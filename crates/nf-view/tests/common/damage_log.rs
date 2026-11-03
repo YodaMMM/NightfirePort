@@ -157,6 +157,15 @@ pub struct DamageLog {
     /// `stand_and_fire` reads a dart landing (the target entering the dart family) as progress and
     /// the under states as the win.
     pub tranq_fights: bool,
+    /// OPT-IN (`aimed_fights`, the 0700000c yard-deck-sentry stand, player-upward-shot): the stand
+    /// holds the AIM button through the whole stand — `Input { aiming: true }` every tick — so a
+    /// 0x400000 record (the snipers) fires its ZERO spread [M `Bullet_init` 0x12c5a0:139-170 —
+    /// `mul = 0` only with the aim bit; the 0x1e record carries 0x400000 [L ee_start_05.bin
+    /// @ 0x2c10b8 flags68 0x408050, +0x24 = 100.0]]. Without it the same stand fires the HIP cone —
+    /// 0.14 rad = 4.9 u of scatter at the deck sentry's 35 u — and a clip dries with the target's
+    /// hp untouched (the game's own hip behaviour; [L] the blocked real-health run's three dry
+    /// clips). Off = the plain stand every other walk is pinned against.
+    pub aimed_fights: bool,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
 }
@@ -652,7 +661,15 @@ impl Walker {
                     (q[0] * q[0] + q[2] * q[2]).sqrt() < 0.6 && q[1].abs() < 1.2
                 });
                 let reload = sim.gun.clip == 0;
-                let fire = !reload && unseen == 0 && !blocked && err.abs() < 0.03 && perr.abs() < 0.04
+                // aimed_fights (OPT-IN): the tap gate TIGHTENS with the aim held — the stand's
+                // plain tolerances (0.03 rad yaw / 0.04 norm pitch = ±1.05 u / ±2.2 u at the deck
+                // sentry's 35 u) are wider than the chest box, and the zero-spread aimed round
+                // [M 0x12c5a0:139-170] goes exactly along the view — the diagnostic trace hit with
+                // an exact view and the loose stand dried clips on the same box. 0.01 / 0.01 =
+                // ±0.35 u / ±0.55 u at 35 u — inside the box, still reachable by the ±0.08/tick
+                // converge.
+                let (err_gate, perr_gate) = if self.dmg.aimed_fights { (0.01, 0.01) } else { (0.03, 0.04) };
+                let fire = !reload && unseen == 0 && !blocked && err.abs() < err_gate && perr.abs() < perr_gate
                     && t.saturating_sub(last_tap) >= 8;
                 let crowd = self.dmg.back_off.is_some_and(|r| sim.drones.list.iter().any(|o| o.team == 1 && o.enabled && o.present
                     && !o.corpse && o.health > 0.0 && ((o.pos[0] - b[0]).powi(2) + (o.pos[2] - b[2]).powi(2)).sqrt() < r));
@@ -669,7 +686,12 @@ impl Walker {
                         sim.drones.list[di].health, sim.drones.list[di].pos[0], sim.drones.list[di].pos[2],
                         b[0], b[2], sim.drones.health.health, aim.map(|a| [a[0], a[2]]), sim.gun.clip, sim.gun.spare);
                 }
-                (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), forward: if crowd { -1.0 } else if creep { 0.5 } else { 0.0 }, ..Default::default() }, fire, reload)
+                // aimed_fights (OPT-IN, the 0700000c deck-sentry stand): the aim button HELD every
+                // tick — the raise completes, the aim bit stays set, and a 0x400000 record (the
+                // snipers [L ee_start_05.bin @ 0x2c10b8 flags68 0x408050]) fires its zero spread
+                // [M Bullet_init 0x12c5a0:139-170]. Off (every other walk) the bit never sets and
+                // the pull keeps the record's hip cone [M 0x12c5a0:139-170 mul = 1].
+                (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), forward: if crowd { -1.0 } else if creep { 0.5 } else { 0.0 }, aiming: self.dmg.aimed_fights, ..Default::default() }, fire, reload)
             };
             if reload {
                 self.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, true, false);

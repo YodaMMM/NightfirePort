@@ -43,3 +43,14 @@ Work log:
 - (03:00) next: opt-in `aimed_fights` in DamageLog::stand_and_fire (the lane_fights pattern) +
   the real-input test from the level start to the yard ladder base (legs 1-6 factored), firing up
   at #18 through the aimed act; symptom pin (hip = no hits) + the fix pin (aimed = the kill).
+- (03:10) the fix shipped: OPT-IN `DamageLog::aimed_fights` (the lane_fights pattern; default off
+  — zero behaviour change for every other walk) — `stand_and_fire` holds the aim button under the
+  flag AND tightens the tap gate to 0.01/0.01 (the plain 0.03 rad/0.04 norm = ±1.05/±2.2 u at 35 u
+  is wider than the chest box; the zero-spread round goes exactly along the view). The real-input
+  proof (crates/nf-view/tests/upward_shot_0700000c_live.rs, both green):
+  `the_hip_pull_dries_three_clips_on_the_deck_sentry` (the symptom: the walk's own legs 1-6 reach
+  the yard ladder base, the hip stand dries its rounds, hp 10 → 10) and
+  `the_aimed_upward_round_lands_and_drops_the_deck_sentry` (the emplacement drops — the pair
+  #18/#36 at one spot; a round into the exposed box hits whichever twin the ray meets first).
+  walkreal0c.rs: legs 1-6 factored into `walk_spawn_to_the_yard_ladder_base` (the band walk calls
+  it and continues at leg 7 — no behaviour change).
