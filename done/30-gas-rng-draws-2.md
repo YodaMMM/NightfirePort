@@ -16,3 +16,8 @@ Do:
 
 ---
 claimed-by: sandbox3 at 2026-11-03T05:06Z
+
+---
+## Report (done, 2026-11-03T06:12Z)
+
+Closed by the driver: the report is on `s/gas-rng-draws-2` (docs/reports/gas-rng-draws-2.md); the worker didn't run finish.sh.
