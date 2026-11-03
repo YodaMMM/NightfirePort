@@ -123,3 +123,19 @@ detour dies to the lobby's east volleyers (a dry fight cost 82.5; a -72.0 blast 
 Grenade in flight — the bullet/prop path, the walk-level jink never fired). Next levers: the
 Deagle #777 detour, a live check on the real crossing.
 >>>>>>> origin/s/level-11-start-fight-real-health-2
+
+## level-11-start-fight-real-health-3 (progress 2026-11-03 12:58 UTC)
+
+The real-damage walk is GREEN and un-ignored. The findings that made it: (1) the stands fire from
+the hip by default and the plain 0.03/0.04 tap gate spent rounds the 7-round budget did not have
+(the fresh equip is weapon 0x10 with SEVEN rounds [M Player_InitWeapon 0x1a7ef8:275-288, both
+legs]); (2) the AIM BUTTON cannot be used by the fight machinery at all — the port's free-aim path
+reinterprets the fight's turn/look as cursor moves and the rounds fly off the aligned view
+(DamageLog::precise_fights' doc, repro11c: 7 taps at err 0.0000, zero boxes); (3) the pistol deals
+10.0 a torso round [L ee_start_05.bin 0x2bf150 + 0x10·0x10C + 0x0c] — the fights ran the
+07000012 walk's own head-hunt + unseen-fights law and #10 died at the bend (fight#10 clip 14,
+killed true), the crossing clean at 79.0 health. Ran: walkreal_07000011_live 2/2,
+start_corridor_guard_07000011_live 8/8, nf-game+nf-formats+nf-audio 136 passed 3 failed (the 3
+allowed slim-ISO disc_golden), nf-view lib 100/0, the FULL walkreal_*_live sweep (25 binaries,
+0 failed — 14/15 included). The full 4-crate suite build does not fit the sandbox disk (~1073
+test binaries; 9.9G total) — the chunked coverage above is what ran.
