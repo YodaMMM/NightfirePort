@@ -12589,7 +12589,8 @@ pub struct Drones {
     /// tests; the flash state itself decays independently).
     pub flash_probe: Option<FlashProbe>,
     /// The 07000041 wrapper-end countdown (ticks since the approach chain's ch 1 rose): the port's
-    /// [S] stand-in for the wrapper's end into 0x0700001b — see the tick_inner arm for the evidence.
+    /// [S] story-hand-off window for the wrapper's end into 0x0700001b — see the tick_inner arm
+    /// for the evidence and the refuted premises.
     pub wrapper_end_timer: Option<u32>,
     /// mp-world-sync (agent 9): online, every body the shared world sees this tick (the human
     /// slots in slot order, then the bots), set by the Sim before `tick`. `Some` switches the
@@ -17060,21 +17061,36 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // the per-frame sight counter becomes "saw last frame"; this tick's sight accumulates below.
         self.saw_opp_last_frame = self.saw_opp_this_frame;
         self.saw_opp_this_frame = false;
-        // The 07000041 wrapper end (documented stand-in — the port's flow so the level plays
-        // through into 0700001b): with the approach chain fired (ch 1, the
-        // scripted-drone plate #99's out [D PL#99]) the wrapper's approach sequence runs; once it
-        // has run the chain's longest script (0x06000027, 241 ticks [D the nis dump]) the level
-        // ends into the space station 0x0700001b — the hand-off the game itself models as the
-        // 0x7100018 briefing special case [M ResetMap_Load 0x1d6360:99-102]. 07000041.bin carries
-        // no exit placement of its own [D the placement scan: no 0xE8 LOAD_LEVEL; no ch-100
-        // writer in the 7 scripts [D the nis decode]]. The game's remaining carrier is the script
-        // EVENT op 0x12 — Script_EventHandler 0x1d94c0:194-198 → ResetMap_LevelToLoad with a dword
-        // level id read from the script stream [M 0x1d94c0:83-93] — and the ELF census finds NO
-        // hardcoded 41→1b pair (all five 0x7000041 refs are gameplay special-cases; Mission_Update's
-        // ch-100 map defaults 0x7000041 → 0x7000048 [M 0x182c60:89-115]), so the end must be a
-        // type-0x12 event inside one of the 7 streams — decode pending. Note: a script 0x12 into
-        // 0x0700001b would load the 0x7100018 briefing first [M 0x1d94c0 skipbrief=0] — the port's
-        // direct jump skips it. Until the decode, the 241-tick timer stays the documented stand-in.
+        // The 07000041 wrapper end — the port's story hand-off (a documented [S] stand-in flow).
+        // What the disc PROVES (every pin carried from level-41-exit-event's decode): the 7 type-7
+        // scripts decode with NO 0x12 event (0x3 delay ×6 + 0xF callback ×3, no 0xD channel write
+        // [D the nis decode, wrapper_07000041_end_live]); nothing ever RUNS them — the level's only
+        // two 0xD9 ScriptPlayer placements (map 01000081 idx 0/42) both carry script hash
+        // 0x06000000, a hash no archive on the disc carries [D the 99-archive type-7 scan], with
+        // trigger mask p5 = 0, so `SP_Update`'s trigger = flags & 0 [M script-player.md] and both
+        // idle forever; no 0xE8 LOAD_LEVEL exists [D the placement scan]; the mission system is
+        // inert (07000041 has no MissionData row [D ACTION.ELF 0x2a4350's 24 records], so nothing
+        // writes ch 99/100 [M Mission_MonitorObjectives 0x1827d8 + Mission_Update 0x182c60]); and
+        // the one 0xF4 movie trigger's E-arm loads nothing — its movie code is 0 [D params (0, 4,
+        // 0)] and `Trigger_Activate` 0x1b2518-55 only writes GameState+0x10 and pushes states 6/7,
+        // with no movie started state 6 pops the same tick (`psiMovieFinished` 0x1082e8 =
+        // `BGFMVPlaying == 0`) and state 7's fade counts out and pops [M 0x1c9ca8-0x1c9cfc].
+        // DRIVING.ELF holds no 0x07000041/0x0700001b literal either [D grep] — the game's hop to
+        // the station is the story layer's, data-driven outside ACTION.ELF. So the hop has no
+        // in-level carrier on this disc, and the port models it as its own documented flow: once
+        // the approach chain's channel (ch 1, the plate #99 out [D PL#99]) has been on for the
+        // chain window, the hand-off latches the story's next base map 0x0700001b [L the front
+        // end's sp_level 0x2df2e0 — 0x0700001b is the 7th base map; M the game's own Equinox hop
+        // 0x1d3800:95-97 → 0x1d6360:99-102 wraps the load through the 0x7100018 briefing]. The
+        // WINDOW is a port choice [S unverified]: the chain's longest script's length, 241 ticks
+        // [D 06000027's length] — the script itself never runs [D, the pins above]; the length only
+        // bounds the chain's presentation (the turret shot, the voices, the rod delete). The latch
+        // rides the load path's wrap at the consumer — 0x0700001b → 0x07100018 → 0x0700001b
+        // [M 0x1d3800:95-97 + 0x1d6360:99-102, triggers::wrap_intro/resolve_exit_code + the
+        // nf-view drain]. The game's real exit tail [M Trigger_Activate 0x1b2318:105-116:
+        // Music_Event(3,1), GS_PauseGame(1), ResetMap_LevelToLoad, PushState(300,7), RamSave] is
+        // the kind-10 trigger shape; this stand-in latches the same field the 0xE8/0x12 paths
+        // latch and leaves the tail to the consumer's drain.
         if d.level == 0x0700_0041 && self.level_exit.is_none() {
             if self.channels.on(1) {
                 let t = self.wrapper_end_timer.unwrap_or(0) + 1;
