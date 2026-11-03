@@ -290,10 +290,13 @@ impl Props {
         let c = if d.lo == d.hi { d.pos } else { [(d.lo[0] + d.hi[0]) / 2.0, (d.lo[1] + d.hi[1]) / 2.0, (d.lo[2] + d.hi[2]) / 2.0] };
         let ext = [(d.hi[0] - d.lo[0]) / 2.0, (d.hi[1] - d.lo[1]) / 2.0, (d.hi[2] - d.lo[2]) / 2.0];
         let sphere = if d.sphere > 0.0 { d.sphere } else { (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt() };
-        // A (near-)zero sphere makes a zero blast: radius ~0 reaches nothing and the script plays at
-        // scale 0 [M 0x12bb60: radius and scale both from tag+0x8c]. Not spawned — the draw shows
-        // the newest blast of a script, so a same-tick empty one hid the C5 fireball.
-        if sphere < 0.05 { return None; }
+        // The game's only gate is the type byte itself [M 0x12bb60:LAB_0012bc50 — `if (cVar4 !=
+        // 0)` around the whole Explode_Create]; a (near-)zero +0x8c just plays the script at
+        // scale ~0 (Explode_Create 0x17cbd0:40 skips the Camera_Shake below 0.5). The old
+        // `< 0.05 → None` guard was a draw workaround from the one-slot era — the draw now
+        // holds BLAST_COPIES slot sets per script (concurrent_blasts_draw_live), so a same-tick
+        // twin no longer hides the C5 fireball, and the game's twin-door smash (bigdoor01's
+        // leaf carries the sentinel object bounds [D #93 obj 91 min/max ±1e7]) spawns too.
         let mult = match d.kind { 1 => 4.0f32, 2 => 2.0, _ => 3.0 };
         Some((c, sphere * mult, d.blast_damage, d.kind))
     }
