@@ -23,3 +23,16 @@ Work log:
   `load_fresh_at` + `walk_fresh_spawn_to_the_mission_end_real_damage_agent` (the same fight
   package, the same no-poke fresh boot). d1 call sites byte-identical, the difficulty assert at
   every load. Build running; commit after it compiles.
+- (16:23) ALL FOUR SISTERS GREEN on real health, real input: 09 100.0/50.0 untouched (the
+  patrol-beat clears held), 0a 100.0 untouched, 08 24.8 (the head-hunt fights — the plain pick
+  let the walkway shotgun guard #20 grind 10 × −4.2 before the plain wrapper died at 25137),
+  0b 72.4 (the lane sprint — see the report). The 0b tactic: the terminal-room GT pair
+  #174/#175 arms on the dome fence's ch 0x0D OR the files take's ch 0x06 (OR #290 → ch 0x0E =
+  p4 14 [D]; the level census has no ch-28 writer, so the exec trio #291-293 never wakes) and
+  fires the eased barrel on the 0.1 s cadence [M 0x180498 case 4] — every in-lane tick is a
+  fire tick, so the armed transits run the raw stick loop (`lane_sprint`, the deck-sprint
+  pattern, all gated on `real`): the GT drain fell 76.4 → 19.2. The four binaries re-run green
+  (serial, NF_SILENT=1: 08 5/0, 09 7/0, 0a 11/0+3 ign, 0b 6/0), nf-game 102 binaries green,
+  nf-formats' 3 disc_golden fails are the slim-ISO allowance (missing /DRIVING/MIS01.MUS#0).
+  The full suite.py did not fit the window (its build step alone — all ~100 nf-view binaries —
+  exceeded the tool timeout on this 2-core box; the runs would not have fit either).
