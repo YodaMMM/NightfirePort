@@ -68,10 +68,25 @@ fn trace_the_upward_shot_flight() {
             sim.world.segment_bullet_scoped(cel, eye, end), sim.world.segment_bullet(eye, end));
     }
     let mut fired = false;
-    for t in 0..40u32 {
+    let mut seen = false;
+    for t in 0..300u32 {
         let mut input = Input::default();
-        if !fired { input.fire = true; fired = true; }
-        scene.sim.as_mut().unwrap().step_bond(input, t == 0, false, false);
+        if t < 90 {
+            // The aim raise [M Player_Weapon 0x1a24c8]: the aimed sniper's spread is 0
+            // [M player_spread — the 0x400000 record with the aim bit].
+            input.aiming = true;
+        } else {
+            input.aiming = true;
+            input.fire = true;
+            fired = true;
+        }
+        scene.sim.as_mut().unwrap().step_bond(input, t >= 90, false, false);
+        if t % 10 == 0 {
+            let sim = scene.sim.as_ref().unwrap();
+            eprintln!("[raise t{t}] aiming {} anim {:?} raising {} clip {} pend {} fstate {} rstate {} script {:#x} vt {:.1}",
+                sim.aiming, sim.view_aim_anim, sim.view_aim_raising, sim.gun.clip, sim.gun.pending, sim.gun.fire_state, sim.gun.reload_state, sim.view_script, sim.view_time);
+        }
+        if t < 90 { continue; }
         let sim = scene.sim.as_mut().unwrap();
         for im in &sim.drones.player_impacts {
             eprintln!("[t{t}] impact {im:?}");
@@ -86,7 +101,8 @@ fn trace_the_upward_shot_flight() {
             eprintln!("[t{t} b{bi}] pos {:?} trav {:.1} cel {cel:?} scoped {sc:?} flat {fl:?}",
                 b.pos, b.travelled);
         }
-        if sim.drones.player_bullets.is_empty() && t > 0 { eprintln!("[t{t}] bullets gone"); break; }
+        if fired && seen && sim.drones.player_bullets.is_empty() { eprintln!("[t{t}] bullets gone"); break; }
+        if !sim.drones.player_bullets.is_empty() { seen = true; }
     }
     let sim = scene.sim.as_ref().unwrap();
     eprintln!("[outcome] drone {target_idx} hp {:.1} (started 10.0)", sim.drones.list[target_idx].health);

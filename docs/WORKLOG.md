@@ -28,3 +28,18 @@ Work log:
   on the wall behind, hp 10.0 unchanged). The shot dir bends up vs the view aim — next: the
   zero-spread (aiming) trace and the scene.rs muzzle/aim construction [M Player_WeaponInitBullet
   0x1a4bf0 + Player_GetAimingPoint 0x1a4a98].
+- (02:50) **THE VERDICT — no port flight bug; the harness fired hip.** The aimed act (input.aiming
+  held → the raise completes ~t20 → sim.aiming true → player_spread mul = 0 [M 0x12c5a0:139-170;
+  the 0x1e record carries 0x400000 [L ee_start_05.bin @ 0x2c10b8 flags68 0x408050]]) lands: the
+  trace's round impacts `Drone { drone: 18, part: 4 }` at (36.16, 12.27, -208.68), hp 10 → -50.
+  The hip act the walker's stand_and_fire always fired (its Input never sets `aiming`) carries the
+  record's +0x24 = 100.0 base cone [L 0x2c10b8] = 0.14 rad = **4.9 u scatter radius at 35 u**
+  against a ~0.5 u chest box — the game's own hip sniper misses the same way [M 0x12c5a0:139-170
+  mul = 1 without the aim bit]. "Level shots work" = the level fights ran at d 7-10 where the same
+  cone is ~1.1 u. The flight (cel scope 78/77 the whole lane, no find_cel None, no flat fallback,
+  straddle covers the lane, the world stop 4.7 u BEHIND the box) matches the game's pick law.
+  ALSO pinned: step_bond's 2nd arg is the TRIGGER (probe_0d_bullet's `!clip_empty` convention) —
+  my first aimed runs passed false and never fired.
+- (03:00) next: opt-in `aimed_fights` in DamageLog::stand_and_fire (the lane_fights pattern) +
+  the real-input test from the level start to the yard ladder base (legs 1-6 factored), firing up
+  at #18 through the aimed act; symptom pin (hip = no hits) + the fix pin (aimed = the kill).
