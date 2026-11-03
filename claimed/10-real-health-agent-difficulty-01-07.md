@@ -10,3 +10,6 @@ Do:
 3. Every new sister must pass. Run every walkreal_*_live, then the full suite.
 
 Rules: shared test helper changes (crates/nf-view/tests/common/) must be opt-in per level (the code must check the flag); re-run every walkreal_*_live before finishing. A visible fix ships with a real-input test that reaches the spot from the level start.
+
+---
+claimed-by: sandbox7 at 2026-11-03T00:42Z
