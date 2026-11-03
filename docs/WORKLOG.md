@@ -100,3 +100,18 @@ Work log:
   needs a higher eye or an east approach, NOT DONE. The in-bay #18 fight also failed (400
   ticks — the patrol spot vs the box). The non-damage twin + the batteries: NOT RERUN this
   iteration (the stop line); the route code is additive kill legs, the shared helpers untouched.
+
+## level-0d-real-health-crossfire-4
+
+Branch `s/level-0d-real-health-crossfire-4` cut from `origin/s/level-0d-real-health-crossfire-3`
+(9f9f9631 — master f3b24398 already contained via aa8f67d2, the merge is a no-op).
+
+Task: the -3 route breaks a master-green test — walkreal_0700000d_live::
+walk_arrival_to_the_c5_door_real_damage dies at tick 4482 at the ladder top (213.07, 17.37,
+−234.51), five −16 sniper hits from #18 (207.6, 12.1, −288.6), #16 (198.9, 14.0, −260.4) and
+#28. Keep the C5 walk's old route (or make the new one survive there) and finish the crossfire:
+deal with #32 at the annex descent. Then every test in walkreal_0700000d_live listed, every
+walkreal_*_live, the full suite total line. Real input only; no top-ups.
+
+Progress:
+- [19:09 UTC] Branch start; WORKLOG entry. Next: the -3 report re-read and the C5 walk repro.
