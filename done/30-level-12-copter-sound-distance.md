@@ -12,3 +12,8 @@ Do:
 
 ---
 claimed-by: sandbox1 at 2026-11-03T05:13Z
+
+---
+## Report (done, 2026-11-03T05:55Z)
+
+Closed by the driver: the report is on `s/level-12-copter-sound-distance` (docs/reports/level-12-copter-sound-distance.md); the worker didn't run finish.sh.
