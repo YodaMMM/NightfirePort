@@ -41,3 +41,14 @@ Progress:
 - [09:00 UTC] Final state: 6/7 walkreal_07000001 green (every Operative master, real damage
   included), the Agent sister red at the hall (tick 3366, the stage walk into #6 at 0.5 u).
   nf-game lib 655 green. The sister + the hall analysis ride the branch for the next session.
+
+## level-01-agent-hall-fight
+Started 2026-11-03 13:33 UTC. Branch s/level-01-agent-hall-fight cut from origin/s/level-01-agent-escort-fight,
+origin/master merged (clean, 05075e4d). Task: win the hall fight on real input the way a player
+would (the escort report's weapon/grenade lever, approach angle, kill order); no health top-ups,
+no forced guard state, shared helpers stay opt-in. Done = the Agent walk green, every other
+walkreal_07000001_live test green, every walkreal_*_live green, then the full suite total.
+
+Work log:
+- (13:33) branch start, WORKLOG entry. Sandbox survived (no reset): ISO + work/ + toolchain + the
+  ALSA prefix all in place. Next: fast runner in the background, then the escort report.
