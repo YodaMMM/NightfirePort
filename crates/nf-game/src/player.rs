@@ -701,11 +701,21 @@ impl Bond {
         self.regrab = self.regrab.saturating_sub(1);
         self.fall_damage = None;
         self.drown_damage = None;
-        // The move quad zeroes every active on-foot tick before the substate body runs [M
-        // Player_Update 0x193600:131-133 `obj+0xF4 == 1 → Vec_Zero(BLData+0x10)`] — the guards'
-        // accuracy moving test reads these lanes, so a substate that stores nothing (the climb
-        // body, the creep body) leaves the quad at zero.
-        self.move_local = [0.0; 2];
+        // The move quad zeroes on CLIMB ticks only — the game's Vec_Zero pair sits INSIDE
+        // `if (sVar6 == 1)` where case 1 IS Player_Climb [M Player_Update 0x193600:129-134 +
+        // the switch at :43-46: case 1 → Player_Climb, case 0 the walk, case 3 Player_Move (the
+        // swim)] — that is why the climb's own lane writes are ADDS on the zeroed quad
+        // [M 0x196310:56,90; 0x1969d0:151]. Every other substate RETAINS the previous tick's
+        // lanes: the walk body overwrites them each tick ([M Player_Move 0x191dd0:166-170's
+        // own stores]), and a WIRE rider retains the last walk tick's eased lanes through the
+        // whole ride — the guards' accuracy read |(BL+0x10, 0, BL+0x18)| != 0 → MOVING
+        // [M DroneWeap_DoOpponentTargetting 0x179a48:34-41 → DroneWeap_DoBulletAccuracy
+        // 0x179740:71-73's TargetMoving_Accuracy]. The port zeroed EVERY tick, which read a
+        // wire rider as STILL — the 0d wire crossfire hit a riding Bond at stationary accuracy
+        // (level-0d-real-health-crossfire).
+        if self.substate == SS_CLIMB {
+            self.move_local = [0.0; 2];
+        }
         match self.substate {
             SS_CLIMB => self.climb_tick(world, ctx, input),
             SS_GRAPPLE => self.grapple_tick(&input),
@@ -961,10 +971,11 @@ impl Bond {
         if action && fwd_raw < 0.05 {
             self.push_fwd = -0.05;
             dismount_push = -0.05;
-            // The dismount's own +0x18 write [M Player_Climb 0x196310:90 `+0x18 −= 0.05`]: the quad's
-            // z lane reads −0.05 on THIS tick (the guards' moving test sees it; the port applies the
+            // The dismount's own +0x18 write [M Player_Climb 0x196310:90 `+0x18 += −(0.2/
+            // FRAME_RATE_DIV)·0.25` — an ADD on the RETAINED quad]: the quad's z lane reads
+            // −0.05 on THIS tick (the guards' moving test sees it; the port applies the
             // push to the position on the next walk tick).
-            self.move_local[1] = -0.05;
+            self.move_local[1] += -0.05;
             self.dismount();
         } else {
             // Recompute the thresholds every tick [M 0x196310:49-53].
@@ -974,8 +985,9 @@ impl Bond {
                 // Above the top: the +0.6 forward lunge [M 0x196310:54-62], consumed next tick.
                 self.push_fwd = 0.6;
                 dismount_push = 0.6;
-                // The lunge's +0x18 write [M 0x196310:56] — the quad's z lane this tick.
-                self.move_local[1] = 0.6;
+                // The lunge's +0x18 write [M 0x196310:56 `+0x18 += (0.2/FRAME_RATE_DIV)·3.0` —
+                // an ADD on the retained quad] — the quad's z lane this tick.
+                self.move_local[1] += 0.6;
                 self.dismount();
             } else if self.climb_bottom <= self.pos[1] {
                 // Mid-ladder: climb [M 0x196310:63-78].
@@ -1423,9 +1435,9 @@ impl Bond {
             self.yaw = crawl_yaw + if nearer_a { -std::f32::consts::FRAC_PI_2 } else { std::f32::consts::FRAC_PI_2 };
             self.regrab = 0x78;
             self.push_fwd += 0.05;
-            // The exit's own +0x18 write on the zeroed quad [M 0x1969d0:151 `+0x18 += 0.05`]: the
-            // guards' moving test reads it on this tick.
-            self.move_local[1] = 0.05;
+            // The exit's own +0x18 write on the retained quad [M 0x1969d0:151 `+0x18 += 0.05`]:
+            // the guards' moving test reads it on this tick.
+            self.move_local[1] += 0.05;
             return;
         }
         // The crawl motion along the axis is the port's shape (the game's is the crawl anims' root
@@ -1493,9 +1505,10 @@ impl Bond {
         // the shipped game — both live wires are type 0 [D placements probe]). The clamp below
         // projects the ride onto the line, so Bond slides down a sloped zipline and accelerates.
         self.fall_speed += 0.15;
-        // The same write lands on the quad Player_Update zeroed this tick [M 0x197f50:121 on
-        // 0x193600:133's Vec_Zero]: the guards' moving test reads a riding Bond as moving.
-        self.move_local[1] = 0.15;
+        // The same write lands on the RETAINED quad (the game's Vec_Zero pair is walk-ticks-only
+        // [M 0x193600:129-134]) — [M 0x197f50:121 `+0x18 += fVar7·0.15`]: the guards' moving test
+        // reads a riding Bond as moving.
+        self.move_local[1] += 0.15;
         self.pos[1] -= self.fall_speed / 60.0;
         let lifted = [self.pos[0], self.pos[1] + 1.17363, self.pos[2]];
         let closest = Wire::closest_point(a, b, lifted);
