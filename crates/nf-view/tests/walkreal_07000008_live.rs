@@ -400,6 +400,12 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         if difficulty >= 3 && name == "the mid west" {
             fight_close_guards(&mut w, "the mid west", 4200);
         }
+        // 00 Agent (difficulty 3): #16/#17 are ambush spawners (their plates fire mid-leg) —
+        // the walk-out stand catches whatever the link walk enabled before the hall legs.
+        // D3-GATED.
+        if difficulty >= 3 && name == "the long link" {
+            fight_close_guards(&mut w, "the long link", 4200);
+        }
     }
     // Sister: the descent was WALKED — the walkway's zone plates (TouchOnces out 42/43/44, the
     // ambush spawners' start channels [D placements; M Trigger_Hit 0x1b1fc8 walk-in mask 8])
@@ -410,6 +416,12 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             "the walked descent crossed the walkway ambush plates (42/43/44) [D]");
     }
     w.climb_stairs([107.25, 27.7, -119.5], "the stairwell down", 1.6, 4200);
+    // 00 Agent (difficulty 3): the descent's return-fire stands drained the clip — the 05
+    // sisters' rule: the fights must not open on a drained clip (a mid-fight reload is free
+    // burst time for the platform pair). D3-GATED.
+    if difficulty >= 3 {
+        w.reload_full();
+    }
     // The boarding ([D the floor probe]): the platform (y 27.25, z −121..−122.5) ends at the car
     // shaft — the middle (x 112) is open below (the cabin hangs there; its floor is the plate at
     // y 28, z −127.4), the side ledges (x 110/114) run south at y 26.75 past the parked cabin's
