@@ -131,3 +131,22 @@ Input tokens / output tokens / context used / cost: not visible to me (no token 
 figures are exposed in this environment). What I can see: the sandbox wall clock (the session
 started ~15:41 UTC after a sandbox reset; the setup — clone, work-slim, the onfoot ISO, rustup,
 the user-prefix ALSA headers, cargo fetch — was redone from scratch and took ~30 min of it).
+
+## ntfy failed
+
+All three fallbacks failed — ntfy.sh is unreachable from this sandbox (git push to github.com
+worked throughout, so this is host-specific egress):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "…" https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "… urlopen(Request('https://ntfy.sh/nightfire-yoda-8k3x', …), timeout=20)"` →
+   `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "…" https://ntfy.sh/nightfire-yoda-8k3x` → hung past the 60 s
+   tool timeout, killed with no output.
+
+The finish steps were otherwise executed in order: the branch pushed (final commit includes
+this report), then `bash ../nf-queue/finish.sh 10-real-health-agent-difficulty-08-09-0a-0b done
+docs/reports/real-health-agent-difficulty-08-09-0a-0b.md` → `OK done
+10-real-health-agent-difficulty-08-09-0a-0b` (the script's one `cat: … No such file or
+directory` line is it reading the report path relative to the queue worktree, where the report
+isn't checked out; the done marker itself landed: `/home/z/nf-queue/done/10-real-health-agent-difficulty-08-09-0a-0b.md`).
