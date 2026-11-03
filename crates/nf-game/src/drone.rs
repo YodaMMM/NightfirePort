@@ -14510,7 +14510,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 matches!(u16::from_le_bytes([r[0x02], r[0x03]]), 0x33 | 0x6a | 0x6e)
             });
             if flags6c_b & 0x1_0000 != 0 && swoosh_05cd {
-                self.gas.init(b.pos, 0.0, [0.0; 3], 0.3, 0.6, 5, [0x30, 0xd0, 0xff, 0x90], 6.0);
+                self.gas.init_hash(crate::gas::SMOKE_QUAD, b.pos, 0.0, [0.0; 3], 0.3, 0.6, 5, [0x30, 0xd0, 0xff, 0x90], 0, 6.0);
             }
             // The photograph targets and breakable doors see the bullet this tick (the game's
             // collision pass registers the contact; the prop's update walks it — crate::props).
@@ -15213,7 +15213,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         _ => None,
                     };
                     if let Some((s0, s1, mesh)) = victim_puff {
-                        self.gas.init_ex(mesh, hit.point, 0.0, [0.0; 3], s0, s1, 5, [0xff, 0xff, 0xff, 0xff], 0, 60.0);
+                        self.gas.init_ex(&mut self.rng, mesh, hit.point, 0.0, [0.0; 3], s0, s1, 5, [0xff, 0xff, 0xff, 0xff], 0, 60.0);
                         // +0xf0 |= 8 rides the blood mesh only (the bolt's 0x0200_026e case never
                         // sets it [M 0x13fff0:251-255]).
                         if mesh == 0x0200_08bc {
@@ -15413,7 +15413,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // 0x7f7f64ff, life 8) [M 0x1cef38:60-70].
                     let mesh = d.surfaces.as_ref().map_or(0, |s| s.gas_mesh(m));
                     if mesh != 0 {
-                        self.gas.init_ex(mesh, hit, 0.0, [0.0; 3], 2.0, 3.0, 5, [0x7f, 0x7f, 0x64, 0xff], 0, 8.0);
+                        self.gas.init_ex(&mut self.rng, mesh, hit, 0.0, [0.0; 3], 2.0, 3.0, 5, [0x7f, 0x7f, 0x64, 0xff], 0, 8.0);
                     }
                 } else if let Some(nd) = self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, hit, n, m, dir, flags70, bounces, true, if pierce { 0 } else { 8 }, host) {
                     ricochet = Some((hit, nd));
@@ -17313,7 +17313,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // pinned by gt.rs's death-gate test).
                     crate::gt::GTEvent::Smoke { .. } => {}
                     crate::gt::GTEvent::DestroyedBurst { pos } => {
-                        self.gas.init_ex(crate::gas::SMOKE_QUAD, pos, 0.0, [0.0, 0.5, 0.0], 0.3, 1.5, 4, [0xff, 0xff, 0xff, 0xff], 1, 20.0);
+                        self.gas.init_hash(crate::gas::SMOKE_QUAD, pos, 0.0, [0.0, 0.5, 0.0], 0.3, 1.5, 4, [0xff, 0xff, 0xff, 0xff], 1, 20.0);
                     }
                     // Music_Event(2,1) [M case 4] — the music system is view-side.
                     crate::gt::GTEvent::CombatSting => { self.music.event(2, 1); }
@@ -20593,7 +20593,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             self.health.flash_alpha = f;
                             if let Some(t) = d.sfx { let h = t.get(0x16); self.audio.play3d(h.id, pos, None); }
                             self.lights.create(10.0, 5.0, pos, [0xff, 0xff, 0xff], 0, 10, 1, 0, &mut self.rng);
-                            self.gas.init(pos, 0.0, [0.0; 3], 0.5, 1.68, 0xb, [0x00, 0x80, 0x80, 0x80], 30.0);
+                            // The flashbang's own gas puff [M Bullet_DoTrails 0x12d890 decompile :288-290,
+                            // disasm 0x12dd60-0x12ddb8]: Gas_Init(0.5, 1.68, cel, blast pos, quat obj+0x50,
+                            // vel NULL, mesh 0x020001f, kind 0xb, rgba 0xffffff7f, end 0x80808000, life
+                            // 0x7f) — the old call's mesh SMOKE_QUAD/rgba [0x00,0x80,0x80,0x80]/end
+                            // 0/life 30 were misreadings; kind 0xb quarters the spin [M 0x1aacc8:74-76]
+                            // and the NULL velocity takes the (0, REC, 0) default [M 0x1aacc8:105-129].
+                            // The draws: spin + sign (init_ex), no velocity draws [M 0x1aacc8:89-141].
+                            self.gas.init_ex(&mut self.rng, 0x0200_001f, pos, 0.0, [0.0; 3], 0.5, 1.68, 0xb, [0xff, 0xff, 0xff, 0x7f], 0x8080_8000, 127.0);
                             self.shake = self.shake.max(2.0);
                             if owner == usize::MAX {
                                 // The broadcast [M 0x12d890 flash arm 0x12e0c0 → `Drone_MessageObjVicinity`

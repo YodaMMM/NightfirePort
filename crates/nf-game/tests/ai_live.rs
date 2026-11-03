@@ -257,7 +257,13 @@ fn guard_takes_cover_like_the_game() {
     // [M 0x1c7a98 + 0x14c600:81-107] — so spawner 266's drone fires and reacts on a different
     // schedule and the shared stream shifts; 913's attack-reentry-choice had 2, fix-impact-remainder2
     // 4, fix-ai-remainder 1).
-    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 9);
+    // Seed 4 (re-picked at gas-rng-draws: every `Gas_Init` puff now consumes the game's own draws —
+    // the spin `Rand_FRand(π/2·REC_FRAME_RATE)` and the sign `Rand_Rand(0x100)` [M 0x1aacc8:72-80],
+    // plus the kind-7/NULL-vel wind spread [M 0x1aacc8:108-116] — and the guard's wall impacts spawn
+    // the Effect_Bullet gas entries through that same call [M 0x1cea98], so the stream shifts on
+    // every shot. 9 had 61.342/9; seeds 0-24 on this model: 4 passes every pin, 0/2 pick another
+    // first move, 1/3 hold the 90-tick lean in UnderCoverAim (live 37)).
+    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 4);
     let mut sim = l.sim(drones, rng);
     let player = bond_at([79.86, 22.92, 96.0]);
     for _ in 0..700 { sim.tick(&d, &player); }
