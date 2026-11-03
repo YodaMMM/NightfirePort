@@ -13,3 +13,7 @@ So the binding/clear rules stop guards from opening and crossing doors they shou
 
 ---
 claimed-by: sandbox3 at 2026-11-03T16:55Z
+
+---
+## Report (done, 2026-11-03T20:48Z)
+
