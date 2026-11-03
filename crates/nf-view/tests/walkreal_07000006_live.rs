@@ -129,7 +129,13 @@ const PLATES_34: [usize; 7] = [524, 525, 526, 661, 662, 663, 664];
 /// USATxt label 0x05000043; the proven fusebox_06_live draw].
 fn draw_laser(w: &mut Walker) {
     let draw = Input { switch_to: Some(0x4e), ..Default::default() };
-    for _ in 0..40 { w.tick(draw, false); }
+    // Retry the equip: the request only lands when idle (not firing/reloading/holstering
+    // [M Player_WeaponChange 0x1a6f80]), and a fight that just ended can leave the gun
+    // mid-anim — the 00j run's 40-tick window raced it and the assert read weapon 2.
+    for _ in 0..240 {
+        if w.scene.sim.as_ref().unwrap().gun.weapon == 0x4e { break; }
+        w.tick(draw, false);
+    }
     assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x4e, "the Laser equips [D 0x05000043]");
 }
 
@@ -151,6 +157,42 @@ fn fight_through(w: &mut Walker) {
         if !w.shoot(di, "the courtyard guard") {
             // Out of ammo: resupply from the ground pickups (the route carries spares).
             w.resupply("the courtyard fight");
+        }
+    }
+}
+
+/// 00-Agent clear (real-health-00agent-06, measured): fight every alive guard within `radius`
+/// until the spot is empty, with a per-target tick cap. One 8-u pass kills at most 4 and cannot
+/// reach the guardroom's west end (the room is ~12 u deep) — the 00 roster's min-difficulty-3
+/// placements (#6/#10/#18/#28 beyond the Agent pair #3/#4) survived every doorway pass and
+/// shredded the exposed cut stand (the 00f/00g ledgers). The 13-u radius reaches the whole
+/// room [D the room's floor spans x 27.9..36.5, z −23..−16] but also sweeps in the court-side
+/// low guards (y 39.0, #27 at (25.4, −14.5)) whose wall-blocked rays no stand can answer — the
+/// 00h run burned 18 × the full shoot budget on #27. So: each target gets a bounded budget; a
+/// guard still standing after it is OFF the ray (the walker's own sight/LOS rules) and is skipped
+/// for the reactive return fire to handle; the clear returns when every in-radius guard is
+/// either dead or skipped. The 6000-tick budget: a peeking cover guard (#27, hp 10 after the
+/// doorway phase) only exposes while he fires — a 1500-tick window can land entirely between
+/// his bursts (the 00j log's "exposed false" at dist 5.1), while a visible guard in the open
+/// dies well inside 1000.
+fn clear_the_spot(w: &mut Walker, radius: f32) {
+    w.switch_to_armed("the 00 clear");
+    let mut skipped: Vec<usize> = Vec::new();
+    for _ in 0..12 {
+        let target = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (0..sim.drones.list.len()).find(|&i| {
+                let d = &sim.drones.list[i];
+                !d.corpse && d.health > 0.0 && d.pos[1] < 46.0
+                    && dxz(d.pos, sim.bond.pos) < radius && !skipped.contains(&i)
+            })
+        };
+        let Some(di) = target else { return };
+        eprintln!("[06] clearing guard {di} at {:?}", w.scene.sim.as_ref().unwrap().drones.list[di].pos);
+        if !w.shoot_bounded(di, "the 00 clear", 6000) {
+            skipped.push(di);
+            // Out of ammo or out of budget: restock so the next target starts full.
+            w.resupply("the 00 clear");
         }
     }
 }
@@ -225,9 +267,47 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
         eprintln!("[06] door {di} at {pos:?}");
         w.use_door(di, "door #47");
     }
+    // 00-Agent tactics (real-health-00agent-06, measured): crossing the guardroom under fire
+    // costs −71.6 at 00 — the reactive return fire only answers AFTER each hit, and the two
+    // guardroom guards (#4, #3 — #3 is the difficulty≥2 spawn at (29.9, 41.0, −19.5), 7.3 u
+    // from the doorway, inside the fight radius) land 31 hits while Bond walks to the nook
+    // (91.8 → 20.2, the 00 run's ledger; at Agent the same crossing costs ≤4 — accuracy 0.9 →
+    // 1.3 and pain 0.7 → 1.0 [M ReadTuningVars 0x1d3a80 case 0x7000006]). The player clears
+    // the room from the doorway BEFORE the crossing, and again at the nook (any survivor).
+    if difficulty >= 3 {
+        clear_the_spot(w, 13.0);
+    }
     // Through #47 into the guardroom; the nav graph covers this room [D leg probe: 4 nodes].
     w.walk_nav_to([29.9, 40.5, -17.5], "the guardroom fusebox nook", 1.4);
+    // 00-Agent tactics (real-health-00agent-06, measured): at 00 the two guardroom guards
+    // (#4, #3) shoot the exposed Laser cut to pieces — the nook fights landed −22.0 (9 hits)
+    // and −44.0 while the walk stood at the fusebox (the 00 death ledger: 91.8 → 20.2 across
+    // ticks 2761-2872; at Agent the same fights cost ≤4 total). The player clears the room at
+    // range BEFORE standing at the fusebox, and again before the pilaster lane's mouth step.
+    if difficulty >= 3 {
+        clear_the_spot(w, 13.0);
+    }
     if cut {
+        if difficulty >= 3 {
+            // 00-Agent tactics (real-health-00agent-06, measured): the doorway fight drops #3
+            // at (30.26, 41.0, −16.95) — 0.9 u off the nook stand's ray to the group-0 wire
+            // (28.00, 40.00, −18.15) — and the corpse eats the Laser beam (the 00e run's
+            // "shoot_point cap": the wire never burned off the nook stand, while
+            // fusebox_06_live burns the same wire from a corpse-free room). The player steps
+            // north-east off the bodies and cuts from there — the ray to the wire stays clear.
+            w.walk_to(Wp::new(30.9, 40.5, -16.2), "the cut's clear stand, off the fight corpses");
+            // Re-clear at the stand: the doorway skips (#27 — outside-north post (25.4, −14.5),
+            // wall-blocked from every inside stand) CHASE Bond and come back on-ray here —
+            // the 00i ledger: #27 followed him to the stand and machine-gunned the whole cut
+            // (22 hits for 61.0) with hp 10 left. From the stand its corner post is visible.
+            clear_the_spot(w, 13.0);
+            // Back to the nook for the cut itself — the fusebox_06_live-proven stand for the
+            // group-0 wire ray (28.00, 40.00, −18.15). The 00k run cut from the offset stand
+            // and capped (the ray blocked there); the 00e run cut from the nook with #27 still
+            // alive and the reactive fights interrupted the taps — with the room clear and the
+            // chaser dead, the nook cut runs unmolested.
+            w.walk_to(Wp::new(29.9, 40.5, -17.5), "back to the nook for the cut");
+        }
         draw_laser(w);
         let wire = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -243,6 +323,12 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(57), "ch 57 — the searchlights-off gate — is on [D #747 p1]");
         assert!(sim.drones.channels.on(103), "the bundle's second word ch 103 fires [D #747 p3]");
+    }
+    // 00-Agent tactics: second guardroom sweep after the (optional) cut — anything the
+    // doorway fight left alive (or that wandered in behind Bond) dies here, before the
+    // pilaster lane's mouth step.
+    if difficulty >= 3 {
+        clear_the_spot(w, 13.0);
     }
     // West out of the guardroom through the auto-closing door #59 Door_Top_I2 (27.88, 40.00, −23.00).
     if difficulty >= 2 {
@@ -371,14 +457,32 @@ fn walk_the_tunnel_and_gallery(w: &mut Walker) {
 /// [L ee_start_05 record 1]) and its final event 0x12 [0x07000007] loads the party [M
 /// Script_EventHandler 0x1d94c0 case 0x12]. The alarm-silencing TouchOnce #765 (out 177) shares
 /// the volume's spot [D trig dump] — the walk trips both, exactly as the walkthrough does.
-fn walk_the_ledge_to_the_party(w: &mut Walker) {
+fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32) {
     // East along the courtyard: the web's 41.1 east strip [D nodes 246 (10.74, 41.22, −34.28) /
     // 455-456 (14.0, 40.71, −34..−36.7) / 214 (25.27, 41.41, −40.6) / 215 (27.61, 41.15, −40.71)].
     w.walk_nav_to([10.5, 42.4, -34.3], "the courtyard's east strip", 1.6);
+    if difficulty >= 3 {
+        // 00-Agent tactics (real-health-00agent-06, measured): the ch-55 alarm's reinforcement
+        // pair (#19/#20) converges on the strip AFTER the alarm's mouth fight — at 00 they met
+        // Bond point-blank (d 3.7/5.2) mid-leg and the reactive return fire bled 77.5 hp
+        // (15 hits, the 00c death ledger: #20 −44.5 in 9, #19 −33.0 in 6, hp 20 left). The
+        // player keeps them at range: fight at every node of the descent, so the pair dies
+        // while it is still 8 u out instead of inside the gun's TooClose band.
+        clear_the_spot(w, 8.0);
+    }
     w.walk_nav_to([14.0, 41.9, -36.7], "the courtyard's south-east corner", 1.6);
+    if difficulty >= 3 {
+        clear_the_spot(w, 8.0);
+    }
     w.walk_nav_to([25.3, 42.6, -40.6], "the east courtyard floor", 1.6);
+    if difficulty >= 3 {
+        clear_the_spot(w, 8.0);
+    }
     // South to the web's 41.15 band and the step's foot [D nodes 355/457/371].
     w.walk_nav_to([25.2, 42.3, -47.3], "the 43-step's foot", 1.6);
+    if difficulty >= 3 {
+        clear_the_spot(w, 8.0);
+    }
     w.walk_nav_to([24.1, 42.3, -50.0], "south along the step's foot", 1.4);
     // Up the 43.0 step (band C z −48: 43.0 at x 18..20 [D]; node 370 (19.96, 43.27, −49.95))
     // and onto the ledge's north end (node 363 (17.49, 43.49, −50.34)).
@@ -470,7 +574,17 @@ fn walk_the_castle_interior_to_the_party_at(difficulty: u32) {
         assert!(sim.drones.searchlights.parts.iter().filter(|p| p.kind == 4).all(|p| !p.drawn), "no corona at the start");
     }
 
-    walk_to_the_courtyard_at(&mut w, false, difficulty);
+    // 00-Agent tactics (real-health-00agent-06, measured): the 00 walk takes the stealth
+    // route's fusebox Laser cut. Without it the courtyard's ch-55 plate raises the alarm and
+    // the ch-55 spawner #735 drops the reinforcement pair (#19/#20) at their strip posts
+    // (11.6, 42.0, −35.1) / (13.2, 41.7, −34.8) — measured at 00: the pair bled 77.5 hp
+    // point-blank on the descent (the 00c/00d ledgers), because the guards' ×1.3 accuracy and
+    // ×1.0 pain [M ReadTuningVars 0x1d3a80 case 0x7000006] make the un-silenced descent
+    // unwalkable. The cut writes ch 57 — the heads' off-channel — and Searchlight_Update
+    // force-states them to 3 before the tracking code runs, so no head ever writes ch 55 and
+    // #735 never spawns [M Searchlight_Update 0x1cb900:88-92; D #747 p1]. The guardroom is
+    // pre-cleared by the 00 fights below, so the cut's exposed window is safe.
+    walk_to_the_courtyard_at(&mut w, difficulty >= 3, difficulty);
     eprintln!("[06] reached the courtyard at tick {}", w.total_ticks);
     for r in &w.rises { eprintln!("[06] rise: ch {} at tick {} bond {:?} touching {:?}", r.0, r.1, r.2, r.3); }
     // THE WALKED BOND TURNS THEM ON AT THE ENTRANCE: the first ch-0x34 rise is the walk's own
@@ -483,7 +597,15 @@ fn walk_the_castle_interior_to_the_party_at(difficulty: u32) {
         // this walk: Bond ≈ (3.4, 46.5, −21.5) mid-drop).
         assert_eq!(first.3, vec![664], "the guardroom route's first plate is the balcony-drop poly #664");
         let h = heads06(&w);
-        assert!(h.iter().all(|&(st, on)| st != 3 && on), "all four heads lit after the entrance plate: {h:?}");
+        if difficulty >= 3 {
+            // The cut route: ch 57 (the heads' off-channel) holds every head at state 3 even
+            // through the reveal NIS — the switch-channel check runs before the tracking
+            // machine [M Searchlight_Update 0x1cb900:88-92], so no head lights and no head
+            // ever writes the alarm channel 55.
+            assert!(h.iter().all(|&(st, _)| st == 3), "the cut keeps the courtyard heads dark: {h:?}");
+        } else {
+            assert!(h.iter().all(|&(st, on)| st != 3 && on), "all four heads lit after the entrance plate: {h:?}");
+        }
         // The lit heads still spot Bond at Operative: the alarm channel 55 (written only while a
         // head tracks [M Searchlight_Update 0x1cb900:142-144]) rises in the courtyard, after the
         // plate. Operative-only pin [D coll-scan of the head cones, this branch]: the catch is a
@@ -514,7 +636,7 @@ fn walk_the_castle_interior_to_the_party_at(difficulty: u32) {
         assert!(s == 1 || s == 3, "the objective is announced but not complete at the courtyard (state {s}) [M 0x182270:98-105 / 0x1827d8:55-67]");
         assert_eq!(sim.drones.level_exit, None, "no exit before the LoadPoint chain");
     }
-    walk_the_ledge_to_the_party(&mut w);
+    walk_the_ledge_to_the_party_at(&mut w, difficulty);
     eprintln!("[06] the whole castle walked in {} ticks; falls: {:?}", w.total_ticks, w.report.falls);
     for f in &w.report.falls { eprintln!("[06] fall: {f}"); }
     for s in &w.report.stuck_events { eprintln!("[06] stuck: {s}"); }
@@ -611,12 +733,31 @@ fn walk_the_castle_interior_to_the_party_real_damage() {
 /// through the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table
 /// 0x2df4c0 row 1 carries 2; Txt 0x14e = "Agent"]. On this level group the pick scales Bond's
 /// pain by Plr_DMod_Normal 0.7 instead of Easy 0.6 and the guards' hit chance by
-/// DroneFiring_Accuracy_Normal 1.1 instead of Easy 0.8 [M Player_HandlePain 0x1902c8;
-/// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 05-08 group]; the min-difficulty
+/// DroneFiring_Accuracy_Normal 0.9 instead of Easy 0.8 [M Player_HandlePain 0x1902c8;
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88; ReadTuningVars 0x1d3a80 case 0x7000006:
+/// Normal 0x3f666666 = 0.9 — this comment said 1.1, which contradicted the decompile; fixed by
+/// real-health-00agent-06]; the min-difficulty
 /// placements pass Drone_Create's gate [M 0x136be0:49] and the Lock_Create auto-unlock keeps
 /// tagged locks shut [M 0x1ae1f8:67-69 — Operative-only]. Real input only — the load path is the
 /// only difference.
 #[test]
 fn walk_the_castle_interior_to_the_party_real_damage_agent() {
     walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(2));
+}
+
+/// 00-Agent sister of `..._real_damage` (real-health-00agent-06): the same walked truck-spawn →
+/// castle-interior → party route at the menu's 00 Agent pick — GameState+0x28 = 3 through the
+/// front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table 0x2df4c0 row 2
+/// carries 3; Txt 0x14f = "00 Agent"; Drones::difficulty assert at the load below]. The
+/// difficulty-3 rows the game reads on this group [M ReadTuningVars 0x1d3a80 case 0x7000006;
+/// Player_HandlePain 0x1902c8; DroneWeap_DoBulletAccuracy 0x179740:74-88 — 3 → Hard]:
+/// Plr_DMod_Hard 0x3f800000 = 1.0 (Bond takes FULL damage — no Easy/Normal relief), the guards'
+/// hit chance × DroneFiring_Accuracy_Hard 0x3fa66666 = 1.3 and their bullets × DroneDamage_Hard
+/// 0x3f4ccccd = 0.8; Drone_Create's min-difficulty gate spawns every placement tagged ≤ 3
+/// [M 0x136be0:49], and the Lock_Create auto-unlock stays off beyond Operative
+/// [M 0x1ae1f8:67-69]. Real input only — the
+/// load path is the only difference; no health, ammo or channel writes, no teleports.
+#[test]
+fn walk_the_castle_interior_to_the_party_real_damage_00agent() {
+    walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(3));
 }
