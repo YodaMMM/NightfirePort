@@ -9,7 +9,12 @@
 //! (the decomp dropped the arg — disassembly 0x12bbb8 `lw a1,0(s1)` → 0x12bbc4 `jal`). A
 //! real-mesh target shows the wreck; an undrawable slot (no batches / the no-draw bit 0x10)
 //! vanishes [M View_AddObjects 0x1e62d8:33's `(obj+0xF0 & 0x8010) == 0`, the FLAGS_COPYING
-//! census]. Opt-in via NF_ISO.
+//! census]. BUT the swap itself is conditional: `Destroy_Create` 0x12c318:57-59 ZEROES tag[0]
+//! when the leaf's own glist flags carry 0x10 (obj+0xF0 = glist+0x44 [M Control_SetGList
+//! 0x134960]) — `Destroy_Smash` then takes its `*piVar1 == 0` arm and skips the swap, so the
+//! intact glist stays attached and the leaf keeps its intact draw. 07000014's server racks are
+//! that case [D obj#273 DESTROY_BoxSatellite flags 0x30]: after the cascade every rack still
+//! shows its model at its spot. Opt-in via NF_ISO.
 
 use nf_formats::iso9660::IsoImage;
 use nf_formats::level::Level;
@@ -53,14 +58,17 @@ fn the_destroyed_glists_resolve_per_the_game() {
         "GENERATORS_Intact's block-0x27 word is GENERATORS_Destroyednew [D]");
     assert!(drawable(&level, m, gen_wreck), "GENERATORS_Destroyednew's glist is a real mesh [D]");
     assert_eq!(level.maps[m].lod.get(sat).copied(), Some(-1), "DESTROY_BoxSatellite has no LOD variant [D]");
-    // The fallback slot for the satellite box: the next entity's glist record — an undrawable
-    // slot (the no-draw bit 0x10), so the game's smash leaves nothing drawn [M 0x1d1b68 +
-    // View_AddObjects 0x8010].
-    assert_eq!(sat + 1, icon, "the satellite box's fallback record is 3RD_Person_Icon [D]");
+    // The satellite box's own glist carries the no-draw bit [D flags 0x30] — Destroy_Create
+    // 0x12c318:57-59 zeroes tag[0] for it, so the parsemap fallback (the next object's record —
+    // 3RD_Person_Icon here [D object-table adjacency]) is NEVER swapped in: the smash skips the
+    // SetGList [M 0x12bb60's `*piVar1 == 0` arm] and the intact glist stands.
+    assert_eq!(level.maps[m].objects[sat].flags & 0x10, 0x10,
+        "DESTROY_BoxSatellite's own glist flags carry the no-draw bit 0x10 [D]");
+    assert_eq!(sat + 1, icon, "the satellite box's parsemap fallback record is 3RD_Person_Icon [D]");
     assert!(!drawable(&level, m, icon), "3RD_Person_Icon's glist is undrawable (flags {:#x}) [D]",
         level.maps[m].objects[icon].flags);
     // The port's bake: every DRAWN leaf with a drawable destroyed glist has a wreck entry, and
-    // no satellite leaf got one (its target is undrawable).
+    // no satellite leaf got one (the creator zeroes its swap — the fallback never swaps in).
     let scene = nf_view::load(&iso, "07000014.bin", false).expect("load");
     assert!(!scene.destroy_centres.is_empty(), "07000014 draws Destroy leaves [D]");
     let drawn: std::collections::HashSet<usize> = scene.destroy_centres.iter().map(|(_, pl)| *pl).collect();
@@ -70,7 +78,17 @@ fn the_destroyed_glists_resolve_per_the_game() {
     let sat_placements: Vec<usize> = level.maps[m].placements.iter().enumerate()
         .filter(|(_, p)| p.flags & 0xff == 0xe1 && !p.by_hash() && p.index as usize == sat)
         .map(|(i, _)| i).collect();
-    for i in sat_placements { assert!(!wrecked.contains(&i), "no wreck baked for the satellite leaf #{i} (undrawable slot)"); }
+    assert!(!sat_placements.is_empty(), "the disc places the satellite box [D]");
+    for i in &sat_placements { assert!(!wrecked.contains(i), "no wreck baked for the satellite leaf #{i} (the swap is zeroed)"); }
+    // The no-swap case's draw side: the satellite leaves are NOT in the per-frame dead gate —
+    // their intact draws survive the smash (the game's racks never disappear) [M 0x12c318:57-59
+    // + 0x12bb60's skip]. The swap-case leaves (barrels, generators — flags without 0x10 [D]) stay
+    // in the gate.
+    for i in &sat_placements {
+        assert!(!drawn.contains(i), "the satellite leaf #{i} keeps its intact draw (no-swap case)");
+    }
+    assert!(sat_placements.iter().all(|i| !drawn.contains(i)) && !drawn.is_empty(),
+        "the swap-case leaves ride the dead gate, the no-swap leaves do not");
 }
 
 /// The real-input path: the sabotage AND 0x8C (the real laser cut is the walk's leg; here the
@@ -122,8 +140,9 @@ fn the_cascade_swaps_the_smashed_leaves_to_their_wrecks() {
     }
     assert!(ch85, "the cascade reaches box #729's death 0x85 [D the kill→death pairs]");
     let sim = scene.sim.as_ref().unwrap();
-    // The smash landed: some Destroy leaves are dead, and every drawn dead leaf is either
-    // wrecked (the swap target drawable) or vanished (undrawable) — never intact-drawn.
+    // The smash landed: some Destroy leaves are dead, and every gated dead leaf (the swap case —
+    // flags without 0x10) is wrecked or vanished, never intact-drawn. The no-swap leaves (the
+    // racks — flags 0x30 [D]) are not in the gate at all: their intact draws stand.
     let dead: std::collections::HashSet<usize> = sim.drones.props.destroy.iter()
         .filter(|d| d.dead).map(|d| d.placement).collect();
     assert!(!dead.is_empty(), "the cascade smashed Destroy leaves");
@@ -134,6 +153,13 @@ fn the_cascade_swaps_the_smashed_leaves_to_their_wrecks() {
         .map(|(_, pl)| *pl).filter(|pl| dead.contains(pl)).collect();
     assert!(!wrecked_dead.is_empty(),
         "the smashed leaves' wreck draws are live (the game shows the wreck after the smash)");
+    // The no-swap leaves that died in the same cascade keep their intact draws: not in
+    // destroy_centres means the renderer's dead gate never touches them [M 0x12c318:57-59 +
+    // 0x12bb60's skip].
+    let noswap_dead: Vec<usize> = dead.iter().copied()
+        .filter(|pl| !scene.destroy_centres.iter().any(|(_, c)| c == pl)).collect();
+    assert!(!noswap_dead.is_empty(),
+        "cascade-killed no-swap leaves (the racks) keep their intact draws");
     // The wreck draw set (the lib.rs feed's own filter shape): the dead leaves' wreck centres
     // ride `destroy_wreck_draw`; their INTACT centres ride `destroy_dead` — the two sets are
     // disjoint (different objects, different glists).

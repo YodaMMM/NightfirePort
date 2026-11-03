@@ -9407,31 +9407,46 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // the same `transform(matrix, obj.centre)` add_instance bakes into the group's cull
                 // sphere, so the bits match the material's `centre` the draw filter reads.
                 if kind == 0xe1 {
-                    destroy_centres.push((transform(&inst.matrix, obj.centre), pi));
-                    // The destroyed-glist swap's WRECK side. `Destroy_Create` 0x12c318:25-30 stores
-                    // tag[0] = `*(glist+0x40)` when the block-0x27 LOD-next word stands, else the
-                    // parsemap fallback slot `pCelList + idx*0x50 + 0x50` [M 0x1d1b68 computes it
-                    // unconditionally; `parsemap_block_LOD` 0x1d1f10 writes `cel+0x40 = index*0x50 +
-                    // pCelList`, so the fallback record is the NEXT main-map entity's glist];
-                    // `Destroy_Smash` 0x12bb60's `Control_SetGList(obj, tag[0])` swaps it in (the
-                    // disassembly 0x12bbb8 `lw a1,0(s1)` + 0x12bbc4 — the decomp dropped the arg).
-                    // The port resolves the same two targets and bakes the wreck at the LEAF's own
-                    // matrix (the swap changes only the glist; obj+0x90 stands). An undrawable slot
-                    // (no batches, or the no-draw bit 0x10 — `View_AddObjects` 0x1e62d8:33's
-                    // `(obj+0xF0 & 0x8010) == 0` gate, the FLAGS_COPYING evidence) is not baked: the
-                    // leaf just vanishes. The wreck's ambient dim follows the swapped-in glist's own
-                    // 0x800 flags (obj+0xF0 is the glist's flags copy [M Control_SetGList 0x134960]).
-                    let wreck = level.maps[map].lod_target(object)
-                        .map(|o| (map, o))
-                        .or_else(|| (p.index as usize + 1 < level.maps[map].objects.len()).then_some((map, p.index as usize + 1)));
-                    if let Some((wm, wo)) = wreck {
-                        let wobj = &level.maps[wm].objects[wo];
-                        if wobj.flags & 0x10 == 0 && wobj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) {
-                            let wmult = if wobj.flags & 0x800 != 0 {
-                                mul_bytes(cel_ambient(&room_cels, transform(&inst.matrix, wobj.centre), 0).unwrap_or([0xff; 3]))
-                            } else { [1.0; 3] };
-                            add_instance(level, &Instance { map: wm, object: wo, matrix: inst.matrix, placement: p.clone() }, Layer::World, None, &mut groups, Some(&mut bounds), None, None, None, wmult, &room_cels, u32::MAX, u32::MAX);
-                            destroy_wrecks.push((transform(&inst.matrix, wobj.centre), pi));
+                    // The swap's NO-SWAP case, which decides whether the leaf's intact draw dies at
+                    // all. `Destroy_Create` 0x12c318:57-59 zeroes tag[0] when the leaf's OWN glist
+                    // flags carry the no-draw bit 0x10 (obj+0xF0 = glist+0x44, copied by the
+                    // SetGList at :25 [M Control_SetGList 0x134960]); `Destroy_Smash` 0x12bb60 then
+                    // takes its `*piVar1 == 0` arm and SKIPS the `Control_SetGList(obj, tag[0])`
+                    // swap — the intact glist stays attached and the leaf keeps drawing exactly
+                    // what it drew before the smash. 07000014's server racks are that case
+                    // [D obj#273 DESTROY_BoxSatellite flags 0x30, bit 0x10 set]: the cascade's
+                    // blast leaves every rack's intact model on show (the game's playtest: the
+                    // racks must not disappear). The port's old read hid them (the racks went into
+                    // the per-frame dead gate — destroy_centres below — with no wreck baked). A
+                    // leaf in the zeroing case therefore joins NEITHER the dead gate NOR the wreck
+                    // bakes; its draws stand unfiltered forever.
+                    if obj.flags & 0x10 == 0 {
+                        destroy_centres.push((transform(&inst.matrix, obj.centre), pi));
+                        // The destroyed-glist swap's WRECK side. `Destroy_Create` 0x12c318:25-30 stores
+                        // tag[0] = `*(glist+0x40)` when the block-0x27 LOD-next word stands, else the
+                        // parsemap fallback slot `pCelList + idx*0x50 + 0x50` [M 0x1d1b68 computes it
+                        // unconditionally; `parsemap_block_LOD` 0x1d1f10 writes `cel+0x40 = index*0x50 +
+                        // pCelList`, so the fallback record is the NEXT main-map entity's glist];
+                        // `Destroy_Smash` 0x12bb60's `Control_SetGList(obj, tag[0])` swaps it in (the
+                        // disassembly 0x12bbb8 `lw a1,0(s1)` + 0x12bbc4 — the decomp dropped the arg).
+                        // The port resolves the same two targets and bakes the wreck at the LEAF's own
+                        // matrix (the swap changes only the glist; obj+0x90 stands). An undrawable slot
+                        // (no batches, or the no-draw bit 0x10 — `View_AddObjects` 0x1e62d8:33's
+                        // `(obj+0xF0 & 0x8010) == 0` gate, the FLAGS_COPYING evidence) is not baked: the
+                        // leaf just vanishes. The wreck's ambient dim follows the swapped-in glist's own
+                        // 0x800 flags (obj+0xF0 is the glist's flags copy [M Control_SetGList 0x134960]).
+                        let wreck = level.maps[map].lod_target(object)
+                            .map(|o| (map, o))
+                            .or_else(|| (p.index as usize + 1 < level.maps[map].objects.len()).then_some((map, p.index as usize + 1)));
+                        if let Some((wm, wo)) = wreck {
+                            let wobj = &level.maps[wm].objects[wo];
+                            if wobj.flags & 0x10 == 0 && wobj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) {
+                                let wmult = if wobj.flags & 0x800 != 0 {
+                                    mul_bytes(cel_ambient(&room_cels, transform(&inst.matrix, wobj.centre), 0).unwrap_or([0xff; 3]))
+                                } else { [1.0; 3] };
+                                add_instance(level, &Instance { map: wm, object: wo, matrix: inst.matrix, placement: p.clone() }, Layer::World, None, &mut groups, Some(&mut bounds), None, None, None, wmult, &room_cels, u32::MAX, u32::MAX);
+                                destroy_wrecks.push((transform(&inst.matrix, wobj.centre), pi));
+                            }
                         }
                     }
                 }
