@@ -6,3 +6,7 @@ Tried and not enough: the sweep at every difficulty (now on master; the Operativ
 
 ---
 claimed-by: sandbox7 at 2026-11-03T22:34Z
+
+---
+## Report (done, 2026-11-03T23:52Z)
+
