@@ -54,3 +54,7 @@ Work log:
   #18/#36 at one spot; a round into the exposed box hits whichever twin the ray meets first).
   walkreal0c.rs: legs 1-6 factored into `walk_spawn_to_the_yard_ladder_base` (the band walk calls
   it and continues at leg 7 — no behaviour change).
+- (03:25) FINAL: every walkreal_*_live binary green (77: the 25 walkreal_0700*, celprobe, dump,
+  the 50 probe*_live — incl. both 0c consumers of the split walk); bullet/decal/stairwell group
+  green; nf-game 1040 passed / 0 failed; nf-formats+nf-audio 136 passed with exactly the 3
+  allowed slim-ISO disc_golden failures. Report at docs/reports/player-upward-shot.md.
