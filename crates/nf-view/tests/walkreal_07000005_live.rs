@@ -1427,9 +1427,20 @@ fn the_notch_holds_the_walk_and_the_grab_needs_its_zone() {
 /// [M Trigger_Activate 0x1b2318:91-107] and ends the level into 07000006 — the same chain the
 /// old stand-in pinned, now reached on real input.
 #[test]
-fn the_door_band_exit_chains_to_07000006_walked() {
+fn the_door_band_exit_chains_to_07000006_walked() { the_door_band_exit_chains_to_07000006_walked_at(1) }
+
+/// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent rides the
+/// front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
+fn the_door_band_exit_chains_to_07000006_walked_at(difficulty: u32) {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load(&iso, "07000005.bin", false).expect("load 07000005")
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "07000005.bin", false, None, difficulty)
+            .expect("load 07000005")
+    });
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     w.wait(30);
     walk_the_cable_route_to_the_stairs_top(&mut w);
     walk_the_stairs_top_to_the_terrace_spot(&mut w);
@@ -1473,4 +1484,17 @@ fn the_door_band_exit_chains_to_07000006_walked() {
 #[test]
 fn the_door_band_exit_chains_to_07000006_walked_real_damage() {
     walker::with_real_damage(the_door_band_exit_chains_to_07000006_walked);
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty): the same walked
+/// cable-car → terrace → door-#112 route at the menu's Agent pick — GameState+0x28 = 2 through
+/// the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table 0x2df4c0 row
+/// 1 carries 2; Txt 0x14e = "Agent"]. On this level group the pick scales Bond's pain by
+/// Plr_DMod_Normal 0.7 instead of Easy 0.6 and the guards' hit chance by
+/// DroneFiring_Accuracy_Normal 1.1 instead of Easy 0.8 [M Player_HandlePain 0x1902c8;
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 05-08 group]. Real input only — the load
+/// path is the only difference.
+#[test]
+fn the_door_band_exit_chains_to_07000006_walked_real_damage_agent() {
+    walker::with_real_damage(|| the_door_band_exit_chains_to_07000006_walked_at(2));
 }
