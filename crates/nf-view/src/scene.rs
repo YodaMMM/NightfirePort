@@ -2847,6 +2847,20 @@ impl Sim {
             .and_then(|w| w.get(0x68..0x6c)).map_or(false, |b| u32::from_le_bytes(b.try_into().unwrap()) & 0x40 != 0);
         let aiming = self.aim_gate(input.aiming || (input.scope && scoped));
         self.free_aim = aiming && input.aiming;
+        // level-0c-yard-climb-real-health-4 [M Player_AutoAim 0x1a7c98:50-59 — the aim-branch
+        // ease]: while the aim button is HELD (obj+0x60 bit0 set), the assist offsets ease
+        // toward the manual offsets at 0.5/tick and the Check_AutoAim scan does NOT run — per
+        // tick, not per shot. The port ran the ease only inside the fire path's dir pick, so
+        // an assist locked during the walk legs stayed frozen through the aim-raise and
+        // steered the first aimed rounds off target (measured: the pre-climb stand's shot
+        // carried aoff -0.216 rad — 12° off the converged view, the round died on the wall
+        // behind #15 [L the NF_RF_TRACE impact trace]; the same freeze held the west-edge
+        // stand's rounds 1.2 u west of #13 at (-4.20,12.58,-221.83) [L the same trace]).
+        if input.aiming {
+            let (ox, oy) = (-self.cursor[0] * 0.76966, self.cursor[1] * 0.57724);
+            let off = self.drones.aim_offset;
+            self.drones.aim_offset = [off[0] + (ox - off[0]) * 0.5, off[1] + (oy - off[1]) * 0.5];
+        }
         // Weapon switching (`Player_WeaponChange` 0x1a6f80): only when idle (not firing/reloading/holstering). The
         // switch request (`anim+0x63`) is set here; the holster/draw cycle runs in `run` (`Player_SetWeaponAnimObj`).
         // The weapon/gadget split: mouse wheel / Q cycles weapons (mode=0, 1..0x47); G cycles gadgets (mode=1,
@@ -4327,9 +4341,13 @@ impl Sim {
             // assist of a target locked before the raise carries into the first aim-mode shots.
             // fix-guard-misc2: the port dropped the lock and the offsets entirely on entering aim
             // mode, so an assist acquired while hip-firing never reached an aim-mode bullet.
-            // fix-aim-raise2: the gated BIT (`self.aiming`, maintained by `aim_gate` before run),
-            // not the raw button — the scan runs while a raise-script weapon is still raising.
-            let dir = if self.auto_aim && !self.free_aim { self.drones.auto_aim(&d, camera, look, self.gun.weapon) } else if self.free_aim {
+            // fix-aim-raise2 gated the scan on the BIT so the scan ran during the raise; 
+            // level-0c-yard-climb-real-health-4 corrects that with the decompile: the scan gate
+            // is the RAW aim button [M Player_AutoAim 0x1a7c98:50-59 — the branch reads
+            // obj+0x60 bit0: bit set → the ease arm, no scan; bit clear → the Check_AutoAim
+            // scan], so the button-held raise runs the ease (the per-tick ease lives in the
+            // step_bond path, right after the aim gate) and only the button-UP ticks scan.
+            let dir = if self.auto_aim && !self.free_aim && !aiming { self.drones.auto_aim(&d, camera, look, self.gun.weapon) } else if self.free_aim {
                 // The cursor is screen-space (cross units); the offsets are object-frame angles
                 // (a larger yaw turns LEFT, so x flips — the same flip `crosshair()` documents).
                 let (ox, oy) = (-self.cursor[0] * 0.76966, self.cursor[1] * 0.57724);

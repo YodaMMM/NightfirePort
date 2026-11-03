@@ -431,8 +431,26 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
 /// Real input only: the whole route is walked from the level start, no teleport after the
 /// load; the top-up walk and the eastroute replay (flag off) keep master's pinned
 /// choreography.
+/// level-0c-yard-climb-real-health-4 (GREEN — un-ignored): the -3 blocker (the west sniper
+/// #13 eating the runs at tick 14308) was never the ledge lip — the session's shot trace
+/// (NF_RF_TRACE + the player_impacts dump) showed the stands' rounds flying 2-3° OFF the
+/// converged view and dying on the wall BEHIND #13 at (-4.20,12.58,-221.83) /
+/// (-4.26,13.04,-221.78), because (a) the taps fired with the aim bit false (the raise never
+/// ran: the aim-press edge fired into the switch anim, and the game queues the raise only on
+/// the pressed edge from the idle machine [M 0x1a24c8:113-152]) so every round rode the HIP
+/// cone (spread base 100.0 [L ee_start_05.bin @ 0x2c10b8 +0x24]), and (b) the port scanned
+/// auto-aim and froze the walk-legs' assist offset through the aim hold, steering the first
+/// aimed rounds -12° off (aoff -0.216) — the game eases the offsets toward the manual offsets
+/// EVERY aim tick and scans only button-up ticks [M Player_AutoAim 0x1a7c98:50-59]. The port
+/// fixes live in scene.rs (the per-tick aim-branch ease + the raw-button scan gate); the
+/// stands gained the raise loop (settle, then hold aim until the bit sets), the aim-bit fire
+/// gate and the cursor-aware convergence (the effective aim = the view + the eased cursor
+/// offsets). Result: #13 dies AIMED from the west edge (part 4, t284 [L this session's
+/// impact trace]), the #284 crossing + the ledge diagonals + the #282 ride + the 0d legs all
+/// pass on real input, and the mission completes with Bond ALIVE at 26.2 hp ([L] the green
+/// run: 'objective 3 complete on the 0d arrival — the whole mission walked (0c legs 19287
+/// ticks + 0d 838 ticks)').
 #[test]
-#[ignore = "real health 2026-11-03 (level-0c-yard-climb-real-health-3): the YARD IS SOLVED and the #284 WIRE CROSSING PASSES on this branch — the still-gate aimed stand (the deck sentry's wiggle-step during the round's flight was the measured miss; the zero-spread act has no lead) kills #18 MID-CROSSING ([L] the door spot is not exposed at all — aim None; the -2 census's twin #36 is present false on this tree, the pair/corpse theory retired), the east-ledge/pre-climb/ladder-top/west-edge sweeps run on the strict gun rays, the climb mantles, the ledger at tick 12300 is 82.4 for 100 with Bond ALIVE at 17.6 hp (the -2 runs died at the base at 1.6), and the ride + drop land on the west ledge ([L] 'the west gap crossed on wire #284 — landed (-8.21, 12.82, -215.66)'). THE REMAINING BLOCKER is the west-ledge fight: the west sniper #13 patrols to (-3.0, 12.2, -221.1), d ~6 LEVEL across the gap, and its 2 x -16 + the fatal -1.6 graze kill the 51.4-hp Bond at tick 14308 ([L] the death log) — the walk's own fights land killed false and the still-gate sweeps find NO gun-ray-exposed candidate from the edge or the ledge (the plain eye ray reads Some while the rounds die on the ledge lip — the predictor-vs-muzzle-flight gap the #15 case measured; the strict rays read None behind #13's cover). Measured razor edge: with the west-edge sweep at the LADDER TOP the ride froze byte-exact at d_B 1.52-1.61 (wire_anim_time stuck, auto_drop frozen, substate 6, disabled false — an NIS/anim-script gate keyed to a volume the ride's sway phase enters); with the sweep moved to the west edge the ride's phase shifted and the crossing passes — the freeze is path-phase dependent, not deterministic. Next session: kill #13 from a spot whose gun rays clear (or walk the lip corner), then the ledge diagonals + wire #282 + the 0d legs under the fights; then un-ignore."]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
     walker::with_yard_aimed_stands(|| {
         walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff)

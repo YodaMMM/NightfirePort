@@ -42,6 +42,10 @@ pub fn with_yard_aimed_stands<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// Trace helpers (scratch): the gun's state for the no-bullet-spawned line.
+fn s_gun_debug(w: &Walker) -> String { format!("{:?}", w.scene.sim.as_ref().unwrap().gun.weapon) }
+fn s_gun_fire_state(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().gun.fire_state }
+
 /// One aimed-0x1e stand on drone `di` with the STILL GATE. The aimed act's zero spread
 /// [M Bullet_init 0x12c5a0:139-170] puts the round exactly along the view, but the round
 /// FLIES ([M] Bullet_update 0x12e7b0 — the round steps its `speed` per tick), and a guard
@@ -60,6 +64,28 @@ fn yard_stand_aimed(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
         sim.step_bond(nf_game::player::Input { switch_to: Some(0x1e), ..Default::default() }, false, false, false);
         w.total_ticks += 1;
     }
+    // level-0c-yard-climb-real-health-4: the aim-RAISE loop. Measured (this session): the
+    // stand's aim press at t0 fired its edge INTO the switch anim (switch_state 3) and the
+    // raise never queued — the aim bit stayed false for the whole stand (360+ ticks, gun
+    // idle [L the a04i run's mid-crossing trace]), so every round rode the hip cone. The
+    // game queues the raise ONLY on the aim-PRESSED edge from the idle machine
+    // [M 0x1a24c8:113-152 — `(uVar8 & 1) == (bVar5 & 1)` skips the arms, the raise arm runs
+    // on the 0→1 edge; the port's queue gate scene.rs 4707 needs switch_state 0 + the idle
+    // script too], so a player RELEASES the aim after the switch, lets the weapon settle,
+    // and RE-PRESSES. Wait for switch_state 0 (no input), then hold aim until the bit sets
+    // (the raise plays ~len/1.25 ticks; its finish sets the bit [M 0x1a2e38:554-561]).
+    for _ in 0..90 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.gun.switch_state == 0 && !sim.gun.fire_state { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
+    }
+    for _ in 0..240 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.aiming { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { aiming: true, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
     const STILL_NEED: u32 = 18;
     let prev = w.dmg.aimed_fights;
     w.dmg.aimed_fights = true;
@@ -74,6 +100,7 @@ fn yard_stand_aimed(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
         let mut still = 0u32;
         let mut last_pos = [0.0f32; 3];
         let mut have_pos = false;
+        let mut trace_impact_frame = 0u32;
         for t in 0..cap {
             let (input, fire, reload) = {
                 let sim = w.scene.sim.as_ref().unwrap();
@@ -103,10 +130,40 @@ fn yard_stand_aimed(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                 let at = aim.unwrap_or([d.pos[0], d.pos[1] + 0.3, d.pos[2]]);
                 let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
                 let h = (dx * dx + dz * dz).sqrt().max(0.5);
-                let err = { let mut a = dx.atan2(dz) - sim.bond.yaw;
+                let desired_yaw = dx.atan2(dz);
+                let desired_pitch = (dy / h).atan();
+                // level-0c-yard-climb-real-health-4: the AIM-MODE convergence. With the aim bit on,
+                // the fired round's direction is the VIEW PLUS the cursor offsets [M scene.rs
+                // free-aim: the cursor follows the stick (`want = cursor − turn/0.76966`,
+                // `+look·π/2/0.57724`, clamped ±0.296/±0.4), the offsets ease toward
+                // (−cx·0.76966, +cy·0.57724) and the fired dir = the view + the eased offsets —
+                // the same view+cursor round the 07000011 walk pinned (precise_fights' doc)] — so
+                // converging the VIEW alone (the old err/perr) left the shot on the cursor: the
+                // measured rounds steered −12° off (aoff −0.216) and died on the wall behind
+                // #15 [L the a04k trace]. Drive the CURSOR to the position that puts the effective
+                // aim on the target, and gate the tap on the EFFECTIVE error.
+                let yaw_err = { let mut a = desired_yaw - sim.bond.yaw;
                     while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                     while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
-                let perr = (dy / h).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+                let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
+                let cx_want_raw = -yaw_err / 0.76966;
+                let cy_want_raw = pitch_err / 0.57724;
+                let cx_want = cx_want_raw.clamp(-0.296, 0.296);
+                let cy_want = cy_want_raw.clamp(-0.4, 0.4);
+                let cur = sim.cursor;
+                // The drive uses the UNCLAMPED target: at the window edge the overflow becomes
+                // the free-aim spill (scene.rs 3066-3067 rewrites the input to the clamp
+                // overflow) and turns the VIEW — the clamped drive fed zero there and the aim
+                // stalled with the cursor pinned at (±0.296, ±0.4) [L the a04m trace: the err
+                // frozen at −0.924 for 300+ ticks].
+                let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
+                let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
+                // The effective aim (what the fired round obeys): the view + the eased offsets.
+                let aoff = sim.drones.aim_offset;
+                let err = { let mut a = yaw_err - aoff[0];
+                    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                let perr = pitch_err - aoff[1];
                 // Another live hostile on the line, short of the target: the game's bullets hit
                 // any drone [M Drone_CollisionHandler 0x140968] — shoot the blocker (the
                 // fights' shoot_blockers idiom; the yard top carries several 0x1e guards).
@@ -134,14 +191,27 @@ fn yard_stand_aimed(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                     continue;
                 }
                 let reload = sim.gun.clip == 0;
-                let fire = !reload && unseen == 0 && !blocked && err.abs() < 0.01 && perr.abs() < 0.01
+                // level-0c-yard-climb-real-health-4: the AIM-BIT gate. Measured (this session's
+                // NF_RF_TRACE shot trace): the stand's taps fired with `self.aiming == false` —
+                // the aim-raise anim had not finished [M the aim bit is set only after the
+                // aim-raise anim finishes — Player_SetWeaponAnimObj case 0xf, scene.rs's auto-aim
+                // comment] — so every round rode the HIP cone (the 0x1e's spread base 100.0 [L
+                // ee_start_05.bin @ 0x2c10b8 +0x24]: 2-3° of scatter at d 16 — the measured
+                // rounds died 1.2-1.3 u off, on the wall BEHIND #13 at (-4.20,12.58,-221.83) and
+                // (-4.26,13.04,-221.78) [L the impact trace], while the probe's AIMED round from
+                // the same class of pose HIT #13 part 4 [L walkreal_probe0c_lip]). The trigger
+                // also kept the gun in its fire script (fire_state true t88-t344), so the raise
+                // never ran. A player holds L1 WITHOUT tapping: the raise finishes, the bit sets,
+                // and the tap is then a zero-spread round. Gate the tap on the bit.
+                let fire = sim.aiming && !reload && unseen == 0 && !blocked && err.abs() < 0.01 && perr.abs() < 0.01
                     && still >= STILL_NEED && t.saturating_sub(last_tap) >= 8;
                 if trace && t % 60 == 0 {
-                    eprintln!("[0c] yard stand ({label}) t{t}: tgt #{di} hp {:.1} at ({:.2},{:.2}) still {still} aim {:?} err {err:.3} perr {perr:.3} clip {} spare {} hp {:.1}",
+                    eprintln!("[0c] yard stand ({label}) t{t}: tgt #{di} hp {:.1} at ({:.2},{:.2}) still {still} aim {:?} err {err:.3} perr {perr:.3} clip {} spare {} hp {:.1} atgt {:?} aoff {:?} aimbit {} fire_state {} cursor ({:.3},{:.3})",
                         sim.drones.list[di].health, sim.drones.list[di].pos[0], sim.drones.list[di].pos[2],
-                        aim.map(|a| [a[0], a[2]]), sim.gun.clip, sim.gun.spare, sim.drones.health.health);
+                        aim.map(|a| [a[0], a[2]]), sim.gun.clip, sim.gun.spare, sim.drones.health.health,
+                        sim.drones.aim_target, sim.drones.aim_offset, sim.aiming, sim.gun.fire_state, cur[0], cur[1]);
                 }
-                (nf_game::player::Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), aiming: true, ..Default::default() }, fire, reload)
+                (nf_game::player::Input { turn, look, aiming: true, ..Default::default() }, fire, reload)
             };
             if reload {
                 w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, true, false);
@@ -150,9 +220,42 @@ fn yard_stand_aimed(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                 for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
             } else if fire {
                 last_tap = t;
+                let pre = w.scene.sim.as_ref().unwrap().drones.player_bullets.len();
+                let (vyaw, vpitch) = { let s = w.scene.sim.as_ref().unwrap(); (s.bond.yaw, s.bond.pitch) };
+                let aiming_bit = w.scene.sim.as_ref().unwrap().aiming;
                 w.tick_fire(input);
+                if trace {
+                    let s = w.scene.sim.as_ref().unwrap();
+                    if let Some(b) = s.drones.player_bullets.get(pre).or_else(|| s.drones.player_bullets.last()) {
+                        eprintln!("[0c] yard stand ({label}) t{t}: SHOT from ({:.2},{:.2},{:.2}) dir ({:.4},{:.4},{:.4}) | view yaw {vyaw:.4} pitch {vpitch:.4} view_dir ({:.4},{:.4},{:.4}) aiming_bit {aiming_bit} spread {:?}",
+                            b.pos[0], b.pos[1], b.pos[2], b.dir[0], b.dir[1], b.dir[2],
+                            vyaw.sin(), vpitch.sin(), vyaw.cos(), s.drones.player_spread);
+                    } else {
+                        eprintln!("[0c] yard stand ({label}) t{t}: SHOT but NO bullet spawned (gun state {:?} fire_state {})",
+                            s_gun_debug(w), s_gun_fire_state(w));
+                    }
+                }
             } else {
                 w.tick(input, false);
+            }
+            // level-0c-yard-climb-real-health-4 (trace): what did this tick's rounds do? The
+            // probe (walkreal_probe0c_lip, scratch) fires the SAME shot from the SAME pose and
+            // HITS #13 (part 4) — so the real stand's rounds dying means the live pose/differs;
+            // the impact events name the death point.
+            if trace && w.total_ticks != trace_impact_frame {
+                trace_impact_frame = w.total_ticks;
+                let imps: Vec<String> = w.scene.sim.as_ref().unwrap().drones.player_impacts.iter()
+                    .map(|i| match i {
+                        nf_game::drone::PlayerImpact::Drone { drone, part, at } =>
+                            format!("DRONE #{drone} part {part} at ({:.2},{:.2},{:.2})", at[0], at[1], at[2]),
+                        nf_game::drone::PlayerImpact::World(p) =>
+                            format!("WORLD at ({:.2},{:.2},{:.2})", p[0], p[1], p[2]),
+                    }).collect();
+                if !imps.is_empty() {
+                    let s = &w.scene.sim.as_ref().unwrap();
+                    eprintln!("[0c] yard stand ({label}) t{t}: impacts {} | bond ({:.2},{:.2},{:.2}) eye {:.2} crouch {:.2} yaw {:.3} pitch {:.3} weapon {:#x}",
+                        imps.join(" | "), s.bond.pos[0], s.bond.pos[1], s.bond.pos[2], s.bond.eye, s.bond.crouch_drop, s.bond.yaw, s.bond.pitch, s.gun.weapon);
+                }
             }
         }
         w.scene.sim.as_ref().unwrap().drones.list[di].health <= 0.0
@@ -216,6 +319,7 @@ fn yard_sniper_stands(w: &mut Walker, label: &str, max: usize) {
     let sweep = match label {
         "at-the-door" => Some((64.0f32, 900u32, 3usize)),
         "pre-climb" | "ladder-top" | "west-edge" | "west-ledge" => Some((48.0, 700, 3)),
+        "lip-1" | "lip-2" | "lip-3" | "lip-4" => Some((48.0, 300, 3)),
         _ => None,
     };
     if let Some((range, cap, count)) = sweep {
@@ -1070,11 +1174,28 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
     // measured). The still-gate stand aims with the strict gun rays; a no-op when the flag is
     // off.
     yard_sniper_stands(&mut w, "west-ledge", 3);
+    // level-0c-yard-climb-real-health-4 (OPT-IN): the diagonal stands. Measured this
+    // session: #13's cover reads NO gun-ray-exposed candidate from the landing (the
+    // west-ledge sweep above stood zero times) and from the west edge the converged still-
+    // gate rounds die in flight (clip 2→1 spent, hp 10.0 never moved [L this session's
+    // run]); the walk's own fight on the diagonal burns its clip the same way (fight#13
+    // t0-t240, blocked false, err 0.001-0.016, hp 10.0 never moved) and the -16 at frame
+    // 13725 + the fatal -1.6 graze kill the 17.6-hp Bond at tick 14308 mid-diagonal at
+    // (-7.69, 12.40, -217.32) [L the death log]. Custom stand spots OFF the walk's own
+    // lines fall off the strip (two probe walk_tos landed in the gap at y 9.88/1.96 [L
+    // this session]) — so the still-gate stands run AT the route's own diagonal arrivals
+    // (proven floor, the walk_to radii the master walk pins), stepping toward his post
+    // until the strict rays clear; one landing round kills the 10-hp sniper [L the
+    // census]. yard_sniper_stands is a no-op when the flag is off.
     // The diagonal ledges south-east to icon #6 [D probe blk2 west map].
     w.walk_to(Wp::new(-6.0, 12.4, -219.6).r(1.5), "the west ledge diagonal");
+    yard_sniper_stands(&mut w, "lip-1", 3);
     w.walk_to(Wp::new(-4.5, 12.4, -221.5).r(1.5), "the west ledge diagonal 2");
+    yard_sniper_stands(&mut w, "lip-2", 3);
     w.walk_to(Wp::new(-2.5, 12.4, -222.8).r(1.4), "the west ledge diagonal 3");
+    yard_sniper_stands(&mut w, "lip-3", 3);
     w.walk_to(Wp::new(-1.4, 12.4, -223.6).r(1.0), "icon #6 at wire #282's B end");
+    yard_sniper_stands(&mut w, "lip-4", 3);
     // REAL: grab wire #282 (`wire_silosilo2`, A (5.85, 14.11, −223.15) B (−0.25, 14.11, −223.15)
     // [D probe blk]) — the standing body at (−1.4, −223.6) is inside the wire's world sphere
     // (centre (2.80, 14.11, −223.15) r 5.05 [D probe blk]), so the walk-east contact grab fires
