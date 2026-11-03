@@ -12,7 +12,12 @@ pub use walker::{Act, Walker, Wp, wrap_pi};
 
 /// The spawn asserts + legs 1-9c of the main walk, ending on the slot jump's band landing
 /// (grounded, floor 10.2..11.7, x > 42.6). Deterministic: the caller continues from here.
-pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
+/// player-upward-shot: legs 1-6 of `walk_spawn_to_the_band` — the REAL route from the level
+/// start (the walkway start #1 [D]) through the laser-watch burn, the vent drop, the staircase
+/// descent, the plates chain, the open secret door and the yard crossing — ending at the yard
+/// ladder base (11.6, 1.2, -186.6). Same legs, same asserts, one cut point; the band walk calls
+/// this and continues at leg 7. No behaviour change for any caller.
+pub fn walk_spawn_to_the_yard_ladder_base(iso: &str) -> Walker {
     let iso = iso.to_string();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "0700000c.bin", false, None).unwrap());
     {
@@ -604,6 +609,12 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
     w.walk_to(Wp::new(40.0, 1.4, -184.5).r(2.0), "the yard west");
     w.walk_to(Wp::new(20.0, 1.4, -184.5).r(1.5), "the yard west 2");
     w.walk_to(Wp::new(11.6, 1.2, -186.6).r(1.2), "the ladder base");
+    w
+}
+
+pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
+    // Legs 1-6 (unchanged — now shared with the yard-deck-sentry test).
+    let mut w = walk_spawn_to_the_yard_ladder_base(iso);
     // Leg 7 (REAL): the ladder walk-in grab + climb (the walk substate rides the DEFAULT arm
     // r 0.55 [M 0x1953f4 via the jump table @0x2fc0d0]).
     w.walk_to(Wp::new(10.3, 1.05, -186.8).r(0.7), "the ladder approach");

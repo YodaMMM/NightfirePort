@@ -196,70 +196,99 @@ fn the_stun_flash_scales_with_distance() {
         "the alpha is the game's distance factor ×(LOS branch) on the recorded geometry [M 0x12dfb0], got {alpha} want {e}");
 }
 
-/// ── The guard within the blast is stunned for 3600 ticks and drops his weapon ───────────────────
-/// msg 0x18 (player-thrown, SP) → 0x4D; ENTER arms `RecoverTime`'s 0x35 arm — 18·(200−0) = 3600
-/// ticks at the stats default [M 0x147188 + 0x172bb0] — and drops the held weapon (DropWeapon +
-/// ChangeWeapon(1)) [M 0x172bb0 case 1]. The port armed 7200 and left the rifle in his hands.
+/// ── The guard within the blast is stunned for the game's recover and gets up ────────────────────
+/// The flash's delivery rule [M `Bullet_DoTrails` 0x12d890 flash arm 0x12e0c0 →
+/// `Drone_MessageObjVicinity` 0x13a438]: msg 0x18 to every drone within 20.0 of the BLAST whose
+/// head→blast sight passes (`NDrone2_CanSeeObject` = the AI-net ray + `Collide_LineOfSight`
+/// [M 0x176f18]) — NOT within 20 of Bond. The Impact ENTER [M 0x172bb0 case 1] stores
+/// `RecoverTime` (the 0x35 arm: 18·(200−0) = 3600 ticks [M 0x147188]) into +0xCE0, drops the held
+/// weapon for anim set ≠ 4 (`DropWeapon + ChangeWeapon(1)`), calls the fall 0x2E on the Rand draw
+/// 0 (0x2D on 1) with follow-on Loop 0x4E; `StunGrenadeLoop` ENTER re-arms the wake timer with the
+/// STORED span — `+0xCC4 = frame + (+0xCE0)`, a fresh 3600 from the Loop's first tick [M 0x1631c0
+/// case 1] — and case 0xC releases to Recover 0x4F when nobody is within 2.0
+/// (`DroneFunc_AnyoneNear(0x40000000)`); Recover calls the get-up 0x76 with follow-on Attack 0x56
+/// for non-civilians [M 0x163350 case 1]. The release chain must FINISH: the CallAnim no-datum
+/// fallback substitutes a playable state [M 0x13ab58], and a call whose transition is missing from
+/// both the current anim's list and state 0's pends exactly as the game's `GetDAnimForCall` does
+/// [M 0x13db30 → 0x13de40] — no timeout exists in the decompile.
+///
+/// The subject is the PLACED guard list[2] (anim set 5): Bond is teleported 3 u to his right and
+/// faces him — the one spot on 07000005 where a placed guard stands inside the delivery rule (the
+/// level-start within-20 guard list[6] stands 7.6 u below the blast floor, outside the sight
+/// check). Both hops are the test's own staging, like the original's post-pop retreat.
 #[test]
-#[ignore = "107a open: the arm verifies (a placed guard: state 0x4d, weapon 1, stun_until = frame+3600; the TIMER_C pass fires and clears timer_c after the live-pos stun_kept_down fix) but the release chain stalls in 0x4d for guards whose anim set lacks the 0x2d/0x2e stun anims — guard 0 advanced to the Loop, the chosen gi never left Impact; chase DroneAnim_CallAnim's no-datum fallback next session"]
 fn the_stun_stuns_the_guard_for_3600_and_drops_his_weapon() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_grenade(&iso, 0x35);
-    // A PLACED guard (the spawn-pocket guards react to the thrown stun like the game's) — the dev
-    // spawn's drone lacks the start anim and its IMPACT follow-on never advances (107a open, noted
-    // in the report).
-    let gi = {
+    let (gi, gx, gy, gz, gyaw) = {
         let sim = scene.sim.as_ref().unwrap();
-        *sim.drones.llist.iter().find(|&&i| {
-            let dr = &sim.drones.list[i];
-            dr.present && dr.enabled && !dr.corpse && dr.health > 0.0
-                && (dr.pos[0] - sim.bond.pos[0]).powi(2) + (dr.pos[2] - sim.bond.pos[2]).powi(2) < 400.0
-        }).expect("a placed guard within 20 u of Bond's start on 07000005")
+        let g = &sim.drones.list[2];
+        (2, g.pos[0], g.pos[1], g.pos[2], g.yaw)
     };
     {
         let sim = scene.sim.as_mut().unwrap();
-        let dr = &mut sim.drones.list[gi];
-        dr.health = 200.0; // outlive any stray damage: this test is about the stun
+        sim.drones.list[gi].health = 200.0; // outlive any stray damage: this test is about the stun
     }
-    scene.sim.as_mut().unwrap().bond.pitch = -0.9;
+    // Bond 3 u to the guard's right (perpendicular −), facing him. [L] measured: the only tried
+    // offset near list[2] where the floor holds Bond, the grenade pops and the flash reaches him.
+    let (sy, cy) = (gyaw.sin(), gyaw.cos());
+    let mut dev = nf_view::dev::Dev { scenario: None, ..Default::default() };
+    dev.teleport(&mut scene, [gx + cy * 0.0 - sy * -3.0, gy, gz + sy * 0.0 + cy * -3.0], gyaw + std::f32::consts::PI);
+    for _ in 0..30 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+    scene.sim.as_mut().unwrap().bond.pitch = -0.9; // at the floor just ahead
     let mut popped = None;
     for _ in 0..600u32 {
         scene.sim.as_mut().unwrap().step_bond(Input::default(), true, false, false);
         if scene.sim.as_ref().unwrap().drones.health.flashbang > 0.0 { popped = Some(()); break; }
     }
     popped.expect("the stun flashed");
-    // set_state queues next_state — give the SM a pass to land 0x4D. Then step Bond back: the
-    // Loop's case 0xC holds the guard down while anyone is within 4.0 [M 0x1631c0], and he is
-    // spawned 2 u from Bond — the release is the 3600 timer only from a distance.
+    // set_state queues next_state — give the SM a pass to land 0x4D. Bond then steps back 30 u
+    // (the proper teleport re-cells him): the Loop's case 0xC holds the guard down while anyone
+    // is within 2.0 [M 0x1631c0 case 0xc], and he is spawned ~3 u from Bond — the release is the
+    // 3600 timer only from a distance.
     for _ in 0..2 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
-    // The proper teleport (re-cells Bond; a raw bond.pos write gets snapped back by the player
-    // collision's floor revalidation).
-    let mut dev = nf_view::dev::Dev { scenario: None, ..Default::default() };
     let bp = scene.sim.as_ref().unwrap().bond.pos;
-    dev.teleport(&mut scene, [bp[0] - 30.0, bp[1], bp[2]], 0.0);
+    let byaw = scene.sim.as_ref().unwrap().bond.yaw;
+    dev.teleport(&mut scene, [bp[0] - byaw.sin() * 30.0, bp[1], bp[2] - byaw.cos() * 30.0], byaw);
     let sim = scene.sim.as_ref().unwrap();
-    let now = 0; // the frame counter is internal; read the armed span instead (below)
-    let _ = now;
     let dr = &sim.drones.list[gi];
-    eprintln!("guard state {:#x} weapon {} stun_until {}", dr.state, dr.weapon, dr.stun_until);
+    eprintln!("guard state {:#x} weapon {} stun_recover {}", dr.state, dr.weapon, dr.stun_recover);
     assert_eq!(dr.state, nf_game::drone::state::STUN_GRENADE_IMPACT, "the guard enters StunGrenadeImpact 0x4D [M 0x1469b8 case 0x18]");
     // `DropWeapon + ChangeWeapon(1)` unless he held the unarmed id 4 [M 0x172bb0 case 1].
     assert!(dr.weapon == 1 || dr.weapon == 4, "the stunned guard drops to weapon 1 (or held the unarmed 4), got {}", dr.weapon);
+    // 3599, not 3600: the game's own float path is `fptoui(f32(1800)·0.01·(200−0xB9))` — f32 0.01
+    // is 0.00999999977648, so the product is 3599.99992 and fptoui truncates [M 0x147188:44-46 +
+    // the fptoui tail; L the port's mul.s chain]. The old "= 3600" doc rounded.
+    assert_eq!(dr.stun_recover, 3599, "the 0x35 arm stores FRAME_RATE_INT·30·0.01·(200−0) into +0xCE0 [M 0x147188 case 0x35]");
     // Sister: no blast damage — the flash branch never reaches Explode_Create [M 0x12e118].
     assert!(sim.drones.explosions.is_empty(), "the stun grenade must not blast");
-    // The armed span: step until the Loop's timer releases him and count the ticks (the 0x35 arm's
-    // 3600 at b9 = 0 [M 0x147188]); the IMPACT ENTER arms `frame + 3600`.
+    // The release chain: step until the guard has LEFT the family, counting the ticks. The law:
+    // the fall clip plays out in Impact (Rand 0 → 0x2E, else 0x2D [M 0x172bb0 case 1]), the Loop
+    // holds a FRESH 3600 from its first tick [M 0x1631c0 case 1], then Recover's get-up 0x76 runs
+    // to its follow-on Attack 0x56 [M 0x163350 case 1] — so the total exceeds 3600 by the two
+    // clips' lengths. The old carry ended the Loop one fall-clip early ([M] deviation fixed here).
     use nf_game::drone::state::{STUN_GRENADE_IMPACT, STUN_GRENADE_LOOP, STUN_GRENADE_RECOVER};
     let mut held = 0u32;
-    for _ in 0..4000u32 {
+    let mut exit_state = 0u8;
+    for _ in 0..5000u32 {
         let sim = scene.sim.as_mut().unwrap();
         sim.step_bond(Input::default(), false, false, false);
         let dr = &sim.drones.list[gi];
         held += 1;
-        if held > 4 && !matches!(dr.state, STUN_GRENADE_IMPACT | STUN_GRENADE_LOOP | STUN_GRENADE_RECOVER) { break; }
+        if held > 4 && !matches!(dr.state, STUN_GRENADE_IMPACT | STUN_GRENADE_LOOP | STUN_GRENADE_RECOVER) {
+            exit_state = dr.state;
+            break;
+        }
     }
-    eprintln!("guard held in the stun chain for {held} ticks");
-    assert!((3500..=3800).contains(&held), "the stun chain holds ~3600 ticks (the 0x35 arm, b9 = 0) [M 0x147188], got {held}");
+    eprintln!("guard held in the stun chain for {held} ticks, exit {exit_state:#x}");
+    // The get-up's follow-on is Attack 0x56 for non-civilians [M 0x163350 case 1]. The poll can
+    // land on 0x66 (Attack's own first move: the guard holds the fists ChangeWeapon(1) gave him
+    // at the Impact, so Attack draws his sidearm — DRAW_WEAPON 0x66) when the draw is queued
+    // within the same tick the follow-on lands.
+    assert!(exit_state == nf_game::drone::state::ATTACK || exit_state == nf_game::drone::state::DRAW_WEAPON,
+        "the recovered guard wakes into Attack 0x56 (the get-up's follow-on; 0x66 = Attack's draw of the sidearm he holds fists after the drop) [M 0x163350 case 1], got {exit_state:#x}");
+    assert!(held > 3600, "the Loop's fresh re-arm holds 3600 from the Loop's first tick — the chain cannot finish before it [M 0x1631c0 case 1], got {held}");
+    assert!(held <= 4300, "the hold is 3600 + the fall and get-up clips, not an endless stall, got {held}");
 }
 
 /// ── The 0x69 smoke: a 5-tick fuse into a 3600-tick cloud ────────────────────────────────────────
