@@ -72,3 +72,16 @@ spawn_stats_params`), make every spawn read exactly the game's record (load-time
 game uses it, the spawner's own section where it has one), and get the 8 red tests (14×3, 16×2,
 drake, 1b astronaut fire, astronaut health) green with their pins unchanged unless proven wrong —
 then every walkreal_*_live and the full suite.
+
+sniper-spawn-stats-2 (final, 2026-11-03 ~00:10 UTC): the stats pieces re-applied on master (the
+0c-0d merge was reverted in 7b097fa9) with the spawn read = the LOAD-TIME table + the template's OWN
+section per spawn (a fresh clone — NOT the leaking shared table) and the DefaultInit consumers
+re-run in the game's order after the read (ninja health, captain_setup, the kind-0x18 TakeXHits —
+Drake's 60.0 pinned the order). All 8 reds green with their pins unchanged: 14 8/8, 16 14/14, drake
+3/3, 1b 17/17, astronaut_guards 4/4; the 0c damage half unchanged (tick 8700: 80.2 / 69 hits); 0d
+unchanged. Runs: four crates' lib suites green (655/23/92/100); EVERY walkreal_*_live (78) green;
+the spawn-sensitive integration set green (ai_live 37, stealth_ai_live 9, + 16 more). The open
+spawn-time global-write question goes to live checks (ee_start_05: type-1 empty at start with
+template #3's section valid [L 0x31aa30], the section's kind words sit at type 12 [L 0x31ab30] —
+a remap or a non-write the port cannot resolve offline). Report
+docs/reports/sniper-spawn-stats-2.md; next session: the full suite on the merged tree.
