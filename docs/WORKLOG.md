@@ -26,3 +26,9 @@ difficulty3_07000001_live 4/4, interactables_07000001_live 10/10, nf-game --lib 
 background fast runner is killed between tool calls in this sandbox (canary verified) — the
 per-binary foreground runs stand in, as documented in the escort-fight report. Remaining: the
 report (the 00 Agent route changes), the final suite attempt, the finish steps.
+
+Report (17:52 tree, 16:52 UTC): docs/reports/difficulty3-07000001-pins.md written — the full
+difficulty-3 delta list with addresses, the 00 Agent route notes (the two west captains #165/#163
+joining #167, the mandatory door lure, the 0.8 DPS, the no-autoaim), the three required runs
+quoted, the live checks for the main agent listed. The background fast runner is impossible in
+this sandbox (the setsid canary died between tool calls); the per-binary foreground runs stand in.
