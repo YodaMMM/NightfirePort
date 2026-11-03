@@ -3006,7 +3006,12 @@ impl Sim {
             // step (0x1a6f80:179-198) — `cycle` takes &mut self for the marker clear.
             let base_of = |w: u8| weapons.base(w as usize) as u8;
             let target = if let Some(id) = input.switch_to {
-                if id != self.gun.weapon && owned.get(id as usize).copied().unwrap_or(false)
+                // The owned read is the BASE's slot: the twins share it (`BL+0x1BA + base·0xC`,
+                // `Player_EquipWeapon` 0x1a8a58:39-41 — a variant owns nothing of its own; the
+                // port's Inventory::equip_weapon writes the same base slot [M]) — a direct request
+                // for the Samurai overcharge 0x32 (base 0x33) after its give was refused on
+                // owned[0x32] and the draw never started (fire_modes3's samurai leg).
+                if id != self.gun.weapon && owned.get(base_of(id) as usize).copied().unwrap_or(false)
                     && weapons.first_person(id as usize) != 0 { Some(id) } else { None }
             } else if idle && input.weapon_cycle != 0 {
                 let t = self.gun.toggle_back(nf_game::gun::CycleMode::Weapons, &owned, has_ammo, selectable, base_of);
@@ -10051,6 +10056,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let spoken = drones.map(|c| (c.snd2lbl.clone(), c.sfx_durations.clone()));
             let mut drones = nf_game::drone::Drones::new(list, rng);
             drones.lights = lights;
+            // sniper-spawn-stats-2: the Sim's `drone_stats` table starts as the level's
+            // LOAD-time table (the same one `level_drones` read the placed drones' stats from) — a
+            // spawner spawn's `behaviour_util_get`+`DoModeSettingsNEW` read/write THIS table
+            // [M 0x137cb0 → 0x1c7a98/0x14c600], so a section-less template reads the load-time
+            // record, not an empty one.
+            drones.stats_table = {
+                let roles: Vec<nf_formats::drone::SpawnRole> = {
+                    let ps: Vec<(u32, Vec<(u32, u32)>)> = level.maps[level.main_map().unwrap()].placements.iter().map(|p| (p.flags & 0xff, p.params.clone())).collect();
+                    nf_formats::drone::spawn_roles(&ps)
+                };
+                nf_game::drone::load_stats_table(&data, level, &roles)
+            };
             if let Some((rows, durs)) = spoken { drones.attach_snd2lbl(rows, durs); }
             // The selected difficulty BEFORE the creates: every create-time gate reads it
             // (captain_setup 0x14b300:504-535, Drone_Create's min-difficulty tag 0x136be0:49,

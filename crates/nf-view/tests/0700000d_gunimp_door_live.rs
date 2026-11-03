@@ -131,7 +131,7 @@ fn hold_fire(scene: &mut nf_view::scene::Scene, shots: u32, max_ticks: u32, done
     let mut fired = 0u32;
     while ticks < max_ticks && fired < shots {
         if done(scene.sim.as_ref().unwrap()) { return (ticks, fired); }
-        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { fire: true, aiming: true, ..Default::default() }, false, false, false);
+        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { aiming: true, ..Default::default() }, true, false, false);
         if scene.sim.as_ref().unwrap().drones.props.gunimps.iter().any(|g| g.beam.is_some()) { fired += 1; }
         ticks += 1;
     }
@@ -299,4 +299,116 @@ fn the_beam_stops_at_the_surface_it_hits() {
     eprintln!("beam far {far:?} vs raw {raw:?} (door z {door_z})");
     assert!(d_far < 6.0, "the beam must stop at the C5 surface (far z within 6 of the door plane), got {far:?}");
     assert!(d_far < d_raw || d_raw < 6.0, "the raw 1000-unit point overshoots the door by {}", d_raw);
+}
+
+/// c5-door-smash-explosion: the laser kill spawns the game's smash blasts. `Destroy_Smash`
+/// 0x12bb60:LAB_0012bc50 runs `Explode_Create` 0x17cbd0 whenever the tag's type byte is
+/// non-zero — bigdoor02's death fires script 0x6000052 (type 6 → the else arm) at scale
+/// obj+0x8c·3 = the leaf's parsed sphere·3 [M 0x12bcdc `lwc1 $f12, 140($16)`; D #96 sphere
+/// 3.144], and the same tick's channel chain smashes bigdoor01 (type 5 → the same script)
+/// [M 0x12c4f8:29-33]. Explode_Create plays the script facing the closest player, shakes the
+/// camera for a blast ≥ 0.5 [M 0x17cbd0:40-44] and its class-0x40 object lives the script's
+/// +0xAB0 u16. The port spawns the same per-blast ScriptPlayers (`spawn_once_scaled`) and the
+/// draw holds BLAST_COPIES slot sets per blast script (concurrent_blasts_draw_live), so both
+/// same-tick fireballs draw. Real input: the ST-3 plate, the mount, the aim, the held trigger.
+#[test]
+fn the_laser_kill_spawns_the_smash_blasts() {
+    let Some(mut scene) = mounted_after_plate() else { panic!("the mount") };
+    let target = c5(&scene);
+    let dead = |sim: &nf_view::scene::Sim| sim.drones.props.destroy.iter().any(|d| d.placement == 96 && d.dead);
+    let (_at, hit) = fire_at(&mut scene, target, 300, &dead);
+    assert!(hit || dead(scene.sim.as_ref().unwrap()), "the mount must reach the aim onto the C5 door");
+    // Hold the trigger one tick at a time and snapshot the death tick's end state — the
+    // pending_blasts drain runs at the tick tail, so both blast ScriptPlayers exist by then.
+    // (No coast: fire_at's converged trigger already fires, so the death can land inside it.)
+    let mut snap: Option<(u32, usize, Vec<(u32, f32)>, f32, [f32; 3])> = None;
+    for t in 0..7200u32 {
+        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { fire: true, aiming: true, ..Default::default() }, false, false, false);
+        let sim = scene.sim.as_ref().unwrap();
+        if sim.drones.shake > 0.0 { eprintln!("[blast] tick {t} shake {} explosions {}", sim.drones.shake, sim.drones.explosions.len()); }
+        let b = sim.drones.props.destroy.iter().find(|d| d.placement == 96).unwrap();
+        if !b.dead { continue; }
+        let sps: Vec<(u32, f32)> = sim.drones.scripts.players.iter()
+            .filter(|p| p.placement == usize::MAX)
+            .map(|p| (p.scripts[0], p.scale)).collect();
+        snap = Some((sim.drones.frame, sps.len(), sps, sim.drones.shake, b.pos));
+        break;
+    }
+    let (frame, n, sps, shake, door_pos) = snap.expect("the drain crosses below zero → Destroy_Smash [M 0x12bd48:46-49]");
+    eprintln!("[blast] death frame {frame}, blast SPs {sps:?}, shake {shake}");
+    assert!(n >= 2, "both same-tick smashes spawn their blasts (bigdoor02's kill and bigdoor01's         channel-chain smash [M 0x12c4f8:29-33]), got {n}");
+    // The fireball script by the type byte [M 0x12bb60:LAB_0012bc50 — types 5/6 take the else arm].
+    assert!(sps.iter().all(|(h, _)| *h == 0x0600_0052), "the type-5/6 script is 0x6000052, got {sps:?}");
+    // bigdoor02's scale is the leaf's parsed sphere × 3 [M 0x12bcdc; D #96 sphere 3.144].
+    let big = sps.iter().map(|(_, s)| *s).fold(0.0f32, f32::max);
+    assert!((big - 3.144_156 * 3.0).abs() < 0.01, "bigdoor02's blast scale is sphere·3 (0x8c·mult [M 0x12bb60]), got {big}");
+    // The Camera_Shake byte [M 0x17cbd0:40-44 — Camera_Shake only from a blast ≥ 0.5]: the
+    // drain sets it to the blast radius (the scale·1 trace: 9.432468) and the tick decay
+    // [S the port's 0.9/tick shape] runs after it, so the snapshot (1–2 ticks past the drain)
+    // still carries most of the 9.43 set.
+    assert!(shake > 7.0, "the blast shakes the camera (the decayed Camera_Shake byte), got {shake}");
+    // The fireball art resolves: the script's entity hashes are session models (the draw has
+    // meshes to show — the render check confirms the picture).
+    let sim = scene.sim.as_ref().unwrap();
+    let ents: Vec<u32> = sim.drones.scripts.entities().iter()
+        .filter(|(sh, _, _, _, _)| *sh == 0x0600_0052).map(|&(_, _, h, _, _)| h).collect();
+    assert!(!ents.is_empty(), "the blast script's entities are live");
+    for h in &ents {
+        assert!(sim.data().models.contains_key(h), "blast entity {h:08x} has session art");
+    }
+    let _ = door_pos;
+}
+
+/// PROBE (c5-door-smash-explosion): what does the sim spawn when the laser kills bigdoor02?
+/// Prints the death-tick blast state — explosions, the blast SPs, the shake, the two doors.
+#[test]
+#[ignore = "assertion-free probe; run with --ignored"]
+fn probe_laser_kill_blast_state() {
+    let Some(mut scene) = mounted_after_plate() else { panic!("mount") };
+    let target = c5(&scene);
+    let (_at, hit) = fire_at(&mut scene, target, 300, &|_| false);
+    assert!(hit, "the probe must aim");
+    for _ in 0..40 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
+    let mut death_frame = None;
+    for t in 0..3600u32 {
+        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { fire: true, aiming: true, ..Default::default() }, false, false, false);
+        let sim = scene.sim.as_ref().unwrap();
+        let b = sim.drones.props.destroy.iter().find(|d| d.placement == 96).unwrap();
+        if b.dead { death_frame = Some((t, sim.drones.frame)); break; }
+    }
+    let sim = scene.sim.as_ref().unwrap();
+    let (t, f) = death_frame.expect("the door died");
+    eprintln!("[probe] dead at hold-tick {t} frame {f}");
+    eprintln!("[probe] explosions {:?}", sim.drones.explosions);
+    eprintln!("[probe] blast SPs {:?}", sim.drones.scripts.players.iter()
+        .filter(|p| p.placement == usize::MAX).map(|p| (p.scripts[0], p.scale, p.state, p.info[0].is_some(), p.deleted)).collect::<Vec<_>>());
+    for (sh, st, hash, _m, alpha) in sim.drones.scripts.entities().iter().filter(|(sh, _, _, _, _)| *sh == 0x6000052) {
+        let art = sim.data().models.get(hash).map(|m| m.radius);
+        eprintln!("[probe] blast ent script {sh:08x} stream {st} hash {hash:08x} alpha {alpha} art {:?}", art);
+    }
+    eprintln!("[probe] shake {}", sim.drones.shake);
+    let b = c5_b(&scene); let a = c5_a(&scene);
+    eprintln!("[probe] bigdoor02 kind {} blast_damage {} sphere {}", b.kind, b.blast_damage, b.sphere);
+    eprintln!("[probe] bigdoor01 kind {} blast_damage {} sphere {}", a.kind, a.blast_damage, a.sphere);
+    {
+        let img = nf_formats::iso9660::IsoImage::open(&iso().unwrap()).expect("iso");
+        let (entries, bin) = nf_formats::disc::files_bin_entries(&img).unwrap();
+        let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("0700000d.bin")).unwrap();
+        let data = img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).unwrap();
+        let lv = nf_formats::level::Level::parse(&data).unwrap();
+        let mm = lv.main_map().unwrap();
+        let d = sim.data();
+        for want in [93usize, 96] {
+            let p = &lv.maps[mm].placements[want];
+            let oi = p.index as usize;
+            let (lo, hi) = nf_game::props::bounds(&lv, mm, p);
+            let orec = lv.maps[mm].objects.get(oi);
+            eprintln!("[probe] placement #{want} flags {:02x} obj {oi} bounds {:?}", p.flags & 0xff, [lo, hi]);
+            if let Some(o) = orec {
+                eprintln!("[probe]   object radius {} min {:?} max {:?}", o.radius, o.min, o.max);
+            }
+
+            eprintln!("[probe]   bounds lo {:?} hi {:?}", lo, hi);
+        }
+    }
 }

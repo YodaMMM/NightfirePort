@@ -1330,9 +1330,17 @@ pub struct Drone {
     /// `Drone+0x12C`: the mission-wait channel word `AllyLeadMissionWait` ENTER latches (0 → 0x99)
     /// [M 0x15efc8:17-20]. Init 0 by `Drone_SM_InitObject` 0x175838; no writer in the decompile.
     pub mission_wait_channel: u16,
-    /// The stun-grenade recover deadline (frame): `StunGrenadeLoop`'s `+0xCC4 = GameState._52_4_ + (+0xCE0)`
-    /// [M 0x1631c0 case 1], where `+0xCE0` is `DroneFunc_RecoverTime` 0x147188's ticks. fix-explosions.
+    /// The stun-grenade recover deadline mirror (frame): armed by the `StunGrenadeImpact` ENTER at
+    /// `frame + recover` for the tests' debug reads. The game's `+0xCC4` (the timer the Loop's TIMER_C
+    /// reads) is armed at the LOOP ENTER, `frame + (+0xCE0)`, a fresh span — `stun_recover` below.
+    /// fix-explosions; re-armed fresh per [M 0x1631c0 case 1] (stun-release-no-stun-anims).
     pub stun_until: u32,
+    /// `Drone+0xCE0` for the stun-grenade family: `DSTATE_StunGrenadeImpact`'s ENTER writes
+    /// `DroneFunc_RecoverTime` 0x147188's ticks there [M 0x172bb0 case 1], and `StunGrenadeLoop`'s
+    /// ENTER re-arms the wake timer with that STORED span — `+0xCC4 = frame + (+0xCE0)`, a fresh
+    /// `RecoverTime` from the Loop's first tick, not a deadline carried from the Impact
+    /// [M 0x1631c0 case 1]. The same stored-span shape as `tase_recover`/`dart_recover`.
+    pub stun_recover: u32,
     /// fix-stunner-press (109b): the tase accumulator `Drone+0xBC` — `DroneFunc_HandleImpact` case 7
     /// adds FRAME_RATE_MUL per tase msg and falls to `DSTATE_Taser` when it passes 2·health
     /// [M 0x1469b8:126-130]. No other writer in the decompile: it persists across states.
@@ -1854,6 +1862,13 @@ pub struct Drone {
     /// `NDrone2_DoGravity` 0x141e58:12-15 returns 1 (gravity on) on it BEFORE every other gate —
     /// a corpse carrying it falls even with the collision bit 0x20 cleared [M].
     pub keeps_gravity: bool,
+    /// sniper-spawn-stats-2: the placement's RAW parameters for a spawner template — the game
+    /// re-runs `behaviour_util_get` 0x1c7a98 + `DoModeSettingsNEW` 0x14c600:70-107 at every
+    /// `DroneSpawner_SpawnDrone` 0x137cb0, so the template's stats section writes the GLOBAL
+    /// `drone_stats` table (0x31aa30) at spawn and the read takes the table as of that moment
+    /// (its own section over whatever an earlier spawn wrote). The port stores the params and
+    /// re-rolls `Drones::stats_table` at the spawn; `None` for placed drones (their stats are final).
+    pub spawn_stats_params: Option<Vec<(u32, u32)>>,
 }
 
 /// Normalise a vector (the grenade throw direction helper).
@@ -1987,6 +2002,8 @@ impl Drone {
             shot_aims: Vec::new(),
             // 952: the raw accuracy roll per shot, parallel to `shots`.
             shot_rolls: Vec::new(),
+            // sniper-spawn-stats-2: set for spawner templates by `level_drones` (see the field).
+            spawn_stats_params: None,
             // drone-abseil-elevator: the +0x23 rope fields. `move_ok`
             // (+0x24) is set for every drone at DefaultInit 0x14b300:771; the rest start at the
             // game's fresh-allocation values.
@@ -2038,6 +2055,7 @@ impl Drone {
             abseil_land_latch: false,
             mission_path_dist: 0.0,
             stun_until: 0, player_pos: [0.0; 3],
+            stun_recover: 0,
             down: false,
             door_partner: None, door_side: 0, door_planes: [[0.0; 4]; 3], door_zone: 0, door_idle_anim: 0x24, door_zone_step: 0, door_pair_requested: false,
             door_pair_watch: false,
@@ -6379,8 +6397,10 @@ impl Drone {
                 // `DroneFunc_RecoverTime` 0x147188, the 0x35 arm: FRAME_RATE_INT·30·0.01·(200 − Drone+0xB9)
                 // = 18·(200−0) = 3600 ticks at the stats default +0xB9 = 0 (BOT_stats[8], zero at run time
                 // [L 07000005]) [M 0x147188 + 0x172bb0]. The old 7200 read the switch's DEFAULT arm — twice
-                // the game's stun for a stun bullet.
-                self.stun_until = frame + self.recover_time(30);
+                // the game's stun for a stun bullet. The span is STORED (+0xCE0, `stun_recover`) before the
+                // drop, in the case-1 order [M 0x172bb0 case 1]; the wake timer arms from it at the Loop.
+                self.stun_recover = self.recover_time(30);
+                self.stun_until = frame + self.stun_recover; // the deadline mirror (the game arms +0xCC4 at the Loop)
                 // fix-guard-drops-flashbang [M 0x172bb0:15-18, the state's own case 1]: the flashed
                 // guard DROPS the held gun and takes the fists — `if (+0xda != 4) { DropWeapon;
                 // ChangeWeapon(1) }` — whatever route stunned him (the flash broadcast, a stunned
@@ -6397,14 +6417,19 @@ impl Drone {
                 self.alert_status_set(2, frame); // [M 0x172bb0 case 1] — the status byte; no +0x50C write
                 self.vision_on = false;
                 self.firing = false;
-                // `Rand_Rand(2)`: one draw of the shared stream, then the anim with follow-on Loop [M 0x172c34].
-                let a = if rng.rand(2) == 0 { anim_state::STUNNED_A } else { anim_state::STUNNED_B };
+                // `Rand_Rand(2)`: one draw of the shared stream, then the anim with follow-on Loop — the
+                // draw 0 plays 0x2E and the draw 1 plays 0x2D [M 0x172bb0 case 1, dis 0x172c34-0x172c5c:
+                // `Rand_Rand(2)`; `beq` → the 0x2e arm]. (The old arm read the draws the other way round.)
+                let a = if rng.rand(2) == 0 { anim_state::STUNNED_B } else { anim_state::STUNNED_A };
                 self.call_anim(d, a, STUN_GRENADE_LOOP, 0);
                 true
             }
             (STUN_GRENADE_LOOP, msg::ENTER) => {
-                // The down flag +0x2f, its EXIT clearing it [M 0x1631c0 case 1/2].
-                self.vision_on = false; self.firing = false; self.timer_c = Some(self.stun_until);
+                // The down flag +0x2f, its EXIT clearing it [M 0x1631c0 case 1/2]. The wake timer
+                // RE-ARMS with the STORED span: `+0xCC4 = frame + (+0xCE0)` — a fresh RecoverTime
+                // from the Loop's first tick, not a deadline carried from the Impact
+                // [M 0x1631c0 case 1] (the old `stun_until` carry ended the hold one fall-clip early).
+                self.vision_on = false; self.firing = false; self.timer_c = Some(frame + self.stun_recover);
                 self.down = true;
                 true
             }
@@ -7075,7 +7100,19 @@ impl Drone {
         // impact — `DroneFunc_HandleImpact` case 0x18 [M 0x1469b8:250-313] through the same
         // unhandled→GLOBAL fallback the bullets use (WaitSwitch's handler drops it [M 0x15b960], the
         // GLOBAL base state picks it up).
-        if m == msg::FLASH { return self.on_flash(d, rng, frame, s); }
+        // stun-release-no-stun-anims: the STUN-GRENADE LOOP carries its own case 0x18 — the flash
+        // re-arms the wake timer (`+0xCC4 = frame + RecoverTime(msg[6])`) and STAYS in the Loop, no
+        // Impact re-entry [M 0x1631c0 case 0x18]. The only 0x18 broadcaster is the 0x35's flash arm
+        // [M 0x12e0c0], whose RecoverTime arm is 30 [M 0x147188 case 0x35]. (The DART loop's case
+        // 0x18 forwards to HandleImpact instead — re-enters 0x4D [M 0x163570 case 0x18] — which is
+        // exactly `on_flash`'s set_state, right for 0x51 and every other carrying state.)
+        if m == msg::FLASH {
+            if s == state::STUN_GRENADE_LOOP {
+                self.timer_c = Some(frame + self.recover_time(30));
+                return true;
+            }
+            return self.on_flash(d, rng, frame, s);
+        }
         // guard-blast-smoke: the explosive impact (msg 9) and the smoke cloud's touch (msg 0x17)
         // ride the same state machine — `HandleImpact` cases 9/0x17 through the same
         // unhandled→GLOBAL fallback (the GLOBAL base has neither case [M 0x15b830]).
@@ -11755,6 +11792,24 @@ pub fn captain_skin(skin: u32, param: &impl Fn(u32) -> u32, props: &nf_formats::
 /// - The per-class update/delete dispatch (.data 0x26f890 base, stride 12 {update, _, delete}
 ///   [D]; Creature class 0x23 rows at 0x26fa34/0x26fa3c, Copter 0x3B at 0x26fb54/0x26fb5c) never
 ///   fires for 0x23 for the same census reason — see docs/port-map/unreached.md.
+/// The level's load-time `drone_stats` table (0x31aa30): `behaviour_util_get` 0x1c7a98 over every
+/// PLACED kind-0x0f placement that passes `Drone_Create`'s difficulty gate, in placement order.
+/// Template placements never write at load (07000005's only section sits on a template and the
+/// level-start record is empty [L ee_start_05.bin]) — their sections write at spawn instead.
+/// sniper-spawn-stats-2: shared by `level_drones` (the load-time reads) and the Sim
+/// (`Drones::stats_table` — the table a spawn's `DoModeSettingsNEW` read runs against
+/// [M 0x137cb0 → 0x1c7a98/0x14c600]).
+pub fn load_stats_table(d: &Data, level: &nf_formats::level::Level, roles: &[nf_formats::drone::SpawnRole]) -> nf_formats::drone::DroneStatsTable {
+    let Some(m) = level.main_map() else { return Default::default() };
+    let mut stats = nf_formats::drone::DroneStatsTable::default();
+    for (k, p) in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x0f).enumerate() {
+        let param = |j: u32| p.params.iter().find(|(i, _)| *i == j).map(|&(_, v)| v).unwrap_or(0);
+        if param(2) > d.difficulty || roles.get(k) != Some(&nf_formats::drone::SpawnRole::Placed) { continue; }
+        stats.behaviour_get(param);
+    }
+    stats
+}
+
 pub fn level_drones(d: &Data, level: &nf_formats::level::Level, rng: &mut Rng, lights: &mut crate::light::LightList) -> Vec<Drone> {
     // The map parse's ambient radiators precede every dynamic-object create [M parsemap_handle_block_id 0x1d1020].
     crate::light::level_lights(level, rng, lights);
@@ -11771,13 +11826,7 @@ pub fn level_drones(d: &Data, level: &nf_formats::level::Level, rng: &mut Rng, l
         let list: Vec<(u32, Vec<(u32, u32)>)> = level.maps[m].placements.iter().map(|p| (p.flags & 0xff, p.params.clone())).collect();
         nf_formats::drone::spawn_roles(&list)
     };
-    let mut stats = nf_formats::drone::DroneStatsTable::default();
-    for (k, p) in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0x0f).enumerate() {
-        let param = |j: u32| p.params.iter().find(|(i, _)| *i == j).map(|&(_, v)| v).unwrap_or(0);
-        if param(2) > d.difficulty || roles.get(k) != Some(&nf_formats::drone::SpawnRole::Placed) { continue; }
-        stats.behaviour_get(param);
-    }
-    let load_stats = stats.clone();
+    let load_stats = load_stats_table(d, level, &roles);
     let mut stats = nf_formats::drone::DroneStatsTable::default();
     let mut drone_k = 0usize;
     level.maps[m].placements.iter().enumerate().filter_map(|(i, p)| {
@@ -11804,6 +11853,10 @@ pub fn level_drones(d: &Data, level: &nf_formats::level::Level, rng: &mut Rng, l
         };
         let mut dr = Drone::new_with_stats(d, [p.translation[0], floor + 1.0, p.translation[2]], p.rotation[1], param, rng, st);
         dr.placement = i;
+        // sniper-spawn-stats-2: a spawner template's `DoModeSettingsNEW` runs at every
+        // `DroneSpawner_SpawnDrone` [M 0x137cb0], so its stats re-roll then from the shared table —
+        // keep the raw params for the spawn handler.
+        if role != Some(nf_formats::drone::SpawnRole::Placed) { dr.spawn_stats_params = Some(p.params.clone()); }
         // `NDrone2_PostLoad_Init` 0x14d890:18-22: every drone's nav path (+0x954) is
         // `AINetwork_NavPathForPosition(drone pos)` at level load — the path `ClosestAIPoint`
         // matches the AI points against [M 0x151b18:130].
@@ -11993,6 +12046,10 @@ pub struct Drones {
     pub channels: crate::triggers::Channels,
     pub triggers: Vec<crate::triggers::Trigger>,
     pub spawners: Vec<crate::spawners::Spawner>,
+    /// sniper-spawn-stats-2: the level's shared `drone_stats` table (0x31aa30, BSS) — the game
+    /// re-runs `behaviour_util_get` at every spawner spawn, so a template's section (and the record it
+    /// leaves) feeds every later spawn's `DoModeSettingsNEW` read [M 0x137cb0 → 0x1c7a98/0x14c600].
+    pub stats_table: nf_formats::drone::DroneStatsTable,
     /// Cover nodes' run-time state, `Drone_ProcessCoverNodes`' shared cursor and its frame counter.
     pub cover_rt: Vec<crate::cover::CoverRt>,
     /// Sounds made since the last frame (`Sound_Play3D`'s list; weights zeroed after the drones heard them).
@@ -12741,7 +12798,7 @@ impl Drones {
             if let Some(g) = &mut dr.body_glow { g.owner = i; }
         }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, player_move_local: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, player_move_local: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), stats_table: Default::default(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             // The game's `DAT_00299092` (the shared LOS-probe counter; see the field) — zeroed
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
@@ -19012,6 +19069,58 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 match action {
                     crate::spawners::Action::Spawn(i) => {
                         let dr = &mut self.list[i];
+                        // sniper-spawn-stats-2: `DroneSpawner_SpawnDrone` 0x137cb0 re-runs the
+                        // full drone init — `behaviour_util_get` 0x1c7a98 writes the template's stats
+                        // section into the GLOBAL `drone_stats` table (0x31aa30) and `DoModeSettingsNEW`
+                        // 0x14c600:70-107 reads the table as of that moment (`+0xB4` accuracy, `+0xB5`
+                        // aggression, health `+0xAC`, `+0xB8` reaction, `+0xB9` recover; a zero health
+                        // word keeps the defaults 5/0/10). A section-less template therefore reads
+                        // whatever an earlier spawn left — 0700000c's grp-3 carrier (acc 9 / react 80)
+                        // and grp-4 carrier (acc 4 / hp 22) reach every later same-type spawn [D both
+                        // levels' placements; the port's old spawn kept the load-time defaults].
+                        if let Some(params) = dr.spawn_stats_params.clone() {
+                            // The spawn's read runs against the LOAD-TIME table with the
+                            // template's OWN section applied — a fresh clone, NOT the shared
+                            // mutable table: a section-less template reads the load-time record
+                            // (the 14/16/1b real-health walks pin those guards at the defaults
+                            // [L the walked runs]), and a section-carrying template reads its own
+                            // words (0700000c's grp-3 carrier acc 9 / react 80, grp-4 acc 4 /
+                            // hp 22 [D]). The game's global-table write at spawn
+                            // (`behaviour_util_get` 0x1c7a98:85 writes `drone_stats` on the
+                            // 0x8001 tag) would leak an earlier same-type section into later
+                            // spawns — the live table state is the open question below (the
+                            // ee_start_05 snapshot shows the LOAD-time table does NOT hold a
+                            // template's section: type 1 empty at start with template #3's
+                            // section valid [L ee_start_05.bin @0x31aa30 + 0x31ab30]).
+                            let mut table = self.stats_table.clone();
+                            let ty = table.behaviour_get(&|k: u32| params.iter().find(|(j, _)| *j == k).map_or(0, |&(_, v)| v));
+                            let st = table.stats(ty);
+                            dr.accuracy = st.accuracy;
+                            dr.aggression = st.aggression;
+                            dr.reaction = st.reaction;
+                            dr.recover = st.recover;
+                            dr.health = st.health as f32;
+                            dr.max_health = st.health as f32;
+                            // The spawn is a fresh Drone_Create: DefaultInit's family blocks run
+                            // AFTER the DoModeSettingsNEW read — the mode-0xd ninja health 100
+                            // [M 0x14b300:744-753; the port's type_setup], `captain_setup`'s
+                            // health/accuracy mods [M 0x14b300:504-535] and the kind-0x18
+                            // astronaut TakeXHits health [M 0x14b300:726-739 + 0x14d928] all
+                            // consume the table values in that order (the same chain
+                            // `Drone::new_with_stats` runs after its stats read). Drake 0x1b's
+                            // spawn pinned the order: his 60.0 health is TakeXHits(2, 0x33)×3,
+                            // not the table record [M above].
+                            if dr.mode == 0x0d { dr.health = 100.0; dr.max_health = 100.0; }
+                            dr.captain_setup(d);
+                            if dr.kind == 0x18 {
+                                let dmg = if d.difficulty == 1 { 1.0 } else { 2.0 };
+                                let per = d.weapons.records.get(0x33)
+                                    .map(|r| f32::from_le_bytes(r[0xc..0x10].try_into().unwrap()))
+                                    .unwrap_or(10.0);
+                                dr.max_health = per * dmg * if (dr.skin & 0xffff) == 0xba { 3.0 } else { 1.0 };
+                                dr.health = dr.max_health;
+                            }
+                        }
                         dr.present = true; dr.enabled = true; dr.started = false;
                         // `control_add_object_to_list` prepends [M 0x134698]: a drone spawned this frame updates
                         // before every placement object from its NEXT frame on, and NOT in the frame it spawned
@@ -21270,6 +21379,7 @@ mod tests {
             abseil_land_latch: false,
             mission_path_dist: 0.0,
             stun_until: 0, player_pos: [0.0; 3],
+            stun_recover: 0,
             down: false,
             door_partner: None, door_side: 0, door_planes: [[0.0; 4]; 3], door_zone: 0, door_idle_anim: 0x24, door_zone_step: 0, door_pair_requested: false,
             door_pair_watch: false,
@@ -21333,6 +21443,8 @@ mod tests {
             moved_since: None,
             stopped_since: None,
             target_motion: Motion::default(),
+            // sniper-spawn-stats-2: the test drone is placed, not spawned by a template.
+            spawn_stats_params: None,
         };
         dr
     }

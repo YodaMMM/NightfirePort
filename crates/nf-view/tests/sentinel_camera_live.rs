@@ -35,7 +35,9 @@ fn give_and_select(scene: &mut Scene, weapon: u8, spare: u32) {
     {
         let sim = scene.sim.as_mut().unwrap();
         let owned = sim.drones.inventory.owned.len();
-        if (weapon as usize) < owned { sim.drones.inventory.owned[weapon as usize] = true; }
+        // The owned flag lives at the BASE slot: the twins share it [M Player_EquipWeapon 0x1a8a58:39-41].
+        let base = sim.weapons.base(weapon as usize) as usize;
+        if base < owned { sim.drones.inventory.owned[base] = true; }
         // The twins share the base's clip slot [M 0x1a1988:18-22]: the 0x2d's rounds live in clip[0x2c].
         let slot = if weapon == 0x2d { 0x2c } else { weapon as usize };
         if let Some(c) = sim.drones.inventory.clip.get_mut(slot) { *c = 4; }
