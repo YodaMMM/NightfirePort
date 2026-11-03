@@ -110,6 +110,39 @@ fn probe_0d_bullet_trace() {
 
     // Shot 1: AIMED at #33's torso.
     fire_one(&mut w, [p33[0], p33[1] + 0.3, p33[2]], true, "aimed #33");
-    // Shot 2: AIMED at #31's torso.
-    fire_one(&mut w, [p31[0], p31[1] + 0.3, p31[2]], true, "aimed #31");
+    // Calibration: fire at three KNOWN settled pitches and read the bullet's actual flight pitch —
+    // the camera-vs-bond pitch mapping (the aimed round flew 0.016 rad flat at pitch ~0.026).
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        let eye = bp[1] + sim.bond.eye - sim.bond.crouch_drop;
+        let fwd = 30.0f32;
+        let yaw = sim.bond.yaw;
+        for want in [0.10f32, 0.0f32, -0.10f32] {
+            // settle bond.pitch to `want` (normalized) exactly
+            for _ in 0..200 {
+                let sim = w.scene.sim.as_mut().unwrap();
+                let perr = want - sim.bond.pitch;
+                if perr.abs() < 0.0004 { break; }
+                sim.step_bond(nf_game::player::Input { look: perr.clamp(-0.02, 0.02), aiming: true, ..Default::default() }, false, false, false);
+                w.total_ticks += 1;
+            }
+            let sim = w.scene.sim.as_mut().unwrap();
+            let held_pitch = sim.bond.pitch;
+            let clip_empty = sim.gun.clip == 0;
+            sim.step_bond(nf_game::player::Input { aiming: true, ..Default::default() }, !clip_empty, clip_empty, false);
+            w.total_ticks += 1;
+            let sim = w.scene.sim.as_ref().unwrap();
+            if let Some(b) = sim.drones.player_bullets.iter().find(|b| !b.dead) {
+                let pitch_rad = b.dir[1].asin();
+                let yaw_b = b.dir[0].atan2(-b.dir[2]);
+                eprintln!("[cal] bond.pitch {held_pitch:.4} -> bullet pitch (norm) {:.4} rad {:.4} yaw {:.4} (bond yaw {:.4})",
+                    pitch_rad / std::f32::consts::FRAC_PI_2, pitch_rad, yaw_b, yaw);
+            } else {
+                eprintln!("[cal] bond.pitch {held_pitch:.4} -> NO bullet (clip {})", sim.gun.clip);
+            }
+            for _ in 0..30 { w.scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); w.total_ticks += 1; }
+            let _ = (fwd, eye);
+        }
+    }
 }

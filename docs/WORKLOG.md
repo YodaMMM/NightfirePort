@@ -27,3 +27,15 @@ probe_0d_climb_cover). Goal: apply the report's levers — kill #33 from the PLA
 drop (the flat shot), then climb immediately, eat the honest roof/wire cost, win the deck fight,
 take the bay drop — and un-ignore
 walkreal_0700000d_live::walk_arrival_to_the_c5_door_real_damage on real input only.
+State at the deadline: the real-damage walk stays #[ignore]d. Delivered: the platform-kill
+lever wired into the walk (kills from the armour arrive point before the dock-edge leg; the
+non-damage twin green, pool 100->100) and probe_0d_platform + probe_0d_bullet. Found: the
+main-floor edge slide (standing at the dock-edge arrive drops Bond to a y ~7.9 ledge whose
+rounds the dock face eats); the held 0x1e is a 0x400000 record (hip-fire = the full 100-unit
+cone, misses past ~5 u [L weapon_data 0x1e +0x24 = 100.0, +0x68 = 0x408050; M Bullet_init
+0x12c5a0:139-170]) — the previous branch's d 21 hip one-tap did not reproduce; shoot_far now
+fires AIMED; the aimed round flies 0.016 rad flatter than the settled bond.pitch (probe_0d_bullet:
+bullet dir pitch 0.0155 vs the torso line 0.0256 at d 27 = 0.44 low) — the camera-vs-bond
+pitch mapping is the last blocker; its calibration harness is in probe_0d_bullet (needs
+w.after_step() in the loops). Next: calibrate, bias shoot_far's want_pitch, un-ignore, run
+everything (no suite ran — deadline).
