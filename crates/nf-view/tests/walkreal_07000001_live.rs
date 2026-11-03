@@ -20,6 +20,23 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// input path from spawn #0 to the exit plate, stopping AT the fire tick — `level_exit` is
 /// posted and `exit_hold` still has all 300 frames (the game's fade level is 0 on the fire tick;
 /// `Camera_UpdateGlbVars` advances it on the frames after [M 0x1bada0:16-20]).
+/// The Agent kill order: the pellet-stream carriers (the SMG 0x12, the shotgun 0x1c) before the
+/// pistols, then the nearer first. The level's SMG guard ground 21 × 1.05-2.10 into the close-order
+/// run and the captain's 8-pellet volley ended it; a player silences the sprayers first.
+fn agent_order(w: &Walker, guards: &[usize]) -> Vec<usize> {
+    let mut g = guards.to_vec();
+    g.sort_by(|&a, &b| {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let key = |i: usize| {
+            let d = &sim.drones.list[i];
+            (u8::from(!matches!(d.weapon, 0x12 | 0x1c)), walker::dxz(d.pos, sim.bond.pos))
+        };
+        let (ka, kb) = (key(a), key(b));
+        ka.0.cmp(&kb.0).then(ka.1.total_cmp(&kb.1))
+    });
+    g
+}
+
 fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker { walk_to_the_exit_at(iso, stop_at_fire, 1) }
 
 /// The walk at `difficulty` — the difficulty select's GameState+0x28 value (1 Operative, 2 Agent,
@@ -42,8 +59,14 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // DroneWeap_FireWeapon 0x178f68, weapon_data+0x18]) took 24 health each from 0.8-1.2 u at the
     // east door. The top-up walks keep their fight timelines.
     if !w.tops_up() {
-        w.keep_off = Some(4.0);
-        w.dmg.back_off = Some(4.0);
+        // Agent tactics (level-01-agent-escort-fight): the TooClose band doubles everything inside
+        // 3.0 [M 0x139fac-0x139fc8 ×DroneFiring_TooClose_Damage 2.0 under DroneFiring_TooClose_Distance
+        // 3.0; the accuracy's forced hit 0x179740:100-110] — at the ×0.7 Agent pain [M 0x1902c8 ×
+        // Plr_DMod_Normal] the Operative-parity close fights are lethal (the Agent run took 79.4 in
+        // the three clearing fights, 14.0 a pistol round at 1.7-2.7 u). The player fights from
+        // OUTSIDE the band: a wider personal space (6.5, not 4.0) and the approach stops at 8 below.
+        w.keep_off = Some(if difficulty >= 2 { 6.5 } else { 4.0 });
+        w.dmg.back_off = Some(if difficulty >= 2 { 6.5 } else { 4.0 });
     }
     // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
     // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
@@ -93,12 +116,17 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         }).collect()
     };
     eprintln!("[01] {} armed guard(s) within 14 of the contact — clearing", guards.len());
+    // Agent kill order: the pellet-stream carriers first (the level's SMG guard 0x12 ground
+    // 21 × 1.05-2.10 into the close-order run — a player silences the sprayer before the pistols).
+    let mut guards = if difficulty >= 2 { agent_order(&w, &guards) } else { guards };
     for g in guards {
-        // Walk within 9 of the guard first (line of sight), then shoot.
+        // Walk within 9 of the guard first (line of sight), then shoot. Agent: stop at 8 — the
+        // fight happens outside the TooClose band (the close-order run walked to 3.5 and fought
+        // at 1.7-2.7 u under the ×2 damage).
         let gpos = w.scene.sim.as_ref().unwrap().drones.list[g].pos;
         let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
         if walker::dxz(gpos, bpos) > 9.0 {
-            w.walk_nav_to(gpos, &format!("approach guard {g}"), 3.5);
+            w.walk_nav_to(gpos, &format!("approach guard {g}"), if difficulty >= 2 { 8.0 } else { 3.5 });
         }
         if !w.shoot(g, &format!("guard {g}")) {
             if w.resupply("ammo retry") { w.shoot(g, &format!("guard {g}")); }
@@ -213,17 +241,83 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // structure). A player enters the hall by its main door and fights inside; the east hop is
     // the route the guard-11 approach already proves (nav reached (2.97,6.38,16.27) from the
     // same start), and from the stage the named guards are short in-hall hops.
+    // Agent: the hall's north crowd holds the stage line — the close-order run walked the stage
+    // INTO them (a 14.0 pistol round at 1.0 u, then the captain's full 8-pellet volley at 1.9 u,
+    // mid-walk — dead before any fight could answer). A player clears what he can see from the
+    // meet room first: the named guards at 4-9 u are outside the TooClose band, in the open.
+    if difficulty >= 2 {
+        for g in agent_order(&w, &named) {
+            let (los, dist) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[g];
+                if d.corpse || d.health <= 0.0 { continue; }
+                let bp = sim.bond.pos;
+                let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                (sim.world.segment(eye, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none(), walker::dxz(d.pos, bp))
+            };
+            if !los { eprintln!("[01] pre-clear guard {g}: no LOS from the meet room ({dist:.1} u) — leaving him for the staged loop"); continue; }
+            if dist > 9.0 { w.walk_nav_to(w.scene.sim.as_ref().unwrap().drones.list[g].pos, &format!("pre-clear approach guard {g}"), 8.0); }
+            if !w.shoot(g, &format!("pre-clear guard {g}")) {
+                if w.resupply("pre-clear ammo") { w.shoot(g, &format!("pre-clear guard {g}")); }
+            }
+        }
+    }
+    // Agent: the blind stage walk is the killer — the nav threads the north crowd (the close-order
+    // run took a 14.0 pistol round at 1.0 u and the captain's full 8-pellet volley at 1.9 u mid-walk,
+    // dead before any fight could answer). The player stops on the hall's south floor short of the
+    // crowd (outside the ×2 band, [M 0x139fac-0x139fc8 under DroneFiring_TooClose_Distance 3.0]) and
+    // fights from there; the named loop's approaches cover the rest. Operative keeps the proven hop.
+    if difficulty >= 2 {
+        // The hall's south door (7.9, 11.1) is the only nav entry from the meet room, and the
+        // alerted crowd hunts it in full cover (the door-funnel runs died to full volleys at
+        // 0.7-2.8 u; from the south their parts never expose — plain AND scoped probes — while
+        // their rounds come THROUGH the plane; the live check is filed in the report). The
+        // Agent stage stays the proven east hop; the named loop's hold gives the door its
+        // swing and the hunters their chance to show before any approach.
+    }
     w.walk_nav_to([2.9, 6.3, 16.3], "stage into the hall (east door)", 3.0);
+    // Agent kill order in the hall too: the shotgun captain (0x1c, 24 hp) before the pistols —
+    // the close-order run walked to 3.0 of guard #11 first and ate the captain's full 8-pellet
+    // volley at 1.9 u while the pistol round landed at 1.0 (the ×2 TooClose band). A player
+    // silences the volley first, from outside the band.
+    let mut named = if difficulty >= 2 { agent_order(&w, &named) } else { named };
     for g in named {
         let gpos = w.scene.sim.as_ref().unwrap().drones.list[g].pos;
         // The guards hunt: guard 11 left his placement for the hall's south entry and the
         // approach from the courtyard side wedged on the hall's south wall (the nav gave up
         // at the 3000-tick cap, segment_to_target ≈0.47). Re-stage through the proven route
         // (the meet-room corridor → the east door) before closing from inside.
-        if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, gpos) > 9.0 {
-            walker::hall_restage(&mut w, &format!("guard {g} approach"));
+        // Agent: NO restage and NO approach — the restage's east hop threads the same crowd
+        // (the close-order run died mid-stage to a 14.0 round at 1.0 u and the captain's
+        // volley at 1.9) and the door funnel's hops cannot stop short (the 8.0 arrive
+        // overshot to 0.9). The guards HUNT to the south door: hold the stage point and let
+        // them come — the doorway fight sits at the ×2 band's edge and their parts show
+        // through the open door. The approach stays the last resort (a guard that never
+        // comes), after the hold.
+        if difficulty >= 2 {
+            // Give the door its swing and the hunters their chance to show before any approach:
+            // the door funnel's hops cannot stop short (the 8.0 arrive overshot to 0.7-0.9 and
+            // the volleys ended three runs). A guard that never shows is left for the escort
+            // rounds (the contact stalls on him and the clear loop re-visits).
+            for _ in 0..40 {
+                let seen = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let d = &sim.drones.list[g];
+                    if d.corpse || d.health <= 0.0 { break; }
+                    let bp = sim.bond.pos;
+                    let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                    walker::dxz(d.pos, bp) < 10.0
+                        && sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none()
+                };
+                if seen { break; }
+                w.wait(30);
+            }
+        } else {
+            if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, gpos) > 9.0 {
+                walker::hall_restage(&mut w, &format!("guard {g} approach"));
+            }
+            w.walk_nav_to(gpos, &format!("approach hall guard {g}"), 3.0);
         }
-        w.walk_nav_to(gpos, &format!("approach hall guard {g}"), 3.0);
         // Dry mid-hall is the walk's own trap: the hall's south wall walls the resupply nav
         // off from the corridor boxes (every southward hop wedged at segment t≈0.095). A
         // player steps out the door he came in by: east door → corridor box → back inside.
@@ -383,11 +477,14 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 }
             }
         }
+        // The Agent kill order here too (the pellet carriers first; see the initial clear).
+        let guards = if difficulty >= 2 { agent_order(&w, &guards) } else { guards };
         for g in guards {
             // Walk TO the guard (the route's doors open under Bond's feet via the stuck handler —
             // a midpoint stop can sit behind a wall with no line of sight). The gate is LOS, not
             // just distance: at the stairwell corner Bond stood 3.2 from the guard with the
-            // eye→torso ray hitting a wall at t 0.18 — the shots could never land.
+            // eye→torso ray hitting a wall at t 0.18 — the shots could never land. Agent: stop at
+            // 8 (outside the TooClose band).
             let (gpos, los_clear) = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let d = &sim.drones.list[g];
@@ -396,8 +493,41 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 (d.pos, sim.world.segment(eye, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none())
             };
             let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
+            // Agent: the hall's guards HUNT to the south door (guard 6 met the door-stander at
+            // 0.7 u in the close-order run; the stage nav opens the door for them) — the approach
+            // walks Bond into the doorway volleys, and the door funnel's hops cannot stop short
+            // anyway (the 8.0 arrive overshot to 0.9). The player HOLDS the stage point and lets
+            // them come: the doorway firefight sits at the ×2 band's edge, and their parts show
+            // through the open door. ~15 s of hold, then fight whatever showed; the approach is
+            // the last resort for a guard that never comes.
+            let mut los_clear = los_clear;
+            let mut gpos = gpos;
+            let mut bpos = bpos;
+            if difficulty >= 2 && (walker::dxz(gpos, bpos) > 9.0 || !los_clear) {
+                for _ in 0..30 {
+                    w.wait(30);
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let d = &sim.drones.list[g];
+                    if d.corpse || d.health <= 0.0 { break; }
+                    let bp = sim.bond.pos;
+                    let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                    let dist = walker::dxz(d.pos, bp);
+                    let seen = dist < 10.0
+                        && sim.world.segment(eye, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none();
+                    drop(sim);
+                    if seen { break; }
+                }
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[g];
+                let bp = sim.bond.pos;
+                let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                los_clear = sim.world.segment(eye, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none();
+                gpos = d.pos;
+                bpos = bp;
+                drop(sim);
+            }
             if walker::dxz(gpos, bpos) > 9.0 || !los_clear {
-                w.walk_nav_to(gpos, &format!("approach guard {g}"), 3.0);
+                w.walk_nav_to(gpos, &format!("approach guard {g}"), if difficulty >= 2 { 8.0 } else { 3.0 });
             }
             // Low ammo: grab the nearest pickup first (the placed kind-3 ammo / the guard drops).
             {
