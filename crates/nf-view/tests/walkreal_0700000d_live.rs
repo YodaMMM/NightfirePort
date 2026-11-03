@@ -76,6 +76,39 @@ fn walk_arrival_to_the_c5_door() {
             "the armour pickup taken on the walk-over [M 0x18e650 type 3], got {}", sim.drones.health.armour);
     }
 
+    // THE PLATFORM KILLS — the report's one untried free lever, now MAPPED: from the armour
+    // arrive point on the warehouse main floor ((180.46, 12.19, −207.93), probe-verified stand:
+    // settles at y 12.19, rays CLEAR) the raw rays to the dock patroller #33 (d 28.4) AND the
+    // perch #31 (d 34.0, torso y 7.15) are CLEAR while BOTH cones read the stand blind (vis
+    // 0.00 → no LOS probe [M DroneVision_ProcessDroneSight 0x176a28] — probe_0d_platform: every
+    // stand x 176-184, z −205..−222). The flat geometry kills the dock face problem: eye ~13.6
+    // → torso ~14.0 over dxz ~29 cannot be eaten by the face the way every steep ground shot
+    // east of x ~192 was [probe_0d_climb_cover: 8+13 aimed rounds all died on the face]. The
+    // stand keeps Bond OFF the lip: the walkable main floor ends z ~−207.6 at x ~178 (standing
+    // at the dock-edge arrive point slides Bond down to a y ~7.9 ledge — measured: from that
+    // ledge every #33 round died on the face), so the kills fire from the armour leg's own
+    // arrive point and the dock-edge leg runs AFTER them. The west roof (#27/#28) is still
+    // ASLEEP — it wakes only when Bond stands at the drop point [probe part E] — so both kills
+    // happen with nobody watching. #33 dies first (the flatter target), then #31 (the
+    // steep-down hip-fire lands — the ground perch kill lands steep-up the same way): the drop
+    // then starts the climb with the strip's two awake snipers already down (the post-drop kill
+    // calls stay as log-only fallbacks). Real fire path (shoot_far holds the stand), no writes.
+    w.wait(30);
+    {
+        let p = bond_pos(&w);
+        assert!(p[1] > 11.0, "the kill stand holds the warehouse main floor y ~12.19 (no lip slide), got {p:?}");
+    }
+    let platform_pool = w.scene.sim.as_ref().unwrap().drones.health.health;
+    let dock_killed = kill_guard_at(&mut w, [194.0, -232.2], [5.5, 3.0], "the dock patroller #33 (the platform shot)");
+    let perch_platform = kill_guard_at(&mut w, [161.1, -235.2], [2.0, 2.5], "the perch sniper #31 (the platform shot)");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let h = sim.drones.health.health;
+        eprintln!("[0d] the platform kills: #33 down {} #31 down {} pool {:.1} -> {:.1}",
+            dock_killed, perch_platform, platform_pool, h);
+        assert!(h > platform_pool - 48.0, "the platform shots must not eat the pool, {platform_pool} -> {h}");
+    }
+
     // Leg 1: south to the dock's south edge — walked. The dock's south edge drops to the
     // under-dock trench (the floors 3.0/0.0 [D probes]) whose far side walls 3.9 m up at the
     // yard's north edge (the trench floor 0.0 ends z −266; the yard begins 3.9 at z −272 [D
@@ -719,7 +752,12 @@ fn kill_guard_at(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label: &str) -> bo
 /// (±0.25 u lateral, ±0.6 u vertical — inside the box at any distance) and holds the STAND
 /// (no strafe repositioning: the route's stand is the probe-cleared ray; sliding off it walks
 /// Bond out of his own cover — measured: the first kill attempt slid 5 u north and died).
-/// The real fire path end to end (the gun, the bullets, the hit boxes), reload pulses on empty.
+/// The fire is AIMED (`aiming: true` — the platform-kill measurements: the held 0x1e is a
+/// 0x400000 record [L ee_start_05.bin weapon_data 0x1e +0x68 = 0x408050] whose hip-fire keeps
+/// the full 100-unit cone [M Bullet_init 0x12c5a0:139-170's player_spread — exact ONLY with the
+/// aim bit] and misses a 0.3 u torso beyond ~5 u — 5 dead-centre hip rounds at d 28-33 landed
+/// nothing, while the aimed `shoot_at` path lands static kills at d 25 (the C5 door)). The
+/// real fire path end to end (the gun, the bullets, the hit boxes), reload pulses on empty.
 fn shoot_far(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
     let mut hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
     let mut last_tap = 0u32;
@@ -748,6 +786,7 @@ fn shoot_far(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
             let input = nf_game::player::Input {
                 turn: err.clamp(-0.08, 0.08),
                 look: perr.clamp(-0.08, 0.08),
+                aiming: true,
                 ..Default::default()
             };
             w.scene.sim.as_mut().unwrap().step_bond(input, trigger, clip_empty && t % 20 == 0, false);
