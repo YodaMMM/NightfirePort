@@ -179,6 +179,9 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         // (team 3, death ch 0x60) keep their hold and are never answered to).
         w.dmg.shoot_blockers = true;
         w.dmg.fire_through_disabled = true;
+        // The lane's dry in-hand fights (the 0x12 clip 0 vs the P99's 15 in reserve) — the
+        // game's own mid-fight cycle [L the 00agent-02-03-2 ledger].
+        w.dmg.switch_dry = true;
     }
     let (li, o0, o1, o2) = mission_row();
     {

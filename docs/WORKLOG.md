@@ -46,3 +46,14 @@ In-file d3 resupplies (resupply's 9-u covered-path corridor) before the servants
 the dry P99 died to shotgun captain #5 at 1.6 u in the first fix run. Walk ends t59079,
 health 28.8, exit loads 07000004. Binary: 6 passed + the d3 sister explicit pass; the ignore
 is removed. Next: the 02 d3 sister (round-0 stand-off committed, untested).
+
+### real-health-00agent-02-03-2 (22:12 UTC checkpoint)
+
+03 binary 7/7 (the d3 sister in-suite). 02 binary 3/0 + the d3 sister still parked: the funnel
+defence at the geisha-1 plate works (the rooms passed at 60.0 vs -04's 27.6; the plate duel
+cost 28.8), the stair/lane kill zone remains — the courtyard sniper (0x1e) is NOT exposed from
+the stair top (the duel never fired, clip 32 at the status) and his one hit is 48.0; the
+lane-mouth duel + the 6.0 funnel retreat were tried and the RNG reshuffles killed other spots.
+Shared opt-ins this task: fire_through_disabled (the game's collide drops Enable(0) [M
+Collide_PickObj 0x1eae80]), switch_dry (the mid-fight weapon cycle). Both default off = master
+behaviour; every walkreal binary to be swept before the report.

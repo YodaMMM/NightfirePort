@@ -145,6 +145,13 @@ pub struct DamageLog {
     /// not-yet-enabled guard standing on the line held every tap ("killed false" x5, the
     /// 00agent ledger) while the shooter chewed Bond down. Off = master behaviour (the hold).
     pub fire_through_disabled: bool,
+    /// OPT-IN (`switch_dry`, set by the 02/03 00 Agent walks): the in-hand mag ran dry mid-fight
+    /// — the game's own weapon cycle to the next firearm with rounds (one press + the draw
+    /// wait), instead of the master give-up. A player whose mag ran dry swaps guns mid-fight,
+    /// not after it: the hp-5 rifle chaser finished a clip-0 Bond whose P99 still carried 15
+    /// rounds [L the real-health-00agent-02-03-2 ledger, the courtyard-lane run]. Off = master
+    /// behaviour (the fight is given up).
+    pub switch_dry: bool,
     /// OPT-IN for `stand_and_fire`: Bond steps back (aim held) while any live guard stands
     /// inside this range. Under 3.0 u every drone round hits [M DroneWeap_DoBulletAccuracy
     /// 0x179740:113-115] and a shotgun guard's 8 pellets all land; None keeps Bond still.
@@ -661,7 +668,20 @@ impl Walker {
         let mut last_hit = 0u32;
         let mut dry = 0u32;
         let mut blocked_runs = 0u32;
+        // switch_dry: the cycle press + draw wait (see the field doc).
+        let mut cycle_wait = 0u32;
         for t in 0..cap {
+            if self.dmg.switch_dry {
+                let clip_dry = { let s = self.scene.sim.as_ref().unwrap(); s.gun.clip == 0 && s.gun.spare == 0 };
+                if clip_dry {
+                    if cycle_wait >= 80 { return false; }
+                    let press = cycle_wait == 0;
+                    cycle_wait += 1;
+                    self.tick(Input { weapon_cycle: i8::from(press), ..Default::default() }, false);
+                    continue;
+                }
+                cycle_wait = 0;
+            }
             let (input, fire, reload) = {
                 let sim = self.scene.sim.as_ref().unwrap();
                 let d = &sim.drones.list[di];
