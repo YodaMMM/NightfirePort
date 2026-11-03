@@ -161,9 +161,12 @@ fn fight_through(w: &mut Walker) {
 /// (group 0 → ch 57 + 103); without it the searchlights stay live and the courtyard raises the
 /// ch-55 alarm — neither blocks the walk (no fail channel on this level [L record 1; M
 /// 0x1827d8:98-107]).
-fn walk_to_the_courtyard(w: &mut Walker, cut: bool) {
+fn walk_to_the_courtyard(w: &mut Walker, cut: bool) { walk_to_the_courtyard_at(w, cut, 1) }
+
+/// `difficulty` threads the sister's Agent tactics (the door #59 mouth step); 1 = the old body.
+fn walk_to_the_courtyard_at(w: &mut Walker, cut: bool, difficulty: u32) {
     walk_to_the_guardhouse_court(w);
-    walk_from_the_guardhouse_court(w, cut);
+    walk_from_the_guardhouse_court_at(w, cut, difficulty);
 }
 
 /// The spawn → the guardhouse court east of the searchlight courtyard, with its idle guard down.
@@ -207,7 +210,9 @@ fn walk_to_the_guardhouse_court(w: &mut Walker) {
 /// west ramp up to head #2's balcony (floor 46.0 at x 7..10.8, z −26..−22 [D floor probe]) and
 /// off its west edge onto the 41.0 courtyard floor — the drop passes through the Spotlight
 /// Trigger poly #664 (y 45.93, x −0.8..6.8, z −25.7..−21.0 [D trigger dump]).
-fn walk_from_the_guardhouse_court(w: &mut Walker, cut: bool) {
+fn walk_from_the_guardhouse_court(w: &mut Walker, cut: bool) { walk_from_the_guardhouse_court_at(w, cut, 1) }
+
+fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32) {
     w.walk_to(Wp::new(36.0, 39.1, -13.4), "before door #47");
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -249,6 +254,16 @@ fn walk_from_the_guardhouse_court(w: &mut Walker, cut: bool) {
     }
     // THROUGH the doorway (level-06-castle-fire): without this waypoint the mouth leg aims
     // through the guardroom's west wall (the auto-closing doorway is a nav blind spot).
+    // Agent tactics (real-health-agent-difficulty), opt-in for the difficulty-2 sister: the
+    // Agent run's extra spawns (Drone_Create's min-difficulty gate [M 0x136be0:49]) stretch the
+    // guardroom fights, and by the time the through-leg walks the auto-closing door #59 has
+    // begun its close cycle (the wedge: ch_open 0, pos01 0.50) — the nav re-route over the
+    // guardroom's upper level left Bond floating on the upper threshold, 6000 ticks wedged.
+    // The player closes the distance to the mouth before the leaf shuts: step into the doorway
+    // first, then through.
+    if difficulty >= 2 {
+        w.walk_to(Wp::new(27.9, 40.2, -22.4), "to the doorway mouth");
+    }
     w.walk_to(Wp::new(26.6, 40.6, -23.6), "through door #59");
     // West up the ramp to head #2's balcony and down into the courtyard (the nav leg drops off the
     // balcony's west edge through plate #664 → ch 0x34 → SP #808's reveal NIS 0x06000066).
@@ -438,7 +453,7 @@ fn walk_the_castle_interior_to_the_party_at(difficulty: u32) {
         assert!(sim.drones.searchlights.parts.iter().filter(|p| p.kind == 4).all(|p| !p.drawn), "no corona at the start");
     }
 
-    walk_to_the_courtyard(&mut w, false);
+    walk_to_the_courtyard_at(&mut w, false, difficulty);
     eprintln!("[06] reached the courtyard at tick {}", w.total_ticks);
     for r in &w.rises { eprintln!("[06] rise: ch {} at tick {} bond {:?} touching {:?}", r.0, r.1, r.2, r.3); }
     // THE WALKED BOND TURNS THEM ON AT THE ENTRANCE: the first ch-0x34 rise is the walk's own

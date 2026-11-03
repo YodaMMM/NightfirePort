@@ -835,6 +835,15 @@ fn walk_the_full_mission_start_to_finish() {
     walk_the_full_mission_start_to_finish_at(1)
 }
 
+/// Real damage: the same walk with the health top-up off for every walker it makes (the
+/// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
+/// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
+/// walk completes on the port's own damage.
+#[test]
+fn walk_the_full_mission_start_to_finish_real_damage() {
+    walker::with_real_damage(walk_the_full_mission_start_to_finish);
+}
+
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty): the same walk at
 /// the menu's Agent pick — GameState+0x28 = 2 through the front-end's launch path [M C_SBNFDFCTY
 /// 0x216ca8:15; the `difficulty[]` table 0x2df4c0 row 1 carries 2; Txt 0x14e = "Agent"]. On this

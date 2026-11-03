@@ -155,6 +155,16 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
     // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
     w.prefer_head = true;
+    // Agent tactics (real-health-agent-difficulty), opt-in for the difficulty-2 sister: at
+    // DroneFiring_Accuracy_Normal 0.8 the shotgun (weapon 0x1C) guards close in — under 3.0 u
+    // every drone round hits [M DroneWeap_DoBulletAccuracy 0x179740:113-115] and their 8-pellet
+    // volleys cost ~3.3 health a pellet at Plr_DMod_Normal 0.7 (the sister's first run died at
+    // tick 40108: 52.1 in 16 hits from a guard at 2.8 u). The 02 walk's keep_off/back_off 4.0
+    // (the same `Walker` arms its real-health walk pins green).
+    if difficulty >= 2 {
+        w.keep_off = Some(4.0);
+        w.dmg.back_off = Some(4.0);
+    }
     let (li, o0, o1, o2) = mission_row();
     {
         let sim = w.scene.sim.as_ref().unwrap();
