@@ -13,3 +13,6 @@ Do:
 1. Prove which RNG the game's gas init draws from [M the gas init decompile]: the shared stream or a separate one. If separate, give the port's gas pool its own Rng and the drone stream stays unchanged (most of the reds should go away).
 2. If it really is the shared stream: each red test must be re-checked, not re-pinned blindly. A walk that now fails to complete a level is a real regression to fix; only a digest or a count that the RNG shift legitimately moves may be re-pinned, citing the decompile.
 3. Run every listed test file and the goggles test; all green. Then the full suite.
+
+---
+claimed-by: sandbox3 at 2026-11-03T05:06Z
