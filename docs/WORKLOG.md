@@ -33,3 +33,13 @@ Work log:
   walkreal_probe03handoff 3/0, handback_sp_path_live 3/0, fix_scores_handoff_live 1/0,
   briefing_plays_live 0/0 (opt-in), mp_debriefing_flow 6/0. Level doc §2/§5 updated (the port models
   the hand-off). Fast runner restarted (the first start died: nohup env had no cargo on PATH).
+- (11:33, sandbox restart) setup redone: clone, work-slim, ISO (369823203-byte archive verified),
+  rustup stable, py7zr (no 7z binary, no root), ALSA dev deb into a user prefix. Merge
+  origin/master (67 commits, clean; master's side of the shared files is level-41-every-objective's
+  test corrections) -> a9c45abb, pushed.
+- (10:58) the first fast-runner start died on the link: rust-lld could not find -lasound (the
+  deb's alsa.pc pointed libdir at /usr/lib where only libasound.so.2 lives; the prefix symlink
+  dangled). Fixed the prefix: libasound.so -> the system libasound.so.2, alsa.pc libdir -> the
+  prefix; cleaned alsa-sys+cpal, restarted the runner. Build ok: 1096 test binaries in 1673 s.
+- (11:47) nf-game lib on the merged tree: 656/0/5i (the Equinox-hop resolve test green, 1/0 run
+  alone too). Full-suite run phase in progress; totals to be quoted in the report.
