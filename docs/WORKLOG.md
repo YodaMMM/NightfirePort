@@ -113,3 +113,13 @@ Live checks for the main agent:
 2. From the west ledge landing (-8.2, 12.8, -215.7), can a player shoot the west sniper #13 at
    (-3.0, 12.2, -221.1) — or does the ledge lip eat the rounds the way the port's predictor
    mismatch shows? A screenshot of the sight line would settle the cover.
+
+## level-0c-yard-climb-real-health-4 (started 2026-11-03 16:45 UTC)
+
+Branch s/level-0c-yard-climb-real-health-4 cut from origin/s/level-0c-yard-climb-real-health-3 (4313518d),
+merged origin/master (cbed0983) clean. Plan: read the -3/-2 reports and the blocked queue notes, take the
+-3 report's named next step (the west-ledge fight, then the sister un-ignore on real health), use the aimed
+act (DamageLog::aimed_fights, player-upward-shot) for the deck sentries, re-check every remaining climb hit
+against the game's sight/accuracy/damage path [M], real input only (no health/ammo/channel writes, no
+teleports, no damage/health lowering), shared helpers only behind a per-level opt-in. Suite runner started
+in the background at 16:46 UTC.
