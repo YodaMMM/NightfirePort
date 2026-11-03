@@ -69,8 +69,21 @@ fn cab_y(w: &Walker) -> Option<f32> {
 /// mission AND [M 0x1827d8:119-123] therefore cannot fold on a fresh boot; the END rides OUT
 /// #304's OWN ch 100 write (the mirror of ch 0x41 into ch 0x5A AND ch 0x64 [D 0700000b.md
 /// §objectives]), which Mission_Update latches from ANY writer [M 0x182c60:23-28].
-fn load_fresh() -> Walker {
-    Walker::new(nf_view::load_with_carry(&iso(), "0700000b.bin", false, None).expect("load"))
+fn load_fresh() -> Walker { load_fresh_at(1) }
+
+/// `load_fresh` at `difficulty` (1 Operative = the old load's replay parity; 2 Agent rides the
+/// front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]). The same
+/// NO-channel-poke fresh boot — the carried objectives' channels stay OFF (see the doc above).
+fn load_fresh_at(difficulty: u32) -> Walker {
+    let w = if difficulty == 1 {
+        Walker::new(nf_view::load_with_carry(&iso(), "0700000b.bin", false, None).expect("load"))
+    } else {
+        Walker::new(nf_view::load_with_carry_difficulty(&iso(), "0700000b.bin", false, None, difficulty)
+            .expect("load 0700000b"))
+    };
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
+    w
 }
 
 /// The fresh boot's own pins (the head of `walk_fresh_spawn_to_the_mission_end`), shared by the
@@ -794,6 +807,29 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage() {
         // combat [M 0x164210; 0x1469b8:315-361] — the death run's fight#1/#3 stood 833 ticks in
         // the ring open for 21 health against ATTACK-state guards the darts could never touch.
         // The fights answer only dartable guards and the win is the sleep, not a wound.
+        w.dmg.tranq_fights = true;
+        fresh_boot_asserts(&w);
+        walk_to_the_mission_end(&mut w, true, true);
+    });
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty-08-09-0a-0b): the
+/// same walked balcony → exec floor → terminal → roof → parachute route at the menu's Agent pick
+/// — GameState+0x28 = 2 through the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the
+/// `difficulty[]` table 0x2df4c0 row 1 carries 2; Txt 0x14e = "Agent"]. On this level group
+/// (09-0b) the pick scales Bond's pain by Plr_DMod_Normal 0.8 instead of Easy 0.6 and the
+/// guards' hit chance by DroneFiring_Accuracy_Normal 1.0 instead of Easy 0.8 [M Player_HandlePain
+/// 0x1902c8; DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 09-0b group ← ReadTuningVars
+/// 0x1d3a80]; the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. The same
+/// fresh boot with NO channel pokes (`fresh_boot_asserts` pins the channels off) and the same
+/// fight package (`lane_fights` + `tranq_fights` + back_off 3.0). Real input only — the load
+/// path is the only difference.
+#[test]
+fn walk_fresh_spawn_to_the_mission_end_real_damage_agent() {
+    walker::with_real_damage(|| {
+        let mut w = load_fresh_at(2);
+        w.dmg.lane_fights = true;
+        w.dmg.back_off = Some(3.0);
         w.dmg.tranq_fights = true;
         fresh_boot_asserts(&w);
         walk_to_the_mission_end(&mut w, true, true);

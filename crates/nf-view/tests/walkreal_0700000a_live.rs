@@ -15,13 +15,26 @@ use walker::{Act, Walker, Wp};
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 /// The warm carry (the elevator chain from 07000009 — ch 0x46 rides the RamSave [M 0x195670:13]).
-fn load_carry(save: Option<&nf_game::player::RamSave>) -> Walker {
+fn load_carry(save: Option<&nf_game::player::RamSave>) -> Walker { load_carry_at(save, 1) }
+
+/// `load_carry` at `difficulty` (1 Operative = the old warm load's replay parity; 2 Agent rides
+/// the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty] on the
+/// WARM load — the cold capture only harvests the boot's own health/switch/inventory/channels,
+/// none difficulty-dependent).
+fn load_carry_at(save: Option<&nf_game::player::RamSave>, difficulty: u32) -> Walker {
     let cold = nf_view::load_with_carry(&iso(), "0700000a.bin", false, None).expect("load 0700000a cold");
     let save = save.map(|s| s.to_owned()).unwrap_or_else(|| {
         let sim = cold.sim.as_ref().unwrap();
         nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
     });
-    let mut w = Walker::new(nf_view::load_with_carry(&iso(), "0700000a.bin", false, Some(&save)).expect("load 0700000a warm"));
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load_with_carry(&iso(), "0700000a.bin", false, Some(&save)).expect("load 0700000a warm")
+    } else {
+        nf_view::load_with_carry_difficulty(&iso(), "0700000a.bin", false, Some(&save), difficulty)
+            .expect("load 0700000a warm")
+    });
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     // The keypad codes: the game's own boot table over the port's local-stream default
     // [L ee_start_0700000a.bin @0x2beff8 — KeyCodes, 0x33·5 bytes; code index 1 reads
     // "3078", shown 0] — the same load-path ground truth the level doc's switch_channels
@@ -290,8 +303,11 @@ fn walk_leg_watched(w: &mut Walker, to: [f32; 3], arrive: f32, label: &str) -> b
 /// channel hand-driven there), back to the security keyboard, the REAL use-key activation
 /// ([M] SP_Activate 0x1dc338 + SP_Update 0x1dbda8 state 1), and the AND-mux chain 0x49 → 0x4A.
 /// Everything here is walked (step_bond only); ends after objective 5's channel settles.
-fn walk_to_security_keyboard() -> Walker {
-    let mut w = load_carry(None);
+fn walk_to_security_keyboard() -> Walker { walk_to_security_keyboard_at(1) }
+
+/// `walk_to_security_keyboard` at `difficulty` (2 = the front-end's launch path, see load_carry_at).
+fn walk_to_security_keyboard_at(difficulty: u32) -> Walker {
+    let mut w = load_carry_at(None, difficulty);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -558,8 +574,12 @@ fn walk_office_floor_to_the_security_keyboard() {
 /// parks clear — every eastward ray z −18.3..−19.15 clear with state 4 [D probe]) → the ai lane
 /// south → the south corridor → the hatch E.
 #[test]
-fn walk_office_floor_qworm_keyboard_hatch() {
-    let mut w = walk_to_security_keyboard();
+fn walk_office_floor_qworm_keyboard_hatch() { walk_office_floor_qworm_keyboard_hatch_at(1) }
+
+/// The walk body at `difficulty` (1 Operative = the old warm load's replay parity; 2 Agent rides
+/// the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
+fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
+    let mut w = walk_to_security_keyboard_at(difficulty);
 
     // ai-sight-drawn-gate-5 route re-derivation (the ring route, BFS-derived): the old route
     // crossed the LOCKED office door (−10.6, −19.3, ch 0x30) by force-driving the channel — no
@@ -1493,3 +1513,18 @@ fn probe_laser_web_positions() {
     }
 }
 
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty-08-09-0a-0b): the
+/// same walked office-floor ring — Q-Worm, the security keyboard, the keypad door, the hatch —
+/// at the menu's Agent pick — GameState+0x28 = 2 through the front-end's launch path
+/// [M C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table 0x2df4c0 row 1 carries 2; Txt 0x14e =
+/// "Agent"] on the warm carry (the elevator chain from 09). On this level group (09-0b) the pick
+/// scales Bond's pain by Plr_DMod_Normal 0.8 instead of Easy 0.6 and the guards' hit chance by
+/// DroneFiring_Accuracy_Normal 1.0 instead of Easy 0.8 [M Player_HandlePain 0x1902c8;
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 09-0b group ← ReadTuningVars 0x1d3a80];
+/// the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the
+/// load path is the only difference.
+#[test]
+fn walk_office_floor_qworm_keyboard_hatch_real_damage_agent() {
+    walker::with_real_damage(|| walk_office_floor_qworm_keyboard_hatch_at(2))
+}
