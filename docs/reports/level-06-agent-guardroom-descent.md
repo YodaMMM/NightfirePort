@@ -120,3 +120,22 @@ read.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed (this sandbox's egress to ntfy.sh was dead at 11:47-11:49 UTC;
+git push to github.com worked throughout, so only ntfy.sh was unreachable):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-06-agent-guardroom-descent: done —
+   the Agent sister green (the wedge was the west-wall pilaster corner-catch, not an upper
+   level; the float was the stuck ladder's own jumps), walkreal sweep 137/0, report filed"
+   https://ntfy.sh/nightfire-yoda-8k3x` → `curl: (28) Connection timed out after 20002
+   milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/
+   nightfire-yoda-8k3x', data=b'level-06-agent-guardroom-descent: done', headers={'Title':
+   'NightfirePort'}), timeout=20)"` → `urllib.error.URLError: <urlopen error [Errno 101]
+   Network is unreachable>` (socket.connect to the resolved ntfy.sh address failed with
+   errno 101)
+3. `wget -q -O- --post-data "level-06-agent-guardroom-descent: done"
+   https://ntfy.sh/nightfire-yoda-8k3x` → no output, killed at the 60 s tool cap (hung in
+   connect, same as curl's timeout)
