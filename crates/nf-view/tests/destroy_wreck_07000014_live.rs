@@ -171,3 +171,103 @@ fn the_cascade_swaps_the_smashed_leaves_to_their_wrecks() {
     eprintln!("[014] dead destroy leaves {} (drawn {}, wrecked {}), wreck draws {}",
         dead.len(), drawn_dead.len(), wrecked_dead.len(), wreck_draw.len());
 }
+
+/// The post-cascade door spam pin (level-14-cascade-servers-3): the cascade → 0x85 unlocks
+/// doors 45/46 (Door_Slide_11A/B, ch_lock 0x85 — captured BEFORE the unlock, which clears
+/// ch_lock to 0x0) and the waiting guards (the group-9/13 clones) walk the route through the
+/// pair. The game allows at most one OpenDoor enter+exit per door of the pair, then
+/// combat-move: `NDrone2_ReachedDestNode` 0x153358:151-155 — a re-arrival at a door node whose
+/// door already stands in +0xBA8 returns immediately (`if (iVar11 == *(int *)(iVar2 + 0xba8))
+/// return 1;`), no re-bind, no 0x81 re-entry, no +0x5A6 clobber; +0xBA8 stands until the tail
+/// clears it on the door-open arrival [M 0x153358:170-176]; `DSTATE_OpenDoor` 0x1681f8 case 3
+/// exits on the live DoorIsOpen. The unfixed port re-bound and re-entered 0x81 on every
+/// arrival — 96 OpenDoor ticks in a 1200-tick window [L the level-14-cascade-servers-2 run].
+#[test]
+fn no_guard_spams_the_opendoor_after_the_cascade() {
+    let iso = iso();
+    let mut scene = nf_view::load(&iso, "07000014.bin", false).expect("load 07000014");
+    for _ in 0..400 {
+        if !scene.sim.as_ref().unwrap().disabled { break; }
+        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+    }
+    // The doors and the guard templates, before anything moves: the unlock clears ch_lock
+    // [L the level-14-cascade-servers-2 session], so the indices are hoisted out of the wait.
+    let (doors, clones) = {
+        let sim = scene.sim.as_ref().unwrap();
+        let doors: Vec<usize> = sim.drones.doors.list.iter().enumerate()
+            .filter(|(_, d)| d.ch_lock == 0x85).map(|(i, _)| i).collect();
+        let clones: Vec<usize> = sim.drones.list.iter().enumerate()
+            .filter(|(_, x)| x.group == 9 || x.group == 13).map(|(i, _)| i).collect();
+        assert!(doors.len() == 2, "the ch_lock-0x85 door pair exists [D Door_Slide_11A/B], got {doors:?}");
+        assert!(!clones.is_empty(), "the door-waiting guard templates exist (groups 9/13) [L the probe14 census]");
+        (doors, clones)
+    };
+    // Bond to the hall west end; the guards' real wait at the locked door (the probe's phase 1).
+    scene.sim.as_mut().unwrap().drones.channels.set(0x87, 1, 1);
+    scene.sim.as_mut().unwrap().drones.channels.set(0x88, 1, 1);
+    scene.sim.as_mut().unwrap().bond.pos = [-87.5, -1.7, 33.4];
+    for _ in 0..2700 {
+        scene.sim.as_mut().unwrap().drones.health.health = 100.0;
+        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+    }
+    // The REAL E press on the console plate [M Player_Activate 0x1a5170's class-0x1D arm →
+    // Trigger_Activate 0x1b2318 mask 0x4] — the same shape as the cascade-swap test above.
+    let t_centre = {
+        let sim = scene.sim.as_ref().unwrap();
+        let t = sim.drones.triggers.iter()
+            .find(|t| t.out == 0xa0 && t.mask & 4 != 0 && t.kind == nf_game::triggers::kind::TOUCH)
+            .expect("the 0xA0 E-use touch exists [D placement 399]");
+        [(t.lo[0] + t.hi[0]) * 0.5, (t.lo[1] + t.hi[1]) * 0.5, (t.lo[2] + t.hi[2]) * 0.5]
+    };
+    scene.sim.as_mut().unwrap().bond.pos = [-60.3, 0.9, 38.4];
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        let head = sim.bond.head();
+        let d = [t_centre[0] - head[0], t_centre[1] - head[1], t_centre[2] - head[2]];
+        let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-4);
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond.yaw = d[0].atan2(d[2]);
+        sim.bond.pitch = (d[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+    }
+    let mut fired = false;
+    for _ in 0..12 {
+        scene.sim.as_mut().unwrap().drones.health.health = 100.0;
+        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, true);
+        if scene.sim.as_ref().unwrap().drones.channels.on(0xa0) { fired = true; break; }
+    }
+    assert!(fired, "the E press fires the mask-4 touch → 0xA0 [M 0x1b2318:23-33]");
+    let mut ch85 = false;
+    for _ in 0..300u32 {
+        if scene.sim.as_ref().unwrap().drones.channels.on(0x85) { ch85 = true; }
+        scene.sim.as_mut().unwrap().drones.health.health = 100.0;
+        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        if ch85 { break; }
+    }
+    assert!(ch85, "the cascade reaches 0x85 [D the kill→death pairs]");
+    // The unlock opens the pair; the guards walk the route. 1500 ticks (the probe's measured
+    // crossings land at 60/1055/1468 after E [L probe14_guards]): count every tick a guard
+    // stands in OpenDoor (0x81) and every guard that combat-moves west of the hall's mid.
+    let mut opendoor_ticks = 0u32;
+    let mut crossed = 0usize;
+    for _ in 0..1500u32 {
+        scene.sim.as_mut().unwrap().drones.health.health = 100.0;
+        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        let sim = scene.sim.as_ref().unwrap();
+        for &c in &clones {
+            let g = &sim.drones.list[c];
+            if g.present && g.state == 0x81 { opendoor_ticks += 1; }
+            if g.present && g.pos[0] < -52.4 { crossed += 1; }
+        }
+    }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        for &d in &doors {
+            assert!(sim.drones.doors.list[d].pos01 > 0.99,
+                "door #{d} stands open after the unlock [L the -2 run's pos01 1.0]");
+        }
+    }
+    assert!(crossed >= 1, "at least one guard combat-moves west past x −52.4 [L probe14_guards' crossings 60/1055/1468]");
+    assert!(opendoor_ticks <= 8,
+        "the guards must not spam OpenDoor at the open door [M 0x153358:151-155 — one enter+exit per door of the pair]: {opendoor_ticks} OpenDoor ticks in the 1500-tick window");
+    eprintln!("[014] OpenDoor ticks {opendoor_ticks} in 1500, guards west of −52.4: {crossed}");
+}

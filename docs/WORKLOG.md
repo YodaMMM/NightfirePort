@@ -5,3 +5,12 @@
 - Start: branch `s/level-14-cascade-servers-2` from origin/master c0450ef6. Task: on 07000014 finish the destroyed-model swap for the cascade's objects (racks must draw their destroyed models), find why guards spam the door outside the room after the cascade, add real-input tests; run interactables_07000014_live, walkreal_07000014_live, full suite. Previous attempt's research: origin/s/level-14-cascade-servers-and-door-guards (wreck-side swap in, two OpenDoor dispatch fixes in, crossing bisect + suite run left open).
 - The racks: the no-swap case landed. [D] obj#273 DESTROY_BoxSatellite glist flags 0x30 (bit 0x10) → Destroy_Create 0x12c318:57-59 zeroes tag[0] → Destroy_Smash 0x12bb60's *piVar1==0 arm skips the swap → the intact glist stands; the port's old census hid the racks behind the per-frame dead gate (they vanished). Now: 0x10-flagged leaves join neither destroy_centres nor the wreck bakes. destroy_wreck_07000014_live 2/2, door_wait 1/1, walkreal_07000014_live 8/8, interactables_07000014_live 10/10, destroy regressions (0d keys 3, channels 1, blast_debris 1, blast_scripts 3) all green.
 - The door spam: REPRODUCED with a real-input test (E press → cascade → 0x85 → doors 45/46 unlock and fully open; then 96 OpenDoor 0x81 ticks in a 1200-tick window). Root cause identified [M 0x153358:151-155]: the game's re-arrival at a door node whose door already stands in +0xBA8 is a no-op (return before any state change); the port re-enters OpenDoor on every arrival. Drafted fix (persistent door_bound = the +0xBA8 stand-in, the same-door no-op, the tail clear) did NOT verify within the session — reverted, analysis in the report.
+
+## level-14-cascade-servers-3 (started 2026-11-03 12:26 UTC)
+
+Branch = origin/s/level-14-cascade-servers-2 (2fae2cc4) + origin/master merged (601ee4df; the -2
+session's racks no-swap case rides along). Task: land + verify the drafted door-spam fix (the
+`door_bound` +0xBA8 stand-in [M NDrone2_ReachedDestNode 0x153358:151-155 + 0x1681f8 case 3]),
+`no_guard_spams_the_opendoor_after_the_cascade` green, the racks pin kept, every walkreal_*_live
+green, the full suite total line. Sandbox survived the previous task: repo/work/ISO intact, only
+the branch setup was needed.
