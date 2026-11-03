@@ -1330,9 +1330,17 @@ pub struct Drone {
     /// `Drone+0x12C`: the mission-wait channel word `AllyLeadMissionWait` ENTER latches (0 → 0x99)
     /// [M 0x15efc8:17-20]. Init 0 by `Drone_SM_InitObject` 0x175838; no writer in the decompile.
     pub mission_wait_channel: u16,
-    /// The stun-grenade recover deadline (frame): `StunGrenadeLoop`'s `+0xCC4 = GameState._52_4_ + (+0xCE0)`
-    /// [M 0x1631c0 case 1], where `+0xCE0` is `DroneFunc_RecoverTime` 0x147188's ticks. fix-explosions.
+    /// The stun-grenade recover deadline mirror (frame): armed by the `StunGrenadeImpact` ENTER at
+    /// `frame + recover` for the tests' debug reads. The game's `+0xCC4` (the timer the Loop's TIMER_C
+    /// reads) is armed at the LOOP ENTER, `frame + (+0xCE0)`, a fresh span — `stun_recover` below.
+    /// fix-explosions; re-armed fresh per [M 0x1631c0 case 1] (stun-release-no-stun-anims).
     pub stun_until: u32,
+    /// `Drone+0xCE0` for the stun-grenade family: `DSTATE_StunGrenadeImpact`'s ENTER writes
+    /// `DroneFunc_RecoverTime` 0x147188's ticks there [M 0x172bb0 case 1], and `StunGrenadeLoop`'s
+    /// ENTER re-arms the wake timer with that STORED span — `+0xCC4 = frame + (+0xCE0)`, a fresh
+    /// `RecoverTime` from the Loop's first tick, not a deadline carried from the Impact
+    /// [M 0x1631c0 case 1]. The same stored-span shape as `tase_recover`/`dart_recover`.
+    pub stun_recover: u32,
     /// fix-stunner-press (109b): the tase accumulator `Drone+0xBC` — `DroneFunc_HandleImpact` case 7
     /// adds FRAME_RATE_MUL per tase msg and falls to `DSTATE_Taser` when it passes 2·health
     /// [M 0x1469b8:126-130]. No other writer in the decompile: it persists across states.
@@ -2047,6 +2055,7 @@ impl Drone {
             abseil_land_latch: false,
             mission_path_dist: 0.0,
             stun_until: 0, player_pos: [0.0; 3],
+            stun_recover: 0,
             down: false,
             door_partner: None, door_side: 0, door_planes: [[0.0; 4]; 3], door_zone: 0, door_idle_anim: 0x24, door_zone_step: 0, door_pair_requested: false,
             door_pair_watch: false,
@@ -6388,8 +6397,10 @@ impl Drone {
                 // `DroneFunc_RecoverTime` 0x147188, the 0x35 arm: FRAME_RATE_INT·30·0.01·(200 − Drone+0xB9)
                 // = 18·(200−0) = 3600 ticks at the stats default +0xB9 = 0 (BOT_stats[8], zero at run time
                 // [L 07000005]) [M 0x147188 + 0x172bb0]. The old 7200 read the switch's DEFAULT arm — twice
-                // the game's stun for a stun bullet.
-                self.stun_until = frame + self.recover_time(30);
+                // the game's stun for a stun bullet. The span is STORED (+0xCE0, `stun_recover`) before the
+                // drop, in the case-1 order [M 0x172bb0 case 1]; the wake timer arms from it at the Loop.
+                self.stun_recover = self.recover_time(30);
+                self.stun_until = frame + self.stun_recover; // the deadline mirror (the game arms +0xCC4 at the Loop)
                 // fix-guard-drops-flashbang [M 0x172bb0:15-18, the state's own case 1]: the flashed
                 // guard DROPS the held gun and takes the fists — `if (+0xda != 4) { DropWeapon;
                 // ChangeWeapon(1) }` — whatever route stunned him (the flash broadcast, a stunned
@@ -6406,14 +6417,19 @@ impl Drone {
                 self.alert_status_set(2, frame); // [M 0x172bb0 case 1] — the status byte; no +0x50C write
                 self.vision_on = false;
                 self.firing = false;
-                // `Rand_Rand(2)`: one draw of the shared stream, then the anim with follow-on Loop [M 0x172c34].
-                let a = if rng.rand(2) == 0 { anim_state::STUNNED_A } else { anim_state::STUNNED_B };
+                // `Rand_Rand(2)`: one draw of the shared stream, then the anim with follow-on Loop — the
+                // draw 0 plays 0x2E and the draw 1 plays 0x2D [M 0x172bb0 case 1, dis 0x172c34-0x172c5c:
+                // `Rand_Rand(2)`; `beq` → the 0x2e arm]. (The old arm read the draws the other way round.)
+                let a = if rng.rand(2) == 0 { anim_state::STUNNED_B } else { anim_state::STUNNED_A };
                 self.call_anim(d, a, STUN_GRENADE_LOOP, 0);
                 true
             }
             (STUN_GRENADE_LOOP, msg::ENTER) => {
-                // The down flag +0x2f, its EXIT clearing it [M 0x1631c0 case 1/2].
-                self.vision_on = false; self.firing = false; self.timer_c = Some(self.stun_until);
+                // The down flag +0x2f, its EXIT clearing it [M 0x1631c0 case 1/2]. The wake timer
+                // RE-ARMS with the STORED span: `+0xCC4 = frame + (+0xCE0)` — a fresh RecoverTime
+                // from the Loop's first tick, not a deadline carried from the Impact
+                // [M 0x1631c0 case 1] (the old `stun_until` carry ended the hold one fall-clip early).
+                self.vision_on = false; self.firing = false; self.timer_c = Some(frame + self.stun_recover);
                 self.down = true;
                 true
             }
@@ -7084,7 +7100,19 @@ impl Drone {
         // impact — `DroneFunc_HandleImpact` case 0x18 [M 0x1469b8:250-313] through the same
         // unhandled→GLOBAL fallback the bullets use (WaitSwitch's handler drops it [M 0x15b960], the
         // GLOBAL base state picks it up).
-        if m == msg::FLASH { return self.on_flash(d, rng, frame, s); }
+        // stun-release-no-stun-anims: the STUN-GRENADE LOOP carries its own case 0x18 — the flash
+        // re-arms the wake timer (`+0xCC4 = frame + RecoverTime(msg[6])`) and STAYS in the Loop, no
+        // Impact re-entry [M 0x1631c0 case 0x18]. The only 0x18 broadcaster is the 0x35's flash arm
+        // [M 0x12e0c0], whose RecoverTime arm is 30 [M 0x147188 case 0x35]. (The DART loop's case
+        // 0x18 forwards to HandleImpact instead — re-enters 0x4D [M 0x163570 case 0x18] — which is
+        // exactly `on_flash`'s set_state, right for 0x51 and every other carrying state.)
+        if m == msg::FLASH {
+            if s == state::STUN_GRENADE_LOOP {
+                self.timer_c = Some(frame + self.recover_time(30));
+                return true;
+            }
+            return self.on_flash(d, rng, frame, s);
+        }
         // guard-blast-smoke: the explosive impact (msg 9) and the smoke cloud's touch (msg 0x17)
         // ride the same state machine — `HandleImpact` cases 9/0x17 through the same
         // unhandled→GLOBAL fallback (the GLOBAL base has neither case [M 0x15b830]).
@@ -21351,6 +21379,7 @@ mod tests {
             abseil_land_latch: false,
             mission_path_dist: 0.0,
             stun_until: 0, player_pos: [0.0; 3],
+            stun_recover: 0,
             down: false,
             door_partner: None, door_side: 0, door_planes: [[0.0; 4]; 3], door_zone: 0, door_idle_anim: 0x24, door_zone_step: 0, door_pair_requested: false,
             door_pair_watch: false,
