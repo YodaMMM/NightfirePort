@@ -925,5 +925,11 @@ fn walk_the_whole_mission_on_real_input_real_damage() {
 /// only — the load path is the only difference.
 #[test]
 fn walk_the_whole_mission_on_real_input_real_damage_agent() {
-    walker::with_real_damage(|| walk_the_whole_mission_on_real_input_at(2))
+    // HEAD-HUNT (the 05/07 00 Agent sisters' tactic on this level group): at Agent the guards'
+    // hit chance is DroneFiring_Accuracy_Normal 1.1 (Operative 0.8) and Bond's pain is
+    // Plr_DMod_Normal 0.7 (0.6) [M tuning.rs 05-08 group] — every tick a fight stands is a
+    // burst tick, so the fights take the clear head box first (one head hit drops a 12-health
+    // guard [M NDrone2_HitDamage 0x145558 × DroneDamage_Head]) instead of grinding bodies —
+    // the plain pick's nearest-body order let the walkway shotgun guard #20 land 10 × −4.2.
+    walker::with_real_damage_head_hunting(|| walk_the_whole_mission_on_real_input_at(2))
 }

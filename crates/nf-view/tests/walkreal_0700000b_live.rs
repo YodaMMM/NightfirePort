@@ -102,6 +102,33 @@ fn fresh_boot_asserts(w: &Walker) {
     }
 }
 
+/// The real-health lane sprint (the deck-sprint pattern generalized): the terminal-room GT
+/// pair #174/#175 arms the moment the dome fence fires ch 0x0D (OR #290 → ch 0x0E = p4 14 [D
+/// #290; the level census]) — OR the files take itself (ch 0x06, the OR's other arm) — and
+/// fires on the 0.1 s cadence along the eased barrel [M 0x180498 case 4]: every tick in the
+/// pair's lane is a fire tick its ease can land. The player's answer is the RUN: the walk_to
+/// legs' node pauses are the slow part, so the armed transits drive the raw stick loop
+/// (forward 1.0, the turn clamp) straight through — the same real-input shape the deck sprint
+/// uses. Returns false on the timeout (the caller judges).
+fn lane_sprint(w: &mut Walker, target: [f32; 3], arrive: f32, max_ticks: u32, label: &str) -> bool {
+    let start = w.total_ticks;
+    while w.total_ticks - start < max_ticks {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        if walker::dxz(p, target) < arrive { return true; }
+        let desired = (target[0] - p[0]).atan2(target[2] - p[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        let input = nf_game::player::Input {
+            turn: err.clamp(-0.08, 0.08),
+            forward: if err.abs() > 0.6 { 0.0 } else { 1.0 },
+            ..Default::default()
+        };
+        w.tick(input, false);
+    }
+    eprintln!("[0b] {label}: the lane sprint timed out at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    false
+}
+
 /// The shared walkthrough — both walks reuse the same legs: the spawn plates → the arrival
 /// cut-scene → the cab ride → the exec floor → the waiting-room exit transit (the one kept
 /// stand-in) → the ring → the terminal → the lock's walked E → the Q-Worm install → the files
@@ -476,8 +503,16 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
         if let Some((c, lo, hi)) = spot {
             eprintln!("[0b] the spawned files use-plate at ({:.2},{:.2},{:.2}) box ({:.2},{:.2},{:.2})..({:.2},{:.2},{:.2})",
                 c[0], c[1], c[2], lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
+            // REAL HEALTH: the fence has fired ch 0x0D by now (the walk crossed it en route) —
+            // the terminal-room GT pair #174/#175 is ARMED (OR #290 → ch 0x0E = p4 14 [D]), so
+            // the dome-floor transit south runs the lane sprint (see lane_sprint); the warm
+            // walks keep the walked approach.
             let room = w.try_walk_to(Wp::new(-1.0, 47.5, -5.5).r(1.2), "files the terminal room (from n14)");
-            let walked = w.try_walk_to(Wp::new(c[0], lo[1] - 0.4, c[2]).r(1.4), "the spawned files use-plate");
+            let walked = if real {
+                lane_sprint(w, [c[0], lo[1] - 0.4, c[2]], 1.4, 900, "the spawned files use-plate")
+            } else {
+                w.try_walk_to(Wp::new(c[0], lo[1] - 0.4, c[2]).r(1.4), "the spawned files use-plate")
+            };
             eprintln!("[0b] the files approach: terminal room {} plate walked {}", room, walked);
             // THE SISTER: objective 9 is still open at the writer — ch 0x06 and the OR's output
             // ch 0x4E are OFF before the E fires. The plate is mask 4 = use, so the touch path
@@ -520,13 +555,22 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
     {
         // Both walks end the files section at the spawned plate (by the terminal), so the
         // return is ONE lane: the dome walk north, then the proven n14 → n15 → n16 legs.
-        let _ = w.try_walk_to(Wp::new(-1.0, 47.5, -5.5).r(1.2), "return the terminal room (from the dome)");
-        for (label, wp) in [
-            ("return n14", Wp::new(-1.45, 47.18, 3.74).r(1.0)),
-            ("return n15", Wp::new(-1.33, 47.18, 6.82).r(1.0)),
-            ("return n16", Wp::new(-13.67, 47.18, 6.40).r(1.0)),
-        ] {
-            w.walk_to(wp, label);
+        // REAL HEALTH: the pair is armed (the fence + the take both feed OR #290), so the
+        // whole return lane runs the sprint — the plate → the room → n14 → n15 → n16.
+        if real {
+            lane_sprint(w, [-1.0, 47.5, -5.5], 1.2, 900, "return the terminal room (from the dome)");
+            lane_sprint(w, [-1.45, 47.18, 3.74], 1.0, 600, "return n14");
+            lane_sprint(w, [-1.33, 47.18, 6.82], 1.0, 600, "return n15");
+            lane_sprint(w, [-13.67, 47.18, 6.40], 1.0, 900, "return n16");
+        } else {
+            let _ = w.try_walk_to(Wp::new(-1.0, 47.5, -5.5).r(1.2), "return the terminal room (from the dome)");
+            for (label, wp) in [
+                ("return n14", Wp::new(-1.45, 47.18, 3.74).r(1.0)),
+                ("return n15", Wp::new(-1.33, 47.18, 6.82).r(1.0)),
+                ("return n16", Wp::new(-13.67, 47.18, 6.40).r(1.0)),
+            ] {
+                w.walk_to(wp, label);
+            }
         }
         w.walk_to(Wp::new(-14.3, 47.4, 6.5).r(1.0), "E-plate #166 side (walked)");
     }
@@ -651,6 +695,7 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
     // [M Intersect_RayGeom 0x10a8c8:168], surface classes 0xd/0xe skipped. The walk into the
     // slot passes both gates on real input; the take raises ch 0x3F [M Pickup_Handler
     // 0x18e650:330-333 writes switch_channels[param 3] = 1; D #280 p3 = 0x3F].
+    // The E-plate #166 side stand is short; the deck sprint below is the real-health crossing.
     w.walk_to(Wp::new(pp[0] - 0.3, pp[1] - 1.4, pp[2] - 1.0).r(1.0), "the parachute take slot (walked)");
     let mut taken = w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f);
     for _ in 0..120 {
