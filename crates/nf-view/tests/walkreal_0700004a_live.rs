@@ -79,10 +79,19 @@ fn aim_input(w: &Walker, target: V3) -> Input {
 //    walk burns both with the laser watch — 1/tick off the 100-burn counter under the beam
 //    [M Bullet_DoTrails 0x12e2f0-0x12e390] — the satchel test's way; its sister pins the
 //    no-defuse direction (the blast kills, ch 0x62 ≈ 1377 ticks after the hand-back [L]).
-#[test]
-fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby() {
+/// The walk, parametrized by the menu's difficulty pick (Agent = 2 [M C_SBNFDFCTY 0x216ca8:15
+/// → GameState+0x28]): the difficulty-1 expression is the pre-sister master's byte-for-byte
+/// (plain `load`), 2+ loads the front-end's launch path [M → load_with_carry_difficulty], and
+/// the sim's difficulty is asserted at load [M GameState+0x28 0x2a3790 → Drones::difficulty].
+fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby_at(difficulty: u32) {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "0700004a.bin", false).unwrap());
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load(&iso, "0700004a.bin", false).unwrap()
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "0700004a.bin", false, None, difficulty).unwrap()
+    });
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -222,11 +231,26 @@ fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby() {
     }
 }
 
+#[test]
+fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby() {
+    ride_the_lift_from_the_spawn_and_walk_into_the_lobby_at(1);
+}
+
 /// Real damage: the same walk with the health top-up off for every walker it makes (the
 /// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
 /// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
 /// walk completes on the port's own damage.
 #[test]
 fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby_real_damage() {
-    walker::with_real_damage(ride_the_lift_from_the_spawn_and_walk_into_the_lobby);
+    walker::with_real_damage(|| ride_the_lift_from_the_spawn_and_walk_into_the_lobby_at(1));
+}
+
+/// The Agent-difficulty sister (real-health-agent-difficulty-16-1b-41-4a): the same walked ride
+/// on real health, loaded at difficulty 2 the menu way — Bond's pain scales by 4a's
+/// Plr_DMod_Normal [M Player_HandlePain 0x1902c8; the 0x11..=0x13|0x4a group 0.5 → 0.6,
+/// bullet.rs damage_factor] and the guards' hit chance by Accuracy Normal [M
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88]. Real input only; no health/ammo/channel writes.
+#[test]
+fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby_real_damage_agent() {
+    walker::with_real_damage(|| ride_the_lift_from_the_spawn_and_walk_into_the_lobby_at(2));
 }
