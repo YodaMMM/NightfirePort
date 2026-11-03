@@ -539,15 +539,16 @@ mod tests {
     #[test]
     fn the_burn_segment_never_passes_the_record_range() {
         let world = CollisionWorld::empty();
-        let vol = PlayerVolume { feet: [1e4, 0.0, 1e4], height: 0.1, radius: 0.1 };
+        // (the boxes API: no body boxes here — the burn-walk round flies unopposed; the old
+        // test parked a far-away cylinder, which the posed-box walk never sees)
         // The 0x4E round: one segment [muzzle, muzzle+4.0], dead after. A satchel centre at
         // 4.5 on the ray lies outside every segment the round ever produces.
         let mut w = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 33.33, travelled: 0.0, range: 4.0,
             damage: 0.0, owner: 0, state: 0, weapon: 0x4e, flyby: false, bounces: 0, ..Bullet::TAIL };
         let mut rng = crate::drone::Rng::new(7);
-        w.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng);
+        w.update(&world, &[], [1e4, 0.0, 1e4], &mut rng);
         let end0 = w.pos[2];
-        w.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng);
+        w.update(&world, &[], [1e4, 0.0, 1e4], &mut rng);
         assert_eq!(w.state, 2, "the round is dead after the boundary tick [M 0x12e95c-0x12e984]");
         assert!(end0 <= 4.0 + 1e-3 && w.pos[2] <= 4.0 + 1e-3,
             "no segment end ever passes 4.0 [L +0x1C], first {end0} last {}", w.pos[2]);
@@ -555,7 +556,7 @@ mod tests {
         let mut w2 = Bullet { pos: [0.0, 1.0, 0.0], dir: [0.0, 0.0, 1.0], speed: 33.33, travelled: 0.0, range: 8.0,
             damage: 0.0, owner: 0, state: 0, weapon: 0x4f, flyby: false, bounces: 0, ..Bullet::TAIL };
         let mut rng2 = crate::drone::Rng::new(7);
-        w2.update(&world, &vol, [1e4, 0.0, 1e4], &mut rng2);
+        w2.update(&world, &[], [1e4, 0.0, 1e4], &mut rng2);
         assert!(w2.pos[2] >= 8.0 - 1e-3, "the 0x4F segment covers 4.5-8.0 [L +0x1C], got {}", w2.pos[2]);
     }
 
