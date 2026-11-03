@@ -19,3 +19,14 @@ citations. (2) Where the game really swaps, the test's expectation or the walk m
 follow the game (cite [M]); keep [L] pins unless proven wrong. (3) All six green plus
 drone_block_swaps_live; run every walkreal_*_live, every rook/abseil/elevator test,
 then the full suite.
+
+### drone-block-swaps-g055-2 — 2026-11-03 (sessions 1-2)
+
+The G-055 re-land (revert-of-revert of c0450ef6) plus the six reds triaged: rook06 and
+abseil_elevator were the tests encoding the pre-g055 model — the game's FirstAttack tail
+[M 0x148010:100-131] really flushes the ch-16 guard (row-2 alt 0x2a, FirstAlertState 0 on 06
+[M 0x147f58]) and the jumper's row-7 chain 0x85→0x89→0x63; both tests now follow the game and
+run green. The 07000014 tripbomb walk went green with the trench-guard kill and the stale-gi
+re-finds; the 07000016 punch walk with the gated shelter-door counter-fire. Remaining: the
+07000014 real-damage west-route swarm and the 07000016 real-damage defeat walk (report:
+docs/reports/drone-block-swaps-g055-2.md).
