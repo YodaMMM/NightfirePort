@@ -8,3 +8,8 @@ Run every test in walkreal_0700000d_live and list each result; then every walkre
 
 ---
 claimed-by: sandbox1 at 2026-11-03T19:03Z
+
+---
+## Report (done, 2026-11-03T19:29Z)
+
+Closed by the driver: the report is on `s/level-0d-real-health-crossfire-4` (docs/reports/level-0d-real-health-crossfire-4.md); the worker didn't run finish.sh.
