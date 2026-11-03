@@ -31,3 +31,18 @@ assert measures the wrong counter; the grenade-count and fuse-death asserts pin 
 Suite/env: sandbox disk went 100% full (rust-lld bus errors); cargo clean freed 6.8 GB, rebuild
 underway. ALSA link needs RUSTFLAGS="-L native=/home/z/alsa/usr/lib/x86_64-linux-gnu"
 (untracked /home/z/env.sh, never committed). Next: run the four ignored legs, diagnose 248/321.
+
+Progress 03:46 UTC: all four ignored legs now pass (fire_modes3_live 9/9). The port fix: the
+direct switch request's owned read is the BASE's slot [M Player_EquipWeapon 0x1a8a58:39-41, the
+twins share BL+0x1BA+base·0xC; the port's own Inventory::equip_weapon writes the same base slot]
+— the Samurai 0x32 give owns base 0x33 and the old gate refused the draw on owned[0x32]. Harness
+fixes, each cause named: (248 launcher) the guided round flies 200 units at 0.25/tick [L +0x1C/
++0x20] ≈ 800+15 ticks and the substate-10 ride swallows every press [M Player_Update 0x193600
+case 10] — the old 400-tick wait pressed into the ride; and the 4-rocket pull needs the held path
+(spp 4 [L +0x28], interval 30 [L +0x40], shots [0,30,60,90]). (281 MGL) the grenade family spawns
+a Grenade object with no shot_tick pulse (the port's bullet-path presentation) — the `shots >= 1`
+assert measured nothing. (321 samurai) the base-owned draw above; plus the blast safety: the
+spawn's own floor is 0.36 under the eye [L ee_start_05 rest 24.9633 vs eye 25.32], so any
+down-tilt detonates the 256-damage bolt / 100-damage rockets at Bond's feet — level aim crosses
+the courtyard. The burst leg's arm() helper now writes the SHARED base clip slot [M
+Player_ReloadAmmoType 0x1a1988:18-22]. Kill switches: none; no health writes; all real input.

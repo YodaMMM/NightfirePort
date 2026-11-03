@@ -90,6 +90,10 @@ fn mode_press(scene: &mut nf_view::scene::Scene) -> u8 {
 }
 
 /// Arms the gun for a clean shot (the harness's direct setup, as fix_weapon_fire_modes_live does).
+/// The clip write goes to the weapon's SHARED slot — a twin record (+0x05 set, matching ammo type)
+/// reloads and spends `clip[base]`, one physical magazine per family [M Player_ReloadAmmoType
+/// 0x1a1988:18-22; the sim re-reads that slot into `gun.clip` at every tick start] — the old raw
+/// `clip[weapon]` write left the base slot stale and the next tick overwrote the armed clip.
 fn arm(scene: &mut nf_view::scene::Scene, clip: i16) {
     let sim = scene.sim.as_mut().unwrap();
     sim.gun.reload_state = 0;
@@ -97,7 +101,10 @@ fn arm(scene: &mut nf_view::scene::Scene, clip: i16) {
     sim.gun.pending = 0;
     sim.gun.clip = clip.max(0) as u32;
     let w = sim.gun.weapon as usize;
-    if let Some(c) = sim.drones.inventory.clip.get_mut(w) { *c = clip; }
+    let r = &sim.weapons.records[w];
+    let base = u16::from_le_bytes([r[2], r[3]]) as usize;
+    let slot = if r[5] != 0 && r[0x90] == sim.weapons.records[base][0x90] { base } else { w };
+    if let Some(c) = sim.drones.inventory.clip.get_mut(slot) { *c = clip; }
 }
 
 /// Pitches the view down over `ramp` ticks (the real look input) so the round hits the floor.
@@ -202,7 +209,12 @@ fn burst_rifle_one_pull_fires_three() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load(&iso);
     tick(&mut scene, 30);
-    assert!(give(&mut scene, 0x0a, 30), "give the Type 40");
+    // The PINE arm, not the panel give: the give runs the pickups' take path, whose
+    // `Upgrade_Weapon` remap turns pickup id 10 into 0xC whenever the clock is non-zero
+    // [M 0x18e650:142 — GameState+0x52, the panel's sim-tick stand-in] — 0x0C is a different
+    // record (no twin), the panel returns Some(0x0a) regardless, and the draw of 0x0a was
+    // refused on owned[0x0a]. The arm is the PCSX2 pass's own setup (the twin below uses it too).
+    arm_record(&mut scene, 0x0a, 30);
     assert!(draw(&mut scene, 0x0a), "draw the Type 40");
     let spp = |scene: &nf_view::scene::Scene, w: usize|
         u16::from_le_bytes([scene.sim.as_ref().unwrap().weapons.records[w][0x28], scene.sim.as_ref().unwrap().weapons.records[w][0x29]]);
@@ -285,8 +297,17 @@ fn launcher_guided_rides_and_unguided_fires_four() {
     tick(&mut scene, 6);
     assert!(scene.sim.as_ref().unwrap().missile_cam.is_some(), "the guided mode's camera rode the missile");
     // Let the missile die, then the REAL mode press lands the unguided twin (the twin's own
-    // has-ammo gate — arm its clip, the PCSX2 pass's PINE setup).
-    tick(&mut scene, 400);
+    // has-ammo gate — arm its clip, the PCSX2 pass's PINE setup). The guided round flies its full
+    // 200-unit range at 0.25 u/tick [L 0x2C +0x1C/+0x20] — ~800 ticks before the ride ends (plus
+    // the 15-tick restore [M Bullet_Delete 0x12e660:28]) — and while it rides the substate-10
+    // player swallows every press [M Player_Update 0x193600 case 10]: the old 400-tick wait
+    // pressed into the ride and the mode press never landed.
+    for _ in 0..1000 {
+        if scene.sim.as_ref().unwrap().missile_cam.is_none() { break; }
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+    }
+    assert!(scene.sim.as_ref().unwrap().missile_cam.is_none(), "the guided ride ended (range out + restore)");
+    tick(&mut scene, 10);
     arm_record(&mut scene, 0x2d, 4);
     let w = mode_press(&mut scene);
     assert_eq!(w, 0x2d, "the mode press landed the unguided twin 0x2D");
@@ -294,10 +315,18 @@ fn launcher_guided_rides_and_unguided_fires_four() {
         u16::from_le_bytes([sim.weapons.records[0x2d][0x28], sim.weapons.records[0x2d][0x29]]) };
     assert_eq!(spp, 4, "the unguided twin fires 4 per pull [L 0x2D +0x28 = 4]");
     // Sister: the camera does NOT ride for 0x2D (+0x6C & 4 clear [L 0x2D = 0x1a200]).
-    aim_down(&mut scene, 10, -0.9);
+    // The default (level-start) pitch, no down-tilt: the spawn's own floor is 0.36 under the eye
+    // [L ee_start_05 rest 24.9633 vs eye 25.32], so even the torpedo leg's -0.5 put each rocket's
+    // blast (radius 8, damage 100 [L 0x2D +0x08/+0x0C]) on the platform at Bond's feet — 47.5
+    // health after round 1, dead before round 3. Level, the rounds cross the courtyard and their
+    // blasts land past the watch.
     arm(&mut scene, 4);
-    let (shots, _, _, _, _) = fire_once(&mut scene, 20);
-    assert_eq!(shots, 4, "one pull of the unguided twin fired 4 rockets [L 0x2D +0x28 = 4]");
+    // The pull is the game's held-trigger path [M Player_WeaponFiring 0x1a5460:601-655]: spp 4
+    // [L +0x28] at the 30-tick interval [L +0x40] — shots at ticks 0/30/60/90. The old drive
+    // (a one-tick pull, a 20-tick watch) measured 1 rocket: the release cancels the pull
+    // [M 0x1a5460:442-446] and the watch could not have seen the interval anyway.
+    let shot_ticks = fire_held(&mut scene, 95, 100);
+    assert_eq!(shot_ticks, [0, 30, 60, 90], "one held pull fired 4 rockets at the 30-tick interval [L 0x2D +0x28 = 4, +0x40 = 30]");
     assert!(scene.sim.as_ref().unwrap().missile_cam.is_none(), "the unguided twin never rides the camera");
 }
 
@@ -327,8 +356,11 @@ fn mgl_impact_and_delay_through_the_real_mode_press() {
     assert_eq!(w, 0x2b, "the mode press landed the delay twin 0x2B");
     aim_down(&mut scene, 10, -1.0);
     arm(&mut scene, 6);
-    let (shots, _, grenades, boom, boom_tick) = fire_once(&mut scene, 400);
-    assert!(shots >= 1, "0x2B fired");
+    let (_, _, grenades, boom, boom_tick) = fire_once(&mut scene, 400);
+    // The fire itself: the MGL is the grenade family — `Bullet_init` 0x12c5a0's class-3 arm spawns
+    // a grenade object, and the port's `shot_tick` pulse is the BULLET path's spawn presentation
+    // with no grenade counterpart. The old `shots >= 1` assert therefore measured nothing and the
+    // leg read as a missed trigger edge; the grenade spawn + the fuse death below are the fire.
     assert!(grenades >= 1, "0x2B fired its grenade");
     let (r, d, owner, wt) = boom.expect("0x2B died on its fuse");
     assert!(boom_tick >= 150, "the delay twin NEVER detonated on contact (fuse death at tick {boom_tick})");
@@ -362,7 +394,11 @@ fn samurai_charge_drains_and_blasts_and_beam_spends_twelve() {
         assert_eq!(falen, 280, "the charge script is 280 frames [L 0x32 +0x44]");
         assert_eq!(per_shot, 100, "the overcharge's shot costs the whole clip [L 0x32 +0x91]");
     }
-    aim_down(&mut scene, 30, -0.9);
+    // The default (level-start) pitch, no down-tilt: the spawn's own floor is 0.36 under the eye
+    // [L ee_start_05 rest 24.9633 vs eye 25.32], so even a -0.5 muzzle detonated the bolt (radius
+    // 8, damage 256 [L 0x32 +0x08/+0x0C]) on the platform at Bond's feet — dead mid-charge, and
+    // the mode press then read hands. Level, the bolt crosses the courtyard and its blast lands
+    // far from him.
     // Hold the trigger: the shot fires (clip 100 → 0), the charge script plays, the drain runs.
     {
         let sim = scene.sim.as_mut().unwrap();
