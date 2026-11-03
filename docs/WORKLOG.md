@@ -25,6 +25,17 @@ door is bound.
 - THE FIX: the stale+distance clear now wipes BOTH stand-ins (one line + the [M] comment) —
   the game's single-slot lifecycle restored. Next: build, the 11 tests + the spam pin, the
   walkreal sweep, the suite.
+- 19:05-19:15 UTC (continued session): the second [M] piece landed at 50bcbeca — the ENTER
+  deferral. DSTATE_OpenDoor's ENTER ran BEFORE the port's door-node resolution could land, so
+  the -3 DoorIsOpen early-exit read the stale pre-bind latch and bounced EVERY fresh binding
+  back to +0x5A6 (the driven guard stood in 0x63 with the reach consumed, no re-attempt). The
+  game's order is bind-then-ENTER [M 0x153358:149-163 → 0x1681f8 case 1]: a fresh binding
+  defers the ENTER; Drones::tick re-delivers it right after the resolution. Verified 19:14:
+  **ALL 11 previously-red tests GREEN** — npc_doors_live 6/6, fix_guard_misc_live 6/6,
+  walkreal_07000003_live 5/5 (both route tests), walkreal_0700000a_live 10/10 (all three),
+  walkreal_07000014_live 9/9 (all four, incl. the delta-exit wedge and the tripbomb route) —
+  AND the pin kept: no_guard_spams_the_opendoor_after_the_cascade green (destroy_wreck
+  3/3). Next: the full walkreal sweep, the full suite total line, the report.
 
 ## level-14-cascade-servers-2
 
