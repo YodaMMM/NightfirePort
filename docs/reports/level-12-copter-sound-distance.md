@@ -46,8 +46,10 @@ outer ← bank+0xc. Both tables read the same for the copter's ids [D — probe1
 - **The 3D law** (`nf-audio/src/sfx.rs` `levels()`): identical integer chain to 0x1060c — the same
   /100 scaling, inner·10/range·10, the a² quadratic, the left-axis dots, the rear ×75, the mode-0
   average. Measured on the real 07000012 bank, the port's output equals the law within 1–2 GSV
-  units (1 unit = 1/100) at every probed spot (the deltas are the test's f64 √ vs the ported
-  fixed-point `ps2_sqrt`; the driver carries the game's own integer sqrt).
+  chain exactly — with the ported fixed-point `ps2_sqrt` in the test's reference, all five
+  probed spots compare EQUAL (0.340/0.340 at d20, 0.120 at d50, 0.090+0.180-rear behind,
+  0.000/0.200 at 90° left, 0.000/0.000/0.000 at d120). The driver is bit-exact with the game's
+  integer chain.
 - **The radii**: the port's `SfxTable` (SFXOutputData, from ACTION.ELF) and the bank `Effect`
   parse (nf-formats/src/soundbank.rs) both read the stabs layout (`docs/systems/sound.md` §1.1 —
   max_reject@0x1c, ducker@0x22, ducker_length@0x24, master_volume@0x28 checked against the
@@ -74,9 +76,10 @@ plays inside it. Nothing here is "almost full strength from behind and away".
   follows most ticks with the emitter moving >2 u with the copter.
 - `the_copter_engine_fades_and_pans_by_the_game_law` — the real bank in the real driver: the
   volume and pan at d=20/50 front, d=50 behind, d=90° left, d=120 equal the game's integer law
-  (replicated in the test from [M 0x1060c/0x10eb8/0x1300] with the [D] radii and start volume),
-  ±0.025; plus the law's shape as relations (falloff, rear dominance behind, the left/right dot
-  split, silence beyond outer).
+  (replicated in the test from [M 0x1060c/0x10eb8/0x1300] with the [D] radii and start volume,
+  the reference using the ported fixed-point `ps2_sqrt`): exact equality at all five spots; plus
+  the law's shape as relations (falloff, rear dominance behind, the left/right dot split,
+  silence beyond outer).
 - `the_copter_gun_is_audible_only_inside_its_outer_radius` — no gun voice at 60 u, a voice at 20 u.
 
 Probes (assertion-free, `--ignored`): `probe12_copter_sounds.rs` (the disc dump: placements,
