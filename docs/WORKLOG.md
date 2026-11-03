@@ -59,3 +59,7 @@ head — the boxes ride the palette offset), anim_events_live 4+1ign, bond_boxes
 encoded the reverted root drop; reverting it is not a view-only re-pin — the sim returns to
 master's). Full suite: did not fit this window (setup + the two-worktree probe capture);
 the next message resumes with the chunked runner on a fresh state file.
+
+## bond-hitbox-pose-3
+
+- (07:15 UTC, 11-03) Branch created from origin/master (6f16146e) + merged origin/s/bond-hitbox-pose-2 (the reds: walkreal_07000014 ×3, walkreal_07000004 results tallies). Merge resolution: master's cel-scoped bullet pick (segment_bullet_scoped) + pose-2's posed-box player walk (damage::first_box_hit); drone.rs keeps the bond_boxes build with master's Drones fields; the small test helpers keep master's body/move_local/crouched literals; anim_events keeps pose-2's melee tick-wait with master's helper. Next: reproduce the 14 reds on this tree, find which pose-2 change moves each, check the game [M/L].
