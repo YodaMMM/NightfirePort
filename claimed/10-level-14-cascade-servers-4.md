@@ -10,3 +10,6 @@ Correction to that report: walkreal_07000014_live is GREEN on origin/master. The
 - walkreal_07000014_live: the_e_use_switch_fires_the_sabotage_cascade_and_opens_the_west_door, walk_the_infiltration_to_the_delta_exit (+ _real_damage), walk_the_tripbomb_route_pick_up_place_and_shoot_it
 
 So the binding/clear rules stop guards from opening and crossing doors they should. Re-check `door_bound` against [M 0x153358:151-155, 0x1681f8 case 3, DSTATE_OpenDoor's ENTER + NDrone2_DoorIsOpen]: when the game clears +0xBA8 and when a fresh door is bound. Keep no_guard_spams_the_opendoor_after_the_cascade green AND all 11 above green, then every walkreal_*_live, then the full suite total line.
+
+---
+claimed-by: sandbox4 at 2026-11-03T15:09Z
