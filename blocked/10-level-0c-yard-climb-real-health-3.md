@@ -9,3 +9,7 @@ Real input only; no health top-ups or forced state; shared helpers opt-in. Done 
 
 ---
 claimed-by: sandbox1 at 2026-11-03T14:11Z
+
+---
+## Report (blocked, 2026-11-03T14:53Z)
+
