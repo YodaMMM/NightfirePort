@@ -99,3 +99,10 @@ COMBAT_NO_SIGHT 0x5c search toward the last-seen position) vs the port's fire-st
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed again at the 2026-11-03 continuation (after the queue entry was
+attached): 1. `curl` → `curl: (28) Connection timed out after 15002 milliseconds`; 2.
+`python3 urllib` → `URLError: <urlopen error [Errno 101] Network is unreachable>`; 3. `wget`
+→ killed at the 40 s timeout with no output.
