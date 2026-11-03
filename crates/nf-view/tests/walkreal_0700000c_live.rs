@@ -405,10 +405,38 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
 /// anywhere — and Bond's death panics with the damage log (who, weapon, range). Auto-aim is
 /// the app default; the fights are the walker's own plain return fire. The two documented
 /// route stand-ins are links from the master walk (neither writes health, armour or ammo).
+///
+/// The yard's deck-sniper stands are OPT-IN (`walker::with_yard_aimed_stands`): the deck
+/// snipers (weapon 0x1e, -16 a hit, 10.7-11 u above the yard floor) sit outside the plain
+/// fights' 7.5 u vertical reach and were the real-health run's killer chain (#18 dealt 51.8
+/// of 100 in 4 hits from d ~34 u [L the predecessor run's census]; Bond died ON the ladder at
+/// y 7.95). The stands kill them AIMED from the strip — the zero-spread aimed act
+/// [M Bullet_init 0x12c5a0:139-170; the HIP cone 100.0 → 4.9 u of scatter at 35 u
+/// [L ee_start_05.bin @ 0x2c10b8 +0x24] is the miss the player-upward-shot branch pinned] —
+/// then the walk climbs and mantles. Real input only: the whole route is walked from the
+/// level start, no teleport after the load; the top-up walk and the eastroute replay (flag
+/// off) keep master's pinned choreography.
+/// The yard's deck-sniper stands are OPT-IN (`walker::with_yard_aimed_stands`): the deck
+/// snipers (weapon 0x1e, -16 a hit, 10.7-11 u above the yard floor) sit outside the plain
+/// fights' 7.5 u vertical reach and were the real-health run's killer chain (#18 dealt 51.8
+/// of 100 in 4 hits from d ~34 u [L the predecessor run's census]; Bond died ON the ladder at
+/// y 7.95). level-0c-yard-climb-real-health-3's answer: the STILL-GATE aimed stand — the
+/// zero-spread aimed act [M Bullet_init 0x12c5a0:139-170] has no lead, and the sentry's
+/// wiggle-step during the round's flight is the measured miss (converged rounds never landed
+/// while it stepped; the same spot landed the run it paused [L the probe on this branch]) —
+/// so the stand taps only after the target holds still 18 ticks. The emplacement dies
+/// MID-CROSSING (from the door it is not exposed at all — aim None [L the same probe]; the
+/// -2 census's twin #36 is present false on this tree — the round-vs-twin theory is retired),
+/// the pre-climb suppression pass stands on #15/#1, the ladder-top stands on the hitters.
+/// Real input only: the whole route is walked from the level start, no teleport after the
+/// load; the top-up walk and the eastroute replay (flag off) keep master's pinned
+/// choreography.
 #[test]
-#[ignore = "real health: 80 damage by tick 8700 (weapon 0x1e drones hit from ~34 u), then the yard climb never mantles"]
+#[ignore = "real health 2026-11-03 (level-0c-yard-climb-real-health-3): the YARD IS SOLVED and the #284 WIRE CROSSING PASSES on this branch — the still-gate aimed stand (the deck sentry's wiggle-step during the round's flight was the measured miss; the zero-spread act has no lead) kills #18 MID-CROSSING ([L] the door spot is not exposed at all — aim None; the -2 census's twin #36 is present false on this tree, the pair/corpse theory retired), the east-ledge/pre-climb/ladder-top/west-edge sweeps run on the strict gun rays, the climb mantles, the ledger at tick 12300 is 82.4 for 100 with Bond ALIVE at 17.6 hp (the -2 runs died at the base at 1.6), and the ride + drop land on the west ledge ([L] 'the west gap crossed on wire #284 — landed (-8.21, 12.82, -215.66)'). THE REMAINING BLOCKER is the west-ledge fight: the west sniper #13 patrols to (-3.0, 12.2, -221.1), d ~6 LEVEL across the gap, and its 2 x -16 + the fatal -1.6 graze kill the 51.4-hp Bond at tick 14308 ([L] the death log) — the walk's own fights land killed false and the still-gate sweeps find NO gun-ray-exposed candidate from the edge or the ledge (the plain eye ray reads Some while the rounds die on the ledge lip — the predictor-vs-muzzle-flight gap the #15 case measured; the strict rays read None behind #13's cover). Measured razor edge: with the west-edge sweep at the LADDER TOP the ride froze byte-exact at d_B 1.52-1.61 (wire_anim_time stuck, auto_drop frozen, substate 6, disabled false — an NIS/anim-script gate keyed to a volume the ride's sway phase enters); with the sweep moved to the west edge the ride's phase shifted and the crossing passes — the freeze is path-phase dependent, not deterministic. Next session: kill #13 from a spot whose gun rays clear (or walk the lip corner), then the ledge diagonals + wire #282 + the 0d legs under the fights; then un-ignore."]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
-    walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff);
+    walker::with_yard_aimed_stands(|| {
+        walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff)
+    });
 }
 
 
