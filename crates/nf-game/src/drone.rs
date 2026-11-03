@@ -730,8 +730,9 @@ pub struct Player {
     /// The runtime cel the queries start from (obj+0x20 — fix-safe08b): the `pCelList` cell index in
     /// the world's `ScopeGraph`; `None` = the flat (unscoped) world.
     pub cel: Option<usize>,
-    /// The crouch substate is live (`bond.crouched` at the build site): the trigger toucher
-    /// switches to the game's crouch pick arm with it (level-0a-ceiling-gun-route).
+    /// The crouch stance (`Player_SSCrouch` 0x1924c0's state, the port's `Bond::crouched`): the
+    /// hit-box pose picks the crouch idle's palette when set [D the SP crouch anim-set descriptor
+    /// 0x2b91d8's idle script 0x060009ff → seq 0x0400084e; M PlayerAnimSetInitCrouch 0x18fea0].
     pub crouched: bool,
     /// The move quad's x/z lanes the guards' accuracy moving test reads [M
     /// DroneWeap_DoOpponentTargetting 0x179a48:33-41 — the target's class byte obj+0xFF == 3 (the
@@ -6278,11 +6279,14 @@ impl Drone {
             (UNDER_COVER_SNIPER_FIRE, msg::TIMER_C) => { self.fire(d, rng, frame, true); true }
             (UNDER_COVER_SNIPER_FIRE, msg::TIMER_D) => { self.set_state(UNDER_COVER_RETURN); true }
             (UNDER_COVER_SNIPER_FIRE, msg::EXPLOSIVE) => { self.take_explosive_msg(d, frame, UNDER_COVER_LEAVE_NOW); true }
-            // `NDrone2_DSTATE_UnderCoverSniperReload` (0x16a8b0): the reload anim (0x52), then back to 0x97. Refills
-            // the clip from the spare (`+0xBBC = +0xBBE`).
+            // `NDrone2_DSTATE_UnderCoverSniperReload` (0x16a8b0): ENTER [M case 1] — the +0x4F8 seen
+            // flag (not modelled), `Drone_AlertStatusSet(1)`, `+0x3b = 0`, the reload anim (0x52),
+            // then back to 0x97, and the clip refill from the spare (`+0xBBC = +0xBBE`, after the
+            // anim call in the case's order).
             (UNDER_COVER_SNIPER_RELOAD, msg::ENTER) => {
                 self.vision_on = true;
                 self.cover_claimed = false;
+                self.alert_status_set(1, frame); // [M 0x16a8b0 case 1]
                 self.call_anim(d, anim_state::RELOAD, UNDER_COVER_SNIPER_FIRE, 0);
                 self.clip = self.clip_max;
                 true
@@ -8159,16 +8163,32 @@ impl Drone {
             // gate lives only in case 3]: the timer shot is NOT held while the muzzle is buried.
             (AIM_STAND_FIRE | AIM_CROUCH_FIRE, msg::TIMER_C) => { self.fire(d, rng, frame, true); true }
             // `NDrone2_DSTATE_AimStandReload` 0x1666d8 (state 0x69) / `NDrone2_DSTATE_AimCrouchReload`
-            // 0x167370 (state 0x71) ENTER [M 0x1666d8 case 1]: `firing` drops, the clip refills from
-            // the reserve (`+0xBBC = +0xBBE`), and the reload anim's follow-on returns to the matching
-            // fire state (0x68 stand / 0x70 crouch). (The game's 1-in-30 alternate reload anim 0x4a
-            // with the same follow-on is a presentation variant [M 0x1666d8:21-27] — the port plays
-            // RELOAD only.)
+            // 0x167370 (state 0x71) ENTER [M case 1]: `firing` drops and the clip refills from the
+            // reserve (`+0xBBC = +0xBBE`). Stand order [M 0x1666d8:16-30]: the +0x4F8 seen flag
+            // (port convention: not modelled), `Drone_AlertStatusSet(1)`, the draw, the anim, the
+            // refill; Crouch order [M 0x167370:14-19]: the flag, the refill, `+0x3b = 0`, the anim —
+            // NO alert write, NO draw there [M the case has neither]. The reload anim's follow-on
+            // returns to the matching fire state (0x68 stand / 0x70 crouch). The game's 1-in-30
+            // alternate: `Rand_Rand(30)` drawn UNCONDITIONALLY at every AimStandReload ENTER
+            // [M disasm 0x166738-0x166740 `addiu a0,0x1e; jal Rand_Rand`], and a 0 draw with
+            // `DroneAnim_CanDoAnimState(0x4a, 0)` plays anim 0x4a instead of 0x52 (the same
+            // follow-on) [M 0x1666d8:21-27] — the shared stream consumes the draw, so the port
+            // must too (determinism), and 1-in-30 guards visibly reach down to reload.
             (AIM_STAND_RELOAD | AIM_CROUCH_RELOAD, msg::ENTER) => {
                 self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1666d8:16 / 0x167370:15]
                 self.firing = false;
-                self.clip = self.clip_max;
-                self.call_anim(d, anim_state::RELOAD, if s == AIM_STAND_RELOAD { AIM_STAND_FIRE } else { AIM_CROUCH_FIRE }, 0);
+                if s == AIM_STAND_RELOAD {
+                    self.alert_status_set(1, frame); // [M 0x1666d8 case 1 — AlertStatusSet(1)]
+                    if rng.rand(30) == 0 && self.can_do(d, 0x4a) {
+                        self.call_anim(d, 0x4a, AIM_STAND_FIRE, 0);
+                    } else {
+                        self.call_anim(d, anim_state::RELOAD, AIM_STAND_FIRE, 0);
+                    }
+                    self.clip = self.clip_max; // [M 0x1666d8:30 — after the anim call]
+                } else {
+                    self.clip = self.clip_max; // [M 0x167370:17 — before the anim call]
+                    self.call_anim(d, anim_state::RELOAD, AIM_CROUCH_FIRE, 0);
+                }
                 true
             }
             (AIM_STAND_RELOAD | AIM_CROUCH_RELOAD, msg::UPDATE) => { self.turn_to_opponent(0.9); true }
@@ -20103,17 +20123,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // Bullets: move, collide with the world and Bond (`Bullet_update` + `Collide_Update`), damage
         // (`Player_HandlePain`); the hit flash fades by 1 per tick (HUD). `Bullet_DoTrails` fly-by (sound 0x1dc) is
         // checked inside `Bullet::update` in the game's RNG order (Rand_FRand → Rand_Rand(5)).
+        // Bond's body: the 16 anim boxes (`HumanCollisionBones` 0x2c6be8 [D], `Collide_Jointy`
+        // 0x1ec180 kind 0x201, gate `Collide_Intersect` 0x1ebaa8:101-105 — Bond's obj carries the
+        // glist and +0xFA bit 3 [L ee_start_05.bin 0x16cefe0]) at the [L] standing idle palette
+        // (`damage::bond_boxes`); the old cylinder was the documented deviation.
         self.impacts.clear();
-        // Bond's hit volume spans his body boxes: the game tests his `HumanCollisionBones` boxes
-        // (`Collide_Intersect` 0x1ebaa8 → `Collide_Jointy` for `obj+0xFA & 8`, set on the player
-        // [L ee_start_05/0700000a/07000001: obj+0xFA = 8, the anim palette live +200 & 1]). A standing
-        // human's boxes reach from 1.03 below obj+0x30 (the foot boxes, 0x34/0x38) to 0.87 above it
-        // (the head box 5: centre +0.76, half 0.11) [D the port's AnimGetCollData boxes on 07000002's
-        // idle guards]; the top follows the eye (+0.70 standing) so a crouch lowers it. The old
-        // cylinder ran from 0.4 below to 1.4 above — missing the legs and catching shots 0.5 over the head.
-        let feet_y = player.pos[1] - 1.03;
-        let eye_y = if player.eye == [0.0; 3] { player.pos[1] + 0.7 } else { player.eye[1] }; // fixtures without an eye
-        let vol = crate::bullet::PlayerVolume { feet: [player.pos[0], feet_y, player.pos[2]], height: (eye_y + 0.17 - feet_y).max(0.5), radius: 0.25 };
+        let bond_boxes = crate::damage::bond_boxes(d, player.yaw, player.pos, player.crouched);
         let viewer = player.pos;
         for b in &mut self.bullets {
             let (from, dir) = (b.pos, b.dir);
@@ -20137,7 +20152,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps, &mut self.rng);
                 continue;
             }
-            if let Some(ev) = b.update(d.world, &vol, viewer, &mut self.rng) {
+            if let Some(ev) = b.update(d.world, &bond_boxes, viewer, &mut self.rng) {
                 match ev {
                     crate::bullet::BulletEvent::World(p) => {
                         // The satchel charge LANDS instead of dying [M Bullet_CollisionHandler
@@ -20226,7 +20241,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         }
                         }
                     }
-                    crate::bullet::BulletEvent::Player { damage, at } => {
+                    crate::bullet::BulletEvent::Player { damage, at, part: _ } => {
                         // The satchel charge bounces off Bond without hurting him [M
                         // Bullet_CollisionHandler 0x12ce80 @0x12d150: the hit-object walk's
                         // class-2/3 arm sets obj+0xF4 = 1 (flying again); the explode-on-body

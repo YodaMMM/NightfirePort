@@ -45,12 +45,20 @@ fn load_at(pos: [f32; 3]) -> nf_view::scene::Scene {
     scene
 }
 
-/// Stages a guard bullet two units in front of Bond's EYE (yaw 0 → +Z ahead; the standing eye rides
-/// 0.7 above the feet — BL+0x908 [L bldata.md, M 0x18f5d8:117-128]) and steps once.
+/// Stages a guard's round two units in front of Bond, straight into the TORSO box. The staging is
+/// the box geometry, not the old cylinder's eye line: the 16 boxes at the [L] idle pose put the
+/// torso box's centre at the root + (−0.025, +0.287, −0.086) — the bone4/bone1 midpoint 0.2866 the
+/// snapshot test pins [L ee_start_05, reload_and_bond_hitboxes_live] — and the EYE (root + 0.7,
+/// BL+0x908 [L bldata.md, M 0x18f5d8:117-128]) rides 1.3 cm ABOVE the head box's top face
+/// (centre +0.577, half 0.11), so an eye-height line threads the head/torso gap at the idle pose
+/// the port holds (the game's live aim palette is not modelled yet). A −Z line through the torso
+/// centre crosses no earlier-listed box (the head box bottom is +0.467), so `Collide_Jointy`'s
+/// list-order walk reports part 4 [M 0x1ec180]. Bond's pos here is the game's root convention
+/// (floor + 1.085 standing [L 07000005 start, M Player_Collision 0x194df0]).
 fn shoot_from_front(scene: &mut nf_view::scene::Scene, damage: f32, weapon: u16) {
     let p = scene.sim.as_ref().unwrap().bond.pos;
     scene.sim.as_mut().unwrap().drones.bullets.push(Bullet {
-        pos: [p[0], p[1] + 0.7, p[2] + 2.0],
+        pos: [p[0] - 0.025, p[1] + 0.287, p[2] + 2.0],
         dir: [0.0, 0.0, -1.0],
         speed: 15.0, travelled: 0.0, range: 100.0,
         damage, owner: usize::MAX, state: 0, weapon, flyby: false, bounces: 0, ..Bullet::TAIL
@@ -201,4 +209,60 @@ fn damage_factor_matches_readtuningvars_per_level_group() {
     let mut r = Rng::new(7);
     let first = r.rand(4);
     assert!(first < 4, "Rand_Rand(4) returns 0..4, got {first}");
+}
+
+/// The stance poses the boxes [M PlayerAnimSetInitCrouch 0x18fea0 — the SP crouch anim set → idle
+/// script 0x060009ff [D descriptor 0x2b91d8] → the port's BOND_CROUCH_POSE, the root drop carried
+/// by `Bond::pos`'s cc [L AnimObj+0xCC: standing 1.0347, crouched 0.55]]: a round at the STANDING
+/// head box's centre height misses a crouched Bond (the head box rides ~0.5 lower with the dropped
+/// root) and hits the same Bond standing. Both arms stage through the real crouch input path.
+#[test]
+fn a_round_at_the_standing_head_height_misses_crouched_and_hits_standing() {
+    let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let standing_head = |scene: &nf_view::scene::Scene| {
+        // The standing head box centre: entry 0's rule at the idle pose — bone5 + (0, bone5.y − bone4.y, 0)
+        // = root + 0.577, half 0.11 [L ee_start_05 palette, reload_and_bond_hitboxes_live pins it].
+        let p = scene.sim.as_ref().unwrap().bond.pos;
+        [p[0] - 0.014, p[1] + 0.577, p[2] - 0.20]
+    };
+    let mut scene = load_at([128.0, 2.0, 128.0]);
+    let target = standing_head(&scene);
+    shoot_at(&mut scene, 100.0, 0x2c, target);
+    assert!(scene.sim.as_ref().unwrap().drones.health.health < 100.0,
+        "the same round hits the STANDING head box (part 5)");
+
+    // Crouch through the real input path: hold the crouch key until the stance settles (the
+    // transition blend interpolates cc — Player_SSCrouch's lockout, player.rs's 0.75 note).
+    let mut scene = load_at([128.0, 2.0, 128.0]);
+    for _ in 0..300 {
+        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
+        let sim = scene.sim.as_ref().unwrap();
+        if sim.bond.crouched && (sim.bond.cc - nf_game::player::CROUCH_ROOT_HEIGHT).abs() < 0.02 { break; }
+    }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(sim.bond.crouched, "the crouch input crouches Bond (Player_SSCrouch 0x1924c0)");
+        assert!((sim.bond.cc - nf_game::player::CROUCH_ROOT_HEIGHT).abs() < 0.02,
+            "the crouched root height cc ≈ 0.55 [L AnimObj+0xCC], got {}", sim.bond.cc);
+    }
+    let sim = scene.sim.as_ref().unwrap();
+    let boxes = sim.bond_hit_boxes();
+    let head_top = boxes.iter().find(|b| b.part == 5).map(|b| b.m[3][1] + b.half[1]).expect("the head box exists");
+    assert!(target[1] > head_top + 0.2,
+        "the standing-head line flies above the crouched head box (top {head_top:.3} vs the round at {:.3})", target[1]);
+    drop(sim);
+    shoot_at(&mut scene, 100.0, 0x2c, target);
+    assert_eq!(scene.sim.as_ref().unwrap().drones.health.health, 100.0,
+        "the round above the crouched head misses every box");
+}
+
+/// `shoot_from_front` at an explicit world point (the crouch test's standing-head line).
+fn shoot_at(scene: &mut nf_view::scene::Scene, damage: f32, weapon: u16, at: [f32; 3]) {
+    scene.sim.as_mut().unwrap().drones.bullets.push(Bullet {
+        pos: [at[0], at[1], at[2] + 2.0],
+        dir: [0.0, 0.0, -1.0],
+        speed: 15.0, travelled: 0.0, range: 100.0,
+        damage, owner: usize::MAX, state: 0, weapon, flyby: false, bounces: 0, ..Bullet::TAIL
+    });
+    scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
 }
