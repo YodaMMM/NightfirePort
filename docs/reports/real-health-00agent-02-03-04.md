@@ -57,7 +57,9 @@ died to rifle chips from drones #8/#10 (weapon 0x12, 13.4/26.1 u, −1.8 each) w
 fights never opened. The pre-room scoop walk is retired (it passed the captors' posts and cost
 61.2 before the room); the open question for the next session is the round-0 fight itself — the
 shotgun must be in hand BEFORE the 1.3-u doorway fight, and the only drops lie behind the
-captor's fire.
+captor's fire. A 6.0 `keep_off`/`back_off` standoff was measured and retired: the opening
+volley drops to the 4-u band's cost, but the fights grind ~6x longer and Bond reached the
+geisha-1 plate at 22.2 (vs 88.8) before dying at tick 31109 [L the ledger].
 
 ## The 03 d3 sister (red, measured to the hit)
 
