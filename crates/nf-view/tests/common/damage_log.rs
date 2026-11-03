@@ -149,6 +149,14 @@ pub struct DamageLog {
     /// 07000002 castle and 07000007 party real-damage walks went red (a death at the 01 stairwell,
     /// 6000-tick stalls on the 02 geisha and 07 east-stair legs) and they pass with them off.
     pub lane_fights: bool,
+    /// OPT-IN (`lane_floor_drops`, set by the 07000011 00 Agent walk): the lane resupply's
+    /// on-floor band relaxes to the master 1.5. This level's dropped guns rest with their centre
+    /// ON the floor ray [L drop-stand-height probe 2026-10-22 — the 07000001 drops' centre
+    /// 5.3452 vs the floor 5.3452096], 1.09 under Bond's standing pos y, outside the lane 0.5
+    /// band — the lane pass could not see this level's own fight drops and every pass came back
+    /// dry while the fights ran the 7-round pistol empty. Off = the lane 0.5 band everywhere
+    /// else (no other walk sets it).
+    pub lane_floor_drops: bool,
     /// The fight about to run picked a shooter whose boxes are NOT reachable from here (the
     /// unseen-cover fallback): a short stand cap, the creep has to open the line fast.
     pub unseen_fight: bool,

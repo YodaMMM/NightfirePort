@@ -52,6 +52,15 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
         nf_view::load_with_carry_difficulty(&iso, "07000011.bin", false, None, difficulty)
             .expect("load")
     });
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[011] d{difficulty} at load: {} drones, clip {} spare {}",
+            sim.drones.list.len(), sim.gun.clip, sim.gun.spare);
+        for p in sim.drones.pickups.iter().filter(|p| !p.gone) {
+            eprintln!("[011]   placed pickup at ({:.2},{:.2},{:.2}) kind {} weapon {:#x} rounds {}",
+                p.m[3][0], p.m[3][1], p.m[3][2], p.kind, p.weapon, p.rounds);
+        }
+    }
     if difficulty != 1 {
         assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
             "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
@@ -102,6 +111,20 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     // fly off the aligned view (DamageLog::precise_fights' doc, repro11c). Inert under the top-up
     // (the fights never run there).
     if !w.tops_up() { w.dmg.precise_fights = true; }
+
+    // THE 00 AGENT RESUPPLY MODE (difficulty 3): the d3 placements grow the fight count past the
+    // fresh 7-round pistol's budget [M 0x1a7ef8:275-281 — the mission-11 equip is 7] and the
+    // shared resupply then targeted the floor's only placed ammo box — the grenade launcher at
+    // (10.54, 47.47, 18.10) [D #290] 22 u away on desk geometry — whose tour ate the descent
+    // leg's cap. The lane mode (the 07000013 walk's opt-in, per-walk only) plus the floor-drop
+    // band counts the guard drops the fights themselves leave ON the floor (the drop's centre
+    // rests on the floor ray, 1.09 under Bond's pos y — outside the lane 0.5 band): the run's
+    // NE-landing pass walked onto a fresh kill drop and armed clip 30 [L the 2026-11-03 run].
+    // Agent (d2) stays on the shared rules (its fights fit the 7; it is green as-is).
+    if difficulty == 3 {
+        w.dmg.lane_fights = true;
+        w.dmg.lane_floor_drops = true;
+    }
 
     // Leg 1: east across the top floor to the stairwell door (the nav web [D paths 0/1] has no
     // cross-floor route — the direct chain), then through the doorway's south band — walked.
@@ -224,6 +247,7 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
             w.scene.sim.as_mut().unwrap().drones.keypad_digit((d - b'0') as u32);
             w.wait(1);
         }
+        w.wait(2); // the case-4 match fires on the last digit's tick; the case-1 hold writes ch 0x12 the NEXT tick [M 0x1ae3d8 — the hold loop runs before the keypad tick in the object pass]
         {
             let sim = w.scene.sim.as_ref().unwrap();
             assert!(sim.drones.channels.on(0x12),
