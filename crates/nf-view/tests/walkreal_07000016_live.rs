@@ -683,7 +683,33 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool) -> (usize, u32) {
         let sim = w.scene.sim.as_ref().unwrap();
         sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0x1e && d.dtype == 0xf && !matches!(d.death_channel, 23..=26)).unwrap()
     };
-    while w.total_ticks - t0 < 2600 { w.tick(Input::default(), false); }
+    // The game's FirstAttack flush [M 0x148010:100-131] writes her return state 0x56 [M :102],
+    // and she works the shelter door at 2.3 m while Bond waits out the pulse — her -1.20 stars
+    // every 6 ticks took the idle stand from >30 to dead inside the wait (the 2026-11-03 8715
+    // death, both chaser walks). Bond fires short bursts back through the door while she is
+    // above 55 health (the punch window still needs her alive with her punch intact).
+    while w.total_ticks - t0 < 2600 {
+        // One tick per iteration — a dry gun must not wedge the wait (the stand_and_fire cap
+        // counts shots, and with no spare ammo it never returns).
+        let (alive, hold, err, dist) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let her = &sim.drones.list[chaser];
+            let bp = sim.bond.pos;
+            let alive = her.present && !her.corpse && her.health > 0.0;
+            let hold = alive && !(her.health < 55.0 && walker::dxz(her.pos, bp) < 8.0);
+            let err = walker::wrap_pi((her.pos[0] - bp[0]).atan2(her.pos[2] - bp[2]) - sim.bond.yaw);
+            (alive, hold, err, walker::dxz(her.pos, bp))
+        };
+        if !alive || w.tops_up() || !hold {
+            // tops_up walks keep their exact pre-flush timeline (the counter-fire's shots
+            // shift the shared stream); the real-damage walks (tops_up false) need the
+            // return fire to live.
+            w.tick(Input::default(), false);
+            continue;
+        }
+        let input = Input { turn: err.clamp(-0.08, 0.08), ..Default::default() };
+        if err.abs() < 0.06 && dist < 12.0 { w.tick_fire(input); } else { w.tick(input, false); }
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         eprintln!("[finale] the chaser #{chaser} at {:?}, +{}; Bond holds {:#x} (clip {} spare {}), owns {:x?}",
@@ -1398,6 +1424,11 @@ fn clear_the_pit_shooters(w: &mut Walker, chaser: usize, stand_cap: u32) {
                 .find(|&i| walker::DamageLog::visible(sim, i))
         };
         let Some(di) = pick else { break };
+        // The flush [M 0x148010:100-131] puts the pit soldiers on their second blocks and they
+        // hunt the stand — the stand's 900 ticks can out-damage Bond from >30 to dead inside ONE
+        // window iteration (the 2026-11-03 8715 death). Survival first: bail the clear when the
+        // health floor would break the caller's loop anyway.
+        if w.scene.sim.as_ref().unwrap().drones.health.health < 30.0 { break; }
         let _ = w.switch_to_armed("the pit room shooters");
         let killed = w.stand_and_fire(di, stand_cap);
         if !killed { tried.retain(|&(k, _)| k != di); tried.push((di, w.total_ticks + 240)); }
