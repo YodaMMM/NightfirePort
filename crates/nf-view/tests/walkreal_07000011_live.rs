@@ -42,10 +42,20 @@ use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
-#[test]
-fn walk_spawn_to_the_lower_floor_load_point() {
+/// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent / 3 00
+/// Agent ride the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
+fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000011.bin", false, None).expect("load"));
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load_with_carry(&iso, "07000011.bin", false, None).expect("load")
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "07000011.bin", false, None, difficulty)
+            .expect("load")
+    });
+    if difficulty != 1 {
+        assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+            "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -145,12 +155,81 @@ fn walk_spawn_to_the_lower_floor_load_point() {
     // at n45/n46/n47, the stair chain starts fresh at n94 [D nav BFS]). The keypad lock #177 is
     // create-unlocked on Operative [D #177 p6 = 1; M 0x1ae1f8:67-69] and Lock_Update case 1
     // (0x1ae3d8) holds ch 0x12 on, so the door answers E from level start.
+    // THE SISTERS' KEYPAD (difficulty 2/3): `Lock_Create` 0x1ae1f8:67-69 calls `Lock_Unlock` at
+    // create ONLY while GameState+0x40 == 1 — on Agent/00 Agent the keypad #177 is created
+    // LOCKED, ch 0x12 cold [M; the interactables_07000011 sister pins the cold load]. The player's
+    // way, all real input: the aim + E pulse arms the mini-game (state 3 [M Player_Activate
+    // 0x1a5170:158-166 → Lock_Activate 0x1aed00's kind-0 no-key arm]), the digit presses run
+    // C_KEYPAD_Handler 0x216810 msg 0x4b, the case-4 match fires `Lock_Unlock` [M 0x1ae3d8:262-296]
+    // and the next case-1 tick holds ch 0x12 [M 0x1ae3d8:192-196] — the door answers E again.
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x12),
-            "the keypad's Operative unlock holds ch 0x12 [D #177 p6; M 0x1ae3d8 case 1]");
+        if difficulty == 1 {
+            assert!(sim.drones.channels.on(0x12),
+                "the keypad's Operative unlock holds ch 0x12 [D #177 p6; M 0x1ae3d8 case 1]");
+        } else {
+            assert!(!sim.drones.channels.on(0x12),
+                "Agent/00 Agent: the keypad #177 is created LOCKED, ch 0x12 cold [M Lock_Create 0x1ae1f8:67-69]");
+        }
     }
     w.walk_to(Wp::new(10.22, 47.4, -3.6).r(0.9), "the stairwell door's front tile");
+    if difficulty != 1 {
+        // The stand north-west of the keypad (11.58, 48.20, −4.21 [D]) — its wall (the parapet W1
+        // (9.2,−5.8)→(12.75,−3.5) [D]) faces the office floor, so the front side is here; the use
+        // sphere is head+look within 1.0 + r [M 0x1a5170:100-108] and the facing gate reads
+        // `l.facing · (body − l.pos) ≥ 0` [M 0x1a5170:158-166]. The aim loop is
+        // walkreal_0700000a's real-input keypad entry (turn/look input, one use-key pulse).
+        w.walk_to(Wp::new(10.7, 47.4, -4.1).r(0.5), "the keypad's front side");
+        let kp: [f32; 3] = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let l = sim.drones.locks.iter().find(|l| l.placement == 177).expect("keypad #177 [D]");
+            l.pos
+        };
+        let mut armed = false;
+        'kp: for _cycle in 0..8u32 {
+            for t in 0..30u32 {
+                {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    if sim.drones.keypad.is_some() { armed = true; break 'kp; }
+                    let bp = sim.bond.pos;
+                    let eye = bp[1] + sim.bond.eye - sim.bond.crouch_drop;
+                    let dx = kp[0] - bp[0];
+                    let dz = kp[2] - bp[2];
+                    let dy = kp[1] - eye;
+                    let desired = dx.atan2(dz);
+                    let err = walker::wrap_pi(desired - sim.bond.yaw);
+                    let perr = (dy / walker::dxz(bp, kp).max(0.5)).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+                    let input = nf_game::player::Input {
+                        turn: err.clamp(-0.05, 0.05),
+                        look: perr.clamp(-0.05, 0.05),
+                        ..Default::default()
+                    };
+                    let hold = t == 15 && err.abs() < 0.2;
+                    w.scene.sim.as_mut().unwrap().step_bond(input, false, false, hold);
+                }
+                w.total_ticks += 1;
+            }
+        }
+        assert!(armed, "the keypad #177 E arms the mini-game (state 3) [M 0x1aed00's kind-0 no-key arm]");
+        // The 4 digits (C_KEYPAD_Handler 0x216810 msg 0x4b — the keypad page's digit-control
+        // dispatch; the cursor/page UI is the view's presentation, the audit §5). The code is the
+        // lock's p1 entry of the boot table (the game's KeyCodes 0x2a37a8 [M Locks_Init 0x1b0548]).
+        let code = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let idx = sim.drones.locks.iter().find(|l| l.placement == 177).expect("keypad #177 [D]").code;
+            sim.drones.key_codes.code(idx)
+        };
+        for d in code {
+            assert!(d >= b'0' && d <= b'9', "the keypad code digits are ASCII");
+            w.scene.sim.as_mut().unwrap().drones.keypad_digit((d - b'0') as u32);
+            w.wait(1);
+        }
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            assert!(sim.drones.channels.on(0x12),
+                "the solved keypad's case-1 hold writes ch 0x12 [M 0x1ae3d8:192-196]");
+        }
+    }
     let d192 = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
         .position(|d| (d.pos[0] - 10.22).abs() < 0.5 && (d.pos[2] + 5.21).abs() < 0.5)
         .expect("door_large_stairwell #192 [D]");
@@ -242,7 +321,8 @@ fn walk_spawn_to_the_lower_floor_load_point() {
     // (level-11-every-objective-3: the load is the difficulty-3 front-end path — the exact call
     // walkreal_07000012_live calibrates tower2's route on; the spawn pins here are
     // difficulty-independent [M the 0x1827d8 announce + #679's contact write].)
-    let scene2 = nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, 3)
+    let scene2 = nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None,
+            if difficulty == 1 { 3 } else { difficulty })
         .expect("07000012 loads after the exit");
     let mut w2 = Walker::new(scene2);
     // The precise act on the carried leg too (real damage only): the 07000012 fights are the ones
@@ -311,8 +391,14 @@ fn walk_spawn_to_the_lower_floor_load_point() {
     eprintln!("[011] walked out in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
 }
 
-/// Real damage: the whole walked chain (07000011 spawn → the stairwell descent → the Load
-/// Point exit → the real 07000012 load → tower2's route → the shaft exit → the real 0700004A
+/// The plain Operative walk (the topped-up allowance; the load is the replay-parity path).
+#[test]
+fn walk_spawn_to_the_lower_floor_load_point() {
+    walk_spawn_to_the_lower_floor_load_point_at(1)
+}
+
+/// Real damage, Operative: the whole walked chain (07000011 spawn → the stairwell descent → the
+/// Load Point exit → the real 07000012 load → tower2's route → the shaft exit → the real 0700004A
 /// load) with the health top-up off for every walker it makes — the stairwell guards'
 /// (0x11/0x13/0x14/0x36/0x37 [D §5]) fire is the port's own damage — and the walker's return
 /// fire on; Bond's death panics with the death spot and the last hits (common/damage_log.rs).
@@ -320,19 +406,51 @@ fn walk_spawn_to_the_lower_floor_load_point() {
 /// topped-up allowance and reads off under this wrapper [M damage_log.rs no_topup_env]); the
 /// loads are the game's own exit → next-level path ([M ResetMap_LevelToLoad 0x1b24b8;
 /// Player_RamLoad 0x1957a8]), not teleports.
+/// The fights HEAD-HUNT and answer the desk guards (`with_real_damage_head_hunting` +
+/// `with_real_damage_unseen_fights`) — the same law the 07000012 walk's own real-damage sister
+/// runs on the same route (walkreal_07000012_live.rs): the level's guards are the 12-health
+/// type-2 skins and the mission-11 pistol deals 10.0 a torso round [L ee_start_05.bin
+/// 0x2bf150 + 0x10·0x10C + 0x0c = 10.0], so a torso fight needs 2-3 rounds a guard — the
+/// 2026-11-03 aimed run spent 6 of the 7 on the lobby (fight#9's hp-30 guard ate 2 torso
+/// rounds for 30→10 and MELEED 14 later) and Bond crossed the south corridor with 1 round —
+/// not enough for the shotgun #10 (hp 12 needs 2 torso rounds, 1 head hit [M
+/// NDrone2_HitDamage 0x145558 × DroneDamage_Head]). One head hit drops a 12-health guard.
 #[test]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage() {
-    // The fights HEAD-HUNT and answer the desk guards (`with_real_damage_head_hunting` +
-    // `with_real_damage_unseen_fights`) — the same law the 07000012 walk's own real-damage sister
-    // runs on the same route (walkreal_07000012_live.rs): the level's guards are the 12-health
-    // type-2 skins and the mission-11 pistol deals 10.0 a torso round [L ee_start_05.bin
-    // 0x2bf150 + 0x10·0x10C + 0x0c = 10.0], so a torso fight needs 2-3 rounds a guard — the
-    // 2026-11-03 aimed run spent 6 of the 7 on the lobby (fight#9's hp-30 guard ate 2 torso
-    // rounds for 30→10 and MELEED 14 later) and Bond crossed the south corridor with 1 round —
-    // not enough for the shotgun #10 (hp 12 needs 2 torso rounds, 1 head hit [M
-    // NDrone2_HitDamage 0x145558 × DroneDamage_Head]). One head hit drops a 12-health guard.
     walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||
-            walker::with_real_damage(
-                walk_spawn_to_the_lower_floor_load_point)))
+            walker::with_real_damage(||
+                walk_spawn_to_the_lower_floor_load_point_at(1))))
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-00agent-11): the same walked
+/// route at the menu's Agent pick — the front-end's launch path, GameState+0x40 = 2 [M
+/// C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]. On this level group the pick scales
+/// Bond's pain by Plr_DMod_Normal 0.7 (vs Operative's Plr_DMod_Easy) and the guards' hit chance
+/// rides DroneFiring_Accuracy_Normal 0.7 (vs Easy 0.5) [M Player_HandlePain 0x1902c8:29-37;
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88]; the min-difficulty placements pass Drone_Create's
+/// gate [M 0x136be0:49]. The keypad #177 is created LOCKED at difficulty 2 (the p6 tag
+/// auto-unlocks only on Operative [M 0x1ae1f8:67-69]) — the walk solves it on real input (the
+/// aim + E arm, the digit presses, the case-4 match). Real input only — the load path is the
+/// only other difference.
+#[test]
+fn walk_spawn_to_the_lower_floor_load_point_real_damage_agent() {
+    walker::with_real_damage_head_hunting(||
+        walker::with_real_damage_unseen_fights(||
+            walker::with_real_damage(||
+                walk_spawn_to_the_lower_floor_load_point_at(2))))
+}
+
+/// 00 Agent-difficulty sister of `..._real_damage_agent`: the same walked route at the menu's
+/// 00 Agent pick — GameState+0x40 = 3 [M C_SBNFDFCTY 0x216ca8:15]. The pick scales Bond's pain
+/// by Plr_DMod_Hard 1.2 (vs Agent's 0.7), the guards' hit chance rides
+/// DroneFiring_Accuracy_Hard 1.0 (vs 0.7) and their rounds by DroneDamage_Hard 0.8 [M
+/// Player_HandlePain 0x1902c8:40-41; DroneWeap_DoBulletAccuracy 0x179740:74-88; damage.rs];
+/// the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input only.
+#[test]
+fn walk_spawn_to_the_lower_floor_load_point_real_damage_00agent() {
+    walker::with_real_damage_head_hunting(||
+        walker::with_real_damage_unseen_fights(||
+            walker::with_real_damage(||
+                walk_spawn_to_the_lower_floor_load_point_at(3))))
 }
