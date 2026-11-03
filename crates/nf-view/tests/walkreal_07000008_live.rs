@@ -172,9 +172,20 @@ fn fight_close_guards(w: &mut Walker, label: &str, max_ticks: u32) {
 /// (objective 1 → 4), the descent back down, the boarding, the ride, the cinematic, the Hind
 /// shoot-down on real aim and trigger (objective 2 → 4), and the mission end into 0x0730008.
 #[test]
-fn walk_the_whole_mission_on_real_input() {
+fn walk_the_whole_mission_on_real_input() { walk_the_whole_mission_on_real_input_at(1) }
+
+/// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent rides the
+/// front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
+fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000008.bin", false).expect("load 07000008"));
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load(&iso, "07000008.bin", false).expect("load 07000008")
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "07000008.bin", false, None, difficulty)
+            .expect("load 07000008")
+    });
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -901,4 +912,24 @@ fn the_ally_fights_only_the_guards_through_the_noise_path() {
 #[test]
 fn walk_the_whole_mission_on_real_input_real_damage() {
     walker::with_real_damage(walk_the_whole_mission_on_real_input);
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty-08-09-0a-0b): the
+/// same walked station → fusebox → safe → briefcase → gondola → Hind route at the menu's Agent
+/// pick — GameState+0x28 = 2 through the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the
+/// `difficulty[]` table 0x2df4c0 row 1 carries 2; Txt 0x14e = "Agent"]. On this level group
+/// (05-08) the pick scales Bond's pain by Plr_DMod_Normal 0.7 instead of Easy 0.6 and the
+/// guards' hit chance by DroneFiring_Accuracy_Normal 1.1 instead of Easy 0.8 [M Player_HandlePain
+/// 0x1902c8; DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 05-08 group ← ReadTuningVars
+/// 0x1d3a80]; the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input
+/// only — the load path is the only difference.
+#[test]
+fn walk_the_whole_mission_on_real_input_real_damage_agent() {
+    // HEAD-HUNT (the 05/07 00 Agent sisters' tactic on this level group): at Agent the guards'
+    // hit chance is DroneFiring_Accuracy_Normal 1.1 (Operative 0.8) and Bond's pain is
+    // Plr_DMod_Normal 0.7 (0.6) [M tuning.rs 05-08 group] — every tick a fight stands is a
+    // burst tick, so the fights take the clear head box first (one head hit drops a 12-health
+    // guard [M NDrone2_HitDamage 0x145558 × DroneDamage_Head]) instead of grinding bodies —
+    // the plain pick's nearest-body order let the walkway shotgun guard #20 land 10 × −4.2.
+    walker::with_real_damage_head_hunting(|| walk_the_whole_mission_on_real_input_at(2))
 }
