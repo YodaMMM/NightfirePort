@@ -165,6 +165,21 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         w.keep_off = Some(4.0);
         w.dmg.back_off = Some(4.0);
     }
+    if difficulty >= 3 {
+        // 00 Agent (real-health-00agent-02-03-2): the west-lawn fights on drone #8 (weapon 0x12)
+        // burned five 900-tick caps at "killed false" while his −1.8 chips bled Bond out at
+        // t25850 [L the 00agent ledger; the NF_RF_TRACE run: aim Some, blocked true every
+        // sample] — the gun line to #8 crosses a NOT-YET-ENABLED guard (the 0x23/0x24/0x25
+        // plates fire later on the route) and the stand never shoots through a drone (the
+        // blocker hold). The game's own collide drops Enable(0) objects before the hit test
+        // [M Collide_PickObj 0x1eae80; Check_AutoAim 0x1a73f8 skips +0xF4 == 1] — a disabled
+        // drone never stops a round — so the hold is not game-shaped there. The opt-in
+        // fire_through_disabled drops disabled drones from the line; live hostiles on it are
+        // still answered by shoot_blockers (the retarget reads team == 1, so the servants
+        // (team 3, death ch 0x60) keep their hold and are never answered to).
+        w.dmg.shoot_blockers = true;
+        w.dmg.fire_through_disabled = true;
+    }
     let (li, o0, o1, o2) = mission_row();
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -263,11 +278,25 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         w.walk_to(Wp { at, act: Act::None, arrive: 1.0 }, name);
     }
     w.lenient = false;
+    if difficulty >= 3 {
+        // 00 Agent (real-health-00agent-02-03-2): the servants' ground is a running fight (the
+        // 0x24/0x25 guards and their captains) and the real-damage hook's resupply is the lane
+        // walks' arm, not this walk's. A player scavenges the dead guards' drops between
+        // contacts: the dry P99 (clip 1 spare 0) met shotgun captain #5 at 1.6 u and died to
+        // his volley at t42315 [L the 00agent-02-03-2 ledger]. resupply walks the covered path
+        // only (the 9-u corridor rule), so this stays on the route.
+        let _ = w.resupply("before the servants' rescue (00agent)");
+    }
     for (plate, want_ch) in [(None, 0x4fu8), (Some(plate0x25), 0x50u8)] {
         let (si, at, rescue_ch) = *servants.iter().find(|(_, _, ch)| *ch == want_ch)
             .unwrap_or_else(|| panic!("the servant carrying {want_ch:#x} [D p6]"));
         // #389's 0x21 plate already fired on the lane approach; #388's 0x25 plate is walked here.
         if let Some(plate) = plate {
+            if difficulty >= 3 {
+                // 00 Agent: rounds before the plate walk (the running fight on the servants'
+                // ground; the dry-gun death above) [L the 00agent-02-03-2 ledger].
+                let _ = w.resupply(&format!("before the {want_ch:#x} plate (00agent)"));
+            }
             w.walk_nav_to(plate, &format!("onto the {want_ch:#x}-servant's enable plate"), 1.8);
             if !w.scene.sim.as_ref().unwrap().drones.channels.on(0x25) {
                 // An awake guard standing in the double doors' sweep on this leg (doors 4/5 at
@@ -288,6 +317,11 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
             }
         }
         w.wait(10);
+        if difficulty >= 3 {
+            // 00 Agent: rounds before the servant walk (the same running-fight rule) [L the
+            // 00agent-02-03-2 ledger].
+            let _ = w.resupply(&format!("before servant {si} (00agent)"));
+        }
         w.walk_nav_to([at[0], at[1] - 0.3, at[2]], &format!("servant {si}"), 1.7);
         let sim = w.scene.sim.as_ref().unwrap();
         let d = &sim.drones.list[si];
@@ -581,7 +615,6 @@ fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
 /// placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the load path is the
 /// only difference.
 #[test]
-#[ignore = "00 Agent: Bond dies before the end on real health (death mechanics in the s/real-health-00agent-02-03-04 report); follow-up real-health-00agent-02-03-2"]
 fn walk_the_full_route_and_complete_every_objective_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(3));
 }

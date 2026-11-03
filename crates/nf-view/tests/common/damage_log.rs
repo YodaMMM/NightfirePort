@@ -135,6 +135,16 @@ pub struct DamageLog {
     /// [L the 2026-11-02 level-11 real-damage run]. Off = master behaviour (hold fire; the
     /// 03 servants stand among the guards and must not be shot through).
     pub shoot_blockers: bool,
+    /// OPT-IN (`fire_through_disabled`, set by the 07000003 00 Agent walk): a drone the game has
+    /// disabled (WAIT_SWITCH, +0xF4 enable cleared) never blocks the gun line — the game's own
+    /// collide drops Enable(0) objects [M Collide_PickObj 0x1eae80: the +0xfd&1 arm returns the
+    /// obj before the hit test; NDrone2_DSTATE_WaitSwitch 0x15b960 enter → NDrone2_Enable(0)
+    /// 0x149dd0 obj+0xF0 |= 0x20 — the pin the smg-close-range-hits report cites for the dormant
+    /// ch-0x5 guard taking nothing], and the bullets and the auto-aim skip it [M Check_AutoAim
+    /// 0x1a73f8 skips +0xF4 == 1]. The plain blocked hold reads present/alive only, so a
+    /// not-yet-enabled guard standing on the line held every tap ("killed false" x5, the
+    /// 00agent ledger) while the shooter chewed Bond down. Off = master behaviour (the hold).
+    pub fire_through_disabled: bool,
     /// OPT-IN for `stand_and_fire`: Bond steps back (aim held) while any live guard stands
     /// inside this range. Under 3.0 u every drone round hits [M DroneWeap_DoBulletAccuracy
     /// 0x179740:113-115] and a shotgun guard's 8 pellets all land; None keeps Bond still.
@@ -697,6 +707,10 @@ impl Walker {
                 let mut blocker: Option<usize> = None;
                 let blocked = sim.drones.list.iter().enumerate().any(|(k, o)| {
                     if k == di || !o.present || o.corpse || o.health <= 0.0 { return false; }
+                    // fire_through_disabled (opt-in): the game's own collide drops Enable(0)
+                    // objects before the hit test [M Collide_PickObj 0x1eae80] — a disabled
+                    // drone never stops a round, so it never blocks the line.
+                    if self.dmg.fire_through_disabled && !o.enabled { return false; }
                     let c = [o.pos[0] - eye[0], o.pos[1] + 0.6 - eye[1], o.pos[2] - eye[2]];
                     let s = c[0] * u[0] + c[1] * u[1] + c[2] * u[2];
                     if s <= 0.0 || s >= len - 0.3 { return false; }

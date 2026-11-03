@@ -697,6 +697,30 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     }
     // 3. The captors die (the 0x17 guards: death chs 0x88 / 0x2A / 0x29 [D param 12]) — the save
     //    fires through the real fire path, AND #397 closes 0x3B [D tr[017]].
+    //    00 Agent round-0 (real-health-00agent-02-03-2): the approach met the shotgun captor at
+    //    1.3 u and his first 8-pellet volley landed 57.6 at 2.7 u — dead at t6398 [L the
+    //    00agent ledger; this branch's own run, the same tick]. A player holds the corridor and
+    //    calls him out: at keep_off's 4 u the volley is the 4-u band's 21.6 and the under-3.0-u
+    //    every-round-hits rule is out of play [M DroneWeap_DoBulletAccuracy 0x179740:113-115].
+    //    The captor leaves the room on sight (the hostage_captor note: a captor that saw Bond
+    //    and left the room is outside the 8-u sweep), so the stand-off wait has an end.
+    if difficulty >= 3 {
+        let di = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            sim.drones.list.iter().enumerate()
+                .filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
+                    && dxz(d.pos, bp) < 10.0)
+                .min_by(|a, b| dxz(a.1.pos, bp).total_cmp(&dxz(b.1.pos, bp)))
+                .map(|(i, _)| i)
+        };
+        if let Some(di) = di {
+            if hold_for_sight(&mut w, di, 1200) {
+                let _ = w.shoot(di, "geisha 1 round-0 stand-off");
+            }
+            status(&w, "geisha 1 round-0 stand-off");
+        }
+    }
     let g1 = geisha(&w, 0x49).unwrap();
     let at = w.scene.sim.as_ref().unwrap().drones.list[g1].pos;
     clear_captors_real(&mut w, at, "geisha 1", difficulty >= 3);

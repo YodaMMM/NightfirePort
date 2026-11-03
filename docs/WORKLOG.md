@@ -34,3 +34,15 @@ shared helpers untouched (opt-in only). -04's measured deaths: 02 died t6398 in 
 doorway volley (8 pellets x 7.2 at 2.7 u) and best run died at the bunker door at 27.6 to
 drones #8/#10 rifle chips (fights never opened); 03 died t25850 on the west lawn (drone #8 at
 1 hp survived four blocked fights, chips bled Bond out, then the west-lane nav wedged).
+
+### real-health-00agent-02-03-2 (21:55 UTC checkpoint)
+
+The 03 d3 sister GREEN: the west-lawn blocker was a NOT-YET-ENABLED guard on the gun line —
+the stand held every tap while drone #8 chewed Bond out (aim Some, blocked true per
+NF_RF_TRACE). The game's own collide drops Enable(0) objects [M Collide_PickObj 0x1eae80;
+Check_AutoAim 0x1a73f8], so the opt-in `fire_through_disabled` (new DamageLog flag, set by the
+03 d3 walk only) drops disabled drones from the line; `shoot_blockers` retargets live hostiles.
+In-file d3 resupplies (resupply's 9-u covered-path corridor) before the servants' rescue legs —
+the dry P99 died to shotgun captain #5 at 1.6 u in the first fix run. Walk ends t59079,
+health 28.8, exit loads 07000004. Binary: 6 passed + the d3 sister explicit pass; the ignore
+is removed. Next: the 02 d3 sister (round-0 stand-off committed, untested).
