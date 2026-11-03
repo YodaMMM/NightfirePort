@@ -87,3 +87,16 @@ route guards' attrition (12/17). The next move: keep the aim on the crossing gua
 through the gap, fetch the pickups before the stairwell, set the kill order guards 3, 14, 5. Real
 input only; never lower damage/health; helpers opt-in only. Run walkreal_07000001_live,
 escort_follow_07000001, nf-game. Suite started on the tree.
+
+Progress (16:25 UTC): the Agent walk GREEN on the first fixed run — end health 35.6 (the 1.6
+death gone), exit at tick 14181, walkreal_07000001_live 7/7, escort_follow_07000001_live 1/1,
+nf-game --lib 656/0/5. The three levers, all gated difficulty >= 2: (1) the door-phase lure's
+aim now tracks the crossing guard's LIVE position each tick (the old burst aimed at a
+placement snapshot captured once — the show-then-shoot settle gap); (2) the route clears run
+the driver's 3 -> 14 -> 5 order then the pellet-carriers-first Agent order (route_order, all
+three sweep loops); (3) a pickup line sweeps the west-hall placed pair + the drops before the
+stairwell (the walk-over take [M Pickup_Handler 0x18e650]). The back half now costs ~7.3
+total (42.9 -> 35.6 across the route pre-clear, the sweeps and the plate leg — the pre-clear
+itself 42.9 -> 42.9). The door phase still bleeds ~33.6 (76.5 -> 42.9, 8 hits from cover-firing
+#5 whose parts never expose from the south [L the prior probe]) — the walk survives it; the
+next lever if a re-run ever needs more margin.
