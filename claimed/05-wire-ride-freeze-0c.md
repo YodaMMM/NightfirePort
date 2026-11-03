@@ -5,3 +5,6 @@ From docs/reports/level-0c-yard-climb-real-health-3.md (origin/s/level-0c-yard-c
 Reproduce it (the report's walk with the west-edge sweep at the LADDER TOP), find which wire_tick branch stops advancing, and port the game's rule for that case [M the wire/zipline update and its auto-drop]. A player must never be stuck on the wire.
 
 Done = a real-input test that reproduces the old freeze phase and now finishes the ride; every walkreal_*_live green; the full suite total line.
+
+---
+claimed-by: sandbox4 at 2026-11-03T18:53Z
