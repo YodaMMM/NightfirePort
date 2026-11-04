@@ -351,6 +351,8 @@ fn castle_d_intro_enables_the_assassin_and_the_kill_ends_the_mission_to_the_outr
         travelled: 0.0, range: 60.0, damage: 100.0, radius: 3.0, weapon_type: 0x34, mesh: 0x0200_0726, owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: false,
         stuck: false, seek_target: None,
         phase: None,
+    burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
+    defused: false,
     });
     // gas-rng-draws-2: the frag now FOLLOWS the assassin — his idle walk is stream-driven (every
     // real `Gas_Init` site consumes the shared stream's draws [M 0x1aacc8:72-80; 0x1e3780/
@@ -434,6 +436,8 @@ fn a_double_cross_death_opens_no_transition() {
         travelled: 0.0, range: 60.0, damage: 100.0, radius: 3.0, weapon_type: 0x34, mesh: 0x0200_0726, owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: false,
         stuck: false, seek_target: None,
         phase: None,
+    burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
+    defused: false,
     });
     let mut failed = false;
     for _ in 0..600u32 {

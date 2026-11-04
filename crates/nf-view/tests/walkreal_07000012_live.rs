@@ -50,21 +50,24 @@ fn mission_row_12() -> usize {
     row
 }
 
-#[test]
-fn walk_spawn_to_the_shaft_exit() {
+fn walk_spawn_to_the_shaft_exit_at(difficulty: u32) {
     let iso = iso();
     let row12 = mission_row_12();
     assert_eq!(row12, 16, "the record's row in the port's LEVELS table [L row 16]");
     // The keypad locks (placements 656/694) carry param 6 = 1: Lock_Create auto-unlocks them at
     // difficulty 1 [M 0x1ae1f8 tail: level_tag+0x44 != 0 && GameState+0x28 == 1 -> Lock_Unlock],
-    // so the Q-Decryptor keypad burn this route walks is the Agent+ behavior; the load is 00 Agent
-    // where the full (pre-gate calibration) roster exists [M 0x136be0:49].
-    let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, 3).unwrap());
+    // so the Q-Decryptor keypad burn this route walks is the Agent+ behavior; the difficulty-3
+    // load is 00 Agent where the full (pre-gate calibration) roster exists [M 0x136be0:49]. The
+    // difficulty-3 expression is byte-identical to the pre-sister master's (the same
+    // load_with_carry_difficulty(..., 3) — real-health-agent-difficulty-01-07's idiom).
+    let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, difficulty).unwrap());
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
         assert!(p[0] > 21.0 && p[0] < 24.0 && p[1] > 0.0 && p[1] < 2.0 && p[2] > 18.0 && p[2] < 20.0,
             "the elevator start #0 [D], got {p:?}");
+        assert_eq!(sim.drones.difficulty, difficulty,
+            "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     }
     tower2::walk_12(&mut w);
     tower2::walk_12_exit(&mut w);
@@ -102,6 +105,25 @@ fn walk_spawn_to_the_shaft_exit() {
         assert_eq!(sim.drones.mission.states[row12][0], 4,
             "12's 'Activate elevator override control' stays complete [M 0x182270 keeps previous parts]");
     }
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty-12-13-14-15): the
+/// same route and the same end, loaded at difficulty 2 the menu way (the front-end's launch path
+/// [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]; GameState+0x28 → the sim's
+/// Drones::difficulty, asserted at load). Agent spawns the min-difficulty-2 placements
+/// [M Drone_Create 0x136be0:49] — fewer than the master walk's 00-Agent roster — scales Bond's
+/// pain by Plr_DMod_Normal [M Player_HandlePain 0x1902c8] and the guards' hit chance by
+/// Accuracy row 2 [M DroneWeap_DoBulletAccuracy 0x179740:74-88]. Real input only; the fights
+/// keep the level's own head-hunting + unseen-cover law.
+#[test]
+fn walk_spawn_to_the_shaft_exit_real_damage_agent() {
+    walker::with_real_damage_head_hunting(||
+        walker::with_real_damage_unseen_fights(|| walk_spawn_to_the_shaft_exit_at(2)))
+}
+
+#[test]
+fn walk_spawn_to_the_shaft_exit() {
+    walk_spawn_to_the_shaft_exit_at(3);
 }
 
 /// Real damage: the whole-mission walk (the Tower2 B offices route plus the real 0700004A load)

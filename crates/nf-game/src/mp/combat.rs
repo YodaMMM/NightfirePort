@@ -345,6 +345,10 @@ impl MpCombat {
                 owner, state: 0, bounces: 0, smoke_popped: false, resting: false,
                 stuck: false, seek_target: None,
                 phase: matches!(weapon as u16, 0x3a | 0x3b).then(|| Box::new(StuckGadget::thrown(sdir))),
+                // satchel-laser-scramble: BU+0x102 — Bullet_init 0x12c5a0:211 writes 100 for the
+                // 0x3b family (the record's +0x02 base).
+                burn: if u16::from_le_bytes([w[2], w[3]]) == 0x3b { 100 } else { 0 },
+                defused: false,
             });
             return;
         }

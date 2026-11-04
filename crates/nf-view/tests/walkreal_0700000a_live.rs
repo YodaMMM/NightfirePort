@@ -15,13 +15,26 @@ use walker::{Act, Walker, Wp};
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 /// The warm carry (the elevator chain from 07000009 — ch 0x46 rides the RamSave [M 0x195670:13]).
-fn load_carry(save: Option<&nf_game::player::RamSave>) -> Walker {
+fn load_carry(save: Option<&nf_game::player::RamSave>) -> Walker { load_carry_at(save, 1) }
+
+/// `load_carry` at `difficulty` (1 Operative = the old warm load's replay parity; 2 Agent rides
+/// the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty] on the
+/// WARM load — the cold capture only harvests the boot's own health/switch/inventory/channels,
+/// none difficulty-dependent).
+fn load_carry_at(save: Option<&nf_game::player::RamSave>, difficulty: u32) -> Walker {
     let cold = nf_view::load_with_carry(&iso(), "0700000a.bin", false, None).expect("load 0700000a cold");
     let save = save.map(|s| s.to_owned()).unwrap_or_else(|| {
         let sim = cold.sim.as_ref().unwrap();
         nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
     });
-    let mut w = Walker::new(nf_view::load_with_carry(&iso(), "0700000a.bin", false, Some(&save)).expect("load 0700000a warm"));
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load_with_carry(&iso(), "0700000a.bin", false, Some(&save)).expect("load 0700000a warm")
+    } else {
+        nf_view::load_with_carry_difficulty(&iso(), "0700000a.bin", false, Some(&save), difficulty)
+            .expect("load 0700000a warm")
+    });
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     // The keypad codes: the game's own boot table over the port's local-stream default
     // [L ee_start_0700000a.bin @0x2beff8 — KeyCodes, 0x33·5 bytes; code index 1 reads
     // "3078", shown 0] — the same load-path ground truth the level doc's switch_channels
@@ -290,8 +303,11 @@ fn walk_leg_watched(w: &mut Walker, to: [f32; 3], arrive: f32, label: &str) -> b
 /// channel hand-driven there), back to the security keyboard, the REAL use-key activation
 /// ([M] SP_Activate 0x1dc338 + SP_Update 0x1dbda8 state 1), and the AND-mux chain 0x49 → 0x4A.
 /// Everything here is walked (step_bond only); ends after objective 5's channel settles.
-fn walk_to_security_keyboard() -> Walker {
-    let mut w = load_carry(None);
+fn walk_to_security_keyboard() -> Walker { walk_to_security_keyboard_at(1) }
+
+/// `walk_to_security_keyboard` at `difficulty` (2 = the front-end's launch path, see load_carry_at).
+fn walk_to_security_keyboard_at(difficulty: u32) -> Walker {
+    let mut w = load_carry_at(None, difficulty);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -558,8 +574,12 @@ fn walk_office_floor_to_the_security_keyboard() {
 /// parks clear — every eastward ray z −18.3..−19.15 clear with state 4 [D probe]) → the ai lane
 /// south → the south corridor → the hatch E.
 #[test]
-fn walk_office_floor_qworm_keyboard_hatch() {
-    let mut w = walk_to_security_keyboard();
+fn walk_office_floor_qworm_keyboard_hatch() { walk_office_floor_qworm_keyboard_hatch_at(1) }
+
+/// The walk body at `difficulty` (1 Operative = the old warm load's replay parity; 2 Agent rides
+/// the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
+fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
+    let mut w = walk_to_security_keyboard_at(difficulty);
 
     // ai-sight-drawn-gate-5 route re-derivation (the ring route, BFS-derived): the old route
     // crossed the LOCKED office door (−10.6, −19.3, ch 0x30) by force-driving the channel — no
@@ -1465,10 +1485,24 @@ fn low_beam_621_crossing(crouch: bool) {
 
 /// The standing half of the low-beam rule: live, Bond walking STANDING through #621's line
 /// fired ch 0x24 + 0x10 at z −32.77 (the line z ≈ −33.05 at x −12.6) [L 2026-11-01, fresh
-/// boot] — the game's standing pick capsule reaches the floor (`Player_Collision` 0x194df0's
-/// default arm: r 0.275 round pos+0.55 and pos+0.275−cc [M :204-227]).
+/// boot]. The game's standing trigger toucher is the collide-pass HITTEST segment
+/// (`Player_Collision` 0x194df0's default arm A = pos+0.275, B = pos+(0.55−cc), r 0.55,
+/// mode 0x800 [M :315-333]; picked by `Collide_PickObj` 0x1eae80:96-119, refined by
+/// `Intersect_CylGeom` vs the trigger's glist [M 0x1ebaa8:226-247 → 0x109da0:447], mirrored
+/// into the trigger's +0xD0 [M 0x1ea398:160-215], credited class-3 by `Trigger_Hit` 0x1b1fc8
+/// [L ee_start_0700000a.bin: the player obj+0xFF = 3]). trigger-hittest-segment completed the
+/// chain: the trigger cels' glist flags bit 0x40 [D #607/#614/#621 = 0x645] routes the refine
+/// to the RAW per-triangle law (the plane-crossing anchor + `Dist2Tri`'s one-sided entry +
+/// the strict < radius refine — triggers.rs `seg_touches_tri_raw`). The law went GREEN here on
+/// the branch (the segment toucher + the raw refine, 2026-11-04) but the one-sided entry's sign
+/// needs the glist's PLANE RECORDS (the game's authoritative normal — the port's parse carries
+/// only the tri winding, whose sign disagrees on the 05 spawn plate and broke the truck chain):
+/// parse the plane records, wire `seg_touches_tri_raw` into `touched_by` (r > 0), flip the
+/// standing toucher to `player.body` (the wired diff is in this branch's history, commit
+/// e7f80cd6), and retune this walk's #614 jump press (~1.8; the raw refine's side-face distance
+/// fires the line at the walker's full-speed arc).
 #[test]
-#[ignore = "port gap: the standing trigger toucher is the measured box pos−0.05..pos+1.26 r 0.55 (drone.rs player_touchers; its reach bottoms pos−0.6 = 0.53 on 0a's floor) and misses #621's band y 0.13-0.39 [D]; the game fires it standing [L 2026-11-01]. The game-capsule reach was tried and reverted twice (the 05 truck-chain / park-plate calibrations, documented at the toucher site)"]
+#[ignore = "port gap: the standing toucher is the measured box (drone.rs player_touchers) and misses #621's band y 0.13-0.39 [D]; the game fires it standing [L 2026-11-02]. The full chain is pinned and implemented (triggers.rs seg_touches_tri_raw, the [M] asm cited there): the raw refine went green here on the branch but needs the glist PLANE RECORDS parsed for the one-sided entry's sign (the tri winding disagrees on 05's spawn plate) before it can land"]
 fn low_beam_621_fires_standing() {
     low_beam_621_crossing(false);
 }
@@ -1493,3 +1527,35 @@ fn probe_laser_web_positions() {
     }
 }
 
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty-08-09-0a-0b): the
+/// same walked office-floor ring — Q-Worm, the security keyboard, the keypad door, the hatch —
+/// at the menu's Agent pick — GameState+0x28 = 2 through the front-end's launch path
+/// [M C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table 0x2df4c0 row 1 carries 2; Txt 0x14e =
+/// "Agent"] on the warm carry (the elevator chain from 09). On this level group (09-0b) the pick
+/// scales Bond's pain by Plr_DMod_Normal 0.8 instead of Easy 0.6 and the guards' hit chance by
+/// DroneFiring_Accuracy_Normal 1.0 instead of Easy 0.8 [M Player_HandlePain 0x1902c8;
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 09-0b group ← ReadTuningVars 0x1d3a80];
+/// the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the
+/// load path is the only difference.
+#[test]
+fn walk_office_floor_qworm_keyboard_hatch_real_damage_agent() {
+    walker::with_real_damage(|| walk_office_floor_qworm_keyboard_hatch_at(2))
+}
+
+/// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-08-09-0a-0b): the same
+/// walked office-floor ring — Q-Worm, the security keyboard, the keypad door, the hatch — at the
+/// menu's 00 Agent pick — GameState+0x28 = 3 through the front-end's launch path
+/// [M C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table 0x2df4c0 row 2 carries 3 [D]; Txt 0x14f
+/// = "00 Agent"] on the warm carry (the elevator chain from 09). On this level group (09-0b)
+/// the pick scales Bond's pain by Plr_DMod_Hard 1.0 (Easy 0.6, Agent 0.8); the guards' hit
+/// chance stays DroneFiring_Accuracy_Hard 1.0 — the SAME row Agent runs (Easy 0.8) — and the
+/// guards' base bullet damage rides DroneDamage_Hard 0.8 (Agent 1.0) [M Player_HandlePain
+/// 0x1902c8; DroneWeap_DoBulletAccuracy 0x179740:74-88; ReadTuningVars 0x1d3a80 cases
+/// 0x7000009-a-b; tuning.rs 09-0b group]; the min-difficulty placements pass Drone_Create's
+/// gate at d2 AND d3 [M 0x136be0:49]. Real input only — the load path is the only difference
+/// (plus the d3-gated tactics the deaths force, inside this file).
+#[test]
+fn walk_office_floor_qworm_keyboard_hatch_real_damage_00agent() {
+    walker::with_real_damage(|| walk_office_floor_qworm_keyboard_hatch_at(3))
+}

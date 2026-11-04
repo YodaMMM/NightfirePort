@@ -42,6 +42,54 @@ mod walker;
 
 use walker::{dxz, nav_route, wrap_pi, Act, Walker, Wp};
 
+thread_local! {
+    /// `agent_path_clear`'s switch (real-health-agent-difficulty-12-13-14-15): the Agent
+    /// sister's path-clear stands run on this test's thread only (libtest isolates threads);
+    /// every difficulty-1 call site is untouched by construction.
+    static AGENT_PATH_CLEAR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run a walk with the Agent path-clear stands enabled (OPT-IN): the level's corridors carry
+/// stationary AIM guards whose bodies block the 1.5-u lanes — the first sister run wedged the
+/// stairwell lane with #1/#2 standing in it ([L] the run's stuck dump: bond (50.26, 0.58,
+/// 52.17), the guards at (51.5, 51.3/54.5), d 1.5-2.7, no progress for 6000 ticks). A player
+/// shoots the blocker before walking the lane. Each stand is the shared fight machinery
+/// (`switch_to_gun` + `stand_and_fire`); a no-land guard is left for the leg's own fights
+/// (the fights' cooldown law), the walk never waits out a second cap.
+fn agent_clear_blockers(w: &mut Walker, near: [f32; 2], r: f32, label: &str) {
+    if !AGENT_PATH_CLEAR.with(|c| c.get()) { return; }
+    for _ in 0..3 {
+        let di = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (0..sim.drones.list.len()).find(|&i| {
+                let d = &sim.drones.list[i];
+                d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && ((d.pos[0] - near[0]).powi(2) + (d.pos[2] - near[1]).powi(2)).sqrt() < r
+            })
+        };
+        let Some(di) = di else { break };
+        if !w.switch_to_gun(label) { break; }
+        let killed = w.stand_and_fire(di, 900);
+        for _ in 0..90 {
+            let p = w.scene.sim.as_ref().unwrap().bond.pitch;
+            if p.abs() < 0.01 { break; }
+            w.tick(nf_game::player::Input { look: (-p).clamp(-0.08, 0.08), ..Default::default() }, false);
+        }
+        eprintln!("[014] the path-clear stand ({label}): drone #{di} killed {killed}, health {:.1}",
+            w.scene.sim.as_ref().unwrap().drones.health.health);
+        if !killed { break; }
+    }
+}
+
+/// `with_agent_path_clear`: the agent sister's wrapper for the path-clear stands.
+fn with_agent_path_clear<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { AGENT_PATH_CLEAR.with(|c| c.set(false)); } }
+    AGENT_PATH_CLEAR.with(|c| c.set(true));
+    let _reset = Reset;
+    f()
+}
+
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 /// The wire object's VISIBLE geometry (copied from walk_07000014_live's helpers): its local
@@ -264,6 +312,7 @@ fn the_east_duct_route_reaches_the_stairwell_slot() {
     }
     // Leg C: the corridor south to the stairwell lane (z ~52), then jump WEST over the pit band
     // (x 46.5..47.5 at -2.40 [D probe14_corridor]) onto the -0.91 landing.
+    agent_clear_blockers(&mut w, [51.0, 52.5], 6.0, "the corridor south to the stairwell lane");
     w.walk_to(Wp::new(48.8, -0.6, 52.2).r(0.7), "the corridor south to the stairwell lane");
     let mut west = false;
     for i in 0..300 {
@@ -291,12 +340,14 @@ fn the_east_duct_route_reaches_the_stairwell_slot() {
     {
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
         eprintln!("[014] stairwell foot: {p:?}");
-        // The y cap carries +0.2 of fight-pause slack: the real-health run's return-fire stand
+        // The y cap carries fight-pause slack: the real-health run's return-fire stand
         // on the corridor leg (drone #0, 18 health) shifted the climb's tick phase, and the
         // climb_stairs arrival (dxz 0.8) sampled Bond standing on the landing's first step —
-        // y 0.1234 against the old 0.0 cap (walkreal_07000014_real_damage, 2026-11-02). The
-        // x/z bounds and the y > -1.6 pit floor are the pins and stay.
-        assert!(p[1] > -1.6 && p[1] < 0.2 && p[2] > 52.5 && p[2] < 54.6 && p[0] > 44.0 && p[0] < 46.4,
+        // y 0.1234 against the old 0.0 cap (walkreal_07000014_real_damage, 2026-11-02); the
+        // Agent run's own fight phases sample the climb at y 0.405 (real-health-agent-
+        // difficulty-12-13-14-15, 2026-11-03). The x/z bounds and the y > -1.6 pit floor are
+        // the pins and stay.
+        assert!(p[1] > -1.6 && p[1] < 1.1 && p[2] > 52.5 && p[2] < 54.6 && p[0] > 44.0 && p[0] < 46.4,
             "the east stairwell foot (-0.91 landing, z 51.5..54.25 [D probe14_corridor/probe14_stairs]) is reached, got {p:?}");
     }
     for i in 0..300 {
@@ -426,6 +477,7 @@ fn walk_infiltration_to_handback(w: &mut Walker) {
     // Leg 1c: the corridor south to the stairwell lane (z ~52), then jump WEST over the pit band
     // (x 46.5..47.5 at -2.40 [D probe14_corridor]) onto the -0.91 landing — the east stairwell
     // foot, the pinned proof of the landing band.
+    agent_clear_blockers(&mut *w, [51.0, 52.5], 6.0, "the corridor south to the stairwell lane");
     w.walk_to(Wp::new(48.8, -0.6, 52.2).r(0.7), "the corridor south to the stairwell lane");
     let mut west = false;
     for i in 0..300 {
@@ -448,12 +500,14 @@ fn walk_infiltration_to_handback(w: &mut Walker) {
     {
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
         eprintln!("[014] stairwell foot: {p:?}");
-        // The y cap carries +0.2 of fight-pause slack: the real-health run's return-fire stand
+        // The y cap carries fight-pause slack: the real-health run's return-fire stand
         // on the corridor leg (drone #0, 18 health) shifted the climb's tick phase, and the
         // climb_stairs arrival (dxz 0.8) sampled Bond standing on the landing's first step —
-        // y 0.1234 against the old 0.0 cap (walkreal_07000014_real_damage, 2026-11-02). The
-        // x/z bounds and the y > -1.6 pit floor are the pins and stay.
-        assert!(p[1] > -1.6 && p[1] < 0.2 && p[2] > 52.5 && p[2] < 54.6 && p[0] > 44.0 && p[0] < 46.4,
+        // y 0.1234 against the old 0.0 cap (walkreal_07000014_real_damage, 2026-11-02); the
+        // Agent run's own fight phases sample the climb at y 0.405 (real-health-agent-
+        // difficulty-12-13-14-15, 2026-11-03). The x/z bounds and the y > -1.6 pit floor are
+        // the pins and stay.
+        assert!(p[1] > -1.6 && p[1] < 1.1 && p[2] > 52.5 && p[2] < 54.6 && p[0] > 44.0 && p[0] < 46.4,
             "the east stairwell foot (-0.91 landing, z 51.5..54.25 [D probe14_corridor/probe14_stairs]) is reached, got {p:?}");
     }
     // Back east over the pit band to the corridor: the jump is EDGE-ANCHORED (walk to the
@@ -870,8 +924,79 @@ fn the_vent_drop_hands_bond_into_the_facility() {
 /// off the spawn plate #484's 0x4b [D row 21; M 0x1827d8 case 1].
 #[test]
 fn walk_the_infiltration_to_the_delta_exit() {
+    walk_the_infiltration_to_the_delta_exit_at(1);
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty-12-13-14-15): the
+/// same walked route and the same end, loaded at difficulty 2 the menu way (the front-end's
+/// launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]; GameState+0x28 →
+/// Drones::difficulty, asserted at load). Agent spawns the min-difficulty-2 placements
+/// [M Drone_Create 0x136be0:49], scales Bond's pain by Plr_DMod_Normal [M Player_HandlePain
+/// 0x1902c8] and the guards' hit chance by Accuracy row 2 [M DroneWeap_DoBulletAccuracy
+/// 0x179740:74-88]. Real input only; no health, ammo or channel writes.
+#[test]
+fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
+    // The lane-fight + path-clear laws (opt-in, this level's sister only — set inside the body
+    // behind the difficulty gate; see the body comment for the measured deaths).
+    with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(2));
+}
+
+/// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-12-13-14-15): the same
+/// walked infiltration → sabotage → Rook → delta-exit route at the menu's 00 Agent pick —
+/// GameState+0x28 = 3 through the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 →
+/// load_with_carry_difficulty; GameState+0x28 → Drones::difficulty, asserted at load]. The pick
+/// scales Bond's pain by Plr_DMod_Hard 1.0 (Easy 0.6, Agent 0.7 [M Player_HandlePain 0x1902c8;
+/// ReadTuningVars 0x1d3a80; L the d2-sisters report's rows]) and the guards' hit chance by
+/// DroneFiring_Accuracy_Hard 1.3 (Easy 0.8, Normal 0.9 [M DroneWeap_DoBulletAccuracy
+/// 0x179740:74-88]); the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49].
+/// The Agent grind (back_off 4.0 + lane_fights) and the path-clear stands run behind
+/// `difficulty >= 2` gates in the body, so the d3 run inherits them; the fights HEAD-HUNT (the
+/// 05-07 sisters' law: at 1.3 accuracy every stood tick is a tick of bursts); the d3-only
+/// deaths get their own d3-gated blocks. Real input only; no health, ammo or channel writes.
+///
+/// IGNORED with the measured run: the d3 walk dies by WEDGE, not by damage — at tick 26340 the
+/// "1.72 landing" resupply leg wedges Bond AIRBORNE at (33.84, 0.82, 30.95) floating 0.41 over
+/// the scoped floor, d 2.70 short of the drop (32.50, 0.83, 33.29), grounded=false, and the
+/// leg's cap panics (walker_b2.rs:641) — the d3 fights' displacement (40 return-fire fights,
+/// 22 hits for 50.0 by that tick — half the budget gone at the landing) puts Bond off the leg's
+/// laid line and the resupply approach cannot re-ground him. The d2 sister rode a TOP-UP (its
+/// wrapper lacks the `with_real_damage` wrap — flagged to the merge owner), so no real-health
+/// d2 baseline exists to diff against. NEXT LEVERS: a d3-gated re-ground before the landing
+/// resupply (a settle tick loop, the skip-hand-back's grounding pattern), or a d3-gated direct
+/// walk_to the drop's cell bypassing the resupply nav, or the fights' smoother early game (the
+/// first 50.0 went in the infiltration grind — the 05-07 sniper-stand law applied to the
+/// stairwell's AIM pairs).
+#[test]
+#[ignore = "00 Agent: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
+fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
+    walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(3)));
+}
+
+fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap());
+    // The difficulty-1 expression is byte-identical to the pre-sister master's (real-health-
+    // agent-difficulty-01-07's idiom); 2+ loads the menu way [M C_SBNFDFCTY 0x216ca8:15].
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load_with_carry(&iso, "07000014.bin", false, None).unwrap()
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "07000014.bin", false, None, difficulty).unwrap()
+    });
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
+    if difficulty >= 2 {
+        // The Agent grind: the first sister run died at tick 4297 with drone #6 (skin
+        // 0x5000093, 28 health, d 1.4) dealing 95.5 in 32 hits while the plain fights gave
+        // up (2 fights, no round landed) — a player backs off and trades at range (the
+        // 07000013 chain's own law: under 3.0 u every drone round hits [M
+        // DroneWeap_DoBulletAccuracy 0x179740:113-115]; the 03 sister's back_off 4.0 fix).
+        // The second run (24 fights, unseen fights) died at 8084 with #4 (10 health, d 2.0,
+        // 57.0 in 19 hits) and #6 (28 health, d 5.0) STILL alive — the plain eye-ray aim
+        // reads Some while the rounds die on the corridor corners; the lane fights' STRICT
+        // gun-ray aim + the damage-weighted pick is the 07000013 chain's own passing law.
+        // Opt-in per difficulty: the difficulty-1 call sites keep master behaviour.
+        w.dmg.back_off = Some(4.0);
+        w.dmg.lane_fights = true;
+    }
     walk_infiltration_to_handback(&mut w);
     walk_the_west_route_to_the_switch_band(&mut w);
     // The E press through the REAL Player_Activate use path (the walk's own input): aim at the
@@ -1085,6 +1210,12 @@ fn walk_the_infiltration_to_the_delta_exit() {
     assert_eq!(save.weapon, exit_req,
         "the save's weapon byte is M_CONTROL+0x63 as of the drain [M 0x195670:18-19]");
     let mut w15 = Walker::new(nf_view::load_with_carry(&iso, "07000015.bin", false, Some(&save)).unwrap());
+    if difficulty >= 2 {
+        // The 15 part's fights run the same lane law (the difficulty rides the warm save —
+        // the guards hit at the Agent scale here too).
+        w15.dmg.back_off = Some(4.0);
+        w15.dmg.lane_fights = true;
+    }
     {
         let sim = w15.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;

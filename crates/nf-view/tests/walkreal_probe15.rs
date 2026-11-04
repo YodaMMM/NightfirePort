@@ -262,3 +262,34 @@ fn probe_triggers_and_scripts() {
         }
     }
 }
+
+#[test]
+#[ignore = "assertion-free probe dump; run with --ignored"]
+fn probe_armour_pickups_and_west_room_guards() {
+    let iso = iso();
+    let scene = nf_view::load_with_carry_difficulty(&iso, "07000015.bin", false, None, 2).expect("load");
+    let sim = scene.sim.as_ref().unwrap();
+    eprintln!("=== armour pickups (kind 3) ===");
+    for (i, p) in sim.drones.pickups.iter().enumerate() {
+        if p.kind == 3 {
+            let t = [p.m[3][0], p.m[3][1], p.m[3][2]];
+            let fy = sim.world.floor_below(t, 8.0);
+            eprintln!("pickup[{i}] kind={} weapon={:#x} at=({:.2},{:.2},{:.2}) state={} hidden={} gone={} floor_below={:?}",
+                p.kind, p.weapon, t[0], t[1], t[2], p.state, p.hidden, p.gone, fy);
+        }
+    }
+    eprintln!("=== ALL pickups (first 40, any kind) ===");
+    for (i, p) in sim.drones.pickups.iter().take(40).enumerate() {
+        let t = [p.m[3][0], p.m[3][1], p.m[3][2]];
+        eprintln!("pickup[{i}] kind={} weapon={:#x} at=({:.2},{:.2},{:.2}) state={}",
+            p.kind, p.weapon, t[0], t[1], t[2], p.state);
+    }
+    eprintln!("=== guards west of x 16 (the west room) and the plank guards ===");
+    for (i, d) in sim.drones.list.iter().enumerate() {
+        let p = d.pos;
+        if p[0] < 16.0 || ((20.0..45.0).contains(&p[0]) && (28.0..45.0).contains(&p[2])) {
+            eprintln!("drone[{i}] skin={:#x} weapon={:#x} at=({:.2},{:.2},{:.2}) hp={}",
+                d.skin, d.weapon, p[0], p[1], p[2], d.health);
+        }
+    }
+}
