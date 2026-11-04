@@ -4,3 +4,8 @@ Sweep every Sprite_SetText and Sprite_SetTextNFmt caller in ACTION.ELF for on-fo
 
 ---
 claimed-by: sandbox4 at 2026-11-04T20:19Z
+
+---
+## Report (done, 2026-11-04T20:54Z)
+
+Closed by the driver: the report is on `s/audit-sprite-set-text` (docs/reports/audit-sprite-set-text.md); the worker didn't run finish.sh.
