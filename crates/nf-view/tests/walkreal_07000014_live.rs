@@ -1724,7 +1724,26 @@ fn clear_hostiles(w: &mut Walker, radius: f32, cap: u32) {
             d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
                 && walker::dxz(d.pos, sim.bond.pos) < radius
         }) else { return };
-        w.resupply("the hostile clear"); // the dropped-gun cycle — the flush's swarms outshoot one clip
+        // The dropped-gun cycle is now a bounded test-local loot pass (this tree's measured
+        // runs: the fights held Bond at 74.0 across 9-12 fights — the armour takes the traded
+        // rounds — while the shared resupply walked Bond onto the trench lip for a drop
+        // 2.38 away behind the rim (target (38.72, 0.00, 33.60) from (40.91, 0.38, 32.66),
+        // unclosable) and burned ~12000 ticks across its 4 attempts before the wedge abort
+        // killed the walk at 18540/18840. A player scoops what lies at his feet on his own
+        // floor and keeps walking; everything else stays where it fell.
+        {
+            let (bp, target) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                let t = sim.drones.pickups.iter().filter(|p| !p.gone)
+                    .filter(|p| (p.m[3][1] - bp[1]).abs() < 0.3)
+                    .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+                    .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)))
+                    .filter(|t| walker::dxz(*t, bp) < 6.0);
+                (bp, t)
+            };
+            if let Some(t) = target { w.walk_nav_to(t, "the clear's loot pass", 1.2); }
+        }
         w.shoot_loose(di, "the hostile clear", cap);
     }
     // The fights displace Bond (the backpedal inside 3.0) — walk home over the NAV web (the
