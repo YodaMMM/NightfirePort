@@ -246,7 +246,7 @@ fn demolition_destroy_own_goal_and_restart() {
     assert!(m.objects_rt.slot_msgs.is_empty());
     m.damage_site(1.0, 0);
     m.damage_site(1.0, 0);
-    assert_eq!(m.objects_rt.slot_msgs, [(0, 0x200002b)]);
+    assert_eq!(m.objects_rt.slot_msgs, [(0, 0x200002b, None, 90)]);
     m.objects_rt.site.as_mut().unwrap().state = 500;
     m.damage_site(1000.0, 1);
     assert_eq!(m.game.team_scores, [0.0, 1.0], "the attacking team scores [M 0x1870a0:125-132]");
@@ -561,4 +561,37 @@ fn koth_entry_sound_is_rate_limited() {
     m.game.clock = 6.5;
     m.update_objects(DT, &on, &mut rng);
     assert_eq!(m.objects_rt.sounds.len(), 2, "past 5 s it sounds again");
+}
+
+/// A teammate's hit with friendly fire on tells both players, then stays quiet for the 3 s
+/// timer [M 0x1857c0:46-56]. Sister: an enemy hit posts nothing.
+#[test]
+fn friendly_hit_posts_both_lines_once() {
+    let mut m = make(scenario::TEAM_DEATHMATCH, 10, -1);
+    join(&mut m, 0, 0);
+    join(&mut m, 1, 0);
+    join(&mut m, 2, 1);
+    m.settings.friendly_fire = 1;
+    m.register_bullet_hit(0, 2);
+    assert!(m.objects_rt.slot_msgs.is_empty());
+    m.register_bullet_hit(0, 1);
+    m.register_bullet_hit(0, 1);
+    assert_eq!(m.objects_rt.slot_msgs, [(0, 0x2000029, Some(1), 0xb4), (1, 0x200002a, Some(0), 0xb4)]);
+}
+
+/// A death tells the victim who did it; with no other shooter it is the self line [M
+/// 0x190810:68-85].
+#[test]
+fn a_death_tells_the_victim() {
+    let mut rng = Rng::new(7);
+    let mut m = make(scenario::DEATHMATCH, 10, -1);
+    join(&mut m, 0, 0);
+    join(&mut m, 1, 1);
+    m.player_killed(0, Some(1), false, false, &mut rng);
+    m.player_killed(1, Some(1), false, false, &mut rng);
+    m.player_killed(1, None, false, false, &mut rng);
+    assert_eq!(
+        m.objects_rt.slot_msgs,
+        [(0, 0x2000038, Some(1), 0xb4), (1, 0x2000037, Some(1), 0xb4), (1, 0x2000037, Some(1), 0xb4)]
+    );
 }

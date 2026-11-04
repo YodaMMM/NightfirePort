@@ -127,8 +127,9 @@ pub struct MpObjectsRt {
     /// label its `%s` takes) — `Text_AddMsg(-1, 0, 4, .., 0, MP_MSG_TICKS)` at each site
     /// (presentation, never hashed).
     pub msgs: Vec<(u32, Option<u32>)>,
-    /// The per-slot lines (`Text_AddMsg(slot, 0, 1, ..)`, the INFO pane's): (slot, label).
-    pub slot_msgs: Vec<(usize, u32)>,
+    /// The per-slot lines (`Text_AddMsg(slot, 0, 1, ..)`, the INFO pane's): (slot, label, the slot
+    /// whose name fills its `%s`, display frames).
+    pub slot_msgs: Vec<(usize, u32, Option<usize>, u16)>,
     /// The label `StatusSpr` holds after a site round's result [M 0x1870a0:117-123,146-158];
     /// cleared by the restart [M 0x184bd0:88-89].
     pub site_status: Option<u32>,
@@ -263,6 +264,14 @@ impl MpMatch {
         if let Some(k) = killer.filter(|&k| k != victim && k < super::MP_MAX_SLOTS) {
             if self.kill_msgs.len() >= 64 { self.kill_msgs.remove(0); }
             self.kill_msgs.push((k, victim));
+        }
+        // The victim's own line: by the last shooter, else by themselves [M 0x190810:68-85]. Only
+        // the local slot draws it, so a bot's copy goes nowhere, as `Player_CheckForDeath` is
+        // the humans' path.
+        if self.objects_rt.slot_msgs.len() < 64 {
+            let by = killer.filter(|&k| k != victim && k < super::MP_MAX_SLOTS);
+            let line = (victim, if by.is_some() { 0x2000038 } else { 0x2000037 }, Some(by.unwrap_or(victim)), 0xb4);
+            self.objects_rt.slot_msgs.push(line);
         }
         let mut delta = 0.0f32;
         if let Some(k) = killer {
@@ -501,6 +510,11 @@ impl MpMatch {
                     return false; // [M :43-45]
                 }
                 if self.game.slots[victim].timers[0] == 0 {
+                    // the shooter's name to the victim, the victim's to the shooter [M :49-54]
+                    if self.objects_rt.slot_msgs.len() < 64 {
+                        self.objects_rt.slot_msgs.push((victim, 0x2000029, Some(attacker), 0xb4));
+                        self.objects_rt.slot_msgs.push((attacker, 0x200002a, Some(victim), 0xb4));
+                    }
                     self.game.slots[victim].timers[0] = (3 * FRAME_RATE_INT) as u16; // [M :56]
                 }
             }
@@ -1079,7 +1093,7 @@ impl MpMatch {
             // A defender's hit: the warning, at most once per 1.5 s [M :96-107].
             if hitter < super::MP_MAX_SLOTS && self.settings.players[hitter].team as usize == defending {
                 if self.game.slots[hitter].timers[1] == 0 && self.objects_rt.slot_msgs.len() < 64 {
-                    self.objects_rt.slot_msgs.push((hitter, 0x200002b));
+                    self.objects_rt.slot_msgs.push((hitter, 0x200002b, None, MP_MSG_TICKS));
                 }
                 self.game.slots[hitter].timers[1] = MP_MSG_TICKS;
             }
