@@ -4,3 +4,8 @@ On 07000008 the helicopter that attacks the gondola must fly its attack, not hol
 
 ---
 claimed-by: sandbox1 at 2026-11-04T18:54Z
+
+---
+## Report (done, 2026-11-04T20:16Z)
+
+Closed by the driver: the report is on `s/level-08-hind-flight-pin` (docs/reports/level-08-hind-flight-pin.md); the worker didn't run finish.sh.
