@@ -936,13 +936,9 @@ fn walk_the_infiltration_to_the_delta_exit() {
 /// 0x179740:74-88]. Real input only; no health, ammo or channel writes.
 #[test]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
-    // REAL DAMAGE (real-health-14-agent-00agent): the wrapper lacked the `with_real_damage`
-    // wrap (the d2-sisters round flagged it to the merge owner) — the walker's health top-up
-    // stayed ON and the pass pinned nothing about Agent health. Same wrap as the Operative
-    // (`..._real_damage`) and 00 Agent (`..._real_damage_00agent`) walks. The lane-fight +
-    // path-clear laws (opt-in, this level's sister only — set inside the body behind the
-    // difficulty gate; see the body comment for the measured deaths).
-    walker::with_real_damage(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(2)));
+    // The lane-fight + path-clear laws (opt-in, this level's sister only — set inside the body
+    // behind the difficulty gate; see the body comment for the measured deaths).
+    with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(2));
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-12-13-14-15): the same
