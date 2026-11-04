@@ -1658,6 +1658,17 @@ impl Player {
         let mode = self.modes[cur];
         let s = self.info[cur].as_mut().unwrap();
         s.player = self.placement; // for NF_SCRIPTLOG
+        // `Script_Play` 0x1db588:23-41 — every SP_LoadScript arm starts playback through
+        // `Script_Play`, which on a camera script (`+0xAA8 & 0x40`, the port's `nis.camera` →
+        // flags bit 0x40 [M 0x1d8248 → Script::load]) whose hash is one of the three death NISs
+        // (`Script_IsDeathNIS` 0x1dae60: 0x6000952/0x600098a/0x6000991) posts the death music
+        // jump `Music_Event(6, 1)` [M 0x1db588:26-41], then `Text_FlushAllSubtitles` (the
+        // subtitle flush rides the view side; the Sim carries no script subtitles here). The
+        // board's event-6 consumer is the on-death marker jump (`UpdateMusicalEvents`
+        // 0x114e70 DAT_002d3510 = MapMusicData+0xc) — the same jump Player_CheckForDeath posts.
+        if s.flags & 0x40 != 0 && Script::is_death_nis(self.scripts[cur]) {
+            out.push(Request::Event { kind: 0x41, params: vec![] });
+        }
         match mode {
             1 => { s.start(false); self.state = 2; }
             8 => { s.start(true); self.state = 6; }
@@ -3013,5 +3024,49 @@ mod tests {
         assert!(ch.on(0x40), "the SKIPPED cut-scene still wrote ch 0x40 = 1 [M 0x1da998:19-100 catch-up + 0x1d94c0 case 0xd]");
         assert!(ch.time[0x40] != 0, "the catch-up's write stamped switch_channels_time[0x40]");
         assert!(ch.script_channels.contains(&0x40));
+    }
+
+    /// audit-music-events — `Script_Play` 0x1db588:26-41: an SP_LoadScript on a CAMERA script
+    /// (`+0xAA8 & 0x40`) whose hash is one of the three death NISs (`Script_IsDeathNIS`
+    /// 0x1dae60) posts the death music jump `Music_Event(6, 1)` — the port's kind-0x41 Event
+    /// request, drained onto the board by `Drones::drain_script_requests` (the board's event-6
+    /// consumer is the on-death marker jump). A camera script with any other hash posts nothing.
+    #[test]
+    fn the_death_nis_start_posts_the_death_music_jump() {
+        let mk = |hash: u32| Arc::new(Nis {
+            hashcode: hash, camera: true, loop_start: 0, length: 100,
+            streams: vec![NisStream { first_key: 0, last_key: 0, commands: Vec::new() }],
+            keys: Vec::new(),
+        });
+        let mk_player = |hash: u32| Player {
+            placement: 0, scripts: [hash, 0], modes: [1, 0], stay: false, mask: 0, out: 0, gate: 0,
+            scale: 1.0, matrix: IDENT, cur: 0, state: 0, activated: false, countdown: 0,
+            info: [None, None], deleted: false, live_matrix: IDENT, subs: Vec::new(),
+            hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false, bullet_filter: 0,
+            bullet_hits: Vec::new(), tick_bullet_hits: Vec::new(),
+        };
+        let mut objs = Objects::default();
+        let mut ch = Channels::default();
+        let world = TestWorld;
+        // The 05 plunge death NIS (SP #284): the load posts the jump.
+        let mut lib = HashMap::new();
+        lib.insert(0x0600_0952u32, mk(0x0600_0952));
+        let mut p = mk_player(0x0600_0952);
+        let mut out = Vec::new();
+        p.load(&lib, &mut objs, &mut ch, &world, 0, &mut out);
+        assert!(
+            out.iter().any(|r| matches!(r, Request::Event { kind: 0x41, .. })),
+            "the death NIS start posts Music_Event(6,1) [M 0x1db588:26-41]"
+        );
+        // Sister: a camera script that is NOT a death NIS posts no death music jump.
+        let mut lib2 = HashMap::new();
+        lib2.insert(0x0600_0421u32, mk(0x0600_0421));
+        let mut p2 = mk_player(0x0600_0421);
+        let mut out2 = Vec::new();
+        p2.load(&lib2, &mut objs, &mut ch, &world, 0, &mut out2);
+        assert!(
+            !out2.iter().any(|r| matches!(r, Request::Event { kind: 0x41, .. })),
+            "a non-death camera NIS posts no death music jump [M 0x1db588:27-37]"
+        );
     }
 }
