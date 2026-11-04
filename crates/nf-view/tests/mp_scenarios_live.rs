@@ -341,12 +341,12 @@ fn flag_lines_follow_the_subtitles_option() {
     place(&mut p, 1, away, 0.0);
     place(&mut p, 0, flag1, 0.0);
     ticks(&mut p, 3, &row(None, 2));
-    let lines = |s: &Sim| s.hud.msgs.iter().map(|m| m.text.clone()).collect::<Vec<_>>();
+    let lines = |s: &Sim| s.hud.subs[1].iter().map(|m| m.text.clone()).collect::<Vec<_>>();
     assert_eq!(lines(p.a.sim.as_ref().unwrap()), ["MI6 Flag captured"]);
     assert!(lines(p.b.sim.as_ref().unwrap()).is_empty(), "the option off shows nothing");
     place(&mut p, 0, base0, 0.0);
     ticks(&mut p, 3, &row(None, 2));
-    assert_eq!(lines(p.a.sim.as_ref().unwrap())[..2], ["MI6 Flag captured", "Phoenix Team scored"]);
+    assert_eq!(lines(p.a.sim.as_ref().unwrap()), ["MI6 Flag captured", "Phoenix Team scored"]);
 }
 
 #[test]

@@ -20063,17 +20063,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             for id in std::mem::take(&mut dr.anim_stops) { self.audio.stop_all_with_id(id); }
             if let Some(t) = d.sfx { for id in &snd { let h = t.get(*id); self.audio.play3d(h.id, at, None); if !h.looped { self.sounds.push(Sound { id: h.id, pos: at, inner: h.inner, outer: h.outer, weight: h.weight }); } } }
             // subtitles-do-spoken: `AnimProcessScriptCmds` 0x1c1b38 case 1's `Sound_Play3D(100.0f,
-            // −1, −1, id, bone-0 pos, …)` builds the node with the CUSTOM outer 100.0 (node+0x44,
-            // +0x30 = 1 [M 0x1dd548:33]); `Sound_ReqestPlaySfx` 0x1dcc68 then sets +0x52 =
-            // dist < 100 × 0.5 (the streamed ids' distance arm — the spoken ids carry
-            // SFXOutputData+0x15 = 1 [D], ScriptCam == 0 at the 07000006 boot [D the boot NIS
-            // 0x06000066 carries no camera op]) and `Sound_UpdateSounds` 0x1dda70 fires
+            // −1, −1, id, bone-0 pos, …)` passes custom = 0 (`daddu t0,zero,zero` in the jal's delay
+            // slot at 0x1c2214), so the node takes the bank's outer, SFXOutputData+8 (node+0x44,
+            // +0x30 = 0 [M 0x1dd548:27-44]); `Sound_ReqestPlaySfx` 0x1dcc68 then sets +0x52 =
+            // dist < outer × 0.5 (the streamed ids' distance arm — the spoken ids carry
+            // SFXOutputData+0x15 = 1 [D]), forced on under a script camera [M :83-99], and
+            // `Sound_UpdateSounds` 0x1dda70 fires
             // `Sound_DoSubtitle(id)` on the start with +0x52 set — the driver conversation
             // (`snd2lbl` ids 0xac/0xae [D Snd2Lbl idx 78/79, always-show]) posts here.
             for id in &snd {
                 let dist = ((self.player_pos[0] - at[0]).powi(2) + (self.player_pos[1] - at[1]).powi(2) + (self.player_pos[2] - at[2]).powi(2)).sqrt();
                 let dur = self.sfx_durations.get((id & 0xfffff) as usize).copied().unwrap_or(0.0);
-                spoken_subs.push((*id, dist < 50.0, dur));
+                let outer = d.sfx.map_or(20.0, |t| t.get(*id).outer); // 0x41a00000 past the table
+                spoken_subs.push((*id, self.hud_frozen || dist < outer * 0.5, dur));
             }
             for mut p in dr.drops.drain(..) { p.from = Some(index); self.pickups.push(p); }
             // `Drone_CollisionHandler` (0x140968, WORKLOG 0078): the feet-sphere down-ray + gravity, before the

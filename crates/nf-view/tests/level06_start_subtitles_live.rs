@@ -40,33 +40,28 @@ fn driver_conversation_posts_with_the_option_off() {
     let sim = scene.sim.as_ref().unwrap();
     let track = &sim.drones.subtitle_track;
     let line = |label: u32| track.lines().iter().find(|l| l.label == label);
-    // The whole gate conversation posts in script order through the FIFO chain [M Text_UpdateMsg
-    // 0x1b11d8: only the displayed head's timer runs; a later add queues behind it]. The wall
-    // guards' scripts (#487/#488) have no wait channel (p3 = 0 [D census]) so the frame-1 sound
-    // 0xdc posts at the boot tick; the driver/escort wake on the spawn plates' ch 0xb9.
-    let opener = line(0x0600_0070).expect("the wall guard's opener queued (frame-1 event of 0x06000124)");
-    assert!(opener.start <= 3, "no wait channel: the script starts at boot (got start {})", opener.start);
-    assert_eq!(opener.end - opener.start, 196, "0.92 × SFXOutputData[0xdc]+0x10 × 60 [D; L 0x30d084]");
+    // The conversation posts in script order. The wall guards' chatter (0xdc/0xe1/0xdd) plays at
+    // about 26, past the 15 the bank's outer 30 allows, so it posts nothing [M 0x1dcc68; L PCSX2
+    // 07000006: the driver's line, the reply, then no text through frame 840]. The driver/escort
+    // wake on the spawn plates' ch 0xb9.
+    for far in [0x0600_0070, 0x0600_0071, 0x0600_0072] {
+        assert!(line(far).is_none(), "{far:#x} is out of subtitle range");
+    }
     // The driver's line: start script 0x0600011d, op-1 sound 0xac at frame 5 [D anim entry]; the
     // start tick is the wake chain's (the ch-0xb9 plates → DSTATE wake → the script), so the pin
     // is the range + the duration, not a hand-computed tick.
     let driver = line(0x0600_006e).expect("the driver's line queued despite the option Off");
-    assert!(opener.end <= driver.start && driver.start < 300, "after the opener, within the wake window (got start {})", driver.start);
+    assert!(driver.start < 30, "within the wake window (got start {})", driver.start);
     assert_eq!(driver.end - driver.start, 211, "0.92 × 3.8312931 s × 60 [D SFXOutputData; L 0x30d084]");
-    // The escort's reply: script 0x0600011b's op-1 at frame 295 [D]; its sound fired while the
-    // queue still displayed, so the FIFO starts it at a later line's end [M 0x1b11d8].
+    // The escort's reply: script 0x0600011b's op-1 at frame 295 [D], after the driver's line ends.
     let escort = line(0x0600_006f).expect("the escort's reply queued");
-    assert!(escort.start >= driver.end, "the FIFO chained the reply behind the busy head [M 0x1b11d8]");
+    assert!(escort.start >= driver.end && escort.start < 310, "got start {}", escort.start);
     assert_eq!(escort.end - escort.start, 183, "0.92 × 3.3215871 s × 60 [D]");
-    // The wall guards' hip-flask exchange follows (0x06000126 frame 250, 0x06000124 frame 408).
-    assert!(line(0x0600_0071).is_some() && line(0x0600_0072).is_some(), "the guards' chat queued");
     // The per-tick query the draw code calls.
     assert_eq!(track.active_subtitle(driver.start), Some(0x0600_006e));
     assert_eq!(track.active_subtitle(driver.start + 210), Some(0x0600_006e));
     assert_ne!(track.active_subtitle(driver.start + 211), Some(0x0600_006e), "the head's timer hit 0 and the queue advanced [M Text_UpdateMsg 0x1b11d8]");
     assert_eq!(track.active_subtitle(escort.start), Some(0x0600_006f));
-    // The HUD drain took the same adds (the game's single Text_AddMsg call).
-    assert!(sim.hud.msgs.iter().any(|m| m.script), "the spoken lines reached the HUD drain");
 }
 
 /// Sister: the same lines with the option ON — the track is identical (the spoken adds' gate is
@@ -87,3 +82,32 @@ fn the_option_on_leaves_the_always_show_lines_unchanged() {
     assert_eq!((driver.end - driver.start, escort.end - escort.start), (211, 183));
 }
 
+/// The node takes the bank's outer 30, so a line posts only within 15: the driver and escort at
+/// about 11-13 post, the far guards' chatter at about 26 plays unsubtitled, as PCSX2 shows
+/// [M 0x1dcc68, custom = 0 at the 0x1c2210 call; D SFXOutputData+8].
+#[test]
+fn far_guard_chatter_posts_no_subtitle() {
+    let Some(path) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let Ok(mut scene) = nf_view::load(&path, "07000006.bin", false) else { return };
+    let sim = scene.sim.as_mut().unwrap();
+    let mut seen: Vec<String> = Vec::new();
+    for _ in 0..640 {
+        sim.step_bond(Default::default(), false, false, false);
+        if let Some(m) = sim.hud.subs[1].front() {
+            if seen.last() != Some(&m.text) { seen.push(m.text.clone()); }
+        }
+    }
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert!(seen[0].starts_with("Can") && seen[1].starts_with("Then it"), "{seen:?}");
+}
+
+/// The apostrophe is the bank's byte 0x93, drawn by the font's glyph of that code; decoded to its
+/// Windows-1252 character it must still reach the glyph, or "Can't" draws as "Cant".
+#[test]
+fn the_apostrophe_reaches_its_glyph() {
+    let Some(path) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let Ok(scene) = nf_view::load(&path, "07000006.bin", false) else { return };
+    let font = &scene.hud.as_ref().unwrap().font;
+    assert_eq!(font.layout("Can\u{201c}t", 0.0, 0.0).0.len(), 5, "five glyphs");
+    assert_eq!(font.layout("Cant", 0.0, 0.0).0.len(), 4);
+}
