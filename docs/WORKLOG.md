@@ -71,3 +71,12 @@ destroy[10] is a zero-extent box), fix_finale's 16 shelter pulse. Real input onl
 assertion weakened without a decompile address, helpers opt-in per level. Suite via
 tools/test/suite.py (background from the start) + chunk_suite.py for the final tree. Sandbox
 expires ~18:46 UTC; stop-new-work 18:26 UTC.
+Round 2 (2026-11-04 17:14-18:40 UTC). enemy_accuracy re-pinned green (two 0x12 cells: d1 d5
+8 was 15, d2 d5 25 was 17 [M 0x1aacc8]; binary 5/0+4i). fix_blast_scripts: aim_at pitch now
+half-turns [M player.rs look()], the type-0 leg ignored with the measured geometry ledger
+(point box at the origin, no floor within 56 u, P2K range 50 [L 0x2bf368]); binary 3/0+1i. 01:
+the doorway lure play opened to d1 (AND fires 1974), lip/release/pre-clear gates opened, a
+0x500003a far-field pre-clear added; three later reds carry fresh ledgers (7712 d1 west
+corridor, 4162 d3 far pair, 8502 d2 stairwell). Not done: 02/03/14/16/1b re-routes (16 12/2+2i,
+1b 15/2+2i, 03 4/2+1i fresh), the finale pulse leg (fresh ledger), the full walkreal sweep, the
+chunk-suite total.
