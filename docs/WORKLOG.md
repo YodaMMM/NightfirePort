@@ -73,3 +73,18 @@ clear #281/#283 before the descent legs, or hold the door-wall lane while firing
 opt-in. Done = both green + every walkreal_*_live green + the full suite total line.
 Also to measure on this tree: the g055-3 merge's two shifts (07000003 real_damage,
 07000011_live 2/4) — master advanced since (turret-round-spread, ring-beams-3 et al.).
+
+## drone-block-swaps-g055-4 (progress 2026-11-04 ~18:15 UTC)
+
+The two target walks verified green on the pushed tree, whole, serial: `walkreal_07000014_live`
+9 passed / 0 failed / 1 ignored (153 s), `walkreal_07000016_live` 14 passed / 0 failed /
+2 ignored (74 s). The FULL walkreal_*_live sweep ran: 80 binaries, 246 passed / 3 failed /
+20 ignored; the only 3 failures are the g055-3 hand-off's master-merge shifts in other
+levels' files (07000011 spawn-to-load-point real_damage + _agent, 07000003 full-route
+real_damage) — measured still red on this tree, owners' files. Full-suite grind in progress
+(resumable per-binary chunker, fresh state): 592/1104 binaries, 2744 passed / 11 failed /
+190 ignored; failures = the 3 allowed slim-ISO disc_golden + identity_disc (needs the full
+retail image, 1,191,072 sectors [D docs/build-identity.md]; the sandbox has the slim onfoot
+ISO, 518,435 sectors measured) + the GPU-surface set (glass_guards_14_live 1, fix_0c_pylon_live
+2, probe_pylon_render 1 — wgpu adapter NotFound headless, the last three matching the October
+headless record). Report + totals to follow.
