@@ -185,6 +185,8 @@ fn grenade_events_match_the_records() {
         resting: false, // fix-grenade-throw's slow-bounce latch (merged alongside)
         stuck: false, seek_target: None, // fix-oddjob-hat
         phase: None,
+    burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
+    defused: false,
     };
     let mut rng = nf_game::drone::Rng::new(0);
     // 0x2A: the first contact is ONE Bounce event (the Sim's Bounce arm blasts on it)…
