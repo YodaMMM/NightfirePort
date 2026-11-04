@@ -74,8 +74,9 @@ fn set_crouch(w: &mut Walker, on: bool) {
 /// leg never arrives.
 const BEAM_614: ([f32; 2], [f32; 2]) = ([-24.71, 13.03], [-19.45, 13.03]);
 const BEAM_621: ([f32; 2], [f32; 2]) = ([-14.95, -32.40], [-9.92, -33.95]);
-/// Beam #625: x 18.88, z 2.38-7.64, y 0.39-0.65 [D triggers dump].
-const BEAM_625: ([f32; 2], [f32; 2]) = ([18.88, 2.38], [18.88, 7.64]);
+// Beam #625's static dump box (x 18.88, z 2.38-7.64, y 0.39-0.65 [D triggers dump]) lives in
+// sweep_jump_beam625's doc: the crossing is sweep-aware (the band moves — see beam625_x), so the
+// old const-line shape is gone.
 fn jump_over_low_beam(w: &mut Walker, beam: ([f32; 2], [f32; 2]), to: [f32; 3], jump_before: f32, label: &str) {
     let (a, b) = beam;
     let (ux, uz) = (b[0] - a[0], b[1] - a[1]);
@@ -179,6 +180,100 @@ fn sweep_jump_beam614(w: &mut Walker, southbound: bool, x: f32, y: f32, label: &
         assert!(sim.drones.channels.time[0x22] == 0,
             "{label}: ch 0x22 stamped — the swept beam was touched [D #614 out 0x22; the pin stands]");
         eprintln!("[{label}] the sweep-jump cleared the band: pos {p:?} box ({zmin:.3},{zmax:.3})");
+    }
+}
+
+/// The live x-extent of beam #625's posed collision tris. The glist rides key motion: 3 keys,
+/// x 18.877 -> 16.078 -> 18.877, one pass = 240 ticks (step 1/120 per tick [D keys, m_paths —
+/// the probe's dump of the placement; M Trigger_Create 0x1b1720:56-87 + Trigger_Update
+/// 0x1b1a78:60-70; the port re-poses the tris per tick — Motion::advance + step_motion]) — the
+/// same sweep shape #614 rides, along the corridor's x axis. The key-0 box is the static dump's
+/// x 18.744..19.022, z 2.38..7.64, y 0.39..0.65 [D triggers dump].
+fn beam625_x(sim: &nf_view::scene::Sim) -> (f32, f32) {
+    sim.drones.triggers.iter().find(|t| t.placement == 625).expect("beam #625 [D]")
+        .tris.iter().flat_map(|tri| tri.iter().map(|v| v[0]))
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), x| (a.min(x), b.max(x)))
+}
+
+/// The sweep-aware westbound crossing of beam #625 (the ring's east corridor, z ~4.9-5.3): the
+/// same law sweep_jump_beam614 pins, rotated to the x axis. The old blind press (jump 1.0 before
+/// the STATIC line x 18.88 [D], the jump_over_low_beam shape) predates the sweep reading: the
+/// beam's band sweeps x 18.877 <=> 16.078 [D keys] over its 240-tick pass, its west park reaches
+/// x_min 15.94 [L probe_0a_beams: the key-0 lo 18.744 minus the 2.799 key travel], and the
+/// whole westbound lane (z 4.9-5.3) sits inside the beam's z span 2.38..7.64 [D] — so the walk's
+/// x(t) meets the sweep whatever the phase (the #614 probe's 16/16 phases, along x now). The
+/// strict beam law (the glist flags 0x645 [D]; the touch goes through the posed plane records'
+/// one-sided refine `seg_touches_tri_raw` [M Trigger_Hit 0x1b1fc8 -> Collide_Intersect
+/// 0x1ebaa8:93-99 -> Intersect_CylGeom 0x109da0's RAW branch -> Dist2Tri 0x1dfca8, wired in
+/// triggers.rs `Trigger::hits`'s seg_beam arm]) stamps ch 0x26 whenever a stand or the arc's low
+/// tail overlaps the band's (x,z) footprint at the wrong phase — the walk's upstream timing
+/// shifted and the four qworm walks crossed it (the 0x26 stamp, this round's red).
+/// The re-timing, ring-sweep-timing's method:
+/// - the arm watch: the beam parked EAST (posed box_max >= 18.75; the key-0 park hi is 19.022
+///   [D], the wrap parks it there each pass) — the takeoff side clear and the whole westward
+///   sweep ahead of the arc;
+/// - the press at x <= 19.88 (1.0 before the static line 18.88 [D] — the old press distance,
+///   kept: the arc's low early ticks stay east of the posed box, which only moves west from the
+///   park);
+/// - the arc west until x <= 15.3 (0.64+ west of the west park's reach x_min 15.94 - 0.55
+///   touch radius [L]) — the arc's middle clears vertically at any pose (the #614 probe's
+///   numbers: the arc runs ~0.1 u/tick, the feet rise to ~1.84, the standing toucher's bottom
+///   B = feet-0.485 [M Player_Collision 0x194df0 default arm] clears the band top 0.65 [D]
+///   while feet >= 1.69);
+/// - the pins: the press/landing gaps > 0.56 from the POSED box, and ch 0x26 never stamped
+///   [D #625 out 0x26].
+fn sweep_jump_beam625(w: &mut Walker, label: &str) {
+    // 1. the arm watch: the live box into the east-park window (<= 3 cycles = 720 ticks).
+    let mut armed = false;
+    for _ in 0..720u32 {
+        let (xmin, xmax) = { let sim = w.scene.sim.as_ref().unwrap(); beam625_x(sim) };
+        if xmax >= 18.75 { armed = true; break; }
+        w.wait(1);
+    }
+    assert!(armed, "{label}: beam #625 never swept into the east-park window in 3 cycles");
+    // 2. the press stand: walk west, no jump input, until 1.0 before the static line.
+    let press_x = 19.88f32;
+    let mut stood = false;
+    for _ in 0..240u32 {
+        let p = { let sim = w.scene.sim.as_ref().unwrap(); sim.bond.pos };
+        if p[0] <= press_x { stood = true; break; }
+        let yaw = w.scene.sim.as_ref().unwrap().bond.yaw;
+        let desired = (9.9f32 - p[0]).atan2(5.3 - p[2]);
+        w.tick(nf_game::player::Input { forward: 1.0, turn: walker::wrap_pi(desired - yaw).clamp(-0.05, 0.05), ..Default::default() }, false);
+    }
+    assert!(stood, "{label}: the press stand at x {press_x} never arrived");
+    // 3. the standing-clearance pin at the press tick (the posed box, not the static dump: the
+    //    beam only moves WEST from the park, so the gap here is the pass's worst east-side gap).
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let (xmin, xmax) = beam625_x(sim);
+        let p = sim.bond.pos;
+        let gap = p[0] - xmax;
+        assert!(gap > 0.56, "{label}: the press stand sits {gap:.3} from the live box ({xmin:.3}..{xmax:.3}) — the standing touch radius 0.55 [L the #614 phase probe]");
+    }
+    // 4. the arc: one tick of jump input, then forward through the arc past the whole band.
+    let x_far = 15.3f32;
+    let mut jumped = false;
+    let mut crossed = false;
+    for _ in 0..160u32 {
+        let p = { let sim = w.scene.sim.as_ref().unwrap(); sim.bond.pos };
+        if p[0] <= x_far { crossed = true; break; }
+        let yaw = w.scene.sim.as_ref().unwrap().bond.yaw;
+        let desired = (9.9f32 - p[0]).atan2(5.3 - p[2]);
+        w.tick(nf_game::player::Input { forward: 1.0, turn: walker::wrap_pi(desired - yaw).clamp(-0.05, 0.05), jump: !jumped, ..Default::default() }, false);
+        jumped = true;
+    }
+    assert!(crossed, "{label}: the sweep-jump arc never reached x {x_far}");
+    // 5. the landing clearance + the definitive 0x26 pin.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let (xmin, xmax) = beam625_x(sim);
+        let p = sim.bond.pos;
+        let gap = xmin - p[0];
+        assert!(gap > 0.56, "{label}: the arc landed {gap:.3} from the live box ({xmin:.3}..{xmax:.3}) at {p:?}");
+        assert!(sim.drones.channels.time[0x26] == 0,
+            "{label}: ch 0x26 stamped — the swept beam was touched [D #625 out 0x26; the pin stands]");
+        eprintln!("[{label}] the sweep-jump cleared the band: pos {p:?} box ({xmin:.3},{xmax:.3})");
     }
 }
 
@@ -904,8 +999,10 @@ fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
         assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");
     }
     // Beam #625 (out 0x26, x 18.88, z 2.38-7.64, y 0.39-0.65 [D]) — a low line across the
-    // corridor: jumped.
-    jump_over_low_beam(&mut w, BEAM_625, [16.4, 1.3, 4.9], 1.0, "ring: jump beam #625 westbound");
+    // corridor: jumped, sweep-aware (the band sweeps x 18.877 <=> 16.078 [D keys] — see
+    // sweep_jump_beam625; the old blind press landed the arc's low tail inside the west park's
+    // reach once the walk's upstream timing shifted).
+    sweep_jump_beam625(&mut w, "ring: jump beam #625 westbound (the sweep)");
     for (wp, label) in [([9.9f32, 1.3, 5.3], "ring: the corridor west end"),
                         ([9.75, 1.3, 8.8], "ring: up the east corridor north"),
                         ([9.6, 1.3, 12.3], "ring: up the east corridor north 2"),
