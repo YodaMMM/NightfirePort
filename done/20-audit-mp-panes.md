@@ -4,3 +4,8 @@ Multiplayer's lines, status text and pickups all had gaps. Sweep MPPaneList and 
 
 ---
 claimed-by: sandbox3 at 2026-11-04T21:26Z
+
+---
+## Report (done, 2026-11-04T21:53Z)
+
+Closed by the driver: the report is on `s/audit-mp-panes` (docs/reports/audit-mp-panes.md); the worker didn't run finish.sh.
