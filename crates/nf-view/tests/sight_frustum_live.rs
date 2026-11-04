@@ -17,13 +17,21 @@
 //! the guards walk their own patrol on the shared RNG. Opt-in via `NF_ISO`.
 //!
 //! Numbers (deterministic on the slim ISO, difficulty 1): 07000001 start, 120 idle ticks —
-//! Bond's eye (−8.5, 7.1, −9.8), look (0.00, 0.00, 1.00); guard placement 158 at 6.3 units,
-//! 17.1° off the aim; placement 161 at 2.2 units, 23.2°; placement 261 at 18.6 units, 38.3° —
-//! all three bullet-clear from the eye and inside the frustum (261 only via the world-sphere
-//! slack: 38.3° > the 37.57° raw half-angle). 40 look-up ticks (input.look = 0.01/tick, the
-//! on-foot pitch path [M Player_Update's BL+0x8a8 integration, the port's player.rs :1495]) put
-//! Bond at pitch ≥ 0.40 (≈ 37° up) with both 158 and 261 still bullet-clear and still inside the
-//! old cone — but below the tilted bottom plane: the port marks them undrawn.
+//! Bond's eye (−8.5, 7.1, −9.8), look (0.00, 0.00, 1.00); guard placement 158 at 6.4 units,
+//! 17.4° off the aim; placement 161 at 2.4 units, 19.9° — both bullet-clear from the eye and
+//! inside the frustum. 40 look-up ticks (input.look = 0.01/tick, the on-foot pitch path
+//! [M Player_Update's BL+0x8a8 integration, the port's player.rs :1495]) put Bond at pitch
+//! 0.40 (≈ 37° up) with both still bullet-clear and still inside the old cone — but below the
+//! tilted bottom plane: the port marks them undrawn.
+//!
+//! Census note (gas-rng-draws-3): the original third census guard, placement 261 (18.6 u,
+//! 38.3° — inside only via the world-sphere slack), is DELETED before tick 120 on the shared
+//! RNG stream: he carries prop 0x59 and the GO_TO_GOAL arrival tail deletes such guards
+//! [M 0x165640:47-82]; on the re-landed stream he finishes his route during the intro. The
+//! census is re-derived onto the staying guards 158/161 (the only other present, clear,
+//! in-frustum guards at the start view — every other candidate is occluded). The world-sphere
+//! slack's start-view coverage left with 261; `in_view`'s slack term itself is unchanged code
+//! [M 0x133070 obj+0x8C].
 
 use nf_view::scene::Sim;
 
@@ -79,10 +87,12 @@ fn looking_up_leaves_the_below_plane_guards_undrawn() {
 
     // Baseline at the start view (pitch ≈ 0): both guards are on-screen and drawn — the sister's
     // state, asserted here so the rejection below is provably the pitch's work.
-    {
-        let d261 = guard(&sim, 261);
-        assert!(ray_clear(&sim, d261), "placement 261 occluded at the start view — geometry moved, re-derive");
-        assert!(d261.drawn, "placement 261 undrawn at the start view (frustum {})", frustum(&sim, d261));
+    // (261, the original baseline guard, is deleted on arrival by the game's own law
+    // [M 0x165640:47-82]; the census is re-derived onto the staying 158/161.)
+    for p in [158usize, 161] {
+        let d = guard(&sim, p);
+        assert!(ray_clear(&sim, d), "placement {p} occluded at the start view — geometry moved, re-derive");
+        assert!(d.drawn, "placement {p} undrawn at the start view (frustum {})", frustum(&sim, d));
     }
 
     // The real input path: look up 0.01 (π/2 units) per tick for 40 ticks → pitch ≥ 0.40 (≈ 37°).
@@ -91,29 +101,24 @@ fn looking_up_leaves_the_below_plane_guards_undrawn() {
     for _ in 0..40 { step(&mut sim, up); }
     assert!(sim.bond.pitch >= 0.39, "the look input did not raise the pitch ({})", sim.bond.pitch);
 
-    // placement 261 (≈ 16.7 units, 43° off the pitched aim): still bullet-clear, still inside the
-    // old cone — and below the tilted bottom plane. [M 0x1e62d8:71 + 0x1e89e0: the object is drawn
-    // only inside the four side planes; a point this far below fails the bottom plane.]
-    {
-        let d = guard(&sim, 261);
-        assert!(ray_clear(&sim, d), "placement 261 occluded after the look-up — geometry moved, re-derive");
-        assert!(old_cone(&sim, d), "placement 261 left the old cone too — the discriminator moved, re-derive");
-        assert!(!frustum(&sim, d), "placement 261 still inside the frustum after the look-up — re-derive");
-        assert!(!d.drawn, "placement 261 drawn while below the tilted frustum — the stand-in behaviour");
-    }
-    // placement 158 (≈ 4.9 units): the same verdict, a nearer guard.
-    {
-        let d = guard(&sim, 158);
-        assert!(ray_clear(&sim, d), "placement 158 occluded after the look-up — geometry moved, re-derive");
-        assert!(!frustum(&sim, d), "placement 158 still inside the frustum after the look-up — re-derive");
-        assert!(!d.drawn, "placement 158 drawn while below the tilted frustum — the stand-in behaviour");
+    // placements 158 (≈ 5.0 units) and 161 (≈ 2.5 units) after the look-up: still bullet-clear,
+    // still inside the old cone — and below the tilted bottom plane. [M 0x1e62d8:71 + 0x1e89e0:
+    // the object is drawn only inside the four side planes; a point this far below fails the
+    // bottom plane.]
+    for p in [158usize, 161] {
+        let d = guard(&sim, p);
+        assert!(ray_clear(&sim, d), "placement {p} occluded after the look-up — geometry moved, re-derive");
+        assert!(old_cone(&sim, d), "placement {p} left the old cone too — the discriminator moved, re-derive");
+        assert!(!frustum(&sim, d), "placement {p} still inside the frustum after the look-up — re-derive");
+        assert!(!d.drawn, "placement {p} drawn while below the tilted frustum — the stand-in behaviour");
     }
 }
 
 /// The sister: at the start view the on-screen guards stay drawn — the frustum must not over-reject
 /// (guards-0c's slide fix rides this: an undrawn guard slides with no gait [M NDrone2_DoAnimation
-/// 0x149f88]). placement 261 sits 0.7° OUTSIDE the raw 37.57° half-angle and passes only through the
-/// world-sphere slack [M 0x133070 obj+0x8C] — dropping the slack flips it and fails here.
+/// 0x149f88]). Census re-derived onto the staying guards 158/161 (see the header note: 261 is
+/// deleted on arrival [M 0x165640:47-82]; his 0.7°-outside-the-half-angle slack coverage left
+/// with him — the slack term itself is unchanged [M 0x133070 obj+0x8C]).
 #[test]
 fn in_frustum_guards_stay_drawn_at_the_start_view() {
     let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return; };
@@ -121,7 +126,7 @@ fn in_frustum_guards_stay_drawn_at_the_start_view() {
     let idle = nf_game::player::Input::default();
     for _ in 0..120 { step(&mut sim, idle); }
     assert!(sim.bond.pitch.abs() < 0.05, "the start view is not level ({})", sim.bond.pitch);
-    for p in [158usize, 161, 261] {
+    for p in [158usize, 161] {
         let d = guard(&sim, p);
         assert!(ray_clear(&sim, d), "placement {p} occluded at the start view — geometry moved, re-derive");
         assert!(frustum(&sim, d), "placement {p} outside the frustum at the start view — re-derive");
