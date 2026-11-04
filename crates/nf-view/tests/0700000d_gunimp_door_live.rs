@@ -412,3 +412,22 @@ fn probe_laser_kill_blast_state() {
         }
     }
 }
+
+/// Mounting narrows the view to 30° and dismounting restores 60° [M GunImp_Activate 0x132f00:`Camera_CalcViewAngles(0x3f060a92)`;
+/// GunImp_Deactivate 0x132c18:42 `Camera_CalcViewAngles(0x3f860a92)`; L audits/live-0d-c5/ctl frames vs audits/render-1104-gunfov].
+#[test]
+fn the_mount_narrows_the_view_and_the_dismount_restores_it() {
+    let Some(mut scene) = mounted_after_plate() else { panic!("the mount") };
+    let fov = nf_view::view_fov(scene.sim.as_ref().unwrap());
+    assert!((fov - 0.523_598_8).abs() < 1e-5, "mounted view angle 0x3f060a92, got {fov}");
+    let sim = scene.sim.as_mut().unwrap();
+    for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); }
+    for _ in 0..120 {
+        sim.step_bond(Default::default(), false, false, true);
+        sim.step_bond(Default::default(), false, false, false);
+        if !sim.drones.props.gunimps.iter().any(|g| g.active) { break; }
+    }
+    assert!(!sim.drones.props.gunimps.iter().any(|g| g.active), "the use press dismounts");
+    let fov = nf_view::view_fov(sim);
+    assert!((fov - std::f32::consts::FRAC_PI_3).abs() < 1e-5, "dismounted view angle 0x3f860a92, got {fov}");
+}
