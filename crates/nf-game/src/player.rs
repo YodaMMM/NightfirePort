@@ -360,7 +360,12 @@ pub struct Bond {
     /// above the feet. The capsule ends and the floor ray hang off this, so a crouched Bond is a
     /// shorter capsule resting closer to his feet (the truck ride parks him at floor + 0.607).
     pub cc: f32,
-    /// `BL+0x90C` (eye drop when crouched) and `BL+0x908`.
+    /// `BL+0x90C` (eye drop when crouched) and `BL+0x908` — the eye's surface offset: 0.7 while
+    /// the head is above the water line, easing to 0.0 under it (`Player_PositionCamera`
+    /// 0x18f5d8:113-128 lerps it 0.1/tick toward `surfaced ? 0.7 : 0.0`; the global is written by
+    /// `Player_MonitorAir` 0x191a70:110/124). The camera head reads it [M `Player_GetHeadPos`
+    /// 0x195aa0:39-51: eye.y = obj+0x34 + BL+0x908 − BL+0x90c]. audit-player-camera-modes: the
+    /// port used to pin it at the standing 0.7 — underwater the game's eye sat 0.7 lower.
     pub crouch_drop: f32,
     pub eye: f32,
     /// `BL+0x928`: ticks falling.
@@ -1546,9 +1551,12 @@ impl Bond {
     /// `+0x89C`) and the HUD air pane are not ported this pass.
     fn monitor_air(&mut self, ctx: &LadderCtx) {
         // The game's refill branch runs for ANY cel (including the −500 default) when the head is above
-        // `cel+0x90` [M 0x191a70:98-111] — air refills on dry land too.
+        // `cel+0x90` [M 0x191a70:98-111] — air refills on dry land too. The head is the standing eye
+        // (the game reads the ANIM head bone [M 0x191a70:50-53]; the port runs no skeleton) — NOT
+        // the camera head: the game's air/fade path never sees BL+0x908, so the drown threshold
+        // stays put while the camera eye dips (audit-player-camera-modes decouple).
         let surface = ctx.water.unwrap_or(-500.0);
-        let head = self.head()[1];
+        let head = self.pos[1] + EYE - self.crouch_drop;
         self.underwater = head < surface && surface > -400.0;
         self.water_fade = if self.underwater { (self.water_fade + (1.0 - self.water_fade) / 60.0).min(1.0) }
             else { (self.water_fade - self.water_fade / 120.0).max(0.0) };
@@ -1566,6 +1574,19 @@ impl Bond {
             self.air_tick = 0;
         }
         self.air = self.air.clamp(0.0, 100.0);
+        // audit-player-camera-modes [M `Player_PositionCamera` 0x18f5d8:113-128]: BL+0x908 — the
+        // camera eye's surface offset — lerps 0.1/tick toward 0.7 while `surfaced` and toward 0.0
+        // under it. The port's `eye` IS that slot (the head reads it, [M `Player_GetHeadPos`
+        // 0x195aa0:39-51]). The game runs the lerp inside PositionCamera's case 0/0xe — every
+        // tick the first-person camera is live, whichever substate — so the ease sits here (after
+        // every substate, where `underwater` is fresh) gated on the same modes: the wire/creep
+        // third-person camera (0xb) and the script/missile/turret cams freeze it in the game too.
+        // The drown head above stays on the standing eye — the game's air path reads the anim
+        // head bone, which never sees BL+0x908.
+        if matches!(self.cam_mode, 0 | 0xe) {
+            let target = if self.underwater { 0.0 } else { EYE };
+            self.eye += (target - self.eye) * 0.1;
+        }
     }
 
     /// One 60 Hz physics tick (the port's `Player_Move` + `Player_Collision` walk body). `swimming`
@@ -2023,9 +2044,13 @@ self.local = [vs / k, vf / k];
         // `View_RotTransMatrix` 0x1e5168 matrix into viewer+0x120, the rot copy to +0xE0, the
         // pos copy to +0xC0, the byte +0x2B cleared [M 0x1bbbf8:5-16]): the port carries the
         // same role as this eye/crouch-drop pair the view builds its camera from.
-        // `Player_PositionCamera`: the crouch drop and the eye ease in.
+        // `Player_PositionCamera`: the crouch drop eases in here (audit-player-camera-modes: the
+        // game's ramp sits in PositionCamera's substate block [M 0x18f5d8:68-89] — substate 4
+        // rises +0.0225·FRAME_RATE_MUL toward 0.45, any substate but the held 0x10 falls toward
+        // 0; the port keys it on the `crouched` flag, which rides substate 4). The eye's surface
+        // ease lives in `monitor_air` (it needs this tick's `underwater`, and the game eases
+        // BL+0x908 in every substate while cam mode 0/0xe, not just the walk/swim bodies).
         self.crouch_drop = if self.crouched { (self.crouch_drop + 0.0225).min(0.45) } else { (self.crouch_drop - 0.0225).max(0.0) };
-        self.eye += (EYE - self.eye) * 0.1;
     }
 }
 

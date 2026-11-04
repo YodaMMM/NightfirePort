@@ -5603,6 +5603,13 @@ impl Sim {
         // first-person gun is gone for the whole sequence (PCSX2: no gun from the 40th dead frame on).
         // MP re-equips at the respawn (`mp_equip_local`).
         if !mp_death_was_active && self.drones.death.active && self.gun.weapon != 0x47 { self.gun.go_to_hands(); }
+        // audit-player-camera-modes [M `Player_PositionCamera` 0x18f5d8:130-132]: while the death
+        // state word (obj+0xf4) is 2/3 the case-0 arm zeroes BL+0x90c EVERY tick — a death out of
+        // the crouch stands the camera eye back up to the standing head (`Player_GetHeadPos`
+        // 0x195aa0 reads obj+0x34 + BL+0x908 − BL+0x90c). The port's dead branch runs no walk
+        // tick, so `crouch_drop` used to freeze at its crouched value and the death camera sat
+        // 0.45 low. Idempotent per dead tick like the game's.
+        if self.drones.death.active { self.bond.crouch_drop = 0.0; }
         // Online, death + respawn belong to the per-slot MP combat (every machine, shared stream).
         if self.net_rng.is_none() && self.net_rng_shared.is_none() { self.step_mp_death_respawn(mp_death_was_active); }
         // fix-script-objects: the script-created AI volumes (`Drone_AIVolume_Create` 0x1376c0 via
