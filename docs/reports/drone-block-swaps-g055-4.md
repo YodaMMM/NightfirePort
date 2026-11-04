@@ -112,3 +112,14 @@ particular spot or camera needed.
 
 not visible to me — no token, credit, context-window or cost figures are shown anywhere
 in this environment's interfaces for this session.
+
+## ntfy failed
+
+- curl: `curl: (28) Connection timed out after 20002 milliseconds`.
+- python3 urllib: the first attempt raised `SyntaxError: bytes can only contain ASCII
+  literal characters` (an em-dash in the message literal); the ASCII retry raised
+  `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`.
+- wget: DNS resolved and the connection attempt was still running when the 25 s timeout
+  killed it (`wget_rc=124`) — no response, no output. The sandbox has no route to
+  ntfy.sh (the same record as g055-3's and the earlier tasks' reports). No notification
+  was delivered from this sandbox.
