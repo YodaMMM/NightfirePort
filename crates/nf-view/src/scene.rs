@@ -7791,7 +7791,11 @@ impl Scene {
         // hud-start: the ENTRY fade is not in this chain any more — it draws UNDER the gameplay
         // HUD (`entry_fade_hud`).
         let fade = sim.drones.exit_fade_view().or_else(|| sim.drones.view_fade);
-        crate::hud::script_overlay(fade, sim.drones.letterbox, &sprites, &self.hud_textures, aspect, flash)
+        let mut f = crate::hud::script_overlay(fade, sim.drones.letterbox, &sprites, &self.hud_textures, aspect, flash);
+        if sim.script_camera().is_some() {
+            f.append(&crate::hud::cutscene_subtitles(self, aspect));
+        }
+        f
     }
 
     /// hud-start: `Player_Init`'s entry fade (`Camera_SetFade(-45, 0xff, 1)` on the player's

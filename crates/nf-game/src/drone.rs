@@ -19050,7 +19050,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let drone_pre: Vec<V3> = self.list.iter().map(|x| x.pos).collect();
         // subtitles-do-spoken: deferred `Sound_DoSubtitle` adds (the per-drone `dr` borrow holds
         // the list; the helper needs `&mut self` — drained after the loop).
-        let mut spoken_subs: Vec<(u32, bool, f32)> = Vec::new();
         for &(_, what, index) in &order {
             if what == 1 { let _pw = crate::prof::scope("ctl: kind 1");
                 self.triggers[index].update(&mut self.channels, &touchers, &self.bullet_contacts_prev, frame);
@@ -20062,21 +20061,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             for id in std::mem::take(&mut dr.anim_stops) { self.audio.stop_all_with_id(id); }
             if let Some(t) = d.sfx { for id in &snd { let h = t.get(*id); self.audio.play3d(h.id, at, None); if !h.looped { self.sounds.push(Sound { id: h.id, pos: at, inner: h.inner, outer: h.outer, weight: h.weight }); } } }
-            // subtitles-do-spoken: `AnimProcessScriptCmds` 0x1c1b38 case 1's `Sound_Play3D(100.0f,
-            // −1, −1, id, bone-0 pos, …)` passes custom = 0 (`daddu t0,zero,zero` in the jal's delay
-            // slot at 0x1c2214), so the node takes the bank's outer, SFXOutputData+8 (node+0x44,
-            // +0x30 = 0 [M 0x1dd548:27-44]); `Sound_ReqestPlaySfx` 0x1dcc68 then sets +0x52 =
-            // dist < outer × 0.5 (the streamed ids' distance arm — the spoken ids carry
-            // SFXOutputData+0x15 = 1 [D]), forced on under a script camera [M :83-99], and
-            // `Sound_UpdateSounds` 0x1dda70 fires
-            // `Sound_DoSubtitle(id)` on the start with +0x52 set — the driver conversation
-            // (`snd2lbl` ids 0xac/0xae [D Snd2Lbl idx 78/79, always-show]) posts here.
-            for id in &snd {
-                let dist = ((self.player_pos[0] - at[0]).powi(2) + (self.player_pos[1] - at[1]).powi(2) + (self.player_pos[2] - at[2]).powi(2)).sqrt();
-                let dur = self.sfx_durations.get((id & 0xfffff) as usize).copied().unwrap_or(0.0);
-                let outer = d.sfx.map_or(20.0, |t| t.get(*id).outer); // 0x41a00000 past the table
-                spoken_subs.push((*id, self.hud_frozen || dist < outer * 0.5, dur));
-            }
             for mut p in dr.drops.drain(..) { p.from = Some(index); self.pickups.push(p); }
             // `Drone_CollisionHandler` (0x140968, WORKLOG 0078): the feet-sphere down-ray + gravity, before the
             // AI-boundary push-out (the game's `AINetwork_GetBoundsPushVectorForSphere` runs last in the handler).
@@ -20097,9 +20081,24 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // X_{K+1} = drawn_K ? 2 : max(X_K − 1, 0).
             dr.drawn_grace = if dr.drawn { 2 } else { dr.drawn_grace.saturating_sub(1) };
         }
-        // subtitles-do-spoken: the deferred `Sound_DoSubtitle` adds (the frame is the sound's
-        // start tick — `Sound_UpdateSounds` 0x1dda70 fires the call on the request tick).
-        for (id, dist_ok, dur) in spoken_subs { self.sound_subtitle(id, dist_ok, dur); }
+        // subtitles-do-spoken: `Sound_UpdateSounds` 0x1dda70 fires `Sound_DoSubtitle` on every
+        // node's start with +0x52 set [M :95-98]. `Sound_ReqestPlaySfx` 0x1dcc68 sets it: always for
+        // a 2-D node [M :34-37]; for a 3-D one, dist < outer × 0.5 only when SFXOutputData+0x15 is
+        // set and no script camera runs [M :83-99]. The outer is the bank's: the scripts' spoken
+        // sounds pass custom = 0 (`daddu t0,zero,zero` in the jal's delay slot at 0x1c2214) [M
+        // 0x1dd548:27-44], and the +0x15 ids also refuse past outer × 1.1, inside the same miss.
+        for (id, pos) in std::mem::take(&mut self.audio.started) {
+            let h = d.sfx.map(|t| t.get(id));
+            let dist_ok = match (pos, h) {
+                (Some(p), Some(h)) if h.cull && !self.hud_frozen => {
+                    let e = [self.player_pos[0] - p[0], self.player_pos[1] - p[1], self.player_pos[2] - p[2]];
+                    (e[0] * e[0] + e[1] * e[1] + e[2] * e[2]).sqrt() < h.outer * 0.5
+                }
+                _ => true,
+            };
+            let dur = self.sfx_durations.get((id & 0xfffff) as usize).copied().unwrap_or(0.0);
+            self.sound_subtitle(id, dist_ok, dur);
+        }
         // `SetupHostageKiller`'s hostage half: hostage +0x2B0 = the killer [M 0x144030:57-59].
         for (hi, ki) in killer_binds { if let Some(h) = self.list.get_mut(hi) { h.captor = Some(ki); } }
         drop(prof_loop);
