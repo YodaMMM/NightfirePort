@@ -631,8 +631,11 @@ pub fn status_line(m: &MpMatch) -> Vec<StatusPart> {
         // "%s%s" (0x2000024, 0x2000023) [M :72-90]; 0x10 alone: 0x2000023 [M :43-52].
         MpEndStatus::Draw if lives => vec![StatusPart::Label(0x0200_0023)],
         MpEndStatus::Draw => vec![StatusPart::Label(0x0200_0024), StatusPart::Label(0x0200_0023)],
-        // Time up outside 0x10: case 2 prints "%s%s" (0x2000028, 0x1c9) and skips the sort [M 0x184bd0:42-50].
-        MpEndStatus::None => vec![StatusPart::Label(0x0200_0028), StatusPart::Label(0x1c9)],
+        // Time up outside 0x10: case 2's sprintf format is the plain "%s" at 0x30cbf0, with
+        // bind(0x2000028) "Time Up!" as its argument and bind(0x1c9) "Press START" a spare one it
+        // never reads [M disasm 0x184da8-0x184de0: a1 = s0, a2 = s1 in the jal's delay slot, a3 = the
+        // second bind; L ee_start_05.bin @0x30cbf0] — the line reads "Time Up!" alone.
+        MpEndStatus::None => vec![StatusPart::Label(0x0200_0028)],
     }
 }
 

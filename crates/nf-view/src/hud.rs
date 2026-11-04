@@ -1555,8 +1555,18 @@ fn mp_panes(h: &mut Hud, s: &crate::scene::Sim, t: &nf_formats::hud::HudTables) 
     }
 
     // The clock: font 1, centred, white (MPTimeInfo colour 0xffffffff — saturating) with the
-    // black colour2 outline [L 0x2a4710]; the time-limit gate [M 0x184268:138].
-    if m.settings.time_limit != -1 {
+    // black colour2 outline [L 0x2a4710]. The write gate has TWO arms [M MP_CheckForEndCondition
+    // 0x184268]: the demolition/protection rounds run on the ROUND clock MPGame+0x194 and write
+    // whenever it is > 0 — no −1 check (:57, reached from the 0x20000040/0x20000080 arm) — while
+    // every other scenario writes only when the MATCH limit is set, `MPSettings+0x1a0 != -1`
+    // (:142), and never after the 0xfe time-up latch. The port's round default (60.0 when the
+    // menu limit is negative [M 0x183438:53]) lives in `game.limit`, so the demolition gate keys
+    // on that — the settings gate hid the round clock on unlimited demolition/protection matches
+    // (audit-sprite-set-text).
+    let round_clock = m.settings.scenario == nf_game::mp::scenario::DEMOLITION
+        || m.settings.scenario == nf_game::mp::scenario::PROTECTION;
+    let clock_on = if round_clock { m.game.limit > 0.0 } else { m.settings.time_limit != -1 };
+    if clock_on {
         let clock = snap.timer_string();
         outlined_text(h, Anchor::Centre, &t.font_header, HEADER_FONT_TEX, 1, &clock, SW / 2.0, 32.0, true, gs(0xffffff, 0xff), gs(0, 0xff));
     }
