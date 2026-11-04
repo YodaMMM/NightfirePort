@@ -143,10 +143,13 @@ closed:
 
 ## Verification
 
-- The full four-crate suite (`python3 tools/test/suite.py`, NF_ISO set, per-binary time limit):
-  see the total line below.
-- Per-binary pass counts for the families touched by this audit are listed from the same run.
-- SUITE_RESULTS_PLACEHOLDER
+- This branch's only commits are docs (WORKLOG + this report) — **no code changes**, so the suite
+  obligation has nothing of mine to regress: the run below is master's own baseline.
+- The full four-crate suite was launched in the background (`python3 tools/test/suite.py`, NF_ISO set)
+  at 18:48 UTC from a cold target: at hand-off (19:03 UTC) it was still in its build phase (target
+  1.9 GB, runner alive, no per-binary lines yet). The runner kept going after hand-off; the driver's
+  batch run and the next session on this branch can read its total from `suite.out` / `../suite.log`.
+  Nothing on this branch can turn a suite binary red that master itself does not.
 
 ## What's left
 
