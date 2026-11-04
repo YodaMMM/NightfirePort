@@ -62,3 +62,27 @@ Progress:
   — the wedge, measured) / 1 ignored (the d3 00agent, unchanged). The report written; the
   full suite not run this window (the final tree's only source diff vs master is this test
   file's wrap + docs).
+
+## real-health-14-00agent-2 (2026-11-04)
+
+- [13:56-15:30 UTC] Cut s/real-health-14-00agent-2 from origin/s/real-health-14-agent-00agent
+  + merged origin/master (5918eb5f). Re-landed the prior session's crossing work and measured
+  it leg by leg: the cc fix (971e480b cherry-picked as 3c011896), the two SkyBridge crossing
+  west-drifts (strafe +1.0 for 15 airborne ticks; the trench landing passes under the STANDING
+  capsule — (45.08, 0.51, 62.49) measured), the four vent-lane windows widened to p[1] < 3.6
+  (lane true at y 3.468 measured), and the lid leg re-worked: the report's hop-over is refuted
+  by measurement (the standing capsule jams at the mouth's lintel — vel (0,0,0) freeze, hop
+  arcs squashed at +0.032, and the stand gate's +0.95 LOS passes UNDER the lintel while
+  crouched), so the leg crosses on the game's own crouch toggle (real input [M
+  Player_HandleJump]) — over true measured to (45.13, 3.05, 40.02).
+- [15:00 UTC] The next exposed leg: the crawl jams at the mezzanine's west lip (segment hit
+  0.124) and NO stand spot exists along the lane (the headroom LOS blocked z 42.2..40.0 — a
+  low duct). Both jams are the live-push vs dead-tail divergence [M 0x109da0:447]; the
+  NF_WALK_CLIP=1 / NF_WALK_GHOST=1 experiments both break earlier legs (measured 1.9 s
+  panics) — hour-scale to re-land. The standing capsule re-rolls five master-green walks
+  (2 passed / 7 failed measured whole), so the tree returned to the wrap-only state at the
+  tip (549b5d20); the re-land commits (3c011896 + 71d0651c) stay in the pushed history.
+- [15:29 UTC] Final battery: walkreal_07000014_live 8 passed / 1 failed (the d2 agent wedge —
+  the task continues from it) / 1 ignored (the d3); 0700000a 12/0/3, 07000012 3/0/0,
+  0700001b 17/0/2, 07000002 3/0/1, 07000005 14/0/0, 0700000d 1/0/1,
+  fix_guard_first_shot_live 1/0/0 — all green. The full suite did not fit this window.
