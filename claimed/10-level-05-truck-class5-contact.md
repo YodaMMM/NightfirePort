@@ -1,3 +1,6 @@
 # level-05-truck-class5-contact — the truck ride's own contact
 
 The trigger audit's item #11: the 05 truck ride's class-5 contact is not ported. Read the player_touchers notes in crates/nf-game/src/drone.rs and Trigger_Hit 0x1b1fc8:27-47 (class 3 -> mask 8, 2 -> 0x10, 5 -> 2, 0x4a -> 0x10). fix_truck_live pins the ride crouched; whether a standing rider fires the park plate ch 0x70 is unmeasured, and a rider who stays standing must not be stuck with an unfinishable level. Port what the decompile says for the truck's contact with the park plate, with addresses, and pin the standing and crouched rides on real input. If the decompile cannot settle the standing case, say exactly which live read would. Every walkreal_*_live; the full suite total line.
+
+---
+claimed-by: sandbox7 at 2026-11-04T11:26Z
