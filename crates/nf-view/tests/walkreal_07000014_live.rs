@@ -970,13 +970,29 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// the scoped floor, d 2.70 short of the drop (32.50, 0.83, 33.29), grounded=false, and the
 /// leg's cap panics (walker_b2.rs:641) — the d3 fights' displacement (40 return-fire fights,
 /// 22 hits for 50.0 by that tick — half the budget gone at the landing) puts Bond off the leg's
-/// laid line and the resupply approach cannot re-ground him. The d2 sister rode a TOP-UP (its
-/// wrapper lacks the `with_real_damage` wrap — flagged to the merge owner), so no real-health
-/// d2 baseline exists to diff against. NEXT LEVERS: a d3-gated re-ground before the landing
-/// resupply (a settle tick loop, the skip-hand-back's grounding pattern), or a d3-gated direct
-/// walk_to the drop's cell bypassing the resupply nav, or the fights' smoother early game (the
-/// first 50.0 went in the infiltration grind — the 05-07 sniper-stand law applied to the
-/// stairwell's AIM pairs).
+/// laid line and the resupply approach cannot re-ground him.
+///
+/// MEASURED AGAIN (real-health-14-00agent-5): the d2 sister WITH the `with_real_damage` wrap
+/// (the top-up off, the merge owner's flag) wedges the SAME way on master's tree — the "1.72
+/// landing" leg cap at tick 25740 with Bond floating at (33.90, 0.68, 35.38) d 0.81 short,
+/// grounded=false, health 32.5 (36 hits for 67.5, 31 fights — the BUDGET SURVIVES; the wedge is
+/// not a death) — so a real-health d2 baseline still does not exist; the wrap lands only with
+/// the wedge fixed. The wedge is a HOVER DITHER, not a static trap: the trace shows grounded
+/// flickering on single ticks between floats (each ground tick zeroes vel, the next float
+/// re-accumulates ~0.003 of fall, an up-facing push gives it back) — pos never descends,
+/// float_ticks never accumulates, the walker's recovery hop can't fire, and 60+ QUIET no-input
+/// ticks (the probe's bare-pose ground takes <100) do NOT break it — the hover is the port's
+/// fallback radial push holding the capsule where the game's dead push-tail [M 0x109da0:431-447,
+/// the -3 report's ref reading] would give none. The mezzanine-lip question is CLOSED this
+/// window (see docs/reports/real-health-14-00agent-5.md): the fresh-boot hold at x 45.134 is
+/// the GAME's own behaviour (the port's 45.1339 matches), the walk's route crosses west at the
+/// flush lid (z ≈ 42.37, probe14_lip_route arm B) or the south opening (z ≤ 39.4, arm C) — the
+/// hold band is only z ≈ 39.9..42.2 and no leg needs to push through it. NEXT LEVERS (in
+/// order): (1) the sim-side hover fix at the pocket — a scoped push rule that lets the fall
+/// complete where the game's tail is structurally dead (NOT the dropped -4 branch's global
+/// honest_ref; scope it to the failed-ref up-facing hold or to this pocket's cel), then the d2
+/// wrap + this un-ignore are one-liners; (2) a d2/d3-gated fight-quiet approach so the
+/// displacement never reaches the pocket; (3) the stairwell AIM-pair stands.
 #[test]
 #[ignore = "00 Agent: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
