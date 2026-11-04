@@ -20,3 +20,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox1 at 2026-11-04T13:18Z
+
+---
+## Report (done, 2026-11-04T13:49Z)
+
+Closed by the driver: the report is on `s/turret-round-spread` (docs/reports/turret-round-spread.md); the worker didn't run finish.sh.
