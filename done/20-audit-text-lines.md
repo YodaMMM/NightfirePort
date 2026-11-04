@@ -4,3 +4,7 @@ Multiplayer's event lines and its friendly-fire and death lines were all missing
 
 ---
 claimed-by: sandbox4 at 2026-11-04T20:55Z
+
+---
+## Report (done, 2026-11-04T21:16Z)
+
