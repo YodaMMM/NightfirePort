@@ -198,6 +198,49 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
     eprintln!("[014] {label}: ch {want:#x} on at +{} ticks (laser cut)", w.total_ticks - start);
 }
 
+/// The east vent lane south over its flush lid (z 42.16 [D #655/#600]): the STANDING capsule
+/// jams at the mouth's lintel — the measured freeze at (45.13, 3.416, 42.71) has vel (0,0,0),
+/// grounded, the walk step cancelled by the live push displacement, and the hop arcs squashed
+/// at +0.03 by the same contact (the lintel sits just over the standing capsule's top 4.451,
+/// so the headroom-gated jump cannot clear it either) — the port's live push vs the game's
+/// dead push tail [M Intersect_CylGeom 0x109da0:447 — the +0x50 DeltaP lifetime guard]. The
+/// game's own move through a low mouth is the CROUCH: a crouch press edge drops Bond to the
+/// 0.55 capsule (the flag AND cc, paired [M Player_HandleJump]) and a second press stands him
+/// on the open mezzanine (the stand re-press needs headroom [M the Toggle arm]) — real input,
+/// no pokes. Runs the leg crouched and reports whether Bond stood at the target.
+fn lane_south_over_the_lid(w: &mut Walker, target: [f32; 3], label: &str) -> bool {
+    let mut over = false;
+    let mut stood = false;
+    for i in 0..2500 {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            if p[2] < target[2] + 0.4 { over = true; }
+            if over && sim.bond.grounded && !sim.bond.crouched { stood = true; break; }
+        }
+        let b = &w.scene.sim.as_ref().unwrap().bond;
+        let want = (target[0] - b.pos[0]).atan2(target[2] - b.pos[2]);
+        // The stand gate's +0.95 LOS passes UNDER the lintel while crouched (crouch root
+        // 2.95 + 0.95 = 3.90 < the lintel ~4.4) — a press at the mouth stands Bond straight
+        // back into the jam (measured this round). So: walk crouched ~45 ticks (z 42.75 →
+        // ~42.2, south of the lintel), pause there while the 60-tick lockout burns, and press
+        // the stand from i>=51 — the first clear-headed tick takes it (the vent-band spot at
+        // z ~40 stays blocked, measured; the open lane z ~41.8..42.5 is the window). A taken
+        // stand sets crouched=false and stops the presses (no ping-pong: the new lockout eats
+        // any press that would re-crouch).
+        let inp = nf_game::player::Input {
+            forward: if i < 45 || i >= 63 { 1.0 } else { 0.0 },
+            crouch: if b.crouched { i >= 51 && i % 3 == 0 && b.grounded } else { i == 0 },
+            turn: wrap_pi(want - b.yaw).clamp(-0.08, 0.08),
+            ..Default::default()
+        };
+        w.tick(inp, false);
+    }
+    let b = w.scene.sim.as_ref().unwrap();
+    eprintln!("[014] {label}: over {over} stood {stood} at {:?}", b.bond.pos);
+    over && stood
+}
+
 /// The crouch toggle the walker lacks (Act::CrouchOn is unreachable in walk_to): set the field
 /// the way the game's crouch hold does and give the stance a tick to settle.
 fn set_crouch(w: &mut Walker, on: bool) {
@@ -307,10 +350,27 @@ fn the_east_duct_route_reaches_the_stairwell_slot() {
             if b.grapple.is_none() && b.grounded && b.pos[1] < 1.0 { down = true; break; }
         }
         let b = &w.scene.sim.as_ref().unwrap().bond;
-        let inp = nf_game::player::Input {
-            forward: 1.0, jump: i % 25 == 0,
-            turn: wrap_pi(std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
-            ..Default::default()
+        // The STANDING capsule's spine sphere catches the east walkway's west-edge corner (x
+        // 44.54, top 2.37 [D probe14_room]) when the falling root passes the walkway-top level
+        // at x >= ~43.5 and the push arms `walkable` — Bond hangs on the edge. The game's own
+        // air control is the fix: the strafe lane applies airborne [M Player_Move 0x191dd0],
+        // and the probe sweep of the gap [L real-health-14-agent-00agent] reads the trench
+        // -0.60 first in every column x 41.8..44.2 at z 62.0..63.55 — so the release drifts
+        // WEST 15 ticks (the hang faces the point yaw ~2.09, and strafe + is left of it [M the
+        // move quad (c*vs, -s*vs)]) and lands x ~42.9..43.4, clear of both edges. (The pinned
+        // trench landing passed only because the buggy crouch capsule fell past the catches.)
+        let inp = if i < 15 {
+            nf_game::player::Input {
+                strafe: 1.0,
+                turn: wrap_pi(std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
+                ..Default::default()
+            }
+        } else {
+            nf_game::player::Input {
+                forward: 1.0, jump: i % 25 == 0,
+                turn: wrap_pi(std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
+                ..Default::default()
+            }
         };
         w.tick(inp, false);
     }
@@ -479,10 +539,27 @@ fn walk_infiltration_to_handback(w: &mut Walker) {
             if b.grapple.is_none() && b.grounded && b.pos[1] < 1.0 { down = true; break; }
         }
         let b = &w.scene.sim.as_ref().unwrap().bond;
-        let inp = nf_game::player::Input {
-            forward: 1.0, jump: i % 25 == 0,
-            turn: wrap_pi(std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
-            ..Default::default()
+        // The STANDING capsule's spine sphere catches the east walkway's west-edge corner (x
+        // 44.54, top 2.37 [D probe14_room]) when the falling root passes the walkway-top level
+        // at x >= ~43.5 and the push arms `walkable` — Bond hangs on the edge. The game's own
+        // air control is the fix: the strafe lane applies airborne [M Player_Move 0x191dd0],
+        // and the probe sweep of the gap [L real-health-14-agent-00agent] reads the trench
+        // -0.60 first in every column x 41.8..44.2 at z 62.0..63.55 — so the release drifts
+        // WEST 15 ticks (the hang faces the point yaw ~2.09, and strafe + is left of it [M the
+        // move quad (c*vs, -s*vs)]) and lands x ~42.9..43.4, clear of both edges. (The pinned
+        // trench landing passed only because the buggy crouch capsule fell past the catches.)
+        let inp = if i < 15 {
+            nf_game::player::Input {
+                strafe: 1.0,
+                turn: wrap_pi(std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
+                ..Default::default()
+            }
+        } else {
+            nf_game::player::Input {
+                forward: 1.0, jump: i % 25 == 0,
+                turn: wrap_pi(std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
+                ..Default::default()
+            }
         };
         w.tick(inp, false);
     }
@@ -644,7 +721,7 @@ fn walk_infiltration_to_handback(w: &mut Walker) {
             let sim = w.scene.sim.as_ref().unwrap();
             let b = &sim.bond;
             let p = b.pos;
-            if b.grapple.is_none() && b.grounded && p[1] > 1.8 && p[1] < 3.4
+            if b.grapple.is_none() && b.grounded && p[1] > 1.8 && p[1] < 3.6
                 && p[2] < 48.4 && p[0] > 44.0 && p[0] < 47.0 {
                 lane = true;
                 break;
@@ -666,7 +743,7 @@ fn walk_infiltration_to_handback(w: &mut Walker) {
             let sim = w.scene.sim.as_ref().unwrap();
             let b = &sim.bond;
             let p = b.pos;
-            if b.grapple.is_none() && b.grounded && p[1] > 1.8 && p[1] < 3.4
+            if b.grapple.is_none() && b.grounded && p[1] > 1.8 && p[1] < 3.6
                 && p[2] < 48.4 && p[0] > 44.0 && p[0] < 47.0 {
                 lane = true;
                 break;
@@ -690,7 +767,7 @@ fn walk_infiltration_to_handback(w: &mut Walker) {
     // flush in the lane floor [D probe14_mouthfin A: 2.38->2.40 at z 42.3..42.2] — to the
     // mezzanine, then WEST across the sloped connector (z 39.5..38.25, 2.15..2.40 [D
     // probe14_mouthfin D grid]) to the #301 drop band.
-    w.walk_to(Wp::new(45.0, 2.4, 40.0).r(0.8), "the lane south past the mouth");
+    lane_south_over_the_lid(w, [45.0, 2.4, 40.0], "the lane south past the mouth");
     let _ = w.try_walk_to(Wp::new(44.9, 2.4, 39.2).r(0.8), "the lane south to the connector");
     let _ = w.try_walk_to(Wp::new(40.7, 2.3, 39.0).r(1.2), "the mezzanine west across the connector");
     // The SP #276 cut-scene (0x06000833, 1400 ticks [D decode]) writes ch 0x47 at its last tick.
@@ -1510,10 +1587,27 @@ fn walk_to_the_vent_grab(w: &mut Walker) -> (u32, [f32; 3], f32) {
             if b.grapple.is_none() && b.grounded && b.pos[1] < 1.0 { down = true; break; }
         }
         let b = &w.scene.sim.as_ref().unwrap().bond;
-        let inp = nf_game::player::Input {
-            forward: 1.0, jump: i % 25 == 0,
-            turn: wrap_pi(std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
-            ..Default::default()
+        // The STANDING capsule's spine sphere catches the east walkway's west-edge corner (x
+        // 44.54, top 2.37 [D probe14_room]) when the falling root passes the walkway-top level
+        // at x >= ~43.5 and the push arms `walkable` — Bond hangs on the edge. The game's own
+        // air control is the fix: the strafe lane applies airborne [M Player_Move 0x191dd0],
+        // and the probe sweep of the gap [L real-health-14-agent-00agent] reads the trench
+        // -0.60 first in every column x 41.8..44.2 at z 62.0..63.55 — so the release drifts
+        // WEST 15 ticks (the hang faces the point yaw ~2.09, and strafe + is left of it [M the
+        // move quad (c*vs, -s*vs)]) and lands x ~42.9..43.4, clear of both edges. (The pinned
+        // trench landing passed only because the buggy crouch capsule fell past the catches.)
+        let inp = if i < 15 {
+            nf_game::player::Input {
+                strafe: 1.0,
+                turn: wrap_pi(std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
+                ..Default::default()
+            }
+        } else {
+            nf_game::player::Input {
+                forward: 1.0, jump: i % 25 == 0,
+                turn: wrap_pi(std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
+                ..Default::default()
+            }
         };
         w.tick(inp, false);
     }
@@ -1615,7 +1709,7 @@ fn walk_to_the_vent_grab(w: &mut Walker) -> (u32, [f32; 3], f32) {
             let sim = w.scene.sim.as_ref().unwrap();
             let b = &sim.bond;
             let p = b.pos;
-            if b.grapple.is_none() && b.grounded && p[1] > 1.8 && p[1] < 3.4
+            if b.grapple.is_none() && b.grounded && p[1] > 1.8 && p[1] < 3.6
                 && p[2] < 48.4 && p[0] > 44.0 && p[0] < 47.0 {
                 lane = true;
                 break;
@@ -1635,7 +1729,7 @@ fn walk_to_the_vent_grab(w: &mut Walker) -> (u32, [f32; 3], f32) {
             let sim = w.scene.sim.as_ref().unwrap();
             let b = &sim.bond;
             let p = b.pos;
-            if b.grapple.is_none() && b.grounded && p[1] > 1.8 && p[1] < 3.4
+            if b.grapple.is_none() && b.grounded && p[1] > 1.8 && p[1] < 3.6
                 && p[2] < 48.4 && p[0] > 44.0 && p[0] < 47.0 {
                 lane = true;
                 break;
@@ -1649,7 +1743,7 @@ fn walk_to_the_vent_grab(w: &mut Walker) -> (u32, [f32; 3], f32) {
         w.tick(inp, false);
     }
     assert!(lane, "the release lands Bond on the east vent lane (2.40 [D probe14_tunnel A]), got {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
-    w.walk_to(Wp::new(45.0, 2.4, 40.0).r(0.8), "the lane south past the mouth");
+    lane_south_over_the_lid(w, [45.0, 2.4, 40.0], "the lane south past the mouth");
     let _ = w.try_walk_to(Wp::new(44.9, 2.4, 39.2).r(0.8), "the lane south to the connector");
     let mut grab = None;
     for _ in 0..1200 {
