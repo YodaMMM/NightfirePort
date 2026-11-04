@@ -71,3 +71,13 @@ None needed — the pin is against disc bytes + decompile law, not against play 
 ## Usage
 
 not visible to me (no token/credit/context-window figures are exposed in this environment).
+
+## ntfy failed
+
+All three notification fallbacks failed in this sandbox (ntfy.sh is unreachable from here):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "difficulty-gated-placements: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds` (exit 28)
+2. `python3 -c "import urllib.request as u; u.urlopen(...)"` → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "difficulty-gated-placements: done" https://ntfy.sh/nightfire-yoda-8k3x` → killed by
+   the 30 s timeout with no output (exit 124)
