@@ -99,3 +99,12 @@ the full record for the next window.
 
 not visible to me — no token, credit, context-window or cost figures are shown anywhere in this
 environment's interfaces for this session.
+
+## ntfy failed
+
+- curl: `curl: (28) Connection timed out after 20001 milliseconds`.
+- python3 urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`.
+- wget: no response and no output within the 25 s timeout (`timeout 25 wget …` returned empty).
+  The sandbox has no route to ntfy.sh — the same record as the -4, -3 and every earlier task's
+  report. No notification was delivered from this sandbox.
+
