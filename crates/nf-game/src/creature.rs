@@ -506,7 +506,8 @@ mod tests {
         assert!(pool.list[i].dead); // obj+0xF0 bit 0x20
     }
 
-    /// Creature_Hurt: 2.0f per player-class contact [M 0x1352d0:21-24].
+    /// Creature_Hurt: 2.0f per player-class contact [M 0x1352d0:21-24], through the game's
+    /// `Player_HandlePain` damage factor (level 0x01 group, Normal → ×0.7 [M bullet.rs]).
     #[test]
     fn hurt_drops_two_per_player_contact() {
         let mut pool = Creatures::new();
@@ -514,7 +515,9 @@ mod tests {
         let mut health = hp();
         let mut rng = crate::drone::Rng::new(1);
         pool.hurt(i, &[true, false, true], &mut health, &mut rng, 2, 0x0700_0001);
-        assert!((health.health - 96.0).abs() < 1e-4);
+        let expect = 100.0 - 2.0 * (2.0 * crate::bullet::damage_factor(0x0700_0001, 2));
+        assert!((health.health - expect).abs() < 1e-4, "health {} != {}", health.health, expect);
+        assert!((expect - 97.2).abs() < 1e-4, "the factor assumption moved: {}", expect);
     }
 
     /// The waypoints stay inside the roam radius [M 0x1350a8-0x1350d8] and waypoint 0 is
