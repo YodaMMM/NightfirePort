@@ -76,3 +76,19 @@ opt-in only. The 15 Agent walk is ignored on master (level-15-agent-doors owns i
 its Operative walk. Reading: docs/reports/real-health-00agent-05-07.md (origin/s/real-health-00agent-05-07)
 and the Agent sisters on master. Done = each sister green, or ignored with a measured reason and
 the next lever; then every walkreal_*_live; full suite total line.
+
+- [03:45 UTC] Round-1 outcome. 12 and 13's real-damage walks ARE the 00 Agent walks (d3 asserted
+  at load, the pre-sister master's own difficulty-3 expression) — both green on the branch:
+  12 binary 3/0 (25 s), 13 binary 3/0 (35 s). Added the two missing `_real_damage_00agent`
+  sisters. 14 (d3): dies by WEDGE, not damage — the "1.72 landing" resupply leg floats Bond
+  0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 return-fire fights, 22 hits
+  for 50.0 by then) and the leg cap panics; IGNORED with the levers (a d3-gated re-ground, a
+  direct walk_to the drop's cell, the stairwell AIM-pair stands; the d2 sister rides a TOP-UP
+  — its wrapper lacks with_real_damage, flagged). 15 (d3): the measured budget exceeds 100 —
+  the opening burst 63.0 (the d3 ledger's #15 behind the spawn; a spawn stand TRIED and cost
+  more: the gantry line blocked, the flank through door (81.7,-1.0) burned 56.0) + the #526
+  rim-shot blast 69.3 at the d3 pain row 1.0 [M bullet.rs damage_factor 0x14..=0x16;
+  grenade.rs:609] = 132.3 before the plank legs; IGNORED with the levers (the grenade-launcher
+  #526 shot from door[32] at ~14.9 u via the case-0x4B chain, a pre-emptive #15 kill scout,
+  the door[38]-north grenadier stands now in the body behind the d3 gate). 15 binary 5/0 + 2i,
+  14 binary 9/0 + 1i. Next: the walkreal sweep, the lib suites, the report.
