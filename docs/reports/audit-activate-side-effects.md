@@ -173,6 +173,12 @@ Both visible verdicts are headless-verified; a render would make them player-vis
    camera's pose with the pane-16 HUD and no crosshair/health/ammo panes [M 0x1b0058:43-49; the port's
    SecCam pane hud.rs:642-657].
 
+## ntfy failed (partial)
+
+curl: `curl: (28) Connection timed out after 20002 milliseconds`. python3 urllib:
+`urlopen error [Errno 101] Network is unreachable`. The wget fallback exited 0 (empty body, treated as
+delivered).
+
 ## Usage
 
 Session token figures visible to me (read from the Task tool result metadata of the two research
