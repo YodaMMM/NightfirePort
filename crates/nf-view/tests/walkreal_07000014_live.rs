@@ -790,6 +790,11 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
             eprintln!("[014] the descent landed {p:?}");
         }
     }
+    // The stationary-stand window was the descent only (level-14-landing-hover): the west
+    // legs' fights resume their full law here — the d2/d3 walks set
+    // `descent_stationary_fights` across the descent block alone (the field doc carries the
+    // wedge record), and every other caller never sets it.
+    w.dmg.descent_stationary_fights = false;
 
     // Leg 2: west to the Kiko cut-scene touch #381 — the walk's OWN route (level-14-delta-exit-walk).
     // The closed Door_Slide_11A/B pair (ch_lock 0x85 [D placements 151/152]) seals its doorway
@@ -964,7 +969,16 @@ fn walk_the_infiltration_to_the_delta_exit() {
 #[test]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
     // The lane-fight + path-clear laws (opt-in, this level's sister only — set inside the body
-    // behind the difficulty gate; see the body comment for the measured deaths).
+    // behind the difficulty gate; see the body comment for the measured deaths). STILL TOP-UP
+    // (level-14-landing-hover): the `with_real_damage` wrap was MEASURED this window with the
+    // new d2/d3 laws and is NOT landed yet — the walk crossed the 1.72 landing and the whole
+    // descent cleanly (the wedge this branch's laws fix — the landing leg arrived at +280
+    // ticks, the drop west cleared, the descent assert passed on every run), then spent the
+    // budget to 3.2 in the escape-loop grind and died at tick 18851 at (23.08, 1.13, -21.36),
+    // one leg short of the delta doorway. The laws below (the stationary descent, the
+    // escalating cooldowns, the head-hunt) are the measured ground the wrap lands on next
+    // window; the fights' remaining stood-tick exposure (~13-15 in two stands) is the named
+    // leftover. The d3 sister's note carries the full record.
     with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(2));
 }
 
@@ -1009,8 +1023,21 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// honest_ref; scope it to the failed-ref up-facing hold or to this pocket's cel), then the d2
 /// wrap + this un-ignore are one-liners; (2) a d2/d3-gated fight-quiet approach so the
 /// displacement never reaches the pocket; (3) the stairwell AIM-pair stands.
+///
+/// LEVEL-14-LANDING-HOVER re-measure (s/level-14-landing-hover): the landing wedge is fixed
+/// WALK-SIDE — the descent's stationary-stand window (`descent_stationary_fights`, set for
+/// every `difficulty >= 2` body call) ties the fights' feet through the mezzanine descent, so
+/// the back_off shove / creep / lane-resupply fetches never carry Bond under the 1.72 landing
+/// slab into the hover pocket. Measured there: every run crossed the landing cleanly (the
+/// landing leg arrived at +280 ticks, the drop west cleared, the descent assert passed). That
+/// window's d3 blocker was the FIGHTS' BUDGET at accuracy 1.3 [M DroneWeap_DoBulletAccuracy
+/// 0x179740:74-88] — the infiltration grind took 45.0, the failed stands vs the
+/// geometry-blocked far guards the rest, death tick 6786 at (30.27, 0.55, 35.45) — which the
+/// level-14-ignored-walks levers (the trench return-fire stand, the bounded drop loot pass,
+/// the wheel draw) answer. This branch carries BOTH lever sets; the ignore comes off when the
+/// whole d3 walk is green. Real input only; no health, ammo or channel writes.
 #[test]
-#[ignore = "00 Agent: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
+#[ignore = "00 Agent: the fights' budget at accuracy 1.3 — the infiltration grind took 45.0 and the failed stands vs the geometry-blocked far guards the rest; died at tick 6786 at (30.27, 0.55, 35.45) just past the descent. The 1.72-landing wedge is FIXED (the stationary-stand window — every run crossed the landing cleanly); levers: the stairwell AIM-pair stands for the grind, then the d2 wrap, then this"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| with_trench_stand(|| walk_the_infiltration_to_the_delta_exit_at(3))));
 }
@@ -1039,8 +1066,30 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
         // Opt-in per difficulty: the difficulty-1 call sites keep master behaviour.
         w.dmg.back_off = Some(4.0);
         w.dmg.lane_fights = true;
+        // Escalating cooldowns (level-14-landing-hover, measured on this window's master): the
+        // west route's far guards (#8 skin 0x5000087 at (27.7, 1.0, 46.2) [L the death run's
+        // ledger]) sit behind geometry the fights' gun rays never clear from any route spot —
+        // SEVEN stands vs #8 all "killed false", zero rounds landed on him ever, and each
+        // failed stand is stood-tick exposure (the 6621 fight alone cost 18.0; the flat 240
+        // re-took the same spot every 240 ticks — the exact law the 0700000c Agent walk's
+        // opt-in exists for). The escalation walks Bond out of a sight line the stand cannot
+        // answer instead of re-standing him in it; fights that LAND never escalate.
+        w.dmg.escalating_cooldowns = true;
+        // precise_fights was TRIED and REVERTED (measured 2026-11-04): the 0.01 tap gate
+        // starved the stands' own give-up laws and the south loop stretched a leg to 41k
+        // ticks (the fights at 7809 → 49105) — the walk died later on the same budget. The
+        // plain gate stands.
     }
     walk_infiltration_to_handback(&mut w);
+    // Lever 2 (level-14-landing-hover, d2/d3-gated): the fights through the mezzanine descent
+    // run STATIONARY — they still answer the shooters (the measured no-fight window starved
+    // the kill ledger: the unanswered far guards drained the whole 100.0 budget by tick 5328
+    // in leg 2), but the stands' own displacement — the back_off shove, the creep, the lane
+    // resupply's walk_nav_to fetches — never runs, so it can never carry Bond under the 1.72
+    // landing slab into the hover pocket (d1, whose stands never move Bond, lands the slab
+    // every run). The measured wedge record sits on the DamageLog field; the shared function
+    // clears the flag after the descent block — the west legs' fights resume moving there.
+    w.dmg.descent_stationary_fights = difficulty >= 2;
     walk_the_west_route_to_the_switch_band(&mut w);
     // The E press through the REAL Player_Activate use path (the walk's own input): aim at the
     // touch's volume centre with turn/look steering (the cut_fusebox aim convention), then hold

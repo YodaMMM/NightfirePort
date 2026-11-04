@@ -258,6 +258,23 @@ pub struct DamageLog {
     /// strip fights met Bond with the armour gone. A player answers what he SEES. Off = master
     /// behaviour (the lane gun-ray pick) everywhere else — no other walk sets it.
     pub eye_ray_stands: bool,
+    /// OPT-IN (`descent_stationary_fights`, set by the 07000014 d2/d3 walks across the mezzanine
+    /// descent only, level-14-landing-hover lever 2): while the flag is set the fights still run
+    /// (the shooters must die — the measured no-fight window starved the kill ledger and the
+    /// unanswered far guards drained the whole 100.0 budget by tick 5328 in leg 2) but they are
+    /// STATIONARY, d1's stand law: no back_off shove, no creep, no lane resupply fetches — the
+    /// fight's own displacement never runs, so it can never carry Bond under the 1.72 landing
+    /// slab into the hover pocket. The wedge evidence (s/real-health-14-00agent-5's measured
+    /// runs): the fights' stand displacement (the back_off shove `forward: -1.0`, the creep, the
+    /// lane resupply's walk_nav_to fetches) put Bond under the slab — the resupply detour parked
+    /// him floating at (33.90, 0.68, 31.14) and the landing leg wedged at (33.90, 0.68, 35.38),
+    /// grounded=false at tick 25740; the d3 twin wedged the same way (tick 26340, (33.84, 0.82,
+    /// 30.95)). d1, whose stands never move Bond, lands the slab every run — the displacement,
+    /// not the collision, is what puts Bond in the pocket. The pick and aim laws are UNCHANGED
+    /// (the d2/d3 gun-ray set, the damage-weighted pick, the d3 head-hunt) — only the stand's
+    /// feet are tied. Off = master behaviour: no other walk sets the flag and every fight window
+    /// is unchanged.
+    pub descent_stationary_fights: bool,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
 }
@@ -654,7 +671,12 @@ impl Walker {
         // picks up the guards' own drops instead of walking on (the 12 corridor: clip 1 spare 0
         // at the shotgun guard's door — the fights' silent `!armed` return left Bond standing
         // in the lane [L the walkreal_07000012_real_damage run, 2026-11-02]).
-        let lane = self.dmg.lane_fights || UNSEEN_FIGHTS.with(|c| c.get());
+        // descent_stationary_fights (OPT-IN, the 07000014 d2/d3 descent): the fetch walks are
+        // part of the stand's displacement — tied like the feet (level-14-landing-hover; the
+        // field doc carries the wedge record). A dry gun walks on, the leg's own gate re-fights
+        // from the next spot.
+        let lane = !self.dmg.descent_stationary_fights
+            && (self.dmg.lane_fights || UNSEEN_FIGHTS.with(|c| c.get()));
         if !armed(self) {
             if lane && !self.dmg.resupplying {
                 self.dmg.resupplying = true;
@@ -852,7 +874,12 @@ impl Walker {
                         aim.map(|a| (a[0], a[2])).map_or("none".into(), |a| format!("({:.2},{:.2})", a.0, a.1)),
                         sim.gun.clip, sim.gun.spare);
                 }
-                let crowd = self.dmg.back_off.is_some_and(|r| sim.drones.list.iter().any(|o| o.team == 1 && o.enabled && o.present
+                // descent_stationary_fights (OPT-IN, the 07000014 d2/d3 descent): the stand's
+                // feet are TIED — no back_off shove (crowd) and no creep — d1's stationary
+                // stand with the d2/d3 aim laws kept (level-14-landing-hover lever 2; the
+                // fights still answer the shooters, their displacement never runs).
+                let crowd = !self.dmg.descent_stationary_fights
+                    && self.dmg.back_off.is_some_and(|r| sim.drones.list.iter().any(|o| o.team == 1 && o.enabled && o.present
                     && !o.corpse && o.health > 0.0 && ((o.pos[0] - b[0]).powi(2) + (o.pos[2] - b[2]).powi(2)).sqrt() < r));
                 // The unseen-cover creep: a player pushing toward a guard crouched behind a desk
                 // walks up to the lip until his own eye line clears it over the top (the ray to
@@ -860,7 +887,8 @@ impl Walker {
                 // never while a guard stands inside the back-off range. OPT-IN (`lane_fights`,
                 // the 07000013 walk): the shared walks' stands never move forward (master
                 // behaviour; level-13-lobby-rifles-2).
-                let creep = (self.dmg.lane_fights || self.dmg.unseen_fight) && aim.is_none() && !crowd
+                let creep = !self.dmg.descent_stationary_fights
+                    && (self.dmg.lane_fights || self.dmg.unseen_fight) && aim.is_none() && !crowd
                     && (self.dmg.back_off.is_some() || self.dmg.unseen_fight) && unseen % 12 < 7;
                 if trace && t % 60 == 0 {
                     eprintln!("[rf-trace] fight#{di} t{t}: tgt hp {:.1} at ({:.1},{:.1}) bond ({:.1},{:.1}) hp {:.1} aim {:?} blocked {blocked} err {err:.3} perr {perr:.3} clip {} spare {} creep {creep}",
