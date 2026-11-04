@@ -415,7 +415,11 @@ impl Camera {
     /// The near plane is the game's Ps2Near2 = 0.1 [L ee_start_05.bin; docs/systems/render.md — the
     /// PS2WorldViewVU1Kick2 0x10b2b0 depth mapping's n, f = 2^24 far; the ZBUF range N1/F1 saturates
     /// ≈ 0.114]; the port's older 0.05 showed 5 cm more near content than the game.
-    fn view_proj(&self, aspect: f32) -> ([[f32; 4]; 4], [[f32; 4]; 4]) {
+    fn view_proj(&self, aspect: f32) -> ([[f32; 4]; 4], [[f32; 4]; 4]) { self.view_proj_sheared(aspect, (0.0, 0.0)) }
+
+    /// [`Camera::view_proj`] with `Camera_Shear` 0x1bba38's skew in the view: identity with xs at
+    /// row 1 col 0 and ys at row 0 col 1, scaled by (1+xs, 1+ys, 1+xs) [M :37-41].
+    fn view_proj_sheared(&self, aspect: f32, (xs, ys): (f32, f32)) -> ([[f32; 4]; 4], [[f32; 4]; 4]) {
         let (near, far, f) = (0.1f32, 4000.0f32, 1.0 / (self.fov * 0.5).tan());
         let proj = Mat4::from_cols_array_2d(&[[f / aspect, 0.0, 0.0, 0.0], [0.0, f, 0.0, 0.0], [0.0, 0.0, far / (near - far), -1.0], [0.0, 0.0, near * far / (near - far), 0.0]]);
         let fw = self.dir().normalize();
@@ -426,7 +430,8 @@ impl Camera {
         let s = self.right();
         let u = s.cross(fw);
         let view = |e: Vec3| Mat4::from_cols_array_2d(&[[s.x, u.x, -fw.x, 0.0], [s.y, u.y, -fw.y, 0.0], [s.z, u.z, -fw.z, 0.0], [-s.dot(e), -u.dot(e), fw.dot(e), 1.0]]);
-        ((proj * view(self.pos)).to_cols_array_2d(), (proj * view(Vec3::ZERO)).to_cols_array_2d())
+        let shear = Mat4::from_cols_array_2d(&[[1.0 + xs, (1.0 + ys) * xs, 0.0, 0.0], [(1.0 + xs) * ys, 1.0 + ys, 0.0, 0.0], [0.0, 0.0, 1.0 + xs, 0.0], [0.0, 0.0, 0.0, 1.0]]);
+        ((proj * shear * view(self.pos)).to_cols_array_2d(), (proj * shear * view(Vec3::ZERO)).to_cols_array_2d())
     }
 }
 
@@ -2767,7 +2772,8 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     // the window path feeds it from the front end's AV widescreen row) — see cutscene_frame.
     let game_aspect = scene.sim.as_ref().map_or(4.0 / 3.0, |s| s.view_aspect);
     let (proj_aspect, band) = if cut { cutscene_frame(w as f32, h as f32, game_aspect) } else { (w as f32 / h as f32, [0.0; 4]) };
-    let (vp_shot, _) = cam.view_proj(proj_aspect);
+    let view_shear = scene.sim.as_ref().map_or((0.0, 0.0), |s| s.view_shear);
+    let (vp_shot, _) = cam.view_proj_sheared(proj_aspect, view_shear);
     // The doors' `Door_IsClosed` snapshot for the walk's portal gate (fix-door-portal-links).
     let door_closed = scene.sim.as_ref().map(|s| s.drones.doors.closed_flags());
     // Render aid (NF_NO_PORTAL_CULL): draw every cel — the dev panel's portal-culling OFF — for shots from a `--bond`
@@ -2820,7 +2826,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     });
     let view = target.create_view(&Default::default());
     let depth = gpu::depth_view(&device, w, h);
-    let (vp, vp_rot) = cam.view_proj(proj_aspect);
+    let (vp, vp_rot) = cam.view_proj_sheared(proj_aspect, view_shear);
     let snow = snow_for(scene, cam);
     let hud_owned = shot_hud(scene, proj_aspect, menu, movie.is_some());
     let hud = &hud_owned;
@@ -5928,7 +5934,8 @@ impl App {
                 let game_aspect = self.fe.as_ref().map_or(4.0 / 3.0, |fe| fe.view_aspect());
                 if let Some(sim) = self.scene.sim.as_mut() { sim.view_aspect = game_aspect; }
                 let (proj_aspect, band) = if cutscene { cutscene_frame(g.config.width as f32, g.config.height as f32, game_aspect) } else { (aspect0, [0.0; 4]) };
-                let (vp0, _) = draw_cam.view_proj(proj_aspect);
+                let view_shear = self.scene.sim.as_ref().map_or((0.0, 0.0), |s| s.view_shear);
+                let (vp0, _) = draw_cam.view_proj_sheared(proj_aspect, view_shear);
                 // One visibility walk per frame, shared by the palette's object cull and render's
                 // World cull (fix-portal): the eye's cel from `Camera_CheckLocation` 0x1bae90's
                 // persistent state, the walk from it [M 0x1e86e8].
@@ -6009,7 +6016,7 @@ impl App {
                 };
                 let view = frame.texture.create_view(&Default::default());
                 let aspect = proj_aspect;
-                let (_, vp_rot) = draw_cam.view_proj(aspect);
+                let (_, vp_rot) = draw_cam.view_proj_sheared(aspect, view_shear);
                 let vp = vp0;
                 let snow = snow_for(&self.scene, &draw_cam);
                 // fix-menus: a menu page up → the menu overlay replaces the HUD. fix-menu-movies2:

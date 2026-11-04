@@ -862,6 +862,8 @@ pub struct Sim {
     /// shear runs [M 0x1bba38:49], 0 otherwise (the port's only writer is this trigger). The
     /// draw side reads it for the underwater blur.
     pub global_blur: u8,
+    /// `Camera_Shear` 0x1bba38's (xs, ys) this tick, (0, 0) above water; the view applies it.
+    pub view_shear: (f32, f32),
     /// unported-front-end-menus-3: `Camera_ApplySwing`'s phase (viewer+0x204) [M 0x1bbf40:10]
     /// — advances 2π/(FRAME_RATE·4) per swaying frame (the 4-second cycle).
     pub swing_phase: f32,
@@ -3531,9 +3533,10 @@ impl Sim {
             // cel+0x90 head test) each frame runs `Camera_Shear` 0x1bba38; the blur byte
             // drops when the eye leaves (the port's only GlobalBlur writer).
             if self.bond.underwater {
-                let _ = self.camera_shear();
+                self.view_shear = self.camera_shear();
             } else {
                 self.global_blur = 0;
+                self.view_shear = (0.0, 0.0);
             }
             // unported-front-end-menus-3: `Player_Update` 0x193600:439-441's per-tick sway [M]
             // — the current weapon's swing amount (weapon_data+0x8c, `swing_amount`) × the
@@ -10373,6 +10376,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // blur byte.
                 shear_phase: 0.0,
                 global_blur: 0,
+                view_shear: (0.0, 0.0),
                 swing_phase: 0.0,
             })
         });
@@ -15005,8 +15009,7 @@ impl Sim {
     /// phase) into xs.234 @0x30d798 / ys.235 @0x30d79c, both × 0.025], advances the shear
     /// phase (viewer+0x1e0) by REC_FRAME_RATE and wraps it into [−π, π] [M :26-34], and sets
     /// `GlobalBlur = 0x91` [M :49]. The game builds the identity+skew matrix (scale 1+xs,
-    /// 1+ys, 1+xs) and concats it into the view matrix — the draw side's job (the port's Camera has
-    /// no roll/shear slot yet).
+    /// 1+ys, 1+xs) and concats it into the view matrix — `Camera::view_proj_sheared` on the draw side.
     pub fn camera_shear(&mut self) -> (f32, f32) {
         let (xs, ys) = camera_shear_step(&mut self.shear_phase);
         self.global_blur = 0x91; // [M 0x1bba38:49]
