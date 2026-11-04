@@ -43,9 +43,11 @@ use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
-#[test]
-fn walk_the_warm_chain_to_the_front_entrance_and_out() {
-    let iso = iso();
+/// The whole warm chain (12 → 4A → 13 → out) on real input. `real_damage` = the armour detour
+/// (see the real-damage test below); the wrapper turns the top-up off for every walker the walk
+/// makes. `difficulty` = the menu pick the chain runs at (the front-end's launch path [M
+/// C_SBNFDFCTY 0x216ca8:15]; 3 = the pre-sister byte-identical 00 Agent).
+fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // ---- 07000012 walked (the shared route) ----
     // Agent difficulty (3): the keypad locks' param-6 tag auto-unlocks them at create on
     // Operative [M 0x1ae1f8 tail], and the route's burn leg pins the Agent+ behaviour
@@ -53,17 +55,38 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
     // 0x1b0650's flag arm]). The block drops the scene before the next level loads (a 4 GB
     // test machine OOMs with three resident levels).
     let save = {
-        let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, 3).unwrap());
+        let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, difficulty).unwrap());
+        assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+            "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
+        if real_damage {
+            // The spawn-lobby guards stand ON the first leg and the fights ran point-blank, where
+            // every drone round hits [M DroneWeap_DoBulletAccuracy 0x179740:113-115] — the run
+            // arrived at 13 with 18.5 health and died in the lobby. A player backs off and trades
+            // at range: the stand's opt-in step-back (aim held) while a guard is inside 3.0.
+            w.dmg.back_off = Some(3.0);
+            // The open-lobby lane tactics (wide shooters window, damage-weighted pick, floor-drop
+            // resupply around fights; common/damage_log.rs `lane_fights`).
+            w.dmg.lane_fights = true;
+        }
         tower2::walk_12(&mut w);
         tower2::walk_12_exit(&mut w);
         let sim = w.scene.sim.as_ref().unwrap();
         nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request,
             &sim.drones.inventory, &sim.drones.channels).with_mission(&sim.drones.mission)
+            // ONE difficulty through the mission (level-13-chain-difficulty): the game's
+            // GameState+0x28 (0x2a3790) global survives the level change untouched — its five
+            // writers (bootup 0x1c7e78:25, the difficulty page 0x216ca8:15, MP confirm 0x20ec00:150,
+            // mini-mission 0x1ffb90:22, the PTP return 0x1c8560:36) never run in an on-foot level
+            // change [M whole-decompile grep] — and the next level's creates read the SAME pick
+            // [M 0x136be0:49]. The chain's pick is 00 Agent (3): the 12 route pins the Agent+
+            // roster and the keypad's no-create-unlock burn [M 0x136be0:49, 0x1ae1f8 tail].
+            .with_difficulty(sim.drones.difficulty)
     };
 
     // ---- 0700004A: the spawn drop onto the 0x4D touch (the game's own placement) ----
     let save = {
         let mut w = Walker::new(nf_view::load_with_carry(&iso, "0700004a.bin", false, Some(&save)).unwrap());
+        if real_damage { w.dmg.back_off = Some(3.0); w.dmg.lane_fights = true; }
         w.wait_enabled(3000, "the 4A intro");
         let mut landed = false;
         for _ in 0..600 {
@@ -79,14 +102,19 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
         let sim = w.scene.sim.as_ref().unwrap();
         nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request,
             &sim.drones.inventory, &sim.drones.channels).with_mission(&sim.drones.mission)
+            // The difficulty rides on (the chain's one pick; see the 12 capture above).
+            .with_difficulty(sim.drones.difficulty)
     };
 
     // ---- 07000013 walked ----
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000013.bin", false, Some(&save)).unwrap());
+    if real_damage { w.dmg.back_off = Some(3.0); w.dmg.lane_fights = true; }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x48) && sim.drones.channels.on(0x49) && sim.drones.channels.on(0x4d),
             "the previous parts' channels carry through the warm load [M 0x182270]");
+        assert_eq!(sim.drones.difficulty, difficulty,
+            "the chain's one difficulty rode the warm save into 13 [M GameState+0x28 has no transition-path writer; RamSave::difficulty]");
     }
     w.wait_enabled(3000, "the 13 intro");
     w.wait(120);
@@ -147,6 +175,32 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.bond.cel, Some(28), "the portal-1 cross relinks Bond into the security room's cel [M 0x1e0d58]");
     }
+    if real_damage {
+        // The armour the route passes: the real-damage walk arrives here at single-digit health
+        // (the spawn-lobby trades on 12 + the lobby fights), and the room's south shelf holds the
+        // BodyArmourLight #414 (−27.66, −368.51, 25.57 [D]) — a player takes it. The take is the
+        // game's own walk-over, the armour float to 50 [M Pickup_Handler 0x18e650:220-225].
+        w.walk_to(Wp::new(-27.5, -368.4, 30.0).r(1.2), "13: the room's west lane");
+        // The shelf stand is BESIDE the unit on the room floor: pushing at the placement wedges
+        // on the unit's north face (the 15720-tick run's 6000-tick cap at (−26.55, 26.41), clear
+        // chest ray, floor_ny 1.0 [L the run dump]), and standing ON the unit leaves the take ray
+        // blocked by the unit's own mesh (armour 0 at 0.9 above the floor [L the 9840-tick run]).
+        // From the floor at the unit's east face the sphere centre sits inside `radius + 1.1` of
+        // Bond [M 0x18e148:203-214] and the walk-over takes it.
+        w.walk_to(Wp::new(-27.0, -368.4, 25.57).r(0.6), "13: the BodyArmour shelf");
+        let sim = w.scene.sim.as_ref().unwrap();
+        // KNOWN ITEM (not pinned): the take ray from every spot the walker can reach ends inside
+        // the shelf unit's own mesh — armour 0 from the floor beside it (the 12.9 s run) and from
+        // on top of it (the 9.8 s run, 1.27 from the centre, under the 1.6 radius) [L both run
+        // logs]. The walk takes the detour anyway and reports; the live check (does a fresh-boot
+        // player take #414 standing east of the unit, and what blocks the ray here) goes to the
+        // report. Not a pass/fail assert: the armour is the detour's BONUS, the walk's own
+        // survival is the test.
+        if sim.drones.health.armour < 50.0 {
+            eprintln!("[013] the BodyArmourLight #414 did NOT take at the shelf (armour {} at ({:.2},{:.2},{:.2})) — the take-ray item, see the report",
+                sim.drones.health.armour, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2]);
+        }
+    }
     w.walk_to(Wp::new(-25.5, -368.4, 32.5).r(1.2), "13: the room south-east");
     w.walk_to(Wp::new(-22.0, -368.4, 29.0).r(1.2), "13: the room south");
     w.walk_to(Wp::new(-18.5, -368.4, 26.2).r(1.1), "13: at the shutter panel");
@@ -194,7 +248,10 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
     w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: out of the room");
     w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west again");
     w.walk_to(Wp::new(-6.0, -368.2, 55.0).r(1.5), "13: the lobby south");
-    w.walk_to(Wp::new(-6.2, -368.0, 66.3).r(0.6), "13: the front entrance");
+    // r 0.9: the entrance mouth's gate post wedges the last 0.75 (the 16920-tick run's 6000-tick
+    // cap at (−5.61, 65.83), already inside touch #156's band [D x −8.61..−4.15, z 65.09..67.16])
+    // — the touch and the success band fire from here.
+    w.walk_to(Wp::new(-6.2, -368.0, 66.3).r(0.9), "13: the front entrance");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x50), "the entrance touch #156 writes ch 0x50 [D]");
@@ -259,4 +316,62 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
     // [D]) and is DEAD DATA anyway (gate ch 0x4E has no writer on the disc [D §3]) — the walkreal
     // route ends at the level exit; the E-arm itself is covered by walk_07000013_live.
     eprintln!("[013] walked out in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
+}
+
+#[test]
+fn walk_the_warm_chain_to_the_front_entrance_and_out() {
+    let iso = iso();
+    walk_the_warm_chain(&iso, false, 3);
+}
+
+/// The same chain on REAL damage (level-13-chain-difficulty): no health top-up for any walker
+/// the walk makes, the walker answers whoever shoots (`return_fire`), Bond's death panics with
+/// the death line (common/damage_log.rs). ONE difficulty end to end — the chain's 00 Agent pick
+/// rides the warm saves [M GameState+0x28 has no transition-path writer] — so the 13 lobby fight
+/// runs at the difficulty a player picked on 12. The walk takes the BodyArmour #414 detour the
+/// route passes inside the security room (a player at single-digit health grabs the armour the
+/// level grants him [D the placement; M Pickup_Handler 0x18e650:220-225]) — though the take ray
+/// from every reachable spot ends inside the shelf unit's own mesh (the report's live check; the
+/// detour stays, the take is not pinned).
+///
+/// GREEN as of level-13-lobby-rifles. The old deaths, and what answered them (all [L] run logs,
+/// [D] the named geometry, [M] the cited code):
+/// - the 07000012 south-east bend: the guards fight from AIM_CROUCH_FIRE (0x70) behind the
+///   Office-C desks — every box-centre ray from the lane stops at Office-C_Obj9_computer
+///   (14.99,0.91,−2.10)..(15.73,1.60,−1.33) while the guard's spread pellets clear the lip. The
+///   port's own fire gate (`gun_through_wall` [M 0x178520]) is wired and honest: the cover is
+///   real, so the walker now fights the shooter that is hurting him even when no box is
+///   reachable (the nearest live muzzle — `shooters` already guarantees hit-in-240 or
+///   firing-at-him-now [M the shooters filter]), and the stand CREEPS toward the muzzle until
+///   the ray opens over the desk lip — a player pushing up to cover to see over it.
+/// - the exposure rule gained the gun's stand-in rays: the round leaves the view model low-right
+///   of the eye, and at a wall edge the eye ray cleared while every round died on the jamb (the
+///   07000013 security-room stand, tgt hp pinned at 6.0, clip draining [L the fight#9 trace]) —
+///   `exposed_part` now requires the eye AND both low-lateral gun-offset rays clear.
+/// - the resupply never armed anyone: the arrive radius 1.8 stopped outside a small drop's
+///   `radius + 1.1` take sphere [M 0x18e148:203-214], the y filter chased placed boxes buried
+///   half a unit under the floor, and a taken gun's ammo lands in the INVENTORY (the pass's
+///   clip-only success test read it as dry) — 4 × 6000-tick passes to the same ghost, every
+///   time. Fixed: on-floor y filter, walk-onto arrive 0.6, inventory-aware success, a 12 u
+///   fetch cap (a cross-lobby sprint under rifle + grenade fire is the tick-1102 death, a frag
+///   blast for the remaining 75.5 [L the NF_DMG_TRACE log]), and targets already tried are
+///   skipped.
+/// - the armour shelf/entrance-mouth route fixes are in the leg comments below.
+#[test]
+fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage() {
+    let iso = iso();
+    walker::with_real_damage(|| walk_the_warm_chain(&iso, true, 3));
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty-12-13-14-15): the
+/// same walked chain and the same end, loaded at difficulty 2 the menu way (the front-end's
+/// launch path [M C_SBNFDFCTY 0x216ca8:15]; GameState+0x28 → Drones::difficulty, asserted at
+/// each load). Agent spawns the min-difficulty-2 placements [M Drone_Create 0x136be0:49],
+/// scales Bond's pain by Plr_DMod_Normal [M Player_HandlePain 0x1902c8] and the guards' hit
+/// chance by Accuracy row 2 [M DroneWeap_DoBulletAccuracy 0x179740:74-88]. Real input only; no
+/// health, ammo or channel writes.
+#[test]
+fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage_agent() {
+    let iso = iso();
+    walker::with_real_damage(|| walk_the_warm_chain(&iso, true, 2));
 }

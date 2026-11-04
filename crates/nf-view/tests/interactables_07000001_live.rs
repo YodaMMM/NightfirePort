@@ -377,38 +377,131 @@ fn the_bond_bonus_needs_the_gold_medal() {
         "the west bonus sits at the disc's spot [D #316], got {:?}", bonuses[1]);
 }
 
-/// The bonus's walk-over consumption: blocked on this branch — the bonus floor sits ~1.6
-/// below every floor the walker reaches from either side (the spawn-side nav ends on the
-/// upper hall at y 7.18; the west corridor's low route rides the escort path this harness
-/// walks only with the contact). Blocker: the west-hall bonus floor, listed in the report.
+/// The two Bond bonuses' real reach, on real input — the game's own routes onto both floors.
+/// #315 (−13.244, 5.630, 10.355 [D placement]) stands on the west rooms' low floor (5.34 [D
+/// the disc's collision cels, floor_below at the spot]) UNDER the gallery slab (8.5-8.9 over
+/// x −13.5..−10.5, z 9-13 [D]); the walkable approach is the direct south-west line from the
+/// spawn side — across the south rooms (floors 4.4-4.9 [D]) and a step north into the alcove
+/// — the line the probe walk rides end to end (dxz 0.25 from the pickup at the far end). The
+/// lane-side approach wedges on the trench/curb band at z≈11 (a floor gap east of the alcove,
+/// [D the no-floor strip at z 11, x −15..−7]); no door, no gate on the south-west line.
+/// #316 (−26.790, 9.514, 14.508 [D]) stands on the GALLERY (9.224 [D floor cels at (−26.8,
+/// 14.5)]): the game's own ramp chain [D aipath path 1 nodes 7→8→16→17→18→9] — the west lane
+/// under the gallery (the slab rides z 13.5-16.5 over the lane [D]), through door #2 (−14.06,
+/// 5.35, 13.05 [D]; the east face is the hall's north-west floor, the west face the lane — the
+/// escort's own westward crossing [D the escort route]; no open/lock channel [D params];
+/// E-openable [M 0x1a5170 case 0x1C → Door_Activate; the entry-door test pins the path]),
+/// south at x≈−31 (nodes 2→5), the z≈0 run (nodes 6→7→8), then the STAIR east — the disc's
+/// step cels 5.339 at x −28.0 → 8.620 at x −23.0 at z 0.0-0.5 [D floor_below sweep] — up to
+/// node 9 (−22.29, 9.47, −0.04), then the gallery ring north (nodes 9→15→10→11→12, x≈−21,
+/// y 9.67 [D]) and west along z≈14 (nodes 12→13) over #316. The alcove itself is a sealed
+/// pocket: its north and west sides carry wall stubs (the probe rays hit at z≈10.9-11.9,
+/// x −13.2..−11.5 [D]) and the z≈11 floor gap runs east of it — the only opening is the south
+/// step down to the 4.4 room, the way the walk came in. The takes are the real walked
+/// walk-overs (the case-6 arm logs and consumes [M Pickup_Handler 0x18e650:234-236]). Sister:
+/// a fresh load walks the same south-west line but stops short of the alcove — nothing is
+/// taken.
 #[test]
-#[ignore = "blocker: the west-hall bonus floor is off the walker's reachable set on this branch — see the report"]
 fn the_bond_bonus_walk_over_takes_it() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry_medals(&iso, "07000001.bin", false, None, 1, gold_bits(0x0700_0001))
         .expect("gold load"));
     past_intro(&mut w);
-    let spot = {
+    let spots: Vec<[f32; 3]> = {
         let s = w.scene.sim.as_ref().unwrap();
-        s.drones.pickups.iter().find(|p| p.kind == nf_game::pickup::kind::BOND_BONUS)
-            .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]]).expect("the hall bonus [D #315]")
+        let v: Vec<_> = s.drones.pickups.iter()
+            .filter(|p| p.kind == nf_game::pickup::kind::BOND_BONUS)
+            .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]]).collect();
+        assert_eq!(v.len(), 2, "both kind-6 placements created under the medal [D #315/#316]");
+        v
     };
-    // The stand-in transit onto the bonus's own floor; the take is the real walked walk-over
-    // (the case-6 arm logs and consumes [M Pickup_Handler 0x18e650:234-236]).
-    let sim = w.scene.sim.as_mut().unwrap();
-    sim.bond.pos = [spot[0], spot[1] + 0.4, spot[2] + 1.4];
-    sim.bond.vel = [0.0; 3];
-    drop(sim);
-    w.wait(30);
-    w.walk_to(walker::Wp::new(spot[0], spot[1], spot[2]).r(0.6), "onto the bond bonus");
-    let taken = |w: &Walker| w.scene.sim.as_ref().unwrap().drones.pickups.iter()
+    assert!((spots[0][0] - (-13.243799)).abs() < 0.5 && (spots[0][2] - 10.35467).abs() < 0.5
+        && (spots[0][1] - 5.63).abs() < 0.5, "the hall bonus at the disc's spot, the LOW floor [D #315], got {:?}", spots[0]);
+    assert!((spots[1][0] - (-26.790361)).abs() < 0.5 && (spots[1][2] - 14.508442).abs() < 0.5
+        && (spots[1][1] - 9.51).abs() < 0.5, "the west bonus at the disc's spot, the GALLERY floor [D #316], got {:?}", spots[1]);
+    let gone = |w: &Walker, k: usize| w.scene.sim.as_ref().unwrap().drones.pickups.iter()
         .filter(|p| p.kind == nf_game::pickup::kind::BOND_BONUS)
-        .all(|p| p.gone || p.hidden);
-    for _ in 0..120 {
-        w.tick(Default::default(), false);
-        if taken(&w) { break; }
+        .nth(k).map_or(true, |p| p.gone || p.hidden);
+    // The at-rest pin: after the intro, before anyone walks, BOTH bonuses wait (the guard AI
+    // never consumes them — the pick pass is the player's [M Pickup_Handler 0x18e650]).
+    {
+        let rest: Vec<(bool, bool)> = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
+            .filter(|p| p.kind == nf_game::pickup::kind::BOND_BONUS)
+            .map(|p| (p.gone, p.hidden)).collect();
+        eprintln!("[bonus] at rest after the intro (gone, hidden): {rest:?}");
+        assert!(rest.len() == 2 && rest.iter().all(|&(g, h)| !g && !h),
+            "both bonuses must wait at rest after the intro, got {rest:?}");
     }
-    assert!(taken(&w), "the walk-over consumes the bonus [M 0x18e650:234-236]");
+
+    // Leg 1: the hall bonus — the real walk from the spawn side. The steer rides the south
+    // rooms (floors 4.4-4.9 [D collision cels]) — the raw line to the bonus drifts west into
+    // the z≈0 pit band, so the south-room anchor comes first — then steps north into the
+    // bonus's alcove (5.34, under the gallery slab 8.5-8.9 [D]); the probe walk rode this
+    // whole line (its far end sat dxz 0.25 from the pickup, take fired). The lane-side
+    // approach wedges on the trench/curb band at z≈11 (a floor gap east of the alcove, [D the
+    // no-floor strip at z 11, x −15..−7]); no door, no gate on the south-west line.
+    w.walk_to(walker::Wp::new(-9.5, 5.8, 8.0).r(1.4), "the south room");
+    w.walk_to(walker::Wp::new(spots[0][0], spots[0][1] + 0.4, spots[0][2]).r(0.7), "onto the hall bonus");
+    w.wait(30);
+    assert!(gone(&w, 0), "the walked-over hall bonus is consumed [M 0x18e650:234-236], bond {:?}",
+        w.scene.sim.as_ref().unwrap().bond.pos);
+    eprintln!("[bonus] the hall bonus taken at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+
+    // Leg 2: back out the way the walk came in (the sealed pocket's only opening is the south
+    // step [D the wall stubs north/west of the alcove]), then the nav graph carries the walk
+    // to the hall stage (the same graph the monitor test rides from the spawn side).
+    w.walk_to(walker::Wp::new(-9.5, 5.8, 8.0).r(1.4), "back to the south room");
+    w.walk_nav_to([2.9, 6.3, 16.3], "stage into the hall (east door)", 3.0);
+    // Leg 3: the lane west, the hall's north-west floor, then through door #2 — the real E
+    // path [M 0x1a5170 case 0x1C → Door_Activate] — into the west lane under the gallery.
+    w.walk_nav_to([0.6, 6.0, 14.3], "the west corridor lane", 1.4);
+    let (dpos, di) = {
+        let s = w.scene.sim.as_ref().unwrap();
+        walker::door_near(s, [-14.06, 5.35, 13.05]).expect("door #2 [D placement]")
+    };
+    w.walk_nav_to([dpos[0] + 2.2, dpos[1] + 0.6, dpos[2] + 0.9], "east of door #2", 1.2);
+    w.use_door(di, "door #2 (the west lane)");
+    w.walk_to(walker::Wp::new(-16.2, 6.4, 13.8).r(1.0), "through door #2 westward");
+    // Leg 4: the lane west under the gallery, then the corridor's south-west corner and the
+    // south run (the AI's own node chain [D aipath path 1: 19→0→1→2→5→6→7→8]).
+    w.walk_nav_to([-26.24, 6.4, 14.48], "the lane under the gallery", 1.8);
+    w.walk_nav_to([-31.2, 6.4, 14.68], "the corridor's south-west corner", 1.8);
+    w.walk_nav_to([-30.88, 6.4, 4.95], "the south run", 2.0);
+    // The foot's own approach is the AI's exact chain — the direct east cut wedges on the
+    // stair's side wall [D path-1 links 5→6→7→8; the wall the probe ray hit at z≈1.3].
+    w.walk_nav_to([-32.96, 6.4, 1.51], "the south run's end", 1.6);
+    w.walk_nav_to([-33.0, 6.4, -0.08], "the south-west corner", 1.6);
+    w.walk_nav_to([-28.91, 6.4, -0.04], "the ramp foot", 1.6);
+    eprintln!("[bonus] at the ramp foot at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    // Leg 5: the stair east — the disc's own step cels [D 5.339 at x −28.0 → 8.620 at x −23.0,
+    // z 0.0-0.5] — up to the gallery's south-east node (path-1 node 9, y 9.47 [D]).
+    w.walk_to(walker::Wp::new(-22.29, 9.9, -0.04).r(1.2), "up the stair to the gallery");
+    eprintln!("[bonus] on the gallery at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    assert!(w.scene.sim.as_ref().unwrap().bond.pos[1] > 8.6,
+        "the stair must land Bond on the gallery (centre above the 9.224 slab's floor [D]), got {:?}",
+        w.scene.sim.as_ref().unwrap().bond.pos);
+    // Leg 6: the gallery ring north (the AI's own nodes [D path 1: 9→15→10→11→12]) then west
+    // along z≈14 (nodes 12→13) over #316 — the walk-over take.
+    w.walk_nav_to([-21.03, 10.2, 14.10], "the gallery's north run", 1.8);
+    w.walk_to(walker::Wp::new(spots[1][0], spots[1][1] + 0.4, spots[1][2]).r(0.7), "onto the west bonus");
+    w.wait(30);
+    assert!(gone(&w, 1), "the walked-over west bonus is consumed [M 0x18e650:234-236], bond {:?}",
+        w.scene.sim.as_ref().unwrap().bond.pos);
+    assert!(gone(&w, 0), "the hall bonus stays taken (no respawn) [M 0x18e650]");
+
+    // Sister: a fresh load nobody walks — the intro plays out, the world idles, and BOTH
+    // bonuses still wait (the take is the walked walk-over's doing, not time, not the guard
+    // AI, not the load).
+    let mut w2 = Walker::new(nf_view::load_with_carry_medals(&iso, "07000001.bin", false, None, 1, gold_bits(0x0700_0001))
+        .expect("reload"));
+    past_intro(&mut w2);
+    w2.wait(600);
+    let states: Vec<(bool, bool)> = w2.scene.sim.as_ref().unwrap().drones.pickups.iter()
+        .filter(|p| p.kind == nf_game::pickup::kind::BOND_BONUS)
+        .map(|p| (p.gone, p.hidden)).collect();
+    eprintln!("[bonus] the sister's bonuses after the idle (gone, hidden): {states:?}");
+    assert!(states.len() == 2 && states.iter().all(|&(gone, _)| !gone),
+        "the idle load consumes nothing (the sister) [M 0x18e650's pick sphere], got {states:?}");
 }
 
 /// The comms console's shot arm (0x30 #105 "room_communication_tv", p1 = 0 → the tag's health

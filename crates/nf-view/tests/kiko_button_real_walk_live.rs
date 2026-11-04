@@ -66,6 +66,8 @@ fn grenade_at(sim: &mut nf_view::scene::Sim, pos: [f32; 3]) {
         mesh: 0x0200_0726, owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: false,
         stuck: false, seek_target: None,
         phase: None,
+    burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
+    defused: false,
     });
 }
 
@@ -83,8 +85,10 @@ fn tick_until(w: &mut Walker, max: u32, what: &str, done: impl Fn(&nf_view::scen
 /// HurtPoly-ShuttleLaunch, and he ends it alive with the mission not failed (the walkreal shape).
 fn sit_out_pulse(w: &mut Walker, label: &str) -> u32 {
     let allowance = w.top_up_health;
-    w.top_up_health = false;
+    // The allowance holds until the pulse rises (the guards' fire before it is not the volume's
+    // contact), then is OFF for every tick of the pulse (walkreal_07000016_live's shape).
     tick_until(w, 8000, label, |s| s.drones.channels.on(243));
+    w.top_up_health = false;
     let mut n = 0u32;
     while w.scene.sim.as_ref().unwrap().drones.channels.on(243) {
         {

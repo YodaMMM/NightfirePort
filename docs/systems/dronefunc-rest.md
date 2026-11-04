@@ -43,13 +43,26 @@ drone.rs:1468). The game points `+0x4D8` (the active props) at it when `DroneFun
 - **`DroneFunc_Using2ndBehaviour` 0x14a5e8** [M]: `return drone+0x29` (the latch).
 - **`DroneFunc_Set1stBehaviour` 0x14a5f0** [M]: 0 unless `+0xC48 == 100`; clears `+0x29`, points
   `+0x4D8` back at the first block `+0x4DC`, returns 1. Called from `NDrone2_DSTATE_GoToGoalPosition`
-  0x165640's blocked tail (a class-0xC5==7 escort whose second behaviour is 0xB4 resumes it) together
-  with `DroneFunc_Set2ndBehaviour`/`ChangeToAttackMode`.
+  0x165640's arrival tail together with `DroneFunc_Set2ndBehaviour`/`ChangeToAttackMode`.
+- **`DroneFunc_Set2ndBehaviour` 0x14a618** [M]: 0 unless `+0xC48 == 100`; sets `+0x29`, points
+  `+0x4D8` at `+0x4E8`, returns 1.
+- **`NDrone2_ChangeToAttackMode` 0x14a648** [M :11-35]: with `+0x5A4` ≠ 0 — `+0xC6` (when set) into
+  `+0xC5`, a mode-2 sniper to 0x19 returning 0x56, `+0xC6`/`+0x5A4` cleared, and with `+0xC48 == 100`
+  the second block (`+0x4D8 = +0x4E8`, `+0x29 = 1`) [:29-31]; returns the old `+0x5A4`.
+- **GoToGoalPosition's arrival tail** [M 0x165640:47-82]: prop 0x59 → DeleteMe 0xB4; else (single
+  player) a drone whose mode `+0xC5` is 7 (EnemyRunToPoint): already on the second block → `Set1st`
+  and stay; else `ChangeToAttackMode` — its state is entered at once; with none, `Set2nd` and
+  `+0xC5 = +0xC4`, staying this tick (the next arrival tick, mode ≠ 7, enters `+0x5A2`). Every other
+  mode enters `+0x5A2`.
 
-Port status [S deviation]: the port parses the block (and its alertness level) but never swaps the
-active props at runtime — every prop ask reads the first block — and `+0x29` has no port field. The
-GoToGoalPosition tail's escort arm is the documented [S] stand-in (drone.rs, the GO_TO_GOAL fail arm).
-Cited at the `alert_props` parsing site; consequences noted there.
+Port status: `Drone::props` is the active block and `alert_props` holds the inactive one; `using_2nd`
+is `+0x29`. `set_2nd_behaviour` / `set_1st_behaviour` / `change_to_attack_mode` swap them, so writes to
+either block survive a swap back. Wired: the GoToGoal arrival tail and EnemyMission's arrival
+`ChangeToAttackMode`. The 07000011 office guards (p5 = 100, mode 7, `+0x5A4` = 0x56) take their second
+block on arrival — its step property 0x42 is what makes them step-aim in the fight
+(`start_corridor_guard_07000011_live`). Not wired yet (GAPS G-055): `FirstAttack`'s alt-state branch
+[M 0x148010:100-131], `PreDroneControl`'s second-switch flush [M 0x148db0:58-82] and `HandleImpact`'s
+09/0A `Set1st` [M 0x1469b8:114].
 
 ## The first-attack stamps and the comms-alert state
 

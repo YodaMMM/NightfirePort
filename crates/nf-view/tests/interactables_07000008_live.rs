@@ -737,14 +737,20 @@ fn pickups_take_on_the_walk_over() {
 // ── glass (0x20) ────────────────────────────────────────────────────────────────────────────
 
 /// A class-2 glass pane breaks under the first bullet (health param absent → 0 dies on the
-/// first hit [D #170/#176/#177 param 0 only; M Break_Update 0x12bfd8; Break_Kill 0x12b970]).
-/// BLOCKED per-instance: the disc's panes are the lower-station controlroom windows (the live
-/// box centre (105.25, 35.31, −121.06)) and the controlroom approach runs through the lower
-/// station whose start #8 spot is the documented wedge (the walk input moves nothing there —
-/// docs/levels/07000008.md §"The kill floor"); the glass KIND's live break on this level is
-/// pinned by rocket_glass08_live (the corridor pane, the real rocket path).
+/// first hit [D #170/#176/#177 param 0 only; M Break_Update 0x12bfd8; Break_Kill 0x12b970]),
+/// walked in on real input. The route is the game's own into the lower-station control room:
+/// the disc's start #8 (118.66, 35.0, −113.22 [D #8; the audit row] — the game's own spawn spot
+/// for that start; `Player_Start` 0x190fd0 takes the first gate-0 start and both 08 starts are
+/// gate 0 [D params], so the port's load picks #0 and the test spawns at the #8 spot itself) →
+/// NORTH into the y-33.5 hall → west → the west walkway (x 110-114, y 33.7 [D floor scan]) south
+/// to the corridor → E-open the control-room door #145 (107.75, 33.5, −119.37 [D]; free, p3 = 0
+/// — `Door_Create` 0x136100's p3 is the lock channel, 0 = never locked [M door.rs ch_lock]) →
+/// into the control room → the first aimed shot kills the west window pane.
+/// The start-#8 SOUTH edge is not the route (the old wedge): the pocket's south wall (z −114.5,
+/// x 117..120.25, y 34.25..37.88 [D tris]) stands over a floorless recess (no floor tri between
+/// the floor edge z ≈ −113.3 and the wall [D tri scan]) — real disc geometry, not a port
+/// collision or door-state bug; the game's route west walks around it.
 #[test]
-#[ignore = "the 08 controlroom panes sit inside the lower station whose start #8 approach is the documented wedge — the glass kind's live break is pinned by rocket_glass08_live's corridor pane; a per-instance pin needs the controlroom interior route"]
 fn glass_pane_breaks_on_the_first_bullet() {
     // The P2K injected the loadout way (rocket_glass08's load_weapons pattern).
     let Some(_) = std::env::var_os("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
@@ -754,34 +760,151 @@ fn glass_pane_breaks_on_the_first_bullet() {
         for ch in [0x45u32, 0x70, 0x02, 0x48] { sim.drones.channels.set(ch, 1, sim.drones.frame); }
     }
     w.wait_enabled(3000, "the level start");
+    // Spawn at the disc's start #8 (the lower station) — the game's own start placement [D #8],
+    // not an arbitrary spot; the walk to the control room is real input from here.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [118.66, 34.6, -113.22];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(5);
     // The disc's panes #170/#176/#177 resolve to live breaks whose boxes carry the world pose
-    // (the placements are map-origin — the bounds are the position). The corridor pane sits by
-    // the shutters (rocket_glass08's z −96.75 crossing [M disasm 0x12cf44..0x12cf64]); pick the
-    // placed kind-2 pane nearest that line, excluding the carriage's script panes.
+    // (the placements are map-origin — the bounds are the position): the west window (x 105.25
+    // plane, z −122..−120.1), the south row (z −122 plane, x 105.25..109.25) and the east window
+    // (x 109.25 plane), all y 34.25..36.37 — the controlroom windows above the y-33.5 floor.
+    // Pick the west window by its disc spot (the doc's (105.25, 35.31, −121.06) centre),
+    // excluding the gondola carriage's script panes (the y 27.85 row).
     let pane = {
         let sim = w.scene.sim.as_ref().unwrap();
         sim.drones.breaks.list.iter().enumerate()
             .filter(|(_, b)| b.kind == 2 && !b.dead && b.script_obj.is_none())
             .min_by(|a, b| {
-                let dz = |b: &nf_game::breakable::Break| (b.lo[2] + b.hi[2]) / 2.0 + 96.75;
-                dz(a.1).abs().total_cmp(&dz(b.1).abs())
+                let d = |b: &nf_game::breakable::Break| {
+                    [(b.lo[0] + b.hi[0]) / 2.0 - 105.25, (b.lo[1] + b.hi[1]) / 2.0 - 35.31,
+                     (b.lo[2] + b.hi[2]) / 2.0 + 121.06].iter().map(|v| v * v).sum::<f32>()
+                };
+                d(a.1).total_cmp(&d(b.1))
             })
             .map(|(i, b)| (i, b.lo, b.hi))
-            .expect("a placed glass pane by the corridor shutters [D #170/#176/#177]")
+            .expect("the west controlroom window pane [D #170/#176/#177]")
     };
     let centre = [(pane.1[0] + pane.2[0]) / 2.0, (pane.1[1] + pane.2[1]) / 2.0, (pane.1[2] + pane.2[2]) / 2.0];
     eprintln!("[08 glass] pane {} at {:?}", pane.0, centre);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(!sim.drones.breaks.list[pane.0].dead, "sister: the pane stands before the shot [M Break_Update 0x12bfd8]");
+        let sisters = sim.drones.breaks.list.iter().filter(|b| b.kind == 2 && b.script_obj.is_none()
+            && b.hi[1] > 34.0 && b.hi[1] < 37.0 && b.lo[2] < -119.0).count();
+        assert!(sisters >= 3, "the three controlroom windows stand [D #170/#176/#177], got {sisters}");
     }
-    // Stand 3 north of the pane on its floor (the stand-in transit; the shot is the real input).
-    w.scene.sim.as_mut().unwrap().bond.pos = [centre[0], centre[1] + 0.5, centre[2] + 3.0];
-    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
-    w.wait(10);
-    aim_and_fire_until(&mut w, centre, 2, 240, |s| s.drones.breaks.list[pane.0].dead);
-    assert!(w.scene.sim.as_ref().unwrap().drones.breaks.list[pane.0].dead,
-        "the bullet broke the pane [M Break_Update 0x12bfd8; Break_Kill 0x12b970]");
+    // The walked route (all real input): north out of the start pocket into the y-33.5 hall,
+    // west, then south along the west walkway (x 110-114 [D floor scan]) to the corridor, and
+    // west to the control-room door.
+    for (name, at) in [
+        ("north to the hall", [118.4f32, 33.9, -110.5]),
+        ("the hall west", [114.0, 33.8, -107.8]),
+        ("the walkway head", [110.5, 33.8, -108.5]),
+        ("the walkway south", [110.3, 33.8, -112.0]),
+        ("the walkway south 2", [110.3, 33.8, -116.0]),
+        ("the corridor west", [107.8, 33.6, -118.0]),
+    ] {
+        w.walk_to(Wp { at, act: Act::None, arrive: 0.4 }, name);
+    }
+    // The control-room door #145: closed until Bond's use opens it (free door, p3 = 0 [D];
+    // M Door_Activate 0x135be0 — the player's E activation on a closed door).
+    let (door_pos, door_i) = walker::door_near(w.scene.sim.as_ref().unwrap(), [107.75, 33.5, -119.37])
+        .expect("the control-room door #145 [D]");
+    assert!((door_pos[0] - 107.75).abs() < 0.5 && (door_pos[2] + 119.37).abs() < 0.5,
+        "the nearest door to the control-room mouth is #145, got {door_pos:?}");
+    let pos01_before = w.scene.sim.as_ref().unwrap().drones.doors.list[door_i].pos01;
+    w.walk_to(Wp { at: [107.75, 33.5, -118.3], act: Act::Use { use_ticks: 240 }, arrive: 0.45 }, "E the control-room door");
+    // The swing takes its anim ticks after the use is accepted; hold until it leaves the
+    // closed key (0.5 for a swing door [M door.rs pos01]).
+    let mut pos01_after = pos01_before;
+    for _ in 0..240 {
+        pos01_after = w.scene.sim.as_ref().unwrap().drones.doors.list[door_i].pos01;
+        if (pos01_after - pos01_before).abs() > 0.1 { break; }
+        w.tick(Input::default(), false);
+    }
+    assert!((pos01_after - pos01_before).abs() > 0.1,
+        "the E use moved the door off its closed key [M Door_Activate 0x135be0], {pos01_before} -> {pos01_after}");
+    // Through the doorway into the control room, up to the window wall.
+    for (name, at) in [
+        ("into the room", [107.4f32, 33.6, -120.5]),
+        ("by the panes", [107.2, 33.6, -121.0]),
+    ] {
+        w.walk_to(Wp { at, act: Act::None, arrive: 0.35 }, name);
+    }
+    // Align the aim on the pane's centre WITHOUT firing (the real look input), then fire exactly
+    // ONE shot: hold the trigger until the clip decrements once, release, and the pane must die
+    // from that bullet (health 0 → the first hit kills [D params; M Break_Update 0x12bfd8]).
+    for _ in 0..400 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let head = sim.bond.head();
+        let to = [centre[0] - head[0], centre[1] - head[1], centre[2] - head[2]];
+        let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(1e-4);
+        let dy = walker::wrap_pi(to[0].atan2(to[2]) - sim.bond.yaw);
+        let dp = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+        if dy.abs() < 0.01 && dp.abs() < 0.005 { break; }
+        let input = Input { turn: dy.clamp(-0.08, 0.08), look: dp.clamp(-0.05, 0.05), ..Default::default() };
+        w.tick(input, false);
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let head = sim.bond.head();
+        let to = [centre[0] - head[0], centre[1] - head[1], centre[2] - head[2]];
+        let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(1e-4);
+        let dy = walker::wrap_pi(to[0].atan2(to[2]) - sim.bond.yaw);
+        let dp = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+        assert!(dy.abs() < 0.02 && dp.abs() < 0.01, "the aim settled on the pane, dy {dy:.4} dp {dp:.4}");
+    }
+    let shot_input = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let head = sim.bond.head();
+        let to = [centre[0] - head[0], centre[1] - head[1], centre[2] - head[2]];
+        let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(1e-4);
+        Input {
+            turn: walker::wrap_pi(to[0].atan2(to[2]) - sim.bond.yaw).clamp(-0.08, 0.08),
+            look: ((to[1] / l).asin() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch).clamp(-0.05, 0.05),
+            ..Default::default()
+        }
+    };
+    // The P2K is weapon 2 (the injected loadout [M 0x1a7ef8's loadout case]); the walk's auto
+    // return-fire may have left another weapon in hand — switch back before the shot.
+    for _ in 0..240 {
+        if w.scene.sim.as_ref().unwrap().gun.weapon == 2 { break; }
+        w.tick(Input { switch_to: Some(2), ..Default::default() }, false);
+    }
+    assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 2, "the P2K is in hand for the shot");
+    // The pocket guards may have drawn the auto return-fire on the walk in — top the clip up
+    // first (tick_fire reloads when empty), then pin ONE bullet.
+    for _ in 0..600 {
+        if w.scene.sim.as_ref().unwrap().gun.clip > 0 { break; }
+        w.tick_fire(shot_input);
+    }
+    let clip0 = w.scene.sim.as_ref().unwrap().gun.clip;
+    assert!(clip0 > 0, "the P2K has a round chambered for the shot");
+    let mut fired = false;
+    for _ in 0..40 {
+        if w.scene.sim.as_ref().unwrap().gun.clip < clip0 { fired = true; break; }
+        w.tick_fire(shot_input);
+    }
+    assert!(fired, "the trigger fired a bullet (the clip moved) — gun state {:?} bond {:?}",
+        { let g = &w.scene.sim.as_ref().unwrap().gun;
+          (g.weapon, g.clip, g.spare, g.reload_state, g.fire_state, g.switch_state) },
+        w.scene.sim.as_ref().unwrap().bond.pos);
+    for _ in 0..8 {
+        if w.scene.sim.as_ref().unwrap().drones.breaks.list[pane.0].dead { break; }
+        w.tick(Input::default(), false);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(sim.drones.breaks.list[pane.0].dead,
+        "the first bullet broke the pane [M Break_Update 0x12bfd8; Break_Kill 0x12b970; D #170 health 0]");
+    for (i, b) in sim.drones.breaks.list.iter().enumerate() {
+        if i == pane.0 || b.kind != 2 || b.script_obj.is_some()
+            || b.hi[1] <= 34.0 || b.hi[1] >= 37.0 || b.lo[2] >= -119.0 { continue; }
+        assert!(!b.dead, "sister: the one bullet took only the aimed pane — pane #{i} fell too [D #176/#177]");
+    }
 }
 
 // ── hint plates (0x33) ──────────────────────────────────────────────────────────────────────
@@ -832,17 +955,31 @@ fn copter_gated_hover() {
     assert!(!sim.drones.channels.on(0x4b), "no arrival write while gated [M Copter_Move 0x17d628]");
 }
 
-// ── hurt (0xe4) — the kill floor, blocked one step short ────────────────────────────────────
+// ── hurt (0xe4) — the fall's end: the death NIS's terminal event, not the kill floor ────────
 
-/// The end-to-end fall kill: the real walk off the boarding platform falls, the plunge
-/// TouchOnce fires (ch 0x7C) and the death NIS (SP #307) takes the body — and HOLDS it at
-/// y 17.56, above the y −24.10 kill floor (the port has no death after the death NIS; the game
-/// fails the mission there [M 0x182c60:21-43]). BLOCKED: the fix is the death NIS's terminal
-/// event → mission fail (docs/levels/07000008.md §"The kill floor, end to end"; the mid-path is
-/// hurt_07000008_live's pin, the volumes' row law is the hurt unit tests').
+/// The end-to-end fall off the boarding platform, the way the game ends it: the real walk off
+/// the lip falls, the plunge TouchOnce fires (ch 0x7C [D #54]), the death NIS (SP #307,
+/// 0x06000991 — `Script_IsDeathNIS` [M nis.rs]) takes the body, and the NIS's OWN terminal
+/// event — stream 6's event 0xD params (0x62, 1) at the script's tick 89 [D 0x06000991, the
+/// script-channel census; decoded on the real walk] — raises the death channel. `Mission_Update`'s
+/// ch-0x62 arm fails the mission (MissionState 3, to_end 0x7000048) [M 0x182c60:21-43] and the
+/// 0x40000042 fail menu's Restart row queues the WARM reload of the CURRENT level
+/// [M 0x216618:19-21] — here auto-answered by the sim's `auto_restart` stand-in for the menu view.
+/// The body HOLDS through it — the game's own law, not a port gap: the NIS's event 4 disables the
+/// player [M Script_EventHandler 0x1d94c0:119; Player_Update 0x193600:80-89 returns on the 0
+/// byte] and the stream carries no event 6, so `Script_Free`'s 0x100-gated enable never runs
+/// [M 0x1da880:44-49]. The y −24.10 kill floor stays SILENT through this path: the held body
+/// never descends past the NIS's fall (the hold at y 17.56, the fall's floor ≈17.5), 41 units
+/// above the quads [D #42/#43/#44 y −24.10] — the kill floor serves falls the plunge NIS does
+/// not catch (hurt_07000008_live pins those mid-paths; the volumes' row law is the hurt unit
+/// tests').
+///
+/// The old body of this test ("the fall reached the kill floor") was WRONG — it contradicted the
+/// decompile-backed law pinned in decomp_audit_07000008_live (`the_f5_fall_death_nis_writes_0x62_
+/// and_opens_the_fail_menu`: the same real walk-off fails the mission with `hurt_hits == 0`);
+/// fixed per the task rule, see docs/reports/level-08-fall-kill-floor.md.
 #[test]
-#[ignore = "the death-NIS hold blocks the end-to-end fall kill (the body is held at y 17.56 above the y −24.10 kill floor) — the fix is the death NIS's terminal event → mission fail; the mid-path is pinned by hurt_07000008_live"]
-fn the_kill_floor_ends_the_fall() {
+fn the_fall_off_the_platform_ends_the_mission_through_the_death_nis() {
     let mut w = load();
     // The boarding platform edge (hurt_07000008_live's proven spot), the real walk off.
     w.scene.sim.as_mut().unwrap().bond.pos = [111.4, 24.5, -127.2];
@@ -850,10 +987,42 @@ fn the_kill_floor_ends_the_fall() {
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     w.wait(10);
     let walked = Input { forward: 1.0, ..Default::default() };
-    let mut touched = false;
-    for _ in 0..1200 {
+    let mut plunged = false;
+    let mut min_y = f32::MAX;
+    for _ in 0..1600 {
         w.scene.sim.as_mut().unwrap().step_bond(walked, false, false, false);
-        if w.scene.sim.as_ref().unwrap().hurts.iter().any(|h| h.hits > 0) { touched = true; break; }
+        min_y = min_y.min(w.scene.sim.as_ref().unwrap().bond.pos[1]);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x7c) { plunged = true; }
+        if plunged && w.scene.sim.as_ref().unwrap().drones.channels.on(0x62) { break; }
     }
-    assert!(touched, "the fall reached the kill floor [D #42/#43/#44 y −24.10; M Hurt_Update 0x17e5d0]");
+    assert!(plunged, "the plunge TouchOnce fired on the walk-off [D #54]");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x62),
+        "ch 0x62 rose — the death NIS's own terminal event 0xD (0x62,1) at its tick 89 [D 0x06000991 s6]");
+    assert!(min_y < 20.0, "the fall ran (min y {min_y:.2})");
+    // MissionState 3 lands the tick after (the mission reads the channels before the scripts
+    // write them in the same tick — decomp_audit_07000008_live's ordering note).
+    for _ in 0..10 {
+        if w.scene.sim.as_ref().unwrap().drones.mission.state == 3 { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+    }
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.mission.state, 3,
+        "MissionState 3 [M 0x182c60:21-43's ch-0x62 arm]");
+    // The fail menu opens 1 tick later (TimeOut 1.0 [M 0x182c60:58-64]) and the sim's
+    // auto_restart answers Restart: the warm reload of the CURRENT level queues.
+    for _ in 0..400 {
+        if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.level_exit, Some(0x0700_0008),
+            "the fail restart → the CURRENT level [M 0x216618:20 GameState._12_4_]");
+        assert!(!sim.drones.level_exit_cold, "the restart is the warm arm [M 0x216618:20 IsWarmReset = 1]");
+        assert!(sim.drones.level_exit_restart, "on the entry checkpoint [M 0x216618:21 Player_RamLoad(Bond, 1)]");
+        assert!(sim.bond.pos[1] > -24.1,
+            "the body still holds, above the kill floor quads [D #42/#43/#44 y −24.10] (y {:.2})", sim.bond.pos[1]);
+        let hits: u32 = sim.hurts.iter().map(|h| h.hits).sum();
+        assert_eq!(hits, 0,
+            "the kill floor stays silent through the NIS path — it serves falls the plunge NIS does not catch");
+    }
 }

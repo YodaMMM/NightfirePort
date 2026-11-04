@@ -49,6 +49,7 @@ pub struct NavPath {
 #[derive(Clone, Debug)]
 pub struct Wall { pub a: V3, pub b: V3, pub ha: f32, pub hb: f32, pub flags: u32 }
 
+#[derive(Clone, Debug, Default)]
 pub struct Network {
     pub paths: Vec<NavPath>,
     pub walls: Vec<Wall>,

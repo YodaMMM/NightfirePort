@@ -126,9 +126,13 @@ fn the_thrown_hat_kills_the_guard_in_one_hit_and_never_bounces() {
         }
         // Park the victim where the geometry was verified: the stun state holds it still (the
         // stunned guard stays seekable — `Bullet_heatseekable` 0x12f248 excludes only the
-        // WAIT_SWITCH state and the dead), so the flight meets a fixed target.
+        // WAIT_SWITCH state and the dead), so the flight meets a fixed target. The fixture writes
+        // the +0xCE0 span (`stun_recover`) the Loop's ENTER re-arms the wake timer from
+        // [M 0x172bb0 case 1 + 0x1631c0 case 1] — the old `stun_until` deadline write predates the
+        // stored-span law (stun-release-no-stun-anims).
         let st = sim.drones.frame + 7200;
         let v = &mut sim.drones.list[victim];
+        v.stun_recover = 7200;
         v.stun_until = st;
         v.state = nf_game::drone::state::STUN_GRENADE_IMPACT;
         sim.bond.yaw = aim_yaw;

@@ -257,10 +257,16 @@ fn the_grapple_point_latches_the_q_claw() {
 }
 
 /// The laser mine (0xFE, Laser_Mine #109 at (52.40, −8.52, −41.43), damage 50 radius 10, blast
-/// script 0x06000052 [D params; the probe]) detonates when Bond's capsule meets its cel [M
-/// Mine_Update 0x17c930's hit-list walk → the blast + Camera_Shake(radius)]. Sister: three units
-/// clear, the mine never explodes.
-#[ignore = "gap: the walk-in contact never credits in this session — the mine parses (damage 50, radius 10, script 0x06000052, 514 cel tris [D the probe]) and the mechanic is proven on 07000015 (census_07000015's mine tests); this level's beam model spans 16 units (lo 44.4,-9.3,-49.3 .. 60.3,-7.7,-33.4 [D the probe]) and the walked-in capsule at the body's centre does not reach the contact in 120 ticks — the next session re-spots the walk-in (likely the beam's surface, not its centre, is the contact face)"]
+/// script 0x06000052 [D params; the probe]) detonates when Bond's body capsule meets its cel [M
+/// Mine_Update 0x17c930's hit-list walk → the blast + Camera_Shake(radius); the body is
+/// `Player_Collision` 0x194df0's capsule, drone.rs's mine pass]. Sister: three units clear, the
+/// mine never explodes.
+///
+/// (The earlier cut was ignore-listed: the walked-in teleport at the body's centre fell out of
+/// the 1.6-unit-tall beam before the collide pass credited the contact — no floor sits under
+/// the beam (it spans the airlock gap [D the probe's 16-unit box]). The re-spot holds Bond's
+/// capsule inside the beam — the stand-in transit; the contact itself is the game's own
+/// collide pass over the mine cel's tris, run every tick.)
 #[test]
 fn the_laser_mine_detonates_on_contact() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -278,11 +284,17 @@ fn the_laser_mine_detonates_on_contact() {
     let a = [hi[0] + 2.0, hi[1] + 2.0, hi[2] + 2.0]; let b = [hi[0] + 2.0, hi[1] + 3.4, hi[2] + 2.0];
     let _ = lo;
     assert!(!sim.drones.mines[0].touching(a, b, 0.5), "sister: three units clear does not touch");
-    // Walk Bond into the mine's cel: the real walk path (a teleport to the spot, then the input).
-    sim.bond = nf_game::player::Bond::stand_at(&sim.world, [mpos[0], mpos[1], mpos[2]], 0.0);
+    // Walk Bond into the mine's cel: the stand-in transit holds the capsule inside the beam
+    // (the re-spot above); the explode arm is the game's own per-tick contact [M 0x17c930].
+    sim.bond = nf_game::player::Bond::stand_at(&sim.world, [mpos[0], mpos[1] - 0.3, mpos[2]], 0.0);
     let idle = Input::default();
     let mut boom = false;
-    for _ in 0..120 { sim.step_bond(idle, false, false, false); if sim.drones.mines[0].exploded { boom = true; break; } }
+    for _ in 0..120 {
+        sim.bond.pos = [mpos[0], mpos[1] - 0.3, mpos[2]];
+        sim.bond.vel = [0.0; 3];
+        sim.step_bond(idle, false, false, false);
+        if sim.drones.mines[0].exploded { boom = true; break; }
+    }
     assert!(boom, "the mine explodes on Bond's capsule [M 0x17c930]");
 }
 
@@ -333,37 +345,47 @@ fn the_dyno_rod_needs_both_channels() {
     assert!(sim.drones.worldobjs.dynobjs.is_empty(), "both channels armed — the rod deletes");
 }
 
-/// The creepwalls (0x3F StealthWall ×2 [D PL#59/#106]): the use key at the wall enters the crawl
-/// (substate 7) [M Player_Creep 0x1969d0; the swim-vent pattern]. Sister: Bond away → the use
-/// key does nothing.
-#[ignore = "gap: the use key at this wall's mouth does not start the crawl in this session — the wall parses (2.0-unit axis along x at (20.58,0.08,-18.30), ch 0 [D the probe dump]) and the crawl is proven on 07000005/0d (fix_swim_vent_live); the entry's spot/face combination here needs a re-spot (the sister leg + the axis-facing walk both ran)"]
+/// The creepwalls (0x3F StealthWall ×2 [D PL#59/#106 — the census re-run #532/#579]) are
+/// CONFIGURED-INERT on this wrapper: the use key's crawl scan is gated on the third-icon
+/// context 6 [M Player_Activate 0x1a5170:66-97 — with ctx 6 the press scans class '+'], the
+/// context is written only by `ThirdIcon_Update` 0x196e80 from the level's 0xFA icons [M
+/// player.rs's `icon_ctx` doc — reset per tick, icon writes only], and 07000041 carries NO
+/// ctx-6 icon — its two icons are ctx 2 (gated on ch 1) and ctx 3 [D PL#105/#114 params; the
+/// census]. The re-spot probe (both walls, both ends, both axial facings, the vent pattern's
+/// mouth) never enters the crawl — the game's own answer: the walls are set dressing here;
+/// the crawl mechanic itself is pinned on 07000005/0d (fix_swim_vent_live). Sister: the icon
+/// set is exactly {2, 3} at the load.
 #[test]
-fn the_stealth_wall_crawls_on_the_use_key() {
+fn the_stealth_walls_are_inert_without_a_ctx6_icon() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load(&iso);
     let sim = scene.sim.as_mut().unwrap();
     settle(sim);
     assert_eq!(sim.creepwalls.len(), 2, "both stealth walls parse [D PL#59/#106]");
-    // Stand just outside end B on the floor (the swim-vent pattern; the entry's own floor ray).
-    let w = sim.creepwalls[0].clone();
-    let (a, b) = w.endpoints();
-    let out = [b[0] - (a[0] - b[0]) / w.half_len.max(1e-3), 0.0, b[2] - (a[2] - b[2]) / w.half_len.max(1e-3)];
-    // Sister first: the use key away from the wall does not crawl.
-    sim.bond = nf_game::player::Bond::stand_at(&sim.world, [out[0] - 4.0, w.pos[1] + 1.0, out[2]], 0.0);
-    for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
-    sim.step_bond(Input::default(), false, false, true);
-    assert_ne!(sim.bond.substate, nf_game::player::SS_CREEP, "sister: away from the wall the use key is inert");
-    // At the wall's mouth: the crawl starts.
-    sim.bond = nf_game::player::Bond::stand_at(&sim.world, [out[0], w.pos[1], out[2]], 0.0);
-    sim.bond.yaw = std::f32::consts::FRAC_PI_2; // facing the wall along its axis (it runs along +x)
-    for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
-    sim.step_bond(Input::default(), false, false, true);
-    assert_eq!(sim.bond.substate, nf_game::player::SS_CREEP, "the use key starts the crawl [M 0x1969d0]");
-    // Crawl to the far end: the exit back to the walk.
-    let fwd = Input { forward: 1.0, ..Default::default() };
-    let mut exited = false;
-    for _ in 0..1200 { sim.step_bond(fwd, false, false, false); if sim.bond.substate != nf_game::player::SS_CREEP { exited = true; break; } }
-    assert!(exited, "the crawl reaches the far end and exits [M the vent's end arm]");
+    {
+        let mut ctxs: Vec<u8> = sim.icons.iter().map(|i| i.ctx).collect();
+        ctxs.sort();
+        assert_eq!(ctxs, vec![2, 3], "sister: the level's icon contexts are 2 and 3 — none grants the crawl's ctx 6 [D PL#105/#114]");
+    }
+    // The probe's best entries, pinned as the negative: both walls at both ends, 0.8 beyond the
+    // endpoint on the axis, facing in and out — the use key never starts the crawl [M 0x1a5170:
+    // 66-97's ctx-6 gate].
+    for wi in 0..2 {
+        let w = sim.creepwalls[wi].clone();
+        let (a, b) = w.endpoints();
+        let ax = [a[0] - b[0], a[2] - b[2]];
+        let al = ax[0].hypot(ax[1]).max(1e-3);
+        let dir = [ax[0] / al, ax[1] / al]; // the unit B→A axis (x, z)
+        for (end, sgn) in [(b, 1.0f32), (a, -1.0f32)] {
+            let spot = [end[0] - sgn * dir[0] * 0.8, 0.0, end[2] - sgn * dir[1] * 0.8];
+            let yaw_in = (sgn * dir[0]).atan2(sgn * dir[1]);
+            sim.bond = nf_game::player::Bond::stand_at(&sim.world, [spot[0], w.pos[1] + 1.0, spot[2]], yaw_in);
+            for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
+            sim.step_bond(Input::default(), false, false, true);
+            assert_ne!(sim.bond.substate, nf_game::player::SS_CREEP,
+                "wall {wi} end {}: the use key must not crawl — no ctx-6 icon on this level [M 0x1a5170:66-97]", if sgn > 0.0 {"B"} else {"A"});
+        }
+    }
 }
 
 /// The ladders (0x22 ×2 [D PL#7/#12-ish, the probe: (6.53,2.54,−58.14) / (51.05,5.33,−13.24)]):
@@ -464,8 +486,10 @@ fn the_rotors_spin() {
 /// hand-off the game itself models as the 0x7100018 → 0x7000018 → 0x700001b briefing special
 /// case [M 0x1d6360:99-102]; 07000041.bin carries no exit placement of its own [D the placement
 /// scan: no 0xE8 LOAD_LEVEL, no ch-100 writer in the 7 scripts [D the nis decode]]. The port's
-/// chain: ch 1 → the longest chain script (0x06000027, 241 ticks [D nis dump]) → the exit.
-/// Sister: without ch 1 the wrapper never ends.
+/// chain: ch 1 → the story hand-off window — the chain's longest script's length, 241 ticks
+/// [D 06000027's length; the script itself never runs on this disc [D the SP pins: both 0xD9
+/// placements carry the 0x06000000 sentinel with mask 0]] — then the exit latch. Sister: without
+/// ch 1 the wrapper never ends.
 #[test]
 fn the_wrapper_ends_into_the_space_station_after_the_chain() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -492,4 +516,135 @@ fn every_model_resolves_on_the_load() {
     let sim = scene.sim.as_ref().unwrap();
     let _ = sim;
     assert!(scene.cels.len() > 0, "the level's rooms loaded [D survey: 8 cels on the wrapper]");
+}
+
+/// The chain trigger answers the player's E — BEFORE and AFTER the plate. SL_Trigger #99
+/// (20.59, 0.00, −33.44) carries out ch 1, mask 0x4 = the E/activate dispatch, lock ch 0x6e
+/// [D PL#99 params 0:0x1 1:0x4 7:0x6e — the census re-run #572]: `Trigger_Activate` 0x1b2318's
+/// case-1 arm gates ONLY on mask&4 and writes the out channel — **no lock read anywhere in the
+/// arm** [M 0x1b2318:38-49, read this session: mask&4 → `switch_channels[out] = 1` → the
+/// glist-0x10 self-delete latch]. The lock channel is read by `Trigger_Locked` 0x1b2fc8 (its
+/// non-type-10 arm: locked iff ext+0x24 is on), whose ONLY caller is `Check_Target` 0x1a7810:197
+/// inside the type-10 aim-hint branch (via `Player_AutoAim` 0x1a7c98) — never the E-fire path.
+/// The walk-through plate #100 (out 0x6e, mask 8 [D PL#100]) therefore does NOT lock the E out.
+/// (level-41-every-objective correction: this test's older leg-2 sister asserted the refused E
+/// and passed VACUOUSLY — it never aimed, so the use sphere [M 0x1a5170:100-108] at pitch 0
+/// passed over the volume's 0..0.75 y-band and the E reached no trigger at all; the decompile
+/// says the aimed E fires regardless. The test is wrong, the port matches the game.) The
+/// level's chain channel has a REAL player path either way (the tests above drive ch 1 with
+/// the set_script stand-in): the E on #99 fires the whole approach chain, plate or no plate.
+#[test]
+fn the_chain_trigger_answers_the_e_before_and_after_the_plate() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    // Leg 1: the unlocked E fires the chain, and the wrapper ends (the real-path version of the
+    // stand-in drive).
+    let mut scene = load(&iso);
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(1), "sister: ch 1 cold at the load [D]");
+        assert!(!sim.drones.channels.on(0x6e), "sister: the plate is uncrossed [D]");
+    }
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        settle(sim);
+        // At #99's own spot, aiming the use point INTO its volume (the use sphere is head + look
+        // [M 0x1a5170:100-108]; the pitch is the game's ±1 value [M RotMatrixX 0x1e46a0]).
+        sim.bond = nf_game::player::Bond::stand_at(&sim.world, [20.59, 1.4, -32.0], std::f32::consts::PI);
+        for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
+        {
+            let target = [20.59f32, 0.5, -33.44];
+            let head = sim.bond.head();
+            let dx = target[0] - head[0]; let dy = target[1] - head[1]; let dz = target[2] - head[2];
+            let dist = (dx * dx + dz * dz).sqrt().max(0.5);
+            sim.bond.yaw = dx.atan2(dz);
+            sim.bond.pitch = (dy / dist).atan() / std::f32::consts::FRAC_PI_2;
+        }
+        let mut fired = false;
+        for _ in 0..120 {
+            sim.step_bond(Input::default(), false, false, true);
+            if sim.drones.channels.on(1) { fired = true; break; }
+        }
+        assert!(fired, "the E on SL_Trigger #99 fires ch 1 while its lock 0x6e is clear [D PL#99 p0 = 1, p1 = 0x4, p7 = 0x6e; M 0x1b2318 case 1]");
+    }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(1), "the chain channel latched [D]");
+    }
+    let sim = scene.sim.as_mut().unwrap();
+    let idle = Input::default();
+    let mut exited = false;
+    for _ in 0..2000 { sim.step_bond(idle, false, false, false); if sim.drones.level_exit == Some(0x0700_001b) { exited = true; break; } }
+    assert!(exited, "the E-fired chain ends the wrapper into 0x0700001b [M 0x1d6360:99-102's hand-off; S the port's flow — the existing stand-in test's pin]");
+    // Leg 2 (the sister on a fresh load): the plate's ch 0x6e is ON, and the SAME aimed E still
+    // fires ch 1 — the case-1 arm reads no lock [M 0x1b2318:38-49; the lock's only reader,
+    // Trigger_Locked 0x1b2fc8, is called only from Check_Target 0x1a7810:197's type-10
+    // aim-hint branch]. (The older sister here asserted the refusal and passed vacuously: it
+    // never aimed, so the E reached nothing — see the doc above.)
+    let mut scene2 = load(&iso);
+    {
+        let sim = scene2.sim.as_mut().unwrap();
+        settle(sim);
+        // The real walk through the plate #100 (the plate test's own route).
+        sim.bond = nf_game::player::Bond::stand_at(&sim.world, [15.5, 1.4, -30.0], std::f32::consts::PI);
+        let mut input = Input::default();
+        input.forward = 1.0;
+        let mut crossed = false;
+        for _ in 0..200 { sim.step_bond(input, false, false, false); if sim.drones.channels.on(0x6e) { crossed = true; break; } }
+        assert!(crossed, "the plate walk fired ch 0x6e [D PL#100; M 0x1b2b88]");
+        // The aimed E on #99 now: ch 0x6e is on and the E STILL fires ch 1.
+        sim.bond = nf_game::player::Bond::stand_at(&sim.world, [20.59, 1.4, -32.0], std::f32::consts::PI);
+        for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
+        {
+            let target = [20.59f32, 0.5, -33.44];
+            let head = sim.bond.head();
+            let dx = target[0] - head[0]; let dy = target[1] - head[1]; let dz = target[2] - head[2];
+            let dist = (dx * dx + dz * dz).sqrt().max(0.5);
+            sim.bond.yaw = dx.atan2(dz);
+            sim.bond.pitch = (dy / dist).atan() / std::f32::consts::FRAC_PI_2;
+        }
+        let mut fired = false;
+        for _ in 0..120 {
+            sim.step_bond(Input::default(), false, false, true);
+            if sim.drones.channels.on(1) { fired = true; break; }
+        }
+        assert!(fired,
+            "with the plate's ch 0x6e on, the aimed E on #99 STILL fires ch 1 — the case-1 arm reads no lock [M 0x1b2318:38-49; D PL#99 p0=1 p1=0x4]");
+    }
+}
+
+/// The movie trigger (0xF4 MovieTrigger #81 at (16.13, −0.00, −0.41), mask 0x4, movie code 0
+/// [D PL#81 params 0:0x0 1:0x4 — the census re-run #554]) answers the E with the game's own
+/// no-op chain: `Trigger_Activate` 0x1b2318:51-62 case 0xd gates on mask&4, writes
+/// `GameState+0x10 = 0` and pushes GameFlow states 6+7; state 6 pops immediately
+/// (`psiMovieFinished` 0x1082e8 — no movie was started) and NOTHING on the arm calls
+/// `ResetMap_LevelToLoad` — no movie, no level load [M the audit's consumer chain]. The port:
+/// the armed E raises `movie_request = Some(0)` and the wrapper stays put. Sister: no movie
+/// request and no exit before the E.
+#[test]
+fn the_movie_trigger_e_requests_no_movie_and_no_exit() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = load(&iso);
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.movie_request, None, "sister: no movie request at the load [D]");
+        assert_eq!(sim.drones.level_exit, None, "sister: no exit at the load [D]");
+    }
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        settle(sim);
+        // At the trigger's spot, facing its volume (the use sphere is head + look [M 0x1a5170]).
+        sim.bond = nf_game::player::Bond::stand_at(&sim.world, [16.13, 1.4, 0.9], std::f32::consts::PI);
+        for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
+        let mut fired = false;
+        for _ in 0..120 {
+            sim.step_bond(Input::default(), false, false, true);
+            if sim.drones.movie_request.is_some() { fired = true; break; }
+        }
+        assert!(fired, "the E on the movie trigger raises the movie request [D PL#81 mask 0x4; M 0x1b2318:51-62 case 0xd]");
+    }
+    let sim = scene.sim.as_ref().unwrap();
+    assert_eq!(sim.drones.movie_request, Some(0),
+        "the request carries the OUT slot's movie code 0 [D PL#81 p0 = 0; M the port's movie_request = the OUT slot]");
+    assert_eq!(sim.drones.level_exit, None,
+        "no level load rides the movie trigger [M 0x1b2318 case 0xd calls no ResetMap_LevelToLoad; the audit's consumer chain]");
 }

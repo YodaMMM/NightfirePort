@@ -721,7 +721,15 @@ const NET_HASH_EVERY: u32 = 15;
 /// wrote, and `Player_InitWeapon` (0x1a7ef8) runs the per-level loadout switch over `Player_RamLoad`
 /// (0x1957a8). `None` = a cold load (the game's boot path; `Player_RamLoad`'s whole body is skipped).
 pub fn load_with_carry(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>) -> Result<scene::Scene> {
-    load_impl(iso, archive, all, save, false, &[], false, None, 1, 0)
+    // The warm chain's difficulty: the game's difficulty global (`GameState+40` DECIMAL = hex
+    // +0x28, 0x2a3790) survives the level change untouched — its five writers (bootup 0x1c7e78:25
+    // = 2, the difficulty page 0x216ca8:15, the MP confirm 0x20ec00:150 = 1, the mini-mission
+    // 0x1ffb90:22 = 1, the driving-return PTP restore 0x1c8560:36) never run in an on-foot level
+    // change [M whole-decompile grep]. The port re-creates the Scene per load and seeds the
+    // difficulty at build, so the value rides the RamSave (`with_difficulty`); a save without it
+    // (the plain `capture`) keeps 1, the old direct-load replay parity.
+    let difficulty = save.map(|s| s.difficulty).filter(|&d| (1..=4).contains(&d)).unwrap_or(1);
+    load_impl(iso, archive, all, save, false, &[], false, None, difficulty, 0)
 }
 
 /// The carry-over load pre-merged for the given weapon ids (the dev menu's lazy give: the same
@@ -851,6 +859,10 @@ pub fn warm_exit_save(sim: &scene::Sim) -> nf_game::player::RamSave {
         &sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
         .with_mission(&sim.drones.mission)
         .with_tally(&sim.drones.progress)
+        // The difficulty global survives the level change in the game (no transition-path writer;
+        // see `RamSave::difficulty`) — attach the sim's mirror so a `load_with_carry` of this save
+        // re-seeds it. The front-end load wrappers take the pick as a parameter and ignore it.
+        .with_difficulty(sim.drones.difficulty)
 }
 
 fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, give: &[u8], mp: bool, mp_settings: Option<nf_game::mp::MpSettings>, difficulty: u32, bonus: u64) -> Result<scene::Scene> {
@@ -2073,16 +2085,25 @@ fn destroy_tints(scene: &scene::Scene) -> Vec<([u32; 3], [u8; 2])> {
         .collect()
 }
 
-/// The snow quads facing the camera, plus the emitter particles (fix-world-fx: the same billboard
-/// pass — `Emitter_Draw` 0x17b708 path A draws both through `psiDrawParticleList`).
+/// The snow quads facing the camera (`DrawDrops` → `psiDrawParticleList` with the flake texture).
 fn snow_for(scene: &scene::Scene, cam: &Camera) -> Vec<scene::Vertex> {
     let Some(sim) = scene.sim.as_ref() else { return Vec::new() };
-    let f = cam.dir();
+    let (right, up) = billboard_axes(cam);
+    sim.snow_quads(right, up)
+}
+
+/// The emitter sprites facing the camera, grouped by def texture and blend (`Emitter_Draw` 0x17b708
+/// path A → `psiDrawParticleList` 0x122d50 with def+0x04 bound; `Scene::particle_draws`).
+fn particles_for(scene: &scene::Scene, cam: &Camera) -> Vec<(Option<usize>, bool, Vec<scene::Vertex>)> {
+    let (right, up) = billboard_axes(cam);
+    scene.particle_draws(right, up)
+}
+
+/// The camera's world right/up axes the billboards span.
+fn billboard_axes(cam: &Camera) -> ([f32; 3], [f32; 3]) {
     let right = cam.right();
-    let up = right.cross(f).normalize_or_zero();
-    let mut out = sim.snow_quads(right.to_array(), up.to_array());
-    out.extend(sim.particle_quads(right.to_array(), up.to_array()));
-    out
+    let up = right.cross(cam.dir()).normalize_or_zero();
+    (right.to_array(), up.to_array())
 }
 
 /// One frame of sound (`Sound_UpdateListeners` → `Sound_UpdateSounds` → the batch → `SFXUpdate`): the listener is
@@ -2797,6 +2818,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     let hud = &hud_owned;
     let movie_arg = movie.map(|(w, h, rgba)| (*w, *h, rgba.as_slice()));
     r.set_shards(&queue, &scene.shard_draws());
+    r.set_particles(&queue, &particles_for(scene, cam));
     let mut enc = r.render(&device, &queue, &view, &depth, vp, vp_rot, cam.pos.to_array(), time as u32, &snow, hud, movie_arg, if cut { Some(band) } else { None });
     let row = (4 * w).next_multiple_of(256);
     let buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
@@ -6091,6 +6113,7 @@ impl App {
                 g.renderer.destroy_tint = destroy_tints(&self.scene);
                 let fp_enc = std::time::Instant::now();
                 g.renderer.set_shards(&g.queue, &self.scene.shard_draws());
+                g.renderer.set_particles(&g.queue, &particles_for(&self.scene, &draw_cam));
                 let enc = g.renderer.render(&g.device, &g.queue, &view, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
                 let fp_sub = std::time::Instant::now();
                 frame_part(5, fp_sub - fp_enc);
@@ -7121,6 +7144,21 @@ pub fn run() -> Result<()> {
                 // Render aid (health-pane-fade): `NF_PANE_FADE=1` turns the pane-fade option on
                 // (`decay_gate`, PlayerSetting+0xB) from tick 1, so BL+0x8BC decays and the pane fades.
                 if t == 1 && std::env::var_os("NF_PANE_FADE").is_some() { sim.drones.decay_gate = true; }
+                // Render aid (particle-textures): `NF_EMITTER_AT=t:hash[:dist]` spawns a one-shot burst of
+                // emitter def `hash` (the `Effect_Create` impact arm's `WorldFx::spawn_impact`) `dist`
+                // units (default 2) along Bond's view on tick t, normal up — a shot of any def's sprites.
+                if let Some(v) = std::env::var("NF_EMITTER_AT").ok() {
+                    let p: Vec<&str> = v.split(':').collect();
+                    let tick = p.first().and_then(|s| s.parse::<u32>().ok());
+                    let hash = p.get(1).and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok());
+                    let dist = p.get(2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(2.0);
+                    if let (Some(tick), Some(hash)) = (tick, hash) {
+                        if tick == t {
+                            let (h, l) = (sim.bond.head(), sim.bond.look());
+                            sim.drones.fx.spawn_impact(hash, [h[0] + l[0] * dist, h[1] + l[1] * dist, h[2] + l[2] * dist], [0.0, 1.0, 0.0]);
+                        }
+                    }
+                }
                 // Render aid (bond-moment-flash): `NF_MOMENT_AT=t` marks Bond moment 0x65 done on tick t
                 // (the BondMoments entry PlrStat_DoneBondMoment sets), so the HUD's 007 flash runs.
                 if std::env::var("NF_MOMENT_AT").ok().and_then(|v| v.parse::<u32>().ok()) == Some(t) {
@@ -7150,7 +7188,21 @@ pub fn run() -> Result<()> {
                 let mut laser_fire = false;
                 if let Some((a, b, _)) = range("NF_LASER_AT") {
                     if t == a { eprintln!("[satchel-laser] spark def {:?}", sim.drones.fx.defs().get(&nf_game::drone::Drones::SATCHEL_BURN_SPARKS)); }
-                    if (a..=b).contains(&t) {
+                    // `NF_LASER_FLOAT=dist,dy,yaw` (with NF_LASER_AT): Bond faces `yaw` level and the
+                    // landed charge is held `dist` ahead of his eye, `dy` off it, over the burn ticks —
+                    // the framing of the PS2 reference (whose view cannot pitch down on the ride).
+                    if let Some(f) = std::env::var("NF_LASER_FLOAT").ok().map(|v| v.split(',').filter_map(|s| s.parse::<f32>().ok()).collect::<Vec<_>>()) {
+                        if f.len() == 3 && (a..=b).contains(&t) {
+                            sim.bond.yaw = f[2];
+                            sim.bond.pitch = 0.0;
+                            let h = sim.bond.head();
+                            if let Some(i) = sim.drones.bullets.iter().position(|x| x.landed && x.family(&sim.weapons) == 0x3b) {
+                                sim.drones.bullets[i].pos = [h[0] + f[2].sin() * f[0], h[1] + f[1], h[2] + f[2].cos() * f[0]];
+                                laser_fire = true;
+                            }
+                        }
+                    }
+                    if (a..=b).contains(&t) && std::env::var_os("NF_LASER_FLOAT").is_none() {
                         let charge = sim.drones.bullets.iter().find(|x| x.landed && x.family(&sim.weapons) == 0x3b).map(|x| x.pos);
                         if let Some(c) = charge {
                             let h = sim.bond.head();
@@ -8007,6 +8059,27 @@ mod headless_app_harness {
             }
             false
         }
+
+        /// Pump logic ticks until `pred` or `max_ticks` run out — the shape the
+        /// mission_outros_live tests use (their 6000-tick loop). The state-6 hold is the
+        /// game's per-vblank movie poll, not a wall clock: BGFMVPlaying = 1 on the open
+        /// [M 0x1081a8], cleared only at the decode pump's end of file [M 0x108060],
+        /// psiMovieFinished = BGFMVPlaying == 0 [M 0x1082e8], and the game's decode pump
+        /// runs one frame per vblank [M main 0x109080] — so the hold advances one per flow
+        /// tick (the port: `Player::headless_advance` per flow tick, mission-outros-2/4).
+        /// A wall budget cannot express it: the briefing's own PSS is 4 440 064 audio
+        /// samples at 48 kHz = 92.5 s = 5550 ticks [D crates/nf-formats/golden/
+        /// pss_movies.tsv 07100005.PSS] — the briefings run 1815-5550 and the outros
+        /// 1776-4230 [D the same table] — minutes of hold on an image with the real
+        /// movies, ~0 on the stub image (the pop, still covered: the pred returns at
+        /// once).
+        pub fn pump_ticks(&mut self, max_ticks: u32, mut pred: impl FnMut(&App) -> bool) -> bool {
+            for _ in 0..max_ticks {
+                self.frame(1.0 / 60.0);
+                if pred(&self.app) { return true; }
+            }
+            false
+        }
     }
 
     /// Menu sounds were missing entirely: run() built the sound driver and dropped it, so the
@@ -8077,7 +8150,20 @@ mod headless_app_harness {
         }
         #[cfg(not(feature = "movies"))]
         let _ = (state6_frames, saw_player);
-        let loading = h.pump(6.0, |a| a.async_load.is_some() && a.fe.is_none());
+        // The resolve — in TICKS, not wall seconds. State 6 pops when the movie's frames are
+        // consumed (BGFMVPlaying clears at the decode pump's end of file [M 0x108060];
+        // psiMovieFinished = BGFMVPlaying == 0 [M 0x1082e8]) and the poll advances one per
+        // game vblank [M main 0x109080], so the hold runs in flow ticks. On an image with the
+        // real movies and no `movies` feature (the no-decode player), the opened briefing
+        // holds its own 5550 ticks [D pss_movies.tsv 07100005.PSS: 4 440 064 samples @48 kHz
+        // = 92.5 s] — mission-outros-2's correct game fix [M 0x1081a8's BGFMVPlaying = 1 on
+        // the open; the old player reported `ended` before the first frame, which is why this
+        // test's old 6 s wall budget ever passed there]. The 6 s wall pump could never see
+        // the resolve on such an image ("the briefing resolve never started the level load",
+        // every run, idle machine included); the stub image pops at once and the pred still
+        // returns immediately. 7000 ticks > 5550 with margin; a `movies` build's Enter skip
+        // (pressed above, past the 1.0 s Confirm guard) resolves in the first ticks.
+        let loading = h.pump_ticks(7000, |a| a.async_load.is_some() && a.fe.is_none());
         assert!(loading, "the briefing resolve never started the level load");
         let loaded = h.pump(20.0, |a| a.level_code == 0x0700_0005 && a.async_load.is_none() && a.fe.is_none());
         assert!(loaded, "the level never finished loading (the 5 s LOADING_HOLD + the build)");

@@ -451,6 +451,15 @@ pub fn mounted_heat_strip(heat: f32) -> (f32, f32) {
     (v.min(100) as f32, 100.0)
 }
 
+/// The ammo pane's strip (filled, full) in the Ronin's remote view: the substate-0x10 arm sets max 100
+/// and the value `((short)v + (v >> 15)) >> 1 & 0xffff` of the turret's ext+0xF0 shot counter, with no
+/// clamp (only the 0xc arm clamps) [M HUD_UpdateAmmoPane 0x19a7f0:146-151].
+pub fn ronin_shots_strip(shots: u16) -> (f32, f32) {
+    let v = shots as i16 as i32;
+    let half = ((v + ((shots >> 15) as i32)) >> 1) as u32 & 0xffff;
+    (half as f32, 100.0)
+}
+
 /// The once-per-level gadget hint for this frame (`Player_WeaponFiring` 0x1a5460 [M]): weapon 0x54
 /// (the Micro-Camera) with the view model idle and `CamHint` clear → label 0x1000216 (:223-232);
 /// weapon 0x37 (the Remote Mine) likewise with `StickyHint` → 0x10002dc (:385-390). Each latch is set
@@ -591,7 +600,12 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     let zoomed = sim.map_or(false, |s| s.zoom_target > 1.0) || sim.map_or(false, |s| s.missile_cam.is_some())
         // cable-3p: any non-first-person camera mode hides it - `HUD_UpdateCrossHair` 0x19e6d0 ends at
         // LAB_0019e9c8 (not drawn) when BLData+0x950 != 0 [M :97-100] (the wire/creep 0xB, the orbit 1/2).
-        || sim.map_or(false, |s| s.bond.cam_mode != 0);
+        || sim.map_or(false, |s| s.bond.cam_mode != 0)
+        // The Ronin's remote view is cam mode 0xf: `GT_TakeControl` 0x181740 calls
+        // `Player_SetCamMode(BL, 0xf)`, which stores BL+0x950 = 0xf and enables pane 18 [M 0x195928
+        // :11, case 0xf], so the same BL+0x950 != 0 exit hides the cross [M 0x19e6d0:97-100]. Only
+        // the pane's own reticle (sprite 5) shows. The port keeps that cam mode as `ronin_mounted`.
+        || sim.is_some_and(|s| s.drones.ronin_mounted().is_some());
     // options-census: the Crosshairs row (Advanced 0x1000_0124 → PlayerSetting+0x08) hides the
     // sprite — HUD_UpdateCrossHair 0x19e6d0:96 sets +0x38 = 0xff (not drawn) when the byte is 0.
     // fix-hud-parity: that option gate sits on the NOT-aiming arm only — the aim-mode path
@@ -749,9 +763,19 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     let clip_size = u16::from_le_bytes([rec[0x92], rec[0x93]]) as f32;
     let flags68 = u32::from_le_bytes(rec[0x68..0x6c].try_into().unwrap());
     // `BL+0x95E` running (a weapon switch): the game clears the ammo text (sprite +0x20 = 0 — the
-    // `sh $zero,0x20(s6)` DELAY-SLOT store at 0x19aa9c that the decompiler drops) and takes the rounds
-    // strip off-screen (layer +0x38 = 0xFF); only the weapon name shows [M HUD_UpdateAmmoPane 0x19a7f0:
-    // 176-189, :248-273, :276-300]. PCSX2 play agrees: name alone on a switch, then ammo + fire mode.
+    // `sh $zero,0x20(s6)` DELAY-SLOT store at 0x19aa9c that the decompiler drops) and hides the fire
+    // mode while the name is up [M HUD_UpdateAmmoPane 0x19a7f0:176-189, :218-226]. PCSX2 play agrees:
+    // name alone on a switch, then ammo + fire mode.
+    // hud-ammo-under-label: the ROUNDS STRIP behaves differently on the FIRST label. The strip
+    // sprites (AmmoSprInfo[5]/[6]) are created on the template's layers 0x1c/0x1d and rect (pane
+    // (−25,−64), 25×64, uv (230,0,25,64)) [D the table; M HUD_CreateDefault 0x199b70 copies +8→rt+0x38
+    // and template+pane → rt+0x24/26]; the pane fn's strip blocks only hide them (0xff at 0x19ad0c/
+    // 0x19ae48) or reposition them while the timer is 0. The 07000011 f42 capture shows the bar over
+    // the weapon name during that first 60-tick label, and after it the bar remains (positioned).
+    // Once a rest frame has run, a switch takes the strips off again [M 0x19ad0c/0x19ae48; L 07000005
+    // 2026-10-12 switch: the name alone] — the port keeps that with the `ammo_strips_positioned`
+    // latch (scene.rs hud_tick). The strips-escape-the-hide mechanism at the level start is [S]
+    // unverified (the live check in the report settles it); the capture is the pin.
     let switching = s.hud.weapon_label_timer > 0;
     // fix-ammo-pane [M 0x19a7f0:283-299]: the name sprite's label id reads weapon_data[drone+0x63]+0x38 —
     // the REQUESTED weapon — so the pending draw announces the weapon being drawn to, not the old one.
@@ -790,17 +814,33 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     // kind 0x1f, max 100, value min((int)(ext+0x90 · 0.5), 100) [M HUD_UpdateAmmoPane 0x19a7f0:137-145]
     // — so the rounds strip becomes BulletImg[0x1f]'s heat gauge (`mounted_heat_strip`). The count
     // text stays blank: the held weapon is WeaponNone 0x47, whose +0x68 carries 0x20 [D weapon_data].
-    let mount_heat = s.drones.props.gunimps.iter().find(|g| g.active).map(|g| g.heat);
+    // The Ronin's remote view (substate 0x10, `GT_TakeControl` 0x181740 → BL+0x878 = the turret)
+    // takes the same kind-0x1f gauge, max 100, value = the turret's shot counter ext+0xF0 halved
+    // (`(short)v / 2`, no clamp) [M HUD_UpdateAmmoPane 0x19a7f0:146-151] — the red bar on the right
+    // of the remote view, full at the 200 shots `GT_Create` gives a player's Ronin.
+    let mount_heat = s.drones.props.gunimps.iter().find(|g| g.active).map(|g| mounted_heat_strip(g.heat))
+        .or_else(|| s.drones.ronin_mounted().map(|i| ronin_shots_strip(s.drones.gt_turrets[i].hp)));
     let strip_kind = if mount_heat.is_some() { 0x1f } else { ammo_type };
-    if let (false, false, Some(&[bu, bv, bw, hpr])) = (mp || sec_cam, switching, t.bullets.get(strip_kind)) {
+    if mp || sec_cam {
+        // The MP ammo pane has 3 sprites — no strips at all [M 0x19a7f0:247,275 (the count gates)].
+    } else if switching && !s.hud.ammo_strips_positioned {
+        // The first label: the strips in their created (template) state — both sprites at the
+        // created rect, layers 0x1c/0x1d, the template colours [D AmmoSprInfo; M 0x199b70].
+        for (i, layer) in [(5usize, 0x1ci32), (6, 0x1d)] {
+            if let Some(sp) = t.ammo.get(i) {
+                h.quad(Anchor::Right, layer, sp.texture, 0, AMMO_AT.0 + sp.x as f32, AMMO_AT.1 + sp.y as f32, sp.w as f32, sp.h as f32,
+                    [sp.uv[0] as f32, sp.uv[1] as f32, sp.uv[2] as f32, sp.uv[3] as f32], (false, false), gs(sp.colour >> 8, sp.colour & 0xff));
+            }
+        }
+    } else if let (false, Some(&[bu, bv, bw, hpr])) = (switching, t.bullets.get(strip_kind)) {
         // The strips draw the same transformed clip'/max' for kind 0x1f [M 0x19a7f0:129-136 flows into
         // :254-269]: the filled height = clip'·px/round of the full max'·px/round column, and the filled
         // strip's v starts (max'−clip')·px/round down the bullet texture.
         // fix-laser-watch-look: the held laser's strip shows the charge of 100 (the pane's second
         // value reads the same instance's f32 [M 0x19a7f0:172]; the sprite layout's exact gauge is a
         // render live check).
-        let (clip_n, max_n) = if let Some(heat) = mount_heat {
-            mounted_heat_strip(heat)
+        let (clip_n, max_n) = if let Some(strip) = mount_heat {
+            strip
         } else if laser_held {
             (s.laser_charge, 100.0)
         } else if ammo_type as u8 == 0x1f {

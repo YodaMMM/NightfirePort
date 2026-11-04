@@ -177,6 +177,20 @@ pub fn ps2_far1(level: u32) -> f32 {
     }
 }
 
+/// The eye distance inside which the GS's 24-bit depth wraps: `PS2WorldViewVU1Kick2` 0x10b2b0 maps a
+/// vertex at view depth d to zbuf(d) = N1 + (F1 − N1)·n·(f/d − 1)/(f − n) with N1 = `Ps2Near1` 8.0,
+/// F1 = `Ps2Far1`, n = `Ps2Near2` 0.1, f = `Ps2Far2` 2^24 [M; L ee_start_05.bin], and the leaves
+/// write ZBUF_1 PSM 1 (Z24) [D ps2gfx]. zbuf reaches 2^24 at this distance: nearer vertices (the
+/// near-plane clip points at d = n included, zbuf = F1) land past the 24-bit range. Only the levels
+/// whose F1 exceeds 2^24 (05, 0C, 0D) put it beyond the 0.1 near plane; elsewhere it is < n.
+pub fn zbuf_wrap_distance(level: u32) -> f32 {
+    const N1: f64 = 8.0;
+    const NEAR: f64 = 0.1;
+    const FAR2: f64 = 16_777_216.0;
+    let f1 = ps2_far1(level) as f64;
+    (FAR2 / (1.0 + (FAR2 - N1) * (FAR2 - NEAR) / ((f1 - N1) * NEAR))) as f32
+}
+
 /// The world-space half-extent of a weather flake (snow / rising drops, `DrawDrops` 0x18cb90 →
 /// `psiDrawParticleList` → `CreatePointerSpriteList` 0x11a160). The sprite's VU1 scale word is
 /// `1/(PS2SnowSize·PS2SnowSizeMult)` [M 0x11a160:81]; an emitter sprite of def size `s` gets
@@ -553,4 +567,21 @@ fn snow_size_is_the_game_table_and_the_flake_follows_it() {
     // Sister: the size really depends on the level (05 vs 06 differ; neither is the old fixed 0.1).
     assert!((h(0x0700_0005) - h(0x0700_0006)).abs() > 0.005);
     assert!((h(0x0700_0005) - 0.1).abs() > 0.05);
+}
+
+#[test]
+fn zbuf_wrap_distance_follows_far1() {
+    // 0C (Far1 20475840): zbuf passes 2^24 at d ≈ 0.122 — past the 0.1 near plane.
+    let c = zbuf_wrap_distance(0x0700_000c);
+    assert!((c - 0.12205).abs() < 2e-4, "0C wrap distance {c}");
+    // The formula at that distance is 2^24 (the definition), and at the near plane it is Far1 itself.
+    let zb = |d: f64, f1: f64| 8.0 + (f1 - 8.0) * 0.1 * (16_777_216.0 / d - 1.0) / (16_777_216.0 - 0.1);
+    assert!((zb(c as f64, 20_475_840.0) - 16_777_216.0).abs() < 1e3);
+    assert!((zb(0.1, 20_475_840.0) - 20_475_840.0).abs() < 1.0);
+    // 05 / 0D also wrap beyond the near plane; 12 (the other Ronin level) and 07 keep the default
+    // Far1 4194240 → the wrap sits well inside the near plane.
+    assert!(zbuf_wrap_distance(0x0700_0005) > 0.1 && zbuf_wrap_distance(0x0700_000d) > 0.1);
+    assert!(zbuf_wrap_distance(0x0700_0012) < 0.03, "{}", zbuf_wrap_distance(0x0700_0012));
+    // Sister: 08 (Far1 13191350 < 2^24) never wraps past the near plane.
+    assert!(zbuf_wrap_distance(0x0700_0008) < 0.1);
 }

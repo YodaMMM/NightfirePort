@@ -230,6 +230,48 @@ pub struct Material {
     pub index_count: u32,
 }
 
+/// One emitter sprite as two triangles facing the camera (`right`/`up` world axes), half-extent
+/// `size`, uv (0,0) at the top-left corner — the whole sprite texture.
+pub fn particle_quad(pos: [f32; 3], size: f32, rgba: [u8; 4], right: [f32; 3], up: [f32; 3]) -> [Vertex; 6] {
+    let (r, u) = (right.map(|v| v * size), up.map(|v| v * size));
+    let c = |sr: f32, su: f32, uv: [f32; 2]| Vertex {
+        pos: [pos[0] + r[0] * sr + u[0] * su, pos[1] + r[1] * sr + u[1] * su, pos[2] + r[2] * sr + u[2] * su],
+        uv, rgba, nrm: [0; 4],
+    };
+    let (a, b, cc, d) = (c(-1.0, -1.0, [0.0, 1.0]), c(1.0, -1.0, [1.0, 1.0]), c(1.0, 1.0, [1.0, 0.0]), c(-1.0, 1.0, [0.0, 0.0]));
+    [a, b, cc, a, cc, d]
+}
+
+/// The world half-extent of an emitter sprite of def size `size` (def+0x30): HALF the size (the
+/// sprite is `size` across). The VU1 scale word is `4·size/(PS2ParticleSize·PS2SnowSizeMult)` [M
+/// 0x119910:81]. Measured [L PCSX2, audits/render-1101-particles-ps2]: on the 05 stone-wall hit
+/// (def 0x0c00000f, texture 0x030000bb — 16×16 with only its centre 2×2 texels lit [D]) the lit
+/// core of a lone spark is ≤ 1/8 of a quad `size` across at the dumped spark depth (the CRT filter
+/// only widens it), so a half-extent of `size` would draw it at least twice the game's width; the
+/// flake size measured on the 05 / 06 captures gives the same reading
+/// (`nf_game::env::flake_half_extent`). The 0700004a charge burn (def 0x0c00000a, a soft 64×64
+/// glow, ~43 overlapping sprites) is consistent with it once the additive alpha runs past 1
+/// (`particle_add_pipeline`).
+pub fn particle_half_extent(size: f32) -> f32 { size * 0.5 }
+
+/// The emitter defs' sprite textures (def+0x04 hash → index into `textures`): each hash resolves
+/// to the first map texture with that hashcode, reusing a scene texture of the same key or
+/// appending one. A zero hash (the file's −1) and a hash no map holds are left out.
+pub fn particle_textures(level: &nf_formats::level::Level, textures: &mut Vec<TextureImage>) -> HashMap<u32, usize> {
+    let mut out = HashMap::new();
+    for d in level.maps.iter().flat_map(|m| m.emitter_defs.iter()) {
+        if d.texture == 0 || out.contains_key(&d.texture) { continue; }
+        let Some((mi, t)) = level.maps.iter().enumerate().find_map(|(mi, m)| m.textures.iter().find(|t| t.hashcode == d.texture).map(|t| (mi, t))) else { continue };
+        let key = (mi, t.index as u32);
+        let i = match textures.iter().position(|x| x.key == key) {
+            Some(i) => i,
+            None => { textures.push(TextureImage::from_texture(mi, t)); textures.len() - 1 }
+        };
+        out.insert(d.texture, i);
+    }
+    out
+}
+
 /// fix-menu-movies: `Clone` so the front end can keep its own texture list (the scene's entries
 /// plus the background-movie frame slot) without re-parsing the archive.
 #[derive(Clone)]
@@ -667,6 +709,11 @@ pub struct Sim {
     /// Per hint marker, the straddled `cells` indices (the game's obj+0xD0 chain occupancy — the
     /// same resolution as `icon_cels`, over the marker's world sphere).
     pub hint_cels: Vec<Vec<usize>>,
+    /// Per trigger: the ONE cel the game links it to at create — `Trigger_Create` 0x1b1720:96
+    /// runs `build_LinkToRoom` 0x1c9680 at the object's world-sphere centre [M] — resolved here
+    /// with the same world-sphere + `find_cell_raycast` construction the hints/icons use. None =
+    /// the cel did not resolve (the trigger stays pickable from anywhere: fail-open).
+    pub trigger_link_cels: Vec<Option<usize>>,
     /// Per hint marker: fired once per level load (obj+0xFE bit 0 deletes the game's object
     /// [M Hint_Update 0x1b3380:41-42]).
     pub hint_fired: Vec<bool>,
@@ -955,6 +1002,14 @@ pub struct HudState {
     /// `HUD_UpdateXRayPane` 0x1a1410), updated in `hud_tick` after the flow controller — the
     /// game's pane walk order [M HUD_Update 0x19a088:20-69]. hud.rs draws them.
     pub goggle_panes: nf_game::hud_pane::GogglePanes,
+    /// hud-ammo-under-label: the ammo strips' "ever drawn at rest" latch. The game's strip sprites
+    /// (AmmoSprInfo[5]/[6]) sit in their created state — template layers 0x1c/0x1d and the template
+    /// rect — until the pane's strip blocks first run with `BL+0x95E` at 0 and position them
+    /// [M HUD_UpdateAmmoPane 0x19a7f0:247-300]; the 07000011 f42 capture shows the bar over the
+    /// weapon name during that first label. Once a rest frame has positioned them, a switch takes
+    /// them off again (layer 0xff) [M 0x19ad0c/0x19ae48; L 07000005 2026-10-12 switch shows the name
+    /// alone]. The port latches on the first timer==0 tick (hud_tick); false at load.
+    pub ammo_strips_positioned: bool,
 }
 
 impl HudState {
@@ -2792,6 +2847,20 @@ impl Sim {
             .and_then(|w| w.get(0x68..0x6c)).map_or(false, |b| u32::from_le_bytes(b.try_into().unwrap()) & 0x40 != 0);
         let aiming = self.aim_gate(input.aiming || (input.scope && scoped));
         self.free_aim = aiming && input.aiming;
+        // level-0c-yard-climb-real-health-4 [M Player_AutoAim 0x1a7c98:50-59 — the aim-branch
+        // ease]: while the aim button is HELD (obj+0x60 bit0 set), the assist offsets ease
+        // toward the manual offsets at 0.5/tick and the Check_AutoAim scan does NOT run — per
+        // tick, not per shot. The port ran the ease only inside the fire path's dir pick, so
+        // an assist locked during the walk legs stayed frozen through the aim-raise and
+        // steered the first aimed rounds off target (measured: the pre-climb stand's shot
+        // carried aoff -0.216 rad — 12° off the converged view, the round died on the wall
+        // behind #15 [L the NF_RF_TRACE impact trace]; the same freeze held the west-edge
+        // stand's rounds 1.2 u west of #13 at (-4.20,12.58,-221.83) [L the same trace]).
+        if input.aiming {
+            let (ox, oy) = (-self.cursor[0] * 0.76966, self.cursor[1] * 0.57724);
+            let off = self.drones.aim_offset;
+            self.drones.aim_offset = [off[0] + (ox - off[0]) * 0.5, off[1] + (oy - off[1]) * 0.5];
+        }
         // Weapon switching (`Player_WeaponChange` 0x1a6f80): only when idle (not firing/reloading/holstering). The
         // switch request (`anim+0x63`) is set here; the holster/draw cycle runs in `run` (`Player_SetWeaponAnimObj`).
         // The weapon/gadget split: mouse wheel / Q cycles weapons (mode=0, 1..0x47); G cycles gadgets (mode=1,
@@ -2951,7 +3020,12 @@ impl Sim {
             // step (0x1a6f80:179-198) — `cycle` takes &mut self for the marker clear.
             let base_of = |w: u8| weapons.base(w as usize) as u8;
             let target = if let Some(id) = input.switch_to {
-                if id != self.gun.weapon && owned.get(id as usize).copied().unwrap_or(false)
+                // The owned read is the BASE's slot: the twins share it (`BL+0x1BA + base·0xC`,
+                // `Player_EquipWeapon` 0x1a8a58:39-41 — a variant owns nothing of its own; the
+                // port's Inventory::equip_weapon writes the same base slot [M]) — a direct request
+                // for the Samurai overcharge 0x32 (base 0x33) after its give was refused on
+                // owned[0x32] and the draw never started (fire_modes3's samurai leg).
+                if id != self.gun.weapon && owned.get(base_of(id) as usize).copied().unwrap_or(false)
                     && weapons.first_person(id as usize) != 0 { Some(id) } else { None }
             } else if idle && input.weapon_cycle != 0 {
                 let t = self.gun.toggle_back(nf_game::gun::CycleMode::Weapons, &owned, has_ammo, selectable, base_of);
@@ -3580,6 +3654,11 @@ impl Sim {
                     } else {
                         self.bond.cam_mode = 0;
                         self.bond.substate = nf_game::player::SS_WALK;
+                        // door-scan-skip-bit-2: this arm's game chain ends in
+                        // `Player_ChangeSubState(player, 0)` [M 0x195fc8:11-16], whose body clears
+                        // `obj+0xF0` bit 0x10 [M 0x190630:35-40] — the hand-back re-shows Bond to
+                        // the door auto-close scan.
+                        self.drones.bond_door_skip = false;
                     }
                 }
                 nf_game::nis::Request::PlayerEnable { at, .. } => {
@@ -3932,7 +4011,11 @@ impl Sim {
         let player = nf_game::drone::Player { pos, target: [camera[0], camera[1] - 0.45, camera[2]], eye: camera, aim: look, sph, hanging, capsule, body,
             // standins-drone-922: the facing yaw the flash factor reads [M 0x12d890:328-330].
             yaw: self.bond.yaw,
-            cel: self.cel_at(self.bond.pos).and_then(|room| self.room_cell.get(room).copied().flatten()) };
+            cel: self.cel_at(self.bond.pos).and_then(|room| self.room_cell.get(room).copied().flatten()),
+            // The crouch substate drives the trigger toucher's pick-arm switch
+            // (level-0a-ceiling-gun-route).
+            crouched: self.bond.crouched,
+            move_local: self.bond.move_local };
         let d = nf_game::drone::Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: self.level, sequences: &self.seqs, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models, surfaces: self.surfaces.as_ref(), voices: self.voices.as_deref(), difficulty: self.drones.difficulty,
             ai_points: &self.ai_points };
         // `Player_WeaponFiring` → `Player_WeaponInitBullet` from the eye along the view (*deviation*: no auto-aim and
@@ -4258,9 +4341,13 @@ impl Sim {
             // assist of a target locked before the raise carries into the first aim-mode shots.
             // fix-guard-misc2: the port dropped the lock and the offsets entirely on entering aim
             // mode, so an assist acquired while hip-firing never reached an aim-mode bullet.
-            // fix-aim-raise2: the gated BIT (`self.aiming`, maintained by `aim_gate` before run),
-            // not the raw button — the scan runs while a raise-script weapon is still raising.
-            let dir = if self.auto_aim && !self.free_aim { self.drones.auto_aim(&d, camera, look, self.gun.weapon) } else if self.free_aim {
+            // fix-aim-raise2 gated the scan on the BIT so the scan ran during the raise; 
+            // level-0c-yard-climb-real-health-4 corrects that with the decompile: the scan gate
+            // is the RAW aim button [M Player_AutoAim 0x1a7c98:50-59 — the branch reads
+            // obj+0x60 bit0: bit set → the ease arm, no scan; bit clear → the Check_AutoAim
+            // scan], so the button-held raise runs the ease (the per-tick ease lives in the
+            // step_bond path, right after the aim gate) and only the button-UP ticks scan.
+            let dir = if self.auto_aim && !self.free_aim && !aiming { self.drones.auto_aim(&d, camera, look, self.gun.weapon) } else if self.free_aim {
                 // The cursor is screen-space (cross units); the offsets are object-frame angles
                 // (a larger yaw turns LEFT, so x flips — the same flip `crosshair()` documents).
                 let (ox, oy) = (-self.cursor[0] * 0.76966, self.cursor[1] * 0.57724);
@@ -4830,7 +4917,15 @@ impl Sim {
                 // pellets returns too [L weapon_data 0x53: pellets 0]). `GT_TakeControl` runs
                 // `Player_WeaponNone` (hands) [M 00181740].
                 if self.gun.weapon == nf_game::gt::RONIN_CONTROL {
-                    if self.drones.ronin_take_control() == Some(true) { self.gun.go_to_hands(); }
+                    if self.drones.ronin_take_control() == Some(true) {
+                        self.gun.go_to_hands();
+                        // The turret updates after the player in the same frame and its case 7
+                        // reads the pad directly [M 00180498 case 7]: the press that mounted is
+                        // already a held trigger there (the spin arms on this tick — live ext+0xD4
+                        // after an 8-frame press, ronin_live `ronin_barrel_spin_on_the_press`).
+                        // The aim deltas of this one tick are left at zero.
+                        self.drones.gt_mount = Some((0.0, 0.0, true, false));
+                    }
                     break 'shot;
                 }
                 // 0x52 (:265-282): the pellet loop calls `GT_DeployMiniGun(player obj+0x30 +
@@ -5026,6 +5121,10 @@ impl Sim {
                         phase: matches!(self.gun.weapon as u16, 0x3a | 0x3b).then(|| {
                             Box::new(nf_game::grenade::StuckGadget::thrown(sdir))
                         }),
+                        // satchel-laser-scramble: BU+0x102 — Bullet_init 0x12c5a0:211 writes 100 for
+                        // the 0x3b family (the record's +0x02 base, in scope as `base`).
+                        burn: if base == 0x3b { 100 } else { 0 },
+                        defused: false,
                     });
                 } else {
                     // The muzzle light runs on every shot tick for the light-gated records — the
@@ -5229,7 +5328,22 @@ impl Sim {
             // `head`; the SP/switch/PCQWORM arm takes `sp_head` (garage-lift-calls); the SS/gunimp
             // pick below re-derives the same head. The last argument is Bond's body position
             // (obj+0xC0) — `SP_Activate` 0x1dc338:51-53's facing-dot input (use-pick-sp-standins).
-            self.drones.player_use_doors(&d, self.bond.head(), look, self.drones.frame, self.bond.head(), self.bond.pos);
+            // The game's stage-2 pick scope [M Collide_Pick 0x1eb320:125, :313-328]: the pick
+            // walks the objects linked to the cels `Collide_StraddleCels` 0x1eac98 reaches from
+            // the player's cel through the portals the use sphere meets (`Intersect_Portal`
+            // 0x1ea7b8 v0x101). The port: the player's straddle set over the pick segment
+            // (head → use point, r 1.0); a trigger whose one link cel sits outside it is not
+            // considered (the 07000003 locked-door audit: the bedroom plate never fires from the
+            // library doorway). No player cel, no gate (fail-open).
+            let trigger_scope = {
+                let head0 = self.bond.head();
+                find_cell_raycast(&self.cel_graph, self.bond.pos, Some(&self.world)).map(|cell| {
+                    let up = [head0[0] + look[0], head0[1] + look[1], head0[2] + look[2]];
+                    let cels = self.world.debug_straddle(cell, head0, up, 1.0);
+                    self.trigger_link_cels.iter().map(|tc| tc.map_or(true, |c| cels.contains(&c))).collect::<Vec<bool>>()
+                })
+            };
+            self.drones.player_use_doors(&d, self.bond.head(), look, self.drones.frame, self.bond.head(), self.bond.pos, trigger_scope);
             // `Player_Activate` 0x1a5170's ONE pick for every class [M :100-108]: a sphere of radius
             // exactly 1.0 (asm 0x1a5278 `lui $at, 0x3f80`) centred at head + view dir (`Mat_GetDir`
             // of the slot viewer's matrix, asm 0x1a5250), through Collide_SphereIntersect 0x1ec940
@@ -5791,6 +5905,12 @@ impl Sim {
             if changed { self.hud.weapon_label_timer = 60; }
         }
         self.hud.weapon_label_timer = self.hud.weapon_label_timer.saturating_sub(1);
+        // hud-ammo-under-label: the strips' first rest frame. The pane's strip blocks position the
+        // two strip sprites the first time they run with the timer at 0 [M HUD_UpdateAmmoPane
+        // 0x19a7f0:248-269, 276-296]; before that (the level-start label) the sprites still carry
+        // the created template state the f42 capture shows. hud.rs draws the template state while
+        // this latch is clear and the timer runs.
+        if self.hud.weapon_label_timer == 0 { self.hud.ammo_strips_positioned = true; }
         // The crouch icon: the timer holds 60 while crouched, then fades after standing
         // [M 0x19b9c8:305-328].
         if self.bond.crouched { self.hud.crouch_icon_timer = 60; }
@@ -6178,33 +6298,6 @@ impl Sim {
         for (p, &alive) in env.drops.iter().zip(&env.alive) {
             if !alive { continue; }
             let c = |sr: f32, su: f32, uv: [f32; 2]| Vertex { pos: [p[0] + r[0] * sr + u[0] * su, p[1] + r[1] * sr + u[1] * su, p[2] + r[2] * sr + u[2] * su], uv, rgba: [63, 63, 63, 127], nrm: [0; 4] };
-            let (a, b, cc, d) = (c(-1.0, -1.0, [0.0, 1.0]), c(1.0, -1.0, [1.0, 1.0]), c(1.0, 1.0, [1.0, 0.0]), c(-1.0, 1.0, [0.0, 0.0]));
-            out.extend_from_slice(&[a, b, cc, a, cc, d]);
-        }
-        out
-    }
-
-    /// The emitter particles as camera-facing quads (`Emitter_Draw` 0x17b708 path A →
-    /// `psiDrawParticleList` 0x122d50: a size-`def.size` rgba sprite per alive slot). The game sizes
-    /// the sprite in screen space (`4·size / (PS2ParticleSize · PS2SnowSizeMult)`) — the port
-    /// takes the def size as the world-space half-extent, the way the snow quads do. The GAME'S SCALAR for the
-    /// render pass, EXACT [M 0x119910:81 `pDMA[4] = (uint)((1.0/(PS2ParticleSize·PS2SnowSizeMult))·4.0·size)`
-    /// — a VU1 sprite scale word next to the ST=1.0 constants]: PS2ParticleSize = Ps2Far1·0.002386635 [M 0x11e2e8:67],
-    /// PS2SnowSizeMult = (1/viewer+0x108)·(1/(viewport-H·0.002232143)) = 448/H [M 0x10b2b0:100-112] — ∝ 1/far and
-    /// ∝ viewport height, i.e. a FIXED SCREEN-SPACE size, not a world extent; the ±size/2 world-space reading is the
-    /// port's approximation (the half-vs-full factor lives in the VU1 sprite microcode, backlog L-706). The
-    /// white rgb in the game's sprite comes from the bound def texture (the font-slot hash, def+0x04)
-    /// modulated by the slot rgba [M 0x119910:19]; the port has no per-def texture, so the colour is
-    /// the slot rgba itself — listed in the report's render follow-ups.
-    pub fn particle_quads(&self, right: [f32; 3], up: [f32; 3]) -> Vec<Vertex> {
-        let sprites = self.drones.fx.particle_sprites();
-        let mut out = Vec::with_capacity(sprites.len() * 6);
-        for s in sprites {
-            let (r, u) = (right.map(|v| v * s.size), up.map(|v| v * s.size));
-            let c = |sr: f32, su: f32, uv: [f32; 2]| Vertex {
-                pos: [s.pos[0] + r[0] * sr + u[0] * su, s.pos[1] + r[1] * sr + u[1] * su, s.pos[2] + r[2] * sr + u[2] * su],
-                uv, rgba: s.rgba, nrm: [0; 4],
-            };
             let (a, b, cc, d) = (c(-1.0, -1.0, [0.0, 1.0]), c(1.0, -1.0, [1.0, 1.0]), c(1.0, 1.0, [1.0, 0.0]), c(-1.0, 1.0, [0.0, 0.0]));
             out.extend_from_slice(&[a, b, cc, a, cc, d]);
         }
@@ -6714,6 +6807,9 @@ pub struct Scene {
     /// break-shards draw: a kind-2 breakable's face draw word (its batch texture) → the index into
     /// `textures` of `(the pane object's map, word)`, so a shard binds the pane's own texture.
     pub shard_tex: HashMap<u32, usize>,
+    /// The emitter sprite textures: def+0x04 texture hash → index into `textures`
+    /// (`particle_textures`; a hash no map holds is absent and draws untextured).
+    pub particle_tex: HashMap<u32, usize>,
     /// The pause/fail menus' burning woman (`psiDecompressWoman` 0x1202a8): decoded into 0x030000db's HUD texture
     /// while a paused page shows it. Set by the loader from the level archive's kind-16 "woman" entry.
     pub woman: Option<crate::woman::Woman>,
@@ -7561,6 +7657,30 @@ impl Scene {
     /// word), and the alpha `min(lifetime·FRAME_RATE·10, 255)` through `psiSetTweakA` [M 0x12bef8:50-56].
     /// The tweak scales the face's own vertex alpha (255 → the pane as it was) [S: the tweak's exact
     /// use in the shard microcode is unread]. A shard still in its peel delay draws at its spawn spot.
+    /// The emitter sprites (`Emitter_Draw` 0x17b708 path A → `psiDrawParticleList` 0x122d50) as
+    /// camera-facing quads grouped by draw state: `(texture, additive, vertices)`, the texture an
+    /// index into `textures` (None = the def's hash resolved no map texture — the white fallback).
+    /// Each sprite is the def texture's whole image (`CreatePointerSpriteListColour` 0x119910:
+    /// the CLAMP_1 region-repeat masks are the texture's w−1/h−1, the ST constants 0..1 [M
+    /// 0x119910 pDMA[4..5], pDMA[0xc..0x10]]), MODULATED by the slot rgba (TEX0 TCC 1, TFX 0 [M
+    /// 0x119910 TEX0 word]), depth-tested without writing (`psiSwitchZBufferRead(0)` /
+    /// `psiSwitchZBufferWrite(1)` [M 0x122d98-0x122da4]), blended by def+0x3c
+    /// (`ParticleSprite::additive`). The game draws every emitter object in its own call; one
+    /// group per (texture, blend) draws the same pixels.
+    pub fn particle_draws(&self, right: [f32; 3], up: [f32; 3]) -> Vec<(Option<usize>, bool, Vec<Vertex>)> {
+        let Some(sim) = self.sim.as_ref() else { return Vec::new() };
+        let mut groups: Vec<(Option<usize>, bool, Vec<Vertex>)> = Vec::new();
+        for s in sim.drones.fx.particle_sprites() {
+            let tex = self.particle_tex.get(&s.texture).copied();
+            let g = match groups.iter().position(|(t, a, _)| *t == tex && *a == s.additive) {
+                Some(k) => k,
+                None => { groups.push((tex, s.additive, Vec::new())); groups.len() - 1 }
+            };
+            groups[g].2.extend_from_slice(&particle_quad(s.pos, particle_half_extent(s.size), s.rgba, right, up));
+        }
+        groups
+    }
+
     pub fn shard_draws(&self) -> Vec<(usize, Vec<Vertex>)> {
         let Some(sim) = self.sim.as_ref() else { return Vec::new() };
         let sh = &sim.drones.breaks.shatter;
@@ -9314,31 +9434,45 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // the same `transform(matrix, obj.centre)` add_instance bakes into the group's cull
                 // sphere, so the bits match the material's `centre` the draw filter reads.
                 if kind == 0xe1 {
-                    destroy_centres.push((transform(&inst.matrix, obj.centre), pi));
-                    // The destroyed-glist swap's WRECK side. `Destroy_Create` 0x12c318:25-30 stores
-                    // tag[0] = `*(glist+0x40)` when the block-0x27 LOD-next word stands, else the
-                    // parsemap fallback slot `pCelList + idx*0x50 + 0x50` [M 0x1d1b68 computes it
-                    // unconditionally; `parsemap_block_LOD` 0x1d1f10 writes `cel+0x40 = index*0x50 +
-                    // pCelList`, so the fallback record is the NEXT main-map entity's glist];
-                    // `Destroy_Smash` 0x12bb60's `Control_SetGList(obj, tag[0])` swaps it in (the
-                    // disassembly 0x12bbb8 `lw a1,0(s1)` + 0x12bbc4 — the decomp dropped the arg).
-                    // The port resolves the same two targets and bakes the wreck at the LEAF's own
-                    // matrix (the swap changes only the glist; obj+0x90 stands). An undrawable slot
-                    // (no batches, or the no-draw bit 0x10 — `View_AddObjects` 0x1e62d8:33's
-                    // `(obj+0xF0 & 0x8010) == 0` gate, the FLAGS_COPYING evidence) is not baked: the
-                    // leaf just vanishes. The wreck's ambient dim follows the swapped-in glist's own
-                    // 0x800 flags (obj+0xF0 is the glist's flags copy [M Control_SetGList 0x134960]).
-                    let wreck = level.maps[map].lod_target(object)
-                        .map(|o| (map, o))
-                        .or_else(|| (p.index as usize + 1 < level.maps[map].objects.len()).then_some((map, p.index as usize + 1)));
-                    if let Some((wm, wo)) = wreck {
-                        let wobj = &level.maps[wm].objects[wo];
-                        if wobj.flags & 0x10 == 0 && wobj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) {
-                            let wmult = if wobj.flags & 0x800 != 0 {
-                                mul_bytes(cel_ambient(&room_cels, transform(&inst.matrix, wobj.centre), 0).unwrap_or([0xff; 3]))
-                            } else { [1.0; 3] };
-                            add_instance(level, &Instance { map: wm, object: wo, matrix: inst.matrix, placement: p.clone() }, Layer::World, None, &mut groups, Some(&mut bounds), None, None, None, wmult, &room_cels, u32::MAX, u32::MAX);
-                            destroy_wrecks.push((transform(&inst.matrix, wobj.centre), pi));
+                    // The swap's NO-SWAP case, which decides whether the leaf's intact draw dies at
+                    // all. `Destroy_Create` 0x12c318:57-59 zeroes tag[0] when the leaf's OWN glist
+                    // flags carry the no-draw bit 0x10 (obj+0xF0 = glist+0x44, copied by the
+                    // SetGList at :25 [M Control_SetGList 0x134960]); `Destroy_Smash` 0x12bb60 then
+                    // takes its `*piVar1 == 0` arm and SKIPS the `Control_SetGList(obj, tag[0])`
+                    // swap — the intact glist stays attached and the leaf keeps drawing exactly
+                    // what it drew before the smash. 07000014's server racks are that case
+                    // [D obj#273 DESTROY_BoxSatellite flags 0x30, bit 0x10 set]: the cascade's
+                    // blast swaps nothing in for them. A leaf in the zeroing case joins NEITHER the
+                    // dead gate NOR the wreck bakes. (The no-draw gate above already skips every
+                    // 0x10 leaf before this point, so this guard keeps the two rules consistent
+                    // rather than changing any draw.)
+                    if obj.flags & 0x10 == 0 {
+                        destroy_centres.push((transform(&inst.matrix, obj.centre), pi));
+                        // The destroyed-glist swap's WRECK side. `Destroy_Create` 0x12c318:25-30 stores
+                        // tag[0] = `*(glist+0x40)` when the block-0x27 LOD-next word stands, else the
+                        // parsemap fallback slot `pCelList + idx*0x50 + 0x50` [M 0x1d1b68 computes it
+                        // unconditionally; `parsemap_block_LOD` 0x1d1f10 writes `cel+0x40 = index*0x50 +
+                        // pCelList`, so the fallback record is the NEXT main-map entity's glist];
+                        // `Destroy_Smash` 0x12bb60's `Control_SetGList(obj, tag[0])` swaps it in (the
+                        // disassembly 0x12bbb8 `lw a1,0(s1)` + 0x12bbc4 — the decomp dropped the arg).
+                        // The port resolves the same two targets and bakes the wreck at the LEAF's own
+                        // matrix (the swap changes only the glist; obj+0x90 stands). An undrawable slot
+                        // (no batches, or the no-draw bit 0x10 — `View_AddObjects` 0x1e62d8:33's
+                        // `(obj+0xF0 & 0x8010) == 0` gate, the FLAGS_COPYING evidence) is not baked: the
+                        // leaf just vanishes. The wreck's ambient dim follows the swapped-in glist's own
+                        // 0x800 flags (obj+0xF0 is the glist's flags copy [M Control_SetGList 0x134960]).
+                        let wreck = level.maps[map].lod_target(object)
+                            .map(|o| (map, o))
+                            .or_else(|| (p.index as usize + 1 < level.maps[map].objects.len()).then_some((map, p.index as usize + 1)));
+                        if let Some((wm, wo)) = wreck {
+                            let wobj = &level.maps[wm].objects[wo];
+                            if wobj.flags & 0x10 == 0 && wobj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) {
+                                let wmult = if wobj.flags & 0x800 != 0 {
+                                    mul_bytes(cel_ambient(&room_cels, transform(&inst.matrix, wobj.centre), 0).unwrap_or([0xff; 3]))
+                                } else { [1.0; 3] };
+                                add_instance(level, &Instance { map: wm, object: wo, matrix: inst.matrix, placement: p.clone() }, Layer::World, None, &mut groups, Some(&mut bounds), None, None, None, wmult, &room_cels, u32::MAX, u32::MAX);
+                                destroy_wrecks.push((transform(&inst.matrix, wobj.centre), pi));
+                            }
                         }
                     }
                 }
@@ -9760,9 +9894,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // non-07000005 level would explain "ghostly white": texture × white vertex × GAIN → white.
         let untextured = materials.iter().filter(|m| m.key.is_none()).count();
         if untextured > 0 { eprintln!("render: {untextured} of {} materials have no texture (white fallback)", materials.len()); }
-        let textures: Vec<TextureImage> = keys.into_iter().map(|key| {
+        let mut textures: Vec<TextureImage> = keys.into_iter().map(|key| {
             TextureImage::from_texture(key.0, &level.maps[key.0].textures[key.1 as usize])
         }).collect();
+        // The emitter sprites' textures (def+0x04): `Emitter_LoadDefs` 0x17ab40 resolves the def's
+        // texture hash through the hashtable and keeps the entry's first word, which
+        // `CreatePointerSpriteListColour` 0x119910 binds via `psiFont_SetTexture` 0x120880 [M
+        // 0x17ab40 `hashtable_getitem` → `*item`, 0x119910:19]. The map texture with that hashcode joins the scene textures
+        // (appended, so the material texture indices stay put); the first map holding it wins,
+        // as the snow texture's lookup does.
+        let particle_tex = particle_textures(&level, &mut textures);
         let mut hud_textures: Vec<(u32, TextureImage)> = crate::hud::TEXTURES.iter().chain(crate::menu::MENU_TEXTURES.iter()).chain(crate::menu::mp_textures().iter()).filter_map(|&h| level.maps.iter().enumerate().find_map(|(mi, m)| m.textures.iter().find(|t| t.hashcode == h).map(|t| {
             (h, TextureImage::from_texture(mi, t))
         }))).collect();
@@ -9936,6 +10077,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let spoken = drones.map(|c| (c.snd2lbl.clone(), c.sfx_durations.clone()));
             let mut drones = nf_game::drone::Drones::new(list, rng);
             drones.lights = lights;
+            // sniper-spawn-stats-2: the Sim's `drone_stats` table starts as the level's
+            // LOAD-time table (the same one `level_drones` read the placed drones' stats from) — a
+            // spawner spawn's `behaviour_util_get`+`DoModeSettingsNEW` read/write THIS table
+            // [M 0x137cb0 → 0x1c7a98/0x14c600], so a section-less template reads the load-time
+            // record, not an empty one.
+            drones.stats_table = {
+                let roles: Vec<nf_formats::drone::SpawnRole> = {
+                    let ps: Vec<(u32, Vec<(u32, u32)>)> = level.maps[level.main_map().unwrap()].placements.iter().map(|p| (p.flags & 0xff, p.params.clone())).collect();
+                    nf_formats::drone::spawn_roles(&ps)
+                };
+                nf_game::drone::load_stats_table(&data, level, &roles)
+            };
             if let Some((rows, durs)) = spoken { drones.attach_snd2lbl(rows, durs); }
             // The selected difficulty BEFORE the creates: every create-time gate reads it
             // (captain_setup 0x14b300:504-535, Drone_Create's min-difficulty tag 0x136be0:49,
@@ -10022,6 +10175,24 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }).collect::<Vec<_>>();
             let hint_fired = vec![false; hints.len()];
             let icon_msg_timers = vec![0u8; icons.len()];
+            // The triggers' one link cel each (the game's stage-2 pick scope): the placement's
+            // world-sphere centre through the yaw matrix (the same construction as the hints'
+            // [M Control_BuildWorldSph 0x133070]), then `find_cell_raycast` (build_FindCel
+            // 0x1c8cb0). `Trigger_Create` 0x1b1720:96 links the trigger ONCE, at that centre.
+            let trigger_link_cels = drones.triggers.iter().map(|t| {
+                let (mi, p) = level.maps.get(0).and_then(|m| m.placements.get(t.placement)).map(|p| (0usize, p))?;
+                let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                    else if (p.index as usize) < level.maps[mi].objects.len() { Some((mi, p.index as usize)) } else { None };
+                let o = obj.and_then(|(om, oi)| level.maps.get(om).and_then(|map| map.objects.get(oi)))?;
+                let yaw = p.rotation[1];
+                let (sy, cy) = yaw.sin_cos();
+                let centre = [
+                    p.translation[0] + o.centre[0] * cy + o.centre[2] * sy,
+                    p.translation[1] + o.centre[1],
+                    p.translation[2] - o.centre[0] * sy + o.centre[2] * cy,
+                ];
+                find_cell_raycast(&cel_graph, centre, Some(&world))
+            }).collect::<Vec<_>>();
             // The wire anims' root tracks: the level archive's kind-5 scripts (the player body anims)
             // resolved to their sequences [D 07000005: 0x060005e5 101 frames → 0x04000536, the move pair
             // 0x060000b4/b5 → 0x04000034/35 travelling 0.7637/0.7106 per cycle].
@@ -10092,7 +10263,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 pda_display: [0; 4],
                 pda_hold: 0,
                 pda_lock: None,
-                hints, hint_cels, hint_fired, icon_msg_timers,
+                hints, hint_cels, hint_fired, icon_msg_timers, trigger_link_cels,
                 view_alert: false,
                 prev_aiming: false,
                 view_aim_anim: None,
@@ -10159,7 +10330,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
-        Scene { shard_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, door_dims, sl_dims, dynobj_matrices, rotor_placements, rbody_placements, mine_placements, gunimp_placements, script_tweak_alpha,
+        Scene { shard_tex, particle_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, door_dims, sl_dims, dynobj_matrices, rotor_placements, rbody_placements, mine_placements, gunimp_placements, script_tweak_alpha,
             door_scene_hidden,
             sl_lod,
             corona_pos,
@@ -11413,10 +11584,21 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         // Past the rotors: the rigid bodies at their live obj+0x90 [M RB_EulerEvolve 0x1d7810].
                         let bi = ri - self.rotor_placements.len();
                         if bi >= self.rbody_placements.len() {
-                            // Past the rigid bodies: the mines at their placement matrix until the
-                            // sim explodes one (the game deletes it [M 0x17cb7c-0x17cb88]).
-                            let &(pl, mx) = self.mine_placements.get(bi - self.rbody_placements.len())?;
-                            if s.drones.mines.iter().any(|mn| mn.placement == pl && mn.exploded) { return None; }
+                            // Past the rigid bodies: the mines posed every tick at their placement
+                            // rotation and the bob's live y, collapsed once the sim explodes the
+                            // mine (the game deletes it [M 0x17cb7c-0x17cb88]). The game draws the
+                            // mine glist at obj+0x90 [M View_DrawObjectGlist 0x1e6780:44], which
+                            // Control_BuildWorldSph 0x133070:17 rebuilds every tick from obj+0x50
+                            // (rot) + obj+0x30 (pos) [M Control_GetObjMatrix 0x134210:10-12];
+                            // Mine_Update 0x17c930 bobs obj+0x34 = pos.y +
+                            // sin(GameState+0x52·param3·0.0002)·param4·0.1 [M disasm
+                            // 0x17c9c8-0x17c9f4] and View_RotTransMatrix 0x1e5168:46-48 writes
+                            // obj+0x30..0x38 into the drawn matrix's translation — so the slot
+                            // keeps the placement rotation and takes the live y.
+                            let &(pl, mut mx) = self.mine_placements.get(bi - self.rbody_placements.len())?;
+                            let Some(mn) = s.drones.mines.iter().find(|mn| mn.placement == pl) else { return Some(mx) };
+                            if mn.exploded { return None; }
+                            mx[3][1] = mn.posed_y;
                             return Some(mx);
                         }
                         let pi = self.rbody_placements[bi];
@@ -12298,6 +12480,21 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // per ticked frame. `colour_attach_map_covers_every_slot_on_the_lag_levels` pins the
         // invariant (every slot present), so a change that would make the fallback reachable
         // fails a test instead of silently changing the palette's colours.
+        gt_barrel_spin(self, p, ab);
+        ronin_view_wrap_marks(self, p, ab);
+    }
+
+    /// The attachment indices of the mounted Ronin's script parts whose triangles drop by the 24-bit
+    /// depth wrap in the remote view, and the wrap distance; empty when the view is not up or the
+    /// level's wrap sits inside the near plane (`ronin_view_wrap_marks`).
+    pub fn ronin_view_wrap_parts(&self) -> (Vec<usize>, f32) {
+        let Some(s) = self.sim.as_ref() else { return (Vec::new(), 0.0) };
+        let dw = nf_game::env::zbuf_wrap_distance(s.level);
+        if dw <= GAME_NEAR || s.drones.ronin_mounted().is_none() { return (Vec::new(), dw); }
+        let parts = self.attachments.iter().enumerate()
+            .filter(|(_, a)| a.script.is_some_and(|(h, ..)| h == nf_game::gt::RONIN_SCRIPT_A || h == nf_game::gt::RONIN_SCRIPT_B))
+            .map(|(i, _)| i).collect();
+        (parts, dw)
     }
 
     /// The per-object colour multipliers of one frame (`View_SetupRenderModes_Tweak`'s TAmbient): per character,
@@ -14800,4 +14997,56 @@ pub fn camera_swing_step(phase: &mut f32, amount: f32, zoom: f32) -> (f32, f32, 
         k * nf_game::trig::sinf(phi),            // yaw: sin(φ) [M 0x1bbf40:16-19]
         k * nf_game::trig::sinf(phi * 3.0),      // roll: sin(3φ) [M 0x1bbf40:20-24]
     )
+}
+
+/// The world pass's near plane, the game's `Ps2Near2` (lib.rs `Camera::view_proj`).
+const GAME_NEAR: f32 = 0.1;
+
+/// The Ronin's remote view puts the eye 0.104 ahead of the barrel's origin and 0.15 above its axis
+/// [M Player_PositionCamera 0x18f5d8 case 0xf; L PCSX2 audits/render-1101-roninview], so the barrel's
+/// tube strips (glist z 0.031..0.369) start behind the eye. The VU1 clip program cuts them at the 0.1
+/// near plane [M micro `_$ROTATECLIPED`/`_$ZMINUS` 0x241e30/0x242340], where zbuf = `Ps2Far1`; on 0C
+/// that is past the 24-bit Z range (`zbuf_wrap_distance`), so the clip vertices wrap to a far depth and
+/// the strips lose the depth test to the muzzle ring right behind them. The PS2 frame shows the ring's
+/// face and no tubes; moving the eye 0.1 back (all tube vertices in front of the eye) brings tubes in,
+/// hidden only where the ring is behind them [L PCSX2 audits/render-1101-roninview2 eye A/B].
+/// The port reproduces it for the mounted Ronin's script parts: their palette entries carry
+/// 1 + the wrap distance in m[3][3] (otherwise 1.0, unused by the transform), and the world shader
+/// drops a triangle with a vertex nearer than that (gpu.rs `nw`). The general wrap — a garbage depth
+/// over any near-clipped triangle — is not modelled.
+fn ronin_view_wrap_marks(scene: &Scene, p: &mut [Mat4], attach_base: usize) {
+    let (parts, dw) = scene.ronin_view_wrap_parts();
+    for a in parts {
+        if let Some(m) = p.get_mut(attach_base + a) {
+            if m[3][1] > -9000.0 { m[3][3] = 1.0 + dw; }
+        }
+    }
+}
+
+/// `GT_Update`'s spin block on the drawn barrel [M 0x180498:365-382, 538-556]: obj+0x90 of
+/// registered[1] = `RotMatrixZ(angle)` · its script pose (rows [c, s, 0] / [−s, c, 0] onto the pose's
+/// x / y rows) on the ticks the block runs (`GTurret::spin_draw`). Measured [L PCSX2
+/// audits/render-1101-roninview]: the barrel's row0 (−0.921, −0.388, 0.017) = cos/sin(−2.741) of the
+/// script-A pose with ext+0xD4 = −2.741. The palette entry is the attachment that drew the entity's
+/// matrix (same script, stream and hash, same matrix).
+fn gt_barrel_spin(scene: &Scene, p: &mut [Mat4], attach_base: usize) {
+    let Some(s) = scene.sim.as_ref() else { return };
+    for t in s.drones.gt_turrets.iter().filter(|t| !t.delete_flag && t.registered[1] != 0) {
+        let Some(a) = t.spin_draw else { continue };
+        let Some(Some(nf_game::nis::Obj::Entity { hash, src, matrix, .. })) = s.drones.scripts.objects.list.get(t.registered[1] as usize - 1) else { continue };
+        let (sn, c) = a.sin_cos();
+        let m = *matrix;
+        let mut r = m;
+        for k in 0..4 {
+            r[0][k] = c * m[0][k] + sn * m[1][k];
+            r[1][k] = -sn * m[0][k] + c * m[1][k];
+        }
+        let same = |x: &Mat4| (0..4).all(|i| (0..4).all(|j| (x[i][j] - m[i][j]).abs() < 1e-4));
+        for (i, att) in scene.attachments.iter().enumerate() {
+            if !att.script.is_some_and(|(sh, st, h, _)| (sh, st) == *src && h == *hash) { continue; }
+            if let Some(e) = p.get_mut(attach_base + i) {
+                if same(e) { let w = e[3][3]; *e = r; e[3][3] = w; }
+            }
+        }
+    }
 }

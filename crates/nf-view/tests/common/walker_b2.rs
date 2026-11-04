@@ -92,6 +92,12 @@ pub struct Walker {
     /// Lenient walks bail (u32::MAX) at the 6000-tick cap instead of panicking — the caller
     /// decides (walkreal_0700000b_live's deck leg keeps the interactions real on a wedge).
     pub lenient: bool,
+    /// The stuck ladder's player answers, OPT-IN (default off keeps every walk tuned on the old
+    /// ladder): the E goes only to a door on Bond's own floor that is not locked (a set lock
+    /// channel still off; the main walker's filter — a door 7 u up the stairwell, or a locked one, never
+    /// answers the E, and the press reset the ladder forever), and a live hostile standing on
+    /// the lane within a body's reach on Bond's floor is shot before the walk goes on.
+    pub stuck_answers: bool,
     /// ai-sight-drawn-gate-4 (NF_ALARM_TRACE, additive): each drone's last logged state, so the
     /// trace prints only transitions + a 50-tick digest — the fail reads as the presser's walk.
     pub alarm_last: Vec<u8>,
@@ -142,7 +148,7 @@ impl Walker {
             scene, top_up_health: true, dmg: DamageLog::new(), stop_on_exit: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0, float_ticks: 0,
-            sidestep: 0, max_y: pos[1], lenient: false,
+            sidestep: 0, max_y: pos[1], lenient: false, stuck_answers: false,
             alarm_last: Vec::new(),
             alarm_props_dumped: None,
         }
@@ -285,25 +291,73 @@ impl Walker {
 
     /// Walk to the nearest live pickups (ammo/guns on the floor — placed or guard drops) until the
     /// ammo pool grows. Returns whether any ammo arrived.
+    ///
+    /// The SHARED rules are the master ones: ammo = clip+spare, the 1.5 ground filter, no
+    /// tried-target list, the 45 u fetch, the 1.8 arrive. The 07000013 walk's tighter rules
+    /// (inventory-counting ammo, the 0.5 on-floor filter, the tried list, the 12 u fetch, the
+    /// 0.6 arrive) are OPT-IN via `lane_fights` — only that walk sets it — because the other
+    /// real-damage walks resupply master-green on the old rules (level-13-lobby-rifles-2).
     pub fn resupply(&mut self, label: &str) -> bool {
+        let lane = self.dmg.lane_fights;
+        // `lane_floor_drops` (the 07000011 00 Agent opt-in): the on-floor band relaxes to the
+        // master 1.5 — the floor-resting fight drops sit 1.09 under Bond's pos y [L
+        // drop-stand-height probe], outside the lane 0.5 band. Everything else lane-shaped (the
+        // 12-u fetch, the tried list, the 0.6 arrive, the inventory ammo count) stays lane's.
+        let floor_band = if self.dmg.lane_floor_drops { 1.5 } else { 0.5 };
+        // Ammo in hand (lane): the current gun's clip+spare AND the inventory's (a taken gun lands
+        // in the inventory — the current clip does not move [M Pickup_Handler 0x18e650's equip
+        // path], so a successful gun pick would read as a dry pass without this). The shared rule
+        // stays clip+spare.
         let ammo = |w: &Walker| {
             let sim = w.scene.sim.as_ref().unwrap();
-            sim.gun.clip as i32 + sim.gun.spare as i32
+            let mut total = sim.gun.clip as i32 + sim.gun.spare as i32;
+            if lane {
+                let inv = &sim.drones.inventory;
+                for wid in 2..=0x47usize {
+                    if !inv.owned.get(wid).copied().unwrap_or(false) { continue; }
+                    let slot = nf_game::pickup::Inventory::clip_slot(&sim.weapons, wid);
+                    total += inv.clip.get(slot).copied().unwrap_or(0) as i32;
+                    total += inv.carried.get(sim.weapons.ammo_type(wid)).copied().unwrap_or(0) as i32;
+                }
+            }
+            total
         };
         let before = ammo(self);
+        // Targets a previous attempt already walked to without arming Bond (lane): the take radius
+        // is `bounds.radius + 1.1` [M 0x18e148:203-214] and a small-model drop the 1.8 arrive
+        // radius never touched (the 07000012 spawn-lobby runs stood 4 × 6000 ticks one drop short
+        // of arming, then re-walked the SAME target every pass) — and a target the nav wedge
+        // refused twice is not a third walk.
+        let mut tried: Vec<[f32; 3]> = Vec::new();
         for attempt in 0..4 {
             let Some(target) = self.scene.sim.as_ref().unwrap().drones.pickups.iter()
                 .filter(|p| !p.gone)
-                // Ground-level pickups only: the upstairs placed boxes are a detour the walker
-                // cannot always climb; the drops land at the guards' feet [L drop positions].
-                .filter(|p| (p.m[3][1] - self.pos[1]).abs() < 1.5)
+                // Ground-level pickups only — ON Bond's floor (lane): the drops rest with their
+                // centre on the floor ray [L drop-stand-height probe 2026-10-22] — a pickup half
+                // a unit below it is a placed box buried under this floor, its take ray blocked
+                // forever (the 07000012 spawn lobby's y 0.4-0.5 ghosts ate every pass while the
+                // real guard drops waited farther out). The shared filter keeps the master 1.5.
+                .filter(|p| (p.m[3][1] - self.pos[1]).abs() < if lane { floor_band } else { 1.5 })
+                .filter(|p| !lane || tried.iter().all(|t| dxz(*t, [p.m[3][0], p.m[3][1], p.m[3][2]]) > 2.0))
                 .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
                 .min_by(|a, b| dxz(*a, self.pos).total_cmp(&dxz(*b, self.pos)))
             else { break };
             let d = dxz(target, self.pos);
-            if d > 45.0 { break; }
+            // A SHORT fetch only (lane): a pass across open ground under rifle and grenade fire is
+            // the death the plain walk avoids by keeping to the legs (the 07000012 run died at
+            // tick 1102 walking 14 u of open lobby floor to a drop, and ate a frag blast for the
+            // remaining 75.5 on the way [L the NF_DMG_TRACE death log]). The route legs walk
+            // over drops on the path at the leg arrive radii, and the next fight's low-ammo
+            // resupply re-runs this when a near drop exists. The shared fetch stays the master 45.
+            if d > if lane { 12.0 } else { 45.0 } { break; }
+            tried.push(target);
             eprintln!("[walk] {label}: resupply attempt {attempt} at ({:.1},{:.1},{:.1}) (d {:.1})", target[0], target[1], target[2], d);
-            self.walk_nav_to(target, &format!("{label} resupply {attempt}"), 1.8);
+            // The final arrive walks BOND ONTO the drop (lane): the take test is the pickup's
+            // sphere centre within `radius + 1.1` of the player position [M 0x18e148:203-214] — a
+            // small-model gun drop (radius ≈ 0.3) stops taking at ≈ 1.4, inside the old 1.8
+            // arrive radius, so the pass stood next to live ammo and came back dry. The shared
+            // arrive stays the master 1.8.
+            self.walk_nav_to(target, &format!("{label} resupply {attempt}"), if lane { 0.6 } else { 1.8 });
             if ammo(self) > before { break; }
         }
         let got = ammo(self) > before;
@@ -333,6 +387,27 @@ impl Walker {
             (sim.gun.clip, sim.gun.spare)
         };
         c + s > 0
+    }
+
+    /// The return-fire switch (damage_log.rs): cycle until a GUN in hand has ammo (or give up
+    /// after 12 switches). The armed test is return_fire's in-hand gate — `(2..=0x47)` [M the
+    /// gadget ids sit above it]: the Q-Decryptor's beam charge (clip 500) reads as ammo to the
+    /// plain `switch_to_armed`, and a fight "fired" the gadget at the guard until its burst killed
+    /// Bond (07000012, real damage). Kept apart from `switch_to_armed`, whose any-ammo test the
+    /// 07000009 patrol-beat clears rely on (their dry-P2K resupply ends on the first armed slot;
+    /// a gun-only cycle there stands Bond 732 ticks while the lobby guards close in).
+    pub fn switch_to_gun(&mut self, label: &str) -> bool {
+        let armed = |w: &Walker| {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (2..=0x47).contains(&sim.gun.weapon) && sim.gun.clip + sim.gun.spare > 0
+        };
+        for k in 0..12 {
+            if armed(self) { return true; }
+            eprintln!("[walk] {label}: cycling to a gun ({k})");
+            self.tick(Input { weapon_cycle: 1, ..Default::default() }, false);
+            for _ in 0..60 { self.tick(Input::default(), false); } // the holster/draw cycle
+        }
+        armed(self)
     }
 
     /// Aim at a drone's torso (root + 0.3 — the port's drone pos is the ROOT, the torso box centre
@@ -548,6 +623,9 @@ impl Walker {
     /// wedged (3 stuck-mitigation cycles without progress).
     pub fn walk_to(&mut self, wp: Wp, label: &str) -> u32 {
         let mut start_ticks = self.total_ticks;
+        // `stuck_answers`: each blocker is fought once per leg (an unkillable one falls through
+        // to the plain ladder, whose cycles still bound the leg).
+        let mut fought: Vec<usize> = Vec::new();
         let mut use_left = 0u32;
         let mut ladder = false;
         let mut riding = false;
@@ -743,8 +821,25 @@ impl Walker {
                     // the door's own plane blocks a straight segment to its centre, so NO LOS filter
                     // here: the nearest door within reach gets the E (a toggle [M Door_Activate],
                     // and opening a neighbouring door never blocks the walk).
-                    let door_i = sim.drones.doors.list.iter().position(|d| dxz(d.pos, self.pos) < 2.8);
-                    if let Some(di) = door_i {
+                    let answers = self.stuck_answers;
+                    let door_i = sim.drones.doors.list.iter().position(|d| dxz(d.pos, self.pos) < 2.8
+                        && (!answers || ((d.pos[1] - self.pos[1]).abs() < 2.5
+                            && !(d.ch_lock != 0 && !sim.drones.channels.on(d.ch_lock as u32)))));
+                    let blocker = if answers && door_i.is_none() {
+                        sim.drones.list.iter().enumerate().position(|(i, g)| g.team == 1 && g.present && !g.corpse && g.health > 0.0
+                            && dxz(g.pos, self.pos) < 1.8 && (g.pos[1] - self.pos[1]).abs() < 2.5
+                            && !fought.contains(&i))
+                    } else { None };
+                    if let Some(bi) = blocker {
+                        drop(sim);
+                        fought.push(bi);
+                        eprintln!("[walk] {label}: hostile body-block (drone {bi}) — shooting the blocker");
+                        let t0 = self.total_ticks;
+                        if !self.shoot_bounded(bi, label, 3000) { self.resupply(label); }
+                        // The fight is the response's own budget, not the leg's.
+                        start_ticks += self.total_ticks - t0;
+                        self.stuck = 0;
+                    } else if let Some(di) = door_i {
                         drop(sim);
                         self.use_door(di, label);
                         self.stuck = 0;

@@ -50,21 +50,24 @@ fn mission_row_12() -> usize {
     row
 }
 
-#[test]
-fn walk_spawn_to_the_shaft_exit() {
+fn walk_spawn_to_the_shaft_exit_at(difficulty: u32) {
     let iso = iso();
     let row12 = mission_row_12();
     assert_eq!(row12, 16, "the record's row in the port's LEVELS table [L row 16]");
     // The keypad locks (placements 656/694) carry param 6 = 1: Lock_Create auto-unlocks them at
     // difficulty 1 [M 0x1ae1f8 tail: level_tag+0x44 != 0 && GameState+0x28 == 1 -> Lock_Unlock],
-    // so the Q-Decryptor keypad burn this route walks is the Agent+ behavior; the load is 00 Agent
-    // where the full (pre-gate calibration) roster exists [M 0x136be0:49].
-    let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, 3).unwrap());
+    // so the Q-Decryptor keypad burn this route walks is the Agent+ behavior; the difficulty-3
+    // load is 00 Agent where the full (pre-gate calibration) roster exists [M 0x136be0:49]. The
+    // difficulty-3 expression is byte-identical to the pre-sister master's (the same
+    // load_with_carry_difficulty(..., 3) — real-health-agent-difficulty-01-07's idiom).
+    let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, difficulty).unwrap());
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
         assert!(p[0] > 21.0 && p[0] < 24.0 && p[1] > 0.0 && p[1] < 2.0 && p[2] > 18.0 && p[2] < 20.0,
             "the elevator start #0 [D], got {p:?}");
+        assert_eq!(sim.drones.difficulty, difficulty,
+            "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     }
     tower2::walk_12(&mut w);
     tower2::walk_12_exit(&mut w);
@@ -79,6 +82,10 @@ fn walk_spawn_to_the_shaft_exit() {
         let sim = w.scene.sim.as_ref().unwrap();
         nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request,
             &sim.drones.inventory, &sim.drones.channels).with_mission(&sim.drones.mission)
+            // The difficulty rides the warm save: the game's GameState+0x28 global survives the
+            // level change untouched (no transition-path writer [M whole-decompile grep]) and the
+            // next level's creates/locks read the SAME 00 Agent pick [M 0x136be0:49, 0x1ae1f8 tail].
+            .with_difficulty(sim.drones.difficulty)
     };
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "0700004a.bin", false, Some(&save)).unwrap());
     w.wait_enabled(3000, "the 4A intro");
@@ -98,4 +105,53 @@ fn walk_spawn_to_the_shaft_exit() {
         assert_eq!(sim.drones.mission.states[row12][0], 4,
             "12's 'Activate elevator override control' stays complete [M 0x182270 keeps previous parts]");
     }
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty-12-13-14-15): the
+/// same route and the same end, loaded at difficulty 2 the menu way (the front-end's launch path
+/// [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]; GameState+0x28 → the sim's
+/// Drones::difficulty, asserted at load). Agent spawns the min-difficulty-2 placements
+/// [M Drone_Create 0x136be0:49] — fewer than the master walk's 00-Agent roster — scales Bond's
+/// pain by Plr_DMod_Normal [M Player_HandlePain 0x1902c8] and the guards' hit chance by
+/// Accuracy row 2 [M DroneWeap_DoBulletAccuracy 0x179740:74-88]. Real input only; the fights
+/// keep the level's own head-hunting + unseen-cover law.
+#[test]
+fn walk_spawn_to_the_shaft_exit_real_damage_agent() {
+    walker::with_real_damage_head_hunting(||
+        walker::with_real_damage_unseen_fights(|| walk_spawn_to_the_shaft_exit_at(2)))
+}
+
+#[test]
+fn walk_spawn_to_the_shaft_exit() {
+    walk_spawn_to_the_shaft_exit_at(3);
+}
+
+/// Real damage: the whole-mission walk (the Tower2 B offices route plus the real 0700004A load)
+/// with the health top-up off for every walker it makes and the walker's return fire on — Bond's
+/// death panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that
+/// the route completes on the port's own damage. No health/armour/ammo writes anywhere; the exit
+/// load into 0700004A is the game's own Trigger_Activate path [M 0x1b2318 → Player_RamLoad
+/// 0x1957a8], not a teleport.
+///
+/// The fights HEAD-HUNT (`with_real_damage_head_hunting`): the level's guards are the
+/// 12-health type-2 skins (0x500004/0x500006/0x500008) — the first real-health run's damage
+/// log: the whole 100.0 was 20 hits, the shotgun guard #10 (skin 0x5000008, weapon 0x1c)
+/// dealing 72 in 16 rounds from 4.2 u [D weapon_data 0x2bf150 +0x18 = 8 pellets] while the
+/// return fire's torso taps needed 3-5 rounds a guard — the level's own offering is the aim:
+/// one head hit drops a 12-health guard [M NDrone2_HitDamage 0x145558 × DroneDamage_Head].
+/// The port's fire law is the game's: one accuracy roll per FireWeapon call, the 8-pellet
+/// cone along the SAME aim [M DroneWeap_FireWeapon 0x178f68:233-241], TooClose ×2
+/// accuracy/damage only under 3.0 u [M DroneWeap_DoBulletAccuracy 0x179740:113-115;
+/// Drone_ModBulletDamage 0x139f50:21-23] — the 4.2-u volley that landed 6 pellets on one
+/// frame is the game's own rolled-hit cone, not a port over-damage.
+/// The fights also answer the DESK guards (`with_real_damage_unseen_fights`): the offices'
+/// guards sit behind the desk rows and the first run's fights never started against the worst
+/// of them (the plain pick needs one clear eye ray; the Office-C computer mesh eats every ray
+/// — the same mechanism the 07000013 lobby diagnosed) while the shotgun guard's volleys land.
+/// The unseen fight's creep walks Bond up to the desk lip until the line opens — the level's
+/// own cover law, not a cheat: no health, armour, ammo or position writes.
+#[test]
+fn walk_spawn_to_the_shaft_exit_real_damage() {
+    walker::with_real_damage_head_hunting(||
+        walker::with_real_damage_unseen_fights(walk_spawn_to_the_shaft_exit))
 }

@@ -136,6 +136,29 @@ docs/systems/ai-spawned-objects.md "Proven never called"], so no Sub object ever
   `Drones::deploy_ronin` / `ronin_take_control` / `ronin_view` / `gt_activate_pick`, the viewer's
   0x52/0x53 arms and the pane-18 draw; pinned by `crates/nf-view/tests/ronin_live.rs`. Open: the
   `Collide_Pick` volume is approximated (triangles within 0.6 of the sweep) [S]; the gun's
-  look-at/aim pose is an angle ease standing in for `Quat_Slerp_Acc` [S]; the remote view's eye
-  renders inside the 0x2000361 housing in the port — the game hides only the turret object
-  (`View_SetDrawInOtherViewsOnly(BL+0x878)`), so a live look is needed (UNKNOWNS).
+  look-at/aim pose is an angle ease standing in for `Quat_Slerp_Acc` [S].
+- **Barrel spin** [M 0x180498:360-382, 496, 536-556]: registered[1] (the 0x2000362 barrel) is drawn at
+  `RotMatrixZ(ext+0xD4)` · its script pose on the ticks the spin block runs — the angle is absolute
+  (wrapped into (−π, π) by `fmodf`), not accumulated in the matrix. Case 4 runs it on every tracked
+  frame at a fixed 2·2π/60 per tick (ext+0xD8 untouched); case 7 decays ext+0xD8 ×0.9 per tick,
+  re-arms it to 2·2π/60 on every held-trigger tick, and spins while it is non-zero. The mounting
+  press is already a held trigger for the same frame's case 7 (the turret updates after the player).
+  Live [L PCSX2 audits/render-1101-roninview + roninview2]: an 8-frame press, 45 frames later
+  ext+0xD4 = −2.741 and the barrel's row0 = (cos, sin)(−2.741) of the script-A pose. Port:
+  `GTurret::spin_draw`, scene.rs `gt_barrel_spin`; `gt` unit tests + `ronin_live`
+  `ronin_barrel_spin_on_the_press`.
+- **The barrel end in the remote view** [L PCSX2 audits/render-1101-roninview2 eye A/B]: the eye sits
+  0.104 ahead of the barrel's origin, 0.15 above its axis, so the tube strips (glist z 0.031..0.369)
+  start behind it. The PS2 shows the muzzle ring's face (the octagon with the hole) and no tubes.
+  Moving the eye literal from −0.4 to −0.5 (all tube vertices in front of the eye) shows the tubes,
+  but only outside the ring's outline. The VU1 clip program cuts the strips at the 0.1 near plane
+  [M micro 0x241e30 `_$ROTATECLIPED` … `_$ZMINUS`], where zbuf = `Ps2Far1`. On 0C that is past the
+  Z24 range (render.md), so the clip vertices wrap to a far depth and the strips lose the depth
+  test to the ring behind them. Port: on levels whose wrap distance is past the near plane, the
+  mounted Ronin's script parts carry the distance in their palette m[3][3], and the world shader
+  drops their triangles that have a nearer vertex (`ronin_view_wrap_marks`; `ronin_live`
+  `ronin_remote_view_marks_the_wrapped_parts`). On 07000012 (default Far1) the wrap sits inside the
+  near plane and the tubes draw. The general garbage-depth effect on other near-clipped geometry
+  is not modelled.
+- **The shot gauge** (the red bar on the right of the remote view): the ammo pane's substate-0x10
+  arm (hud.md).

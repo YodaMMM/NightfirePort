@@ -34,6 +34,14 @@ fn loaded() -> Option<nf_view::scene::Scene> {
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
     // hud-start: a load holds nothing (0x47 [M 0x1a7ef8:137]) - settle the start draw first.
     nf_view::settle_start_draw(scene.sim.as_mut().unwrap());
+    // hud-ammo-under-label: during the FIRST label the strips still sit in their created (template)
+    // state and draw (the 07000011 f42 capture) — run the label out so the strip checks see the
+    // positioned pane the strip logic is about.
+    let mut n = 0;
+    while scene.sim.as_ref().unwrap().hud.weapon_label_timer > 0 && n < 120 {
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+        n += 1;
+    }
     Some(scene)
 }
 

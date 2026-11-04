@@ -104,6 +104,9 @@ fn the_office_floor_route_reaches_the_07000012_exit() {
     // walkreal_07000011_live's (green there; the stairwell guards shoot, so the walk tops the
     // health up and pins the route, not the firefight).
     w.top_up_health = true;
+    // A stairwell guard who parks on the flight (AIM_STAND_FIRE at arm's length) is shot, and a
+    // door on another floor of the well or a locked one draws no E (`Walker::stuck_answers`).
+    w.stuck_answers = true;
     let band = |w: &Walker, lo: f32, hi: f32, what: &str| {
         let y = w.scene.sim.as_ref().unwrap().bond.pos[1];
         assert!(y > lo && y < hi, "{what}: y {y} not in ({lo}, {hi}) — the descent left the flights");

@@ -119,3 +119,15 @@ Session 1 progress (~11:30 UTC):
   through 1e5ab960 + this commit; report docs/reports/guard-push-every-tick-2.md written (with
   the live checks and the ntfy-failed record); finish.sh run `blocked` (the task's red set is
   not green and the 2-hour window closes at ~18:05 UTC).
+
+## guard-push-every-tick-3 (started 2026-11-04 11:05 UTC)
+
+Branch s/guard-push-every-tick-3 cut from origin/s/guard-push-every-tick-2 (c9a93c66), origin/master
+(f9f6544c) merged. Continue blocked/10-guard-push-every-tick-2: the every-tick actor push is faithful
+[M 0x1ec180:253-266 + 0x149ec8's gates]; the walker push-dodge is implemented but doesn't clear — the
+0a hall-door civilian holds the leg after 6 dodge cycles (d swings 0.95..1.43). This pass: widen the
+swing (dodge until d > 2.6, biased toward the walkable side) or make the walkers' nav legs cost live
+bodies — test-side walker changes, opt-in per level. Then re-run every red binary (walkreal
+01/02/07/0c/11, escort_follow_07000001, exit_aim_01, interactables_07000001/03, party_door_lock_07000007,
+speech_facial_fallback, guest_faces, probe_07_route, cutscene_timer_pause) and fix each; no assertion
+weakened; chunk_suite.py for the full run; nf-game + every walkreal_*_live.

@@ -16,7 +16,19 @@
 //!
 //! Enemies are DISABLED for the walk only in the walkreal sense: damage is suppressed
 //! (top_up_health, the walker's allowance) — except `walk_arrival_to_drakes_defeat_on_real_health`,
-//! which plays the same route on real health. Opt-in via NF_ISO (the slim ISO is enough).
+//! which plays the same route on real health, and the `_real_damage` variants (no top-up, a death
+//! panics). Opt-in via NF_ISO (the slim ISO is enough).
+//!
+//! The level look: every zero-g shot here is taken with the forward row level (yaw only, the eye
+//! put at the target's height on the lift thruster, the stabiliser [M Player_ZeroG 0x192ab0:
+//! 163-199] pressed if a tilt creeps in). The port's camera in zero-g is the walk's scalar yaw
+//! (mirrored off the forward row) and the walk's scalar pitch, which the zero-g branch never
+//! moves (0 from the entry); the shot rides the forward row (`Bond::look`). A pitched forward row
+//! therefore shoots off the view, under either composition of the look rotation (the world-frame
+//! `m·R` the port has now, or the body-frame `R·m` [M Concat 0x1e4a90 + Mat_CopyRot 0x1e3370]):
+//! only the level shot lands where the view looks. The cost: a target above or below must be met
+//! at its own height, so the band the later waves float in (y 2.5–8.7, above the deck) is fought
+//! from inside it or not at all — the full walks wait those waves out under the deck.
 
 #[path = "common/walker.rs"]
 mod walker;
@@ -152,27 +164,10 @@ fn float_to_slit_mouth(w: &mut Walker) {
     }
 }
 
-/// Kill every live astronaut (skin 0x05000078) with the walker's real fire, until `done` or
-/// none is left.
-fn kill_astronauts(w: &mut Walker, hold: [f32; 3], done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
-    let mut n = 0u32;
-    while n < cap {
-        let target = {
-            let sim = w.scene.sim.as_ref().unwrap();
-            if done(sim) { return; }
-            sim.drones.list.iter().position(|d| d.present && !d.corpse && d.enabled && d.health > 0.0 && d.skin & 0xffff == 0x78)
-        };
-        match target {
-            Some(di) => { let _ = w.shoot(di, "astronaut"); n += 1; }
-            None => { let input = thrust_to(w.scene.sim.as_ref().unwrap(), hold); w.tick(input, false); n += 1; }
-        }
-    }
-}
-
-/// The station Bond floats at to shoot console `k`'s screen: every screen is bullet-visible from
-/// (32, −1.7, 0) [the probe1b_chanmap los_1b_screens scan of the port's bullet segments]; the far
-/// pairs are shot from nearer floats — 7/8 from (46, −7, 0), 1/2 from (20, −2, 0) — the harness's
-/// choice of where to fly (any screen in bullet sight within 20 u is fired at on the way).
+/// The station Bond floats at to shoot console `k`'s screen (x and z; the height is the screen's,
+/// see `shoot_consoles`): 7/8 from x 46, 1/2 from x 20, the rest from x 32 — the harness's choice
+/// of where to fly; a station whose level shot is blocked, or that the float cannot reach, is
+/// replaced by `level_station`'s.
 fn console_station(k: u32) -> [f32; 3] {
     match k { 7 | 8 => [46.0, -7.0, 0.0], 1 | 2 => [20.0, -2.0, 0.0], _ => [32.0, -1.7, 0.0] }
 }
@@ -182,19 +177,147 @@ fn console_station(k: u32) -> [f32; 3] {
 /// [M 0x1aa25c].
 const CONSOLE_ORDER: [u32; 8] = [3, 4, 5, 6, 8, 7, 1, 2];
 
-/// Shoot the eight console screens from the float stations: each console UI script carries three
-/// holds (event 3 on streams 1/2/3 [D the probe1b_scripts decode]) and resumes from each on 20
-/// bullet damage — one rifle hit per hold [M SP_UnPause 0x1dca58 /
-/// SP_GetHitDamage 0x1dc5f8], then writes the console channel [D stream 4 ev0x0d]. The aim is the held
-/// script's largest hit sphere (the game's own damage volume — held_hit_targets); the trigger is
-/// tapped in bursts: the rifle's clip recharges (the gun_1b probe: 12 rounds per shot, ~1 round
-/// per 4 ticks after a ~100-tick pause), so the walk waits for three shots' worth before a burst.
-/// Returns the frame each console latched.
+/// The level look's yaw error toward `at` (about world up — the forward row's heading), the
+/// height of `at` over the eye, and the horizontal range.
+fn level_errs(sim: &nf_view::scene::Sim, at: [f32; 3]) -> (f32, f32, f32) {
+    let e = sim.bond.head();
+    let f = sim.bond.look();
+    let yaw_err = walker::wrap_pi((at[0] - e[0]).atan2(at[2] - e[2]) - f[0].atan2(f[2]));
+    (yaw_err, at[1] - e[1], ((at[0] - e[0]).powi(2) + (at[2] - e[2]).powi(2)).sqrt())
+}
+
+/// The view is level (the forward row's y under 0.01): the master view keeps the entry pitch 0
+/// in zero-g, so only a level forward row shoots where the view looks.
+fn view_level(sim: &nf_view::scene::Sim) -> bool { sim.bond.look()[1].abs() < 0.01 }
+
+/// The level look's turn toward `at` plus the stabiliser press (action 0xe [M Player_ZeroG
+/// 0x192ab0:163-199]) whenever the forward row has picked up a tilt.
+fn level_turn(sim: &nf_view::scene::Sim, inp: &mut Input, at: [f32; 3], turn_max: f32) {
+    let (e, _, _) = level_errs(sim, at);
+    inp.turn = e.clamp(-turn_max, turn_max);
+    inp.stabilise = sim.bond.look()[1].abs() > 0.005 && sim.bond.stabiliser == 0;
+}
+
+/// The round's start offset from the eye along the body's right/up rows. The laser round leaves
+/// from between the eye and the view model's muzzle datum and flies at the view point 256 u out
+/// (scene.rs `shot_from`, weapon 0x33's +0x68 0x10000 arm); read back off each fired round (its
+/// spawn point = pos − dir·travelled), so the aim can lead the eye by the offset.
+#[derive(Clone, Copy, Default)]
+struct ShotCal { off: [f32; 2] }
+
+impl ShotCal {
+    fn learn(&mut self, sim: &nf_view::scene::Sim, n_before: usize) {
+        let Some(b) = sim.drones.player_bullets.get(n_before) else { return };
+        let o = [b.pos[0] - b.dir[0] * b.travelled, b.pos[1] - b.dir[1] * b.travelled, b.pos[2] - b.dir[2] * b.travelled];
+        let e = sim.bond.head();
+        let rel = [o[0] - e[0], o[1] - e[1], o[2] - e[2]];
+        let m = sim.bond.zero_g_rot;
+        let dot = |a: [f32; 3]| a[0] * rel[0] + a[1] * rel[1] + a[2] * rel[2];
+        self.off = [dot(m[0]), dot(m[1])];
+    }
+    /// The world offset of the round's line from the eye's at range `d` (it closes on the view
+    /// line at 256 u).
+    fn at(&self, sim: &nf_view::scene::Sim, d: f32) -> [f32; 3] {
+        let m = sim.bond.zero_g_rot;
+        let k = (1.0 - d / 256.0).max(0.0);
+        [0, 1, 2].map(|i| (self.off[0] * m[0][i] + self.off[1] * m[1][i]) * k)
+    }
+    /// Where the eye aims so the round passes `c`.
+    fn eye_target(&self, sim: &nf_view::scene::Sim, c: [f32; 3]) -> [f32; 3] {
+        let e = sim.bond.head();
+        let d = ((c[0] - e[0]).powi(2) + (c[1] - e[1]).powi(2) + (c[2] - e[2]).powi(2)).sqrt();
+        let o = self.at(sim, d);
+        [c[0] - o[0], c[1] - o[1], c[2] - o[2]]
+    }
+    /// The round's predicted line: start and unit direction.
+    fn ray(&self, sim: &nf_view::scene::Sim) -> ([f32; 3], [f32; 3]) {
+        let e = sim.bond.head();
+        let o0 = self.at(sim, 0.0);
+        let o = [e[0] + o0[0], e[1] + o0[1], e[2] + o0[2]];
+        let f = sim.bond.look();
+        let v = [e[0] + f[0] * 256.0 - o[0], e[1] + f[1] * 256.0 - o[1], e[2] + f[2] * 256.0 - o[2]];
+        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        (o, [v[0] / l, v[1] / l, v[2] / l])
+    }
+}
+
+/// A shot from `eye` reaches the hit sphere (c, r): the bullet segment's first world contact lies
+/// past the sphere's entry (the held script's damage volume [M SP_GetHitDamage 0x1dc5f8]; the
+/// bullet pass's world-first rule).
+fn sphere_shot_ok(sim: &nf_view::scene::Sim, eye: [f32; 3], c: [f32; 3], r: f32) -> bool {
+    let d = ((c[0] - eye[0]).powi(2) + (c[1] - eye[1]).powi(2) + (c[2] - eye[2]).powi(2)).sqrt();
+    if d <= r { return true; }
+    match sim.world.segment_bullet(eye, c) { None => true, Some(t) => t * d > d - r * 0.9 }
+}
+
+/// Room for the float's body (the 0.55 capsule [M Player_Collision 0x194df0]) at the station `st`
+/// and on the straight way from `from`: the feet and head lines and four 0.7-u spokes clear.
+fn station_room(sim: &nf_view::scene::Sim, from: [f32; 3], st: [f32; 3]) -> bool {
+    let room = |a: [f32; 3], b: [f32; 3]| sim.world.segment(a, b).is_none();
+    let up = [st[0], st[1] + 1.2, st[2]];
+    let dn = [st[0], st[1] - 0.6, st[2]];
+    room(from, st) && room(st, up) && room(st, dn) && room([from[0], from[1] + 0.9, from[2]], up)
+        && (0..4).all(|q| { let a = q as f32 * std::f32::consts::FRAC_PI_2; room(st, [st[0] + 0.7 * a.sin(), st[1], st[2] + 0.7 * a.cos()]) })
+}
+
+/// Where to float for a level shot at the sphere (c, r): the eye at the centre's height on a ring
+/// around it (6–14 u out, 24 bearings), the shot clear (`sphere_shot_ok`), room for the body
+/// (`station_room`), not a station the float already stalled short of; the nearest to `pref`.
+fn level_station(sim: &nf_view::scene::Sim, c: [f32; 3], r: f32, from: [f32; 3], pref: [f32; 3], banned: &[[f32; 3]]) -> Option<[f32; 3]> {
+    let eye_off = sim.bond.head()[1] - sim.bond.pos[1];
+    let mut best: Option<(f32, [f32; 3])> = None;
+    for rad in [6.0f32, 8.0, 10.0, 12.0, 14.0] {
+        for k in 0..24 {
+            let a = k as f32 * std::f32::consts::TAU / 24.0;
+            let eye = [c[0] + rad * a.sin(), c[1], c[2] + rad * a.cos()];
+            let st = [eye[0], eye[1] - eye_off, eye[2]];
+            if !sphere_shot_ok(sim, eye, c, r) || !station_room(sim, from, st) { continue; }
+            if banned.iter().any(|b| dist3(*b, st) < 1.0) { continue; }
+            let dd = dist3(st, pref);
+            if best.map_or(true, |b| dd < b.0) { best = Some((dd, st)); }
+        }
+    }
+    best.map(|b| b.1)
+}
+
+fn dist3(a: [f32; 3], b: [f32; 3]) -> f32 { ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() }
+
+/// The float's thrust toward `at` with the lift on a damped speed target (the eased thruster lags
+/// ~25 ticks [M 0x192ab0:92-159], so the plain proportional lift creeps the last half-unit).
+fn float_to(sim: &nf_view::scene::Sim, at: [f32; 3]) -> Input {
+    let mut inp = thrust_to(sim, at);
+    let dy = at[1] - sim.bond.pos[1];
+    let vstar = (dy * 0.03).clamp(-0.05, 0.05);
+    inp.lift = ((vstar + (vstar - sim.bond.zero_g_lift) * 2.0) * 10.0).clamp(-1.0, 1.0);
+    inp
+}
+
+/// Shoot the eight console screens in deadline order with the level look: each console UI script
+/// carries three holds (event 3 on streams 1/2/3 [D the probe1b_scripts decode]) and resumes from
+/// each on 20 bullet damage — one rifle hit per hold [M SP_UnPause 0x1dca58 / SP_GetHitDamage
+/// 0x1dc5f8], then writes the console channel [D stream 4 ev0x0d]. The aim is the held script's
+/// largest hit sphere (the game's own damage volume — held_hit_targets): Bond floats to the
+/// console's station at the screen's own height (the lift thruster), yaws onto it and taps when
+/// the round's line (`ShotCal`) passes inside the sphere with the world clear. The trigger is
+/// tapped in bursts: the laser's clip only recharges (+1 per 4 frames while no fire script runs
+/// [M Player_Update 0x193600 disasm 0x193eb8-0x19405c]; each tap drains 12), and starting a burst
+/// at 48 rounds keeps the holds' 3 hits together so the recharge runs between consoles. Returns
+/// the frame each console latched.
 fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
     let mut latched = Vec::new();
     let mut last_shot = 0u32;
     let mut in_burst = false;
+    let mut plan: (u32, Option<[f32; 3]>) = (0, None);
+    let mut cal = ShotCal::default();
+    let mut banned: Vec<[f32; 3]> = Vec::new();
+    let mut moved_at = 0u32;
+    let mut last_pos = [0.0f32; 3];
+    let mut last_goal = [0.0f32; 3];
     for tt in 0..6000u32 {
+        {
+            let p = w.scene.sim.as_ref().unwrap().bond.pos;
+            if dist3(p, last_pos) > 0.3 { moved_at = tt; last_pos = p; }
+        }
         let (input, fire) = {
             let sim = w.scene.sim.as_ref().unwrap();
             for &k in &CONSOLE_ORDER {
@@ -204,29 +327,51 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
             let pi = sim.drones.scripts.players.iter().position(|p| p.gate as u32 == 30 + k && p.hit_points > 0.0)
                 .expect("the console's UI script player (gate 30 + k, hit points 20 [D SP#213-220])");
             let tg = sim.drones.scripts.held_hit_targets(&data_of(sim));
-            let best = tg.iter().filter(|x| x.0 == pi).max_by(|a, b| a.2.partial_cmp(&b.2).unwrap()).map(|x| x.1);
-            let station = console_station(k);
-            let mut inp = thrust_to(sim, station);
+            let best = tg.iter().filter(|x| x.0 == pi).max_by(|a, b| a.2.partial_cmp(&b.2).unwrap()).map(|x| (x.1, x.2));
+            let eye_off = sim.bond.head()[1] - sim.bond.pos[1];
+            let mut station = console_station(k);
             let mut fire = false;
-            if let Some(c) = best {
-                let (e, pe) = walker::zero_g_errs(sim, c).unwrap();
-                inp.turn = e.clamp(-0.08, 0.08);
-                inp.look = pe.clamp(-0.08, 0.08);
+            let mut aim = None;
+            if let Some((c0, r)) = best {
+                let c = cal.eye_target(sim, c0);
+                station[1] = c[1] - eye_off;
+                let se = [station[0], station[1] + eye_off, station[2]];
+                // The default station when its level shot is clear and the body fits; else (or
+                // once the float has stalled 150 ticks short of it) a planned one.
+                let default_ok = sphere_shot_ok(sim, se, c, r) && !banned.iter().any(|&b| dist3(b, station) < 1.0)
+                    && station_room(sim, sim.bond.pos, station);
+                let goal = if plan.0 == k && plan.1.is_some() { plan.1.unwrap() } else { station };
+                if goal != last_goal { last_goal = goal; moved_at = tt; }
+                let stalled = tt.saturating_sub(moved_at) > 150 && dist3(sim.bond.pos, goal) >= 1.0;
+                if stalled { banned.push(goal); moved_at = tt; }
+                if !default_ok || stalled || (plan.0 == k && plan.1.is_some()) {
+                    if plan.0 != k || stalled { plan = (k, level_station(sim, c, r, sim.bond.pos, station, &banned)); }
+                    if let Some(p) = plan.1 { station = p; }
+                }
+                aim = Some(c);
                 let clip = sim.gun.clip;
-                if clip >= 36 { in_burst = true; }
+                if clip >= 48 { in_burst = true; }
                 if clip < 12 { in_burst = false; }
-                let eye = sim.bond.head();
-                let dist = ((c[0] - eye[0]).powi(2) + (c[1] - eye[1]).powi(2) + (c[2] - eye[2]).powi(2)).sqrt();
-                let los = match sim.world.segment_bullet(eye, c) { None => true, Some(t) => (1.0 - t) * dist < 0.4 };
-                let near = walker::dxz(sim.bond.pos, station) < 2.5 || (los && dist < 20.0);
-                fire = near && in_burst && e.abs() < 0.006 && pe.abs() < 0.006
-                    && tt.saturating_sub(last_shot) >= 12 && tt % 6 == 0;
+                let (o, f) = cal.ray(sim);
+                // The round's miss distance from the sphere centre.
+                let v = [c0[0] - o[0], c0[1] - o[1], c0[2] - o[2]];
+                let along = v[0] * f[0] + v[1] * f[1] + v[2] * f[2];
+                let miss = ((v[0] - along * f[0]).powi(2) + (v[1] - along * f[1]).powi(2) + (v[2] - along * f[2]).powi(2)).sqrt();
+                fire = sphere_shot_ok(sim, o, c0, r) && along > 0.0 && dist3(sim.bond.head(), c) < 40.0 && in_burst
+                    && miss < r * 0.8 && view_level(sim) && tt.saturating_sub(last_shot) >= 12 && tt % 6 == 0;
+            }
+            let mut inp = float_to(sim, station);
+            match aim {
+                Some(c) => level_turn(sim, &mut inp, c, 0.08),
+                None => inp.stabilise = sim.bond.look()[1].abs() > 0.005 && sim.bond.stabiliser == 0,
             }
             (inp, fire)
         };
         if fire {
             let c0 = w.scene.sim.as_ref().unwrap().gun.clip;
+            let nb = w.scene.sim.as_ref().unwrap().drones.player_bullets.len();
             w.tick_fire(input);
+            cal.learn(w.scene.sim.as_ref().unwrap(), nb);
             if w.scene.sim.as_ref().unwrap().gun.clip < c0 { last_shot = tt; }
         } else {
             w.tick(input, false);
@@ -237,6 +382,332 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
         if sim.drones.channels.on(k) && !latched.iter().any(|&(c, _)| c == k) { latched.push((k, sim.drones.frame)); }
     }
     latched
+}
+
+/// The live astronauts (skin 0x05000078) Bond can hurt: present, enabled, not a corpse.
+fn live_astronauts(sim: &nf_view::scene::Sim) -> Vec<usize> {
+    sim.drones.list.iter().enumerate()
+        .filter(|(_, d)| d.present && !d.corpse && d.enabled && d.health > 0.0 && d.skin & 0xffff == 0x78)
+        .map(|(i, _)| i).collect()
+}
+
+/// The first present, enabled, live guard — the per-guard motion read [M DroneWeap_DoOpponentTargetting
+/// 0x179a48:47-73: the latches live on every Drone]. The station's opening wave is present from the
+/// arrival (the spawner walk built the list before the first tick).
+fn first_tracker(sim: &nf_view::scene::Sim) -> usize {
+    sim.drones.list.iter().enumerate()
+        .find(|(_, d)| d.present && !d.corpse && d.enabled && d.health > 0.0)
+        .map(|(i, _)| i)
+        .expect("a present guard in the station sim")
+}
+
+/// The round would land on drone `di`: the view ray (the laser flies straight — weapon 0x33's
+/// spread +0x24 is 0 [D weapon_data]) enters one of its hit boxes before the world's first bullet
+/// contact — the comparison the bullet pass itself runs (`exposed_aim`'s rule, along the view).
+fn ray_on(sim: &nf_view::scene::Sim, di: usize) -> bool {
+    let eye = sim.bond.head();
+    let f = sim.bond.look();
+    let ray = [f[0] * 40.0, f[1] * 40.0, f[2] * 40.0];
+    let end = [eye[0] + ray[0], eye[1] + ray[1], eye[2] + ray[2]];
+    let data = data_of(sim);
+    let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, end);
+    sim.drones.list[di].hit_boxes(&data).iter()
+        .filter_map(|b| nf_game::damage::ray_box(eye, ray, b))
+        .any(|t| tw.map_or(true, |w| t < w))
+}
+
+/// How many live astronauts within 40 u have a bullet line from their head to the eye point `e`,
+/// and how many float inside 3.5 u of it (the always-hit TooClose band and its doubled damage [M
+/// DoBulletAccuracy 0x179740:113-115; Drone_ModBulletDamage 0x139fac-0x139fc8]).
+fn exposure(sim: &nf_view::scene::Sim, e: [f32; 3]) -> (u32, u32) {
+    let (mut seen, mut close) = (0, 0);
+    for i in live_astronauts(sim) {
+        let d = &sim.drones.list[i];
+        let h = [d.pos[0], d.pos[1] + 0.6, d.pos[2]];
+        let r = dist3(h, e);
+        if r > 40.0 { continue; }
+        if r < 3.5 { close += 1; }
+        if sim.world.segment_bullet(h, e).is_none() { seen += 1; }
+    }
+    (seen, close)
+}
+
+/// A float point near `from` (a 1.5-u grid out to `rad`, at the heights `ys`) with room for the
+/// body and a clear way there, scored by `score` (lower wins; the travel adds 0.05 a unit).
+fn best_float_point(sim: &nf_view::scene::Sim, from: [f32; 3], rad: f32, ys: &[f32], score: impl Fn([f32; 3]) -> Option<f32>) -> Option<([f32; 3], f32)> {
+    let mut best: Option<([f32; 3], f32)> = None;
+    let n = (rad / 1.5) as i32;
+    for ix in -n..=n {
+        for iz in -n..=n {
+            for &y in ys {
+                let c = [from[0] + ix as f32 * 1.5, y, from[2] + iz as f32 * 1.5];
+                let d = dist3(c, from);
+                if d > rad * 1.05 { continue; }
+                if d > 0.1 && !station_room(sim, from, c) { continue; }
+                let Some(s) = score(c) else { continue };
+                let s = s + 0.05 * d;
+                if best.map_or(true, |b| s < b.1) { best = Some((c, s)); }
+            }
+        }
+    }
+    best
+}
+
+/// A level-look zero-g fight from the float station `hold`: the view only yaws (see the module
+/// note), the lift thruster puts the eye at the target's height, and the trigger is tapped when
+/// the view ray is on one of the target's hit boxes (`ray_on`). Target choice: an astronaut
+/// inside the 3-u always-hit band first [M DoBulletAccuracy 0x179740:113-115], then the priority
+/// target (Drake, skin 0x050000BA), then the nearest one with a bullet line to Bond, then the
+/// nearest. Cover: on a dry clip (the laser's 100 rounds only recharge, 12 a tap) Bond floats to
+/// the point near `hold` the fewest astronauts can see — losing sight resets each shooter's 2-s
+/// new-sighting clock [M 0x179740:103-105] — and comes back out at 60 rounds. Returns at `done`
+/// or the tick cap.
+fn fight(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
+    fight_opts(w, hold, prio, false, done, cap)
+}
+
+/// `fight` with the Agent tactics switch (real-health-agent-difficulty-16-1b-41-4a, opt-in —
+/// the Operative walks keep the master behaviour): `waves_first` scores a THREATENING wave
+/// astronaut (its muzzle→Bond ray is clear) ABOVE the prio target. The master order fights the
+/// prio target first (Drake at r−50 beats a threatening wave at r−20), which at Agent — the
+/// astronauts' Accuracy Normal 0.8 [M DroneWeap_DoBulletAccuracy 0x179740:74-88] — let the
+/// floaters grind the stand down (the measured death log: five astronauts' −3.5s at 5-11 u
+/// while every aim re-pick still chose Drake). A player clears the add waves and takes the
+/// boss last; the fight's `done` gate is the prio target's death, so the waves dying never
+/// ends it early.
+fn fight_opts(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: bool, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
+    let mut last_tap = 0u32;
+    let mut target: Option<(usize, [f32; 3])> = None;
+    let mut recharging = false;
+    let mut cover = hold;
+    for t in 0..cap {
+        if done(w.scene.sim.as_ref().unwrap()) { return; }
+        let sim = w.scene.sim.as_ref().unwrap();
+        let eye_off = sim.bond.head()[1] - sim.bond.pos[1];
+        if sim.gun.clip < 12 { recharging = true; }
+        if sim.gun.clip >= 60 { recharging = false; }
+        if (recharging || waves_first) && t % 30 == 0 {
+            let p = sim.bond.pos;
+            // waves_first: a hold that cannot ANSWER the prio target is as bad as an exposed one
+            // (the first sheltered run floated out Drake's whole 6000-tick cap without a shot):
+            // a blocked muzzle→prio ray costs 50, the same band as the aim pick's prio bonus.
+            let prio_blind = |c: [f32; 3], eye_y: f32| -> bool {
+                prio.is_some_and(|pr| {
+                    let d = &sim.drones.list[pr];
+                    d.present && !d.corpse && d.health > 0.0
+                        && sim.world.segment_bullet([c[0], eye_y, c[2]], [d.pos[0], d.pos[1] + 0.6, d.pos[2]]).is_some()
+                })
+            };
+            let sc = |c: [f32; 3]| {
+                let (s, cl) = exposure(sim, [c[0], c[1] + eye_off, c[2]]);
+                (s as f32 + 4.0 * cl as f32) + if prio_blind(c, c[1] + eye_off) { 50.0 } else { 0.0 }
+            };
+            let mut best = (sc(p), p);
+            for r in [2.5f32, 5.0] {
+                for o in [[r, 0.0, 0.0], [-r, 0.0, 0.0], [0.0, r, 0.0], [0.0, -r, 0.0], [0.0, 0.0, r], [0.0, 0.0, -r]] {
+                    let c = [hold[0] + o[0], hold[1] + o[1], hold[2] + o[2]];
+                    if sim.world.segment(p, c).is_some() { continue; }
+                    let s = sc(c) + 0.05 * r;
+                    if s < best.0 { best = (s, c); }
+                }
+            }
+            cover = best.1;
+        }
+        let dead_target = target.is_some_and(|(i, _)| { let d = &sim.drones.list[i]; d.corpse || d.health <= 0.0 });
+        if t % 10 == 0 || dead_target {
+            let e = sim.bond.head();
+            let mut best: Option<(f32, usize, [f32; 3])> = None;
+            let mut cands = live_astronauts(sim);
+            if let Some(p) = prio { if !cands.contains(&p) { let d = &sim.drones.list[p]; if d.present && !d.corpse && d.health > 0.0 { cands.push(p); } } }
+            for i in cands {
+                let d = &sim.drones.list[i];
+                let r = dist3(d.pos, e);
+                if r > 40.0 { continue; }
+                let Some(a) = w.exposed_aim(i) else { continue };
+                let threat = sim.world.segment_bullet([d.pos[0], d.pos[1] + 0.6, d.pos[2]], e).is_none();
+                // waves_first banding: a THREATENING wave outranks a far prio target, but the
+                // prio target CLOSING inside 8 u outranks the waves — Drake's own gun (weapon
+                // 0x30, the measured −14.0 a hit at Agent = the record × Plr_DMod_Normal 0.7
+                // [D weapon_data 0x30 +0x0c; M 0x1902c8]) is four waves' worth per hit, and the
+                // first sheltered fight let him sit at 4.1 u for two of them (28.0 of the run's
+                // last 30.0).
+                let s = if r < 3.5 { r - 100.0 }
+                    else if Some(i) == prio && r < 8.0 { r - 60.0 }
+                    else if waves_first && threat { r - 30.0 }
+                    else if Some(i) == prio { r - 50.0 }
+                    else if threat { r - 20.0 }
+                    else { r };
+                if best.map_or(true, |b| s < b.0) { best = Some((s, i, a)); }
+            }
+            target = best.map(|b| (b.1, b.2));
+        }
+        let (input, fire) = {
+            // waves_first (the Agent tactics): hold at the least-exposed point near `hold` from
+            // the START, not only while the clip recharges — the hub float at Agent took the
+            // whole wave ring's fire while the aim re-picks ground through the adds (the
+            // measured deaths: 43 and 41 hits for 100.0). Drake closes in through the float, so
+            // the sheltered hold keeps him shootable (the exposure scoring is the same
+            // fewest-astronauts-see-me rule the recharge arm already used).
+            let mut spot = if recharging || waves_first { cover } else { hold };
+            if let Some((_, a)) = target { if !recharging { spot[1] = a[1] - eye_off; } }
+            let mut inp = thrust_to(sim, spot);
+            let mut fire = false;
+            match target {
+                Some((i, a)) => {
+                    level_turn(sim, &mut inp, a, 0.08);
+                    fire = ray_on(sim, i) && view_level(sim) && sim.gun.clip >= 12 && t.saturating_sub(last_tap) >= 12;
+                }
+                None => inp.stabilise = sim.bond.look()[1].abs() > 0.005 && sim.bond.stabiliser == 0,
+            }
+            (inp, fire)
+        };
+        if fire { last_tap = t; w.tick_fire(input); } else { w.tick(input, false); }
+    }
+}
+
+/// Wait out a phase in cover: float to the nearby point (out to `rad`, from 9 u below to 3 u
+/// above) the fewest live astronauts can see, re-scored every 30 ticks with hysteresis, and shoot
+/// only what the level view reaches from there — the eye stays at the cover height. The later
+/// waves (spawners #165-181, ch 116-120 from the missile scripts [D]) float in the band above
+/// the deck; under the deck and the rails every line from that band is cut.
+/// floats to the least-exposed point in reach (`best_float_point`, the same rule the waves'
+/// 2-s sighting clock rewards) and snipes whatever levels with the eye. Returns the last cover
+/// point (the Agent Drake fight re-fights FROM it — the shelter the waves' LOS already
+/// respects; see `fight_opts`).
+fn hide_and_snipe(w: &mut Walker, rad: f32, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) -> Option<[f32; 3]> {
+    let mut last_tap = 0u32;
+    let mut cover: Option<([f32; 3], f32)> = None;
+    let mut cal = ShotCal::default();
+    for t in 0..cap {
+        if done(w.scene.sim.as_ref().unwrap()) { return cover.map(|c| c.0); }
+        let sim = w.scene.sim.as_ref().unwrap();
+        let eye_off = sim.bond.head()[1] - sim.bond.pos[1];
+        let p = sim.bond.pos;
+        let score = |c: [f32; 3]| { let (s, cl) = exposure(sim, [c[0], c[1] + eye_off, c[2]]); s as f32 * 3.0 + cl as f32 * 10.0 };
+        if t % 30 == 0 {
+            let ys: Vec<f32> = (-6..=2).map(|k| p[1] + k as f32 * 1.5).collect();
+            let here = cover.map(|(c, _)| (c, score(c)));
+            if let Some((c, s)) = best_float_point(sim, p, rad, &ys, |c| Some(score(c))) {
+                cover = match here { Some((hc, hs)) if hs <= s + 1.0 => Some((hc, hs)), _ => Some((c, s)) };
+            }
+        }
+        let spot = cover.map_or(p, |c| c.0);
+        let e = sim.bond.head();
+        let mut tgt: Option<(f32, usize, [f32; 3])> = None;
+        for i in live_astronauts(sim) {
+            let d = &sim.drones.list[i];
+            let r = dist3(d.pos, e);
+            if r > 40.0 { continue; }
+            let Some(a) = w.exposed_aim(i) else { continue };
+            if (a[1] - e[1]).abs() > 0.4 { continue; }
+            if tgt.map_or(true, |b| r < b.0) { tgt = Some((r, i, a)); }
+        }
+        let mut inp = float_to(sim, spot);
+        let mut fire = false;
+        match tgt {
+            Some((_, i, a)) => {
+                level_turn(sim, &mut inp, cal.eye_target(sim, a), 0.3);
+                fire = ray_on(sim, i) && view_level(sim) && sim.gun.clip >= 12 && t.saturating_sub(last_tap) >= 12;
+            }
+            None => inp.stabilise = sim.bond.look()[1].abs() > 0.005 && sim.bond.stabiliser == 0,
+        }
+        let nb = sim.drones.player_bullets.len();
+        if fire { last_tap = t; w.tick_fire(inp); cal.learn(w.scene.sim.as_ref().unwrap(), nb); } else { w.tick(inp, false); }
+    }
+    cover.map(|c| c.0)
+}
+
+/// The mission route both full walks play (no position, substate or channel write after the
+/// load): the first wave fought from the hub float → the launch order; the eight screens; the
+/// later waves waited out in cover until the fight gate spawns Drake; Drake fought; the defeat
+/// NIS (no skip, so its channel writes land) waited out in cover. Returns Drake's index.
+fn play_the_mission(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) -> bool + Copy) -> usize {
+    play_the_mission_opts(w, alive, false)
+}
+
+/// `play_the_mission` with the Agent tactics switch: `waves_first` rides the Drake fight's aim
+/// pick (see `fight_opts`) — the Operative walks keep the master order.
+fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) -> bool + Copy, waves_first: bool) -> usize {
+    let drake_of = |s: &nf_view::scene::Sim| s.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0xba);
+
+    // 1. The first wave → the launch order.
+    fight(w, [32.0, -1.7, 0.0], None, |s| s.drones.channels.on(19) || !alive(s), 4000);
+    assert!(alive(w.scene.sim.as_ref().unwrap()), "Bond survives the first wave");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(19),
+        "the first wave's death raises the launch order ch 19 [D spawner #163 p6 = 194, AND #202]");
+
+    // 2. The consoles, in deadline order.
+    let latched = shoot_consoles(w);
+    eprintln!("[1b] consoles latched (console, frame): {latched:?}; health {:.1} armour {:.1}",
+        w.scene.sim.as_ref().unwrap().drones.health.health, w.scene.sim.as_ref().unwrap().drones.health.armour);
+    for k in 1..=8u32 {
+        assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(k), "console {k} latched by the real shot [D the console UI scripts' t682 write]");
+    }
+    assert!(alive(w.scene.sim.as_ref().unwrap()), "Bond survives the console run");
+
+    // 3. The disarm branch, the fly-by chain, Drake — the later waves waited out in cover.
+    // The Agent tactics (waves_first): Drake is fought FROM the shelter the wave-wait just
+    // proved — the deck cover the floaters' LOS already respects — not from the open hub (the
+    // measured Agent deaths: 43/41/39 hits for 100.0 at the hub hold, the wave ring grinding
+    // the stand down while Drake was the only target). The prio-aware cover pick in fight_opts
+    // keeps a hold that can answer him.
+    let drake_hold = if waves_first { hide_and_snipe(w, 12.0, |s| drake_of(s).is_some() || !alive(s), 6000) } else { hide_and_snipe(w, 12.0, |s| drake_of(s).is_some() || !alive(s), 6000); None };
+    let drake = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(alive(sim), "Bond survives the later waves to the fly-by (health {:.1})", sim.drones.health.health);
+        assert!(sim.drones.missile_deploy.iter().all(|&d| d == 2),
+            "every missile took the DISARM branch (MissileDeploy 2 [M 0x1aa2cc]): {:?}", sim.drones.missile_deploy);
+        assert!(sim.drones.channels.on(46), "missile 1's disarm script writes SP#211's start ch 46 [D 0600091c @t1000]");
+        assert!(sim.drones.channels.on(10), "the fly-by chain writes the fight gate ch 10 [D 0x060008f0 t400]");
+        assert!(sim.drones.mission.status() <= 1, "no fail on the way (status {}) [M 0x182c60]", sim.drones.mission.status());
+        // The game's order, pinned mid-walk on the state the objective monitor reads [M
+        // Mission_MonitorObjectives 0x1827d8]. The fight gate does NOT wait for objective 1: the
+        // done channels that feed AND #139 (ch 21/22/27) are written only when each missile's p2
+        // script ENDS [M 0x1aa33c-3d0 — Script_Update; Script_IsPlaying; bne v0 → the writes sit
+        // behind it: sb 1 → switch_channels[16(s0)] = p6 at 0x1aa3a0-3bc (disarm) /
+        // switch_channels[14(s0)] = p5 at 0x1aa380-388 (launch); obj+0xf4 = 4 at 0x1aa3d4-3d8],
+        // and missile 1's p2 writes the Drake-chain ch 46 @t1000 but ends at t1710 [D 0600091c],
+        // so ch 10 → Drake lands ~710 ticks BEFORE ch 21. So while Drake lives: obj 1 is merely
+        // announced (3) and obj 2 still hidden (1 — its enable ch 0x09 has not fired [L record 1b
+        // obj 2; M 0x1827d8:55-67]). The monitor completes obj 1 (record 4 [M 0x1827d8:78-85])
+        // later, when the three p2 ends raise ch 0x09.
+        assert!(!sim.drones.channels.on(0x09) && !sim.drones.channels.on(0x0b),
+            "at the fight gate neither objective channel has fired: ch 0x09 waits on the p2 ends [M 0x1aa33c-3d0], ch 0x0b on Drake's death [D]");
+        assert_eq!(sim.drones.mission.states[23][0], 3,
+            "objective 1 is announced but NOT complete while Drake spawns [M 0x1827d8:41-54/78-85]");
+        assert_eq!(sim.drones.mission.states[23][1], 1,
+            "objective 2 is still hidden (its enable ch 0x09 has not fired) [L record 1b obj 2; M 0x1827d8:55-67]");
+        drake_of(sim).expect("the fight gate spawns Drake (spawner #187, trigger 10 [D])")
+    };
+    assert!(w.scene.sim.as_ref().unwrap().drones.list[drake].enabled, "the gate enables Drake (wait-switch 10 [D])");
+    eprintln!("[1b] Drake spawned at frame {}; health {:.1}", w.scene.sim.as_ref().unwrap().drones.frame, w.scene.sim.as_ref().unwrap().drones.health.health);
+
+    // 4. Drake, then the defeat NIS plays out (no skip, so its channel writes land).
+    w.skip_cutscenes = false;
+    fight_opts(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, |s| s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s), 6000);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(alive(sim), "Bond survives Drake's fight (health {:.1})", sim.drones.health.health);
+        assert!(sim.drones.list[drake].health <= 0.0, "Drake dies to Bond's fire in the float");
+        assert!(sim.drones.channels.on(0x0e), "Drake's death channel ch 0x0e rises with the kill [D #186 p12 = 14; M 0x1747b8/0x13e660]");
+        // The order's middle hinge, in the window between Drake's death (ch 0x0e) and the defeat
+        // NIS's ch 0x0b write (its t600 [D 0x06000a20] — the NIS only starts on 0x0e, so 0x0b is
+        // still 600 ticks out): the missiles' p2 scripts ended during the fight, so AND #139 has
+        // raised ch 0x09 and the monitor completed objective 1 [M 0x1827d8:78-85], while
+        // objective 2 is announced (its enable ch 0x09 fired [M 0x1827d8:55-67]) and not yet
+        // complete — the game's order: obj 1 completes BEFORE obj 2.
+        assert!(!sim.drones.channels.on(0x0b),
+            "the defeat NIS's ch 0x0b write sits at its t600, after the death tick [D 0x06000a20]");
+        assert!(sim.drones.channels.on(0x09),
+            "the p2 ends raised ch 0x09 during the fight [M 0x1aa33c-3d0 + D the p2 lengths]");
+        assert_eq!(sim.drones.mission.states[23][0], 4,
+            "objective 1 is COMPLETE by Drake's death [M 0x1827d8:78-85]");
+        assert_eq!(sim.drones.mission.states[23][1], 3,
+            "objective 2 is announced and not complete at Drake's death [M 0x1827d8:55-67]");
+    }
+    hide_and_snipe(w, 12.0, |s| s.drones.mission.status() == 6 || !alive(s), 2400);
+    w.skip_cutscenes = true;
+    drake
 }
 
 /// The launch order is the FIRST WAVE's death, on disc data alone: the arrival script
@@ -275,7 +746,7 @@ fn the_first_wave_kill_raises_the_launch_order() {
         assert!(sim.drones.space_missiles.iter().all(|m| m.state == 0), "sister: the missiles wait on ch 19 [M 0x1aa1c8]");
     }
     let hold = w.scene.sim.as_ref().unwrap().bond.pos;
-    kill_astronauts(&mut w, hold, |s| s.drones.channels.on(19), 2400);
+    fight(&mut w, hold, None, |s| s.drones.channels.on(19), 2400);
     let sim = w.scene.sim.as_ref().unwrap();
     assert!(sim.drones.channels.on(194), "the dead wave writes spawner #163's done channel 194 [D p6; M 0x137e68]");
     assert!(sim.drones.channels.on(19), "AND #202 (193 & 194) raises the launch order ch 19 [D]");
@@ -304,9 +775,41 @@ fn the_first_wave_kill_raises_the_launch_order() {
 ///
 /// The walker's health allowance stays on (damage suppressed — the walkreal convention); the
 /// real-health run of the same route, with the later waves (spawners #165-181, ch 116-120 from
-/// the missile scripts [D]) fought, is `walk_arrival_to_drakes_defeat_on_real_health`.
+
+/// `the_first_wave_kill_raises_the_launch_order` on real damage (common/damage_log.rs: no top-up,
+/// Bond's death panics with the death line): the level-look fight from the start float kills the
+/// first wave before its rounds get through.
 #[test]
-#[ignore = "zero-g look in the body frame reverted (the aim did not follow the camera); the console shots need it - 10-level-1b-zero-g-look"]
+fn the_first_wave_kill_raises_the_launch_order_real_damage() {
+    walker::with_real_damage(the_first_wave_kill_raises_the_launch_order);
+}
+
+/// The whole mission on real input — no position, substate or channel write after the load.
+/// The station is a zero-g level from the start (the p3 == 2 spawn enters substate 8 [M
+/// Player_Init 0x1910f8 :160-165]) and the route never needs the shaft's far side: Drake comes
+/// to Bond (`play_the_mission`).
+///
+/// 1. The arrival plays; the first wave (spawner #163) attacks; killing it raises ch 194 →
+///    AND #202 → ch 19, the launch order [D — the sister test above].
+/// 2. The eight missiles leave state 0 [M 0x1aa1c8]; their p0 scripts write the console gates
+///    31..38 at t359 [D], the console UI scripts (SP#213-220, hit points 20) play and hold at
+///    t650; Bond floats to the stations and shoots the screens (20 damage resumes the script
+///    [M SP_UnPause 0x1dca58], the t682 write latches the console channel [D]) before each
+///    missile's p0 ends (state 2 reads the channel [M 0x1aa25c]) — all eight take the DISARM
+///    branch (MissileDeploy 2 [M 0x1aa2cc]).
+/// 3. Missile 1's disarm script writes ch 46 [D 0600091c @t1000] — SP#211's start (gate ch 30,
+///    console 1's UI write [D 060007e2]); the fly-by chain 0x060007fd → 0x060008f0 writes the
+///    fight gate ch 10 at its t400 [D]; spawner #187 (trigger 10 [D]) spawns Drake, who closes
+///    in through the float. The done channels 21/22/27 land → AND #139 → ch 9, objective 1 [D].
+/// 4. Bond shoots Drake (the real fire path): his death channel 14 [D #186 p12], the defeat NIS
+///    (SP#198) writes ch 0x0b [D 0x06000a20], the monitor's ch 9 & 0x0b → ch 100 → MissionState
+///    6 → 0x0730001b [M 0x182c60:114-116].
+///
+/// Every shot is taken with the view level (the module note's level look), so it lands where the
+/// view looks with either zero-g look composition. The walker's health allowance stays on
+/// (damage suppressed — the walkreal convention); `walk_arrival_to_drakes_defeat_on_real_health`
+/// plays the same route on real health.
+#[test]
 fn walk_arrival_to_drakes_defeat() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
@@ -318,66 +821,32 @@ fn walk_arrival_to_drakes_defeat() {
         assert_eq!(sim.drones.mission.states[23][0], 3,
             "'Disable the missiles' shows at once (enable 0 [L], the state-0 arm [M 0x1827d8:41-54])");
         assert_eq!(sim.drones.mission.states[23][1], 1, "'Defeat Drake' hides until ch 0x09 [L record 1b obj 2]");
+        assert!(view_level(sim) && sim.bond.pitch == 0.0, "the float starts level: the entry matrix is RotMatrix(−pitch·π/2, yaw, 0) of the walk's 0 pitch");
     }
-
-    // 1. The first wave → the launch order.
-    kill_astronauts(&mut w, [32.0, -1.7, 0.0], |s| s.drones.channels.on(19), 4000);
-    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(19),
-        "the first wave's death raises the launch order ch 19 [D spawner #163 p6 = 194, AND #202]");
-
-    // 2. The consoles, in deadline order.
-    let latched = shoot_consoles(&mut w);
-    eprintln!("[1b] consoles latched (console, frame): {latched:?}");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        for k in 1..=8u32 {
-            assert!(sim.drones.channels.on(k), "console {k} latched by the real shot [D the console UI scripts' t682 write]");
-        }
-    }
-
-    // 3. The disarm branch, the fly-by chain, Drake.
-    let mut drake = None;
-    for _ in 0..4000u32 {
-        let sim = w.scene.sim.as_ref().unwrap();
-        if let Some(i) = sim.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0xba) { drake = Some(i); break; }
-        let input = thrust_to(sim, [32.0, -1.7, 0.0]);
-        w.tick(input, false);
-    }
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.missile_deploy.iter().all(|&d| d == 2),
-            "every missile took the DISARM branch (MissileDeploy 2 [M 0x1aa2cc]): {:?}", sim.drones.missile_deploy);
-        assert!(sim.drones.channels.on(46), "missile 1's disarm script writes SP#211's start ch 46 [D 0600091c @t1000]");
-        assert!(sim.drones.channels.on(10), "the fly-by chain writes the fight gate ch 10 [D 0x060008f0 t400]");
-        assert!(sim.drones.mission.status() <= 1, "no fail on the way (status {}) [M 0x182c60]", sim.drones.mission.status());
-    }
-    let drake = drake.expect("the fight gate spawns Drake (spawner #187, trigger 10 [D])");
-    assert!(w.scene.sim.as_ref().unwrap().drones.list[drake].enabled, "the gate enables Drake (wait-switch 10 [D])");
-
-    // 4. The fight and the defeat NIS (plays out — no skip, so its channel writes land).
-    w.skip_cutscenes = false;
-    assert!(w.shoot(drake, "Drake"), "Drake dies to Bond's fire in the float");
-    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x0e),
-        "Drake's death channel ch 0x0e rises with the kill [D #186 p12 = 14; M 0x1747b8/0x13e660]");
-    let mut ended = false;
-    for _ in 0..2400u32 {
-        w.tick(Default::default(), false);
-        if w.scene.sim.as_ref().unwrap().drones.mission.status() == 6 { ended = true; break; }
-    }
-    w.skip_cutscenes = true;
+    play_the_mission(&mut w, |_| true);
     let sim = w.scene.sim.as_ref().unwrap();
     assert!(sim.drones.channels.on(0x09), "objective 1: AND #139 (21 & 22 & 27) → ch 9 [D]");
     assert!(sim.drones.channels.on(0x0b), "the defeat NIS writes ch 0x0b [D 0x06000a20]");
     assert!(sim.drones.channels.on(100), "ch 100, the mission end [M 0x1827d8:120 / D 0x06000a20]");
-    assert!(ended, "the mission ends (MissionState 6) [M 0x182c60]");
+    assert_eq!(sim.drones.mission.status(), 6, "the mission ends (MissionState 6) [M 0x182c60]");
     assert_eq!(sim.drones.mission.to_end, 0x0730_001b, "the station's own end code [M 0x182c60:114-116]");
+    // Both objectives COMPLETE on the records the monitor reads, in the game's order (the
+    // mid-walk hinges pinned obj 1 = 3 / obj 2 = 1 at Drake's spawn and obj 1 = 4 / obj 2 = 3 at
+    // his death):
+    // the monitor's state-3 arm turns each record 4 when its channel reads ON [M 0x1827d8:78-85].
+    assert_eq!(sim.drones.mission.states[23][0], 4,
+        "objective 1 'Disable the missiles' is COMPLETE on the record [M 0x1827d8:78-85; L record 1b obj 1]");
+    assert_eq!(sim.drones.mission.states[23][1], 4,
+        "objective 2 'Defeat Drake' is COMPLETE on the record [M 0x1827d8:78-85; L record 1b obj 2]");
+    // The channels of record, stamped on every nonzero write [M 0x1b1a78:87,107,188-189]: the
+    // defeat NIS writes 0x0b at t600 and the end ch 100 at t720 [D 0x06000a20], so obj 2's
+    // completion lands strictly before the mission-end channel's last stamp.
+    let t = |c: u32| sim.drones.channels.time.get(c as usize).copied()
+        .unwrap_or_else(|| panic!("ch {c} was written on the walk"));
+    assert!(t(0x0b) < t(100),
+        "obj 2's completion channel 0x0b lands before the mission-end ch 100 [D 0x06000a20 t600/t720] ({} vs {})", t(0x0b), t(100));
 }
 
-/// The start float lifts Bond OFF the deck band: 0700001b loads in the zero-g substate 8 [M
-/// Player_Init 0x1910f8 :160-165], the float flies to the slit mouth, and the lift thruster (the
-/// body's up row [M 0x193600:284-295]) carries him above the deck. Sister: a switch-channel-75
-/// write changes no substate — `C_CHCHZEROG_Handler` 0x216388's 0x4b is the cheat page's menu
-/// message [M 0x216388:10-17], and no ACTION.ELF code reads `switch_channels[75]`.
 #[test]
 fn the_zero_g_entry_floats_bond_off_the_deck() {
     let iso = iso();
@@ -714,146 +1183,30 @@ fn the_sp211_chain_spawns_drake_in_the_start_float() {
         "the gate enables Drake (wait-switch 10 [D])");
 }
 
-/// The live astronauts (skin 0x05000078) Bond can hurt: present, enabled, not a corpse.
-fn live_astronauts(sim: &nf_view::scene::Sim) -> Vec<usize> {
-    sim.drones.list.iter().enumerate()
-        .filter(|(_, d)| d.present && !d.corpse && d.enabled && d.health > 0.0 && d.skin & 0xffff == 0x78)
-        .map(|(i, _)| i).collect()
-}
-
-/// A player's zero-g fight: hold the float station `hold` on the thrusters, turn to the nearest
-/// astronaut whose body a bullet can reach (`exposed_aim` — the game's own box-entry rule), and
-/// tap the rifle when the view is on him; auto-aim (the app's default, applied every frame)
-/// pulls the round onto his torso bone. Returns at `done` or the tick cap.
-fn fight_astronauts(w: &mut Walker, hold: [f32; 3], done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
-    fight(w, hold, None, done, cap)
-}
-
-/// `fight_astronauts` with an optional priority target (Drake, skin 0x050000BA): while he is
-/// alive and a bullet can reach him he is the one aimed at.
-fn fight(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
-    let mut last_tap = 0u32;
-    let mut target: Option<(usize, [f32; 3])> = None;
-    let mut recharging = false;
-    let mut spot = hold;
-    for t in 0..cap {
-        // Ammo management + cover: the rifle's clip only recharges (12 rounds a shot, no spare —
-        // the gun_1b probe), so a dry clip sends Bond to the nearby float point the fewest
-        // astronauts can shoot (a bullet segment from each one's head to his eye) and away from
-        // any within 3 u (the always-hit, double-damage TooClose band [M DoBulletAccuracy
-        // 0x179740:113-115; Drone_ModBulletDamage 0x139fac-0x139fc8]); losing sight resets a
-        // shooter's 2-s new-sighting clock [M 0x179740:103-105] — then back out at 60 rounds.
-        {
-            let sim = w.scene.sim.as_ref().unwrap();
-            if sim.gun.clip < 12 { recharging = true; }
-            if sim.gun.clip >= 60 { recharging = false; }
-            if !recharging { spot = hold; }
-            else if t % 30 == 0 {
-                let live = live_astronauts(sim);
-                let eye_off = sim.bond.head()[1] - sim.bond.pos[1];
-                let score = |c: [f32; 3]| -> f32 {
-                    let e = [c[0], c[1] + eye_off, c[2]];
-                    let mut sc = 0.0;
-                    for &i in &live {
-                        let d = &sim.drones.list[i];
-                        let h = [d.pos[0], d.pos[1] + 0.6, d.pos[2]];
-                        let r = ((h[0] - e[0]).powi(2) + (h[1] - e[1]).powi(2) + (h[2] - e[2]).powi(2)).sqrt();
-                        if r > 40.0 { continue; }
-                        if r < 3.5 { sc += 4.0; }
-                        if sim.world.segment_bullet(h, e).is_none() { sc += 1.0; }
-                    }
-                    sc
-                };
-                let p = sim.bond.pos;
-                let mut best = (score(p), p);
-                for r in [2.5f32, 5.0] {
-                    for o in [[r, 0.0, 0.0], [-r, 0.0, 0.0], [0.0, r, 0.0], [0.0, -r, 0.0], [0.0, 0.0, r], [0.0, 0.0, -r]] {
-                        let c = [hold[0] + o[0], hold[1] + o[1], hold[2] + o[2]];
-                        // Reachable: a clear body segment from where he floats.
-                        if sim.world.segment(p, c).is_some() { continue; }
-                        let sc = score(c) + 0.05 * r;
-                        if sc < best.0 { best = (sc, c); }
-                    }
-                }
-                spot = best.1;
-            }
-        }
-        if done(w.scene.sim.as_ref().unwrap()) { return; }
-        if t % 10 == 0 || target.is_some_and(|(i, _)| {
-            let d = &w.scene.sim.as_ref().unwrap().drones.list[i];
-            d.corpse || d.health <= 0.0
-        }) {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let e = sim.bond.head();
-            let mut best: Option<(f32, usize, [f32; 3])> = None;
-            let mut cands = live_astronauts(sim);
-            if let Some(p) = prio {
-                let d = &sim.drones.list[p];
-                if d.present && !d.corpse && d.health > 0.0 {
-                    if let Some(a) = w.exposed_aim(p) { cands.clear(); best = Some((0.0, p, a)); }
-                }
-            }
-            for i in cands {
-                let d = &sim.drones.list[i];
-                let r = ((d.pos[0] - e[0]).powi(2) + (d.pos[1] - e[1]).powi(2) + (d.pos[2] - e[2]).powi(2)).sqrt();
-                if r > 40.0 { continue; }
-                if let Some(a) = w.exposed_aim(i) {
-                    if best.map_or(true, |b| r < b.0) { best = Some((r, i, a)); }
-                }
-            }
-            target = best.map(|b| (b.1, b.2));
-        }
-        let (input, fire) = {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let mut inp = thrust_to(sim, spot);
-            let mut fire = false;
-            if let Some((_, a)) = target {
-                if let Some((e, pe)) = walker::zero_g_errs(sim, a) {
-                    inp.turn = e.clamp(-0.08, 0.08);
-                    inp.look = pe.clamp(-0.08, 0.08);
-                    fire = e.abs() < 0.03 && pe.abs() < 0.03 && sim.gun.clip >= 12 && t.saturating_sub(last_tap) >= 12;
-                }
-            }
-            (inp, fire)
-        };
-        let nh = w.scene.sim.as_ref().unwrap().drones.player_hits.len();
-        if fire { last_tap = t; w.tick_fire(input); } else { w.tick(input, false); }
-        if std::env::var_os("NF_1B_TRACE").is_some() {
-            let sim = w.scene.sim.as_ref().unwrap();
-            for h in &sim.drones.player_hits[nh..] {
-                let d = &sim.drones.list[h.1.min(sim.drones.list.len() - 1)];
-                eprintln!("[hit] f{} d{} lost {:.1} dist {:.1} seen {} st {:#x} armour {:.0} motion {:?}", h.0, h.1, h.2, d.dist, d.seen_ticks, d.state, sim.drones.health.armour, sim.drones.target_motion);
-            }
-        }
-        if std::env::var_os("NF_1B_TRACE").is_some() && t % 100 == 0 {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let live = live_astronauts(sim);
-            let near: Vec<String> = live.iter().map(|&i| { let d = &sim.drones.list[i];
-                format!("d{i}@{:.0} st{:#x} hp{:.0}", walker::dxz(d.pos, sim.bond.pos), d.state, d.health) }).collect();
-            eprintln!("[fight] f{} hp {:.0} ar {:.0} clip {} pos ({:.1},{:.1},{:.1}) tgt {:?} live {}: {}", sim.drones.frame, sim.drones.health.health, sim.drones.health.armour,
-                sim.gun.clip, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], target.map(|x| x.0), live.len(), near.join(" "));
-        }
-    }
-}
-
 /// The whole mission on REAL health — no top-up, no position, substate or channel write after
-/// the load — played the way a player plays it: auto-aim on (the app's default; `drain_options`
-/// writes `sim.auto_aim` from the option every frame), the console order and the rifle's burst
-/// discipline of the walk above, and the waves FOUGHT instead of waited out: after the eight
-/// screens Bond holds the float station and kills astronauts (`fight`), dropping to the
-/// least-exposed nearby float point while the clip recharges, then kills Drake the same way.
+/// the load — the route of `walk_arrival_to_drakes_defeat` (`play_the_mission`): auto-aim on (the
+/// app's default; the laser's +0x14 is 0, so `Check_AutoAim` never locks with it [M 0x1a73f8 k =
+/// +0x14/100]), the first wave fought from the hub float, the screens in deadline order, the later
+/// waves waited out under the deck (they float in the band above it), Drake fought, the defeat NIS
+/// waited out in cover.
 ///
 /// The damage he takes is the game's model, pinned [M]: weapon 0x6a's 5.0 [D weapon_data +0x0c]
-/// × `Plr_DMod_Easy` 0.6 at the load's difficulty 1 (1b's group [M ReadTuningVars 0x1d3a80
-/// case 0x700001b: 0x3f19999a]; the switch on GameState+0x28 [M Player_HandlePain 0x1902c8:28-49])
-/// = 3.0 a hit, armour first [M :100-105]; the hit roll `100 − 5·acc` × `DroneFiring_Accuracy_Easy`
-/// 0.6 [M 0x1d3a80 / DoBulletAccuracy 0x179740:52-99] × `TargetMoving` 0.75 while the float's
-/// thruster pair is live [M 0x179a48:34-41 — `Drones::player_move_local`].
-#[test]
-#[ignore = "zero-g look in the body frame reverted (the aim did not follow the camera); the console shots need it - 10-level-1b-zero-g-look"]
-fn walk_arrival_to_drakes_defeat_on_real_health() {
+/// × `Plr_DMod_*` at the load's difficulty (1b's group [M ReadTuningVars 0x1d3a80 case
+/// 0x700001b: Easy 0x3f19999a = 0.6, Normal 0x3f333333 = 0.7]; the switch on GameState+0x28
+/// [M Player_HandlePain 0x1902c8:28-49]) = 3.0/3.5 a hit, armour first [M :100-105]; the hit
+/// roll `100 − 5·acc` with the astronauts' accuracy 9 × `DroneFiring_Accuracy_*` (Easy 0.6,
+/// Normal 0x3f4ccccd = 0.8 [M 0x1d3a80 / DoBulletAccuracy 0x179740:52-99]) × `TargetMoving`
+/// 0.75 while the float's thruster pair is live [M 0x179a48:34-41 — `Drones::player_move_local`].
+/// The walk, parametrized by the menu's difficulty pick (Agent = 2 [M C_SBNFDFCTY 0x216ca8:15
+/// → GameState+0x28]): the difficulty-1 expression is the pre-sister master's byte-for-byte
+/// (plain `load`), 2+ loads the front-end's launch path [M → load_with_carry_difficulty].
+fn walk_arrival_to_drakes_defeat_on_real_health_at(difficulty: u32) {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load(&iso, "0700001b.bin", false).unwrap()
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "0700001b.bin", false, None, difficulty).unwrap()
+    });
     w.top_up_health = false;
     w.wait_enabled(3000, "the shuttle arrival");
     w.scene.sim.as_mut().unwrap().auto_aim = true;
@@ -861,73 +1214,135 @@ fn walk_arrival_to_drakes_defeat_on_real_health() {
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.bond.substate, SS_ZEROG_8, "the station starts in the zero-g substate [M Player_Init 0x1910f8 :160-165]");
-        assert_eq!(sim.drones.difficulty, 1, "the harness load's difficulty (GameState+0x28 = 1)");
-        assert_eq!(nf_game::bullet::damage_factor(sim.level, 1), 0.6, "1b's Plr_DMod_Easy [M 0x1d3a80 case 0x700001b]");
+        assert_eq!(sim.drones.difficulty, difficulty, "the harness load's difficulty (GameState+0x28) [M 0x2a3790 → Drones::difficulty]");
+        assert_eq!(nf_game::bullet::damage_factor(sim.level, difficulty),
+            if difficulty == 1 { 0.6 } else if difficulty == 3 { 1.0 } else { 0.7 },
+            "1b's Plr_DMod row for the picked difficulty [M 0x1d3a80 case 0x700001b: Easy 0.6, Normal 0.7, Hard 1.0]");
         assert_eq!(sim.tuning.DroneFiring_Accuracy_Easy, 0.6, "1b's DroneFiring_Accuracy_Easy [M 0x1d3a80 case 0x700001b]");
+        if difficulty >= 2 {
+            assert_eq!(sim.tuning.DroneFiring_Accuracy_Normal, 0.8, "1b's DroneFiring_Accuracy_Normal [M 0x1d3a80 case 0x700001b: 0x3f4ccccd]");
+        }
         let rec = &sim.weapons.records[0x6a];
         assert_eq!(f32::from_le_bytes(rec[0x0c..0x10].try_into().unwrap()), 5.0, "the astronauts' weapon 0x6a hits for 5.0 [D weapon_data +0x0c]");
     }
-    let dead = |s: &nf_view::scene::Sim| s.drones.health.health <= 0.0;
-    let drake_of = |s: &nf_view::scene::Sim| s.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0xba);
-
-    // 1. The first wave → the launch order (the walk's own fight).
-    kill_astronauts(&mut w, [32.0, -1.7, 0.0], |s| s.drones.channels.on(19) || dead(s), 4000);
-    assert!(!dead(w.scene.sim.as_ref().unwrap()), "Bond survives the first wave");
-    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(19), "the first wave's death raises the launch order ch 19 [D]");
-
-    // 2. The consoles, in deadline order (the screens before the astronauts: the last one
-    //    latches ~190 ticks before its missile's deadline, no rifle charge to spare).
-    let latched = shoot_consoles(&mut w);
-    eprintln!("[1b-rh] consoles latched (console, frame): {latched:?}; health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
-    for k in 1..=8u32 {
-        assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(k), "console {k} latched by the real shot");
-    }
-    assert!(!dead(w.scene.sim.as_ref().unwrap()), "Bond survives the console run");
-
-    // 3. The waves until the fight gate spawns Drake: fought, not waited out.
-    fight_astronauts(&mut w, [32.0, -1.7, 0.0], |s| drake_of(s).is_some() || dead(s), 4000);
-    let drake = {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(!dead(sim), "Bond survives the later waves to the fly-by (health {:.1})", sim.drones.health.health);
-        assert!(sim.drones.missile_deploy.iter().all(|&d| d == 2), "every missile took the DISARM branch: {:?}", sim.drones.missile_deploy);
-        drake_of(sim).expect("the fight gate spawns Drake (spawner #187, trigger 10 [D])")
-    };
-    eprintln!("[1b-rh] Drake spawned at frame {}; health {:.1}", w.scene.sim.as_ref().unwrap().drones.frame, w.scene.sim.as_ref().unwrap().drones.health.health);
-
-    // 4. Drake, then the defeat NIS plays out (no skip, so its channel writes land).
-    w.skip_cutscenes = false;
-    fight(&mut w, [32.0, -1.7, 0.0], Some(drake), |s| s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || dead(s), 6000);
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(!dead(sim), "Bond survives Drake's fight (health {:.1})", sim.drones.health.health);
-        assert!(sim.drones.list[drake].health <= 0.0, "Drake dies to Bond's fire in the float");
-    }
-    let mut ended = false;
-    for _ in 0..2400u32 {
-        w.tick(Default::default(), false);
-        let sim = w.scene.sim.as_ref().unwrap();
-        if sim.drones.mission.status() == 6 || dead(sim) { ended = sim.drones.mission.status() == 6; break; }
-    }
-    w.skip_cutscenes = true;
+    let alive = |s: &nf_view::scene::Sim| s.drones.health.health > 0.0;
+    play_the_mission_opts(&mut w, alive, difficulty >= 2);
     let sim = w.scene.sim.as_ref().unwrap();
     let lost: f32 = sim.drones.player_hits.iter().map(|h| h.2).sum();
     eprintln!("[1b-rh] end frame {} health {:.1} armour {:.1} hits {} health lost {lost:.1}",
         sim.drones.frame, sim.drones.health.health, sim.drones.health.armour, sim.drones.player_hits.len());
-    assert!(ended, "the mission ends (MissionState 6) with Bond alive [M 0x182c60] (health {:.1})", sim.drones.health.health);
+    assert_eq!(sim.drones.mission.status(), 6, "the mission ends (MissionState 6) with Bond alive [M 0x182c60] (health {:.1})", sim.drones.health.health);
     assert_eq!(sim.drones.mission.to_end, 0x0730_001b, "the station's own end code [M 0x182c60:114-116]");
-    // Sister: the damage path ran for real — the waves' rounds cost health (no top-up).
-    assert!(lost >= 30.0 && sim.drones.player_hits.len() >= 20,
-        "the waves really hurt Bond on the way ({} hits, {lost:.1} health) — no allowance", sim.drones.player_hits.len());
+    // Both objectives COMPLETE on the records the monitor reads, in the game's order (the
+    // mid-walk hinges in play_the_mission pin obj 1 = 3 / obj 2 = 1 at Drake's spawn and
+    // obj 1 = 4 / obj 2 = 3 at his death) [M 0x1827d8:78-85; L record 1b].
+    assert_eq!(sim.drones.mission.states[23][0], 4, "objective 1 COMPLETE on the record");
+    assert_eq!(sim.drones.mission.states[23][1], 4, "objective 2 COMPLETE on the record");
+    let t = |c: u32| sim.drones.channels.time.get(c as usize).copied()
+        .unwrap_or_else(|| panic!("ch {c} was written on the walk"));
+    assert!(t(0x0b) < t(100), "obj 2's 0x0b lands before the mission-end ch 100 [D 0x06000a20 t600/t720]");
+    // Sister: the damage path ran for real — the rounds cost the armour and then health (no top-up).
+    assert!(sim.drones.player_hits.len() >= 15 && sim.drones.health.armour == 0.0 && lost > 0.0,
+        "the waves really hurt Bond on the way ({} hits, armour {:.1}, {lost:.1} health) — no allowance", sim.drones.player_hits.len(), sim.drones.health.armour);
     assert!(sim.drones.health.health < 100.0, "health is never topped up");
 }
 
-/// The zero-g "moving" byte the hit roll reads is the float's thruster pair, not a position
-/// change [M DroneWeap_DoOpponentTargetting 0x179a48:34-41 reads |(BL+0x10, 0, BL+0x18)| != 0;
-/// Player_Update 0x193600:131-133 zeroes the quad each tick; Player_ZeroG 0x192ab0:113,135 adds
-/// the 0.04-eased smoothers +0x20/+0x28 into it, with no dead-zone]. A burst of forward thrust
-/// then release: the pair decays by 0.96 a tick and never reaches 0, so 300 ticks later the float
-/// still reads moving (×TargetMoving 0.75 [M 0x179740:78-80]) although its position change per
-/// tick is under the on-foot test's 1e-4. Sister: a float that never thrusted reads still.
+#[test]
+fn walk_arrival_to_drakes_defeat_on_real_health() {
+    walk_arrival_to_drakes_defeat_on_real_health_at(1);
+}
+
+/// The Agent-difficulty sister (real-health-agent-difficulty-16-1b-41-4a): the same walked
+/// station on real health, loaded at difficulty 2 the menu way — Bond's pain scales by 1b's
+/// Plr_DMod_Normal 0.7 [M Player_HandlePain 0x1902c8; 0x1d3a80 case 0x700001b] and the
+/// astronauts' hit chance by Accuracy Normal 0.8 [M DroneWeap_DoBulletAccuracy 0x179740:74-88].
+/// Real input only; no health/ammo/channel writes.
+#[test]
+#[ignore = "Agent: Bond dies on real health, tactics not a port gap (the s/real-health-agent-difficulty-16-1b-41-4a report); follow-up real-health-agent-16-1b-2"]
+fn walk_arrival_to_drakes_defeat_on_real_health_agent() {
+    walk_arrival_to_drakes_defeat_on_real_health_at(2);
+}
+
+/// The 00 Agent sister (real-health-00agent-16-1b-41-4a): the same walked station on real
+/// health, loaded at difficulty 3 the menu way — pain Plr_DMod_Hard 1.0 [M Player_HandlePain
+/// 0x1902c8; 0x1d3a80 case 0x700001b: Easy 0.6, Normal 0.7, Hard 0x3f800000] and the
+/// astronauts' hit chance by Accuracy Hard [M DroneWeap_DoBulletAccuracy 0x179740:74-88].
+/// Real input only; no health/ammo/channel writes.
+#[test]
+#[ignore = "00 Agent: Bond dies in the Drake fight on real health — tick 8426 at (12.26,5.83,0.27), 26 hits for 100.0 (the waves' 0x6a at -5.0 Hard and Drake's 0x30 at -20.0 [M 0x1d3a80 case 0x700001b: Hard 0x3f800000]; the d2 death was 32 hits at tick 10695), Accuracy Hard on the game's own pipeline; next lever: the d2 stand work first (real-health-agent-16-1b-2 — Bond's dps/reload cadence, the waves' sight-lines), then the d3 pressure"]
+fn walk_arrival_to_drakes_defeat_on_real_health_00agent() {
+    walk_arrival_to_drakes_defeat_on_real_health_at(3);
+}
+
+/// The astronauts' stats and gun, from the disc and the decompile. They are type 1 (`+0xC7`,
+/// placement parameter 15) and carry no stats section of their own; the type's record comes from
+/// placement #140's section (skin 0x0500008F, tag 0x80010006 — kind 1 = accuracy 9, aggression 1,
+/// health 10, 80, 3, reaction 80, recover 80, 1 [D the 0x303330 bit widths]) through the shared
+/// table every later drone of the type reads [M behaviour_util_get 0x1c7a98; DoModeSettingsNEW
+/// 0x14c600:70-107]; their health is then `DroneInit_TakeXHits(dmg, 0x33)` = weapon 0x33's 20.0 ×
+/// 1.0 on Easy [M 0x14b300:728-739 + 0x14d928:6-8] — one laser hit (0x33's own +0x0c 20.0).
+/// Their weapon 0x6a: 5.0 a round, one round a shot, spread 5 [D weapon_data +0x0c/+0x18/+0x24].
+/// The hit roll [M DroneWeap_DoBulletAccuracy 0x179740:52-99, ported `hit_chance`]: (100 − 5·9) ×
+/// Easy 0.6 = 33 %, × TargetMoving 0.75 = 24.75 % on a thrusting float; inside 3 u every round hits
+/// [M :113-115] for twice the damage [M Drone_ModBulletDamage 0x139fac-0x139fc8]; beyond it a hit
+/// also needs 2 s of unbroken sight (`+0x270 ≥ NewSighting_TimeToHit · FRAME_RATE`) and no sight
+/// lost since the last shot (`+0x41`) [M :102-109]. `DroneWeap_FireWeapon` 0x178f68 runs the roll
+/// for every shot but the type-0x1e minigun arm [M :92-148] and spawns `weapon_data+0x18` bullets
+/// [M :233-241] — the port's `fire_weapon` (drone.rs) follows both. Sister: the astronaut's own
+/// (empty) section alone would read the defaults 5/0/10, so the pin can fail.
+#[test]
+fn the_astronauts_fire_at_accuracy_9_for_3_a_hit() {
+    let iso = iso();
+    let img = nf_formats::iso9660::IsoImage::open(&iso).unwrap();
+    let (entries, bin) = nf_formats::disc::files_bin_entries(&img).unwrap();
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("0700001b.bin")).unwrap();
+    let data = img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).unwrap();
+    let lv = nf_formats::level::Level::parse(&data).unwrap();
+    let pl = &lv.maps[lv.main_map().unwrap()].placements;
+    let get = |i: usize, k: u32| pl[i].params.iter().find(|(j, _)| *j == k).map_or(0, |&(_, v)| v);
+    assert_eq!((pl[140].flags & 0xff, get(140, 0), get(140, 15), get(140, 26)), (0x0f, 0x0500_008f, 1, 0x8001_0006),
+        "#140 carries the type-1 stats section [D]");
+    let mut table = nf_formats::drone::DroneStatsTable::default();
+    assert_eq!(table.behaviour_get(|k| get(140, k)), 1);
+    assert_eq!(table.0[1][1], [9, 1, 10, 80, 3, 80, 80, 1], "the type-1 kind-1 record [D]");
+    let astro: Vec<usize> = (0..pl.len()).filter(|&i| pl[i].flags & 0xff == 0x0f && get(i, 0) == 0x0500_0078).collect();
+    assert!(astro.len() >= 17 && astro.iter().all(|&i| get(i, 15) == 1 && get(i, 26) == 0),
+        "every astronaut template is type 1 with no section of its own [D]");
+    let mut alone = nf_formats::drone::DroneStatsTable::default();
+    let ty = alone.behaviour_get(|k| get(astro[0], k));
+    let own = alone.stats(ty);
+    assert_eq!((own.accuracy, own.aggression, own.health), (5, 0, 10), "sister: an astronaut's own section alone reads the defaults");
+
+    let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
+    w.wait_enabled(3000, "the shuttle arrival");
+    for _ in 0..3000u32 {
+        w.tick(Default::default(), false);
+        if !live_astronauts(w.scene.sim.as_ref().unwrap()).is_empty() { break; }
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    let live = live_astronauts(sim);
+    assert!(!live.is_empty(), "the first wave spawns");
+    for &i in &live {
+        let d = &sim.drones.list[i];
+        assert_eq!((d.accuracy, d.aggression, d.reaction, d.recover), (9, 1, 80, 80), "astronaut {i} reads the shared type-1 record");
+        assert_eq!((d.weapon, d.health, d.max_health, d.damage_mul), (0x6a, 20.0, 20.0, 1.0), "astronaut {i}: weapon 0x6a, TakeXHits(1.0, 0x33) = 20");
+    }
+    let rec = &sim.weapons.records[0x6a];
+    let f = |o: usize| f32::from_le_bytes(rec[o..o + 4].try_into().unwrap());
+    assert_eq!((f(0x0c), rec[0x18], f(0x24)), (5.0, 1, 5.0), "weapon 0x6a: 5.0 a round, one round, spread 5 [D]");
+    assert_eq!(f32::from_le_bytes(sim.weapons.records[0x33][0x0c..0x10].try_into().unwrap()), 20.0, "the laser 0x33 hits for 20 [D]");
+    let t = &sim.tuning;
+    let still = nf_game::drone::Motion::default();
+    let moving = nf_game::drone::Motion { moving: true, ..Default::default() };
+    let pct = |m| nf_game::drone::hit_chance(t, sim.level, 1, 9, 20.0, m, 0x10);
+    assert!((pct(still) - 33.0).abs() < 1e-4, "(100 − 45) × 0.6 = 33 % ({})", pct(still));
+    assert!((pct(moving) - 24.75).abs() < 1e-4, "× TargetMoving 0.75 = 24.75 % ({})", pct(moving));
+    assert!(nf_game::drone::hit_chance(t, sim.level, 1, 9, 2.0, still, 0x10) > pct(still), "sister: TooClose (×2, twice [M :53-55, :97-99]) raises it");
+    assert_eq!((t.DroneFiring_TooClose_Distance, t.DroneFiring_TooClose_Damage, t.DroneFiring_NewSighting_TimeToHit), (3.0, 2.0, 2.0),
+        "TooClose under 3 u, ×2 damage; 2 s of sight to land a round [M ReadTuningVars 0x1d3a80]");
+    assert!((nf_game::bullet::damage_factor(sim.level, 1) * f(0x0c) - 3.0).abs() < 1e-5, "5.0 × Plr_DMod_Easy 0.6 = 3 a hit");
+}
+
 #[test]
 fn the_zero_g_float_reads_moving_while_its_thrusters_decay() {
     let iso = iso();
@@ -939,10 +1354,15 @@ fn the_zero_g_float_reads_moving_while_its_thrusters_decay() {
         assert_eq!(sim.bond.substate, SS_ZEROG_8, "the float substate [M 0x1910f8 :160-165]");
         assert_eq!(sim.bond.local, [0.0, 0.0], "no thrust yet");
         assert_eq!(sim.drones.player_move_local, Some([0.0, 0.0]), "the viewer hands the drones the pair in zero-g");
-        assert!(!sim.drones.target_motion.0, "sister: a float that never thrusted reads still");
+        let g = first_tracker(sim);
+        assert!(!sim.drones.list[g].target_motion.moving, "sister: a float that never thrusted reads still [M 0x179a48:34-41]");
     }
     for _ in 0..20u32 { w.tick(Input { forward: 1.0, ..Default::default() }, false); }
-    assert!(w.scene.sim.as_ref().unwrap().drones.target_motion.0, "thrusting reads moving");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let g = first_tracker(sim);
+        assert!(sim.drones.list[g].target_motion.moving, "thrusting reads moving [M 0x179a48:34-41]");
+    }
     for _ in 0..300u32 { w.tick(Input::default(), false); }
     let p0 = w.scene.sim.as_ref().unwrap().bond.pos;
     w.tick(Input::default(), false);
@@ -951,8 +1371,9 @@ fn the_zero_g_float_reads_moving_while_its_thrusters_decay() {
     let step = (p1[0] - p0[0]).abs() + (p1[2] - p0[2]).abs();
     assert!(step < 1e-4, "the decayed drift moves under the on-foot 1e-4 test ({step:e})");
     assert!(sim.bond.local[1] != 0.0, "the eased forward smoother never reaches 0 [M 0x192ab0:116-135]");
-    assert!(sim.drones.target_motion.0, "the float still reads MOVING for the hit roll [M 0x179a48:34-41]");
-    assert!(!sim.drones.target_motion.1, "the first-moved window (2 s) is long over [M 0x179a48:70-73]");
+    let g = first_tracker(sim);
+    assert!(sim.drones.list[g].target_motion.moving, "the float still reads MOVING for the hit roll [M 0x179a48:34-41]");
+    assert!(!sim.drones.list[g].target_motion.first_moved, "the first-moved window (2 s) is long over [M 0x179a48:70-73]");
 }
 
 /// The float against the shaft's south end-wall (z −20.40 [D the_end_walls_seal_the_shaft_box])
@@ -1034,4 +1455,11 @@ fn the_float_slides_along_the_south_end_wall() {
     fly(&mut w, [8.0, -1.2, -17.0], 900, false);
     let p = w.scene.sim.as_ref().unwrap().bond.pos;
     assert!(p[2] > -17.3, "the float backs off the wall freely (z {:.2})", p[2]);
+}
+
+/// `the_float_slides_along_the_south_end_wall` on real damage: the first wave reaches the float
+/// at the end-wall while it slides (armour only, measured), and Bond lives through the whole leg.
+#[test]
+fn the_float_slides_along_the_south_end_wall_real_damage() {
+    walker::with_real_damage(the_float_slides_along_the_south_end_wall);
 }

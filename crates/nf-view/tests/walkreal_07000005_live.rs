@@ -20,6 +20,26 @@ use walker::{Walker};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
+/// The visibility probe (NF_VIS_PROBE, diagnostic only — no behaviour): per alive team-1 drone
+/// within 45 u — the position, the dxz/dy off Bond, and whether the walker's own exposed_aim
+/// reaches a box. The 00 Agent tactic work reads this map to place the fights.
+fn probe_vis(w: &Walker, label: &str) {
+    if std::env::var_os("NF_VIS_PROBE").is_none() { return; }
+    let sim = w.scene.sim.as_ref().unwrap();
+    let b = sim.bond.pos;
+    for (i, d) in sim.drones.list.iter().enumerate() {
+        if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { continue; }
+        let dxz = ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt();
+        if dxz > 45.0 { continue; }
+        let dy = d.pos[1] - b[1];
+        eprintln!("[vis] {label}: #{i} skin {:#x} wpn {:#x} pos ({:.1},{:.1},{:.1}) dxz {dxz:.1} dy {dy:+.1} hp {:.0} aim {}",
+            d.skin, d.weapon, d.pos[0], d.pos[1], d.pos[2], d.health,
+            if w.exposed_aim(i).is_some() { "SOME" } else { "none" });
+    }
+}
+
+
+
 /// The stick's turn toward `yaw` this tick (`Input::turn` adds to the yaw [port player.rs]),
 /// clamped to the walker's own per-tick rate.
 fn stick_err(w: &Walker, yaw: f32) -> f32 {
@@ -62,9 +82,11 @@ fn walk_to_the_gatehouse_and_ride_the_truck() {
     // hand-off takes Bond from where he stands (the enable's `at` is the truck's matrix).
     w.walk_nav_to([98.6, 26.0, 106.5], "to the gatehouse", 1.6);
     {
-        // The spawn's reveal plate (ch 0x45 at feet+0.47) sits below the toucher stand-in's reach —
-        // a documented stand-in miss (see drone.rs's toucher comment); the truck chain does not
-        // need it (fix_truck_live drives the whole ride without it).
+        // The spawn's reveal plate (TouchOnce #36 at (105.94, 24.41, 108.14), out 0x45 [D]) fires
+        // on the boot tick under the −0.6 stand-in reach (the plate sits 0.557 below the boot
+        // reference, inside the [0.557, 0.575] window the stand-in straddles — drone.rs's toucher
+        // comment); the assert below pins the fire. (The pre-−0.6 "documented miss" note here is
+        // obsolete.)
         let sim = w.scene.sim.as_ref().unwrap();
         eprintln!("[05] at the gatehouse tick {} bond {:?}; ch 0x45 {} ch 0x5c {}", w.total_ticks, sim.bond.pos,
             sim.drones.channels.on(0x45) as u8, sim.drones.channels.on(0x5c) as u8);
@@ -302,6 +324,7 @@ pub fn walk_to_the_slab_east_end(w: &mut Walker) {
         ("the lane, tower north", [29.5, 33.7, 75.0]),
     ] {
         w.walk_nav_to(at, name, 1.5);
+        probe_vis(w, name);
     }
     w.walk_nav_to([30.0, 36.0, 60.0], "the tower top", 1.5);
     {
@@ -761,7 +784,7 @@ fn the_notch_grab_and_ride_parked() {
 /// PlungeTrigger, whose death NIS SP #284 (06000952) disabled the sim and wrote the mission-fail
 /// ch 0x62 [L the NF_SCRIPTLOG run of 2026-10-31]) → the east lane → the covered staircase's
 /// top (35.0, 43.3, −71.4). Ends standing on the stairs' top.
-fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker) {
+fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker, difficulty: u32) {
     walk_to_the_slab_east_end(w);
     walk_the_gap_to_the_notch(w);
     // The grab + ride, the round-8 shape (the notch test's exact legs): the ctx-3 zone walk,
@@ -981,11 +1004,46 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker) {
     // through the "second crack" (z −46..−50 — the crack cuts x −36..−34.25 to floors 18-25, but
     // the spine holds) and down the gallery (z −52..−64, the spine 37.4 with the gallery floor
     // 4-6 below on both sides) to the widening at z −65 (x −37..−35: 37-38).
+    probe_vis(w, "pre-spine");
     walk_legs(w, &[
         ([-34.9, 37.0, -37.5], "the corridor 37.5"),
         ([-34.9, 37.2, -39.5], "the corridor 39.5"),
         ([-34.9, 37.4, -41.5], "the corridor 41.5"),
         ([-34.9, 37.6, -43.5], "the corridor 43.5"),
+    ], 34.0, 900);
+    // The gallery riflemen below the spine (the Agent/00 Agent tactics, gated d >= 2): #8 at
+    // (-46.9, 22.0, -60.7) and #9 at (-49.6, 22.0, -58.5) — 16 u BELOW the spine — fire on the
+    // spine's gallery legs (the a05c repro: 20 hits for 46.8, no fight — their rounds reach Bond
+    // but the eye→centre pick read none from the gallery). From the CORRIDOR's 39.5 leg their
+    // down-ray clears (the NF_VIS_PROBE per-leg map a05k.out: "the corridor 39.5: #8 aim SOME, #9
+    // aim SOME" at dy −15.3) — a player stops under the corridor's roof, sees the two riflemen in
+    // the gallery below-left, and shoots them before stepping onto the exposed spine. The stand
+    // runs from the corridor's 43.5 mouth (the proven a05q shape: both sentries killed at
+    // 9356/9455, the run finished 61.5 [L a05q.out]; the deeper 39.5 stand's head-box aim measured
+    // zero landed rounds — the chest is the box the down-ray clears). shoot_point, NOT shoot():
+    // the sentries are STATIONARY (their pos never moves across any ledger [L a05c..a05p]), and
+    // shoot()'s flanks walk Bond off the corridor's west edge (the a05o/p wedges at
+    // (−37.6, 36.0, −41.7), floor_below None, within the first sidestep). The aim point is the
+    // chest (+0.6 over the root); the 2400-tick cap is shoot_point's own. The Operative master
+    // (d1) skips.
+    if difficulty >= 3 {
+        for (at, label) in [([-46.9f32, 22.0, -60.7], "the gallery rifleman west"), ([-49.6, 22.0, -58.5], "the gallery rifleman east")] {
+            let rifleman = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
+                d.team == 1 && d.present && !d.corpse && d.health > 0.0
+                    && ((d.pos[0] - at[0]).powi(2) + (d.pos[1] - at[1]).powi(2) + (d.pos[2] - at[2]).powi(2)).sqrt() < 2.0
+            });
+            if let Some(di) = rifleman {
+                let g = w.scene.sim.as_ref().unwrap().drones.list[di].pos;
+                let aim = [g[0], g[1] + 0.6, g[2]];
+                let killed = w.shoot_point(aim, label, move |sim: &nf_view::scene::Sim| {
+                    sim.drones.list.get(di).is_none_or(|d| d.corpse || d.health <= 0.0)
+                });
+                eprintln!("[05a] {label} stand: killed {killed} at tick {}", w.total_ticks);
+            }
+        }
+        w.reload_full();
+    }
+    walk_legs(w, &[
         ([-34.9, 37.6, -45.5], "the spine at the crack"),
         ([-34.9, 37.6, -48.0], "the spine mid-crack"),
         ([-34.9, 37.5, -50.5], "the spine past the crack"),
@@ -1211,10 +1269,18 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker) {
 /// (i23.m50.o41 mat10) — each with a gap at z −67.75..−69.0/−69.25: THE DOORWAY, the only link
 /// between the staircase pocket (x 38-40) and the open slab (x ≤ 36) [D map F, the y-50.2 wall
 /// sections]. Ends standing at the terrace spot (22.0, −68.0).
-fn walk_the_stairs_top_to_the_terrace_spot(w: &mut Walker) {
+fn walk_the_stairs_top_to_the_terrace_spot(w: &mut Walker, difficulty: u32) {
     walk_legs(w, &[
         ([36.4, 43.8, -71.8], "the stairs' top east end"),
         ([36.4, 43.7, -72.6], "the strip's west corner"),
+    ], 40.0, 900);
+    // NOTE (the walkway ambush pair, 2026-11-03): two 0x16 riflemen stand on the walkway's south
+    // edge at (42.4-43.0, 45.2-45.3, -72.0..-73.6) — the route's legs pass within 1-2 u [L the
+    // 00agent ledgers]. A scripted shoot() stand here measured killed false at 62-600 ticks (their
+    // boxes sit behind the walkway's south lip for the eye→centre pick even at 3 u) and the stand
+    // itself cost the exposure — the walk eats the pair's pass-by price (~12 [L a05g: 9.2+2.8])
+    // instead of standing in it.
+    walk_legs(w, &[
         ([38.5, 44.0, -72.7], "the south strip 38.5"),
         ([41.0, 44.1, -72.7], "the south strip 41"),
         ([43.4, 44.1, -72.6], "the south strip 43.4"),
@@ -1300,7 +1366,7 @@ fn the_cable_landing_walks_the_south_walkway_toward_the_zip_door() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
     w.wait(30);
-    walk_the_cable_route_to_the_stairs_top(&mut w);
+    walk_the_cable_route_to_the_stairs_top(&mut w, 1);
     eprintln!("[05r] the corridor→stairs legs complete in {} ticks; falls {:?}",
         w.total_ticks, w.report.falls);
     for f in &w.report.falls { eprintln!("[05r] fall: {f}"); }
@@ -1318,6 +1384,7 @@ fn walk_legs(w: &mut Walker, targets: &[([f32; 3], &str)], min_y: f32, max_leg_t
         let (at, name) = targets[leg];
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
         if walker::dxz(p, at) < 0.7 {
+            probe_vis(w, name);
             eprintln!("[05r] {name}: +{ticks_on_leg} ticks bond {:?}", p);
             leg += 1;
             ticks_on_leg = 0;
@@ -1425,12 +1492,68 @@ fn the_notch_holds_the_walk_and_the_grab_needs_its_zone() {
 /// [M Trigger_Activate 0x1b2318:91-107] and ends the level into 07000006 — the same chain the
 /// old stand-in pinned, now reached on real input.
 #[test]
-fn the_door_band_exit_chains_to_07000006_walked() {
+fn the_door_band_exit_chains_to_07000006_walked() { the_door_band_exit_chains_to_07000006_walked_at(1) }
+
+/// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent rides the
+/// front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
+fn the_door_band_exit_chains_to_07000006_walked_at(difficulty: u32) {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load(&iso, "07000005.bin", false).expect("load 07000005")
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "07000005.bin", false, None, difficulty)
+            .expect("load 07000005")
+    });
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
+    // The Agent/00 Agent tactics (gated inside the level's own test file; Operative keeps the
+    // master behaviour): the return-fire fights STEP BACK while a live guard stands inside 4 u —
+    // the melee punchers reach Bond in the fights' stand (the 00 Agent courtyard melee cost 16.5
+    // standing in its reach [L the 2026-11-03 00agent repro a05.out: fight#3's window 97.2 →
+    // 50.8]) — the same tactic the 03 Agent sister shipped (keep_off/back_off 4.0,
+    // real-health-agent-difficulty-01-07). DamageLog::back_off is the shared opt-in (default
+    // None = master stands still; the field is read in stand_and_fire's crowd arm only).
+    if difficulty >= 3 {
+        w.dmg.back_off = Some(4.0);
+        // The spine's vertical shooters (DamageLog::shooters_window): the gallery riflemen stand
+        // 16.6 u BELOW the spine (y 22.0 vs the spine's 38.6) and their rounds reach Bond — the
+        // plain 6.0 dy window dropped them before the pick (the a05c repro: 18 rounds for 48.0 on
+        // the spine, no fight). The 48/18 window is the player's down-shot sight line; whether the
+        // down-ray clears is the exposed_aim pick's to answer (the NF_VIS_PROBE per-leg map).
+        w.dmg.shooters_window = Some((48.0, 18.0));
+    }
     w.wait(30);
-    walk_the_cable_route_to_the_stairs_top(&mut w);
-    walk_the_stairs_top_to_the_terrace_spot(&mut w);
+    probe_vis(&w, "the spawn");
+    // The two 0x24 snipers of the castle approach (the 00 Agent tactics, gated d >= 2 in the
+    // level's own file): the ditch placement at (99.7, 16.8, 101.6) — 9 u from the spawn, 8 u
+    // BELOW the road, aim none from the spawn itself [L the NF_VIS_PROBE map a05e.out] — snipes
+    // at d 4.6 the moment the road descends past its ditch (one rolled hit cost 30.0 at tick 609
+    // [L a05f.out], and the return-fire fight only killed it afterwards); the wall placement at
+    // (62.1, 34.5, 104.2) is exposed from the spawn (43.1 u, dy +9.5, aim SOME) and sniped 30.0
+    // at tick 1381 in the unpatched run. A player under sniper arcs engages them BEFORE crossing
+    // their fields: the walker's own shoot() (aim + tap on the real fire path; its flank/forward
+    // push opens the blocked down-ray as Bond closes). The Operative master (d1) skips — the
+    // placements don't pass Drone_Create's min-difficulty gate [M 0x136be0:49].
+    if difficulty >= 3 {
+        for (at, label) in [([99.7f32, 16.8, 101.6], "the ditch sniper"), ([62.1, 34.5, 104.2], "the courtyard wall sniper")] {
+            let sniper = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
+                d.team == 1 && d.present && !d.corpse && d.health > 0.0
+                    && ((d.pos[0] - at[0]).powi(2) + (d.pos[1] - at[1]).powi(2) + (d.pos[2] - at[2]).powi(2)).sqrt() < 5.0
+            });
+            if let Some(di) = sniper {
+                let killed = w.shoot(di, label);
+                eprintln!("[05a] {label} stand: killed {killed} at tick {}", w.total_ticks);
+            }
+        }
+        // The stands drain the clip (the ditch stand's 1500 ticks of aim + taps): reload BEFORE
+        // the walk so the return-fire fights never open on a drained clip — the a05g repro's
+        // fight#3 opened at 0.9 u with clip 1 and reloaded mid-fight, standing in the guard's
+        // TooClose field (Walker::reload_full, the additive API).
+        w.reload_full();
+    }
+    walk_the_cable_route_to_the_stairs_top(&mut w, difficulty);
+    probe_vis(&w, "the stairs top");
+    walk_the_stairs_top_to_the_terrace_spot(&mut w, difficulty);
     // Walk east INTO the doorway arch and press E (the walker's Use: face the point, pulse the
     // key — the game's Activate is edge-triggered [M Input_Action mask 4]). The reach is the
     // game's use sphere: radius 1.0 at head + 1×view dir, sphere vs the trigger's glist [M
@@ -1471,4 +1594,37 @@ fn the_door_band_exit_chains_to_07000006_walked() {
 #[test]
 fn the_door_band_exit_chains_to_07000006_walked_real_damage() {
     walker::with_real_damage(the_door_band_exit_chains_to_07000006_walked);
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty): the same walked
+/// cable-car → terrace → door-#112 route at the menu's Agent pick — GameState+0x28 = 2 through
+/// the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table 0x2df4c0 row
+/// 1 carries 2; Txt 0x14e = "Agent"]. On this level group the pick scales Bond's pain by
+/// Plr_DMod_Normal 0.7 instead of Easy 0.6 and the guards' hit chance by
+/// DroneFiring_Accuracy_Normal 1.1 instead of Easy 0.8 [M Player_HandlePain 0x1902c8;
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 05-08 group]. Real input only — the load
+/// path is the only difference.
+#[test]
+fn the_door_band_exit_chains_to_07000006_walked_real_damage_agent() {
+    // PLAIN with_real_damage — the exact shape the difficulty branch's run shipped and passed
+    // (57.6 health [L docs/reports/real-health-agent-difficulty-01-07]); the 00 Agent tactics are
+    // gated d >= 3 in the body so this sister's RNG stays the proven one.
+    walker::with_real_damage(|| the_door_band_exit_chains_to_07000006_walked_at(2))
+}
+
+/// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-05-07): the same walked
+/// cable-car → terrace → door-#112 route at the menu's 00 Agent pick — GameState+0x28 = 3 through
+/// the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table 0x2df4c0 row
+/// 2 carries 3; Txt 0x14f = "00 Agent"]. On this level group the pick scales Bond's pain by
+/// Plr_DMod_Hard 1.0 (the Operative run rides Easy 0.6, Agent 0.7) and the guards' hit chance by
+/// DroneFiring_Accuracy_Hard 1.3 (Easy 0.8, Normal 1.1) [M Player_HandlePain 0x1902c8;
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 05-08 group ← ReadTuningVars 0x1d3a80];
+/// the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the
+/// load path is the only difference.
+#[test]
+fn the_door_band_exit_chains_to_07000006_walked_real_damage_00agent() {
+    // The fights HEAD-HUNT (see the Agent sister): at 00 Agent the guards' accuracy is 1.3 and
+    // Bond's pain is unscaled, so every tick a fight stands is a tick of bursts — the head pick
+    // halves the stand time.
+    walker::with_real_damage_head_hunting(|| the_door_band_exit_chains_to_07000006_walked_at(3))
 }

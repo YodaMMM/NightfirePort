@@ -96,6 +96,18 @@ fn shoot_mine(w: &mut Walker, plc: usize, at: [f32; 3], label: &str) -> f32 {
     panic!("{label}: mine #{plc} never exploded under fire");
 }
 
+/// The Agent roster's placement-spot resolution (real-health-agent-difficulty-12-13-14-15):
+/// the min-difficulty-2 placements shift the port indices, but a placement's [D] spot is
+/// difficulty-stable — find the live hostile standing there.
+fn agent_drone_near(w: &Walker, at: [f32; 3], tol: f32) -> Option<usize> {
+    let sim = w.scene.sim.as_ref().unwrap();
+    (0..sim.drones.list.len()).find(|&i| {
+        let d = &sim.drones.list[i];
+        d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+            && (d.pos[0] - at[0]).powi(2) + (d.pos[1] - at[1]).powi(2) + (d.pos[2] - at[2]).powi(2) < tol * tol
+    })
+}
+
 /// Draw weapon `id` (the real switch request) and wait out the holster/draw.
 fn draw(w: &mut Walker, id: u8) {
     w.tick(nf_game::player::Input { switch_to: Some(id), ..Default::default() }, false);
@@ -175,10 +187,15 @@ fn walk_plain(w: &mut Walker, to: [f32; 3], r: f32, label: &str) {
     panic!("{label}: walk_plain cap\n{}", walker::fail_dump_pub(&w.scene, to, label));
 }
 
-#[test]
-fn walk_spawn_to_the_omega_sector_exit() {
+fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000015.bin", false).unwrap());
+    // The difficulty-1 expression is byte-identical to the pre-sister master's (real-health-
+    // agent-difficulty-01-07's idiom); 2+ loads the menu way [M C_SBNFDFCTY 0x216ca8:15].
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load(&iso, "07000015.bin", false).unwrap()
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "07000015.bin", false, None, difficulty).unwrap()
+    });
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -189,6 +206,8 @@ fn walk_spawn_to_the_omega_sector_exit() {
     w.wait(120);
     {
         let sim = w.scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.difficulty, difficulty,
+            "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
         assert!(sim.drones.channels.on(0x4b), "the spawn plate #484 fires the record's enable ch 0x4b [D row 21 enable 0x4b]");
         assert_eq!(sim.drones.mission.states[21].len(), 1,
             "the mission data lists exactly ONE objective for 07000015 [D MissionData row 21 count 1]");
@@ -198,31 +217,116 @@ fn walk_spawn_to_the_omega_sector_exit() {
     // The route: the spawn gantry west, then the NAV GRAPH's own route to the exit hall (the
     // z≈0 lane crosses the silo hole at x 66-74 — the walk's first run fell in; the guards' AI
     // paths are the game's own answer for the gantry maze), then the USE exit.
-    w.walk_to(Wp::new(88.0, 41.4, -0.5).r(1.2), "the gantry west");
     // The shots ride the P2K (0x02, 7 + 41 rounds at the level start [D the 07000015 loadout];
     // the drawn Delta Repeater carries 3 + 9 bolts).
+    // real-health-00agent-12-13-14-15 (the d3 note): the d3 roster's opening burst came from a
+    // 0x50000b2 guard BEHIND the spawn (the d3 ledger's #15, (72.35, 41.34, −9.44) at his
+    // hits) — 63.0 in 9 hits before the return fire finished him at tick 867. A spawn stand
+    // was TRIED and cost MORE (the line from the gantry is blocked — segment Some(0.068) —
+    // the shoot machinery flanked through door (81.7, −1.0) for 56.0 and two 3000-tick caps);
+    // the fights' own law is the cheaper answer (their creep killed him from the lane), so the
+    // d3 run keeps the fights and eats the opening burst — the budget note is in the report.
+    w.walk_to(Wp::new(88.0, 41.4, -0.5).r(1.2), "the gantry west");
     draw(&mut w, 0x02);
     // #462 lies across the silo crossing (the waist beam at x 46.8, z −2..3.2): the crossing's
     // nav lane walks into it at x 48.5, so it is shot from the lane once the gantry clutter
     // clears the line (≤ 14 u).
     let mine462 = [46.8f32, 41.556, 0.6];
     nav_until_clear(&mut w, [34.6, 41.4, 6.0], mine462, 14.0, "the silo crossing");
+    // REAL-HEALTH TACTIC (level-14-15-real-health-finish): the silo rifle guard (placement 699,
+    // port index 0, skin 0x5000087, weapon 0x15 — the burst rifle) plinks the crossing approach
+    // from ~6 u (8 × −1.20 in the measured run) and the automatic fight left it at hp 4; a
+    // player drops it from the lane before crossing — it stands in the open it has been firing
+    // from, so the line is the one its own rounds ride.
+    // The explicit kills run only on the real-health runs: the master (top-up) walk never
+    // fights (its pinned timeline has no return fire — the "enemies may be disabled" allowance),
+    // so an unconditional shoot(0) there burns the clip on an untouched guard at 10 u and the
+    // crossing arrives dry (the measured master failure: clip 0 spare 0 at #462).
+    if !w.tops_up() { w.shoot(0, "the silo rifle guard (placement 699)"); }
     let d = shoot_mine(&mut w, 462, mine462, "the silo-crossing beam #462");
     assert!(d > 4.0, "#462 is shot from down the lane ({d:.2} u)");
     assert!(w.follow_nav_route([34.6, 41.4, 6.0], "the silo crossing"), "the nav route crosses the gantry");
     w.walk_to(Wp::new(34.6, 41.4, 6.0).r(1.2), "the north turn");
     // The z ≈ 18 doorway fence (#383 the vertical beam at x 35.6, #384/#385 the diagonals) stands
-    // behind door[38] (z 10.5): through the door to z 13 (the body clears the beams there), one
-    // round on the vertical beam — the other two go on its blast.
-    w.walk_to(Wp::new(34.6, 41.4, 13.0).r(0.8), "door[38] north of the leaf");
-    let d = shoot_mine(&mut w, 383, [35.6, 42.3, 17.47], "the doorway fence #383");
-    assert!(d > 4.0, "#383 is shot from short of the fence ({d:.2} u)");
+    // behind door[38] (z 10.5). REAL-HEALTH TACTIC (level-14-15-real-health-finish): the old
+    // through-the-door shot from z 13 is 4.5 u off the beam and the fence's own blast
+    // [M Explode_Propagate 0x17c518 — radius 8, damage 100 [L ee_start_05.bin @0x2bf150
+    // + 0x383's record]] costs 44.8 at that range (the measured run: −16.0, −12.8, −16.0 across
+    // frames 2686-2687) — the level's own law, so the shot moves to RANGE, the exact dance
+    // a_p2k_round_from_10_units_explodes_the_door38_fence pins: into the leaf's E reach, open
+    // door[38], step back south of it, and the round rides the open doorway's window from ~10 u,
+    // past the blast's reach. The neighbours #384/#385 still go on the blast's case-0x4B entries
+    // [M 0x17c518].
+    w.walk_to(Wp::new(34.6, 41.4, 9.8).r(0.6), "door[38] E reach");
+    open_door_facing(&mut w, [34.6, 41.4, 10.5], "door[38]");
+    walk_plain(&mut w, [34.6, 41.4, 7.5], 0.35, "south of door[38], the shot line");
+    {
+        // consider-explosive-gate-3 diagnostic: the shot line's clearance against each fence
+        // mine's pick sphere (the segment_t gate [M worldobj.rs segment_t: sphere then tris]) —
+        // the real-damage run's Bond arrives with the guards' dropped AR auto-equipped (the
+        // walk-over take [M Player_IsBetterWeapon 0x1a6eb0]), whose muzzle shifts the line.
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+        let at = [35.6f32, 42.3, 17.47];
+        let dir = [at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]];
+        let dd: f32 = dir.iter().map(|v| v * v).sum();
+        for plc in [383usize, 384, 385] {
+            let m = &sim.drones.mines[mine_idx(&w, plc)];
+            let ac = [m.centre[0] - eye[0], m.centre[1] - eye[1], m.centre[2] - eye[2]];
+            let t = (ac.iter().zip(&dir).map(|(a, b)| a * b).sum::<f32>() / dd).clamp(0.0, 1.0);
+            let q = [eye[0] + dir[0] * t - m.centre[0], eye[1] + dir[1] * t - m.centre[1], eye[2] + dir[2] * t - m.centre[2]];
+            let d2: f32 = q.iter().map(|v| v * v).sum();
+            eprintln!("[mines] graze #{plc}: gun {:#04x} centre {:?} sph_r {:.3} closest {:.3} {}",
+                sim.gun.weapon, m.centre, m.sph_r, d2.sqrt(), if d2.sqrt() < m.sph_r { "INSIDE the gate" } else { "outside" });
+        }
+    }
+    // The pinned dance re-draws the P2K. The real-health fights upstream drop the guards' ARs and
+    // the walk-over take auto-equips one [M Player_IsBetterWeapon 0x1a6eb0 — the AR 0x1a is rank 3
+    // of BEST_WEAPON, the P2K 0x02 rank 16] — the measured run reaches this mark with the AR in
+    // hand (clip 30 spare 0). The bullet spawns from the camera–gun-bone midpoint for an fp-model
+    // weapon [M Player_WeaponInitBullet 0x1a4bf0:226-245; the port's scene.rs shot_from], so the
+    // AR's muzzle rides the aim line onto a different fence tri: the line eye→#383's centre passes
+    // inside ALL THREE fence pick spheres (the measured graze table — #383 closest 0.25, #384
+    // 0.61, #385 0.65, sph_r 2.18 each), and which mine's tris take the round first is the game's
+    // own first-solid-node rule [M Collide_Update 0x1ea398:216-229]. From the AR the round takes
+    // #385 first (the tick-2640 failure: #385 cause 2 BULLET, its case-0x4B blast then takes
+    // #383/#384 [M Explode_Propagate 0x17c518] — the game does the same), from the P2K — the gun
+    // this walk's own doc pins ("the shots ride the P2K") and the sister test fires — it takes
+    // #383 first. The real switch restores the walk's stated tactic; no health/ammo writes.
+    draw(&mut w, 0x02);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.gun.clip + sim.gun.spare > 0, "the P2K is dry at the fence mark (clip {} spare {})", sim.gun.clip, sim.gun.spare);
+    }
+    let d = shoot_mine(&mut w, 383, [35.6, 42.3, 17.47], "the doorway fence #383 from 10 u");
+    assert!(d > 8.0, "#383 is shot from RANGE, past its own blast ({d:.2} u)");
     w.wait(10);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         for plc in [384usize, 385] {
             let m = &sim.drones.mines[mine_idx(&w, plc)];
             assert!(m.exploded && m.cause == nf_game::worldobj::MINE_BLAST, "#{plc} goes on #383's blast (cause {})", m.cause);
+        }
+    }
+    // real-health-00agent-12-13-14-15 (the d3 gate): the plank grenadiers (the same [D] spots
+    // the d2 pre-shoot resolves — port #7 (28.63, 41.34, 35.51) and #8 (42.71, 41.34, 35.49)
+    // [L the d2 load probe]) opened fire on the door[39] north leg BEFORE the d2-gated stand
+    // ran (the d3 ledger: 19.3 in 3 hits from #8 and 7.0 from #7, frames 3600-3607, the death
+    // tick) — a player clears them from door[38]'s north lane before walking the spine (the
+    // d2 stand point, ~20 u; the fence-mark stands at 28 u never fired — the 0.02-rad aim gate
+    // is a torso-width there). The AR in hand drops a 20-hp grenadier in one round; the loose
+    // gate keeps the taps coming while the aim settles. The d2 stand below is a no-op once
+    // they are down.
+    if difficulty >= 3 {
+        w.walk_to(Wp::new(34.6, 41.4, 16.0).r(1.2), "door[38] north (the d3 grenadier stand)");
+        for (at, label) in [
+            ([28.63f32, 41.34, 35.51], "the west-plank grenadier from door[38] north"),
+            ([42.71f32, 41.34, 35.49], "the east-plank grenadier from door[38] north"),
+        ] {
+            if let Some(di) = agent_drone_near(&w, at, 8.0) {
+                w.shoot_bounded(di, label, 2400);
+            }
         }
     }
 
@@ -255,6 +359,13 @@ fn walk_spawn_to_the_omega_sector_exit() {
         ("the nav lane west", Wp::new(37.6, 41.4, 76.9).r(1.2)),
         ("the nav lane southwest", Wp::new(30.5, 41.4, 74.6).r(1.2)),
         ("the doorway north side", Wp::new(28.7, 41.4, 71.5).r(1.0)),
+        // REAL-HEALTH TACTIC (level-14-15-real-health-finish): placement 722 (port index 2, skin
+        // 0x500008c, weapon 0x1a — the grenade launcher) sits at (26.22, 41.45, 71.15) [D], the
+        // door[32] doorway itself, and the measured run died to ITS grenade chain: the grenade
+        // popped near #526 (7.7 u from the mine's sphere) and the mine's own blast took Bond at
+        // 1.7 u (−27.73, frame 5067) before the walk's own rim shot — the exact scenario the
+        // walk's own comment warns about. A player clears the doorway guard before the west
+        // lane; shoot() is a no-op once a fight has finished it.
         ("door[32] threshold", Wp::new(26.2, 41.4, 71.2).r(0.9)),  // in E reach of the leaf (head→pos d² 5.3 < 6.25)
         ("door[32] through", Wp::new(23.0, 41.4, 71.2).r(0.9)),
         ("door[32] west-top", Wp::new(20.0, 41.4, 70.0).r(1.2)),
@@ -265,7 +376,40 @@ fn walk_spawn_to_the_omega_sector_exit() {
         // z 61..67) to door[52] (1.05, 60.67), the corridor's north door.
         ("the west lane", Wp::new(13.0, 41.4, 71.0).r(1.2)),
     ];
-    w.walk_route(route);
+    // The Agent path: the d2 roster shifts the port indices (Drone_Create's min-difficulty
+    // gate [M 0x136be0:49]) — the route's targeted pre-shoots resolve by the guards' [D]
+    // placement spots. REAL-HEALTH TACTIC: the plank grenadiers (port #7 at (28.63, 41.34,
+    // 35.51) and #8 at (42.71, 41.34, 35.49) [L the d2 load probe]) plinked the measured run
+    // for −16.8 in 8 hits and −28.8 (a grenade) across the west-plank leg; a player clears
+    // them from door[39]'s north lane before stepping onto the plank grid — both stand in the
+    // open at 10.6 / 11.9 u. The BodyArmourHeavy #802 (22.53, 40.35, 35.53 [L the d2 load
+    // probe]) is NOT taken: it sits in the x ≈ 25 pit behind the ch_lock 0xc8 door at
+    // (25.1, 41.6, 36.6) — the detour walk wedged airborne against that door at (25.76,
+    // 41.47, 36.18) with floor_below 40.28 — so the #526 rim-shot blast stays on health
+    // (the pain rows for 07000015: [M Player_HandlePain 0x1902c8 × ReadTuningVars 0x1d3a80's
+    // per-level jump table — the 0x14..=0x16 group (Easy 0.4, Normal 0.6, Hard 1.0), the
+    // same shape [L ee_start_05.bin @0x30cc50/54/58 = 0.6/0.7/1.0 pins for the 0x05..=0x08
+    // group]) and the budget comes from the fights.
+    let (route_a, route_b) = route.split_at(route.iter().position(|(l, _)| *l == "the west plank").unwrap());
+    w.walk_route(route_a);
+    if difficulty >= 2 {
+        for (at, label) in [
+            ([28.63f32, 41.34, 35.51], "the west-plank grenadier (port #7, skin 0x500008c)"),
+            ([42.71f32, 41.34, 35.49], "the east-plank grenadier (port #8, skin 0x50000b2)"),
+        ] {
+            if let Some(di) = agent_drone_near(&w, at, 8.0) {
+                w.shoot(di, label);
+            }
+        }
+    }
+    w.walk_route(route_b);
+    if difficulty >= 2 {
+        if let Some(di) = agent_drone_near(&w, [26.22, 41.45, 71.15], 4.0) {
+            w.shoot(di, "the door[32] doorway grenade guard (placement 722) at the Agent roster");
+        }
+    } else if !w.tops_up() {
+        w.shoot(2, "the door[32] doorway grenade guard (placement 722)");
+    }
     // #526, the Tripbomb_Tiny ankle beam (x 10.7..11.8, z 70.95..71.41, 0.27-0.47 over the floor
     // [D]), lies ALONG the lane in door[29]'s doorway, in the trough between the 0.76 rim at
     // x ≈ 12 and the leaf: the doorway (the leaf's z 70.06..72.32) leaves under the body's 1.1
@@ -280,6 +424,10 @@ fn walk_spawn_to_the_omega_sector_exit() {
     let route: &[(&str, Wp)] = &[
         ("door[29] threshold", Wp::new(11.5, 41.4, 71.2).r(0.9)),
         ("door[29] through", Wp::new(8.0, 41.4, 71.2).r(1.0)),
+        // REAL-HEALTH TACTIC: the west-room grenadiers (port #10 at (−5.14, 41.34, 67.25) and
+        // #11 at (−1.87, 41.34, 77.42) [L the d2 load probe]) shot through the door[29]
+        // doorway at the measured run's tail (−4.2 at frame 6020, the killing −2.5 at 6106)
+        // — from just inside the doorway a player answers both before the southwest jog.
         ("the southwest jog", Wp::new(6.0, 41.4, 68.5).r(1.0)),
         ("the west room", Wp::new(6.0, 41.4, 66.0).r(1.2)),
         ("the west room south", Wp::new(1.0, 41.4, 63.0).r(1.2)),
@@ -301,14 +449,66 @@ fn walk_spawn_to_the_omega_sector_exit() {
         ("the hall east", Wp::new(5.0, 41.4, 42.0).r(1.2)),
         ("the east bridge", Wp::new(6.5, 41.4, 34.0).r(1.2)),
         ("the hall south", Wp::new(2.0, 41.4, 30.0).r(1.2)),
-        ("door[42] threshold", Wp::new(0.0, 41.4, 26.0).r(0.9)),
-        ("door[42] through", Wp::new(0.0, 41.4, 23.0).r(1.0)),
+        // REAL-HEALTH TACTIC (level-14-15-real-health-finish): placement 733 (port index 5, skin
+        // 0x500008c, weapon 0x1a — the grenade launcher) sits at (6.25, 41.45, 35.69) [D], the
+        // bridge's north end, and its grenade spray down the south corridor killed the measured
+        // run (−2.80 direct + the −0.36/−1.18/−1.59 triple-pop at frames 6482-6489, then the
+        // killing blast at door[42]). A player takes it from the bridge before pushing south;
+        // shoot() is a no-op once a fight has finished it.
+    ];
+    let (route_c, route_d) = route.split_at(route.iter().position(|(l, _)| *l == "the southwest jog").unwrap());
+    w.walk_route(route_c);
+    if difficulty >= 2 {
+        for (at, label) in [
+            ([-5.14f32, 41.34, 67.25], "the west-room grenadier (port #10, skin 0x50000b2)"),
+            ([-1.87f32, 41.34, 77.42], "the northwest grenadier (port #11, skin 0x50000b2)"),
+        ] {
+            if let Some(di) = agent_drone_near(&w, at, 8.0) {
+                w.shoot(di, label);
+            }
+        }
+    }
+    w.walk_route(route_d);
+    if difficulty >= 2 {
+        if let Some(di) = agent_drone_near(&w, [6.25, 41.45, 35.69], 6.0) {
+            w.shoot(di, "the great-hall grenade guard (placement 733) at the Agent roster");
+        }
+    } else if !w.tops_up() {
+        w.shoot(5, "the great-hall grenade guard (placement 733)");
+    }
+    // REAL-HEALTH TACTIC (level-14-15-real-health-finish): door[42] from the NORTH side, not
+    // through it — the #447/#448/#449 fence at z ≈ 17.6 (the floor-to-ceiling beam at x 0 and
+    // the two diagonals [D]) has no lane the body clears, and the old through-the-door shot
+    // from z 23 is 5.7 u off the beam, inside the fence's own blast (radius 8 [M
+    // Explode_Propagate 0x17c518]). From the threshold the round rides the open doorway's
+    // window ~9 u — the a_p2k_round_from_10_units_explodes_the_door38_fence dance — and the
+    // neighbours still go on the blast's case-0x4B entries [M 0x17c518].
+    let route: &[(&str, Wp)] = &[
+        // The leaf sits at x −1.1 (door[50]'s printed pos (−1.1, 41.6, 46.1) is the pattern
+        // [D doors 50/42]) — the E reach needs head→leaf d² < 6.25 [M Player_Activate
+        // 0x1a5170], so the stand is 0.8 north of the leaf plane, not the lane centre.
+        ("door[42] threshold", Wp::new(0.0, 41.4, 25.9).r(0.6)),
     ];
     w.walk_route(route);
-    // The #447/#448/#449 fence at z ≈ 17.6 (the floor-to-ceiling beam at x 0 and the two
-    // diagonals [D]) — no lane the body clears. One round on the vertical beam from south of door[42]
-    // sets the fence off: the neighbours go on the blast's case-0x4B entries [M 0x17c518].
-    shoot_mine(&mut w, 447, [0.0, 42.3, 17.29], "the south-corridor fence #447");
+    // The walker's own door press on the corridor door itself — index 42, the walk's door
+    // numbering this route's comments already use ("doors [50] z 46.1, [42] z 25.1…"). The
+    // DEBUG probe (kept in the report): door_near(−1.1, 25.1) lands on door[20] — the
+    // LOWER-DECK twin placement 646 (−1.04, 23.85, 25.10), 17.5 below the corridor floor,
+    // dxz 0.06 vs door[42]'s 0.064 — whose E reach can never fire from up here; door[42]
+    // (−1.05, 41.59, 25.06) is the floor-level leaf the passage needs open. Then a settle for
+    // the swing before the shot line crosses the doorway.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let d = &sim.drones.doors.list[42];
+        assert!((d.pos[2] - 25.06).abs() < 0.2 && (d.pos[1] - 41.59).abs() < 0.5,
+            "doors.list[42] is the corridor floor door at z 25.1, got {:?}", d.pos);
+    }
+    w.use_door(42, "door[42]");
+    for _ in 0..40 { w.tick(nf_game::player::Input::default(), false); }
+    assert!(w.scene.sim.as_ref().unwrap().drones.doors.list[42].state & 0xc != 0,
+        "door[42] is open inside the auto-close window [M 0x13660c-0x136700]");
+    let d = shoot_mine(&mut w, 447, [0.0, 42.3, 17.29], "the south-corridor fence #447 from the threshold");
+    assert!(d > 8.0, "#447 is shot from RANGE through the open doorway ({d:.2} u)");
     w.wait(10);
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -317,6 +517,7 @@ fn walk_spawn_to_the_omega_sector_exit() {
             assert!(m.exploded && m.cause == nf_game::worldobj::MINE_BLAST, "#{plc} goes on #447's blast (cause {})", m.cause);
         }
     }
+    w.walk_to(Wp::new(0.0, 41.4, 23.0).r(1.0), "door[42] through");
     let route: &[(&str, Wp)] = &[
         ("door[51] threshold", Wp::new(0.0, 41.4, 11.5).r(0.9)),
         ("door[51] through", Wp::new(0.0, 41.4, 8.5).r(1.0)),
@@ -381,7 +582,20 @@ fn walk_spawn_to_the_omega_sector_exit() {
         let expect16: Vec<usize> = owned15.iter().copied().filter(|&i| i != 0x56).collect();
         eprintln!("[015] 15 exit: held {held15:#x} owned {owned15:x?}; 16 arrival: held {:#x} owned {owned16:x?}", sim.gun.weapon);
         assert_eq!(owned16, expect16, "16 keeps 15's weapons except the decryptor (no skin on 16) [M 0x1a7ef8 case 0x7000016; 0x1a97c8]");
-        assert_eq!(owned16, vec![1, 2, 0x11, 0x34, 0x37, 0x4e, 0x54], "the walked chain lands the 14 kit minus the Grapple (swept on 15) and the decryptor [M 0x1a7ef8 case 0x7000014]");
+        // REAL-HEALTH FORM (level-14-15-real-health-finish): the absolute kit is a superset law
+        // — the walked chain KEEPS the 14 kit minus the Grapple (swept on 15) and the decryptor,
+        // and the only additions are the fights' own guard-drop pickups: on real health the
+        // fights' dry-resupply gates take the dead guards' weapons (the walk-over take
+        // [M Pickup_Handler 0x18e650]), and a drop is the weapon's BASE [M DroneWeap_DropWeapon
+        // 0x17a2a0 — `let base = d.weapons.base(w)`]: 0x14 is the 0x15 burst rifle's base (the
+        // 0x5000087 guards), 0x1a the grenade-launcher guards' own (the 0x500008c guards)
+        // [L weapon_data bases]. The measured run: owned [1, 2, 0x11, 0x14, 0x1a, 0x34, 0x37,
+        // 0x4e, 0x54].
+        assert!(expect16.iter().all(|i| owned16.contains(i)),
+            "the walked chain keeps the 14 kit minus the Grapple (swept on 15) and the decryptor [M 0x1a7ef8 case 0x7000014], got {owned16:x?}");
+        let extras: Vec<usize> = owned16.iter().copied().filter(|i| !expect16.contains(i)).collect();
+        assert!(extras.iter().all(|&i| i == 0x14 || i == 0x1a),
+            "the only additions are the fights' guard-drop pickups (a drop is the base weapon [M 0x17a2a0]), got {extras:x?}");
         assert_eq!(sim.gun.weapon, held15, "16 draws the weapon Bond held at 15's exit [M 0x1a7ef8:306]");
         assert_ne!(sim.gun.weapon, 1, "Bond does not arrive on 16 with only his fists");
         assert!(sim.drones.channels.on(0x8e), "the spawn plate #252 fires ch 0x8e [D 07000016]");
@@ -476,5 +690,158 @@ fn crouching_under_the_door52_beam_passes_it() {
             assert!(m.exploded && m.cause == nf_game::worldobj::MINE_BODY,
                 "sister: standing, the body meets #487 and it goes (exploded {}, cause {})", m.exploded, m.cause);
         }
+    }
+}
+
+/// Real damage: the whole-mission walk (the silo gantry → the Omega Sector exit → the real
+/// 07000016 load) with the health top-up off for every walker it makes — the garrison's fire
+/// (all 20 guards stay live and armed) and the laser-mine blasts are the port's own damage —
+/// and the walker's return fire on; Bond's death panics with the death spot and the last hits
+/// (common/damage_log.rs). No health/armour/ammo writes (the mine shots are the real fire path;
+/// the route's own tactic — every mine shot from down its lane — is the level's offering); the
+/// exit load into 07000016 is the game's own USE-exit path [M Player_Activate 0x1a5170 case
+/// 0x1d → Trigger_Activate 0x1b2318], not a teleport.
+///
+/// The fights HEAD-HUNT (`with_real_damage_head_hunting`): the first real-health run's damage
+/// log shows the attrition law — the route's own #526 doorway blast cost 27.73, the
+/// garrison's long-range chip the rest, and the killing sequence was a 2.8-u guard's spray
+/// down the south corridor igniting the #447/#448/#449 mine fence [M Bullet_update
+/// 0x12e7b0: any bullet's flight segment picks a mine (mode 0x201, mask 0) → Collide_PickObj
+/// — the game's own guard fire sets mines off] — the level's offering is the aim: one head
+/// hit drops a guard before its spray reaches a fence [M NDrone2_HitDamage 0x145558 ×
+/// DroneDamage_Head].
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty-12-13-14-15): the
+/// same walked route and the same end, loaded at difficulty 2 the menu way (the front-end's
+/// launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]; GameState+0x28 →
+/// Drones::difficulty, asserted at load). Agent spawns the min-difficulty-2 placements
+/// [M Drone_Create 0x136be0:49], scales Bond's pain by Plr_DMod_Normal [M Player_HandlePain
+/// 0x1902c8] and the guards' hit chance by Accuracy row 2 [M DroneWeap_DoBulletAccuracy
+/// 0x179740:74-88]. Real input only; no health, ammo or channel writes.
+#[test]
+#[ignore = "Agent: with the guards taking their door routes (level-14-cascade-servers-4) Bond takes a 41.6 world blast hit at frame 5400 and dies to #5 at 7885 near (-0.02, 41.32, 46.87); follow-up level-15-agent-doors"]
+fn walk_spawn_to_the_omega_sector_exit_real_damage_agent() {
+    walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(2));
+}
+
+#[test]
+fn walk_spawn_to_the_omega_sector_exit_real_damage() {
+    walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(1));
+}
+
+/// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-12-13-14-15): the same
+/// walked silo → Omega Sector exit route at the menu's 00 Agent pick — GameState+0x28 = 3
+/// through the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty;
+/// GameState+0x28 → Drones::difficulty, asserted at load]. On this level the pick scales Bond's
+/// pain by the 0x14..=0x16 group's Hard row 1.0 (Easy 0.4, Agent 0.6 [M Player_HandlePain
+/// 0x1902c8; ReadTuningVars 0x1d3a80's per-level jump table; L the d2-sisters report's rows])
+/// and the guards' hit chance by DroneFiring_Accuracy_Hard 1.3 (Easy 0.8, Normal 0.9 [M
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88]); the min-difficulty placements pass Drone_Create's
+/// gate [M 0x136be0:49] — more of the garrison than the Agent roster. The Agent sisters' tactics
+/// (the plank/west-room grenadier stands, the doorway guards) sit behind `difficulty >= 2` gates
+/// in the body, so the d3 run inherits them; the d3-only deaths get their own d3-gated blocks.
+/// Real input only; no health, ammo or channel writes.
+///
+/// IGNORED with the measured budget: the d3 run's own ledger puts the route over 100 health
+/// before the west lane — (a) the opening burst 63.0 in 9 hits from the d3 roster's
+/// 0x50000b2 guard behind the spawn (the ledger's #15, (72.35, 41.34, −9.44) at his hits;
+/// the return fire finished him at tick 867; a spawn stand was TRIED and cost MORE — the
+/// line from the gantry is blocked, segment Some(0.068), and the shoot machinery's flank
+/// through door (81.7, −1.0) burned 56.0 and two 3000-tick caps); (b) the #526 ankle-beam
+/// rim-shot blast ~69.3 at d3 — the rim hides every farther lane shot [D the trough; the
+/// walk's own shot is from just east of the rim], and the pain row scales blasts [M
+/// bullet.rs damage_factor 0x14..=0x16 → 1.0 at d3; grenade.rs:609 routes the blast's
+/// player hit through it; L the d1 27.73 and d2 41.60 ledgers = 69.3 raw]. 63.0 + 69.3
+/// exceeds 100 before the plank legs, let alone the endgame fights. NEXT LEVERS: the
+/// #526 shot from door[32]'s threshold (~14.9 u down the lane) with the door[32] guard's
+/// own dropped 0x1a — the grenade's arc clears the rim and the case-0x4B chain sets #526
+/// [M 0x17c518] at a blast reach of ~0.5 raw; a pre-emptive #15 kill needs his spawn spot
+/// and a clear line (a live scout); the grenadier stands now sit behind the d3 gate in the
+/// body (the fence-mark stands at 28 u never fired — the 0.02-rad aim gate is a torso
+/// width there; the door[38]-north point is the next try).
+#[test]
+#[ignore = "00 Agent: the route's measured budget exceeds 100 health — the opening burst 63.0 (the d3 ledger's #15 behind the spawn) + the #526 rim-shot blast 69.3 at the d3 pain row 1.0 [M damage_factor 0x14..=0x16] = 132.3 before the plank legs; levers: the grenade-launcher #526 shot from door[32] at ~14.9 u, a pre-emptive #15 kill (needs a spawn-spot scout), the door[38]-north grenadier stands"]
+fn walk_spawn_to_the_omega_sector_exit_real_damage_00agent() {
+    walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(3));
+}
+
+#[test]
+fn walk_spawn_to_the_omega_sector_exit() {
+    walk_spawn_to_the_omega_sector_exit_at(1);
+}
+
+/// The range shot the merges never pinned: a mine takes a BULLET from a distance, through the
+/// game's own bullet path. The doorway fence #383 (the floor-to-ceiling beam at x 35.6, z 17.47
+/// [D]) stands ~10 u south of the spine's z 7.5 line — door[38] (z 10.5) sits between, so the
+/// shot rides the door's open window (the auto-close fires after `FRAME_RATE_INT·6` = 360 quiet
+/// ticks [M door.rs `update`'s auto-close arm; 0x13660c-0x136700]): open the leaf from its E
+/// reach, step back south, settle the aim, fire. The round's flight segment picks the mine (the
+/// per-tick HITTEST mode 0x201 with mask 0 [M Bullet_update 0x12e7b0 disasm 0x12f040/0x12f134] →
+/// `Collide_Pick` 0x1eb320 walks the straddled cels' object lists → `Collide_PickObj` 0x1eae80
+/// admits the cel-linked mine: obj+0xF0 0, no class mask, a collision glist),
+/// `Collide_Update` 0x1ea398:160-233 mirrors the hit onto the mine's list with +0x58 = the bullet
+/// and `Mine_Update` 0x17c930 explodes on the referenced entry. The neighbours #384/#385 go on the
+/// blast's case-0x4B entries [M Explode_Propagate 0x17c518]. No health writes: the guards hold
+/// (the sister tests' dev freeze), so Bond walks the route on his own feet and the only damage in
+/// the run is the mine's own blast.
+#[test]
+fn a_p2k_round_from_10_units_explodes_the_door38_fence() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000015.bin", false).unwrap());
+    w.top_up_health = false;
+    w.wait_enabled(3000, "the silo arrival");
+    w.wait(120);
+    w.scene.sim.as_mut().unwrap().drones.hold_npcs = true;
+    draw(&mut w, 0x02); // the P2K: 7 + 41 rounds at the level start [D the 07000015 loadout]
+    // The route west, then the NAV GRAPH's own silo crossing to the spine (the direct z ≈ 0 line
+    // falls into the silo hole at x 67.45 [D floor grid]). #462 stands across the crossing's lane
+    // and the lane walks into it, so it is shot from the lane first — route clearing; the RANGE
+    // shot of this test is #383 below.
+    w.walk_to(Wp::new(88.0, 41.4, -0.5).r(1.2), "the gantry west");
+    let mine462 = [46.8f32, 41.556, 0.6];
+    nav_until_clear(&mut w, [34.6, 41.4, 6.0], mine462, 14.0, "the silo crossing");
+    shoot_mine(&mut w, 462, mine462, "the silo-crossing beam #462 (route clearing)");
+    assert!(w.follow_nav_route([34.6, 41.4, 6.0], "the silo crossing"), "the nav route crosses the gantry");
+    w.walk_to(Wp::new(34.6, 41.4, 6.0).r(1.2), "the north turn");
+    // Door[38]: into the leaf's E reach (head→pos d² < 6.25 [M Player_Activate 0x1a5170]), open,
+    // then back south of it — the shot line crosses the open doorway at x ≈ 34.9 [D leaf].
+    w.walk_to(Wp::new(34.6, 41.4, 9.8).r(0.6), "door[38] E reach");
+    open_door_facing(&mut w, [34.6, 41.4, 10.5], "door[38]");
+    walk_plain(&mut w, [34.6, 41.4, 7.5], 0.35, "south of door[38], the shot line");
+    let at = [35.6f32, 42.3, 17.47];
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let m = &sim.drones.mines[mine_idx(&w, 383)];
+        assert!(!m.exploded, "#383 still hangs before the shot");
+        let bp = sim.bond.pos;
+        let eye_y = bp[1] + sim.bond.eye - sim.bond.crouch_drop;
+        let d = ((at[0] - bp[0]).powi(2) + (at[1] - eye_y).powi(2) + (at[2] - bp[2]).powi(2)).sqrt();
+        eprintln!("[mines] the range shot: bond {bp:?} eye_y {eye_y:.2} → #383 {at:?}, d {d:.2}");
+        assert!(d > 8.0, "the shot is from RANGE ({d:.2} u — the task's > 8)");
+        let di = walker::door_near(sim, [34.6, 41.4, 10.5]).expect("door[38]").1;
+        assert!(sim.drones.doors.list[di].state & 0xc != 0,
+            "door[38] is still open inside the auto-close window [M 0x13660c-0x136700]");
+    }
+    let d = shoot_mine(&mut w, 383, at, "the doorway fence #383 from 10 u");
+    assert!(d > 8.0, "#383 takes the round from RANGE ({d:.2} u)");
+    w.wait(10); // the blast's case-0x4B entries land on the neighbours' NEXT update [M 0x17c518]
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let m = &sim.drones.mines[mine_idx(&w, 383)];
+        assert!(m.exploded, "#383 is gone (obj+0xFE bit 0 [M 0x17cb7c-0x17cb88])");
+        assert_eq!(m.cause, nf_game::worldobj::MINE_BULLET,
+            "the cause is the bullet's mirrored contact [M 0x1ea398:160-233]");
+        // The blast-played proof is the neighbours' chain: #384/#385 can only explode through the
+        // blast's own `Explode_Propagate` case-0x4B entries (a referenced HITDATA per mine in
+        // reach, attacker = the exploding mine [M 0x17c518 case 0x4B; 0x17cde0]) — there is no
+        // other writer of MINE_BLAST. (The `drones.explosions` list is the view's per-tick event
+        // feed — the grenade section clears it every tick [M drone.rs `explosions.clear()`] — so
+        // it is empty by the time the boom is observed and proves nothing here.)
+        for plc in [384usize, 385] {
+            let m = &sim.drones.mines[mine_idx(&w, plc)];
+            assert!(m.exploded && m.cause == nf_game::worldobj::MINE_BLAST,
+                "#{plc} goes on #383's blast (cause {})", m.cause);
+        }
+        eprintln!("[mines] #383's blast chain: causes {:?}, bond health {:.1}",
+            [384usize, 385].map(|p| sim.drones.mines[mine_idx(&w, p)].cause), sim.drones.health.health);
     }
 }

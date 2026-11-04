@@ -400,6 +400,63 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         w.total_ticks, w2.total_ticks);
 }
 
+/// THE WHOLE MISSION ON REAL HEALTH (`walker::walker::with_real_damage` — the b2 walker's
+/// damage_log): the same walked route, the top-up off — no health, armour or ammo writes
+/// anywhere — and Bond's death panics with the damage log (who, weapon, range). Auto-aim is
+/// the app default; the fights are the walker's own plain return fire. The two documented
+/// route stand-ins are links from the master walk (neither writes health, armour or ammo).
+///
+/// The yard's deck-sniper stands are OPT-IN (`walker::with_yard_aimed_stands`): the deck
+/// snipers (weapon 0x1e, -16 a hit, 10.7-11 u above the yard floor) sit outside the plain
+/// fights' 7.5 u vertical reach and were the real-health run's killer chain (#18 dealt 51.8
+/// of 100 in 4 hits from d ~34 u [L the predecessor run's census]; Bond died ON the ladder at
+/// y 7.95). The stands kill them AIMED from the strip — the zero-spread aimed act
+/// [M Bullet_init 0x12c5a0:139-170; the HIP cone 100.0 → 4.9 u of scatter at 35 u
+/// [L ee_start_05.bin @ 0x2c10b8 +0x24] is the miss the player-upward-shot branch pinned] —
+/// then the walk climbs and mantles. Real input only: the whole route is walked from the
+/// level start, no teleport after the load; the top-up walk and the eastroute replay (flag
+/// off) keep master's pinned choreography.
+/// The yard's deck-sniper stands are OPT-IN (`walker::with_yard_aimed_stands`): the deck
+/// snipers (weapon 0x1e, -16 a hit, 10.7-11 u above the yard floor) sit outside the plain
+/// fights' 7.5 u vertical reach and were the real-health run's killer chain (#18 dealt 51.8
+/// of 100 in 4 hits from d ~34 u [L the predecessor run's census]; Bond died ON the ladder at
+/// y 7.95). level-0c-yard-climb-real-health-3's answer: the STILL-GATE aimed stand — the
+/// zero-spread aimed act [M Bullet_init 0x12c5a0:139-170] has no lead, and the sentry's
+/// wiggle-step during the round's flight is the measured miss (converged rounds never landed
+/// while it stepped; the same spot landed the run it paused [L the probe on this branch]) —
+/// so the stand taps only after the target holds still 18 ticks. The emplacement dies
+/// MID-CROSSING (from the door it is not exposed at all — aim None [L the same probe]; the
+/// -2 census's twin #36 is present false on this tree — the round-vs-twin theory is retired),
+/// the pre-climb suppression pass stands on #15/#1, the ladder-top stands on the hitters.
+/// Real input only: the whole route is walked from the level start, no teleport after the
+/// load; the top-up walk and the eastroute replay (flag off) keep master's pinned
+/// choreography.
+/// level-0c-yard-climb-real-health-4 (GREEN — un-ignored): the -3 blocker (the west sniper
+/// #13 eating the runs at tick 14308) was never the ledge lip — the session's shot trace
+/// (NF_RF_TRACE + the player_impacts dump) showed the stands' rounds flying 2-3° OFF the
+/// converged view and dying on the wall BEHIND #13 at (-4.20,12.58,-221.83) /
+/// (-4.26,13.04,-221.78), because (a) the taps fired with the aim bit false (the raise never
+/// ran: the aim-press edge fired into the switch anim, and the game queues the raise only on
+/// the pressed edge from the idle machine [M 0x1a24c8:113-152]) so every round rode the HIP
+/// cone (spread base 100.0 [L ee_start_05.bin @ 0x2c10b8 +0x24]), and (b) the port scanned
+/// auto-aim and froze the walk-legs' assist offset through the aim hold, steering the first
+/// aimed rounds -12° off (aoff -0.216) — the game eases the offsets toward the manual offsets
+/// EVERY aim tick and scans only button-up ticks [M Player_AutoAim 0x1a7c98:50-59]. The port
+/// fixes live in scene.rs (the per-tick aim-branch ease + the raw-button scan gate); the
+/// stands gained the raise loop (settle, then hold aim until the bit sets), the aim-bit fire
+/// gate and the cursor-aware convergence (the effective aim = the view + the eased cursor
+/// offsets). Result: #13 dies AIMED from the west edge (part 4, t284 [L this session's
+/// impact trace]), the #284 crossing + the ledge diagonals + the #282 ride + the 0d legs all
+/// pass on real input, and the mission completes with Bond ALIVE at 26.2 hp ([L] the green
+/// run: 'objective 3 complete on the 0d arrival — the whole mission walked (0c legs 19287
+/// ticks + 0d 838 ticks)').
+#[test]
+fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
+    walker::with_yard_aimed_stands(|| {
+        walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff)
+    });
+}
+
 
 /// Sister (ladder-0c): the 0c's OTHER ladder, #495 `Ladder` (−6.42, 1.0, −177.39, yaw −0.2618,
 /// mesh bounds x ±0.204 / y 0..2.0 / z degenerate [D placement #495 + its map object]) — the same

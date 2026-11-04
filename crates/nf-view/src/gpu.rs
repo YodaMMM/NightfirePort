@@ -54,6 +54,9 @@ override FOG: f32 = 0.0;
 override FAR: f32 = 0.0;
 override NOTEX: f32 = 0.0;  // debug: 1.0 = ignore the texture sample (treat as solid white) to isolate vertex colour
 override NOFOG: f32 = 0.0;   // debug: 1.0 = skip the fog pass entirely
+// 1.0 = the GS additive Cs·As/128 + Cd with As past 0x80: the colour leaves premultiplied by the
+// UNCLAMPED alpha (up to 255/128) and the blend is One + One (blend code 5).
+override PREMUL: f32 = 0.0;
 // fog: rgb + enabled; fogk: N1, (F1 − N1)·n/(f − n), f, gain.
 // lp0/lp1: the frame's two closest lights' positions (psiLight_SetLights 0x10e588's TLight, w = 1);
 // lc0/lc1: their TColor rows (rgb·intensity in the game's byte scale, w = 1/r²), fix-lighting.
@@ -74,7 +77,7 @@ override NOFOG: f32 = 0.0;   // debug: 1.0 = skip the fog pass entirely
 @group(0) @binding(4) var<storage, read> mtg: array<f32>;
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
-struct VO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) c: vec4<f32>, @location(2) d: f32 };
+struct VO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) c: vec4<f32>, @location(2) d: f32, @location(4) nw: f32 };
 // `SkinIt` 0x10bf30's morph term, before the skinning: pos += Σ_m weight[m] × target[morph + m],
 // the 12-byte reads as three f32; the game marshals the weights with an identity Morph_Index
 // (`AnimObjectDraw` 0x1c4490:150), so channel m reads target base + (morph + m)·12. Channels
@@ -167,6 +170,14 @@ fn morph_pos(p0: vec3<f32>, mtb: i32, mwb: u32, cnt: u32, tend: u32) -> vec3<f32
     }
     o.p = vp * vec4<f32>(p, 1.0);
     o.d = o.p.w;
+    // ronin-view-2: the 24-bit depth wrap of near-clipped triangles (scene.rs `ronin_view_wrap_marks`):
+    // a palette entry whose m[3][3] is 1 + d flags its vertices nearer than d; the fragment stage
+    // drops every triangle that has one (the flag interpolates above 0 across it).
+    o.nw = 0.0;
+    if (sa.x != 0xffffffffu) {
+        let wd = pal[sa.x][3][3] - 1.0;
+        if (wd > 0.0 && o.p.w < wd) { o.nw = 1.0; }
+    }
     if (FAR > 0.5) { o.p.z = o.p.w; }
     // view-model-last: the list-2 gun after `psiClearZ` — its depth squashed toward the eye so it covers
     // the world and the effects drawn before it, while its own parts still depth-sort.
@@ -176,6 +187,7 @@ fn morph_pos(p0: vec3<f32>, mtb: i32, mwb: u32, cnt: u32, tend: u32) -> vec3<f32
     return o;
 }
 @fragment fn fs(i: VO) -> @location(0) vec4<f32> {
+    if (i.nw > 0.0) { discard; }
     let fog = us[8];
     let fogk = us[9];
     let s = textureSample(tex, samp, i.uv);
@@ -195,6 +207,7 @@ fn morph_pos(p0: vec3<f32>, mtb: i32, mwb: u32, cnt: u32, tend: u32) -> vec3<f32
             a = a * min(floor(zb / 128.0), 255.0) / 255.0;
         }
     }
+    if (PREMUL > 0.5) { return vec4<f32>(min(rgb * fogk.w, vec3<f32>(1.0)) * max(o.a, 0.0), 1.0); }
     return vec4<f32>(min(rgb * fogk.w, vec3<f32>(1.0)), a);
 }
 "#;
@@ -259,6 +272,8 @@ impl HudFrame {
 const SNOW_MAX: usize = 4096 * 6;
 /// break-shards draw: at most this many texture groups of glass shards per frame (one uniform slot each).
 const SHARD_GROUPS: usize = 16;
+/// particle-textures: at most this many (texture, blend) groups of emitter sprites per frame (one uniform slot each).
+const PARTICLE_GROUPS: usize = 16;
 
 /// Most overlay vertices per frame.
 const HUD_MAX: usize = 16384;
@@ -444,6 +459,16 @@ pub struct Renderer {
     shard_vbuf: wgpu::Buffer,
     /// This frame's shard groups: (tex_frames index, first vertex, count) — `set_shards`.
     shard_groups: Vec<(usize, u32, u32)>,
+    /// particle-textures: the emitter sprites (`Scene::particle_draws`) — the normal-alpha pipeline
+    /// (the additive groups use `snow_pipeline`), their vertex buffer, and this frame's groups
+    /// (tex_frames index, additive, first vertex, count) — `set_particles`.
+    particle_alpha_pipeline: wgpu::RenderPipeline,
+    /// The def+0x3c == 0 state (ALPHA_1 0x48, Cs·As/128 + Cd): As = texel·vertex alpha reaches
+    /// 255/128 for a 0x80 texel under a 255 key alpha, so the source is scaled by the unclamped
+    /// alpha (blend code 5) instead of the snow pipeline's clamped SrcAlpha.
+    particle_add_pipeline: wgpu::RenderPipeline,
+    particle_vbuf: wgpu::Buffer,
+    particle_groups: Vec<(usize, bool, u32, u32)>,
     snow_vbuf: wgpu::Buffer,
     snow_bg: wgpu::BindGroup,
     /// The level's fog (`psiPreGameRun`): colour 0-255, `Ps2Far1`.
@@ -621,11 +646,11 @@ impl Renderer {
             let s = (String::from("enable wgpu_binding_array;
 ") + SHADER)
                 .replace("@group(1) @binding(0) var tex: texture_2d<f32>;", "@group(1) @binding(0) var texs: binding_array<texture_2d<f32>>;")
-                .replace("struct VO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) c: vec4<f32>, @location(2) d: f32 };",
-                         "struct VO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) c: vec4<f32>, @location(2) d: f32, @location(3) @interpolate(flat) ti: u32 };")
+                .replace("struct VO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) c: vec4<f32>, @location(2) d: f32, @location(4) nw: f32 };",
+                         "struct VO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) c: vec4<f32>, @location(2) d: f32, @location(3) @interpolate(flat) ti: u32, @location(4) nw: f32 };")
                 .replace("    o.uv = uv;\n    o.c = c * (255.0 / 128.0);", "    o.uv = uv;\n    o.ti = u32(us[b + 4u].y);\n    o.c = c * (255.0 / 128.0);")
                 .replace("let s = textureSample(tex, samp, i.uv);", "let s = textureSample(texs[i.ti], samp, i.uv);");
-            assert!(s.contains("texs[i.ti]") && s.contains("o.ti = ") && s.contains("binding_array"), "the bindless shader edits must all apply");
+            assert!(s.contains("texs[i.ti]") && s.contains("ti: u32, @location(4) nw") && s.contains("o.ti = ") && s.contains("binding_array"), "the bindless shader edits must all apply");
             s
         } else { SHADER.to_string() };
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("nf-view"), source: wgpu::ShaderSource::Wgsl(src.into()) });
@@ -694,12 +719,14 @@ impl Renderer {
                 // (Cs−0)·Ad + Cd (07000041's env-map overlays): add the source only where the base batch
                 // wrote destination alpha; the alpha channel itself comes back unchanged (D = Cd).
                 4 => wgpu::BlendState { color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::DstAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add }, alpha: alpha_keep },
+                // Cs·As/128 + Cd with the source already scaled by its unclamped As (PREMUL).
+                5 => wgpu::BlendState { color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add }, alpha: alpha_keep },
                 _ => wgpu::BlendState { color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add }, alpha: alpha_keep },
             };
             // As >= 1 (TEST 0x5001B) -> a >= 1/128; As > 0x7F (0x507FD) -> a > 127/128.
             let (aref, greater) = match d.atest { 1 => (1.0 / 128.0, 0.0), 2 => (127.0 / 128.0, 1.0), _ => (0.0, 0.0) };
             let constants = [("AREF", aref), ("AGREATER", greater), ("FOG", d.fog as f64), ("FAR", if d.pass == 4 { 1.0 } else { 0.0 }), ("VMZ", if d.pass == 7 { 1.0 } else { 0.0 }),
-                ("NOTEX", if notex { 1.0 } else { 0.0 }), ("NOFOG", if nofog { 1.0 } else { 0.0 })];
+                ("NOTEX", if notex { 1.0 } else { 0.0 }), ("NOFOG", if nofog { 1.0 } else { 0.0 }), ("PREMUL", if d.blend == 5 { 1.0 } else { 0.0 })];
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("nf-view"),
                 layout: Some(&layout),
@@ -921,6 +948,12 @@ impl Renderer {
         // break-shards draw: normal alpha, no depth write, the alpha-list test [S: psiDrawShard's
         // GS state is in its microcode packet, unread — the pane's own list-1 state stood in].
         let shard_pipeline = make_pipeline(Draw { pass: 5, blend: 0, zwrite: false, atest: 1, fog: 0 });
+        // particle-textures: `psiDrawParticleList` 0x122d50's def+0x3c ≠ 0 state — ALPHA_1 0x44,
+        // depth read on, write off [M 0x122d98-0x122dc4, 0x1214f8]; the additive state (0x48) is
+        // `particle_add_pipeline` (blend code 5).
+        let particle_alpha_pipeline = make_pipeline(Draw { pass: 5, blend: 0, zwrite: false, atest: 0, fog: 0 });
+        let particle_add_pipeline = make_pipeline(Draw { pass: 5, blend: 5, zwrite: false, atest: 0, fog: 0 });
+        let particle_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("particles"), size: (SNOW_MAX * std::mem::size_of::<crate::scene::Vertex>()) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let shard_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("shards"), size: (SNOW_MAX * std::mem::size_of::<crate::scene::Vertex>()) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let snow_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (SNOW_MAX * std::mem::size_of::<crate::scene::Vertex>()) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let (snow_bg, snow_view) = match &scene.snow_texture { Some(t) => make_tex2(t.width, t.height, &t.rgba), None => make_tex2(1, 1, &[255, 255, 255, 255]) };
@@ -965,7 +998,7 @@ impl Renderer {
             for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
             reached.iter().map(|r| !r).collect()
         };
-        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), skin_collapsed: Default::default(), pal_shadow: Default::default(), sub_runs, sub_meta, live_prefix: Vec::new(), split_runs: true, last_indices: 0, char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, screen_offset: [0.0; 2], ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, sky_flash_mask: 0, pass_timestamps: None, probe_skip: Vec::new() }
+        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), particle_alpha_pipeline, particle_add_pipeline, particle_vbuf, particle_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), skin_collapsed: Default::default(), pal_shadow: Default::default(), sub_runs, sub_meta, live_prefix: Vec::new(), split_runs: true, last_indices: 0, char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, screen_offset: [0.0; 2], ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, sky_flash_mask: 0, pass_timestamps: None, probe_skip: Vec::new() }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -1187,6 +1220,19 @@ impl Renderer {
     /// ignores the band: the FMV owns the whole screen [M 0x209e88].
     /// break-shards draw: this frame's glass shards (`Scene::shard_draws` — scene texture index,
     /// world vertices), uploaded before `render`.
+    /// particle-textures: this frame's emitter sprites (`Scene::particle_draws` — scene texture
+    /// index or None for the white fallback, additive, world vertices), uploaded before `render`.
+    pub fn set_particles(&mut self, queue: &wgpu::Queue, groups: &[(Option<usize>, bool, Vec<crate::scene::Vertex>)]) {
+        self.particle_groups.clear();
+        let mut all: Vec<crate::scene::Vertex> = Vec::new();
+        for (ti, additive, v) in groups.iter().take(PARTICLE_GROUPS) {
+            let n = v.len().min(SNOW_MAX - all.len()) / 3 * 3;
+            if n == 0 { break; }
+            self.particle_groups.push((ti.map_or(0, |t| t + 1), *additive, all.len() as u32, n as u32));
+            all.extend_from_slice(&v[..n]);
+        }
+        if !all.is_empty() { queue.write_buffer(&self.particle_vbuf, 0, bytemuck::cast_slice(&all)); }
+    }
     pub fn set_shards(&mut self, queue: &wgpu::Queue, groups: &[(usize, Vec<crate::scene::Vertex>)]) {
         self.shard_groups.clear();
         let mut all: Vec<crate::scene::Vertex> = Vec::new();
@@ -1443,7 +1489,13 @@ impl Renderer {
                 const SLOT: usize = 20;
                 let mut staged = std::mem::take(&mut self.staged);
                 staged.clear();
-                staged.resize(HEAD + SLOT * (self.order.len() + 1 + self.shard_groups.len()), 0.0);
+                staged.resize(HEAD + SLOT * (self.order.len() + 1 + self.shard_groups.len() + self.particle_groups.len()), 0.0);
+                // particle-textures: one slot per emitter-sprite group after the shard groups.
+                let pbase = self.order.len() + 1 + self.shard_groups.len();
+                for (g, &(tf, _, _, _)) in self.particle_groups.iter().enumerate() {
+                    let (fb, nf, rate) = self.tex_frames[tf];
+                    staged[HEAD + (pbase + g) * SLOT + 17] = (fb + ((ticks / rate) % nf) as usize) as f32;
+                }
                 // break-shards draw: one slot per shard group after the draws — no lights, the
                 // group's texture as the array index (batch-draws).
                 for (g, &(tf, _, _)) in self.shard_groups.iter().enumerate() {
@@ -1620,6 +1672,19 @@ impl Renderer {
             // perf-240g: with the batch, groups 0 (uniform_bg) and 1 (the bindless array) are still
             // bound from the world draws, and the snow / shard pipelines share their layout, so the
             // bindings carry over (re-setting the array re-tracked every texture in it at finish).
+            // particle-textures: the emitter sprites (`Emitter_Draw` 0x17b708 path A), each group
+            // with its def texture and blend in its own uniform slot.
+            if !self.particle_groups.is_empty() {
+                if self.batch.is_none() { pass.set_bind_group(0, &self.uniform_bg, &[]); }
+                pass.set_vertex_buffer(0, self.particle_vbuf.slice(..));
+                pass.set_vertex_buffer(1, self.snow_skin.slice(..));
+                let base = (self.order.len() + 1 + self.shard_groups.len()) as u32;
+                for (g, &(tf, additive, first, count)) in self.particle_groups.iter().enumerate() {
+                    pass.set_pipeline(if additive { &self.particle_add_pipeline } else { &self.particle_alpha_pipeline });
+                    if self.batch.is_none() { let (fb, nf, rate) = self.tex_frames[tf]; pass.set_bind_group(1, &self.tex_bgs[fb + ((ticks / rate) % nf) as usize], &[]); }
+                    pass.draw(first..first + count, base + g as u32..base + g as u32 + 1);
+                }
+            }
             if ns > 0 {
                 pass.set_pipeline(&self.snow_pipeline);
                 if self.batch.is_none() {
