@@ -20,3 +20,12 @@ No behaviour change expected; a pin that shows a divergence fixes it with the ad
   aim_assist_ease_0700000d_live.rs: hip-fire lock on a 0d guard (P2K 0x02, no raise script,
   zero spread [L ee_start_05 weapon_data 0x02]), the exact 0.5^k ease law per tick, the converged
   aimed round == the view dir, the sister (button up → the scan re-snaps).
+- (22:00-23:12, fresh sandbox #3) resumed from origin (all four commits present). Pins
+  re-verified green in this sandbox: aim_assist_ease_0700000d_live 1/1, wire_rider_readback_
+  0700000d_live 1/1. Full-suite runs hit sandbox limits (disk exhaustion → linker SIGBUS on
+  two binaries; cleared ~1.5 GB and rebuilt; the 10-min tool cap killed two compile calls) —
+  all test binaries built by 23:12. Ran (all --test-threads=1): nf-game lib 658/658;
+  walkreal_07000001 8/8, _02 3/3, _03 6/6, _04 10/10, _05 14/14, _06 6/6, _07 5/5,
+  walkreal_0700000d 1/1, walkreal_0700000c 3/3, _c_barrelrow 1/1, _c_eastroute 1/1 — 11 of
+  the 107 walkreal binaries (the changed-code levels 0c/0d + 7 more), all green; the other
+  96 did not fit the sandbox window. Report + finish steps follow.
