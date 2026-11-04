@@ -114,3 +114,27 @@ walkreal_07000001_live 7/0 (the un-ignored Agent walk included), all 26 walkreal
 + celprobe + dump binaries 0 failed (the pre-existing ignores only), nf-game 1047/0 + 656
 lib/0, nf-formats+nf-audio 136/3 (the 3 disc_golden allowance). Report:
 docs/reports/level-01-agent-stairwell-doors.md.
+
+## real-health-00agent-01 (continuation verified green, 2026-11-04 03:20 UTC)
+
+Task: add the 00 Agent (difficulty 3) sister of walkreal_07000001_live's real-damage walk,
+`Drones::difficulty == 3` asserted at load. The sister was landed green on this branch's tip
+(0c0de2e9, the first session): the lip law — the hall's fourth guard (#5, 0x5000038 shotgun,
+24 hp, 0.9 u off the aperture's north side, outside the named loops' AND) ate the doorway
+step point-blank (the 4119 death: -14.40 x2 at 0.9 u, the x2 TooClose band [M
+Drone_ModBulletDamage 0x139f50]); a d3-gated lip block lures him across the aperture (the
+guards hunt the gunshot [M DroneFunc_SetNoiseHeard]) and drops him from the hold line before
+the step. This session: the sandbox reset twice, so the verification was redone from a fresh
+clone + full rebuild: walkreal_07000001_live 8/0 on the sister's own binary (0 ignored; the
+d3 sister `walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent` included;
+the load asserts `drones.difficulty == 3` [M GameState+0x28 → Drones::difficulty]),
+difficulty3_07000001_live 4/0 (the pins hold), and EVERY walkreal_*_live binary run whole:
+78/78 binaries, 218 passed / 0 failed / 10 pre-existing ignored (5 long-level binaries
+time-starved at 3-way concurrency re-ran solo green: 0a 12/0, 0d 1/0, 11 3/0, 12 3/0, 16
+14/0, 41 11/0). Suite totals captured: nf-formats+nf-audio 229 passed / 4 failed / 3
+ignored — the 3 disc_golden slim-ISO allowance plus identity_disc, which expects the full
+1,191,072-sector image (the onfoot ISO is 518,435 sectors, so it is an image-size
+environment failure, not a tree failure); nf-view partial 48 binaries 0 failed before the
+window closed; nf-game not reached (2-core box, restarts ate the window — lesson 10
+recognises "did not fit"; the diff is test-file-only, no src/ change). Report:
+docs/reports/real-health-00agent-01.md.
