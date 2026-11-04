@@ -83,8 +83,13 @@ The switch on `MPGame+0x188` [M 0x184bd0:36-93; offsets confirmed by disasm — 
 
 - **0** playing: `MP_Pickup_Process` + `MP_CheckForEndCondition` + `BOT_update` (the first and
   third are phase 2+ in the port).
-- **2** (time up): scenario 0x10 falls through to case 1; anything else binds the status text
-  "Game Over :" 0x2000024 + "Press START" 0x1c9 into `StatusSpr` and sets state **3** [M :42-50].
+- **2** (time up): scenario 0x10 falls through to case 1; anything else sprintfs the status
+  with `Txt_BindLabel(0x2000028)` ("Time Up!") as the FMT and `Txt_BindLabel(0x1c9)` ("Press
+  START") in the never-consumed a3 slot — "Time Up!" has no `%s`, so the line reads "Time Up!"
+  alone [M disasm 0x184da8-0x184ddc: `move $a1,$s0` after the first bind overwrote the fmt
+  register, `move $a3,$v0` the second; L the USATxt binds, s/audit-sprite-set-text] — and sets
+  state **3** [M :42-50]. (This line used to say "Game Over :" 0x2000024 — that label belongs to
+  the case-1 arms below.)
 - **1** (score end): `MP_SortOutWhoWon` 0x1848d0, which sets state **3** and writes the status
   text [M :51-53; 0x1848d0:20]:
   - 0x10: the winner is the fewest deaths (`+0x08`) among slots with an obj, counting only

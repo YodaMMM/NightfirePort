@@ -631,8 +631,12 @@ pub fn status_line(m: &MpMatch) -> Vec<StatusPart> {
         // "%s%s" (0x2000024, 0x2000023) [M :72-90]; 0x10 alone: 0x2000023 [M :43-52].
         MpEndStatus::Draw if lives => vec![StatusPart::Label(0x0200_0023)],
         MpEndStatus::Draw => vec![StatusPart::Label(0x0200_0024), StatusPart::Label(0x0200_0023)],
-        // Time up outside 0x10: case 2 prints "%s%s" (0x2000028, 0x1c9) and skips the sort [M 0x184bd0:42-50].
-        MpEndStatus::None => vec![StatusPart::Label(0x0200_0028), StatusPart::Label(0x1c9)],
+        // Time up outside 0x10: case 2 sprintfs the status with the FMT = bind(0x2000028)
+        // "Time Up!" [L USATxt bind] and bind(0x1c9) "Press START" only in the UNUSED a3 slot
+        // [M disasm 0x184da8-0x184ddc: `move $a1,$s0` after the first bind overwrote the fmt
+        // register, `move $a3,$v0` the second; "Time Up!" has no %s, so vsprintf consumes no
+        // vararg — the line reads "Time Up!" alone; the a3 bind is a dead argument].
+        MpEndStatus::None => vec![StatusPart::Label(0x0200_0028)],
     }
 }
 

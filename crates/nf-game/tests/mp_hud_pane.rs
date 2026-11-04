@@ -93,8 +93,10 @@ fn a_kill_queues_the_killers_message() {
 
 /// The status line: nothing while playing; Arena's single winner prints "Game Over :" + the
 /// codename + " " + "Won" (0x2000024, name, 0x2000027 [M 0x1848d0:62-70]); the lives scenario
-/// 0x10 uses "Player %s Won" 0x2000022 [M :21-41]; a time-up outside 0x10 prints 0x2000028 +
-/// 0x1c9 [M 0x184bd0:42-50]. Sister: a draw is 0x2000024 + 0x2000023.
+/// 0x10 uses "Player %s Won" 0x2000022 [M :21-41]; a time-up outside 0x10 prints 0x2000028
+/// "Time Up!" alone — case 2's sprintf takes bind(0x2000028) as the FMT and bind(0x1c9)
+/// "Press START" in the never-consumed a3 slot [M disasm 0x184da8-0x184ddc; L the USATxt binds,
+/// mp_status_strings_live]. Sister: a draw is 0x2000024 + 0x2000023.
 /// A site round's result holds the status line through the restart wait; 2.5 s in it swaps to
 /// the restart label, and the restart clears it [M 0x1870a0:146-158, 0x184bd0:79-89]. Sister: the
 /// wait never shows the time-up text.
@@ -122,7 +124,7 @@ fn the_status_line_follows_the_sort() {
     m.game.end_status = MpEndStatus::Draw;
     assert_eq!(status_line(&m), vec![StatusPart::Label(0x0200_0024), StatusPart::Label(0x0200_0023)]);
     m.game.end_status = MpEndStatus::None;
-    assert_eq!(status_line(&m), vec![StatusPart::Label(0x0200_0028), StatusPart::Label(0x1c9)]);
+    assert_eq!(status_line(&m), vec![StatusPart::Label(0x0200_0028)]);
     m.settings.scenario = scenario::DEATH_LIMIT_FFA;
     m.game.end_status = MpEndStatus::Won("Bond".into());
     assert_eq!(status_line(&m), vec![StatusPart::Format(0x0200_0022, "Bond".into())]);

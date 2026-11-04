@@ -223,9 +223,13 @@ open. Icons 3/4/5 are additive (flag 0x100) [L 0x2be888].
 
 **Clock** — `TimeSpr` (`MPTimeInfo` 0x2a4710, a separate sprite made by `MP_Start` 0x183a50, not
 a pane): font 1 (the header face, style 0x30cbd0 = FF 01 FE 03 → centred), (256,32) for one viewer
-(MP_Start moves y to 0x20 [M :186-200]), white with a black outline; only when MPSettings+0x1a0 !=
-−1 [M 0x184268:138]. **Status line** — `StatusSpr` (`MPStatusInfo` 0x2a4740): font 2 centred at
-(256,48): "Game Over :" + name + " Won" / "Game Over :" + "A Draw" / "Time Up!" + "Press START" /
+(MP_Start moves y to 0x20 [M :186-200]), white with a black outline; gated per
+MP_CheckForEndCondition: the demolition/protection round clock writes while `MPGame+0x194 > 0`
+[M 0x184268:57], every other scenario while `MPSettings+0x1a0 != -1` [M :142]. **Status line** —
+`StatusSpr` (`MPStatusInfo` 0x2a4740): font 2 centred at
+(256,48): "Game Over :" + name + " Won" / "Game Over :" + "A Draw" / the time-up arm's
+"Time Up!" (the a3 "Press START" bind is never consumed — no %s in the fmt [M disasm
+0x184da8-0x184ddc; L the USATxt binds, s/audit-sprite-set-text]) /
 0x10's "Player %s Won" [M 0x1848d0, 0x184bd0 case 2] → `nf_game::mp::hud::status_line`.
 
 **Radar ring** — RadarSprInfo (512,0) through FixMP → **(432,16)** 64×64 [L] (the port drew
