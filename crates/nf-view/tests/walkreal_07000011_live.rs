@@ -124,6 +124,77 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     if difficulty == 3 {
         w.dmg.lane_fights = true;
         w.dmg.lane_floor_drops = true;
+        // The close-guard law: under 3.0 u every drone round hits [M DroneWeap_DoBulletAccuracy
+        // 0x179740:113-115] — this run's ledger finishes Bond with the connector guard #18 at
+        // 1.9 u (4.0, the last health) and round 1's flight-B blocker stood 1.6 u. A player
+        // back-pedals out of the free-hit band while shooting (the opt-in steps back, aim held).
+        w.dmg.back_off = Some(2.6);
+    }
+
+    // THE 00 AGENT PRE-LEG (real-health-00agent-11-2): take the top-floor BodyArmour BEFORE the
+    // first fight. Round 1 died at the north strip 31.1 with 15 hits for 100.0 — the fights
+    // themselves traded 70 of it (#14 56.0 + #15 28.0 while their partners crossed-fired) and
+    // #17/#16 finished the last 9. The game's own law: a bullet pain's armour fraction is 1.0 —
+    // armour absorbs first, health only what the armour cannot cover [M Player_HandlePain
+    // 0x1902c8:84-104 → the type-0 arm; PlayerHealth::apply's `absorbed = (d·frac).min(armour)`],
+    // and the take is the walk-over `Pickup_Handler` [M 0x18e650 — refused only at armour ≥ 50;
+    // Bond loads with 0]. The disc places #261/#266 BodyArmour at (23.12, 47.62, 22.88) on the
+    // top office floor [D; the load print], 23 u east of the spawn along the open floor — the
+    // player's own first move on 00 Agent. The d1/d2 sisters keep their pinned timelines; the
+    // detour is the d3 route's own shape. (The mid-leg take of round 1 wedged the 6000-tick cap
+    // inside resupply recursion; as a PRE-LEG the fights it meets are the spawn guards' free
+    // kills and the take happens before any fight has cost anything.)
+    if difficulty == 3 {
+        // The east office floor is a desk maze the game's own nav never spans [D: path 1 has NO
+        // node path from the spawn-side n39 to the armour-side n64; path 0's ring stays z 7-16]
+        // and the direct steer wedges on the mid-floor wall run (measured: stuck at (12.5, 13.5),
+        // segment hit 0.56 ahead, sidesteps exhausted). The chain below is a corridor-BFS over
+        // the world's own segments (0.5 u cells, 3 body-width rays a step, walkreal probe this
+        // task) — the walkable way a player threads the desks, out to the armour pocket and back
+        // to the stairwell-door ledge where leg 1's own chain takes over.
+        let maze: &[(&str, f32, f32)] = &[
+            ("the spawn pocket south", 0.0, 22.5), ("east of the west desks", 4.0, 22.0),
+            ("the west corridor", 4.5, 21.0), ("south of the west desks", 4.5, 18.5),
+            ("the mid-west jog", 5.5, 16.5), ("the mid corridor west", 9.5, 16.5),
+            ("the desk corner 1", 10.5, 16.0), ("the desk corner 2", 11.0, 15.0),
+            ("the desk corner 3", 11.5, 14.5), ("the desk corner 4", 12.5, 14.0),
+            ("the mid-wall south", 12.5, 9.5), ("the ledge jog 1", 13.0, 9.0),
+            ("the ledge jog 2", 13.0, 7.5), ("the stairwell-door ledge", 13.5, 6.5),
+            ("the ledge east", 17.0, 6.5), ("the east jog 1", 17.5, 8.0),
+            ("the east run", 19.5, 9.5), ("the east jog 2", 20.5, 10.0),
+            ("the east wall north", 20.5, 16.5), ("the armour run east", 22.5, 16.5),
+            ("the armour run north", 22.5, 20.0), ("the armour take spot", 22.5, 21.5),
+        ];
+        for (label, x, z) in maze {
+            w.walk_to(Wp::new(*x, 47.4, *z).r(0.8), &format!("d3 pre-leg: {label}"));
+        }
+        // The take fires from the ring around the armour (radius 0.477 + 1.1 with a clear
+        // sphere→centre line [M 0x18e148:203-214; the walkreal probe this task]) — the take spot
+        // (22.5, 21.5) the corridor-BFS proved, plus the lenient inner hop (23.0, 22.0); a
+        // wedged hop is skipped (the desk lip east of the pickup) — the stand inside the ring
+        // has already taken it.
+        w.try_walk_to(Wp::new(23.0, 47.4, 22.0).r(0.4), "d3 pre-leg: the armour ring inner cell");
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            assert!(sim.drones.health.armour > 0.0,
+                "the pre-leg took the BodyArmour (walk-over take [M 0x18e650], armour {})",
+                sim.drones.health.armour);
+        }
+        // Back west along the same corridor to the ledge, where leg 1's direct chain resumes.
+        // The x-20.5 wall run has the desk rows half a unit east — tight arrival radii keep the
+        // steering overshoot off the desk tops (measured: a 0.8 arrive corner climbed the desk at
+        // (21.5, 15.9) and wedged grounded=false).
+        for (label, x, z, r) in [
+            ("the armour run back south", 22.5f32, 16.5f32, 0.8f32),
+            ("the east wall back", 20.5, 16.5, 0.45), ("the east wall back 2", 20.5, 15.5, 0.45),
+            ("the east wall back 3", 20.5, 14.0, 0.45), ("the east wall back 4", 20.5, 12.0, 0.5),
+            ("the east jog back", 20.5, 10.0, 0.5),
+            ("the east run back", 19.5, 9.5, 0.6), ("the ledge east back", 17.0, 6.5, 0.8),
+        ] {
+            w.walk_to(Wp::new(x, 47.4, z).r(r), &format!("d3 pre-leg return: {label}"));
+        }
+        eprintln!("[011] d3 pre-leg: armour {} on at +{} ticks",
+            { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.health.armour }, w.total_ticks);
     }
 
     // Leg 1: east across the top floor to the stairwell door (the nav web [D paths 0/1] has no
