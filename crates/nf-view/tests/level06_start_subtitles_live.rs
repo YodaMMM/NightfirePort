@@ -125,3 +125,18 @@ fn subtitle_lines_break_as_the_game_does() {
     let play = "Can\u{201c}t I rest a moment?  I drove six hours to get here.";
     assert!(wrap(play, font, 276.0)[0].trim_end().ends_with("drove six"), "{:?}", wrap(play, font, 276.0));
 }
+
+/// A long objective shows one part at a time, each for its share [M Text_AddMsg 0x1b0c30:190-290;
+/// L PCSX2 07000007: the first part alone, never stacked].
+#[test]
+fn a_long_line_shows_one_part_at_a_time() {
+    let Some(path) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let Ok(scene) = nf_view::load(&path, "07000006.bin", false) else { return };
+    let font = &scene.hud.as_ref().unwrap().font;
+    let text = "Rendezvous with undercover agents and maintain cover as party guest";
+    let (first, left) = nf_view::hud::line_part(font, text, 300.0, 300.0, 480.0);
+    assert_eq!(first, "Rendezvous with undercover agents and maintain cover as");
+    assert!(left > 200.0 && left < 300.0, "{left}");
+    let (second, _) = nf_view::hud::line_part(font, text, 10.0, 300.0, 480.0);
+    assert_eq!(second, "party guest");
+}

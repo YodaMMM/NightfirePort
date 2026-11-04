@@ -981,21 +981,16 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             // shadow (flag 0x20), layer 0x1e while shown; alpha = time·17 under 15 ticks
             // [M 0x19ca88:83-97].
             let a = (msg.time * 17.0).min(255.0) as u32;
-            for (k, l) in t.font.word_wrap(&msg.text, 480.0).split('\n').enumerate() {
-                h.text_fading(Anchor::Left, &t.font, 30, l, 16.0, 88.0 + k as f32 * t.font.line_height(), false, gs(0xffffff, a));
-            }
+            let (l, left) = line_part(&t.font, &msg.text, msg.time, msg.life, 480.0);
+            let a = a.min((left * 17.0).min(255.0) as u32);
+            h.text_fading(Anchor::Left, &t.font, 30, &l, 16.0, 88.0, false, gs(0xffffff, a));
         } else if let Some(msg) = s.hud.info_msgs.front() {
             let a = (msg.time * 17.0).min(255.0) as u32;
             bar(&mut h, bw);
-            let wrapped = t.font.word_wrap(&msg.text, 480.0);
-            let lines: Vec<&str> = wrapped.split('\n').collect();
-            let mut maxw = 0.0f32;
-            for l in &lines { maxw = maxw.max(t.font.layout(l, 0.0, 0.0).1); }
-            let x0 = SW / 2.0 - maxw / 2.0;
-            let lh = t.font.line_height();
-            for (k, l) in lines.iter().enumerate() {
-                h.text_fading(Anchor::Centre, &t.font, 29, l, x0, 129.0 + k as f32 * lh, false, gs(0x7d6d59, a));
-            }
+            let (l, left) = line_part(&t.font, &msg.text, msg.time, msg.life, 480.0);
+            let a = a.min((left * 17.0).min(255.0) as u32);
+            let x0 = SW / 2.0 - t.font.layout(&l, 0.0, 0.0).1 / 2.0;
+            h.text_fading(Anchor::Centre, &t.font, 29, &l, x0, 129.0, false, gs(0x7d6d59, a));
         } else if s.hud.info_close > 0.0 && !mp {
             bar(&mut h, s.hud.info_close);
         }
@@ -1054,23 +1049,15 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             // stores] — the status label alone carries "OBJECTIVE COMPLETE" (the port used to draw
             // the body row too: two stacked OBJECTIVE COMPLETE banners).
             if !complete && a != 0 {
-                // `Text_AddMsg` 0x1b0c30 wraps the message text with `Font_WordWrapString` at
-                // TextMsgFormats[2]'s maxWidth = 480 [L 0x2bf108+0x14 = 0x1e0] — the box's own width
-                // (ObjectiveStatusSprInfo[2] x 16 w 480 [L 0x319608+0x58]); the port wraps at draw
-                // time (the font lives in the scene tables, the queue stores the raw bind).
-                // __Font_DrawText 0x1ee598:65-71: each '\n' line draws from the same block start x
-                // and the next line sits `glyph0.h + gap + 1.0` lower; Font_DrawText 0x1eee48's
-                // justify-2 centre shifts the block start x -= width/2 by the WIDEST line, so the
-                // block centres on 256 with its lines left-aligned from there.
-                let wrapped = t.font.word_wrap(&msg.text, 480.0);
-                let lines: Vec<&str> = wrapped.split('\n').collect();
-                let mut maxw = 0.0f32;
-                for l in &lines { maxw = maxw.max(t.font.layout(l, 0.0, 0.0).1); }
-                let x0 = SW / 2.0 - maxw / 2.0;
-                let lh = t.font.line_height();
-                for (k, l) in lines.iter().enumerate() {
-                    h.text_fading(Anchor::Centre, &t.font, 29, l, x0, 40.0 + k as f32 * lh, false, gs(0x7d6d59, a));
-                }
+                // `Text_AddMsg` 0x1b0c30 wraps at TextMsgFormats[2]'s maxWidth = 480 [L 0x2bf108+0x14 =
+                // 0x1e0] and queues each part as its own message [M :190-290], so a long objective
+                // shows one line at a time [L PCSX2 07000007 "Rendezvous...": the first part alone
+                // fades out; never stacked]. The port wraps at draw time (the font lives in the
+                // scene tables, the queue stores the raw bind).
+                let (l, left) = line_part(&t.font, &msg.text, msg.time, msg.life, 480.0);
+                let a = a.min((left * 17.0).min(255.0) as u32);
+                let x0 = SW / 2.0 - t.font.layout(&l, 0.0, 0.0).1 / 2.0;
+                h.text_fading(Anchor::Centre, &t.font, 29, &l, x0, 40.0, false, gs(0x7d6d59, a));
             }
         } else if s.hud.objective_close > 0.0 {
             bar(&mut h, s.hud.objective_close);
@@ -1411,6 +1398,24 @@ fn outlined_text(h: &mut Hud, anchor: Anchor, font: &nf_formats::hud::Font, tex:
     h.text_scaled_tex(anchor, font, layer, tex, s, x0, y, false, c, false, 1.0);
 }
 
+/// The part of a long line on screen now, and the ticks left in it: `Text_AddMsg` 0x1b0c30 queues
+/// each wrapped part as its own message, its time the part's share by length [M :190-290]. The
+/// port's queue holds the whole line, so the share is walked from the message's elapsed time; the
+/// game's 60-tick floor for the non-subtitle types [M :243-250] is not modelled.
+pub fn line_part(font: &nf_formats::hud::Font, text: &str, time: f32, life: f32, max_w: f32) -> (String, f32) {
+    let parts = crate::menu::font_word_wrap(text, font, max_w);
+    let total = parts.iter().map(|p| p.len()).sum::<usize>().max(1) as f32;
+    let mut edge = 0.0f32;
+    let elapsed = life - time;
+    for p in &parts {
+        edge += life * p.len() as f32 / total;
+        if elapsed < edge {
+            return (p.trim_end().to_string(), edge - elapsed);
+        }
+    }
+    (parts.last().map_or(String::new(), |p| p.trim_end().to_string()), time.max(0.0))
+}
+
 /// The script camera's frame: only the subtitle sprite outlives the HUD's sprite pass —
 /// `Text_Update` 0x1b1510 hands it the first viewer whose +0x2a is still set.
 pub fn cutscene_subtitles(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
@@ -1434,16 +1439,7 @@ fn subtitles(h: &mut Hud, s: &crate::scene::Sim, t: &nf_formats::hud::HudTables)
     };
     if s.drones.hud_frozen {
         let Some(m) = s.hud.subs[0].front() else { return };
-        let parts = crate::menu::font_word_wrap(&m.text, &t.font, 480.0);
-        let total = parts.iter().map(|p| p.len()).sum::<usize>().max(1) as f32;
-        let mut left = (m.life - m.time) / m.life.max(1.0) * total;
-        for p in &parts {
-            left -= p.len() as f32;
-            if left < 0.0 {
-                line(h, p, 426.0);
-                return;
-            }
-        }
+        line(h, &line_part(&t.font, &m.text, m.time, m.life, 480.0).0, 426.0);
     } else if let Some(m) = s.hud.subs[1].front() {
         let lines = crate::menu::font_word_wrap(&m.text, &t.font, 460.0 * 0.6);
         let Some(first) = lines.first() else { return };
