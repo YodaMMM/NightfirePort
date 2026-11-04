@@ -1485,21 +1485,24 @@ fn low_beam_621_crossing(crouch: bool) {
 
 /// The standing half of the low-beam rule: live, Bond walking STANDING through #621's line
 /// fired ch 0x24 + 0x10 at z −32.77 (the line z ≈ −33.05 at x −12.6) [L 2026-11-01, fresh
-/// boot]. The game's standing trigger toucher is NOW PINNED: the collide-pass HITTEST segment
-/// itself (`Player_Collision` 0x194df0's default arm A = pos+0.275, B = pos+(0.55−cc), r 0.55,
+/// boot]. The game's standing trigger toucher is the collide-pass HITTEST segment
+/// (`Player_Collision` 0x194df0's default arm A = pos+0.275, B = pos+(0.55−cc), r 0.55,
 /// mode 0x800 [M :315-333]; picked by `Collide_PickObj` 0x1eae80:96-119, refined by
 /// `Intersect_CylGeom` vs the trigger's glist [M 0x1ebaa8:226-247 → 0x109da0:447], mirrored
 /// into the trigger's +0xD0 [M 0x1ea398:160-215], credited class-3 by `Trigger_Hit` 0x1b1fc8
-/// [L ee_start_0700000a.bin: the player obj+0xFF = 3]). Its bottom B−r = pos−cc = floor+0.05
-/// sits inside #621's band y 0.13-0.39 [D]; the box stand-in (bottom pos−0.6 = 0.53) misses it.
-/// This test went GREEN with the segment wired in (2026-11-03) but the same wiring broke three
-/// measured pins — the 05 truck-ride park plate, 011's Bond-Moment plate #235 (a glist ~0.85
-/// over pos, the ref-gate/extent divergence), and this file's office-ring "no beam fired" route
-/// pin (the walker path brushes low bands the game's footpath never did) — so the segment is
-/// reverted to the box until those land. Full chain + the next levers: the toucher site in
-/// drone.rs and docs/reports/level-0a-low-beam-standing-toucher.md.
+/// [L ee_start_0700000a.bin: the player obj+0xFF = 3]). trigger-hittest-segment completed the
+/// chain: the trigger cels' glist flags bit 0x40 [D #607/#614/#621 = 0x645] routes the refine
+/// to the RAW per-triangle law (the plane-crossing anchor + `Dist2Tri`'s one-sided entry +
+/// the strict < radius refine — triggers.rs `seg_touches_tri_raw`). The law went GREEN here on
+/// the branch (the segment toucher + the raw refine, 2026-11-04) but the one-sided entry's sign
+/// needs the glist's PLANE RECORDS (the game's authoritative normal — the port's parse carries
+/// only the tri winding, whose sign disagrees on the 05 spawn plate and broke the truck chain):
+/// parse the plane records, wire `seg_touches_tri_raw` into `touched_by` (r > 0), flip the
+/// standing toucher to `player.body` (the wired diff is in this branch's history, commit
+/// e7f80cd6), and retune this walk's #614 jump press (~1.8; the raw refine's side-face distance
+/// fires the line at the walker's full-speed arc).
 #[test]
-#[ignore = "port gap: the standing trigger toucher is the measured box pos−0.05..pos+1.26 r 0.55 (drone.rs player_touchers; reach bottoms pos−0.6 = 0.53 on 0a's floor) and misses #621's band y 0.13-0.39 [D]; the game fires it standing [L 2026-11-02]. The game's shape is now pinned (the HITTEST segment, see the doc above) and the wiring went green here, but breaks the 05 ride park plate, 011's plate #235 and the office-ring route pin — the next levers are the route-side tightening, the glist ref-gate/extent, and the ride's class-5 contact"]
+#[ignore = "port gap: the standing toucher is the measured box (drone.rs player_touchers) and misses #621's band y 0.13-0.39 [D]; the game fires it standing [L 2026-11-02]. The full chain is pinned and implemented (triggers.rs seg_touches_tri_raw, the [M] asm cited there): the raw refine went green here on the branch but needs the glist PLANE RECORDS parsed for the one-sided entry's sign (the tri winding disagrees on 05's spawn plate) before it can land"]
 fn low_beam_621_fires_standing() {
     low_beam_621_crossing(false);
 }
