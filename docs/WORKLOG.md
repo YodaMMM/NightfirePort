@@ -43,3 +43,18 @@ remaining reds green (sight_frustum_live 2, walkreal_01/02/03/14/16/1b, fix_blas
 fix_finale_live, hostage_killer_07000002_live, enemy_accuracy_live), re-routing walks the way a
 player would adapt (never forcing state), re-pinning only values the stream legitimately moves.
 - (13:18) branch created, master merged clean, initial checkpoint pushed.
+- (14:35) sight_frustum_live 2/2 GREEN — census re-derived onto staying guards 158/161; 261 is
+  deleted before tick 120 on the shared stream (prop 0x59 GO_TO_GOAL arrival tail [M 0x165640:47-82]).
+- (14:35) hostage_killer_07000002_live 5/5 GREEN — the ch-0x19 opener pin now accepts the captor's
+  silent-first 0x2E roll (no voice; step-1 advance sends to the hostage; her expected reply opens)
+  [M 0x14a8b8 Rand(6) + D 0x2E.sfx=0 + M 0x141b00 + M 0x144340:10-24] — the same exception the
+  repeat rule already carried, on the first turn.
+- (14:35) fix_blast_scripts type-0 leg diagnosed (fix next message): the teleport spot
+  (1.9717, -0.4, -2.256) is a VOID (no floor within 35u on any ray; Bond falls forever, grounded
+  false); destroy[10] (#470) is a zero-extent box (lo==hi==origin, the boundless bigdoor01 leaf);
+  the P2K record has spread 0.0 [L ee_snapshot weapon_data +0x24] so the shot dir is exactly
+  `look` — and the test's aim_at treats pitch as radians while the game's pitch is half-turns
+  [M player.rs look(): p = pitch*HALF_PI], so the shot dives -34.3 deg instead of the intended
+  -21.8, passing 1.45u from the origin — outside the degenerate-box 0.1 tolerance [M
+  breakable.rs seg_box_t lo==hi arm]. Needs a re-derived reachable spot (a real floor) or a
+  compensated aim; geometry, not stream.
