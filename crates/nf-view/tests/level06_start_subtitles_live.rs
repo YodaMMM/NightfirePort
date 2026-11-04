@@ -66,7 +66,7 @@ fn driver_conversation_posts_with_the_option_off() {
     assert_ne!(track.active_subtitle(driver.start + 211), Some(0x0600_006e), "the head's timer hit 0 and the queue advanced [M Text_UpdateMsg 0x1b11d8]");
     assert_eq!(track.active_subtitle(escort.start), Some(0x0600_006f));
     // The HUD drain took the same adds (the game's single Text_AddMsg call).
-    assert!(sim.hud.msgs.iter().any(|m| m.script), "the spoken lines reached the HUD drain");
+    assert!(sim.hud.subs.iter().flatten().next().is_some(), "the spoken lines reached the HUD drain");
 }
 
 /// Sister: the same lines with the option ON — the track is identical (the spoken adds' gate is
