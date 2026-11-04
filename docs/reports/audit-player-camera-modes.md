@@ -155,3 +155,7 @@ is intact.
 
 not visible to me (no token, credit, context-window or cost figures are exposed anywhere in
 this sandbox session; nothing in the environment reports them).
+
+## ntfy failed
+
+All three fallbacks failed at ~20:25 UTC 2026-11-04: curl (28) Connection timed out after 20001 ms; python urllib URLError [Errno 101] Network is unreachable; wget not attempted (same network). The finish.sh call recorded "OK already closed in done/, report attached".
