@@ -3161,9 +3161,14 @@ impl Drone {
             pos: self.pos, dir: [s, 0.0, c], speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
             damage: f32_at(0x0c), owner, state: 0, weapon: record as u16,
             flyby: d.weapons.flyby(record), bounces: 0,
-            // The flight's glass pass from the record [M Bullet_update 0x12f048-0x12f058].
-            glass_pass: d.weapons.records.get(record as usize)
-                .is_some_and(|w| u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0),
+            // The guard-side flight keeps the port's documented deviation (the glass pass NOT
+            // modelled [S]): the real-health routes stand behind station glass (the 08 d2
+            // platform-mouth wave cleared at zero cost while the rounds stopped on it) — arming
+            // the pass here turned walk_the_whole_mission_on_real_input_real_damage_agent red at
+            // tick 25178 (#23/#19 volleys through the top-station glass). The player-side flight
+            // carries the pass (update_player_bullets' flight_glass) where the Hind fight needs
+            // it; the guard-side route work lands with the next session.
+            glass_pass: false,
             ..crate::bullet::Bullet::TAIL
         })
     }
@@ -11236,8 +11241,9 @@ impl Drone {
             let dir = crate::bullet::spread(aim, f32_at(0x24), flags68, rng);
             let mut b = crate::bullet::Bullet { pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage, owner, state: 0,
                 weapon: self.weapon as u16, flyby: d.weapons.flyby(self.weapon as usize), bounces: 0,
-                // The flight's glass pass from the record [M Bullet_update 0x12f048-0x12f058].
-                glass_pass: u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap()) & 0x800 == 0,
+                // Guard-side deviation: the glass pass stays unmodelled (see the close-combat
+                // spawn above — the real-health routes stand behind station glass).
+                glass_pass: false,
                 ..crate::bullet::Bullet::TAIL };
             b.init_fuse(w);
             b
@@ -17397,8 +17403,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 damage: f32_at(0x0c), owner: usize::MAX, state: 0,
                                 weapon: crate::gt::TURRET_WEAPON_RECORD as u16,
                                 flyby: d.weapons.flyby(crate::gt::TURRET_WEAPON_RECORD), bounces: 0,
-                                // The flight's glass pass from the record [M Bullet_update 0x12f048-0x12f058].
-                                glass_pass: u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap()) & 0x800 == 0,
+                                // Guard-side deviation: the glass pass stays unmodelled (see the
+                                // close-combat spawn in drone.rs).
+                                glass_pass: false,
                                 ..crate::bullet::Bullet::TAIL
                             };
                             b.init_fuse(w);
@@ -17638,8 +17645,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                     pos: from, dir, speed: f32_at(0x20), travelled: 0.0,
                                     range: f32_at(0x1c), damage: f32_at(0x0c), owner: usize::MAX,
                                     state: 0, weapon: 107, flyby: d.weapons.flyby(107), bounces: 0,
-                                    // The flight's glass pass from the record [M Bullet_update 0x12f048-0x12f058].
-                                    glass_pass: u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap()) & 0x800 == 0,
+                                    // Guard-side deviation: the glass pass stays unmodelled (see the
+                                    // close-combat spawn in drone.rs).
+                                    glass_pass: false,
                                     ..crate::bullet::Bullet::TAIL
                                 };
                                 b.init_fuse(w);
