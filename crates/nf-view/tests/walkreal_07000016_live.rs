@@ -502,6 +502,40 @@ fn sit_out_pulse(w: &mut Walker, label: &str) -> u32 {
     n
 }
 
+/// The real-damage walk's pulse-1 sit (drone-block-swaps-g055-3, opt-in): the same pulse
+/// skeleton with the PROACTIVE shelter tick — the pit soldiers are answered on sight through
+/// the door (see shelter_tick_proactive), so they fall with loaded drops instead of
+/// emptying their clips into the run. Nothing moves Bond's feet; the same volume/live
+/// asserts stand.
+fn sit_out_pulse_proactive(w: &mut Walker, label: &str) -> u32 {
+    let allowance = w.top_up_health;
+    let mut last_tap = 0u32;
+    let mut waited = 0u32;
+    while !w.scene.sim.as_ref().unwrap().drones.channels.on(243) {
+        shelter_tick_proactive(w, &mut last_tap);
+        waited += 1;
+        assert!(waited < 8000, "{label}: not within 8000 ticks");
+    }
+    w.top_up_health = false;
+    let mut n = 0u32;
+    while w.scene.sim.as_ref().unwrap().drones.channels.on(243) {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            let h = sim.hurts.iter().find(|h| h.gate == 0xf3).expect("HurtPoly-ShuttleLaunch");
+            assert!(!h.contains(p, [p[0], p[1] + 1.8, p[2]], 0.55), "{label}: the volume touches Bond at {p:?} (+{n})");
+            assert!(sim.drones.health.health > 0.0, "{label}: Bond died at {p:?} (+{n})");
+        }
+        shelter_tick_proactive(w, &mut last_tap);
+        n += 1;
+        assert!(n < 1000, "{label}: the pulse never fell");
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(sim.drones.health.health > 0.0 && sim.drones.mission.status() != 3, "{label}: Bond lives, no fail");
+    w.top_up_health = allowance;
+    n
+}
+
 /// One tick in the shelter: with a visible guard shooting Bond (`DamageLog::shooters`), turn the
 /// view onto his exposed part and fire (a tap every 8 ticks once on target, a reload on an empty
 /// clip); otherwise an idle tick. Turn/look only — Bond's feet never move, so the pulse's
@@ -515,6 +549,32 @@ fn shelter_tick(w: &mut Walker, last_tap: &mut u32) {
                 .find_map(|i| walker::DamageLog::exposed_part(sim, i).map(|at| (i, at)))
         }
     };
+    shelter_tick_picked(w, last_tap, pick);
+}
+
+/// The proactive shelter tick (drone-block-swaps-g055-3, opt-in — the real-damage walk only):
+/// the pick drops the shooters-only filter. The flush [M 0x148010:100-131] sends the pit
+/// soldiers hunting from their first attack, so they pour fire the whole pit phase and their
+/// AR drops land DRY whatever Bond does later (the measured dry-stand death at 14401: the
+/// squad phase started with clip 1 spare 1 and the cycling found no round in any owned gun).
+/// A player in the shelter shoots everyone he can see through the door, reactive or not —
+/// the soldiers die inside the pulse window with their clips mostly intact, and their drops
+/// (each with its own clip [M DroneWeap_DropWeapon 0x17a2a0]) arm the finale squad phase.
+fn shelter_tick_proactive(w: &mut Walker, last_tap: &mut u32) {
+    let pick = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let armed = sim.gun.clip + sim.gun.spare > 0 && (2..=0x47).contains(&sim.gun.weapon);
+        if !armed || sim.disabled { None } else {
+            sim.drones.list.iter().enumerate()
+                .filter(|&(_, d)| d.team == 1 && d.present && d.enabled && !d.corpse && d.health > 0.0
+                    && walker::dxz(d.pos, sim.bond.pos) < 30.0)
+                .find_map(|(i, _)| walker::DamageLog::exposed_part(sim, i).map(|at| (i, at)))
+        }
+    };
+    shelter_tick_picked(w, last_tap, pick);
+}
+
+fn shelter_tick_picked(w: &mut Walker, last_tap: &mut u32, pick: Option<(usize, [f32; 3])>) {
     let Some((_, at)) = pick else { w.tick(Input::default(), false); return };
     let (input, fire, reload) = {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -669,12 +729,46 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool) -> (usize, u32) {
     let t0 = w.total_ticks;
     eprintln!("[finale] hand-back at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
     w.skip_cutscenes = true;
+    // The pit soldiers answered at the hand-back (drone-block-swaps-g055-3, opt-in —
+    // re_arm and !tops_up): the ONE window where they stand visible with their clips
+    // mostly intact. They hunt from the hand-back and empty everything into the pit phase
+    // (the measured dry death at 14401: the squad phase opened on clip 1 spare 1 and the
+    // weapon cycling found no round in any owned gun; the shelter's walls block the eye
+    // rays from inside, so the pulse-1 sit sees nobody). A player turns and fights on the
+    // open floor before the shelter door shuts (1000..1350 [D]) — the stand caps at +550
+    // so the walk in keeps inside_at < 1000, and breaks the moment nobody is exposed.
+    if re_arm && !w.tops_up() {
+        let mut last_tap = 0u32;
+        while w.total_ticks - t0 < 550 {
+            let any = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let armed = sim.gun.clip + sim.gun.spare > 0 && (2..=0x47).contains(&sim.gun.weapon);
+                armed && !sim.disabled && sim.drones.list.iter().enumerate()
+                    .any(|(i, d)| d.team == 1 && d.present && d.enabled && !d.corpse && d.health > 0.0
+                        && walker::dxz(d.pos, sim.bond.pos) < 30.0
+                        && walker::DamageLog::exposed_part(sim, i).is_some())
+            };
+            if !any { break; }
+            shelter_tick_proactive(w, &mut last_tap);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[real-damage] the hand-back stand: soldiers answered at +{}, health {:.1}, holds {:#04x} clip {} spare {}",
+            w.total_ticks - t0, sim.drones.health.health, sim.gun.weapon, sim.gun.clip, sim.gun.spare);
+    }
     w.walk_route(INTO_THE_SHELTER);
     let inside_at = w.total_ticks - t0;
     eprintln!("[finale] in the shelter +{inside_at}");
     assert!(inside_at < 1000, "Bond is in the room before its door starts to shut (+{inside_at}, the leaves move 1000..1350 [D])");
-    // Pulse 1.
-    let n1 = sit_out_pulse(w, "pulse 1 in the shelter");
+    // Pulse 1. The real-damage walk sits it out PROACTIVELY (drone-block-swaps-g055-3): the
+    // pit soldiers are shot on sight through the door so their drops keep their clips for the
+    // finale squad (the reactive sit let them pour fire the whole phase and the drops landed
+    // dry). The punch test and the tops-up walks keep the exact original sit (re_arm and
+    // !tops_up gate it, the file's established opt-in pattern).
+    let n1 = if re_arm && !w.tops_up() {
+        sit_out_pulse_proactive(w, "pulse 1 in the shelter (the pit soldiers answered)")
+    } else {
+        sit_out_pulse(w, "pulse 1 in the shelter")
+    };
     assert!((555..=562).contains(&n1), "pulse 1 is 1611..2170 = 559 ticks [D stream 6], got {n1}");
     assert!(w.scene.sim.as_ref().unwrap().drones.mission.status() != 3, "no fail");
     // The chaser: ch 240 @2180 spawns her; the door reopens 2230..2580.
@@ -1545,6 +1639,18 @@ fn the_chasers_punch_lands_the_record_damage() {
 fn kill_the_chaser_with_range_keeping(w: &mut Walker, chaser: usize, t0: u32) {
     assert!(w.switch_to_armed("the chaser's kill"), "a carried gun has rounds");
     let mut aim = w.exposed_aim(chaser);
+    // The pit shooters answer the melee fight (drone-block-swaps-g055-3, the task's clear —
+    // the pit soldiers, NEVER the chaser herself): while the range-keeping loop holds the
+    // band, the soldiers' steady fire is the run's other dealer, and their drops (each with
+    // its own clip [M DroneWeap_DropWeapon 0x17a2a0]) land on the backpedal floor for the
+    // finale squad phase. A player clears the doorway while backing away from the fists —
+    // the loop picks the nearest VISIBLE live pit soldier (team 1, not a finale clone —
+    // their death channels are 23..=26 [D mux #611]) alongside the chaser's aim refresh,
+    // and fires at it with the same tap discipline whenever she is outside the punch band
+    // (2.0 [M 0x1789c0:26-40]) or out of sight; her own taps resume the moment she is
+    // inside 2.0. The final squad phase then fights on the soldiers' dropped rounds instead
+    // of Bond's dried carry (the measured dry-stand death at 14551).
+    let mut side: Option<(usize, [f32; 3], f32)> = None;
     for t in 0..6000u32 {
         let (dead, dist, bp, dp) = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -1562,23 +1668,44 @@ fn kill_the_chaser_with_range_keeping(w: &mut Walker, chaser: usize, t0: u32) {
             let dry = { let g = &w.scene.sim.as_ref().unwrap().gun; g.clip + g.spare == 0 };
             if dry { assert!(w.switch_to_armed("the kill's dry re-arm"), "a carried gun still has rounds"); }
         }
-        if t % 30 == 0 { aim = w.exposed_aim(chaser); }
+        if t % 30 == 0 {
+            aim = w.exposed_aim(chaser);
+            side = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                sim.drones.list.iter().enumerate()
+                    .filter(|&(i, d)| i != chaser && d.team == 1 && d.present && d.enabled
+                        && !d.corpse && d.health > 0.0 && !matches!(d.death_channel, 23..=26)
+                        && walker::dxz(d.pos, bp) < 25.0
+                        && walker::DamageLog::visible(sim, i))
+                    .min_by(|a, b| walker::dxz(a.1.pos, bp).total_cmp(&walker::dxz(b.1.pos, bp)))
+                    .map(|(i, d)| (i, [d.pos[0], d.pos[1] + 0.3, d.pos[2]], walker::dxz(d.pos, bp)))
+            };
+        }
+        // The fire plan: the side soldier when she is outside the punch band (her approach
+        // legs, not her swings) or out of sight, else the chaser herself.
+        let shooting_side = side.is_some() && (aim.is_none() || dist >= 2.0);
         let (input, fire) = {
             let sim = w.scene.sim.as_ref().unwrap();
-            let at = aim.unwrap_or([dp[0], dp[1] + 0.3, dp[2]]);
+            let (at, tdist, have) = match (shooting_side, side) {
+                (true, Some((_, at, sdist))) => (Some(at), sdist, true),
+                _ => (aim, dist, aim.is_some()),
+            };
+            let at = at.unwrap_or([dp[0], dp[1] + 0.3, dp[2]]);
             let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
             let err = walker::wrap_pi((at[0] - bp[0]).atan2(at[2] - bp[2]) - sim.bond.yaw);
-            let want_pitch = ((at[1] - eye[1]) / dist.max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+            let want_pitch = ((at[1] - eye[1]) / tdist.max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
             let perr = want_pitch - sim.bond.pitch;
             let on_target = err.abs() < 0.02 && perr.abs() < 0.028 && t % 16 == 0;
             let input = Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() };
-            let fire = if aim.is_none() { false } else { on_target && dist >= 2.0 };
+            let fire = if !have { false } else { on_target && tdist >= 2.0 };
             (input, fire)
         };
-        // Out of sight and far: close for the view (she is coming anyway — the chain closes).
+        // Out of sight and far: close for the view (she is coming anyway — the chain closes);
+        // with a side soldier exposed, stand and tap it instead of walking into her.
         if aim.is_none() {
-            let forward = if dist > 5.0 { 1.0 } else { 0.0 };
-            w.tick(Input { forward, ..input }, false);
+            let forward = if shooting_side { 0.0 } else if dist > 5.0 { 1.0 } else { 0.0 };
+            let input = Input { forward, ..input };
+            if fire { w.tick_fire(input); } else { w.tick(input, false); }
         } else if dist < 3.0 {
             // Hold the band off: backpedal facing her, tap only with the view on her (the same
             // tap discipline shoot_point uses — the aim wobbles ±0.05 rad while converging).
@@ -1630,6 +1757,17 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(difficulty: u
     });
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
         "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
+    // The route fights' economy (drone-block-swaps-g055-3, d1 only — the Agent sister keeps
+    // its own measured tactics): under the flush the guards hunt from their first attack and
+    // the un-dropped hunter re-opens at every leg — the measured d1 route bled ~80 of Bond's
+    // 100 across 8 fights before the pit (he arrived at 20.2 and the finale squad finished
+    // him dry). The lane pick measured WORSE (the stand traded 61.6 in one fight and the run
+    // died on the route at 1926 — reverted); the opt-in finish_fights escalation is the
+    // keeper: a player finishes the guard he is fighting (hp 20 — the rounds are cheaper
+    // than the bleed, and the route has no hard window).
+    if difficulty == 1 {
+        w.dmg.finish_fights = true;
+    }
         let (chaser, t0) = walk_to_the_chaser_fight(&mut w, true);
         // The route's return-fire fights spend bolts — the arrival SET is the chain's [M
         // 0x1a7ef8], but the gun in hand may be dry; the fight continues on the carried P2K
