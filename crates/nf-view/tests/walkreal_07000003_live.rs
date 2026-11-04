@@ -343,6 +343,46 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
                     eprintln!("[03] servant {si}'s captor #{ci} at ({:.1},{:.1},{:.1}) state {:#x} hp {:.1} corpse {}",
                         c.pos[0], c.pos[1], c.pos[2], c.state, c.health, c.corpse);
                 }
+                // 00 Agent (real-health-00agent-02-03-3): the east captor's room guards (the
+                // door-8 cluster at (35.5-37.5, -0.6) — #19 hp 12, #18 hp 12, #2 hp 24 shotgun)
+                // shot Bond out of the captor flank's REACTIVE fights: under the guards' door
+                // routes the flipped kill order (#2 first) left #18 live into a second fight and
+                // his 28.8 volley (40.8 -> 12.0) was the whole green margin — the
+                // pre-door-routes run answered the same cluster from (36.2,5.7) for 12.0 total
+                // and finished at 28.8 [L the two NF_RF_TRACE ledgers, identical to t48500]. A
+                // player takes the room's fight spot FIRST (the flank-1 nav-3 ground the green
+                // run fought from — parts expose from there; from the servant ground they do
+                // not, and the flank walk into the shotgun's 3.0 band died at 26.4 [L this
+                // branch's first pre-clear run]) and clears the cluster hp-ascending with real
+                // fire before the duel. si==0 only — the west (0x4f) leg's reactive sequence is
+                // green as-is and is not touched.
+                if difficulty >= 3 && si == 0 {
+                    w.walk_nav_to([36.5, 5.9, 5.7], "the captor room rally", 1.5);
+                    let escorts: Vec<usize> = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let mut es: Vec<(f32, usize)> = sim.drones.list.iter().enumerate()
+                            .filter(|(i, d)| Some(*i) != captor && d.present && !d.corpse && d.health > 0.0
+                                && d.team == 1
+                                && walker::dxz(d.pos, [36.5, 5.9, 5.7]) <= 9.0)
+                            .map(|(i, d)| (d.health, i)).collect();
+                        es.sort_by(|a, b| a.0.total_cmp(&b.0));
+                        es.into_iter().map(|(_, i)| i).collect()
+                    };
+                    for gi in escorts {
+                        let (alive, gp, hp) = {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            let g = &sim.drones.list[gi];
+                            (!g.corpse && g.health > 0.0, g.pos, g.health)
+                        };
+                        if !alive { continue; }
+                        eprintln!("[03] captor room guard #{gi} at ({:.1},{:.1},{:.1}) hp {hp:.1} — pre-clear", gp[0], gp[1], gp[2]);
+                        if !w.shoot(gi, &format!("servant {si} captor room guard {gi}")) {
+                            if w.resupply("captor room ammo") {
+                                w.shoot(gi, &format!("servant {si} captor room guard {gi} (retry)"));
+                            }
+                        }
+                    }
+                }
                 let mut killed = w.shoot(ci, &format!("servant {si}'s captor"));
                 // The mode-4 dodging captor pattern (the east-lane legs' own note: a captor
                 // "stays out of sight across the wall"): a player chases him — walk to his LIVE
@@ -375,6 +415,15 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         eprintln!("[03] servant {si} post-save state {:#x}", d.state);
         assert!(sim.drones.channels.on(rescue_ch as u32),
             "the save raised servant {si}'s rescue channel {rescue_ch:#x} [D p6; M 0x1441c0:11-18]");
+        if difficulty >= 3 && si == 0 {
+            // 00 Agent (real-health-00agent-02-03-3): the green run's post-rescue west-lawn leg
+            // started from the chase's end (38.34,0.72) and its nav threads the building's east
+            // side through the (39.0,12.9) door; from the rally the nav detours through the
+            // (35.6,8.7) door instead and that E stalls the leg 29x3000 ticks [L the first rally
+            // run's ledger]. The player walks the chase's last leg: restore the green
+            // continuation point (the flank's own nav link, walked there in the green run).
+            w.walk_nav_to([38.4, 5.9, 0.8], "the east flank end", 1.6);
+        }
     }
     w.wait(10);
     {
@@ -618,7 +667,7 @@ fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
 /// placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the load path is the
 /// only difference.
 #[test]
-#[ignore = "00 Agent: under the guards' door routes Bond dies at tick 59112 near (-1.38, 5.96, -34.47) to #16 (skin 0x5000038, weapon 0x1c); follow-up real-health-00agent-02-03-3"]
+#[ignore = "00 Agent: the east captor-room cluster under the door routes — the pre-clear rally kills the door-8 guards (#18/#19/#2) at zero fight cost but the rally APPROACH crosses their gun line (40.8 -> 15.6-19.2) and the exit lawn then needs ~29; next levers: an approach that stays north of door 8 (the green run fought from (36.2,5.7) THROUGH the open doorway), the 87000-tick (35.6,8.7) door stall on the post-rescue west-lawn leg, and the exit-lawn #16 post-kill volley; follow-up real-health-00agent-02-03-3"]
 fn walk_the_full_route_and_complete_every_objective_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(3));
 }
