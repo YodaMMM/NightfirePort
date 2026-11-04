@@ -907,6 +907,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             }
         }
     }
+    subtitles(&mut h, s, t);
     // The pickup message bar (pane 21, `Text_AddMsg` 0x1b0c30 + `HUD_UpdateStatusPane` 0x19c310): three sprites
     // copied into `PickupStatusSprInfo` from 0x2FC460 (stride 0x30) [L ee_start_05.bin; M static init 0x1a0058]:
     // the middle is a 1-texel column of the HUD sheet 0x0300007A (u 190, v 0..56) stretched to 256×26 at
@@ -1408,6 +1409,42 @@ fn outlined_text(h: &mut Hud, anchor: Anchor, font: &nf_formats::hud::Font, tex:
         h.text_scaled_tex(anchor, font, layer + 1, tex, s, x0 + dx, y + dy, false, outline, false, 1.0);
     }
     h.text_scaled_tex(anchor, font, layer, tex, s, x0, y, false, c, false, 1.0);
+}
+
+/// The subtitle sprites, font 2 centred on x 256, colour 0x7d6d59, no bar [L `SubTitleSprInfo`
+/// 0x319940; style 0x30cdb0]. A script camera's line (`Text_Update` 0x1b1510) sits at y 426 and
+/// runs a line wider than `TextMsgFormats[4]`'s 480 as consecutive parts, each for its share of the
+/// time [M 0x1b0c30:228-239]; in play (`Text_Update2Line` 0x1b09f0) the first line wraps at 0.6 of
+/// `TextMsgFormats[5]`'s 460 at y 402 and the rest at 460 at y 422 [M 0x1b09f0:50-73].
+fn subtitles(h: &mut Hud, s: &crate::scene::Sim, t: &nf_formats::hud::HudTables) {
+    let colour = gs(0x7d6d59, 0xff);
+    let line = |h: &mut Hud, l: &str, y: f32| {
+        let (_, w) = t.font.layout(l, 0.0, 0.0);
+        h.text_fading(Anchor::Centre, &t.font, 1, l, SW / 2.0 - w / 2.0, y, false, colour);
+    };
+    if s.drones.hud_frozen {
+        let Some(m) = s.hud.subs[0].front() else { return };
+        let wrapped = t.font.word_wrap(&m.text, 480.0);
+        let parts: Vec<&str> = wrapped.split('\n').collect();
+        let total = parts.iter().map(|p| p.len()).sum::<usize>().max(1) as f32;
+        let mut left = (m.life - m.time) / m.life.max(1.0) * total;
+        for p in &parts {
+            left -= p.len() as f32;
+            if left < 0.0 {
+                line(h, p, 426.0);
+                return;
+            }
+        }
+    } else if let Some(m) = s.hud.subs[1].front() {
+        let wrapped = t.font.word_wrap(&m.text, 460.0 * 0.6);
+        let (first, rest) = wrapped.split_once('\n').unwrap_or((&wrapped, ""));
+        line(h, first, 402.0);
+        let rest = rest.replace('\n', " ");
+        let wrapped = t.font.word_wrap(&rest, 460.0);
+        if let Some(second) = wrapped.split('\n').next().filter(|l| !l.is_empty()) {
+            line(h, second, 422.0);
+        }
+    }
 }
 
 /// The created MP pane rects for one full-screen viewer (HUD units): `HUD_FixMP` 0x19b110 clamps

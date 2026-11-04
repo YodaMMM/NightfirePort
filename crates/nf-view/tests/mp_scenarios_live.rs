@@ -314,6 +314,41 @@ fn a_scenario_object_desync_is_detected() {
 /// Arena (Deathmatch 0x1): slot 0 shoots slot 1 dead through the online combat — +1 score/kill
 /// [M 0x188f70:157-184]; frag limit 1 latches [M 0x184268:170-172] and the FFA who-won names the
 /// unique qualifier [M 0x1848d0:55-86]. Sister: the victim scores nothing.
+/// The scenario one-shots resolve in the arena's loaded banks: an id no bank carries never
+/// starts a voice [M `MPSound_Play` 0x18bee0 ids at the rules' call sites].
+#[test]
+fn scenario_sounds_are_in_the_arena_banks() {
+    let Some(p) = start(settings(scenario::CAPTURE_THE_FLAG, 1, -1, [0, 1])) else { eprintln!("skip: NF_ISO not set"); return };
+    let (_, bank, _) = p.a.sound_bank.as_ref().expect("the arena's bank");
+    for id in [0x14au32, 0x14b, 0x14c, 0x14f, 0x5d7, 0x5f8] {
+        assert!(bank.effect(id).is_some(), "{id:#x} is in the arena bank");
+    }
+}
+
+/// The scenario event lines reach the HUD with the game's text, and only with the Subtitles
+/// option on: `Text_AddMsg` drops type-4 adds while it is off [M 0x1b0c30:148].
+#[test]
+fn flag_lines_follow_the_subtitles_option() {
+    let Some(mut p) = start(settings(scenario::CAPTURE_THE_FLAG, 5, -1, [0, 1])) else { eprintln!("skip: NF_ISO not set"); return };
+    p.a.sim.as_mut().unwrap().drones.subtitle_track.enabled = true;
+    p.b.sim.as_mut().unwrap().drones.subtitle_track.enabled = false;
+    let (flag1, base0) = {
+        let o = &p.m().objects_rt;
+        (o.flags[1].as_ref().unwrap().home, o.bases[0].unwrap())
+    };
+    ticks(&mut p, 10, &row(None, 2)); // past the spawn window
+    let away = far_from(&p, &[flag1, base0], 1);
+    place(&mut p, 1, away, 0.0);
+    place(&mut p, 0, flag1, 0.0);
+    ticks(&mut p, 3, &row(None, 2));
+    let lines = |s: &Sim| s.hud.subs[1].iter().map(|m| m.text.clone()).collect::<Vec<_>>();
+    assert_eq!(lines(p.a.sim.as_ref().unwrap()), ["MI6 Flag captured"]);
+    assert!(lines(p.b.sim.as_ref().unwrap()).is_empty(), "the option off shows nothing");
+    place(&mut p, 0, base0, 0.0);
+    ticks(&mut p, 3, &row(None, 2));
+    assert_eq!(lines(p.a.sim.as_ref().unwrap()), ["MI6 Flag captured", "Phoenix Team scored"]);
+}
+
 #[test]
 fn arena_deathmatch_online() {
     let Some(mut p) = start(settings(scenario::DEATHMATCH, 1, -1, [0, 0])) else { eprintln!("skip: NF_ISO not set"); return };
@@ -358,10 +393,16 @@ fn capture_the_flag_online() {
     ticks(&mut p, 2, &row(None, 2));
     let f = p.m().objects_rt.flags[1].as_ref().unwrap();
     assert_eq!((f.state, f.carrier), (1, Some(0)), "the enemy contact takes the flag");
+    for sim in [p.a.sim.as_ref().unwrap(), p.b.sim.as_ref().unwrap()] {
+        assert!(sim.drones.audio.live_ids().contains(&0x14c), "both machines hear the take");
+    }
     place(&mut p, 0, base0, 0.0);
     ticks(&mut p, 2, &row(None, 2));
     assert_eq!(p.m().game.team_scores, [1.0, 0.0], "the capture scores the taker's team");
     assert_eq!(p.m().game.slots[0].score, 1.0, "and the carrier");
+    for sim in [p.a.sim.as_ref().unwrap(), p.b.sim.as_ref().unwrap()] {
+        assert!(sim.drones.audio.live_ids().contains(&0x14b), "both machines hear the capture");
+    }
     assert_eq!(p.m().objects_rt.flags[1].as_ref().unwrap().state, 0, "the flag reset home");
     run_to_end(&mut p, 20);
 }

@@ -70,7 +70,7 @@ fn subtitles_off_drops_the_script_lines_in_the_sim() {
     for _ in 0..230 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     let sim = scene.sim.as_ref().unwrap();
     assert!(sim.drones.script_msgs.is_empty(), "the flag gate dropped the add (script_msgs)");
-    assert!(!sim.hud.msgs.iter().any(|m| m.script), "no script line reached the HUD");
+    assert!(sim.hud.subs.iter().flatten().next().is_none(), "no script line reached the HUD");
     assert!(sim.drones.subtitle_track.is_empty(), "the track is empty");
     assert_eq!(sim.drones.subtitle_track.active_subtitle(sim.drones.frame), None);
 }
@@ -99,7 +99,7 @@ fn subtitles_on_queues_the_line_on_the_track_at_the_right_tick() {
     let frame = sim.drones.frame;
     assert_eq!(sim.drones.subtitle_track.active_subtitle(frame), Some(0x0600_0068),
         "the line the script queued (Wait(183) → tick 184) is active at frame {frame}");
-    assert!(sim.hud.msgs.iter().any(|m| m.script && (m.life - 1132.0).abs() < 1e-3),
+    assert!(sim.hud.subs.iter().flatten().any(|m| (m.life - 1132.0).abs() < 1e-3),
         "the HUD drain consumed the add into a 1132-tick script line (the game's Text_UpdateMsg head)");
     // The track's line matches the push the Sim made: start = the script tick (184), end = +1132.
     let lines = sim.drones.subtitle_track.lines();

@@ -612,10 +612,17 @@ pub enum StatusPart {
 
 /// The MP status line (`StatusSpr`, `MPStatusInfo` @0x2a4740: (256,48), font 2 centred, white
 /// [L]) as `MP_SortOutWhoWon` 0x1848d0 / `MP_Update` 0x184bd0 case 2 write it, in print order
-/// (the caller binds and concatenates). Empty while playing.
+/// (the caller binds and concatenates). Empty while playing, unless a site round's result holds
+/// the sprite [M 0x1870a0:117-123,146-158]; the restart wait swaps it for label 0x2000049 at 2.5 s
+/// [M 0x184bd0:79-84].
 pub fn status_line(m: &MpMatch) -> Vec<StatusPart> {
     use super::MpEndStatus;
-    if m.game.state < 3 { return Vec::new(); }
+    if m.game.state == 6 && 2.5 <= m.game.restart_timer {
+        return vec![StatusPart::Label(0x0200_0049)];
+    }
+    if m.game.state < 3 || m.game.state == 6 {
+        return m.objects_rt.site_status.map(StatusPart::Label).into_iter().collect();
+    }
     let lives = m.settings.scenario == scenario::DEATH_LIMIT_FFA;
     match &m.game.end_status {
         // 0x10: "Player %s Won" 0x2000022 [M :21-41]; else "%s%s %s" (0x2000024, name, 0x2000027) [M :62-70].
