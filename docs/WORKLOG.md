@@ -63,3 +63,22 @@ sign broke fix_truck_live's 05 spawn plate), retune the 0a ring's #614 jump pres
 low_beam_621_fires_standing un-ignored green; walkreal_0700000a_live, fix_truck_live,
 interactables_07000011_live, every trigger/beam/laser test, every walkreal_*_live green; full
 suite total line.
+
+Session result (06:35 UTC): the glist PLANE RECORDS parsed and landed — the record is 10 bytes at
+the leaf s16 area base + plane·2: the normal 3×i16 · 2⁻¹⁴ used RAW plus the f32 distance whose
+bits span the record's halfwords +3/+4 [D probe: 0a beam #621 d-bits 0xBA55912C = −8.34e-4 through
+its own tri, 011 #235 d ≈ 0, 05 plate d = −0.0; the prior "4-i16 (n×1e-4, d)" reading was
+imprecise]. `Collision::triangles_with_planes` emits them; the trigger parse transforms each with
+the placement matrix (n_w = R·n_l, d_w = d_l − n_w·t — the record's own side); `Trigger.planes`
+carries them, `seg_touches_tri_raw` takes the record plane, `touched_by` (r > 0) wired raw, the
+standing toucher switched to `player.body`, `low_beam_621_fires_standing` UN-IGNORED and GREEN
+(walkreal_0700000a_live 9/4/2), the ring's #614 presses at 1.8. The record planes ride the key
+motion (`Motion.local_planes`, re-posed per step) — the beams SWEEP across their corridors and
+the ring's 4 failures are the sweep phase meeting the jumper's descent (the standing segment
+reaches 0.45 under the root; the #614 live bounds were caught at z 10.73..11.01 vs the static
+line 13.03 [D touchprobe]); the sweep-aware press windows were built, measured, and reverted for
+time (in the history). fix_truck_live still 0/2 (the plate's record plane is exactly through its
+tris and the law should fire — the boot tick's toucher state is the open lever);
+interactables_07000011_live 15/1; the full suite did not fit the window (the build consumed it);
+every walkreal_*_live beyond 0a still owes its run. Report:
+docs/reports/trigger-plane-records.md.
