@@ -1026,6 +1026,16 @@ pub struct HudState {
 }
 
 impl HudState {
+    /// An INFO pane add. In multiplayer `Text_AddMsg` 0x1b0c30:94-132 divides every queued type-1
+    /// line's timer by the new count, so a burst of lines shortens instead of queueing.
+    fn push_info(&mut self, m: Msg, mp: bool) {
+        let n = self.info_msgs.len() as f32;
+        if mp && n > 0.0 {
+            self.info_msgs.iter_mut().for_each(|q| q.time /= n + 1.0);
+        }
+        self.info_msgs.push_back(m);
+    }
+
     /// The per-BOOT text globals the game keeps in .sdata across level loads — `DoorMsg` 0x30cd04
     /// (the door-hint cap of 3) and `LoadMsg` 0x30cd08 (the exit-hint cooldown) [M 0x1a7810:78-79,
     /// 195-196; 0x1a7b98-0x1a7bc8]. The app calls this on every level swap so a new level's Sim
@@ -5973,6 +5983,7 @@ impl Sim {
             self.hud.subs.iter_mut().for_each(|q| q.clear());
         }
         let lang = self.lang.take();
+        let is_mp = self.mp.is_some();
         let mut new_msgs: std::collections::VecDeque<Msg> = Default::default();
         let sub = !self.drones.hud_frozen as usize;
         if let Some(lang) = lang.as_ref() {
@@ -6000,13 +6011,13 @@ impl Sim {
         // (`Txt_BindLabel` runs inside ThirdIcon_Update 0x196e80:41 / Hint_Update 0x1b3380:31),
         // before the pane could ever draw, so this sits before the cut-scene freeze like the
         // script-op drain above; the pane display waits on the viewer gate (below).
-        for (label, time) in self.hud.info_labels.drain(..) {
+        for (label, time) in std::mem::take(&mut self.hud.info_labels) {
             let text = lang.as_ref().and_then(|l| l.bind(label)).unwrap_or("").trim().to_string();
 
             if !text.is_empty() {
                 let mut m = Msg::new(text, time);
                 m.label = label;
-                self.hud.info_msgs.push_back(m);
+                self.hud.push_info(m, is_mp);
             }
         }
         // The keycode messages (`PCQWorm_Update` 0x1aee20:24-29, `Lock_Update` 0x1ae3d8:246-257):
@@ -6019,7 +6030,7 @@ impl Sim {
             if !text.is_empty() {
                 let mut m = Msg::new(text, time);
                 m.label = 0x200_0014;
-                self.hud.info_msgs.push_back(m);
+                self.hud.push_info(m, is_mp);
             }
         }
         // mp-hud-real: the kill messages addressed to this machine's slot (`MP_PlayerKilled`
@@ -6039,7 +6050,7 @@ impl Sim {
                 if !text.is_empty() {
                     let mut msg = Msg::new(text, ticks as f32);
                     msg.label = label;
-                    self.hud.info_msgs.push_back(msg);
+                    self.hud.push_info(msg, is_mp);
                 }
             }
             if m.kill_msgs.iter().any(|&(to, _)| to == me) {
@@ -6051,7 +6062,7 @@ impl Sim {
                     if !text.is_empty() {
                         let mut msg = Msg::new(text, nf_game::mp::hud::KILL_MSG_TICKS as f32);
                         msg.label = nf_game::mp::hud::KILL_MSG_LABEL;
-                        self.hud.info_msgs.push_back(msg);
+                        self.hud.push_info(msg, is_mp);
                     }
                 }
             }
@@ -6081,7 +6092,10 @@ impl Sim {
             if !text.is_empty() { new_msgs.push_back(Msg::new(text, 180.0)); }
         }
         self.hud.taken_seen = self.drones.taken.len();
-        for m in new_msgs { self.hud.msgs.push_back(m); }
+        // `Text_AddMsg` 0x1b0c30:90-93: multiplayer turns type 6 into 1, the INFO pane's.
+        for m in new_msgs {
+            if is_mp { self.hud.push_info(m, true) } else { self.hud.msgs.push_back(m) }
+        }
         self.lang = lang;
         // The mission layer's events (`Mission_Update` 0x182c60 / `Mission_MonitorObjectives`
         // 0x1827d8, docs/systems/mission.md): type-2 objective notices, the FailLabel, the type-3
