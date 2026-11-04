@@ -4,3 +4,8 @@ Continue origin/s/level-08-00agent-hind (merge origin/master first) and read its
 
 ---
 claimed-by: sandbox7 at 2026-11-04T06:52Z
+
+---
+## Report (done, 2026-11-04T09:33Z)
+
+Closed by the driver: the report is on `s/level-08-pane-shootout` (docs/reports/level-08-pane-shootout.md); the worker didn't run finish.sh.
