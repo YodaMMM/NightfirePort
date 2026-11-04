@@ -74,3 +74,21 @@ weapon 0x1c); 02 still dies in the courtyard kill zone (the stair/lane sniper 0x
 hit). Branch cut from origin/master a71f9233 (the fire_through_disabled and switch_dry opt-ins
 are there). Real input only, no top-ups. Remove each ignore when green; every walkreal_*_live;
 full suite total line.
+
+- [01:55 UTC] Round-1 outcome. Reproduced the 03 death exactly (t59112, (-1.38,5.96,-34.47), 12.0
+  health at the exit lawn). Diffed NF_RF_TRACE ledgers old-branch vs master: the runs are IDENTICAL
+  to t48500 (same fights, same ticks — fight#8 t21426 at 43.6 both). The divergence is the servant-0
+  captor flank: the green run's reactive fights killed #19 -> #18 -> #2 (12.0 total, ended 28.8);
+  master's door routes moved the captor ~1.4u, the flank spot moved with him, the pick flipped to
+  #2 first and #18 survived into a second fight whose 28.8 volley (40.8 -> 12.0) is the whole green
+  margin. Built a d3+si0 pre-clear (rally at the green fight spot (36.5,5.7), cluster hp-ascending,
+  real fire): the fights resolve at ZERO cost (#18/#19/#2 killed true, health held) but the rally
+  APPROACH crosses the door-8 gun line (nav detours through the threshold (35.07,2.13); 40.8 ->
+  15.6-19.2) and a straight walk_to wedges at the door. Also measured: the post-rescue west-lawn
+  leg from the rally detours through the (35.6,8.7) door and stalls 29x3000 ticks (87000); the
+  green run's own run stalled the SAME mid-courtyard double doors (10.0/11.8,-20.2) 2x3000 — the
+  stalls predate the door routes, the east one is new. Ignore re-set with the three levers; 03
+  binary 6/0 + 1 ignored. The 02 sister untouched (still parked, the courtyard kill zone). Next
+  round: an approach that stays north of door 8, the east-door stall, and the exit-lawn #16
+  post-kill volley question (a "killed true" target landing 12.0 after his fight — possible
+  zombie-drone sim smell worth a look).
