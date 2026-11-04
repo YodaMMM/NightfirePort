@@ -121,7 +121,7 @@ fn shoot_guard_through_panes(
         }).collect()
     };
     for stand in stands {
-        w.walk_nav_to(*stand, "the glass stand", 1.6);
+        w.walk_nav_to(*stand, "the glass stand", 0.7);
         let sheet_of = |lo: [f32; 3], hi: [f32; 3]| (lo[axis] + hi[axis]) / 2.0;
         let side = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -159,7 +159,13 @@ fn shoot_guard_through_panes(
                         let mut inside = true;
                         for &k in &others {
                             let at = eye[k] + s * (chest[k] - eye[k]);
-                            if at < span[k].0 - 0.6 || at > span[k].1 + 0.6 { inside = false; break; }
+                            // The REAL span (a 0.05 numeric tolerance, no slack): a crossing
+                            // inside the ±0.6 slack but outside the actual sheet flies through
+                            // fresh air — the round never touches the glass and the pane never
+                            // drains (the measured failed run: the nearer guard 16's crossing
+                            // landed 0.43 north of sheet 177 and starved the real-crossing
+                            // guard 8 of every tap).
+                            if at < span[k].0 - 0.05 || at > span[k].1 + 0.05 { inside = false; break; }
                         }
                         if !inside { continue; }
                         let dist = dxz(d.pos, bp);
@@ -181,9 +187,16 @@ fn shoot_guard_through_panes(
             match plan {
                 Some((err, perr, gi, pane)) if err.abs() < 0.02 && perr.abs() < 0.028 && fire_ok(&w.scene.sim.as_ref().unwrap()) => {
                     let input = Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() };
-                    eprintln!("[glass-tap] t{t} pane {pane} guard {gi} err {err:.3} clip {}", w.scene.sim.as_ref().unwrap().gun.clip);
-                    w.tick_fire(input);
-                    taps.push((t, gi));
+                    // Pulse the trigger (fire on even ticks only): the pistol is semi-auto —
+                    // a HELD trigger refires never, so a converged hold spent exactly one
+                    // round per stand (the measured failed run's clip 7→6 then flat).
+                    if t % 2 == 0 {
+                        eprintln!("[glass-tap] t{t} pane {pane} guard {gi} err {err:.3} clip {}", w.scene.sim.as_ref().unwrap().gun.clip);
+                        w.tick_fire(input);
+                        taps.push((t, gi));
+                    } else {
+                        w.tick(input, false);
+                    }
                 }
                 Some((err, perr, _, _)) => {
                     let input = Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() };
@@ -581,9 +594,26 @@ fn the_08_station_shot_crosses_to_the_ambush_guard() {
         ("the x-110 south", [110.0, 33.7, -117.0], 1.3),
         ("the z-118 lane", [108.5, 33.5, -118.3], 1.2),
         ("the booth apron", [108.0, 33.5, -119.6], 1.0),
-        ("the booth mouth", [107.8, 33.5, -120.6], 0.9),
     ] {
         w.walk_to(Wp::new(at[0], at[1], at[2]).r(r), name);
+    }
+    // ── through the mouth door — on the MEASURED doorway span ──
+    // The door's pos (107.75, 33.5, −119.37) is NOT the passage: with the leaf OPEN the
+    // clear span is x 106.6..107.6 at every capsule height 33.7..35.3 [L the passage scan
+    // in this test's run log; the x ≥ 107.8 piece is WALL — the old 107.8-aimed leg ground
+    // into its face, the capsule hung grounded=false for the full 6000-tick cap]. The
+    // doorway legs aim the span centre: north of the wall first (the apron stands at x 108.2
+    // — the straight line to the booth clips the wall's east face), then through on the
+    // centreline x ≈ 107.1. The door auto-opens on approach (measured state 0x2 → 0x4,
+    // pos01 1.0, both runs) and the leaf's keys never translate it out of the frame (3 keys,
+    // identical pos [L]) — the swing parks clear of the 106.6..107.6 span.
+    w.walk_to(Wp::new(107.1, 33.5, -119.0).r(0.5), "the doorway north");
+    w.walk_to(Wp::new(107.05, 33.5, -120.8).r(0.9), "the booth mouth");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let in_booth = sim.bond.pos[0] > 105.25 && sim.bond.pos[0] < 109.25 && sim.bond.pos[2] < -119.9;
+        assert!(in_booth, "the mouth crossing failed — bond at {:?}", sim.bond.pos);
+        eprintln!("[glass-08] inside the booth at {:?}", sim.bond.pos);
     }
     // The panes' filters FIRST (the 06 lesson) + the pair's state at the booth.
     {
@@ -600,10 +630,13 @@ fn the_08_station_shot_crosses_to_the_ambush_guard() {
             }
         }
     }
-    // The booth interior stands (the east sheet 177 crossing; see the doc). The helper walks
-    // each stand on nav (the entry is the open north face — the route's own probe showed the
-    // node leg passes north of the sheets).
-    let s = shoot_guard_through_panes(&mut w, &[177, 170], &[[107.25, 34.5, -121.0], [108.5, 34.5, -120.6]], 0, 1500, |_| true)
+    // The booth interior stands (the east sheet 177 crossing; see the doc). The stands sit
+    // DEEP south (z −121.4): from the booth's north edge the crossings to the live guards all
+    // land NORTH of sheet 177's real span (−122.0..−120.12) — inside the ±0.6 slack but
+    // OUTSIDE the glass, so the rounds fly through fresh air and the pane never drains (the
+    // measured failed run). From z −121.4 the far deck guard 8's chest line crosses x 109.25
+    // at z ≈ −121.25, y ≈ 36.2 — inside the real sheet.
+    let s = shoot_guard_through_panes(&mut w, &[177, 170], &[[107.25, 34.5, -121.4], [106.5, 34.5, -121.4]], 0, 1500, |_| true)
         .expect("a guard took the round through the live station pane");
     eprintln!("[glass-08] guard {} pane {} tap t{} died t{} hp {:.2} -> {:.2}",
         s.guard, s.pane, s.tap_t, s.died_t, s.hp_before, s.hp_after);
