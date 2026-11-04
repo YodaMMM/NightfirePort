@@ -210,6 +210,10 @@ pub struct Motion {
     pub matrix: [[f32; 4]; 4],
     /// The glist collision in object space.
     pub local: Vec<[V3; 3]>,
+    /// The glist's OWN plane records in object space (the tri's 4th u16 → (n · 2⁻¹⁴, d f32) [M asm
+    /// 0x10a1d8-0x10a1e8]) — the raw narrow phase's authoritative side rides the posed matrix with
+    /// the triangles (trigger-plane-records).
+    pub local_planes: Vec<([f32; 3], f32)>,
 }
 
 impl Motion {
@@ -514,25 +518,41 @@ impl Trigger {
         Some(t)
     }
 
-    /// The spline step of `Trigger_Update` 0x1b1a78:60-70 (after the lock return, before
-    /// `Trigger_Hit`): the volume follows the posed matrix.
-    pub fn step_motion(&mut self) {
-        if let Some(m) = self.motion.as_mut() {
-            let tris = m.advance();
-            self.set_tris(tris);
-        }
-    }
-
     /// New world triangles (a moving trigger). The planes default to the winding cross (the
     /// pre-record reading — `seg_touches_tri_raw`'s doc); the level parse overwrites them with the
-    /// glist's own plane records (`Collision::triangles_with_planes`). A motion step rebuilds them
-    /// from the step's winding — the record planes ride the parse-time matrix only (the moving
-    /// trigger residual at `Motion`; the battery's glists are static).
+    /// glist's own plane records (`Collision::triangles_with_planes`), and every motion step
+    /// re-poses the record planes with the step's matrix (`Motion::advance`).
     pub fn set_tris(&mut self, tris: Vec<[V3; 3]>) {
         let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
         for t in &tris { for v in t { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } } }
         let planes = tris.iter().map(|t| winding_plane(t)).collect();
         (self.tris, self.lo, self.hi, self.planes) = (tris, lo, hi, planes);
+    }
+
+    /// The spline step of `Trigger_Update` 0x1b1a78:60-70 (after the lock return, before
+    /// `Trigger_Hit`): the volume follows the posed matrix — triangles AND plane records.
+    pub fn step_motion(&mut self) {
+        // The record planes ride the pose: n_w = R·n_l, d_w = d_l − n_w·t (the rigid transform
+        // of the game's local-plane test; non-finite marks keep the winding plane). Computed
+        // after the borrow ends: the pose happens in `advance`, the re-pose needs the new matrix.
+        let posed: Vec<([f32; 3], f32)> = match self.motion.as_mut() {
+            Some(m) => {
+                let tris = m.advance();
+                let mp: Vec<([f32; 3], f32)> = m.local_planes.iter().map(|(n_l, d_l)| {
+                    if !n_l.iter().all(|x| x.is_finite()) || !d_l.is_finite() { return (*n_l, *d_l); }
+                    let nw = [n_l[0] * m.matrix[0][0] + n_l[1] * m.matrix[1][0] + n_l[2] * m.matrix[2][0],
+                              n_l[0] * m.matrix[0][1] + n_l[1] * m.matrix[1][1] + n_l[2] * m.matrix[2][1],
+                              n_l[0] * m.matrix[0][2] + n_l[1] * m.matrix[1][2] + n_l[2] * m.matrix[2][2]];
+                    (nw, d_l - (nw[0] * m.matrix[3][0] + nw[1] * m.matrix[3][1] + nw[2] * m.matrix[3][2]))
+                }).collect();
+                self.set_tris(tris);
+                mp
+            }
+            None => return,
+        };
+        for (i, (nw, dw)) in posed.into_iter().enumerate() {
+            if i < self.planes.len() && nw.iter().all(|x| x.is_finite()) && dw.is_finite() { self.planes[i] = (nw, dw); }
+        }
     }
 
     /// The trigger's bounding-box centre (for scenario placement — put Bond at a TouchOnce trigger's centre to
@@ -889,7 +909,8 @@ pub fn build(level: &Level) -> Vec<Trigger> {
             let step = if rate > 0.0 { last as f32 / rate } else { 0.0 };
             let local: Vec<[V3; 3]> = target.and_then(|(om, oi)| level.maps[om].objects[oi].collision.as_ref())
                 .map(|c| c.triangles()).unwrap_or_default();
-            Box::new(Motion { keys: keys.clone(), last, step, t: 0.0, matrix: mx, local })
+            Box::new(Motion { keys: keys.clone(), last, step, t: 0.0, matrix: mx, local,
+                local_planes: src.iter().map(|(_, n, d)| (*n, *d)).collect() })
         });
         // Touch triggers on channel 0x7D only work on level 0x07001500.
         match Trigger::from_params(i, kind, q, tris).map(|mut t| {
@@ -990,7 +1011,7 @@ mod tests {
         let key = |x: f32| crate::door::Key { pos: [x, 0.0, 0.0], quat: [0.0, 0.0, 0.0, 1.0] };
         let motion = |t: &mut Trigger| {
             let local = t.tris.clone();
-            t.motion = Some(Box::new(Motion { keys: vec![key(0.0), key(10.0), key(20.0)], last: 2, step: 2.0 / 4.0, t: 0.0, matrix: crate::door::interp(&[key(0.0), key(10.0)], 0, 1, 0.0, true).unwrap(), local }));
+            t.motion = Some(Box::new(Motion { keys: vec![key(0.0), key(10.0), key(20.0)], last: 2, step: 2.0 / 4.0, t: 0.0, matrix: crate::door::interp(&[key(0.0), key(10.0)], 0, 1, 0.0, true).unwrap(), local, local_planes: Vec::new() }));
         };
         let mut ch = Channels::default();
         let mut once = plate(kind::TOUCH_ONCE, 0x23, 8, vec![]);
