@@ -5,3 +5,6 @@ Continue from origin/s/drone-block-swaps-g055-4; merge origin/master first. The 
 - walkreal_07000011_live::walk_spawn_to_the_lower_floor_load_point_real_damage (panic at common/walker_b2.rs:170)
 - walkreal_07000011_live::walk_spawn_to_the_lower_floor_load_point_real_damage_agent (panic at common/walker_b2.rs:641)
 For each, say what changed for the guards on that level, then re-route or re-pin the walk with the opt-in levers the 14 and 16 walks used. Run every walkreal binary and the full suite, and report the total line.
+
+---
+claimed-by: sandbox3 at 2026-11-04T20:07Z
