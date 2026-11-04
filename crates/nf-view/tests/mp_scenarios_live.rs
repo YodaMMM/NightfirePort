@@ -325,6 +325,30 @@ fn scenario_sounds_are_in_the_arena_banks() {
     }
 }
 
+/// The scenario event lines reach the HUD with the game's text, and only with the Subtitles
+/// option on: `Text_AddMsg` drops type-4 adds while it is off [M 0x1b0c30:148].
+#[test]
+fn flag_lines_follow_the_subtitles_option() {
+    let Some(mut p) = start(settings(scenario::CAPTURE_THE_FLAG, 5, -1, [0, 1])) else { eprintln!("skip: NF_ISO not set"); return };
+    p.a.sim.as_mut().unwrap().drones.subtitle_track.enabled = true;
+    p.b.sim.as_mut().unwrap().drones.subtitle_track.enabled = false;
+    let (flag1, base0) = {
+        let o = &p.m().objects_rt;
+        (o.flags[1].as_ref().unwrap().home, o.bases[0].unwrap())
+    };
+    ticks(&mut p, 10, &row(None, 2)); // past the spawn window
+    let away = far_from(&p, &[flag1, base0], 1);
+    place(&mut p, 1, away, 0.0);
+    place(&mut p, 0, flag1, 0.0);
+    ticks(&mut p, 3, &row(None, 2));
+    let lines = |s: &Sim| s.hud.msgs.iter().map(|m| m.text.clone()).collect::<Vec<_>>();
+    assert_eq!(lines(p.a.sim.as_ref().unwrap()), ["MI6 Flag captured"]);
+    assert!(lines(p.b.sim.as_ref().unwrap()).is_empty(), "the option off shows nothing");
+    place(&mut p, 0, base0, 0.0);
+    ticks(&mut p, 3, &row(None, 2));
+    assert_eq!(lines(p.a.sim.as_ref().unwrap())[..2], ["MI6 Flag captured", "Phoenix Team scored"]);
+}
+
 #[test]
 fn arena_deathmatch_online() {
     let Some(mut p) = start(settings(scenario::DEATHMATCH, 1, -1, [0, 0])) else { eprintln!("skip: NF_ISO not set"); return };

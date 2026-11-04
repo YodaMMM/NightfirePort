@@ -95,6 +95,23 @@ fn a_kill_queues_the_killers_message() {
 /// codename + " " + "Won" (0x2000024, name, 0x2000027 [M 0x1848d0:62-70]); the lives scenario
 /// 0x10 uses "Player %s Won" 0x2000022 [M :21-41]; a time-up outside 0x10 prints 0x2000028 +
 /// 0x1c9 [M 0x184bd0:42-50]. Sister: a draw is 0x2000024 + 0x2000023.
+/// A site round's result holds the status line through the restart wait; 2.5 s in it swaps to
+/// the restart label, and the restart clears it [M 0x1870a0:146-158, 0x184bd0:79-89]. Sister: the
+/// wait never shows the time-up text.
+#[test]
+fn the_site_result_holds_the_status_line() {
+    let mut m = MpMatch::init(MpSettings::deathmatch(0x0700_0011));
+    m.game.state = 6;
+    m.objects_rt.site_status = Some(0x0200_002f);
+    assert_eq!(status_line(&m), vec![StatusPart::Label(0x0200_002f)]);
+    m.game.restart_timer = 2.5;
+    assert_eq!(status_line(&m), vec![StatusPart::Label(0x0200_0049)]);
+    m.game.state = 0;
+    m.game.restart_timer = 0.0;
+    m.restart_scenario(&mut nf_game::drone::Rng::new(1));
+    assert!(status_line(&m).is_empty());
+}
+
 #[test]
 fn the_status_line_follows_the_sort() {
     let mut m = make(scenario::DEATHMATCH);

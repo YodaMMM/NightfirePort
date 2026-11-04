@@ -5974,6 +5974,21 @@ impl Sim {
                 let text = lang.bind(label).unwrap_or("").trim().to_string();
                 if !text.is_empty() { new_msgs.push_back(Msg { script: true, ..Msg::new(text, time as f32) }); }
             }
+            // The scenario event lines: `Text_AddMsg(-1, 0, 4, ..)` — type 4, so the Subtitles
+            // option gates them like every other non-0xff line [M 0x1b0c30:148].
+            if let Some(m) = self.mp.as_mut() {
+                let shown = self.drones.subtitle_track.enabled;
+                for (label, arg) in m.objects_rt.msgs.drain(..) {
+                    let text = match arg {
+                        Some(a) => lang.format(label, &[lang.bind(a).unwrap_or("").to_string()]),
+                        None => lang.bind(label).unwrap_or("").to_string(),
+                    };
+                    if shown && !text.is_empty() {
+                        let ticks = nf_game::mp::rules::MP_MSG_TICKS as f32;
+                        new_msgs.push_back(Msg { script: true, ..Msg::new(text, ticks) });
+                    }
+                }
+            }
         }
         // The INFO pane's label drain (fix-context-hints): the game binds at POST time
         // (`Txt_BindLabel` runs inside ThirdIcon_Update 0x196e80:41 / Hint_Update 0x1b3380:31),
@@ -6006,6 +6021,15 @@ impl Sim {
         // 0xb4)` [M]) — the MP info pane draws them (`HUD_MPUpdateStatusPane` 0x19ca88).
         let me = self.mp_local_slot;
         if let Some(m) = self.mp.as_mut() {
+            let posted = std::mem::take(&mut m.objects_rt.slot_msgs);
+            for (_, label) in posted.into_iter().filter(|&(to, _)| to == me) {
+                let text = lang.as_ref().and_then(|l| l.bind(label)).unwrap_or("").to_string();
+                if !text.is_empty() {
+                    let mut msg = Msg::new(text, nf_game::mp::rules::MP_MSG_TICKS as f32);
+                    msg.label = label;
+                    self.hud.info_msgs.push_back(msg);
+                }
+            }
             if m.kill_msgs.iter().any(|&(to, _)| to == me) {
                 let mine: Vec<usize> = m.kill_msgs.iter().filter(|&&(to, _)| to == me).map(|&(_, v)| v).collect();
                 m.kill_msgs.retain(|&(to, _)| to != me);

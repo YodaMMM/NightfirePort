@@ -242,10 +242,17 @@ fn demolition_destroy_own_goal_and_restart() {
     m.damage_site(1500.0, 1);
     assert_eq!(m.objects_rt.site.as_ref().unwrap().state, 500);
     assert_eq!(m.game.state, 0, "still standing");
+    // a defender's hit warns that player, once per 1.5 s; an attacker's never does [M 0x1870a0:96-107]
+    assert!(m.objects_rt.slot_msgs.is_empty());
+    m.damage_site(1.0, 0);
+    m.damage_site(1.0, 0);
+    assert_eq!(m.objects_rt.slot_msgs, [(0, 0x200002b)]);
+    m.objects_rt.site.as_mut().unwrap().state = 500;
     m.damage_site(1000.0, 1);
     assert_eq!(m.game.team_scores, [0.0, 1.0], "the attacking team scores [M 0x1870a0:125-132]");
     assert_eq!(m.game.slots[1].score, 1.0, "the last hitter's personal point");
     assert_eq!(m.game.state, 6, "the round is over at once [M :160]");
+    assert_eq!(m.objects_rt.site_status, Some(0x200002e), "MI6 destroyed target [M :146-158]");
     tick(&mut m, 300, &mut rng); // the 5 s restart timer [M 0x184bd0:79-92]
     assert_eq!(m.game.state, 0, "back to playing");
     assert_eq!(m.game.team_scores, [0.0, 1.0], "the restart keeps the scores (multi-round)");
@@ -519,6 +526,17 @@ fn ctf_events_raise_their_sounds() {
     assert_eq!(m.objects_rt.sounds, [0x14c, 0x14f], "the drop");
     m.touch_flag(0);
     assert_eq!(m.objects_rt.sounds, [0x14c, 0x14f, 0x14f], "the return");
+    // the lines: flag 0 is Phoenix's (0x1c7); from its base "captured", then "dropped", "returned"
+    assert_eq!(
+        m.objects_rt.msgs,
+        [(0x200003a, Some(0x1c7)), (0x2000039, Some(0x1c7)), (0x200003b, Some(0x1c7))]
+    );
+    // sister: taking it where it lies is "picked up", not "captured" [M 0x1861a8:182,265]
+    m.touch_flag(1);
+    m.player_killed(1, Some(0), false, false, &mut rng);
+    m.objects_rt.msgs.clear();
+    m.touch_flag(1);
+    assert_eq!(m.objects_rt.msgs, [(0x200003c, Some(0x1c7))]);
 }
 
 /// The hill sounds on stepping on, once per 5 s per slot, not every tick
