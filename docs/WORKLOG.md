@@ -44,3 +44,23 @@ re-land chain (cc fix bd007c18f + strafe drift 74f660327 + the 3.6 vent windows 
 crouch toggle) so the mezzanine west lip (x ~45.1, z ~39.9) stops holding Bond, keeping
 the d1 walk green; (3) the d2 with_real_damage wrap (55f0b4055); (4) the d3 un-ignore.
 Every pin cited [M]/[D]/fresh-boot [L]; full suite before push if it fits.
+
+### real-health-14-00agent-4 outcome (2026-11-04 ~20:40 UTC)
+
+The honest ref rule LANDED: `Bond::honest_ref` (opt-in, default false = master everywhere)
+makes `capsule_tri_contact` run the game's push tail faithfully — a failed ref-guard means
+NO push and NO contact [M Intersect_CylGeom 0x109da0:431-447, decompile re-verified this
+session: the push + the pick bit + the best-hit record all sit inside the
+`dot(q−+0x50,n)>0 && |q−+0x50|<radius` arm, the record tail LAB_0010a738 reached only
+through the push's goto]; up-facing contacts keep the fallback stand-in ([S], measured:
+killing them drops the d1 walk out of the world at tick 745, y −157.15). The lip mechanism
+PROVEN: probe14_lip_release — honest releases the mezzanine west lip in 28 ticks; the
+fallback pins x 45.1338 (the -3's number reproduced; the hold identified: the lip's west
+face n=(1,0,0) radial push cancelling the westward crawl). The cc fix + the re-land chain
+cherry-picked (4f6352d7a/fbdded0c6) and measured WITH the flag: honest on `_at` = 2/7 (the
+d1's spawn-area fall at tick 745; the non-`_at` walkers jam at the lip without the flag);
+honest on every walker = 1/8 — the coupled chain does NOT close this window. The tree
+returns to the -3 tip's green set (the re-land parked in history, the test file byte-back
+to a3b83fcae): walkreal_07000014_live 9 passed / 0 failed / 1 ignored measured whole (197
+s), fix_npc_doors_live 1/0, fix_guard_misc_live 6/0, nf-game lib 659/0/5. The d2 wrap +
+d3 un-ignore stay parked with the chain. Next window's levers in the report.
