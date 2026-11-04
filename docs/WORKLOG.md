@@ -101,3 +101,36 @@ on its cap instead of the one head kill), the #447-fence pop chain (9.1, the law
 the optional #462 east mark. Real input only; no top-ups; helpers opt-in. Remove the ignore on
 walk_spawn_to_the_omega_sector_exit_real_damage_agent when green; every walkreal_*_live; the
 full suite total line.
+
+## level-15-agent-doors-2 (done, 2026-11-04 10:52 UTC)
+
+The Agent walk is GREEN un-ignored — both remaining leads landed inside the walk, no sim-code
+change, no helper change (tests/common untouched):
+
+- **The #447/#448/#449 fence pops pinned and dodged [L the run probe]**: all three mine records
+  carry damage 80, radius 10 (the v8 run printed them from the sim — `Mine::damage`/`radius`,
+  inst+0x1C/0x20 [M worldobj.rs's Mine]); the measured pops at the old threshold stand were
+  80·(1−9/10)·0.6 = 4.8 and 80·(1−8/10)·0.6 = 9.6 ×2 = 24.0 together [M Explode_Propagate
+  0x17c518's `(int)` truncation]. The shot is now taken from a mark 2.2 u north — 11.1 u off
+  #447, ≥ 10 u off all three — the pops drop to zero (the truncation floor), the assert's
+  range rule (d > 8) holds with room.
+- **The west-room grenadiers answered by PROXIMITY at the jog**: the rim mark's placement-spot
+  pre-shoots missed (the door routes walk the guards off their spots — the v7 run's
+  agent_drone_near(8.0) found none), and #10's return-fire stands cost 21.0. The sweep now
+  finds the nearest live hostile within 14 u of Bond at the jog and repeats while one stands
+  (the measured run took #11 at 12.5 u); #10's residue fell to 8.4 (his own fire during the
+  jog leg's return fire) and the walk saves 12.6 net.
+- The green run: exit USE #445 reached, Bond crosses at 26.2 health (73.8 taken of 100.0);
+  `walkreal_07000015_live` whole: **6 passed 0 failed 1 ignored** (the 1 = the d3 00 Agent
+  sister, ignored for its own documented reason — the d3 budget exceeds 100 health).
+- Every `walkreal_*_live` binary on this branch: **28 binaries, 170 passed, 0 failed, 15
+  ignored, 0 red** (01: 8/0/0, 02: 3/0/1, 03: 6/0/1, 04: 10/0/0, 05: 14/0/0, 06: 6/0/1,
+  07: 5/0/0, 08: 5/0/1, 09: 8/0/0, 0a: 12/0/3, 0b: 7/0/0, 0c: 1/0/0, 0c_barrelrow: 1/0/0,
+  0c_eastroute: 3/0/0, 0d: 1/0/1, 11: 3/0/1, 11_route: 1/0/0, 12: 3/0/0, 13: 3/0/0,
+  14: 9/0/1, 15: 6/0/1, 16: 14/0/2, 1b: 17/0/2, 41: 15/0/0, 4a: 4/0/0, 4a_satchel: 2/0/0,
+  celprobe: 2/0/0, dump: 1/0/0).
+- The full suite: nf-game **1048 passed 0 failed 8 ignored**; nf-formats+nf-audio **136 passed
+  3 failed** (the 3 = the slim-ISO disc_golden allowance, /DRIVING/MIS01.MUS BIGF). The rest of
+  nf-view's non-walkreal set did NOT fit this sandbox window (the test-binary links alone
+  outlast the remaining time; disk filled to 89% again). The next session can finish it; the
+  code surface this task touched is the one test file.
