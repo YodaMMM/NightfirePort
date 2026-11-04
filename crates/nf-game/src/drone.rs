@@ -18467,37 +18467,28 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     let (a, b, r) = player.body;
                     crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging }
                 } else {
-                    // The standing stance keeps the measured box reach below. THE GAME'S SHAPE IS
-                    // NOW PINNED (level-0a-low-beam-standing-toucher, 2026-11-03): the collide-pass
-                    // HITTEST segment itself — `Player_Collision` 0x194df0's default arm A =
-                    // pos+up·0.275 → BLData+0x760, B = pos+up·(0.55−cc) → +0x770, r 0.55 → +0x7cc,
-                    // mode 0x800 → +0x7d4 [M :315-333 + the tail]; `Collide_PickObj` 0x1eae80:96-119
-                    // picks on that segment (dist < obj_r·1.5 + h+0x8c), `Collide_Intersect`
-                    // 0x1ebaa8:226-247 refines with `Intersect_CylGeom` vs the trigger's OWN glist
-                    // (obj+0xD8 = the celglist [M Trigger_Create 0x1b1720:92]; strict dist < radius
-                    // [M 0x109da0:447], misses drop as the 1e8 sentinel [M 0x1ea398:118-158]), the
-                    // contacts mirror into both sides' obj+0xD0 [M 0x1ea398:160-215], and
-                    // `Trigger_Hit` 0x1b1fc8:27-47 credits the class-3 owners as mask-8 — the
-                    // player obj+0xFF = 3 [L ee_start_0700000a.bin: glb_players[0] @0x2d88e0 →
-                    // 0x1b78640, +0xff = 3]. That segment bottoms at B−r = pos−cc (floor+0.05
-                    // standing), inside #621's band y 0.13-0.39 [D] — the game's standing walk
-                    // fires it [L PCSX2 2026-11-02: ch 0x24 0→1 crossing z −31.0→−33.78], the box
-                    // (bottom pos−0.6 = 0.53) does not. Wiring the segment in IS testable
-                    // (low_beam_621_fires_standing went green with it) but breaks three measured
-                    // pins, each with its own open lever: (1) the 07000005 truck ride — the park
-                    // plate fires standing (the segment dips 0.163 under B to the plate; the
-                    // game's standing-RIDE contact is unmeasured, the 05-truck trace played
-                    // crouched only, and the ride's own class-5 truck contact is not ported,
-                    // trigger-port-check #11); (2) 07000011's Bond-Moment plate #235 — its glist
-                    // rides ~0.85 over pos, above even the segment's pos+0.825 top, the same
-                    // glist ref-gate/extent divergence as the 0c ch-27 bay volume documented on
-                    // Toucher::player; (3) the 0a office-ring route pin (walkreal_0700000a_live
-                    // walk_office_floor_qworm_keyboard_hatch: "no laser/alert channel fired") —
-                    // the port's walker path brushes low bands the game's footpath never did, a
-                    // route-side waypoint divergence, and the real-damage sisters die to the
-                    // laser. The next lever is the route-side tightening plus the glist
-                    // ref-gate/extent, then this arm replaces the box.
-                    crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) }
+                    // trigger-hittest-segment: the standing stance NOW USES the game's HITTEST
+                    // segment (`Player_Collision` 0x194df0's default arm A = pos+up·0.275, B =
+                    // pos+up·(0.55−cc), r 0.55 [M :315-333 + the tail] — the same case-correct
+                    // pair the crouch below rides; built at the scene's drone::Player site).
+                    // The missing half of the 2026-11-03 revert is in: the trigger cels' glist
+                    // flags carry bit 0x40 [D 0700000a #607/#614/#621 = 0x645, 07000011 #235 =
+                    // 0x50], which routes `Collide_Intersect` 0x1ebaa8:93-99 to the RAW refine —
+                    // `Intersect_CylGeom` 0x109da0's plane-crossing anchor + `Dist2Tri` 0x1dfca8's
+                    // one-sided entry + the strict < radius refine (triggers.rs
+                    // `seg_touches_tri_raw`, the asm cited there). That law fires 0a's low beam
+                    // #621 standing (the segment bottom B = pos−0.485 stands 0.16 over the band
+                    // top 0.39, inside the 0.55 refine [D band 0.13-0.39]); fires 011's Bond-Moment
+                    // plate #235 (a vertical wall quad the standing segment plane-crosses
+                    // degenerately → the centroid anchor [M 0x10a3f0-0x10a4fc]); keeps the 0c
+                    // ch-27 bay volume silent at the floor rest (the volume floor 0.755 over pos
+                    // is BEHIND the floor tri's inward plane → the code-99 miss [M 0x1dfca8:58-68]
+                    // — the old both-sided capsule fired it). The ride's class-5 truck contact
+                    // (trigger-port-check #11) stays unported: the standing-ride park-plate
+                    // silence rides on the plate quad's own winding under the one-sided law (the
+                    // trace played crouched only; the live check stands in the 0a report).
+                    let (a, b, r) = player.body;
+                    crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging }
                 }
             }],
             Some(bodies) => bodies.iter().filter(|b| b.alive).map(|b| if b.bot {

@@ -383,6 +383,63 @@ pub fn capsule_hits_tris_strict(a: V3, b: V3, r: f32, tris: &[[V3; 3]]) -> bool 
     })
 }
 
+/// The game's trigger-contact narrow phase for a capsule toucher — `Intersect_CylGeom` 0x109da0's
+/// RAW branch (the trigger cels' glist flags bit 0x40, see `Trigger::touched_by`), pinned from the
+/// disassembly (trigger-hittest-segment):
+///
+/// 1. the plane-crossing parameter of the toucher segment A→B on the triangle's plane,
+///    t = clamp(−(A·N+d)/(N·(B−A)), 0, 1), P = A + t·(B−A) [M 0x109da0 asm 0x10a200-0x10a2f0 —
+///    the numerator A·N+d and the denominator N·(B−A) with the t clamp against 0/1];
+///    a segment parallel to the plane (|N·(B−A)| ≤ 0x3951B717 ≈ 1.78e-4, asm 0x10a1c4-0x10a1fc)
+///    anchors P at the projection of the triangle's CENTROID onto the segment instead (clamped)
+///    [M asm 0x10a3f0-0x10a4fc: t = dot(centroid−A, B−A)/|B−A|², the 0x1e3ce508 ≈ 1e-20 zero check,
+///    else P = A];
+/// 2. the directional skip `(dot > 0.99987 && t > 0.5) || (dot < −0.99987 && t < 0.5)` (asm
+///    0x10a278-0x10a2e8, the 0x3f7fbe77/0xbf7fbe77 constants) — unreachable for the player's 0.76
+///    segment (|N·(B−A)| ≤ |B−A| < 0.999), live for longer swept HITTESTs;
+/// 3. `Dist2Tri` 0x1dfca8's one-sided entry: the signed plane distance of P < 0 → the code-99 miss
+///    (P behind the triangle's plane) [M 0x1dfca8:58-68 — `if ((float)auStack_80 < 0.0) { *param_6
+///    = 99; return ...}`], else the closest point on the face/edge/vertex and its distance;
+/// 4. the strict refine: the distance < radius [M asm 0x10a5c0-0x10a5d0 — `c.ole.s radius, dist;
+///    bc1t skip`].
+///
+/// NOT modelled (the residual): the first Dist2Tri's edge/vertex re-anchor — a feature code
+/// 1..7 re-queries from the closest segment point to HITTEST+0x50 [M asm 0x10a32c-0x10a3ec], a
+/// reference the player's `Player_Collision` 0x194df0 never writes (BLData+0x790 has no writer in
+/// the decomp tree; the collide pass only pushes it, `Collide_Intersect` 0x1ebaa8:353-373). The
+/// first query's distance stands in [S].
+pub fn seg_touches_tri_raw(a: V3, b: V3, r: f32, t: &[V3; 3]) -> bool {
+    let e0 = sub(t[1], t[0]);
+    let e1 = sub(t[2], t[0]);
+    let n_raw = cross(e0, e1);
+    let nn = dot(n_raw, n_raw);
+    if nn <= 1e-12 { return false; }
+    let inv = 1.0 / nn.sqrt();
+    let n = [n_raw[0] * inv, n_raw[1] * inv, n_raw[2] * inv];
+    let d = -dot(n, t[0]);
+    let ab = sub(b, a);
+    let ab2 = dot(ab, ab);
+    let ndot = dot(n, ab);
+    let (p, tt) = if ndot.abs() <= 1.78e-4 {
+        // The segment is parallel to the plane: anchor at the centroid's projection [M 0x10a3f0-].
+        let c = [(t[0][0] + t[1][0] + t[2][0]) / 3.0,
+                 (t[0][1] + t[1][1] + t[2][1]) / 3.0,
+                 (t[0][2] + t[1][2] + t[2][2]) / 3.0];
+        if ab2 <= 1e-20 { (a, 0.0) } else {
+            let tt = (dot(sub(c, a), ab) / ab2).clamp(0.0, 1.0);
+            (lerp(a, b, tt), tt)
+        }
+    } else {
+        let tt = (-(dot(a, n) + d) / ndot).clamp(0.0, 1.0);
+        (lerp(a, b, tt), tt)
+    };
+    // The directional skip (unreachable at the player's 0.76 segment, ported for exactness).
+    if (ndot > 0.999_87 && tt > 0.5) || (ndot < -0.999_87 && tt < 0.5) { return false; }
+    // One-sided: P behind the triangle's plane is the code-99 miss [M 0x1dfca8:58-68].
+    if dot(p, n) + d < 0.0 { return false; }
+    point_triangle(p, t) < r
+}
+
 fn segment_hits_triangle(a: V3, b: V3, t: &[V3; 3]) -> bool {
     let d = sub(b, a);
     let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
@@ -498,6 +555,15 @@ impl Trigger {
             && (0..3).all(|k| c.a[k] >= self.lo[k] && c.a[k] <= self.hi[k])
             && (0..3).all(|k| c.b[k] >= self.lo[k] && c.b[k] <= self.hi[k]) {
             return true;
+        }
+        if c.r > 0.0 {
+            // trigger-hittest-segment: the game's own narrow phase for the capsule touchers
+            // (`Intersect_CylGeom` 0x109da0's RAW branch — the trigger cels' glist flags carry
+            // bit 0x40 [D 0700000a #607/#614/#621 = 0x645, 07000011 #235 = 0x50; `Collide_Intersect`
+            // 0x1ebaa8:93-99 turns it into HITDATA+0x51 |= 2, which routes the refine past the
+            // ref-point law to the raw per-triangle distance, asm 0x10a530-0x10a538]). The bullets
+            // (r 0) keep the inclusive both-sided test their [M] citations measure.
+            return self.tris.iter().any(|t| seg_touches_tri_raw(c.a, c.b, c.r, t));
         }
         capsule_hits_tris(c.a, c.b, c.r, &self.tris)
     }
