@@ -4,3 +4,8 @@ Read docs/reports/real-health-14-00agent-5.md on origin/s/real-health-14-00agent
 
 ---
 claimed-by: sandbox4 at 2026-11-04T21:56Z
+
+---
+## Report (done, 2026-11-04T22:27Z)
+
+Closed by the driver: the report is on `s/level-14-landing-hover` (docs/reports/level-14-landing-hover.md); the worker didn't run finish.sh.
