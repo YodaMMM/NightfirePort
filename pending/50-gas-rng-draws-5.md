@@ -24,11 +24,4 @@ Continue from origin/s/gas-rng-draws-4; merge origin/master first. Read docs/rep
   12/2+2i. `walkreal_0700001b_live` 15/2+2i.
 - `walkreal_07000002_live` and `walkreal_07000014_live`: built, not run (the window closed
   mid-sweep; 02's walks alone cost ~6 min).
-- nf-view lib test builds clean (an earlier ALSA-1.2.16 glibc-2.43 sqrtf link failure was the
-  sandbox's user-prefix being too new; 1.2.11 fixed it — no repo change involved).
 
-## Live checks for the main agent
-
-1. 01's far pair: in PCSX2 at 00 Agent, gdbwatch the two 0x500003a guards at ≈(-7.9, 6.3,
-   -0.4) — WHEN do they start (the switch channel) relative to the hall AND? The port needs
-   their enable tick to place the pre-clear.
