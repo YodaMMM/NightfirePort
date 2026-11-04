@@ -739,6 +739,14 @@ pub struct Player {
     /// Bond stores them every tick (`Bond::move_local`); callers without a body model leave the
     /// default [0, 0] — a still target.
     pub move_local: [f32; 2],
+    /// level-05-truck-class5-contact: Bond stood on a MOVING carrier this tick (`Player_FeetOnPoint`
+    /// → `Control_InheritVelocity` 0x133e88's ride — the scene's ground-carry hit). Gates the
+    /// standing toucher's deep reach (the game's segment bottom `B−r = pos−cc`, the truck ride's
+    /// proven law) to the carrier case: the port's PARSED glist extents for the low beams/plates
+    /// ride off the game's actual placement (0a's #614 parsed tris sit ~0.9 under the corridor
+    /// floor, 07000011's #235 ~0.85 over pos — the documented ref-gate/extent divergence), so the
+    /// general deep reach stays blocked by those route pins.
+    pub riding: bool,
 }
 
 /// The player as an AI target (`DAT_00298fd0`): his position when the nodes were found, the frame (`+0x54`), and per
@@ -18569,11 +18577,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // fire through the box's pos+1.81 top, over the segment's pos+0.825) and
                     // changes only the DEEP reach: floor plates between 0.6 and cc = 1.0347 below
                     // the reference now fire, as the game's do (07000002's bunker plate 0x80 was
-                    // the old stand-in's remaining known miss of this kind). The bottom end is
-                    // `body`'s own B (`Player_Collision`'s stamped default arm — the climb/creep
-                    // arm's r-0.275 shape keeps the old box: its lateral r differs).
+                    // the old stand-in's remaining known miss of this kind). The deep bottom is
+                    // `body`'s own B (`Player_Collision`'s stamped default arm) and it lands ONLY
+                    // on a moving carrier (`riding` — the truck): the same deep reach on the FLOOR
+                    // touches the port's PARSED low-beam tris where they ride ~0.9 below the
+                    // game's actual glist (0a's #614: the parsed band y 0.25-0.53 under a corridor
+                    // whose floor is at 1.2 — the walkreal ring fired #614 through the floor,
+                    // measured on this branch; the game's own jump clears the line [L 0.9-1.3
+                    // takeoff]) — the ref-gate/extent parse divergence blocks the general deep
+                    // reach, the same lever that keeps the box's top (see above).
                     let (ba, bb, br) = player.body;
-                    let (a, b, r) = if br == 0.55 {
+                    let (a, b, r) = if br == 0.55 && player.riding {
                         (bb, [player.pos[0], player.pos[1] + 1.26, player.pos[2]], br)
                     } else {
                         ([player.pos[0], player.pos[1] - 0.05, player.pos[2]], [player.pos[0], player.pos[1] + 1.26, player.pos[2]], 0.55)
