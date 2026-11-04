@@ -716,10 +716,59 @@ fn bond_is_armed_at_the_chaser_fight_on_a_direct_load() {
 /// [M Pickup_Handler 0x18e650] auto-took ONE AR on the way; the player collects the rest while
 /// they are still a few steps behind, not from the pit floor 70 u away, past the walker's own
 /// 45 u resupply reach). The other callers keep their measured timelines.
+/// The 07000014 clear_hostiles idiom, test-local for this file: kill every live team-1 guard
+/// inside `radius` (the flush hunts from the first attack [M 0x148010:100-131], so anyone left
+/// in the lane chews the next leg), cycling the dropped guns in between (the clear's resupply
+/// — the swarm outshoots one clip), then walk the NAV web back to the spot the caller left
+/// Bond at (the fights displace him; the direct steer hits the door-wall jambs).
+fn clear_hostiles_16(w: &mut Walker, radius: f32, cap: u32) {
+    let home = w.scene.sim.as_ref().unwrap().bond.pos;
+    for _ in 0..10 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let Some(di) = sim.drones.list.iter().position(|d| {
+            d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                && walker::dxz(d.pos, sim.bond.pos) < radius
+        }) else { return };
+        w.resupply("the hostile clear"); // the dropped-gun cycle — the flush's swarms outshoot one clip
+        w.shoot_bounded(di, "the hostile clear", cap);
+    }
+    // The drops feed the run (the dry-finale lesson — the measured 14401 death opened the
+    // squad phase on clip 1 spare 1): walk the corpses Bond just made. The walk-over take
+    // [M Pickup_Handler 0x18e650] files their guns AND their remaining clips into the carry;
+    // the walker's own resupply refuses off-corridor detours, so the corpses ARE the walk.
+    let spots: Vec<[f32; 3]> = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        sim.drones.list.iter()
+            .filter(|d| d.corpse && d.team == 1 && walker::dxz(d.pos, bp) < 45.0)
+            .map(|d| [d.pos[0], d.pos[1], d.pos[2]]).collect()
+    };
+    for (k, s) in spots.iter().enumerate() {
+        w.walk_nav_to(*s, &format!("the clear's corpse walk {k}"), 1.0);
+    }
+    w.walk_nav_to(home, "back to the clear's home spot", 1.0);
+}
+
 fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool) -> (usize, u32) {
     w.wait_enabled(3000, "the launch-centre arrival");
     w.wait(100);
-    w.walk_route(APPROACH);
+    if re_arm && !w.tops_up() {
+        // The route leg-wise with the hostile clears between (drone-block-swaps-g055-3, the
+        // 07000014 clear_hostiles idiom, test-local): under the flush the ambush guards hunt
+        // from their first attack and the reactive return fire bled ~80 of Bond's 100 across
+        // 8 fights before the pit (the measured 20.2 arrival and the 14401 dry death). A
+        // player clears the lane BEFORE walking into the next leg — each kill is hp-20 cheap
+        // and the dropped guns cycle into the carry (the clear's own resupply), which is also
+        // the finale squad's ammo. walk_route's legs ARE walk_to calls, so the structure is
+        // the route's own; the clear caps at 1200 per shooter and walks the NAV web home so
+        // the next leg starts where it would have.
+        for (label, wp) in APPROACH {
+            clear_hostiles_16(w, 40.0, 900);
+            w.walk_to(*wp, label);
+        }
+    } else {
+        w.walk_route(APPROACH);
+    }
     if re_arm { w.resupply("the route fights' drops (the corridor guards' ARs)"); }
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x8d), "the route crossed the corridor touch #616 — the button's gate is armed [D]");
     // The launch chain plays out (no skip): ch 0x81 → the pack cinema → the hand-back on the pit

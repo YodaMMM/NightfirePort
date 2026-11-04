@@ -40,3 +40,16 @@ justifications). Task: the last two real-health walks under the G-055 hunt — 0
 delta-exit walk (dies ~14137 at (-48,30) to the p5=100 hunters #281/#283) and
 07000016's chaser-defeat walk (dies ~9241 on the pit floor to the chaser + pit squad).
 Real input only; no health tops; shared helpers stay opt-in.
+- [11:00 UTC] 07000016 iteration chain (all measured): the kill-loop side-fire on the pit
+  soldiers (she is skipped while inside her 2.0 punch band), the hand-back stand (breaks at
+  +0 — the soldiers are not exposed from the hand-back spot), the proactive pulse-1 sit
+  (no exposure through the shelter walls), lane_fights+back_off (WORSE — the stand traded
+  61.6 in one fight, died on the route at 1926; reverted), the opt-in finish_fights
+  escalation in the shared helper (flag default false; only the d1 real-damage walk sets
+  it): the un-dropped hunter now eats one determined shoot_bounded pass — fights kill true
+  (4 kills in the last trace) — and the leg-wise clear_hostiles_16 with corpse walks. The
+  run still dies (last: 10684 at the ramp foot — the ambush crossfire during each fight
+  costs 3-39 health a kill; Bond's own dps with the carried guns is the bottleneck). The
+  next session's levers: a higher-dps carried gun for the clears (the guards' own ARs via
+  an early switch), cover-positioned fights, and killing the ambush's 5 guards BEFORE the
+  ramp (their spawn/hold spots are fixed [D] — a pre-positioned stand at the ramp mouth).
