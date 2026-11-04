@@ -152,21 +152,27 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
         // the world's own segments (0.5 u cells, 3 body-width rays a step, walkreal probe this
         // task) — the walkable way a player threads the desks, out to the armour pocket and back
         // to the stairwell-door ledge where leg 1's own chain takes over.
-        let maze: &[(&str, f32, f32)] = &[
-            ("the spawn pocket south", 0.0, 22.5), ("east of the west desks", 4.0, 22.0),
-            ("the west corridor", 4.5, 21.0), ("south of the west desks", 4.5, 18.5),
-            ("the mid-west jog", 5.5, 16.5), ("the mid corridor west", 9.5, 16.5),
-            ("the desk corner 1", 10.5, 16.0), ("the desk corner 2", 11.0, 15.0),
-            ("the desk corner 3", 11.5, 14.5), ("the desk corner 4", 12.5, 14.0),
-            ("the mid-wall south", 12.5, 9.5), ("the ledge jog 1", 13.0, 9.0),
-            ("the ledge jog 2", 13.0, 7.5), ("the stairwell-door ledge", 13.5, 6.5),
-            ("the ledge east", 17.0, 6.5), ("the east jog 1", 17.5, 8.0),
-            ("the east run", 19.5, 9.5), ("the east jog 2", 20.5, 10.0),
-            ("the east wall north", 20.5, 16.5), ("the armour run east", 22.5, 16.5),
-            ("the armour run north", 22.5, 20.0), ("the armour take spot", 22.5, 21.5),
+        let maze: &[(&str, f32, f32, f32)] = &[
+            ("the spawn pocket south", 0.0, 22.5, 0.8),
+            // The #6/#5 spawn fights' own gun drop rests at (−3.0, 17.9) [L the run logs] — the
+            // pre-leg's ammo stop (resupply_off forbids the tours; the fights ahead need the
+            // rounds). The coarse probe has z 16-19 x −2..5 open — the detour rejoin is proven
+            // geometry on both ends.
+            ("the spawn-fight drop detour", -3.0, 17.9, 0.9),
+            ("the detour rejoin", 2.0, 17.2, 0.9),
+            ("south of the west desks", 4.5, 18.5, 0.8),
+            ("the mid-west jog", 5.5, 16.5, 0.8), ("the mid corridor west", 9.5, 16.5, 0.8),
+            ("the desk corner 1", 10.5, 16.0, 0.6), ("the desk corner 2", 11.0, 15.0, 0.6),
+            ("the desk corner 3", 11.5, 14.5, 0.6), ("the desk corner 4", 12.5, 14.0, 0.6),
+            ("the mid-wall south", 12.5, 9.5, 0.7), ("the ledge jog 1", 13.0, 9.0, 0.6),
+            ("the ledge jog 2", 13.0, 7.5, 0.6), ("the stairwell-door ledge", 13.5, 6.5, 0.7),
+            ("the ledge east", 17.0, 6.5, 0.8), ("the east jog 1", 17.5, 8.0, 0.6),
+            ("the east run", 19.5, 9.5, 0.7), ("the east jog 2", 20.5, 10.0, 0.6),
+            ("the east wall north", 20.5, 16.5, 0.7), ("the armour run east", 22.5, 16.5, 0.8),
+            ("the armour run north", 22.5, 20.0, 0.8), ("the armour take spot", 22.5, 21.5, 0.6),
         ];
-        for (label, x, z) in maze {
-            w.walk_to(Wp::new(*x, 47.4, *z).r(0.8), &format!("d3 pre-leg: {label}"));
+        for (label, x, z, r) in maze {
+            w.walk_to(Wp::new(*x, 47.4, *z).r(*r), &format!("d3 pre-leg: {label}"));
         }
         // The take fires from the ring around the armour (radius 0.477 + 1.1 with a clear
         // sphere→centre line [M 0x18e148:203-214; the walkreal probe this task]) — the take spot
@@ -543,7 +549,7 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage_agent() {
 /// Player_HandlePain 0x1902c8:40-41; DroneWeap_DoBulletAccuracy 0x179740:74-88; damage.rs];
 /// the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input only.
 #[test]
-#[ignore = "00 Agent: Bond dies on real health (the s/real-health-agent-00agent-11 report measures it); follow-up real-health-00agent-11-2"]
+#[ignore = "00 Agent (round 2, s/real-health-00agent-11-2): the armour pre-leg is measured (the desk-maze corridor-BFS to the take ring, armour 50 on [M 0x18e650] at +2922 ticks; round 1's 70-cost landing fights now cost 0) and the walk reaches the 18.9 strips on the 130 budget (80 health + 50 armour) — it dies at connector 2 (tick 5973, 20 hits for 100.0, 16 fights won) with the 23.0/18.9 pairs' crossfire the remaining ~40-health hole; docs/reports/real-health-00agent-11-2.md"]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage_00agent() {
     walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||
