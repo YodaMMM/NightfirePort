@@ -14,3 +14,16 @@ Done = the four green + every walkreal_*_live, interactables_*_live, fix_truck_l
 fix_npc_doors_live, fix_level_chain_live, interact_07000005_live, smg_close_range_live,
 use_key_census_live, mp_world_sync_live each with counts + the full suite total line.
 Deadline ~15:26 UTC (stop new work 15:06 UTC).
+
+--- the round's outcome (2026-11-04 15:09 UTC) ---
+
+The four qworm walks GREEN (a29ee0e8): beam #625's key sweep read off the disc (keys x 18.877 ->
+16.078 -> 18.877, step 0.008333, last 2 = the 240-tick pass [D, probe_0a_beams]) and the crossing
+re-timed sweep_jump_beam625 — the arm watch on the POSED box (east park, box_max >= 18.75), the
+press kept 1.0 before the static line (x 19.88), the arc west to x 15.3 (past the west park's
+reach 15.94-0.55), the press/landing gap pins > 0.56 and the ch 0x26 stamp pin. The live box at
+the landing read 17.396..17.673 (2.1+ clear) on all four runs. Also fixed the base branch's own
+build break: two Trigger literals missing the new seg_beam field (triggers.rs's test plate helper
++ exit_aim_hint_live's mk — rule 9). Every named binary green (the counts in the report); the
+full suite total line did not fit (the sandbox recycle at 13:37 ate the warm target; the rebuild
++ named runs took the window).
