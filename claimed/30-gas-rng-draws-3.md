@@ -11,3 +11,6 @@ Do:
 3. hostage_killer_07000002: re-check the opener law [M 0x144340:34-40] before touching the pin.
 4. enemy_accuracy / fix_blast_scripts / fix_finale: re-pin only values the stream legitimately moves, citing [M]; a level that can no longer be finished is a regression to fix.
 5. Every file above green, plus every walkreal_*_live; then the full suite total line.
+
+---
+claimed-by: sandbox3 at 2026-11-04T12:57Z
