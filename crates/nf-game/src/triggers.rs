@@ -1010,7 +1010,10 @@ mod tests {
         // a toucher above the surface is on the record's front. The pre-record tests rode the
         // both-sided capsule, where the winding was invisible.
         let (a, b, c, d) = ([-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.0, 1.0], [-1.0, 0.0, 1.0]);
-        Trigger { placement: 0, kind, out, mask, list, lock: 0, hide: false, glist_0x10: true, filter_gate: 0, tris: vec![[a, c, b], [a, d, c]], planes: Vec::new(), lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], gone: false, script: None, next_level: 0, gate: 0, key_gate: 0, success: 0, fallback: 0, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None }
+        Trigger { placement: 0, kind, out, mask, list, lock: 0, hide: false, glist_0x10: true, filter_gate: 0, tris: vec![[a, c, b], [a, d, c]],
+            // not a laser-beam glist (flags 0x645) — the test plates keep master's contact.
+            seg_beam: false,
+            planes: Vec::new(), lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], gone: false, script: None, next_level: 0, gate: 0, key_gate: 0, success: 0, fallback: 0, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None }
     }
 
     /// A keyed trigger's volume rides its keys [M Trigger_Update 0x1b1a78:60-70]: pose at the
