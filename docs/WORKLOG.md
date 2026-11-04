@@ -88,3 +88,30 @@ its ignore message. The doors session pinned the lead: after the panes die, the 
 own glass quads stop the launch-corridor rays (collide-vs-draw glist split). Branch cut from
 origin/s/level-08-00agent-doors 26c30220, merged origin/master cee0f0df (fast-forward; master
 already carries the doors work and strips WORKLOG as a process file).
+
+## level-08-00agent-hind (the flight-law evidence, 2026-11-04 02:05 UTC)
+
+The Hind blocker root-caused from the decompile + disc dumps (all [M] with addr, [L] probe
+outputs; the probe ran nf-extract coll-obj/coll-scan + a throwaway weapon-record dump):
+
+- The bullet FLIGHT query is armed per tick [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f058]:
+  kind 0x101/0x201 at HITTEST+0x94, the pick mask at +0x98 ZEROED every flying tick, and
+  **+0x9a = 0x20 when weapon_data+0x6c bit 0x800 is clear**. The HITTEST base is obj+0xD4
+  [M Collide_Update 0x1ea398:78-84].
+- The contact walk [M Collide_Update 0x1ea398:216-229]: pass = (HITDATA+0x51 bit 1: the
+  obj+0xF0 0x40 glist flag) | (surface byte bit 0x40); +0x80 rolls the RNG; **when +0x9a has
+  0x20, a surface byte == 0x10 (glass) contact is ALWAYS a pass** — the round continues; the
+  mirrored contact still lands on the pane's obj+0xD0 and Break_Update kills it.
+- [L weapon records (ACTION.ELF weapon_data)]: every gun + the AT-420 0x2c (0x00012204) has
+  +0x6c bit 0x800 CLEAR → the glass pass arms for all of them; 0x01/0x45 have it SET.
+- [L coll-obj 07000008 map1]: OBJECT_Glass1a/6a, DOOR_Glass_1/4, Glass10 (the 16 ride panes,
+  hashes 0x02000477/78/79/0x0200037f/0x02000382 from ride script 0x0600004C streams
+  7-18/23-26) — collision ALL mat 0x10. OBJECT_Carriage (0x0200038a) — flags **0x1000**,
+  250 tris ALL mat 0x06, bounds only (−0.42..0.66, −0.31..1.07, −1.98..1.74) — the hanger
+  box ABOVE the cabin (the carriage origin rides 4.5 above the cabin floor), NOT the walls
+  Bond sees. Object_Floorgrate (0x02000413) flags 0x1001, 13 tris.
+- The port already carries the pane-level glass pass (drone.rs:14703-14722 glass_pass) but
+  the WORLD flight trace (segment_bullet) still stops on mat-0x10 quads — the alive panes
+  stop the world ray, so the 00agent corridor gate reads blocked even where the game flies.
+- Port fix queued: the flight traces gain the glass pass (surface byte & 0x3f == 0x10 passes
+  for records with +0x6c bit 0x800 clear), matching 0x1ea398:216-229.
