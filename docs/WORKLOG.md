@@ -100,3 +100,14 @@ directly). Failures classified in docs/reports/drone-block-swaps-g055-4.md: the 
 disc_golden, identity_disc (needs the full retail image), 5 GPU-surface tests (wgpu
 adapter NotFound headless), the 3 pre-existing walkreal shifts, 2 mp timeouts. Report:
 docs/reports/drone-block-swaps-g055-4.md.
+
+## drone-block-swaps-g055-5
+Started 2026-11-04 20:24 UTC. Branch s/drone-block-swaps-g055-5 = origin/s/drone-block-swaps-g055-4
+(afd342e60) merged with origin/master (2b02ff2ec lineage). Task: the last three walks before G-055 —
+walkreal_07000003_live::walk_the_full_route_and_complete_every_objective_real_damage,
+walkreal_07000011_live::walk_spawn_to_the_lower_floor_load_point_real_damage (panic walker_b2.rs:170)
+and ..._real_damage_agent (panic walker_b2.rs:641) are red on the merged tree, green on master. For
+each: say what changed for the guards on that level, then re-route or re-pin with the opt-in levers
+the 14/16 walks used. FirstAttack/HandleImpact read correct — do not change them to make a walk pass.
+Every walkreal binary + the full suite total line.
+- (20:24) branch cut, master merged clean, WORKLOG started.
