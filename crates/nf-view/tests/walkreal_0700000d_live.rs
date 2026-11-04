@@ -270,11 +270,13 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
     for k in 0..80u32 {
         let sim = w.scene.sim.as_mut().unwrap();
         // The stick HELD through the jump — a player runs onto the grab with the stick forward
-        // and keeps holding; the walk quad's eased lanes then read non-zero at the grab and the
-        // RETAINED quad (walk-ticks-only zeroing [M 0x193600:129-134]) reads MOVING through the
-        // ride — the guards' TargetMoving_Accuracy applies [M 0x179a48:34-41 + 0x179740:71-73].
-        // The released-stick jump dead-zone-snapped the quad to [0,0] at the grab and the rider
-        // read still (the wire crossfire hit at stationary accuracy).
+        // and keeps holding. The game zeroes the move quad on EVERY alive tick BEFORE the
+        // substate dispatch [M Player_Update 0x193600:128-134 — the gate is the player state
+        // +0xF4, not the +0xF6 substate switch; raw MIPS lh 0xf4 @0x1937e0 vs lh 0xf6 @0x193938]
+        // and Player_Wire writes no lane, so the rider's quad reads [0,0] through the ride and
+        // the guards read him STILL [M 0x179a48:34-41; wire_rider_readback_0700000d_live pins
+        // it] — the crossfire's accuracy on the rider is the game's own stopped/moving chain
+        // [M 0x179740:52-99].
         sim.step_bond(nf_game::player::Input { jump: (60..=63).contains(&k), forward: 0.3, ..Default::default() }, false, false, false);
         w.total_ticks += 1;
         if sim.bond.substate == nf_game::player::SS_WIRE {
