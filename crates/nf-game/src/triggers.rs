@@ -219,6 +219,9 @@ impl Motion {
 }
 
 /// A body that can touch triggers: capsule axis from `a` to `b`, radius, drone (true) or Bond, drone skin hash.
+/// The `skin` marker of the riding deep-reach toucher: it touches script plates only.
+pub const RIDE_TOUCHER: u32 = u32::MAX;
+
 #[derive(Clone, Copy, Debug)]
 /// `contain`: whether the volume-containment contact (see `Trigger::touched_by`) applies to this toucher.
 pub struct Toucher { pub a: V3, pub b: V3, pub r: f32, pub drone: bool, pub skin: u32, pub contain: bool }
@@ -472,6 +475,7 @@ impl Trigger {
     /// here covers the volume case (a toucher capsule fully inside the trigger's bounds — e.g.
     /// 07000006's LoadPoint #746, an open room-shaped glist [D measured tris]).
     pub fn touched_by(&self, c: &Toucher) -> bool {
+        if c.skin == RIDE_TOUCHER && self.script.is_none() { return false; }
         let grow = c.r + 0.1;
         let lo = [c.a[0].min(c.b[0]) - grow, c.a[1].min(c.b[1]) - grow, c.a[2].min(c.b[2]) - grow];
         let hi = [c.a[0].max(c.b[0]) + grow, c.a[1].max(c.b[1]) + grow, c.a[2].max(c.b[2]) + grow];

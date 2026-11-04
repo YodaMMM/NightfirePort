@@ -18502,7 +18502,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // owner (the game's MP bots are Drone_Create objects [M BOT_init 0x1249e8:139]; their class
         // byte's trigger credit is the one residual for a live check). The reach laws are the ones
         // above. [M the walk; the port's per-body design is the MP port design].
-        let player_touchers: Vec<crate::triggers::Toucher> = match &self.net_bodies {
+        let mut player_touchers: Vec<crate::triggers::Toucher> = match &self.net_bodies {
             None => vec![{
                 if player.crouched {
                     // The crouch IS a different pick arm in the game, and `body` already carries
@@ -18587,11 +18587,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // takeoff]) — the ref-gate/extent parse divergence blocks the general deep
                     // reach, the same lever that keeps the box's top (see above).
                     let (ba, bb, br) = player.body;
-                    let (a, b, r) = if br == 0.55 && player.riding {
-                        (bb, [player.pos[0], player.pos[1] + 1.26, player.pos[2]], br)
-                    } else {
-                        ([player.pos[0], player.pos[1] - 0.05, player.pos[2]], [player.pos[0], player.pos[1] + 1.26, player.pos[2]], 0.55)
-                    };
+                    let _ = (ba, bb, br);
+                    let (a, b, r) = ([player.pos[0], player.pos[1] - 0.05, player.pos[2]], [player.pos[0], player.pos[1] + 1.26, player.pos[2]], 0.55);
                     crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging }
                 }
             }],
@@ -18601,6 +18598,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 crate::triggers::Toucher { contain: !b.hanging, ..crate::triggers::Toucher::player([b.pos[0], b.pos[1] - 0.6, b.pos[2]]) }
             }).collect(),
         };
+        // The ride's deep reach (see `riding`): script plates only (the truck's ch 0x70 park plate).
+        // A placed plate over a moving floor keeps the box: 0700004a's lift stand must not fire the
+        // top reveal plate. The marker skin never reaches a filter: player touchers carry drone false.
+        if self.net_bodies.is_none() && player.riding && !player.crouched && player.body.2 == 0.55 {
+            player_touchers.push(crate::triggers::Toucher { a: player.body.1, b: [player.pos[0], player.pos[1] + 1.26, player.pos[2]], r: 0.55, drone: false, skin: crate::triggers::RIDE_TOUCHER, contain: false });
+        }
         let touchers: Vec<crate::triggers::Toucher> = player_touchers.into_iter()
             .chain(self.list.iter().filter(|x| x.enabled).map(|x| crate::triggers::Toucher { a: [x.pos[0], x.pos[1] - 1.0, x.pos[2]], b: x.head(), r: 0.4, drone: true, skin: x.skin, contain: true }))
             .collect();
