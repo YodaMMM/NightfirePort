@@ -373,7 +373,7 @@ fn walk_to_security_keyboard_at(difficulty: u32) -> Walker {
         w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.6), label);
         assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission ended at the outbound leg '{label}'");
     }
-    jump_over_low_beam(&mut w, BEAM_614, [-22.2, 0.4, 11.0], 1.0, "jump beam #614 southbound");
+    jump_over_low_beam(&mut w, BEAM_614, [-22.2, 0.4, 11.0], 1.8, "jump beam #614 southbound");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let on: Vec<String> = [0x1f, 0x20, 0x21, 0x22, 0x24, 0x25, 0x26, 0x0f, 0x10, 0x11, 0x12, 0x81]
@@ -455,7 +455,7 @@ fn walk_to_security_keyboard_at(difficulty: u32) -> Walker {
         assert!(ok || k + 1 == back.len(), "the walk-back leg {k} never arrived (exit {:?})", w.scene.sim.as_ref().unwrap().drones.level_exit);
     }
     w.walk_to(Wp::new(-22.2, 0.4, 10.6).r(0.5), "the west corridor, south of beam #614");
-    jump_over_low_beam(&mut w, BEAM_614, [-22.2, 0.4, 15.6], 1.0, "jump beam #614 northbound");
+    jump_over_low_beam(&mut w, BEAM_614, [-22.2, 0.4, 15.6], 1.8, "jump beam #614 northbound");
     for (wp, label) in [([-22.2f32, 0.4, 16.8], "the west corridor's head (back)"),
                         ([-16.6, 0.4, 17.4], "the north corridor east (back)"),
                         ([-11.6, 0.4, 16.6], "the west hall, west of beam #607 (back)")] {
@@ -1493,16 +1493,15 @@ fn low_beam_621_crossing(crouch: bool) {
 /// [L ee_start_0700000a.bin: the player obj+0xFF = 3]). trigger-hittest-segment completed the
 /// chain: the trigger cels' glist flags bit 0x40 [D #607/#614/#621 = 0x645] routes the refine
 /// to the RAW per-triangle law (the plane-crossing anchor + `Dist2Tri`'s one-sided entry +
-/// the strict < radius refine — triggers.rs `seg_touches_tri_raw`). The law went GREEN here on
-/// the branch (the segment toucher + the raw refine, 2026-11-04) but the one-sided entry's sign
-/// needs the glist's PLANE RECORDS (the game's authoritative normal — the port's parse carries
-/// only the tri winding, whose sign disagrees on the 05 spawn plate and broke the truck chain):
-/// parse the plane records, wire `seg_touches_tri_raw` into `touched_by` (r > 0), flip the
-/// standing toucher to `player.body` (the wired diff is in this branch's history, commit
-/// e7f80cd6), and retune this walk's #614 jump press (~1.8; the raw refine's side-face distance
-/// fires the line at the walker's full-speed arc).
+/// the strict < radius refine — triggers.rs `seg_touches_tri_raw`), and trigger-plane-records
+/// landed the missing half: the one-sided entry reads the glist's OWN plane records (the tri's
+/// 4th u16 → 3×i16 normal · 2⁻¹⁴ + the f32 distance at byte +6 [M asm 0x10a1d8-0x10a1e8],
+/// parsed per tri — `Collision::triangles_with_planes`), not the winding cross whose sign broke
+/// the 05 spawn plate and the office-ring route on the e7f80cd6 wiring. The standing toucher is
+/// `player.body` (the HITTEST segment) and this walk's #614 jump presses ride 1.8 (the
+/// arc-height-vs-press-ticks law: the game's own arc clears the line at +0.43 [L], the port's
+/// full-speed arc crossed it at the 1.0 press).
 #[test]
-#[ignore = "port gap: the standing toucher is the measured box (drone.rs player_touchers) and misses #621's band y 0.13-0.39 [D]; the game fires it standing [L 2026-11-02]. The full chain is pinned and implemented (triggers.rs seg_touches_tri_raw, the [M] asm cited there): the raw refine went green here on the branch but needs the glist PLANE RECORDS parsed for the one-sided entry's sign (the tri winding disagrees on 05's spawn plate) before it can land"]
 fn low_beam_621_fires_standing() {
     low_beam_621_crossing(false);
 }
