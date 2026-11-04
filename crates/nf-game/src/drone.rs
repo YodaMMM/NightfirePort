@@ -18542,7 +18542,43 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // route-side waypoint divergence, and the real-damage sisters die to the
                     // laser. The next lever is the route-side tightening plus the glist
                     // ref-gate/extent, then this arm replaces the box.
-                    crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) }
+                    //
+                    // level-05-truck-class5-contact: the BOTTOM end is now the game's own segment
+                    // bottom, with the box's calibrated top kept. The ride's plates are NOT the
+                    // class-5 path the old note guessed: the truck script 0x06000A22 creates them
+                    // as type-0xEA/0xEB Entity triggers with params (out, 8, 0…) — the park plate
+                    // ch 0x70 (stream 6), the bed touch ch 0x71 (stream 7) and the hand-off ch
+                    // 0x5C (stream 8) are all MASK-8 player triggers [D decode,
+                    // docs/formats/nis-script.md §06000A22], so `Trigger_Hit`'s mask-8 arm returns
+                    // exactly the class-3 contact bit [M 0x1b1fc8:56-58 `if (uVar1 == 8) return
+                    // (uVar8 >> 3) & 1`]. The truck itself is a script player whose obj+0xFF =
+                    // 0x1b [M SP_CreateScriptPlayer 0x1db9a8:71] — 0x1b is in NONE of the
+                    // classification arms [M 0x1b1fc8:27-47: 3→8, 2→0x10, 5→2, 0x4a→0x10], and the
+                    // class census agrees (only `Bullet_init` 0x12c5a0:87 writes 0xff = 5) — so
+                    // even where the truck's contact mirrors onto the plate's obj+0xD0 list [M
+                    // Collide_Update 0x1ea398:160-215], it credits nothing: the ride's plates fire
+                    // from Bond's OWN class-3 contact, standing or crouched alike, and the
+                    // port's player-toucher-only model is faithful for the whole chain
+                    // (trigger-port-check #11's "class-5" reading is disproven for it). The
+                    // standing rider's own segment reaches the bed plate: B = pos+0.55−cc =
+                    // pos−0.4847 (cc 1.0347 [L]), the plate 0.163 under B < r 0.55 [D the trace's
+                    // numbers] — so the fix_truck sister's old "standing never fires" pin was the
+                    // unmeasured belief, not the game; the ride pins now assert the fire and the
+                    // level exit. The hybrid shape (the game's B, the box's top) keeps the two
+                    // top-side divergence pins green (the 0x5C hand-off plate and 07000011's #235
+                    // fire through the box's pos+1.81 top, over the segment's pos+0.825) and
+                    // changes only the DEEP reach: floor plates between 0.6 and cc = 1.0347 below
+                    // the reference now fire, as the game's do (07000002's bunker plate 0x80 was
+                    // the old stand-in's remaining known miss of this kind). The bottom end is
+                    // `body`'s own B (`Player_Collision`'s stamped default arm — the climb/creep
+                    // arm's r-0.275 shape keeps the old box: its lateral r differs).
+                    let (ba, bb, br) = player.body;
+                    let (a, b, r) = if br == 0.55 {
+                        (bb, [player.pos[0], player.pos[1] + 1.26, player.pos[2]], br)
+                    } else {
+                        ([player.pos[0], player.pos[1] - 0.05, player.pos[2]], [player.pos[0], player.pos[1] + 1.26, player.pos[2]], 0.55)
+                    };
+                    crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging }
                 }
             }],
             Some(bodies) => bodies.iter().filter(|b| b.alive).map(|b| if b.bot {

@@ -112,3 +112,59 @@ fn the_handover_never_fires_for_bond_who_stays_at_the_spawn() {
         "the ch-0x5C hand-over never fires without the walk [D the plate is player-mask 8]");
     assert!(sim.drones.level_exit.is_none(), "the truck chain does not end the level from the spawn");
 }
+
+/// Sister: the STANDING ride — the same real-input walk to the gatehouse, the hand-over, and
+/// then the player NEVER crouches. The park plate ch 0x70 is a mask-8 player trigger [D the
+/// truck script 0x06000A22 stream 6: Entity 0x0200087F, params (0x70, 8, 0…)] and the standing
+/// rider's own game segment reaches it: B = pos+0.55−cc = pos−0.4847 over the bed (feet 37.28
+/// [D block 0x2E of 0x020003be]), the plate at 37.7418 sitting 0.163 under B — inside r 0.55
+/// [M Player_Collision 0x194df0's default arm; Trigger_Hit 0x1b1fc8:56-58's mask-8 arm credits
+/// the class-3 contact; the truck's own class-0x1b contact [M SP_CreateScriptPlayer
+/// 0x1db9a8:71] credits nothing]. A rider who stays standing is NOT stuck: 0x70 fires on the
+/// ride and the chain ends the level into 07000006.
+#[test]
+fn the_standing_ride_still_parks_and_ends_the_level() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!(p[0] > 100.0 && p[0] < 110.0 && p[2] > 100.0 && p[2] < 115.0,
+            "the cold start spawns at the gatehouse road (#26 [D]), got {p:?}");
+        assert!(!sim.disabled, "no intro blocks this level's start");
+    }
+    w.wait(200);
+    w.walk_nav_to([98.6, 26.0, 106.5], "to the gatehouse walkway edge", 1.2);
+    let mut fired_at = None;
+    for t in 0..3600u32 {
+        w.tick(Default::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.drones.channels.on(0x5c) { fired_at = Some(w.total_ticks); break; }
+    }
+    let fired_at = fired_at.expect("ch 0x5C fires while Bond stands at the gatehouse edge [D stream 8's window]");
+    eprintln!("[05-standing] ch 0x5C fired at t {fired_at}");
+    // The hand-over + the STANDING ride: no crouch input at all. The bed touch ch 0x71 parents
+    // Bond and the ride carries him west; the standing rider's own segment reaches the park
+    // plate (0.163 under B < r 0.55 [M]), so the chain completes and the level exits.
+    let mut rode = false;
+    let mut stood = true;
+    let mut exited = None;
+    let mut t70 = None;
+    for _ in 0..6800u32 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let on_bed = sim.drones.channels.on(0x71);
+        let west = sim.bond.pos[0] < 90.0;
+        if sim.bond.crouched { stood = false; }
+        if on_bed && west { rode = true; }
+        drop(sim);
+        w.tick(Default::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if t70.is_none() && sim.drones.channels.on(0x70) { t70 = Some(w.total_ticks); }
+        if let Some(l) = sim.drones.level_exit { exited = Some(l); break; }
+    }
+    assert!(stood, "the ride stays standing (no crouch input through the whole ride)");
+    assert!(rode, "the hand-over puts Bond on the truck bed (ch 0x71) and the standing ride carries him west");
+    assert!(t70.is_some(), "the standing rider's own contact fires the park plate ch 0x70 (mask 8 [D]; the segment reach [M])");
+    assert_eq!(exited, Some(0x0700_0006),
+        "the standing ride is not stuck: the chain ends the level into 07000006 [D mux #316 → SP #320 → ch 0x1D → #118]");
+}
