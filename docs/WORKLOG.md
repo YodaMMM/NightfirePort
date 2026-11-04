@@ -142,3 +142,35 @@ crouched — measure whether a standing rider fires the park plate ch 0x70, and 
 real input (a standing rider must not be stuck with an unfinishable level). If the decompile cannot
 settle the standing case, name the exact live read that would. Every walkreal_*_live; full suite
 total line. Deadline ~13:28 UTC (stop new work 13:08 UTC).
+
+level-05-truck-class5-contact progress:
+- [11:31-11:52 UTC] The chain read: the truck script 0x06000A22 creates the ride's plates as
+  type-0xEA/0xEB Entity triggers with params (out, 8, 0...) — the park plate ch 0x70 (stream 6),
+  the bed touch ch 0x71 (stream 7), the hand-off ch 0x5C (stream 8) are all MASK-8 player
+  triggers [D decode + Trigger_Touch 0x1b2aa8's disasm: slot 1 <- the original param 0 (the out),
+  slot 9 <- the original param 1 (the mask), Trigger_Create 0x1b1720:80-84 reads the mask at
+  ext+0x36 = level_tag param 9 with the default-2]. Trigger_Hit walks the TRIGGER's own obj+0xD0
+  contact list [M Trigger_Update 0x1b1a78:71 passes the trigger object] and its mask-8 arm returns
+  exactly the class-3 contact bit [M 0x1b1fc8:56-58]. The truck is a script player, obj+0xFF =
+  0x1b [M SP_CreateScriptPlayer 0x1db9a8:71] — 0x1b is in no classification arm [M 0x1b1fc8:27-47]
+  and the class census agrees (only Bullet_init 0x12c5a0:87 writes 0xff = 5) — the truck's own
+  contact credits NOTHING even where Collide_Update 0x1ea398:160-215 mirrors it onto the plate's
+  list. Trigger-port-check #11's "class-5" reading is DISPROVEN for this chain: the ride fires
+  from Bond's OWN class-3 contact, and the port's player-toucher-only model is faithful.
+- [11:52-12:07 UTC] THE STANDING CASE SETTLED BY THE DECOMPILE: the standing rider's own segment
+  reaches the bed plate — B = pos+0.55-cc = pos-0.4847 (cc 1.0347 [L]), the plate 0.163 under B <
+  r 0.55 [M Player_Collision 0x194df0's default arm; the Intersect_CylGeom 0x109da0 clamp counts
+  the end region, docs/systems/player.md]. The old fix_truck sister's "standing never fires" pin
+  was the unmeasured belief. FIX: the standing toucher's bottom end is now the game's own segment
+  B — gated to the MOVING CARRIER (Sim.riding from ground_motion's Some, world.rs: ground_motion
+  answers Some only when the first surface under Bond belongs to a moving object). The general
+  deep reach stays blocked by the PARSED-glist divergence measured on this branch: 0a's #614
+  parsed band y 0.25-0.53 sits ~0.9 under the corridor floor (1.2) and the faithful reach fired
+  #614 through the floor (the walkreal ring's laser pin, ch 0x22 stamp at frame 4199; the game's
+  own jump clears the line [L 0.9-1.3 takeoff]) — the same ref-gate/extent lever that keeps the
+  box's calibrated top (the 0x5C plate, 07000011's #235).
+- Pins: fix_truck_live's standing sister flipped to the decompile-backed fire + the exit;
+  mayhew_handover_live adds the REAL-INPUT standing ride (the walk from the spawn, the hand-over,
+  no crouch input, 0x70 fires, the level exits into 07000006 — a standing rider is not stuck).
+  Green: fix_truck 2/0, mayhew_handover 3/0, walkreal_05 14/0, gate_guard_truck 2/0,
+  interactables_05 6/0, walkreal_0a 12/0/3 (master's own ignores), nf-game lib 657/0.
