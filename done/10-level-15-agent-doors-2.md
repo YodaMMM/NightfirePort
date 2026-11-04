@@ -8,3 +8,8 @@ claimed-by: sandbox7 at 2026-11-04T09:35Z
 ---
 ## Report (done, 2026-11-04T10:51Z)
 
+
+---
+## Report from the worker (done, 2026-11-04T10:51Z)
+
+Closed by the driver: the report is on `s/level-15-agent-doors-2` (docs/reports/level-15-agent-doors-2.md); the worker didn't run finish.sh.
