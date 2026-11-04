@@ -201,7 +201,12 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
 /// The crouch toggle the walker lacks (Act::CrouchOn is unreachable in walk_to): set the field
 /// the way the game's crouch hold does and give the stance a tick to settle.
 fn set_crouch(w: &mut Walker, on: bool) {
-    w.scene.sim.as_mut().unwrap().bond.crouched = on;
+    // The game's own pair: the flag AND the root height (the feet band reads cc —
+    // [M Player_FeetOnPoint 0x194188:106]; see the crawl-exit note in
+    // the_east_duct_route_reaches_the_stairwell_slot).
+    let sim = w.scene.sim.as_mut().unwrap();
+    sim.bond.crouched = on;
+    sim.bond.cc = if on { nf_game::player::CROUCH_ROOT_HEIGHT } else { nf_game::player::ROOT_HEIGHT };
     for _ in 0..15 { w.tick(nf_game::player::Input::default(), false); }
 }
 
@@ -239,7 +244,20 @@ fn the_east_duct_route_reaches_the_stairwell_slot() {
     // Leg A: the crossing stance (40.8, floor 2.40, 65.5) — the spawn crouch walks there; the aim
     // needs the standing head (the 3.86 duct roof clears at this z [D probe14_aim]).
     w.walk_to(Wp::new(40.8, 2.4, 65.5).r(0.5), "to the crossing stance");
-    w.scene.sim.as_mut().unwrap().bond.crouched = false;
+    // The stand leaves the game's own pair: the flag AND the root height. The feet band reads
+    // the root (`hit − 0.1 <= cc` [M Player_FeetOnPoint 0x194188:106]; the crouch root
+    // 0.55 = BL+0x7CC [M Player_Collision 0x194df0:235/248 + the tail store :405-408], the
+    // stand restores the 1.0347 root [M the stand arm Player_SSCrouch 0x1924c0:84-105 — the
+    // port's pair at player.rs:1637-1638]). A flag-only poke used to leave cc at the crouch
+    // 0.55 for the WHOLE walk — the band's reach shrank 1.13 → 0.65 and the 1.72-landing
+    // float (the slab skirt's ny-0.42 push holds Bond 0.65–0.86 above the corridor floor)
+    // hung just outside it forever: the wedge both real-health runs died in
+    // (real-health-14-agent-00agent).
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.crouched = false;
+        sim.bond.cc = nf_game::player::ROOT_HEIGHT;
+    }
     for _ in 0..20 { w.tick(nf_game::player::Input::default(), false); }
     // switch to the Q-Claw (0x50) [L gadget is_grapple: 0x50/0x51; +0x70 & 0x40]
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false); }
@@ -411,7 +429,15 @@ fn walk_infiltration_to_handback(w: &mut Walker) {
     // the_east_duct_route_reaches_the_stairwell_slot chain [D GRAPPLEPOINT_SkyBridge #658
     // (45.29, 5.10, 62.94); M Bullet_Delete 0x12e660:50-55 + Player_SSGrapple 0x192860].
     w.walk_to(Wp::new(40.8, 2.4, 65.5).r(0.5), "to the crossing stance");
-    w.scene.sim.as_mut().unwrap().bond.crouched = false;
+    // The stand pairs the flag with the root height (see set_stance's note in
+    // the_east_duct_route_reaches_the_stairwell_slot): cc at the crouch 0.55 shrank the feet
+    // band's reach for the rest of the walk — the 1.72-landing float wedge
+    // (real-health-14-agent-00agent).
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.crouched = false;
+        sim.bond.cc = nf_game::player::ROOT_HEIGHT;
+    }
     for _ in 0..20 { w.tick(nf_game::player::Input::default(), false); }
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false); }
     let point = [45.2888f32, 5.0961, 62.9362]; // [D placement; the port's resolution, probe14_aim]
@@ -1293,7 +1319,10 @@ fn the_vent_grill_blocks_the_west_duct_per_the_game() {
     {
         let sim = scene.sim.as_mut().unwrap();
         for _ in 0..60 { sim.step_bond(nf_game::player::Input::default(), false, false, false); }
+        // The crouch pairs the flag with the root height (the game's own pair [M 0x194df0:235/248;
+        // the feet band reads cc — Player_FeetOnPoint 0x194188:106]).
         sim.bond.crouched = true;
+        sim.bond.cc = nf_game::player::CROUCH_ROOT_HEIGHT;
         for _ in 0..15 { sim.step_bond(nf_game::player::Input::default(), false, false, false); }
         for _ in 0..400 {
             let inp = nf_game::player::Input { forward: 1.0, ..Default::default() };
@@ -1437,7 +1466,14 @@ fn walk_to_the_vent_grab(w: &mut Walker) -> (u32, [f32; 3], f32) {
     w.wait_enabled(3000, "the intro");
     w.wait(120);
     w.walk_to(Wp::new(40.8, 2.4, 65.5).r(0.5), "to the crossing stance");
-    w.scene.sim.as_mut().unwrap().bond.crouched = false;
+    // The stand pairs the flag with the root height (see the crawl-exit note in
+    // the_east_duct_route_reaches_the_stairwell_slot) — a flag-only poke left cc at the crouch
+    // 0.55 and shrank the feet band's reach for the rest of the walk.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.crouched = false;
+        sim.bond.cc = nf_game::player::ROOT_HEIGHT;
+    }
     for _ in 0..20 { w.tick(nf_game::player::Input::default(), false); }
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false); }
     let point = [45.2888f32, 5.0961, 62.9362];
