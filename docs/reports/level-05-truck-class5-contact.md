@@ -118,3 +118,11 @@ expect the stamp on the park tick, matching the port's pin.
 
 `not visible to me` — this sandbox exposes no token, credit or context-window figures for the
 session (no such counters were shown in any tool output or environment surface during the run).
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-04 13:19–13:22 UTC):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-05-truck-class5-contact: done …" https://ntfy.sh/nightfire-yoda-8k3x` → `curl: (28) Connection timed out after 20002 milliseconds` (a later retry with -m 25 --retry 2 timed out three times: `curl: (28) Connection timed out after 25000/25001/25001 milliseconds`).
+2. `python3 urllib.request.urlopen(...)` → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`.
+3. `wget -q -O- --post-data "…" --timeout=20 https://ntfy.sh/nightfire-yoda-8k3x` → silent timeout, no output.
+The finish marker itself ran OK (`finish.sh` printed `OK done 10-level-05-truck-class5-contact`).
