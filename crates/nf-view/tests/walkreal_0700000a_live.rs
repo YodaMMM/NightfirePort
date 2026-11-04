@@ -99,6 +99,89 @@ fn jump_over_low_beam(w: &mut Walker, beam: ([f32; 2], [f32; 2]), to: [f32; 3], 
     panic!("{label}: the jump leg never arrived (bond {:?})", w.scene.sim.as_ref().unwrap().bond.pos);
 }
 
+/// The live z-extent of beam #614's posed collision tris. The glist rides key motion: 3 keys,
+/// z 13.0287 → 10.27843 → 13.0287, one pass = 240 ticks (step 1/120 per tick [D keys, m_paths;
+/// M Trigger_Create 0x1b1720:56-87 + Trigger_Update 0x1b1a78:60-70; the port re-poses the tris
+/// per tick — Motion::advance + step_motion]). [L sweep-probe round 1] the live box parks
+/// 12.896..13.173 at t≈224..18 and bottoms 10.146..10.423 at t≈110..148, sliding ≤0.034 u/tick.
+fn beam614_z(sim: &nf_view::scene::Sim) -> (f32, f32) {
+    sim.drones.triggers.iter().find(|t| t.placement == 614).expect("beam #614 [D]")
+        .tris.iter().flat_map(|tri| tri.iter().map(|v| v[2]))
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), z| (a.min(z), b.max(z)))
+}
+
+/// The sweep-aware crossing of beam #614. The beam sweeps the whole corridor (the box's centre
+/// rides 13.03 ⇄ 10.28 every 240 ticks [D keys; L probe]) so NO standing pass exists: the walk's
+/// z(t) is monotone against the sweep and always meets it (the probe's 16/16 phases stamped 0x22
+/// [L]). The JUMP is the dodge: its arc runs 0.1 u/tick (double the walk) with the feet rising to
+/// 1.84 [L probe round 3], and the standing toucher's segment bottom (B = feet−0.485 [M
+/// Player_Collision 0x194df0 default arm; the band top 0.5164 [L]]) clears the beam's band by
+/// more than r 0.55 while feet ≥ 1.59 — the arc's middle (k 10..37) is untouchable at ANY beam
+/// pose, so ONE jump crosses the whole band. Its low-y ends (k ≤ 9 and k ≥ 38, touch radius
+/// sqrt(0.55²−(B−0.5164)²) ≤ 0.54) stay clear of the live box by construction:
+/// - southbound: the takeoff stand at z ≤ 13.79 (the arc's k38-42 land south of the box's floor
+///   10.146 with dz ≥ radius+0.03) and the arm `box_max ≤ 12.0` (the ascent's k9 keeps dz ≥ 0.43
+///   vs the radius 0.25 even against the slide's 0.034/tick);
+/// - northbound: the takeoff stand at z ≥ 9.52 (the arc's k39 clears the parked north box
+///   13.173 by 0.43 vs 0.25) and the arm `box_min ≥ 12.7` (the beam parked/keeping north so the
+///   ascent's k9 keeps dz ≥ 1.79).
+/// The arc lands ~4.75 u past the takeoff — past the whole band either way — and the helper pins
+/// the standing clearance at the takeoff, the landing clearance, and that ch 0x22 never stamped
+/// (the "no laser/alert channel fired" pin, un-weakened [D #614 out 0x22]).
+fn sweep_jump_beam614(w: &mut Walker, southbound: bool, x: f32, y: f32, label: &str) {
+    // 1. the arm watch: the live box into the crossing window (≤ 3 cycles = 720 ticks).
+    let mut armed = false;
+    for _ in 0..720u32 {
+        let (zmin, zmax) = { let sim = w.scene.sim.as_ref().unwrap(); beam614_z(sim) };
+        if if southbound { zmax <= 12.0 } else { zmin >= 12.7 } { armed = true; break; }
+        w.wait(1);
+    }
+    assert!(armed, "{label}: beam #614 never swept into the crossing window in 3 cycles");
+    // 2. the takeoff stand (real input; the approach never enters the box's reach — the box's
+    //    extreme poses are 13.173/10.146 and the approach stops at 13.75/9.7).
+    let takeoff = if southbound { 13.75 } else { 9.7 };
+    let desired = if southbound { std::f32::consts::PI } else { 0.0 };
+    let mut stood = false;
+    for _ in 0..240u32 {
+        let p = { let sim = w.scene.sim.as_ref().unwrap(); sim.bond.pos };
+        let there = if southbound { p[2] <= takeoff } else { p[2] >= takeoff };
+        if there { stood = true; break; }
+        let yaw = w.scene.sim.as_ref().unwrap().bond.yaw;
+        let turn = walker::wrap_pi(desired - yaw).clamp(-0.05, 0.05);
+        w.tick(nf_game::player::Input { forward: 1.0, turn, ..Default::default() }, false);
+    }
+    assert!(stood, "{label}: the takeoff stand at z {takeoff} never arrived");
+    // 3. the standing-clearance pin at the takeoff tick.
+    let (zmin, zmax) = { let sim = w.scene.sim.as_ref().unwrap(); beam614_z(sim) };
+    let gap = if southbound { takeoff - zmax } else { zmin - takeoff };
+    assert!(gap > 0.56, "{label}: the takeoff stand sits {gap:.3} from the live box ({zmin:.3}..{zmax:.3}) — the standing touch radius 0.55 [L the phase probe]");
+    // 4. the jump: one tick of jump input, then forward through the arc to the far z.
+    let z_far = if southbound { 9.35 } else { 13.9 };
+    let mut jumped = false;
+    let mut crossed = false;
+    for _ in 0..160u32 {
+        let p = { let sim = w.scene.sim.as_ref().unwrap(); sim.bond.pos };
+        let there = if southbound { p[2] <= z_far } else { p[2] >= z_far };
+        if there { crossed = true; break; }
+        let yaw = w.scene.sim.as_ref().unwrap().bond.yaw;
+        let turn = walker::wrap_pi(desired - yaw).clamp(-0.05, 0.05);
+        w.tick(nf_game::player::Input { forward: 1.0, turn, jump: !jumped, ..Default::default() }, false);
+        jumped = true;
+    }
+    assert!(crossed, "{label}: the sweep-jump arc never reached z {z_far}");
+    // 5. the landing clearance + the definitive 0x22 pin.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let (zmin, zmax) = beam614_z(sim);
+        let p = sim.bond.pos;
+        let gap = if southbound { zmin - p[2] } else { p[2] - zmax };
+        assert!(gap > 0.56, "{label}: the arc landed {gap:.3} from the live box ({zmin:.3}..{zmax:.3}) at {p:?}");
+        assert!(sim.drones.channels.time[0x22] == 0,
+            "{label}: ch 0x22 stamped — the swept beam was touched [D #614 out 0x22; the pin stands]");
+        eprintln!("[{label}] the sweep-jump cleared the band: pos {p:?} box ({zmin:.3},{zmax:.3})");
+    }
+}
+
 /// Fire the held weapon at a static point through the real trigger path: turn+look the view onto
 /// the point (the walker's shoot() aim loop, aimed at a useobj instead of a drone), pulse the
 /// trigger while within `range`. Returns whether the point reacted (the caller's channel check).
@@ -373,7 +456,10 @@ fn walk_to_security_keyboard_at(difficulty: u32) -> Walker {
         w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.6), label);
         assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission ended at the outbound leg '{label}'");
     }
-    jump_over_low_beam(&mut w, BEAM_614, [-22.2, 0.4, 11.0], 1.8, "jump beam #614 southbound");
+    // The sweep-aware crossing (see sweep_jump_beam614): the blind 1.8 press landed the arc in
+    // the beam's swept pose — the takeoff moves to 13.75 behind the arm box_max ≤ 12.0, the arc
+    // clears the whole swept band, and the 0x22 pin stays.
+    sweep_jump_beam614(&mut w, true, -22.2, 0.4, "jump beam #614 southbound (the sweep)");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let on: Vec<String> = [0x1f, 0x20, 0x21, 0x22, 0x24, 0x25, 0x26, 0x0f, 0x10, 0x11, 0x12, 0x81]
@@ -446,16 +532,20 @@ fn walk_to_security_keyboard_at(difficulty: u32) -> Walker {
     jump_over_low_beam(&mut w, BEAM_621, [-13.5, 0.4, -30.6], 1.0, "jump beam #621 northbound");
     let back = {
         let sim = w.scene.sim.as_ref().unwrap();
-        let mut nodes = walker::nav_route(sim, sim.bond.pos, [-22.2, 0.4, 10.6]).expect("nav: the pocket → the west corridor");
-        nodes.push([-22.2, 0.4, 10.6]);
+        // The final node holds SOUTH of the beam's swept band (the box floor 10.146, the
+        // standing touch radius 0.55 [L the probe]: z ≤ 9.5 is clear at every sweep pose; the
+        // old 10.6 sat inside the bottom park's exclusion and the approach stamped 0x22).
+        let mut nodes = walker::nav_route(sim, sim.bond.pos, [-22.2, 0.4, 9.0]).expect("nav: the pocket → the west corridor");
+        nodes.push([-22.2, 0.4, 9.0]);
         nodes
     };
     for (k, p) in back.iter().enumerate() {
         let ok = walk_leg_watched(&mut w, *p, 1.3, &format!("back to the west corridor node {k}"));
         assert!(ok || k + 1 == back.len(), "the walk-back leg {k} never arrived (exit {:?})", w.scene.sim.as_ref().unwrap().drones.level_exit);
     }
-    w.walk_to(Wp::new(-22.2, 0.4, 10.6).r(0.5), "the west corridor, south of beam #614");
-    jump_over_low_beam(&mut w, BEAM_614, [-22.2, 0.4, 15.6], 1.8, "jump beam #614 northbound");
+    // The sweep-aware northbound crossing (see sweep_jump_beam614): the takeoff stand 9.7
+    // behind the arm box_min ≥ 12.7 (the beam parked north), the arc lands ~14.45.
+    sweep_jump_beam614(&mut w, false, -22.2, 0.4, "jump beam #614 northbound (the sweep)");
     for (wp, label) in [([-22.2f32, 0.4, 16.8], "the west corridor's head (back)"),
                         ([-16.6, 0.4, 17.4], "the north corridor east (back)"),
                         ([-11.6, 0.4, 16.6], "the west hall, west of beam #607 (back)")] {
@@ -610,7 +700,9 @@ fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
         ([-22.2, 1.3, 15.4], "ring: the west corridor, north of beam #614", false),
         // Beam #614 (out ch 0x22, OR #667 → ch 0x0F → gun #640) spans the corridor wall to
         // wall at ankle height — jumped (jump_over_low_beam, keyed on this label).
-        ([-22.2, 1.3, 11.0], "ring: jump beam #614", true),
+        // The sweep-aware southbound crossing (see sweep_jump_beam614): the arc lands ~9.15,
+        // past the whole swept band — the next leg's (−20.5, 5.5) walk never re-enters it.
+        ([-22.2, 1.3, 9.2], "ring: sweep-jump beam #614", false),
         ([-20.5, 1.3, 5.5], "ring: down the west office block", false),
         // The crossing rides the game's own ai lane: the patrol nodes 17/28 cross at z 5.54/5.60
         // [D 0700000a ai_network, disc y 0.0]. The swing door opened to the pos01-0 end leaves
@@ -661,10 +753,13 @@ fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
         // The alarm guard's cone covers the south corridor mouth (the route note above) — the
         // watch between the legs catches his run the way walk_leg_watched does below.
         let jump = label == "ring: jump beam #614";
-        if crouched && !jump { set_crouch(&mut w, true); }
+        let sweep = label == "ring: sweep-jump beam #614";
+        if crouched && !jump && !sweep { set_crouch(&mut w, true); }
         watch_and_clear(&mut w, 16.0);
-        if jump { jump_over_low_beam(&mut w, BEAM_614, wp, 1.0, label); } else { w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label); }
-        if crouched && !jump { set_crouch(&mut w, false); }
+        if sweep { sweep_jump_beam614(&mut w, true, wp[0], wp[1], label); }
+        else if jump { jump_over_low_beam(&mut w, BEAM_614, wp, 1.0, label); }
+        else { w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label); }
+        if crouched && !jump && !sweep { set_crouch(&mut w, false); }
         {
             let sim = w.scene.sim.as_ref().unwrap();
             let chs: Vec<String> = [0x1f, 0x20, 0x21, 0x22, 0x24, 0x25, 0x26, 0x0f, 0x10, 0x11, 0x12, 0x81]
