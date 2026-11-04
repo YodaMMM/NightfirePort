@@ -94,7 +94,7 @@ fn clear_captors(w: &mut Walker, around: [f32; 3], label: &str) {
 /// The real-health walk's captor fight: the same kill set as `clear_captors`, played the way a
 /// player does under real fire — enabled guards only, shot from range when a part is exposed,
 /// approached node by node until one is, the gun cycled/looted when it runs dry.
-fn clear_captors_real(w: &mut Walker, around: [f32; 3], label: &str) {
+fn clear_captors_real(w: &mut Walker, around: [f32; 3], label: &str, d3: bool) {
     for round in 0..8 {
         let target = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -117,6 +117,9 @@ fn clear_captors_real(w: &mut Walker, around: [f32; 3], label: &str) {
             eprintln!("[02] {label}: captor {round} (drone {di}) survived the clip");
             loot(w, &format!("{label} captor {round}"), 1);
         }
+        // The 00 Agent scoop: the dead guard's drop is the resupply (one 8-pellet tap per captor
+        // keeps the next fight ahead of its first volley).
+        if d3 { scoop_drops(w, &format!("{label} captor {round} drop"), 1); }
         status(w, &format!("{label} captor {round}"));
     }
 }
@@ -129,7 +132,7 @@ fn clear_captors_real(w: &mut Walker, around: [f32; 3], label: &str) {
 /// captain (weapon 0x1C, 8 pellets a round [M DroneWeap_FireWeapon 0x178f68 weapon_data+0x18
 /// loop]); under 3.0 u every round hits [M DroneWeap_DoBulletAccuracy 0x179740:113-115], and at
 /// 6.7 u the 0.045-rad spread still puts the whole volley on Bond.
-fn take_room(w: &mut Walker, around: [f32; 3], label: &str) {
+fn take_room(w: &mut Walker, around: [f32; 3], label: &str, d3: bool) {
     w.dmg.dry_taps = Some(5);
     let mut tried: Vec<(usize, u32)> = Vec::new();
     for round in 0..16 {
@@ -157,6 +160,7 @@ fn take_room(w: &mut Walker, around: [f32; 3], label: &str) {
                 if !killed { let until = w.total_ticks + 240; tried.push((di, until)); }
                 let dry = { let g = &w.scene.sim.as_ref().unwrap().gun; g.clip + g.spare == 0 };
                 if dry { arm_fullest(w, &format!("{label} room {round} dry")); }
+                if d3 { arm_weapon(w, 0x1c, &format!("{label} room {round} shotgun")); }
                 eprintln!("[02] {label} room {round}: drone {di} killed {killed}");
             }
             None => {
@@ -172,7 +176,7 @@ fn take_room(w: &mut Walker, around: [f32; 3], label: &str) {
     }
     w.dmg.dry_taps = None;
     // Whatever the stand left (a captor out of every line from here): the old sweep.
-    clear_captors_real(w, around, label);
+    clear_captors_real(w, around, label, d3);
 }
 
 /// Bond's own status line (health, armour, gun) for the fight log.
@@ -289,6 +293,14 @@ fn arm_fullest(w: &mut Walker, label: &str) {
         if read(w).0 == best { break; }
         cycle(w);
     }
+    // The draw can eat a press and leave the wheel one short of `best` (the bunker run armed the
+    // dry 0x47 cuffs with a 32-round 0x12 on the wheel [L the 00agent ledger] — Bond then took
+    // the corridor's rifle chips on an empty hand). Verify and re-cycle: a no-op whenever the
+    // first pass landed (every d1/d2 run — the RNG is unchanged there).
+    for _ in 0..12 {
+        if read(w).0 == best { break; }
+        cycle(w);
+    }
     let (id, n) = read(w);
     eprintln!("[02] {label}: armed the fullest gun {id:#x} ({n} rounds; carried {:?})", seen);
     reload_full(w);
@@ -303,6 +315,47 @@ fn reload_full(w: &mut Walker) {
     if spare == 0 { return; }
     w.scene.sim.as_mut().unwrap().step_bond(Default::default(), false, true, false);
     for _ in 0..90 { w.tick(Default::default(), false); }
+}
+
+/// Walk to the nearest live pickup at the feet (the guards' drops land at the fight floor [L
+/// drops]) and take it — no `have` gate, `n` pickups — then cycle to a firearm with ammo. The
+/// 00 Agent economy: the guards' dropped guns ARE the resupply (the bunker entry saw a 4-round
+/// 0x1c shotgun drop [L the arm_fullest carry log]), and at DroneFiring_Accuracy_Hard 1.0 the
+/// fights must end in one tap, not one per reload cycle.
+fn scoop_drops(w: &mut Walker, label: &str, n: usize) {
+    for k in 0..n {
+        let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+        let target = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
+            .filter(|p| !p.gone)
+            .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+            .filter(|q| dxz(*q, bp) < 6.0 && (q[1] - bp[1]).abs() < 1.5)
+            .min_by(|a, b| dxz(*a, bp).total_cmp(&dxz(*b, bp)));
+        let Some(target) = target else { break };
+        eprintln!("[02] {label}: scooping the drop ({:.1},{:.1},{:.1}) (d {:.1})", target[0], target[1], target[2], dxz(target, bp));
+        w.walk_nav_to(target, &format!("{label} scoop {k}"), 0.4);
+        // Arm the take at once: the captors close DURING the scoop walk, and the fights that
+        // answer them fire the gun in hand (the first scoop run fought drones 7/5/6 on the P99
+        // for 61.2 health because the switch came only after the loop [L the 00agent ledger]).
+        let _ = w.switch_to_armed(&format!("{label} scoop {k} arm"));
+    }
+    let _ = w.switch_to_armed(label);
+}
+
+/// Cycle the wheel to the gun `id` (the game's own weapon cycle, the arm_fullest walk) and top
+/// the clip up. False if the wheel never showed it (not carried or dry).
+fn arm_weapon(w: &mut Walker, id: u8, label: &str) -> bool {
+    let read = |w: &Walker| w.scene.sim.as_ref().unwrap().gun.weapon;
+    for _ in 0..12 {
+        if read(w) == id {
+            reload_full(w);
+            eprintln!("[02] {label}: armed {id:#x}");
+            return true;
+        }
+        w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
+        for _ in 0..60 { w.tick(Default::default(), false); }
+    }
+    eprintln!("[02] {label}: {id:#x} not carried");
+    false
 }
 
 /// Close on guard `di` the way a player rounds a corner: node by node along the nav web toward
@@ -466,9 +519,20 @@ fn clear_pursuers(w: &mut Walker, radius: f32, label: &str) {
 /// of an unseen guard. Robustness: green with 0..400 idle ticks inserted after the armour take
 /// (16 offsets on the placement-stat guards, 2026-11-01).
 #[test]
-fn walk_the_castle_all_objectives_real_health() {
+fn walk_the_castle_all_objectives_real_health() { walk_the_castle_all_objectives_real_health_at(1) }
+
+/// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent rides the
+/// front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
+fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000002.bin", false).expect("load 07000002"));
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load(&iso, "07000002.bin", false).expect("load 07000002")
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "07000002.bin", false, None, difficulty)
+            .expect("load 07000002")
+    });
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     // Real health: no walker top-up — the walk takes the guards' fire through the real pipeline.
     w.top_up_health = false;
     // The hostile-body-block arm is OPT-IN and this walk is its only setter: the shared walker's
@@ -487,6 +551,15 @@ fn walk_the_castle_all_objectives_real_health() {
     // (`close_in`) carried Bond into those ranges and is gone.
     w.keep_off = Some(4.0);
     w.dmg.back_off = Some(4.0);
+    // 00 Agent tactics (real-health-00agent-02-03-04), the difficulty-3 sister only: at
+    // DroneFiring_Accuracy_Hard 1.0 (vs Agent's 0.7) and Plr_DMod_Hard 1.2 (vs 0.7) the
+    // geisha-room shotgun captors land 8-pellet volleys worth 57.6 at 2.7 u and 21.6 at 4.0 u
+    // [L the 00agent ledger — the first run died at tick 6398, 100.0 in 56 hits], and the
+    // doorway angle never exposed a head part (the fight's two part-4 taps did 5.6 of the
+    // captor's 12.0 [L the NF_KILL_TRACE run]). A player at 00 Agent takes the guards' dropped
+    // shotguns and answers the room with the same gun — one 8-pellet tap kills a 12-hp captor
+    // before its first volley [L drops: the guards drop 0x1c with shells]. The d1/d2 runs keep
+    // the exact restored RNG: every arm below is behind `difficulty >= 3`.
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -588,6 +661,11 @@ fn walk_the_castle_all_objectives_real_health() {
         }
     }
     arm_fullest(&mut w, "before the geisha-1 room");
+    // NOTE (real-health-00agent-02-03-04): no pre-room drop scoop here — the walk to the drops
+    // passes the captors' posts and the return-fire fights answer them in the open corridor on
+    // the P99 (61.2 health before the room, the first tactic run [L the 00agent ledger]). The
+    // room's own round-0 kill drops the captor's shotgun and the per-round scoop arms it (the
+    // `d3` arm in `clear_captors_real`) — the later rounds fight on it.
     w.lenient = true;
     w.walk_to(Wp { at: [-35.2, 6.5, 4.6], act: Act::Wait(10), arrive: 0.9 }, "the ch-0x17 plate");
     w.lenient = false;
@@ -619,9 +697,61 @@ fn walk_the_castle_all_objectives_real_health() {
     }
     // 3. The captors die (the 0x17 guards: death chs 0x88 / 0x2A / 0x29 [D param 12]) — the save
     //    fires through the real fire path, AND #397 closes 0x3B [D tr[017]].
+    //    00 Agent round-0 (real-health-00agent-02-03-2): the approach met the shotgun captor at
+    //    1.3 u and his first 8-pellet volley landed 57.6 at 2.7 u — dead at t6398 [L the
+    //    00agent ledger; this branch's own run, the same tick]. A player holds the corridor and
+    //    calls him out: at keep_off's 4 u the volley is the 4-u band's 21.6 and the under-3.0-u
+    //    every-round-hits rule is out of play [M DroneWeap_DoBulletAccuracy 0x179740:113-115].
+    //    The captor leaves the room on sight (the hostage_captor note: a captor that saw Bond
+    //    and left the room is outside the 8-u sweep), so the stand-off wait has an end.
+    if difficulty >= 3 {
+        // The hook's dry in-hand fights give up while the wheel carries rounds (the lane's
+        // 0x12 clip 0 vs the P99's 15 [L the 00agent-02-03-2 ledger]) — the game's own
+        // mid-fight cycle, opt-in for this walk only.
+        w.dmg.switch_dry = true;
+        // The funnel retreats to 6.0 (scoped to the loop, restored after): the duel's 28.8 was
+        // the closing captain's 2-3 volleys at the 4-u ring [L the 00agent-02-03-2 ledger] —
+        // the wider ring keeps more of the volley's pellets off Bond (the 6.0-standoff
+        // experiment's own finding: the opening volley drops to the 4-u band's cost).
+        // The funnel defence (real-health-00agent-02-03-2): the captors patrol OUT of the room
+        // (the diag run: the 0x1c captains #6/#7 at 11.5-14.7 u, state 0x67, closing) and the
+        // corridor meeting at 1.3 u cost the first run its Bond at t6398 [L the 00agent ledger].
+        // Hold the plate and duel each captor as he funnels out — one at a time, the drop
+        // scooped and the shotgun armed after each kill (one 8-pellet tap kills a 12-hp captor
+        // and answers the 24-hp captain at 4+ u, where the volley is the 4-u band's 21.6 and
+        // the under-3.0-u rule is out of play [M DroneWeap_DoBulletAccuracy 0x179740:113-115]).
+        for k in 0..4 {
+            w.dmg.back_off = Some(6.0);
+            let di = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
+                        && dxz(d.pos, bp) < 16.0)
+                    .min_by(|a, b| dxz(a.1.pos, bp).total_cmp(&dxz(b.1.pos, bp)))
+                    .map(|(i, _)| i)
+            };
+            let Some(di) = di else { break };
+            if !hold_for_sight(&mut w, di, 900) { break; }
+            // stand_and_fire, NOT shoot: the shoot loop's reposition/flank walked Bond INTO the
+            // closing captain (dist 1.6 at the shot, 50.4 health for the kill [L the
+            // 00agent-02-03-2 run]). The stand holds the plate and duels — Bond does not move
+            // (the back_off 4.0 retreat keeps the under-3.0-u rule out of play).
+            let _ = w.stand_and_fire(di, 900);
+            status(&w, &format!("geisha 1 round-0 stand-off {k}"));
+            // The kill's drop is the resupply (the guards' own guns; the dead captain's shells).
+            scoop_drops(&mut w, &format!("geisha 1 stand-off {k} drop"), 1);
+            arm_weapon(&mut w, 0x1c, &format!("geisha 1 stand-off {k} shotgun"));
+        }
+        w.dmg.back_off = Some(4.0);
+        // The corridor carries its own chaser (drone #8 enabled mid-duel and chewed 43.2 into
+        // the fight's back — the hook is one-fight-at-a-time [L the 00agent-02-03-2 run]). A
+        // player breaks off and answers him before the room's rounds.
+        clear_pursuers(&mut w, 16.0, "after the geisha-1 stand-off");
+    }
     let g1 = geisha(&w, 0x49).unwrap();
     let at = w.scene.sim.as_ref().unwrap().drones.list[g1].pos;
-    clear_captors_real(&mut w, at, "geisha 1");
+    clear_captors_real(&mut w, at, "geisha 1", difficulty >= 3);
     for _ in 0..240 {
         if ch_on(&w, 0x49) { break; }
         w.tick(Default::default(), false);
@@ -654,8 +784,71 @@ fn walk_the_castle_all_objectives_real_health() {
             // Into the bunker with the fullest gun (the ch-0x81 ambush is next [D #389]).
             arm_fullest(&mut w, "before the bunker");
         }
+        if name == "west wing stair" && difficulty >= 3 {
+            // 00 Agent (real-health-00agent-02-03-2): the courtyard sniper (weapon 0x1e) covers
+            // the stair descent and the lane crossing — his ONE hit from 25.7 u landed 48.0 and
+            // the crossing never survived it [L the 00agent-02-03-2 ledger, two runs]. A player
+            // spots the muzzle from the stair top and answers before descending: the stand taps
+            // from cover (Bond does not move), the 12-hp class dies to three body rounds [L the
+            // run ledger "hp 12"]. Nothing exposed from here = the stand gives up on its own.
+            let di = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
+                        && d.weapon == 0x1e && dxz(d.pos, bp) < 30.0)
+                    .map(|(i, _)| i).next()
+            };
+            if let Some(di) = di {
+                // The fullest gun, not whatever the rooms left in hand (the shotgun's last 3
+                // pellets burned at 25 u were 3 close-range kills gone [L the 00agent-02-03-2
+                // run: the dry hook fight then let the hp-5 rifle chaser finish Bond]). And the
+                // aim held: the hip cone at 25 u missed all 16 rifle rounds [L the same run];
+                // the aim raise is the game's own zero-spread for a 0x400000 record [M
+                // Bullet_init 0x12c5a0:139-170]. Scoped to this stand only — the walk's other
+                // fights keep the plain gates.
+                w.dmg.aimed_fights = true;
+                arm_fullest(&mut w, "the stair-top sniper duel");
+                let _ = w.stand_and_fire(di, 1200);
+                w.dmg.aimed_fights = false;
+                status(&w, "the courtyard sniper from the stair top");
+            }
+        }
+        if name == "courtyard lane" && difficulty >= 3 {
+            // 00 Agent (real-health-00agent-02-03-2): the sniper (0x1e, one hit 48.0) is exposed
+            // from the lane mouth — the lane leg's own hook fight killed him there in the
+            // earlier run [L the 00agent-02-03-2 ledger: "courtyard lane: returned fire on
+            // drone #9 (killed true)"] — but his shot reaches the DESCENT, so the stand must
+            // not wait for the leg to hand him over. The stair top never exposed him (the
+            // aimed duel there never fired, clip 32 at the status [L the same run]). Here:
+            // the fullest gun, the aim held for the 19-25-u stand, then restored.
+            let di = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
+                        && d.weapon == 0x1e && dxz(d.pos, bp) < 30.0)
+                    .map(|(i, _)| i).next()
+            };
+            if let Some(di) = di {
+                w.dmg.aimed_fights = true;
+                arm_fullest(&mut w, "the lane-mouth sniper duel");
+                let _ = w.stand_and_fire(di, 1200);
+                w.dmg.aimed_fights = false;
+                status(&w, "the lane-mouth sniper duel");
+            }
+        }
         leg_to(&mut w, at, name, 1.6);
         status(&w, name);
+        if difficulty >= 3 && (name == "stair bottom" || name == "courtyard lane") {
+            // 00 Agent (real-health-00agent-02-03-2): the kills here (the sniper at the lane's
+            // mouth) drop their guns on the route and the fights behind ran DRY on the lane —
+            // the hp-5 rifle chaser finished a clip-0 Bond [L the 00agent-02-03-2 ledger]. A
+            // player low on rounds grabs what dropped before walking on (the file's own loot
+            // rule): one scoop, then the fullest gun.
+            scoop_drops(&mut w, &format!("{name} drops"), 1);
+            arm_fullest(&mut w, &format!("{name} rearm"));
+        }
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -706,6 +899,11 @@ fn walk_the_castle_all_objectives_real_health() {
     // at (−28.7, 7.19, −18.3), run11 2026-10-31).
     leg_to(&mut w, [-30.0, 5.9, -21.5], "the east courtyard again", 1.6);
     arm_fullest(&mut w, "before the geisha-2 room");
+    if difficulty >= 3 {
+        // The same 00 Agent arm for the second room (its captain carries 24 [L ee_02b.bin]) —
+        // by here the captors' dropped shotguns ride the wheel.
+        arm_weapon(&mut w, 0x1c, "the geisha-2 shotgun");
+    }
     // The ch-0x19 plate tr[009] sits in the doorway (quad x −27.58..−26.19, z −22.08..−18.49 at
     // y 6.04 [L probe02quads tris]; the door at (−27.8, 6.6, −20.3) is its west edge [L base log]).
     // The real leg walks THROUGH the doorway into the quad — the old arrive-1.2 stop at x −28.09
@@ -733,7 +931,7 @@ fn walk_the_castle_all_objectives_real_health() {
     }
     let g2 = geisha(&w, 0x4a).unwrap();
     let at = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
-    take_room(&mut w, at, "geisha 2");
+    take_room(&mut w, at, "geisha 2", difficulty >= 3);
     for _ in 0..240 {
         if ch_on(&w, 0x4a) { break; }
         w.tick(Default::default(), false);
@@ -1086,3 +1284,33 @@ fn walk_the_castle_all_objectives_to_the_exit() {
 /// A read-only clone of the walker's scene handle for the geisha lookups (the walker's own
 /// borrows fight a direct `&w.scene` inside a block that also mutates).
 fn sim_view(w: &Walker) -> &nf_view::scene::Sim { w.scene.sim.as_ref().unwrap() }
+
+/// Agent-difficulty sister of `walk_the_castle_all_objectives_real_health`
+/// (real-health-agent-difficulty): the same walked route at the menu's Agent pick —
+/// GameState+0x28 = 2 through the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the
+/// `difficulty[]` table 0x2df4c0 row 1 carries 2; Txt 0x14e = "Agent"]. On this level group the
+/// pick scales Bond's pain by Plr_DMod_Normal 0.7 instead of Easy 0.5 and the guards' hit chance
+/// by DroneFiring_Accuracy_Normal 0.8 instead of Easy 0.5 [M Player_HandlePain 0x1902c8;
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 01-04 group]; the min-difficulty
+/// placements pass Drone_Create's gate [M 0x136be0:49] and the captain criterion reads prop 5
+/// [M 0x14b300:504-535]. Real input only — the load path is the only difference.
+#[test]
+fn walk_the_castle_all_objectives_real_health_agent() {
+    walk_the_castle_all_objectives_real_health_at(2);
+}
+
+/// 00 Agent-difficulty sister of `..._real_health_agent` (real-health-00agent-02-03-04): the
+/// same walked route at the menu's 00 Agent pick — GameState+0x28 = 3 through the front end's
+/// launch path [M C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table 0x2df4c0 row 2 carries 3;
+/// Txt 0x14f = "00 Agent"]. On this level group the pick scales Bond's pain by Plr_DMod_Hard
+/// 1.2 instead of Agent's Plr_DMod_Normal 0.7, the guards' hit chance rides
+/// DroneFiring_Accuracy_Hard 1.0 instead of 0.7 and their rounds by DroneDamage_Hard 0.8; the
+/// autoaim bit closes at 00 Agent (Autoaim_HardMul 0) [M Player_HandlePain 0x1902c8;
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 01-04 group]; the min-difficulty
+/// placements pass Drone_Create's gate [M 0x136be0:49] and the captain criterion reads prop 8
+/// [M 0x14b300:504-535]. Real input only — the load path is the only difference.
+#[test]
+#[ignore = "00 Agent: Bond dies before the end on real health (death mechanics in the s/real-health-00agent-02-03-04 report); follow-up real-health-00agent-02-03-2"]
+fn walk_the_castle_all_objectives_real_health_00agent() {
+    walk_the_castle_all_objectives_real_health_at(3);
+}

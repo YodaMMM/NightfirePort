@@ -1330,9 +1330,17 @@ pub struct Drone {
     /// `Drone+0x12C`: the mission-wait channel word `AllyLeadMissionWait` ENTER latches (0 → 0x99)
     /// [M 0x15efc8:17-20]. Init 0 by `Drone_SM_InitObject` 0x175838; no writer in the decompile.
     pub mission_wait_channel: u16,
-    /// The stun-grenade recover deadline (frame): `StunGrenadeLoop`'s `+0xCC4 = GameState._52_4_ + (+0xCE0)`
-    /// [M 0x1631c0 case 1], where `+0xCE0` is `DroneFunc_RecoverTime` 0x147188's ticks. fix-explosions.
+    /// The stun-grenade recover deadline mirror (frame): armed by the `StunGrenadeImpact` ENTER at
+    /// `frame + recover` for the tests' debug reads. The game's `+0xCC4` (the timer the Loop's TIMER_C
+    /// reads) is armed at the LOOP ENTER, `frame + (+0xCE0)`, a fresh span — `stun_recover` below.
+    /// fix-explosions; re-armed fresh per [M 0x1631c0 case 1] (stun-release-no-stun-anims).
     pub stun_until: u32,
+    /// `Drone+0xCE0` for the stun-grenade family: `DSTATE_StunGrenadeImpact`'s ENTER writes
+    /// `DroneFunc_RecoverTime` 0x147188's ticks there [M 0x172bb0 case 1], and `StunGrenadeLoop`'s
+    /// ENTER re-arms the wake timer with that STORED span — `+0xCC4 = frame + (+0xCE0)`, a fresh
+    /// `RecoverTime` from the Loop's first tick, not a deadline carried from the Impact
+    /// [M 0x1631c0 case 1]. The same stored-span shape as `tase_recover`/`dart_recover`.
+    pub stun_recover: u32,
     /// fix-stunner-press (109b): the tase accumulator `Drone+0xBC` — `DroneFunc_HandleImpact` case 7
     /// adds FRAME_RATE_MUL per tase msg and falls to `DSTATE_Taser` when it passes 2·health
     /// [M 0x1469b8:126-130]. No other writer in the decompile: it persists across states.
@@ -1565,6 +1573,17 @@ pub struct Drone {
     /// resolves it to the nearest door (`NDrone_InitDoorNodes` 0x139a70 binding) and stands it in
     /// `hit_door`.
     pub door_node: Option<u16>,
+    /// The route's door binding (the game's `+0xBA8` door side — the game's one slot is shared
+    /// with the kick, which the port keeps in `kick_sp`): `ReachedDestNode` stands the reached
+    /// node's door in it and a RE-ARRIVAL at a node whose door already stands there returns
+    /// immediately — no re-bind, no 0x81 re-entry, no +0x5A6 clobber [M 0x153358:151-155]. It
+    /// stands until the door-open arrival's tail clears it [M 0x153358:170-176] or the flag-4
+    /// node arms clear it [M 0x153358:119-121 + the :175 fall-through]; `ControlSTANDARD`
+    /// 0x1490f0:232 additionally drops the game's slot beyond 2.0 u (the port's `hit_door`
+    /// distance clear at Drones::tick covers the working door the same way). Port value = the
+    /// NODE whose door was bound (the node⇔door mapping is 1:1 per `NDrone_InitDoorNodes`
+    /// 0x139a70:24-70, so the node comparison is the game's door-object comparison).
+    pub door_bound: Option<u16>,
     /// Outbox: `NDrone2_OpenDoor` requested this tick (DSTATE_OpenDoor ENTER / timer C / msg 0x20,
     /// or `ControlSTANDARD`'s 60-tick bump check). Serviced by `Drones::tick` where the doors live.
     pub door_attempt: bool,
@@ -2047,6 +2066,7 @@ impl Drone {
             abseil_land_latch: false,
             mission_path_dist: 0.0,
             stun_until: 0, player_pos: [0.0; 3],
+            stun_recover: 0,
             down: false,
             door_partner: None, door_side: 0, door_planes: [[0.0; 4]; 3], door_zone: 0, door_idle_anim: 0x24, door_zone_step: 0, door_pair_requested: false,
             door_pair_watch: false,
@@ -2085,6 +2105,7 @@ impl Drone {
             melee_min_dist: 4.0, attack_hold: 0,
             door_open_at: 0,
             hit_door: None, door_return: 0, door_node: None, door_attempt: false, pending_door_msg: false, hit_door_open: true,
+            door_bound: None,
             // fix-nav-remainder: the kick-node outbox + the ScriptPlayer binding.
             kick_sp: None, kick_node: None, ally_wait_node: None, kick_attempt: false, no_bunching: 0,
             no_bunching_hit: false,
@@ -2674,6 +2695,12 @@ impl Drone {
         if flags & 0x80000 != 0 { self.talks.push((0x47, false)); }
         if flags & 2 != 0 {
             if next_door {
+                // [M 0x153358:151-155]: the re-arrival at a door node whose door already stands
+                // in +0xBA8 returns immediately — no re-bind, no 0x81 re-entry, no +0x5A6
+                // clobber. The binding stands until the door-open tail (below) or a flag-4 arm
+                // clears it.
+                if self.door_bound == Some(node) { return true; }
+                self.door_bound = Some(node);
                 self.door_node = Some(node);
                 // +0x5A6 (the return state) is saved only when the current state is not already
                 // 0x81 — re-entering through the pair's second node must not clobber the saved
@@ -2682,15 +2709,21 @@ impl Drone {
                 self.set_state(state::OPEN_DOOR);
                 return true;
             }
-            if self.hit_door_open { self.hit_door = None; } // [M 0x153358:175]
+            if self.hit_door_open {
+                // [M 0x153358:170-176]: the door-open arrival's tail clears +0xBA8 next to the
+                // working door.
+                self.hit_door = None;
+                if self.door_bound.is_some() { self.door_bound = None; }
+            }
             return false;
         }
         if flags & 4 != 0 {
             // [M 0x153358:135-153]: no successor → the tail clears +0xBA8; a kick successor binds
-            // this node's object (the first crossing enters 0x82); otherwise the tail clears too.
+            // this node's object (the first crossing enters 0x82); otherwise the tail clears too
+            // [M :119-121 and the :175 fall-through].
             match next {
                 Some(_) if next_kick => { self.kick_node = Some(node); }
-                _ => self.kick_sp = None,
+                _ => { self.kick_sp = None; self.door_bound = None; }
             }
             return false;
         }
@@ -3128,6 +3161,14 @@ impl Drone {
             pos: self.pos, dir: [s, 0.0, c], speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
             damage: f32_at(0x0c), owner, state: 0, weapon: record as u16,
             flyby: d.weapons.flyby(record), bounces: 0,
+            // The guard-side flight keeps the port's documented deviation (the glass pass NOT
+            // modelled [S]): the real-health routes stand behind station glass (the 08 d2
+            // platform-mouth wave cleared at zero cost while the rounds stopped on it) — arming
+            // the pass here turned walk_the_whole_mission_on_real_input_real_damage_agent red at
+            // tick 25178 (#23/#19 volleys through the top-station glass). The player-side flight
+            // carries the pass (update_player_bullets' flight_glass) where the Hind fight needs
+            // it; the guard-side route work lands with the next session.
+            glass_pass: false,
             ..crate::bullet::Bullet::TAIL
         })
     }
@@ -6388,8 +6429,10 @@ impl Drone {
                 // `DroneFunc_RecoverTime` 0x147188, the 0x35 arm: FRAME_RATE_INT·30·0.01·(200 − Drone+0xB9)
                 // = 18·(200−0) = 3600 ticks at the stats default +0xB9 = 0 (BOT_stats[8], zero at run time
                 // [L 07000005]) [M 0x147188 + 0x172bb0]. The old 7200 read the switch's DEFAULT arm — twice
-                // the game's stun for a stun bullet.
-                self.stun_until = frame + self.recover_time(30);
+                // the game's stun for a stun bullet. The span is STORED (+0xCE0, `stun_recover`) before the
+                // drop, in the case-1 order [M 0x172bb0 case 1]; the wake timer arms from it at the Loop.
+                self.stun_recover = self.recover_time(30);
+                self.stun_until = frame + self.stun_recover; // the deadline mirror (the game arms +0xCC4 at the Loop)
                 // fix-guard-drops-flashbang [M 0x172bb0:15-18, the state's own case 1]: the flashed
                 // guard DROPS the held gun and takes the fists — `if (+0xda != 4) { DropWeapon;
                 // ChangeWeapon(1) }` — whatever route stunned him (the flash broadcast, a stunned
@@ -6406,14 +6449,19 @@ impl Drone {
                 self.alert_status_set(2, frame); // [M 0x172bb0 case 1] — the status byte; no +0x50C write
                 self.vision_on = false;
                 self.firing = false;
-                // `Rand_Rand(2)`: one draw of the shared stream, then the anim with follow-on Loop [M 0x172c34].
-                let a = if rng.rand(2) == 0 { anim_state::STUNNED_A } else { anim_state::STUNNED_B };
+                // `Rand_Rand(2)`: one draw of the shared stream, then the anim with follow-on Loop — the
+                // draw 0 plays 0x2E and the draw 1 plays 0x2D [M 0x172bb0 case 1, dis 0x172c34-0x172c5c:
+                // `Rand_Rand(2)`; `beq` → the 0x2e arm]. (The old arm read the draws the other way round.)
+                let a = if rng.rand(2) == 0 { anim_state::STUNNED_B } else { anim_state::STUNNED_A };
                 self.call_anim(d, a, STUN_GRENADE_LOOP, 0);
                 true
             }
             (STUN_GRENADE_LOOP, msg::ENTER) => {
-                // The down flag +0x2f, its EXIT clearing it [M 0x1631c0 case 1/2].
-                self.vision_on = false; self.firing = false; self.timer_c = Some(self.stun_until);
+                // The down flag +0x2f, its EXIT clearing it [M 0x1631c0 case 1/2]. The wake timer
+                // RE-ARMS with the STORED span: `+0xCC4 = frame + (+0xCE0)` — a fresh RecoverTime
+                // from the Loop's first tick, not a deadline carried from the Impact
+                // [M 0x1631c0 case 1] (the old `stun_until` carry ended the hold one fall-clip early).
+                self.vision_on = false; self.firing = false; self.timer_c = Some(frame + self.stun_recover);
                 self.down = true;
                 true
             }
@@ -7111,7 +7159,19 @@ impl Drone {
         // impact — `DroneFunc_HandleImpact` case 0x18 [M 0x1469b8:250-313] through the same
         // unhandled→GLOBAL fallback the bullets use (WaitSwitch's handler drops it [M 0x15b960], the
         // GLOBAL base state picks it up).
-        if m == msg::FLASH { return self.on_flash(d, rng, frame, s); }
+        // stun-release-no-stun-anims: the STUN-GRENADE LOOP carries its own case 0x18 — the flash
+        // re-arms the wake timer (`+0xCC4 = frame + RecoverTime(msg[6])`) and STAYS in the Loop, no
+        // Impact re-entry [M 0x1631c0 case 0x18]. The only 0x18 broadcaster is the 0x35's flash arm
+        // [M 0x12e0c0], whose RecoverTime arm is 30 [M 0x147188 case 0x35]. (The DART loop's case
+        // 0x18 forwards to HandleImpact instead — re-enters 0x4D [M 0x163570 case 0x18] — which is
+        // exactly `on_flash`'s set_state, right for 0x51 and every other carrying state.)
+        if m == msg::FLASH {
+            if s == state::STUN_GRENADE_LOOP {
+                self.timer_c = Some(frame + self.recover_time(30));
+                return true;
+            }
+            return self.on_flash(d, rng, frame, s);
+        }
         // guard-blast-smoke: the explosive impact (msg 9) and the smoke cloud's touch (msg 0x17)
         // ride the same state machine — `HandleImpact` cases 9/0x17 through the same
         // unhandled→GLOBAL fallback (the GLOBAL base has neither case [M 0x15b830]).
@@ -9432,6 +9492,25 @@ impl Drone {
             // to the node, so the ENTER plays the anim directly [S fold].
             (state::OPEN_DOOR, msg::ENTER) => {
                 self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1681f8:19]
+                // [M 0x1681f8 case 1 → LAB_00168400]: the ENTER checks `NDrone2_DoorIsOpen`
+                // FIRST — an already-open door returns to +0x5A6 at once: no anim, no
+                // `NDrone2_OpenDoor`, no timer-C re-arm. A later route pass over the open pair
+                // re-binds [M 0x153358:149-163] and lands here — the game's enter+exit on an
+                // open door costs nothing (the door is never re-worked).
+                //
+                // PORT ORDER: the game binds +0xBA8 inside `ReachedDestNode` (0x153358) BEFORE
+                // `Drone_SM_SetState` delivers this ENTER, so DoorIsOpen reads the just-bound
+                // door. The port binds inside the caller's UPDATE (the route walk) and resolves
+                // the node → door outbox only after the state machine drains (`Drones::tick`
+                // follows the send) — at this ENTER `hit_door` still holds the pre-bind latch
+                // (`None` → the per-tick refresh keeps `hit_door_open` true), so deciding now
+                // would bounce EVERY fresh binding back to the return state: the guard strands
+                // before a closed door (the driven door-pair crossing). A fresh binding
+                // (`door_node` still pending) defers: `Drones::tick` re-delivers this ENTER
+                // right after the resolution, and the decision below then reads the door the
+                // game would have read.
+                if self.door_node.is_some() { return true; }
+                if self.hit_door_open { self.set_state(self.door_return); return true; }
                 if self.prop(d, 0x14) || self.prop(d, 0x15) || self.prop(d, 0x16) {
                     self.call_anim(d, 0x4e, 0, 0);
                 } else if self.alert < 1.0 {
@@ -10927,6 +11006,10 @@ impl Drone {
             // The box carries the spawn alignment (`Bullet_init`'s `Mat_Align2Dir(obj+0x90, BU+0x00)`
             // [M 0x12c5a0:185]) the flight pose keeps.
             phase: matches!(weapon_type, 0x3a | 0x3b).then(|| Box::new(crate::grenade::StuckGadget::thrown(dir))),
+            // satchel-laser-scramble: BU+0x102 — Bullet_init 0x12c5a0:211 writes 100 for the 0x3b
+            // family (this site's weapon_type IS the record's +0x02 base).
+            burn: if weapon_type == 0x3b { 100 } else { 0 },
+            defused: false,
         })
     }
 
@@ -11207,7 +11290,11 @@ impl Drone {
         (0..w[0x18]).map(|_| {
             let dir = crate::bullet::spread(aim, f32_at(0x24), flags68, rng);
             let mut b = crate::bullet::Bullet { pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage, owner, state: 0,
-                weapon: self.weapon as u16, flyby: d.weapons.flyby(self.weapon as usize), bounces: 0, ..crate::bullet::Bullet::TAIL };
+                weapon: self.weapon as u16, flyby: d.weapons.flyby(self.weapon as usize), bounces: 0,
+                // Guard-side deviation: the glass pass stays unmodelled (see the close-combat
+                // spawn above — the real-health routes stand behind station glass).
+                glass_pass: false,
+                ..crate::bullet::Bullet::TAIL };
             b.init_fuse(w);
             b
         }).collect()
@@ -12607,7 +12694,8 @@ pub struct Drones {
     /// tests; the flash state itself decays independently).
     pub flash_probe: Option<FlashProbe>,
     /// The 07000041 wrapper-end countdown (ticks since the approach chain's ch 1 rose): the port's
-    /// [S] stand-in for the wrapper's end into 0x0700001b — see the tick_inner arm for the evidence.
+    /// [S] story-hand-off window for the wrapper's end into 0x0700001b — see the tick_inner arm
+    /// for the evidence and the refuted premises.
     pub wrapper_end_timer: Option<u32>,
     /// mp-world-sync (agent 9): online, every body the shared world sees this tick (the human
     /// slots in slot order, then the bots), set by the Sim before `tick`. `Some` switches the
@@ -14614,7 +14702,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // mine-shield-by-guard: the query moved ahead of the mine and stuck-gadget passes so
             // the guard competes with them by hit distance [M the same first-hit rule]; the
             // application stays in the match below.
-            let tw = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
+            // The flight's glass pass [M Bullet_update 0x12e7b0 disasm 0x12f048-0x12f058 —
+            // HITTEST+0x9a = 0x20 for records with +0x6C bit 0x800 clear; Collide_Update
+            // 0x1ea398:216-229 passes the surface-byte-0x10 contacts]: computed once per
+            // round, shared by every world trace of the flight below.
+            let flight_glass = d.weapons.records.get(b.weapon as usize)
+                .is_some_and(|w| u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0);
+            let tw = d.world.segment_flight_scoped(d.world.find_cel(b.pos), b.pos, end, flight_glass);
             for (i, dr) in self.list.iter().enumerate() {
                 // `Drone_CollisionHandler` 0x140968:62 returns while `NPCGlobals == 0` (the NIS freeze:
                 // drones take no damage) and `Collide_PickObj` 0x1eae80:26-30 drops `obj+0xF0 & 0x20`
@@ -14653,7 +14747,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // The round's world stop rides the game's cel-scoped pick [M Collide_Pick 0x1eb320:125
                 // candidate nodes from Collide_StraddleCels 0x1eac98 only; Bullet_update re-feeds
                 // the round's start cel every tick, disasm 0x12f0cc-0x12f0d8].
-                let tstop = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
+                let tstop = d.world.segment_flight_scoped(d.world.find_cel(b.pos), b.pos, end, flight_glass);
                 for (i, br) in self.breaks.list.iter().enumerate().filter(|(_, x)| !x.dead) {
                     // `Collide_FilterBullets` [M 0x1ece30:24-33]: the weapon's category word
                     // against the pane's mask | 0x106 — non-zero AND drops the contact.
@@ -14998,7 +15092,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         if *present & (1u16 << slot) == 0 { continue; }
                         let Some((centre, r)) = targets[slot] else { continue };
                         let Some(t) = Self::segment_sphere_entry(b.pos, end, centre, r) else { continue };
-                        let tw = *tw_copter.get_or_insert_with(|| d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end));
+                        let tw = *tw_copter.get_or_insert_with(|| d.world.segment_flight_scoped(d.world.find_cel(b.pos), b.pos, end, flight_glass));
                         if tw.is_some_and(|w| w < t) { continue; }
                         self.copters[ci].part_hits.push(crate::copter::PartHit { slot: slot as u8, damage: bcontact, class: bclass });
                         copter_stop = true;
@@ -15105,6 +15199,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         s.burn -= amount;
                         sparks.push((Self::closest_on_segment(b.pos, end, s.pos), [-b.dir[0], -b.dir[1], -b.dir[2]]));
                         if s.burn <= 0 { s.defused = true; fizzles.push(s.pos); }
+                    }
+                }
+                // satchel-laser-scramble: the PLAYER's placed satchel rides the thrown-grenade pool
+                // in this port (`Sim`'s shot block spawns the fired 0x3b as a `Grenade`) — the game
+                // holds it in the SAME bullet object, so the same contact walk burns it [M
+                // 0x12d890:445-466 — the tail gate is the record's +0x02 family 0x3b, in every state
+                // < 2, landed or still flying]. The port's grenade pool only serves the 0x3b tail
+                // (grenade.rs), and only 0x3b is selectable on the disc [L record sweep], so the
+                // gate is the id. The contact sphere keeps the walk's 0.5 stand-in [S — the charge's
+                // exact glist bounds are not pinned; see the bullet arm above].
+                for g in self.grenades.iter_mut() {
+                    if g.state >= 2 || g.defused { continue; }
+                    if g.weapon_type != 0x3b { continue; }
+                    if Self::segment_hits_sphere(b.pos, end, g.pos, 0.5) {
+                        g.burn -= amount;
+                        sparks.push((Self::closest_on_segment(b.pos, end, g.pos), [-b.dir[0], -b.dir[1], -b.dir[2]]));
+                        if g.burn <= 0 { g.defused = true; fizzles.push(g.pos); }
                     }
                 }
                 for (p, n) in sparks { self.fx.spawn_impact(Self::SATCHEL_BURN_SPARKS, p, n); }
@@ -17078,21 +17189,36 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // the per-frame sight counter becomes "saw last frame"; this tick's sight accumulates below.
         self.saw_opp_last_frame = self.saw_opp_this_frame;
         self.saw_opp_this_frame = false;
-        // The 07000041 wrapper end (documented stand-in — the port's flow so the level plays
-        // through into 0700001b): with the approach chain fired (ch 1, the
-        // scripted-drone plate #99's out [D PL#99]) the wrapper's approach sequence runs; once it
-        // has run the chain's longest script (0x06000027, 241 ticks [D the nis dump]) the level
-        // ends into the space station 0x0700001b — the hand-off the game itself models as the
-        // 0x7100018 briefing special case [M ResetMap_Load 0x1d6360:99-102]. 07000041.bin carries
-        // no exit placement of its own [D the placement scan: no 0xE8 LOAD_LEVEL; no ch-100
-        // writer in the 7 scripts [D the nis decode]]. The game's remaining carrier is the script
-        // EVENT op 0x12 — Script_EventHandler 0x1d94c0:194-198 → ResetMap_LevelToLoad with a dword
-        // level id read from the script stream [M 0x1d94c0:83-93] — and the ELF census finds NO
-        // hardcoded 41→1b pair (all five 0x7000041 refs are gameplay special-cases; Mission_Update's
-        // ch-100 map defaults 0x7000041 → 0x7000048 [M 0x182c60:89-115]), so the end must be a
-        // type-0x12 event inside one of the 7 streams — decode pending. Note: a script 0x12 into
-        // 0x0700001b would load the 0x7100018 briefing first [M 0x1d94c0 skipbrief=0] — the port's
-        // direct jump skips it. Until the decode, the 241-tick timer stays the documented stand-in.
+        // The 07000041 wrapper end — the port's story hand-off (a documented [S] stand-in flow).
+        // What the disc PROVES (every pin carried from level-41-exit-event's decode): the 7 type-7
+        // scripts decode with NO 0x12 event (0x3 delay ×6 + 0xF callback ×3, no 0xD channel write
+        // [D the nis decode, wrapper_07000041_end_live]); nothing ever RUNS them — the level's only
+        // two 0xD9 ScriptPlayer placements (map 01000081 idx 0/42) both carry script hash
+        // 0x06000000, a hash no archive on the disc carries [D the 99-archive type-7 scan], with
+        // trigger mask p5 = 0, so `SP_Update`'s trigger = flags & 0 [M script-player.md] and both
+        // idle forever; no 0xE8 LOAD_LEVEL exists [D the placement scan]; the mission system is
+        // inert (07000041 has no MissionData row [D ACTION.ELF 0x2a4350's 24 records], so nothing
+        // writes ch 99/100 [M Mission_MonitorObjectives 0x1827d8 + Mission_Update 0x182c60]); and
+        // the one 0xF4 movie trigger's E-arm loads nothing — its movie code is 0 [D params (0, 4,
+        // 0)] and `Trigger_Activate` 0x1b2518-55 only writes GameState+0x10 and pushes states 6/7,
+        // with no movie started state 6 pops the same tick (`psiMovieFinished` 0x1082e8 =
+        // `BGFMVPlaying == 0`) and state 7's fade counts out and pops [M 0x1c9ca8-0x1c9cfc].
+        // DRIVING.ELF holds no 0x07000041/0x0700001b literal either [D grep] — the game's hop to
+        // the station is the story layer's, data-driven outside ACTION.ELF. So the hop has no
+        // in-level carrier on this disc, and the port models it as its own documented flow: once
+        // the approach chain's channel (ch 1, the plate #99 out [D PL#99]) has been on for the
+        // chain window, the hand-off latches the story's next base map 0x0700001b [L the front
+        // end's sp_level 0x2df2e0 — 0x0700001b is the 7th base map; M the game's own Equinox hop
+        // 0x1d3800:95-97 → 0x1d6360:99-102 wraps the load through the 0x7100018 briefing]. The
+        // WINDOW is a port choice [S unverified]: the chain's longest script's length, 241 ticks
+        // [D 06000027's length] — the script itself never runs [D, the pins above]; the length only
+        // bounds the chain's presentation (the turret shot, the voices, the rod delete). The latch
+        // rides the load path's wrap at the consumer — 0x0700001b → 0x07100018 → 0x0700001b
+        // [M 0x1d3800:95-97 + 0x1d6360:99-102, triggers::wrap_intro/resolve_exit_code + the
+        // nf-view drain]. The game's real exit tail [M Trigger_Activate 0x1b2318:105-116:
+        // Music_Event(3,1), GS_PauseGame(1), ResetMap_LevelToLoad, PushState(300,7), RamSave] is
+        // the kind-10 trigger shape; this stand-in latches the same field the 0xE8/0x12 paths
+        // latch and leaves the tail to the consumer's drain.
         if d.level == 0x0700_0041 && self.level_exit.is_none() {
             if self.channels.on(1) {
                 let t = self.wrapper_end_timer.unwrap_or(0) + 1;
@@ -17344,6 +17470,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 damage: f32_at(0x0c), owner: usize::MAX, state: 0,
                                 weapon: crate::gt::TURRET_WEAPON_RECORD as u16,
                                 flyby: d.weapons.flyby(crate::gt::TURRET_WEAPON_RECORD), bounces: 0,
+                                // Guard-side deviation: the glass pass stays unmodelled (see the
+                                // close-combat spawn in drone.rs).
+                                glass_pass: false,
                                 ..crate::bullet::Bullet::TAIL
                             };
                             b.init_fuse(w);
@@ -17583,6 +17712,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                     pos: from, dir, speed: f32_at(0x20), travelled: 0.0,
                                     range: f32_at(0x1c), damage: f32_at(0x0c), owner: usize::MAX,
                                     state: 0, weapon: 107, flyby: d.weapons.flyby(107), bounces: 0,
+                                    // Guard-side deviation: the glass pass stays unmodelled (see the
+                                    // close-combat spawn in drone.rs).
+                                    glass_pass: false,
                                     ..crate::bullet::Bullet::TAIL
                                 };
                                 b.init_fuse(w);
@@ -18426,6 +18558,36 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     let (a, b, r) = player.body;
                     crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging }
                 } else {
+                    // The standing stance keeps the measured box reach below. THE GAME'S SHAPE IS
+                    // NOW PINNED (level-0a-low-beam-standing-toucher, 2026-11-03): the collide-pass
+                    // HITTEST segment itself — `Player_Collision` 0x194df0's default arm A =
+                    // pos+up·0.275 → BLData+0x760, B = pos+up·(0.55−cc) → +0x770, r 0.55 → +0x7cc,
+                    // mode 0x800 → +0x7d4 [M :315-333 + the tail]; `Collide_PickObj` 0x1eae80:96-119
+                    // picks on that segment (dist < obj_r·1.5 + h+0x8c), `Collide_Intersect`
+                    // 0x1ebaa8:226-247 refines with `Intersect_CylGeom` vs the trigger's OWN glist
+                    // (obj+0xD8 = the celglist [M Trigger_Create 0x1b1720:92]; strict dist < radius
+                    // [M 0x109da0:447], misses drop as the 1e8 sentinel [M 0x1ea398:118-158]), the
+                    // contacts mirror into both sides' obj+0xD0 [M 0x1ea398:160-215], and
+                    // `Trigger_Hit` 0x1b1fc8:27-47 credits the class-3 owners as mask-8 — the
+                    // player obj+0xFF = 3 [L ee_start_0700000a.bin: glb_players[0] @0x2d88e0 →
+                    // 0x1b78640, +0xff = 3]. That segment bottoms at B−r = pos−cc (floor+0.05
+                    // standing), inside #621's band y 0.13-0.39 [D] — the game's standing walk
+                    // fires it [L PCSX2 2026-11-02: ch 0x24 0→1 crossing z −31.0→−33.78], the box
+                    // (bottom pos−0.6 = 0.53) does not. Wiring the segment in IS testable
+                    // (low_beam_621_fires_standing went green with it) but breaks three measured
+                    // pins, each with its own open lever: (1) the 07000005 truck ride — the park
+                    // plate fires standing (the segment dips 0.163 under B to the plate; the
+                    // game's standing-RIDE contact is unmeasured, the 05-truck trace played
+                    // crouched only, and the ride's own class-5 truck contact is not ported,
+                    // trigger-port-check #11); (2) 07000011's Bond-Moment plate #235 — its glist
+                    // rides ~0.85 over pos, above even the segment's pos+0.825 top, the same
+                    // glist ref-gate/extent divergence as the 0c ch-27 bay volume documented on
+                    // Toucher::player; (3) the 0a office-ring route pin (walkreal_0700000a_live
+                    // walk_office_floor_qworm_keyboard_hatch: "no laser/alert channel fired") —
+                    // the port's walker path brushes low bands the game's footpath never did, a
+                    // route-side waypoint divergence, and the real-damage sisters die to the
+                    // laser. The next lever is the route-side tightening plus the glist
+                    // ref-gate/extent, then this arm replaces the box.
                     crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) }
                 }
             }],
@@ -18569,7 +18731,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // exactly these five out; the s/level-14-trench-landing whitelist (only the four
                     // celglist-creator kinds) un-posed the ride platforms (the paternoster cab
                     // 0x2000367, the 0700004a lift entity obj_type 31, the gondola) and broke the rides.
-                    Some(crate::nis::Obj::Entity { hash, kind, matrix, .. }) if !matches!(kind, 0xea | 0xeb | 0xf5 | 0xf2 | 0xf0) => parts.push((id(0), *hash, *matrix)),
+                    Some(crate::nis::Obj::Entity { hash, kind, matrix, .. }) if !matches!(kind, 0xea | 0xeb | 0xf5 | 0xf2 | 0xf0) => {
+                        // Break_Kill's law [M 0x12b970:60 — obj+0xFE |= 1, "the collision goes
+                        // away"]: a KILLED 0x20 pane's glist leaves the collide set. The pane row
+                        // rides the same script obj (the per-tick sync upserts it), so its dead
+                        // flag past the death tick drops the part — the death tick keeps it (the
+                        // killing contact registers BEFORE Break_Kill takes the collision away,
+                        // the same grace the 0x400_0000_0000 placed-pane arm carries). Measured
+                        // on 07000008: the gondola's shot-out windows kept stopping the eye rays
+                        // at the pane plane (the 3409-tri dump showed the dead quads in the
+                        // dynamic set) and the Hind-fight launch corridors never opened.
+                        let pane_dead = *kind == 0x20
+                            && drones.breaks.list.iter().any(|b| b.script_obj == Some(oi) && b.dead && b.dead_frame != drones.frame);
+                        if !pane_dead { parts.push((id(0), *hash, *matrix)); }
+                    }
                     _ => {}
                 }
             }
@@ -19455,6 +19630,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     dr.hit_door = self.node_doors.as_ref().and_then(|m| m.get(&(path, node))).copied();
                     if let Some(i) = dr.hit_door { dr.hit_door_open = self.doors.list[i].state == crate::door::OPEN; }
                 }
+                // The game delivers `DSTATE_OpenDoor`'s ENTER with the binding ALREADY live
+                // [M 0x153358:149-163 binds +0xBA8, then Drone_SM_SetState runs the ENTER whose
+                // DoorIsOpen reads it — 0x1681f8 case 1]. The port's bind happens inside the
+                // send above, so the ENTER ran before this resolution existed; the arm deferred
+                // (the fresh-binding gate) — re-deliver it now, with the door the game would
+                // have read. Only a drone still standing in 0x81 (an impact queued elsewhere in
+                // the same send can have moved it) takes the re-delivery.
+                if dr.state == state::OPEN_DOOR { dr.send(d, rng, frame, msg::ENTER); }
             }
             // The route's KICK node (fix-nav-remainder): resolve the node → ScriptPlayer binding
             // (`NDrone_InitKickNodes` 0x139ce0, built lazily below) and — on the node's first
@@ -19797,7 +19980,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if let Some(i) = dr.hit_door {
                     let dp = self.doors.list[i].pos;
                     if (dr.pos[0] - dp[0]).powi(2) + (dr.pos[1] - dp[1]).powi(2) + (dr.pos[2] - dp[2]).powi(2) > 4.0 {
+                        // The game clears the ONE slot here [M 0x1490f0:237 —
+                        // `*(undefined4 *)(uVar2 + 0xba8) = 0` after the Vec_Dist3D > 2.0]. The
+                        // port's split stand-ins — `hit_door` (the DoorIsOpen/OpenDoor side) and
+                        // `door_bound` (the ReachedDestNode 0x153358:151-155 no-op key) — ARE that
+                        // one +0xBA8, so BOTH clear: a binding left only in `door_bound` no-ops
+                        // every later route pass at the node, and with `hit_door` already gone the
+                        // guard can neither re-bind nor re-attempt — stranded before a closed door
+                        // (the chase/interrupt flows the 11 red door tests exercise).
                         dr.hit_door = None;
+                        dr.door_bound = None;
                     } else if !dr.hit_door_open {
                         dr.door_attempt = true;
                     }
@@ -21405,6 +21597,7 @@ mod tests {
             abseil_land_latch: false,
             mission_path_dist: 0.0,
             stun_until: 0, player_pos: [0.0; 3],
+            stun_recover: 0,
             down: false,
             door_partner: None, door_side: 0, door_planes: [[0.0; 4]; 3], door_zone: 0, door_idle_anim: 0x24, door_zone_step: 0, door_pair_requested: false,
             door_pair_watch: false,
@@ -21432,6 +21625,7 @@ mod tests {
             free_root: false, bounded: true, dtype: 0, mode_normal: 0, mode_alert: 0, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None, alert_block: 0.0,
             door_open_at: 0,
             hit_door: None, door_return: 0, door_node: None, door_attempt: false, pending_door_msg: false, hit_door_open: true,
+            door_bound: None,
             // fix-nav-remainder: the kick-node outbox + the ScriptPlayer binding.
             kick_sp: None, kick_node: None, ally_wait_node: None, kick_attempt: false, no_bunching: 0,
             no_bunching_hit: false,

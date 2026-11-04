@@ -2847,6 +2847,20 @@ impl Sim {
             .and_then(|w| w.get(0x68..0x6c)).map_or(false, |b| u32::from_le_bytes(b.try_into().unwrap()) & 0x40 != 0);
         let aiming = self.aim_gate(input.aiming || (input.scope && scoped));
         self.free_aim = aiming && input.aiming;
+        // level-0c-yard-climb-real-health-4 [M Player_AutoAim 0x1a7c98:50-59 — the aim-branch
+        // ease]: while the aim button is HELD (obj+0x60 bit0 set), the assist offsets ease
+        // toward the manual offsets at 0.5/tick and the Check_AutoAim scan does NOT run — per
+        // tick, not per shot. The port ran the ease only inside the fire path's dir pick, so
+        // an assist locked during the walk legs stayed frozen through the aim-raise and
+        // steered the first aimed rounds off target (measured: the pre-climb stand's shot
+        // carried aoff -0.216 rad — 12° off the converged view, the round died on the wall
+        // behind #15 [L the NF_RF_TRACE impact trace]; the same freeze held the west-edge
+        // stand's rounds 1.2 u west of #13 at (-4.20,12.58,-221.83) [L the same trace]).
+        if input.aiming {
+            let (ox, oy) = (-self.cursor[0] * 0.76966, self.cursor[1] * 0.57724);
+            let off = self.drones.aim_offset;
+            self.drones.aim_offset = [off[0] + (ox - off[0]) * 0.5, off[1] + (oy - off[1]) * 0.5];
+        }
         // Weapon switching (`Player_WeaponChange` 0x1a6f80): only when idle (not firing/reloading/holstering). The
         // switch request (`anim+0x63`) is set here; the holster/draw cycle runs in `run` (`Player_SetWeaponAnimObj`).
         // The weapon/gadget split: mouse wheel / Q cycles weapons (mode=0, 1..0x47); G cycles gadgets (mode=1,
@@ -3006,7 +3020,12 @@ impl Sim {
             // step (0x1a6f80:179-198) — `cycle` takes &mut self for the marker clear.
             let base_of = |w: u8| weapons.base(w as usize) as u8;
             let target = if let Some(id) = input.switch_to {
-                if id != self.gun.weapon && owned.get(id as usize).copied().unwrap_or(false)
+                // The owned read is the BASE's slot: the twins share it (`BL+0x1BA + base·0xC`,
+                // `Player_EquipWeapon` 0x1a8a58:39-41 — a variant owns nothing of its own; the
+                // port's Inventory::equip_weapon writes the same base slot [M]) — a direct request
+                // for the Samurai overcharge 0x32 (base 0x33) after its give was refused on
+                // owned[0x32] and the draw never started (fire_modes3's samurai leg).
+                if id != self.gun.weapon && owned.get(base_of(id) as usize).copied().unwrap_or(false)
                     && weapons.first_person(id as usize) != 0 { Some(id) } else { None }
             } else if idle && input.weapon_cycle != 0 {
                 let t = self.gun.toggle_back(nf_game::gun::CycleMode::Weapons, &owned, has_ammo, selectable, base_of);
@@ -4322,9 +4341,13 @@ impl Sim {
             // assist of a target locked before the raise carries into the first aim-mode shots.
             // fix-guard-misc2: the port dropped the lock and the offsets entirely on entering aim
             // mode, so an assist acquired while hip-firing never reached an aim-mode bullet.
-            // fix-aim-raise2: the gated BIT (`self.aiming`, maintained by `aim_gate` before run),
-            // not the raw button — the scan runs while a raise-script weapon is still raising.
-            let dir = if self.auto_aim && !self.free_aim { self.drones.auto_aim(&d, camera, look, self.gun.weapon) } else if self.free_aim {
+            // fix-aim-raise2 gated the scan on the BIT so the scan ran during the raise; 
+            // level-0c-yard-climb-real-health-4 corrects that with the decompile: the scan gate
+            // is the RAW aim button [M Player_AutoAim 0x1a7c98:50-59 — the branch reads
+            // obj+0x60 bit0: bit set → the ease arm, no scan; bit clear → the Check_AutoAim
+            // scan], so the button-held raise runs the ease (the per-tick ease lives in the
+            // step_bond path, right after the aim gate) and only the button-UP ticks scan.
+            let dir = if self.auto_aim && !self.free_aim && !aiming { self.drones.auto_aim(&d, camera, look, self.gun.weapon) } else if self.free_aim {
                 // The cursor is screen-space (cross units); the offsets are object-frame angles
                 // (a larger yaw turns LEFT, so x flips — the same flip `crosshair()` documents).
                 let (ox, oy) = (-self.cursor[0] * 0.76966, self.cursor[1] * 0.57724);
@@ -5098,6 +5121,10 @@ impl Sim {
                         phase: matches!(self.gun.weapon as u16, 0x3a | 0x3b).then(|| {
                             Box::new(nf_game::grenade::StuckGadget::thrown(sdir))
                         }),
+                        // satchel-laser-scramble: BU+0x102 — Bullet_init 0x12c5a0:211 writes 100 for
+                        // the 0x3b family (the record's +0x02 base, in scope as `base`).
+                        burn: if base == 0x3b { 100 } else { 0 },
+                        defused: false,
                     });
                 } else {
                     // The muzzle light runs on every shot tick for the light-gated records — the
@@ -9407,31 +9434,45 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // the same `transform(matrix, obj.centre)` add_instance bakes into the group's cull
                 // sphere, so the bits match the material's `centre` the draw filter reads.
                 if kind == 0xe1 {
-                    destroy_centres.push((transform(&inst.matrix, obj.centre), pi));
-                    // The destroyed-glist swap's WRECK side. `Destroy_Create` 0x12c318:25-30 stores
-                    // tag[0] = `*(glist+0x40)` when the block-0x27 LOD-next word stands, else the
-                    // parsemap fallback slot `pCelList + idx*0x50 + 0x50` [M 0x1d1b68 computes it
-                    // unconditionally; `parsemap_block_LOD` 0x1d1f10 writes `cel+0x40 = index*0x50 +
-                    // pCelList`, so the fallback record is the NEXT main-map entity's glist];
-                    // `Destroy_Smash` 0x12bb60's `Control_SetGList(obj, tag[0])` swaps it in (the
-                    // disassembly 0x12bbb8 `lw a1,0(s1)` + 0x12bbc4 — the decomp dropped the arg).
-                    // The port resolves the same two targets and bakes the wreck at the LEAF's own
-                    // matrix (the swap changes only the glist; obj+0x90 stands). An undrawable slot
-                    // (no batches, or the no-draw bit 0x10 — `View_AddObjects` 0x1e62d8:33's
-                    // `(obj+0xF0 & 0x8010) == 0` gate, the FLAGS_COPYING evidence) is not baked: the
-                    // leaf just vanishes. The wreck's ambient dim follows the swapped-in glist's own
-                    // 0x800 flags (obj+0xF0 is the glist's flags copy [M Control_SetGList 0x134960]).
-                    let wreck = level.maps[map].lod_target(object)
-                        .map(|o| (map, o))
-                        .or_else(|| (p.index as usize + 1 < level.maps[map].objects.len()).then_some((map, p.index as usize + 1)));
-                    if let Some((wm, wo)) = wreck {
-                        let wobj = &level.maps[wm].objects[wo];
-                        if wobj.flags & 0x10 == 0 && wobj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) {
-                            let wmult = if wobj.flags & 0x800 != 0 {
-                                mul_bytes(cel_ambient(&room_cels, transform(&inst.matrix, wobj.centre), 0).unwrap_or([0xff; 3]))
-                            } else { [1.0; 3] };
-                            add_instance(level, &Instance { map: wm, object: wo, matrix: inst.matrix, placement: p.clone() }, Layer::World, None, &mut groups, Some(&mut bounds), None, None, None, wmult, &room_cels, u32::MAX, u32::MAX);
-                            destroy_wrecks.push((transform(&inst.matrix, wobj.centre), pi));
+                    // The swap's NO-SWAP case, which decides whether the leaf's intact draw dies at
+                    // all. `Destroy_Create` 0x12c318:57-59 zeroes tag[0] when the leaf's OWN glist
+                    // flags carry the no-draw bit 0x10 (obj+0xF0 = glist+0x44, copied by the
+                    // SetGList at :25 [M Control_SetGList 0x134960]); `Destroy_Smash` 0x12bb60 then
+                    // takes its `*piVar1 == 0` arm and SKIPS the `Control_SetGList(obj, tag[0])`
+                    // swap — the intact glist stays attached and the leaf keeps drawing exactly
+                    // what it drew before the smash. 07000014's server racks are that case
+                    // [D obj#273 DESTROY_BoxSatellite flags 0x30, bit 0x10 set]: the cascade's
+                    // blast swaps nothing in for them. A leaf in the zeroing case joins NEITHER the
+                    // dead gate NOR the wreck bakes. (The no-draw gate above already skips every
+                    // 0x10 leaf before this point, so this guard keeps the two rules consistent
+                    // rather than changing any draw.)
+                    if obj.flags & 0x10 == 0 {
+                        destroy_centres.push((transform(&inst.matrix, obj.centre), pi));
+                        // The destroyed-glist swap's WRECK side. `Destroy_Create` 0x12c318:25-30 stores
+                        // tag[0] = `*(glist+0x40)` when the block-0x27 LOD-next word stands, else the
+                        // parsemap fallback slot `pCelList + idx*0x50 + 0x50` [M 0x1d1b68 computes it
+                        // unconditionally; `parsemap_block_LOD` 0x1d1f10 writes `cel+0x40 = index*0x50 +
+                        // pCelList`, so the fallback record is the NEXT main-map entity's glist];
+                        // `Destroy_Smash` 0x12bb60's `Control_SetGList(obj, tag[0])` swaps it in (the
+                        // disassembly 0x12bbb8 `lw a1,0(s1)` + 0x12bbc4 — the decomp dropped the arg).
+                        // The port resolves the same two targets and bakes the wreck at the LEAF's own
+                        // matrix (the swap changes only the glist; obj+0x90 stands). An undrawable slot
+                        // (no batches, or the no-draw bit 0x10 — `View_AddObjects` 0x1e62d8:33's
+                        // `(obj+0xF0 & 0x8010) == 0` gate, the FLAGS_COPYING evidence) is not baked: the
+                        // leaf just vanishes. The wreck's ambient dim follows the swapped-in glist's own
+                        // 0x800 flags (obj+0xF0 is the glist's flags copy [M Control_SetGList 0x134960]).
+                        let wreck = level.maps[map].lod_target(object)
+                            .map(|o| (map, o))
+                            .or_else(|| (p.index as usize + 1 < level.maps[map].objects.len()).then_some((map, p.index as usize + 1)));
+                        if let Some((wm, wo)) = wreck {
+                            let wobj = &level.maps[wm].objects[wo];
+                            if wobj.flags & 0x10 == 0 && wobj.gfx.leaves.iter().any(|l| !l.batches.is_empty()) {
+                                let wmult = if wobj.flags & 0x800 != 0 {
+                                    mul_bytes(cel_ambient(&room_cels, transform(&inst.matrix, wobj.centre), 0).unwrap_or([0xff; 3]))
+                                } else { [1.0; 3] };
+                                add_instance(level, &Instance { map: wm, object: wo, matrix: inst.matrix, placement: p.clone() }, Layer::World, None, &mut groups, Some(&mut bounds), None, None, None, wmult, &room_cels, u32::MAX, u32::MAX);
+                                destroy_wrecks.push((transform(&inst.matrix, wobj.centre), pi));
+                            }
                         }
                     }
                 }

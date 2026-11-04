@@ -10,11 +10,405 @@ pub mod walker;
 
 pub use walker::{Act, Walker, Wp, wrap_pi};
 
+thread_local! {
+    /// `with_yard_aimed_stands`'s switch: the yard's deck-sniper stands run on this test's
+    /// thread only (libtest runs each test on its own thread, so the top-up walk, the
+    /// eastroute replay and the upward-shot proofs on master's plain behaviour are untouched).
+    static YARD_AIMED_STANDS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run a walk with the yard's deck-sniper stands enabled (OPT-IN, level-0c-yard-climb-real-
+/// health-2): the real-health run's killer chain is the deck snipers (weapon 0x1e, -16 a hit)
+/// sitting 10.7-11 u ABOVE the yard floor — outside the shared shooters window's 7.5 vertical
+/// reach (common/damage_log.rs), the plain fights never answer them, and #18 ((36.4, 12.1,
+/// -208.8), hp 10, a STATIONARY sentry [L the real-health run's yard census]) dealt 51.8 of
+/// 100 in 4 hits from d ~34 u before killing Bond ON the ladder at y 7.95 [L the predecessor
+/// run]. The game's own climb has no pain gate to hide behind [M Player_Climb 0x196310 - the
+/// stick advances the climb, the only up-block is the 0x20 head-hit flag;
+/// Player_HandlePain 0x1902c8 writes no substate; Player_CollLadder 0x196118:17's sole health
+/// read is the grab gate] — only death ends it [M Player_CheckForDeath 0x190810] — so a real
+/// player kills the deck before climbing: the sniper 0x1e is in the boot loadout [D the boot
+/// loadout], and the AIMED act's spread is zero [M Bullet_init 0x12c5a0:139-170 — mul = 0
+/// only with the aim bit; the 0x1e record carries 0x400000, flags68 0x408050 [L
+/// ee_start_05.bin @ 0x2c10b8]] where the HIP cone (spread base +0x24 = 100.0 → 0.14 rad =
+/// 4.9 u of scatter at 35 u) misses the ~0.5 u chest box the way the game's does — the
+/// player-upward-shot root cause, pinned by upward_shot_0700000c_live on master.
+#[allow(dead_code)]
+pub fn with_yard_aimed_stands<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { YARD_AIMED_STANDS.with(|c| c.set(false)); } }
+    YARD_AIMED_STANDS.with(|c| c.set(true));
+    let _reset = Reset;
+    f()
+}
+
+/// Trace helpers (scratch): the gun's state for the no-bullet-spawned line.
+fn s_gun_debug(w: &Walker) -> String { format!("{:?}", w.scene.sim.as_ref().unwrap().gun.weapon) }
+fn s_gun_fire_state(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().gun.fire_state }
+
+/// One aimed-0x1e stand on drone `di` with the STILL GATE. The aimed act's zero spread
+/// [M Bullet_init 0x12c5a0:139-170] puts the round exactly along the view, but the round
+/// FLIES ([M] Bullet_update 0x12e7b0 — the round steps its `speed` per tick), and a guard
+/// that steps during the flight is not where the view was — no lead. Measured (this
+/// session's probe, level-0c-yard-climb-real-health-3): converged aimed rounds (err 0.000,
+/// perr 0.000, blocked false) at the deck sentry #18 never landed while it wiggle-stepped
+/// ±0.1 u at (36.36, 12.06, -208.79); the same stand from the same spot LANDED the run the
+/// sentry stood still (probe A round 2: hp 10.0 → -50.0). A player holds the shot until the
+/// guard pauses. So: converge, tap only after the target has held still STILL_NEED ticks.
+/// The direct number-key switch through the real input path [M Player_WeaponChange mode 0];
+/// the view levelled after (the fights' own idiom). Never writes health, armour or ammo.
+fn yard_stand_aimed(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
+    for _ in 0..120 {
+        let sim = w.scene.sim.as_mut().unwrap();
+        if sim.gun.weapon == 0x1e { break; }
+        sim.step_bond(nf_game::player::Input { switch_to: Some(0x1e), ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    // level-0c-yard-climb-real-health-4: the aim-RAISE loop. Measured (this session): the
+    // stand's aim press at t0 fired its edge INTO the switch anim (switch_state 3) and the
+    // raise never queued — the aim bit stayed false for the whole stand (360+ ticks, gun
+    // idle [L the a04i run's mid-crossing trace]), so every round rode the hip cone. The
+    // game queues the raise ONLY on the aim-PRESSED edge from the idle machine
+    // [M 0x1a24c8:113-152 — `(uVar8 & 1) == (bVar5 & 1)` skips the arms, the raise arm runs
+    // on the 0→1 edge; the port's queue gate scene.rs 4707 needs switch_state 0 + the idle
+    // script too], so a player RELEASES the aim after the switch, lets the weapon settle,
+    // and RE-PRESSES. Wait for switch_state 0 (no input), then hold aim until the bit sets
+    // (the raise plays ~len/1.25 ticks; its finish sets the bit [M 0x1a2e38:554-561]).
+    for _ in 0..90 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.gun.switch_state == 0 && !sim.gun.fire_state { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
+    }
+    for _ in 0..240 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.aiming { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { aiming: true, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    const STILL_NEED: u32 = 18;
+    let prev = w.dmg.aimed_fights;
+    w.dmg.aimed_fights = true;
+    let killed = {
+        let trace = std::env::var_os("NF_RF_TRACE").is_some();
+        let mut di = di;
+        let mut unseen = 0u32;
+        let mut last_tap = 0u32;
+        let mut aim: Option<[f32; 3]> = None;
+        let mut hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
+        let mut last_hit = 0u32;
+        let mut still = 0u32;
+        let mut last_pos = [0.0f32; 3];
+        let mut have_pos = false;
+        let mut trace_impact_frame = 0u32;
+        for t in 0..cap {
+            let (input, fire, reload) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[di];
+                if d.corpse || d.health <= 0.0 || !d.present { return true; }
+                if sim.disabled { return false; }
+                if sim.gun.clip == 0 && sim.gun.spare == 0 { return false; }
+                // The still gate: root motion only (the box sway rides the anim; the root is
+                // what carries the chest out of the round's path during the flight).
+                let moved = have_pos && ((d.pos[0] - last_pos[0]).powi(2)
+                    + (d.pos[1] - last_pos[1]).powi(2) + (d.pos[2] - last_pos[2]).powi(2)).sqrt() > 0.03;
+                have_pos = true;
+                last_pos = d.pos;
+                still = if moved { 0 } else { still.saturating_add(1) };
+                if d.health < hp0 { hp0 = d.health; last_hit = t; }
+                if t - last_hit > 400 { return false; }
+                // Re-pick the exposed part every 10 ticks with the STRICT gun-ray set (the
+                // fights' lane idiom, `DamageLog::exposed_part_gun_rays`): the round leaves the
+                // muzzle low-right of the eye, and the measured #15 case is the predictor gap —
+                // the plain EYE ray read Some while every round died on the deck structure
+                // (5 rounds, hp 10.0 never moved [L this session's pre-climb stand]); the
+                // muzzle stand-in rays demand the flight's own lane clear.
+                if t % 10 == 0 { aim = walker::DamageLog::exposed_part_gun_rays(&sim, di); }
+                if aim.is_none() { unseen += 1; if unseen > 60 { return false; } } else { unseen = 0; }
+                let b = sim.bond.pos;
+                let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
+                let at = aim.unwrap_or([d.pos[0], d.pos[1] + 0.3, d.pos[2]]);
+                let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
+                let h = (dx * dx + dz * dz).sqrt().max(0.5);
+                let desired_yaw = dx.atan2(dz);
+                let desired_pitch = (dy / h).atan();
+                // level-0c-yard-climb-real-health-4: the AIM-MODE convergence. With the aim bit on,
+                // the fired round's direction is the VIEW PLUS the cursor offsets [M scene.rs
+                // free-aim: the cursor follows the stick (`want = cursor − turn/0.76966`,
+                // `+look·π/2/0.57724`, clamped ±0.296/±0.4), the offsets ease toward
+                // (−cx·0.76966, +cy·0.57724) and the fired dir = the view + the eased offsets —
+                // the same view+cursor round the 07000011 walk pinned (precise_fights' doc)] — so
+                // converging the VIEW alone (the old err/perr) left the shot on the cursor: the
+                // measured rounds steered −12° off (aoff −0.216) and died on the wall behind
+                // #15 [L the a04k trace]. Drive the CURSOR to the position that puts the effective
+                // aim on the target, and gate the tap on the EFFECTIVE error.
+                let yaw_err = { let mut a = desired_yaw - sim.bond.yaw;
+                    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
+                let cx_want_raw = -yaw_err / 0.76966;
+                let cy_want_raw = pitch_err / 0.57724;
+                let cx_want = cx_want_raw.clamp(-0.296, 0.296);
+                let cy_want = cy_want_raw.clamp(-0.4, 0.4);
+                let cur = sim.cursor;
+                // The drive uses the UNCLAMPED target: at the window edge the overflow becomes
+                // the free-aim spill (scene.rs 3066-3067 rewrites the input to the clamp
+                // overflow) and turns the VIEW — the clamped drive fed zero there and the aim
+                // stalled with the cursor pinned at (±0.296, ±0.4) [L the a04m trace: the err
+                // frozen at −0.924 for 300+ ticks].
+                let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
+                let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
+                // The effective aim (what the fired round obeys): the view + the eased offsets.
+                let aoff = sim.drones.aim_offset;
+                let err = { let mut a = yaw_err - aoff[0];
+                    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                let perr = pitch_err - aoff[1];
+                // Another live hostile on the line, short of the target: the game's bullets hit
+                // any drone [M Drone_CollisionHandler 0x140968] — shoot the blocker (the
+                // fights' shoot_blockers idiom; the yard top carries several 0x1e guards).
+                let len = (dx * dx + dy * dy + dz * dz).sqrt().max(0.01);
+                let u = [dx / len, dy / len, dz / len];
+                let mut blocker: Option<usize> = None;
+                let blocked = sim.drones.list.iter().enumerate().any(|(k, o)| {
+                    if k == di || !o.present || o.corpse || o.health <= 0.0 { return false; }
+                    let c = [o.pos[0] - eye[0], o.pos[1] + 0.6 - eye[1], o.pos[2] - eye[2]];
+                    let s = c[0] * u[0] + c[1] * u[1] + c[2] * u[2];
+                    if s <= 0.0 || s >= len - 0.3 { return false; }
+                    let q = [c[0] - u[0] * s, c[1] - u[1] * s, c[2] - u[2] * s];
+                    let on_line = (q[0] * q[0] + q[2] * q[2]).sqrt() < 0.6 && q[1].abs() < 1.2;
+                    if on_line && blocker.is_none() { blocker = Some(k); }
+                    on_line
+                });
+                if blocked && self_blocker_hostile(&sim, blocker) {
+                    let k = blocker.unwrap();
+                    if trace { eprintln!("[0c] yard stand ({label}) t{t}: line blocked by live hostile #{k} — retarget"); }
+                    di = k;
+                    hp0 = sim.drones.list[k].health;
+                    last_hit = t;
+                    aim = None;
+                    unseen = 0;
+                    continue;
+                }
+                let reload = sim.gun.clip == 0;
+                // level-0c-yard-climb-real-health-4: the AIM-BIT gate. Measured (this session's
+                // NF_RF_TRACE shot trace): the stand's taps fired with `self.aiming == false` —
+                // the aim-raise anim had not finished [M the aim bit is set only after the
+                // aim-raise anim finishes — Player_SetWeaponAnimObj case 0xf, scene.rs's auto-aim
+                // comment] — so every round rode the HIP cone (the 0x1e's spread base 100.0 [L
+                // ee_start_05.bin @ 0x2c10b8 +0x24]: 2-3° of scatter at d 16 — the measured
+                // rounds died 1.2-1.3 u off, on the wall BEHIND #13 at (-4.20,12.58,-221.83) and
+                // (-4.26,13.04,-221.78) [L the impact trace], while the probe's AIMED round from
+                // the same class of pose HIT #13 part 4 [L walkreal_probe0c_lip]). The trigger
+                // also kept the gun in its fire script (fire_state true t88-t344), so the raise
+                // never ran. A player holds L1 WITHOUT tapping: the raise finishes, the bit sets,
+                // and the tap is then a zero-spread round. Gate the tap on the bit.
+                let fire = sim.aiming && !reload && unseen == 0 && !blocked && err.abs() < 0.01 && perr.abs() < 0.01
+                    && still >= STILL_NEED && t.saturating_sub(last_tap) >= 8;
+                if trace && t % 60 == 0 {
+                    eprintln!("[0c] yard stand ({label}) t{t}: tgt #{di} hp {:.1} at ({:.2},{:.2}) still {still} aim {:?} err {err:.3} perr {perr:.3} clip {} spare {} hp {:.1} atgt {:?} aoff {:?} aimbit {} fire_state {} cursor ({:.3},{:.3})",
+                        sim.drones.list[di].health, sim.drones.list[di].pos[0], sim.drones.list[di].pos[2],
+                        aim.map(|a| [a[0], a[2]]), sim.gun.clip, sim.gun.spare, sim.drones.health.health,
+                        sim.drones.aim_target, sim.drones.aim_offset, sim.aiming, sim.gun.fire_state, cur[0], cur[1]);
+                }
+                (nf_game::player::Input { turn, look, aiming: true, ..Default::default() }, fire, reload)
+            };
+            if reload {
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, true, false);
+                w.total_ticks += 1;
+                w.after_step();
+                for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+            } else if fire {
+                last_tap = t;
+                let pre = w.scene.sim.as_ref().unwrap().drones.player_bullets.len();
+                let (vyaw, vpitch) = { let s = w.scene.sim.as_ref().unwrap(); (s.bond.yaw, s.bond.pitch) };
+                let aiming_bit = w.scene.sim.as_ref().unwrap().aiming;
+                w.tick_fire(input);
+                if trace {
+                    let s = w.scene.sim.as_ref().unwrap();
+                    if let Some(b) = s.drones.player_bullets.get(pre).or_else(|| s.drones.player_bullets.last()) {
+                        eprintln!("[0c] yard stand ({label}) t{t}: SHOT from ({:.2},{:.2},{:.2}) dir ({:.4},{:.4},{:.4}) | view yaw {vyaw:.4} pitch {vpitch:.4} view_dir ({:.4},{:.4},{:.4}) aiming_bit {aiming_bit} spread {:?}",
+                            b.pos[0], b.pos[1], b.pos[2], b.dir[0], b.dir[1], b.dir[2],
+                            vyaw.sin(), vpitch.sin(), vyaw.cos(), s.drones.player_spread);
+                    } else {
+                        eprintln!("[0c] yard stand ({label}) t{t}: SHOT but NO bullet spawned (gun state {:?} fire_state {})",
+                            s_gun_debug(w), s_gun_fire_state(w));
+                    }
+                }
+            } else {
+                w.tick(input, false);
+            }
+            // level-0c-yard-climb-real-health-4 (trace): what did this tick's rounds do? The
+            // probe (walkreal_probe0c_lip, scratch) fires the SAME shot from the SAME pose and
+            // HITS #13 (part 4) — so the real stand's rounds dying means the live pose/differs;
+            // the impact events name the death point.
+            if trace && w.total_ticks != trace_impact_frame {
+                trace_impact_frame = w.total_ticks;
+                let imps: Vec<String> = w.scene.sim.as_ref().unwrap().drones.player_impacts.iter()
+                    .map(|i| match i {
+                        nf_game::drone::PlayerImpact::Drone { drone, part, at } =>
+                            format!("DRONE #{drone} part {part} at ({:.2},{:.2},{:.2})", at[0], at[1], at[2]),
+                        nf_game::drone::PlayerImpact::World(p) =>
+                            format!("WORLD at ({:.2},{:.2},{:.2})", p[0], p[1], p[2]),
+                    }).collect();
+                if !imps.is_empty() {
+                    let s = &w.scene.sim.as_ref().unwrap();
+                    eprintln!("[0c] yard stand ({label}) t{t}: impacts {} | bond ({:.2},{:.2},{:.2}) eye {:.2} crouch {:.2} yaw {:.3} pitch {:.3} weapon {:#x}",
+                        imps.join(" | "), s.bond.pos[0], s.bond.pos[1], s.bond.pos[2], s.bond.eye, s.bond.crouch_drop, s.bond.yaw, s.bond.pitch, s.gun.weapon);
+                }
+            }
+        }
+        w.scene.sim.as_ref().unwrap().drones.list[di].health <= 0.0
+    };
+    w.dmg.aimed_fights = prev;
+    for _ in 0..90 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pitch;
+        if p.abs() < 0.01 { break; }
+        w.tick(nf_game::player::Input { look: (-p).clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[0c] the yard sniper stand ({label}): drone #{di} killed {killed}, health {:.1}",
+        sim.drones.health.health);
+    killed
+}
+
+/// The blocker retarget's gate: only a live hostile (team 1) takes the round — the shared
+/// `shoot_blockers` rule ([M] the fights' own gate, damage_log.rs stand_and_fire).
+fn self_blocker_hostile(sim: &nf_view::scene::Sim, blocker: Option<usize>) -> bool {
+    blocker.is_some_and(|k| {
+        let o = &sim.drones.list[k];
+        o.team == 1 && o.enabled && o.present && !o.corpse && o.health > 0.0
+    })
+}
+
+/// The yard's deck-sniper stands (OPT-IN, `with_yard_aimed_stands` — a no-op for every other
+/// caller). Labels:
+/// - "mid-crossing" (called after the yard's first west legs, BEFORE the open-ground beat
+///   costs health): the deck-emplacement stand — the deck sentry #18 at (36.36, 12.06,
+///   -208.79) [L this session's dumps; the -2 census's twin #36 is present false, enabled
+///   false on this tree — the PAIR reading does not hold and the round-vs-twin theory is
+///   retired] — killed by the still-gate stand. Measured exposure [L this session]: aim None
+///   from the secret door (d ~37.3, elevation 15.6° — the stand can never land there, the
+///   old at-the-door sweep never fired a round), Some from the ladder base (d 33.3, 18.1°)
+///   and from the mid-crossing legs (d ~24.6-32, 19-23°).
+/// - "at-the-door" (the secret door, before the yard legs): the east-ledge sweep — the yard's
+///   OTHER snipers (#20/#37, weapon 0x1e, (61.3/60.4, 9.7, -160/-157) [L this session's death
+///   log — they dealt 2 × -16 during the door approach/first legs from d ~59, outside every
+///   fight window]) get one capped still-gate stand each. A landing round kills a 10-hp
+///   sniper [L the census].
+/// - "pre-climb" (the ladder base): the emplacement stand again if #18 survived the crossing,
+///   then the suppression sweep — every other alive weapon-0x1e within 48 u gets one capped
+///   still-gate stand: the patroller #15 ((17.7, 12.2, -216.8) [L this session's dump]) and
+///   the walkway-deck #1 ((13.0, 12.1, -196.0) [L the census]) acquire Bond late and never
+///   pass the recent-hit pick, and #1's close beat at the mantle is what killed the 3.8 hp
+///   Bond [L the predecessor's death at (9.25, 12.12, -188.53)]. Short caps: these are
+///   suppression (a landing round kills a 10-hp sniper [L the census hp 10.0]).
+/// - "ladder-top": the same sweep at deck level (Bond is LEVEL with the deck there; #1's
+///   first beat lands ~110 ticks after the mantle — BEFORE any recent-hit window could pick
+///   him [L the frame-10681 beat in this session's death log] — so the sweep does not wait
+///   for a hit).
+/// The recent-hitter pass (all labels): stands on whoever of the alive weapon-0x1e hostiles
+/// within 48 u is actually hitting Bond (a hit in the last 600 frames — the snipers'
+/// observed beat is 170-360 frames [L the real-health run's fight traces]) and whose STRICT
+/// gun rays clear from here (`DamageLog::exposed_part_gun_rays`).
+fn yard_sniper_stands(w: &mut Walker, label: &str, max: usize) {
+    if !YARD_AIMED_STANDS.with(|c| c.get()) { return; }
+    // The east-ledge / pre-climb / ladder-top sweep: every alive weapon-0x1e hostile within
+    // `range` u gets one capped still-gate stand (the strict gun-ray aim keeps a covered
+    // guard from eating the clip — the #15 measurement).
+    let sweep = match label {
+        "at-the-door" => Some((64.0f32, 900u32, 3usize)),
+        "pre-climb" | "ladder-top" | "west-edge" | "west-ledge" => Some((48.0, 700, 3)),
+        "lip-1" | "lip-2" | "lip-3" | "lip-4" => Some((48.0, 300, 3)),
+        _ => None,
+    };
+    if let Some((range, cap, count)) = sweep {
+        for _ in 0..count {
+            let di_opt = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let b = sim.bond.pos;
+                (0..sim.drones.list.len()).find(|&i| {
+                    let d = &sim.drones.list[i];
+                    if !(d.weapon == 0x1e && d.health > 0.0 && d.present && !d.corpse && d.team == 1 && d.enabled) { return false; }
+                    let dxz = ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt();
+                    if dxz > range { return false; }
+                    // The emplacement is the mid-crossing/pre-climb pass's own target; from the
+                    // door it is not exposed at all (aim None [L the probe]) — the gun rays
+                    // keep this sweep honest either way.
+                    walker::DamageLog::exposed_part_gun_rays(&sim, i).is_some()
+                })
+            };
+            let Some(di) = di_opt else { break };
+            yard_stand_aimed(w, di, label, cap);
+        }
+    }
+    // The deck emplacement for the yard-floor labels: the still-gate stand re-runs until the
+    // sentry drops (each stand waits out the wiggle; the proof + this session's probe A both
+    // landed within a few rounds once the sentry paused).
+    if label == "pre-climb" || label == "mid-crossing" {
+        for _ in 0..3 {
+            let di_opt = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                (0..sim.drones.list.len()).find(|&i| {
+                    let d = &sim.drones.list[i];
+                    d.weapon == 0x1e && d.health > 0.0 && d.present && !d.corpse
+                        && (d.pos[0] - 36.4).abs() < 2.5 && (d.pos[2] + 208.8).abs() < 3.5 && d.pos[1] > 8.0
+                })
+            };
+            let Some(di) = di_opt else { break };
+            yard_stand_aimed(w, di, label, 2400);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        let left: Vec<usize> = (0..sim.drones.list.len()).filter(|&i| {
+            let d = &sim.drones.list[i];
+            d.weapon == 0x1e && d.health > 0.0 && d.present && !d.corpse
+                && (d.pos[0] - 36.4).abs() < 2.5 && (d.pos[2] + 208.8).abs() < 3.5 && d.pos[1] > 8.0
+        }).collect();
+        eprintln!("[0c] the deck emplacement after the aimed stands ({label}): {left:?} still alive");
+    }
+    for _ in 0..max {
+        let di_opt = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let now = sim.drones.frame;
+            let b = sim.bond.pos;
+            (0..sim.drones.list.len()).find(|&i| {
+                let d = &sim.drones.list[i];
+                if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { return false; }
+                if d.weapon != 0x1e { return false; }
+                let dxz = ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt();
+                if dxz > 48.0 { return false; }
+                let hitting = sim.drones.player_hits.iter().rev()
+                    .take_while(|h| now.saturating_sub(h.0) <= 600)
+                    .any(|h| h.1 == i);
+                if !hitting { return false; }
+                walker::DamageLog::exposed_part_gun_rays(&sim, i).is_some()
+            })
+        };
+        let Some(di) = di_opt else { break };
+        if yard_stand_aimed(w, di, label, 1500) { continue; }
+    }
+}
+
 /// The spawn asserts + legs 1-9c of the main walk, ending on the slot jump's band landing
 /// (grounded, floor 10.2..11.7, x > 42.6). Deterministic: the caller continues from here.
-pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
+/// player-upward-shot: legs 1-6 of `walk_spawn_to_the_band` — the REAL route from the level
+/// start (the walkway start #1 [D]) through the laser-watch burn, the vent drop, the staircase
+/// descent, the plates chain, the open secret door and the yard crossing — ending at the yard
+/// ladder base (11.6, 1.2, -186.6). Same legs, same asserts, one cut point; the band walk calls
+/// this and continues at leg 7. No behaviour change for any caller.
+pub fn walk_spawn_to_the_yard_ladder_base(iso: &str) -> Walker {
     let iso = iso.to_string();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "0700000c.bin", false, None).unwrap());
+    // OPT-IN (`with_yard_aimed_stands`): the whole walk's fights hold the aim button —
+    // `DamageLog::aimed_fights`, the zero-spread aimed act [M Bullet_init 0x12c5a0:139-170].
+    // Measured reason (the first real-health run on this branch): the plain HIP fights pick the
+    // deck sentry #18 themselves from the ladder base (d 34.4) and pull 5 hip rounds into the
+    // 4.9 u cone — all miss (the pinned player-upward-shot symptom), the clip burns to 0, and
+    // the aimed stand after it starts mid-reload standing in the lane at 3.8 hp — death. With
+    // the fights aimed the same engagement lands (the upward-shot proof). The flag is OFF for
+    // every other caller: the upward-shot hip pin (the dry-clip symptom test) walks this same
+    // function and must keep its hip pulls.
+    if YARD_AIMED_STANDS.with(|c| c.get()) { w.dmg.aimed_fights = true; }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -599,11 +993,38 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
     eprintln!("[0c] the yard reached for real through the open secret door — on the yard floor at {:?}",
         w.scene.sim.as_ref().unwrap().bond.pos);
 
+    // Leg 6a (OPT-IN, `with_yard_aimed_stands`): the east-ledge sweep FROM THE DOOR — the
+    // yard's other snipers (#20/#37) dealt 2 × -16 during the door approach/first legs from
+    // d ~59, outside every fight window [L this session's death log]; a player clears the
+    // overlooks before walking the open ground. Then the deck-emplacement stand MID-CROSSING
+    // — the old at-the-door emplacement sweep is retired with a measurement: from the secret
+    // door (d ~37.3, elevation 15.6°) the emplacement is NOT exposed (aim None, the stand
+    // never fired a round [L this session's probe, level-0c-yard-climb-real-health-3]). The
+    // first crossing legs take Bond to spots where it IS exposed (d ~24.6-32, 19-23°), and
+    // the still-gate stand lands there (the deck sentry's wiggle-step is what the gate waits
+    // out). Killing #18 before the last two legs is the health budget: its crossing beat was
+    // 2-3 × -16 [L the -2 runs] and 51.8 of the -1 run's 100 damage.
+    yard_sniper_stands(&mut w, "at-the-door", 3);
     // Leg 6 (REAL): south-west across the yard to the ladder base.
     w.walk_to(Wp::new(48.0, 1.4, -179.0).r(1.5), "the yard south of the door");
     w.walk_to(Wp::new(40.0, 1.4, -184.5).r(2.0), "the yard west");
+    yard_sniper_stands(&mut w, "mid-crossing", 2);
     w.walk_to(Wp::new(20.0, 1.4, -184.5).r(1.5), "the yard west 2");
     w.walk_to(Wp::new(11.6, 1.2, -186.6).r(1.2), "the ladder base");
+    w
+}
+
+pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
+    // Legs 1-6 (unchanged — now shared with the yard-deck-sentry test).
+    let mut w = walk_spawn_to_the_yard_ladder_base(iso);
+    // Leg 6b (OPT-IN, the yard's deck snipers, level-0c-yard-climb-real-health-2): on real
+    // health the deck snipers (weapon 0x1e, -16 a hit) are the walk's killer chain — outside
+    // the plain fights' 7.5 u vertical reach, never answered — so the stand kills them AIMED
+    // from the strip (the upward-shot proof) before the climb; on the top-up walk and the
+    // eastroute replay this is a no-op (the flag is off — the choreography stays pinned).
+    // Without a landing round this stand was SUPPRESSION only (the predecessor branch) and
+    // the walk stayed ignored; the aimed act [M 0x12c5a0:139-170] lands.
+    yard_sniper_stands(&mut w, "pre-climb", 4);
     // Leg 7 (REAL): the ladder walk-in grab + climb (the walk substate rides the DEFAULT arm
     // r 0.55 [M 0x1953f4 via the jump table @0x2fc0d0]).
     w.walk_to(Wp::new(10.3, 1.05, -186.8).r(0.7), "the ladder approach");
@@ -649,6 +1070,14 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
     }
     eprintln!("[0c] the yard ladder climbed for real to y {:.2}", w.scene.sim.as_ref().unwrap().bond.pos[1]);
 
+    // The ladder-top stands (OPT-IN, same flag): on the walkway Bond is LEVEL with the deck
+    // snipers and #1 ((13.0, 12.1, -196.0), d 7.6 from the top [L the yard census]) — too
+    // steep to shoot from the yard floor (its gun rays were false there) — killed Bond within
+    // ~110 ticks of the mantle at 3.8 hp [L the real-health run's death at (9.25, 12.12,
+    // -188.53), tick 9741]. The same aimed-0x1e stands, now at deck level; a no-op on the
+    // top-up walk and the eastroute replay.
+    yard_sniper_stands(&mut w, "ladder-top", 3);
+
     // Leg 8 (REAL): the patrol-ring diagonal from the ladder top to the north-west corner
     // ((6-9,−188) → (9-11,−190) → (11-12,−192) → (12-13,−194) [D probes]) and west along the
     // north-west walkway to its west edge (0..8, −208 [D probes]).
@@ -656,6 +1085,14 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
     w.walk_to(Wp::new(12.0, 11.1, -196.0).r(1.2), "the ring diagonal 2");
     w.walk_to(Wp::new(12.0, 11.1, -203.0).r(1.2), "the ring north-west corner");
     w.walk_to(Wp::new(4.0, 11.1, -207.5).r(1.2), "the ring west edge");
+    // Leg 8a (OPT-IN, `with_yard_aimed_stands`): the west-side sweep AT THE WEST EDGE, before
+    // the wire legs — the west sniper #13 ((-14.59, 12.24, -216.35) [L this session's dump])
+    // survived the ring-west-edge fight (killed false [L the real-health run]); from the
+    // ladder top it is not gun-ray exposed (the sweep found no candidate [L this session's
+    // run]), from the edge it is LEVEL (y 12.15 vs 12.24) and the fights' own stand fought it
+    // here — a player clears the far side before stepping off the edge. Same still-gate
+    // stands; a no-op when the flag is off.
+    yard_sniper_stands(&mut w, "west-edge", 3);
     // Leg 8b (REAL, blocker 4 replaced): the west-gap wire crossing. The disc's own mechanism
     // [D probe blk/blk2]: the type-3 grab icon #4 (−3.30, 12.36, −207.51) sits at the west
     // edge's south end; `wire_firstsilo2mainsilos` #284's grab segment A (−4.63, 13.67, −209.88)
@@ -690,10 +1127,20 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
     // mode-7 facing]; drop with the action press inside 0.9 of B.
     let dropped = {
         let mut dropped = false;
-        for _ in 0..2400u32 {
+        let trace = std::env::var_os("NF_RF_TRACE").is_some();
+        for t in 0..2400u32 {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.bond.substate != nf_game::player::SS_WIRE { dropped = true; break; }
             let d = ((sim.bond.pos[0] + 8.47).powi(2) + (sim.bond.pos[2] + 216.52).powi(2)).sqrt();
+            if trace && t % 120 == 0 {
+                // The ride's own progress line: a stall (d not shrinking) names its blocker —
+                // this session's real-health run stalled at d 1.6 (the natural stop is 1.05
+                // PAST B [L blockers-2's hang]) with #13 alive on the west side [L the
+                // ring-west-edge fight, killed false].
+                let bb = &sim.bond;
+                eprintln!("[0c] the #284 ride t{t}: pos {:?} d_B {d:.2} mode {:#x} anim {:#x} at {:.1} rate {:.2} yaw {:.3} auto {:.1} disabled {} sub {}",
+                    bb.pos, bb.mode, bb.wire_anim, bb.wire_anim_time, bb.wire_anim_rate, bb.yaw, bb.auto_drop, sim.disabled, bb.substate);
+            }
             // The drop is the jump press inside 0.9 of B (blockers-2's green drop). The
             // FIRE-action variant (real-crossings 29b43fa9, never run on that branch) rode the
             // full 2400 ticks to the natural stop d_B ≈ 1.05 past B WITHOUT releasing [this
@@ -719,11 +1166,36 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
             "the #284 ride must drop onto the west ledge (11.24-11.38 [D probe blk2 west map]), got {p:?} dropped {dropped}");
     }
     eprintln!("[0c] the west gap crossed on wire #284 — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    // Leg 8c (OPT-IN, `with_yard_aimed_stands`): the west-ledge sweep, before the ledge
+    // diagonals — the west sniper #13 patrols to (-3.0, 12.2, -221.1), d ~6 LEVEL across the
+    // gap [L this session's death log: 2 × -16 + the fatal -1.6 graze at 14308], and the
+    // walk's own fights land killed false against him (the plain eye-ray aim reads Some while
+    // the rounds die on the ledge lip — the same predictor-vs-muzzle-flight gap the #15 case
+    // measured). The still-gate stand aims with the strict gun rays; a no-op when the flag is
+    // off.
+    yard_sniper_stands(&mut w, "west-ledge", 3);
+    // level-0c-yard-climb-real-health-4 (OPT-IN): the diagonal stands. Measured this
+    // session: #13's cover reads NO gun-ray-exposed candidate from the landing (the
+    // west-ledge sweep above stood zero times) and from the west edge the converged still-
+    // gate rounds die in flight (clip 2→1 spent, hp 10.0 never moved [L this session's
+    // run]); the walk's own fight on the diagonal burns its clip the same way (fight#13
+    // t0-t240, blocked false, err 0.001-0.016, hp 10.0 never moved) and the -16 at frame
+    // 13725 + the fatal -1.6 graze kill the 17.6-hp Bond at tick 14308 mid-diagonal at
+    // (-7.69, 12.40, -217.32) [L the death log]. Custom stand spots OFF the walk's own
+    // lines fall off the strip (two probe walk_tos landed in the gap at y 9.88/1.96 [L
+    // this session]) — so the still-gate stands run AT the route's own diagonal arrivals
+    // (proven floor, the walk_to radii the master walk pins), stepping toward his post
+    // until the strict rays clear; one landing round kills the 10-hp sniper [L the
+    // census]. yard_sniper_stands is a no-op when the flag is off.
     // The diagonal ledges south-east to icon #6 [D probe blk2 west map].
     w.walk_to(Wp::new(-6.0, 12.4, -219.6).r(1.5), "the west ledge diagonal");
+    yard_sniper_stands(&mut w, "lip-1", 3);
     w.walk_to(Wp::new(-4.5, 12.4, -221.5).r(1.5), "the west ledge diagonal 2");
+    yard_sniper_stands(&mut w, "lip-2", 3);
     w.walk_to(Wp::new(-2.5, 12.4, -222.8).r(1.4), "the west ledge diagonal 3");
+    yard_sniper_stands(&mut w, "lip-3", 3);
     w.walk_to(Wp::new(-1.4, 12.4, -223.6).r(1.0), "icon #6 at wire #282's B end");
+    yard_sniper_stands(&mut w, "lip-4", 3);
     // REAL: grab wire #282 (`wire_silosilo2`, A (5.85, 14.11, −223.15) B (−0.25, 14.11, −223.15)
     // [D probe blk]) — the standing body at (−1.4, −223.6) is inside the wire's world sphere
     // (centre (2.80, 14.11, −223.15) r 5.05 [D probe blk]), so the walk-east contact grab fires

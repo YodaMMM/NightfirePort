@@ -1445,12 +1445,38 @@ impl CollisionWorld {
     /// Falls back to the flat `segment_bullet` when there is no scope or the cell is unknown — the
     /// caller's safety net, same as the scoped actor queries.
     pub fn segment_bullet_scoped(&self, cell: Option<usize>, from: V3, to: V3) -> Option<f32> {
-        let Some(cell) = cell else { return self.segment_bullet(from, to) };
+        self.flight_scoped_impl(cell, from, to, false)
+    }
+
+    /// The flying round's world trace with the game's GLASS PASS: everything `segment_bullet_scoped`
+    /// models, plus the contact walk's glass arm — when the round's weapon record `+0x6C` has bit
+    /// 0x800 clear, the flight's HITTEST+0x9a carries 0x20 every flying tick [M `Bullet_update`
+    /// 0x12e7b0 disasm 0x12f030-0x12f058: `sh $zero,0xe8($s4)` zeroes the +0x98 pick mask, then
+    /// `sh $v0,0xea($s4)` stores `(record+0x6c & 0x800 == 0) << 5`], and the contact walk treats a
+    /// surface byte 0x10 (glass) contact as a PASS — `bVar3 = 1` unless the byte differs [M
+    /// `Collide_Update` 0x1ea398:216-229: `if ((hittest+0x9a & 0x20) != 0) { bVar3 = 1; if
+    /// (contact+0x50 != 0x10) bVar3 = pass_bits; }`] — the round continues past the glass while the
+    /// mirrored contact still lands on the glass object (the pane's obj+0xD0 chain takes the damage
+    /// [M 0x1ea398:160-233]). [L weapon_data]: every gun + the AT-420 0x2c (0x00012204) has bit 0x800
+    /// clear; 0x01/0x45 have it set. [L coll-obj 07000008 map1]: the 16 ride panes (OBJECT_Glass1a/
+    /// 6a, DOOR_Glass_1/4, Glass10) are ALL mat 0x10 — this rule is what lets the 00agent Hind
+    /// flight leave the bottom-terminal cabin through its windows.
+    pub fn segment_flight_scoped(&self, cell: Option<usize>, from: V3, to: V3, glass: bool) -> Option<f32> {
+        self.flight_scoped_impl(cell, from, to, glass)
+    }
+
+    /// The flat twin of [`CollisionWorld::segment_flight_scoped`] (no cel scope).
+    pub fn segment_flight(&self, from: V3, to: V3, glass: bool) -> Option<f32> {
+        self.segment_in_sets_drop_pass_glass(from, to, true, true, glass)
+    }
+
+    fn flight_scoped_impl(&self, cell: Option<usize>, from: V3, to: V3, glass: bool) -> Option<f32> {
+        let Some(cell) = cell else { return self.segment_flight(from, to, glass) };
         // An out-of-range cell is a caller bug: the flat answer is the conservative fallback (the
         // scoped actor queries instead test nothing — their callers keep a valid `bond.cel`).
         let in_range = self.scope.as_ref().is_some_and(|sc| cell < sc.graph.cells.len());
-        if !in_range { return self.segment_bullet(from, to); }
-        let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to)) else { return self.segment_bullet(from, to) };
+        if !in_range { return self.segment_flight(from, to, glass); }
+        let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to)) else { return self.segment_flight(from, to, glass) };
         let d = sub(to, from);
         let mut best = None::<f32>;
         {
@@ -1459,6 +1485,7 @@ impl CollisionWorld {
                 let o = &stat.objects[*r as usize];
                 for k in o.tris.clone() {
                     if stat.bullet_pass(k) { continue; } // the pass-flagged hits the bit-0x8 queries drop [M 0x1ebff0]
+                    if glass && stat.mats[k] & 0x3f == 0x10 { continue; } // the glass pass [M 0x1ea398:216-229]
                     let t = &stat.tris[k];
                     if let Some(tt) = ray_tri_t(from, d, t) {
                         if best.is_none_or(|b| tt < b) { best = Some(tt); }
@@ -1471,6 +1498,7 @@ impl CollisionWorld {
             for o in along(g, from, to) {
                 for k in o.tris.clone() {
                     if g.bullet_pass(k) { continue; } // [M 0x1ebff0]
+                    if glass && g.mats[k] & 0x3f == 0x10 { continue; } // the glass pass [M 0x1ea398:216-229]
                     let t = &g.tris[k];
                     if let Some(tt) = ray_tri_t(from, d, t) {
                         if best.is_none_or(|b| tt < b) { best = Some(tt); }
@@ -2035,6 +2063,14 @@ impl CollisionWorld {
     }
 
     fn segment_in_sets_drop_pass(&self, from: V3, to: V3, with_missile: bool, drop_pass: bool) -> Option<f32> {
+        self.segment_in_sets_drop_pass_glass(from, to, with_missile, drop_pass, false)
+    }
+
+    /// [`Self::segment_in_sets_drop_pass`] with the flight's glass pass: `glass` drops every
+    /// surface-byte-0x10 hit (the game's contact walk passes glass for the rounds whose
+    /// HITTEST+0x9a carries 0x20 [M Collide_Update 0x1ea398:216-229; Bullet_update 0x12e7b0
+    /// disasm 0x12f048-0x12f058]).
+    fn segment_in_sets_drop_pass_glass(&self, from: V3, to: V3, with_missile: bool, drop_pass: bool, glass: bool) -> Option<f32> {
         let d = sub(to, from);
         let (mut best, mut lo, mut hi) = (None::<f32>, [0f32; 3], [0f32; 3]);
         for k in 0..3 { lo[k] = from[k].min(to[k]); hi[k] = from[k].max(to[k]); }
@@ -2046,6 +2082,7 @@ impl CollisionWorld {
             for o in along(g, from, to) {
                 for k in o.tris.clone() {
                     if drop_pass && g.bullet_pass(k) { continue; } // the pass-flagged hits the bit-0x8 queries drop [M 0x1ebff0]
+                    if glass && g.mats[k] & 0x3f == 0x10 { continue; } // the glass pass [M 0x1ea398:216-229]
                     let t = &g.tris[k];
                     let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
                     if dot(cross(e1, e2), d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]

@@ -400,33 +400,23 @@ fn the_dragon_e_use_spawns_the_safe_key_that_writes_ch_0x4e() {
 }
 
 
-/// The locked sister: door #4 `door_secret_bedroom` locks on ch 0x31 (p3=49 [D], +0x68 per
-/// `Door_Create` 0x136100; `Door_Activate`'s lock gate [M door.rs — the port's gate refuses the
-/// E while the channel is off, probe-pinned: 45 ticks of E from the doorway hold state 0x2 with
-/// ch 0x31 forced off]) must refuse the same E — and the E must not reach the mask-4 plate #504
-/// either: the game's use pick is the point (head + 1×look) vs the plate's own collision glist
-/// [M Player_Activate 0x1a5170:100-108 → Collide_PickObj 0x1eae80:219-228 → Collide_Intersect
-/// 0x1ebaa8:186-190 → Intersect_PointGeom 0x1e92d8], and from the doorway stance that point sits
-/// ~1.2 above the volume's top sheet (the settled root + the 1.0 reach) and outside its east/south
-/// faces — #504's glist is the 4-sheet walk-in shell at x 10.09-13.51, z −36.33..−34.94, y
-/// 5.64..6.73 [D coll-scan 07000003 obj 308]. The game plays the locked-door hit sound until ch
-/// 0x31 [D audit]; the fixed port pick matches (the plate's ch 0x31 never rises here).
+/// The locked door: door #4 `door_secret_bedroom` locks on ch 0x31 (p3=49 [D], +0x68 per
+/// `Door_Create` 0x136100). The use pick is the point (head + 1×look) vs the mask-4 plate #504's
+/// collision glist [M Player_Activate 0x1a5170:100-108 → Collide_PickObj 0x1eae80:219-228 →
+/// Collide_Intersect 0x1ebaa8:186-190 → Intersect_PointGeom 0x1e92d8]; #504's glist is the
+/// 4-sheet walk-in shell at x 10.09-13.51, z −36.33..−34.94, y 5.64..6.73 [D coll-scan 07000003
+/// obj 308].
 ///
-/// IGNORED (use-pick-two-stage-2): the audit's refusal is not reproducible by the decompile's
-/// own registration law, and the test pins the audit reading. `Intersect_PointGeom` 0x1e92d8
-/// registers a triangle when `vecutil_Dist2Tri_PointGeom`'s CLAMPED distance is ≤ the radius
-/// [M 0x1e92d8:229-231; the routine's edge/vertex arms are cases 1-6 of the 0x1dfac8 switch] —
-/// from this stance the y-6.44 sheet's north-east-top corner (13.51, 6.44, −36.33 [D coll-scan])
-/// sits 0.43..0.77 from any doorway use point, so the law fires ch 0x31 where the audit measured
-/// a refusal. The stage-2 cel scope cannot explain it either: the plate's world-sphere centre and
-/// the doorway stance resolve to the SAME cel 53 in the port's cel graph [D probe, this tree].
-/// Settling this needs the game's live use point (the viewer-matrix dir at the press —
-/// Player_Activate 0x1a5170:100-108 reads `Mat_GetDir(glb_viewer[BL+0x94e]+0x120)`, not the
-/// body's facing) — the report's live check. The other 8 tests of this file pin the pick law
-/// that IS decompile-consistent.
-#[ignore = "the audit refusal vs the 0x1e92d8 clamped-distance law — live check pending (see the doc comment)"]
+/// The audit's refusal above was WRONG: the game's E from this stance reaches the plate. The
+/// decompile's registration law says so (`Intersect_PointGeom` 0x1e92d8 registers a triangle when
+/// `vecutil_Dist2Tri_PointGeom`'s CLAMPED distance is ≤ the radius [M 0x1e92d8:229-231] — the
+/// y-6.44 sheet's north-east-top corner (13.51, 6.44, −36.33 [D coll-scan]) sits 0.43..0.77 from
+/// the doorway use point), and the live game agrees [L PCSX2 2026-11-03, fresh goto_level
+/// 07000003, Bond placed at the stance the walker's E settles on (13.283, −37.091) yaw 0.695: R2
+/// (action 0xE, `Player_Activate`) raises ch 0x31 0 → 1 within 60 frames; the same placement with
+/// no press keeps it 0 — audits/live-1103-03].
 #[test]
-fn locked_door_refuses_the_e() {
+fn the_e_at_the_locked_door_reaches_the_bedroom_plate() {
     let mut w = load();
     let di4 = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
         .position(|d| d.placement == 4).expect("door #4");
@@ -434,9 +424,8 @@ fn locked_door_refuses_the_e() {
     w.scene.sim.as_mut().unwrap().bond.pos = [p4[0] - 1.8, p4[1] - 0.1, p4[2] - 1.8];
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     w.wait(10);
-    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x31), "sister: ch 0x31 off at the locked door");
-    let before4 = w.scene.sim.as_ref().unwrap().drones.doors.list[di4].state;
-    w.use_door(di4, "the locked bedroom door (sister)");
-    assert_eq!(w.scene.sim.as_ref().unwrap().drones.doors.list[di4].state, before4,
-        "sister: the ch-0x31-locked door must not move on the E [D p3=49; M door.rs lock arm]");
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x31), "sister: ch 0x31 off before the E [L no-press control]");
+    w.use_door(di4, "the locked bedroom door");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x31),
+        "the E from the doorway reaches plate #504 and raises ch 0x31 [L live-1103-03; M 0x1e92d8:229-231]");
 }

@@ -67,6 +67,8 @@ fn frag_blast_kills_the_guard_next_to_it_and_the_stun_touches_nobody() {
         weapon_type: 0x34, mesh: 0, owner: usize::MAX, state: 1, bounces: 0, smoke_popped: false, resting: false,
         stuck: false, seek_target: None,
         phase: None,
+    burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
+    defused: false,
     });
     let mut blasted = false;
     for _ in 0..40 { sim.step_bond(Input::default(), false, false, false); if !sim.drones.explosions.is_empty() { blasted = true; break; } }
@@ -89,6 +91,8 @@ fn frag_blast_kills_the_guard_next_to_it_and_the_stun_touches_nobody() {
             weapon_type: 0x35, mesh: 0, owner: usize::MAX, state: 1, bounces: 0, smoke_popped: false, resting: false,
         stuck: false, seek_target: None,
         phase: None,
+        burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
+        defused: false,
         });
         let mut hurt = false;
         for _ in 0..40 {
@@ -122,6 +126,8 @@ fn stun_grenade_stuns_without_damage_and_a_shot_kills_the_stunned() {
         damage: 0.0, radius: 0.0, weapon_type: 0x35, mesh: 0, owner: usize::MAX, state: 1, bounces: 0, smoke_popped: false, resting: false,
         stuck: false, seek_target: None,
         phase: None,
+    burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
+    defused: false,
     });
     let mut stunned = false;
     for _ in 0..40 {

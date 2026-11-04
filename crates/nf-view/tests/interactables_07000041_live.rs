@@ -486,8 +486,10 @@ fn the_rotors_spin() {
 /// hand-off the game itself models as the 0x7100018 → 0x7000018 → 0x700001b briefing special
 /// case [M 0x1d6360:99-102]; 07000041.bin carries no exit placement of its own [D the placement
 /// scan: no 0xE8 LOAD_LEVEL, no ch-100 writer in the 7 scripts [D the nis decode]]. The port's
-/// chain: ch 1 → the longest chain script (0x06000027, 241 ticks [D nis dump]) → the exit.
-/// Sister: without ch 1 the wrapper never ends.
+/// chain: ch 1 → the story hand-off window — the chain's longest script's length, 241 ticks
+/// [D 06000027's length; the script itself never runs on this disc [D the SP pins: both 0xD9
+/// placements carry the 0x06000000 sentinel with mask 0]] — then the exit latch. Sister: without
+/// ch 1 the wrapper never ends.
 #[test]
 fn the_wrapper_ends_into_the_space_station_after_the_chain() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -516,17 +518,23 @@ fn every_model_resolves_on_the_load() {
     assert!(scene.cels.len() > 0, "the level's rooms loaded [D survey: 8 cels on the wrapper]");
 }
 
-/// The chain trigger answers the player's E — until the plate locks it. SL_Trigger #99
+/// The chain trigger answers the player's E — BEFORE and AFTER the plate. SL_Trigger #99
 /// (20.59, 0.00, −33.44) carries out ch 1, mask 0x4 = the E/activate dispatch, lock ch 0x6e
-/// [D PL#99 params 0:0x1 1:0x4 7:0x6e — the census re-run #572]: `Trigger_Activate` 0x1b2318
-/// case 1 fires it on the use while its lock is clear, and `Trigger_Locked` 0x1b2fc8:24-29
-/// locks it whenever ch 0x6e is on — the state the walk-through plate #100 (out 0x6e, mask 8
-/// [D PL#100]) leaves behind. So the level's chain channel has a REAL player path (the tests
-/// above drive ch 1 with the set_script stand-in): the E on #99 before the plate fires the
-/// whole approach chain; after the plate the same E is refused. Sisters: ch 1 cold at the
-/// load; and on a fresh load walked through the plate, the E on #99 leaves ch 1 cold.
+/// [D PL#99 params 0:0x1 1:0x4 7:0x6e — the census re-run #572]: `Trigger_Activate` 0x1b2318's
+/// case-1 arm gates ONLY on mask&4 and writes the out channel — **no lock read anywhere in the
+/// arm** [M 0x1b2318:38-49, read this session: mask&4 → `switch_channels[out] = 1` → the
+/// glist-0x10 self-delete latch]. The lock channel is read by `Trigger_Locked` 0x1b2fc8 (its
+/// non-type-10 arm: locked iff ext+0x24 is on), whose ONLY caller is `Check_Target` 0x1a7810:197
+/// inside the type-10 aim-hint branch (via `Player_AutoAim` 0x1a7c98) — never the E-fire path.
+/// The walk-through plate #100 (out 0x6e, mask 8 [D PL#100]) therefore does NOT lock the E out.
+/// (level-41-every-objective correction: this test's older leg-2 sister asserted the refused E
+/// and passed VACUOUSLY — it never aimed, so the use sphere [M 0x1a5170:100-108] at pitch 0
+/// passed over the volume's 0..0.75 y-band and the E reached no trigger at all; the decompile
+/// says the aimed E fires regardless. The test is wrong, the port matches the game.) The
+/// level's chain channel has a REAL player path either way (the tests above drive ch 1 with
+/// the set_script stand-in): the E on #99 fires the whole approach chain, plate or no plate.
 #[test]
-fn the_chain_trigger_answers_the_e_until_the_plate_locks_it() {
+fn the_chain_trigger_answers_the_e_before_and_after_the_plate() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     // Leg 1: the unlocked E fires the chain, and the wrapper ends (the real-path version of the
     // stand-in drive).
@@ -567,7 +575,11 @@ fn the_chain_trigger_answers_the_e_until_the_plate_locks_it() {
     let mut exited = false;
     for _ in 0..2000 { sim.step_bond(idle, false, false, false); if sim.drones.level_exit == Some(0x0700_001b) { exited = true; break; } }
     assert!(exited, "the E-fired chain ends the wrapper into 0x0700001b [M 0x1d6360:99-102's hand-off; S the port's flow — the existing stand-in test's pin]");
-    // Leg 2 (the sister on a fresh load): the plate's ch 0x6e locks #99 — the same E is refused.
+    // Leg 2 (the sister on a fresh load): the plate's ch 0x6e is ON, and the SAME aimed E still
+    // fires ch 1 — the case-1 arm reads no lock [M 0x1b2318:38-49; the lock's only reader,
+    // Trigger_Locked 0x1b2fc8, is called only from Check_Target 0x1a7810:197's type-10
+    // aim-hint branch]. (The older sister here asserted the refusal and passed vacuously: it
+    // never aimed, so the E reached nothing — see the doc above.)
     let mut scene2 = load(&iso);
     {
         let sim = scene2.sim.as_mut().unwrap();
@@ -578,13 +590,25 @@ fn the_chain_trigger_answers_the_e_until_the_plate_locks_it() {
         input.forward = 1.0;
         let mut crossed = false;
         for _ in 0..200 { sim.step_bond(input, false, false, false); if sim.drones.channels.on(0x6e) { crossed = true; break; } }
-        assert!(crossed, "the plate walk armed the lock channel [D PL#100; M 0x1b2b88]");
-        // The E on #99 now: locked — ch 1 must stay cold [M Trigger_Locked 0x1b2fc8:24-29].
+        assert!(crossed, "the plate walk fired ch 0x6e [D PL#100; M 0x1b2b88]");
+        // The aimed E on #99 now: ch 0x6e is on and the E STILL fires ch 1.
         sim.bond = nf_game::player::Bond::stand_at(&sim.world, [20.59, 1.4, -32.0], std::f32::consts::PI);
         for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
-        for _ in 0..120 { sim.step_bond(Input::default(), false, false, true); }
-        assert!(!sim.drones.channels.on(1),
-            "sister: with the plate's ch 0x6e on, the E on #99 is locked out — ch 1 must stay cold [M 0x1b2fc8:24-29; D PL#99 p7 = 0x6e]");
+        {
+            let target = [20.59f32, 0.5, -33.44];
+            let head = sim.bond.head();
+            let dx = target[0] - head[0]; let dy = target[1] - head[1]; let dz = target[2] - head[2];
+            let dist = (dx * dx + dz * dz).sqrt().max(0.5);
+            sim.bond.yaw = dx.atan2(dz);
+            sim.bond.pitch = (dy / dist).atan() / std::f32::consts::FRAC_PI_2;
+        }
+        let mut fired = false;
+        for _ in 0..120 {
+            sim.step_bond(Input::default(), false, false, true);
+            if sim.drones.channels.on(1) { fired = true; break; }
+        }
+        assert!(fired,
+            "with the plate's ch 0x6e on, the aimed E on #99 STILL fires ch 1 — the case-1 arm reads no lock [M 0x1b2318:38-49; D PL#99 p0=1 p1=0x4]");
     }
 }
 

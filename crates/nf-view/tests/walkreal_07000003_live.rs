@@ -138,12 +138,51 @@ fn walk_the_alpine_route_to_the_exit() {
 /// (walking, turning, E, real fire) — the servants rescued through their enable plates + captor
 /// kills, the Dragon Safe opened and its key taken, the exit fired. No channel or state pokes.
 #[test]
-fn walk_the_full_route_and_complete_every_objective() {
+fn walk_the_full_route_and_complete_every_objective() { walk_the_full_route_and_complete_every_objective_at(1) }
+
+/// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent rides the
+/// front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
+fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000003.bin", false).expect("load 07000003"));
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load(&iso, "07000003.bin", false).expect("load 07000003")
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "07000003.bin", false, None, difficulty)
+            .expect("load 07000003")
+    });
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
     // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
     w.prefer_head = true;
+    // Agent tactics (real-health-agent-difficulty), opt-in for the difficulty-2 sister: at
+    // DroneFiring_Accuracy_Normal 0.8 the shotgun (weapon 0x1C) guards close in — under 3.0 u
+    // every drone round hits [M DroneWeap_DoBulletAccuracy 0x179740:113-115] and their 8-pellet
+    // volleys cost ~3.3 health a pellet at Plr_DMod_Normal 0.7 (the sister's first run died at
+    // tick 40108: 52.1 in 16 hits from a guard at 2.8 u). The 02 walk's keep_off/back_off 4.0
+    // (the same `Walker` arms its real-health walk pins green).
+    if difficulty >= 2 {
+        w.keep_off = Some(4.0);
+        w.dmg.back_off = Some(4.0);
+    }
+    if difficulty >= 3 {
+        // 00 Agent (real-health-00agent-02-03-2): the west-lawn fights on drone #8 (weapon 0x12)
+        // burned five 900-tick caps at "killed false" while his −1.8 chips bled Bond out at
+        // t25850 [L the 00agent ledger; the NF_RF_TRACE run: aim Some, blocked true every
+        // sample] — the gun line to #8 crosses a NOT-YET-ENABLED guard (the 0x23/0x24/0x25
+        // plates fire later on the route) and the stand never shoots through a drone (the
+        // blocker hold). The game's own collide drops Enable(0) objects before the hit test
+        // [M Collide_PickObj 0x1eae80; Check_AutoAim 0x1a73f8 skips +0xF4 == 1] — a disabled
+        // drone never stops a round — so the hold is not game-shaped there. The opt-in
+        // fire_through_disabled drops disabled drones from the line; live hostiles on it are
+        // still answered by shoot_blockers (the retarget reads team == 1, so the servants
+        // (team 3, death ch 0x60) keep their hold and are never answered to).
+        w.dmg.shoot_blockers = true;
+        w.dmg.fire_through_disabled = true;
+        // The lane's dry in-hand fights (the 0x12 clip 0 vs the P99's 15 in reserve) — the
+        // game's own mid-fight cycle [L the 00agent-02-03-2 ledger].
+        w.dmg.switch_dry = true;
+    }
     let (li, o0, o1, o2) = mission_row();
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -242,11 +281,25 @@ fn walk_the_full_route_and_complete_every_objective() {
         w.walk_to(Wp { at, act: Act::None, arrive: 1.0 }, name);
     }
     w.lenient = false;
+    if difficulty >= 3 {
+        // 00 Agent (real-health-00agent-02-03-2): the servants' ground is a running fight (the
+        // 0x24/0x25 guards and their captains) and the real-damage hook's resupply is the lane
+        // walks' arm, not this walk's. A player scavenges the dead guards' drops between
+        // contacts: the dry P99 (clip 1 spare 0) met shotgun captain #5 at 1.6 u and died to
+        // his volley at t42315 [L the 00agent-02-03-2 ledger]. resupply walks the covered path
+        // only (the 9-u corridor rule), so this stays on the route.
+        let _ = w.resupply("before the servants' rescue (00agent)");
+    }
     for (plate, want_ch) in [(None, 0x4fu8), (Some(plate0x25), 0x50u8)] {
         let (si, at, rescue_ch) = *servants.iter().find(|(_, _, ch)| *ch == want_ch)
             .unwrap_or_else(|| panic!("the servant carrying {want_ch:#x} [D p6]"));
         // #389's 0x21 plate already fired on the lane approach; #388's 0x25 plate is walked here.
         if let Some(plate) = plate {
+            if difficulty >= 3 {
+                // 00 Agent: rounds before the plate walk (the running fight on the servants'
+                // ground; the dry-gun death above) [L the 00agent-02-03-2 ledger].
+                let _ = w.resupply(&format!("before the {want_ch:#x} plate (00agent)"));
+            }
             w.walk_nav_to(plate, &format!("onto the {want_ch:#x}-servant's enable plate"), 1.8);
             if !w.scene.sim.as_ref().unwrap().drones.channels.on(0x25) {
                 // An awake guard standing in the double doors' sweep on this leg (doors 4/5 at
@@ -267,6 +320,11 @@ fn walk_the_full_route_and_complete_every_objective() {
             }
         }
         w.wait(10);
+        if difficulty >= 3 {
+            // 00 Agent: rounds before the servant walk (the same running-fight rule) [L the
+            // 00agent-02-03-2 ledger].
+            let _ = w.resupply(&format!("before servant {si} (00agent)"));
+        }
         w.walk_nav_to([at[0], at[1] - 0.3, at[2]], &format!("servant {si}"), 1.7);
         let sim = w.scene.sim.as_ref().unwrap();
         let d = &sim.drones.list[si];
@@ -284,6 +342,46 @@ fn walk_the_full_route_and_complete_every_objective() {
                     let c = &sim.drones.list[ci];
                     eprintln!("[03] servant {si}'s captor #{ci} at ({:.1},{:.1},{:.1}) state {:#x} hp {:.1} corpse {}",
                         c.pos[0], c.pos[1], c.pos[2], c.state, c.health, c.corpse);
+                }
+                // 00 Agent (real-health-00agent-02-03-3): the east captor's room guards (the
+                // door-8 cluster at (35.5-37.5, -0.6) — #19 hp 12, #18 hp 12, #2 hp 24 shotgun)
+                // shot Bond out of the captor flank's REACTIVE fights: under the guards' door
+                // routes the flipped kill order (#2 first) left #18 live into a second fight and
+                // his 28.8 volley (40.8 -> 12.0) was the whole green margin — the
+                // pre-door-routes run answered the same cluster from (36.2,5.7) for 12.0 total
+                // and finished at 28.8 [L the two NF_RF_TRACE ledgers, identical to t48500]. A
+                // player takes the room's fight spot FIRST (the flank-1 nav-3 ground the green
+                // run fought from — parts expose from there; from the servant ground they do
+                // not, and the flank walk into the shotgun's 3.0 band died at 26.4 [L this
+                // branch's first pre-clear run]) and clears the cluster hp-ascending with real
+                // fire before the duel. si==0 only — the west (0x4f) leg's reactive sequence is
+                // green as-is and is not touched.
+                if difficulty >= 3 && si == 0 {
+                    w.walk_nav_to([36.5, 5.9, 5.7], "the captor room rally", 1.5);
+                    let escorts: Vec<usize> = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let mut es: Vec<(f32, usize)> = sim.drones.list.iter().enumerate()
+                            .filter(|(i, d)| Some(*i) != captor && d.present && !d.corpse && d.health > 0.0
+                                && d.team == 1
+                                && walker::dxz(d.pos, [36.5, 5.9, 5.7]) <= 9.0)
+                            .map(|(i, d)| (d.health, i)).collect();
+                        es.sort_by(|a, b| a.0.total_cmp(&b.0));
+                        es.into_iter().map(|(_, i)| i).collect()
+                    };
+                    for gi in escorts {
+                        let (alive, gp, hp) = {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            let g = &sim.drones.list[gi];
+                            (!g.corpse && g.health > 0.0, g.pos, g.health)
+                        };
+                        if !alive { continue; }
+                        eprintln!("[03] captor room guard #{gi} at ({:.1},{:.1},{:.1}) hp {hp:.1} — pre-clear", gp[0], gp[1], gp[2]);
+                        if !w.shoot(gi, &format!("servant {si} captor room guard {gi}")) {
+                            if w.resupply("captor room ammo") {
+                                w.shoot(gi, &format!("servant {si} captor room guard {gi} (retry)"));
+                            }
+                        }
+                    }
                 }
                 let mut killed = w.shoot(ci, &format!("servant {si}'s captor"));
                 // The mode-4 dodging captor pattern (the east-lane legs' own note: a captor
@@ -317,6 +415,15 @@ fn walk_the_full_route_and_complete_every_objective() {
         eprintln!("[03] servant {si} post-save state {:#x}", d.state);
         assert!(sim.drones.channels.on(rescue_ch as u32),
             "the save raised servant {si}'s rescue channel {rescue_ch:#x} [D p6; M 0x1441c0:11-18]");
+        if difficulty >= 3 && si == 0 {
+            // 00 Agent (real-health-00agent-02-03-3): the green run's post-rescue west-lawn leg
+            // started from the chase's end (38.34,0.72) and its nav threads the building's east
+            // side through the (39.0,12.9) door; from the rally the nav detours through the
+            // (35.6,8.7) door instead and that E stalls the leg 29x3000 ticks [L the first rally
+            // run's ledger]. The player walks the chase's last leg: restore the green
+            // continuation point (the flank's own nav link, walked there in the green run).
+            w.walk_nav_to([38.4, 5.9, 0.8], "the east flank end", 1.6);
+        }
     }
     w.wait(10);
     {
@@ -534,4 +641,33 @@ fn killing_a_servant_fails_the_mission() {
     assert_eq!(sim.drones.mission.fail_label, 0x0400_0034, "the Killed Civilians fail label [M 0x1827d8:98-104]");
     assert_eq!(sim.drones.mission.state, 2, "MissionState 2 (the fail arm) [M 0x182c60:45-57]");
     assert!(sim.drones.channels.on(99), "the mission-fail channel rose [M mission.rs ch.set(99)]");
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty): the same walked
+/// route at the menu's Agent pick — GameState+0x28 = 2 through the front-end's launch path [M
+/// C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table 0x2df4c0 row 1 carries 2; Txt 0x14e =
+/// "Agent"]. On this level group the pick scales Bond's pain by Plr_DMod_Normal 0.7 instead of
+/// Easy 0.5 and the guards' hit chance by DroneFiring_Accuracy_Normal 0.8 instead of Easy 0.5
+/// [M Player_HandlePain 0x1902c8; DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 01-04
+/// group]; the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input
+/// only — the load path is the only difference.
+#[test]
+fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
+    walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(2));
+}
+
+/// 00 Agent-difficulty sister of `..._real_damage_agent` (real-health-00agent-02-03-04): the
+/// same walked route at the menu's 00 Agent pick — GameState+0x28 = 3 through the front end's
+/// launch path [M C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table 0x2df4c0 row 2 carries 3;
+/// Txt 0x14f = "00 Agent"]. On this level group the pick scales Bond's pain by Plr_DMod_Hard
+/// 1.2 instead of Agent's Plr_DMod_Normal 0.7, the guards' hit chance rides
+/// DroneFiring_Accuracy_Hard 1.0 instead of 0.7 and their rounds by DroneDamage_Hard 0.8; the
+/// autoaim bit closes at 00 Agent (Autoaim_HardMul 0) [M Player_HandlePain 0x1902c8;
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 01-04 group]; the min-difficulty
+/// placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the load path is the
+/// only difference.
+#[test]
+#[ignore = "00 Agent: the east captor-room cluster under the door routes — the pre-clear rally kills the door-8 guards (#18/#19/#2) at zero fight cost but the rally APPROACH crosses their gun line (40.8 -> 15.6-19.2) and the exit lawn then needs ~29; next levers: an approach that stays north of door 8 (the green run fought from (36.2,5.7) THROUGH the open doorway), the 87000-tick (35.6,8.7) door stall on the post-rescue west-lawn leg, and the exit-lawn #16 post-kill volley; follow-up real-health-00agent-02-03-3"]
+fn walk_the_full_route_and_complete_every_objective_real_damage_00agent() {
+    walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(3));
 }

@@ -38,6 +38,8 @@ fn blast_until_dead(sim: &mut nf_view::scene::Sim, target_i: usize) {
             travelled: 0.0, range: 60.0, damage: 100.0, radius: 3.0, weapon_type: 0x34, mesh: 0x0200_0726, owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: false,
             stuck: false, seek_target: None,
             phase: None,
+        burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
+        defused: false,
         });
         for _ in 0..60u32 {
             sim.step_bond(Default::default(), false, false, false);

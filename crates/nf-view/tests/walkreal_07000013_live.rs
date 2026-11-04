@@ -45,8 +45,9 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 /// The whole warm chain (12 → 4A → 13 → out) on real input. `real_damage` = the armour detour
 /// (see the real-damage test below); the wrapper turns the top-up off for every walker the walk
-/// makes.
-fn walk_the_warm_chain(iso: &str, real_damage: bool) {
+/// makes. `difficulty` = the menu pick the chain runs at (the front-end's launch path [M
+/// C_SBNFDFCTY 0x216ca8:15]; 3 = the pre-sister byte-identical 00 Agent).
+fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // ---- 07000012 walked (the shared route) ----
     // Agent difficulty (3): the keypad locks' param-6 tag auto-unlocks them at create on
     // Operative [M 0x1ae1f8 tail], and the route's burn leg pins the Agent+ behaviour
@@ -54,7 +55,9 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool) {
     // 0x1b0650's flag arm]). The block drops the scene before the next level loads (a 4 GB
     // test machine OOMs with three resident levels).
     let save = {
-        let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, 3).unwrap());
+        let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, difficulty).unwrap());
+        assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+            "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
         if real_damage {
             // The spawn-lobby guards stand ON the first leg and the fights ran point-blank, where
             // every drone round hits [M DroneWeap_DoBulletAccuracy 0x179740:113-115] — the run
@@ -110,8 +113,8 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool) {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x48) && sim.drones.channels.on(0x49) && sim.drones.channels.on(0x4d),
             "the previous parts' channels carry through the warm load [M 0x182270]");
-        assert_eq!(sim.drones.difficulty, 3,
-            "the chain's one difficulty (00 Agent) rode the warm save into 13 [M GameState+0x28 has no transition-path writer; RamSave::difficulty]");
+        assert_eq!(sim.drones.difficulty, difficulty,
+            "the chain's one difficulty rode the warm save into 13 [M GameState+0x28 has no transition-path writer; RamSave::difficulty]");
     }
     w.wait_enabled(3000, "the 13 intro");
     w.wait(120);
@@ -318,7 +321,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool) {
 #[test]
 fn walk_the_warm_chain_to_the_front_entrance_and_out() {
     let iso = iso();
-    walk_the_warm_chain(&iso, false);
+    walk_the_warm_chain(&iso, false, 3);
 }
 
 /// The same chain on REAL damage (level-13-chain-difficulty): no health top-up for any walker
@@ -357,5 +360,18 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
 #[test]
 fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage() {
     let iso = iso();
-    walker::with_real_damage(|| walk_the_warm_chain(&iso, true));
+    walker::with_real_damage(|| walk_the_warm_chain(&iso, true, 3));
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty-12-13-14-15): the
+/// same walked chain and the same end, loaded at difficulty 2 the menu way (the front-end's
+/// launch path [M C_SBNFDFCTY 0x216ca8:15]; GameState+0x28 → Drones::difficulty, asserted at
+/// each load). Agent spawns the min-difficulty-2 placements [M Drone_Create 0x136be0:49],
+/// scales Bond's pain by Plr_DMod_Normal [M Player_HandlePain 0x1902c8] and the guards' hit
+/// chance by Accuracy row 2 [M DroneWeap_DoBulletAccuracy 0x179740:74-88]. Real input only; no
+/// health, ammo or channel writes.
+#[test]
+fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage_agent() {
+    let iso = iso();
+    walker::with_real_damage(|| walk_the_warm_chain(&iso, true, 2));
 }

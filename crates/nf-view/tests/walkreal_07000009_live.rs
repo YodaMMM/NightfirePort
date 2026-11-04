@@ -76,9 +76,20 @@ fn the_elevator_activation_writer_pinned() {
 /// killed at 2.5u; his zero-damage symptom was the K5 darts themselves + the dart whitelist gap
 /// the dart test below pins]).
 #[test]
-fn walk_tower_a_start_to_finish() {
+fn walk_tower_a_start_to_finish() { walk_tower_a_start_to_finish_at(1) }
+
+/// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent rides the
+/// front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
+fn walk_tower_a_start_to_finish_at(difficulty: u32) {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000009.bin", false).expect("load 07000009"));
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load(&iso, "07000009.bin", false).expect("load 07000009")
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "07000009.bin", false, None, difficulty)
+            .expect("load 07000009")
+    });
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     w.top_up_health = true;
     w.wait(10);
     {
@@ -593,4 +604,34 @@ fn the_lobby_guards_load_with_the_type_0xd_stats_health_1() {
         assert_eq!(d.aggression, 1, "kind-1 word 1 → +0xB5 [M 0x14c758-5c], got {}", d.aggression);
         assert_eq!((d.reaction, d.recover), (80, 80), "kind-1 words 5/6 → +0xB8/+0xB9 [M 0x14c600:105-106], got {}/{}", d.reaction, d.recover);
     }
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty-08-09-0a-0b): the
+/// same walked car-park → lobby → security-room → panel → cab route at the menu's Agent pick —
+/// GameState+0x28 = 2 through the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the
+/// `difficulty[]` table 0x2df4c0 row 1 carries 2; Txt 0x14e = "Agent"]. On this level group
+/// (09-0b) the pick scales Bond's pain by Plr_DMod_Normal 0.8 instead of Easy 0.6 and the
+/// guards' hit chance by DroneFiring_Accuracy_Normal 1.0 instead of Easy 0.8 [M Player_HandlePain
+/// 0x1902c8; DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 09-0b group ← ReadTuningVars
+/// 0x1d3a80]; the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input
+/// only — the load path is the only difference.
+#[test]
+fn walk_tower_a_start_to_finish_real_damage_agent() {
+    walker::with_real_damage(|| walk_tower_a_start_to_finish_at(2))
+}
+
+/// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-08-09-0a-0b): the same
+/// walked car-park → lobby → security-room → panel → cab route at the menu's 00 Agent pick —
+/// GameState+0x28 = 3 through the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the
+/// `difficulty[]` table 0x2df4c0 row 2 carries 3 [D]; Txt 0x14f = "00 Agent"]. On this level
+/// group (09-0b) the pick scales Bond's pain by Plr_DMod_Hard 1.0 (Easy 0.6, Agent 0.8); the
+/// guards' hit chance stays DroneFiring_Accuracy_Hard 1.0 — the SAME row Agent runs (Easy 0.8)
+/// — and the guards' base bullet damage rides DroneDamage_Hard 0.8 (Agent 1.0) [M Player_HandlePain
+/// 0x1902c8; DroneWeap_DoBulletAccuracy 0x179740:74-88; ReadTuningVars 0x1d3a80 cases
+/// 0x7000009-a-b; tuning.rs 09-0b group]; the min-difficulty placements pass Drone_Create's gate
+/// at d2 AND d3 [M 0x136be0:49]. Real input only — the load path is the only difference (plus
+/// the d3-gated tactics the deaths force, inside this file).
+#[test]
+fn walk_tower_a_start_to_finish_real_damage_00agent() {
+    walker::with_real_damage(|| walk_tower_a_start_to_finish_at(3))
 }

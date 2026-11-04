@@ -380,6 +380,16 @@ impl Walker {
         self.tick_inner(input, use_key, false, false);
     }
 
+    /// Reload to a full clip (the game's R held ~100 ticks — the R branch refills while the clip
+    /// is under its size and the spare pool holds [M Player_WeaponFiring's reload branch]; the
+    /// presses past the fill are no-ops). ADDITIVE API, no existing walk calls it: the 05 00
+    /// Agent body reloads after its scripted sniper stands so the return-fire fights never start
+    /// on a drained clip (the 2026-11-03 repro a05g.out: fight#3 opened at 0.9 u with clip 1 and
+    /// reloaded mid-fight, standing in the guard's TooClose field).
+    pub fn reload_full(&mut self) {
+        for _ in 0..100 { self.tick_inner(Input::default(), false, false, true); }
+    }
+
     /// One tick with the trigger HELD (walkreal-b2): the gadget burns come from the held fire's refire
     /// [M Player_WeaponInitBullet 0x1a4bf0 → Player_MuzzleFlash 0x1a4298 → Draw_LaserBeam 0x1a4560; the
     /// held-fire loop 0x1a5460:601-694]; `Lock_Update` 0x1ae3d8:194 burns the lock the beam touches.
@@ -718,6 +728,15 @@ impl Walker {
     }
 
     pub fn shoot(&mut self, di: usize, label: &str) -> bool {
+        self.shoot_bounded(di, label, 10800)
+    }
+
+    /// `shoot` with a caller's tick cap (ADDITIVE — `shoot` delegates at the old 10800; no
+    /// existing caller changes): the 05 00 Agent gallery stands bound their flank budget so a
+    /// narrow-geometry fight cannot walk Bond off the corridor (the a05n repro: the east stand
+    /// burned 10800 ticks on an 8-hp guard and its flanks dropped Bond off the corridor mouth,
+    /// wedging the spine leg).
+    pub fn shoot_bounded(&mut self, di: usize, label: &str, cap: u32) -> bool {
         let mut hp0 = self.scene.sim.as_ref().unwrap().drones.list[di].health;
         let mut repositions = 0i32;
         let mut last_progress = 0u32;
@@ -731,7 +750,7 @@ impl Walker {
         let kill_trace = std::env::var_os("NF_KILL_TRACE").is_some();
         let mut kt_health = f32::MAX;
         let mut kt_state = 0xffu8;
-        for t in 0..10800u32 {
+        for t in 0..cap {
             {
                 let sim = self.scene.sim.as_ref().unwrap();
                 if kill_trace {
