@@ -13,3 +13,14 @@ claimed-by: sandbox1 at 2026-11-04T10:07Z
 ---
 ## Report (blocked, 2026-11-04T11:40Z)
 
+---
+## Report (blocked, 2026-11-04T11:50Z)
+Branch `s/drone-block-swaps-g055-3` (pushed through 2900a2b3; the full report is
+`docs/reports/drone-block-swaps-g055-3.md` on the branch). In short: g055-2 merged with
+master (one conflict resolved); the two target real-health walks are NOT green yet —
+07000016 diagnosed to the route-economy dry-ammo root with a measured attempt chain pushed
+(the kill-loop side-fire, the opt-in finish_fights escalation — fights kill true — the
+leg-wise hostile clears with corpse walks; next levers in the WORKLOG), 07000014 not
+reached (binary 8/1 — its earlier fixes green). The four earlier fixes verified on the
+merged sim (nf-game whole: 1051/0/8). Two master-merge shifts documented
+(07000003/07000011). The 948-binary nf-view run did not fit the window.
