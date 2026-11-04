@@ -35,3 +35,9 @@ exclusion (z −34.4 vs the floor −34.138: dz 0.26 < 0.55) — but the same ge
 before, so (a) is likelier. Next lever: watch which toucher writes 0x24 around the #621 legs
 (the band legs: walkreal_0700000a "the column north of beam #621" / "jump beam #621
 southbound/northbound"), re-time that one leg; the #614 sweep-jump needs no re-tuning.
+
+Finish (2026-11-04 ~10:53 UTC): the four qworm walks GREEN — walkreal_0700000a_live whole
+13 passed / 0 failed / 2 ignored (23 s for the four sisters), low_beam_621_fires_standing 2/0,
+fix_truck_live 2/0, interactables_07000011_live 16/0. The 0x24 writer was the northbound #621
+press firing its takeoff stand inside the band's footprint after the phase shift; press 2.2
+fixes it geometrically (0.72 3D-clear of the corner, plane-side-independent).
