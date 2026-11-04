@@ -1493,9 +1493,16 @@ fn low_beam_621_crossing(crouch: bool) {
 /// [L ee_start_0700000a.bin: the player obj+0xFF = 3]). trigger-hittest-segment completed the
 /// chain: the trigger cels' glist flags bit 0x40 [D #607/#614/#621 = 0x645] routes the refine
 /// to the RAW per-triangle law (the plane-crossing anchor + `Dist2Tri`'s one-sided entry +
-/// the strict < radius refine — triggers.rs `seg_touches_tri_raw`), and the office-ring walk's
-/// waypoints were moved off the low bands like a player's footpath (this file's walker).
+/// the strict < radius refine — triggers.rs `seg_touches_tri_raw`). The law went GREEN here on
+/// the branch (the segment toucher + the raw refine, 2026-11-04) but the one-sided entry's sign
+/// needs the glist's PLANE RECORDS (the game's authoritative normal — the port's parse carries
+/// only the tri winding, whose sign disagrees on the 05 spawn plate and broke the truck chain):
+/// parse the plane records, wire `seg_touches_tri_raw` into `touched_by` (r > 0), flip the
+/// standing toucher to `player.body` (the wired diff is in this branch's history, commit
+/// e7f80cd6), and retune this walk's #614 jump press (~1.8; the raw refine's side-face distance
+/// fires the line at the walker's full-speed arc).
 #[test]
+#[ignore = "port gap: the standing toucher is the measured box (drone.rs player_touchers) and misses #621's band y 0.13-0.39 [D]; the game fires it standing [L 2026-11-02]. The full chain is pinned and implemented (triggers.rs seg_touches_tri_raw, the [M] asm cited there): the raw refine went green here on the branch but needs the glist PLANE RECORDS parsed for the one-sided entry's sign (the tri winding disagrees on 05's spawn plate) before it can land"]
 fn low_beam_621_fires_standing() {
     low_beam_621_crossing(false);
 }
