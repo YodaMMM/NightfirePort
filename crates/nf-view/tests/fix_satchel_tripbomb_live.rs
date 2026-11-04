@@ -87,6 +87,9 @@ fn thrown(sim: &nf_view::scene::Sim, hit: [f32; 3], normal: [f32; 3], id: u16) -
         mesh: sim.weapons.projectile_mesh(id as usize), owner: usize::MAX, state: 0,
         bounces: 0, smoke_popped: false, resting: false, stuck: false, seek_target: None,
         phase: Some(Box::new(nf_game::grenade::StuckGadget::thrown([-normal[0], -normal[1], -normal[2]]))),
+        // BU+0x102 [M Bullet_init 0x12c5a0:211 — 100 for the 0x3b family].
+        burn: if id == 0x3b { 100 } else { 0 },
+        defused: false,
     }
 }
 

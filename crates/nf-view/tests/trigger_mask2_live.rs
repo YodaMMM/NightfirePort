@@ -44,6 +44,8 @@ fn a_live_grenade_through_the_07000006_plate_fires_it() {
             travelled: 0.0, range: 300.0, damage: 0.0, radius: 0.0, mesh: 0, owner: usize::MAX,
             state: 0, bounces: 0, smoke_popped: false, resting: false, stuck: false,
             seek_target: None, phase: None, weapon_type: 0x3b,
+        burn: 100, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
+        defused: false,
         });
     }
     let mut fired_at = None;
@@ -84,6 +86,8 @@ fn a_grenade_nowhere_near_the_plates_fires_nothing() {
             travelled: 0.0, range: 300.0, damage: 0.0, radius: 0.0, mesh: 0, owner: usize::MAX,
             state: 0, bounces: 0, smoke_popped: false, resting: false, stuck: false,
             seek_target: None, phase: None, weapon_type: 0x3b,
+        burn: 100, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
+        defused: false,
         });
     }
     for t in 1..120u32 {
