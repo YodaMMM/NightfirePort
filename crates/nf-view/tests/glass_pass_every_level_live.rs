@@ -17,7 +17,7 @@
 mod walker;
 
 use nf_game::player::Input;
-use walker::{dxz, Walker};
+use walker::{Wp, dxz, Walker};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
@@ -234,6 +234,7 @@ fn the_01_breach_shot_breaks_the_entry_glass() {
         sim.drones.breaks.list.iter().find(|b| b.placement == *p).map_or(false, |b| !b.dead)).collect();
     let mut taps: Vec<(u32, usize)> = vec![];
     let mut drained = false;
+    let mut impact_seen = false;
     let mut prev_impact_len = 0usize;
     let mut prev_pos: Vec<[f32; 3]> = sim.drones.list.iter().map(|d| d.pos).collect();
     let mut awake_at: Option<u32> = None;
@@ -275,6 +276,19 @@ fn the_01_breach_shot_breaks_the_entry_glass() {
         }
         let mut input = Input::default();
         let mut fired = false;
+        if best.is_none() && awake_at.is_some() {
+            // The post-smash plain tap: the chargers are INSIDE (no pane between) — the pin's
+            // second half ("the round reaches the guard") is a separate fact from the crossing
+            // half; aim the nearest live guard and fire.
+            let mut best_g: Option<(f32, usize, [f32; 3])> = None;
+            for (i, d) in sim.drones.list.iter().enumerate() {
+                if d.health <= 0.0 || !d.enabled { continue; }
+                let chest = [d.pos[0], d.pos[1] + 0.9, d.pos[2]];
+                let dist = dxz(d.pos, bp);
+                if best_g.map_or(true, |(bd, _, _)| dist < bd) { best_g = Some((dist, i, chest)); }
+            }
+            best = best_g.map(|(d, i, chest)| (d, i, chest, 0usize));
+        }
         if let Some((_, gi, chest, pane)) = best {
             let dx = chest[0] - eye[0];
             let dz = chest[2] - eye[2];
@@ -292,7 +306,12 @@ fn the_01_breach_shot_breaks_the_entry_glass() {
             // (t2128, the flight time) but no Drone impact registered — the freshly-woken
             // waiter is not yet bullet-pickable [M Collide_PickObj 0x1eae80:26-30's obj+0xF0
             // 0x20 drop]; the smash lands wake+16 [L the probe], so the window is wake+10..14.
-            let due = awake_at.map_or(false, |w| t.saturating_sub(w) >= 10 && t.saturating_sub(w) <= 22);
+            // The window runs past the smash (the chargers reach pane 130's plane at wake+16
+            // [L the probe]): after the pane is gone the same loop keeps tapping — the pin's
+            // second half (the round REACHES the guard) rides the charging guards, whose
+            // pickable gate [M Collide_PickObj 0x1eae80:26-30's obj+0xF0 0x20 drop] is what
+            // this run measures.
+            let due = awake_at.map_or(false, |w| t.saturating_sub(w) >= 10 && t.saturating_sub(w) <= 140);
             if converged && awake && due && t % 2 == 0 {
                 fired = true;
                 taps.push((t, gi));
@@ -310,6 +329,7 @@ fn the_01_breach_shot_breaks_the_entry_glass() {
             _ => None,
         }).collect();
         prev_impact_len = vlen;
+        if !new_impacts.is_empty() { impact_seen = true; }
         for (pi, (p, _, _)) in panes.iter().enumerate() {
             if prev_alive[pi] && !alive_now[pi] {
                 let tapped: Vec<usize> = taps.iter().rev().take(4).filter(|(tt, _)| t - *tt <= 24).map(|(_, g)| *g).collect();
@@ -340,14 +360,22 @@ fn the_01_breach_shot_breaks_the_entry_glass() {
     }
     assert!(drained, "no round ever drained a live entry pane on real input — the panes: {:?}, the taps: {:?}",
         prev_alive, taps);
-    eprintln!("[glass-01] the crossing pin held (a real-input round broke a live pane); the charger-impact half is the documented leftover");
+    // The impact half, measured again this round (2026-11-04): even post-smash plain taps at
+    // the charging guards (the window past wake+140, the chargers inside) register NO drone
+    // impact — the raw `step_bond` harness never advances the NPC globals, and the game's own
+    // Drone_CollisionHandler 0x140968:62 returns while NPCGlobals == 0 (the NIS freeze: drones
+    // take no damage) [M] — the guards are undamageable for the whole run BY THE HARNESS, not
+    // by the port. The next session drives the full scene step after the wake (or measures the
+    // NPCGlobals release tick) and the impact half closes there.
+    eprintln!("[glass-01] the crossing pin held; the impact half measured blocked by the raw-step harness's NPC freeze (impacts {:?}, impact_seen {})",
+        sim.drones.player_impacts.iter().rev().take(4).collect::<Vec<_>>(), impact_seen);
 }
 
 /// 14 (Countdown, Delta Sector): the placed ServerRoomWindow / CompRoom1Window / SCCP_Window
 /// panes [D glass_guards_14] with the room guards behind them; Bond walks (nav) to a stand and
 /// shoots through the live pane.
 #[test]
-#[ignore = "the window stand-walk needs the next window; the 01 raw-step pin carries this session's proof"]
+#[ignore = "the window stands sit on the facility corridor (z 33.3, nodes 57/58 [D nav]) below the spawn mezzanine (34.65, 3.41, 60.73 [L the probe]) — the plain nav walk cannot cross the vertical drops (walk_nav_to gave up at the spawn, d 29.9, two runs); the reached-for stands need the walked east route (the SkyBridge crossing + the trench) or the west descent legs, then the shooting phase — the geometry is measured ready (from the west stand (22.9, 1.2, 33.3) guards #5 (1 u) and #2 (16 u) are both inside pane 97's crossing [D the recon coords this round]; the 60-u shots from the spawn overfly the pane but the pistol's 50.0 range [M weapon_data+0x1C] and the wall frames stop them"]
 fn the_14_window_shot_crosses_to_the_room_guard() {
     unsafe { std::env::set_var("NF_SILENT", "1"); }
     let scene = nf_view::load(&iso(), "07000014.bin", false).expect("load 07000014");
@@ -363,6 +391,77 @@ fn the_14_window_shot_crosses_to_the_room_guard() {
     let s = shoot_guard_through_panes(&mut w, &[97, 86, 156], &stands, 0, 900, |_| true)
         .expect("a room guard took the round through the live window");
     eprintln!("[glass-14] guard {} pane {} tap t{} died t{} hp {:.2} -> {:.2}",
+        s.guard, s.pane, s.tap_t, s.died_t, s.hp_before, s.hp_after);
+    assert!(s.hp_after < s.hp_before, "the round reached the guard");
+}
+
+/// 06 (Air Force One): the placed pane 376 (a z-sheet at z −16.3, x 29.35..30.85, y 40.7..42.3
+/// [D the recon]) with guard #3 standing 1 u behind it at (30.3, 41.0, −16.8) and #2/#4 on the
+/// flanks [D the recon]; Bond spawns at (57.2, 39.3, 22.6) [L the probe], walks the fuselage
+/// south on nav to a stand north of the sheet, and the pistol round crosses the pane to #3.
+/// Pin: a pane dies on the tick the aimed guard loses health — the round's mirrored contact
+/// [M Break_Update 0x12bfd8:36-37] + the penetration roll [M Collide_Update 0x1ea398:216-229,
+/// the pistol 0x02 carries bit 0x800 CLEAR [L the record census]].
+#[test]
+#[ignore = "the guardroom window pane 376 carries filter 0xff07 [D the placement param 2, printed in the run] — by [M Collide_FilterBullets 0x1ece30] the pistol's 0x0008 ammo word ANDs non-zero and the contact is dropped: NO gun round can break or cross this pane, the game's own law; the pane is smash-only (the drone-contact arm [M Break_Update 0x12bfd8:23-34]). Also measured: the world line to the behind-guard blocks at 68.8% (the wall around the window; the recon's lo/hi box includes the frame). The pin here is the smash path, not a bullet"]
+fn the_06_boardroom_shot_crosses_to_the_behind_guard() {
+    unsafe { std::env::set_var("NF_SILENT", "1"); }
+    let scene = nf_view::load(&iso(), "07000006.bin", false).expect("load 07000006");
+    let mut w = Walker::new(scene);
+    assert!(w.switch_to_armed("the 06 shot"), "a firearm is in hand");
+    // The walked approach: walkreal_07000006_live's own guardhouse-court legs (the spawn ->
+    // the truck -> the greeting plates -> the dock -> the well courtyard -> the hedge -> the
+    // court -> before door #47). The pane 376 is the guardroom's window: the room's interior
+    // is z < −16.3 (the route's own fusebox nook (29.9, 40.5, −17.5) [M the route file]), the
+    // court side z > −16.3. The stand is 2.8 u north of the sheet; guard #3 stands 1 u behind
+    // it at (30.3, 41.0, −16.8) [D the recon], #2/#4 on the flanks (outside the pane's x span).
+    w.walk_nav_to([60.0, 38.3, 31.5], "off the truck, south", 1.6);
+    w.walk_nav_to([45.0, 38.3, 24.0], "across the greeting plates", 1.6);
+    w.walk_nav_to([24.3, 38.3, 27.6], "the dock's west end", 1.6);
+    w.walk_nav_to([24.6, 38.5, 21.5], "down the west lane", 1.6);
+    w.walk_nav_to([26.5, 39.1, 13.1], "the well courtyard's west side", 1.6);
+    w.walk_to(Wp::new(23.2, 39.1, 7.0), "the hedge gap");
+    w.walk_to(Wp::new(27.2, 39.1, -2.4), "around the hedge end");
+    w.walk_to(Wp::new(33.7, 39.1, -8.9), "the guardhouse court");
+    w.walk_to(Wp::new(36.0, 39.1, -13.4), "before door #47");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let b = sim.drones.breaks.list.iter().find(|b| b.placement == 376).unwrap();
+        eprintln!("[glass-06] pane 376 health {:.2} dead {} filter {:#x} lo {:?} hi {:?}", b.health, b.dead, b.filter, b.lo, b.hi);
+    }
+    let s = shoot_guard_through_panes(&mut w, &[376], &[[30.1, 40.3, -13.5]], 2, 400, |sim| {
+        // Diagnostic: the world line to the behind-guard and the pane's state, every 60 ticks.
+        let bp = sim.bond.pos;
+        let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+        if let Some(d) = sim.drones.list.iter().enumerate().find(|(_, d)| d.health > 0.0 && d.pos[2] < -16.6 && d.pos[0] > 29.0 && d.pos[0] < 31.0).map(|(i, d)| (i, d)) {
+            let chest = [d.1.pos[0], d.1.pos[1] + 0.9, d.1.pos[2]];
+            let seg = sim.world.segment(eye, chest);
+            let br = sim.drones.breaks.list.iter().find(|b| b.placement == 376).unwrap();
+            eprintln!("[glass-06d] bond {:.1},{:.1},{:.1} guard {} at {:.1},{:.1},{:.1} seg_to_chest {:?} pane hp {:.2} dead {}", bp[0], bp[1], bp[2], d.0, d.1.pos[0], d.1.pos[1], d.1.pos[2], seg, br.health, br.dead);
+        }
+        true
+    })
+    .expect("a guard took the round through the live pane 376");
+    eprintln!("[glass-06] guard {} pane {} tap t{} died t{} hp {:.2} -> {:.2}",
+        s.guard, s.pane, s.tap_t, s.died_t, s.hp_before, s.hp_after);
+    assert!(s.hp_after < s.hp_before, "the round reached the guard");
+}
+
+/// 08 (the mid-station): the placed panes 170/176/177 at y 35.3 [D the recon]
+/// — 176 is a z-sheet at z −122.0 (x 105.3..109.3), 170/177 are x-sheets — with the ambush
+/// squad #15/#16 (y 34.5, z −111..−113) south-east behind them [D the recon]. Bond spawns at
+/// (139.5, 50.1, −76.4) [L the probe]; the walkreal-08 route's hall legs walk the area. A stand
+/// north of 176's sheet puts #15's chest inside the pane's x span on the crossing.
+#[test]
+#[ignore = "the stand (105.0, 35.0, -124.5) is deep in the mid-station — the spawn (139.5, 50.1, -76.4) [L the probe] needs the walkreal-08 route's hall legs (the plain nav walk from the spawn does not connect in the window); the pane geometry is measured (176 is the z-sheet x 105.3..109.3 at z -122.0 with the ambush squad #15/#16 south-east [D the recon]); next session walks the route legs then re-runs this pin"]
+fn the_08_station_shot_crosses_to_the_ambush_guard() {
+    unsafe { std::env::set_var("NF_SILENT", "1"); }
+    let scene = nf_view::load(&iso(), "07000008.bin", false).expect("load 07000008");
+    let mut w = Walker::new(scene);
+    assert!(w.switch_to_armed("the 08 shot"), "a firearm is in hand");
+    let s = shoot_guard_through_panes(&mut w, &[176, 170, 177], &[[105.0, 35.0, -124.5]], 2, 1500, |_| true)
+        .expect("a guard took the round through the live station pane");
+    eprintln!("[glass-08] guard {} pane {} tap t{} died t{} hp {:.2} -> {:.2}",
         s.guard, s.pane, s.tap_t, s.died_t, s.hp_before, s.hp_after);
     assert!(s.hp_after < s.hp_before, "the round reached the guard");
 }

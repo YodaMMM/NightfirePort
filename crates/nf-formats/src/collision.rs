@@ -91,6 +91,24 @@ impl Collision {
     /// cross — the port's only normal source — carries the game's plane direction (the hit point and
     /// t are winding-independent; only the cross flips).
     pub fn triangles_with_material(&self) -> Vec<([[f32; 3]; 3], u8)> {
+        self.triangles_with_planes().into_iter().map(|(v, m, _, _)| (v, m)).collect()
+    }
+
+    /// [`Collision::triangles_with_material`] with each triangle's OWN plane record, the authoritative
+    /// side the game's trigger narrow phase reads: `Intersect_CylGeom` 0x109da0 fetches the record at
+    /// the leaf's s16 area base + plane·2 bytes and builds `Dist2Tri` 0x1dfca8's `plane_equ` from it —
+    /// the normal 3×i16 · 2⁻¹⁴ (NOT re-normalised: |n| = 16383-16384, used raw) and the distance as
+    /// the f32 whose bit pattern spans the record's halfwords +3/+4 (byte +6..+0xA) [M asm
+    /// 0x10a1d8-0x10a1e8 + 0x10a283-0x10a2b0; Dist2Tri 0x1dfca8:38-68 reads plane_equ as (V3 n, f32 d)].
+    /// Records are 5 halfwords (10 bytes) apart; the emitted normal/distance are the record's own
+    /// LOCAL-space values (the caller transforms them with the placement matrix). Measured on the
+    /// disc (trigger-plane-records probe): 0700000a's laserbeam #621 tri 0 record n (−45,16383,0)
+    /// d-bits 0xBA55912C = −8.34e-4 sits the plane through the tri's own verts (residual 4.4e-4,
+    /// the i16 normal's quantisation); 07000011 #235's records d ≈ 0 and 07000005's plate record
+    /// d = −0.0 sit exactly through theirs. Where a record is missing or degenerate (|n| < 1) the
+    /// fallback is the winding cross with d = −n·v0 (the old winding-only reading).
+    /// Returns (verts, material, plane normal, plane distance) per triangle.
+    pub fn triangles_with_planes(&self) -> Vec<([[f32; 3]; 3], u8, [f32; 3], f32)> {
         let mut out = Vec::new();
         for bx in self.boxes.iter().filter(|b| b.children.is_none()) {
             let base = bx.vblock as usize * 0x20;
@@ -100,18 +118,29 @@ impl Collision {
                     let w = |k: usize| self.words.get(base + i as usize + k).copied().unwrap_or(0) as f32;
                     [w(0) * bx.scale + bx.origin[0], w(1) * bx.scale + bx.origin[1], w(2) * bx.scale + bx.origin[2]]
                 });
-                // The stored plane normal: the triangle's plane halfword indexes the leaf's s16 area
-                // (the same base as the vertex halfwords; `Intersect_RayGeom` loads 3 s16 · 2⁻¹⁴).
+                // The stored plane record: 3×i16 normal · 2⁻¹⁴ then the f32 distance from the
+                // halfword pair at +3/+4 (byte +6..+0xA) [M asm 0x10a1d8-0x10a1e8].
                 let p = t.plane as usize;
                 let pw = |k: usize| self.words.get(base + p + k).copied().unwrap_or(0) as f32 * (1.0 / 16384.0);
-                let n = [pw(0), pw(1), pw(2)];
+                let (n, d) = match (self.words.get(base + p + 3), self.words.get(base + p + 4)) {
+                    (Some(&lo), Some(&hi)) => {
+                        let bits = (lo as u16 as u32) | ((hi as u16 as u32) << 16);
+                        let n = [pw(0), pw(1), pw(2)];
+                        if n[0] * n[0] + n[1] * n[1] + n[2] * n[2] > 1e-9 {
+                            (n, f32::from_bits(bits))
+                        } else {
+                            (n, f32::from_bits(0x7fc0_0000)) // NaN: marks the degenerate record
+                        }
+                    }
+                    _ => ([f32::NAN; 3], f32::NAN),
+                };
                 let e1 = [v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2]];
                 let e2 = [v[2][0] - v[0][0], v[2][1] - v[0][1], v[2][2] - v[0][2]];
                 let cr = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
                 if n[0] * cr[0] + n[1] * cr[1] + n[2] * cr[2] < 0.0 {
                     v.swap(1, 2);
                 }
-                out.push((v, m));
+                out.push((v, m, n, d));
             }
         }
         out

@@ -519,6 +519,14 @@ pub struct Sim {
     /// mp-world-sync: `step_bond` already moved the remotes this tick (the callers' later
     /// `step_net_remotes` call is then a no-op).
     net_remotes_done: bool,
+    /// level-05-truck-class5-contact: Bond stood on a MOVING carrier this tick (the ground-carry
+    /// hit below — `Player_FeetOnPoint` → `Control_InheritVelocity` 0x133e88's ride). The trigger
+    /// toucher's deep reach rides on it (drone.rs's standing arm); the game's own contact shape is
+    /// the same segment everywhere, but the port's PARSED glist extents for the low beams/plates
+    /// ride off the game's actual placement (0a's #614 parsed tris sit ~0.9 under the corridor
+    /// floor, 07000011's #235 ~0.85 over pos — the documented ref-gate/extent divergence), so the
+    /// general deep reach stays blocked by those route pins and lands on the measured ride only.
+    riding: bool,
     /// mp-world-sync: each human slot's armour (`BLData+0x8B0`) — the armour pickup's shared
     /// state (set to 50 on the take [M Pickup_Handler 0x18e650:220-225], cleared on death).
     pub mp_armour: [f32; nf_net::MAX_AGENTS],
@@ -3082,9 +3090,15 @@ impl Sim {
         // the moved pass copies after `control_handle_cel_change` 0x1336f8:212 (the ride below and the
         // tick's own move both belong to the next relink's segment). fix-swim-entry.
         let prev_tick_pos = self.bond.pos;
+        self.riding = false;
         if !self.disabled {
             let p = self.bond.pos;
             if let Some(g) = self.world.ground_motion(p, [p[0], p[1] - 1.6347, p[2]]) {
+                // level-05-truck-class5-contact: the ride flag the toucher's deep reach reads (see
+                // the `riding` field note). `ground_motion` answers Some ONLY when the first
+                // surface under Bond belongs to a moving object [M world.rs ground_motion], so a
+                // static floor never sets it.
+                self.riding = true;
                 let (sn, cs) = g.turn.sin_cos();
                 let (x, z) = (p[0] + g.delta[0] - g.pivot[0], p[2] + g.delta[2] - g.pivot[2]);
                 self.bond.pos = [g.pivot[0] + x * cs + z * sn, p[1] + g.delta[1], g.pivot[2] - x * sn + z * cs];
@@ -4015,7 +4029,8 @@ impl Sim {
             // The crouch substate drives the trigger toucher's pick-arm switch
             // (level-0a-ceiling-gun-route).
             crouched: self.bond.crouched,
-            move_local: self.bond.move_local };
+            move_local: self.bond.move_local,
+            riding: self.riding };
         let d = nf_game::drone::Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: self.level, sequences: &self.seqs, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models, surfaces: self.surfaces.as_ref(), voices: self.voices.as_deref(), difficulty: self.drones.difficulty,
             ai_points: &self.ai_points };
         // `Player_WeaponFiring` → `Player_WeaponInitBullet` from the eye along the view (*deviation*: no auto-aim and
@@ -10253,6 +10268,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             mp_dead_ticks: [0; nf_net::MAX_AGENTS],
             net_row: None,
             net_remotes_done: false,
+            riding: false,
             net_last_takes: Vec::new(),
             use_key_prev: false,
             ronin_was_mounted: false,

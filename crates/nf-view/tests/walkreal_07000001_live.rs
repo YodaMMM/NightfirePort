@@ -1508,6 +1508,7 @@ fn following_mayhew_down_completes_the_level() {
         d.pos[0], d.pos[1], d.pos[2], d.state, sim.bond.pos);
     let contact_toucher = nf_game::triggers::Toucher {
         a: [d.pos[0], d.pos[1] - 1.0, d.pos[2]], b: d.head(), r: 0.4, drone: true, skin: d.skin, contain: true,
+        seg_only: false, // the merge's field: the 01f plate keeps its master semantics (the segment+radius both-sided test on record-less plates)
     };
     // On-foot Bond: `contain: !hanging` with hanging false — the sim's own on-foot construction
     // [drone.rs 16711], and this walk never leaves the ground.

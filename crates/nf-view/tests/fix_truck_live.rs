@@ -80,29 +80,38 @@ fn truck_ride_parks_bond_at_the_game_height_and_ends_the_level() {
     assert_eq!(sim.drones.level_exit, Some(0x0700_0006), "the ride must end the level into 07000006");
 }
 
-/// Sister: the STANDING ride does not touch the plate — the standing capsule's touch axis starts at
-/// pos+0.15 (38.53 at the standing park height), 0.78 above the plate at 37.7418, and the 0.55-radius
-/// capsule reaches only to 37.98 — a 0.23 miss [M Toucher::player, Player_Collision 0x194df0's 0.55].
-/// Proves the plate assertion can fail and pins the mechanism: it is the crouched stance that reaches
-/// the plate, as the trace's play did.
+/// Sister: the STANDING ride fires the parking plate too — the plate is a MASK-8 player trigger
+/// [D the truck script 0x06000A22 stream 6: Entity 0x0200087F, params (0x70, 8, 0…)], so
+/// `Trigger_Hit` 0x1b1fc8:56-58 returns exactly the class-3 contact bit; the truck's own contact
+/// (a script player, obj+0xFF = 0x1b [M SP_CreateScriptPlayer 0x1db9a8:71]) is in none of the
+/// classification arms [M 0x1b1fc8:27-47] and credits nothing even where it mirrors onto the
+/// plate's obj+0xD0 list [M Collide_Update 0x1ea398:160-215] — the old class-5 guess
+/// (trigger-port-check #11) is disproven for this chain. The standing rider's own game segment
+/// reaches the plate: B = pos+0.55−cc = pos−0.4847 (cc 1.0347 [L]) over the bed (feet 37.28 [D
+/// block 0x2E of 0x020003be]), and the plate at 37.7418 sits 0.163 under B — inside r 0.55 [M
+/// Player_Collision 0x194df0's default arm; the Intersect_CylGeom 0x109da0 clamp counts the end
+/// sphere, docs/systems/player.md]. Pins the mechanism: the standing ride is NOT stuck — the
+/// plate fires and the chain ends the level (the mayhew_handover sister rides it on real input).
 #[test]
-fn standing_ride_never_touches_the_parking_plate() {
+fn standing_ride_still_fires_the_parking_plate() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
     let sim = scene.sim.as_mut().unwrap();
     sim.bond = Bond::new([100.0, 26.0, 108.0], sim.bond.yaw);
+    let mut fired = None;
     for t in 1..=7000u32 {
         sim.step_bond(Input::default(), false, false, false);
-        // The park plateau: the truck has parked and Bond stands still on it.
-        if t > 5400 && sim.bond.pos[1] > 38.0 && sim.bond.pos[2] < 53.0 && t > 6400 {
-            eprintln!("[standing] t{t} bond {:?}", sim.bond.pos);
-            break;
-        }
+        if fired.is_none() && sim.drones.channels.on(0x70) { fired = Some(t); }
+        if sim.drones.level_exit.is_some() { break; }
     }
     let bond = sim.bond.pos;
-    eprintln!("[standing] parked bond ({bond:?}) 0x70:{}", sim.drones.channels.on(0x70) as i32);
-    assert!(!sim.drones.channels.on(0x70), "the standing ride must not fire the parking plate (the capsule misses it by ~0.23)");
-    // The miss: (pos + 0.15) − plate − 0.55 > 0 — the touch capsule's reach stops short of the plate.
-    assert!(bond[1] + 0.15 - PLATE_Y - 0.55 > 0.0, "the standing touch capsule cannot reach the plate (miss {:.3})",
-        bond[1] + 0.15 - PLATE_Y - 0.55);
+    eprintln!("[standing] parked bond ({bond:?}) 0x70 fired at {fired:?}  exit {:?}", sim.drones.level_exit);
+    let t70 = fired.expect("the standing ride fires the parking plate (the game's segment reaches it: plate 0.163 under B < r 0.55)");
+    // The reach law: the standing segment's bottom end B = pos+0.55−cc must sit within r 0.55 of
+    // the plate (the port's bed stand parks Bond at ~38.39; B ≈ 37.90; the gap ≈ 0.163).
+    let cc = sim.bond.cc;
+    let reach_gap = bond[1] + 0.55 - cc - PLATE_Y;
+    assert!(reach_gap < 0.55, "the standing segment's bottom end B sits within r 0.55 of the plate (gap {reach_gap:.3})");
+    eprintln!("[standing] B-to-plate gap {reach_gap:.3} < 0.55, 0x70 at t{t70}, exit {:?}", sim.drones.level_exit);
+    assert_eq!(sim.drones.level_exit, Some(0x0700_0006), "the standing ride is not stuck: the chain ends the level into 07000006");
 }

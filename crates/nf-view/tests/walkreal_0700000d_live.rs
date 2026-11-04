@@ -39,14 +39,35 @@ fn bond_pos(w: &Walker) -> [f32; 3] { w.scene.sim.as_ref().unwrap().bond.pos }
 
 #[test]
 fn walk_arrival_to_the_c5_door() {
+    walk_arrival_to_the_c5_door_at(1);
+}
+
+/// The difficulty-parameterized body (real-health-agent-0c-0d): 1 is the byte-identical
+/// master replay; 2+ (the Agent sister) loads the menu way BOTH times — the cold menu pick
+/// and the warm level change both run GameState+0x28 = 2 [M C_SBNFDFCTY 0x216ca8:15 →
+/// load_with_carry_difficulty; GameState+0x28 → Drones::difficulty, asserted after the
+/// warm load]. Agent spawns the min-difficulty-2 placements [M Drone_Create 0x136be0:49],
+/// scales Bond's pain by Plr_DMod_Normal [M Player_HandlePain 0x1902c8] and the guards'
+/// hit chance by Accuracy row 2 [M DroneWeap_DoBulletAccuracy 0x179740:74-88].
+fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
     let iso = iso();
     // The warm carry: 0c's record-11 channels ride the save [M 0x182270:92-95].
-    let cold = nf_view::load_with_carry(&iso, "0700000d.bin", false, None).expect("load cold");
+    let cold = if difficulty == 1 {
+        nf_view::load_with_carry(&iso, "0700000d.bin", false, None).expect("load cold")
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "0700000d.bin", false, None, difficulty).expect("load cold")
+    };
     let save = {
         let sim = cold.sim.as_ref().unwrap();
         nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
     };
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "0700000d.bin", false, Some(&save)).expect("load warm"));
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load_with_carry(&iso, "0700000d.bin", false, Some(&save)).expect("load warm")
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "0700000d.bin", false, Some(&save), difficulty).expect("load warm")
+    });
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     for c in [0x1bu8, 0x1c] { w.scene.sim.as_mut().unwrap().drones.set_channel(c); }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -801,6 +822,33 @@ fn walk_arrival_to_the_c5_door() {
 #[ignore = "real health, level-0d-real-health-crossfire-2: the platform kills (pool 100->100) + the ladder-top kills (#16 + the sweep's 2) land and the ride reads MOVING (the port fix [M 0x193600:129-134]); Bond still dies at the deck arrival — the -2 audit measured the two remaining drains exactly: #10 (skin 0x5000093, the bay guard (214.7,12.1,-289.5)) fires 3 hits (46) during the ~1100-tick ladder-top stand (sight legal: its eye->ladder-top ray clears the canopy corner [D coll-scan]; hearing cannot reach — the P2K shot's outer radius 40 [L] < d 55.3, and msg-0x14 receivers >50 from Bond return 0 [M 0x1437a0:77-79]), and #29 (0x5000087) — engaged by the sweep's missed passes — steps into a firing spot and eats the ride+landing for 54 (4 hits at the exact 180-tick cadence 5423/5603/5783/5964). The [0d:ray] audit: the ladder-top eye is 4.9 BELOW the west-roof surface — the eye->chest ray dies at 0.972-0.974 on the roof slab edge (the deck eye 7.5 below — worse), so #29 is UNSHOOTABLE from every stand the route reaches while its own descending rounds clear its roof edge; the ray-gated sweep + the skipped deck attempt + the polled settle were tried and measured WORSE-or-equal (the gate's engage chain), retired. The game-side levers + the live checks in docs/reports/level-0d-real-health-crossfire-2.md"]
 fn walk_arrival_to_the_c5_door_real_damage() {
     walker::with_real_damage(walk_arrival_to_the_c5_door);
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-0c-0d): the same walked
+/// route and the same end, loaded at difficulty 2 the menu way — the front-end's launch
+/// path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty; GameState+0x28 →
+/// Drones::difficulty, asserted at load]. Agent spawns the min-difficulty-2 placements
+/// [M Drone_Create 0x136be0:49], scales Bond's pain by Plr_DMod_Normal [M Player_HandlePain
+/// 0x1902c8] and the guards' hit chance by Accuracy row 2 [M DroneWeap_DoBulletAccuracy
+/// 0x179740:74-88]. Real input only; no health, ammo or channel writes.
+///
+/// IGNORED with the measured run (real-health-agent-0c-0d): the walk rides the same
+/// Operative-shaped death the `..._real_damage` ignore audits — the deck arrival — and the
+/// Agent deltas are measured on top: DIED tick 4850 (202.25,16.14,-255.06) with 0
+/// return-fire fights, 6 hits for 100.0 (armour spent on the way): #21 (skin 0x5000087,
+/// sniper 0x1e, (162.8,1.0,-215.0)) landed 2 × 28.0 from d 58.3 and #36 (0x1e,
+/// (157.7,1.0,-228.1)) 1 × 10.0 from d 54.2 — both OUTSIDE the fights' 48 u lane window
+/// and outside every pinned kill box, so no fight ever engaged them — plus #20's one 28.0
+/// at d 7.1 on the deck. The Operative audit's own drains (#10 the bay guard, #29 the west
+/// roof — unsatisfiable from every stand the route reaches, level-0d-real-health-crossfire-2)
+/// sit under the same crossfire. NEXT LEVERS: the 50-level-0d-real-health-crossfire-5 lever
+/// set first (this sister must build on a green Operative base); then a d2-gated aimed stand
+/// on the two d2 snipers from the strip (the 0c yard-stand law — the zero-spread aimed act
+/// [M Bullet_init 0x12c5a0:139-170] reaches d 55+ with the still-gate tap law).
+#[test]
+#[ignore = "Agent: the Operative deck-arrival crossfire death comes EARLIER — tick 4850 (202.25,16.14,-255.06), 0 return-fire fights, 6 hits for 100.0: the d2 snipers #21 (2 × 28.0 from d 58.3) and #36 (1 × 10.0 from d 54.2) sit outside the fights' 48 u window and every pinned kill box; levers: the 50-level-0d-real-health-crossfire-5 set on a green Operative base, then a d2-gated aimed stand on the two d2 snipers"]
+fn walk_arrival_to_the_c5_door_real_damage_agent() {
+    walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(2));
 }
 
 /// Shoot a live guard standing near (x, z) through the real fire path (the walker's aim +
