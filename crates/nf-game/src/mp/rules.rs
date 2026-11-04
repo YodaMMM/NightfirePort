@@ -127,6 +127,11 @@ pub struct MpObjectsRt {
     /// label its `%s` takes) — `Text_AddMsg(-1, 0, 4, .., 0, MP_MSG_TICKS)` at each site
     /// (presentation, never hashed).
     pub msgs: Vec<(u32, Option<u32>)>,
+    /// The per-slot lines (`Text_AddMsg(slot, 0, 1, ..)`, the INFO pane's): (slot, label).
+    pub slot_msgs: Vec<(usize, u32)>,
+    /// The label `StatusSpr` holds after a site round's result [M 0x1870a0:117-123,146-158];
+    /// cleared by the restart [M 0x184bd0:88-89].
+    pub site_status: Option<u32>,
     /// `MPGame+slot·0x30+0x2c`: the clock stamp of the slot's last hill-entry sound, 0.0 = none
     /// [M 0x186ae0:101-105].
     pub hill_sound_at: [f32; super::MP_MAX_SLOTS],
@@ -650,6 +655,7 @@ impl MpMatch {
     pub fn restart_scenario(&mut self, rng: &mut Rng) {
         self.game.clock = 0.0; // [M 0x183fc0:40-53]
         self.game.restart_timer = 0.0;
+        self.objects_rt.site_status = None; // [M 0x184bd0:88-89]
         let s = self.settings.scenario;
         if s == scenario::DEMOLITION || s == scenario::PROTECTION {
             let pool: Vec<usize> = match s {
@@ -1013,6 +1019,8 @@ impl MpMatch {
         }
         if self.game.limit > 0.0 && self.game.limit < self.game.clock {
             self.game.team_scores[defending] += 1.0; // [M :112-124]
+            // "<attackers> failed to destroy target" [M :117-123]
+            self.objects_rt.site_status = Some(if defending == 1 { 0x200002d } else { 0x200002c });
             if let Some(site) = &mut self.objects_rt.site {
                 site.sub = 1;
                 // The same branch switches the site's ScriptPlayer to script 1
@@ -1068,6 +1076,13 @@ impl MpMatch {
         }
         if dmg > 0.0 {
             self.mp_sound(SND_CLAIM); // [M :84]
+            // A defender's hit: the warning, at most once per 1.5 s [M :96-107].
+            if hitter < super::MP_MAX_SLOTS && self.settings.players[hitter].team as usize == defending {
+                if self.game.slots[hitter].timers[1] == 0 && self.objects_rt.slot_msgs.len() < 64 {
+                    self.objects_rt.slot_msgs.push((hitter, 0x200002b));
+                }
+                self.game.slots[hitter].timers[1] = MP_MSG_TICKS;
+            }
         }
         if self.objects_rt.site.as_ref().is_some_and(|x| x.state >= 1) {
             return;
@@ -1085,6 +1100,9 @@ impl MpMatch {
                 1.0
             };
             self.game.slots[h].score += delta; // [M :138-140]
+            // "<hitter's side> destroyed target" [M :146-158]
+            let phoenix = self.settings.players[h].team == 0;
+            self.objects_rt.site_status = Some(if phoenix { 0x200002f } else { 0x200002e });
         }
         let site = &mut self.objects_rt.site;
         site.as_mut().unwrap().sub = 1;

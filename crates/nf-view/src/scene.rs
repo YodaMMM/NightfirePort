@@ -6021,6 +6021,15 @@ impl Sim {
         // 0xb4)` [M]) — the MP info pane draws them (`HUD_MPUpdateStatusPane` 0x19ca88).
         let me = self.mp_local_slot;
         if let Some(m) = self.mp.as_mut() {
+            let posted = std::mem::take(&mut m.objects_rt.slot_msgs);
+            for (_, label) in posted.into_iter().filter(|&(to, _)| to == me) {
+                let text = lang.as_ref().and_then(|l| l.bind(label)).unwrap_or("").to_string();
+                if !text.is_empty() {
+                    let mut msg = Msg::new(text, nf_game::mp::rules::MP_MSG_TICKS as f32);
+                    msg.label = label;
+                    self.hud.info_msgs.push_back(msg);
+                }
+            }
             if m.kill_msgs.iter().any(|&(to, _)| to == me) {
                 let mine: Vec<usize> = m.kill_msgs.iter().filter(|&&(to, _)| to == me).map(|&(_, v)| v).collect();
                 m.kill_msgs.retain(|&(to, _)| to != me);
