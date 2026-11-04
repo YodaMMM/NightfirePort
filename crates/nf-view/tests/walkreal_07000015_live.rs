@@ -217,9 +217,16 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // The route: the spawn gantry west, then the NAV GRAPH's own route to the exit hall (the
     // z≈0 lane crosses the silo hole at x 66-74 — the walk's first run fell in; the guards' AI
     // paths are the game's own answer for the gantry maze), then the USE exit.
-    w.walk_to(Wp::new(88.0, 41.4, -0.5).r(1.2), "the gantry west");
     // The shots ride the P2K (0x02, 7 + 41 rounds at the level start [D the 07000015 loadout];
     // the drawn Delta Repeater carries 3 + 9 bolts).
+    // real-health-00agent-12-13-14-15 (the d3 note): the d3 roster's opening burst came from a
+    // 0x50000b2 guard BEHIND the spawn (the d3 ledger's #15, (72.35, 41.34, −9.44) at his
+    // hits) — 63.0 in 9 hits before the return fire finished him at tick 867. A spawn stand
+    // was TRIED and cost MORE (the line from the gantry is blocked — segment Some(0.068) —
+    // the shoot machinery flanked through door (81.7, −1.0) for 56.0 and two 3000-tick caps);
+    // the fights' own law is the cheaper answer (their creep killed him from the lane), so the
+    // d3 run keeps the fights and eats the opening burst — the budget note is in the report.
+    w.walk_to(Wp::new(88.0, 41.4, -0.5).r(1.2), "the gantry west");
     draw(&mut w, 0x02);
     // #462 lies across the silo crossing (the waist beam at x 46.8, z −2..3.2): the crossing's
     // nav lane walks into it at x 48.5, so it is shot from the lane once the gantry clutter
@@ -300,6 +307,26 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
         for plc in [384usize, 385] {
             let m = &sim.drones.mines[mine_idx(&w, plc)];
             assert!(m.exploded && m.cause == nf_game::worldobj::MINE_BLAST, "#{plc} goes on #383's blast (cause {})", m.cause);
+        }
+    }
+    // real-health-00agent-12-13-14-15 (the d3 gate): the plank grenadiers (the same [D] spots
+    // the d2 pre-shoot resolves — port #7 (28.63, 41.34, 35.51) and #8 (42.71, 41.34, 35.49)
+    // [L the d2 load probe]) opened fire on the door[39] north leg BEFORE the d2-gated stand
+    // ran (the d3 ledger: 19.3 in 3 hits from #8 and 7.0 from #7, frames 3600-3607, the death
+    // tick) — a player clears them from door[38]'s north lane before walking the spine (the
+    // d2 stand point, ~20 u; the fence-mark stands at 28 u never fired — the 0.02-rad aim gate
+    // is a torso-width there). The AR in hand drops a 20-hp grenadier in one round; the loose
+    // gate keeps the taps coming while the aim settles. The d2 stand below is a no-op once
+    // they are down.
+    if difficulty >= 3 {
+        w.walk_to(Wp::new(34.6, 41.4, 16.0).r(1.2), "door[38] north (the d3 grenadier stand)");
+        for (at, label) in [
+            ([28.63f32, 41.34, 35.51], "the west-plank grenadier from door[38] north"),
+            ([42.71f32, 41.34, 35.49], "the east-plank grenadier from door[38] north"),
+        ] {
+            if let Some(di) = agent_drone_near(&w, at, 8.0) {
+                w.shoot_bounded(di, label, 2400);
+            }
         }
     }
 
@@ -699,6 +726,42 @@ fn walk_spawn_to_the_omega_sector_exit_real_damage_agent() {
 #[test]
 fn walk_spawn_to_the_omega_sector_exit_real_damage() {
     walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(1));
+}
+
+/// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-12-13-14-15): the same
+/// walked silo → Omega Sector exit route at the menu's 00 Agent pick — GameState+0x28 = 3
+/// through the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty;
+/// GameState+0x28 → Drones::difficulty, asserted at load]. On this level the pick scales Bond's
+/// pain by the 0x14..=0x16 group's Hard row 1.0 (Easy 0.4, Agent 0.6 [M Player_HandlePain
+/// 0x1902c8; ReadTuningVars 0x1d3a80's per-level jump table; L the d2-sisters report's rows])
+/// and the guards' hit chance by DroneFiring_Accuracy_Hard 1.3 (Easy 0.8, Normal 0.9 [M
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88]); the min-difficulty placements pass Drone_Create's
+/// gate [M 0x136be0:49] — more of the garrison than the Agent roster. The Agent sisters' tactics
+/// (the plank/west-room grenadier stands, the doorway guards) sit behind `difficulty >= 2` gates
+/// in the body, so the d3 run inherits them; the d3-only deaths get their own d3-gated blocks.
+/// Real input only; no health, ammo or channel writes.
+///
+/// IGNORED with the measured budget: the d3 run's own ledger puts the route over 100 health
+/// before the west lane — (a) the opening burst 63.0 in 9 hits from the d3 roster's
+/// 0x50000b2 guard behind the spawn (the ledger's #15, (72.35, 41.34, −9.44) at his hits;
+/// the return fire finished him at tick 867; a spawn stand was TRIED and cost MORE — the
+/// line from the gantry is blocked, segment Some(0.068), and the shoot machinery's flank
+/// through door (81.7, −1.0) burned 56.0 and two 3000-tick caps); (b) the #526 ankle-beam
+/// rim-shot blast ~69.3 at d3 — the rim hides every farther lane shot [D the trough; the
+/// walk's own shot is from just east of the rim], and the pain row scales blasts [M
+/// bullet.rs damage_factor 0x14..=0x16 → 1.0 at d3; grenade.rs:609 routes the blast's
+/// player hit through it; L the d1 27.73 and d2 41.60 ledgers = 69.3 raw]. 63.0 + 69.3
+/// exceeds 100 before the plank legs, let alone the endgame fights. NEXT LEVERS: the
+/// #526 shot from door[32]'s threshold (~14.9 u down the lane) with the door[32] guard's
+/// own dropped 0x1a — the grenade's arc clears the rim and the case-0x4B chain sets #526
+/// [M 0x17c518] at a blast reach of ~0.5 raw; a pre-emptive #15 kill needs his spawn spot
+/// and a clear line (a live scout); the grenadier stands now sit behind the d3 gate in the
+/// body (the fence-mark stands at 28 u never fired — the 0.02-rad aim gate is a torso
+/// width there; the door[38]-north point is the next try).
+#[test]
+#[ignore = "00 Agent: the route's measured budget exceeds 100 health — the opening burst 63.0 (the d3 ledger's #15 behind the spawn) + the #526 rim-shot blast 69.3 at the d3 pain row 1.0 [M damage_factor 0x14..=0x16] = 132.3 before the plank legs; levers: the grenade-launcher #526 shot from door[32] at ~14.9 u, a pre-emptive #15 kill (needs a spawn-spot scout), the door[38]-north grenadier stands"]
+fn walk_spawn_to_the_omega_sector_exit_real_damage_00agent() {
+    walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(3));
 }
 
 #[test]
