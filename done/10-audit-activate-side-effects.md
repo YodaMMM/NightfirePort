@@ -11,3 +11,7 @@ claimed-by: sandbox1 at 2026-11-04T18:30Z
 ## Report (done, 2026-11-04T18:53Z)
 
 Closed by the driver: the report is on `s/audit-activate-side-effects` (docs/reports/audit-activate-side-effects.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-11-04T19:01Z)
+
