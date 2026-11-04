@@ -1573,6 +1573,17 @@ pub struct Drone {
     /// resolves it to the nearest door (`NDrone_InitDoorNodes` 0x139a70 binding) and stands it in
     /// `hit_door`.
     pub door_node: Option<u16>,
+    /// The route's door binding (the game's `+0xBA8` door side — the game's one slot is shared
+    /// with the kick, which the port keeps in `kick_sp`): `ReachedDestNode` stands the reached
+    /// node's door in it and a RE-ARRIVAL at a node whose door already stands there returns
+    /// immediately — no re-bind, no 0x81 re-entry, no +0x5A6 clobber [M 0x153358:151-155]. It
+    /// stands until the door-open arrival's tail clears it [M 0x153358:170-176] or the flag-4
+    /// node arms clear it [M 0x153358:119-121 + the :175 fall-through]; `ControlSTANDARD`
+    /// 0x1490f0:232 additionally drops the game's slot beyond 2.0 u (the port's `hit_door`
+    /// distance clear at Drones::tick covers the working door the same way). Port value = the
+    /// NODE whose door was bound (the node⇔door mapping is 1:1 per `NDrone_InitDoorNodes`
+    /// 0x139a70:24-70, so the node comparison is the game's door-object comparison).
+    pub door_bound: Option<u16>,
     /// Outbox: `NDrone2_OpenDoor` requested this tick (DSTATE_OpenDoor ENTER / timer C / msg 0x20,
     /// or `ControlSTANDARD`'s 60-tick bump check). Serviced by `Drones::tick` where the doors live.
     pub door_attempt: bool,
@@ -2094,6 +2105,7 @@ impl Drone {
             melee_min_dist: 4.0, attack_hold: 0,
             door_open_at: 0,
             hit_door: None, door_return: 0, door_node: None, door_attempt: false, pending_door_msg: false, hit_door_open: true,
+            door_bound: None,
             // fix-nav-remainder: the kick-node outbox + the ScriptPlayer binding.
             kick_sp: None, kick_node: None, ally_wait_node: None, kick_attempt: false, no_bunching: 0,
             no_bunching_hit: false,
@@ -2683,6 +2695,12 @@ impl Drone {
         if flags & 0x80000 != 0 { self.talks.push((0x47, false)); }
         if flags & 2 != 0 {
             if next_door {
+                // [M 0x153358:151-155]: the re-arrival at a door node whose door already stands
+                // in +0xBA8 returns immediately — no re-bind, no 0x81 re-entry, no +0x5A6
+                // clobber. The binding stands until the door-open tail (below) or a flag-4 arm
+                // clears it.
+                if self.door_bound == Some(node) { return true; }
+                self.door_bound = Some(node);
                 self.door_node = Some(node);
                 // +0x5A6 (the return state) is saved only when the current state is not already
                 // 0x81 — re-entering through the pair's second node must not clobber the saved
@@ -2691,15 +2709,21 @@ impl Drone {
                 self.set_state(state::OPEN_DOOR);
                 return true;
             }
-            if self.hit_door_open { self.hit_door = None; } // [M 0x153358:175]
+            if self.hit_door_open {
+                // [M 0x153358:170-176]: the door-open arrival's tail clears +0xBA8 next to the
+                // working door.
+                self.hit_door = None;
+                if self.door_bound.is_some() { self.door_bound = None; }
+            }
             return false;
         }
         if flags & 4 != 0 {
             // [M 0x153358:135-153]: no successor → the tail clears +0xBA8; a kick successor binds
-            // this node's object (the first crossing enters 0x82); otherwise the tail clears too.
+            // this node's object (the first crossing enters 0x82); otherwise the tail clears too
+            // [M :119-121 and the :175 fall-through].
             match next {
                 Some(_) if next_kick => { self.kick_node = Some(node); }
-                _ => self.kick_sp = None,
+                _ => { self.kick_sp = None; self.door_bound = None; }
             }
             return false;
         }
@@ -9414,6 +9438,25 @@ impl Drone {
             // to the node, so the ENTER plays the anim directly [S fold].
             (state::OPEN_DOOR, msg::ENTER) => {
                 self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1681f8:19]
+                // [M 0x1681f8 case 1 → LAB_00168400]: the ENTER checks `NDrone2_DoorIsOpen`
+                // FIRST — an already-open door returns to +0x5A6 at once: no anim, no
+                // `NDrone2_OpenDoor`, no timer-C re-arm. A later route pass over the open pair
+                // re-binds [M 0x153358:149-163] and lands here — the game's enter+exit on an
+                // open door costs nothing (the door is never re-worked).
+                //
+                // PORT ORDER: the game binds +0xBA8 inside `ReachedDestNode` (0x153358) BEFORE
+                // `Drone_SM_SetState` delivers this ENTER, so DoorIsOpen reads the just-bound
+                // door. The port binds inside the caller's UPDATE (the route walk) and resolves
+                // the node → door outbox only after the state machine drains (`Drones::tick`
+                // follows the send) — at this ENTER `hit_door` still holds the pre-bind latch
+                // (`None` → the per-tick refresh keeps `hit_door_open` true), so deciding now
+                // would bounce EVERY fresh binding back to the return state: the guard strands
+                // before a closed door (the driven door-pair crossing). A fresh binding
+                // (`door_node` still pending) defers: `Drones::tick` re-delivers this ENTER
+                // right after the resolution, and the decision below then reads the door the
+                // game would have read.
+                if self.door_node.is_some() { return true; }
+                if self.hit_door_open { self.set_state(self.door_return); return true; }
                 if self.prop(d, 0x14) || self.prop(d, 0x15) || self.prop(d, 0x16) {
                     self.call_anim(d, 0x4e, 0, 0);
                 } else if self.alert < 1.0 {
@@ -18424,6 +18467,36 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     let (a, b, r) = player.body;
                     crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging }
                 } else {
+                    // The standing stance keeps the measured box reach below. THE GAME'S SHAPE IS
+                    // NOW PINNED (level-0a-low-beam-standing-toucher, 2026-11-03): the collide-pass
+                    // HITTEST segment itself — `Player_Collision` 0x194df0's default arm A =
+                    // pos+up·0.275 → BLData+0x760, B = pos+up·(0.55−cc) → +0x770, r 0.55 → +0x7cc,
+                    // mode 0x800 → +0x7d4 [M :315-333 + the tail]; `Collide_PickObj` 0x1eae80:96-119
+                    // picks on that segment (dist < obj_r·1.5 + h+0x8c), `Collide_Intersect`
+                    // 0x1ebaa8:226-247 refines with `Intersect_CylGeom` vs the trigger's OWN glist
+                    // (obj+0xD8 = the celglist [M Trigger_Create 0x1b1720:92]; strict dist < radius
+                    // [M 0x109da0:447], misses drop as the 1e8 sentinel [M 0x1ea398:118-158]), the
+                    // contacts mirror into both sides' obj+0xD0 [M 0x1ea398:160-215], and
+                    // `Trigger_Hit` 0x1b1fc8:27-47 credits the class-3 owners as mask-8 — the
+                    // player obj+0xFF = 3 [L ee_start_0700000a.bin: glb_players[0] @0x2d88e0 →
+                    // 0x1b78640, +0xff = 3]. That segment bottoms at B−r = pos−cc (floor+0.05
+                    // standing), inside #621's band y 0.13-0.39 [D] — the game's standing walk
+                    // fires it [L PCSX2 2026-11-02: ch 0x24 0→1 crossing z −31.0→−33.78], the box
+                    // (bottom pos−0.6 = 0.53) does not. Wiring the segment in IS testable
+                    // (low_beam_621_fires_standing went green with it) but breaks three measured
+                    // pins, each with its own open lever: (1) the 07000005 truck ride — the park
+                    // plate fires standing (the segment dips 0.163 under B to the plate; the
+                    // game's standing-RIDE contact is unmeasured, the 05-truck trace played
+                    // crouched only, and the ride's own class-5 truck contact is not ported,
+                    // trigger-port-check #11); (2) 07000011's Bond-Moment plate #235 — its glist
+                    // rides ~0.85 over pos, above even the segment's pos+0.825 top, the same
+                    // glist ref-gate/extent divergence as the 0c ch-27 bay volume documented on
+                    // Toucher::player; (3) the 0a office-ring route pin (walkreal_0700000a_live
+                    // walk_office_floor_qworm_keyboard_hatch: "no laser/alert channel fired") —
+                    // the port's walker path brushes low bands the game's footpath never did, a
+                    // route-side waypoint divergence, and the real-damage sisters die to the
+                    // laser. The next lever is the route-side tightening plus the glist
+                    // ref-gate/extent, then this arm replaces the box.
                     crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) }
                 }
             }],
@@ -18567,7 +18640,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // exactly these five out; the s/level-14-trench-landing whitelist (only the four
                     // celglist-creator kinds) un-posed the ride platforms (the paternoster cab
                     // 0x2000367, the 0700004a lift entity obj_type 31, the gondola) and broke the rides.
-                    Some(crate::nis::Obj::Entity { hash, kind, matrix, .. }) if !matches!(kind, 0xea | 0xeb | 0xf5 | 0xf2 | 0xf0) => parts.push((id(0), *hash, *matrix)),
+                    Some(crate::nis::Obj::Entity { hash, kind, matrix, .. }) if !matches!(kind, 0xea | 0xeb | 0xf5 | 0xf2 | 0xf0) => {
+                        // Break_Kill's law [M 0x12b970:60 — obj+0xFE |= 1, "the collision goes
+                        // away"]: a KILLED 0x20 pane's glist leaves the collide set. The pane row
+                        // rides the same script obj (the per-tick sync upserts it), so its dead
+                        // flag past the death tick drops the part — the death tick keeps it (the
+                        // killing contact registers BEFORE Break_Kill takes the collision away,
+                        // the same grace the 0x400_0000_0000 placed-pane arm carries). Measured
+                        // on 07000008: the gondola's shot-out windows kept stopping the eye rays
+                        // at the pane plane (the 3409-tri dump showed the dead quads in the
+                        // dynamic set) and the Hind-fight launch corridors never opened.
+                        let pane_dead = *kind == 0x20
+                            && drones.breaks.list.iter().any(|b| b.script_obj == Some(oi) && b.dead && b.dead_frame != drones.frame);
+                        if !pane_dead { parts.push((id(0), *hash, *matrix)); }
+                    }
                     _ => {}
                 }
             }
@@ -19445,6 +19531,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     dr.hit_door = self.node_doors.as_ref().and_then(|m| m.get(&(path, node))).copied();
                     if let Some(i) = dr.hit_door { dr.hit_door_open = self.doors.list[i].state == crate::door::OPEN; }
                 }
+                // The game delivers `DSTATE_OpenDoor`'s ENTER with the binding ALREADY live
+                // [M 0x153358:149-163 binds +0xBA8, then Drone_SM_SetState runs the ENTER whose
+                // DoorIsOpen reads it — 0x1681f8 case 1]. The port's bind happens inside the
+                // send above, so the ENTER ran before this resolution existed; the arm deferred
+                // (the fresh-binding gate) — re-deliver it now, with the door the game would
+                // have read. Only a drone still standing in 0x81 (an impact queued elsewhere in
+                // the same send can have moved it) takes the re-delivery.
+                if dr.state == state::OPEN_DOOR { dr.send(d, rng, frame, msg::ENTER); }
             }
             // The route's KICK node (fix-nav-remainder): resolve the node → ScriptPlayer binding
             // (`NDrone_InitKickNodes` 0x139ce0, built lazily below) and — on the node's first
@@ -19787,7 +19881,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if let Some(i) = dr.hit_door {
                     let dp = self.doors.list[i].pos;
                     if (dr.pos[0] - dp[0]).powi(2) + (dr.pos[1] - dp[1]).powi(2) + (dr.pos[2] - dp[2]).powi(2) > 4.0 {
+                        // The game clears the ONE slot here [M 0x1490f0:237 —
+                        // `*(undefined4 *)(uVar2 + 0xba8) = 0` after the Vec_Dist3D > 2.0]. The
+                        // port's split stand-ins — `hit_door` (the DoorIsOpen/OpenDoor side) and
+                        // `door_bound` (the ReachedDestNode 0x153358:151-155 no-op key) — ARE that
+                        // one +0xBA8, so BOTH clear: a binding left only in `door_bound` no-ops
+                        // every later route pass at the node, and with `hit_door` already gone the
+                        // guard can neither re-bind nor re-attempt — stranded before a closed door
+                        // (the chase/interrupt flows the 11 red door tests exercise).
                         dr.hit_door = None;
+                        dr.door_bound = None;
                     } else if !dr.hit_door_open {
                         dr.door_attempt = true;
                     }
@@ -21423,6 +21526,7 @@ mod tests {
             free_root: false, bounded: true, dtype: 0, mode_normal: 0, mode_alert: 0, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None, alert_block: 0.0,
             door_open_at: 0,
             hit_door: None, door_return: 0, door_node: None, door_attempt: false, pending_door_msg: false, hit_door_open: true,
+            door_bound: None,
             // fix-nav-remainder: the kick-node outbox + the ScriptPlayer binding.
             kick_sp: None, kick_node: None, ally_wait_node: None, kick_attempt: false, no_bunching: 0,
             no_bunching_hit: false,

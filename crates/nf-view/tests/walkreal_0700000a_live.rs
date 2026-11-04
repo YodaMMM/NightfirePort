@@ -1485,10 +1485,21 @@ fn low_beam_621_crossing(crouch: bool) {
 
 /// The standing half of the low-beam rule: live, Bond walking STANDING through #621's line
 /// fired ch 0x24 + 0x10 at z −32.77 (the line z ≈ −33.05 at x −12.6) [L 2026-11-01, fresh
-/// boot] — the game's standing pick capsule reaches the floor (`Player_Collision` 0x194df0's
-/// default arm: r 0.275 round pos+0.55 and pos+0.275−cc [M :204-227]).
+/// boot]. The game's standing trigger toucher is NOW PINNED: the collide-pass HITTEST segment
+/// itself (`Player_Collision` 0x194df0's default arm A = pos+0.275, B = pos+(0.55−cc), r 0.55,
+/// mode 0x800 [M :315-333]; picked by `Collide_PickObj` 0x1eae80:96-119, refined by
+/// `Intersect_CylGeom` vs the trigger's glist [M 0x1ebaa8:226-247 → 0x109da0:447], mirrored
+/// into the trigger's +0xD0 [M 0x1ea398:160-215], credited class-3 by `Trigger_Hit` 0x1b1fc8
+/// [L ee_start_0700000a.bin: the player obj+0xFF = 3]). Its bottom B−r = pos−cc = floor+0.05
+/// sits inside #621's band y 0.13-0.39 [D]; the box stand-in (bottom pos−0.6 = 0.53) misses it.
+/// This test went GREEN with the segment wired in (2026-11-03) but the same wiring broke three
+/// measured pins — the 05 truck-ride park plate, 011's Bond-Moment plate #235 (a glist ~0.85
+/// over pos, the ref-gate/extent divergence), and this file's office-ring "no beam fired" route
+/// pin (the walker path brushes low bands the game's footpath never did) — so the segment is
+/// reverted to the box until those land. Full chain + the next levers: the toucher site in
+/// drone.rs and docs/reports/level-0a-low-beam-standing-toucher.md.
 #[test]
-#[ignore = "port gap: the standing trigger toucher is the measured box pos−0.05..pos+1.26 r 0.55 (drone.rs player_touchers; its reach bottoms pos−0.6 = 0.53 on 0a's floor) and misses #621's band y 0.13-0.39 [D]; the game fires it standing [L 2026-11-01]. The game-capsule reach was tried and reverted twice (the 05 truck-chain / park-plate calibrations, documented at the toucher site)"]
+#[ignore = "port gap: the standing trigger toucher is the measured box pos−0.05..pos+1.26 r 0.55 (drone.rs player_touchers; reach bottoms pos−0.6 = 0.53 on 0a's floor) and misses #621's band y 0.13-0.39 [D]; the game fires it standing [L 2026-11-02]. The game's shape is now pinned (the HITTEST segment, see the doc above) and the wiring went green here, but breaks the 05 ride park plate, 011's plate #235 and the office-ring route pin — the next levers are the route-side tightening, the glist ref-gate/extent, and the ride's class-5 contact"]
 fn low_beam_621_fires_standing() {
     low_beam_621_crossing(false);
 }
@@ -1527,4 +1538,21 @@ fn probe_laser_web_positions() {
 #[test]
 fn walk_office_floor_qworm_keyboard_hatch_real_damage_agent() {
     walker::with_real_damage(|| walk_office_floor_qworm_keyboard_hatch_at(2))
+}
+
+/// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-08-09-0a-0b): the same
+/// walked office-floor ring — Q-Worm, the security keyboard, the keypad door, the hatch — at the
+/// menu's 00 Agent pick — GameState+0x28 = 3 through the front-end's launch path
+/// [M C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table 0x2df4c0 row 2 carries 3 [D]; Txt 0x14f
+/// = "00 Agent"] on the warm carry (the elevator chain from 09). On this level group (09-0b)
+/// the pick scales Bond's pain by Plr_DMod_Hard 1.0 (Easy 0.6, Agent 0.8); the guards' hit
+/// chance stays DroneFiring_Accuracy_Hard 1.0 — the SAME row Agent runs (Easy 0.8) — and the
+/// guards' base bullet damage rides DroneDamage_Hard 0.8 (Agent 1.0) [M Player_HandlePain
+/// 0x1902c8; DroneWeap_DoBulletAccuracy 0x179740:74-88; ReadTuningVars 0x1d3a80 cases
+/// 0x7000009-a-b; tuning.rs 09-0b group]; the min-difficulty placements pass Drone_Create's
+/// gate at d2 AND d3 [M 0x136be0:49]. Real input only — the load path is the only difference
+/// (plus the d3-gated tactics the deaths force, inside this file).
+#[test]
+fn walk_office_floor_qworm_keyboard_hatch_real_damage_00agent() {
+    walker::with_real_damage(|| walk_office_floor_qworm_keyboard_hatch_at(3))
 }

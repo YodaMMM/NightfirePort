@@ -759,11 +759,98 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // Bond walks the last leg onto the plate (the contact stalled at the stairwell head;
     // the AND cannot fire with him outside the volume).
     drop(sim);
-    if difficulty >= 2 {
+    // The ch-0xF ambush is a PLACED pocket pair, not a door route — [L the trio dump on this
+    // tree] #12 (0x5000036 SMG) stands DISABLED at (-31.31, 6.34, 11.51) (the stairwell-head
+    // pocket) and #17 (0x5000039 SMG) at (-29.08, 6.34, -0.01) (the south lower hall) from the
+    // hall AND on (state 0x1, enabled false — disabled objects are dropped from bullet
+    // collision [M Collide_PickObj 0x1eae80:82 +0xF0 & 0x20], so they cannot be thinned
+    // early), and the corridor's walkable band at the slab's x is z >= 13.4 only [L the
+    // scratch sight probe: the z 11.8-13.0 hip rays all hit] — the TOUCH slab out 0xF mask 0x8
+    // (player) x -26.13..-24.73, z 13.25..16.84 [D placement dump] covers the full width, so
+    // BOND's crossing pops them on any line. The old sweep crossed it MID-NAV (the approach to
+    // guard 3), ate the pop volley at 2.6 u while still under nav (3×2.1 at t7094-7106 [L the
+    // run's dmg trace]) and the next leg walked the 0.4-u corner death. The player crosses a
+    // known ambush line READY: step in, and the tick ch 0xF rises step back out — the poppers'
+    // 10-tick reaction [M DroneFunc_ReactionTime 0x14ac60:15-24, the 07000001 arm] leaves that
+    // window — then fight from the mouth at 6.5+ u, outside the TooClose doubling [M
+    // Drone_ModBulletDamage 0x139f50]. From the mouth #17's post is EXPOSED [L the sight
+    // probe: every eye ray from (-23..-24.5, 13.5..16.5) to his torso clears] while #12's
+    // pocket is walled [L the same probe: no clear ray from any of those stands] — his own
+    // step-out under the mouth fire (he advanced (-31.3,11.5) -> (-30.6,13.4) during the run's
+    // mouth fight [L the dmg trace]) is the kill window, so a guard parked west of x -27 is
+    // fought SHOOT-ONLY: no approach walk ever takes Bond back into the pocket corner.
+    if difficulty >= 2 && !w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
+        eprintln!("[01] the ch-0xF ambush: crossing the slab deliberately from ({:?})",
+            w.scene.sim.as_ref().unwrap().bond.pos);
+        let prev_keep = w.keep_off;
+        let prev_back = w.dmg.back_off;
+        w.keep_off = Some(6.5);
+        w.dmg.back_off = Some(6.5);
+        w.walk_nav_to([-24.0, 6.4, 14.8], "the ambush stance (east of the ch-0xF slab)", 0.8);
+        w.walk_nav_to([-25.7, 6.4, 14.8], "cross the ch-0xF slab (the ambush pops)", 0.25);
+        for _ in 0..120 {
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) { break; }
+            w.wait(1);
+        }
+        // Out FIRST (the pop volley's reaction window), then the mouth fight.
+        w.walk_nav_to([-22.3, 6.4, 14.8], "back off the popped ambush", 1.0);
+        for ambush_round in 0..5 {
+            let near: Vec<usize> = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| {
+                    let d = &sim.drones.list[i];
+                    i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                        && ((2..0x47).contains(&d.weapon) || (0x6a..=0x71).contains(&d.weapon))
+                        && walker::dxz(d.pos, bp) < 14.0
+                }).collect()
+            };
+            if near.is_empty() { break; }
+            eprintln!("[01] ambush round {ambush_round}: fighting {near:?} from the mouth");
+            for g2 in route_order(&w, &near) {
+                let (gpos, los) = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let d = &sim.drones.list[g2];
+                    if d.corpse || d.health <= 0.0 { continue; }
+                    let bp = sim.bond.pos;
+                    let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                    (d.pos, sim.world.segment(eye, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none())
+                };
+                // The pocket rule: a guard parked west of x -27 (the stairwell-head pocket) is
+                // NEVER approached — the shoot loop alone, from the mouth. Hunters in the open
+                // corridor get the normal approach to 8 (outside the ×2 band).
+                if gpos[0] > -27.0 && walker::dxz(gpos, w.scene.sim.as_ref().unwrap().bond.pos) > 9.0 {
+                    w.walk_nav_to(gpos, &format!("ambush approach guard {g2}"), 8.0);
+                }
+                if !w.shoot(g2, &format!("ambush guard {g2}")) {
+                    if w.resupply("ambush ammo") { w.shoot(g2, &format!("ambush guard {g2} retry")); }
+                }
+                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+            }
+            if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+            // A pocket guard that will not step out yet: hold the mouth (the gunshot hearing
+            // keeps drawing him) and give the fight machinery the next window.
+            let still = w.scene.sim.as_ref().unwrap().drones.list.iter().enumerate().any(|(i, d)| {
+                i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                    && d.pos[0] < -27.0 && walker::dxz(d.pos, w.scene.sim.as_ref().unwrap().bond.pos) < 14.0
+            });
+            if still { w.wait(300); }
+        }
+        w.keep_off = prev_keep;
+        w.dmg.back_off = prev_back;
+    }
+    {
         // The player clears his OWN radius before the stairwell descent: the route guards the
         // contact woke (the west-corridor SMG pair 12/17 among them) sit 2-6 u off the final
         // legs, and the return-fire exchanges bled the run dry there (31.7 -> 0 across two
         // volleys in the first full-route run). Same loop shape as the escort rounds' clears.
+        // Every difficulty: once the guards take their door routes (door 2 at (-15, 6.3, 14.1),
+        // the route's door binding [M 0x153358:149-163]) #17 reaches the stairwell head on
+        // Operative too.
+        // At Agent the SMG pair's close volleys double inside 3.0 u (DroneFiring_TooClose
+        // [M Drone_ModBulletDamage 0x139f50]); keep the walk's Agent stand-off (6.5) here too.
+        let prev_back_off = w.dmg.back_off;
+        if difficulty >= 2 { w.dmg.back_off = Some(6.5); }
         for sweep in 0..3 {
             let near: Vec<usize> = {
                 let sim = w.scene.sim.as_ref().unwrap();
@@ -778,7 +865,9 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             for g2 in route_order(&w, &near) {
                 let gpos = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
                 let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
-                if walker::dxz(gpos, bpos) > 9.0 {
+                // The pocket rule (the ch-0xF ambush block above): a guard parked west of x -27
+                // is shot from where Bond stands, never approached into the corner.
+                if walker::dxz(gpos, bpos) > 9.0 && gpos[0] > -27.0 {
                     w.walk_nav_to(gpos, &format!("pre-stairwell approach guard {g2}"), 8.0);
                 }
                 if !w.shoot(g2, &format!("pre-stairwell guard {g2}")) {
@@ -789,6 +878,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
             let _ = sweep;
         }
+        w.dmg.back_off = prev_back_off;
     }
     // The player route descends the stairwell from the west hall's corner (the AI's own path
     // climbs over the top floor — the sister proved the descent through this anchor).
@@ -1494,6 +1584,19 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage() {
 /// no health, armour or channel writes. A pass pins the level completes at Agent on the port's
 /// own damage and the game's Agent spawns (the min-difficulty placements now pass Drone_Create's
 /// gate [M 0x136be0:49] and the captain criterion reads prop 5 [M 0x14b300:504-535]).
+///
+/// level-01-agent-stairwell-doors: the stairwell ch-0xF ambush is a PLACED pocket pair — [L the
+/// placement dump + the trio trace on this tree] #12 (0x5000036 SMG) disabled at (-31.31, 6.34,
+/// 11.51) and #17 (0x5000039 SMG) at (-29.08, 6.34, -0.01) from the hall AND on (state 0x1;
+/// disabled objects are dropped from bullet collision [M Collide_PickObj 0x1eae80:82 +0xF0 &
+/// 0x20], and the corridor's walkable band at the slab's x is z >= 13.4 only [L the sight
+/// probe], so the TOUCH slab out 0xF mask 0x8 x -26.13..-24.73, z 13.25..16.84 [D placement]
+/// pops them on ANY crossing). The walk now crosses the slab deliberately, steps back out in
+/// the poppers' 10-tick reaction window [M DroneFunc_ReactionTime 0x14ac60:15-24] and fights
+/// from the mouth at 6.5+ u (outside the TooClose doubling [M Drone_ModBulletDamage 0x139f50]):
+/// the backed-off return fire dropped #12/#3/#17 for 3.1 health on the fix run, and a guard
+/// parked west of x -27 (the walled pocket — no clear eye ray from any mouth stand [L]) is
+/// fought SHOOT-ONLY, never approached into the 0.4-u corner where the pre-fix run died.
 #[test]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(2));

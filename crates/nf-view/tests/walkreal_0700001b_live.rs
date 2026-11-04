@@ -463,6 +463,19 @@ fn best_float_point(sim: &nf_view::scene::Sim, from: [f32; 3], rad: f32, ys: &[f
 /// new-sighting clock [M 0x179740:103-105] — and comes back out at 60 rounds. Returns at `done`
 /// or the tick cap.
 fn fight(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
+    fight_opts(w, hold, prio, false, done, cap)
+}
+
+/// `fight` with the Agent tactics switch (real-health-agent-difficulty-16-1b-41-4a, opt-in —
+/// the Operative walks keep the master behaviour): `waves_first` scores a THREATENING wave
+/// astronaut (its muzzle→Bond ray is clear) ABOVE the prio target. The master order fights the
+/// prio target first (Drake at r−50 beats a threatening wave at r−20), which at Agent — the
+/// astronauts' Accuracy Normal 0.8 [M DroneWeap_DoBulletAccuracy 0x179740:74-88] — let the
+/// floaters grind the stand down (the measured death log: five astronauts' −3.5s at 5-11 u
+/// while every aim re-pick still chose Drake). A player clears the add waves and takes the
+/// boss last; the fight's `done` gate is the prio target's death, so the waves dying never
+/// ends it early.
+fn fight_opts(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: bool, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
     let mut last_tap = 0u32;
     let mut target: Option<(usize, [f32; 3])> = None;
     let mut recharging = false;
@@ -473,9 +486,22 @@ fn fight(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, done: impl Fn(&nf_
         let eye_off = sim.bond.head()[1] - sim.bond.pos[1];
         if sim.gun.clip < 12 { recharging = true; }
         if sim.gun.clip >= 60 { recharging = false; }
-        if recharging && t % 30 == 0 {
+        if (recharging || waves_first) && t % 30 == 0 {
             let p = sim.bond.pos;
-            let sc = |c: [f32; 3]| { let (s, cl) = exposure(sim, [c[0], c[1] + eye_off, c[2]]); s as f32 + 4.0 * cl as f32 };
+            // waves_first: a hold that cannot ANSWER the prio target is as bad as an exposed one
+            // (the first sheltered run floated out Drake's whole 6000-tick cap without a shot):
+            // a blocked muzzle→prio ray costs 50, the same band as the aim pick's prio bonus.
+            let prio_blind = |c: [f32; 3], eye_y: f32| -> bool {
+                prio.is_some_and(|pr| {
+                    let d = &sim.drones.list[pr];
+                    d.present && !d.corpse && d.health > 0.0
+                        && sim.world.segment_bullet([c[0], eye_y, c[2]], [d.pos[0], d.pos[1] + 0.6, d.pos[2]]).is_some()
+                })
+            };
+            let sc = |c: [f32; 3]| {
+                let (s, cl) = exposure(sim, [c[0], c[1] + eye_off, c[2]]);
+                (s as f32 + 4.0 * cl as f32) + if prio_blind(c, c[1] + eye_off) { 50.0 } else { 0.0 }
+            };
             let mut best = (sc(p), p);
             for r in [2.5f32, 5.0] {
                 for o in [[r, 0.0, 0.0], [-r, 0.0, 0.0], [0.0, r, 0.0], [0.0, -r, 0.0], [0.0, 0.0, r], [0.0, 0.0, -r]] {
@@ -499,13 +525,30 @@ fn fight(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, done: impl Fn(&nf_
                 if r > 40.0 { continue; }
                 let Some(a) = w.exposed_aim(i) else { continue };
                 let threat = sim.world.segment_bullet([d.pos[0], d.pos[1] + 0.6, d.pos[2]], e).is_none();
-                let s = if r < 3.5 { r - 100.0 } else if Some(i) == prio { r - 50.0 } else if threat { r - 20.0 } else { r };
+                // waves_first banding: a THREATENING wave outranks a far prio target, but the
+                // prio target CLOSING inside 8 u outranks the waves — Drake's own gun (weapon
+                // 0x30, the measured −14.0 a hit at Agent = the record × Plr_DMod_Normal 0.7
+                // [D weapon_data 0x30 +0x0c; M 0x1902c8]) is four waves' worth per hit, and the
+                // first sheltered fight let him sit at 4.1 u for two of them (28.0 of the run's
+                // last 30.0).
+                let s = if r < 3.5 { r - 100.0 }
+                    else if Some(i) == prio && r < 8.0 { r - 60.0 }
+                    else if waves_first && threat { r - 30.0 }
+                    else if Some(i) == prio { r - 50.0 }
+                    else if threat { r - 20.0 }
+                    else { r };
                 if best.map_or(true, |b| s < b.0) { best = Some((s, i, a)); }
             }
             target = best.map(|b| (b.1, b.2));
         }
         let (input, fire) = {
-            let mut spot = if recharging { cover } else { hold };
+            // waves_first (the Agent tactics): hold at the least-exposed point near `hold` from
+            // the START, not only while the clip recharges — the hub float at Agent took the
+            // whole wave ring's fire while the aim re-picks ground through the adds (the
+            // measured deaths: 43 and 41 hits for 100.0). Drake closes in through the float, so
+            // the sheltered hold keeps him shootable (the exposure scoring is the same
+            // fewest-astronauts-see-me rule the recharge arm already used).
+            let mut spot = if recharging || waves_first { cover } else { hold };
             if let Some((_, a)) = target { if !recharging { spot[1] = a[1] - eye_off; } }
             let mut inp = thrust_to(sim, spot);
             let mut fire = false;
@@ -527,12 +570,16 @@ fn fight(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, done: impl Fn(&nf_
 /// only what the level view reaches from there — the eye stays at the cover height. The later
 /// waves (spawners #165-181, ch 116-120 from the missile scripts [D]) float in the band above
 /// the deck; under the deck and the rails every line from that band is cut.
-fn hide_and_snipe(w: &mut Walker, rad: f32, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
+/// floats to the least-exposed point in reach (`best_float_point`, the same rule the waves'
+/// 2-s sighting clock rewards) and snipes whatever levels with the eye. Returns the last cover
+/// point (the Agent Drake fight re-fights FROM it — the shelter the waves' LOS already
+/// respects; see `fight_opts`).
+fn hide_and_snipe(w: &mut Walker, rad: f32, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) -> Option<[f32; 3]> {
     let mut last_tap = 0u32;
     let mut cover: Option<([f32; 3], f32)> = None;
     let mut cal = ShotCal::default();
     for t in 0..cap {
-        if done(w.scene.sim.as_ref().unwrap()) { return; }
+        if done(w.scene.sim.as_ref().unwrap()) { return cover.map(|c| c.0); }
         let sim = w.scene.sim.as_ref().unwrap();
         let eye_off = sim.bond.head()[1] - sim.bond.pos[1];
         let p = sim.bond.pos;
@@ -567,6 +614,7 @@ fn hide_and_snipe(w: &mut Walker, rad: f32, done: impl Fn(&nf_view::scene::Sim) 
         let nb = sim.drones.player_bullets.len();
         if fire { last_tap = t; w.tick_fire(inp); cal.learn(w.scene.sim.as_ref().unwrap(), nb); } else { w.tick(inp, false); }
     }
+    cover.map(|c| c.0)
 }
 
 /// The mission route both full walks play (no position, substate or channel write after the
@@ -574,6 +622,12 @@ fn hide_and_snipe(w: &mut Walker, rad: f32, done: impl Fn(&nf_view::scene::Sim) 
 /// later waves waited out in cover until the fight gate spawns Drake; Drake fought; the defeat
 /// NIS (no skip, so its channel writes land) waited out in cover. Returns Drake's index.
 fn play_the_mission(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) -> bool + Copy) -> usize {
+    play_the_mission_opts(w, alive, false)
+}
+
+/// `play_the_mission` with the Agent tactics switch: `waves_first` rides the Drake fight's aim
+/// pick (see `fight_opts`) — the Operative walks keep the master order.
+fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) -> bool + Copy, waves_first: bool) -> usize {
     let drake_of = |s: &nf_view::scene::Sim| s.drones.list.iter().position(|d| d.present && !d.corpse && d.skin & 0xffff == 0xba);
 
     // 1. The first wave → the launch order.
@@ -592,7 +646,12 @@ fn play_the_mission(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) -> bool
     assert!(alive(w.scene.sim.as_ref().unwrap()), "Bond survives the console run");
 
     // 3. The disarm branch, the fly-by chain, Drake — the later waves waited out in cover.
-    hide_and_snipe(w, 12.0, |s| drake_of(s).is_some() || !alive(s), 6000);
+    // The Agent tactics (waves_first): Drake is fought FROM the shelter the wave-wait just
+    // proved — the deck cover the floaters' LOS already respects — not from the open hub (the
+    // measured Agent deaths: 43/41/39 hits for 100.0 at the hub hold, the wave ring grinding
+    // the stand down while Drake was the only target). The prio-aware cover pick in fight_opts
+    // keeps a hold that can answer him.
+    let drake_hold = if waves_first { hide_and_snipe(w, 12.0, |s| drake_of(s).is_some() || !alive(s), 6000) } else { hide_and_snipe(w, 12.0, |s| drake_of(s).is_some() || !alive(s), 6000); None };
     let drake = {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(alive(sim), "Bond survives the later waves to the fly-by (health {:.1})", sim.drones.health.health);
@@ -625,7 +684,7 @@ fn play_the_mission(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) -> bool
 
     // 4. Drake, then the defeat NIS plays out (no skip, so its channel writes land).
     w.skip_cutscenes = false;
-    fight(w, [32.0, -1.7, 0.0], Some(drake), |s| s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s), 6000);
+    fight_opts(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, |s| s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s), 6000);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(alive(sim), "Bond survives Drake's fight (health {:.1})", sim.drones.health.health);
@@ -1132,16 +1191,22 @@ fn the_sp211_chain_spawns_drake_in_the_start_float() {
 /// waited out in cover.
 ///
 /// The damage he takes is the game's model, pinned [M]: weapon 0x6a's 5.0 [D weapon_data +0x0c]
-/// × `Plr_DMod_Easy` 0.6 at the load's difficulty 1 (1b's group [M ReadTuningVars 0x1d3a80
-/// case 0x700001b: 0x3f19999a]; the switch on GameState+0x28 [M Player_HandlePain 0x1902c8:28-49])
-/// = 3.0 a hit, armour first [M :100-105]; the hit roll `100 − 5·acc` with the astronauts'
-/// accuracy 9 (`the_astronauts_fire_at_accuracy_9_for_3_a_hit`) × `DroneFiring_Accuracy_Easy`
-/// 0.6 [M 0x1d3a80 / DoBulletAccuracy 0x179740:52-99] × `TargetMoving` 0.75 while the float's
-/// thruster pair is live [M 0x179a48:34-41 — `Drones::player_move_local`].
-#[test]
-fn walk_arrival_to_drakes_defeat_on_real_health() {
+/// × `Plr_DMod_*` at the load's difficulty (1b's group [M ReadTuningVars 0x1d3a80 case
+/// 0x700001b: Easy 0x3f19999a = 0.6, Normal 0x3f333333 = 0.7]; the switch on GameState+0x28
+/// [M Player_HandlePain 0x1902c8:28-49]) = 3.0/3.5 a hit, armour first [M :100-105]; the hit
+/// roll `100 − 5·acc` with the astronauts' accuracy 9 × `DroneFiring_Accuracy_*` (Easy 0.6,
+/// Normal 0x3f4ccccd = 0.8 [M 0x1d3a80 / DoBulletAccuracy 0x179740:52-99]) × `TargetMoving`
+/// 0.75 while the float's thruster pair is live [M 0x179a48:34-41 — `Drones::player_move_local`].
+/// The walk, parametrized by the menu's difficulty pick (Agent = 2 [M C_SBNFDFCTY 0x216ca8:15
+/// → GameState+0x28]): the difficulty-1 expression is the pre-sister master's byte-for-byte
+/// (plain `load`), 2+ loads the front-end's launch path [M → load_with_carry_difficulty].
+fn walk_arrival_to_drakes_defeat_on_real_health_at(difficulty: u32) {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load(&iso, "0700001b.bin", false).unwrap()
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "0700001b.bin", false, None, difficulty).unwrap()
+    });
     w.top_up_health = false;
     w.wait_enabled(3000, "the shuttle arrival");
     w.scene.sim.as_mut().unwrap().auto_aim = true;
@@ -1149,14 +1214,19 @@ fn walk_arrival_to_drakes_defeat_on_real_health() {
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.bond.substate, SS_ZEROG_8, "the station starts in the zero-g substate [M Player_Init 0x1910f8 :160-165]");
-        assert_eq!(sim.drones.difficulty, 1, "the harness load's difficulty (GameState+0x28 = 1)");
-        assert_eq!(nf_game::bullet::damage_factor(sim.level, 1), 0.6, "1b's Plr_DMod_Easy [M 0x1d3a80 case 0x700001b]");
+        assert_eq!(sim.drones.difficulty, difficulty, "the harness load's difficulty (GameState+0x28) [M 0x2a3790 → Drones::difficulty]");
+        assert_eq!(nf_game::bullet::damage_factor(sim.level, difficulty),
+            if difficulty == 1 { 0.6 } else { 0.7 },
+            "1b's Plr_DMod row for the picked difficulty [M 0x1d3a80 case 0x700001b: Easy 0.6, Normal 0.7]");
         assert_eq!(sim.tuning.DroneFiring_Accuracy_Easy, 0.6, "1b's DroneFiring_Accuracy_Easy [M 0x1d3a80 case 0x700001b]");
+        if difficulty >= 2 {
+            assert_eq!(sim.tuning.DroneFiring_Accuracy_Normal, 0.8, "1b's DroneFiring_Accuracy_Normal [M 0x1d3a80 case 0x700001b: 0x3f4ccccd]");
+        }
         let rec = &sim.weapons.records[0x6a];
         assert_eq!(f32::from_le_bytes(rec[0x0c..0x10].try_into().unwrap()), 5.0, "the astronauts' weapon 0x6a hits for 5.0 [D weapon_data +0x0c]");
     }
     let alive = |s: &nf_view::scene::Sim| s.drones.health.health > 0.0;
-    play_the_mission(&mut w, alive);
+    play_the_mission_opts(&mut w, alive, difficulty >= 2);
     let sim = w.scene.sim.as_ref().unwrap();
     let lost: f32 = sim.drones.player_hits.iter().map(|h| h.2).sum();
     eprintln!("[1b-rh] end frame {} health {:.1} armour {:.1} hits {} health lost {lost:.1}",
@@ -1175,6 +1245,22 @@ fn walk_arrival_to_drakes_defeat_on_real_health() {
     assert!(sim.drones.player_hits.len() >= 15 && sim.drones.health.armour == 0.0 && lost > 0.0,
         "the waves really hurt Bond on the way ({} hits, armour {:.1}, {lost:.1} health) — no allowance", sim.drones.player_hits.len(), sim.drones.health.armour);
     assert!(sim.drones.health.health < 100.0, "health is never topped up");
+}
+
+#[test]
+fn walk_arrival_to_drakes_defeat_on_real_health() {
+    walk_arrival_to_drakes_defeat_on_real_health_at(1);
+}
+
+/// The Agent-difficulty sister (real-health-agent-difficulty-16-1b-41-4a): the same walked
+/// station on real health, loaded at difficulty 2 the menu way — Bond's pain scales by 1b's
+/// Plr_DMod_Normal 0.7 [M Player_HandlePain 0x1902c8; 0x1d3a80 case 0x700001b] and the
+/// astronauts' hit chance by Accuracy Normal 0.8 [M DroneWeap_DoBulletAccuracy 0x179740:74-88].
+/// Real input only; no health/ammo/channel writes.
+#[test]
+#[ignore = "Agent: Bond dies on real health, tactics not a port gap (the s/real-health-agent-difficulty-16-1b-41-4a report); follow-up real-health-agent-16-1b-2"]
+fn walk_arrival_to_drakes_defeat_on_real_health_agent() {
+    walk_arrival_to_drakes_defeat_on_real_health_at(2);
 }
 
 /// The astronauts' stats and gun, from the disc and the decompile. They are type 1 (`+0xC7`,

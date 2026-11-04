@@ -619,3 +619,19 @@ fn the_lobby_guards_load_with_the_type_0xd_stats_health_1() {
 fn walk_tower_a_start_to_finish_real_damage_agent() {
     walker::with_real_damage(|| walk_tower_a_start_to_finish_at(2))
 }
+
+/// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-08-09-0a-0b): the same
+/// walked car-park → lobby → security-room → panel → cab route at the menu's 00 Agent pick —
+/// GameState+0x28 = 3 through the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the
+/// `difficulty[]` table 0x2df4c0 row 2 carries 3 [D]; Txt 0x14f = "00 Agent"]. On this level
+/// group (09-0b) the pick scales Bond's pain by Plr_DMod_Hard 1.0 (Easy 0.6, Agent 0.8); the
+/// guards' hit chance stays DroneFiring_Accuracy_Hard 1.0 — the SAME row Agent runs (Easy 0.8)
+/// — and the guards' base bullet damage rides DroneDamage_Hard 0.8 (Agent 1.0) [M Player_HandlePain
+/// 0x1902c8; DroneWeap_DoBulletAccuracy 0x179740:74-88; ReadTuningVars 0x1d3a80 cases
+/// 0x7000009-a-b; tuning.rs 09-0b group]; the min-difficulty placements pass Drone_Create's gate
+/// at d2 AND d3 [M 0x136be0:49]. Real input only — the load path is the only difference (plus
+/// the d3-gated tactics the deaths force, inside this file).
+#[test]
+fn walk_tower_a_start_to_finish_real_damage_00agent() {
+    walker::with_real_damage(|| walk_tower_a_start_to_finish_at(3))
+}

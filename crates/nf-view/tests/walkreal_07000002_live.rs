@@ -697,6 +697,58 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     }
     // 3. The captors die (the 0x17 guards: death chs 0x88 / 0x2A / 0x29 [D param 12]) — the save
     //    fires through the real fire path, AND #397 closes 0x3B [D tr[017]].
+    //    00 Agent round-0 (real-health-00agent-02-03-2): the approach met the shotgun captor at
+    //    1.3 u and his first 8-pellet volley landed 57.6 at 2.7 u — dead at t6398 [L the
+    //    00agent ledger; this branch's own run, the same tick]. A player holds the corridor and
+    //    calls him out: at keep_off's 4 u the volley is the 4-u band's 21.6 and the under-3.0-u
+    //    every-round-hits rule is out of play [M DroneWeap_DoBulletAccuracy 0x179740:113-115].
+    //    The captor leaves the room on sight (the hostage_captor note: a captor that saw Bond
+    //    and left the room is outside the 8-u sweep), so the stand-off wait has an end.
+    if difficulty >= 3 {
+        // The hook's dry in-hand fights give up while the wheel carries rounds (the lane's
+        // 0x12 clip 0 vs the P99's 15 [L the 00agent-02-03-2 ledger]) — the game's own
+        // mid-fight cycle, opt-in for this walk only.
+        w.dmg.switch_dry = true;
+        // The funnel retreats to 6.0 (scoped to the loop, restored after): the duel's 28.8 was
+        // the closing captain's 2-3 volleys at the 4-u ring [L the 00agent-02-03-2 ledger] —
+        // the wider ring keeps more of the volley's pellets off Bond (the 6.0-standoff
+        // experiment's own finding: the opening volley drops to the 4-u band's cost).
+        // The funnel defence (real-health-00agent-02-03-2): the captors patrol OUT of the room
+        // (the diag run: the 0x1c captains #6/#7 at 11.5-14.7 u, state 0x67, closing) and the
+        // corridor meeting at 1.3 u cost the first run its Bond at t6398 [L the 00agent ledger].
+        // Hold the plate and duel each captor as he funnels out — one at a time, the drop
+        // scooped and the shotgun armed after each kill (one 8-pellet tap kills a 12-hp captor
+        // and answers the 24-hp captain at 4+ u, where the volley is the 4-u band's 21.6 and
+        // the under-3.0-u rule is out of play [M DroneWeap_DoBulletAccuracy 0x179740:113-115]).
+        for k in 0..4 {
+            w.dmg.back_off = Some(6.0);
+            let di = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
+                        && dxz(d.pos, bp) < 16.0)
+                    .min_by(|a, b| dxz(a.1.pos, bp).total_cmp(&dxz(b.1.pos, bp)))
+                    .map(|(i, _)| i)
+            };
+            let Some(di) = di else { break };
+            if !hold_for_sight(&mut w, di, 900) { break; }
+            // stand_and_fire, NOT shoot: the shoot loop's reposition/flank walked Bond INTO the
+            // closing captain (dist 1.6 at the shot, 50.4 health for the kill [L the
+            // 00agent-02-03-2 run]). The stand holds the plate and duels — Bond does not move
+            // (the back_off 4.0 retreat keeps the under-3.0-u rule out of play).
+            let _ = w.stand_and_fire(di, 900);
+            status(&w, &format!("geisha 1 round-0 stand-off {k}"));
+            // The kill's drop is the resupply (the guards' own guns; the dead captain's shells).
+            scoop_drops(&mut w, &format!("geisha 1 stand-off {k} drop"), 1);
+            arm_weapon(&mut w, 0x1c, &format!("geisha 1 stand-off {k} shotgun"));
+        }
+        w.dmg.back_off = Some(4.0);
+        // The corridor carries its own chaser (drone #8 enabled mid-duel and chewed 43.2 into
+        // the fight's back — the hook is one-fight-at-a-time [L the 00agent-02-03-2 run]). A
+        // player breaks off and answers him before the room's rounds.
+        clear_pursuers(&mut w, 16.0, "after the geisha-1 stand-off");
+    }
     let g1 = geisha(&w, 0x49).unwrap();
     let at = w.scene.sim.as_ref().unwrap().drones.list[g1].pos;
     clear_captors_real(&mut w, at, "geisha 1", difficulty >= 3);
@@ -732,8 +784,71 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             // Into the bunker with the fullest gun (the ch-0x81 ambush is next [D #389]).
             arm_fullest(&mut w, "before the bunker");
         }
+        if name == "west wing stair" && difficulty >= 3 {
+            // 00 Agent (real-health-00agent-02-03-2): the courtyard sniper (weapon 0x1e) covers
+            // the stair descent and the lane crossing — his ONE hit from 25.7 u landed 48.0 and
+            // the crossing never survived it [L the 00agent-02-03-2 ledger, two runs]. A player
+            // spots the muzzle from the stair top and answers before descending: the stand taps
+            // from cover (Bond does not move), the 12-hp class dies to three body rounds [L the
+            // run ledger "hp 12"]. Nothing exposed from here = the stand gives up on its own.
+            let di = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
+                        && d.weapon == 0x1e && dxz(d.pos, bp) < 30.0)
+                    .map(|(i, _)| i).next()
+            };
+            if let Some(di) = di {
+                // The fullest gun, not whatever the rooms left in hand (the shotgun's last 3
+                // pellets burned at 25 u were 3 close-range kills gone [L the 00agent-02-03-2
+                // run: the dry hook fight then let the hp-5 rifle chaser finish Bond]). And the
+                // aim held: the hip cone at 25 u missed all 16 rifle rounds [L the same run];
+                // the aim raise is the game's own zero-spread for a 0x400000 record [M
+                // Bullet_init 0x12c5a0:139-170]. Scoped to this stand only — the walk's other
+                // fights keep the plain gates.
+                w.dmg.aimed_fights = true;
+                arm_fullest(&mut w, "the stair-top sniper duel");
+                let _ = w.stand_and_fire(di, 1200);
+                w.dmg.aimed_fights = false;
+                status(&w, "the courtyard sniper from the stair top");
+            }
+        }
+        if name == "courtyard lane" && difficulty >= 3 {
+            // 00 Agent (real-health-00agent-02-03-2): the sniper (0x1e, one hit 48.0) is exposed
+            // from the lane mouth — the lane leg's own hook fight killed him there in the
+            // earlier run [L the 00agent-02-03-2 ledger: "courtyard lane: returned fire on
+            // drone #9 (killed true)"] — but his shot reaches the DESCENT, so the stand must
+            // not wait for the leg to hand him over. The stair top never exposed him (the
+            // aimed duel there never fired, clip 32 at the status [L the same run]). Here:
+            // the fullest gun, the aim held for the 19-25-u stand, then restored.
+            let di = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
+                        && d.weapon == 0x1e && dxz(d.pos, bp) < 30.0)
+                    .map(|(i, _)| i).next()
+            };
+            if let Some(di) = di {
+                w.dmg.aimed_fights = true;
+                arm_fullest(&mut w, "the lane-mouth sniper duel");
+                let _ = w.stand_and_fire(di, 1200);
+                w.dmg.aimed_fights = false;
+                status(&w, "the lane-mouth sniper duel");
+            }
+        }
         leg_to(&mut w, at, name, 1.6);
         status(&w, name);
+        if difficulty >= 3 && (name == "stair bottom" || name == "courtyard lane") {
+            // 00 Agent (real-health-00agent-02-03-2): the kills here (the sniper at the lane's
+            // mouth) drop their guns on the route and the fights behind ran DRY on the lane —
+            // the hp-5 rifle chaser finished a clip-0 Bond [L the 00agent-02-03-2 ledger]. A
+            // player low on rounds grabs what dropped before walking on (the file's own loot
+            // rule): one scoop, then the fullest gun.
+            scoop_drops(&mut w, &format!("{name} drops"), 1);
+            arm_fullest(&mut w, &format!("{name} rearm"));
+        }
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
