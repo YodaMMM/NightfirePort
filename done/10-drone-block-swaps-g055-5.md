@@ -8,3 +8,8 @@ For each, say what changed for the guards on that level, then re-route or re-pin
 
 ---
 claimed-by: sandbox1 at 2026-11-04T20:17Z
+
+---
+## Report (done, 2026-11-04T21:32Z)
+
+Closed by the driver: the report is on `s/drone-block-swaps-g055-5` (docs/reports/drone-block-swaps-g055-5.md); the worker didn't run finish.sh.
