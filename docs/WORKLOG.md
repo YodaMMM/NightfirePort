@@ -35,3 +35,11 @@ Work log:
     0x179740:113-115]; the fixed walk routes get unlucky on the correct stream. Routes need
     re-tuning — left for the next message.
 - (06:05) nf-game lib green; ai_live 37/0 green (the base branch's re-pins hold).
+
+## gas-rng-draws-3
+Started 2026-11-04 13:16 UTC. Branch s/gas-rng-draws-3 cut from origin/s/gas-rng-draws-2
+3083a2ca, then origin/master merged in. Task: finish landing the gas RNG draws — turn the
+remaining reds green (sight_frustum_live 2, walkreal_01/02/03/14/16/1b, fix_blast_scripts_live,
+fix_finale_live, hostage_killer_07000002_live, enemy_accuracy_live), re-routing walks the way a
+player would adapt (never forcing state), re-pinning only values the stream legitimately moves.
+- (13:18) branch created, master merged clean, initial checkpoint pushed.
