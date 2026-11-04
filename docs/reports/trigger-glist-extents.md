@@ -111,9 +111,15 @@ report's numbers, retune the three levels' routes, then re-run the battery.
 ## Verification (the pushed tree)
 
 - The pushed tree is behaviour-byte-identical to master in every test binary (the diff = two
-  examples + docs). Baseline suite run in progress on this tree at finish time — the total
-  line below; the named battery on the LEVER tree (reverted here) is quoted above as the
-  measurement.
+  examples + docs), so the suite baseline running on it at finish time is this tree's run. It
+  did not reach its total line inside the sandbox window (the 1102-binary run was still
+  mid-suite at the 18:17 UTC finish; its partial output showed the three disc_golden failures
+  the slim ISO allows plus CRASH exit-9 lines on mp_shot_effects_live and
+  walkreal_07000011_live — the 3.9 GiB no-swap box's OOM, the same kill the battery saw on
+  walkreal_07000011_live — and one glass_guards_14_live failure). The suite total line for
+  this tree is the first item for the next session: re-run
+  NF_ISO=$NF_ISO nohup python3 tools/test/suite.py > suite.out 2>&1 & and read tail -1. The
+  named battery on the LEVER tree (reverted here) is quoted above as the measurement.
 - Per binary on the lever tree: nf-game 658/0/5, fix_truck 2/0, mayhew 3/0, npc_doors 6/0/1,
   fix_guard_misc 6/0, walkreal_0700000a 13/0/2.
 
