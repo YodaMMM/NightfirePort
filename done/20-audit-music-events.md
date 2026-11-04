@@ -4,3 +4,7 @@ The helicopter's attack beat was missing until its state machine was ported, so 
 
 ---
 claimed-by: sandbox1 at 2026-11-04T21:33Z
+
+---
+## Report (done, 2026-11-04T22:24Z)
+
