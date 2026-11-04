@@ -153,3 +153,19 @@ report's numbers, retune the three levels' routes, then re-run the battery.
 
 not visible to me — this sandbox exposes no token, credit or context-window figures for the
 session (no such counters appeared in any tool output or environment surface).
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-04 18:17–18:20 UTC); github.com pushes from the same
+sandbox succeeded, so the block is specific to ntfy.sh egress:
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "trigger-glist-extents: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds` (exit 28).
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'trigger-glist-extents: done', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`.
+3. `wget -q -O- --post-data "trigger-glist-extents: done" https://ntfy.sh/nightfire-yoda-8k3x --timeout=20`
+   → no output; diagnostic without -q: `Resolving ntfy.sh (ntfy.sh)... 129.212.146.227, 2604:a880:800:14:0:3:cb8d:4000` /
+   `Connecting to ntfy.sh (ntfy.sh)|129.212.146.227|:443... failed: Connection timed out.` /
+   IPv6 `failed: Network is unreachable.`
+The finish marker itself ran OK (`finish.sh` printed `OK done 20-trigger-glist-extents`; the
+first run resolved the report path against the nf-queue worktree — repaired by re-running with
+the absolute path, `OK already closed in done/, report attached`).
