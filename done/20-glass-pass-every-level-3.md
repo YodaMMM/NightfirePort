@@ -6,7 +6,6 @@ Continue origin/s/glass-pass-every-level-2 (merge origin/master first) and read 
 claimed-by: sandbox1 at 2026-11-04T14:42Z
 
 ---
-## Report (done, 2026-11-04T16:21Z)
 
 # glass-pass-every-level-3 — report (2026-11-04)
 
@@ -101,3 +100,14 @@ from the x 106.2 / z −121.5 corner when their wander crosses the span.
 
 not visible to me — no token, credit, cost or context-window figures are exposed anywhere in
 this environment (no status bar, no session summary, no API dashboard access).
+
+## ntfy failed
+
+All three fallbacks failed in order (2026-11-04 ~17:35 UTC):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "glass-pass-every-level-3: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'...'), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "glass-pass-every-level-3: done ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out (killed at the 120 s shell cap, no output, nonzero exit)
+
