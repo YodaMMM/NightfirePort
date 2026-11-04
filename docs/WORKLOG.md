@@ -88,3 +88,15 @@ retail image, 1,191,072 sectors [D docs/build-identity.md]; the sandbox has the 
 ISO, 518,435 sectors measured) + the GPU-surface set (glass_guards_14_live 1, fix_0c_pylon_live
 2, probe_pylon_render 1 — wgpu adapter NotFound headless, the last three matching the October
 headless record). Report + totals to follow.
+
+### drone-block-swaps-g055-4 outcome (2026-11-04 ~19:05 UTC)
+
+Both target walks green and verified whole on the pushed tree (07000014 9p/0f/1i,
+07000016 14p/0f/2i); the full walkreal_*_live sweep 80 binaries 246p/3f/20i (the 3 = the
+g055-3 hand-off's other-level shifts, measured still red, owners'); the FULL four-crate
+suite ran: 1104 binaries built, all run serially — 4202 passed / 15 failed / 339 ignored
+(4203 effective with the second crate's fix_ai_remainder_live copy, both copies green
+directly). Failures classified in docs/reports/drone-block-swaps-g055-4.md: the 3 allowed
+disc_golden, identity_disc (needs the full retail image), 5 GPU-surface tests (wgpu
+adapter NotFound headless), the 3 pre-existing walkreal shifts, 2 mp timeouts. Report:
+docs/reports/drone-block-swaps-g055-4.md.
