@@ -578,3 +578,20 @@ fn friendly_hit_posts_both_lines_once() {
     m.register_bullet_hit(0, 1);
     assert_eq!(m.objects_rt.slot_msgs, [(0, 0x2000029, Some(1), 0xb4), (1, 0x200002a, Some(0), 0xb4)]);
 }
+
+/// A death tells the victim who did it; with no other shooter it is the self line [M
+/// 0x190810:68-85].
+#[test]
+fn a_death_tells_the_victim() {
+    let mut rng = Rng::new(7);
+    let mut m = make(scenario::DEATHMATCH, 10, -1);
+    join(&mut m, 0, 0);
+    join(&mut m, 1, 1);
+    m.player_killed(0, Some(1), false, false, &mut rng);
+    m.player_killed(1, Some(1), false, false, &mut rng);
+    m.player_killed(1, None, false, false, &mut rng);
+    assert_eq!(
+        m.objects_rt.slot_msgs,
+        [(0, 0x2000038, Some(1), 0xb4), (1, 0x2000037, Some(1), 0xb4), (1, 0x2000037, Some(1), 0xb4)]
+    );
+}

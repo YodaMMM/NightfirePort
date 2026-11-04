@@ -265,6 +265,14 @@ impl MpMatch {
             if self.kill_msgs.len() >= 64 { self.kill_msgs.remove(0); }
             self.kill_msgs.push((k, victim));
         }
+        // The victim's own line: by the last shooter, else by themselves [M 0x190810:68-85]. Only
+        // the local slot draws it, so a bot's copy goes nowhere, as `Player_CheckForDeath` is
+        // the humans' path.
+        if self.objects_rt.slot_msgs.len() < 64 {
+            let by = killer.filter(|&k| k != victim && k < super::MP_MAX_SLOTS);
+            let line = (victim, if by.is_some() { 0x2000038 } else { 0x2000037 }, Some(by.unwrap_or(victim)), 0xb4);
+            self.objects_rt.slot_msgs.push(line);
+        }
         let mut delta = 0.0f32;
         if let Some(k) = killer {
             if k == victim {
