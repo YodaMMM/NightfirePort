@@ -725,12 +725,70 @@ fn clear_hostiles_16(w: &mut Walker, radius: f32, cap: u32) {
     let home = w.scene.sim.as_ref().unwrap().bond.pos;
     for _ in 0..10 {
         let sim = w.scene.sim.as_ref().unwrap();
+        // The LEVEL gate (drone-block-swaps-g055-4): the route's ambushers are the ring
+        // guards — placements 186-191 all spawn at y 6.71 on the upper ring (hp 10-25 [L
+        // probe_16_guards]) while the approach legs run at floor 0 — and a Bond on the
+        // ground cannot fight them: the measured run burned 10800 ticks on the unexposed
+        // drone #0 (dist 14-16, `exposed false`), the flank nav dragged him up the ramp wall
+        // (head_bump, target (15.13, 6.71, -74.68)), and the below-fights fed the crossfire
+        // that emptied his 100 (the 10684 death at the ramp foot). A player climbs first and
+        // fights the ring AT LEVEL — the ring legs' own clears (Bond at y ~6.7) do that
+        // cheaply (hp 10 each); the ground guard (#187, y 0.80) still fights from the floor.
+        let bp = sim.bond.pos;
         let Some(di) = sim.drones.list.iter().position(|d| {
             d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
-                && walker::dxz(d.pos, sim.bond.pos) < radius
+                && walker::dxz(d.pos, bp) < radius
+                && d.pos[1] <= bp[1] + 2.0 && d.pos[1] >= bp[1] - 2.0
         }) else { return };
-        w.resupply("the hostile clear"); // the dropped-gun cycle — the flush's swarms outshoot one clip
+        // The far+unexposed stand is not a fight (measured both ways on this tree): run A
+        // burned 10800 futile ticks on the unexposed drone #0 (dist 14-16, `exposed false`)
+        // and run B — with the level gate alone — stood at the launch centre shooting a wall
+        // at dist 39 while the above ring guards poured free (the 2609 death, 71 hits, 0
+        // return-fire fights). A player keeps walking the legs when nobody is exposed to
+        // answer; the geometry opens as he advances, and the ring legs fight the ring guards
+        // AT LEVEL (hp 10 each [L probe_16_guards]). Close and unexposed keeps the flank
+        // dance (shoot_bounded's own repositioning — the run-A fights that landed).
+        if walker::dxz(sim.drones.list[di].pos, bp) > 15.0 { return; }
+        if walker::dxz(sim.drones.list[di].pos, bp) > 8.0 && w.exposed_aim(di).is_none() { return; }
+        // A nearly-dry gun starts a fight it cannot finish (the measured ring-2 fight opened
+        // on clip 1 spare 3 and cost 28 health in the flank dance): restock from the
+        // trail-corridor boxes first — the station's 0x47 box (100 rounds [L probe_16_pickups])
+        // sits 3 u off the station legs.
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[clear] at {:?} holds {:#04x} clip {} spare {} owns {:x?}",
+                sim.bond.pos, sim.gun.weapon, sim.gun.clip, sim.gun.spare,
+                (0..sim.drones.inventory.owned.len()).filter(|&w| sim.drones.inventory.owned[w]).collect::<Vec<_>>());
+            if sim.gun.clip + sim.gun.spare < 8 { w.resupply("the hostile clear low"); }
+        }
         w.shoot_bounded(di, "the hostile clear", cap);
+        // The kill's own loot, immediately (drone-block-swaps-g055-4): the guard's dropped
+        // gun lies at the fight floor — walk over it NOW (the walk-over take [M
+        // Pickup_Handler 0x18e650] files it + its clip), not after ten fights. The measured
+        // stands went dry at +468 and kept standing while the shared resupply's walked-path
+        // corridor filter refused the 10-25 u drops ("no pickup within the walked-path
+        // corridor") — the cycle then crawled through every dry gun to the fists.
+        if w.scene.sim.as_ref().unwrap().drones.list[di].corpse {
+            // Loot by the DROP's live position, not the corpse spot: the gun bounces/slides
+            // off where the guard fell (the measured loot walk arrived at the corpse and the
+            // take never fired — the next fight opened on clip 1 spare 3). Close drops only:
+            // the loot walk itself is exposure; a farther one stays for the walker's own
+            // trail-corridor resupply on the route legs. Arrive 0.6 — the walk-over take's
+            // radius is under a unit [M Pickup_Handler 0x18e650].
+            let drop = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                sim.drones.pickups.iter().filter(|p| !p.gone)
+                    .filter(|p| (p.m[3][1] - bp[1]).abs() < 1.5)
+                    .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+                    .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)))
+                    .filter(|t| walker::dxz(*t, bp) < 8.0)
+            };
+            if let Some(t) = drop {
+                w.walk_nav_to(t, "the clear's kill loot", 0.6);
+                switch_to_a_deep_firearm(w, "the clear's kill loot");
+            }
+        }
     }
     // The drops feed the run (the dry-finale lesson — the measured 14401 death opened the
     // squad phase on clip 1 spare 1): walk the corpses Bond just made. The walk-over take
@@ -749,6 +807,27 @@ fn clear_hostiles_16(w: &mut Walker, radius: f32, cap: u32) {
     w.walk_nav_to(home, "back to the clear's home spot", 1.0);
 }
 
+
+/// Cycle to a real firearm with a deep mag (drone-block-swaps-g055-4): the plain
+/// switch_to_armed's cycle lands on whatever has rounds in the game's weapon order — the
+/// measured loot walk left Bond holding the frag 0x34 (clip 1 spare 2) and the squad phase
+/// threw three grenades at hp-20 clones before dying dry. The dropped 0x1a SMGs (50-round
+/// mags [L probe_16_pickups]) are the pit floor's own guns; a player swaps to the deepest
+/// magazine he just picked up, not to the grenade bandolier.
+fn switch_to_a_deep_firearm(w: &mut Walker, label: &str) {
+    for _ in 0..12 {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let g = &sim.gun;
+            if (2..=0x47).contains(&g.weapon) && g.weapon != 0x34 && g.weapon != 0x37
+                && g.clip + g.spare >= 10 { return; }
+        }
+        w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
+        for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); } // the holster/draw cycle
+    }
+    w.switch_to_armed(label); // anything armed beats the fists
+}
+
 fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool) -> (usize, u32) {
     w.wait_enabled(3000, "the launch-centre arrival");
     w.wait(100);
@@ -762,9 +841,40 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool) -> (usize, u32) {
         // the finale squad's ammo. walk_route's legs ARE walk_to calls, so the structure is
         // the route's own; the clear caps at 1200 per shooter and walks the NAV web home so
         // the next leg starts where it would have.
+        //
+        // drone-block-swaps-g055-4: the proactive stands are the RING legs' tool only. The
+        // measured ground-leg stands on this tree bled 72 health by the lane-east fight (the
+        // ring guards #0/#2-#5 overlook the ground from y 6.71 [L probe_16_guards] and pour
+        // free while Bond fights what he cannot see) and the fights' displacement pushed him
+        // off the lane into the trench (the y -4.65 deaths). The ground legs keep MOVING —
+        // the walker's reactive return fire answers what actually shoots (the same economy
+        // that held 07000014's fights at 74.0 on this tree) — while the ring legs (y 5.9,
+        // the guards' own floor) clear at level, hp 10 each. The gate is 5.5 (the ring
+        // floor), not 4.0: the ramp legs top at y 4.6 and the measured run took the gate
+        // there — Bond still at y 2.9 under the whole ring — and the stand burned ~1400
+        // ticks on a hunting guard 17-27 u out (12 rounds, zero damage) while the ring
+        // guards emptied him (the 1988 death).
         for (label, wp) in APPROACH {
-            clear_hostiles_16(w, 40.0, 900);
-            w.walk_to(*wp, label);
+            if wp.at[1] > 5.5 { clear_hostiles_16(w, 40.0, 900); }
+            // The ring/station legs ride the NAV web: the direct steer from the ramp top
+            // walked off the ring's edge and fell to the ground below (the measured runs:
+            // "the ring east: arrived at (13.39, 0.91, -79.41)" from the ramp top y 4.74) —
+            // the whole ring phase then runs at ground level under the ring guards' fire
+            // (the y 5.9 leg targets arrive on xz alone). The nav web holds the ring nodes
+            // (the flank nav reached (15.13, 6.71, -74.68) [L the run-A STUCK dump]) and
+            // climbs the ramp properly; at ring level the guards are at BOND's level — the
+            // band-gated fights land (the measured ring-gate kill: drone 0 at 6.8 u, ~8
+            // health) and the pour dies with them.
+            // The station legs walk directly: the station platform is flat ring level (the
+            // measured nav runs arrived y 6.83-6.84 with no fall) and their walk_to carries
+            // the station E's console Use (the chain's gate) — the nav route to it wandered
+            // north and gave up at the 3000-tick cap without the press. Only the ramp->ring
+            // transition legs ride the nav (the direct steer fell off the ring edge there).
+            if wp.at[1] > 5.0 && (label.starts_with("the ring") || label.starts_with("the return")) {
+                w.walk_nav_to([wp.at[0], wp.at[1], wp.at[2]], label, wp.arrive);
+            } else {
+                w.walk_to(*wp, label);
+            }
         }
     } else {
         w.walk_route(APPROACH);
@@ -1816,6 +1926,10 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(difficulty: u
     // than the bleed, and the route has no hard window).
     if difficulty == 1 {
         w.dmg.finish_fights = true;
+        // drone-block-swaps-g055-4: the reactive pick skips the ring guards a level above
+        // (the shared flag's doc) — the ground legs keep moving under the overhead fire and
+        // the ring legs clear at level.
+        w.dmg.level_fights = true;
     }
         let (chaser, t0) = walk_to_the_chaser_fight(&mut w, true);
         // The route's return-fire fights spend bolts — the arrival SET is the chain's [M
@@ -1875,6 +1989,7 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(difficulty: u
             for (k, s) in spots.iter().enumerate() {
                 w.walk_nav_to(*s, &format!("the loot walk {k}"), 1.0);
             }
+            switch_to_a_deep_firearm(&mut w, "the loot walk");
             let sim = w.scene.sim.as_ref().unwrap();
             eprintln!("[real-damage] the loot walk: {} corpses, owns {:?}, in hand {:#04x} clip {} spare {}",
                 spots.len(), owned(sim), sim.gun.weapon, sim.gun.clip, sim.gun.spare);

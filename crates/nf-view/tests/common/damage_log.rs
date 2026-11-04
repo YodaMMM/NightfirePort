@@ -185,6 +185,19 @@ pub struct DamageLog {
     /// The fight about to run picked a shooter whose boxes are NOT reachable from here (the
     /// unseen-cover fallback): a short stand cap, the creep has to open the line fast.
     pub unseen_fight: bool,
+    /// OPT-IN (drone-block-swaps-g055-4, `level_fights`, set by the 07000016 real-damage walk):
+    /// the return-fire pick keeps only the shooters at Bond's LEVEL (pos y within ±2.0 of
+    /// Bond's) — a guard a level above (the route's ring guards at y 6.71 over the floor-0
+    /// approach) or below (the trench guard under the ring) is not answerable from here. The
+    /// 07000016 route's ambushers are the ring guards — placements 186-191 spawn at y 6.71 on
+    /// the upper ring [L probe_16_guards] over the floor-0 approach — and a floor-level
+    /// Bond cannot answer them: the measured reactive stands fought the overhead fire (the
+    /// flank nav dragged Bond up the ramp wall, head_bump; the fights' displacement pushed him
+    /// off the lane into the trench — two deaths at y −4.65/−5.04, 71 hits for 100 each). A
+    /// player under overhead fire keeps walking the legs and fights the ring AT LEVEL (the
+    /// route's own ring legs, hp 10 each). Off = master behaviour (the plain pick) everywhere
+    /// else — no other walk changes.
+    pub level_fights: bool,
     /// OPT-IN (`tranq_fights`, the 0700000b walk): Bond's only conventional weapon on 0700000b is
     /// the Korsakov K5 sleep dart (0x43 — the silent-infiltration kit [M 0x1a7ef8 case
     /// 0x7000009/0a/0b the boot loadout; L the death run's bullet probe — wpn 0x43, dmg 0.10,
@@ -508,6 +521,14 @@ impl Walker {
             let sim = self.scene.sim.as_ref().unwrap();
             if sim.disabled || !sim.bond.grounded { return false; }
             let cands = self.dmg.shooters(sim);
+            // OPT-IN `level_fights` (drone-block-swaps-g055-4, the field doc): the shooters a
+            // level above Bond are not answers — the pick drops them and the leg walks on.
+            let cands = if self.dmg.level_fights {
+                let by = sim.bond.pos[1];
+                cands.into_iter()
+                    .filter(|&i| { let y = sim.drones.list[i].pos[1]; y <= by + 2.0 && y >= by - 2.0 })
+                    .collect::<Vec<usize>>()
+            } else { cands };
 
             // The plain pick: the nearest shooter Bond can see (`shooters` is nearest first).
             // With `lane_fights`, fight the shooter who is actually HURTING Bond first: the 07000013 crossing mixed
