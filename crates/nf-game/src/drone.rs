@@ -18610,7 +18610,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // exactly these five out; the s/level-14-trench-landing whitelist (only the four
                     // celglist-creator kinds) un-posed the ride platforms (the paternoster cab
                     // 0x2000367, the 0700004a lift entity obj_type 31, the gondola) and broke the rides.
-                    Some(crate::nis::Obj::Entity { hash, kind, matrix, .. }) if !matches!(kind, 0xea | 0xeb | 0xf5 | 0xf2 | 0xf0) => parts.push((id(0), *hash, *matrix)),
+                    Some(crate::nis::Obj::Entity { hash, kind, matrix, .. }) if !matches!(kind, 0xea | 0xeb | 0xf5 | 0xf2 | 0xf0) => {
+                        // Break_Kill's law [M 0x12b970:60 — obj+0xFE |= 1, "the collision goes
+                        // away"]: a KILLED 0x20 pane's glist leaves the collide set. The pane row
+                        // rides the same script obj (the per-tick sync upserts it), so its dead
+                        // flag past the death tick drops the part — the death tick keeps it (the
+                        // killing contact registers BEFORE Break_Kill takes the collision away,
+                        // the same grace the 0x400_0000_0000 placed-pane arm carries). Measured
+                        // on 07000008: the gondola's shot-out windows kept stopping the eye rays
+                        // at the pane plane (the 3409-tri dump showed the dead quads in the
+                        // dynamic set) and the Hind-fight launch corridors never opened.
+                        let pane_dead = *kind == 0x20
+                            && drones.breaks.list.iter().any(|b| b.script_obj == Some(oi) && b.dead && b.dead_frame != drones.frame);
+                        if !pane_dead { parts.push((id(0), *hash, *matrix)); }
+                    }
                     _ => {}
                 }
             }
