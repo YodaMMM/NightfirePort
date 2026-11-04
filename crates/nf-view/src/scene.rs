@@ -6028,10 +6028,16 @@ impl Sim {
         let me = self.mp_local_slot;
         if let Some(m) = self.mp.as_mut() {
             let posted = std::mem::take(&mut m.objects_rt.slot_msgs);
-            for (_, label) in posted.into_iter().filter(|&(to, _)| to == me) {
-                let text = lang.as_ref().and_then(|l| l.bind(label)).unwrap_or("").to_string();
+            for (_, label, name, ticks) in posted.into_iter().filter(|p| p.0 == me) {
+                let text = match name {
+                    Some(n) => {
+                        let name = crate::hud::mp_name(m, lang.as_ref(), n);
+                        lang.as_ref().map(|l| l.format(label, &[name])).unwrap_or_default()
+                    }
+                    None => lang.as_ref().and_then(|l| l.bind(label)).unwrap_or("").to_string(),
+                };
                 if !text.is_empty() {
-                    let mut msg = Msg::new(text, nf_game::mp::rules::MP_MSG_TICKS as f32);
+                    let mut msg = Msg::new(text, ticks as f32);
                     msg.label = label;
                     self.hud.info_msgs.push_back(msg);
                 }
