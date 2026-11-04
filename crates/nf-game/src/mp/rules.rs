@@ -354,9 +354,15 @@ impl MpMatch {
         let drop_pos = self.game.slots[victim].pos;
         let mut dropped = 0; // each drop sounds [M 0x1861a8:166, 0x187568:329, 0x1882d8:120]
         let mut lines = Vec::new();
+        // the carried bit(s) to clear off the victim's +0x26 word — each object's own drop call
+        // clears its own bit [M MP_FlagUpdate 0x1861a8:127-129 (msg 0x30, bit 0x1);
+        // MP_GoldenEyeUpdate 0x187568:329-336 → MP_setPlayerStatus 0x18a518 with bits 0x4/0x8;
+        // MP_BluePrintUpdate 0x1882d8:81-84 (msg 0x33, bit 0x2)]
+        let mut clear_bits = 0u16;
         for f in self.objects_rt.flags.iter_mut().flatten() {
             if f.carrier == Some(victim) {
                 dropped += 1;
+                clear_bits |= 1;
                 lines.push((0x2000039, team_label(f.team))); // [M 0x1861a8:155-165]
                 f.state = 2;
                 f.carrier = None;
@@ -376,6 +382,7 @@ impl MpMatch {
                 continue;
             }
             dropped += 1;
+            clear_bits |= if i == 0 { 4 } else { 8 }; // [M 0x187568:231-236 — the item-kind bit]
             let n = self.objects.goldeneye[i].len();
             let pos = if n > 0 {
                 let pick = rng.rand(n as u32) as usize; // [M 0x187568:281-283]
@@ -398,6 +405,7 @@ impl MpMatch {
         if let Some(bp) = &mut self.objects_rt.blueprint {
             if bp.carrier == Some(victim) {
                 dropped += 1;
+                clear_bits |= 2; // [M 0x1882d8:81-84 — msg 0x33 clears the blueprint bit]
                 lines.push((0x2000046, team_label(bp.team))); // [M 0x1882d8:109-118]
                 bp.state = 2;
                 bp.carrier = None;
@@ -413,7 +421,7 @@ impl MpMatch {
         for (label, arg) in lines {
             self.mp_msg(label, arg);
         }
-        self.game.slots[victim].status_bits &= !1; // the carrying bit clears [M 0x18a518]
+        self.game.slots[victim].status_bits &= !clear_bits; // the carrying bits clear [M 0x18a518:88-96]
     }
 
     /// `MP_assassinReset` 0x18aa70 — the new assassin is the dead assassin's last-killer when
@@ -1380,6 +1388,15 @@ impl MpMatch {
             self.game.team_scores[1 - tt.min(1)] += 1.0; // [M 0x187568:110-117]
             self.game.slots[t].status = 0xfffe; // [M :118]
         }
+        // MP_GoldenEyeUpdate 0x187568:123-126 — the strike completion clears BOTH item bits off
+        // their carriers (MP_setPlayerStatus(carrier_a, 4, 0x37, .., clear=1) +
+        // MP_setPlayerStatus(carrier_b, 8, 0x38, .., clear=1)) before both items respawn.
+        for i in 0..2 {
+            let carrier = self.objects_rt.ge[i].as_ref().and_then(|it| it.carrier);
+            if let Some(c) = carrier {
+                self.game.slots[c].status_bits &= if i == 0 { !4 } else { !8 };
+            }
+        }
         for i in 0..2 {
             let n = self.objects.goldeneye[i].len();
             if n > 0 {
@@ -1408,6 +1425,10 @@ impl MpMatch {
             it.carrier = Some(slot);
             it.counter = 0;
             it.team = self.settings.players[slot].team as u16; // the MP_HitBy out-param [M :241]
+            // MP_GoldenEyeUpdate 0x187568:231-236 — the item's kind word picks the bit:
+            // kind 6 (the port's goldeneye[0], placement case 6 [M 0x185de8]) → 0x4 (msg 0x35),
+            // kind 7 (goldeneye[1]) → 0x8 (msg 0x36), clear=0.
+            self.game.slots[slot].status_bits |= if item == 0 { 4 } else { 8 };
             let team = it.team;
             self.mp_sound(SND_GE_TAKE); // [M :435]
             self.mp_msg(0x200003e + item as u32, team_label(team)); // [M :238-253,418-434]
@@ -1455,7 +1476,9 @@ impl MpMatch {
                     self.mp_msg(0x2000047, team_label(team as u16)); // [M 0x188970:170-179]
                     self.game.team_scores[team] += 1.0;
                     self.game.slots[c].score += 1.0;
-                    self.game.slots[c].status_bits &= !1;
+                    // MP_BluePrintReachedBase 0x188970:27-29 — MP_setPlayerStatus(obj, 2, 0x34, ..,
+                    // clear=1): the BLUEPRINT bit 0x2 clears (bit 0x1 is the CTF flag's).
+                    self.game.slots[c].status_bits &= !2;
                     let n = self.objects.blueprint_items.len();
                     let bp = self.objects_rt.blueprint.as_mut().unwrap();
                     bp.state = 0;
@@ -1500,7 +1523,9 @@ impl MpMatch {
             bp.carrier = Some(slot);
             bp.counter = 0;
             bp.team = self.settings.players[slot].team as u16;
-            self.game.slots[slot].status_bits |= 1;
+            // MP_BluePrintUpdate 0x1882d8:126-129 — MP_setPlayerStatus(carrier, 2, 0x32, ..,
+            // clear=0): the BLUEPRINT bit 0x2 sets (bit 0x1 is the CTF flag's [M 0x1861a8:178-179]).
+            self.game.slots[slot].status_bits |= 2;
             let team = bp.team;
             self.mp_sound(SND_CLAIM); // [M 0x1882d8:143,197]
             self.mp_msg(0x2000045, team_label(team)); // [M :131-141,187-196]

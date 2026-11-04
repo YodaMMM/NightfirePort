@@ -1588,9 +1588,13 @@ fn mp_panes(h: &mut Hud, s: &crate::scene::Sim, t: &nf_formats::hud::HudTables) 
     // 0xc6984e, < 0.2 0x9d1912; sprite 3 the armour strip (tex 0x03000170, layer 0x1b) w =
     // armour · 2.56, hidden at 0. Rects: (16,416) 128×16 and (24,420) 128×16 for one viewer
     // [L PCSX2 EE snapshot 2026-10-18 pane 1; M 0x19b390:58-60 — the strip sits at the backing
-    // +8,+4]. The pane hides while a zoom/camera pane is up [M :55-61].
+    // +8,+4]. The pane hides while a zoom/camera pane is up [M :55-61] — the update's hide set
+    // reads the enable bytes of panes 9/10/11/16/17/18 (HUDINFO+0x144/0x164/0x184/0x224/0x244/
+    // 0x264 [M :54-61]): the redeemer (the port's missile_cam), the camera + OICW zooms, and
+    // the Ronin remote view (the port's `ronin_mounted`) — audit-mp-panes added the Ronin, the
+    // port drew the bar over the remote view.
     let paned = s.zoom_target > 1.0 && matches!(zoom_overlay(s.gun.weapon), ZoomOverlay::Camera | ZoomOverlay::Oicw);
-    if !paned && s.missile_cam.is_none() {
+    if !paned && s.missile_cam.is_none() && s.drones.ronin_mounted().is_none() {
         let (x0, y0) = (MP_FIX_INSET, SH - MP_FIX_INSET - 16.0);
         let bonus = m.settings.players[me].armor_bonus as f32;
         let frac = (s.drones.health.health / (bonus + 100.0)).max(0.0);
