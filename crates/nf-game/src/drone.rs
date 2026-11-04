@@ -18538,7 +18538,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // under the one-sided law (the trace played crouched only; the live check
                     // stands in the 0a report).
                     let (a, b, r) = player.body;
-                    crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging, seg_only: true }
+                    crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: false, seg_only: true }
                 }
             }],
             Some(bodies) => bodies.iter().filter(|b| b.alive).map(|b| if b.bot {

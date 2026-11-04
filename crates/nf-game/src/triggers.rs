@@ -597,7 +597,9 @@ impl Trigger {
             && (0..3).all(|k| c.b[k] >= self.lo[k] && c.b[k] <= self.hi[k]) {
             return true;
         }
-        if c.r > 0.0 {
+        // The strict law runs for the standing HITTEST segment only; the measured box, the crouch
+        // body and the drones keep the both-sided capsule every measured pin stands on.
+        if c.seg_only {
             // trigger-hittest-segment: the game's own narrow phase for the capsule touchers
             // (`Intersect_CylGeom` 0x109da0's RAW branch — the trigger cels' glist flags carry
             // bit 0x40 [D 0700000a #607/#614/#621 = 0x645, 07000011 #235 = 0x50; `Collide_Intersect`
@@ -607,14 +609,13 @@ impl Trigger {
             // the glist's OWN record per tri (trigger-plane-records): `Dist2Tri` 0x1dfca8 tests
             // the record's plane_equ, not the winding cross. A volume with no records (the
             // script-stream plates, e.g. 07000005's gatehouse ch 0x5C quad) has no side to read:
-            // it keeps the both-sided capsule below, for the measured box only: the standing
-            // segment's low reach stays off them until the game's ride contact is measured.
-            if self.planes.is_empty() { if c.seg_only { return false; } } else {
-                return self.tris.iter().enumerate().any(|(i, t)| match self.planes.get(i) {
-                    Some((n, d)) => seg_touches_tri_raw(c.a, c.b, c.r, t, n, *d),
-                    None => { let (n, d) = winding_plane(t); seg_touches_tri_raw(c.a, c.b, c.r, t, &n, d) }
-                });
-            }
+            // the standing segment stays off it (the box keeps the both-sided capsule): the
+            // low reach waits on a measured ride contact.
+            if self.planes.is_empty() { return false; }
+            return self.tris.iter().enumerate().any(|(i, t)| match self.planes.get(i) {
+                Some((n, d)) => seg_touches_tri_raw(c.a, c.b, c.r, t, n, *d),
+                None => { let (n, d) = winding_plane(t); seg_touches_tri_raw(c.a, c.b, c.r, t, &n, d) }
+            });
         }
         capsule_hits_tris(c.a, c.b, c.r, &self.tris)
     }
