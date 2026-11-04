@@ -131,3 +131,13 @@ the board semantics by the existing music.rs tests (17 green, including the even
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed (sandbox egress to ntfy.sh blocked):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "audit-music-events: done …" https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "… urlopen(Request('https://ntfy.sh/nightfire-yoda-8k3x', …), timeout=20)"` →
+   `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "audit-music-events: done …" https://ntfy.sh/nightfire-yoda-8k3x` →
+   timed out with no output (killed at 30 s).
