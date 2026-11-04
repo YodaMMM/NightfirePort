@@ -64,3 +64,17 @@ master after the door-routes merge: Bond dies tick 25773 near (113.19, 28.28, -1
 skin 0x500002f, weapon 0x15, 9.8 u, 6.0 a-hit) the way a player would — kill #20 first, cover,
 approach. Real input only, no top-ups. Operative and Agent walks stay green. Branch cut from
 origin/master 38052bf6.
+
+## level-08-00agent-doors (round 1 outcome, 2026-11-04 00:05 UTC)
+
+The pinned 25773 boarding death is FIXED: the d3 fights drain the pistol pool dry and the
+platform-mouth stand's `switch_to_armed` wheel landed the OWNED AT-420 (2..=0x47 counts it) — the
+re-route scoops the #15/#16/#17 drops at the long link, checks firearm-armed (launcher excluded)
+at the platform mouth with resupply from the fresh #23/#19 drops, and the wave clears at zero
+cost (#20 down in 12 ticks at 25250, #23/#24 by 25693, health 78.0 untouched). Port law fixed:
+Break_Kill's "the collision goes away" [M 0x12b970:60] — the dead 0x20 pane's glist now leaves
+the per-tick dynamic set (script_parts); the pane shoot-out itself works (kind 2, health 1.0 —
+one tap each; the rows leave, the script objects delete). The Hind fight remains: the d3 hp is
+598 = DiffMod 2.0 × 299 (6 rocket hits needed) and the carriage model's OWN glass quads still
+stop the launch-corridor rays after the panes die — the collide-vs-draw glist split is the next
+session's lead (the report carries the blast dumps, the pad probe, the levers).
