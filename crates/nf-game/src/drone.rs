@@ -18564,94 +18564,59 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // arm. The standing stance keeps the measured box reach below (the
                     // truck-chain/park-plate calibrations live there).
                     let (a, b, r) = player.body;
-                    crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging }
+                    crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging, seg_only: false }
                 } else {
-                    // The standing stance keeps the measured box reach below. THE GAME'S SHAPE IS
-                    // NOW PINNED (level-0a-low-beam-standing-toucher, 2026-11-03): the collide-pass
-                    // HITTEST segment itself — `Player_Collision` 0x194df0's default arm A =
-                    // pos+up·0.275 → BLData+0x760, B = pos+up·(0.55−cc) → +0x770, r 0.55 → +0x7cc,
-                    // mode 0x800 → +0x7d4 [M :315-333 + the tail]; `Collide_PickObj` 0x1eae80:96-119
-                    // picks on that segment (dist < obj_r·1.5 + h+0x8c), `Collide_Intersect`
-                    // 0x1ebaa8:226-247 refines with `Intersect_CylGeom` vs the trigger's OWN glist
-                    // (obj+0xD8 = the celglist [M Trigger_Create 0x1b1720:92]; strict dist < radius
-                    // [M 0x109da0:447], misses drop as the 1e8 sentinel [M 0x1ea398:118-158]), the
-                    // contacts mirror into both sides' obj+0xD0 [M 0x1ea398:160-215], and
-                    // `Trigger_Hit` 0x1b1fc8:27-47 credits the class-3 owners as mask-8 — the
-                    // player obj+0xFF = 3 [L ee_start_0700000a.bin: glb_players[0] @0x2d88e0 →
-                    // 0x1b78640, +0xff = 3]. That segment bottoms at B−r = pos−cc (floor+0.05
-                    // standing), inside #621's band y 0.13-0.39 [D] — the game's standing walk
-                    // fires it [L PCSX2 2026-11-02: ch 0x24 0→1 crossing z −31.0→−33.78], the box
-                    // (bottom pos−0.6 = 0.53) does not. Wiring the segment in IS testable
-                    // (low_beam_621_fires_standing went green with it) but breaks three measured
-                    // pins, each with its own open lever: (1) the 07000005 truck ride — the park
-                    // plate fires standing (the segment dips 0.163 under B to the plate; the
-                    // game's standing-RIDE contact is unmeasured, the 05-truck trace played
-                    // crouched only, and the ride's own class-5 truck contact is not ported,
-                    // trigger-port-check #11); (2) 07000011's Bond-Moment plate #235 — its glist
-                    // rides ~0.85 over pos, above even the segment's pos+0.825 top, the same
-                    // glist ref-gate/extent divergence as the 0c ch-27 bay volume documented on
-                    // Toucher::player; (3) the 0a office-ring route pin (walkreal_0700000a_live
-                    // walk_office_floor_qworm_keyboard_hatch: "no laser/alert channel fired") —
-                    // the port's walker path brushes low bands the game's footpath never did, a
-                    // route-side waypoint divergence, and the real-damage sisters die to the
-                    // laser. The next lever is the route-side tightening plus the glist
-                    // ref-gate/extent, then this arm replaces the box.
-                    //
-                    // level-05-truck-class5-contact: the BOTTOM end is now the game's own segment
-                    // bottom, with the box's calibrated top kept. The ride's plates are NOT the
-                    // class-5 path the old note guessed: the truck script 0x06000A22 creates them
-                    // as type-0xEA/0xEB Entity triggers with params (out, 8, 0…) — the park plate
-                    // ch 0x70 (stream 6), the bed touch ch 0x71 (stream 7) and the hand-off ch
-                    // 0x5C (stream 8) are all MASK-8 player triggers [D decode,
-                    // docs/formats/nis-script.md §06000A22], so `Trigger_Hit`'s mask-8 arm returns
-                    // exactly the class-3 contact bit [M 0x1b1fc8:56-58 `if (uVar1 == 8) return
-                    // (uVar8 >> 3) & 1`]. The truck itself is a script player whose obj+0xFF =
-                    // 0x1b [M SP_CreateScriptPlayer 0x1db9a8:71] — 0x1b is in NONE of the
-                    // classification arms [M 0x1b1fc8:27-47: 3→8, 2→0x10, 5→2, 0x4a→0x10], and the
-                    // class census agrees (only `Bullet_init` 0x12c5a0:87 writes 0xff = 5) — so
-                    // even where the truck's contact mirrors onto the plate's obj+0xD0 list [M
-                    // Collide_Update 0x1ea398:160-215], it credits nothing: the ride's plates fire
-                    // from Bond's OWN class-3 contact, standing or crouched alike, and the
-                    // port's player-toucher-only model is faithful for the whole chain
-                    // (trigger-port-check #11's "class-5" reading is disproven for it). The
-                    // standing rider's own segment reaches the bed plate: B = pos+0.55−cc =
-                    // pos−0.4847 (cc 1.0347 [L]), the plate 0.163 under B < r 0.55 [D the trace's
-                    // numbers] — so the fix_truck sister's old "standing never fires" pin was the
-                    // unmeasured belief, not the game; the ride pins now assert the fire and the
-                    // level exit. The hybrid shape (the game's B, the box's top) keeps the two
-                    // top-side divergence pins green (the 0x5C hand-off plate and 07000011's #235
-                    // fire through the box's pos+1.81 top, over the segment's pos+0.825) and
-                    // changes only the DEEP reach: floor plates between 0.6 and cc = 1.0347 below
-                    // the reference now fire, as the game's do (07000002's bunker plate 0x80 was
-                    // the old stand-in's remaining known miss of this kind). The deep bottom is
-                    // `body`'s own B (`Player_Collision`'s stamped default arm) and it lands ONLY
-                    // on a moving carrier (`riding` — the truck): the same deep reach on the FLOOR
-                    // touches the port's PARSED low-beam tris where they ride ~0.9 below the
-                    // game's actual glist (0a's #614: the parsed band y 0.25-0.53 under a corridor
-                    // whose floor is at 1.2 — the walkreal ring fired #614 through the floor,
-                    // measured on this branch; the game's own jump clears the line [L 0.9-1.3
-                    // takeoff]) — the ref-gate/extent parse divergence blocks the general deep
-                    // reach, the same lever that keeps the box's top (see above).
-                    let (ba, bb, br) = player.body;
-                    let _ = (ba, bb, br);
-                    let (a, b, r) = ([player.pos[0], player.pos[1] - 0.05, player.pos[2]], [player.pos[0], player.pos[1] + 1.26, player.pos[2]], 0.55);
-                    crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging }
+                    // trigger-plane-records: the standing stance NOW USES the game's HITTEST
+                    // segment (`Player_Collision` 0x194df0's default arm A = pos+up·0.275, B =
+                    // pos+up·(0.55−cc), r 0.55 [M :315-333 + the tail] — the same case-correct
+                    // pair the crouch above rides; built at the scene's drone::Player site).
+                    // The 2026-11-03/04 reverts' missing half is in: the trigger cels' glist
+                    // flags carry bit 0x40 [D 0700000a #607/#614/#621 = 0x645, 07000011 #235 =
+                    // 0x50], which routes `Collide_Intersect` 0x1ebaa8:93-99 to the RAW refine —
+                    // `Intersect_CylGeom` 0x109da0's plane-crossing anchor + `Dist2Tri` 0x1dfca8's
+                    // one-sided entry + the strict < radius refine (triggers.rs
+                    // `seg_touches_tri_raw`, the asm cited there) — and the one-sided entry reads
+                    // the glist's OWN plane records (the tri's 4th u16 → 3×i16 normal · 2⁻¹⁴ +
+                    // the f32 distance at byte +6 [M asm 0x10a1d8-0x10a1e8]; parsed per tri now —
+                    // `Collision::triangles_with_planes`), NOT the winding cross whose sign broke
+                    // the measured pins on the e7f80cd6 wiring. The record plane fires 0a's low
+                    // beam #621 standing (the segment bottom B = pos−0.485 stands 0.16 over the
+                    // band top 0.39, inside the 0.55 refine [D band 0.13-0.39]); keeps 011's
+                    // Bond-Moment plate #235 firing (a vertical wall quad the standing segment
+                    // plane-crosses degenerately → the centroid anchor [M 0x10a3f0-0x10a4fc]);
+                    // keeps the 0c ch-27 bay volume silent at the floor rest (the volume floor
+                    // 0.755 over pos is BEHIND the floor tri's record plane → the code-99 miss
+                    // [M 0x1dfca8:58-68] — the old both-sided capsule fired it). The ride's
+                    // class-5 truck contact (trigger-port-check #11) stays unported: the
+                    // standing-ride park-plate silence rides on the plate quad's own record plane
+                    // under the one-sided law (the trace played crouched only; the live check
+                    // stands in the 0a report).
+                    let (a, b, r) = player.body;
+                    crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: false, seg_only: true }
                 }
             }],
             Some(bodies) => bodies.iter().filter(|b| b.alive).map(|b| if b.bot {
-                crate::triggers::Toucher { a: [b.pos[0], b.pos[1] - 1.0, b.pos[2]], b: b.head, r: 0.4, drone: true, skin: 0, contain: true }
+                crate::triggers::Toucher { a: [b.pos[0], b.pos[1] - 1.0, b.pos[2]], b: b.head, r: 0.4, drone: true, skin: 0, contain: true, seg_only: false }
             } else {
                 crate::triggers::Toucher { contain: !b.hanging, ..crate::triggers::Toucher::player([b.pos[0], b.pos[1] - 0.6, b.pos[2]]) }
             }).collect(),
         };
+        // The standing body's UPPER reach: the HITTEST segment tops at pos+0.825, but plates above
+        // that fire in the game — 07000005's gatehouse ch 0x5C quad at y 27.05 over a standing
+        // pos 25.88 (the truck hand-off, t1884 [D fix-truck]) and 07000011's #235 at ~pos+0.85.
+        // The measured box (feet pos-0.6, top pos+1.26, r 0.55) keeps that reach beside the
+        // segment's low reach until the game's upper contact is pinned. // [S] unverified shape
+        if self.net_bodies.is_none() && !player.crouched {
+            player_touchers.push(crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) });
+        }
         // The ride's deep reach (see `riding`): script plates only (the truck's ch 0x70 park plate).
         // A placed plate over a moving floor keeps the box: 0700004a's lift stand must not fire the
         // top reveal plate. The marker skin never reaches a filter: player touchers carry drone false.
         if self.net_bodies.is_none() && player.riding && !player.crouched && player.body.2 == 0.55 {
-            player_touchers.push(crate::triggers::Toucher { a: player.body.1, b: [player.pos[0], player.pos[1] + 1.26, player.pos[2]], r: 0.55, drone: false, skin: crate::triggers::RIDE_TOUCHER, contain: false });
+            player_touchers.push(crate::triggers::Toucher { a: player.body.1, b: [player.pos[0], player.pos[1] + 1.26, player.pos[2]], r: 0.55, drone: false, skin: crate::triggers::RIDE_TOUCHER, contain: false, seg_only: false });
         }
         let touchers: Vec<crate::triggers::Toucher> = player_touchers.into_iter()
-            .chain(self.list.iter().filter(|x| x.enabled).map(|x| crate::triggers::Toucher { a: [x.pos[0], x.pos[1] - 1.0, x.pos[2]], b: x.head(), r: 0.4, drone: true, skin: x.skin, contain: true }))
+            .chain(self.list.iter().filter(|x| x.enabled).map(|x| crate::triggers::Toucher { a: [x.pos[0], x.pos[1] - 1.0, x.pos[2]], b: x.head(), r: 0.4, drone: true, skin: x.skin, contain: true, seg_only: false }))
             .collect();
         drop(prof_pre);
         { let _p = crate::prof::scope("drones: Trigger_Calc"); crate::triggers::calc(d.level, &mut self.triggers, &mut self.channels, &touchers, &self.bullet_contacts_prev, frame); }
@@ -18888,11 +18853,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for (o, kind, params, hash, m) in live {
             let tris: Vec<[V3; 3]> = d.world.shape(hash).map(|s| s.iter().map(|t| t.map(|p| nf_formats::placement::transform(&m, p))).collect()).unwrap_or_default();
             match self.triggers.iter_mut().find(|t| t.script == Some(o)) {
-                Some(t) => t.set_tris(tris),
+                Some(t) => { t.set_tris(tris); t.planes.clear(); }
                 None => {
                     let k = if kind == 0xea { crate::triggers::kind::TOUCH_ONCE } else { crate::triggers::kind::TOUCH };
                     let q = |i: u32| params.get(i as usize).copied().unwrap_or(0);
-                    if let Some(mut t) = crate::triggers::Trigger::from_params(usize::MAX - o, k, q, tris) { t.script = Some(o); self.triggers.push(t); }
+                    if let Some(mut t) = crate::triggers::Trigger::from_params(usize::MAX - o, k, q, tris) { t.script = Some(o); t.planes.clear(); self.triggers.push(t); }
                 }
             }
         }
@@ -19131,7 +19096,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let drone_pre: Vec<V3> = self.list.iter().map(|x| x.pos).collect();
         // subtitles-do-spoken: deferred `Sound_DoSubtitle` adds (the per-drone `dr` borrow holds
         // the list; the helper needs `&mut self` — drained after the loop).
-        let mut spoken_subs: Vec<(u32, bool, f32)> = Vec::new();
         for &(_, what, index) in &order {
             if what == 1 { let _pw = crate::prof::scope("ctl: kind 1");
                 self.triggers[index].update(&mut self.channels, &touchers, &self.bullet_contacts_prev, frame);
@@ -20151,19 +20115,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             for id in std::mem::take(&mut dr.anim_stops) { self.audio.stop_all_with_id(id); }
             if let Some(t) = d.sfx { for id in &snd { let h = t.get(*id); self.audio.play3d(h.id, at, None); if !h.looped { self.sounds.push(Sound { id: h.id, pos: at, inner: h.inner, outer: h.outer, weight: h.weight }); } } }
-            // subtitles-do-spoken: `AnimProcessScriptCmds` 0x1c1b38 case 1's `Sound_Play3D(100.0f,
-            // −1, −1, id, bone-0 pos, …)` builds the node with the CUSTOM outer 100.0 (node+0x44,
-            // +0x30 = 1 [M 0x1dd548:33]); `Sound_ReqestPlaySfx` 0x1dcc68 then sets +0x52 =
-            // dist < 100 × 0.5 (the streamed ids' distance arm — the spoken ids carry
-            // SFXOutputData+0x15 = 1 [D], ScriptCam == 0 at the 07000006 boot [D the boot NIS
-            // 0x06000066 carries no camera op]) and `Sound_UpdateSounds` 0x1dda70 fires
-            // `Sound_DoSubtitle(id)` on the start with +0x52 set — the driver conversation
-            // (`snd2lbl` ids 0xac/0xae [D Snd2Lbl idx 78/79, always-show]) posts here.
-            for id in &snd {
-                let dist = ((self.player_pos[0] - at[0]).powi(2) + (self.player_pos[1] - at[1]).powi(2) + (self.player_pos[2] - at[2]).powi(2)).sqrt();
-                let dur = self.sfx_durations.get((id & 0xfffff) as usize).copied().unwrap_or(0.0);
-                spoken_subs.push((*id, dist < 50.0, dur));
-            }
             for mut p in dr.drops.drain(..) { p.from = Some(index); self.pickups.push(p); }
             // `Drone_CollisionHandler` (0x140968, WORKLOG 0078): the feet-sphere down-ray + gravity, before the
             // AI-boundary push-out (the game's `AINetwork_GetBoundsPushVectorForSphere` runs last in the handler).
@@ -20184,9 +20135,24 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // X_{K+1} = drawn_K ? 2 : max(X_K − 1, 0).
             dr.drawn_grace = if dr.drawn { 2 } else { dr.drawn_grace.saturating_sub(1) };
         }
-        // subtitles-do-spoken: the deferred `Sound_DoSubtitle` adds (the frame is the sound's
-        // start tick — `Sound_UpdateSounds` 0x1dda70 fires the call on the request tick).
-        for (id, dist_ok, dur) in spoken_subs { self.sound_subtitle(id, dist_ok, dur); }
+        // subtitles-do-spoken: `Sound_UpdateSounds` 0x1dda70 fires `Sound_DoSubtitle` on every
+        // node's start with +0x52 set [M :95-98]. `Sound_ReqestPlaySfx` 0x1dcc68 sets it: always for
+        // a 2-D node [M :34-37]; for a 3-D one, dist < outer × 0.5 only when SFXOutputData+0x15 is
+        // set and no script camera runs [M :83-99]. The outer is the bank's: the scripts' spoken
+        // sounds pass custom = 0 (`daddu t0,zero,zero` in the jal's delay slot at 0x1c2214) [M
+        // 0x1dd548:27-44], and the +0x15 ids also refuse past outer × 1.1, inside the same miss.
+        for (id, pos) in std::mem::take(&mut self.audio.started) {
+            let h = d.sfx.map(|t| t.get(id));
+            let dist_ok = match (pos, h) {
+                (Some(p), Some(h)) if h.cull && !self.hud_frozen => {
+                    let e = [self.player_pos[0] - p[0], self.player_pos[1] - p[1], self.player_pos[2] - p[2]];
+                    (e[0] * e[0] + e[1] * e[1] + e[2] * e[2]).sqrt() < h.outer * 0.5
+                }
+                _ => true,
+            };
+            let dur = self.sfx_durations.get((id & 0xfffff) as usize).copied().unwrap_or(0.0);
+            self.sound_subtitle(id, dist_ok, dur);
+        }
         // `SetupHostageKiller`'s hostage half: hostage +0x2B0 = the killer [M 0x144030:57-59].
         for (hi, ki) in killer_binds { if let Some(h) = self.list.get_mut(hi) { h.captor = Some(ki); } }
         drop(prof_loop);

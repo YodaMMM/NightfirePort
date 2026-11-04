@@ -56,6 +56,9 @@ pub struct Sounds {
     /// the dive loop 0x27 starts on under-entry and stops with the surface gasp 0x60c on under-exit).
     /// Bookkeeping lives here so the scene-side hook needs no new Sim state.
     pub swim_prev_under: bool,
+    /// The nodes requested since the Sim last drained them, for `Sound_UpdateSounds` 0x1dda70's
+    /// `Sound_DoSubtitle` on a start: (id, the 3-D position; `None` for a 2-D node).
+    pub started: Vec<(u32, Option<V3>)>,
 }
 
 pub const POOL: usize = 256;
@@ -198,6 +201,10 @@ pub fn level_bank(level: u32) -> Option<u32> {
 }
 
 impl Sounds {
+    fn note_start(&mut self, id: u32, pos: Option<V3>) {
+        if self.started.len() < POOL { self.started.push((id, pos)); }
+    }
+
     fn alloc(&mut self, n: Node) -> Handle {
         if self.nodes.len() < POOL { self.nodes.push(Some(n)); return self.nodes.len() as Handle; }
         match self.nodes.iter().position(|x| x.is_none()) {
@@ -209,6 +216,7 @@ impl Sounds {
     /// `Sound_Play(id, …)`: a 2-D sound. 0xFFFF (low 20 bits) is "none".
     pub fn play(&mut self, id: u32) -> Handle {
         if id & 0xfffff == 0xffff { return 0; }
+        self.note_start(id, None);
         self.alloc(Node { id, pos: [0.0; 3], is3d: false, custom: None, state: 0, age: 0, since_start: 0 })
     }
 
@@ -216,6 +224,7 @@ impl Sounds {
     /// ambients); everything else uses the bank's radii.
     pub fn play3d(&mut self, id: u32, pos: V3, radii: Option<(f32, f32)>) -> Handle {
         if id & 0xfffff == 0xffff { return 0; }
+        self.note_start(id, Some(pos));
         self.alloc(Node { id, pos, is3d: true, custom: radii, state: 0, age: 0, since_start: 0 })
     }
 

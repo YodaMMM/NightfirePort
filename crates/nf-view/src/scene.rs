@@ -919,6 +919,11 @@ pub const GOGGLE_NIGHT_SPRITE0_H: u16 = 64;
 /// The HUD state the port keeps in Sim (the game keeps it in BLData / the TXTMSG list / pane structs).
 #[derive(Clone, Debug, Default)]
 pub struct HudState {
+    /// The subtitle queues, head first: `[0]` type 4 (`Text_Update` 0x1b1510, a script camera's
+    /// line), `[1]` type 5 (`Text_Update2Line` 0x1b09f0, the two-line form play uses — `Text_AddMsg`
+    /// 0x1b0c30:81-88 turns a type-4 add into 5 outside a script camera). `Game_Run` 0x1c9790:17-25
+    /// updates one queue per frame, so the other's head waits.
+    pub subs: [std::collections::VecDeque<Msg>; 2],
     /// The (viewer 0, type 6) pickup message queue, head first (`Text_AddMsg` 0x1b0c30's list head 0x31997c).
     pub msgs: std::collections::VecDeque<Msg>,
     /// How many `drones.taken` events `hud_tick` has converted into messages.
@@ -2594,6 +2599,9 @@ impl Sim {
             // the shared bit-exact generator — the game's MP_Update draws the global RNG only on
             // the state-6 restart's site re-pick (MP_RestartScenario 0x183fc0)
             m.update(1.0 / 60.0, false, &mut self.drones.rng);
+            for id in m.objects_rt.sounds.drain(..) {
+                nf_game::mp::mp_sound_play(&mut self.drones.audio, id);
+            }
             // mp-host-match-logic: the humans' live positions ride the match every tick (the game
             // reads the live `obj+0x30` per comparison [M 0x185098:123-129]) — the net path set
             // these per tick already; the local path never did, so the spawn policy and the rules
@@ -5962,14 +5970,30 @@ impl Sim {
         // The skip's subtitle flush [M Script_FFwd 0x1dac78:28-29 `Text_FlushAllSubtitles()`]: the
         // script-sourced lines (type 4/5 [M 0x1b15c8]) die; the pickup/INFO queues stay.
         if std::mem::take(&mut self.drones.text_flush) {
-            self.hud.msgs.retain(|m| !m.script);
+            self.hud.subs.iter_mut().for_each(|q| q.clear());
         }
         let lang = self.lang.take();
         let mut new_msgs: std::collections::VecDeque<Msg> = Default::default();
+        let sub = !self.drones.hud_frozen as usize;
         if let Some(lang) = lang.as_ref() {
             for (label, time) in self.drones.script_msgs.drain(..) {
                 let text = lang.bind(label).unwrap_or("").trim().to_string();
-                if !text.is_empty() { new_msgs.push_back(Msg { script: true, ..Msg::new(text, time as f32) }); }
+                if !text.is_empty() { self.hud.subs[sub].push_back(Msg { script: true, ..Msg::new(text, time as f32) }); }
+            }
+            // The scenario event lines: `Text_AddMsg(-1, 0, 4, ..)` — type 4, so the Subtitles
+            // option gates them like every other non-0xff line [M 0x1b0c30:148].
+            if let Some(m) = self.mp.as_mut() {
+                let shown = self.drones.subtitle_track.enabled;
+                for (label, arg) in m.objects_rt.msgs.drain(..) {
+                    let text = match arg {
+                        Some(a) => lang.format(label, &[lang.bind(a).unwrap_or("").to_string()]),
+                        None => lang.bind(label).unwrap_or("").to_string(),
+                    };
+                    if shown && !text.is_empty() {
+                        let ticks = nf_game::mp::rules::MP_MSG_TICKS as f32;
+                        self.hud.subs[sub].push_back(Msg { script: true, ..Msg::new(text, ticks) });
+                    }
+                }
             }
         }
         // The INFO pane's label drain (fix-context-hints): the game binds at POST time
@@ -6003,6 +6027,21 @@ impl Sim {
         // 0xb4)` [M]) — the MP info pane draws them (`HUD_MPUpdateStatusPane` 0x19ca88).
         let me = self.mp_local_slot;
         if let Some(m) = self.mp.as_mut() {
+            let posted = std::mem::take(&mut m.objects_rt.slot_msgs);
+            for (_, label, name, ticks) in posted.into_iter().filter(|p| p.0 == me) {
+                let text = match name {
+                    Some(n) => {
+                        let name = crate::hud::mp_name(m, lang.as_ref(), n);
+                        lang.as_ref().map(|l| l.format(label, &[name])).unwrap_or_default()
+                    }
+                    None => lang.as_ref().and_then(|l| l.bind(label)).unwrap_or("").to_string(),
+                };
+                if !text.is_empty() {
+                    let mut msg = Msg::new(text, ticks as f32);
+                    msg.label = label;
+                    self.hud.info_msgs.push_back(msg);
+                }
+            }
             if m.kill_msgs.iter().any(|&(to, _)| to == me) {
                 let mine: Vec<usize> = m.kill_msgs.iter().filter(|&&(to, _)| to == me).map(|&(_, v)| v).collect();
                 m.kill_msgs.retain(|&(to, _)| to != me);
@@ -6129,11 +6168,16 @@ impl Sim {
         }
         // `Text_UpdateMsg` 0x1b11d8: time −= 1 per frame, delete at ≤ 0 — but the viewer's +0x2a HUD
         // flag returns early while a cut-scene camera runs [M 0x1b11d8:16-18], freezing every message
-        // until the NIS ends. The port: no countdown and no bar close while frozen.
+        // until the NIS ends. The port: no countdown and no bar close while frozen. The subtitle
+        // lines carry id −1, which skips that gate [M :12-20], so their head ticks either way.
+        if let Some(m) = self.hud.subs[sub].front_mut() {
+            m.time -= 1.0;
+            if m.time <= 0.0 { self.hud.subs[sub].pop_front(); }
+        }
         if self.drones.hud_frozen {
             return;
         }
-        // The pickup/script pane (viewer 0, TXTMSG type 6/4): the head ticks alone, exactly like
+        // The pickup pane (viewer 0, TXTMSG type 6): the head ticks alone, exactly like
         // every other status pane. `Text_UpdateMsg` 0x1b11d8:48-73 decrements ONLY the pane's head
         // node (`*param_3` — the out-param the pane state machine 0x19c310 re-looks-up on expiry),
         // so a message queued behind another keeps its FULL life until it reaches the front; the
@@ -7747,7 +7791,11 @@ impl Scene {
         // hud-start: the ENTRY fade is not in this chain any more — it draws UNDER the gameplay
         // HUD (`entry_fade_hud`).
         let fade = sim.drones.exit_fade_view().or_else(|| sim.drones.view_fade);
-        crate::hud::script_overlay(fade, sim.drones.letterbox, &sprites, &self.hud_textures, aspect, flash)
+        let mut f = crate::hud::script_overlay(fade, sim.drones.letterbox, &sprites, &self.hud_textures, aspect, flash);
+        if sim.script_camera().is_some() {
+            f.append(&crate::hud::cutscene_subtitles(self, aspect));
+        }
+        f
     }
 
     /// hud-start: `Player_Init`'s entry fade (`Camera_SetFade(-45, 0xff, 1)` on the player's

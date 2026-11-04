@@ -97,6 +97,13 @@ pub fn mouse_look_add(turn: &mut f32, look: &mut f32, dx: f64, dy: f64, zoom: f3
 /// The game's vertical field of view in play (60°, docs/systems/player.md).
 const GAME_FOV: f32 = std::f32::consts::FRAC_PI_3;
 
+/// The first-person view angle. Mounting a deck gun narrows it to 30° in single player [M GunImp_Activate
+/// 0x132f00: `Camera_CalcViewAngles(0x3f060a92)`, 0x3f860a92 when MPSettings says multiplayer]; dismounting
+/// restores 60° [M GunImp_Deactivate 0x132c18:42].
+pub fn view_fov(sim: &scene::Sim) -> f32 {
+    if sim.mp.is_none() && sim.drones.props.gunimps.iter().any(|g| g.active) { GAME_FOV * 0.5 } else { GAME_FOV / sim.zoom }
+}
+
 /// The viewer at one tick (pos = the eye, yaw/pitch the look angles, fov half-angle radians). Pub for
 /// the headless interpolation tests (fix-interp-ghosting) to build tick cameras the way the loop does.
 #[derive(Clone, Copy)]
@@ -2239,7 +2246,8 @@ async fn device(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) 
 /// is clear — health iris, ammo, crosshair, radar, messages and the damage glow (`psiFadeView`, in the same
 /// gated block) all disappear together. Snapshot-verified: the 07000001 opening cut-scene has viewer[0]/[5]
 /// +0x2a = 0 while `ScriptCam`@0x30d100 is non-zero [L ee_start_07000001.bin]. The port's condition is the
-/// one it already drives the cut-scene camera from: a live script camera object.
+/// one it already drives the cut-scene camera from: a live script camera object. The subtitle
+/// sprite is the exception; it rides `Scene::script_overlay_hud`, over the letterbox bars.
 pub fn overlay_for(scene: &scene::Scene, aspect: f32) -> gpu::HudFrame {
     let cutscene = scene.sim.as_ref().is_some_and(|s| s.script_camera().is_some());
     if cutscene { gpu::HudFrame::default() } else { hud::overlay(scene, aspect) }
@@ -5724,7 +5732,7 @@ impl App {
                         }
                         if !self.noclip {
                             let h = sim.bond.head();
-                            self.cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV / sim.zoom };
+                            self.cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: view_fov(sim) };
                             // mp-local-look (online aim lagged the mouse): the lockstep
                             // runs this player's turn/look `input_delay` ticks late (3 at least, up to
                             // 15 with the adaptive delay over the internet). The camera adds the turn/
@@ -7291,7 +7299,7 @@ pub fn run() -> Result<()> {
                     }
                 }
             }
-            if walk { let h = sim.bond.head(); cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV / sim.zoom }; }
+            if walk { let h = sim.bond.head(); cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: view_fov(sim) }; }
             if walk { if let Some((p, yaw, pitch, fov)) = sim.script_camera() { cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov }; } }
             if walk { if let Some((p, yaw, pitch, fov)) = sim.wire_camera() { cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV / fov }; } }
             eprintln!("Bond at {:?}{}, health {}", sim.bond.pos, if sim.disabled { " (disabled by a script)" } else { "" }, sim.drones.health.health);
