@@ -101,3 +101,10 @@ framing.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed in order (2026-11-04 ~23:24-23:26 UTC):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "aim-ease-wire-accuracy-pins: done — both pins landed green on the fixed ease + the rider-still law; report pushed, finish.sh closed" https://ntfy.sh/nightfire-yoda-8k3x` → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 urllib.request` → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "aim-ease-wire-accuracy-pins: done" https://ntfy.sh/nightfire-yoda-8k3x` → no output within 60 s (killed by the tool timeout, no bytes received)
