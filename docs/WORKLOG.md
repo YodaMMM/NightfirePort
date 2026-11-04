@@ -73,3 +73,34 @@ same end, Drones::difficulty == 2 asserted at load; port fixes where the damage 
 from the per-difficulty pipeline, otherwise tactics (cover, pickups, kill order, timing).
 Real input only, no teleports, shared helpers untouched unless per-level opt-in. Branch cut
 from origin/master 38052bf6 (the 01-07 sisters branch is already merged — merge-base confirms).
+
+- (00:25 UTC, 11-03) The four Agent sisters wired (each walk body parametrized `_at(difficulty)`,
+  the difficulty-1 call byte-identical, `load_with_carry_difficulty(..., 2)` the menu way, the
+  Drones::difficulty assert at load [M 0x2a3790]): 16's finale, 1b's station, 41's two walks,
+  4a's ride. Results — 4a GREEN (zero damage: the ride has no armed hazards on the route), 41
+  both GREEN (zero damage), 1b RED and 16 RED. All four d1 walks re-run green on the branch.
+  No shared-helper changes: the 1b tactics live in the level's own file (fight_opts/fight/
+  play_the_mission_opts/hide_and_snipe, opt-in via `waves_first = difficulty >= 2`); no
+  crates/nf-view/tests/common/ edit; no crates/*/src edit.
+- (00:25 UTC, 11-03) The damage logs match the game's per-difficulty pipeline everywhere — no
+  port divergence: 1b's astronaut rounds 5.0 × Plr_DMod_Normal 0.7 = 3.5 [D weapon 0x6a +0x0c;
+  M 0x1902c8; 0x1d3a80 case 0x700001b]; Drake's own gun −14.0 = the 0x30 record × 0.7 [D]; the
+  16 AR rounds the records × Normal. The deaths are tactics, not port bugs.
+- (00:25 UTC, 11-03) 1b's grind (three iterations, each logged): the Drake fight's aim pick
+  ordered Drake (r−50) over threatening waves (r−20) — the wave ring ground 43 hits for 100.0
+  through the stand; waves-first scoring (threat r−30) → 41; the exposure-scored shelter hold
+  (fight_opts re-scoring every 30 ticks, a prio-blind hold penalized 50) → Drake died-starved
+  (the 6000 cap, no shot); the shelter = hide_and_snipe's cover point as the Drake hold →
+  39 hits; the Drake-close band (r < 8 → r−60, his 0x30 gun is four waves' worth per hit) →
+  32 hits, then 36 (Drake capped at 2×−14.0). Best run: died 10695, 32 hits. Next: the fight
+  needs Bond's dps up (the ammo/reload cadence) or the waves' sight-lines held down longer.
+- (00:25 UTC, 11-03) 16's ledger: the APPROACH fights cost ~86 (44 hits: #3 35.7/17, #5 16.8/4,
+  #2 10.5/5, #1 8.4/4) before the pit phase; the pit-door guard pre-shoot (skin 0x5000093 at
+  the death log's spot) added before the chaser kill. Next: the approach's dragged fights (17
+  hits from one guard = the fight never won the trade) need the fight machinery's study —
+  cover, or the guards' own drops armed earlier.
+- (00:25 UTC, 11-03) The full 4-crate suite did not fit: the background suite.py was killed
+  between tool calls (the sandbox's known behaviour), the chunk runner's target-cache build
+  filled the disk (3.8 MB free, the linker failed; the cache wiped), and the repo-target
+  4-crate build alone exceeds the window's remainder. The four touched binaries ran instead
+  (the numbers above); the other levels' walks are untouched by construction (no shared file).
