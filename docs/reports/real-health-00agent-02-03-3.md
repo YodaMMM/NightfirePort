@@ -73,3 +73,14 @@ branch is `s/real-health-00agent-02-03-3`, cut from `origin/master` a71f9233.
 
 not visible to me (no token/credit/context figures are exposed to this session; nothing in the
 sandbox reports them).
+
+## ntfy failed
+
+All three fallbacks failed in order (2026-11-04 ~01:58 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "real-health-00agent-02-03-3: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. python3 urllib (fallback 2)
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → killed after 30 s with no output (connection never established)
