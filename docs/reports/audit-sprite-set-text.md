@@ -44,7 +44,7 @@ disc's USATxt.dat by `mp_status_strings_live` (the port's own FILES.BIN reader).
 | `MP_CheckForEndCondition` :61-64 (the 0x20000040/0x20000080 arm) | `TimeSpr` ← `Timer_Seconds2String((round_limit − round_clock)·100, 2)` every playing tick while `MPGame+0x194 > 0` and ch 0xfe clear | `hud::mp_panes` clock | **FIXED** (the gate, below) |
 | `MP_CheckForEndCondition` :144-147 (every other scenario) | `TimeSpr` ← the match clock, only while `MPSettings+0x1a0 != -1` and ch 0xfe clear (0xfe latches time-up) | `hud::mp_panes` clock (`settings.time_limit != -1`) | ✓ |
 | `MP_Update` case 0 → `MP_CheckForEndCondition` | (the writes above; state 0 only) | ✓ same window | ✓ |
-| `MP_Update` case 2 [M :42-50] | `StatusSpr` ← `sprintf(bind(0x2000028)="Time Up!", …, bind(0x1c9)="Press START")` — the FMT is the first bind (disasm 0x184da8-0x184ddc: `move $a1,$s0` after it overwrote the fmt register) and "Time Up!" has no `%s`, so the a3 bind is NEVER consumed — the line reads "Time Up!" alone; state → 3 | `status_line`'s `MpEndStatus::None` arm | **FIXED** (the port concatenated "Press START") |
+| `MP_Update` case 2 [M :42-50] | `StatusSpr` ← `sprintf("%s", bind(0x2000028)="Time Up!", bind(0x1c9)="Press START")`, the second argument unread | `status_line`'s `MpEndStatus::None` arm | **FIXED** (the port concatenated "Press START") |
 | `MP_Update` case 2 with scenario 0x10 | falls through to case 1 (`MP_SortOutWhoWon`) | the same fall-through in the port's state machine | ✓ |
 | `MP_Update` case 1 → `MP_SortOutWhoWon` 0x1848d0 | 0x10: "Player %s Won" 0x2000022 / "A Draw" 0x2000023 (the tie quirk [M :23-52]); FFA: exactly one qualifier → "Game Over : %s Won" = "%s%s %s" of (0x2000024, codename, 0x2000027) [M :55-85]; team games: "Game Over :A Draw" = "%s%s" of (0x2000024, 0x2000023), the third bind (0x1c9) again a dead arg [M :87-92] | `MpMatch::sort_out_who_won` rules.rs:584-648 + `status_line` | ✓ all four arms |
 | `MP_Update` case 6 at ≥2.5 s [M :82-84] | `StatusSpr` ← bind(0x2000049) = "Restarting" | `status_line`'s state-6 arm | ✓ |
@@ -63,11 +63,11 @@ disc's USATxt.dat by `mp_status_strings_live` (the port's own FILES.BIN reader).
 
 ## The fixes (each pinned by a test through the real path)
 
-1. **The time-up status read "Time Up!Press START"** — `MP_Update` case 2 sprintfs the status
-   with the FMT = `Txt_BindLabel(0x2000028)` ("Time Up!") and `Txt_BindLabel(0x1c9)` ("Press
-   START") in the a3 slot that "Time Up!"'s lack of a `%s` never consumes [M disasm
-   0x184da8-0x184ddc — the first bind's return is moved into $a1 through $s0, the second into
-   $a3; L the binds]. The port's `MpEndStatus::None` arm concatenated both labels.
+1. **The time-up status read "Time Up!Press START"** — `MP_Update` case 2's format is the plain
+   "%s" at 0x30cbf0, with `Txt_BindLabel(0x2000028)` ("Time Up!") its argument and
+   `Txt_BindLabel(0x1c9)` ("Press START") a spare one it never reads [M disasm 0x184da8-0x184de0:
+   a1 = s0, a2 = s1 in the jal's delay slot, a3 = the second bind; L ee_start_05.bin @0x30cbf0].
+   The port's `MpEndStatus::None` arm concatenated both labels.
    `status_line` now returns the game's single label [M]. Test: `mp_hud_pane` 5/5 (the None arm
    re-pinned), `mp_status_strings_live` 1/1 (the fifteen labels bound off the disc, including the
    case-2 pair).

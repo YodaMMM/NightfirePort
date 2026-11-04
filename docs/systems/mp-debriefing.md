@@ -84,10 +84,10 @@ The switch on `MPGame+0x188` [M 0x184bd0:36-93; offsets confirmed by disasm — 
 - **0** playing: `MP_Pickup_Process` + `MP_CheckForEndCondition` + `BOT_update` (the first and
   third are phase 2+ in the port).
 - **2** (time up): scenario 0x10 falls through to case 1; anything else sprintfs the status
-  with `Txt_BindLabel(0x2000028)` ("Time Up!") as the FMT and `Txt_BindLabel(0x1c9)` ("Press
-  START") in the never-consumed a3 slot — "Time Up!" has no `%s`, so the line reads "Time Up!"
-  alone [M disasm 0x184da8-0x184ddc: `move $a1,$s0` after the first bind overwrote the fmt
-  register, `move $a3,$v0` the second; L the USATxt binds, s/audit-sprite-set-text] — and sets
+  with the plain `"%s"` at 0x30cbf0 as the format, `Txt_BindLabel(0x2000028)` ("Time Up!") as its
+  argument and `Txt_BindLabel(0x1c9)` ("Press START") a spare one it never reads, so the line reads
+  "Time Up!" alone [M disasm 0x184da8-0x184de0: a1 = s0, a2 = s1 in the jal's delay slot, a3 = the
+  second bind; L ee_start_05.bin @0x30cbf0, s/audit-sprite-set-text] — and sets
   state **3** [M :42-50]. (This line used to say "Game Over :" 0x2000024 — that label belongs to
   the case-1 arms below.)
 - **1** (score end): `MP_SortOutWhoWon` 0x1848d0, which sets state **3** and writes the status
