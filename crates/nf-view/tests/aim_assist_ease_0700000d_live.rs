@@ -17,14 +17,18 @@
 //!
 //! Pinned on the real input path from the level start (no teleports), with the Wolfram P2K 0x02:
 //! the one weapon whose record removes both confounds — no aim-raise script (+0xB8 = 0 [L
-//! ee_start_05.bin weapon_data 0x2bf150 + 0x02·0x10c + 0xB8], so the aim bit follows the raw
+//! ee_start_05.bin weapon_data @0x2bf150 + 0x02·0x10c + 0xB8], so the aim bit follows the raw
 //! button at once [M 0x1a24c8:117-119] and there is no raise window) and zero spread (+0x24 = 0.0,
 //! +0x98 = 0.0 [L same record], so the spawned round's direction is the aim direction exactly).
-//! The route legs are the walkreal-0d ones to the ladder base; the lock is taken hip-firing
-//! (button up), then the pin holds the aim button and asserts, per tick, the exact 0.5 ease toward
-//! the centred cursor's manual offsets (0, 0), fires one converged round and asserts its
-//! direction equals the view direction, then releases the button and asserts the scan re-snaps
-//! (the offsets jump back up) — the sister.
+//! The stand is the walkreal-0d ladder top (the proven route legs + the #435 climb): the
+//! platform guard #33 posts ~16.5 u from it [L the cand dumps] — inside the Autoaim_Range 25 with
+//! a workable cone (k = wf 100 [L +0x14] · 0.01 · (1 − d/25): h ≈ 0.04, v ≈ 0.07 rad at 16.5). The
+//! view is steered to the guard's chest MINUS half a unit, so the pitch half of the snap is
+//! non-zero by construction while staying inside the cone. The lock is taken hip-firing (button
+//! up — the lock itself proves cone + the sensor LOS [M Check_AutoAim 0x1a73f8]); then the pin
+//! holds the aim button and asserts, per tick, the exact 0.5 ease toward the centred cursor's
+//! manual offsets (0, 0), fires one converged round and asserts its direction equals the view
+//! direction, then releases the button and asserts the scan re-snaps — the sister.
 
 #[path = "common/walker_b2.rs"]
 mod walker;
@@ -53,6 +57,65 @@ fn lockable(w: &Walker) -> Vec<(usize, f32)> {
     v
 }
 
+/// Every alive enemy, for the diagnostics: (index, dist, drawn, enabled, pos).
+fn enemies(w: &Walker) -> Vec<(usize, f32, bool, bool, [f32; 3])> {
+    let sim = w.scene.sim.as_ref().unwrap();
+    let eye = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
+    let mut v: Vec<(usize, f32, bool, bool, [f32; 3])> = sim.drones.list.iter().enumerate()
+        .filter(|(_, d)| d.present && !d.corpse && d.health > 0.0 && d.team == 1)
+        .map(|(i, d)| {
+            let dv = [d.pos[0] - eye[0], d.pos[1] - eye[1], d.pos[2] - eye[2]];
+            (i, (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt(), d.drawn, d.enabled, d.pos)
+        })
+        .collect();
+    v.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    v
+}
+
+/// Steer the view (yaw AND pitch, real turn/look input) toward the guard's chest MINUS half a
+/// unit until the hip-fire lock lands (the scan locks: cone + LOS proven by the lock itself).
+/// The turn itself flips the frustum cull (`drawn` = `visible_to`: the view frustum + clear rays
+/// [M 0x13a7a0's Vision_InView + the LOS]), so the loop starts from the nearest ALIVE enemy and
+/// lets the scan's own filter be the gate. Returns the target index and the post-lock snap
+/// (already halved by the scan-tail fold).
+fn hip_lock(w: &mut Walker, label: &str) -> Option<(usize, [f32; 2])> {
+    let Some(&(t0, _, _, en, _)) = enemies(w).iter().find(|&&e| e.1 < 24.0 && e.3) else { return None };
+    if !en { return None; }
+    let mut t = t0;
+    for k in 0..900 {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if let Some(cur) = sim.drones.aim_target {
+                if sim.drones.list[cur].health > 0.0 && sim.drones.list[cur].present && lockable(w).iter().any(|&(i, _)| i == cur) {
+                    let v0 = sim.drones.aim_offset;
+                    eprintln!("[{label}] target #{cur} locked at tick {k}, v0 {v0:?}");
+                    return Some((cur, v0));
+                }
+            }
+            if !enemies(w).iter().any(|&(i, _, _, _, _)| i == t) {
+                match enemies(w).iter().find(|&&e| e.1 < 24.0 && e.3) { Some(&(i, _, _, _, _)) => t = i, None => return None }
+            }
+        }
+        let (turn, look) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let dp = sim.drones.list[t].pos;
+            let eye = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
+            let dy = (dp[1] + 0.5) - 0.5 - eye[1]; // the chest MINUS half a unit: a non-zero snap
+            let dxz = ((dp[0] - eye[0]).powi(2) + (dp[2] - eye[2]).powi(2)).sqrt().max(0.5);
+            let mut e = (dp[0] - eye[0]).atan2(dp[2] - eye[2]) - sim.bond.yaw;
+            while e > std::f32::consts::PI { e -= std::f32::consts::TAU; }
+            while e < -std::f32::consts::PI { e += std::f32::consts::TAU; }
+            let pe = (dy / dxz).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+            let turn = if e.abs() < 0.008 { 0.0 } else { e.clamp(-0.08, 0.08) };
+            let look = if pe.abs() * std::f32::consts::FRAC_PI_2 < 0.006 { 0.0 } else { pe.clamp(-0.08, 0.08) };
+            (turn, look)
+        };
+        w.tick(Input { turn, look, ..Default::default() }, false);
+    }
+    eprintln!("[{label}] the turn loop timed out, aim_target {:?}", w.scene.sim.as_ref().unwrap().drones.aim_target);
+    None
+}
+
 #[test]
 fn the_aim_assist_eases_half_per_tick_and_the_aimed_round_goes_where_the_view_points() {
     let iso = iso();
@@ -72,7 +135,7 @@ fn the_aim_assist_eases_half_per_tick_and_the_aimed_round_goes_where_the_view_po
     w.scene.sim.as_mut().unwrap().auto_aim = true;
 
     // The Wolfram P2K 0x02 through the panel (the fix-aim-raise give): the real switch input
-    // rides the holster/draw cycle to the fully idle machine.
+    // rides the holster/draw cycle to the idle machine.
     let (status, sw) = nf_view::panel::apply(&mut w.scene, &[
         ("do".to_string(), "weapon".to_string()),
         ("id".to_string(), "0x02".to_string()),
@@ -95,8 +158,10 @@ fn the_aim_assist_eases_half_per_tick_and_the_aimed_round_goes_where_the_view_po
         let s = w.scene.sim.as_ref().unwrap();
         assert!(s.gun.switch_state == 0 && !s.gun.fire_state && s.gun.reload_state == 0, "the P2K never settled");
     }
-    // The walkreal-0d route legs to the ladder base, real input (the crossfire pool is the
-    // walker's own top-up here — this pin is about the aim offsets, not survival).
+
+    // The walkreal-0d route legs to the ladder #435 top — the stand with a guard inside the
+    // Autoaim_Range cone (real input; the crossfire pool is the walker's own top-up — this pin is
+    // about the aim offsets, not survival).
     w.walk_to(Wp::new(180.6, 11.2, -208.8).r(0.9), "the BodyArmourHeavy #525");
     assert!(w.try_walk_to(Wp { at: [181.0, 7.5, -227.5], act: Act::None, arrive: 1.5 }, "the platform drop"), "the drop must reach the ground");
     for (at, r, label) in [
@@ -109,41 +174,19 @@ fn the_aim_assist_eases_half_per_tick_and_the_aimed_round_goes_where_the_view_po
     ] {
         assert!(w.try_walk_to(Wp { at, act: Act::None, arrive: r }, label), "{label} must walk");
     }
-    let cands = lockable(&w);
-    eprintln!("[lock] bond {:?} lockable within 24: {:?}", bond_pos(&w), cands);
-    assert!(!cands.is_empty(), "no enemy within the Autoaim_Range 25 at the ladder base — the pin needs a guard in range");
+    assert!(w.try_walk_to(Wp::at(212.47, 16.0, -234.51, Act::Ladder { top_y: 15.6 }), "climb ladder #435"), "the ladder climb must top out");
+    assert!(bond_pos(&w)[1] > 16.0, "the ladder tops at y ~17.37 [D]");
 
-    // HIP-FIRE LOCK (button up): turn toward the nearest lockable guard and stop at a deliberate
-    // ~0.04 rad residual so the scan's snap is non-zero; the scan runs every button-up tick and
-    // locks the guard (cone + LOS proven by the lock itself).
-    let mut t = cands[0].0;
-    let mut locked = false;
-    let mut v0 = [0.0f32; 2];
-    'turn: for _ in 0..600 {
-        let err = {
-            let sim = w.scene.sim.as_ref().unwrap();
-            if !lockable(&w).iter().any(|&(i, _)| i == t) {
-                // The pick died or left the range: re-pick the nearest.
-                match lockable(&w).first() { Some(&(i, _)) => t = i, None => break 'turn }
-            }
-            let dp = w.scene.sim.as_ref().unwrap().drones.list[t].pos;
-            let desired = (dp[0] - sim.bond.pos[0]).atan2(dp[2] - sim.bond.pos[2]);
-            let mut e = desired - sim.bond.yaw;
-            while e > std::f32::consts::PI { e -= std::f32::consts::TAU; }
-            while e < -std::f32::consts::PI { e += std::f32::consts::TAU; }
-            e
-        };
-        if w.scene.sim.as_ref().unwrap().drones.aim_target == Some(t) { locked = true; break; }
-        let turn = if err.abs() < 0.04 { 0.0 } else { err.clamp(-0.08, 0.08) };
-        w.tick(Input { turn, ..Default::default() }, false);
-        let sim = w.scene.sim.as_ref().unwrap();
-        if let Some(cur) = sim.drones.aim_target {
-            if lockable(&w).iter().any(|&(i, _)| i == cur) { t = cur; locked = true; v0 = sim.drones.aim_offset; break; }
-        }
+    // The stand's enemies, nearest first (the diagnostics double as the range evidence).
+    for &(i, d, drawn, en, p) in enemies(&w).iter().take(6) {
+        eprintln!("[cand] #{i} pos ({:.1},{:.1},{:.1}) d {:.1} drawn {} en {}", p[0], p[1], p[2], d, drawn, en);
     }
-    eprintln!("[lock] target #{t} locked {locked} v0 {:?}", v0);
-    assert!(locked, "the hip-fire lock never landed on a guard (button up) [M Check_AutoAim 0x1a73f8]");
-    assert!(v0[0].abs() > 0.004, "the lock snap must be non-zero for the ease to be observable, got {:?}", v0);
+
+    // HIP-FIRE LOCK (button up) from the ladder top.
+    let Some((t, v0)) = hip_lock(&mut w, "lock") else {
+        panic!("no hip-fire lock from the ladder top — the pin needs a guard in the Autoaim_Range cone (lockable: {:?})", lockable(&w));
+    };
+    assert!(v0[0].abs() > 0.004 || v0[1].abs() > 0.004, "the lock snap must be non-zero for the ease to be observable, got {:?}", v0);
 
     // LAW 1 — the ease: hold the aim button (0x02 has no raise script: the bit sets on the press
     // tick) and assert, EVERY tick, the exact 0.5-per-tick ease toward the manual offsets. The
@@ -215,9 +258,9 @@ fn the_aim_assist_eases_half_per_tick_and_the_aimed_round_goes_where_the_view_po
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let (tgt, off) = (sim.drones.aim_target, sim.drones.aim_offset);
-        eprintln!("[sister] post target {:?} offsets {tgt:?} -> {off:?}", tgt);
-        assert!(off[0].abs() > 0.002,
-            "with the button up the scan must re-snap the offsets (they jumped {pre:?} -> {off:?}) [M Player_AutoAim 0x1a7c98:60-109 — the Check_AutoAim branch on the button-up ticks]");
+        eprintln!("[sister] post target {:?} offsets {:?}", tgt, off);
+        assert!(off[0].abs() > 0.002 || off[1].abs() > 0.002,
+            "with the button up the scan must re-snap the offsets (they went {pre:?} -> ({tgt:?}, {off:?})) [M Player_AutoAim 0x1a7c98:60-109 — the Check_AutoAim branch on the button-up ticks]");
         assert!(tgt.is_some(), "the scan re-locked a guard on the release tick (a guard is still in the cone) [M 0x1a73f8]");
     }
 }
