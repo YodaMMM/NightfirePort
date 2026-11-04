@@ -1678,8 +1678,27 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
 /// bullet.rs damage_factor] and the guards'/clones' hit chance by Accuracy Normal [M
 /// DroneWeap_DoBulletAccuracy 0x179740:74-88]; Drone_Create 0x136be0:49's min-difficulty gate
 /// spawns the param-2 placements. Real input only; no health/ammo/channel writes.
+///
+/// IGNORED with the measured round (real-health-agent-16-1b-2, NF_DMG_TRACE on this tree):
+/// the 71.4 of the 100 the d2 ledger loses is the SOUTH GALLERY — four AR guards
+/// (0x500008c/0x50000b2/0x50000b1, 10-25 hp) patrolling z −102..−112 at y 6.7 (#1 at y 0.8) —
+/// whose first landed round is tick 455 at the ramp foot (their fields never reach the spawn
+/// legs), above the plain shooters window's dy 6.0 so the ramp-foot fights trade with the
+/// close ground pair while the gallery plinks free. TRIED this round: (a) a load-time (48, 18)
+/// shooters window — the fights engaged the gallery across the pit from the lane east (one
+/// fight, dead at 1271; the wide pool breaks the early geometry); (b) the window gated from
+/// the ring's east end (y 5.9, dy 0.8) — the fights DID take the gallery 1v1 and killed
+/// #5/#1/#3/#1 on the ring, but the ring trades cost 44 and Bond entered the chaser fight at
+/// 7.6 (dead 8435); (c) zero-movement shoot_point stands on the gallery from the spawn — every
+/// guard fails the eye-ray visible() gate from there (the ring structure blocks; the stands
+/// all skipped, the timeline byte-identical); (d) static-spot stands at the ring east — Bond
+/// died AT the stands (2189) under the crossfire. NEXT LEVERS: a cover-shaped approach (the
+/// fights' own flank machinery on the gallery from the ring, one guard at a time, with the
+/// ring's south rim as the break), or an armour pickup before the ramp foot (none found on
+/// the chain set), or the main agent's live scout of whether the gallery is reachable on foot
+/// (the station's west side?) — the player answer this route is missing.
 #[test]
-#[ignore = "Agent: Bond dies on real health, tactics not a port gap (the s/real-health-agent-difficulty-16-1b-41-4a report); follow-up real-health-agent-16-1b-2"]
+#[ignore = "Agent: Bond dies on real health — the south gallery (four AR guards above z -102..-112) plinks 71.4 of the 100 free from tick 455; the ring-gated (48,18) window makes the fights take them but the ring trades still cost 44 (entered the chaser at 7.6); levers: a cover-shaped gallery approach from the ring, an armour pickup, a live scout of the gallery's foot access"]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
     walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2));
 }

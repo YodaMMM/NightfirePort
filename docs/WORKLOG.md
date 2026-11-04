@@ -89,3 +89,25 @@ tactics, not a port gap). Read docs/reports/real-health-agent-difficulty-16-1b-4
 origin/s/real-health-agent-difficulty-16-1b-41-4a, re-route the way a player would. Real input
 only; no top-ups; helpers opt-in. Remove each ignore when green; every walkreal_*_live; the
 full suite total line.
+
+- [05:12 UTC] Round outcome. 16 (d2): the death ledger attributed — 71.4 of the 100 is the
+  SOUTH GALLERY (four AR guards, 0x500008c/0x50000b2/0x50000b1, 10-25 hp, patrolling
+  z −102..−112 at y 6.7, #1 at y 0.8) plinking free from tick 455 (the ramp foot — their
+  fields never reach the spawn legs; they sit above the plain shooters window's dy 6.0 so the
+  ramp-foot fights trade with the close ground pair). Four levers measured this round: the
+  load-time (48,18) window (the fights crossed the pit from the lane east — dead 1271, one
+  fight), the ring-east-gated (48,18) window (the fights TOOK the gallery 1v1 and killed
+  #5/#1/#3/#1 on the ring but the ring trades cost 44 — entered the chaser fight at 7.6,
+  dead 8435), zero-movement shoot_point stands from the spawn (every guard fails visible()
+  from there — the ring structure blocks; timeline byte-identical), static-spot stands at the
+  ring east (dead AT the stands, 2189). The ignore message now carries the law + the levers;
+  the file is otherwise master-identical. 1b (d2): the current master state measures 36 hits,
+  death 9856 (the prior branch's 32-hit state was its own tree); the death ledger — the wave
+  ring (six 0x5000078 astronauts at 7.9-10.0 u, −3.5/hit) outpaces the fight's dps, Drake
+  (#19, 0x30) 28.0 in 2 hits. The prior round's named lever (the dry window 60 → 30) measured
+  37 hits / 9405 — neutral-to-worse, reverted. 1b left master-identical. Both binaries whole:
+  16 14/0+1i, 1b 17/0+1i. The other 23 walkreal binaries: untouched by construction (no
+  shared-file change this round — the common/ dir is clean). Next round's levers in the
+  report: the 16 cover-shaped gallery approach / the gallery's foot access (a live scout);
+  the 1b exposure scoring against the spawn band above the deck (the waves spawn at y 10-12,
+  the shelter floats at y 3-6 — a hold the down-shooters cannot see).
