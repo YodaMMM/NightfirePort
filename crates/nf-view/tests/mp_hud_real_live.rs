@@ -88,3 +88,22 @@ fn a_local_kill_posts_the_kill_message() {
     let (_, text) = msgs.iter().find(|(l, _)| *l == nf_game::mp::hud::KILL_MSG_LABEL).unwrap();
     assert!(text.starts_with("Killed "), "{text}");
 }
+
+/// A pickup line in multiplayer is type 1, the INFO pane's, never the pickup bar [M Text_AddMsg
+/// 0x1b0c30:90-93].
+#[test]
+fn a_pickup_line_goes_to_the_info_pane() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = nf_view::load_mp_carry(&iso, "07000023.bin", false, None, settings(3)).expect("load");
+    let sim = scene.sim.as_mut().unwrap();
+    sim.drones.taken.push((0, nf_game::pickup::Taken::Armour));
+    sim.step_bond(nf_game::player::Input::default(), false, false, false);
+    assert!(sim.hud.msgs.is_empty(), "no bar line");
+    assert!(sim.hud.info_msgs.iter().any(|m| m.text.contains("Armor")), "{:?}", sim.hud.info_msgs.iter().map(|m| m.text.clone()).collect::<Vec<_>>());
+    // a second line halves the queued one's timer [M 0x1b0c30:94-132]
+    let before = sim.hud.info_msgs.front().unwrap().time;
+    sim.drones.taken.push((0, nf_game::pickup::Taken::Armour));
+    sim.step_bond(nf_game::player::Input::default(), false, false, false);
+    assert_eq!(sim.hud.info_msgs.len(), 2);
+    assert!(sim.hud.info_msgs.front().unwrap().time < before / 2.0 + 0.5, "halved");
+}
