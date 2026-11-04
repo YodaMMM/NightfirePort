@@ -2114,6 +2114,31 @@ impl Scripts {
         (out, present)
     }
 
+    /// The part objects' world matrices, the same resolution `copter_part_targets` walks — the
+    /// missile pods' `Mat_GetDir(pod+0x90)` facing (`Copter_FireMissile` 0x17d9f0:78) and the gun
+    /// pair's `Mat_LookAt` targets (`Copter_FireGun` 0x17d828:60-62 — the game aims the barrel
+    /// objects; the port keeps no barrel objects to aim, the firing math needs only the muzzle).
+    /// An entity carries its own matrix; an anim the matrix of the stream that owns it (the same
+    /// source `copter_part_targets` reads for its centre).
+    pub fn copter_part_matrices(&self, placement: usize, parts: &[Option<(usize, u32)>; 9], w: &dyn World) -> [Option<Mat4>; 9] {
+        let mut out: [Option<Mat4>; 9] = [None; 9];
+        let Some(p) = self.players.iter().find(|p| p.placement == placement && !p.deleted) else { return out };
+        if p.hidden { return out; }
+        let s = p.info[p.cur].as_ref();
+        for (slot, reg) in parts.iter().enumerate() {
+            let Some((o, h)) = *reg else { continue };
+            let m = match self.objects.list.get(o).and_then(|x| x.as_ref()) {
+                Some(Obj::Entity { hash, matrix, .. }) if *hash == h => Some(*matrix),
+                Some(Obj::Anim { skin, .. }) if *skin == h => {
+                    s.and_then(|s| (0..s.streams.len()).find(|&i| s.streams[i].obj == Some(o)).and_then(|i| s.stream_matrix(i, &self.objects, w)))
+                }
+                _ => None,
+            };
+            out[slot] = m;
+        }
+        out
+    }
+
     /// A synthetic one-shot player (fix-objects2): mode 1 (plays once from spawn), no gate, no
     /// trigger — the game's hidden `SP_Create` inside `Copter_Create` 0x17d340 plays the copter's
     /// flight script the same way once its gate channel opens [M 0x1dbc08's mode dispatch].

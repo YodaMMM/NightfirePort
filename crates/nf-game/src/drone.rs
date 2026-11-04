@@ -12717,6 +12717,10 @@ pub struct Drones {
     /// the lock pass (the match fires `Lock_Unlock` 0x1b0650 → the hold loop's channel). `None`
     /// = no keypad open (the game's state 0/1/2/5 locks refuse the E).
     pub keypad: Option<(usize, crate::lock::Keypad)>,
+    /// hind-flight-pin: the game's `attackmode_159` global [M Copter_Update 0x17dbb8:184] —
+    /// `Rand_Rand(10)` on every case-2 entry, the missile/gun pick reads `& 1`. One word shared
+    /// by every copter, like the game's.
+    pub copter_attackmode: u32,
 }
 
 /// mp-world-sync (agent 9): one body as the online shared world sees it (see `Drones::net_bodies`).
@@ -13008,6 +13012,10 @@ impl Drones {
             // attached by the host from ACTION.ELF (`attach_snd2lbl`); empty = no spoken subtitles.
             snd2lbl: Vec::new(),
             sfx_durations: Vec::new(),
+            // hind-flight-pin: `attackmode_159` [M Copter_Update 0x17dbb8:184 — `Rand_Rand(10)`
+            // on every case-2 entry, the missile/gun pick reads `& 1`]. The game keeps ONE global
+            // word shared by every copter.
+            copter_attackmode: 0,
     };
         drones
     }
@@ -13057,6 +13065,35 @@ impl Drones {
     pub fn keypad_digit(&mut self, d: u32) {
         if let Some((_, kp)) = self.keypad.as_mut() {
             kp.digit(d);
+        }
+    }
+
+    /// hind-flight-pin: the copter shot's `Bullet_init(−1, copter, barrel, weapon_data +
+    /// id·0x10c, pos, dir, 0xffff)` [M `Copter_FireGun` 0x17d828:85-90 / `Copter_FireMissile`
+    /// 0x17d9f0:88-97] — the same spawn the GT turret's Fire arm makes [M 0x180498 case 4]: the
+    /// owner is not the player and the barrel not a class-3 drone, so the spread scale stays 1.0
+    /// and the bloom reads the record (+0x24, +0x68) [M 0x12c5a0:134-166 + disasm
+    /// 0x12c710-0x12c858] — `crate::bullet::spread`'s three draws. The owner is the port's
+    /// not-a-drone mark (`usize::MAX`) — every hit-time modifier that reads the shooter skips,
+    /// the same NULL-gating the game's copter owner takes (`Drone_ModBulletDamage`'s drone
+    /// reads). Unlike `GT_Update` 0x180498:349 there is NO extra pad draw after `Bullet_init`
+    /// in either fire function.
+    fn spawn_copter_bullet(&mut self, d: &Data, pos: V3, dir: V3, weapon: u16) {
+        if let Some(w) = d.weapons.records.get(weapon as usize) {
+            let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+            let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
+            let dir = crate::bullet::spread(dir, f32_at(0x24), flags68, &mut self.rng);
+            let mut b = crate::bullet::Bullet {
+                pos, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
+                damage: f32_at(0x0c), owner: usize::MAX, state: 0, weapon,
+                flyby: d.weapons.flyby(weapon as usize), bounces: 0,
+                // Guard-side deviation: the glass pass stays unmodelled (see the close-combat
+                // spawn in drone.rs).
+                glass_pass: false,
+                ..crate::bullet::Bullet::TAIL
+            };
+            b.init_fuse(w);
+            self.bullets.push(b);
         }
     }
 
@@ -18612,12 +18649,33 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // either way, and the queued blast's first tick is the next frame's age-1 like every
         // other blast's [M 0x134630 obj+0xEC = the creation time]).
         let mut copter_death_blasts: Vec<V3> = Vec::new();
-        for c in &mut self.copters {
+        // hind-flight-pin: the state-2 attack requests, drained after the loop (the audio board,
+        // the bullet pool and the music board are `Drones` fields the split borrow cannot reach
+        // mid-iteration; the game makes these calls inline inside `Copter_Update` [M 0x17dbb8:
+        // 189-198] — the copter updates before the frame's other consumers either way).
+        let mut copter_events: Vec<crate::copter::CopterEvent> = Vec::new();
+        // hind-flight-pin: the spot/attack inputs [M 0x17dbb8:138-243]. `DiffMod` [M 0x17d340:74-93]
+        // = the same difficulty multiplier the hp takes; the player pos = obj+0x30, the sphere
+        // centre = +0x80 (the port's `sph`).
+        let diff_mod = crate::copter::copter_hp_mult(self.difficulty);
+        for (cidx, c) in self.copters.iter_mut().enumerate() {
             // copter-hitdata-damage: the slot-3 emitter's position (the gas branch's gate
             // `rec+0x3c != 0` + its obj+0x80) refreshes from the SP part targets each tick.
             let (targets, _) = self.scripts.copter_part_targets(c.placement, &c.parts, d);
             c.slot3_pos = targets[3].map(|(p, _)| p);
-            let (unhide, posed, death_blast) = c.update(&paths, &mut self.channels, &mut self.gas, frame, explode_level, &mut self.rng);
+            let mats = self.scripts.copter_part_matrices(c.placement, &c.parts, d);
+            let mut ctx = crate::copter::CopterCtx {
+                player: Some((player.pos, player.sph)),
+                world: d.world,
+                diff_mod,
+                level: d.level,
+                part_poses: &targets,
+                part_mats: &mats,
+                attackmode: &mut self.copter_attackmode,
+            };
+            let (unhide, posed, death_blast, events) = c.update(&paths, &mut self.channels, &mut self.gas, frame, explode_level, &mut self.rng, &mut ctx);
+            for ev in events { copter_events.push(ev); }
+            let _ = cidx;
             if unhide { self.scripts.unhide_sp(c.placement); }
             if posed { self.scripts.pose_copter_sp(c.placement, c.matrix); }
             if let Some(p) = death_blast { copter_death_blasts.push(p); }
@@ -18647,6 +18705,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         // Copter_Delete 0x17e568: LList_Remove(0x2a3830, rec) [M :9] — the deleted copters leave the list.
         self.copters.retain(|c| !c.landed);
+        // hind-flight-pin: the state-2 attack requests [M 0x17dbb8:189-198]. The game makes these
+        // calls inside `Copter_Update` — the port's boards live here; the order (music, then the
+        // shot's sound + bullet) is the case-2 body's.
+        for ev in copter_events {
+            match ev {
+                crate::copter::CopterEvent::Music => self.music.event(2, 1),
+                crate::copter::CopterEvent::Gun { muzzle, dir, weapon, sound } => {
+                    // `Sound_Play3D(100, −1, −1, 0x5df, muzzle)` [M 0x17d828:82].
+                    self.audio.play3d(sound, muzzle, None);
+                    self.spawn_copter_bullet(d, muzzle, dir, weapon);
+                }
+                crate::copter::CopterEvent::Missile { pos, dir, weapon } => {
+                    self.spawn_copter_bullet(d, pos, dir, weapon);
+                }
+            }
+        }
         // The script players' tick head (the create-time load beat — the game does it during the
         // level load [M 0x1db9a8:81-86]): the players THEMSELVES update from the control walk
         // below, in the game's list order (fix-script-start-tick — the old all-players-here beat
