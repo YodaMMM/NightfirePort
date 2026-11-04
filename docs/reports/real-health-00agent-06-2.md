@@ -94,3 +94,16 @@ this report and the merge).
 ## Usage
 
 Not visible to me: this environment exposes no token, cost or context-window figures for the session.
+
+## ntfy failed
+
+All three prescribed fallbacks failed; exact outputs:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20001 milliseconds`.
+2. `python3 -c "import urllib.request as u; u.urlopen(...)"` →
+   `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`.
+3. `wget -q -O- --post-data "real-health-00agent-06-2: done" https://ntfy.sh/nightfire-yoda-8k3x` →
+   no output, killed at the 30 s timeout (exit 124).
+
+Everything else (the branch push, the report commit, finish.sh) succeeded.
