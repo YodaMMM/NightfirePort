@@ -99,10 +99,8 @@ fn frag_drop(x: f32, y: f32, z: f32) -> nf_game::grenade::Grenade {
         pos: [x, y, z], velocity: [0.0, 0.0, 0.0], speed: 0.1667,
         travelled: 0.0, range: 210.0, damage: 100.0, radius: 8.0,
         weapon_type: 0x34, mesh: 0, owner: 0, state: 0, bounces: 0,
-        smoke_popped: false, resting: false, stuck: false, seek_target: None, phase: None,
+        smoke_popped: false, resting: false, stuck: false, seek_target: None, phase: None, burn: 0, defused: false,
     }
-burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
-defused: false,
 }
 
 /// Count the 0x51c bounce-sound starts per tick over the drop's life.
@@ -180,8 +178,6 @@ fn thrown_frag_probe() {
     let g = frag_drop(SPOT[0], floor + 1.2, SPOT[2]);
     let (starts, trace) = run_drop(&l, nf_game::grenade::Grenade {
         velocity: [sp * v, sp * v, 0.0], ..g
-    burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
-    defused: false,
     }, 400);
     for line in &trace { eprintln!("{line}"); }
     let all: Vec<String> = starts.iter().map(|(t, id)| format!("t{t}:{id:#x}")).collect();
@@ -207,8 +203,6 @@ fn wall_hit_still_sounds() {
     let g = frag_drop(SPOT[0], floor + 1.2, SPOT[2]);
     let (starts, trace) = run_drop(&l, nf_game::grenade::Grenade {
         velocity: [wall.0[0] * v, 0.0, wall.0[2] * v], ..g
-    burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
-    defused: false,
     }, 400);
     for line in &trace { eprintln!("{line}"); }
     let all: Vec<String> = starts.iter().map(|(t, id)| format!("t{t}:{id:#x}")).collect();
@@ -228,8 +222,6 @@ fn skim_probe() {
     let g = frag_drop(SPOT[0], floor + 0.05, SPOT[2]);
     let (starts, trace) = run_drop(&l, nf_game::grenade::Grenade {
         velocity: [0.1667, 0.0, 0.0], ..g
-    burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
-    defused: false,
     }, 400);
     for line in &trace { eprintln!("{line}"); }
     let all: Vec<String> = starts.iter().map(|(t, id)| format!("t{t}:{id:#x}")).collect();

@@ -128,10 +128,8 @@ pub fn grenade_at(d: &Data, weapon_type: u16, pos: [f32; 3]) -> nf_game::grenade
         resting: true,
         stuck: false,
         seek_target: None,
-        phase: None,
+        phase: None, burn: 0, defused: false,
     }
-burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
-defused: false,
 }
 
 fn idx(sim: &Drones, placement: usize) -> usize {
