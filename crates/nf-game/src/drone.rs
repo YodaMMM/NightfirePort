@@ -1691,6 +1691,11 @@ pub struct Drone {
     pub alpha: f32,
     /// A switch channel to raise after the drone's update (`SetDeathChannel`).
     pub raise: Option<u8>,
+    /// audit-text-lines: a HostageSaved ENTER ran this tick — the Drones tick posts the rescue
+    /// INFO message for it. `DroneFunc_HostageSaved` 0x1441c0:20-51 posts the message inside the
+    /// ENTER, but the state handler has no `Drones` access (the `raise` pattern): the tick's
+    /// drain takes this and counts it into `Drones::hostage_saves` (0x1441c0's `DAT_00298fac`).
+    pub hostage_saved: bool,
     /// `DCVars+0x2B0`: the hostage's captor link (`NDrone2_SetupHostageKiller` 0x144030 — the
     /// (the execution-scene setup downstream of this link — `NDrone2_SetupHostageExecute`
     /// 0x14a808, from `NDrone2_DSTATE_HostageKillerAttack` 0x15c940 [M caller grep] — copies the
@@ -2090,7 +2095,7 @@ impl Drone {
             // init-forced-0x90 stand-in (kiko::chaser_death_channel) is removed.
             death_channel: param(12) as u8,
             special_death: param(13), special_spot: pos, special_yaw: yaw,
-            stationary: param(13) != 0 && param(13) != 0x0600_021f, alpha: 255.0, raise: None,
+            stationary: param(13) != 0 && param(13) != 0x0600_021f, alpha: 255.0, raise: None, hostage_saved: false,
             head_yaw: 0.0, head_pitch: 0.0, tracking: false, track_recheck: 0, aim_pitch: 0.0,
             captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(), voice_type: voice_type(skin), female: matches!(skin & 0xffff, 0x0e | 0x0f | 0x10 | 0x11 | 0x52 | 0x15 | 0x20 | 0x22..=0x24 | 0x17 | 0x18 | 0x2b | 0x2d | 0x34 | 0x3b | 0x3c | 0x5e), voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0,
             facial_talk: None, facial_talk_start: 0, facial_talk_fired: 0, facial_talk_pending: None, facial_played: Vec::new(), talk_line: None, talk_track: false, talk_track_until: 0, facial_last_stamp: None,
@@ -9206,6 +9211,11 @@ impl Drone {
                 self.alert_status_set(0, frame); // [M 0x15ccf0 case 1] — the status byte; no +0x50C write
                 self.captor = None;
                 if self.second_channel != 0 && self.raise.is_none() { self.raise = Some(self.second_channel); }
+                // audit-text-lines — `DroneFunc_HostageSaved` 0x1441c0:20-51, the part after the
+                // channel raise: the rescue INFO messages. The message rides the pending flag
+                // (the handler has no `Drones` access — the `raise` pattern); the tick's drain
+                // counts it and posts through `info_labels`.
+                self.hostage_saved = true;
                 if self.find_run_to_point(d) {
                     self.return_state = HOSTAGE_HIDE; // +0x5a2 = 0xe [M 0x15ccf0:42]
                     self.set_state(HOSTAGE_GO_TO_GOAL);
@@ -12288,6 +12298,13 @@ pub struct Drones {
     /// ("Obtained Lock Keycode %c%c%c%c") over `KeyCodes[i]` and post it as type 1 for 0xb4
     /// ticks; the Sim binds and formats them into its INFO pane.
     pub info_codes: Vec<([u8; 4], f32)>,
+    /// The hostages saved this level — `DroneFunc_HostageSaved` 0x1441c0's counter `DAT_00298fac`
+    /// [M 0x1441c0:13]: incremented on every HostageSaved ENTER and read back to pick the rescue
+    /// INFO message (first save → 0x200004f "1 of 2 hostages released", a later save → 0x2000050
+    /// "All hostages released"). The game's global has no other reader or writer in ACTION.ELF
+    /// (the bss clear per level load is its reset [S]), so the port's per-level `Drones` zero
+    /// default is that reset.
+    pub hostage_saves: u32,
     /// The mission's own end (`Mission_Update` 0x182c60 case 4's `ResetMap_LevelToLoad(LevelToEndTo)`
     /// to the front end or an outro/interlude code, not the next 0x0700 level): the host runs the
     /// game's end sequence (the outro movie when the level has one, then the results page).
@@ -12877,6 +12894,7 @@ impl Drones {
             movie_request: None,
             info_labels: Vec::new(),
             info_codes: Vec::new(),
+            hostage_saves: 0,
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
             bond_door_skip: false, // the boot value latches at the Mission_Init site (Player_Init 0x1910f8's write)
@@ -20112,6 +20130,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 self.audio.play3d(id, pos, None);
             }
             if let Some(c) = dr.raise.take() { self.channels.set(c as u32, 1, frame); }
+            // audit-text-lines — `DroneFunc_HostageSaved` 0x1441c0:20-51, the rescue INFO message
+            // half of the save (the ENTER sets the pending flag). Level-gated to 0x7000002/0x7000003
+            // [M :20-34 — any other GameState returns]; the count `DAT_00298fac` is read AFTER the
+            // increment [M :13-14] and picks the label: decomp, count 1 (the first save — the
+            // "before == 0" arm forces "after == 1" and always falls through) posts
+            // `Text_AddMsg(0, 0, 1, Txt_BindLabel(0x200004f), 0, 0xb4)` ("1 of 2 hostages
+            // released") and every later save posts 0x2000050 ("All hostages released") the same
+            // way [M :35-51]. `info_labels` is the type-1 INFO path the locked exit rides; the
+            // view drains it into the HUD pane.
+            if dr.hostage_saved {
+                dr.hostage_saved = false;
+                if self.level_current == 0x0700_0002 || self.level_current == 0x0700_0003 {
+                    self.hostage_saves += 1;
+                    let label = if self.hostage_saves == 1 { 0x0200_004f } else { 0x0200_0050 };
+                    self.info_labels.push((label, 180.0)); // 0xb4 [M 0x1441c0:51]
+                }
+            }
             // `DroneFunc_OnInitDeath`'s verdict: the FailLabel event + the fail channel [M 0x13e560
             // applied per 0x145bd0's reasons; fix-actors]. The monitor's standing hooks (ch 0x60/0x61
             // → the label + ch 99) take it from here [M 0x1827d8:98-107].
@@ -21644,7 +21679,7 @@ mod tests {
             tase_recover: 0,
             dart_recover: 0,
             tase_fall_anim: 0,
-            stationary: false, alpha: 255.0, raise: None,
+            stationary: false, alpha: 255.0, raise: None, hostage_saved: false,
             velocity: [0.0; 3], in_air: false, on_surface: true,
             // astronaut zero-G:
             thrust: false,
