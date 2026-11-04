@@ -18473,7 +18473,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // owner (the game's MP bots are Drone_Create objects [M BOT_init 0x1249e8:139]; their class
         // byte's trigger credit is the one residual for a live check). The reach laws are the ones
         // above. [M the walk; the port's per-body design is the MP port design].
-        let player_touchers: Vec<crate::triggers::Toucher> = match &self.net_bodies {
+        let mut player_touchers: Vec<crate::triggers::Toucher> = match &self.net_bodies {
             None => vec![{
                 if player.crouched {
                     // The crouch IS a different pick arm in the game, and `body` already carries
@@ -18489,7 +18489,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // arm. The standing stance keeps the measured box reach below (the
                     // truck-chain/park-plate calibrations live there).
                     let (a, b, r) = player.body;
-                    crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging }
+                    crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging, seg_only: false }
                 } else {
                     // trigger-plane-records: the standing stance NOW USES the game's HITTEST
                     // segment (`Player_Collision` 0x194df0's default arm A = pos+up·0.275, B =
@@ -18517,17 +18517,25 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // under the one-sided law (the trace played crouched only; the live check
                     // stands in the 0a report).
                     let (a, b, r) = player.body;
-                    crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging }
+                    crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging, seg_only: true }
                 }
             }],
             Some(bodies) => bodies.iter().filter(|b| b.alive).map(|b| if b.bot {
-                crate::triggers::Toucher { a: [b.pos[0], b.pos[1] - 1.0, b.pos[2]], b: b.head, r: 0.4, drone: true, skin: 0, contain: true }
+                crate::triggers::Toucher { a: [b.pos[0], b.pos[1] - 1.0, b.pos[2]], b: b.head, r: 0.4, drone: true, skin: 0, contain: true, seg_only: false }
             } else {
                 crate::triggers::Toucher { contain: !b.hanging, ..crate::triggers::Toucher::player([b.pos[0], b.pos[1] - 0.6, b.pos[2]]) }
             }).collect(),
         };
+        // The standing body's UPPER reach: the HITTEST segment tops at pos+0.825, but plates above
+        // that fire in the game — 07000005's gatehouse ch 0x5C quad at y 27.05 over a standing
+        // pos 25.88 (the truck hand-off, t1884 [D fix-truck]) and 07000011's #235 at ~pos+0.85.
+        // The measured box (feet pos-0.6, top pos+1.26, r 0.55) keeps that reach beside the
+        // segment's low reach until the game's upper contact is pinned. // [S] unverified shape
+        if self.net_bodies.is_none() && !player.crouched {
+            player_touchers.push(crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) });
+        }
         let touchers: Vec<crate::triggers::Toucher> = player_touchers.into_iter()
-            .chain(self.list.iter().filter(|x| x.enabled).map(|x| crate::triggers::Toucher { a: [x.pos[0], x.pos[1] - 1.0, x.pos[2]], b: x.head(), r: 0.4, drone: true, skin: x.skin, contain: true }))
+            .chain(self.list.iter().filter(|x| x.enabled).map(|x| crate::triggers::Toucher { a: [x.pos[0], x.pos[1] - 1.0, x.pos[2]], b: x.head(), r: 0.4, drone: true, skin: x.skin, contain: true, seg_only: false }))
             .collect();
         drop(prof_pre);
         { let _p = crate::prof::scope("drones: Trigger_Calc"); crate::triggers::calc(d.level, &mut self.triggers, &mut self.channels, &touchers, &self.bullet_contacts_prev, frame); }
@@ -18764,11 +18772,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for (o, kind, params, hash, m) in live {
             let tris: Vec<[V3; 3]> = d.world.shape(hash).map(|s| s.iter().map(|t| t.map(|p| nf_formats::placement::transform(&m, p))).collect()).unwrap_or_default();
             match self.triggers.iter_mut().find(|t| t.script == Some(o)) {
-                Some(t) => t.set_tris(tris),
+                Some(t) => { t.set_tris(tris); t.planes.clear(); }
                 None => {
                     let k = if kind == 0xea { crate::triggers::kind::TOUCH_ONCE } else { crate::triggers::kind::TOUCH };
                     let q = |i: u32| params.get(i as usize).copied().unwrap_or(0);
-                    if let Some(mut t) = crate::triggers::Trigger::from_params(usize::MAX - o, k, q, tris) { t.script = Some(o); self.triggers.push(t); }
+                    if let Some(mut t) = crate::triggers::Trigger::from_params(usize::MAX - o, k, q, tris) { t.script = Some(o); t.planes.clear(); self.triggers.push(t); }
                 }
             }
         }

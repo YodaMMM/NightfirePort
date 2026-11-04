@@ -230,7 +230,7 @@ impl Motion {
 /// A body that can touch triggers: capsule axis from `a` to `b`, radius, drone (true) or Bond, drone skin hash.
 #[derive(Clone, Copy, Debug)]
 /// `contain`: whether the volume-containment contact (see `Trigger::touched_by`) applies to this toucher.
-pub struct Toucher { pub a: V3, pub b: V3, pub r: f32, pub drone: bool, pub skin: u32, pub contain: bool }
+pub struct Toucher { pub a: V3, pub b: V3, pub r: f32, pub drone: bool, pub skin: u32, pub contain: bool, pub seg_only: bool }
 
 impl Toucher {
     /// Bond in the normal stance (`Player_Collision` 0x194DF0, hip height 1.035 read live).
@@ -247,7 +247,7 @@ impl Toucher {
     /// documented live check — the game's true contact is `Intersect_CylGeom` vs the trigger's
     /// glist [M Trigger_Create 0x1b1720:92 stores the glist at obj+0xD8], whose ref-gate/extent
     /// the port has not modelled.
-    pub fn player(feet: V3) -> Toucher { Toucher { a: [feet[0], feet[1] + 0.55, feet[2]], b: [feet[0], feet[1] + 1.86, feet[2]], r: 0.55, drone: false, skin: 0, contain: true } }
+    pub fn player(feet: V3) -> Toucher { Toucher { a: [feet[0], feet[1] + 0.55, feet[2]], b: [feet[0], feet[1] + 1.86, feet[2]], r: 0.55, drone: false, skin: 0, contain: true, seg_only: false } }
 }
 
 /// One class-5 (BULLET) contact for this tick: a projectile's per-tick flight segment and its
@@ -605,12 +605,16 @@ impl Trigger {
             // ref-point law to the raw per-triangle distance, asm 0x10a530-0x10a538]). The bullets
             // (r 0) keep the inclusive both-sided test their [M] citations measure. The plane is
             // the glist's OWN record per tri (trigger-plane-records): `Dist2Tri` 0x1dfca8 tests
-            // the record's plane_equ, not the winding cross. A tri without a record (hand-built
-            // test volumes, a motion step) rides the winding plane.
-            return self.tris.iter().enumerate().any(|(i, t)| match self.planes.get(i) {
-                Some((n, d)) => seg_touches_tri_raw(c.a, c.b, c.r, t, n, *d),
-                None => { let (n, d) = winding_plane(t); seg_touches_tri_raw(c.a, c.b, c.r, t, &n, d) }
-            });
+            // the record's plane_equ, not the winding cross. A volume with no records (the
+            // script-stream plates, e.g. 07000005's gatehouse ch 0x5C quad) has no side to read:
+            // it keeps the both-sided capsule below, for the measured box only: the standing
+            // segment's low reach stays off them until the game's ride contact is measured.
+            if self.planes.is_empty() { if c.seg_only { return false; } } else {
+                return self.tris.iter().enumerate().any(|(i, t)| match self.planes.get(i) {
+                    Some((n, d)) => seg_touches_tri_raw(c.a, c.b, c.r, t, n, *d),
+                    None => { let (n, d) = winding_plane(t); seg_touches_tri_raw(c.a, c.b, c.r, t, &n, d) }
+                });
+            }
         }
         capsule_hits_tris(c.a, c.b, c.r, &self.tris)
     }
@@ -634,7 +638,7 @@ impl Trigger {
         // per-tick segment vs this trigger's collision triangles (zero-radius capsule; the game's exact
         // pass `Intersect_CylGeom` 0x109da0:587 vetoes a sphere-picked node whose segment misses the glist).
         let bullets5: Vec<&BulletContact> = bullets.iter()
-            .filter(|b| self.touched_by(&Toucher { a: b.a, b: b.b, r: 0.0, drone: false, skin: 0, contain: false }))
+            .filter(|b| self.touched_by(&Toucher { a: b.a, b: b.b, r: 0.0, drone: false, skin: 0, contain: false, seg_only: false }))
             .collect();
         let m = self.mask;
         // The filter branch runs only for types 1/2 with mask & 0x18 and a player/drone contact [M 0x1b1fc8:56].
