@@ -133,3 +133,10 @@ Per-binary runs, release, `--test-threads=1`, real ISO:
 
 not visible to me (no token, credit, context-window or cost figures are exposed anywhere in
 this sandbox session; nothing in the environment reports them).
+
+## ntfy failed
+
+All three fallbacks failed at 12:55 UTC: `curl` exit 28 (connection timed out after 20 s),
+python3 `urlopen` URLError [Errno 101] Network is unreachable, `wget` killed at the 30 s
+tool timeout mid-connect. No route to ntfy.sh from this sandbox; the notification could not
+be delivered.
