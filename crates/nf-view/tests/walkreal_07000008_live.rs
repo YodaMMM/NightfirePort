@@ -763,7 +763,16 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         let aim_dir = [sy * spp, sp, syp * spp];
         let b = sim.bond.pos;
         let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
-        let slit_clear = sim.world.segment_bullet(eye, [eye[0] + aim_dir[0] * 3.0, eye[1] + aim_dir[1] * 3.0, eye[2] + aim_dir[2] * 3.0]).is_none();
+        // The slit gate reads the FLIGHT query on 00 Agent (the round's own world trace — the
+        // glass pass [M Collide_Update 0x1ea398:216-229; Bullet_update disasm 0x12f048-0x12f058])
+        // so an aim through the live panes reads as the game's flight reads it: the mat-0x10
+        // pane quads pass, the mat-0x06 frame walls stop. The Operative/Agent sisters keep the
+        // plain segment_bullet — their timelines stay byte-exact.
+        let slit_clear = if difficulty >= 3 {
+            sim.world.segment_flight(eye, [eye[0] + aim_dir[0] * 3.0, eye[1] + aim_dir[1] * 3.0, eye[2] + aim_dir[2] * 3.0], true).is_none()
+        } else {
+            sim.world.segment_bullet(eye, [eye[0] + aim_dir[0] * 3.0, eye[1] + aim_dir[1] * 3.0, eye[2] + aim_dir[2] * 3.0]).is_none()
+        };
         // 00 Agent (difficulty 3): the launch CORRIDOR — the first 12 u of the round's flight
         // must be clear air from the eye AND both gun stand-ins (the round spawns at the muzzle
         // [M the fire block]; the AT-420's blast is radius 8, ≈100 [L ee_start_05.bin
@@ -777,12 +786,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         let corridor_clear = difficulty < 3 || {
             let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
             let right = [cy, 0.0, -fy];
+            // The flight query with the glass pass: the round's own world trace — the live
+            // panes' mat-0x10 quads pass, the mat-0x06 frames/walls stop [M 0x1ea398:216-229].
             [eye,
              [eye[0] + right[0] * 0.25, eye[1] - 0.15, eye[2] + right[2] * 0.25],
              [eye[0] - right[0] * 0.25, eye[1] - 0.15, eye[2] - right[2] * 0.25]]
                 .iter()
                 .all(|from| { let from = *from; sim.world
-                    .segment_bullet(from, [from[0] + aim_dir[0] * 12.0, from[1] + aim_dir[1] * 12.0, from[2] + aim_dir[2] * 12.0])
+                    .segment_flight(from, [from[0] + aim_dir[0] * 12.0, from[1] + aim_dir[1] * 12.0, from[2] + aim_dir[2] * 12.0], true)
                     .is_none() })
         };
         let line_ok = slit_clear && launch_line_clear(sim, cp);
