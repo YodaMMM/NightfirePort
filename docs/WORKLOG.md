@@ -92,3 +92,12 @@ no top-ups. The Operative walk stays green. Branch cut from origin/master 38052b
   and #10's drag 21.0 are the remaining 30. Agent test still RED; the Operative real-damage
   sister re-run GREEN on the branch; the rest of the binary unverified. Next: kill #10 in the
   first rim-mark fight (hp 20, one head hit), find the fence-pop law (radius ≠ 8?), re-check.
+
+## level-15-agent-doors-2 (branch cut, 2026-11-04 09:45 UTC)
+
+Task: finish the 15 Agent walk from s/level-15-agent-doors (merged origin/master) — the ledger
+sits at exactly 100.0 with ~30 to find: #10's first rim-mark fight drag (21.0, the fight gave up
+on its cap instead of the one head kill), the #447-fence pop chain (9.1, the law unpinned), and
+the optional #462 east mark. Real input only; no top-ups; helpers opt-in. Remove the ignore on
+walk_spawn_to_the_omega_sector_exit_real_damage_agent when green; every walkreal_*_live; the
+full suite total line.
