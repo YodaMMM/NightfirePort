@@ -53,3 +53,10 @@ Real input only; no health tops; shared helpers stay opt-in.
   next session's levers: a higher-dps carried gun for the clears (the guards' own ARs via
   an early switch), cover-positioned fights, and killing the ambush's 5 guards BEFORE the
   ramp (their spawn/hold spots are fixed [D] — a pre-positioned stand at the ramp mouth).
+- [11:47 UTC] Report written (docs/reports/drone-block-swaps-g055-3.md): both target walks
+  not green yet (07000016 diagnosed to the route-economy/dry-ammo root with the measured
+  attempt chain and next levers; 07000014 not reached), the four earlier fixes verified
+  green on the merged sim (nf-game 1051/0/8 whole; 07000014 binary 8/1, 07000016 binary
+  13/1 — only the target walks red), the two master-merge shifts (07000003/07000011)
+  documented for their owners, the critical-binary sweep results recorded. finish.sh
+  with `blocked` + this reason follows.
