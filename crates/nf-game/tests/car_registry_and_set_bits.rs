@@ -97,7 +97,8 @@ fn car_delete_is_car_deactivate_0x132e78() {
     let mut sys = CarSystem::init();
     sys.tanks[0] = Some(driven_car());
     sys.num_tanks = 1;
-    sys.delete(0);
+    let blast = sys.delete(0).expect("Car_Delete's deactivate explodes [M 0x131d88:66-68]");
+    assert_eq!(blast.3, nf_game::car::CAR_BLAST_SCRIPT, "the blast script is 0x06000052");
     let car = sys.tanks[0].as_ref().unwrap();
     assert_eq!(car.state, CAR_RESPAWNING, "deactivate's state 99");
     assert_eq!(car.timer_or_pilot, RESPAWN_TICKS, "the 0x708 respawn timer");

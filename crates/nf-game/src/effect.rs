@@ -563,6 +563,8 @@ mod tests {
             gas: [EffectGas { mesh: 0x0200_0039, kind: 9, rgba: [0x7f7f_7f7f, 0], scale: [0.005, 0.02], life: 32, wall_offset: 1, orient_normal: 0 }, Default::default(), Default::default()],
             debris_mesh: 0x0200_012c, debris_speed: 6.2, debris_spin: 0.785, debris_life: 55, debris_enable: 1, debris_count: 5,
             emitter: 0,
+            foot_decal_4: 0,
+            foot_decal_8: 0,
         }
     }
 

@@ -657,6 +657,9 @@ pub struct Sim {
     pub surfaces: Option<nf_formats::sfx::SurfaceSounds>,
     pub voices: Option<Vec<nf_formats::sfx::VoiceLine>>,
     pub step_dist: f32,
+    /// The foot alternator (`ScriptFootstepFoot` [M AnimObjectUpdate 0x1befd8:186]): flipped
+    /// every footstep, foot 8 after the first flip — the print's decal column follows.
+    pub step_foot: bool,
     /// The laser-family beam's endpoints this tick (the hand/head end, the hit end) —
     /// `gadget::laser_tick` while a laser weapon is out [M Player_LaserPointer 0x1a65d8]. The
     /// renderer draws the beam mesh (0x2000131/0x2000133) between them.
@@ -3567,9 +3570,37 @@ impl Sim {
             if self.step_dist > stride {
                 self.step_dist %= stride;
                 let p = self.bond.pos;
-                if climbing { self.drones.audio.play3d(0x286, p, None); }
-                else if let (Some(s), Some((t, _, m))) = (self.surfaces.as_ref(), self.world.segment_surface(p, [p[0], p[1] - 1.6347, p[2]], true)) {
-                    if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.footstep, m) { self.drones.audio.play3d(id, [p[0], p[1] - 1.6347 * t, p[2]], None); }
+                if climbing {
+                    self.drones.audio.play3d(0x286, p, None);
+                } else if let (Some(s), Some((t, n, m, _pass, host))) =
+                    (self.surfaces.as_ref(), self.world.segment_surface_host(p, [p[0], p[1] - 1.6347, p[2]], true))
+                {
+                    if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.footstep, m) {
+                        self.drones.audio.play3d(id, [p[0], p[1] - 1.6347 * t, p[2]], None);
+                    }
+                    // The footprint decal arm — audit-effect-calls: the game's step is the FULL
+                    // `Effect_Create(…, foot | 0x42)` [M 0x1befd8:196-201], flag 0x2 →
+                    // `Effect_Player` 0x1cec48:59-140: sound (0x40, above) PLUS the foot decal.
+                    // gfx = `EffectInfo[mat]+0x8` on foot 4 / `+0xc` on foot 8 [M 0x1cec48:84-89],
+                    // 0 = none; the foot toggles every step [M 0x1befd8:186-190
+                    // `ScriptFootstepFoot` flip → :196-198 foot 4/8]; the decal's y = the ground
+                    // hit's y + 0.05 [M 0x1cec48:118-124] and it aligns to the surface up
+                    // (`Mat_Align2Up`) at the hit, hosted on the hit's cel [M 0x1cec48:107-136].
+                    // The port places it at the body's own ground point [S — the game puts the
+                    // x/z at the foot bone (`obj+0xdc → +0xb8` bone list +0xdc0/+0xcc0,
+                    // 0x1cec48:89-96), whose world matrices the port does not build for
+                    // first-person Bond]; the draw is the shared decal path (no new drawing).
+                    self.step_foot = !self.step_foot;
+                    let mat = (m & 0x3f) as usize;
+                    if m != 0 {
+                        if let Some(rec) = s.effects.get(mat) {
+                            let mesh = if self.step_foot { rec.foot_decal_8 } else { rec.foot_decal_4 };
+                            if mesh != 0 {
+                                let gp = [p[0], p[1] - 1.6347 * t + 0.05, p[2]];
+                                self.drones.effects.add_decal(gp, n, mesh, host);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -10339,7 +10370,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
-            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, zoom_saved: Vec::new(), zoom_aim_prev: false, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), drone_draw_cache: (0..crate::pose_pool::MAX_SLOTS).map(|_| Default::default()).collect(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), bond_anim: nf_game::mp::body_anim::MpBodyAnim::new(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
+            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, zoom_saved: Vec::new(), zoom_aim_prev: false, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, step_foot: false, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), drone_draw_cache: (0..crate::pose_pool::MAX_SLOTS).map(|_| Default::default()).collect(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), bond_anim: nf_game::mp::body_anim::MpBodyAnim::new(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [const { None }; nf_net::MAX_AGENTS],
             mp_local_slot: 0,
             mp_body_speed: [0.0; nf_net::MAX_AGENTS],

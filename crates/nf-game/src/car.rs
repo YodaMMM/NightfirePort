@@ -23,6 +23,20 @@
 use crate::drone::Rng;
 use nf_formats::anim::Mat4;
 
+/// `Car_Deactivate` 0x131d88:66-68's `Explode_Create` numbers: radius 10.0 (the first float —
+/// the `param_2 < 0.5` shake gate [M 0x17cbd0:63-67]), damage 10.0 (the +0x28 store), the blast
+/// script 0x06000052, and the debris kind the script-0x06000052 arm throws (the copter-death
+/// precedent [M drone.rs copter_death_blasts]).
+pub const CAR_BLAST_RADIUS: f32 = 10.0;
+pub const CAR_BLAST_DAMAGE: f32 = 10.0;
+pub const CAR_BLAST_SCRIPT: u32 = 0x0600_0052;
+pub const CAR_BLAST_DEBRIS: u16 = 6;
+
+/// The pending-blast tuple `Car::deactivate`/`Car::delete` hand their caller for
+/// `Drones::pending_blasts`: (pos, radius, damage, script, scale, debris kind). The owner is the
+/// caller's (the copter-death mark `usize::MAX - 1` — the car object has no drone-registry id).
+pub type CarBlast = ([f32; 3], f32, f32, u32, f32, u16);
+
 /// The Enviro-Mods vehicles option (`MPSettings+0x460`): 0 Off, 1 Tanks, 2 Helicopters, 3 Random
 /// [M P_MPENVIROMODS_Handler 0x210030:16 — options in menu order].
 pub const VEHICLES_OFF: u32 = 0;
@@ -171,11 +185,28 @@ impl Car {
     /// the 0x708 respawn timer [M 0x131d88:74-79]. The caller restores the player (substate +
     /// `Player_Enable`); `Car_PlayerHasDied` 0x132e98 and `Car_CollisionHandler` 0x131838 call
     /// the same.
-    pub fn deactivate(&mut self) {
+    ///
+    /// audit-effect-calls: the game's `Explode_Create` runs UNCONDITIONALLY on every non-99
+    /// entry, before the pose restore — the blast sits at the live `obj+0x30` translation, not
+    /// the spawn point [M 0x131d88:66-73: `Explode_Create(0x41200000, 0x41200000, 0x42480000,
+    /// car, car+0x30, 0x2d6210, 0x6000052, 0xff, 0xff, 100, car)` then `Mat_Copy(TankSpawns…)`].
+    /// The port dropped that call; `deactivate` now returns it for the caller to push into
+    /// `Drones::pending_blasts` (owner `usize::MAX - 1`, the copter-death "not a drone" mark —
+    /// the car object has no drone-registry id; debris kind 6 = the script-0x06000052 arm, the
+    /// copter-death precedent for the same script [M drone.rs copter_death_blasts]). The whole
+    /// body is the game's `state != 99` arm [M 0x131d88:20], so a second call is a no-op.
+    pub fn deactivate(&mut self) -> Option<CarBlast> {
+        if self.state == CAR_RESPAWNING {
+            return None; // [M 0x131d88:20]
+        }
+        // The blast takes the LIVE matrix translation; the restore below is the game's
+        // post-explode `Mat_Copy` [M 0x131d88:66-73].
+        let pos = [self.matrix[3][0], self.matrix[3][1], self.matrix[3][2]];
         self.state = CAR_RESPAWNING;
         self.timer_or_pilot = RESPAWN_TICKS;
         self.driver = None;
         self.matrix = self.spawn_matrix;
+        Some((pos, CAR_BLAST_RADIUS, CAR_BLAST_DAMAGE, CAR_BLAST_SCRIPT, CAR_BLAST_RADIUS, CAR_BLAST_DEBRIS))
     }
 
     /// The heli drive step [M Car_Update 0x1307d8:157-246, the `CAR_INFO+0x112 != 0` branch]:
@@ -399,10 +430,12 @@ impl CarSystem {
     /// `Car_Delete` 0x132e78 [M] — the class-0x28 delete handler, dispatched from
     /// `control_delete_object` 0x133178:16-18 through control_funcs[type·0xC + 8] (the car row
     /// 0x26fa70 = update 0x1307d8 / collision 0x131838 / delete 0x132e78); it is a tail-call
-    /// to `Car_Deactivate` 0x131d88, so the game's delete IS the deactivate.
-    pub fn delete(&mut self, slot: usize) {
+    /// to `Car_Deactivate` 0x131d88, so the game's delete IS the deactivate — blast included.
+    pub fn delete(&mut self, slot: usize) -> Option<CarBlast> {
         if let Some(Some(car)) = self.tanks.get_mut(slot) {
-            car.deactivate();
+            car.deactivate()
+        } else {
+            None
         }
     }
 }
