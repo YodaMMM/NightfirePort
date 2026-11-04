@@ -126,8 +126,14 @@ pub enum Request {
     /// overlay (colour 0x000000ff: RGB 0, alpha target 0xff) whose alpha ramps |1/f| per tick on the
     /// viewer; f < 0 starts at alpha 1 and fades in, f > 0 starts at 0 and fades out. Suppressed
     /// while `SCRIPTINFO+0xAB5` bit 0 (the skip latch) is set [M 0x1db3d0:10-12].
-    /// `viewer`: `Camera_SetFade`'s last argument — 0 the cut-scene (script camera) viewer, 1 the gameplay viewer.
-    Fade { ticks: f32, viewer: u8 },
+    /// `viewer`: `Camera_SetFade`'s viewer-slot argument — 0 the cut-scene (script camera) viewer
+    /// (slot 4), 1 the gameplay viewer (slot 0). `mode`: `Camera_SetFade`'s last argument — the
+    /// fade TYPE byte the call stores at viewer+0x234 [M 0x1bbdd8:16]: 0 on the op-0x13 fades and
+    /// `Script_Update`'s near-end fade, 1 on the skip's fade-out and the tail's fade-in. The type
+    /// is half of the refuse gate (the other half the viewer's state byte): a type-0 fade never
+    /// blocks — a re-arm overwrites it mid-ramp — a type-1 fade refuses a second fade on the same
+    /// viewer while it runs [M 0x1bbdd8 disasm 0x1bbe08-0x1bbe18].
+    Fade { ticks: f32, viewer: u8, mode: u8 },
     /// Op 0x1e: `Script_TextStart` 0x1db2b8 → `Text_AddMsg(-1, 0, 4, Txt_BindLabel(label, 0), 0,
     /// time)` — a HUD message from the text bank shown for `time` frames [M 0x1db2b8:9-12]. The raw
     /// label travels (the Lang table lives above nf-game); nf-view binds it like the pickup messages.
@@ -367,7 +373,17 @@ impl Script {
     }
 
     /// `Script_Play` (0x1db588).
-    pub fn start(&mut self, looping: bool) { self.play = if looping { self.play | 9 } else { (self.play & !8) | 1 }; }
+    pub fn start(&mut self, looping: bool) {
+        self.play = if looping { self.play | 9 } else { (self.play & !8) | 1 };
+        // `Script_Play` 0x1db588:24-26: a camera-flag script's play latches the global `ScriptCam`
+        // to its hashcode (`Script_Free` 0x1da880:49-51 clears it when the same hash frees;
+        // `Script_Init` zeroes it). The port carries the latch per script: its only reader is
+        // `Script_Update`'s near-end fade gate [M 0x1da998:47 — `ScriptCam != 0 && +0xaa8 & 0x40`],
+        // and a playing camera-flag script's own play is what set the global, so the per-script
+        // flag is the same condition. The disc's 18 camera-flag SP scripts are all non-looping
+        // [D the audit-nis-ops census], so the latch can never outlive its script's stop.
+        if self.nis.camera { self.script_cam = true; }
+    }
     /// `Script_Stop`.
     pub fn stop(&mut self) { self.play &= !1; }
     /// `Script_Set2Start` (0x1daf00).
@@ -411,6 +427,13 @@ impl Script {
         // Music_Event(5, hash) [M 0x1dac78:55]: the skip's music pulse (EventList[5] = hash; the port's music
         // runtime has no consumer for the skip pulse, so it rides the uncarried Event request).
         out.push(Request::Event { kind: 0x40, params: vec![self.nis.hashcode] });
+        // `Camera_SetFade((float)+0xAB4, 4, 0xff, 1)` [M 0x1dac78:56-57] — the skip's own view
+        // fade-out: min(remaining, 45) ticks to black (a positive duration starts at alpha 0 and
+        // ramps out), fade TYPE 1 — it refuses a second fade on the script viewer while it ramps.
+        // The scene keeps playing under it: the catch-up only starts once the script fade clock
+        // passes `+0xAB4` (update's loop guard below), then the tail's fade-in takes the screen
+        // back [M 0x1da998:101-110].
+        out.push(Request::Fade { ticks: self.fade_len as f32, viewer: 0, mode: 1 });
         // The ScriptCam arm's other half [M 0x1dac78:26-30]: `Input_ClearAllActions(-1)` (the port's skip is
         // edge-latched, nothing to clear) and `Text_FlushAllSubtitles()` — the shown dialogue line dies with
         // the skip (the port used to keep it). Reaching here means the camera flag is
@@ -479,7 +502,7 @@ impl Script {
                 // The game's own fade-out in the last 20 ticks of a camera script [M :53-71]:
                 // `Camera_SetFade(40, 4, 0xff, 0)` — 40 ticks to black — unless the hash is in the
                 // no-fade set. It re-arms every tick; the drain's in-progress guard debounces.
-                if !no_fade { out.push(Request::Fade { ticks: 40.0, viewer: 0 }); }
+                if !no_fade { out.push(Request::Fade { ticks: 40.0, viewer: 0, mode: 0 }); }
             }
             // The fade bookkeeping [M :84-98]: the skip's fade advances one frame per tick; past its length it
             // sets the freeze flag (bit 5).
@@ -494,7 +517,7 @@ impl Script {
         // the GAMEPLAY viewer — `Camera_SetFade(0xc1b00000, 0, 0xff, 1)` [L 0xc1b00000 = -22.0: 22 ticks from
         // black], clear the fade clock, play bit 4 and the skip latch.
         if self.fade_clock > self.fade_len as f32 && !self.playing() {
-            out.push(Request::Fade { ticks: -22.0, viewer: 1 });
+            out.push(Request::Fade { ticks: -22.0, viewer: 1, mode: 1 });
             self.fade_clock = 0.0;
             self.play &= !0x10;
             self.fade_flags &= !1;
@@ -666,7 +689,7 @@ impl Script {
                         // alpha 1 and fades in, f > 0 fades out) unless the skip latch (+0xAB5 bit 0)
                         // is set [M 0x1db3d0:10-12].
                         let Some(t) = rd(0, 4) else { self.streams[i].pc = None; return };
-                        if self.fade_flags & 1 == 0 { out.push(Request::Fade { ticks: -f32::from_bits(t), viewer: 0 }); }
+                        if self.fade_flags & 1 == 0 { out.push(Request::Fade { ticks: -f32::from_bits(t), viewer: 0, mode: 0 }); }
                         next = pc + 6;
                     }
                     0x14 => {

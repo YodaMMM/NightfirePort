@@ -8,6 +8,9 @@
 //! nf-extract files-extract <iso> <out-dir> unpack FILES.BIN by FileList
 //! nf-extract bin-list <iso>                every entry of every level .bin (TSV, stdout; ~44k rows)
 //! nf-extract bin-digest <iso>              per-archive digest of bin-list (= golden/level_bins.tsv)
+//! nf-extract nis-census <iso>              per-archive census of level-script (type 7) stream opcodes,
+//!                                          walked with the game's own per-op byte lengths, plus one
+//!                                          row per op-0x12 event site (TSV, stdout)
 //! nf-extract tex-list <iso>                every map texture with index/palette SHA-1s (TSV, stdout)
 //! nf-extract tex-digest <iso>              per-archive digest of tex-list (= golden/textures.tsv)
 //! nf-extract tex-export <iso> <out> [pfx]  map textures as indexed PNGs (archives starting with pfx)
@@ -93,6 +96,9 @@ fn main() -> Result<()> {
             Ok(())
         }
         "script-digest" => { print!("{}", disc::script_digest(&IsoImage::open(a(1)?)?)?); Ok(()) }
+        // audit-nis-ops: per-archive census of level-script (type 7) stream opcodes, walked with the
+        // game's own per-op byte lengths (Script_Run 0x1d8548's switch + handlers).
+        "nis-census" => nis_census(&IsoImage::open(a(1)?)?),
         "ai-path-digest" => { print!("{}", disc::ai_path_digest(&IsoImage::open(a(1)?)?)?); Ok(()) }
         "drone-digest" => { print!("{}", disc::drone_start_digest(&IsoImage::open(a(1)?)?)?); Ok(()) }
         "drones" => drones(&IsoImage::open(a(1)?)?, a(2)?),
@@ -1261,6 +1267,82 @@ fn block_dump(iso: &IsoImage, level_name: &str, id: u8, out_dir: &Path) -> Resul
 /// One script's commands, with each op-0 sequence's frame count and root translation at its ends.
 /// Level scripts (type-7 entries, docs/formats/nis-script.md): header, streams (command bytes in hex) and, for one
 /// script, its keys.
+/// audit-nis-ops: the per-archive census of level-script (type-7 entry) stream opcodes. Every stream's
+/// command bytes are walked with the game's own per-op lengths (the op byte, its `BIN_Get*` arguments and
+/// the one trailing byte `Script_Run` 0x1d8548:120 skips after every handler): 4/5/6 → 1+2+1, 7 → 1+9+4n+1,
+/// 9 → 2, 0x0a → 1+12+1, 0x0c → 2, 0x0d → 1+5+1, 0x0f → 2, 0x12 → 1+2+4n+1, 0x13 → 1+4+1, 0x14 → 1+10+4+1,
+/// 0x15 → 2, 0x16 → 1+4+3+1, 0x17 → 2, 0x18 → 1+3+1, 0x1a → 2, 0x1b → 1+4+2+1, 0x1d → 2, 0x1e → 1+4+2+1,
+/// anything else → 1 (the game's default arm reads none). Output: one TSV row per archive —
+/// `archive  scripts  streams  ops_total  tail  N04=…` — the `Nxx` columns keyed by op in hex, then a
+/// second block `archive  hash  stream  byte  op  event  n  params` listing every op-0x12 event site
+/// (the event-kind census rides on it). `tail` counts streams whose walk hit a truncated command.
+fn nis_census(iso: &IsoImage) -> Result<()> {
+    use nf_formats::{levelbin::LevelBin, nis::Nis};
+    use std::collections::BTreeMap;
+    let (entries, bin) = disc::files_bin_entries(iso)?;
+    let mut sites: String = String::new();
+    sites.push_str("archive\thash\tstream\toff\top\tevent\tn\tparams\n");
+    let mut rows: Vec<String> = Vec::new();
+    for fe in entries.iter().filter(|e| e.name.to_ascii_lowercase().ends_with(".bin")) {
+        let data = iso.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64)?;
+        let lb = match LevelBin::parse(&data) { Ok(l) => l, Err(_) => continue };
+        let mut ops: BTreeMap<u8, u64> = BTreeMap::new();
+        let (mut scripts, mut streams, mut total, mut tail) = (0u64, 0u64, 0u64, 0u64);
+        for e in lb.entries.iter().filter(|e| e.kind == 7) {
+            let h = u32::from_str_radix(&e.name, 16).unwrap_or(0);
+            let Ok(s) = Nis::parse(h, lb.data(&data, e)) else { continue };
+            scripts += 1;
+            for (i, st) in s.streams.iter().enumerate() {
+                streams += 1;
+                let c = &st.commands;
+                let rd = |o: usize, n: usize| -> Option<u32> {
+                    c.get(o..o + n).map(|b| b.iter().rev().fold(0u32, |a, &x| a << 8 | x as u32))
+                };
+                let mut p = 0usize;
+                while p < c.len() {
+                    let op = c[p];
+                    // args = the command's own argument bytes (the op byte and the shared trail excluded)
+                    let args = match op {
+                        4 | 5 | 6 => 2,
+                        7 => 9 + 4 * c.get(p + 9).copied().unwrap_or(0) as usize, // n at the head's last byte
+                        9 | 0x0c | 0x0f | 0x15 | 0x17 | 0x1a | 0x1d => 0,
+                        0x0a => 12,
+                        0x0d => 5,
+                        0x12 => {
+                            let n = c.get(p + 1).copied().unwrap_or(0) as usize;
+                            let kind = c.get(p + 2).copied().unwrap_or(0);
+                            let params: Vec<String> = (0..n).filter_map(|k| rd(p + 3 + 4 * k, 4)).map(|v| format!("{v:08x}")).collect();
+                            sites.push_str(&format!("{}\t{h:08x}\t{i}\t{p}\t0x12\t0x{kind:02x}\t{n}\t{}\n", fe.name, params.join(",")));
+                            2 + 4 * n
+                        }
+                        0x13 => 4,
+                        0x14 => 14,
+                        0x16 => 7,
+                        0x18 => 3,
+                        0x1b => 6,
+                        0x1e => 6,
+                        _ => 0,
+                    };
+                    if c.get(p + 1 + args).is_none() { tail += 1; break; } // truncated command (no trail byte)
+                    *ops.entry(op).or_insert(0) += 1;
+                    total += 1;
+                    // the trail byte the game skips after the handler (+1 in Script_Run's tail); the
+                    // default arm (any other byte) reads none and skips no trail either
+                    let in_switch = matches!(op, 4 | 5 | 6 | 7 | 9 | 0x0a | 0x0c | 0x0d | 0x0f | 0x12 | 0x13 | 0x14 | 0x15 | 0x16 | 0x17 | 0x18 | 0x1a | 0x1b | 0x1d | 0x1e);
+                    p += if in_switch { 1 + args + 1 } else { 1 };
+                }
+            }
+        }
+        if scripts > 0 {
+            let cols: String = ops.iter().map(|(op, n)| format!("N{op:02x}={n}")).collect::<Vec<_>>().join("\t");
+            rows.push(format!("{}\t{scripts}\t{streams}\t{total}\t{tail}\t{cols}", fe.name));
+        }
+    }
+    for r in rows { println!("{r}"); }
+    print!("{sites}");
+    Ok(())
+}
+
 fn nis(iso: &IsoImage, level_name: &str, only: Option<u32>) -> Result<()> {
     use nf_formats::{levelbin::LevelBin, nis::Nis};
     let (entries, bin) = disc::files_bin_entries(iso)?;
