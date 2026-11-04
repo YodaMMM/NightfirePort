@@ -138,6 +138,11 @@ pub struct Trigger {
     /// Touch families that is param 6 (the same param the lock reads; both live at ext+0x24/+0x2E from slot p6).
     pub filter_gate: u8,
     pub tris: Vec<[V3; 3]>,
+    /// Per-triangle world plane (n, d) for the raw trigger narrow phase — the game reads each tri's
+    /// OWN glist plane record (`Intersect_CylGeom` 0x109da0 → `Dist2Tri` 0x1dfca8's plane_equ), whose
+    /// side is authoritative where the winding disagrees. `set_tris` fills it from the winding (the
+    /// pre-record reading); the level parse overwrites it with the records (triangles_with_planes).
+    pub planes: Vec<([f32; 3], f32)>,
     pub lo: V3,
     pub hi: V3,
     /// TouchOnce removed itself (its channel was on).
@@ -383,6 +388,74 @@ pub fn capsule_hits_tris_strict(a: V3, b: V3, r: f32, tris: &[[V3; 3]]) -> bool 
     })
 }
 
+/// The game's trigger-contact narrow phase for a capsule toucher — `Intersect_CylGeom` 0x109da0's
+/// RAW branch (the trigger cels' glist flags bit 0x40, see `Trigger::touched_by`), pinned from the
+/// disassembly (trigger-hittest-segment):
+///
+/// 1. the plane-crossing parameter of the toucher segment A→B on the triangle's plane,
+///    t = clamp(−(A·N+d)/(N·(B−A)), 0, 1), P = A + t·(B−A) [M 0x109da0 asm 0x10a200-0x10a2f0 —
+///    the numerator A·N+d and the denominator N·(B−A) with the t clamp against 0/1];
+///    a segment parallel to the plane (|N·(B−A)| ≤ 0x3951B717 ≈ 1.78e-4, asm 0x10a1c4-0x10a1fc)
+///    anchors P at the projection of the triangle's CENTROID onto the segment instead (clamped)
+///    [M asm 0x10a3f0-0x10a4fc: t = dot(centroid−A, B−A)/|B−A|², the 0x1e3ce508 ≈ 1e-20 zero check,
+///    else P = A];
+/// 2. the directional skip `(dot > 0.99987 && t > 0.5) || (dot < −0.99987 && t < 0.5)` (asm
+///    0x10a278-0x10a2e8, the 0x3f7fbe77/0xbf7fbe77 constants) — unreachable for the player's 0.76
+///    segment (|N·(B−A)| ≤ |B−A| < 0.999), live for longer swept HITTESTs;
+/// 3. `Dist2Tri` 0x1dfca8's one-sided entry: the signed plane distance of P < 0 → the code-99 miss
+///    (P behind the triangle's plane) [M 0x1dfca8:58-68 — `if ((float)auStack_80 < 0.0) { *param_6
+///    = 99; return ...}`], else the closest point on the face/edge/vertex and its distance;
+/// 4. the strict refine: the distance < radius [M asm 0x10a5c0-0x10a5d0 — `c.ole.s radius, dist;
+///    bc1t skip`].
+///
+/// The PLANE is the glist's OWN record (`Trigger.planes` — `Collision::triangles_with_planes`), not
+/// the winding cross: the game's Dist2Tri reads the record the tri's 4th u16 indexes (3×i16 normal
+/// · 2⁻¹⁴ + the f32 distance at byte +6, 5-halfword records [M asm 0x10a1d8-0x10a1e8; the decomp
+/// fetch `puVar12 = base + plane·2` builds the plane_equ from it]) and its side is authoritative —
+/// the trigger-plane-records lever (the winding version broke 05's spawn plate ch 0x45 and the 0a
+/// office-ring route on the e7f80cd6 wiring).
+///
+/// NOT modelled (the residual): the first Dist2Tri's edge/vertex re-anchor — a feature code
+/// 1..7 re-queries from the closest segment point to HITTEST+0x50 [M asm 0x10a32c-0x10a3ec], a
+/// reference the player's `Player_Collision` 0x194df0 never writes (BLData+0x790 has no writer in
+/// the decomp tree; the collide pass only pushes it, `Collide_Intersect` 0x1ebaa8:353-373). The
+/// first query's distance stands in [S].
+pub fn seg_touches_tri_raw(a: V3, b: V3, r: f32, t: &[V3; 3], n: &[f32; 3], d: f32) -> bool {
+    let n = *n;
+    let ab = sub(b, a);
+    let ab2 = dot(ab, ab);
+    let ndot = dot(n, ab);
+    let (p, tt) = if ndot.abs() <= 1.78e-4 {
+        // The segment is parallel to the plane: anchor at the centroid's projection [M 0x10a3f0-].
+        let c = [(t[0][0] + t[1][0] + t[2][0]) / 3.0,
+                 (t[0][1] + t[1][1] + t[2][1]) / 3.0,
+                 (t[0][2] + t[1][2] + t[2][2]) / 3.0];
+        if ab2 <= 1e-20 { (a, 0.0) } else {
+            let tt = (dot(sub(c, a), ab) / ab2).clamp(0.0, 1.0);
+            (lerp(a, b, tt), tt)
+        }
+    } else {
+        let tt = (-(dot(a, n) + d) / ndot).clamp(0.0, 1.0);
+        (lerp(a, b, tt), tt)
+    };
+    // The directional skip (unreachable at the player's 0.76 segment, ported for exactness).
+    if (ndot > 0.999_87 && tt > 0.5) || (ndot < -0.999_87 && tt < 0.5) { return false; }
+    // One-sided: P behind the record's plane is the code-99 miss [M 0x1dfca8:58-68].
+    if dot(p, n) + d < 0.0 { return false; }
+    point_triangle(p, t) < r
+}
+
+/// The winding-derived plane (unit normal from the vertex cross, d = −n·v0) — the pre-record
+/// reading of the tri's plane, the fallback for hand-built volumes (tests, motion steps).
+fn winding_plane(t: &[V3; 3]) -> ([f32; 3], f32) {
+    let n_raw = cross(sub(t[1], t[0]), sub(t[2], t[0]));
+    let nn = dot(n_raw, n_raw);
+    if nn <= 1e-12 { return ([0.0, 0.0, 0.0], 0.0); }
+    let inv = 1.0 / nn.sqrt();
+    let n = [n_raw[0] * inv, n_raw[1] * inv, n_raw[2] * inv];
+    (n, -dot(n, t[0]))
+}
+
 fn segment_hits_triangle(a: V3, b: V3, t: &[V3; 3]) -> bool {
     let d = sub(b, a);
     let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
@@ -435,7 +508,7 @@ impl Trigger {
         let mask = if mask == 0 { 2 } else { mask };
         if matches!(kind, kind::TOUCH | kind::TOUCH_ONCE) && out_ch == 0x7d { return None; }
         let filter_gate = if matches!(kind, kind::TOUCH | kind::TOUCH_ONCE) { list.get(4).copied().unwrap_or(0) as u8 } else { 0 };
-        let mut t = Trigger { placement, kind, out: out_ch as u8, mask, list, lock: lock as u8, hide, glist_0x10: true, filter_gate, tris: Vec::new(), lo: [0.0; 3], hi: [0.0; 3], gone: false, script: None, next_level, gate, key_gate, success, fallback, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None };
+        let mut t = Trigger { placement, kind, out: out_ch as u8, mask, list, lock: lock as u8, hide, glist_0x10: true, filter_gate, tris: Vec::new(), planes: Vec::new(), lo: [0.0; 3], hi: [0.0; 3], gone: false, script: None, next_level, gate, key_gate, success, fallback, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None };
         if kind == kind::MOVIE { t.movie_code = out_ch; }
         t.set_tris(tris);
         Some(t)
@@ -450,11 +523,16 @@ impl Trigger {
         }
     }
 
-    /// New world triangles (a moving trigger).
+    /// New world triangles (a moving trigger). The planes default to the winding cross (the
+    /// pre-record reading — `seg_touches_tri_raw`'s doc); the level parse overwrites them with the
+    /// glist's own plane records (`Collision::triangles_with_planes`). A motion step rebuilds them
+    /// from the step's winding — the record planes ride the parse-time matrix only (the moving
+    /// trigger residual at `Motion`; the battery's glists are static).
     pub fn set_tris(&mut self, tris: Vec<[V3; 3]>) {
         let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
         for t in &tris { for v in t { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } } }
-        (self.tris, self.lo, self.hi) = (tris, lo, hi);
+        let planes = tris.iter().map(|t| winding_plane(t)).collect();
+        (self.tris, self.lo, self.hi, self.planes) = (tris, lo, hi, planes);
     }
 
     /// The trigger's bounding-box centre (for scenario placement — put Bond at a TouchOnce trigger's centre to
@@ -498,6 +576,21 @@ impl Trigger {
             && (0..3).all(|k| c.a[k] >= self.lo[k] && c.a[k] <= self.hi[k])
             && (0..3).all(|k| c.b[k] >= self.lo[k] && c.b[k] <= self.hi[k]) {
             return true;
+        }
+        if c.r > 0.0 {
+            // trigger-hittest-segment: the game's own narrow phase for the capsule touchers
+            // (`Intersect_CylGeom` 0x109da0's RAW branch — the trigger cels' glist flags carry
+            // bit 0x40 [D 0700000a #607/#614/#621 = 0x645, 07000011 #235 = 0x50; `Collide_Intersect`
+            // 0x1ebaa8:93-99 turns it into HITDATA+0x51 |= 2, which routes the refine past the
+            // ref-point law to the raw per-triangle distance, asm 0x10a530-0x10a538]). The bullets
+            // (r 0) keep the inclusive both-sided test their [M] citations measure. The plane is
+            // the glist's OWN record per tri (trigger-plane-records): `Dist2Tri` 0x1dfca8 tests
+            // the record's plane_equ, not the winding cross. A tri without a record (hand-built
+            // test volumes, a motion step) rides the winding plane.
+            return self.tris.iter().enumerate().any(|(i, t)| match self.planes.get(i) {
+                Some((n, d)) => seg_touches_tri_raw(c.a, c.b, c.r, t, n, *d),
+                None => { let (n, d) = winding_plane(t); seg_touches_tri_raw(c.a, c.b, c.r, t, &n, d) }
+            });
         }
         capsule_hits_tris(c.a, c.b, c.r, &self.tris)
     }
@@ -771,8 +864,19 @@ pub fn build(level: &Level) -> Vec<Trigger> {
         // Trigger_Create builds obj+0x90 with control_create_object's quaternion-0 arm →
         // View_RotTransMatrix [M 0x1b1720:52, 0x1344e0:26-29].
         let mx = view_rot_trans_matrix(p.rotation, p.translation);
-        let tris: Vec<[V3; 3]> = target.and_then(|(om, oi)| level.maps[om].objects[oi].collision.as_ref())
-            .map(|c| c.triangles().into_iter().map(|t| t.map(|v| transform(&mx, v))).collect()).unwrap_or_default();
+        // The glist's OWN plane records ride the same matrix (trigger-plane-records): the record's
+        // local (n, d) maps to world with the linear part only for n and d_w = d − n_w·t (the
+        // rigid-transform of the game's local-plane test — the sign the one-sided entry reads).
+        let src: Vec<([[f32; 3]; 3], [f32; 3], f32)> = target.and_then(|(om, oi)| level.maps[om].objects[oi].collision.as_ref())
+            .map(|c| c.triangles_with_planes().into_iter()
+                .map(|(t, _m, n, d)| (t.map(|v| transform(&mx, v)), n, d)).collect()).unwrap_or_default();
+        let tris: Vec<[V3; 3]> = src.iter().map(|(t, _, _)| *t).collect();
+        let record_planes: Vec<([f32; 3], f32)> = src.iter().map(|(_, n, d)| {
+            let nw = [n[0] * mx[0][0] + n[1] * mx[1][0] + n[2] * mx[2][0],
+                      n[0] * mx[0][1] + n[1] * mx[1][1] + n[2] * mx[2][1],
+                      n[0] * mx[0][2] + n[1] * mx[1][2] + n[2] * mx[2][2]];
+            (nw, d - (nw[0] * mx[3][0] + nw[1] * mx[3][1] + nw[2] * mx[3][2]))
+        }).collect();
         // The key-list motion (`Trigger_Create` 0x1b1720:61-87): keys from `m_paths[extra[8]]`,
         // last = count − 1, step = last / rate [M]; a zero count or no keys leaves it static.
         let count = (p.extra[7] & 0xffff) as usize;
@@ -788,7 +892,14 @@ pub fn build(level: &Level) -> Vec<Trigger> {
             Box::new(Motion { keys: keys.clone(), last, step, t: 0.0, matrix: mx, local })
         });
         // Touch triggers on channel 0x7D only work on level 0x07001500.
-        match Trigger::from_params(i, kind, q, tris).map(|mut t| { t.motion = motion; t }) {
+        match Trigger::from_params(i, kind, q, tris).map(|mut t| {
+            // The record planes overwrite the winding defaults where the record is real (a missing
+            // or degenerate record — the NaN marks — keeps the winding plane set_tris built).
+            for (i, (nw, dw)) in record_planes.iter().enumerate() {
+                if nw.iter().all(|x| x.is_finite()) && dw.is_finite() && i < t.planes.len() { t.planes[i] = (*nw, *dw); }
+            }
+            t.motion = motion; t
+        }) {
             Some(mut t) if raw_dc => {
                 apply_raw_dc_map(&mut t, &param);
                 if !matches!(t.kind, kind::TOUCH | kind::TOUCH_ONCE) || t.out != 0x7d { out.push(t); }
@@ -862,9 +973,13 @@ mod tests {
     use super::*;
 
     fn plate(kind: u8, out: u8, mask: u32, list: Vec<u32>) -> Trigger {
-        // A 2 × 2 horizontal quad at y = 0 around the origin.
+        // A 2 × 2 horizontal quad at y = 0 around the origin, wound +y UP: the game's own floor
+        // plates' plane records all point up (07000005's spawn plate record n = (0,16384,0) d = −0.0
+        // [D, trigger-plane-records probe]) and the raw narrow phase is one-sided on that side —
+        // a toucher above the surface is on the record's front. The pre-record tests rode the
+        // both-sided capsule, where the winding was invisible.
         let (a, b, c, d) = ([-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.0, 1.0], [-1.0, 0.0, 1.0]);
-        Trigger { placement: 0, kind, out, mask, list, lock: 0, hide: false, glist_0x10: true, filter_gate: 0, tris: vec![[a, b, c], [a, c, d]], lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], gone: false, script: None, next_level: 0, gate: 0, key_gate: 0, success: 0, fallback: 0, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None }
+        Trigger { placement: 0, kind, out, mask, list, lock: 0, hide: false, glist_0x10: true, filter_gate: 0, tris: vec![[a, c, b], [a, d, c]], planes: Vec::new(), lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], gone: false, script: None, next_level: 0, gate: 0, key_gate: 0, success: 0, fallback: 0, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None }
     }
 
     /// A keyed trigger's volume rides its keys [M Trigger_Update 0x1b1a78:60-70]: pose at the
