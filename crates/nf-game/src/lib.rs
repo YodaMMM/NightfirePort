@@ -56,6 +56,7 @@ pub mod gt;
 pub mod body_glow;
 pub mod rigid_body;
 pub mod space_laser;
+pub mod creature;
 pub mod copter;
 pub mod shadow;
 pub mod watch;

@@ -11831,7 +11831,8 @@ pub fn captain_skin(skin: u32, param: &impl Fn(u32) -> u32, props: &nf_formats::
 /// - `Creature_Init` 0x135208 (:+0x144) — `LList_Init(0x316e90, 0xf0, 0)` [M 0x135208:6-7], the
 ///   creature list. Retail data never creates a creature: placement type 0xe0 ships on no level
 ///   [D census — docs/systems/script-census.md:120, docs/systems/uncited-audit.md:229], so the
-///   list stays empty and the port carries none (an empty-list init is a no-op).
+///   list stays empty. The mechanics ARE ported (`crate::creature` — the pool's `llist` folds
+///   it); `Drones::attach_level_id` runs the kind-0xE0 case, which creates nothing on retail.
 /// - The per-class update/delete dispatch (.data 0x26f890 base, stride 12 {update, _, delete}
 ///   [D]; Creature class 0x23 rows at 0x26fa34/0x26fa3c, Copter 0x3B at 0x26fb54/0x26fb5c) never
 ///   fires for 0x23 for the same census reason — see docs/port-map/unreached.md.
@@ -12158,6 +12159,11 @@ pub struct Drones {
     /// head; the driver drains it after the tick, the blasts BEFORE the bullet sum (the game's
     /// frame order — the blast fires mid-frame, the MP update reads the chain at the frame's end).
     pub site_blast_hits: Vec<(f32, usize)>,
+    /// The creatures (placement kind 0xE0, class byte 0x23) — `Creature_Create` 0x134ab8's
+    /// pool. Empty on retail: no level ships kind 0xE0 [D — the census test
+    /// `creature_kind_0xe0_never_ships`, re-verified 2026-11-04]; the mechanics are ported in
+    /// `crate::creature` so the census tripwire's demand is already met if data ever changes.
+    pub creatures: crate::creature::Creatures,
     pub last_flinch: Option<u32>,
     /// The level's `light_tag` records (`LightList` 0x2c74c0): level placements, ambient radiators,
     /// the searchlights' kind-2 beams and the muzzle flashes (fix-lighting).
@@ -12855,6 +12861,7 @@ impl Drones {
             spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             bullet_contacts_now: Vec::new(),
             bullet_contacts_prev: Vec::new(),
+            creatures: crate::creature::Creatures::new(),
             space_laser_beams: Vec::new(),
             // fix-06-alarm.
             sound_triggers: Default::default(),
@@ -13599,11 +13606,14 @@ impl Drones {
         // placements. `Sub_Create` 0x1ad6c0 (case 0x36, 0x1d04f0:215) and `MiniSub_Create`
         // 0x182130 (case 0x37, 0x1d04f0:221) have no row in the disc placement census
         // (docs/systems/script-census.md's type table) — no shipped level carries either kind.
-        // `Creature_Create` 0x134ab8 / `Creature_CalcPoint` 0x134cf0 / `Creature_CalcWaypoints`
-        // 0x134e58 (case 0xE0, 0x1d04f0:353) likewise: "Creature_Create type 0xE0 never occurs
-        // on the disc" [D script-census.md:120; docs/systems/uncited-audit.md:229-231 — dead on
-        // retail data]. The port therefore runs no case for them; the proof is the census, and
-        // the game functions are cited here at the exact dispatch site that would call them.
+        // Creatures (case 0xE0, 0x1d04f0:351-357 → `Creature_Create` 0x134ab8) ARE ported now
+        // (`crate::creature` — create/calc_point/calc_waypoints/move/hurt/delete with addresses).
+        // The dead-data fact stands: "Creature_Create type 0xE0 never occurs on the disc" [D
+        // script-census.md:120; docs/systems/uncited-audit.md:229-231; the census test
+        // `creature_kind_0xe0_never_ships` re-verified on the slim ISO 2026-11-04], so this case
+        // creates nothing on retail — it is the exact dispatch the game runs, and the census
+        // test is the tripwire that keeps the two in step.
+        self.creatures = crate::creature::attach(level);
 
         // The drones' `placement` is the create pass's own enumeration index (`level_drones`'s
         // `dr.placement = i`; `parsemap_create_dynamic_objects` 0x1d04f0 creates one object per
@@ -18846,6 +18856,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // (0x26f9c8/0x26f9cc, ELF scan); the runtime order is the object list's creation
             // order, which the placement-keyed sort preserves.
             .chain(self.rbodies.list.iter().enumerate().map(|(j, r)| (r.placement as usize, 7u8, j)))
+            // The creatures (placement kind 0xE0, class byte 0x23): `Creature_Update` sits in the
+            // same `control_funcs` table (row 0x23 at 0x26FA34 = 0x26f890 + 0x23·12 — {update,
+            // NULL collide, delete} [M+D]). Empty on retail — the census is the dead-data proof.
+            .chain(self.creatures.list.iter().enumerate().map(|(j, c)| (c.placement, 8u8, j)))
             .collect();
         order.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         // `Doors_Calc`'s head memset (0x135fe0:13), which the game runs at the TOP of
@@ -18989,6 +19003,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // the list; the helper needs `&mut self` — drained after the loop).
         let mut spoken_subs: Vec<(u32, bool, f32)> = Vec::new();
         for &(_, what, index) in &order {
+            // The creatures (class 0x23): `Creature_Update` 0x135268 — the cel gate folded open
+            // (deviation 2 in crate::creature's doc), `Creature_Move` 0x135340's state machine
+            // per tick, `Creature_Delete` 0x135230 on delete_me. Empty on retail (the census).
+            if what == 8 { let _pw = crate::prof::scope("ctl: kind 8");
+                self.creatures.tick_one(index, d.world, player.pos, &mut self.rng);
+                continue;
+            }
             if what == 1 { let _pw = crate::prof::scope("ctl: kind 1");
                 self.triggers[index].update(&mut self.channels, &touchers, &self.bullet_contacts_prev, frame);
                 if std::mem::take(&mut self.triggers[index].lock_msg) { self.info_labels.push((0x200_0021, 180.0)); }

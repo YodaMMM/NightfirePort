@@ -125,3 +125,9 @@ Progress:
 - [04:40 UTC] Sandbox start: repo + work/ (slim) + ISO + nf-queue worktree all present from an
   earlier session; branch cut from origin/master; WORKLOG restored from the running copy, entry
   started. Next: decompile survey of Creature_* and the creature placement census.
+- [05:58 UTC] The port is in: `crates/nf-game/src/creature.rs` (Creature_Create 0x134ab8 /
+  CalcPoint 0x134cf0 / CalcWaypoints 0x134e58 / Init 0x135208 / Delete 0x135230 / Update
+  0x135268 / Hurt 0x1352d0 / Move 0x135340, six unit tests), `Drones.creatures` field +
+  the kind-0xE0 attach + the class-0x23 control dispatch (`what == 8`). Fixed the impl
+  split (move_tick/calc_waypoints are per-creature). Lib test compiles. Next: lib tests,
+  census re-run, full suite, walkreal sweep, report.
