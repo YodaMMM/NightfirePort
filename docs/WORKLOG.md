@@ -115,3 +115,20 @@ outputs; the probe ran nf-extract coll-obj/coll-scan + a throwaway weapon-record
   stop the world ray, so the 00agent corridor gate reads blocked even where the game flies.
 - Port fix queued: the flight traces gain the glass pass (surface byte & 0x3f == 0x10 passes
   for records with +0x6c bit 0x800 clear), matching 0x1ea398:216-229.
+
+## level-08-00agent-hind (round 1 outcome, 2026-11-04 02:26 UTC)
+
+The flight's GLASS PASS is ported and verified: `segment_flight`/`segment_flight_scoped` drop
+the surface-byte-0x10 hits for the rounds whose record +0x6C bit 0x800 is clear [M Collide_Update
+0x1ea398:216-229; Bullet_update 0x12e7b0 disasm 0x12f030-0x12f058]; the player-bullet flight
+(tw/tstop/copter-shield) and the 00agent d3 gates read it. The GUARD-side flight keeps the
+documented deviation (glass_pass: false at the four spawn sites): arming it turned the d2 Agent
+walk red at tick 25178 — the #23/#19 volleys pass the top-station glass the platform-mouth stand
+hides behind; the route work is the next session's. walkreal_07000008_live 5 passed 0 failed
+1 ignored (d2 re-verified green; nf-game lib 656/0/5).
+
+The 00agent walk (run un-ignored once): the shoot-out taps 9 rounds, kills NOTHING (dead rows
+[]; every pane reads OPEN — the rows' script objects ended at the ride's EntityEnd: no dynamic
+quads AND the box-contact kill never fires — the orphaned-row lead), then rocket 1 (t138) flies
+through the open pane plane and self-blasts. Next: re-source the bottom-terminal panes, then the
+corridor gate's wall-band reach. The ignore stays on with the state in its message.
