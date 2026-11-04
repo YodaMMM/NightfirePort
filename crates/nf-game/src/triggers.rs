@@ -143,6 +143,10 @@ pub struct Trigger {
     /// side is authoritative where the winding disagrees. `set_tris` fills it from the winding (the
     /// pre-record reading); the level parse overwrites it with the records (triangles_with_planes).
     pub planes: Vec<([f32; 3], f32)>,
+    /// A laser-beam glist (flags 0x645 [D 0700000a #607/#614/#621]): the only cels the standing
+    /// HITTEST segment touches. Its low reach is proven on these [L ch 0x24]; on floor plates it
+    /// fires ahead of the measured box and moves scripted sequences. // [S] scope, not a game rule
+    pub seg_beam: bool,
     pub lo: V3,
     pub hi: V3,
     /// TouchOnce removed itself (its channel was on).
@@ -512,7 +516,7 @@ impl Trigger {
         let mask = if mask == 0 { 2 } else { mask };
         if matches!(kind, kind::TOUCH | kind::TOUCH_ONCE) && out_ch == 0x7d { return None; }
         let filter_gate = if matches!(kind, kind::TOUCH | kind::TOUCH_ONCE) { list.get(4).copied().unwrap_or(0) as u8 } else { 0 };
-        let mut t = Trigger { placement, kind, out: out_ch as u8, mask, list, lock: lock as u8, hide, glist_0x10: true, filter_gate, tris: Vec::new(), planes: Vec::new(), lo: [0.0; 3], hi: [0.0; 3], gone: false, script: None, next_level, gate, key_gate, success, fallback, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None };
+        let mut t = Trigger { placement, kind, out: out_ch as u8, mask, list, lock: lock as u8, hide, glist_0x10: true, filter_gate, tris: Vec::new(), seg_beam: false, planes: Vec::new(), lo: [0.0; 3], hi: [0.0; 3], gone: false, script: None, next_level, gate, key_gate, success, fallback, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None };
         if kind == kind::MOVIE { t.movie_code = out_ch; }
         t.set_tris(tris);
         Some(t)
@@ -597,9 +601,9 @@ impl Trigger {
             && (0..3).all(|k| c.b[k] >= self.lo[k] && c.b[k] <= self.hi[k]) {
             return true;
         }
-        // The strict law runs for the standing HITTEST segment only; the measured box, the crouch
+        // The strict law runs for the standing segment and for Bond on the beams; the box elsewhere, the crouch
         // body and the drones keep the both-sided capsule every measured pin stands on.
-        if c.seg_only {
+        if c.seg_only || (self.seg_beam && !c.drone && c.r > 0.0) {
             // trigger-hittest-segment: the game's own narrow phase for the capsule touchers
             // (`Intersect_CylGeom` 0x109da0's RAW branch — the trigger cels' glist flags carry
             // bit 0x40 [D 0700000a #607/#614/#621 = 0x645, 07000011 #235 = 0x50; `Collide_Intersect`
@@ -611,7 +615,7 @@ impl Trigger {
             // script-stream plates, e.g. 07000005's gatehouse ch 0x5C quad) has no side to read:
             // the standing segment stays off it (the box keeps the both-sided capsule): the
             // low reach waits on a measured ride contact.
-            if self.planes.is_empty() { return false; }
+            if !self.seg_beam || self.planes.is_empty() { return false; }
             return self.tris.iter().enumerate().any(|(i, t)| match self.planes.get(i) {
                 Some((n, d)) => seg_touches_tri_raw(c.a, c.b, c.r, t, n, *d),
                 None => { let (n, d) = winding_plane(t); seg_touches_tri_raw(c.a, c.b, c.r, t, &n, d) }
@@ -924,6 +928,7 @@ pub fn build(level: &Level) -> Vec<Trigger> {
             for (i, (nw, dw)) in record_planes.iter().enumerate() {
                 if nw.iter().all(|x| x.is_finite()) && dw.is_finite() && i < t.planes.len() { t.planes[i] = (*nw, *dw); }
             }
+            t.seg_beam = target.is_some_and(|(om, oi)| level.maps[om].objects[oi].flags == 0x645);
             t.motion = motion; t
         }) {
             Some(mut t) if raw_dc => {
