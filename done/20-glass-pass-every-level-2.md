@@ -4,3 +4,8 @@ Continue origin/s/glass-pass-every-level (merge origin/master first) and read it
 
 ---
 claimed-by: sandbox1 at 2026-11-04T12:50Z
+
+---
+## Report (done, 2026-11-04T13:16Z)
+
+Closed by the driver: the report is on `s/glass-pass-every-level-2` (docs/reports/glass-pass-every-level-2.md); the worker didn't run finish.sh.
