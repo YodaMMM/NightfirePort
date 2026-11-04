@@ -56,11 +56,61 @@ resupply. Built the opt-in lane_floor_drops band (the fight drops rest ON the fl
 under Bond's pos y — the lane 0.5 band could not see them); with it the NE-landing pass walked
 onto a fresh kill drop and armed clip 30. The remaining levers listed in the report.
 
-## real-health-00agent-01 (branch cut, 2026-11-04 00:10 UTC)
+## level-08-00agent-doors (branch cut, 2026-11-03 22:31 UTC)
 
-Task: the 00 Agent (difficulty 3) sister of walkreal_07000001_live's real-damage walk —
-Drones::difficulty == 3 asserted at load; the difficulty3_07000001_live pins and the
-level-01-agent-hall-fight-2 report are the reading; the Agent walk belongs to
-level-01-agent-stairwell-doors, reuse what it lands; guards take their door routes on master
-(door 2 at (-15.0, 6.3, 14.1)). Real input only, no top-ups, helpers opt-in. Branch cut from
-origin/master a71f9233.
+Task: re-route the late-mission leg of
+walkreal_07000008_live::walk_the_whole_mission_on_real_input_real_damage_00agent (ignored on
+master after the door-routes merge: Bond dies tick 25773 near (113.19, 28.28, -122.97) to #20,
+skin 0x500002f, weapon 0x15, 9.8 u, 6.0 a-hit) the way a player would — kill #20 first, cover,
+approach. Real input only, no top-ups. Operative and Agent walks stay green. Branch cut from
+origin/master 38052bf6.
+
+## level-15-agent-doors (branch cut, 2026-11-03 22:35 UTC)
+
+Task: re-route
+walkreal_07000015_live::walk_spawn_to_the_omega_sector_exit_real_damage_agent (ignored on
+master after the door-routes merge: a -41.6 world hit at tick 5400, -22.5 from #11 skin
+0x50000b2 at 6191, death to #5 skin 0x500008c at 7885 near (-0.02, 41.32, 46.87)) the way a
+player would — identify the world hit (blast / hurt volume / live wire) and why the door
+change moved Bond or a guard into it, then cover + approach on real input. Real input only,
+no top-ups. The Operative walk stays green. Branch cut from origin/master 38052bf6.
+
+## level-01-agent-stairwell-doors (branch cut, 2026-11-03 22:39 UTC)
+
+Task: make
+walkreal_07000001_live::walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent
+green on Agent and un-ignore it. On master (after level-14-cascade-servers-4: one +0xBA8
+door slot, OpenDoor ENTER deferral) the 07000001 guards take their door routes: door 2 at
+(-15.0, 6.3, 14.1) opens around frame 3460 and the SMG guards reach the stairwell head.
+Bond arrives at the pre-stairwell clear on ~38.7 health and the pair #3 (skin 0x5000038) /
+#12 meet him at 1-2.5 u (TooClose doubling [M Drone_ModBulletDamage 0x139f50]). Tried and
+not enough: the sweep at every difficulty (the Operative walk is green), back_off 6.5 during
+the sweep, no approach walk. Levers: arrive with more health (the pickups, the hall phase's
+settle gap), fight the pair from the hall's west side before they reach the head, or catch
+them at door 2 as they come through. Real input only; no top-ups. Run every walkreal_*_live;
+full suite total line. Branch cut from origin/master 38052bf6.
+
+## level-01-agent-stairwell-doors (round 1 outcome, 2026-11-03 23:55 UTC)
+
+DONE — walkreal_07000001_live::walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent
+UN-IGNORED and green (end health 20.9, level_exit at tick 10238, the contact on the plate,
+ch 0x10 on). The brief's levers died on the disc: the stairwell ch-0xF ambush is a PLACED
+pocket pair, not a door route — [L the trio trace on this tree] #12 (0x5000036 SMG) stands
+DISABLED at (-31.31, 6.34, 11.51) and #17 (0x5000039 SMG) at (-29.08, 6.34, -0.01) from the
+hall AND on (state 0x1; disabled objects are dropped from bullet collision [M Collide_PickObj
+0x1eae80:82 +0xF0 & 0x20]), #3 (0x5000038 SMG 24 hp) is enabled early by the ch-0x26 slab at
+x -17.85..-16.45 [D placement dump] and hunts from the south room. The corridor's walkable
+band at the 0xF slab's x is z >= 13.4 only [L the sight probe: the z 11.8-13.0 hip rays all
+hit], so the slab (x -26.13..-24.73, z 13.25..16.84 [D]) covers the full width — the pop is
+unavoidable, and #12's pocket has NO clear eye ray from any mouth stand [L the same probe]
+(he must step out; the mouth fire draws him — he advanced to (-30.6, 13.4) in the pre-fix
+run's mouth fight [L the dmg trace]). The fix (test-side only, no src change): cross the slab
+deliberately, step back out in the poppers' 10-tick reaction window [M DroneFunc_ReactionTime
+0x14ac60:15-24], fight from the mouth at 6.5+ u (outside the TooClose doubling [M
+Drone_ModBulletDamage 0x139f50]) — the backed-off return fire dropped #12/#3/#17 for 3.1
+health on the fix run — and the pocket rule: a guard parked west of x -27 is shot-only,
+NEVER nav-approached (the pre-fix run died walking into the 0.4-u corner). Verified:
+walkreal_07000001_live 7/0 (the un-ignored Agent walk included), all 26 walkreal_0700xx_live
++ celprobe + dump binaries 0 failed (the pre-existing ignores only), nf-game 1047/0 + 656
+lib/0, nf-formats+nf-audio 136/3 (the 3 disc_golden allowance). Report:
+docs/reports/level-01-agent-stairwell-doors.md.
