@@ -129,3 +129,18 @@ d2 wrap ride the pushed history (`git cherry-pick bd007c18f 74f660327`, plus the
 
 not visible to me (no token, credit, context-window or cost figures are exposed anywhere in
 this sandbox session; nothing in the environment reports them).
+
+## ntfy failed
+
+All three fallbacks failed at ~19:12 UTC 2026-11-04:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "real-health-14-00agent-3: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'…', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "…" https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out after 60 s and was killed (no output).
+
+The report and the finish.sh step (`OK done 10-real-health-14-00agent-3`, queue commit
+15d9cbaf5) completed before the notification attempts; only the ntfy ping is outstanding.
+
