@@ -102,3 +102,12 @@ green set with the flag shipped default-off.** Everything below is pushed.
 
 not visible to me — no token, credit, context-window or cost figures are shown anywhere
 in this environment's interfaces for this session.
+
+## ntfy failed
+
+- curl: `curl: (28) Connection timed out after 15001 milliseconds`.
+- python3 urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`.
+- wget: the connection attempt was still running when the 20 s timeout killed it
+  (`rc=124`) — no response, no output. The sandbox has no route to ntfy.sh (the same
+  record as the -3 report's and every earlier task's). No notification was delivered
+  from this sandbox.
