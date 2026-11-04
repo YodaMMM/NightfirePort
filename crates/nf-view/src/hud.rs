@@ -1411,6 +1411,16 @@ fn outlined_text(h: &mut Hud, anchor: Anchor, font: &nf_formats::hud::Font, tex:
     h.text_scaled_tex(anchor, font, layer, tex, s, x0, y, false, c, false, 1.0);
 }
 
+/// The script camera's frame: only the subtitle sprite outlives the HUD's sprite pass —
+/// `Text_Update` 0x1b1510 hands it the first viewer whose +0x2a is still set.
+pub fn cutscene_subtitles(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
+    let mut h = Hud { quads: Vec::new(), aspect, textures: &scene.hud_textures };
+    if let (Some(s), Some(t)) = (scene.sim.as_ref(), scene.hud.as_ref()) {
+        subtitles(&mut h, s, t);
+    }
+    h.finish()
+}
+
 /// The subtitle sprites, font 2 centred on x 256, colour 0x7d6d59, no bar [L `SubTitleSprInfo`
 /// 0x319940; style 0x30cdb0]. A script camera's line (`Text_Update` 0x1b1510) sits at y 426 and
 /// runs a line wider than `TextMsgFormats[4]`'s 480 as consecutive parts, each for its share of the
@@ -1424,8 +1434,7 @@ fn subtitles(h: &mut Hud, s: &crate::scene::Sim, t: &nf_formats::hud::HudTables)
     };
     if s.drones.hud_frozen {
         let Some(m) = s.hud.subs[0].front() else { return };
-        let wrapped = t.font.word_wrap(&m.text, 480.0);
-        let parts: Vec<&str> = wrapped.split('\n').collect();
+        let parts = crate::menu::font_word_wrap(&m.text, &t.font, 480.0);
         let total = parts.iter().map(|p| p.len()).sum::<usize>().max(1) as f32;
         let mut left = (m.life - m.time) / m.life.max(1.0) * total;
         for p in &parts {
@@ -1436,12 +1445,11 @@ fn subtitles(h: &mut Hud, s: &crate::scene::Sim, t: &nf_formats::hud::HudTables)
             }
         }
     } else if let Some(m) = s.hud.subs[1].front() {
-        let wrapped = t.font.word_wrap(&m.text, 460.0 * 0.6);
-        let (first, rest) = wrapped.split_once('\n').unwrap_or((&wrapped, ""));
+        let lines = crate::menu::font_word_wrap(&m.text, &t.font, 460.0 * 0.6);
+        let Some(first) = lines.first() else { return };
         line(h, first, 402.0);
-        let rest = rest.replace('\n', " ");
-        let wrapped = t.font.word_wrap(&rest, 460.0);
-        if let Some(second) = wrapped.split('\n').next().filter(|l| !l.is_empty()) {
+        let rest = lines[1..].join(" ");
+        if let Some(second) = crate::menu::font_word_wrap(&rest, &t.font, 460.0).first() {
             line(h, second, 422.0);
         }
     }

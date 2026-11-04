@@ -111,3 +111,17 @@ fn the_apostrophe_reaches_its_glyph() {
     assert_eq!(font.layout("Can\u{201c}t", 0.0, 0.0).0.len(), 5, "five glyphs");
     assert_eq!(font.layout("Cant", 0.0, 0.0).0.len(), 4);
 }
+
+/// The game's own measure breaks these lines where PCSX2 does: the cut-scene part at 480 ends on
+/// "I" [L 07000001, Subtitles on], the play line at 276 ends on "six" [L 07000006].
+#[test]
+fn subtitle_lines_break_as_the_game_does() {
+    let Some(path) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let Ok(scene) = nf_view::load(&path, "07000006.bin", false) else { return };
+    let font = &scene.hud.as_ref().unwrap().font;
+    let wrap = nf_view::menu::font_word_wrap;
+    let cam = "Ah, Mr. Bond - at last.  This is Kiko Hayashi, my bodyguard. I assure you, she\u{201c}s quite skilled.";
+    assert!(wrap(cam, font, 480.0)[0].trim_end().ends_with("bodyguard. I"), "{:?}", wrap(cam, font, 480.0));
+    let play = "Can\u{201c}t I rest a moment?  I drove six hours to get here.";
+    assert!(wrap(play, font, 276.0)[0].trim_end().ends_with("drove six"), "{:?}", wrap(play, font, 276.0));
+}
