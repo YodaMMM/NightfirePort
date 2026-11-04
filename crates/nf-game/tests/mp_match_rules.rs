@@ -519,6 +519,17 @@ fn ctf_events_raise_their_sounds() {
     assert_eq!(m.objects_rt.sounds, [0x14c, 0x14f], "the drop");
     m.touch_flag(0);
     assert_eq!(m.objects_rt.sounds, [0x14c, 0x14f, 0x14f], "the return");
+    // the lines: flag 0 is Phoenix's (0x1c7); from its base "captured", then "dropped", "returned"
+    assert_eq!(
+        m.objects_rt.msgs,
+        [(0x200003a, Some(0x1c7)), (0x2000039, Some(0x1c7)), (0x200003b, Some(0x1c7))]
+    );
+    // sister: taking it where it lies is "picked up", not "captured" [M 0x1861a8:182,265]
+    m.touch_flag(1);
+    m.player_killed(1, Some(0), false, false, &mut rng);
+    m.objects_rt.msgs.clear();
+    m.touch_flag(1);
+    assert_eq!(m.objects_rt.msgs, [(0x200003c, Some(0x1c7))]);
 }
 
 /// The hill sounds on stepping on, once per 5 s per slot, not every tick
