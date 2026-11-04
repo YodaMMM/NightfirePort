@@ -8,3 +8,7 @@ Done = those four green plus the WHOLE of every walkreal_*_live, interactables_*
 
 ---
 claimed-by: sandbox7 at 2026-11-04T13:24Z
+
+---
+## Report (done, 2026-11-04T15:09Z)
+
