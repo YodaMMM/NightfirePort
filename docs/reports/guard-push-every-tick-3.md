@@ -75,3 +75,12 @@ dodge cleared it). `interactables_07000001_live` improved to 7/3 (was red on the
 ## Usage
 
 not visible to me — this session exposes no token, cost or context-window figures to the agent.
+
+## ntfy failed
+
+All three notification fallbacks failed in this sandbox (ntfy.sh unreachable from here):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds` (exit 28)
+2. `python3 -c "...urlopen(...)"` → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → killed by the 30 s timeout, no output (exit 124)
