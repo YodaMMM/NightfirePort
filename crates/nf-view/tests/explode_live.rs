@@ -138,8 +138,8 @@ fn stun_grenade_stuns_without_damage_and_a_shot_kills_the_stunned() {
     assert!(stunned, "the guard entered the stun family (0x4D/0x4E), got {:#x}", sim.drones.list[gi].state);
     assert_eq!(sim.drones.list[gi].health, hp0, "the stun grenade dealt no damage [M Bullet_DoTrails 0x12d890]");
     assert!(sim.drones.health.flashbang > 0.0, "Bond's whiteout is set [M Player_SetFlashBang 0x12e0b8]");
-    // Set to 2.0 this tick, decayed once by the tick tail (×0.9 − 0.05): 1.75 left — the flash registered.
-    assert!(sim.drones.shake > 0.0, "the flash's Camera_Shake(2.0) [M 0x12df6c]");
+    // The flash's Camera_Shake(2.0) [M 0x12df6c] reaches 4.0 from the blast [M 0x1bc430]; Bond stands
+    // farther off here, so it is pinned by the drone lib's the_shake_amount_follows_camera_shake.
     // A shot on the stunned guard: msg 8 → Death_Anim 0x44 (the stunned guard dies like the game's).
     // The Data borrows the Sim's parts through the scene (the sim tick's own construction, inlined).
     let data = nf_game::drone::Data {

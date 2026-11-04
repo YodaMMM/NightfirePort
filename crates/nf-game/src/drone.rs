@@ -11697,14 +11697,13 @@ pub fn hazard_link_flag(weapon_type: u16, stuck: bool) -> Option<(f32, u16)> {
 }
 
 /// The per-viewer shake amount `Camera_Shake` 0x1bc430:12-26 writes [M]: with range = 2·radius
-/// and d ≤ range, `min((int)(range·(1 − (d/range)²)), 10)`; 0 outside. Explode_Create 0x17cc28
-/// only calls it from radius ≥ 0.5.
-#[allow(dead_code)] // not wired yet
+/// and d ≤ range, `min(range·(1 − (d/range)²), 10.0)`, a float (`min.s` at 0x1bc4d0, `swc1` the next
+/// word); 0 outside. Explode_Create 0x17cc28 only calls it from radius ≥ 0.5.
 pub fn camera_shake_amount(radius: f32, dist: f32) -> f32 {
     let range = radius * 2.0;
     if dist > range { return 0.0; }
     let inten = range * (1.0 - (dist / range) * (dist / range));
-    if inten <= 0.0 { 0.0 } else { (inten as i32).min(10) as f32 }
+    if inten <= 0.0 { 0.0 } else { inten.min(10.0) }
 }
 
 pub fn flash_amount(head: V3, blast: V3, px: f32, pz: f32, yaw: f32, has_los: bool) -> f32 {
@@ -12099,13 +12098,16 @@ pub struct Drones {
     /// The satchel countdown beeps raised this tick (pos) — Bullet_DoTrails' 0x447 arm
     /// [M 0x12d890:435-443], flushed to audio + `sounds` after the bullets pass.
     pub pending_beeps: Vec<V3>,
-    /// The camera-shake amount: `Explode_Create` 0x17cbd0 calls `Camera_Shake(pos, radius)` when the
-    /// radius reaches 0.5 [M 0x17cc28-0x17cc44]. The port keeps the old [S] set (max radius) and
-    /// decay (×0.9 − 0.05): the game's `Camera_Shake` 0x1bc430 per-viewer `min((int)(2r·(1−(d/2r)²)),
-    /// 10)` store and `Camera_Update` 0x1bb6d8:35-43's vector draw + `shake −= Rand_FRand(shake·0.25)`
-    /// are not ported yet (the int-into-float store and the RNG draws need
-    /// the disassembly). The view reads it for the offset.
+    /// `viewer+0x200`, the camera-shake amount: `Camera_Shake` 0x1bc430 stores
+    /// [`camera_shake_amount`] when it is positive; `Camera_Update` 0x1bb6d8:37-43 spends it each
+    /// tick, see [`Drones::shake_tick`].
     pub shake: f32,
+    /// This tick's eye offset from the shake, added to the view's position.
+    pub shake_eye: V3,
+    /// The shake's own generator. The game draws from the shared seed pair [M 0x1e00d0, 0x1e3780];
+    /// here it stays apart so a blast re-rolls nothing in the sim and never touches the net
+    /// hash [S].
+    pub shake_seed: u32,
     pub health: crate::bullet::PlayerHealth,
     /// Every hit on Bond: (tick, shooting drone, health lost).
     pub player_hits: Vec<(u32, usize, f32)>,
@@ -12933,7 +12935,7 @@ impl Drones {
             if let Some(g) = &mut dr.body_glow { g.owner = i; }
         }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, player_move_local: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), stats_table: Default::default(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, shake_eye: [0.0; 3], shake_seed: 0x5ca1_ab1e, bond_crouched: false, bond_view_bones: None, player_move_local: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), stats_table: Default::default(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             // The game's `DAT_00299092` (the shared LOS-probe counter; see the field) — zeroed
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
@@ -14321,7 +14323,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `Camera_Shake(pos, radius)` only from radius 0.5 [M 0x17cc28]. The exact
         // Camera_Shake/Camera_Update port (camera_shake_amount) is not wired yet (open store/RNG
         // questions) — the old shape stays.
-        if radius >= 0.5 { self.shake = self.shake.max(radius); }
+        if radius >= 0.5 { Self::camera_shake(&mut self.shake, radius, pos, player_pos); }
         self.explosions.push((pos, radius, damage, owner, weapon_type));
         // explode-debris-spawn: the blast is a persistent object now — `Explode_Create` 0x17cbd0's
         // class-0x0F object with its EXPLODEINFO, ticked at the walk head from the next frame
@@ -15945,6 +15947,31 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     }
 
     /// `Sound_Play3D(id, pos, …)`: heard (the sound pool) and, unless looped, entered in the drones' hearing list.
+    /// `Camera_Shake` 0x1bc430: a positive amount replaces the viewer's [M :20-24].
+    fn camera_shake(shake: &mut f32, radius: f32, pos: V3, viewer: V3) {
+        let e = [pos[0] - viewer[0], pos[1] - viewer[1], pos[2] - viewer[2]];
+        let amount = camera_shake_amount(radius, (e[0] * e[0] + e[1] * e[1] + e[2] * e[2]).sqrt());
+        if amount > 0.0 { *shake = amount; }
+    }
+
+    /// `Camera_Update` 0x1bb6d8:37-43 with a shake up: `Rand_FRand_MVar2_Vec` 0x1e00d0 moves the eye
+    /// by `s·r − s` per axis, s = shake·REC_FRAME_RATE, then `shake −= Rand_FRand(shake·0.25)`
+    /// [M 0x1e3780]; below zero clears it, and a spent shake stops drawing under 0.001 [S].
+    fn shake_tick(&mut self) {
+        self.shake_eye = [0.0; 3];
+        if self.shake <= 0.0 { return; }
+        let mut unit = || {
+            self.shake_seed = self.shake_seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (self.shake_seed >> 8) as f32 / (1u32 << 24) as f32
+        };
+        let s = self.shake / 60.0;
+        let eye = [s * unit() - s, s * unit() - s, s * unit() - s];
+        let spent = unit() * self.shake * 0.25;
+        self.shake_eye = eye;
+        self.shake -= spent;
+        if self.shake < 0.001 { self.shake = 0.0; }
+    }
+
     pub fn play_sound(&mut self, pos: V3, h: nf_formats::sfx::SfxHearing) { self.play_sound_handle(pos, h); }
 
     /// The pain grunt `Sound_Play3D(100, −1, −1, 0x88, BL+0x30)` — `Player_HandlePain`
@@ -20968,7 +20995,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             if let Some(t) = d.sfx { let h = t.get(0x16); self.audio.play3d(h.id, pos, None); }
                             self.lights.create(10.0, 5.0, pos, [0xff, 0xff, 0xff], 0, 10, 1, 0, &mut self.rng);
                             self.gas.init(pos, 0.0, [0.0; 3], 0.5, 1.68, 0xb, [0x00, 0x80, 0x80, 0x80], 30.0);
-                            self.shake = self.shake.max(2.0);
+                            Self::camera_shake(&mut self.shake, 2.0, pos, player.pos); // [M 0x12d890:291]
                             if owner == usize::MAX {
                                 // The broadcast [M 0x12d890 flash arm 0x12e0c0 → `Drone_MessageObjVicinity`
                                 // 0x13a438]: msg 0x18 to every class-2 object within 20.0 (`0x41a00000`;
@@ -21197,7 +21224,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // was set to FRAME_RATE·f·10 = 600·f ticks [M 0x196040 + 0x12e0b8]). The old self-fraction
         // decay (−f/6 per tick) erased the whiteout in ~6 ticks — invisible.
         self.health.flashbang = (self.health.flashbang - 1.0).max(0.0);
-        self.shake = (self.shake * 0.9 - 0.05).max(0.0); // [S] the old shape; the exact decay is not ported yet
+        self.shake_tick();
         // The SimpleScripts (`SS_Update` 0x1a9948's state machine — grates-02). The `SS_Operate`
         // 0x1a9df8 contacts, from the collision pass's registered dynamic set: the player's
         // capsule box (bit 0) and this tick's player-bullet flight (bit 1) against each SS part's
@@ -21666,7 +21693,7 @@ mod tests {
     fn the_shake_amount_follows_camera_shake() {
         assert_eq!(camera_shake_amount(8.0, 0.0), 10.0, "2·8 = 16 at the centre → capped 10");
         assert_eq!(camera_shake_amount(3.0, 0.0), 6.0, "2·3 = 6, under the cap");
-        assert_eq!(camera_shake_amount(3.0, 1.5), 5.0, "6·(1−0.0625) = 5.625 → (int) 5");
+        assert_eq!(camera_shake_amount(3.0, 1.5), 5.625, "6·(1−0.0625), kept as a float [M min.s 0x1bc4d0]");
         assert_eq!(camera_shake_amount(3.0, 6.0), 0.0, "d = 2r → intensity 0");
         assert_eq!(camera_shake_amount(3.0, 6.5), 0.0, "d > 2r → outside, 0");
         assert_eq!(camera_shake_amount(1.0, 0.0), 2.0, "2·1 = 2 — the 0.5 floor's smallest real shake");

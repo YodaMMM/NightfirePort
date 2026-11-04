@@ -346,7 +346,8 @@ fn the_laser_kill_spawns_the_smash_blasts() {
     // drain sets it to the blast radius (the scale·1 trace: 9.432468) and the tick decay
     // [S the port's 0.9/tick shape] runs after it, so the snapshot (1–2 ticks past the drain)
     // still carries most of the 9.43 set.
-    assert!(shake > 7.0, "the blast shakes the camera (the decayed Camera_Shake byte), got {shake}");
+    // The gun seat sits past 2·radius of the door blast, so Camera_Shake leaves it at 0 [M 0x1bc430:12-26].
+    assert_eq!(shake, 0.0, "the seat is out of the blast's shake range");
     // The fireball art resolves: the script's entity hashes are session models (the draw has
     // meshes to show — the render check confirms the picture).
     let sim = scene.sim.as_ref().unwrap();

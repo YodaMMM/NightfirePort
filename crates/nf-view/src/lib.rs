@@ -2756,6 +2756,8 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     let cam = &scene.sim.as_ref().and_then(|s| s.view_override()).map(|(p, d)| Camera {
         pos: Vec3::new(p[0], p[1], p[2]), yaw: d[0].atan2(d[2]), pitch: d[1].clamp(-1.0, 1.0).asin(), fov: GAME_FOV,
     }).unwrap_or(*cam);
+    let shaken = Camera { pos: cam.pos + Vec3::from(scene.sim.as_ref().map_or([0.0; 3], |s| s.drones.shake_eye)), ..*cam };
+    let cam = &shaken;
     let (opts_right, opts_up) = cam_axes(cam);
     opts.right = opts_right;
     opts.up = opts_up;
@@ -5783,6 +5785,8 @@ impl App {
                             if let Some((p, yaw, pitch, fov)) = sim.cam2_camera() {
                                 self.cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV / fov };
                             }
+                            // `Camera_Update` 0x1bb6d8:37-43: the shake moves the finished eye.
+                            self.cam.pos += Vec3::from(sim.drones.shake_eye);
                         }
                         // Dev readout in the window title (the real HUD panes are the draw code's):
                         // the game's own pane inputs — health BL+0x894 [M HUD_UpdateHealthPane
