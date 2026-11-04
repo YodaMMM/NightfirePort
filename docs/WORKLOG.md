@@ -146,3 +146,8 @@ Progress:
   1's "dead downstream" claim was false — the Mat_GetNorm dir realign persists across the
   CalcWaypoints loop (doc reworded). New mode-1 test (steps = extent, clamp skipped);
   7/7 creature tests green in release.
+- [10:08 UTC] Report written (docs/reports/creature-ambient.md): the citation path (kind
+  0xE0 ships on no level — census test green on the slim ISO), the 8-function port, the
+  audit's 6 fixes, the full-suite totals (1060 binaries: 4102 passed / 3 allowed
+  disc_golden failures / 326 ignored; the 81 walkreal+door/guard binaries re-run green
+  after the audit fixes). Finishing: push → finish.sh → ntfy.
