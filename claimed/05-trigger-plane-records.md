@@ -5,3 +5,6 @@ Continue origin/s/trigger-hittest-segment (merge origin/master first) and read d
 Do: parse the plane records in the level parse, feed `seg_touches_tri_raw` the record's plane, re-wire `touched_by` (r > 0) and the standing `player.body` (the diff is e7f80cd6), retune the 0a ring's #614 jump press to ~1.8 (the route-side legs are in e7f80cd6).
 
 Done = low_beam_621_fires_standing un-ignored and green; walkreal_0700000a_live, fix_truck_live, interactables_07000011_live and every trigger/beam/laser test green; every walkreal_*_live green; the full suite total line. List each binary with its count.
+
+---
+claimed-by: sandbox3 at 2026-11-04T02:51Z
