@@ -493,6 +493,31 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     w.walk_route(route_c);
     // (The west-room grenadiers are answered from the rim mark above, before this doorway is
     // walked — level-15-agent-doors. The fights' leftovers resolve on the legs' return fire.)
+    // REAL-HEALTH TACTIC (level-15-agent-doors-2): the placement-spot pre-shoots at the rim mark
+    // MISSED the west-room pair (the door routes walk the guards off their spots — the v7 run's
+    // agent_drone_near(8.0) found none there), and #10's return-fire stands then cost 21.0
+    // across two fights (the west-room fight gave up, the door[52]-through fight killed him at
+    // 12.6 more). A player stepping into the west room kills the grenadiers he can see (hp 20 —
+    // one head hit [M NDrone2_HitDamage 0x145558 × DroneDamage_Head; the d2 head-hunt wrapper])
+    // before the throwing starts: the nearest live hostile within 14 u of Bond, answered from
+    // the jog (the room's interior is open floor between the doorway and the south wall), and
+    // the sweep repeats while one stands (the measured run's first sweep took #11 at 12.5 u and
+    // #10's own fire still cost 8.4 on the legs' return fire).
+    if difficulty >= 2 {
+        for sweep in 0..3 {
+            let near = { let sim = w.scene.sim.as_ref().unwrap();
+                (0..sim.drones.list.len())
+                    .filter(|&i| { let d = &sim.drones.list[i];
+                        d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 })
+                    .min_by_key(|&i| { let d = &sim.drones.list[i]; let b = sim.bond.pos;
+                        ((d.pos[0] - b[0]).powi(2) + (d.pos[1] - b[1]).powi(2) + (d.pos[2] - b[2]).powi(2)) as u32 })
+                    .filter(|&i| { let d = &sim.drones.list[i]; let b = sim.bond.pos;
+                        ((d.pos[0] - b[0]).powi(2) + (d.pos[1] - b[1]).powi(2) + (d.pos[2] - b[2]).powi(2)) < 14.0 * 14.0 })
+            };
+            let Some(di) = near else { break };
+            w.shoot(di, &format!("the west-room grenadier met at the jog, sweep {sweep} (level-15-agent-doors-2: by proximity, not the spot)"));
+        }
+    }
     let (route_d1, route_d2) = route_d.split_at(route_d.iter().position(|(l, _)| *l == "door[50] through").unwrap());
     w.walk_route(route_d1);
     // REAL-HEALTH TACTIC (level-15-agent-doors): the great-hall grenade guard is answered from
@@ -543,6 +568,15 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     for _ in 0..40 { w.tick(nf_game::player::Input::default(), false); }
     assert!(w.scene.sim.as_ref().unwrap().drones.doors.list[42].state & 0xc != 0,
         "door[42] is open inside the auto-close window [M 0x13660c-0x136700]");
+    // REAL-HEALTH TACTIC (level-15-agent-doors-2): the fence's own pops are pure distance — all
+    // three records carry damage 80, radius 10 [L the run probe 2026-11-04 printed all three:
+    // damage 80, radius 10; the measured pops at the threshold stand were
+    // 80·(1−9/10)·0.6 = 4.8 and 80·(1−8/10)·0.6 = 9.6 ×2 = 24.0 together]. A player who has
+    // come this far takes the shot from OUTSIDE every blast: two steps north put all three
+    // mines ≥ 10 u away ((int)d ≥ 10 → the sweep's damage is zero [M Explode_Propagate
+    // 0x17c518's truncation]) — the line still runs down the open doorway's x 0 aperture and
+    // the assert's range rule (d > 8) holds with room to spare.
+    w.walk_to(Wp::new(0.0, 41.4, 28.5).r(0.5), "the fence mark north (outside the pops' radius 10)");
     let d = shoot_mine(&mut w, 447, [0.0, 42.3, 17.29], "the south-corridor fence #447 from the threshold");
     assert!(d > 8.0, "#447 is shot from RANGE through the open doorway ({d:.2} u)");
     w.wait(10);
@@ -752,9 +786,12 @@ fn crouching_under_the_door52_beam_passes_it() {
 /// Drones::difficulty, asserted at load). Agent spawns the min-difficulty-2 placements
 /// [M Drone_Create 0x136be0:49], scales Bond's pain by Plr_DMod_Normal [M Player_HandlePain
 /// 0x1902c8] and the guards' hit chance by Accuracy row 2 [M DroneWeap_DoBulletAccuracy
-/// 0x179740:74-88]. Real input only; no health, ammo or channel writes.
+/// 0x179740:74-88]. Real input only; no health, ammo or channel writes. GREEN on the doors
+/// route (level-15-agent-doors-2): the west-room grenadiers are answered by proximity at the
+/// jog (the placement-spot pre-shoots missed the door-route drift) and the #447 fence shot is
+/// taken from 11.1 u — outside all three blasts' radius 10 [L the probe; M Explode_Propagate
+/// 0x17c518's truncation] — Bond crosses the exit at 26.2 health.
 #[test]
-#[ignore = "Agent: with the guards taking their door routes (level-14-cascade-servers-4) Bond takes a 41.6 world blast hit at frame 5400 and dies to #5 at 7885 near (-0.02, 41.32, 46.87); follow-up level-15-agent-doors"]
 fn walk_spawn_to_the_omega_sector_exit_real_damage_agent() {
     walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(2));
 }
