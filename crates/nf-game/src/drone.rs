@@ -3161,6 +3161,14 @@ impl Drone {
             pos: self.pos, dir: [s, 0.0, c], speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
             damage: f32_at(0x0c), owner, state: 0, weapon: record as u16,
             flyby: d.weapons.flyby(record), bounces: 0,
+            // The guard-side flight keeps the port's documented deviation (the glass pass NOT
+            // modelled [S]): the real-health routes stand behind station glass (the 08 d2
+            // platform-mouth wave cleared at zero cost while the rounds stopped on it) — arming
+            // the pass here turned walk_the_whole_mission_on_real_input_real_damage_agent red at
+            // tick 25178 (#23/#19 volleys through the top-station glass). The player-side flight
+            // carries the pass (update_player_bullets' flight_glass) where the Hind fight needs
+            // it; the guard-side route work lands with the next session.
+            glass_pass: false,
             ..crate::bullet::Bullet::TAIL
         })
     }
@@ -11232,7 +11240,11 @@ impl Drone {
         (0..w[0x18]).map(|_| {
             let dir = crate::bullet::spread(aim, f32_at(0x24), flags68, rng);
             let mut b = crate::bullet::Bullet { pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage, owner, state: 0,
-                weapon: self.weapon as u16, flyby: d.weapons.flyby(self.weapon as usize), bounces: 0, ..crate::bullet::Bullet::TAIL };
+                weapon: self.weapon as u16, flyby: d.weapons.flyby(self.weapon as usize), bounces: 0,
+                // Guard-side deviation: the glass pass stays unmodelled (see the close-combat
+                // spawn above — the real-health routes stand behind station glass).
+                glass_pass: false,
+                ..crate::bullet::Bullet::TAIL };
             b.init_fuse(w);
             b
         }).collect()
@@ -14640,7 +14652,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // mine-shield-by-guard: the query moved ahead of the mine and stuck-gadget passes so
             // the guard competes with them by hit distance [M the same first-hit rule]; the
             // application stays in the match below.
-            let tw = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
+            // The flight's glass pass [M Bullet_update 0x12e7b0 disasm 0x12f048-0x12f058 —
+            // HITTEST+0x9a = 0x20 for records with +0x6C bit 0x800 clear; Collide_Update
+            // 0x1ea398:216-229 passes the surface-byte-0x10 contacts]: computed once per
+            // round, shared by every world trace of the flight below.
+            let flight_glass = d.weapons.records.get(b.weapon as usize)
+                .is_some_and(|w| u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0);
+            let tw = d.world.segment_flight_scoped(d.world.find_cel(b.pos), b.pos, end, flight_glass);
             for (i, dr) in self.list.iter().enumerate() {
                 // `Drone_CollisionHandler` 0x140968:62 returns while `NPCGlobals == 0` (the NIS freeze:
                 // drones take no damage) and `Collide_PickObj` 0x1eae80:26-30 drops `obj+0xF0 & 0x20`
@@ -14679,7 +14697,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // The round's world stop rides the game's cel-scoped pick [M Collide_Pick 0x1eb320:125
                 // candidate nodes from Collide_StraddleCels 0x1eac98 only; Bullet_update re-feeds
                 // the round's start cel every tick, disasm 0x12f0cc-0x12f0d8].
-                let tstop = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
+                let tstop = d.world.segment_flight_scoped(d.world.find_cel(b.pos), b.pos, end, flight_glass);
                 for (i, br) in self.breaks.list.iter().enumerate().filter(|(_, x)| !x.dead) {
                     // `Collide_FilterBullets` [M 0x1ece30:24-33]: the weapon's category word
                     // against the pane's mask | 0x106 — non-zero AND drops the contact.
@@ -15024,7 +15042,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         if *present & (1u16 << slot) == 0 { continue; }
                         let Some((centre, r)) = targets[slot] else { continue };
                         let Some(t) = Self::segment_sphere_entry(b.pos, end, centre, r) else { continue };
-                        let tw = *tw_copter.get_or_insert_with(|| d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end));
+                        let tw = *tw_copter.get_or_insert_with(|| d.world.segment_flight_scoped(d.world.find_cel(b.pos), b.pos, end, flight_glass));
                         if tw.is_some_and(|w| w < t) { continue; }
                         self.copters[ci].part_hits.push(crate::copter::PartHit { slot: slot as u8, damage: bcontact, class: bclass });
                         copter_stop = true;
@@ -17385,6 +17403,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 damage: f32_at(0x0c), owner: usize::MAX, state: 0,
                                 weapon: crate::gt::TURRET_WEAPON_RECORD as u16,
                                 flyby: d.weapons.flyby(crate::gt::TURRET_WEAPON_RECORD), bounces: 0,
+                                // Guard-side deviation: the glass pass stays unmodelled (see the
+                                // close-combat spawn in drone.rs).
+                                glass_pass: false,
                                 ..crate::bullet::Bullet::TAIL
                             };
                             b.init_fuse(w);
@@ -17624,6 +17645,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                     pos: from, dir, speed: f32_at(0x20), travelled: 0.0,
                                     range: f32_at(0x1c), damage: f32_at(0x0c), owner: usize::MAX,
                                     state: 0, weapon: 107, flyby: d.weapons.flyby(107), bounces: 0,
+                                    // Guard-side deviation: the glass pass stays unmodelled (see the
+                                    // close-combat spawn in drone.rs).
+                                    glass_pass: false,
                                     ..crate::bullet::Bullet::TAIL
                                 };
                                 b.init_fuse(w);

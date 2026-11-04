@@ -91,6 +91,12 @@ pub struct Bullet {
     /// rewrite [M 0x12e7b0:163-217, 246-265; L ee_start_05.bin weapon_data 0x3b]. `dir` follows the
     /// arc; the mesh and the countdown digits keep this. Set for the 0x3b family by `init_fuse`.
     pub spawn_dir: Option<V3>,
+    /// The flight's GLASS PASS: the round's weapon record `+0x6C` bit 0x800 CLEAR → the flight's
+    /// HITTEST+0x9a carries 0x20 every flying tick and the contact walk passes surface-byte-0x10
+    /// (glass) contacts [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f058; Collide_Update
+    /// 0x1ea398:216-229]. Set from the record at construction (the `drone.rs` spawn sites);
+    /// false = the bit-0x800 records (the fists 0x01, the laser 0x45) whose flight stops on glass.
+    pub glass_pass: bool,
 }
 
 impl Bullet {
@@ -102,6 +108,9 @@ impl Bullet {
         owner: 0, state: 0, weapon: 0, flyby: false, bounces: 0,
         fuse: 210.0, fuse_ticks: false, burn: 0, defused: false, landed: false,
         stick_normal: None, last_qs: 0, digits: None, spawn_dir: None,
+        // Own line (lesson 4): the glass pass defaults OFF — the bit-0x800 records; the spawn
+        // sites arm it from the record.
+        glass_pass: false,
     };
 
     /// `Bullet_init` 0x12c5a0's fuse block (the tail of the initializer, after the velocity
@@ -235,7 +244,7 @@ impl Bullet {
         // a candidate [M Collide_Pick 0x1eb320:125 → Collide_StraddleCels 0x1eac98]. The port
         // re-derives the cel with build_FindCel 0x1c8cb0 each tick, exactly like the PlayerBullet
         // flight next door; the no-scope fallback is the flat ray.
-        let tw = world.segment_bullet_scoped(world.find_cel(self.pos), self.pos, end);
+        let tw = world.segment_flight_scoped(world.find_cel(self.pos), self.pos, end, self.glass_pass);
         let tp = segment_cylinder(self.pos, end, player);
         let at = |t: f32| [self.pos[0] + (end[0] - self.pos[0]) * t, self.pos[1] + (end[1] - self.pos[1]) * t, self.pos[2] + (end[2] - self.pos[2]) * t];
         // CompHitData 0x1d33c0 [M] — QuickSort comparator id 2 (Collide_Update 0x1ea398 / Collide_RayIntersect 0x1ec690 / Collide_SphereIntersect 0x1ec940 / Collide_CylinderIntersect 0x1ecc00 / Collide_FilterBullets 0x1ece30 sort their hit lists by the f32 at HITDATA+0xc, ascending); the port keeps no hit list — the nearest-of comparison below replaces the sort.
