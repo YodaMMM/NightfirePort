@@ -118,3 +118,13 @@ predecessor branches measured the full rebuild does not fit.
 ## Usage
 
 not visible to me (no token, context-window or cost figures are exposed to this session).
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-04 ~03:10 UTC):
+- `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` →
+  `curl: (28) Connection timed out after 20002 milliseconds`
+- `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'...', headers={'Title':'NightfirePort'}), timeout=20)"` →
+  `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+- `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → killed at the 30 s tool
+  timeout with no output.
