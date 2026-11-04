@@ -107,3 +107,32 @@ fn a_pickup_line_goes_to_the_info_pane() {
     assert_eq!(sim.hud.info_msgs.len(), 2);
     assert!(sim.hud.info_msgs.front().unwrap().time < before / 2.0 + 0.5, "halved");
 }
+
+/// audit-mp-panes: the MP health pane hides while the Ronin remote view is up [M
+/// HUD_UpdateMPHealthPane 0x19b630:54-61 — the hide set reads the enable bytes of panes
+/// 9/10/11/16/17/18; 18 is the Ronin's cam mode 0xf]. Real path: the sim owns a player Ronin
+/// turret taken to state 7 (`GT_TakeControl` 0x181740 sets ext+0xf2/state 7 [M]; the port's
+/// `ronin_mounted` stands in for pane 18's enable byte), the frame draws no 0x03000172/71
+/// quads. Sister: without the mount the backing draws.
+#[test]
+fn the_mp_health_pane_hides_under_the_ronin_view() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = nf_view::load_mp_carry(&iso, "07000023.bin", false, None, settings(3)).expect("load");
+    let slot = |h: u32| scene.hud_textures.iter().position(|(k, _)| *k == h).map(|i| i + 1);
+    let backing = slot(0x0300_0172).expect("the MP health backing loads");
+    let bar = slot(0x0300_0171).expect("the MP health bar loads");
+    // sister first: unmounted, the backing draws
+    let frame = nf_view::hud::overlay(&scene, 4.0 / 3.0);
+    assert!(quads_with(&frame, backing) > 0, "the backing draws without the mount");
+    // the mount: a player-owned turret at state 7 (MOUNTED [M 0x181740])
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        let mut t = nf_game::gt::GTurret::default();
+        t.owner = nf_game::gt::PLAYER_OWNER;
+        t.state = nf_game::gt::gt_state::MOUNTED;
+        sim.drones.gt_turrets.push(t);
+    }
+    let frame = nf_view::hud::overlay(&scene, 4.0 / 3.0);
+    assert_eq!(quads_with(&frame, backing), 0, "no backing under the Ronin view [M 0x19b630:54-61]");
+    assert_eq!(quads_with(&frame, bar), 0, "no bar either — every pane sprite hides");
+}
