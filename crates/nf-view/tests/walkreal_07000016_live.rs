@@ -1695,7 +1695,7 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
 /// died AT the stands (2189) under the crossfire. NEXT LEVERS: a cover-shaped approach (the
 /// fights' own flank machinery on the gallery from the ring, one guard at a time, with the
 /// ring's south rim as the break), or an armour pickup before the ramp foot (none found on
-/// the chain set), or the main agent's live scout of whether the gallery is reachable on foot
+/// the chain set), or a live PCSX2 scout of whether the gallery is reachable on foot
 /// (the station's west side?) — the player answer this route is missing.
 #[test]
 #[ignore = "Agent: Bond dies on real health — the south gallery (four AR guards above z -102..-112) plinks 71.4 of the 100 free from tick 455; the ring-gated (48,18) window makes the fights take them but the ring trades still cost 44 (entered the chaser at 7.6); levers: a cover-shaped gallery approach from the ring, an armour pickup, a live scout of the gallery's foot access"]
