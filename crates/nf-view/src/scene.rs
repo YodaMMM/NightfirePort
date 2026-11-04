@@ -7819,7 +7819,17 @@ impl Scene {
         // the exit fade can never be refused or covered by a script fade.
         // hud-start: the ENTRY fade is not in this chain any more — it draws UNDER the gameplay
         // HUD (`entry_fade_hud`).
-        let fade = sim.drones.exit_fade_view().or_else(|| sim.drones.view_fade);
+        let fade = sim.drones.exit_fade_view().or_else(|| {
+            // The script viewer's fade draws only while a script camera holds viewer 4 enabled:
+            // `Script_KillStream` case 4 disables it with the camera stream (`Camera_Enable(4, 0,
+            // 0, 0)` [M 0x1d9860:71-76]) and `Script_CameraStart` re-arms it — so a script fade
+            // that outlives its cut-scene (the intro→story hand-off has no camera-free tick for
+            // the hand-back clear) stops drawing with the scene, the game's ramp-after-disable
+            // never reaches the screen. The gameplay viewer's fades (the tail's fade-in) draw
+            // regardless (`view_fade_script` false).
+            let cam = sim.script_camera().is_some();
+            sim.drones.view_fade.filter(|_| !sim.drones.view_fade_script || cam)
+        });
         let mut f = crate::hud::script_overlay(fade, sim.drones.letterbox, &sprites, &self.hud_textures, aspect, flash);
         if sim.script_camera().is_some() {
             f.append(&crate::hud::cutscene_subtitles(self, aspect));
