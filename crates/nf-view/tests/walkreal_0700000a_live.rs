@@ -529,7 +529,14 @@ fn walk_to_security_keyboard_at(difficulty: u32) -> Walker {
     // over beam #621, the nav up to the west corridor south of beam #614, the jump north, the
     // north corridor, and beam #607's plane crouched on the doorway line.
     w.walk_to(Wp::new(-13.5, 0.4, -34.4).r(0.5), "the band east to the column (back)");
-    jump_over_low_beam(&mut w, BEAM_621, [-13.5, 0.4, -30.6], 1.0, "jump beam #621 northbound");
+    // The northbound press widens 1.0 → 2.2: the walked route's phase (the #614 sweep-jump's
+    // arm watch re-timed the ticks) shifts the band-west arrival ~0.66 east, and at press 1.0
+    // the takeoff stand lands INSIDE #621's (x,z) footprint (x −14.8, z −33.4 [L the 621watch
+    // round: 0x24 stamped exactly here]) — the band's record planes face the SOUTH side
+    // [L: the southbound crossing from the north stays clean at the same footprint], so the
+    // northbound raw refine reads it. Press 2.2 fires the jump at (−15.6, −34.4), 0.72 clear
+    // of the band's west-south corner in 3D, and the arc's footprint ticks ride y-safe B ≥ 1.3.
+    jump_over_low_beam(&mut w, BEAM_621, [-13.5, 0.4, -30.6], 2.2, "jump beam #621 northbound");
     let back = {
         let sim = w.scene.sim.as_ref().unwrap();
         // The final node holds SOUTH of the beam's swept band (the box floor 10.146, the
