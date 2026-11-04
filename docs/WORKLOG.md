@@ -30,3 +30,13 @@ run green. The 07000014 tripbomb walk went green with the trench-guard kill and 
 re-finds; the 07000016 punch walk with the gated shelter-door counter-fire. Remaining: the
 07000014 real-damage west-route swarm and the 07000016 real-damage defeat walk (report:
 docs/reports/drone-block-swaps-g055-2.md).
+
+## drone-block-swaps-g055-3 (started 2026-11-04 10:14 UTC)
+
+Branch s/drone-block-swaps-g055-3 from origin/s/drone-block-swaps-g055-2 (82128666),
+origin/master (66822831) merged in (the one conflict — the stairwell-foot y cap in
+walkreal_07000014_live.rs, two copies — resolved to the looser 1.1 with both sides'
+justifications). Task: the last two real-health walks under the G-055 hunt — 07000014's
+delta-exit walk (dies ~14137 at (-48,30) to the p5=100 hunters #281/#283) and
+07000016's chaser-defeat walk (dies ~9241 on the pit floor to the chaser + pit squad).
+Real input only; no health tops; shared helpers stay opt-in.
