@@ -598,6 +598,15 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     for _ in 0..600 {
         if w.scene.sim.as_ref().unwrap().drones.copters.iter().any(|c| c.out == 0x4b && (1..=2).contains(&c.state)) { flying = true; break; }
         w.tick(Input::default(), false);
+        // hind-flight-pin: the arrival log — every 30 ticks from the gate opening [M Copter_Update
+        // 0x17dbb8 head], the copter's live flight record.
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.drones.frame % 30 == 0 {
+            for c in sim.drones.copters.iter().filter(|c| c.out == 0x4b) {
+                eprintln!("[08 flight] f{} pos ({:.2},{:.2},{:.2}) state {} path {:?} t {:.2} dmg {:.1}",
+                    sim.drones.frame, c.pos()[0], c.pos()[1], c.pos()[2], c.state, c.path, c.t, c.damage);
+            }
+        }
     }
     assert!(flying, "the gate ch 5 opened the route flight (state 1/2) [M 0x17dbb8 head]");
     // 00 Agent (difficulty 3): SHOOT OUT the carriage's north and south panes before the fight.
@@ -747,6 +756,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     for t in 0..20000u32 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b) { ch4b = true; break; }
         let sim = w.scene.sim.as_ref().unwrap();
+        // hind-flight-pin: the fight log — every 30 ticks to the death [M the death tail writes
+        // ch 0x4B at 0x17e3bc-0x17e3c8].
+        if sim.drones.frame % 30 == 0 {
+            let c = &sim.drones.copters[ci];
+            eprintln!("[08 flight] f{} pos ({:.2},{:.2},{:.2}) state {} path {:?} t {:.2} dmg {:.1}/{:.0} bullets {}",
+                sim.drones.frame, c.pos()[0], c.pos()[1], c.pos()[2], c.state, c.path, c.t, c.damage, hp,
+                sim.drones.bullets.iter().filter(|b| b.state != 2).count());
+        }
         let cp = sim.drones.copters[ci].pos();
         let rocket = sim.drones.player_bullets.iter().find(|b| b.guided_cam && !b.dead).map(|b| (b.pos, b.dir));
         let (from, yaw, pitch) = match rocket {
