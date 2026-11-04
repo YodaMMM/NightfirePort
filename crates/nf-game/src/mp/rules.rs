@@ -34,6 +34,14 @@ pub const PLAYER_SPHERE_DY: f32 = -0.1267;
 /// `0600003e` entry is 299 ticks [D the archive entry's length field; the live load reads the
 /// arena's own copy through `level.nis`, so this constant is only the headless rigs' value].
 pub const GE_STRIKE_FRAMES: u16 = 299;
+/// The scenario one-shots' `MPSound_Play` 0x18bee0 ids [M at each call site].
+const SND_CAPTURE: u32 = 0x14b;
+const SND_CLAIM: u32 = 0x14c;
+const SND_LOST: u32 = 0x14f;
+const SND_GE_LAUNCH: u32 = 0x14a;
+const SND_GE_TAKE: u32 = 0x5d7;
+const SND_HILL_FIVE: u32 = 0x5f8;
+
 
 /// mp-scenarios-online: an MP object's model bounds — the placement's celglist record (`obj+0xD8`):
 /// +0x10 the local sphere centre, +0x1C its radius (`Control_BuildWorldSph` 0x133070 → obj+0x80 /
@@ -104,6 +112,12 @@ pub struct MpObjState {
 /// below; its AI-emitter re-walk is not ported.
 #[derive(Clone, Debug, Default)]
 pub struct MpObjectsRt {
+    /// The `MPSound_Play` 0x18bee0 ids the rules raised since the Sim last drained them
+    /// (presentation, never hashed).
+    pub sounds: Vec<u32>,
+    /// `MPGame+slot·0x30+0x2c`: the clock stamp of the slot's last hill-entry sound, 0.0 = none
+    /// [M 0x186ae0:101-105].
+    pub hill_sound_at: [f32; super::MP_MAX_SLOTS],
     /// The two CTF flags (index = owning team).
     pub flags: [Option<MpObjState>; 2],
     /// The two CTF bases' capture points (the base obj's +0xC0 position).
@@ -196,6 +210,15 @@ impl MpMatch {
     /// (the game walks `HitByList`; the caller resolves), `explosive` = the killing hurt type was
     /// 4..7 [M 0x188f70:193-198] (preloads the carried objects' return counters), `golden_gun` =
     /// the bot golden-gun special (+2.0 [M :170-178]).
+    /// `MPSound_Play` 0x18bee0 — queues the one-shot for the Sim's drain; a rig that never drains
+    /// keeps the newest 64.
+    fn mp_sound(&mut self, id: u32) {
+        if self.objects_rt.sounds.len() >= 64 {
+            self.objects_rt.sounds.remove(0);
+        }
+        self.objects_rt.sounds.push(id);
+    }
+
     pub fn player_killed(&mut self, victim: usize, killer: Option<usize>, explosive: bool, golden_gun: bool, rng: &mut Rng) {
         if self.settings.master == 0 {
             return; // [M 0x188f70:84-86]
@@ -203,6 +226,9 @@ impl MpMatch {
         self.game.slots[victim].deaths += 1; // every scenario [M :92-94]
         if self.settings.scenario == scenario::DEATH_LIMIT_FFA {
             self.game.slots[victim].score -= 1.0; // the lives copy [M :96-98]
+            if self.settings.frag_limit <= self.game.slots[victim].deaths as i32 {
+                self.mp_sound(SND_CLAIM); // out of lives [M :98-99]
+            }
         }
         self.game.slots[victim].dead = true; // the port's obj+0xF4 ∈ {2,3} stand-in
         // The kill message to the last shooter when that is not the victim [M :100-107]. The
@@ -268,13 +294,16 @@ impl MpMatch {
             if let Some(t) = self.assassin_target {
                 if victim == t && killer_slot == self.assassin {
                     self.game.slots[killer_slot.unwrap()].score += 5.0; // [M :229-233]
+                    self.mp_sound(SND_CAPTURE);
                 }
             }
             if self.assassin == Some(victim) {
-                if let (Some(t), Some(k)) = (self.assassin_target, killer_slot) {
-                    if k == t {
+                match (self.assassin_target, killer_slot) {
+                    (Some(t), Some(k)) if k == t => {
                         self.game.slots[k].score += 3.0; // [M :234-242]
+                        self.mp_sound(SND_CLAIM);
                     }
+                    _ => self.mp_sound(SND_LOST), // [M :236-237]
                 }
                 self.assassin_reset(rng); // [M :243]
             }
@@ -289,8 +318,10 @@ impl MpMatch {
     /// preloads to `RETURN_FRAMES` when the kill was explosive.
     fn drop_carried(&mut self, victim: usize, explosive: bool, rng: &mut Rng) {
         let drop_pos = self.game.slots[victim].pos;
+        let mut dropped = 0; // each drop sounds [M 0x1861a8:166, 0x187568:329, 0x1882d8:120]
         for f in self.objects_rt.flags.iter_mut().flatten() {
             if f.carrier == Some(victim) {
+                dropped += 1;
                 f.state = 2;
                 f.carrier = None;
                 f.pos = drop_pos.unwrap_or(f.pos);
@@ -308,6 +339,7 @@ impl MpMatch {
             if !carried {
                 continue;
             }
+            dropped += 1;
             let n = self.objects.goldeneye[i].len();
             let pos = if n > 0 {
                 let pick = rng.rand(n as u32) as usize; // [M 0x187568:281-283]
@@ -328,6 +360,7 @@ impl MpMatch {
         }
         if let Some(bp) = &mut self.objects_rt.blueprint {
             if bp.carrier == Some(victim) {
+                dropped += 1;
                 bp.state = 2;
                 bp.carrier = None;
                 bp.pos = drop_pos.unwrap_or(bp.pos);
@@ -335,6 +368,9 @@ impl MpMatch {
                     bp.counter = RETURN_FRAMES as u16;
                 }
             }
+        }
+        for _ in 0..dropped {
+            self.mp_sound(SND_LOST);
         }
         self.game.slots[victim].status_bits &= !1; // the carrying bit clears [M 0x18a518]
     }
@@ -389,6 +425,9 @@ impl MpMatch {
             p.team = 0; // the team words zero [M :12-19]
         }
         let old = self.assassin.take(); // [M :16,20]
+        if old.is_some() {
+            self.mp_sound(SND_CLAIM); // [M :21-22]
+        }
         let mut new_a = None;
         if inherit {
             if let Some(o) = old {
@@ -836,6 +875,7 @@ impl MpMatch {
                         u.sub = 0;
                         u.state = enemy as i16;
                         u.controller = p as i16;
+                        self.mp_sound(SND_LOST); // [M :52]
                     }
                 }
                 let (state, controller) = {
@@ -858,11 +898,13 @@ impl MpMatch {
                     let u = &mut self.objects_rt.uplinks[ui];
                     u.state = 0; // [M :85-98]
                     u.controller = p as i16;
+                    self.mp_sound(SND_CLAIM);
                 }
                 if let Some(p) = self.obj_hit_by(&self.objects_rt.uplinks[ui], 1) {
                     let u = &mut self.objects_rt.uplinks[ui];
                     u.state = 1; // [M :99-113]
                     u.controller = p as i16;
+                    self.mp_sound(SND_CLAIM);
                 }
             }
         }
@@ -877,17 +919,20 @@ impl MpMatch {
         let team = self.settings.players[slot].team as i16;
         let u = &mut self.objects_rt.uplinks[term];
         if u.state != team {
+            let neutral = u.state == 2;
             u.state = team;
             u.controller = slot as i16; // [M 0x186d98:88-98, 24-52]
             u.sub = 0;
+            self.mp_sound(if neutral { SND_CLAIM } else { SND_LOST });
         }
     }
 
     /// `MP_KOHUpdate` 0x186ae0:78-151 — every alive player on the hill drips 0.2/s personally; in
     /// team games the scoring player's team score is recomputed as the truncated Σ of that team's
     /// personals [M :122-137]. The on-hill status bit 0x10 (+0x26) sets while on the hill and
-    /// clears when an alive player leaves it [M :95-115 `MP_setPlayerStatus(.., 0x10, ..)`]; the
-    /// 5-point sound is presentation.
+    /// clears when an alive player leaves it [M :95-115 `MP_setPlayerStatus(.., 0x10, ..)`].
+    /// Stepping on sounds at most once per 5 s per slot [M :101-105]; each whole score that is a
+    /// multiple of 5 sounds as it is reached [M :138-142].
     fn koth_update(&mut self, dt: f32, on_hill: &[bool; super::MP_MAX_SLOTS]) {
         let s = self.settings.scenario;
         if s != scenario::KOTH_FFA && s != scenario::KOTH_TEAM {
@@ -906,8 +951,20 @@ impl MpMatch {
                 self.game.slots[slot].status_bits &= !0x10; // [M :94-98]
                 continue;
             }
+            if self.game.slots[slot].status_bits & 0x10 == 0 {
+                let at = self.objects_rt.hill_sound_at[slot];
+                if at == 0.0 || at + 5.0 < self.game.clock {
+                    self.mp_sound(SND_CLAIM);
+                    self.objects_rt.hill_sound_at[slot] = self.game.clock;
+                }
+            }
             self.game.slots[slot].status_bits |= 0x10; // [M :115]
+            let before = self.game.slots[slot].score as i32;
             self.game.slots[slot].score += dt * 0.2; // [M :118-121]
+            let after = self.game.slots[slot].score as i32;
+            if after % 5 == 0 && after != before {
+                self.mp_sound(SND_HILL_FIVE);
+            }
             if self.settings.team_game != 0 {
                 let t = self.settings.players[slot].team as usize;
                 self.recompute_team_sum(t); // [M :122-137]
@@ -981,10 +1038,14 @@ impl MpMatch {
             if dmg > 0.0 {
                 site.last_hitter = hitter as i16; // [M :84-91]
             }
-            if site.state >= 1 {
-                return;
-            }
         }
+        if dmg > 0.0 {
+            self.mp_sound(SND_CLAIM); // [M :84]
+        }
+        if self.objects_rt.site.as_ref().is_some_and(|x| x.state >= 1) {
+            return;
+        }
+        self.mp_sound(SND_CLAIM); // [M :126]
         let attacking = 1 - defending;
         self.game.team_scores[attacking] += 1.0; // [M :125-132]
         let h = self.objects_rt.site.as_ref().unwrap().last_hitter;
@@ -1017,6 +1078,7 @@ impl MpMatch {
         f.carrier = Some(slot);
         f.counter = 0;
         self.game.slots[slot].status_bits |= 1; // [M 0x18a518:88-96]
+        self.mp_sound(SND_CLAIM); // [M 0x1861a8:276]
     }
 
     /// `MP_FlagUpdate` 0x1861a8 — state 0: an enemy contact takes the flag [M :170-190]; state 1:
@@ -1052,6 +1114,7 @@ impl MpMatch {
                     if sq_dist(cpos, point) < CAPTURE_SQ_DIST {
                         self.game.team_scores[1 - ti] += 1.0; // [M :89-93]
                         self.game.slots[c].score += 1.0; // [M :94-98]
+                        self.mp_sound(SND_CAPTURE); // [M :124]
                         self.flag_home(ti);
                         self.game.slots[c].status_bits &= !1; // the carrying bit clears [M :87-88]
                     }
@@ -1059,6 +1122,7 @@ impl MpMatch {
                 2 => {
                     if self.obj_hit_by(self.objects_rt.flags[ti].as_ref().unwrap(), fteam as u32).is_some() {
                         self.flag_home(ti); // the teammate return [M :195-221]
+                        self.mp_sound(SND_LOST); // [M :258]
                         continue;
                     }
                     if let Some(p) = self.obj_hit_by(self.objects_rt.flags[ti].as_ref().unwrap(), enemy) {
@@ -1068,6 +1132,7 @@ impl MpMatch {
                     let t = counter;
                     if t > RETURN_FRAMES as u16 {
                         self.flag_home(ti); // the 30 s return [M :226-259]
+                        self.mp_sound(SND_LOST);
                     } else {
                         self.objects_rt.flags[ti].as_mut().unwrap().counter = t + 1;
                     }
@@ -1092,6 +1157,7 @@ impl MpMatch {
             };
             if state == 2 && my_team == fteam as u32 {
                 self.flag_home(ti); // the teammate return [M :195-221]
+                self.mp_sound(SND_LOST);
                 return;
             }
             if (state == 0 || state == 2) && my_team != fteam as u32 {
@@ -1161,6 +1227,7 @@ impl MpMatch {
                             it.counter = 0;
                             it.pos = pos;
                             it.home = pos;
+                            self.mp_sound(SND_LOST); // [M :226]
                         }
                     } else {
                         self.objects_rt.ge[i].as_mut().unwrap().counter = counter + dt_frame(dt);
@@ -1195,6 +1262,7 @@ impl MpMatch {
                 for c in [c0, c1] {
                     self.game.slots[c].score += 1.0; // [M :368-377]
                 }
+                self.mp_sound(SND_GE_LAUNCH); // [M :378]
                 for i in 0..2 {
                     self.objects_rt.ge[i].as_mut().unwrap().state = 3; // [M :379-384]
                 }
@@ -1272,6 +1340,7 @@ impl MpMatch {
             it.carrier = Some(slot);
             it.counter = 0;
             it.team = self.settings.players[slot].team as u16; // the MP_HitBy out-param [M :241]
+            self.mp_sound(SND_GE_TAKE); // [M :435]
         }
     }
 
@@ -1311,7 +1380,8 @@ impl MpMatch {
                     None => sq_dist(cpos, base) < CAPTURE_SQ_DIST,
                 };
                 if reached {
-                    // MP_BluePrintReachedBase [M 0x188970:27-55]
+                    // MP_BluePrintReachedBase [M 0x188970:24-55]
+                    self.mp_sound(SND_CAPTURE);
                     self.game.team_scores[team] += 1.0;
                     self.game.slots[c].score += 1.0;
                     self.game.slots[c].status_bits &= !1;
@@ -1337,6 +1407,7 @@ impl MpMatch {
                     bp.state = 0; // resets to free where it lies [M 0x1882d8:147-180]
                     bp.carrier = None;
                     bp.counter = 0;
+                    self.mp_sound(SND_LOST); // [M :179]
                 } else {
                     self.objects_rt.blueprint.as_mut().unwrap().counter = counter + dt_frame(dt);
                 }
@@ -1358,6 +1429,7 @@ impl MpMatch {
             bp.counter = 0;
             bp.team = self.settings.players[slot].team as u16;
             self.game.slots[slot].status_bits |= 1;
+            self.mp_sound(SND_CLAIM); // [M 0x1882d8:143,197]
         }
     }
 
