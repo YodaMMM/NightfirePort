@@ -10289,7 +10289,7 @@ pub fn font_word_wrap(s: &str, font: &nf_formats::hud::Font, max_w: f32) -> Vec<
             if max_w <= acc { stopped = true; break; }
             let c = rest[i];
             i += 1;
-            let code = match c as u32 { 0x92 | 0x2019 => 0x27, v => v };
+            let code = nf_formats::hud::Lang::cp1252_code(c);
             match c {
                 '\t' | ' ' => brk = i,
                 '\n' => { brk = i; newline = true; break; }
