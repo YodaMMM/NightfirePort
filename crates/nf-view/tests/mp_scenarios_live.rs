@@ -314,6 +314,17 @@ fn a_scenario_object_desync_is_detected() {
 /// Arena (Deathmatch 0x1): slot 0 shoots slot 1 dead through the online combat — +1 score/kill
 /// [M 0x188f70:157-184]; frag limit 1 latches [M 0x184268:170-172] and the FFA who-won names the
 /// unique qualifier [M 0x1848d0:55-86]. Sister: the victim scores nothing.
+/// The scenario one-shots resolve in the arena's loaded banks: an id no bank carries never
+/// starts a voice [M `MPSound_Play` 0x18bee0 ids at the rules' call sites].
+#[test]
+fn scenario_sounds_are_in_the_arena_banks() {
+    let Some(p) = start(settings(scenario::CAPTURE_THE_FLAG, 1, -1, [0, 1])) else { eprintln!("skip: NF_ISO not set"); return };
+    let (_, bank, _) = p.a.sound_bank.as_ref().expect("the arena's bank");
+    for id in [0x14au32, 0x14b, 0x14c, 0x14f, 0x5d7, 0x5f8] {
+        assert!(bank.effect(id).is_some(), "{id:#x} is in the arena bank");
+    }
+}
+
 #[test]
 fn arena_deathmatch_online() {
     let Some(mut p) = start(settings(scenario::DEATHMATCH, 1, -1, [0, 0])) else { eprintln!("skip: NF_ISO not set"); return };
@@ -358,10 +369,16 @@ fn capture_the_flag_online() {
     ticks(&mut p, 2, &row(None, 2));
     let f = p.m().objects_rt.flags[1].as_ref().unwrap();
     assert_eq!((f.state, f.carrier), (1, Some(0)), "the enemy contact takes the flag");
+    for sim in [p.a.sim.as_ref().unwrap(), p.b.sim.as_ref().unwrap()] {
+        assert!(sim.drones.audio.live_ids().contains(&0x14c), "both machines hear the take");
+    }
     place(&mut p, 0, base0, 0.0);
     ticks(&mut p, 2, &row(None, 2));
     assert_eq!(p.m().game.team_scores, [1.0, 0.0], "the capture scores the taker's team");
     assert_eq!(p.m().game.slots[0].score, 1.0, "and the carrier");
+    for sim in [p.a.sim.as_ref().unwrap(), p.b.sim.as_ref().unwrap()] {
+        assert!(sim.drones.audio.live_ids().contains(&0x14b), "both machines hear the capture");
+    }
     assert_eq!(p.m().objects_rt.flags[1].as_ref().unwrap().state, 0, "the flag reset home");
     run_to_end(&mut p, 20);
 }

@@ -2594,6 +2594,9 @@ impl Sim {
             // the shared bit-exact generator — the game's MP_Update draws the global RNG only on
             // the state-6 restart's site re-pick (MP_RestartScenario 0x183fc0)
             m.update(1.0 / 60.0, false, &mut self.drones.rng);
+            for id in m.objects_rt.sounds.drain(..) {
+                nf_game::mp::mp_sound_play(&mut self.drones.audio, id);
+            }
             // mp-host-match-logic: the humans' live positions ride the match every tick (the game
             // reads the live `obj+0x30` per comparison [M 0x185098:123-129]) — the net path set
             // these per tick already; the local path never did, so the spawn policy and the rules

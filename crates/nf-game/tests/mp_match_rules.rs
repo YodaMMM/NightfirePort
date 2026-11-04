@@ -499,3 +499,48 @@ fn respawn_health_and_gates() {
     m.game.state = 3;
     assert!(!m.respawn_allowed(0));
 }
+
+/// The scenario one-shots: a take, a drop and a teammate return each raise their
+/// `MPSound_Play` id [M 0x1861a8:276,166,258]; a capture raises 0x14b [M :124] and not the
+/// return's 0x14f. Sister: touches that change nothing raise nothing.
+#[test]
+fn ctf_events_raise_their_sounds() {
+    let mut rng = Rng::new(7);
+    let mut m = make(scenario::CAPTURE_THE_FLAG, 20, -1);
+    join(&mut m, 0, 0);
+    join(&mut m, 1, 1);
+    m.register_mp_object([30.0, 1.0, 30.0], [0.0, 0.0, 1.0], 0, [0, 0, 0, 0, 0, 0, 0], 0);
+    m.create_mode_objects(&mut rng);
+    m.touch_flag(0); // an owner touching the flag at home does nothing
+    assert!(m.objects_rt.sounds.is_empty());
+    m.touch_flag(1);
+    assert_eq!(m.objects_rt.sounds, [0x14c], "the take");
+    m.player_killed(1, Some(0), false, false, &mut rng);
+    assert_eq!(m.objects_rt.sounds, [0x14c, 0x14f], "the drop");
+    m.touch_flag(0);
+    assert_eq!(m.objects_rt.sounds, [0x14c, 0x14f, 0x14f], "the return");
+}
+
+/// The hill sounds on stepping on, once per 5 s per slot, not every tick
+/// [M 0x186ae0:101-105].
+#[test]
+fn koth_entry_sound_is_rate_limited() {
+    let mut rng = Rng::new(7);
+    let mut m = make(scenario::KOTH_FFA, 20, -1);
+    join(&mut m, 0, 0);
+    let mut on = [false; nf_game::mp::MP_MAX_SLOTS];
+    on[0] = true;
+    m.game.clock = 1.0;
+    for _ in 0..10 {
+        m.update_objects(DT, &on, &mut rng);
+    }
+    assert_eq!(m.objects_rt.sounds, [0x14c], "one sound while standing on it");
+    let off = [false; nf_game::mp::MP_MAX_SLOTS];
+    m.update_objects(DT, &off, &mut rng);
+    m.update_objects(DT, &on, &mut rng);
+    assert_eq!(m.objects_rt.sounds.len(), 1, "stepping back on inside 5 s stays quiet");
+    m.update_objects(DT, &off, &mut rng);
+    m.game.clock = 6.5;
+    m.update_objects(DT, &on, &mut rng);
+    assert_eq!(m.objects_rt.sounds.len(), 2, "past 5 s it sounds again");
+}
