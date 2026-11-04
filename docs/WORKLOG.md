@@ -45,3 +45,12 @@
   0x1b0c30:81-92 (4→5 outside a script camera, 6→1 in multiplayer, 4/5 follow Subtitles
   unless id 0xff). Fix missing/wrong lines with a clear port site, pin each with a test,
   report the rest as a table.
+- [22:40 UTC] Census done (ELF jal scan 40 sites / 22 callers, matches the brief's 23 with
+  Text_AddMsg itself); all labels bound off the real USATxt.dat via a FILES.BIN reader. One
+  fix landed: DroneFunc_HostageSaved 0x1441c0:20-51's rescue INFO lines (0x200004f first save,
+  0x2000050 after) — the port only raised the channel; now Drones::hostage_saves + a
+  Drone::hostage_saved pending flag (the raise pattern) → info_labels. Test
+  hostage_rescue_msgs_live 1/0 (07000002's two geishas, first save via the real shot path),
+  hostage_save_07000002_live 2/0, nf-game --lib 658/0/5-ignored. Left: Player_WeaponFiring's
+  two once-per-boot watch/mine hints (0x1000216/0x10002dc) — no clear port site in the window;
+  stale pickup.rs:128 comment noted. Report at docs/reports/audit-text-lines.md.
