@@ -9,3 +9,7 @@ Real input only; never top up health or force guard state. Shared helpers in tes
 
 ---
 claimed-by: sandbox1 at 2026-11-04T10:07Z
+
+---
+## Report (blocked, 2026-11-04T11:40Z)
+
