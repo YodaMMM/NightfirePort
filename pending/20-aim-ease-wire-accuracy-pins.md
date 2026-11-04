@@ -5,6 +5,3 @@ Two changes on master have no direct real-input test:
 2. Wire accuracy: the move quad zeroes on climb ticks only [M Player_Update 0x193600:129-134], so a wire rider keeps the last walk lanes and guards read him as MOVING [M DroneWeap_DoOpponentTargetting 0x179a48:34-41 -> DroneWeap_DoBulletAccuracy 0x179740:71-73]. Pin on real input on 0d's wire: the rider reads moving, a stationary Bond reads still.
 
 No behaviour change is expected; if a pin shows the port differs from the decompile, fix it with the address. Every walkreal_*_live; the full suite total line.
-
----
-claimed-by: sandbox3 at 2026-11-04T14:29Z
