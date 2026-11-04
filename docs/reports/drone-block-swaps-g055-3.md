@@ -104,3 +104,13 @@ hand-back to the squad phase — expect the route's 8 fights to drain every carr
 not visible to me — no token, credit, context-window or cost figures are shown anywhere in
 this environment's interfaces for this session (a subagent task result quoted its own
 per-task token line, which is not this session's budget).
+
+## ntfy failed
+
+- curl: `curl: (28) Connection timed out after 15002 milliseconds`.
+- python3 urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+  (a first attempt also raised `SyntaxError: bytes can only contain ASCII literal
+  characters` — an em-dash in the message literal; the ASCII retry reached the URLError).
+- wget: DNS resolved (129.212.146.227) and the connection attempt was still running when
+  the 25 s timeout killed it — no notification delivered. The sandbox has no route to
+  ntfy.sh (the same record as creature-ambient's and the earlier tasks').
