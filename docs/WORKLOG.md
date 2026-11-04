@@ -141,3 +141,33 @@ shoot-out must kill panes [M Break_Update; the mirrored contact on the glass obj
 obj+0xD0 chain], a shot-out window must break and clear for the player; then finish
 walkreal_07000008_live::walk_the_whole_mission_on_real_input_real_damage_00agent (real input
 only, no top-ups; remove the ignore when green); every walkreal_*_live; full suite total line.
+
+## level-08-pane-shootout (done, 2026-11-04 09:35 UTC)
+
+Both blockers from the hind session resolved from the DIAGNOSTIC RUNS, no sim-code change needed
+for either; the 00agent walk is green un-ignored and the branch carries the proof:
+
+- **The pane shoot-out killed nothing because the TEST never fired**: the old cleared-gated tap
+  held fire while the aim ray read BLOCKED and let go the moment it read OPEN — and the bounds-
+  centre ray reads OPEN before a single round (the centre sits a hair short of the sheet: the
+  north pane's centre ray eye→centre reads OPEN while a perpendicular ray through the sheet hits
+  at t 0.52 [L the probe raytest 2026-11-04]). The sim's mirrored-contact law was already
+  correct: the player-bullet pass's seg_box_t contact over the pane bounds drains the row [M
+  drone.rs's break contact → Break_Update 0x12bfd8:36-37] and one round kills a health-1.0 pane
+  [D params [2,1,0]]. The shoot-out now fires on the CONVERGED aim (the fire edge every 12
+  ticks): 10/10 end panes die to one round each, both end bearings then read CLEAR 30 u — a
+  shot-out window breaks AND clears.
+- **The rocket self-blasts were the walk's own aim law**: the shot leaves through the CROSSHAIR
+  [M the crosshair pass — aim = look + 0.76966·cx·right + 0.57724·cy·up], and the tracker's
+  convergence saturates the free-aim cursor at its clamp (the fire dump at every launch: cross
+  (−0.296, ±0.394), cursor pinned) — every launch sat up to 0.23 rad off the tracker's converged
+  view, so the guided chase crossed the window frames: the t347 round detonated 2.4 u from Bond
+  (−75 [L the diag run — frame 28066]), the t747 round 2.2 u (−62.5 [L frame 28470]). The fight
+  now aims and gates on the CROSSHAIR's own bearing (d3-gated; the eye-visibility gate ≥ t 0.8
+  and the machine-lane corridor refuse the wall-band launches): 7 rockets, 7 body hits, damage
+  606 vs hp 598, no self-blasts.
+- `walkreal_07000008_live` whole: 6 passed 0 failed 0 ignored (the 00agent sister un-ignored).
+  The walkreal level runs 01-16+1b: 140 passed 0 failed 13 ignored across 19 binaries. nf-game
+  1047/0/8; nf-formats+nf-audio 136/3 (the 3 = the slim-ISO disc_golden allowance). The rest of
+  nf-view's binaries and 0c/11_route/41/4a did not fit this sandbox (the disk filled at 100% —
+  the linker Bus-errors — and the window closed).
