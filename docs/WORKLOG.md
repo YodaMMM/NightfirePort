@@ -131,3 +131,18 @@ Progress:
   the kind-0xE0 attach + the class-0x23 control dispatch (`what == 8`). Fixed the impl
   split (move_tick/calc_waypoints are per-creature). Lib test compiles. Next: lib tests,
   census re-run, full suite, walkreal sweep, report.
+- [09:05 UTC] Suite state: nf-view run complete via the per-binary resumable runner
+  (cargo's own invocation restarts each window; 948 binaries: 2912 passed / 0 failed /
+  318 ignored; every walkreal_*_live, npc_doors_live, fix_npc_doors_live,
+  fix_guard_misc_live green). nf-formats + nf-audio + nf-game chunks green (the 3
+  disc_golden slim-ISO failures only). The independent decompile audit (subagent, 8
+  functions + Spline_Interp + a whole-ELF state-3 store scan) confirmed the 7 load-bearing
+  claims and found 6 real divergences, ALL now fixed in creature.rs: A the create-tail
+  stall (game sets state 1 THEN calcs at create; the port's deferred calc left rate 0
+  forever — initial state is 0 now, deviation 3 reworded), B mode-1's euler ignores the
+  chase 0.2 scale, C CalcPoint's f13 and mode-1's off are the EXTENT (+0xD8), not the roam
+  radius (+0xC8), D the roam clamp is the mode-0/≥2 arm only, E Spline_Interp's position
+  is Catmull-Rom in both modes (mode 0 swaps only the rotation to identity), F deviation
+  1's "dead downstream" claim was false — the Mat_GetNorm dir realign persists across the
+  CalcWaypoints loop (doc reworded). New mode-1 test (steps = extent, clamp skipped);
+  7/7 creature tests green in release.

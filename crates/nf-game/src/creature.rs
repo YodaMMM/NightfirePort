@@ -38,15 +38,20 @@
 //! the sim side; the merge side tracks the missing mesh pose). No retail creature exists to
 //! render (census above).
 //!
-//! Documented port deviations (both no-ops on retail — the pool is empty; both listed in
+//! Documented port deviations (each a no-op on retail — the pool is empty; all listed in
 //! docs/reports/creature-ambient.md for the merge side):
 //! 1. `Creature_CalcPoint`'s hit branch lifts the waypoint by `normal·radius` off the ground
 //!    [M 0x134dfc-0x134e00] and re-aligns the caller's direction buffer with the surface
 //!    (`Mat_Align2Dir` + `Mat_GetNorm` [M 0x134dd8-0x134dfc]). The port's ray API
-//!    (`CollisionWorld::segment_surface` world.rs:2161) carries (fraction, point, material) —
+//!    (`CollisionWorld::segment_hit` world.rs:2161) carries (fraction, point, material) —
 //!    no surface normal — so the port lands the waypoint ON the hit and leaves the direction
-//!    un-realigned. Bounded by `radius`; the game's own realign result is dead downstream in
-//!    the hit branch itself (s2 is never read again [D 0x134dfc-0x134e0c]).
+//!    un-realigned. That divergence is LIVE downstream, not dead: `Mat_GetNorm` writes the
+//!    caller's dir buffer (the in-place arg, disasm 0x134de0-0x134de8) and it persists
+//!    across `Creature_CalcWaypoints`' loop, so after a hit the game's later waypoints leave
+//!    the surface direction while the port's keep the pre-hit one. Bounded by the mode-0/≥2
+//!    roam clamp; mode 1 has no roam clamp (its cel-Y clamp is deviation 2). The overshoot
+//!    the lift/pullback uses is the extent (see calc_point's call site), itself 0.0 under
+//!    deviation 2.
 //! 2. The per-cel reads — the mode-1 admission gate `cel+0x3c == 0xC023` [M 0x134ab8:103],
 //!    the update gate `cel == 0 || cel+0xa0 != 0` [M 0x135268:10-12] and the mode-1 waypoint
 //!    Y-clamp against `cel+0x54`/`cel+0x90` [M 0x13509c-0x1350a4] — need the object's cel
@@ -55,10 +60,13 @@
 //!    by the attach with `None` (gate folded open, clamp off); the extents field
 //!    (`max(|glist+0x38|, |glist+0x28|)` [M 0x134ab8:78-84]) is likewise unmapped
 //!    (docs/fields/glist.md covers only +0x10/+0x1C/+0x40/+0x44) and passes 0.0.
-//! 3. `Creature_Create`'s own `Creature_CalcWaypoints` call [M 0x134ab8:114-116] is deferred
-//!    to the first `Creature_Move` tick (state 0's calc) — the attach runs before the
+//! 3. `Creature_Create`'s own `Creature_CalcWaypoints` call [M 0x134ab8:114-116, disasm
+//!    0x134cbc sets state 1 then 0x134cc0 calls the calc] is deferred to the first
+//!    `Creature_Move` tick (the state-0 branch) — the attach runs before the
 //!    `CollisionWorld` exists. The waypoint set is identical (waypoint 0 is the create
-//!    position, unmoved by then) and the interpolation timeline is unchanged.
+//!    position, unmoved by then) and the interpolation itself is unchanged; the whole
+//!    motion starts one tick later than the game's (the calc tick consumes the first
+//!    `Creature_Update` slot).
 
 use crate::door::{self, Key};
 use crate::trig::{ee_add, atan2f_libm, sinf, HALF_PI};
@@ -168,7 +176,9 @@ impl Creatures {
         let c = Creature {
             home: pos,
             mode,
-            state: 1, // [M 0x134cbc — the create tail sets state 1 (after the deferred calc; deviation 3)]
+            state: 0, // deviation 3: the game sets state 1 then calcs AT create (0x134cbc `sh 1`,
+            // 0x134cc0 `jal 0x134e58`); the attach has no CollisionWorld yet, so the calc is the
+            // FIRST Move tick's state-0 branch and the interpolation starts one tick later.
             radius,
             delay,
             hurt_flag: param(3) as u8,   // [M 0x134ab8:75]
@@ -244,8 +254,16 @@ impl Creature {
             1 => {
                 // [M 0x1353ac-0x1353c4] obj+0xFA |= 0x20.
                 self.moved = true;
-                // [M 0x1353d0] Spline_Interp(+0xcc, +8, 0, 5, obj+0x90, 0, +0xc0).
-                if let Some(m) = door::interp(&self.wps, 0, 5, self.spline_t, self.spline_mode != 0) {
+                // [M 0x1353d0] Spline_Interp(+0xcc, +8, 0, 5, obj+0x90, 0, +0xc0): the game
+                // always runs the spline — the position is Catmull-Rom in both modes
+                // [M 0x1e1858:216-229 unconditional] and spline mode 0 swaps ONLY the
+                // rotation to identity [M 0x1e1858:241/275/334-345] (audit E).
+                if let Some(mut m) = door::interp(&self.wps, 0, 5, self.spline_t, true) {
+                    if self.spline_mode == 0 {
+                        m[0] = [1.0, 0.0, 0.0, 0.0];
+                        m[1] = [0.0, 1.0, 0.0, 0.0];
+                        m[2] = [0.0, 0.0, 1.0, 0.0];
+                    }
                     self.matrix = m;
                     self.pos = [m[3][0], m[3][1], m[3][2]];
                 }
@@ -307,9 +325,11 @@ impl Creature {
                 }
             }
             let (off, euler) = if self.mode == 1 {
-                // [M 0x135014-0x135044] mode 1: off = radius; euler = {Rand_FRandHalf(0.2),
-                // Rand_FRandHalf(π/2), 0}.
-                (self.radius, [scale * rng.frand_half(0.2), scale * rng.frand_half(HALF_PI), 0.0])
+                // [M 0x135014-0x135044 disasm 0x134ff0-0x135024] mode 1: off = extent
+                // (CREATURE+0xD8 — the same value CalcPoint's f13 gets); euler =
+                // {Rand_FRandHalf(0.2), Rand_FRandHalf(π/2), 0} drawn straight — the chase
+                // 0.2 scale does NOT reach the mode-1 arm (audit B).
+                (self.extent, [rng.frand_half(0.2), rng.frand_half(HALF_PI), 0.0])
             } else {
                 // [M 0x135084-0x1350b0] modes 0 and ≥2: off = Rand_FRand(radius·0.5) +
                 // radius·0.5; euler = {s·Rand_FRandHalf(π), s·Rand_FRandHalf(π), 0}.
@@ -317,16 +337,21 @@ impl Creature {
                 (rng.frand(half) + half, [scale * rng.frand_half(HALF_PI), scale * rng.frand_half(HALF_PI), 0.0])
             };
             let mut wp = self.wps[i].pos;
-            calc_point(&mut wp, prev, &mut dir, &euler, off, self.radius, world);
-            // [M 0x1350a8-0x1350d8] the roam clamp: |wp − home|² > radius² → home + radius·dir.
-            let dx = wp[0] - self.home[0];
-            let dy = wp[1] - self.home[1];
-            let dz = wp[2] - self.home[2];
-            let sq = dx * dx + dy * dy + dz * dz;
-            if self.radius * self.radius < sq {
-                let l = sq.sqrt();
-                let k = self.radius / l;
-                wp = [self.home[0] + dx * k, self.home[1] + dy * k, self.home[2] + dz * k];
+            // [M 0x134e58:134,154 disasm 0x13501c/0x1350c0 — f13 = extent, both modes] the
+            // ray's overshoot is the extent, not the roam radius (audit C).
+            calc_point(&mut wp, prev, &mut dir, &euler, off, self.extent, world);
+            // [M 0x1350a8-0x1350d8 disasm 0x135068 — mode 1 exits past the clamp] the roam
+            // clamp is the mode-0/≥2 arm only; mode 1's only clamp is the cel-Y one (audit D).
+            if self.mode != 1 {
+                let dx = wp[0] - self.home[0];
+                let dy = wp[1] - self.home[1];
+                let dz = wp[2] - self.home[2];
+                let sq = dx * dx + dy * dy + dz * dz;
+                if self.radius * self.radius < sq {
+                    let l = sq.sqrt();
+                    let k = self.radius / l;
+                    wp = [self.home[0] + dx * k, self.home[1] + dy * k, self.home[2] + dz * k];
+                }
             }
             // [M 0x13509c-0x1350a4] mode 1's Y clamp against the cel bounds — deviation 2
             // (no cel data: the clamp is off).
@@ -455,7 +480,9 @@ mod tests {
         assert_eq!(c.hurt_player, 1);
         assert_eq!(c.spline_mode, 0);
         assert!(!c.registered);
-        assert_eq!(c.state, 1);
+        // Deviation 3: the deferred calc makes the first tick the state-0 calc tick (the game
+        // calcs at create with state already 1 — 0x134cbc/0x134cc0).
+        assert_eq!(c.state, 0);
         assert_eq!(c.placement, 7);
         // The six waypoint quats are the placement rotation's quat [M 0x134ab8:92-98].
         let q = euler_to_quat(&rot);
@@ -484,7 +511,7 @@ mod tests {
         let mut rng = crate::drone::Rng::new(1);
         let world = CollisionWorld::empty();
         let i = pool.create(0, [0.0; 3], [0.0; 3], &placement(0, 100, 6000, 0, 0), None).unwrap();
-        pool.list[i].state = 0;
+        // Deviation 3: the first tick is the deferred create calc (state 0 → 1).
         pool.tick_one(i, &world, [1e6; 3], &mut rng);
         assert_eq!(pool.list[i].state, 1); // the calc tick
         let mut t = 0.0f32;
@@ -528,7 +555,6 @@ mod tests {
         let mut rng = crate::drone::Rng::new(7);
         let world = CollisionWorld::empty();
         let i = pool.create(0, [10.0, 20.0, 30.0], [0.0; 3], &placement(0, 50, 6000, 1, 0), None).unwrap();
-        pool.list[i].state = 0;
         // The chase check runs against the player position (i ≥ 2, hurt flag set) — a far
         // player keeps the roam branch.
         pool.tick_one(i, &world, [1e6; 3], &mut rng);
@@ -555,5 +581,36 @@ mod tests {
         pool.tick_one(i, &world, [0.0; 3], &mut rng);
         assert!(pool.llist.is_empty());
         assert!(!pool.list[i].registered);
+    }
+
+    /// Mode 1: no roam clamp (audit D — the game's mode-1 arm exits past it) and the ray
+    /// overshoot/off is the extent, not the roam radius (audit C — disasm 0x13501c/0x1350c0
+    /// load f13 from +0xd8, mode-1 off from +0xd8 too). With an empty world every CalcPoint
+    /// misses, so each waypoint lands at prev + dir·off; off = extent = 200 puts every
+    /// waypoint 200 away — far outside the radius-10 roam clamp a mode-0 creature would get.
+    #[test]
+    fn mode_one_skips_the_roam_clamp_and_uses_the_extent() {
+        let mut pool = Creatures::new();
+        let mut rng = crate::drone::Rng::new(3);
+        let world = CollisionWorld::empty();
+        let i = pool.create(0, [0.0; 3], [0.0; 3], &placement(1, 10, 6000, 0, 0), Some(-0x3fddi16)).unwrap();
+        pool.list[i].extent = 200.0; // deviation 2 masks it at attach; the mechanic is the audit's target
+        pool.tick_one(i, &world, [1e6; 3], &mut rng);
+        let wps = &pool.list[i].wps;
+        for k in 1..6usize {
+            let dx = wps[k].pos[0] - wps[k - 1].pos[0];
+            let dy = wps[k].pos[1] - wps[k - 1].pos[1];
+            let dz = wps[k].pos[2] - wps[k - 1].pos[2];
+            let d = (dx * dx + dy * dy + dz * dz).sqrt();
+            assert!((d - 200.0).abs() < 1e-3, "mode-1 step {k} is {d}, expected the 200 extent off");
+        }
+        // The mode-0 twin clamps to its 10-radius roam instead.
+        let j = pool.create(1, [0.0; 3], [0.0; 3], &placement(0, 10, 6000, 0, 0), None).unwrap();
+        pool.list[j].extent = 200.0;
+        pool.tick_one(j, &world, [1e6; 3], &mut rng);
+        for w in &pool.list[j].wps[1..] {
+            let d = (w.pos[0] * w.pos[0] + w.pos[1] * w.pos[1] + w.pos[2] * w.pos[2]).sqrt();
+            assert!(d <= 10.0 + 1e-3, "mode-0 waypoint at {d} escaped the roam clamp");
+        }
     }
 }
