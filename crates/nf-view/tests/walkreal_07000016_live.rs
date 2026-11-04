@@ -1702,3 +1702,15 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
     walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2));
 }
+
+/// The 00 Agent sister (real-health-00agent-16-1b-41-4a): the same walked chaser mission on
+/// real damage, loaded at difficulty 3 the menu way — pain Plr_DMod_Hard 1.0 (the 0x14..=0x16
+/// group [M Player_HandlePain 0x1902c8; bullet.rs damage_factor; 0x1d3a80 case 0x7000014-16:
+/// Normal 0.5, Hard 0x3f800000]) and the guards' hit chance by Accuracy Hard [M
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88]. The d2 gates (the pit-door guard pre-shoot) fire
+/// at 3 too. Real input only; no health/ammo/channel writes.
+#[test]
+#[ignore = "00 Agent: Bond dies in the corridor approach cluster on real health — tick 1141, 20 hits for 100.0 (the d2 ledger's ~86 attrition at Hard: #2 skin 0x50000b2 AR 47.5 in 7, #0 17.5/5, #5 14.0/2, #3 10.5/3, #4 7.0/2), pain Plr_DMod_Hard 1.0 [M 0x1d3a80 case 0x7000014-16] and Accuracy Hard [M 0x179740:74-88] on the game's own pipeline; next lever: the approach-fight work (real-health-agent-16-1b-2) then the 05-07 d3 stands (spawn pre-shoots, head-hunting)"]
+fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_00agent() {
+    walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3));
+}

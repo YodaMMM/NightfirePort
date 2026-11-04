@@ -365,6 +365,17 @@ fn walk_from_the_plate_to_the_tether_crossing_and_the_levels_end_real_damage_age
     walker::with_real_damage(|| walk_from_the_plate_to_the_tether_crossing_and_the_levels_end_at(2));
 }
 
+/// The 00 Agent sister (real-health-00agent-16-1b-41-4a): the same walked crossing on real
+/// health, loaded at difficulty 3 the menu way — 0x7000041 has no case in ReadTuningVars
+/// [M 0x1d3a80: the switch's default returns, so the static rows hold: pain Plr_DMod_Hard
+/// 1.25, Easy 0.75, Normal 1.0 — the default group [M bullet.rs damage_factor; L the ELF
+/// .data initialisers]] and the guards' hit chance by Accuracy Hard [M
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88]. Real input only; no health/ammo/channel writes.
+#[test]
+fn walk_from_the_plate_to_the_tether_crossing_and_the_levels_end_real_damage_00agent() {
+    walker::with_real_damage(|| walk_from_the_plate_to_the_tether_crossing_and_the_levels_end_at(3));
+}
+
 // ---------------------------------------------------------------------------
 // level-41-every-objective: the whole wrapper played as a player, both orders.
 //
@@ -705,4 +716,12 @@ fn the_plate_first_walk_real_damage() {
 #[test]
 fn the_plate_first_walk_real_damage_agent() {
     walker::with_real_damage(|| the_plate_first_walk_locked_e_dyno_rod_tether_and_the_far_south_at(2));
+}
+
+/// The 00 Agent sister (real-health-00agent-16-1b-41-4a): the same walked plate-first route on
+/// real health at difficulty 3 (see the other sister's header — the default 0x1d3a80 rows: pain
+/// Hard 1.25). Real input only; no health/ammo/channel writes.
+#[test]
+fn the_plate_first_walk_real_damage_00agent() {
+    walker::with_real_damage(|| the_plate_first_walk_locked_e_dyno_rod_tether_and_the_far_south_at(3));
 }
