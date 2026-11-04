@@ -20,6 +20,7 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 fn the_exit_resolves_to_the_gate_plate_and_e_is_refused_there() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     // The intro cut-scene (SP #277, script 0x06000087) writes ch 0xB at ~tick 2119 [D decode];
     // wait it out, then the script tail (event 6) re-places Bond (walkreal_07000001's opening).
     let mut enabled_at = None;

@@ -13,6 +13,7 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 fn probe_the_route() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000007.bin", false).expect("load 07000007"));
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     w.wait_enabled(3000, "the party start");
     w.wait(60);
     {

@@ -139,6 +139,12 @@ pub struct Walker {
     /// blocker, and the player's response is to clear him (the 01 hall guards the disc's meet
     /// chain starts). Default OFF — the shared walker stays master's everywhere else.
     pub clear_pushers: bool,
+    /// The push-dodge (walk around a live body that pins a stalled leg), OPT-IN per level
+    /// (guard-push-every-tick-3): the every-tick push [M Collide_Jointy 0x1ec180:253-266] is
+    /// faithful, so a straight-lane walker wedges on any body the disc's own player would step
+    /// around — but the dodge re-shapes the walk's response everywhere it is set, so each test
+    /// that wants it sets this. Default OFF — the shared walker stays master's.
+    pub push_dodge: bool,
     max_y: f32,
     pub lenient: bool,
     /// Inside the stuck ladder's hostile-body-block response (the arm's shoot/resupply run their
@@ -253,6 +259,7 @@ impl Walker {
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0,
             sidestep: 0, sidestep_decays: false, clear_pushers: false, max_y: pos[1], lenient: false,
+            push_dodge: false,
             trail: Vec::new(),
             alarm_last: Vec::new(),
             drone_watch, watch_last,
@@ -736,6 +743,47 @@ impl Walker {
         self.shoot_bounded(di, label, 10800)
     }
 
+    /// One gunshot aimed BESIDE a body (2.5 u off its spine, the shot misses) — the game's own
+    /// scatter: CivilianMission's msg::SOUND/BULLET arm runs enemy_alerts → CIVILIAN_SCARED
+    /// [M 0x15d860's SOUND | ALARM case; the port's state table], and a scared civilian RUNS
+    /// off the lane. A hit would kill (the 07 mission civilian dies at hp 10 and the kill fired
+    /// the level exit — the fail state), so the aim point is offset off the spine.
+    pub fn scare_shot(&mut self, di: usize, label: &str) -> bool {
+        let (bp, dp) = {
+            let sim = self.scene.sim.as_ref().unwrap();
+            (sim.bond.pos, sim.drones.list[di].pos)
+        };
+        // Perpendicular to Bond→body, on the body's far side: the bullet passes beside him.
+        let (dx, dz) = (dp[0] - bp[0], dp[2] - bp[2]);
+        let len = (dx * dx + dz * dz).sqrt().max(1e-3);
+        let (px, pz) = (-dz / len, dx / len);
+        let at = [dp[0] + px * 2.5, dp[1] + 0.3, dp[2] + pz * 2.5];
+        let desired = (at[0] - bp[0]).atan2(at[2] - bp[2]);
+        for t in 0..180 {
+            {
+                let sim = self.scene.sim.as_ref().unwrap();
+                if sim.drones.list[di].state == nf_game::drone::state::CIVILIAN_SCARED
+                    || sim.drones.list[di].corpse {
+                    eprintln!("[walk] {label}: the scare shot landed (body {di} state {:#x} at +{t})", sim.drones.list[di].state);
+                    return true;
+                }
+                let err = wrap_pi(desired - sim.bond.yaw);
+                let perr = ((at[1] - (sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop))
+                    / dxz(sim.bond.pos, at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+                let input = Input {
+                    turn: err.clamp(-0.08, 0.08),
+                    look: perr.clamp(-0.08, 0.08),
+                    ..Default::default()
+                };
+                let fire = t >= 60 && t % 30 == 0 && err.abs() < 0.15;
+                self.tick_inner(input, false, fire, false);
+            }
+        }
+        eprintln!("[walk] {label}: the scare shot never scattered body {di}");
+        false
+    }
+
+
     /// `shoot` with a caller's tick cap (ADDITIVE — `shoot` delegates at the old 10800; no
     /// existing caller changes): the 05 00 Agent gallery stands bound their flank budget so a
     /// narrow-geometry fight cannot walk Bond off the corridor (the a05n repro: the east stand
@@ -1074,6 +1122,10 @@ impl Walker {
         // body is behind the run or 2.2 clear, capped.
         let mut dodge: Option<f32> = None;
         let mut dodge_ticks = 0u32;
+        // The nearest presser's distance now and at the last side re-evaluation (the escape-
+        // progress check above needs both).
+        let mut dd_now = 0.0f32;
+        let mut dd_last: Option<f32> = None;
         // The body the last dodge circled: the away-from-body side can be the walled side (the
         // 0a hall-door civilian: the push carries Bond into the south wall, the room is north) —
         // a same-body re-stall flips the side.
@@ -1091,6 +1143,14 @@ impl Walker {
                 panic!("walk_to {label}: 6000-tick cap\n{dump}");
             }
             let sim = self.scene.sim.as_ref().unwrap();
+            {
+                let b = sim.bond.pos;
+                dd_now = sim.drones.list.iter()
+                    .filter(|d| d.enabled && d.present && !d.corpse && d.health > 0.0
+                        && (d.pos[1] - b[1]).abs() < 2.5)
+                    .map(|d| dxz(d.pos, b))
+                    .fold(f32::INFINITY, f32::min);
+            }
             if self.stop_on_exit && sim.drones.level_exit.is_some() {
                 self.report.legs.push((label.to_string(), self.total_ticks - start_ticks, self.pos));
                 eprintln!("[walk] {label}: level_exit reached at +{} ticks", self.total_ticks - start_ticks);
@@ -1113,13 +1173,55 @@ impl Walker {
                 dodge_ticks += 1;
                 let sim = self.scene.sim.as_ref().unwrap();
                 let b = sim.bond.pos;
-                let presser = sim.drones.list.iter()
-                    .filter(|d| d.enabled && d.present && !d.corpse && d.health > 0.0
+                let presser = sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.enabled && d.present && !d.corpse && d.health > 0.0
                         && (d.pos[1] - b[1]).abs() < 2.5)
-                    .map(|d| (d.pos, dxz(d.pos, b)))
-                    .min_by(|a, c| a.1.total_cmp(&c.1));
-                let keep = dodge_ticks < 1200 && presser.is_some_and(|(dpos, dd)| {
-                    if dd >= 2.2 { false }
+                    .map(|(i, d)| (i, d.pos, dxz(d.pos, b)))
+                    .min_by(|a, c| a.2.total_cmp(&c.2));
+                // guard-push-every-tick-3: the 0a hall-door civilian oscillated the v2 dodge
+                // (d swung 0.95..1.43 for 6 cycles — the away side was the walled side and the
+                // leg's own steering walked Bond back into the lane). Two widenings, both inside
+                // the dodge run:
+                // - the release distance 2.2 → 2.6 (the report's "dodge until d > 2.6");
+                // - every 40 ticks re-evaluate the strafe side: a world segment along the strafe
+                //   direction (the walkable-room probe) or no dd growth in 40 ticks flips the
+                //   side — the away side being the wall no longer needs a full re-stall to fix.
+                // Re-read the geometry every 10 ticks: a side that was walled at the wedged
+                // spot often opens once the yield backs Bond out of the doorway squeeze (the
+                // 07 hall-door civilian: both probes walled at d 0.95, the left side open 2 u
+                // back — the probe runs from wherever Bond stands NOW).
+                if dodge_ticks % 10 == 0 {
+                    let yaw = sim.bond.yaw;
+                    let (lx, lz) = (yaw.cos(), -yaw.sin());
+                    let left_blocked = sim.world.segment(b, [b[0] + lx * 1.8, b[1], b[2] + lz * 1.8]).is_some();
+                    let right_blocked = sim.world.segment(b, [b[0] - lx * 1.8, b[1], b[2] - lz * 1.8]).is_some();
+                    let stalled = dodge_ticks >= 80 && dd_last.map_or(false, |prev| dd_now < prev + 0.15);
+                    // The away-from-body side first (re-read each probe — the body's bearing
+                    // changes as Bond circles), then the only open side, then the yield.
+                    let away_left = presser.map_or(true, |(_, dpos, _)| {
+                        (b[0] - dpos[0]) * lx + (b[2] - dpos[2]) * lz >= 0.0
+                    });
+                    let want = if away_left && !left_blocked { Some(1.0) }
+                        else if !away_left && !right_blocked { Some(-1.0) }
+                        else if !left_blocked { Some(1.0) }
+                        else if !right_blocked { Some(-1.0) }
+                        else { Some(0.0) }; // both walled: yield
+                    if want != Some(side) || stalled {
+                        dodge = want;
+                        dd_last = None;
+                        eprintln!("[walk] push-dodge -> {} (d {dd_now:.2})", match want {
+                            Some(1.0) => "left", Some(-1.0) => "right", _ => "yield" });
+                    } else {
+                        dd_last = Some(dd_now);
+                    }
+                }
+                // The yield also HOLDS 600 ticks once clear: the body may be mid-mission-walk
+                // (the 07 hall-door civilian walks a route — Bond's yield unblocks HIM), and a
+                // straight re-approach at the first 2.6 tick re-wedges before his beat moves
+                // him off the lane. 10 s of stand-off, then the leg re-approaches.
+                let keep = dodge_ticks < 1200 && presser.is_some_and(|(_, dpos, dd)| {
+                    if side == 0.0 { dd < 2.6 || dodge_ticks < 600 }
+                    else if dd >= 2.6 { false }
                     else if dd < 1.6 { true }
                     else {
                         let (vx, vz) = (wp.at[0] - b[0], wp.at[2] - b[2]);
@@ -1127,11 +1229,40 @@ impl Walker {
                         (vx * bx + vz * bz) / ((vx * vx + vz * vz).sqrt() * dd.max(1e-3)) > 0.15
                     }
                 });
+                if dodge_ticks >= 1200 {
+                    // A full dodge cycle spent and the body still pins the lane: the game's own
+                    // answer — a CIVILIAN_MISSION hit by a bullet scatters (CivilianMission's
+                    // msg::BULLET → on_bullet_resume → CIVILIAN_SCARED [M 0x15d860; the port's
+                    // state table drone.rs]), and a corpse carries the 0x200 arm (no push). The
+                    // shot rides the real fire path like every walker fight.
+                    if let Some((di, _, _)) = presser {
+                        let (was_lenient, t0) = (self.lenient, self.total_ticks);
+                        self.lenient = true;
+                        let _ = self.scare_shot(di, label);
+                        self.lenient = was_lenient;
+                        start_ticks += self.total_ticks - t0; // the shot is the response's cost
+                        eprintln!("[walk] {label}: push-dodge escalated to a scatter shot at body {di}");
+                    }
+                    dodge = None;
+                    dodge_ticks = 0;
+                    self.stuck = 0;
+                    continue;
+                }
                 if !keep {
                     dodge = None;
                     dodge_ticks = 0;
+                } else if side == 0.0 {
+                    // The yield: walk BACKWARD (the move rows take a negative vf [M
+                    // Player_Update 0x193600: pos[0] += c·vs + s·vf …]) until the body is
+                    // clear enough to re-approach.
+                    self.tick(Input { forward: -0.6, ..Default::default() }, false);
+                    continue;
                 } else {
-                    self.tick(Input { strafe: side, forward: 0.45, ..Default::default() }, false);
+                    // Pure lateral while the body still presses (the diagonal's forward
+                    // component ground Bond back into the doorway squeeze); the diagonal
+                    // resumes once 1.6 clear.
+                    let fwd = if dd_now < 1.6 { 0.0 } else { 0.45 };
+                    self.tick(Input { strafe: side, forward: fwd, ..Default::default() }, false);
                     continue;
                 }
             }
@@ -1336,7 +1467,9 @@ impl Walker {
                     // pusher and re-wedge every cycle. Direction-aware, every team (civilians,
                     // allies and guests push too — the near arm subsumes the voice arms
                     // [M 0x149ec8:16-33]); corpses can't (the 0x200 arm).
-                    let pusher = {
+                    // OPT-IN (push_dodge): the dodge re-shapes the walk's response — the shared
+                    // default stays master's plain sidestep ladder.
+                    let pusher = if !self.push_dodge { None } else {
                         let sim = self.scene.sim.as_ref().unwrap();
                         let b = self.pos;
                         sim.drones.list.iter().enumerate()
@@ -1352,10 +1485,19 @@ impl Walker {
                         let (lx, lz) = (yaw.cos(), -yaw.sin());
                         let away = [self.pos[0] - dpos[0], self.pos[2] - dpos[2]];
                         let left_dot = away[0] * lx + away[1] * lz;
-                        // First try the away-from-body side; a same-body re-stall means that side
-                        // is the walled one — flip (the away side is where the push already
-                        // carries him, which is exactly where the equilibrium sits).
-                        let want_left = if last_dodge_body == Some(di) { left_dot < 0.0 } else { left_dot >= 0.0 };
+                        // The walkable-room bias (guard-push-every-tick-3): probe 1.8 u along
+                        // each strafe direction; a walled side loses even when it is the away
+                        // side (the 0a civilian's push carried Bond into the south wall — the
+                        // room is north). Both open or both walled: the away side (or the flip
+                        // on a same-body re-stall, as before).
+                        let b = self.pos;
+                        let left_open = self.scene.sim.as_ref().unwrap().world
+                            .segment([b[0] + lx * 1.8, b[1], b[2] + lz * 1.8], b).is_none();
+                        let right_open = self.scene.sim.as_ref().unwrap().world
+                            .segment([b[0] - lx * 1.8, b[1], b[2] - lz * 1.8], b).is_none();
+                        let mut want_left = if last_dodge_body == Some(di) { left_dot < 0.0 } else { left_dot >= 0.0 };
+                        if left_open && !right_open { want_left = true; }
+                        else if right_open && !left_open { want_left = false; }
                         last_dodge_body = Some(di);
                         dodge = Some(if want_left { 1.0 } else { -1.0 });
                         dodge_ticks = 0;
@@ -1599,6 +1741,16 @@ pub fn load_levels(sim: &nf_view::scene::Sim) -> Vec<(V3, u8, u8, u8, u32)> {
 /// tried (the graph is per-path; a cross-path walk needs the caller's own anchors). Returns the node
 /// positions between start and dest (exclusive of both), or None when no path connects them.
 pub fn nav_route(sim: &nf_view::scene::Sim, start: V3, dest: V3) -> Option<Vec<V3>> {
+    // The live-body cost (guard-push-every-tick-3, the report's "nav legs cost live bodies"
+    // lever, test-side): a route whose nodes all sit ≥ 1.2 u from every live body beats one
+    // that threads a body — the disc's own ai graph usually offers a second lane (the 07 hall
+    // door's civilian #22 stood on the picked lane while a parallel node chain ran 2 u north).
+    // The first body-adjacent route stays the fallback when no clear lane exists.
+    let bodies: Vec<V3> = sim.drones.list.iter()
+        .filter(|d| d.enabled && d.present && !d.corpse && d.health > 0.0)
+        .map(|d| d.pos).collect();
+    let clear = |pts: &[V3]| pts.iter().all(|p| bodies.iter().all(|b| (b[1] - p[1]).abs() >= 2.5 || dxz(*b, *p) >= 1.2));
+    let mut fallback: Option<Vec<V3>> = None;
     let mut order: Vec<usize> = (0..sim.nav.paths.len()).collect();
     // Prefer the path whose nearest node to dest sits at dest's height.
     order.sort_by_key(|&pi| {
@@ -1614,10 +1766,14 @@ pub fn nav_route(sim: &nf_view::scene::Sim, start: V3, dest: V3) -> Option<Vec<V
         let used = vec![0u16; sim.nav.paths[pi].links.len()];
         if let Ok((_, route)) = nf_game::nav::Route::to_position(&sim.nav, &sim.world, Some(pi), start, dest, &goal, &used, &|_, _| false) {
             let pts: Vec<V3> = route.nodes.iter().map(|&n| sim.nav.paths[pi].nodes[n as usize].pos).collect();
-            if pts.len() > 2 { return Some(pts[1..pts.len() - 1].to_vec()); }
+            if pts.len() > 2 {
+                let mid = pts[1..pts.len() - 1].to_vec();
+                if clear(&mid) { return Some(mid); }
+                if fallback.is_none() { fallback = Some(mid); }
+            }
         }
     }
-    None
+    fallback
 }
 
 /// A route leg: two anchors, filled with nav nodes between them (per-path A* first, then the

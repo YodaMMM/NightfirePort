@@ -94,6 +94,7 @@ fn gold_bits(base_map: u32) -> u64 {
 fn the_redlamp_rigid_body_takes_the_bullets_impulse() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     past_intro(&mut w);
     {
         let s = w.scene.sim.as_ref().unwrap();
@@ -164,6 +165,7 @@ fn the_redlamp_rigid_body_takes_the_bullets_impulse() {
     // 0x1d6e38 → 0x1d7c78 → 0x17c048] — the bounded-drift pin replaces it; the bit-still
     // zero-wind sister lives in lamp_wind_live::zero_wind_keeps_the_lamps_bit_still).
     let mut w2 = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("reload"));
+    w2.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     past_intro(&mut w2);
     w2.wait(240);
     assert!(tilt_of(w2.scene.sim.as_ref().unwrap()) < 15.0,
@@ -182,6 +184,7 @@ fn the_redlamp_rigid_body_takes_the_bullets_impulse() {
 fn shooting_the_comms_room_screen_smashes_it() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     past_intro(&mut w);
     let (di, centre) = {
         let s = w.scene.sim.as_ref().unwrap();
@@ -207,6 +210,7 @@ fn shooting_the_comms_room_screen_smashes_it() {
     }
     // Sister: a fresh load, nobody shoots — every destroyable stays whole.
     let mut w2 = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("reload"));
+    w2.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     past_intro(&mut w2);
     let s2 = w2.scene.sim.as_ref().unwrap();
     assert!(s2.drones.props.destroy.iter().all(|d| !d.dead), "unshot destroyables stay whole (the sister)");
@@ -227,6 +231,7 @@ fn shooting_the_comms_room_screen_smashes_it() {
 fn the_hint_marker_registers_but_the_disc_parks_it_in_the_void() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     {
         let s = w.scene.sim.as_ref().unwrap();
         assert_eq!(s.hints.len(), 1, "the one 0x33 placement (stage 3 passes the difficulty-1 gate) \
@@ -261,6 +266,7 @@ fn the_hint_marker_registers_but_the_disc_parks_it_in_the_void() {
 fn the_ammo_box_credits_the_mp5_pool_on_the_walk_over() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     past_intro(&mut w);
     let (before, ppos) = {
         let s = w.scene.sim.as_ref().unwrap();
@@ -342,6 +348,7 @@ fn the_ammo_box_credits_the_mp5_pool_on_the_walk_over() {
         .any(|p| p.gone || p.hidden), "the walked-over box is consumed by the take [M 0x18e650:234-236]");
     // Sister: a fresh load, Bond off the box — the pool waits (the untouched base value).
     let mut w2 = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("reload"));
+    w2.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     past_intro(&mut w2);
     let b2 = w2.scene.sim.as_ref().unwrap().drones.inventory.carried[1];
     w2.wait(120);
@@ -365,6 +372,7 @@ fn the_bond_bonus_needs_the_gold_medal() {
     // The gold load: the same carry path the 0700000b kind-6 test uses.
     let mut w = Walker::new(nf_view::load_with_carry_medals(&iso, "07000001.bin", false, None, 1, gold_bits(0x0700_0001))
         .expect("gold load"));
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     past_intro(&mut w);
     let s = w.scene.sim.as_ref().unwrap();
     let bonuses: Vec<_> = s.drones.pickups.iter()
@@ -406,6 +414,7 @@ fn the_bond_bonus_walk_over_takes_it() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry_medals(&iso, "07000001.bin", false, None, 1, gold_bits(0x0700_0001))
         .expect("gold load"));
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     past_intro(&mut w);
     let spots: Vec<[f32; 3]> = {
         let s = w.scene.sim.as_ref().unwrap();
@@ -494,6 +503,7 @@ fn the_bond_bonus_walk_over_takes_it() {
     // AI, not the load).
     let mut w2 = Walker::new(nf_view::load_with_carry_medals(&iso, "07000001.bin", false, None, 1, gold_bits(0x0700_0001))
         .expect("reload"));
+    w2.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     past_intro(&mut w2);
     w2.wait(600);
     let states: Vec<(bool, bool)> = w2.scene.sim.as_ref().unwrap().drones.pickups.iter()
@@ -517,6 +527,7 @@ fn the_bond_bonus_walk_over_takes_it() {
 fn shooting_the_comms_console_kills_the_feed_and_the_console() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     past_intro(&mut w);
     let centre = {
         let s = w.scene.sim.as_ref().unwrap();
@@ -545,6 +556,7 @@ fn shooting_the_comms_console_kills_the_feed_and_the_console() {
     }
     // Sister: a fresh load, nobody shoots — the console keeps its health and its feed.
     let mut w2 = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("reload"));
+    w2.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     past_intro(&mut w2);
     let m2 = &w2.scene.sim.as_ref().unwrap().drones.monitors.list[0];
     assert_eq!(m2.state, 0, "the unshot console sits idle (the sister) [M 0x1b0058's state gate]");
@@ -566,6 +578,7 @@ fn shooting_the_comms_console_kills_the_feed_and_the_console() {
 fn the_security_camera_sweep_latches_the_player_in_range() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     {
         let s = w.scene.sim.as_ref().unwrap();
         assert_eq!(s.drones.sensors.list.len(), 1, "the one 0x28 placement [D #280]");
@@ -623,6 +636,7 @@ fn the_security_camera_sweep_latches_the_player_in_range() {
 fn e_use_on_the_radio_fax_prints_its_pages() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     past_intro(&mut w);
     let has = |w: &Walker, hash: u32| w.scene.sim.as_ref().unwrap().drones.scripts.entities()
         .iter().any(|e| e.2 == hash);
@@ -664,6 +678,7 @@ fn e_use_on_the_radio_fax_prints_its_pages() {
 fn the_music_trigger_row_and_the_never_created_kinds_match_the_disc() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     past_intro(&mut w);
     let s = w.scene.sim.as_ref().unwrap();
     assert!(s.drones.worldobjs.music_triggers.iter().any(|t| t.ch_on == 13 && t.event_id == 2),

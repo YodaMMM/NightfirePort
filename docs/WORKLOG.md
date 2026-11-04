@@ -131,3 +131,19 @@ bodies — test-side walker changes, opt-in per level. Then re-run every red bin
 01/02/07/0c/11, escort_follow_07000001, exit_aim_01, interactables_07000001/03, party_door_lock_07000007,
 speech_facial_fallback, guest_faces, probe_07_route, cutscene_timer_pause) and fix each; no assertion
 weakened; chunk_suite.py for the full run; nf-game + every walkreal_*_live.
+
+Round (2026-11-04 ~12:18 UTC): the dodge widened and made opt-in. walker.rs: the release 2.2 → 2.6,
+the every-10-tick geometry re-read (the away-from-body side first, then the only open side, then the
+YIELD — backward off a both-sides-walled doorway squeeze), the pure-lateral gate while the body still
+presses, the scatter-shot escalation after a full 1200-tick cycle (the game's own CIVILIAN_MISSION
+bullet/sound scatter [M 0x15d860]); the arm + the whole dodge behind the new opt-in `push_dodge` flag
+(rule 7), set in cutscene_timer_pause, walkreal 02/07, escort_follow_01, exit_aim_01,
+interactables_01, party_door_lock_07, probe_07_route. nav_route prefers routes whose nodes sit
+≥ 1.2 u from live bodies (the report's "nav legs cost live bodies", test-side). Green:
+escort_follow_07000001 1/0 (was red). Still red on the 07 hall-door civilian #22 (team 3
+CIVILIAN_MISSION hp 10, STATIC in the port, the only doorway crossing): cutscene_timer_pause,
+probe_07_route, party_door_lock_07000007 (×2) — the kill fired the level exit (the fail state), the
+offset miss-shot does not scatter (the scare folds prop 0x3c && seen && bond_armed [M 0x1787c8/0x178768]
+— the live check names it). interactables_07000001 7/3 (improved; the camera-latch and redlamp-tip
+asserts shifted with the push). exit_aim_01 / walkreal_02 / walkreal_07: the window ended mid-run
+(timeouts). 0c/11/facial: not run.

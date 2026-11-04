@@ -70,6 +70,7 @@ fn walk_to_the_story_point(w: &mut Walker) {
 fn the_control_scene_freezes_the_mission_clock_until_the_hand_back() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000007.bin", false).expect("load 07000007"));
+    w.push_dodge = true; // guard-push-every-tick-3: the hall-door civilian pins the story-point lane
     w.skip_cutscenes = false; // watch the real window (the walker's default skips it)
 
     // Baseline: the clock runs while Bond is in control [M 0x1995a0 — no pause byte set outside

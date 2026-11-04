@@ -38,6 +38,7 @@ const ESCORT_STATES: [u8; 10] = [
 fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     // The intro cut-scene writes ch 0xB (the contact's enable) ~tick 2119; its tail re-places
     // Bond — the same wait-out walkreal-a runs.
     let mut enabled_at = None;

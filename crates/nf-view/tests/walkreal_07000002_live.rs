@@ -531,6 +531,7 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         nf_view::load_with_carry_difficulty(&iso, "07000002.bin", false, None, difficulty)
             .expect("load 07000002")
     });
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
         "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     // Real health: no walker top-up — the walk takes the guards' fire through the real pipeline.
@@ -989,6 +990,7 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     //    0x4D sits beside it [D]. No channel is hand-set anywhere in this leg.
     let next = "07000003.bin";
     let mut w3 = Walker::new(nf_view::load(&iso, next, false).expect("07000003 must load after the exit"));
+    w3.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     w3.top_up_health = false;
     w3.skip_cutscenes = false;
     let mut handed = None;
@@ -1020,6 +1022,7 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
 fn walk_the_castle_all_objectives_to_the_exit() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000002.bin", false).expect("load 07000002"));
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -1255,6 +1258,7 @@ fn walk_the_castle_all_objectives_to_the_exit() {
     //    0x4D sits beside it [D]. No channel is hand-set anywhere in this leg.
     let next = "07000003.bin";
     let mut w3 = Walker::new(nf_view::load(&iso, next, false).expect("07000003 must load after the exit"));
+    w3.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     w3.skip_cutscenes = false;
     let mut handed = None;
     for t in 0..900u32 {

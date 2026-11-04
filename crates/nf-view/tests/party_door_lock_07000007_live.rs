@@ -148,6 +148,7 @@ fn walk_to_the_story_point(w: &mut Walker) {
 fn the_party_corridor_door_locks_at_the_control_scene() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000007.bin", false).expect("load 07000007"));
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     walk_to_the_story_point(&mut w);
     // The close takes ticks: Door_SetState mirrors the OLD state's motion bits to the open
     // channel (leaving OPEN writes 1 [M 0x135618:26]) until the leaf arrives at CLOSED. Wait out
@@ -207,6 +208,7 @@ fn the_party_corridor_door_locks_at_the_control_scene() {
 fn sister_the_free_doors_still_open_after_the_lockout() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000007.bin", false).expect("load 07000007"));
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     walk_to_the_story_point(&mut w);
     // The same settle (the close's mirror bounces ch 130 while the leaf swings).
     let mut settled = false;

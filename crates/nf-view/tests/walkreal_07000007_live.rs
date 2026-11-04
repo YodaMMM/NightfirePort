@@ -83,6 +83,7 @@ fn walk_the_party_start_to_finish_at(difficulty: u32) {
         nf_view::load_with_carry_difficulty(&iso, "07000007.bin", false, None, difficulty)
             .expect("load 07000007")
     });
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
         "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     {
@@ -325,6 +326,7 @@ fn walk_the_party_start_to_finish_at(difficulty: u32) {
 fn the_group_plate_wakes_the_walkers_and_the_guards_stay_calm() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000007.bin", false).expect("load 07000007"));
+    w.push_dodge = true; // guard-push-every-tick-3: the every-tick push makes lane bodies real; opt-in per level
     w.wait_enabled(3000, "the party start");
     w.wait(60);
     // The ch-6 waiters before the plate: WAIT_SWITCH (state 1), standing.
