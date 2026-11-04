@@ -32,3 +32,15 @@
   re-land + the wrap + the cc fix ride the history one cherry-pick away. The principled
   fix is the lib push-tail port (the guard rule at world.rs:801-805) + the full walkreal
   battery (rule 10) — the next window's first move.
+
+## real-health-14-00agent-4 (started 2026-11-04 19:17 UTC)
+
+Branch s/real-health-14-00agent-4 cut from origin/s/real-health-14-00agent-3 (7ceaffa18),
+origin/master merged clean. Continue the -3 report's "What's left": (1) the lib fix —
+delete the spine through-push fallback at crates/nf-game/src/world.rs:804-805 so a failed
+ref-guard means no push and no contact, the game's rule [M Intersect_CylGeom 0x109da0:431-447]
+— and re-verify against the FULL walkreal battery + door/guard tests (rule 10); (2) the
+re-land chain (cc fix bd007c18f + strafe drift 74f660327 + the 3.6 vent windows + the lid
+crouch toggle) so the mezzanine west lip (x ~45.1, z ~39.9) stops holding Bond, keeping
+the d1 walk green; (3) the d2 with_real_damage wrap (55f0b4055); (4) the d3 un-ignore.
+Every pin cited [M]/[D]/fresh-boot [L]; full suite before push if it fits.
