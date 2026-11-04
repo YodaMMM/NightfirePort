@@ -870,43 +870,6 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             ..Default::default()
         };
         let _ = exit_ticks;
-        // D3-ONLY launch/flight diagnostics (eprintln reads only — no sim writes): at every
-        // riding transition dump the corridor reads; while a rocket flies, trace its dir's
-        // world stop every 4 ticks (the chase-arc blocker).
-        if difficulty >= 3 {
-            let fdiag = |sim: &nf_view::scene::Sim, from: [f32; 3], to: [f32; 3]| {
-                let t = sim.world.segment_flight_scoped(sim.world.find_cel(from), from, to, true);
-                match t { None => "CLEAR".to_string(), Some(t) => format!("stop t{t:.3}") }
-            };
-            if rocket.is_some() != riding || rocket.is_some() {
-                let sim = w.scene.sim.as_ref().unwrap();
-                let b = sim.bond.pos;
-                let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
-                let cy = sim.bond.yaw.cos();
-                let right = [cy, 0.0, -sim.bond.yaw.sin()];
-                if rocket.is_some() != riding {
-                    let mode = if rocket.is_some() { "LAUNCH" } else { "GONE" };
-                    eprintln!("[08 diag] t{t} {mode} yaw {yaw:.3} pitch {pitch:.3} mach-az {desired_yaw:.3} dist {l:.1} eye→mach {} gunR→mach {} gunL→mach {}",
-                        fdiag(sim, eye, cp),
-                        fdiag(sim, [eye[0] + right[0] * 0.25, eye[1] - 0.15, eye[2] + right[2] * 0.25], cp),
-                        fdiag(sim, [eye[0] - right[0] * 0.25, eye[1] - 0.15, eye[2] - right[2] * 0.25], cp));
-                    let mut sweep = String::new();
-                    for k in 0..32 {
-                        let az = k as f32 * std::f32::consts::TAU / 32.0;
-                        let far = [eye[0] + az.sin() * 30.0, eye[1], eye[2] + az.cos() * 30.0];
-                        let tf = sim.world.segment_flight(eye, far, true);
-                        let tb = sim.world.segment_bullet(eye, far);
-                        sweep.push_str(&format!("az{az:.2}:{}/{} ", tf.map(|t| (t * 30.0).round() as i32).unwrap_or(30), tb.map(|t| (t * 30.0).round() as i32).unwrap_or(30)));
-                    }
-                    eprintln!("[08 diag] t{t} flight/bullet 30u sweep (u): {sweep}");
-                } else if let Some((p, d)) = rocket {
-                    if w.total_ticks % 4 == 0 {
-                        let far = [p[0] + d[0] * 40.0, p[1] + d[1] * 40.0, p[2] + d[2] * 40.0];
-                        eprintln!("[08 diag] t{t} fly p({:.1},{:.1},{:.1}) d({:.2},{:.2},{:.2}) dir-stop {}", p[0], p[1], p[2], d[0], d[1], d[2], fdiag(sim, p, far));
-                    }
-                }
-            }
-        }
         if rocket.is_some() != riding {
             riding = rocket.is_some();
             let now = sim.drones.copters[ci].damage;
@@ -948,15 +911,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             && yaw_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
             && pitch_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
             && l >= if difficulty >= 3 { 16.0 } else { 10.0 } && slit_clear && corridor_clear && eye_sees && machine_lane_clear;
-        if ready {
-            if difficulty >= 3 {
-                eprintln!("[08 fire] t{t} f{} yaw_err {yaw_err:.3} pitch_err {pitch_err:.3} l {l:.1} eye_sees {} lane_clear {} slit {} corridor {} bond_yaw {:.3} mach_az {desired_yaw:.3} cross ({:.3},{:.3}) cursor ({:.3},{:.3}) free_aim {}",
-                    w.total_ticks,
-                    sim.world.segment_flight_scoped(sim.world.find_cel(eye), eye, cp, true).map(|t| format!("t{t:.3}")).unwrap_or_else(|| "CLEAR".into()),
-                    machine_lane_clear, slit_clear, corridor_clear, sim.bond.yaw, sim.cross[0], sim.cross[1], sim.cursor[0], sim.cursor[1], sim.free_aim);
-            }
-            w.tick_fire(input);
-        } else { w.tick(input, false); }
+        if ready { w.tick_fire(input); } else { w.tick(input, false); }
         if t % 100 == 0 {
             let sim = w.scene.sim.as_ref().unwrap();
             eprintln!("[08 hind t{t} f{}] dist {l:.1} line_ok {line_ok} exit {exit_ticks} damage {:.1} hp {hp} weapon {:#x} clip {} bond {:?} copter {:?} st {} bullets {:?}",
@@ -1281,9 +1236,13 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
 /// DroneWeap_DoBulletAccuracy 0x179740:74-88; ReadTuningVars 0x1d3a80 cases 0x7000005-8;
 /// tuning.rs 05-08 group]; the min-difficulty placements pass Drone_Create's gate at d2 AND d3
 /// [M 0x136be0:49]. Real input only — the load path is the only difference (plus the d3-gated
-/// tactics the deaths force, inside this file).
+/// tactics the deaths force, inside this file). The Hind fight's shoot-out fires on the
+/// CONVERGED aim (the ray-gate fired nothing: the bounds-centre ray reads OPEN before a round
+/// — 10/10 end panes die to one round each) and the launch gates read the CROSSHAIR the shot
+/// itself flies through [M the crosshair aim law]: the tracker's convergence saturates the
+/// free-aim cursor at its clamp and every launch sat up to 0.23 rad off the view — the chase
+/// then clipped the window frames (the measured −75/−62.5 self-blasts [L the diag runs]).
 #[test]
-#[ignore = "00 Agent: the FLIGHT GLASS PASS landed ([M Collide_Update 0x1ea398:216-229 the contact walk passes surface-byte-0x10 for the records with weapon_data+0x6C bit 0x800 clear; Bullet_update disasm 0x12f048-0x12f058 arms HITTEST+0x9a=0x20]; the 16 ride panes are ALL mat 0x10 [L coll-obj]) and the d3 slit/corridor gates now read the flight query, but the fight is still red: the bottom-terminal pane shoot-out taps 9 rounds and kills NOTHING (dead rows [] — every pane reads OPEN: the rows' script objects ended at the ride's EntityEnd so the dynamic quads are gone AND the box-contact kill never fires — the orphaned-row lead), then the first rocket (t138) launches through the open pane plane and self-blasts (the real-damage death follows). Next: re-source the bottom-terminal panes (placement 0x20 or the terminal's own script), then the corridor gate's wall-band reach. [L the 00agent run 2026-11-04]"]
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| walk_the_whole_mission_on_real_input_at(3))
 }
