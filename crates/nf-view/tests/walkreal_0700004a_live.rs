@@ -254,3 +254,13 @@ fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby_real_damage() {
 fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby_real_damage_agent() {
     walker::with_real_damage(|| ride_the_lift_from_the_spawn_and_walk_into_the_lobby_at(2));
 }
+
+/// The 00 Agent sister (real-health-00agent-16-1b-41-4a): the same walked ride on real health,
+/// loaded at difficulty 3 the menu way — Bond's pain scales by 4a's Plr_DMod_Hard 1.0 (the
+/// 0x11..=0x13|0x4a group [M Player_HandlePain 0x1902c8; bullet.rs damage_factor; 0x1d3a80
+/// case 0x700004a]) and the guards' hit chance by Accuracy Hard [M
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88]. Real input only; no health/ammo/channel writes.
+#[test]
+fn ride_the_lift_from_the_spawn_and_walk_into_the_lobby_real_damage_00agent() {
+    walker::with_real_damage(|| ride_the_lift_from_the_spawn_and_walk_into_the_lobby_at(3));
+}

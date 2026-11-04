@@ -1216,8 +1216,8 @@ fn walk_arrival_to_drakes_defeat_on_real_health_at(difficulty: u32) {
         assert_eq!(sim.bond.substate, SS_ZEROG_8, "the station starts in the zero-g substate [M Player_Init 0x1910f8 :160-165]");
         assert_eq!(sim.drones.difficulty, difficulty, "the harness load's difficulty (GameState+0x28) [M 0x2a3790 → Drones::difficulty]");
         assert_eq!(nf_game::bullet::damage_factor(sim.level, difficulty),
-            if difficulty == 1 { 0.6 } else { 0.7 },
-            "1b's Plr_DMod row for the picked difficulty [M 0x1d3a80 case 0x700001b: Easy 0.6, Normal 0.7]");
+            if difficulty == 1 { 0.6 } else if difficulty == 3 { 1.0 } else { 0.7 },
+            "1b's Plr_DMod row for the picked difficulty [M 0x1d3a80 case 0x700001b: Easy 0.6, Normal 0.7, Hard 1.0]");
         assert_eq!(sim.tuning.DroneFiring_Accuracy_Easy, 0.6, "1b's DroneFiring_Accuracy_Easy [M 0x1d3a80 case 0x700001b]");
         if difficulty >= 2 {
             assert_eq!(sim.tuning.DroneFiring_Accuracy_Normal, 0.8, "1b's DroneFiring_Accuracy_Normal [M 0x1d3a80 case 0x700001b: 0x3f4ccccd]");
@@ -1261,6 +1261,16 @@ fn walk_arrival_to_drakes_defeat_on_real_health() {
 #[ignore = "Agent: Bond dies on real health, tactics not a port gap (the s/real-health-agent-difficulty-16-1b-41-4a report); follow-up real-health-agent-16-1b-2"]
 fn walk_arrival_to_drakes_defeat_on_real_health_agent() {
     walk_arrival_to_drakes_defeat_on_real_health_at(2);
+}
+
+/// The 00 Agent sister (real-health-00agent-16-1b-41-4a): the same walked station on real
+/// health, loaded at difficulty 3 the menu way — pain Plr_DMod_Hard 1.0 [M Player_HandlePain
+/// 0x1902c8; 0x1d3a80 case 0x700001b: Easy 0.6, Normal 0.7, Hard 0x3f800000] and the
+/// astronauts' hit chance by Accuracy Hard [M DroneWeap_DoBulletAccuracy 0x179740:74-88].
+/// Real input only; no health/ammo/channel writes.
+#[test]
+fn walk_arrival_to_drakes_defeat_on_real_health_00agent() {
+    walk_arrival_to_drakes_defeat_on_real_health_at(3);
 }
 
 /// The astronauts' stats and gun, from the disc and the decompile. They are type 1 (`+0xC7`,
