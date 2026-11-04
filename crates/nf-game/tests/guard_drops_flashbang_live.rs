@@ -251,6 +251,8 @@ fn flashbang_stuns_three_guards_and_never_kills() {
         stuck: false,
         seek_target: None,
         phase: None,
+        burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
+        defused: false,
     });
 
     // Bond far from the blast so his own flash does not matter to the guards' assertions.
@@ -325,6 +327,8 @@ fn frag_at_the_same_spot_kills_the_trio() {
         damage: f32_at(0x0c), radius: f32_at(0x08), weapon_type: 0x34, mesh: 0,
         owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: true,
         stuck: false, seek_target: None, phase: None,
+        burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
+        defused: false,
     });
     let p = bond_at([blast[0] + 60.0, blast[1], blast[2]]);
     for _ in 0..320u32 { sim.tick(&d, &p); }
@@ -380,6 +384,8 @@ fn frag_at_the_waitswitch_trio_takes_nothing() {
         damage: f32_at(0x0c), radius: f32_at(0x08), weapon_type: 0x34, mesh: 0,
         owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: true,
         stuck: false, seek_target: None, phase: None,
+        burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
+        defused: false,
     });
     let p = bond_at([blast[0] + 60.0, blast[1], blast[2]]);
     for _ in 0..320u32 { sim.tick(&d, &p); }
@@ -417,6 +423,8 @@ fn flash_at_the_waitswitch_trio_does_nothing() {
         damage: f32_at(0x0c), radius: f32_at(0x08), weapon_type: 0x35, mesh: 0,
         owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: true,
         stuck: false, seek_target: None, phase: None,
+        burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
+        defused: false,
     });
     let p = bond_at([blast[0] + 60.0, blast[1], blast[2]]);
     for _ in 0..320u32 {
@@ -460,6 +468,8 @@ fn a_flashed_guard_killed_after_drops_nothing_more() {
         damage: f32_at(0x0c), radius: f32_at(0x08), weapon_type: 0x35, mesh: 0,
         owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: true,
         stuck: false, seek_target: None, phase: None,
+        burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
+        defused: false,
     });
     let p = bond_at([blast[0] + 60.0, blast[1], blast[2]]);
     let mut flashed = false;
@@ -486,6 +496,8 @@ fn a_flashed_guard_killed_after_drops_nothing_more() {
         damage: f32_at34(0x0c), radius: f32_at34(0x08), weapon_type: 0x34, mesh: 0,
         owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: true,
         stuck: false, seek_target: None, phase: None,
+        burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
+        defused: false,
     });
     for _ in 0..320u32 { sim.tick(&d, &p); }
     assert!(matches!(sim.list[gi].state, state::DEATH_ANIM | state::DEAD | state::FADE | state::FADE_FAST),

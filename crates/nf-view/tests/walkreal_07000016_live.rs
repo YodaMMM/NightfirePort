@@ -1587,11 +1587,18 @@ fn kill_the_chaser_with_range_keeping(w: &mut Walker, chaser: usize, t0: u32) {
 /// for the squad the melee band hold (backpedal-with-fire while a clone is inside 3.0 — under
 /// it every drone round hits [M 0x179740:113-115]; the punch only inside 2.0) with
 /// stand-and-fire from the shelter's cover. No health top-ups, no state pokes.
-#[test]
-fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
-    walker::with_real_damage_head_hunting(|| {
-        let iso = iso();
-        let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
+/// The difficulty-1 expression is the pre-sister master's byte-for-byte; 2+ loads the front
+/// end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty] and asserts the
+/// sim's difficulty at load [M GameState+0x28 0x2a3790 → Drones::difficulty].
+fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(difficulty: u32) {
+    let iso = iso();
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap()
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b])), difficulty).unwrap()
+    });
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
         let (chaser, t0) = walk_to_the_chaser_fight(&mut w, true);
         // The route's return-fire fights spend bolts — the arrival SET is the chain's [M
         // 0x1a7ef8], but the gun in hand may be dry; the fight continues on the carried P2K
@@ -1611,6 +1618,18 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
         // by a mile — 39.6 of the run's 90.6 attrition (one band breach + her approach stars)
         // against the pit shooters' ~8 — while the old shooters-first order kept her plinking
         // through the whole ~2700-tick clearing. The band hold (range keeping) is unchanged.
+        // The Agent tactics (real-health-agent-difficulty-16-1b-41-4a): the pit-door guard is
+        // answered BEFORE the chaser — the measured Agent run ate 15.0 of her AR rounds
+        // (skin 0x5000093, weapon 0x14, hp 20) through the whole chaser stand while the range-
+        // keeping loop held Bond on her; a player clears the doorway shooter first. The spot is
+        // the death log's (-3.1, -22.0, -163.5); the roster at d2 is found by proximity to it.
+        if difficulty >= 2 {
+            let door_guard = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
+                d.present && !d.corpse && d.health > 0.0 && d.team == 1
+                    && (d.pos[0] - -3.1).powi(2) + (d.pos[1] - -22.0).powi(2) + (d.pos[2] - -163.5).powi(2) < 36.0
+            });
+            if let Some(g) = door_guard { w.shoot(g, "the pit-door guard (skin 0x5000093) before the chaser"); }
+        }
         kill_the_chaser_with_range_keeping(&mut w, chaser, t0);
         // Then the pit room's soldiers (their steady fire is what remains; the first run died to
         // them at the shelter). The 300-tick stand cap: the faithful-stream measured run had
@@ -1646,5 +1665,52 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.health.health > 0.0, "Bond survives the finale on the port's real damage");
         eprintln!("[real-damage] the finale walked: {}", w.dmg.summary(sim));
-    });
+}
+
+#[test]
+fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
+    walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(1));
+}
+
+/// The Agent-difficulty sister (real-health-agent-difficulty-16-1b-41-4a): the same walked
+/// finale on real health, loaded at difficulty 2 the menu way — Bond's pain scales by 16's
+/// Plr_DMod_Normal [M Player_HandlePain 0x1902c8; 0x1d3a80's 0x11..=0x13 group 0.5 → 0.6,
+/// bullet.rs damage_factor] and the guards'/clones' hit chance by Accuracy Normal [M
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88]; Drone_Create 0x136be0:49's min-difficulty gate
+/// spawns the param-2 placements. Real input only; no health/ammo/channel writes.
+///
+/// IGNORED with the measured round (real-health-agent-16-1b-2, NF_DMG_TRACE on this tree):
+/// the 71.4 of the 100 the d2 ledger loses is the SOUTH GALLERY — four AR guards
+/// (0x500008c/0x50000b2/0x50000b1, 10-25 hp) patrolling z −102..−112 at y 6.7 (#1 at y 0.8) —
+/// whose first landed round is tick 455 at the ramp foot (their fields never reach the spawn
+/// legs), above the plain shooters window's dy 6.0 so the ramp-foot fights trade with the
+/// close ground pair while the gallery plinks free. TRIED this round: (a) a load-time (48, 18)
+/// shooters window — the fights engaged the gallery across the pit from the lane east (one
+/// fight, dead at 1271; the wide pool breaks the early geometry); (b) the window gated from
+/// the ring's east end (y 5.9, dy 0.8) — the fights DID take the gallery 1v1 and killed
+/// #5/#1/#3/#1 on the ring, but the ring trades cost 44 and Bond entered the chaser fight at
+/// 7.6 (dead 8435); (c) zero-movement shoot_point stands on the gallery from the spawn — every
+/// guard fails the eye-ray visible() gate from there (the ring structure blocks; the stands
+/// all skipped, the timeline byte-identical); (d) static-spot stands at the ring east — Bond
+/// died AT the stands (2189) under the crossfire. NEXT LEVERS: a cover-shaped approach (the
+/// fights' own flank machinery on the gallery from the ring, one guard at a time, with the
+/// ring's south rim as the break), or an armour pickup before the ramp foot (none found on
+/// the chain set), or a live PCSX2 scout of whether the gallery is reachable on foot
+/// (the station's west side?) — the player answer this route is missing.
+#[test]
+#[ignore = "Agent: Bond dies on real health — the south gallery (four AR guards above z -102..-112) plinks 71.4 of the 100 free from tick 455; the ring-gated (48,18) window makes the fights take them but the ring trades still cost 44 (entered the chaser at 7.6); levers: a cover-shaped gallery approach from the ring, an armour pickup, a live scout of the gallery's foot access"]
+fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
+    walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2));
+}
+
+/// The 00 Agent sister (real-health-00agent-16-1b-41-4a): the same walked chaser mission on
+/// real damage, loaded at difficulty 3 the menu way — pain Plr_DMod_Hard 1.0 (the 0x14..=0x16
+/// group [M Player_HandlePain 0x1902c8; bullet.rs damage_factor; 0x1d3a80 case 0x7000014-16:
+/// Normal 0.5, Hard 0x3f800000]) and the guards' hit chance by Accuracy Hard [M
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88]. The d2 gates (the pit-door guard pre-shoot) fire
+/// at 3 too. Real input only; no health/ammo/channel writes.
+#[test]
+#[ignore = "00 Agent: Bond dies in the corridor approach cluster on real health — tick 1141, 20 hits for 100.0 (the d2 ledger's ~86 attrition at Hard: #2 skin 0x50000b2 AR 47.5 in 7, #0 17.5/5, #5 14.0/2, #3 10.5/3, #4 7.0/2), pain Plr_DMod_Hard 1.0 [M 0x1d3a80 case 0x7000014-16] and Accuracy Hard [M 0x179740:74-88] on the game's own pipeline; next lever: the approach-fight work (real-health-agent-16-1b-2) then the 05-07 d3 stands (spawn pre-shoots, head-hunting)"]
+fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_00agent() {
+    walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3));
 }

@@ -213,10 +213,19 @@ fn the_tether_wires_refuse_a_player_grab_on_the_disc_data() {
 /// drive anything — has no disc toucher (see the module header). So the walk's end IS the level's
 /// end on this disc: the next level's load / mission end comes from the driving-side flow, from
 /// nothing the walk can reach [D].
-#[test]
-fn walk_from_the_plate_to_the_tether_crossing_and_the_levels_end() {
+/// The walk, parametrized by the menu's difficulty pick (Agent = 2 [M C_SBNFDFCTY 0x216ca8:15
+/// → GameState+0x28]): the difficulty-1 expression is the pre-sister master's byte-for-byte
+/// (plain `load`), 2+ loads the front-end's launch path [M → load_with_carry_difficulty], and
+/// the sim's difficulty is asserted at load [M GameState+0x28 0x2a3790 → Drones::difficulty].
+fn walk_from_the_plate_to_the_tether_crossing_and_the_levels_end_at(difficulty: u32) {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000041.bin", false).unwrap());
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load(&iso, "07000041.bin", false).unwrap()
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "07000041.bin", false, None, difficulty).unwrap()
+    });
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     w.wait_enabled(600, "the wrapper's load");
     w.walk_route(&[
         ("off the airlock west", Wp::new(24.0, 1.1, -31.0).r(1.4)),
@@ -332,13 +341,39 @@ fn walk_from_the_plate_to_the_tether_crossing_and_the_levels_end() {
     assert_eq!(sim.drones.mission_end, None, "no mission record → the mission layer never ends the level [M Mission_Init 0x182270:53-56]");
 }
 
+#[test]
+fn walk_from_the_plate_to_the_tether_crossing_and_the_levels_end() {
+    walk_from_the_plate_to_the_tether_crossing_and_the_levels_end_at(1);
+}
+
 /// Real damage: the same walk with the health top-up off for every walker it makes (the
 /// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
 /// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
 /// walk completes on the port's own damage.
 #[test]
 fn walk_from_the_plate_to_the_tether_crossing_and_the_levels_end_real_damage() {
-    walker::with_real_damage(walk_from_the_plate_to_the_tether_crossing_and_the_levels_end);
+    walker::with_real_damage(|| walk_from_the_plate_to_the_tether_crossing_and_the_levels_end_at(1));
+}
+
+/// The Agent-difficulty sister (real-health-agent-difficulty-16-1b-41-4a): the same walked
+/// crossing on real health, loaded at difficulty 2 the menu way — 41 sits in 0x1d3a80's
+/// 0x11..=0x13|0x4a group, so Bond's pain scales 0.5 → 0.6 [M Player_HandlePain 0x1902c8;
+/// bullet.rs damage_factor] and the guards' hit chance by Accuracy Normal [M
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88]. Real input only; no health/ammo/channel writes.
+#[test]
+fn walk_from_the_plate_to_the_tether_crossing_and_the_levels_end_real_damage_agent() {
+    walker::with_real_damage(|| walk_from_the_plate_to_the_tether_crossing_and_the_levels_end_at(2));
+}
+
+/// The 00 Agent sister (real-health-00agent-16-1b-41-4a): the same walked crossing on real
+/// health, loaded at difficulty 3 the menu way — 0x7000041 has no case in ReadTuningVars
+/// [M 0x1d3a80: the switch's default returns, so the static rows hold: pain Plr_DMod_Hard
+/// 1.25, Easy 0.75, Normal 1.0 — the default group [M bullet.rs damage_factor; L the ELF
+/// .data initialisers]] and the guards' hit chance by Accuracy Hard [M
+/// DroneWeap_DoBulletAccuracy 0x179740:74-88]. Real input only; no health/ammo/channel writes.
+#[test]
+fn walk_from_the_plate_to_the_tether_crossing_and_the_levels_end_real_damage_00agent() {
+    walker::with_real_damage(|| walk_from_the_plate_to_the_tether_crossing_and_the_levels_end_at(3));
 }
 
 // ---------------------------------------------------------------------------
@@ -497,10 +532,15 @@ fn the_chain_order_played_from_the_fresh_start() {
 /// steers — this task's probes dumped the jam at (22.8, −4.1) with CLEAR segments to every
 /// target (the port's own collision [S]; the game-side geometry was never measured), and each
 /// jammed lenient leg burns its 3000-tick cap.
-#[test]
-fn the_plate_first_walk_locked_e_dyno_rod_tether_and_the_far_south() {
+fn the_plate_first_walk_locked_e_dyno_rod_tether_and_the_far_south_at(difficulty: u32) {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000041.bin", false).unwrap());
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load(&iso, "07000041.bin", false).unwrap()
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "07000041.bin", false, None, difficulty).unwrap()
+    });
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     w.wait_enabled(600, "the wrapper's load");
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -656,11 +696,32 @@ fn the_north_detour_walks_to_the_movie_trigger_and_its_e_is_a_no_op() {
     assert_mission_layer_inert(sim, "at the movie trigger");
 }
 
+#[test]
+fn the_plate_first_walk_locked_e_dyno_rod_tether_and_the_far_south() {
+    the_plate_first_walk_locked_e_dyno_rod_tether_and_the_far_south_at(1);
+}
+
 /// Real damage: the plate-first walk with the health top-up off and the return fire on — the
 /// only armed hazard on the route is nothing (no drones, the turret's ch-1 edge never comes,
 /// the laser mine #109 sits at x 52 off the route [D PL#109]), so a pass pins the walk
 /// completes on the port's own damage with Bond alive at the far south end.
 #[test]
 fn the_plate_first_walk_real_damage() {
-    walker::with_real_damage(the_plate_first_walk_locked_e_dyno_rod_tether_and_the_far_south);
+    walker::with_real_damage(|| the_plate_first_walk_locked_e_dyno_rod_tether_and_the_far_south_at(1));
+}
+
+/// The Agent-difficulty sister (real-health-agent-difficulty-16-1b-41-4a): the same walked
+/// plate-first route on real health at difficulty 2 (see the other sister's header). Real
+/// input only; no health/ammo/channel writes.
+#[test]
+fn the_plate_first_walk_real_damage_agent() {
+    walker::with_real_damage(|| the_plate_first_walk_locked_e_dyno_rod_tether_and_the_far_south_at(2));
+}
+
+/// The 00 Agent sister (real-health-00agent-16-1b-41-4a): the same walked plate-first route on
+/// real health at difficulty 3 (see the other sister's header — the default 0x1d3a80 rows: pain
+/// Hard 1.25). Real input only; no health/ammo/channel writes.
+#[test]
+fn the_plate_first_walk_real_damage_00agent() {
+    walker::with_real_damage(|| the_plate_first_walk_locked_e_dyno_rod_tether_and_the_far_south_at(3));
 }

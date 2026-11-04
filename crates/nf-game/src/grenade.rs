@@ -71,6 +71,17 @@ pub struct Grenade {
     /// The renderer aligns the stuck model to `-normal` and the tripbomb's laser fires along `+normal`
     /// (the stick matrix Z = −normal [M :266]; the beam end = pos − 200·Z [M 0x12efb8-0x12efc8]).
     pub phase: Option<Box<StuckGadget>>,
+    /// `BU+0x102`: the laser burn counter — `Bullet_init` 0x12c5a0:211 writes 100 for the 0x3b
+    /// family (the player's thrown satchel included: the same `Bullet_init` runs on every fired
+    /// record). `Bullet_DoTrails`' contact walk takes FRAME_RATE_MUL (1) off it per 0x4E watch
+    /// contact, FRAME_RATE_MUL·10 per 0x4F [M 0x12d890:452-466].
+    pub burn: i16,
+    /// The burned-out satchel (`BU+0x102 < 1` [M 0x12d890:424]): the tail redraws the fuse to
+    /// `Rand_Rand(0x1518) + 0x3c` EVERY tick and skips the beep and the contact walk
+    /// (`goto LAB_0012e41c`, :425-433) — the digits keep cycling and the fuse never reaches
+    /// < 0, so the charge never explodes (satchel-laser-scramble; the port's Bullet path keeps
+    /// the same state in `Bullet::defused`).
+    pub defused: bool,
 }
 
 /// fix-satchel-tripbomb: the stuck state of a +0x100 satchel/tripbomb (`Grenade.phase` — one box;
@@ -333,7 +344,9 @@ impl Grenade {
         if self.resting {
             if armed_mine { return None; }
             self.travelled += 1.0;
-            if self.travelled > self.range {
+            // The burned-out satchel never explodes [M 0x12d890:424-433 — the redraw keeps the
+            // fuse positive; the gate covers the resting early-out that skips the tail].
+            if self.travelled > self.range && !self.defused {
                 self.state = 2;
                 return Some(GrenadeEvent::Explode { pos: self.pos, radius: self.radius, damage: self.damage, owner: self.owner, weapon_type: self.weapon_type });
             }
@@ -350,7 +363,10 @@ impl Grenade {
         // DECREMENTED `BU+0xFC`).
         if !armed_mine {
             self.travelled += 1.0;
-            if self.travelled > self.range {
+            // The burned-out satchel never explodes [M 0x12d890:424-433]: the tail's redraw keeps
+            // the fuse in [59, 5458] after each decrement, so the < 0 test can never pass while
+            // `defused`; the gate states the game's outcome directly (satchel-laser-scramble).
+            if self.travelled > self.range && !self.defused {
                 self.state = 2;
                 // fix-weapon-fire-modes [M Bullet_update 0x12e7b0:158-162]: for a no-fuse record this
                 // expiry is the RANGE-OUT arm — a SILENT state-4 death. The Sim's Explode arm gates on
@@ -369,6 +385,22 @@ impl Grenade {
             let fuse = self.range - self.travelled;
             let qs = (fuse * 0.066_666_67) as i16;
             let sec = (fuse * 0.016_666_668) as i32;
+            // The digits are (re)spawned EVERY tick from the fuse BEFORE any redraw — the
+            // burned-out arm's `goto LAB_0012e41c` (:424-433) lands after :422's read and at the
+            // digit-object spawn (:485-553), so a beep tick updates the digits too [M].
+            if let Some(p) = self.phase.as_mut() {
+                let s = sec.max(0) as u8;
+                p.digits = Some((s / 10, s % 10));
+            }
+            // satchel-laser-scramble: the burned-out arm [M 0x12d890:424-433] — with
+            // `BU+0x102 < 1` the tail redraws the fuse to `Rand_Rand(0x1518) + 0x3c` EVERY tick
+            // and jumps past the beep and the contact walk; the redraw keeps the fuse in
+            // [60, 5459], so the charge never explodes. (The port's Bullet path keeps the same
+            // arm in `tick_charge_fuse` — drone.rs.)
+            if self.defused {
+                self.range = self.travelled + (rng.rand(0x1518) + 0x3c) as f32;
+                return None;
+            }
             if let Some(p) = self.phase.as_mut() {
                 if qs != p.last_qs {
                     p.last_qs = qs;
@@ -376,8 +408,6 @@ impl Grenade {
                         return Some(GrenadeEvent::Beep(self.pos));
                     }
                 }
-                let sec = sec.max(0) as u8;
-                p.digits = Some((sec / 10, sec % 10));
             }
         }
         // The stuck satchel stops here: `Bullet_update` case 3 zeroes the speed and the velocity
@@ -643,6 +673,7 @@ mod tests {
             damage: 50.0, radius: 4.0, weapon_type: 0x34, mesh: 0x0200_02af, owner: 0, state: 0, bounces: 0, smoke_popped: false, resting: false,
             stuck: false, seek_target: None,
             phase: None,
+            burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
         };
         let mut rng = Rng::new(0);
         let mut bounced = false;
@@ -666,6 +697,7 @@ mod tests {
             damage: 50.0, radius: 4.0, weapon_type: 0x34, mesh: 0x0200_02af, owner: 0, state: 0, bounces: BOUNCE_MAX, smoke_popped: false, resting: false,
             stuck: false, seek_target: None,
             phase: None,
+            burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
         };
         let mut rng = Rng::new(0);
         let mut bounced = false;
@@ -690,6 +722,7 @@ mod tests {
             damage: 50.0, radius: 4.0, weapon_type: 0x34, mesh: 0x0200_02af, owner: 0, state: 0, bounces: BOUNCE_MAX - 1, smoke_popped: false, resting: false,
             stuck: false, seek_target: None,
             phase: None,
+            burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
         };
         if let Some(ev) = g.update(&w, &mut rng) { assert!(matches!(ev, GrenadeEvent::Bounce(_)), "one short: a bounce, got {ev:?}"); }
         else { assert!(g.bounces == BOUNCE_MAX, "the bounce counted"); }
@@ -705,6 +738,7 @@ mod tests {
             damage: 50.0, radius: 4.0, weapon_type: 0x34, mesh: 0x0200_02af, owner: 0, state: 1, bounces: 0, smoke_popped: false, resting: false,
             stuck: false, seek_target: None,
             phase: None,
+            burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
         };
         let mut rng = Rng::new(0);
         let mut events = Vec::new();
@@ -746,6 +780,8 @@ mod tests {
             pos: [0.0, 1.0, 2.0], velocity: [0.0, 0.0, -1.0], speed: 1.0, travelled: 0.0, range: 300.0,
             damage: 2000.0, radius: 8.0, weapon_type: 0x3b, mesh: 0x0200_07b3, owner: usize::MAX, state: 0,
             bounces: 0, smoke_popped: false, resting: false, stuck: false, seek_target: None, phase: None,
+            burn: 100, // [M Bullet_init 0x12c5a0:211 — the 0x3b family's counter]
+            defused: false,
         }
     }
 
@@ -813,6 +849,55 @@ mod tests {
         assert!(g.state < 2, "alive past the old 210-tick mark (the family fuse)");
     }
 
+    /// satchel-laser-scramble [M `Bullet_DoTrails` 0x12d890:424-433, the decompile's burn arm]:
+    /// a burned-out satchel (`BU+0x102` driven below 1 — the watch contact's walk, drone.rs's
+    /// 0x4E pass) redraws its fuse to `Rand_Rand(0x1518) + 0x3c` EVERY tick, skips the beep and
+    /// the contact walk (`goto LAB_0012e41c`), and never explodes; the digits — taken before the
+    /// redraw (:422) — show the previous tick's redraw after the decrement, so the display
+    /// scrambles.
+    #[test]
+    fn a_burned_out_satchel_redraws_its_fuse_every_tick_scrambles_the_digits_and_never_explodes() {
+        let w = wall_world();
+        let mut g = satchel();
+        let mut rng = Rng::new(0);
+        // Place it: the burn walk targets the stuck charge (every state < 2 in the game — the
+        // port's walk covers the pool the same way).
+        let mut stuck = false;
+        for _ in 0..40 { if matches!(g.update(&w, &mut rng), Some(GrenadeEvent::Stick(_))) { stuck = true; break; } }
+        assert!(stuck, "the satchel is placed");
+        // The laser burn-out: the walk drove BU+0x102 to 0 and latched `defused` (drone.rs).
+        g.burn = 0;
+        g.defused = true;
+        let mut fuses = Vec::new();
+        let mut digits_seen = std::collections::HashSet::new();
+        let mut prev: Option<f32> = None;
+        for _ in 0..30 {
+            let ev = g.update(&w, &mut rng);
+            assert!(matches!(ev, None), "no event leaves the burned-out tail, got {ev:?}");
+            assert!(g.state < 2, "the burned-out satchel never explodes");
+            let fuse = g.range - g.travelled;
+            // The redraw: an integral 0x3c + Rand_Rand(0x1518) ∈ [60, 5459] fuse every tick.
+            assert!((60.0..=5459.0).contains(&fuse) && fuse.fract() == 0.0, "redrawn fuse {fuse}");
+            if let Some(p) = prev {
+                // The digits read the PREVIOUS redraw after this tick's decrement [M :422, :424-433].
+                let sec = ((p - 1.0) * 0.016_666_668) as i32;
+                assert_eq!(g.phase.as_ref().unwrap().digits, Some(((sec / 10) as u8, (sec % 10) as u8)),
+                    "digits from the previous redraw {p}");
+            }
+            digits_seen.insert(g.phase.as_ref().unwrap().digits);
+            fuses.push(fuse);
+            prev = Some(fuse);
+        }
+        fuses.dedup();
+        assert!(fuses.len() >= 29, "the fuse redraws EVERY tick, got {fuses:?}");
+        assert!(digits_seen.len() >= 6, "the display scrambles — {} distinct readings over 30 ticks", digits_seen.len());
+        // Sister: the redraw arm jumps past the beep — none of the 30 ticks plays 0x447.
+        let mut beeps = 0;
+        for _ in 0..30 { if matches!(g.update(&w, &mut rng), Some(GrenadeEvent::Beep(_))) { beeps += 1; } }
+        assert_eq!(beeps, 0, "the burned-out tail never beeps [M :424-433]");
+        assert!(g.state < 2, "still alive");
+    }
+
     /// fix-satchel-tripbomb [M `Bullet_CollisionHandler` 0x12ce80:325-334 + `Bullet_update` case 3
     /// 0x12efa4-0x12efc8]: the tripbomb (0x3a, sticky + the 0x80000 laser bit [L record 0x80100])
     /// sticks flush (0.002), the stick overwrites the fuse slot with 120.0, and the laser arms on
@@ -824,6 +909,7 @@ mod tests {
             pos: [0.0, 1.0, 2.0], velocity: [0.0, 0.0, -1.0], speed: 1.0, travelled: 0.0, range: 42857.0,
             damage: 100.0, radius: 8.0, weapon_type: 0x3a, mesh: 0x0200_074f, owner: usize::MAX, state: 0,
             bounces: 0, smoke_popped: false, resting: false, stuck: false, seek_target: None, phase: None,
+            burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
         };
         let mut rng = Rng::new(0);
         let mut stuck_tick = None;
@@ -863,6 +949,7 @@ mod tests {
             pos: [0.0, 1.0, 0.002], velocity: [0.0; 3], speed: 0.0, travelled: 0.0, range: 42857.0,
             damage: 100.0, radius: 8.0, weapon_type: 0x3a, mesh: 0x0200_074f, owner: usize::MAX, state: 1,
             bounces: 0, smoke_popped: false, resting: true, stuck: true, seek_target: None, phase: Some(Box::new(ph)),
+            burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
         };
         let (lo, hi) = ([-0.2278f32, -0.1042, -0.2064], [0.2278f32, 0.1042, 0.0064]);
         let c = |i: usize| [if i & 1 != 0 { hi[0] } else { lo[0] }, if i & 2 != 0 { hi[1] } else { lo[1] }, if i & 4 != 0 { hi[2] } else { lo[2] }];

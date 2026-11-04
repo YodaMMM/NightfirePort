@@ -941,6 +941,37 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
     with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(2));
 }
 
+/// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-12-13-14-15): the same
+/// walked infiltration → sabotage → Rook → delta-exit route at the menu's 00 Agent pick —
+/// GameState+0x28 = 3 through the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 →
+/// load_with_carry_difficulty; GameState+0x28 → Drones::difficulty, asserted at load]. The pick
+/// scales Bond's pain by Plr_DMod_Hard 1.0 (Easy 0.6, Agent 0.7 [M Player_HandlePain 0x1902c8;
+/// ReadTuningVars 0x1d3a80; L the d2-sisters report's rows]) and the guards' hit chance by
+/// DroneFiring_Accuracy_Hard 1.3 (Easy 0.8, Normal 0.9 [M DroneWeap_DoBulletAccuracy
+/// 0x179740:74-88]); the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49].
+/// The Agent grind (back_off 4.0 + lane_fights) and the path-clear stands run behind
+/// `difficulty >= 2` gates in the body, so the d3 run inherits them; the fights HEAD-HUNT (the
+/// 05-07 sisters' law: at 1.3 accuracy every stood tick is a tick of bursts); the d3-only
+/// deaths get their own d3-gated blocks. Real input only; no health, ammo or channel writes.
+///
+/// IGNORED with the measured run: the d3 walk dies by WEDGE, not by damage — at tick 26340 the
+/// "1.72 landing" resupply leg wedges Bond AIRBORNE at (33.84, 0.82, 30.95) floating 0.41 over
+/// the scoped floor, d 2.70 short of the drop (32.50, 0.83, 33.29), grounded=false, and the
+/// leg's cap panics (walker_b2.rs:641) — the d3 fights' displacement (40 return-fire fights,
+/// 22 hits for 50.0 by that tick — half the budget gone at the landing) puts Bond off the leg's
+/// laid line and the resupply approach cannot re-ground him. The d2 sister rode a TOP-UP (its
+/// wrapper lacks the `with_real_damage` wrap — flagged to the merge owner), so no real-health
+/// d2 baseline exists to diff against. NEXT LEVERS: a d3-gated re-ground before the landing
+/// resupply (a settle tick loop, the skip-hand-back's grounding pattern), or a d3-gated direct
+/// walk_to the drop's cell bypassing the resupply nav, or the fights' smoother early game (the
+/// first 50.0 went in the infiltration grind — the 05-07 sniper-stand law applied to the
+/// stairwell's AIM pairs).
+#[test]
+#[ignore = "00 Agent: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
+fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
+    walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(3)));
+}
+
 fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     let iso = iso();
     // The difficulty-1 expression is byte-identical to the pre-sister master's (real-health-

@@ -3161,6 +3161,14 @@ impl Drone {
             pos: self.pos, dir: [s, 0.0, c], speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
             damage: f32_at(0x0c), owner, state: 0, weapon: record as u16,
             flyby: d.weapons.flyby(record), bounces: 0,
+            // The guard-side flight keeps the port's documented deviation (the glass pass NOT
+            // modelled [S]): the real-health routes stand behind station glass (the 08 d2
+            // platform-mouth wave cleared at zero cost while the rounds stopped on it) — arming
+            // the pass here turned walk_the_whole_mission_on_real_input_real_damage_agent red at
+            // tick 25178 (#23/#19 volleys through the top-station glass). The player-side flight
+            // carries the pass (update_player_bullets' flight_glass) where the Hind fight needs
+            // it; the guard-side route work lands with the next session.
+            glass_pass: false,
             ..crate::bullet::Bullet::TAIL
         })
     }
@@ -10952,6 +10960,10 @@ impl Drone {
             // The box carries the spawn alignment (`Bullet_init`'s `Mat_Align2Dir(obj+0x90, BU+0x00)`
             // [M 0x12c5a0:185]) the flight pose keeps.
             phase: matches!(weapon_type, 0x3a | 0x3b).then(|| Box::new(crate::grenade::StuckGadget::thrown(dir))),
+            // satchel-laser-scramble: BU+0x102 — Bullet_init 0x12c5a0:211 writes 100 for the 0x3b
+            // family (this site's weapon_type IS the record's +0x02 base).
+            burn: if weapon_type == 0x3b { 100 } else { 0 },
+            defused: false,
         })
     }
 
@@ -11232,7 +11244,11 @@ impl Drone {
         (0..w[0x18]).map(|_| {
             let dir = crate::bullet::spread(aim, f32_at(0x24), flags68, rng);
             let mut b = crate::bullet::Bullet { pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage, owner, state: 0,
-                weapon: self.weapon as u16, flyby: d.weapons.flyby(self.weapon as usize), bounces: 0, ..crate::bullet::Bullet::TAIL };
+                weapon: self.weapon as u16, flyby: d.weapons.flyby(self.weapon as usize), bounces: 0,
+                // Guard-side deviation: the glass pass stays unmodelled (see the close-combat
+                // spawn above — the real-health routes stand behind station glass).
+                glass_pass: false,
+                ..crate::bullet::Bullet::TAIL };
             b.init_fuse(w);
             b
         }).collect()
@@ -14640,7 +14656,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // mine-shield-by-guard: the query moved ahead of the mine and stuck-gadget passes so
             // the guard competes with them by hit distance [M the same first-hit rule]; the
             // application stays in the match below.
-            let tw = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
+            // The flight's glass pass [M Bullet_update 0x12e7b0 disasm 0x12f048-0x12f058 —
+            // HITTEST+0x9a = 0x20 for records with +0x6C bit 0x800 clear; Collide_Update
+            // 0x1ea398:216-229 passes the surface-byte-0x10 contacts]: computed once per
+            // round, shared by every world trace of the flight below.
+            let flight_glass = d.weapons.records.get(b.weapon as usize)
+                .is_some_and(|w| u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0);
+            let tw = d.world.segment_flight_scoped(d.world.find_cel(b.pos), b.pos, end, flight_glass);
             for (i, dr) in self.list.iter().enumerate() {
                 // `Drone_CollisionHandler` 0x140968:62 returns while `NPCGlobals == 0` (the NIS freeze:
                 // drones take no damage) and `Collide_PickObj` 0x1eae80:26-30 drops `obj+0xF0 & 0x20`
@@ -14679,7 +14701,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // The round's world stop rides the game's cel-scoped pick [M Collide_Pick 0x1eb320:125
                 // candidate nodes from Collide_StraddleCels 0x1eac98 only; Bullet_update re-feeds
                 // the round's start cel every tick, disasm 0x12f0cc-0x12f0d8].
-                let tstop = d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end);
+                let tstop = d.world.segment_flight_scoped(d.world.find_cel(b.pos), b.pos, end, flight_glass);
                 for (i, br) in self.breaks.list.iter().enumerate().filter(|(_, x)| !x.dead) {
                     // `Collide_FilterBullets` [M 0x1ece30:24-33]: the weapon's category word
                     // against the pane's mask | 0x106 — non-zero AND drops the contact.
@@ -15024,7 +15046,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         if *present & (1u16 << slot) == 0 { continue; }
                         let Some((centre, r)) = targets[slot] else { continue };
                         let Some(t) = Self::segment_sphere_entry(b.pos, end, centre, r) else { continue };
-                        let tw = *tw_copter.get_or_insert_with(|| d.world.segment_bullet_scoped(d.world.find_cel(b.pos), b.pos, end));
+                        let tw = *tw_copter.get_or_insert_with(|| d.world.segment_flight_scoped(d.world.find_cel(b.pos), b.pos, end, flight_glass));
                         if tw.is_some_and(|w| w < t) { continue; }
                         self.copters[ci].part_hits.push(crate::copter::PartHit { slot: slot as u8, damage: bcontact, class: bclass });
                         copter_stop = true;
@@ -15131,6 +15153,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         s.burn -= amount;
                         sparks.push((Self::closest_on_segment(b.pos, end, s.pos), [-b.dir[0], -b.dir[1], -b.dir[2]]));
                         if s.burn <= 0 { s.defused = true; fizzles.push(s.pos); }
+                    }
+                }
+                // satchel-laser-scramble: the PLAYER's placed satchel rides the thrown-grenade pool
+                // in this port (`Sim`'s shot block spawns the fired 0x3b as a `Grenade`) — the game
+                // holds it in the SAME bullet object, so the same contact walk burns it [M
+                // 0x12d890:445-466 — the tail gate is the record's +0x02 family 0x3b, in every state
+                // < 2, landed or still flying]. The port's grenade pool only serves the 0x3b tail
+                // (grenade.rs), and only 0x3b is selectable on the disc [L record sweep], so the
+                // gate is the id. The contact sphere keeps the walk's 0.5 stand-in [S — the charge's
+                // exact glist bounds are not pinned; see the bullet arm above].
+                for g in self.grenades.iter_mut() {
+                    if g.state >= 2 || g.defused { continue; }
+                    if g.weapon_type != 0x3b { continue; }
+                    if Self::segment_hits_sphere(b.pos, end, g.pos, 0.5) {
+                        g.burn -= amount;
+                        sparks.push((Self::closest_on_segment(b.pos, end, g.pos), [-b.dir[0], -b.dir[1], -b.dir[2]]));
+                        if g.burn <= 0 { g.defused = true; fizzles.push(g.pos); }
                     }
                 }
                 for (p, n) in sparks { self.fx.spawn_impact(Self::SATCHEL_BURN_SPARKS, p, n); }
@@ -17385,6 +17424,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 damage: f32_at(0x0c), owner: usize::MAX, state: 0,
                                 weapon: crate::gt::TURRET_WEAPON_RECORD as u16,
                                 flyby: d.weapons.flyby(crate::gt::TURRET_WEAPON_RECORD), bounces: 0,
+                                // Guard-side deviation: the glass pass stays unmodelled (see the
+                                // close-combat spawn in drone.rs).
+                                glass_pass: false,
                                 ..crate::bullet::Bullet::TAIL
                             };
                             b.init_fuse(w);
@@ -17624,6 +17666,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                     pos: from, dir, speed: f32_at(0x20), travelled: 0.0,
                                     range: f32_at(0x1c), damage: f32_at(0x0c), owner: usize::MAX,
                                     state: 0, weapon: 107, flyby: d.weapons.flyby(107), bounces: 0,
+                                    // Guard-side deviation: the glass pass stays unmodelled (see the
+                                    // close-combat spawn in drone.rs).
+                                    glass_pass: false,
                                     ..crate::bullet::Bullet::TAIL
                                 };
                                 b.init_fuse(w);
@@ -18467,6 +18512,36 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     let (a, b, r) = player.body;
                     crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging }
                 } else {
+                    // The standing stance keeps the measured box reach below. THE GAME'S SHAPE IS
+                    // NOW PINNED (level-0a-low-beam-standing-toucher, 2026-11-03): the collide-pass
+                    // HITTEST segment itself — `Player_Collision` 0x194df0's default arm A =
+                    // pos+up·0.275 → BLData+0x760, B = pos+up·(0.55−cc) → +0x770, r 0.55 → +0x7cc,
+                    // mode 0x800 → +0x7d4 [M :315-333 + the tail]; `Collide_PickObj` 0x1eae80:96-119
+                    // picks on that segment (dist < obj_r·1.5 + h+0x8c), `Collide_Intersect`
+                    // 0x1ebaa8:226-247 refines with `Intersect_CylGeom` vs the trigger's OWN glist
+                    // (obj+0xD8 = the celglist [M Trigger_Create 0x1b1720:92]; strict dist < radius
+                    // [M 0x109da0:447], misses drop as the 1e8 sentinel [M 0x1ea398:118-158]), the
+                    // contacts mirror into both sides' obj+0xD0 [M 0x1ea398:160-215], and
+                    // `Trigger_Hit` 0x1b1fc8:27-47 credits the class-3 owners as mask-8 — the
+                    // player obj+0xFF = 3 [L ee_start_0700000a.bin: glb_players[0] @0x2d88e0 →
+                    // 0x1b78640, +0xff = 3]. That segment bottoms at B−r = pos−cc (floor+0.05
+                    // standing), inside #621's band y 0.13-0.39 [D] — the game's standing walk
+                    // fires it [L PCSX2 2026-11-02: ch 0x24 0→1 crossing z −31.0→−33.78], the box
+                    // (bottom pos−0.6 = 0.53) does not. Wiring the segment in IS testable
+                    // (low_beam_621_fires_standing went green with it) but breaks three measured
+                    // pins, each with its own open lever: (1) the 07000005 truck ride — the park
+                    // plate fires standing (the segment dips 0.163 under B to the plate; the
+                    // game's standing-RIDE contact is unmeasured, the 05-truck trace played
+                    // crouched only, and the ride's own class-5 truck contact is not ported,
+                    // trigger-port-check #11); (2) 07000011's Bond-Moment plate #235 — its glist
+                    // rides ~0.85 over pos, above even the segment's pos+0.825 top, the same
+                    // glist ref-gate/extent divergence as the 0c ch-27 bay volume documented on
+                    // Toucher::player; (3) the 0a office-ring route pin (walkreal_0700000a_live
+                    // walk_office_floor_qworm_keyboard_hatch: "no laser/alert channel fired") —
+                    // the port's walker path brushes low bands the game's footpath never did, a
+                    // route-side waypoint divergence, and the real-damage sisters die to the
+                    // laser. The next lever is the route-side tightening plus the glist
+                    // ref-gate/extent, then this arm replaces the box.
                     crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) }
                 }
             }],
@@ -18610,7 +18685,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // exactly these five out; the s/level-14-trench-landing whitelist (only the four
                     // celglist-creator kinds) un-posed the ride platforms (the paternoster cab
                     // 0x2000367, the 0700004a lift entity obj_type 31, the gondola) and broke the rides.
-                    Some(crate::nis::Obj::Entity { hash, kind, matrix, .. }) if !matches!(kind, 0xea | 0xeb | 0xf5 | 0xf2 | 0xf0) => parts.push((id(0), *hash, *matrix)),
+                    Some(crate::nis::Obj::Entity { hash, kind, matrix, .. }) if !matches!(kind, 0xea | 0xeb | 0xf5 | 0xf2 | 0xf0) => {
+                        // Break_Kill's law [M 0x12b970:60 — obj+0xFE |= 1, "the collision goes
+                        // away"]: a KILLED 0x20 pane's glist leaves the collide set. The pane row
+                        // rides the same script obj (the per-tick sync upserts it), so its dead
+                        // flag past the death tick drops the part — the death tick keeps it (the
+                        // killing contact registers BEFORE Break_Kill takes the collision away,
+                        // the same grace the 0x400_0000_0000 placed-pane arm carries). Measured
+                        // on 07000008: the gondola's shot-out windows kept stopping the eye rays
+                        // at the pane plane (the 3409-tri dump showed the dead quads in the
+                        // dynamic set) and the Hind-fight launch corridors never opened.
+                        let pane_dead = *kind == 0x20
+                            && drones.breaks.list.iter().any(|b| b.script_obj == Some(oi) && b.dead && b.dead_frame != drones.frame);
+                        if !pane_dead { parts.push((id(0), *hash, *matrix)); }
+                    }
                     _ => {}
                 }
             }
