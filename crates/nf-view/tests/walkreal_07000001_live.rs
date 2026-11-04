@@ -279,8 +279,15 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // run took a 14.0 pistol round at 1.0 u and the captain's full 8-pellet volley at 1.9 u mid-walk,
     // dead before any fight could answer). The player stops on the hall's south floor short of the
     // crowd (outside the ×2 band, [M 0x139fac-0x139fc8 under DroneFiring_TooClose_Distance 3.0]) and
-    // fights from there; the named loop's approaches cover the rest. Operative keeps the proven hop.
-    if difficulty >= 2 {
+    // fights from there; the named loop's approaches cover the rest.
+    // gas-rng-draws: the Operative (d1) run now takes the SAME doorway play. On the re-landed
+    // stream the ch-0xE crowd bunches at the mouth the tick the meet scene writes 0xE — the d1
+    // stage walk met three of them at 0.4-0.7 u and died there at tick 1930 (26 hits for 100.0;
+    // the under-3-u forced hits [M DroneWeap_DoBulletAccuracy 0x179740:113-115] + the TooClose
+    // ×2 [M Drone_ModBulletDamage 0x139f50]). The lure hold below is difficulty-blind geometry:
+    // the hold line sits just outside the 3.0 band and the guards cross one at a time — easier
+    // tuning than Agent (pain 0.5, accuracy 0.5), not a different game.
+    if difficulty >= 1 {
         // The hall's south door (7.9, 11.1) is the only nav entry from the meet room, and the
         // alerted crowd hunts it in full cover: from the south their parts never expose — plain
         // AND scoped probes, with the door open or shut — while their rounds come THROUGH the
@@ -317,9 +324,8 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         w.keep_off = Some(3.2);
         w.dmg.back_off = Some(3.2);
     }
-    if difficulty < 2 {
-        w.walk_nav_to([2.9, 6.3, 16.3], "stage into the hall (east door)", 3.0);
-    }
+    // (the d1 stage walk is gone — gas-rng-draws: every difficulty holds the door line now; the
+    // named loop fights the crowd through the aperture and the follow crosses the cleared door.)
     // Agent kill order in the hall too: the shotgun captain (0x1c, 24 hp) before the pistols —
     // the close-order run walked to 3.0 of guard #11 first and ate the captain's full 8-pellet
     // volley at 1.9 u while the pistol round landed at 1.0 (the ×2 TooClose band). A player
@@ -338,7 +344,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // them come — the doorway fight sits at the ×2 band's edge and their parts show
         // through the open door. The approach stays the last resort (a guard that never
         // comes), after the hold.
-        if difficulty >= 2 {
+        if difficulty >= 1 {
             // The lure first: a burst INTO the hall at the guard's own spot — the guards hunt
             // the gunshot hearing, and the hunter paths south through the open aperture.
             // level-01-agent-hall-fight-2: the aim TRACKS HIS LIVE POSITION, not the placement
@@ -412,7 +418,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             let sim = w.scene.sim.as_ref().unwrap();
             let dry = sim.gun.clip + sim.gun.spare < 8;
             drop(sim);
-            if dry && difficulty >= 2 {
+            if dry && difficulty >= 1 {
                 // The door phase: the ladder's stage leg crosses the funnel under fire (the
                 // first run died there). Resupply from the hold line and walk back.
                 w.resupply(&format!("hall guard {g} ammo"));
@@ -437,6 +443,28 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // lead's 5.0 release band [M NDrone2_DSTATE_AllyLeadWait 0x15eda8 case 3]. The direct
     // steer crosses the already-open aperture; the nav's own funnel hop wedges here (the
     // closes capped at 3000 ticks four runs running).
+    // gas-rng-draws: the 0x500003a pair in the south lower hall (≈(-7.9, 6.3, -0.4)) covers the
+    // door mouth from ~19.7-19.8 u — the d3 doorway fight ate 98.4 of 100 from them (the 4163
+    // death: 84.0 in 6 + 14.4 in 8). A player silences the far field BEFORE the aperture work:
+    // they stand south-west of the hold line, so the approach walks AWAY from the funnel. The
+    // skin+presence filter self-gates the loop (no such started guard → no-op).
+    let far: Vec<usize> = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (0..sim.drones.list.len()).filter(|&i| {
+            let d = &sim.drones.list[i];
+            d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0 && d.skin == 0x0500_003a
+        }).collect()
+    };
+    for g in far {
+        let gpos = w.scene.sim.as_ref().unwrap().drones.list[g].pos;
+        if walker::dxz(gpos, w.scene.sim.as_ref().unwrap().bond.pos) > 9.0 {
+            w.walk_nav_to(gpos, &format!("far-field approach guard {g}"), 8.0);
+        }
+        if !w.shoot(g, &format!("far-field guard {g}")) {
+            if w.resupply("far-field ammo") { w.shoot(g, &format!("far-field guard {g} retry")); }
+        }
+        if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+    }
     if difficulty >= 3 {
         // real-health-00agent-01: the AND's three named guards are down, but the hall holds
         // MORE than them — the d3 run's #5 (0x5000038, the shotgun 0x1c, 24 hp) stood 0.9 u off
@@ -446,8 +474,11 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // later route window's 9 u). A player does not step through an aperture with a guard on
         // its lip: from the hold line, the lure draws him (the guards hunt the gunshot hearing
         // [M DroneFunc_SetNoiseHeard] — the same bounded live-tracked burst the named loop
-        // uses) and the fight takes him as he crosses. D3-GATED: the Agent sister's green
-        // timelines stay byte-exact.
+        // uses) and the fight takes him as he crosses. Was D3-gated to keep the Agent sister's
+        // timeline byte-exact; gas-rng-draws: that timeline is red on this stream anyway, the lip
+        // guard exists at every difficulty (the d1 ledger's #7, skin 0x5000038 weapon 0x1c 24 hp,
+        // stood at the mouth pre-fix), and d1 now holds the door line like the sisters — the gate
+        // opens to all.
         let lip: Vec<usize> = {
             let sim = w.scene.sim.as_ref().unwrap();
             (0..sim.drones.list.len()).filter(|&i| {
@@ -485,7 +516,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
         }
     }
-    if difficulty >= 2 {
+    if difficulty >= 1 {
         w.walk_to(Wp { at: [7.9, 6.4, 12.3], act: Act::None, arrive: 0.6 }, "into the hall doorway (the release band)");
         // The player walked this corridor five minutes ago and knows the guards: the contact's
         // route to the plate runs west through the west corridor, where the SMG pair (12/17)
