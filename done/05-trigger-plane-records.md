@@ -8,3 +8,8 @@ Done = low_beam_621_fires_standing un-ignored and green; walkreal_0700000a_live,
 
 ---
 claimed-by: sandbox7 at 2026-11-04T03:10Z
+
+---
+## Report (done, 2026-11-04T06:34Z)
+
+Closed by the driver: the report is on `s/trigger-plane-records` (docs/reports/trigger-plane-records.md); the worker didn't run finish.sh.
