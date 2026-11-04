@@ -545,6 +545,18 @@ pub struct Bond {
     /// quad is the thruster pair `local` [M Player_ZeroG 0x192ab0:113,135], which the viewer hands
     /// to the guards as `Drones::player_move_local`; these lanes stay zeroed there.
     pub move_local: [f32; 2],
+    /// OPT-IN (real-health-14-00agent-4, set by the 07000014 agent walks): the push tail runs
+    /// the game's ref-guard faithfully — a failed guard means NO push and NO contact [M
+    /// Intersect_CylGeom 0x109da0:431-447: the push, the pick bit and the best-hit record all sit
+    /// inside the `dot(q − HITTEST+0x50, n) > 0 && |q − +0x50| < radius` arm, and the record tail
+    /// LAB_0010a738 is reached only through the push's goto; decompile re-verified this session].
+    /// `HITTEST+0x50` boots (0,0,0) [L ee_start_*] and its only writer is the DeltaP add-back [M
+    /// Collide_Intersect 0x1ebaa8:353-373], so on walked lines away from the origin the tail is
+    /// structurally dead — the mezzanine west lip (x ~45.1, z ~39.9) releases Bond. Off (the
+    /// default, every other walk) = the port's spine through-push fallback stands in for the
+    /// failed arm — the stand-in the raw-input probe pinned: it held x 45.1338 for 600 ticks
+    /// where the game's dead tail lets go (the -3 report's divergence measurement).
+    pub honest_ref: bool,
 }
 
 impl Bond {
@@ -572,6 +584,7 @@ impl Bond {
             // into `drones.audio`); `Player_HandleJump` 0x1916b0 plays 0xA3 at launch (:184) and
             // 0xA3/0x5FB at the head bump (:195-198).
             sfx_out: Vec::new(),
+            honest_ref: false,
             // unported-front-end-menus-3: no orbit until Player_SetCamMode(BL, 1) (0x195928
             // case 1) arms it.
             orbit: None,
@@ -1067,7 +1080,7 @@ impl Bond {
         // OWN list (`*(cel + 0x18)`) — walls hanging on other rooms' cels never block. `self.cel`
         // is that relink (obj+0x20; the Sim refreshes it off the position each tick, the
         // `build_LinkToRoom` 0x1c9680 order); `None` falls back to the flat world.
-        let (push, walkable) = world.capsule_push_scoped(self.cel, a, b, CLIMB_RADIUS, false, self.pick_ref);
+        let (push, walkable) = world.capsule_push_scoped(self.cel, a, b, CLIMB_RADIUS, false, self.pick_ref, self.honest_ref);
         // The pick-contact bit is measured but NOT gated into `grounded` (hatch-crouch-0c4):
         // `Player_FeetOnPoint` 0x194188 registers the stand-on contact on the ridden object's
         // `obj+0xD0` list through `Coll_AddHitToList` 0x1ede68 (dist forced 1.0, normal =
@@ -1831,7 +1844,7 @@ self.local = [vs / k, vf / k];
         // (Intersect_CylGeom 0x109da0's `dot(q − A, B − A) > 0` gate + the 02 fin wedge the PS2
         // rounds [L]); the port's walk/NPC paths still depend on the unguarded through-push
         // (escort_follow_07000001_live regressed with it on) — a known port divergence.
-        let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS, swimming, self.pick_ref);
+        let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS, swimming, self.pick_ref, self.honest_ref);
         // walk-move-clip EXPERIMENT (`NF_WALK_CLIP=1`): the game's move-clip walk model — the
         // tick's move clipped at the capsule's face contacts, the radial push tail dead (see
         // capsule_tri_clip). Replaces the push displacement AND the pick_ref feed (the game's
@@ -1879,7 +1892,7 @@ self.local = [vs / k, vf / k];
                 let move_v = [self.pos[0] - pre_move_pos[0], self.pos[1] - pre_move_pos[1], self.pos[2] - pre_move_pos[2]];
                 world.capsule_clip(a, b, RADIUS, swimming, move_v)
             } else {
-                world.capsule_push(a, b, RADIUS, swimming, self.pick_ref)
+                world.capsule_push(a, b, RADIUS, swimming, self.pick_ref, self.honest_ref)
             };
             push = if walk_ghost() && !walk_clip() { [0.0; 3] } else { fp };
             walkable = fw;
