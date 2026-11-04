@@ -34,6 +34,36 @@ use walker::{Act, Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
+/// The G-055 flush's kill-loot cycle (g055-4, test-local): the fights' drops rearm the walk —
+/// the walk-over take [M Pickup_Handler 0x18e650] files the weapon + its clip, then the deep
+/// firearm cycle holds a real gun with rounds (the merged-tree real-damage run spent its health
+/// in the servants'-ground fights: 88 of 100 across the trio's crossfire before the exit lawn
+/// finished Bond at tick 56836).
+fn loot_the_drops_03(w: &mut Walker, label: &str) {
+    for _ in 0..4 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        let t = sim.drones.pickups.iter().filter(|p| !p.gone)
+            .filter(|p| (p.m[3][1] - bp[1]).abs() < 1.5)
+            .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+            .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)))
+            .filter(|t| walker::dxz(*t, bp) < 8.0);
+        let Some(t) = t else { break };
+        w.walk_nav_to(t, &format!("{label} loot"), 0.6);
+    }
+    for _ in 0..12 {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let g = &sim.gun;
+            if (2..=0x47).contains(&g.weapon) && g.weapon != 0x34 && g.weapon != 0x37
+                && g.clip + g.spare >= 5 { return; }
+        }
+        w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
+        for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+    }
+    w.switch_to_armed(label);
+}
+
 /// The mission-table row and objective indices for this level [L ee_start_05 @ 0x2a3f18 via
 /// mission::c07000003]: obj0 0x4e "Retrieve Dragon Safe contents", obj1 0x51 "Rescue Mayhew's
 /// servants", obj2 0x53 "Find door leading to Mayhew" (enable 0x52).
@@ -55,6 +85,16 @@ fn clear_near(w: &mut Walker, r: f32, label: &str) {
                 .map(|(i, _)| i)
         };
         let Some(di) = near else { return };
+        // The far+unexposed skip (g055-4's 16-walk lever): a guard whose boxes no eye ray
+        // reaches (the door-8 cluster #18/#19/#2 behind the leaves [D the 00agent-02-03-2
+        // note]) is not a fight — the measured d2 run's flank nav walked INTO the doorway's
+        // sweep line and #18's point-blank volleys (38.7 in 16 hits, hp 12 — the taps never
+        // landed through the door) finished Bond at 58345. The route's own legs engage the
+        // cluster through the open doorway (the green runs fought from (36.2,5.7) THROUGH it).
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if walker::dxz(sim.drones.list[di].pos, sim.bond.pos) > 8.0 && w.exposed_aim(di).is_none() { return; }
+        }
         let _ = w.switch_to_armed(label);
         if !w.shoot(di, &format!("{label} guard {k}")) { let _ = w.resupply(label); }
     }
@@ -325,6 +365,13 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
             // 00agent-02-03-2 ledger].
             let _ = w.resupply(&format!("before servant {si} (00agent)"));
         }
+        // The G-055 flush's second-block guards hold the servants' ground posts and cross-fire
+        // the approach (the merged-tree real-damage run: the trio #14/#2/#18 each cost 24-34
+        // health during the servant navs, 88 total, and the exit lawn finished the last 6.8).
+        // A player clears the ground one guard at a time from where he stands and scoops the
+        // drops (the kill-loot cycle) — the fights shorten with every kill.
+        clear_near(&mut w, 9.0, "the servants' ground");
+        loot_the_drops_03(&mut w, "the servants' ground");
         w.walk_nav_to([at[0], at[1] - 0.3, at[2]], &format!("servant {si}"), 1.7);
         let sim = w.scene.sim.as_ref().unwrap();
         let d = &sim.drones.list[si];

@@ -42,6 +42,41 @@ use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
+/// The G-055 first-attack flush [M 0x148010:100-131] puts this level's stairwell guards on their
+/// SECOND behaviour block at their first attack — the blocks charge to contact (the merged-tree
+/// real-damage death: 100.0 across 29 hits / 13 fights, the 18.9-strip pair's melee 65 of it,
+/// drones #13/#14 at d 0.7-1.4; the agent sister's leg then wedged in the shared resupply's
+/// 22-u tour because every fight spent the 7-round spawn pistol [M 0x1a7ef8:275-281]). A player
+/// scoops the dropped guns at his feet between fights — the walk-over take [M Pickup_Handler
+/// 0x18e650] files the weapon + its clip — and holds the best-fed owned gun. Test-local (the
+/// g055-4 idiom): the shared resupply and every other walk stay master's.
+fn loot_the_drops(w: &mut Walker, label: &str) {
+    for _ in 0..4 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        let t = sim.drones.pickups.iter().filter(|p| !p.gone)
+            .filter(|p| (p.m[3][1] - bp[1]).abs() < 1.5)
+            .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+            .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)))
+            .filter(|t| walker::dxz(*t, bp) < 8.0);
+        let Some(t) = t else { break };
+        w.walk_nav_to(t, &format!("{label} loot"), 0.6);
+    }
+    // The deep-firearm cycle (g055-4): hold a real gun with rounds — the plain cycle can land
+    // on the frag 0x34.
+    for _ in 0..12 {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let g = &sim.gun;
+            if (2..=0x47).contains(&g.weapon) && g.weapon != 0x34 && g.weapon != 0x37
+                && g.clip + g.spare >= 5 { return; }
+        }
+        w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
+        for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+    }
+    w.switch_to_armed(label); // anything armed beats the fists
+}
+
 /// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent / 3 00
 /// Agent ride the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
 fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
@@ -112,18 +147,23 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     // (the fights never run there).
     if !w.tops_up() { w.dmg.precise_fights = true; }
 
-    // THE 00 AGENT RESUPPLY MODE (difficulty 3): the d3 placements grow the fight count past the
-    // fresh 7-round pistol's budget [M 0x1a7ef8:275-281 — the mission-11 equip is 7] and the
-    // shared resupply then targeted the floor's only placed ammo box — the grenade launcher at
-    // (10.54, 47.47, 18.10) [D #290] 22 u away on desk geometry — whose tour ate the descent
-    // leg's cap. The lane mode (the 07000013 walk's opt-in, per-walk only) plus the floor-drop
-    // band counts the guard drops the fights themselves leave ON the floor (the drop's centre
-    // rests on the floor ray, 1.09 under Bond's pos y — outside the lane 0.5 band): the run's
-    // NE-landing pass walked onto a fresh kill drop and armed clip 30 [L the 2026-11-03 run].
-    // Agent (d2) stays on the shared rules (its fights fit the 7; it is green as-is).
-    if difficulty == 3 {
+    // THE 00 AGENT RESUPPLY MODE (difficulty 3; AGENT TOO on the merged tree): the d3 placements
+    // grow the fight count past the fresh 7-round pistol's budget [M 0x1a7ef8:275-281 — the
+    // mission-11 equip is 7] and the shared resupply then targeted the floor's only placed ammo
+    // box — the grenade launcher at (10.54, 47.47, 18.10) [D #290] 22 u away on desk geometry —
+    // whose tour ate the descent leg's cap. The lane mode (the 07000013 walk's opt-in, per-walk
+    // only) plus the floor-drop band counts the guard drops the fights themselves leave ON the
+    // floor (the drop's centre rests on the floor ray, 1.09 under Bond's pos y — outside the lane
+    // 0.5 band): the run's NE-landing pass walked onto a fresh kill drop and armed clip 30 [L the
+    // 2026-11-03 run]. Agent (d2) rode the shared rules while the guards held their first blocks;
+    // the merged G-055 flush (the second-block chargers, the real-damage death measured this
+    // session: 100.0 across 29 hits / 13 fights, the agent sister's shared-resupply wedge at the
+    // same 22-u box) spends the 7 exactly like d3 — the same two levers apply.
+    if difficulty >= 2 {
         w.dmg.lane_fights = true;
         w.dmg.lane_floor_drops = true;
+    }
+    if difficulty == 3 {
         // The close-guard law: under 3.0 u every drone round hits [M DroneWeap_DoBulletAccuracy
         // 0x179740:113-115] — this run's ledger finishes Bond with the connector guard #18 at
         // 1.9 u (4.0, the last health) and round 1's flight-B blocker stood 1.6 u. A player
@@ -342,16 +382,20 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     }
     w.wait(45); // the swing finishes before the doorway walk (the auto-close is 360 ticks [M Door_Update])
     w.walk_to(Wp::new(11.0, 47.4, -5.5).r(0.9), "through the stairwell doorway");
+    loot_the_drops(&mut w, "the doorway"); // g055-4 kill-loot: the fights rearm from their own drops
     w.walk_to(Wp::new(13.0, 46.9, -6.2).r(0.9), "the top flight east");
     w.walk_to(Wp::new(19.5, 44.6, -5.2).r(1.0), "the north flight down (46.8→44.4)");
     w.walk_to(Wp::new(22.3, 43.6, -3.2).r(1.0), "the north-east landing 43.1");
     band(&w, 42.6, 44.6, "the NE landing");
+    loot_the_drops(&mut w, "the NE landing");
     w.walk_to(Wp::new(23.0, 39.5, 3.6).r(1.0), "the east flight down (43.1→39.1)");
     w.walk_to(Wp::new(20.5, 39.5, 5.8).r(1.0), "the south-east landing 39.1");
     band(&w, 38.6, 40.5, "the SE landing");
+    loot_the_drops(&mut w, "the SE landing");
     w.walk_to(Wp::new(15.2, 35.6, 6.0).r(1.0), "the south run down (39.1→35.2)");
     w.walk_to(Wp::new(14.8, 35.4, 5.0).r(0.9), "the south-west landing 35.2");
     band(&w, 34.6, 36.6, "the SW landing");
+    loot_the_drops(&mut w, "the SW landing");
     // The real-health run's fights pause the descent (a return-fire stand or a pain stagger
     // on the flight), so the dxz-arrival can sample the band a step or two up the flight —
     // measured 32.516 against this 32.5 cap (walkreal_07000011_real_damage, 2026-11-02). The
@@ -360,15 +404,19 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     w.walk_to(Wp::new(14.8, 31.4, -2.6).r(1.0), "the west flight C down (35.2→31.1)");
     band(&w, 30.4, 32.7, "flight C's bottom");
     w.walk_to(Wp::new(22.4, 31.3, -3.0).r(1.0), "the north strip 31.1 east");
+    loot_the_drops(&mut w, "the 31.1 strip");
     w.walk_to(Wp::new(23.0, 27.4, 3.8).r(1.0), "the east connector down (31.1→27.1)");
     band(&w, 26.4, 29.5, "connector 1's bottom");
     w.walk_to(Wp::new(15.0, 27.4, 4.8).r(1.0), "the south strip 27.1 west");
+    loot_the_drops(&mut w, "the 27.1 strip");
     w.walk_to(Wp::new(14.8, 23.3, -2.6).r(1.0), "the west flight B down (27.1→23.0)");
     band(&w, 22.4, 25.0, "flight B's bottom");
     w.walk_to(Wp::new(22.4, 23.2, -3.0).r(1.0), "the north strip 23.0 east");
+    loot_the_drops(&mut w, "the 23.0 strip");
     w.walk_to(Wp::new(23.0, 19.3, 3.8).r(1.0), "the east connector down (23.0→18.9)");
     band(&w, 18.2, 21.3, "connector 2's bottom");
     w.walk_to(Wp::new(15.0, 19.2, 4.8).r(1.0), "the south strip 18.9 west");
+    loot_the_drops(&mut w, "the 18.9 strip");
     w.walk_to(Wp::new(14.8, 15.4, -2.6).r(1.0), "the west flight A down (18.9→15.0)");
     {
         let sim = w.scene.sim.as_ref().unwrap();

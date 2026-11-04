@@ -6520,6 +6520,33 @@ impl Drone {
         }
         self.tase_accum = self.tase_accum.saturating_add(1);
         if self.tase_accum as u32 > (self.health as u32) << 1 {
+            // The 09/0A stamp arm [M 0x1469b8:103-128] — only the fall tase reaches it (the
+            // accumulator gate returns 1 earlier, [M :76-88]). Without the first-sight latch
+            // (`+0x4F8 & 0x4000000`, the port's `sighted`): only the resume write, `SMI+0x10`
+            // = 0x14 CivilianPatrol [M :105-106; SMI = Drone+0x108, so SMI+0x10 = +0x118, the
+            // port's `impact_resume`]. With it: the first-attack and sight latches clear, the
+            // alt state 0x89 RunToAlarm arms (+0x16 = 0, +0x4FC = 0), and with `+0xC48 == 100`
+            // the FIRST block comes back (`+0x29 = 0`, `+0x4D8 = +0x4DC` — the Set1st this
+            // task wires, [M :114-116]); then mode 9, alt mode 7, `+0x5A2` = 0x14 and
+            // `SMI+0x10` = 0x15 ReturnToPatrolPath [M :119-124]. After the stun the guard
+            // re-enters Attack, whose FirstAttack tail consumes the 0x89 (`set_2nd_behaviour`
+            // there) — the alarm run, docs/GAPS.md G-055.
+            if matches!(d.level, 0x0700_0009 | 0x0700_000a) {
+                if !self.sighted {
+                    self.impact_resume = state::CIVILIAN_PATROL;
+                } else {
+                    self.first_attack_done = false; // `+0x4F8 &= ~0x2000000` [M :108]
+                    self.alt_state = crate::kiko::RUN_TO_ALARM; // `+0x5A4 = 0x89` [M :110]
+                    self.alarm_run = false; // `+0x16 = 0` [M :111]
+                    self.alert_bits = 0; // `+0x4FC = 0` [M :112]
+                    self.set_1st_behaviour(); // `+0xC48 == 100` → `+0x29 = 0`, `+0x4D8 = +0x4DC` [M :114-116]
+                    self.mode = 9; // `+0xC5 = 9` [M :119]
+                    self.alt_mode = 7; // `+0xC6 = 7` [M :120]
+                    self.sighted = false; // `+0x4F8 &= ~0x4000000` [M :121-122]
+                    self.return_state = state::CIVILIAN_PATROL; // `+0x5A2 = 0x14` [M :123]
+                    self.impact_resume = state::RETURN_TO_PATROL_PATH; // `SMI+0x10 = 0x15` [M :124]
+                }
+            }
             // `Drone_SM_SetState(0x4a, msg[6])` [M 0x1469b8 case 7] — the ENTER MsgObject's slot 6 is
             // the triggering message's slot 6 (dis 0x171f14-0x171f20), and `DSTATE_Taser` case 1 reads
             // it (`param_4[6]` → `DroneFunc_RecoverTime` [M 0x162b98]) — the same HITDATA `self.hit`
@@ -7894,10 +7921,29 @@ impl Drone {
                     first = if self.prop(d, 0x1b) { if rng.rand(2) == 0 { 0 } else { self.choose_combat_move(d, rng) } }
                         else if self.prop(d, 0x18) { 0 } else if self.prop(d, 0x19) { self.choose_combat_move(d, rng) } else { 0 };
                     if first_sight && first == 0 { self.attack_talk(d.level, rng); }
-                    // `FirstAttack` may switch to the second behaviour block (`+0x5A4` ≠ 0, not modelled); [L] the 07000005
-                    // gate guard still used its first block after a fight (`+0x4D8` = `+0x4DC`, WORKLOG 0021), so no switch.
                 }
                 if first != 0 { self.set_state(first); return true; }
+                // G-055: `FirstAttack`'s alternate-state tail [M 0x148010:100-131] — with the alt
+                // state (+0x5A4) set and the second switch (+0x135) clear it runs the
+                // `ChangeToAttackMode` flush INLINE instead of `AttackNoWeapon`: `+0x5A2 = 0x56`
+                // [M :102], `+0xC6 → +0xC5`, the mode-2 sniper to 0x19 + the DroneTypeSettings
+                // +304 hook (the port's `stationary`), `+0xC6`/`+0x5A4` cleared, and with
+                // `+0xC48 == 100` the SECOND block comes in (`+0x4D8 = +0x4E8`, `+0x29 = 1`)
+                // [M :118-128]; `+0x28 = 1` has no port reader (same as `ChangeToAttackMode`'s).
+                // The return is the old alt state — 0xb4 (DeleteMe) → 0x56, the sniper arm 0x56
+                // [M :128-131]. FirstAttack's own pass only (re-entries return 0 at
+                // `+0x4F8 & 0x2000000` [M :17-19]), and only after a zero FirstSightState pick —
+                // a non-zero one returns from FirstAttack before the tail [M :41-45]. Unarmed
+                // guards take `AttackNoWeapon` instead (the weapon-≤1 arm above); `+0x135` is
+                // provably clear here — the common path just cleared it and neither
+                // `DroneAlertToObject` nor `AttackTalk` writes +0x135 [M the +0x135 writer
+                // census: DefaultInit/PreDroneControl/FirstAttack/SetAsAttacking only].
+                if first_time && self.alt_state != 0 {
+                    self.return_state = state::ATTACK; // `+0x5A2 = 0x56` [M 0x148010:102]
+                    let st = self.change_to_attack_mode();
+                    self.set_state(if st == crate::kiko::DELETE_ME { state::ATTACK } else { st });
+                    return true;
+                }
                 // attack-reentry-choice (913): Attack's own fallback when FirstAttack returned 0
                 // [M 0x164210:24-90] — on the first entry with no pick AND on every re-entry:
                 // `+0x50C = 1.0` (alertness) and `Drone_AlertStatusSet(1)` (the status byte +0x51C
@@ -19555,17 +19601,25 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // (`+0x13A`): 0xC deletes the drone [M :55-58], otherwise `+0x5A4` is passed VERBATIM to
             // `Drone_SM_SetState` in the same call — including 0, no default [M :65-90] — with the
             // +0x28 latch and the +0xc6→+0xc5 mode swap gated on it being non-zero [M :79-89] and a
-            // mode-2 → 0x56 retype in between [M :73-78, unmodelled]. `+0x5A4` is written from the
+            // mode-2 → 0x56 retype in between [M :73-78]. `+0x5A4` is written from the
             // type settings [M 0x14cbd8:108-114,201-202; 0x14d2e8:54-60] — the port derives it at
             // init (the alt_mode/start-state mapping). standins-drone-925: the old `else ATTACK`
             // default is gone — the game substitutes nothing.
+            // G-055: with an alt state the game's flush IS the `ChangeToAttackMode` inline
+            // [M 0x148db0:65-82] — `+0xC6 → +0xC5`, the mode-2 sniper to 0x19 (its SetState
+            // argument becomes 0x56, [M :73-78]), `+0xC6`/`+0x5A4` cleared, and with
+            // `+0xC48 == 100` the SECOND block comes in (`+0x4D8 = +0x4E8`, `+0x29 = 1`)
+            // [M :75-77]; `+0x28 = 1` has no port reader. `change_to_attack_mode` is that body
+            // (and the drone keeps the verbatim-0 SetState when the alt state is clear).
             if dr.second_channel != 0 && dr.second_tag != 0 && self.channels.on(dr.second_channel as u32) {
                 dr.second_channel = 0;
                 if dr.second_tag == 0xc { dr.present = false; dr.enabled = false; continue; }
                 dr.second_tag = 0;
-                let alt = dr.alt_state;
                 dr.enabled = true;
-                dr.set_state(alt);
+                if dr.alt_state != 0 {
+                    let st = dr.change_to_attack_mode();
+                    dr.set_state(st);
+                }
             }
             // `NDrone2_DSTATE_Hostage` (0x15cb78) case 3 [M 0x15cb78:24-36]: the per-frame captor
             // check — the captor link (+0x2B0) empty or the captor's health (+0xAC) ≤ 0 →
@@ -22140,5 +22194,172 @@ mod abseil_tests {
         assert!(drones.list[1].target_motion.first_moved, "B holds through its stamp + 120");
         drones.tick_inner(&d, &player); // frame 171
         assert!(!drones.list[1].target_motion.first_moved, "B cleared at ITS stamp + 121 [M :70-73]");
+    }
+    /// An empty-tables `Data` at the given level id — the shape the tick/send unit tests need
+    /// (the property reads return 0 on the empty tables, so prop-gated arms stay off). The
+    /// owned tables live in a `keep` bundle the caller drops at the end (the borrows outlive
+    /// the `Data`).
+    macro_rules! empty_data {
+        ($level:expr, $keep:ident, $dname:ident) => {
+            let $keep = (
+                CollisionWorld::empty(),
+                nf_formats::drone::DroneAnimData { states: Vec::new(), info: Vec::new(), tables: Vec::new() },
+                nf_formats::drone::PropertyTables { descs: Vec::new(), masks: Vec::new(), types: Vec::new() },
+                std::collections::HashMap::<u32, nf_formats::anim::Script>::new(),
+                nf_formats::weapon::WeaponData { records: Vec::new(), ammo_cap: Vec::new(), ammo_raw: Vec::new() },
+                nf_formats::tuning::Tuning::default(),
+                std::collections::HashMap::<u32, nf_formats::anim::Sequence>::new(),
+                std::collections::HashMap::<u32, nf_formats::character::Skin>::new(),
+                std::collections::HashMap::<u8, nf_formats::character::Skeleton>::new(),
+                crate::nav::Network::default(),
+                Vec::<crate::cover::CoverNode>::new(),
+                nf_formats::hitbox::CollisionBones { human: Vec::new(), astronaut: Vec::new() },
+                Vec::<crate::aivolume::AiVolume>::new(),
+                std::collections::HashMap::<u32, crate::pickup::Model>::new(),
+                Vec::<crate::aipoint::AiPoint>::new(),
+            );
+            let $dname = Data { tables: &$keep.1, props: &$keep.2, scripts: &$keep.3, weapons: &$keep.4, world: &$keep.0, level: $level,
+                sequences: &$keep.6, skins: &$keep.7, skeletons: &$keep.8, nav: &$keep.9, covers: &$keep.10, tuning: &$keep.5,
+                hitboxes: &$keep.11, volumes: &$keep.12, sfx: None, models: &$keep.13, surfaces: None, voices: None,
+                difficulty: 2, ai_points: &$keep.14 };
+        };
+    }
+
+    /// G-055 (drone-block-swaps): `NDrone2_PreDroneControl`'s second-switch flush
+    /// [M 0x148db0:51-90] — a guard with `+0x135` (second channel) set whose channel goes ON
+    /// runs the `ChangeToAttackMode` flush inline when `+0x5A4` (alt_state) is non-zero:
+    /// `+0xC6 → +0xC5`, `+0xC6`/`+0x5A4` cleared, and with `+0xC48 == 100` the SECOND block
+    /// comes in (`+0x4D8 = +0x4E8`, `+0x29 = 1`) [M :75-77], the SetState argument the alt
+    /// state. Sister: the channel OFF leaves the guard alone.
+    #[test]
+    fn second_switch_flush_swaps_in_the_second_block() {
+        empty_data!(0x0700_0002, d_keep, d);
+        let mut dr = drone_at([10.0, 0.0, 10.0]);
+        // The disc's wake-guard shape (07000002 #465: p6 = 73 the channel, p8 = 100 the tag) plus
+        // p5 = 100 (the second block) — the port's fields [M 0x14b300: params 5/6/8].
+        dr.second_channel = 73;
+        dr.second_tag = 100;
+        dr.weapon = 0x10; // armed: the post-flush Attack enter must reach the fallback, not the scared arm
+        dr.alt_mode = 7;
+        dr.alt_state = state::ATTACK; // +0x5A4 = 0x56 [M 0x14cbd8 row alt]
+        dr.alert_props = Some([0xAA, 0xBB, 0xCC]);
+        dr.props = [0x11, 0x22, 0x33];
+        let mut drones = Drones::new(vec![dr], Rng::new(0x5eed));
+        // Sister first: the channel still OFF — no flush, the latch and the blocks untouched.
+        drones.tick_inner(&d, &Player::default());
+        assert!(!drones.list[0].using_2nd, "channel OFF: no flush, the drone stays on its first block [M 0x148db0:53]");
+        assert_eq!(drones.list[0].second_tag, 100, "channel OFF: the tag stands [M :53]");
+        // The channel ON (what Switch_Activate's `switch_channels[param 0] = 1` write does
+        // [M 0x1b02a8]): the flush consumes the tag and swaps the blocks.
+        drones.channels.set(73, 1, drones.frame);
+        drones.tick_inner(&d, &Player::default());
+        let dr = &drones.list[0];
+        assert!(dr.using_2nd, "the flush swapped the second block in [M 0x148db0:75-77]");
+        assert_eq!(dr.props, [0xAA, 0xBB, 0xCC], "the ACTIVE block is now the second one [M :75-77]");
+        assert_eq!(dr.alert_props, Some([0x11, 0x22, 0x33]), "the first block survives the swap [M DroneFunc_Set1stBehaviour 0x14a5f0]");
+        assert_eq!(dr.second_channel, 0, "the channel is consumed [M 0x148db0:65]");
+        assert_eq!(dr.second_tag, 0, "the tag is consumed [M 0x148db0:65]");
+        assert_eq!(dr.mode, 7, "+0xC6 → +0xC5 [M 0x148db0:68]");
+        assert_eq!(dr.alt_mode, 0, "+0xC6 cleared [M 0x148db0:78]");
+        assert_eq!(dr.alt_state, 0, "+0x5A4 cleared [M 0x148db0:79]");
+        // The flush's SetState(0x56) re-enters Attack (FirstAttack → 0 at the latch, the fallback
+        // [M 0x164210:69-88]) — Combat for this no-0x18 guard.
+        assert_eq!(dr.state, state::COMBAT, "the flush's 0x56 re-enters Attack, whose fallback lands in Combat [M 0x148db0:82 + 0x164210:69-88]");
+    }
+
+    /// G-055 (drone-block-swaps): `DroneFunc_FirstAttack`'s alternate-state tail
+    /// [M 0x148010:100-131] — an armed guard whose first attack finds `+0x5A4` ≠ 0 runs the
+    /// `ChangeToAttackMode` flush inline: `+0x5A2 = 0x56` [M :102], the mode swap, and with
+    /// `+0xC48 == 100` the SECOND block comes in [M :118-128]; the return (the next state) is
+    /// the old alt state. Sister: alt state clear → Attack's own fallback, no swap.
+    #[test]
+    fn first_attack_alt_tail_swaps_in_the_second_block() {
+        let mut dr = drone_at([10.0, 0.0, 10.0]);
+        dr.state = state::ATTACK;
+        dr.weapon = 0x10; // armed: the weapon-≤1 arm must not take it
+        dr.alt_mode = 7;
+        dr.alt_state = state::ATTACK; // +0x5A4 = 0x56
+        dr.alert_props = Some([0xAA, 0xBB, 0xCC]);
+        dr.props = [0x11, 0x22, 0x33];
+        // The sister: the same guard WITHOUT an alt state reaches Attack's fallback instead.
+        let mut sis = drone_at([30.0, 0.0, 30.0]);
+        sis.state = state::ATTACK;
+        sis.weapon = 0x10;
+        sis.alert_props = Some([0xAA, 0xBB, 0xCC]);
+        empty_data!(0x0700_0001, d_keep, d);
+        let mut rng = Rng::new(0x5eed);
+        dr.send(&d, &mut rng, 1, msg::ENTER);
+        assert!(dr.first_attack_done, "FirstAttack ran once [M 0x148010:63]");
+        assert!(dr.using_2nd, "the alt tail swapped the second block in [M 0x148010:124-127]");
+        assert_eq!(dr.props, [0xAA, 0xBB, 0xCC], "the ACTIVE block is now the second one [M 0x148010:125]");
+        assert_eq!(dr.alt_mode, 0, "+0xC6 cleared [M 0x148010:122]");
+        assert_eq!(dr.alt_state, 0, "+0x5A4 cleared [M 0x148010:123]");
+        assert_eq!(dr.mode, 7, "+0xC6 → +0xC5 [M 0x148010:104]");
+        assert_eq!(dr.return_state, state::ATTACK, "+0x5A2 = 0x56 [M 0x148010:102]");
+        // The 0x56 return re-enters Attack (case 1 runs FirstAttack again → 0 at the latch [M
+        // 0x148010:17-19]) whose own fallback takes over [M 0x164210:69-88] — Combat here.
+        assert_eq!(dr.state, state::COMBAT, "the tail's 0x56 re-enters Attack, whose fallback lands in Combat [M 0x164210:69-88]");
+        let mut rng = Rng::new(0x5eed);
+        sis.send(&d, &mut rng, 1, msg::ENTER);
+        assert!(!sis.using_2nd, "sister: no alt state, no swap — Attack's fallback runs [M 0x148010:100-101]");
+        assert_eq!(sis.state, state::COMBAT, "sister: the fallback picks Combat [M 0x164210:69-88]");
+    }
+
+    /// G-055 (drone-block-swaps): `DroneFunc_HandleImpact` case 7's 09/0A stamp arm
+    /// [M 0x1469b8:103-128] — on 0x07000009/0x0700000a the fall tase of a guard that carries
+    /// the first-sight latch (`+0x4F8 & 0x4000000`) restores the FIRST block when
+    /// `+0xC48 == 100` and arms the alt state 0x89 RunToAlarm; the sister latches/levels keep
+    /// the current block.
+    #[test]
+    fn tase_fall_on_090a_swaps_back_to_the_first_block() {
+        // The swap arm: level 0a, sighted, on the second block → the fall restores the first.
+        empty_data!(0x0700_000a, d_keep, d);
+        let mut dr = drone_at([10.0, 0.0, 10.0]);
+        dr.sighted = true; // +0x4F8 & 0x4000000
+        dr.first_attack_done = true;
+        // `using_2nd` set: the ACTIVE block IS the second one [M Drone+0x29 + 0x4D8 = +0x4E8].
+        dr.alert_props = Some([0x11, 0x22, 0x33]); // the stashed FIRST block
+        dr.props = [0xAA, 0xBB, 0xCC];
+        dr.using_2nd = true;
+        dr.health = 10.0;
+        let mut rng = Rng::new(0x5eed);
+        for i in 0..21u32 {
+            dr.send(&d, &mut rng, i + 1, msg::TASE);
+        }
+        assert_eq!(dr.state, state::TASER, "the fall tase enters Taser 0x4a [M 0x1469b8:129-133]");
+        assert!(!dr.using_2nd, "Set1st: the FIRST block is active again [M 0x1469b8:114-116]");
+        assert_eq!(dr.props, [0x11, 0x22, 0x33], "the first block's words are back [M :115-116]");
+        assert_eq!(dr.alert_props, Some([0xAA, 0xBB, 0xCC]), "the second block survives the swap back [M 0x14a5f0]");
+        assert_eq!(dr.alt_state, crate::kiko::RUN_TO_ALARM, "+0x5A4 = 0x89 RunToAlarm [M 0x1469b8:110]");
+        assert_eq!(dr.mode, 9, "+0xC5 = 9 [M :119]");
+        assert_eq!(dr.alt_mode, 7, "+0xC6 = 7 [M :120]");
+        assert!(!dr.sighted, "+0x4000000 clear [M :121-122]");
+        assert!(!dr.first_attack_done, "+0x2000000 clear [M :108]");
+        assert_eq!(dr.return_state, state::CIVILIAN_PATROL, "+0x5A2 = 0x14 [M :123]");
+        assert_eq!(dr.impact_resume, state::RETURN_TO_PATROL_PATH, "SMI+0x10 = 0x15 [M :124]");
+        // Sister 1: the same fall WITHOUT the sight latch — only the resume write, no swap.
+        empty_data!(0x0700_000a, d1_keep, d1);
+        let mut dr1 = drone_at([10.0, 0.0, 10.0]);
+        dr1.alert_props = Some([0x11, 0x22, 0x33]);
+        dr1.props = [0xAA, 0xBB, 0xCC];
+        dr1.using_2nd = true;
+        dr1.health = 10.0;
+        let mut rng = Rng::new(0x5eed);
+        for i in 0..21u32 { dr1.send(&d1, &mut rng, i + 1, msg::TASE); }
+        assert_eq!(dr1.impact_resume, state::CIVILIAN_PATROL, "SMI+0x10 = 0x14 with the latch clear [M 0x1469b8:105-106]");
+        assert!(dr1.using_2nd, "sister: the latch clear — no swap [M 0x1469b8:105-107]");
+        assert_eq!(dr1.alt_state, 0, "sister: no 0x89 arm [M :105-107]");
+        // Sister 2: the sight latch ON but another level — the whole stamp arm is level-gated.
+        empty_data!(0x0700_0001, d2_keep, d2);
+        let mut dr2 = drone_at([10.0, 0.0, 10.0]);
+        dr2.sighted = true;
+        dr2.alert_props = Some([0x11, 0x22, 0x33]);
+        dr2.props = [0xAA, 0xBB, 0xCC];
+        dr2.using_2nd = true;
+        dr2.health = 10.0;
+        let mut rng = Rng::new(0x5eed);
+        for i in 0..21u32 { dr2.send(&d2, &mut rng, i + 1, msg::TASE); }
+        assert!(dr2.using_2nd, "sister: level not 09/0A — no swap [M 0x1469b8:103]");
+        assert_eq!(dr2.impact_resume, 0, "sister: no resume write either [M :103]");
     }
 }

@@ -198,8 +198,15 @@ fn the_elevator_jumper_opens_the_door_and_attacks() {
     let d = &sim.drones.list[i];
     // The timer's msg 0xc sets Attack 0x56 [M 0x169488:40]; the combat chooser then moves it on
     // within the tick (no route → COMBAT_NO_ROUTE 0x5f here) — any combat-chain state proves it.
+    // With the game's FirstAttack alternate-state tail [M 0x148010:100-131] the first ENTER also
+    // flushes a guard that carries an alt state: this level's mode-alert-7 guards hold
+    // +0x5A4 = DroneTypeSettings[row 7].alt = 0x85 [M 0x14cbd8:103-114], the flush returns the OLD
+    // alt state [M 0x148010:128-131], and the 0x85 EnemyRunToPoint → 0x89 RunToAlarm chain lands in
+    // GoToGoal 0x63 — the combat chain's own run-to-goal leg [M 0x164c08 case 0xC]. GO_TO_GOAL is
+    // that flush's legitimate first-combat successor.
     assert!(matches!(d.state, state::ATTACK | state::COMBAT | state::COMBAT_NO_MOVE | state::COMBAT_NO_ROUTE
-        | state::COMBAT_OUT_OF_RANGE | state::COMBAT_NEW_SIGHTING | state::COMBAT_NO_SIGHT | state::AIM_STAND),
+        | state::COMBAT_OUT_OF_RANGE | state::COMBAT_NEW_SIGHTING | state::COMBAT_NO_SIGHT | state::AIM_STAND
+        | state::GO_TO_GOAL),
         "the timer C → Attack → the combat chain, got {:#x}", d.state);
     assert!(d.log.iter().any(|&(_, st)| st == state::ATTACK), "the transition went through Attack 0x56");
 }

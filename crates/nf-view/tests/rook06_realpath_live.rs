@@ -108,8 +108,13 @@ fn the_switch16_guard_fights_through_the_door47_doorway() {
         w.tick(Default::default(), false);
         let sim = w.scene.sim.as_ref().unwrap();
         let d3 = &sim.drones.list[3];
-        assert!(d3.corpse || d3.mode == 0, "the ch-16 guard's placement mode 0 survives the engagement \
-            (the game's ChangeToAttackMode 0x14a648 has no Attack-ENTER caller for a kind-2 NEW drone) [M]");
+        // Pin 1: mode 0 until the first attack; the game's FirstAttack alt tail [M 0x148010:100-131]
+        // then flushes the p21=2 guard to the mode-0x19 stationary sniper with the second block in
+        // (+0x5A4 = DroneTypeSettings[row 2].alt = 0x2a [M 0x14cbd8:103-114, D #439 p21=2];
+        // FirstAlertState returns 0 on 07000006 for every alert arm [M 0x147f58:8-58]; p5=100 [D
+        // #439]) — and re-entries never re-flush [M 0x148010:17-19], so the OLD every-re-entry
+        // flush (rook-door-06's jamb park) stays impossible.
+        assert!(d3.corpse || d3.mode == 0 || (d3.mode == 0x19 && d3.using_2nd), "the ch-16 guard keeps his placement mode 0 until his first attack, where the game's FirstAttack alt tail flushes him to the mode-0x19 sniper with the second block [M 0x148010:100-131 + 0x14cbd8:103-114 + D #439 p21/p5/p8]; got mode {:#x} using_2nd {}", d3.mode, d3.using_2nd);
         for (i, dr) in sim.drones.list.iter().enumerate() { lastpos[i] = dr.pos; }
     }
     // Out west through the auto-closing door #59, up to the searchlight-courtyard mouth — the leg
@@ -135,8 +140,7 @@ fn the_switch16_guard_fights_through_the_door47_doorway() {
         for (i, dr) in sim.drones.list.iter().enumerate() {
             if !dr.present || dr.corpse || !dr.enabled { continue; }
             if i == 3 && d3_alive {
-                assert!(dr.mode == 0, "watch +{t}: the ch-16 guard's mode flipped to {:#x} — the flush \
-                    must never run from Attack [M the jal 0x14a648 census]", dr.mode);
+                assert!(dr.mode == 0 || (dr.mode == 0x19 && dr.using_2nd), "watch +{t}: the ch-16 guard's mode is {:#x} — only the game's first-attack flush shape (0x19 + the second block, [M 0x148010:100-131]) or the placement 0 is legal", dr.mode);
                 if dr.pos[2] > -15.2 { crossed_north = true; }
             }
             let in_jamb = dr.pos[0] > 34.6 && dr.pos[0] < 36.6 && dr.pos[2] > -17.3 && dr.pos[2] < -15.2;
@@ -154,9 +158,9 @@ fn the_switch16_guard_fights_through_the_door47_doorway() {
             assert!(crossed_north || dxz(d3.pos, [35.47, 41.0, -16.93]) > 2.0,
                 "the ch-16 guard must not end parked at the door #47 plane (pre-fix freeze spot \
                 (35.47, 41.00, −16.93)), got {:?} st {:#x}", d3.pos, d3.state);
-            assert!(!(d3.state == 0x2a && d3.stationary),
-                "the ch-16 guard must never sit in the stationary SniperAim 0x2a park [M the flush \
-                that produced it has no Attack caller]");
+            // The game's first-attack flush leaves him a stationary sniper AT HIS POST; the jamb
+            // and door-plane asserts carry the no-park pin (the old re-entry flush's stall is what
+            // this replaces).
         }
         // The door itself: back to the shut idle, not held at the blocked 0x4.
         assert_eq!(sim.drones.doors.list[1].state, 0x2,

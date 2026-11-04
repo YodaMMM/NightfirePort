@@ -118,6 +118,14 @@ pub struct DamageLog {
     pub active: bool,
     /// Return fire on real damage (`shooters`); a test that scripts its own fight turns it off.
     pub return_fire: bool,
+    /// OPT-IN (drone-block-swaps-g055-3): when the return-fire stand's cap expires without the
+    /// drop, run ONE determined `shoot_bounded` pass before the 240-tick cooldown. Under the
+    /// flush [M 0x148010:100-131] the un-dropped guard keeps hunting from his first attack —
+    /// the measured d1 07000016 route bled ~80 health across 8 such fights before the pit —
+    /// and a player finishes the guard he is fighting. The route has no hard window, so the
+    /// kill's time is free; the guards are hp 20, so the kill's rounds are cheaper than the
+    /// bleed. False everywhere else — no other walk changes.
+    pub finish_fights: bool,
     /// Inside a return-fire fight (the fight's own walks must not start another).
     pub fighting: bool,
     /// Return-fire fights started, for the summary.
@@ -177,6 +185,19 @@ pub struct DamageLog {
     /// The fight about to run picked a shooter whose boxes are NOT reachable from here (the
     /// unseen-cover fallback): a short stand cap, the creep has to open the line fast.
     pub unseen_fight: bool,
+    /// OPT-IN (drone-block-swaps-g055-4, `level_fights`, set by the 07000016 real-damage walk):
+    /// the return-fire pick keeps only the shooters at Bond's LEVEL (pos y within ±2.0 of
+    /// Bond's) — a guard a level above (the route's ring guards at y 6.71 over the floor-0
+    /// approach) or below (the trench guard under the ring) is not answerable from here. The
+    /// 07000016 route's ambushers are the ring guards — placements 186-191 spawn at y 6.71 on
+    /// the upper ring [L probe_16_guards] over the floor-0 approach — and a floor-level
+    /// Bond cannot answer them: the measured reactive stands fought the overhead fire (the
+    /// flank nav dragged Bond up the ramp wall, head_bump; the fights' displacement pushed him
+    /// off the lane into the trench — two deaths at y −4.65/−5.04, 71 hits for 100 each). A
+    /// player under overhead fire keeps walking the legs and fights the ring AT LEVEL (the
+    /// route's own ring legs, hp 10 each). Off = master behaviour (the plain pick) everywhere
+    /// else — no other walk changes.
+    pub level_fights: bool,
     /// OPT-IN (`tranq_fights`, the 0700000b walk): Bond's only conventional weapon on 0700000b is
     /// the Korsakov K5 sleep dart (0x43 — the silent-infiltration kit [M 0x1a7ef8 case
     /// 0x7000009/0a/0b the boot loadout; L the death run's bullet probe — wpn 0x43, dmg 0.10,
@@ -500,6 +521,14 @@ impl Walker {
             let sim = self.scene.sim.as_ref().unwrap();
             if sim.disabled || !sim.bond.grounded { return false; }
             let cands = self.dmg.shooters(sim);
+            // OPT-IN `level_fights` (drone-block-swaps-g055-4, the field doc): the shooters a
+            // level above Bond are not answers — the pick drops them and the leg walks on.
+            let cands = if self.dmg.level_fights {
+                let by = sim.bond.pos[1];
+                cands.into_iter()
+                    .filter(|&i| { let y = sim.drones.list[i].pos[1]; y <= by + 2.0 && y >= by - 2.0 })
+                    .collect::<Vec<usize>>()
+            } else { cands };
 
             // The plain pick: the nearest shooter Bond can see (`shooters` is nearest first).
             // With `lane_fights`, fight the shooter who is actually HURTING Bond first: the 07000013 crossing mixed
@@ -645,7 +674,20 @@ impl Walker {
         // standing in a lane he cannot answer — walk on (the leg's own return-fire gate re-fights
         // from the next spot).
         let cap = if self.dmg.unseen_fight { 300 } else { 900 };
-        let killed = self.switch_to_gun(label) && self.stand_and_fire(di, cap);
+        let mut killed = self.switch_to_gun(label) && self.stand_and_fire(di, cap);
+        if !killed && self.dmg.finish_fights {
+            let alive = {
+                let sim = self.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[di];
+                d.present && !d.corpse && d.health > 0.0
+            };
+            if alive {
+                let h_mid = self.scene.sim.as_ref().unwrap().drones.health.health;
+                killed = self.shoot_bounded(di, label, 1800);
+                let sim = self.scene.sim.as_ref().unwrap();
+                eprintln!("[real-damage] {label}: the determined pass on drone #{di} (killed {killed}) health {h_mid:.1} -> {:.1}", sim.drones.health.health);
+            }
+        }
         // The stand may have emptied the gun (stand_and_fire gives up when clip+spare hit 0):
         // restock from the floor drops so the NEXT fight does not run dry (same run, the sniper).
         if lane && !armed(self) && !self.dmg.resupplying {
