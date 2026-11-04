@@ -1627,6 +1627,11 @@ pub struct Drone {
     /// 0x163c68 case 5). Drained by `Drones::tick` straight into `drones.audio`. Own line (merge
     /// lesson 4).
     pub sfx_reqs: Vec<(u32, V3)>,
+    /// audit-music-events: music-event outbox queued by the state arms that have no `Drones`
+    /// access — the hostage-saved cue `Music_Event(0x10, 1)` (`NDrone2_DSTATE_HostageSaved`
+    /// 0x15ccf0:20-21). Drained by `Drones::tick` straight onto `drones.music`'s board. Own
+    /// line (merge lesson 4).
+    pub music_reqs: Vec<u8>,
     /// `Drone+0xC6` = 7 (the scared-run mode `DroneFunc_HandleImpact` sets for civilians on
     /// 07000009/0A [M 0x1469b8:103-127, level-gated `GameState+0xf8fffff7 < 2`]):
     /// `DSTATE_CivilianScared` 0x15d3a0 then runs `NDrone2_FindRunToPoint`.
@@ -2125,6 +2130,7 @@ impl Drone {
             // fix-room-sound: the foley one-shot outbox + the pain-grunt handle.
             foley_reqs: Vec::new(), pain_grunt: None,
             sfx_reqs: Vec::new(),
+            music_reqs: Vec::new(),
             // ai-points: the scared-run mode marker +0xC6.
             scared_run: false,
             // fix-facial3: the blink driver state + the facial script slots.
@@ -9242,8 +9248,9 @@ impl Drone {
             }
             (HOSTAGE, msg::ANIM_DONE) => { self.set_danim_now(d, 0xf4, 0); true }
             // HostageSaved (0x15ccf0 — state 0x0c [L 0x29b300]) ENTER [M 0x15ccf0:16-44]:
-            // `Drone_AlertStatusSet(0)`, clear the captor link, `Music_Event(0x10, 1)` (the port
-            // has no music-event consumer in Sim — skipped), then `DroneFunc_HostageSaved`
+            // `Drone_AlertStatusSet(0)`, clear the captor link, `Music_Event(0x10, 1)` (outboxed
+            // for the tick's board drain — audit-music-events; the game's in-Sim readers are
+            // MayhewB/C's combat-pick gate, ch 15 ∥ ch 16, not ported), then `DroneFunc_HostageSaved`
             // 0x1441c0: raise the placement's out channel (+0x135 = placement param 6 — the port's
             // `second_channel`) with the stamp and count the save [M 0x1441c0:11-18]. The raise
             // rides `self.raise`, the `Drones` tick's channel writer. Then the fresh-save arm:
@@ -9256,6 +9263,9 @@ impl Drone {
             (HOSTAGE_SAVED, msg::ENTER) => {
                 self.alert_status_set(0, frame); // [M 0x15ccf0 case 1] — the status byte; no +0x50C write
                 self.captor = None;
+                // `Music_Event(0x10, 1)` [M 0x15ccf0:20-21] — the hostage-saved cue rides the
+                // music-event outbox (audit-music-events).
+                self.music_reqs.push(0x10);
                 if self.second_channel != 0 && self.raise.is_none() { self.raise = Some(self.second_channel); }
                 // audit-text-lines — `DroneFunc_HostageSaved` 0x1441c0:20-51, the part after the
                 // channel raise: the rescue INFO messages. The message rides the pending flag
@@ -16855,6 +16865,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     let id = if glass { 0x2e } else if self.rng.rand(100) < 41 { 0x5f2 } else { 0x5f3 };
                     self.audio.play3d(id, centre, None);
                 }
+                // audit-music-events: `Script_Play` 0x1db588:26-41 — the death-NIS start's
+                // `Music_Event(6, 1)` (the kind-0x41 Event is only pushed by SP_LoadScript's
+                // death-NIS post [M 0x1db588:23-41]; the board's event-6 consumer is the
+                // on-death marker jump, `UpdateMusicalEvents` 0x114e70 DAT_002d3510).
+                crate::nis::Request::Event { kind: 0x41, params: _ } => {
+                    self.music.event(6, 1);
+                }
                 crate::nis::Request::Event { kind: 0x40, params } => {
                     self.music.event(5, params.first().copied().unwrap_or(0));
                 }
@@ -17818,6 +17835,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // for the first 58 frames of channel 0xA4, then = 1 for the first 598 of channel 0x37 or 0x61; Bond dead →
         // event 6 (`Player_CheckForDeath`, a player-side call — runs during cut-scenes, not gated).
         self.attack_gate.new_frame();
+        // audit-music-events — `Drone_InitComms` 0x139520:163-196, the all-clear scan (game order:
+        // before CheckAlarmRaised :262): walk the drone list, skip the `+0x4F8 & 0x600 != 0` ones
+        // (the port's enabled/non-corpse encode) and clear the all-clear when a plain drone's
+        // alert status (+0x44) is exactly 1. The game's second arm — a `+0x4F8 & 0x100` flagged
+        // drone, aware (+0x50C >= 1.0) within 30 units of its opponent and not in state 2 — clears
+        // it too (and latches switch_channels 0x97/0x98): the port does not carry the 0x100 bit,
+        // so that arm is not modelled [S]. All clear → `Music_Event(0xe, 1)`. The board has NO
+        // reader for ch 14 anywhere in ACTION.ELF (grep DAT_002d3530 — write-only), so this is
+        // board-fidelity only.
+        if self.npc_enabled {
+            let mut all_clear = true;
+            for dr in self.list.iter().filter(|dr| dr.present) {
+                if !dr.enabled || dr.corpse { continue; }
+                if dr.alert_status == 1 { all_clear = false; }
+            }
+            if all_clear { self.music.event(0xe, 1); }
+        }
         // CheckAlarmRaised sits inside `Drone_InitComms`' `NPCGlobals != 0` block [M 0x139520:124-284]: a cut-scene
         // that disabled the drones (event 5) also mutes the alarm music.
         if self.npc_enabled && matches!(d.level, 0x0700_0005 | 0x0700_0006) {
@@ -18104,9 +18138,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     }
                     dr.seen = true; dr.ever_seen = true;
                     // `DroneVision_HaveOpponentSight` 0x175ef0:82-86: with prop 0x3c the same ack
-                    // sets `+0x228 & 8` (and the +0x234 stamp + the 0xf self-msg; the mode-4
-                    // music ping is not ported). AttackTalk's type-3 arm reads exactly this bit.
-                    if dr.prop(d, 0x3c) { dr.ever_seen_3c = true; }
+                    // sets `+0x228 & 8` (and the +0x234 stamp + the 0xf self-msg). AttackTalk's
+                    // type-3 arm reads exactly this bit.
+                    if dr.prop(d, 0x3c) {
+                        if !dr.ever_seen_3c {
+                            dr.ever_seen_3c = true;
+                            // audit-music-events — the mode-4 spotted ping [M 0x175ef0:88-92]: the
+                            // first-ever sighted guard (prop 0x3c, `+0x228 & 8` rising) in mode
+                            // (+0xc5) 4 posts `Music_Event(0xf, 1)` — the spotted cue MayhewB/C's
+                            // updaters read (0x112270:97 / 0x112730:42, ch 15 ∥ ch 16; the
+                            // game's self-msg 0xf/10 pair stays unported).
+                            if dr.mode == 4 { self.music.event(0xf, 1); }
+                        }
+                    }
                     // `NDrone2_SetOpponent` 0x1422d0 → `DroneFunc_AllocateTargetID` 0x141f28: a team-1
                     // guard claims its shared registry slot on acquiring the opponent, and the sight
                     // stamp (`DroneFunc_TargetSeen` 0x14a008 — the game stamps it from the talk sites
@@ -21760,6 +21804,7 @@ mod tests {
             // fix-room-sound: the foley one-shot outbox + the pain-grunt handle.
             foley_reqs: Vec::new(), pain_grunt: None,
             sfx_reqs: Vec::new(),
+            music_reqs: Vec::new(),
             // ai-points: the scared-run mode marker +0xC6.
             scared_run: false,
             // fix-anim-events: the EventFunc outboxes.
