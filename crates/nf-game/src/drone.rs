@@ -18562,10 +18562,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // segment's low reach until the game's upper contact is pinned. // [S] unverified shape
         if self.net_bodies.is_none() && !player.crouched {
             player_touchers.push(crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) });
+        }
         // The ride's deep reach (see `riding`): script plates only (the truck's ch 0x70 park plate).
         // A placed plate over a moving floor keeps the box: 0700004a's lift stand must not fire the
         // top reveal plate. The marker skin never reaches a filter: player touchers carry drone false.
-        }
         if self.net_bodies.is_none() && player.riding && !player.crouched && player.body.2 == 0.55 {
             player_touchers.push(crate::triggers::Toucher { a: player.body.1, b: [player.pos[0], player.pos[1] + 1.26, player.pos[2]], r: 0.55, drone: false, skin: crate::triggers::RIDE_TOUCHER, contain: false, seg_only: false });
         }
