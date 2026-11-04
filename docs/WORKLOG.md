@@ -58,3 +58,16 @@ player would adapt (never forcing state), re-pinning only values the stream legi
   -21.8, passing 1.45u from the origin — outside the degenerate-box 0.1 tolerance [M
   breakable.rs seg_box_t lo==hi arm]. Needs a re-derived reachable spot (a real floor) or a
   compensated aim; geometry, not stream.
+
+## gas-rng-draws-4 (started 2026-11-04 16:49 UTC)
+
+Branch s/gas-rng-draws-4 cut from origin/s/gas-rng-draws-3 (b6dd3a47e), merged origin/master
+(b21edd082) in. Task: finish the gas-init draws on the shared RNG stream [M 0x1aacc8:72-80] —
+the report-3 list in order: enemy_accuracy's per-setup re-pin first (8 min), then the walk
+re-routes (01 contact route + friendly-death stretch, 02 to_the_exit, 03 east-lane wedge +
+friendly death, 14 the corridor-door chain at (30.3,35.4), 16 punch pin + defeat walk, 1b
+Drake's defeat), fix_blast_scripts' type-0 leg (geometry-dead: the teleport spot is a void,
+destroy[10] is a zero-extent box), fix_finale's 16 shelter pulse. Real input only, no
+assertion weakened without a decompile address, helpers opt-in per level. Suite via
+tools/test/suite.py (background from the start) + chunk_suite.py for the final tree. Sandbox
+expires ~18:46 UTC; stop-new-work 18:26 UTC.
