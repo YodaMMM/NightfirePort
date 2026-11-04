@@ -94,12 +94,25 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 #[test]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
+    walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(1);
+}
+
+/// The difficulty-parameterized body (real-health-agent-0c-0d): 1 is the byte-identical
+/// master replay; 2+ (the Agent sisters) load the menu way — the front-end's launch path
+/// [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty; GameState+0x28 0x2a3790 →
+/// Drones::difficulty, asserted after each load]. Agent spawns the min-difficulty-2
+/// placements [M Drone_Create 0x136be0:49], scales Bond's pain by Plr_DMod_Normal
+/// [M Player_HandlePain 0x1902c8] and the guards' hit chance by Accuracy row 2
+/// [M DroneWeap_DoBulletAccuracy 0x179740:74-88]; the route legs are untouched.
+fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(difficulty: u32) {
     let iso = iso();
     // Legs 1-9c (the spawn asserts through the slot jump's band landing) are the shared
     // prologue `walk_spawn_to_the_band` (common/walkreal0c.rs) — moved verbatim, same
     // ticks, so the eastroute test can replay the game's own route to the band instead
     // of teleporting to it.
-    let mut w = walker::walk_spawn_to_the_band(&iso);
+    let mut w = walker::walk_spawn_to_the_band_at(&iso, difficulty);
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
 
     // Leg 10 (REAL): the band east to its true end. The disc's band floor 10.34 runs x 44..55.6
     // (z −209.06..−206.31: obj_turb1_walkway01 x 43.2..49.3 + obj_turb2_walkway01 x 49.3..56.1
@@ -386,7 +399,17 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
         let sim = w.scene.sim.as_ref().unwrap();
         nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
     };
-    let mut w2 = Walker::new(nf_view::load_with_carry(&iso, "0700000d.bin", false, Some(&save)).unwrap());
+    // The warm reload runs the same difficulty the 0c legs were played at (the game's
+    // difficulty global survives the level change untouched; the port re-seeds it at build
+    // [M nf-view lib.rs load_with_carry's carry comment] — 2+ pins the menu pick the same way
+    // the cold load did).
+    let mut w2 = Walker::new(if difficulty == 1 {
+        nf_view::load_with_carry(&iso, "0700000d.bin", false, Some(&save)).unwrap()
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "0700000d.bin", false, Some(&save), difficulty).unwrap()
+    });
+    assert_eq!(w2.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
+        "the 0d reload runs the picked difficulty [M 0x182270:92-121 + GameState+0x28]");
     w2.wait_enabled(3000, "the 0d arrival");
     w2.walk_to(Wp::new(179.53, 11.6, -205.40).r(1.2), "onto the TR-2 arrival plate");
     w2.wait(30);
@@ -454,6 +477,47 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
     walker::with_yard_aimed_stands(|| {
         walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff)
+    });
+}
+
+/// Agent-difficulty sister of `..._real_damage` (real-health-agent-0c-0d): the same walked
+/// route and the same end, loaded at difficulty 2 the menu way — the front-end's launch
+/// path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty; GameState+0x28 →
+/// Drones::difficulty, asserted at load]. Agent spawns the min-difficulty-2 placements
+/// [M Drone_Create 0x136be0:49], scales Bond's pain by Plr_DMod_Normal [M Player_HandlePain
+/// 0x1902c8] and the guards' hit chance by Accuracy row 2 [M DroneWeap_DoBulletAccuracy
+/// 0x179740:74-88]. Real input only; no health, ammo or channel writes.
+///
+/// IGNORED with the measured run (real-health-agent-0c-0d): the Operative real-damage walk is
+/// byte-identical through tick 4054 (the same fights, the same landed hits — the shared RNG
+/// draws pass both accuracy rows [M DroneWeap_DoBulletAccuracy 0x179740:74-88]) and finishes
+/// the mission at 26.2 hp; the Agent rows (pain Plr_DMod_Normal, hit chance Accuracy row 2)
+/// land the draws d1 dodges and Bond dies. Three lever rounds measured on this branch, each
+/// deterministic:
+/// - run 1 (master fights): DIED tick 4054 (12.96,12.35,-124.38) — 65 hits for 100.0; the
+///   plain nearest-visible pick stood 900-tick fights on the display-ground guards whose own
+///   boxes the hall slab eats (#27 twice, ticks 2707/3637, 26.6 + 29.6 health) while the
+///   d 19.8 machine pistol #30 chewed 26.3 in 25 hits.
+/// - run 2 (+lane fights, the 07000013 law): the fights WIN — #33/#27/#24/#30 all killed —
+///   but each stand still pays the crossfire: DIED tick 6716 (7.18,7.40,-113.15, the display
+///   ground) at 12.5 hp, the below-floor shooter #31 (y 3.2, d 26.3) unkillable from every
+///   stand the route reaches (the down-rays die on the floor edge) chewing the last 12.5.
+/// - run 3 (+escalating failed-fight cooldowns 240→1920): DIED tick 8579 (53.98,6.94,-163.03,
+///   the warehouse plates) — the fights kept winning (#37 killed) but the one tick-5903 fight
+///   on #30 paid 19.0 to the machine pistol's own cadence and the walk arrived at the plates
+///   with 3.0. A 4th round (+dry_taps 3, faster abandonment) RESHUFFLED WORSE: DIED tick 4234
+///   (the fight cycle re-engages sooner) — reverted.
+/// NEXT LEVERS: a d2-gated staircase-head down-shot stand on the display-ground pair (the
+/// 0c yard-stand law — the zero-spread aimed act from the stair head, where the game's own
+/// hall-floor opening x 9..12.4 gives the line); an aimed stand on #31 from the display
+/// pocket (the photograph leg's own spot); the shooter-side read (NF_RF_TRACE + NF_RF_GEOM on
+/// the tick-5903 fight) to see whether the blocker hold or the slab eats the taps. The
+/// Operative baseline this sister must match: 100.0 → 26.2 hp over 19287+838 ticks.
+#[test]
+#[ignore = "Agent: the fights win but the crossfire cadence out-bleeds the route — run 3 (lane fights + escalating cooldowns) died tick 8579 at the warehouse plates (3.0 hp left; the tick-5903 fight paid 19.0 to the d 18-20 machine pistols); run 1 (master fights) died tick 4054, run 2 tick 6716, run 4 (dry_taps) reshuffled worse, tick 4234; levers: a d2-gated stair-head down-shot stand on the display-ground pair, an aimed stand on #31 from the display pocket, the NF_RF_TRACE read of the blocked fights"]
+fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_agent() {
+    walker::with_yard_aimed_stands(|| {
+        walker::walker::with_real_damage(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(2))
     });
 }
 

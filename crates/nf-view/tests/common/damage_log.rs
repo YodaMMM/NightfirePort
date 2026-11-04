@@ -225,6 +225,18 @@ pub struct DamageLog {
     /// 0c snipers keep the button (`aimed_fights`) — their zero spread needs the bit
     /// [M Bullet_init 0x12c5a0:139-170].
     pub precise_fights: bool,
+    /// OPT-IN (`escalating_cooldowns`, set by the 0700000c Agent walk, real-health-agent-0c-0d):
+    /// a fight the stand did not drop doubles its re-fight wait each further failure on the same
+    /// drone — 240, 480, 960, 1920 (capped). The master 240 keeps re-fighting a shooter whose
+    /// boxes the geometry eats on every leg, and each failed stand is standing exposure in the
+    /// open (the first d2 run re-fought the display-ground guard #27 at ticks 2707 and 3637 for
+    /// 26.6 + 29.6 health — the drains that killed the walk). A player who could not answer a
+    /// shooter from a spot does not re-take the same spot; the leg's own walk carries Bond out of
+    /// the sight line. Off = master behaviour (the flat 240).
+    pub escalating_cooldowns: bool,
+    /// (drone, tick) per failed fight — the escalation's counter (the flat law keeps no history:
+    /// `cooldown` holds only the latest entry per drone).
+    pub fight_fails: Vec<(usize, u32)>,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
 }
@@ -672,7 +684,18 @@ impl Walker {
         self.dmg.fighting = false;
         // A guard the stand did not drop (out of sight, the cap) is left for 240 ticks: the
         // leg walks on instead of standing in the open re-fighting him.
-        if !killed { let until = self.total_ticks + 240; self.dmg.cooldown.retain(|e| e.0 != di); self.dmg.cooldown.push((di, until)); }
+        if !killed {
+            // The failed-fight cooldown: master 240 ticks flat. The escalation (opt-in
+            // `escalating_cooldowns`) doubles the wait per further failure on the same drone —
+            // the re-fights of a geometry-blocked shooter are the exposure that killed the
+            // first d2 run (see the field doc).
+            let fails = self.dmg.fight_fails.iter().filter(|&&(i, _)| i == di).count() as u32;
+            self.dmg.fight_fails.push((di, self.total_ticks));
+            let wait = if self.dmg.escalating_cooldowns { 240u32 << fails.min(3) } else { 240 };
+            let until = self.total_ticks + wait;
+            self.dmg.cooldown.retain(|e| e.0 != di);
+            self.dmg.cooldown.push((di, until));
+        }
         let sim = self.scene.sim.as_ref().unwrap();
         eprintln!("[real-damage] {label}: returned fire on drone #{di} (killed {killed}) at tick {}, health {h0:.1} -> {:.1}",
             self.total_ticks, sim.drones.health.health);

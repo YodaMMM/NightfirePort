@@ -397,8 +397,40 @@ fn yard_sniper_stands(w: &mut Walker, label: &str, max: usize) {
 /// ladder base (11.6, 1.2, -186.6). Same legs, same asserts, one cut point; the band walk calls
 /// this and continues at leg 7. No behaviour change for any caller.
 pub fn walk_spawn_to_the_yard_ladder_base(iso: &str) -> Walker {
+    walk_spawn_to_the_yard_ladder_base_at(iso, 1)
+}
+
+/// The difficulty-parameterized prologue (real-health-agent-0c-0d): 1 is the byte-identical
+/// master expression (every existing call site keeps its replay); 2+ loads the menu way —
+/// the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty;
+/// GameState+0x28 0x2a3790 → Drones::difficulty, asserted by the caller]. Agent spawns the
+/// min-difficulty-2 placements [M Drone_Create 0x136be0:49] and swaps the captain flag
+/// [M NDrone2_DefaultInit 0x14b300:504-535]; the route legs are untouched.
+pub fn walk_spawn_to_the_yard_ladder_base_at(iso: &str, difficulty: u32) -> Walker {
     let iso = iso.to_string();
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "0700000c.bin", false, None).unwrap());
+    let mut w = Walker::new(if difficulty == 1 {
+        nf_view::load_with_carry(&iso, "0700000c.bin", false, None).unwrap()
+    } else {
+        nf_view::load_with_carry_difficulty(&iso, "0700000c.bin", false, None, difficulty).unwrap()
+    });
+    if difficulty >= 2 {
+        // The Agent fights (opt-in by construction — no existing caller loads 2+). Measured
+        // reason (the first d2 run, tick 4054 death): the plain nearest-visible pick spent
+        // its 900-tick stands on shooters whose own boxes the hall slab eats — the
+        // display-ground guards (#27 twice, ticks 2707/3637) shoot UP through the staircase
+        // opening while the return down-rays die on its edge, and each failed stand cost
+        // 26-40 health while the d 19.8 machine pistol (#30) chewed on. The lane fights'
+        // strict gun-ray gate + the damage-weighted pick (the 07000013 crossing's own
+        // passing law) fight whoever is actually hurting Bond from a line the gun can
+        // answer [M DroneWeap_DoBulletAccuracy 0x179740:113-115 — the fights' own range law].
+        w.dmg.lane_fights = true;
+        // And the failed fights stop re-taking the same spot: the second d2 run still died
+        // (tick 6716, the display ground) re-fighting the below-floor shooter #31 (y 3.2 —
+        // the down-rays die on the floor edge) whose 240-tick cooldown put Bond back in the
+        // open twice more. The escalation doubles the wait per failure; the leg's own walk
+        // carries Bond out of the sight line.
+        w.dmg.escalating_cooldowns = true;
+    }
     // OPT-IN (`with_yard_aimed_stands`): the whole walk's fights hold the aim button —
     // `DamageLog::aimed_fights`, the zero-spread aimed act [M Bullet_init 0x12c5a0:139-170].
     // Measured reason (the first real-health run on this branch): the plain HIP fights pick the
@@ -1015,8 +1047,14 @@ pub fn walk_spawn_to_the_yard_ladder_base(iso: &str) -> Walker {
 }
 
 pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
+    walk_spawn_to_the_band_at(iso, 1)
+}
+
+/// The difficulty-parameterized band prologue (real-health-agent-0c-0d): 1 is the
+/// byte-identical master expression; the legs are shared verbatim with the Agent sister.
+pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
     // Legs 1-6 (unchanged — now shared with the yard-deck-sentry test).
-    let mut w = walk_spawn_to_the_yard_ladder_base(iso);
+    let mut w = walk_spawn_to_the_yard_ladder_base_at(iso, difficulty);
     // Leg 6b (OPT-IN, the yard's deck snipers, level-0c-yard-climb-real-health-2): on real
     // health the deck snipers (weapon 0x1e, -16 a hit) are the walk's killer chain — outside
     // the plain fights' 7.5 u vertical reach, never answered — so the stand kills them AIMED

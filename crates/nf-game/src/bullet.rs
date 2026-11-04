@@ -448,6 +448,29 @@ mod tests {
         assert_eq!(d, [0.0, 0.0, 1.0]);
     }
 
+    #[test]
+    fn cone_draws_three_even_when_dead_on() {
+        // `Bullet_init` 0x12c5a0's spread block is UNCONDITIONAL [M 0x12c7f4-0x12c858 — the
+        // FRand_MVar2(2s)·0.0014 + FRand(2π) + FRand(π) sequence runs every round; the owner
+        // arms only scale `s`]: the 0x400000 arm's s = 0 leaves the direction EXACTLY the aim
+        // vector while the three draws still consume the shared stream. The turret record 96
+        // carries +0x24 = 4.0 with +0x68 = 0 [L ee_start_05.bin @0x2c55d0+0x24/0x68] — its
+        // rounds take the full 4.0 cone (the owner obj's +0xff is 0x36 [M 0017ffa0:77], not
+        // the player's 2, so the scale arm stays 1.0 and the bloom never computes).
+        let mut rng = crate::drone::Rng::new(7);
+        let dir = cone([0.0, 0.0, 1.0], 4.0, &mut rng);
+        assert_eq!(rng.draws, 3, "the cone consumes exactly three draws [M 0x12c5a0:171-180]");
+        assert!(dir != [0.0, 0.0, 1.0], "spread 4.0 moves the direction off the aim (the turret rounds are not dead-on)");
+        let mut rng2 = crate::drone::Rng::new(7);
+        let dir_on = spread([0.0, 0.0, 1.0], 4.0, 0x40_0000, &mut rng2);
+        assert_eq!(rng2.draws, 3, "the 0x400000 dead-on arm still draws the three [M the unconditional block]");
+        assert_eq!(dir_on, [0.0, 0.0, 1.0], "dead-on: the direction is EXACTLY the aim vector [M 0x12c7f4's fVar8 = 0]");
+        // The same seed and spread: the same direction (the shared stream is deterministic).
+        let mut rng3 = crate::drone::Rng::new(7);
+        let dir3 = cone([0.0, 0.0, 1.0], 4.0, &mut rng3);
+        assert_eq!(dir3, dir, "the cone is a pure function of the stream state");
+    }
+
     use super::*;
 
     /// bullet-range-210: the flight death range is `weapon_data+0x1C` [M `Bullet_update` case 1,

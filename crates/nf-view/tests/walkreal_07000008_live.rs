@@ -212,25 +212,6 @@ fn switch_to_firearm(w: &mut Walker, label: &str) -> bool {
     g.weapon != 0x2c && (2..=0x47).contains(&g.weapon) && g.clip + g.spare > 0
 }
 
-/// Tap the trigger at `target` — one fire tick every 12 (the semi-auto fires on the trigger
-/// EDGE: a held trigger is one pull [L the pane hold — clip 18 spare 7 unchanged after 300 held
-/// ticks]); the taps stop when `done` holds. The aim is the walk's own tracker.
-fn tap_at(w: &mut Walker, target: [f32; 3], fire_ticks: u32, done: impl Fn(&nf_view::scene::Sim) -> bool) {
-    for t in 0..fire_ticks {
-        if done(&w.scene.sim.as_ref().unwrap()) { break; }
-        let sim = w.scene.sim.as_ref().unwrap();
-        let head = sim.bond.head();
-        let to = [target[0] - head[0], target[1] - head[1], target[2] - head[2]];
-        let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(0.01);
-        let desired_yaw = to[0].atan2(to[2]);
-        let desired_pitch = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2;
-        let yaw_err = walker::wrap_pi(desired_yaw - sim.bond.yaw);
-        let pitch_err = desired_pitch - sim.bond.pitch;
-        let input = Input { turn: yaw_err.clamp(-0.08, 0.08), look: pitch_err.clamp(-0.05, 0.05), ..Default::default() };
-        if t % 12 == 0 { w.tick_fire(input); } else { w.tick(input, false); }
-    }
-}
-
 /// The whole mission on one fresh load: the intro, the fusebox, the safe, the briefcase
 /// (objective 1 → 4), the descent back down, the boarding, the ride, the cinematic, the Hind
 /// shoot-down on real aim and trigger (objective 2 → 4), and the mission end into 0x0730008.
@@ -647,26 +628,70 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             .collect();
         eprintln!("[08 panes] live end panes near the cabin: {panes:?}");
         switch_to_firearm(&mut w, "the panes");
-        let gun = w.scene.sim.as_ref().unwrap().gun.weapon;
+        // A player shoots the glass he can see — the aim-ray-to-bounds-centre gate CANNOT work
+        // here: the captured centre is the pane bounds' midpoint, which sits a hair short of the
+        // sheet plane (the north pane's centre ray eye→centre reads OPEN while a perpendicular
+        // ray through the sheet hits at t 0.52 [L the probe raytest 2026-11-04]), so every ray
+        // reads OPEN before a single round and the old cleared-gated tap fired nothing (the
+        // orphaned-pane symptom of the hind session: 9 rounds were the earlier fights, dead rows
+        // []). The pane damage law needs no new sim code — the port's contact already drains it:
+        // the game's collision pass registers the round's contact on the pane's obj+0xD0 chain
+        // whether or not the round stops (the mirrored contact) and `Break_Update` 0x12bfd8:36-37
+        // drains health from that chain; the port's seg_box_t contact over the pane bounds does
+        // the same (drone.rs's player-bullet pass). The kill drops the row and the script object
+        // (Break_Kill's obj+0xFE delete → retain_script_panes → the dynamic quads leave the set),
+        // which is what "breaks and clears" means for the launch corridors. So: aim at the pane
+        // centre with the real look input, pull the trigger on a CONVERGED aim (the fire edge
+        // every 12 ticks — a held trigger is one pull [L the pane hold]), until the pane's row
+        // dies (the kill drops it from breaks.list).
+        let pane_gone = |sim: &nf_view::scene::Sim, c: [f32; 3]| {
+            sim.drones.breaks.list.iter().filter(|b| b.kind == 2 && !b.dead).all(|b| {
+                let m = [(b.lo[0] + b.hi[0]) / 2.0, (b.lo[1] + b.hi[1]) / 2.0, (b.lo[2] + b.hi[2]) / 2.0];
+                (m[0] - c[0]).powi(2) + (m[1] - c[1]).powi(2) + (m[2] - c[2]).powi(2) > 0.7 * 0.7
+            })
+        };
         for (k, c) in panes.iter().enumerate() {
-            let cleared = |s: &nf_view::scene::Sim| {
-                let b = s.bond.pos;
-                let eye = [b[0], b[1] + s.bond.eye - s.bond.crouch_drop, b[2]];
-                s.world.segment_bullet(eye, *c).map_or(true, |t| t >= 0.999)
-            };
-            tap_at(&mut w, *c, 240, cleared);
+            let mut fired = 0u32;
+            for t in 0..260u32 {
+                if pane_gone(&w.scene.sim.as_ref().unwrap(), *c) { break; }
+                let sim = w.scene.sim.as_ref().unwrap();
+                let head = sim.bond.head();
+                let to = [c[0] - head[0], c[1] - head[1], c[2] - head[2]];
+                let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(0.01);
+                let desired_yaw = to[0].atan2(to[2]);
+                let desired_pitch = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+                let yaw_err = walker::wrap_pi(desired_yaw - sim.bond.yaw);
+                let pitch_err = desired_pitch - sim.bond.pitch;
+                let input = Input { turn: yaw_err.clamp(-0.08, 0.08), look: pitch_err.clamp(-0.05, 0.05), ..Default::default() };
+                // Fire on the edge, only on a converged aim — the pane's bounds box is thin
+                // (0.9-1.2 u across, ~0.1 thick [L the rows' bounds]) and an off-aim round
+                // misses it (the health 1.0 dies to one contact [D params [2,1,0]]).
+                let fire = t % 12 == 0 && yaw_err.abs() < 0.01 && pitch_err.abs() < 0.02 && fired < 5;
+                if fire { fired += 1; w.tick_fire(input); } else { w.tick(input, false); }
+            }
             let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[08 panes] pane {k} at {c:?}: {} after {fired} rounds, clip {} spare {}",
+                if pane_gone(sim, *c) { "SHOT OUT" } else { "STILL GLAZED" }, sim.gun.clip, sim.gun.spare);
+        }
+        {
+            // The proof the shoot-out happened: every end pane's row is gone (killed rows drop),
+            // and the two end bearings read open air 30 u out — a shot-out window breaks AND
+            // clears for the player [L the fix1 run — the broken pane's bearing read CLEAR 30 u].
+            let sim = w.scene.sim.as_ref().unwrap();
+            let alive: Vec<[f32; 3]> = sim.drones.breaks.list.iter().filter(|b| b.kind == 2 && !b.dead)
+                .map(|b| [(b.lo[0] + b.hi[0]) / 2.0, (b.lo[1] + b.hi[1]) / 2.0, (b.lo[2] + b.hi[2]) / 2.0]).collect();
+            let unbroken = panes.iter().filter(|c| !pane_gone(sim, **c)).count();
+            eprintln!("[08 panes] after the shoot-out: {unbroken} end panes still glazed, {} live kind-2 rows total", alive.len());
             let b = sim.bond.pos;
             let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
-            let t = sim.world.segment_bullet(eye, *c);
-            eprintln!("[08 panes] pane {k} at {c:?}: {} clip {} spare {}", if t.is_none() || t.is_some_and(|t| t >= 0.999) { "OPEN" } else { "glazed" }, sim.gun.clip, sim.gun.spare);
-        }
-        let _ = gun;
-        {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let dead: Vec<(usize, bool, u32)> = sim.drones.breaks.list.iter()
-                .filter(|b| b.dead).map(|b| (b.script_obj.unwrap_or(usize::MAX), b.dead, b.dead_frame)).collect();
-            eprintln!("[08 panes] dead rows {:?} vs frame {}", dead, sim.drones.frame);
+            for (name, c) in [("north", panes.iter().find(|c| c[2] < b[2] - 1.5)), ("south", panes.iter().find(|c| c[2] > b[2] + 1.5))] {
+                let Some(c) = c else { continue };
+                let dir = [(c[0] - eye[0]) / 3.0, (c[1] - eye[1]) / 3.0, (c[2] - eye[2]) / 3.0];
+                let far = [eye[0] + dir[0] * 30.0, eye[1] + dir[1] * 30.0, eye[2] + dir[2] * 30.0];
+                let t = sim.world.segment_bullet(eye, far);
+                eprintln!("[08 panes] the {name} bearing 30 u out: {}", if t.is_none() || t.is_some_and(|t| t >= 0.999) { "CLEAR" } else { "blocked" });
+            }
+            assert_eq!(unbroken, 0, "the shoot-out must kill every end pane (the rows' mirrored contact drains [M Break_Update 0x12bfd8:36-37]) — {unbroken} still glazed");
         }
     }
     assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b), "no arrival while the route flies");
@@ -733,8 +758,40 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
         let desired_yaw = to[0].atan2(to[2]);
         let desired_pitch = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2;
-        let yaw_err = walker::wrap_pi(desired_yaw - yaw);
-        let pitch_err = desired_pitch - pitch;
+        // 00 Agent: the shot leaves through the CROSSHAIR, not the view centre — the aim law is
+        // look + 0.76966·cx·right + 0.57724·cy·up, normalized [M the crosshair pass: the shot's
+        // direction through the crosshair]. The walk's own tracker saturates the free-aim cursor
+        // at its clamp while it converges (the fire dump at every launch: cross (−0.296, ±0.394),
+        // the cursor pinned), which put every measured launch up to 0.23 rad off the tracker's
+        // converged view — rocket 4's round crossed the south-east corner post 3 u out and the
+        // blast took −62.5 at 2.2 u [L the diag run 2026-11-04 — the world hit at frame 28470].
+        // The player aims the CROSSHAIR: the tracker's error (and the slit/corridor lanes below)
+        // read the crosshair's own bearing, so a clamped cursor recenters before the shot. The
+        // ride keeps the rocket-dir steering (the cursor is frozen mid-flight) [M the missile-cam
+        // block zeroes the input the cursor arm would see]. D3-GATED: the sisters' timelines stay
+        // byte-exact.
+        let (aim_ref_yaw, aim_ref_pitch, aim_dir) = if difficulty >= 3 && rocket.is_none() {
+            let (syy, cyy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+            // `bond.pitch` is BL+0x8A8 in units of π/2, positive up (the walk's own aim code).
+            let p = sim.bond.pitch * std::f32::consts::FRAC_PI_2;
+            let right = [cyy, 0.0, -syy];
+            let up = [-p.sin() * syy, p.cos(), -p.sin() * cyy];
+            let tx = 0.76966 * sim.cross[0];
+            let ty = 0.57724 * sim.cross[1];
+            let dd = [syy * p.cos() + tx * right[0] + ty * up[0],
+                p.sin() + tx * right[1] + ty * up[1],
+                cyy * p.cos() + tx * right[2] + ty * up[2]];
+            let ll = (dd[0] * dd[0] + dd[1] * dd[1] + dd[2] * dd[2]).sqrt().max(1e-6);
+            let ad = [dd[0] / ll, dd[1] / ll, dd[2] / ll];
+            (ad[0].atan2(ad[2]), ad[1].clamp(-1.0, 1.0).asin() / std::f32::consts::FRAC_PI_2, ad)
+        } else {
+            let (sy, syp) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+            let pa = sim.bond.pitch * std::f32::consts::FRAC_PI_2;
+            let (sp, spp) = (pa.sin(), pa.cos());
+            (yaw, pitch, [sy * spp, sp, syp * spp])
+        };
+        let yaw_err = walker::wrap_pi(desired_yaw - aim_ref_yaw);
+        let pitch_err = desired_pitch - aim_ref_pitch;
         // REAL-HEALTH TACTIC (level-08-real-health-rockets) — pick weapon and range the way a
         // player would:
         // 1. NO ROCKET AT A TARGET INSIDE THE BLAST RADIUS: the AT-420's blast is radius 8,
@@ -756,11 +813,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // doorway, then steer": the muzzle ray's first 3 u must leave the cabin clear, and the
         // machine must be beyond the blast's 10 u reach. A round that dies mid-flight after
         // that detonates on the far terrain (k > 8 of the falloff — no self-damage).
-        let (sy, syp) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
-        // `bond.pitch` is BL+0x8A8 in units of π/2, positive up (the walk's own aim code).
-        let pa = sim.bond.pitch * std::f32::consts::FRAC_PI_2;
-        let (sp, spp) = (pa.sin(), pa.cos());
-        let aim_dir = [sy * spp, sp, syp * spp];
+        // (`aim_dir` above: the crosshair's own bearing on 00 Agent, the view's on the sisters.)
         let b = sim.bond.pos;
         let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
         // The slit gate reads the FLIGHT query on 00 Agent (the round's own world trace — the
@@ -830,8 +883,34 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // the aim tolerance is the guided round's, not a settled sniper's (see above): the
         // machine's low passes through the slit are a few ticks wide and the tracker's
         // ±0.08/±0.05 per-tick clamps cannot settle inside a sniper gate there.
-        let ready = rocket.is_none() && sim.missile_cam.is_none() && yaw_err.abs() < 0.25 && pitch_err.abs() < 0.25
-            && l >= if difficulty >= 3 { 16.0 } else { 10.0 } && slit_clear && corridor_clear;
+        // 00 Agent: the player fires at what he can SEE. The eye's flight ray to the machine's
+        // live position must reach (essentially) the machine — the stop, if any, is the cable
+        // sag the guided round threads (the measured launches' stops t0.85-0.95 [L the diag
+        // run 2026-11-04]) — NOT the cabin's own wall band: the t347 launch's eye ray stopped
+        // at t0.048 (the machine hidden behind the band between the windows), the chase then
+        // steered the round onto the window frame and the blast took −75 at 2.4 u [L the diag
+        // run — the world hit at frame 28066]. And the CHASE's lane — the machine-bearing
+        // corridor from the eye and both gun stand-ins — must reach the machine the same way
+        // (the t747 launch's round clipped the south-east corner post 2.2 u from Bond: −62.5
+        // [L the diag run — frame 28470]). D3-GATED: the sisters' timelines stay byte-exact.
+        let eye_sees = difficulty < 3 || sim.world
+            .segment_flight_scoped(sim.world.find_cel(eye), eye, cp, true)
+            .is_none_or(|t| t >= 0.8);
+        let machine_lane_clear = difficulty < 3 || {
+            let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+            let right = [cy, 0.0, -fy];
+            [eye,
+             [eye[0] + right[0] * 0.25, eye[1] - 0.15, eye[2] + right[2] * 0.25],
+             [eye[0] - right[0] * 0.25, eye[1] - 0.15, eye[2] - right[2] * 0.25]]
+                .iter()
+                .all(|from| { let from = *from; sim.world
+                    .segment_flight_scoped(sim.world.find_cel(from), from, cp, true)
+                    .is_none_or(|t| t >= 0.8) })
+        };
+        let ready = rocket.is_none() && sim.missile_cam.is_none()
+            && yaw_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
+            && pitch_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
+            && l >= if difficulty >= 3 { 16.0 } else { 10.0 } && slit_clear && corridor_clear && eye_sees && machine_lane_clear;
         if ready { w.tick_fire(input); } else { w.tick(input, false); }
         if t % 100 == 0 {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -1157,9 +1236,13 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
 /// DroneWeap_DoBulletAccuracy 0x179740:74-88; ReadTuningVars 0x1d3a80 cases 0x7000005-8;
 /// tuning.rs 05-08 group]; the min-difficulty placements pass Drone_Create's gate at d2 AND d3
 /// [M 0x136be0:49]. Real input only — the load path is the only difference (plus the d3-gated
-/// tactics the deaths force, inside this file).
+/// tactics the deaths force, inside this file). The Hind fight's shoot-out fires on the
+/// CONVERGED aim (the ray-gate fired nothing: the bounds-centre ray reads OPEN before a round
+/// — 10/10 end panes die to one round each) and the launch gates read the CROSSHAIR the shot
+/// itself flies through [M the crosshair aim law]: the tracker's convergence saturates the
+/// free-aim cursor at its clamp and every launch sat up to 0.23 rad off the view — the chase
+/// then clipped the window frames (the measured −75/−62.5 self-blasts [L the diag runs]).
 #[test]
-#[ignore = "00 Agent: the FLIGHT GLASS PASS landed ([M Collide_Update 0x1ea398:216-229 the contact walk passes surface-byte-0x10 for the records with weapon_data+0x6C bit 0x800 clear; Bullet_update disasm 0x12f048-0x12f058 arms HITTEST+0x9a=0x20]; the 16 ride panes are ALL mat 0x10 [L coll-obj]) and the d3 slit/corridor gates now read the flight query, but the fight is still red: the bottom-terminal pane shoot-out taps 9 rounds and kills NOTHING (dead rows [] — every pane reads OPEN: the rows' script objects ended at the ride's EntityEnd so the dynamic quads are gone AND the box-contact kill never fires — the orphaned-row lead), then the first rocket (t138) launches through the open pane plane and self-blasts (the real-damage death follows). Next: re-source the bottom-terminal panes (placement 0x20 or the terminal's own script), then the corridor gate's wall-band reach. [L the 00agent run 2026-11-04]"]
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| walk_the_whole_mission_on_real_input_at(3))
 }
