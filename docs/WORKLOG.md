@@ -66,3 +66,15 @@ the BodyArmour take as a pre-leg BEFORE the first fight (23.12, 47.62, 22.88 [D]
 on the lower floor (13.60, 15.55, 5.52 [D]) where the route passes it, a dry-fight disengage so a
 dry Bond keeps moving — re-route the way a player would, real input only, no top-ups, helpers
 opt-in only. Remove the ignore when green; then every walkreal_*_live; full suite total line.
+
+## real-health-00agent-11-2 (round 2 outcome, 2026-11-04 03:20 UTC)
+
+The d3 armour pre-leg is BUILT and MEASURED: the desk-maze corridor-BFS chain (the game's own nav
+never spans the east office floor — path 1 n39→n64 disconnected [D]) to the take ring at
+(22.5, 21.5), the spawn-drop detour leg for ammo, back_off 2.6 — armour 50 on at +2922 ticks
+[M 0x18e650 the hard 50; 0x1902c8's armour-fraction-1.0 absorption]. Round 1's 70-cost landing
+fights now cost 0. The walk reaches the 18.9 strips and dies at connector 2 (tick 5973, 20 hits
+for 100.0, 16 fights won) — the 23.0/18.9 pairs' crossfire is the remaining ~40-health hole;
+three economy levers tried and reverted with their ledgers (resupply_off, resupply_avoid,
+fights_floor). Binary 3 passed / 0 failed / 1 ignored (d1 plain + d1 real + d2 Agent green).
+Helpers byte-identical to master. Report: docs/reports/real-health-00agent-11-2.md.
