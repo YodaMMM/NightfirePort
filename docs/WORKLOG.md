@@ -60,3 +60,16 @@ Real input only; no health tops; shared helpers stay opt-in.
   13/1 — only the target walks red), the two master-merge shifts (07000003/07000011)
   documented for their owners, the critical-binary sweep results recorded. finish.sh
   with `blocked` + this reason follows.
+
+## drone-block-swaps-g055-4 (started 2026-11-04 15:16 UTC)
+
+Branch s/drone-block-swaps-g055-4 cut from origin/s/drone-block-swaps-g055-3,
+origin/master (182408f88) merged clean (no conflicts). Continue g055-3's hand-off: the two
+target walks — 07000016's chaser-defeat real-damage walk (the dry-ammo route-economy root;
+levers: the AR switch for the clears, cover-positioned fights, the ramp-mouth ambush's five
+fixed spawns killed before the descent) and 07000014's delta-exit real-damage walk (levers:
+clear #281/#283 before the descent legs, or hold the door-wall lane while firing; keep the
+(29.99, 0.61, 38.00) descent-landing pin). Real input only; no top-ups; shared helpers
+opt-in. Done = both green + every walkreal_*_live green + the full suite total line.
+Also to measure on this tree: the g055-3 merge's two shifts (07000003 real_damage,
+07000011_live 2/4) — master advanced since (turret-round-spread, ring-beams-3 et al.).
