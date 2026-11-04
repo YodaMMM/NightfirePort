@@ -89,3 +89,22 @@ cameras — grep the decompile for the 0x2a3790 readers), pin a live test
 (difficulty_placements_live.rs) of the port's spawned/locked set against the [D] placements
 filtered by the [M] rule for every on-foot level at difficulty 1/2/3, and fix every reader
 the port is missing. Leave walkreal_* alone.
+
+Completion (2026-11-04 ~09:10 UTC): the sweep found 19 readers of the difficulty global
+(GameState._40_4_ = +0x28 = 0x2a3790) in the decompile; exactly six are placement creators —
+Drone_Create 0x136be0:49, Lock_Create 0x1ae1f8:67-69, SoundTrigger_Create 0x1b2628:24-40,
+Hint_Create 0x1b3248:12-25, Copter_Create 0x17d340:76-94 (HP 299.0 x 1.0/1.5/2.0), and the
+NDrone2_DefaultInit captain criterion 0x14b300:504-556 (prop 9/5/8 at d1/2/3, with the skin
+switch's default branch clearing +0x19 for dtype not in {1,2,3,6,7}). The other readers are
+runtime scalars (damage/HP/aim), non-gated (Door/Switch read frame time, Car/AIVolume/Env_Tree
+read the mission word, DroneSpawner has no gate, Pickup kind-6 gates on the gold-medal byte
+0x199a40, not difficulty). All six gates were already implemented in the port; no src/ change
+was needed. The one red on the first run (07000007 d3 placement #404) was the TEST missing the
+default-branch clear, fixed with the address; the port was right. New test
+crates/nf-view/tests/difficulty_placements_live.rs pins, for all 22 on-foot levels x d1/2/3,
+the drone placement-index sets, the captain flags, lock unlocked-sets, sound-trigger sets,
+hint (label, stage) sets and copter HP multipliers of the port against the [D] placements
+filtered by the [M] rules: 3 passed 0 failed in 65 s on the final tree (origin/master merged,
+0902d3bc). Suite on the final tree (suite.py, chunks; 263 of 1091 binaries fit before the
+deadline): 963 passed, 3 failed (the three disc_golden slim-ISO failures, allowed), 57 ignored;
+the required families (difficulty*, interactables_*, interact_*) ran whole with 0 failures.
