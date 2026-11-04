@@ -168,3 +168,11 @@ cost figures anywhere I can read (the only numbers I can see are per-subagent to
 counts in task results, e.g. the audit task reported "Tokens -> prompt:107288
 completion:8859 total:116147", which is that subagent's own usage, not this session's
 budget).
+
+## ntfy failed
+
+- curl: `curl: (28) Connection timed out after 20001 milliseconds` (and a second attempt
+  at 15 s: same timeout).
+- python3 urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`.
+- wget: produced no output (silent with -q; the sandbox has no route to ntfy.sh — the
+  same record as the earlier tasks, e.g. real-health-00agent-02-03-3's ntfy note).
