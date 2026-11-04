@@ -4,3 +4,7 @@ Census every script (NIS) op used on the disc by on-foot levels, per level, agai
 
 ---
 claimed-by: sandbox4 at 2026-11-04T22:28Z
+
+---
+## Report (done, 2026-11-04T23:15Z)
+
