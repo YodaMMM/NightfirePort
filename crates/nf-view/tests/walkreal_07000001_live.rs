@@ -437,6 +437,54 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // lead's 5.0 release band [M NDrone2_DSTATE_AllyLeadWait 0x15eda8 case 3]. The direct
     // steer crosses the already-open aperture; the nav's own funnel hop wedges here (the
     // closes capped at 3000 ticks four runs running).
+    if difficulty >= 3 {
+        // real-health-00agent-01: the AND's three named guards are down, but the hall holds
+        // MORE than them — the d3 run's #5 (0x5000038, the shotgun 0x1c, 24 hp) stood 0.9 u off
+        // the aperture's north side and the doorway step ate his volley point-blank (the 4119
+        // death: -14.40/-2.80 at 0.9 u, the ×2 TooClose band [M Drone_ModBulletDamage
+        // 0x139f50]; the named loops never visit him — he is outside the AND and outside every
+        // later route window's 9 u). A player does not step through an aperture with a guard on
+        // its lip: from the hold line, the lure draws him (the guards hunt the gunshot hearing
+        // [M DroneFunc_SetNoiseHeard] — the same bounded live-tracked burst the named loop
+        // uses) and the fight takes him as he crosses. D3-GATED: the Agent sister's green
+        // timelines stay byte-exact.
+        let lip: Vec<usize> = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (0..sim.drones.list.len()).filter(|&i| {
+                let d = &sim.drones.list[i];
+                d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                    && walker::dxz(d.pos, [7.9, 6.3, 11.1]) < 7.0
+            }).collect()
+        };
+        for g5 in lip {
+            for t in 0..300u32 {
+                let (input, trigger, done) = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let d = &sim.drones.list[g5];
+                    if d.corpse || d.health <= 0.0 { (Input::default(), false, true) }
+                    else {
+                        let bp = sim.bond.pos;
+                        let at = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
+                        let desired = (at[0] - bp[0]).atan2(at[2] - bp[2]);
+                        let err = walker::wrap_pi(desired - sim.bond.yaw);
+                        let want_pitch = ((at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop)) / walker::dxz(bp, at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+                        let perr = want_pitch - sim.bond.pitch;
+                        (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() },
+                            err.abs() < 0.02 && perr.abs() < 0.028 && t % 16 == 0, d.pos[2] < 10.5)
+                    }
+                };
+                if done { break; }
+                w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
+                w.total_ticks += 1;
+                w.after_step();
+                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+            }
+            if !w.shoot(g5, &format!("door lip guard {g5}")) {
+                if w.resupply("door lip ammo") { w.shoot(g5, &format!("door lip guard {g5} retry")); }
+            }
+            if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+        }
+    }
     if difficulty >= 2 {
         w.walk_to(Wp { at: [7.9, 6.4, 12.3], act: Act::None, arrive: 0.6 }, "into the hall doorway (the release band)");
         // The player walked this corridor five minutes ago and knows the guards: the contact's
@@ -1600,4 +1648,22 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage() {
 #[test]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(2));
+}
+
+/// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-01): the same walked
+/// route — the stairwell-doors ambush law above — with the sim loaded the way the menu's 00
+/// Agent pick loads it — GameState+0x28 = 3 through the front-end's launch path [M
+/// C_SBNFDFCTY 0x216ca8:15 writes the wheel row's value 3 (`difficulty[]` table 0x2df4c0 row 2,
+/// Txt 0x30000a7); `Player_HandlePain` 0x1902c8 scales Bond's pain by Plr_DMod_Hard 1.2 on this
+/// level group (Easy 0.5, Agent 0.7), `DroneWeap_DoBulletAccuracy` 0x179740:81-95 by
+/// DroneFiring_Accuracy_Hard 1.0 (Easy 0.5, Agent 0.8) and `NDrone2_HitDamage` 0x145558 reads
+/// DroneDamage_Hard 0.8 for the guards' own bullets [M tuning.rs 01-04 group; L the pins:
+/// 0x30cab8/0x30caec — difficulty3_07000001_live asserts the three words on a d3 load]]. The
+/// min-difficulty placements pass Drone_Create's gate at d3 exactly as at d2 [M 0x136be0:49] —
+/// the same roster the Agent walk fights, hit more often for less per hit while Bond's pain is
+/// amplified 1.2×. Real input only — the load path is the only difference (plus the
+/// d3-gated tactics the deaths force, inside this file); no health, armour or channel writes.
+#[test]
+fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent() {
+    walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(3));
 }
