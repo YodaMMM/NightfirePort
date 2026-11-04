@@ -8,3 +8,7 @@ No behaviour change is expected; if a pin shows the port differs from the decomp
 
 ---
 claimed-by: sandbox3 at 2026-11-04T21:54Z
+
+---
+## Report (done, 2026-11-04T23:24Z)
+
