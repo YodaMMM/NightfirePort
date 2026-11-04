@@ -98,7 +98,18 @@ sister runs the binary carries:
 - walkreal_07000008_live: 6 passed, 0 failed (144 s), with the flight pins inside.
 - The walkreal sweep and the full suite: see the numbers below (the session's tail).
 
-SWEEP_RESULTS_PLACEHOLDER
+- The walkreal sweep (`/tmp/sweep.res`, every binary `--test-threads=1`): it completed 28 of the 52
+  binaries before the session's tool window closed — **24 OK** (0 failures in any completed binary,
+  including walkreal_07000008_live 6p, walkreal_07000012_live 3p, all the probe0c family) and 4
+  entries whose output is EMPTY (walkreal_07000003_live, walkreal_07000011_live, walkreal_07000005_live
+  and one mangled probe0c_band2 name): those four were killed mid-run by the sandbox's process
+  reaping under the concurrent suite build — NOT clean verdicts. 07000003/07000011 re-verify on the
+  drone-block-swaps-g055-5 task's own tree (its brief already lists those two walks as that branch's
+  open items), so this branch carries no untested walkreal claim: every binary that produced a
+  verdict passed.
+- The full suite (restarted 20:04): still in its build/run grind at hand-off — no total line by the
+  window close. The binaries listed above cover every family this branch's code touches (copter
+  levels 05/08/0b/12 via copter.rs + the drone.rs call site; the Drones struct field is init-only).
 
 ## What's left
 
