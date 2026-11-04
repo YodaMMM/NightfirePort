@@ -6,3 +6,6 @@ Branch from origin/s/drone-block-swaps-g055-2 (merge origin/master into it first
 2. walkreal_07000016_live::walk_the_chasers_defeat_completes_the_mission_on_real_damage — dies at ~9241 on the pit floor to the chaser plus the pit squad. Clear the pit squad (never the chaser) inside the kill loop's backpedal branch.
 
 Real input only; never top up health or force guard state. Shared helpers in tests/common stay opt-in. Done = both green, the four earlier fixes still green, every walkreal_*_live green, then the full suite total line.
+
+---
+claimed-by: sandbox6 at 2026-11-04T05:03Z
