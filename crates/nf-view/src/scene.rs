@@ -1026,6 +1026,12 @@ pub struct HudState {
 }
 
 impl HudState {
+    /// A type-3 add's sweep: every queued type-2 line's timer goes to −1, so the mission banner
+    /// never waits behind objectives [M `Text_AddMsg` 0x1b0c30:134-146].
+    fn drop_objective_lines(&mut self) {
+        self.objective_msgs.iter_mut().for_each(|m| m.time = -1.0);
+    }
+
     /// An INFO pane add. In multiplayer `Text_AddMsg` 0x1b0c30:94-132 divides every queued type-1
     /// line's timer by the new count, so a burst of lines shortens instead of queueing.
     fn push_info(&mut self, m: Msg, mp: bool) {
@@ -6139,12 +6145,14 @@ impl Sim {
                     // The type-3 "Mission Complete" (0x2000006), 240 ticks [M 0x182c60:85-122].
                     // The level end itself arrives as `Event::LevelEnd` after the banner (case 4).
                     if let Some(t) = self.lang.as_ref().and_then(|l| l.bind(0x0200_0006)) {
+                        self.hud.drop_objective_lines();
                         self.hud.mission_msgs.push_back(Msg::new(t.to_string(), 240.0));
                     }
                 }
                 nf_game::mission::Event::MissionFailed => {
                     // The type-3 "Mission Fail" (0x2000007), 300 ticks [M 0x182c60:45-57].
                     if let Some(t) = self.lang.as_ref().and_then(|l| l.bind(0x0200_0007)) {
+                        self.hud.drop_objective_lines();
                         self.hud.mission_msgs.push_back(Msg::new(t.to_string(), 300.0));
                     }
                 }
