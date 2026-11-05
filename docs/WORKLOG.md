@@ -15,3 +15,13 @@ msg-5 :157 — new field play_script_talk_gate). Pins: 3 lib tests + voice_trigg
 (2 tests: real Drone_SfxInfo rows; the frag-flee drives the ENTER bark on real 07000005 data).
 nf-game release suite 1066 passed / 0 failed; nf-formats 92+11 with the 3 allowed disc_golden
 failures; nf-audio 28. Report next.
+
+## broken-object-bark
+Started 2026-11-05 04:18 UTC. Branch s/broken-object-bark cut from origin/master 17a784980,
+with origin/s/audit-voice-triggers merged (2bc25c6c7 — not on master). Task: the port never
+calls `Drone_BrokenObject` 0x138588 from `Break_Kill` 0x12b970 (breakable.rs only documents it):
+level 0x7000001 only, a player-broken script-type-5 object, live type-0x0c drones, bark
+0x40 + Rand(4) [M 0x138588 — reading the decompile in full next; audit-voice-triggers's
+"Left as a table" row 1]. Plumb it from the Breaks kill path to Drones, game Rand order and
+every gate; pin: Bond shoots a qualifying 07000001 object with a qualifying guard alive → the
+line plays; another level or a non-player break → nothing.
