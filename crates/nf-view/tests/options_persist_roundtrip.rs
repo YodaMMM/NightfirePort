@@ -67,7 +67,9 @@ fn point_card_at_config(fe: &mut FrontEnd) {
 }
 
 /// Boot → title → Main → NightFire → New Codename → the name entry → the Edit wheel, actions
-/// and ticks only. The card flow's save runs during the ticks (card_tick is fe.tick's own).
+/// and ticks only. The card flow's save runs during the ticks (card_tick is fe.tick's own); the
+/// wheel's 0x4c forwards the create to Controls [M P_CNMENU 0x213288:38-40] and the helper Backs
+/// to the wheel for its callers.
 fn to_edit_wheel(fe: &mut FrontEnd) {
     assert_eq!(fe.page, Page::Start, "the boot opens the title");
     assert!(act(fe, Action::Confirm), "the title's Enter");
@@ -86,16 +88,21 @@ fn to_edit_wheel(fe: &mut FrontEnd) {
         assert!(fe.cn_type_char(ch), "the grid types {ch}");
     }
     assert!(act(fe, Action::Confirm), "the ✓ submits the name");
-    // The card flow's "Saving data…" completes into the Edit wheel (pending_page = the wheel
-    // [M C_KEYBOARD 0x213a98:53-65 → the completion routes there]).
+    // The card flow's "Saving data…" completes into the wheel, whose 0x4c forwards the create
+    // straight to Controls (pending_page = the wheel [M C_KEYBOARD 0x213a98:53-65]; the forward
+    // [M P_CNMENU 0x213288:38-40]).
     for _ in 0..2000 {
-        if fe.page == Page::CnMenu {
+        if fe.page == Page::CnControls {
             break;
         }
         fe.tick();
     }
-    assert_eq!(fe.page, Page::CnMenu, "the card flow lands on the Edit wheel");
-    assert_eq!(fe.cursor, 1, "the wheel opens on Controller Setup [L PCSX2 m30]");
+    assert_eq!(fe.page, Page::CnControls, "the create forwards to Controls [M 0x213288:39]");
+    assert_eq!(fe.cursor, 0, "the Controls page opens on the style row");
+    // The wheel is one Back away (the port's Controls-Back model) — the callers walk its rows.
+    assert!(act(fe, Action::Back), "Controls Back → the wheel");
+    assert_eq!(fe.page, Page::CnMenu);
+    assert_eq!(fe.cursor, 1, "the wheel re-opens on Controller Setup [L PCSX2 m30]");
 }
 
 /// The wheel's row → the option page, actions only [M C_SBCNOPTIONS 0x213528:32-60 — rows

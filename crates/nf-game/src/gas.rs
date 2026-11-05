@@ -87,6 +87,40 @@ pub struct Gas {
     /// a 0x400 object is submitted to a view only while that viewer's goggle mode (+0x236) is 2
     /// [M View_AddObjects 0x1e62d8:38-47]. The draw side reads it.
     pub xray_only: bool,
+    /// The spawn rotation (`Gas_Init`'s param-5 euler vector — the quaternion argument of
+    /// `control_create_object` [M 0x1aacc8:31]; the game's gas objects are NOT billboards —
+    /// `GAS_OBJ_FLAGS` carries no 0x8 — so `View_DrawObjectGlist` rotates them from their own
+    /// +0x90). fix-scrape-and-impacts row 13: `Effect_Bullet`'s wall puffs spawn with
+    /// `Vec_NormToRot(normal)`, floor puffs with the negated-normal euler or zero by the entry's
+    /// +0x1b byte [M 0x1ce8a8:122-130]. The draw side reads it; every pre-existing site keeps
+    /// [0,0,0] (the game's sites pass zero or the euler — zero except the impact puffs).
+    pub rot: [f32; 3],
+    /// The gas obj's +0xF0 bit 0x10 — the HIDDEN bit [M Gas_Init 0x1aacc8's LAB_001ab1e4
+    /// `*(obj+0xf0) |= 0x10` for kinds 9/10; gases_smoke's cases 9/10 re-OR it every tick].
+    /// A hidden puff never draws (fx-gas-and-blasts row 5): it is a stationary cloud EMITTER
+    /// whose children are the visible puffs. The draw side reads it.
+    pub hidden: bool,
+    /// obj+0xec — the creation GameState, written by `control_init_object` 0x134630:15; the
+    /// kind-9 emitter's warmup reads it (`GameState - obj[0xec] < 20` blocks the child spawns
+    /// [M gases_smoke 0x1ab2d0 case 9]). Set from the pool's frame at init.
+    pub born: u32,
+    /// The kind-9/10 emitter's child-spawn record — the game stores Gas_Init's OWN args at the
+    /// object's data table (+0x40..+0x58: rgba, end rgba, glist, p1, p2, life [M 0x1aacc8:46-52,
+    /// the `8 < kind < 0xb` block]) and the update cases re-pass them to every child's Gas_Init
+    /// [M 0x1ab2d0 case 9 / case 10], with the record's rgb re-combined with the parent's LIVE
+    /// alpha byte each spawn (`(rec & 0xffffff00) | (u8)obj[0x106]`).
+    pub child: Option<ChildSeed>,
+}
+
+/// The kind-9/10 emitter's stored Gas_Init args (see `Gas::child`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChildSeed {
+    pub p1: f32,
+    pub p2: f32,
+    pub mesh: u32,
+    pub rgba: [u8; 4],
+    pub rgba_end: u32,
+    pub life: f32,
 }
 
 /// The obj+0xF0 bits `Gas_Init` ORs into every puff after `hashtable_set_object_to_entity_gfx` has
@@ -123,6 +157,9 @@ pub struct GasPool {
     pub puffs: Vec<Gas>,
     /// The spawn counter feeding the deterministic jitter (the game's 5 RNG draws, un-consumed).
     counter: u32,
+    /// The current GameState tick (`update` stores it; `init_ex` stamps it into `Gas::born` for
+    /// the kind-9 warmup — the game reads obj+0xec, GameState at creation [M 0x134630:15]).
+    pub frame: u32,
 }
 
 /// `Rand_Rand(0x100) > 0x7f`-quality sign/offset from the counter: a 32-bit bit-mix (xxhash-style), no
@@ -183,6 +220,10 @@ impl GasPool {
             kind: 7,
             billboard: false,
             xray_only: false,
+            hidden: false,
+            born: 0,
+            child: None,
+            rot: [0.0; 3],
         });
         let _ = yaw; // the rot-z euler: stored to obj+0x50/0x60 in the game; the port's billboard draw reads only the spin
     }
@@ -232,6 +273,10 @@ impl GasPool {
             kind: 7,
             billboard: false,
             xray_only: false,
+            hidden: false,
+            born: 0,
+            child: None,
+            rot: [0.0; 3],
         });
         let _ = yaw; // the rotation draw: stored to obj+0x50/0x60; the port's billboard reads only the spin
     }
@@ -268,6 +313,10 @@ impl GasPool {
             kind: 0,
             billboard: false,
             xray_only: false,
+            hidden: false,
+            born: 0,
+            child: None,
+            rot: [0.0; 3],
         });
     }
 
@@ -301,6 +350,10 @@ impl GasPool {
             kind: 3, // [M :349]
             billboard: false,
             xray_only: false,
+            hidden: false,
+            born: 0,
+            child: None,
+            rot: [0.0; 3],
         });
         let _ = yaw; // the rot-z euler (the searchlight's shape); the port's billboard reads only the spin
     }
@@ -326,9 +379,20 @@ impl GasPool {
         let vel = match kind {
             4 => [vel[0] * REC_FRAME_RATE + (jitter(n, 3) - 0.025), vel[1] * REC_FRAME_RATE, vel[2] * REC_FRAME_RATE + (jitter(n, 4) - 0.025)],
             7 => [(jitter(n, 3) * 0.2 - 0.1) * REC_FRAME_RATE, jitter(n, 5) * 0.2 * REC_FRAME_RATE, (jitter(n, 4) * 0.2 - 0.1) * REC_FRAME_RATE],
+            // fx-gas-and-blasts row 5: kinds 9/10 are the HIDDEN cloud emitters — the game's
+            // LAB_001ab1e4 vel store re-uses the caller's ROT vector as the velocity [M 0x1aacc8
+            // `puVar9 = param_4 … *pfVar1 = *puVar9 …`], but the emitters never move (their update
+            // cases have no motion), so the port parks them at (0,0,0).
+            9 | 10 => [0.0; 3],
             _ => [0.0, REC_FRAME_RATE, 0.0],
         };
         let _ = yaw;
+        // fx-gas-and-blasts row 5: kind 10 halves the life at creation [M 0x1aacc8's kind-10 arm
+        // `pfVar1[0xe] = pfVar1[0xe] * 0.5` — +0x38 IS the life] and both emitters take the hidden
+        // bit + the child-spawn record (Gas_Init's own args, stored at the data table [M :46-52]).
+        let life = if kind == 10 { life * 0.5 } else { life };
+        let child = matches!(kind, 9 | 10)
+            .then(|| ChildSeed { p1, p2, mesh, rgba, rgba_end, life });
         // The fade target: the entry's packed rgba end (the game's param 10 [M 0x1aacc8:56-71]).
         let end = [(rgba_end >> 24) as u8, (rgba_end >> 16) as u8, (rgba_end >> 8) as u8, rgba_end as u8];
         self.puffs.push(Gas {
@@ -348,16 +412,33 @@ impl GasPool {
             kind,
             billboard: false,
             xray_only: false,
+            hidden: matches!(kind, 9 | 10), // [M LAB_001ab1e4: `obj+0xf0 |= 0x10`]
+            born: self.frame,
+            child,
+            rot: [0.0; 3],
         });
         // The mesh rides alongside for the draw (the game passes it to the gfx hashtable); the port's
         // billboard draw reads it from the puff via the pool index.
         if let Some(g) = self.puffs.last_mut() { g.mesh = mesh; }
     }
 
-    /// `gases_smoke` 0x1ab2d0 for the ported types (0, 4, 7): motion, growth, fade, the life countdown
-    /// and the kill. Types 9/10 (hidden emitters) and 0xb are not ported; no game caller in the port's
-    /// scope uses them yet.
-    pub fn update(&mut self) {
+    /// `init_ex` with the spawn rotation (`Gas_Init`'s param-5 euler → the create-object quaternion
+    /// [M 0x1aacc8:31]) — the impact puffs' orientation: `Effect_Bullet`'s wall puffs spawn with
+    /// `Vec_NormToRot(normal)` [M 0x1ce8a8:129], floor puffs with the negated-normal euler or zero
+    /// by the entry's +0x1b byte [M :122-127]. Everything else is `init_ex` exactly.
+    #[allow(clippy::too_many_arguments)]
+    pub fn init_ex_rot(&mut self, mesh: u32, pos: V3, yaw: f32, vel: V3, p1: f32, p2: f32, kind: u8, rgba: [u8; 4], rgba_end: u32, life: f32, rot: [f32; 3]) {
+        self.init_ex(mesh, pos, yaw, vel, p1, p2, kind, rgba, rgba_end, life);
+        if let Some(g) = self.puffs.last_mut() { g.rot = rot; }
+    }
+
+    /// `gases_smoke` 0x1ab2d0 for the ported types (0, 4, 7, 9, 10): motion, growth, fade, the life
+    /// countdown and the kill; the kind-9/10 hidden emitters spawn their children (fx-gas-and-blasts
+    /// row 5). 0xb is ported on s/fx-muzzle-and-trail; no game caller in the port's scope creates
+    /// kind-9/10 parents yet (the audit's census) — the mechanics land here for the callers that do.
+    pub fn update(&mut self, frame: u32) {
+        self.frame = frame; // obj+0xec-equivalent stamp for puffs created later this tick
+        let mut children: Vec<(ChildSeed, V3, V3, u8, u8)> = Vec::new();
         self.puffs.retain_mut(|g| {
             match g.kind {
                 // Case 0 [M 0x1ab2d0 case 0]: vel damped ×0.95, gravity scaled −0.02, pos += vel.
@@ -379,12 +460,73 @@ impl GasPool {
                     for k in 0..3 { g.pos[k] += g.vel[k]; }
                     g.pos[1] += WLD_GRAVITY[1] * -0.02 * REC_FRAME_RATE;
                 }
+                // fx-gas-and-blasts row 5 [M 0x1ab2d0 case 9 = :146-162]: the hidden cloud emitter
+                // — no motion; after the 20-tick creation warmup (`GameState - obj[0xec] <
+                // FRAME_RATE_MUL·20.0` blocks) it spawns a kind-8 child on every tick where
+                // `GameState & 3 == 3`, with the parent's own creation args (the child record) and
+                // the parent's rgb + LIVE alpha byte. The kind-8 NULL-vel store is (0, REC, 0)
+                // [M 0x1aacc8's kind-8 arm].
+                9 => {
+                    if frame.wrapping_sub(g.born) >= 20 && frame & 3 == 3 {
+                        if let Some(s) = g.child.clone() {
+                            children.push((s, g.pos, [0.0, REC_FRAME_RATE, 0.0], 8, g.alpha_byte()));
+                        }
+                    }
+                }
+                // [M 0x1ab2d0 case 10 = :164-186]: the emitter — every tick where
+                // `GameState & 7 == 7` it spawns a kind-7 child with the GIVEN velocity
+                // (0, 2·REC, 0) through the generic given-vel store (·REC again [M 0x1aacc8:89-92]).
+                10 => {
+                    if frame & 7 == 7 {
+                        if let Some(s) = g.child.clone() {
+                            children.push((s, g.pos, [0.0, mul_ee(2.0 * REC_FRAME_RATE, REC_FRAME_RATE), 0.0], 7, g.alpha_byte()));
+                        }
+                    }
+                }
                 _ => {}
             }
             g.scale += g.scale_rate;
             for k in 0..4 { g.rgba[k] = (g.rgba[k] + g.rgba_rate[k]).clamp(0.0, 255.0); }
             g.life -= 1.0;
             g.life > 0.0
+        });
+        for (s, pos, vel, kind, alpha) in children {
+            self.push_child(&s, pos, vel, kind, alpha);
+        }
+    }
+
+    /// A kind-8/7 emitter child: the parent's Gas_Init re-call [M 0x1ab2d0 case 9/case 10] —
+    /// the record's p1/p2/mesh/rgba-end/life, the rgb re-combined with the parent's live alpha
+    /// byte, the spin+sign head (the counter-hash stand-in), no hidden bit, no child record.
+    fn push_child(&mut self, s: &ChildSeed, pos: V3, vel: V3, kind: u8, alpha: u8) {
+        if self.puffs.len() >= Self::CAP { return; }
+        let n = self.counter.wrapping_add(0x9e37_79b9);
+        self.counter = n;
+        let spin = jitter(n, 1) * (std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE)
+            * if jitter(n, 2) > 0.5 { 1.0 } else { -1.0 };
+        let rgba = [s.rgba[0], s.rgba[1], s.rgba[2], alpha];
+        let end = [(s.rgba_end >> 24) as u8, (s.rgba_end >> 16) as u8, (s.rgba_end >> 8) as u8, s.rgba_end as u8];
+        self.puffs.push(Gas {
+            pos, vel,
+            mesh: s.mesh,
+            scale: s.p1,
+            scale_rate: (s.p2 - s.p1) / s.life,
+            rgba: rgba.map(f32::from),
+            rgba_rate: [
+                (f32::from(end[0]) - f32::from(rgba[0])) / s.life,
+                (f32::from(end[1]) - f32::from(rgba[1])) / s.life,
+                (f32::from(end[2]) - f32::from(rgba[2])) / s.life,
+                (f32::from(end[3]) - f32::from(rgba[3])) / s.life,
+            ],
+            spin,
+            life: s.life,
+            kind,
+            billboard: false,
+            xray_only: false,
+            hidden: false,
+            born: self.frame,
+            child: None,
+            rot: [0.0; 3],
         });
     }
 }
@@ -462,12 +604,12 @@ mod tests {
         pool.init([1.0, 2.0, 3.0], 0.0, [0.0; 3], 0.05, 0.10, 7, [0x48, 0x40, 0x30, 0x80], 8.0);
         assert_eq!(pool.puffs.len(), 1);
         let g0 = pool.puffs[0].clone();
-        pool.update();
+        pool.update(0);
         let g1 = &pool.puffs[0];
         assert!(g1.scale > g0.scale, "the puff grows");
         assert!(g1.rgba[3] < g0.rgba[3], "the puff fades");
         let mut n = 0;
-        while !pool.puffs.is_empty() { pool.update(); n += 1; assert!(n < 20, "the puff outlived its life"); }
+        while !pool.puffs.is_empty() { pool.update(0); n += 1; assert!(n < 20, "the puff outlived its life"); }
         assert_eq!(n, 7, "life 8 = 8 ticks (1 spent before the count)");
     }
 
@@ -480,5 +622,66 @@ mod tests {
         assert_eq!(a.puffs, b.puffs, "same calls, same puffs (no wall-clock)");
         for _ in 0..200 { a.init([0.0; 3], 0.0, [0.0; 3], 0.05, 0.1, 7, [72, 64, 48, 128], 4.0); }
         assert_eq!(a.puffs.len(), GasPool::CAP, "the pool caps");
+    }
+}
+
+#[cfg(test)]
+mod emitter_tests {
+    use super::*;
+
+    /// fx-gas-and-blasts row 5 [M Gas_Init 0x1aacc8's kind-9/10 arms + gases_smoke 0x1ab2d0
+    /// case 9 = :146-162 / case 10 = :164-186]: the hidden cloud emitters.
+    #[test]
+    fn kind9_emitter_warms_up_then_spawns_kind8_children_on_the_3_gate() {
+        let mut pool = GasPool::default();
+        pool.update(100); // the pool's frame stamp (GameState during tick 100)
+        pool.init_ex(SMOKE_QUAD, [1.0, 2.0, 3.0], 0.0, [0.0; 3], 0.5, 1.0, 9, [0x40, 0x40, 0x40, 0xff], 0x40404001, 600.0);
+        let p = &pool.puffs[0];
+        assert!(p.hidden, "the kind-9 parent takes the +0x10 hidden bit [M LAB_001ab1e4]");
+        assert_eq!(p.child.as_ref().unwrap().life, 600.0, "kind 9 keeps its life");
+        // The 20-tick warmup: no child even on a &3 == 3 tick inside it.
+        pool.update(101); // 101 - 100 = 1 < 20, and 101 & 3 == 1 — nothing
+        pool.update(103); // & 3 == 3 but the warmup holds (103 - 100 = 3 < 20)
+        assert!(pool.puffs.iter().all(|g| g.kind != 8), "the warmup blocks the children");
+        // After the warmup: children only on the & 3 == 3 ticks. The parent's own rgba fades
+        // each tick, so the child's alpha byte is the parent's LIVE one at the spawn tick.
+        let parent_alpha = pool.puffs[0].alpha_byte();
+        pool.update(123); // 123 - 100 = 23 ≥ 20, 123 & 3 == 3 → a child
+        assert_eq!(pool.puffs.iter().filter(|g| g.kind == 8).count(), 1, "one child on the &3==3 tick");
+        // The child carries the parent's record with the parent's LIVE alpha byte.
+        let c = pool.puffs.iter().find(|g| g.kind == 8).unwrap();
+        assert_eq!(c.pos, [1.0, 2.0, 3.0], "the child spawns at the parent");
+        assert_eq!(c.mesh, SMOKE_QUAD);
+        assert!((c.vel[1] - REC_FRAME_RATE).abs() < 1e-6, "the kind-8 NULL-vel store is (0, REC, 0) [M 0x1aacc8]");
+        assert_eq!(c.rgba[3], f32::from(parent_alpha), "the parent's live alpha byte rides the child's rgba");
+        assert!(!c.hidden && c.child.is_none(), "children are visible leaves");
+        pool.update(124); // 124 & 3 == 0 → none
+        assert_eq!(pool.puffs.iter().filter(|g| g.kind == 8).count(), 1);
+        pool.update(127); // 127 & 3 == 3 → another
+        assert_eq!(pool.puffs.iter().filter(|g| g.kind == 8).count(), 2);
+        // Sister: a &3 == 3 tick BEFORE the warmup ends spawns nothing (covered above).
+    }
+
+    #[test]
+    fn kind10_emitter_halves_its_life_and_spawns_kind7_children_on_the_7_gate() {
+        let mut pool = GasPool::default();
+        pool.update(0);
+        pool.init_ex(SMOKE_QUAD, [0.0; 3], 0.0, [0.0; 3], 0.4, 2.0, 10, [0x80, 0x80, 0x80, 0xc8], 0x80808064, 100.0);
+        let p = &pool.puffs[0];
+        assert!(p.hidden);
+        assert!((p.life - 50.0).abs() < 1e-4, "kind 10 halves the life at creation [M 0x1aacc8 `pfVar1[0xe] *= 0.5`]");
+        // Children on the & 7 == 7 ticks only.
+        pool.update(6); // & 7 == 6 → none
+        assert!(pool.puffs.iter().all(|g| g.kind != 7));
+        let parent_alpha = pool.puffs[0].alpha_byte();
+        pool.update(7); // & 7 == 7 → a child
+        let c = pool.puffs.iter().find(|g| g.kind == 7).unwrap();
+        assert_eq!(c.pos, [0.0; 3]);
+        assert!((c.vel[1] - mul_ee(2.0 * REC_FRAME_RATE, REC_FRAME_RATE)).abs() < 1e-9,
+            "the given (0, 2·REC, 0) vel through the generic ·REC store [M 0x1aacc8:89-92]");
+        assert_eq!(c.rgba[3], f32::from(parent_alpha), "the parent's live alpha byte");
+        assert!((c.life - 50.0).abs() < 1e-4, "the child's life comes from the record");
+        pool.update(15); // & 7 == 7 again
+        assert_eq!(pool.puffs.iter().filter(|g| g.kind == 7).count(), 2);
     }
 }

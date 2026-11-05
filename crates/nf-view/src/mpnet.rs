@@ -312,11 +312,11 @@ pub struct NetCore {
     closed: bool,
     /// Events for the app (`take_app_events`).
     events: Vec<CoreEvent>,
-    /// Host: the match-start payload (tag 1) and the polls left to repeat it. The DATA tunnel is
-    /// unacknowledged, so a single send is lost with the link's loss rate (the 5 % e2e lost it);
-    /// the host repeats it every `START_RESEND_EVERY` polls for `START_RESEND_POLLS` polls and
+    /// Host: the match-start payload (tag 1), the next repeat and the last, in `epoch` ms. The DATA
+    /// tunnel is unacknowledged, so a single send is lost with the link's loss rate (the 5 % e2e
+    /// lost it); the host repeats it every `START_RESEND_EVERY_MS` for `START_RESEND_FOR_MS` and
     /// the client keeps the first copy [S port protocol].
-    start_resend: Option<(Vec<u8>, u32)>,
+    start_resend: Option<(Vec<u8>, u64, u64)>,
     /// net-p2p: internet reachability — None until the app enables it (`enable_reach`); tests that
     /// build cores directly never probe the LAN gateway or a public STUN server.
     reach_cfg: Option<nf_net::p2p::ReachConfig>,
@@ -359,10 +359,10 @@ pub struct NetCore {
     lobby_edits: Vec<nf_net::LobbyEdit>,
 }
 
-/// The host repeats the match-start payload every this many polls …
-const START_RESEND_EVERY: u32 = 4;
-/// … for this many polls after the arm (≈ 2 s of 60 Hz frames).
-const START_RESEND_POLLS: u32 = 120;
+/// The host repeats the match-start payload this often …
+const START_RESEND_EVERY_MS: u64 = 67;
+/// … for this long after the arm. Time, not polls: `poll` runs once per display frame.
+const START_RESEND_FOR_MS: u64 = 2000;
 
 fn session_cfg() -> Config {
     // NET_HASH_EVERY's cadence; net-internet: the host measures every peer's RTT and adapts
@@ -849,10 +849,10 @@ impl NetCore {
             }
         }
         if self.is_host && !self.closed {
-            if let Some((bytes, left)) = self.start_resend.as_mut() {
-                *left = left.saturating_sub(1);
-                let resend = (*left % START_RESEND_EVERY == 0).then(|| bytes.clone());
-                if *left == 0 { self.start_resend = None; }
+            if let Some((bytes, next, until)) = self.start_resend.as_mut() {
+                let resend = (now >= *next).then(|| bytes.clone());
+                if resend.is_some() { *next = now + START_RESEND_EVERY_MS; }
+                if now >= *until { self.start_resend = None; }
                 if let Some(b) = resend { self.sess.send_data(b); }
             }
         }
@@ -974,7 +974,8 @@ impl NetCore {
         self.events.push(CoreEvent::MatchStarted(Box::new(s.clone())));
         let payload = encode_match_start(&mp_to_match(s), s.seed);
         self.sess.send_data(payload.clone());
-        self.start_resend = Some((payload, START_RESEND_POLLS));
+        let now = self.epoch.elapsed().as_millis() as u64;
+        self.start_resend = Some((payload, now + START_RESEND_EVERY_MS, now + START_RESEND_FOR_MS));
     }
 
     /// The lobby's agents (the trait's `agents`).
@@ -1592,6 +1593,23 @@ mod cloud_tests {
         assert_eq!(joiner.borrow().join_code_note(), None, "the note clears once connected");
         host.borrow_mut().close();
         joiner.borrow_mut().close();
+    }
+
+    /// The host's start repeat runs its two seconds on a 240 Hz display. Sister: counted in polls
+    /// it stopped after 0.6 s there, so a client that lost those copies never started.
+    #[test]
+    fn the_match_start_repeats_for_two_seconds_at_240_hz() {
+        let host = NetCore::host(0).unwrap();
+        let now = host.borrow().epoch.elapsed().as_millis() as u64;
+        host.borrow_mut().start_resend = Some((vec![1, 2, 3], now + START_RESEND_EVERY_MS, now + START_RESEND_FOR_MS));
+        let t0 = std::time::Instant::now();
+        while host.borrow().start_resend.is_some() {
+            host.borrow_mut().poll();
+            std::thread::sleep(std::time::Duration::from_micros(1_000_000 / 240));
+        }
+        let secs = t0.elapsed().as_secs_f32();
+        assert!((1.9..2.5).contains(&secs), "the repeat ran {secs} s");
+        host.borrow_mut().close();
     }
 
     #[test]

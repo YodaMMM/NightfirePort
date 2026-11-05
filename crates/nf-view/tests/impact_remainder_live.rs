@@ -6,6 +6,13 @@
 //! fixed seed; a shot into the sky (no hit) adds no impact draws. docs/atlas/effect.md.
 use nf_game::player::Input;
 
+/// The bullet holes: a guard walking anywhere on the level leaves footprints in the same pool.
+fn holes(sim: &nf_view::scene::Sim) -> Vec<nf_game::effect::Decal> {
+    let data = sim.data();
+    let foot = |m: u32| data.surfaces.is_some_and(|s| s.effects.iter().any(|e| e.foot_decal_4 == m || e.foot_decal_8 == m));
+    sim.drones.effects.decals.iter().filter(|d| !foot(d.mesh)).cloned().collect()
+}
+
 /// The pure rule: for a fixed seed the function draws EXACTLY once when the surface byte carries
 /// 0x80 (never otherwise — the 0x50/0x51 weapons and the plain bytes skip), and the pierce it
 /// reports is the decompile's `0x40 | (roll & 1)` [M 0x12cfd0..0x12cfe4].
@@ -122,7 +129,7 @@ fn a_wall_shot_draws_the_games_count_and_a_sky_shot_draws_nothing() {
                 sim.step_bond(Input { fire: true, ..Input::default() }, true, false, false);
                 for _ in 0..(ticks + 2) { sim.step_bond(Input::default(), false, false, false); }
                 assert!(sim.drones.fx.emitters.iter().all(|e| e.placement != usize::MAX), "a sky shot spawns no impact emitter");
-                assert!(sim.drones.effects.debris.is_empty() && sim.drones.effects.decals.is_empty(), "a sky shot spawns nothing");
+                assert!(sim.drones.effects.debris.is_empty() && holes(sim).is_empty(), "a sky shot spawns nothing");
                 (sim.drones.rng.draws - d0,)
             }
         };

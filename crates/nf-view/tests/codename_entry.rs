@@ -145,10 +145,11 @@ fn reserved_name_refused_with_box_6_label_2c0() {
 }
 
 /// The accept: the normalized name creates the profile through the card flow ("Saving data…"
-/// runs, then the completion routes to the wheel 0x4000001d) [M C_KEYBOARD 0x213a98:53-65;
-/// strupr write-back 0x1f9930:77; the pre-wheel write under msg 9 = PS2_DoCardFlow's 0x26c].
+/// runs, then the completion routes through the wheel 0x4000001d — whose 0x4c, entered from the
+/// name entry 0x40000020 with cheat clear, immediately forwards to Controls 0x40000022 [M
+/// C_KEYBOARD 0x213a98:53-65; P_CNMENU 0x213288:38-40]).
 #[test]
-fn valid_name_creates_saves_and_routes_to_the_wheel() {
+fn valid_name_creates_saves_and_forwards_to_controls() {
     let dir = card_dir("create");
     let mut fe = FrontEnd::new();
     fe.set_profile_dir(dir.clone());
@@ -170,7 +171,11 @@ fn valid_name_creates_saves_and_routes_to_the_wheel() {
     assert_eq!(fe.cn_exit, Some(0x4000_001d), "DAT_002e1ad8's continuation [M 0x213a98:58]");
     assert_eq!(fe.card.ops_done, 1, "the trigger wrote once");
     assert_eq!(fe.card_message(), None, "the box closed on completion [M 0x217bd8:62-71]");
-    assert_eq!(fe.page, Page::CnMenu);
+    // The wheel's 0x4c forwards the create flow straight to Controls [M P_CNMENU 0x213288:38-40
+    // — from 0x40000020 with cheat clear it sends Manager 0x44 → 0x40000022].
+    assert_eq!(fe.page, Page::CnControls);
+    assert_eq!(fe.page.id(), 0x4000_0022, "the forward's target [M 0x213288:39]");
+    assert_eq!(fe.cursor, 0, "the Controls page opens on the style row");
     // The stored name round-trips through the game's own encode/decode.
     let back = nf_game::profile::Profile::load_file(&path).unwrap();
     assert_eq!(back.name, "TESTING");
@@ -209,7 +214,7 @@ fn an_existing_codename_asks_the_overwrite_box() {
     assert!(fe.card_answer(nf_view::menu::BTN_YES), "Yes continues the save [M 0x10ee38's == 2 arm]");
     fe.tick();
     assert_eq!(fe.card.ops_done, 2, "the overwrite wrote once");
-    assert_eq!(fe.page, Page::CnMenu, "the wheel takes over after the write");
+    assert_eq!(fe.page, Page::CnControls, "the overwrite's completion forwards too [M 0x213288:38-40]");
     let replaced = nf_game::profile::Profile::load_file(&nf_game::profile::Profile::path_in(&dir, "TWICE")).unwrap();
     assert_eq!(replaced.progress.nightfire_status(),
         nf_game::profile::Profile::default_codename("TWICE").progress.nightfire_status(),
@@ -263,6 +268,8 @@ fn the_wheel_s_last_row_saves_the_codename() {
     type_name(&mut fe, "SAVEME");
     assert!(fe.cn_press(FrontEnd::CN_KEY_CONFIRM)); // create rides the flow
     fe.tick();
+    assert_eq!(fe.page, Page::CnControls, "the create's forward [M P_CNMENU 0x213288:38-40]");
+    assert!(fe.action(Action::Back), "the port's Controls Back returns to the wheel");
     assert_eq!(fe.page, Page::CnMenu);
     let before = nf_game::profile::Profile::load_file(&nf_game::profile::Profile::path_in(&dir, "SAVEME")).unwrap();
     assert_eq!(before.progress.nightfire_status() & (1 << 5), 0, "sister: the bit must be unset first");
@@ -366,4 +373,106 @@ fn the_name_entry_strings_come_from_the_language_bank() {
     assert_eq!(b(0x29b), "New Codename", "def_codename[0]'s label [L 0x2e1b18 dword 0]");
     assert_eq!(b(0x211), "Default", "def_codename[1]'s label [L 0x2e1b50 dword 0]");
     assert_ne!(b(0x2c0), b(0x3bc), "sister: the two refusals are different lines");
+}
+
+// ── the create journey on key presses, from Main ─────────────────────────────────────────────
+
+use nf_view::menu;
+
+/// START → P_PARISENUM → P_ESTHERO (movie) → Main, the menus_flow boot chain [M 0x20a648:43,
+/// 0x20a060:16-45].
+fn tick_to_title(fe: &mut FrontEnd) {
+    for _ in 0..8 {
+        fe.tick();
+        if fe.flow.get_state() == menu::ST_RUNNER && fe.flow.current_level == menu::FRONTEND_LEVEL { return; }
+    }
+    panic!("boot never reached the front-end map: state {} level {:x}", fe.flow.get_state(), fe.flow.current_level);
+}
+
+fn start_to_main(fe: &mut FrontEnd) {
+    assert_eq!(fe.page, Page::Start);
+    assert!(fe.action(Action::Confirm), "START");
+    for _ in 0..8 { if fe.intro_movie { break; } fe.tick(); }
+    assert!(fe.intro_movie, "P_ESTHERO's movie is up");
+    for _ in 0..menu::ESTHERO_GRACE { fe.tick(); }
+    assert!(fe.action(Action::Confirm), "the skip past the grace");
+    fe.tick();
+    assert_eq!(fe.page, Page::Main);
+}
+
+/// Main's rows change page after the 0x13-tick delay with input blocked [M C_GOCODENAMES
+/// 0x216b38:29-37; P_CNSELECT 0x212ad0:73-74].
+fn main_confirm(fe: &mut FrontEnd) {
+    assert!(fe.action(Action::Confirm));
+    for _ in 0..menu::DELAYED_PAGE_TICKS + menu::MAIN_OPEN_BLOCK { fe.tick(); }
+}
+
+/// The CloseIris walk lands `CLOSE_IRIS_PAGE_TICKS` ticks after the action [M 0x202190:6-9].
+fn iris_confirm(fe: &mut FrontEnd) {
+    assert!(fe.action(Action::Confirm));
+    for _ in 0..menu::CLOSE_IRIS_PAGE_TICKS + 2 { fe.tick(); }
+}
+
+/// The task's journey, all on key presses from Main: Esc on Main holds, a codename is created,
+/// the flow reaches Controls (the wheel's 0x4c forward [M P_CNMENU 0x213288:38-40]), and the
+/// player carries on to the mission list. Evidence per step: C_GOCODENAMES 0x216b38:29-37 →
+/// 0x4000001b; C_SBCNSELECT 0x212f58 case 0x4b sel 0 → 0x40000020; C_KEYBOARD 0x213a98:53-65 the
+/// accept; P_CNMENU 0x213288:38-40 the forward → 0x40000022; C_RBCONTROL 0x217908:4b the commit
+/// → Manager 0x5f; P_MAIN_Handler 0x20a7b0 has no back arm; C_SBNFDFCTY 0x216ca8:10-17 the list.
+#[test]
+fn from_main_create_codename_reach_controls_then_the_mission_list() {
+    let dir = card_dir("journey");
+    let mut fe = FrontEnd::new();
+    fe.set_profile_dir(dir.clone());
+    tick_to_title(&mut fe);
+    start_to_main(&mut fe);
+    assert_eq!(fe.page, Page::Main);
+    // Esc on Main: the game has no back arm there [M P_MAIN_Handler 0x20a7b0] — the page holds
+    // and the start movie does not replay.
+    assert!(fe.action(Action::Back), "the press is consumed");
+    assert_eq!(fe.page, Page::Main, "○/Esc on Main holds [M 0x20a7b0]");
+    assert!(!fe.intro_playing && !fe.intro_movie, "no start-movie replay");
+    // Codenames (row 2) → Select Codename 0x4000001b [M C_GOCODENAMES 0x216b38:29-37].
+    fe.cursor = 2;
+    main_confirm(&mut fe);
+    assert_eq!(fe.page, Page::CnSelect);
+    // New Codename (row 0) → the name entry 0x40000020 [M C_SBCNSELECT 0x212f58 case 0x4b sel 0].
+    fe.cursor = 0;
+    assert!(fe.action(Action::Confirm));
+    assert_eq!(fe.page, Page::CnName);
+    // Type the codename on the grid (the ✓ holds the focus on open [M P_CNNAME 0x213790:47]) and
+    // submit with ✕.
+    fe.cn_typed.clear();
+    fe.cn_clear_on_key = false;
+    for ch in "AGENT07".chars() { assert!(fe.cn_type_char(ch)); }
+    assert!(fe.action(Action::Confirm), "the ✓ submits");
+    // "Saving data…" runs in the flow's tick; the completion enters the wheel 0x4000001d whose
+    // 0x4c forwards straight to Controls [M P_CNMENU 0x213288:38-40 — from the name entry with
+    // cheat clear it sends Manager 0x44 → 0x40000022].
+    fe.tick();
+    assert_eq!(fe.page, Page::CnControls);
+    assert_eq!(fe.page.id(), 0x4000_0022, "the forward's target [M 0x213288:39]");
+    assert_eq!(fe.cursor, 0, "the Controls page opens on the style row");
+    // ✕ commits the style/invert pair and closes back to the wheel [M C_RBCONTROL 0x217908:4b].
+    assert!(fe.action(Action::Confirm));
+    assert_eq!(fe.page, Page::CnMenu);
+    // Carry on: the Back chain walks out (CnSelect → Main) and the mission list opens through
+    // NightFire → Codenames → Play without saving → Difficulty.
+    assert!(fe.action(Action::Back));
+    assert_eq!(fe.page, Page::CnSelect);
+    assert!(fe.action(Action::Back));
+    assert_eq!(fe.page, Page::Main);
+    fe.cursor = 0;
+    main_confirm(&mut fe);
+    assert_eq!(fe.page, Page::Codename);
+    // Play without saving (row 1): the confirm box arms, ✕ continues through it [M P_NFSELECT
+    // 0x20aec0:103 CloseIris → the difficulty wheel].
+    fe.cursor = 1;
+    assert!(fe.action(Action::Confirm));
+    iris_confirm(&mut fe);
+    assert_eq!(fe.page, Page::Difficulty);
+    assert!(fe.action(Action::Confirm));
+    iris_confirm(&mut fe);
+    assert_eq!(fe.page, Page::MissionSelect, "the mission list [M C_SBNFDFCTY 0x216ca8:10-17]");
+    let _ = std::fs::remove_dir_all(&dir);
 }

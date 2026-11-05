@@ -143,7 +143,7 @@ fn the_hint_is_frame_rate_independent_at_240_rendered_fps() {
         sim.bond = Bond::new([23.0, 30.6, 59.8], -2.01);
     }
     let _ = fire_hint(&mut scene);
-    let mut anim: f32 = 0.0;
+    let mut anim: f64 = 0.0;
     let mut life240 = 1u32; // sim ticks, post tick included
     let mut done = false;
     for _frame in 0..6000u32 {

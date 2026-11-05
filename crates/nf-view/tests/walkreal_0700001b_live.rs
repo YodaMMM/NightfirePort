@@ -644,6 +644,11 @@ fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) ->
         assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(k), "console {k} latched by the real shot [D the console UI scripts' t682 write]");
     }
     assert!(alive(w.scene.sim.as_ref().unwrap()), "Bond survives the console run");
+    // The disarm asserts assume every missile reached state 2 (all consoles latched above).
+    // The gate-and-cover wait is a no-op at the tree's fast countdown and becomes the pacing
+    // fix when the constant moves to REC_FRAME_RATE 0x30d0dc (seed·60 gated ticks — the
+    // measured run in docs/reports/sp-panes-new-drawing.md).
+    hide_and_snipe(w, 12.0, |s| s.drones.missile_deploy.iter().all(|&d| d == 2) || !alive(s), 12000);
 
     // 3. The disarm branch, the fly-by chain, Drake — the later waves waited out in cover.
     // The Agent tactics (waves_first): Drake is fought FROM the shelter the wave-wait just

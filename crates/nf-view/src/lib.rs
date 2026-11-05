@@ -139,9 +139,10 @@ pub fn lerp_yaw(a: f32, b: f32, t: f32) -> f32 {
 /// 0x23bf90, syscall 0x73) — one sim tick per vertical blank [M 0023c058/0023c0e8 decomp +
 /// caller scan]. The host render loop's `dt * 60` accumulation with whole-tick runs is the
 /// port's vsync wait (determinism rule: the tick count, not the wall clock, drives Sim).
-pub fn ticks_for_frame(anim_time: &mut f32, dt: f32, max_ticks: u32) -> u32 {
+pub fn ticks_for_frame(anim_time: &mut f64, dt: f32, max_ticks: u32) -> u32 {
     let before = *anim_time as u32;
-    *anim_time += dt * 60.0;
+    // f64: an f32 clock rounds a small step away, the shorter the frame the sooner (19 h at 240 Hz).
+    *anim_time += (dt * 60.0) as f64;
     (*anim_time as u32).saturating_sub(before).min(max_ticks)
 }
 /// fix-interp-camera-bracket: one presented frame's interpolation bracket. The camera bracket is
@@ -2877,7 +2878,7 @@ struct App {
     /// Animation: `None` = the game's start animations; `Some(k)` = the k-th sequence per skeleton (`[` / `]`);
     /// time in 60 Hz ticks; paused (`P`).
     choice: Option<usize>,
-    anim_time: f32,
+    anim_time: f64,
     paused: bool,
     /// F3 = show held-back drones (reinforcements, drones waiting for a switch), F = make armed drones fire.
     opts: scene::ViewOpts,
@@ -2898,7 +2899,9 @@ struct App {
     /// The external dev panel (http://127.0.0.1:7007, `--dev`) and the level its catalog describes.
     panel: Option<panel::Handle>,
     panel_level: u32,
-    panel_frames: u32,
+    /// 60 Hz ticks of time since boot (the catalog refreshes every 30), and the fraction left over.
+    panel_ticks: u32,
+    panel_clock: f32,
     /// Right mouse held: scope zoom (`Player_Zoom`).
     zoom: bool,
     /// Dev mode (WORKLOG 0083): `None` when `--dev` is off.
@@ -2950,6 +2953,15 @@ struct App {
     menu_clock: f32,
     /// fe-60hz: the front end's own 60 Hz tick accumulator (seconds).
     fe_clock: f32,
+    /// The movie hold's 60 Hz ticks not yet spent, as a fraction: the game polls BGFMVPlaying per
+    /// vblank, so the hold counts time, not this host's display frames.
+    movie_poll_clock: f32,
+    /// The same fraction for the menus' sound pump: `SFXUpdate` is once per game frame [M sound.md §6].
+    sound_poll_clock: f32,
+    /// The widescreen option's viewer+0x114 aspect, as last read from the front end.
+    game_aspect: f32,
+    /// The 60 Hz ticks no driver update has answered yet (`sound_pumps`).
+    sound_owed: u32,
     /// The sim reported the mission's own end this frame (see `Drones::mission_end`).
     pending_mission_end: bool,
     /// mission-results-page: the finished mission's progress layer, snapshotted at
@@ -3376,15 +3388,19 @@ impl App {
         // the press that picked the mission cannot skip its own briefing (a
         // double-tap) [S unverified as a game claim — the game needs no guard because
         // its skip key is disjoint from its pick keys]. The front-end intro run is NOT state 6:
-        // it reaches `fe.action`, which honours P_ESTHERO's 180-tick grace and the boot logos'
-        // no-skip [M 0x215a50:6] (fe-audit: this intercept used to swallow the intro's skip).
+        // its Confirm reaches `fe.action`, which honours P_ESTHERO's 180-tick grace and the boot
+        // logos' no-skip through the manager's own poll (movie_skip_poll [M 0x21c3d8:40-43,
+        // 0x215a50:6]); the action-0x19 keys take the same poll earlier, in App::app_key
+        // (movie-skip-keys). (fe-audit: this intercept used to swallow the intro's skip.)
         if fe.flow.get_state() == menu::ST_MOVIE {
             // The Confirm guard (the game's own 0x19 keys skip ungated in app_key):
             let shown = self.movie.as_ref().map_or(f32::MAX, |p| p.shown_for());
             if a == MA::Confirm && shown >= 1.0 { fe.flow.skip_movie(); }
             return;
         }
-        if fe.page == menu::Page::Pause && a == MA::Back {
+        // A YES/NO confirm or the hint box takes its own Back [M C_LBMSGOPTIONS_Handler 0x2022a0].
+        if fe.page == menu::Page::Pause && a == MA::Back
+            && !fe.confirming_restart && !fe.confirming_quit && fe.pause_hint.is_none() {
             // profile-session: the pause front end drops here — the session stands [M the
             // globals outlive MenuManager_Delete; the next manager inherits].
             self.stash_profile_session();
@@ -3793,6 +3809,9 @@ impl App {
     /// the synchronous path did, draw the screen's first frame and hand the build to a worker.
     fn start_async_load(&mut self, next: u32) {
         self.loading_hint.reset(); // a new load picks its own hint
+        // `ResetMap_Load` runs `Sound_Kill` first [M 0x1d6360:24, :131]; the scene swap comes seconds
+        // later. A running fade-down is the rows' own exit and finishes under the load.
+        if let Some(s) = self.sound.as_mut() { if !s.driver.fading_down() { s.reset(); } }
         // `Trigger_Activate`'s exit order: the success/fallback channel write (already applied in
         // the sim), then `Player_RamSave` [M 0x1b2318:97-116] — capture the old sim now, before
         // the scene swap drops it (fix-level2 F2). The old sim stays in `self.scene` until the
@@ -3844,8 +3863,9 @@ impl App {
         // `bonus[]` global is ONE store that survives every map load (only `LS_LoadBonus` 0x1ce488
         // and the award path write it [M Menu_SetBonus 0x1ff898 callers]), so the kind-6 gate
         // [M 0x18dda0:93-95] reads the save's medals on every level. No profile → the fresh-boot
-        // zero word [L ee_start_05 0x2e1b88].
-        let bonus = self.fe.as_ref().map_or(0, |fe| fe.bonus_bits());
+        // zero word [L ee_start_05 0x2e1b88]. A part-to-part load runs with no front end up: the
+        // word comes from the stashed session.
+        let bonus = self.fe.as_ref().map_or_else(|| self.profile_session.bonus_bits(), |fe| fe.bonus_bits());
         let job = async_load::Job::spawn(move || {
             if let Some(st) = mp_settings {
                 load_mp_carry(&iso, &name, all, save.as_ref(), st)
@@ -4021,6 +4041,14 @@ impl App {
         // entirely [M 0x182270:19-22]. Without a front end (headless loads, boot) the fresh
         // boot value stands. The seed glue below is the port's mirror of that single store:
         // the front end holds the session's bits, every fresh sim is seeded from it.
+        // The medals, best scores and unlocks are the same single globals: a fresh sim starts from
+        // them, or the results page's commit over its blank copy wipes the save [M the
+        // `ScoringTable` and `bonus[]` writers: only the results commit and LS_Load].
+        let saved = self.fe.as_ref().map_or(self.profile_session.saved_progress(), |fe| fe.saved_progress()).cloned();
+        if let (Some(saved), Some(sim)) = (saved, self.scene.sim.as_mut()) {
+            let p = &mut sim.drones.progress;
+            (p.table, p.bonus, p.nightfire_status, p.game_complete) = (saved.table, saved.bonus, saved.nightfire_status, saved.game_complete);
+        }
         if let Some(fe) = self.fe.as_ref() {
             if let Some(sim) = self.scene.sim.as_mut() {
                 sim.drones.progress.nightfire_status = fe.packed_unlocks();
@@ -4039,7 +4067,7 @@ impl App {
             // none of it. The result is never drawn (each rebuild overwrites its buffers whole),
             // and the build reads the scene only (the memo is a pure function of its key).
             let (mut p, mut c) = (Vec::new(), Vec::new());
-            self.scene.skin_palette_into(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None, &mut p, &mut c);
+            self.scene.skin_palette_into(&g.renderer.skin_layout, self.choice, self.anim_time as f32, self.opts, None, &mut p, &mut c);
             let second = (p.clone(), c.clone());
             self.pal_spare = vec![(p, c), second];
         }
@@ -4229,7 +4257,7 @@ impl App {
     /// calls Sound_UpdateListeners → Sound_UpdateSounds every not-frozen frame, in the same block
     /// as MenuManager_Update [M Game_Run 0x1c9790:7-11]. Silent under NF_SILENT: without an output
     /// device `build_sound` returns None and the commands just bookkeep on the state machine.
-    fn menu_music_tick(&mut self) {
+    fn menu_music_tick(&mut self, dt: f32) {
         // frontend-music (menu-audio-state): the transitions + the drain live in the extracted
         // `fe_music_step` (menu_music.rs) so the headless flows drive the SAME glue the window
         // runs. This wrapper only applies the commands to the sound driver.
@@ -4263,17 +4291,23 @@ impl App {
                                 None => eprintln!("menu music: track {track:#x} files not on the disc — no credits music"),
                             }
                         }
-                        menu_music::MusicCmd::StopMusic => { s.music = None; }
+                        menu_music::MusicCmd::StopMusic => s.stop_music(),
                         menu_music::MusicCmd::MusicVolume(v) => { s.driver.music_master = v; }
                         menu_music::MusicCmd::FadeDownMusic => { s.driver.fade_down(true); }
                     }
                 }
             }
         }
-        // The pump: one driver update + output send per frame while the menus are up and the
-        // audio is not held (the pause page's hold mirrors `MenuManager_Create(pause_sound=1)`).
-        if !self.audio_paused {
-            if let Some(s) = self.sound.as_mut() { s.batch(|_, _| {}); }
+        // The pump: one driver update + output send per 60 Hz tick `sound_tick` did not answer, unless
+        // the audio is held (the pause page's hold mirrors `MenuManager_Create(pause_sound=1)`). A
+        // second update on top of `sound_tick` doubles every fade and duck.
+        let polls = movie_polls(&mut self.sound_poll_clock, dt);
+        if self.audio_paused {
+            self.sound_owed = 0;
+        } else {
+            let menus = self.fe.is_some() || self.async_load.is_some();
+            let n = sound_pumps(&mut self.sound_owed, polls, menus);
+            if let Some(s) = self.sound.as_mut() { for _ in 0..n { s.batch(|_, _| {}); } }
         }
     }
 
@@ -4284,7 +4318,8 @@ impl App {
     /// change [M `Manager_SendMessage` 0x21c858:338 — stop when the new page's aux is 0, restart
     /// when it differs from the playing one]. Plus the `psiMovieFinished` poll [M 0x1082e8] and
     /// the phase-2 resolve routing the host's level load [M ResetMap_Load 0x1d6360 LoadState 2].
-    fn movie_tick(&mut self) {
+    fn movie_tick(&mut self, dt: f32) {
+        let polls = movie_polls(&mut self.movie_poll_clock, dt);
         let movie_iso = self.movie_iso_path();
         let Some(fe) = self.fe.as_mut() else {
             // No front-end page is up: no page wants the looping backdrop — stop it. The game's
@@ -4334,7 +4369,7 @@ impl App {
                 // 0x108060]).
                 match &mut self.movie {
                     Some(p) if p.code() == code && !p.is_looping() => {
-                        p.headless_advance();
+                        p.headless_advance_by(polls);
                         if p.finished() { fe.intro_movie_finished(); } else { fe.intro_live = true; }
                     }
                     _ => {}
@@ -4380,12 +4415,13 @@ impl App {
             // psiMovieFinished [M 0x1082e8]: the poll advances the no-decode stand-in one frame
             // per call ([`Player::headless_advance`]).
             let ended = match self.movie.as_mut() {
-                Some(p) if p.code() == code => { p.headless_advance(); p.finished() }
+                Some(p) if p.code() == code => { p.headless_advance_by(polls); p.finished() }
                 _ => false,
             };
             if ended {
-                // The 0x50 finish arm restarts the pair while it is down [M 0x20a1f0:34-39].
-                fe.music.movie_finished();
+                // The 0x50 finish arm restarts the pair while it is down [M 0x20a1f0:34-39] — once,
+                // inside this call: a second start behind the remove meets the dying item's voices,
+                // is refused, and the pair goes silent.
                 fe.attract_movie_finished();
             }
         } else if fe.page == menu::Page::WinGame && fe.win_movie {
@@ -4406,10 +4442,8 @@ impl App {
             }
             if let Some(p) = self.movie.as_mut().filter(|p| p.code() == code) {
                 // One psiMovieFinished poll per page tick (60 Hz), not per redraw.
-                while fe.win_movie_polled != fe.flow.ticks {
-                    p.headless_advance();
-                    fe.win_movie_polled = fe.win_movie_polled.wrapping_add(1);
-                }
+                p.headless_advance_by(fe.flow.ticks.wrapping_sub(fe.win_movie_polled));
+                fe.win_movie_polled = fe.flow.ticks;
                 ended |= p.finished();
             }
             if ended {
@@ -4460,6 +4494,8 @@ impl App {
     }
 
     fn grab(&mut self, on: bool) {
+        // A button let go over a menu never reaches the game's arms: it must not stay held.
+        if !on { self.trigger = false; self.zoom = false; self.grabbed = false; }
         let Some(g) = &self.gfx else { return };
         if on {
             let ok = g.window.set_cursor_grab(CursorGrabMode::Locked).or_else(|_| g.window.set_cursor_grab(CursorGrabMode::Confined)).is_ok();
@@ -4541,7 +4577,7 @@ impl App {
                 menu::menu_overlay_fonts(fe, &t.font, &t.font_header, Some(&t.font_medium), lang, &self.scene.hud_textures, 1280.0 / 720.0)
             }))
         };
-        shot(&self.scene, &self.cam, &png.to_string_lossy(), self.choice, self.anim_time, self.opts, self.notex, self.nofog, fe_menu.as_ref(), movie_owned.as_ref())
+        shot(&self.scene, &self.cam, &png.to_string_lossy(), self.choice, self.anim_time as f32, self.opts, self.notex, self.nofog, fe_menu.as_ref(), movie_owned.as_ref())
     }
 
     /// Player bug report (F10, bugreport.rs): the frame, where the player is, the system, the session recording and
@@ -4643,7 +4679,7 @@ impl App {
         })
     }
 
-    fn poll_panel(&mut self) {
+    fn poll_panel(&mut self, dt: f32) {
         let Some(h) = self.panel.clone() else { return };
         let queued: Vec<String> = h.lock().map(|mut g| std::mem::take(&mut g.queue)).unwrap_or_default();
         let mut changed = !queued.is_empty();
@@ -4669,8 +4705,9 @@ impl App {
             if let Ok(mut g) = h.lock() { g.status = status; }
         }
         let level = self.scene.sim.as_ref().map_or(0, |s| s.level);
-        self.panel_frames += 1;
-        if changed || level != self.panel_level || self.panel_frames % 30 == 0 {
+        let before = self.panel_ticks / 30;
+        self.panel_ticks += movie_polls(&mut self.panel_clock, dt);
+        if changed || level != self.panel_level || self.panel_ticks / 30 != before {
             changed = true;
             self.panel_level = level;
         }
@@ -4786,7 +4823,12 @@ impl App {
                 // fix-movie-playback: the movie glue runs before the load path so a phase-2
                 // resolve lands in the same frame the state 6 popped.
                 self.menu_script_tick();
-                self.movie_tick();
+                self.movie_tick(dt);
+                // The load resets the sound system before its movie [M ResetMap_Load 0x1d6360:24
+                // Sound_Kill + Sound_Init]: the mission's music and loops do not run under an outro.
+                if self.level_code != menu::FRONTEND_LEVEL && self.fe.as_ref().is_some_and(|fe| fe.flow.get_state() == menu::ST_MOVIE) {
+                    self.sound = None;
+                }
                 self.adopt_lobby_session();
                 if self.net_finished.is_some() {
                     let on_debrief = self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::MpDebriefing);
@@ -4855,7 +4897,7 @@ impl App {
                 }
                 // frontend-music: the menus' own audio (the jingle pair, the credits track), the
                 // page-change transitions and the per-frame pump.
-                self.menu_music_tick();
+                self.menu_music_tick(dt);
                 // The Auto Aim option reaches the game (it was stored and never read), and
                 // options-census generalizes the same drain to every wired row
                 // (docs/systems/options-census.md).
@@ -4922,7 +4964,8 @@ impl App {
                 if self.async_load.is_some() && !self.poll_async_load() { return; }
                 // The Toggles page's fps display (wall-clock; a dev readout, never in the Sim).
                 if let Some(d) = self.dev.as_deref_mut() {
-                    if dt > 0.0 { d.fps = if d.fps <= 0.0 { 1.0 / dt } else { d.fps * 0.9 + (1.0 / dt) * 0.1 }; }
+                    // 0.9 per 60 Hz tick of time, not per frame.
+                    if dt > 0.0 { let k = 0.9f32.powf(dt * 60.0); d.fps = if d.fps <= 0.0 { 1.0 / dt } else { d.fps * k + (1.0 / dt) * (1.0 - k) }; }
                 }
                 let speed = if self.keys.contains(&KeyCode::ShiftLeft) { 40.0 } else { 8.0 } * dt;
                 let fwd = self.cam.dir();
@@ -4934,7 +4977,7 @@ impl App {
                 if self.noclip || self.scene.sim.is_none() { self.cam.pos += mv * speed; }
                 // One animation frame per 60 Hz game update (FRAME_RATE_MUL = 1), docs/formats/animation.md.
                 self.ticked = false;
-                self.poll_panel();
+                self.poll_panel(dt);
                 // fix-pause-audio: the pause page holds the sound. `MenuManager_Create` with
                 // `pause_sound` runs `SFXPause` (batch op 9) + `SFXPauseAllStreams` (op 0x16) and
                 // `MenuManager_Delete` runs the unpause pair [M 0x21b908:121-124, 0x21c2b0:11-22];
@@ -5516,6 +5559,8 @@ impl App {
                             // The PC-port rapid fire (`--rapid-fire` / the dev Toggles page): local play only —
                             // an online match keeps every machine on the game's rules (lockstep).
                             sim.rapid_fire = RAPID_FIRE.load(std::sync::atomic::Ordering::Relaxed) && self.net.is_none();
+                            // The window answers the fail menu through its page, not the sim's restart.
+                            sim.drones.auto_restart = false;
                             sim.step_bond(input, trigger, reload, use_key);
                             // Port dev aid: re-apply `--bond` after the opening cut-scene's hand-back.
                             if let Some(b) = self.dev_bond {
@@ -5636,6 +5681,7 @@ impl App {
                             }
                             self.prev_lock_ch = on;
                             if let Some(s) = self.sound.as_mut() { sound_tick(s, sim); }
+                            self.sound_owed = self.sound_owed.saturating_sub(1);
                             // mp-host-match-logic: the match-end handover — `MP_Update` 0x184bd0's
                             // case 4 sets `GameState+0x1C = 0x40000033` (the port's
                             // `MpGame::request_debriefing`, state 5 waits); the host opens
@@ -5813,7 +5859,7 @@ impl App {
                     // Dev mode after-tick: god mode / infinite ammo (the game's own state, set the way the game sets it).
                     frame_part(0, fp_t0.elapsed());
                     if debrief_opened { self.grab(false); } // the menus own the cursor again
-                    if let Some(d) = self.dev.as_deref_mut() { d.after_tick(&mut self.scene); }
+                    if let Some(d) = self.dev.as_deref_mut() { d.after_tick(&mut self.scene); d.result_tick(elapsed); }
                     // The mission's end sequence (`Mission_Update` case 4 → `ResetMap_LevelToLoad`
                     // of the outro or the front end): the same front-end path the F8 hook drives.
                     if let Some(ch) = self.force_channel {
@@ -5822,6 +5868,9 @@ impl App {
                         }
                     }
                     if std::mem::take(&mut self.pending_mission_end) { self.demo_results(true); }
+                    // `Mission_Update` case 4's else arm: the fail menu 0x40000042 opens over the paused
+                    // mission [M 0x182c60:77-80].
+                    if self.fe.is_none() && self.scene.sim.as_ref().is_some_and(|s| s.drones.fail_menu_open()) { self.demo_results(false); }
                     // mp-match-end: the debriefing handover, drained beside the mission end.
                     if let Some((board, settings)) = self.pending_mp_debrief.take() { self.mp_results(board, settings); }
                 }
@@ -5837,6 +5886,11 @@ impl App {
             let fe_n = (self.fe_clock * 60.0) as u32;
             self.fe_clock -= fe_n as f32 / 60.0;
             for _ in 0..fe_n.min(8) { fe.tick(); }
+            // A finished save routes here from the tick, with no action behind it to run the bonus
+            // page's 0x4c build.
+            if fe.page == menu::Page::NfBonus && fe.bonus.is_none() {
+                if let Some(p) = self.results_progress.as_mut() { fe.results_subpages_enter(p, None); }
+            }
         }
     }
 
@@ -5890,7 +5944,7 @@ impl App {
                     // perf-240: the tick before last's buffers are refilled (skin_palette_into overwrites
                     // them whole) instead of a fresh ~1 MB allocation every tick.
                     let (mut np, mut nc) = self.pal_prev.take().or_else(|| self.pal_spare.pop()).unwrap_or_default();
-                    self.scene.skin_palette_into(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None, &mut np, &mut nc);
+                    self.scene.skin_palette_into(&g.renderer.skin_layout, self.choice, self.anim_time as f32, self.opts, None, &mut np, &mut nc);
                     let new = (np, nc);
                     frame_part(3, fp_pal.elapsed());
                     g.renderer.char_light_centre = self.scene.char_light_centres();
@@ -5916,7 +5970,7 @@ impl App {
                     self.pal_cur = Some(new);
                     self.beam_entries = self.scene.beam_entries(&g.renderer.skin_layout);
                 }
-                let (draw_cam, alpha0) = draw_bracket(&mut self.cam_prev, &mut self.cam_cur, self.cam, pal_rebuilt, self.anim_time.fract(), interp0);
+                let (draw_cam, alpha0) = draw_bracket(&mut self.cam_prev, &mut self.cam_cur, self.cam, pal_rebuilt, self.anim_time.fract() as f32, interp0);
                 let aspect0 = g.config.width as f32 / g.config.height as f32;
                 // fix-cutscene-letterbox: a live script camera frames the view at the game's own
                 // 4:3 aspect and pillar-boxes the render into the band (the game's letterbox bars
@@ -5927,7 +5981,9 @@ impl App {
                 // (0x10000223 → viewer+0x114 [M 0x1baf70:28-32]); feed the same aspect the
                 // cut-scene view builds at (`Sim::view_aspect`, the gun tilt's input) and frame
                 // the cut-scene with it — see cutscene_frame. The game's default (row off) is 4/3.
-                let game_aspect = self.fe.as_ref().map_or(4.0 / 3.0, |fe| fe.view_aspect());
+                // The front end is closed during play, so the option's value outlives it here.
+                if let Some(fe) = self.fe.as_ref() { self.game_aspect = fe.view_aspect(); }
+                let game_aspect = self.game_aspect;
                 if let Some(sim) = self.scene.sim.as_mut() { sim.view_aspect = game_aspect; }
                 let (proj_aspect, band) = if cutscene { cutscene_frame(g.config.width as f32, g.config.height as f32, game_aspect) } else { (aspect0, [0.0; 4]) };
                 let (vp0, _) = draw_cam.view_proj(proj_aspect);
@@ -6190,18 +6246,27 @@ impl App {
                 // the MP confirm page started a second load of the same arena.
                 if state == ElementState::Pressed && self.fe.is_some() && self.async_load.is_some() { return false }
                 if state == ElementState::Pressed && self.fe.is_some() {
-                    // The game's own skip keys for state 6 (the briefing/outro movie): action 0x19
-                    // is R1/D-pad-down, mask 0x840, pad 0 [M psiInput_MapInputs 0x10cd80:416], and
-                    // GameFlow case 6 skips the movie THE MOMENT that action fires — Input_Action(-1,
-                    // 0x19, 1) with NO time gate [M GameFlow_Main 0x1c98c8:145-149]. The port binds
-                    // the same two buttons' PC keys (cutscene_skip_key) to that skip here, ungated —
-                    // the in-mission arm above already maps them when a script plays. Enter/Confirm
-                    // keeps its 1.0 s guard in menu_input (it is not the game's skip button).
+                    // The game's own skip keys for EVERY movie kind: action 0x19 is R1/D-pad-down,
+                    // mask 0x840, pad 0 [M psiInput_MapInputs 0x10cd80:416]. State 6 (the
+                    // briefing/outro movie) skips THE MOMENT that action fires — Input_Action(-1,
+                    // 0x19, 1) with NO time gate [M GameFlow_Main 0x1c98c8:145-149]. The front-end
+                    // movies (the start movie's run, the attract trailer) take the manager's ONE
+                    // poll — `Menu_InputAction(-1, 0x19, 4)` → `Menu_StopMovie(0)`, gated by the
+                    // skip byte (the boot logos clear it, c49 = 0 [M 0x209e88:41,:55]) and the
+                    // 180-tick grace on the start movie [M MenuManager_Update 0x21c3d8:40-43,
+                    // Menu_StopMovie 0x215a50:6] — movie-skip-keys: the same keys used to skip
+                    // state 6 only, Confirm was the PC adapter's stand-in for the rest.
                     if !repeat
                         && cutscene_skip_key(k)
-                        && self.fe.as_ref().is_some_and(|fe| fe.flow.get_state() == menu::ST_MOVIE)
+                        && self.fe.as_ref().is_some_and(|fe|
+                            fe.flow.get_state() == menu::ST_MOVIE || fe.movie_skip_armed())
                     {
-                        if let Some(fe) = self.fe.as_mut() { fe.flow.skip_movie(); }
+                        let fe = self.fe.as_mut().unwrap();
+                        if fe.flow.get_state() == menu::ST_MOVIE {
+                            fe.flow.skip_movie();
+                        } else {
+                            fe.movie_skip_poll();
+                        }
                         return false
                     }
                     // net-online-lobby: the join address page takes the raw keys FIRST — digits,
@@ -6329,8 +6394,10 @@ impl App {
                         // instead of pausing. Only the bare
                         // viewer (no mission) quits on an un-grabbed Esc.
                         let in_mission = self.scene.sim.is_some() && self.level_code != 0 && self.level_code != menu::FRONTEND_LEVEL;
+                        let cinema = in_mission && self.scene.sim.as_ref().is_some_and(|s| s.script_camera().is_some());
                         if self.grabbed || in_mission {
-                            self.grab(false);
+                            // A refused pause keeps the mouse: the player is still in the mission.
+                            if !cinema { self.grab(false); }
                             // Esc in a mission opens the pause page [S: the game pauses on Start].
                             // The game's pause gate: the action AND GameState+0x36==0 AND
                             // ScriptCam==0 [M Player_Update 0x193600:72] — a script camera up (the
@@ -6459,7 +6526,7 @@ impl App {
             aiming: false,
             last: std::time::Instant::now(),
             choice,
-            anim_time,
+            anim_time: anim_time as f64,
             paused: false,
             opts,
             noclip: false,
@@ -6488,6 +6555,10 @@ impl App {
             frame_ticks: 0,
             menu_clock: 0.0,
             fe_clock: 0.0,
+            movie_poll_clock: 0.0,
+            sound_poll_clock: 0.0,
+            game_aspect: if std::env::var_os("NF_WIDESCREEN").is_some() { 16.0 / 9.0 } else { 4.0 / 3.0 },
+            sound_owed: 0,
             pending_mission_end: false,
             results_progress: None,
             pending_mp_debrief: None,
@@ -6508,7 +6579,8 @@ impl App {
             frame_start: std::time::Instant::now(),
             panel: None,
             panel_level: 0,
-            panel_frames: 0,
+            panel_ticks: 0,
+            panel_clock: 0.0,
             fe: None,
             screen_pos: (0, 0),
             auto_aim_opt: true,
@@ -6773,6 +6845,10 @@ impl App {
         if let Some(s) = self.sound.as_mut() {
             s.driver.music_master = ov(0x1000_0135);
             s.driver.master = ov(0x1000_0134);
+            // The roll fades its own track out [M P_CREDITS_Handler 0x2152b0:165-168].
+            if let Some(v) = self.fe.as_ref().filter(|fe| fe.page == menu::Page::Credits).and_then(|fe| fe.credits.music_volume()) {
+                s.driver.music_master = v;
+            }
         }
         // Y-axis: the game negates the two analog look channels when set [M Input_Update
         // 0x17ee88:50-52]; the port negates the accumulated look delta at the input fill.
@@ -7747,6 +7823,29 @@ pub fn mission_end_stats(p: &nf_game::progress::Progress) -> menu::Stats {
 /// the sim before each local tick; never applied to an online match.
 pub static RAPID_FIRE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The whole 60 Hz ticks `dt` seconds carry, the fraction kept in `clock`. At 240 Hz a movie hold
+/// that counted display frames ran out four times early.
+/// How far `sound_tick` may run behind the clock before the pump covers for it: ordinary phase
+/// between the two clocks stays under this.
+const SOUND_SLACK: u32 = 2;
+
+/// The driver updates the pump owes this frame. `owed` counts the 60 Hz ticks no update has
+/// answered; `sound_tick` pays one each. Under the menus or a load every tick is the pump's.
+/// Elsewhere this frame's own ticks are still to run, so only older debt counts: that is what
+/// a noclip flight, the dev menu or a lockstep wait leaves, and the music queue runs dry on it.
+fn sound_pumps(owed: &mut u32, polls: u32, menus: bool) -> u32 {
+    let due = if menus { *owed + polls } else { owed.saturating_sub(SOUND_SLACK) };
+    *owed = (*owed + polls).saturating_sub(due);
+    due.min(8)
+}
+
+pub fn movie_polls(clock: &mut f32, dt: f32) -> u32 {
+    *clock += dt * 60.0;
+    let whole = (*clock + 1e-3).floor();
+    *clock = (*clock - whole).max(0.0);
+    whole as u32
+}
+
 pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Player>, iso: &str) -> bool {
     if fe.flow.get_state() == menu::ST_MOVIE {
         // psiStartBackgroundMovie replaces whatever the one BGFMV slot holds [M 0x1081a8] —
@@ -7767,10 +7866,8 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
                 // picture path and does not pace this decision (mission-outros-4).
                 // One player poll per flow tick (60 Hz), not per redraw: at 240 Hz the per-redraw poll
                 // ran the hold out in a quarter of the movie (the Double Cross outro cut out early).
-                while fe.flow.movie_polled < fe.flow.movie_clock {
-                    p.headless_advance();
-                    fe.flow.movie_polled += 1;
-                }
+                p.headless_advance_by(fe.flow.movie_clock - fe.flow.movie_polled);
+                fe.flow.movie_polled = fe.flow.movie_clock;
                 fe.flow.movie_playing = !p.finished();
             }
             None => {
@@ -7925,6 +8022,8 @@ static NET_STALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 // (the briefing pop, the mission Esc quit, the unpolled session
 // through the load) all lived in code no test ran.
 // ---------------------------------------------------------------------------
+#[cfg(test)]
+mod flow_audit;
 #[cfg(test)]
 mod headless_app_harness {
     use super::*;
@@ -8090,6 +8189,52 @@ mod headless_app_harness {
             }
             false
         }
+    }
+
+    /// The gold-medal bonus pickups ride every part of a mission: a part-to-part load runs with no
+    /// front end up, so the `bonus[0]` word must come from the stashed session [M the game's one
+    /// global, 0x18dda0:93-95]. The word read 0 on every such load and later parts lost them.
+    #[test]
+    fn a_part_change_keeps_the_gold_medal_bonus_pickups() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let bonus_pickups = |word: u64| {
+            let mut h = HeadlessApp::mission(&iso, "07000001.bin");
+            let mut progress = nf_game::progress::Progress::default();
+            progress.bonus[0] = word;
+            h.app.profile_session.session_progress = Some(progress);
+            h.frames(5);
+            h.app.scene.sim.as_mut().unwrap().drones.level_exit = Some(0x0700_0002);
+            assert!(h.pump(60.0, |a| a.async_load.is_none() && a.scene.sim.as_ref().is_some_and(|s| s.level == 0x0700_0002)),
+                "the part change never landed");
+            h.app.scene.sim.as_ref().unwrap().drones.pickups.iter().filter(|p| p.spin).count()
+        };
+        assert_eq!(bonus_pickups(u64::MAX), 3, "07000002 places three bonus pickups for a gold medal");
+        assert_eq!(bonus_pickups(0), 0, "no medal, no bonus pickups");
+    }
+
+    /// Finishing a mission keeps what the save already holds: the medals and best scores of every
+    /// other mission [M the game's `bonus[]` and `ScoringTable` are single globals; P_NFRESULTS
+    /// 0x208e78 only adds to them].
+    #[test]
+    fn finishing_a_mission_keeps_the_other_missions_records() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let mut h = HeadlessApp::mission(&iso, "07000005.bin");
+        let mut profile = nf_game::profile::Profile::default_codename("BOND");
+        profile.progress.set_level_bonus(0x0700_0001, 3, 0);
+        profile.progress.table[4].best = 123_456;
+        let word = profile.progress.bonus[0];
+        assert_ne!(word, 0);
+        h.app.profile_session.profile = Some(profile);
+        h.frames(5);
+        h.app.scene.sim.as_mut().unwrap().drones.level_exit = Some(0x0700_0006);
+        assert!(h.pump(60.0, |a| a.async_load.is_none() && a.scene.sim.as_ref().is_some_and(|s| s.level == 0x0700_0006)),
+            "the part change never landed");
+        h.frames(5);
+        h.app.demo_results(true);
+        let kept = h.app.fe.as_ref().unwrap().profile.as_ref().unwrap();
+        assert!(kept.progress.has_medal(0x0700_0001, 3, 0), "the Double Cross gold medal was lost");
+        assert_eq!(kept.progress.table[4].best, 123_456, "the Double Cross best score was lost");
+        assert_eq!(kept.progress.bonus[0] & word, word);
     }
 
     /// Menu sounds were missing entirely: run() built the sound driver and dropped it, so the
@@ -8643,6 +8788,283 @@ mod headless_app_harness {
         // SfxMasterVolume 100 at 0x30c958/0x30c95c — Driver::new carries them].
         assert_eq!(nf_audio::sfx::Driver::new().music_master, 70);
         assert_eq!(nf_audio::sfx::Driver::new().master, 100);
+    }
+
+    /// Every driver update sends exactly one `Cmd::Reverb`, so one second's capture counts them.
+    fn audio_updates_in_a_second(app: &mut HeadlessApp, hz: u32) -> usize {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        app.app.sound = Some(nf_audio::sfx::Sound {
+            driver: Default::default(),
+            output: None,
+            captured: Some(log.clone()),
+            music_files: None,
+            music: None,
+            music_pending: Vec::new(),
+        });
+        for _ in 0..hz { app.frame(1.0 / hz as f32); }
+        let n = log.lock().unwrap().iter().filter(|c| matches!(c, nf_audio::Cmd::Reverb { .. })).count();
+        n
+    }
+
+    /// `SFXUpdate` runs once per game frame [M sound.md §6]: in a mission the sim's tick is the only
+    /// update, 60 a second at any display rate. Sister: the old per-frame pump on top of it made
+    /// 300 at 240 Hz, every fade and duck five times fast.
+    #[test]
+    fn a_mission_updates_the_sound_sixty_times_a_second() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut got = Vec::new();
+        for hz in [60, 144, 240] {
+            let mut app = HeadlessApp::mission(&iso, "07000006.bin");
+            got.push((hz, audio_updates_in_a_second(&mut app, hz)));
+        }
+        assert!(got.iter().all(|g| (58..=62).contains(&g.1)), "{got:?}");
+    }
+
+    /// The menus' pump keeps the same rate.
+    #[test]
+    fn the_menus_update_the_sound_sixty_times_a_second() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut got = Vec::new();
+        for hz in [60, 144, 240] {
+            let mut app = HeadlessApp::boot(&iso);
+            got.push((hz, audio_updates_in_a_second(&mut app, hz)));
+        }
+        assert!(got.iter().all(|g| (58..=62).contains(&g.1)), "{got:?}");
+    }
+
+    /// A windowless front end on the mission list, past its first ticks.
+    fn front_end(iso: &str, page: menu::Page) -> HeadlessApp {
+        let mut h = HeadlessApp::boot(iso);
+        h.app.fe = Some(menu::FrontEnd::new());
+        h.app.movie = None;
+        for _ in 0..30 { h.app.frame(1.0 / 60.0); }
+        h.app.fe.as_mut().unwrap().page = page;
+        h
+    }
+
+    /// Seconds until the hold of the movie `code` runs out, with the movie's own length in
+    /// seconds. `app.frame` alone: no picture is pulled, so only the hold can end it.
+    fn hold_secs(h: &mut HeadlessApp, code: u32, hz: f32) -> (f32, f32) {
+        let (mut frames, mut len) = (0u32, 0.0f32);
+        while frames < (200.0 * hz) as u32 {
+            h.app.frame(1.0 / hz);
+            frames += 1;
+            match h.app.movie.as_ref().filter(|p| p.code() == code) {
+                Some(p) if p.finished() => break,
+                Some(p) => len = p.length_ticks() as f32 / 60.0,
+                None if len > 0.0 => break,
+                None => {}
+            }
+        }
+        (frames as f32 / hz, len)
+    }
+
+    /// A briefing holds its real length at any display rate. Sister: counting the hold on two
+    /// clocks ran it out in half the time at 30 Hz and never at 144 or 240.
+    #[test]
+    fn a_briefing_holds_its_length_at_any_display_rate() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let code = 0x0710_0005;
+        if movie::Player::start(&iso, code, 100).is_err() { eprintln!("no movie data — skipping"); return; }
+        for hz in [30.0f32, 60.0, 144.0, 240.0] {
+            let mut h = front_end(&iso, menu::Page::MissionSelect);
+            let fe = h.app.fe.as_mut().unwrap();
+            fe.flow.movie_code = code;
+            fe.flow.push_state(menu::ST_MOVIE, 0);
+            let (secs, len) = hold_secs(&mut h, code, hz);
+            assert!(len > 0.0 && (secs - len).abs() < 0.2, "{hz} Hz held {secs} s of a {len} s movie");
+        }
+    }
+
+    /// A mission with the dev tools on, past its first ticks.
+    fn dev_mission(iso: &str) -> HeadlessApp {
+        let mut h = HeadlessApp::mission(iso, "07000005.bin");
+        for _ in 0..120 { h.app.frame(1.0 / 60.0); }
+        h.app.dev = Some(Box::new(dev::Dev::default()));
+        h
+    }
+
+    /// The dev result line stays its 3 s. Sister: counted per frame it left after 0.75 s at 240 Hz.
+    #[test]
+    fn the_dev_result_line_stays_three_seconds_at_any_display_rate() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut h = dev_mission(&iso);
+        for hz in [60.0f32, 240.0] {
+            let d = h.app.dev.as_deref_mut().unwrap();
+            (d.result_msg, d.result_timer) = (Some("x".into()), 180);
+            let mut frames = 0;
+            while h.app.dev.as_deref().unwrap().result_msg.is_some() && frames < 3000 { h.app.frame(1.0 / hz); frames += 1; }
+            let secs = frames as f32 / hz;
+            assert!((secs - 3.0).abs() < 0.05, "{hz} Hz: {secs} s");
+        }
+    }
+
+    /// The 0.25x row runs a quarter of the ticks. Sister: 0.25 of a frame's one tick truncated to
+    /// none, so the row froze the game outright at 60 Hz and up.
+    #[test]
+    fn the_quarter_speed_row_runs_a_quarter_of_the_ticks() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut h = dev_mission(&iso);
+        h.app.dev.as_deref_mut().unwrap().time_scale = 0.25;
+        for hz in [60.0f32, 240.0] {
+            let at = |h: &HeadlessApp| h.app.scene.sim.as_ref().unwrap().drones.frame;
+            let a = at(&h);
+            for _ in 0..(2.0 * hz) as u32 { h.app.frame(1.0 / hz); }
+            let ran = at(&h) - a;
+            assert!((29..=31).contains(&ran), "{hz} Hz: {ran} ticks in 2 s");
+        }
+    }
+
+    /// The fps readout settles in the same time at any rate. Sister: 0.9 per frame took 0.97 s
+    /// after a drop to 30 fps and 0.24 s after a drop to 120.
+    #[test]
+    fn the_fps_readout_settles_in_the_same_time_at_any_display_rate() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut h = dev_mission(&iso);
+        for hz in [60.0f32, 240.0] {
+            h.app.dev.as_deref_mut().unwrap().fps = hz;
+            let (half, mut secs) = (hz / 2.0, 0.0f32);
+            while (h.app.dev.as_deref().unwrap().fps - half).abs() > half * 0.05 && secs < 5.0 { h.app.frame(1.0 / half); secs += 1.0 / half; }
+            assert!((0.4..0.7).contains(&secs), "{hz} Hz: settled in {secs} s");
+        }
+    }
+
+    /// The panel's catalog refreshes twice a second. Sister: every 30 frames was 8 a second at 240 Hz.
+    #[test]
+    fn the_panel_catalog_refreshes_twice_a_second_at_any_display_rate() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut h = dev_mission(&iso);
+        for hz in [60.0f32, 240.0] {
+            let handle: panel::Handle = Default::default();
+            h.app.panel = Some(handle.clone());
+            h.app.frame(1.0 / hz); // the first poll sees a new level
+            let mut n = 0;
+            for _ in 0..(2.0 * hz) as u32 {
+                handle.lock().unwrap().catalog.clear();
+                h.app.frame(1.0 / hz);
+                if !handle.lock().unwrap().catalog.is_empty() { n += 1; }
+            }
+            assert!((3..=5).contains(&n), "{hz} Hz: {n} refreshes in 2 s");
+        }
+    }
+
+    /// A level left running a long time keeps 60 ticks a second at any rate. Sister: on the f32
+    /// clock 240 Hz froze at 19.4 h (0 ticks a second) and 1000 Hz at 4.9 h, where 60 Hz ran on.
+    #[test]
+    fn a_long_session_keeps_sixty_ticks_a_second() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut h = HeadlessApp::mission(&iso, "07000005.bin");
+        for _ in 0..120 { h.app.frame(1.0 / 60.0); }
+        for hz in [60.0f32, 240.0, 1000.0] {
+            h.app.anim_time = 4_194_304.0;
+            let at = |h: &HeadlessApp| h.app.scene.sim.as_ref().unwrap().drones.frame;
+            let a = at(&h);
+            for _ in 0..hz as u32 { h.app.frame(1.0 / hz); }
+            let ran = at(&h) - a;
+            assert!((59..=61).contains(&ran), "{hz} Hz: {ran} ticks in 1 s");
+        }
+    }
+
+    /// The win page's movie, the same.
+    #[test]
+    fn the_win_movie_holds_its_length_at_any_display_rate() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let code = crate::credits::WINGAME_MOVIE;
+        if movie::Player::start(&iso, code, 100).is_err() { eprintln!("no movie data — skipping"); return; }
+        for hz in [30.0f32, 60.0, 144.0, 240.0] {
+            let mut h = front_end(&iso, menu::Page::WinGame);
+            h.app.fe.as_mut().unwrap().win_movie = true;
+            let (secs, len) = hold_secs(&mut h, code, hz);
+            assert!(len > 0.0 && (secs - len).abs() < 0.2, "{hz} Hz held {secs} s of a {len} s movie");
+        }
+    }
+
+    /// The sim standing still must not stop the driver: the music queue holds under two seconds, so
+    /// with no update it runs dry and the voices keep their last state. Noclip skips `sound_tick`.
+    #[test]
+    fn noclip_keeps_the_sound_updating() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        for hz in [60, 240] {
+            let mut app = HeadlessApp::mission(&iso, "07000006.bin");
+            app.app.noclip = true;
+            let n = audio_updates_in_a_second(&mut app, hz);
+            assert!((55..=62).contains(&n), "{hz} Hz: {n}");
+        }
+    }
+
+    /// The open dev menu runs no ticks; the sound still updates at the same rate.
+    #[test]
+    fn the_dev_menu_keeps_the_sound_updating() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut app = HeadlessApp::mission(&iso, "07000006.bin");
+        app.app.dev = Some(Box::default());
+        app.app.dev.as_deref_mut().unwrap().menu = true;
+        let n = audio_updates_in_a_second(&mut app, 240);
+        assert!((55..=62).contains(&n), "{n}");
+    }
+
+    /// A lockstep wait runs no ticks either.
+    #[test]
+    fn a_lockstep_wait_keeps_the_sound_updating() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut app = HeadlessApp::mission(&iso, "07000006.bin");
+        let host = (28170..28190).find_map(|p| mpnet::SessionProxy::host(p).ok()).expect("no UDP port to bind");
+        app.app.net = Some(host);
+        app.app.net_await_load = true;
+        let n = audio_updates_in_a_second(&mut app, 60);
+        assert!((55..=62).contains(&n), "{n}");
+    }
+
+    /// `ResetMap_Load` runs `Sound_Kill` at the top of the load [M 0x1d6360:24, :131]: the old
+    /// level's loops stop when the loading screen goes up, not when the new scene swaps in.
+    /// Sister: a running fade-down (the pause and results rows) is left to finish under the load.
+    #[test]
+    fn a_level_load_silences_the_old_level_at_its_start() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        for fading in [false, true] {
+            let mut app = HeadlessApp::mission(&iso, "07000006.bin");
+            app.frames(30);
+            let s = app.app.sound.as_mut().unwrap();
+            let live = s.driver.items();
+            assert!(live > 0, "the level's ambients are up");
+            if fading { s.driver.fade_down(true); }
+            app.app.pending_level = Some(0x0700_0005);
+            app.frame(1.0 / 60.0);
+            assert!(app.app.async_load.is_some(), "the load is running");
+            let left = app.app.sound.as_ref().unwrap().driver.items();
+            if fading { assert!(left > 0, "the fade finishes under the load"); } else { assert_eq!(left, 0, "{live} items at the load"); }
+            assert!(app.pump(30.0, |a| a.async_load.is_none()), "the load finished");
+        }
+    }
+
+    /// `SFXStopMusic` ends the stream at once [M 0x1168e8]: dropping only the player left the
+    /// queued buffers playing, up to two seconds of credits track over the main menu.
+    #[test]
+    fn stop_music_clears_the_queued_stream() {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut s = nf_audio::sfx::Sound { driver: Default::default(), output: None, captured: Some(log.clone()), music_files: None, music: None, music_pending: vec![(0, 1, 0)] };
+        s.stop_music();
+        assert!(s.music_pending.is_empty(), "a queued start dies with it");
+        assert!(log.lock().unwrap().iter().any(|c| matches!(c, nf_audio::Cmd::MusicStop)), "the output drops its queue");
+    }
+
+    /// A hitch must not double the updates: the frame's own ticks run after the pump, so only what
+    /// earlier frames left over counts against the mission. Under the menus every tick is the pump's.
+    #[test]
+    fn the_pump_only_covers_ticks_the_sim_left() {
+        let mut owed = 0;
+        assert_eq!(sound_pumps(&mut owed, 6, false), 0, "this frame's ticks come first");
+        assert_eq!(owed, 6);
+        owed -= 4; // the four-tick cap ran
+        assert_eq!(sound_pumps(&mut owed, 1, false), 0, "two behind is ordinary phase");
+        owed = 3;
+        assert_eq!(sound_pumps(&mut owed, 1, false), 1);
+        assert_eq!(owed, 3);
+        owed = 0;
+        assert_eq!(sound_pumps(&mut owed, 1, true), 1);
+        assert_eq!(owed, 0);
+        assert_eq!(sound_pumps(&mut owed, 60, true), 8, "a long frame does not burst");
+        assert_eq!(owed, 0);
     }
 }
 

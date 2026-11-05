@@ -98,7 +98,7 @@ fn creating_bond_from_a_fresh_boot_saves_it_to_the_card() {
     );
     let path = nf_game::profile::Profile::path_in(&dir, "BOND");
     assert!(path.exists(), "the codename is saved to the card [M LS_Save(0x2e1ae8)]");
-    assert_eq!(fe.page, Page::CnMenu, "the flow lands on the wheel 0x4000001d [M :58]");
+    assert_eq!(fe.page, Page::CnControls, "the create forwards through the wheel to Controls [M P_CNMENU 0x213288:38-40]");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

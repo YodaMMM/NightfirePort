@@ -759,19 +759,21 @@ mod tests {
         assert!(Pickup::create_from_set([0.0; 3], [0.0; 3], 12, &w, &models).is_none(), "sister: kind 12 is not a set");
     }
 
-    /// The respawn tail [M 0x18e650:338-348 + 0x18e148:182-189]: respawn 60 hides for
-    /// 60·60·10 ticks then restores; 0xFFFF never hides; 0 deletes (the caller's `gone`).
+    /// The respawn tail [M 0x18e650:338-348 + 0x18e148:182-189]: respawn 60 hides while
+    /// `elapsed <= 60·60·10` — the restore lands on elapsed == limit+1 (the port used to
+    /// restore on elapsed == limit, one tick early); 0xFFFF never hides; 0 deletes (the
+    /// caller's `gone`).
     #[test]
     fn respawn_hides_for_frame_rate_times_respawn_times_ten() {
         let m = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0; 4]];
         let mut p = Pickup { kind: 3, weapon: 0x47, rounds: 50, model: 0, bounds: Model { centre: [0.0; 3], radius: 0.5 }, m, start: [0.0; 3], vel: [0.0; 3], state: 1, lifetime: 0, switch_channel: 0, sound: None, hidden: false, gone: false, from: None, obj: None, respawn: 60, respawn_ticks: 0, spin: false,
             label: 0,
         };
-        p.hidden = true; p.state = 2; p.respawn_ticks = 60 * 60 * 10;
-        for _ in 0..(60 * 60 * 10 - 1) { p.respawn_wait(); }
-        assert!(p.hidden && p.state == 2, "still hidden on the last wait tick");
+        p.hidden = true; p.state = 2; p.respawn_ticks = 60 * 60 * 10 + 1;
+        for _ in 0..(60 * 60 * 10) { p.respawn_wait(); }
+        assert!(p.hidden && p.state == 2, "still hidden at elapsed == limit [M 0x18e148:183-185]");
         p.respawn_wait();
-        assert!(!p.hidden && p.state == 1, "restored after 60·60·10 ticks");
+        assert!(!p.hidden && p.state == 1, "restored on the tick after the limit");
         // Sister: the forever respawn (0xFFFF) never enters the wait in the first place — the
         // caller leaves it visible (`match p.respawn { 0xFFFF => {} }`, drone.rs).
     }

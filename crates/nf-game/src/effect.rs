@@ -334,6 +334,27 @@ pub fn frand_half_vec(rng: &mut Rng, scale: f32) -> V3 {
     [frand_half(rng, scale), frand_half(rng, scale), frand_half(rng, scale)]
 }
 
+/// `Vec_NormToRot` 0x1e31b0 [M, the whole 104-byte function]: `out = (−atan2(y, √(x²+z²)),
+/// atan2(x, z), 0)` — the euler (pitch, yaw, roll) that rotates the world −z axis onto the
+/// vector. `Effect_Bullet`'s wall puffs spawn with it [M 0x1ce8a8:77, :129]; the game's
+/// `atan2f` is the C library's — the port's f32 atan2 matches to the ulp [S the PS2 libm's
+/// last-bit differences].
+pub fn vec_norm_to_rot(v: V3) -> [f32; 3] {
+    [-f32::atan2(v[1], (v[0] * v[0] + v[2] * v[2]).sqrt()), f32::atan2(v[0], v[2]), 0.0]
+}
+
+/// `Effect_Bullet`'s floor-puff euler for a +0x1b entry [M 0x1ce8a8:78-85, the fStack_120
+/// vector]: pitch = −ATAN2_APPROX(−y, √((−x)²+(−z)²)), yaw = ATAN2_APPROX(−x, −z), roll 0 —
+/// the negated normal through the same construction as `vec_norm_to_rot`. The game computes
+/// it with its approximate `ATAN2_APPROX` 0x1e30f8 [S: the port uses libm atan2; the puff
+/// orientation difference is sub-degree].
+pub fn negated_normal_euler(v: V3) -> [f32; 3] {
+    let nx = -v[0];
+    let ny = -v[1];
+    let nz = -v[2];
+    [-f32::atan2(ny, (nx * nx + nz * nz).sqrt()), f32::atan2(nx, nz), 0.0]
+}
+
 /// `Vec_MakeOrthonormalBasis` 0x1e4b78: two vectors orthonormal against `n`; `Effect_Create` stores
 /// `u + v` into `HITDATA+0x20` [M 0x1ce740] and `Debris_Create` spreads the debris velocity with it.
 pub fn orthonormal_basis_pair(n: V3) -> (V3, V3) {
@@ -498,12 +519,18 @@ impl Effects {
                     let wall = g.wall_offset != 0;
                     if wall && n[1].abs() > 0.3 { continue; }
                     let p = if wall { [pos[0] + n[0] * PUFF_OFFSET, pos[1] + n[1] * PUFF_OFFSET, pos[2] + n[2] * PUFF_OFFSET] } else { pos };
-                    // The velocity: wall puffs get `Vec_NormToRot(normal)` (0x1ce96c); floor puffs get
-                    // zero or the euler vector by flag +0x1b. The port zeroes both ([S] — the drift is
-                    // a visual; `Vec_NormToRot`/`ATAN2_APPROX` are not ported).
-                    let _ = g.orient_normal;
+                    // The spawn rotation [M 0x1ce8a8:122-130]: a wall puff (+0x1a) orients along the
+                    // normal (`Vec_NormToRot` 0x1e31b0); a floor puff with the +0x1b byte set takes the
+                    // negated-normal euler [M :78-85], else the zero vector.
+                    let rot = if wall {
+                        vec_norm_to_rot(n)
+                    } else if g.orient_normal != 0 {
+                        negated_normal_euler(n)
+                    } else {
+                        [0.0; 3]
+                    };
                     let rgba = [((g.rgba[0] >> 24) & 0xff) as u8, ((g.rgba[0] >> 16) & 0xff) as u8, ((g.rgba[0] >> 8) & 0xff) as u8, (g.rgba[0] & 0xff) as u8];
-                    gas.init_ex(g.mesh, p, 0.0, [0.0; 3], g.scale[0], g.scale[1], g.kind as u8, rgba, g.rgba[1], g.life as f32);
+                    gas.init_ex_rot(g.mesh, p, 0.0, [0.0; 3], g.scale[0], g.scale[1], g.kind as u8, rgba, g.rgba[1], g.life as f32, rot);
                 }
             }
             // The decal: `EffectInfo+4` != 0 → take a pool node, evicting the OLDEST when the 200 are
@@ -566,6 +593,52 @@ mod tests {
             foot_decal_4: 0,
             foot_decal_8: 0,
         }
+    }
+
+    /// fx-scrape-and-impacts row 13: `Vec_NormToRot` 0x1e31b0's values and the wall puff's spawn
+    /// rotation — `Effect_Bullet` orients the +0x1a wall puff with `Vec_NormToRot(normal)`
+    /// [M 0x1ce8a8:129], the floor puff with the negated-normal euler by +0x1b [M :122-127] and
+    /// zero without it. Sister: the pre-fix shape (both zero) fails on the wall arm.
+    #[test]
+    fn wall_puffs_spawn_oriented_along_the_normal() {
+        // The pure forms: axis normals through Vec_NormToRot.
+        assert_eq!(vec_norm_to_rot([0.0, 0.0, 1.0]), [0.0, 0.0, 0.0]);
+        assert!((vec_norm_to_rot([1.0, 0.0, 0.0])[1] - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        assert!((vec_norm_to_rot([0.0, 1.0, 0.0])[0] + std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        // The euler's negated form mirrors the pitch and the yaw.
+        let e = negated_normal_euler([0.0, 1.0, 0.0]);
+        assert!((e[0] - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        // Through the real path: a wall hit (|normal.y| ≤ 0.3) spawns the puff with the
+        // Vec_NormToRot rotation; a floor puff follows its +0x1b byte.
+        let mut r = rec(0x0200_0126, 0);
+        r.gas[0].orient_normal = 1;
+        let surf = table(r);
+        let mut gas = crate::gas::GasPool::default();
+        let mut e2 = Effects::new();
+        let mut rng = Rng::new(3);
+        // Normal [0.8, 0, 0.6]: |y| = 0 → the wall puff runs (and the floor puffs' slots are
+        // empty, mesh 0 — the first entry is the only one).
+        e2.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [0.0, 0.0, 0.0], [0.8, 0.0, 0.6], 10, [0.0, 0.0, -1.0], 0x2, 0, true, 8);
+        assert_eq!(gas.puffs.len(), 1);
+        let want = vec_norm_to_rot([0.8, 0.0, 0.6]);
+        assert_eq!(gas.puffs[0].rot, want, "the wall puff carries the Vec_NormToRot euler");
+        // The +0x1b floor puff: normal [0,1,0] is a floor hit for the WALL entry (skipped), so
+        // make the entry a floor puff (+0x1a clear) and re-shoot.
+        let mut r = rec(0, 0);
+        r.gas[0] = EffectGas { mesh: 0x0200_0039, kind: 0, rgba: [0x7f7f_7f7f, 0], scale: [0.005, 0.02], life: 32, wall_offset: 0, orient_normal: 1 };
+        let surf = table(r);
+        let mut gas2 = crate::gas::GasPool::default();
+        let mut e3 = Effects::new();
+        e3.bullet_impact(&mut rng, Some(&surf), &mut gas2, &mut fx(), [1.0, 1.0, 1.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8);
+        assert_eq!(gas2.puffs[0].rot, negated_normal_euler([0.0, 1.0, 0.0]));
+        // +0x1b clear → the zero vector.
+        let mut r = rec(0, 0);
+        r.gas[0] = EffectGas { mesh: 0x0200_0039, kind: 0, rgba: [0x7f7f_7f7f, 0], scale: [0.005, 0.02], life: 32, wall_offset: 0, orient_normal: 0 };
+        let surf = table(r);
+        let mut gas3 = crate::gas::GasPool::default();
+        let mut e4 = Effects::new();
+        e4.bullet_impact(&mut rng, Some(&surf), &mut gas3, &mut fx(), [1.0, 1.0, 1.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8);
+        assert_eq!(gas3.puffs[0].rot, [0.0; 3]);
     }
 
     /// A 23-entry `EffectInfo` table with `r` at material 10 (STONE) — the parse is indexed by the

@@ -208,7 +208,7 @@ fn boot_reaches_main_through_the_intro_both_ways() {
 // ── Back at every step ───────────────────────────────────────────────────────────────────────
 
 #[test]
-fn back_walks_every_single_player_step_to_the_title() {
+fn back_walks_every_single_player_step_to_main() {
     let mut fe = FrontEnd::new();
     to_missions(&mut fe);
     // The Dossier opens off the mission list with □ and returns with Back.
@@ -231,11 +231,12 @@ fn back_walks_every_single_player_step_to_the_title() {
     assert_eq!(fe.cursor, 0);
     assert!(act(&mut fe, Action::Back));
     assert_eq!(fe.page, Page::Main);
+    // Back holds on Main — the game has no back arm there [M P_MAIN_Handler 0x20a7b0]; the old
+    // port route (Back → the title, the start-movie replay) was the [S] guess.
     assert!(act(&mut fe, Action::Back));
-    assert_eq!(fe.page, Page::Start, "Back walks all the way to the title [S — the port's Main Back]");
+    assert_eq!(fe.page, Page::Main, "Back holds on Main [M 0x20a7b0]");
+    assert!(!fe.intro_playing && !fe.intro_movie, "no start-movie replay");
     // …and forward again still works.
-    assert!(act(&mut fe, Action::Confirm), "the title");
-    assert_eq!(fe.page, Page::Main);
     assert!(act(&mut fe, Action::Confirm), "NightFire");
     assert_eq!(fe.page, Page::Codename);
 }
@@ -288,13 +289,18 @@ fn select_codename_new_codename_validates_creates_saves_and_reloads() {
     type_on_grid(&mut fe, "MONEYP");
     assert_eq!(fe.cn_typed_name(), "MONEYP");
     assert!(act(&mut fe, Action::Confirm), "the ✓ submits");
-    // The create saved through the card flow and landed on the wheel.
-    assert_eq!(fe.page, Page::CnMenu, "the completion routes to the wheel [M 0x213a98:58]");
-    assert_eq!(fe.cursor, 1, "the wheel opens on Controller Setup [L PCSX2 m30]");
+    // The create saved through the card flow; the wheel's 0x4c forwarded straight to Controls
+    // [M P_CNMENU 0x213288:38-40 — from the name entry with cheat clear, Manager 0x44 → 0x40000022].
+    assert_eq!(fe.page, Page::CnControls, "the completion forwards to Controls [M 0x213288:39]");
+    assert_eq!(fe.cursor, 0, "the Controls page opens on the style row");
     assert_eq!(fe.active_profile.as_deref(), Some("MONEYP"));
     assert!(nf_game::profile::Profile::path_in(&dir, "MONEYP").exists(), "the file is on the card");
-    // Back to the main menu and re-open: the saved codename is listed and loads.
-    assert!(act(&mut fe, Action::Back), "the wheel goes back");
+    // Back to the main menu and re-open: the saved codename is listed and loads. Back from
+    // Controls returns to the wheel (the port's Controls-Back model), then the wheel's own
+    // Back chain walks CnSelect → Main.
+    assert!(act(&mut fe, Action::Back), "Controls Back → the wheel");
+    assert_eq!(fe.page, Page::CnMenu);
+    assert!(act(&mut fe, Action::Back));
     assert_eq!(fe.page, Page::CnSelect);
     assert!(act(&mut fe, Action::Back));
     assert_eq!(fe.page, Page::Main);
@@ -426,6 +432,8 @@ fn a_completed_mission_routes_the_results_save_and_the_next_row() {
     assert_eq!(fe.page, Page::CnName);
     type_on_grid(&mut fe, "BOND007");
     assert!(act(&mut fe, Action::Confirm), "the ✓ submits");
+    assert_eq!(fe.page, Page::CnControls, "the forward [M 0x213288:38-40]");
+    assert!(act(&mut fe, Action::Back), "the port's Controls Back returns to the wheel");
     assert_eq!(fe.page, Page::CnMenu);
     assert!(act(&mut fe, Action::Back));
     assert_eq!(fe.page, Page::CnSelect);

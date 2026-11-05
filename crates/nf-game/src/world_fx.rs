@@ -56,6 +56,13 @@ const REC_FRAME_RATE: f32 = 1.0 / 60.0;
 /// namespace, same as gas.rs's SMOKE_QUAD 0x02000039).
 pub const RIPPLE_MESH: u32 = 0x0200_0129;
 
+/// The flicker spark's random fire gfx table — the 5 dwords at 0x2fcca0..0x2fccb0 that
+/// `Flicker_Update` 0x1ab960:118-124 copies to the stack and indexes with `Rand_Rand(5)`
+/// [D elf dump, verified byte-for-byte; docs/atlas/flicker.md:22-23].
+pub const FIRE_MESHES: [u32; 5] = [
+    0x0200_02d1, 0x0200_02d2, 0x0200_02d3, 0x0200_02d4, 0x0200_02d5,
+];
+
 /// The counter-hash the RNG-discipline note describes (the same bit-mix gas.rs uses).
 fn jitter(counter: u32, salt: u32) -> f32 {
     let mut h = counter ^ salt;
@@ -75,6 +82,13 @@ pub struct FlickerFx {
     pub signal_channel: u16,
     /// obj+0x103..105, started black (the object memory zeroes) and fading white.
     pub rgb: [u8; 3],
+    /// data+4 = param 0: the u16 gate `Flicker_Update` 0x1ab960:117 requires non-zero before the
+    /// spark puff [M 0x1acb00:56 writes it from the placement's param 0].
+    pub spark_gate: u16,
+    /// data+0x10..0x1b: the kind-4 velocity drift `Flicker_Create` 0x1acb00:58-59 builds —
+    /// `Mat_GetUp` of `View_RotTransMatrix(orient, pos)` = matrix row 1 [M 0x1e33b8; the
+    /// rigid_body.rs:851 precedent], the port's `placement::view_rot_trans_matrix`.
+    pub drift: V3,
 }
 
 /// One 0x21 placement.
@@ -482,6 +496,11 @@ pub struct WorldFx {
     pub trees: Vec<TreeFx>,
     pub clouds: Vec<CloudFx>,
     pub apocalypses: Vec<ApocalypseFx>,
+    /// fx-gas-and-blasts row 9: this tick's Apocalypse flashbang write — `Player_SetFlashBang(
+    /// remaining, glb_blokes, min(remaining·382/total, 255))` [M 0x18d4f0:33-40]; (remaining
+    /// ticks, alpha 0..1). `None` = no write this tick (unarmed/expired). Consumed (take()) by
+    /// Drones::tick into `health.flashbang/flash_total/flash_alpha`.
+    pub apocalypse_flash: Option<(f32, f32)>,
     pub emitters: Vec<EmitterFx>,
     /// The paired 0x2c strikes, in pairing order (the master's creation order).
     pub lightnings: Vec<LightningStrike>,
@@ -580,9 +599,18 @@ impl WorldFx {
                     });
                 }
                 0xe3 => {
-                    // `Flicker_Create` 0x1acb00: data+4 = param 0 (the u16 spark gate — unreachable),
-                    // data+0x20 = param 1 (the signal channel). The tint starts black.
-                    fx.flickers.push(FlickerFx { placement: i, pos, signal_channel: param(1) as u16, rgb: [0; 3] });
+                    // `Flicker_Create` 0x1acb00: data+4 = param 0 (the u16 spark gate), data+0x20 =
+                    // param 1 (the signal channel), data+0x10..0x1b = the drift (`Mat_GetUp` of the
+                    // placement's view matrix, row 1) [M 0x1acb00:54-59]. The tint starts black.
+                    let m = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
+                    fx.flickers.push(FlickerFx {
+                        placement: i,
+                        pos,
+                        signal_channel: param(1) as u16,
+                        rgb: [0; 3],
+                        spark_gate: param(0) as u16,
+                        drift: [m[1][0], m[1][1], m[1][2]],
+                    });
                 }
                 0xd4 => {
                     // `Cloud_Create` 0x18d620:20-28 (the port's drift rates; the slot is param 4 —
@@ -681,12 +709,36 @@ impl WorldFx {
     /// The def table (the test's count predictor: the impact burst draws 4 × min(max, batch)).
     pub fn defs(&self) -> &std::collections::HashMap<u32, EmitterDef> { &self.defs }
 
+    /// `Light_FindMapLight` 0x1cc3d0: an 8-byte function returning 0 on this build [M decomp
+    /// 001cc3d0 — `return 0;`]. `Some(on)` would model the real lookup (`light+0x48 != 0` = on);
+    /// the stub means `None` every call, so `Flicker_Update`'s light-off spark path is dead and
+    /// the tint always takes the white arm [M 0x1ab960:65-95; docs/atlas/flicker.md:15-16].
+    fn find_map_light() -> Option<bool> {
+        let _ = FIRE_MESHES; // (keep the table referenced on the dead path too)
+        None
+    }
+
+    /// The spark puff [M 0x1ab960:118-124]: `Gas_Init(1.2, 0.8, cel, obj+0x80, 0, data+0x10,
+    /// FIRE_MESHES[Rand_Rand(5)], kind 4, 0xffffffff, 0x0a460003, life 85)` — the life the
+    /// decompiler drops is `addiu $v0, $zero, 0x55` (0x1abc0c) stored `sw $v0, ($sp)` at
+    /// 0x1abc34 before the `jal Gas_Init` 0x1abc3c [M disasm; the env.rs:226 precedent where the
+    /// same pattern carries the ripple's 63]. The game follows with `Particles_Create(5,
+    /// obj+0x80, plane (0, -1, 0, 0))` [M 0x1abc44-0x1abc68] — unported: the port has no
+    /// particles system, and `Particles_Update` 0x1cf528 self-kills through the stubbed
+    /// `psiParticleUpdate` 0x111290 [M; world_fx.rs module doc].
+    fn flicker_spark(gas: &mut crate::gas::GasPool, rng: &mut crate::drone::Rng, pos: V3, drift: V3) {
+        let mesh = FIRE_MESHES[rng.rand(5) as usize % 5];
+        gas.init_ex(mesh, pos, 0.0, drift, 1.2, 0.8, 4, [0xff, 0xff, 0xff, 0xff], 0x0a46_0003, 85.0);
+    }
+
     /// One 60 Hz tick (`Emitter_Update`/`Ripples_Update`/`cloud_update`/`Apocalypse_Update` run in
-    /// the game's object handler; `Flicker_Update` likewise). `frame` = `GameState+0x52`. `rng` is
-    /// the SHARED stream — consumed ONLY by the impact emitters (`shared_rng`); the 0xf2
-    /// placements keep the counter-hash replacement (the G-033/fix-world-fx discipline — a
-    /// documented deviation: the game's 4 draws per spawn [M 0x17b080:216-247] are the stream's,
-    /// the port hashes the same bands per object).
+    /// the game's object handler; `Flicker_Update` likewise). `frame` = `GameState+0x34` (the
+    /// decompile's `_52_4_` names DECIMAL 52 — the same global tick counter env.rs:246 cites;
+    /// the sibling level-id read `GameState._12_4_ != 0x7000005` in NDrone2_DealWithObjHit
+    /// 0x13fff0:310 pins the base). `rng` is the SHARED stream — consumed ONLY by the impact
+    /// emitters (`shared_rng`); the 0xf2 placements keep the counter-hash replacement (the
+    /// G-033/fix-world-fx discipline — a documented deviation: the game's 4 draws per spawn
+    /// [M 0x17b080:216-247] are the stream's, the port hashes the same bands per object).
     pub fn tick(&mut self, ch: &mut Channels, player_pos: V3, frame: u32, gas: &mut crate::gas::GasPool, rng: &mut crate::drone::Rng) {
         // Flicker [M 0x1ab960]: the stubbed FindMapLight keeps the white target and the 0 stamp.
         for f in &mut self.flickers {
@@ -699,6 +751,18 @@ impl WorldFx {
                 }
             }
             if f.signal_channel != 0 { ch.set(f.signal_channel as u32, 0, frame); }
+            // The spark branch [M 0x1ab960:117-129]: the light found AND off, the placement's
+            // param-0 gate non-zero (data+4), and an even frame (`GameState+0x34 & 1 == 0`).
+            // `Light_FindMapLight` 0x1cc3d0 is an 8-byte stub returning 0 on this build [M], so
+            // `find_map_light()` is always None and the branch never runs — byte-exact with the
+            // shipped game. The puff itself is pinned value-for-value by
+            // `flicker_spark_matches_flicker_update_0x1ab960` (Rng-discipline note: the game's
+            // `Rand_Rand(5)` mesh draw sits behind this dead gate, so the shared stream gains
+            // nothing on this build).
+            let light_found_and_off = Self::find_map_light().map_or(false, |on| !on);
+            if light_found_and_off && f.spark_gate != 0 && frame & 1 == 0 {
+                Self::flicker_spark(gas, rng, f.pos, f.drift);
+            }
         }
         // Ripples [M 0x1ac028]: the gate (counter-hash for Rand_Rand(period)), then 3 counter-hash
         // draws for the x/z jitter and the start scale.
@@ -779,14 +843,26 @@ impl WorldFx {
             let _ = player_pos; // the parked position rides the sky pass's own follow (levels.rs)
         }
         // Apocalypse [M 0x18d4f0]: the latch, the countdown, the whiteout value.
+        let mut flash: Option<(f32, f32)> = None;
         for a in &mut self.apocalypses {
             if !a.armed && ch.on(a.channel as u32) { a.armed = true; }
             if a.armed {
                 a.remaining -= 1.0;
                 if a.remaining <= 0.0 { a.remaining = 0.0; a.fade = 0.0; continue; }
                 if a.whiteout { a.fade = a.remaining * 5.0 / a.total; }
+                // fx-gas-and-blasts row 9 [M 0x18d4f0:33-40]: the flashbang flag re-calls
+                // `Player_SetFlashBang(remaining, glb_blokes, min(remaining·382/total, 255))`
+                // EVERY armed tick (0x196040: BL+0x963 = the byte, BL+0x918 = BL+0x91C = the
+                // duration). The port carries it as this tick's (remaining, alpha 0..1) write;
+                // Drones::tick applies it to `health` right after this pass. None → no write
+                // (unarmed or expired — the last write's own countdown expires the whiteout).
+                if a.flashbang {
+                    let v = (a.remaining * 382.0 / a.total).min(255.0) as u8;
+                    flash = Some((a.remaining, f32::from(v) / 255.0));
+                }
             }
         }
+        self.apocalypse_flash = flash;
         // Lightning bolts [M 0x18cf68]: the visibility (and the reflicker redistribution) —
         // the game's class-0x33 update reads the globals each pass; the port reads its copy
         // (resting cleared until the sky pass drives it, so the bolts stay hidden).
@@ -990,13 +1066,49 @@ mod tests {
     #[test]
     fn flicker_fades_white_and_the_signal_channel_stays_clear() {
         let mut fx = WorldFx::default();
-        fx.flickers.push(FlickerFx { placement: 0, pos: [0.0; 3], signal_channel: 0x55, rgb: [0; 3] });
+        fx.flickers.push(FlickerFx { placement: 0, pos: [0.0; 3], signal_channel: 0x55, rgb: [0; 3], spark_gate: 0, drift: [0.0; 3] });
         let mut ch = Channels::default();
         ch.set(0x55, 1, 0);
         let mut rng = crate::drone::Rng::new(1);
         for _ in 0..600 { fx.tick(&mut ch, [0.0; 3], 0, &mut crate::gas::GasPool::default(), &mut rng); }
         assert_eq!(fx.flickers[0].rgb, [255; 3], "the tint reaches white");
         assert_eq!(ch.v[0x55], 0, "the stubbed FindMapLight keeps the light-on path");
+    }
+
+    /// The spark puff's exact values [M 0x1ab960:118-124 + disasm 0x1abc0c/0x1abc34]: mesh =
+    /// FIRE_MESHES[Rand_Rand(5)], scale 1.2 -> 0.8 over life 85, kind 4, rgba 0xffffffff ->
+    /// 0x0a460003, the drift as the velocity seed. The tick's own gate is dead on this build
+    /// (`find_map_light()` = the 0x1cc3d0 stub), so the values are pinned on the helper the tick
+    /// calls — and the tick-with-default-flicker run above stays puff-free (asserted in the
+    /// fades_white test via the same pool shape: nothing spawns when the gate is closed).
+    #[test]
+    fn flicker_spark_matches_flicker_update_0x1ab960() {
+        let mut gas = crate::gas::GasPool::default();
+        let mut rng = crate::drone::Rng::new(0x1234_5678);
+        let drift: V3 = [0.3, -0.5, 0.2];
+        let mut meshes = Vec::new();
+        for _ in 0..5 {
+            let before = gas.puffs.len();
+            WorldFx::flicker_spark(&mut gas, &mut rng, [1.0, 2.0, 3.0], drift);
+            assert_eq!(gas.puffs.len(), before + 1, "one puff per spark");
+            let puff = gas.puffs.last().unwrap();
+            meshes.push(puff.mesh);
+            assert_eq!(puff.kind, 4, "the game's kind 4");
+            assert!((puff.scale - 1.2).abs() < 1e-4, "scale starts 1.2, got {}", puff.scale);
+            assert!((puff.scale_rate - (0.8 - 1.2) / 85.0).abs() < 1e-6, "scale rate = (0.8-1.2)/85 [M 0x1aacc8:60], got {}", puff.scale_rate);
+            assert_eq!(puff.rgba, [255.0, 255.0, 255.0, 255.0], "rgba start 0xffffffff");
+            let a_rate = (0x03 as f32 - 255.0) / 85.0;
+            assert!((puff.rgba_rate[3] - a_rate).abs() < 1e-4, "alpha rate -> 0x03 over 85, got {}", puff.rgba_rate[3]);
+            assert!((puff.rgba_rate[0] - (0x0a as f32 - 255.0) / 85.0).abs() < 1e-4, "red rate -> 0x0a [M 0x1abc40 ori t3,0xa46..]");
+            let want: V3 = [drift[0] * REC_FRAME_RATE, drift[1] * REC_FRAME_RATE, drift[2] * REC_FRAME_RATE];
+            assert!((puff.vel[1] - want[1]).abs() < 1e-6, "kind-4 y vel = drift_y * REC exact, got {:?}", puff.vel);
+            // x/z carry the kind-4 jitter arm (gas.rs). The game adds Rand_FRand(0x05) [M
+            // 0x1aacc8:92/96 -> band ±0.05/2]; the port's arm draws the raw [0,1) band − 0.025, a
+            // pre-existing [S] stand-in outside this task's scope — assert only the seed.
+            for k in [0usize, 2] { assert!((puff.vel[k] - want[k]).abs() < 1.0, "kind-4 x/z = drift * REC + jitter, got {:?}", puff.vel); }
+        }
+        assert!(meshes.iter().all(|m| FIRE_MESHES.contains(m)), "meshes from the 0x2fcca0 table, got {meshes:?}");
+        assert_eq!(meshes.len(), 5, "five sparks cover the draws");
     }
 
     /// `LeafGen_Update` 0x1acc48 + `Leaf_Create` 0x1abc88 + `Leaf_Update` 0x1abee0: the gate fires
@@ -1245,6 +1357,37 @@ mod tests {
         assert!((fx.apocalypses[0].fade - 60.0 * 5.0 / 120.0).abs() < 1e-4, "fade = remaining·5/total [M 0x18d4f0]");
         for f in 61..130 { fx.tick(&mut ch, [0.0; 3], f, &mut crate::gas::GasPool::default(), &mut rng); }
         assert!(fx.apocalypses[0].remaining == 0.0, "the countdown floors at 0");
+    }
+
+    /// fx-gas-and-blasts row 9 [M Apocalypse_Update 0x18d4f0:33-40]: the flashbang flag drives
+    /// `Player_SetFlashBang(remaining, glb_blokes, min(remaining·382/total, 255))` EVERY armed
+    /// tick — the port's `apocalypse_flash` carries (remaining, alpha 0..1) for Drones::tick to
+    /// write into `health`. The whiteout-only record (flashbang false) writes None.
+    #[test]
+    fn apocalypse_flashbang_carries_the_per_tick_write() {
+        let mut fx = WorldFx::default();
+        fx.apocalypses.push(ApocalypseFx {
+            placement: 0, channel: 0x11, rumble: 0, whiteout: false, flashbang: true,
+            remaining: 100.0, total: 100.0, armed: false, fade: 0.0,
+        });
+        let mut ch = Channels::default();
+        let mut rng = crate::drone::Rng::new(1);
+        fx.tick(&mut ch, [0.0; 3], 0, &mut crate::gas::GasPool::default(), &mut rng);
+        assert!(fx.apocalypse_flash.is_none(), "unlatched: no write");
+        ch.set(0x11, 1, 1);
+        fx.tick(&mut ch, [0.0; 3], 1, &mut crate::gas::GasPool::default(), &mut rng);
+        // Tick 1: remaining 99 — the value = min(99·382/100, 255) = 255 (the clamp), alpha 1.0.
+        let (remaining, alpha) = fx.apocalypse_flash.take().expect("armed + flashbang → a write");
+        assert!((remaining - 99.0).abs() < 1e-4);
+        assert!((alpha - 1.0).abs() < 1e-4, "99·382/100 = 378 → clamped to 255 [M the 0x437f0000 arm]");
+        for f in 2..80 { fx.tick(&mut ch, [0.0; 3], f, &mut crate::gas::GasPool::default(), &mut rng); }
+        // Tick 79: remaining 21 — 21·382/100 = 80.22 → byte 80, alpha 80/255 (no clamp).
+        let (remaining, alpha) = fx.apocalypse_flash.take().expect("still armed");
+        assert!((remaining - 21.0).abs() < 1e-4);
+        assert!((alpha - 80.0 / 255.0).abs() < 1e-4, "the unclamped decay: 21·382/100 = 80.22 → 80");
+        for f in 80..110 { fx.tick(&mut ch, [0.0; 3], f, &mut crate::gas::GasPool::default(), &mut rng); }
+        assert!(fx.apocalypses[0].remaining == 0.0, "expired");
+        assert!(fx.apocalypse_flash.is_none(), "no write after the countdown floors");
     }
 
     /// `cloud_update` 0x18d768: the phases accumulate the drift and wrap by fmod.
