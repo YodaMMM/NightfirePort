@@ -6,6 +6,3 @@ Continue from origin/s/audit-voice-triggers; merge origin/master first. The four
 - walkreal_07000003_live::walk_the_full_route_and_complete_every_objective (the east lane cap)
 - smg_close_range_live::smg_rounds_damage_a_close_guard_and_the_pistol_sister (the pistol control at 1 u)
 For each, say which draw moved what, then re-route or re-pin the test, keeping every pin honest. Run every walkreal binary and the full suite, and quote the total line.
-
----
-claimed-by: sandbox4 at 2026-11-05T05:15Z
