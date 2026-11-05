@@ -142,3 +142,13 @@ new-field rule).
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks, in order, at 2026-11-05 ~04:43 UTC:
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "sp-panes-new-drawing: done ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. python urllib → `urlopen error` traceback (connection to ntfy.sh failed)
+3. `wget -q -O- --post-data ...` → no output, timed out under the 25 s cap
+
+(The audit-sp-panes branch reported the same ntfy unreachability from this sandbox family.)
