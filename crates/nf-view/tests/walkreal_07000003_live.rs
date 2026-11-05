@@ -321,17 +321,18 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         ("the east lane north", [10.59, 6.47, -22.91]),
     ] {
         clear_near(&mut w, 8.0, name);
-        // fx-muzzle-repin-2: lenient is re-armed per leg — the clear_near/shoot internals reset it
-        // on their way out, and the wedged leg panicked at the non-lenient cap (both the plain and
-        // the Agent real-damage walks on the corrected stream: the mid anchor's nav slid Bond down
-        // the moat, segment_to_target hit, the sidesteps never finding the ramp) instead of
-        // reaching any ladder below.
+        // audit-voice-triggers-3: lenient is re-armed per leg — the clear_near/shoot internals
+        // reset it on their way out, and the 2026-11-05 run's wedged leg panicked at the
+        // non-lenient cap instead of returning to the ladder below.
         w.lenient = true;
         let mut got = w.walk_to(Wp { at, act: Act::None, arrive: 1.0 }, name);
-        // The wedge ladder (the audit-voice-triggers-3 law, same lane): a player does not stand in
-        // a ditch — sidestep ALONG the moat (the moat legs above walked it fine), then take the
-        // anchor again from the stepped-aside spot. Both sides fail: skip the anchor — the anchors
-        // steer the nav, the NEXT anchor re-derives its own path and the route continues.
+        // The wedge ladder: the lane climb wedges from the moat's south edge (the 2026-11-05
+        // run: the mid anchor's nav slid Bond DOWN the ditch to (10.28, 6.34, -36.05), the
+        // sidesteps never finding the ramp; segment_to_target hit at t 0.10). A player does not
+        // stand in a ditch: sidestep ALONG the moat (the moat legs above walked it fine), then
+        // take the anchor again from the stepped-aside spot. Both sides fail: skip the anchor —
+        // the anchors steer the nav, the NEXT anchor re-derives its own path and the route
+        // continues (the same doctrine as the 01 walk's wedged-lane ladders).
         if got == u32::MAX {
             let bp = w.scene.sim.as_ref().unwrap().bond.pos;
             for (side, sname) in [(1.0f32, "east"), (-1.0f32, "west")] {

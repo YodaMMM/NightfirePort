@@ -1508,6 +1508,11 @@ pub struct Drone {
     pub bond_talk_cooldown: u32,
     /// `+0xCE0`: the `DroneFunc_DoBondTalk` lines-spoken count [M 0x144488].
     pub bond_talk_done: u32,
+    /// The PLAY_SCRIPT re-bark gate (audit-voice-triggers): the game's msg-3 re-bark opens when
+    /// `now > +0x11c + 0x1e` — 30 frames past the state-enter dwell stamp [M 0x15ba68:113-121].
+    /// The port's PLAY_SCRIPT-scoped stand-in for that stamp (ENTER sets `frame + 30` for the
+    /// 0x6000168/0x6000169 arms; 0 = no gate — the other script arms never re-bark).
+    pub play_script_talk_gate: u32,
     /// `+0x53C`: the facial anim object attached for the current talk line — `AnimFacialAppend`
     /// 0x1c6490's return, stored by `NDrone2_SpeechSFX` 0x141b00's facial arm [M 0x141b00:18-23].
     /// The port holds the attached facial script's hash while the line plays (lip-flap not modelled).
@@ -2121,6 +2126,7 @@ impl Drone {
             delete_me: false,
             talk_script: 0, talk_cooldown: 0,
             last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep_ops: Vec::new(), anim_stops: Vec::new(), drops: Vec::new(),
+            play_script_talk_gate: 0,
             free_root: false, bounded: true, dtype: param(15) as u8, mode_normal: param(16) as u8, mode_alert: param(21) as u8, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None,
             // `DroneFunc_NearPlayerCollision`'s source array:
             dist_to_player: [100000.0; 4],
@@ -5614,9 +5620,13 @@ impl Drone {
         if !matches!(s, RUN_AWAY_FROM_OBJECT | HIDE_FROM_SCARY_OBJECT | RECOVER_FROM_SCARY_OBJECT) { return None; }
         Some(match (s, m) {
             // ENTER: +0x4F8 |= 0x10000, AlertStatusSet(1), +0x4F8 |= 0x400000, FindSafety — fail → 0x88
-            // [M 0x168aa8:18-30].
+            // [M 0x168aa8:18-30]. The game also barks here: `NDrone2_DeathTalk(param_1)` sits between
+            // the `+0x50c = 1.0` write and the 0x400000 set [M 0x168aa8:19-22] — the flee from a
+            // grenade/explosive opens with the drone's death-line group (a panic reuse of the same
+            // pool; audit-voice-triggers).
             (RUN_AWAY_FROM_OBJECT, msg::ENTER) => {
                 self.vision_on = true;
+                self.death_talk(d); // [M 0x168aa8:21]
                 if !self.find_safety_from_scary_object(d) { self.set_state(RECOVER_FROM_SCARY_OBJECT); }
                 true
             }
@@ -6310,6 +6320,7 @@ impl Drone {
                 if self.anim_set == 0x13 && d.level < 0x0700_000e { self.set_state(UNDER_COVER_SNIPER_FIRE); return Some(true); }
                 self.vision_on = true; // `+0x4F8 |= 0x10000` on the fire path [M 0x16a3e0:31 — after the sniper bail]
                 self.fire(d, rng, frame, true);
+                self.attack_talk(d.level, rng); // [M 0x16a3e0:33 — after DroneWeap_Fire, every ENTER] (audit-voice-triggers)
                 true
             }
             (UNDER_COVER_FIRE, msg::UPDATE) => {
@@ -6330,6 +6341,7 @@ impl Drone {
             // + `NDrone2_BondIsFacingMe` (0x154f60) + Rand(3) = 0 → duck back (0x99).
             (UNDER_COVER_SNIPER_FIRE, msg::ENTER) => {
                 self.vision_on = true;
+                self.attack_talk(d.level, rng); // [M 0x16a610:20 — right after the 0x10000 set] (audit-voice-triggers)
                 self.cover_claimed = false;
                 // `+0x2E` = node.kind != 1 (corner, not low); timer C at +1 s, timer D at +6 s.
                 self.timer_c = Some(frame + 60);
@@ -7371,6 +7383,14 @@ impl Drone {
                     _ => (0x24, 0x11a),
                 };
                 self.play_script(d, self.start_script, st, follow, 0, msg::ANIM_DONE);
+                // The 0x6000168/0x6000169 arms fall into the shared tail: SetScript, then
+                // `NDrone2_AttackTalk`, then `+0x4F8 |= 0x400000` [M 0x15ba68:69-74]. The other
+                // script arms (0x60005e6/0x60008ae via LAB_0015bb74, the default LAB_0015bb50,
+                // 0x60007ac via LAB_0015bb9c) return after their SetScript — no talk.
+                if matches!(self.start_script, 0x6000_168 | 0x6000_169) {
+                    self.attack_talk(d.level, rng); // [M 0x15ba68:72] (audit-voice-triggers)
+                    self.play_script_talk_gate = frame + 30; // the UPDATE re-bark gate: now > +0x11c + 0x1e [M 0x15ba68:113-117]
+                }
                 true
             }
             // msg 5 (0x15ba68 case 5, the script's natural end): `+0x554 = 0`, then — the default and
@@ -7386,7 +7406,9 @@ impl Drone {
                 let played = self.anim.script.unwrap_or(0);
                 self.start_script = 0;
                 match played {
-                    0x6000_168 | 0x6000_169 => { self.call_anim(d, 10, AIM_STAND_FIRE, 0); true }
+                    // [M 0x15ba68:150-157] the 0x6000169/0x6000168 arms: clear 0x400000, `+0x554 = 0`,
+                    // `CallAnim(0, 10, 0, 0x68, 0, 0)`, then `NDrone2_AttackTalk` — the state is HELD.
+                    0x6000_168 | 0x6000_169 => { self.call_anim(d, 10, AIM_STAND_FIRE, 0); self.attack_talk(d.level, rng); true }
                     _ => { let s = self.start_state(d); self.set_state(s); true }
                 }
             }
@@ -7396,6 +7418,13 @@ impl Drone {
                 // unresolved (the port's start_state mapped it to ATTACK), so only the
                 // look runs here for now.
                 if let Some(n) = self.look_for_opponent(d) { self.set_state(n) }
+                // [M 0x15ba68:107-121] 30 frames past the state-enter frame (`+0x11c`, the game's
+                // state-dwell stamp; `iVar2 + 0x1e < now`) the 0x6000168/0x6000169 arms call
+                // `NDrone2_AttackTalk` EVERY update — the per-entry repeat delay rate-limits it.
+                if matches!(self.start_script, 0x6000_168 | 0x6000_169)
+                    && self.play_script_talk_gate != 0 && frame > self.play_script_talk_gate {
+                    self.attack_talk(d.level, rng); // [M 0x15ba68:120] (audit-voice-triggers)
+                }
                 true
             }
             // `NDrone2_DSTATE_PlayScript` 0x15ba68 cases 0x11/0x12/0x14/0x15/0x16/0x1e (the alert family,
@@ -14965,7 +14994,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     if !glass_pass { b.dead = true; }
                     br.health -= contact_dmg;
                     if br.health < 0.0 {
-                        if let Some(k) = self.breaks.kill(i, b.pos, end, &mut self.rng) {
+                        // fx-broken-object-bark: the bullet kill is the one `Break_Kill` entry whose
+                        // hitdata +0x58 is the BULLET (kind 5 [M 0x12c5a0:87]) from the PLAYER's
+                        // weapon system (+0xe0 → +0x30 == glb_players [M 0x1385ec-0x1385f4] — this
+                        // walk is `update_player_bullets`), so `Drone_BrokenObject` 0x138588 runs
+                        // HERE and only here: the bark walk collects (drone, line) inside the kill,
+                        // between the sound roll and the debris draws (the game's order
+                        // [M 0x12b970:66-76 → :135 → :141]), and the requests land on the drones'
+                        // `talks` (the `NDrone2_SpeechSFX` port form) right after — before anything
+                        // else draws (the explosion sites keep plain `kill`: their hitdata +0x58 is
+                        // the breakable itself, kind 0x20 [M 0x17c518:163-164], failing the kind-5
+                        // gate with no draw [M 0x1385d8-0x1385e0]).
+                        let mut barks: Vec<(usize, u32)> = Vec::new();
+                        if let Some(k) = self.breaks.kill_by_bullet(i, b.pos, end, &mut self.rng, &self.list, self.level_current, self.npc_system_disabled, &mut barks) {
+                            for (di, line) in barks {
+                                if let Some(dr) = self.list.get_mut(di) { dr.talks.push((line as usize, false)); }
+                            }
                             self.break_kills.push((k.placement, k.kind, k.sound));
                             // A script pane's kill deletes its object (Break_Kill's obj+0xFE
                             // bit 0 [M 0x12b970:60]): the pane leaves the collision set and
@@ -16831,9 +16875,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     if self.subtitle_track.enabled { self.script_msgs.push((label, time)); }
                     self.subtitle_track.push(self.frame, label, time);
                 }
-                // `Text_FlushAllSubtitles()` (0x1b15c8) from `Script_FFwd`'s skip arm [M 0x1dac78:28-29]:
-                // the pending script texts die here; the already-bound HUD lines drop on the viewer side
-                // (the `text_flush` flag the scene consumes), which keeps the game's type-4-only scope.
+                // `Text_FlushAllSubtitles()` (0x1b15c8) from `Script_FFwd`'s skip arm [M 0x1dac78:28-29]
+                // — and, subtitle-flush-camera-scripts, from `Script_Play`'s camera tail on EVERY
+                // camera script start [M 0x1db618]: the pending script texts die here; the
+                // already-bound HUD lines drop on the viewer side (the `text_flush` flag the scene
+                // consumes) — the game's deleted classes are the type-4 AND type-5 messages
+                // (`bVar1 - 4 < 2` [M disasm 0x1b1604-0x1b1610]: script op-0x1e captions and the
+                // id-0xff voice captions `Text_AddMsg` promotes to 5 [M 0x1b0c30:87]); the
+                // type-1/2/3/6 gameplay messages stay.
                 crate::nis::Request::TextFlush => {
                     self.script_msgs.clear();
                     self.text_flush = true;
@@ -22156,6 +22205,7 @@ mod tests {
             delete_me: false,
             talk_script: 0, talk_cooldown: 0,
             last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep_ops: Vec::new(), anim_stops: Vec::new(), drops: Vec::new(),
+            play_script_talk_gate: 0,
             facial_talk: None, facial_talk_start: 0, facial_talk_fired: 0, facial_talk_pending: None, facial_played: Vec::new(), talk_line: None, talk_track: false, talk_track_until: 0, facial_last_stamp: None,
             free_root: false, bounded: true, dtype: 0, mode_normal: 0, mode_alert: 0, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None, alert_block: 0.0,
             door_open_at: 0,
@@ -22789,6 +22839,94 @@ mod abseil_tests {
         for i in 0..21u32 { dr2.send(&d2, &mut rng, i + 1, msg::TASE); }
         assert!(dr2.using_2nd, "sister: level not 09/0A — no swap [M 0x1469b8:103]");
         assert_eq!(dr2.impact_resume, 0, "sister: no resume write either [M :103]");
+    }
+
+    // ---- audit-voice-triggers: the state-arm callers of the voice path -------------------------
+    // Each pin drives the REAL state-machine delivery (`Drone.send` → the DSTATE's msg arm) and
+    // pins the SpeechSFX REQUEST the arm makes (the `(idx, force)` pair the audio drain plays).
+
+    /// `NDrone2_DSTATE_RunAwayFromObject` 0x168aa8 case 1 calls `NDrone2_DeathTalk` between the
+    /// `+0x50c = 1.0` write and the 0x400000 set [M 0x168aa8:19-22] — a flee from a grenade opens
+    /// with the death-line pool (the panic bark).
+    #[test]
+    fn runaway_enter_barks_the_death_line() {
+        empty_data!(0x0700_0005, keep, d);
+        let mut dr = drone_at([10.0, 0.0, 10.0]);
+        dr.voice_type = 2; // the 07000005 guards [L speech.md §2.1: 0x0500002e/2f/30 → +0xd8 = 2]
+        dr.health = 10.0;
+        dr.state = state::RUN_AWAY_FROM_OBJECT;
+        dr.send(&d, &mut Rng::new(0x5eed), 100, msg::ENTER);
+        assert_eq!(dr.talks, vec![(5, true)], "DeathTalk's type-2 line 5, forced [M 0x13eff8 mapping; 0x168aa8:21]");
+        // Sister: the second DeathTalk of the same death sees the first's line and is skipped
+        // [M 0x13eff8:75-85] — the port's current-line dedupe keys on the +0x4D0 handle's sfx id
+        // (the drain sets `voice` when the request plays; with the real table entry 5's sfxId 139
+        // [L speech.md §3] the second call matches and stays silent).
+        dr.talks.clear();
+        dr.voice = Some((1, 0)); // the played handle; its line id (0 here) == line_sfx(5) with no table
+        dr.death_talk(&d);
+        assert!(dr.talks.is_empty(), "the same-line dedupe holds on a second call");
+    }
+
+    /// `NDrone2_DSTATE_UnderCoverFire` 0x16a3e0 case 1: `|= 0x10000`, `DroneWeap_Fire(1)`, then
+    /// `NDrone2_AttackTalk` [M 0x16a3e0:31-33]; `UnderCoverSniperFire` 0x16a610 case 1 talks right
+    /// after its own 0x10000 set [M 0x16a610:19-20].
+    #[test]
+    fn undercover_fire_enters_bark_attack_talk() {
+        empty_data!(0x0700_000c, keep, d);
+        let mut dr = drone_at([10.0, 0.0, 10.0]);
+        dr.voice_type = 3; // odds 0 — the line lands on every roll [M 0x13eac0 case 3]
+        dr.health = 10.0;
+        dr.state = state::UNDER_COVER_SNIPER_FIRE;
+        dr.send(&d, &mut Rng::new(0x5eed), 100, msg::ENTER);
+        assert!((0xac..=0xb2).contains(&dr.talks.last().copied().map_or(0, |t| t.0)),
+            "SniperFire's ENTER barks 0xAC + Rand(7) [M 0x16a610:20; 0x13eac0 case 3]");
+        // Sister: the non-sniper UnderCoverFire ENTER — the type-3 arm again (deterministic).
+        let mut dr2 = drone_at([10.0, 0.0, 10.0]);
+        dr2.voice_type = 3;
+        dr2.health = 10.0;
+        dr2.state = state::UNDER_COVER_FIRE;
+        dr2.send(&d, &mut Rng::new(0x5eed), 100, msg::ENTER);
+        assert!((0xac..=0xb2).contains(&dr2.talks.last().copied().map_or(0, |t| t.0)),
+            "UnderCoverFire's ENTER barks 0xAC + Rand(7) [M 0x16a3e0:33]");
+    }
+
+    /// `NDrone2_DSTATE_PlayScript` 0x15ba68: the 0x6000168/0x6000169 arms fall into the shared
+    /// ENTER tail (SetScript → `NDrone2_AttackTalk` → `|= 0x400000`) [M :69-74]; msg 3 re-barks
+    /// EVERY update once `now > +0x11c + 0x1e` [M :107-121]; msg 5 barks after the hold anim
+    /// [M :150-157]. The other script arms never talk.
+    #[test]
+    fn play_script_talks_on_enter_update_and_done_for_the_start_scripts() {
+        empty_data!(0x0700_0001, keep, d);
+        // ENTER with the 07000001 start script 0x6000169.
+        let mut dr = drone_at([10.0, 0.0, 10.0]);
+        dr.voice_type = 3; // the deterministic arm — 0xAC + Rand(7), odds 0 [M 0x13eac0 case 3]
+        dr.health = 10.0;
+        dr.start_script = 0x6000_169;
+        dr.state = state::PLAY_SCRIPT;
+        dr.send(&d, &mut Rng::new(0x5eed), 100, msg::ENTER);
+        assert!((0xac..=0xb2).contains(&dr.talks.last().copied().map_or(0, |t| t.0)),
+            "the ENTER tail barks [M 0x15ba68:72]");
+        assert_eq!(dr.play_script_talk_gate, 130, "the re-bark gate = enter + 30 [M 0x15ba68:113-117]");
+        // UPDATE at the gate: no re-bark yet (`iVar2 + 0x1e < now` is strict).
+        let n = dr.talks.len();
+        dr.send(&d, &mut Rng::new(0x5eed), 130, msg::UPDATE);
+        assert_eq!(dr.talks.len(), n, "frame == enter + 0x1e does not re-bark [M :117]");
+        // UPDATE past the gate: the re-bark.
+        dr.send(&d, &mut Rng::new(0x5eed), 131, msg::UPDATE);
+        assert!(dr.talks.len() > n, "now > +0x11c + 0x1e re-barks every update [M 0x15ba68:120]");
+        // Sister: the other start scripts never talk at ENTER (0x60007ac returns via LAB_0015bb9c).
+        let mut dr2 = drone_at([10.0, 0.0, 10.0]);
+        dr2.voice_type = 3;
+        dr2.health = 10.0;
+        dr2.start_script = 0x6000_7ac;
+        dr2.state = state::PLAY_SCRIPT;
+        dr2.send(&d, &mut Rng::new(0x5eed), 100, msg::ENTER);
+        assert!(dr2.talks.is_empty(), "0x60007ac's ENTER arm has no AttackTalk [M 0x15ba68:46-63]");
+        // ANIM_DONE on 0x6000169: the hold anim + one more AttackTalk [M 0x15ba68:150-157].
+        dr.anim.script = Some(0x6000_169);
+        let n2 = dr.talks.len();
+        dr.send(&d, &mut Rng::new(0x5eed), 200, msg::ANIM_DONE);
+        assert!(dr.talks.len() > n2, "msg 5 barks after CallAnim(10, 0x68) [M 0x15ba68:157]");
     }
 
     /// The PlayScript deaf window covers 0x6000168 too [M NDrone2_DSTATE_PlayScript 0x15ba68:70-73 —

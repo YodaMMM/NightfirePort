@@ -2327,6 +2327,12 @@ pub fn scene_overlay_up(scene: &scene::Scene, movie_up: bool) -> bool {
 /// `Player_Update` is not reached again (`Game_Run` 0x1c9790 skips the object handlers), but
 /// `Game_Draw` 0x1e6f50:186-214 keeps drawing every viewer's sprite list with no pause gate, so
 /// the HUD sprites stay on screen under the menu as that last update left them.
+/// The pages drawn over the paused frame's HUD layer: the pause page, and the fail menu, whose
+/// red death wash is that layer's blood pane.
+fn menu_over_hud(fe: &menu::FrontEnd) -> bool {
+    fe.page == menu::Page::Pause || (fe.page == menu::Page::Results && fe.outcome == menu::Outcome::Failed)
+}
+
 pub fn hud_under_menu(hud: gpu::HudFrame, menu: &gpu::HudFrame) -> gpu::HudFrame {
     let mut f = hud;
     f.append(menu);
@@ -2617,7 +2623,7 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
     let frame = menu::menu_overlay_fonts(&fe, &tables.font, &tables.font_header, Some(&tables.font_medium), lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0);
     // hud-start: the pause page draws over the gameplay HUD, as the windowed App composes it
     // (`hud_under_menu`) — the shot used to show the page alone, with no health ring.
-    if fe.page == menu::Page::Pause && scene.sim.is_some() {
+    if menu_over_hud(&fe) && scene.sim.is_some() {
         return (Some(hud_under_menu(overlay_for(scene, 1280.0 / 720.0), &frame)), movie);
     }
     (Some(frame), movie)
@@ -6145,7 +6151,7 @@ impl App {
                         // ring, ammo pane) [L PCSX2 captures; the
                         // port replaced the HUD with the overlay]. The HUD's quads go FIRST so
                         // the menu draws over them (frame order = draw order).
-                        if fe.page == menu::Page::Pause && !matches!(fe.flow.get_state(), menu::ST_MOVIE) {
+                        if menu_over_hud(fe) && !matches!(fe.flow.get_state(), menu::ST_MOVIE) {
                             // The menu's runs shift by the HUD's vertex count (the HUD's vertices go first) and the HUD
                             // keeps its own runs — the old merge shifted by the MENU's count and dropped the HUD's runs,
                             // so the live pause page drew from the wrong vertices (the plate, the figure and most rows
@@ -7774,17 +7780,9 @@ fn pause_objective_rows(sim: &scene::Sim) -> Vec<menu::PauseObjective> {
 
 /// bonus-007: the pause SCORE tab's live counters, straight off the progress layer — the game's
 /// handler fills its list box from `PlrMissionStats` [M C_GCPAUSE_Handler 0x204408:447-498; the
-/// record layout is docs/fields/player-stats.md]. Shots/accuracy/time keep their existing fill.
+/// record layout is docs/fields/player-stats.md]. The same record as the results page's stats.
 fn pause_stats(sim: &scene::Sim) -> menu::Stats {
-    let s = sim.drones.progress.stats();
-    menu::Stats {
-        bond_moves: s.bond_moments,
-        dispatched: s.dispatched,
-        subdued: s.disabled,
-        surrendered: s.surrendered,
-        bonus_pickups: s.bonus_pickups,
-        ..menu::Stats::default()
-    }
+    mission_end_stats(&sim.drones.progress)
 }
 
 /// The mission's tracked tallies as the results page's stats (mission-results-page). The game's
@@ -9105,6 +9103,13 @@ mod bonus_pause_stats {
         assert_eq!(s.subdued, 4, "+0x10 → Subdued");
         assert_eq!(s.surrendered, 5, "+0x14 → Surrendered");
         assert_eq!(s.bonus_pickups, 6, "+0x24 → the 007 Bonus row");
+        // Sister: the tab's Time and Accuracy rows read the same record, not a blank default.
+        scene.sim.as_mut().unwrap().drones.progress.stats[0].elapsed = 7900;
+        scene.sim.as_mut().unwrap().drones.progress.stats[0].shots_fired = 4;
+        scene.sim.as_mut().unwrap().drones.progress.stats[0].shots_hit_enemy = 3;
+        let s = crate::pause_stats(scene.sim.as_ref().unwrap());
+        assert_eq!(s.time_s, 79, "+0x30 in 1/100 s → the Time row");
+        assert_eq!(s.accuracy_pct, 75, "the Accuracy Rating row");
     }
 }
 

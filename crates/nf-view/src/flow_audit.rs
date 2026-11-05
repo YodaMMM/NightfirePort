@@ -474,8 +474,9 @@ fn every_menu_page_opens_and_backs_out() {
     p.press(K::Escape, "back to Edit Codename", |f| f.page == Page::CnSelect);
     p.press(K::Escape, "back to the main menu", |f| f.page == Page::Main);
     p.wait(0.1);
-    p.press(K::Escape, "back to the title", |f| f.page == Page::Start);
+    p.key(K::Escape);
     p.wait(0.2);
+    assert_eq!(p.page(), Some(Page::Main), "Esc on Main holds [M P_MAIN_Handler 0x20a7b0]");
     assert!(!p.exit_requested(), "no page quits the game");
 }
 

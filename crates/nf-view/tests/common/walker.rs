@@ -190,6 +190,10 @@ pub struct Walker {
     /// steps off the line (the strafe) instead of shooting the escort. `None` = the old
     /// behaviour, every other caller unchanged.
     pub shield: Option<usize>,
+    /// audit-voice-triggers-2 (opt-in; the 01 escort sets it): the shield's tap cone includes the
+    /// game's spread cap (0.2464 rad — bullet::player_spread's 176-unit cap) so a moving volley
+    /// whose pellets would cross the shielded contact is refused before it fires.
+    pub shield_bloom: bool,
     /// courtyard-lamps: the channel-rise watch (opt-in; empty by default). Each tick a listed
     /// channel turns on, `rises` records (channel, walker tick, Bond's feet, the placement indices
     /// of the not-yet-deleted triggers writing that channel whose volume Bond's capsule touches) —
@@ -252,7 +256,7 @@ impl Walker {
             alarm_last: Vec::new(),
             drone_watch, watch_last,
             health_last: Vec::new(),
-            shield: None,
+            shield: None, shield_bloom: false,
             fighting_blocker: false,
             body_block_response: false,
             bridge_wedged_nav: false,
@@ -795,6 +799,14 @@ impl Walker {
                                 let ey = eye[1] + (at[1] - eye[1]) * t;
                                 let miss2 = (ex - sd.pos[0]).powi(2) + (ez - sd.pos[2]).powi(2);
                                 let reach = 0.9 + 0.05 * ds;
+                                // audit-voice-triggers-2 (opt-in `shield_bloom`): the tap cone is the
+                                // aim line PLUS the game's own spread — and the spread caps at 176
+                                // units = 0.2464 rad [M bullet::player_spread's cap, pinned by
+                                // nf-game's player_spread_blooms_and_the_aim_gate] — a moving volley's
+                                // pellets land ~2 u off the aim line at 9.7 u (the 2026-11-05 kill:
+                                // the guard-14 volley's cone crossed the contact 1.96 u off the line
+                                // while the modelled reach was 1.39). Flag walks model the cap.
+                                let reach = if self.shield_bloom { reach.max(0.2464 * ds) } else { reach };
                                 if miss2 < reach * reach
                                     && (sd.pos[1] - 1.2) < ey && ey < (sd.pos[1] + 2.2) {
                                     shield_block = true;
