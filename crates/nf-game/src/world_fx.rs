@@ -482,6 +482,11 @@ pub struct WorldFx {
     pub trees: Vec<TreeFx>,
     pub clouds: Vec<CloudFx>,
     pub apocalypses: Vec<ApocalypseFx>,
+    /// fx-gas-and-blasts row 9: this tick's Apocalypse flashbang write — `Player_SetFlashBang(
+    /// remaining, glb_blokes, min(remaining·382/total, 255))` [M 0x18d4f0:33-40]; (remaining
+    /// ticks, alpha 0..1). `None` = no write this tick (unarmed/expired). Consumed (take()) by
+    /// Drones::tick into `health.flashbang/flash_total/flash_alpha`.
+    pub apocalypse_flash: Option<(f32, f32)>,
     pub emitters: Vec<EmitterFx>,
     /// The paired 0x2c strikes, in pairing order (the master's creation order).
     pub lightnings: Vec<LightningStrike>,
@@ -779,14 +784,26 @@ impl WorldFx {
             let _ = player_pos; // the parked position rides the sky pass's own follow (levels.rs)
         }
         // Apocalypse [M 0x18d4f0]: the latch, the countdown, the whiteout value.
+        let mut flash: Option<(f32, f32)> = None;
         for a in &mut self.apocalypses {
             if !a.armed && ch.on(a.channel as u32) { a.armed = true; }
             if a.armed {
                 a.remaining -= 1.0;
                 if a.remaining <= 0.0 { a.remaining = 0.0; a.fade = 0.0; continue; }
                 if a.whiteout { a.fade = a.remaining * 5.0 / a.total; }
+                // fx-gas-and-blasts row 9 [M 0x18d4f0:33-40]: the flashbang flag re-calls
+                // `Player_SetFlashBang(remaining, glb_blokes, min(remaining·382/total, 255))`
+                // EVERY armed tick (0x196040: BL+0x963 = the byte, BL+0x918 = BL+0x91C = the
+                // duration). The port carries it as this tick's (remaining, alpha 0..1) write;
+                // Drones::tick applies it to `health` right after this pass. None → no write
+                // (unarmed or expired — the last write's own countdown expires the whiteout).
+                if a.flashbang {
+                    let v = (a.remaining * 382.0 / a.total).min(255.0) as u8;
+                    flash = Some((a.remaining, f32::from(v) / 255.0));
+                }
             }
         }
+        self.apocalypse_flash = flash;
         // Lightning bolts [M 0x18cf68]: the visibility (and the reflicker redistribution) —
         // the game's class-0x33 update reads the globals each pass; the port reads its copy
         // (resting cleared until the sky pass drives it, so the bolts stay hidden).
@@ -1245,6 +1262,37 @@ mod tests {
         assert!((fx.apocalypses[0].fade - 60.0 * 5.0 / 120.0).abs() < 1e-4, "fade = remaining·5/total [M 0x18d4f0]");
         for f in 61..130 { fx.tick(&mut ch, [0.0; 3], f, &mut crate::gas::GasPool::default(), &mut rng); }
         assert!(fx.apocalypses[0].remaining == 0.0, "the countdown floors at 0");
+    }
+
+    /// fx-gas-and-blasts row 9 [M Apocalypse_Update 0x18d4f0:33-40]: the flashbang flag drives
+    /// `Player_SetFlashBang(remaining, glb_blokes, min(remaining·382/total, 255))` EVERY armed
+    /// tick — the port's `apocalypse_flash` carries (remaining, alpha 0..1) for Drones::tick to
+    /// write into `health`. The whiteout-only record (flashbang false) writes None.
+    #[test]
+    fn apocalypse_flashbang_carries_the_per_tick_write() {
+        let mut fx = WorldFx::default();
+        fx.apocalypses.push(ApocalypseFx {
+            placement: 0, channel: 0x11, rumble: 0, whiteout: false, flashbang: true,
+            remaining: 100.0, total: 100.0, armed: false, fade: 0.0,
+        });
+        let mut ch = Channels::default();
+        let mut rng = crate::drone::Rng::new(1);
+        fx.tick(&mut ch, [0.0; 3], 0, &mut crate::gas::GasPool::default(), &mut rng);
+        assert!(fx.apocalypse_flash.is_none(), "unlatched: no write");
+        ch.set(0x11, 1, 1);
+        fx.tick(&mut ch, [0.0; 3], 1, &mut crate::gas::GasPool::default(), &mut rng);
+        // Tick 1: remaining 99 — the value = min(99·382/100, 255) = 255 (the clamp), alpha 1.0.
+        let (remaining, alpha) = fx.apocalypse_flash.take().expect("armed + flashbang → a write");
+        assert!((remaining - 99.0).abs() < 1e-4);
+        assert!((alpha - 1.0).abs() < 1e-4, "99·382/100 = 378 → clamped to 255 [M the 0x437f0000 arm]");
+        for f in 2..80 { fx.tick(&mut ch, [0.0; 3], f, &mut crate::gas::GasPool::default(), &mut rng); }
+        // Tick 79: remaining 21 — 21·382/100 = 80.22 → byte 80, alpha 80/255 (no clamp).
+        let (remaining, alpha) = fx.apocalypse_flash.take().expect("still armed");
+        assert!((remaining - 21.0).abs() < 1e-4);
+        assert!((alpha - 80.0 / 255.0).abs() < 1e-4, "the unclamped decay: 21·382/100 = 80.22 → 80");
+        for f in 80..110 { fx.tick(&mut ch, [0.0; 3], f, &mut crate::gas::GasPool::default(), &mut rng); }
+        assert!(fx.apocalypses[0].remaining == 0.0, "expired");
+        assert!(fx.apocalypse_flash.is_none(), "no write after the countdown floors");
     }
 
     /// `cloud_update` 0x18d768: the phases accumulate the drift and wrap by fmod.
