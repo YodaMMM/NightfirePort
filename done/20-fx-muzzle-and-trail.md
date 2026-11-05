@@ -4,3 +4,7 @@ Port rows 6, 12 and 14 of the table: turret muzzle smoke, the bullet trail big p
 
 ---
 claimed-by: sandbox3 at 2026-11-05T00:37Z
+
+---
+## Report (done, 2026-11-05T02:39Z)
+
