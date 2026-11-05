@@ -120,3 +120,16 @@ Environment-visible token figures for this session, copied exactly:
 - Explore subagent 2 (glass_pass research): `Tokens -> prompt:125216 completion:11430
   total:136646` (from the subagent's final report footer).
 - My own session's input/output tokens, context used and cost: **not visible to me**.
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "guard-mode-c4-glass: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds` (exit 28).
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'…', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>` (the connect
+   raised `OSError: [Errno 101] Network is unreachable` in `sock.connect`).
+3. `wget -q -O- --post-data "guard-mode-c4-glass: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output; the tool call hit its 60 s timeout and was killed (host unreachable for
+   ntfy.sh from this sandbox; git/copy-party hosts resolve and work, ntfy.sh does not).
