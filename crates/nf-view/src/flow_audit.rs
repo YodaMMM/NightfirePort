@@ -710,7 +710,7 @@ fn the_briefing_skips_on_the_action_keys_at_once_at_240hz() {
     p.briefing_up();
     p.wait(0.5);
     p.key(K::ArrowDown);
-    p.until(3.0, |a| a.fe.as_ref().is_none_or(|f| f.flow.get_state() != menu::ST_MOVIE)).expect("the skip");
+    p.until(3.0, |a| a.async_load.is_some()).expect("the skip");
     p.finish_load();
     assert_eq!(p.app().level_code, 0x0700_0005, "the skip returns to the level load");
 }
