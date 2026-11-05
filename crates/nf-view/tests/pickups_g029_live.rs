@@ -122,7 +122,7 @@ fn a_respawning_placed_pickup_hides_and_returns_on_07000004() {
         let p = sim.drones.pickups.iter().find(|p| p.kind == 0 && p.weapon == 0x12 && p.respawn == 2 && !p.gone)
             .expect("07000004 places weapon 0x12 with respawn 2 [D the census]");
         let c = p.centre();
-        ([c[0], c[1] + 0.2, c[2]], 60 * p.respawn as u32 * 10)
+        ([c[0], c[1] + 0.2, c[2]], 60 * p.respawn as u32 * 10 + 1) // hidden while elapsed <= limit [M 0x18e148:183-185]
     };
     eprintln!("[respawn] the 0x12 pickup at {spot:?}, wait {respawn_ticks} ticks");
     // Onto the pickup (the established position pattern; the touch path itself is untouched).
