@@ -6,3 +6,6 @@ Branch from `origin/s/civ-combined`, push to `s/civ-repin-finish`. Read docs/rep
 - walkreal_07000013_live walk_the_warm_chain_to_the_front_entrance_and_out_real_damage: still red on the combined tree.
 
 Real input, no teleports. Run both binaries whole and quote the result.
+
+---
+claimed-by: sandbox5 at 2026-11-05T22:14Z
