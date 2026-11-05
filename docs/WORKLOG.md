@@ -56,3 +56,12 @@ Progress 2026-11-05 11:10-12:15 UTC: the comparison, [M-cited]:
   ignored; walkreal_07000012_live 3/0, corridor_guards_07000012_live 1/0,
   enemies_07000012_live 3/0; nf-game full suite 1077 passed / 0 failed / 8 ignored;
   nf-formats+nf-audio green except the 3 expected disc_golden slim-ISO failures.
+
+## guard-goal-arrival-radii
+Started 2026-11-05 18:12 UTC. Branch s/guard-goal-arrival-radii (master 2f0c88e2c + origin/s/level-12-engage-range
+merged). Task: guards arrive under each goal's own radius — route+0x8C = Drone+0x8EC, seeded 2.0 [M 0x14b300:579],
+rewritten by SetupRouteToPosition from the goal's radius (0 -> 2.0) [M 0x158b10], NOT touched by SetupRouteToObject
+[M 0x158948]; MoveToGoalPosition arrives under it [M 0x1517d8:49-52]. Port uses flat 2.0 (drone.rs move_to_goal +
+move_to_object). Census [M]: alarm point + run-to point = AiPoint +0x14 accuracy; sound/drone alert 2.0; cover 0.5/1.0;
+ambush 0.5; safety 1.0; mission fresh 1.0 / retry 2.0; closer-probe 3.0; interrogate 10.0. level-12's fix regressed the
+001 real-damage walks (Bond dies) and was reverted — form 1 first, walks re-routed per-level opt-in, never weaken.
