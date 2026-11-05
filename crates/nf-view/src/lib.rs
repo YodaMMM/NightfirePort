@@ -7780,17 +7780,9 @@ fn pause_objective_rows(sim: &scene::Sim) -> Vec<menu::PauseObjective> {
 
 /// bonus-007: the pause SCORE tab's live counters, straight off the progress layer — the game's
 /// handler fills its list box from `PlrMissionStats` [M C_GCPAUSE_Handler 0x204408:447-498; the
-/// record layout is docs/fields/player-stats.md]. Shots/accuracy/time keep their existing fill.
+/// record layout is docs/fields/player-stats.md]. The same record as the results page's stats.
 fn pause_stats(sim: &scene::Sim) -> menu::Stats {
-    let s = sim.drones.progress.stats();
-    menu::Stats {
-        bond_moves: s.bond_moments,
-        dispatched: s.dispatched,
-        subdued: s.disabled,
-        surrendered: s.surrendered,
-        bonus_pickups: s.bonus_pickups,
-        ..menu::Stats::default()
-    }
+    mission_end_stats(&sim.drones.progress)
 }
 
 /// The mission's tracked tallies as the results page's stats (mission-results-page). The game's
@@ -9111,6 +9103,13 @@ mod bonus_pause_stats {
         assert_eq!(s.subdued, 4, "+0x10 → Subdued");
         assert_eq!(s.surrendered, 5, "+0x14 → Surrendered");
         assert_eq!(s.bonus_pickups, 6, "+0x24 → the 007 Bonus row");
+        // Sister: the tab's Time and Accuracy rows read the same record, not a blank default.
+        scene.sim.as_mut().unwrap().drones.progress.stats[0].elapsed = 7900;
+        scene.sim.as_mut().unwrap().drones.progress.stats[0].shots_fired = 4;
+        scene.sim.as_mut().unwrap().drones.progress.stats[0].shots_hit_enemy = 3;
+        let s = crate::pause_stats(scene.sim.as_ref().unwrap());
+        assert_eq!(s.time_s, 79, "+0x30 in 1/100 s → the Time row");
+        assert_eq!(s.accuracy_pct, 75, "the Accuracy Rating row");
     }
 }
 
