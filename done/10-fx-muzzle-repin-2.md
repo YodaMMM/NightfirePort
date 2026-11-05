@@ -135,3 +135,8 @@ Every claim is from runs on this branch's merged tree (post-master-merge), quote
 ## Usage
 
 not visible to me
+
+---
+## Notification (appended 2026-11-05T13:15Z)
+
+curl + python3 failed (timeout / network unreachable); the wget fallback succeeded (exit 0).
