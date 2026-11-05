@@ -445,6 +445,28 @@ impl Breaks {
     /// kill is the dead bit + the kind sound and NO pieces (see the module header —
     /// `psiCreateBreakableData` never ran on its glist); the entity's deletion is the caller's.
     pub fn kill(&mut self, i: usize, a: V3, b: V3, rng: &mut Rng) -> Option<BreakEffect> {
+        self.kill_inner(i, a, b, rng, None)
+    }
+
+    /// The bullet-pass kill — the one `Break_Kill` entry whose hitdata carries a BULLET at
+    /// +0x58: `Break_Update` 0x12bfd8's contact walk passes the LAST damaging contact's node
+    /// [M 0x12bfd8:48-52], and a bullet contact's node +0x58 is the bullet obj (the victim's
+    /// mirrored node, hitdata-spawner-ally.md §4 [M 0x1ea398:189]) whose obj+0xff == 5
+    /// [M `Bullet_init` 0x12c5a0:87]. `Drone_BrokenObject` 0x138588 requires exactly that kind
+    /// and the player's weapon system (bullet+0xe0 → +0x30 == glb_players [M 0x1385ec-0x1385f4]):
+    /// the port's `update_player_bullets` walk IS the player's rounds, so the caller passes its
+    /// drone slice + level and collects `(drone index, chosen line)` pairs — the walk and its
+    /// `Rand(4)` draws run INSIDE this kill, between the sound roll and the debris draws, the
+    /// game's order [M 0x12b970:66-76 roll → :135 `Drone_BrokenObject` → :141 `Debris_Create_Loop`].
+    /// The explosion path's hitdata +0x58 is the breakable itself (kind 0x20 [M 0x17c518:163-164
+    /// `Break_ApplyDamage(*(iVar8+0x58), iVar8)`) and a walked-through pane's is the drone
+    /// (kind 2 [M 0x12bfd8:24-33]) — both fail the kind-5 gate before any draw, which is why
+    /// those sites keep plain `kill` (the identical, draw-free RNG stream).
+    pub fn kill_by_bullet(&mut self, i: usize, a: V3, b: V3, rng: &mut Rng, drones: &[crate::drone::Drone], level: u32, system_disabled: bool, out: &mut Vec<(usize, u32)>) -> Option<BreakEffect> {
+        self.kill_inner(i, a, b, rng, Some((drones, level, system_disabled, out)))
+    }
+
+    fn kill_inner(&mut self, i: usize, a: V3, b: V3, rng: &mut Rng, bark: Option<(&[crate::drone::Drone], u32, bool, &mut Vec<(usize, u32)>)>) -> Option<BreakEffect> {
         let br = &mut self.list[i];
         if br.dead { return None; }
         br.dead = true;
@@ -470,6 +492,44 @@ impl Breaks {
         } else {
             0x5F3
         };
+        // fx-broken-object-bark: `Break_Kill`'s else branch calls `Drone_BrokenObject` BEFORE the
+        // material fix and `Debris_Create_Loop` [M 0x12b970:135-141]; the shatter arm (the model
+        // type 2 = glass) never reaches it [M 0x12b970:78-133] — so the bark walk runs only for
+        // kind != 2, its `Rand(4)` draws sitting exactly between the sound roll and the debris
+        // draws. `Drone_BrokenObject` 0x138588 [M disasm 0x138588-0x1386d0], gates in order:
+        // `Drone_bDisableSystem == 0` (0x13858c) — the caller's `system_disabled` (the port's
+        // `npc_system_disabled`, the options-menu drones-off setting); `GameState+0xc ==
+        // 0x7000001` (0x1385b0); the
+        // hitdata's +0x58 object exists, is a bullet (obj+0xff == 5 [M 0x12c5a0:87]) and belongs to
+        // the player's weapon system (+0xe0 → +0x30 == glb_players [M 0x1385ec-0x1385f4]) — both
+        // carried by `kill_by_bullet`'s caller (the player-bullet walk) and refused by `kill`'s
+        // None (see above). Then the list walk from 0x298e14 [M 0x138618-0x1386b0], in list order:
+        // the type byte +0xc5 == 0x0c else skip; a type-0x0c drone with health +0xac <= 0 ABORTS
+        // the whole walk (0x138628-0x138634 `c.ole.s` + `bc1tl` → return — later drones get
+        // nothing); the body-obj gate (drone+0xc exists, its +0xff is 2 or 0x11 [M 0x13863c-0x13865c])
+        // — every SP drone's body obj is kind 2 (`NDrone2_CreateObj` 0x14d7c8:14; 0x11 is the MP
+        // bot body, `BOT_respawn` 0x124e38:90) and the port's `Drone` carries its body: structural.
+        // Per barking drone ONE `DroneFunc_ChooseSFX(0x40, 0x43)` = 0x40 + Rand(4) [M 0x1497e8]
+        // and `NDrone2_SpeechSFX(&dcvars, line, 0, 0, 0)` [M 0x138688-0x1386a4] — the port's
+        // non-forced talk request (drone.rs's `talks.push((line, false))` inline form).
+        if br.kind != 2 {
+            if let Some((drones, level, system_disabled, out)) = bark {
+                // `Drone_bDisableSystem == 0` [M 0x13858c] — the port's `npc_system_disabled`
+                // (the options-menu drones-off setting, false in play; docs/systems/actors.md).
+                if !system_disabled && level == 0x0700_0001 {
+                    for (di, dr) in drones.iter().enumerate() {
+                        // The game's list holds CREATED drones only (`Drone_Create`/`DroneSpawner_Create`
+                        // append [M 0x136be0/0x137e68]); the port pre-creates spawner slots — a
+                        // not-present row is a drone the game has not created yet: skip it.
+                        if !dr.present { continue; }
+                        if dr.dtype != 0x0c { continue; }
+                        if dr.health <= 0.0 { break; }
+                        let line = 0x40u32 + rng.rand(4) as u32;
+                        out.push((di, line));
+                    }
+                }
+            }
+        }
         let (hit, normal, mat) = Self::contact(&br.src.records, a, b, trans, centre);
         // Break_Kill defaults the hit material's low 6 bits to 0x10 when zero — the debris
         // table's breakable row [M 0x12b970:137-138 `if ((hitdata+0x50 & 0x3f) == 0) = 0x10`].
