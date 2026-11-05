@@ -372,6 +372,32 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         // drops (the kill-loot cycle) — the fights shorten with every kill.
         clear_near(&mut w, 9.0, "the servants' ground");
         loot_the_drops_03(&mut w, "the servants' ground");
+        // gas-rng-draws: the door-8 cluster (#18/#19/#2 behind the leaves at (38.7, 0.2)) can
+        // outlive the ground clear — clear_near's far+unexposed skip passes them by while the
+        // leaves hide their boxes, and the servant nav then walks THROUGH the opening door
+        // into #18's point-blank volley (the fresh d2 ledger: killed at 56606 at (40.30, 0.29),
+        // 1.6 u, health 6.2 entering the leg). A player at a door that just hissed open does
+        // not step through blind: he fights what shows through the mouth from the hinge side.
+        // Self-gating on the cluster being alive keeps every stream that already cleared it
+        // byte-identical (the green runs fought the cluster through this doorway earlier).
+        {
+            let cluster_alive = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                // No `enabled` in the filter: the door-8 members load DISABLED behind the
+                // leaves (the 01 ch-0xF pocket law — disabled objects are dropped from bullet
+                // collision [M Collide_PickObj 0x1eae80:82]) and pop when the door opens —
+                // which is exactly why the mouth walk must run first. Only a corpse or a
+                // finished fight keeps the block a no-op (the green streams cleared them).
+                sim.drones.list.iter().any(|d| {
+                    d.team == 1 && !d.corpse && d.health > 0.0
+                        && walker::dxz(d.pos, [38.7f32, 6.2f32, 0.2f32]) < 6.0
+                })
+            };
+            if cluster_alive {
+                w.walk_nav_to([35.6f32, 6.4f32, 3.4f32], "the door-8 mouth (the cluster holds)", 1.0);
+                clear_near(&mut w, 9.0, "the door-8 mouth");
+            }
+        }
         w.walk_nav_to([at[0], at[1] - 0.3, at[2]], &format!("servant {si}"), 1.7);
         let sim = w.scene.sim.as_ref().unwrap();
         let d = &sim.drones.list[si];
