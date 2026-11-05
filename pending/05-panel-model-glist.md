@@ -12,6 +12,3 @@ Red on that tip, each to be fixed by matching the game's ray, not by turning the
 Then check walkreal_0700000c_live, walkreal_07000014_live, walkreal_07000016_live, and walkreal_0700001b_live's consoles from spots a player would use. Strip the NF_AIMPROBE prints.
 
 Use a PCSX2-backed number wherever one exists. Run each binary whole and quote the results.
-
----
-claimed-by: sandbox5 at 2026-11-05T21:54Z
