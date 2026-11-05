@@ -383,19 +383,43 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         {
             let cluster_alive = {
                 let sim = w.scene.sim.as_ref().unwrap();
-                // No `enabled` in the filter: the door-8 members load DISABLED behind the
-                // leaves (the 01 ch-0xF pocket law — disabled objects are dropped from bullet
-                // collision [M Collide_PickObj 0x1eae80:82]) and pop when the door opens —
-                // which is exactly why the mouth walk must run first. Only a corpse or a
-                // finished fight keeps the block a no-op (the green streams cleared them).
+                // The anchor is the cluster's LOAD band [L the gas-rng-draws-6 probe:
+                // #18 (27.92, 6.25, −5.57) hp 12 weapon 0x1c, #2 (30.69, 6.25, −7.55) hp 12
+                // weapon 0xe, #19 (37.01, 6.25, −15.04) hp 12 weapon 0xe, all disabled state
+                // 0x1, and door #8 (35.62, 6.51, 2.71) closed state 0x2 pos01 0.50; no other
+                // hostile stands within 8 of the band centre]. The first anchor — the
+                // POST-open pocket (38.7, 0.2) r 6.0 they walk to AFTER the door opens —
+                // never matched the load spots, so the block never fired on the failing
+                // stream. No `enabled` in the filter: the door-8 members load DISABLED behind
+                // the leaves (the 01 ch-0xF pocket law — disabled objects are dropped from
+                // bullet collision [M Collide_PickObj 0x1eae80:82]) and pop when the door
+                // opens — which is exactly why the mouth walk must run first. Only a corpse
+                // or a finished fight keeps the block a no-op (the green streams cleared
+                // them).
                 sim.drones.list.iter().any(|d| {
                     d.team == 1 && !d.corpse && d.health > 0.0
-                        && walker::dxz(d.pos, [38.7f32, 6.2f32, 0.2f32]) < 6.0
+                        && walker::dxz(d.pos, [31.9f32, 6.25f32, -9.4f32]) < 8.0
                 })
             };
             if cluster_alive {
                 w.walk_nav_to([35.6f32, 6.4f32, 3.4f32], "the door-8 mouth (the cluster holds)", 1.0);
-                clear_near(&mut w, 9.0, "the door-8 mouth");
+                // The mouth stand opens door #8 the way the mid-nav approach did [L the d2
+                // ledger — the door opened under the servant nav]; the popped members then
+                // walk their pocket route (to (38.7, 0.2) [L the d2 ledger]) — ~6.9 u from
+                // the mouth, inside clear_near's 9 band once they arrive. The settle loop
+                // gives them that walk and fights them from the hinge side (the green runs'
+                // own fight shape from (36.2, 5.7) THROUGH the doorway), instead of stepping
+                // off into the servant nav with the fight unanswered.
+                for round in 0..5 {
+                    w.wait(90);
+                    let at_pocket = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        sim.drones.list.iter().filter(|d| d.team == 1 && !d.corpse && d.health > 0.0
+                            && walker::dxz(d.pos, [38.7f32, 6.2f32, 0.2f32]) < 7.0).count()
+                    };
+                    clear_near(&mut w, 9.0, "the door-8 mouth");
+                    if at_pocket == 0 && round >= 1 { break; }
+                }
             }
         }
         w.walk_nav_to([at[0], at[1] - 0.3, at[2]], &format!("servant {si}"), 1.7);
@@ -743,4 +767,36 @@ fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
 #[ignore = "00 Agent: the east captor-room cluster under the door routes — the pre-clear rally kills the door-8 guards (#18/#19/#2) at zero fight cost but the rally APPROACH crosses their gun line (40.8 -> 15.6-19.2) and the exit lawn then needs ~29; next levers: an approach that stays north of door 8 (the green run fought from (36.2,5.7) THROUGH the open doorway), the 87000-tick (35.6,8.7) door stall on the post-rescue west-lawn leg, and the exit-lawn #16 post-kill volley; follow-up real-health-00agent-02-03-3"]
 fn walk_the_full_route_and_complete_every_objective_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(3));
+}
+
+/// The door-8 cluster's LOAD-state probe (gas-rng-draws-6; run with `--ignored --nocapture`):
+/// report-5's named first step — the staged pre-servant-nav mouth-clear's anchor
+/// (`dxz < 6.0` of (38.7, 6.2, 0.2)) never fired because the cluster (#18/#19/#2) loads
+/// DISABLED behind the leaves at its OWN spots and only walks to (38.7, 0.2) after the door
+/// opens. This probe dumps every hostile's load position/state at tick 100 (before any leg)
+/// so the filter can be re-anchored to the real spots. Cheap (no walking).
+#[test]
+#[ignore = "probe: dump the door-8 cluster's load state at tick 100"]
+fn probe_door8_cluster_load_state() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000003.bin", false).expect("load 07000003"));
+    w.wait(100);
+    let sim = w.scene.sim.as_ref().unwrap();
+    for (i, d) in sim.drones.list.iter().enumerate() {
+        if d.team != 1 { continue; }
+        eprintln!("[03-probe] #{i} skin {:#x} at ({:.2},{:.2},{:.2}) enabled {} present {} corpse {} state {:#x} hp {:.1} weapon {:#x}",
+            d.skin, d.pos[0], d.pos[1], d.pos[2], d.enabled, d.present, d.corpse, d.state, d.health, d.weapon);
+    }
+    let door8 = sim.drones.doors.list.iter().enumerate()
+        .find(|(_, dr)| walker::dxz(dr.pos, [35.6f32, 2.1, 2.7]) < 4.0);
+    if let Some((di, dr)) = door8 {
+        eprintln!("[03-probe] door #{di} at ({:.2},{:.2},{:.2}) state {:#x} pos01 {:.2}",
+            dr.pos[0], dr.pos[1], dr.pos[2], dr.state, dr.pos01);
+    } else {
+        eprintln!("[03-probe] no door within 4 of (35.6, 2.1, 2.7) — dump all doors:");
+        for (di, dr) in sim.drones.doors.list.iter().enumerate() {
+            eprintln!("[03-probe] door #{di} at ({:.2},{:.2},{:.2}) state {:#x} pos01 {:.2}",
+                dr.pos[0], dr.pos[1], dr.pos[2], dr.state, dr.pos01);
+        }
+    }
 }
