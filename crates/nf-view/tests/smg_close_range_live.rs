@@ -81,7 +81,7 @@ struct FireTrace {
 /// (4 more rounds) or the tick cap. Every tick is logged to stderr under [smg]. Impacts are
 /// attributed by the engine's own hit record's weapon: the escort's own volleys land in the
 /// same list (his 0x1c pellets) and must not count as the player's registration.
-fn fire_at(w: &mut Walker, gi: usize, max_rounds: u32, my_weapon: u16, label: &str) -> FireTrace {
+fn fire_at(w: &mut Walker, gi: usize, max_rounds: u32, my_weapon: u16, label: &str, segment_gate: bool) -> FireTrace {
     // audit-voice-triggers-2: the live guards HUNT (the gunfire alerted them — the merged
     // branch's added attack barks wake them earlier than master's stream did). At a 1 u stand a
     // circling guard flips the aim geometry (dxz under the 0.5 clamp, dx/dz sign flips swing
@@ -108,6 +108,34 @@ fn fire_at(w: &mut Walker, gi: usize, max_rounds: u32, my_weapon: u16, label: &s
             let sim = w.scene.sim.as_ref().unwrap();
             torso_aim(sim, gi)
         };
+        // audit-voice-triggers-3 (segment_gate legs): the 0x74 combat guards crouch BEHIND the
+        // hall's crates — the chest never clears (the hold-spot run: d#6/d#11, 0 rounds in 6000
+        // ticks) and when he does shoot, only the head shows over the lip. The player aims at
+        // whatever box the game exposes: the chest if it shows, else the head (part 5 — the
+        // port's one head part [M damage.rs hit_damage's match]), else any box with a clear
+        // centre ray. A head hit is the ×100 line [M NDrone2_HitDamage 0x145558] — the control
+        // lands on the exposed box, the way the game itself registers hits.
+        let (chest, part) = if segment_gate {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+            let bx = sim.drones.list[gi].hit_boxes(&data_of(sim));
+            let clear = |c: &[f32; 3]| sim.world.segment(eye, *c).is_none();
+            let mut pick: Option<([f32; 3], Option<i16>)> = None;
+            for want in [4i16, 5] {
+                if let Some(b) = bx.iter().find(|b| b.part == want) {
+                    let c = [b.m[3][0], b.m[3][1], b.m[3][2]];
+                    if clear(&c) { pick = Some((c, Some(want))); break; }
+                }
+            }
+            if pick.is_none() {
+                for b in &bx {
+                    let c = [b.m[3][0], b.m[3][1], b.m[3][2]];
+                    if clear(&c) { pick = Some((c, Some(b.part))); break; }
+                }
+            }
+            pick.unwrap_or((chest, part))
+        } else { (chest, part) };
         let (input, on) = {
             let sim = w.scene.sim.as_ref().unwrap();
             tr.boxes = boxes;
@@ -120,7 +148,15 @@ fn fire_at(w: &mut Walker, gi: usize, max_rounds: u32, my_weapon: u16, label: &s
             let err = walker::wrap_pi(desired - sim.bond.yaw);
             let want_pitch = (dy / walker::dxz(bp, chest).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
             let perr = want_pitch - sim.bond.pitch;
-            let on = err.abs() < 0.07 && perr.abs() < 0.10;
+            let on = err.abs() < 0.07 && perr.abs() < 0.10
+                // audit-voice-triggers-3 (opt-in per leg — the green 1 u leg keeps its exact
+                // timeline): the player does not fire into cover. The combat-state guards
+                // re-cover DURING a fire (d#11: the segment was clear at the stand, then the
+                // 6 rounds ate the crate over 527 ticks); the gate holds the trigger while his
+                // eye-to-chest line is blocked and fires when he pops out to shoot — the same
+                // pop-out the 300-tick reposition pause waits for.
+                && (!segment_gate || sim.world.segment(eye, chest).is_none());
+            let _ = boxes;
             // audit-voice-triggers-2: hold the stand's band on real input while the guard hunts
             // (see the `band` note above) — a drifted guard swings err past the gate and the
             // leg stops spawning rounds.
@@ -375,6 +411,18 @@ fn smg_rounds_damage_a_close_guard_and_the_pistol_sister() {
             let d = &sim.drones.list[i];
             d.team == 1 && !d.corpse && d.enabled && d.health > 0.0
         });
+        // audit-voice-triggers-2's pinned next step, landed (the legs beyond 1 u): the escort
+        // steals candidates within ~8 u of his idling spot — d#6 died 12.0 -> 0.0 with 0 player
+        // impacts, his volley, mid-leg. A candidate FARTHER than ~8 u from the contact cannot be
+        // stolen (his rounds do not reach), so the 2 u / 6 u legs take the farthest-first.
+        if dist > 1.0 {
+            let cpos = w.scene.sim.as_ref().unwrap().drones.list[ci].pos;
+            live.sort_by(|&a, &b| {
+                let sim = w.scene.sim.as_ref().unwrap();
+                walker::dxz(sim.drones.list[b].pos, cpos).total_cmp(&walker::dxz(sim.drones.list[a].pos, cpos))
+            });
+            eprintln!("[smg] {dist} u leg: candidates farthest-from-the-contact first: {live:?}");
+        }
         if live.is_empty() { break; }
         let mut tg = live[0];
         // audit-voice-triggers-2: the same clear-segment gate the SMG legs use — a combat-state
@@ -420,9 +468,23 @@ fn smg_rounds_damage_a_close_guard_and_the_pistol_sister() {
                     d.team == 1 && !d.corpse && d.enabled && d.health > 0.0
                 });
                 if !live.contains(&tg) { break; }
-                stand_near(&mut w, tg, dist);
+                if dist > 1.0 {
+                    // audit-voice-triggers-3: the combat-state guards HUNT the leg's own gunfire —
+                    // the old chase-stand walked Bond after a moving 0x74 guard into the hall's
+                    // cover pockets (the STUCK wedges at the 3000-tick cap) and the escort killed
+                    // the chased candidate mid-walk (the 2026-11-05 run: d#5 12.0 -> 0.0 with 0
+                    // player impacts, d#6 12.0 -> 6.8 before the leg even fired — his volleys,
+                    // NOT the control's). The player HOLDS the proven mid-hall spot instead: the
+                    // hunters cross the open floor TOWARD the gunshot (the sound lure is the
+                    // game's own hunting law [M DroneFunc_SetNoiseHeard]), the clear-segment
+                    // gate fires when one crosses the sight line, and a guard Bond faces at 2-4 u
+                    // dies to BOND, not to the escort behind him. No stand: the leg fires from
+                    // where it stands.
+                } else {
+                    stand_near(&mut w, tg, dist);
+                }
                 let rounds = if dist > 1.0 { 6 } else { 3 };
-                let tr = fire_at(&mut w, tg, rounds, 0x2, &format!("pistol {dist}u a{attempt}"));
+                let tr = fire_at(&mut w, tg, rounds, 0x2, &format!("pistol {dist}u a{attempt}"), dist > 1.0);
                 let drop = tr.hp0 - tr.hp1;
                 eprintln!("[smg] pistol {dist} u on d#{tg} (attempt {attempt}): spawned {} rounds, {} impacts, hp {:.1} -> {:.1} (drop {drop:.3}), ticks {}",
                     tr.spawned, tr.impacts.len(), tr.hp0, tr.hp1, tr.ticks);
@@ -485,7 +547,7 @@ fn smg_rounds_damage_a_close_guard_and_the_pistol_sister() {
             let clip = w.scene.sim.as_ref().unwrap().gun.clip;
             let rounds = round_cap.min(clip.max(1) as u32);
             eprintln!("[smg] firing {rounds} SMG rounds at d#{tg} from {d:.2} u (aim {dist})");
-            let tr = fire_at(&mut w, tg, rounds, 0x12, &format!("smg {dist}u"));
+            let tr = fire_at(&mut w, tg, rounds, 0x12, &format!("smg {dist}u"), true);
             let drop = tr.hp0 - tr.hp1;
             let expected: f32 = tr.impacts.iter().map(|(_, e, _)| *e).sum();
             eprintln!("[smg] SMG {dist} u: spawned {} rounds, {} impacts (ally {}), hp {:.1} -> {:.1} (drop {drop:.3}, expected {expected:.3}), ticks {}",
@@ -514,7 +576,7 @@ fn smg_rounds_damage_a_close_guard_and_the_pistol_sister() {
     // pass-through is that rule, not a bug.
     if let Some(dg) = dg {
         stand_near(&mut w, dg, 0.9);
-        let tr = fire_at(&mut w, dg, 4, 0x2, "dormant");
+        let tr = fire_at(&mut w, dg, 4, 0x2, "dormant", false);
         eprintln!("[smg] DORMANT d#{dg}: spawned {} rounds, hp {:.1} -> {:.1} — Enable(0) hold [M 0x15b960/0x149dd0]",
             tr.spawned, tr.hp0, tr.hp1);
         assert_eq!(tr.hp0, tr.hp1, "a switch-held guard takes no bullets — the game's own Enable(0) rule [M 0x15b960 enter]");
