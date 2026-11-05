@@ -515,6 +515,23 @@ impl GTurret {
         }
     }
 
+    /// fx-gas-and-blasts row 10 [M GT_Create 0x17ffa0:150-166]: after a turret enters the list,
+    /// every OTHER class-6 object whose ext+0xb8 equals the new turret's owner is self-deleted
+    /// (`obj+0xfe |= 1`) with the `Explode_Create(5.0, 5.0, 50.0, …, 0x6000052, …, 100)` blast at
+    /// its own +0x30. Returns the blown turrets' positions (the caller queues the blasts).
+    pub fn create_chain(turrets: &mut [GTurret], new_idx: usize) -> Vec<[f32; 3]> {
+        let Some(new) = turrets.get(new_idx) else { return Vec::new() };
+        let owner = new.owner;
+        let mut blown = Vec::new();
+        for (i, t) in turrets.iter_mut().enumerate() {
+            if i != new_idx && !t.delete_flag && t.owner == owner {
+                t.delete_flag = true;
+                blown.push(t.pos);
+            }
+        }
+        blown
+    }
+
     /// `GT_PlayerHasDied` 0x181808: every state-7 turret whose owner is the dead object
     /// loses control [M 00181808 — the object-list walk collapses to the turret list].
     pub fn player_has_died(turrets: &mut [GTurret], dead_owner: u32) {
@@ -1553,3 +1570,25 @@ mod tests {
         assert!(place_object(&ok, [0.0, 0.4, 0.0], [0.0, 0.0, 1.0]).is_some(), "a wall 0.45 away still seats");
     }
 }
+    /// fx-gas-and-blasts row 10 [M GT_Create 0x17ffa0:150-166]: the same-owner chain — placing a
+    /// second turret with the same ext+0xb8 owner self-deletes the first with the 5/5/50
+    /// 0x6000052 blast at its own +0x30. The game runs the sweep INSIDE GT_Create, so the level
+    /// placement walk fires it per placement too.
+    #[test]
+    fn create_chain_blows_the_same_owner_turrets() {
+        let mut turrets = vec![
+            GTurret { owner: 7, pos: [1.0, 2.0, 3.0], ..GTurret::default() },
+            GTurret { owner: 9, pos: [4.0, 5.0, 6.0], ..GTurret::default() },
+            GTurret { owner: 7, pos: [7.0, 8.0, 9.0], ..GTurret::default() },
+        ];
+        // The new one is index 2 (owner 7): the other owner-7 turret (index 0) blows.
+        let blown = GTurret::create_chain(&mut turrets, 2);
+        assert_eq!(blown, vec![[1.0, 2.0, 3.0]], "the same-owner sibling dies [M 0x17ffa0:157-163]");
+        assert!(turrets[0].delete_flag, "obj+0xfe |= 1 on the blown one");
+        assert!(!turrets[1].delete_flag && !turrets[2].delete_flag, "the other owner and the new one stay");
+        // Sister: an already-requested delete is not blown twice.
+        turrets[1].owner = 7;
+        turrets[1].delete_flag = true;
+        let blown = GTurret::create_chain(&mut turrets, 2);
+        assert!(blown.is_empty(), "a delete-flagged sibling is skipped");
+    }

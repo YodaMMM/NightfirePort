@@ -88,6 +88,12 @@ pub struct MpFx {
     pub due: Vec<(u32, usize, u32)>,
     /// Every sound this module started (frame, id, position, slot) — the tests' and the log's view.
     pub started: Vec<(u32, u32, V3, usize)>,
+    /// mp-bot-voices: the bots' bark handle per slot — the game's `BOT_vars+0x73c` voice ref
+    /// (`Sound_Stop_Ref` 0x1de370 stops it before the next bark [M 0x1266c8-0x1266d0]; the game
+    /// re-stamps it with the new play [M 0x1266fc]). The `Sound_Playing_Ref` 0x1de3a0 gate that
+    /// reads it is NOT evaluated — see `Sim::mp_bot_bark`'s doc. Cleared on the bot's respawn
+    /// (a fresh drone object, a fresh +0x73c).
+    pub bot_bark: [Option<u32>; nf_net::MAX_AGENTS],
     /// Off: the combat still records, the flush only clears (the hash-equality tests).
     pub disabled: bool,
 }
@@ -97,7 +103,7 @@ impl Default for MpFx {
         MpFx {
             events: Vec::new(), body_sounds: Vec::new(), last_shot: [None; nf_net::MAX_AGENTS], tracers: Vec::new(),
             step: [0.0; nf_net::MAX_AGENTS], prev_pos: [None; nf_net::MAX_AGENTS], was_dead: [false; nf_net::MAX_AGENTS],
-            due: Vec::new(), started: Vec::new(), disabled: false,
+            due: Vec::new(), started: Vec::new(), bot_bark: [None; nf_net::MAX_AGENTS], disabled: false,
         }
     }
 }
@@ -142,9 +148,9 @@ impl Sim {
         self.mp_fx.tracers.get(n - 1 - k)
     }
 
-    fn mpfx_play3d(&mut self, id: u32, pos: V3, slot: usize) {
-        if id == 0 || id & 0xfffff == 0xffff { return; }
-        self.drones.audio.play3d(id, pos, None);
+    fn mpfx_play3d(&mut self, id: u32, pos: V3, slot: usize) -> u32 {
+        if id == 0 || id & 0xfffff == 0xffff { return 0; }
+        let h = self.drones.audio.play3d(id, pos, None);
         let frame = self.drones.frame;
         self.mp_fx.started.push((frame, id, pos, slot));
         if self.mp_fx.started.len() > 4096 { self.mp_fx.started.drain(..2048); }
@@ -152,6 +158,63 @@ impl Sim {
             let l = self.bond.head();
             let d = ((pos[0] - l[0]).powi(2) + (pos[1] - l[1]).powi(2) + (pos[2] - l[2]).powi(2)).sqrt();
             eprintln!("[mpfx] f{frame} sound {id:#x} at ({:.2}, {:.2}, {:.2}) slot {slot} dist {d:.1}", pos[0], pos[1], pos[2]);
+        }
+        h
+    }
+
+    /// mp-bot-voices: the MP bots' bark — `BOT_soundEffect` 0x126618's production caller. The
+    /// trigger's pool comes from `BotBrain::bot_sound_effect` (trigger 1 → 0x154/0x157 + Rand(3)
+    /// [M disasm 0x1266a0-0x1266b0]; 0x1F → 0x14D/0x152 [M 0x126680-0x12669c]); the one
+    /// `Rand_Rand(n)` draw is on the shared match stream, taken exactly when the game's arm is
+    /// reached [M 0x1266b4], so every machine draws identically and the state hash stays equal.
+    /// The line then runs `NDrone2_PlaySFX`'s row gates via `Drones::foley_entry` (the bot bark
+    /// passes param_5 = 1 [M 0x1266f0]): the 30-frame post-load gate + the row's repeatDelay —
+    /// all ten bot rows carry repeat 0 [D ELF `Drone_SfxInfo` 0x2812d0 rows 0x14d..0x159], so the
+    /// delay arm is vacuous here and the post-load gate stands. Delivery: the previous bark's
+    /// handle stops (`Sound_Stop_Ref` [M 0x1266c8-0x1266d0]) and the row's sfx plays at the bot
+    /// (the game's `Sound_Play3D(piVar6[4], …)` inside PlaySFX [M 0x141a50]; the port's MP bots
+    /// are not drone objects, so the line rides the presentation channel like the bots' shot
+    /// sounds — the drones' hearing list is an SP-drone consumer).
+    ///
+    /// NOT carried: `Sound_Playing_Ref` 0x1de3a0's "previous bark still playing" gate on the
+    /// trigger-0x1F arm [M 0x126668-0x126678]. It reads the sound pool's node (ref word +0x38 vs
+    /// `Drone+0x108`, state byte +0x50) — the pool's contents are per-machine presentation (the
+    /// local slot's own 0x412 / 0x88 sounds play on one machine only), so a gate on it would make
+    /// the shared stream's draw count machine-dependent and desync the match. The port stops the
+    /// previous handle and always plays (the same deviation `Drones::bot_handle_pain` carries for
+    /// SP), rate-limited only by the row gates above.
+    ///
+    /// `alt` (the game's `Drone+0x15` byte) is false: the MP bot records carry no sex byte and the
+    /// port does not map the MP character skins to one — the male pools stand in. [S] unverified;
+    /// the alt arms stay pinned only by `bot_sound_effect`'s unit tests, not by the live path.
+    ///
+    /// Runs outside `self` so the damage sites can call it while holding the match borrow: the
+    /// draw + the row stamp are sim state and happen even when `mp_fx.disabled` (the
+    /// hash-equality runs), only the delivery is skipped.
+    pub fn mp_bot_bark(
+        drones: &mut nf_game::drone::Drones, mp_fx: &mut MpFx,
+        voices: Option<&[nf_formats::sfx::VoiceLine]>, bots: &[nf_game::mp::MpBot],
+        slot: usize, trigger: u32,
+    ) {
+        let Some(b) = bots.iter().find(|b| b.slot == slot) else { return };
+        let alt = false; // [S] unverified — see the doc
+        let Some((base, n)) = b.brain.bot_sound_effect(trigger, alt) else { return };
+        let pos = b.brain.pos;
+        let id = base as usize + drones.rng.rand(n) as usize; // [M 0x1266b4] the shared stream
+        let frame = drones.frame;
+        let Some(l) = nf_game::drone::Drones::foley_entry(voices, &mut drones.voice_last, id, frame) else { return };
+        if mp_fx.disabled { return; }
+        if slot < mp_fx.bot_bark.len() {
+            if let Some(h) = mp_fx.bot_bark[slot] { drones.audio.stop(h); } // [M 0x1266c8]
+        }
+        let h = drones.audio.play3d(l.sfx, pos, None);
+        mp_fx.started.push((frame, l.sfx, pos, slot));
+        if mp_fx.started.len() > 4096 { mp_fx.started.drain(..2048); }
+        if slot < mp_fx.bot_bark.len() {
+            mp_fx.bot_bark[slot] = (h != 0).then_some(h); // [M 0x1266fc]
+        }
+        if log_on() {
+            eprintln!("[mpfx] f{frame} bot bark slot {slot} trigger {trigger:#x} line {id:#x} sfx {} at ({:.2}, {:.2}, {:.2})", l.sfx, pos[0], pos[1], pos[2]);
         }
     }
 

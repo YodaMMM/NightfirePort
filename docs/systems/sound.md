@@ -800,6 +800,8 @@ HasSampleEnded@6ac: handle -1 → 1; KeyOnFrameDelay≥1 → 0; sample → !psiI
 (KillSFX → key-off), or until stolen, FadeAndKill'ed or reset. A natural end does not key-off; the voice is just unlocked [M].
 "Playing" test PS2_CheckKeyOn2@da1c: true if ENVX != 0 at the last batch-end snapshot, or keyed on in this batch / the delayed batch / the previous batch (LastKeyOn), or looping.
 
+Port: one `Driver::update` per 60 Hz tick at any display rate. `sound_tick` is the update while the sim ticks. `menu_music_tick`'s pump answers the ticks it leaves: all of them under the menus or a load, and anything over two behind elsewhere (noclip, the dev menu, a lockstep wait), since the music queue runs dry in under two seconds without an update. A voice keyed on in this batch ignores a reported end: it is the last occupant's release, freed a batch ago.
+
 ## 7. Key-on dispatch (PS2_SendKeyONKeyOff@d544, end of every RPC batch except the stream-only commands) [M]
 Snapshots ENVX (SD_VP_ENVX = 0x500) of all 48 voices (bit set = silent) → writes VMIXEL/VMIXER (reverb) → removes key-off voices from the key-on sets → KON = front voices.
 KOFF = key-offs. If SFXMode != 0: DelayThread(500 us), then KON = rear voices (delayed rear). If SFXMode == 0, rear voices are keyed together with the front ones.

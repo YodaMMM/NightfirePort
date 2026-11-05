@@ -70,6 +70,27 @@ fn precache_streams_only_and_dedups_the_real_start() {
     assert_eq!(d.items(), 2);
 }
 
+/// The takeover refreshes `StartedWhenNisPlaying` [M sound.md §3.2 step 3]: a line armed the tick
+/// before the cut-scene's flag rose still dies with the skip. Sister: armed in a scene, started
+/// after it, the line is not the scene's.
+#[test]
+fn the_takeover_refreshes_started_when_nis() {
+    let started = |d: &Driver| d.items_probe().iter().find(|p| p.0 == 175).map(|p| p.3);
+    let (mut d, _bank, _sbf) = driver();
+    let mut out = Vec::new();
+    d.pre_cache(&mut out, 175, 10);
+    assert_eq!(started(&d), Some(false));
+    d.set_nis_playing(true);
+    assert_eq!(d.start(&mut out, 175, None, 7, None), 0);
+    assert_eq!(started(&d), Some(true), "the start under the scene is the scene's");
+    let (mut d, _bank, _sbf) = driver();
+    d.set_nis_playing(true);
+    d.pre_cache(&mut out, 175, 10);
+    d.set_nis_playing(false);
+    assert_eq!(d.start(&mut out, 175, None, 7, None), 0);
+    assert_eq!(started(&d), Some(false));
+}
+
 /// `SFXPreCache` sets the voice up without keying it on (`StartSample` skips KeyOn while
 /// `KeyOnFrameDelay != 0`); the real start keys it on; an untaken pre-setup is deleted when the
 /// countdown reaches 0 [M sound.md §3.2].

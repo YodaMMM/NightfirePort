@@ -10,6 +10,13 @@
 use nf_game::player::Input;
 use nf_view::scene::ViewOpts;
 
+/// The bullet holes: a guard walking anywhere on the level leaves footprints in the same pool.
+fn holes(sim: &nf_view::scene::Sim) -> Vec<nf_game::effect::Decal> {
+    let data = sim.data();
+    let foot = |m: u32| data.surfaces.is_some_and(|s| s.effects.iter().any(|e| e.foot_decal_4 == m || e.foot_decal_8 == m));
+    sim.drones.effects.decals.iter().filter(|d| !foot(d.mesh)).cloned().collect()
+}
+
 #[test]
 fn a_shot_at_a_wall_leaves_a_decal_a_sky_shot_leaves_none() {
     let Some(iso) = std::env::var("NF_ISO").ok() else { return };
@@ -43,13 +50,13 @@ fn a_shot_at_a_wall_leaves_a_decal_a_sky_shot_leaves_none() {
         sim.bond.pitch = (-0.05f32).asin();
         sim.bond.eye = 0.0;
         // Fire one tick, then fly the bullet to the wall.
-        let before = sim.drones.effects.decals.len();
+        let before = holes(sim).len();
         sim.step_bond(Input { fire: true, ..Input::default() }, true, false, false);
         for _ in 0..90 {
             sim.step_bond(Input::default(), false, false, false);
-            if sim.drones.effects.decals.len() > before { break; }
+            if holes(sim).len() > before { break; }
         }
-        let dec = sim.drones.effects.decals.last().cloned();
+        let dec = holes(sim).last().cloned();
         // Sister: a shot into the sky (60° up where the world finds nothing) leaves no decal.
         let up_dir = [yaw.sin() * 0.5, 0.866, yaw.cos() * 0.5];
         let up_end = [eye0[0] + up_dir[0] * 200.0, eye0[1] + up_dir[1] * 200.0, eye0[2] + up_dir[2] * 200.0];
@@ -57,12 +64,12 @@ fn a_shot_at_a_wall_leaves_a_decal_a_sky_shot_leaves_none() {
         if sim.data().world.segment(eye0, up_end).is_none() {
             sim.bond.pitch = 1.0;
             sim.bond.yaw = yaw;
-            let b2 = sim.drones.effects.decals.len();
+            let b2 = holes(sim).len();
             sim.step_bond(Input { fire: true, ..Input::default() }, true, false, false);
             for _ in 0..90 { sim.step_bond(Input::default(), false, false, false); }
-            sky_new = sim.drones.effects.decals.len() - b2;
+            sky_new = holes(sim).len() - b2;
         }
-        (hit, dec, mat, sim.drones.effects.decals.len() - before, sky_new)
+        (hit, dec, mat, holes(sim).len() - before, sky_new)
     };
     let dec = dec.expect("one wall shot → exactly one new decal");
     assert_eq!(new_decals, 1, "one wall shot → exactly one new decal");
@@ -100,7 +107,7 @@ fn a_shot_at_a_wall_leaves_a_decal_a_sky_shot_leaves_none() {
         let sim = scene.sim.as_ref().unwrap();
         // The new decal's draw slot is its pool node (the 200-slot ring keeps each hole in its node for
         // life [M Effect_InitLists 0x1cf268]), not the list index.
-        let slot = sim.drones.effects.decal_node(sim.drones.effects.decals.len() - 1);
+        let slot = sim.drones.effects.decal_node(sim.drones.effects.decals.iter().position(|d| d.serial == dec.serial).unwrap());
         let att = scene.effect_attachment(0, slot, dec.mesh)
             .expect("the decal mesh's draw slots are in the scene");
         // The debris pool: `Scene::build` instances every `EffectInfo+0x74` hash the level archive

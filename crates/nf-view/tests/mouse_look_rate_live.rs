@@ -47,7 +47,7 @@ enum Feed {
 fn arith_loop(fps: u32, feed: Feed) -> (f32, f32) {
     let dt = 1.0 / fps as f32;
     let (dxf, dyf) = (DX_PER_SEC / fps as i32, DY_PER_SEC / fps as i32);
-    let mut anim_time = 0.0f32;
+    let mut anim_time = 0.0f64;
     let (mut turn, mut look) = (0.0f32, 0.0f32);
     let (mut got_t, mut got_l) = (0.0f32, 0.0f32);
     // One second of mouse, then idle frames until the pending delta drains.
@@ -114,7 +114,7 @@ fn sim_loop(iso: &str, fps: u32) -> (f32, f32, f32, f32) {
     };
     let dt = 1.0 / fps as f32;
     let (dxf, dyf) = (DX_PER_SEC / fps as i32, DY_PER_SEC / fps as i32);
-    let (mut anim_time, mut turn, mut look) = (0.0f32, 0.0f32, 0.0f32);
+    let (mut anim_time, mut turn, mut look) = (0.0f64, 0.0f32, 0.0f32);
     let (mut cam_prev, mut cam_cur): (Option<Camera>, Option<Camera>) = (None, None);
     let mut cam = cam_of(sim);
     let mut drawn = cam;
@@ -126,7 +126,7 @@ fn sim_loop(iso: &str, fps: u32) -> (f32, f32, f32, f32) {
             sim.step_bond(input, false, false, false);
             cam = cam_of(sim);
         }
-        drawn = draw_bracket(&mut cam_prev, &mut cam_cur, cam, n > 0, anim_time.fract(), true).0;
+        drawn = draw_bracket(&mut cam_prev, &mut cam_cur, cam, n > 0, anim_time.fract() as f32, true).0;
     }
     (wrap(sim.bond.yaw - yaw0), (sim.bond.pitch - pitch0) * std::f32::consts::FRAC_PI_2, wrap(drawn.yaw - yaw0), drawn.pitch - pitch0 * std::f32::consts::FRAC_PI_2)
 }

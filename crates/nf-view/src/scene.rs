@@ -901,12 +901,19 @@ pub struct Msg {
     /// 0x19c310:219-229], so a cut-scene starting in the banner's flash window holds the chime
     /// until the hand-back (objective-banner-timing).
     pub sfx1: bool,
+    /// TXT_MSG+0x10, the image-message id: when non-zero the status pane's state 2 re-textures
+    /// sprite 0 with it (`hashtable_set_sprite(sprite0, msg+0x10)`), clears the text and jumps
+    /// straight to state 3 — the strcmp and the text row are skipped [M 0x19c310:183-190, disc
+    /// disasm 0x19c558-570]. `Text_AddMsg` stores it only for NULL-text posts [M 0x1b0c30:160]
+    /// and no decompiled caller passes a non-zero id (the 36-call-site sweep) — the port keeps
+    /// 0 on every queue push, so the arm is inert until a future caller sources an id.
+    pub image: u32,
 }
 
 impl Msg {
     pub fn new(text: String, time: f32) -> Msg {
         Msg { text, time, status: 0, failed: false, life: time, opened: false, second: false, label: 0, script: false,
-            sfx1: false }
+            sfx1: false, image: 0 }
     }
 }
 
@@ -1026,6 +1033,13 @@ pub struct HudState {
     /// them off again (layer 0xff) [M 0x19ad0c/0x19ae48; L 07000005 2026-10-12 switch shows the name
     /// alone]. The port latches on the first timer==0 tick (hud_tick); false at load.
     pub ammo_strips_positioned: bool,
+    /// The lens-flare pane's sticky alpha byte (sprite 0's +0x38, the pane's whole state
+    /// [M `HUD_UpdateLensFlarePane` 0x19d770:73-111]): decays 0x10 per frame, rises 0x20 while
+    /// the sun is LOS-visible and its zoom-rescaled screen position is on-screen, clamped
+    /// 0..255; frozen while the level has no sun (`SunVector` 0). MP has no pane 8 (MPPaneList
+    /// slot 8 is dead [M 0x199e88]) — `hud_tick` holds it at 0 there. Updated in `hud_tick`;
+    /// hud.rs draws the 7 quads from it.
+    pub flare_alpha: f32,
 }
 
 impl HudState {
@@ -1408,6 +1422,13 @@ pub struct Cel {
     /// a full u32) != 0, written for both room-cel classes. `Sound_UpdateListeners` ORs it with `env >= 20`
     /// (a signed s16 compare) into `SFXSetEnvironment`'s underwater argument.
     pub underwater: bool,
+    /// `cel+0xa1`: the cel's music-zone channel — placement param 4 (`level_tag+0x3c`, a byte) for
+    /// both room-cel classes [M parseentity_fixup_entity 0x1d00c0: the 0xc023/0xc047 arms write
+    /// `*(char *)(cel + 0xa1) = *(char *)(entity + 0x3c)`; `build_alloc_cel` 0x1c93f8 zeroes it
+    /// on every other cel]. `Player_Update` 0x193600:117-122 posts `Music_Event(ch, 1)` every
+    /// tick the player object's cel carries a non-zero one — the level's music-zone machine
+    /// (TowerC 0x113a20 reads e[44]/e[41]/e[17], the 0b zones' channels).
+    pub music_zone: u8,
 }
 
 /// The runtime cel graph for the portal visibility walk (fix-perf-level, G-016's portal half).
@@ -1606,7 +1627,8 @@ pub fn parse_cel_graph(level: &Level) -> (Vec<Cel>, CelGraph) {
                         let env = if flags16 == 0xc023 { -0x6768i16 } else { param32(9) as u16 as i16 };
                         rooms.push(Cel { min: o.min, max: o.max, ambient: [a0, a1], zone: if flags16 == 0xc047 { param(5) } else { 0 },
                             water: if flags16 == 0xc023 { o.max[1] } else { -500.0 },
-                            env, underwater: param32(3) != 0 });
+                            env, underwater: param32(3) != 0,
+                            music_zone: param(4) });
                         room_to_cell.push(Some(idx));
                     }
                 }
@@ -2638,10 +2660,29 @@ impl Sim {
         // mp-scenarios-online (agent6): the round restart's respawns and the match-decided deaths
         // reach the bodies before the bots tick.
         self.step_mp_scenario_sync();
+        // local-match-bot-pickups: the row reconcile runs BEFORE the bots' rebuild — the game
+        // unregisters in the same pass that deletes (the Handler's tail / Pickup_Update's
+        // expiry), the port's deletes land in the drones phase (the previous tick), and
+        // step_mp_bots's availability refresh would mark the row first and the helper's
+        // row-registered gate would never fire.
+        if self.mp.is_some() && self.net_rng.is_none() && self.net_rng_shared.is_none() {
+            self.reconcile_mp_pickup_rows();
+        }
         // mp-bots-in-match: the bots' per-frame driver — the game's `BOT_update` 0x126448 family
         // runs per frame inside the MP flow (the brains + the firing pipeline + respawn/score
         // bookkeeping), exactly like the port's `MP_Update` block above.
         { let _p = nf_game::prof::scope("mp: step_mp_bots"); self.step_mp_bots(); }
+        // local-match-bot-pickups: the shared take pass — `Pickup_Update` 0x18e148's
+        // humans-then-bots taker loop — runs HERE, right after the bots and before any body
+        // moves (every taker's position is last tick's on every machine — the pass's own doc).
+        // The game runs the pass on every machine inside the MP flow; the port's ONLINE match
+        // takes through `update_pickups_net` (the session's `Drones::net_bodies` row, set in
+        // the tick's sync below) and keeps that path untouched — a LOCAL match has no session
+        // row, so without this call the pass never ran and no bot could take anything (the
+        // audit-pickup-calls finding).
+        if self.mp.is_some() && self.net_rng.is_none() && self.net_rng_shared.is_none() {
+            self.step_mp_pickups();
+        }
         // mp-world-sync (agent 9): with the session's row (online), the remote bodies move HERE —
         // after the shared prologue, before the local body — so every body of the tick moves
         // against the same collision world (the doors and script objects join it at the drones'
@@ -3378,6 +3419,15 @@ impl Sim {
             // (`build_point_in_bounding_box` 0x1c9500), so the actor's cel always carries the geometry
             // under him and the straddle BFS roots at the floor's cel — the 08 escort's straddle root and
             // the portal-centre crossings ([M 0x1c8928's +0x70]) both ride the same stateful cel).
+            // The music-zone read [M Player_Update 0x193600:117-122]: while the player object's cel
+            // (obj+0x20 — the link from the tick before: this read precedes the same tick's
+            // movement relink in the game's Player_Update) is a room cel whose entity carries
+            // prop 0x3c, the cel's channel posts `Music_Event(ch, 1)` EVERY tick. A generic cel
+            // keeps the allocator's 0 at +0xa1 [M build_alloc_cel 0x1c93f8] and posts nothing.
+            if let Some(room) = self.bond.cel.and_then(|cell| self.room_cell.iter().position(|&c| c == Some(cell))) {
+                let ch = self.cels[room].music_zone;
+                if ch != 0 { self.drones.music.event(ch as usize, 1); }
+            }
             self.bond.cel = bond_cel;
             // The melee hit-push `BL+0x910` (fix-bond-damage): `Player_Update` 0x193600 decays it
             // ×0.9 every tick [M disasm 0x1937a4-0x1937d8] and, while Bond is alive, adds it to the
@@ -3578,6 +3628,15 @@ impl Sim {
                     if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.footstep, m) {
                         self.drones.audio.play3d(id, [p[0], p[1] - 1.6347 * t, p[2]], None);
                     }
+                    // `Player_DealWithObjHit` 0x194458:80-82: the same footstep's hit (the anim
+                    // object's +0x60 bit-0x4 frame — this block is the port's footstep event) in
+                    // the water material pair runs `Env_WaterRipple(hit)` [M]. `env_water_ripple`
+                    // re-checks `(mat & 0x3f) - 0xd < 2` [M 0x17c118:9] and spawns the kind-1 ring
+                    // at the ground hit point (HITDATA+0x40 [M docs/fields/hitdata-spawner-ally.md]).
+                    // The port's probe is the grounding variant (no_water drops only the 0xE planes
+                    // — world.rs `segment_surface`), so 0xD floors ripple; the game's collide hit
+                    // can also be 0xE [S — the port's footstep probe never sees those planes].
+                    nf_game::env::env_water_ripple(&mut self.drones.gas, m, [p[0], p[1] - 1.6347 * t, p[2]]);
                     // The footprint decal arm — audit-effect-calls: the game's step is the FULL
                     // `Effect_Create(…, foot | 0x42)` [M 0x1befd8:196-201], flag 0x2 →
                     // `Effect_Player` 0x1cec48:59-140: sound (0x40, above) PLUS the foot decal.
@@ -5898,6 +5957,23 @@ impl Sim {
         if let Some(label) = crate::hud::gadget_hint(self.gun.weapon, vm_idle, &mut self.hud.cam_hint, &mut self.hud.sticky_hint) {
             self.hud.info_labels.push_back((label, 180.0));
         }
+        // The lens-flare pane's alpha ramp (pane 8, `HUD_UpdateLensFlarePane` 0x19d770): the
+        // update's sticky sprite byte decays 0x10 per frame and rises 0x20 while the sun is
+        // line-of-sight visible AND its zoom-rescaled screen position lands in (−5,517)×(−5,453)
+        // [M :73-111]; with no sun (`SunVector` 0) the whole update is skipped — the alpha FREEZES
+        // rather than decays [M :65-66]. The LOS is the pane's own `Collide_LineOfSight(head,
+        // head − SunVector, …, 0, 8)` [M :84-91] — the same ray `ramp_char_ambient` runs for the
+        // +0x962 sun flag, which is the pane's other output (the port models it there). MP has no
+        // pane 8 (MPPaneList slot 8 is dead [M 0x199e88]) — no flare, no state in a match.
+        if self.mp.is_none() && self.drones.sun_vector != [0.0; 3] {
+            let sv = self.drones.sun_vector;
+            let visible = {
+                let head = self.bond.head();
+                self.world.segment_surface_bullet(head, [head[0] - sv[0], head[1] - sv[1], head[2] - sv[2]]).is_none()
+            };
+            let on = visible && crate::hud::flare_sun_screen(self).map_or(false, |(sx, sy)| crate::hud::flare_on_screen(sx, sy));
+            self.hud.flare_alpha = crate::hud::flare_alpha_step(self.hud.flare_alpha, on);
+        }
         // The goggles flow controller first — the game's `HUD_Update` 0x19a088 calls
         // `HUD_MonitorNightSight` 0x19e9d8 right after the crosshair, before the pane walk
         // [M :19]. The guard ladder's inputs, each per its decompile line:
@@ -6115,13 +6191,25 @@ impl Sim {
             let Some(lang) = lang.as_ref() else { break };
             let text = match t {
                 nf_game::pickup::Taken::Weapon { weapon } => {
-                    let name = lang.bind(self.weapons.name_label(*weapon as usize)).unwrap_or("");
-                    lang.format(0x200_000D, &[name.to_string()])
+                    if is_mp {
+                        // The MP arm binds weapon_data[raw]+0x3C BARE — no 0x200000D "%s"
+                        // wrapper [M 0x18e650:249-256].
+                        lang.bind(self.weapons.mp_name_label(*weapon as usize)).unwrap_or("").to_string()
+                    } else {
+                        let name = lang.bind(self.weapons.name_label(*weapon as usize)).unwrap_or("");
+                        lang.format(0x200_000D, &[name.to_string()])
+                    }
                 }
                 nf_game::pickup::Taken::Ammo { weapon, rounds } => {
                     let at = self.weapons.ammo_type(*weapon as usize);
                     let name = lang.bind(self.weapons.ammo_name_label(at)).unwrap_or("");
-                    lang.format(0x200_000E, &[rounds.to_string(), name.to_string()])
+                    if is_mp {
+                        // The MP arm formats through the C string at 0x30cc28 — "%d x %s"
+                        // [D elf dump] — over (rounds taken, ammo_data[type]+8) [M 0x18e650:279-288].
+                        format!("{} x {}", rounds, name)
+                    } else {
+                        lang.format(0x200_000E, &[rounds.to_string(), name.to_string()])
+                    }
                 }
                 nf_game::pickup::Taken::Key { .. } => lang.bind(0x200_0010).unwrap_or("").to_string(),
                 nf_game::pickup::Taken::Armour => lang.bind(0x200_000F).unwrap_or("").to_string(),
@@ -6133,7 +6221,10 @@ impl Sim {
                 // 07000008 briefcase's label is 0 → no message.
                 nf_game::pickup::Taken::Label { label } => if *label != 0 { lang.bind(*label).unwrap_or("").to_string() } else { String::new() },
             };
-            if !text.is_empty() { new_msgs.push_back(Msg::new(text, 180.0)); }
+            if !text.is_empty() {
+                // `Text_AddMsg`'s duration [M 0x18e650:324-327]: 180 SP, 90 MP.
+                new_msgs.push_back(Msg::new(text, if is_mp { 90.0 } else { 180.0 }));
+            }
         }
         self.hud.taken_seen = self.drones.taken.len();
         // `Text_AddMsg` 0x1b0c30:90-93: multiplayer turns type 6 into 1, the INFO pane's.
@@ -6174,7 +6265,7 @@ impl Sim {
                     // port wraps at draw time — the font lives in the scene's HudTables, which the
                     // Sim-side drain doesn't hold; the life scaling is not ported, see the report.)
                     self.hud.objective_msgs.push_back(Msg { text, time: ticks as f32, status, failed, life: ticks as f32, opened: false, second: false, label, script: false,
-                        sfx1: false }); // objectives-0b-start: the label rides the Msg (the port's provenance for the game-label pins, `Text_AddMsg` 0x1b0c30 stores the bound string's id)
+                        sfx1: false, image: 0 }); // objectives-0b-start: the label rides the Msg (the port's provenance for the game-label pins, `Text_AddMsg` 0x1b0c30 stores the bound string's id)
                 }
                 nf_game::mission::Event::FailLabel(l) => {
                     self.hud.fail_label = l;
@@ -10856,7 +10947,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let Some(s) = self.sim.as_ref() else { return far };
                 // The breath's mode-2 puff carries the 0x400 bit: drawn only in x-ray [M Env_Breath
                 // 0x17c024-0x17c02c; View_AddObjects 0x1e62d8:38-47].
-                let Some(g) = s.drones.gas.puffs.get(gi as usize).filter(|g| g.mesh == gmesh && (!g.xray_only || s.goggle_mode() == 2)) else { return far };
+                let Some(g) = s.drones.gas.puffs.get(gi as usize).filter(|g| g.mesh == gmesh && !g.hidden && (!g.xray_only || s.goggle_mode() == 2)) else { return far };
                 let (c, sn) = g.spin.sin_cos();
                 let (rx, ry) = (opts.right, opts.up);
                 let (r2, u2) = ([rx[0] * c - ry[0] * sn, rx[1] * c - ry[1] * sn, rx[2] * c - ry[2] * sn],
@@ -13281,7 +13372,8 @@ impl Sim {
                 s.status = 0xffff;
             }
         }
-        for b in m.bots.iter_mut() {
+        let mut bot_died: Vec<usize> = Vec::new();
+        for (bi, b) in m.bots.iter_mut().enumerate() {
             if b.slot < m.game.slots.len() && m.game.slots[b.slot].dead && !b.dead {
                 b.dead = true;
                 b.health = 0.0;
@@ -13290,7 +13382,14 @@ impl Sim {
                 // NDrone2_DSTATE_BotDead stamps the SM timer at GameState + FRAME_RATE_INT * 3 =
                 // 180 ticks, then BotRespawn runs BOT_respawn [M 0x171518:22-41; the human gate
                 // is FRAME_RATE_INT * 5 = 300, 0x190bb0:41] (standins-scene-929).
+                bot_died.push(bi);
             }
+        }
+        // NDrone2_DSTATE_BotDead's death-msg arm also zeroes the bot's pickup visit rows —
+        // `MP_resetPickupBotVisitTimes(bot)` [M 0x171518:17; the helper 0x18be50] — so the
+        // respawned bot re-competes for pickups instead of starving behind its old stamps.
+        for bi in bot_died {
+            nf_game::mp::reset_pickup_bot_visit_times(&mut self.mp_bot_pickups, bi);
         }
         if online {
             let humans = (m.settings.human_count as usize).min(nf_net::MAX_AGENTS);
@@ -13324,11 +13423,14 @@ impl Sim {
         let others = self.bot_others(); // the immutable pass ends before the match is taken &mut
         {
             use nf_game::pickup::kind;
-            // mp-bot-weapons: `available` = the pickup stands takeable (not in the state-2
-            // respawn wait, not deleted) — `pickGoal` scores only the registered, present ones.
+            // mp-bot-weapons: `available` = the row's REGISTERED state — the game's pickGoal
+            // skips a row whose registered object is GONE [M 0x126b88:386-387]; a hidden
+            // (respawning, state 2) pickup's row stays registered and targeted (it comes back).
+            // local-match-bot-pickups: the delete arm's unregister (reconcile_mp_pickup_rows)
+            // relies on this reading — its row-registered gate is this flag [M 0x18a058:10-14].
             let live: Vec<([f32; 3], u16, u8, bool)> = self.drones.pickups.iter()
                 .filter(|p| matches!(p.kind, kind::WEAPON | kind::AMMO | kind::ARMOUR))
-                .map(|p| ([p.m[3][0], p.m[3][1], p.m[3][2]], p.weapon, p.kind as u8, !p.gone && p.state != 2))
+                .map(|p| ([p.m[3][0], p.m[3][1], p.m[3][2]], p.weapon, p.kind as u8, !p.gone))
                 .collect();
             if live.len() != self.mp_bot_pickups.len() {
                 self.mp_bot_pickups = live.iter().map(|&(pos, w, c, a)| nf_game::mp::bots::BotPickup {
@@ -13414,6 +13516,9 @@ impl Sim {
                     m.bots[i].health = m.bots[i].max_health;
                     m.bots[i].dead = false;
                     m.bots[i].respawns += 1;
+                    // mp-bot-voices: a fresh drone — the stored bark handle dies with the old
+                    // object (the game's +0x73c is per drone; `BOT_respawn` 0x124e38 re-inits it).
+                    if slot < self.mp_fx.bot_bark.len() { self.mp_fx.bot_bark[slot] = None; }
                     // mp-scenarios-online (agent6): `MP_ReSpawn`'s slot resets (streak, last
                     // shooter, status bits, alive) [M 0x185368:55-57] — the bot's slot stayed
                     // `dead` forever after its first death (KOTH's alive gate, the contacts and
@@ -13642,6 +13747,12 @@ impl Sim {
                     if !m.register_bullet_hit(vs, ks) { continue; }
                     let dmg = nf_game::mp::equip::mp_pain(&m.settings, &pain, dmg, nf_game::mp::equip::PART_TORSO);
                     m.bots[j].health -= dmg;
+                    // mp-bot-voices: the hit's pain bark — the game's DealWithObjHit case 0x27 MP
+                    // arm barks right after the damage write, before the death check [M 0x1401b0
+                    // → 0x1401d0, `addiu a1,zero,31` in the jal delay slot]. Trigger 0x1f → the
+                    // pain pool; the game's playing gate is the one piece mp_bot_bark drops
+                    // (audio state is per-machine — see its doc).
+                    Self::mp_bot_bark(&mut self.drones, &mut self.mp_fx, self.voices.as_deref(), &m.bots, vs, 0x1f);
                     if m.bots[j].health <= 0.0 {
                         // mp-host-match-logic: the frag goes through the match's real scoring
                         // (`MP_PlayerKilled` 0x188f70 — the killer/streak/team-score rules and
@@ -13653,6 +13764,12 @@ impl Sim {
                         m.bots[j].dead = true;
                         m.bots[j].deaths += 1;
                         m.bots[j].respawn_at = frame + 180;
+                        // mp-bot-voices: the death bark — the death states' ENTER plays trigger 1
+                        // before the kill is scored [M 0x1755d8 (BotDeathByExplosion) / 0x175540
+                        // (BotDeathAnim), `addiu a1,zero,1` in the jal delay slot; MP_PlayerKilled
+                        // 0x188f70 comes after at 0x175658]. Ungated: the new line stops the old
+                        // [M 0x1266c8].
+                        Self::mp_bot_bark(&mut self.drones, &mut self.mp_fx, self.voices.as_deref(), &m.bots, victim_slot, 1);
                         m.player_killed(victim_slot, Some(killer_slot), false, false, &mut self.drones.rng);
                         if std::env::var_os("NF_BOTLOG").is_some() { eprintln!("[botlog] f{frame} kill: slot {killer_slot} (weapon {:#x}) killed slot {victim_slot}", shot.weapon); }
                     }
@@ -13665,6 +13782,31 @@ impl Sim {
             if let Some(p) = pickups.get_mut(idx) { if i < p.visit.len() { p.visit[i] = t; } }
         }
         self.mp_bot_pickups = pickups;
+    }
+
+    /// local-match-bot-pickups: the game unregisters a pickup's bot row when the body leaves
+    /// for good — the delete arm (`Pickup_Handler` 0x18e650:338-344: `+0x2c == 0` sets the gone
+    /// flag and calls `MP_UnregisterPickup` under the MP gate) and the lifetime expiry
+    /// (`Pickup_Update` 0x18e148:254-258). The port's deletes land in the drones' own pass (the
+    /// take/consume tails' respawn-0 arm, the drop lifetime), so the reconcile runs at the next
+    /// driver pass, BEFORE the bots' availability refresh: the row is zeroed and leaves the
+    /// registered count [M MP_UnregisterPickup 0x18a058:21-31] — the bots' goal machine skips
+    /// an unregistered row [M 0x126b88:386-387] and a deleted pickup never re-registers. A
+    /// hidden (respawning, state 2) pickup keeps its row: only the delete arm unregisters.
+    pub fn reconcile_mp_pickup_rows(&mut self) {
+        use nf_game::pickup::kind;
+        let Some(m) = self.mp.as_mut() else { return };
+        let mut row = 0usize;
+        for k in 0..self.drones.pickups.len() {
+            let p = &self.drones.pickups[k];
+            let row_kind = matches!(p.kind, kind::WEAPON | kind::AMMO | kind::ARMOUR);
+            if p.gone && row_kind && row < self.mp_bot_pickups.len() && self.mp_bot_pickups[row].available {
+                let mut reg = m.settings.registered_pickups as u32;
+                nf_game::mp::unregister_pickup(&mut self.mp_bot_pickups[row], &mut reg);
+                m.settings.registered_pickups = reg as u16;
+            }
+            if row_kind { row += 1; }
+        }
     }
 
     /// mp-bot-weapons: `Pickup_Update` 0x18e148's taker loop for an MP match, run on every machine
@@ -13747,12 +13889,29 @@ impl Sim {
                     if online { self.mp_armour[local] = self.drones.health.armour; }
                 }
                 Taker::Remote(slot) => {
+                    // The take sound [M Pickup_Handler 0x18e650:336-337]: the shared tail plays
+                    // `+0x2A` for EVERY taker, and the shared sim runs the full human path for a
+                    // remote human — the per-kind overrides (0xF5 kinds 0/1 [M :290], 0x141
+                    // armour [M :300], 0x14C bonus [M :319], else the placement's word) apply.
+                    // The port's remote arm is the consume-only stand-in and was silent.
+                    let (take_sound, at) = {
+                        let p = &self.drones.pickups[k];
+                        let s = match pkind {
+                            kind::WEAPON | kind::AMMO => Some(0xF5u32),
+                            kind::ARMOUR => Some(0x141u32),
+                            kind::BOND_BONUS => Some(0x14Cu32),
+                            _ => p.sound,
+                        };
+                        (s, [p.m[3][0], p.m[3][1], p.m[3][2]])
+                    };
                     if pkind == kind::ARMOUR {
                         if self.mp_armour[slot] < 50.0 {
                             self.mp_armour[slot] = 50.0;
+                            if let (Some(id), Some(sfx)) = (take_sound, self.sfx.as_ref()) { self.drones.play_sound(at, sfx.get(id)); }
                             self.drones.consume_pickup(k, frame);
                         }
                     } else {
+                        if let (Some(id), Some(sfx)) = (take_sound, self.sfx.as_ref()) { self.drones.play_sound(at, sfx.get(id)); }
                         self.drones.consume_pickup(k, frame);
                     }
                 }
@@ -13776,6 +13935,15 @@ impl Sim {
                         eprintln!("[botlog] f{} bot{} took pickup {} (kind {} weapon {:#x} rounds {}) → weapon {:#x} armour {} hp {:.0}",
                             frame, i, k, pkind, pweapon, prounds, m.bots[i].brain.vars.weapon_id, m.bots[i].brain.vars.arsenal.armour, health);
                     }
+                    // The take sound [M Pickup_Handler 0x18e650:137 → :334-337]: the bot arm
+                    // jumps straight to the shared tail, which plays the PLACEMENT's own +0x2A
+                    // word — the 0xF5/0x141/0x14C overrides live in the message block the bot
+                    // path skips. The port's bot take was silent.
+                    let (bot_sound, at) = {
+                        let p = &self.drones.pickups[k];
+                        (p.sound, [p.m[3][0], p.m[3][1], p.m[3][2]])
+                    };
+                    if let (Some(id), Some(sfx)) = (bot_sound, self.sfx.as_ref()) { self.drones.play_sound(at, sfx.get(id)); }
                     self.drones.consume_pickup(k, frame);
                 }
             }
@@ -14403,11 +14571,24 @@ impl Sim {
             if located && !m.register_bullet_hit(victim, attacker) { return; }
             let d = cb::mp_damage(&rules, amount, part);
             m.bots[j].health -= d;
+            // mp-bot-voices: the hit's pain bark — the game's DealWithObjHit case 0x27 MP arm
+            // barks right after the damage write, before the death check [M 0x1401b0 → 0x1401d0,
+            // `addiu a1,zero,31`]; this site is the port's `NDrone2_HitDamage` 0x145558 →
+            // `BOT_handlePain` 0x125ed8 arm (the multipliers above are its [M]), whose verdict
+            // reading matches: survived → the pain pool, died → the death pool below.
+            Self::mp_bot_bark(&mut self.drones, &mut self.mp_fx, self.voices.as_deref(), &m.bots, victim, 0x1f);
             if m.bots[j].health <= 0.0 {
                 m.bots[j].health = 0.0;
                 m.bots[j].dead = true;
                 m.bots[j].deaths += 1;
                 m.bots[j].respawn_at = frame + 180;
+                // mp-bot-voices: the death bark — the death states' ENTER plays trigger 1 before
+                // the kill is scored [M 0x1755d8 / 0x175540, `addiu a1,zero,1`; MP_PlayerKilled
+                // 0x188f70 comes after at 0x175658].
+                Self::mp_bot_bark(&mut self.drones, &mut self.mp_fx, self.voices.as_deref(), &m.bots, victim, 1);
+                // The same death arm's visit-row reset [M 0x171518:17 — the game's BotDead
+                // runs it on every death path; the combat kill is this site's shape].
+                nf_game::mp::reset_pickup_bot_visit_times(&mut self.mp_bot_pickups, j);
                 m.player_killed(victim, Some(attacker), false, false, &mut self.drones.rng);
             }
             return;

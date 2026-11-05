@@ -3084,6 +3084,14 @@ pub struct ProfileSession {
 }
 
 impl ProfileSession {
+    /// The session's progress store while no front end is up — `FrontEnd::saved_progress` over the stash.
+    pub fn saved_progress(&self) -> Option<&nf_game::progress::Progress> {
+        self.profile.as_ref().map(|p| &p.progress).or(self.session_progress.as_ref())
+    }
+
+    /// The `bonus[0]` word while no front end is up — `FrontEnd::bonus_bits` over the stash.
+    pub fn bonus_bits(&self) -> u64 { self.saved_progress().map_or(0, |p| p.bonus[0]) }
+
     /// The stash side — the manager delete: the session the window carries while this front
     /// end is dropped [M the globals stand; P_NFRESULTS reads them after the handover built
     /// a fresh manager].
@@ -4520,6 +4528,39 @@ impl FrontEnd {
         self.open_pair_sfx();
     }
 
+    /// Is the manager's movie-skip poll armed — a front-end movie that accepts the skip is up?
+    /// The game arms the skip byte `DAT_002e1c49` on the START movie [M P_ESTHERO_Handler
+    /// 0x20a060:18] and on the attract trailer [M P_ATTRACT_Handler 0x20a1f0:18/:28]; the boot
+    /// logos clear it, so they are never armed [M P_INTRO_Handler 0x209e88:41,:55].
+    pub fn movie_skip_armed(&self) -> bool {
+        self.attract_playing || (self.intro_playing && self.intro_movie && self.intro_skippable)
+    }
+
+    /// The manager's ONE movie-skip poll, for every front-end movie kind:
+    /// `MenuManager_Update` 0x21c3d8:37-43 reads the skip action while a movie plays
+    /// (`Menu_InputAction(-1, 0x19, 4)`) and calls `Menu_StopMovie(0)`, which stops the movie
+    /// only when it accepts the skip (`DAT_002e1c49`) AND the grace (`DAT_002e1c4c`) has run
+    /// out [M Menu_StopMovie 0x215a50:6 — the counter ticks down per manager tick,
+    /// `Menu_UpdateMovieCounter` 0x215970:6-8]. The attract trailer opens with no grace
+    /// [M 0x20a1f0:17-19,:27-29]; the START movie with the 180-tick one (ESTHERO_GRACE)
+    /// [M 0x20a060:17-18]; the boot logos never accept the skip. Returns true when a movie was
+    /// stopped — the caller swallowed the action either way (the game's msg 0x68/1 input block
+    /// owns these pages [M 0x20a060:25, 0x20a1f0:37]).
+    pub fn movie_skip_poll(&mut self) -> bool {
+        if !self.movie_skip_armed() { return false; }
+        if self.attract_playing {
+            self.attract_movie_finished();
+            return true;
+        }
+        if self.intro_ticks >= ESTHERO_GRACE {
+            self.intro_movie = false;   // psiStopBackgroundMovie [M 0x215a50:11]
+            self.intro_live = false;
+            self.intro_frames = 0;
+            return true;
+        }
+        false
+    }
+
     /// The pause page opens over a running mission (the game's GS_PauseGame [M 0x17d178 pauses the
     /// sim; Player_Update 0x193600:73 opens page 0x4000004b]; the port only tracks the page — the
     /// caller pauses its own loop, and the sound hold:
@@ -5667,6 +5708,17 @@ impl FrontEnd {
         if self.results_queued {
             return false;
         }
+        // The card's dialog owns the input while it waits [M C_LBERROPTIONS 0x2185e8's msg-0x4b arm
+        // raises DAT_002462da with the pressed button]. The name page's box 4 and the list's delete
+        // confirm answer through their own arms.
+        if self.card.awaiting && self.cn_box.is_none() && self.cn_delete_row.is_none() {
+            let b = self.card.buttons;
+            return match a {
+                Action::Confirm => self.card_answer([BTN_YES, BTN_RETRY, BTN_OK].into_iter().find(|x| b & x != 0).unwrap_or(BTN_OK)),
+                Action::Back => self.card_answer(if b & BTN_CANCEL != 0 { BTN_CANCEL } else { BTN_OK }),
+                _ => false,
+            };
+        }
         // The MP start checks' refusal is the game's option box too (Menu_CreateOptionBox with the
         // error label [M C_SBMPOPTIONS 0x20e818:50-130]); it was never drawn, so Continue just did
         // nothing.
@@ -5689,8 +5741,9 @@ impl FrontEnd {
         // [`Self::attract_movie_finished`]. Other actions are swallowed and do NOT reach the
         // counter (the game's `Menu_InputAction` never runs for them here).
         if self.attract_playing {
-            if a == Action::Confirm {
-                self.attract_movie_finished();
+            // movie-skip-keys: Confirm rides the manager's own poll with the 0x19 keys now
+            // (App::app_key) — the ONE rule, [`Self::movie_skip_poll`] [M 0x21c3d8:40-43].
+            if a == Action::Confirm && self.movie_skip_poll() {
                 return true;
             }
             return false;
@@ -5708,10 +5761,9 @@ impl FrontEnd {
         // pair restart, then the next page) [M 0x20a060:28-45]. The boot logos clear c49: they
         // are unskippable [M 0x209e88:41, :55].
         if self.intro_playing {
-            if a == Action::Confirm && self.intro_movie && self.intro_skippable && self.intro_ticks >= ESTHERO_GRACE {
-                self.intro_movie = false;   // psiStopBackgroundMovie [M 0x215a50:11]
-                self.intro_live = false;
-                self.intro_frames = 0;
+            // movie-skip-keys: Confirm rides the manager's own poll with the 0x19 keys now
+            // (App::app_key) — the ONE rule, [`Self::movie_skip_poll`] [M 0x21c3d8:40-43].
+            if a == Action::Confirm && self.movie_skip_poll() {
                 return true;
             }
             return false;
@@ -7277,12 +7329,14 @@ impl FrontEnd {
 
     /// pickup-medal-gate: the active profile's `bonus[0]` word — the game's `bonus[]` global
     /// `LS_LoadBonus` 0x1ce488 fills from the save's BUNS block and `PlrStats_HasGoldMedal`
-    /// 0x199a40 reads for `Pickup_Create`'s kind-6 gate [M 0x18dda0:93-95]. 0 without a profile
-    /// (the fresh-boot BSS word [L ee_start_05 0x2e1b88]; a Play-without-saving session's awards
-    /// live only in the sim's own progress in the port [S — the game's globals would carry them,
-    /// see `unlock_mp_settings`'s note]).
-    pub fn bonus_bits(&self) -> u64 {
-        self.profile.as_ref().map_or(0, |p| p.progress.bonus[0])
+    /// 0x199a40 reads for `Pickup_Create`'s kind-6 gate [M 0x18dda0:93-95]. A Play-without-saving
+    /// session reads its session layer; 0 before any award (the fresh-boot BSS word
+    /// [L ee_start_05 0x2e1b88]).
+    pub fn bonus_bits(&self) -> u64 { self.saved_progress().map_or(0, |p| p.bonus[0]) }
+
+    /// The session's progress store: the active profile's, else the session layer.
+    pub fn saved_progress(&self) -> Option<&nf_game::progress::Progress> {
+        self.profile.as_ref().map(|p| &p.progress).or(self.session_progress.as_ref())
     }
 
     /// The SP list's driving handover [M `C_SBNFMAP` 0x20b8d8 case 0x4b → `ResetMap_LevelToLoad`
@@ -9836,7 +9890,11 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             }
         }
     });
-    if let Some(t) = fe.notice.as_ref().or(fe.net_notice.as_ref()).or(mp_err.as_ref()) {
+    // The results save question and the card flow's messages [M DAT_002462d4] ride the same box.
+    let save_ask = fe.results_box.then(|| "Save your progress?".to_string());
+    let card_msg = fe.card_message().map(|(_, l)| bind(l)).filter(|s| !s.is_empty());
+    let asks = save_ask.is_some() || (card_msg.is_some() && fe.card.buttons & BTN_CANCEL != 0);
+    if let Some(t) = fe.notice.as_ref().or(fe.net_notice.as_ref()).or(mp_err.as_ref()).or(card_msg.as_ref()).or(save_ask.as_ref()) {
         // The page under a message box dims so the box reads on its own (it sat on the list rows'
         // text in the live check).
         // In FRONT of every page layer (the HUD sorts higher layers to the back; the page rows draw
@@ -9858,7 +9916,8 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             let mid = 230.0 + (k as f32 - (n - 1.0) / 2.0) * 22.0;
             centred(&mut h, font, -12, l, mx(320.0), my(mid), cream, true, 1.0);
         }
-        centred(&mut h, font, -12, "Press Enter", mx(320.0), my(282.0), dim, true, 1.0);
+        let hint = if asks { "Enter: Yes    Esc: No" } else if card_msg.is_some() && fe.card.buttons == 0 { "" } else { "Press Enter" };
+        centred(&mut h, font, -12, hint, mx(320.0), my(282.0), dim, true, 1.0);
     }
     h.finish()
 }
