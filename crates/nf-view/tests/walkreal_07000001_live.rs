@@ -1248,6 +1248,13 @@ fn following_mayhew_down_completes_the_level() {
     let ci = sim.drones.list.iter().position(|d| d.skin == 0x0500_004f).expect("the contact");
     drop(sim);
     w.shield = Some(ci);
+    // audit-voice-triggers-2: the contact stands on the fight lines (the hall run) and the merged
+    // branch's added voice draws shifted the shared RNG — the guard-14 volley's moving spread
+    // (the game's 176-unit cap = 0.2464 rad [M bullet::player_spread]) crossed him 1.96 u off the
+    // aim line where the modelled reach was 1.39, killing him (d#1 10.0 → −39.5 at t5704,
+    // by_player, weapon 0x1c) and failing the escort (ch 0x60 → 99). The walk models the cap in
+    // the shield's cone so a tap that would cross him is refused before it fires.
+    w.shield_bloom = true;
     let plate = walker::trigger_centre(w.scene.sim.as_ref().unwrap(), walker::trigger_kind::TOUCH, 0x10).expect("the AND-touch plate");
     // Clear whatever armed guard stands within 14 of the contact (the hide exit needs the coast
     // clear [M NDrone2_NotNearArmedDrone 0x177640]).
