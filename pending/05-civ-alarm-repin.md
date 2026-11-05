@@ -18,6 +18,3 @@ Failing on the branch (full suite 4378 passed, 21 failed before the stealth test
 - start_corridor_guard_07000011_live: confirm it stays green
 
 Real input, no teleports in walks. Run every binary above whole, then the full suite if the window allows. Quote the results in the report.
-
----
-claimed-by: sandbox1 at 2026-11-05T18:33Z
