@@ -4027,6 +4027,14 @@ impl App {
         // entirely [M 0x182270:19-22]. Without a front end (headless loads, boot) the fresh
         // boot value stands. The seed glue below is the port's mirror of that single store:
         // the front end holds the session's bits, every fresh sim is seeded from it.
+        // The medals, best scores and unlocks are the same single globals: a fresh sim starts from
+        // them, or the results page's commit over its blank copy wipes the save [M the
+        // `ScoringTable` and `bonus[]` writers: only the results commit and LS_Load].
+        let saved = self.fe.as_ref().map_or(self.profile_session.saved_progress(), |fe| fe.saved_progress()).cloned();
+        if let (Some(saved), Some(sim)) = (saved, self.scene.sim.as_mut()) {
+            let p = &mut sim.drones.progress;
+            (p.table, p.bonus, p.nightfire_status, p.game_complete) = (saved.table, saved.bonus, saved.nightfire_status, saved.game_complete);
+        }
         if let Some(fe) = self.fe.as_ref() {
             if let Some(sim) = self.scene.sim.as_mut() {
                 sim.drones.progress.nightfire_status = fe.packed_unlocks();
@@ -8131,6 +8139,31 @@ mod headless_app_harness {
         };
         assert_eq!(bonus_pickups(u64::MAX), 3, "07000002 places three bonus pickups for a gold medal");
         assert_eq!(bonus_pickups(0), 0, "no medal, no bonus pickups");
+    }
+
+    /// Finishing a mission keeps what the save already holds: the medals and best scores of every
+    /// other mission [M the game's `bonus[]` and `ScoringTable` are single globals; P_NFRESULTS
+    /// 0x208e78 only adds to them].
+    #[test]
+    fn finishing_a_mission_keeps_the_other_missions_records() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let mut h = HeadlessApp::mission(&iso, "07000005.bin");
+        let mut profile = nf_game::profile::Profile::default_codename("BOND");
+        profile.progress.set_level_bonus(0x0700_0001, 3, 0);
+        profile.progress.table[4].best = 123_456;
+        let word = profile.progress.bonus[0];
+        assert_ne!(word, 0);
+        h.app.profile_session.profile = Some(profile);
+        h.frames(5);
+        h.app.scene.sim.as_mut().unwrap().drones.level_exit = Some(0x0700_0006);
+        assert!(h.pump(60.0, |a| a.async_load.is_none() && a.scene.sim.as_ref().is_some_and(|s| s.level == 0x0700_0006)),
+            "the part change never landed");
+        h.frames(5);
+        h.app.demo_results(true);
+        let kept = h.app.fe.as_ref().unwrap().profile.as_ref().unwrap();
+        assert!(kept.progress.has_medal(0x0700_0001, 3, 0), "the Double Cross gold medal was lost");
+        assert_eq!(kept.progress.table[4].best, 123_456, "the Double Cross best score was lost");
+        assert_eq!(kept.progress.bonus[0] & word, word);
     }
 
     /// Menu sounds were missing entirely: run() built the sound driver and dropped it, so the
