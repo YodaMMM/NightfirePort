@@ -113,3 +113,21 @@ stopping at x 6.958338, the game's own point [L the 0x1a4d90 breakpoint: head (1
 
 not visible to me — this environment shows no token, credit or context-window figures for the
 session, so there are no numbers to copy.
+
+---
+## Report addendum (done, 2026-11-05T22:50Z): the ntfy failed section
+
+## ntfy failed
+
+All three fallbacks failed to reach https://ntfy.sh/nightfire-yoda-8k3x from this sandbox (the
+host unreachable, the same pattern as civ-alarm-repin-2 and civ-repin-11-13):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "panel-model-glist: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`.
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'panel-model-glist: done', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`.
+3. `wget -q -O- --post-data "panel-model-glist: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → hung with no output; killed by the 25 s timeout (exit 124).
+
+The report and branch were pushed before the notification attempts; the driver can read the
+result here and in the queue's done/05-panel-model-glist.md.
