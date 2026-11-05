@@ -3850,7 +3850,10 @@ impl App {
         // and the award path write it [M Menu_SetBonus 0x1ff898 callers]), so the kind-6 gate
         // [M 0x18dda0:93-95] reads the save's medals on every level. No profile → the fresh-boot
         // zero word [L ee_start_05 0x2e1b88].
-        let bonus = self.fe.as_ref().map_or(0, |fe| fe.bonus_bits());
+        // The briefing's resolve closes the front end before this runs: the standing session holds it.
+        let bonus = self.fe.as_ref().map(|fe| fe.bonus_bits())
+            .or_else(|| self.profile_session.profile.as_ref().map(|p| p.progress.bonus[0]))
+            .unwrap_or(0);
         let job = async_load::Job::spawn(move || {
             if let Some(st) = mp_settings {
                 load_mp_carry(&iso, &name, all, save.as_ref(), st)
