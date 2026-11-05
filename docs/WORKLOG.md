@@ -15,3 +15,8 @@ msg-5 :157 — new field play_script_talk_gate). Pins: 3 lib tests + voice_trigg
 (2 tests: real Drone_SfxInfo rows; the frag-flee drives the ENTER bark on real 07000005 data).
 nf-game release suite 1066 passed / 0 failed; nf-formats 92+11 with the 3 allowed disc_golden
 failures; nf-audio 28. Report next.
+
+## audit-voice-triggers-2
+Started 2026-11-05 05:31 UTC. Branch s/audit-voice-triggers-2 (continued from origin/s/audit-voice-triggers, merging origin/master).
+Task: the four added triggers read correct against the decompile, so no draw is removed to make a test pass unless a line is proved wrong. Merged with master these four are red, green without the branch: walkreal_07000001 following_mayhew_down (AND-touch never fires, walkreal_07000001_live.rs:1522), walk_from_the_spawn_to_the_exit_with_the_contact_real_damage (Bond dies tick 3253), walkreal_07000003 walk_the_full_route (east lane cap), smg_close_range_live (pistol control at 1 u). For each, say which draw moved what, then re-route or re-pin the test, keeping every pin honest. Run every walkreal binary and the full suite, quote the total line.
+Progress 2026-11-05 05:31 UTC: branch cut, WORKLOG started.
