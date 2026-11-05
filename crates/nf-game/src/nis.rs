@@ -2075,12 +2075,7 @@ impl Scripts {
                             matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
                             matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
                             matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2]];
-                        // beam-weapon-panels-1b: the built pick sphere's radius carries the
-                        // object's own scale — `glist+0x1C · |obj+0xE8|` [M Control_BuildWorldSph
-                        // 0x133070]. The stream matrix's row norms are that scale's analog here.
-                        let norm = |k: usize| (matrix[k][0] * matrix[k][0] + matrix[k][1] * matrix[k][1] + matrix[k][2] * matrix[k][2]).sqrt();
-                        let scale = (norm(0) + norm(1) + norm(2)) / 3.0;
-                        out.push((pi, centre, r * scale, Some((*hash, *matrix))));
+                        out.push((pi, centre, r, Some((*hash, *matrix))));
                     }
                     Obj::Anim { skin, .. } => {
                         // The anim object's BuildWorldSph volume: its own model glist (obj+0xD8 = the
@@ -2130,12 +2125,7 @@ impl Scripts {
                             matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
                             matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
                             matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2]];
-                        // beam-weapon-panels-1b: the built pick sphere's radius carries the
-                        // object's own scale — `glist+0x1C · |obj+0xE8|` [M Control_BuildWorldSph
-                        // 0x133070]. The stream matrix's row norms are that scale's analog here.
-                        let norm = |k: usize| (matrix[k][0] * matrix[k][0] + matrix[k][1] * matrix[k][1] + matrix[k][2] * matrix[k][2]).sqrt();
-                        let scale = (norm(0) + norm(1) + norm(2)) / 3.0;
-                        out.push((pi, centre, r * scale, Some((*hash, *matrix))));
+                        out.push((pi, centre, r, Some((*hash, *matrix))));
                     }
                     Obj::Anim { skin, .. } => {
                         // The anim object's BuildWorldSph volume: its own model glist (obj+0xD8 =

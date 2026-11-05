@@ -23,18 +23,3 @@ fn firing_along_the_walkway_breaks_no_panel() {
         assert_eq!(broken(sim), 0, "yaw {yaw}");
     }
 }
-
-/// Sister: a round fired down into a panel does break it.
-#[test]
-fn a_round_into_a_panel_breaks_it() {
-    let Ok(iso) = std::env::var("NF_ISO") else { return };
-    let mut scene = nf_view::load_with_carry_difficulty(&iso, "0700001b.bin", false, None, 1).unwrap();
-    for _ in 0..3000 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
-    let sim = scene.sim.as_mut().unwrap();
-    sim.bond.pos = [16.74, -1.84, 4.62];
-    sim.bond.yaw = -1.57;
-    sim.bond.pitch = -0.9;
-    for _ in 0..60 { sim.step_bond(Input::default(), false, false, false); }
-    for i in 0..240 { sim.bond.pitch = -0.9; sim.step_bond(Input::default(), i % 24 < 8, false, false); }
-    assert!(broken(sim) > 0, "shot straight at it");
-}

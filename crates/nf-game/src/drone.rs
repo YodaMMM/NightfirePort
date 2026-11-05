@@ -11614,6 +11614,9 @@ pub const SWOOSH_POOL: usize = 512;
 pub const MICRO_CAMERA_BASE: u16 = 0x54;
 pub const MICRO_CAMERA_SHUTTER_SFX: u32 = 0xec;
 
+/// 0700001b's solar panel glist [D the 16 stream Entities, placements 41-56].
+const SOLAR_PANEL_GLIST: u32 = 0x0200_0a42;
+
 /// One of Bond's bullets (`Player_WeaponInitBullet` → `Bullet_init` / `Bullet_update` with owner = player).
 #[derive(Clone, Debug)]
 pub struct PlayerBullet { pub pos: V3, pub dir: V3, pub speed: f32, pub travelled: f32, pub range: f32, pub damage: f32, pub weapon: u16, pub first: bool, pub dead: bool,
@@ -14019,6 +14022,37 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
     }
 
+    /// The segment against a glist's triangles posed by `m`: the first contact as a fraction of it.
+    fn segment_posed_mesh_t(m: &nf_formats::anim::Mat4, tris: &[[V3; 3]], a: V3, b: V3) -> Option<f32> {
+        let dot = |x: V3, y: V3| x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+        let row = |k: usize| [m[k][0], m[k][1], m[k][2]];
+        let (r0, r1, r2) = (row(0), row(1), row(2));
+        let (s0, s1, s2) = (dot(r0, r0).max(1e-9), dot(r1, r1).max(1e-9), dot(r2, r2).max(1e-9));
+        let local = |p: V3| {
+            let w = [p[0] - m[3][0], p[1] - m[3][1], p[2] - m[3][2]];
+            [dot(w, r0) / s0, dot(w, r1) / s1, dot(w, r2) / s2]
+        };
+        let (la, lb) = (local(a), local(b));
+        let ld = [lb[0] - la[0], lb[1] - la[1], lb[2] - la[2]];
+        tris.iter().filter_map(|t| crate::world::ray_tri_t(la, ld, t)).min_by(f32::total_cmp)
+    }
+
+    /// `Collide_RayIntersect` on the crosshair ray: the point the ray first hits, or `to`
+    /// [M Player_WeaponInitBullet 0x1a4bf0:154-164]. The level, then the held panels.
+    pub fn aim_snap(&self, d: &Data, from: V3, to: V3, glass: bool) -> V3 {
+        let mut t = d.world.segment_flight_scoped(d.world.find_cel(from), from, to, glass).unwrap_or(1.0);
+        for (_, c, r, mesh) in self.scripts.held_hit_volumes(d) {
+            if let Some((SOLAR_PANEL_GLIST, m)) = mesh {
+                if Self::segment_hits_sphere(from, to, c, r) {
+                    if let Some(k) = d.world.shape(SOLAR_PANEL_GLIST).and_then(|tris| Self::segment_posed_mesh_t(&m, tris, from, to)) {
+                        t = t.min(k);
+                    }
+                }
+            }
+        }
+        [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, from[2] + (to[2] - from[2]) * t]
+    }
+
     pub fn fire_player(&mut self, d: &Data, from: V3, dir: V3, weapon: u8, sound: nf_formats::sfx::SfxHearing) {
         let Some(w) = d.weapons.records.get(weapon as usize) else { return };
         // [M Bullet_init 0x12c5a0:285-291]: a weapon whose ammo type (+0x90 byte) is 0x0e — the
@@ -15251,8 +15285,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // way). The built sphere's radius carries the object's own scale [M
             // Control_BuildWorldSph 0x133070: `glist+0x1C · |obj+0xE8|`] — the helpers now fold
             // the stream matrix's scale into the radius they return.
-            for (pi, c, r, _mesh) in &held_targets {
-                if Self::segment_hits_sphere(b.pos, end, *c, *r) {
+            // The sphere only picks the candidates: a panel takes the round when it meets the panel's
+            // triangles [L PCSX2 0700001b: the walkway round crosses the r 4.77 sphere with no hit
+            // entry, other rounds list the panel object]. Panels only: the consoles' glist is not in
+            // the level's shapes, and their contact stays the sphere.
+            let meets = |c: &[f32; 3], r: f32, mesh: &Option<(u32, nf_formats::anim::Mat4)>| {
+                Self::segment_hits_sphere(b.pos, end, *c, r) && match mesh {
+                    Some((SOLAR_PANEL_GLIST, m)) => d.world.shape(SOLAR_PANEL_GLIST)
+                        .is_none_or(|tris| Self::segment_posed_mesh_t(m, tris, b.pos, end).is_some()),
+                    _ => true,
+                }
+            };
+            for (pi, c, r, mesh) in &held_targets {
+                if meets(c, *r, mesh) {
                     self.scripts.add_hit_damage(*pi, b.damage);
                 }
             }
@@ -15264,8 +15309,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // player-bullets-only scope as the damage gather above [*deviation*].
             let sp_weapon_id = d.weapons.records.get(b.weapon as usize)
                 .map_or(0u16, |r| u16::from_le_bytes([r[0x00], r[0x01]]));
-            for (pi, c, r, _mesh) in &sp_bullet_targets {
-                if Self::segment_hits_sphere(b.pos, end, *c, *r) {
+            for (pi, c, r, mesh) in &sp_bullet_targets {
+                if meets(c, *r, mesh) {
                     self.scripts.add_bullet_hit(*pi, sp_weapon_id);
                 }
             }
