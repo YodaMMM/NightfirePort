@@ -25,3 +25,20 @@ level 0x7000001 only, a player-broken script-type-5 object, live type-0x0c drone
 "Left as a table" row 1]. Plumb it from the Breaks kill path to Drones, game Rand order and
 every gate; pin: Bond shoots a qualifying 07000001 object with a qualifying guard alive → the
 line plays; another level or a non-player break → nothing.
+Progress 2026-11-05 05:30 UTC: `Drone_BrokenObject` 0x138588 read in full (decompile + disasm
+0x138588-0x1386d0): gates bDisableSystem → level 0x7000001 → hitdata+0x58 is a kind-5 BULLET
+from the player's weapon system (+0xe0→+0x30 == glb_players) → the list walk (dtype +0xc5 ==
+0x0c, health +0xac <= 0 ABORTS the walk [M 0x138628-0x138634 bc1tl], body-obj kinds 2/0x11),
+one 0x40+Rand(4) per barking drone [M 0x1497e8], NDrone2_SpeechSFX(line, 0,0,0). The explode
+path's hitdata +0x58 is the breakable itself (kind 0x20 [M 0x17c518:163-164]) and the
+walked-through pane's is the drone (kind 2 [M 0x12bfd8:24-33]) — both fail kind-5 draw-free;
+only the player-bullet kill (Break_Update's last contact, +0x58 = the bullet [M 0x1ea398:189])
+barks. Port: `Breaks::kill_by_bullet` (the bark walk inside the kill, between the sound roll
+and the debris draws, the game's order) + the caller turns the pairs into talks pushes; the
+plain `kill` unchanged. Pins: broken_object_bark_live 4/4 (07000001 positive, another level
+silent, explosion silent, the abort/type gates). nf-game FULL 1070/0;
+interactables_07000001_live 10/0; walkreal_07000001_live 7/1 — the failure (and a second one)
+exists on the merged base without my change (stash-verified ×2; plain master 8/0 in a clean
+worktree): the voice-triggers merge's bark triggers (and now the game's own Break_Kill Rand(4)
+draws) shift the walker's combat RNG. The full suite.py was killed by the sandbox's
+background-job rule three times; the nf-view remainder did not fit. Report next.
