@@ -1485,10 +1485,10 @@ impl CollisionWorld {
     /// static cel; Collide_RayIntersect's pick walks cels, so it never sees them]). The dynamic
     /// set is not in the scoped walk anyway.
     pub fn segment_aim_scoped(&self, cell: Option<usize>, from: V3, to: V3, glass: bool) -> Option<f32> {
-        let Some(cell) = cell else { if std::env::var_os("NF_AIMPROBE").is_some() { eprintln!("[aimray] no cel -> flat fallback"); } return self.flight_scoped_impl(cell, from, to, glass) };
+        let Some(cell) = cell else { return self.flight_scoped_impl(cell, from, to, glass) };
         let in_range = self.scope.as_ref().is_some_and(|sc| cell < sc.graph.cells.len());
-        if !in_range { if std::env::var_os("NF_AIMPROBE").is_some() { eprintln!("[aimray] cell {cell} out of range -> fallback"); } return self.flight_scoped_impl(Some(cell), from, to, glass); }
-        let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to)) else { if std::env::var_os("NF_AIMPROBE").is_some() { eprintln!("[aimray] no portal runs -> fallback"); } return self.flight_scoped_impl(Some(cell), from, to, glass) };
+        if !in_range { return self.flight_scoped_impl(Some(cell), from, to, glass); }
+        let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to)) else { return self.flight_scoped_impl(Some(cell), from, to, glass) };
         let d = sub(to, from);
         let mut best = None::<f32>;
         let stat = &self.stat;
@@ -1503,10 +1503,6 @@ impl CollisionWorld {
                 if let Some(tt) = ray_tri_t(from, d, t) {
                     if best.is_none_or(|b| tt < b) {
                         best = Some(tt);
-                        if std::env::var_os("NF_AIMPROBE").is_some() {
-                            let si = stat.owners.get(*r as usize).copied().unwrap_or(u32::MAX);
-                            eprintln!("[aimray] hit t {tt:.4} mat {:#x} run {r} owner {si} aim_pick {:?}", stat.mats[k], self.aim_pick.get(si as usize));
-                        }
                     }
                 }
             }

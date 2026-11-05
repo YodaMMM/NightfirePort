@@ -13524,9 +13524,6 @@ impl Drones {
                     }
                 }
             }
-            if std::env::var_os("NF_AIMPROBE").is_some() {
-                eprintln!("[wiregeo] {} hashes: {:?}", geo.len(), geo.keys().map(|k| format!("{k:#x}")).collect::<Vec<_>>());
-            }
             self.wire_geo = geo;
         }
         // SimpleScripts (`SS_Create` 0x1a9c58): the 0xE2 placements with a non-zero key count, their
@@ -14103,8 +14100,29 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // cam (139.531, 50.789, -76.431) -> the flat ray snapped (139.562, 50.789, -96.706), the
         // wood band x 139.44..139.62.]
         let mut t = d.world.segment_aim_scoped(d.world.find_cel(from), from, to, glass).unwrap_or(1.0);
-        if std::env::var_os("NF_AIMPROBE").is_some() {
-            eprintln!("[snap] from {from:.3?} to {to:.3?} level t {t:.4}");
+        // THE OBJECT STAGE (aim-object-stage): `Collide_Pick` 0x1eb320's built-sphere broad
+        // phase per object (obj+0x80..0x8c — `Control_BuildWorldSph` 0x133070: centre =
+        // obj+0x90 · glist+0x10, radius = glist+0x1C · |obj+0xE8|; the port's
+        // `sp_bullet_targets` returns exactly that pair per stream entity), then
+        // `Collide_Intersect` 0x1ebaa8's type-0x201 arm — the segment vs the object's OWN
+        // glist triangles posed by the object's own matrix, back-face-culled, first hit wins
+        // [M 0x1ec690's `param_9 & 0x10` stop]. Candidates: every loaded script's stream
+        // entities (the game's pick covers every object with a built sphere). An object whose
+        // glist has no parsed triangles never enters the 0x201 hit chain — the sphere alone
+        // does not stop the ray [L the 0700001b breakpoints: no hit entry without a triangle
+        // touch]. The posing is the ENTITY's own matrix (obj+0x90); the 0x94 & 0x20 pick-skip
+        // flag is not modeled ([S] — no port-side source for the per-object flag word yet).
+        {
+            for (_pi, c, r, mesh) in &self.scripts.sp_bullet_targets(d) {
+                let Some((hash, m)) = mesh else { continue };
+                if !Self::segment_hits_sphere(from, to, *c, *r) { continue; }
+                let Some(tris) = d.world.shape(*hash) else { continue };
+                if let Some(tt) = Self::segment_posed_mesh_t(m, tris, from, to) {
+                    if tt > 1e-4 && tt <= 1.0 {
+                        t = t.min(tt);
+                    }
+                }
+            }
         }
         // The SCRIPT ENTITIES are NOT in the ray's object set: the live-proven lines say the
         // game's snap ray passes them — the 08 straight rocket's line crosses the shutters' wood
@@ -15301,37 +15319,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     for (g, k, obj) in fb.alive_wires() {
                         let hit = match self.scripts.objects.list.get(obj) {
                             Some(Some(crate::nis::Obj::Entity { hash, matrix, .. })) => {
-                                match self.wire_geo.get(hash) {
-                                    Some((lo, hi)) => {
-                                        let (mut wlo, mut whi) = ([f32::MAX; 3], [f32::MIN; 3]);
-                                        for cx in 0..2 {
-                                            for cy in 0..2 {
-                                                for cz in 0..2 {
-                                                    let p = [
-                                                        if cx == 0 { lo[0] } else { hi[0] },
-                                                        if cy == 0 { lo[1] } else { hi[1] },
-                                                        if cz == 0 { lo[2] } else { hi[2] },
-                                                    ];
-                                                    let w = nf_formats::placement::transform(matrix, p);
-                                                    for c in 0..3 {
-                                                        wlo[c] = wlo[c].min(w[c]);
-                                                        whi[c] = whi[c].max(w[c]);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        // the cables are flat: a hair of thickness for the slab test
-                                        for c in 0..3 {
-                                            wlo[c] -= 0.01;
-                                            whi[c] += 0.01;
-                                        }
-                                        let h = Self::segment_hits_aabb(b.pos, end, wlo, whi);
-                                        if std::env::var_os("NF_AIMPROBE").is_some() {
-                                            eprintln!("[wirehit] bullet {:?} -> end {:?} aabb {:?}..{:?} hit {h}", b.pos.map(|v| (v*10.0).round()/10.0), end.map(|v| (v*10.0).round()/10.0), wlo.map(|v| (v*10.0).round()/10.0), whi.map(|v| (v*10.0).round()/10.0));
-                                        }
-                                        h
+                                // aim-object-stage: the contact is the object's OWN collision
+                                // glist — the same posed triangles the aim ray's object stage
+                                // snaps to (`Collide_Intersect` 0x1ebaa8's 0x201 arm; the aim ray
+                                // and the flight share the object's one collision glist [M
+                                // Collide_Pick 0x1eb320 -> Collide_Intersect 0x1ebaa8]). The
+                                // gfx-bounds AABB the fusebox-geometry session used is the RENDER
+                                // frame — the posed collision glist on 07000014's wires lands
+                                // ~0.37 u east of the posed gfx box — and with the snap now ON
+                                // the posed glist the re-aimed line meets the glist, not the gfx
+                                // box; the game's own contact is its collision geometry, so the
+                                // pair (snap, contact) must share the frame.
+                                match d.world.shape(*hash) {
+                                    Some(tris) if !tris.is_empty() => {
+                                        Self::segment_posed_mesh_t(matrix, tris, b.pos, end).is_some()
                                     }
-                                    None => Self::script_obj_pos(&self.scripts, d, obj).is_some_and(|p| {
+                                    _ => Self::script_obj_pos(&self.scripts, d, obj).is_some_and(|p| {
                                         Self::segment_hits_sphere(b.pos, end, p, crate::fusebox::WIRE_RADIUS)
                                     }),
                                 }
