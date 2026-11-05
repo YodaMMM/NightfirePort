@@ -635,3 +635,139 @@ fn every_on_foot_mission_starts_from_the_list_and_quits_back() {
     }
     assert!(!p.exit_requested());
 }
+
+// ---------------------------------------------------------------------------
+// movie-skip-keys: the skip action's PC keys (ArrowDown = the pad mask's D-pad-down half,
+// R = R1 [M psiInput_MapInputs 0x10cd80:415-417]) must skip EVERY skippable movie kind
+// through the real App key path, the way the game's ONE poll does. The game reads the skip
+// action while a front-end movie plays — `Menu_InputAction(-1, 0x19, 4)` → `Menu_StopMovie(0)`
+// [M MenuManager_Update 0x21c3d8:37-43] — and `Menu_StopMovie` stops the movie only when it
+// accepts the skip (DAT_002e1c49) and the grace (DAT_002e1c4c, `Menu_UpdateMovieCounter`
+// 0x215970:6-8) has run out [M 0x215a50:6]. The kinds differ only in their gates:
+//   boot logos — c49 = 0, unskippable [M P_INTRO_Handler 0x209e88:41,:55];
+//   the start movie (P_ESTHERO) — c49 = 1, grace 0xb4 = 180 ticks [M 0x20a060:17-18];
+//   the attract trailer — c49 = 1, no grace [M P_ATTRACT_Handler 0x20a1f0:17-19,:27-29];
+//   state 6 — the case-6 read `Input_Action(-1, 0x19, 1)`, no gate [M 0x1c98c8:148-150].
+// The headless countdown carries the intro/state-6 movies on an image without PSS data, so
+// those legs run on any NF_ISO at any display rate; the attract's key leg needs the real
+// decoder (a declined attract closes at once [M BGFMVPlaying == 0 — the glue's Err arm]) and
+// gates on `iso()`.
+// ---------------------------------------------------------------------------
+
+/// The image without the movie-data gate: the front-end state machine and the keys run on it.
+fn nf_iso() -> Option<String> { std::env::var("NF_ISO").ok() }
+
+/// The boot logos refuse every skip — the action keys AND Confirm [M 0x209e88:41,:55].
+#[test]
+fn the_boot_logos_refuse_every_skip_at_240hz() {
+    let Some(iso) = nf_iso() else { return };
+    let mut p = Player::boot(&iso, 240);
+    p.until(30.0, |a| a.fe.as_ref().is_some_and(|f| f.intro_playing && f.intro_movie)).expect("the first logo");
+    p.key(K::ArrowDown); p.wait(0.3);
+    p.key(K::KeyR); p.wait(0.3);
+    p.key(K::Enter); p.wait(0.3);
+    let fe = p.fe();
+    assert!(fe.intro_playing && fe.intro_movie && fe.page == Page::Intro,
+        "the boot logo is unskippable [M 0x209e88:41,:55]");
+}
+
+/// The start movie skips on the action keys — but only past its 180-tick grace, at 240 Hz.
+#[test]
+fn the_start_movie_skips_on_the_action_keys_past_the_grace_at_240hz() {
+    let Some(iso) = nf_iso() else { return };
+    // Inside the grace (180 ticks = 3 s) the keys refuse [M 0x215a50:6].
+    let mut p = Player::boot(&iso, 240);
+    p.title();
+    p.key(K::Enter);
+    p.until(8.0, |a| a.fe.as_ref().is_some_and(|f| f.page == Page::EstHero && f.intro_movie)).expect("the start movie");
+    p.wait(1.0);
+    p.key(K::ArrowDown); p.wait(0.3);
+    p.key(K::KeyR); p.wait(0.3);
+    assert!(p.fe().intro_movie, "the grace still holds the movie (96 ticks < 180 [M 0x20a060:17])");
+    // Past the grace (240 ticks in) D-pad-down's key skips, straight to the main menu
+    // [M 0x21c3d8:40-43].
+    p.wait(2.4);
+    p.key(K::ArrowDown);
+    p.until(3.0, |a| a.fe.as_ref().is_some_and(|f| f.page == Page::Main && !f.intro_playing)).expect("the skip");
+    // R (R1) skips too — a fresh boot.
+    let mut p = Player::boot(&iso, 240);
+    p.title();
+    p.key(K::Enter);
+    p.until(8.0, |a| a.fe.as_ref().is_some_and(|f| f.page == Page::EstHero && f.intro_movie)).expect("the start movie");
+    p.wait(3.4);
+    p.key(K::KeyR);
+    p.until(3.0, |a| a.fe.as_ref().is_some_and(|f| f.page == Page::Main && !f.intro_playing)).expect("the R skip");
+}
+
+/// State 6 skips on the action keys at once — the case-6 read has no gate [M 0x1c98c8:148-150].
+#[test]
+fn the_briefing_skips_on_the_action_keys_at_once_at_240hz() {
+    let Some(iso) = nf_iso() else { return };
+    let mut p = Player::boot(&iso, 240);
+    p.main_menu();
+    p.mission_list();
+    p.pick(1);
+    p.briefing_up();
+    p.wait(0.5);
+    p.key(K::ArrowDown);
+    p.until(3.0, |a| a.async_load.is_some()).expect("the skip");
+    p.finish_load();
+    assert_eq!(p.app().level_code, 0x0700_0005, "the skip returns to the level load");
+}
+
+/// The attract trailer skips on the action keys at once — c49 = 1, c4c = 0 [M 0x20a1f0:17-19].
+/// Needs the real decoder: a declined attract closes at once, so this runs only where the
+/// image carries the PSS files (the sister legs above run everywhere).
+#[test]
+fn the_attract_trailer_skips_on_the_action_keys_at_240hz() {
+    let Some(iso) = iso() else { return };
+    let mut p = Player::boot(&iso, 240);
+    p.main_menu();
+    p.until(50.0, |a| a.fe.as_ref().is_some_and(|f| f.attract_playing)).expect("the attract");
+    p.wait(0.5);
+    p.key(K::ArrowDown);
+    p.wait(0.3);
+    assert!(!p.fe().attract_playing, "the trailer skipped on D-pad-down's key");
+    assert_eq!(p.page(), Some(Page::Main));
+    // The next cycle takes R (R1).
+    p.until(60.0, |a| a.fe.as_ref().is_some_and(|f| f.attract_playing)).expect("the second attract");
+    p.wait(0.5);
+    p.key(K::KeyR);
+    p.wait(0.3);
+    assert!(!p.fe().attract_playing && p.page() == Some(Page::Main), "the R skip");
+}
+
+/// The poll's own rule, FrontEnd-level (the attract branch needs the real decoder at App level,
+/// so the gate itself is pinned here): the attract skips with no grace, the START movie refuses
+/// inside its 180-tick grace and passes after it, the boot logos are never armed [M
+/// 0x20a1f0:17-19, 0x20a060:17-18, 0x215a50:6, 0x209e88:41,:55]. The fields are the state
+/// `start_intro_movie` / `attract_open` build.
+#[test]
+fn the_skip_poll_honours_each_kind_gate() {
+    let mut fe = menu::FrontEnd::new();
+    // The attract trailer: c49 = 1, c4c = 0 — skips at once, back on the opener.
+    fe.page = Page::Main;
+    fe.attract_opener = Page::Main;
+    fe.attract_movie = 0x073a_0048;
+    fe.attract_playing = true;
+    assert!(fe.movie_skip_armed());
+    assert!(fe.movie_skip_poll(), "the attract skips at once [M 0x20a1f0:17-19]");
+    assert!(!fe.attract_playing && fe.page == Page::Main, "back on the opener [M 0x20a1f0:64]");
+    // The START movie: the grace refuses one tick short, passes on the tick [M 0x215a50:6].
+    fe.page = Page::EstHero;
+    fe.intro_playing = true;
+    fe.intro_movie = true;
+    fe.intro_skippable = true;
+    fe.intro_ticks = menu::ESTHERO_GRACE - 1;
+    assert!(!fe.movie_skip_poll(), "the grace holds at tick 179");
+    assert!(fe.intro_movie, "the movie is still up");
+    fe.intro_ticks = menu::ESTHERO_GRACE;
+    assert!(fe.movie_skip_poll(), "past the grace it skips [M 0x20a060:17-18]");
+    assert!(!fe.intro_movie);
+    // The boot logos: c49 = 0 — never armed, however long they run [M 0x209e88:41,:55].
+    fe.intro_movie = true;
+    fe.intro_skippable = false;
+    fe.intro_ticks = menu::ESTHERO_GRACE + 100;
+    assert!(!fe.movie_skip_armed() && !fe.movie_skip_poll(), "the logos refuse");
+    assert!(fe.intro_movie);
+}

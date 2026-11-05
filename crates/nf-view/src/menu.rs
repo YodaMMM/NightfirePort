@@ -4528,6 +4528,39 @@ impl FrontEnd {
         self.open_pair_sfx();
     }
 
+    /// Is the manager's movie-skip poll armed — a front-end movie that accepts the skip is up?
+    /// The game arms the skip byte `DAT_002e1c49` on the START movie [M P_ESTHERO_Handler
+    /// 0x20a060:18] and on the attract trailer [M P_ATTRACT_Handler 0x20a1f0:18/:28]; the boot
+    /// logos clear it, so they are never armed [M P_INTRO_Handler 0x209e88:41,:55].
+    pub fn movie_skip_armed(&self) -> bool {
+        self.attract_playing || (self.intro_playing && self.intro_movie && self.intro_skippable)
+    }
+
+    /// The manager's ONE movie-skip poll, for every front-end movie kind:
+    /// `MenuManager_Update` 0x21c3d8:37-43 reads the skip action while a movie plays
+    /// (`Menu_InputAction(-1, 0x19, 4)`) and calls `Menu_StopMovie(0)`, which stops the movie
+    /// only when it accepts the skip (`DAT_002e1c49`) AND the grace (`DAT_002e1c4c`) has run
+    /// out [M Menu_StopMovie 0x215a50:6 — the counter ticks down per manager tick,
+    /// `Menu_UpdateMovieCounter` 0x215970:6-8]. The attract trailer opens with no grace
+    /// [M 0x20a1f0:17-19,:27-29]; the START movie with the 180-tick one (ESTHERO_GRACE)
+    /// [M 0x20a060:17-18]; the boot logos never accept the skip. Returns true when a movie was
+    /// stopped — the caller swallowed the action either way (the game's msg 0x68/1 input block
+    /// owns these pages [M 0x20a060:25, 0x20a1f0:37]).
+    pub fn movie_skip_poll(&mut self) -> bool {
+        if !self.movie_skip_armed() { return false; }
+        if self.attract_playing {
+            self.attract_movie_finished();
+            return true;
+        }
+        if self.intro_ticks >= ESTHERO_GRACE {
+            self.intro_movie = false;   // psiStopBackgroundMovie [M 0x215a50:11]
+            self.intro_live = false;
+            self.intro_frames = 0;
+            return true;
+        }
+        false
+    }
+
     /// The pause page opens over a running mission (the game's GS_PauseGame [M 0x17d178 pauses the
     /// sim; Player_Update 0x193600:73 opens page 0x4000004b]; the port only tracks the page — the
     /// caller pauses its own loop, and the sound hold:
@@ -5708,8 +5741,9 @@ impl FrontEnd {
         // [`Self::attract_movie_finished`]. Other actions are swallowed and do NOT reach the
         // counter (the game's `Menu_InputAction` never runs for them here).
         if self.attract_playing {
-            if a == Action::Confirm {
-                self.attract_movie_finished();
+            // movie-skip-keys: Confirm rides the manager's own poll with the 0x19 keys now
+            // (App::app_key) — the ONE rule, [`Self::movie_skip_poll`] [M 0x21c3d8:40-43].
+            if a == Action::Confirm && self.movie_skip_poll() {
                 return true;
             }
             return false;
@@ -5727,10 +5761,9 @@ impl FrontEnd {
         // pair restart, then the next page) [M 0x20a060:28-45]. The boot logos clear c49: they
         // are unskippable [M 0x209e88:41, :55].
         if self.intro_playing {
-            if a == Action::Confirm && self.intro_movie && self.intro_skippable && self.intro_ticks >= ESTHERO_GRACE {
-                self.intro_movie = false;   // psiStopBackgroundMovie [M 0x215a50:11]
-                self.intro_live = false;
-                self.intro_frames = 0;
+            // movie-skip-keys: Confirm rides the manager's own poll with the 0x19 keys now
+            // (App::app_key) — the ONE rule, [`Self::movie_skip_poll`] [M 0x21c3d8:40-43].
+            if a == Action::Confirm && self.movie_skip_poll() {
                 return true;
             }
             return false;
