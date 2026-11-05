@@ -93,3 +93,15 @@ fn health_pip_alpha_blink_scales_with_fade() {
     // Above the blink threshold pip 0 is a normal filled pip.
     assert_eq!(health_pip_alpha(0, 4.0, 15, 0.5), 0.275);
 }
+
+/// A sprite with no loaded texture draws at size 0, so the whole flare vanished with its ramp green.
+#[test]
+fn every_flare_sprite_has_its_texture_on_the_desert_level() {
+    let Ok(iso) = std::env::var("NF_ISO") else { return };
+    let scene = nf_view::load(&iso, "0700000c.bin", false).unwrap();
+    let flare = &scene.hud.as_ref().unwrap().flare;
+    assert_eq!(flare.len(), 7);
+    for sp in flare {
+        assert!(scene.hud_textures.iter().any(|(h, _)| *h == sp.texture), "{:#x}", sp.texture);
+    }
+}

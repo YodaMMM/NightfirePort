@@ -37,14 +37,16 @@ const SH: f32 = 448.0;
 /// `HUD_UpdateSpacePane` 0x19d3b8; D 0700001b.bin entry 61 sub 0..4]).
 /// fix-hud-parity added the Q-Claw marker 0x0300004C [D AmmoSprInfo[7]]; the security-camera
 /// pane's four (0x030000AA..AD) follow [L SecCamSprInfo 0x2bdeb0].
-pub const TEXTURES: [u32; 43] = [0x0300_005b, 0x0300_005a, 0x0300_0026, 0x0300_007a, 0x0300_0128, 0x0300_018d, 0x0300_018e, 0x0300_0003, 0x0300_0034, 0x0300_0002, 0x0300_0173, 0x0300_0174, 0x0300_017f, 0x0300_017d, 0x0300_0055, 0x0300_0056, 0x0300_0057, 0x0300_0090, 0x0300_0141, 0x0300_0066, 0x0300_0067, 0x0300_006a, 0x0300_005e, 0x0300_004a, 0x0300_005f, 0x0300_005c, 0x0300_005d, 0x0300_0059,
+pub const TEXTURES: [u32; 48] = [0x0300_005b, 0x0300_005a, 0x0300_0026, 0x0300_007a, 0x0300_0128, 0x0300_018d, 0x0300_018e, 0x0300_0003, 0x0300_0034, 0x0300_0002, 0x0300_0173, 0x0300_0174, 0x0300_017f, 0x0300_017d, 0x0300_0055, 0x0300_0056, 0x0300_0057, 0x0300_0090, 0x0300_0141, 0x0300_0066, 0x0300_0067, 0x0300_006a, 0x0300_005e, 0x0300_004a, 0x0300_005f, 0x0300_005c, 0x0300_005d, 0x0300_0059,
     0x0300_0177, 0x0300_0178, 0x0300_0179, 0x0300_017a, 0x0300_017b, 0x0300_004c,
     0x0300_00aa, 0x0300_00ab, 0x0300_00ac, 0x0300_00ad,
     // The Ronin pane's own (pane 18, `RoninSprInfo` 0x2be160 sprites 2/3/5 [L]).
     0x0300_00dc, 0x0300_00de, 0x0300_0146,
     // goggles: the x-ray noise 0x03000098 (32x32) and the battery icon 0x0300017E (16x16) of the
     // two goggles panes [D NightSightSprInfo / XraySprInfo; every SP archive carries both].
-    0x0300_0098, 0x0300_017e];
+    0x0300_0098, 0x0300_017e,
+    // The lens flare's discs and glow (pane 8, `LensFlareSprInfo` 0x2bd8d8).
+    0x0300_004f, 0x0300_0050, 0x0300_0051, 0x0300_0052, 0x0300_0082];
 
 /// The 0700001b missile-status pane (pane 20: `SpacePane` 0x2be598 = {x 0, y 0, flags 0, create
 /// `HUD_CreateDefault`, update `HUD_UpdateSpacePane` 0x19d3b8, `SpaceSprInfo` 0x2be3b0, 11 sprites}
@@ -728,14 +730,33 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     let flare_a = s.hud.flare_alpha;
     if s.mp.is_none() && flare_a >= 1.0 && t.flare.len() >= 7 {
         if let Some((sx, sy)) = flare_sun_screen(s) {
+            let first = h.quads.len();
             for (sp, x, y, w, hgt) in flare_quads(&t.flare, flare_a as u32, sx, sy, |tex| h.tex_dims(tex)) {
                 if w < 1.0 || hgt < 1.0 { continue; }
                 let at = if sp.flags & 0x800 != 0 { (-(w / 2.0), -(hgt / 2.0)) } else { (0.0, 0.0) };
                 let c = gs(0xffffff, flare_a as u32);
+                // Zero UV extents = the whole texture, as in `sprite`.
+                let (tw, th) = h.tex_dims(sp.texture);
+                let uv = if sp.uv[2] == 0 && sp.uv[3] == 0 { [0.0, 0.0, tw, th] } else { sp.uv.map(|k| k as f32) };
                 if sp.flags & 0x400 != 0 {
-                    h.tiled_quad(Anchor::Centre, 0x31, sp.texture, x + at.0, y + at.1, w, hgt, [sp.uv[0] as f32, sp.uv[1] as f32, sp.uv[2] as f32, sp.uv[3] as f32], sp.flags, c);
+                    h.tiled_quad(Anchor::Centre, 0x31, sp.texture, x + at.0, y + at.1, w, hgt, uv, sp.flags, c);
                 } else {
-                    h.quad(Anchor::Centre, 0x31, sp.texture, 1, x + at.0, y + at.1, w, hgt, [sp.uv[0] as f32, sp.uv[1] as f32, sp.uv[2] as f32, sp.uv[3] as f32], (false, false), c);
+                    h.quad(Anchor::Centre, 0x31, sp.texture, 1, x + at.0, y + at.1, w, hgt, uv, (false, false), c);
+                }
+            }
+            // The discs mirror a quarter texture with its bright centre in a corner: a wrapped
+            // sample at the quad's edge drew that corner as a square outline.
+            for q in &mut h.quads[first..] {
+                let t = &scene.hud_textures[q.tex - 1].1;
+                let (du, dv) = (0.5 / t.width as f32, 0.5 / t.height as f32);
+                let span = |f: fn(&crate::gpu::HudVertex) -> f32, v: &[crate::gpu::HudVertex]| {
+                    v.iter().map(f).fold((f32::MAX, f32::MIN), |(a, b), x| (a.min(x), b.max(x)))
+                };
+                let (u0, u1) = span(|p| p.uv[0], &q.v);
+                let (v0, v1) = span(|p| p.uv[1], &q.v);
+                if u1 - u0 <= 2.0 * du || v1 - v0 <= 2.0 * dv { continue; }
+                for p in &mut q.v {
+                    p.uv = [p.uv[0].clamp(u0 + du, u1 - du), p.uv[1].clamp(v0 + dv, v1 - dv)];
                 }
             }
         }
