@@ -7,7 +7,7 @@
 //! Not yet: combat moves (steps, strafes, rolls, cover), patrols, hearing, drone-to-drone alerts, bullets/damage.
 
 use crate::trig::{angle_difference, atan2_approx, rotate_to_bearing};
-use crate::world::{CollisionWorld, V3};
+use crate::world::{CollisionWorld, HitHost, V3};
 use nf_formats::anim::Script;
 use nf_formats::drone::{DroneAnimData, PropertyTables};
 use std::collections::HashMap;
@@ -15876,8 +15876,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // fix-rocket-glass-08). The hit's node pass flag (the glist-0x40 rule) rides the
                 // scoped query's 4th field — `Collide_Intersect` 0x1ebaa8:143-145 ORs it into
                 // HITDATA+0x51 bit 1 and the walk's base pass reads that bit [M 0x12cea0..0x12cea8].
-                let pierce = crate::effect::penetration_roll_node(&mut self.rng, m, weapon, node_pass, flags6c_w);
-                if first_world {
+                let mut pierce = crate::effect::penetration_roll_node(&mut self.rng, m, weapon, node_pass, flags6c_w);
+                // THE OBJECT-HIT PASS ARM [M Bullet_CollisionHandler 0x12ce80 disasm
+                // 0x12cf58-0x12cf5c]: an object hit (HITDATA+0x58 != 0) passes when
+                // obj+0xF0 & 0x60 != 0 — obj+0xF0 = the glist record's +0x44 word | the create
+                // param [M Control_CreateObjEx 0x1343c8:36], the placement's own flag word. The
+                // AIM ray's pick does NOT apply this gate (the same object's glist takes the aim
+                // snap [L the 07000008 breakpoint run: the ray hit the shutter object at
+                // (139.562, 50.792, -96.706)]) — the pass is the flight's alone, and the live
+                // rocket's hit chain lists the shutter object on the crossing step while the
+                // round passes to the -100 back wall.
+                if let HitHost::Object(id, _) = host {
+                    // The dynamic part ids: bit 40 + the door list index (drone.rs's set_dynamic
+                    // parts), bit 41 the SS parts, bit 42 the breakable panes.
+                    if id >> 40 == 0x1 {
+                        if let Some(dr) = self.doors.list.get((id & 0xFF_FFFF_FFFF) as usize) {
+                            if dr.bullet_pass { pierce = true; }
+                        }
+                    }
+                }
+                if first_world && !pierce {
                     self.player_impacts.push(PlayerImpact::World(hit));
                     // `PlrStat_LogShotHitScenery(0)` 0x198408 (SP_Update 0x1dbda8:261; Destroy_Smash
                     // 0x12bb60:55 — the port folds the breakables into this world-hit path): the

@@ -222,6 +222,14 @@ pub struct Door {
     pub sph_centre: V3,
     /// The object's hashcode (the drawn mesh and the collision shape).
     pub glist: u32,
+    /// The placement flag word's bullet-pass bits (0x20|0x40): obj+0xF0 = glist record +0x44 |
+    /// the create param [M Control_CreateObjEx 0x1343c8:36], and `Bullet_CollisionHandler`
+    /// 0x12ce80's object-hit arm passes any hit whose object carries obj+0xF0 & 0x60 (disasm
+    /// 0x12cf58-0x12cf5c) — the flight's object pass the AIM ray's pick does not apply (the
+    /// same object's glist takes the aim snap [L the 07000008 breakpoint run]). The 08 closed
+    /// shutters ride it: the live rocket's hit chain lists the shutter object on the crossing
+    /// step and the round passes to the −100 back wall.
+    pub bullet_pass: bool,
 }
 
 impl Door {
@@ -412,6 +420,7 @@ impl Doors {
                 dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
                 matrix: m, inv_closed: [[0.0; 4]; 4],
                 pos: p.translation, sph: (transform(&m, centre), radius), sph_centre: centre, glist,
+                bullet_pass: p.flags & 0x60 != 0,
             };
             if d.kind == 0 {
                 // `Door_SetupSwing`: the swing covers half the range, so the speed re-quantises to whole ticks
@@ -1254,6 +1263,7 @@ mod tests {
             matrix: quat_matrix([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0]),
             inv_closed: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             pos: [0.0, 0.0, 0.0], sph: ([0.0, 1.1, 0.0], 1.28), sph_centre: [0.0, 1.1, 0.0], glist: 7,
+            bullet_pass: false,
         });
         doors
     }
@@ -1298,6 +1308,7 @@ mod tests {
             dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
             matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 1.1, 0.0], 1.28), sph_centre: [10.0, 1.1, 0.0], glist: 8,
+            bullet_pass: false,
         });
         let mut ch = channels();
         let mut sounds = Vec::new();
@@ -1332,6 +1343,7 @@ mod tests {
             dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
             matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 1.1, 0.0], 1.28), sph_centre: [10.0, 1.1, 0.0], glist: 8,
+            bullet_pass: false,
         });
         let mut ch = channels();
         ch.set(0x12, 1, 1); // 07000011: Lock #177's burn / TouchOnce #283's out channel
@@ -1361,6 +1373,7 @@ mod tests {
             matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             // The create fallback's sphere: the placement translation, radius 0.0.
             inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 0.0, 0.0], 0.0), sph_centre: [10.0, 0.0, 0.0], glist: 0,
+            bullet_pass: false,
         });
         let mut ch = channels();
         // The use point 2.0 out (head + look): inside the old stand-in's 2.5, so the deleted arm
@@ -1388,6 +1401,7 @@ mod tests {
             dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
             matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 1.1, 0.0], 1.28), sph_centre: [10.0, 1.1, 0.0], glist: 8,
+            bullet_pass: false,
         });
         let mut ch = channels();
         // The use point 1.0 from the live sphere centre [10, 1.1, 0]: reach = 1.0 + 1.28 = 2.28 → hit.
@@ -1407,6 +1421,7 @@ mod tests {
                 dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
                 matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
                 inv_closed: [[0.0; 4]; 4], pos: [k as f32, 0.0, 0.0], sph: ([k as f32, 1.1, 0.0], 1.28), sph_centre: [k as f32, 1.1, 0.0], glist: 9,
+            bullet_pass: false,
             });
         }
         let mut ch = channels();
@@ -1429,6 +1444,7 @@ mod tests {
             speed: 1.0 / 30.0, dir, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
             matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 1.1, 0.0], 1.28), sph_centre: [10.0, 1.1, 0.0], glist: 8,
+            bullet_pass: false,
         });
         doors
     }
@@ -1526,6 +1542,7 @@ mod world_helper_tests {
             timer: 0, open_timer: 0, msg_shown: false, matrix: [[0.0; 4]; 4],
             inv_closed: [[0.0; 4]; 4], pos: [0.0; 3], sph: ([0.0; 3], 0.0),
             sph_centre: [0.0; 3], glist: 0,
+            bullet_pass: false,
         };
         let mut doors = Doors::default();
         doors.list.push(mk(0x5A)); // a wired lock channel
