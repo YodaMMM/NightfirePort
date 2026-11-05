@@ -19,3 +19,14 @@ the pickup, the respawn timer starts, and the MP Auto Aim row is read when the t
 Run mp_pickups_visible_live, mp_world_sync_live, every mp_*_live, pickup_live, nf-game; suite
 via tools/test/suite.py in the background + once more on the final tree. Sandbox expires
 ~06:29 UTC; stop-new-work 06:09 UTC.
+Round 2 (2026-11-05 05:40 UTC). The dormant pass wired: step_mp_pickups called from the MP
+driver (step_bond) right after step_mp_bots, LOCAL matches only (the online net_bodies path
+untouched); reconcile_mp_pickup_rows at the driver head before the bots' refresh (the delete
+arm's unregister [M 0x18e650:341 → 0x18a058] + the expiry 0x18e148:254-258); the rows'
+available re-read as the registered law [M pickGoal 0x126b88:386-390 skips only a gone
+object's row]; reset_pickup_bot_visit_times at both BotDead ports [M 0x171518:17]. Pins
+local_match_bot_pickups_live 3/0. Re-pins: mp_bots 7200-tick hunt window, mp_perf_16 digest,
+pickups_g029 respawn 1201 (the audit's fix-4 law), mp_pickup_take's sound read. 43 of 45
+mp/pickup binaries green; pickup_live 1/0; nf-game lib 662/0+5i; mp_online_failures +
+mp_stress_explosives killed by the sandbox on the base tree too (pre-existing). Suite on the
+final tree running in the background.
