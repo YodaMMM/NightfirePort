@@ -7342,7 +7342,8 @@ impl Drone {
             // `NDrone2_DSTATE_PlayScript` 0x15ba68. ENTER (msg 1): `+0x4F8 |= 0x10000 | 0x2000`, then
             // SetScript(`+0x554`, …) per script — 0x60005e6/0x60008ae and the default → (0x24, 0x11a,
             // 0x1e, 0, 5, 0); 0x6000168 → (10, 0x32, 8, 0, 5, 0); 0x6000169 → (5, 0x32, 0x1e, 0, 5, 0)
-            // + AttackTalk + `+0x4F8 |= 0x400000`; 0x60007ac → (10, 0x32, 0xf, 0, 5, 0) + props
+            // — the 0x168/0x169 arms share the tail AttackTalk + `+0x4F8 |= 0x400000` [M 0x15ba68:70-73];
+            // 0x60007ac → (10, 0x32, 0xf, 0, 5, 0) + props
             // 0x3b/0x3a cleared. The resume `+0xCD8` (0x56 ATTACK for the default/0x60005e6/0x60008ae
             // arms) is the IMPACT resume (cases 6/7/8/9 → `HandleImpact(+0xCD8)`), not the script's
             // natural end — msg 5 lands back in this state (below). Not ported: the impact resume, the
@@ -7371,7 +7372,8 @@ impl Drone {
             // HELD (the 07000001 guard's script 06000169 ends into his idle-then-aim follow-up);
             // 0x60007ac → `DroneAnim_SetDAnimNow` (0x13dd78) of danim 0xf4 with blend 0, wait 1, plus the
             // +0x4f8 0x400000 clear and +0x54c = π [M 0x15ba68:135-138], then the start state (no 0x60007ac
-            // drone is ported — the sub-arm stays unported, its +0x4f8 bit has no port reader).
+            // drone is ported — the SetDAnimNow/π sub-arm stays unported; the clear itself lands in the
+            // port as the `start_script = 0` below, which is what the msg::SOUND deafness reads).
             (PLAY_SCRIPT, msg::ANIM_DONE) => {
                 let played = self.anim.script.unwrap_or(0);
                 self.start_script = 0;
@@ -7395,12 +7397,17 @@ impl Drone {
             // the game's alarm-heard scripted guards reach combat (cover_nodes_live's 06 gunfire).
             (PLAY_SCRIPT, msg::SOUND) => {
                 // 0x15ba68 case 0x14 → `DroneVision_EnemyAlerts` case 0x14 → `DroneVision_AlertSound`
-                // 0x177800. The ENTER case sets `+0x4F8 |= 0x400000` for start scripts 0x6000169 and
-                // 0x60007ac [M 0x15ba68:36-44], and AlertSound returns 0 while it is set [M
-                // 0x177800:19-21] — those scripted guards are DEAF to gunfire while the script plays
-                // (the flag clears when the script ends, 0x15ba68 case 5; the port's start_script
-                // zeroes at the same point, the PLAY_SCRIPT msg::ANIM_DONE arm).
-                if self.start_script == 0x6000_169 || self.start_script == 0x6000_7ac {
+                // 0x177800. The ENTER case sets `+0x4F8 |= 0x400000` for start scripts 0x6000168 and
+                // 0x6000169 — their arms fall into the SHARED tail (SetScript → AttackTalk → the OR)
+                // [M 0x15ba68:70-73; disasm 0x15bbac / 0x15bbc0 → `lui 0x40` + `sw 0x4f8` at
+                // 0x15bbf4-0x15bc08] — and 0x60007ac by its OWN OR right after its SetScript
+                // [M 0x15ba68:84; disasm `lui $a1, 0x40` + `sw 0x4f8` at 0x15bc40-0x15bc54]. The
+                // default/0x60005e6/0x60008ae arms return after SetScript with no OR [M 0x15bb50-0x15bba4].
+                // AlertSound returns 0 while the bit is set [M 0x177800:19-21] — those scripted guards
+                // are DEAF to gunfire while the script plays (the flag clears when the script ends,
+                // 0x15ba68 case 5 [M :128/:135/:153]; the port's start_script zeroes at the same
+                // message, the PLAY_SCRIPT msg::ANIM_DONE arm).
+                if self.start_script == 0x6000_168 || self.start_script == 0x6000_169 || self.start_script == 0x6000_7ac {
                     if std::env::var_os("NF_AILOG").is_some() {
                         eprintln!("[ailog] guard {} PlayScript SOUND: script {:#x} holds +0x4F8 0x400000 — deaf to gunfire [M 0x177800:19-21]", self.index, self.start_script);
                     }
@@ -22718,5 +22725,44 @@ mod abseil_tests {
         for i in 0..21u32 { dr2.send(&d2, &mut rng, i + 1, msg::TASE); }
         assert!(dr2.using_2nd, "sister: level not 09/0A — no swap [M 0x1469b8:103]");
         assert_eq!(dr2.impact_resume, 0, "sister: no resume write either [M :103]");
+    }
+
+    /// The PlayScript deaf window covers 0x6000168 too [M NDrone2_DSTATE_PlayScript 0x15ba68:70-73 —
+    /// the 0x6000168/0x6000169 arms fall into the SHARED ENTER tail `SetScript → AttackTalk →
+    /// +0x4F8 |= 0x400000`, disasm 0x15bbac/0x15bbc0 → the OR at 0x15bbf4-0x15bc08; :84 —
+    /// 0x60007ac's own OR, disasm 0x15bc40-0x15bc54]: `DroneVision_AlertSound` 0x177800:19-21
+    /// returns 0 while the bit stands, so the scripted guard ignores gunfire. The window ends at
+    /// the script's natural end (msg 5): all three arms clear the bit there [M :128/:135/:153].
+    /// Mode 9 at alertness 1.0 is AlertSound's attack row (mode byte 9 reads +0x50c, > 0.7 → 0x56)
+    /// [M 0x177800:51-68] — the observable "hears" here.
+    #[test]
+    fn play_script_0x168_is_deaf_to_gunfire_until_the_script_ends() {
+        empty_data!(0x0700_0001, keep, d);
+        let mut dr = drone_at([10.0, 0.0, 10.0]);
+        dr.mode = 9;
+        dr.alert = 1.0;
+        dr.state = state::PLAY_SCRIPT;
+        dr.start_script = 0x6000_168;
+        let mut rng = Rng::new(0x5eed);
+        // The state ENTER (the game's PlayScript entry plays the start script): the port's ENTER arm
+        // runs `play_script` → `anim.script = Some(0x6000168)` [M 0x15ba68:49-53/70-73].
+        dr.send(&d, &mut rng, 99, msg::ENTER);
+        assert_eq!(dr.anim.script, Some(0x6000_168), "the 0x6000168 script is the one playing");
+        // Gunfire (msg 0x14) while the script plays: the bit holds, the script holds [M 0x177800:19-21].
+        dr.send(&d, &mut rng, 100, msg::SOUND);
+        assert_eq!(dr.state, state::PLAY_SCRIPT, "the 0x6000168 script holds through gunfire — the ENTER shared tail sets +0x4F8 0x400000 [M 0x15ba68:73; disasm 0x15bbf4-0x15bc08]");
+        assert!(!dr.log.iter().any(|&(f, _)| f == 100), "no state transition on the while-scripted shot — deaf [M 0x177800:19-21]");
+        // The script's natural end (msg 5): the 0x6000168 arm clears +0x4F8's 0x400000 [M 0x15ba68:153] —
+        // the port zeroes start_script in the same arm, the msg::SOUND deafness read.
+        dr.send(&d, &mut rng, 101, msg::ANIM_DONE);
+        assert_eq!(dr.start_script, 0, "the deaf bit clears at the script's end [M 0x15ba68:153]");
+        assert_eq!(dr.state, state::PLAY_SCRIPT, "the 0x168/0x169 msg-5 arm HOLDS the state (CallAnim + AttackTalk, no SetState) [M 0x15ba68:149-157]");
+        // The next gunshot lands on the armed rows: mode 9 at alert 1.0 → Attack 0x56 [M 0x177800:51-68]
+        // — the guard HEARS. (With the empty census tables the ATTACK enter re-seats him at its
+        // fallback afterwards; the pin is the msg-102 transition into ATTACK — what AlertSound
+        // returns and the port's arm does.)
+        dr.send(&d, &mut rng, 102, msg::SOUND);
+        assert!(dr.log.iter().any(|&(f, n)| f == 102 && n == state::ATTACK),
+            "the guard hears once the script ends: mode 9 at alert 1.0 → Attack [M 0x177800:51-68]; log {:?}", dr.log);
     }
 }
