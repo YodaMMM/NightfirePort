@@ -2950,6 +2950,9 @@ struct App {
     menu_clock: f32,
     /// fe-60hz: the front end's own 60 Hz tick accumulator (seconds).
     fe_clock: f32,
+    /// The movie hold's 60 Hz ticks not yet spent, as a fraction: the game polls BGFMVPlaying per
+    /// vblank, so the hold counts time, not this host's display frames.
+    movie_poll_clock: f32,
     /// The sim reported the mission's own end this frame (see `Drones::mission_end`).
     pending_mission_end: bool,
     /// mission-results-page: the finished mission's progress layer, snapshotted at
@@ -4284,7 +4287,8 @@ impl App {
     /// change [M `Manager_SendMessage` 0x21c858:338 — stop when the new page's aux is 0, restart
     /// when it differs from the playing one]. Plus the `psiMovieFinished` poll [M 0x1082e8] and
     /// the phase-2 resolve routing the host's level load [M ResetMap_Load 0x1d6360 LoadState 2].
-    fn movie_tick(&mut self) {
+    fn movie_tick(&mut self, dt: f32) {
+        let polls = movie_polls(&mut self.movie_poll_clock, dt);
         let movie_iso = self.movie_iso_path();
         let Some(fe) = self.fe.as_mut() else {
             // No front-end page is up: no page wants the looping backdrop — stop it. The game's
@@ -4334,7 +4338,7 @@ impl App {
                 // 0x108060]).
                 match &mut self.movie {
                     Some(p) if p.code() == code && !p.is_looping() => {
-                        p.headless_advance();
+                        p.headless_advance_by(polls);
                         if p.finished() { fe.intro_movie_finished(); } else { fe.intro_live = true; }
                     }
                     _ => {}
@@ -4380,7 +4384,7 @@ impl App {
             // psiMovieFinished [M 0x1082e8]: the poll advances the no-decode stand-in one frame
             // per call ([`Player::headless_advance`]).
             let ended = match self.movie.as_mut() {
-                Some(p) if p.code() == code => { p.headless_advance(); p.finished() }
+                Some(p) if p.code() == code => { p.headless_advance_by(polls); p.finished() }
                 _ => false,
             };
             if ended {
@@ -4407,7 +4411,7 @@ impl App {
             if let Some(p) = self.movie.as_mut().filter(|p| p.code() == code) {
                 // One psiMovieFinished poll per page tick (60 Hz), not per redraw.
                 while fe.win_movie_polled != fe.flow.ticks {
-                    p.headless_advance();
+                    p.headless_advance_by(polls);
                     fe.win_movie_polled = fe.win_movie_polled.wrapping_add(1);
                 }
                 ended |= p.finished();
@@ -4417,7 +4421,7 @@ impl App {
                 fe.music.movie_finished();
                 fe.win_movie_finished();
             }
-        } else if mission_movie_glue(fe, &mut self.movie, &movie_iso) {
+        } else if mission_movie_glue(fe, &mut self.movie, &movie_iso, polls) {
         } else {
             // The page's aux loop [M 0x21c858:338]: stop when the page has no aux, (re)start when
             // the playing code differs from the page's.
@@ -4786,7 +4790,7 @@ impl App {
                 // fix-movie-playback: the movie glue runs before the load path so a phase-2
                 // resolve lands in the same frame the state 6 popped.
                 self.menu_script_tick();
-                self.movie_tick();
+                self.movie_tick(dt);
                 self.adopt_lobby_session();
                 if self.net_finished.is_some() {
                     let on_debrief = self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::MpDebriefing);
@@ -6488,6 +6492,7 @@ impl App {
             frame_ticks: 0,
             menu_clock: 0.0,
             fe_clock: 0.0,
+            movie_poll_clock: 0.0,
             pending_mission_end: false,
             results_progress: None,
             pending_mp_debrief: None,
@@ -7747,7 +7752,16 @@ pub fn mission_end_stats(p: &nf_game::progress::Progress) -> menu::Stats {
 /// the sim before each local tick; never applied to an online match.
 pub static RAPID_FIRE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Player>, iso: &str) -> bool {
+/// The whole 60 Hz ticks `dt` seconds carry, the fraction kept in `clock`. At 240 Hz a movie hold
+/// that counted display frames ran out four times early.
+pub fn movie_polls(clock: &mut f32, dt: f32) -> u32 {
+    *clock += dt * 60.0;
+    let whole = (*clock + 1e-3).floor();
+    *clock = (*clock - whole).max(0.0);
+    whole as u32
+}
+
+pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Player>, iso: &str, polls: u32) -> bool {
     if fe.flow.get_state() == menu::ST_MOVIE {
         // psiStartBackgroundMovie replaces whatever the one BGFMV slot holds [M 0x1081a8] —
         // a looping page backdrop standing in the slot must yield to the state-6 movie
@@ -7768,7 +7782,7 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
                 // One player poll per flow tick (60 Hz), not per redraw: at 240 Hz the per-redraw poll
                 // ran the hold out in a quarter of the movie (the Double Cross outro cut out early).
                 while fe.flow.movie_polled < fe.flow.movie_clock {
-                    p.headless_advance();
+                    p.headless_advance_by(polls);
                     fe.flow.movie_polled += 1;
                 }
                 fe.flow.movie_playing = !p.finished();
