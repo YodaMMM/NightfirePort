@@ -849,9 +849,13 @@ fn walk_fresh_spawn_to_the_mission_end() {
 /// `DroneFiring_TargetMoving_Accuracy`]. The cut-scene tail waits until the GAME re-enables
 /// Bond (the arrival cut-scene's `wait_enabled` pattern) — the fixed 2900 stood him 450
 /// extra ticks at the deck key under fire with no control ([L] 11 hits, 23.8 → 0.0, no fight
-/// ever started). Green run: the ring sleeps cost 2.1 (44.8 → 42.7), the deck sprint + the
-/// take-slot sleeps (#5/#4, dartable mid-chase) land the mission complete with 15.4 left;
-/// stuck 0, the one fall is the parachute jump itself.
+/// ever started). Green run (level-0b-walk-after-scrape-draw, after s/fx-scrape-and-impacts'
+/// draws shifted the stream): the deck crossing is the SPRINT-THROUGH (the sprint ends at the
+/// take slot, the take fires on the pass — the walked take-slot stop's return-fire gate stood a
+/// blocked dart fight at the deck's south-west while drone #4 chewed 58.8 at 4.5 u, the
+/// real_damage_agent/00agent deaths at tick 16047); the mission completes with 62.8 left (d1),
+/// 42.0 (Agent), 27.5 (00 Agent), 0 return-fire fights; stuck 0, the one fall is the parachute
+/// jump itself.
 #[test]
 fn walk_fresh_spawn_to_the_mission_end_real_damage() {
     walker::with_real_damage(|| {
