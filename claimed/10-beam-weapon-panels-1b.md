@@ -5,3 +5,6 @@ Measured from (16.74,-1.84,4.62) on 0700001b at yaw -1.57, the start weapon (slo
 Read the weapon's real fire path in the decompile: is it a bullet at all, does it fire on press or after the meter rises, what is its damage per tick, its class bits, and does its contact reach obj+0xD0 of an SP object? Compare each with the port, which treats it as an instant 20-damage round. Then find what the game's shot at a console does differently from a shot at a panel. Fix the difference. Keep solar_panel_hits_live: firing along the walkway breaks nothing. Run walkreal_0700001b_live and solar_panels_live and report both.
 
 Lead: weapon 0x33 is the Phoenix Samurai bolt, whose 0x100000/0x200000 arms explode at the hit (script 0x60007c4, Explode_Create). Two neighbouring panels break together on the first shot, which fits a blast reaching SP objects through the sphere sweep rather than a direct contact. Check that path first: does the game's blast reach panel SPs at all, and where does the port's first shot actually land at tick 0?
+
+---
+claimed-by: sandbox3 at 2026-11-05T16:36Z
