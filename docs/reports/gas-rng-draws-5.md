@@ -114,6 +114,14 @@ the full suite did not fit the window. Branch `s/gas-rng-draws-5` (cut from
 3. 16's pit wire: the world hits at (−5.7, −22.0, −166.1) — which hurt volume wrote the 10.0 +
    21.2 (fieldprobe the hurt list's gates at that spot outside any pulse)?
 
+## ntfy failed
+
+All three fallbacks failed (the sandbox's tool network could not reach ntfy.sh):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "gas-rng-draws-5: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(...)"` → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "gas-rng-draws-5: ..." https://ntfy.sh/nightfire-yoda-8k3x` → killed at the 120 s tool timeout with no output (hang).
+
 ## Usage
 
 not visible to me (no token/credit/context-window figures are exposed to this session; nothing
