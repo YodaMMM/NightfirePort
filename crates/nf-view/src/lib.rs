@@ -2953,6 +2953,8 @@ struct App {
     /// The movie hold's 60 Hz ticks not yet spent, as a fraction: the game polls BGFMVPlaying per
     /// vblank, so the hold counts time, not this host's display frames.
     movie_poll_clock: f32,
+    /// The same fraction for the menus' sound pump: `SFXUpdate` is once per game frame [M sound.md §6].
+    sound_poll_clock: f32,
     /// The sim reported the mission's own end this frame (see `Drones::mission_end`).
     pending_mission_end: bool,
     /// mission-results-page: the finished mission's progress layer, snapshotted at
@@ -4232,7 +4234,7 @@ impl App {
     /// calls Sound_UpdateListeners → Sound_UpdateSounds every not-frozen frame, in the same block
     /// as MenuManager_Update [M Game_Run 0x1c9790:7-11]. Silent under NF_SILENT: without an output
     /// device `build_sound` returns None and the commands just bookkeep on the state machine.
-    fn menu_music_tick(&mut self) {
+    fn menu_music_tick(&mut self, dt: f32) {
         // frontend-music (menu-audio-state): the transitions + the drain live in the extracted
         // `fe_music_step` (menu_music.rs) so the headless flows drive the SAME glue the window
         // runs. This wrapper only applies the commands to the sound driver.
@@ -4273,10 +4275,12 @@ impl App {
                 }
             }
         }
-        // The pump: one driver update + output send per frame while the menus are up and the
-        // audio is not held (the pause page's hold mirrors `MenuManager_Create(pause_sound=1)`).
-        if !self.audio_paused {
-            if let Some(s) = self.sound.as_mut() { s.batch(|_, _| {}); }
+        // The pump: one driver update + output send per 60 Hz tick while the menus or a load are up
+        // and the audio is not held (the pause page's hold mirrors `MenuManager_Create(pause_sound=1)`).
+        // Anywhere else `sound_tick` is the update; a second one here doubles every fade and duck.
+        let polls = movie_polls(&mut self.sound_poll_clock, dt);
+        if !self.audio_paused && (self.fe.is_some() || self.async_load.is_some()) {
+            if let Some(s) = self.sound.as_mut() { for _ in 0..polls.min(8) { s.batch(|_, _| {}); } }
         }
     }
 
@@ -4859,7 +4863,7 @@ impl App {
                 }
                 // frontend-music: the menus' own audio (the jingle pair, the credits track), the
                 // page-change transitions and the per-frame pump.
-                self.menu_music_tick();
+                self.menu_music_tick(dt);
                 // The Auto Aim option reaches the game (it was stored and never read), and
                 // options-census generalizes the same drain to every wired row
                 // (docs/systems/options-census.md).
@@ -6493,6 +6497,7 @@ impl App {
             menu_clock: 0.0,
             fe_clock: 0.0,
             movie_poll_clock: 0.0,
+            sound_poll_clock: 0.0,
             pending_mission_end: false,
             results_progress: None,
             pending_mp_debrief: None,
@@ -8657,6 +8662,48 @@ mod headless_app_harness {
         // SfxMasterVolume 100 at 0x30c958/0x30c95c — Driver::new carries them].
         assert_eq!(nf_audio::sfx::Driver::new().music_master, 70);
         assert_eq!(nf_audio::sfx::Driver::new().master, 100);
+    }
+
+    /// Every driver update sends exactly one `Cmd::Reverb`, so one second's capture counts them.
+    fn audio_updates_in_a_second(app: &mut HeadlessApp, hz: u32) -> usize {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        app.app.sound = Some(nf_audio::sfx::Sound {
+            driver: Default::default(),
+            output: None,
+            captured: Some(log.clone()),
+            music_files: None,
+            music: None,
+            music_pending: Vec::new(),
+        });
+        for _ in 0..hz { app.frame(1.0 / hz as f32); }
+        let n = log.lock().unwrap().iter().filter(|c| matches!(c, nf_audio::Cmd::Reverb { .. })).count();
+        n
+    }
+
+    /// `SFXUpdate` runs once per game frame [M sound.md §6]: in a mission the sim's tick is the only
+    /// update, 60 a second at any display rate. Sister: the old per-frame pump on top of it made
+    /// 300 at 240 Hz, every fade and duck five times fast.
+    #[test]
+    fn a_mission_updates_the_sound_sixty_times_a_second() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut got = Vec::new();
+        for hz in [60, 144, 240] {
+            let mut app = HeadlessApp::mission(&iso, "07000006.bin");
+            got.push((hz, audio_updates_in_a_second(&mut app, hz)));
+        }
+        assert!(got.iter().all(|g| (58..=62).contains(&g.1)), "{got:?}");
+    }
+
+    /// The menus' pump keeps the same rate.
+    #[test]
+    fn the_menus_update_the_sound_sixty_times_a_second() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut got = Vec::new();
+        for hz in [60, 144, 240] {
+            let mut app = HeadlessApp::boot(&iso);
+            got.push((hz, audio_updates_in_a_second(&mut app, hz)));
+        }
+        assert!(got.iter().all(|g| (58..=62).contains(&g.1)), "{got:?}");
     }
 }
 
