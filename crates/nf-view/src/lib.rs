@@ -5849,6 +5849,11 @@ impl App {
             let fe_n = (self.fe_clock * 60.0) as u32;
             self.fe_clock -= fe_n as f32 / 60.0;
             for _ in 0..fe_n.min(8) { fe.tick(); }
+            // A finished save routes here from the tick, with no action behind it to run the bonus
+            // page's 0x4c build.
+            if fe.page == menu::Page::NfBonus && fe.bonus.is_none() {
+                if let Some(p) = self.results_progress.as_mut() { fe.results_subpages_enter(p, None); }
+            }
         }
     }
 
