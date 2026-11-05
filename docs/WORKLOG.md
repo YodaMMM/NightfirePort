@@ -39,3 +39,11 @@ cuts (the wire needs to be in the ray — the game's ray hits object glists [L t
 (139.562, 50.792, -96.706), pos (140.719, 49.5, -96.751), r 1.812]), rocket_origin_live against
 the true snapped point. Then the walkreal consoles (0c/14/16/1b) from player spots and strip the
 NF_AIMPROBE prints.
+
+Progress (panel-model-glist): the flight's object-pass arm shipped — Bullet_CollisionHandler
+0x12ce80's obj+0xF0 & 0x60 rule [M disasm 0x12cf58-0x12cf5c; Control_CreateObjEx 0x1343c8:36
+writes obj+0xF0 = glist+0x44 | create param] ported as a per-door bullet_pass (the placement
+word's 0x60 bits) applied in flush_world_impacts, with the world impact recorded at the
+explosion point. rocket_glass08_live 3/0, rocket_stop_plane08_live 4/0, rocket_origin_live 1/0,
+fusebox_geometry_07000014_live 1/0 (all whole, quoted); interactables_07000014_live 9/1 (the
+east-wing laser cut needs the aim ray's object stage). Report: docs/reports/panel-model-glist.md.
