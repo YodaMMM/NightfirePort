@@ -4415,7 +4415,7 @@ impl App {
             if let Some(p) = self.movie.as_mut().filter(|p| p.code() == code) {
                 // One psiMovieFinished poll per page tick (60 Hz), not per redraw.
                 while fe.win_movie_polled != fe.flow.ticks {
-                    p.headless_advance_by(polls);
+                    p.headless_advance();
                     fe.win_movie_polled = fe.win_movie_polled.wrapping_add(1);
                 }
                 ended |= p.finished();
@@ -4425,7 +4425,7 @@ impl App {
                 fe.music.movie_finished();
                 fe.win_movie_finished();
             }
-        } else if mission_movie_glue(fe, &mut self.movie, &movie_iso, polls) {
+        } else if mission_movie_glue(fe, &mut self.movie, &movie_iso) {
         } else {
             // The page's aux loop [M 0x21c858:338]: stop when the page has no aux, (re)start when
             // the playing code differs from the page's.
@@ -7766,7 +7766,7 @@ pub fn movie_polls(clock: &mut f32, dt: f32) -> u32 {
     whole as u32
 }
 
-pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Player>, iso: &str, polls: u32) -> bool {
+pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Player>, iso: &str) -> bool {
     if fe.flow.get_state() == menu::ST_MOVIE {
         // psiStartBackgroundMovie replaces whatever the one BGFMV slot holds [M 0x1081a8] —
         // a looping page backdrop standing in the slot must yield to the state-6 movie
@@ -7787,7 +7787,7 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
                 // One player poll per flow tick (60 Hz), not per redraw: at 240 Hz the per-redraw poll
                 // ran the hold out in a quarter of the movie (the Double Cross outro cut out early).
                 while fe.flow.movie_polled < fe.flow.movie_clock {
-                    p.headless_advance_by(polls);
+                    p.headless_advance();
                     fe.flow.movie_polled += 1;
                 }
                 fe.flow.movie_playing = !p.finished();
@@ -8704,6 +8704,64 @@ mod headless_app_harness {
             got.push((hz, audio_updates_in_a_second(&mut app, hz)));
         }
         assert!(got.iter().all(|g| (58..=62).contains(&g.1)), "{got:?}");
+    }
+
+    /// A windowless front end on the mission list, past its first ticks.
+    fn front_end(iso: &str, page: menu::Page) -> HeadlessApp {
+        let mut h = HeadlessApp::boot(iso);
+        h.app.fe = Some(menu::FrontEnd::new());
+        h.app.movie = None;
+        for _ in 0..30 { h.app.frame(1.0 / 60.0); }
+        h.app.fe.as_mut().unwrap().page = page;
+        h
+    }
+
+    /// Seconds until the hold of the movie `code` runs out, with the movie's own length in
+    /// seconds. `app.frame` alone: no picture is pulled, so only the hold can end it.
+    fn hold_secs(h: &mut HeadlessApp, code: u32, hz: f32) -> (f32, f32) {
+        let (mut frames, mut len) = (0u32, 0.0f32);
+        while frames < (200.0 * hz) as u32 {
+            h.app.frame(1.0 / hz);
+            frames += 1;
+            match h.app.movie.as_ref().filter(|p| p.code() == code) {
+                Some(p) if p.finished() => break,
+                Some(p) => len = p.length_ticks() as f32 / 60.0,
+                None if len > 0.0 => break,
+                None => {}
+            }
+        }
+        (frames as f32 / hz, len)
+    }
+
+    /// A briefing holds its real length at any display rate. Sister: counting the hold on two
+    /// clocks ran it out in half the time at 30 Hz and never at 144 or 240.
+    #[test]
+    fn a_briefing_holds_its_length_at_any_display_rate() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let code = 0x0710_0005;
+        if movie::Player::start(&iso, code, 100).is_err() { eprintln!("no movie data — skipping"); return; }
+        for hz in [30.0f32, 60.0, 144.0, 240.0] {
+            let mut h = front_end(&iso, menu::Page::MissionSelect);
+            let fe = h.app.fe.as_mut().unwrap();
+            fe.flow.movie_code = code;
+            fe.flow.push_state(menu::ST_MOVIE, 0);
+            let (secs, len) = hold_secs(&mut h, code, hz);
+            assert!(len > 0.0 && (secs - len).abs() < 0.2, "{hz} Hz held {secs} s of a {len} s movie");
+        }
+    }
+
+    /// The win page's movie, the same.
+    #[test]
+    fn the_win_movie_holds_its_length_at_any_display_rate() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let code = crate::credits::WINGAME_MOVIE;
+        if movie::Player::start(&iso, code, 100).is_err() { eprintln!("no movie data — skipping"); return; }
+        for hz in [30.0f32, 60.0, 144.0, 240.0] {
+            let mut h = front_end(&iso, menu::Page::WinGame);
+            h.app.fe.as_mut().unwrap().win_movie = true;
+            let (secs, len) = hold_secs(&mut h, code, hz);
+            assert!(len > 0.0 && (secs - len).abs() < 0.2, "{hz} Hz held {secs} s of a {len} s movie");
+        }
     }
 }
 
