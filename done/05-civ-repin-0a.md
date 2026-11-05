@@ -114,3 +114,8 @@ not security guards:
 
 not visible to me — this environment shows no token, credit or context-window figures for the
 session, so there are no numbers to copy.
+
+
+## ntfy failed
+
+All three fallbacks failed (curl exit 28 connection timed out; python urllib [Errno 101] Network is unreachable; wget killed at 35s, exit 124). The report is on the branch s/civ-repin-0a at 7e506273d; the driver can read it there.
