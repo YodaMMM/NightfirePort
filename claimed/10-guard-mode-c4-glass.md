@@ -7,3 +7,6 @@ Two player-visible divergences found by a sweep for fields that are read but nev
 2. Guard rounds stop on glass: `glass_pass: false` at the guard spawn sites in drone.rs is a documented shortcut. The game clears the stop for every record without bit 0x800 [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f058]. Arm it from the record as the player side does, then re-pin the real-damage walks that relied on the old behaviour (the 08 station route first). No draws removed or reordered.
 
 Check each with the decompile, cite [M]/[L], and keep tests honest: real input, no teleports.
+
+---
+claimed-by: sandbox7 at 2026-11-05T18:11Z
