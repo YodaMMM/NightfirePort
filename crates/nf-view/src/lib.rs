@@ -2548,6 +2548,9 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
     if fe.page == menu::Page::MpBotChoose { fe.mp_bot_char = fe.cursor; }
     // Join Game: `--cursor` is agent 1's panel state (0 press to join, 1 choose codename, 5 joined).
     if fe.page == menu::Page::MpJoin { fe.mp_join[0].state = fe.cursor as u32; fe.mp_join[0].joined = fe.cursor > 0; fe.cursor = 0; }
+    if let Some(i) = args.iter().position(|a| a == "--objective-row") {
+        fe.pause_objectives_sel = args.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or(0);
+    }
     if let Some(i) = args.iter().position(|a| a == "--pause-tab") {
         fe.pause_tab = args.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or(0);
     }

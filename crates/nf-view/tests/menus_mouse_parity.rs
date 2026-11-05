@@ -26,6 +26,19 @@ fn act(fe: &mut FrontEnd, a: Action) -> bool {
 }
 
 /// Two frames — the mouse paths ride the window's own tick loop; no movie can start from a hover.
+/// The list's nine-line window on 0700000b's eight announced rows (PCSX2, 2026-11-05): opening on
+/// the last row shows rows 2-7, moving up leaves the view until the selection passes its top.
+#[test]
+fn objectives_window_follows_the_selection() {
+    let mut lines = [1; menu::OBJECTIVE_ROWS];
+    lines[..8].copy_from_slice(&[2, 2, 1, 2, 2, 1, 2, 1]);
+    assert_eq!(menu::pause_objective_top(&lines, 0, 7), 2);
+    assert_eq!(menu::pause_objective_top(&lines, 2, 4), 2);
+    assert_eq!(menu::pause_objective_top(&lines, 2, 1), 1);
+    assert_eq!(menu::pause_objective_top(&lines, 1, 0), 0);
+    assert_eq!(menu::pause_objective_top(&lines, 0, 6), 2, "down again: just far enough");
+}
+
 fn hover(fe: &mut FrontEnd, x: f32, y: f32) -> bool {
     let r = fe.mouse_move(x, y);
     fe.tick(); fe.tick();
@@ -278,7 +291,9 @@ fn the_pause_objectives_rows_hover_and_click_like_the_keyboard() {
     assert!(act(&mut fe, Action::Confirm), "Enter dismisses");
     assert!(fe.pause_hint.is_none());
     // A wrapped row takes two lines: its second line is still that row, the next row sits below it.
-    fe.pause_objective_lines.set([2, 1, 1, 1, 1, 1, 1, 1]);
+    let mut wrapped = [1; menu::OBJECTIVE_ROWS];
+    wrapped[0] = 2;
+    fe.pause_objective_lines.set(wrapped);
     let line = 18.0 * 480.0 / 448.0;
     assert!(hover(&mut fe, 300.0, 159.0 + 2.0 * line), "the row under the wrapped one");
     assert_eq!(fe.pause_objectives_sel, 1);
