@@ -773,6 +773,16 @@ impl Bond {
     /// lanes in `grapple_drift`, moves pos by the walk's own axis add [M the walk's application of
     /// the +0x10 quad] and holds y — the rope pin; no push rides the drift (the dead push tail).
     fn grapple_tick(&mut self, input: &Input) {
+        // The grapple's own quad memset [M Player_SSGrapple 0x192860 — disasm 0x192a24-0x192a34:
+        // addiu $a0=BL+0x10 / $a1=0 / $a2=0x10, jal memset (symtab 0x23653c), the delay-slot sqc2
+        // copying the old quad to +0x20; only the phase-4 exit branch at 0x192a18 skips it]: the
+        // reel and the hang read STILL to the guards from the FIRST grapple tick, so a grapple
+        // entered while walking must not carry the walk lanes into the accuracy moving test
+        // [M 0x179a48:34-41 → 0x179740:71-73]. The walk/swim bodies overwrite the quad per tick,
+        // the climb zeroes it [M 0x193600:129-134] — this substate's zero lives here (regression-
+        // read-player-move: 6d1ef8e95 made the shared tick zero CLIMB-only and the grapple lost
+        // its 566f1d298-era guarantee along with it).
+        self.move_local = [0.0; 2];
         let Some(st) = self.grapple.as_mut() else { self.substate = SS_WALK; return };
         let mut pos = self.pos;
         let fire = input.fire;
@@ -2985,6 +2995,29 @@ mod tests {
         let mut b = Bond::stand_at(&w, [0.0, 0.0, 0.0], 0.0);
         for _ in 0..10 { b.tick(&w, &Input { strafe: 1.0, ..Default::default() }); }
         assert!(b.move_local[0] != 0.0, "sister: the on-foot strafe sets x: {:?}", b.move_local);
+    }
+
+    /// regression-read-player-move: the walk lanes must not ride into the hang. `Player_SSGrapple`
+    /// memsets BL+0x10..+0x20 on EVERY call (the reel and the hang alike; only the phase-4 exit
+    /// skips it) [M disasm 0x192a24-0x192a34: addiu $a0=BL+0x10 / $a1=0 / $a2=0x10, jal memset
+    /// (symtab 0x23653c), the delay-slot sqc2 copying the old quad to +0x20] — so a grapple
+    /// entered WHILE WALKING reads STILL to the guards from the first grapple tick. The port's
+    /// per-tick zero went CLIMB-only (6d1ef8e95, [M 0x193600:129-134]) and nothing re-zeroed the
+    /// grapple side, so the last walk's lanes rode the whole hang and the accuracy moving test
+    /// [M 0x179a48:34-41 → 0x179740:71-73] read a hanging Bond as moving.
+    #[test]
+    fn grapple_entered_from_a_walk_does_not_carry_the_walk_lanes() {
+        let w = room();
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, 0.0], 0.0);
+        for _ in 0..10 { b.tick(&w, &Input { strafe: 1.0, ..Default::default() }); }
+        assert!(b.move_local[0] != 0.0, "pre: the walk set the x lane: {:?}", b.move_local);
+        b.substate = SS_GRAPPLE;
+        b.grapple = Some(crate::gadget::GrappleState { point: [0.0, 2.0, 0.0], phase: 2, pull: 0.0 });
+        let hang = Input { fire: true, ..Default::default() };
+        for _ in 0..30 { b.tick(&w, &hang); }
+        assert_eq!(b.substate, SS_GRAPPLE, "the held fire keeps the hang");
+        assert_eq!(b.move_local, [0.0, 0.0],
+            "the grapple's own memset [M 0x192860] must clear the walk lanes on the hang: {:?}", b.move_local);
     }
 
     /// The zero-g quad the guards read is the thruster pair `local` (handed over as

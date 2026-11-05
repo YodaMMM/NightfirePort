@@ -2548,6 +2548,9 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
     if fe.page == menu::Page::MpBotChoose { fe.mp_bot_char = fe.cursor; }
     // Join Game: `--cursor` is agent 1's panel state (0 press to join, 1 choose codename, 5 joined).
     if fe.page == menu::Page::MpJoin { fe.mp_join[0].state = fe.cursor as u32; fe.mp_join[0].joined = fe.cursor > 0; fe.cursor = 0; }
+    if let Some(i) = args.iter().position(|a| a == "--objective-row") {
+        fe.pause_objectives_sel = args.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or(0);
+    }
     if let Some(i) = args.iter().position(|a| a == "--pause-tab") {
         fe.pause_tab = args.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or(0);
     }
@@ -9063,6 +9066,88 @@ mod headless_app_harness {
         assert_eq!(owed, 0);
         assert_eq!(sound_pumps(&mut owed, 60, true), 8, "a long frame does not burst");
         assert_eq!(owed, 0);
+    }
+
+    /// regression-read-player-move: the grapple's own quad memset through the REAL App path —
+    /// the held-W walk rides the window's own input build (the `held(KeyW)` lanes), the Q-Claw
+    /// latches the SkyBridge grapple point (walkreal-14's crossing: GRAPPLEPOINT_SkyBridge
+    /// (45.29, 5.10, 62.94) [D placement; the port resolves 45.2888, 5.0961, 62.9362], the bolt's
+    /// class-0x51 latch [M Bullet_Delete 0x12e660:50-55]), the reel hangs at d < 2.0
+    /// [M Player_SSGrapple 0x192860:91-94] — and the quad the guards' accuracy moving test reads
+    /// [M 0x179a48:34-41 → 0x179740:71-73] must be ZERO on the hang: `Player_SSGrapple` memsets
+    /// BL+0x10..+0x20 on every call [M disasm 0x192a24-0x192a34]. Run at both frame steps: the
+    /// 1/60 tick and the 1/240 four-frames-per-tick pump must agree.
+    #[test]
+    fn the_grapple_hang_reads_still_after_a_walk_at_both_frame_steps() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let run = |step: f32, label: &str| {
+            let mut h = HeadlessApp::mission(&iso, "07000014.bin");
+            let frames_per_tick = (1.0 / 60.0 / step).round().max(1.0) as f32;
+            let mut guard = 0;
+            while h.app.scene.sim.as_ref().unwrap().disabled {
+                h.frame(step);
+                guard += 1;
+                assert!(guard < 6000, "{label}: the load never enabled");
+            }
+            h.frames((2.0 * frames_per_tick) as u32);
+            // Hold W through the aim and the fire — the walk lanes are live at the latch, which
+            // is the shape the regression needs (a grapple entered WHILE WALKING).
+            h.key(KeyCode::KeyW);
+            // The Q-Claw (0x50) through the real switch lane [L gadget is_grapple: 0x50/0x51].
+            let point = [45.2888f32, 5.0961, 62.9362]; // [D placement; the port's resolution]
+            let want_look = 0.20f32 / std::f32::consts::FRAC_PI_2; // the bolt-legal arc [D probe14_aim]
+            let mut switched = false;
+            for _ in 0..200 {
+                h.app.weapon_switch_to = Some(0x50);
+                h.frame(step);
+                if h.app.scene.sim.as_ref().unwrap().gun.weapon == 0x50 { switched = true; break; }
+            }
+            assert!(switched, "{label}: the Q-Claw switch never landed");
+            // Steer onto the point and fire to latch [M 0x12e660:50-55; the 1.0 sweep 0x12c5a0:92].
+            let wrap = |a: f32| a - std::f32::consts::TAU * ((a + std::f32::consts::PI) / std::f32::consts::TAU).round();
+            let mut latched = false;
+            for _ in 0..900 {
+                {
+                    let s = h.app.scene.sim.as_ref().unwrap();
+                    let b = &s.bond;
+                    let dyaw = wrap((point[0] - b.pos[0]).atan2(point[2] - b.pos[2]) - b.yaw);
+                    let dlook = want_look - b.pitch;
+                    let k = step * 60.0; // the same per-tick steer rate at either frame step
+                    h.app.turn += dyaw.clamp(-0.08, 0.08) * k;
+                    h.app.look += dlook.clamp(-0.08, 0.08) * k;
+                    h.app.trigger = dyaw.abs() < 0.05 && dlook.abs() < 0.03;
+                }
+                h.frame(step);
+                if h.app.scene.sim.as_ref().unwrap().bond.grapple.is_some() { latched = true; break; }
+            }
+            assert!(latched, "{label}: the Q-Claw bolt never latched the SkyBridge point");
+            // Reel to the hang [M 0x192860:79-121] with the fire still held.
+            let mut hanging = false;
+            for _ in 0..600 {
+                h.frame(step);
+                let s = h.app.scene.sim.as_ref().unwrap();
+                match (&s.bond.grapple, s.bond.substate) {
+                    (Some(g), nf_game::player::SS_GRAPPLE) if g.phase == 2 => { hanging = true; break; }
+                    (None, _) => break,
+                    _ => {}
+                }
+            }
+            assert!(hanging, "{label}: the reel never reached the phase-2 hang");
+            // Drop the W lane (the fire HELD keeps the hang [M 0x192860:56-66's arm]) and pin the
+            // quad on the hang itself.
+            h.app.app_key(KeyCode::KeyW, winit::event::ElementState::Released, false);
+            for _ in 0..10 { h.frame(step); }
+            {
+                let s = h.app.scene.sim.as_ref().unwrap();
+                let b = &s.bond;
+                assert_eq!(b.substate, nf_game::player::SS_GRAPPLE, "{label}: the held fire keeps the hang");
+                assert_eq!(b.move_local, [0.0, 0.0],
+                    "{label}: the hang's quad must read STILL to the guards [M 0x192860 memset; \
+                     0x179a48:34-41], got {:?}", b.move_local);
+            }
+        };
+        run(1.0 / 60.0, "1/60");
+        run(1.0 / 240.0, "1/240");
     }
 }
 

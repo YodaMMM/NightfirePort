@@ -14987,7 +14987,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     if !glass_pass { b.dead = true; }
                     br.health -= contact_dmg;
                     if br.health < 0.0 {
-                        if let Some(k) = self.breaks.kill(i, b.pos, end, &mut self.rng) {
+                        // fx-broken-object-bark: the bullet kill is the one `Break_Kill` entry whose
+                        // hitdata +0x58 is the BULLET (kind 5 [M 0x12c5a0:87]) from the PLAYER's
+                        // weapon system (+0xe0 → +0x30 == glb_players [M 0x1385ec-0x1385f4] — this
+                        // walk is `update_player_bullets`), so `Drone_BrokenObject` 0x138588 runs
+                        // HERE and only here: the bark walk collects (drone, line) inside the kill,
+                        // between the sound roll and the debris draws (the game's order
+                        // [M 0x12b970:66-76 → :135 → :141]), and the requests land on the drones'
+                        // `talks` (the `NDrone2_SpeechSFX` port form) right after — before anything
+                        // else draws (the explosion sites keep plain `kill`: their hitdata +0x58 is
+                        // the breakable itself, kind 0x20 [M 0x17c518:163-164], failing the kind-5
+                        // gate with no draw [M 0x1385d8-0x1385e0]).
+                        let mut barks: Vec<(usize, u32)> = Vec::new();
+                        if let Some(k) = self.breaks.kill_by_bullet(i, b.pos, end, &mut self.rng, &self.list, self.level_current, self.npc_system_disabled, &mut barks) {
+                            for (di, line) in barks {
+                                if let Some(dr) = self.list.get_mut(di) { dr.talks.push((line as usize, false)); }
+                            }
                             self.break_kills.push((k.placement, k.kind, k.sound));
                             // A script pane's kill deletes its object (Break_Kill's obj+0xFE
                             // bit 0 [M 0x12b970:60]): the pane leaves the collision set and
@@ -16849,9 +16864,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     if self.subtitle_track.enabled { self.script_msgs.push((label, time)); }
                     self.subtitle_track.push(self.frame, label, time);
                 }
-                // `Text_FlushAllSubtitles()` (0x1b15c8) from `Script_FFwd`'s skip arm [M 0x1dac78:28-29]:
-                // the pending script texts die here; the already-bound HUD lines drop on the viewer side
-                // (the `text_flush` flag the scene consumes), which keeps the game's type-4-only scope.
+                // `Text_FlushAllSubtitles()` (0x1b15c8) from `Script_FFwd`'s skip arm [M 0x1dac78:28-29]
+                // — and, subtitle-flush-camera-scripts, from `Script_Play`'s camera tail on EVERY
+                // camera script start [M 0x1db618]: the pending script texts die here; the
+                // already-bound HUD lines drop on the viewer side (the `text_flush` flag the scene
+                // consumes) — the game's deleted classes are the type-4 AND type-5 messages
+                // (`bVar1 - 4 < 2` [M disasm 0x1b1604-0x1b1610]: script op-0x1e captions and the
+                // id-0xff voice captions `Text_AddMsg` promotes to 5 [M 0x1b0c30:87]); the
+                // type-1/2/3/6 gameplay messages stay.
                 crate::nis::Request::TextFlush => {
                     self.script_msgs.clear();
                     self.text_flush = true;
@@ -18931,10 +18951,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // `Collision::triangles_with_planes`), NOT the winding cross whose sign broke
                     // the measured pins on the e7f80cd6 wiring. The record plane fires 0a's low
                     // beam #621 standing (the segment bottom B = pos−0.485 stands 0.16 over the
-                    // band top 0.39, inside the 0.55 refine [D band 0.13-0.39]); keeps 011's
-                    // Bond-Moment plate #235 firing (a vertical wall quad the standing segment
-                    // plane-crosses degenerately → the centroid anchor [M 0x10a3f0-0x10a4fc]);
-                    // keeps the 0c ch-27 bay volume silent at the floor rest (the volume floor
+                    // band top 0.39, inside the 0.55 refine [D band 0.13-0.39]). The raw law is
+                    // SCOPED to the 0x645 beam glists (triggers.rs's [S] scope — the port's raw
+                    // model over-fired the 0x50 floor plates across 17 walk tests, so `seg_beam`
+                    // stays flags == 0x645 until the model matches the game's refine); 011's
+                    // Bond-Moment plate #235 (0x50) therefore rides the measured box below, not
+                    // the segment — the game routes its bit-0x40 glist through the centroid
+                    // anchor [M 0x10a3f0-0x10a4fc], the gap the raw model still has to close.
+                    // The 0c ch-27 bay volume silent at the floor rest (the volume floor
                     // 0.755 over pos is BEHIND the floor tri's record plane → the code-99 miss
                     // [M 0x1dfca8:58-68] — the old both-sided capsule fired it). The ride's
                     // class-5 truck contact (trigger-port-check #11) stays unported: the

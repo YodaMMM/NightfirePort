@@ -1723,12 +1723,22 @@ impl Player {
         // `Script_Play`, which on a camera script (`+0xAA8 & 0x40`, the port's `nis.camera` →
         // flags bit 0x40 [M 0x1d8248 → Script::load]) whose hash is one of the three death NISs
         // (`Script_IsDeathNIS` 0x1dae60: 0x6000952/0x600098a/0x6000991) posts the death music
-        // jump `Music_Event(6, 1)` [M 0x1db588:26-41], then `Text_FlushAllSubtitles` (the
-        // subtitle flush rides the view side; the Sim carries no script subtitles here). The
-        // board's event-6 consumer is the on-death marker jump (`UpdateMusicalEvents`
+        // jump `Music_Event(6, 1)` [M disasm 0x1db608-0x1db610]. The flush that follows is NOT
+        // gated on the three ids: `jal Text_FlushAllSubtitles` 0x1db618 runs for EVERY camera
+        // script, right inside `Script_Play` — before SP_LoadScript's arm tail reaches the
+        // script's own first `Script_Update` [M 0x1dbc08: the mode arms call Script_Play, then
+        // Script_Update] — so a caption already on screen dies with the cut-scene start and the
+        // script's own first line does not. The flush is the same `Text_FlushAllSubtitles`
+        // 0x1b15c8 the skip arm runs, so the port reuses its `Request::TextFlush` (the Sim-side
+        // pending lines, the bound HUD lines via the view's `text_flush` consumer, and the
+        // subtitle track — the game's type-4/5 message class [M 0x1b1604-0x1b1610]). The board's
+        // event-6 consumer is the on-death marker jump (`UpdateMusicalEvents`
         // 0x114e70 DAT_002d3510 = MapMusicData+0xc) — the same jump Player_CheckForDeath posts.
-        if s.flags & 0x40 != 0 && Script::is_death_nis(self.scripts[cur]) {
-            out.push(Request::Event { kind: 0x41, params: vec![] });
+        if s.flags & 0x40 != 0 {
+            if Script::is_death_nis(self.scripts[cur]) {
+                out.push(Request::Event { kind: 0x41, params: vec![] });
+            }
+            out.push(Request::TextFlush);
         }
         match mode {
             1 => { s.start(false); self.state = 2; }
@@ -1839,7 +1849,15 @@ impl Player {
                 self.state = 2;
                 self.countdown = 5;
                 let looping = self.modes[self.cur] == 8;
-                if let Some(s) = self.info[self.cur].as_mut() { s.start(looping); }
+                if let Some(s) = self.info[self.cur].as_mut() {
+                    s.start(looping);
+                    // `SP_Update` case 1 reaches `Script_Play` too [M 0x1dbda8 case 1 →
+                    // 0x1dc174 `Script_Play(si, mode == 8)`], so the camera tail runs here as
+                    // well: the flush for every camera script [M 0x1db618]. (The death-NIS
+                    // `Music_Event(6,1)` of the same tail is not ported on this arm — a
+                    // pre-existing gap, listed in the report.)
+                    if s.flags & 0x40 != 0 { out.push(Request::TextFlush); }
+                }
                 value = true;
             }
             2 => {

@@ -196,6 +196,22 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
             };
             eprintln!("[escort] round {round} stall: contact ({:.1},{:.1},{:.1}) state {cstate:#x} path {cpd:.1} bond ({:.1},{:.1},{:.1}) db {:.1}",
                 cp[0], cp[1], cp[2], w.scene.sim.as_ref().unwrap().bond.pos[0], w.scene.sim.as_ref().unwrap().bond.pos[2], w.scene.sim.as_ref().unwrap().bond.pos[1], walker::dxz(cp, w.scene.sim.as_ref().unwrap().bond.pos));
+            // The bark-trace (broken-object-bark-escort): is a queued bark holding the lead?
+            // One-shot per round: the drone's talk/voice/script/goal/wait bindings, then every
+            // door near the Bond↔lead mid (the shoji pair the npc_doors leg watches).
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[ci];
+                eprintln!("[escort] trace: talks {} voice {:?} last_voice {} script {:?} goal {:?} wait_node {:?} switch {:#x} started {} present {} enabled {}",
+                    d.talks.len(), d.voice.map(|v| v.1), d.last_voice, d.anim.script, d.goal, d.ally_wait_node, d.switch_channel, d.started, d.present, d.enabled);
+                let mid = [(cp[0] + sim.bond.pos[0]) * 0.5, cp[1], (cp[2] + sim.bond.pos[2]) * 0.5];
+                for (i, dr) in sim.drones.doors.list.iter().enumerate() {
+                    if walker::dxz(dr.pos, mid) < 10.0 {
+                        eprintln!("[escort] trace: door #{i} at ({:.1},{:.1},{:.1}) state {:#x} pos01 {:.2} ch_open {:#x} ch_lock {:#x}",
+                            dr.pos[0], dr.pos[1], dr.pos[2], dr.state, dr.pos01, dr.ch_open, dr.ch_lock);
+                    }
+                }
+            }
             // The un-wedge (the player's stick move): a round that ended where it started means
             // Bond is wedged against a wall corner — the direct steer and the nav legs all slide
             // into the same wall. The game's player rounds it with the stick's LATERAL component
@@ -265,6 +281,75 @@ fn escort_at_walking_speed_keeps_the_games_distance_and_the_exit_opens() {
                 // him — the resume band is route-relative, so standing outside the route's fence
                 // strip (db 2.6, the scan's far-node −9.8) never un-parks him; closing through the
                 // nav does.
+                // THE WEST WALL first (the meet hall's west wall segment x≈1.93, z 11.1-13.1 [D
+                // the disc's collision cels]): the bark-shifted follow steering pushes Bond
+                // against it west of the hall (this tree's wedge at (1.4, 11.6), segment 0.12-0.20,
+                // head_bump) and every direct steer out is dead — the walkreal 01 recovery is the
+                // proven way back: the hall's north opening lane [D nav path 0 nodes 8/23/7].
+                {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let (bp, cp2) = (sim.bond.pos, sim.drones.list[ci].pos);
+                    let walled = bp[0] < 2.0 && sim.world.segment(bp, cp2).is_some();
+                    drop(sim);
+                    if walled {
+                        eprintln!("[escort] round {round}: the hall's west wall is between Bond and the contact — walking the north lane back in");
+                        w.walk_nav_to([0.6, 6.5, 14.3], "the west corridor lane (north)", 1.4);
+                        w.walk_nav_to([3.39, 6.4, 14.69], "the hall's north opening (nav node 23)", 1.4);
+                        w.walk_nav_to([6.88, 6.4, 14.62], "inside the hall (nav node 7)", 1.4);
+                    }
+                }
+                // THE CLOSED DOOR between Bond and the parked lead comes first (the
+                // broken-object-bark stream parks the lead south of the auto-closed door #1
+                // (7.9, 5.3, 11.1) with Bond north of it [L this tree's bark-trace: the lead at
+                // (3.1, 6.3, 6.8) in AllyLeadWait, talks 0 voice None — the bark does NOT hold
+                // him, it only shifted the follow ticks — and door #1 state 0x2 pos01 0.00
+                // between the pair]): a player at a shut door E-opens it — the game's other
+                // activator [M Player_Activate 0x1a5170 case 0x1c → Door_Activate(obj, player, 1)].
+                // The midpoint rule from the closed-door branch below, run HERE because the
+                // lead's AllyLeadWait state shadows that branch on every stall round.
+                let door_i = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let mid = [(cp[0] + sim.bond.pos[0]) * 0.5, cp[1],
+                               (cp[2] + sim.bond.pos[2]) * 0.5];
+                    sim.drones.doors.list.iter().enumerate()
+                        .filter(|(_, dr)| dr.state & 0x12 != 0 && walker::dxz(dr.pos, mid) < 8.0)
+                        .min_by(|(_, a), (_, b)| walker::dxz(a.pos, mid).total_cmp(&walker::dxz(b.pos, mid)))
+                        .map(|(i, _)| i)
+                };
+                if let Some(door_i) = door_i {
+                    let (dpos, dl0) = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        (sim.drones.doors.list[door_i].pos, sim.drones.doors.list[door_i].state)
+                    };
+                    eprintln!("[escort] round {round}: the lead waits behind a closed door {door_i} (state {dl0:#x}) at ({:.1},{:.1},{:.1}) — Bond E-opens it", dpos[0], dpos[1], dpos[2]);
+                    // Bond stands on HIS side of the door (1.6 u off it toward himself): the
+                    // closed door is between the pair, so the lead-side stand of the branch-5
+                    // shape is unreachable here.
+                    let (dx, dz) = (dpos[0] - w.scene.sim.as_ref().unwrap().bond.pos[0],
+                                    dpos[2] - w.scene.sim.as_ref().unwrap().bond.pos[2]);
+                    let l = (dx * dx + dz * dz).sqrt().max(1e-4);
+                    // door-react-path5: the use fires once per press edge [M 0x1a5ea8-0x1a5ee8 +
+                    // 0x17f084-0x17f090] — tap, release, tap (the same shape as the
+                    // closed-door branch below).
+                    let mut flip = false;
+                    for _ in 0..1500u32 {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let st = sim.drones.doors.list[door_i].state;
+                        if st & 0x12 == 0 { break; } // opening/open — stop pressing
+                        let bp = sim.bond.pos;
+                        let stand = [dpos[0] - dx / l * 1.6, dpos[1], dpos[2] - dz / l * 1.6];
+                        let d = walker::dxz(bp, stand);
+                        let desired = (stand[0] - bp[0]).atan2(stand[2] - bp[2]);
+                        let err = walker::wrap_pi(desired - sim.bond.yaw);
+                        drop(sim);
+                        if d > 1.8 {
+                            w.tick(Input { turn: err.clamp(-0.07, 0.07), forward: 0.55, ..Default::default() }, false);
+                        } else {
+                            w.tick(Input { turn: err.clamp(-0.07, 0.07), ..Default::default() }, flip);
+                            flip = !flip;
+                        }
+                    }
+                }
                 // The straight line to the lead is BLOCKED (a wall corner / a closed shoji between
                 // them): the direct steer wedges against it and holds the route gap open. Close
                 // through the nav route — the walker's stuck handler opens the route's doors under
