@@ -21,3 +21,8 @@ Real input, no teleports in walks. Run every binary above whole, then the full s
 
 ---
 claimed-by: sandbox4 at 2026-11-05T18:54Z
+
+---
+## Report (done, 2026-11-05T19:57Z)
+
+Closed by the driver: the report is on `s/civ-alarm-repin` (docs/reports/civ-alarm-repin.md); the worker didn't run finish.sh.
