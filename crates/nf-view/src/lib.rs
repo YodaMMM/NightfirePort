@@ -2327,6 +2327,12 @@ pub fn scene_overlay_up(scene: &scene::Scene, movie_up: bool) -> bool {
 /// `Player_Update` is not reached again (`Game_Run` 0x1c9790 skips the object handlers), but
 /// `Game_Draw` 0x1e6f50:186-214 keeps drawing every viewer's sprite list with no pause gate, so
 /// the HUD sprites stay on screen under the menu as that last update left them.
+/// The pages drawn over the paused frame's HUD layer: the pause page, and the fail menu, whose
+/// red death wash is that layer's blood pane.
+fn menu_over_hud(fe: &menu::FrontEnd) -> bool {
+    fe.page == menu::Page::Pause || (fe.page == menu::Page::Results && fe.outcome == menu::Outcome::Failed)
+}
+
 pub fn hud_under_menu(hud: gpu::HudFrame, menu: &gpu::HudFrame) -> gpu::HudFrame {
     let mut f = hud;
     f.append(menu);
@@ -2617,7 +2623,7 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
     let frame = menu::menu_overlay_fonts(&fe, &tables.font, &tables.font_header, Some(&tables.font_medium), lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0);
     // hud-start: the pause page draws over the gameplay HUD, as the windowed App composes it
     // (`hud_under_menu`) — the shot used to show the page alone, with no health ring.
-    if fe.page == menu::Page::Pause && scene.sim.is_some() {
+    if menu_over_hud(&fe) && scene.sim.is_some() {
         return (Some(hud_under_menu(overlay_for(scene, 1280.0 / 720.0), &frame)), movie);
     }
     (Some(frame), movie)
@@ -6145,7 +6151,7 @@ impl App {
                         // ring, ammo pane) [L PCSX2 captures; the
                         // port replaced the HUD with the overlay]. The HUD's quads go FIRST so
                         // the menu draws over them (frame order = draw order).
-                        if fe.page == menu::Page::Pause && !matches!(fe.flow.get_state(), menu::ST_MOVIE) {
+                        if menu_over_hud(fe) && !matches!(fe.flow.get_state(), menu::ST_MOVIE) {
                             // The menu's runs shift by the HUD's vertex count (the HUD's vertices go first) and the HUD
                             // keeps its own runs — the old merge shifted by the MENU's count and dropped the HUD's runs,
                             // so the live pause page drew from the wrong vertices (the plate, the figure and most rows
