@@ -34,3 +34,8 @@ Break-rule comparison (decompile vs port, 2026-11-05 ~10:20-11:35 UTC):
   spawns) — both green.
 - Repro probe probe1b_touch_repro.rs: no repro of touch-break found in the port; the
   reported symptom needs the live checks in the report.
+
+Suite before final push: nf-game/nf-formats/nf-audio all green except the 3 expected
+disc_golden slim-ISO failures; nf-view's serial sweep did not fit the window (test-files-only
+change; own binaries platform_touch_1b_live 2/2 green). Report:
+docs/reports/level-1b-platform-touch.md.
