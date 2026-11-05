@@ -30,6 +30,11 @@ Port replacement: same sites as above — the per-load engine recreation (droppi
 `Music` engine and driver state) is the port's `SFXReset` + `SoundInit = 0`. Cited in
 `nf-view/src/lib.rs` (`Sound_Kill` 0x1ddfd0).
 
+The worker build swaps the scene seconds after the load starts, so the reset itself runs at the
+start: `App::start_async_load` calls `Sound::reset` (every item and the music end). A running
+fade-down is left alone: the pause and results rows fade before the game's load [M 0x204408:150-151]
+and the port starts its load at once, so that fade finishes under the loading screen.
+
 ## `Sound_SetLogSfxFile` 0x1de368 (8 bytes) — reached, and EMPTY [M]
 
 Body [M 0x1de368]: a bare `ret` (the shipped binary ships it empty — whatever logging hook it once

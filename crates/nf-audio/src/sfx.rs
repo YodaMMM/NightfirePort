@@ -49,7 +49,10 @@ pub fn pcm_hash(p: &Pcm) -> u64 {
 
 /// One hardware voice pair (`ES_VoiceHandleData` → SPU voices): front, and rear for 3-D sounds.
 #[derive(Clone, Debug)]
-struct Voice { front: u32, rear: Option<u32>, looping: bool, playing: bool, pitch: u32, stream: bool }
+struct Voice { front: u32, rear: Option<u32>, looping: bool, playing: bool, pitch: u32, stream: bool,
+    /// Keyed on in this batch: `PS2_CheckKeyOn2` counts it as playing [M §6]. An end reported now is
+    /// the voice's last occupant, killed a batch ago.
+    fresh: bool }
 
 #[derive(Clone, Debug)]
 struct Item {
@@ -275,6 +278,7 @@ impl Driver {
             // The takeover keys the set-up voice on now, from the start of the line
             // (`SampleKeyOn(VoiceHandle[0], …)` [M §3.2 step 3]).
             self.items[k].key_on_delay = 0;
+            self.items[k].started_when_nis = self.nis_playing;
             out.extend(std::mem::take(&mut self.items[k].held));
             return 0;
         }
@@ -427,7 +431,7 @@ impl Driver {
         (it.base_volume[ch], it.pitch[ch], it.pan[ch]) = (vol, pitch, pan);
         if ch == 0 { it.sample_hash = pcm_hash(&pcm); }
         let (front, rear) = (free[0] as u32, is3d.then(|| free[1] as u32));
-        let v = Voice { front, rear, looping: looped, playing: true, pitch: pitch.max(0) as u32, stream: streamed };
+        let v = Voice { front, rear, looping: looped, playing: true, pitch: pitch.max(0) as u32, stream: streamed, fresh: true };
         self.voices[front as usize] = Some(v);
         it.vh[ch] = Some(front as usize);
         it.pos = it.real_pos;
@@ -441,7 +445,7 @@ impl Driver {
         let front_cmd = Cmd::Play { voice: front, pcm: pcm.clone(), pitch: pitch.max(0) as u32, left: l, right: r, delay: 0.0, reverb };
         if hold { self.items[i].held.push(front_cmd) } else { out.push(front_cmd) }
         if let Some(rv) = rear {
-            self.voices[rv as usize] = Some(Voice { front: rv, rear: None, looping: looped, playing: true, pitch: pitch.max(0) as u32, stream: streamed });
+            self.voices[rv as usize] = Some(Voice { front: rv, rear: None, looping: looped, playing: true, pitch: pitch.max(0) as u32, stream: streamed, fresh: true });
             // Mode ≠ 0: the rear voices are keyed on after `DelayThread(500)` (µs); mode 0 keys them with the front.
             let rear_cmd = Cmd::Play { voice: rv, pcm, pitch: pitch.max(0) as u32, left: b, right: if self.mode == 0 { b } else { -b }, delay: if self.mode == 0 { 0.0 } else { 0.0005 }, reverb };
             if hold { self.items[i].held.push(rear_cmd) } else { out.push(rear_cmd) }
@@ -575,6 +579,9 @@ impl Driver {
         self.fade_music = music as i32;
     }
 
+    /// A fade-down is running (`FadeStatus` 1).
+    pub fn fading_down(&self) -> bool { self.fade_status == 1 }
+
     /// `SFXFadeUp(fadeMusic)` (RPC cmd 7): fade-up always starts from 0 [M].
     pub fn fade_up(&mut self, music: bool) {
         self.fade = 0;
@@ -645,7 +652,8 @@ impl Driver {
     /// `SFXUpdate` (0x4ee4): once per game frame. `ended`: hardware voices that reached their end flag.
     /// Returns the reverb depth 0..1 (`EVOL`) the output should apply this frame [M §6 step 2].
     pub fn update(&mut self, out: &mut Vec<Cmd>, ended: &[u32]) -> f32 {
-        for &e in ended { if let Some(Some(v)) = self.voices.get_mut(e as usize) { v.playing = false; } }
+        for &e in ended { if let Some(Some(v)) = self.voices.get_mut(e as usize) { v.playing = v.fresh && v.playing; } }
+        for v in self.voices.iter_mut().flatten() { v.fresh = false; }
         if self.started > 0 { self.started = self.started * 9 / 10; }
         // §6 step 2: `SFXUpdateEnvironment; ES_UpdateDucker; SFXFadeUpdate; if NisQuitten: ES_StopDucker` [M].
         // The timer advances ~17 ms/frame (the port's fixed 60 Hz; the IOP quantises to 100 ms — the 2 s fade holds).
@@ -883,6 +891,20 @@ impl Sound {
     /// `SFXPauseAllStreams` (op 0x16); `MenuManager_Delete` runs the unpause pair (0xa / 0x17)
     /// [M 0x21b908:121-124, 0x21c2b0:11-22]. The host stops ticking the sim while a menu is up, so
     /// the commands go to the output here and now — the next `batch` only runs after the menu closes.
+    /// `SFXStopMusic` (op 0x12): the stream ends now, its queued buffers with it [M 0x1168e8].
+    pub fn stop_music(&mut self) {
+        self.music = None;
+        self.music_pending.clear();
+        if let Some(c) = &self.captured { c.lock().unwrap().push(Cmd::MusicStop); }
+        if let Some(o) = &self.output { o.send([Cmd::MusicStop]); }
+    }
+
+    /// `SFXReset` (`Sound_Kill` [M 0x1ddfd0]): every item and the music end now.
+    pub fn reset(&mut self) {
+        self.stop_music();
+        self.batch(|drv, _| drv.remove(0, None));
+    }
+
     pub fn set_paused(&mut self, paused: bool) {
         let mut out = Vec::new();
         self.driver.set_paused(paused, &mut out);
@@ -1093,6 +1115,30 @@ mod tests {
         d.remove(0, Some(7));
         d.update(&mut Vec::new(), &[]);
         assert!(d.ids().is_empty(), "SFXRemove(0, id) removes every matching item [M 0x1f88]");
+    }
+
+    /// A killed voice's release ends in the mixer a few ms later, and the driver hears of it at the
+    /// next update. A start that re-used the voice in that batch must not take the old end for its
+    /// own: `PS2_CheckKeyOn2` counts a voice keyed on this batch as playing [M §6]. Sister: its
+    /// real end, one update later, still lands.
+    #[test]
+    fn a_reused_voice_ignores_the_old_sounds_end() {
+        let (b, sbf) = one_sound_bank();
+        let mut d = Driver::new();
+        d.load_bank(4, b, sbf);
+        d.set_listener([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+        let mut out = Vec::new();
+        d.start(&mut out, 7, Some([5.0, 0.0, 0.0]), 1, None);
+        let Some(Cmd::Play { voice, .. }) = out.first().cloned() else { panic!("{out:?}") };
+        d.remove(1, None);
+        d.update(&mut Vec::new(), &[]);
+        let mut out = Vec::new();
+        d.start(&mut out, 7, Some([5.0, 0.0, 0.0]), 2, None);
+        assert!(matches!(out.first(), Some(Cmd::Play { voice: v, .. }) if *v == voice), "the lowest free voice is re-used: {out:?}");
+        d.update(&mut Vec::new(), &[voice]);
+        assert!(d.is_playing(2), "the new sound lives past the old one's end");
+        d.update(&mut Vec::new(), &[voice]);
+        assert!(!d.is_playing(2), "its own end reaps it");
     }
 
     /// A start whose id no loaded bank holds returns 1 and starts nothing — the game's lookup

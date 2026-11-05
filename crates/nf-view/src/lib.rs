@@ -2955,6 +2955,8 @@ struct App {
     movie_poll_clock: f32,
     /// The same fraction for the menus' sound pump: `SFXUpdate` is once per game frame [M sound.md §6].
     sound_poll_clock: f32,
+    /// The 60 Hz ticks no driver update has answered yet (`sound_pumps`).
+    sound_owed: u32,
     /// The sim reported the mission's own end this frame (see `Drones::mission_end`).
     pending_mission_end: bool,
     /// mission-results-page: the finished mission's progress layer, snapshotted at
@@ -3798,6 +3800,9 @@ impl App {
     /// the synchronous path did, draw the screen's first frame and hand the build to a worker.
     fn start_async_load(&mut self, next: u32) {
         self.loading_hint.reset(); // a new load picks its own hint
+        // `ResetMap_Load` runs `Sound_Kill` first [M 0x1d6360:24, :131]; the scene swap comes seconds
+        // later. A running fade-down is the rows' own exit and finishes under the load.
+        if let Some(s) = self.sound.as_mut() { if !s.driver.fading_down() { s.reset(); } }
         // `Trigger_Activate`'s exit order: the success/fallback channel write (already applied in
         // the sim), then `Player_RamSave` [M 0x1b2318:97-116] — capture the old sim now, before
         // the scene swap drops it (fix-level2 F2). The old sim stays in `self.scene` until the
@@ -4268,19 +4273,23 @@ impl App {
                                 None => eprintln!("menu music: track {track:#x} files not on the disc — no credits music"),
                             }
                         }
-                        menu_music::MusicCmd::StopMusic => { s.music = None; }
+                        menu_music::MusicCmd::StopMusic => s.stop_music(),
                         menu_music::MusicCmd::MusicVolume(v) => { s.driver.music_master = v; }
                         menu_music::MusicCmd::FadeDownMusic => { s.driver.fade_down(true); }
                     }
                 }
             }
         }
-        // The pump: one driver update + output send per 60 Hz tick while the menus or a load are up
-        // and the audio is not held (the pause page's hold mirrors `MenuManager_Create(pause_sound=1)`).
-        // Anywhere else `sound_tick` is the update; a second one here doubles every fade and duck.
+        // The pump: one driver update + output send per 60 Hz tick `sound_tick` did not answer, unless
+        // the audio is held (the pause page's hold mirrors `MenuManager_Create(pause_sound=1)`). A
+        // second update on top of `sound_tick` doubles every fade and duck.
         let polls = movie_polls(&mut self.sound_poll_clock, dt);
-        if !self.audio_paused && (self.fe.is_some() || self.async_load.is_some()) {
-            if let Some(s) = self.sound.as_mut() { for _ in 0..polls.min(8) { s.batch(|_, _| {}); } }
+        if self.audio_paused {
+            self.sound_owed = 0;
+        } else {
+            let menus = self.fe.is_some() || self.async_load.is_some();
+            let n = sound_pumps(&mut self.sound_owed, polls, menus);
+            if let Some(s) = self.sound.as_mut() { for _ in 0..n { s.batch(|_, _| {}); } }
         }
     }
 
@@ -5644,6 +5653,7 @@ impl App {
                             }
                             self.prev_lock_ch = on;
                             if let Some(s) = self.sound.as_mut() { sound_tick(s, sim); }
+                            self.sound_owed = self.sound_owed.saturating_sub(1);
                             // mp-host-match-logic: the match-end handover — `MP_Update` 0x184bd0's
                             // case 4 sets `GameState+0x1C = 0x40000033` (the port's
                             // `MpGame::request_debriefing`, state 5 waits); the host opens
@@ -6498,6 +6508,7 @@ impl App {
             fe_clock: 0.0,
             movie_poll_clock: 0.0,
             sound_poll_clock: 0.0,
+            sound_owed: 0,
             pending_mission_end: false,
             results_progress: None,
             pending_mp_debrief: None,
@@ -7759,6 +7770,20 @@ pub static RAPID_FIRE: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 
 /// The whole 60 Hz ticks `dt` seconds carry, the fraction kept in `clock`. At 240 Hz a movie hold
 /// that counted display frames ran out four times early.
+/// How far `sound_tick` may run behind the clock before the pump covers for it: ordinary phase
+/// between the two clocks stays under this.
+const SOUND_SLACK: u32 = 2;
+
+/// The driver updates the pump owes this frame. `owed` counts the 60 Hz ticks no update has
+/// answered; `sound_tick` pays one each. Under the menus or a load every tick is the pump's.
+/// Elsewhere this frame's own ticks are still to run, so only older debt counts: that is what
+/// a noclip flight, the dev menu or a lockstep wait leaves, and the music queue runs dry on it.
+fn sound_pumps(owed: &mut u32, polls: u32, menus: bool) -> u32 {
+    let due = if menus { *owed + polls } else { owed.saturating_sub(SOUND_SLACK) };
+    *owed = (*owed + polls).saturating_sub(due);
+    due.min(8)
+}
+
 pub fn movie_polls(clock: &mut f32, dt: f32) -> u32 {
     *clock += dt * 60.0;
     let whole = (*clock + 1e-3).floor();
@@ -8704,6 +8729,94 @@ mod headless_app_harness {
             got.push((hz, audio_updates_in_a_second(&mut app, hz)));
         }
         assert!(got.iter().all(|g| (58..=62).contains(&g.1)), "{got:?}");
+    }
+
+    /// The sim standing still must not stop the driver: the music queue holds under two seconds, so
+    /// with no update it runs dry and the voices keep their last state. Noclip skips `sound_tick`.
+    #[test]
+    fn noclip_keeps_the_sound_updating() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        for hz in [60, 240] {
+            let mut app = HeadlessApp::mission(&iso, "07000006.bin");
+            app.app.noclip = true;
+            let n = audio_updates_in_a_second(&mut app, hz);
+            assert!((55..=62).contains(&n), "{hz} Hz: {n}");
+        }
+    }
+
+    /// The open dev menu runs no ticks; the sound still updates at the same rate.
+    #[test]
+    fn the_dev_menu_keeps_the_sound_updating() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut app = HeadlessApp::mission(&iso, "07000006.bin");
+        app.app.dev = Some(Box::default());
+        app.app.dev.as_deref_mut().unwrap().menu = true;
+        let n = audio_updates_in_a_second(&mut app, 240);
+        assert!((55..=62).contains(&n), "{n}");
+    }
+
+    /// A lockstep wait runs no ticks either.
+    #[test]
+    fn a_lockstep_wait_keeps_the_sound_updating() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut app = HeadlessApp::mission(&iso, "07000006.bin");
+        let host = (28170..28190).find_map(|p| mpnet::SessionProxy::host(p).ok()).expect("no UDP port to bind");
+        app.app.net = Some(host);
+        app.app.net_await_load = true;
+        let n = audio_updates_in_a_second(&mut app, 60);
+        assert!((55..=62).contains(&n), "{n}");
+    }
+
+    /// `ResetMap_Load` runs `Sound_Kill` at the top of the load [M 0x1d6360:24, :131]: the old
+    /// level's loops stop when the loading screen goes up, not when the new scene swaps in.
+    /// Sister: a running fade-down (the pause and results rows) is left to finish under the load.
+    #[test]
+    fn a_level_load_silences_the_old_level_at_its_start() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        for fading in [false, true] {
+            let mut app = HeadlessApp::mission(&iso, "07000006.bin");
+            app.frames(30);
+            let s = app.app.sound.as_mut().unwrap();
+            let live = s.driver.items();
+            assert!(live > 0, "the level's ambients are up");
+            if fading { s.driver.fade_down(true); }
+            app.app.pending_level = Some(0x0700_0005);
+            app.frame(1.0 / 60.0);
+            assert!(app.app.async_load.is_some(), "the load is running");
+            let left = app.app.sound.as_ref().unwrap().driver.items();
+            if fading { assert!(left > 0, "the fade finishes under the load"); } else { assert_eq!(left, 0, "{live} items at the load"); }
+            assert!(app.pump(30.0, |a| a.async_load.is_none()), "the load finished");
+        }
+    }
+
+    /// `SFXStopMusic` ends the stream at once [M 0x1168e8]: dropping only the player left the
+    /// queued buffers playing, up to two seconds of credits track over the main menu.
+    #[test]
+    fn stop_music_clears_the_queued_stream() {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut s = nf_audio::sfx::Sound { driver: Default::default(), output: None, captured: Some(log.clone()), music_files: None, music: None, music_pending: vec![(0, 1, 0)] };
+        s.stop_music();
+        assert!(s.music_pending.is_empty(), "a queued start dies with it");
+        assert!(log.lock().unwrap().iter().any(|c| matches!(c, nf_audio::Cmd::MusicStop)), "the output drops its queue");
+    }
+
+    /// A hitch must not double the updates: the frame's own ticks run after the pump, so only what
+    /// earlier frames left over counts against the mission. Under the menus every tick is the pump's.
+    #[test]
+    fn the_pump_only_covers_ticks_the_sim_left() {
+        let mut owed = 0;
+        assert_eq!(sound_pumps(&mut owed, 6, false), 0, "this frame's ticks come first");
+        assert_eq!(owed, 6);
+        owed -= 4; // the four-tick cap ran
+        assert_eq!(sound_pumps(&mut owed, 1, false), 0, "two behind is ordinary phase");
+        owed = 3;
+        assert_eq!(sound_pumps(&mut owed, 1, false), 1);
+        assert_eq!(owed, 3);
+        owed = 0;
+        assert_eq!(sound_pumps(&mut owed, 1, true), 1);
+        assert_eq!(owed, 0);
+        assert_eq!(sound_pumps(&mut owed, 60, true), 8, "a long frame does not burst");
+        assert_eq!(owed, 0);
     }
 }
 
