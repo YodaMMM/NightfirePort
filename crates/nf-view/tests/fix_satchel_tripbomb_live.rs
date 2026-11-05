@@ -90,6 +90,7 @@ fn thrown(sim: &nf_view::scene::Sim, hit: [f32; 3], normal: [f32; 3], id: u16) -
         // BU+0x102 [M Bullet_init 0x12c5a0:211 — 100 for the 0x3b family].
         burn: if id == 0x3b { 100 } else { 0 },
         defused: false,
+        born: 0,
     }
 }
 

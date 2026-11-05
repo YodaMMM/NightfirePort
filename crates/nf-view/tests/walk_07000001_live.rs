@@ -100,6 +100,7 @@ fn killing_the_contact_raises_the_mission_fail_channel() {
         phase: None,
     burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
     defused: false,
+    born: 0,
     });
     let mut dead = false;
     for _ in 0..300u32 {

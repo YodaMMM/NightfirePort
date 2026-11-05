@@ -266,6 +266,7 @@ fn the_facility_chain_runs_to_the_delta_sector_exit() {
         phase: None,
     burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
     defused: false,
+    born: 0,
     });
     let mut dead = false;
     for _ in 0..300u32 {
