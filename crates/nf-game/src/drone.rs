@@ -15226,16 +15226,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // accumulates it until the player's hit points. Player bullets only [*deviation*:
             // the game's Collide pass covers the drone rounds too; the port's drone-bullet pass
             // is separate and stays out of the read set].
-            // The sphere alone never lands a hit: the round must meet the glist's triangles
-            // [M Collide_Update 0x1ea398's Collide_Intersect 0x1ebaa8]. Without this a round fired
-            // anywhere inside a 1b solar panel's 4.77 sphere broke the panels under Bond's feet.
-            let meets = |c: &[f32; 3], r: f32, mesh: &Option<(u32, nf_formats::anim::Mat4)>| {
-                Self::segment_hits_sphere(b.pos, end, *c, r) && mesh.as_ref().is_none_or(|(hash, m)| {
-                    d.world.shape(*hash).is_none_or(|tris| Self::segment_hits_posed_mesh(m, tris, b.pos, end))
-                })
-            };
-            for (pi, c, r, mesh) in &held_targets {
-                if meets(c, *r, mesh) { self.scripts.add_hit_damage(*pi, b.damage); }
+            // beam-weapon-panels-1b: the game's bullet-vs-object pick is SPHERE-ONLY —
+            // `Collide_PickObj` 0x1eae80 takes the closest point on the hittest segment to the
+            // object's BUILT world sphere (obj+0x80 centre, obj+0x8c radius) and skips the object
+            // when `radius² <= sqDist` — no glist triangles in the pick (Collide_Intersect
+            // 0x1ebaa8 serves the other hittest kinds: 0x101 point, 0x201 segment-vs-static,
+            // 0x400). The prior WIP's world.shape triangle stage broke the console latch and
+            // still failed the walkway (the panels' glist bound 4.77 spans the walkway either
+            // way). The built sphere's radius carries the object's own scale [M
+            // Control_BuildWorldSph 0x133070: `glist+0x1C · |obj+0xE8|`] — the helpers now fold
+            // the stream matrix's scale into the radius they return.
+            for (pi, c, r, _mesh) in &held_targets {
+                if Self::segment_hits_sphere(b.pos, end, *c, *r) {
+                    self.scripts.add_hit_damage(*pi, b.damage);
+                }
             }
             // The SP_Hit bullet arm records the contact per player — the weapon id is the
             // bullet's `weapon_data+0x00` u16 [M docs/fields/weapon_data.md: the id = the
@@ -15245,8 +15249,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // player-bullets-only scope as the damage gather above [*deviation*].
             let sp_weapon_id = d.weapons.records.get(b.weapon as usize)
                 .map_or(0u16, |r| u16::from_le_bytes([r[0x00], r[0x01]]));
-            for (pi, c, r, mesh) in &sp_bullet_targets {
-                if meets(c, *r, mesh) { self.scripts.add_bullet_hit(*pi, sp_weapon_id); }
+            for (pi, c, r, _mesh) in &sp_bullet_targets {
+                if Self::segment_hits_sphere(b.pos, end, *c, *r) {
+                    self.scripts.add_bullet_hit(*pi, sp_weapon_id);
+                }
             }
             // mp-site-damage-offline: the site takes the bullet this tick — the game's collision
             // pass appends the contact to the site SP's stream objects' `obj+0xD0` chain and the
