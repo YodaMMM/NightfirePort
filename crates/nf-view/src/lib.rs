@@ -504,6 +504,8 @@ fn wire_music(sim: &mut scene::Sim, mm: Vec<nf_formats::music::MapMusic>, vars: 
     // zeroed event board) — docs/systems/sound-lifecycle.md.
     sim.drones.attack_gate.vars = vars.iter().find(|v| v.level == sim.level).copied()
         .or(Some(nf_formats::music::MusicVars { level: sim.level, count: 2, floor: 0, window: 8, distance: 25.0 }));
+    // The pristine table row for the updaters' `GateWrite::Restore` re-seat (MayhewB 0x112270:57-76).
+    sim.drones.attack_gate.table_row = vars.iter().find(|v| v.level == sim.level).copied();
     sim.drones.music = nf_game::music::Music::new(mm);
     sim.drones.music.event(0, sim.level);
     sim.drones.music.event(1, 1);
