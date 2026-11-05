@@ -9,3 +9,7 @@ claimed-by: sandbox4 at 2026-11-05T07:14Z
 ## Report (done, 2026-11-05T08:03Z)
 
 Closed by the driver: the report is on `s/guard-damage-since-1017` (docs/reports/guard-damage-since-1017.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-11-05T08:03Z)
+
