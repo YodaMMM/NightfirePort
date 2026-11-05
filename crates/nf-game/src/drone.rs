@@ -12493,7 +12493,7 @@ pub struct Drones {
     /// (`SP_Update` 0x1dbda8:96-100) sees the LAST walk's event, not this walk's.
     pub prev_event2: u32,
     /// Speech: each line's last play frame (`Drone_SfxInfo+0x08`, global; `None` = never) and the patrol-talk cooldown.
-    voice_last: Vec<Option<u32>>,
+    pub voice_last: Vec<Option<u32>>,
     patrol_cooldown: u32,
     /// The vision globals `0x298fa0` (this frame's sight count) / `0x298f84` (last frame's latch
     /// [M Drone_InitComms 0x139520:263-265]); HeardNoiseTalk reads the latch.
@@ -15913,8 +15913,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     }
 
     /// The `NDrone2_PlaySFX` gate + `Drone_SfxInfo` stamp (`lastFrame` in the table, shared by every drone) —
-    /// split out so the door site inside the `list.iter_mut()` loop can play through the narrow field borrows.
-    fn foley_entry(lines: Option<&[nf_formats::sfx::VoiceLine]>, voice_last: &mut Vec<Option<u32>>, idx: usize, frame: u32) -> Option<nf_formats::sfx::VoiceLine> {
+    /// split out so the door site inside the `list.iter_mut()` loop can play through the narrow field borrows;
+    /// pub for the MP bots' bark (`mpfx::Sim::mp_bot_bark`), which runs the same row gates.
+    pub fn foley_entry(lines: Option<&[nf_formats::sfx::VoiceLine]>, voice_last: &mut Vec<Option<u32>>, idx: usize, frame: u32) -> Option<nf_formats::sfx::VoiceLine> {
         let lines = lines?;
         if voice_last.len() < lines.len() { voice_last.resize(lines.len(), None); }
         let l = lines.get(idx).copied()?;
@@ -15926,20 +15927,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// `BOT_handlePain` (0x125ed8, fix-room-sound): the bots' grunt pools — the pain pool is
     /// male `0x14d..0x151` (`Rand_Rand(5)`) / female `0x152..0x153` (`Rand_Rand(2)`), the death
     /// pool male `0x154..0x156` / female `0x157..0x159` (`Rand_Rand(3)`, no playing gate on a
-    /// death) [M disasm 0x1260c8-0x12617c; the decomp's `uVar8 == 0x1e` verdict branch is dead].
-    /// Exactly one `Rand_Rand(n)` draw per call that reaches a pool, before the play [M 0x126168];
+    /// death) [M disasm 0x1260dc-0x1261a4; the decomp's `uVar8 == 0x1e` verdict branch is dead:
+    /// the health test at 0x1260dc-0x1260e8 produces only 1 = died / 0x1f = survived]. Exactly
+    /// one `Rand_Rand(n)` draw per call that reaches a pool, before the play [M 0x126168];
     /// the previous grunt is stopped and the new handle stored (`Sound_Stop_Ref` 0x1de370, the
     /// handle at `comm+0x73c`) [M 0x126178-0x1261a4]. All ten pool entries are `Drone_SfxInfo`
-    /// lines (950/948/943/596/138 · 944/465 · 949/947/139 · 945/581/466), so the play runs the
-    /// shared `NDrone2_PlaySFX` gates via `foley_entry`.
+    /// lines (950/948/943/596/138 · 944/465 · 949/947/139 · 945/581/466, all repeat 0 [D ELF]),
+    /// so the play runs the shared `NDrone2_PlaySFX` gates via `foley_entry`.
     ///
-    /// NOT wired into the hit path: the game reaches `BOT_handlePain` only under `MPSettings+0x388`
-    /// (the bots flag [M 0x145558:15-17]) and the port is single-player — `NDrone2_HitDamage`'s SP
-    /// arm is `NDrone2_PainTalk` (`pain_talk`), which is what the port runs, so no `Rand_*` draws
-    /// were added to the live stream and no seed-pinned test moves. *Deviation*: the "previous
-    /// grunt still playing" gate (`Sound_Playing_Ref` 0x1de3a0 on the stored handle) needs the
-    /// sound pool's node state, which nf-game does not expose — the port stops the previous handle
-    /// and always plays.
+    /// Still no caller on the SP hit path, and that is the game's shape too: `NDrone2_HitDamage`
+    /// 0x145558 routes to `BOT_handlePain` only under the MP bots flag `MPSettings+0x388`
+    /// [M 0x145558:15-17], and this lift is indexed into the SP drones list, which holds no MP
+    /// bots. The MP bots' damage/death flow barks through `mp::bots::BotBrain::bot_sound_effect`
+    /// + the driver's `Sim::mp_bot_bark` (nf-view mpfx.rs), which reuse this reading — survived
+    /// → the pain pool, died → the death pool [M 0x126104 → 0x126158-0x126164 vs 0x126120 →
+    /// 0x126138-0x126154]. *Deviation* (carried by `mp_bot_bark` too): the "previous grunt still
+    /// playing" gate (`Sound_Playing_Ref` 0x1de3a0 — the sound node's ref word +0x38 vs
+    /// `Drone+0x108`, state byte +0x50) has no sim-side model; the port stops the previous
+    /// handle and always plays. In MP the gate must stay unevaluated: the audio pool's contents
+    /// are per-machine, and a gate on them would make the shared stream's draw count
+    /// machine-dependent.
     pub fn bot_handle_pain(&mut self, d: &Data, index: usize, died: bool, frame: u32) {
         let female = self.list[index].female;
         let (base, n) = Self::pain_pool(female, died);
@@ -22061,6 +22068,26 @@ mod foley_tests {
         let draw = rng.rand(n) as usize;
         let l = Drones::foley_entry(Some(&lines), &mut last, base + draw, 40).expect("the death entry plays");
         assert!(l.sfx == 949 || l.sfx == 947 || l.sfx == 139, "a male death-pool sfx, got {}", l.sfx);
+    }
+
+    /// mp-bot-voices settlement: `BOT_handlePain`'s verdict pools and `BOT_soundEffect`'s trigger
+    /// pools are the same lines — died == trigger 1 (the death states' ENTER), survived ==
+    /// trigger 0x1f (`DealWithObjHit` case 0x27's MP arm) [M 0x126104→0x126158-0x126164 and
+    /// 0x126120→0x126138-0x126154 vs 0x1266a0-0x1266b0 and 0x126680-0x12669c]. The two readings
+    /// recorded in audit-voice-triggers' table row disagreed on which ids are pain and which are
+    /// death; this cross-check pins the disassembly's answer (pain 0x14d.., death 0x154..).
+    #[test]
+    fn bot_pain_pools_agree_with_bot_sound_effect() {
+        let rec = crate::mp::bots::INITIAL_BOT_RECORDS[0].clone();
+        let brain = crate::mp::bots::BotBrain::bot_init(&rec, 4, [0.0, 1.6, 0.0], 0.0);
+        for alt in [false, true] {
+            let (b, n) = Drones::pain_pool(alt, false);
+            assert_eq!(brain.bot_sound_effect(0x1f, alt), Some((b as u16, n)),
+                "survived == trigger 0x1f (alt {alt}) [M 0x126138-0x126154 vs 0x126680-0x12669c]");
+            let (b, n) = Drones::pain_pool(alt, true);
+            assert_eq!(brain.bot_sound_effect(1, alt), Some((b as u16, n)),
+                "died == trigger 1 (alt {alt}) [M 0x126158-0x126164 vs 0x1266a0-0x1266b0]");
+        }
     }
 }
 

@@ -4741,13 +4741,19 @@ impl BotBrain {
     }
 
     /// `BOT_soundEffect` 0x126618 [M] — the bot barks, keyed by the DCVars+0x15 byte (`alt`):
-    /// trigger 1 → 0x154 + Rand(3) (0x157 + Rand(3) with `alt`); 0x1E and 0x1F → 0x14D + Rand(5)
-    /// (0x152 + Rand(2) with `alt`), 0x1F only when the old ref (`+0x73C`) has stopped
-    /// (`Sound_Playing_Ref`); other triggers return without a sound. fix-849: the branch had
-    /// trigger 1 at 0x152 and 0x1E fixed at the `alt` arm. The callers are the death states
-    /// (0xF2/0xF3) and `NDrone2_DealWithObjHit`. The port's MP bots have no bark channel — bot
-    /// sound is presentation (rules.rs' note), the drivers' `Sound` sink is not threaded into
-    /// `BotBrain` — so the trigger table stands as documentation here [S].
+    /// trigger 1 → 0x154 + Rand(3) (0x157 + Rand(3) with `alt`) [M disasm 0x1266a0-0x1266b0];
+    /// 0x1E and 0x1F → 0x14D + Rand(5) (0x152 + Rand(2) with `alt`) [M 0x126680-0x12669c], 0x1F
+    /// only when the old ref (`+0x73C`) has stopped (`Sound_Playing_Ref` [M 0x126668-0x126678]);
+    /// other triggers return without a sound. fix-849: the branch had trigger 1 at 0x152 and
+    /// 0x1E fixed at the `alt` arm. The game's callers, all direct `jal`s: the death states'
+    /// ENTER — BotDeathAnim 0x175508 → 0x175540 and BotDeathByExplosion 0x1755a8 → 0x1755d8,
+    /// both trigger 1 (`addiu a1,zero,1` in the jal delay slot [M]) — and `NDrone2_DealWithObjHit`
+    /// case 0x27's MP arm, trigger 0x1f [M 0x1401d0-0x1401d4]. Production caller: the driver's
+    /// `Sim::mp_bot_bark` (nf-view mpfx.rs) — the MP bot damage/death flow draws this table on
+    /// the shared stream and delivers the line; the 0x1F playing gate is the one piece it does
+    /// not carry (audio state is per-machine — see mp_bot_bark's doc). Trigger 0x1E stays
+    /// call-site-less in the game (BOT_handlePain's decomp arm for it is dead) and caller-less
+    /// in the port.
     pub fn bot_sound_effect(&self, trigger: u32, alt: bool) -> Option<(u16, u32)> {
         let _ = self;
         match trigger {

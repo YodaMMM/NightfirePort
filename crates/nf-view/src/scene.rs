@@ -13414,6 +13414,9 @@ impl Sim {
                     m.bots[i].health = m.bots[i].max_health;
                     m.bots[i].dead = false;
                     m.bots[i].respawns += 1;
+                    // mp-bot-voices: a fresh drone — the stored bark handle dies with the old
+                    // object (the game's +0x73c is per drone; `BOT_respawn` 0x124e38 re-inits it).
+                    if slot < self.mp_fx.bot_bark.len() { self.mp_fx.bot_bark[slot] = None; }
                     // mp-scenarios-online (agent6): `MP_ReSpawn`'s slot resets (streak, last
                     // shooter, status bits, alive) [M 0x185368:55-57] — the bot's slot stayed
                     // `dead` forever after its first death (KOTH's alive gate, the contacts and
@@ -13642,6 +13645,12 @@ impl Sim {
                     if !m.register_bullet_hit(vs, ks) { continue; }
                     let dmg = nf_game::mp::equip::mp_pain(&m.settings, &pain, dmg, nf_game::mp::equip::PART_TORSO);
                     m.bots[j].health -= dmg;
+                    // mp-bot-voices: the hit's pain bark — the game's DealWithObjHit case 0x27 MP
+                    // arm barks right after the damage write, before the death check [M 0x1401b0
+                    // → 0x1401d0, `addiu a1,zero,31` in the jal delay slot]. Trigger 0x1f → the
+                    // pain pool; the game's playing gate is the one piece mp_bot_bark drops
+                    // (audio state is per-machine — see its doc).
+                    Self::mp_bot_bark(&mut self.drones, &mut self.mp_fx, self.voices.as_deref(), &m.bots, vs, 0x1f);
                     if m.bots[j].health <= 0.0 {
                         // mp-host-match-logic: the frag goes through the match's real scoring
                         // (`MP_PlayerKilled` 0x188f70 — the killer/streak/team-score rules and
@@ -13653,6 +13662,12 @@ impl Sim {
                         m.bots[j].dead = true;
                         m.bots[j].deaths += 1;
                         m.bots[j].respawn_at = frame + 180;
+                        // mp-bot-voices: the death bark — the death states' ENTER plays trigger 1
+                        // before the kill is scored [M 0x1755d8 (BotDeathByExplosion) / 0x175540
+                        // (BotDeathAnim), `addiu a1,zero,1` in the jal delay slot; MP_PlayerKilled
+                        // 0x188f70 comes after at 0x175658]. Ungated: the new line stops the old
+                        // [M 0x1266c8].
+                        Self::mp_bot_bark(&mut self.drones, &mut self.mp_fx, self.voices.as_deref(), &m.bots, victim_slot, 1);
                         m.player_killed(victim_slot, Some(killer_slot), false, false, &mut self.drones.rng);
                         if std::env::var_os("NF_BOTLOG").is_some() { eprintln!("[botlog] f{frame} kill: slot {killer_slot} (weapon {:#x}) killed slot {victim_slot}", shot.weapon); }
                     }
@@ -14403,11 +14418,21 @@ impl Sim {
             if located && !m.register_bullet_hit(victim, attacker) { return; }
             let d = cb::mp_damage(&rules, amount, part);
             m.bots[j].health -= d;
+            // mp-bot-voices: the hit's pain bark — the game's DealWithObjHit case 0x27 MP arm
+            // barks right after the damage write, before the death check [M 0x1401b0 → 0x1401d0,
+            // `addiu a1,zero,31`]; this site is the port's `NDrone2_HitDamage` 0x145558 →
+            // `BOT_handlePain` 0x125ed8 arm (the multipliers above are its [M]), whose verdict
+            // reading matches: survived → the pain pool, died → the death pool below.
+            Self::mp_bot_bark(&mut self.drones, &mut self.mp_fx, self.voices.as_deref(), &m.bots, victim, 0x1f);
             if m.bots[j].health <= 0.0 {
                 m.bots[j].health = 0.0;
                 m.bots[j].dead = true;
                 m.bots[j].deaths += 1;
                 m.bots[j].respawn_at = frame + 180;
+                // mp-bot-voices: the death bark — the death states' ENTER plays trigger 1 before
+                // the kill is scored [M 0x1755d8 / 0x175540, `addiu a1,zero,1`; MP_PlayerKilled
+                // 0x188f70 comes after at 0x175658].
+                Self::mp_bot_bark(&mut self.drones, &mut self.mp_fx, self.voices.as_deref(), &m.bots, victim, 1);
                 m.player_killed(victim, Some(attacker), false, false, &mut self.drones.rng);
             }
             return;
