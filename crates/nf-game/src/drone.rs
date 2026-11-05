@@ -16839,9 +16839,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     if self.subtitle_track.enabled { self.script_msgs.push((label, time)); }
                     self.subtitle_track.push(self.frame, label, time);
                 }
-                // `Text_FlushAllSubtitles()` (0x1b15c8) from `Script_FFwd`'s skip arm [M 0x1dac78:28-29]:
-                // the pending script texts die here; the already-bound HUD lines drop on the viewer side
-                // (the `text_flush` flag the scene consumes), which keeps the game's type-4-only scope.
+                // `Text_FlushAllSubtitles()` (0x1b15c8) from `Script_FFwd`'s skip arm [M 0x1dac78:28-29]
+                // — and, subtitle-flush-camera-scripts, from `Script_Play`'s camera tail on EVERY
+                // camera script start [M 0x1db618]: the pending script texts die here; the
+                // already-bound HUD lines drop on the viewer side (the `text_flush` flag the scene
+                // consumes) — the game's deleted classes are the type-4 AND type-5 messages
+                // (`bVar1 - 4 < 2` [M disasm 0x1b1604-0x1b1610]: script op-0x1e captions and the
+                // id-0xff voice captions `Text_AddMsg` promotes to 5 [M 0x1b0c30:87]); the
+                // type-1/2/3/6 gameplay messages stay.
                 crate::nis::Request::TextFlush => {
                     self.script_msgs.clear();
                     self.text_flush = true;
