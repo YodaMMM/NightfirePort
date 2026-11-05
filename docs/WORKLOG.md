@@ -10,3 +10,18 @@ the port's instant 20-damage round, fix the console-vs-panel difference, keep so
 run walkreal_0700001b_live + solar_panels_live. Lead: 0x33 Phoenix bolt 0x100000/0x200000 arms explode at
 hit (0x60007c4 Explode_Create); two panels together = blast through the sphere sweep, check whether the
 game's blast reaches panel SPs and where the port's first shot lands at tick 0.
+
+## aim-snap-objects
+Started 2026-11-05 19:34 UTC. Branch s/aim-snap-objects (cut from origin/s/panel-aim-snap 08ace8edf). Task:
+finish the crosshair aim snap — port the OBJECT side of Player_WeaponInitBullet 0x1a4bf0:154-164's
+Collide_RayIntersect aiming-point snap (mask 0x20a / 0x208 with +0x6C & 0x800) [L the PCSX2 breakpoints:
+the beam round leaves the muzzle y -1.23, rises to -1.09 by x 3.47, clears the panels; rounds crossing a
+panel's 4.77 sphere get no hit entry unless they touch its triangles]. Drones::aim_snap covers level+panels
+only today; add drones, doors, wires/fuseboxes, breakables, script entities; read Collide_RayIntersect
+0x1ec690 + Collide_Pick; the glass mask bit 2 semantics (aim_snap's glass argument may be inverted); check
++0x6C & 0x800 against the records. 13 red on the branch (suite 4386/13): fusebox_geometry_07000014,
+interactables_07000014 (the laser cut), rocket_stop_plane08 x2, rocket_glass08 (live-proven — fix the ray),
+rocket_origin (update to the snapped point), walkreal_07000014 x2, walkreal_0700000c real_damage,
+walkreal_07000016 x2 (check for the same ray gap first), walkreal_0700001b x2 ("console 1 latched" — new
+firing spots above the panels; order 3,5,6... stalls at console 8 from (44.77,-8.66,1.68)). Keep
+firing_along_the_walkway_breaks_no_panel green; keep the panel-only triangle stage.
