@@ -13,3 +13,8 @@ claimed-by: sandbox7 at 2026-11-05T05:29Z
 ---
 ## Report (blocked, 2026-11-05T09:56Z)
 
+
+---
+## Report from the worker (done, 2026-11-05T09:57Z)
+
+Closed by the driver: the report is on `s/audit-voice-triggers-2` (docs/reports/audit-voice-triggers-2.md); the worker didn't run finish.sh.
