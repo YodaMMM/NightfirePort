@@ -32,3 +32,4 @@ claimed-by: sandbox3 at 2026-11-05T03:13Z
 ---
 ## Report (done, 2026-11-05T04:24Z)
 
+branch: s/gas-rng-draws-5 — docs/reports/gas-rng-draws-5.md (02/16/1b green; 01 real-damage d1+d2 green; 03 5/1+1i; 14 fresh ledgers; finale+suite carried)
