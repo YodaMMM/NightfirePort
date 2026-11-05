@@ -4,3 +4,7 @@ s/fx-muzzle-repin-3 was cut from master and contains none of the muzzle code, so
 
 ---
 claimed-by: sandbox4 at 2026-11-05T16:38Z
+
+---
+## Report (blocked, 2026-11-05T17:38Z)
+
