@@ -9,3 +9,8 @@ Real input, no teleports. Run both binaries whole and quote the result.
 
 ---
 claimed-by: sandbox5 at 2026-11-05T22:14Z
+
+---
+## Report (done, 2026-11-05T22:59Z)
+
+Closed by the driver: the report is on `s/civ-repin-finish` (docs/reports/civ-repin-finish.md); the worker didn't run finish.sh.
