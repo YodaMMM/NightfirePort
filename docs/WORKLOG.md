@@ -29,3 +29,15 @@ Progress log:
   copter 0x17d828/0x17d9f0, GT turret 0x180498, space laser record 107) now arm
   `glass_pass` from the weapon record +0x6c bit 0x800 [M Bullet_update 0x12e7b0 disasm
   0x12f048-0x12f058] — the player-side law. 08 real-damage walk re-pin in progress.
+- 08 walkreal re-pin (partial): added the "stairwell mouth" fight stand at difficulty >= 2
+  and extended the "lower level east" platform-mouth stand gate to >= 2. Verified on the
+  real-damage trio: Operative (d1) + the plain walks pass (4 passed), the Agent (d2) and
+  00 Agent (d3) runs STILL FAIL — the d3 death moved from tick 25209 to 27933 (a later,
+  different spot); at the mouth stand #19 held "out of sight" through 6 stands (sight
+  blocked from the foot) and the stand burned ~1000 ticks for 3 kills (#20/#23/#24).
+  The two Agent variants need the next session (see the report's what's left).
+- Regression spot-checks on the type_setup change: nf-game lib 679 passed / 5 ignored,
+  abseil_death_live 5 passed, stairwell_guards_07000011_live 3 passed,
+  abseil_elevator_live 3 passed. The FULL suite did not fit (walkreal binaries alone are
+  minutes each; the sandbox deadline hit) — the per-binary list and the remaining runs are
+  in the report.

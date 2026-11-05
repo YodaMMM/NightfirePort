@@ -474,6 +474,19 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     if difficulty >= 3 {
         w.reload_full();
     }
+    // guard-mode-c4-glass RE-PIN (Agent + 00 Agent): the platform-mouth wave (#23 at the
+    // stairwell's foot, the burst-rifle pair #19/#20 7-10 u west on the platform) now shoots
+    // THROUGH the mouth's panes — the guard rounds carry the game's glass pass [M Bullet_update
+    // 0x12e7b0 disasm 0x12f048-0x12f058; the old hard-wired stop was the port's shortcut]. The
+    // Agent run died at tick 25209 walking into the mouth (33 hits for 100.0; #23 point-blank
+    // 5 × −4.2 at d 1.6). A player arriving at the stairwell's foot fights the wave from the
+    // foot's own cover BEFORE stepping onto the exposed platform — his own rounds pass the pane
+    // the same way (the player flight's glass pass). REAL INPUT: the stand_and_fire aim/fire
+    // path from the walked arrival spot. The Operative sister stays topped-up (the stand no-ops
+    // under tops_up) and its timeline is untouched.
+    if difficulty >= 2 {
+        fight_close_guards(&mut w, "the stairwell mouth", 4200);
+    }
     // The boarding ([D the floor probe]): the platform (y 27.25, z −121..−122.5) ends at the car
     // shaft — the middle (x 112) is open below (the cabin hangs there; its floor is the plate at
     // y 28, z −127.4), the side ledges (x 110/114) run south at y 26.75 past the parked cabin's
@@ -486,14 +499,16 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         ("the west ledge at the cabin", [110.0, 27.0, -126.3]),
     ] {
         w.walk_nav_to(at, name, 1.4);
-        // 00 Agent (difficulty 3): the burst-rifle pair (#19/#20, weapon 0x15, skin 0x500002f,
-        // at (101.9-104.5, 28.2, -122.3/-122.6), 7-10 u west [L the d3 ledgers]) fires into
-        // the boarding legs from the platform's west — the d3 runs died in the legs (ticks
-        // 25164/25382/25426) before the `before the boarding` stand below ran. A player fights
-        // the pair the moment the platform mouth opens (the "platform west" stand of the same
-        // runs killed #19 from there) instead of walking the burst lane first. D3-GATED: the
-        // Operative/Agent sisters' timelines stay byte-exact.
-        if difficulty >= 3 && name == "the lower level east" {
+        // 00 Agent (difficulty 3) + guard-mode-c4-glass Agent re-pin: the burst-rifle pair
+        // (#19/#20, weapon 0x15, skin 0x500002f, at (101.9-104.5, 28.2, -122.3/-122.6), 7-10 u
+        // west [L the d3 ledgers]) fires into the boarding legs from the platform's west — the
+        // d3 runs died in the legs (ticks 25164/25382/25426) before the `before the boarding`
+        // stand below ran, and the Agent run died at tick 25209 once the guard rounds passed
+        // the panes [M 0x12e7b0 disasm]. A player fights the pair the moment the platform mouth
+        // opens (the "platform west" stand of the same runs killed #19 from there) instead of
+        // walking the burst lane first. D2/D3-GATED: the Operative sister's timeline stays
+        // byte-exact.
+        if difficulty >= 2 && name == "the lower level east" {
             // 00 Agent (difficulty 3): the descent's fights can leave the FIREARMS dry while the
             // AT-420 sits owned with clip 4 — the 25773 death's stand cycled the dry pistol onto
             // the LAUNCHER (see firearm_armed) and stood into #20's interval-4 bursts (13 × 6.0,
