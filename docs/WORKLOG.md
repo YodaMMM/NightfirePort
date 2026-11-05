@@ -31,3 +31,22 @@ real_damage_00agent at (2.22,58.08,36.54), under fire from drone #4 at 4.5 units
 survive the way a player would (fight or take cover there); do not remove or reorder a draw.
 Impact tests must count bullet holes only (guards' footprints share the decal pool). Run
 walkreal_0700000b_live, impacts_live, qclaw_live, impact_remainder_live.
+Outcome (2026-11-05 07:55 UTC): s/fx-scrape-and-impacts rebased onto origin/master a89818235
+(clean) and landed on s/level-0b-walk-after-scrape-draw. The walk deaths fixed the player's way:
+the deck sprint now runs THROUGH the parachute take slot (the take raises ch 0x3F on the pass —
+the touch law is a per-tick distance+LOS check [M Pickup_Update 0x18e148:202-220]), so the walked
+take-slot stop's return-fire gate can no longer stand Bond in a blocked dart fight at the deck's
+south-west while drone #4 (weapon 0x18) chews from 4.5 u — the real_damage_agent/00agent deaths
+at tick 16047 (2.22,58.08,36.54) were that stand [L the NF_RF_TRACE fight#9 log: 180+ ticks,
+blocked true, health 53.2 → 0]. No draw removed or reordered; the tranq fights stay on the legs
+where their target is reachable. The impact tests now count BULLET HOLES only — the wait keys on
+an EffectInfo+4-mesh decal [M Effect_Bullet 0x1ce9c8] and the sky sisters assert no +4-mesh
+decal, since the guards' footprints share the 0x3496e0 pool with the +8/+0xc boot meshes [M
+Effect_Player 0x1cec48:84-107]. Green: walkreal_0700000b_live 7/0 (real_damage 62.8, agent 42.0,
+00agent 27.5 left; mission complete tick 16076, stuck 0), impacts_live 5/0, impact_remainder_live
+3/0, qclaw_live 3/0, nf-game lib 667/0 (5 ignored), laser_gas_mesh 4/0, blast_smoke 2/0,
+break_debris 4/0, grenade 1/0, rigid_body_wiring 6/0, npc_doors 6/0 (1 ignored),
+fix_guard_misc 2/0, walkreal_07000001 8/0, walkreal_0700000d 1/0 (2 ignored); nf-formats 136 ok
++ the 3 allowed disc_golden fails; nf-audio 28/0. The nf-view suite whole (959 test binaries)
+did not fit the window; no src/ changed on this branch beyond the scrape branch's, whose
+changed-code binaries all ran above.
