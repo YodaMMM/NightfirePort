@@ -5523,6 +5523,8 @@ impl App {
                             // The PC-port rapid fire (`--rapid-fire` / the dev Toggles page): local play only —
                             // an online match keeps every machine on the game's rules (lockstep).
                             sim.rapid_fire = RAPID_FIRE.load(std::sync::atomic::Ordering::Relaxed) && self.net.is_none();
+                            // The window answers the fail menu through its page, not the sim's restart.
+                            sim.drones.auto_restart = false;
                             sim.step_bond(input, trigger, reload, use_key);
                             // Port dev aid: re-apply `--bond` after the opening cut-scene's hand-back.
                             if let Some(b) = self.dev_bond {
@@ -5829,6 +5831,9 @@ impl App {
                         }
                     }
                     if std::mem::take(&mut self.pending_mission_end) { self.demo_results(true); }
+                    // `Mission_Update` case 4's else arm: the fail menu 0x40000042 opens over the paused
+                    // mission [M 0x182c60:77-80].
+                    if self.fe.is_none() && self.scene.sim.as_ref().is_some_and(|s| s.drones.fail_menu_open()) { self.demo_results(false); }
                     // mp-match-end: the debriefing handover, drained beside the mission end.
                     if let Some((board, settings)) = self.pending_mp_debrief.take() { self.mp_results(board, settings); }
                 }
