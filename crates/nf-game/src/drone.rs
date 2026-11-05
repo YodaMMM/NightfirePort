@@ -22479,16 +22479,25 @@ mod abseil_tests {
         dr.state = state::PLAY_SCRIPT;
         dr.start_script = 0x6000_168;
         let mut rng = Rng::new(0x5eed);
+        // The state ENTER (the game's PlayScript entry plays the start script): the port's ENTER arm
+        // runs `play_script` → `anim.script = Some(0x6000168)` [M 0x15ba68:49-53/70-73].
+        dr.send(&d, &mut rng, 99, msg::ENTER);
+        assert_eq!(dr.anim.script, Some(0x6000_168), "the 0x6000168 script is the one playing");
         // Gunfire (msg 0x14) while the script plays: the bit holds, the script holds [M 0x177800:19-21].
         dr.send(&d, &mut rng, 100, msg::SOUND);
         assert_eq!(dr.state, state::PLAY_SCRIPT, "the 0x6000168 script holds through gunfire — the ENTER shared tail sets +0x4F8 0x400000 [M 0x15ba68:73; disasm 0x15bbf4-0x15bc08]");
+        assert!(!dr.log.iter().any(|&(f, _)| f == 100), "no state transition on the while-scripted shot — deaf [M 0x177800:19-21]");
         // The script's natural end (msg 5): the 0x6000168 arm clears +0x4F8's 0x400000 [M 0x15ba68:153] —
         // the port zeroes start_script in the same arm, the msg::SOUND deafness read.
         dr.send(&d, &mut rng, 101, msg::ANIM_DONE);
         assert_eq!(dr.start_script, 0, "the deaf bit clears at the script's end [M 0x15ba68:153]");
         assert_eq!(dr.state, state::PLAY_SCRIPT, "the 0x168/0x169 msg-5 arm HOLDS the state (CallAnim + AttackTalk, no SetState) [M 0x15ba68:149-157]");
-        // The next gunshot lands on the armed rows: mode 9 at alert 1.0 → Attack 0x56 [M 0x177800:51-68].
+        // The next gunshot lands on the armed rows: mode 9 at alert 1.0 → Attack 0x56 [M 0x177800:51-68]
+        // — the guard HEARS. (With the empty census tables the ATTACK enter re-seats him at its
+        // fallback afterwards; the pin is the msg-102 transition into ATTACK — what AlertSound
+        // returns and the port's arm does.)
         dr.send(&d, &mut rng, 102, msg::SOUND);
-        assert_eq!(dr.state, state::ATTACK, "the guard hears once the script ends [M 0x177800:51-68]");
+        assert!(dr.log.iter().any(|&(f, n)| f == 102 && n == state::ATTACK),
+            "the guard hears once the script ends: mode 9 at alert 1.0 → Attack [M 0x177800:51-68]; log {:?}", dr.log);
     }
 }
