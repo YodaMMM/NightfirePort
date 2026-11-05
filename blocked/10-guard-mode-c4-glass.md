@@ -10,3 +10,7 @@ Check each with the decompile, cite [M]/[L], and keep tests honest: real input, 
 
 ---
 claimed-by: sandbox1 at 2026-11-05T18:58Z
+
+---
+## Report (blocked, 2026-11-05T20:15Z)
+
