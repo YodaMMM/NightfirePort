@@ -87,6 +87,14 @@ pub struct Gas {
     /// a 0x400 object is submitted to a view only while that viewer's goggle mode (+0x236) is 2
     /// [M View_AddObjects 0x1e62d8:38-47]. The draw side reads it.
     pub xray_only: bool,
+    /// The spawn rotation (`Gas_Init`'s param-5 euler vector — the quaternion argument of
+    /// `control_create_object` [M 0x1aacc8:31]; the game's gas objects are NOT billboards —
+    /// `GAS_OBJ_FLAGS` carries no 0x8 — so `View_DrawObjectGlist` rotates them from their own
+    /// +0x90). fix-scrape-and-impacts row 13: `Effect_Bullet`'s wall puffs spawn with
+    /// `Vec_NormToRot(normal)`, floor puffs with the negated-normal euler or zero by the entry's
+    /// +0x1b byte [M 0x1ce8a8:122-130]. The draw side reads it; every pre-existing site keeps
+    /// [0,0,0] (the game's sites pass zero or the euler — zero except the impact puffs).
+    pub rot: [f32; 3],
     /// The gas obj's +0xF0 bit 0x10 — the HIDDEN bit [M Gas_Init 0x1aacc8's LAB_001ab1e4
     /// `*(obj+0xf0) |= 0x10` for kinds 9/10; gases_smoke's cases 9/10 re-OR it every tick].
     /// A hidden puff never draws (fx-gas-and-blasts row 5): it is a stationary cloud EMITTER
@@ -215,6 +223,7 @@ impl GasPool {
             hidden: false,
             born: 0,
             child: None,
+            rot: [0.0; 3],
         });
         let _ = yaw; // the rot-z euler: stored to obj+0x50/0x60 in the game; the port's billboard draw reads only the spin
     }
@@ -267,6 +276,7 @@ impl GasPool {
             hidden: false,
             born: 0,
             child: None,
+            rot: [0.0; 3],
         });
         let _ = yaw; // the rotation draw: stored to obj+0x50/0x60; the port's billboard reads only the spin
     }
@@ -306,6 +316,7 @@ impl GasPool {
             hidden: false,
             born: 0,
             child: None,
+            rot: [0.0; 3],
         });
     }
 
@@ -342,6 +353,7 @@ impl GasPool {
             hidden: false,
             born: 0,
             child: None,
+            rot: [0.0; 3],
         });
         let _ = yaw; // the rot-z euler (the searchlight's shape); the port's billboard reads only the spin
     }
@@ -403,10 +415,21 @@ impl GasPool {
             hidden: matches!(kind, 9 | 10), // [M LAB_001ab1e4: `obj+0xf0 |= 0x10`]
             born: self.frame,
             child,
+            rot: [0.0; 3],
         });
         // The mesh rides alongside for the draw (the game passes it to the gfx hashtable); the port's
         // billboard draw reads it from the puff via the pool index.
         if let Some(g) = self.puffs.last_mut() { g.mesh = mesh; }
+    }
+
+    /// `init_ex` with the spawn rotation (`Gas_Init`'s param-5 euler → the create-object quaternion
+    /// [M 0x1aacc8:31]) — the impact puffs' orientation: `Effect_Bullet`'s wall puffs spawn with
+    /// `Vec_NormToRot(normal)` [M 0x1ce8a8:129], floor puffs with the negated-normal euler or zero
+    /// by the entry's +0x1b byte [M :122-127]. Everything else is `init_ex` exactly.
+    #[allow(clippy::too_many_arguments)]
+    pub fn init_ex_rot(&mut self, mesh: u32, pos: V3, yaw: f32, vel: V3, p1: f32, p2: f32, kind: u8, rgba: [u8; 4], rgba_end: u32, life: f32, rot: [f32; 3]) {
+        self.init_ex(mesh, pos, yaw, vel, p1, p2, kind, rgba, rgba_end, life);
+        if let Some(g) = self.puffs.last_mut() { g.rot = rot; }
     }
 
     /// `gases_smoke` 0x1ab2d0 for the ported types (0, 4, 7, 9, 10): motion, growth, fade, the life

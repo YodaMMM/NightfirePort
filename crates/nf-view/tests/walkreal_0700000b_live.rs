@@ -646,21 +646,35 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
         .find(|p| p.switch_channel == 0x3f).expect("OBJECT_Parachute (0xF0, ch 0x3F)").clone();
     let pp = [parachute.m[3][0], parachute.m[3][1], parachute.m[3][2]];
     if real {
-        // THE DECK SPRINT — the player's crossing on real health. The deck key stands 30-42 u
-        // from four roof guards [D placements; L the death runs' damage logs]; the K5's dart
-        // cannot touch a guard in full combat [M 0x164210 — Attack carries no case 0x19] and the
-        // sleep it does land buys `RecoverTime(0x43) = 36·(200−+0xB9)` ≈ 144 ticks on these
+        // THE DECK SPRINT-THROUGH — the player's crossing on real health. The deck key stands
+        // 30-42 u from four roof guards [D placements; L the death runs' damage logs]; the K5's
+        // dart cannot touch a guard in full combat [M 0x164210 — Attack carries no case 0x19] and
+        // the sleep it does land buys `RecoverTime(0x43) = 36·(200−+0xB9)` ≈ 144 ticks on these
         // guards before a team-1 wake [M 0x147188 k=60; L the ring sleeps #1/#3 — both back
         // shooting inside ~150 ticks] — standing to dart them is the stall that bled the first
         // un-ignoring runs. A moving target cuts the guards' roll instead [M 0x179740 —
         // `DroneFiring_TargetMoving_Accuracy`], so Bond RUNS the diagonal (the same real-input
         // pattern the jump leg drives; no fight stops) straight through the reduced fire.
-        let target = [pp[0], pp[1] - 1.4, pp[2] - 5.0];
+        // THE SCRAPE-SHIFT ANSWER (level-0b-walk-after-scrape-draw): s/fx-scrape-and-impacts'
+        // own draws shifted the shared stream, and the sprint that used to end at the deck slot
+        // (pp−5.0) then cost its stop there: the walked take-slot leg's return-fire gate picked a
+        // dartable deck guard whose aim ray the housing blocks, and `stand_and_fire` held the
+        // blocked stand (no dart flies, the 300-tick no-round window never closes) while drone #4
+        // (skin 0x5000006, weapon 0x18) stood 4.5 u away chewing 58.8 health into the run's last
+        // 80 frames [L the real_damage_agent death log, tick 16047 at (2.22,58.08,36.54)]. A
+        // player under that fire does not stand and trade — the objective is 9 u further and the
+        // take fires from the RUN (the touch law is a per-tick distance+LOS check [M
+        // 0x18e148:202-220], it needs no stand) — so the sprint now runs THROUGH the take slot
+        // [pp−0.3, −1.0], the take raising ch 0x3F on the pass, and the jump leg's east drive
+        // (raw ticks, no return-fire gate) follows with no stop between. The tranq fights stay
+        // on the legs where their target is reachable; the deck's end is pure movement.
+        let target = [pp[0] - 0.3, pp[1] - 1.4, pp[2] - 1.0];
         let start = w.total_ticks;
         while w.total_ticks - start < 2400 {
             let sim = w.scene.sim.as_ref().unwrap();
             let p = sim.bond.pos;
-            if walker::dxz(p, target) < 1.6 { break; }
+            if walker::dxz(p, target) < 1.0 { break; }
+            if sim.drones.channels.on(0x3f) { break; } // the take fired on the pass
             let desired = (target[0] - p[0]).atan2(target[2] - p[2]);
             let err = walker::wrap_pi(desired - sim.bond.yaw);
             let input = nf_game::player::Input {
@@ -671,15 +685,16 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
             w.tick(input, false);
         }
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        assert!(walker::dxz(p, target) < 1.6, "the deck sprint must reach the parachute's deck slot on real input, got {p:?}");
+        assert!(walker::dxz(p, target) < 1.0 || w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f),
+            "the deck sprint must reach the parachute's take slot on real input (or take it on the pass), got {p:?}");
     } else {
         // The deck east from the re-place point IS the game's route and it WALKS: the walkthrough
         // arrives at the deck below the pickup in both walks (deterministic 60 Hz — once green,
         // always green), so no stand-in: the arrival is a hard assert. (The prior session's wedge
         // transit is gone; the deck's full extent was never a blocker on this tree.)
         w.walk_to(Wp::new(pp[0], pp[1] - 1.4, pp[2] - 5.0).r(1.6), "the deck below the parachute");
+        w.wait(10);
     }
-    w.wait(10);
     // Take the parachute: the WALKED slot. The game's reach is NOT the north side (the old
     // target z +1.2 ground Bond EAST along the pickup's low box — the run dump's wedge at
     // (3.61, 58.07, 41.34), 1.1 m east of the take zone, mis-read at the time as "the
@@ -696,7 +711,12 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
     // slot passes both gates on real input; the take raises ch 0x3F [M Pickup_Handler
     // 0x18e650:330-333 writes switch_channels[param 3] = 1; D #280 p3 = 0x3F].
     // The E-plate #166 side stand is short; the deck sprint below is the real-health crossing.
-    w.walk_to(Wp::new(pp[0] - 0.3, pp[1] - 1.4, pp[2] - 1.0).r(1.0), "the parachute take slot (walked)");
+    // (Warm walks only: the real-health sprint-through above arrives — and takes — moving; a
+    // walk_to here would re-arm the return-fire gate at the slot, the stand the sprint exists to
+    // avoid.)
+    if !real {
+        w.walk_to(Wp::new(pp[0] - 0.3, pp[1] - 1.4, pp[2] - 1.0).r(1.0), "the parachute take slot (walked)");
+    }
     let mut taken = w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f);
     for _ in 0..120 {
         if taken { break; }
@@ -829,9 +849,13 @@ fn walk_fresh_spawn_to_the_mission_end() {
 /// `DroneFiring_TargetMoving_Accuracy`]. The cut-scene tail waits until the GAME re-enables
 /// Bond (the arrival cut-scene's `wait_enabled` pattern) — the fixed 2900 stood him 450
 /// extra ticks at the deck key under fire with no control ([L] 11 hits, 23.8 → 0.0, no fight
-/// ever started). Green run: the ring sleeps cost 2.1 (44.8 → 42.7), the deck sprint + the
-/// take-slot sleeps (#5/#4, dartable mid-chase) land the mission complete with 15.4 left;
-/// stuck 0, the one fall is the parachute jump itself.
+/// ever started). Green run (level-0b-walk-after-scrape-draw, after s/fx-scrape-and-impacts'
+/// draws shifted the stream): the deck crossing is the SPRINT-THROUGH (the sprint ends at the
+/// take slot, the take fires on the pass — the walked take-slot stop's return-fire gate stood a
+/// blocked dart fight at the deck's south-west while drone #4 chewed 58.8 at 4.5 u, the
+/// real_damage_agent/00agent deaths at tick 16047); the mission completes with 62.8 left (d1),
+/// 42.0 (Agent), 27.5 (00 Agent), 0 return-fire fights; stuck 0, the one fall is the parachute
+/// jump itself.
 #[test]
 fn walk_fresh_spawn_to_the_mission_end_real_damage() {
     walker::with_real_damage(|| {
