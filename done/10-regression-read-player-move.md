@@ -4,3 +4,7 @@ Read every commit since 2026-10-20 touching: crates/nf-game/src/player.rs crates
 
 ---
 claimed-by: sandbox4 at 2026-11-05T15:08Z
+
+---
+## Report (done, 2026-11-05T16:29Z)
+
