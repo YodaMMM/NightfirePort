@@ -125,3 +125,9 @@ Every claim is from runs on this branch's merged tree (post-master-merge), quote
 ## Usage
 
 not visible to me
+
+## Notification
+
+The curl and python3 fallbacks failed (`curl: (28) Connection timed out after 20002 milliseconds`;
+`urlopen error [Errno 101] Network is unreachable`); the wget fallback succeeded (exit 0,
+2026-11-05 ~13:15 UTC) — the notification went out.
