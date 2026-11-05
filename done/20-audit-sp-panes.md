@@ -4,3 +4,7 @@ The multiplayer pane sweep (docs/reports/audit-mp-panes.md) found real gaps, so 
 
 ---
 claimed-by: sandbox4 at 2026-11-04T23:17Z
+
+---
+## Report (done, 2026-11-05T00:39Z)
+
