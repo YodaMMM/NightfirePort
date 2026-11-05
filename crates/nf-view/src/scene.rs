@@ -3595,6 +3595,15 @@ impl Sim {
                     if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.footstep, m) {
                         self.drones.audio.play3d(id, [p[0], p[1] - 1.6347 * t, p[2]], None);
                     }
+                    // `Player_DealWithObjHit` 0x194458:80-82: the same footstep's hit (the anim
+                    // object's +0x60 bit-0x4 frame — this block is the port's footstep event) in
+                    // the water material pair runs `Env_WaterRipple(hit)` [M]. `env_water_ripple`
+                    // re-checks `(mat & 0x3f) - 0xd < 2` [M 0x17c118:9] and spawns the kind-1 ring
+                    // at the ground hit point (HITDATA+0x40 [M docs/fields/hitdata-spawner-ally.md]).
+                    // The port's probe is the grounding variant (no_water drops only the 0xE planes
+                    // — world.rs `segment_surface`), so 0xD floors ripple; the game's collide hit
+                    // can also be 0xE [S — the port's footstep probe never sees those planes].
+                    nf_game::env::env_water_ripple(&mut self.drones.gas, m, [p[0], p[1] - 1.6347 * t, p[2]]);
                     // The footprint decal arm — audit-effect-calls: the game's step is the FULL
                     // `Effect_Create(…, foot | 0x42)` [M 0x1befd8:196-201], flag 0x2 →
                     // `Effect_Player` 0x1cec48:59-140: sound (0x40, above) PLUS the foot decal.
