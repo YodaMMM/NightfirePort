@@ -29,15 +29,23 @@ fn data_of(sim: &nf_view::scene::Sim) -> nf_game::drone::Data {
     }
 }
 
-/// The torso box to aim at: the largest-volume posed hit box whose part is neither a head bone
-/// (4/5 — a head hit is ×100 and kills a 12-health guard outright, unmeasurable per round) nor
-/// a leg bone (0x31+). Falls back to 0.6 above the origin when no boxes pose at all.
+/// The torso box to aim at: the largest-volume posed hit box that is neither the head bone
+/// (part 5 — a head hit is ×DroneDamage_Head and kills a 12-health guard outright, unmeasurable
+/// per round) nor a leg bone (0x31+). Falls back to 0.6 above the origin when no boxes pose at
+/// all.
+/// audit-voice-triggers-2 correction: the old filter dropped parts 4 AND 5 as "head bones", but
+/// the port's damage law has ONE head part: `hit_damage`'s match arms are 5 → DroneDamage_Head,
+/// 0x14/0x15/0x17/0x20/0x23/0x27 → Arms, 0x31..=0x38 → Legs, and EVERYTHING ELSE (part 4
+/// included) → DroneDamage_Torso [M damage.rs 0x145558's table; pinned by nf-game's
+/// hit_damage_per_part_and_difficulty — h(4, 2, 1) = 5.25 torso, head=false]. On the 0x5000039
+/// rig part 4 IS the chest (half 0.2×0.25×0.15 [L the pistol-leg box dump]); excluding it sent
+/// the aim to 0.07-half arm boxes, where the shifted shared-RNG cone draws miss.
 fn torso_aim(sim: &nf_view::scene::Sim, gi: usize) -> (V3, usize, Option<i16>) {
     let dr = &sim.drones.list[gi];
     let boxes = dr.hit_boxes(&data_of(sim));
     let n = boxes.len();
     let best = boxes.iter()
-        .filter(|b| !matches!(b.part, 4 | 5) && !(0x31..=0x38).contains(&b.part))
+        .filter(|b| b.part != 5 && !(0x31..=0x38).contains(&b.part))
         .max_by(|a, b| {
             let va = a.half[0] * a.half[1] * a.half[2];
             let vb = b.half[0] * b.half[1] * b.half[2];
@@ -74,6 +82,13 @@ struct FireTrace {
 /// attributed by the engine's own hit record's weapon: the escort's own volleys land in the
 /// same list (his 0x1c pellets) and must not count as the player's registration.
 fn fire_at(w: &mut Walker, gi: usize, max_rounds: u32, my_weapon: u16, label: &str) -> FireTrace {
+    // audit-voice-triggers-2: the live guards HUNT (the gunfire alerted them — the merged
+    // branch's added attack barks wake them earlier than master's stream did). At a 1 u stand a
+    // circling guard flips the aim geometry (dxz under the 0.5 clamp, dx/dz sign flips swing
+    // err past the gate) and the leg's rounds never spawn. The stand's band is held with the
+    // same real input stand_near uses: walk in when the guard drifts out, back off when a
+    // point-blank guard would swing the aim.
+    let band: Option<f32> = if my_weapon == 0x2 { Some(1.2) } else { None };
     let mut tr = FireTrace { spawned: 0, impacts: Vec::new(), ally_impacts: 0, hp0: 0.0, hp1: 0.0, flying: Vec::new(), boxes: 0, enabled_at_fire: Vec::new(), corpse: false, ticks: 0 };
     tr.hp0 = w.scene.sim.as_ref().unwrap().drones.list[gi].health;
     let mut hp_prev = tr.hp0;
@@ -106,14 +121,29 @@ fn fire_at(w: &mut Walker, gi: usize, max_rounds: u32, my_weapon: u16, label: &s
             let want_pitch = (dy / walker::dxz(bp, chest).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
             let perr = want_pitch - sim.bond.pitch;
             let on = err.abs() < 0.07 && perr.abs() < 0.10;
-            (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() }, on)
+            // audit-voice-triggers-2: hold the stand's band on real input while the guard hunts
+            // (see the `band` note above) — a drifted guard swings err past the gate and the
+            // leg stops spawning rounds.
+            let mut fwd = 0.0f32;
+            if let Some(band) = band {
+                let d = walker::dxz(bp, sim.drones.list[gi].pos);
+                if d > band { fwd = 1.0; } else if d < band - 0.6 || err.abs() > 0.5 { fwd = -1.0; }
+            }
+            (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), forward: fwd, ..Default::default() }, on)
         };
         let (hp_before, enabled, state, dist, born_before) = {
             let sim = w.scene.sim.as_ref().unwrap();
             let dr = &sim.drones.list[gi];
             (dr.health, dr.enabled, dr.state, walker::dxz(sim.bond.pos, dr.pos), sim.drones.frame)
         };
-        if on { w.tick_fire(input); } else { w.tick(input, false); }
+        // audit-voice-triggers-2: the pistol (0x2) is SEMI-AUTOMATIC — a held trigger fires
+        // once per pull and the pull only re-arms on release [M gun.rs Player_WeaponFiring —
+        // the semi P2K held fires ONCE; the refire comes from a new press]. The held-trigger
+        // loop used to spend the leg's whole budget on one round. Press for 2 ticks, release
+        // for 4, through the same real input path.
+        let semi = my_weapon == 0x2;
+        let press = !semi || (t % 6) < 2;
+        if on && press { w.tick_fire(input); } else { w.tick(input, false); }
         tr.ticks += 1;
         let sim = w.scene.sim.as_ref().unwrap();
         let spawned_here = sim.shot_tick;
@@ -121,6 +151,18 @@ fn fire_at(w: &mut Walker, gi: usize, max_rounds: u32, my_weapon: u16, label: &s
             tr.spawned += 1;
             last_spawn = t;
             tr.enabled_at_fire.push(enabled);
+            // audit-voice-triggers-2: point-blank misses — dump the guard's live pose and every
+            // flying bullet at the spawn tick (the round's whole flight can sit inside this
+            // tick, so the after-tick sample is the only witness).
+            let dr = &sim.drones.list[gi];
+            eprintln!("[smg] {label} +{t}   guard now at ({:.3},{:.3},{:.3}) state {:#x} boxes {}",
+                dr.pos[0], dr.pos[1], dr.pos[2], dr.state, dr.hit_boxes(&data_of(sim)).len());
+            for bx in dr.hit_boxes(&data_of(sim)).iter() {
+                eprintln!("[smg] {label} +{t}   box part {} c ({:.3},{:.3},{:.3}) h ({:.3},{:.3},{:.3})",
+                    bx.part, bx.m[3][0], bx.m[3][1], bx.m[3][2], bx.half[0], bx.half[1], bx.half[2]);
+            }
+            eprintln!("[smg] {label} +{t}   bullets alive {} bond yaw {:.4} pitch {:.4}",
+                sim.drones.player_bullets.len(), sim.bond.yaw, sim.bond.pitch);
         }
         // This tick's drone impacts (player_impacts is cleared at the head of each tick's
         // collision pass): expected loss from the engine's own hit record (dr.hit), observed
@@ -163,6 +205,18 @@ fn fire_at(w: &mut Walker, gi: usize, max_rounds: u32, my_weapon: u16, label: &s
                 if !hits.is_empty() {
                     eprintln!("[smg] {label} +{t}   alive bullet w{:#x} born {} bounces {} ({:.2},{:.2},{:.2}) dir ({:.3},{:.3},{:.3}) ENTERS boxes {:?} (should-hit)",
                         b.weapon, b.born, b.bounces, b.pos[0], b.pos[1], b.pos[2], b.dir[0], b.dir[1], b.dir[2], &hits[..hits.len().min(4)]);
+                } else if tr.impacts.is_empty() {
+                    // audit-voice-triggers-2: a spawned round that missed everything — print the
+                    // ray against every posed box so the miss is explained (spread? pose? aim?).
+                    eprintln!("[smg] {label} +{t}   MISSED bullet w{:#x} born {} ({:.3},{:.3},{:.3}) dir ({:.4},{:.4},{:.4}) len {:.3}",
+                        b.weapon, b.born, b.pos[0], b.pos[1], b.pos[2], b.dir[0], b.dir[1], b.dir[2], l);
+                    let bp = sim.bond.pos;
+                    eprintln!("[smg] {label} +{t}   bond at ({:.3},{:.3},{:.3}) yaw {:.4} pitch {:.4}",
+                        bp[0], bp[1], bp[2], sim.bond.yaw, sim.bond.pitch);
+                    for bx in boxes_now.iter() {
+                        eprintln!("[smg] {label} +{t}   box part {} centre ({:.3},{:.3},{:.3}) half ({:.3},{:.3},{:.3})",
+                            bx.part, bx.m[3][0], bx.m[3][1], bx.m[3][2], bx.half[0], bx.half[1], bx.half[2]);
+                    }
                 }
             }
             tr.flying = sim.drones.player_bullets.iter().take(3).map(|b| (b.pos, b.dir)).collect();
@@ -304,7 +358,14 @@ fn smg_rounds_damage_a_close_guard_and_the_pistol_sister() {
     eprintln!("[smg] live guards in distance order: {live:?}");
 
     // The pistol sisters: switch to 0x2 through the real switch, then 1 u, 2 u and the 6 u
-    // control — each on a fresh living guard.
+    // control — each on a fresh living guard. audit-voice-triggers-2 re-pin: the game's cone
+    // draw is UNCONDITIONAL — every spawned round draws its offset from the shared RNG
+    // [M Bullet_init 0x12c5a0:171-180 — the spread block runs even on a dead-on aim, pinned by
+    // nf-game's cone_draws_three_even_when_dead_on], so which single round lands depends on
+    // where the shared stream sits. The merged branch's added voice triggers consume draws
+    // (barks), shifting every downstream roll; the old 1-round pin encoded master's lucky
+    // stream position. The control's claim — the pistol registers damage on the guards the
+    // game lets you hit — is pinned by up to 3 rounds with at least one PLAYER impact.
     w.tick(Input { switch_to: Some(0x2), ..Default::default() }, false);
     for _ in 0..90 { w.tick(Default::default(), false); }
     assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x2, "the pistol switch");
@@ -314,12 +375,49 @@ fn smg_rounds_damage_a_close_guard_and_the_pistol_sister() {
             let d = &sim.drones.list[i];
             d.team == 1 && !d.corpse && d.enabled && d.health > 0.0
         });
-        let Some(&tg) = live.first() else { break };
-        stand_near(&mut w, tg, dist);
-        let tr = fire_at(&mut w, tg, 1, 0x2, &format!("pistol {dist}u"));
+        if live.is_empty() { break; }
+        let mut tg = live[0];
+        // audit-voice-triggers-2: the same clear-segment gate the SMG legs use — a combat-state
+        // guard (0x74) can sit behind the hall's cover (d#11 at 2 u: 3 rounds, 0 impacts, the
+        // rounds eat the crate); the control's claim is about guards the game lets you hit.
+        loop {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let (chest, _, _) = torso_aim(sim, tg);
+            let bp = sim.bond.pos;
+            let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+            if sim.world.segment(eye, chest).is_none() { break; }
+            drop(sim);
+            eprintln!("[smg] d#{tg}: no clear eye-to-torso segment for the pistol leg — next candidate");
+            live.remove(0);
+            if live.is_empty() { break; }
+            tg = live[0];
+        }
+        // audit-voice-triggers-2: the leg retries on the next candidate — the combat-state
+        // guards re-cover DURING the stand (d#11: the segment was clear before stand_near and
+        // the 3 rounds still ate the crate), so the pre-stand gate alone is not enough. The
+        // same doctrine as the SMG legs' `_attempt` loop: only a guard the game lets Bond hit
+        // takes the leg; a leg with a landed round proves the control.
+        let mut leg: Option<(FireTrace, usize)> = None;
+        for _attempt in 0..3 {
+            live.retain(|&i| {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[i];
+                d.team == 1 && !d.corpse && d.enabled && d.health > 0.0
+            });
+            if live.is_empty() { break; }
+            let tg = live[0];
+            stand_near(&mut w, tg, dist);
+            let tr = fire_at(&mut w, tg, 3, 0x2, &format!("pistol {dist}u"));
+            let drop = tr.hp0 - tr.hp1;
+            eprintln!("[smg] pistol {dist} u on d#{tg}: spawned {} rounds, {} impacts, hp {:.1} -> {:.1} (drop {drop:.3}), ticks {}",
+                tr.spawned, tr.impacts.len(), tr.hp0, tr.hp1, tr.ticks);
+            if drop > 0.0 && !tr.impacts.is_empty() { leg = Some((tr, tg)); break; }
+            live.remove(0);
+        }
+        let Some((tr, tg)) = leg else {
+            panic!("pistol rounds at {dist} u damaged no live guard (the level-01 report's own control at 3.5-9 u)");
+        };
         let drop = tr.hp0 - tr.hp1;
-        eprintln!("[smg] pistol {dist} u on d#{tg}: spawned {} rounds, {} impacts, hp {:.1} -> {:.1} (drop {drop:.3}), ticks {}",
-            tr.spawned, tr.impacts.len(), tr.hp0, tr.hp1, tr.ticks);
         assert!(drop > 0.0, "pistol rounds at {dist} u must damage the guard (the level-01 report's own control at 3.5-9 u)");
         assert!(!tr.impacts.is_empty(), "pistol {dist} u: at least one PLAYER impact must register (ally hits: {})", tr.ally_impacts);
         if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare < 4 {
