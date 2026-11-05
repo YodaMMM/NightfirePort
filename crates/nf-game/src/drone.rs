@@ -12903,6 +12903,25 @@ impl crate::nis::World for Data<'_> {
             _ => None,
         }).collect()).unwrap_or_default()
     }
+    /// fx-npc-footsteps: the op-4 footstep markers (event kinds 0 / 4 / 5) of `script` with authored
+    /// frame in `(from, to]`, in command order — the raise half of `AnimProcessScriptCmds`
+    /// 0x1c1b38:372-401 that `Script_Interp` case 2's synchronous `AnimObjectUpdate` runs (the
+    /// stream's own consumption is `Request::NisFootstep`).
+    fn anim_ops4_footsteps(&self, script: u32, from: i32, to: i32) -> Vec<u8> {
+        self.scripts.get(&script).map(|s| s.commands.iter().filter(|c| c.op == 4).filter_map(|c| match c.args.as_slice() {
+            [f, ev @ (0 | 4 | 5), ..] if (*f as i32) > from && (*f as i32) <= to => Some(*ev as u8),
+            _ => None,
+        }).collect()).unwrap_or_default()
+    }
+    /// fx-npc-footsteps: the stream anim object's posed FOOT bone (palette slot 55 = foot 4 /
+    /// 51 = foot 8, stride 0x40 [M Effect_Player 0x1cec48:89-110]) in world space at `frame` —
+    /// the same pose `anim_obj_matrix` builds, read at the slot instead of the root.
+    fn anim_foot_matrix(&self, skin: u32, script: u32, frame: f32, slot: usize) -> Option<nf_formats::anim::Mat4> {
+        let sk = self.skins.get(&skin)?;
+        let skel = self.skeletons.get(&sk.skeleton)?;
+        let pose = crate::anim::script_pose_together(self.scripts, self.sequences, skel, sk, script, frame)?;
+        nf_formats::anim::world_pose(&pose, sk).get(slot).copied()
+    }
 }
 
 impl Data<'_> {
@@ -13911,6 +13930,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         match scripts.objects.list.get(o) {
             Some(Some(crate::nis::Obj::Entity { matrix, .. })) => Some([matrix[3][0], matrix[3][1], matrix[3][2]]),
             Some(Some(crate::nis::Obj::Anim { skin, script, frame, .. })) => crate::nis::World::discrete0(d, *skin, *script, *frame).map(|m| [m[3][0], m[3][1], m[3][2]]),
+            _ => None,
+        }
+    }
+
+    /// fx-npc-footsteps: a stream anim object's world position (the `Script_Interp` case-2 ray's
+    /// origin — obj+0xc0, the object matrix's translation row) plus the skin / anim script / frame
+    /// the foot-bone pose reads from (`Obj::Anim`'s fields; the case-2 block set `matrix` from the
+    /// same frame this tick).
+    pub fn script_anim_obj(scripts: &crate::nis::Scripts, o: usize) -> Option<([f32; 3], u32, u32, f32)> {
+        match scripts.objects.list.get(o) {
+            Some(Some(crate::nis::Obj::Anim { skin, script, frame, matrix, .. })) =>
+                Some(([matrix[3][0], matrix[3][1], matrix[3][2]], *skin, *script, *frame)),
             _ => None,
         }
     }
@@ -16761,6 +16792,60 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             if let Some(t) = d.sfx { let e = t.get(id); if !e.looped { self.sounds.push(Sound { id: e.id, pos, inner: e.inner, outer: e.outer, weight: e.weight }); } }
                         }
                         None => { self.audio.play(id); }
+                    }
+                }
+                // fx-npc-footsteps: `Script_Interp` case 2's trailing footstep [M 0x1d9a08
+                // 0x1d9f64-0x1da020]. The stream's synchronous `AnimObjectUpdate` raised
+                // `hitdata+0x60 & 4` from the op-4 footstep markers (the drain-order stand-in for
+                // the game's command-time raise, as the drone path above); the inner consumption
+                // stayed behind `ScriptCam != 0` [M 0x1befd8:191-195], so this block consumes.
+                // First the marker kinds mutate the one global `ScriptFootstepFoot` 0x30cde0 in
+                // command order [M 0x1c1b38:372-401], then the consumption reads it [M 0x1da000-
+                // 0x1da014: foot 4, 8 when set, `| 0x42`]: a fresh 4-unit downward ray from the
+                // object's position [M 0x1d9f7c-0x1d9fd0: `Vec_Copy2(obj+0xc0, A, B); B.y -= 4.0;
+                // cel = build_FindCel(A); Collide_RayIntersect(A, B, cel, obj, 0, &hits, 0, 0xf0d)`]
+                // and `Effect_Create(rayhit, obj, foot|0x42, 1.0)` [M 0x1da01c] — the FULL
+                // Effect_Player arm (the surface's footstep sound at the ray hit + the footprint
+                // decal at the foot bone, y = hit y + 0.05, the |foot_y − hit_y| ≤ 0.2 gate
+                // [M 0x1cec48:59-136]), and `Effect_Create`'s material early-out [M 0x1ce688:59].
+                // NO ScriptCam gate — the trailing block never reads it [M 0x1d9f30-0x1da028: the
+                // only globals are `ScriptFootstepFoot` and `glb_world`]. [S] stand-ins: the port
+                // keeps no per-stream stored hitdata, so the game's second gate `rayhit.y −
+                // hitdata+0xcc ≤ 0.2` [M 0x1d9fdc-0x1d9ffc] (the fresh hit against the object's
+                // stored standing ground — it rejects props above it) is subsumed by the short
+                // ray + the material gate; `Sound_SetAlertness(0, …)` [M 0x1cec48:59-70] — the
+                // step is not heard by the drones — is the port's plain play3d (the hearing list
+                // is only fed from `anim_sounds`/weapons, not footsteps).
+                crate::nis::Request::NisFootstep { at, ops } => {
+                    for op in ops {
+                        match op {
+                            0 => self.script_footstep_foot = !self.script_footstep_foot,
+                            4 => self.script_footstep_foot = false,
+                            _ => self.script_footstep_foot = true,
+                        }
+                    }
+                    let Some(o) = at else { continue };
+                    let Some((pos, skin, script, frame)) = Self::script_anim_obj(&self.scripts, o) else { continue };
+                    if let (Some(s), Some((t, n, m, _pass, host))) = (d.surfaces, d.world.segment_surface_host([pos[0], pos[1], pos[2]], [pos[0], pos[1] - 4.0, pos[2]], true)) {
+                        // [M Effect_Create 0x1ce688:59 — `(hitdata+0x50 & 0x3f) != 0` or nothing at all.]
+                        if m & 0x3f != 0 {
+                            let hy = pos[1] - 4.0 * t; // the ray's hit y [M 0x1d9fdc reads the hitdata's +0xc]
+                            if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.footstep, m) {
+                                self.audio.play3d(id, [pos[0], hy, pos[2]], None);
+                            }
+                            if let Some(rec) = s.effects.get((m & 0x3f) as usize) {
+                                let foot8 = self.script_footstep_foot;
+                                let mesh = if foot8 { rec.foot_decal_8 } else { rec.foot_decal_4 };
+                                if mesh != 0 {
+                                    let bone = if foot8 { 51usize } else { 55usize };
+                                    if let Some(bm) = crate::nis::World::anim_foot_matrix(d, skin, script, frame, bone) {
+                                        if (bm[3][1] - hy).abs() <= 0.2 { // [M Effect_Player 0x1cec48:114-116]
+                                            self.effects.add_decal([bm[3][0], hy + 0.05, bm[3][2]], n, mesh, host); // [M :118-136]
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 // `SFXPreCache(id, frames)` (RPC cmd 0x26 [M 0x117118]) from the case-1 precache:
