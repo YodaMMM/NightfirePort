@@ -33,3 +33,16 @@ lane cap), then run walkreal 01, walkreal 03 and smg_close_range_live whole and 
 Progress 2026-11-05 10:47 UTC: branch cut from origin/s/audit-voice-triggers-2 (its report read:
 Mayhew + the 1 u smg control green; the mechanism and next steps for the three reds pinned there),
 pushed.
+
+Progress 2026-11-05 11:42 UTC (audit-voice-triggers-3): master merged (one conflict in drone.rs:
+the footstep_ops rename takes master's side, our play_script_talk_gate field and the three bark
+tests kept alongside master's new deaf-window test). walkreal_07000001 GREEN 8/8 (the d1 walks
+take the Agent hall fight: the meet-room pre-clear, the door lure, the 3.2 band-edge hold, the
+doorway step now south-of-aperture-only, the route pre-clear + pickup line, the pre-stairwell 6.5;
+the personal space 6.5 on every difficulty — the 4.0 stood inside the guards' closing range).
+walkreal_07000003 walk_the_full_route GREEN (353.56 s): the east-lane return legs re-arm lenient
+per leg and wedged anchors take the moat sidestep ladder. smg_close_range_live still red (the 2 u
+leg): the gated legs hold the mid-hall spot, fire only on a clear line, aim at the exposed box —
+the escort still kills every candidate mid-leg (d#5/d#6/d#11 12->0 ally, 0 player impacts); the 1 u
+control stays green byte-exact. Next: the report, the 03 binary whole if the window allows, the
+full suite honestly reported.
