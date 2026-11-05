@@ -4,3 +4,8 @@ Read every commit since 2026-10-20 touching crates/nf-game/src/drone.rs that cha
 
 ---
 claimed-by: sandbox5 at 2026-11-05T16:39Z
+
+---
+## Report (done, 2026-11-05T17:59Z)
+
+Closed by the driver: the report is on `s/regression-read-drone-ai` (docs/reports/regression-read-drone-ai.md); the worker didn't run finish.sh.
