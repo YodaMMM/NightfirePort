@@ -50,7 +50,11 @@ fn iso() -> Option<String> {
 // Re-pinned for standins-scene-930: an online bot's armour pickup now runs Pickup_Handler's class-2 case 3
 // (BOT_vars+0xA4 / the armour byte += amount, capped 50 [M 0x18e650:119-133]) instead of the old +20 health,
 // so the fights run differently — kills 37; the two machines' per-tick hashes still agree.
-const PINNED_DIGEST: u64 = 0x89cb_fcb6_ae45_c2ac;
+/// The 2-humans + 14-bots fixed run's hash fold. The golden moved with mp-bot-voices: the bots'
+/// pain/death barks are real shared-stream draws now (`BOT_soundEffect` 0x126618's arms — the
+/// one `Rand_Rand(n)` per bark [M 0x1266b4]), so the simulated result legitimately differs from
+/// the pre-bark 0x89cb_fcb6_ae45_c2ac; the pin's job (catching an UNintended change) is intact.
+const PINNED_DIGEST: u64 = 0x6483_2b31_d595_bd3b;
 
 const TICKS: u32 = 3600;
 
