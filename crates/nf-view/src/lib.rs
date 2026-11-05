@@ -4392,8 +4392,9 @@ impl App {
                 _ => false,
             };
             if ended {
-                // The 0x50 finish arm restarts the pair while it is down [M 0x20a1f0:34-39].
-                fe.music.movie_finished();
+                // The 0x50 finish arm restarts the pair while it is down [M 0x20a1f0:34-39] — once,
+                // inside this call: a second start behind the remove meets the dying item's voices,
+                // is refused, and the pair goes silent.
                 fe.attract_movie_finished();
             }
         } else if fe.page == menu::Page::WinGame && fe.win_movie {
