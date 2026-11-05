@@ -1,3 +1,6 @@
 # level-0b-walk-after-scrape-draw — land s/fx-scrape-and-impacts
 
 s/fx-scrape-and-impacts adds the game's own draws (the laser env puff jitter, the wall-puff roll). They are right, but the shifted random stream kills Bond at the end of walkreal_0700000b_live's real_damage_agent and real_damage_00agent at (2.22,58.08,36.54), under fire from drone #4 at 4.5 units. Rebase the branch on master and make those walks survive the way a player would: fight or take cover at that spot rather than standing in the fire. Do not remove or reorder a draw. Impact tests must count bullet holes only, since guards' footprints share the decal pool. Run walkreal_0700000b_live, impacts_live, qclaw_live and impact_remainder_live and report them.
+
+---
+claimed-by: sandbox4 at 2026-11-05T07:06Z
