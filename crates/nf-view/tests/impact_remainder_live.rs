@@ -74,20 +74,26 @@ fn a_wall_shot_draws_the_games_count_and_a_sky_shot_draws_nothing() {
         sim.bond.pitch = (-0.05f32).asin();
         sim.bond.eye = 0.0;
         let draws = |s: &mut nf_game::drone::Rng| s.draws;
+        // BULLET HOLES ONLY (the wait + the sky sister): the guards' footprints share the same
+        // 200-node decal pool — `Effect_Player` 0x1cec48 takes 0x3496e0 nodes with the
+        // EffectInfo+8/+0xc boot-print meshes [M 0x1cec48:84-107], not the +4 column the bullet
+        // holes use (`Effect_Bullet` 0x1ce9c8) — so the wait keys on a +4-mesh decal, and a
+        // footprint cannot end it before the bullet lands.
+        let hole_meshes: Vec<u32> = sim.data().surfaces.iter().flat_map(|s| s.effects.iter())
+            .map(|r| r.decal).filter(|m| *m != 0).collect();
+        let count_holes = |ds: &[nf_game::effect::Decal]| ds.iter().filter(|d| hole_meshes.contains(&d.mesh)).count();
         // The shot: fire one tick, fly to the wall, then one more tick (the impact emitter's
         // first update) — count the shared-stream draws across the whole window.
         let d0 = draws(&mut sim.drones.rng);
         sim.step_bond(Input { fire: true, ..Input::default() }, true, false, false);
-        let mut decals0 = sim.drones.effects.decals.len();
+        let holes0 = count_holes(&sim.drones.effects.decals);
         let mut debris0 = sim.drones.effects.debris.len();
         let mut ticks = 0;
         while ticks < 90 {
             sim.step_bond(Input::default(), false, false, false);
             ticks += 1;
-            if sim.drones.effects.decals.len() > decals0 || sim.drones.effects.debris.len() > debris0 { break; }
+            if count_holes(&sim.drones.effects.decals) > holes0 || sim.drones.effects.debris.len() > debris0 { break; }
         }
-        decals0 = sim.drones.effects.decals.len();
-        debris0 = sim.drones.effects.debris.len();
         let n_debris = sim.drones.effects.debris.len() - debris0.min(sim.drones.effects.debris.len());
         let n_debris = sim.drones.effects.debris.len();
         let _ = n_debris;
@@ -122,7 +128,9 @@ fn a_wall_shot_draws_the_games_count_and_a_sky_shot_draws_nothing() {
                 sim.step_bond(Input { fire: true, ..Input::default() }, true, false, false);
                 for _ in 0..(ticks + 2) { sim.step_bond(Input::default(), false, false, false); }
                 assert!(sim.drones.fx.emitters.iter().all(|e| e.placement != usize::MAX), "a sky shot spawns no impact emitter");
-                assert!(sim.drones.effects.debris.is_empty() && sim.drones.effects.decals.is_empty(), "a sky shot spawns nothing");
+                assert!(sim.drones.effects.debris.is_empty()
+                    && sim.drones.effects.decals.iter().all(|d| !hole_meshes.contains(&d.mesh)),
+                    "a sky shot spawns no bullet-hole decal and no debris (a guard footprint in the shared pool is not a hole)");
                 (sim.drones.rng.draws - d0,)
             }
         };
