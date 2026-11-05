@@ -20337,43 +20337,48 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // — the game uses the STORED hitdata at obj+0xdc its collision handler keeps, which
             // the port does not cache per drone; the decal's x/z bone matrix is the port's
             // `palette()` (the upper-body-aim deviation does not reach the feet).
+            // The markers' global mutations apply in command order, then ONE consumption — the
+            // game's `hitdata+0x60 & 4` is a per-frame FLAG (`AnimObjectUpdate` clears it at
+            // :157, the markers raise it, and the consumption block :191-208 fires at most ONE
+            // `Effect_Create` per object per frame), so two markers in one window are one step.
+            let stepped = !dr.footstep_ops.is_empty();
             for op in std::mem::take(&mut dr.footstep_ops) {
                 match op {
                     0 => self.script_footstep_foot = !self.script_footstep_foot,
                     4 => self.script_footstep_foot = false,
                     _ => self.script_footstep_foot = true,
                 }
-                // [M 0x1befd8:191-195] — under a script camera: no sound, no decal.
-                if self.scripts.camera().is_some() { continue; }
+            }
+            if stepped && self.scripts.camera().is_none() {
+                // [M 0x1befd8:191-195] — under a script camera (Some above): no sound, no decal.
                 let feet = dr.feet();
-                let Some((t, n, m, _pass, host)) = d.world.segment_surface_host([feet[0], feet[1] + 0.5, feet[2]], [feet[0], feet[1] - 1.0, feet[2]], true) else { continue };
-                // [M Effect_Create 0x1ce688:59 — `(hitdata+0x50 & 0x3f) != 0` or nothing at all.]
-                let Some(s) = d.surfaces else { continue };
-                if m & 0x3f == 0 { continue; }
-                // The sound arm (0x40): the surface's footstep id at the ground hit [M 0x1cec48:59-70];
-                // the position is the ray's [S] (above).
-                if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.footstep, m) {
-                    self.audio.play3d(id, [feet[0], feet[1] + 0.5 - 1.5 * t, feet[2]], None);
-                }
-                // The decal arm (0x2): `Effect_Player`'s footprint [M 0x1cec48:84-136].
-                if let Some(rec) = s.effects.get((m & 0x3f) as usize) {
-                    let foot8 = self.script_footstep_foot;
-                    let mesh = if foot8 { rec.foot_decal_8 } else { rec.foot_decal_4 };
-                    if mesh != 0 {
-                        // The foot bone's world translation: palette slot 55 (foot 4, +0xdc0) /
-                        // slot 51 (foot 8, +0xcc0) [M 0x1cec48:89-96]. One palette per footstep event.
-                        let bone = if foot8 { 51usize } else { 55usize };
-                        if let Some(bm) = dr.palette(d).and_then(|p| p.get(bone).copied()) {
-                            let gy = feet[1] + 0.5 - 1.5 * t;
-                            // [M 0x1cec48:114-116] — the foot must be at the ground (|Δy| ≤ 0.2),
-                            // else the game's node stays blank (no print).
-                            if (bm[3][1] - gy).abs() <= 0.2 {
-                                // [M :118-124] — y = the hit's y + 0.05; the shared decal path
-                                // (the player's prints ride it too; its align2dir [S] stands in
-                                // for `Mat_Align2Up`).
-                                self.effects.add_decal([bm[3][0], gy + 0.05, bm[3][2]], n, mesh, host);
+                if let (Some(s), Some((t, n, m, _pass, host))) = (d.surfaces, d.world.segment_surface_host([feet[0], feet[1] + 0.5, feet[2]], [feet[0], feet[1] - 1.0, feet[2]], true)) {
+                    // [M Effect_Create 0x1ce688:59 — `(hitdata+0x50 & 0x3f) != 0` or nothing at all.]
+                    if m & 0x3f != 0 {
+                    // The sound arm (0x40): the surface's footstep id at the ground hit [M 0x1cec48:59-70];
+                    // the position is the ray's [S] (the game plays at the stored hitdata+0x40).
+                    if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.footstep, m) {
+                        self.audio.play3d(id, [feet[0], feet[1] + 0.5 - 1.5 * t, feet[2]], None);
+                    }
+                    // The decal arm (0x2): `Effect_Player`'s footprint [M 0x1cec48:84-136]: gfx
+                    // `EffectInfo[mat]+8` on foot 4 / `+0xc` on foot 8, x/z the foot bone's world
+                    // translation (palette slot 55 / 51 [M :89-96]), y = the ground hit's y + 0.05
+                    // [M :118-124] behind the |foot_y − hit_y| ≤ 0.2 gate [M :114-116], aligned to
+                    // the surface up and cel-hosted [M :125-136] (the shared decal path; its
+                    // align2dir [S] stands in for `Mat_Align2Up`).
+                    if let Some(rec) = s.effects.get((m & 0x3f) as usize) {
+                        let foot8 = self.script_footstep_foot;
+                        let mesh = if foot8 { rec.foot_decal_8 } else { rec.foot_decal_4 };
+                        if mesh != 0 {
+                            let bone = if foot8 { 51usize } else { 55usize };
+                            if let Some(bm) = dr.palette(d).and_then(|p| p.get(bone).copied()) {
+                                let gy = feet[1] + 0.5 - 1.5 * t;
+                                if (bm[3][1] - gy).abs() <= 0.2 {
+                                    self.effects.add_decal([bm[3][0], gy + 0.05, bm[3][2]], n, mesh, host);
+                                }
                             }
                         }
+                    }
                     }
                 }
             }
