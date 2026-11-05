@@ -1029,7 +1029,14 @@ pub struct Drone {
     pub alarm_patrol: u8,
     /// `Drone+0xA70`: the assigned AI point (`AssignAIPath` 0x154190 / `FindAlarmPoint` 0x153008's
     /// reuse arm) — the port keeps the point's (yaw, position).
-    pub alarm_point: Option<(f32, V3)>,
+    pub alarm_point: Option<(f32, V3, f32)>,
+    /// `Drone+0x8EC` via route+0x8C: the goal arrival radius. Seeded 2.0 by `DefaultInit`
+    /// [M 0x14b300:579 — both +0x8EC and +0x8F0 = 0x40000000], rewritten by
+    /// `SetupRouteToPosition` from each goal's radius argument (0 -> 2.0) [M 0x158b10] and NOT
+    /// touched by the combat route build [M 0x158948]; `MoveToGoalPosition` arrives when the
+    /// route distance drops under it [M 0x1517d8:49-52]. Form 1 (this task): every position-goal
+    /// setter carries its game radius here; `move_to_goal` arrives under it.
+    pub goal_arrival: f32,
     /// The level's AI points, stamped by `attach_level` (`Drone_AIPoint` 0x137550): (kind = param 0,
     /// position = the placement translation, yaw = the placement rotation y). Kind 8 = the alarm
     /// panels [D: 12 on 07000009 map39, 9 on 0700000a map37, 0 elsewhere].
@@ -2030,6 +2037,7 @@ impl Drone {
             dist: 0.0, yaw_to_opp: 0.0,
             state: state::GLOBAL, prev_state: 0, next_state: None, entered: 0, timer_c: None, timer_d: None,
             alarm_yaw: 0.0, alarm_run: false, timer_c_payload: 0, alarm_patrol: param(23) as u8, alarm_point: None,
+            goal_arrival: 2.0, // the DefaultInit seed [M 0x14b300:579]
             ai_points: Vec::new(), alarm_switches: Vec::new(),
             explosive_pos: pos, explosive_run_dist: 0.0,
             anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), blend_out: false, started: false, early_end: false, len_cap: None },
@@ -5499,6 +5507,10 @@ impl Drone {
         self.cover = Some(i);
         self.croute = None;
         self.goal = Some(goal);
+        // `NDrone2_FindCover` 0x152548:174-181 — SetupGoalPosition(0.5, …) for cover-node kind 0
+        // (corner) / 1 (low), else 1.0; the chosen node is `pcVar7` walking the 0xb0-stride node
+        // array, its first byte the kind.
+        self.goal_arrival = if n.kind <= 1 { 0.5 } else { 1.0 };
         self.cover_rt[i].owner = Some(self.index);
         self.cover_side = side;
         self.cover_point = n.position(bits, false).map_or(goal, |p| p.0);
@@ -5527,6 +5539,8 @@ impl Drone {
         self.cover = Some(i);
         self.croute = None;
         self.goal = Some(goal);
+        // `NDrone2_FindAmbushCover` 0x152958:207-208 — SetupGoalPosition(0.5, …) always.
+        self.goal_arrival = 0.5;
         self.cover_rt[i].owner = Some(self.index);
         self.cover_side = side;
         self.cover_point = n.position(bits, false).map_or(goal, |p| p.0);
@@ -5600,6 +5614,7 @@ impl Drone {
         if len < 0.001 { return false; }
         let goal = [scary[0] + dx / len * dist, scary[1] + 0.5, scary[2] + dz / len * dist];
         self.goal = Some(goal);
+        self.goal_arrival = 1.0; // SetupGoalPosition(1.0, …) [M 0x152250:126-127, 163-164]
         self.croute = None; // ResetRoute + InvalidateRoute [M 0x152250:128-129]
         self.move_to_goal(d); // build the route now (the deadline bounds a dead route)
         true
@@ -5686,9 +5701,11 @@ impl Drone {
     /// code band 0..3 on the fresh path and always 1 on the reuse path [M-dis jump tables 0x2f6390 /
     /// 0x2f63d0]; the port keeps the boolean the callers use.
     fn find_alarm_point(&mut self, d: &Data) -> bool {
-        if let Some((yaw, pos)) = self.alarm_point {
+        if let Some((yaw, pos, acc)) = self.alarm_point {
             self.alarm_yaw = yaw;
             self.goal = Some(pos);
+            // the reuse arm re-runs SetupGoalPosition with the SAME point accuracy [M 0x153008:45-48]
+            self.goal_arrival = acc;
             self.move_to_goal(d);
             return true;
         }
@@ -5702,10 +5719,12 @@ impl Drone {
         let path = self.nav_path.flatten();
         let Some(pi) = crate::aipoint::closest(d.ai_points, d.nav, d.world, path, self.pos, 8, owner) else { return false };
         self.goal = Some(d.ai_points[pi].pos);
+        // SetupGoalPosition(point+0x14, …) — the AIPoint's own accuracy [M 0x153008:20-23].
+        self.goal_arrival = d.ai_points[pi].accuracy;
         // The game's fresh path returns the `MoveToGoalPosition` code band 0..3 [M-dis 0x2f63d0].
         if !matches!(self.move_to_goal(d), 0..=3) { return false; }
         self.alarm_yaw = f32::from_bits(d.ai_points[pi].yaw_bits); // `Drone+0x734` [M 0x153008:24; M-dis 0x1530c8-30]
-        self.alarm_point = Some((self.alarm_yaw, d.ai_points[pi].pos));
+        self.alarm_point = Some((self.alarm_yaw, d.ai_points[pi].pos, d.ai_points[pi].accuracy));
         true
     }
 
@@ -5731,6 +5750,8 @@ impl Drone {
             .or_else(|| if group == 2 { crate::aipoint::closest(d.ai_points, d.nav, d.world, path, self.pos, 1, owner) } else { None });
         let Some(pi) = hit else { return false };
         self.goal = Some(d.ai_points[pi].pos);
+        // SetupGoalPosition(point+0x14, …) — the AIPoint's own accuracy [M 0x153168:39-43].
+        self.goal_arrival = d.ai_points[pi].accuracy;
         // `AINetwork_InvalidateRoute(drone+0x860)` before SetupGoalPosition/MoveToGoalPosition —
         // every ask rebuilds the route even when a stale valid one exists [M 0x153168:41, 76].
         self.croute = None;
@@ -5801,6 +5822,7 @@ impl Drone {
         let Some((k, _)) = anchor else {
             self.croute = None; // ResetRoute + InvalidateRoute(+0x860) [M :166-167]
             self.goal = Some(self.player_pos); // SetupGoalPosition(2.0, the player) [M :168-169]
+            self.goal_arrival = 2.0;
             return false;
         };
         {
@@ -5811,7 +5833,10 @@ impl Drone {
         }
         self.croute = None; // InvalidateRoute(+0x860) [M :139-140, 203-204]
         let np = node_pos(self.route.as_ref().unwrap(), k);
-        self.goal = Some(np); // SetupGoalPosition(2.0 / 1.0, the node) [M :141-142, 205-206]
+        self.goal = Some(np);
+        // SetupGoalPosition(1.0, the node) on the fresh path [M 0x153a30:141-142]; the fallback
+        // route builds at :168/:205 carry 2.0 — the port's retry arms below set it.
+        self.goal_arrival = 1.0;
         let code = self.move_to_goal(d); // [M :143-144, 207-208]
         if best_reach.is_some() { return true; }
         if matches!(code, 0..=3) {
@@ -5820,6 +5845,7 @@ impl Drone {
         }
         self.croute = None;
         self.goal = Some(self.player_pos); // the waypoint route failed → the player [M :160-169]
+        self.goal_arrival = 2.0; // [M :168-169]
         false
     }
 
@@ -5859,7 +5885,9 @@ impl Drone {
         let (code, reached) = {
             let route = self.croute.as_mut().unwrap();
             route.remaining = route.distance(d.nav, feet);
-            if route.remaining < 2.0 { return 3; }
+            // `MoveToGoalPosition` 0x1517d8:49-52 — the arrival is route+0x8C = Drone+0x8EC, the
+            // goal's own radius (form 1), not a global 2.0.
+            if route.remaining < self.goal_arrival { return 3; }
             let ppos = self.player_pos;
             let r = route.follow(d.nav, feet, &|p| Drone::ppos_near(ppos, p));
             // `LinkCreep_Handler` (0x15a2c8) runs `ReachedDestNode` for EVERY followed route — the
@@ -5883,11 +5911,13 @@ impl Drone {
     /// wall, if a route there exists and the drone is not already within 2.0 of it.
     fn set_goal_to_closer_position(&mut self, d: &Data) -> bool {
         let Some(p) = d.nav.first_wall_hit(self.pos, self.target.pos) else { return false };
-        let (old_goal, old_route) = (self.goal, self.croute.take());
+        let (old_goal, old_route, old_arrival) = (self.goal, self.croute.take(), self.goal_arrival);
         self.goal = Some(p);
+        self.goal_arrival = 3.0; // MoveToGoalPosition(3.0, …) [M 0x155e10:30]
         if self.move_to_goal(d) < 3 { return true; }
         self.goal = old_goal;
         self.croute = old_route;
+        self.goal_arrival = old_arrival;
         false
     }
 
@@ -5896,11 +5926,13 @@ impl Drone {
     fn set_goal_to_drone_with_los(&mut self, d: &Data, rng: &mut Rng) -> bool {
         for (i, pos, sees) in self.peers.clone() {
             if i == self.index || !sees || rng.rand(4) != 0 { continue; }
-            let (old_goal, old_route) = (self.goal, self.croute.take());
+            let (old_goal, old_route, old_arrival) = (self.goal, self.croute.take(), self.goal_arrival);
             self.goal = Some(pos);
+            self.goal_arrival = 3.0; // MoveToGoalPosition(3.0, …) [M 0x1543f8:100-101]
             if matches!(self.move_to_goal(d), 0 | 2) { return true; }
             self.goal = old_goal;
             self.croute = old_route;
+            self.goal_arrival = old_arrival;
         }
         false
     }
@@ -7785,6 +7817,7 @@ impl Drone {
                 if self.stays(d) { self.call_anim_variant(d, anim_state::ALERT_LOOK, 1, back, 0); return true; }
                 // `NDrone2_SetSoundAlertRoute` (0x154aa8): the goal becomes the sound (radius 2.0).
                 self.goal = Some(self.sound_pos);
+                self.goal_arrival = 2.0; // [M 0x154aa8:11-13]
                 self.croute = None;
                 if self.turned && self.prop(d, 0x21) { self.set_state(ALERT_TO_POSITION); return true; }
                 let to = atan2_approx(self.sound_pos[0] - self.pos[0], self.sound_pos[2] - self.pos[2]);
@@ -8603,6 +8636,7 @@ impl Drone {
                     self.target.pos
                 };
                 self.goal = Some(goal);
+                self.goal_arrival = 10.0; // the interrogate assist's radius [M 0x15add0 + callers]
                 if matches!(self.move_to_goal(d), 0..=3) {
                     self.return_state = INTEROGATE_ASSIST_WAIT;
                     self.set_state(GO_TO_GOAL);
@@ -22080,6 +22114,7 @@ mod tests {
             seen_ticks: 0, unseen_ticks: 0, vision_on: false, dist: 0.0, yaw_to_opp: 0.0,
             state: 0, prev_state: 0, next_state: None, entered: 0, timer_c: None, timer_d: None,
             alarm_yaw: 0.0, alarm_run: false, timer_c_payload: 0, alarm_patrol: 0, alarm_point: None,
+            goal_arrival: 2.0, // the DefaultInit seed [M 0x14b300:579]
             ai_points: Vec::new(), alarm_switches: Vec::new(),
             explosive_pos: pos, explosive_run_dist: 0.0,
             anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), blend_out: false, started: false, early_end: false, len_cap: None },
