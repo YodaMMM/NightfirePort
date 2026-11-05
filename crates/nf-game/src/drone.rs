@@ -13727,15 +13727,11 @@ impl Drones {
                 t.script_player_b = self.scripts.players.len();
                 self.scripts.players.push(mount(t.script_b));
                 self.gt_turrets.push(t);
-                // fx-gas-and-blasts row 10 [M GT_Create 0x17ffa0:150-166]: the same-owner chain —
-                // every earlier turret with this owner dies with the 5/5/50 0x6000052 blast at
-                // its own +0x30. The game runs this INSIDE GT_Create, so the level placement
-                // walk fires it per placement too.
-                let new_idx = self.gt_turrets.len() - 1;
-                let blown = crate::gt::GTurret::create_chain(&mut self.gt_turrets, new_idx);
-                for pos in blown {
-                    self.pending_blasts.push((pos, 5.0, 50.0, usize::MAX - 1, 0, 0x0600_0052, 5.0, 0));
-                }
+                // fx-gas-and-blasts note [M GT_Create 0x17ffa0:80-90 + parsemap_create_dynamic_objects
+                // 0x1d04f0 case 0x27]: the PLACEMENT path calls GT_Create with param_6 = 0, so the
+                // turret's own ext+0xb8 is ITSELF — the same-owner chain can never fire between
+                // placements. Only the deploy path carries a real parent owner (the deployer), so
+                // the chain lives there alone.
             }
         }
         // The space laser: kind 0x38 — the same walk's case 0x38 [M 0x1d04f0:227].
