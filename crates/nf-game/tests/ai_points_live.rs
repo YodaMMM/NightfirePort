@@ -156,8 +156,9 @@ fn scared_guest_runs_to_the_closest_aipoint() {
     let g = &mut sim.list[guest];
     // The impact-set scared-run mode (the game sets +0xC6 = 7 on 09/0A [M-gated]; the marker the
     // 0x15d3a0 arm reads). Set directly — 07000007's impacts never set it [M gate].
-    g.scared_run = true;
-    g.send(&d, &mut sim.rng, 0, nf_game::drone::msg::SCREAM);
+    g.alt_mode = 7;
+    g.state = CIVILIAN_SCARED;
+    g.send(&d, &mut sim.rng, 0, nf_game::drone::msg::ENTER);
     assert_eq!(g.state, nf_game::drone::state::HOSTAGE_GO_TO_GOAL, "the mode-7 scared guest runs to the AI point [M 0x15d3a0:40-47]");
     let goal = g.goal.expect("the goal is the chosen point");
     // The chosen point is the registry's answer for this guest (group 2, its nav path).
@@ -186,7 +187,8 @@ fn scared_guest_without_the_mode_hides_at_once() {
     use nf_game::drone::state::*;
     sim.list[guest].state = CIVILIAN;
     let g = &mut sim.list[guest];
-    g.send(&d, &mut sim.rng, 0, nf_game::drone::msg::SCREAM);
+    g.state = CIVILIAN_SCARED;
+    g.send(&d, &mut sim.rng, 0, nf_game::drone::msg::ENTER);
     assert_eq!(g.state, nf_game::drone::state::CIVILIAN_HIDING, "no scared-run mode → straight to hiding [M 0x15d3a0:53-55]");
 }
 

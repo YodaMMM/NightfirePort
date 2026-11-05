@@ -14,7 +14,7 @@
 #[path = "common/walker_b2.rs"]
 mod walker;
 
-use walker::{Act, Walker, Wp, dxz, leg};
+use walker::{Act, Walker, Wp, dxz, leg, wrap_pi};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
@@ -112,6 +112,20 @@ fn walk_tower_a_start_to_finish_at(difficulty: u32) {
     // graph (lenient: a wedged node is skipped and the next re-aims — furniture body-blocks direct
     // steers in some runs). Every node lands in a patrol-beat clear (live guards).
     assert!(cycle_to_lethal(&mut w), "the P2K (0x2, 7+41) is in Bond's 09 owned set — the K5 darts the load opens on damage nothing [M 0x13fff0:269-306]");
+    // The stealth legs run on the darts: the P2K's shots noise-pull the civilian guards into
+    // the alarm run (the 2026-11-05 trace — the g4 execute's gunfire sent the never-latched
+    // patrolling g3 to his switch in 0x63), while the K5 dart sleeps silently [M 0x13fff0:
+    // 269-306 → msg 0x19]. The wheel is cycled back; the takedowns keep it there.
+    assert!(cycle_to_darts(&mut w), "the K5 darts (0x43, clip 5 + spare 10 [L the load dump]) cycle back for the silent takedowns");
+    // Climb and pre-open the stairwell's lobby door (18.8, −368.4, 39.0 [D]) FIRST: the nav
+    // graph's only stairwell→lobby connection runs through it, every racer's switch sits in the
+    // lobby west of it, and a chase that arrives at the CLOSED door pays ~375 ticks of opening
+    // animation mid-race (the 2026-11-05 runs 5-7 lost the g3 press race — latch+958 [L this
+    // trace] — by ~100-300 ticks on exactly that door). Doing it FIRST also moves the g4
+    // meeting INTO the stairwell: the beats handle him 2-4 u from Bond, and a later racer's
+    // chase starts at the TOP with the door already open (~480 ticks to the west switches vs
+    // the 958-tick fuse). The stair base below is walked afterwards.
+    walk_nav_clearing(&mut w, [18.8, -368.4, 39.0], "climb and pre-open the lobby door", 1.4);
     walk_nav_clearing(&mut w, [19.79, -376.68, 30.37], "the stair base", 1.4);
     walk_nav_clearing(&mut w, [-18.4, -368.8, 27.5], "up the stairs and across the lobby to the panel", 1.2);
     {
@@ -277,6 +291,7 @@ fn the_alarm_switch_fails_objective_1() {
         s.pos
     };
     assert!(cycle_to_lethal(&mut w), "the P2K (0x2, 7+41) is in Bond's 09 owned set — the K5 darts the load opens on damage nothing [M 0x13fff0:269-306]");
+    assert!(cycle_to_darts(&mut w), "the K5 darts cycle back — the stealth legs run silent (the P2K's shots noise-pull civilian guards into the alarm run [L the 2026-11-05 trace])");
     walk_nav_clearing(&mut w, [19.79, -376.68, 30.37], "the stair base", 1.4);
     walk_nav_clearing(&mut w, [-18.4, -368.8, 27.5], "up the stairs and across the lobby", 1.2);
     {
@@ -284,11 +299,20 @@ fn the_alarm_switch_fails_objective_1() {
         assert!(!sim.drones.channels.on(0x61) && !sim.drones.channels.on(0x7c) && !sim.drones.channels.on(0x7d),
             "the walk to the switch must not raise the alarm (obj 1) before the press");
     }
-    // The final leg walks the nav graph to the switch with NO clears: clear_live_guards chases
-    // ever_seen guards across floors (the first walked runs dragged Bond down to the car park
-    // mid-leg and the dxz-only arrival then "reached" the switch from 8 units below it), and the
-    // lobby leg above already left the beat cleared.
-    w.walk_nav_to(spot, "the alarm switch", 0.95);
+    // The final leg walks the nav graph to the switch WITH the racer watch at each node — the
+    // fixed takedown chases a racer anywhere (a racer not chased WILL press; the old
+    // cross-floor skip left exactly that hole), and the node beats keep the walk itself the
+    // only mover between them. The dy assert below pins the arrival (a dxz-only "arrive" from
+    // a floor below once passed here — the chase's floor discipline is what changed).
+    let pts = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        leg(sim, sim.bond.pos, spot)
+    };
+    for (k, p) in pts.iter().enumerate().skip(1) {
+        clear_live_guards(&mut w, &format!("the alarm switch pre {k}"));
+        let _ = w.try_walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("the alarm switch nav {k}"));
+        clear_live_guards(&mut w, &format!("the alarm switch nav {k}"));
+    }
     assert!(w.try_walk_to(Wp::new(spot[0], spot[1], spot[2]).r(0.95), "the alarm switch final approach"),
         "the walk must reach the ch-124 switch at {spot:?} — Walker movement only, no sim.bond.pos writes");
     {
@@ -348,6 +372,19 @@ fn live_state(st: u8) -> bool {
         | nf_game::kiko::RUN_TO_ALARM | nf_game::kiko::PRESS_ALARM)
 }
 
+/// A guard on the alarm race in the wider sense: the chain states, the sight ack (`ever_seen`,
+/// +0x228 & 8 [M 0x175ef0:82-86]), or RunToAlarm's flag (+0x16 [M 0x1736f8:19]). The flag is the
+/// tell the state alone hides: RunToAlarm's ENTER hands the walk to GoToGoalPosition (0x63) with
+/// the return state PressAlarm [M 0x1736f8:13-23] — and 0x63 is also the patrol's own nav state.
+/// The 2026-11-05 trace (this branch): the P2K execute's shots noise-pulled the patrolling g3
+/// (never latched: `seen false los false` on every traced tick) into an 890-tick 0x63 run to his
+/// switch with `alarm_run` the only distinguishing field; the beat clears that only read
+/// live_state ignored him until he ENTERED PressAlarm (0x8a) 31.8 u away — 210 ticks before his
+/// press — and the capped takedown shot from 31.7 u for 1500 ticks while the fuse ran out.
+fn racer(d: &nf_game::drone::Drone) -> bool {
+    d.ever_seen || d.alarm_run || live_state(d.state)
+}
+
 /// Cycle the weapon wheel until a lethal gun is in hand — anything armed outside the
 /// zero-damage ids (the 0x43/0x44 darts → msg 0x19 [M 0x13fff0:269-306], the 0x4a/0x4c taser →
 /// msg 7 [M 0x1469b8 case 7]). The same cycle interact_07000009_live's kill test runs.
@@ -381,100 +418,285 @@ fn asleep(st: u8) -> bool {
     matches!(st, nf_game::drone::state::STUN_DART_IMPACT | nf_game::drone::state::STUN_DART_LOOP | nf_game::drone::state::STUN_DART_RECOVER)
 }
 
-/// One guard's takedown, the level's own stealth shape: the K5 dart SLEEPS him (zero damage
-/// [M 0x13fff0:269-306 → msg 0x19; 0x1469b8:315-361 → 0x50]) and one P2K round executes the
-/// sleeper — a sleeping guard dies to ANY bullet regardless of health [M the dart-family
-/// DSTATEs' msg-8 arm 0x163430/0x163570/0x163700 case 8/9 → 0x44 Death_Anim]. The shots land
-/// POINT BLANK: approach to ~2.4u first whenever the guard is not mid-chain (the first run's
-/// execute at 10u over the stairwell missed a static sleeper 14+ times; the scratch's 2.5u
-/// kill was one tap). A live alarm-bound guard gets shot from where Bond stands (the chain is
-/// racing). Darts dry → direct fire. Returns dead.
-fn takedown(w: &mut Walker, di: usize, label: &str) -> bool {
-    let (st0, gp) = {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let d = &sim.drones.list[di];
-        (d.state, d.pos)
-    };
-    let live = live_state(st0);
-    if !live { approach(w, gp, 2.2, label); }
-    // The dart: the silent takedown. A sleeping guard runs NO chain (the 0x50-0x52 family's
-    // switch covers every message — blind, deaf, unalertable [M 0x163430/0x163570/0x163700]) —
-    // the beat is cleared without a corpse, without the gunshot that pulls the next guard into
-    // a race with the walk (the two executed runs both failed to a noise-pulled presser while
-    // Bond was busy). The wake timer (RecoverTime) outruns the walk: a woken guard resumes his
-    // patrol far behind Bond.
-    let darted = {
-        let sim = w.scene.sim.as_ref().unwrap();
-        matches!(sim.drones.bond_weapon, 0x43 | 0x44) && sim.gun.clip + sim.gun.spare > 0
-    } || cycle_to_darts(w);
-    if darted {
-        w.shoot_loose(di, &format!("{label} dart {di}"), 500);
-        let sim = w.scene.sim.as_ref().unwrap();
-        if sim.drones.list[di].corpse || asleep(sim.drones.list[di].state) { return true; }
-    }
-    // Darts dry (or the dart missed twice): the loud fallback — direct fire.
-    if cycle_to_lethal(w) {
-        let (c, s) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare) };
-        if c + s > 0 {
-            w.shoot_loose(di, &format!("{label} shoot {di}"), 1500);
-        }
-    }
+/// Another guard (≠ di) already racing — the emergency that outranks finishing the current
+/// quiet takedown: every tick volleyed into a doomed-or-sleeping guard is a tick off the
+/// racer's ~670–890-tick run fuse [L PCSX2; the 2026-11-05 trace].
+fn other_racer(w: &Walker, di: usize) -> Option<usize> {
     let sim = w.scene.sim.as_ref().unwrap();
-    let d = &sim.drones.list[di];
-    d.corpse || d.health <= 0.0 || asleep(d.state)
+    sim.drones.list.iter().enumerate()
+        .position(|(i, d)| i != di && d.present && !d.corpse && d.health > 0.0 && d.enabled
+            && !asleep(d.state) && racer(d))
 }
 
-fn st0_of(d: &nf_game::drone::Drone) -> u8 { d.state }
-
-/// Walk Bond to `stand_dist` from `gp` (a static guard's position) THROUGH THE NAV GRAPH —
-/// the stairwell guards stand mid-stair, and the direct XZ steer stalls at the stair base with
-/// the guard 4u up (the first run's dart then executed from BELOW, where the stair geometry
-/// itself eats the ray — the level-09-every-objective report's "geometry shadow", real for
-/// from-below lines; the scratch's kill was from the stairs beside him).
-fn approach(w: &mut Walker, gp: [f32; 3], stand_dist: f32, label: &str) {
-    let bp = w.scene.sim.as_ref().unwrap().bond.pos;
-    let dx = bp[0] - gp[0];
-    let dz = bp[2] - gp[2];
-    let l = (dx * dx + dz * dz).sqrt();
-    if l <= stand_dist { return; }
-    let stand = [gp[0] + dx / l * stand_dist, gp[1], gp[2] + dz / l * stand_dist];
-    if dxz(stand, bp) > 16.0 { return; } // too far to bother closing — shoot from here
-    let pts = {
+/// Steer Bond toward `target` by direct input, with one nav hop when the direct line stalls (a
+/// wedged steer — furniture, a wall corner — gets the NEXT nav node of the leg graph toward the
+/// target instead). The shared shape of the chase and the shadow. Returns false on the cap.
+fn steer_to(w: &mut Walker, target: [f32; 3], arrive: f32, cap: u32, label: &str) -> bool {
+    let start = w.total_ticks;
+    let mut stalled = 0u32;
+    let mut best = f32::MAX;
+    let mut dry_hops = 0u32;
+    loop {
+        if w.total_ticks - start > cap { return false; }
+        if w.stop_on_exit && w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { return false; }
+        let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+        let d = dxz(target, bp);
+        let flat = (target[1] - bp[1]).abs() < 1.5;
+        if d <= arrive && flat { return true; }
+        if d > best - 0.03 { stalled += 1; } else { stalled = 0; best = best.min(d); }
+        if stalled > 100 {
+            // wedged: one nav hop toward the target; two consecutive dry hops → the steer cannot
+            // make progress here (the target may sit behind furniture the graph does not serve)
+            let pts = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                leg(sim, bp, target)
+            };
+            if pts.len() > 1 {
+                let _ = w.try_walk_to(Wp::new(pts[1][0], pts[1][1], pts[1][2]).r(1.1), &format!("{label} hop"));
+                dry_hops = 0;
+            } else {
+                dry_hops += 1;
+                if dry_hops >= 2 { return false; }
+            }
+            stalled = 0;
+            best = f32::MAX;
+            continue;
+        }
         let sim = w.scene.sim.as_ref().unwrap();
-        leg(sim, bp, stand)
-    };
-    for (k, p) in pts.iter().enumerate().skip(1) {
-        let _ = w.try_walk_to(Wp::new(p[0], p[1], p[2]).r(1.1), &format!("{label} approach {k}"));
+        let desired = (target[0] - sim.bond.pos[0]).atan2(target[2] - sim.bond.pos[2]);
+        let err = wrap_pi(desired - sim.bond.yaw);
+        let input = nf_game::player::Input {
+            turn: err.clamp(-0.08, 0.08),
+            forward: if err.abs() > 1.3 { 0.0 } else { 1.0 },
+            ..Default::default()
+        };
+        w.tick(input, false);
     }
-    let _ = w.try_walk_to(Wp::new(stand[0], stand[1], stand[2]).r(0.9), &format!("{label} approach end"));
+}
+
+/// Close on a RACING guard (already acked — stealth is moot; his press fuse is running): pursue
+/// his LIVE position through the nav graph, replanning as he moves. A guard who reaches his
+/// switch stands there for the PressAlarm fuse — 180 + 30 ticks from the ENTER to the channel
+/// write [M 0x168ea8:30-31, 56-63] — stationary, inside dart range, exactly where the chase
+/// wants him. The nav walk (whole legs at the walker's own pace, a node re-checked and the plan
+/// re-issued whenever he drifts 2.5 u) is what the direct steer could not be: the 2026-11-05
+/// run chased g3 from 12.5 u and still lost the 670-tick race crawling at ~1.5 u/s into
+/// stairwell geometry between one-node hops. Returns true when he is dead/asleep or within
+/// `close` on his floor.
+fn chase_to(w: &mut Walker, di: usize, close: f32, cap: u32, label: &str) -> bool {
+    let start = w.total_ticks;
+    let mut last_goal = [f32::MAX; 3];
+    loop {
+        if w.total_ticks - start > cap {
+            eprintln!("[09] {label}: chase cap g{di}");
+            return false;
+        }
+        if w.stop_on_exit && w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { return false; }
+        let (st, dp, hp, corpse) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.list[di];
+            (d.state, d.pos, d.health, d.corpse)
+        };
+        if corpse || hp <= 0.0 { return true; }
+        if asleep(st) { return true; }
+        let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+        let same_floor = (dp[1] - bp[1]).abs() < 3.5;
+        if same_floor && dxz(dp, bp) <= close { return true; }
+        // The chase runs to his DESTINATION, not his heels: FindAlarmPoint's assigned switch
+        // (`alarm_point`, +0x738 pair [M 0x153008:26-30]) is STATIC — a straight nav plan beats
+        // following him through doorways (the 2026-11-05 run followed g3's live pos through the
+        // north lobby door and paid ~440 ticks of door animation for it). Arrive first, and the
+        // guard walks INTO dart range for his own 210-tick press.
+        let goal = w.scene.sim.as_ref().unwrap().drones.list[di].alarm_point.map(|p| p.1);
+        let goal = goal.unwrap_or(dp);
+        if dxz(goal, last_goal) <= 2.5 {
+            // he holds his line: the direct close on a (near-)stationary target
+            if steer_to(w, goal, close, 240, &format!("{label} chase g{di}")) { continue; }
+        } else {
+            last_goal = goal;
+            // the whole nav leg to his switch, node by node, re-checked each node
+            let pts = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                leg(sim, bp, goal)
+            };
+            for p in pts.iter().skip(1) {
+                if w.stop_on_exit && w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { return false; }
+                let (st, dp2, hp, corpse) = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let d = &sim.drones.list[di];
+                    (d.state, d.pos, d.health, d.corpse)
+                };
+                if corpse || hp <= 0.0 { return true; }
+                if asleep(st) { return true; }
+                let bp2 = w.scene.sim.as_ref().unwrap().bond.pos;
+                if (dp2[1] - bp2[1]).abs() < 3.5 && dxz(dp2, bp2) <= close { return true; }
+                let goal2 = w.scene.sim.as_ref().unwrap().drones.list[di].alarm_point.map(|p| p.1).unwrap_or(dp2);
+                if dxz(goal2, last_goal) > 2.5 { break; } // his switch changed — replan
+                let _ = w.try_walk_to(Wp::new(p[0], p[1], p[2]).r(1.1), &format!("{label} chase g{di} node"));
+            }
+        }
+        if w.total_ticks - start > cap { return false; }
+    }
+}
+
+/// Close on a NOT-yet-racing guard from BEHIND: the guards' sight is the 12 u + ±1.57 rad
+/// (half-fov) cone on their facing [D props; M 0x175ef0 family] — a 180° front hemisphere — so
+/// the back hemisphere never latches, and a guard who never latches never challenges, never
+/// runs, never presses. The shadow point trails his CURRENT yaw (a patroller's facing rotates
+/// along his route; the re-aim follows). Bail (false) the tick he latches — the caller's racer
+/// branch takes the chase — and when he is on another floor (the walk's next beat retries).
+fn shadow_to(w: &mut Walker, di: usize, stand: f32, cap: u32, label: &str) -> bool {
+    let start = w.total_ticks;
+    loop {
+        if w.total_ticks - start > cap {
+            eprintln!("[09] {label}: shadow cap g{di}");
+            return false;
+        }
+        let (st, dp, dyaw, hp, corpse, racing) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.list[di];
+            (d.state, d.pos, d.yaw, d.health, d.corpse, racer(d))
+        };
+        if corpse || hp <= 0.0 { return true; }
+        if asleep(st) { return true; }
+        if racing { return false; } // latched mid-shadow: the chase takes over
+        let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+        if (dp[1] - bp[1]).abs() >= 3.5 { return false; } // another floor: not now
+        if dxz(dp, bp) <= stand + 0.5 { return true; }
+        // behind him: his facing is (sin yaw, cos yaw) in (x, z) [M the yaw convention of
+        // atan2(dx, dz) everywhere the walker aims]
+        let behind = [dp[0] - dyaw.sin() * stand, dp[1], dp[2] - dyaw.cos() * stand];
+        let target = if dxz(behind, bp) > 0.8 { behind } else { dp };
+        if !steer_to(w, target, 0.7, 220, &format!("{label} shadow g{di}")) {
+            let (hp, corpse, st, racing) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[di];
+                (d.health, d.corpse, d.state, racer(d))
+            };
+            if corpse || hp <= 0.0 || asleep(st) { return true; }
+            if racing { return false; }
+            if w.total_ticks - start > cap { return false; }
+        }
+    }
+}
+
+/// One guard's takedown, the level's own stealth shape, rebuilt on the 2026-11-05 trace:
+/// - the darts land POINT BLANK only — the 6.5 u volley on g5 missed all 15 (clip 5 + spare 10
+///   → clip 5 spare 0) while the scratch's 2.5 u kill was one tap [L both, this branch] — so
+///   the dart fires at ≤ 3.4 u, after the shadow/chase closed;
+/// - a not-yet-racing guard is shadowed from BEHIND (never latches, never challenges);
+/// - a RACING guard (ever_seen / alarm_run / the chain states) is chased to his switch — he
+///   STOPS there for the 210-tick PressAlarm fuse [M 0x168ea8], stationary, inside dart range —
+///   instead of being shot from beyond the old 16 u approach cap (the trace: g3 at 31.7 u ate
+///   1500 ticks of P2K for zero damage on his 1.0 health);
+/// - the dart SLEEPS (zero damage [M 0x13fff0:269-306 → msg 0x19]) — no corpse, no gunshot, no
+///   noise pull of the next guard (the old loud fallback pulled the patrolling g3 into the run
+///   that failed the walk). GO_TO_GOAL carries the dart case: a racer falls asleep MID-RUN
+///   [M dart_impact_state_ok; the Tower band sets his wake resume to CIVILIAN_PATROL
+///   M 0x1469b8:331-357]. Darts dry → return false; the caller resupplies, and only a real
+///   drought falls back to the loud P2K.
+/// Returns dead-or-asleep.
+fn takedown(w: &mut Walker, di: usize, label: &str) -> bool {
+    let start = w.total_ticks;
+    let mut volleys = 0u32;
+    loop {
+        if w.total_ticks - start > 3000 {
+            eprintln!("[09] {label}: takedown cap g{di}");
+            return false;
+        }
+        let (st, dp, hp, corpse, racing) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.list[di];
+            (d.state, d.pos, d.health, d.corpse, racer(d))
+        };
+        if corpse || hp <= 0.0 { return true; }
+        if asleep(st) { return true; }
+        let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+        let same_floor = (dp[1] - bp[1]).abs() < 3.5;
+        let dist = dxz(dp, bp);
+        // Get point-blank first. A racer is chased to wherever his chain takes him (the switch);
+        // a quiet guard is shadowed from behind so he never latches at all.
+        if !same_floor || dist > 3.4 {
+            // an emergent racer elsewhere outranks closing on this quiet guard
+            if !racing {
+                if let Some(ri) = other_racer(w, di) {
+                    eprintln!("[09] {label}: g{ri} raced while closing on g{di} — the racer takes the round");
+                    return false;
+                }
+            }
+            let ok = if racing {
+                chase_to(w, di, 3.0, 1500, label)
+            } else {
+                let shadowed = shadow_to(w, di, 2.6, 1500, label);
+                if !shadowed {
+                    // the shadow could not reach him (wedge, another floor): a bounded direct
+                    // rush still beats a far volley for the tap race
+                    chase_to(w, di, 2.6, 500, label)
+                } else { true }
+            };
+            if !ok { return false; }
+            continue;
+        }
+        // Point blank: the silent dart. The aim tracks his live position per tick (the loose
+        // gate ≈ the torso box at this range [M shoot_loose's doc]); the sleep takes him out of
+        // every chain. The volley is SHORT — 110 ticks ≈ the aim settle + 2–3 taps + the dart
+        // flight: the sleep the last dart causes lands IN FLIGHT after the volley returns, and
+        // the re-read below catches it (the 320-tick cap fired half a clip into already-
+        // sleeping guards while the next guard's race ran — the 2026-11-05 run 2 budget burn).
+        let darted = { let sim = w.scene.sim.as_ref().unwrap();
+            matches!(sim.drones.bond_weapon, 0x43 | 0x44) && sim.gun.clip + sim.gun.spare > 0 } || cycle_to_darts(w);
+        if darted {
+            w.shoot_loose(di, &format!("{label} dart {di}"), 80);
+            volleys += 1;
+            let (st, hp, corpse) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[di];
+                (d.state, d.health, d.corpse)
+            };
+            if corpse || hp <= 0.0 || asleep(st) { return true; }
+            // an emergent racer elsewhere outranks another volley here
+            if let Some(ri) = other_racer(w, di) {
+                eprintln!("[09] {label}: g{ri} raced while volleying g{di} — the racer takes the round");
+                return false;
+            }
+            if volleys >= 4 {
+                eprintln!("[09] {label}: g{di} survived {volleys} point-blank volleys — skipped");
+                return false;
+            }
+            continue; // he drifted or the volley missed: re-close (tighter) and tap again
+        }
+        return false; // darts dry — the caller resupplies or falls back
+    }
 }
 
 /// The patrol-beat clear: take down the nearest alive guard that threatens the alarm chain —
-/// `ever_seen` latched (the sight's own ack bit, +0x228 & 8 [M 0x175ef0:82-86]), a live
-/// alarm-bound state, or standing inside the 15u bubble ahead with a clear static line (the
-/// imminent challenge). Ammo dry → the real resupply (floor pickups / drops), then the next
-/// guard. A guard that survived the takedown window (a wedged line) is skipped — the walk's
-/// own asserts judge the outcome.
+/// `racer()` (the sight ack, RunToAlarm's flag, the chain states), a guard LATCHING NOW
+/// (`seen_ticks > 0`: inside the 12 u + FOV gate this tick — the reaction window from the first
+/// held-LOS tick to the ack is the race the dart must win), a heard-noise investigator, or
+/// standing inside the 15 u bubble ahead with a clear static line (the imminent challenge).
+/// Ammo dry → the real resupply (floor pickups / drops), then the next guard; a real dart
+/// drought with no floor resupply falls back to the loud point-blank P2K (the asserts judge the
+/// noise it pulls). A guard that survived the takedown window (a wedged line) is skipped — the
+/// walk's own asserts judge the outcome.
 fn clear_live_guards(w: &mut Walker, label: &str) {
     let mut skipped: Vec<usize> = Vec::new();
     for round in 0..12 {
         let bp = w.scene.sim.as_ref().unwrap().bond.pos;
-        // Priority: the racing guards first (ever_seen / the alarm-bound states / the
-        // heard-noise investigators 0xa3-0xa5 walking in on the gunfire), then the 15u-bubble
-        // pre-sight picks; nearest within the class.
+        // Priority: racers and latching guards first (the press fuse runs on them), then the
+        // bubble/heard-noise pre-sight picks; nearest within the class.
         let Some(di) = w.scene.sim.as_ref().unwrap().drones.list.iter().enumerate()
             .filter(|(i, d)| d.present && !d.corpse && d.health > 0.0 && d.enabled
                 && !asleep(d.state) // a sleeper runs no chain — the beat is already cleared
                 && !skipped.contains(i)
-                && (d.ever_seen || live_state(d.state)
+                && (racer(d)
+                    || d.seen_ticks > 0
                     || matches!(d.state, nf_game::drone::state::HEARD_NOISE_AWARE | nf_game::drone::state::HEARD_NOISE_SUSPECT | nf_game::drone::state::HEARD_NOISE_ALERT)
                     || (dxz(d.pos, bp) < 15.0
                         && w.scene.sim.as_ref().unwrap().world
                             .segment([bp[0], bp[1] + w.scene.sim.as_ref().unwrap().bond.eye, bp[2]],
                                      [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none())))
             .min_by_key(|(i, d)| (
-                (d.ever_seen || live_state(d.state)
-                    || matches!(d.state, nf_game::drone::state::HEARD_NOISE_AWARE | nf_game::drone::state::HEARD_NOISE_SUSPECT | nf_game::drone::state::HEARD_NOISE_ALERT)) as u8,
+                (!(racer(d) || d.seen_ticks > 0)) as u8,
                 (dxz(d.pos, bp) * 100.0) as i32,
                 *i))
             .map(|(i, _)| i)
@@ -482,13 +704,24 @@ fn clear_live_guards(w: &mut Walker, label: &str) {
         {
             let sim = w.scene.sim.as_ref().unwrap();
             let d = &sim.drones.list[di];
-            eprintln!("[09] {label}: clearing guard {di} (state {:#x}, dist {:.1}, round {round})", d.state, dxz(d.pos, sim.bond.pos));
+            eprintln!("[09] {label}: clearing guard {di} (state {:#x}, dist {:.1}, racer {} [ever_seen {} alarm_run {}], seen_ticks {}, alarm_point {:?}, round {round})",
+                d.state, dxz(d.pos, sim.bond.pos), racer(d), d.ever_seen, d.alarm_run, d.seen_ticks, d.alarm_point);
         }
         if !takedown(w, di, label) {
-            // dry or a wedged line: the real resupply, then one more look; a drought BREAKS the
-            // clear (every further round would burn seconds of cycling while the guards run)
-            let (c, s) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare) };
-            if c + s == 0 && !w.resupply(label) { break; }
+            // darts dry: the real resupply, then one more look; a DROUGHT with no floor
+            // resupply falls back to the loud point-blank kill (the asserts judge the noise);
+            // anything else (a wedged line, a survived volley) just skips him
+            let (wp, c, s) = { let sim = w.scene.sim.as_ref().unwrap();
+                (sim.drones.bond_weapon, sim.gun.clip, sim.gun.spare) };
+            let darts_dry = matches!(wp, 0x43 | 0x44) && c + s == 0;
+            if darts_dry && w.resupply(label) { continue; }
+            if darts_dry && cycle_to_lethal(w) {
+                let (c, s) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare) };
+                if c + s > 0 {
+                    eprintln!("[09] {label}: darts dry, no resupply — the loud point-blank fallback on g{di}");
+                    w.shoot_loose(di, &format!("{label} shoot {di}"), 900);
+                }
+            }
             if w.scene.sim.as_ref().unwrap().drones.list[di].health > 0.0
                 && !w.scene.sim.as_ref().unwrap().drones.list[di].corpse {
                 // he lived through the bounded windows — stop feeding rounds into the wall
@@ -505,6 +738,7 @@ fn walk_nav_clearing(w: &mut Walker, target: [f32; 3], label: &str, final_arrive
         leg(sim, sim.bond.pos, target)
     };
     for (k, p) in pts.iter().enumerate().skip(1) {
+        clear_live_guards(w, &format!("{label} pre {k}"));
         let _ = w.try_walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("{label} nav {k}"));
         clear_live_guards(w, &format!("{label} nav {k}"));
     }

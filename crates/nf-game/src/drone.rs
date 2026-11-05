@@ -1641,10 +1641,6 @@ pub struct Drone {
     /// 0x15ccf0:20-21). Drained by `Drones::tick` straight onto `drones.music`'s board. Own
     /// line (merge lesson 4).
     pub music_reqs: Vec<u8>,
-    /// `Drone+0xC6` = 7 (the scared-run mode `DroneFunc_HandleImpact` sets for civilians on
-    /// 07000009/0A [M 0x1469b8:103-127, level-gated `GameState+0xf8fffff7 < 2`]):
-    /// `DSTATE_CivilianScared` 0x15d3a0 then runs `NDrone2_FindRunToPoint`.
-    pub scared_run: bool,
     /// The port's mirror of `comm+0x73c` — `BOT_handlePain` (0x125ed8) keeps the handle of the
     /// currently playing pain grunt there and stops it before the next pool play
     /// (`Sound_Stop_Ref` 0x1de370) [M 0x126168-0x1261a0]; the port's field is the same state
@@ -2141,8 +2137,6 @@ impl Drone {
             foley_reqs: Vec::new(), pain_grunt: None,
             sfx_reqs: Vec::new(),
             music_reqs: Vec::new(),
-            // ai-points: the scared-run mode marker +0xC6.
-            scared_run: false,
             // fix-facial3: the blink driver state + the facial script slots.
             facial_state: 0, facial_timer: 0, facial_reappend: false, facial_idle: None, facial_blink: None, last_tick: 0,
             alert_block: alert_props.map_or(0.0, |w| nf_formats::drone::ALERTNESS_LEVELS[d.props.get(0x20, &w) as usize & 3]),
@@ -3907,6 +3901,9 @@ impl Drone {
     fn send_hurt_scream(&mut self, d: &Data) {
         if self.prop(d, 0x32) && !self.screamed {
             self.screamed = true;
+            // The bit observers take the alarm from [M 0x145e28:14]: PCSX2 07000007, a punched guest's
+            // neighbours get msg 0x1f, guests hide and guards draw. The broadcast itself moves nobody.
+            self.alert_bits |= 2;
             self.pending_shout = Some((msg::SCREAM, self.pos));
         }
     }
@@ -5715,6 +5712,79 @@ impl Drone {
         true
     }
 
+    /// FirstSightState's prop-0x1A return [M 0x147c48:142-153] with FirstAttack's stamps: the 09/0A
+    /// challenge, which goes on to RunToAlarm, or the 07/41 interrogation.
+    fn first_sight_challenge(&mut self, d: &Data, frame: u32) -> u8 {
+        self.first_attack_done = true;
+        self.alert = 1.0;
+        self.second_tag = 0;
+        self.second_channel = 0;
+        if self.attack_frame == 0 { self.attack_frame = frame; }
+        self.sight_range = self.sight_range.max(self.combat_range);
+        self.half_fov = 0.0;
+        if matches!(d.level, 0x0700_0009 | 0x0700_000a) { state::CIVILIAN_CHALLENGE } else { state::INTEROGATE }
+    }
+
+    /// `DroneFunc_FirstAttack` 0x148010: the first attack's stamps, talks and combat pick, once per drone.
+    /// Returns the next state, 0 for none. Attack's ENTER and CivilianScared's ENTER both start with it
+    /// [M 0x164210 case 1, 0x15d3a0 case 1].
+    fn first_attack(&mut self, d: &Data, rng: &mut Rng, frame: u32) -> u8 {
+        if !self.first_attack_done && self.own_sight && self.prop(d, 0x1a)
+            && matches!(d.level, 0x0700_0007 | 0x0700_0009 | 0x0700_000a | 0x0700_0041) {
+            return self.first_sight_challenge(d, frame);
+        }
+        let first_time = !self.first_attack_done;
+        let mut first = 0;
+        if first_time {
+            self.first_attack_done = true;
+            // FirstAttack → FirstSightState: alertness 1, combat sight; props 0x1B (50 %) / 0x19 pick a
+            // combat move [M 0x147c48]. FirstAttack also clears the second switch.
+            self.alert = 1.0;
+            self.second_channel = 0;
+            // FirstAttack: the attack is visible to others (`+0x4FC |= 0x10`, enemy side), shouts with prop 0x33.
+            // Only the enemy side raises the bit [M 0x148010:73-75]; everyone stamps +0x524 once [M :52-54].
+            if self.team == 1 {
+                if self.alert_bits & 0x10 == 0 { self.attack_frame = frame; }
+                self.alert_bits |= 0x10 | if self.prop(d, 0x33) { 1 } else { 0 };
+            } else if self.attack_frame == 0 { self.attack_frame = frame; }
+            self.sight_range = self.sight_range.max(self.combat_range);
+            self.half_fov = 0.0;
+            // The talks [M 0x148010]: the own-sight bit `+0x4F8 & 0x8000000` (`own_sight` — set by
+            // `DroneVision_EnemyLookForOpponent` 0x177ed0:76-80 with 0x4000000, and by the
+            // civilian/party/door-guard/truck-driver armed reactions) routes the first attack
+            // through `FirstSightState` 0x147c48, which talks `SeenPlayerTalk` [M :106] before its
+            // prop-0x1B roll; FirstAttack's own `AttackTalk` [M 0x148010:94] follows only when
+            // FirstSightState chose no state, or when the bit is clear.
+            let first_sight = self.own_sight;
+            if first_sight { self.seen_player_talk(d, rng); } else { self.attack_talk(d.level, rng); }
+            first = if self.prop(d, 0x1b) { if rng.rand(2) == 0 { 0 } else { self.choose_combat_move(d, rng) } }
+                else if self.prop(d, 0x18) { 0 } else if self.prop(d, 0x19) { self.choose_combat_move(d, rng) } else { 0 };
+            if first_sight && first == 0 { self.attack_talk(d.level, rng); }
+        }
+        if first != 0 { return first; }
+        // G-055: `FirstAttack`'s alternate-state tail [M 0x148010:100-131] — with the alt
+        // state (+0x5A4) set and the second switch (+0x135) clear it runs the
+        // `ChangeToAttackMode` flush INLINE instead of `AttackNoWeapon`: `+0x5A2 = 0x56`
+        // [M :102], `+0xC6 → +0xC5`, the mode-2 sniper to 0x19 + the DroneTypeSettings
+        // +304 hook (the port's `stationary`), `+0xC6`/`+0x5A4` cleared, and with
+        // `+0xC48 == 100` the SECOND block comes in (`+0x4D8 = +0x4E8`, `+0x29 = 1`)
+        // [M :118-128]; `+0x28 = 1` has no port reader (same as `ChangeToAttackMode`'s).
+        // The return is the old alt state — 0xb4 (DeleteMe) → 0x56, the sniper arm 0x56
+        // [M :128-131]. FirstAttack's own pass only (re-entries return 0 at
+        // `+0x4F8 & 0x2000000` [M :17-19]), and only after a zero FirstSightState pick —
+        // a non-zero one returns from FirstAttack before the tail [M :41-45]. Unarmed
+        // guards take `AttackNoWeapon` instead (the weapon-≤1 arm above); `+0x135` is
+        // provably clear here — the common path just cleared it and neither
+        // `DroneAlertToObject` nor `AttackTalk` writes +0x135 [M the +0x135 writer
+        // census: DefaultInit/PreDroneControl/FirstAttack/SetAsAttacking only].
+        if first_time && self.alt_state != 0 {
+            self.return_state = state::ATTACK; // `+0x5A2 = 0x56` [M 0x148010:102]
+            let st = self.change_to_attack_mode();
+            return if st == crate::kiko::DELETE_ME { state::ATTACK } else { st };
+        }
+        0
+    }
+
     /// `NDrone2_FindRunToPoint` (0x153168): the point group by behaviour — prop 0x56 → 8 (the alarm
     /// panels), prop 0x4e → 1, else by team (1 → 0, 2 → 9, 3 → 2 with a group-1 fallback) [M :14-33]
     /// (`aipoint::run_to_point_group`); `NDrone2_ClosestAIPoint` 0x151b18 over the level's AI points
@@ -7287,11 +7357,16 @@ impl Drone {
             // clears the second switch) into CivilianHiding. `false` = the state handler's
             // unhandled; the GLOBAL re-entry drops too — GLOBAL has no 0x11/0x12 case to alert
             // from [M 0x15b830].
-            if matches!(s, WAIT_SWITCH | GLOBAL | HOSTAGE | HOSTAGE_SAVED | HOSTAGE_IDLE | HOSTAGE_HIDE) { return false; }
-            let civilian = matches!(s, PARTY_GIRL | CIVILIAN | CIVILIAN_MISSION | CIVILIAN_MISSION_WAIT | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD | TRUCK_DRIVER_IDLE | CIVILIAN_SCARED | CIVILIAN_HIDING);
-            if civilian {
-                if !matches!(s, CIVILIAN_SCARED | CIVILIAN_HIDING) { self.set_state(CIVILIAN_SCARED); }
-            } else if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); }
+            // CivilianChallenge 0x162558 has no 0x11/0x12 case either [M the whole switch].
+            if matches!(s, WAIT_SWITCH | GLOBAL | HOSTAGE | HOSTAGE_SAVED | HOSTAGE_IDLE | HOSTAGE_HIDE | CIVILIAN_CHALLENGE) { return false; }
+            // Neither broadcast moves the hearer: `DroneVision_ShoutFromOtherDrone` 0x177a30 returns 0 in
+            // single player (s3 is zeroed on both arms [M disasm 0x177a78-0x177a88]). PCSX2 07000009: the
+            // second guard reacted to his own sight of Bond, not to the shout. EnemyAlerts' bookkeeping
+            // still runs ahead of the call [M 0x177c18:24-32].
+            if !self.investigating {
+                self.resume_state = s;
+                self.home = self.feet();
+            }
             return true;
         }
         // BulletImpact 0x55 (0x173098): enter turns vision on; the flinch call ends it (state `+0x118`).
@@ -7633,7 +7708,7 @@ impl Drone {
             // The game's MP / level-07 party gate is checked at the sender (`Drones::tick`'s ConsiderAlerted loop
             // [M 0x148c60:13-15]); msg 0x1f has no other sender. A gate failure returns 0 → the base state's default —
             // nothing (the assisting guard's own msg 0x1f is swallowed like the game's).
-            (IDLE | ALERT | PATROL, msg::FORCED_ATTACK) => {
+            (PLAY_SCRIPT | IDLE | ALERT | PATROL, msg::FORCED_ATTACK) => { // PlayScript too [L PCSX2 07000012: DoForcedAttack from 0x15be64]
                 if self.alerted_by_drone && !self.first_attack_done {
                     self.alerted_by_drone = false;
                     self.alert_pending |= 0x2000_0000;
@@ -7912,14 +7987,8 @@ impl Drone {
                 // arm (broadcast bits, not own sight) picks `DroneFunc_FirstAlertState` 0x147f58's
                 // state instead — `Drone::first_alert_state` lifts that pick; the port does not yet
                 // stamp the 0x70000000 broadcast bits [S].
-                self.first_attack_done = true;
-                self.alert = 1.0;
-                self.second_tag = 0;
-                self.second_channel = 0;
-                if self.attack_frame == 0 { self.attack_frame = frame; }
-                self.sight_range = self.sight_range.max(self.combat_range);
-                self.half_fov = 0.0;
-                self.set_state(if matches!(d.level, 0x0700_0009 | 0x0700_000a) { CIVILIAN_CHALLENGE } else { INTEROGATE });
+                let st = self.first_sight_challenge(d, frame);
+                self.set_state(st);
                 true
             }
             // NO ATTACK-ENTER alt flush here. `NDrone2_ChangeToAttackMode` 0x14a648 is called from
@@ -7963,53 +8032,8 @@ impl Drone {
                 // non-zero pick is the next state. FirstAttack runs its body ONCE per drone —
                 // `+0x4F8 & 0x2000000` (`first_attack_done`) set → it returns 0 at once [M :17-19] —
                 // so every re-entry goes straight to Attack's own fallback below.
-                let first_time = !self.first_attack_done;
-                let mut first = 0;
-                if first_time {
-                    self.first_attack_done = true;
-                    // FirstAttack → FirstSightState: alertness 1, combat sight; props 0x1B (50 %) / 0x19 pick a
-                    // combat move [M 0x147c48]. FirstAttack also clears the second switch.
-                    self.alert = 1.0;
-                    self.second_channel = 0;
-                    // FirstAttack: the attack is visible to others (`+0x4FC |= 0x10`, enemy side), shouts with prop 0x33.
-                    if self.alert_bits & 0x10 == 0 { self.attack_frame = frame; }
-                    self.alert_bits |= 0x10 | if self.prop(d, 0x33) { 1 } else { 0 };
-                    self.sight_range = self.sight_range.max(self.combat_range);
-                    self.half_fov = 0.0;
-                    // The talks [M 0x148010]: the own-sight bit `+0x4F8 & 0x8000000` (`own_sight` — set by
-                    // `DroneVision_EnemyLookForOpponent` 0x177ed0:76-80 with 0x4000000, and by the
-                    // civilian/party/door-guard/truck-driver armed reactions) routes the first attack
-                    // through `FirstSightState` 0x147c48, which talks `SeenPlayerTalk` [M :106] before its
-                    // prop-0x1B roll; FirstAttack's own `AttackTalk` [M 0x148010:94] follows only when
-                    // FirstSightState chose no state, or when the bit is clear.
-                    let first_sight = self.own_sight;
-                    if first_sight { self.seen_player_talk(d, rng); } else { self.attack_talk(d.level, rng); }
-                    first = if self.prop(d, 0x1b) { if rng.rand(2) == 0 { 0 } else { self.choose_combat_move(d, rng) } }
-                        else if self.prop(d, 0x18) { 0 } else if self.prop(d, 0x19) { self.choose_combat_move(d, rng) } else { 0 };
-                    if first_sight && first == 0 { self.attack_talk(d.level, rng); }
-                }
+                let first = self.first_attack(d, rng, frame);
                 if first != 0 { self.set_state(first); return true; }
-                // G-055: `FirstAttack`'s alternate-state tail [M 0x148010:100-131] — with the alt
-                // state (+0x5A4) set and the second switch (+0x135) clear it runs the
-                // `ChangeToAttackMode` flush INLINE instead of `AttackNoWeapon`: `+0x5A2 = 0x56`
-                // [M :102], `+0xC6 → +0xC5`, the mode-2 sniper to 0x19 + the DroneTypeSettings
-                // +304 hook (the port's `stationary`), `+0xC6`/`+0x5A4` cleared, and with
-                // `+0xC48 == 100` the SECOND block comes in (`+0x4D8 = +0x4E8`, `+0x29 = 1`)
-                // [M :118-128]; `+0x28 = 1` has no port reader (same as `ChangeToAttackMode`'s).
-                // The return is the old alt state — 0xb4 (DeleteMe) → 0x56, the sniper arm 0x56
-                // [M :128-131]. FirstAttack's own pass only (re-entries return 0 at
-                // `+0x4F8 & 0x2000000` [M :17-19]), and only after a zero FirstSightState pick —
-                // a non-zero one returns from FirstAttack before the tail [M :41-45]. Unarmed
-                // guards take `AttackNoWeapon` instead (the weapon-≤1 arm above); `+0x135` is
-                // provably clear here — the common path just cleared it and neither
-                // `DroneAlertToObject` nor `AttackTalk` writes +0x135 [M the +0x135 writer
-                // census: DefaultInit/PreDroneControl/FirstAttack/SetAsAttacking only].
-                if first_time && self.alt_state != 0 {
-                    self.return_state = state::ATTACK; // `+0x5A2 = 0x56` [M 0x148010:102]
-                    let st = self.change_to_attack_mode();
-                    self.set_state(if st == crate::kiko::DELETE_ME { state::ATTACK } else { st });
-                    return true;
-                }
                 // attack-reentry-choice (913): Attack's own fallback when FirstAttack returned 0
                 // [M 0x164210:24-90] — on the first entry with no pick AND on every re-entry:
                 // `+0x50C = 1.0` (alertness) and `Drone_AlertStatusSet(1)` (the status byte +0x51C
@@ -8916,13 +8940,29 @@ impl Drone {
             (CIVILIAN_MISSION, msg::UPDATE) => {
                 if self.near_armed_person(d) { // 0x15d860:35 passes 0x41200000 — dead arg [M 0x1787c8]
                     self.sighted = true;
+                    // The same scare arm as Civilian's: `+0x4F8 |= 0x8000000`, prop 0x33's once-shout
+                    // with Bond as the source [M 0x15d860:69-84].
+                    self.own_sight = true;
+                    if self.prop(d, 0x33) && !self.scare_shouted {
+                        self.alert_bits |= 1;
+                        self.pending_shout = Some((msg::SHOUT, self.target.pos));
+                        self.scare_shouted = true;
+                    }
                     if self.voice_type == 0x10 { self.team = 1; self.set_state(ATTACK); }
                     else { self.set_state(CIVILIAN_SCARED); }
                 } else if self.route.is_some() {
                     // [M 0x15d860:36-38] the game calls BondTalk before UpdateMissionRoute.
                     self.bond_talk(d, rng, frame);
                     let arrived = self.update_mission_route(d, rng, frame, self.walk_anim(d));
-                    if arrived && self.next_state.is_none() { d.props.set(0x1d, &mut self.props, 0); self.set_state(CIVILIAN); }
+                    if arrived && self.next_state.is_none() {
+                        d.props.set(0x1d, &mut self.props, 0);
+                        // Off 07000012 an alt state with the second switch clear flushes through
+                        // ChangeToAttackMode; otherwise Civilian [M 0x15d860:51-66].
+                        if d.level != 0x0700_0012 && self.alt_state != 0 && self.second_channel == 0 {
+                            let st = self.change_to_attack_mode();
+                            self.set_state(st);
+                        } else { self.set_state(CIVILIAN); }
+                    }
                 } else {
                     d.props.set(0x1d, &mut self.props, 0);
                     self.set_state(CIVILIAN);
@@ -9196,10 +9236,15 @@ impl Drone {
             // with the scared-run mode (+0xC6 == 7) `FindRunToPoint` first — found → return state 0x13 and
             // HostageGoToGoalPosition 0x64, none → CivilianHiding [M 0x15d3a0:34-52].
             (CIVILIAN_SCARED, msg::ENTER) => {
+                // `DroneFunc_FirstAttack` first; a pick is the next state [M 0x15d3a0:19-25]. On 07000012 the
+                // office worker's pick is 0x85 (alt state), and the stamp lets the guards see the alarm 60
+                // ticks later (PCSX2: SetState 0x85 at frame 168, msg 0x1f at 228).
+                let first = self.first_attack(d, rng, frame);
+                if first != 0 { self.set_state(first); return true; }
                 self.vision_on = true;
                 self.alert_status_set(2, frame); // [M 0x15d3a0 case 1] — the status byte; no +0x50C write
                 self.civilian_scared_talk(d, rng); // [M 0x15d3a0:30 — NDrone2_CivilianScaredTalk 0x13f900]
-                if self.scared_run && self.find_run_to_point(d) {
+                if self.alt_mode == 7 && self.find_run_to_point(d) {
                     self.return_state = CIVILIAN_HIDING;
                     self.set_state(HOSTAGE_GO_TO_GOAL);
                     return true;
@@ -22175,8 +22220,6 @@ mod tests {
             foley_reqs: Vec::new(), pain_grunt: None,
             sfx_reqs: Vec::new(),
             music_reqs: Vec::new(),
-            // ai-points: the scared-run mode marker +0xC6.
-            scared_run: false,
             // fix-anim-events: the EventFunc outboxes.
             weapon_swap: 0, pending_melee: None, pending_weapon_swap: false, recoil_weapon: false,
             // fix-facial3: the blink driver state + the facial script slots.

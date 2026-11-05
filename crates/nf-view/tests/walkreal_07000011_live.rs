@@ -180,11 +180,18 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     // and the take is the walk-over `Pickup_Handler` [M 0x18e650 — refused only at armour ≥ 50;
     // Bond loads with 0]. The disc places #261/#266 BodyArmour at (23.12, 47.62, 22.88) on the
     // top office floor [D; the load print], 23 u east of the spawn along the open floor — the
-    // player's own first move on 00 Agent. The d1/d2 sisters keep their pinned timelines; the
-    // detour is the d3 route's own shape. (The mid-leg take of round 1 wedged the 6000-tick cap
+    // player's own first move on 00 Agent. (The mid-leg take of round 1 wedged the 6000-tick cap
     // inside resupply recursion; as a PRE-LEG the fights it meets are the spawn guards' free
     // kills and the take happens before any fight has cost anything.)
-    if difficulty == 3 {
+    // THE AGENT SISTER RIDES THE SAME PRE-LEG (civ-repin-11-13): the 2026-11-06 d2 run died at
+    // connector 2 (t16236, 23 hits for 100.0 / 13 fights) after its pre-fight low-restock tour
+    // (the lane 12 u fetch) targeted the GL #290 at d 11.9 and wedged twice at the 6000-tick cap
+    // on the desk lip — 12000 ticks and a dry descent (clip 4 → 2 → 1, the NE-landing drop armed
+    // clip 30 only at t14400+) [L the clean per-test run]. The armour take + the #6/#5 drop detour
+    // (the pre-leg's own ammo stop) are the player's answer: the 130 budget (80 health + 50
+    // armour) the d3 run measured on these flights, armed from the first fight. The d1 sister
+    // keeps her timeline (she passes without it — her death was 07000012's, fixed on that walker).
+    if difficulty >= 2 {
         // The east office floor is a desk maze the game's own nav never spans [D: path 1 has NO
         // node path from the spawn-side n39 to the armour-side n64; path 0's ring stays z 7-16]
         // and the direct steer wedges on the mid-floor wall run (measured: stuck at (12.5, 13.5),
@@ -441,6 +448,13 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     // ends facing −Z with the head near z −2.8 (the old 0.9 arrival left the use point 1.04 out).
     w.walk_to(Wp::new(14.3, 17.0, -2.0).r(0.3), "in front of the Load Point");
     w.walk_to(Wp::new(14.3, 17.0, -2.8).r(0.3), "the Load Point");
+    // The use plane is MARGINAL at this arrival: the head must sit near z −2.8 for the ray to
+    // land inside 1.0 of the #193 use point (the old 0.9 arrival left it 1.04 out), and the
+    // r-0.3 arrive samples anywhere in (−3.1, −2.5) — the 2026-11-06 d2 arrival took −2.56 and
+    // the E fell 1.28 out, the exit never fired [L the run log]. One deeper press-in leg puts
+    // the head against the #193 face on every run (the door's +Z faces sit at z −4.00 [D tris];
+    // try_walk_to skips the leg rather than wedge).
+    w.try_walk_to(Wp::new(14.3, 17.0, -3.3).r(0.3), "the Load Point, pressed in");
     let mut loaded = false;
     for _ in 0..60 {
         w.tick(nf_game::player::Input::default(), true);
@@ -478,7 +492,25 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     // the 7-round budget has to survive (the front-end load re-equips weapon 0x10 with 7 [M
     // 0x1a7ef8:282-288 — case 0x7000012 RamLoads and, BL+0x27a clear, falls into the 0x7000011
     // equip]). Inert under the top-up (the fights never run there).
-    if !w2.tops_up() { w2.dmg.precise_fights = true; }
+    // THE 07000012 LEGS' SURVIVAL KIT (civ-repin-11-13): the 2026-11-05 d1 run died at t1011 on
+    // 12's lobby south — clip 3 spare 0, and the MASTER-rules resupply tour (the 45 u fetch, no
+    // tried list, the master 1.5 band that also sees the lobby's buried y 0.4-0.5 ghosts) walked
+    // Bond into killer #4's line (11.7 u) for 93.0 in 7 hits while it toured nothing [L the
+    // civ-alarm-repin-2 death ledger]. The 07000013 walk survives the SAME tower2 legs at the SAME
+    // difficulties with the lane kit on its 12 walker [L its passing d2/d3 runs] — the same three
+    // levers here: the lane resupply (the 12 u fetch, the tried list, the 0.6 walk-onto arrive,
+    // the inventory ammo count), the floor-drop band (this level's fight drops rest 1.09 under
+    // Bond's pos y — invisible to the lane 0.5 band, so every pass came back dry while the fights
+    // ran the 7 dry), and the 3.0 back-off stand (the 13 walk's shipped value on this route; the
+    // failed 2026-11-05 attempt's wedge was 2.6 on the 11 STAIRWELL walker, untouched here). The
+    // top-up runs never fight (the return-fire gate reads tops_up first), so the kit is inert
+    // there.
+    if !w2.tops_up() {
+        w2.dmg.precise_fights = true;
+        w2.dmg.lane_fights = true;
+        w2.dmg.lane_floor_drops = true;
+        w2.dmg.back_off = Some(3.0);
+    }
     w2.wait_enabled(3000, "07000012's intro");
     w2.wait(90);
     {

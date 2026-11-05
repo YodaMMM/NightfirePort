@@ -124,7 +124,7 @@ fn run(w: &mut Walker, gi: usize, ticks: u32, input: Input, factor: f32) -> Trac
             t.los_dist = Some(((p[0] - g.pos[0]).powi(2) + (p[1] - g.pos[1]).powi(2) + (p[2] - g.pos[2]).powi(2)).sqrt());
         }
         if g.seen && t.first_seen.is_none() { t.first_seen = Some(k); }
-        t.max_vis = t.max_vis.max(g.visibility);
+        if t.first_seen.is_none() { t.max_vis = t.max_vis.max(g.visibility); }
         if t.first_seen.is_none() { t.max_err = t.max_err.max((g.visibility - predict(g, p, factor)).abs()); }
         if g.state != last { t.states.push((k, g.state)); last = g.state; }
     }
@@ -144,7 +144,8 @@ fn crossing(range: f32, f: f32) -> f32 {
 /// first tick and the sighting is acked on the 35th LOS tick (ReactionTime at alert 0, stat 80:
 /// ((1 − 0)·30)·0.01·(200 − 80), EE-chopped 35.999996 → 35 [M 0x14ac60]) — 34 ticks after the first. On 09 the security guard's `NearArmedPerson`
 /// is prop 0x3c + the ack alone [M 0x1787c8:14-21], so the ack tick itself leaves Civilian
-/// (CivilianScared → CivilianHiding 0x13 [M 0x15d118:46-72, 0x15d3a0]).
+/// (CivilianScared → FirstAttack's prop-0x1A pick, CivilianChallenge 0x3E, then RunToAlarm [L PCSX2
+/// 07000009 2026-11-05: SetState 0x12, 0x3e, 0x89, 0x63, 0x8a, alarm ch 0x61 on]).
 /// Sister: the same spot crouched — ×0.75 puts v at ≈ 0.60 < 0.7 [M 0x1390c0:40-42]: no ray, no
 /// sighting in 200 ticks.
 #[test]
@@ -153,14 +154,14 @@ fn vision_09_standing_vs_crouched_at_10() {
     let g = &w.scene.sim.as_ref().unwrap().drones.list[G09];
     assert_eq!((g.sight_range, g.half_fov, g.reaction, g.alert), (12.0, std::f32::consts::FRAC_PI_2, 80, 0.0), "the 09 lobby guard's sight row [D]");
     place(&mut w, G09, 10.0, 0.0, true);
-    let tr = run(&mut w, G09, 200, Input::default(), 1.0);
+    let tr = run(&mut w, G09, 36, Input::default(), 1.0);
     eprintln!("standing: {tr:?}");
     assert!(tr.max_err < 3e-3, "the port's visibility follows 0x175af0 (worst error {})", tr.max_err);
     assert!((tr.max_vis - 0.8).abs() < 0.01, "v at 10u head-on ≈ 0.80, got {}", tr.max_vis);
     assert_eq!(tr.first_los, Some(0), "the LOS ray lands on the first tick");
     assert_eq!(tr.first_seen.map(|s| s - tr.first_los.unwrap()), Some(34), "acked on the 35th LOS tick (ReactionTime 35 at stat 80)");
-    assert_eq!(tr.states.first(), Some(&(tr.first_seen.unwrap(), nf_game::drone::state::CIVILIAN_HIDING)),
-        "the ack tick leaves Civilian through CivilianScared to CivilianHiding");
+    assert_eq!(tr.states.first(), Some(&(tr.first_seen.unwrap(), nf_game::drone::state::CIVILIAN_CHALLENGE)),
+        "the ack tick leaves Civilian through CivilianScared to CivilianChallenge");
 
     let mut w = setup("07000009.bin", G09);
     place(&mut w, G09, 10.0, 0.0, true);
@@ -308,6 +309,24 @@ fn reaction_level_arms_0b_vs_09() {
 }
 
 
+/// Seen by the 09 security guard, Bond sets off the alarm unless he stops the guard: challenge, the
+/// run to the panel, the press, then the alarm channel [L PCSX2 07000009 2026-11-05: SetState 0x3e
+/// at frame 29, 0x89 at 293, 0x63, 0x8a at 414, ch 0x61 on by 696].
+#[test]
+fn seen_by_the_09_guard_the_alarm_goes_off() {
+    use nf_game::drone::state::CIVILIAN_CHALLENGE;
+    let mut w = setup("07000009.bin", G09);
+    place(&mut w, G09, 6.0, 0.0, true);
+    let tr = run(&mut w, G09, 1400, Input::default(), 1.0);
+    eprintln!("alarm run: {:?}", tr.states);
+    let order: Vec<u8> = tr.states.iter().map(|s| s.1).collect();
+    let at = |st: u8| order.iter().position(|&x| x == st);
+    // RunToAlarm hands on to GoToGoal 0x63 inside one tick, as in the game (0x89 at 293, 0x63 at 294).
+    let (c, r, p) = (at(CIVILIAN_CHALLENGE), at(nf_game::drone::state::GO_TO_GOAL), at(nf_game::kiko::PRESS_ALARM));
+    assert!(c.is_some() && r.is_some() && p.is_some() && c < r && r < p, "challenge, run, press: {:?}", tr.states);
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x61), "the alarm channel is on: {:?}", tr.states);
+}
+
 /// The deaf bit: CivilianScared's ENTER sets `+0x4F8 |= 0x400000` [M 0x15d3a0:28] and nothing on
 /// the scared/hiding path clears it (RouteMsgDCV clears only 0x10000/0x2000 [M 0x171df8:182-183]),
 /// so `HandleSoundAlerts` skips the guard for good [M 0x148a30:43-44]. Bond lets the 09 guard see
@@ -323,7 +342,7 @@ fn hearing_09_scared_guard_is_deaf() {
         if scare {
             place(&mut w, G09, 6.0, 0.0, true);
             let tr = run(&mut w, G09, 120, Input::default(), 1.0);
-            assert!(tr.states.iter().any(|s| s.1 == nf_game::drone::state::CIVILIAN_HIDING), "the guard saw Bond and hid: {:?}", tr.states);
+            assert!(tr.states.iter().any(|s| s.1 == nf_game::drone::state::CIVILIAN_CHALLENGE), "the guard saw Bond and challenged: {:?}", tr.states);
             assert!(w.scene.sim.as_ref().unwrap().drones.list[G09].deaf, "CivilianScared left the deaf bit");
         }
         // Behind him at 6u (he stands where he hid), facing away; one shot.
@@ -445,7 +464,7 @@ fn vision_09_crouched_behind_desk_view_bones() {
         assert!(a.bones_seen.iter().all(|s| &s[2..3] == "1"), "{dist}u: the head bone is clear on every tick: {:?}", a.bones_seen);
         assert_eq!(a.first_los, Some(0), "{dist}u: the head ray lands on the first call");
         assert_eq!(a.first_seen, Some(34), "{dist}u: the LOS holds: acked on the 35th tick (ReactionTime 35)");
-        assert_eq!(a.states.first().map(|s| s.1), Some(nf_game::drone::state::CIVILIAN_HIDING), "{dist}u: the guard hides: {:?}", a.states);
+        assert_eq!(a.states.first().map(|s| s.1), Some(nf_game::drone::state::CIVILIAN_CHALLENGE), "{dist}u: the guard challenges: {:?}", a.states);
         if dist < 6.5 {
             assert_eq!(a.chest_clear, 0, "{dist}u sister: the one-point target is behind the desk on every tick");
         } else {
