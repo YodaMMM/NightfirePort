@@ -4,3 +4,7 @@ Read docs/reports/audit-sp-panes.md on origin/s/audit-sp-panes, section 3. Build
 
 ---
 claimed-by: sandbox1 at 2026-11-05T02:43Z
+
+---
+## Report (done, 2026-11-05T04:41Z)
+
