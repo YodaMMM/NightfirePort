@@ -25,3 +25,17 @@ rocket_origin (update to the snapped point), walkreal_07000014 x2, walkreal_0700
 walkreal_07000016 x2 (check for the same ray gap first), walkreal_0700001b x2 ("console 1 latched" — new
 firing spots above the panels; order 3,5,6... stalls at console 8 from (44.77,-8.66,1.68)). Keep
 firing_along_the_walkway_breaks_no_panel green; keep the panel-only triangle stage.
+
+## panel-model-glist
+
+Aim snap: finish on the corrected filter. Branch cut from origin/s/aim-snap-placement fc6e21313
+(the aim ray's filter reads the placement word — object flags never carry 0x8000, so the old
+filter skipped every static surface and the snap never landed). Green on this tip:
+firing_along_the_walkway_breaks_no_panel, the ray stopping at x 6.958338 — the game's own point
+[L PCSX2 breakpoint at 0x1a4d90: head (16.741, -1.137, 4.62), hit (6.958, -1.137, 4.62),
+object 0]. Red on this tip, each to be fixed by matching the game's ray: rocket_glass08_live /
+rocket_stop_plane08_live (the rocket must pass the 08 window plane -96.75), the 07000014 laser
+cuts (the wire needs to be in the ray — the game's ray hits object glists [L the 0x1c object at
+(139.562, 50.792, -96.706), pos (140.719, 49.5, -96.751), r 1.812]), rocket_origin_live against
+the true snapped point. Then the walkreal consoles (0c/14/16/1b) from player spots and strip the
+NF_AIMPROBE prints.
