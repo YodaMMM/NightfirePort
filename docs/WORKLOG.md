@@ -51,3 +51,16 @@ full suite honestly reported.
 Started 2026-11-05 12:19 UTC. Branch s/audit-voice-triggers-4 (continued from origin/s/audit-voice-triggers-3, merging origin/master).
 Task: the last smg legs — merge master, finish the 2 u/6 u pistol legs without removing or reordering a draw, then run smg_close_range_live, walkreal 01, walkreal 03 and voice_triggers_live and report each.
 Progress 2026-11-05 12:19 UTC: branch cut from origin/s/audit-voice-triggers-3 (its report read: walkreal 01 GREEN 8/8, walkreal 03 GREEN 6/0/1, smg_close_range_live still red at the 2 u/6 u legs — the hall escort steals every 12-health candidate; the pinned next step: take those legs to the courtyard roster ch 0x26/0xf (d#2/d#3/d#4/d#12/d#17) by walking their own plates, real input only, no channel writes), pushed.
+
+Progress 2026-11-05 13:52 UTC (audit-voice-triggers-4): DONE. The -3 pinned step landed whole: the
+2 u/6 u pistol legs took the plate-enabled ch-0x26/0xf corridor roster on real input (probe [L]:
+plate t#8 (-17.15,14.99) out 0x26 -> d#2/d#3; slab t#1 (-25.43,15.05) out 0xf -> d#4/d#12/d#17; no
+channel writes — the touch IS the enable). 1 u byte-exact green (6 rounds, 5 impacts, 24.0->-2.2,
+26.250, 107 ticks). 2 u: the escort's w0x1c volley stole d#3 (3 ally impacts, 0 player) — DOCUMENTED
+as the game's own ally behaviour per the pinned step (a). 6 u: registered on d#4 from the mouth (the
+01 walk's ambush stance; the sight probe's cleared rays) — 1 player impact, 12.0->0.0. The corridor
+door wedge (Bond stuck at (-13.49,10.40), every route leg STUCK) fixed by the 2 u leg's own proven
+door-apex waypoint + a file-local wedged-lead sidestep. SMG legs 2.250/11.250 expected-exact; the
+dormant probe holds (32 rounds, hp flat). NO draw removed or reordered anywhere — test-side tactics
+only. All four required binaries green whole: smg 1/0 (39.67 s), walkreal 01 8/0 (50.48 s), walkreal
+03 6/0/1 (383.27 s), voice_triggers_live 2/0 (0.08 s). Report: docs/reports/audit-voice-triggers-4.md.
