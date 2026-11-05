@@ -46,3 +46,8 @@ leg): the gated legs hold the mid-hall spot, fire only on a clear line, aim at t
 the escort still kills every candidate mid-leg (d#5/d#6/d#11 12->0 ally, 0 player impacts); the 1 u
 control stays green byte-exact. Next: the report, the 03 binary whole if the window allows, the
 full suite honestly reported.
+
+## audit-voice-triggers-4
+Started 2026-11-05 12:19 UTC. Branch s/audit-voice-triggers-4 (continued from origin/s/audit-voice-triggers-3, merging origin/master).
+Task: the last smg legs — merge master, finish the 2 u/6 u pistol legs without removing or reordering a draw, then run smg_close_range_live, walkreal 01, walkreal 03 and voice_triggers_live and report each.
+Progress 2026-11-05 12:19 UTC: branch cut from origin/s/audit-voice-triggers-3 (its report read: walkreal 01 GREEN 8/8, walkreal 03 GREEN 6/0/1, smg_close_range_live still red at the 2 u/6 u legs — the hall escort steals every 12-health candidate; the pinned next step: take those legs to the courtyard roster ch 0x26/0xf (d#2/d#3/d#4/d#12/d#17) by walking their own plates, real input only, no channel writes), pushed.
