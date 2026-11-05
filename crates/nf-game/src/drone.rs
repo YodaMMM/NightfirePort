@@ -14972,7 +14972,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     if !glass_pass { b.dead = true; }
                     br.health -= contact_dmg;
                     if br.health < 0.0 {
-                        if let Some(k) = self.breaks.kill(i, b.pos, end, &mut self.rng) {
+                        // fx-broken-object-bark: the bullet kill is the one `Break_Kill` entry whose
+                        // hitdata +0x58 is the BULLET (kind 5 [M 0x12c5a0:87]) from the PLAYER's
+                        // weapon system (+0xe0 → +0x30 == glb_players [M 0x1385ec-0x1385f4] — this
+                        // walk is `update_player_bullets`), so `Drone_BrokenObject` 0x138588 runs
+                        // HERE and only here: the bark walk collects (drone, line) inside the kill,
+                        // between the sound roll and the debris draws (the game's order
+                        // [M 0x12b970:66-76 → :135 → :141]), and the requests land on the drones'
+                        // `talks` (the `NDrone2_SpeechSFX` port form) right after — before anything
+                        // else draws (the explosion sites keep plain `kill`: their hitdata +0x58 is
+                        // the breakable itself, kind 0x20 [M 0x17c518:163-164], failing the kind-5
+                        // gate with no draw [M 0x1385d8-0x1385e0]).
+                        let mut barks: Vec<(usize, u32)> = Vec::new();
+                        if let Some(k) = self.breaks.kill_by_bullet(i, b.pos, end, &mut self.rng, &self.list, self.level_current, self.npc_system_disabled, &mut barks) {
+                            for (di, line) in barks {
+                                if let Some(dr) = self.list.get_mut(di) { dr.talks.push((line as usize, false)); }
+                            }
                             self.break_kills.push((k.placement, k.kind, k.sound));
                             // A script pane's kill deletes its object (Break_Kill's obj+0xFE
                             // bit 0 [M 0x12b970:60]): the pane leaves the collision set and
