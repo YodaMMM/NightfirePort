@@ -172,6 +172,15 @@ pub struct HudTables {
     /// '0'..'9'; `Player_WeaponFiring` 0x1a5460:155-194 sets them on the view model's anim datums
     /// 3−i (`AnimDatumSetEntity`), entity 0 for '*' and when idle [M].
     pub pda_digits: [u32; 10],
+    /// The lens-flare pane's sprites (`LensFlarePane` 0x2bda10 → `HUD_UpdateLensFlarePane`
+    /// 0x19d770, `LensFlareSprInfo` 0x2bd8d8 — 7 [L ee_start_05.bin]: colour 0xffffff00,
+    /// layer −1, flags 0x0d00 (additive + tile-mirror + centred) on 0/1/3/4 and 0x0900
+    /// (additive + centred) on 2/5/6, uv (0,0,31,31) / (0,0,63,63) / (0,0,0,0), x=y=w=h=0 —
+    /// the update rewrites position, size and colour (alpha ramp) every visible frame). The
+    /// drawn size base is the TEXTURE's own dims: at runtime `hashtable_set_sprite` 0x1ca3d8
+    /// copies the texture record's width/height to the sprite's +0x28/+0x2a, the fields the
+    /// update multiplies by its per-sprite size factors [M 0x19d770:135-183].
+    pub flare: Vec<SpriteInfo>,
 }
 
 impl HudTables {
@@ -239,6 +248,7 @@ impl HudTables {
         let ronin = sprites("RoninSprInfo")?;
         let laser = sprites("LaserSprInfo")?;
         let camera = sprites("CameraSprInfo")?;
+        let flare = sprites("LensFlareSprInfo")?;
         let pda_digits = {
             let (pa, _) = sym("PdaDigits")?;
             let pb = Buf(at(pa)?);
@@ -267,6 +277,7 @@ impl HudTables {
             ronin,
             laser,
             camera,
+            flare,
             bullets,
             font,
             font_header,

@@ -560,6 +560,94 @@ pub fn grapple_marker(points: &[(f32, f32, f32)], range: f32, ctx: u8) -> Option
     out
 }
 
+/// The health pips' alpha factor for one frame (`HUD_UpdateHealthPane` 0x19b9c8:179-203): filled
+/// 0.55 / empty 0.15, all of it scaled by the pane fade `f` = min(4·BL+0x8BC, 1) [M :117-126].
+/// Pip 0 blinks while the pip count is under 0.5 (health < 7.14): its alpha is `f·0.55` while
+/// `GameState+0x52 % 30 < 15` and `f·0.15` otherwise — the game's blink arm REPLACES the factor
+/// before the fade multiply [M :185-200] (the port used to skip the fade in the blink arm).
+pub fn health_pip_alpha(i: usize, pips: f32, frame: u32, fade: f32) -> f32 {
+    let base = if (i as f32) < pips { 0.55 } else { 0.15 };
+    let base = if i == 0 && pips < 0.5 {
+        if frame % 30 < 15 { 0.55 } else { 0.15 }
+    } else { base };
+    base * fade
+}
+
+/// The lens-flare pane (pane 8, `HUD_UpdateLensFlarePane` 0x19d770) — the sun's sprite row.
+/// The pane's whole state is one byte (the sticky alpha, the port's `HudState::flare_alpha`):
+/// the update decays it 0x10 per frame [M :73-77] and, when the sun is line-of-sight visible
+/// AND its screen position (rescaled about the screen centre by the zoom, BL+0x8d0 [M :96-101])
+/// lands in (−5, 517)×(−5, 453), raises it 0x20, clamped at 0xff [M :103-111]. Under 1 every
+/// sprite parks on layer 0xff; otherwise each draws white at alpha `a`, layer 0x31 [M :125-183],
+/// its size the TEXTURE's dims (the runtime +0x28/+0x2a [M hashtable_set_sprite 0x1ca3d8]) times
+/// its factor, positioned mirrored about the screen centre by its position factor — sprite 6 (the
+/// centre glow) sits exactly on the scaled sun position and shrinks with the sun's distance from
+/// the screen centre: size = base·max(0, (int)(256 − dist))·0.015625 [M :175-183].
+pub fn flare_alpha_step(prev: f32, sun_on_screen: bool) -> f32 {
+    let a = if sun_on_screen { prev + 32.0 } else { prev - 16.0 };
+    a.clamp(0.0, 255.0)
+}
+
+/// The pane's on-screen gate for the RESCALED sun position [M 0x19d770:103-111]:
+/// −5 < x < 517 and −5 < y < 453 (strict).
+pub fn flare_on_screen(sx: f32, sy: f32) -> bool {
+    sx > -5.0 && sx < 517.0 && sy > -5.0 && sy < 453.0
+}
+
+/// The scaled sun screen position for the flare, or None with no sun or behind the camera.
+/// The game projects `head − SunVector` with `View_3DPoint2Screen` [M 0x19d770:92-93] — the same
+/// projection `project_hud` models (unclamped here: the gate reaches 5 px past the screen edge) —
+/// then rescales BOTH axes about the screen centre by BL+0x8d0, the zoom magnification
+/// (`Player_Zoom` scales it, `Player_Init` seeds 1.0 [M 0x1a1a70:56-57, 0x1910f8:60]) [M :96-101].
+/// The port's zoom scalar `Sim::zoom` stands in for BL+0x8d0 [S].
+pub fn flare_sun_screen(s: &crate::scene::Sim) -> Option<(f32, f32)> {
+    let sv = s.drones.sun_vector;
+    if sv == [0.0; 3] { return None; }
+    let pos = s.bond.head();
+    let p = [pos[0] - sv[0], pos[1] - sv[1], pos[2] - sv[2]];
+    let yaw = s.bond.yaw;
+    let pitch = s.bond.pitch * std::f32::consts::FRAC_PI_2;
+    let f = 1.0 / ((std::f32::consts::FRAC_PI_3 / s.zoom.max(1e-3)) * 0.5).tan();
+    let fwd = [pitch.cos() * yaw.sin(), pitch.sin(), pitch.cos() * yaw.cos()];
+    let right = [-yaw.cos(), 0.0, yaw.sin()];
+    let up = [right[1] * fwd[2] - right[2] * fwd[1], right[2] * fwd[0] - right[0] * fwd[2], right[0] * fwd[1] - right[1] * fwd[0]];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let rel = [p[0] - pos[0], p[1] - pos[1], p[2] - pos[2]];
+    let z = dot(fwd, rel);
+    if z <= 0.0 { return None; }
+    let x = SW / 2.0 + f * (dot(right, rel) / z) * (SW / 2.0) * 0.75;
+    let y = SH / 2.0 - f * (dot(up, rel) / z) * (SH / 2.0);
+    Some(((x - SW / 2.0) * s.zoom + SW / 2.0, (y - SH / 2.0) * s.zoom + SH / 2.0))
+}
+
+/// The pane's 7 quads for one frame: `(sprite, x, y, w, h)` with the game's (short)(int)
+/// truncations [M 0x19d770:135-183]. `tex` is the texture-dims lookup (the runtime base dims).
+/// Position factors: 0.7/0.5/0.3/−0.1/−0.2/−0.4, sprite 6 at the sun itself; size factors
+/// 3.0/4.0/1.0/5.0/2.0/0.5, sprite 6 `max(0, (int)(256 − dist))·0.015625` with dist the scaled
+/// sun position's distance from the screen centre.
+pub fn flare_quads(table: &[SpriteInfo], alpha: u32, sx: f32, sy: f32, tex: impl Fn(u32) -> (f32, f32)) -> Vec<(SpriteInfo, f32, f32, f32, f32)> {
+    if alpha < 1 || table.len() < 7 { return Vec::new(); }
+    const SIZE: [f32; 6] = [3.0, 4.0, 1.0, 5.0, 2.0, 0.5];
+    const POS: [f32; 6] = [0.7, 0.5, 0.3, -0.1, -0.2, -0.4];
+    let mut out = Vec::with_capacity(7);
+    for (i, sp) in table[..6].iter().enumerate() {
+        let (tw, th) = tex(sp.texture);
+        let x = ((sx - SW / 2.0) * POS[i] + SW / 2.0) as i32 as f32;
+        let y = ((sy - SH / 2.0) * POS[i] + SH / 2.0) as i32 as f32;
+        let w = (tw * SIZE[i]) as i32 as f32;
+        let h = (th * SIZE[i]) as i32 as f32;
+        out.push((*sp, x, y, w, h));
+    }
+    let sp = &table[6];
+    let (tw, th) = tex(sp.texture);
+    let dx = sx - SW / 2.0;
+    let dy = sy - SH / 2.0;
+    let dist = (dx * dx + dy * dy).sqrt();
+    let k = (((256.0 - dist) as i32).max(0)) as f32 * 0.015625;
+    out.push((*sp, sx as i32 as f32, sy as i32 as f32, (tw * k) as i32 as f32, (th * k) as i32 as f32));
+    out
+}
+
 /// Build 6 NDC vertices (two triangles) for a rectangle from (x0,y0) to (x1,y1).
 fn ndc_rect(x0: f32, y0: f32, x1: f32, y1: f32) -> [crate::gpu::HudVertex; 6] {
     use crate::gpu::HudVertex;
@@ -629,6 +717,29 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     let (Some(s), Some(t)) = (sim, scene.hud.as_ref()) else { return h.finish() };
     let frame = s.drones.frame;
     goggle_panes(&mut h, s, t);
+    // The lens-flare pane (pane 8, `HUD_UpdateLensFlarePane` 0x19d770, `LensFlareSprInfo`
+    // 0x2bd8d8 × 7 [L ee_start_05.bin]; SP only — MPPaneList slot 8 is dead [M 0x199e88]):
+    // 7 additive white quads on layer 0x31 at alpha `HudState::flare_alpha` (the pane's sticky
+    // sprite byte; the alpha ramp lives in `hud_tick`), tracking the sun: sizes are the texture's
+    // dims × 3.0/4.0/1.0/5.0/2.0/0.5, positions the sun's zoom-rescaled screen position mirrored
+    // about the screen centre by 0.7/0.5/0.3/−0.1/−0.2/−0.4, sprite 6 the centre glow on the sun
+    // itself [M :125-183]. The template's flags 0x0d00 (sprites 0/1/3/4) carry the 0x400
+    // tile-mirror the big quads repeat with, 0x0900 plain additive on 2/5/6 [D the table].
+    let flare_a = s.hud.flare_alpha;
+    if s.mp.is_none() && flare_a >= 1.0 && t.flare.len() >= 7 {
+        if let Some((sx, sy)) = flare_sun_screen(s) {
+            for (sp, x, y, w, hgt) in flare_quads(&t.flare, flare_a as u32, sx, sy, |tex| h.tex_dims(tex)) {
+                if w < 1.0 || hgt < 1.0 { continue; }
+                let at = if sp.flags & 0x800 != 0 { (-(w / 2.0), -(hgt / 2.0)) } else { (0.0, 0.0) };
+                let c = gs(0xffffff, flare_a as u32);
+                if sp.flags & 0x400 != 0 {
+                    h.tiled_quad(Anchor::Centre, 0x31, sp.texture, x + at.0, y + at.1, w, hgt, [sp.uv[0] as f32, sp.uv[1] as f32, sp.uv[2] as f32, sp.uv[3] as f32], sp.flags, c);
+                } else {
+                    h.quad(Anchor::Centre, 0x31, sp.texture, 1, x + at.0, y + at.1, w, hgt, [sp.uv[0] as f32, sp.uv[1] as f32, sp.uv[2] as f32, sp.uv[3] as f32], (false, false), c);
+                }
+            }
+        }
+    }
     // The guided-missile camera's pane 9 (`HUD_CreateRedeemer` 0x19dec0 + `HUD_UpdateRedeemerPane` 0x19e178,
     // `RedeemerSprInfo` 0x2bda30 [L ACTION.ELF]; colours are 0xRRGGBBAA): sprite 0 the centre ring, 3..8 the
     // bracket pieces (flag 0x40 mirrors the right-hand ones), 9 the full-screen red wash (0x300000ff) — all at
@@ -731,9 +842,8 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     let hp = s.drones.health.health.clamp(0.0, 100.0) * 0.07;
     let colour = if hp >= 4.0 { 0x52a88b } else if hp >= 2.0 { 0xc6984e } else { 0x9d1912 };
     for i in (0..7).filter(|_| !riding && !mp) {
-        let mut a = if (i as f32) < hp { 0.55 } else { 0.15 };
-        if i == 0 && hp < 0.5 { a = if frame % 30 < 15 { 0.55 } else { 0.15 }; }
-        h.sprite(Anchor::Left, HEALTH_AT, &t.health[8 + i], gs(colour, (a * f * 255.0) as u32));
+        let a = health_pip_alpha(i, hp, frame, f);
+        h.sprite(Anchor::Left, HEALTH_AT, &t.health[8 + i], gs(colour, (a * 255.0) as u32));
     }
     if !riding && !mp { h.sprite(Anchor::Left, HEALTH_AT, &t.health[15], gs(colour, (f * 140.0) as u32)); }
     // Damage glow (sprites 20–23, `HealthSprInfo[20..24]`): full screen, additive, red at alpha `BL+0x968`,

@@ -1023,6 +1023,13 @@ pub struct HudState {
     /// them off again (layer 0xff) [M 0x19ad0c/0x19ae48; L 07000005 2026-10-12 switch shows the name
     /// alone]. The port latches on the first timer==0 tick (hud_tick); false at load.
     pub ammo_strips_positioned: bool,
+    /// The lens-flare pane's sticky alpha byte (sprite 0's +0x38, the pane's whole state
+    /// [M `HUD_UpdateLensFlarePane` 0x19d770:73-111]): decays 0x10 per frame, rises 0x20 while
+    /// the sun is LOS-visible and its zoom-rescaled screen position is on-screen, clamped
+    /// 0..255; frozen while the level has no sun (`SunVector` 0). MP has no pane 8 (MPPaneList
+    /// slot 8 is dead [M 0x199e88]) — `hud_tick` holds it at 0 there. Updated in `hud_tick`;
+    /// hud.rs draws the 7 quads from it.
+    pub flare_alpha: f32,
 }
 
 impl HudState {
@@ -5866,6 +5873,23 @@ impl Sim {
         let vm_idle = self.gun.switch_state == 0 && self.gun.reload_state == 0 && !self.gun.fire_state;
         if let Some(label) = crate::hud::gadget_hint(self.gun.weapon, vm_idle, &mut self.hud.cam_hint, &mut self.hud.sticky_hint) {
             self.hud.info_labels.push_back((label, 180.0));
+        }
+        // The lens-flare pane's alpha ramp (pane 8, `HUD_UpdateLensFlarePane` 0x19d770): the
+        // update's sticky sprite byte decays 0x10 per frame and rises 0x20 while the sun is
+        // line-of-sight visible AND its zoom-rescaled screen position lands in (−5,517)×(−5,453)
+        // [M :73-111]; with no sun (`SunVector` 0) the whole update is skipped — the alpha FREEZES
+        // rather than decays [M :65-66]. The LOS is the pane's own `Collide_LineOfSight(head,
+        // head − SunVector, …, 0, 8)` [M :84-91] — the same ray `ramp_char_ambient` runs for the
+        // +0x962 sun flag, which is the pane's other output (the port models it there). MP has no
+        // pane 8 (MPPaneList slot 8 is dead [M 0x199e88]) — no flare, no state in a match.
+        if self.mp.is_none() && self.drones.sun_vector != [0.0; 3] {
+            let sv = self.drones.sun_vector;
+            let visible = {
+                let head = self.bond.head();
+                self.world.segment_surface_bullet(head, [head[0] - sv[0], head[1] - sv[1], head[2] - sv[2]]).is_none()
+            };
+            let on = visible && crate::hud::flare_sun_screen(self).map_or(false, |(sx, sy)| crate::hud::flare_on_screen(sx, sy));
+            self.hud.flare_alpha = crate::hud::flare_alpha_step(self.hud.flare_alpha, on);
         }
         // The goggles flow controller first — the game's `HUD_Update` 0x19a088 calls
         // `HUD_MonitorNightSight` 0x19e9d8 right after the crosshair, before the pane walk
