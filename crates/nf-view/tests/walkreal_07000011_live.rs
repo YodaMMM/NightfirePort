@@ -51,11 +51,26 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// 0x18e650] files the weapon + its clip — and holds the best-fed owned gun. Test-local (the
 /// g055-4 idiom): the shared resupply and every other walk stay master's.
 fn loot_the_drops(w: &mut Walker, label: &str) {
+    loot_the_drops_up_to(w, label, 1.5);
+}
+
+/// The stairwell-bottom variant (fx-muzzle-repin-4): the fights' earlier kill-drops lie UP the
+/// flights Bond has already descended (the shifted stream left #17's drop at y 24.0 and #14's
+/// at 21.3 above the 18.9 strip), and the |Δy| < 1.5 band ratchets him back up one take at a
+/// time — the 2026-11-05 run's loot tour climbed to y 24.01 and the flight-A assert fired
+/// ("the descent never reached the lower floor"). A player descending scoops the drops at his
+/// FEET: the band's up-side caps at the standing floor (drops above it are left behind).
+fn loot_the_drops_floor(w: &mut Walker, label: &str) {
+    loot_the_drops_up_to(w, label, 0.0);
+}
+
+fn loot_the_drops_up_to(w: &mut Walker, label: &str, up: f32) {
     for _ in 0..4 {
         let sim = w.scene.sim.as_ref().unwrap();
         let bp = sim.bond.pos;
         let t = sim.drones.pickups.iter().filter(|p| !p.gone)
             .filter(|p| (p.m[3][1] - bp[1]).abs() < 1.5)
+            .filter(|p| p.m[3][1] - bp[1] <= up)
             .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
             .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)))
             .filter(|t| walker::dxz(*t, bp) < 8.0);
@@ -416,7 +431,7 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     w.walk_to(Wp::new(23.0, 19.3, 3.8).r(1.0), "the east connector down (23.0→18.9)");
     band(&w, 18.2, 21.3, "connector 2's bottom");
     w.walk_to(Wp::new(15.0, 19.2, 4.8).r(1.0), "the south strip 18.9 west");
-    loot_the_drops(&mut w, "the 18.9 strip");
+    loot_the_drops_floor(&mut w, "the 18.9 strip");
     w.walk_to(Wp::new(14.8, 15.4, -2.6).r(1.0), "the west flight A down (18.9→15.0)");
     {
         let sim = w.scene.sim.as_ref().unwrap();
