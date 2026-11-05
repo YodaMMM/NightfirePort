@@ -18,3 +18,6 @@ The rocket's own flight, per tick: (139.531, -76.431) start at the HEAD, then (1
 Then check walkreal_0700000c_live, walkreal_07000014_live, walkreal_07000016_live, and walkreal_0700001b_live's consoles from spots a player would use. Strip the NF_AIMPROBE prints.
 
 Use a PCSX2-backed number wherever one exists. Run each binary whole and quote the results.
+
+---
+claimed-by: sandbox4 at 2026-11-05T22:10Z
