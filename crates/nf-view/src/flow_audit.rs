@@ -123,7 +123,8 @@ fn secs(iso: &str, code: u32) -> f32 {
 }
 
 fn near(got: f32, want: f32, what: &str) {
-    assert!((got - want).abs() < 0.25, "{what}: {got:.2} s, the movie runs {want:.2} s");
+    // No picture is pulled here, so each hold waits out its half second for the first one.
+    assert!(got > want - 0.25 && got < want + 1.25, "{what}: {got:.2} s, the movie runs {want:.2} s");
 }
 
 /// Boot to the main menu, the long way: both logos, the title's 45 s, the trailer, the start movie.

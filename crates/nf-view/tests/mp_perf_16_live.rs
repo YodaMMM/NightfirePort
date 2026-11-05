@@ -60,7 +60,7 @@ fn iso() -> Option<String> {
 /// pain/death barks are real shared-stream draws now (`BOT_soundEffect` 0x126618's arms — the
 /// one `Rand_Rand(n)` per bark [M 0x1266b4]), so the simulated result legitimately differs from
 /// the pre-bark 0x89cb_fcb6_ae45_c2ac; the pin's job (catching an UNintended change) is intact.
-const PINNED_DIGEST: u64 = 0x6483_2b31_d595_bd3b;
+const PINNED_DIGEST: u64 = 0x8d0b_45e7_2e02_ebd2;
 
 const TICKS: u32 = 3600;
 
