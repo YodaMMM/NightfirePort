@@ -4,3 +4,7 @@ s/fx-scrape-and-impacts adds the game's own draws (the laser env puff jitter, th
 
 ---
 claimed-by: sandbox5 at 2026-11-05T07:14Z
+
+---
+## Report (done, 2026-11-05T07:51Z)
+
