@@ -247,6 +247,67 @@ fn the_escort_opens_the_interior_doors_on_his_route() {
             if !w.scene.sim.as_ref().unwrap().drones.channels.on(0x33) {
                 w.walk_nav_to([6.79, 0.0, 8.91], "onto the corridor plate", 0.4);
             }
+            // The west wall + the closed door before the blind close (the broken-object-bark
+            // stream's park: the lead waits south of the auto-closed door #1 (7.9, 5.3, 11.1)
+            // with Bond wedged against the meet hall's west wall segment (x≈1.93, z 11.1-13.1
+            // [D the disc's collision cels]) west of the hall [L the escort_follow bark-trace —
+            // the lead in AllyLeadWait 0x20 with talks 0 voice None: the bark does NOT hold
+            // him, the Rand(4) draws only shifted the follow ticks]). The walkreal 01 lane walk
+            // brings Bond back inside the hall [D nav path 0 nodes 8/23/7]; then a player at a
+            // shut door between him and the lead E-opens it [M Player_Activate 0x1a5170 case
+            // 0x1c → Door_Activate(obj, player, 1)].
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let (bp, cp) = (sim.bond.pos, sim.drones.list[ci].pos);
+                let walled = bp[0] < 2.0 && sim.world.segment(bp, cp).is_some();
+                drop(sim);
+                if walled {
+                    eprintln!("[01] round: the hall's west wall is between Bond and the contact — walking the north lane back in");
+                    w.walk_nav_to([0.6, 6.5, 14.3], "the west corridor lane (north)", 1.4);
+                    w.walk_nav_to([3.39, 6.4, 14.69], "the hall's north opening (nav node 23)", 1.4);
+                    w.walk_nav_to([6.88, 6.4, 14.62], "inside the hall (nav node 7)", 1.4);
+                }
+            }
+            let cp = w.scene.sim.as_ref().unwrap().drones.list[ci].pos;
+            let door_i = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let mid = [(cp[0] + sim.bond.pos[0]) * 0.5, cp[1], (cp[2] + sim.bond.pos[2]) * 0.5];
+                sim.drones.doors.list.iter().enumerate()
+                    .filter(|(_, dr)| dr.state & 0x12 != 0 && walker::dxz(dr.pos, mid) < 8.0)
+                    .min_by(|(_, a), (_, b)| walker::dxz(a.pos, mid).total_cmp(&walker::dxz(b.pos, mid)))
+                    .map(|(i, _)| i)
+            };
+            if let Some(door_i) = door_i {
+                let (dpos, dl0) = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    (sim.drones.doors.list[door_i].pos, sim.drones.doors.list[door_i].state)
+                };
+                eprintln!("[01] round: the lead waits behind a closed door {door_i} (state {dl0:#x}) at ({:.1},{:.1},{:.1}) — Bond E-opens it", dpos[0], dpos[1], dpos[2]);
+                // door-react-path5: the use fires once per press edge [M 0x1a5ea8-0x1a5ee8 +
+                // 0x17f084-0x17f090] — tap, release, tap. Bond stands on HIS side (1.6 u off
+                // the door toward himself — the closed door is between the pair).
+                let (dx, dz) = (dpos[0] - w.scene.sim.as_ref().unwrap().bond.pos[0],
+                                dpos[2] - w.scene.sim.as_ref().unwrap().bond.pos[2]);
+                let l = (dx * dx + dz * dz).sqrt().max(1e-4);
+                let mut flip = false;
+                for _ in 0..1500u32 {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let st = sim.drones.doors.list[door_i].state;
+                    if st & 0x12 == 0 { break; } // opening/open — stop pressing
+                    let bp = sim.bond.pos;
+                    let stand = [dpos[0] - dx / l * 1.6, dpos[1], dpos[2] - dz / l * 1.6];
+                    let d = walker::dxz(bp, stand);
+                    let desired = (stand[0] - bp[0]).atan2(stand[2] - bp[2]);
+                    let err = walker::wrap_pi(desired - sim.bond.yaw);
+                    drop(sim);
+                    if d > 1.8 {
+                        w.tick(nf_game::player::Input { turn: err.clamp(-0.07, 0.07), forward: 0.55, ..Default::default() }, false);
+                    } else {
+                        w.tick(nf_game::player::Input { turn: err.clamp(-0.07, 0.07), ..Default::default() }, flip);
+                        flip = !flip;
+                    }
+                }
+            }
             let cpos = w.scene.sim.as_ref().unwrap().drones.list[ci].pos;
             w.walk_nav_to(cpos, "close on the contact", 4.0);
             continue;
