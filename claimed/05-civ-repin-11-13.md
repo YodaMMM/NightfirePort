@@ -5,3 +5,6 @@ Branch from `origin/s/civ-alarm-repin-2`, push to `s/civ-repin-11-13`. Read docs
 walkreal_07000011_live real_damage and _agent, walkreal_07000013_live real_damage. Fights now start early. The 11 walk reached 12 with no ammo; the 13 walk took a 70-point blast on 12 north lobby. Fix ammo economy and cover in the walk.
 
 Real input, no teleports. Run the binary whole and quote the result. If the window closes, push what is green.
+
+---
+claimed-by: sandbox4 at 2026-11-05T21:25Z
