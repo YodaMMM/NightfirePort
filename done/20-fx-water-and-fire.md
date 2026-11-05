@@ -4,3 +4,8 @@ Port rows 3 and 4 of the table: Env_WaterRipple from the flesh hit handlers, and
 
 ---
 claimed-by: sandbox7 at 2026-11-05T01:05Z
+
+---
+## Report (done, 2026-11-05T02:22Z)
+
+Closed by the driver: the report is on `s/fx-water-and-fire` (docs/reports/fx-water-and-fire.md); the worker didn't run finish.sh.
