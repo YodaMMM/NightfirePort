@@ -1,3 +1,20 @@
+## aim-object-stage
+Started 2026-11-05 ~23:10 UTC. Branch s/aim-object-stage (cut from origin/s/aim-snap-final
+23975ae9f). Task: the aim ray still has no object stage, so the game's snap (shutter object
+at (139.562, 50.792, -96.706) [L]) and the laser's cut of the 14 wire differ. Add the object
+stage with honest glist posing, in the order Collide_Pick 0x1eb320 and Collide_Intersect
+0x1ebaa8 walk it. Must end green: interactables_07000014_live, fusebox_geometry_07000014_live,
+rocket_glass08_live, rocket_stop_plane08_live, rocket_origin_live, solar_panel_hits_live.
+Then run walkreal_07000008, 0c, 14, 16, 1b and report each; the 1b console walk needs firing
+spots above the panels. Cite the rule for the rocket's midpoint gate or leave it alone.
+Strip the NF_AIMPROBE prints.
+
+Progress log:
+- Sandbox reused (repo, work/, ISO, cargo, nf-queue all present).
+- Branch created from origin/s/aim-snap-final and pushed; aim-snap-objects +
+  panel-model-glist reports read.
+- Studying the aim-ray implementation next.
+
 
 ## beam-weapon-panels-1b
 Started 2026-11-05 16:46 UTC. Branch s/beam-weapon-panels-1b (cut from origin/s/panel-mesh-wip 786875a4f;
