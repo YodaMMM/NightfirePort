@@ -16972,7 +16972,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             match p.respawn {
                 0 => p.gone = true,
                 0xFFFF => {}
-                r => { p.hidden = true; p.state = 2; p.respawn_ticks = 60 * r as u32 * 10; }
+                // Hidden while `elapsed <= FRAME_RATE_INT · respawn · 10` [M 0x18e148:183-185] —
+                // the restore lands on the tick AFTER the limit, so the wait is limit+1 ticks
+                // (the port used to restore one tick early, on elapsed == limit).
+                r => { p.hidden = true; p.state = 2; p.respawn_ticks = 60 * r as u32 * 10 + 1; }
             }
             // `Player_EquipWeapon`'s tail [M 0x1a8a58]: on a WEAPON equip (not the ammo path —
             // `Player_EquipAmmo` has no switch), the per-player auto-switch flag (live 1 [L]) ∧
@@ -17026,7 +17029,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         match p.respawn {
             0 => p.gone = true,
             0xFFFF => {}
-            r => { p.hidden = true; p.state = 2; p.respawn_ticks = 60 * r as u32 * 10; }
+            // Same tail as take_pickup: hidden while elapsed <= limit [M 0x18e148:183-185] —
+            // limit+1 ticks (see take_pickup).
+            r => { p.hidden = true; p.state = 2; p.respawn_ticks = 60 * r as u32 * 10 + 1; }
         }
     }
 
