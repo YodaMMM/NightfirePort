@@ -276,6 +276,10 @@ impl GasPool {
             kind: 7,
             billboard: false,
             xray_only: false,
+            hidden: false,
+            born: 0,
+            child: None,
+            rot: [0.0; 3],
         });
     }
 
@@ -312,6 +316,10 @@ impl GasPool {
             kind: 7,
             billboard: false,
             xray_only: false,
+            hidden: false,
+            born: 0,
+            child: None,
+            rot: [0.0; 3],
         });
     }
 
@@ -353,6 +361,10 @@ impl GasPool {
             kind: 0xb,
             billboard: false,
             xray_only: false,
+            hidden: false,
+            born: 0,
+            child: None,
+            rot: [0.0; 3],
         });
     }
 
@@ -598,6 +610,7 @@ impl GasPool {
                             children.push((s, g.pos, [0.0, mul_ee(2.0 * REC_FRAME_RATE, REC_FRAME_RATE), 0.0], 7, g.alpha_byte()));
                         }
                     }
+                }
                 // Case 0xb [M 0x1ab2d0 case 0xb = 0x1ab44c, decomp :186-211]: the same motion —
                 // pos += WldGravity·(REC·−0.02·FRM) then pos += the stored velocity — plus the
                 // rot-z spin accumulation (`obj+0x58 += data+0`, the spin rate Gas_Init stored)
@@ -816,7 +829,7 @@ mod tests {
         let l0 = g.pos;
         let mut pool2 = GasPool::default();
         pool2.puffs.push(g.clone());
-        pool2.update();
+        pool2.update(0);
         assert!(pool2.puffs[0].pos[1] > l0[1], "the puff rises");
     }
 }
