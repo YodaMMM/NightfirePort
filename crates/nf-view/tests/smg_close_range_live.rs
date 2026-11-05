@@ -392,26 +392,44 @@ fn smg_rounds_damage_a_close_guard_and_the_pistol_sister() {
             if live.is_empty() { break; }
             tg = live[0];
         }
-        // audit-voice-triggers-2: the leg retries on the next candidate — the combat-state
-        // guards re-cover DURING the stand (d#11: the segment was clear before stand_near and
-        // the 3 rounds still ate the crate), so the pre-stand gate alone is not enough. The
-        // same doctrine as the SMG legs' `_attempt` loop: only a guard the game lets Bond hit
-        // takes the leg; a leg with a landed round proves the control.
+        // audit-voice-triggers-2: the leg retries until the live roster is exhausted — the
+        // combat-state guards re-cover DURING the stand (d#11: the segment was clear before
+        // stand_near and the 3 rounds still ate the crate), and the escort can steal a leg's
+        // kill (d#5 died 12→0 with 0 player impacts — his volley, not the control's). A
+        // covered candidate is retried once after a 300-tick reposition pause (0x74 guards pop
+        // out of cover to shoot); an ally-stolen kill voids the leg (the control needs the
+        // PLAYER's registration) and moves on. The same doctrine as the SMG legs' `_attempt`
+        // loop: a leg with a landed PLAYER round proves the control.
         let mut leg: Option<(FireTrace, usize)> = None;
-        for _attempt in 0..3 {
-            live.retain(|&i| {
-                let sim = w.scene.sim.as_ref().unwrap();
-                let d = &sim.drones.list[i];
-                d.team == 1 && !d.corpse && d.enabled && d.health > 0.0
-            });
-            if live.is_empty() { break; }
+        while !live.is_empty() {
             let tg = live[0];
-            stand_near(&mut w, tg, dist);
-            let tr = fire_at(&mut w, tg, 3, 0x2, &format!("pistol {dist}u"));
-            let drop = tr.hp0 - tr.hp1;
-            eprintln!("[smg] pistol {dist} u on d#{tg}: spawned {} rounds, {} impacts, hp {:.1} -> {:.1} (drop {drop:.3}), ticks {}",
-                tr.spawned, tr.impacts.len(), tr.hp0, tr.hp1, tr.ticks);
-            if drop > 0.0 && !tr.impacts.is_empty() { leg = Some((tr, tg)); break; }
+            let mut mine: Option<FireTrace> = None;
+            for attempt in 0..2 {
+                if attempt > 0 {
+                    // The reposition pause: the guard's own AI re-covers/re-exposes.
+                    for _ in 0..300 { w.tick(Default::default(), false); }
+                }
+                // The retries spend the pistol dry (the 1 u leg takes 6, d#11's two attempts
+                // took 8) — a dry gun breaks fire_at at ticks 0 and the leg proves nothing.
+                if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare < 8 {
+                    w.resupply("pistol leg retries");
+                }
+                live.retain(|&i| {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let d = &sim.drones.list[i];
+                    d.team == 1 && !d.corpse && d.enabled && d.health > 0.0
+                });
+                if !live.contains(&tg) { break; }
+                stand_near(&mut w, tg, dist);
+                let rounds = if dist > 1.0 { 6 } else { 3 };
+                let tr = fire_at(&mut w, tg, rounds, 0x2, &format!("pistol {dist}u a{attempt}"));
+                let drop = tr.hp0 - tr.hp1;
+                eprintln!("[smg] pistol {dist} u on d#{tg} (attempt {attempt}): spawned {} rounds, {} impacts, hp {:.1} -> {:.1} (drop {drop:.3}), ticks {}",
+                    tr.spawned, tr.impacts.len(), tr.hp0, tr.hp1, tr.ticks);
+                if drop > 0.0 && !tr.impacts.is_empty() { mine = Some(tr); break; }
+                if tr.hp1 <= 0.0 { break; } // dead (the escort's steal or the guard's own end) — no retry on a corpse
+            }
+            if let Some(tr) = mine { leg = Some((tr, tg)); break; }
             live.remove(0);
         }
         let Some((tr, tg)) = leg else {
