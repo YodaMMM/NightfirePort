@@ -736,3 +736,38 @@ fn the_attract_trailer_skips_on_the_action_keys_at_240hz() {
     p.wait(0.3);
     assert!(!p.fe().attract_playing && p.page() == Some(Page::Main), "the R skip");
 }
+
+/// The poll's own rule, FrontEnd-level (the attract branch needs the real decoder at App level,
+/// so the gate itself is pinned here): the attract skips with no grace, the START movie refuses
+/// inside its 180-tick grace and passes after it, the boot logos are never armed [M
+/// 0x20a1f0:17-19, 0x20a060:17-18, 0x215a50:6, 0x209e88:41,:55]. The fields are the state
+/// `start_intro_movie` / `attract_open` build.
+#[test]
+fn the_skip_poll_honours_each_kind_gate() {
+    let mut fe = menu::FrontEnd::new();
+    // The attract trailer: c49 = 1, c4c = 0 — skips at once, back on the opener.
+    fe.page = Page::Main;
+    fe.attract_opener = Page::Main;
+    fe.attract_movie = 0x073a_0048;
+    fe.attract_playing = true;
+    assert!(fe.movie_skip_armed());
+    assert!(fe.movie_skip_poll(), "the attract skips at once [M 0x20a1f0:17-19]");
+    assert!(!fe.attract_playing && fe.page == Page::Main, "back on the opener [M 0x20a1f0:64]");
+    // The START movie: the grace refuses one tick short, passes on the tick [M 0x215a50:6].
+    fe.page = Page::EstHero;
+    fe.intro_playing = true;
+    fe.intro_movie = true;
+    fe.intro_skippable = true;
+    fe.intro_ticks = menu::ESTHERO_GRACE - 1;
+    assert!(!fe.movie_skip_poll(), "the grace holds at tick 179");
+    assert!(fe.intro_movie, "the movie is still up");
+    fe.intro_ticks = menu::ESTHERO_GRACE;
+    assert!(fe.movie_skip_poll(), "past the grace it skips [M 0x20a060:17-18]");
+    assert!(!fe.intro_movie);
+    // The boot logos: c49 = 0 — never armed, however long they run [M 0x209e88:41,:55].
+    fe.intro_movie = true;
+    fe.intro_skippable = false;
+    fe.intro_ticks = menu::ESTHERO_GRACE + 100;
+    assert!(!fe.movie_skip_armed() && !fe.movie_skip_poll(), "the logos refuse");
+    assert!(fe.intro_movie);
+}
