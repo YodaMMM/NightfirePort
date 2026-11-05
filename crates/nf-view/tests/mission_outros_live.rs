@@ -39,7 +39,7 @@ fn lang(iso_path: &str) -> nf_formats::hud::Lang {
 
 /// The host's real per-frame glue + one front-end tick.
 fn frame(fe: &mut FrontEnd, slot: &mut Option<nf_view::movie::Player>, iso: &str) {
-    nf_view::mission_movie_glue(fe, slot, iso, 1);
+    nf_view::mission_movie_glue(fe, slot, iso);
     fe.tick();
 }
 

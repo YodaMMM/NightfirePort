@@ -27,6 +27,8 @@ pub struct Dev {
     pub menu: bool,
     /// The time scale: how many 60 Hz ticks to run per render frame. 1 = normal, 0 = paused, fractional = slow.
     pub time_scale: f32,
+    /// The ticks of `time_scale` not yet run, as a fraction.
+    pub time_carry: f32,
     /// One-shot: run exactly one tick this frame (the "step" key), whatever the time scale.
     pub step: bool,
     /// God mode: Bond's health is locked at 100, armour at 50 and the hit flash cleared each tick.
@@ -86,7 +88,7 @@ pub enum SpawnPick { Normal, Sniper, Ambush }
 impl Default for Dev {
     fn default() -> Self {
         Dev {
-            overlay: false, menu: false, time_scale: 1.0, step: false, god_mode: false, infinite_ammo: false,
+            overlay: false, menu: false, time_scale: 1.0, time_carry: 0.0, step: false, god_mode: false, infinite_ammo: false,
             best_level: None, best_clip: Vec::new(), best_spare: Vec::new(), no_reload: false, spawn: SpawnPick::Normal,
             forced: Vec::new(), saved_spot: None, mouse: (0.0, 0.0), scenario: None, menu_sel: 0, result_msg: None, result_timer: 0,
             test_run: None,
@@ -106,7 +108,10 @@ impl Dev {
     /// The number of ticks to run this frame (the time scale × the elapsed ticks, capped, plus a step). Consumes the
     /// one-shot `step` flag.
     pub fn tick_count(&mut self, elapsed_ticks: u32) -> u32 {
-        let mut n = if self.time_scale <= 0.0 { 0 } else { (elapsed_ticks as f32 * self.time_scale) as u32 };
+        // The fraction carries: at 60 Hz and up a frame has 0 or 1 ticks, and 0.25 of 1 is no tick.
+        self.time_carry = if self.time_scale <= 0.0 { 0.0 } else { self.time_carry + elapsed_ticks as f32 * self.time_scale };
+        let mut n = self.time_carry as u32;
+        self.time_carry -= n as f32;
         if self.step { n = n.saturating_add(1).max(1); self.step = false; }
         n.min(8)
     }
@@ -221,8 +226,15 @@ impl Dev {
             }
         }
         self.forced.clear();
-        // B-9: the result message fades after ~3 s (180 ticks).
-        if self.result_timer > 0 { self.result_timer -= 1; if self.result_timer == 0 { self.result_msg = None; } }
+    }
+
+    /// B-9: the result message fades after ~3 s (180 ticks). `ticks` = the 60 Hz ticks of time this
+    /// frame carried; the sim may be held under the open menu, the message still runs out.
+    pub fn result_tick(&mut self, ticks: u32) {
+        if self.result_timer > 0 {
+            self.result_timer = self.result_timer.saturating_sub(ticks);
+            if self.result_timer == 0 { self.result_msg = None; }
+        }
     }
 
     /// Spawn a guard at `pos` with the picked type/mode, the way the game's spawner does (`Action::Spawn` → present +
