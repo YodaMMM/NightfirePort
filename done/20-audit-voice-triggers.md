@@ -4,3 +4,7 @@ List every caller of the drone voice path (Drone_SfxInfo lines, the speech and b
 
 ---
 claimed-by: sandbox3 at 2026-11-04T23:27Z
+
+---
+## Report (done, 2026-11-05T00:35Z)
+
