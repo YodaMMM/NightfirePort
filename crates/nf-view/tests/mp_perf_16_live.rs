@@ -50,7 +50,13 @@ fn iso() -> Option<String> {
 // Re-pinned for standins-scene-930: an online bot's armour pickup now runs Pickup_Handler's class-2 case 3
 // (BOT_vars+0xA4 / the armour byte += amount, capped 50 [M 0x18e650:119-133]) instead of the old +20 health,
 // so the fights run differently — kills 37; the two machines' per-tick hashes still agree.
-const PINNED_DIGEST: u64 = 0x89cb_fcb6_ae45_c2ac;
+// local-match-bot-pickups re-pin: two game-faithful changes land inside this online run, both
+// simulated identically on every machine (the lockstep holds — ha == hb every tick): (1) the
+// bots' pickup rows read the REGISTERED law — pickGoal skips only a row whose registered
+// object is GONE [M 0x126b88:386-390], so the bots now also target hidden (respawning) rows;
+// (2) NDrone2_DSTATE_BotDead zeroes the dead bot's pickup visit rows [M 0x171518:17]. The old
+// digest baked the port's two deviations in (the state-2 skip and the never-reset stamps).
+const PINNED_DIGEST: u64 = 0x6b6f_2ae6_bf54_2614;
 
 const TICKS: u32 = 3600;
 

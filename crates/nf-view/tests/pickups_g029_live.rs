@@ -143,7 +143,12 @@ fn a_respawning_placed_pickup_hides_and_returns_on_07000004() {
         assert!(p.hidden, "hidden while waiting (obj+0xF0 & 0x10) [M]");
         assert_eq!(p.state, 2);
         assert!(!p.gone, "respawn != 0 is never deleted [M 0x18e650:338-348]");
-        assert_eq!(p.respawn_ticks, respawn_ticks, "the full FRAME_RATE_INT · respawn · 10 wait [M]");
+        // audit-pickup-calls fix 4 [M 0x18e148:183-185]: the game hides while
+        // `elapsed <= FRAME_RATE_INT · respawn · 10`, so the restore lands on limit+1 — the
+        // port's `respawn_ticks = 60·respawn·10 + 1` (the old pin held the one-tick-early
+        // 1200; the unit pin respawn_hides_for_frame_rate_times_respawn_times_ten carries the
+        // same re-pin).
+        assert_eq!(p.respawn_ticks, respawn_ticks + 1, "the full FRAME_RATE_INT · respawn · 10 wait, restore at limit+1 [M 0x18e148:183-185]");
         assert!(sim.drones.inventory.owned.get(0x12).copied().unwrap_or(false), "the weapon went into the inventory");
     }
     // The wait: tick with idle input until the counter is at its last tick, still hidden; the

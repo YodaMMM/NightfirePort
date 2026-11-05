@@ -2653,10 +2653,29 @@ impl Sim {
         // mp-scenarios-online (agent6): the round restart's respawns and the match-decided deaths
         // reach the bodies before the bots tick.
         self.step_mp_scenario_sync();
+        // local-match-bot-pickups: the row reconcile runs BEFORE the bots' rebuild — the game
+        // unregisters in the same pass that deletes (the Handler's tail / Pickup_Update's
+        // expiry), the port's deletes land in the drones phase (the previous tick), and
+        // step_mp_bots's availability refresh would mark the row first and the helper's
+        // row-registered gate would never fire.
+        if self.mp.is_some() && self.net_rng.is_none() && self.net_rng_shared.is_none() {
+            self.reconcile_mp_pickup_rows();
+        }
         // mp-bots-in-match: the bots' per-frame driver — the game's `BOT_update` 0x126448 family
         // runs per frame inside the MP flow (the brains + the firing pipeline + respawn/score
         // bookkeeping), exactly like the port's `MP_Update` block above.
         { let _p = nf_game::prof::scope("mp: step_mp_bots"); self.step_mp_bots(); }
+        // local-match-bot-pickups: the shared take pass — `Pickup_Update` 0x18e148's
+        // humans-then-bots taker loop — runs HERE, right after the bots and before any body
+        // moves (every taker's position is last tick's on every machine — the pass's own doc).
+        // The game runs the pass on every machine inside the MP flow; the port's ONLINE match
+        // takes through `update_pickups_net` (the session's `Drones::net_bodies` row, set in
+        // the tick's sync below) and keeps that path untouched — a LOCAL match has no session
+        // row, so without this call the pass never ran and no bot could take anything (the
+        // audit-pickup-calls finding).
+        if self.mp.is_some() && self.net_rng.is_none() && self.net_rng_shared.is_none() {
+            self.step_mp_pickups();
+        }
         // mp-world-sync (agent 9): with the session's row (online), the remote bodies move HERE —
         // after the shared prologue, before the local body — so every body of the tick moves
         // against the same collision world (the doors and script objects join it at the drones'
@@ -13329,7 +13348,8 @@ impl Sim {
                 s.status = 0xffff;
             }
         }
-        for b in m.bots.iter_mut() {
+        let mut bot_died: Vec<usize> = Vec::new();
+        for (bi, b) in m.bots.iter_mut().enumerate() {
             if b.slot < m.game.slots.len() && m.game.slots[b.slot].dead && !b.dead {
                 b.dead = true;
                 b.health = 0.0;
@@ -13338,7 +13358,14 @@ impl Sim {
                 // NDrone2_DSTATE_BotDead stamps the SM timer at GameState + FRAME_RATE_INT * 3 =
                 // 180 ticks, then BotRespawn runs BOT_respawn [M 0x171518:22-41; the human gate
                 // is FRAME_RATE_INT * 5 = 300, 0x190bb0:41] (standins-scene-929).
+                bot_died.push(bi);
             }
+        }
+        // NDrone2_DSTATE_BotDead's death-msg arm also zeroes the bot's pickup visit rows —
+        // `MP_resetPickupBotVisitTimes(bot)` [M 0x171518:17; the helper 0x18be50] — so the
+        // respawned bot re-competes for pickups instead of starving behind its old stamps.
+        for bi in bot_died {
+            nf_game::mp::reset_pickup_bot_visit_times(&mut self.mp_bot_pickups, bi);
         }
         if online {
             let humans = (m.settings.human_count as usize).min(nf_net::MAX_AGENTS);
@@ -13372,11 +13399,14 @@ impl Sim {
         let others = self.bot_others(); // the immutable pass ends before the match is taken &mut
         {
             use nf_game::pickup::kind;
-            // mp-bot-weapons: `available` = the pickup stands takeable (not in the state-2
-            // respawn wait, not deleted) — `pickGoal` scores only the registered, present ones.
+            // mp-bot-weapons: `available` = the row's REGISTERED state — the game's pickGoal
+            // skips a row whose registered object is GONE [M 0x126b88:386-387]; a hidden
+            // (respawning, state 2) pickup's row stays registered and targeted (it comes back).
+            // local-match-bot-pickups: the delete arm's unregister (reconcile_mp_pickup_rows)
+            // relies on this reading — its row-registered gate is this flag [M 0x18a058:10-14].
             let live: Vec<([f32; 3], u16, u8, bool)> = self.drones.pickups.iter()
                 .filter(|p| matches!(p.kind, kind::WEAPON | kind::AMMO | kind::ARMOUR))
-                .map(|p| ([p.m[3][0], p.m[3][1], p.m[3][2]], p.weapon, p.kind as u8, !p.gone && p.state != 2))
+                .map(|p| ([p.m[3][0], p.m[3][1], p.m[3][2]], p.weapon, p.kind as u8, !p.gone))
                 .collect();
             if live.len() != self.mp_bot_pickups.len() {
                 self.mp_bot_pickups = live.iter().map(|&(pos, w, c, a)| nf_game::mp::bots::BotPickup {
@@ -13713,6 +13743,31 @@ impl Sim {
             if let Some(p) = pickups.get_mut(idx) { if i < p.visit.len() { p.visit[i] = t; } }
         }
         self.mp_bot_pickups = pickups;
+    }
+
+    /// local-match-bot-pickups: the game unregisters a pickup's bot row when the body leaves
+    /// for good — the delete arm (`Pickup_Handler` 0x18e650:338-344: `+0x2c == 0` sets the gone
+    /// flag and calls `MP_UnregisterPickup` under the MP gate) and the lifetime expiry
+    /// (`Pickup_Update` 0x18e148:254-258). The port's deletes land in the drones' own pass (the
+    /// take/consume tails' respawn-0 arm, the drop lifetime), so the reconcile runs at the next
+    /// driver pass, BEFORE the bots' availability refresh: the row is zeroed and leaves the
+    /// registered count [M MP_UnregisterPickup 0x18a058:21-31] — the bots' goal machine skips
+    /// an unregistered row [M 0x126b88:386-387] and a deleted pickup never re-registers. A
+    /// hidden (respawning, state 2) pickup keeps its row: only the delete arm unregisters.
+    pub fn reconcile_mp_pickup_rows(&mut self) {
+        use nf_game::pickup::kind;
+        let Some(m) = self.mp.as_mut() else { return };
+        let mut row = 0usize;
+        for k in 0..self.drones.pickups.len() {
+            let p = &self.drones.pickups[k];
+            let row_kind = matches!(p.kind, kind::WEAPON | kind::AMMO | kind::ARMOUR);
+            if p.gone && row_kind && row < self.mp_bot_pickups.len() && self.mp_bot_pickups[row].available {
+                let mut reg = m.settings.registered_pickups as u32;
+                nf_game::mp::unregister_pickup(&mut self.mp_bot_pickups[row], &mut reg);
+                m.settings.registered_pickups = reg as u16;
+            }
+            if row_kind { row += 1; }
+        }
     }
 
     /// mp-bot-weapons: `Pickup_Update` 0x18e148's taker loop for an MP match, run on every machine
@@ -14482,6 +14537,9 @@ impl Sim {
                 m.bots[j].dead = true;
                 m.bots[j].deaths += 1;
                 m.bots[j].respawn_at = frame + 180;
+                // The same death arm's visit-row reset [M 0x171518:17 — the game's BotDead
+                // runs it on every death path; the combat kill is this site's shape].
+                nf_game::mp::reset_pickup_bot_visit_times(&mut self.mp_bot_pickups, j);
                 m.player_killed(victim, Some(attacker), false, false, &mut self.drones.rng);
             }
             return;

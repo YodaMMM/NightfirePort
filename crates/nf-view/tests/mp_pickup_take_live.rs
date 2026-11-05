@@ -65,24 +65,46 @@ fn mp_take_message_is_ninety_ticks_with_the_mp_label_and_the_sound_plays() {
         let sim = scene.sim.as_mut().unwrap();
         sim.bond = nf_game::player::Bond::stand_at(&sim.world, [at[0], at[1], at[2]], 0.0);
     }
-    let sounds_before = scene.sim.as_ref().unwrap().drones.sounds.len();
+    // local-match-bot-pickups: the take pass now runs at the TICK'S HEAD (the MP driver, right
+    // after the bots), so the take sound's hearing-list copy is consumed by the SAME tick's AI
+    // hearing pass and never survives a step boundary — the old per-tick `drones.sounds` scan
+    // read the old order's accident, not the law. The law (the shared tail plays the placement's
+    // word at the pickup [M 0x18e650:334-337]) is read off a SECOND take driven straight into
+    // the pass, before any further tick consumes the hearing list.
     let mut heard = false;
     for _ in 0..40 {
         step(&mut scene, 1);
-        // The take sound lives in the hearing list one tick (the AI consumes it) — check per tick.
         let sim = scene.sim.as_ref().unwrap();
-        if sim.drones.sounds.iter().skip(sounds_before).any(|s| s.id == 0xf5
-            && (s.pos[0] - at[0]).abs() < 1.0 && (s.pos[2] - at[2]).abs() < 1.0) { heard = true; break; }
+        if !sim.drones.taken.is_empty() { break; }
     }
     let sim = scene.sim.as_ref().unwrap();
     assert!(!sim.drones.taken.is_empty(), "the pickup is taken through the real MP touch walk");
+    let taken_first = sim.drones.taken.len() - 1; // the driven take's entry (the HUD drain ran in-tick)
+    let (second, at2) = {
+        let sim = scene.sim.as_ref().unwrap();
+        let b = sim.drones.pickups.iter().enumerate()
+            .filter(|(k, p)| *k != target && !p.gone && p.state != 2 && p.kind == nf_game::pickup::kind::WEAPON)
+            .map(|(k, _)| k).next().expect("a second weapon pickup");
+        let p = &sim.drones.pickups[b];
+        (b, [p.m[3][0], p.m[3][1], p.m[3][2]])
+    };
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond = nf_game::player::Bond::stand_at(&sim.world, [at2[0], at2[1], at2[2]], 0.0);
+        sim.step_mp_pickups();
+    }
+    let sim = scene.sim.as_ref().unwrap();
+    if sim.drones.sounds.iter().any(|s| s.id == 0xf5
+        && (s.pos[0] - at2[0]).abs() < 1.0 && (s.pos[2] - at2[2]).abs() < 1.0) { heard = true; }
     // The take sound [M 0x18e650:290 + :336-337]: kinds 0/1 force 0xF5 into +0x2A and the tail
     // plays it.
     assert!(heard, "the take plays 0xF5 at the pickup (heard within the 40 ticks)");
     // The message [M 0x18e650:249-256 + :279-288 + :324-328]: the MP arm binds
     // weapon_data[raw]+0x3C bare (weapon) or formats "%d x %s" (ammo), and Text_AddMsg carries
     // 90 ticks (180 is the SP value).
-    let (_, t) = sim.drones.taken.last().unwrap();
+    // The driven take's own entry — the second (direct-drive) take's message has no HUD drain
+    // yet (no step ran after it), so the pane assert reads the first take's taken record.
+    let (_, t) = &sim.drones.taken[taken_first];
     let lang = sim.lang.as_ref().expect("the arena's text table");
     let expected = match t {
         nf_game::pickup::Taken::Weapon { weapon } => {
