@@ -350,8 +350,10 @@ fn cursors_wrap_and_back_walks_up_the_pages() {
     // M_BUTTONs (the def's page 40000002 binds ctrls 10000002/3/4, kind byte 1 [D 08000002 in
     // 07000048.bin]; Menu_Update 0x1f1dc0 dispatches kind 1 to Button_Update), so Scroll_Init's
     // wrap flag never enters and the button focus walk is not visible in the decompile's C.
-    // Back from Main → the title is the port's [S] (P_MAIN 0x20a7b0 has only the 0x4c/0x50 arms
-    // [M] — no Back arm at all).
+    // Back from Main is IGNORED — settled this pass [M P_MAIN_Handler 0x20a7b0: only the 0x4c
+    // enter and the 0x50 idle-attract arm; the row controls C_GONIGHTFIRE 0x2169b8 et al. take
+    // only the 0x4b select]. The old port route (Back → the title, the start movie replay) was
+    // the [S] guess.
     fe.action(Action::Up);
     fe.action(Action::Down);
     fe.cursor = 0;
