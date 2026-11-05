@@ -901,12 +901,19 @@ pub struct Msg {
     /// 0x19c310:219-229], so a cut-scene starting in the banner's flash window holds the chime
     /// until the hand-back (objective-banner-timing).
     pub sfx1: bool,
+    /// TXT_MSG+0x10, the image-message id: when non-zero the status pane's state 2 re-textures
+    /// sprite 0 with it (`hashtable_set_sprite(sprite0, msg+0x10)`), clears the text and jumps
+    /// straight to state 3 — the strcmp and the text row are skipped [M 0x19c310:183-190, disc
+    /// disasm 0x19c558-570]. `Text_AddMsg` stores it only for NULL-text posts [M 0x1b0c30:160]
+    /// and no decompiled caller passes a non-zero id (the 36-call-site sweep) — the port keeps
+    /// 0 on every queue push, so the arm is inert until a future caller sources an id.
+    pub image: u32,
 }
 
 impl Msg {
     pub fn new(text: String, time: f32) -> Msg {
         Msg { text, time, status: 0, failed: false, life: time, opened: false, second: false, label: 0, script: false,
-            sfx1: false }
+            sfx1: false, image: 0 }
     }
 }
 
@@ -6174,7 +6181,7 @@ impl Sim {
                     // port wraps at draw time — the font lives in the scene's HudTables, which the
                     // Sim-side drain doesn't hold; the life scaling is not ported, see the report.)
                     self.hud.objective_msgs.push_back(Msg { text, time: ticks as f32, status, failed, life: ticks as f32, opened: false, second: false, label, script: false,
-                        sfx1: false }); // objectives-0b-start: the label rides the Msg (the port's provenance for the game-label pins, `Text_AddMsg` 0x1b0c30 stores the bound string's id)
+                        sfx1: false, image: 0 }); // objectives-0b-start: the label rides the Msg (the port's provenance for the game-label pins, `Text_AddMsg` 0x1b0c30 stores the bound string's id)
                 }
                 nf_game::mission::Event::FailLabel(l) => {
                     self.hud.fail_label = l;

@@ -56,20 +56,20 @@ pub const TEXTURES: [u32; 43] = [0x0300_005b, 0x0300_005a, 0x0300_0026, 0x0300_0
 /// - Sprites 1..8 (the eight lamps, tex 0x03000178): `MissileDeploy[k−1]` == 1 → tex 0x03000177
 ///   flashing 0x00ff00ff / 0xffffffff on `frame % (FPS/2) < FPS/4`; == 3 → tex 0x03000177, 0x00ff0080;
 ///   else switch channel k on → tex 0x0300017A, 0xff000080 when the state is 2, else 0xff0000ff.
-///   The port does not yet model `MissileDeploy` (written by `SpaceMissile_Update` 0x1aa118's
-///   jump-table states, undecompiled; `Create_SpaceMissile` 0x1a9ef0 zeroes it) — it stays 0 here, so
-///   only the channel rule applies [S for missile states 1..3].
+///   `MissileDeploy` is the 8 bytes at 0x30cd70, written by `SpaceMissile_Update` 0x1aa118's
+///   jump-table states (0x1aa238 = 1 on the countdown exit, 0x1aa338 = 2 / 0x1aa314 = 3 on the
+///   console branch) and zeroed per `Create_SpaceMissile` 0x1a9ef0:62 — the sim's
+///   `Drones::missile_deploy` feeds it here.
 /// - Sprite 0 (the T, tex 0x03000179): flashes 0xff000080 / 0x7f7f7f7f while channel 9 is on (the game
 ///   leaves the last written colour when it goes off; the port returns to the template's) [M; S the reset].
 /// - Sprites 9 / 10 (the top boxes, tex 0x0300017B): 0x7f7f7f7f, flashing 0xff000080 while channel
 ///   0x18 / 0x1C is on.
 /// The game's sprite texture and colour persist between frames (`hashtable_set_sprite` is sticky); the
 /// port recomputes from the inputs each frame.
-pub fn space_pane(table: &[SpriteInfo], level: u32, on: impl Fn(u32) -> bool, frame: u32) -> Vec<(SpriteInfo, u32)> {
+pub fn space_pane(table: &[SpriteInfo], level: u32, on: impl Fn(u32) -> bool, frame: u32, deploy: &[u8; 8]) -> Vec<(SpriteInfo, u32)> {
     if level != 0x0700_001b || table.len() < 11 { return Vec::new(); }
     // `GameState+0x34 % (FRAME_RATE_INT >> 1) < FRAME_RATE_INT >> 2` with FRAME_RATE_INT 60.
     let flash = frame % 30 < 15;
-    let deploy = [0u8; 8];
     let mut out: Vec<(SpriteInfo, u32)> = table[..11].iter().map(|s| (*s, s.colour)).collect();
     for k in 1..9 {
         let st = deploy[k - 1];
@@ -697,7 +697,44 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
                     let mut sp2 = sp.clone(); sp2.layer = 0x27;
                     h.sprite(anchor_of(sp), (0.0, 0.0), &sp2, gs(sp.colour >> 8, sp.colour & 0xff));
                 },
-                10 => {}
+                10 => {
+                    // The copter lock bracket [M 0x19e178:137-183; the template L RedeemerSprInfo
+                    // 0x2bda30 entry 10 = tex 0x03000059, (192,160) 128×128, flags 0x500]. The game
+                    // parks the sprite's layer byte at 0xff pre-loop and re-lights it per projecting
+                    // copter, so with no copter the sprite stays hidden — the port just skips the
+                    // draw. The projection runs through the ACTIVE viewer, which during the ride is
+                    // the missile's own camera [M Player_PositionCamera 0x18f5d8 case 0xc: the view
+                    // matrix IS the missile's obj+0x90; the port's render builds the same
+                    // yaw/pitch from `view_override`'s dir, lib.rs]: the gameplay 60° zoom-1 FOV
+                    // (`project_hud`'s math with the ride's eye/angles). The copter root's matrix
+                    // translation stands in for the body obj+0x30 (the body rides the root; the
+                    // port keeps no per-part pose) [S], behind `Copter_GetBody`'s own hide gate
+                    // [M 0x17e4b8:6-8].
+                    let yaw = mc.dir[0].atan2(mc.dir[2]);
+                    let pitch = mc.dir[1].clamp(-1.0, 1.0).asin();
+                    let f = 1.0 / (std::f32::consts::FRAC_PI_3 * 0.5).tan();
+                    let fwd = [pitch.cos() * yaw.sin(), pitch.sin(), pitch.cos() * yaw.cos()];
+                    let right = [-yaw.cos(), 0.0, yaw.sin()];
+                    let up = [right[1] * fwd[2] - right[2] * fwd[1], right[2] * fwd[0] - right[0] * fwd[2], right[0] * fwd[1] - right[1] * fwd[0]];
+                    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+                    let mut pts: Vec<(f32, f32)> = Vec::new();
+                    for c in s.drones.copters.iter() {
+                        if c.body(s.drones.channels.on(u32::from(c.gate))).is_none() { continue; }
+                        let p = c.pos();
+                        let rel = [p[0] - mc.pos[0], p[1] - mc.pos[1], p[2] - mc.pos[2]];
+                        let z = dot(fwd, rel);
+                        if z <= 0.0 { continue; } // View_3DPoint2Screen < 1 [M :145-152]
+                        pts.push((SW / 2.0 + f * (dot(right, rel) / z) * (SW / 2.0) * 0.75, SH / 2.0 - f * (dot(up, rel) / z) * (SH / 2.0)));
+                    }
+                    if let Some((gx, gy)) = copter_lock_bracket(&pts, frame, sp.w as f32, sp.h as f32) {
+                        // The game writes the runtime x/y outright; the port offsets the table's
+                        // (192,160) by the same delta. Layer 0x27 is the game's per-frame write
+                        // (:170), overriding the table's 0x22 [L].
+                        let mut sp10 = sp.clone();
+                        sp10.layer = 0x27;
+                        h.sprite(Anchor::Centre, (gx - sp.x as f32, gy - sp.y as f32), &sp10, gs(sp.colour >> 8, sp.colour & 0xff));
+                    }
+                }
                 _ => h.sprite(anchor_of(sp), (0.0, 0.0), sp, gs(sp.colour >> 8, sp.colour & 0xff)),
             }
         }
@@ -1031,6 +1068,22 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             // colour is the gold 0x785a14ff (case 3's else branch stores it unconditionally), the
             // body's 0x7d6d59ff.
             let complete = msg.status == 0x0200_0053;
+            // The image-message arm [M 0x19c310:183-190, disc disasm 0x19c558-570]: state 2
+            // re-textures sprite 0 (the body row) with TXT_MSG+0x10, clears its text and jumps
+            // straight to state 3 — the strcmp and the text rows are skipped for this display
+            // (status stays 0, so the label bind below would resolve nothing anyway). The port
+            // draws the texture where the body row sits, with the body row's own fade-in
+            // schedule and colour [S — no disc writer of +0x10 exists (the 36-call-site sweep);
+            // the label/sfx pairing of an image post is unobservable on disc].
+            if msg.image != 0 {
+                let ia = objective_rows(false, msg.time).2 & 0xff;
+                if ia != 0 {
+                    let (tw, th) = h.tex_dims(msg.image);
+                    if tw > 0.0 && th > 0.0 {
+                        h.quad(Anchor::Centre, 29, msg.image, 0, SW / 2.0 - tw / 2.0, 40.0, tw, th, [0.0, 0.0, tw, th], (false, false), gs(0x7d6d59, ia));
+                    }
+                }
+            } else {
             // fix-hud-parity: the flash window and the label-only fade (`objective_rows`) — the
             // banner opens on the status label alone, blinking 20 on / 20 off without its shadow
             // for 60 ticks, then the body joins; only the body fades out.
@@ -1058,6 +1111,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
                 let a = a.min((left * 17.0).min(255.0) as u32);
                 let x0 = SW / 2.0 - t.font.layout(&l, 0.0, 0.0).1 / 2.0;
                 h.text_fading(Anchor::Centre, &t.font, 29, &l, x0, 40.0, false, gs(0x7d6d59, a));
+            }
             }
         } else if s.hud.objective_close > 0.0 {
             bar(&mut h, s.hud.objective_close);
@@ -1128,7 +1182,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     }
     // The 0700001b missile-status pane (pane 20, `HUD_UpdateSpacePane` 0x19d3b8 — `space_pane`). The pane's
     // CREATE has x 0, y 0, flags 0: the sprites' own x/y are screen positions [L 0x2be598].
-    for (sp, c) in space_pane(&t.space, s.level, |k| s.drones.channels.on(k), frame) {
+    for (sp, c) in space_pane(&t.space, s.level, |k| s.drones.channels.on(k), frame, &s.drones.missile_deploy) {
         h.sprite(Anchor::Right, (0.0, 0.0), &sp, gs(c >> 8, c & 0xff));
     }
     // The crouch icon (health pane sprite 19): while crouched (player mode 4) tex 0x03000173; after standing
@@ -1711,6 +1765,28 @@ pub fn project_hud(s: &crate::scene::Sim, p: [f32; 3]) -> Option<(f32, f32)> {
     let x = SW / 2.0 + f * (dot(right, rel) / z) * (SW / 2.0) * 0.75;
     let y = SH / 2.0 - f * (dot(up, rel) / z) * (SH / 2.0);
     (x >= 0.0 && x <= SW && y >= 0.0 && y <= SH).then_some((x, y))
+}
+
+/// The redeemer pane's sprite 10, the copter lock bracket — the per-frame position/visibility
+/// the game's CopterList walk writes [M `HUD_UpdateRedeemerPane` 0x19e178:140-183]: every
+/// projecting copter clamps its screen point into [0,512]×[0,448] (:153-164), writes the
+/// sprite's x/y as `scr.x − w` / `448 − scr.y − h` (:167-169 — w/h are the runtime +0x28/+0x2a,
+/// the texture's own dims [M `hashtable_set_sprite` 0x1ca47c-48c]) and lights the layer byte to
+/// 0x27 (:170); a bracket centred on (256,224)±32 with `frame & 8` re-parks the layer at 0xff
+/// (:171-176). The walk is last-wins for BOTH the position and the park. `points` are the raw
+/// (unclamped) projections in walk order; `None` = the sprite stays parked (no copter, or the
+/// last one blinked off). The template is [L RedeemerSprInfo 0x2bda30 entry 10: tex 0x03000059,
+/// layer 0x22, flags 0x500, (192,160) 128×128] — the runtime layer 0x27 overrides the table's
+/// while drawn.
+pub fn copter_lock_bracket(points: &[(f32, f32)], frame: u32, w: f32, h: f32) -> Option<(f32, f32)> {
+    let mut out = None;
+    for &(sx, sy) in points {
+        let sx = sx.clamp(0.0, SW);
+        let sy = sy.clamp(0.0, SH);
+        let centred = (sx - 256.0).abs() < 32.0 && (sy - 224.0).abs() < 32.0;
+        out = if centred && frame & 8 != 0 { None } else { Some((sx - w, SH - sy - h)) };
+    }
+    out
 }
 
 pub fn camera_brackets(s: &crate::scene::Sim, aspect: f32) -> Vec<[f32; 4]> {

@@ -237,6 +237,7 @@ fn the_fail_message_is_centred_on_the_banner() {
             label: 0, // fix-context-hints added the provenance id (0 = pre-bound text)
             script: false, // fix-ladder-water added the script-subtitle flag (this is a fail banner, not a subtitle)
             sfx1: true, // objective-banner-timing: the case-3 chime already fired (second: true pairs with it)
+            image: 0, // sp-panes-new-drawing: the TXT_MSG+0x10 image id (0 = a text post)
         });
     }
     let frame = nf_view::hud::overlay(&scene, 4.0 / 3.0);
