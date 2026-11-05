@@ -12,6 +12,9 @@
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
+/// The identity placement the script players spawn at (the tests' inline matrix, named).
+const IDENT_MAT: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+
 /// The briefing track is the pack's script walked on `Script_Run`'s clock: a command after
 /// `Wait(t)` fires on tick t+1 (the pre-increment clock — `Script_Update` 0x1da998:33,39 adds
 /// FRAME_RATE_MUL to the script and per-stream timers after `Script_Run`), the FIFO chain queues
@@ -105,4 +108,113 @@ fn subtitles_on_queues_the_line_on_the_track_at_the_right_tick() {
     let lines = sim.drones.subtitle_track.lines();
     assert_eq!(lines.len(), 1, "one add so far");
     assert_eq!((lines[0].label, lines[0].start, lines[0].end), (0x0600_0068, 184, 184 + 1132));
+}
+
+/// subtitle-flush-camera-scripts: `Script_Play` 0x1db588's camera tail flushes the subtitles for
+/// EVERY camera script — `jal Text_FlushAllSubtitles` 0x1db618 sits outside the three-death-NIS
+/// music gate [M disasm 0x1db608-0x1db618], so a caption already on screen dies when a cut-scene
+/// starts. The flush's deleted classes are the type-4/5 messages [M 0x1b1604-0x1b1610] — the
+/// script op-0x1e captions and the id-0xff voice captions — which is exactly what the Sim's
+/// `script_msgs` + `subtitle_track` + the view's `hud.subs` carry.
+///
+/// Harness: the intro text script 0x06000961 comes from 07000500.bin's pack; no level pack
+/// carries BOTH a camera script and an op-0x1e script (the probe over seven level packs), so the
+/// real camera NIS of 0700001b.bin (the first `camera`-flagged script of that pack, real disc
+/// data) is inserted into the running 07000500 Sim's script lib under its own hash — the spawn,
+/// the load and `Script_Play`'s camera tail are the Sim's real path.
+#[test]
+fn camera_script_start_flushes_the_live_caption() {
+    let Some(path) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    // A real camera-flagged NIS from a cut-scene pack (0700001b.bin).
+    let cam_nis = {
+        let scene = nf_view::load(&path, "0700001b.bin", false).expect("0700001b loads");
+        let sim = scene.sim.as_ref().unwrap();
+        let (h, n) = sim.drones.scripts.lib.iter().find(|(_, n)| n.camera)
+            .map(|(h, n)| (*h, n.clone())).expect("0700001b's pack has camera scripts");
+        eprintln!("camera script {h:#x} (length {})", n.length);
+        (h, n)
+    }; // the 0700001b scene drops before the second load (headless memory)
+    let Ok(mut scene) = nf_view::load(&path, "07000500.bin", false) else { eprintln!("07000500.bin does not load headless — skipped"); return };
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.drones.subtitle_track.enabled = true;
+        sim.drones.scripts.lib.insert(cam_nis.0, cam_nis.1);
+        sim.drones.scripts.spawn_once(0x0600_0000, 0x0600_0961, IDENT_MAT);
+    }
+    for _ in 0..230 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        let frame = sim.drones.frame;
+        assert_eq!(sim.drones.subtitle_track.active_subtitle(frame), Some(0x0600_0068),
+            "the caption is live before the camera script starts (frame {frame})");
+    }
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.drones.scripts.spawn_once(0x0600_0001, cam_nis.0, IDENT_MAT);
+    }
+    for _ in 0..4 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
+    let sim = scene.sim.as_ref().unwrap();
+    let frame = sim.drones.frame;
+    assert_eq!(sim.drones.subtitle_track.active_subtitle(frame), None,
+        "the camera script's start flushed the live caption (frame {frame}) [M 0x1db618]");
+    assert!(sim.hud.subs.iter().flatten().next().is_none(),
+        "the bound HUD line died with the flush (the view's text_flush consumer)");
+    assert!(sim.drones.script_msgs.is_empty(), "the pending drains died too");
+}
+
+/// Sister: a NON-camera script's start leaves the live caption alone — `Script_Play`'s tail only
+/// runs under `+0xAA8 & 0x40` [M 0x1db5c0's camera gate; the flush and the music event are both
+/// past it].
+#[test]
+fn non_camera_script_start_leaves_the_live_caption() {
+    let Some(path) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let Ok(mut scene) = nf_view::load(&path, "07000500.bin", false) else { eprintln!("07000500.bin does not load headless — skipped"); return };
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.drones.subtitle_track.enabled = true;
+        sim.drones.scripts.spawn_once(0x0600_0000, 0x0600_0961, IDENT_MAT);
+    }
+    for _ in 0..230 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert_eq!(sim.drones.subtitle_track.active_subtitle(sim.drones.frame), Some(0x0600_0068),
+            "the caption is live");
+    }
+    {
+        // A second player of the same NON-camera text script: SP_LoadScript's arms all reach
+        // `Script_Play` [M 0x1dbc08], whose tail does nothing without the camera flag.
+        let sim = scene.sim.as_mut().unwrap();
+        sim.drones.scripts.spawn_once(0x0600_0002, 0x0600_0961, IDENT_MAT);
+    }
+    for _ in 0..6 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
+    let sim = scene.sim.as_ref().unwrap();
+    let frame = sim.drones.frame;
+    assert_eq!(sim.drones.subtitle_track.active_subtitle(frame), Some(0x0600_0068),
+        "the non-camera start did not flush the live caption (frame {frame})");
+}
+
+/// The flush runs BEFORE the script's own first line: `Script_Play`'s tail precedes
+/// `SP_LoadScript`'s arm tail `Script_Update` [M 0x1dbc08: Script_Play → Script_Update], so the
+/// camera script's own op-0x1e line is queued after the flush and displays. The script here is
+/// the real 0x06000961 op stream [D 07000500.bin] with only the header's camera word flipped —
+/// the flag is the thing under test; a pack camera script carries no op-0x1e to observe with.
+#[test]
+fn camera_start_does_not_eat_the_script_s_own_first_line() {
+    let Some(path) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let Ok(mut scene) = nf_view::load(&path, "07000500.bin", false) else { eprintln!("07000500.bin does not load headless — skipped"); return };
+    const TEST_CAM_TEXT: u32 = 0x0600_0f61; // a test-only hash: the flipped clone
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.drones.subtitle_track.enabled = true;
+        let mut n: nf_formats::nis::Nis = std::clone::Clone::clone(&**sim.drones.scripts.lib.get(&0x0600_0961).expect("the pack has the intro text script"));
+        n.hashcode = TEST_CAM_TEXT;
+        n.camera = true; // [S] the flip — the flush-under-test needs an op-0x1e camera script; none exists on the disc packs
+        sim.drones.scripts.lib.insert(TEST_CAM_TEXT, std::sync::Arc::new(n));
+        sim.drones.scripts.spawn_once(0x0600_0000, TEST_CAM_TEXT, IDENT_MAT);
+    }
+    for _ in 0..230 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
+    let sim = scene.sim.as_ref().unwrap();
+    let frame = sim.drones.frame;
+    assert_eq!(sim.drones.subtitle_track.active_subtitle(frame), Some(0x0600_0068),
+        "the camera script's OWN first line displays — the start flush ran before it (frame {frame})");
 }
