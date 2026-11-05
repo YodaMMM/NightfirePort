@@ -139,9 +139,10 @@ pub fn lerp_yaw(a: f32, b: f32, t: f32) -> f32 {
 /// 0x23bf90, syscall 0x73) — one sim tick per vertical blank [M 0023c058/0023c0e8 decomp +
 /// caller scan]. The host render loop's `dt * 60` accumulation with whole-tick runs is the
 /// port's vsync wait (determinism rule: the tick count, not the wall clock, drives Sim).
-pub fn ticks_for_frame(anim_time: &mut f32, dt: f32, max_ticks: u32) -> u32 {
+pub fn ticks_for_frame(anim_time: &mut f64, dt: f32, max_ticks: u32) -> u32 {
     let before = *anim_time as u32;
-    *anim_time += dt * 60.0;
+    // f64: an f32 clock rounds a small step away, the shorter the frame the sooner (19 h at 240 Hz).
+    *anim_time += (dt * 60.0) as f64;
     (*anim_time as u32).saturating_sub(before).min(max_ticks)
 }
 /// fix-interp-camera-bracket: one presented frame's interpolation bracket. The camera bracket is
@@ -2877,7 +2878,7 @@ struct App {
     /// Animation: `None` = the game's start animations; `Some(k)` = the k-th sequence per skeleton (`[` / `]`);
     /// time in 60 Hz ticks; paused (`P`).
     choice: Option<usize>,
-    anim_time: f32,
+    anim_time: f64,
     paused: bool,
     /// F3 = show held-back drones (reinforcements, drones waiting for a switch), F = make armed drones fire.
     opts: scene::ViewOpts,
@@ -4046,7 +4047,7 @@ impl App {
             // none of it. The result is never drawn (each rebuild overwrites its buffers whole),
             // and the build reads the scene only (the memo is a pure function of its key).
             let (mut p, mut c) = (Vec::new(), Vec::new());
-            self.scene.skin_palette_into(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None, &mut p, &mut c);
+            self.scene.skin_palette_into(&g.renderer.skin_layout, self.choice, self.anim_time as f32, self.opts, None, &mut p, &mut c);
             let second = (p.clone(), c.clone());
             self.pal_spare = vec![(p, c), second];
         }
@@ -4551,7 +4552,7 @@ impl App {
                 menu::menu_overlay_fonts(fe, &t.font, &t.font_header, Some(&t.font_medium), lang, &self.scene.hud_textures, 1280.0 / 720.0)
             }))
         };
-        shot(&self.scene, &self.cam, &png.to_string_lossy(), self.choice, self.anim_time, self.opts, self.notex, self.nofog, fe_menu.as_ref(), movie_owned.as_ref())
+        shot(&self.scene, &self.cam, &png.to_string_lossy(), self.choice, self.anim_time as f32, self.opts, self.notex, self.nofog, fe_menu.as_ref(), movie_owned.as_ref())
     }
 
     /// Player bug report (F10, bugreport.rs): the frame, where the player is, the system, the session recording and
@@ -5902,7 +5903,7 @@ impl App {
                     // perf-240: the tick before last's buffers are refilled (skin_palette_into overwrites
                     // them whole) instead of a fresh ~1 MB allocation every tick.
                     let (mut np, mut nc) = self.pal_prev.take().or_else(|| self.pal_spare.pop()).unwrap_or_default();
-                    self.scene.skin_palette_into(&g.renderer.skin_layout, self.choice, self.anim_time, self.opts, None, &mut np, &mut nc);
+                    self.scene.skin_palette_into(&g.renderer.skin_layout, self.choice, self.anim_time as f32, self.opts, None, &mut np, &mut nc);
                     let new = (np, nc);
                     frame_part(3, fp_pal.elapsed());
                     g.renderer.char_light_centre = self.scene.char_light_centres();
@@ -5928,7 +5929,7 @@ impl App {
                     self.pal_cur = Some(new);
                     self.beam_entries = self.scene.beam_entries(&g.renderer.skin_layout);
                 }
-                let (draw_cam, alpha0) = draw_bracket(&mut self.cam_prev, &mut self.cam_cur, self.cam, pal_rebuilt, self.anim_time.fract(), interp0);
+                let (draw_cam, alpha0) = draw_bracket(&mut self.cam_prev, &mut self.cam_cur, self.cam, pal_rebuilt, self.anim_time.fract() as f32, interp0);
                 let aspect0 = g.config.width as f32 / g.config.height as f32;
                 // fix-cutscene-letterbox: a live script camera frames the view at the game's own
                 // 4:3 aspect and pillar-boxes the render into the band (the game's letterbox bars
@@ -6471,7 +6472,7 @@ impl App {
             aiming: false,
             last: std::time::Instant::now(),
             choice,
-            anim_time,
+            anim_time: anim_time as f64,
             paused: false,
             opts,
             noclip: false,
@@ -8824,6 +8825,23 @@ mod headless_app_harness {
                 if !handle.lock().unwrap().catalog.is_empty() { n += 1; }
             }
             assert!((3..=5).contains(&n), "{hz} Hz: {n} refreshes in 2 s");
+        }
+    }
+
+    /// A level left running a long time keeps 60 ticks a second at any rate. Sister: on the f32
+    /// clock 240 Hz froze at 19.4 h (0 ticks a second) and 1000 Hz at 4.9 h, where 60 Hz ran on.
+    #[test]
+    fn a_long_session_keeps_sixty_ticks_a_second() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut h = HeadlessApp::mission(&iso, "07000005.bin");
+        for _ in 0..120 { h.app.frame(1.0 / 60.0); }
+        for hz in [60.0f32, 240.0, 1000.0] {
+            h.app.anim_time = 4_194_304.0;
+            let at = |h: &HeadlessApp| h.app.scene.sim.as_ref().unwrap().drones.frame;
+            let a = at(&h);
+            for _ in 0..hz as u32 { h.app.frame(1.0 / hz); }
+            let ran = at(&h) - a;
+            assert!((59..=61).contains(&ran), "{hz} Hz: {ran} ticks in 1 s");
         }
     }
 
