@@ -2958,6 +2958,8 @@ struct App {
     movie_poll_clock: f32,
     /// The same fraction for the menus' sound pump: `SFXUpdate` is once per game frame [M sound.md §6].
     sound_poll_clock: f32,
+    /// The widescreen option's viewer+0x114 aspect, as last read from the front end.
+    game_aspect: f32,
     /// The 60 Hz ticks no driver update has answered yet (`sound_pumps`).
     sound_owed: u32,
     /// The sim reported the mission's own end this frame (see `Drones::mission_end`).
@@ -5959,7 +5961,9 @@ impl App {
                 // (0x10000223 → viewer+0x114 [M 0x1baf70:28-32]); feed the same aspect the
                 // cut-scene view builds at (`Sim::view_aspect`, the gun tilt's input) and frame
                 // the cut-scene with it — see cutscene_frame. The game's default (row off) is 4/3.
-                let game_aspect = self.fe.as_ref().map_or(4.0 / 3.0, |fe| fe.view_aspect());
+                // The front end is closed during play, so the option's value outlives it here.
+                if let Some(fe) = self.fe.as_ref() { self.game_aspect = fe.view_aspect(); }
+                let game_aspect = self.game_aspect;
                 if let Some(sim) = self.scene.sim.as_mut() { sim.view_aspect = game_aspect; }
                 let (proj_aspect, band) = if cutscene { cutscene_frame(g.config.width as f32, g.config.height as f32, game_aspect) } else { (aspect0, [0.0; 4]) };
                 let (vp0, _) = draw_cam.view_proj(proj_aspect);
@@ -6522,6 +6526,7 @@ impl App {
             fe_clock: 0.0,
             movie_poll_clock: 0.0,
             sound_poll_clock: 0.0,
+            game_aspect: if std::env::var_os("NF_WIDESCREEN").is_some() { 16.0 / 9.0 } else { 4.0 / 3.0 },
             sound_owed: 0,
             pending_mission_end: false,
             results_progress: None,
