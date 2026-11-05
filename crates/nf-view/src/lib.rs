@@ -3389,7 +3389,9 @@ impl App {
             if a == MA::Confirm && shown >= 1.0 { fe.flow.skip_movie(); }
             return;
         }
-        if fe.page == menu::Page::Pause && a == MA::Back {
+        // A YES/NO confirm or the hint box takes its own Back [M C_LBMSGOPTIONS_Handler 0x2022a0].
+        if fe.page == menu::Page::Pause && a == MA::Back
+            && !fe.confirming_restart && !fe.confirming_quit && fe.pause_hint.is_none() {
             // profile-session: the pause front end drops here — the session stands [M the
             // globals outlive MenuManager_Delete; the next manager inherits].
             self.stash_profile_session();
@@ -4470,6 +4472,8 @@ impl App {
     }
 
     fn grab(&mut self, on: bool) {
+        // A button let go over a menu never reaches the game's arms: it must not stay held.
+        if !on { self.trigger = false; self.zoom = false; self.grabbed = false; }
         let Some(g) = &self.gfx else { return };
         if on {
             let ok = g.window.set_cursor_grab(CursorGrabMode::Locked).or_else(|_| g.window.set_cursor_grab(CursorGrabMode::Confined)).is_ok();
@@ -6354,8 +6358,10 @@ impl App {
                         // instead of pausing. Only the bare
                         // viewer (no mission) quits on an un-grabbed Esc.
                         let in_mission = self.scene.sim.is_some() && self.level_code != 0 && self.level_code != menu::FRONTEND_LEVEL;
+                        let cinema = in_mission && self.scene.sim.as_ref().is_some_and(|s| s.script_camera().is_some());
                         if self.grabbed || in_mission {
-                            self.grab(false);
+                            // A refused pause keeps the mouse: the player is still in the mission.
+                            if !cinema { self.grab(false); }
                             // Esc in a mission opens the pause page [S: the game pauses on Start].
                             // The game's pause gate: the action AND GameState+0x36==0 AND
                             // ScriptCam==0 [M Player_Update 0x193600:72] — a script camera up (the
