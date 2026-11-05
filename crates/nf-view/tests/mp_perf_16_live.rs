@@ -56,7 +56,11 @@ fn iso() -> Option<String> {
 // object is GONE [M 0x126b88:386-390], so the bots now also target hidden (respawning) rows;
 // (2) NDrone2_DSTATE_BotDead zeroes the dead bot's pickup visit rows [M 0x171518:17]. The old
 // digest baked the port's two deviations in (the state-2 skip and the never-reset stamps).
-const PINNED_DIGEST: u64 = 0x6b6f_2ae6_bf54_2614;
+/// The 2-humans + 14-bots fixed run's hash fold. The golden moved with mp-bot-voices: the bots'
+/// pain/death barks are real shared-stream draws now (`BOT_soundEffect` 0x126618's arms — the
+/// one `Rand_Rand(n)` per bark [M 0x1266b4]), so the simulated result legitimately differs from
+/// the pre-bark 0x89cb_fcb6_ae45_c2ac; the pin's job (catching an UNintended change) is intact.
+const PINNED_DIGEST: u64 = 0x6483_2b31_d595_bd3b;
 
 const TICKS: u32 = 3600;
 
