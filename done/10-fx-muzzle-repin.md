@@ -6,3 +6,7 @@ Rebased on master they shift the random stream and turn 30 tests red: enemy_accu
 
 ---
 claimed-by: sandbox1 at 2026-11-05T09:31Z
+
+---
+## Report (done, 2026-11-05T11:05Z)
+
