@@ -424,6 +424,7 @@ fn a_grenade_blast_plays_the_explosion_script_entities() {
         phase: None,
     burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
     defused: false,
+    born: 0,
     });
     let mut blasted = false;
     for _ in 0..40 { sim.step_bond(Input::default(), false, false, false); if !sim.drones.explosions.is_empty() { blasted = true; break; } }

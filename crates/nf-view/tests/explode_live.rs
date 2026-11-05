@@ -69,6 +69,7 @@ fn frag_blast_kills_the_guard_next_to_it_and_the_stun_touches_nobody() {
         phase: None,
     burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
     defused: false,
+    born: 0,
     });
     let mut blasted = false;
     for _ in 0..40 { sim.step_bond(Input::default(), false, false, false); if !sim.drones.explosions.is_empty() { blasted = true; break; } }
@@ -93,6 +94,7 @@ fn frag_blast_kills_the_guard_next_to_it_and_the_stun_touches_nobody() {
         phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
         defused: false,
+        born: 0,
         });
         let mut hurt = false;
         for _ in 0..40 {
@@ -128,6 +130,7 @@ fn stun_grenade_stuns_without_damage_and_a_shot_kills_the_stunned() {
         phase: None,
     burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
     defused: false,
+    born: 0,
     });
     let mut stunned = false;
     for _ in 0..40 {
