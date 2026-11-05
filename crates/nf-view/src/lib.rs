@@ -2898,7 +2898,9 @@ struct App {
     /// The external dev panel (http://127.0.0.1:7007, `--dev`) and the level its catalog describes.
     panel: Option<panel::Handle>,
     panel_level: u32,
-    panel_frames: u32,
+    /// 60 Hz ticks of time since boot (the catalog refreshes every 30), and the fraction left over.
+    panel_ticks: u32,
+    panel_clock: f32,
     /// Right mouse held: scope zoom (`Player_Zoom`).
     zoom: bool,
     /// Dev mode (WORKLOG 0083): `None` when `--dev` is off.
@@ -4651,7 +4653,7 @@ impl App {
         })
     }
 
-    fn poll_panel(&mut self) {
+    fn poll_panel(&mut self, dt: f32) {
         let Some(h) = self.panel.clone() else { return };
         let queued: Vec<String> = h.lock().map(|mut g| std::mem::take(&mut g.queue)).unwrap_or_default();
         let mut changed = !queued.is_empty();
@@ -4677,8 +4679,9 @@ impl App {
             if let Ok(mut g) = h.lock() { g.status = status; }
         }
         let level = self.scene.sim.as_ref().map_or(0, |s| s.level);
-        self.panel_frames += 1;
-        if changed || level != self.panel_level || self.panel_frames % 30 == 0 {
+        let before = self.panel_ticks / 30;
+        self.panel_ticks += movie_polls(&mut self.panel_clock, dt);
+        if changed || level != self.panel_level || self.panel_ticks / 30 != before {
             changed = true;
             self.panel_level = level;
         }
@@ -4930,7 +4933,8 @@ impl App {
                 if self.async_load.is_some() && !self.poll_async_load() { return; }
                 // The Toggles page's fps display (wall-clock; a dev readout, never in the Sim).
                 if let Some(d) = self.dev.as_deref_mut() {
-                    if dt > 0.0 { d.fps = if d.fps <= 0.0 { 1.0 / dt } else { d.fps * 0.9 + (1.0 / dt) * 0.1 }; }
+                    // 0.9 per 60 Hz tick of time, not per frame.
+                    if dt > 0.0 { let k = 0.9f32.powf(dt * 60.0); d.fps = if d.fps <= 0.0 { 1.0 / dt } else { d.fps * k + (1.0 / dt) * (1.0 - k) }; }
                 }
                 let speed = if self.keys.contains(&KeyCode::ShiftLeft) { 40.0 } else { 8.0 } * dt;
                 let fwd = self.cam.dir();
@@ -4942,7 +4946,7 @@ impl App {
                 if self.noclip || self.scene.sim.is_none() { self.cam.pos += mv * speed; }
                 // One animation frame per 60 Hz game update (FRAME_RATE_MUL = 1), docs/formats/animation.md.
                 self.ticked = false;
-                self.poll_panel();
+                self.poll_panel(dt);
                 // fix-pause-audio: the pause page holds the sound. `MenuManager_Create` with
                 // `pause_sound` runs `SFXPause` (batch op 9) + `SFXPauseAllStreams` (op 0x16) and
                 // `MenuManager_Delete` runs the unpause pair [M 0x21b908:121-124, 0x21c2b0:11-22];
@@ -5821,7 +5825,7 @@ impl App {
                     // Dev mode after-tick: god mode / infinite ammo (the game's own state, set the way the game sets it).
                     frame_part(0, fp_t0.elapsed());
                     if debrief_opened { self.grab(false); } // the menus own the cursor again
-                    if let Some(d) = self.dev.as_deref_mut() { d.after_tick(&mut self.scene); }
+                    if let Some(d) = self.dev.as_deref_mut() { d.after_tick(&mut self.scene); d.result_tick(elapsed); }
                     // The mission's end sequence (`Mission_Update` case 4 → `ResetMap_LevelToLoad`
                     // of the outro or the front end): the same front-end path the F8 hook drives.
                     if let Some(ch) = self.force_channel {
@@ -6518,7 +6522,8 @@ impl App {
             frame_start: std::time::Instant::now(),
             panel: None,
             panel_level: 0,
-            panel_frames: 0,
+            panel_ticks: 0,
+            panel_clock: 0.0,
             fe: None,
             screen_pos: (0, 0),
             auto_aim_opt: true,
@@ -8747,6 +8752,78 @@ mod headless_app_harness {
             fe.flow.push_state(menu::ST_MOVIE, 0);
             let (secs, len) = hold_secs(&mut h, code, hz);
             assert!(len > 0.0 && (secs - len).abs() < 0.2, "{hz} Hz held {secs} s of a {len} s movie");
+        }
+    }
+
+    /// A mission with the dev tools on, past its first ticks.
+    fn dev_mission(iso: &str) -> HeadlessApp {
+        let mut h = HeadlessApp::mission(iso, "07000005.bin");
+        for _ in 0..120 { h.app.frame(1.0 / 60.0); }
+        h.app.dev = Some(Box::new(dev::Dev::default()));
+        h
+    }
+
+    /// The dev result line stays its 3 s. Sister: counted per frame it left after 0.75 s at 240 Hz.
+    #[test]
+    fn the_dev_result_line_stays_three_seconds_at_any_display_rate() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut h = dev_mission(&iso);
+        for hz in [60.0f32, 240.0] {
+            let d = h.app.dev.as_deref_mut().unwrap();
+            (d.result_msg, d.result_timer) = (Some("x".into()), 180);
+            let mut frames = 0;
+            while h.app.dev.as_deref().unwrap().result_msg.is_some() && frames < 3000 { h.app.frame(1.0 / hz); frames += 1; }
+            let secs = frames as f32 / hz;
+            assert!((secs - 3.0).abs() < 0.05, "{hz} Hz: {secs} s");
+        }
+    }
+
+    /// The 0.25x row runs a quarter of the ticks. Sister: 0.25 of a frame's one tick truncated to
+    /// none, so the row froze the game outright at 60 Hz and up.
+    #[test]
+    fn the_quarter_speed_row_runs_a_quarter_of_the_ticks() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut h = dev_mission(&iso);
+        h.app.dev.as_deref_mut().unwrap().time_scale = 0.25;
+        for hz in [60.0f32, 240.0] {
+            let at = |h: &HeadlessApp| h.app.scene.sim.as_ref().unwrap().drones.frame;
+            let a = at(&h);
+            for _ in 0..(2.0 * hz) as u32 { h.app.frame(1.0 / hz); }
+            let ran = at(&h) - a;
+            assert!((29..=31).contains(&ran), "{hz} Hz: {ran} ticks in 2 s");
+        }
+    }
+
+    /// The fps readout settles in the same time at any rate. Sister: 0.9 per frame took 0.97 s
+    /// after a drop to 30 fps and 0.24 s after a drop to 120.
+    #[test]
+    fn the_fps_readout_settles_in_the_same_time_at_any_display_rate() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut h = dev_mission(&iso);
+        for hz in [60.0f32, 240.0] {
+            h.app.dev.as_deref_mut().unwrap().fps = hz;
+            let (half, mut secs) = (hz / 2.0, 0.0f32);
+            while (h.app.dev.as_deref().unwrap().fps - half).abs() > half * 0.05 && secs < 5.0 { h.app.frame(1.0 / half); secs += 1.0 / half; }
+            assert!((0.4..0.7).contains(&secs), "{hz} Hz: settled in {secs} s");
+        }
+    }
+
+    /// The panel's catalog refreshes twice a second. Sister: every 30 frames was 8 a second at 240 Hz.
+    #[test]
+    fn the_panel_catalog_refreshes_twice_a_second_at_any_display_rate() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut h = dev_mission(&iso);
+        for hz in [60.0f32, 240.0] {
+            let handle: panel::Handle = Default::default();
+            h.app.panel = Some(handle.clone());
+            h.app.frame(1.0 / hz); // the first poll sees a new level
+            let mut n = 0;
+            for _ in 0..(2.0 * hz) as u32 {
+                handle.lock().unwrap().catalog.clear();
+                h.app.frame(1.0 / hz);
+                if !handle.lock().unwrap().catalog.is_empty() { n += 1; }
+            }
+            assert!((3..=5).contains(&n), "{hz} Hz: {n} refreshes in 2 s");
         }
     }
 
