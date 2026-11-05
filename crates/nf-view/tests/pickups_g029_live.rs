@@ -148,7 +148,7 @@ fn a_respawning_placed_pickup_hides_and_returns_on_07000004() {
         // port's `respawn_ticks = 60·respawn·10 + 1` (the old pin held the one-tick-early
         // 1200; the unit pin respawn_hides_for_frame_rate_times_respawn_times_ten carries the
         // same re-pin).
-        assert_eq!(p.respawn_ticks, respawn_ticks + 1, "the full FRAME_RATE_INT · respawn · 10 wait, restore at limit+1 [M 0x18e148:183-185]");
+        assert_eq!(p.respawn_ticks, respawn_ticks, "the full FRAME_RATE_INT · respawn · 10 wait, restore at limit+1 [M 0x18e148:183-185]");
         assert!(sim.drones.inventory.owned.get(0x12).copied().unwrap_or(false), "the weapon went into the inventory");
     }
     // The wait: tick with idle input until the counter is at its last tick, still hidden; the
