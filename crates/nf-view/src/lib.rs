@@ -7970,6 +7970,8 @@ static NET_STALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 // through the load) all lived in code no test ran.
 // ---------------------------------------------------------------------------
 #[cfg(test)]
+mod flow_audit;
+#[cfg(test)]
 mod headless_app_harness {
     use super::*;
     use winit::keyboard::KeyCode;
