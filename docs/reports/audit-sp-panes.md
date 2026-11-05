@@ -173,6 +173,16 @@ assertion holds the pre-fix shape wrong).
 - The four live checks above.
 - The full-suite run on a disk that fits (the walkreal set first).
 
+## ntfy failed
+
+All three fallbacks, in order, with their output:
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "audit-sp-panes: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'audit-sp-panes: done', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "audit-sp-panes: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out with no output (killed at the 20 s deadline).
+
 ## Usage
 
 not visible to me
