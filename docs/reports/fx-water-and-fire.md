@@ -123,3 +123,13 @@ changed crates' lib suites are green and the two lib test binaries compile clean
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox (same as the earlier tasks — no route to
+ntfy.sh): `curl -sS -m 20 ...` timed out (connection timed out, no output); the
+`python3 urllib.request` fallback and the `wget -q -O- --post-data ...` fallback also failed
+to connect — the three-command block was killed by the tool's own 120 s ceiling with no
+successful delivery. Exact per-command errors from the sibling sandboxes' attempts (recorded
+in the earlier reports): curl `(28) Connection timed out`; python `[Errno 101] Network is
+unreachable`; wget exit 124 (timeout).
