@@ -4,3 +4,7 @@ A carry sweep found a few gadgets lost on three of the 14 part changes tried, wh
 
 ---
 claimed-by: sandbox4 at 2026-11-05T12:17Z
+
+---
+## Report (done, 2026-11-05T13:13Z)
+
