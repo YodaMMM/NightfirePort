@@ -4,3 +4,8 @@ Port row 2 of the table: the footstep Effect_Create for NPCs, on the per-frame s
 
 ---
 claimed-by: sandbox7 at 2026-11-05T03:08Z
+
+---
+## Report (done, 2026-11-05T04:12Z)
+
+Closed by the driver: the report is on `s/fx-npc-footsteps` (docs/reports/fx-npc-footsteps.md); the worker didn't run finish.sh.
