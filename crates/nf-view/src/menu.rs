@@ -9857,7 +9857,11 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             }
         }
     });
-    if let Some(t) = fe.notice.as_ref().or(fe.net_notice.as_ref()).or(mp_err.as_ref()) {
+    // The results save question and the card flow's messages [M DAT_002462d4] ride the same box.
+    let save_ask = fe.results_box.then(|| "Save your progress?".to_string());
+    let card_msg = fe.card_message().map(|(_, l)| bind(l)).filter(|s| !s.is_empty());
+    let asks = save_ask.is_some() || (card_msg.is_some() && fe.card.buttons & BTN_CANCEL != 0);
+    if let Some(t) = fe.notice.as_ref().or(fe.net_notice.as_ref()).or(mp_err.as_ref()).or(card_msg.as_ref()).or(save_ask.as_ref()) {
         // The page under a message box dims so the box reads on its own (it sat on the list rows'
         // text in the live check).
         // In FRONT of every page layer (the HUD sorts higher layers to the back; the page rows draw
@@ -9879,7 +9883,8 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             let mid = 230.0 + (k as f32 - (n - 1.0) / 2.0) * 22.0;
             centred(&mut h, font, -12, l, mx(320.0), my(mid), cream, true, 1.0);
         }
-        centred(&mut h, font, -12, "Press Enter", mx(320.0), my(282.0), dim, true, 1.0);
+        let hint = if asks { "Enter: Yes    Esc: No" } else if card_msg.is_some() && fe.card.buttons == 0 { "" } else { "Press Enter" };
+        centred(&mut h, font, -12, hint, mx(320.0), my(282.0), dim, true, 1.0);
     }
     h.finish()
 }
