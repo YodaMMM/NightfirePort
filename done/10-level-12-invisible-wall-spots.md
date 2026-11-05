@@ -4,3 +4,8 @@ After the alarm on 07000012, guards stop at about (22.97,1.06,36.21) as if at a 
 
 ---
 claimed-by: sandbox7 at 2026-11-05T09:58Z
+
+---
+## Report (done, 2026-11-05T10:43Z)
+
+Closed by the driver: the report is on `s/level-12-invisible-wall-spots` (docs/reports/level-12-invisible-wall-spots.md); the worker didn't run finish.sh.
