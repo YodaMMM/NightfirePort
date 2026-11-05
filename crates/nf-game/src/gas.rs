@@ -526,6 +526,7 @@ impl GasPool {
             hidden: false,
             born: self.frame,
             child: None,
+            rot: [0.0; 3],
         });
     }
 }
