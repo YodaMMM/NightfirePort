@@ -18,6 +18,13 @@
 
 use nf_game::player::Input;
 
+/// The bullet holes: a guard walking anywhere on the level leaves footprints in the same pool.
+fn holes(sim: &nf_view::scene::Sim) -> Vec<nf_game::effect::Decal> {
+    let data = sim.data();
+    let foot = |m: u32| data.surfaces.is_some_and(|s| s.effects.iter().any(|e| e.foot_decal_4 == m || e.foot_decal_8 == m));
+    sim.drones.effects.decals.iter().filter(|d| !foot(d.mesh)).cloned().collect()
+}
+
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 /// The check spot, ~4.05 units from point #282 (13.7525, 32.2919, 57.3034 [L ee_start_05.bin obj+0x30]).
@@ -83,7 +90,7 @@ fn the_claw_draws_and_the_held_fire_latches_reels_and_hangs_with_no_beam_and_no_
         let sim = scene.sim.as_ref().unwrap();
         assert!(scene.sim.as_ref().unwrap().laser_beam.is_none(),
             "the claw (0x50) is NOT a laser weapon — the old is_laser_weapon drew the 'bullet impact' beam");
-        assert!(sim.drones.effects.decals.is_empty(),
+        assert!(holes(sim).is_empty(),
             "the claw bolt spawns no bullet decals [M Effect_Create 0x1ce688's kind-0 dispatch]");
         if sim.bond.grapple.as_ref().map(|g| g.phase) == Some(2) {
             let d = dist(sim.bond.pos, TARGET);
@@ -96,7 +103,7 @@ fn the_claw_draws_and_the_held_fire_latches_reels_and_hangs_with_no_beam_and_no_
         let sim = scene.sim.as_ref().unwrap();
         assert!(hung, "the held fire must reel Bond to #282 and hang him (pos {:?}, phase {:?})",
             sim.bond.pos, sim.bond.grapple.as_ref().map(|g| g.phase));
-        assert!(sim.drones.effects.decals.is_empty(), "0 bullet decals through the whole grapple");
+        assert!(holes(sim).is_empty(), "0 bullet decals through the whole grapple");
     }
     // The release detaches [M 0x192860:64-66].
     scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);

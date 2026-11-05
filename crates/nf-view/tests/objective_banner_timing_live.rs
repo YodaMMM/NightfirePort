@@ -203,7 +203,7 @@ fn a_scene_starting_in_the_flash_window_holds_the_open_chime() {
         sim.hud.objective_msgs.push_back(nf_view::scene::Msg {
             text: "flash window probe".to_string(), time: 300.0, status: 0x0200_0051, failed: false,
             life: 300.0, opened: false, second: false, label: 0, script: false,
-            sfx1: false,
+            sfx1: false, image: 0, // sp-panes-new-drawing: the TXT_MSG+0x10 image id (0 = a text post)
         });
         sim.bond.pos = [94.2, 43.7, -45.9]; // TouchOnce #412's volume
     }

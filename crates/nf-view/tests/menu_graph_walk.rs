@@ -704,7 +704,10 @@ fn probe_back(name: &str, prologue: &[Edge], path: &[Edge], findings: &mut Vec<S
     // load's MenuManager_Create with an empty stack [S unverified — P_NFRESULTS 0x208e78 has no
     // 0x5f arm; its exits are ✕ / 0x5d / 0x5e (:28-53, :222-230)].
     let fail_menu = start == Page::Results;
-    if fail_menu || matches!(start, Page::Start | Page::WinGame | Page::Credits | Page::Intro | Page::ParisEnum | Page::EstHero) {
+    // Main joins the no-back set: P_MAIN_Handler 0x20a7b0 has no Back arm at all (the 0x50 only
+    // takes the idle attract; the row controls handle only the 0x4b select) — the game ignores
+    // ○/Esc on Main.
+    if fail_menu || matches!(start, Page::Start | Page::Main | Page::WinGame | Page::Credits | Page::Intro | Page::ParisEnum | Page::EstHero) {
         return;
     }
     for _ in 0..BACK_STEPS {

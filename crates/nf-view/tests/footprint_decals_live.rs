@@ -62,8 +62,21 @@ fn walking_leaves_the_games_footprint_decals() {
     // The prints among the new decals (a responding guard's holes carry the hole meshes —
     // filtered by the material's two foot columns; on stone-family floors 0x02000126 is shared
     // with the hole set, so the count assert keeps a margin).
+    // fx-npc-footsteps: the level's NPCs lay their OWN prints now (the same `Effect_Create`), so
+    // the filter also keeps only the decals ON Bond's walked segment — a patrolling guard's step
+    // on the same surface family shares the two meshes but not the path.
+    let seg_dist = |p: [f32; 3]| {
+        let (sx, sz) = (start[0], start[2]);
+        let dx = target[0] - sx;
+        let dz = target[2] - sz;
+        let len2 = dx * dx + dz * dz;
+        let t = (((p[0] - sx) * dx + (p[2] - sz) * dz) / len2).clamp(0.0, 1.0);
+        let (cx, cz) = (sx + dx * t, sz + dz * t);
+        ((p[0] - cx) * (p[0] - cx) + (p[2] - cz) * (p[2] - cz)).sqrt()
+    };
     let prints: Vec<_> = sim.drones.effects.decals.iter().skip(before)
         .filter(|d| d.mesh == m4 || d.mesh == m8)
+        .filter(|d| seg_dist(d.pos) < 1.0)
         .collect();
     assert!(
         prints.len() >= 2,

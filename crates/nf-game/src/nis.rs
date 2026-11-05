@@ -79,6 +79,17 @@ pub enum Request {
     /// voice lines and one-shot effects are baked into their animation scripts this way. `at` is the owning
     /// `Obj::Anim`'s object index (the sound's position, read each drain).
     AnimSound { id: u32, at: Option<usize> },
+    /// A stream anim object's footstep (`Script_Interp` case 2's trailing block [M 0x1d9a08
+    /// 0x1d9f64-0x1da020]): the case-2 `AnimObjectUpdate` ticked the anim script synchronously and
+    /// its op-4 footstep markers (0/4/5) raised `hitdata+0x60 & 4` — the inner consumption stays
+    /// suppressed behind `ScriptCam != 0` [M 0x1befd8:191-195], so the stream's own block consumes:
+    /// a fresh 4-unit downward `Collide_RayIntersect` from obj+0xc0 [M 0x1d9f7c-0x1d9fd0] and
+    /// `Effect_Create(rayhit, obj, foot|0x42)` [M 0x1da01c]. `ops` are the marker kinds in command
+    /// order (they mutate the one global `ScriptFootstepFoot` before the consumption reads it
+    /// [M 0x1c1b38:372-401 → 0x1da000]); `at` is the owning `Obj::Anim`'s object index. No
+    /// `ScriptCam` gate here — the trailing block never reads it [M 0x1d9f30-0x1da028: the only
+    /// globals are `ScriptFootstepFoot` and `glb_world`].
+    NisFootstep { at: Option<usize>, ops: Vec<u8> },
     /// `SFXPreCache(id, frames)` (RPC cmd 0x26 [M 0x117118]): the cut-scene line's item is armed
     /// while its authored frame is within 0x33 (51) of the anim's current frame
     /// [M 0x1c1b38 case 1 + disasm 0x1c1ea8-0x1c1ed0: the call passes the frames still ahead],
@@ -349,6 +360,21 @@ pub trait World {
     /// The op-1 sounds of `script` with authored frame in `(from, to]`, paired with each one's
     /// distance ahead of `from` — the `SFXPreCache` arguments (`AnimProcessScriptCmds` case 1).
     fn anim_ops1_precache(&self, script: u32, from: i32, to: i32) -> Vec<(u32, i32)> { let _ = (script, from, to); Vec::new() }
+    /// The footstep markers of `script` with authored frame in `(from, to]`, in command order — the
+    /// op-4 event kinds 0 (toggle) / 4 (foot 4) / 5 (foot 8) that `AnimProcessScriptCmds`
+    /// (0x1c1b38:372-401) turns into `ScriptFootstepFoot` mutations + the `ScriptFootstepType` raise,
+    /// which the same call's `AnimObjectUpdate` consumes as the `Effect_Create(…, foot|0x42)`
+    /// (`Script_Interp` case 2's trailing block [M 0x1d9f64-0x1da020]). Empty default: only the
+    /// runtime's `Data` holds the scripts.
+    fn anim_ops4_footsteps(&self, script: u32, from: i32, to: i32) -> Vec<u8> { let _ = (script, from, to); Vec::new() }
+    /// A stream anim object's posed FOOT bone matrix in world space — `Effect_Player`'s footprint
+    /// x/z source [M 0x1cec48:89-110: the obj+0xdc hitdata's +0xb8 palette, slot 55 on foot 4 /
+    /// slot 51 on foot 8, stride 0x40 — 55*0x40 = 0xdc0, 51*0x40 = 0xcc0]. `slot` is that palette
+    /// index. The stream object sits at the origin and the anim's root track carries the world
+    /// position (the same rule `anim_obj_matrix` documents), so the posed bone matrices ARE world
+    /// space. `None` default / absent data: no decal x/z — the game's palette would be stale or
+    /// zero there too.
+    fn anim_foot_matrix(&self, skin: u32, script: u32, frame: f32, slot: usize) -> Option<Mat4> { let _ = (skin, script, frame, slot); None }
     // The removed `level()` method keyed the 0700004a lift stand-in; the lift holds on its channel
     // now (the state-2 unpause + the negative-delay hold) and nothing reads a running level here.
     /// fix-script-objects: a glist's LOCAL bounding sphere (the map object's centre and radius —
@@ -1302,6 +1328,18 @@ impl Script {
                     if let Some(m) = w.anim_obj_matrix(*skin, *script, *frame) { *matrix = m; }
                     for id in w.anim_ops1(*script, from, *frame as i32) {
                         out.push(Request::AnimSound { id, at: o });
+                    }
+                    // fx-npc-footsteps: the case-2 footstep [M 0x1d9a08 0x1d9f64-0x1da020]. The
+                    // synchronous `AnimObjectUpdate` ran the anim script's op-4 footstep markers
+                    // (0x1c1b38:372-401) and raised `hitdata+0x60 & 4`; the inner consumption is
+                    // behind `ScriptCam != 0` (the NIS's own script camera keeps it suppressed
+                    // [M 0x1befd8:191-195]), so the stream's trailing block consumes instead: the
+                    // fresh downward ray + `Effect_Create(rayhit, obj, foot|0x42)`. The drain does
+                    // the ray and the Effect_Player arms — the request carries the object and the
+                    // marker kinds (the global alternator's command-order mutations).
+                    let ops = w.anim_ops4_footsteps(*script, from, *frame as i32);
+                    if !ops.is_empty() {
+                        out.push(Request::NisFootstep { at: o, ops });
                     }
                     // `AnimProcessScriptCmds` case 1's precache [M 0x1c1b38 case 1, disasm
                     // 0x1c1ea8-0x1c1ed0]: every op-1 sitting 0..=50 frames ahead of the anim's

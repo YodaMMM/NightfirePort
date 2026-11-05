@@ -124,7 +124,12 @@ fn bots_roam_and_hunt() {
     let mut cells: Vec<std::collections::BTreeSet<(i32, i32, i32)>> = vec![Default::default(); bots];
     let mut through_wall = 0u32;
     let mut big_drop = 0u32;
-    for t in 0..3600u32 {
+    // local-match-bot-pickups: the bots now SEEK the registered pickups (the game's pickGoal
+    // skips only a row whose registered object is GONE [M 0x126b88:386-390 — the port's old
+    // `available` gate also skipped the hidden/respawning rows, keeping the bots home]) — the
+    // run's first minute goes to touring the pickup spots, so the firing window is the game's
+    // own two minutes before the hunt assert.
+    for t in 0..7200u32 {
         let respawns: Vec<u32> = (0..bots).map(|i| scene.sim.as_ref().unwrap().mp_bot_respawns(i)).collect();
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
         let sim = scene.sim.as_ref().unwrap();

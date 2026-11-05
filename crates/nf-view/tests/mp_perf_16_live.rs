@@ -50,13 +50,21 @@ fn iso() -> Option<String> {
 // Re-pinned for standins-scene-930: an online bot's armour pickup now runs Pickup_Handler's class-2 case 3
 // (BOT_vars+0xA4 / the armour byte += amount, capped 50 [M 0x18e650:119-133]) instead of the old +20 health,
 // so the fights run differently — kills 37; the two machines' per-tick hashes still agree.
-// gas-rng-draws-2 re-pin: the 16-replica fixed run's bots fight, and every real `Gas_Init` site
-// now consumes the game's draws from the shared stream [M Gas_Init 0x1aacc8:72-80 — spin
-// Rand_FRand 0x1ab060 + sign Rand_Rand 0x1ab08c (+ the kind-7 wind draws 0x1ab160/184/1a4);
-// Rand_FRand/Rand_Rand 0x1e3780/0x1e3738 advance the same SEED_X/SEED_Y pair the AI accuracy
-// (DroneWeap_DoBulletAccuracy 0x179740) and the bullet spread (Bullet_init 0x12c5a0) draw from],
-// so every bot decision after a puff moves. The pin exists to catch UNintended optimisation
-// drift; this is the intended behaviour change.
+// gas-rng-draws-6 re-pin (the merge of s/gas-rng-draws-5 + master): BOTH parents moved the
+// digest, each game-faithfully, and the merged tree carries both:
+// (a) gas-rng-draws-2's re-pin: every real `Gas_Init` site consumes the game's draws from the
+//     shared stream [M Gas_Init 0x1aacc8:72-80 — spin Rand_FRand 0x1ab060 + sign Rand_Rand
+//     0x1ab08c (+ the kind-7 wind draws 0x1ab160/184/1a4); Rand_FRand/Rand_Rand 0x1e3780/
+//     0x1e3738 advance the same SEED_X/SEED_Y pair the AI accuracy (DroneWeap_DoBulletAccuracy
+//     0x179740) and the bullet spread (Bullet_init 0x12c5a0) draw from], so every bot decision
+//     after a puff moves. The pin exists to catch UNintended optimisation drift; this is the
+//     intended behaviour change.
+// (b) master's local-match-bot-pickups re-pin: the bots' pickup rows read the REGISTERED law —
+//     pickGoal skips only a row whose registered object is GONE [M 0x126b88:386-390] — and
+//     NDrone2_DSTATE_BotDead zeroes the dead bot's pickup visit rows [M 0x171518:17]; plus the
+//     bots' pain/death barks are real shared-stream draws now (`BOT_soundEffect` 0x126618's
+//     arms — the one `Rand_Rand(n)` per bark [M 0x1266b4]).
+/// The 2-humans + 14-bots fixed run's hash fold; the pin's job (catching an UNintended change) is intact.
 const PINNED_DIGEST: u64 = 0xfce3_e6fa_7c12_2c43;
 
 const TICKS: u32 = 3600;

@@ -174,6 +174,8 @@ pub struct Player {
     tick: u32,
     started: Option<std::time::Instant>,
     ended: bool,
+    /// 60 Hz ticks the hold has waited for the first picture.
+    waited: u32,
     /// The ONE decoder path: the closed-GOP streaming worker.
     #[cfg(feature = "movies")]
     stream: Option<MovieStream>,
@@ -269,7 +271,7 @@ impl Player {
             // open; 0x108060 clears it at the pump's end of file] — the headless hold runs the
             // real length instead of reporting finished before the first frame.
             let _ = &m;
-            Ok(Player { code, looping, volume, last: None, tick: 0, started: None, ended: false, timing: Timing::default(), length_ticks, headless_left: (!looping && length_ticks > 0).then_some(length_ticks) })
+            Ok(Player { code, looping, volume, last: None, tick: 0, started: None, ended: false, waited: 0, timing: Timing::default(), length_ticks, headless_left: (!looping && length_ticks > 0).then_some(length_ticks) })
         }
         #[cfg(feature = "movies")]
         {
@@ -292,7 +294,7 @@ impl Player {
             // end. The live stream keeps feeding the picture path; a looping backdrop restarts
             // instead of finishing [M 0x108060's else arm].
             let headless_left = (!looping && length_ticks > 0).then_some(length_ticks);
-            Ok(Player { code, looping, volume, last: None, tick: 0, started: None, ended: false, stream, pcm: std::sync::Arc::new(pcm), rate, _pcm: None, timing: Timing::default(), length_ticks, headless_left })
+            Ok(Player { code, looping, volume, last: None, tick: 0, started: None, ended: false, waited: 0, stream, pcm: std::sync::Arc::new(pcm), rate, _pcm: None, timing: Timing::default(), length_ticks, headless_left })
         }
     }
 
@@ -322,6 +324,14 @@ impl Player {
     /// length [D the audio track]. The host's BGFMVPlaying polls call this once per frame; the
     /// decoder thread (the `movies` feature's picture path) does not drive it — a fast headless
     /// poll loop reaches the movie's end at the same poll count as a 60 Hz display.
+    /// The hold starts at the first picture, up to half a second after the open: the decoder takes
+    /// that long to warm up, and a hold from the open ran out 5 pictures early.
+    pub fn headless_advance_by(&mut self, ticks: u32) {
+        #[cfg(feature = "movies")]
+        if self.started.is_some() && self.last.is_none() && self.waited < 30 { self.waited += ticks; return; }
+        for _ in 0..ticks { self.headless_advance(); }
+    }
+
     pub fn headless_advance(&mut self) {
         if let Some(left) = self.headless_left.as_mut() {
             *left -= 1;

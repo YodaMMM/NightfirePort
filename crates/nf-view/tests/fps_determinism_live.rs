@@ -15,7 +15,7 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 fn run_loop(scene: &mut nf_view::scene::Scene, fps: u32, seconds: f32, max_ticks: u32) -> (Vec<u32>, u32, [f32; 3], f32, u32) {
     let dt = 1.0 / fps as f32;
     let frames = (seconds * fps as f32).round() as u32;
-    let mut anim_time = 0.0f32;
+    let mut anim_time = 0.0f64;
     let mut per_frame = Vec::new();
     for _ in 0..frames {
         let n = ticks_for_frame(&mut anim_time, dt, max_ticks);
@@ -75,14 +75,14 @@ fn slow_frames_drop_ticks_never_burst() {
 /// tick, and the cap applies before the count is handed to the sim.
 #[test]
 fn scheduler_boundary_arithmetic() {
-    let mut t = 0.0f32;
+    let mut t = 0.0f64;
     assert_eq!(ticks_for_frame(&mut t, 1.0 / 60.0, 4), 1);
     assert_eq!(ticks_for_frame(&mut t, 1.0 / 120.0, 4), 0, "half a tick: no whole tick yet");
     assert_eq!(ticks_for_frame(&mut t, 1.0 / 120.0, 4), 1, "the second half-frame crosses the boundary");
-    let mut t = 0.0f32;
+    let mut t = 0.0f64;
     assert_eq!(ticks_for_frame(&mut t, 0.2, 4), 4, "a 5 fps frame asks 12, is capped at 4");
     assert_eq!(t as u32, 12, "the clock still advanced by dt·60 (12); only the run was capped");
-    let mut t = 10.0f32;
+    let mut t = 10.0f64;
     assert_eq!(ticks_for_frame(&mut t, -1.0, 4), 0, "a negative dt (should not happen) runs nothing");
 }
 
