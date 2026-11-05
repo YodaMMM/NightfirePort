@@ -64,8 +64,10 @@ fn iso() -> Option<String> {
 //     NDrone2_DSTATE_BotDead zeroes the dead bot's pickup visit rows [M 0x171518:17]; plus the
 //     bots' pain/death barks are real shared-stream draws now (`BOT_soundEffect` 0x126618's
 //     arms — the one `Rand_Rand(n)` per bark [M 0x1266b4]).
+// Measured on the merged tree (gas-rng-draws-6): kills 35, digest 0x986f_90e8_e5d6_b12f — both
+// parents' game-faithful changes ride in one stream; the machines' per-tick hashes still agree.
 /// The 2-humans + 14-bots fixed run's hash fold; the pin's job (catching an UNintended change) is intact.
-const PINNED_DIGEST: u64 = 0xfce3_e6fa_7c12_2c43;
+const PINNED_DIGEST: u64 = 0x986f_90e8_e5d6_b12f;
 
 const TICKS: u32 = 3600;
 

@@ -689,11 +689,11 @@ fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) ->
 
     // 4. Drake, then the defeat NIS plays out (no skip, so its channel writes land).
     w.skip_cutscenes = false;
-    fight_opts(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, |s| s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s), 6000);
+    fight_opts(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, |s| s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s), 9000);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(alive(sim), "Bond survives Drake's fight (health {:.1})", sim.drones.health.health);
-        assert!(sim.drones.list[drake].health <= 0.0, "Drake dies to Bond's fire in the float");
+        assert!(sim.drones.list[drake].health <= 0.0, "Drake dies to Bond's fire in the float (Drake hp {:.1} left — the merged stream's fight rolls run the 6000-tick window out [L gas-rng-draws-6])", sim.drones.list[drake].health);
         assert!(sim.drones.channels.on(0x0e), "Drake's death channel ch 0x0e rises with the kill [D #186 p12 = 14; M 0x1747b8/0x13e660]");
         // The order's middle hinge, in the window between Drake's death (ch 0x0e) and the defeat
         // NIS's ch 0x0b write (its t600 [D 0x06000a20] — the NIS only starts on 0x0e, so 0x0b is

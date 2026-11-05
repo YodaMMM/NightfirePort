@@ -99,3 +99,20 @@ expires ~15:22 UTC; stop-new-work 15:02 UTC.
 Work log:
 - (13:24) branch start, WORKLOG entry; reading report-5 for the named next steps, then the
   master merge.
+- (13:30) the master merge: gas draws carry through (init_ex/init_ex_rot take rng); master's
+  newly-merged Gas_Init sites re-based to the real draws (the laser row-11 puff 0x1cf1ec, the
+  buoyancy row-7 puff 0x1d6eb4, the flicker spark 0x1abc3c, the water-ripple callers 0x17c118);
+  the kinds-9/10 hidden emitters land with the counter-hash child stand-in (no game caller in
+  scope); mp_perf_16's pin carries both parents' reasons.
+- (13:57) 03 d2 real-damage GREEN: the probe (#[ignore]d, kept) dumped the door-8 cluster's
+  LOAD spots (#18 (27.92,6.25,-5.57), #2 (30.69,6.25,-7.55), #19 (37.01,6.25,-15.04), all
+  disabled 0x1; door #8 (35.62,6.51,2.71) closed) — the mouth-clear re-anchored to the load
+  band + a bounded hinge-side settle loop. Whole binary 6/0+2i (was 5/1+1i).
+- (14:29) 14 GREEN 9/0+1i (was 4/5+1i): the west nudge past the door-wall jamb (both chain
+  copies), the descent landing pin sampled before clear_hostiles, the delta exit E pulses +
+  the pocket hostile clear (the d1 use ray was eaten by live guards).
+- (14:38-49) the sweep: mp_perf_16 re-pinned 0x986f_90e8_e5d6_b12f kills 35 (2/0),
+  walkreal_02 3/0+1i, walkreal_16 14/0+2i, goggles 8/0, walkreal_01 5/3 (the draws-5 state,
+  no regression), walkreal_1b 15/2+2i (Drake hp 60 after 9000 fight ticks from the hold spot —
+  the shots don't land on the merged stream; the report names the re-derivation).
+- (14:52) the report; the full suite did not fit (chunk_suite ~3 h vs the ~2 h window).
