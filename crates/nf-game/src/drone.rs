@@ -20297,6 +20297,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let feet = dr.feet();
                 if let (Some(s), Some((t, _, m))) = (d.surfaces, d.world.segment_surface([feet[0], feet[1] + 0.5, feet[2]], [feet[0], feet[1] - 1.0, feet[2]], true)) {
                     if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.footstep, m) { self.audio.play3d(id, [feet[0], feet[1] + 0.5 - 1.5 * t, feet[2]], None); }
+                    // `NDrone2_DealWithObjHit` 0x13fff0:79-83: on a footstep frame (the anim
+                    // object's +0x60 bit 0x4 — `dr.footstep` is the port's event) whose hit
+                    // material is the water pair, `Env_WaterRipple(hit)` runs BEFORE the hit-class
+                    // dispatch [M]. `env_water_ripple` re-checks `(mat & 0x3f) - 0xd < 2`
+                    // [M 0x17c118:9] and spawns the kind-1 ring at the hit point (HITDATA+0x40
+                    // [M docs/fields/hitdata-spawner-ally.md]). The port's probe is the grounding
+                    // variant (no_water drops only the 0xE planes — world.rs `segment_surface`),
+                    // so 0xD floors ripple here; the game's collide hit can also be 0xE [S — the
+                    // port's footstep probe never sees those planes].
+                    crate::env::env_water_ripple(&mut self.gas, m, [feet[0], feet[1] + 0.5 - 1.5 * t, feet[2]]);
                 }
             }
             for id in std::mem::take(&mut dr.anim_stops) { self.audio.stop_all_with_id(id); }
