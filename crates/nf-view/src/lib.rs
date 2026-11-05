@@ -3388,8 +3388,10 @@ impl App {
         // the press that picked the mission cannot skip its own briefing (a
         // double-tap) [S unverified as a game claim — the game needs no guard because
         // its skip key is disjoint from its pick keys]. The front-end intro run is NOT state 6:
-        // it reaches `fe.action`, which honours P_ESTHERO's 180-tick grace and the boot logos'
-        // no-skip [M 0x215a50:6] (fe-audit: this intercept used to swallow the intro's skip).
+        // its Confirm reaches `fe.action`, which honours P_ESTHERO's 180-tick grace and the boot
+        // logos' no-skip through the manager's own poll (movie_skip_poll [M 0x21c3d8:40-43,
+        // 0x215a50:6]); the action-0x19 keys take the same poll earlier, in App::app_key
+        // (movie-skip-keys). (fe-audit: this intercept used to swallow the intro's skip.)
         if fe.flow.get_state() == menu::ST_MOVIE {
             // The Confirm guard (the game's own 0x19 keys skip ungated in app_key):
             let shown = self.movie.as_ref().map_or(f32::MAX, |p| p.shown_for());
@@ -6244,18 +6246,27 @@ impl App {
                 // the MP confirm page started a second load of the same arena.
                 if state == ElementState::Pressed && self.fe.is_some() && self.async_load.is_some() { return false }
                 if state == ElementState::Pressed && self.fe.is_some() {
-                    // The game's own skip keys for state 6 (the briefing/outro movie): action 0x19
-                    // is R1/D-pad-down, mask 0x840, pad 0 [M psiInput_MapInputs 0x10cd80:416], and
-                    // GameFlow case 6 skips the movie THE MOMENT that action fires — Input_Action(-1,
-                    // 0x19, 1) with NO time gate [M GameFlow_Main 0x1c98c8:145-149]. The port binds
-                    // the same two buttons' PC keys (cutscene_skip_key) to that skip here, ungated —
-                    // the in-mission arm above already maps them when a script plays. Enter/Confirm
-                    // keeps its 1.0 s guard in menu_input (it is not the game's skip button).
+                    // The game's own skip keys for EVERY movie kind: action 0x19 is R1/D-pad-down,
+                    // mask 0x840, pad 0 [M psiInput_MapInputs 0x10cd80:416]. State 6 (the
+                    // briefing/outro movie) skips THE MOMENT that action fires — Input_Action(-1,
+                    // 0x19, 1) with NO time gate [M GameFlow_Main 0x1c98c8:145-149]. The front-end
+                    // movies (the start movie's run, the attract trailer) take the manager's ONE
+                    // poll — `Menu_InputAction(-1, 0x19, 4)` → `Menu_StopMovie(0)`, gated by the
+                    // skip byte (the boot logos clear it, c49 = 0 [M 0x209e88:41,:55]) and the
+                    // 180-tick grace on the start movie [M MenuManager_Update 0x21c3d8:40-43,
+                    // Menu_StopMovie 0x215a50:6] — movie-skip-keys: the same keys used to skip
+                    // state 6 only, Confirm was the PC adapter's stand-in for the rest.
                     if !repeat
                         && cutscene_skip_key(k)
-                        && self.fe.as_ref().is_some_and(|fe| fe.flow.get_state() == menu::ST_MOVIE)
+                        && self.fe.as_ref().is_some_and(|fe|
+                            fe.flow.get_state() == menu::ST_MOVIE || fe.movie_skip_armed())
                     {
-                        if let Some(fe) = self.fe.as_mut() { fe.flow.skip_movie(); }
+                        let fe = self.fe.as_mut().unwrap();
+                        if fe.flow.get_state() == menu::ST_MOVIE {
+                            fe.flow.skip_movie();
+                        } else {
+                            fe.movie_skip_poll();
+                        }
                         return false
                     }
                     // net-online-lobby: the join address page takes the raw keys FIRST — digits,
