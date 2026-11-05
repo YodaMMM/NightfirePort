@@ -4,3 +4,7 @@ Drake does not appear in the 0700001b cut-scene he belongs in. Find which cut-sc
 
 ---
 claimed-by: sandbox5 at 2026-11-05T07:54Z
+
+---
+## Report (done, 2026-11-05T08:04Z)
+
