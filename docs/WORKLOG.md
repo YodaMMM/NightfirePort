@@ -60,3 +60,12 @@ pins (clip 9, no spare leak, the 4..8 rounds, the cap) all hold. Still red/not r
 (the escort settles at (4.56,6.34,6.31), never leads past the shoji doors), start_corridor_guard
 d2 (idle Bond survives 1500 ticks), walkreal 11/14/16 + npc_doors/fix_guard_misc unrun, the full
 suite not run.
+
+## fx-muzzle-repin-4
+Started 2026-11-05 16:52 UTC. Branch s/fx-muzzle-repin-4 cut from origin/s/fx-muzzle-repin-2 (698c79b3f, not master) — origin/master merge next.
+Task: redo the muzzle re-pin on the right base (repin-3 was cut from master and holds none of the
+muzzle code): after the merge, grep -c shot_flashes crates/nf-game/src/drone.rs and grep -c
+init_gt_shot_smoke crates/nf-game/src/gas.rs must both be above 0 (outputs quoted in the report),
+then finish fix_npc_doors_live, walkreal_07000011_live and walkreal_07000014_live keeping every
+draw; report each binary.
+Progress 2026-11-05 16:52 UTC: sandbox reset, repo recloned, branch cut from repin-2, pushed.
