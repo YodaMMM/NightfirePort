@@ -257,6 +257,45 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
         eprintln!("[011] d3 pre-leg: armour {} on at +{} ticks",
             { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.health.armour }, w.total_ticks);
     }
+    if difficulty == 2 {
+        // THE AGENT PRE-LEG (fx-muzzle-repin-4): the shifted stream spent the 7-round spawn
+        // pistol on the top-floor fights and the dry body-block resupply then toured to the
+        // floor's only placed ammo box — the grenade launcher at (10.54, 47.47, 18.10) [D #290]
+        // — whose desk-geometry tour wedged (two 6000-tick caps, done (false)); Bond crossed
+        // the stairwell DRY and the SE-landing pair #13/#14 (both 12 hp, weapon 0x19) volleyed
+        // 100.0 into him at (21.2, 40.3, 5.2) (the 2026-11-05 deaths, tick 15551). The
+        // Operative sister's own run answers this exact hole with the launcher (its resupply
+        // took it: clip 6 spare 6, then 10 straight fight kills down the stairwell). A player
+        // low on rounds walks to the visible ammo box BEFORE the descent: the same proven desk
+        // maze the 00 Agent pre-leg walks (the corridor-BFS geometry, both ends measured),
+        // truncated at the mid corridor the launcher sits 1.9 u north-east of, and the ring
+        // hop. The walk-over take fires from `radius + 1.1` with a clear sphere line
+        // [M 0x18e148:203-214; Pickup_Handler 0x18e650 files the weapon + its clip]; with the
+        // box gone the dry resupply finds no 12-u target and `switch_to_armed` arms the
+        // launcher instead of touring [M Player_GetBestWeapon's first-owned-with-ammo scan].
+        let maze: &[(&str, f32, f32, f32)] = &[
+            ("the spawn pocket south", 0.0, 22.5, 0.8),
+            ("the spawn-fight drop detour", -3.0, 17.9, 0.9),
+            ("the detour rejoin", 2.0, 17.2, 0.9),
+            ("south of the west desks", 4.5, 18.5, 0.8),
+            ("the mid-west jog", 5.5, 16.5, 0.8),
+            ("the mid corridor west", 9.5, 16.5, 0.8),
+        ];
+        for (label, x, z, r) in maze {
+            w.walk_to(Wp::new(*x, 47.4, *z).r(*r), &format!("d2 pre-leg: {label}"));
+        }
+        // The launcher-box hop is retired (fx-muzzle-repin-4, measured): the take never fires —
+        // the direct south hop wedges on the desk at cel 18 ((10.44,15.81), d 2.29) and the
+        // west pocket (9.6,16.3) stands 2.03 out with the sphere line blocked — and the
+        // Operative sister's own "clip 6 spare 6" resupply was a GUARD DROP fetch, not this
+        // box. The pre-leg's value is the drop economy: the fights kill the spawn pair with
+        // clean positioning and the lane resupply scoops their drops (clip 4 spare 7 measured
+        // at this point — 11 rounds into the stairwell vs the old run's 4).
+        eprintln!("[011] d2 pre-leg: the launcher box still placed (the drop economy carries the descent) at +{} ticks, clip {} spare {}",
+            w.total_ticks,
+            { let sim = w.scene.sim.as_ref().unwrap(); sim.gun.clip },
+            { let sim = w.scene.sim.as_ref().unwrap(); sim.gun.spare });
+    }
 
     // Leg 1: east across the top floor to the stairwell door (the nav web [D paths 0/1] has no
     // cross-floor route — the direct chain), then through the doorway's south band — walked.

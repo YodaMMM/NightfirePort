@@ -69,3 +69,23 @@ init_gt_shot_smoke crates/nf-game/src/gas.rs must both be above 0 (outputs quote
 then finish fix_npc_doors_live, walkreal_07000011_live and walkreal_07000014_live keeping every
 draw; report each binary.
 Progress 2026-11-05 16:52 UTC: sandbox reset, repo recloned, branch cut from repin-2, pushed.
+
+Progress 2026-11-05 18:12 UTC: master merged clean (two test conflicts resolved to master's
+landed doctrine — smg_close_range_live's audit-voice-triggers-4 rewrite, walkreal_03's equal-code
+comment side). The greps: grep -c shot_flashes crates/nf-game/src/drone.rs = 5, grep -c
+init_gt_shot_smoke crates/nf-game/src/gas.rs = 4 — the muzzle code survived the merge. Results:
+fix_npc_doors_live GREEN 1/0 (12.58 s, first try — the bark-escort fix and the muzzle draws
+coexist); walkreal_07000014_live GREEN 9/0/1 (179.5 s — the jamb-lane leg west of the door wall
+at both descent copies + the descent landing pin moved before the real-damage hostile clear
+whose lenient walk-home gave up 8 u short on the shifted stream); walkreal_07000011_live 2
+passed 1 failed 1 ignored: the Operative real-damage walk GREEN (the 18.9-strip loot capped at
+floor level — the |dy|<1.5 band ratcheted Bond back up the flights to y 24 on the shifted
+stream), the plain walk GREEN, the Agent real-damage sister still RED: the dry SE-landing death
+(tick 15551, 37 hits/100.0, #13/#14) is FIXED by the d2 pre-leg (the 00 Agent desk maze,
+truncated, + the drop economy — 11 rounds at the stairwell door vs the old 4; the launcher-box
+take never fires and was retired with the measurement), but the walk now wedges at "the west
+flight A down" (bond (22.40,23.99,-1.29) at health 2.2 — the #32 fight's backpedal dragged Bond
+to the ring's EAST side and the direct steer to the west flight cannot cross the central well,
+cel 128 at 0.076). Next lever: an 18.9-strip re-anchor leg (try_walk_to (15.0,19.2,4.8)) before
+flight A, or a nav-routed re-anchor. The full suite did not fit the sandbox window; the three
+task binaries + their counts are listed in the report. Pushed at e51c3728d + this commit.
