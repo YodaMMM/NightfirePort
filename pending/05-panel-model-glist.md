@@ -14,6 +14,3 @@ Live numbers from PCSX2 on 0700001b, Bond at (16.74, -1.84, 4.62) yaw -1.57 pitc
 Then: `firing_along_the_walkway_breaks_no_panel` green, walkreal_0700001b_live's consoles from spots a player would use, walkreal_07000014_live (3 red, one may be the ray's object side) and walkreal_07000016_live (1 red) checked. Strip the NF_AIMPROBE prints. Keep rocket_stop_plane08, rocket_glass08, fusebox_geometry_07000014, interactables_07000014 and walkreal_0700000c green.
 
 Run each binary whole and quote the results.
-
----
-claimed-by: sandbox5 at 2026-11-05T21:32Z
