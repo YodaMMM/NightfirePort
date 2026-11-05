@@ -138,6 +138,9 @@ struct Geo {
     /// Static only (`chunk`): the uniform-grid index `along` reads its candidates from (perf-240e).
     /// `None` = the linear group scan.
     grid: Option<ObjGrid>,
+    /// Static only: per pushed instance (the `owners` ordinal), whether it is CEL geometry (the
+    /// placement flags' 0x8000 [M 0x1d1998:92]) — the aim ray's filter (aim-snap-objects).
+    aim_pick: Vec<bool>,
 }
 
 /// perf-240e: a uniform 3-D grid over a chunked geometry set's objects — a candidate filter in
@@ -462,6 +465,9 @@ pub struct CollisionWorld {
     /// the take ray) test only the cels the game's straddle walk keeps — `Collide_StraddleCels`
     /// 0x1eac98 via `Intersect_Portal` 0x1ea7b8, cap 0x7e cels, the start cel always kept.
     scope: Option<ScopeData>,
+    /// Static only: per pushed instance (the `owners` ordinal), whether it is CEL geometry (the
+    /// placement flags' 0x8000 [M 0x1d1998:92]) — the aim ray's filter (aim-snap-objects).
+    aim_pick: Vec<bool>,
 }
 
 /// Whether the segment `from + t·d`, t in [0, 1], passes through the box (slab test, a little padding).
@@ -994,6 +1000,8 @@ impl CollisionWorld {
     pub fn build_scoped(level: &Level, instances: &[Instance], graph: Option<ScopeGraph>) -> CollisionWorld {
         let mut stat = Geo::default();
         let mut missile = Geo::default();
+        // Per pushed stat instance: is it CEL geometry (the 0x8000 flag) — the aim ray's filter.
+        let mut stat_aim_pick: Vec<bool> = Vec::new();
         // Per pushed object: its own runtime cel (the pushed ordinal — see the doc above).
         let mut obj_cell: Vec<Option<u32>> = Vec::new();
         for inst in instances {
@@ -1035,6 +1043,15 @@ impl CollisionWorld {
             if graph.is_some() {
                 obj_cell.push(Some(obj_cell.len() as u32));
             }
+            // aim-snap-objects: the game's RAY pick (Collide_RayIntersect 0x1ec690 -> Collide_Pick
+            // 0x1eb320's cel walk) only ever sees CEL geometry — placements whose flags word
+            // carries 0x8000 got the runtime cel [M parsemap_block_map_data_static 0x1d1998:92].
+            // The doors (kind 0xdb) and the breakable windows carry NO 0x8000 — they never had a
+            // static cel, so the aim ray passes them (the live-proven 08 straight rocket: its
+            // line's x at the shutters is INSIDE the wood band, yet the game's round pierces the
+            // pane — the snap ray never saw the shutters). The port's stat fold includes them
+            // (the flight's door stops ride it), so the aim query needs the per-instance flag.
+            stat_aim_pick.push(level.maps[inst.map].objects[inst.object].flags & 0x8000 != 0);
             stat.push_kept(c.triangles_with_material().into_iter().map(|(t, m)| (t.map(|p| transform(&inst.matrix, p)), m)), node_pass);
         }
         // Index collision shapes by hashcode, AND by (map,object) packed into a synthetic key for objects whose
@@ -1075,7 +1092,7 @@ impl CollisionWorld {
             }
             ScopeData { graph, cells, always }
         });
-        CollisionWorld { stat, missile, dynamic: Default::default(), shapes, shape_mats, scope }
+        CollisionWorld { stat, missile, dynamic: Default::default(), shapes, shape_mats, scope, aim_pick: stat_aim_pick }
     }
 
     /// Re-keys the cel-scope buckets by an explicit per-instance attribution — the collision side
@@ -1213,7 +1230,7 @@ impl CollisionWorld {
     pub fn from_triangles(tris: Vec<[V3; 3]>) -> CollisionWorld {
         let mut stat = Geo::default();
         stat.push(tris.into_iter().map(|t| (t, 0)));
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), scope: None }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), scope: None, aim_pick: Vec::new() }
     }
 
     /// One object holding these world-space triangles with surface bytes and per-triangle
@@ -1223,7 +1240,7 @@ impl CollisionWorld {
         let pass = tris.iter().map(|(_, _, p)| *p).collect::<Vec<_>>();
         stat.push_flags(tris.into_iter().map(|(t, m, _)| (t, m)), false);
         for (k, p) in pass.into_iter().enumerate() { stat.pass[k] = p; }
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), scope: None }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), scope: None, aim_pick: Vec::new() }
     }
 
     /// Glist object `hash`'s collision triangles in object space.
@@ -1463,6 +1480,41 @@ impl CollisionWorld {
     /// flight leave the bottom-terminal cabin through its windows.
     pub fn segment_flight_scoped(&self, cell: Option<usize>, from: V3, to: V3, glass: bool) -> Option<f32> {
         self.flight_scoped_impl(cell, from, to, glass)
+    }
+
+    /// The AIM-RAY twin (aim-snap-objects): the cel-scoped flight query that additionally skips
+    /// the stat runs owned by NON-cel instances (the placement flags' 0x8000 gate [M
+    /// parsemap_block_map_data_static 0x1d1998:92 — the doors/breakable-windows never had a
+    /// static cel; Collide_RayIntersect's pick walks cels, so it never sees them]). The dynamic
+    /// set is not in the scoped walk anyway.
+    pub fn segment_aim_scoped(&self, cell: Option<usize>, from: V3, to: V3, glass: bool) -> Option<f32> {
+        let Some(cell) = cell else { if std::env::var_os("NF_AIMPROBE").is_some() { eprintln!("[aimray] no cel -> flat fallback"); } return self.flight_scoped_impl(cell, from, to, glass) };
+        let in_range = self.scope.as_ref().is_some_and(|sc| cell < sc.graph.cells.len());
+        if !in_range { if std::env::var_os("NF_AIMPROBE").is_some() { eprintln!("[aimray] cell {cell} out of range -> fallback"); } return self.flight_scoped_impl(Some(cell), from, to, glass); }
+        let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to)) else { if std::env::var_os("NF_AIMPROBE").is_some() { eprintln!("[aimray] no portal runs -> fallback"); } return self.flight_scoped_impl(Some(cell), from, to, glass) };
+        let d = sub(to, from);
+        let mut best = None::<f32>;
+        let stat = &self.stat;
+        for r in &runs {
+            // the run's owner instance (post-chunk index -> the pushed instance ordinal)
+            if stat.owners.get(*r as usize).and_then(|si| self.aim_pick.get(*si as usize)).is_some_and(|p| !*p) { continue; }
+            let o = &stat.objects[*r as usize];
+            for k in o.tris.clone() {
+                if stat.bullet_pass(k) { continue; }
+                if glass && stat.mats[k] & 0x3f == 0x10 { continue; }
+                let t = &stat.tris[k];
+                if let Some(tt) = ray_tri_t(from, d, t) {
+                    if best.is_none_or(|b| tt < b) {
+                        best = Some(tt);
+                        if std::env::var_os("NF_AIMPROBE").is_some() {
+                            let si = stat.owners.get(*r as usize).copied().unwrap_or(u32::MAX);
+                            eprintln!("[aimray] hit t {tt:.4} mat {:#x} run {r} owner {si} aim_pick {:?}", stat.mats[k], self.aim_pick.get(si as usize));
+                        }
+                    }
+                }
+            }
+        }
+        best
     }
 
     /// The flat twin of [`CollisionWorld::segment_flight_scoped`] (no cel scope).
@@ -2766,7 +2818,7 @@ mod tests {
         let n = tris.len();
         let stat = Geo { mats: vec![0; n], tris, objects: vec![Object { lo: [-10.0; 3], hi: [10.0; 3], tris: 0..n }], groups: Vec::new(), owners: Vec::new(), grid: None,
             pass: vec![false; n] };
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), scope: None }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), scope: None, aim_pick: Vec::new() }
     }
 
     /// fix-safe08b: the straddle walk. A wall assigned to an exterior cell with NO portal from the

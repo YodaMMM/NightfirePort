@@ -5345,9 +5345,13 @@ impl Sim {
                                     let o = [(camera[0] + d0[0]) * 0.5, (camera[1] + d0[1]) * 0.5, (camera[2] + d0[2]) * 0.5];
                                     // The aiming point is snapped to whatever the crosshair ray hits, so the round
                                     // converges on the crosshair [M 0x1a4bf0:154-164; mask 0x20a, 0x208 with +0x6C & 0x800].
-                                    let aim_pt = [camera[0] + dir[0] * 256.0, camera[1] + dir[1] * 256.0, camera[2] + dir[2] * 256.0];
+                                    let aim_pt_raw = [camera[0] + dir[0] * 256.0, camera[1] + dir[1] * 256.0, camera[2] + dir[2] * 256.0];
                                     let flags6c = u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap());
-                                    let aim_pt = self.drones.aim_snap(&d, camera, aim_pt, flags6c & 0x800 == 0);
+                                    let aim_pt = self.drones.aim_snap(&d, camera, aim_pt_raw, flags6c & 0x800 == 0);
+                                    if std::env::var_os("NF_AIMPROBE").is_some() {
+                                        let o_mid = self.view_datum(0).map(|d0| [(camera[0] + d0[0]) * 0.5, (camera[1] + d0[1]) * 0.5, (camera[2] + d0[2]) * 0.5]);
+                                        eprintln!("[aimprobe] cam {camera:.3?} raw {aim_pt_raw:.3?} snapped {aim_pt:.3?} o {o_mid:?} w {} flags6c {:#x}", self.gun.weapon, flags6c);
+                                    }
                                     let v = [aim_pt[0] - o[0], aim_pt[1] - o[1], aim_pt[2] - o[2]];
                                     let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
                                     (o, [v[0] / l, v[1] / l, v[2] / l])
@@ -5362,6 +5366,9 @@ impl Sim {
                             let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
                             let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
                             self.drones.player_spread = Some(nf_game::bullet::player_spread(f32_at(0x24), f32_at(0x98), params.shots_per_pull - self.gun.pending, params.clip as i32, flags68, self.aiming));
+                        }
+                        if std::env::var_os("NF_AIMPROBE").is_some() {
+                            eprintln!("[fireprobe] w {} yaw {:.3} pitch {:.3} from {shot_from:.3?} dir {shot_dir:.3?}", self.gun.weapon, self.bond.yaw, self.bond.pitch);
                         }
                         self.drones.fire_player(&d, shot_from, shot_dir, self.gun.weapon, sound);
                         // fix-weapon-fire-modes [M Bullet_init 0x12c5a0:248-253]: a `+0x6C & 4` shot hands

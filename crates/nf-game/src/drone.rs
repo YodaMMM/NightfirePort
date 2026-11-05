@@ -13524,6 +13524,9 @@ impl Drones {
                     }
                 }
             }
+            if std::env::var_os("NF_AIMPROBE").is_some() {
+                eprintln!("[wiregeo] {} hashes: {:?}", geo.len(), geo.keys().map(|k| format!("{k:#x}")).collect::<Vec<_>>());
+            }
             self.wire_geo = geo;
         }
         // SimpleScripts (`SS_Create` 0x1a9c58): the 0xE2 placements with a non-zero key count, their
@@ -14037,16 +14040,118 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         tris.iter().filter_map(|t| crate::world::ray_tri_t(la, ld, t)).min_by(f32::total_cmp)
     }
 
+    /// The t where the segment first enters the world AABB (the slab test), or None.
+    fn segment_aabb_entry_t(from: V3, to: V3, lo: V3, hi: V3) -> Option<f32> {
+        let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+        let (mut t0, mut t1) = (0.0f32, 1.0f32);
+        for k in 0..3 {
+            let (a, b) = (from[k], d[k]);
+            if b.abs() < 1e-12 {
+                if a < lo[k] || a > hi[k] { return None; }
+                continue;
+            }
+            let (mut ta, mut tb) = ((lo[k] - a) / b, (hi[k] - a) / b);
+            if ta > tb { std::mem::swap(&mut ta, &mut tb); }
+            t0 = t0.max(ta);
+            t1 = t1.min(tb);
+            if t0 > t1 { return None; }
+        }
+        (t0 > 1e-4 && t0 <= 1.0).then_some(t0)
+    }
+
+    /// The t where the segment first enters the sphere (the smaller non-negative root of
+    /// |from + d·t − c| = r), for the thin models the level ships without collision shapes.
+    fn segment_sphere_entry_t(from: V3, to: V3, c: V3, r: f32) -> Option<f32> {
+        let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+        let o = [from[0] - c[0], from[1] - c[1], from[2] - c[2]];
+        let a = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+        if a < 1e-12 { return None; }
+        let b = 2.0 * (o[0] * d[0] + o[1] * d[1] + o[2] * d[2]);
+        let cc = o[0] * o[0] + o[1] * o[1] + o[2] * o[2] - r * r;
+        let disc = b * b - 4.0 * a * cc;
+        if disc < 0.0 { return None; }
+        let sq = disc.sqrt();
+        let t0 = (-b - sq) / (2.0 * a);
+        let t1 = (-b + sq) / (2.0 * a);
+        for t in [t0, t1] {
+            if (0.0..=1.0).contains(&t) { return Some(t); }
+        }
+        None
+    }
+
     /// `Collide_RayIntersect` on the crosshair ray: the point the ray first hits, or `to`
-    /// [M Player_WeaponInitBullet 0x1a4bf0:154-164]. The level, then the held panels.
+    /// [M Player_WeaponInitBullet 0x1a4bf0:154-164 — the snap runs per shot; the mask 0x20a
+    /// passes glass (bit 2) unless the record stops on it (+0x6C & 0x800 -> 0x208); the glass
+    /// flag here is that pass semantics and the level query's convention matches — NOT inverted].
+    /// The sets, in the game's pipeline: the CEL-SCOPED level query (the dynamic doors ride
+    /// their objects' pick gates, not the level walk), then the OBJECTS: `Collide_Pick` 0x1eb320's
+    /// built-sphere broad phase per object (obj+0x80..0x8c [M Control_BuildWorldSph 0x133070])
+    /// and `Collide_Intersect` 0x1ebaa8's type-0x201 arm (the segment vs the object's own glist
+    /// triangles, first hit wins [M 0x1ec690's `param_9 & 0x10` stop]). The port's object
+    /// candidates: every loaded script's stream entities (`sp_bullet_targets`' set — the game's
+    /// pick covers every object with a built sphere), the drones (the hit boxes, the port's
+    /// guard geometry [M AnimGetCollData]), and the solar panels (kept: their exact
+    /// world.shape triangles under the same sphere gate — the panel-only triangle stage).
     pub fn aim_snap(&self, d: &Data, from: V3, to: V3, glass: bool) -> V3 {
-        let mut t = d.world.segment_flight_scoped(d.world.find_cel(from), from, to, glass).unwrap_or(1.0);
-        for (_, c, r, mesh) in self.scripts.held_hit_volumes(d) {
-            if let Some((SOLAR_PANEL_GLIST, m)) = mesh {
-                if Self::segment_hits_sphere(from, to, c, r) {
-                    if let Some(k) = d.world.shape(SOLAR_PANEL_GLIST).and_then(|tris| Self::segment_posed_mesh_t(&m, tris, from, to)) {
-                        t = t.min(k);
+        // The level query is CEL-SCOPED [M Collide_RayIntersect 0x1ec690 feeds the shooter's cel
+        // (param_3 = *(obj+0x20)) to Collide_Pick's StraddleCels walk 0x1eb320:125]: through a
+        // non-portal hole (the 08 window) the walk never reaches the far room, so the ray finds
+        // NOTHING there and the aim stays the raw 256-out point — the live-proven straight
+        // rocket pierces the pane because its line o->P256 crosses the pane span (x 139.72), NOT
+        // because the ray snapped past it. The flat query saw the cage back wall, snapped there,
+        // and pulled the flight line onto the wood stile (the -96.706 stops). [L the probe:
+        // cam (139.531, 50.789, -76.431) -> the flat ray snapped (139.562, 50.789, -96.706), the
+        // wood band x 139.44..139.62.]
+        let mut t = d.world.segment_aim_scoped(d.world.find_cel(from), from, to, glass).unwrap_or(1.0);
+        if std::env::var_os("NF_AIMPROBE").is_some() {
+            eprintln!("[snap] from {from:.3?} to {to:.3?} level t {t:.4}");
+        }
+        // The 0x201 intersect is BACK-FACE-CULLED [M Collide_Intersect 0x1ebaa8's
+        // `dot(cross(e1,e2), d) >= 0 -> continue` — the port's own Möller–Trumbore carries the
+        // same cull]: a ray STARTING INSIDE an object sees only exit (back) faces and hits
+        // nothing. A candidate whose built sphere contains the ray origin is therefore
+        // transparent to the snap — and counting it (an entry t of ~0) collapses the aim point
+        // onto the muzzle and turns the shot direction into noise (the 14 laser cut's +z
+        // bullet). The origin-outside gate is the game's cull, port-side.
+        for (_, c, r, mesh) in self.scripts.sp_bullet_targets(d) {
+            let d2 = (from[0] - c[0]).powi(2) + (from[1] - c[1]).powi(2) + (from[2] - c[2]).powi(2);
+            if d2 <= r * r { continue; }
+            if !Self::segment_hits_sphere(from, to, c, r) { continue; }
+            // The geometry ladder, thinnest first: the level's collision triangles (world.shape)
+            // when the model has them, else the posed gfx bounds (wire_geo — the wire cables sit
+            // 1.5 above their entity origin and 0.2 wide [D 07000014's wire bounds]), else the
+            // glist bound's crossing. Each rung is AUTHORITATIVE — the game's ray-vs-glist MISSES
+            // when the crosshair passes beside a thin run (the camera ray here crosses the cable
+            // plane at x -89.70, left of the cable's -89.5..-89.3 span) and the snap must miss
+            // with it, or the snapped line is pulled off the cable the flight's own wire test
+            // would have caught [S — the game's Intersect_RayGeom walks the glist; the port has
+            // no model glist parse yet, the bounds are its stand-in].
+            let k = match mesh {
+                Some((hash, m)) => {
+                    if let Some(tris) = d.world.shape(hash) {
+                        Self::segment_posed_mesh_t(&m, tris, from, to)
+                    } else if let Some((wlo, whi)) = self.wire_geo.get(&hash) {
+                        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+                        for cx in 0..2 { for cy in 0..2 { for cz in 0..2 {
+                            let p = [if cx == 0 { wlo[0] } else { whi[0] }, if cy == 0 { wlo[1] } else { whi[1] }, if cz == 0 { wlo[2] } else { whi[2] }];
+                            let w = nf_formats::placement::transform(&m, p);
+                            for c in 0..3 { lo[c] = lo[c].min(w[c]); hi[c] = hi[c].max(w[c]); }
+                        } } }
+                        Self::segment_aabb_entry_t(from, to, lo, hi)
+                    } else {
+                        Self::segment_sphere_entry_t(from, to, c, r)
                     }
+                }
+                None => Self::segment_sphere_entry_t(from, to, c, r),
+            };
+            if let Some(k) = k { if k > 1e-4 { t = t.min(k); } }
+        }
+        for dr in &self.list {
+            if dr.corpse || !dr.enabled || !dr.present || dr.health <= 0.0 { continue; }
+            let ray = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+            for b in &dr.hit_boxes(d) {
+                if let Some(k) = crate::damage::ray_box(from, ray, b) {
+                    if k > 1e-4 && k <= 1.0 { t = t.min(k); }
                 }
             }
         }
@@ -15250,7 +15355,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                             wlo[c] -= 0.01;
                                             whi[c] += 0.01;
                                         }
-                                        Self::segment_hits_aabb(b.pos, end, wlo, whi)
+                                        let h = Self::segment_hits_aabb(b.pos, end, wlo, whi);
+                                        if std::env::var_os("NF_AIMPROBE").is_some() {
+                                            eprintln!("[wirehit] bullet {:?} -> end {:?} aabb {:?}..{:?} hit {h}", b.pos.map(|v| (v*10.0).round()/10.0), end.map(|v| (v*10.0).round()/10.0), wlo.map(|v| (v*10.0).round()/10.0), whi.map(|v| (v*10.0).round()/10.0));
+                                        }
+                                        h
                                     }
                                     None => Self::script_obj_pos(&self.scripts, d, obj).is_some_and(|p| {
                                         Self::segment_hits_sphere(b.pos, end, p, crate::fusebox::WIRE_RADIUS)
