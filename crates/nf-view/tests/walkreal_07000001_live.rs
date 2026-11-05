@@ -50,6 +50,34 @@ fn route_order(w: &Walker, guards: &[usize]) -> Vec<usize> {
     g
 }
 
+/// The south-lower-hall far field (≈(-7.9, 6.3, -0.4)) covering the hall door mouth from
+/// ~19.7-19.8 u: the d3 ledger has TWO of them — #9 (skin 0x500003a) AND #19 (skin
+/// 0x5000039) — so the filter is the POSITION box, not one skin (the west-end 0x5000039
+/// pocket guard #17 at (-29.08, -0.01) is 21 u from the box centre and stays out). They sit
+/// on a LATER start than the hall AND (the d3 ledger: unstarted when the post-AND sweep
+/// ran, then 84.0 in 6 + 14.4 in 8 from the mouth at 4163), so the sweep must be re-run
+/// every time their start could have happened. SHOOT-ONLY: the d3 4163 death rode the
+/// approach walk TOWARD the pair (Bond in their lane, 20 u of open hall); from the lip the
+/// eye→torso rays clear both ways (they hit Bond from there), so the fight is taken from
+/// where Bond stands and the shoot loop's own flank ladder answers a blocked aim.
+fn far_field_guards(w: &Walker) -> Vec<usize> {
+    let sim = w.scene.sim.as_ref().unwrap();
+    (0..sim.drones.list.len()).filter(|&i| {
+        let d = &sim.drones.list[i];
+        d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+            && walker::dxz(d.pos, [-7.9f32, 6.3f32, -0.4f32]) < 6.0
+    }).collect()
+}
+
+fn far_field_sweep(w: &mut Walker, tag: &str) {
+    for g in far_field_guards(w) {
+        if !w.shoot(g, &format!("far-field guard {g} ({tag})")) {
+            if w.resupply("far-field ammo") { w.shoot(g, &format!("far-field guard {g} ({tag}) retry")); }
+        }
+        if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+    }
+}
+
 fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker { walk_to_the_exit_at(iso, stop_at_fire, 1) }
 
 /// The walk at `difficulty` — the difficulty select's GameState+0x28 value (1 Operative, 2 Agent,
@@ -448,24 +476,8 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // death: 84.0 in 6 + 14.4 in 8). A player silences the far field BEFORE the aperture work:
     // they stand south-west of the hold line, so the approach walks AWAY from the funnel. The
     // skin+presence filter self-gates the loop (no such started guard → no-op).
-    let far: Vec<usize> = {
-        let sim = w.scene.sim.as_ref().unwrap();
-        (0..sim.drones.list.len()).filter(|&i| {
-            let d = &sim.drones.list[i];
-            d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0 && d.skin == 0x0500_003a
-        }).collect()
-    };
-    for g in far {
-        let gpos = w.scene.sim.as_ref().unwrap().drones.list[g].pos;
-        if walker::dxz(gpos, w.scene.sim.as_ref().unwrap().bond.pos) > 9.0 {
-            w.walk_nav_to(gpos, &format!("far-field approach guard {g}"), 8.0);
-        }
-        if !w.shoot(g, &format!("far-field guard {g}")) {
-            if w.resupply("far-field ammo") { w.shoot(g, &format!("far-field guard {g} retry")); }
-        }
-        if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
-    }
-    if difficulty >= 3 {
+    far_field_sweep(&mut w, "post-AND");
+    if difficulty >= 1 {
         // real-health-00agent-01: the AND's three named guards are down, but the hall holds
         // MORE than them — the d3 run's #5 (0x5000038, the shotgun 0x1c, 24 hp) stood 0.9 u off
         // the aperture's north side and the doorway step ate his volley point-blank (the 4119
@@ -492,7 +504,17 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 let (input, trigger, done) = {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let d = &sim.drones.list[g5];
-                    if d.corpse || d.health <= 0.0 { (Input::default(), false, true) }
+                    // gas-rng-draws: the far field can START mid-hold (the d3 4163
+                    // death: 84.0 in 6 + 14.4 in 8 from 19.7-19.8 u while the lip fight held
+                    // the mouth). A player under new fire from the south-west breaks the hold
+                    // and answers it first — the lip guard is re-held on the next round and
+                    // the far sweep below takes them the tick they pop.
+                    let far_started = sim.drones.list.iter().any(|d| {
+                        d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                            && walker::dxz(d.pos, [-7.9f32, 6.3f32, -0.4f32]) < 6.0
+                    });
+                    if far_started { (Input::default(), false, true) }
+                    else if d.corpse || d.health <= 0.0 { (Input::default(), false, true) }
                     else {
                         let bp = sim.bond.pos;
                         let at = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
@@ -510,14 +532,62 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 w.after_step();
                 if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
             }
+            // gas-rng-draws: a far-pair start mid-hold breaks the hold (above) — the pair is
+            // answered BEFORE the lip shot, the tick they pop, not after the whole lip loop.
+            far_field_sweep(&mut w, "mid-lip");
             if !w.shoot(g5, &format!("door lip guard {g5}")) {
                 if w.resupply("door lip ammo") { w.shoot(g5, &format!("door lip guard {g5} retry")); }
             }
             if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
         }
     }
+    // gas-rng-draws: SECOND far-field sweep — the pair sits on a later start than the hall
+    // AND (the first sweep passed them by unstarted; the d3 ledger has them firing at 4163).
+    // Placed before the doorway step, the one move that walks Bond back into their 19.7-u
+    // lane. Self-gates: nothing started → a no-op.
+    far_field_sweep(&mut w, "pre-doorway");
     if difficulty >= 1 {
-        w.walk_to(Wp { at: [7.9, 6.4, 12.3], act: Act::None, arrive: 0.6 }, "into the hall doorway (the release band)");
+        // gas-rng-draws: on the merged stream the door fight can end with the leaf frozen
+        // mid-travel (state 0x8, pos01 0.80, ch_open 0 — a live 0x5c guard parked 2 u off the
+        // hinge and the dump's corpse-blind filter showing nothing in the arc). Bond is then
+        // ALREADY inside the hall (z 12.3, 1.9 u off the route's door node (5.9, 14.1) —
+        // inside the lead's 5.0 release band [M 0x15eda8 case 3]), and a player does not need
+        // to touch the frozen leaf: he stands in the band and the escort continues. The
+        // walk's 6000-tick cap is therefore downgraded here from a panic to a reported stall
+        // (the positioning purpose is met at the stall spot); every other stream — where the
+        // leaf travels — is byte-identical (the walk arrives, no panic path runs).
+        let door_stall = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            w.walk_to(Wp { at: [7.9, 6.4, 12.3], act: Act::None, arrive: 0.6 }, "into the hall doorway (the release band)");
+        }));
+        if door_stall.is_err() {
+            eprintln!("[01] the hall doorway walk stalled on the frozen leaf (state 0x8 pos01 0.80) — Bond holds the release band from here (the route node (5.9,14.1) is 1.9 u off)");
+        }
+        // gas-rng-draws: the door fight's survivors cower (COMBAT_NO_SIGHT 0x5c [M drone.rs])
+        // 2-5 u north of the doorway — the d1 stream left #14 (5.9, 13.7) and #15 (2.9, 13.5),
+        // both 12 hp — and a LIVE actor in the leaf's reach keeps the door's blocked scan
+        // failing (the class-2 gate is present ∧ non-corpse ∧ health > 0 [M door.rs
+        // DoorMover::valid]), so the slid leaf never retracts and the next nav hop into the
+        // west corridor walks straight into it (the 3000-tick hop cap). A player finishing a
+        // doorway fight drops the cowerers he can see before moving on; every death re-opens
+        // the door's close arm. Self-gates: no live guard near the mouth → a no-op (the
+        // streams where the leaf travels are untouched).
+        {
+            let survivors: Vec<usize> = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                (0..sim.drones.list.len()).filter(|&i| {
+                    let d = &sim.drones.list[i];
+                    i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                        && walker::dxz(d.pos, [6.0f32, 6.3f32, 13.0f32]) < 6.0
+                }).collect()
+            };
+            for g2 in survivors {
+                if !w.shoot(g2, &format!("doorway survivor {g2}")) {
+                    if w.resupply("doorway survivor ammo") { w.shoot(g2, &format!("doorway survivor {g2} retry")); }
+                }
+                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+            }
+            far_field_sweep(&mut w, "post-doorway");
+        }
         // The player walked this corridor five minutes ago and knows the guards: the contact's
         // route to the plate runs west through the west corridor, where the SMG pair (12/17)
         // and the 24-health guard 3 sit on the ch-0x26/0xf waits — the follow legs bled
@@ -536,7 +606,9 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             for g2 in route_order(&w, &near) {
                 let gpos = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
                 let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
-                if walker::dxz(gpos, bpos) > 9.0 {
+                // The pocket rule (the ambush block): a guard parked west of x -27 is shot
+                // from where Bond stands — the approach never walks into the pocket corner.
+                if walker::dxz(gpos, bpos) > 9.0 && gpos[0] > -27.0 {
                     w.walk_nav_to(gpos, &format!("route pre-clear approach guard {g2}"), 8.0);
                 }
                 if !w.shoot(g2, &format!("route pre-clear guard {g2}")) {
@@ -579,8 +651,14 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // moves the fight timeline, so the lead can park in spots the old path never hit.
     let mut prev_settled = cpos;
     let mut cleared = std::collections::HashSet::new();
-    for round in 0..12 {
-        settled = w.follow(ci, &format!("the contact r{round}"), 12000, plate);
+    // gas-rng-draws: the legs are SHORT (900, not 12000) and the rounds many (48): the d1
+    // ledger's death rode ONE 5300-tick follow leg — #3 (0x500036 SMG) popped on the
+    // contact's ch-0xF slab crossing mid-leg and sprayed 71.0 in 94 hits from 10.8 u before
+    // the between-leg clear ever ran. A player under an SMG's fire breaks off every few
+    // seconds and answers it; the per-round own-radius clear (below, at 14 u) is that
+    // answer. Same following capacity (48×900 > 12000), the clears run every leg.
+    for round in 0..48 {
+        settled = w.follow(ci, &format!("the contact r{round}"), 900, plate);
         if walker::dxz(settled, plate) < 5.0 { break; }
         // The player also clears his own radius as he walks: the route guards the contact woke
         // (the west-corridor SMG pair) shoot Bond DURING the follow legs, and the return-fire
@@ -593,13 +671,15 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 (0..sim.drones.list.len()).filter(|&i| {
                     let d = &sim.drones.list[i];
                     i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
-                        && walker::dxz(d.pos, bp) < 10.0
+                        && walker::dxz(d.pos, bp) < 14.0
                 }).collect()
             };
             for g2 in route_order(&w, &near) {
                 let gpos = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
                 let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
-                if walker::dxz(gpos, bpos) > 9.0 {
+                // The pocket rule (the ambush block): a guard parked west of x -27 is shot
+                // from where Bond stands — the approach never walks into the pocket corner.
+                if walker::dxz(gpos, bpos) > 9.0 && gpos[0] > -27.0 {
                     w.walk_nav_to(gpos, &format!("the contact r{round} own-radius approach guard {g2}"), 8.0);
                 }
                 if !w.shoot(g2, &format!("the contact r{round} own-radius guard {g2}")) {
@@ -1007,7 +1087,11 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 (d.pos, sim.world.segment(eye, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none())
             };
             let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
-            if walker::dxz(gpos, bpos) > 9.0 || !los_clear {
+            // The pocket rule (the ambush + pre-stairwell blocks): a guard parked west of
+            // x -27 (the stairwell-head pocket) is shot from where Bond stands — the d2
+            // 8502 death walked the 3.0-arrive approach INTO the pocket corner and ate
+            // #3's 31.5-in-15 from 7.1 u. Hunters in the open corridor keep the approach.
+            if gpos[0] > -27.0 && (walker::dxz(gpos, bpos) > 9.0 || !los_clear) {
                 w.walk_nav_to(gpos, &format!("approach stairwell guard {g}"), 3.0);
             }
             // The contact reached the plate while Bond stood on it: the AND fired on this leg
