@@ -80,3 +80,11 @@ the doorway lure play opened to d1 (AND fires 1974), lip/release/pre-clear gates
 corridor, 4162 d3 far pair, 8502 d2 stairwell). Not done: 02/03/14/16/1b re-routes (16 12/2+2i,
 1b 15/2+2i, 03 4/2+1i fresh), the finale pulse leg (fresh ledger), the full walkreal sweep, the
 chunk-suite total.
+
+Branch s/gas-rng-draws-5 cut from origin/s/gas-rng-draws-4 (7a99e04a9), merged origin/master
+in. Task: finish the gas RNG draw landing — the report-4 list in order: the walk re-routes
+(01's three remaining reds with fresh ledgers, 02 to_the_exit, 03 the friendly death + east-lane
+wedge, 14 the corridor-door chain at (30.3,35.4), 16 the punch pin + defeat walk, 1b Drake's
+defeat), fix_finale's 16 shelter pulse (Bond died tick 6493 at (-14.50,-22.00,-170.18) before
+pulse 2's window), then every walkreal_*_live whole and the full suite via
+tools/test/chunk_suite.py. Sandbox expires ~05:16 UTC; stop-new-work 04:56 UTC.
