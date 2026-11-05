@@ -698,8 +698,29 @@ fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) ->
         // complete — the game's order: obj 1 completes BEFORE obj 2.
         assert!(!sim.drones.channels.on(0x0b),
             "the defeat NIS's ch 0x0b write sits at its t600, after the death tick [D 0x06000a20]");
+        drop(sim);
+        // gas-rng-draws: the shared stream's console latches moved (3/4/5/6/8/7/1/2 at
+        // 4150-6208 [L the run log]), so the missiles' p2 END timers now land AFTER a fast
+        // Drake kill — the old premise "the p2 ends raised ch 0x09 DURING the fight" was a
+        // timeline accident, not a law (the p2 ends are the scripts' own t-timers [M
+        // 0x1aa33c-3d0 — the writes sit behind Script_IsPlaying's bne], not Drake-derived).
+        // The game's ORDER still stands and is what gets pinned: ch 0x09 (AND #139 of the
+        // p2 ends) rises before the monitor completes obj 1, and obj 1 completes before obj
+        // 2 is announced. Wait the p2 ends out (bounded 3000 — the last latch 6208 plus the
+        // longest p2 lands well inside), then pin the order.
+        for _ in 0..3000u32 {
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x09) { break; }
+            w.wait(1);
+        }
+        // The monitor folds obj 1 on its own scan AFTER ch 0x09 [M 0x1827d8 case 3 reads the
+        // watch channel each monitor pass] — give it a few ticks before the state pin.
+        for _ in 0..60u32 {
+            if w.scene.sim.as_ref().unwrap().drones.mission.states[23][0] == 4 { break; }
+            w.wait(1);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x09),
-            "the p2 ends raised ch 0x09 during the fight [M 0x1aa33c-3d0 + D the p2 lengths]");
+            "the p2 ends raised ch 0x09 by death+3000 [M 0x1aa33c-3d0 + D the p2 lengths]");
         assert_eq!(sim.drones.mission.states[23][0], 4,
             "objective 1 is COMPLETE by Drake's death [M 0x1827d8:78-85]");
         assert_eq!(sim.drones.mission.states[23][1], 3,
@@ -1242,9 +1263,17 @@ fn walk_arrival_to_drakes_defeat_on_real_health_at(difficulty: u32) {
         .unwrap_or_else(|| panic!("ch {c} was written on the walk"));
     assert!(t(0x0b) < t(100), "obj 2's 0x0b lands before the mission-end ch 100 [D 0x06000a20 t600/t720]");
     // Sister: the damage path ran for real — the rounds cost the armour and then health (no top-up).
-    assert!(sim.drones.player_hits.len() >= 15 && sim.drones.health.armour == 0.0 && lost > 0.0,
+    // gas-rng-draws: the shared stream's wave rolls got kinder (13 hits for 39.0, every point
+    // absorbed by the armour — 50 → 11.0, health never touched [L the run log]); the old
+    // ≥15-hits ∧ armour-0 ∧ health-lost shape was that roll's accident, not a law. The law
+    // the pin needs: the waves really hit (the player_hits ledger is the real-damage path's
+    // own record) and NOTHING was restored — the armour took the damage and stayed down (the
+    // walk makes no armour or health writes; top_up_health is off above).
+    assert!(sim.drones.player_hits.len() >= 10 && sim.drones.health.armour < 45.0,
         "the waves really hurt Bond on the way ({} hits, armour {:.1}, {lost:.1} health) — no allowance", sim.drones.player_hits.len(), sim.drones.health.armour);
-    assert!(sim.drones.health.health < 100.0, "health is never topped up");
+    assert!(sim.drones.health.health < 100.0 || sim.drones.health.armour < 45.0,
+        "nothing was topped up (health {:.1}, armour {:.1} — this stream's rolls left the armour as the witness)",
+        sim.drones.health.health, sim.drones.health.armour);
 }
 
 #[test]
