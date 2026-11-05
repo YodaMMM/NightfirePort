@@ -322,6 +322,10 @@ impl Player {
     /// length [D the audio track]. The host's BGFMVPlaying polls call this once per frame; the
     /// decoder thread (the `movies` feature's picture path) does not drive it — a fast headless
     /// poll loop reaches the movie's end at the same poll count as a 60 Hz display.
+    pub fn headless_advance_by(&mut self, ticks: u32) {
+        for _ in 0..ticks { self.headless_advance(); }
+    }
+
     pub fn headless_advance(&mut self) {
         if let Some(left) = self.headless_left.as_mut() {
             *left -= 1;

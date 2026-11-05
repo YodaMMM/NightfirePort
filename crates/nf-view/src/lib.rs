@@ -2950,6 +2950,11 @@ struct App {
     menu_clock: f32,
     /// fe-60hz: the front end's own 60 Hz tick accumulator (seconds).
     fe_clock: f32,
+    /// The movie hold's 60 Hz ticks not yet spent, as a fraction: the game polls BGFMVPlaying per
+    /// vblank, so the hold counts time, not this host's display frames.
+    movie_poll_clock: f32,
+    /// The same fraction for the menus' sound pump: `SFXUpdate` is once per game frame [M sound.md §6].
+    sound_poll_clock: f32,
     /// The sim reported the mission's own end this frame (see `Drones::mission_end`).
     pending_mission_end: bool,
     /// mission-results-page: the finished mission's progress layer, snapshotted at
@@ -4229,7 +4234,7 @@ impl App {
     /// calls Sound_UpdateListeners → Sound_UpdateSounds every not-frozen frame, in the same block
     /// as MenuManager_Update [M Game_Run 0x1c9790:7-11]. Silent under NF_SILENT: without an output
     /// device `build_sound` returns None and the commands just bookkeep on the state machine.
-    fn menu_music_tick(&mut self) {
+    fn menu_music_tick(&mut self, dt: f32) {
         // frontend-music (menu-audio-state): the transitions + the drain live in the extracted
         // `fe_music_step` (menu_music.rs) so the headless flows drive the SAME glue the window
         // runs. This wrapper only applies the commands to the sound driver.
@@ -4270,10 +4275,12 @@ impl App {
                 }
             }
         }
-        // The pump: one driver update + output send per frame while the menus are up and the
-        // audio is not held (the pause page's hold mirrors `MenuManager_Create(pause_sound=1)`).
-        if !self.audio_paused {
-            if let Some(s) = self.sound.as_mut() { s.batch(|_, _| {}); }
+        // The pump: one driver update + output send per 60 Hz tick while the menus or a load are up
+        // and the audio is not held (the pause page's hold mirrors `MenuManager_Create(pause_sound=1)`).
+        // Anywhere else `sound_tick` is the update; a second one here doubles every fade and duck.
+        let polls = movie_polls(&mut self.sound_poll_clock, dt);
+        if !self.audio_paused && (self.fe.is_some() || self.async_load.is_some()) {
+            if let Some(s) = self.sound.as_mut() { for _ in 0..polls.min(8) { s.batch(|_, _| {}); } }
         }
     }
 
@@ -4284,7 +4291,8 @@ impl App {
     /// change [M `Manager_SendMessage` 0x21c858:338 — stop when the new page's aux is 0, restart
     /// when it differs from the playing one]. Plus the `psiMovieFinished` poll [M 0x1082e8] and
     /// the phase-2 resolve routing the host's level load [M ResetMap_Load 0x1d6360 LoadState 2].
-    fn movie_tick(&mut self) {
+    fn movie_tick(&mut self, dt: f32) {
+        let polls = movie_polls(&mut self.movie_poll_clock, dt);
         let movie_iso = self.movie_iso_path();
         let Some(fe) = self.fe.as_mut() else {
             // No front-end page is up: no page wants the looping backdrop — stop it. The game's
@@ -4334,7 +4342,7 @@ impl App {
                 // 0x108060]).
                 match &mut self.movie {
                     Some(p) if p.code() == code && !p.is_looping() => {
-                        p.headless_advance();
+                        p.headless_advance_by(polls);
                         if p.finished() { fe.intro_movie_finished(); } else { fe.intro_live = true; }
                     }
                     _ => {}
@@ -4380,7 +4388,7 @@ impl App {
             // psiMovieFinished [M 0x1082e8]: the poll advances the no-decode stand-in one frame
             // per call ([`Player::headless_advance`]).
             let ended = match self.movie.as_mut() {
-                Some(p) if p.code() == code => { p.headless_advance(); p.finished() }
+                Some(p) if p.code() == code => { p.headless_advance_by(polls); p.finished() }
                 _ => false,
             };
             if ended {
@@ -4407,7 +4415,7 @@ impl App {
             if let Some(p) = self.movie.as_mut().filter(|p| p.code() == code) {
                 // One psiMovieFinished poll per page tick (60 Hz), not per redraw.
                 while fe.win_movie_polled != fe.flow.ticks {
-                    p.headless_advance();
+                    p.headless_advance_by(polls);
                     fe.win_movie_polled = fe.win_movie_polled.wrapping_add(1);
                 }
                 ended |= p.finished();
@@ -4417,7 +4425,7 @@ impl App {
                 fe.music.movie_finished();
                 fe.win_movie_finished();
             }
-        } else if mission_movie_glue(fe, &mut self.movie, &movie_iso) {
+        } else if mission_movie_glue(fe, &mut self.movie, &movie_iso, polls) {
         } else {
             // The page's aux loop [M 0x21c858:338]: stop when the page has no aux, (re)start when
             // the playing code differs from the page's.
@@ -4786,7 +4794,7 @@ impl App {
                 // fix-movie-playback: the movie glue runs before the load path so a phase-2
                 // resolve lands in the same frame the state 6 popped.
                 self.menu_script_tick();
-                self.movie_tick();
+                self.movie_tick(dt);
                 self.adopt_lobby_session();
                 if self.net_finished.is_some() {
                     let on_debrief = self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::MpDebriefing);
@@ -4855,7 +4863,7 @@ impl App {
                 }
                 // frontend-music: the menus' own audio (the jingle pair, the credits track), the
                 // page-change transitions and the per-frame pump.
-                self.menu_music_tick();
+                self.menu_music_tick(dt);
                 // The Auto Aim option reaches the game (it was stored and never read), and
                 // options-census generalizes the same drain to every wired row
                 // (docs/systems/options-census.md).
@@ -6488,6 +6496,8 @@ impl App {
             frame_ticks: 0,
             menu_clock: 0.0,
             fe_clock: 0.0,
+            movie_poll_clock: 0.0,
+            sound_poll_clock: 0.0,
             pending_mission_end: false,
             results_progress: None,
             pending_mp_debrief: None,
@@ -7747,7 +7757,16 @@ pub fn mission_end_stats(p: &nf_game::progress::Progress) -> menu::Stats {
 /// the sim before each local tick; never applied to an online match.
 pub static RAPID_FIRE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Player>, iso: &str) -> bool {
+/// The whole 60 Hz ticks `dt` seconds carry, the fraction kept in `clock`. At 240 Hz a movie hold
+/// that counted display frames ran out four times early.
+pub fn movie_polls(clock: &mut f32, dt: f32) -> u32 {
+    *clock += dt * 60.0;
+    let whole = (*clock + 1e-3).floor();
+    *clock = (*clock - whole).max(0.0);
+    whole as u32
+}
+
+pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Player>, iso: &str, polls: u32) -> bool {
     if fe.flow.get_state() == menu::ST_MOVIE {
         // psiStartBackgroundMovie replaces whatever the one BGFMV slot holds [M 0x1081a8] —
         // a looping page backdrop standing in the slot must yield to the state-6 movie
@@ -7768,7 +7787,7 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
                 // One player poll per flow tick (60 Hz), not per redraw: at 240 Hz the per-redraw poll
                 // ran the hold out in a quarter of the movie (the Double Cross outro cut out early).
                 while fe.flow.movie_polled < fe.flow.movie_clock {
-                    p.headless_advance();
+                    p.headless_advance_by(polls);
                     fe.flow.movie_polled += 1;
                 }
                 fe.flow.movie_playing = !p.finished();
@@ -8643,6 +8662,48 @@ mod headless_app_harness {
         // SfxMasterVolume 100 at 0x30c958/0x30c95c — Driver::new carries them].
         assert_eq!(nf_audio::sfx::Driver::new().music_master, 70);
         assert_eq!(nf_audio::sfx::Driver::new().master, 100);
+    }
+
+    /// Every driver update sends exactly one `Cmd::Reverb`, so one second's capture counts them.
+    fn audio_updates_in_a_second(app: &mut HeadlessApp, hz: u32) -> usize {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        app.app.sound = Some(nf_audio::sfx::Sound {
+            driver: Default::default(),
+            output: None,
+            captured: Some(log.clone()),
+            music_files: None,
+            music: None,
+            music_pending: Vec::new(),
+        });
+        for _ in 0..hz { app.frame(1.0 / hz as f32); }
+        let n = log.lock().unwrap().iter().filter(|c| matches!(c, nf_audio::Cmd::Reverb { .. })).count();
+        n
+    }
+
+    /// `SFXUpdate` runs once per game frame [M sound.md §6]: in a mission the sim's tick is the only
+    /// update, 60 a second at any display rate. Sister: the old per-frame pump on top of it made
+    /// 300 at 240 Hz, every fade and duck five times fast.
+    #[test]
+    fn a_mission_updates_the_sound_sixty_times_a_second() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut got = Vec::new();
+        for hz in [60, 144, 240] {
+            let mut app = HeadlessApp::mission(&iso, "07000006.bin");
+            got.push((hz, audio_updates_in_a_second(&mut app, hz)));
+        }
+        assert!(got.iter().all(|g| (58..=62).contains(&g.1)), "{got:?}");
+    }
+
+    /// The menus' pump keeps the same rate.
+    #[test]
+    fn the_menus_update_the_sound_sixty_times_a_second() {
+        let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut got = Vec::new();
+        for hz in [60, 144, 240] {
+            let mut app = HeadlessApp::boot(&iso);
+            got.push((hz, audio_updates_in_a_second(&mut app, hz)));
+        }
+        assert!(got.iter().all(|g| (58..=62).contains(&g.1)), "{got:?}");
     }
 }
 
