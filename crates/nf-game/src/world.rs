@@ -1048,7 +1048,7 @@ impl CollisionWorld {
             // line's x at the shutters is INSIDE the wood band, yet the game's round pierces the
             // pane — the snap ray never saw the shutters). The port's stat fold includes them
             // (the flight's door stops ride it), so the aim query needs the per-instance flag.
-            stat_aim_pick.push(level.maps[inst.map].objects[inst.object].flags & 0x8000 != 0);
+            stat_aim_pick.push(inst.placement.flags & 0x8000 != 0);
             stat.push_kept(c.triangles_with_material().into_iter().map(|(t, m)| (t.map(|p| transform(&inst.matrix, p)), m)), node_pass);
         }
         // Index collision shapes by hashcode, AND by (map,object) packed into a synthetic key for objects whose
