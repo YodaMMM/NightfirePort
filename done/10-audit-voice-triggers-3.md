@@ -165,3 +165,17 @@ viability).
 ## Usage
 
 not visible to me
+
+---
+## Report from the worker (done, 2026-11-05T11:53Z) — ntfy failed section appended
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-05 ~11:52 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20000 milliseconds`
+2. `python3 -c "... urllib.request ..."` → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → no output, killed at the
+   60 s tool timeout (the connection never opened).
+
