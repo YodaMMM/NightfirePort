@@ -22,3 +22,12 @@ nf-game lib 663/0 (the new wall-puff rotation test), anim_fx_cmd_census 1/0, rig
 1/0, laser_gas_mesh 4/0, blast_smoke 2/0, break_debris 4/0, grenade 1/0, impacts 6/0,
 fix_weapon_effects 3/0, weapon_fx_levels 5/0, impact_remainder 2/0. Full suite not re-run (the
 prior session's sandbox ran the linker out of disk; the changed-code binaries above all pass).
+
+## level-0b-walk-after-scrape-draw
+Started 2026-11-05 07:20 UTC. Branch s/level-0b-walk-after-scrape-draw (s/fx-scrape-and-impacts rebased onto origin/master a89818235).
+Task: land s/fx-scrape-and-impacts — the laser env puff jitter and the wall-puff roll shifted the
+shared RNG stream, so Bond dies at the end of walkreal_0700000b_live's real_damage_agent and
+real_damage_00agent at (2.22,58.08,36.54), under fire from drone #4 at 4.5 units. Make the walks
+survive the way a player would (fight or take cover there); do not remove or reorder a draw.
+Impact tests must count bullet holes only (guards' footprints share the decal pool). Run
+walkreal_0700000b_live, impacts_live, qclaw_live, impact_remainder_live.
