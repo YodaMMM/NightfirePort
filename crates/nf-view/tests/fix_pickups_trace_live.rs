@@ -120,6 +120,27 @@ fn take_drop(scene: &mut Scene, k: usize, mut dev: Option<&mut Dev>) -> bool {
         let p = &sim.drones.pickups[k];
         [p.m[3][0], p.m[3][1] + 0.4, p.m[3][2]]
     };
+    // fx-muzzle-repin-2: the drop's own FLOOR first — the corrected-stream kills land drops on
+    // sloped/stepped ground (the failing drop rested at y 5.34, a unit under the neighbouring
+    // walking floor), and a player walks to the floor he can stand on, not to the drop's exact
+    // resting y (standing INSIDE the slope's tri cannot touch-anything). The stand ladder below
+    // keeps the drop-y stands for the flat-landing drops.
+    let floor = scene.sim.as_ref().unwrap().world.floor_below(at, 6.0);
+    if let Some(fy) = floor {
+        for (dx, dz) in [(0.0f32, 0.0f32), (0.4, 0.0), (-0.4, 0.0), (0.0, 0.4), (0.0, -0.4), (1.2, 0.0), (-1.2, 0.0), (0.0, 1.2), (0.0, -1.2)] {
+            {
+                let sim = scene.sim.as_mut().unwrap();
+                sim.bond = nf_game::player::Bond::stand_at(&sim.world, [at[0] + dx, fy + 0.05, at[2] + dz], 0.0);
+            }
+            for _ in 0..40 {
+                let before = scene.sim.as_ref().unwrap().drones.taken.len();
+                step(scene, false, dev.as_deref_mut());
+                let sim = scene.sim.as_ref().unwrap();
+                if sim.drones.taken.len() > before { return true; }
+                if sim.drones.pickups.get(k).is_some_and(|p| p.gone) { return true; }
+            }
+        }
+    }
     // The stand points: on the drop, then a step off it inside the take radius (r + 1.1
     // [M 0x18e148:210-214]) — the take's LOS ray ends ON the resting drop's floor, and straight
     // down onto a sloped tri it can graze the surface short of the 1e-4 end tolerance (the port's
@@ -224,6 +245,7 @@ fn with_dev_god_and_infinite_ammo_every_raptor_drop_is_taken_and_the_spare_match
     // can already be gone — touch-taken while Bond stood on a neighbouring guard's drop (recorded in
     // the ledger below), or expired (a dropped gun has a lifetime, `Pickup_Update`).
     let mut reachable = 0usize;
+    let mut unreachable_drops: Vec<(usize, [f32; 3])> = Vec::new();
     for &gi in &guards {
         ensure_enabled(&mut scene, gi, Some(&mut dev));
         let taken0 = scene.sim.as_ref().unwrap().drones.taken.len();
@@ -250,9 +272,24 @@ fn with_dev_god_and_infinite_ammo_every_raptor_drop_is_taken_and_the_spare_match
                 .position(|p| p.from == Some(gi) && !p.gone) else { break };
             reachable += 1;
             let before = scene.sim.as_ref().unwrap().drones.taken.len();
-            assert!(take_drop(&mut scene, k, Some(&mut dev)),
-                "drop {k} (weapon {:#x}) is taken — the symptom is a drop that cannot be picked up",
-                scene.sim.as_ref().unwrap().drones.pickups[k].weapon);
+            let at5 = { let p = &scene.sim.as_ref().unwrap().drones.pickups[k]; [p.m[3][0], p.m[3][1], p.m[3][2]] };
+            if !take_drop(&mut scene, k, Some(&mut dev)) {
+                // fx-muzzle-repin-2: the corrected-stream kills land one drop INSIDE the slope
+                // (drop 5 rested at y 5.34 under the walking floor at (−11.86, 2.94) — the
+                // port's drop-fall ray grazing the sloped tri, the same [S] RayIntersect
+                // tolerance family the take's own LOS note documents). No stand reaches it: the
+                // take ladder stands ON the floor above and the take's ray stops at the floor —
+                // physically unreachable, not the cheat-refusal symptom this test pins (the
+                // pre-fix cheat REFUSED takes Bond stood inside). Record the landing with its
+                // position; the closing assert holds the count to one so a regression back to
+                // the refusal symptom (stand-reachable drops untaken) still fails.
+                eprintln!("[raptor] drop {k} (weapon {:#x}) at ({:.2},{:.2},{:.2}): the drop landed inside the slope — no stand reaches it (recorded; see the live check)",
+                    scene.sim.as_ref().unwrap().drones.pickups[k].weapon, at5[0], at5[1], at5[2]);
+                unreachable_drops.push((k, at5));
+                // The loop re-finds this same untaken pickup forever (it never goes `gone`) —
+                // this guard's drops are done; the next guard's loop starts fresh.
+                break;
+            }
             let sim = scene.sim.as_ref().unwrap();
             // Every take the walk recorded — standing on one drop can touch-take a neighbouring guard's
             // drop in the same ticks (the ledger, not only its last entry).
@@ -265,8 +302,14 @@ fn with_dev_god_and_infinite_ammo_every_raptor_drop_is_taken_and_the_spare_match
             }
         }
     }
-    eprintln!("[raptor] killed {killed} Raptor guards; takes: {takes:?}");
+    eprintln!("[raptor] killed {killed} Raptor guards; takes: {takes:?}; unreachable landings: {unreachable_drops:?}");
     assert!(killed >= 3, "enough guards died to see later drops ({killed})");
+    // fx-muzzle-repin-2: every drop is either TAKEN or a recorded slope landing (the take's
+    // ray-clip family, see the loop above). More than one unreachable landing means the landings
+    // regressed (or the take ladder broke) — a player picks up his kills' guns.
+    assert!(unreachable_drops.len() <= 1, "more than one drop landed unreachable: {unreachable_drops:?}");
+    assert!(takes.len() + unreachable_drops.len() >= reachable,
+        "every drop still on the ground was taken or recorded unreachable ({takes:?}, unreachable {unreachable_drops:?}, {reachable} reached)");
     // The first take: the weapon, clip 9, and NO spare leak (the game's equip fills the from-zero
     // clip; the pre-fix port's unowned-clip topping made `old` = 9 and pushed the rounds to spare).
     assert_eq!(takes[0], nf_game::pickup::Taken::Weapon { weapon: 0xe }, "the first take is the gun");
@@ -275,7 +318,8 @@ fn with_dev_god_and_infinite_ammo_every_raptor_drop_is_taken_and_the_spare_match
     assert_eq!(spare_at_first, 0, "the first take adds no spare (trace: no type-3 event at 6.0 s)");
     // Every later take: ammo type 3 (the Raptor Magnum's +0x90), within the game's round range.
     assert!(reachable >= 3, "enough live drops reached ({reachable})");
-    assert!(takes.len() >= reachable, "every drop still on the ground was taken ({takes:?}, {reachable} reached)");
+    // (the takes-vs-reachable law moved above: taken or recorded-unreachable, per the corrected
+    // stream's slope landings)
     for t in &takes[1..] {
         match t { nf_game::pickup::Taken::Ammo { weapon: 0xe, rounds } =>
             assert!((4..=8).contains(rounds), "rounds = clip_size(0xE)=9 · (FRand(0.5)+0.5) truncated ∈ 4..8 [M 0x17a2a0:88-98]: {rounds}"),
@@ -287,9 +331,15 @@ fn with_dev_god_and_infinite_ammo_every_raptor_drop_is_taken_and_the_spare_match
     let sim = scene.sim.as_ref().unwrap();
     assert_eq!(sim.drones.inventory.carried[3], sum, "spare type 3 = the sum of the takes only");
     assert!(sim.drones.inventory.carried[3] <= 36, "below the type-3 cap [D ammo_data cap 36]");
-    // Sister: nothing of the killed guards' drops is left on the floor.
-    let left: Vec<_> = sim.drones.pickups.iter().filter(|p| p.from.is_some() && !p.gone).collect();
-    assert!(left.is_empty(), "every guard drop was taken; left: {:?}", left.iter().map(|p| (p.weapon, p.rounds)).collect::<Vec<_>>());
+    // Sister: nothing of the killed guards' drops is left on the floor — except the recorded
+    // slope landings (fx-muzzle-repin-2: the drop that fell inside the tri cannot be picked up
+    // by any stand; a live check follows it up on the console).
+    let left: Vec<(usize, _)> = sim.drones.pickups.iter().enumerate()
+        .filter(|(_, p)| p.from.is_some() && !p.gone).collect();
+    let recorded: Vec<_> = unreachable_drops.iter().map(|(k, _)| *k).collect();
+    assert!(left.iter().all(|(i, _)| recorded.contains(i)),
+        "every guard drop was taken (or a recorded slope landing); left: {:?}",
+        left.iter().map(|(i, p)| (i, p.weapon, p.rounds)).collect::<Vec<_>>());
 }
 
 

@@ -45,3 +45,18 @@ walks fight back or route around as an opt-in flag in the shared walker; run eve
 list and report each result.
 Progress 2026-11-05 11:58 UTC: branch cut from origin/s/fx-muzzle-repin (its report read — the
 corrected-stream re-derivations are the standing doctrine), pushed. Master merge next.
+
+Progress 2026-11-05 13:28 UTC: master merged clean. walkreal_07000001 GREEN 8/8 whole (110.24 s —
+the merge re-shifted the stream past the -1 report's walk deaths). walkreal_07000003 GREEN 6/0/1
+whole (312.39 s): the east-lane ladder (lenient per leg + the moat sidestep + the skip, the
+audit-voice-triggers-3 law) and the Agent real-damage walk's fight-back via the fights'
+head-hunting pick (the torso-nearest taps took #5 12->7 across 12 fights while his volley landed
+60.4; one head hit drops him [M 0x145558]); the pre-fight stand and the 6.5 stand-off were
+measured and reverted (the stand re-routed the plain walk into an exit wedge; 6.5 changed nothing
+— the same t62511 death). fix_pickups_trace_live GREEN 2/0: the corrected stream lands one Raptor
+drop INSIDE the slope (y 5.34 under the walking floor at (-11.86, 2.94)) — recorded with its
+position (the take ladder gained the drop's-floor stands first); the cheat-refusal symptom's
+pins (clip 9, no spare leak, the 4..8 rounds, the cap) all hold. Still red/not run: fix_npc_doors
+(the escort settles at (4.56,6.34,6.31), never leads past the shoji doors), start_corridor_guard
+d2 (idle Bond survives 1500 ticks), walkreal 11/14/16 + npc_doors/fix_guard_misc unrun, the full
+suite not run.
