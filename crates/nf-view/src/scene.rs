@@ -1408,6 +1408,13 @@ pub struct Cel {
     /// a full u32) != 0, written for both room-cel classes. `Sound_UpdateListeners` ORs it with `env >= 20`
     /// (a signed s16 compare) into `SFXSetEnvironment`'s underwater argument.
     pub underwater: bool,
+    /// `cel+0xa1`: the cel's music-zone channel — placement param 4 (`level_tag+0x3c`, a byte) for
+    /// both room-cel classes [M parseentity_fixup_entity 0x1d00c0: the 0xc023/0xc047 arms write
+    /// `*(char *)(cel + 0xa1) = *(char *)(entity + 0x3c)`; `build_alloc_cel` 0x1c93f8 zeroes it
+    /// on every other cel]. `Player_Update` 0x193600:117-122 posts `Music_Event(ch, 1)` every
+    /// tick the player object's cel carries a non-zero one — the level's music-zone machine
+    /// (TowerC 0x113a20 reads e[44]/e[41]/e[17], the 0b zones' channels).
+    pub music_zone: u8,
 }
 
 /// The runtime cel graph for the portal visibility walk (fix-perf-level, G-016's portal half).
@@ -1606,7 +1613,8 @@ pub fn parse_cel_graph(level: &Level) -> (Vec<Cel>, CelGraph) {
                         let env = if flags16 == 0xc023 { -0x6768i16 } else { param32(9) as u16 as i16 };
                         rooms.push(Cel { min: o.min, max: o.max, ambient: [a0, a1], zone: if flags16 == 0xc047 { param(5) } else { 0 },
                             water: if flags16 == 0xc023 { o.max[1] } else { -500.0 },
-                            env, underwater: param32(3) != 0 });
+                            env, underwater: param32(3) != 0,
+                            music_zone: param(4) });
                         room_to_cell.push(Some(idx));
                     }
                 }
@@ -3378,6 +3386,15 @@ impl Sim {
             // (`build_point_in_bounding_box` 0x1c9500), so the actor's cel always carries the geometry
             // under him and the straddle BFS roots at the floor's cel — the 08 escort's straddle root and
             // the portal-centre crossings ([M 0x1c8928's +0x70]) both ride the same stateful cel).
+            // The music-zone read [M Player_Update 0x193600:117-122]: while the player object's cel
+            // (obj+0x20 — the link from the tick before: this read precedes the same tick's
+            // movement relink in the game's Player_Update) is a room cel whose entity carries
+            // prop 0x3c, the cel's channel posts `Music_Event(ch, 1)` EVERY tick. A generic cel
+            // keeps the allocator's 0 at +0xa1 [M build_alloc_cel 0x1c93f8] and posts nothing.
+            if let Some(room) = self.bond.cel.and_then(|cell| self.room_cell.iter().position(|&c| c == Some(cell))) {
+                let ch = self.cels[room].music_zone;
+                if ch != 0 { self.drones.music.event(ch as usize, 1); }
+            }
             self.bond.cel = bond_cel;
             // The melee hit-push `BL+0x910` (fix-bond-damage): `Player_Update` 0x193600 decays it
             // ×0.9 every tick [M disasm 0x1937a4-0x1937d8] and, while Bond is alive, adds it to the
