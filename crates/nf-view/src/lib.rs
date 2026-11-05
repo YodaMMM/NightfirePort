@@ -4797,6 +4797,11 @@ impl App {
                 // resolve lands in the same frame the state 6 popped.
                 self.menu_script_tick();
                 self.movie_tick(dt);
+                // The load resets the sound system before its movie [M ResetMap_Load 0x1d6360:24
+                // Sound_Kill + Sound_Init]: the mission's music and loops do not run under an outro.
+                if self.level_code != menu::FRONTEND_LEVEL && self.fe.as_ref().is_some_and(|fe| fe.flow.get_state() == menu::ST_MOVIE) {
+                    self.sound = None;
+                }
                 self.adopt_lobby_session();
                 if self.net_finished.is_some() {
                     let on_debrief = self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::MpDebriefing);
