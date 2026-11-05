@@ -13727,6 +13727,11 @@ impl Drones {
                 t.script_player_b = self.scripts.players.len();
                 self.scripts.players.push(mount(t.script_b));
                 self.gt_turrets.push(t);
+                // fx-gas-and-blasts note [M GT_Create 0x17ffa0:80-90 + parsemap_create_dynamic_objects
+                // 0x1d04f0 case 0x27]: the PLACEMENT path calls GT_Create with param_6 = 0, so the
+                // turret's own ext+0xb8 is ITSELF — the same-owner chain can never fire between
+                // placements. Only the deploy path carries a real parent owner (the deployer), so
+                // the chain lives there alone.
             }
         }
         // The space laser: kind 0x38 — the same walk's case 0x38 [M 0x1d04f0:227].
@@ -16044,6 +16049,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         t.script_player_b = self.scripts.spawn_primed(pb, &mut self.channels, d, frame);
         eprintln!("[ronin] deployed at ({:.2}, {:.2}, {:.2}) yaw {:.3} — GT_DeployMiniGun 0x181560", seat[0], seat[1], seat[2], t.base_yaw());
         self.gt_turrets.push(t);
+        // fx-gas-and-blasts row 10 [M GT_Create 0x17ffa0:150-166]: the same-owner chain fires on
+        // the deploy path too — a redeployed minigun detonates the previous same-owner one.
+        let new_idx = self.gt_turrets.len() - 1;
+        let blown = crate::gt::GTurret::create_chain(&mut self.gt_turrets, new_idx);
+        for pos in blown {
+            self.pending_blasts.push((pos, 5.0, 50.0, usize::MAX - 1, 0, 0x0600_0052, 5.0, 0));
+        }
         // `Script_Load`'s create callback `GT_Register` 0x181538 runs inside the load, so the
         // slots are filled before `GT_Create` returns [M 0017ffa0:100-104]. The priming beat's
         // event-0xF hand-offs sit in the request list; drain them now, with the turret in the
@@ -17361,7 +17373,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             for (&k, &di) in m { if self.doors.is_locked(di, &self.channels) { self.locked_door_nodes.insert(k); } }
         }
         // The gas puffs (`gases_smoke` 0x1ab2d0 runs in the object handler every frame).
-        self.gas.update();
+        self.gas.update(self.frame);
         self.update_swooshes();
         // fix-grenade-throw: the smoke clouds' lifetime countdown (`Occlude_Update` 0x17eba0:
         // obj+0xF4 − 1 per tick, 0 → dead).
@@ -17598,6 +17610,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     crate::gt::GTEvent::DestroyedBurst { pos } => {
                         self.gas.init_ex(crate::gas::SMOKE_QUAD, pos, 0.0, [0.0, 0.5, 0.0], 0.3, 1.5, 4, [0xff, 0xff, 0xff, 0xff], 1, 20.0);
                     }
+                    // fx-gas-and-blasts row 10: the MP wreck's Explode_Create [M 0x180498:435-441 —
+                    // 5.0/5.0/50.0, script 0x6000052, at the wreck's own +0x30] — the event's blast
+                    // lands in the sim now (the emit side was gt.rs's DESTROYED arm; this arm used
+                    // to drop it as draw-side data).
+                    crate::gt::GTEvent::Exploded { pos } => {
+                        self.pending_blasts.push((pos, 5.0, 50.0, usize::MAX - 1, 0, 0x0600_0052, 5.0, 0));
+                    }
                     // Music_Event(2,1) [M case 4] — the music system is view-side.
                     crate::gt::GTEvent::CombatSting => { self.music.event(2, 1); }
                     // The rest are the draw-side events (pickup drop, MP wreck explode, the
@@ -17737,6 +17756,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // at tick N is first ticked here at N+1: exactly the game's first `Emitter_Update`, before
         // the bullets and the AI of that frame — the interleave the game itself produces.
         self.fx.tick(&mut self.channels, player.pos, frame, &mut self.gas, &mut self.rng);
+        // fx-gas-and-blasts row 9: the Apocalypse's per-tick `Player_SetFlashBang(remaining,
+        // glb_blokes, min(remaining·382/total, 255))` [M 0x18d4f0:33-40; 0x196040 stores the byte
+        // at BL+0x963 and the duration at BL+0x918 = BL+0x91C — the port's health.flash_alpha /
+        // flashbang / flash_total]. The stun-grenade path is the other writer of the same state.
+        if let Some((remaining, alpha)) = self.fx.apocalypse_flash.take() {
+            self.health.flashbang = remaining;
+            self.health.flash_total = remaining;
+            self.health.flash_alpha = alpha;
+        }
         // The SpaceMissiles tick in the same control pass (the game's object handler runs
         // `SpaceMissile_Update` per frame [M 0x1aa118]).
         {

@@ -10897,7 +10897,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let Some(s) = self.sim.as_ref() else { return far };
                 // The breath's mode-2 puff carries the 0x400 bit: drawn only in x-ray [M Env_Breath
                 // 0x17c024-0x17c02c; View_AddObjects 0x1e62d8:38-47].
-                let Some(g) = s.drones.gas.puffs.get(gi as usize).filter(|g| g.mesh == gmesh && (!g.xray_only || s.goggle_mode() == 2)) else { return far };
+                let Some(g) = s.drones.gas.puffs.get(gi as usize).filter(|g| g.mesh == gmesh && !g.hidden && (!g.xray_only || s.goggle_mode() == 2)) else { return far };
                 let (c, sn) = g.spin.sin_cos();
                 let (rx, ry) = (opts.right, opts.up);
                 let (r2, u2) = ([rx[0] * c - ry[0] * sn, rx[1] * c - ry[1] * sn, rx[2] * c - ry[2] * sn],
