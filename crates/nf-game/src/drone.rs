@@ -11698,10 +11698,15 @@ pub enum PlayerImpact { Drone { drone: usize, part: i16, at: V3 }, World(V3) }
 #[derive(Clone, Copy, Debug)]
 pub struct Sound { pub id: u32, pub pos: V3, pub inner: f32, pub outer: f32, pub weight: f32 }
 
-/// The script fade overlay's state (`Camera_SetFade` 0x1bbdd8's viewer fields +0x228/+0x22C): the
-/// black overlay's alpha and its per-tick rate. Ticked in `Drones::tick`; drawn by nf-view.
+/// The script fade overlay's state (`Camera_SetFade` 0x1bbdd8's viewer fields +0x228/+0x22C and
+/// `Camera_UpdateGlbVars` 0x1bada0's state byte +0x235): the black overlay's alpha, its per-tick
+/// rate, the fade's TYPE byte (+0x234 — the `Request::Fade` `mode`: 0 = the op-0x13/near-end fades
+/// that never block a re-arm, 1 = the skip's fade-out and the tail's fade-in that refuse a second
+/// fade on the same viewer while ramping), and the ramp state (1 ramping, 2 the one-tick park at
+/// the end — an idle object draws nothing, +0x233 = 0 [M 0x1bada0:41-44]). Ticked in
+/// `Drones::tick`; drawn by nf-view.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ViewFade { pub alpha: f32, pub rate: f32 }
+pub struct ViewFade { pub alpha: f32, pub rate: f32, pub mode: u8, pub state: u8 }
 
 /// Anim states of the noise chain: turn (0x61) and a short look (0xB).
 const TURN: u16 = 0x61;
@@ -13270,6 +13275,13 @@ impl Drones {
         self.exit_hold.as_ref().map(|h| ViewFade {
             alpha: 1.0 - h.fade_frames as f32 / h.total as f32,
             rate: 1.0 / h.total as f32,
+            // `GameFlow_PushState`'s `Camera_SetFade(6, ..)` arm [M 0x1c9f38 disasm 0x1c9f7c: a0=6]
+            // stores the fade on viewer 6's own object; its type byte (+0x234) is the call's last
+            // argument — the exit push passes 1 [M 0x1c9f38:12 drops it; the type-1 refusal is what
+            // debounces the hold] — viewer 6 never carries a type-0 fade, so the mode only matters
+            // to the draw code, which never refuses on it.
+            mode: 1,
+            state: 1,
         })
     }
 
@@ -13299,6 +13311,10 @@ impl Drones {
         self.spawn_fade.as_ref().map(|&(left, total)| ViewFade {
             alpha: left as f32 / total as f32,
             rate: -(1.0 / total as f32),
+            // `Player_Init` 0x1910f8:45's type byte: the call's 4th argument is 1 [M — the gameplay
+            // fade-ins refuse while they ramp; the port's spawn fade never re-arms mid-run].
+            mode: 1,
+            state: 1,
         })
     }
 
@@ -16674,20 +16690,27 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // and +0x235 = the state (1 ramping, 2 done-this-tick, 0 idle; the updater
                 // Camera_UpdateGlbVars 0x1bada0 ramps +0x228 by +0x22C, parks 2 one tick, then 0)].
                 // A running TYPE-1 fade refuses; a type-0 script fade never blocks and is overwritten
-                // mid-ramp [M-dis 0x1bbe08-0x1bbe18]. The port's one-state gate (refuse while any
-                // fade runs) is the documented stricter stand-in: it matches the type-1 refusal; the
-                // script-fade overwrite and the one-tick re-arm lag are the deviations (a live check
-                // of Camera_SetFade's type byte for op 0x13 would pin what the scripts pass).
+                // mid-ramp [M-dis 0x1bbe08-0x1bbe18] — the port now carries the type (`mode`) and
+                // refuses only a second fade on the SAME viewer while a type-1 fade runs there.
                 // The same state carries the script's auto-fades (Script_Update's
                 // length−20 fade-out and the −22 handback fade-in) and nf-view draws it.
-                crate::nis::Request::Fade { ticks, viewer } => {
+                crate::nis::Request::Fade { ticks, viewer, mode } => {
                     // `Camera_SetFade(duration, 4, 0xff, 0)` [M 0x1bbdd8]: rate = 1/duration per tick;
                     // a NEGATIVE duration starts at alpha 1.0 and fades in, a positive one starts at
                     // 0.0 and fades out (op 0x13 passes the script f32 negated, so a script fade of
                     // −82 arrives as +82 = out to black [M 0x1db3d0, 0x06000071's bytes]).
-                    if self.view_fade.is_none() {
+                    // The refuse gate [M 0x1bbdd8:14 — accept while the target viewer's own object
+                    // has type +0x234 == 0 OR state +0x235 == 0]: a running type-0 fade is always
+                    // overwritten (the near-end fade re-arms every tick and holds its veil near
+                    // zero); a running type-1 fade refuses only on its own viewer — the game keeps
+                    // one fade object per viewer slot, so a type-1 ramp on the script viewer never
+                    // blocks the gameplay viewer's fade-in (the hand-back clear empties the script
+                    // fade before the tail's request drains, so the single overlay sees them in
+                    // that order too).
+                    let refuse = self.view_fade.as_ref().is_some_and(|f| f.mode != 0 && (viewer == 0) == self.view_fade_script);
+                    if !refuse {
                         let (alpha, rate) = if ticks < 0.0 { (1.0, 1.0 / ticks) } else if ticks > 0.0 { (0.0, 1.0 / ticks) } else { (0.0, 0.0) };
-                        self.view_fade = Some(ViewFade { alpha, rate });
+                        self.view_fade = Some(ViewFade { alpha, rate, mode, state: 1 });
                         self.view_fade_script = viewer == 0;
                     }
                 }
@@ -18863,12 +18886,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // below, in the game's list order (fix-script-start-tick — the old all-players-here beat
         // ran a trigger-started script one tick behind the placement trigger that started it).
         let script_skip = { let _p = crate::prof::scope("drones: scripts head"); self.scripts.begin_tick(&mut self.channels, d, frame) };
-        // The script fade overlay's per-tick advance (`Camera_SetFade`'s viewer state; the game ticks
-        // it in the viewer update): the alpha moves by the rate each tick and parks at its end —
-        // 1.0 after a fade-to-black (the screen stays black until a fade-in), 0.0 after a fade-in.
+        // The script fade overlay's per-tick advance (`Camera_UpdateGlbVars` 0x1bada0 — the game
+        // ticks it in the viewer update): the state-1 alpha moves by the rate each tick UNCLAMPED
+        // (the drawn byte +0x233 clamps, the state does not); the ramp ends only when the alpha
+        // leaves [0,1] STRICTLY — state 2 parks one tick at the last drawn byte, then the idle
+        // object draws nothing (+0x233 = 0 [M 0x1bada0:41-44]). A fade-in whose 1/duration steps
+        // land exactly on 0.0 (07000001's 63-tick intro fade [D + the pinned park]) never leaves
+        // the window and holds — the game's observed parked fade. A re-arm (the drain below)
+        // restarts state 1 fresh.
         if let Some(f) = self.view_fade.as_mut() {
-            if f.rate > 0.0 { f.alpha = (f.alpha + f.rate).min(1.0); }
-            else if f.rate < 0.0 { f.alpha = (f.alpha + f.rate).max(0.0); }
+            match f.state {
+                1 => {
+                    f.alpha += f.rate;
+                    if f.alpha < 0.0 || f.alpha > 1.0 { f.state = 2; }
+                }
+                _ => { self.view_fade = None; }, // state 2 drawn one tick, then idle (+0x235 = 0)
+            }
         }
         // doublecross-transitions: `Player_Init`'s entry fade counts down each tick (the exit
         // hold's documented deviation — the game advances the fade object on the render path,

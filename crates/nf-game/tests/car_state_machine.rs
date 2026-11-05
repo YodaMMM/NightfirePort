@@ -70,7 +70,17 @@ fn deactivate_matches_car_deactivate_0x131d88() {
     // Deactivate: state 99, the 0x708 respawn timer [M 0x131d88:24/79], the driver released,
     // the pose restored from TankSpawns[slot] (the port's spawn_matrix copy).
     car.spawn_matrix[3][0] = 42.0;
-    car.deactivate();
+    // audit-effect-calls: the deactivate carries the game's dropped `Explode_Create`
+    // [M 0x131d88:66-68] at the LIVE obj+0x30 translation (before the pose restore).
+    let live_pos = [car.matrix[3][0], car.matrix[3][1], car.matrix[3][2]];
+    let blast = car.deactivate().expect("the first deactivate explodes [M 0x131d88:66-68]");
+    assert_eq!(blast.0, live_pos, "the blast sits at the live obj+0x30, not the spawn point [M 0x131d88:66-73]");
+    assert_eq!(blast.1, nf_game::car::CAR_BLAST_RADIUS);
+    assert_eq!(blast.2, nf_game::car::CAR_BLAST_DAMAGE);
+    assert_eq!(blast.3, nf_game::car::CAR_BLAST_SCRIPT);
+    assert_eq!(blast.4, nf_game::car::CAR_BLAST_RADIUS, "the script scale follows the 0x4-arm convention");
+    assert_eq!(blast.5, nf_game::car::CAR_BLAST_DEBRIS);
+    assert!(car.deactivate().is_none(), "state 99 re-entry is the game's no-op arm [M 0x131d88:20]");
     assert_eq!(car.state, CAR_RESPAWNING);
     assert_eq!(car.timer_or_pilot, RESPAWN_TICKS, "the respawn timer is 0x708 ticks [M 0x131d88:79]");
     assert_eq!(car.driver, None);
