@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox4 at 2026-11-05T17:40Z
+
+---
+## Report (done, 2026-11-05T18:53Z)
+
+Closed by the driver: the report is on `s/death-nis-music-restart` (docs/reports/death-nis-music-restart.md); the worker didn't run finish.sh.
