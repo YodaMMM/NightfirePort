@@ -247,6 +247,11 @@ fn guard_takes_cover_like_the_game() {
     // moves the first sighting, shifting the shared stream). Seed 2 (re-picked at the attack-reentry-choice merge, 913: Attack's own fallback sends the level's
     // mode-2 guard to SniperAim 0x2a [M 0x164210:85-88] instead of Combat, shifting the shared stream;
     // fix-impact-remainder2 had 4, fix-ai-remainder 1).
+    // Seed 16 (re-picked at fx-muzzle-and-trail: the guard's shots now consume the
+    // muzzle-flash sprite's three orientation draws [M DroneWeap_FireWeapon 0x178f68:189-213 —
+    // control_create_object 0x1344e0 is a plain Mem_Malloc, so the live game makes the draws on
+    // every shot], shifting the shared stream; the seeds that pass every pin on the corrected
+    // stream are 1, 11, 16, 17, 19 and 23. 16 also passed every pin on the pre-flash-draw model.
     // Seed 9 (re-picked at the single blend-out word: `Ready2Fire` reads `Drone+0x538`, which the
     // first replaced script to die clears [M 0x13b1c8:76-77, 0x1c14f0:26-29], so the guard's Combat
     // shots before the cover run land on other ticks and the shared stream shifts. Seeds 0-24 on
@@ -257,7 +262,7 @@ fn guard_takes_cover_like_the_game() {
     // [M 0x1c7a98 + 0x14c600:81-107] — so spawner 266's drone fires and reacts on a different
     // schedule and the shared stream shifts; 913's attack-reentry-choice had 2, fix-impact-remainder2
     // 4, fix-ai-remainder 1).
-    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 9);
+    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 16);
     let mut sim = l.sim(drones, rng);
     let player = bond_at([79.86, 22.92, 96.0]);
     for _ in 0..700 { sim.tick(&d, &player); }
@@ -1412,7 +1417,7 @@ fn grenade_bounce_scares_the_guard_into_the_flee_family() {
         pos: drop, velocity: [0.0, -5.0, 0.0], speed: 5.0, travelled: 0.0, range: 100000.0,
         damage: 1.0, radius: 1.0, weapon_type: 0x34, mesh: 0, owner: usize::MAX, state: 1, bounces: 0, smoke_popped: false, resting: false,
         stuck: false, seek_target: None,
-        phase: None, burn: 0, defused: false,
+        phase: None, burn: 0, defused: false, born: 0,
     });
     let mut saw_87 = false; let mut dist_at_87 = 0.0f32;
     for k in 0..400 {
@@ -1507,3 +1512,4 @@ fn auto_aim_from_a_moving_shooter_is_the_same_instantaneous_geometry() {
     for k in 0..3 { assert!((dir2[k] - to2[k] / n2).abs() < 1e-3, "the riding ray re-snaps to the bone 2 from the new head"); }
     assert!((off[1] - off2[1]).abs() < 0.02, "the assist offset tracks the geometry, not a velocity history ({off:?} vs {off2:?})");
 }
+

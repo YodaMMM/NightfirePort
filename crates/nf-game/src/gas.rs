@@ -240,6 +240,134 @@ impl GasPool {
         self.init_searchlight_smoke(rng, pos);
     }
 
+    /// The GT turret's SHOT smoke — `GT_Update` 0x180498's two fire sites (case 4 @:356 = jal
+    /// 0x180c38, case 7 @:530 = jal 0x181350), on every OTHER shot: the fire tail toggles the
+    /// flash object's barrel byte `+0xf6 ^= 1` (and re-arms the flash `+0xf4 = 2`, unhides
+    /// `+0xf0 &= ~0x10`) and calls `Gas_Init` only when the toggled value is 1 [M disasm
+    /// 0x180bd0-0x180bf8]. Fixed args [M disasm 0x180bfc-0x180c3c]: scale 0.05 → 0.1 (f12 =
+    /// 0x3d4ccccd, f13/f20 = 0x3dcccccd), cel = the GT's (obj+0x20), pos = the muzzle (the same
+    /// vector `Bullet_init` spawned the round from), ROT vector z = the caller's draw, VEL =
+    /// NULL → the kind-7 wind path, glist 0x2000039, kind 7, rgba 0x48403080, 11th arg 1, life
+    /// 128 (stack `sw $v0(0x80), ($sp)` [M 0x180c00-0x180c1c]).
+    /// Draws per smoke, in order [M]: 1. the caller's `Rand_FRand(2π)` (0x180bc0, 0x40c90fdb —
+    /// stored to the ROT vector's z, sp+0x88; the puff's initial spin angle — the port's
+    /// billboard reads only the spin rate, discarded here); 2. the spin `Rand_FRand(π/2·REC)`
+    /// [M 0x1aacc8:72-80]; 3. the spin sign `Rand_Rand(0x100)` — negate at ≥ 0x80 [M 0x1ab08c];
+    /// 4-6. the NULL-vel kind-7 wind spread `Rand_FRand(0.2)` ×3 over `Env_GetWindVel` (0 in the
+    /// port's rooms) [M 0x1ab138-0x1ab1c8]. All consumed BEFORE the pool-cap check (the
+    /// searchlight precedent).
+    pub fn init_gt_shot_smoke(&mut self, rng: &mut crate::drone::Rng, pos: V3) {
+        let _rot_z = rng.frand(6.2831853); // 0x40c90fdb [M 0x180bc0]
+        let spin_mag = rng.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
+        let spin = if rng.rand(0x100) >= 0x80 { -spin_mag } else { spin_mag };
+        let (rx, ry, rz) = (rng.frand(0.2), rng.frand(0.2), rng.frand(0.2));
+        if self.puffs.len() >= Self::CAP { return; }
+        let vel = [rx - 0.1, ry, rz - 0.1].map(|j| mul_ee(j, REC_FRAME_RATE));
+        self.puffs.push(Gas {
+            pos,
+            vel,
+            mesh: SMOKE_QUAD,
+            scale: 0.05, // [M 0x180c0c-0x180c14 f12 = 0x3d4ccccd]
+            scale_rate: (0.1 - 0.05) / 128.0, // [M f13/f20 = 0x3dcccccd = 0.1; life 128]
+            rgba: [0x48 as f32, 0x40 as f32, 0x30 as f32, 0x80 as f32],
+            rgba_rate: [-0x48 as f32 / 128.0, -0x40 as f32 / 128.0, -0x30 as f32 / 128.0, -0x80 as f32 / 128.0],
+            spin,
+            life: 128.0, // [M 0x180c00-0x180c1c stack arg 0x80]
+            kind: 7,
+            billboard: false,
+            xray_only: false,
+            hidden: false,
+            born: 0,
+            child: None,
+            rot: [0.0; 3],
+        });
+    }
+
+    /// The mounted-gun OVERHEAT smoke — `GunImp_Update` 0x1320d8:218-247: while the hot byte
+    /// (`ext+0x9c`, 200 heat) stands, every 6th game frame (`GameState % 6 == 0` [M 0x132480-8c
+    /// divu/mfhi]) emits `Gas_Init(0.05, 0.25, cel, pos, rot, NULL-vel, 0x2000039, 7, 0x484030e4,
+    /// 1)` with life 128 (stack `sw $v0(0x80), ($sp)` [M 0x132510-0x132540]). The position is the
+    /// barrel-tip matrix product offset by `-(obj+0x8c) · U(0,1)` along the aim direction
+    /// [M :224-241 — `fStack_100 = FRand(1.0)`, `fStack_100 = -(obj+0x8c)·fStack_100`, the VU0
+    /// `matrix·vec + base` over `Mat_GetDir(obj+0x90)`]; obj+0x8c is the imp's world-sphere
+    /// radius (the port's `GunImp.radius`). The ROT vector z = the caller's `Rand_FRand(2π)`
+    /// [M :242-244]. VEL NULL → the kind-7 wind path (as `init_gt_shot_smoke`).
+    /// Draws per emission, in order [M]: 1. `Rand_FRand(1.0)` (0x1324b4 — the offset fraction);
+    /// 2. `Rand_FRand(2π)` (0x132504, 0x40c90fdb); 3. the spin; 4. the sign; 5-7. the wind ×3.
+    pub fn init_gunimp_smoke(&mut self, rng: &mut crate::drone::Rng, pos: V3, back: V3, radius: f32) {
+        let k = rng.frand(1.0); // [M 0x1324b4] — the offset fraction along the barrel axis
+        let _rot_z = rng.frand(6.2831853); // [M 0x132504]
+        let spin_mag = rng.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
+        let spin = if rng.rand(0x100) >= 0x80 { -spin_mag } else { spin_mag };
+        let (rx, ry, rz) = (rng.frand(0.2), rng.frand(0.2), rng.frand(0.2));
+        if self.puffs.len() >= Self::CAP { return; }
+        let pos = [pos[0] + back[0] * radius * k, pos[1] + back[1] * radius * k, pos[2] + back[2] * radius * k];
+        let vel = [rx - 0.1, ry, rz - 0.1].map(|j| mul_ee(j, REC_FRAME_RATE));
+        self.puffs.push(Gas {
+            pos,
+            vel,
+            mesh: SMOKE_QUAD,
+            scale: 0.05, // [M 0x13251c-0x132524 f12 = 0x3d4ccccd]
+            scale_rate: (0.25 - 0.05) / 128.0, // [M 0x13252c-0x132530 f13 = 0x3e800000 = 0.25]
+            rgba: [0x48 as f32, 0x40 as f32, 0x30 as f32, 0xe4 as f32], // [M 0x132518/0x13254c t2 = 0x484030e4]
+            rgba_rate: [-0x48 as f32 / 128.0, -0x40 as f32 / 128.0, -0x30 as f32 / 128.0, -0xe4 as f32 / 128.0],
+            spin,
+            life: 128.0, // [M stack arg 0x80]
+            kind: 7,
+            billboard: false,
+            xray_only: false,
+            hidden: false,
+            born: 0,
+            child: None,
+            rot: [0.0; 3],
+        });
+    }
+
+    /// The bullet trail's BIG puff — `Bullet_trail_effect_smoke` 0x12cba8's `+0xf6 != 0` arm
+    /// (decomp :29-53): the STUCK trail bullet (the hat is the only 0x20000 carrier that sets
+    /// obj+0xf6 = 1 at its stick [M Bullet_DoTrails 0x12d890:397-403]), every 15th game tick
+    /// (`(GameState + (u8)obj[0xec]) % 15 == 0` [M disasm 0x12cc7c-0x12cca0 divu/mfhi] — note NO
+    /// MPSettings gate on this arm). Fixed args [M disasm 0x12cd30-0x12cd80]: scale 0.2 → 5.0
+    /// (f12 = 0x3e4ccccd, f13 = 0x40a00000), cel = the bullet's (obj+0x20), pos = obj+0x30, VEL
+    /// = the given vector (no wind draws [M 0x1ab26c-0x1ab28c]), glist 0x0200001f, kind 0xb,
+    /// rgba 0x404040ff → END 0x404040ff (t3, NO fade), life 255 (stack `sw $v0(0xff), ($sp)`
+    /// [M 0x12cd34-0x12cd6c]).
+    /// Draws per puff, in order [M disasm 0x12cca8-0x12cd64]: 1-3. the velocity, each
+    /// `Rand_FRand_MVar2(a, b) = a·U(0,1) − b` [M 0x1e38b0] then offset — x = MVar2(0.3, 0.15)
+    /// + 0.6 ∈ [0.45, 0.75) (0x12ccc4 + 0x3f19999a), y = MVar2(0.1, 0.05) + 0.5 ∈ [0.45, 0.55)
+    /// (0x12cd08, 0x3dcccccd/0x3d4ccccd), z = MVar2(0.3, 0.15) + 0.3 (0x12cce4); 4. the caller's
+    /// `Rand_FRand(2π)` (0x12cd28 — the ROT vector z); 5. the spin `Rand_FRand(π/2·REC)` — kind
+    /// 0xb SCALES it ×0.25 [M 0x1aacc8:72-88 `mul.s f0, f1, 0.25` on the kind==0xb arm];
+    /// 6. the sign `Rand_Rand(0x100)`. The kind-0xb update moves the puff by the stored vel plus
+    /// the shared buoyancy and caps the spin rate [M 0x1ab2d0 case 0xb].
+    pub fn init_trail_big_puff(&mut self, rng: &mut crate::drone::Rng, pos: V3) {
+        let vx = rng.frand(0.3) - 0.15 + 0.6; // MVar2(0.3, 0.15) + 0.6 [M 0x12ccc4+0x12cce0]
+        let vz = rng.frand(0.3) - 0.15 + 0.3; // MVar2(0.3, 0.15) + 0.3 [M 0x12cce4, stored to sp+0x18 = z]
+        let vy = rng.frand(0.1) - 0.05 + 0.5; // MVar2(0.1, 0.05) + 0.5 [M 0x12cd08, stored to sp+0x14 = y]
+        let _rot_z = rng.frand(6.2831853); // [M 0x12cd28]
+        let spin_mag = rng.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE) * 0.25; // kind 0xb ×0.25 [M 0x1ab084]
+        let spin = if rng.rand(0x100) >= 0x80 { -spin_mag } else { spin_mag };
+        if self.puffs.len() >= Self::CAP { return; }
+        self.puffs.push(Gas {
+            pos,
+            vel: [vx, vy, vz].map(|j| mul_ee(j, REC_FRAME_RATE)), // the given-vel store [M 0x1ab26c-0x1ab28c — the VU0 multiply]
+            mesh: 0x0200_001f, // [M 0x12cd38 t0]
+            scale: 0.2, // [M f12 = 0x3e4ccccd]
+            scale_rate: (5.0 - 0.2) / 255.0, // [M f13 = 0x40a00000; life 255]
+            rgba: [0x40 as f32, 0x40 as f32, 0x40 as f32, 0xff as f32],
+            rgba_rate: [0.0; 4], // END 0x404040ff — no fade [M t3 = 0x404040ff]
+            spin,
+            life: 255.0, // [M stack arg 0xff]
+            kind: 0xb,
+            billboard: false,
+            xray_only: false,
+            hidden: false,
+            born: 0,
+            child: None,
+            rot: [0.0; 3],
+        });
+    }
+
     /// The projectile smoke-trail site (`Bullet_trail_effect_smoke` 0x12cba8 fast arm, called from
     /// `Bullet_DoTrails` 0x12d890 when the weapon record's `+0x6C` carries bit 0x2 [M decomp
     /// :144-146]), every 4th game tick (`(GameState tick + obj[0xec]) & 3 == 0` [M disasm
@@ -483,6 +611,17 @@ impl GasPool {
                         }
                     }
                 }
+                // Case 0xb [M 0x1ab2d0 case 0xb = 0x1ab44c, decomp :186-211]: the same motion —
+                // pos += WldGravity·(REC·−0.02·FRM) then pos += the stored velocity — plus the
+                // rot-z spin accumulation (`obj+0x58 += data+0`, the spin rate Gas_Init stored)
+                // and the scale/colour ticks (the common tail). The game also clamps pos.y to
+                // the host cel's +0x54 floor [M :201-203]; the port's puffs carry no cel host
+                // and this puff only rises (vel y > 0.45·REC, buoyancy up), so the clamp is a
+                // no-op for it [S].
+                0xb => {
+                    for k in 0..3 { g.pos[k] += g.vel[k]; }
+                    g.pos[1] += WLD_GRAVITY[1] * -0.02 * REC_FRAME_RATE;
+                }
                 _ => {}
             }
             g.scale += g.scale_rate;
@@ -622,6 +761,76 @@ mod tests {
         assert_eq!(a.puffs, b.puffs, "same calls, same puffs (no wall-clock)");
         for _ in 0..200 { a.init([0.0; 3], 0.0, [0.0; 3], 0.05, 0.1, 7, [72, 64, 48, 128], 4.0); }
         assert_eq!(a.puffs.len(), GasPool::CAP, "the pool caps");
+    }
+
+    /// fx-muzzle-and-trail row 6: the GT shot smoke consumes SIX shared draws in a fixed order —
+    /// the caller's `FRand(2π)` rot-z [M 0x180bc0], the spin `FRand(π/2·REC)` [M 0x1aacc8:72-80],
+    /// the sign `Rand(0x100)` [M 0x1ab08c], then the kind-7 NULL-vel wind spread `FRand(0.2)` ×3
+    /// [M 0x1ab138-0x1ab1c8: x/z centred on the wind, y = raw +FRand(0.2) — the game's own
+    /// asymmetry], all before the pool-cap check. The puff: scale 0.05 → 0.1 over life 128, rgba
+    /// 0x48403080 fading to ~0 [M 0x180bfc-0x180c3c].
+    #[test]
+    fn gt_shot_smoke_draws_six_and_lands_the_values() {
+        let mut pool = GasPool::default();
+        let mut rng = crate::drone::Rng::new(11);
+        pool.init_gt_shot_smoke(&mut rng, [3.0, 4.0, 5.0]);
+        assert_eq!(pool.puffs.len(), 1);
+        let g = &pool.puffs[0];
+        assert_eq!(g.pos, [3.0, 4.0, 5.0]);
+        assert_eq!(g.mesh, SMOKE_QUAD);
+        assert_eq!(g.kind, 7);
+        assert_eq!(g.scale, 0.05);
+        assert_eq!(g.life, 128.0);
+        assert_eq!(g.rgba, [0x48 as f32, 0x40 as f32, 0x30 as f32, 0x80 as f32]);
+        // Replay the same six draws on a twin rng — the pool must sit EXACTLY there on the stream.
+        let mut r2 = crate::drone::Rng::new(11);
+        let _rot_z = r2.frand(6.2831853);
+        let spin_mag = r2.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
+        let spin = if r2.rand(0x100) >= 0x80 { -spin_mag } else { spin_mag };
+        let (rx, ry, rz) = (r2.frand(0.2), r2.frand(0.2), r2.frand(0.2));
+        assert_eq!(g.spin, spin, "draws 2-3 are the spin + sign");
+        assert_eq!(g.vel, [(rx - 0.1), ry, (rz - 0.1)].map(|j| mul_ee(j, REC_FRAME_RATE)), "draws 4-6 are the wind spread");
+        // Sister: a seventh draw before Gas_Init (e.g. a misplaced cap check) shifts the replay.
+        let mut r3 = crate::drone::Rng::new(11);
+        let mut pool3 = GasPool::default();
+        let _shift = r3.frand(1.0);
+        pool3.init_gt_shot_smoke(&mut r3, [3.0, 4.0, 5.0]);
+        assert_ne!(pool3.puffs[0].spin, pool.puffs[0].spin);
+    }
+
+    /// fx-muzzle-and-trail row 12: the trail's BIG puff consumes SIX draws — vx `MVar2(0.3, 0.15)
+    /// + 0.6` [M 0x12ccc4], vz `MVar2(0.3, 0.15) + 0.3` [M 0x12cce4], vy `MVar2(0.1, 0.05) + 0.5`
+    /// [M 0x12cd08], the rot-z `FRand(2π)` [M 0x12cd28], the kind-0xb spin ×0.25 [M 0x1ab084], the
+    /// sign [M 0x1ab08c] — then pushes scale 0.2 → 5.0 over life 255, rgba 0x404040ff with NO fade
+    /// [M 0x12cd38 t0/t3, f12 = 0x3e4ccccd, f13 = 0x40a00000, stack 0xff].
+    #[test]
+    fn trail_big_puff_draws_six_and_lands_the_values() {
+        let mut pool = GasPool::default();
+        let mut rng = crate::drone::Rng::new(5);
+        pool.init_trail_big_puff(&mut rng, [1.0, 1.0, 1.0]);
+        assert_eq!(pool.puffs.len(), 1);
+        let g = &pool.puffs[0];
+        assert_eq!(g.mesh, 0x0200_001f);
+        assert_eq!(g.kind, 0xb);
+        assert_eq!(g.scale, 0.2);
+        assert_eq!(g.life, 255.0);
+        assert_eq!(g.rgba, [0x40 as f32, 0x40 as f32, 0x40 as f32, 0xff as f32]);
+        assert_eq!(g.rgba_rate, [0.0; 4], "END = rgba: no fade");
+        let mut r2 = crate::drone::Rng::new(5);
+        let vx = r2.frand(0.3) - 0.15 + 0.6;
+        let vz = r2.frand(0.3) - 0.15 + 0.3;
+        let vy = r2.frand(0.1) - 0.05 + 0.5;
+        let _rot_z = r2.frand(6.2831853);
+        let spin_mag = r2.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE) * 0.25;
+        let spin = if r2.rand(0x100) >= 0x80 { -spin_mag } else { spin_mag };
+        assert_eq!(g.spin, spin);
+        assert_eq!(g.vel, [vx, vy, vz].map(|j| mul_ee(j, REC_FRAME_RATE)));
+        // The buoyant rise: the kind-0xb motion is pos += vel then the shared gravity lift.
+        let l0 = g.pos;
+        let mut pool2 = GasPool::default();
+        pool2.puffs.push(g.clone());
+        pool2.update(0);
+        assert!(pool2.puffs[0].pos[1] > l0[1], "the puff rises");
     }
 }
 
