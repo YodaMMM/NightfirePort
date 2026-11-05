@@ -14,6 +14,3 @@ Failing on the branch (suite 4386 passed, 13 failed):
 - walkreal_0700001b_live (2): "console 1 latched". The walk fires up through panels its stray shots used to destroy. Use new firing spots above the panels, as a player would. Console order is 3, 5, 6 ... and it stalls at console 8 from (44.77, -8.66, 1.68)
 
 Keep `firing_along_the_walkway_breaks_no_panel` green. Keep the panel-only triangle stage unless a live check says otherwise. Run each binary whole and quote the results.
-
----
-claimed-by: sandbox5 at 2026-11-05T19:26Z
