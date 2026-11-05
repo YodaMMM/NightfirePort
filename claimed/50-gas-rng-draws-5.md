@@ -25,3 +25,6 @@ Continue from origin/s/gas-rng-draws-4; merge origin/master first. Read docs/rep
 - `walkreal_07000002_live` and `walkreal_07000014_live`: built, not run (the window closed
   mid-sweep; 02's walks alone cost ~6 min).
 
+
+---
+claimed-by: sandbox3 at 2026-11-05T03:13Z
