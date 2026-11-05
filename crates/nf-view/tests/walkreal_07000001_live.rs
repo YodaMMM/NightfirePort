@@ -321,8 +321,24 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         w.walk_nav_to([7.5, 6.4, 10.1], "the hall door approach (pre-opens it)", 0.8);
         w.walk_nav_to([7.2, 6.4, 8.8], "the door-hold line", 1.0);
         w.wait(60);
-        w.keep_off = Some(3.2);
-        w.dmg.back_off = Some(3.2);
+        // guard-goal-arrival-radii: the goal machinery's own radii (cover 0.5/1.0, the AI points'
+        // 1.0 accuracies [D the aipoint_accuracy_census]) bring the hall guards ~1 unit deeper
+        // than the flat 2.0 stand-in did — the 00agent run's captain reached 2.9 u (INSIDE the
+        // old 3.2 band, his 8-pellet volley then took 42 health in one burst). The band widens
+        // at d3 ONLY (the d1/d2 balance stays on the tuned 3.2): still well inside the 6.7-u
+        // occlusion edge (the probe: exposed false at 6.7 u with the door open), so the doorway
+        // fight keeps its LOS while Bond backs out of the close-order shotgun band [M
+        // 0x179740:100-110's forced-hit radius is 3.0].
+        let band = if difficulty >= 3 { 4.0 } else { 3.2 };
+        w.keep_off = Some(band);
+        w.dmg.back_off = Some(band);
+        // And at d3 the hold line itself sits 1.2 farther south (z 8.8 -> 7.6): with the goal
+        // radii live the captains close to 2.4 u and the backing is wall-limited — the deeper
+        // line gives the backing room to keep the shotgun band (>3.0 forced-hit radius [M
+        // 0x179740:100-110]) while the doorway LOS holds (4.0 < the 6.7-u occlusion edge).
+        if difficulty >= 3 {
+            w.walk_nav_to([7.2, 6.4, 7.6], "the door-hold line (d3, the radii live)", 1.0);
+        }
     }
     // (the Operative's old east-door stage leg is GONE: walking into the alerted hall is the
     // bleed the doorway fight replaces)
