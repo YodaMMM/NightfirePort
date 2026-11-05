@@ -907,6 +907,7 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             }
         }
     }
+    subtitles(&mut h, s, t);
     // The pickup message bar (pane 21, `Text_AddMsg` 0x1b0c30 + `HUD_UpdateStatusPane` 0x19c310): three sprites
     // copied into `PickupStatusSprInfo` from 0x2FC460 (stride 0x30) [L ee_start_05.bin; M static init 0x1a0058]:
     // the middle is a 1-texel column of the HUD sheet 0x0300007A (u 190, v 0..56) stretched to 256×26 at
@@ -980,21 +981,16 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             // shadow (flag 0x20), layer 0x1e while shown; alpha = time·17 under 15 ticks
             // [M 0x19ca88:83-97].
             let a = (msg.time * 17.0).min(255.0) as u32;
-            for (k, l) in t.font.word_wrap(&msg.text, 480.0).split('\n').enumerate() {
-                h.text_fading(Anchor::Left, &t.font, 30, l, 16.0, 88.0 + k as f32 * t.font.line_height(), false, gs(0xffffff, a));
-            }
+            let (l, left) = line_part(&t.font, &msg.text, msg.time, msg.life, 480.0);
+            let a = a.min((left * 17.0).min(255.0) as u32);
+            h.text_fading(Anchor::Left, &t.font, 30, &l, 16.0, 88.0, false, gs(0xffffff, a));
         } else if let Some(msg) = s.hud.info_msgs.front() {
             let a = (msg.time * 17.0).min(255.0) as u32;
             bar(&mut h, bw);
-            let wrapped = t.font.word_wrap(&msg.text, 480.0);
-            let lines: Vec<&str> = wrapped.split('\n').collect();
-            let mut maxw = 0.0f32;
-            for l in &lines { maxw = maxw.max(t.font.layout(l, 0.0, 0.0).1); }
-            let x0 = SW / 2.0 - maxw / 2.0;
-            let lh = t.font.line_height();
-            for (k, l) in lines.iter().enumerate() {
-                h.text_fading(Anchor::Centre, &t.font, 29, l, x0, 129.0 + k as f32 * lh, false, gs(0x7d6d59, a));
-            }
+            let (l, left) = line_part(&t.font, &msg.text, msg.time, msg.life, 480.0);
+            let a = a.min((left * 17.0).min(255.0) as u32);
+            let x0 = SW / 2.0 - t.font.layout(&l, 0.0, 0.0).1 / 2.0;
+            h.text_fading(Anchor::Centre, &t.font, 29, &l, x0, 129.0, false, gs(0x7d6d59, a));
         } else if s.hud.info_close > 0.0 && !mp {
             bar(&mut h, s.hud.info_close);
         }
@@ -1053,23 +1049,15 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
             // stores] — the status label alone carries "OBJECTIVE COMPLETE" (the port used to draw
             // the body row too: two stacked OBJECTIVE COMPLETE banners).
             if !complete && a != 0 {
-                // `Text_AddMsg` 0x1b0c30 wraps the message text with `Font_WordWrapString` at
-                // TextMsgFormats[2]'s maxWidth = 480 [L 0x2bf108+0x14 = 0x1e0] — the box's own width
-                // (ObjectiveStatusSprInfo[2] x 16 w 480 [L 0x319608+0x58]); the port wraps at draw
-                // time (the font lives in the scene tables, the queue stores the raw bind).
-                // __Font_DrawText 0x1ee598:65-71: each '\n' line draws from the same block start x
-                // and the next line sits `glyph0.h + gap + 1.0` lower; Font_DrawText 0x1eee48's
-                // justify-2 centre shifts the block start x -= width/2 by the WIDEST line, so the
-                // block centres on 256 with its lines left-aligned from there.
-                let wrapped = t.font.word_wrap(&msg.text, 480.0);
-                let lines: Vec<&str> = wrapped.split('\n').collect();
-                let mut maxw = 0.0f32;
-                for l in &lines { maxw = maxw.max(t.font.layout(l, 0.0, 0.0).1); }
-                let x0 = SW / 2.0 - maxw / 2.0;
-                let lh = t.font.line_height();
-                for (k, l) in lines.iter().enumerate() {
-                    h.text_fading(Anchor::Centre, &t.font, 29, l, x0, 40.0 + k as f32 * lh, false, gs(0x7d6d59, a));
-                }
+                // `Text_AddMsg` 0x1b0c30 wraps at TextMsgFormats[2]'s maxWidth = 480 [L 0x2bf108+0x14 =
+                // 0x1e0] and queues each part as its own message [M :190-290], so a long objective
+                // shows one line at a time [L PCSX2 07000007 "Rendezvous...": the first part alone
+                // fades out; never stacked]. The port wraps at draw time (the font lives in the
+                // scene tables, the queue stores the raw bind).
+                let (l, left) = line_part(&t.font, &msg.text, msg.time, msg.life, 480.0);
+                let a = a.min((left * 17.0).min(255.0) as u32);
+                let x0 = SW / 2.0 - t.font.layout(&l, 0.0, 0.0).1 / 2.0;
+                h.text_fading(Anchor::Centre, &t.font, 29, &l, x0, 40.0, false, gs(0x7d6d59, a));
             }
         } else if s.hud.objective_close > 0.0 {
             bar(&mut h, s.hud.objective_close);
@@ -1410,6 +1398,59 @@ fn outlined_text(h: &mut Hud, anchor: Anchor, font: &nf_formats::hud::Font, tex:
     h.text_scaled_tex(anchor, font, layer, tex, s, x0, y, false, c, false, 1.0);
 }
 
+/// The part of a long line on screen now, and the ticks left in it: `Text_AddMsg` 0x1b0c30 queues
+/// each wrapped part as its own message, its time the part's share by length [M :190-290]. The
+/// port's queue holds the whole line, so the share is walked from the message's elapsed time; the
+/// game's 60-tick floor for the non-subtitle types [M :243-250] is not modelled.
+pub fn line_part(font: &nf_formats::hud::Font, text: &str, time: f32, life: f32, max_w: f32) -> (String, f32) {
+    let parts = crate::menu::font_word_wrap(text, font, max_w);
+    let total = parts.iter().map(|p| p.len()).sum::<usize>().max(1) as f32;
+    let mut edge = 0.0f32;
+    let elapsed = life - time;
+    for p in &parts {
+        edge += life * p.len() as f32 / total;
+        if elapsed < edge {
+            return (p.trim_end().to_string(), edge - elapsed);
+        }
+    }
+    (parts.last().map_or(String::new(), |p| p.trim_end().to_string()), time.max(0.0))
+}
+
+/// The script camera's frame: only the subtitle sprite outlives the HUD's sprite pass —
+/// `Text_Update` 0x1b1510 hands it the first viewer whose +0x2a is still set.
+pub fn cutscene_subtitles(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
+    let mut h = Hud { quads: Vec::new(), aspect, textures: &scene.hud_textures };
+    if let (Some(s), Some(t)) = (scene.sim.as_ref(), scene.hud.as_ref()) {
+        subtitles(&mut h, s, t);
+    }
+    h.finish()
+}
+
+/// The subtitle sprites, font 2 centred on x 256, colour 0x7d6d59, no bar [L `SubTitleSprInfo`
+/// 0x319940; style 0x30cdb0]. A script camera's line (`Text_Update` 0x1b1510) sits at y 426 and
+/// runs a line wider than `TextMsgFormats[4]`'s 480 as consecutive parts, each for its share of the
+/// time [M 0x1b0c30:228-239]; in play (`Text_Update2Line` 0x1b09f0) the first line wraps at 0.6 of
+/// `TextMsgFormats[5]`'s 460 at y 402 and the rest at 460 at y 422 [M 0x1b09f0:50-73].
+fn subtitles(h: &mut Hud, s: &crate::scene::Sim, t: &nf_formats::hud::HudTables) {
+    let colour = gs(0x7d6d59, 0xff);
+    let line = |h: &mut Hud, l: &str, y: f32| {
+        let (_, w) = t.font.layout(l, 0.0, 0.0);
+        h.text_fading(Anchor::Centre, &t.font, 1, l, SW / 2.0 - w / 2.0, y, false, colour);
+    };
+    if s.drones.hud_frozen {
+        let Some(m) = s.hud.subs[0].front() else { return };
+        line(h, &line_part(&t.font, &m.text, m.time, m.life, 480.0).0, 426.0);
+    } else if let Some(m) = s.hud.subs[1].front() {
+        let lines = crate::menu::font_word_wrap(&m.text, &t.font, 460.0 * 0.6);
+        let Some(first) = lines.first() else { return };
+        line(h, first, 402.0);
+        let rest = lines[1..].join(" ");
+        if let Some(second) = crate::menu::font_word_wrap(&rest, &t.font, 460.0).first() {
+            line(h, second, 422.0);
+        }
+    }
+}
+
 /// The created MP pane rects for one full-screen viewer (HUD units): `HUD_FixMP` 0x19b110 clamps
 /// every MP pane sprite into the viewer rect inset by 16 on each side when one viewer plays
 /// (MPSettings+0x1ac == 1 [M 0x19b110:27-31]) — viewer (0,512,0,448) → (16..496, 16..432)
@@ -1510,8 +1551,18 @@ fn mp_panes(h: &mut Hud, s: &crate::scene::Sim, t: &nf_formats::hud::HudTables) 
     }
 
     // The clock: font 1, centred, white (MPTimeInfo colour 0xffffffff — saturating) with the
-    // black colour2 outline [L 0x2a4710]; the time-limit gate [M 0x184268:138].
-    if m.settings.time_limit != -1 {
+    // black colour2 outline [L 0x2a4710]. The write gate has TWO arms [M MP_CheckForEndCondition
+    // 0x184268]: the demolition/protection rounds run on the ROUND clock MPGame+0x194 and write
+    // whenever it is > 0 — no −1 check (:57, reached from the 0x20000040/0x20000080 arm) — while
+    // every other scenario writes only when the MATCH limit is set, `MPSettings+0x1a0 != -1`
+    // (:142), and never after the 0xfe time-up latch. The port's round default (60.0 when the
+    // menu limit is negative [M 0x183438:53]) lives in `game.limit`, so the demolition gate keys
+    // on that — the settings gate hid the round clock on unlimited demolition/protection matches
+    // (audit-sprite-set-text).
+    let round_clock = m.settings.scenario == nf_game::mp::scenario::DEMOLITION
+        || m.settings.scenario == nf_game::mp::scenario::PROTECTION;
+    let clock_on = if round_clock { m.game.limit > 0.0 } else { m.settings.time_limit != -1 };
+    if clock_on {
         let clock = snap.timer_string();
         outlined_text(h, Anchor::Centre, &t.font_header, HEADER_FONT_TEX, 1, &clock, SW / 2.0, 32.0, true, gs(0xffffff, 0xff), gs(0, 0xff));
     }
@@ -1537,9 +1588,13 @@ fn mp_panes(h: &mut Hud, s: &crate::scene::Sim, t: &nf_formats::hud::HudTables) 
     // 0xc6984e, < 0.2 0x9d1912; sprite 3 the armour strip (tex 0x03000170, layer 0x1b) w =
     // armour · 2.56, hidden at 0. Rects: (16,416) 128×16 and (24,420) 128×16 for one viewer
     // [L PCSX2 EE snapshot 2026-10-18 pane 1; M 0x19b390:58-60 — the strip sits at the backing
-    // +8,+4]. The pane hides while a zoom/camera pane is up [M :55-61].
+    // +8,+4]. The pane hides while a zoom/camera pane is up [M :55-61] — the update's hide set
+    // reads the enable bytes of panes 9/10/11/16/17/18 (HUDINFO+0x144/0x164/0x184/0x224/0x244/
+    // 0x264 [M :54-61]): the redeemer (the port's missile_cam), the camera + OICW zooms, and
+    // the Ronin remote view (the port's `ronin_mounted`) — audit-mp-panes added the Ronin, the
+    // port drew the bar over the remote view.
     let paned = s.zoom_target > 1.0 && matches!(zoom_overlay(s.gun.weapon), ZoomOverlay::Camera | ZoomOverlay::Oicw);
-    if !paned && s.missile_cam.is_none() {
+    if !paned && s.missile_cam.is_none() && s.drones.ronin_mounted().is_none() {
         let (x0, y0) = (MP_FIX_INSET, SH - MP_FIX_INSET - 16.0);
         let bonus = m.settings.players[me].armor_bonus as f32;
         let frac = (s.drones.health.health / (bonus + 100.0)).max(0.0);

@@ -242,10 +242,17 @@ fn demolition_destroy_own_goal_and_restart() {
     m.damage_site(1500.0, 1);
     assert_eq!(m.objects_rt.site.as_ref().unwrap().state, 500);
     assert_eq!(m.game.state, 0, "still standing");
+    // a defender's hit warns that player, once per 1.5 s; an attacker's never does [M 0x1870a0:96-107]
+    assert!(m.objects_rt.slot_msgs.is_empty());
+    m.damage_site(1.0, 0);
+    m.damage_site(1.0, 0);
+    assert_eq!(m.objects_rt.slot_msgs, [(0, 0x200002b, None, 90)]);
+    m.objects_rt.site.as_mut().unwrap().state = 500;
     m.damage_site(1000.0, 1);
     assert_eq!(m.game.team_scores, [0.0, 1.0], "the attacking team scores [M 0x1870a0:125-132]");
     assert_eq!(m.game.slots[1].score, 1.0, "the last hitter's personal point");
     assert_eq!(m.game.state, 6, "the round is over at once [M :160]");
+    assert_eq!(m.objects_rt.site_status, Some(0x200002e), "MI6 destroyed target [M :146-158]");
     tick(&mut m, 300, &mut rng); // the 5 s restart timer [M 0x184bd0:79-92]
     assert_eq!(m.game.state, 0, "back to playing");
     assert_eq!(m.game.team_scores, [0.0, 1.0], "the restart keeps the scores (multi-round)");
@@ -498,4 +505,93 @@ fn respawn_health_and_gates() {
     // sister: the round-over state blocks respawns [M 0x185368:16-20]
     m.game.state = 3;
     assert!(!m.respawn_allowed(0));
+}
+
+/// The scenario one-shots: a take, a drop and a teammate return each raise their
+/// `MPSound_Play` id [M 0x1861a8:276,166,258]; a capture raises 0x14b [M :124] and not the
+/// return's 0x14f. Sister: touches that change nothing raise nothing.
+#[test]
+fn ctf_events_raise_their_sounds() {
+    let mut rng = Rng::new(7);
+    let mut m = make(scenario::CAPTURE_THE_FLAG, 20, -1);
+    join(&mut m, 0, 0);
+    join(&mut m, 1, 1);
+    m.register_mp_object([30.0, 1.0, 30.0], [0.0, 0.0, 1.0], 0, [0, 0, 0, 0, 0, 0, 0], 0);
+    m.create_mode_objects(&mut rng);
+    m.touch_flag(0); // an owner touching the flag at home does nothing
+    assert!(m.objects_rt.sounds.is_empty());
+    m.touch_flag(1);
+    assert_eq!(m.objects_rt.sounds, [0x14c], "the take");
+    m.player_killed(1, Some(0), false, false, &mut rng);
+    assert_eq!(m.objects_rt.sounds, [0x14c, 0x14f], "the drop");
+    m.touch_flag(0);
+    assert_eq!(m.objects_rt.sounds, [0x14c, 0x14f, 0x14f], "the return");
+    // the lines: flag 0 is Phoenix's (0x1c7); from its base "captured", then "dropped", "returned"
+    assert_eq!(
+        m.objects_rt.msgs,
+        [(0x200003a, Some(0x1c7)), (0x2000039, Some(0x1c7)), (0x200003b, Some(0x1c7))]
+    );
+    // sister: taking it where it lies is "picked up", not "captured" [M 0x1861a8:182,265]
+    m.touch_flag(1);
+    m.player_killed(1, Some(0), false, false, &mut rng);
+    m.objects_rt.msgs.clear();
+    m.touch_flag(1);
+    assert_eq!(m.objects_rt.msgs, [(0x200003c, Some(0x1c7))]);
+}
+
+/// The hill sounds on stepping on, once per 5 s per slot, not every tick
+/// [M 0x186ae0:101-105].
+#[test]
+fn koth_entry_sound_is_rate_limited() {
+    let mut rng = Rng::new(7);
+    let mut m = make(scenario::KOTH_FFA, 20, -1);
+    join(&mut m, 0, 0);
+    let mut on = [false; nf_game::mp::MP_MAX_SLOTS];
+    on[0] = true;
+    m.game.clock = 1.0;
+    for _ in 0..10 {
+        m.update_objects(DT, &on, &mut rng);
+    }
+    assert_eq!(m.objects_rt.sounds, [0x14c], "one sound while standing on it");
+    let off = [false; nf_game::mp::MP_MAX_SLOTS];
+    m.update_objects(DT, &off, &mut rng);
+    m.update_objects(DT, &on, &mut rng);
+    assert_eq!(m.objects_rt.sounds.len(), 1, "stepping back on inside 5 s stays quiet");
+    m.update_objects(DT, &off, &mut rng);
+    m.game.clock = 6.5;
+    m.update_objects(DT, &on, &mut rng);
+    assert_eq!(m.objects_rt.sounds.len(), 2, "past 5 s it sounds again");
+}
+
+/// A teammate's hit with friendly fire on tells both players, then stays quiet for the 3 s
+/// timer [M 0x1857c0:46-56]. Sister: an enemy hit posts nothing.
+#[test]
+fn friendly_hit_posts_both_lines_once() {
+    let mut m = make(scenario::TEAM_DEATHMATCH, 10, -1);
+    join(&mut m, 0, 0);
+    join(&mut m, 1, 0);
+    join(&mut m, 2, 1);
+    m.settings.friendly_fire = 1;
+    m.register_bullet_hit(0, 2);
+    assert!(m.objects_rt.slot_msgs.is_empty());
+    m.register_bullet_hit(0, 1);
+    m.register_bullet_hit(0, 1);
+    assert_eq!(m.objects_rt.slot_msgs, [(0, 0x2000029, Some(1), 0xb4), (1, 0x200002a, Some(0), 0xb4)]);
+}
+
+/// A death tells the victim who did it; with no other shooter it is the self line [M
+/// 0x190810:68-85].
+#[test]
+fn a_death_tells_the_victim() {
+    let mut rng = Rng::new(7);
+    let mut m = make(scenario::DEATHMATCH, 10, -1);
+    join(&mut m, 0, 0);
+    join(&mut m, 1, 1);
+    m.player_killed(0, Some(1), false, false, &mut rng);
+    m.player_killed(1, Some(1), false, false, &mut rng);
+    m.player_killed(1, None, false, false, &mut rng);
+    assert_eq!(
+        m.objects_rt.slot_msgs,
+        [(0, 0x2000038, Some(1), 0xb4), (1, 0x2000037, Some(1), 0xb4), (1, 0x2000037, Some(1), 0xb4)]
+    );
 }

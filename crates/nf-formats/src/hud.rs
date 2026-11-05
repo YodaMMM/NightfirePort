@@ -44,13 +44,13 @@ impl Font {
         let top = self.glyphs.first().map_or(0.0, |g| (g.h + g.yoff) as f32);
         let (mut pen, mut out, mut prev): (f32, Vec<Placed>, Option<usize>) = (x, Vec::new(), None);
         for ch in text.chars() {
-            let ci = ch as u32;
+            let ci = Lang::cp1252_code(ch);
             if ci > 0xffff { continue; }
             if ch == ' ' { pen += self.space * 1.25; prev = None; continue; }
             let Some(gi) = self.glyph(ci as u16) else { continue };
             let g = &self.glyphs[gi];
             if let Some(p) = prev {
-                pen += self.glyphs[p].kerns.iter().find(|k| k.0 == ch as u16).map_or(0.0, |k| k.1 as f32);
+                pen += self.glyphs[p].kerns.iter().find(|k| k.0 == ci as u16).map_or(0.0, |k| k.1 as f32);
                 pen += g.pre as f32;
             }
             out.push(Placed { glyph: gi, x: pen, y: y + g.yoff as f32 - top });
@@ -336,6 +336,12 @@ impl Lang {
         remap[raw.len()] = decoded.len() as u32;
         let offsets = offsets.into_iter().map(|o| remap[(o as usize).min(raw.len())]).collect();
         Ok(Lang { data: decoded, offsets, fixups })
+    }
+
+    /// A character's font glyph code: the bank's source byte, so the Windows-1252 0x80–0x9f
+    /// characters go back to their byte (the game's ' in "Can't" is byte 0x93).
+    pub fn cp1252_code(ch: char) -> u32 {
+        (0x80..=0x9fu8).find(|&b| Self::cp1252_high(b) == ch).map_or(ch as u32, u32::from)
     }
 
     /// One CP-1252 byte 0x80–0xff → its character: the Windows-1252 table for the 0x80–0x9f control

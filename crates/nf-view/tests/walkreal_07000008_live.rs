@@ -598,6 +598,15 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     for _ in 0..600 {
         if w.scene.sim.as_ref().unwrap().drones.copters.iter().any(|c| c.out == 0x4b && (1..=2).contains(&c.state)) { flying = true; break; }
         w.tick(Input::default(), false);
+        // hind-flight-pin: the arrival log — every 30 ticks from the gate opening [M Copter_Update
+        // 0x17dbb8 head], the copter's live flight record.
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.drones.frame % 30 == 0 {
+            for c in sim.drones.copters.iter().filter(|c| c.out == 0x4b) {
+                eprintln!("[08 flight] f{} pos ({:.2},{:.2},{:.2}) state {} path {:?} t {:.2} dmg {:.1}",
+                    sim.drones.frame, c.pos()[0], c.pos()[1], c.pos()[2], c.state, c.path, c.t, c.damage);
+            }
+        }
     }
     assert!(flying, "the gate ch 5 opened the route flight (state 1/2) [M 0x17dbb8 head]");
     // 00 Agent (difficulty 3): SHOOT OUT the carriage's north and south panes before the fight.
@@ -733,6 +742,9 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     let mut riding = false;
     let mut launch_damage = 0.0f32;
     let mut best_rocket = 0.0f32;
+    // hind-flight-pin: the every-30-ticks flight record (pos, state, path, t) [M Copter_Move
+    // 0x17d628 / Copter_Update 0x17dbb8].
+    let mut flight_samples: Vec<([f32; 3], u16, Option<usize>, f32)> = Vec::new();
     // The reposition state: Bond arrives INSIDE the bottom terminal (the ride's end (112, 13.5,
     // −179.7) sits in a walled box — the eye ray stops at x ≈ 110.4/113.6 and z ≈ −176.6/−182.2
     // in every direction, eye height [D the measured stops]). The machine's circuit is outside,
@@ -747,6 +759,15 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     for t in 0..20000u32 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b) { ch4b = true; break; }
         let sim = w.scene.sim.as_ref().unwrap();
+        // hind-flight-pin: the fight log — every 30 ticks to the death [M the death tail writes
+        // ch 0x4B at 0x17e3bc-0x17e3c8].
+        if sim.drones.frame % 30 == 0 {
+            let c = &sim.drones.copters[ci];
+            flight_samples.push((c.pos(), c.state, c.path, c.t));
+            eprintln!("[08 flight] f{} pos ({:.2},{:.2},{:.2}) state {} path {:?} t {:.2} dmg {:.1}/{:.0} bullets {}",
+                sim.drones.frame, c.pos()[0], c.pos()[1], c.pos()[2], c.state, c.path, c.t, c.damage, hp,
+                sim.drones.bullets.iter().filter(|b| b.state != 2).count());
+        }
         let cp = sim.drones.copters[ci].pos();
         let rocket = sim.drones.player_bullets.iter().find(|b| b.guided_cam && !b.dead).map(|b| (b.pos, b.dir));
         let (from, yaw, pitch) = match rocket {
@@ -963,6 +984,40 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     }
     let damage = w.scene.sim.as_ref().unwrap().drones.copters[ci].damage;
     eprintln!("[08] the shoot-down: {rockets} rockets; damage {damage} vs hp {hp}; best single rocket {best_rocket}");
+    // hind-flight-pin: the measured flight. The machine sweeps the valley the whole window —
+    // the log's samples run (70.95, 22.16, −165.04) f25860 → (171.16, 16.32, −192.44) f26640 at
+    // the path's 0.2533/t step, ≈120-170 u of travel per run, with NOT ONE 30-tick stretch below
+    // 2 u — the task's pre-fix "holds one spot" is gone (Copter_Move's spline pose,
+    // copter-path-flight). The case order is the game's [M Copter_Update 0x17dbb8]: 0 → 1 (fly)
+    // with case 2 whenever the spot check lands (the 00 Agent sister's run samples a 2 — the
+    // 45° cone off the path keys' facings points at Bond on her timeline) → the rockets cross hp
+    // → state 4 (no kind-2 arrival path on 08 [D the route dump], rec+0x58 stays None) → 5, whose
+    // ticks re-write ch 0x4B [M :255-275]. The death's 4/5 ticks fall between the 30-tick
+    // samples, so the terminal state is pinned from the sim, not the samples.
+    assert!(flight_samples.len() >= 10, "the flight was sampled every 30 ticks: {}", flight_samples.len());
+    let mut travel = 0.0f32;
+    for w2 in flight_samples.windows(2) {
+        let d = ((w2[1].0[0] - w2[0].0[0]).powi(2) + (w2[1].0[1] - w2[0].0[1]).powi(2) + (w2[1].0[2] - w2[0].0[2]).powi(2)).sqrt();
+        if w2[0].1 <= 2 && w2[1].1 <= 2 {
+            // Two flying samples 30 ticks apart: the route's own speed carries it ≥ 2 u — a
+            // held copter moves 0.
+            assert!(d >= 2.0, "the flight never holds still: {:?} → {:?} moved only {d:.2}", w2[0], w2[1]);
+        }
+        travel += d;
+    }
+    eprintln!("[08 flight-pin] samples {} travel {travel:.1} u; states {:?}", flight_samples.len(),
+        flight_samples.iter().map(|s| s.1).collect::<Vec<_>>());
+    assert!(travel >= 100.0, "the flight travels its circuit, measured {travel:.1} u");
+    // The case order: the flying samples are case 1, with case 2 wherever the spot check landed
+    // [M :188-243]; the death (4) is pinned from the sim at the ch-0x4B break [M :358-370].
+    let flying_states: Vec<u16> = flight_samples.iter().map(|s| s.1).collect();
+    assert!(flying_states.iter().all(|&st| st == 1 || st == 2), "the flight is cases 1/2 [M :138-243]: {flying_states:?}");
+    assert!(flying_states.contains(&1), "the flight flew [M :138]");
+    let end_state = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        sim.drones.copters[ci].state
+    };
+    assert_eq!(end_state, 4, "the death state at the ch-0x4B break [M :358-370 — 08 is not an explode level]");
     assert!(ch4b, "the rockets pushed damage {damage} past hp {hp} → state 4 → rec+0x72 [M :358-370]");
     // The supply: a full clip (4 [L record 0x2C +0x92]) and the type-0xE carry cap (4 [L ammo_data
     // 0x2C69B8 + 0xE·12, +0x02]) — 8 on hand, the ride's three rocket pickups [D 0x0600004C streams

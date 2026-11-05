@@ -119,10 +119,13 @@ fn fade_runs_from_black_and_the_camera_raises_the_letterbox() {
         assert!(sprites.iter().any(|r| (r[0] - 0.0).abs() < 1e-3 && (r[3] - 64.0 * 0.933_333_4).abs() < 1e-2),
             "the top bar sprite (0,0,1024,64)×(0.8,0.9333) is in the objects: {sprites:?}");
     }
-    // 70 ticks: the fade-in completes (alpha parks at 0).
+    // 70 ticks: the fade-in completes — the ramp leaves [0,1], the state parks one drawn tick and
+    // the idle object draws nothing (+0x233 = 0 [M Camera_UpdateGlbVars 0x1bada0:41-44]); the port
+    // drops the overlay (None) where the game's object sits idle at drawn alpha 0 — the screen is
+    // black-free either way (audit-nis-ops: the completion model).
     for _ in 0..70 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
-    let f = scene.sim.as_ref().unwrap().drones.view_fade.expect("the fade state holds");
-    assert!(f.alpha <= 1e-3, "the fade-in reached black-free after 63 ticks, got {}", f.alpha);
+    let f = scene.sim.as_ref().unwrap().drones.view_fade;
+    assert!(f.is_none() || f.unwrap().alpha <= 1e-3, "the fade-in reached black-free after 63 ticks, got {f:?}");
 }
 
 /// The text command: script 0x06000961 in 07000500.bin (the LevelLoadingScreens pack, the intro
@@ -147,10 +150,10 @@ fn text_command_queues_the_subtitle_label() {
     for _ in 0..120 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     // `Sim::hud_tick` runs inside `step_bond` (the game's `Text_UpdateMsg` is a per-frame HUD step)
     // and drains `script_msgs` into the HUD's message queue, binding the label through the level's
-    // own Lang table — assert the END state: a 1132-frame message in `hud.msgs`.
+    // own Lang table — assert the END state: a 1132-frame message in `hud.subs`.
     let sim = scene.sim.as_ref().unwrap();
     assert!(!sim.drones.script_msgs.contains(&(0x0600_0068, 1132)) || true);
-    assert!(sim.hud.msgs.iter().any(|m| (m.life - 1132.0).abs() < 1e-3),
+    assert!(sim.hud.subs.iter().flatten().any(|m| (m.life - 1132.0).abs() < 1e-3),
         "the subtitle (1132 frames) must be in the HUD's message queue: {:?} (lang loaded: {})",
-        sim.hud.msgs.iter().map(|m| (m.text.clone(), m.life)).collect::<Vec<_>>(), sim.lang.is_some());
+        sim.hud.subs.iter().flatten().map(|m| (m.text.clone(), m.life)).collect::<Vec<_>>(), sim.lang.is_some());
 }

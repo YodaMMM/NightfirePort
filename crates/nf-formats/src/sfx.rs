@@ -125,6 +125,12 @@ pub struct EffectRecord {
     /// +0x84: the impact-emitter def hash — `Effect_Create` 0x1ce688's flags & 0x20 arm passes it
     /// to `Emitter_Create` 0x17ae00 (`hashtable_getitem`; a miss → no object). 0 = none.
     pub emitter: u32,
+    /// +0x08: the `Effect_Player` foot decal for the foot-4 step [M 0x1cec48:84-89 —
+    /// `flags & 4` reads +8, otherwise +0xc; 0 = no print on that foot]. The footstep caller
+    /// alternates foot 4/8 per step [M AnimObjectUpdate 0x1befd8:186-198].
+    pub foot_decal_4: u32,
+    /// +0x0c: the `Effect_Player` foot decal for the foot-8 step [M 0x1cec48:84-89].
+    pub foot_decal_8: u32,
 }
 
 /// `ammo_data` (ACTION.ELF 0x2c69b8, 34 × 0xc): per ammo type the casing mesh at +4
@@ -172,6 +178,8 @@ impl SurfaceSounds {
                 debris_enable: b.u8(o + 0x82)?,
                 debris_count: b.u8(o + 0x83)?,
                 emitter: b.u32(o + 0x84)?,
+                foot_decal_4: b.u32(o + 8)?,
+                foot_decal_8: b.u32(o + 0xc)?,
             })
         }).collect::<Result<Vec<_>>>()?;
         Ok(SurfaceSounds { impact: col(0x14)?, footstep: col(0x16)?, body: col(0x18)?, effects, ammo: AmmoData::from_action_elf(data).unwrap_or_default() })

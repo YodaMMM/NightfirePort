@@ -394,8 +394,23 @@ pub struct MpSlot {
     pub deaths: i32,
     /// +0x10 (i32): the kill streak [M 0x188f70:151-163].
     pub streak: i32,
-    /// +0x26 (u16): the status bits — bit0 carrying-flag [M 0x18a518:88-96], bit0x10 on-hill [M
-    /// 0x186ae0:95]. The port sets/clears the bits its rules drive.
+    /// +0x26 (u16): the status bits, written through `MP_setPlayerStatus` 0x18a518 (param_2 = the
+    /// bits, param_6 = clear flag: 0 sets, non-0 clears — `*(MPGame + slot·0x30 + 0x26) = clear ?
+    /// old & ~bits : old | bits` [M 0x18a518:75-88]) and zeroed on every respawn [M 0x185368:56].
+    /// The map, per writer:
+    /// - bit 0x1 — the CTF flag carrier [M MP_FlagUpdate 0x1861a8:178-179 msg 0x2f set,
+    ///   :127-129 msg 0x30 drop / :87-89 msg 0x31 base-return clear];
+    /// - bit 0x2 — the blueprint carrier [M MP_BluePrintUpdate 0x1882d8:126-129 msg 0x32 set,
+    ///   :81-84 msg 0x33 drop clear; MP_BluePrintReachedBase 0x188970:27-29 msg 0x34 clear];
+    /// - bit 0x4 — the GoldenEye kind-6 item's carrier, bit 0x8 — the kind-7 item's [M
+    ///   MP_GoldenEyeUpdate 0x187568:231-236 msgs 0x35/0x36 set; :123-126 msgs 0x37/0x38 clear];
+    /// - bit 0x10 — on the KOTH hill [M MP_KOHUpdate 0x186ae0:113-116 msg 0x39 set,
+    ///   :94-98 msg 0x3a clear].
+    /// Readers: `MP_KOHUpdate` itself (the 0x10 hold), the bot goal machine — `BOTSTATE_pickGoal`
+    /// 0x126b88:133-135 reads the word and the per-team held word `MPGame+team·2+0x1a8`,
+    /// `BOTSTATE_checkAttackMove` 0x126a40 and `BOT_validateStateChange` 0x124fb0 test bit 0x10,
+    /// `NDrone2_DSTATE_BotGlobal` 0x16e060 reads/clears it — and nothing in the HUD (the score
+    /// pane's icons ask the object exts' `+0x1c` carriers instead [M 0x19f0a0:89-127]).
     pub status_bits: u16,
     /// The port's alive marker — its stand-in for the player `obj+0xF4` ∈ {1,2,3} state the game's
     /// filters read [M 0x1830e0:66-75] (*Deviation*: the port's players have no BLData pipeline

@@ -657,6 +657,9 @@ pub struct Sim {
     pub surfaces: Option<nf_formats::sfx::SurfaceSounds>,
     pub voices: Option<Vec<nf_formats::sfx::VoiceLine>>,
     pub step_dist: f32,
+    /// The foot alternator (`ScriptFootstepFoot` [M AnimObjectUpdate 0x1befd8:186]): flipped
+    /// every footstep, foot 8 after the first flip — the print's decal column follows.
+    pub step_foot: bool,
     /// The laser-family beam's endpoints this tick (the hand/head end, the hit end) —
     /// `gadget::laser_tick` while a laser weapon is out [M Player_LaserPointer 0x1a65d8]. The
     /// renderer draws the beam mesh (0x2000131/0x2000133) between them.
@@ -919,6 +922,11 @@ pub const GOGGLE_NIGHT_SPRITE0_H: u16 = 64;
 /// The HUD state the port keeps in Sim (the game keeps it in BLData / the TXTMSG list / pane structs).
 #[derive(Clone, Debug, Default)]
 pub struct HudState {
+    /// The subtitle queues, head first: `[0]` type 4 (`Text_Update` 0x1b1510, a script camera's
+    /// line), `[1]` type 5 (`Text_Update2Line` 0x1b09f0, the two-line form play uses — `Text_AddMsg`
+    /// 0x1b0c30:81-88 turns a type-4 add into 5 outside a script camera). `Game_Run` 0x1c9790:17-25
+    /// updates one queue per frame, so the other's head waits.
+    pub subs: [std::collections::VecDeque<Msg>; 2],
     /// The (viewer 0, type 6) pickup message queue, head first (`Text_AddMsg` 0x1b0c30's list head 0x31997c).
     pub msgs: std::collections::VecDeque<Msg>,
     /// How many `drones.taken` events `hud_tick` has converted into messages.
@@ -1021,6 +1029,22 @@ pub struct HudState {
 }
 
 impl HudState {
+    /// A type-3 add's sweep: every queued type-2 line's timer goes to −1, so the mission banner
+    /// never waits behind objectives [M `Text_AddMsg` 0x1b0c30:134-146].
+    fn drop_objective_lines(&mut self) {
+        self.objective_msgs.iter_mut().for_each(|m| m.time = -1.0);
+    }
+
+    /// An INFO pane add. In multiplayer `Text_AddMsg` 0x1b0c30:94-132 divides every queued type-1
+    /// line's timer by the new count, so a burst of lines shortens instead of queueing.
+    fn push_info(&mut self, m: Msg, mp: bool) {
+        let n = self.info_msgs.len() as f32;
+        if mp && n > 0.0 {
+            self.info_msgs.iter_mut().for_each(|q| q.time /= n + 1.0);
+        }
+        self.info_msgs.push_back(m);
+    }
+
     /// The per-BOOT text globals the game keeps in .sdata across level loads — `DoorMsg` 0x30cd04
     /// (the door-hint cap of 3) and `LoadMsg` 0x30cd08 (the exit-hint cooldown) [M 0x1a7810:78-79,
     /// 195-196; 0x1a7b98-0x1a7bc8]. The app calls this on every level swap so a new level's Sim
@@ -2594,6 +2618,9 @@ impl Sim {
             // the shared bit-exact generator — the game's MP_Update draws the global RNG only on
             // the state-6 restart's site re-pick (MP_RestartScenario 0x183fc0)
             m.update(1.0 / 60.0, false, &mut self.drones.rng);
+            for id in m.objects_rt.sounds.drain(..) {
+                nf_game::mp::mp_sound_play(&mut self.drones.audio, id);
+            }
             // mp-host-match-logic: the humans' live positions ride the match every tick (the game
             // reads the live `obj+0x30` per comparison [M 0x185098:123-129]) — the net path set
             // these per tick already; the local path never did, so the spawn policy and the rules
@@ -3543,9 +3570,37 @@ impl Sim {
             if self.step_dist > stride {
                 self.step_dist %= stride;
                 let p = self.bond.pos;
-                if climbing { self.drones.audio.play3d(0x286, p, None); }
-                else if let (Some(s), Some((t, _, m))) = (self.surfaces.as_ref(), self.world.segment_surface(p, [p[0], p[1] - 1.6347, p[2]], true)) {
-                    if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.footstep, m) { self.drones.audio.play3d(id, [p[0], p[1] - 1.6347 * t, p[2]], None); }
+                if climbing {
+                    self.drones.audio.play3d(0x286, p, None);
+                } else if let (Some(s), Some((t, n, m, _pass, host))) =
+                    (self.surfaces.as_ref(), self.world.segment_surface_host(p, [p[0], p[1] - 1.6347, p[2]], true))
+                {
+                    if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.footstep, m) {
+                        self.drones.audio.play3d(id, [p[0], p[1] - 1.6347 * t, p[2]], None);
+                    }
+                    // The footprint decal arm — audit-effect-calls: the game's step is the FULL
+                    // `Effect_Create(…, foot | 0x42)` [M 0x1befd8:196-201], flag 0x2 →
+                    // `Effect_Player` 0x1cec48:59-140: sound (0x40, above) PLUS the foot decal.
+                    // gfx = `EffectInfo[mat]+0x8` on foot 4 / `+0xc` on foot 8 [M 0x1cec48:84-89],
+                    // 0 = none; the foot toggles every step [M 0x1befd8:186-190
+                    // `ScriptFootstepFoot` flip → :196-198 foot 4/8]; the decal's y = the ground
+                    // hit's y + 0.05 [M 0x1cec48:118-124] and it aligns to the surface up
+                    // (`Mat_Align2Up`) at the hit, hosted on the hit's cel [M 0x1cec48:107-136].
+                    // The port places it at the body's own ground point [S — the game puts the
+                    // x/z at the foot bone (`obj+0xdc → +0xb8` bone list +0xdc0/+0xcc0,
+                    // 0x1cec48:89-96), whose world matrices the port does not build for
+                    // first-person Bond]; the draw is the shared decal path (no new drawing).
+                    self.step_foot = !self.step_foot;
+                    let mat = (m & 0x3f) as usize;
+                    if m != 0 {
+                        if let Some(rec) = s.effects.get(mat) {
+                            let mesh = if self.step_foot { rec.foot_decal_8 } else { rec.foot_decal_4 };
+                            if mesh != 0 {
+                                let gp = [p[0], p[1] - 1.6347 * t + 0.05, p[2]];
+                                self.drones.effects.add_decal(gp, n, mesh, host);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -5603,6 +5658,13 @@ impl Sim {
         // first-person gun is gone for the whole sequence (PCSX2: no gun from the 40th dead frame on).
         // MP re-equips at the respawn (`mp_equip_local`).
         if !mp_death_was_active && self.drones.death.active && self.gun.weapon != 0x47 { self.gun.go_to_hands(); }
+        // audit-player-camera-modes [M `Player_PositionCamera` 0x18f5d8:130-132]: while the death
+        // state word (obj+0xf4) is 2/3 the case-0 arm zeroes BL+0x90c EVERY tick — a death out of
+        // the crouch stands the camera eye back up to the standing head (`Player_GetHeadPos`
+        // 0x195aa0 reads obj+0x34 + BL+0x908 − BL+0x90c). The port's dead branch runs no walk
+        // tick, so `crouch_drop` used to freeze at its crouched value and the death camera sat
+        // 0.45 low. Idempotent per dead tick like the game's.
+        if self.drones.death.active { self.bond.crouch_drop = 0.0; }
         // Online, death + respawn belong to the per-slot MP combat (every machine, shared stream).
         if self.net_rng.is_none() && self.net_rng_shared.is_none() { self.step_mp_death_respawn(mp_death_was_active); }
         // fix-script-objects: the script-created AI volumes (`Drone_AIVolume_Create` 0x1376c0 via
@@ -5965,27 +6027,44 @@ impl Sim {
         // The skip's subtitle flush [M Script_FFwd 0x1dac78:28-29 `Text_FlushAllSubtitles()`]: the
         // script-sourced lines (type 4/5 [M 0x1b15c8]) die; the pickup/INFO queues stay.
         if std::mem::take(&mut self.drones.text_flush) {
-            self.hud.msgs.retain(|m| !m.script);
+            self.hud.subs.iter_mut().for_each(|q| q.clear());
         }
         let lang = self.lang.take();
+        let is_mp = self.mp.is_some();
         let mut new_msgs: std::collections::VecDeque<Msg> = Default::default();
+        let sub = !self.drones.hud_frozen as usize;
         if let Some(lang) = lang.as_ref() {
             for (label, time) in self.drones.script_msgs.drain(..) {
                 let text = lang.bind(label).unwrap_or("").trim().to_string();
-                if !text.is_empty() { new_msgs.push_back(Msg { script: true, ..Msg::new(text, time as f32) }); }
+                if !text.is_empty() { self.hud.subs[sub].push_back(Msg { script: true, ..Msg::new(text, time as f32) }); }
+            }
+            // The scenario event lines: `Text_AddMsg(-1, 0, 4, ..)` — type 4, so the Subtitles
+            // option gates them like every other non-0xff line [M 0x1b0c30:148].
+            if let Some(m) = self.mp.as_mut() {
+                let shown = self.drones.subtitle_track.enabled;
+                for (label, arg) in m.objects_rt.msgs.drain(..) {
+                    let text = match arg {
+                        Some(a) => lang.format(label, &[lang.bind(a).unwrap_or("").to_string()]),
+                        None => lang.bind(label).unwrap_or("").to_string(),
+                    };
+                    if shown && !text.is_empty() {
+                        let ticks = nf_game::mp::rules::MP_MSG_TICKS as f32;
+                        self.hud.subs[sub].push_back(Msg { script: true, ..Msg::new(text, ticks) });
+                    }
+                }
             }
         }
         // The INFO pane's label drain (fix-context-hints): the game binds at POST time
         // (`Txt_BindLabel` runs inside ThirdIcon_Update 0x196e80:41 / Hint_Update 0x1b3380:31),
         // before the pane could ever draw, so this sits before the cut-scene freeze like the
         // script-op drain above; the pane display waits on the viewer gate (below).
-        for (label, time) in self.hud.info_labels.drain(..) {
+        for (label, time) in std::mem::take(&mut self.hud.info_labels) {
             let text = lang.as_ref().and_then(|l| l.bind(label)).unwrap_or("").trim().to_string();
 
             if !text.is_empty() {
                 let mut m = Msg::new(text, time);
                 m.label = label;
-                self.hud.info_msgs.push_back(m);
+                self.hud.push_info(m, is_mp);
             }
         }
         // The keycode messages (`PCQWorm_Update` 0x1aee20:24-29, `Lock_Update` 0x1ae3d8:246-257):
@@ -5998,7 +6077,7 @@ impl Sim {
             if !text.is_empty() {
                 let mut m = Msg::new(text, time);
                 m.label = 0x200_0014;
-                self.hud.info_msgs.push_back(m);
+                self.hud.push_info(m, is_mp);
             }
         }
         // mp-hud-real: the kill messages addressed to this machine's slot (`MP_PlayerKilled`
@@ -6006,6 +6085,21 @@ impl Sim {
         // 0xb4)` [M]) — the MP info pane draws them (`HUD_MPUpdateStatusPane` 0x19ca88).
         let me = self.mp_local_slot;
         if let Some(m) = self.mp.as_mut() {
+            let posted = std::mem::take(&mut m.objects_rt.slot_msgs);
+            for (_, label, name, ticks) in posted.into_iter().filter(|p| p.0 == me) {
+                let text = match name {
+                    Some(n) => {
+                        let name = crate::hud::mp_name(m, lang.as_ref(), n);
+                        lang.as_ref().map(|l| l.format(label, &[name])).unwrap_or_default()
+                    }
+                    None => lang.as_ref().and_then(|l| l.bind(label)).unwrap_or("").to_string(),
+                };
+                if !text.is_empty() {
+                    let mut msg = Msg::new(text, ticks as f32);
+                    msg.label = label;
+                    self.hud.push_info(msg, is_mp);
+                }
+            }
             if m.kill_msgs.iter().any(|&(to, _)| to == me) {
                 let mine: Vec<usize> = m.kill_msgs.iter().filter(|&&(to, _)| to == me).map(|&(_, v)| v).collect();
                 m.kill_msgs.retain(|&(to, _)| to != me);
@@ -6015,7 +6109,7 @@ impl Sim {
                     if !text.is_empty() {
                         let mut msg = Msg::new(text, nf_game::mp::hud::KILL_MSG_TICKS as f32);
                         msg.label = nf_game::mp::hud::KILL_MSG_LABEL;
-                        self.hud.info_msgs.push_back(msg);
+                        self.hud.push_info(msg, is_mp);
                     }
                 }
             }
@@ -6045,7 +6139,10 @@ impl Sim {
             if !text.is_empty() { new_msgs.push_back(Msg::new(text, 180.0)); }
         }
         self.hud.taken_seen = self.drones.taken.len();
-        for m in new_msgs { self.hud.msgs.push_back(m); }
+        // `Text_AddMsg` 0x1b0c30:90-93: multiplayer turns type 6 into 1, the INFO pane's.
+        for m in new_msgs {
+            if is_mp { self.hud.push_info(m, true) } else { self.hud.msgs.push_back(m) }
+        }
         self.lang = lang;
         // The mission layer's events (`Mission_Update` 0x182c60 / `Mission_MonitorObjectives`
         // 0x1827d8, docs/systems/mission.md): type-2 objective notices, the FailLabel, the type-3
@@ -6089,12 +6186,14 @@ impl Sim {
                     // The type-3 "Mission Complete" (0x2000006), 240 ticks [M 0x182c60:85-122].
                     // The level end itself arrives as `Event::LevelEnd` after the banner (case 4).
                     if let Some(t) = self.lang.as_ref().and_then(|l| l.bind(0x0200_0006)) {
+                        self.hud.drop_objective_lines();
                         self.hud.mission_msgs.push_back(Msg::new(t.to_string(), 240.0));
                     }
                 }
                 nf_game::mission::Event::MissionFailed => {
                     // The type-3 "Mission Fail" (0x2000007), 300 ticks [M 0x182c60:45-57].
                     if let Some(t) = self.lang.as_ref().and_then(|l| l.bind(0x0200_0007)) {
+                        self.hud.drop_objective_lines();
                         self.hud.mission_msgs.push_back(Msg::new(t.to_string(), 300.0));
                     }
                 }
@@ -6132,11 +6231,16 @@ impl Sim {
         }
         // `Text_UpdateMsg` 0x1b11d8: time −= 1 per frame, delete at ≤ 0 — but the viewer's +0x2a HUD
         // flag returns early while a cut-scene camera runs [M 0x1b11d8:16-18], freezing every message
-        // until the NIS ends. The port: no countdown and no bar close while frozen.
+        // until the NIS ends. The port: no countdown and no bar close while frozen. The subtitle
+        // lines carry id −1, which skips that gate [M :12-20], so their head ticks either way.
+        if let Some(m) = self.hud.subs[sub].front_mut() {
+            m.time -= 1.0;
+            if m.time <= 0.0 { self.hud.subs[sub].pop_front(); }
+        }
         if self.drones.hud_frozen {
             return;
         }
-        // The pickup/script pane (viewer 0, TXTMSG type 6/4): the head ticks alone, exactly like
+        // The pickup pane (viewer 0, TXTMSG type 6): the head ticks alone, exactly like
         // every other status pane. `Text_UpdateMsg` 0x1b11d8:48-73 decrements ONLY the pane's head
         // node (`*param_3` — the out-param the pane state machine 0x19c310 re-looks-up on expiry),
         // so a message queued behind another keeps its FULL life until it reaches the front; the
@@ -7749,8 +7853,22 @@ impl Scene {
         // the exit fade can never be refused or covered by a script fade.
         // hud-start: the ENTRY fade is not in this chain any more — it draws UNDER the gameplay
         // HUD (`entry_fade_hud`).
-        let fade = sim.drones.exit_fade_view().or_else(|| sim.drones.view_fade);
-        crate::hud::script_overlay(fade, sim.drones.letterbox, &sprites, &self.hud_textures, aspect, flash)
+        let fade = sim.drones.exit_fade_view().or_else(|| {
+            // The script viewer's fade draws only while a script camera holds viewer 4 enabled:
+            // `Script_KillStream` case 4 disables it with the camera stream (`Camera_Enable(4, 0,
+            // 0, 0)` [M 0x1d9860:71-76]) and `Script_CameraStart` re-arms it — so a script fade
+            // that outlives its cut-scene (the intro→story hand-off has no camera-free tick for
+            // the hand-back clear) stops drawing with the scene, the game's ramp-after-disable
+            // never reaches the screen. The gameplay viewer's fades (the tail's fade-in) draw
+            // regardless (`view_fade_script` false).
+            let cam = sim.script_camera().is_some();
+            sim.drones.view_fade.filter(|_| !sim.drones.view_fade_script || cam)
+        });
+        let mut f = crate::hud::script_overlay(fade, sim.drones.letterbox, &sprites, &self.hud_textures, aspect, flash);
+        if sim.script_camera().is_some() {
+            f.append(&crate::hud::cutscene_subtitles(self, aspect));
+        }
+        f
     }
 
     /// hud-start: `Player_Init`'s entry fade (`Camera_SetFade(-45, 0xff, 1)` on the player's
@@ -10255,7 +10373,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
-            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, zoom_saved: Vec::new(), zoom_aim_prev: false, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), drone_draw_cache: (0..crate::pose_pool::MAX_SLOTS).map(|_| Default::default()).collect(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), bond_anim: nf_game::mp::body_anim::MpBodyAnim::new(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
+            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, zoom_saved: Vec::new(), zoom_aim_prev: false, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, step_foot: false, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), drone_draw_cache: (0..crate::pose_pool::MAX_SLOTS).map(|_| Default::default()).collect(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), bond_anim: nf_game::mp::body_anim::MpBodyAnim::new(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [const { None }; nf_net::MAX_AGENTS],
             mp_local_slot: 0,
             mp_body_speed: [0.0; nf_net::MAX_AGENTS],

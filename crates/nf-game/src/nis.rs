@@ -126,8 +126,14 @@ pub enum Request {
     /// overlay (colour 0x000000ff: RGB 0, alpha target 0xff) whose alpha ramps |1/f| per tick on the
     /// viewer; f < 0 starts at alpha 1 and fades in, f > 0 starts at 0 and fades out. Suppressed
     /// while `SCRIPTINFO+0xAB5` bit 0 (the skip latch) is set [M 0x1db3d0:10-12].
-    /// `viewer`: `Camera_SetFade`'s last argument — 0 the cut-scene (script camera) viewer, 1 the gameplay viewer.
-    Fade { ticks: f32, viewer: u8 },
+    /// `viewer`: `Camera_SetFade`'s viewer-slot argument — 0 the cut-scene (script camera) viewer
+    /// (slot 4), 1 the gameplay viewer (slot 0). `mode`: `Camera_SetFade`'s last argument — the
+    /// fade TYPE byte the call stores at viewer+0x234 [M 0x1bbdd8:16]: 0 on the op-0x13 fades and
+    /// `Script_Update`'s near-end fade, 1 on the skip's fade-out and the tail's fade-in. The type
+    /// is half of the refuse gate (the other half the viewer's state byte): a type-0 fade never
+    /// blocks — a re-arm overwrites it mid-ramp — a type-1 fade refuses a second fade on the same
+    /// viewer while it runs [M 0x1bbdd8 disasm 0x1bbe08-0x1bbe18].
+    Fade { ticks: f32, viewer: u8, mode: u8 },
     /// Op 0x1e: `Script_TextStart` 0x1db2b8 → `Text_AddMsg(-1, 0, 4, Txt_BindLabel(label, 0), 0,
     /// time)` — a HUD message from the text bank shown for `time` frames [M 0x1db2b8:9-12]. The raw
     /// label travels (the Lang table lives above nf-game); nf-view binds it like the pickup messages.
@@ -367,7 +373,17 @@ impl Script {
     }
 
     /// `Script_Play` (0x1db588).
-    pub fn start(&mut self, looping: bool) { self.play = if looping { self.play | 9 } else { (self.play & !8) | 1 }; }
+    pub fn start(&mut self, looping: bool) {
+        self.play = if looping { self.play | 9 } else { (self.play & !8) | 1 };
+        // `Script_Play` 0x1db588:24-26: a camera-flag script's play latches the global `ScriptCam`
+        // to its hashcode (`Script_Free` 0x1da880:49-51 clears it when the same hash frees;
+        // `Script_Init` zeroes it). The port carries the latch per script: its only reader is
+        // `Script_Update`'s near-end fade gate [M 0x1da998:47 — `ScriptCam != 0 && +0xaa8 & 0x40`],
+        // and a playing camera-flag script's own play is what set the global, so the per-script
+        // flag is the same condition. The disc's 18 camera-flag SP scripts are all non-looping
+        // [D the audit-nis-ops census], so the latch can never outlive its script's stop.
+        if self.nis.camera { self.script_cam = true; }
+    }
     /// `Script_Stop`.
     pub fn stop(&mut self) { self.play &= !1; }
     /// `Script_Set2Start` (0x1daf00).
@@ -411,6 +427,13 @@ impl Script {
         // Music_Event(5, hash) [M 0x1dac78:55]: the skip's music pulse (EventList[5] = hash; the port's music
         // runtime has no consumer for the skip pulse, so it rides the uncarried Event request).
         out.push(Request::Event { kind: 0x40, params: vec![self.nis.hashcode] });
+        // `Camera_SetFade((float)+0xAB4, 4, 0xff, 1)` [M 0x1dac78:56-57] — the skip's own view
+        // fade-out: min(remaining, 45) ticks to black (a positive duration starts at alpha 0 and
+        // ramps out), fade TYPE 1 — it refuses a second fade on the script viewer while it ramps.
+        // The scene keeps playing under it: the catch-up only starts once the script fade clock
+        // passes `+0xAB4` (update's loop guard below), then the tail's fade-in takes the screen
+        // back [M 0x1da998:101-110].
+        out.push(Request::Fade { ticks: self.fade_len as f32, viewer: 0, mode: 1 });
         // The ScriptCam arm's other half [M 0x1dac78:26-30]: `Input_ClearAllActions(-1)` (the port's skip is
         // edge-latched, nothing to clear) and `Text_FlushAllSubtitles()` — the shown dialogue line dies with
         // the skip (the port used to keep it). Reaching here means the camera flag is
@@ -479,7 +502,7 @@ impl Script {
                 // The game's own fade-out in the last 20 ticks of a camera script [M :53-71]:
                 // `Camera_SetFade(40, 4, 0xff, 0)` — 40 ticks to black — unless the hash is in the
                 // no-fade set. It re-arms every tick; the drain's in-progress guard debounces.
-                if !no_fade { out.push(Request::Fade { ticks: 40.0, viewer: 0 }); }
+                if !no_fade { out.push(Request::Fade { ticks: 40.0, viewer: 0, mode: 0 }); }
             }
             // The fade bookkeeping [M :84-98]: the skip's fade advances one frame per tick; past its length it
             // sets the freeze flag (bit 5).
@@ -494,7 +517,7 @@ impl Script {
         // the GAMEPLAY viewer — `Camera_SetFade(0xc1b00000, 0, 0xff, 1)` [L 0xc1b00000 = -22.0: 22 ticks from
         // black], clear the fade clock, play bit 4 and the skip latch.
         if self.fade_clock > self.fade_len as f32 && !self.playing() {
-            out.push(Request::Fade { ticks: -22.0, viewer: 1 });
+            out.push(Request::Fade { ticks: -22.0, viewer: 1, mode: 1 });
             self.fade_clock = 0.0;
             self.play &= !0x10;
             self.fade_flags &= !1;
@@ -666,7 +689,7 @@ impl Script {
                         // alpha 1 and fades in, f > 0 fades out) unless the skip latch (+0xAB5 bit 0)
                         // is set [M 0x1db3d0:10-12].
                         let Some(t) = rd(0, 4) else { self.streams[i].pc = None; return };
-                        if self.fade_flags & 1 == 0 { out.push(Request::Fade { ticks: -f32::from_bits(t), viewer: 0 }); }
+                        if self.fade_flags & 1 == 0 { out.push(Request::Fade { ticks: -f32::from_bits(t), viewer: 0, mode: 0 }); }
                         next = pc + 6;
                     }
                     0x14 => {
@@ -1658,6 +1681,17 @@ impl Player {
         let mode = self.modes[cur];
         let s = self.info[cur].as_mut().unwrap();
         s.player = self.placement; // for NF_SCRIPTLOG
+        // `Script_Play` 0x1db588:23-41 — every SP_LoadScript arm starts playback through
+        // `Script_Play`, which on a camera script (`+0xAA8 & 0x40`, the port's `nis.camera` →
+        // flags bit 0x40 [M 0x1d8248 → Script::load]) whose hash is one of the three death NISs
+        // (`Script_IsDeathNIS` 0x1dae60: 0x6000952/0x600098a/0x6000991) posts the death music
+        // jump `Music_Event(6, 1)` [M 0x1db588:26-41], then `Text_FlushAllSubtitles` (the
+        // subtitle flush rides the view side; the Sim carries no script subtitles here). The
+        // board's event-6 consumer is the on-death marker jump (`UpdateMusicalEvents`
+        // 0x114e70 DAT_002d3510 = MapMusicData+0xc) — the same jump Player_CheckForDeath posts.
+        if s.flags & 0x40 != 0 && Script::is_death_nis(self.scripts[cur]) {
+            out.push(Request::Event { kind: 0x41, params: vec![] });
+        }
         match mode {
             1 => { s.start(false); self.state = 2; }
             8 => { s.start(true); self.state = 6; }
@@ -2112,6 +2146,31 @@ impl Scripts {
             if let Some(v) = vol { out[slot] = Some(v); present |= 1 << slot; }
         }
         (out, present)
+    }
+
+    /// The part objects' world matrices, the same resolution `copter_part_targets` walks — the
+    /// missile pods' `Mat_GetDir(pod+0x90)` facing (`Copter_FireMissile` 0x17d9f0:78) and the gun
+    /// pair's `Mat_LookAt` targets (`Copter_FireGun` 0x17d828:60-62 — the game aims the barrel
+    /// objects; the port keeps no barrel objects to aim, the firing math needs only the muzzle).
+    /// An entity carries its own matrix; an anim the matrix of the stream that owns it (the same
+    /// source `copter_part_targets` reads for its centre).
+    pub fn copter_part_matrices(&self, placement: usize, parts: &[Option<(usize, u32)>; 9], w: &dyn World) -> [Option<Mat4>; 9] {
+        let mut out: [Option<Mat4>; 9] = [None; 9];
+        let Some(p) = self.players.iter().find(|p| p.placement == placement && !p.deleted) else { return out };
+        if p.hidden { return out; }
+        let s = p.info[p.cur].as_ref();
+        for (slot, reg) in parts.iter().enumerate() {
+            let Some((o, h)) = *reg else { continue };
+            let m = match self.objects.list.get(o).and_then(|x| x.as_ref()) {
+                Some(Obj::Entity { hash, matrix, .. }) if *hash == h => Some(*matrix),
+                Some(Obj::Anim { skin, .. }) if *skin == h => {
+                    s.and_then(|s| (0..s.streams.len()).find(|&i| s.streams[i].obj == Some(o)).and_then(|i| s.stream_matrix(i, &self.objects, w)))
+                }
+                _ => None,
+            };
+            out[slot] = m;
+        }
+        out
     }
 
     /// A synthetic one-shot player (fix-objects2): mode 1 (plays once from spawn), no gate, no
@@ -2988,5 +3047,49 @@ mod tests {
         assert!(ch.on(0x40), "the SKIPPED cut-scene still wrote ch 0x40 = 1 [M 0x1da998:19-100 catch-up + 0x1d94c0 case 0xd]");
         assert!(ch.time[0x40] != 0, "the catch-up's write stamped switch_channels_time[0x40]");
         assert!(ch.script_channels.contains(&0x40));
+    }
+
+    /// audit-music-events — `Script_Play` 0x1db588:26-41: an SP_LoadScript on a CAMERA script
+    /// (`+0xAA8 & 0x40`) whose hash is one of the three death NISs (`Script_IsDeathNIS`
+    /// 0x1dae60) posts the death music jump `Music_Event(6, 1)` — the port's kind-0x41 Event
+    /// request, drained onto the board by `Drones::drain_script_requests` (the board's event-6
+    /// consumer is the on-death marker jump). A camera script with any other hash posts nothing.
+    #[test]
+    fn the_death_nis_start_posts_the_death_music_jump() {
+        let mk = |hash: u32| Arc::new(Nis {
+            hashcode: hash, camera: true, loop_start: 0, length: 100,
+            streams: vec![NisStream { first_key: 0, last_key: 0, commands: Vec::new() }],
+            keys: Vec::new(),
+        });
+        let mk_player = |hash: u32| Player {
+            placement: 0, scripts: [hash, 0], modes: [1, 0], stay: false, mask: 0, out: 0, gate: 0,
+            scale: 1.0, matrix: IDENT, cur: 0, state: 0, activated: false, countdown: 0,
+            info: [None, None], deleted: false, live_matrix: IDENT, subs: Vec::new(),
+            hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false, bullet_filter: 0,
+            bullet_hits: Vec::new(), tick_bullet_hits: Vec::new(),
+        };
+        let mut objs = Objects::default();
+        let mut ch = Channels::default();
+        let world = TestWorld;
+        // The 05 plunge death NIS (SP #284): the load posts the jump.
+        let mut lib = HashMap::new();
+        lib.insert(0x0600_0952u32, mk(0x0600_0952));
+        let mut p = mk_player(0x0600_0952);
+        let mut out = Vec::new();
+        p.load(&lib, &mut objs, &mut ch, &world, 0, &mut out);
+        assert!(
+            out.iter().any(|r| matches!(r, Request::Event { kind: 0x41, .. })),
+            "the death NIS start posts Music_Event(6,1) [M 0x1db588:26-41]"
+        );
+        // Sister: a camera script that is NOT a death NIS posts no death music jump.
+        let mut lib2 = HashMap::new();
+        lib2.insert(0x0600_0421u32, mk(0x0600_0421));
+        let mut p2 = mk_player(0x0600_0421);
+        let mut out2 = Vec::new();
+        p2.load(&lib2, &mut objs, &mut ch, &world, 0, &mut out2);
+        assert!(
+            !out2.iter().any(|r| matches!(r, Request::Event { kind: 0x41, .. })),
+            "a non-death camera NIS posts no death music jump [M 0x1db588:27-37]"
+        );
     }
 }

@@ -93,8 +93,27 @@ fn a_kill_queues_the_killers_message() {
 
 /// The status line: nothing while playing; Arena's single winner prints "Game Over :" + the
 /// codename + " " + "Won" (0x2000024, name, 0x2000027 [M 0x1848d0:62-70]); the lives scenario
-/// 0x10 uses "Player %s Won" 0x2000022 [M :21-41]; a time-up outside 0x10 prints 0x2000028 +
-/// 0x1c9 [M 0x184bd0:42-50]. Sister: a draw is 0x2000024 + 0x2000023.
+/// 0x10 uses "Player %s Won" 0x2000022 [M :21-41]; a time-up outside 0x10 prints 0x2000028
+/// "Time Up!" alone — case 2's sprintf format is the plain "%s" at 0x30cbf0, so bind(0x1c9)
+/// "Press START" is a spare argument it never reads [M disasm 0x184da8-0x184de0; L @0x30cbf0,
+/// mp_status_strings_live]. Sister: a draw is 0x2000024 + 0x2000023.
+/// A site round's result holds the status line through the restart wait; 2.5 s in it swaps to
+/// the restart label, and the restart clears it [M 0x1870a0:146-158, 0x184bd0:79-89]. Sister: the
+/// wait never shows the time-up text.
+#[test]
+fn the_site_result_holds_the_status_line() {
+    let mut m = MpMatch::init(MpSettings::deathmatch(0x0700_0011));
+    m.game.state = 6;
+    m.objects_rt.site_status = Some(0x0200_002f);
+    assert_eq!(status_line(&m), vec![StatusPart::Label(0x0200_002f)]);
+    m.game.restart_timer = 2.5;
+    assert_eq!(status_line(&m), vec![StatusPart::Label(0x0200_0049)]);
+    m.game.state = 0;
+    m.game.restart_timer = 0.0;
+    m.restart_scenario(&mut nf_game::drone::Rng::new(1));
+    assert!(status_line(&m).is_empty());
+}
+
 #[test]
 fn the_status_line_follows_the_sort() {
     let mut m = make(scenario::DEATHMATCH);
@@ -105,7 +124,7 @@ fn the_status_line_follows_the_sort() {
     m.game.end_status = MpEndStatus::Draw;
     assert_eq!(status_line(&m), vec![StatusPart::Label(0x0200_0024), StatusPart::Label(0x0200_0023)]);
     m.game.end_status = MpEndStatus::None;
-    assert_eq!(status_line(&m), vec![StatusPart::Label(0x0200_0028), StatusPart::Label(0x1c9)]);
+    assert_eq!(status_line(&m), vec![StatusPart::Label(0x0200_0028)]);
     m.settings.scenario = scenario::DEATH_LIMIT_FFA;
     m.game.end_status = MpEndStatus::Won("Bond".into());
     assert_eq!(status_line(&m), vec![StatusPart::Format(0x0200_0022, "Bond".into())]);

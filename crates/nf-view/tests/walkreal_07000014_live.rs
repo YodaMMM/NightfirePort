@@ -344,9 +344,12 @@ fn the_east_duct_route_reaches_the_stairwell_slot() {
         // on the corridor leg (drone #0, 18 health) shifted the climb's tick phase, and the
         // climb_stairs arrival (dxz 0.8) sampled Bond standing on the landing's first step —
         // y 0.1234 against the old 0.0 cap (walkreal_07000014_real_damage, 2026-11-02); the
-        // Agent run's own fight phases sample the climb at y 0.405 (real-health-agent-
-        // difficulty-12-13-14-15, 2026-11-03). The x/z bounds and the y > -1.6 pit floor are
-        // the pins and stay.
+        // The cap carries fight-phase slack from both sides of the merge: the real-health
+        // runs' return-fire stands and the game's FirstAttack flush [M 0x148010:100-131]
+        // (the trench-guard fight at the landing) sample the climb's arrival above the old
+        // 0.0, and the agent-difficulty run's own fight phases sampled y 0.405
+        // (real-health-agent-difficulty-12-13-14-15, 2026-11-03) — 1.1 covers both. The
+        // x/z bounds and the y > -1.6 pit floor are the pins and stay.
         assert!(p[1] > -1.6 && p[1] < 1.1 && p[2] > 52.5 && p[2] < 54.6 && p[0] > 44.0 && p[0] < 46.4,
             "the east stairwell foot (-0.91 landing, z 51.5..54.25 [D probe14_corridor/probe14_stairs]) is reached, got {p:?}");
     }
@@ -467,6 +470,7 @@ fn walk_infiltration_to_handback(w: &mut Walker) {
             b.pos, b.grounded);
         eprintln!("[014] the crossing landed {:?}", b.pos);
     }
+    kill_the_trench_guard_270(w);
     // Leg 1b: the trench east to the corridor — the nav lane node 5 -> 4 [D], floor -0.60.
     let _ = w.try_walk_to(Wp::new(48.8, -0.6, 62.8).r(0.7), "the trench east to the corridor");
     {
@@ -504,9 +508,12 @@ fn walk_infiltration_to_handback(w: &mut Walker) {
         // on the corridor leg (drone #0, 18 health) shifted the climb's tick phase, and the
         // climb_stairs arrival (dxz 0.8) sampled Bond standing on the landing's first step —
         // y 0.1234 against the old 0.0 cap (walkreal_07000014_real_damage, 2026-11-02); the
-        // Agent run's own fight phases sample the climb at y 0.405 (real-health-agent-
-        // difficulty-12-13-14-15, 2026-11-03). The x/z bounds and the y > -1.6 pit floor are
-        // the pins and stay.
+        // The cap carries fight-phase slack from both sides of the merge: the real-health
+        // runs' return-fire stands and the game's FirstAttack flush [M 0x148010:100-131]
+        // (the trench-guard fight at the landing) sample the climb's arrival above the old
+        // 0.0, and the agent-difficulty run's own fight phases sampled y 0.405
+        // (real-health-agent-difficulty-12-13-14-15, 2026-11-03) — 1.1 covers both. The
+        // x/z bounds and the y > -1.6 pit floor are the pins and stay.
         assert!(p[1] > -1.6 && p[1] < 1.1 && p[2] > 52.5 && p[2] < 54.6 && p[0] > 44.0 && p[0] < 46.4,
             "the east stairwell foot (-0.91 landing, z 51.5..54.25 [D probe14_corridor/probe14_stairs]) is reached, got {p:?}");
     }
@@ -759,6 +766,7 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
         // crossing the probe walked ((29.99, 0.61, 38.00) grounded).
         let _ = w.try_walk_to(Wp::new(29.7, 0.8, 34.7).r(0.9), "the corridor west of the door wall");
         w.walk_to(Wp::new(30.09, 0.65, 38.73).r(1.2), "the corridor south to the leg-2 spot");
+        if !w.tops_up() { clear_hostiles(w, 24.0, 900); }
         {
             let p = w.scene.sim.as_ref().unwrap().bond.pos;
             assert!((27.0..33.5).contains(&p[0]) && p[1] > 0.5 && p[1] < 1.6 && (36.5..40.5).contains(&p[2]),
@@ -839,6 +847,7 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
         eprintln!("[014] the Kiko scene released Bond at {p:?}");
     }
+    if !w.tops_up() { clear_hostiles(w, 24.0, 900); }
     w.walk_to(Wp::new(-57.9, 0.1, 40.77).r(1.5), "the west corridor's north lane");
     w.walk_to(Wp::new(-60.5, 0.05, 40.77).r(1.0), "the corridor west (node 626)");
     w.walk_to(Wp::new(-60.5, 0.05, 35.7).r(1.2), "the corridor south (node 615)");
@@ -862,6 +871,7 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
     let h_mid = w.scene.sim.as_ref().unwrap().drones.health.health;
     assert!(h_mid >= h_before - 0.01,
         "no live-wire hurt across the #383 cut (health {h_before} → {h_mid}) [M 0x1adfe8:99-101]");
+    if !w.tops_up() { clear_hostiles(w, 24.0, 900); }
     w.walk_to(Wp::new(-89.3, -1.78, 36.99).r(1.2), "the box A north lane (node 649)");
     w.walk_to(Wp::new(-89.3, -1.78, 40.58).r(1.2), "the hall west lane north (node 644)");
     w.walk_to(Wp::new(-89.3, -1.78, 45.7).r(1.2), "the hall north-west (node 204)");
@@ -881,6 +891,7 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
     // 199 [D nav]), up the north ramp (node 632 (−66.23, −1.78, 48.5) → node 630 (−63.7, 0.019,
     // 48.05); the hop-climb the stairs walker uses), then the west corridor south (nodes
     // 620/618/626) into the switch band (lo −63.08…−57.52, z 37.33…39.41 [D]).
+    if !w.tops_up() { clear_hostiles(w, 24.0, 900); }
     w.walk_to(Wp::new(-87.5, -1.78, 46.7).r(1.2), "the hall north lane (node 641)");
     w.walk_to(Wp::new(-72.7, -1.78, 47.4).r(1.2), "the hall north lane east (node 635)");
     w.walk_to(Wp::new(-66.3, -1.78, 48.4).r(1.0), "the north ramp foot (node 632)");
@@ -959,13 +970,29 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// the scoped floor, d 2.70 short of the drop (32.50, 0.83, 33.29), grounded=false, and the
 /// leg's cap panics (walker_b2.rs:641) — the d3 fights' displacement (40 return-fire fights,
 /// 22 hits for 50.0 by that tick — half the budget gone at the landing) puts Bond off the leg's
-/// laid line and the resupply approach cannot re-ground him. The d2 sister rode a TOP-UP (its
-/// wrapper lacks the `with_real_damage` wrap — flagged to the merge owner), so no real-health
-/// d2 baseline exists to diff against. NEXT LEVERS: a d3-gated re-ground before the landing
-/// resupply (a settle tick loop, the skip-hand-back's grounding pattern), or a d3-gated direct
-/// walk_to the drop's cell bypassing the resupply nav, or the fights' smoother early game (the
-/// first 50.0 went in the infiltration grind — the 05-07 sniper-stand law applied to the
-/// stairwell's AIM pairs).
+/// laid line and the resupply approach cannot re-ground him.
+///
+/// MEASURED AGAIN (real-health-14-00agent-5): the d2 sister WITH the `with_real_damage` wrap
+/// (the top-up off, the merge owner's flag) wedges the SAME way on master's tree — the "1.72
+/// landing" leg cap at tick 25740 with Bond floating at (33.90, 0.68, 35.38) d 0.81 short,
+/// grounded=false, health 32.5 (36 hits for 67.5, 31 fights — the BUDGET SURVIVES; the wedge is
+/// not a death) — so a real-health d2 baseline still does not exist; the wrap lands only with
+/// the wedge fixed. The wedge is a HOVER DITHER, not a static trap: the trace shows grounded
+/// flickering on single ticks between floats (each ground tick zeroes vel, the next float
+/// re-accumulates ~0.003 of fall, an up-facing push gives it back) — pos never descends,
+/// float_ticks never accumulates, the walker's recovery hop can't fire, and 60+ QUIET no-input
+/// ticks (the probe's bare-pose ground takes <100) do NOT break it — the hover is the port's
+/// fallback radial push holding the capsule where the game's dead push-tail [M 0x109da0:431-447,
+/// the -3 report's ref reading] would give none. The mezzanine-lip question is CLOSED this
+/// window (see docs/reports/real-health-14-00agent-5.md): the fresh-boot hold at x 45.134 is
+/// the GAME's own behaviour (the port's 45.1339 matches), the walk's route crosses west at the
+/// flush lid (z ≈ 42.37, probe14_lip_route arm B) or the south opening (z ≤ 39.4, arm C) — the
+/// hold band is only z ≈ 39.9..42.2 and no leg needs to push through it. NEXT LEVERS (in
+/// order): (1) the sim-side hover fix at the pocket — a scoped push rule that lets the fall
+/// complete where the game's tail is structurally dead (NOT the dropped -4 branch's global
+/// honest_ref; scope it to the failed-ref up-facing hold or to this pocket's cel), then the d2
+/// wrap + this un-ignore are one-liners; (2) a d2/d3-gated fight-quiet approach so the
+/// displacement never reaches the pocket; (3) the stairwell AIM-pair stands.
 #[test]
 #[ignore = "00 Agent: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
@@ -1700,6 +1727,67 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage() {
     walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
 }
 
+/// The game's FirstAttack flush [M 0x148010:100-131] puts every p5=100 [D census] guard on his
+/// second behaviour block at his first attack, and the west route's block-B words hunt the
+/// walker down (the real-damage deaths: 107 hits across 19 fights). The walk clears the enabled
+/// team-1 hostiles inside `radius` with the walker's loose-gate shots — real input only;
+/// `shoot_loose`'s give-up keeps the walk moving when a sight line never opens.
+fn clear_hostiles(w: &mut Walker, radius: f32, cap: u32) {
+    let home = w.scene.sim.as_ref().unwrap().bond.pos;
+    for _ in 0..10 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let Some(di) = sim.drones.list.iter().position(|d| {
+            d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                && walker::dxz(d.pos, sim.bond.pos) < radius
+        }) else { return };
+        // The dropped-gun cycle is now a bounded test-local loot pass (this tree's measured
+        // runs: the fights held Bond at 74.0 across 9-12 fights — the armour takes the traded
+        // rounds — while the shared resupply walked Bond onto the trench lip for a drop
+        // 2.38 away behind the rim (target (38.72, 0.00, 33.60) from (40.91, 0.38, 32.66),
+        // unclosable) and burned ~12000 ticks across its 4 attempts before the wedge abort
+        // killed the walk at 18540/18840. A player scoops what lies at his feet on his own
+        // floor and keeps walking; everything else stays where it fell.
+        {
+            let (bp, target) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                let t = sim.drones.pickups.iter().filter(|p| !p.gone)
+                    .filter(|p| (p.m[3][1] - bp[1]).abs() < 0.3)
+                    .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+                    .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)))
+                    .filter(|t| walker::dxz(*t, bp) < 6.0);
+                (bp, t)
+            };
+            if let Some(t) = target { w.walk_nav_to(t, "the clear's loot pass", 1.2); }
+        }
+        w.shoot_loose(di, "the hostile clear", cap);
+    }
+    // The fights displace Bond (the backpedal inside 3.0) — walk home over the NAV web (the
+    // direct steer hits the door-wall jambs) so the caller's position pins and next legs start
+    // where they would have without the clear.
+    w.walk_nav_to(home, "back to the clear's home spot", 1.0);
+}
+
+/// The game's FirstAttack alternate-state tail [M 0x148010:100-131] puts the trench guard
+/// (placement #270: p5=100, p8=100, p21=3 [D census]) on his second behaviour block at his
+/// first attack — +0xC6=3 → +0xC5 and +0x5A4 = DroneTypeSettings[row 3].alt
+/// [M 0x14cbd8:103-114] — whose block B words [a0800200, df720813, 44280000] [D #270] hunt the
+/// walker down: the real-damage walk died to his point-blank bursts (100.0 in 50 hits at 0.4 u)
+/// mid-trench. The walk answers with its own range keeping at the crossing's landing — switch
+/// to a carried gun, aim through the walker's exposed view, fire past 2.0, backpedal inside 3.0
+/// (every drone round hits under 3.0 [M DoBulletAccuracy 0x179740:113-115], so the band is
+/// held, not traded). Real input only; no teleports.
+fn kill_the_trench_guard_270(w: &mut Walker) {
+    let di = w.scene.sim.as_ref().unwrap().drones.list.iter()
+        .position(|d| d.placement == 270).expect("the trench guard placement #270 exists");
+    assert!(w.switch_to_armed("the trench guard's kill"), "a carried gun has rounds");
+    // The hunter closes — the LOOSE aim gate (the patrolling-target pattern) keeps the taps
+    // landing while he sweeps between ticks; the band under 3.0 is his, so the kill must land
+    // before he arrives (hp 25 [L the death log]).
+    assert!(w.shoot_loose(di, "the trench guard's kill", 2400),
+        "the trench guard must fall (the game's hunt block chases the walker down)");
+}
+
 // ---------------------------------------------------------------------------
 // level-14-tripbomb-real-route: the tripbomb through the PLAYER's path — no dev panel anywhere.
 //
@@ -1772,8 +1860,9 @@ fn steer_aim(w: &mut Walker, at: V3, fire: bool, use_key: bool) {
 
 /// The gadget's world sphere centre (obj+0x80): the pose · the model's glist bounds centre
 /// [M Control_BuildWorldSph 0x133070; the same stand-in tripwire_shot_live aims at].
-fn trip_body_centre(sim: &nf_view::scene::Sim, gi: usize) -> V3 {
-    let g = &sim.drones.grenades[gi];
+fn trip_body_centre(sim: &nf_view::scene::Sim, _gi: usize) -> V3 {
+    // the caller's index can be stale (see trip_stuck_now) — re-find the stuck bomb
+    let g = &sim.drones.grenades[trip_stuck_now(sim)];
     let m = g.pose();
     let c = sim.models.get(&TRIP_MESH).expect("the tripbomb model's glist bounds").centre;
     let mut out = [m[3][0], m[3][1], m[3][2]];
@@ -1792,6 +1881,13 @@ fn trip_beam_dist(sim: &nf_view::scene::Sim, p: V3) -> f32 {
 
 fn trip_stuck_index(sim: &nf_view::scene::Sim) -> Option<usize> {
     sim.drones.grenades.iter().position(|g| g.weapon_type == TRIP as u16 && g.stuck && g.state < 2)
+}
+
+/// The placed tripbomb's CURRENT grenade index — the flush changes the guards' fight around the
+/// placement, so a thrown guard grenade can enter and leave `grenades` at any time and the
+/// placement-time index goes stale (the 2026-11-03 len-1/index-1 panics).
+fn trip_stuck_now(sim: &nf_view::scene::Sim) -> usize {
+    trip_stuck_index(sim).expect("the placed tripbomb is still stuck")
 }
 
 /// Hold the laser's fire on `at` until the keypad lock's burn completes and its out channel
@@ -1865,6 +1961,7 @@ fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
     for (k, p) in route.iter().take(stop_at).enumerate() {
         let _ = w.try_walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("the armoury loop node {k}"));
     }
+    if !w.tops_up() { clear_hostiles(&mut w, 26.0, 900); }
     eprintln!("[014-trip] the loop done at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
     // The game's own node path into the lane (the nav web's route branch→rack [L the nav probe]):
     // from the catwalk head the AI climbs the crate row and walks it EAST at y 1.20 — nodes
@@ -2009,7 +2106,7 @@ fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
     let gi = trip_stuck_index(w.scene.sim.as_ref().unwrap()).expect("the thrown tripbomb sticks on the rack wall [M 0x12ce80]");
     let (bomb_pos, bomb_n) = {
         let sim = w.scene.sim.as_ref().unwrap();
-        let g = &sim.drones.grenades[gi];
+        let g = &sim.drones.grenades[trip_stuck_now(sim)];
         (g.pos, g.phase.as_ref().unwrap().normal)
     };
     assert!(stuck && bomb_n[0] < -0.7, "the stick faces back down the lane (normal {bomb_n:?})");
@@ -2064,6 +2161,11 @@ fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
+        // The flush changes the guards' fight around the placement, so a thrown guard grenade
+        // can enter and leave `grenades` between the stick and the retreat — re-find the stuck
+        // tripbomb instead of trusting the placement-time index (the 2026-11-03 len-1/index-1).
+        let gi = trip_stuck_index(sim).expect("the placed tripbomb is still stuck at the retreat");
+        let gi = trip_stuck_now(sim);
         let armed = sim.drones.grenades[gi].phase.as_ref().map_or(false, |p| p.armed);
         eprintln!("[014-trip] retreated to {:?} armed {armed} beams {}", sim.bond.pos, sim.drones.tripbomb_beams.len());
         if armed && !sim.drones.tripbomb_beams.is_empty() {
@@ -2125,17 +2227,19 @@ fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
     // He waits out the arm crouched in the lane (the beam is up by now or arms within these ticks).
     for _ in 0..200 {
         let sim = w.scene.sim.as_ref().unwrap();
+        let gi = trip_stuck_now(sim);
         if sim.drones.grenades[gi].phase.as_ref().map_or(false, |p| p.armed) && !sim.drones.tripbomb_beams.is_empty() { break; }
         w.tick(nf_game::player::Input::default(), false);
     }
-    let body = trip_body_centre(w.scene.sim.as_ref().unwrap(), gi);
+    let body = trip_body_centre(w.scene.sim.as_ref().unwrap(), trip_stuck_now(w.scene.sim.as_ref().unwrap()));
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let (bd, d) = (trip_beam_dist(sim, sim.bond.pos), tv_len(tv_sub(body, sim.bond.pos)));
         eprintln!("[014-trip] at the spot: bond {:?} body-dist {d:.2} beam-dist {bd:.2} armed {}",
-            sim.bond.pos, sim.drones.grenades[gi].phase.as_ref().map_or(false, |p| p.armed));
+            sim.bond.pos, { let gi = trip_stuck_now(sim); sim.drones.grenades[gi].phase.as_ref().map_or(false, |p| p.armed) });
         assert!(d >= 3.0, "the shot spot holds the bomb in view ({d})");
         assert!(bd > 1.6, "Bond stands clear of the beam line ({bd})");
+        let gi = trip_stuck_now(sim);
         assert!(sim.drones.grenades[gi].phase.as_ref().map_or(false, |p| p.armed), "the tripbomb armed");
         assert!(!sim.drones.tripbomb_beams.is_empty(), "the armed tripbomb draws its beam");
     }

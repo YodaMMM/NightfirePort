@@ -2246,7 +2246,8 @@ async fn device(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) 
 /// is clear — health iris, ammo, crosshair, radar, messages and the damage glow (`psiFadeView`, in the same
 /// gated block) all disappear together. Snapshot-verified: the 07000001 opening cut-scene has viewer[0]/[5]
 /// +0x2a = 0 while `ScriptCam`@0x30d100 is non-zero [L ee_start_07000001.bin]. The port's condition is the
-/// one it already drives the cut-scene camera from: a live script camera object.
+/// one it already drives the cut-scene camera from: a live script camera object. The subtitle
+/// sprite is the exception; it rides `Scene::script_overlay_hud`, over the letterbox bars.
 pub fn overlay_for(scene: &scene::Scene, aspect: f32) -> gpu::HudFrame {
     let cutscene = scene.sim.as_ref().is_some_and(|s| s.script_camera().is_some());
     if cutscene { gpu::HudFrame::default() } else { hud::overlay(scene, aspect) }
