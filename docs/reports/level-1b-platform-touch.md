@@ -119,3 +119,14 @@ placements, the script decode, the glist collision census) and `probe1b_touch_re
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three notification attempts failed (2026-11-05 ~11:00 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. python3 urllib.request (fallback 2) → `urllib.error.URLError: <urlopen error [Errno 101]
+   Network is unreachable>`
+3. `wget -q -O- --post-data "level-1b-platform-touch: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out (killed after 120 s, no output)
