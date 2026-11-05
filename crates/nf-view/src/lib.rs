@@ -6806,6 +6806,10 @@ impl App {
         if let Some(s) = self.sound.as_mut() {
             s.driver.music_master = ov(0x1000_0135);
             s.driver.master = ov(0x1000_0134);
+            // The roll fades its own track out [M P_CREDITS_Handler 0x2152b0:165-168].
+            if let Some(v) = self.fe.as_ref().filter(|fe| fe.page == menu::Page::Credits).and_then(|fe| fe.credits.music_volume()) {
+                s.driver.music_master = v;
+            }
         }
         // Y-axis: the game negates the two analog look channels when set [M Input_Update
         // 0x17ee88:50-52]; the port negates the accumulated look delta at the input fill.
