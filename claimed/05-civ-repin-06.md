@@ -5,3 +5,6 @@ Branch from `origin/s/civ-alarm-repin-2`, push to `s/civ-repin-06`. Read docs/re
 walkreal_07000006_live real_damage and _agent: the first ch-0x34 plate crossed is #662, not #664, at walkreal_07000006_live.rs:822. Find which behaviour moved the route, and re-route or re-pin with the reason.
 
 Real input, no teleports. Run the binary whole and quote the result. If the window closes, push what is green.
+
+---
+claimed-by: sandbox1 at 2026-11-05T20:51Z
