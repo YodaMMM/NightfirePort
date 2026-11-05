@@ -28,3 +28,11 @@ Progress log:
   laser_watch_0c_live 3/0; bullet_range_live 3/0; fix_foliage_bullets_live 2/0;
   bullet_range_census 1/0; fix_06_fire_live 3/0; drone_weapon_drop_live 3/0.
 - Full suite in progress; report next.
+- Verdict: the window is CLEAN — no player-visible break found in any of the 30 commits;
+  nothing to fix, no fail-first test owed, no breaking commit / first tag to name. Full
+  proofs and pass counts in docs/reports/regression-read-weapons.md. The full nf-view
+  suite did not fit the sandbox (disk + 10-min tool cap); everything touching the audited
+  code ran green. One pre-window deviation noted for the future: mine 0x37 keeps fuse 420
+  (no detonator yet) where the game gives a player owner 7777 — flip it when the
+  detonator lands.
+- Done 2026-11-05 ~19:00 UTC.
