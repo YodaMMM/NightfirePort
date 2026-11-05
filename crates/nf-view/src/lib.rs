@@ -3396,7 +3396,9 @@ impl App {
             if a == MA::Confirm && shown >= 1.0 { fe.flow.skip_movie(); }
             return;
         }
-        if fe.page == menu::Page::Pause && a == MA::Back {
+        // A YES/NO confirm or the hint box takes its own Back [M C_LBMSGOPTIONS_Handler 0x2022a0].
+        if fe.page == menu::Page::Pause && a == MA::Back
+            && !fe.confirming_restart && !fe.confirming_quit && fe.pause_hint.is_none() {
             // profile-session: the pause front end drops here — the session stands [M the
             // globals outlive MenuManager_Delete; the next manager inherits].
             self.stash_profile_session();
@@ -4415,8 +4417,9 @@ impl App {
                 _ => false,
             };
             if ended {
-                // The 0x50 finish arm restarts the pair while it is down [M 0x20a1f0:34-39].
-                fe.music.movie_finished();
+                // The 0x50 finish arm restarts the pair while it is down [M 0x20a1f0:34-39] — once,
+                // inside this call: a second start behind the remove meets the dying item's voices,
+                // is refused, and the pair goes silent.
                 fe.attract_movie_finished();
             }
         } else if fe.page == menu::Page::WinGame && fe.win_movie {
@@ -4437,10 +4440,8 @@ impl App {
             }
             if let Some(p) = self.movie.as_mut().filter(|p| p.code() == code) {
                 // One psiMovieFinished poll per page tick (60 Hz), not per redraw.
-                while fe.win_movie_polled != fe.flow.ticks {
-                    p.headless_advance();
-                    fe.win_movie_polled = fe.win_movie_polled.wrapping_add(1);
-                }
+                p.headless_advance_by(fe.flow.ticks.wrapping_sub(fe.win_movie_polled));
+                fe.win_movie_polled = fe.flow.ticks;
                 ended |= p.finished();
             }
             if ended {
@@ -4491,6 +4492,8 @@ impl App {
     }
 
     fn grab(&mut self, on: bool) {
+        // A button let go over a menu never reaches the game's arms: it must not stay held.
+        if !on { self.trigger = false; self.zoom = false; self.grabbed = false; }
         let Some(g) = &self.gfx else { return };
         if on {
             let ok = g.window.set_cursor_grab(CursorGrabMode::Locked).or_else(|_| g.window.set_cursor_grab(CursorGrabMode::Confined)).is_ok();
@@ -4819,6 +4822,11 @@ impl App {
                 // resolve lands in the same frame the state 6 popped.
                 self.menu_script_tick();
                 self.movie_tick(dt);
+                // The load resets the sound system before its movie [M ResetMap_Load 0x1d6360:24
+                // Sound_Kill + Sound_Init]: the mission's music and loops do not run under an outro.
+                if self.level_code != menu::FRONTEND_LEVEL && self.fe.as_ref().is_some_and(|fe| fe.flow.get_state() == menu::ST_MOVIE) {
+                    self.sound = None;
+                }
                 self.adopt_lobby_session();
                 if self.net_finished.is_some() {
                     let on_debrief = self.fe.as_ref().is_some_and(|fe| fe.page == menu::Page::MpDebriefing);
@@ -5549,6 +5557,8 @@ impl App {
                             // The PC-port rapid fire (`--rapid-fire` / the dev Toggles page): local play only —
                             // an online match keeps every machine on the game's rules (lockstep).
                             sim.rapid_fire = RAPID_FIRE.load(std::sync::atomic::Ordering::Relaxed) && self.net.is_none();
+                            // The window answers the fail menu through its page, not the sim's restart.
+                            sim.drones.auto_restart = false;
                             sim.step_bond(input, trigger, reload, use_key);
                             // Port dev aid: re-apply `--bond` after the opening cut-scene's hand-back.
                             if let Some(b) = self.dev_bond {
@@ -5856,6 +5866,9 @@ impl App {
                         }
                     }
                     if std::mem::take(&mut self.pending_mission_end) { self.demo_results(true); }
+                    // `Mission_Update` case 4's else arm: the fail menu 0x40000042 opens over the paused
+                    // mission [M 0x182c60:77-80].
+                    if self.fe.is_none() && self.scene.sim.as_ref().is_some_and(|s| s.drones.fail_menu_open()) { self.demo_results(false); }
                     // mp-match-end: the debriefing handover, drained beside the mission end.
                     if let Some((board, settings)) = self.pending_mp_debrief.take() { self.mp_results(board, settings); }
                 }
@@ -5871,6 +5884,11 @@ impl App {
             let fe_n = (self.fe_clock * 60.0) as u32;
             self.fe_clock -= fe_n as f32 / 60.0;
             for _ in 0..fe_n.min(8) { fe.tick(); }
+            // A finished save routes here from the tick, with no action behind it to run the bonus
+            // page's 0x4c build.
+            if fe.page == menu::Page::NfBonus && fe.bonus.is_none() {
+                if let Some(p) = self.results_progress.as_mut() { fe.results_subpages_enter(p, None); }
+            }
         }
     }
 
@@ -6365,8 +6383,10 @@ impl App {
                         // instead of pausing. Only the bare
                         // viewer (no mission) quits on an un-grabbed Esc.
                         let in_mission = self.scene.sim.is_some() && self.level_code != 0 && self.level_code != menu::FRONTEND_LEVEL;
+                        let cinema = in_mission && self.scene.sim.as_ref().is_some_and(|s| s.script_camera().is_some());
                         if self.grabbed || in_mission {
-                            self.grab(false);
+                            // A refused pause keeps the mouse: the player is still in the mission.
+                            if !cinema { self.grab(false); }
                             // Esc in a mission opens the pause page [S: the game pauses on Start].
                             // The game's pause gate: the action AND GameState+0x36==0 AND
                             // ScriptCam==0 [M Player_Update 0x193600:72] — a script camera up (the
@@ -6814,6 +6834,10 @@ impl App {
         if let Some(s) = self.sound.as_mut() {
             s.driver.music_master = ov(0x1000_0135);
             s.driver.master = ov(0x1000_0134);
+            // The roll fades its own track out [M P_CREDITS_Handler 0x2152b0:165-168].
+            if let Some(v) = self.fe.as_ref().filter(|fe| fe.page == menu::Page::Credits).and_then(|fe| fe.credits.music_volume()) {
+                s.driver.music_master = v;
+            }
         }
         // Y-axis: the game negates the two analog look channels when set [M Input_Update
         // 0x17ee88:50-52]; the port negates the accumulated look delta at the input fill.
@@ -7831,10 +7855,8 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
                 // picture path and does not pace this decision (mission-outros-4).
                 // One player poll per flow tick (60 Hz), not per redraw: at 240 Hz the per-redraw poll
                 // ran the hold out in a quarter of the movie (the Double Cross outro cut out early).
-                while fe.flow.movie_polled < fe.flow.movie_clock {
-                    p.headless_advance();
-                    fe.flow.movie_polled += 1;
-                }
+                p.headless_advance_by(fe.flow.movie_clock - fe.flow.movie_polled);
+                fe.flow.movie_polled = fe.flow.movie_clock;
                 fe.flow.movie_playing = !p.finished();
             }
             None => {
@@ -7989,6 +8011,8 @@ static NET_STALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 // (the briefing pop, the mission Esc quit, the unpolled session
 // through the load) all lived in code no test ran.
 // ---------------------------------------------------------------------------
+#[cfg(test)]
+mod flow_audit;
 #[cfg(test)]
 mod headless_app_harness {
     use super::*;

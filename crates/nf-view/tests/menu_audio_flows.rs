@@ -185,7 +185,6 @@ impl Host {
                 if finished {
                     // [M the 0x50 finish arm restarts the pair (0x20a1f0:34-39);
                     // attract_movie_finished runs the 0x5f pop back to the opener]
-                    fe.music.movie_finished();
                     fe.attract_movie_finished();
                     player = None;
                 }

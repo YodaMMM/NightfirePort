@@ -5675,6 +5675,17 @@ impl FrontEnd {
         if self.results_queued {
             return false;
         }
+        // The card's dialog owns the input while it waits [M C_LBERROPTIONS 0x2185e8's msg-0x4b arm
+        // raises DAT_002462da with the pressed button]. The name page's box 4 and the list's delete
+        // confirm answer through their own arms.
+        if self.card.awaiting && self.cn_box.is_none() && self.cn_delete_row.is_none() {
+            let b = self.card.buttons;
+            return match a {
+                Action::Confirm => self.card_answer([BTN_YES, BTN_RETRY, BTN_OK].into_iter().find(|x| b & x != 0).unwrap_or(BTN_OK)),
+                Action::Back => self.card_answer(if b & BTN_CANCEL != 0 { BTN_CANCEL } else { BTN_OK }),
+                _ => false,
+            };
+        }
         // The MP start checks' refusal is the game's option box too (Menu_CreateOptionBox with the
         // error label [M C_SBMPOPTIONS 0x20e818:50-130]); it was never drawn, so Continue just did
         // nothing.
