@@ -4,3 +4,7 @@ Continue from s/fx-muzzle-repin-2 and read its report. Merge master first; the v
 
 ---
 claimed-by: sandbox1 at 2026-11-05T13:49Z
+
+---
+## Report (done, 2026-11-05T15:05Z)
+
