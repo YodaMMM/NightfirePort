@@ -10906,8 +10906,13 @@ fn cn_controls_rows(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, la
     let mid1 = 109.0 + 12.5;
     let c1 = on;
     if let Some(r) = rows.get(1) { left_text(h, font, &bind(r.label), mx(376.0), my(mid1 + 6.0), c1, true, sc); }
-    centred(h, font, -2, &value_txt(1), mx(461.0 + 49.5), my(mid1 + 6.0), c1, true, sc);
-    if sel1 { arrow(h, 455.0, mid1, true); arrow(h, 566.0, mid1, false); }
+    let value1 = value_txt(1);
+    centred(h, font, -2, &value1, mx(461.0 + 49.5), my(mid1 + 6.0), c1, true, sc);
+    // The arrows clear the word: "Inverted" runs wider than the fixed 55.5 either side.
+    let (placed, _) = font.layout(&value1, 0.0, 0.0);
+    let ink = placed.first().zip(placed.last()).map_or(0.0, |(p0, pl)| pl.x + font.glyphs[pl.glyph].w as f32 - p0.x);
+    let half = (ink * sc / (mx(1.0) - mx(0.0)) / 2.0 + 12.0).max(55.5);
+    if sel1 { arrow(h, 510.5 - half, mid1, true); arrow(h, 510.5 + half, mid1, false); }
 }
 
 fn opt_list(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Option<&Lang>) {
