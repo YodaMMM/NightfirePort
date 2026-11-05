@@ -334,6 +334,12 @@ impl WeaponData {
     pub fn name_label(&self, weapon: usize) -> u32 {
         self.records.get(weapon).map_or(0, |r| u32::from_le_bytes(r[0x38..0x3c].try_into().unwrap()))
     }
+
+    /// `+0x3C`: the MP weapon-name label. The MP take-message arm binds it BARE — no 0x200000D
+    /// "%s" wrapper [M Pickup_Handler 0x18e650:249-256].
+    pub fn mp_name_label(&self, weapon: usize) -> u32 {
+        self.records.get(weapon).map_or(0, |r| u32::from_le_bytes(r[0x3c..0x40].try_into().unwrap()))
+    }
 }
 
 #[cfg(test)]

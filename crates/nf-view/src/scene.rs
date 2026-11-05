@@ -6115,13 +6115,25 @@ impl Sim {
             let Some(lang) = lang.as_ref() else { break };
             let text = match t {
                 nf_game::pickup::Taken::Weapon { weapon } => {
-                    let name = lang.bind(self.weapons.name_label(*weapon as usize)).unwrap_or("");
-                    lang.format(0x200_000D, &[name.to_string()])
+                    if is_mp {
+                        // The MP arm binds weapon_data[raw]+0x3C BARE — no 0x200000D "%s"
+                        // wrapper [M 0x18e650:249-256].
+                        lang.bind(self.weapons.mp_name_label(*weapon as usize)).unwrap_or("").to_string()
+                    } else {
+                        let name = lang.bind(self.weapons.name_label(*weapon as usize)).unwrap_or("");
+                        lang.format(0x200_000D, &[name.to_string()])
+                    }
                 }
                 nf_game::pickup::Taken::Ammo { weapon, rounds } => {
                     let at = self.weapons.ammo_type(*weapon as usize);
                     let name = lang.bind(self.weapons.ammo_name_label(at)).unwrap_or("");
-                    lang.format(0x200_000E, &[rounds.to_string(), name.to_string()])
+                    if is_mp {
+                        // The MP arm formats through the C string at 0x30cc28 — "%d x %s"
+                        // [D elf dump] — over (rounds taken, ammo_data[type]+8) [M 0x18e650:279-288].
+                        format!("{} x {}", rounds, name)
+                    } else {
+                        lang.format(0x200_000E, &[rounds.to_string(), name.to_string()])
+                    }
                 }
                 nf_game::pickup::Taken::Key { .. } => lang.bind(0x200_0010).unwrap_or("").to_string(),
                 nf_game::pickup::Taken::Armour => lang.bind(0x200_000F).unwrap_or("").to_string(),
@@ -6133,7 +6145,10 @@ impl Sim {
                 // 07000008 briefcase's label is 0 → no message.
                 nf_game::pickup::Taken::Label { label } => if *label != 0 { lang.bind(*label).unwrap_or("").to_string() } else { String::new() },
             };
-            if !text.is_empty() { new_msgs.push_back(Msg::new(text, 180.0)); }
+            if !text.is_empty() {
+                // `Text_AddMsg`'s duration [M 0x18e650:324-327]: 180 SP, 90 MP.
+                new_msgs.push_back(Msg::new(text, if is_mp { 90.0 } else { 180.0 }));
+            }
         }
         self.hud.taken_seen = self.drones.taken.len();
         // `Text_AddMsg` 0x1b0c30:90-93: multiplayer turns type 6 into 1, the INFO pane's.
@@ -13747,12 +13762,29 @@ impl Sim {
                     if online { self.mp_armour[local] = self.drones.health.armour; }
                 }
                 Taker::Remote(slot) => {
+                    // The take sound [M Pickup_Handler 0x18e650:336-337]: the shared tail plays
+                    // `+0x2A` for EVERY taker, and the shared sim runs the full human path for a
+                    // remote human — the per-kind overrides (0xF5 kinds 0/1 [M :290], 0x141
+                    // armour [M :300], 0x14C bonus [M :319], else the placement's word) apply.
+                    // The port's remote arm is the consume-only stand-in and was silent.
+                    let (take_sound, at) = {
+                        let p = &self.drones.pickups[k];
+                        let s = match pkind {
+                            kind::WEAPON | kind::AMMO => Some(0xF5u32),
+                            kind::ARMOUR => Some(0x141u32),
+                            kind::BOND_BONUS => Some(0x14Cu32),
+                            _ => p.sound,
+                        };
+                        (s, [p.m[3][0], p.m[3][1], p.m[3][2]])
+                    };
                     if pkind == kind::ARMOUR {
                         if self.mp_armour[slot] < 50.0 {
                             self.mp_armour[slot] = 50.0;
+                            if let (Some(id), Some(sfx)) = (take_sound, self.sfx.as_ref()) { self.drones.play_sound(at, sfx.get(id)); }
                             self.drones.consume_pickup(k, frame);
                         }
                     } else {
+                        if let (Some(id), Some(sfx)) = (take_sound, self.sfx.as_ref()) { self.drones.play_sound(at, sfx.get(id)); }
                         self.drones.consume_pickup(k, frame);
                     }
                 }
@@ -13776,6 +13808,15 @@ impl Sim {
                         eprintln!("[botlog] f{} bot{} took pickup {} (kind {} weapon {:#x} rounds {}) → weapon {:#x} armour {} hp {:.0}",
                             frame, i, k, pkind, pweapon, prounds, m.bots[i].brain.vars.weapon_id, m.bots[i].brain.vars.arsenal.armour, health);
                     }
+                    // The take sound [M Pickup_Handler 0x18e650:137 → :334-337]: the bot arm
+                    // jumps straight to the shared tail, which plays the PLACEMENT's own +0x2A
+                    // word — the 0xF5/0x141/0x14C overrides live in the message block the bot
+                    // path skips. The port's bot take was silent.
+                    let (bot_sound, at) = {
+                        let p = &self.drones.pickups[k];
+                        (p.sound, [p.m[3][0], p.m[3][1], p.m[3][2]])
+                    };
+                    if let (Some(id), Some(sfx)) = (bot_sound, self.sfx.as_ref()) { self.drones.play_sound(at, sfx.get(id)); }
                     self.drones.consume_pickup(k, frame);
                 }
             }
