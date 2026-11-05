@@ -10132,7 +10132,7 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
     // The selected tab is the LIGHT one and the rest dark brown (PCSX2 07000005 pause, MISSION/OBJECTIVES tabs) — the
     // controls' 0x1b colour 0x7d6d59 vs 0x1c 0x201707; each centred in its control.
     for (i, &(id, x, w, fb)) in tabs.iter().enumerate() {
-        let c = if i == tab { gs(0x7d6d59, 0xff) } else { gs(0x201707, 0xff) };
+        let c = if i == tab && fe.pause_hint.is_none() { gs(0x7d6d59, 0xff) } else { gs(0x201707, 0xff) };
         label(h, font, &lbl(id, fb), x, 120.0, w, 16.0, c, false, 1.0);
     }
     match tab {
