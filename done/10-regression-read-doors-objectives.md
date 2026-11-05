@@ -4,3 +4,7 @@ Read every commit since 2026-10-20 touching: crates/nf-game/src/triggers.rs crat
 
 ---
 claimed-by: sandbox1 at 2026-11-05T15:07Z
+
+---
+## Report (done, 2026-11-05T16:06Z)
+
