@@ -4,3 +4,7 @@ Port rows 7, 8, 11 and 13 of the table: rigid body scrape dust, anim script comm
 
 ---
 claimed-by: sandbox4 at 2026-11-05T00:42Z
+
+---
+## Report (done, 2026-11-05T02:14Z)
+
