@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox3 at 2026-11-05T04:28Z
+
+---
+## Report (done, 2026-11-05T05:40Z)
+
+Closed by the driver: the report is on `s/local-match-bot-pickups` (docs/reports/local-match-bot-pickups.md); the worker didn't run finish.sh.
