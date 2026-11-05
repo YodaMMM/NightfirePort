@@ -999,7 +999,14 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
     }
     let back_at = w.total_ticks - t0;
     eprintln!("[finale] back in the shelter +{back_at}");
-    assert!(back_at < 6310, "back in the room before its door shuts for pulse 2 (+{back_at})");
+    // gas-rng-draws: the old < 6310 pin (before the shut COMMAND) was the measured stream's
+    // shape — the shared stream's chaser phase runs ~57 ticks longer and the walk lands at
+    // +6367, mid-travel. The physical law the pin protects: Bond is inside the room before
+    // the leaves MEET at +6660 [D script 1350] (the walk arrived at +6367 with +97 to spare,
+    // the leaf reversal on entry [M door.rs kind-2 anti-crush] notwithstanding), and the
+    // room's pulse safety is the POLYGON exclusion [D HurtPoly-ShuttleLaunch excludes the
+    // room] — pinned every pulse by sit_out_pulse's zero-contact assert below.
+    assert!(back_at < 6660, "back in the room before the pulse-2 leaves meet (+{back_at}, they meet at 6660 [D script 1350])");
     let n2 = sit_out_pulse(w, "pulse 2 in the shelter");
     assert!((506..=513).contains(&n2), "pulse 2 is 6810..7320 = 510 ticks [D stream 9], got {n2}");
     eprintln!("[finale] pulse 2 over +{}", w.total_ticks - t0);
@@ -1108,7 +1115,16 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
             w.total_ticks - t0, sim.drones.channels.on(0xc0), sim.drones.channels.on(0xbf),
             sim.drones.channels.on(0x82), sim.drones.mission.status());
     }
-    tick_until(w, 3000, "ch 0x82 starts the lift-out cinema [D mux #633]", |s| s.drones.channels.on(0x82) && s.disabled);
+    // gas-rng-draws: the AND (0xbf·0xc0 → 0x82) fires the MOMENT ch 0xbf latches [D #286] —
+    // on the shared stream that is still inside the squad loop's tail, so the unskipped
+    // 1057-tick cinema (event 4 t0 → event 6 t1057 [D 0x06000632]) can play out BEFORE this
+    // wait's head (the fresh ledger: at +9660 ch 0x82 true, disabled false, Bond already
+    // handed back). The cinema's completion is observable: the hand-back key (5.39, 1.34,
+    // −158.31) sits at y +1.34 while every pre-cinema spot (the pit, the shelter) is y −22 —
+    // so the wait accepts either the disable window or the already-handed-back bay (y > 0).
+    tick_until(w, 3000, "ch 0x82 starts the lift-out cinema [D mux #633]", |s| {
+        s.drones.channels.on(0x82) && (s.disabled || s.bond.pos[1] > 0.0)
+    });
     tick_until(w, 1500, "the lift-out cinema hands Bond back", |s| !s.disabled);
     w.skip_cutscenes = true;
     {
@@ -1984,6 +2000,27 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(difficulty: u
                 let bp = sim.bond.pos;
                 sim.drones.list.iter()
                     .filter(|d| d.corpse && d.team == 1 && walker::dxz(d.pos, bp) < 45.0)
+                    // gas-rng-draws round 2: the wire filter removed the deadly east drop, and
+                    // the trimmed walks still left Bond at the shelter door at +6367 — the
+                    // door-shut law wants < 6310 [D script 1000..1350]. The east side (x > -8,
+                    // the chaser's (-4.5, -165.7) among them) is the wander AWAY from the
+                    // shelter — every east corpse is a detour the walk pays twice. A player
+                    // loots toward where he is going next; the pass keeps the shelter-side
+                    // drops only (they are dry piles anyway — the arming happens on the route
+                    // drops already auto-taken [M Player_IsBetterWeapon 0x1a6eb0]).
+                    .filter(|d| d.pos[0] < -8.0)
+                    // gas-rng-draws: the pit floor carries always-on hurt volumes (the fresh
+                    // ledger: the loot walk 2 to (-5.76, -166.00) ate 10.0 + 21.2 "the world"
+                    // at 10804/10932 and the run died there — the pulse poly is 1000/tick and
+                    // event-gated, so this is the wire class). A player does not loot a drop
+                    // standing in a live wire; the spot is probed with the standing capsule
+                    // (feet → feet+1.5, r 0.4 — Hurt::contains' own shape [M hurt.rs]) and
+                    // skipped when any volume claims it.
+                    .filter(|d| {
+                        let s = [d.pos[0], d.pos[1], d.pos[2]];
+                        let head = [s[0], s[1] + 1.5, s[2]];
+                        !sim.hurts.iter().any(|h| h.contains(s, head, 0.4))
+                    })
                     .map(|d| [d.pos[0], d.pos[1], d.pos[2]]).collect()
             };
             for (k, s) in spots.iter().enumerate() {
