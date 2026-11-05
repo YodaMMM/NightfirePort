@@ -15661,6 +15661,27 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     if mesh != 0 {
                         self.gas.init_ex(mesh, hit, 0.0, [0.0; 3], 2.0, 3.0, 5, [0x7f, 0x7f, 0x64, 0xff], 0, 8.0);
                     }
+                    // fx-scrape-and-impacts row 11 [M Effect_Laser 0x1cef38:110-120]: the second puff,
+                    // on `GameState & 1` — +0x52 is the LEVEL CODE word (`RB_Update`'s `& 0xf` gate maps
+                    // to the same register [M rigid_body.rs rb_update's doc]; bit 0 = the odd-numbered
+                    // levels). A white dust puff on the surface: pos = hit + (Rand_FRandHalf_Vec(0.1)
+                    // ⊙ HITDATA+0x20), +0x20 being `Effect_Create`'s stored orthonormal-basis sum
+                    // [M 0x1ce740] — the tangential spread — then Gas_Init(0.005, 0.1, cel, pos,
+                    // angles = the zero vector 0x2d6200 [L ACTION.ELF (0,0,0), nis.rs], 0, gfx
+                    // 0x2000039, kind 0, rgba 0xc8c8c87f → 0x20202006, life 0x15 = 21 ticks
+                    // [M disasm 0x1cf1ec `li v0,0x15` / 0x1cf228 `sw v0,0(sp)` — the decompiler drops
+                    // the 11th arg]). The three half draws run whenever the gate passes, regardless of
+                    // the burn-puff's EffectInfo mesh gate [M :110 sits outside :59's].
+                    if self.level_current & 1 != 0 {
+                        let jit = crate::effect::frand_half_vec(&mut self.rng, 0.1);
+                        let basis = crate::effect::orthonormal_basis_sum(n);
+                        let p = [
+                            hit[0] + jit[0] * basis[0],
+                            hit[1] + jit[1] * basis[1],
+                            hit[2] + jit[2] * basis[2],
+                        ];
+                        self.gas.init_ex_rot(crate::gas::SMOKE_QUAD, p, 0.0, [0.0; 3], 0.05, 0.1, 0, [0xc8, 0xc8, 0xc8, 0x7f], 0x2020_2006, 21.0, [0.0; 3]);
+                    }
                 } else if let Some(nd) = self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, hit, n, m, dir, flags70, bounces, true, if pierce { 0 } else { 8 }, host) {
                     ricochet = Some((hit, nd));
                 }
@@ -19343,7 +19364,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let mut rb_sounds = Vec::new();
                 self.rbodies.handle_collisions_one(&d.world, index, &mut rb_sounds);
                 for (id, pos) in rb_sounds { self.audio.play3d(id, pos, None); }
-                self.rbodies.tick_one(index, self.level_current & 0xf, &mut self.rng);
+                // fx-scrape-and-impacts row 7 [M RB_Update 0x1d6e38 disasm 0x1d6eb4-0x1d6f44]: the
+                // buoyancy arm's gas puff — `Gas_Init(0.5, 1.0, cel, obj+0xc0, NULL angles, 0,
+                // gfx 0x2000129, kind 1, rgba 0x40008080 → 0x80808008, life 16)` — the same gate and
+                // the same single `Rand_FRand(0.15)` draw as the impulse (which `tick_one` consumed).
+                if let Some(puff) = self.rbodies.tick_one(index, self.level_current & 0xf, &mut self.rng) {
+                    self.gas.init_ex(0x0200_0129, puff, 0.0, [0.0; 3], 0.5, 1.0, 1, [0x40, 0x00, 0x80, 0x80], 0x8080_8008, 16.0);
+                }
                 continue;
             }
             if what == 3 { let _pw = crate::prof::scope("ctl: kind 3");

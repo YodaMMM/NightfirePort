@@ -488,6 +488,14 @@ pub fn rb_apply_wind(rb: &mut RigidBody, st: &mut RbState, wind: [f32; 3], obj_p
 /// The lamp mover is the wind: `RB_ApplyWind` 0x1d7c78 lands the force AT A POINT for
 /// type != 0 (obj+0xc0 x, obj+0xc4 + rb+0x9c − rb+0x13c y, obj+0xc8 z) — torque, the only
 /// per-frame torque a freely hanging Rot body gets.
+///
+/// Returns `Some(obj+0xc0)` when the arm fired — the same gate also draws the game's gas puff
+/// [M 0x1d6e38 disasm 0x1d6eb4-0x1d6f44: `Gas_Init(0.5, 1.0, cel, obj+0xc0, NULL angles, 0,
+/// gfx 0x2000129, kind 1, rgba 0x40008080 → 0x80808008, life 0x10 = 16 ticks`
+/// — 0x1d6ee8 `li v0,0x10` + 0x1d6f30 `sw v0,0(sp)`, the decompiler-dropped 11th arg; ONE
+/// `Rand_FRand(0.15)` draw feeds both the impulse and (through the shared frame) the puff],
+/// `None` otherwise. fx-scrape-and-impacts row 7: the caller pushes the puff into the gas pool.
+#[allow(clippy::too_many_arguments)]
 pub fn rb_update(
     rb: &mut RigidBody,
     st: &mut RbState,
@@ -497,15 +505,18 @@ pub fn rb_update(
     wind: [f32; 3],    // the caller's `Env_GetWindVel(cel, obj+0xc0)` [M 0x1d7c78]
     obj_pos: [f32; 3], // obj+0xc0 (the wind's application point base)
     frand: impl FnOnce(f32) -> f32,
-) {
+) -> Option<[f32; 3]> {
+    let mut puff = None;
     if let Some((surface, top)) = buoy {
         if obj_y < surface && level_low_nibble != 0 {
             let f = (obj_y - top).abs() * rb.mass * 0.4 + frand(0.15);
             rb_add_impulsive_force(st, [0.0, f, 0.0]);
+            puff = Some(obj_pos);
         }
     }
     rb_apply_wind(rb, st, wind, obj_pos);
     rb_euler_evolve(rb, st, 0, crate::ssys::REC_FRAME_RATE);
+    puff
 }
 
 // ============================================================================
@@ -1224,8 +1235,10 @@ impl Rbodies {
 
     /// One body's `RB_Update` — the control walk's per-object call: each kind-0xD8 object runs
     /// its own update once per frame (the dispatch pair at 0x26f9c8 is per object [M]).
-    pub fn tick_one(&mut self, j: usize, level_low_nibble: u32, rng: &mut crate::drone::Rng) {
-        let Some(o) = self.list.get_mut(j) else { return };
+    /// Returns `Some(obj+0xc0)` when the buoyancy arm fired — the game's gas puff position
+    /// ([M 0x1d6e38 disasm], see `rb_update`) for the caller's gas pool.
+    pub fn tick_one(&mut self, j: usize, level_low_nibble: u32, rng: &mut crate::drone::Rng) -> Option<[f32; 3]> {
+        let Some(o) = self.list.get_mut(j) else { return None };
         // Env_GetWindVel(cel, obj+0xc0) [M 0x1d7c78] — obj+0xc0 is the object's world position;
         // the port's stand-in is the drawn translation (identical for the Rot census bodies,
         // which never translate [M EulerEvolve]) [S].
@@ -1236,8 +1249,9 @@ impl Rbodies {
         let obj_y = o.st.trans[1];
         let buoy = o.buoy;
         let obj_pos = o.st.trans;
-        crate::rigid_body::rb_update(&mut o.rb, &mut o.st, buoy, obj_y, level_low_nibble, wind, obj_pos, |m| rng.frand(m));
+        let puff = crate::rigid_body::rb_update(&mut o.rb, &mut o.st, buoy, obj_y, level_low_nibble, wind, obj_pos, |m| rng.frand(m));
         o.flags |= 0x20;
+        puff
     }
 
     /// `RB_CollisionHandler` 0x1d7a80 [M] per body; the sounds collect for the caller's pool.
