@@ -35,3 +35,13 @@ Task: land s/fx-muzzle-and-trail on current master — merge it, keep gas.rs hid
 fields on every literal, fix the tests the rebase breaks (RNG stream shift) without removing or
 reordering a draw, fix the stale drone.rs comment that says the muzzle draws never fire, run the
 full list and the full suite.
+
+## fx-muzzle-repin-2
+Started 2026-11-05 11:58 UTC. Branch s/fx-muzzle-repin-2 (continued from origin/s/fx-muzzle-repin, merging origin/master).
+Task: finish the muzzle re-pin — the -1 report's "Still red on the merged tree" list is the work:
+the walkreal 01/03 walk reds, fix_npc_doors, fix_pickups_trace, start_corridor_guard_07000011, the
+unrun walkreal 11/14/16 + npc_doors/fix_guard_misc + the full suite. Remove or reorder no draw;
+walks fight back or route around as an opt-in flag in the shared walker; run every binary on the
+list and report each result.
+Progress 2026-11-05 11:58 UTC: branch cut from origin/s/fx-muzzle-repin (its report read — the
+corrected-stream re-derivations are the standing doctrine), pushed. Master merge next.
