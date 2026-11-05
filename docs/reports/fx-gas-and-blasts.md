@@ -123,3 +123,14 @@ drives off it unchanged.
 ## Usage
 
 not visible to me — this sandbox exposes no token, context-window or cost figures.
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-05 ~04:20 UTC):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "…" https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20002 milliseconds`
+2. python urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "…" https://ntfy.sh/nightfire-yoda-8k3x` → killed after the timeout,
+   no output.
+
+`finish.sh` itself succeeded (`OK done 20-fx-gas-and-blasts`).
