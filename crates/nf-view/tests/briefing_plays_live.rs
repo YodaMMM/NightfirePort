@@ -94,7 +94,7 @@ fn walk_to_mission_select(fe: &mut FrontEnd, row: usize, name: &str) {
 
 /// One window redraw: the movie glue first, then the worst-case clock (up to 8 front-end ticks).
 fn redraw(fe: &mut FrontEnd, slot: &mut Option<nf_view::movie::Player>, iso: &str) {
-    nf_view::mission_movie_glue(fe, slot, iso, 1);
+    nf_view::mission_movie_glue(fe, slot, iso);
     for _ in 0..8 { fe.tick(); }
 }
 

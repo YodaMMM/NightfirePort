@@ -4414,10 +4414,8 @@ impl App {
             }
             if let Some(p) = self.movie.as_mut().filter(|p| p.code() == code) {
                 // One psiMovieFinished poll per page tick (60 Hz), not per redraw.
-                while fe.win_movie_polled != fe.flow.ticks {
-                    p.headless_advance_by(polls);
-                    fe.win_movie_polled = fe.win_movie_polled.wrapping_add(1);
-                }
+                p.headless_advance_by(fe.flow.ticks.wrapping_sub(fe.win_movie_polled));
+                fe.win_movie_polled = fe.flow.ticks;
                 ended |= p.finished();
             }
             if ended {
@@ -4425,7 +4423,7 @@ impl App {
                 fe.music.movie_finished();
                 fe.win_movie_finished();
             }
-        } else if mission_movie_glue(fe, &mut self.movie, &movie_iso, polls) {
+        } else if mission_movie_glue(fe, &mut self.movie, &movie_iso) {
         } else {
             // The page's aux loop [M 0x21c858:338]: stop when the page has no aux, (re)start when
             // the playing code differs from the page's.
@@ -7766,7 +7764,7 @@ pub fn movie_polls(clock: &mut f32, dt: f32) -> u32 {
     whole as u32
 }
 
-pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Player>, iso: &str, polls: u32) -> bool {
+pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Player>, iso: &str) -> bool {
     if fe.flow.get_state() == menu::ST_MOVIE {
         // psiStartBackgroundMovie replaces whatever the one BGFMV slot holds [M 0x1081a8] —
         // a looping page backdrop standing in the slot must yield to the state-6 movie
@@ -7786,10 +7784,8 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
                 // picture path and does not pace this decision (mission-outros-4).
                 // One player poll per flow tick (60 Hz), not per redraw: at 240 Hz the per-redraw poll
                 // ran the hold out in a quarter of the movie (the Double Cross outro cut out early).
-                while fe.flow.movie_polled < fe.flow.movie_clock {
-                    p.headless_advance_by(polls);
-                    fe.flow.movie_polled += 1;
-                }
+                p.headless_advance_by(fe.flow.movie_clock - fe.flow.movie_polled);
+                fe.flow.movie_polled = fe.flow.movie_clock;
                 fe.flow.movie_playing = !p.finished();
             }
             None => {
