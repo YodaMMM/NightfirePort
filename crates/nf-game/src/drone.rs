@@ -18926,10 +18926,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // `Collision::triangles_with_planes`), NOT the winding cross whose sign broke
                     // the measured pins on the e7f80cd6 wiring. The record plane fires 0a's low
                     // beam #621 standing (the segment bottom B = pos−0.485 stands 0.16 over the
-                    // band top 0.39, inside the 0.55 refine [D band 0.13-0.39]); keeps 011's
-                    // Bond-Moment plate #235 firing (a vertical wall quad the standing segment
-                    // plane-crosses degenerately → the centroid anchor [M 0x10a3f0-0x10a4fc]);
-                    // keeps the 0c ch-27 bay volume silent at the floor rest (the volume floor
+                    // band top 0.39, inside the 0.55 refine [D band 0.13-0.39]). The raw law is
+                    // SCOPED to the 0x645 beam glists (triggers.rs's [S] scope — the port's raw
+                    // model over-fired the 0x50 floor plates across 17 walk tests, so `seg_beam`
+                    // stays flags == 0x645 until the model matches the game's refine); 011's
+                    // Bond-Moment plate #235 (0x50) therefore rides the measured box below, not
+                    // the segment — the game routes its bit-0x40 glist through the centroid
+                    // anchor [M 0x10a3f0-0x10a4fc], the gap the raw model still has to close.
+                    // The 0c ch-27 bay volume silent at the floor rest (the volume floor
                     // 0.755 over pos is BEHIND the floor tri's record plane → the code-99 miss
                     // [M 0x1dfca8:58-68] — the old both-sided capsule fired it). The ride's
                     // class-5 truck contact (trigger-port-check #11) stays unported: the

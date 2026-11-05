@@ -605,7 +605,10 @@ impl Trigger {
             && (0..3).all(|k| c.b[k] >= self.lo[k] && c.b[k] <= self.hi[k]) {
             return true;
         }
-        // The strict law runs for the standing segment and for Bond on the beams; the box elsewhere, the crouch
+        // The strict law runs on the beams for the standing segment and for Bond ([S] scope — the
+        // game routes EVERY bit-0x40 glist through it [D 07000011 #235 = 0x50], but the port's raw
+        // model over-fired the 0x50 floor plates, so the scope waits on the model matching the
+        // game's refine); the box elsewhere, the crouch
         // body and the drones keep the both-sided capsule every measured pin stands on.
         if c.seg_only || (self.seg_beam && !c.drone && c.r > 0.0) {
             // trigger-hittest-segment: the game's own narrow phase for the capsule touchers
