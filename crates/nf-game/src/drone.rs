@@ -1537,7 +1537,11 @@ pub struct Drone {
     /// the drones by `Drones::tick` like `patrol_cooldown`; read by HeardNoiseTalk.
     pub saw_opp_last_frame: bool,
     /// Script footstep this tick (op 4 event 0 / 4 / 5) and sounds to stop (op 4 event 3, `Sound_StopAllWithId`).
-    pub footstep: bool,
+    /// The footstep events queue as the game's command sweep hits them (`AnimProcessScriptCmds` 0x1c1b38
+    /// iterates forward) and apply to `Drones::script_footstep_foot` in order at the tick's drain —
+    /// the game mutates the same global `ScriptFootstepFoot` at command time, before the consuming
+    /// `Effect_Create` [M 0x1c1b38:372-401 → 0x1befd8:185-208].
+    pub footstep_ops: Vec<u8>,
     pub anim_stops: Vec<u32>,
     /// Pickups this drone made this tick (`DroneWeap_DropWeapon`, `DroneFunc_DropGrenade`), collected by `Drones`.
     pub drops: Vec<crate::pickup::Pickup>,
@@ -2108,7 +2112,7 @@ impl Drone {
             // obj+0xFE bit 0 (delete-me; docs/fields/obj-tag.md:44) — see the field.
             delete_me: false,
             talk_script: 0, talk_cooldown: 0,
-            last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep: false, anim_stops: Vec::new(), drops: Vec::new(),
+            last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep_ops: Vec::new(), anim_stops: Vec::new(), drops: Vec::new(),
             free_root: false, bounded: true, dtype: param(15) as u8, mode_normal: param(16) as u8, mode_alert: param(21) as u8, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None,
             // `DroneFunc_NearPlayerCollision`'s source array:
             dist_to_player: [100000.0; 4],
@@ -3092,10 +3096,11 @@ impl Drone {
 
     /// `AnimProcessScriptCmds` for the playing script over frames (from, to] (from 0 = the start frame; `wrapped`: to the
     /// end and again from 1): op 1 `[frame, sfx]` → a sound at the drone; op 4 `[frame, event, arg]` → event 2 calls
-    /// `DroneAnim_EventFunc(arg)`; events 0 / 4 / 5 a footstep (toggle / left / right foot: `ScriptFootstepType` →
-    /// `AnimObjectUpdate` → `Effect_Create(floor hit, 0x42 | foot)`: the floor surface's footstep sound; footprints
-    /// not ported), event 3 `Sound_StopAllWithId(arg)` [M `AnimProcessScriptCmds` 0x1c1b38; the walk scripts carry
-    /// events 4 / 5, e.g. 0600025A frames 19 / 57].
+    /// `DroneAnim_EventFunc(arg)`; events 0 / 4 / 5 queue a footstep marker (toggle / foot 4 / foot 8 — the game's
+    /// `ScriptFootstepFoot` 0x30cde0 + `ScriptFootstepType` globals [M 0x1c1b38:372-401], consumed by
+    /// `AnimObjectUpdate` 0x1befd8:185-208 as the FULL `Effect_Create(floor hit, 0x42 | foot)`: the surface's footstep
+    /// sound AND the footprint decal — the drain below; fx-npc-footsteps), event 3 `Sound_StopAllWithId(arg)` [M
+    /// `AnimProcessScriptCmds` 0x1c1b38; the walk scripts carry events 4 / 5, e.g. 0600025A frames 19 / 57].
     /// (The game dispatches op 4 through the script's +0x70 OnEvent pointer, which `AnimScriptCallOnEvent` 0x1c71f8
     /// stores, and fires the +0x6c OnStop pointer from `AnimScriptDelete` 0x1c14f0 — stored by
     /// `AnimScriptCallOnStop` 0x1c7200. `DroneAnim_SetHTAnim` 0x13b1c8 clears the OLD script's OnStop and the new
@@ -3113,7 +3118,12 @@ impl Drone {
             match (c.op, c.args.as_slice()) {
                 (1, [f, sfx, ..]) if hit(*f as u32) => self.anim_sounds.push(*sfx as u32),
                 (4, [f, 2, arg, ..]) if hit(*f as u32) => events.push(*arg),
-                (4, [f, 0 | 4 | 5, ..]) if hit(*f as u32) => self.footstep = true,
+                // fx-npc-footsteps: the footstep markers queue their EVENT KIND (0 toggle / 4 foot 4 /
+                // 5 foot 8) — `AnimProcessScriptCmds` 0x1c1b38:372-401 mutates the global
+                // `ScriptFootstepFoot` (0x30cde0) at command time, and the same tick's consumption
+                // (`AnimObjectUpdate` 0x1befd8:185-208's `Effect_Create(…, foot|0x42)`) reads it back.
+                // The port applies the queue at the tick's drain, in command order.
+                (4, [f, ev @ (0 | 4 | 5), ..]) if hit(*f as u32) => self.footstep_ops.push(*ev as u8),
                 (4, [f, 3, id, ..]) if hit(*f as u32) => self.anim_stops.push(*id as u32),
                 _ => {}
             }
@@ -12799,6 +12809,15 @@ pub struct Drones {
     /// `Rand_Rand(10)` on every case-2 entry, the missile/gun pick reads `& 1`. One word shared
     /// by every copter, like the game's.
     pub copter_attackmode: u32,
+    /// `ScriptFootstepFoot` (ACTION.ELF 0x30cde0, `action-symtab.tsv` [M]): the foot ALTERNATOR
+    /// the anim-script footstep commands mutate (op 0 toggle,
+    /// op 4 → false = foot 4, op 5 → true = foot 8 [M AnimProcessScriptCmds 0x1c1b38:372-401])
+    /// and `AnimObjectUpdate`'s accumulator flips [M 0x1befd8:176]; `Effect_Player` reads it
+    /// through the `Effect_Create` flags' foot bit to pick the decal gfx and the foot-bone matrix
+    /// [M 0x1cec48:84-96]. ONE global shared by every animated object in the game — the port
+    /// mirrors that (the player's view-side `step_foot` alternator is its own, the pre-existing
+    /// stand-in).
+    pub script_footstep_foot: bool,
 }
 
 /// mp-world-sync (agent 9): one body as the online shared world sees it (see `Drones::net_bodies`).
@@ -12990,6 +13009,8 @@ impl Drones {
             swooshes: Vec::new(),
             // fix-death-restart: the death sequence + the fail-menu policy.
             letterbox: false, view_fade: None, view_fade_script: false, script_cam_prev: false, script_msgs: Vec::new(), text_flush: false,
+            // ScriptFootstepFoot 0x30cde0 [M]: the game's bss boot value 0 (foot 4 first).
+            script_footstep_foot: false,
             // subtitles-data: the fresh profile's Subtitles byte is Off [M profile.rs]; the host
             // wires the AV row (control 0x10000136) / profile flag into `subtitle_track.enabled`.
             subtitle_track: crate::subtitle::SubtitleTrack::new(false),
@@ -20292,11 +20313,68 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             // The animation's sounds (`Sound_Play3D` at the drone) enter the hearing list for the next tick.
             let (snd, at) = (std::mem::take(&mut dr.anim_sounds), dr.pos);
-            // The script's footstep: the floor under the drone (alertness 0: not heard by the drones).
-            if std::mem::take(&mut dr.footstep) {
+            // fx-npc-footsteps: the script's footstep — `AnimObjectUpdate` 0x1befd8:185-208's
+            // consumption of the +0x60&4 footstep flag: the drone's anim-script markers (op 4
+            // events 0 / 4 / 5, `AnimProcessScriptCmds` 0x1c1b38:372-401) raise it
+            // (`ScriptFootstepType` → `hitdata+0x60 |= 4` [M :185-188]) and the step is the FULL
+            // `Effect_Create(1.0, hitdata, obj, foot|0x42)` [M :201]. Flag 0x40 → the surface's
+            // footstep sound (`Effect_Player` 0x1cec48:59-70: `Sound_Play3D(100.0, -1.0, -1.0,
+            // EffectInfo[mat]+0x16, hitdata+0x40)` + `Sound_SetAlertness(0)` — alertness 0: not
+            // heard by the drones); flag 0x2 → the footprint decal: gfx `EffectInfo[mat]+8` on
+            // foot 4 / `+0xc` on foot 8 [M :84-89], x/z the foot bone's world translation
+            // (the hitdata+0xb8 palette, +0xdc0 = slot 55 on foot 4 / +0xcc0 = slot 51 on foot 8
+            // [M :89-96, :107-110]), y = the ground hit's y + 0.05 [M :118-124] behind the
+            // |foot_y − hit_y| ≤ 0.2 gate [M :114-116], aligned to the surface up and hosted on
+            // the hit's cel [M :125-136]. `Effect_Create` 0x1ce688:59 early-outs on a 0 material
+            // (nothing at all — no sound either). Suppressed ENTIRELY while `ScriptCam != 0`
+            // [M 0x1befd8:191-195] (the port's `scripts.camera()`). The foot is the game's ONE
+            // global `ScriptFootstepFoot` 0x30cde0 the markers mutate (op 0 toggle / op 4 → foot 4 /
+            // op 5 → foot 8 [M 0x1c1b38:372-401]); applied per marker here, in command order.
+            // The run arm (`Sound_Play3D(0x286)`, 0x1befd8:200-207) never fires for drones: it is
+            // gated on the accumulator block's `bVar1`, which only the `obj+0xff == 3` kind sets
+            // (the player, `Player_Init` 0x1910f8:76 / `MP_ReSpawn` 0x185368:83) [M :159-167].
+            // Port stand-ins ([S]): the ground hit is this tick's feet ray (`segment_surface_host`)
+            // — the game uses the STORED hitdata at obj+0xdc its collision handler keeps, which
+            // the port does not cache per drone; the decal's x/z bone matrix is the port's
+            // `palette()` (the upper-body-aim deviation does not reach the feet).
+            for op in std::mem::take(&mut dr.footstep_ops) {
+                match op {
+                    0 => self.script_footstep_foot = !self.script_footstep_foot,
+                    4 => self.script_footstep_foot = false,
+                    _ => self.script_footstep_foot = true,
+                }
+                // [M 0x1befd8:191-195] — under a script camera: no sound, no decal.
+                if self.scripts.camera().is_some() { continue; }
                 let feet = dr.feet();
-                if let (Some(s), Some((t, _, m))) = (d.surfaces, d.world.segment_surface([feet[0], feet[1] + 0.5, feet[2]], [feet[0], feet[1] - 1.0, feet[2]], true)) {
-                    if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.footstep, m) { self.audio.play3d(id, [feet[0], feet[1] + 0.5 - 1.5 * t, feet[2]], None); }
+                let Some((t, n, m, _pass, host)) = d.world.segment_surface_host([feet[0], feet[1] + 0.5, feet[2]], [feet[0], feet[1] - 1.0, feet[2]], true) else { continue };
+                // [M Effect_Create 0x1ce688:59 — `(hitdata+0x50 & 0x3f) != 0` or nothing at all.]
+                let Some(s) = d.surfaces else { continue };
+                if m & 0x3f == 0 { continue; }
+                // The sound arm (0x40): the surface's footstep id at the ground hit [M 0x1cec48:59-70];
+                // the position is the ray's [S] (above).
+                if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.footstep, m) {
+                    self.audio.play3d(id, [feet[0], feet[1] + 0.5 - 1.5 * t, feet[2]], None);
+                }
+                // The decal arm (0x2): `Effect_Player`'s footprint [M 0x1cec48:84-136].
+                if let Some(rec) = s.effects.get((m & 0x3f) as usize) {
+                    let foot8 = self.script_footstep_foot;
+                    let mesh = if foot8 { rec.foot_decal_8 } else { rec.foot_decal_4 };
+                    if mesh != 0 {
+                        // The foot bone's world translation: palette slot 55 (foot 4, +0xdc0) /
+                        // slot 51 (foot 8, +0xcc0) [M 0x1cec48:89-96]. One palette per footstep event.
+                        let bone = if foot8 { 51usize } else { 55usize };
+                        if let Some(bm) = dr.palette(d).and_then(|p| p.get(bone).copied()) {
+                            let gy = feet[1] + 0.5 - 1.5 * t;
+                            // [M 0x1cec48:114-116] — the foot must be at the ground (|Δy| ≤ 0.2),
+                            // else the game's node stays blank (no print).
+                            if (bm[3][1] - gy).abs() <= 0.2 {
+                                // [M :118-124] — y = the hit's y + 0.05; the shared decal path
+                                // (the player's prints ride it too; its align2dir [S] stands in
+                                // for `Mat_Align2Up`).
+                                self.effects.add_decal([bm[3][0], gy + 0.05, bm[3][2]], n, mesh, host);
+                            }
+                        }
+                    }
                 }
             }
             for id in std::mem::take(&mut dr.anim_stops) { self.audio.stop_all_with_id(id); }
@@ -21825,7 +21903,7 @@ mod tests {
             // obj+0xFE bit 0 (delete-me; docs/fields/obj-tag.md:44) — see the field.
             delete_me: false,
             talk_script: 0, talk_cooldown: 0,
-            last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep: false, anim_stops: Vec::new(), drops: Vec::new(),
+            last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep_ops: Vec::new(), anim_stops: Vec::new(), drops: Vec::new(),
             facial_talk: None, facial_talk_start: 0, facial_talk_fired: 0, facial_talk_pending: None, facial_played: Vec::new(), talk_line: None, talk_track: false, talk_track_until: 0, facial_last_stamp: None,
             free_root: false, bounded: true, dtype: 0, mode_normal: 0, mode_alert: 0, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None, alert_block: 0.0,
             door_open_at: 0,
