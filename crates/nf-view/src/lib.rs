@@ -3849,8 +3849,9 @@ impl App {
         // `bonus[]` global is ONE store that survives every map load (only `LS_LoadBonus` 0x1ce488
         // and the award path write it [M Menu_SetBonus 0x1ff898 callers]), so the kind-6 gate
         // [M 0x18dda0:93-95] reads the save's medals on every level. No profile → the fresh-boot
-        // zero word [L ee_start_05 0x2e1b88].
-        let bonus = self.fe.as_ref().map_or(0, |fe| fe.bonus_bits());
+        // zero word [L ee_start_05 0x2e1b88]. A part-to-part load runs with no front end up: the
+        // word comes from the stashed session.
+        let bonus = self.fe.as_ref().map_or_else(|| self.profile_session.bonus_bits(), |fe| fe.bonus_bits());
         let job = async_load::Job::spawn(move || {
             if let Some(st) = mp_settings {
                 load_mp_carry(&iso, &name, all, save.as_ref(), st)
@@ -8109,6 +8110,27 @@ mod headless_app_harness {
             }
             false
         }
+    }
+
+    /// The gold-medal bonus pickups ride every part of a mission: a part-to-part load runs with no
+    /// front end up, so the `bonus[0]` word must come from the stashed session [M the game's one
+    /// global, 0x18dda0:93-95]. The word read 0 on every such load and later parts lost them.
+    #[test]
+    fn a_part_change_keeps_the_gold_medal_bonus_pickups() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let bonus_pickups = |word: u64| {
+            let mut h = HeadlessApp::mission(&iso, "07000001.bin");
+            let mut progress = nf_game::progress::Progress::default();
+            progress.bonus[0] = word;
+            h.app.profile_session.session_progress = Some(progress);
+            h.frames(5);
+            h.app.scene.sim.as_mut().unwrap().drones.level_exit = Some(0x0700_0002);
+            assert!(h.pump(60.0, |a| a.async_load.is_none() && a.scene.sim.as_ref().is_some_and(|s| s.level == 0x0700_0002)),
+                "the part change never landed");
+            h.app.scene.sim.as_ref().unwrap().drones.pickups.iter().filter(|p| p.spin).count()
+        };
+        assert_eq!(bonus_pickups(u64::MAX), 3, "07000002 places three bonus pickups for a gold medal");
+        assert_eq!(bonus_pickups(0), 0, "no medal, no bonus pickups");
     }
 
     /// Menu sounds were missing entirely: run() built the sound driver and dropped it, so the
