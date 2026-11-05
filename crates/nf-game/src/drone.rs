@@ -2751,8 +2751,14 @@ impl Drone {
             // this node's object (the first crossing enters 0x82); otherwise the tail clears too
             // [M :119-121 and the :175 fall-through].
             match next {
-                Some(_) if next_kick => { self.kick_node = Some(node); }
-                _ => { self.kick_sp = None; self.door_bound = None; }
+                Some(_) if next_kick => {
+                    // [M 0x153358:129]: the kick bind overwrites the ONE +0xBA8 slot — any door
+                    // binding dies with it (the port's split stand-ins both go).
+                    self.kick_node = Some(node);
+                    self.door_bound = None;
+                    self.hit_door = None;
+                }
+                _ => { self.kick_sp = None; self.door_bound = None; self.hit_door = None; }
             }
             return false;
         }
@@ -7452,8 +7458,13 @@ impl Drone {
                         self.index, self.mode, self.alert, self.dist, self.sound_share, self.prop(d, 0x1f), self.start_script);
                 }
                 if matches!(self.mode, 9 | 0x12 | 0x13 | 0x16) {
-                    if self.alert > 0.7 {
+                    // AlertSound's pre-mode gates stand before the rows: dist > 50 → 0 [M 0x177800:43-45],
+                    // the 0x4000000 sighted bit → 0 [M :48-50]; the attack itself raises
+                    // 0x4000000|0x10000000 [M :69-73].
+                    if self.dist <= 50.0 && !self.sighted && self.alert > 0.7 {
                         if !self.investigating { self.resume_state = s; self.home = self.feet(); }
+                        self.sighted = true;
+                        self.alert_pending |= 0x1000_0000;
                         self.set_state(ATTACK);
                     }
                     true
@@ -7645,9 +7656,12 @@ impl Drone {
             (IDLE | ALERT | PATROL | ALERT_TO_POSITION | SEARCH_AREA | HEARD_NOISE_AWARE, msg::SOUND) => {
                 // Aware (0x16af20): a share above 0.1 → Suspect, else nothing.
                 if s == HEARD_NOISE_AWARE { if self.sound_share > 0.1 { self.set_state(HEARD_NOISE_SUSPECT) } return true; }
-                if matches!(s, ALERT_TO_POSITION | SEARCH_AREA) && self.sound_share > 0.2 {
-                    // AlertToPosition 0x165270 case 0x14 / SearchArea 0x165bf0: the sound-alert pending bit
-                    // (+0x4F8 0x10000000 with the 0x4000000 sighting flag) goes up with the forced attack.
+                if matches!(s, ALERT_TO_POSITION | SEARCH_AREA) && self.sound_share > 0.2 && !self.sighted {
+                    // AlertToPosition 0x165270 case 0x14 / SearchArea 0x165bf0: the forced attack needs
+                    // (+0x4F8 & 0x4000000) == 0 [M the `if` around the SetState(0x56)] and raises
+                    // 0x4000000|0x10000000 when it fires; a sighted guard falls through to EnemyAlerts
+                    // (AlertSound 0x177800:48-50 returns 0 with the bit standing).
+                    self.sighted = true;
                     self.alert_pending |= 0x1000_0000;
                     self.set_state(ATTACK);
                     return true;
@@ -18614,7 +18628,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // HandleSoundAlerts has no enabled or alive gate of its own [M 0x148a30:43-50]. Corpses
             // are kept out: their states drop msg 0x14 and their alertness has no reader.
             for dr in self.list.iter_mut().filter(|x| x.present && !x.corpse) {
-                if !dr.prop(d, 0x1f) || dr.deaf { continue; } // [M 0x148a30:43-44]
+                // The three deaf playscripts' ENTER tails raise +0x4F8 0x400000 [M 0x15ba68:73/:84],
+                // the same bit this gate reads — the window banks nothing [M 0x148a30:43-44].
+                if !dr.prop(d, 0x1f) || dr.deaf
+                    || matches!(dr.start_script, 0x6000_168 | 0x6000_169 | 0x6000_7ac) { continue; } // [M 0x148a30:43-44]
                 // 07000007 only: an unarmed drone hears nothing (`NDrone2_ObjectIsArmed` 0x178768 —
                 // weapon 2..0x46 or 0x6a..0x71 [M 0x148a30:46-50]).
                 if d.level == 0x0700_0007 && !matches!(dr.weapon, 2..=0x46 | 0x6a..=0x71) { continue; }
@@ -22902,5 +22919,68 @@ mod abseil_tests {
         dr.send(&d, &mut rng, 102, msg::SOUND);
         assert!(dr.log.iter().any(|&(f, n)| f == 102 && n == state::ATTACK),
             "the guard hears once the script ends: mode 9 at alert 1.0 → Attack [M 0x177800:51-68]; log {:?}", dr.log);
+    }
+
+    /// REGRESSION (regression-read-drone-ai): the sound-forced Attack out of AlertToPosition /
+    /// SearchArea needs `(+0x4F8 & 0x4000000) == 0` and raises `0x4000000 | 0x10000000` when it
+    /// fires [M DroneVision_AlertToPosition 0x165270 case 0x14 / SearchArea 0x165bf0 case 0x14 —
+    /// `if ((uVar3 & 0x4000000) == 0)` gates the SetState(0x56); the fall-through is
+    /// DroneVision_EnemyAlerts]. A guard who already sighted keeps SEARCHING on fresh sounds —
+    /// the port re-attacked on every share > 0.2 sound, so a searching guard could never lose
+    /// the player's last known position (harder to break contact than the game).
+    #[test]
+    fn search_area_sound_spares_a_sighted_guard_and_the_unsighted_attack_sets_the_bit() {
+        empty_data!(0x0700_0001, keep, d);
+        let mut rng = Rng::new(0x5eed);
+        // Sighted: the sound is ignored — no Attack, no transition at all.
+        let mut dr = drone_at([10.0, 0.0, 10.0]);
+        dr.state = state::SEARCH_AREA;
+        dr.sighted = true;
+        dr.sound_share = 0.5;
+        dr.send(&d, &mut rng, 100, msg::SOUND);
+        assert_eq!(dr.state, state::SEARCH_AREA,
+            "the 0x4000000 guard ignores the sound [M 0x165270/0x165bf0 case 0x14]");
+        // Sister: unsighted, the share > 0.2 sound forces the Attack and raises both bits.
+        let mut dr2 = drone_at([10.0, 0.0, 10.0]);
+        dr2.state = state::SEARCH_AREA;
+        dr2.sound_share = 0.5;
+        dr2.send(&d, &mut rng, 100, msg::SOUND);
+        assert!(dr2.log.iter().any(|&(f, n)| f == 100 && n == state::ATTACK),
+            "the unsighted forced attack [M 0x165270/0x165bf0 case 0x14]; log {:?}", dr2.log);
+        assert!(dr2.sighted, "the forced attack sets 0x4000000 [M 0x165270:14-16]");
+        assert!(dr2.alert_pending & 0x1000_0000 != 0, "the forced attack sets 0x10000000 [M 0x165270:16-17]");
+    }
+
+    /// REGRESSION (regression-read-drone-ai): AlertSound's pre-mode gates stand before the
+    /// scripted mode rows — dist > 50 returns 0 [M 0x177800:43-45] and the 0x4000000 sighted bit
+    /// returns 0 [M :48-50] — so a scripted guard far from the sound, or one that already
+    /// sighted, never snaps to Attack on it. The port's (PLAY_SCRIPT, msg::SOUND) mode-9 arm
+    /// fired on alert > 0.7 alone (the game sets 0x4000000|0x10000000 with the attack,
+    /// 0x177800:69-73).
+    #[test]
+    fn scripted_mode9_sound_respects_the_dist_and_sighted_gates() {
+        empty_data!(0x0700_0001, keep, d);
+        let mut rng = Rng::new(0x5eed);
+        // dist 60: beyond AlertSound's 50-unit earshot [M 0x177800:43-45].
+        let mut dr = drone_at([60.0, 0.0, 0.0]);
+        dr.mode = 9;
+        dr.alert = 1.0;
+        dr.state = state::PLAY_SCRIPT;
+        dr.start_script = 0x6000_05e6; // a non-deaf script: the mode rows are the live path
+        dr.dist = 60.0;
+        dr.send(&d, &mut rng, 100, msg::SOUND);
+        assert_eq!(dr.state, state::PLAY_SCRIPT,
+            "dist > 50: the scripted guard ignores the sound [M 0x177800:43-45]");
+        // Sighted at close range: the same silence [M 0x177800:48-50].
+        let mut dr2 = drone_at([10.0, 0.0, 10.0]);
+        dr2.mode = 9;
+        dr2.alert = 1.0;
+        dr2.state = state::PLAY_SCRIPT;
+        dr2.start_script = 0x6000_05e6;
+        dr2.dist = 10.0;
+        dr2.sighted = true;
+        dr2.send(&d, &mut rng, 100, msg::SOUND);
+        assert_eq!(dr2.state, state::PLAY_SCRIPT,
+            "the 0x4000000 bit deafens the scripted attack row [M 0x177800:48-50]");
     }
 }
