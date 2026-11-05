@@ -9,3 +9,7 @@ For each, say which draw moved what, then re-route or re-pin the test, keeping e
 
 ---
 claimed-by: sandbox7 at 2026-11-05T05:29Z
+
+---
+## Report (blocked, 2026-11-05T09:56Z)
+
