@@ -5481,7 +5481,22 @@ impl FrontEnd {
             if let Some(pg) = self.card.pending_page.take() {
                 if let Some(p) = Page::from_id(pg) {
                     self.enter_page(p);
-                    if p == Page::CnMenu { self.cursor = 1; } // the wheel opens on Controller Setup [L PCSX2 m30]
+                    if p == Page::CnMenu {
+                        self.cursor = 1; // the wheel opens on Controller Setup [L PCSX2 m30]
+                        // P_CNMENU 0x213288:38-40: the wheel's 0x4c, entered from the NAME entry
+                        // (param_6 == 0x40000020) with cheat_mode clear, sends Manager 0x44 →
+                        // 0x40000022 — after creating a codename the flow never rests on the
+                        // wheel. The card completion only enters CnMenu from `request_create`
+                        // (the profile-name save [M C_KEYBOARD 0x213a98:53-65]), whose from-page
+                        // IS the name entry and whose cheat grid cannot create, so the game's
+                        // gate (from 0x40000020 && !cheat) is structural here. The staging is
+                        // the Controls enter's own pair, the same one the wheel's row-1 arm
+                        // runs [M P_CNCONTROLS 0x213cd0 0x4c stages was_inverted].
+                        self.opts_saved = Some(self.opts.clone());
+                        self.av_screen_snapshot();
+                        self.enter_page(Page::CnControls);
+                        self.cursor = 0;
+                    }
                 }
             } else if self.page == Page::Results && self.outcome == Outcome::Complete {
                 self.results_route_on();
@@ -6104,7 +6119,12 @@ impl FrontEnd {
                 // 0x216b38:29-37 → 0x4000001b], on the Default row [M P_CNSELECT 0x212ad0:81, :94-95
                 // — opened from Main it sends 0x2e index 1].
                 (Action::Confirm, 2) => { self.delay_page(Page::CnSelect, 1); return true; }
-                (Action::Back, _) => { self.enter_page(Page::Start); self.cursor = 0; return true; }
+                // P_MAIN_Handler 0x20a7b0 has no Back arm at all — the page's 0x50 only takes
+                // the 45 s idle attract (0xa8c ticks → 0x40000035) and the row controls
+                // C_GONIGHTFIRE 0x2169b8 / C_GOMULTIPLAYER 0x216a78 / C_GOCODENAMES 0x216b38
+                // handle only the 0x4b select. The game's ○/Esc on Main is IGNORED — no title
+                // return, no start-movie replay (the old port route replayed P_ESTHERO).
+                (Action::Back, _) => { return true; }
                 _ => {}
             },
             Page::Codename => match a {
