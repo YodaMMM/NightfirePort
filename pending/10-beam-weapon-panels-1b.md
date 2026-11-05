@@ -1,0 +1,5 @@
+# beam-weapon-panels-1b — the start weapon breaks panels it should not
+
+Measured from (16.74,-1.84,4.62) on 0700001b at yaw -1.57, the start weapon (slot 51, the Beam): the real game held fire for 245 frames along the walkway and broke nothing, its meter rising to about 95; the port lost panels 49 and 50 on the first shot, tick 0. s/panel-mesh-wip adds the triangle stage to both sphere paths (held_hit_volumes, sp_bullet_targets). That is right per the rule [M Collide_Intersect 0x1ebaa8] but does not fix it, and walkreal_0700001b's Drake walks then fail at "console 1 latched". Start from that branch.
+
+Read the weapon's real fire path in the decompile: is it a bullet at all, does it fire on press or after the meter rises, what is its damage per tick, its class bits, and does its contact reach obj+0xD0 of an SP object? Compare each with the port, which treats it as an instant 20-damage round. Then find what the game's shot at a console does differently from a shot at a panel. Fix the difference. Keep solar_panel_hits_live: firing along the walkway breaks nothing. Run walkreal_0700001b_live and solar_panels_live and report both.
