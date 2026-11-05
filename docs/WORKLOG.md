@@ -88,3 +88,14 @@ wedge, 14 the corridor-door chain at (30.3,35.4), 16 the punch pin + defeat walk
 defeat), fix_finale's 16 shelter pulse (Bond died tick 6493 at (-14.50,-22.00,-170.18) before
 pulse 2's window), then every walkreal_*_live whole and the full suite via
 tools/test/chunk_suite.py. Sandbox expires ~05:16 UTC; stop-new-work 04:56 UTC.
+
+## gas-rng-draws-6
+Started 2026-11-05 13:24 UTC. Branch s/gas-rng-draws-6 cut from origin/s/gas-rng-draws-5
+(e4e50af06), merging origin/master next. Task: finish the gas RNG landing — read report-5, the
+03 and 14 walks still carry ledgers; land what is left and finish with a full suite pass
+(quoting the total line). Do not weaken a decompile-backed test to pass a walk. Sandbox
+expires ~15:22 UTC; stop-new-work 15:02 UTC.
+
+Work log:
+- (13:24) branch start, WORKLOG entry; reading report-5 for the named next steps, then the
+  master merge.
