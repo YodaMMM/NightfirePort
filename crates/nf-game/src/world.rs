@@ -458,6 +458,12 @@ pub struct CollisionWorld {
     /// Collision triangles (object space) of every hashed glist object, for `set_dynamic`.
     shapes: std::collections::HashMap<u32, Vec<[V3; 3]>>,
     shape_mats: std::collections::HashMap<u32, Vec<u8>>,
+    /// The objects' glist flags words (celglist+0x44 = the entity-params payload +4 [M
+    /// `parsemap_block_entity_params` 0x1d1508 — the runtime record's +0x44 dword]), keyed like
+    /// `shapes` (real hashcodes and the anonymous `(map, object)` synthetic keys). This is the
+    /// word `Control_SetGList` 0x134960:11 copies into `obj+0xF0` — the pick's gate word
+    /// (`Collide_PickObj` 0x1eae80's mask, the per-cel walk's 0x3000 pre-filter).
+    glist_flags: std::collections::HashMap<u32, u32>,
     /// The cel scope (`build_scoped`): when set, the actor queries (`capsule_push`, the floor ray,
     /// the take ray) test only the cels the game's straddle walk keeps — `Collide_StraddleCels`
     /// 0x1eac98 via `Intersect_Portal` 0x1ea7b8, cap 0x7e cels, the start cel always kept.
@@ -1056,7 +1062,9 @@ impl CollisionWorld {
         // lookup fails and bullets pass through). The synthetic key is 0x80000000 | (map << 16) | object [S].
         let mut shapes: HashMap<u32, Vec<[V3; 3]>> = HashMap::new();
         let mut shape_mats: HashMap<u32, Vec<u8>> = HashMap::new();
+        let mut glist_flags: HashMap<u32, u32> = HashMap::new();
         for (&h, &(m, o)) in &level.by_hash {
+            glist_flags.insert(h, level.maps[m].objects[o].flags);
             if let Some(c) = level.maps[m].objects[o].collision.as_ref() {
                 shapes.insert(h, c.triangles());
                 shape_mats.insert(h, c.triangles_with_material().into_iter().map(|t| t.1).collect());
@@ -1066,8 +1074,9 @@ impl CollisionWorld {
         for (m, map) in level.maps.iter().enumerate() {
             for (o, obj) in map.objects.iter().enumerate() {
                 if obj.hashcode == u32::MAX {
+                    let key = 0x8000_0000 | ((m as u32) << 16) | o as u32;
+                    glist_flags.insert(key, obj.flags);
                     if let Some(c) = obj.collision.as_ref() {
-                        let key = 0x8000_0000 | ((m as u32) << 16) | o as u32;
                         shapes.insert(key, c.triangles());
                         shape_mats.insert(key, c.triangles_with_material().into_iter().map(|t| t.1).collect());
                     }
@@ -1089,8 +1098,12 @@ impl CollisionWorld {
             }
             ScopeData { graph, cells, always }
         });
-        CollisionWorld { stat, missile, dynamic: Default::default(), shapes, shape_mats, scope, aim_pick: stat_aim_pick }
+        CollisionWorld { stat, missile, dynamic: Default::default(), shapes, shape_mats, glist_flags, scope, aim_pick: stat_aim_pick }
     }
+
+    /// The glist flags word (celglist+0x44) of the object a hash resolves to — the port's
+    /// `obj+0xF0` source [M 0x1d1508 / 0x134960:11]. `None`: the hash is not a level object.
+    pub fn glist_flags(&self, hash: u32) -> Option<u32> { self.glist_flags.get(&hash).copied() }
 
     /// Re-keys the cel-scope buckets by an explicit per-instance attribution — the collision side
     /// of the game's per-cel attribution (`build_link_objects_to_rooms` 0x1c9150 hangs every
@@ -1227,7 +1240,7 @@ impl CollisionWorld {
     pub fn from_triangles(tris: Vec<[V3; 3]>) -> CollisionWorld {
         let mut stat = Geo::default();
         stat.push(tris.into_iter().map(|t| (t, 0)));
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), scope: None, aim_pick: Vec::new() }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new() }
     }
 
     /// One object holding these world-space triangles with surface bytes and per-triangle
@@ -1237,7 +1250,7 @@ impl CollisionWorld {
         let pass = tris.iter().map(|(_, _, p)| *p).collect::<Vec<_>>();
         stat.push_flags(tris.into_iter().map(|(t, m, _)| (t, m)), false);
         for (k, p) in pass.into_iter().enumerate() { stat.pass[k] = p; }
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), scope: None, aim_pick: Vec::new() }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new() }
     }
 
     /// Glist object `hash`'s collision triangles in object space.
@@ -2811,7 +2824,7 @@ mod tests {
         let n = tris.len();
         let stat = Geo { mats: vec![0; n], tris, objects: vec![Object { lo: [-10.0; 3], hi: [10.0; 3], tris: 0..n }], groups: Vec::new(), owners: Vec::new(), grid: None,
             pass: vec![false; n] };
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), scope: None, aim_pick: Vec::new() }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new() }
     }
 
     /// fix-safe08b: the straddle walk. A wall assigned to an exterior cell with NO portal from the
