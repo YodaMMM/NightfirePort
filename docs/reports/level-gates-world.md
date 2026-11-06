@@ -90,3 +90,10 @@ Subagent token figures as shown in their results (where: each research agent's f
 - misc-systems agent: prompt 137924, completion 7081, total 145006
 
 My own session's token/context/cost figures: not visible to me.
+
+## ntfy failed
+
+All three fallbacks failed (same as previous sessions in this sandbox):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-gates-world: done" https://ntfy.sh/nightfire-yoda-8k3x` → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request ..."` → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "level-gates-world: done" https://ntfy.sh/nightfire-yoda-8k3x` → hung past 30 s, produced no output (killed by timeout, empty response)
