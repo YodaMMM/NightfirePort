@@ -297,3 +297,16 @@ Task: fix the missile countdown (SpaceMissile_Update state 0 loads 0x30d0dc = RE
 
 Progress log:
 - Branch cut from origin/s/aim-route-3 (f49ded65a); origin/master already an ancestor, merge a no-op. Pushed.
+
+Progress log (aim-route-4 continued):
+- The countdown fix shipped (085b88ca7): COUNTDOWN_STEP = REC_FRAME_RATE 1/60 [M 0x1aa1f0-0x1aa208
+  disassembled], the p3 seeds are seconds — and the seed map CORRECTED to 105/105/40/20/0/60/105/60
+  by index [D placement re-dump; the old list was mis-ordered against p4].
+- ch 19 pinned as the AND[193,194] mux's out (the mux writes it every tick — the raw ch-19 poke
+  in PCSX2 held one tick, hence "started nothing in 118 s"); the drive tests hold the mux's inputs.
+- The drakes walks re-ordered onto the true deadlines [5,4,3,6,8,7,1,2] (k5 +1799 … k1/k2/k7 +9599)
+  with a 12000-tick phase cap: MEASURED — all eight latched early (k5 3993 −553 … k2 10803 −1542),
+  MissileDeploy all-2 — the gate that killed the last three windows PASSED without the clip levers.
+- interactables 9/9, drake_fight 3/3, space_laser 4/4, nf-game space_missile 6/6;
+  walkreal_0700001b 15/2/2 — the two drakes walks now red LATER: Drake's fight (run 1) and the
+  real-health console starvation on 7/1/2 (run 2). Report: docs/reports/aim-route-4.md.
