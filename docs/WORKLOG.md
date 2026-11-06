@@ -116,3 +116,9 @@ Work log:
   no regression), walkreal_1b 15/2+2i (Drake hp 60 after 9000 fight ticks from the hold spot —
   the shots don't land on the merged stream; the report names the re-derivation).
 - (14:52) the report; the full suite did not fit (chunk_suite ~3 h vs the ~2 h window).
+
+## gas-rng-draws-7
+Started 2026-11-06 02:56 UTC. Branch s/gas-rng-draws-7 (cut from origin/s/gas-rng-draws-6 6bd978d11). Task: finish
+landing the gas draws — merge master first (the voice draws landed since), keep every draw, fix 1b's Drake fight
+(both walk_arrival_to_drakes_defeat and its real-health sister: Drake hp 60.0 after 9000 fight ticks from the hold
+spot [L draws-6]), then run every walkreal binary and report each.
