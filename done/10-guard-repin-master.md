@@ -15,3 +15,8 @@ Finish with the five binaries whole plus walkreal 01, 16, 1b and enemy_accuracy_
 
 ---
 claimed-by: sandbox4 at 2026-11-06T09:59Z
+
+---
+## Report (done, 2026-11-06T10:41Z)
+
+Closed by the driver: the report is on `s/guard-repin-master` (docs/reports/guard-repin-master.md); the worker didn't run finish.sh.
