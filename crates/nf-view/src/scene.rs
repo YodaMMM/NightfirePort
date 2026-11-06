@@ -3204,7 +3204,7 @@ impl Sim {
                     // 0x12e74c]. The port has no claw bolt; the bolt dies at the point it latches.
                     self.drones.audio.play3d(GRAPPLE_LATCH_SFX, point, None);
                     self.bond.grapple = Some(nf_game::gadget::GrappleState { point, phase: 1, pull: 0.0 });
-                    self.bond.substate = nf_game::player::SS_GRAPPLE;
+                    self.bond.change_substate(nf_game::player::SS_GRAPPLE);
                     self.bond.vel = [0.0; 3];
                     trigger = false;
                 }
@@ -3472,6 +3472,13 @@ impl Sim {
             // pool (`Player_HandleJump` 0x1916b0:184,195-198 via `Bond::sfx_out`).
             for (id, pos) in self.bond.sfx_out.drain(..) {
                 self.drones.audio.play3d(id, pos, None);
+            }
+            // `Player_ChangeSubState` 0x190630:83-85 — the hardcoded loop-stop trio the change
+            // into [1..3]∪[5..0x10] runs (the Bond outbox; the game's own id-keyed stop
+            // `Sound_StopAllWithId` 0x1de0c8). A live Laser/Stunner beam loop (0x12/0x3d) dies at
+            // the climb/wire/swim entry exactly where the game silences it.
+            for id in self.bond.substate_stops.drain(..) {
+                self.drones.audio.stop_all_with_id(id);
             }
             // `obj+0x40 ← obj+0x30` — the moved pass's copy AFTER the cel change [M 0x1336f8:212].
             self.bond.prev_pos = prev_tick_pos;
@@ -3798,7 +3805,7 @@ impl Sim {
                         self.bond.cam_mode = 2;
                     } else {
                         self.bond.cam_mode = 0;
-                        self.bond.substate = nf_game::player::SS_WALK;
+                        self.bond.change_substate(nf_game::player::SS_WALK);
                         // door-scan-skip-bit-2: this arm's game chain ends in
                         // `Player_ChangeSubState(player, 0)` [M 0x195fc8:11-16], whose body clears
                         // `obj+0xF0` bit 0x10 [M 0x190630:35-40] — the hand-back re-shows Bond to
@@ -5271,6 +5278,12 @@ impl Sim {
                         // the 0x3b family (the record's +0x02 base, in scope as `base`).
                         burn: if base == 0x3b { 100 } else { 0 },
                         defused: false,
+                        // sound-sweep-leftovers `Bullet_init` 0x12c5a0:286-290: the +2 == 0x45
+                        // record — Oddjob's hat ([L SFXOutputData 0x5ef: looped, weight 0]; the
+                        // record's own +0x60 fire id 0x5ef is the one FireWeapon SKIPS) — plays
+                        // the LOOPED 0x5ef at the spawn; the handle lands at BU+0xF0 and
+                        // `Bullet_Delete` 0x12e660:13-16 stops it (Drones::tick's retain arm).
+                        loop_handle: if base == 0x45 { self.drones.audio.play3d(0x5ef, origin, None) } else { 0 },
                     });
                 } else {
                     // The muzzle light runs on every shot tick for the light-gated records — the
@@ -14085,7 +14098,7 @@ impl Sim {
                     let (head, dir) = (b.head(), b.look());
                     if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, r[slot].held)) {
                         b.grapple = Some(nf_game::gadget::GrappleState { point, phase: 1, pull: 0.0 });
-                        b.substate = nf_game::player::SS_GRAPPLE;
+                        b.change_substate(nf_game::player::SS_GRAPPLE);
                         b.vel = [0.0; 3];
                         trigger = false;
                     }
@@ -14099,8 +14112,10 @@ impl Sim {
                 bot_capsules: &[], // the remotes are bodies, not bots — no actor-actor push.
             };
             b.tick_ctx(&self.world, &ctx, &input);
-            // mp-remote-fx: the body's jump launch / head bump sounds play at the flush.
+            // mp-remote-fx: the body's jump launch / head bump sounds play at the flush; the
+            // `Player_ChangeSubState` 0x190630:83-85 loop-stop trio drains into the same flush.
             self.mp_fx.body_sounds.extend(b.sfx_out.drain(..));
+            for id in b.substate_stops.drain(..) { self.drones.audio.stop_all_with_id(id); }
             b.prev_pos = prev_tick_pos;
             self.mp_body_speed[slot] = ((b.pos[0] - before[0]).powi(2) + (b.pos[2] - before[2]).powi(2)).sqrt() * 60.0;
         }
