@@ -423,7 +423,9 @@ fn the_server_room_window_breaks_on_the_gunshot() {
         phase: None,
     burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
     defused: false,
-    });
+    
+    loop_handle: 0,
+});
     w.wait(240); // the grenade's fuse + the blast tick
     let dead = w.scene.sim.as_ref().unwrap().drones.breaks.list[bi].dead;
     assert!(dead, "the grenade blast kills the ServerRoomWindow pane [M Explode_Propagate case 0x20 → Break_ApplyDamage 0x17c518:163-167; D placement params [2, 0, 0x20]]");

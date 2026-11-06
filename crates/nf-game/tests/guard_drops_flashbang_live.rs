@@ -253,7 +253,9 @@ fn flashbang_stuns_three_guards_and_never_kills() {
         phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
         defused: false,
-    });
+    
+        loop_handle: 0,
+});
 
     // Bond far from the blast so his own flash does not matter to the guards' assertions.
     let p = bond_at([blast[0] + 60.0, blast[1], blast[2]]);
@@ -329,7 +331,9 @@ fn frag_at_the_same_spot_kills_the_trio() {
         stuck: false, seek_target: None, phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
         defused: false,
-    });
+    
+        loop_handle: 0,
+});
     let p = bond_at([blast[0] + 60.0, blast[1], blast[2]]);
     for _ in 0..320u32 { sim.tick(&d, &p); }
     for (k, pl) in trio.iter().enumerate() {
@@ -386,7 +390,9 @@ fn frag_at_the_waitswitch_trio_takes_nothing() {
         stuck: false, seek_target: None, phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
         defused: false,
-    });
+    
+        loop_handle: 0,
+});
     let p = bond_at([blast[0] + 60.0, blast[1], blast[2]]);
     for _ in 0..320u32 { sim.tick(&d, &p); }
     for (k, pl) in trio.iter().enumerate() {
@@ -425,7 +431,9 @@ fn flash_at_the_waitswitch_trio_does_nothing() {
         stuck: false, seek_target: None, phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
         defused: false,
-    });
+    
+        loop_handle: 0,
+});
     let p = bond_at([blast[0] + 60.0, blast[1], blast[2]]);
     for _ in 0..320u32 {
         sim.tick(&d, &p);
@@ -470,7 +478,9 @@ fn a_flashed_guard_killed_after_drops_nothing_more() {
         stuck: false, seek_target: None, phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
         defused: false,
-    });
+    
+        loop_handle: 0,
+});
     let p = bond_at([blast[0] + 60.0, blast[1], blast[2]]);
     let mut flashed = false;
     for _f in 1..=260u32 {
@@ -498,7 +508,9 @@ fn a_flashed_guard_killed_after_drops_nothing_more() {
         stuck: false, seek_target: None, phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
         defused: false,
-    });
+    
+        loop_handle: 0,
+});
     for _ in 0..320u32 { sim.tick(&d, &p); }
     assert!(matches!(sim.list[gi].state, state::DEATH_ANIM | state::DEAD | state::FADE | state::FADE_FAST),
         "the frag killed the stunned guard, state {:#x}", sim.list[gi].state);
