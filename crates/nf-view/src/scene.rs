@@ -3454,6 +3454,9 @@ impl Sim {
             // first-person case as mode 0 [M 0x18f5d8:96-97], so the carried pose IS the view.
             if !self.drones.death.active && !net_dead && !self.drones.props.gunimps.iter().any(|g| g.active) {
                 self.bond.jump_locked = self.level == 0x0700_0007 && !self.drones.channels.on(0x48);
+                // Player_Move 0x191dd0:139-141: the same gate scales the move multiplier by 0.9
+                // (Bond walks 10% slower while the party lock is on) — latched beside jump_locked.
+                self.bond.move_locked = self.bond.jump_locked;
                 { let _pphase = nf_game::prof::scope("phase: player move");
                 self.bond.tick_ctx(&self.world, &ctx, &input); }
             }

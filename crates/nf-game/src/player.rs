@@ -469,6 +469,12 @@ pub struct Bond {
     /// The Sim sets `jump_locked` each tick; `jump_refused` asks it to play 0x1db.
     pub jump_locked: bool,
     pub jump_refused: bool,
+    /// 07000007 before channel 0x48: `Player_Move` scales its multiplier by 0.9 — Bond walks
+    /// 10% slower while the party lock is on [M Player_Move 0x191dd0:139-141: `param_1 *= 0.9`
+    /// after the ±0.1 smoother clamps, so both stored lanes (+0x10 forward, +0x18 strafe) shrink
+    /// and the BL+0x20/+0x28 smoother states stay unscaled]. The Sim sets it each tick beside
+    /// `jump_locked`; the scale lands where the port multiplies the eased lanes (`k`).
+    pub move_locked: bool,
     /// `physics_tick` sets it while the game's void-fall arm would run: airborne (the BL+0x940
     /// grounded history 0) and obj+0x34 (position y) below −10.0 [M Player_CollisionHandler
     /// 0x1949a8:97-108 — disasm 0x194b64/0x194c14-0x194c3c]. NOT gated on damage or velocity
@@ -590,6 +596,7 @@ impl Bond {
             sfx_out: Vec::new(),
             jump_locked: false,
             jump_refused: false,
+            move_locked: false,
             void_fall: false,
             land_step: false,
             land_countdown: 0,
@@ -1644,6 +1651,11 @@ impl Bond {
         // Case 3 calls `Player_Move(1.0, …)` [M 0x193600:181-182] — the swim multiplier is ALWAYS 1.0
         // (the 0.75 is `Player_SSCrouch`'s own call argument 0x1924c0:58, not a crouched flag read).
         let k = if swimming { 1.0 } else if self.crouched { 0.75 } else { 1.0 };
+        // `Player_Move` 0x191dd0:139-141 — the party lock multiplies the call's own multiplier by
+        // 0.9 before the store-time scaling; the game clamps the smoothers to ±0.1 FIRST, so the
+        // port scaling `k` here (the lanes multiply by `k` at their stores, and `self.local`
+        // divides it back out) keeps the smoother states unscaled exactly like the game's.
+        let k = if self.move_locked { k * 0.9 } else { k };
         // `Player_Move`: aim mode zeroes forward (and the pad's turn action, which the caller leaves out of `turn`:
         // with a mouse the view turns past the aim box's edge, D-002).
         let (fwd, turn) = if input.aiming { (0.0, input.turn) } else { (input.forward.clamp(-1.0, 1.0), input.turn) };
@@ -2828,6 +2840,37 @@ mod tests {
         for _ in 0..240 { b2.tick_ctx(&world_floor, &ctx, &Input::default()); }
         assert!(b2.grounded && b2.grounded_history != 0 && !b2.void_fall,
             "grounded must clear the void arm: y {} gh {} flag {}", b2.pos[1], b2.grounded_history, b2.void_fall);
+    }
+
+    /// level-gates-player: `Player_Move` 0x191dd0:139-141's party walk lock — on 0x07000007 with
+    /// switch channel 0x48 off the move multiplier scales by 0.9, so Bond walks 10% slower
+    /// (`param_1 *= 0.9` after the ±0.1 smoother clamps; both stored lanes shrink, the smoother
+    /// states stay unscaled — the port divides them back out at `self.local`). The Sim latches
+    /// `move_locked` beside `jump_locked` (scene.rs). Red on the pre-fix port: the field did not
+    /// exist and `k` carried only the swim/crouch multipliers — the locked and free runs were
+    /// identical (ratio 1.0).
+    #[test]
+    fn the_party_walk_lock_scales_the_move_by_0_9() {
+        let ctx = LadderCtx::default();
+        let world_floor = CollisionWorld::from_triangles(vec![
+            [[-50.0, -20.0, -50.0], [50.0, -20.0, 50.0], [50.0, -20.0, -50.0]],
+            [[-50.0, -20.0, -50.0], [-50.0, -20.0, 50.0], [50.0, -20.0, 50.0]],
+        ]);
+        let run = |locked: bool| {
+            let mut b = Bond::new([0.0, -20.0, 0.0], 0.0);
+            b.move_locked = locked;
+            for _ in 0..30 { b.tick_ctx(&world_floor, &ctx, &Input::default()); } // settle onto the floor
+            for _ in 0..120 { b.tick_ctx(&world_floor, &ctx, &Input { forward: 1.0, ..Default::default() }); }
+            (b.pos[0] * b.pos[0] + b.pos[2] * b.pos[2]).sqrt() // forward rides +z at yaw 0
+        };
+        let free = run(false);
+        let locked = run(true);
+        assert!(free > 1.0, "the free run must actually walk: {}", free);
+        let ratio = locked / free;
+        assert!((ratio - 0.9).abs() < 0.01, "the locked walk must be ×0.9 of the free walk: {locked} / {free} = {ratio}");
+        // Sister: the lock only rides the flag — the same run with the latch off is the free run
+        // (the old port's shape, ratio 1.0 by construction).
+        assert!((run(false) - free).abs() < 1e-4, "the free run is reproducible");
     }
 
     /// ladder-mesh-refine: the straddled-cel scoping [M `Collide_Pick` 0x1eb320:125-134 admits a
