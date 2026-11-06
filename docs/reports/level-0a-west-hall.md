@@ -107,3 +107,14 @@ game's walk-speed slide mechanism before its tick pin can be met.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-06 ~19:36 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-0a-west-hall: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`, exit 28.
+2. python3 urllib (fallback 2) → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`, exit 1.
+3. `wget -q -O- --post-data "level-0a-west-hall: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → killed at the 30 s tool timeout with no output (same unreachable network).
+
