@@ -3095,6 +3095,15 @@ impl Sim {
             // and restores the remembered TWIN verbatim (line 113); the cycle walk carries the twin
             // step (0x1a6f80:179-198) — `cycle` takes &mut self for the marker clear.
             let base_of = |w: u8| weapons.base(w as usize) as u8;
+            // The party lock's mode-2 change (weapon-change-refused): `Player_Weapon`
+            // 0x1a24c8:265-275 reads the same cycle actions into `Player_WeaponChange(±1, 2)`
+            // while 07000007's ch 0x48 holds — the only mode-2 call sites. Computed before the
+            // chain so the GetBestWeapon tail below can skip a handled press (the game's mode 2
+            // always resolves: the [0,2) walk lands on the fists — it never falls to
+            // `Player_WeaponNone`'s best-weapon scan).
+            let party_cycle = idle && input.weapon_cycle != 0
+                && self.level == nf_game::player::WEAPON_LOCK_LEVEL
+                && !self.drones.channels.on(nf_game::player::WEAPON_LOCK_CHANNEL);
             let target = if let Some(id) = input.switch_to {
                 // The owned read is the BASE's slot: the twins share it (`BL+0x1BA + base·0xC`,
                 // `Player_EquipWeapon` 0x1a8a58:39-41 — a variant owns nothing of its own; the
@@ -3103,6 +3112,17 @@ impl Sim {
                 // owned[0x32] and the draw never started (fire_modes3's samurai leg).
                 if id != self.gun.weapon && owned.get(base_of(id) as usize).copied().unwrap_or(false)
                     && weapons.first_person(id as usize) != 0 { Some(id) } else { None }
+            } else if party_cycle {
+                // The mode-2 change is bounded to [0,2) [M 0x1a6f80:124-126, disasm
+                // 001a71ec-001a71f0], so from the fists (id 1, the lock's only weapon
+                // [M Player_InitWeapon 0x1a7ef8:184 `anim[0x63] = 1`]) it re-picks the fists —
+                // the weapon stays — and the held==1 arm plays the refused click
+                // `Sound_Play(100.0, 0x1db, 0, 0)` [M 0x1a6f80:127-129, disasm 001a7200-001a7214].
+                // The held ∉ [1,0x48) arm is unreachable under the lock (the direct selection is
+                // refused); the game's cycle would pull it back to the fists (the [0,2) walk's
+                // only landable id), so request that — no click, matching the held==1 gate
+                // [M 0x1a6f80:134-137,162-198].
+                if self.gun.weapon == 1 { self.drones.audio.play(0x1db); None } else { Some(1u8) }
             } else if idle && input.weapon_cycle != 0 {
                 let t = self.gun.toggle_back(nf_game::gun::CycleMode::Weapons, &owned, has_ammo, selectable, base_of);
                 t.or_else(|| self.gun.cycle(input.weapon_cycle, nf_game::gun::CycleMode::Weapons, &owned, has_ammo, selectable))
@@ -3120,7 +3140,7 @@ impl Sim {
                 if std::env::var_os("NF_SOUNDLOG").is_some() {
                     eprintln!("[weapon-switch] tick {}: requesting switch from {:#x} to {:#x}", self.drones.frame, self.gun.weapon, id);
                 }
-            } else if idle && (input.weapon_cycle != 0 || input.gadget_cycle != 0) {
+            } else if idle && !party_cycle && (input.weapon_cycle != 0 || input.gadget_cycle != 0) {
                 // The cycle found nothing: go to hands, then try GetBestWeapon [M Player_WeaponNone + Player_GetBestWeapon].
                 const BEST_WEAPON: [u16; 18] = [0x42, 0x32, 0x1a, 0x18, 0x1c, 0x16, 0x15, 0x08, 0x10, 0x0e, 0x0d, 0x0c, 0x12, 0x06, 0x04, 0x02, 0x0a, 0x01];
                 self.gun.go_to_hands();
