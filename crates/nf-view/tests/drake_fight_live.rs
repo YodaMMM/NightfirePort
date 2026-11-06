@@ -74,42 +74,48 @@ fn the_missile_launch_sequence_reaches_each_phase_and_disarms() {
         // The launch order (AND #202's output; the test drives it — see the module doc).
         sim.drones.channels.set(19, 1, sim.drones.frame);
     }
-    // Phase 1 — state 0 arms on the first gated tick (every p3 seed 0..105 < the 512.0 step).
-    for _ in 0..3 { step_alive(scene.sim.as_mut().unwrap()); }
-    {
-        let sim = scene.sim.as_ref().unwrap();
-        assert!(sim.drones.missile_deploy.iter().all(|&b| b == 1),
-            "state 0 → MissileDeploy[k] = 1 for all eight [M 0x1aa210-238], got {:?}", sim.drones.missile_deploy);
-        assert!(sim.drones.space_missiles.iter().all(|m| m.state == 1), "every missile is in state 1 [M 0x1aa21c]");
-    }
-    // Phase 2 — the p0 scripts' gate writes at t359 [D]; missile 4 wrote ch 192 at its t1 [D].
-    for _ in 0..370 { step_alive(scene.sim.as_mut().unwrap()); }
-    {
-        let sim = scene.sim.as_ref().unwrap();
-        for g in [31u32, 32, 33, 35, 36, 37, 38] {
-            assert!(sim.drones.channels.on(g), "the p0 script's t359 gate write ch {g} [D]");
-        }
-        assert!(sim.drones.channels.on(192), "missile 4's 06000a30 writes ch 192 at t1 [D]");
-    }
-    // The console chain: the port's SPs #213–220 play on gates 31..38, the console scripts write
-    // ch 1..8 at their t682 [D] (gate 34's ch 34 rise — SP #216 — is disc-positive in the port).
+    // (The old phase-1 "all eight armed in state 1" pin is gone: on the disc clocks the early
+    // missiles' state-2 reads (+1800..+6000) pass while the late seeds (105 s) still count, and
+    // every missile's branch depends on ITS console's latch — the merged loop below shoots the
+    // held UIs from the first gate and pins the outcome as all-disarm instead.)
+    // Phase 2+the console chain MERGED: the gates stagger (armed+359 each) and each missile's
+    // state-2 read follows at armed+P0_LEN−1 [M 0x1aa25c] — on the disc clocks console k must
+    // latch inside ITS OWN window (m5's read at +1800, m4's at +3000, m3's at +4200, m6/m8's at
+    // +6000), so the drive shoots the held UI scripts from the FIRST gate on. The fast
+    // countdown let the old shape wait for all eight gates (+359) before the first shot; the
+    // disc does not. The all-armed MissileDeploy==1 pin of the old phase 1 is gone with it:
+    // once shooting starts, the early missiles take the disarm branch (deploy 2) before the
+    // late seeds (m1/m2/m7, +6300) have armed.
     let mut console = Vec::new();
-    for _ in 0..2000u32 {
+    let mut gates_seen = false;
+    for _ in 0..9500u32 {
+        {
+            let sim = scene.sim.as_mut().unwrap();
+            sim.drones.channels.set(193, 1, sim.drones.frame);
+            sim.drones.channels.set(194, 1, sim.drones.frame);
+        }
         step_alive(scene.sim.as_mut().unwrap());
         shoot_held_disarm_sps(scene.sim.as_mut().unwrap());
         let sim = scene.sim.as_ref().unwrap();
         for k in 1..=8u32 { if sim.drones.channels.on(k) && !console.contains(&k) { console.push(k); } }
-        if console.len() == 8 { break; }
+        if [31u32, 32, 33, 35, 36, 37, 38].iter().all(|&g| sim.drones.channels.on(g)) && sim.drones.channels.on(192) { gates_seen = true; }
+        if gates_seen && console.len() == 8 { break; }
     }
     {
         let sim = scene.sim.as_ref().unwrap();
-        assert_eq!(console.len(), 8, "the console scripts write ch 1..8 at t682 [D], got {console:?}");
+        assert!(gates_seen, "the p0 scripts' t359 gate writes ch 31..38 and missile 5's ch 192 at its t1 [D P0_GATE + 06000a30]");
+        assert_eq!(console.len(), 8, "the console scripts write ch 1..8 at their t682 [D], got {console:?}");
     }
     // Phase 3 — each p0 end (state-1 tick L−1 [D t3299/1799/2399]) → state 2 → the disarm branch
     // (ch[k] set) → MissileDeploy[k] = 2; the state-3 p2 waits [D per-missile 1170..1710] →
     // ch 21..28; AND #139 → ch 9.
     let mut disarmed = false;
     for _ in 0..7000u32 {
+        {
+            let sim = scene.sim.as_mut().unwrap();
+            sim.drones.channels.set(193, 1, sim.drones.frame);
+            sim.drones.channels.set(194, 1, sim.drones.frame);
+        }
         step_alive(scene.sim.as_mut().unwrap());
         let sim = scene.sim.as_ref().unwrap();
         if sim.drones.missile_deploy.iter().all(|&b| b == 2) { disarmed = true; break; }
@@ -121,6 +127,11 @@ fn the_missile_launch_sequence_reaches_each_phase_and_disarms() {
     }
     let mut ch9 = false;
     for _ in 0..3000u32 {
+        {
+            let sim = scene.sim.as_mut().unwrap();
+            sim.drones.channels.set(193, 1, sim.drones.frame);
+            sim.drones.channels.set(194, 1, sim.drones.frame);
+        }
         step_alive(scene.sim.as_mut().unwrap());
         if scene.sim.as_ref().unwrap().drones.channels.on(9) { ch9 = true; break; }
     }
@@ -149,8 +160,11 @@ fn the_missile_launch_sequence_reaches_each_phase_and_disarms() {
 /// (`MissileDeploy[k] = 3`, obj+0xf6 = 1 [M 0x1aa25c-338]) and its p1 script writes
 /// `ch 99 = 1` @p1-t1000 [D 060007c6/060007e1 stream 14] — the game's mission-fail channel:
 /// `Mission_Update` 0x182c60:23-33 (internal 1) reads it → MissionState 2 (the type-3 fail msg,
-/// TimeOut 300 [M :45-57]). The missiles 3/4/5 get there first (p0 1800 → state-1 tick 1799
-/// [D] + p1 1000), i.e. armed+2799.
+/// TimeOut 300 [M :45-57]). With the disc countdown (seed·60 [D placement params 2026-11-06 —
+/// by index 105/105/40/20/0/60/105/60; M 0x1aa1f0-0x1aa208]) missile 5 (seed 0, p0 1800) gets
+/// there first: armed at launch+1, state 2 at launch+1800, ch 99 at launch+~2801 — the loop
+/// breaks there, while m4/m3 (armed +1200/+2400) are still in state 1 (their state-2 reads
+/// land at +3000/+4200; the rest count to +6000..+9600, their ch 99s at +7000..+10600).
 ///
 /// The mission's fail lands on ch 99, NOT on ch 199: the monitor's ch-199 arm
 /// (`Mission_MonitorObjectives` 0x1827d8:113-115, FailLabel 0x0200_005a) runs only from
@@ -172,11 +186,17 @@ fn the_missile_launch_fails_the_mission_on_ch_99() {
     // Test setup: remove the MissileDissarm SPs #213–220 (0-based 212..219) so the console
     // channels 1..8 never rise — the proven precondition for the [M] state-2 launch branch.
     scene.sim.as_mut().unwrap().drones.scripts.players.retain(|p| !(212..=219).contains(&p.placement));
-    // ch 99 at armed+2799 (missiles 3/4/5: p0 state-1 tick 1799 + p1 t1000) [D]. Mission_Update
-    // runs ahead of the missile tick in the frame [M Game_Run 0x1c9790's order], so the fail flow
-    // observes ch 99 on the tick after the write — settle 3 ticks before the state pins.
+    // ch 99 at launch+~2801: missile 5 (seed 0, p0 1800 [D]) — armed +1, state 2 +1800, p1
+    // t1000 +2800 [D + M 0x1aa1f0-0x1aa208's seed·60]. Mission_Update runs ahead of the missile
+    // tick in the frame [M Game_Run 0x1c9790's order], so the fail flow observes ch 99 on the
+    // tick after the write — settle 3 ticks before the state pins.
     let mut failed = false;
     for _ in 0..4000u32 {
+        {
+            let sim = scene.sim.as_mut().unwrap();
+            sim.drones.channels.set(193, 1, sim.drones.frame);
+            sim.drones.channels.set(194, 1, sim.drones.frame);
+        }
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
         if scene.sim.as_ref().unwrap().drones.channels.on(99) { failed = true; break; }
     }
@@ -187,19 +207,26 @@ fn the_missile_launch_fails_the_mission_on_ch_99() {
         assert_eq!(sim.drones.mission.status(), 2, "MissionState 2 on ch 99 [M 0x182c60:45-57]");
         assert_eq!(sim.drones.mission.fail_label, 0,
             "FailLabel stays the init sentinel — the monitor only runs in internal 1 [M 0x182c60:22, 0x182270:27]");
-        assert_eq!(sim.drones.missile_deploy, [1, 1, 3, 3, 3, 3, 1, 3],
-            "missiles 3/4/5 (p0 1800) and 6/8 (2400) took the launch branch by the fail; 1/2/7 (3300) are still armed in state 1 [D P0_LEN + M 0x1aa31c/0x1aa210-238]");
-        assert_eq!(sim.drones.space_missiles.iter().find(|m| m.index == 4).unwrap().launch_flag, 1,
-            "missile 4's obj+0xf6 = 1 on the launch path [M 0x1aa31c]");
+        assert_eq!(sim.drones.missile_deploy, [0, 0, 1, 1, 3, 0, 0, 0],
+            "missile 5 (seed 0) took the launch branch by the fail; m4/m3 (seeds 20/40) are armed in state 1 (their state-2 reads land at +3000/+4200), and 6/8/1/2/7 (seeds 60/60/105) are still counting [D placement params + P0_LEN + M 0x1aa31c/0x1aa210-238], got {:?}", sim.drones.missile_deploy);
+        assert_eq!(sim.drones.space_missiles.iter().find(|m| m.index == 5).unwrap().launch_flag, 1,
+            "missile 5's obj+0xf6 = 1 on the launch path [M 0x1aa31c]");
         for c in 21..=28u32 {
             assert!(!sim.drones.channels.on(c),
                 "no done channel rises on the all-launch path [M 0x1aa354's 0xf6==0 arm never runs]");
         }
     }
-    // The state-3 ch 199 still lands at armed+2999, inside the fail window [M 0x1aa360-3c4 +
-    // D END 1200] — and the dead monitor leaves FailLabel 0: the 0x200005a arm is unreachable.
+    // Missile 5's state-3 ch 199 still lands at launch+~3050 (armed +1, state 2 +1800, p1 End
+    // 1200), inside the fail window [M 0x1aa360-3c4 + D END 1200] — and the dead monitor leaves
+    // FailLabel 0: the 0x200005a arm is unreachable. The menu opens at fail+300 = ~launch+3101
+    // [M 0x182c60:123-130], so the pins below read before it.
     let mut abort = false;
     for _ in 0..600u32 {
+        {
+            let sim = scene.sim.as_mut().unwrap();
+            sim.drones.channels.set(193, 1, sim.drones.frame);
+            sim.drones.channels.set(194, 1, sim.drones.frame);
+        }
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
         if scene.sim.as_ref().unwrap().drones.channels.on(199) { abort = true; break; }
     }
