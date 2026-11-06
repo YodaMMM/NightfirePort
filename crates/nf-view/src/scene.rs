@@ -605,6 +605,11 @@ pub struct Sim {
     /// [M `Player_SetWeaponAnimObj` case 0xf 0x1a2e38:554-561]; false for the lower — its finish
     /// leaves the bit clear (case 0x10, [M 0x1a2e38:562-567]).
     pub view_aim_raising: bool,
+    /// void-recovery-2: how often the out-of-cel recovery actually FIRED (a `build_FindCel`
+    /// 0x1c8cb0 miss at the relink, the move clamped back into the old cel's box [M
+    /// control_handle_cel_change 0x133288:186-231]) since the level load — the walks' gate metric:
+    /// it should sit near zero on real input.
+    pub recovery_count: u64,
     /// fix-weapon-fire-modes: the guided-missile camera (`Bullet_init` 0x12c5a0:234-254 for a weapon
     /// record with `+0x6C & 4` — only the AT-420 Sentinel 'Guided' 0x2C [L ee_start_05.bin]). While
     /// `Some`, the view rides the projectile: position/direction = the bullet's [M
@@ -3236,7 +3241,7 @@ impl Sim {
                 match self.world.find_cel(self.bond.pos) {
                     Some(c) => Some(c),
                     None => self.world.out_of_cel_recovery(self.bond.cel, old_prev, nf_game::player::Bond::SPHERE_RADIUS)
-                        .map(|(cell, p)| { self.bond.pos = p; cell }),
+                        .map(|(cell, p)| { self.recovery_count += 1; self.bond.pos = p; cell }),
                 }
             } else {
                 match self.world.player_cel_relink(self.bond.cel, self.bond.prev_pos, self.bond.pos, self.bond.pos) {
@@ -3247,7 +3252,7 @@ impl Sim {
                     // obj+0x40 (the `Bond` field's own doc).
                     // The `build_FindCel` retry comes first [M 0x133288]: only a full miss recovers.
                     None => match self.world.find_cel(self.bond.pos) { Some(c) => Some(c), None => self.world.out_of_cel_recovery(self.bond.cel, self.bond.prev_pos, nf_game::player::Bond::SPHERE_RADIUS)
-                        .map(|(cell, p)| { self.bond.pos = p; cell }) },
+                        .map(|(cell, p)| { self.recovery_count += 1; self.bond.pos = p; cell }) },
                 }
             };
             let water = bond_cel.and_then(|cell| self.room_cell.iter().position(|&c| c == Some(cell)))
@@ -10562,6 +10567,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 shear_phase: 0.0,
                 global_blur: 0,
                 swing_phase: 0.0,
+                // void-recovery-2: the walks' recovery-fire counter (its own line, lesson 4).
+                recovery_count: 0,
             })
         });
         let fog = drones.and_then(|d| fog_for(d.level_id));
@@ -14093,7 +14100,7 @@ impl Sim {
                 match self.world.find_cel(b.pos) {
                     Some(c) => Some(c),
                     None => self.world.out_of_cel_recovery(b.cel, old_prev, nf_game::player::Bond::SPHERE_RADIUS)
-                        .map(|(cell, p)| { b.pos = p; cell }),
+                        .map(|(cell, p)| { self.recovery_count += 1; b.pos = p; cell }),
                 }
             } else {
                 match self.world.player_cel_relink(b.cel, b.prev_pos, b.pos, b.pos) {
@@ -14101,7 +14108,7 @@ impl Sim {
                     // void-recovery: the cel-change default arm [M 0x133288:186-231] — same as the
                     // single-player site above.
                     None => self.world.out_of_cel_recovery(b.cel, b.prev_pos, nf_game::player::Bond::SPHERE_RADIUS)
-                        .map(|(cell, p)| { b.pos = p; cell }),
+                        .map(|(cell, p)| { self.recovery_count += 1; b.pos = p; cell }),
                 }
             };
             let water = cel.and_then(|cell| self.room_cell.iter().position(|&c| c == Some(cell)))
