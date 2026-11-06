@@ -179,6 +179,8 @@ fn the_laser_ray_carriers() {
 fn a_captains_laser_ray() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set - skipping"); return };
     let mut scene = loaded(&iso, "07000012.bin");
+    // The start room is already fighting by now: put every captain back on the 0x19 for the sister.
+    for d in scene.sim.as_mut().unwrap().drones.list.iter_mut().filter(|d| d.captain) { d.weapon = 0x19; }
     let fs = scene.frame_state(None, 0.0, opts());
     let beams0 = scene.guard_beams(|c| fs.posed.get(c).and_then(|p| p.as_ref()).filter(|_| !fs.hidden[c]).map(|(_, w, m)| (w.as_slice(), m)));
     assert!(beams0.is_empty(), "sister: no guard holds 0x18 at the level start (all 0x19)");

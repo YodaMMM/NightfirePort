@@ -476,6 +476,136 @@ fn walk_leg_watched(w: &mut Walker, to: [f32; 3], arrive: f32, label: &str) -> b
     false
 }
 
+/// The game's own sight triple against one point [M 0x175ef0 family: the distance gate, the yaw
+/// cone gate, the LOS ray]: whether the drone `di` would see a body standing at `p` right now
+/// (the eye ≈ pos+1.2, the point at +1.2; `world.segment` is the LOS arm — Some = blocked).
+fn watcher_sees(sim: &nf_view::scene::Sim, di: usize, p: [f32; 3]) -> bool {
+    let d = &sim.drones.list[di];
+    if !d.present || !d.enabled || d.corpse || d.health <= 0.0 || d.team == 0 { return false; }
+    let dx = p[0] - d.pos[0];
+    let dz = p[2] - d.pos[2];
+    let dist = (dx * dx + dz * dz).sqrt();
+    if dist > d.sight_range { return false; }
+    // The facing vector in the walker's own yaw convention (desired = dx.atan2(dz)).
+    let fx = d.yaw.sin();
+    let fz = d.yaw.cos();
+    let dot = (fx * dx + fz * dz) / dist.max(1e-4);
+    if dot < d.half_fov.cos() { return false; }
+    // The LOS arm at three heights, ANY clear = exposed: the game's sight ray runs from the
+    // drone's own eye height (not measured here — 0x175ef0's ray args are the live read), and a
+    // single assumed height can duck under furniture the game's ray clears (the t14705 g17
+    // sighting cleared LOS at d 10.8 through the east strip while the +1.2-only probe read
+    // blocked [L 2026-11-05]). Over-conservative is the safe direction: the gate waits. The
+    // band is LOW (0.4..2.0): the game's eye→chest ray runs near body height and the east
+    // strip's overhead structure blocked every ≥2.2 probe while the game's LOS read true —
+    // high probes under-report exposure, low probes can only over-report it (the gate waits).
+    for h in [0.4f32, 0.7, 1.0, 1.3, 1.6, 2.0] {
+        let eye = [d.pos[0], d.pos[1] + h, d.pos[2]];
+        let tgt = [p[0], p[1] + h, p[2]];
+        if sim.world.segment(eye, tgt).is_none() { return true; }
+    }
+    false
+}
+
+/// Every live non-team-0 drone that would see Bond at his current spot or at any of `points`
+/// right now (the stealth gate's check arm).
+fn sight_watchers(w: &Walker, points: &[[f32; 3]]) -> Vec<usize> {
+    let sim = w.scene.sim.as_ref().unwrap();
+    let here = sim.bond.pos;
+    let mut bad = Vec::new();
+    for di in 0..sim.drones.list.len() {
+        if watcher_sees(sim, di, here) || points.iter().any(|&p| watcher_sees(sim, di, p)) {
+            bad.push(di);
+        }
+    }
+    bad
+}
+
+/// Hold at the current spot until no live civilian sees Bond here or any of `points`. The
+/// civilians cannot be dropped (the office floor's ackers are team-3 civilians with props
+/// 0x53/0x54 set — a player kill is fail reason 3 [M DroneFunc_OnInitDeath 0x145bd0's verdict;
+/// hitdata-spawner-ally.md:203-206]) and a press cannot be undone once 0x8a starts (the fail is
+/// the press timer C, RunToAlarm + 180 + 30 ticks [M NDrone2_DSTATE_PressAlarm 0x168ea8]) — the
+/// only player move is to be SEEN BY NOBODY. Panics with the geometry dump when no window opens
+/// (a route bug, not a wait).
+fn wait_sight_clear(w: &mut Walker, points: &[[f32; 3]], what: &str) {
+    let start = w.total_ticks;
+    loop {
+        let bad = sight_watchers(w, points);
+        if bad.is_empty() { return; }
+        if w.total_ticks - start >= 5400 {
+            let here = w.scene.sim.as_ref().unwrap().bond.pos;
+            let mut s = format!("no sight window for '{what}' after {} ticks (watchers {})\n",
+                w.total_ticks - start, bad.iter().map(|i| format!("g{i}")).collect::<Vec<_>>().join(","));
+            for &di in &bad {
+                let d = &w.scene.sim.as_ref().unwrap().drones.list[di];
+                s.push_str(&format!("  g{di} state {:#x} at ({:.2},{:.2},{:.2}) yaw {:.2} rng {:.1} fov {:.2}\n",
+                    d.state, d.pos[0], d.pos[1], d.pos[2], d.yaw, d.sight_range, d.half_fov));
+            }
+            s.push_str(&walker::fail_dump_pub(&w.scene, here, what));
+            panic!("{s}");
+        }
+        w.wait(1);
+    }
+}
+
+/// Hold until no live team-3 drone is within `range` of Bond here or any of `points` —
+/// DISTANCE-ONLY (the world-segment LOS probe over-blocks the east strip [L the t14717 note:
+/// the probe read the ray blocked at every height while the game's los read true], so the gate
+/// here is the sight RANGE itself). Capped: a patrol that never leaves the band proceeds racy
+/// and the caller's pins judge. Returns whether the window was clean.
+fn wait_distance_clear(w: &mut Walker, points: &[[f32; 3]], range: f32, max_ticks: u32, what: &str) -> bool {
+    let start = w.total_ticks;
+    loop {
+        let bad: Vec<usize> = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            sim.drones.list.iter().enumerate().filter(|(_, d)| {
+                d.present && !d.corpse && d.health > 0.0 && d.enabled && d.team != 0
+                    && (walker::dxz(d.pos, bp) < range || points.iter().any(|p| walker::dxz(d.pos, *p) < range))
+            }).map(|(i, _)| i).collect()
+        };
+        if bad.is_empty() { return true; }
+        if w.total_ticks - start >= max_ticks {
+            eprintln!("[0a] {what}: no distance window after {} ticks (in-range {:?}) — proceeding", w.total_ticks - start, bad);
+            return false;
+        }
+        w.wait(1);
+        if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { return false; }
+    }
+}
+
+/// `walk_leg_watched` with the sight gate before each ~4-unit segment: hold at the segment's
+/// start until no civilian sees the start or the segment's end, then walk it. The hold is sound
+/// because the PREVIOUS segment verified its own end clear and the civilians drift ≤ ~2 u per
+/// segment (patrol pace ~0.02 u/tick [L 2026-11-05 trace]); if the arrival spot itself is
+/// exposed the gate's panic dump shows the geometry (re-anchor the lane, never walk blind).
+fn walk_leg_stealth(w: &mut Walker, to: [f32; 3], arrive: f32, label: &str) -> bool {
+    walk_leg_stealth_cap(w, to, arrive, label, 200)
+}
+
+/// `walk_leg_stealth` with a seg cap: the pocket tail's furniture wedges the straight slices
+/// ~1 u short of the far targets and the full 200-seg loop grinds there INSIDE GT #639's fire
+/// arc — the capped variant stops at the grind (the wedge spot IS the E-reach stand, see the
+/// keypad block) and lets the caller carry on from there.
+fn walk_leg_stealth_cap(w: &mut Walker, to: [f32; 3], arrive: f32, label: &str, cap: usize) -> bool {
+    let seg = 4.0f32;
+    for iteration in 0..cap {
+        let from = w.scene.sim.as_ref().unwrap().bond.pos;
+        let dx = to[0] - from[0];
+        let dz = to[2] - from[2];
+        let dist = (dx * dx + dz * dz).sqrt();
+        if dist < arrive { return true; }
+        watch_and_clear(w, 16.0);
+        if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { return false; }
+        let step = seg.min(dist);
+        let mid = [from[0] + dx / dist * step, to[1], from[2] + dz / dist * step];
+        wait_sight_clear(w, &[mid], &format!("{label} seg {iteration}"));
+        w.walk_to(Wp::new(mid[0], mid[1], mid[2]).r(1.1), &format!("{label} seg {iteration}"));
+    }
+    false
+}
+
 /// The office-floor walk from the fresh load on real input: the arrival plate (obj 3), the lift-cab
 /// sweep, the corridor loop to the Q-Worm PC (the documented cubicle blocker — the install
 /// channel hand-driven there), back to the security keyboard, the REAL use-key activation
@@ -773,21 +903,19 @@ fn walk_office_floor_qworm_keyboard_hatch() { walk_office_floor_qworm_keyboard_h
 fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
     let mut w = walk_to_security_keyboard_at(difficulty);
 
-    // ai-sight-drawn-gate-5 route re-derivation (the ring route, BFS-derived): the old route
-    // crossed the LOCKED office door (−10.6, −19.3, ch 0x30) by force-driving the channel — no
-    // writer for ch 0x30 exists in 0a's data [D trig/switch/script dumps] — and the door exit
-    // sits 8.4 u due south of the panel-side challenge civilian (g15: prop 0x3c/0x1a armed, sight
-    // rng 12, 180° cone, reaction stat 0 → 60 ticks [M 0x1787c8 + 0x175ef0; the roster trace]),
-    // whose cone covers the whole corridor mouth; challenge → anim → RunToAlarm → PressAlarm is
-    // game-true [M 0x162558 + 0x13ab58's +0x596 follow + 0x168ea8] and he is PROTECTED (props
-    // 0x53/0x54 — the ACTION.ELF bitDescs/bitMasks decode) — a player cannot clear him and
-    // cannot outrun 60 reaction ticks through his cone. The drone graph routes through that door
-    // even from the security centre (the run-6 "opening door (−10.6,1.1,−19.3)" loop) — a DRONE
-    // route. The floor-sweep/BFS probe (work/elf collision + world::segment_actor) gives the
-    // player's legal ring route: south through the west offices, the west corridor, the south
-    // corridor, and up the east side to the hatch — the corners below, walked steadily (a real
-    // player's stealth timing: no stops inside a civilian's reach).
-    let ring: [([f32; 3], &str, bool); 27] = [
+    // ai-sight-drawn-gate-5 route re-derivation (the ring's west legs, BFS-derived): the old
+    // route crossed the LOCKED office door (−10.6, −19.3, ch 0x30) by force-driving the channel
+    // — no writer for ch 0x30 exists in 0a's data [D trig/switch/script dumps] — and the door
+    // exit sits 8.4 u due south of the panel-side challenge civilian (g15: prop 0x3c/0x1a armed,
+    // sight rng 12, 180° cone, reaction stat 0 → 60 ticks [M 0x1787c8 + 0x175ef0; the roster
+    // trace]), whose cone covers the whole corridor mouth; challenge → anim → RunToAlarm →
+    // PressAlarm is game-true [M 0x162558 + 0x13ab58's +0x596 follow + 0x168ea8] and he is
+    // PROTECTED (props 0x53/0x54 — the ACTION.ELF bitDescs/bitMasks decode) — a player cannot
+    // clear him and cannot outrun 60 reaction ticks through his cone. The floor-sweep/BFS probe
+    // (work/elf collision + world::segment_actor) gives the player's legal ring route: south
+    // through the west offices and the west corridor (the legs below), then — THIS ROUND — the
+    // south-west lane (the splice below), NOT the old ai-lane crossing.
+    let ring: [([f32; 3], &str, bool); 7] = [
         ([-7.5, 1.3, 14.5], "ring: the security centre's west door", false),
         ([-7.5, 1.3, 16.5], "ring: the west hall north", false),
         // Beam #607's plane (x −8.45, z 15-20.25 [D triggers dump]) spans this corridor: the
@@ -803,53 +931,8 @@ fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
         // Beam #614 (out ch 0x22, OR #667 → ch 0x0F → gun #640) spans the corridor wall to
         // wall at ankle height — jumped (jump_over_low_beam, keyed on this label).
         // The sweep-aware southbound crossing (see sweep_jump_beam614): the arc lands ~9.15,
-        // past the whole swept band — the next leg's (−20.5, 5.5) walk never re-enters it.
+        // past the whole swept band.
         ([-22.2, 1.3, 9.2], "ring: sweep-jump beam #614", false),
-        ([-20.5, 1.3, 5.5], "ring: down the west office block", false),
-        // The crossing rides the game's own ai lane: the patrol nodes 17/28 cross at z 5.54/5.60
-        // [D 0700000a ai_network, disc y 0.0]. The swing door opened to the pos01-0 end leaves
-        // its leaf across x −19.53..−18.32 at z 4.44..4.70 ([L probe979_floor_sweep — the door's
-        // dynamic tris at the open pose]); the old straight x −17.5 leg cut the corner at
-        // z 4.87 and the capsule (r 0.55) grazed the leaf's east face — the micro-pushes rode
-        // the rest dy onto the floor band's f32 edge [M 0x194188:106] and the grounded flag
-        // flickered (the 941 floating wedge). The lane entry arrives tight (r 0.7) so the south
-        // turn starts clear of the leaf.
-        ([-17.6, 1.3, 5.5], "ring: the ai node 17 east of the door", false),
-        // The game's own path-3 lane round the desk block: the nodes 27/26 run east along
-        // z 5.7-5.8, then 32/33/34 run south at x −14.8/−14.5 [D 0700000a ai_network] — the
-        // desk block (x −17.53..−16.59, z 3.29..4.79 [L tris dump]) and the swung leaf's box
-        // (x −19.53..−18.32, z 4.44..4.70 [L]) leave only a 0.79 gap the capsule (r 0.55, 1.1
-        // wide) cannot pass — the game's graph routes around the desks' east side.
-        ([-16.2, 1.3, 5.8], "ring: the ai node 27 east", false),
-        ([-15.0, 1.3, 5.7], "ring: the ai node 26 east", false),
-        ([-14.8, 1.3, 4.0], "ring: the ai node 32 south", false),
-        ([-14.8, 1.3, 2.9], "ring: the ai node 33 south", false),
-        ([-14.5, 1.3, 2.4], "ring: the ai node 34 south", false),
-        ([-17.5, 1.3, 2.5], "ring: down past the west door", false),
-        ([-18.5, 1.3, 2.5], "ring: the door jink west", false),
-        ([-18.5, 1.3, 0.5], "ring: down", false),
-        ([-19.5, 1.3, 0.5], "ring: the west corridor jink 2", false),
-        ([-19.5, 1.3, -1.5], "ring: down 2", false),
-        ([-21.5, 1.3, -1.5], "ring: the west corridor jink 3", false),
-        ([-21.5, 1.3, -6.5], "ring: down the south-west offices", false),
-        ([-18.5, 1.3, -6.5], "ring: jink 4", false),
-        ([-18.5, 1.3, -9.5], "ring: down 3", false),
-        ([-17.5, 1.3, -9.5], "ring: jink 5", false),
-        ([-17.5, 1.3, -13.5], "ring: the south-west corner approach", false),
-        // The pillar crossing (this round's walk): the -2 leg (−11.5, −13.5) hugged the pillar's
-        // south face (z −13.10, x −12.98..−10.9 [D probe rays]) — the r-0.55 capsule's north
-        // edge (z −12.95) overlaps the face and the leg wedged at the 6000-tick cap. The crossing
-        // rides the pocket's open south instead: from the corner approach south-east to
-        // (−14.5, −15.0) — south of every pillar face — then east along the pocket to the game's
-        // N-S ai lane at node 130 (every southward ray from the pocket x −12..−8.5,
-        // z −13.65 → −18.0 clear [D probe rays]).
-        ([-14.5, 1.3, -15.0], "ring: south of the pillar, into the pocket", false),
-        // The keypad approach (this round's walk): the mouth is the locked door #724's doorway —
-        // see the test doc. The keypad #648 (−10.69, 1.52, −17.46 [D]) faces the pocket
-        // (facing (−1,0,0) [D rotation −π/2]); the stand (−11.9,−17.5) is 1.2 west of it (the
-        // wall's west face x −10.45 [D]) and inside the E reach (the use sphere 1.0 + the lock's
-        // 0.13 world sphere [M 0x1a5170:101-108]).
-        ([-11.9, 1.3, -17.5], "ring: the keypad's wall", false),
     ];
     for (wp, label, crouched) in ring {
         // The alarm guard's cone covers the south corridor mouth (the route note above) — the
@@ -872,6 +955,73 @@ fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
                 sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], chs.join(","), tur.join(","));
         }
         assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");
+    }
+    // THE SOUTH-WEST LANE RING (this round's re-route, the alarm leak's measured fix): the old
+    // ring crossed the central ai lane (the old node-17..34 legs above) and g7 — the patrolling
+    // office civilian (skin 0x500002a, team 3, sight 12, 180° cone) whose patrol lane IS the
+    // route's own ai lane — challenged Bond there at t11812 (d 3.3, seen true [L 2026-11-05
+    // trace]); the shout chain alerted g0 ONE tick later (t11813) and g0 ran 12.6 u to the
+    // alarm panel (−21, 10), pressed at t12163, and the press timer landed the fail 0x4000032
+    // at t12400 [L this run; M 0x168ea8's timer C]. The civilians cannot be dropped (props
+    // 0x53/0x54 — a player kill is fail reason 3 [M 0x145bd0]) and a started press cannot be
+    // undone — so the ai-lane crossing is REMOVED. The ring rides the outbound's own
+    // proven-quiet lane instead: walk_to_security_keyboard's PC nav ("to the Q-Worm PC" nodes)
+    // and the walk-back's return nav both ran this exact lane UNSEEN on the same branch [L
+    // 2026-11-05: the arrived node positions below, e.g. (−22.18, 6.50) → (−26.46, −3.93) →
+    // (−16.88, −15.65)]. The lane runs WEST of g7's diamond (his pauses (−25.6, 7.5) /
+    // (−20.6, 5.3) and his east excursion to (−13.1, 2.3) all sit east of x −26 while the lane
+    // is southbound), and every leg holds the stealth gate (wait_sight_clear — nobody sees the
+    // start or the end before it walks [M 0x175ef0's sight triple]). The pocket tail keeps the
+    // old ring's pillar-crossing note: (−14.5, −15.0) rides south of every pillar face (the
+    // pillar's south face z −13.10, x −12.98..−10.9 [D probe rays]), then the keypad's wall.
+    let lane: [([f32; 3], &str); 9] = [
+        ([-22.12, 1.3, 8.6], "lane: the west corridor's south mouth"),
+        ([-22.18, 1.3, 6.5], "lane: south of the office block's west face"),
+        ([-23.04, 1.3, 2.48], "lane: the west lane's mid"),
+        ([-25.99, 1.3, 0.48], "lane: the west lane's south-west corner"),
+        ([-26.46, 1.3, -3.93], "lane: the west offices' south lane"),
+        ([-26.06, 1.3, -7.36], "lane: the west lane's south end"),
+        ([-22.21, 1.3, -11.97], "lane: the cut east"),
+        ([-16.88, 1.3, -15.65], "lane: the pocket's west reach"),
+        ([-14.5, 1.3, -15.0], "ring: south of the pillar, into the pocket"),
+    ];
+    for (k, (wp, label)) in lane.iter().enumerate() {
+        let ok = walk_leg_stealth(&mut w, *wp, 1.3, label);
+        assert!(ok || w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(),
+            "the south-west lane leg {k} ({label}) never arrived (exit {:?})", w.scene.sim.as_ref().unwrap().drones.level_exit);
+        assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[lane] after '{label}' pos ({:.2},{:.2},{:.2}) fail {:#x} exit {:?}",
+                sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.drones.mission.fail_label, sim.drones.level_exit);
+        }
+    }
+    // The keypad approach (this round's walk): the mouth is the locked door #724's doorway —
+    // see the test doc. The keypad #648 (−10.69, 1.52, −17.46 [D]) faces the pocket
+    // (facing (−1,0,0) [D rotation −π/2]). THE POCKET TURRET (measured this round, [L the
+    // hit-source probe on this branch]): the kills are NOT a world volume — they are **GT
+    // #639's minigun rounds** (weapon record 96 = TURRET_WEAPON_RECORD, owner usize::MAX = the
+    // not-a-drone mark [M 17828's GT Fire arm]; 2.4000015 a hit at d1 = the record's 5.0 × the
+    // d1 pain factor 0.48; the turret sits at (−21.98, 2.28, −11.31) and reads state 4 COMBAT
+    // while Bond stands at (−12.7,−16.9)). The lane (x −26..−14) and the pocket's west half
+    // took ZERO hits on every run — the turret's track only opens fire from the keypad
+    // approach's last ~2 u (its first hit landed ~120 ticks after the wedge began). So: the
+    // approach hooks SOUTH-EAST first (the plain walk's own doorway path (−12.73,−16.90) →
+    // (−11.53,−18.11) proved that floor walkable — the direct north-west line to the stand
+    // wedges on the console at 1.0 u out and grinds the seg loop in the turret's line), the
+    // stand is taken from the south-east, and the E-arm → digits → door-wait all run from
+    // COVER (see below).
+    {
+        // The ORIGINAL stand line (−11.9,−17.5): the seg walk CONVERGES to (−12.73,−16.90)
+        // by seg 1-2 on every run (the furniture wedges the slices ~1 u short of the far
+        // target — the exact spot is target-dependent, and this target's wedge is the proven
+        // E-reach stand: the plain walk armed the keypad from it, dxz 2.11 [L this branch]).
+        // The cap stops the grind there — 200 segs of it stood Bond in #639's fire arc for
+        // ~400 ticks (the sisters' 42-hit death); 4 segs = the wedge spot + ~20 ticks.
+        let ok = walk_leg_stealth_cap(&mut w, [-11.9, 1.3, -17.5], 0.8, "ring: the keypad's wall", 4);
+        assert!(ok || w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(),
+            "the keypad's wall leg never arrived (exit {:?})", w.scene.sim.as_ref().unwrap().drones.level_exit);
+        assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at 'ring: the keypad's wall'");
     }
     // THE MOUTH, through the game's own writer chain (all real input — see the test doc):
     // aim the view at the keypad's world sphere and pulse the use key — the class-0x3A arm's
@@ -907,6 +1057,25 @@ fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
         }
     }
     assert!(armed, "the keypad #648 E arms the mini-game (state 3) [M 0x1aed00's kind-0 no-key branch]");
+    // THE DIGITS RUN AT THE WEDGE, NO RETREAT (civ-unignore, the 00agent fix): the old
+    // "out of the turret's line" retreat to (−14.5,−15.0) bought nothing any more — the
+    // civilians-raise-the-alarm merge (576909ed6) left the whole pocket LOS-clear to wall gun
+    // #639 under the game's own track rule (probe, the game's `line_of_sight(turret.pos, p,
+    // LOS_TURRET_TRACK)` + the `dot(fire_dir, dir) ≥ 0.01` cone [M gt.rs GT_Track]: every
+    // pocket cell x −17..−10.5, z −20..−15 reads clear; #639's fire_dir is (0,−1,0), so the
+    // cone passes every floor point), and the measured 00agent run took the retreat's own
+    // seg 0 for 11 rounds (69 ticks) — the retreat is now part of the exposure, not the cure.
+    // The deadly window is #639's COMBAT state, which starts ~script-timed after its first
+    // track (the d2/agent ledger: first hit t12423, the retreat's seg 0) and ends when the
+    // LOS finally blocks east of x ≈ −10.0 (the same probe; the d2 ledger's hits stop at
+    // (−9.8,−18.6)). So the tail is cut to the minimum: the digits type AT the wedge (the
+    // armed keypad is a MENU state — position-independent [M C_KEYPAD_Handler 0x216810 +
+    // 0x1ae3d8 case 4]), the door sweep check is the ~2-tick gate it measures at, and the
+    // doorway crossing runs straight from the wedge — the whole post-arm tail ends inside
+    // #639's first ~20 COMBAT rounds (the measured 00agent ledger after this change: 21
+    // rounds for 84.0, first hit t12409 at (−12.3,−17.2), the last t12549 at (−9.8,−18.6)
+    // where the LOS blocks — end health 16.0; the d1/d2 sisters' ledgers shrink the same
+    // way, the retreat's 11-round seg 0 is gone).
     // The 4 digits [M C_KEYPAD_Handler 0x216810 msg 0x4b — the handler the keypad menu's digit
     // controls dispatch; the cursor/page UI is the view's presentation (GAP-1's UI half, the
     // audit §5)]. The code is the game's own boot table [L ee_start_0700000a.bin @0x2beff8 —
@@ -951,6 +1120,16 @@ fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
         ([-8.7, 1.3, -21.5], "ring: the ai node 0 into the south corridor"),
         ([-6.5, 1.3, -22.5], "ring: the south corridor"),
         ([9.5, 1.3, -22.5], "ring: the south corridor's east run"),
+        // THE EAST-STRIP RACE (known residual, this round): g17 (the east-side patrol civilian,
+        // spawn (24.6, −6.8) [L 2026-11-05 trace]) walks a SW leg that CONVERGES on the strip —
+        // at his closest observed patrol point (20.6, −12.8) the strip mouth is ~11 u inside his
+        // 12-unit sight with the game's LOS clear, and his sighting here cascades through the
+        // shout chain (g2 pressed the south-west panel at t14796 → fail 0x4000032 [L]). The
+        // stealth gate's world-segment probe reads the same ray BLOCKED at every height
+        // [L 2026-11-05: the t14717 sighting repeated identically with the gate live], so the
+        // gate cannot see this exposure — the crossing is left to the watched legs + the
+        // watch_and_clear chase, and the report asks for a live read of g17's full patrol cycle
+        // (the window is his NE return, his back to the west lane).
         ([9.5, 1.3, -13.5], "ring: up the east side south"),
         ([10.6, 1.3, -13.9], "ring: the south gap east"),
         ([15.7, 1.3, -13.9], "ring: before the laser fence"),
@@ -960,7 +1139,21 @@ fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
         // LONG runs walk in segments with the watch BETWEEN them (the east-side boundary-only
         // watch let a runner past the 40-unit band: the press landed mid-leg at +446); the short
         // doorway/jink legs keep the precise r-0.8 walk_to (a 1.2-arrive stall here stands Bond
-        // in the open for 1200 ticks — exactly what invites the runner).
+        // in the open for 1200 ticks — exactly what invites the runner). KNOWN RESIDUAL (this
+        // round): the east-strip legs carry a racy civilian sighting (see the hold-leg note) —
+        // the live-check ask in the report covers timing it.
+        // THE STRIP WINDOW (measured this round): the plain walk's racy g17 sighting became a
+        // BEAM TOUCH under the real-damage run's longer keypad timeline — a converging runner
+        // crossed the web and the alert OR #670 wrote ch 0x12 (the laser pin popped at the
+        // hatch, Bond alive at 28 hp [L this run]). The hold: cross the strip only while no
+        // team-3 drone is within 12.5 u of Bond or the strip's leg targets — g17's NE return
+        // (spawn (24.6, −6.8) → 15.6 u from the strip mouth) is that window; his SW beat
+        // (20.6, −12.8) holds the gate. Distance-only — the segment probe over-blocks here.
+        if label.contains("up the east side south") {
+            wait_distance_clear(&mut w,
+                &[[9.5, 1.3, -13.5], [10.6, 1.3, -13.9], [15.7, 1.3, -13.9]], 12.5, 3600,
+                "the east strip crossing");
+        }
         watch_and_clear(&mut w, 16.0);
         let here = w.scene.sim.as_ref().unwrap().bond.pos;
         let dist = walker::dxz(here, wp);
@@ -1003,6 +1196,10 @@ fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
     // sweep_jump_beam625; the old blind press landed the arc's low tail inside the west park's
     // reach once the walk's upstream timing shifted).
     sweep_jump_beam625(&mut w, "ring: jump beam #625 westbound (the sweep)");
+    // The north corridor legs are g3's patrol lane (the hatch-antechamber civilian, spawn
+    // (9.8, 21.3) [D level doc; L 2026-11-05 trace: he walked south to (9.9, 10.1) and
+    // challenged the ungated walk at d 4.9, t15305] — his press was also only beaten by the
+    // walk's finish; same residual race as the strip, same live-check ask).
     for (wp, label) in [([9.9f32, 1.3, 5.3], "ring: the corridor west end"),
                         ([9.75, 1.3, 8.8], "ring: up the east corridor north"),
                         ([9.6, 1.3, 12.3], "ring: up the east corridor north 2"),

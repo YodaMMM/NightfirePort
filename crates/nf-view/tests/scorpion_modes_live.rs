@@ -137,12 +137,16 @@ fn the_scorpion_fire_modes_through_the_real_input_path() {
     for _ in 0..200 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     assert_eq!(scene.sim.as_ref().unwrap().gun.weapon, 0x2f, "back on the Unguided record");
 
-    // The shooting guard: the first enabled, alive guard after the intro.
+    // The shooting guard: the first enabled, alive ENEMY guard (kind 0x3) after the intro. The
+    // civilian-alarm fix made the scared office worker (kind 0x15, the 0x12→0x85→0x64 run
+    // [L PCSX2 2026-11-05]) an enabled alive drone from the intro on, so the old
+    // first-enabled-alive pick landed on him and the homing scenario lost its guard — the
+    // scenario is the lock on an enemy, so pick the kind the subject needs.
     let guard = {
         let sim = scene.sim.as_ref().unwrap();
         (0..sim.drones.list.len()).find(|&i| {
             let d = &sim.drones.list[i];
-            d.present && !d.corpse && d.enabled && d.health > 0.0
+            d.present && !d.corpse && d.enabled && d.health > 0.0 && d.kind == 3
         }).expect("07000012 has an enabled guard after the intro")
     };
     // The homing is the subject, not the guard's AI: hold the NPCs so the target stands where
