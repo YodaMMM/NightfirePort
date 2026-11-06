@@ -50,6 +50,50 @@ fn route_order(w: &Walker, guards: &[usize]) -> Vec<usize> {
     g
 }
 
+/// The d3 door-lip scan: every live team-1 guard within 7.0 of the hall aperture's lip point
+/// (7.9, 6.3, 11.1) — the exact filter the post-AND lip pass has run since guard-radii-finish
+/// (b28203c21). Extracted verbatim so the escort-crossing re-scan runs the same filter.
+fn door_lip_scan(w: &Walker) -> Vec<usize> {
+    let sim = w.scene.sim.as_ref().unwrap();
+    (0..sim.drones.list.len()).filter(|&i| {
+        let d = &sim.drones.list[i];
+        d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+            && walker::dxz(d.pos, [7.9, 6.3, 11.1]) < 7.0
+    }).collect()
+}
+
+/// The d3 door-lip fight: the bounded live-tracked lure from the hold line (the guards hunt
+/// the gunshot hearing [M DroneFunc_SetNoiseHeard]) draws the lip guard across the aperture,
+/// then the real fire path finishes him. `tag` only names the trace labels. Breaks early when
+/// Bond dies (the caller re-checks health and breaks its own loop).
+fn door_lip_fight(w: &mut Walker, g5: usize, tag: &str) {
+    for t in 0..300u32 {
+        let (input, trigger, done) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.list[g5];
+            if d.corpse || d.health <= 0.0 { (Input::default(), false, true) }
+            else {
+                let bp = sim.bond.pos;
+                let at = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
+                let desired = (at[0] - bp[0]).atan2(at[2] - bp[2]);
+                let err = walker::wrap_pi(desired - sim.bond.yaw);
+                let want_pitch = ((at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop)) / walker::dxz(bp, at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+                let perr = want_pitch - sim.bond.pitch;
+                (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() },
+                    err.abs() < 0.02 && perr.abs() < 0.028 && t % 16 == 0, d.pos[2] < 10.5)
+            }
+        };
+        if done { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
+        w.total_ticks += 1;
+        w.after_step();
+        if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+    }
+    if !w.shoot(g5, &format!("{tag} lip guard {g5}")) {
+        if w.resupply(&format!("{tag} lip ammo")) { w.shoot(g5, &format!("{tag} lip guard {g5} retry")); }
+    }
+}
+
 fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker { walk_to_the_exit_at(iso, stop_at_fire, 1) }
 
 /// The walk at `difficulty` — the difficulty select's GameState+0x28 value (1 Operative, 2 Agent,
@@ -224,11 +268,29 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // died with it). A player tops up at the corridor boxes before the hall: the walked-path
     // corridor's own rule (resupply()).
     {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let dry = (sim.gun.clip as i32) + (sim.gun.spare as i32) < 48;
-        drop(sim);
-        if dry {
-            w.resupply("pre-hall ammo");
+        // guard-radii-01-d3: at 00 Agent the threshold fights burn every pool the walk owns —
+        // the 70165 ledger: the pistol's 54, the hall box's +20, then the wheel SMG's 55 via
+        // the dry-gate's armed switch, and the resupply cycles INSIDE the hall find nothing
+        // (the hall's south wall walls the nav off from the corridor boxes) — so the
+        // fall-through shoot flanks the door dry and lip guard #5 takes the last 24 at 1.4 u.
+        // The lever the finish report names: resupply BEFORE the hall phase, without a
+        // mid-fight detour. resupply() takes the nearest walked-path box per call and the
+        // taken one is gone, so repeated calls sweep the corridor's boxes onto the wheel.
+        if difficulty >= 3 {
+            for pass in 0..3 {
+                if !w.resupply(&format!("d3 pre-hall stock {pass}")) { break; }
+            }
+            // Back to the meet room before the hall (the same invariant the dry branch keeps:
+            // the stage below is the route proven FROM the meet plate).
+            if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, [6.8, 6.0, 8.9]) > 3.0 {
+                w.walk_nav_to([6.8, 6.0, 8.9], "back to the meet room (d3 stock)", 1.5);
+            }
+        } else {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let dry = (sim.gun.clip as i32) + (sim.gun.spare as i32) < 48;
+            drop(sim);
+            if dry {
+                w.resupply("pre-hall ammo");
             // Back to the meet room before the hall: the stage below is the route proven FROM
             // the meet plate. From a corridor box south-west of it the stage leg's nav wedged at
             // (1.5, 7.1, 8.6) — Bond 0.6 above the room's walk height (6.47), the segment to the
@@ -236,6 +298,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, [6.8, 6.0, 8.9]) > 3.0 {
                 w.walk_nav_to([6.8, 6.0, 8.9], "back to the meet room", 1.5);
             }
+        }
         }
     }
 
@@ -522,41 +585,29 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // [M DroneFunc_SetNoiseHeard] — the same bounded live-tracked burst the named loop
         // uses) and the fight takes him as he crosses. D3-GATED: the Agent sister's green
         // timelines stay byte-exact.
-        let lip: Vec<usize> = {
-            let sim = w.scene.sim.as_ref().unwrap();
-            (0..sim.drones.list.len()).filter(|&i| {
-                let d = &sim.drones.list[i];
-                d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
-                    && walker::dxz(d.pos, [7.9, 6.3, 11.1]) < 7.0
-            }).collect()
-        };
+        let lip: Vec<usize> = door_lip_scan(&w);
         for g5 in lip {
-            for t in 0..300u32 {
-                let (input, trigger, done) = {
-                    let sim = w.scene.sim.as_ref().unwrap();
-                    let d = &sim.drones.list[g5];
-                    if d.corpse || d.health <= 0.0 { (Input::default(), false, true) }
-                    else {
-                        let bp = sim.bond.pos;
-                        let at = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
-                        let desired = (at[0] - bp[0]).atan2(at[2] - bp[2]);
-                        let err = walker::wrap_pi(desired - sim.bond.yaw);
-                        let want_pitch = ((at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop)) / walker::dxz(bp, at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
-                        let perr = want_pitch - sim.bond.pitch;
-                        (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() },
-                            err.abs() < 0.02 && perr.abs() < 0.028 && t % 16 == 0, d.pos[2] < 10.5)
-                    }
-                };
-                if done { break; }
-                w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
-                w.total_ticks += 1;
-                w.after_step();
+            door_lip_fight(&mut w, g5, "door");
+            if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+        }
+    }
+    // guard-radii-01-d3: the ledger's #5 (0x5000038, the shotgun 0x1c, 24 hp) surfaces AFTER the
+    // AND — the iter-1 trace ran the first lip scan while he was still off (no "door lip guard"
+    // fight printed), and the route pre-clear leg then walked Bond past his (4.5,15.0) muzzle at
+    // 0.9 u (-14.40 ×3, the 3844 death). A player who just cleared the hall holds the door line
+    // and watches the aperture while the escort starts crossing: poll the same scan from the
+    // hold line and fight the lip the moment it shows. D3-GATED: the d1/d2 timelines stay
+    // byte-exact.
+    if difficulty >= 3 {
+        for poll in 0..20 {
+            let lip2: Vec<usize> = door_lip_scan(&w);
+            if lip2.is_empty() { w.wait(30); continue; }
+            eprintln!("[01] the door-lip re-scan (+{poll} polls) found {lip2:?} — fighting from the hold line");
+            for g5 in lip2 {
+                door_lip_fight(&mut w, g5, "escort lip");
                 if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
             }
-            if !w.shoot(g5, &format!("door lip guard {g5}")) {
-                if w.resupply("door lip ammo") { w.shoot(g5, &format!("door lip guard {g5} retry")); }
-            }
-            if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+            break;
         }
     }
     // The doorway step + the west-corridor route pre-clear + the pickup line, EVERY difficulty:
@@ -621,6 +672,25 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         }
     }
 
+    // guard-radii-01-d3: the finish report's own "post-escort re-sweep" — the first lip scan
+    // ran the moment the AND fired, and the ledger's #5 (0x5000038, the shotgun 0x1c, 24 hp)
+    // surfaces LATE: the 70165 death ate his -14.40/-14.80 volley at 1.4-2.2 u once the crossing
+    // began. As the escort crossing begins, run the lip block's scan again and fight whoever it
+    // finds — from the hold line, the same lure-and-fight shape. D3-GATED: the d1/d2 timelines
+    // stay byte-exact.
+    if difficulty >= 3 {
+        let lip2: Vec<usize> = door_lip_scan(&w);
+        if !lip2.is_empty() {
+            eprintln!("[01] the escort-crossing lip re-scan found {lip2:?} — walking the hold line and fighting");
+            if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, [7.2, 6.4, 8.8]) > 3.0 {
+                w.walk_nav_to([7.2, 6.4, 8.8], "the door-hold line (the escort lip re-scan)", 1.2);
+            }
+        }
+        for g5 in lip2 {
+            door_lip_fight(&mut w, g5, "escort lip");
+            if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+        }
+    }
     let mut settled = cpos;
     // The contact's park from the previous round: two rounds inside ~1 unit with no guard to
     // clear means the lead machine wedged on geometry — Bond walks PAST him toward the plate
