@@ -477,3 +477,5 @@ binary that touches spawners.
   — proven green with master's drone.rs+spawners.rs over this tree (the merge's only source files);
   the d1/d2 deaths sit in the searchlight courtyard (the guard-repin fd3f231ab prior art is unmerged).
   The 06 re-pin is the next session's first item. Report: docs/reports/spawn-pick-walk-05.md.
+- void-recovery: branch from origin/master a6665d115; WORKLOG entry started
+- void-recovery: the out-of-cel recovery arm shipped — control_handle_cel_change 0x133288's default arm (pos := obj+0x40 clamped into the old cel box minus the 1.0576 world-sphere radius [L ee_start_05 M_CONTROL+0x8C], relink the old cel) on the SP bond, the MP bodies and the poke path; both measured spots reproduced (the (12,6.3,-32) poke returns to the poke origin, the (16.5,6.3,-33) poke clamps to cel 8's max x - 1.0576 = 15.98 vs the measured 15.99); 4 live tests on 07000003 red-proven on the old code; walkreal 03 whole 6/0/1, sisters 02 3/0/1 and 04 10/0, mp_perf_16 2/0; the (16.5) stable-stand residual is the ground-contact model, live-check asked. Report: docs/reports/void-recovery.md.

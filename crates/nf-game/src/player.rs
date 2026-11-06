@@ -658,6 +658,14 @@ impl Bond {
         [pos[0] + LOCAL[0] * c + LOCAL[2] * s, pos[1] + LOCAL[1], pos[2] - LOCAL[0] * s + LOCAL[2] * c]
     }
 
+    /// The player's world-sphere radius (`obj+0x8C` = `M_CONTROL+0x8C · |obj+0xE8|`, scale 1.0 at
+    /// rest [M `Control_BuildWorldSph` 0x133070; `L ee_start_05.bin M_CONTROL 0x16cb8a0+0x8C`]):
+    /// 1.0576. This is the radius `control_handle_cel_change` 0x133288's out-of-cel recovery clamps
+    /// the recovered position with (its `obj+0x23` word = byte 0x8C) — the measured (16.5, 6.3, −33)
+    /// teleport on 07000003 lands at x 15.99 = cel 8's max x 17.04 − 1.0576 ≈ 15.98 [D live, the
+    /// void-recovery brief].
+    pub const SPHERE_RADIUS: f32 = 1.0576;
+
     /// The view direction (pitch applied to the forward axis). In the zero-g substates the whole
     /// orientation lives in the object matrix — ZeroG zeroes the scalar pitch BL+0x8a8 EVERY tick
     /// [M Player_ZeroG 0x192ab0:74] — so the view rides the matrix's forward row.
