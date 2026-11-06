@@ -121,10 +121,17 @@ fn bring_to_combat(l: &Level05, seed: u32) -> Option<(Drones, usize, u32)> {
     let mut sim = l.sim(drones, rng);
     for _ in 0..WARM { sim.tick(&d, &bond_at(FAR)); }
     let mut aim = None;
-    for f in 0..300 {
+    // The window must cover several combat-move cycles: the ATTACK move coin re-rolls after each
+    // move's danim and AIM is one outcome — how many moves precede the first AIM_STAND_FIRE is a
+    // shared-stream position, not a law (the old 300-tick window pinned one draw of it).
+    for f in 0..1200 {
         sim.tick(&d, &bond_at(BOND));
         if aim.is_none() && sim.list[gi].state == state::AIM_STAND_FIRE { aim = Some(sim.frame); }
         if aim.is_some() && sim.frame >= aim.unwrap() + 20 { break; }
+    }
+    if aim.is_none() {
+        let tail: Vec<(u32, u8)> = sim.list[gi].log.iter().rev().take(24).rev().copied().collect();
+        eprintln!("[bring] seed {seed}: never aimed in 1200; log tail {tail:?}");
     }
     aim.map(|a| (sim, gi, a))
 }
