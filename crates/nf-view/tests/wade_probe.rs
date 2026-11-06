@@ -64,26 +64,28 @@ fn probe_02_wade_behaviour() {
 fn probe_06_confirm_spot() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "07000006.bin", false).expect("load 07000006");
-    // Settle-scan: teleport Bond onto a grid over the pond (Object_Pondwater cel at 27.5, 38.6, -7
-    // [D docs/levels/07000006.md #351]), settle, and read the feet ray's byte at HIS settled root —
-    // the ground truth for what the game's feet ray reads. The (24,-7) plain-ray 0xE hits sit under
-    // a 0xC cap the game reaches first.
-    let mut found = Vec::new();
-    for xi in -8..9 {
-        for zi in -6..7 {
-            let (x, z) = (27.5 + xi as f32 * 1.0, -7.0 + zi as f32 * 1.0);
+    // Wide settle-scan: teleport Bond over the whole pond region (Object_Pondwater cel #351 at
+    // 27.5, 38.6, -7 [D docs/levels/07000006.md]), settle, and read the feet ray's byte at HIS
+    // settled root. Prints every distinct byte seen so the pond's true surface map is visible.
+    let mut by_byte: std::collections::BTreeMap<u8, Vec<(f32, f32, f32)>> = Default::default();
+    for xi in -12..13 {
+        for zi in -12..13 {
+            let (x, z) = (27.5 + xi as f32 * 1.5, -7.0 + zi as f32 * 1.5);
             let sim = scene.sim.as_mut().unwrap();
             for _ in 0..2000 { sim.step_bond(Default::default(), false, false, false); if !sim.disabled { break; } }
-            sim.bond.pos = [x, 39.8, z];
+            sim.bond.pos = [x, 39.9, z];
             sim.bond.prev_pos = sim.bond.pos;
             sim.bond.vel = [0.0; 3];
             for _ in 0..40 { sim.step_bond(Default::default(), false, false, false); }
             let feet = [sim.bond.pos[0], sim.bond.pos[1] - (sim.bond.cc + 0.6), sim.bond.pos[2]];
-            let b = sim.world.segment_surface(sim.bond.pos, feet, false).map(|h| (h.2 & 0x3f, h.0));
-            if b.map_or(false, |(by, _)| by == 0xE) && sim.bond.grounded && sim.bond.substate == 0 {
-                found.push((sim.bond.pos[0], sim.bond.pos[2], sim.bond.pos[1]));
+            let b = sim.world.segment_surface(sim.bond.pos, feet, false).map(|h| h.2 & 0x3f);
+            if let Some(by) = b {
+                let e = by_byte.entry(by).or_default();
+                if e.len() < 6 { e.push((sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2])); }
             }
         }
     }
-    eprintln!("06 true wade spots (settled, feet byte 0xE, grounded, walking): {} -> {:?}", found.len(), &found[..found.len().min(10)]);
+    for (by, spots) in &by_byte {
+        eprintln!("06 feet byte {by:#04x}: {} spots e.g. {:?}", spots.len(), &spots[..spots.len().min(3)]);
+    }
 }
