@@ -350,3 +350,32 @@ levers (0c's far-sniper cause pinned: the converged aimed rounds miss a STEPPING
 and 16 unchanged with their single pre-existing reds), then quote the six aim binaries and
 walkreal 08 / 0c / 14 / 16 / 1b whole. The [L] 08 pins and the 0x30000000 fix stay. Not in
 the stream batch. Test-side only.
+
+Outcome: 0c and 16 walks GREEN test-side; 08's cause re-pinned one level deeper, the
+attempted gate documented. The merge (master, tests/docs only) + 3 test commits. The 0c fix:
+a new opt-in `sniper_stands` stand in the shared `DamageLog::stand_and_fire` (the level's own
+yard_stand_aimed shape — settle, the aim button held, the CURSOR driven to the effective-aim
+position, the tap gated on the aim BIT + the effective error 0.01 + the target's root still
+18 ticks) plus the shooters window opened to the snipers' (95, 13) stand-off, riding a
+thread-local in common/walkreal0c.rs set BEFORE the prologue legs (the snipers open up INSIDE
+walk_spawn_to_the_band_at — a flag block after the return never runs; measured: the first
+wiring sat after the prologue and the walk died byte-identical). The fights then answer the
+d 61-90 0x1e snipers and one landing round kills an hp-10 guard: #20 killed at 13323 (its old
+kill-shot was 13463), the walk completes at 82.6 hp. The 16 fix: the pit-squad band hold
+factored (`hold_the_band`) and widened to EVERY live hostile inside 3.0 (the 14656 finishers
+were pit-room AR guards #15/#14 at d 1.2-1.3 in Bond's back — the old clone-only hold faced
+away), and the member kill runs in bounded `shoot_bounded` slices with the band hold
+re-checked between them (the death sat inside the 7300-tick fixed-target loop while the
+guards walked point-blank); the finale survives at 6.0 hp. 08: the NF_DMG_TRACE run pinned
+the 28756 death's world bucket to Bond's OWN rocket — the kind-44, owner-−1 blast at
+(113.6, 14.3, −180.3) d 2.7 → −75.0 at tick 28178 (the Hind's 2.0-gun rounds then chewed the
+last 3.0) — and the d3-gated effective-aim corridor gate (the round's first ticks fly along
+the view + the eased offsets, up to 0.23 rad off the gated aim direction; 0.6 u lateral at
+2.7 u) moved the death to 27975 (a −62.5/−15.5 pair) — the chase's mid-flight curve from a
+clear first-12-u corridor remains; the forecast gate (extrapolate the machine's flight-time
+position) is the next lever. Whole-binary quotes: walkreal 0c 3/0/1 (was red), 16 14/0/2 (was
+13/1/2), 1b 17/0/2, 14 9/0/1, 08 5/1 (the 00agent, unchanged red with the new evidence); the
+six aim binaries green (fusebox_geometry_14 1/0, interactables_14 10/0, rocket_glass08 3/0,
+rocket_origin 1/0, rocket_stop_plane08 4/0, solar_panel_hits 1/0). No `crates/*/src` file
+changed; the [L] 08 pins and the 0x30000000 fix untouched. Report:
+docs/reports/aim-route-6.md.
