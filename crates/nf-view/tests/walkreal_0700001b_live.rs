@@ -378,6 +378,18 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
     let mut last_shot = 0u32;
     let mut in_burst = false;
     let mut climbing_out = false;
+    // aim-route-3 (the aim-route-finish §2 recipe): `answered[pi]` counts the script player's
+    // SP_UnPause activations — the damage tail's one-tick flag [M 0x1dc2f8-0x1dc318] fires once
+    // per 20-damage block, and the console UI scripts carry exactly three holds (event 3 on
+    // streams 1/2/3 [D probe1b_scripts]) resumed each by 20 bullet damage — so the count IS the
+    // answered-hold count, straight from the game's own unpause path. `missile_start[k−1]` pins
+    // the frame missile k left state 0 (MissileDeploy 0→1 [M 0x1aa218]) — its p0's tick-0 frame
+    // S_k — so console k's read deadline is S_k + P0_LEN[k−1] − 1 [M 0x1aa23c-258; D P0_LEN].
+    let n_sp = w.scene.sim.as_ref().unwrap().drones.scripts.players.len();
+    let mut answered = vec![0u32; n_sp];
+    let mut missile_start = [0u32; 8];
+    let mut ch19_frame = 0u32;
+    let mut preflied: Vec<u32> = Vec::new();
     let mut plan: (u32, Option<[f32; 3]>) = (0, None);
     let mut cal = ShotCal::default();
     let mut banned: Vec<[f32; 3]> = Vec::new();
@@ -403,7 +415,12 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
         let (input, fire) = {
             let sim = w.scene.sim.as_ref().unwrap();
             for &k in &CONSOLE_ORDER {
-                if sim.drones.channels.on(k) && !latched.iter().any(|&(c, _)| c == k) { latched.push((k, sim.drones.frame)); }
+                if sim.drones.channels.on(k) && !latched.iter().any(|&(c, _)| c == k) {
+                    latched.push((k, sim.drones.frame));
+                    let dl = missile_start[(k - 1) as usize] as i64 + nf_game::space_missile::P0_LEN[(k - 1) as usize] as i64 - 1;
+                    eprintln!("[1b] latch k{k} frame {} deadline {dl} margin {}",
+                        sim.drones.frame, sim.drones.frame as i64 - dl);
+                }
             }
             let Some(&k) = CONSOLE_ORDER.iter().find(|&&k| !sim.drones.channels.on(k)) else { break };
             let pi = sim.drones.scripts.players.iter().position(|p| p.gate as u32 == 30 + k && p.hit_points > 0.0)
@@ -574,7 +591,22 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
                     [station[0], station[1] + 5.0, station[2]]
                 } else { station },
                 None => {
-                    let antic = console_station(k);
+                    // aim-route-3 recipe: when the CURRENT console's three holds are answered
+                    // (its script is playing to its own t682 channel write — nothing left to
+                    // shoot there), pre-fly to the NEXT un-latched console's station NOW. The
+                    // old arm targeted the CURRENT console's station (a no-op — Bond was already
+                    // there), so the whole ~300-tick crossing ran inside the next console's own
+                    // hold chain (the measured 6→8 blocker: the first tap 337 ticks after 8's
+                    // first hold, the flight eating 8's window entirely).
+                    let cur_done = answered[pi] >= 3;
+                    let antic_k = if cur_done {
+                        CONSOLE_ORDER.iter().filter(|&&x| !sim.drones.channels.on(x) && x != k).copied().next()
+                    } else { None };
+                    if cur_done && !preflied.contains(&k) {
+                        preflied.push(k);
+                        eprintln!("[prefly] k{k} frame {} holds {} → next {:?}", sim.drones.frame, answered[pi], antic_k);
+                    }
+                    let antic = console_station(antic_k.unwrap_or(k));
                     let ah = ((antic[0] - sim.bond.pos[0]).powi(2) + (antic[2] - sim.bond.pos[2]).powi(2)).sqrt();
                     let high = (antic[1] < -7.0 && ah > 1.2 && sim.bond.pos[1] > antic[1] + 2.0)
                         || (sim.bond.pos[1] < -7.0 && antic[1] > sim.bond.pos[1] + 2.0 && ah > 1.2);
@@ -597,11 +629,38 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
         } else {
             w.tick(input, false);
         }
+        // aim-route-3: sample the tick's SP_UnPause activations (the answered holds — see the
+        // counter's note), the missiles' state-0 exits (the deadline anchor) and the launch
+        // order's frame, right after the tick so the one-tick flags are still up.
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            for (i, p) in sim.drones.scripts.players.iter().enumerate() {
+                if p.activated {
+                    answered[i] += 1;
+                    if (31..=38).contains(&(p.gate as u32)) {
+                        eprintln!("[hold] k{} hold #{} answered at frame {}", p.gate as u32 - 30, answered[i], sim.drones.frame);
+                    }
+                }
+            }
+            for (i, &d) in sim.drones.missile_deploy.iter().enumerate() {
+                if d >= 1 && missile_start[i] == 0 { missile_start[i] = sim.drones.frame; }
+            }
+            if ch19_frame == 0 && sim.drones.channels.on(19) {
+                ch19_frame = sim.drones.frame;
+                eprintln!("[1b] ch19 (launch order) at frame {ch19_frame}");
+            }
+        }
     }
     let sim = w.scene.sim.as_ref().unwrap();
     for &k in &CONSOLE_ORDER {
-        if sim.drones.channels.on(k) && !latched.iter().any(|&(c, _)| c == k) { latched.push((k, sim.drones.frame)); }
+        if sim.drones.channels.on(k) && !latched.iter().any(|&(c, _)| c == k) {
+            latched.push((k, sim.drones.frame));
+            let dl = missile_start[(k - 1) as usize] as i64 + nf_game::space_missile::P0_LEN[(k - 1) as usize] as i64 - 1;
+            eprintln!("[1b] latch k{k} frame {} deadline {dl} margin {}",
+                sim.drones.frame, sim.drones.frame as i64 - dl);
+        }
     }
+    eprintln!("[1b] MissileDeploy {:?} (ch19 {ch19_frame}, missile starts {missile_start:?})", sim.drones.missile_deploy);
     latched
 }
 
