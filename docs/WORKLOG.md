@@ -93,3 +93,19 @@ every walkreal the earlier reports list red (08, 0c, 14, 16, 1b with firing spot
 
 Progress log:
 - Branch cut + master merged clean; pushed.
+- The word sourced: celglist+0x44 = the entity-params payload +4 [M 0x1d1508
+  pCurrCelList[0x11] = block+8] = the port's MapObject.flags; glist+8 = the collision
+  surface-byte pointer (0 = no collision — the pick's glist requirement). Door.f0 plumbed
+  (Door_Create's SetGList path, no create param); bullet_pass = f0 & 0x60. The aim stage
+  gained the 0x1eae80 mask gate (0x60 for the aim/bullet hittest 0x20a — both call sites
+  build it [M 0x1a4bf0:154, 0x12ef18 t3=522]) + the per-cel walk's f0 & 0x3000 pre-filter
+  [M 0x1eb914]. Probe: the 1b whole panel word 0x81 and the ten pieces 0xc1 match the [L]
+  audits; every 14 door placement's own word is the bare kind 0xdb (the stand-in read false
+  for all of them); the 14 doors resolve the anonymous 'OBJECT_Door' (word 0x0, r 0.4937).
+- The 14 blocker re-measured in the port: the near leaf (pl 384, cel 43 = the beam's own
+  cel) stops the round on its POSED TRIANGLES at t 0.383; its BUILT SPHERE (centre
+  (-89.338,-0.681,31.023), r 0.4937) also catches the beam (sqDist 0.0147 < r² 0.2437) —
+  the game's own sphere arm would stop a closed-door shot too; the 05 boot snapshot reads
+  f0 0x0 on all five doors [L]. The game-real flow opens the leaf (the walk-in proximity);
+  the tests teleport in. Next: the tests walk the real route, or the live check settles
+  the door's runtime pose/f0 on 14.
