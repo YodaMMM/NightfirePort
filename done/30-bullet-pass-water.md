@@ -6,3 +6,7 @@ Read `Collide_Intersect` 0x1ebaa8:311,317 and the node bit behind `bVar7 & 2`, t
 
 ---
 claimed-by: sandbox5 at 2026-11-06T18:17Z
+
+---
+## Report (done, 2026-11-06T19:42Z)
+
