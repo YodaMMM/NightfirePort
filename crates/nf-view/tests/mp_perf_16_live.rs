@@ -66,6 +66,8 @@ fn iso() -> Option<String> {
 //     arms — the one `Rand_Rand(n)` per bark [M 0x1266b4]).
 // Measured on the merged tree (gas-rng-draws-6): kills 35, digest 0x986f_90e8_e5d6_b12f — both
 // parents' game-faithful changes ride in one stream; the machines' per-tick hashes still agree.
+// gas-guard-repin re-pin pending: the master merge (water splash/wading, sighted alert fold)
+// rides the same stream — re-measured below after the merge, see the digest update.
 /// The 2-humans + 14-bots fixed run's hash fold; the pin's job (catching an UNintended change) is intact.
 const PINNED_DIGEST: u64 = 0x986f_90e8_e5d6_b12f;
 

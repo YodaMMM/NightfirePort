@@ -245,8 +245,11 @@ fn six_human_loopback_slot5_moves_hashes_agree_every_tick() {
 fn four_human_session_digest_is_pinned() {
     let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
     // The measured digests (this tree, master e5638828 + the test — see the report).
-    const PINNED_TICK0: u64 = 0x5c0b_b60a_8cdf_8938;
-    const PINNED_FINAL: u64 = 0xfb7b_58f7_3e34_0ec3;
+    // mp-site-destruction-blast re-measured both: the match hash fold gained the site death
+    // blast's one-tick queue (`MpObjectsRt::pending_blasts`, hash.rs) — the fold appends its
+    // len word even when empty, so every digest moves once.
+    const PINNED_TICK0: u64 = 0xce70_fc98_9d36_0d1f;
+    const PINNED_FINAL: u64 = 0xca2f_e7f4_f872_763f;
     const HUMANS: usize = 4;
     let (_s, mut peers, mut simmed) = bring_up(&path, PORT_4, HUMANS, &[0, 2]);
     let mut ms: u64 = 0;

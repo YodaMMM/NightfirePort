@@ -288,6 +288,14 @@ pub struct DamageLog {
     /// (drone, tick) per failed fight — the escalation's counter (the flat law keeps no history:
     /// `cooldown` holds only the latest entry per drone).
     pub fight_fails: Vec<(usize, u32)>,
+    /// OPT-IN (`eye_ray_stands`, set by the 07000011 00 Agent walk): under `lane_fights` the
+    /// stands aim through the plain eye ray (`exposed_part`) instead of the muzzle stand-ins
+    /// (`exposed_part_gun_rays`). This level's strip guards fire across the flights while the
+    /// stand-in rays clip the flight lips — the measured crossings drained the armour 43→0 with
+    /// NO fight ever triggered (the pick returned None, the volleys kept landing), and the 23.0
+    /// strip fights met Bond with the armour gone. A player answers what he SEES. Off = master
+    /// behaviour (the lane gun-ray pick) everywhere else — no other walk sets it.
+    pub eye_ray_stands: bool,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
 }
@@ -661,7 +669,7 @@ impl Walker {
                 }
             } else {
                 let vis = cands.iter().copied()
-                    .filter(|&i| DamageLog::visible_gun_rays(sim, i))
+                    .filter(|&i| if self.dmg.eye_ray_stands { DamageLog::visible(sim, i) } else { DamageLog::visible_gun_rays(sim, i) })
                     .min_by(|&a, &b| {
                         dmg_of(b).total_cmp(&dmg_of(a))
                             .then(dist_of(a).total_cmp(&dist_of(b)))
@@ -908,7 +916,7 @@ impl Walker {
                 // Re-pick the exposed part every 10 ticks (the guard animates, cover buries a part).
                 // The ray set follows the fight's pick: lane fights use the gun stand-ins, the
                 // shared walks the plain eye ray (master behaviour; level-13-lobby-rifles-2).
-                if t % 10 == 0 { aim = if self.dmg.lane_fights { DamageLog::exposed_part_gun_rays(sim, di) } else { DamageLog::exposed_part(sim, di) }; }
+                if t % 10 == 0 { aim = if self.dmg.lane_fights && !self.dmg.eye_ray_stands { DamageLog::exposed_part_gun_rays(sim, di) } else { DamageLog::exposed_part(sim, di) }; }
                 if aim.is_none() {
                     unseen += 1;
                     // NF_RF_GEOM: name the world stop that buries the target on the stand's first

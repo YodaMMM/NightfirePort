@@ -384,7 +384,12 @@ impl MpCombat {
     /// `steer[slot]` = the slot's look input (turn, look) this tick (the guided rocket's steering).
     /// Returns the damage dealt, in the order it happened.
     /// `site` = the scenario site's sphere (Demolition/Protection), a round target too.
-    pub fn step(&mut self, world: &CollisionWorld, wd: &WeaponData, bodies: &[Body], site: Option<(V3, f32)>, steer: &[(f32, f32); MP_MAX_SLOTS], rng: &mut Rng, frame: u32) -> Vec<Hurt> {
+    /// `extra_blasts` = mp-site-destruction-blast: the site's death blasts queued the tick
+    /// before (`MpObjectsRt::pending_blasts` — `Explode_Create` 0x1870a0:144-146), propagated
+    /// here through the same case-3/case-5 pass (the game's explosion object runs its contact on
+    /// its first update [M Explode_CollisionHandler 0x17cde0's one-shot latch], a frame after the
+    /// death). Owner `usize::MAX` = the game's NULL attacker.
+    pub fn step(&mut self, world: &CollisionWorld, wd: &WeaponData, bodies: &[Body], site: Option<(V3, f32)>, steer: &[(f32, f32); MP_MAX_SLOTS], rng: &mut Rng, frame: u32, extra_blasts: &[([f32; 3], f32, f32, usize)]) -> Vec<Hurt> {
         self.blasts.clear();
         let mut hurts = Vec::new();
         let mut blasts: Vec<Blast> = Vec::new();
@@ -575,6 +580,11 @@ impl MpCombat {
         //   destructed (`Bullet_handle_object_destruction` [M :141-162]) — a frag, mine, tripbomb
         //   or MGL Delay round chains its own blast; the stun/smoke (their flash/cloud branches
         //   carry no Explode_Create) just go [S — their effects are the view's].
+        // mp-site-destruction-blast: the site's death blasts lead the pass (created the tick
+        // before — the oldest explosion objects run first).
+        for (pos, radius, damage, owner) in extra_blasts {
+            blasts.push(Blast { pos: *pos, radius: *radius, damage: *damage, owner: *owner, weapon: 0 });
+        }
         let mut i = 0;
         while i < blasts.len() {
             let bl = blasts[i];

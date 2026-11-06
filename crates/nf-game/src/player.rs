@@ -2054,10 +2054,11 @@ self.local = [vs / k, vf / k];
             // The landing arm [M Player_HandleJump 0x1916b0:191-201], gated on flag 8 (feet on
             // ground [M Player_FeetOnPoint 0x194188:185]): 0x5FB when the contact byte is
             // 0xD/0xE, else 0xA3. The byte is the feet ray's first hit [M 0x194188:187-192]: the
-            // ray runs cc + 0.6 down with flags 0xc, so water planes stay in and pass
-            // triangles drop [M 0x1ebaa8:311,317], and it is copied only while surfaced.
+            // ray runs cc + 0.6 down and keeps the water planes, and it is copied only while
+            // surfaced. [L PCSX2 07000002 (-79, 28): byte 0xE, 0x5FB.] The port's bullet query
+            // drops those planes on the disc's data, so this is the plain one.
             let feet = [self.pos[0], self.pos[1] - (self.cc + 0.6), self.pos[2]];
-            let byte = if self.underwater { 0 } else { world.segment_surface_bullet(self.pos, feet).map_or(0, |h| h.2) };
+            let byte = if self.underwater { 0 } else { world.segment_surface(self.pos, feet, false).map_or(0, |h| h.2) };
             self.sfx_out.push((if byte.wrapping_sub(0xd) < 2 { 0x5fb } else { 0xa3 }, self.pos));
             self.land_step = true;
             self.land_countdown = 8;

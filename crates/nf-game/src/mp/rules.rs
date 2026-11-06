@@ -173,6 +173,15 @@ pub struct MpObjectsRt {
     /// every in-flight tick (`MP_GoldenEyeUpdate`'s `SP_SetPos` [M :87-95]), None at the impact
     /// (the strike global clears [M :121-122]). Hashed with [`MpObjectsRt::ge_target`].
     pub ge_strike_pos: Option<[f32; 3]>,
+    /// mp-site-destruction-blast: the site's death blast, queued the tick the site falls
+    /// (`Explode_Create(5.0, 5.0, 500.0, site_obj, obj+0x80, 0x2d6210, 0x600004f, 0xff, 0xff,
+    /// 100, 0)` [M 0x1870a0:144-146 — the float args 5.0, 5.0, 500.0, pos a1 = obj+0x80, script a3 =
+    /// 0x600004f; the attacker t3 = 0 NULL [M 0x187474 `daddu t3,zero,zero`]]) and drained by the
+    /// shared blast pass the NEXT tick — the game's explosion object propagates on its first
+    /// update [M Explode_CollisionHandler 0x17cde0's one-shot latch]. Tuple: (pos, radius 5.0,
+    /// damage 500.0, owner) with owner `usize::MAX` = the game's NULL (no kill credit —
+    /// `Explode_Propagate`'s case-3 registration gate skips a NULL attacker [M 0x17c518:128-134]).
+    pub pending_blasts: Vec<([f32; 3], f32, f32, usize)>,
 }
 
 impl MpObjectsRt {
@@ -678,6 +687,9 @@ impl MpMatch {
         self.game.clock = 0.0; // [M 0x183fc0:40-53]
         self.game.restart_timer = 0.0;
         self.objects_rt.site_status = None; // [M 0x184bd0:88-89]
+        // mp-site-destruction-blast: the restart's class-5 sweep deletes the round's explosion
+        // objects with everything else [M 0x183fc0:14-17] — an undrained death blast goes too.
+        self.objects_rt.pending_blasts.clear();
         let s = self.settings.scenario;
         if s == scenario::DEMOLITION || s == scenario::PROTECTION {
             let pool: Vec<usize> = match s {
@@ -1079,7 +1091,10 @@ impl MpMatch {
     /// hitter is a defender — whose team also pays 1.0 (the own-goal REPLACES the hitter's +1,
     /// `fVar10 = -1.0` [M :129-140]; 402 added both and left the hitter at 0); no recorded hitter
     /// (0xffff) scores no one personally [M :131]. The site is done and the round enters state 6
-    /// at once [M :141-160].
+    /// at once [M :141-160], and the death fires the site's own blast — `Explode_Create(5.0,
+    /// 5.0, 500.0, site_obj, obj+0x80, 0x2d6210, 0x600004f, 0xff, 0xff, 100, 0)` [M :144-146,
+    /// the NULL attacker t3 = 0 at 0x187474] — queued into [`MpObjectsRt::pending_blasts`] for
+    /// the shared blast pass the next tick (see the field's doc).
     pub fn damage_site(&mut self, dmg: f32, hitter: usize) {
         let s = self.settings.scenario;
         if s != scenario::DEMOLITION && s != scenario::PROTECTION {
@@ -1127,8 +1142,25 @@ impl MpMatch {
             self.objects_rt.site_status = Some(if phoenix { 0x200002f } else { 0x200002e });
         }
         let site = &mut self.objects_rt.site;
-        site.as_mut().unwrap().sub = 1;
+        let s = site.as_mut().unwrap();
+        s.sub = 1;
+        // The blast position is the site's obj+0x80 — the contact sphere's world centre, the
+        // point `site_sphere` returns [M 0x1870a0:145 `addiu a1,s4,128`; ObjView's obj+0x80 doc].
+        let centre = s.bounds.map(|b| [s.pos[0] + b.centre[0], s.pos[1] + b.centre[1], s.pos[2] + b.centre[2]]).unwrap_or(s.pos);
+        self.objects_rt.pending_blasts.push((centre, 5.0, 500.0, usize::MAX)); // [M :144-146]
         self.game.state = 6; // the round is over [M :160]
+        // :142 stores GameState+0x34 (the frame counter) into the site obj's +0xEC — the
+        // spawn-frame stamp `MP_HitBy`'s 4-frame window reads on the SLOTS' objects [M
+        // 0x1830e0:36-39]; no port path reads the site's stamp, so the store has no modeled
+        // reader here (recorded, see the report). :143's `SP_UnPause(site SP)` [M 0x1dca58]
+        // writes SP+0x2C (a one-shot event-4 pulse `SP_Update` consumes and clears the same tick
+        // [M 0x1dbda8:78-81]) and clears the current SCRIPTINFO+0x9C — neither write touches the
+        // port's SP model (`sp_script`/`sp_state` [M 0x1dcad8:23-34]), and the done flag above
+        // already stops the site's hit feed. :161-165 moves the Demolition/Protection ext's obj
+        // word out, zeroes it and routes `MP_sendTeamBotMessage(param_3 == 0, 0x41, ext, 0, 0)`
+        // [M 0x18bbc8] — the port's bot pump is not wired [S mod.rs `send_team_bot_message`];
+        // the death itself clears the bots' view: `bot_objectives().site` is None from the
+        // `sub == 1` here.
     }
 
     fn flag_home(&mut self, ti: usize) {
