@@ -105,9 +105,15 @@ volume after the sniper drain — #20 (d 59.2) 36.0 in 3, #23 (d 71.0) 9.0 in 3,
 - walkreal_07000008_live: **5 passed / 1 failed** (194.5 s) — the station-volleys red above.
 - walkreal_07000003_live: **5 passed / 2 failed** (752.2 s) — the agent red above (the 00agent
   fail is its pre-existing ignore).
-- walkreal_07000001_live / walkreal_07000016_live / walkreal_0700001b_live /
-  enemy_accuracy_live: see the WORKLOG tail for the counts as they landed (this report was
-  written while they ran).
+- walkreal_07000001_live: **8 passed / 0 failed** (56.6 s).
+- walkreal_07000016_live: **14 passed / 2 failed** (100.2 s) — the 2 are the file's own
+  pre-existing `#[ignore]`s (the chasers Agent/00agent sisters, ignored on master too);
+  every non-ignored test green.
+- walkreal_0700001b_live and enemy_accuracy_live: launched with the battery but KILLED
+  MID-RUN (the sandbox reaped the processes between tool calls — no result lines, the logs
+  end mid-test: 1b inside "the boundary wall stops the float", accuracy inside
+  "astronauts_hit_like_the_chain"). No counts; both binaries built clean and their earlier
+  tests passed until the kill. Next window runs them whole first.
 
 ## What's left (next window)
 
