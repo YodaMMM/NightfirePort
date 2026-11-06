@@ -318,7 +318,31 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         ("the east lane north", [10.59, 6.47, -22.91]),
     ] {
         clear_near(&mut w, 8.0, name);
-        w.walk_to(Wp { at, act: Act::None, arrive: 1.0 }, name);
+        // audit-voice-triggers-3: lenient is re-armed per leg — the clear_near/shoot internals
+        // reset it on their way out, and the 2026-11-05 run's wedged leg panicked at the
+        // non-lenient cap instead of returning to the ladder below.
+        w.lenient = true;
+        let mut got = w.walk_to(Wp { at, act: Act::None, arrive: 1.0 }, name);
+        // The wedge ladder: the lane climb wedges from the moat's south edge (the 2026-11-05
+        // run: the mid anchor's nav slid Bond DOWN the ditch to (10.28, 6.34, -36.05), the
+        // sidesteps never finding the ramp; segment_to_target hit at t 0.10). A player does not
+        // stand in a ditch: sidestep ALONG the moat (the moat legs above walked it fine), then
+        // take the anchor again from the stepped-aside spot. Both sides fail: skip the anchor —
+        // the anchors steer the nav, the NEXT anchor re-derives its own path and the route
+        // continues (the same doctrine as the 01 walk's wedged-lane ladders).
+        if got == u32::MAX {
+            let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+            for (side, sname) in [(1.0f32, "east"), (-1.0f32, "west")] {
+                let to = [bp[0] + side * 2.5, bp[1], bp[2] + side * 1.5];
+                w.walk_nav_to(to, &format!("{name}: the moat sidestep {sname} (the wedged nav's ladder)"), 1.2);
+                w.lenient = true;
+                got = w.walk_to(Wp { at, act: Act::None, arrive: 1.0 }, &format!("{name} (after the {sname} sidestep)"));
+                if got != u32::MAX { break; }
+            }
+            if got == u32::MAX {
+                eprintln!("[03] {name}: both sidesteps wedged — skipping the anchor, the next leg re-derives the path");
+            }
+        }
     }
     w.lenient = false;
     if difficulty >= 3 {

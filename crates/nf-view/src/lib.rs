@@ -2327,6 +2327,12 @@ pub fn scene_overlay_up(scene: &scene::Scene, movie_up: bool) -> bool {
 /// `Player_Update` is not reached again (`Game_Run` 0x1c9790 skips the object handlers), but
 /// `Game_Draw` 0x1e6f50:186-214 keeps drawing every viewer's sprite list with no pause gate, so
 /// the HUD sprites stay on screen under the menu as that last update left them.
+/// The pages drawn over the paused frame's HUD layer: the pause page, and the fail menu, whose
+/// red death wash is that layer's blood pane.
+fn menu_over_hud(fe: &menu::FrontEnd) -> bool {
+    fe.page == menu::Page::Pause || (fe.page == menu::Page::Results && fe.outcome == menu::Outcome::Failed)
+}
+
 pub fn hud_under_menu(hud: gpu::HudFrame, menu: &gpu::HudFrame) -> gpu::HudFrame {
     let mut f = hud;
     f.append(menu);
@@ -2542,6 +2548,9 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
     if fe.page == menu::Page::MpBotChoose { fe.mp_bot_char = fe.cursor; }
     // Join Game: `--cursor` is agent 1's panel state (0 press to join, 1 choose codename, 5 joined).
     if fe.page == menu::Page::MpJoin { fe.mp_join[0].state = fe.cursor as u32; fe.mp_join[0].joined = fe.cursor > 0; fe.cursor = 0; }
+    if let Some(i) = args.iter().position(|a| a == "--objective-row") {
+        fe.pause_objectives_sel = args.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or(0);
+    }
     if let Some(i) = args.iter().position(|a| a == "--pause-tab") {
         fe.pause_tab = args.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or(0);
     }
@@ -2617,7 +2626,7 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
     let frame = menu::menu_overlay_fonts(&fe, &tables.font, &tables.font_header, Some(&tables.font_medium), lang.as_ref(), &scene.hud_textures, 1280.0 / 720.0);
     // hud-start: the pause page draws over the gameplay HUD, as the windowed App composes it
     // (`hud_under_menu`) — the shot used to show the page alone, with no health ring.
-    if fe.page == menu::Page::Pause && scene.sim.is_some() {
+    if menu_over_hud(&fe) && scene.sim.is_some() {
         return (Some(hud_under_menu(overlay_for(scene, 1280.0 / 720.0), &frame)), movie);
     }
     (Some(frame), movie)
@@ -6145,7 +6154,7 @@ impl App {
                         // ring, ammo pane) [L PCSX2 captures; the
                         // port replaced the HUD with the overlay]. The HUD's quads go FIRST so
                         // the menu draws over them (frame order = draw order).
-                        if fe.page == menu::Page::Pause && !matches!(fe.flow.get_state(), menu::ST_MOVIE) {
+                        if menu_over_hud(fe) && !matches!(fe.flow.get_state(), menu::ST_MOVIE) {
                             // The menu's runs shift by the HUD's vertex count (the HUD's vertices go first) and the HUD
                             // keeps its own runs — the old merge shifted by the MENU's count and dropped the HUD's runs,
                             // so the live pause page drew from the wrong vertices (the plate, the figure and most rows
@@ -7774,17 +7783,9 @@ fn pause_objective_rows(sim: &scene::Sim) -> Vec<menu::PauseObjective> {
 
 /// bonus-007: the pause SCORE tab's live counters, straight off the progress layer — the game's
 /// handler fills its list box from `PlrMissionStats` [M C_GCPAUSE_Handler 0x204408:447-498; the
-/// record layout is docs/fields/player-stats.md]. Shots/accuracy/time keep their existing fill.
+/// record layout is docs/fields/player-stats.md]. The same record as the results page's stats.
 fn pause_stats(sim: &scene::Sim) -> menu::Stats {
-    let s = sim.drones.progress.stats();
-    menu::Stats {
-        bond_moves: s.bond_moments,
-        dispatched: s.dispatched,
-        subdued: s.disabled,
-        surrendered: s.surrendered,
-        bonus_pickups: s.bonus_pickups,
-        ..menu::Stats::default()
-    }
+    mission_end_stats(&sim.drones.progress)
 }
 
 /// The mission's tracked tallies as the results page's stats (mission-results-page). The game's
@@ -9066,6 +9067,88 @@ mod headless_app_harness {
         assert_eq!(sound_pumps(&mut owed, 60, true), 8, "a long frame does not burst");
         assert_eq!(owed, 0);
     }
+
+    /// regression-read-player-move: the grapple's own quad memset through the REAL App path —
+    /// the held-W walk rides the window's own input build (the `held(KeyW)` lanes), the Q-Claw
+    /// latches the SkyBridge grapple point (walkreal-14's crossing: GRAPPLEPOINT_SkyBridge
+    /// (45.29, 5.10, 62.94) [D placement; the port resolves 45.2888, 5.0961, 62.9362], the bolt's
+    /// class-0x51 latch [M Bullet_Delete 0x12e660:50-55]), the reel hangs at d < 2.0
+    /// [M Player_SSGrapple 0x192860:91-94] — and the quad the guards' accuracy moving test reads
+    /// [M 0x179a48:34-41 → 0x179740:71-73] must be ZERO on the hang: `Player_SSGrapple` memsets
+    /// BL+0x10..+0x20 on every call [M disasm 0x192a24-0x192a34]. Run at both frame steps: the
+    /// 1/60 tick and the 1/240 four-frames-per-tick pump must agree.
+    #[test]
+    fn the_grapple_hang_reads_still_after_a_walk_at_both_frame_steps() {
+        let Ok(iso) = std::env::var("NF_ISO") else { return };
+        let run = |step: f32, label: &str| {
+            let mut h = HeadlessApp::mission(&iso, "07000014.bin");
+            let frames_per_tick = (1.0 / 60.0 / step).round().max(1.0) as f32;
+            let mut guard = 0;
+            while h.app.scene.sim.as_ref().unwrap().disabled {
+                h.frame(step);
+                guard += 1;
+                assert!(guard < 6000, "{label}: the load never enabled");
+            }
+            h.frames((2.0 * frames_per_tick) as u32);
+            // Hold W through the aim and the fire — the walk lanes are live at the latch, which
+            // is the shape the regression needs (a grapple entered WHILE WALKING).
+            h.key(KeyCode::KeyW);
+            // The Q-Claw (0x50) through the real switch lane [L gadget is_grapple: 0x50/0x51].
+            let point = [45.2888f32, 5.0961, 62.9362]; // [D placement; the port's resolution]
+            let want_look = 0.20f32 / std::f32::consts::FRAC_PI_2; // the bolt-legal arc [D probe14_aim]
+            let mut switched = false;
+            for _ in 0..200 {
+                h.app.weapon_switch_to = Some(0x50);
+                h.frame(step);
+                if h.app.scene.sim.as_ref().unwrap().gun.weapon == 0x50 { switched = true; break; }
+            }
+            assert!(switched, "{label}: the Q-Claw switch never landed");
+            // Steer onto the point and fire to latch [M 0x12e660:50-55; the 1.0 sweep 0x12c5a0:92].
+            let wrap = |a: f32| a - std::f32::consts::TAU * ((a + std::f32::consts::PI) / std::f32::consts::TAU).round();
+            let mut latched = false;
+            for _ in 0..900 {
+                {
+                    let s = h.app.scene.sim.as_ref().unwrap();
+                    let b = &s.bond;
+                    let dyaw = wrap((point[0] - b.pos[0]).atan2(point[2] - b.pos[2]) - b.yaw);
+                    let dlook = want_look - b.pitch;
+                    let k = step * 60.0; // the same per-tick steer rate at either frame step
+                    h.app.turn += dyaw.clamp(-0.08, 0.08) * k;
+                    h.app.look += dlook.clamp(-0.08, 0.08) * k;
+                    h.app.trigger = dyaw.abs() < 0.05 && dlook.abs() < 0.03;
+                }
+                h.frame(step);
+                if h.app.scene.sim.as_ref().unwrap().bond.grapple.is_some() { latched = true; break; }
+            }
+            assert!(latched, "{label}: the Q-Claw bolt never latched the SkyBridge point");
+            // Reel to the hang [M 0x192860:79-121] with the fire still held.
+            let mut hanging = false;
+            for _ in 0..600 {
+                h.frame(step);
+                let s = h.app.scene.sim.as_ref().unwrap();
+                match (&s.bond.grapple, s.bond.substate) {
+                    (Some(g), nf_game::player::SS_GRAPPLE) if g.phase == 2 => { hanging = true; break; }
+                    (None, _) => break,
+                    _ => {}
+                }
+            }
+            assert!(hanging, "{label}: the reel never reached the phase-2 hang");
+            // Drop the W lane (the fire HELD keeps the hang [M 0x192860:56-66's arm]) and pin the
+            // quad on the hang itself.
+            h.app.app_key(KeyCode::KeyW, winit::event::ElementState::Released, false);
+            for _ in 0..10 { h.frame(step); }
+            {
+                let s = h.app.scene.sim.as_ref().unwrap();
+                let b = &s.bond;
+                assert_eq!(b.substate, nf_game::player::SS_GRAPPLE, "{label}: the held fire keeps the hang");
+                assert_eq!(b.move_local, [0.0, 0.0],
+                    "{label}: the hang's quad must read STILL to the guards [M 0x192860 memset; \
+                     0x179a48:34-41], got {:?}", b.move_local);
+            }
+        };
+        run(1.0 / 60.0, "1/60");
+        run(1.0 / 240.0, "1/240");
+    }
 }
 
 #[cfg(test)]
@@ -9105,6 +9188,13 @@ mod bonus_pause_stats {
         assert_eq!(s.subdued, 4, "+0x10 → Subdued");
         assert_eq!(s.surrendered, 5, "+0x14 → Surrendered");
         assert_eq!(s.bonus_pickups, 6, "+0x24 → the 007 Bonus row");
+        // Sister: the tab's Time and Accuracy rows read the same record, not a blank default.
+        scene.sim.as_mut().unwrap().drones.progress.stats[0].elapsed = 7900;
+        scene.sim.as_mut().unwrap().drones.progress.stats[0].shots_fired = 4;
+        scene.sim.as_mut().unwrap().drones.progress.stats[0].shots_hit_enemy = 3;
+        let s = crate::pause_stats(scene.sim.as_ref().unwrap());
+        assert_eq!(s.time_s, 79, "+0x30 in 1/100 s → the Time row");
+        assert_eq!(s.accuracy_pct, 75, "the Accuracy Rating row");
     }
 }
 

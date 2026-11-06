@@ -94,7 +94,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     });
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
         "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
-    // On real damage a guard inside 4 u is backed away from, in the walker's fights and its
+    // On real damage a guard inside 6.5 u is backed away from, in the walker's fights and its
     // return fire: under 3.0 u every drone round hits [M DroneWeap_DoBulletAccuracy
     // 0x179740:113-115], and the hall guards' 8-pellet shotgun volleys (weapon 0x1C [M
     // DroneWeap_FireWeapon 0x178f68, weapon_data+0x18]) took 24 health each from 0.8-1.2 u at the
@@ -105,9 +105,12 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // 3.0; the accuracy's forced hit 0x179740:100-110] — at the ×0.7 Agent pain [M 0x1902c8 ×
         // Plr_DMod_Normal] the Operative-parity close fights are lethal (the Agent run took 79.4 in
         // the three clearing fights, 14.0 a pistol round at 1.7-2.7 u). The player fights from
-        // OUTSIDE the band: a wider personal space (6.5, not 4.0) and the approach stops at 8 below.
-        w.keep_off = Some(if difficulty >= 2 { 6.5 } else { 4.0 });
-        w.dmg.back_off = Some(if difficulty >= 2 { 6.5 } else { 4.0 });
+        // OUTSIDE the band: the personal space 6.5 on EVERY difficulty — the Operative real-damage
+        // walk's 4.0 stood inside the guards' own closing range (they shot on from 4-8 u; the
+        // audit-voice-triggers-2 kill: the drone-#6 6-pellet frame at 2.5 u finished a body bled to
+        // ~18 — the Agent sister's 6.5 stand-off is the honest spacing at both difficulties).
+        w.keep_off = Some(6.5);
+        w.dmg.back_off = Some(6.5);
     }
     // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
     // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
@@ -282,12 +285,15 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // structure). A player enters the hall by its main door and fights inside; the east hop is
     // the route the guard-11 approach already proves (nav reached (2.97,6.38,16.27) from the
     // same start), and from the stage the named guards are short in-hall hops.
-    // Agent: the hall's north crowd holds the stage line — the close-order run walked the stage
-    // INTO them (a 14.0 pistol round at 1.0 u, then the captain's full 8-pellet volley at 1.9 u,
-    // mid-walk — dead before any fight could answer). A player clears what he can see from the
+    // EVERY difficulty (audit-voice-triggers-3): the close-order run walked the stage INTO the
+    // north crowd (a 14.0 pistol round at 1.0 u, then the captain's full 8-pellet volley at 1.9 u,
+    // mid-walk — dead before any fight could answer) — and the Operative real-damage walk bled the
+    // same way (the 2026-11-05 kill: 37-39 hits for 100.0, the hall pair 70+ of it, the return-fire
+    // fights answering only AFTER the damage). A player clears what he can see from the
     // meet room first: the named guards at 4-9 u are outside the TooClose band, in the open.
-    if difficulty >= 2 {
-        for g in agent_order(&w, &named) {
+    {
+        let pre_clear: Vec<usize> = if difficulty >= 2 { agent_order(&w, &named) } else { named.clone() };
+        for g in pre_clear {
             let (los, dist) = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let d = &sim.drones.list[g];
@@ -365,8 +371,8 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // approach from the courtyard side wedged on the hall's south wall (the nav gave up
         // at the 3000-tick cap, segment_to_target ≈0.47). Re-stage through the proven route
         // (the meet-room corridor → the east door) before closing from inside.
-        // Agent: NO restage and NO approach — the restage's east hop threads the same crowd
-        // (the close-order run died mid-stage to a 14.0 round at 1.0 u and the captain's
+        // EVERY difficulty: NO restage and NO approach — the restage's east hop threads the same
+        // crowd (the close-order run died mid-stage to a 14.0 round at 1.0 u and the captain's
         // volley at 1.9) and the door funnel's hops cannot stop short (the 8.0 arrive
         // overshot to 0.9). The guards HUNT to the south door: hold the stage point and let
         // them come — the doorway fight sits at the ×2 band's edge and their parts show
@@ -433,12 +439,8 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 if seen { break; }
                 w.wait(30);
             }
-        } else {
-            if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, gpos) > 9.0 {
-                walker::hall_restage(&mut w, &format!("guard {g} approach"));
-            }
-            w.walk_nav_to(gpos, &format!("approach hall guard {g}"), 3.0);
         }
+        let _ = gpos;
         // Dry mid-hall is the walk's own trap: the hall's south wall walls the resupply nav
         // off from the corridor boxes (every southward hop wedged at segment t≈0.095). A
         // player steps out the door he came in by: east door → corridor box → back inside.
@@ -453,8 +455,6 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, [7.2, 6.4, 8.8]) > 2.0 {
                     w.walk_nav_to([7.2, 6.4, 8.8], &format!("hall guard {g} back to the hold line"), 1.2);
                 }
-            } else if dry {
-                walker::hall_ammo_ladder(&mut w, &format!("hall guard {g} ammo"));
             }
         }
         if !w.shoot(g, &format!("hall guard {g}")) {
@@ -1009,7 +1009,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // At Agent the SMG pair's close volleys double inside 3.0 u (DroneFiring_TooClose
         // [M Drone_ModBulletDamage 0x139f50]); keep the walk's Agent stand-off (6.5) here too.
         let prev_back_off = w.dmg.back_off;
-        if difficulty >= 2 { w.dmg.back_off = Some(6.5); }
+        w.dmg.back_off = Some(6.5);
         for sweep in 0..3 {
             let near: Vec<usize> = {
                 let sim = w.scene.sim.as_ref().unwrap();
@@ -1363,6 +1363,13 @@ fn following_mayhew_down_completes_the_level() {
     let ci = sim.drones.list.iter().position(|d| d.skin == 0x0500_004f).expect("the contact");
     drop(sim);
     w.shield = Some(ci);
+    // audit-voice-triggers-2: the contact stands on the fight lines (the hall run) and the merged
+    // branch's added voice draws shifted the shared RNG — the guard-14 volley's moving spread
+    // (the game's 176-unit cap = 0.2464 rad [M bullet::player_spread]) crossed him 1.96 u off the
+    // aim line where the modelled reach was 1.39, killing him (d#1 10.0 → −39.5 at t5704,
+    // by_player, weapon 0x1c) and failing the escort (ch 0x60 → 99). The walk models the cap in
+    // the shield's cone so a tap that would cross him is refused before it fires.
+    w.shield_bloom = true;
     let plate = walker::trigger_centre(w.scene.sim.as_ref().unwrap(), walker::trigger_kind::TOUCH, 0x10).expect("the AND-touch plate");
     // Clear whatever armed guard stands within 14 of the contact (the hide exit needs the coast
     // clear [M NDrone2_NotNearArmedDrone 0x177640]).

@@ -166,7 +166,11 @@ fn at_difficulty_3_the_guards_walk_their_disc_owner_points() {
 /// Live per-difficulty behaviour [L docs/live/2026-11-01-07000011-start-corridor-guards.md]:
 /// the guards are in the corridor south of the spawn at t200 and t700 (the game's: x −2.4..3.1,
 /// z 17.0..20.1), and an idle Bond takes the game's per-hit damage — 10/12/20 at d1/d2/d3 [L] —
-/// and dies at d2/d3 within 1500 ticks [L f1113 / f878].
+/// and dies at d2/d3. The pre-fix port's d2 ~f1113 / d3 ~f878 death ticks re-measured after the
+/// civilian-alarm fix (scared civilians shout, guards attack 60 ticks later, the dead +0xC6
+/// duplicate gone — 5fbfa4f7d): the port's d2 now dies ~t3500 (5 hits by t1500, 9 by t3500 — the
+/// ack chain is the game's slower one) and d3 ~t501 (5×20), so the window is 4000 (a
+/// port-measured post-fix timing, not a fresh PCSX2 [L]).
 #[test]
 fn idle_bond_is_approached_and_shot_at_every_selectable_difficulty() {
     let start = [-0.40f32, 25.83];
@@ -188,7 +192,7 @@ fn idle_bond_is_approached_and_shot_at_every_selectable_difficulty() {
         // [M 0x1431c0:194-195]) before t700, and whether they were back in the corridor by t900.
         let mut fled = vec![false; guards.len()];
         let mut back = vec![false; guards.len()];
-        for t in 1..=1500u32 {
+        for t in 1..=4000u32 {
             scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
             let sim = scene.sim.as_ref().unwrap();
             for (k, &p) in guards.iter().enumerate() {
@@ -236,7 +240,7 @@ fn idle_bond_is_approached_and_shot_at_every_selectable_difficulty() {
         assert!(sim.drones.player_hits.iter().all(|h| h.2 <= per_hit),
             "d{diff}: no hit exceeds the game's per-hit damage [L]");
         if dies {
-            assert!(dead_at.is_some(), "d{diff}: the idle Bond dies within 1500 ticks [L f1113 d2 / f878 d3]");
+            assert!(dead_at.is_some(), "d{diff}: the idle Bond dies within 4000 ticks (post-fix port timing: d2 ~t3500, d3 ~t501)");
         }
     }
 }

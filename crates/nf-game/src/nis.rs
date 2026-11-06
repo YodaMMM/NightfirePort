@@ -423,6 +423,27 @@ impl Script {
     /// `Script_IsDeathNIS` (0x1dae60): the three death cut-scenes can NOT be skipped [M 0x1dae60:6-17].
     pub fn is_death_nis(hash: u32) -> bool { matches!(hash, 0x0600_0952 | 0x0600_098a | 0x0600_0991) }
 
+    /// `Script_Play` 0x1db588's camera tail — the one helper behind every port site that reaches a
+    /// `Script_Play` call. The game runs the tail wherever `Script_Play` runs: the load arm
+    /// (`SP_LoadScript` 0x1dbc08's mode dispatch plays every arm through `Script_Play`) and
+    /// `SP_Update` case 1's restart (`0x1dbda8 case 1 → LAB_001dc174 Script_Play(si, mode == 8)`).
+    /// On a camera script (`+0xAA8 & 0x40` → the port's flags 0x40 [M 0x1d8248 → Script::load])
+    /// whose hash (+0x98, the port's `nis.hashcode`) is one of the three death NISs
+    /// (`Script_IsDeathNIS` 0x1dae60: 0x6000952/0x600098a/0x6000991) it posts the death music
+    /// jump `Music_Event(6, 1)` [M disasm 0x1db608-0x1db610 — the port's kind-0x41 Event, drained
+    /// onto the board by `Drones::drain_script_requests`; the board's event-6 consumer is the
+    /// on-death marker jump, the same jump Player_CheckForDeath posts]. The flush after it is NOT
+    /// gated on the three ids: `jal Text_FlushAllSubtitles` 0x1db618 runs for EVERY camera script
+    /// → the port's `Request::TextFlush` (the game's type-4/5 message class [M 0x1b1604-0x1b1610]).
+    fn push_camera_tail(&self, out: &mut Vec<Request>) {
+        if self.flags & 0x40 != 0 {
+            if Script::is_death_nis(self.nis.hashcode) {
+                out.push(Request::Event { kind: 0x41, params: vec![] });
+            }
+            out.push(Request::TextFlush);
+        }
+    }
+
     /// `Script_FFwd(si, 1)` (0x1dac78) — the game's cut-scene skip, called from `SP_Update` state 2 while the
     /// player presses the skip action (`Input_Action(-1, 0x19, 1)` [M 0x1dbda8:129-141]).
     ///
@@ -1720,16 +1741,14 @@ impl Player {
         let s = self.info[cur].as_mut().unwrap();
         s.player = self.placement; // for NF_SCRIPTLOG
         // `Script_Play` 0x1db588:23-41 — every SP_LoadScript arm starts playback through
-        // `Script_Play`, which on a camera script (`+0xAA8 & 0x40`, the port's `nis.camera` →
-        // flags bit 0x40 [M 0x1d8248 → Script::load]) whose hash is one of the three death NISs
-        // (`Script_IsDeathNIS` 0x1dae60: 0x6000952/0x600098a/0x6000991) posts the death music
-        // jump `Music_Event(6, 1)` [M 0x1db588:26-41], then `Text_FlushAllSubtitles` (the
-        // subtitle flush rides the view side; the Sim carries no script subtitles here). The
-        // board's event-6 consumer is the on-death marker jump (`UpdateMusicalEvents`
-        // 0x114e70 DAT_002d3510 = MapMusicData+0xc) — the same jump Player_CheckForDeath posts.
-        if s.flags & 0x40 != 0 && Script::is_death_nis(self.scripts[cur]) {
-            out.push(Request::Event { kind: 0x41, params: vec![] });
-        }
+        // `Script_Play`, whose camera tail (death-NIS `Music_Event(6, 1)`, then the un-gated
+        // flush) runs here via the shared helper. The flush lands BEFORE SP_LoadScript's arm
+        // tail reaches the script's own first `Script_Update` [M 0x1dbc08: the mode arms call
+        // Script_Play, then Script_Update] — so a caption already on screen dies with the
+        // cut-scene start and the script's own first line does not. The flush is the same
+        // `Text_FlushAllSubtitles` 0x1b15c8 the skip arm runs (the Sim-side pending lines, the
+        // bound HUD lines via the view's `text_flush` consumer, and the subtitle track).
+        s.push_camera_tail(out);
         match mode {
             1 => { s.start(false); self.state = 2; }
             8 => { s.start(true); self.state = 6; }
@@ -1839,7 +1858,13 @@ impl Player {
                 self.state = 2;
                 self.countdown = 5;
                 let looping = self.modes[self.cur] == 8;
-                if let Some(s) = self.info[self.cur].as_mut() { s.start(looping); }
+                if let Some(s) = self.info[self.cur].as_mut() {
+                    s.start(looping);
+                    // `SP_Update` case 1 reaches `Script_Play` too [M 0x1dbda8 case 1 →
+                    // LAB_001dc174 `Script_Play(si, mode == 8)`], so the full camera tail runs
+                    // here — the shared helper, exactly the load arm's tail.
+                    s.push_camera_tail(out);
+                }
                 value = true;
             }
             2 => {
@@ -3128,6 +3153,66 @@ mod tests {
         assert!(
             !out2.iter().any(|r| matches!(r, Request::Event { kind: 0x41, .. })),
             "a non-death camera NIS posts no death music jump [M 0x1db588:27-37]"
+        );
+    }
+
+    /// death-nis-music-restart — `SP_Update` case 1 reaches `Script_Play` too [M 0x1dbda8 case 1 →
+    /// LAB_001dc174 `Script_Play(si, mode == 8)`], so a death NIS replayed from the primed state
+    /// runs the same camera tail as the load arm: `Music_Event(6, 1)` [M disasm 0x1db608-0x1db610]
+    /// then the un-gated `Text_FlushAllSubtitles` [M 0x1db618], in that order. No placed SP can
+    /// drive this arm in real play — the disc census [D] ships five death-NIS SP placements
+    /// (07000005 #284 0x6000952, 07000008 #307 0x6000991, 0700000b #325 0x600098a,
+    /// 07000011 #313 0x600098a, 07000012 #767 0x600098a), all mode A 0 / script B 0 / mask 1:
+    /// state-0 starts (case 0), and the scene's own ch-0x62 write fails the level [M
+    /// Mission_Update 0x182c60 case 1] before any re-trigger could walk state 3 → 4 → 1 into
+    /// case 1 — so the pin is a unit pin, driving case 1 the way the game would.
+    #[test]
+    fn the_case1_restart_of_a_death_nis_runs_the_same_camera_tail() {
+        let mk = |hash: u32| Arc::new(Nis {
+            hashcode: hash, camera: true, loop_start: 0, length: 100,
+            streams: vec![NisStream { first_key: 0, last_key: 0, commands: Vec::new() }],
+            keys: Vec::new(),
+        });
+        let mk_player = |hash: u32| Player {
+            // The primed shape: mode 64 primes through SP_LoadScript's else arm into state 1
+            // [M 0x1dbc08:54], the state whose retrigger IS case 1. mask 1 (the channel bit) on
+            // out 0xbe — the 05 plunge SP's wiring [D 07000005.bin #284].
+            placement: 0, scripts: [hash, 0], modes: [64, 0], stay: false, mask: 1, out: 0xbe, gate: 0,
+            scale: 1.0, matrix: IDENT, cur: 0, state: 1, activated: false, countdown: 0,
+            info: [None, None], deleted: false, live_matrix: IDENT, subs: Vec::new(),
+            hit_points: 0.0, damage: 0.0, tick_damage: 0.0, hidden: false, bullet_filter: 0,
+            bullet_hits: Vec::new(), tick_bullet_hits: Vec::new(),
+        };
+        let mut objs = Objects::default();
+        let mut ch = Channels::default();
+        let world = TestWorld;
+        let lib = HashMap::new();
+        // The 05 plunge death NIS (SP #284): primed, the out channel on — the retrigger.
+        let mut p = mk_player(0x0600_0952);
+        p.info[0] = Some(Script::load(mk(0x0600_0952), IDENT, 1.0));
+        ch.set(0xbe, 1, 0);
+        let mut out = Vec::new();
+        p.update(&lib, &mut objs, &mut ch, &world, 1, &mut out, false, SpStart::default());
+        let ev = out.iter().position(|r| matches!(r, Request::Event { kind: 0x41, .. }));
+        let fl = out.iter().position(|r| matches!(r, Request::TextFlush));
+        assert!(ev.is_some(), "the case-1 restart of a death NIS posts Music_Event(6,1) [M 0x1dbda8 case 1 → LAB_001dc174 → 0x1db608-0x1db610]");
+        assert!(fl.is_some(), "the case-1 restart of a camera NIS flushes the subtitles [M 0x1db618]");
+        assert!(ev.unwrap() < fl.unwrap(), "the tail's order: Music_Event(6,1) 0x1db610 before Text_FlushAllSubtitles 0x1db618");
+        assert_eq!(p.state, 2, "case 1 moves the SP to state 2 [M 0x1dbda8 case 1]");
+        // Sister: the same restart on a camera script that is NOT a death NIS — flush, no jump.
+        let mut p2 = mk_player(0x0600_0421);
+        p2.info[0] = Some(Script::load(mk(0x0600_0421), IDENT, 1.0));
+        let mut ch2 = Channels::default();
+        ch2.set(0xbe, 1, 0);
+        let mut out2 = Vec::new();
+        p2.update(&lib, &mut objs, &mut ch2, &world, 1, &mut out2, false, SpStart::default());
+        assert!(
+            !out2.iter().any(|r| matches!(r, Request::Event { kind: 0x41, .. })),
+            "a non-death camera NIS's case-1 restart posts no death music jump [M 0x1db588:27-37]"
+        );
+        assert!(
+            out2.iter().any(|r| matches!(r, Request::TextFlush)),
+            "the non-death restart still flushes [M 0x1db618 — un-gated]"
         );
     }
 }

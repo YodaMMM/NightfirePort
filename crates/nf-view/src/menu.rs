@@ -2460,6 +2460,10 @@ pub struct FrontEnd {
     /// objective-hints: control 8's selected row — starts at the LAST row on every tab entry
     /// (the populate's msg 0x1d = numVis−1 [M 0x204408 0x204840-0x204850]) and moves with ~V.
     pub pause_objectives_sel: usize,
+    /// Each OBJECTIVES row's line count as last drawn: the mouse needs the wrapped layout.
+    pub pause_objective_lines: std::cell::Cell<[u8; OBJECTIVE_ROWS]>,
+    /// The OBJECTIVES row first in view.
+    pub pause_objective_top: std::cell::Cell<usize>,
     /// objective-hints: the ✕ hint box — Some(label) while the modal ok-only option box is up
     /// (label 0x31d already applied) [M 0x204408 case 1 → Menu_CreateOptionBox 0x202218 with
     /// box_id 10, ok_only 1; the box's OK row / a cancel pop it [M C_LBMSGOPTIONS 0x2022a0] and
@@ -3149,6 +3153,8 @@ impl FrontEnd {
             pause_objectives: Vec::new(),
             // objective-hints (each new field on its own line [WORKLOG lesson 4]).
             pause_objectives_sel: 0,
+            pause_objective_lines: std::cell::Cell::new([1; OBJECTIVE_ROWS]),
+            pause_objective_top: std::cell::Cell::new(0),
             pause_hint: None,
             // pause-hint (each new field on its own line [WORKLOG lesson 4]).
             // fix-save-profile (each new field on its own line [WORKLOG lesson 4]).
@@ -3895,11 +3901,8 @@ impl FrontEnd {
             // list's top, the list (98,147,445×190)]: hovering a row scrolls the tab's selection
             // to it — the keyboard's ~V.
             Page::Pause if self.pause_tab == 1 => {
-                let n = self.pause_objectives.len().min(8);
-                for i in 0..n {
-                    let mid = 159.0 + i as f32 * 22.0;
-                    if y >= mid - 11.0 && y < mid + 11.0 && (98.0..543.0).contains(&x) { self.pause_objectives_sel = i; break; }
-                }
+                let n = self.pause_objectives.len().min(OBJECTIVE_ROWS);
+                if let Some(i) = self.pause_objective_at(x, y, n) { self.pause_objectives_sel = i; }
             }
             Page::Pause => {}
             // The two scroll bars share the focused id [D page 0x40000047]: there is no bar to
@@ -4020,11 +4023,8 @@ impl FrontEnd {
             // 0x204408's control-1 0x4b activation]. The CONTROLS/SCORE tabs draw no selectable
             // rows; a click does nothing.
             Page::Pause if self.pause_tab == 1 => {
-                let n = self.pause_objectives.len().min(8);
-                for i in 0..n {
-                    let mid = 159.0 + i as f32 * 22.0;
-                    if y >= mid - 11.0 && y < mid + 11.0 && (98.0..543.0).contains(&x) { return self.action(Action::Confirm); }
-                }
+                let n = self.pause_objectives.len().min(OBJECTIVE_ROWS);
+                if self.pause_objective_at(x, y, n).is_some() { return self.action(Action::Confirm); }
                 return false;
             }
             Page::Pause => {}
@@ -4586,6 +4586,17 @@ impl FrontEnd {
             self.pause_objectives_sel = 0;
             true
         } else { false }
+    }
+
+    /// The OBJECTIVES row under the mouse, of the first `n`.
+    fn pause_objective_at(&self, x: f32, y: f32, n: usize) -> Option<usize> {
+        if !(98.0..543.0).contains(&x) { return None; }
+        let (lines, first) = (self.pause_objective_lines.get(), self.pause_objective_top.get());
+        if y >= 159.0 + (OBJECTIVE_VIEW as f32 - 0.5) * OBJECTIVE_LINE { return None; }
+        (first..n).find(|&i| {
+            let top = pause_objective_y(&lines, first, i) - OBJECTIVE_LINE * 0.5;
+            y >= top && y < top + lines[i] as f32 * OBJECTIVE_LINE
+        })
     }
 
     /// pause-hint: ✕ on the OBJECTIVES tab — `C_GCPAUSE_Handler` 0x204408's control-1 0x4b arm
@@ -10125,7 +10136,7 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
     // The selected tab is the LIGHT one and the rest dark brown (PCSX2 07000005 pause, MISSION/OBJECTIVES tabs) — the
     // controls' 0x1b colour 0x7d6d59 vs 0x1c 0x201707; each centred in its control.
     for (i, &(id, x, w, fb)) in tabs.iter().enumerate() {
-        let c = if i == tab { gs(0x7d6d59, 0xff) } else { gs(0x201707, 0xff) };
+        let c = if i == tab && fe.pause_hint.is_none() { gs(0x7d6d59, 0xff) } else { gs(0x201707, 0xff) };
         label(h, font, &lbl(id, fb), x, 120.0, w, 16.0, c, false, 1.0);
     }
     match tab {
@@ -10228,14 +10239,34 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
             // yellow arrow follows fe.pause_objectives_sel (objective-hints).
             // pause-hint: the hint box hides the list (control 8 msg 0x2b 1 before the box opens
             // [M 0x204408 0x205bf0]; msg 0x50 re-shows it after the close [M 0x203c28:19-24]).
-            let n = if fe.pause_hint.is_some() { 0 } else { fe.pause_objectives.len().min(8) };
-            for (i, o) in fe.pause_objectives.iter().enumerate().take(n) {
-                let y = 159.0 + i as f32 * 22.0;
-                let marker = if o.done { "~J" } else { "~I" };
-                glyph_row(h, font, &format!("{marker} {}", lbl(o.text, "(objective)")), 135.0, y - 9.0, bright);
+            let n = if fe.pause_hint.is_some() { 0 } else { fe.pause_objectives.len().min(OBJECTIVE_ROWS) };
+            // A row too long for the list wraps under its text, the selected row bright and the
+            // rest dim (PCSX2 07000012, 2026-11-05: lines at y 159/177/196/216, 18 lines of 448).
+            // The list shows nine lines and scrolls by row to keep the selection in view; the
+            // last row is cut at the ninth line (PCSX2 0700000b, 2026-11-05).
+            if n > 0 {
+                let sel = fe.pause_objectives_sel.min(n - 1);
+                let rows: Vec<Vec<String>> = fe.pause_objectives.iter().take(n)
+                    .map(|o| wrap_px(&lbl(o.text, "(objective)"), font, mx(OBJECTIVE_TEXT_W))).collect();
+                let mut lines = [1u8; OBJECTIVE_ROWS];
+                for (l, r) in lines.iter_mut().zip(&rows) { *l = r.len() as u8; }
+                let top = pause_objective_top(&lines, fe.pause_objective_top.get(), sel);
+                fe.pause_objective_lines.set(lines);
+                fe.pause_objective_top.set(top);
+                let mut used = 0;
+                for i in top..n {
+                    if used >= OBJECTIVE_VIEW { break; }
+                    let y = pause_objective_y(&lines, top, i);
+                    let c = if i == sel { bright } else { gs(CREAM, 0xff) };
+                    let marker = if fe.pause_objectives[i].done { "~J" } else { "~I" };
+                    glyph_row(h, font, &format!("{marker} {}", rows[i][0]), 135.0, y - 9.0, c);
+                    for (k, l) in rows[i].iter().enumerate().skip(1).take(OBJECTIVE_VIEW - used - 1) {
+                        glyph_row(h, font, l, 151.0, y - 9.0 + k as f32 * OBJECTIVE_LINE, c);
+                    }
+                    used += rows[i].len();
+                }
+                pause_cursor(h, 107.0, pause_objective_y(&lines, top, sel), gs(YELLOW, 0xff));
             }
-            let sel = fe.pause_objectives_sel.min(n.saturating_sub(1));
-            if n > 0 { pause_cursor(h, 107.0, 159.0 + sel as f32 * 22.0, gs(YELLOW, 0xff)); }
         }
         // The MISSION tab (default [L the page's initial state — the d1=6 list is the enabled one]).
         _ => {
@@ -10906,8 +10937,13 @@ fn cn_controls_rows(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, la
     let mid1 = 109.0 + 12.5;
     let c1 = on;
     if let Some(r) = rows.get(1) { left_text(h, font, &bind(r.label), mx(376.0), my(mid1 + 6.0), c1, true, sc); }
-    centred(h, font, -2, &value_txt(1), mx(461.0 + 49.5), my(mid1 + 6.0), c1, true, sc);
-    if sel1 { arrow(h, 455.0, mid1, true); arrow(h, 566.0, mid1, false); }
+    let value1 = value_txt(1);
+    centred(h, font, -2, &value1, mx(461.0 + 49.5), my(mid1 + 6.0), c1, true, sc);
+    // The arrows clear the word: "Inverted" runs wider than the fixed 55.5 either side.
+    let (placed, _) = font.layout(&value1, 0.0, 0.0);
+    let ink = placed.first().zip(placed.last()).map_or(0.0, |(p0, pl)| pl.x + font.glyphs[pl.glyph].w as f32 - p0.x);
+    let half = (ink * sc / (mx(1.0) - mx(0.0)) / 2.0 + 12.0).max(55.5);
+    if sel1 { arrow(h, 510.5 - half, mid1, true); arrow(h, 510.5 + half, mid1, false); }
 }
 
 fn opt_list(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Option<&Lang>) {
@@ -11405,6 +11441,28 @@ fn plate(h: &mut Hud, x: f32, y: f32, w: f32, hh: f32, c: [f32; 4]) {
 /// inside its control's width [M the plates; `Font::layout` measures one line]). The port's earlier
 /// char-count wrap (`wrap`) overfilled the plates and its mission-description call even re-joined
 /// the lines back into one unwrapped string.
+/// The OBJECTIVES text column: the list's 445 less its 88 offset (PCSX2 0700000b: 342 fits, 384 wraps).
+const OBJECTIVE_TEXT_W: f32 = 357.0;
+/// The list's line pitch in the page's 480 lines: 18 of the game's 448.
+const OBJECTIVE_LINE: f32 = 18.0 * 480.0 / 448.0;
+
+/// The most OBJECTIVES rows the list keeps; a mission announces at most 11.
+pub const OBJECTIVE_ROWS: usize = 16;
+/// The lines the OBJECTIVES list shows at once.
+const OBJECTIVE_VIEW: usize = 9;
+
+/// The middle of row `i`'s first line with row `top` first in view.
+fn pause_objective_y(lines: &[u8; OBJECTIVE_ROWS], top: usize, i: usize) -> f32 {
+    159.0 + lines[top..i].iter().map(|&l| l as f32).sum::<f32>() * OBJECTIVE_LINE
+}
+
+/// The row first in view: `top` moved just far enough to show the whole of row `sel`.
+pub fn pause_objective_top(lines: &[u8; OBJECTIVE_ROWS], top: usize, sel: usize) -> usize {
+    let mut top = top.min(sel);
+    while top < sel && lines[top..=sel].iter().map(|&l| l as usize).sum::<usize>() > OBJECTIVE_VIEW { top += 1; }
+    top
+}
+
 fn wrap_px(s: &str, font: &nf_formats::hud::Font, max_w: f32) -> Vec<String> {
     let mut out = Vec::new();
     for para in s.split('\n') {

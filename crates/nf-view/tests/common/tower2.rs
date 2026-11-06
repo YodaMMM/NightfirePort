@@ -3,6 +3,19 @@
 
 use crate::walker::Wp;
 
+/// OPT-IN (civ-unignore, set by the 07000013 chain's d3 real-damage walk, checked at the one
+/// labeled leg below — no other caller sets it, so the 07000012 and campaign walks are
+/// byte-identical): before the south-corridor legs, stand at the "the south corridor east"
+/// leg end and kill the corridor shotgun guard #10 (placement pos (19.7,−14.0), weapon 0x1c,
+/// hp 12) through the ordinary fight machinery. The measured d3 ledger (NF_DMG_TRACE, master
+/// 576909ed6): #10's first fire is ONE tick of 8 × −3.0 pellets at d 3.5 (tick 2723, Bond at
+/// (16.8,−12.0) mid "the south corridor" leg) — the pre-engagement −24 the civ-repin-finish
+/// report ranked as its first live check; the burst's own fight then killed him at 2764.
+/// A player who spots the shotgun man before the corridor does not hand him the opening
+/// blast: the stand runs only when the game's own exposed-part probe reads a reachable box
+/// from the leg end (d 2.0), and a kill there means the burst never exists.
+pub static PRE_CLEAR_SOUTH_CORRIDOR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// The walkreal-12 route: spawn → the keypad burn → the console E. Used again by the 07000013
 /// test's warm chain.
 pub fn walk_12(w: &mut crate::walker::Walker) {
@@ -195,7 +208,29 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
         (8.50, -13.50, "through door plc 543"), (6.50, -15.50, "the south passage"), (6.50, -19.50, "the south passage 2"),
         (5.75, -22.75, "the south hall"), (-9.75, -22.25, "the south hall west"),
     ];
-    for &(x, z, label) in legs { w.walk_to(Wp::new(x, 1.1, z).r(1.0), label); }
+    for &(x, z, label) in legs {
+        w.walk_to(Wp::new(x, 1.1, z).r(1.0), label);
+        if label == "the south-east bend 2" && PRE_CLEAR_SOUTH_CORRIDOR.load(std::sync::atomic::Ordering::Relaxed) {
+            let di = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
+                d.present && !d.corpse && d.health > 0.0 && d.team == 1
+                    && crate::walker::dxz(d.pos, [19.7, 1.0, -14.0]) < 3.0
+            });
+            if let Some(di) = di {
+                let exposed = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    crate::walker::DamageLog::exposed_part(sim, di)
+                };
+                if exposed.is_some() {
+                    eprintln!("[012] pre-clearing the corridor shotgun guard #{di} from the bend-2 leg end (d {:.1})",
+                        crate::walker::dxz(w.scene.sim.as_ref().unwrap().drones.list[di].pos, [20.75, 1.0, -9.75]));
+                    let killed = w.stand_and_fire(di, 600);
+                    eprintln!("[012] the corridor pre-clear: killed {killed}");
+                } else {
+                    eprintln!("[012] the corridor shotgun guard has no exposed part from the leg end — walking on (the burst ledger as measured)");
+                }
+            }
+        }
+    }
     // Door plc 545 (−10.58, −19.29) opens on E only (the game's too: it stays shut on approach and
     // opens on Square [L PCSX2 2026-10-31]); Bond then crosses on the game's own line, z −18.70..−18.81
     // from x −10.0 to −12.4 [L same run].
