@@ -20,3 +20,15 @@ the stun hold — report separately.
 
 Plan: build the red binaries, run each whole for a ledger on this master, then re-tune by
 route (waypoints/legs) and fight levers (carry, timing, clears) — test-side only.
+
+## muzzle-repin-6 (s/muzzle-repin-6)
+
+Task: the three reds muzzle-repin-5 left, on the merged master — walkreal_07000015_live (the
+mine that never exploded under fire: Bond dry + door[42]'s auto-close LOS block; the named
+levers are the #447 door re-open from the mark and a corridor loot lever), walkreal_07000008_live
+(the end-pane shoot-out must kill every pane: Bond died mid-fight, 6 panes still glazed; the
+lever is fight economy), and the start_corridor_guard_07000011 d2 death assert (guards hold
+0x5c but lose sight). walkreal_07000003_live re-run whole. No [L] pin loosened; game code
+stays, every draw stays. Branch cut from s/muzzle-repin-5, merged origin/master (one conflict,
+03 keep_off: master 2ea70f9d2 arms it at difficulty 1 — master's change taken, the pinned 4.0
+stands).
