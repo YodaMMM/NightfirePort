@@ -13,3 +13,8 @@ claimed-by: sandbox3 at 2026-11-06T15:31Z
 ---
 ## Report (done, 2026-11-06T16:46Z)
 
+
+---
+## Report from the worker (done, 2026-11-06T16:46Z)
+
+Closed by the driver: the report is on `s/aim-route-3` (docs/reports/aim-route-3.md); the worker didn't run finish.sh.
