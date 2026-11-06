@@ -8,3 +8,6 @@ Branch from `origin/s/aim-route-3`, merge current `origin/master`, push to `s/ai
 3. Then 08, 0c, 16 with the levers in docs/reports/1b-zero-g-floor.md section 3. For 0c check what Bond holds first: pistol-class weapons have range 50 and those snipers sit at d 61-90.
 
 Keep the [L] 08 pins and the 0x30000000 fix. Walk changes are test-side only.
+
+---
+claimed-by: sandbox5 at 2026-11-06T16:52Z
