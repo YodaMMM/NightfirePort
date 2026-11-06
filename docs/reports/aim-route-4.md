@@ -123,3 +123,14 @@ at 13606 — and failed LATER, at **Drake's fight** (see §4).
 ## Usage
 
 not visible to me — this session exposes no token, credit, context-window or cost figures to copy.
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-06 ~18:14-18:16 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "aim-route-4: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "… urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=…, headers={'Title':'NightfirePort'}), timeout=25)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "aim-route-4: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output, killed at the 45 s tool timeout (no connection established).
