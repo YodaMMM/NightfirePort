@@ -1437,9 +1437,8 @@ fn grenade_bounce_scares_the_guard_into_the_flee_family() {
         damage: 1.0, radius: 1.0, weapon_type: 0x34, mesh: 0, owner: usize::MAX, state: 1, bounces: 0, smoke_popped: false, resting: false,
         stuck: false, seek_target: None,
         phase: None, burn: 0, defused: false, born: 0,
-    });
-        phase: None, burn: 0, defused: false,
         loop_handle: 0,
+    });
     let mut saw_87 = false; let mut dist_at_87 = 0.0f32;
     for k in 0..400 {
         sim.tick(&d, &bond);

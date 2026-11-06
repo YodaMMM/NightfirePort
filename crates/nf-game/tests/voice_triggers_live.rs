@@ -151,6 +151,7 @@ fn a_frag_blast_flees_a_guard_with_his_death_bark() {
         range: 210.0, damage: 8.0, radius: 12.0, weapon_type: 0x34, mesh: 0, owner: usize::MAX,
         state: 1, bounces: 0, smoke_popped: false, resting: true, stuck: false, seek_target: None,
         phase: None, burn: 0, defused: false, born: 0,
+        loop_handle: 0,
     }); // the frag weapon type [M 0x2a/0x34 drain map, drone.rs tick]
     sim.tick(&d, &bond_at([0.0, 0.0, 0.0]));
     assert_eq!(sim.list[ai].state, state::RUN_AWAY_FROM_OBJECT,
