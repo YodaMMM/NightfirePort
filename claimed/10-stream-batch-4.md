@@ -15,3 +15,6 @@ Already measured, so just fix the tests:
 Then the rest of stream-batch-3's list, plain walks first. The pin matrix in enemy_accuracy_live may be re-measured; say the harness is fixed-stream.
 
 An ignore with a measured reason is allowed for 00 Agent walks only. Do not loosen pins tagged [L] and do not change game code to suit a walk.
+
+---
+claimed-by: sandbox1 at 2026-11-06T17:54Z
