@@ -28,7 +28,7 @@ front-end only). Ported-this-pass items link the test (`crates/nf-game/tests/sou
 | Vehicles/driving/MP (`Car_*`, `Copter_*`, `Sub_*`, `GT_*`, `MPSound_*`) | 22 | N/A |
 
 **Ported this pass (5 ids, 4 hooks, each with an NF_ISO test):**
-0x10E grenade-ammo launch, 0xA3 jump launch + 0xA3/0x5FB head bump, 0x249+0x5DD laser
+0x10E grenade-ammo launch, 0xA3 jump launch + 0xA3/0x5FB landing, 0x249+0x5DD laser
 burn-through, 0x148 special-death cry.
 
 ## The table
@@ -39,7 +39,7 @@ burn-through, 0x148 special-death cry.
 |---|---|---|---|---|
 | `Player_HandleJump` 0x1916b0:111 | Sound_Play | 0x1DB | level 0x0700007 & ch 0x48 off: the refused jump | PORTED `nf-view/src/scene.rs:2294` |
 | `Player_HandleJump` 0x1916b0:184 | Sound_Play3D | 0xA3 | jump press: the launch | PORTED `player.rs` `sfx_out` → `scene.rs:2324` + test |
-| `Player_HandleJump` 0x1916b0:195-198 | Sound_Play3D | 0x5FB / 0xA3 | head bump ends the rise; 0x5FB when `level_tag+0x50` ∈ {0xD,0xE} | PORTED (0xA3 arm; the tag+0x50 gate is unparsed — `LadderCtx::level_bump_5fb`, live check below) |
+| `Player_HandleJump` 0x1916b0:195-198 | Sound_Play3D | 0x5FB / 0xA3 | jump landing (flag 8, feet on ground; a head hit, flag 0x20, is silent [M :68-71]); 0x5FB when the feet ray's first hit byte `- 0xd < 2` (0xD/0xE, water), else 0xA3 | PORTED `player.rs` landing arm + `jump_landing_sound_live` |
 | `Player_HandlePain` 0x1902c8:113 | Sound_Play3D | 0x88 | pain (1-in-4 roll) | PORTED `drone.rs:6725,8333` |
 | `Player_DealWithObjHit` 0x194458:231-255 | Sound_Play/3D | 0x600, 0x412, 0x171 | Bond hit by an object (the 0x180 gate) | PORTED `drone.rs:8335-8350` |
 | `Player_CheckForDeath` 0x190810:41,88 | Music_Event / Sound_Play3D | 6 / 0x89 | Bond dies: the music pulse + the death grunt | PORTED `music.rs` event 6, `death.rs:215` |
@@ -126,10 +126,6 @@ The port's front-end (`nf-view/menu.rs`) plays none of these; out of scope for t
 
 ## Live checks (open)
 
-1. **Head-bump variant** (`level_tag+0x50`): in PCSX2, jump under a low ceiling on 07000005 and
-   07000007 with gdbwatch on `Sound_Play3D`'s `$a0` (0x1dd548): the id at the bump (0x5FB vs
-   0xA3) identifies each level's byte; the port's `LadderCtx::level_bump_5fb` then gets set
-   per level.
 2. **Thunder**: on 07000005 (island night, lightning), gdbwatch `Sound_Play` 0x1dd880's `$a0`
    through a storm cycle: expect 0x5D (or 0x5E if `LightningType != 0`) each time a sky slot's
    +0x48 countdown leaves 1. The port's `sky.rs::tick_slot` already computes the same event —
