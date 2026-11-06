@@ -400,24 +400,29 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         }
     }
     w.lenient = false;
-    if difficulty >= 3 {
+    if difficulty >= 2 {
         // 00 Agent (real-health-00agent-02-03-2): the servants' ground is a running fight (the
         // 0x24/0x25 guards and their captains) and the real-damage hook's resupply is the lane
         // walks' arm, not this walk's. A player scavenges the dead guards' drops between
         // contacts: the dry P99 (clip 1 spare 0) met shotgun captain #5 at 1.6 u and died to
         // his volley at t42315 [L the 00agent-02-03-2 ledger]. resupply walks the covered path
         // only (the 9-u corridor rule), so this stays on the route.
-        let _ = w.resupply("before the servants' rescue (00agent)");
+        // door-walk-03b: AGENT runs the same failure one difficulty down — the d2 ledger died
+        // at tick 52087 with weapon 0x12 clip 0 spare 0 (nav 6 was "cycling weapons (0)") —
+        // so the arm extends to the Agent pick (difficulty 2 keeps difficulty 1's two green
+        // walks byte-identical).
+        let _ = w.resupply("before the servants' rescue (agent)");
     }
     for (plate, want_ch) in [(None, 0x4fu8), (Some(plate0x25), 0x50u8)] {
         let (si, at, rescue_ch) = *servants.iter().find(|(_, _, ch)| *ch == want_ch)
             .unwrap_or_else(|| panic!("the servant carrying {want_ch:#x} [D p6]"));
         // #389's 0x21 plate already fired on the lane approach; #388's 0x25 plate is walked here.
         if let Some(plate) = plate {
-            if difficulty >= 3 {
+            if difficulty >= 2 {
                 // 00 Agent: rounds before the plate walk (the running fight on the servants'
                 // ground; the dry-gun death above) [L the 00agent-02-03-2 ledger].
-                let _ = w.resupply(&format!("before the {want_ch:#x} plate (00agent)"));
+                // door-walk-03b: extended to Agent (the same dry-gun death mode at d2).
+                let _ = w.resupply(&format!("before the {want_ch:#x} plate (agent)"));
             }
             w.walk_nav_to(plate, &format!("onto the {want_ch:#x}-servant's enable plate"), 1.8);
             if !w.scene.sim.as_ref().unwrap().drones.channels.on(0x25) {
@@ -439,10 +444,11 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
             }
         }
         w.wait(10);
-        if difficulty >= 3 {
+        if difficulty >= 2 {
             // 00 Agent: rounds before the servant walk (the same running-fight rule) [L the
             // 00agent-02-03-2 ledger].
-            let _ = w.resupply(&format!("before servant {si} (00agent)"));
+            // door-walk-03b: extended to Agent (the same dry-gun death mode at d2).
+            let _ = w.resupply(&format!("before servant {si} (agent)"));
         }
         // The G-055 flush's second-block guards hold the servants' ground posts and cross-fire
         // the approach (the merged-tree real-damage run: the trio #14/#2/#18 each cost 24-34
@@ -451,6 +457,24 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         // drops (the kill-loot cycle) — the fights shorten with every kill.
         clear_near(&mut w, 9.0, "the servants' ground");
         loot_the_drops_03(&mut w, "the servants' ground");
+        if difficulty >= 2 && si == 0 {
+            // door-walk-03b (the Agent ledger, tick 52087): the si-0 (0x50) servant at
+            // (30.8, 6.2, −5.7) is only reachable around the east wing — the A* hops z −1.8 →
+            // +1.0 → +8.5 through the door (22.3, 5.3, 10.9) / the 0x23 plate, and the east-lawn
+            // trio (#5 shotgun (22.8, 9.8), #3 captain weapon 0xe (24.3, 13.5), #4 (24.5, 14.8))
+            // met the nav mid-walk: the return fire killed #4 but the crossfire (59.4 in 26 hits
+            // from #5 at 2.1 u + 21.0 in 2 from #3 at 1.8 u) finished a DRY Bond. A player walks
+            // the saddle first, clears the ground from it (the walker's own keep_off holds the
+            // shotgun at 4 u here, unlike the mid-nav stand) and scoops the drops — the kill-loot
+            // cycle the servants' ground already runs. The saddle itself is nav-reachable (the
+            // failed run's nav 3 arrived there at +298 ticks [L this branch's run]).
+            w.walk_nav_to([23.5, 6.3, 8.4], "the east lawn saddle", 1.5);
+            w.lenient = true;
+            clear_near(&mut w, 9.0, "the east lawn");
+            w.lenient = true;
+            loot_the_drops_03(&mut w, "the east lawn");
+            w.lenient = false;
+        }
         w.walk_nav_to([at[0], at[1] - 0.3, at[2]], &format!("servant {si}"), 1.7);
         let sim = w.scene.sim.as_ref().unwrap();
         let d = &sim.drones.list[si];
