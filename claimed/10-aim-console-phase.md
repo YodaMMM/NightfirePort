@@ -16,3 +16,6 @@ Do not search for a discriminator between "real" and "fake" entities. Instead:
 4. To reach the real phase in PCSX2 later, list what the first wave's death does besides channel 19, in order, with citations.
 
 Keep the [L] 08 pins and the 0x30000000 fix. Quote the six aim binaries and walkreal 08 / 0c / 14 / 16 / 1b.
+
+---
+claimed-by: sandbox4 at 2026-11-06T10:42Z
