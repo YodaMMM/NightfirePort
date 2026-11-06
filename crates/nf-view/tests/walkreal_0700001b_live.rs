@@ -29,6 +29,17 @@
 //! only the level shot lands where the view looks. The cost: a target above or below must be met
 //! at its own height, so the band the later waves float in (y 2.5–8.7, above the deck) is fought
 //! from inside it or not at all — the full walks wait those waves out under the deck.
+//!
+//! AMENDMENT (gas-draws-8, 2026-11-06): the "pitched shoots off the view" half is STALE for the
+//! current tree. The zero-g branch composes the look pitch into `zero_g_rot` every tick
+//! (`rot_matrix(-look·π/2, turn, 0)` then m·R, player.rs physics_tick — the game's own
+//! body-frame composition [M Player_ZeroG 0x192ab0:76-90,160-162]), and `Bond::look` returns the
+//! matrix's forward row — the same row `ray_on` checks and the laser round flies along
+//! (scene.rs `shot_from`: the round aims at `camera + look·256`). A pitched row therefore shoots
+//! exactly where the pitched view looks, and the walk can AIM UP in zero-g with real input. The
+//! level-look convention stays for every pre-existing fight; the one pitched shooter is the
+//! Drake fight (`fight_opts`'s `pitched` — see its doc), whose target hovers out of every
+//! reachable hold's level band.
 
 #[path = "common/walker.rs"]
 mod walker;
@@ -463,7 +474,7 @@ fn best_float_point(sim: &nf_view::scene::Sim, from: [f32; 3], rad: f32, ys: &[f
 /// new-sighting clock [M 0x179740:103-105] — and comes back out at 60 rounds. Returns at `done`
 /// or the tick cap.
 fn fight(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
-    fight_opts(w, hold, prio, false, done, cap)
+    fight_opts(w, hold, prio, false, false, done, cap)
 }
 
 /// `fight` with the Agent tactics switch (real-health-agent-difficulty-16-1b-41-4a, opt-in —
@@ -475,7 +486,21 @@ fn fight(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, done: impl Fn(&nf_
 /// while every aim re-pick still chose Drake). A player clears the add waves and takes the
 /// boss last; the fight's `done` gate is the prio target's death, so the waves dying never
 /// ends it early.
-fn fight_opts(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: bool, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
+/// `fight` with `pitched`: the view YAWS AND PITCHES to the aim point and the level-look fire
+/// gate is lifted (gas-draws-8). The game's zero-g view pitch is the player's own input composed
+/// body-frame into the object matrix every tick [M Player_ZeroG 0x192ab0:76-90 — the pitch
+/// action's −1.2566371·REC_FRAME_RATE rate at BL+0x34/+0x30 — through RotMatrix 0x1e2368 +
+/// Concat 0x1e4a90 at :160-162], and the port does the same (`rot_matrix(-look·π/2, turn, 0)`
+/// then m·R, player.rs physics_tick; `Bond::look` returns the matrix's forward row, so the view
+/// ray, `ray_on`'s check and the laser round — which flies at `camera + look·256`, scene.rs
+/// `shot_from` — all ride the SAME pitched row). The merged stream's Drake (the task's own
+/// hover check) floats the game's own astronaut-combat band y 4.2-7.6 over the deck while every
+/// reachable hold sits below it [L the gas-rng-draws-7 probe], so a level-only fight can never
+/// meet him at his height — a player aims up. The hold never chases the target's height in this
+/// mode (the under-deck wedge at (12.7, −3.0, −1.6) WAS that chase: Bond thrusting up into the
+/// slab); the cover re-pick runs every 30 ticks instead, out to 15 u, scored with the same
+/// prio-blind +50 so the hold keeps a clear 3-D ray to Drake.
+fn fight_opts(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: bool, pitched: bool, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
     let mut last_tap = 0u32;
     let mut target: Option<(usize, [f32; 3])> = None;
     let mut recharging = false;
@@ -486,7 +511,7 @@ fn fight_opts(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: 
         let eye_off = sim.bond.head()[1] - sim.bond.pos[1];
         if sim.gun.clip < 12 { recharging = true; }
         if sim.gun.clip >= 60 { recharging = false; }
-        if (recharging || waves_first) && t % 30 == 0 {
+        if (recharging || waves_first || pitched) && t % 30 == 0 {
             let p = sim.bond.pos;
             // waves_first: a hold that cannot ANSWER the prio target is as bad as an exposed one
             // (the first sheltered run floated out Drake's whole 6000-tick cap without a shot):
@@ -503,7 +528,11 @@ fn fight_opts(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: 
                 (s as f32 + 4.0 * cl as f32) + if prio_blind(c, c[1] + eye_off) { 50.0 } else { 0.0 }
             };
             let mut best = (sc(p), p);
-            for r in [2.5f32, 5.0] {
+            // pitched: the slab's shadow is wider than the ±5 ladder — the gas-rng-draws-7 scan's
+            // clear-ray holds ((10,−6,0) exp7/8, (6,−6,0) exp6/10, (14,−6,0) exp8/11) sit 10-15 u
+            // from the wedged spot, so the pitched re-pick reaches out to 15 (each candidate still
+            // needs the straight float line clear, line 509's segment check).
+            for &r in if pitched { [2.5f32, 5.0, 10.0, 15.0].as_slice() } else { [2.5f32, 5.0].as_slice() } {
                 for o in [[r, 0.0, 0.0], [-r, 0.0, 0.0], [0.0, r, 0.0], [0.0, -r, 0.0], [0.0, 0.0, r], [0.0, 0.0, -r]] {
                     let c = [hold[0] + o[0], hold[1] + o[1], hold[2] + o[2]];
                     if sim.world.segment(p, c).is_some() { continue; }
@@ -548,11 +577,30 @@ fn fight_opts(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: 
             // measured deaths: 43 and 41 hits for 100.0). Drake closes in through the float, so
             // the sheltered hold keeps him shootable (the exposure scoring is the same
             // fewest-astronauts-see-me rule the recharge arm already used).
-            let mut spot = if recharging || waves_first { cover } else { hold };
-            if let Some((_, a)) = target { if !recharging { spot[1] = a[1] - eye_off; } }
+            let mut spot = if recharging || waves_first || pitched { cover } else { hold };
+            // pitched: the hold stays put (the height-chase is what wedged Bond under the slab —
+            // see fight_opts's doc) and the AIM climbs instead.
+            if let Some((_, a)) = target { if !recharging && !pitched { spot[1] = a[1] - eye_off; } }
             let mut inp = thrust_to(sim, spot);
             let mut fire = false;
             match target {
+                Some((i, a)) if pitched => {
+                    // The pitched turn: yaw err as level_turn's, the pitch err as an elevation
+                    // angle on the same row (asin of the forward row's y → the aim elevation
+                    // atan2(dy, dxz)), fed to the zero-g look lane in its π/2 units (the tick's
+                    // x-angle is −look·π/2 [M 0x192ab0:76-90; player.rs]) — 0.05 ≈ the yaw
+                    // clamp's 0.08 rad/tick. No stabiliser press while tracking: it would slerp
+                    // the row back to world up against the aim [M 0x192ab0:163-199].
+                    let e = sim.bond.head();
+                    let f = sim.bond.look();
+                    let dyaw = walker::wrap_pi((a[0] - e[0]).atan2(a[2] - e[2]) - f[0].atan2(f[2]));
+                    inp.turn = dyaw.clamp(-0.08, 0.08);
+                    let dxz = ((a[0] - e[0]).powi(2) + (a[2] - e[2]).powi(2)).sqrt().max(0.3);
+                    let el = f[1].clamp(-1.0, 1.0).asin();
+                    let el_t = (a[1] - e[1]).atan2(dxz);
+                    inp.look = ((el_t - el) / std::f32::consts::FRAC_PI_2).clamp(-0.05, 0.05);
+                    fire = ray_on(sim, i) && sim.gun.clip >= 12 && t.saturating_sub(last_tap) >= 12;
+                }
                 Some((i, a)) => {
                     level_turn(sim, &mut inp, a, 0.08);
                     fire = ray_on(sim, i) && view_level(sim) && sim.gun.clip >= 12 && t.saturating_sub(last_tap) >= 12;
@@ -689,7 +737,13 @@ fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) ->
 
     // 4. Drake, then the defeat NIS plays out (no skip, so its channel writes land).
     w.skip_cutscenes = false;
-    fight_opts(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, |s| s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s), 9000);
+    // gas-draws-8: the Drake fight rides the pitched view (fight_opts's `pitched`) — his merged-
+    // stream hover band y 4.2-7.6 over the deck is the game's own astronaut-combat strafe
+    // (destinations = the opponent + a random 3-D 10-20 u offset [M DroneMove_AstronautCombat
+    // 0x154618:80-105], flown at 2.0 [M 0x174550:16]) and no reachable hold meets it at height
+    // [L the gas-rng-draws-7 scan], so the level-only gate could never land a shot (hp 60.0
+    // through the whole 9000-tick window). A player aims up.
+    fight_opts(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, true, |s| s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s), 9000);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(alive(sim), "Bond survives Drake's fight (health {:.1})", sim.drones.health.health);
