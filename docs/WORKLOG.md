@@ -46,3 +46,9 @@ Progress (continued):
   lever (an OPT-IN walker.rs fights flag: immediate re-engage when the 240-tick cooldown
   delays refighting a guard within 8 u who is hitting Bond) in the ignore message. The d1/d2
   sisters and the whole-03 binary re-run on the final tree (see the report).
+- [23:15 UTC, Nov 6] real-health-00agent-03-5 wrapped: the round report at
+  docs/reports/real-health-00agent-03-5.md (the merged-tree ledger, runs 2-8 all worse and
+  reverted, the opt-in close-range re-engage flag named as the next lever); the four required
+  binaries green on the final tree (03 whole 6/0/1, 02 3/0/1, 04 10/0, interactables_03 9/0);
+  the full suite did not fit (test-file+docs-only diff — the other binaries are master's by
+  construction).
