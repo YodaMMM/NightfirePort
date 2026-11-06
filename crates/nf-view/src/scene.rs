@@ -3270,7 +3270,7 @@ impl Sim {
                     .map(|x| ([x.pos[0], x.pos[1] + 0.4, x.pos[2]], [x.pos[0], x.pos[1] - 0.6, x.pos[2]], 0.4f32))
                     .collect()
             };
-            let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, level_bump_5fb: false, straddle: &straddle_cells, bot_capsules: &bot_capsules };
+            let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, straddle: &straddle_cells, bot_capsules: &bot_capsules };
             // The third-icon context [M ThirdIcon_Update 0x196e80 + Player_CollisionHandler 0x1949a8:22]:
             // the tick starts with +0x95F = 0xFF (none), then every ENABLED icon (its param-1 channel on,
             // or param 1 == 0 = always [M ThirdIcon_Create 0x197070:27-32]) whose straddle-cel set holds
@@ -3609,6 +3609,12 @@ impl Sim {
         let moved_h = (dx * dx + dz * dz).sqrt();
         let climbing = self.bond.substate == nf_game::player::SS_CLIMB;
         let moved = if climbing { (moved_h * moved_h + dy * dy).sqrt() } else { moved_h };
+        let stride = if climbing { 0.4125 } else { 1.65 };
+        // A jump landing forces two steps: `BL+0x924 = 999.0` fires the next one, and `BL+0x966`
+        // counts 8 down to one more [M 0x1916b0:200-201, 0x1befd8:168-171].
+        if std::mem::take(&mut self.bond.land_step) { self.step_dist = 999.0; }
+        let forced_step = self.bond.land_countdown == 1;
+        self.bond.land_countdown = self.bond.land_countdown.saturating_sub(1);
         if self.bond.grounded && !self.disabled && self.bond.substate != nf_game::player::SS_SWIM {
             // The swim gate [M]: the game's step is `Effect_Create` off the CACHED ground hit
             // (0x1ce688:63 early-outs unless `(hit+0x50 & 0x3f) != 0`); the swim capsule (0x194df0
@@ -3616,7 +3622,7 @@ impl Sim {
             // footstep. The port's floor ray still
             // finds the bed mid-pond, so the substate is the gate here.
             self.step_dist += moved;
-            let stride = if climbing { 0.4125 } else { 1.65 };
+            if forced_step { self.step_dist = stride + 0.0001; }
             if self.step_dist > stride {
                 self.step_dist %= stride;
                 let p = self.bond.pos;
@@ -14058,7 +14064,7 @@ impl Sim {
             }
             let ctx = nf_game::player::LadderCtx {
                 ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims),
-                water, sink: input.crouch, creepwalls: &self.creepwalls, level_bump_5fb: false,
+                water, sink: input.crouch, creepwalls: &self.creepwalls,
                 straddle: &[], // MP remotes carry no per-body cel link yet — no scoping.
                 bot_capsules: &[], // the remotes are bodies, not bots — no actor-actor push.
             };

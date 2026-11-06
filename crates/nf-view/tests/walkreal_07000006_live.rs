@@ -367,6 +367,41 @@ fn aimed_stand_the_mouth(w: &mut Walker) {
     }
 }
 
+/// civ-unignore-2: the aimed-mouth sweep with the pick GATED on "actually shot Bond" — a recent
+/// hitter (any range to `radius`) the strict gun rays expose, recent-hitter first. The mouth
+/// sweep's plain ray pick engages ANY exposed post in 40 u, which at the dock would answer the
+/// friendly driver's cell (the driver never fires; the measured lesson above). Here only a
+/// hostile who has hit Bond in the last 600 frames is a target — the player's own rule, the
+/// fights' shooters window widened to the guards' real reach (the plain 20 u window is why the
+/// dock guard plinked free: 27-35 u is outside it but inside his own).
+fn stand_shooters_down(w: &mut Walker, label: &str, radius: f32) {
+    w.switch_to_armed(label);
+    for _ in 0..8 {
+        let di_opt = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let now = sim.drones.frame;
+            let b = sim.bond.pos;
+            let mut best: Option<usize> = None;
+            for i in 0..sim.drones.list.len() {
+                let d = &sim.drones.list[i];
+                if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { continue; }
+                let d_v = ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt();
+                if d_v > radius { continue; }
+                let hitting = sim.drones.player_hits.iter().rev()
+                    .take_while(|h| now.saturating_sub(h.0) <= 600)
+                    .any(|h| h.1 == i);
+                if !hitting { continue; }
+                if walker::DamageLog::exposed_part_gun_rays(&sim, i).is_none() { continue; }
+                best = Some(i);
+                break;
+            }
+            best
+        };
+        let Some(di) = di_opt else { break };
+        aimed_stand(w, di, label, 2400);
+    }
+}
+
 /// The walk from the spawn to the searchlight courtyard's tunnel-door approach (the point where
 /// the game's own web [D Boundary Prime] splits: west into the tunnel, or the ledge route east
 /// to the dressing room). `cut` does the stealth route's fusebox Laser cut in the guardroom
@@ -377,18 +412,29 @@ fn walk_to_the_courtyard(w: &mut Walker, cut: bool) { walk_to_the_courtyard_at(w
 
 /// `difficulty` threads the sister's Agent tactics (the door #59 mouth step); 1 = the old body.
 fn walk_to_the_courtyard_at(w: &mut Walker, cut: bool, difficulty: u32) {
-    walk_to_the_guardhouse_court(w);
+    walk_to_the_guardhouse_court(w, difficulty);
     walk_from_the_guardhouse_court_at(w, cut, difficulty);
 }
 
 /// The spawn → the guardhouse court east of the searchlight courtyard, with its idle guard down.
-fn walk_to_the_guardhouse_court(w: &mut Walker) {
+fn walk_to_the_guardhouse_court(w: &mut Walker, difficulty: u32) {
     // THE DISMOUNT: off the truck bed's open south side (the spawn's own facing walks onto the
     // bed; the probe drops grounded at z≈29).
     w.walk_nav_to([60.0, 38.3, 31.5], "off the truck, south", 1.6);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.bond.pos[2] > 28.0, "the dismount clears the truck's south side, got {:?}", sim.bond.pos);
+    }
+    // civ-unignore-2 (the Agent dock shooters): the dock's east guard (#14) posts at the truck
+    // d 27-35 from every early leg — OUTSIDE the fights' plain 20 u shooters window — so the
+    // return fire never answers him while he plinks the whole west lane (the measured d2
+    // ledger: 25.0 in 13 hits, the walk's biggest single dealer, still hp 10 at the strip
+    // death, and his rounds bled every west-lane stand). A player answers whoever is shooting
+    // him. (A BLIND radius clear here is WRONG — measured this session: clear_the_spot(8.0) at
+    // the dismount shot the friendly driver #17 (hp 1, (66.1,39.2,28.9), never a shooter) and
+    // his death latched the level exit 303 ticks later, killing the walk.)
+    if difficulty >= 2 {
+        stand_shooters_down(w, "the dock shooters", 40.0);
     }
     // Across the driver-greeting plates (#756/#757/#782 → ch 0xB9) on the ground west of the dock.
     w.walk_nav_to([45.0, 38.3, 24.0], "across the greeting plates", 1.6);
@@ -400,7 +446,15 @@ fn walk_to_the_guardhouse_court(w: &mut Walker) {
     // coverage here; each anchor was walked by the probe).
     w.walk_nav_to([24.3, 38.3, 27.6], "the dock's west end", 1.6);
     w.walk_nav_to([24.6, 38.5, 21.5], "down the west lane", 1.6);
+    // civ-unignore-2: answer the dock guard now that he has opened fire (his first hits land
+    // across these legs at d 27-35; see the ledger note at the dismount).
+    if difficulty >= 2 {
+        stand_shooters_down(w, "the west lane shooters", 40.0);
+    }
     w.walk_nav_to([26.5, 39.1, 13.1], "the well courtyard's west side", 1.6);
+    if difficulty >= 2 {
+        stand_shooters_down(w, "the well shooters", 40.0);
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -444,7 +498,10 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
     // (91.8 → 20.2, the 00 run's ledger; at Agent the same crossing costs ≤4 — accuracy 0.9 →
     // 1.3 and pain 0.7 → 1.0 [M ReadTuningVars 0x1d3a80 case 0x7000006]). The player clears
     // the room from the doorway BEFORE the crossing, and again at the nook (any survivor).
-    if difficulty >= 3 {
+    // civ-unignore-2: the guardroom pre-clears run at Agent too — the d2 ledger measures the
+    // crossing fight against the room's own #3 spawn (30.3,41.0,−17.0) landing 3 × −3.85 at
+    // d 2.1-2.8 (point-blank, inside the fight radius) before the reactive fight dropped him.
+    if difficulty >= 2 {
         clear_the_spot(w, 13.0);
     }
     // Through #47 into the guardroom; the nav graph covers this room [D leg probe: 4 nodes].
@@ -454,7 +511,7 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
     // and −44.0 while the walk stood at the fusebox (the 00 death ledger: 91.8 → 20.2 across
     // ticks 2761-2872; at Agent the same fights cost ≤4 total). The player clears the room at
     // range BEFORE standing at the fusebox, and again before the pilaster lane's mouth step.
-    if difficulty >= 3 {
+    if difficulty >= 2 {
         clear_the_spot(w, 13.0);
     }
     if cut {
@@ -497,7 +554,7 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
     // 00-Agent tactics: second guardroom sweep after the (optional) cut — anything the
     // doorway fight left alive (or that wandered in behind Bond) dies here, before the
     // pilaster lane's mouth step.
-    if difficulty >= 3 {
+    if difficulty >= 2 {
         clear_the_spot(w, 13.0);
     }
     // West out of the guardroom through the auto-closing door #59 Door_Top_I2 (27.88, 40.00, −23.00).
@@ -737,8 +794,21 @@ fn walk_the_tunnel_and_gallery(w: &mut Walker) {
 /// Script_EventHandler 0x1d94c0 case 0x12]. The alarm-silencing TouchOnce #765 (out 177) shares
 /// the volume's spot [D trig dump] — the walk trips both, exactly as the walkthrough does.
 fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32) {
-    // East along the courtyard: the web's 41.1 east strip [D nodes 246 (10.74, 41.22, −34.28) /
-    // 455-456 (14.0, 40.71, −34..−36.7) / 214 (25.27, 41.41, −40.6) / 215 (27.61, 41.15, −40.71)].
+    // civ-unignore-2 (the Agent ledge-leg stands): the east strip legs walk Bond PAST the strip
+    // posts (#24 (28.1,42.0,−36.0) hp 20 / #5 (27.8,42.0,−35.7)) whose rounds reach across the
+    // whole east courtyard (the measured d2 ledger: #5's hits at d 31.6/24.2/23.8, #24's at
+    // d 16.8/12.0) while Bond's own muzzle rays read blocked from the west anchors at 21-28 u
+    // [L four mouth censuses] — the ray-open spot the reactive fight proved is the east floor
+    // side (~d 9.7 from (18.56,−37.04), and the route's own east-floor anchor (25.3,−40.6) sits
+    // EAST of the posts). A player crossing a post's lane stops at each leg end and takes what
+    // the aim exposes: aimed_stand_the_mouth (the file's own ray-gated sweep, recent-hitter
+    // first, any height) runs after each leg at Agent real health; a guard the rays still
+    // block is skipped (the stand's 80-tick unseen give-up), never chased. This runs AFTER the
+    // descent's mouth tier (the ch-55 pair is already dead there — the config-4 lesson from
+    // docs/reports/civ-repin-finish.md: pocket stands run while the alarm pair lives bait its
+    // charge), so the only targets are the posts, the deck/roof posts and the walk-in lane's
+    // own guards.
+    let ledge_stands = difficulty == 2;
     w.walk_nav_to([10.5, 42.4, -34.3], "the courtyard's east strip", 1.6);
     if difficulty >= 3 {
         // 00-Agent tactics (real-health-00agent-06, measured): the ch-55 alarm's reinforcement
@@ -749,19 +819,23 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32) {
         // while it is still 8 u out instead of inside the gun's TooClose band.
         clear_the_spot(w, 8.0);
     }
+    if ledge_stands { aimed_stand_the_mouth(w); }
     w.walk_nav_to([14.0, 41.9, -36.7], "the courtyard's south-east corner", 1.6);
     if difficulty >= 3 {
         clear_the_spot(w, 8.0);
     }
+    if ledge_stands { aimed_stand_the_mouth(w); }
     w.walk_nav_to([25.3, 42.6, -40.6], "the east courtyard floor", 1.6);
     if difficulty >= 3 {
         clear_the_spot(w, 8.0);
     }
+    if ledge_stands { aimed_stand_the_mouth(w); }
     // South to the web's 41.15 band and the step's foot [D nodes 355/457/371].
     w.walk_nav_to([25.2, 42.3, -47.3], "the 43-step's foot", 1.6);
     if difficulty >= 3 {
         clear_the_spot(w, 8.0);
     }
+    if ledge_stands { aimed_stand_the_mouth(w); }
     w.walk_nav_to([24.1, 42.3, -50.0], "south along the step's foot", 1.4);
     // Up the 43.0 step (band C z −48: 43.0 at x 18..20 [D]; node 370 (19.96, 43.27, −49.95))
     // and onto the ledge's north end (node 363 (17.49, 43.49, −50.34)).
@@ -939,7 +1013,7 @@ fn the_lamps_light_at_the_ground_mouth() {
     w.rise_watch = vec![0x34];
     w.wait_enabled(3000, "the intro NIS");
     w.wait(30);
-    walk_to_the_guardhouse_court(&mut w);
+    walk_to_the_guardhouse_court(&mut w, 1);
     {
         let h = heads06(&w);
         assert!(h.iter().all(|&(st, on)| st == 3 && !on), "still dark in the guardhouse court: {h:?}");
@@ -1024,8 +1098,20 @@ fn walk_the_castle_interior_to_the_party_real_damage() {
 /// placements pass Drone_Create's gate [M 0x136be0:49] and the Lock_Create auto-unlock keeps
 /// tagged locks shut [M 0x1ae1f8:67-69 — Operative-only]. Real input only — the load path is the
 /// only difference.
+/// GREEN (civ-unignore-2): three Agent-tier levers, all file-local and difficulty-gated (the d1
+/// walks byte-identical). (1) the west-lane shooter sweeps (`stand_shooters_down`) — the dock
+/// guard posts d 27-35 from every early leg, OUTSIDE the fights' plain 20 u shooters window, and
+/// the measured baseline's biggest dealer (25.0 in 13 hits) plinked free the whole walk; a
+/// BLIND radius clear here is measured wrong (it shot the friendly driver #17, hp 1, and his
+/// death latched the level exit). (2) the guardroom pre-clears at Agent (the d3 tier's own
+/// `clear_the_spot(13)` arms) — the room's #3 spawn landed point-blank during the crossing.
+/// (3) the ledge-leg aimed stands — the east strip legs walk past the strip posts whose rounds
+/// reach d 30+ while Bond's muzzle rays read blocked from the west anchors; the ray-gated sweep
+/// takes what opens (the posts #24/#25 died in the mouth tier this run) and skips what stays
+/// blocked. Measured: the whole castle walked in 13031 ticks, end health 3.7, 51 hits for 96.3
+/// (the residual is #5's walk-in lane at hp 3 — his rays never opened before the 43-step) [L
+/// this tree's run].
 #[test]
-#[ignore = "the scripted bot does not yet survive this fight on real damage; the plain walk passes"]
 fn walk_the_castle_interior_to_the_party_real_damage_agent() {
     walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(2));
 }
