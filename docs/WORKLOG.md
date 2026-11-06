@@ -575,3 +575,15 @@ no [L] pin loosening, no walk-driven game code).
   nothing). Then the walk lane: real-damage/Agent/00-Agent walks, 04's stats tests, 14's
   tripbomb wedge, escort_follow, abseil, goggles, upward_shot; ignore with a measured reason
   allowed for 00 Agent walks only. Finish with the still-red list by name.
+- (23:50) The stale pins → rules: spawner_kill 9/9 (setup's counting stub was the old
+  always-spawn pin; rank-0 stub + the whole-list modulus pins, rule cited per test
+  [M 0x137cb0:21/:41-56/:88-96]); guard_reaction path1 (the floor gates the NOTICE
+  [M 0x14ac60] — the shot follows the first move's script: step holds through the danim,
+  strafe-aim releases on entry); side_gates 4/4 (bring_to_combat window 300 → 1200 move
+  cycles); anim_events melee 5/5 (the connect within the 2-tick flight window; the capsule
+  contact clamps the first tick at 0.9467/1.5 — identical numbers on the pre-merge tip, so
+  the red predates the merge); tase unaware-premise scoping (the stream sight-alerts the
+  pocket guard during setup; the msg-7 drop laws assert from any state). Still red: ai_live
+  2 (the SG5 burst pin, the UnderCoverAim 90-vs-37 window), tase P2K-hearing (the only
+  headroom witness at 0.00 rise — live measurement wanted). The walk lane not reached;
+  no ignores added. Full suite did not fit; every named binary ran whole.
