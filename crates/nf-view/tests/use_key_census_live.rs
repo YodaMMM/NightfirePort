@@ -417,7 +417,10 @@ fn use_census_07000012() {
 
     if let Some(mi) = sim.drones.monitors.list.iter().position(|m| m.state == 0 && !at_origin(m.pos)) {
         let mpos = sim.drones.monitors.list[mi].pos;
-        place_near(sim, mpos);
+        // place_near's first offset hangs over the elevator shaft: the fall sets the plunge
+        // channel and the death script takes the level [M 0x1949a8:104-107]. Stand on the floor.
+        sim.bond.pos = [mpos[0], mpos[1] - 0.5, mpos[2] + 1.0];
+        for _ in 0..60 { sim.step_bond(Default::default(), false, false, false); }
         assert!(aim_use(sim, mpos, &|s| s.drones.monitors.list[mi].state == 2),
             "E on the monitor must enter the camera view [M 0x1b0058]");
     }
