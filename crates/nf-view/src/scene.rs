@@ -3454,6 +3454,10 @@ impl Sim {
             // first-person case as mode 0 [M 0x18f5d8:96-97], so the carried pose IS the view.
             if !self.drones.death.active && !net_dead && !self.drones.props.gunimps.iter().any(|g| g.active) {
                 self.bond.jump_locked = self.level == 0x0700_0007 && !self.drones.channels.on(0x48);
+                // Player_Move 0x191dd0:139-141 rides the SAME gate: the mult param scales ×0.9
+                // while the party lock holds [M disasm 0x19220c] — both horizontal wish lanes,
+                // walk and swim; the turn and the smoothers stay unscaled.
+                self.bond.party_slow = self.bond.jump_locked;
                 { let _pphase = nf_game::prof::scope("phase: player move");
                 self.bond.tick_ctx(&self.world, &ctx, &input); }
             }

@@ -469,6 +469,13 @@ pub struct Bond {
     /// The Sim sets `jump_locked` each tick; `jump_refused` asks it to play 0x1db.
     pub jump_locked: bool,
     pub jump_refused: bool,
+    /// The same 07000007/ch-0x48 gate, for the move: `Player_Move` 0x191dd0:139-141 scales the
+    /// mult param ×0.9 (`mul.s f23,f23,f0` @0x19220c, 0.9 = 0x3F666666) before it eases BOTH
+    /// horizontal wish lanes — BL+0x10 strafe @0x192230/0x1922d4 and BL+0x18 forward
+    /// @0x192250/0x1922e0, walk and swim alike — while the turn rate BL+0x34 and the
+    /// +0x20/+0x28 smoothers commit UNSCALED [M disasm 0x191dd0-0x19230c]. The Sim sets it each
+    /// tick beside `jump_locked` (the predicate is identical).
+    pub party_slow: bool,
     /// The jump landing's `BL+0x924 = 999.0` [M 0x1916b0:201]: the next step block fires a step.
     pub land_step: bool,
     /// `BL+0x966` [M 0x1916b0:200]: set to 8 on a jump landing; reaching 0 forces one more step
@@ -583,6 +590,7 @@ impl Bond {
             sfx_out: Vec::new(),
             jump_locked: false,
             jump_refused: false,
+            party_slow: false,
             land_step: false,
             land_countdown: 0,
             // unported-front-end-menus-3: no orbit until Player_SetCamMode(BL, 1) (0x195928
@@ -1635,7 +1643,10 @@ impl Bond {
         self.lockout = self.lockout.saturating_sub(1);
         // Case 3 calls `Player_Move(1.0, …)` [M 0x193600:181-182] — the swim multiplier is ALWAYS 1.0
         // (the 0.75 is `Player_SSCrouch`'s own call argument 0x1924c0:58, not a crouched flag read).
-        let k = if swimming { 1.0 } else if self.crouched { 0.75 } else { 1.0 };
+        // 07000007 with ch 0x48 clear scales the mult ×0.9 before both wish lanes [M Player_Move
+        // 0x191dd0:139-141, disasm 0x19220c — `party_slow`].
+        let k = (if swimming { 1.0 } else if self.crouched { 0.75 } else { 1.0 })
+            * if self.party_slow { 0.9 } else { 1.0 };
         // `Player_Move`: aim mode zeroes forward (and the pad's turn action, which the caller leaves out of `turn`:
         // with a mouse the view turns past the aim box's edge, D-002).
         let (fwd, turn) = if input.aiming { (0.0, input.turn) } else { (input.forward.clamp(-1.0, 1.0), input.turn) };
