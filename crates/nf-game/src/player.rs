@@ -1864,20 +1864,7 @@ self.local = [vs / k, vf / k];
         // (Intersect_CylGeom 0x109da0's `dot(q − A, B − A) > 0` gate + the 02 fin wedge the PS2
         // rounds [L]); the port's walk/NPC paths still depend on the unguarded through-push
         // (escort_follow_07000001_live regressed with it on) — a known port divergence.
-        // level-14-float-narrow: the walk's flat-hold skip runs CROUCHED only. The A/B (the
-        // report): the spine fallback's small up-facing push is the ride holder for the STANDING
-        // capsule — its r-equilibrium (dy 1.032) sits inside the standing band (edge cc+0.1 =
-        // 1.1347), which the lift boarding (fix_autoaim_elevator_live) and the 11 stair flights
-        // (walkreal_07000011_route_live) ground on; skipping it dithers Bond outside the band
-        // (dy 1.145) and the flight descents stall. At the CROUCHED pocket (probe14_pocket_
-        // settle, cc 0.55) the same push parks dy at 0x3f266668 — one ulp above the game's
-        // crouched rest edge 0x3f266667 [L the vent rest] — and grounded flickers forever. The
-        // crouched walk drops the hold; the standing walk keeps master behaviour bit-for-bit.
-        let (mut push, mut walkable) = if self.cc == CROUCH_ROOT_HEIGHT {
-            world.capsule_push_scoped_hold(self.cel, a, b, RADIUS, swimming, self.pick_ref)
-        } else {
-            world.capsule_push_scoped(self.cel, a, b, RADIUS, swimming, self.pick_ref)
-        };
+        let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS, swimming, self.pick_ref);
         // walk-move-clip EXPERIMENT (`NF_WALK_CLIP=1`): the game's move-clip walk model — the
         // tick's move clipped at the capsule's face contacts, the radial push tail dead (see
         // capsule_tri_clip). Replaces the push displacement AND the pick_ref feed (the game's
@@ -1924,10 +1911,6 @@ self.local = [vs / k, vf / k];
             let (fp, fw) = if walk_clip() {
                 let move_v = [self.pos[0] - pre_move_pos[0], self.pos[1] - pre_move_pos[1], self.pos[2] - pre_move_pos[2]];
                 world.capsule_clip(a, b, RADIUS, swimming, move_v)
-            } else if self.cc == CROUCH_ROOT_HEIGHT {
-                // level-14-float-narrow: the crouched walk's flat fallback carries the hold skip
-                // too (the same scope as the scoped call above; see the comment there).
-                world.capsule_push_hold(a, b, RADIUS, swimming, self.pick_ref)
             } else {
                 world.capsule_push(a, b, RADIUS, swimming, self.pick_ref)
             };

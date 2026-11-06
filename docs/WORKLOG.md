@@ -32,3 +32,11 @@ then the walkreal set whole. No digest or walk re-pins to absorb the change.
   mp_perf_16's pinned digest STILL differs (the MP sim reaches the crouched hold regime —
   left for the next message). The plane-form feet ray lives in history 834ee5974 as the
   [M]-faithful alternative.
+  Final tip (2026-11-06 12:50 UTC): the crouch gate ALSO broke the walks (master A/B:
+  walkreal_07000004_live 10/0 green on master vs 8/2 with the gate; 01/05/06/0c/11/12/13/15/16
+  reds of the same class — the crouched regime is common). Reverted the tip to master's
+  collision behaviour: segment_hit_scoped_feet (the game's plane-form t [M 0x10a8c8:176-185])
+  is PRESENT but INACTIVE; the only suite red vs master is probe14_pocket_settle itself (the
+  hover the task targets). All four measured variants + the ledger are in the report; the
+  next candidate is the contact-dist arithmetic vs Dist2Tri 0x109770 (the push equilibrium's
+  1-ulp height, not the band).
