@@ -134,3 +134,26 @@ astronauts_hit_like_the_chain (harness's stream-calibrated expectation; make mea
 stream-independent), (2) the kiko pit-squad shoot red (kiko_button_real_walk_live.rs:319, reproduced not diagnosed —
 find the cause and cite it). Then walks for 01, 16, 1b + enemy_accuracy_live, each binary whole, counts quoted;
 d2/d3 ignores on 16 stay unless green on their own.
+
+## guard-lines-finish (results, 2026-11-06 09:35 UTC)
+Both non-walk reds fixed HARNESS-side (no game-code change; the glass law stands [M Collide_Update
+0x1ea398:216-229]):
+1. enemy_accuracy_live astronauts_hit_like_the_chain — `measure()` now resets the shared RNG to a fixed
+seed and clears the settle's stray rounds at the window start, so every case measures the fire chain from
+the same stream state regardless of what the settle's glass-passed plasma rounds drew. Re-measured pins
+(21 cells) on the fixed stream; the rifle bounds now follow the roll law (a rolled miss flies the wobble
+bullet and can clip Bond [M 0x179740's miss arm] so hits ≤ rolls; the TimeToHit gate clears early
+rolled-true shots [M 0x179740:93-99] so rolled may exceed landed by 4). Whole binary 5/0/4 ignored.
+2. kiko pit-squad red — diagnosed by trace + bisect: Bond holds the FISTS (w 0x1) from the tick-0
+0x47→0x1 swap; the green master run rode a pit member dying ADJACENT to the shelter door whose drop
+(0x14, 21/50) auto-equipped Bond mid-phase (instant swap at tick 9477); the merged fire-path glass pass
+shifts the phase's entry state (return-2 leg stalls +545 ticks from the merged tree's guard positions),
+no adjacent death happens, the fists' 1.8-u hit bullet [L weapon_data range 1.8] never reaches a member
+standing 4.4-5.7 u (its AIM_STAND_FIRE/STEP_AIM standoff), the shoot budget expires untouched. Reverting
+ONLY the five glass_pass sites turns the test green (bisect run) — the law is right, the test rode a
+drop. Fix: the pit loop cycles the wheel to an owned firearm before every target (real input,
+switch_to_armed). Whole binary 1/0 (11.5 s).
+Walks whole, counts quoted: walkreal_07000016_live 14/0/2 ignored (the d2/d3 sisters forced-run and
+STILL red — kept ignored), walkreal_07000001_live 8/0, walkreal_0700001b_live 17/0/2 ignored,
+enemy_accuracy_live 5/0/4, kiko_button_real_walk_live 1/0. The full suite (nf-game/formats/audio + the
+remaining binaries) did NOT fit before the 09:28 stop-work mark; left to the next session.
