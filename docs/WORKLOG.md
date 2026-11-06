@@ -226,3 +226,12 @@ volume; 0c the d 61-90 sniper drain, killers full hp; 14 the leg-2 spot nav stic
 line clips the wall 0.56 u west of the OPEN door (32,2.1,35.8); 16 the point-blank chaser swarm).
 Battery: 1b 15/2/2, 08 5/1, 0c 2/1, 14 6/3/1, 16 13/1/2 (all pre-existing counts; the 1b reds now
 run 300+ s deeper to the MissileDeploy assert). Report: docs/reports/1b-zero-g-floor.md.
+
+## aim-route-finish
+Started 2026-11-06 13:25 UTC. Branch s/aim-route-finish (from origin/s/1b-zero-g-floor, merged
+origin/master, clean). Task: finish the aim routes from the 1b-zero-g-floor report — (1) the 1b
+missile deadline (consoles 5/8/1/2 land 30-438 ticks late: pre-charge the clip, lower the burst
+gate to 36, the 7->1 flight gets the two-phase treatment), (2) the 14 x3 doorway waypoint
+(~x 31.8, z 36.3) before the leg-2 spot, (3) the 08/0c/16 route re-pins per the report's
+classification. No collision/zero-g/snap changes; the [L] 08 pins and the 0x30000000 fix stay;
+zero-g-slide has not landed, so the pocket-avoidance levers stay.
