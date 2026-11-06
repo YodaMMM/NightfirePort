@@ -114,3 +114,13 @@ cut).
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed in this sandbox (the same block muzzle-repin-5 recorded):
+- `curl -sS -m 20 -H "Title: NightfirePort" -d … https://ntfy.sh/nightfire-yoda-8k3x` →
+  `curl: (28) Connection timed out after 20002 milliseconds` (exit 28)
+- python urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+- `wget -q -O- --post-data "muzzle-repin-6: done" …` → no output, killed at the 40 s wrapper
+  (timeout)
+
