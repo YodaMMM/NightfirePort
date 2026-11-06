@@ -3240,10 +3240,10 @@ impl BotBrain {
         input.jump = std::mem::take(&mut self.jump_next);
         self.body.cel = None;
         self.body.tick_ctx(ctx.world, &crate::player::LadderCtx::default(), &input);
-        // The launch/head-bump queue is DROPPED: the game's MP bots never play either sound.
+        // The launch/landing queue is DROPPED: the game's MP bots never play either sound.
         // `Player_HandleJump` 0x1916b0 is the only code in ACTION.ELF that plays 0xA3 (the
         // launch, :184, disasm `addiu a0,zero,0xa3` 0x1918d8 → `Sound_Play3D` 0x191924) or the
-        // head bump 0x5FB/0xA3 (:195-198, 0x1919e4/0x191a14) — a whole-binary immediate scan of
+        // landing 0x5FB/0xA3 (:195-198, 0x1919e4/0x191a14) — a whole-binary immediate scan of
         // every `Sound_Play3D` 0x1dd548 / `Sound_Play` 0x1dd880 call site finds no other
         // producer (SLUS_205.79 / DRIVING.ELF either). Its only caller is `Player_SSWalk` (jal
         // 0x192474), whose only caller is `Player_Update` case 0 (jal 0x193964) — and

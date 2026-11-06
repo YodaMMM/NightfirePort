@@ -303,6 +303,15 @@ fn hash_objects_rt(h: &mut Hasher, m: &MpMatch) {
         hash_bounds(h, b);
     }
     h.u16(o.ge_strike_timer);
+    // mp-site-destruction-blast: the death blast's one-tick queue (the fold point sits after
+    // `step_net_combat`, so the tick that queued it folds the entry; the drain empties it).
+    h.usize(o.pending_blasts.len());
+    for (p, r, d, own) in &o.pending_blasts {
+        h.f32_slice(p);
+        h.f32(*r);
+        h.f32(*d);
+        h.usize(*own);
+    }
 }
 
 /// The per-tick lockstep hash of the whole MP match state. Pure function of the state bits:
