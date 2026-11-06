@@ -336,3 +336,17 @@ the cause pinned one level deeper: the return-fire stands' converged aimed round
 STEPPING guard (the level file's own still-gate note records the identical mechanism for the
 deck sentry) — the window (95,13) and the unseen-fights opt-ins both measured the identical
 13461 death and were reverted. Report: docs/reports/aim-route-5.md.
+
+## aim-route-6
+
+Branch `s/aim-route-6` from `origin/s/aim-route-5` (691b1c87c), merged `origin/master`
+(7370525a4 — the water-byte landing comment; master's missile countdown stays). One merge
+conflict in walkreal_0700001b_live.rs (comment/declaration hunks both sides had touched);
+resolved on the aim-route-5 side — master's substantive test code (the 550-tick ch-0x09 wait,
+the revised objective asserts, the wave defense) was already byte-identical in aim-route-5,
+only wording differed, and the merged file now equals the aim-route-5 tree. Scope per the
+driver: 1b is green; finish the 08 / 0c / 16 walks test-side using the aim-route-5 report's
+levers (0c's far-sniper cause pinned: the converged aimed rounds miss a STEPPING guard; 08
+and 16 unchanged with their single pre-existing reds), then quote the six aim binaries and
+walkreal 08 / 0c / 14 / 16 / 1b whole. The [L] 08 pins and the 0x30000000 fix stay. Not in
+the stream batch. Test-side only.
