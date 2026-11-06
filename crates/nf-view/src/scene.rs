@@ -3457,6 +3457,16 @@ impl Sim {
                 { let _pphase = nf_game::prof::scope("phase: player move");
                 self.bond.tick_ctx(&self.world, &ctx, &input); }
             }
+            // Player_CollisionHandler 0x1949a8:97-108: while airborne (grounded history 0) below
+            // y −10.0 on 07000012 the handler latches switch_channels[0x7C] = 1 every tick
+            // (0x194c44 `sb v0,-756(v1)`) — the atrium void-fall backstop under the plunge-volume
+            // triggers #788-791 [D 07000012-audit] and the death-NIS out #767 [D]. The level gate
+            // lives here (the Sim owns the level and the channels); the airborne/y state comes
+            // from the tick's `void_fall` [M disasm-confirmed]. take() clears a flag left over
+            // from a skipped tick (death/mounted).
+            if self.level == 0x0700_0012 && std::mem::take(&mut self.bond.void_fall) {
+                self.drones.channels.set(0x7c, 1, self.drones.frame);
+            }
             if std::mem::take(&mut self.bond.jump_refused) { self.drones.audio.play(0x1db); }
             // audit-sound-calls: drain the jump launch / head-bump sounds into the Sim's sound
             // pool (`Player_HandleJump` 0x1916b0:184,195-198 via `Bond::sfx_out`).
