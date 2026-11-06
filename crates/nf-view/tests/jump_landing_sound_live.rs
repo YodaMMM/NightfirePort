@@ -84,3 +84,24 @@ fn the_landing_arms_the_forced_steps() {
     assert!(b.land_step, "BL+0x924 = 999.0 [M 0x1916b0:201]");
     assert_eq!(b.land_countdown, 8, "BL+0x966 = 8 [M 0x1916b0:200]");
 }
+
+/// The real water, not a hand-built plane: 07000002's shallows at (-79, 28). [L PCSX2: the landing
+/// there reads byte 0xE, plays 0x5FB, then steps 0x28.]
+#[test]
+fn landing_in_the_02_shallows_splashes_and_wades() {
+    let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set"); return };
+    let mut scene = nf_view::load(&iso, "07000002.bin", false).expect("load 07000002");
+    let sim = scene.sim.as_mut().unwrap();
+    for _ in 0..2000 { sim.step_bond(Default::default(), false, false, false); if !sim.disabled { break; } }
+    sim.bond.pos = [-79.0, 5.0, 28.0];
+    for _ in 0..40 { sim.step_bond(Default::default(), false, false, false); }
+    assert!(sim.bond.grounded, "Bond stands in the shallows: {:?} substate {}", sim.bond.pos, sim.bond.substate);
+    let mut heard = Vec::new();
+    sim.step_bond(Input { jump: true, ..Default::default() }, false, false, false);
+    for _ in 0..80 {
+        sim.step_bond(Default::default(), false, false, false);
+        heard.extend(sim.drones.audio.active_ids());
+    }
+    assert!(heard.contains(&0x5fb), "the landing splashes: {heard:x?}");
+    assert!(heard.contains(&0x28), "the forced steps wade: {heard:x?}");
+}
