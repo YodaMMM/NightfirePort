@@ -329,6 +329,12 @@ impl DamageLog {
                         eprintln!("[dmg]   explosion at ({:.1},{:.1},{:.1}) d {d:.1} radius {:.1} damage {:.1} owner {} kind {}",
                             e.0[0], e.0[1], e.0[2], e.1, e.2, e.3 as isize, e.4);
                     }
+                    // scratch-16-diag: grenades in flight (owner, weapon, pos) around a world hit.
+                    for (gi, g) in sim.drones.grenades.iter().enumerate() {
+                        let d = ((g.pos[0] - p[0]).powi(2) + (g.pos[1] - p[1]).powi(2) + (g.pos[2] - p[2]).powi(2)).sqrt();
+                        eprintln!("[dmg]   grenade #{gi} at ({:.1},{:.1},{:.1}) d {d:.1} owner {} weapon {:#x} state {}",
+                            g.pos[0], g.pos[1], g.pos[2], g.owner as isize, g.weapon_type, g.state);
+                    }
                 }
             }
             self.last_hits.push((f, o, dmg));

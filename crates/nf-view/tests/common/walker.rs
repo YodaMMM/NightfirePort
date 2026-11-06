@@ -169,6 +169,17 @@ pub struct Walker {
     /// length. `DroneWeap_DoBulletAccuracy` 0x179740 forces every round to hit under 3.0 u
     /// (`if (dist < 3.0) bVar2 = true` [M :113-115]), so a fight at 1-2 u takes the whole volley.
     pub keep_off: Option<f32>,
+    /// OPT-IN (guard-radii-16-chasers): a fire tap with a grenade-family weapon in hand is a
+    /// THROW, not a shot — the frag's 210-tick fuse then detonates beside Bond's own follow-up
+    /// path (the measured 10959 self-blast death at (−5.83, −21.99, −163.14): the kill loop's
+    /// dry re-arm cycled onto the frag 0x34, the next taps threw it, and the loot walks strolled
+    /// into the blast — the ledger's two −10.00/−2.60 "world" hits, the frag record's own
+    /// radius 8 / damage 100 [L USATxt.dat]). When set, `tick_fire` downgrades the throw to an
+    /// idle tick and `switch_to_armed` cycles past the grenade hands, so every tap is a bullet.
+    /// Default OFF — every other walk keeps master's behaviour.
+    pub no_grenade_throws: bool,
+    /// The first `no_grenade_throws` downgrade was logged (one line per walk, not per tap).
+    grenade_downgrade_logged: bool,
     /// The walked path: a coarse breadcrumb of ground Bond actually covered (pushed in
     /// tick_inner, ~2 u resolution, 512 points). The resupply rule draws its corridor from it —
     /// see `resupply` for why the harness must not take off-path ammo detours.
@@ -264,6 +275,8 @@ impl Walker {
             rises: Vec::new(),
             prefer_head: false,
             keep_off: None,
+            no_grenade_throws: false,
+            grenade_downgrade_logged: false,
         }
     }
 
@@ -400,9 +413,36 @@ impl Walker {
     /// An empty clip with spare ammo reloads on this tick instead (the game's R; shoot_point's long
     /// windows outlive one clip — the walkreal corridor shot emptied on the captors before the box).
     pub fn tick_fire(&mut self, input: Input) {
+        if self.no_grenade_throws && self.gun_throws() {
+            // OPT-IN downgrade (the field's doc): the tap would THROW, and the frag's fuse
+            // detonates beside Bond's own follow-up path. A plain tick instead — the trigger
+            // stays cold; the walker's own re-arms cycle to a real gun.
+            if !self.grenade_downgrade_logged {
+                self.grenade_downgrade_logged = true;
+                let (w, c, s) = { let sim = self.scene.sim.as_ref().unwrap(); (sim.gun.weapon, sim.gun.clip, sim.gun.spare) };
+                eprintln!("[walk] no_grenade_throws: the tap with {w:#04x} (clip {c} spare {s}) in hand would THROW it — downgraded to an idle tick");
+            }
+            self.tick(input, false);
+            return;
+        }
         let (clip, spare) = { let sim = self.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare) };
         let reload = clip == 0 && spare > 0;
         self.tick_inner(input, false, true, reload);
+    }
+
+    /// The in-hand weapon's fired round is a grenade-family projectile: the port's own spawn gate
+    /// for the Grenade object — the record's gravity bit AND a contact-explode/bounce/stick
+    /// collision flag [M 0x12c5a0 + Bullet_CollisionHandler 0x12ce80's arms; the delta-repeater
+    /// comment in scene.rs's throw path pins the same predicate and moves the 0x11 bolt OFF it].
+    /// The chain into 16 owns exactly the frag 0x34 and the mine 0x37 of this family [M 0x1a7ef8].
+    fn gun_throws(&self) -> bool {
+        let sim = self.scene.sim.as_ref().unwrap();
+        let w = sim.gun.weapon as usize;
+        if !(2..=0x47).contains(&sim.gun.weapon) { return false; }
+        let r = &sim.data().weapons.records[w];
+        let f6c = u32::from_le_bytes(r[0x6c..0x70].try_into().unwrap());
+        let f70 = u32::from_le_bytes(r[0x70..0x74].try_into().unwrap());
+        f6c & 0x8 != 0 && f70 & (0x4 | 0x80 | 0x100) != 0
     }
 
     fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool, reload: bool) {
@@ -616,7 +656,11 @@ impl Walker {
                 let sim = self.scene.sim.as_ref().unwrap();
                 (sim.gun.weapon, sim.gun.clip, sim.gun.spare)
             };
-            if w >= 2 && w <= 0x47 && c + s > 0 { return true; }
+            // no_grenade_throws (opt-in): a grenade hand is not a fightable gun — the tap would
+            // THROW (tick_fire's downgrade) — so the cycle passes it like an empty weapon.
+            let armed = w >= 2 && w <= 0x47 && c + s > 0
+                && !(self.no_grenade_throws && self.gun_throws());
+            if armed { return true; }
             eprintln!("[walk] {label}: cycling weapons ({k}) (weapon {w:#x} clip {c} spare {s})");
             self.tick(Input { weapon_cycle: 1, ..Default::default() }, false);
             for _ in 0..60 { self.tick(Input::default(), false); } // the holster/draw cycle
@@ -625,7 +669,7 @@ impl Walker {
             let sim = self.scene.sim.as_ref().unwrap();
             (sim.gun.weapon, sim.gun.clip, sim.gun.spare)
         };
-        w >= 2 && w <= 0x47 && c + s > 0
+        w >= 2 && w <= 0x47 && c + s > 0 && !(self.no_grenade_throws && self.gun_throws())
     }
 
     /// The return-fire switch (damage_log.rs): this walker's `switch_to_armed` already cycles
