@@ -11790,6 +11790,14 @@ pub fn steer_missile(dir: &mut V3, yaw_in: f32, pitch_in: f32) {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PlayerImpact { Drone { drone: usize, part: i16, at: V3 }, World(V3) }
 
+/// One winning stop of the aim snap's pick, recorded by the traced twin `aim_snap_traced`:
+/// the stage that pulled the point closer and its t along the ray. `pi` is the stream player
+/// index for the object/wire stages (u32::MAX otherwise); `id` is the glist hash for the
+/// object/wire/door stages, the drone index for the drone stage, 0 for the level stage. The
+/// walk planners read these so a station's shot line is one the snap cannot steal.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SnapHit { pub stage: &'static str, pub id: u32, pub pi: u32, pub t: f32 }
+
 /// A sound in the hearing list (`Sound_Play3D`: position, inner / outer radius, weight).
 #[derive(Clone, Copy, Debug)]
 pub struct Sound { pub id: u32, pub pos: V3, pub inner: f32, pub outer: f32, pub weight: f32 }
@@ -14168,6 +14176,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// guard geometry [M AnimGetCollData]), and the solar panels (kept: their exact
     /// world.shape triangles under the same sphere gate — the panel-only triangle stage).
     pub fn aim_snap(&self, d: &Data, from: V3, to: V3, glass: bool) -> V3 {
+        self.aim_snap_inner(d, from, to, glass, None).0
+    }
+
+    /// The traced twin of `aim_snap` — the SAME single implementation, with the pick's winning
+    /// stops returned in order (the level stage, then every object/wire/door/drone candidate
+    /// that pulled the point closer): the walk planners call this so a planned station's shot
+    /// line is one the snap cannot steal [S the planning use; the stages are `aim_snap`'s game
+    /// pipeline, cited there].
+    pub fn aim_snap_traced(&self, d: &Data, from: V3, to: V3, glass: bool) -> (V3, Vec<SnapHit>) {
+        self.aim_snap_inner(d, from, to, glass, Some(Vec::new()))
+    }
+
+    fn aim_snap_inner(&self, d: &Data, from: V3, to: V3, glass: bool, mut trace: Option<Vec<SnapHit>>) -> (V3, Vec<SnapHit>) {
         // The level query is CEL-SCOPED [M Collide_RayIntersect 0x1ec690 feeds the shooter's cel
         // (param_3 = *(obj+0x20)) to Collide_Pick's StraddleCels walk 0x1eb320:125]: through a
         // non-portal hole (the 08 window) the walk never reaches the far room, so the ray finds
@@ -14177,7 +14198,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // and pulled the flight line onto the wood stile (the -96.706 stops). [L the probe:
         // cam (139.531, 50.789, -76.431) -> the flat ray snapped (139.562, 50.789, -96.706), the
         // wood band x 139.44..139.62.]
-        let mut t = d.world.segment_aim_scoped(d.world.find_cel(from), from, to, glass).unwrap_or(1.0);
+        let mut t = 1.0f32;
+        if let Some(tl) = d.world.segment_aim_scoped(d.world.find_cel(from), from, to, glass) {
+            t = tl;
+            if let Some(v) = trace.as_mut() { v.push(SnapHit { stage: "level", id: 0, pi: u32::MAX, t: tl }); }
+        }
         // THE OBJECT STAGE (aim-object-stage): `Collide_Pick` 0x1eb320's built-sphere broad
         // phase per object (obj+0x80..0x8c — `Control_BuildWorldSph` 0x133070: centre =
         // obj+0x90 · glist+0x10, radius = glist+0x1C · |obj+0xE8|; the port's
@@ -14199,7 +14224,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // The per-cel object walk itself: 0x1eb8e8-0x1eb93c (the straddle cels' cel+8 chains)
         // + the ForcedList second walk 0x1eba44-0x1eba5c.
         {
-            for (_pi, c, r, mesh) in &self.scripts.sp_bullet_targets(d) {
+            for (pi, c, r, mesh) in &self.scripts.sp_bullet_targets(d) {
                 let Some((hash, m)) = mesh else { continue };
                 // THE CANDIDATE QUESTION (the remaining stage, see the report): the game's object
                 // pick covers only its LINKED objects — the straddle cels' cel+8 chains plus
@@ -14264,15 +14289,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         whi[k] += 0.01;
                     }
                     if let Some(tt) = Self::segment_aabb_entry_t(from, to, wlo, whi) {
-                        if tt > 1e-4 && tt <= 1.0 { t = t.min(tt); }
+                        if tt > 1e-4 && tt <= 1.0 && tt < t {
+                            t = tt;
+                            if let Some(v) = trace.as_mut() { v.push(SnapHit { stage: "wire", id: *hash, pi: *pi as u32, t: tt }); }
+                        }
                     }
                     continue;
                 }
                 if !Self::segment_hits_sphere(from, to, *c, *r) { continue; }
                 let Some(tris) = d.world.shape(*hash) else { continue };
                 if let Some(tt) = Self::segment_posed_mesh_t(m, tris, from, to) {
-                    if tt > 1e-4 && tt <= 1.0 {
-                        t = t.min(tt);
+                    if tt > 1e-4 && tt <= 1.0 && tt < t {
+                        t = tt;
+                        if let Some(v) = trace.as_mut() { v.push(SnapHit { stage: "object", id: *hash, pi: *pi as u32, t: tt }); }
                     }
                 }
             }
@@ -14292,7 +14321,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if !Self::segment_hits_sphere(from, to, c, r) { continue; }
             let Some(tris) = d.world.shape(dr.glist) else { continue };
             if let Some(tt) = Self::segment_posed_mesh_t(&dr.matrix, tris, from, to) {
-                if tt > 1e-4 && tt <= 1.0 { t = t.min(tt); }
+                if tt > 1e-4 && tt <= 1.0 && tt < t {
+                    t = tt;
+                    if let Some(v) = trace.as_mut() { v.push(SnapHit { stage: "door", id: dr.glist, pi: u32::MAX, t: tt }); }
+                }
             }
         }
         // The SCRIPT ENTITIES are NOT in the ray's object set: the live-proven lines say the
@@ -14305,16 +14337,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // geometry would snap rounds into phantom planes. The thin objects' real contacts stay
         // with the FLIGHT's own object tests (the fusebox wires' posed gfx bounds, the consoles'
         // held spheres), which the raw aim lines reach either way.
-        for dr in &self.list {
+        for (di, dr) in self.list.iter().enumerate() {
             if dr.corpse || !dr.enabled || !dr.present || dr.health <= 0.0 { continue; }
             let ray = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
             for b in &dr.hit_boxes(d) {
                 if let Some(k) = crate::damage::ray_box(from, ray, b) {
-                    if k > 1e-4 && k <= 1.0 { t = t.min(k); }
+                    if k > 1e-4 && k <= 1.0 && k < t {
+                        t = k;
+                        if let Some(v) = trace.as_mut() { v.push(SnapHit { stage: "drone", id: di as u32, pi: u32::MAX, t: k }); }
+                    }
                 }
             }
         }
-        [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, from[2] + (to[2] - from[2]) * t]
+        ([from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, from[2] + (to[2] - from[2]) * t], trace.unwrap_or_default())
     }
 
     pub fn fire_player(&mut self, d: &Data, from: V3, dir: V3, weapon: u8, sound: nf_formats::sfx::SfxHearing) {

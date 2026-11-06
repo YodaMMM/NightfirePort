@@ -250,6 +250,29 @@ fn sphere_shot_ok(sim: &nf_view::scene::Sim, eye: [f32; 3], c: [f32; 3], r: f32)
     match sim.world.segment_bullet(eye, c) { None => true, Some(t) => t * d > d - r * 0.9 }
 }
 
+/// The stance's line through the game's aim snap: the shot converges on the crosshair ray's
+/// first pick stop [M Player_WeaponInitBullet 0x1a4bf0:154-164], so the round reaches the held
+/// sphere (c0, r) only when the line from `eye` to the snap point still passes inside it. The
+/// same candidates the snap sees gate the planner (the raised launch-rig pieces included —
+/// `sphere_shot_ok` is world-only and blind to them): a player moves to a clear line.
+/// `aim` is the point the view turns onto (the adjusted target `c`).
+fn snap_shot_ok(sim: &nf_view::scene::Sim, eye: [f32; 3], aim: [f32; 3], c0: [f32; 3], r: f32) -> bool {
+    let d = data_of(sim);
+    let glass = d.weapons.records.get(sim.gun.weapon as usize)
+        .map_or(true, |w| u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap()) & 0x800 == 0);
+    let v = [aim[0] - eye[0], aim[1] - eye[1], aim[2] - eye[2]];
+    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if l < 1e-4 { return true; }
+    let raw = [eye[0] + v[0] / l * 256.0, eye[1] + v[1] / l * 256.0, eye[2] + v[2] / l * 256.0];
+    let (pt, _) = sim.drones.aim_snap_traced(&d, eye, raw, glass);
+    let w = [c0[0] - eye[0], c0[1] - eye[1], c0[2] - eye[2]];
+    let u = [pt[0] - eye[0], pt[1] - eye[1], pt[2] - eye[2]];
+    let ul = (u[0] * u[0] + u[1] * u[1] + u[2] * u[2]).sqrt().max(1e-6);
+    let along = (w[0] * u[0] + w[1] * u[1] + w[2] * u[2]) / ul;
+    if along <= 0.0 { return false; }
+    ((w[0] * w[0] + w[1] * w[1] + w[2] * w[2] - along * along).max(0.0)).sqrt() <= r
+}
+
 /// Room for the float's body (the 0.55 capsule [M Player_Collision 0x194df0]) at the station `st`
 /// and on the straight way from `from`: the feet and head lines and four 0.7-u spokes clear.
 fn station_room(sim: &nf_view::scene::Sim, from: [f32; 3], st: [f32; 3]) -> bool {
@@ -261,9 +284,10 @@ fn station_room(sim: &nf_view::scene::Sim, from: [f32; 3], st: [f32; 3]) -> bool
 }
 
 /// Where to float for a level shot at the sphere (c, r): the eye at the centre's height on a ring
-/// around it (6–14 u out, 24 bearings), the shot clear (`sphere_shot_ok`), room for the body
+/// around it (6–14 u out, 24 bearings), the shot clear (`sphere_shot_ok`) AND unstealable by the
+/// aim snap (`snap_shot_ok` — the same candidates the snap sees), room for the body
 /// (`station_room`), not a station the float already stalled short of; the nearest to `pref`.
-fn level_station(sim: &nf_view::scene::Sim, c: [f32; 3], r: f32, from: [f32; 3], pref: [f32; 3], banned: &[[f32; 3]]) -> Option<[f32; 3]> {
+fn level_station(sim: &nf_view::scene::Sim, c: [f32; 3], r: f32, c0: [f32; 3], from: [f32; 3], pref: [f32; 3], banned: &[[f32; 3]]) -> Option<[f32; 3]> {
     let eye_off = sim.bond.head()[1] - sim.bond.pos[1];
     let mut best: Option<(f32, [f32; 3])> = None;
     for rad in [6.0f32, 8.0, 10.0, 12.0, 14.0] {
@@ -271,7 +295,7 @@ fn level_station(sim: &nf_view::scene::Sim, c: [f32; 3], r: f32, from: [f32; 3],
             let a = k as f32 * std::f32::consts::TAU / 24.0;
             let eye = [c[0] + rad * a.sin(), c[1], c[2] + rad * a.cos()];
             let st = [eye[0], eye[1] - eye_off, eye[2]];
-            if !sphere_shot_ok(sim, eye, c, r) || !station_room(sim, from, st) { continue; }
+            if !sphere_shot_ok(sim, eye, c, r) || !snap_shot_ok(sim, eye, c, c0, r) || !station_room(sim, from, st) { continue; }
             if banned.iter().any(|b| dist3(*b, st) < 1.0) { continue; }
             let dd = dist3(st, pref);
             if best.map_or(true, |b| dd < b.0) { best = Some((dd, st)); }
@@ -313,6 +337,8 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
     let mut moved_at = 0u32;
     let mut last_pos = [0.0f32; 3];
     let mut last_goal = [0.0f32; 3];
+    let mut dead_ticks = 0u32;
+    let mut dumped: Vec<u32> = Vec::new();
     for tt in 0..6000u32 {
         {
             let p = w.scene.sim.as_ref().unwrap().bond.pos;
@@ -336,16 +362,55 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
                 let c = cal.eye_target(sim, c0);
                 station[1] = c[1] - eye_off;
                 let se = [station[0], station[1] + eye_off, station[2]];
-                // The default station when its level shot is clear and the body fits; else (or
-                // once the float has stalled 150 ticks short of it) a planned one.
-                let default_ok = sphere_shot_ok(sim, se, c, r) && !banned.iter().any(|&b| dist3(b, station) < 1.0)
+                // The pick's candidate dump for the evidence log (the second-half consoles —
+                // the first wave's death has raised the rigs by then), plus the per-bearing
+                // ring scan: which stances the snap leaves alive and who steals the rest.
+                let dump_n = dumped.iter().filter(|&&x| x == k).count();
+                if matches!(k, 8 | 7 | 1 | 2) && (dump_n == 0 || tt % 2000 == 0) && dump_n < 3 {
+                    dumped.push(k);
+                    let dp = data_of(sim);
+                    eprintln!("[cands] console {k} — the pick's candidates at t{tt}:");
+                    for (ci, c2, r2, m2) in sim.drones.scripts.sp_bullet_targets(&dp) {
+                        let p = &sim.drones.scripts.players[ci];
+                        let hsh = m2.map_or(0, |(hh, _)| hh);
+                        eprintln!("[cands]  pi{ci} gate{} hp{:.0} script {:x} cur{} hash {hsh:x} sph({:.2},{:.2},{:.2}) r{r2:.2} dcon{:.2}",
+                            p.gate, p.hit_points, p.scripts[p.cur], p.cur, c2[0], c2[1], c2[2], dist3(c2, c0));
+                    }
+                    let glass = dp.weapons.records.get(sim.gun.weapon as usize)
+                        .map_or(true, |w| u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap()) & 0x800 == 0);
+                    let mut clean = 0usize;
+                    for rad in [6.0f32, 8.0, 10.0, 12.0, 14.0] {
+                        for j in 0..24 {
+                            let a = j as f32 * std::f32::consts::TAU / 24.0;
+                            let eye = [c[0] + rad * a.sin(), c[1], c[2] + rad * a.cos()];
+                            let world = sphere_shot_ok(sim, eye, c, r);
+                            let snap = snap_shot_ok(sim, eye, c, c0, r);
+                            if snap { clean += 1; continue; }
+                            let v = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
+                            let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
+                            let raw = [eye[0] + v[0] / l * 256.0, eye[1] + v[1] / l * 256.0, eye[2] + v[2] / l * 256.0];
+                            let (_, hits) = sim.drones.aim_snap_traced(&dp, eye, raw, glass);
+                            let ws = hits.iter().map(|h| format!("{}:{:x}/p{}/t{:.3}", h.stage, h.id, h.pi, h.t)).collect::<Vec<_>>().join(" ");
+                            eprintln!("[ring] con{k} t{tt} rad{rad:.0} b{j} eye({:.1},{:.1},{:.1}) world{world} hits [{ws}]", eye[0], eye[1], eye[2]);
+                        }
+                    }
+                    eprintln!("[ring] con{k} t{tt}: {clean}/120 bearings the snap leaves alive");
+                }
+                // The default station when its level shot is clear, unstealable by the aim snap
+                // (the same candidates the snap sees) and the body fits; else (or once the float
+                // has stalled 150 ticks short of it, or its LINE went dead — the snap steals
+                // every tap from the stance it parked at) a planned one.
+                let default_ok = sphere_shot_ok(sim, se, c, r) && snap_shot_ok(sim, se, c, c0, r)
+                    && !banned.iter().any(|&b| dist3(b, station) < 1.0)
                     && station_room(sim, sim.bond.pos, station);
                 let goal = if plan.0 == k && plan.1.is_some() { plan.1.unwrap() } else { station };
                 if goal != last_goal { last_goal = goal; moved_at = tt; }
-                let stalled = tt.saturating_sub(moved_at) > 150 && dist3(sim.bond.pos, goal) >= 1.0;
-                if stalled { banned.push(goal); moved_at = tt; }
+                let snap_ok_here = snap_shot_ok(sim, sim.bond.head(), c, c0, r);
+                if dist3(sim.bond.pos, goal) < 1.0 && !snap_ok_here { dead_ticks += 1 } else { dead_ticks = 0 }
+                let stalled = (tt.saturating_sub(moved_at) > 150 && dist3(sim.bond.pos, goal) >= 1.0) || dead_ticks > 150;
+                if stalled { banned.push(goal); moved_at = tt; dead_ticks = 0; }
                 if !default_ok || stalled || (plan.0 == k && plan.1.is_some()) {
-                    if plan.0 != k || stalled { plan = (k, level_station(sim, c, r, sim.bond.pos, station, &banned)); }
+                    if plan.0 != k || stalled { plan = (k, level_station(sim, c, r, c0, sim.bond.pos, station, &banned)); }
                     if let Some(p) = plan.1 { station = p; }
                 }
                 aim = Some(c);
@@ -358,7 +423,37 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
                 let along = v[0] * f[0] + v[1] * f[1] + v[2] * f[2];
                 let miss = ((v[0] - along * f[0]).powi(2) + (v[1] - along * f[1]).powi(2) + (v[2] - along * f[2]).powi(2)).sqrt();
                 fire = sphere_shot_ok(sim, o, c0, r) && along > 0.0 && dist3(sim.bond.head(), c) < 40.0 && in_burst
-                    && miss < r * 0.8 && view_level(sim) && tt.saturating_sub(last_shot) >= 12 && tt % 6 == 0;
+                    && miss < r * 0.8 && snap_ok_here && view_level(sim) && tt.saturating_sub(last_shot) >= 12 && tt % 6 == 0;
+                if tt % 300 == 0 {
+                    eprintln!("[gate] t{tt} con{k} pos({:.2},{:.2},{:.2}) goal({:.2},{:.2},{:.2}) planned{} world{} along{along:.1} miss{miss:.2} snap{snap_ok_here} dead{dead_ticks} clip{} burst{in_burst} view{}",
+                        sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], goal[0], goal[1], goal[2],
+                        plan.1.is_some(), sphere_shot_ok(sim, o, c0, r), sim.gun.clip, view_level(sim));
+                }
+                if fire {
+                    // aim-console-phase probe: what the pick does with this shot's crosshair ray.
+                    let dp = data_of(sim);
+                    let eye = sim.bond.head();
+                    let f = sim.bond.look();
+                    let raw = [eye[0] + f[0] * 256.0, eye[1] + f[1] * 256.0, eye[2] + f[2] * 256.0];
+                    let glass = dp.weapons.records.get(sim.gun.weapon as usize)
+                        .map_or(true, |w| u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap()) & 0x800 == 0);
+                    let (pt, hits) = sim.drones.aim_snap_traced(&dp, eye, raw, glass);
+                    let hs = hits.iter().map(|h| format!("{}:{:x}/p{}/t{:.2}", h.stage, h.id, h.pi, h.t)).collect::<Vec<_>>().join(" ");
+                    eprintln!("[snap] t{tt} con{k} sph({:.2},{:.2},{:.2}) r{r:.2} pull{:.2} snap({:.2},{:.2},{:.2}) hits [{hs}]",
+                        c0[0], c0[1], c0[2], dist3(raw, pt), pt[0], pt[1], pt[2]);
+                    for h in &hits {
+                        if h.pi == u32::MAX { continue; }
+                        let p = &sim.drones.scripts.players[h.pi as usize];
+                        let tgt = sim.drones.scripts.sp_bullet_targets(&dp).into_iter()
+                            .find(|(q, _, _, m)| *q == h.pi as usize && m.map_or(false, |(hh, _)| hh == h.id));
+                        match tgt {
+                            Some((_, c2, r2, _)) => eprintln!("[snap]   winner pi{} gate{} hp{:.0} script {:x} hash {:x} sph({:.2},{:.2},{:.2}) r{r2:.2} dcon{:.2} t{:.3}",
+                                h.pi, p.gate, p.hit_points, p.scripts[p.cur], h.id, c2[0], c2[1], c2[2], dist3(c2, c0), h.t),
+                            None => eprintln!("[snap]   winner pi{} gate{} hp{:.0} script {:x} hash {:x} t{:.3}",
+                                h.pi, p.gate, p.hit_points, p.scripts[p.cur], h.id, h.t),
+                        }
+                    }
+                }
             }
             let mut inp = float_to(sim, station);
             match aim {
