@@ -73,3 +73,14 @@ stream-shift class as the astronaut.
 
 No token, credit, cost or context-window figures are visible to me in this environment (no usage
 meter is shown in the session UI or the tool outputs). not visible to me.
+
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-06T06:52Z):
+
+1. `curl -sS -m 20 … https://ntfy.sh/nightfire-yoda-8k3x` → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 urllib.request` → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data …` → no output, killed at the 30 s timeout.
+
+The finish script itself succeeded: `bash ../nf-queue/finish.sh 10-guard-batch-repin blocked …` → "OK blocked 10-guard-batch-repin".
