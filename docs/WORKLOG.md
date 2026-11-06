@@ -379,3 +379,13 @@ full-suite line did not fit (background jobs die between tool calls — verified
 ceiling cannot hold 03's 752 s): the driver's parent-tree line 4397/31/353 stands as the
 reference; this window cleared 4 of the 31 with none added. Report:
 docs/reports/stream-batch-2.md.
+
+## stream-batch-3 (2026-11-06)
+Started 16:22 UTC. Branch `s/stream-batch-3` cut from `origin/s/stream-batch-2` df294b666,
+`origin/master` a6665d115 merged (clean). Task: the 28 reds of the joined tree's full run
+(driver's line on stream-batch-2 + a6665d115: 4405 passed / 28 failed / 353 ignored) — each
+treated as a possible real regression until shown otherwise, cause named with a citation before
+touching any test; then the walks 01, 06, 08, 0b, 0c, 0d, 11, 12, 13, 14, 15, 16 (plain first;
+6000-tick-cap failures need a look at what stands there). `goggles_draws_live` run with
+`--test-threads=1` before calling it red. Ignore only for 00 Agent walks with a measured reason;
+no [L] loosening; no game code changed to suit a walk.
