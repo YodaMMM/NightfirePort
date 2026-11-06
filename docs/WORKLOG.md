@@ -174,3 +174,19 @@ Started 2026-11-06 07:22 UTC. Branch s/aim-finish (from origin/s/aim-node-pass-2
 
 ## aim-candidates
 Started 2026-11-06 08:28 UTC. Branch s/aim-candidates (from origin/s/aim-finish 81616ca, merged origin/master c2c4a6e — clean). Task: the aim snap's object stage stops on objects the game does not have — fix the pre-filter constants (lui s1,0x3000 = 0x30000000, the f0 word glist+0x44|old&0x30008000), add the Collide_PickObj gates (class 5 skip on 0x200, obj+0xfa&8 or glist+8!=0), make the candidate set the per-cel chains + ForcedList, find why sp_bullet_targets returns stream entities, and re-check Door.bullet_pass against the f0 gate under the [L] 08 pins. Quote the six aim binaries + walkreal 08/0c/14/16/1b.
+- 09:00-09:45: the hittest settled from the disasm [M ACTION.ELF]: RayIntersect is called with
+  the FLAGS word 0x20a/0x208 in the o7 slot (0x1a4d5c-0x1a4d88: addiu t3,0x20a; movn t3,0x208 on
+  weapon+0x6c & 0x800; sw $zero,($sp) = the refine arg 0) and the type word +0x94 = 0x201
+  [M 0x1ec690's store] — so the PickObj mask is 0x60 (the port's value was right), the flags'
+  0x200 class-5 skip is real but vacuous for the port's candidate set, and the obj+0xfa&8 /
+  glist+8!=0 gate is active (script entities pass via Script_EntityStart's 0xe4 [M 0x1d8d78:109];
+  the shape() requirement is the glist+8 half [M 0x1d1810:23-40]). FIXED: both f0 pre-filter
+  sites 0x3000 → 0x30000000 [M Collide_Pick disasm 0x1eb910: lui s1,0x3000]. The chain-membership
+  gate (find_cel on the candidate sphere) built and measured a NO-OP on 1b (every candidate
+  in-cel — the probe) and was NOT shipped (unverified against the 14 wire legs). Reproduced 1b
+  pre-fix (15/2, console 1 unlatched at line 644); post-fix battery: the six aim binaries GREEN
+  (fusebox 1/0, interactables_14 10/0, glass 3/0, origin 1/0, stop_plane 4/0, solar 1/0), lib
+  683/0, walkreals 08 5/1 / 0c 2/1 / 14 6/3/1 / 16 13/1 / 1b 15/2 — the aim-finish profile
+  unchanged: the constants are safe but the 8-walk regression lives in the candidate set
+  (step 3), whose discriminator (creation state vs pose vs a kept-apart list) is still open —
+  the report carries the evidence and the live checks.
