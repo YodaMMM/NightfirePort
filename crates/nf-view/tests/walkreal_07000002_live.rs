@@ -323,12 +323,22 @@ fn reload_full(w: &mut Walker) {
 /// 0x1c shotgun drop [L the arm_fullest carry log]), and at DroneFiring_Accuracy_Hard 1.0 the
 /// fights must end in one tap, not one per reload cycle.
 fn scoop_drops(w: &mut Walker, label: &str, n: usize) {
+    scoop_drops_within(w, label, n, 6.0);
+}
+
+/// The deliberate resupply pass (`scoop_drops` with a wider reach, real-health-00agent-02-5):
+/// the kills a leg left behind drop their guns ON the corridor just covered [M
+/// DroneWeap_DropWeapon 0x17a2a0 — the held weapon at the death-anim arm, clip·(0.25+FRand(0.5))
+/// rounds], and a player who just cleared a corridor walks back a few u and takes a fallen
+/// guard's rifle before the next contact. Same real-input shape as `scoop_drops`: Bond's own
+/// feet via `walk_nav_to`, the take through the capsule, then the game's weapon cycle.
+fn scoop_drops_within(w: &mut Walker, label: &str, n: usize, radius: f32) {
     for k in 0..n {
         let bp = w.scene.sim.as_ref().unwrap().bond.pos;
         let target = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
             .filter(|p| !p.gone)
             .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
-            .filter(|q| dxz(*q, bp) < 6.0 && (q[1] - bp[1]).abs() < 1.5)
+            .filter(|q| dxz(*q, bp) < radius && (q[1] - bp[1]).abs() < 1.5)
             .min_by(|a, b| dxz(*a, bp).total_cmp(&dxz(*b, bp)));
         let Some(target) = target else { break };
         eprintln!("[02] {label}: scooping the drop ({:.1},{:.1},{:.1}) (d {:.1})", target[0], target[1], target[2], dxz(target, bp));
@@ -658,7 +668,24 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             // Second pass: the far garden guards walk into the radius while the near ones are
             // engaged — the wedge ahead (~1400 ticks of mitigation) must not face live shooters.
             clear_pursuers(&mut w, 24.0, "south hall west second pass");
+            if difficulty >= 3 {
+                // The corridor resupply (real-health-00agent-02-5): the leg's return-fire kills
+                // (#1 t4428, #3 t4780, #2 t5060 on the repro run) dropped their 0x12s along the
+                // corridor just covered [M DroneWeap_DropWeapon 0x17a2a0], and the duel at the
+                // plate is a DPS race a 23-round P99 lost (66 hits for 100, t6833 at
+                // (−31.35,6.46,8.40), the 00agent-02-03-4 repro — unchanged on master
+                // e4fb1c512). A player walks back up the dead corridor and takes a fallen
+                // guard's rifle before the room.
+                scoop_drops_within(&mut w, "the south-hall drops", 2, 12.0);
+                arm_fullest(&mut w, "after the south-hall scoop");
+            }
         }
+    }
+    if difficulty >= 3 {
+        // Whatever the corridor still holds within reach (the #2 drop sat ~14 u back on the
+        // repro run's geometry): the same walk-back pass, once, before the wheel is read for
+        // the room (real-health-00agent-02-5).
+        scoop_drops_within(&mut w, "the west-wing drops", 1, 14.0);
     }
     arm_fullest(&mut w, "before the geisha-1 room");
     // NOTE (real-health-00agent-02-03-04): no pre-room drop scoop here — the walk to the drops
