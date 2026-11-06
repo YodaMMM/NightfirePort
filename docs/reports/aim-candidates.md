@@ -59,6 +59,13 @@ The five walkreal profiles are **identical to aim-finish's measured regression p
 2. **Panel pickability**: for the panel object at (36.41, -6.36, -4.62) (class 0, f0 0x81): read `obj+0xD8` (glist) and `glist+8` — expected: either `glist+8 == 0` (no collision block → the aim ray can never stop on it, and the port's `shape()` for that hash is the bug) or non-zero (then the game's ray SHOULD stop on it and the 1b NULL needs a different explanation). Also read `obj+0xfa` (expect bit 0x8 clear for a placement object).
 3. **Aim ray return at the same stance**: repeat the 0x1a4d90 check from head (20, -5.2, 0) aimed at console 1's station — expected `hit = NULL` (the port's snap must then also be NULL after the fix).
 
+## ntfy failed
+
+All three fallbacks failed at 09:45 UTC:
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "aim-candidates: done — pre-filter 0x30000000 fixed+verified (6 aim binaries green, walk profile unchanged), candidate discriminator open, report+live checks pushed" https://ntfy.sh/nightfire-yoda-8k3x` → `curl: (28) Connection timed out after 20002 milliseconds`
+2. python urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "aim-candidates: done" https://ntfy.sh/nightfire-yoda-8k3x` → no output, killed by the 30 s command timeout (wget made no progress).
+
 ## Usage
 
 Not visible to me — my environment shows no token, credit or context-window figures for this session. The only figures visible anywhere were the subagents' own totals, read from their Task-tool result trailers: one reported `prompt:220917 completion:10221 total:231138`, the other `prompt:185363 completion:11092 total:196455`. These are not this session's figures.
