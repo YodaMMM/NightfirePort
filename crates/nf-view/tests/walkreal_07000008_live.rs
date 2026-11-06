@@ -759,6 +759,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             arm_fullest(&mut w, "the panes");
         }
         switch_to_firearm(&mut w, "the panes");
+        // The shoot-out's rounds must be LIVE rounds (guard-repin-master): the cabin fights'
+        // ammo drift decides the clip state here (the fights' shape moved with the guards'
+        // per-goal arrival radii), and the measured red ran pane 1 dry (clip 0 spare 33) so
+        // pane 2's five pulls were dry-fire clicks until the walker's own reload landed
+        // mid-loop — "STILL GLAZED after 5 rounds". A player reloads before a planned glass
+        // shoot: the game's R held to a full clip [M Player_WeaponFiring's reload branch],
+        // real input, no ammo writes (reload_full is the walker's additive R law).
+        w.reload_full();
         // A player shoots the glass he can see — the aim-ray-to-bounds-centre gate CANNOT work
         // here: the captured centre is the pane bounds' midpoint, which sits a hair short of the
         // sheet plane (the north pane's centre ray eye→centre reads OPEN while a perpendicular

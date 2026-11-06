@@ -893,7 +893,7 @@ fn walk_the_tunnel_and_gallery(w: &mut Walker) {
 /// [L ee_start_05 record 1]) and its final event 0x12 [0x07000007] loads the party [M
 /// Script_EventHandler 0x1d94c0 case 0x12]. The alarm-silencing TouchOnce #765 (out 177) shares
 /// the volume's spot [D trig dump] — the walk trips both, exactly as the walkthrough does.
-fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32) {
+fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32, stands: bool) {
     // civ-unignore-2 (the Agent ledge-leg stands): the east strip legs walk Bond PAST the strip
     // posts (#24 (28.1,42.0,−36.0) hp 20 / #5 (27.8,42.0,−35.7)) whose rounds reach across the
     // whole east courtyard (the measured d2 ledger: #5's hits at d 31.6/24.2/23.8, #24's at
@@ -908,7 +908,7 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32) {
     // docs/reports/civ-repin-finish.md: pocket stands run while the alarm pair lives bait its
     // charge), so the only targets are the posts, the deck/roof posts and the walk-in lane's
     // own guards.
-    let ledge_stands = difficulty == 2;
+    let ledge_stands = stands;
     w.walk_nav_to([10.5, 42.4, -34.3], "the courtyard's east strip", 1.6);
     if difficulty >= 3 {
         // 00-Agent tactics (real-health-00agent-06, measured): the ch-55 alarm's reinforcement
@@ -993,11 +993,27 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32) {
 #[test]
 fn walk_the_castle_interior_to_the_party() { walk_the_castle_interior_to_the_party_at(1) }
 
+/// The d1 real-damage body with the Agent ledge stands on (guard-repin-master): the courtyard
+/// cross-fire's shape moved with the guards' per-goal arrival radii [M 0x152548:174-181 — the
+/// cover stops now settle INTO the cover nodes instead of stalling 2.0 short, so the reactive
+/// fights take longer and cost more], and the measured d1 red died at tick 5217 at (20.27,
+/// 41.13, −37.97) crossing the east strip with no stands — #20 (skin 0x500002f) closed to
+/// d 8.8 under the plain return fire and landed 30.2 in 9 hits. The aimed_stand law is the
+/// file's own d2 lever; the real-damage d1 walk borrows it (the plain d1 walk stays
+/// byte-identical — this wrapper is only the real-damage test's).
+
 /// The walk body at `difficulty` (1 Operative = the old `load_with_carry` path's replay parity —
 /// its save resolves to 1; 2 Agent rides the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 →
 /// load_with_carry_difficulty]; the difficulty global survives the level change untouched, so a
 /// warm load re-seeds the same value [M player.rs RamSave::difficulty doc]).
 fn walk_the_castle_interior_to_the_party_at(difficulty: u32) {
+    walk_the_castle_interior_to_the_party_at_stands(difficulty, difficulty == 2)
+}
+
+/// The walk body's stands switch: `stands` = the Agent d2 ledge-leg aimed stands (the file's
+/// own lever) — the real-damage d1 wrapper turns them on; the plain d1 and the pre-existing
+/// gates keep their timelines.
+fn walk_the_castle_interior_to_the_party_at_stands(difficulty: u32, stands: bool) {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000006.bin", false,
         Some(&carry(&[0x1d, 0x45, 0x70])), difficulty).expect("load 07000006"));
@@ -1094,7 +1110,7 @@ fn walk_the_castle_interior_to_the_party_at(difficulty: u32) {
         assert!(s == 1 || s == 3, "the objective is announced but not complete at the courtyard (state {s}) [M 0x182270:98-105 / 0x1827d8:55-67]");
         assert_eq!(sim.drones.level_exit, None, "no exit before the LoadPoint chain");
     }
-    walk_the_ledge_to_the_party_at(&mut w, difficulty);
+    walk_the_ledge_to_the_party_at(&mut w, difficulty, stands);
     eprintln!("[06] the whole castle walked in {} ticks; falls: {:?}", w.total_ticks, w.report.falls);
     for f in &w.report.falls { eprintln!("[06] fall: {f}"); }
     for s in &w.report.stuck_events { eprintln!("[06] stuck: {s}"); }
@@ -1183,7 +1199,7 @@ fn stopping_before_the_tunnel_never_ends_the_castle() {
 /// walk completes on the port's own damage.
 #[test]
 fn walk_the_castle_interior_to_the_party_real_damage() {
-    walker::with_real_damage(walk_the_castle_interior_to_the_party);
+    walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at_stands(1, true));
 }
 
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty): the same walked

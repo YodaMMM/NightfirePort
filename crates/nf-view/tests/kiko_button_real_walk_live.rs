@@ -317,6 +317,15 @@ fn the_07000016_real_walk_reaches_the_kiko_death_button_and_the_cinema_clears_th
                 .map(|(i, _)| i)
         };
         let Some(i) = next else { break };
+        // The fight cannot ride on a dropped gun landing at Bond's feet: with the guard-side fire
+        // glass pass [M Collide_Update 0x1ea398:216-229 — the port's law since guard-batch], the
+        // phase's drop pickup is not guaranteed (the green master run rode one member dying
+        // ADJACENT to the shelter door, and the return-2 leg's stall alone shifts the phase's
+        // entry state), and the held fists' 1.8-u hit bullet never reaches a member standing 4-6 u
+        // off [L weapon_data range 1.8 — the guardroom-guard invulnerability, level-06-guardroom-
+        // guard; the measured 10800-tick budget expiry with clip 1 spare 0 untouched]. Cycle the
+        // wheel to an owned firearm (the real player's move, Input only) before every target.
+        assert!(w.switch_to_armed("the pit squad"), "the pit squad: an owned firearm is on the wheel");
         assert!(w.shoot(i, "the pit squad"), "the pit squad member #{i} dies to Bond's fire");
     }
     tick_until(&mut w, 600, "the pit squad's deaths raise ch 0xbf [D mux #611]", |s| s.drones.channels.on(0xbf));
