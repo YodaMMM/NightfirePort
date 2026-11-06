@@ -8,3 +8,6 @@ Branch from it, push to `s/void-recovery-2`.
 3. Gate: those binaries, `void_recovery_07000003_live`, the walkreal set and a count of how often recovery fires across the walks. It should be close to zero; if not, say where.
 
 If the lookup cannot be made to match, report that and leave the fall as it is: a rare fall is better than pushing players back.
+
+---
+claimed-by: sandbox1 at 2026-11-06T19:44Z
