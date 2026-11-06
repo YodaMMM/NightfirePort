@@ -12,3 +12,7 @@ Do not re-pin digests or walks to absorb this change.
 
 ---
 claimed-by: sandbox1 at 2026-11-06T11:16Z
+
+---
+## Report (blocked, 2026-11-06T12:47Z)
+
