@@ -476,6 +476,13 @@ pub struct Bond {
     /// +0x20/+0x28 smoothers commit UNSCALED [M disasm 0x191dd0-0x19230c]. The Sim sets it each
     /// tick beside `jump_locked` (the predicate is identical).
     pub party_slow: bool,
+    /// `physics_tick` sets it while the game's void-fall arm would run: airborne (the BL+0x940
+    /// grounded history 0) and obj+0x34 (position y) below −10.0 [M Player_CollisionHandler
+    /// 0x1949a8:97-108 — disasm 0x194b64/0x194c14-0x194c3c]. NOT gated on damage or velocity
+    /// sign, idempotent every tick. On 07000012 the Sim turns it into switch_channels[0x7C] = 1
+    /// (@0x194c44 `sb v0,-756(v1)`) — the atrium void-fall backstop under the plunge-volume
+    /// triggers #788-791 [D 07000012-audit] and the death-NIS out channel #767 [D].
+    pub void_fall: bool,
     /// The jump landing's `BL+0x924 = 999.0` [M 0x1916b0:201]: the next step block fires a step.
     pub land_step: bool,
     /// `BL+0x966` [M 0x1916b0:200]: set to 8 on a jump landing; reaching 0 forces one more step
@@ -591,6 +598,7 @@ impl Bond {
             jump_locked: false,
             jump_refused: false,
             party_slow: false,
+            void_fall: false,
             land_step: false,
             land_countdown: 0,
             // unported-front-end-menus-3: no orbit until Player_SetCamMode(BL, 1) (0x195928
@@ -2059,6 +2067,11 @@ self.local = [vs / k, vf / k];
             if self.fall_timer > 60 && self.fall_timer - 60 >= 10 { self.fall_damage = Some((self.fall_timer - 60) as f32); }
             self.fall_timer = 0;
         }
+        // Player_CollisionHandler 0x1949a8:97-108: the void-fall arm runs while airborne
+        // (grounded history 0), NOT gated on velocity sign or damage; the 07000012 y<−10 read
+        // latches ch 0x7C [M disasm 0x194b64/0x194c14-0x194c50]. The Sim applies the level gate
+        // and the write (`party_slow`'s injection pattern).
+        self.void_fall = !swimming && self.grounded_history == 0 && self.pos[1] < -10.0;
         // Jump: a head bump ends the rise; landing after the delay. The zeroing arms stay held
         // off on the settle's held ticks (the accumulating velocity is the observable).
         if !settle_held && self.jump == 1 && self.head_bump {
@@ -2790,6 +2803,42 @@ mod tests {
         assert_eq!(b4.substate, SS_CLIMB, "the crouch grab never attached (substate {})", b4.substate);
         // Sister: the water grab's y-snap holds the swimmer at the rungs (never BELOW bottom+0.02).
         assert!(b.pos[1] >= lad.bottom() + 0.02 - 1e-4, "the grab dropped the swimmer below the rungs: {}", b.pos[1]);
+    }
+
+    /// level-gates-player: the void-fall arm's flag [M `Player_CollisionHandler` 0x1949a8:97-108
+    /// — disasm 0x194b64 the grounded-history read, 0x194c14-0x194c50 the 07000012/y<−10 read and
+    /// the `sb v0,-756(v1)` ch-0x7C store]. The flag rises ONLY while the grounded history is 0
+    /// (airborne) AND the position is below −10.0; grounded or above −10 keeps it off. The Sim
+    /// turns the flag into the ch-0x7C write on 07000012 (scene.rs) — the level gate is the
+    /// Sim's, this test pins the player-side state machine. Red on the pre-fix port: the field
+    /// did not exist (the arm was unported).
+    #[test]
+    fn the_void_fall_flag_needs_airborne_below_minus_10() {
+        let ctx = LadderCtx::default();
+        let world_empty = CollisionWorld::from_triangles(Vec::new());
+        // Falling through the empty world from y −5: while still above −10 the arm never ran.
+        let mut b = Bond::new([0.0, -5.0, 0.0], 0.0);
+        for _ in 0..200 {
+            b.tick_ctx(&world_empty, &ctx, &Input::default());
+            if b.pos[1] < -8.0 { break; }
+        }
+        assert!(b.pos[1] > -10.0 && !b.void_fall,
+            "above −10 the void arm stays off: y {} flag {}", b.pos[1], b.void_fall);
+        // The SAME fall crosses −10 with no floor below — the arm latches (and stays latched:
+        // the branch is idempotent every tick [M 0x194c44, no edge detect]).
+        for _ in 0..120 { b.tick_ctx(&world_empty, &ctx, &Input::default()); }
+        assert!(b.pos[1] < -10.0 && b.grounded_history == 0 && b.void_fall,
+            "the fall below −10 must latch the void arm: y {} gh {} flag {}", b.pos[1], b.grounded_history, b.void_fall);
+        // Grounded clears it: a floor at y −20 catches the fall; the history fills and the
+        // flag drops (the game's arm is the airborne branch only [M 0x194b64 beql v0,zero]).
+        let world_floor = CollisionWorld::from_triangles(vec![
+            [[-50.0, -20.0, -50.0], [50.0, -20.0, 50.0], [50.0, -20.0, -50.0]],
+            [[-50.0, -20.0, -50.0], [-50.0, -20.0, 50.0], [50.0, -20.0, 50.0]],
+        ]);
+        let mut b2 = Bond::new([0.0, 0.0, 0.0], 0.0);
+        for _ in 0..240 { b2.tick_ctx(&world_floor, &ctx, &Input::default()); }
+        assert!(b2.grounded && b2.grounded_history != 0 && !b2.void_fall,
+            "grounded must clear the void arm: y {} gh {} flag {}", b2.pos[1], b2.grounded_history, b2.void_fall);
     }
 
     /// ladder-mesh-refine: the straddled-cel scoping [M `Collide_Pick` 0x1eb320:125-134 admits a
