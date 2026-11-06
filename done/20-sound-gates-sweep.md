@@ -12,3 +12,8 @@ claimed-by: sandbox5 at 2026-11-06T12:51Z
 ---
 ## Report (done, 2026-11-06T14:19Z)
 
+
+---
+## Report from the worker (done, 2026-11-06T14:19Z)
+
+Closed by the driver: the report is on `s/sound-gates-sweep` (docs/reports/sound-gates-sweep.md); the worker didn't run finish.sh.
