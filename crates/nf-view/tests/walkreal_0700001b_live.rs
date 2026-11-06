@@ -377,6 +377,7 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
     let mut latched = Vec::new();
     let mut last_shot = 0u32;
     let mut in_burst = false;
+    let mut climbing_out = false;
     let mut plan: (u32, Option<[f32; 3]>) = (0, None);
     let mut cal = ShotCal::default();
     let mut banned: Vec<[f32; 3]> = Vec::new();
@@ -466,7 +467,7 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
                     && !banned.iter().any(|&b| dist3(b, station) < 1.0)
                     && station_room(sim, sim.bond.pos, station);
                 let goal = if plan.0 == k && plan.1.is_some() { plan.1.unwrap() } else { station };
-                if goal != last_goal { last_goal = goal; moved_at = tt; last_goal_dist = f32::MAX; }
+                if goal != last_goal { last_goal = goal; moved_at = tt; last_goal_dist = f32::MAX; climbing_out = false; }
                 // 1b-zero-g-floor item 1 (the two-phase goal — the report's own next lever):
                 // while the goal is a LOW station (7/8, y −8.12, in front of the bank) and Bond
                 // is still horizontally far and above it, the fly target is the CROSS COLUMN TOP
@@ -478,7 +479,17 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
                 // underside around (44.7, −8.66, 1.69) and the push equilibrium froze the wedge.
                 let horiz = ((goal[0] - sim.bond.pos[0]).powi(2) + (goal[2] - sim.bond.pos[2]).powi(2)).sqrt();
                 cross_high = goal[1] < -7.0 && horiz > 1.2 && sim.bond.pos[1] > goal[1] + 2.0;
-                let fly = if cross_high { [goal[0], goal[1] + 5.0, goal[2]] } else { goal };
+                // The DEPARTURE-side mirror (the 7→1 leg): leaving the low band (the 7/8 stations
+                // y −7) for a high goal (1/2 y −2), the straight line runs UNDER the bank's face
+                // tops (from (46,−7) to (20,−2): y −5.6 at x 38.7 vs the face top −5.21, −3.1 at
+                // 25.7 vs −2.91) and the radial push scrapes it — the measured leg cost 463
+                // ticks. Same ride-above rule, latched (the start-guard pos.y < −7 breaks as the
+                // climb passes −7): ride to goal.y + 5 until above goal.y + 2, then the plain
+                // goal flight — the line from (46, 0) to (20,−2) clears every face top on the
+                // span (y −0.56 at 38.7, −1.56 at 25.7).
+                if sim.bond.pos[1] < -7.0 && goal[1] > sim.bond.pos[1] + 2.0 && horiz > 1.2 { climbing_out = true; }
+                if climbing_out && (sim.bond.pos[1] >= goal[1] + 2.0 || horiz <= 1.2 || goal[1] < -7.0) { climbing_out = false; }
+                let fly = if cross_high || climbing_out { [goal[0], goal[1] + 5.0, goal[2]] } else { goal };
                 // The float's progress TOWARD THE FLY TARGET, not any movement: a wedged crawl
                 // along the bank moved 0.3 every ~110 ticks and kept `moved_at` fresh, so the
                 // stall never tripped and the replan never ran.
@@ -502,6 +513,10 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
                 }
                 aim = Some(c);
                 let clip = sim.gun.clip;
+                // The burst gate stayed at 48 — MEASURED: lowering it to 36 (the three holds'
+                // nominal 3×12 cost) regressed the mid-phase latches (5: +126, 8: +348 — the
+                // earlier bursts restarted the recharge churn inside each hold chain); the
+                // latches with 36 are in the branch history (run 1) vs 48 below.
                 if clip >= 48 { in_burst = true; }
                 if clip < 12 { in_burst = false; }
                 let (o, f) = cal.ray(sim);
@@ -544,9 +559,29 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
             }
             // The same two-phase clamp on the raw station (the fly target the thrusters ride;
             // `station` here is the goal — the plan already landed in it above).
-            let mut inp = float_to(sim, if cross_high {
-                [station[0], station[1] + 5.0, station[2]]
-            } else { station });
+            // Between holds the whole planner above is idle (it lives in the hold-gated
+            // `best` block), so the float cruised on the stale station and each next
+            // console's flight ran INSIDE its own hold window — measured: the 6→8 chain
+            // cost 565 loop-ticks (the crossing only left at 8's first hold, the first
+            // tap 337 after it), and 8's missile read S+2399 catches that whole flight.
+            // Anticipate: with no hold up, float to the NEXT console's default station
+            // (the same two-phase clamp, both sides) so the flight overlaps the current
+            // script's playback and the first tap answers the hold in ~6 ticks. Safe:
+            // k only advances past a console once its channel is on (the latch), so the
+            // anticipation never leaves a console whose holds are still owed.
+            let fly = match aim {
+                Some(_) => if cross_high || climbing_out {
+                    [station[0], station[1] + 5.0, station[2]]
+                } else { station },
+                None => {
+                    let antic = console_station(k);
+                    let ah = ((antic[0] - sim.bond.pos[0]).powi(2) + (antic[2] - sim.bond.pos[2]).powi(2)).sqrt();
+                    let high = (antic[1] < -7.0 && ah > 1.2 && sim.bond.pos[1] > antic[1] + 2.0)
+                        || (sim.bond.pos[1] < -7.0 && antic[1] > sim.bond.pos[1] + 2.0 && ah > 1.2);
+                    if high { [antic[0], antic[1] + 5.0, antic[2]] } else { antic }
+                }
+            };
+            let mut inp = float_to(sim, fly);
             match aim {
                 Some(c) => level_turn(sim, &mut inp, c, 0.08),
                 None => inp.stabilise = sim.bond.look()[1].abs() > 0.005 && sim.bond.stabiliser == 0,
