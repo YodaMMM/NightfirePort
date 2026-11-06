@@ -112,3 +112,18 @@ Branch `s/gas-rng-draws-7` = `origin/s/gas-rng-draws-6` 6bd978d11 + `origin/mast
 
 not visible to me (no token, credit or context-window figures are exposed to this session;
 nothing in the sandbox reports them).
+
+## ntfy failed
+
+All three fallbacks failed in order (2026-11-06 ~04:20-04:24 UTC):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "... urllib.request ..."`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "gas-rng-draws-7: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output, killed at the 45 s tool timeout.
+
+The finish step itself succeeded (`bash ../nf-queue/finish.sh 50-gas-rng-draws-7 done
+docs/reports/gas-rng-draws-7.md` → `OK done 50-gas-rng-draws-7`). The previous session
+(guard-radii-finish, ~03:00 UTC) saw the identical three failures — ntfy.sh is unreachable
+from this sandbox.
