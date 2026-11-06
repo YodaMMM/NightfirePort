@@ -16,6 +16,3 @@ Do these, in order:
 4. `Door.bullet_pass` still reads the placement stand-in; the f0 word is the real gate. Change it if the 08 pins allow, and say what they measured.
 
 Keep the [L] 08 pins. Quote fusebox_geometry_07000014, interactables_07000014, rocket_stop_plane08, rocket_glass08, rocket_origin, solar_panel_hits, walkreal 08 / 0c / 14 / 16 / 1b.
-
----
-claimed-by: sandbox4 at 2026-11-06T08:20Z
