@@ -1903,6 +1903,11 @@ pub struct Drone {
     /// (its own section over whatever an earlier spawn wrote). The port stores the params and
     /// re-rolls `Drones::stats_table` at the spawn; `None` for placed drones (their stats are final).
     pub spawn_stats_params: Option<Vec<(u32, u32)>>,
+    /// The `Drone_Delete` 0x136ce8 turret sweep has run for this deleted drone — the port's
+    /// once-per-deletion latch for the consumer in `Drones::tick` (`delete_me` itself is the
+    /// game's obj+0xFE bit 0 and stays set; a spawner re-add resets both, the game's fresh
+    /// object). See `gt::GTurret::drone_delete_sweep`.
+    pub turret_swept: bool,
 }
 
 /// Normalise a vector (the grenade throw direction helper).
@@ -2170,6 +2175,7 @@ impl Drone {
             moved_since: None,
             stopped_since: None,
             target_motion: Motion::default(),
+            turret_swept: false,
         };
         // `NDrone2_DefaultInit`'s held-weapon switch: the pistol class {2, 6, 0xA, 0xB, 0xE, 0x10,
         // 0x3B..0x40} writes `+0x100 = 2.0` beside its anim set 4 and clip 12 [M 0x14b300:267-293];
@@ -4794,8 +4800,10 @@ impl Drone {
                 // slots' +0x14), the +0x950/+0xA60 arrays freed, and every other object's references
                 // to this drone nulled (+0x170 opponent, +0x2C0, +0x314, class-0xD +0x28) [M
                 // 00136ce8 decompile]. The port folds the sweep — no port object keeps a dangling
-                // id once `present` drops.
-                if gone { self.present = false; self.enabled = false; return Some(true); }
+                // id once `present` drops. `delete_me` rides along (the game's obj+0xFE |= 1 IS this
+                // moment [M-dis 0x133864-0x133888]) — the `Drones::tick` consumer runs the turret
+                // arm of `Drone_Delete` (gt.rs `drone_delete_sweep`) off it, once.
+                if gone { self.delete_me = true; self.present = false; self.enabled = false; return Some(true); }
                 if s == FADE && self.cull { self.set_state(FADE_FAST); }
                 true
             }
@@ -8157,7 +8165,9 @@ impl Drone {
                         // is entered at once; with none, `DroneFunc_Set2ndBehaviour` 0x14a618 and
                         // the mode byte `+0xC5 = +0xC4`, staying this tick. Every other mode
                         // enters `+0x5A2`. (`+0x33 = 0` has no port reader.)
-                        if self.prop(d, 0x59) { self.present = false; self.enabled = false; }
+                        // prop 0x59 → DeleteMe; the ENTER body is `NDrone2_Enable(0)` + `obj+0xFE |= 1`
+                        // [M 0x173f00] — `delete_me` rides along for the tick consumer's turret sweep.
+                        if self.prop(d, 0x59) { self.delete_me = true; self.present = false; self.enabled = false; }
                         else if self.mode == 7 {
                             if self.using_2nd { self.set_1st_behaviour(); }
                             else {
@@ -19796,6 +19806,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             }
                         }
                         dr.present = true; dr.enabled = true; dr.started = false;
+                        // A re-add is the game's FRESH object (`Drone_Create` again) — the delete flag
+                        // and the once-per-deletion turret-sweep latch reset with it.
+                        dr.delete_me = false; dr.turret_swept = false;
                         // `control_add_object_to_list` prepends [M 0x134698]: a drone spawned this frame updates
                         // before every placement object from its NEXT frame on, and NOT in the frame it spawned
                         // (the walk's cursor is already past the list head when the spawner runs) — core-loop §7
@@ -19822,7 +19835,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         for i in v {
                             // The game's deletion path unlinks the drone from the shared object list with
                             // `LList_Remove` 0x1ccac8 (called by `Drone_Delete` 0x136ce8 and every object
-                            // `*_Delete` [M]); dropping the index here is that same unlink.
+                            // `*_Delete` [M]); dropping the index here is that same unlink. The spawner
+                            // remove reaches it through `obj+0xFE |= 1` per spawned drone [M 0x137e68:82,
+                            // :267] — `delete_me` rides for the tick consumer's turret sweep.
+                            self.list[i].delete_me = true;
                             self.list[i].present = false; self.list[i].enabled = false; self.llist.retain(|&k| k != i);
                         }
                     }
@@ -19985,7 +20001,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // (and the drone keeps the verbatim-0 SetState when the alt state is clear).
             if dr.second_channel != 0 && dr.second_tag != 0 && self.channels.on(dr.second_channel as u32) {
                 dr.second_channel = 0;
-                if dr.second_tag == 0xc { dr.present = false; dr.enabled = false; continue; }
+                if dr.second_tag == 0xc {
+                    // PreDroneControl's tag-0xC arm IS `obj+0xFE |= 1` [M 0x148db0:55-58] — the same
+                    // soft delete, so `delete_me` rides for the turret sweep.
+                    dr.delete_me = true; dr.present = false; dr.enabled = false; continue;
+                }
                 dr.second_tag = 0;
                 dr.enabled = true;
                 if dr.alt_state != 0 {
@@ -21573,6 +21593,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // gunimp-door: the mounted laser's beam explode drains here — the same tick the fire
         // queued it, where the tick's `Data` is at hand (see `run_beam_explodes`).
         self.run_beam_explodes(d, player.pos, frame);
+        // `Drone_Delete` 0x136ce8:89-95's turret arm, run where the port folds that delete: every
+        // drone the game deleted this tick (obj+0xFE |= 1 → `control_delete_object` → the class's
+        // delete func [M-dis 0x133864-0x133888, 0x26F890 control_funcs]) sweeps the class-0x36
+        // turrets its deployments own — `obj+0xfe |= 1` + the `Explode_Create(5.0, 5.0, 50.0, …,
+        // 0x6000052, …)` blast at each turret's own +0x30, through the shared pending-blast path
+        // (it hurts bodies). The owner is the port's drone object id (the list index — the
+        // `TrackCand.obj` fold); a placed turret's game owner is ITSELF and never matches
+        // [M 0017ffa0:90-92]. Unreachable through the real paths on retail data — the deployer is
+        // the MP bot ('R' 0x52, mode-0x1e gate [M 00178f68:94], no disc placement carries weapon
+        // 0x52 [D nf-formats/tests/gt_r_weapon_placement_census.rs]) and no port deploy exists —
+        // so this is the once-per-deletion latch the day a deploy lands (unit pin:
+        // gt.rs `drone_delete_blows_only_the_dead_bot_s_turrets`).
+        let newly_deleted: Vec<usize> = self.list.iter().enumerate()
+            .filter(|(_, dr)| dr.delete_me && !dr.turret_swept).map(|(i, _)| i).collect();
+        for i in newly_deleted {
+            self.list[i].turret_swept = true;
+            for pos in crate::gt::GTurret::drone_delete_sweep(&mut self.gt_turrets, i as u32) {
+                self.pending_blasts.push((pos, 5.0, 50.0, usize::MAX - 1, 0, 0x0600_0052, 5.0, 0));
+            }
+        }
         let blasts = std::mem::take(&mut self.pending_blasts);
         for (pos, radius, damage, owner, weapon_type, script, scale, debris_kind) in blasts {
             self.spawn_blast(d, pos, radius, damage, owner, weapon_type, player.pos, frame, script, scale, debris_kind);
@@ -22250,6 +22290,7 @@ mod tests {
             target_motion: Motion::default(),
             // sniper-spawn-stats-2: the test drone is placed, not spawned by a template.
             spawn_stats_params: None,
+            turret_swept: false,
         };
         dr
     }

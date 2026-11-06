@@ -542,6 +542,37 @@ impl GTurret {
         }
     }
 
+    /// `Drone_Delete` 0x136ce8:89-95's turret arm: as a drone object is deleted, every class-0x36
+    /// turret whose ext+0xb8 owner is that drone gets `obj+0xfe |= 1` (the self-delete flag) and
+    /// the `Explode_Create(5.0, 5.0, 50.0, obj, obj+0x30, 0x2d6210, 0x6000052, 0xff, 0xff, 100, 0)`
+    /// blast at its own +0x30 [M 00136ce8 — the same walk that clears the other objects' drone
+    /// back-pointers]. The game's walk has NO state gate and NO already-flagged skip: a turret
+    /// flagged earlier in the same tick (GT_Create's MP sibling sweep) is blown again [M the
+    /// decompile's unconditional arm]. Returns the blown turrets' positions (the caller queues
+    /// the blasts through the shared pending-blast path, which hurts bodies).
+    ///
+    /// The port's fold of the game's pointer-equality gate: a PLACED turret's game owner is the
+    /// turret ITSELF (GT_Create param 6 == 0 → own obj [M 0017ffa0:90-92]) — the port stores that
+    /// as `owner: 0, placement != usize::MAX` — and a self-owned turret can never match another
+    /// object's deletion, so placed turrets are excluded unless they carry a real owner id. The
+    /// `deleted_owner` is the port's drone object id (the list index, the `TrackCand.obj` fold).
+    ///
+    /// On the retail disc this arm is unreachable in the port's real paths: the deployer is the
+    /// MP bot ('R' = BOT_vars+0x768 0x52, gated on mode 0x1e [M 00178f68:94]) and no drone
+    /// placement carries weapon 0x52 [D crates/nf-formats/tests/gt_r_weapon_placement_census.rs];
+    /// the port's guards never deploy (`DroneWeap_FireWeapon`'s deploy branch is unmodeled,
+    /// drone.rs:11361). Unit-pinned: `drone_delete_blows_only_the_dead_bot_s_turrets`.
+    pub fn drone_delete_sweep(turrets: &mut [GTurret], deleted_owner: u32) -> Vec<[f32; 3]> {
+        let mut blown = Vec::new();
+        for t in turrets.iter_mut() {
+            if t.owner == deleted_owner && (t.owner != 0 || t.placement == usize::MAX) {
+                t.delete_flag = true;
+                blown.push(t.pos);
+            }
+        }
+        blown
+    }
+
     /// `GT_Track` 0x17f9c8's selection core over the caller-filtered candidates.
     ///
     /// Range: the game compares the SQUARED distance (`Vec_SqDist3D`) against 2500.0 SP / 500.0 MP
@@ -1591,4 +1622,41 @@ mod tests {
         turrets[1].delete_flag = true;
         let blown = GTurret::create_chain(&mut turrets, 2);
         assert!(blown.is_empty(), "a delete-flagged sibling is skipped");
+    }
+
+    /// [M Drone_Delete 0x136ce8:89-95] the unit pin (the real path cannot reach the arm on retail
+    /// data — see `drone_delete_sweep`'s doc): a deployed turret owned by the deleted drone is
+    /// flagged and blasted at its own position; a turret owned by ANOTHER object stays; a placed
+    /// (self-owned) turret stays even when the deleted drone folds to id 0.
+    #[test]
+    fn drone_delete_blows_only_the_dead_bot_s_turrets() {
+        let mut turrets = vec![
+            // The dead bot's deployment (a future BotBrain deploy stores owner = the bot's list id).
+            GTurret { owner: 3, pos: [10.0, 1.0, 20.0], placement: usize::MAX, ..GTurret::default() },
+            // A turret owned by another object (the player's Ronin).
+            GTurret { owner: PLAYER_OWNER, pos: [30.0, 1.0, 40.0], placement: usize::MAX, ..GTurret::default() },
+            // A placed level turret (the port's self-owned fold: owner 0, a real placement).
+            GTurret { owner: 0, pos: [50.0, 1.0, 60.0], placement: 17, ..GTurret::default() },
+            // The dead bot's SECOND deployment — the game's walk blows every match, not just one.
+            GTurret { owner: 3, pos: [70.0, 1.0, 80.0], placement: usize::MAX, ..GTurret::default() },
+        ];
+        let blown = GTurret::drone_delete_sweep(&mut turrets, 3);
+        assert_eq!(blown, vec![[10.0, 1.0, 20.0], [70.0, 1.0, 80.0]],
+            "both of the dead bot's turrets blow at their own +0x30 [M 00136ce8:92-94]");
+        assert!(turrets[0].delete_flag && turrets[3].delete_flag, "obj+0xfe |= 1 on each [M 00136ce8:91]");
+        assert!(!turrets[1].delete_flag, "another object's turret stays");
+        assert!(!turrets[2].delete_flag, "a placed self-owned turret never matches another object's deletion");
+        // Sister: the placed turret ALSO stays when the port folds the deleted drone to id 0
+        // (list index 0 — the placed turret's own-owner fold must not collide).
+        let mut pair = vec![
+            GTurret { owner: 0, pos: [1.0, 1.0, 1.0], placement: 4, ..GTurret::default() },
+            GTurret { owner: 0, pos: [2.0, 1.0, 2.0], placement: usize::MAX, ..GTurret::default() },
+        ];
+        let blown = GTurret::drone_delete_sweep(&mut pair, 0);
+        assert_eq!(blown, vec![[2.0, 1.0, 2.0]], "a deployed turret owned by drone 0 blows; the placed one stays");
+        // Sister: an already-flagged turret is blown again — the decompile's arm has no 0xfe gate
+        // [M 00136ce8:89-95] (unlike create_chain's port-side skip).
+        turrets[0].delete_flag = true;
+        let blown = GTurret::drone_delete_sweep(&mut turrets, 3);
+        assert_eq!(blown, vec![[10.0, 1.0, 20.0], [70.0, 1.0, 80.0]], "no already-flagged skip in this walk");
     }
