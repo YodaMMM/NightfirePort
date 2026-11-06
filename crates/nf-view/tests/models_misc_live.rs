@@ -340,17 +340,28 @@ fn firing_spawns_a_muzzle_smoke_puff_that_fades_and_dies() {
     // It fades and dies: life 128 ticks [M Player_MuzzleFlash 0x1a4298 — the decomp drops Gas_Init's 11th
     // argument; the disassembly loads it at 0x1a43f8 `li $v0, 0x80` and stores it at 0x1a442c] (the old
     // 8 here was [S], the test audit's UNPROVEN row; rocket-trail-gas measured the real value).
+    // stream-batch-2: the count tracks THE captured puff (by its born frame) — the fire pulse
+    // `t % 9 == 0` spawns a puff per shot through the fire-rate gate, and the joined tree's
+    // muzzle-latch timing spawns one per pulse where the pre-merge streams dropped some; counting
+    // "any kind-7" measured the LAST puff's remaining life (158), not the pinned 128.
+    let born0 = g0.born;
     let mut ticks = 0;
-    while sim.drones.gas.puffs.iter().any(|g| g.kind == 7) {
+    while sim.drones.gas.puffs.iter().any(|g| g.kind == 7 && g.born == born0) {
         sim.step_bond(Input::default(), false, false, false);
         ticks += 1;
         assert!(ticks < 200, "the puff outlived its life");
     }
     assert_eq!(ticks, 127, "life 128, one tick spent before capture: gone after 127 more");
-    // The sister: not firing spawns no muzzle smoke (fix-world-fx: the pool legitimately carries
-    // the ripples' type-6 rings, so the check is the type-7 count).
+    // The sister: not firing spawns no MUZZLE smoke. stream-batch-2: the pool legitimately carries
+    // OTHER kind-7 puffs on a live level — the opening fight's bullet-impact puffs (the fix-world-fx
+    // note's type-6 rings aside) — so the check is the muzzle signature itself: the site's
+    // scale_rate (0.1−0.05)/128 [M 0x1a4298 + 0x1a43f8], which neither the impact puffs (0.03/126)
+    // nor the searchlight smoke (0.25−0.05)/128 share.
+    let muzzle_rate = (0.1f32 - 0.05) / 128.0;
     for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
-    assert!(!sim.drones.gas.puffs.iter().any(|g| g.kind == 7), "no smoke without a shot");
+    assert!(!sim.drones.gas.puffs.iter()
+        .any(|g| g.kind == 7 && (g.scale_rate - muzzle_rate).abs() < 1e-9),
+        "no muzzle-signature smoke without a shot");
 }
 
 /// The broken searchlight's smoke (`Searchlight_Update` 0x1cb900 state 2, every 7th frame at obj+0x30,
