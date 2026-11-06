@@ -7,3 +7,6 @@ Two divergences found by reading drone AI against the decompile. Each needs a fa
 2. Darts on the Tower levels: `on_dart_impact` skips the stamp block the tase runs [M 0x1469b8:322-348 against :89-128]. Port it and pin it.
 
 Run every live binary that touches spawners. Re-pin walks by route, never by removing draws.
+
+---
+claimed-by: sandbox1 at 2026-11-06T02:31Z
