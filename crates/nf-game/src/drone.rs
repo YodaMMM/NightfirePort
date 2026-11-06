@@ -1650,7 +1650,7 @@ pub struct Drone {
     /// 0x163c68 case 5). Drained by `Drones::tick` straight into `drones.audio`. Own line (merge
     /// lesson 4).
     pub sfx_reqs: Vec<(u32, V3)>,
-    /// audit-music-events: music-event outbox queued by the state arms that have no `Drones`
+    /// audit-music-events: music-event outbox queued by the state arms that have no `Music`
     /// access — the hostage-saved cue `Music_Event(0x10, 1)` (`NDrone2_DSTATE_HostageSaved`
     /// 0x15ccf0:20-21). Drained by `Drones::tick` straight onto `drones.music`'s board. Own
     /// line (merge lesson 4).
@@ -4741,13 +4741,11 @@ impl Drone {
                     if self.team == 1 && !self.knocked_out && self.hit_by_player { self.dispatched_logged = true; }
                     self.set_death_channel();
                     self.death_pending = false;
-                    // [M NDrone2_DSTATE_SpecialDeath_Anim 0x163c68 case 5]: when the special-death
-                    // script is 0x0600021F the game plays the scripted-death cry 0x148 at the drone
-                    // (the game's `glb_players != 0` gate — the port's tick always has the player).
-                    // sound-coverage port (audit-sound-calls) — queued for the tick's drain.
-                    if self.special_death == 0x0600_021f {
-                        self.sfx_reqs.push((0x148, self.pos));
-                    }
+                    // [M NDrone2_DSTATE_SpecialDeath_Anim 0x163c68 case 5]: the cry does NOT fire
+                    // here — case 5 is the ANIM_DONE message (the script's completion, disasm
+                    // 0x163f38: `$a0=0x148`, `$a1=glb_players+0x30`), so the 0x148 rides the
+                    // msg::ANIM_DONE arm below, at the PLAYER's position (sound-gates-sweep).
+
                     // The object is the hip from here (feet + `Drone+0xA0`; the port's position is otherwise feet + 1).
                     let hip = self.root_value(d).map_or(0.0, |r| r[1]);
                     self.pos[1] += crate::damage::drone_height(hip) - 1.0;
@@ -4770,7 +4768,18 @@ impl Drone {
                 if !self.firing || matches!(self.anim_set, 4 | 9) { self.drop_weapon(d, rng); }
                 true
             }
-            (SPECIAL_DEATH, msg::ANIM_DONE) => { self.set_state(DEAD); true }
+            (SPECIAL_DEATH, msg::ANIM_DONE) => {
+                // [M NDrone2_DSTATE_SpecialDeath_Anim 0x163c68 case 5, disasm 0x163f38-0x163f80]:
+                // the scripted-death cry 0x148 fires when the death script FINISHES, at the
+                // PLAYER's position (`glb_players+0x30`), gated on the 0x0600021F script and
+                // `glb_players != 0` (the port's tick always has the player; `player_pos` is the
+                // per-tick cache). (sound-gates-sweep: was queued on state ENTER, at the drone.)
+                if self.special_death == 0x0600_021f {
+                    self.sfx_reqs.push((0x148, self.player_pos));
+                }
+                self.set_state(DEAD);
+                true
+            }
             (DEATH_ANIM, msg::EXIT) => { if self.death_pending { self.set_death_channel(); } true }
             (DEATH_ANIM, msg::TIMER_C) => { if self.death_pending { self.set_death_channel(); self.death_pending = false; } true }
             (SPECIAL_DEATH, msg::TIMER_C) => { self.death_pending = true; true }
@@ -9454,8 +9463,9 @@ impl Drone {
             (HOSTAGE_SAVED, msg::ENTER) => {
                 self.alert_status_set(0, frame); // [M 0x15ccf0 case 1] — the status byte; no +0x50C write
                 self.captor = None;
-                // `Music_Event(0x10, 1)` [M 0x15ccf0:20-21] — the hostage-saved cue rides the
-                // music-event outbox (audit-music-events).
+                // `Music_Event(0x10, 1)` [M 0x15ccf0:20-21] — the cue rides the music-event
+                // outbox (this arm has no `Music` access); `Drones::tick` drains it onto the
+                // board. (sound-gates-sweep: the outbox had no drain — the cue never played.)
                 self.music_reqs.push(0x10);
                 if self.second_channel != 0 && self.raise.is_none() { self.raise = Some(self.second_channel); }
                 // audit-text-lines — `DroneFunc_HostageSaved` 0x1441c0:20-51, the part after the
@@ -20713,6 +20723,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // audit-sound-calls: the state arms' raw sound requests (the special-death cry 0x148).
             for (id, pos) in std::mem::take(&mut dr.sfx_reqs) {
                 self.audio.play3d(id, pos, None);
+            }
+            // audit-music-events: the state arms' music events (the hostage-saved cue 0x10, the
+            // `NDrone2_DSTATE_HostageSaved` 0x15ccf0:20-21 `Music_Event(0x10, 1)`) — the arms
+            // have no `Music` access, so they queue and this drain writes the board. The game's
+            // DSTATE arms call the board through the same per-tick control walk.
+            // (sound-gates-sweep: the outbox existed but nothing drained it.)
+            for e in std::mem::take(&mut dr.music_reqs) {
+                self.music.event(e as usize, 1);
             }
             if let Some(c) = dr.raise.take() { self.channels.set(c as u32, 1, frame); }
             // audit-text-lines — `DroneFunc_HostageSaved` 0x1441c0:20-51, the rescue INFO message
