@@ -765,6 +765,15 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
         // 0.17 along from (30.33, 0.55, 35.44)); the corridor lane west of it (x ≈ 29.7) is the
         // crossing the probe walked ((29.99, 0.61, 38.00) grounded).
         let _ = w.try_walk_to(Wp::new(29.7, 0.8, 34.7).r(0.9), "the corridor west of the door wall");
+        // The leg-2 spot's straight line clips the door wall's west jamb (the face bars the
+        // direct south steer at x ≥ 30.3 — the segment hit 0.17 along from (30.33, 0.55, 35.44)),
+        // so re-anchor the approach on the west lane the probe walked ((29.99, 0.61, 38.00)
+        // grounded) before the leg-2 spot. (The report's doorway waypoint (~x 31.8, z 36.3) was
+        // tried first and measured WEDGED: the walker's E toggles fight the kind-2 auto-door —
+        // use_door early-returns on the 0x8 moving state and the stuck counter never escalates,
+        // while the leaf's sliding live sphere (Door_Update's proximity test [M 0x1363c8:52-68])
+        // keeps oscillating open/closed — stuck dump state 0x8 pos01 0.77, d 1.55, 6000 ticks.)
+        w.walk_to(Wp::new(29.7, 0.8, 36.2).r(0.7), "the west lane past the jamb (the probe's crossing)");
         w.walk_to(Wp::new(30.09, 0.65, 38.73).r(1.2), "the corridor south to the leg-2 spot");
         if !w.tops_up() { clear_hostiles(w, 24.0, 900); }
         {
@@ -1941,6 +1950,13 @@ fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
         }
         let _ = w.try_walk_to(Wp::new(30.4, 1.1, 34.9).r(0.8), "down onto the corridor floor (0.0)");
         let _ = w.try_walk_to(Wp::new(29.7, 0.8, 34.7).r(0.9), "the corridor west of the door wall");
+        // The leg-2 spot's straight line clips the door wall's west jamb (the face bars the
+        // direct south steer at x ≥ 30.3 — the segment hit 0.17 along from (30.33, 0.55, 35.44)),
+        // so re-anchor the approach on the west lane the probe walked ((29.99, 0.61, 38.00)
+        // grounded) before the leg-2 spot — the shared fn's shape, copied (the report's doorway
+        // waypoint measured WEDGED on the kind-2 auto-door's open/close oscillation; see the
+        // shared fn's comment).
+        w.walk_to(Wp::new(29.7, 0.8, 36.2).r(0.7), "the west lane past the jamb (the probe's crossing)");
         w.walk_to(Wp::new(30.09, 0.65, 38.73).r(1.2), "the corridor south to the leg-2 spot");
     }
 
