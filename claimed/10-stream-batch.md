@@ -11,3 +11,6 @@ Branch from `origin/s/gas-guard-repin`, merge `origin/s/muzzle-on-master-2`, the
 5. An ignore with a measured reason is allowed for 00 Agent walks only.
 
 Do not loosen pins tagged [L] and do not change game code to suit a walk. Guard rounds through glass are confirmed live on 0d. Finish with one total line from a full run.
+
+---
+claimed-by: sandbox7 at 2026-11-06T11:46Z
