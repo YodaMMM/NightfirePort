@@ -14184,6 +14184,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         {
             for (_pi, c, r, mesh) in &self.scripts.sp_bullet_targets(d) {
                 let Some((hash, m)) = mesh else { continue };
+                // THE PICK GATE [M Collide_PickObj 0x1eae80 disasm 0x1eafc-0x1eb2c + the per-cel
+                // object walk 0x1eb914]: the aim/bullet hittest word 0x20a/0x208 [M
+                // Player_WeaponInitBullet 0x1a4bf0:154 / Bullet_update 0x12ef18 t3=522] builds
+                // the skip mask 0x20 | 0x40 (bit 0x8) = 0x60 — skip every candidate whose
+                // obj+0xF0 & mask != 0; the object walk adds the f0 & 0x3000 pre-filter. The
+                // word = glist+0x44 [M 0x134960:11 / 0x1d1508] = world.glist_flags. [L the
+                // 0700001b audits]: the whole panel f0 0x81 (kept), the pieces 0xc1 (skipped);
+                // the disc words match both (nf-formats' glist_flags_probe).
+                let f0 = d.world.glist_flags(*hash).unwrap_or(0);
+                if f0 & 0x60 != 0 || f0 & 0x3000 != 0 { continue; }
                 // The wire entities ride their GFX-bounds frame end to end (the flight's contact
                 // note below): the posed COLLISION glist measured ~0.1-0.3 u behind the room's
                 // stat wall face on 07000014 [L the flight-stop trace vs the aim-stage probe],
@@ -14225,6 +14235,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         t = t.min(tt);
                     }
                 }
+            }
+        }
+        // THE DOORS in the same pick [L the driving task: the 08 rocket's aim ray hits the
+        // class-0x1c object at (139.562, 50.792, -96.706) — the closed shutters' wood stile]:
+        // the game's per-cel object walk covers every cel-linked object (the doors included,
+        // Door_Create 0x136100's build_LinkToRoom tail), the same word gate, the built-sphere
+        // broad phase (live_sph) then the leaf's own collision triangles at the posed matrix.
+        for dr in &self.doors.list {
+            if dr.glist == 0 { continue; }
+            let f0 = d.world.glist_flags(dr.glist).unwrap_or(0);
+            if f0 & 0x60 != 0 || f0 & 0x3000 != 0 { continue; }
+            let (c, r) = dr.live_sph();
+            if !Self::segment_hits_sphere(from, to, c, r) { continue; }
+            let Some(tris) = d.world.shape(dr.glist) else { continue };
+            if let Some(tt) = Self::segment_posed_mesh_t(&dr.matrix, tris, from, to) {
+                if tt > 1e-4 && tt <= 1.0 { t = t.min(tt); }
             }
         }
         // The SCRIPT ENTITIES are NOT in the ray's object set: the live-proven lines say the
