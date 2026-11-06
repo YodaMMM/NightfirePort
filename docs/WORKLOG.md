@@ -32,3 +32,14 @@ Finish battery: the five binaries whole + walkreal 01, 16, 1b + enemy_accuracy_l
   0d 1/2 (45.6s), 08 5/1 (194.5s), 03 5/2 (752.2s), 01 8/0 (56.6s); 16/1b/enemy_accuracy
   were still running at report time — their counts are in the report tail if landed.
   Report: docs/reports/guard-repin-master.md.
+
+## guard-repin-master-2
+Started 2026-11-06 11:20 UTC. Branch s/guard-repin-master-2 (from origin/s/guard-repin-master,
+already up to date with origin/master). Task: the last three reds — 03 real_damage_agent (land
+the stand_shooters_down leg-end sweeps from 06 on the servant and exit legs, file-local, d-gated);
+13 warm chain real_damage (restore the lobby budget; #8 at the security doorway met Bond at 21 hp);
+0d c5 door real_damage and agent (change the "zero-hit while moving" promise to a measured budget,
+explain the 600 zero ticks at d 63.6); 08 whole mission real_damage_00agent (station legs re-pin
+the declared branch, else measured ignore for the 00 Agent sister only). No [L] loosening beyond
+item 3's, no game-code changes to suit a walk. Finish binaries: those whole plus walkreal 01, 06,
+16, 1b, enemy_accuracy_live.
