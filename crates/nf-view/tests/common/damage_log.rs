@@ -21,6 +21,12 @@ thread_local! {
     /// eye ray reaches (desk cover) — the hurting-first fallback pick plus the stand's creep,
     /// the `lane_fights` machinery without the lane windows.
     static UNSEEN_FIGHTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `with_real_damage_glass_sight`: the sight ray passes INTACT GLASS like the game's own
+    /// round flights do (see `exposed_impl`).
+    static GLASS_SIGHT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `with_real_damage_glass_fights`: the return-fire pick fights the shooter who is actually
+    /// hurting Bond first and skips cooled-down candidates (see `return_fire`).
+    static HURTING_FIRST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The latest real-damage summary on this thread (refreshed every 60 ticks and at a death).
     static LAST_SUMMARY: std::cell::RefCell<Option<(u32, String)>> = const { std::cell::RefCell::new(None) };
 }
@@ -87,6 +93,29 @@ pub fn with_real_damage_unseen_fights<R>(f: impl FnOnce() -> R) -> R {
     UNSEEN_FIGHTS.with(|c| c.set(true));
     let _reset = Reset;
     with_real_damage(f)
+}
+
+/// The 07000008 Agent-sisters' fight tactic (guard-glass-finish): `with_real_damage` + the
+/// head-hunting pick + the GLASS-SIGHT sight rule (see `exposed_impl`) + the HURTING-FIRST
+/// return-fire retargeting (see `return_fire`). The three laws answer the merged-master tree's
+/// measured deaths: the mouth's solid wall band made every foot stand on the burst pair blind
+/// (eleven 61-tick stands, aim None) while the pair walked 8.5 u to point-blank and the
+/// stairwell-top pair landed free hits into the `fighting=true` window (d2, tick 25036); a
+/// failed stand cooled the pick's first candidate and bailed the whole response, and the next
+/// stand fought a zero-damage guard at 11 u while the 59-damage burst rifle chewed 4.4 u away
+/// (d3, tick 25116). Opt-in per test: the master-green real-damage walks keep every pinned
+/// timeline (none of them sets it).
+#[allow(dead_code)]
+pub fn with_real_damage_glass_fights<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) {
+        GLASS_SIGHT.with(|c| c.set(false));
+        HURTING_FIRST.with(|c| c.set(false));
+    } }
+    GLASS_SIGHT.with(|c| c.set(true));
+    HURTING_FIRST.with(|c| c.set(true));
+    let _reset = Reset;
+    with_real_damage_head_hunting(f)
 }
 
 /// `with_real_damage` for a route whose legs were laid for an unanswered walk (a return-fire
@@ -210,6 +239,15 @@ pub struct DamageLog {
     /// `stand_and_fire` reads a dart landing (the target entering the dart family) as progress and
     /// the under states as the win.
     pub tranq_fights: bool,
+    /// OPT-IN (`hurting_first`, set by the 07000008 Agent sisters, `with_real_damage_glass_fights`):
+    /// the return-fire pick orders the VISIBLE shooters by the damage they dealt Bond over the
+    /// same 240-frame window (nearest on ties — the lane pick's order, the plain eye rays and
+    /// windows), and candidates a failed fight just put on cooldown are dropped instead of
+    /// bailing the whole response. Measured d3 death (tick 25116): the pick fought the
+    /// zero-damage #23 at 11 u while #20 (59.0 in 7 hits, 4.4 u) chewed, after the failed #20
+    /// stand's cooldown silenced the response outright. Off = master behaviour (nearest visible
+    /// first, cooldown bails) everywhere else.
+    pub hurting_first: bool,
     /// OPT-IN (`shooters_window`, the 07000005 00 Agent walk): the shooters list's (horizontal,
     /// vertical) reach in u, replacing the plain (20.0, 6.0) / lane (48.0, 7.5) windows. The 05
     /// castle-approach spine is fired on from 16.6 u BELOW (the gallery riflemen #8/#9 stand at y
@@ -256,7 +294,7 @@ pub struct DamageLog {
 
 impl DamageLog {
     pub fn new() -> DamageLog {
-        DamageLog { min_health: 100.0, last_health: 100.0, die_panics: no_topup_env(), active: no_topup_env(), return_fire: !NO_RETURN_FIRE.with(|c| c.get()) && std::env::var_os("NF_WALK_NO_RETURN_FIRE").is_none(), ..Default::default() }
+        DamageLog { min_health: 100.0, last_health: 100.0, die_panics: no_topup_env(), active: no_topup_env(), return_fire: !NO_RETURN_FIRE.with(|c| c.get()) && std::env::var_os("NF_WALK_NO_RETURN_FIRE").is_none(), hurting_first: HURTING_FIRST.with(|c| c.get()), ..Default::default() }
     }
 
     fn owner_desc(sim: &nf_view::scene::Sim, owner: usize) -> String {
@@ -402,16 +440,25 @@ impl DamageLog {
             let c = [b.m[3][0], b.m[3][1], b.m[3][2]];
             let ray = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
             let Some(t_box) = nf_game::damage::ray_box(eye, ray, &b) else { continue };
+            // GLASS_SIGHT (opt-in): the world trace runs the flight's GLASS PASS — a mat-0x10
+            // pane contact is a PASS [M Collide_Update 0x1ea398:216-229], the same law the
+            // guards' and Bond's own gun rounds fly under ([L weapon_data] bit 0x800 clear).
+            let glass = GLASS_SIGHT.with(|c| c.get());
+            let sight = |g: [f32; 3]| if glass {
+                sim.world.segment_flight_scoped(sim.world.find_cel(g), g, c, true)
+            } else {
+                sim.world.segment_bullet_scoped(sim.world.find_cel(g), g, c)
+            };
             if gun_rays {
                 let mut clear = true;
                 for g in &gun_spots {
                     let gr = [c[0] - g[0], c[1] - g[1], c[2] - g[2]];
-                    let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(*g), *g, c);
+                    let tw = sight(*g);
                     if tw.is_some_and(|w| w < t_box) { clear = false; break; }
                 }
                 if !clear { continue; }
             } else {
-                let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, c);
+                let tw = sight(eye);
                 if tw.is_some_and(|w| w < t_box) { continue; }
             }
             let dev = ((c[0] - torso[0]).powi(2) + (c[1] - torso[1]).powi(2) + (c[2] - torso[2]).powi(2)).sqrt();
@@ -558,7 +605,42 @@ impl Walker {
                     .filter(|&i| nf_game::drone::Drone::dart_impact_state_ok(sim.drones.list[i].state))
                     .collect::<Vec<usize>>()
             } else { cands };
-            let pick = if !self.dmg.lane_fights {
+            // HURTING-FIRST (opt-in, `hurting_first`, the 07000008 Agent sisters, guard-glass-finish):
+            // two retarget laws the plain pick lacks, both measured in the same d3 death (tick 25116):
+            // 1. A guard a failed fight just put on cooldown does not silence the whole response: the
+            //    failed #20 stand (he ducked behind the mouth's wall band mid-fight, aim None at t60)
+            //    cooled #20 for 240 ticks and the pick returned #20 first and BAILED — #19 (fightable,
+            //    hp 10, 6 u) was never considered, and the pair burst Bond down unanswereded. The
+            //    filter drops cooled candidates so the response moves to the next answerable shooter.
+            // 2. The pick fights the shooter who is actually HURTING Bond first (the lane pick's
+            //    damage-weighted order, the PLAIN eye-ray visibility and the plain windows — see the
+            //    pick arm below): the same run's later stand fought the zero-damage stairwell-top
+            //    guard #23 at 11 u while the burst rifle #20 (59.0 in 7 hits, 4.4 u, visible) chewed
+            //    health 68 → 0 in 107 ticks inside the `fighting=true` window.
+            let cands = if self.dmg.hurting_first {
+                let tick = self.total_ticks;
+                let now = sim.drones.frame;
+                cands.into_iter()
+                    .filter(|&i| !self.dmg.cooldown.iter().any(|&(ci, until)| ci == i && tick < until)
+                        // The lethality override: a guard the stand CAN see right now who dealt
+                        // real damage over the last 240 frames is answered even inside his
+                        // cooldown — the cooldown exists to stop re-standing on a guard the world
+                        // trace cannot see, and visibility is re-tested here every pick. The d3
+                        // death run's #20 sat cooled until tick 25061 (the failed fight on his
+                        // mid-fight duck behind the mouth's wall band) while his bursts took
+                        // health 68 → 5 — every retarget and re-pick skipped him BECAUSE he was
+                        // cooled, and Bond died at 25116 with #20 at full hp.
+                        || dmg_of(i) > 15.0)
+                    .collect::<Vec<usize>>()
+            } else { cands };
+            let pick = if self.dmg.hurting_first {
+                cands.iter().copied()
+                    .filter(|&i| DamageLog::visible(sim, i))
+                    .min_by(|&a, &b| {
+                        dmg_of(b).total_cmp(&dmg_of(a))
+                            .then(dist_of(a).total_cmp(&dist_of(b)))
+                    })
+            } else if !self.dmg.lane_fights {
                 match cands.iter().copied().find(|&i| DamageLog::visible(sim, i)) {
                     Some(i) => Some(i),
                     // The unseen-cover fallback, opt-in (`with_real_damage_unseen_fights`): the
@@ -609,6 +691,12 @@ impl Walker {
                 if std::env::var_os("NF_RF_GEOM").is_some() && self.total_ticks % 60 == 0 {
                     for &i in &cands { DamageLog::geom_dump(sim, i); }
                 }
+            }
+            if std::env::var_os("NF_RF_TRACE").is_some() && self.dmg.hurting_first {
+                let dmgs: Vec<(usize, f32, f32)> = cands.iter().copied()
+                    .map(|i| (i, dmg_of(i), dist_of(i))).collect();
+                eprintln!("[hf] {label} tick {}: cands (i,dmg,dist) {dmgs:?} pick {pick:?} cooling {:?}", self.total_ticks,
+                    self.dmg.cooldown.iter().filter(|&&(i, u)| u > self.total_ticks).map(|e| e.0).collect::<Vec<_>>());
             }
             picked = pick;
             pick
@@ -757,6 +845,49 @@ impl Walker {
             }
             let (input, fire, reload) = {
                 let sim = self.scene.sim.as_ref().unwrap();
+                // RETARGET (opt-in `hurting_first`, the 07000008 Agent sisters): every 30 ticks the
+                // fight re-reads who is actually hurting Bond and switches to the worst VISIBLE,
+                // off-cooldown shooter when his 240-frame damage beats the current target's by
+                // more than 3.0. The pick's blind spot is the fight's first seconds: the d3 run's
+                // fight#23 opened at tick 24850 when the zero-damage pistol guard #23 (14 u) was
+                // the ONLY candidate, and ten ticks later the burst rifle #20 (4-7 u) opened up —
+                // 59.0 in 7 hits while the stand stayed on #23 (his ledger total: 0.0) and chewed
+                // health 68 → 0 (death tick 25116). A player under new, closer fire switches
+                // targets; the shared fight never did. The switch resets the fight's own progress
+                // trackers (hp0/last_hit/aim/unseen) for the new target.
+                if self.dmg.hurting_first && t > 0 && t % 30 == 0 {
+                    let now = sim.drones.frame;
+                    let dmg_of = |i: usize| -> f32 {
+                        sim.drones.player_hits.iter().rev()
+                            .take_while(|h| now.saturating_sub(h.0) <= 240)
+                            .filter(|h| h.1 == i)
+                            .map(|h| h.2).sum::<f32>()
+                    };
+                    let cur = dmg_of(di);
+                    let better = self.dmg.shooters(sim).into_iter()
+                        .filter(|&i| i != di)
+                        .filter(|&i| DamageLog::visible(sim, i))
+                        // The cooldown bends to active lethality (see the pick-side note): a
+                        // guard visibly dealing > 15 over the window is switchable even inside
+                        // his cooldown — the cooldown guards against INVISIBLE re-stands.
+                        .filter(|&i| !self.dmg.cooldown.iter().any(|&(ci, until)| ci == i && self.total_ticks < until)
+                            || dmg_of(i) > 15.0)
+                        .max_by(|&a, &b| dmg_of(a).total_cmp(&dmg_of(b))
+                            .then(b.cmp(&a)));
+                    if let Some(i) = better {
+                        let nd = dmg_of(i);
+                        if nd > cur + 3.0 {
+                            if trace {
+                                eprintln!("[rf-trace] fight#{di} t{t}: retarget to #{i} (dmg {nd:.1} vs {cur:.1})");
+                            }
+                            di = i;
+                            hp0 = sim.drones.list[di].health;
+                            last_hit = t;
+                            aim = None;
+                            unseen = 0;
+                        }
+                    }
+                }
                 let d = &sim.drones.list[di];
                 if d.corpse || d.health <= 0.0 { return true; }
                 // tranq_fights: the K5's win is the sleep itself — the fall 0x50 and the asleep
@@ -772,7 +903,14 @@ impl Walker {
                 // The ray set follows the fight's pick: lane fights use the gun stand-ins, the
                 // shared walks the plain eye ray (master behaviour; level-13-lobby-rifles-2).
                 if t % 10 == 0 { aim = if self.dmg.lane_fights { DamageLog::exposed_part_gun_rays(sim, di) } else { DamageLog::exposed_part(sim, di) }; }
-                if aim.is_none() { unseen += 1; if unseen > if self.dmg.lane_fights { 120 } else { 60 } { return false; } } else { unseen = 0; }
+                if aim.is_none() {
+                    unseen += 1;
+                    // NF_RF_GEOM: name the world stop that buries the target on the stand's first
+                    // blind tick (the 08 mouth investigation — the diagnostic return_fire already
+                    // runs, wired to the direct stands too).
+                    if unseen == 1 && std::env::var_os("NF_RF_GEOM").is_some() { DamageLog::geom_dump(sim, di); }
+                    if unseen > if self.dmg.lane_fights { 120 } else { 60 } { return false; }
+                } else { unseen = 0; }
                 // No round landed for 300 ticks: walk on (a guard in cover the stand cannot reach;
                 // the 13 lobby stand took 40 health that way). tranq_fights: the dart's HitDamage
                 // is never called [M 0x13fff0:269-306] — progress is a dart LANDING (the target
