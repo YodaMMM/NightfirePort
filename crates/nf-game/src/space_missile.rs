@@ -10,18 +10,20 @@
 //! State machine (the jump table `PTR_LAB_002fcc30` at 0x2fcc30, five entries [M disasm]:
 //! 0→0x1aa1c8, 1→0x1aa23c, 2→0x1aa25c, 3→0x1aa33c, 4→0x1aa3e0):
 //! - **state 0** [M 0x1aa1c8]: return while `switch_channels[ext+0x12]` (p7 = 19) is clear; then
-//!   `ext+0x14 -= 512.0` and stay while the result is >= 0 (c.lt.s/bc1f 0x1aa200-208); on < 0:
-//!   `MissileDeploy[p4−1] = 1` (0x1aa238, base 0x30cd70 at 0x1aa218) and `obj+0xf4 = 1`
-//!   (state 1, 0x1aa21c). **Open correction (sp-panes-new-drawing, measured, not shipped):** the
-//!   512.0 cites "the float at 0x31d0dc" — an unmapped address; the disc disassembly of the
+//!   `ext+0x14 -= REC_FRAME_RATE` and stay while the result is >= 0 (c.olt.s/bc1f 0x1aa200-208);
+//!   on < 0: `MissileDeploy[p4−1] = 1` (0x1aa238, base 0x30cd70 at 0x1aa218) and `obj+0xf4 = 1`
+//!   (state 1, 0x1aa21c). The step is **`REC_FRAME_RATE` = 1/60.0**: the disc disassembly of the
 //!   state-0 body loads the constant with `lui $at,0x31; lwc1 $f1,-0x2f24($at)` =
-//!   0x310000−0x2f24 = **0x30d0dc** = `REC_FRAME_RATE` = 1/60.0 (symtab `0030d0dc`), and the p3
-//!   seeds are SECONDS [D 105/40/20/0/60/105/105/60] — a game-accurate countdown runs seed·60
-//!   gated ticks. Shipped with the fast step because the real timing re-paces the 0700001b
-//!   mission flow: with 1/60 the state-1 sync writes (ch 181..188 @t10) land seed·60 ticks
-//!   later and the walk's console latch budgets (which master paced against the collapsed
-//!   state 0) miss consoles 1/2/7 — see docs/reports/sp-panes-new-drawing.md for the measured
-//!   run and the re-pacing left to do.
+//!   0x310000−0x2f24 = **0x30d0dc** (symtab `0030d0dc` = `REC_FRAME_RATE`; disassembled
+//!   2026-11-06: 0x1aa1f0 `lui $at,0x31` / 0x1aa1f4 `lwc1 $f1,-0x2f24($at)` / 0x1aa1fc
+//!   `sub.s $f0,$f0,$f1` / 0x1aa200 `c.olt.s $f0,$f0,0` / 0x1aa208 `bc1f`), and the p3 seeds
+//!   are SECONDS [D 105/40/20/0/60/105/105/60] — the countdown runs seed·60 gated ticks, so the
+//!   eight missiles leave state 0 STAGGERED (0/1200/2400/3600/6300 ticks after the ch-19 gate;
+//!   only missile 4's 0 s seed expires immediately). The tree shipped 512.0/tick (every seed
+//!   spent in one gated tick, all eight state-0 exits the same frame) until aim-route-4; the
+//!   1/60 step re-paces the 0700001b mission flow (console deadlines move to
+//!   launch + seed·60 + P0_LEN − 1 — the walkreal_0700001b walks were re-ordered onto the
+//!   deadline order in the same task).
 //! - **state 1** [M 0x1aa23c]: `Script_Update(ext[0])` per tick; when `script+0x9c != 0`
 //!   (0x1aa244-24c) → state 2 the SAME tick. `Create_SpaceMissile` runs ONE `Script_Update` at
 //!   create [M 0x1a9ef0:61], so state-1 tick k = script update k+1 (entry stream clock k); the
@@ -127,12 +129,11 @@ pub const P2_WRITES: [&[(u32, u16)]; 8] = [
     &[(1, 87), (930, 89)],
     &[(1, 88), (490, 90)],
 ];
-/// The state-0 countdown decrement — kept at the tree's 512.0 for now: the disc says the
-/// constant is `REC_FRAME_RATE` at 0x30d0dc = 1/60.0 (the state-0 body loads it with
-/// `lui $at,0x31; lwc1 $f1,-0x2f24($at)`; "0x31d0dc" is the unmapped misread), and the p3
-/// seeds are seconds — but the real timing re-paces the 0700001b mission flow (the walk's
-/// console latch budgets). Follow-up with docs/reports/sp-panes-new-drawing.md.
-pub const COUNTDOWN_STEP: f32 = 512.0;
+/// The state-0 countdown decrement: `REC_FRAME_RATE` = 1/60.0 per gated tick [M the state-0
+/// body 0x1aa1f0-0x1aa208 loads 0x30d0dc with `lui $at,0x31; lwc1 $f1,-0x2f24($at)`; symtab
+/// `0030d0dc` = REC_FRAME_RATE; the compare/branch is c.olt.s/bc1f 0x1aa200-208]. The p3 seeds
+/// are seconds [D 105/40/20/0/60/105/105/60], so a seed spends seed·60 gated ticks in state 0.
+pub const COUNTDOWN_STEP: f32 = 1.0 / 60.0;
 
 /// One kind-0x39 placement's missile object (the ext block at obj+0xE0 plus obj+0xf4/0xf6 [M]).
 #[derive(Clone, Debug, PartialEq)]
