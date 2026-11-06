@@ -119,3 +119,18 @@ Progress log:
   in with the leaf closed. Report: docs/reports/aim-object-flags.md. Runs: glass08 3/0,
   stop_plane08 4/0, origin 1/0, panel_hits 1/0, fusebox_geometry 0/1, interactables 9/1,
   walkreal_08 5/1 — all equal to the stage tip (the branch is sim-identical, f0 additive).
+
+## aim-node-pass
+Started 2026-11-06 ~01:10 UTC. Branch s/aim-node-pass = origin/s/aim-object-flags
+af18e350a. Task: (1) verify the 08 shutter nodes' 0x40 flag in the port's shape data,
+replace the kind-byte stand-in with Door.f0, let the node rule (HITDATA+0x51 bit 1 [M
+0x12cea0-0x12cea8], penetration_roll_node) carry the shutters; (2) land the mask gate +
+the cel-linked doors — the new [L]: the 08 rocket's aim ray hits the class-0x1c object at
+(139.562, 50.792, -96.706) and the round flies (139.56, -95.472) to (139.568, -100.472)
+with that object in its hit chain; (3) rewrite the two 14 fusebox tests to walk the real
+route (the leaf open). Must end green: rocket_stop_plane08, rocket_glass08, rocket_origin,
+solar_panel_hits, fusebox_geometry_07000014, interactables_07000014; then walkreals 08, 0c,
+14, 16, 1b.
+
+Progress log:
+- Branch cut + WORKLOG; pushed.
