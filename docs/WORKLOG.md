@@ -150,3 +150,10 @@ Progress log:
   red: the beam bends west-up off the wire slab (the posed centre (-89.41, -0.62, 30.89),
   the round crossing at x -89.75) — the snap's posed-glist west shift, the stage report's
   documented pivot question. interactables' rewrite not started (the same blocker).
+
+## aim-node-pass-2
+Started 2026-11-06 05:28 UTC. Branch s/aim-node-pass-2 (origin/s/aim-node-pass 3ea60a711 merged with
+origin/master — 4 files, clean). Task: finish the 14 cut — rewrite interactables_07000014's cut with the
+walk-and-E pattern of the fusebox test, fix the snap per the report's live check, keep the assertions, re-quote
+rocket_stop_plane08 / rocket_glass08 / rocket_origin / solar_panel_hits and the walkreal 08 0c 14 16 1b binaries.
+No [L] pin loosened.
