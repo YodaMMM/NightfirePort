@@ -30,3 +30,9 @@ gadget_select 2, walk_07000007 2, fix_hud 6, fix_player4 2, microcam_wheel_zoom 
 gondola_windows 3, stealth_ai 10, fix_remote_mine_play 3, interact_07000009 16,
 interactables_0700000a 13, fix_party_mission 9, party_door_lock 2, party_start_rules 6,
 interogate_07 2, mayhew_end_transition 3). Full suite: see the report.
+Suite (22:12 UTC): nf-game lib 686 passed / 0 failed / 5 ignored; every nf-game integration
+binary ok; nf-formats + nf-audio ok except exactly the 3 allowed disc_golden failures (slim
+ISO); all 25 walkreal_07000* level walks + walkreal_dump + npc_doors_live (6) +
+fix_guard_misc_live (6) ok; every symbol-matched binary (weapon_cycle / weapon_lock_input /
+WEAPON_LOCK grep) ok. The remaining nf-view live binaries (cutscene/render/mp probe suites
+that match none of the touched symbols) did not fit the window — owed to the full suite.
