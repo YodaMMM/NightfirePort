@@ -266,3 +266,28 @@ walkreal 08 / 0c / 14 / 16 / 1b whole.
 
 Progress log:
 - Sandbox reset; fresh clone, branch cut, master merged, pushed.
+
+Progress log (continued):
+- The recipe built + the deadline instrumentation: `answered[pi]` counts SP_UnPause
+  activations (the damage tail's one-tick flag [M 0x1dc2f8-0x1dc318]) = the answered holds;
+  the pre-fly to the next un-latched station fires on the 3rd answer; every latch logs
+  `deadline = missile_start[k-1] + P0_LEN[k-1] - 1` [M 0x1aa218/0x1aa23c-258; D P0_LEN].
+- MEASURED run 1 (the recipe, the 48-burst kept): ch19 = 2747, all 8 missile starts 2747;
+  latches 3@4017 (−529) 4@4425 (−121) 5@4629 (+83) 6@5043 (−103) 8@5505 (+359) 7@5961 (−85)
+  1@6388 (+342) 2@6531 (+485); MissileDeploy [3,3,2,2,3,2,2,3]. The pre-fly fires on all 8
+  consoles and gains ~6 ticks — the flights were already inside the end-plays.
+- The chain decomposition (run 1): twin taps 36 t, height re-floats ~78, clip dry gaps 289
+  (k5→k6) and 360 (k7 h1→h2), the real flights 336 (6→8) and 353 (7→1); all 8 UI scripts hold
+  in parallel from ~S+1009 — the serial flow is the wave cost.
+- CHALLENGER 1 (the steady cadence, clip ≥ 16 replaces the 48-burst): MEASURED WORSE
+  ([3,3,2,2,3,3,3,3] — k4 −126 but k5 +108, k8 +414, k7 arms): the early chains consumed the
+  clip ration the 48-threshold saved for the late ones. REVERTED.
+- CHALLENGER 2 (the interleaved fire pick): bit-identical to challenger 1 through k7 — the
+  level look pins a tap to the eye's own height band, so the only free targets are the height
+  twins, which the serial flow already answers in ~36 ticks. REVERTED. The 48-burst survives.
+- Both drakes walks still red at the MissileDeploy gate; the next levers (deadline-rationed
+  burst gate, the fight-exit clip top-up, the mid-bank dual stance) are in the report.
+- 08 x1 / 0c x1 / 16 x1 NOT started (the 1b item consumed the window) — the report carries
+  the classification and the 0c weapon-range hint.
+- Suite not run (time): one test file changed (walkreal_0700001b_live.rs), no src/, no
+  common/; the drakes walks ran 3× whole.
