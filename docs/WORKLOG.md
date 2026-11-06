@@ -361,3 +361,21 @@ with a stale-pin-vs-merge-break reason; then the walks plain → real damage →
 the `DroneFunc_HandleExplosives` 0x1435f0 break-after-first-kind-2 review; NF_EXPPROBE removed
 from drone.rs; one total line from a full run. Ignore only for 00 Agent walks with a measured
 reason; no [L] loosening; no game code changed to suit a walk.
+Outcome (15:35 UTC): the HandleExplosives one-record law landed [M 0x1435f0:46 `break` — the
+walk stops at the first kind-2-in-radius record pass or fail, ≤1 msg 0x21 per drone per frame;
+the port's explosive-outer loop walked on] + NF_EXPPROBE removed. Four non-walk reds fixed with
+harness-premise repairs (no game code): grenade_live (the lob's rest moved out of sight on the
+joined streams — searched standoff, law asserts unchanged), models_misc (the puff count tracked
+every kind-7: per-shot pulses + ambient impact puffs — now the captured puff by born frame),
+gun_turrets (the golden moved +8 draws as a block, damage/gaps identical — ambient upstream
+consumers, re-pinned with attribution), fix_grenade_types (the flash delivery's CanSeeObject
+ray clipped the wall edge on the drifted warm-up — searched offset, law asserts unchanged).
+Triage reasons recorded for the other nine non-walk reds (enemy_accuracy's ~2× hit-rate move
+needs the deferred bisect; the rest are delivery/route premise shifts — blast spot, plate
+route, box approach, firing line, aim premise). Walks: 014's red reproduced tick-exact and the
+report's first lever (the muzzle lane-leg) did NOT reach the death (it is on the 1.72-landing
+descent above the lane) — reverted; 0d/11 reproduced; the rest not re-run this window. The
+full-suite line did not fit (background jobs die between tool calls — verified; the chunk
+ceiling cannot hold 03's 752 s): the driver's parent-tree line 4397/31/353 stands as the
+reference; this window cleared 4 of the 31 with none added. Report:
+docs/reports/stream-batch-2.md.
