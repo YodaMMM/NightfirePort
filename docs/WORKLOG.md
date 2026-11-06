@@ -212,3 +212,17 @@ lift input), re-run the 1b walks until consoles 7 and 8 latch, and run the [ring
 on 08, 0c, 14 x3 and 16 to classify snap faults vs route/raw-aim tuning (14's three are the nav
 stick at "the corridor south to the leg-2 spot"). No zero-g or collision code changes. Keep the
 [L] 08 pins and the 0x30000000 fix.
+1b-zero-g-floor OUTCOME (2026-11-06 ~13:15 UTC): the wedge is the walk's (the driver's correction
+confirmed) — the [pocket] ray dump maps the enclosure (ceiling 0.83 up = the bank's sloped
+underside, riser 4.73 at +x, −x/±z/down clear) and the port's radial push cancels slope-parallel
+thrust (frozen ±0.05 through 3000+ ticks of full climb+back; the game's own push tail is dead
+[M Intersect_CylGeom's +0x50 guard] and clips instead). Fixed by the two-phase goal (the report's
+own next lever): low-station goals cross at the column top goal.y+5 and descend the station's own
+column. The wrong "walk-mode pins it, thrusters dead" comment fixed with the [M] citations (the
+lift IS actions 7−8 [M 0x192ab0:136-137]). Consoles 7 AND 8 latch — all eight latch
+(8@f5511, 7@f5943); the newly-reachable MissileDeploy gate is the next lever (the deadline math
+in the report). The probe on 08/0c/14×3/16: ALL route reds, none snap (08 the station hurt
+volume; 0c the d 61-90 sniper drain, killers full hp; 14 the leg-2 spot nav stick — the straight
+line clips the wall 0.56 u west of the OPEN door (32,2.1,35.8); 16 the point-blank chaser swarm).
+Battery: 1b 15/2/2, 08 5/1, 0c 2/1, 14 6/3/1, 16 13/1/2 (all pre-existing counts; the 1b reds now
+run 300+ s deeper to the MissileDeploy assert). Report: docs/reports/1b-zero-g-floor.md.
