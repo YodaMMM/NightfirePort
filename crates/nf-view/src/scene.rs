@@ -3629,7 +3629,7 @@ impl Sim {
                 if climbing {
                     self.drones.audio.play3d(0x286, p, None);
                 } else if let (Some(s), Some((t, n, m, _pass, host))) =
-                    (self.surfaces.as_ref(), self.world.segment_surface_host(p, [p[0], p[1] - 1.6347, p[2]], true))
+                    (self.surfaces.as_ref(), self.world.segment_surface_host(p, [p[0], p[1] - 1.6347, p[2]], false))
                 {
                     if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.footstep, m) {
                         self.drones.audio.play3d(id, [p[0], p[1] - 1.6347 * t, p[2]], None);
@@ -3639,9 +3639,8 @@ impl Sim {
                     // the water material pair runs `Env_WaterRipple(hit)` [M]. `env_water_ripple`
                     // re-checks `(mat & 0x3f) - 0xd < 2` [M 0x17c118:9] and spawns the kind-1 ring
                     // at the ground hit point (HITDATA+0x40 [M docs/fields/hitdata-spawner-ally.md]).
-                    // The port's probe is the grounding variant (no_water drops only the 0xE planes
-                    // — world.rs `segment_surface`), so 0xD floors ripple; the game's collide hit
-                    // can also be 0xE [S — the port's footstep probe never sees those planes].
+                    // The probe keeps the water planes: wading steps are the 0xE surface's own
+                    // [L PCSX2 07000002 (-79, 28): byte 0xE, step 0x28].
                     nf_game::env::env_water_ripple(&mut self.drones.gas, m, [p[0], p[1] - 1.6347 * t, p[2]]);
                     // The footprint decal arm — audit-effect-calls: the game's step is the FULL
                     // `Effect_Create(…, foot | 0x42)` [M 0x1befd8:196-201], flag 0x2 →
