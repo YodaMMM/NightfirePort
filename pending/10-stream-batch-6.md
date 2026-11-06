@@ -33,4 +33,6 @@ Failing now:
 - walkreal_07000014_live::walk_the_infiltration_to_the_delta_exit_real_damage_agent
 - walkreal_07000015_live
 
-First the 0x5c follow wedge from that report: the d2 guards' stall. Then non-walk reds, naming a cause before touching a test. Then plain walks, real damage, Agent, 00 Agent. A walk_to cap needs a look at what stands there. An ignore with a measured reason is allowed for 00 Agent walks only. Do not loosen pins tagged [L] and do not change game code to suit a walk. Finish with one total line.
+The count doubled from 28 on stream-batch-3 and the new reds are not walks, so bisect them before anything else: `ai_live`, `guard_reaction_live`, `guard_side_gates_live`, `guard_barks_live` ("the guard never reached AIM_STAND_FIRE"), `spawner_kill` ("second spawn, got None"), `anim_events_live`, `tase_silent_live`. Suspects: stream-batch-5's removal of the re-acquire block and exit, and the spawn-pick merge. A guard that never fires is a regression, not drift. Say which commit did it.
+
+Then the 0x5c follow wedge from that report: the d2 guards' stall. Then non-walk reds, naming a cause before touching a test. Then plain walks, real damage, Agent, 00 Agent. A walk_to cap needs a look at what stands there. An ignore with a measured reason is allowed for 00 Agent walks only. Do not loosen pins tagged [L] and do not change game code to suit a walk. Finish with one total line.
