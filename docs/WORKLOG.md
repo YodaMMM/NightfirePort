@@ -525,3 +525,14 @@ damage / Agent / 00 Agent.
   baseline-proven pre-existing; enemy_accuracy did not fit the window. No plain walk
   regressed under the scoped ray.
 - (20:35) report: docs/reports/stream-batch-5.md.
+
+## stream-batch-6
+
+Branch `s/stream-batch-6` from `origin/s/stream-joined` (2efbce7a3, stream-batch-5's joined
+tree: master + bullet water + the scoped sight ray, the 0x5c re-acquire exit removed). Task:
+the failing count doubled from 28 to 59 — bisect the NEW reds first (ai_live, guard_reaction,
+guard_side_gates, guard_barks "never reached AIM_STAND_FIRE", spawner_kill "second spawn got
+None", anim_events, tase_silent) across stream-batch-5's removal of the re-acquire block/exit
+and the spawn-pick merge; then the 0x5c follow wedge (the d2 stall), then non-walk reds, then
+the walks (real damage, Agent, 00 Agent; ignore with a measured reason only for 00 Agent walks;
+no [L] pin loosening, no walk-driven game code).
