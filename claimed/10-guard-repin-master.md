@@ -12,3 +12,6 @@ The reds:
 For each say whether the walk is tuned to old guard positions or a guard now behaves wrongly. The cap and the "must walk" failures may be a guard or Bond standing somewhere new, so look before re-routing. Use route and timing levers for stream-tuned walks. Do not loosen pins tagged [L], do not add ignores to pass, and do not change game code to suit a walk.
 
 Finish with the five binaries whole plus walkreal 01, 16, 1b and enemy_accuracy_live.
+
+---
+claimed-by: sandbox4 at 2026-11-06T09:59Z
