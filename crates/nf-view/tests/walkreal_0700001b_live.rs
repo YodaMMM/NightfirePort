@@ -182,10 +182,16 @@ fn console_station(k: u32) -> [f32; 3] {
 /// hold (its gate 30+k fires at ITS missile's armed+359 [D P0_GATE] — k5's UI at +359, k4's at
 /// +1559, k3's at +2759, k6/k8's at +3959, k1/k2/k7's at +6659): k6 before k8 keeps both inside
 /// +5999 without a double crossing (k6 shares the x32 station with 3/4/5 — no travel — and the
-/// 6→8 crossing then lands k8 ~+5480; k8 first would push the return 8→6 past +5900), and
-/// k7 rides the x46 station k8 just used before the single 7→1/2 cross serves k1/k2 [S — the
-/// measured margins are the latch log below].
-const CONSOLE_ORDER: [u32; 8] = [5, 4, 3, 6, 8, 7, 1, 2];
+/// 6→8 crossing then lands k8 ~+5480). The tail [1, 2, 7] serves the SHARED +9599 deadline in
+/// any order, and 1/2 before 7 keeps the real-health walk alive: the station's astronaut wave
+/// is on Bond from ~launch+6810 (measured: the ring's 2.0-damage hits at d 5.6-9.8 from frame
+/// 9559 = launch+6812, 50 hits for the full 100.0, health 0 before the loop's end — the wave's
+/// own spawn sits near the m1/m2/m7 p0 sync writes ch 181..188 @t10 [D P0_SYNC, ~launch+6310]
+/// [S — the spawn trigger itself is not pinned]), which is exactly the [7,1,2] hover at the
+/// x46 nest waiting for 7's UI (+6659). Waiting for 1/2's holds at their x20 station (25 units
+/// from the nest) spends the same window out of the ring, and the single return crossing lands
+/// 7 at ~+7450, ~2150 inside its deadline [S — the measured margins are the latch log below].
+const CONSOLE_ORDER: [u32; 8] = [5, 4, 3, 6, 8, 1, 2, 7];
 
 /// The level look's yaw error toward `at` (about world up — the forward row's heading), the
 /// height of `at` over the eye, and the horizontal range.
@@ -330,6 +336,32 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
         {
             let p = w.scene.sim.as_ref().unwrap().bond.pos;
             if dist3(p, last_pos) > 0.3 { moved_at = tt; last_pos = p; }
+        }
+        // The wave defense, TAIL CONSOLES ONLY: the station's astronaut wave follows Bond across
+        // the map (measured on the real-health run: 3.0-damage hits at d 3-13 from frame 9414
+        // while he hovered the k1/k2 wait — 43 hits for the full 100.0, dead before the UIs
+        // held; it also cut the [7,1,2] x46 hover short in the pre-reorder run). The early
+        // chains have no wave to fight (first measured contact ~launch+6650) and no margin to
+        // spend: k5/k4/k3/k6/k8 sit ~560-880 inside their one-tick branch reads (+1799/+2999/
+        // +4199/+5999), and an unrestricted detour measured +829 on k3 — m3 then read its
+        // console CLEAR at the +4199 branch and took the LAUNCH arm (MissileDeploy [2,2,3,...],
+        // mission fail). Whenever the wave closes inside 25 u on a tail console, fight it with
+        // the proven first-wave killer — the fight's own dry-clip cover discipline (float away
+        // at <12, back out at 60) paces the laser's 100-round pool against the 12-a-tap drain
+        // [M 0x193eb8-0x19405c] — and resume the console work the tick it thins out. The shared
+        // +9599 tail deadline absorbs the detour (the plain-walk margins were ~1500-2200).
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let all_latched = CONSOLE_ORDER.iter().all(|&k| sim.drones.channels.on(k));
+            let k = if all_latched { 0 } else { *CONSOLE_ORDER.iter().find(|&&k| !sim.drones.channels.on(k)).unwrap() };
+            let wave_close = (k == 1 || k == 2 || k == 7)
+                && live_astronauts(sim).iter().any(|&i| dist3(sim.drones.list[i].pos, sim.bond.pos) < 25.0);
+            if wave_close {
+                fight(w, console_station(k), None,
+                    |s| !live_astronauts(s).iter().any(|&i| dist3(s.drones.list[i].pos, s.bond.pos) < 25.0),
+                    2800);
+                continue;
+            }
         }
         let (input, fire) = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -710,18 +742,29 @@ fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) ->
         assert!(sim.drones.channels.on(0x0e), "Drake's death channel ch 0x0e rises with the kill [D #186 p12 = 14; M 0x1747b8/0x13e660]");
         // The order's middle hinge, in the window between Drake's death (ch 0x0e) and the defeat
         // NIS's ch 0x0b write (its t600 [D 0x06000a20] — the NIS only starts on 0x0e, so 0x0b is
-        // still 600 ticks out): the missiles' p2 scripts ended during the fight, so AND #139 has
-        // raised ch 0x09 and the monitor completed objective 1 [M 0x1827d8:78-85], while
-        // objective 2 is announced (its enable ch 0x09 fired [M 0x1827d8:55-67]) and not yet
-        // complete — the game's order: obj 1 completes BEFORE obj 2.
+        // still 600 ticks out): objective 2 is announced (its enable ch 0x09 fired [M
+        // 0x1827d8:55-67]) and not yet complete, while objective 1 completes on the monitor's ch
+        // 0x09 read [M 0x1827d8:78-85] — the game's order: obj 1 completes BEFORE obj 2.
         assert!(!sim.drones.channels.on(0x0b),
             "the defeat NIS's ch 0x0b write sits at its t600, after the death tick [D 0x06000a20]");
-        assert!(sim.drones.channels.on(0x09),
-            "the p2 ends raised ch 0x09 during the fight [M 0x1aa33c-3d0 + D the p2 lengths]");
+        // On the disc clocks m1/m2/m7 disarm at their own state-2 entries (p0 = 3300 ticks [D
+        // P0_LEN] after armed+6300 — ~launch+9600, past Drake's spawn), so the last p2 end
+        // (m1's, disarm+1710 [D 0600091c]) lands ~450 ticks AFTER the fight gate — a fast kill
+        // (measured: Drake died inside that window on the raw aim) precedes ch 0x09. The order
+        // that always holds: ch 0x09 (obj 1 complete) strictly before the NIS's 0x0b (obj 2's
+        // completion read) — 0x0b sits at death+600 [D 0x06000a20], ch 0x09 within ~450 of the
+        // death. Wait for it bounded inside that gap (550 < 600) and pin obj 2 still un-complete.
+        for _ in 0..550u32 {
+            if w.scene.sim.as_ref().unwrap().drones.mission.states[23][0] == 4 { break; }
+            w.tick(Default::default(), false);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x09) && sim.drones.mission.states[23][0] == 4,
+            "the p2 ends raised ch 0x09 and the monitor completed objective 1 before the NIS's 0x0b [M 0x1aa33c-3d0 / 0x1827d8:78-85 + D the p2 lengths/P0_LEN]");
         assert_eq!(sim.drones.mission.states[23][0], 4,
-            "objective 1 is COMPLETE by Drake's death [M 0x1827d8:78-85]");
+            "objective 1 is COMPLETE once ch 0x09 reads [M 0x1827d8:78-85]");
         assert_eq!(sim.drones.mission.states[23][1], 3,
-            "objective 2 is announced and not complete at Drake's death [M 0x1827d8:55-67]");
+            "objective 2 is announced and not complete while the NIS's 0x0b is still 600 ticks out [M 0x1827d8:55-67]");
     }
     hide_and_snipe(w, 12.0, |s| s.drones.mission.status() == 6 || !alive(s), 2400);
     w.skip_cutscenes = true;
