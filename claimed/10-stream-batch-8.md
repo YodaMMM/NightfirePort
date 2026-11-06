@@ -38,3 +38,6 @@ Failing:
 - walkreal_0700001b_live
 
 Non-walk first, a named cause each. Then plain walks, real damage, Agent, 00 Agent. An ignore with a measured reason is allowed for 00 Agent walks only. Finish with what is still red by name.
+
+---
+claimed-by: sandbox7 at 2026-11-06T23:17Z
