@@ -14115,6 +14115,40 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         {
             for (_pi, c, r, mesh) in &self.scripts.sp_bullet_targets(d) {
                 let Some((hash, m)) = mesh else { continue };
+                // The wire entities ride their GFX-bounds frame end to end (the flight's contact
+                // note below): the posed COLLISION glist measured ~0.1-0.3 u behind the room's
+                // stat wall face on 07000014 [L the flight-stop trace vs the aim-stage probe],
+                // so its triangle hit would snap rounds into the wall. The posed gfx box is the
+                // measured-honest geometry for them and doubles as the broad phase and the
+                // refine (the game's own pick is broadphase-then-refine over the object's own
+                // bound [M Collide_Pick 0x1eb320]).
+                if let Some((lo, hi)) = self.wire_geo.get(hash) {
+                    let (mut wlo, mut whi) = ([f32::MAX; 3], [f32::MIN; 3]);
+                    for cx in 0..2 {
+                        for cy in 0..2 {
+                            for cz in 0..2 {
+                                let p = [
+                                    if cx == 0 { lo[0] } else { hi[0] },
+                                    if cy == 0 { lo[1] } else { hi[1] },
+                                    if cz == 0 { lo[2] } else { hi[2] },
+                                ];
+                                let w = nf_formats::placement::transform(m, p);
+                                for k in 0..3 {
+                                    wlo[k] = wlo[k].min(w[k]);
+                                    whi[k] = whi[k].max(w[k]);
+                                }
+                            }
+                        }
+                    }
+                    for k in 0..3 {
+                        wlo[k] -= 0.01;
+                        whi[k] += 0.01;
+                    }
+                    if let Some(tt) = Self::segment_aabb_entry_t(from, to, wlo, whi) {
+                        if tt > 1e-4 && tt <= 1.0 { t = t.min(tt); }
+                    }
+                    continue;
+                }
                 if !Self::segment_hits_sphere(from, to, *c, *r) { continue; }
                 let Some(tris) = d.world.shape(*hash) else { continue };
                 if let Some(tt) = Self::segment_posed_mesh_t(m, tris, from, to) {
@@ -15319,22 +15353,41 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     for (g, k, obj) in fb.alive_wires() {
                         let hit = match self.scripts.objects.list.get(obj) {
                             Some(Some(crate::nis::Obj::Entity { hash, matrix, .. })) => {
-                                // aim-object-stage: the contact is the object's OWN collision
-                                // glist — the same posed triangles the aim ray's object stage
-                                // snaps to (`Collide_Intersect` 0x1ebaa8's 0x201 arm; the aim ray
-                                // and the flight share the object's one collision glist [M
-                                // Collide_Pick 0x1eb320 -> Collide_Intersect 0x1ebaa8]). The
-                                // gfx-bounds AABB the fusebox-geometry session used is the RENDER
-                                // frame — the posed collision glist on 07000014's wires lands
-                                // ~0.37 u east of the posed gfx box — and with the snap now ON
-                                // the posed glist the re-aimed line meets the glist, not the gfx
-                                // box; the game's own contact is its collision geometry, so the
-                                // pair (snap, contact) must share the frame.
-                                match d.world.shape(*hash) {
-                                    Some(tris) if !tris.is_empty() => {
-                                        Self::segment_posed_mesh_t(matrix, tris, b.pos, end).is_some()
+                                // aim-object-stage: the contact stays in the wire entity's own
+                                // GFX-bounds frame (the fusebox-geometry session's measured-honest
+                                // pose — the visible cable run, y 1.49..1.72 through the entity
+                                // matrix [D]). The COLLISION glist's posed frame measured ~0.1-0.3 u
+                                // BEHIND the room's stat wall face on 07000014 [L the flight-stop
+                                // trace vs the aim-stage probe this session], so both the aim ray's
+                                // snap and this contact ride the gfx frame until the game's
+                                // obj+0x90/glist pivot is live-checked (the report).
+                                match self.wire_geo.get(hash) {
+                                    Some((lo, hi)) => {
+                                        let (mut wlo, mut whi) = ([f32::MAX; 3], [f32::MIN; 3]);
+                                        for cx in 0..2 {
+                                            for cy in 0..2 {
+                                                for cz in 0..2 {
+                                                    let p = [
+                                                        if cx == 0 { lo[0] } else { hi[0] },
+                                                        if cy == 0 { lo[1] } else { hi[1] },
+                                                        if cz == 0 { lo[2] } else { hi[2] },
+                                                    ];
+                                                    let w = nf_formats::placement::transform(matrix, p);
+                                                    for c in 0..3 {
+                                                        wlo[c] = wlo[c].min(w[c]);
+                                                        whi[c] = whi[c].max(w[c]);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        // the cables are flat: a hair of thickness for the slab test
+                                        for c in 0..3 {
+                                            wlo[c] -= 0.01;
+                                            whi[c] += 0.01;
+                                        }
+                                        Self::segment_hits_aabb(b.pos, end, wlo, whi)
                                     }
-                                    _ => Self::script_obj_pos(&self.scripts, d, obj).is_some_and(|p| {
+                                    None => Self::script_obj_pos(&self.scripts, d, obj).is_some_and(|p| {
                                         Self::segment_hits_sphere(b.pos, end, p, crate::fusebox::WIRE_RADIUS)
                                     }),
                                 }
