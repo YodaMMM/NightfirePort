@@ -72,3 +72,11 @@ origin/master c4c00c7ec, clean merge). Task: finish guard-goal-arrival-radii —
 real-damage walks test-side per walk, decide the ai_live cover pin from its [L] source (guard_takes_cover_like_the_game
 was measured live; if it disagrees with radius 0.5, find out why before changing it), run each binary whole and quote
 results.
+
+## guard-radii-01-d3
+Started 2026-11-06 03:30 UTC. Branch s/guard-radii-01-d3 (origin/s/guard-radii-finish e88867f93, already contains
+origin/master — merge was a no-op). Task: walkreal_07000001_live ..._real_damage_00agent — the one red in that binary
+(guard 11's threshold fight runs the pistol dry, the fall-through shoot flanks the door dry, lip guard #5 0x5000038
+24 hp takes the last 24). Levers from the finish report item 5: resupply BEFORE the hall phase at difficulty 3, and
+re-run the lip block's scan once the escort crossing begins. Test-side only, helpers opt-in, radii/damage/health
+untouched.
