@@ -2639,11 +2639,11 @@ fn armour_in(h: &mut crate::bullet::PlayerHealth) -> &mut f32 { &mut h.armour }
 
 /// The party weapon lock (`Player_Weapon` 0x1a24c8:242-275) [M]: on 0x07000007 with switch channel 0x48
 /// OFF (`if (switch_channels[0x48] == '\0') bVar4 = false`), the weapon-cycle actions route to
-/// `Player_WeaponChange(±1, mode 2)` — the fists-only cycle. The port zeroes the cycle request (the
-/// mode-2 cycle from fists re-picks fists and plays the empty-switch click 0x1DB — no switch, sound
-/// aside) and, as the only way a player could otherwise reach a gun, refuses direct selections that are
-/// not the fists [S: the number-key path's lock is not verified in the decompile; the observable game
-/// behaviour is "no weapons at the party"].
+/// `Player_WeaponChange(±1, mode 2)` — the fists-only cycle. The port leaves the cycle request alone
+/// (the Sim routes it to mode 2, where the held==1 arm plays the empty-switch click 0x1DB and the
+/// [0,2) bounds re-pick the fists — weapon-change-refused) and, as the only way a player could
+/// otherwise reach a gun, refuses direct selections that are not the fists [S: the number-key path's
+/// lock is not verified in the decompile; the observable game behaviour is "no weapons at the party"].
 pub const WEAPON_LOCK_LEVEL: u32 = 0x0700_0007;
 /// The re-arm channel: TouchOnce placements 411/412 on 07000007 write it [D nf-extract triggers];
 /// `Trigger_Activate` case 1 latches it [M 0x1b2318:41-49].
@@ -2651,9 +2651,10 @@ pub const WEAPON_LOCK_CHANNEL: u32 = 0x48;
 
 pub fn weapon_lock_input(level: u32, ch48_on: bool, input: &mut Input) {
     // [M 0x1a24c8:243-246]: `if (GameState == 0x7000007) { if (switch_channels[0x48] == 0) bVar4 = false; }`
-    // — the lock is active while the channel is OFF.
+    // — the lock is active while the channel is OFF. The cycle press passes through untouched: the
+    // game reads the same action into the mode-2 change, and the Sim's mode-2 route owns the click
+    // and the fists re-pick [M 0x1a24c8:265-275 → 0x1a6f80:124-137].
     if level == WEAPON_LOCK_LEVEL && !ch48_on {
-        input.weapon_cycle = 0;
         if input.switch_to.is_some_and(|w| w != 1) { input.switch_to = None; }
     }
 }

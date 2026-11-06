@@ -234,12 +234,17 @@ fn party_level_starts_unarmed_and_locked() {
         assert!(s.drones.inventory.owned[2], "the P2K is owned but holstered");
     }
     tick(&mut scene, 40);
-    // The lock: a cycle request with ch 0x48 off cannot leave the fists.
+    // The lock: a cycle request with ch 0x48 off cannot leave the fists — the press passes
+    // through untouched now (the Sim routes it to the game's mode-2 change, which re-picks the
+    // fists and plays the 0x1DB click [M 0x1a24c8:265-275 → 0x1a6f80:124-137; the end-to-end
+    // proof is interact_07000007_live's the_lock_refuses_the_cycle_with_the_click]), while the
+    // direct selection the number keys request is still swallowed.
     {
         let s = sim(&mut scene);
-        let mut input = nf_game::player::Input { weapon_cycle: 1, ..Default::default() };
+        let mut input = nf_game::player::Input { weapon_cycle: 1, switch_to: Some(2), ..Default::default() };
         nf_game::player::weapon_lock_input(s.level, s.drones.channels.on(WEAPON_LOCK_CHANNEL), &mut input);
-        assert_eq!(input.weapon_cycle, 0, "the cycle is swallowed while ch 0x48 is off");
+        assert_eq!(input.weapon_cycle, 1, "the cycle press passes through for the mode-2 route [M 0x1a24c8:265-275]");
+        assert_eq!(input.switch_to, None, "the direct P2K selection is still swallowed while ch 0x48 is off");
     }
     tick(&mut scene, 5);
     assert_eq!(sim(&mut scene).gun.weapon, 1, "Bond holds the fists");
