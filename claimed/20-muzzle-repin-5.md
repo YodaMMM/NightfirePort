@@ -7,3 +7,6 @@ Red (suite 4387 passed, 19 failed): walkreal 02 real_health_agent, 03 full route
 Check first whether any is more than a stream shift: 02 "the computer's destruction raises ch 0x48", 15 "mine never exploded under fire", 08 "the shoot-out must kill every end pane", and the stun hold. Report those separately.
 
 Run each binary whole and quote results.
+
+---
+claimed-by: sandbox7 at 2026-11-06T02:10Z
