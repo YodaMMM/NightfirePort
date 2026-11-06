@@ -280,3 +280,12 @@ stream reds 14 tests on 11 levels — all run whole and tabled in the report; gr
 Branch from s/gas-draws-8 (7e8051e18), merging current origin/master. Carries the guard radii,
 guard glass and gas work on one branch. Re-measuring the §5 red list first (master moved: jump
 landings force two steps, landing/step probes read water, the sighted guard ignores sound).
+Merged origin/master (d6245281a; scene.rs ripple comment/damage_log union/mp_perf digest
+conflicts by hand, the gas draws kept). grenade_live's 0x68 flee: the port's take-once
+bounce queue deviated from the game's per-frame aware-point walk [M 0x1435f0:20-52 +
+0x138b10:18-19] — replaced with the live-object per-frame scan; the test's pin re-pinned
+to the game's own sequence (0x2d flight refused, 0x68 from the bounce). The gas-stream
+frag rolls AWAY (probe: d² 160→177 > 144) so the delivery premise stays red — the
+corridor rebound is the lever. Re-measured all 26 walkreal binaries + the door/guard/AI
+sets: 202/23/15 total; 1b holds 17/0, 02's lob holds green, 04 (7/3 stats trio) and 16
+(11/3 chasers) and 11 (2/3) regressed with the master wave.
