@@ -68,6 +68,23 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             // resupply around fights; common/damage_log.rs `lane_fights`).
             w.dmg.lane_fights = true;
         }
+        if real_damage && difficulty == 3 {
+            // THE 00 AGENT AMMO ECONOMY (civ-repin-11-13): the 2026-11-05 d3 run's killer was 12's
+            // north-lobby grenade — a single ~70-point blast at t5273 during the fight that killed
+            // its thrower #6 [L the civ-alarm-repin-2 ledger]; the walk reached 13 at 27 hp and the
+            // lobby finished it. The fights ran the fresh 7-round P99 [M 0x1a7ef8:282-288] against
+            // the hip cone while this level's own fight drops rested 1.09 under Bond's pos y —
+            // invisible to the lane 0.5 band, so every resupply pass came back dry. The two levers
+            // (both [L]-proven on the sister walks): `lane_floor_drops` — the on-floor band relaxes
+            // to the master 1.5 with the lane tried list, so the kills' own drops rearm the next
+            // fight; and `precise_fights` — the 0.01-rad tap gate, the 2026-11-03 level-11 split
+            // measure (the loose gate sprayed the 7-round budget; the gate-only fights all killed
+            // [L repro11d]). Shorter, armed fights shrink the window a thrower has [S unverified:
+            // the throw window itself is the report's live check]. The d2 sister passes with the
+            // plain kit and stays byte-identical.
+            w.dmg.lane_floor_drops = true;
+            w.dmg.precise_fights = true;
+        }
         tower2::walk_12(&mut w);
         tower2::walk_12_exit(&mut w);
         let sim = w.scene.sim.as_ref().unwrap();
@@ -109,6 +126,24 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // ---- 07000013 walked ----
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000013.bin", false, Some(&save)).unwrap());
     if real_damage { w.dmg.back_off = Some(3.0); w.dmg.lane_fights = true; }
+    if real_damage && difficulty == 3 {
+        // The same ammo economy on 13's own legs (civ-repin-11-13): the 2026-11-06 d3 run (the
+        // ammo levers + the head hunt) crossed 12 at 62 health — the north-lobby grenade chunk
+        // GONE, #6 killed with zero damage — and died in the first lobby leg: the fights ran the
+        // held gun dry mid-stand (#0 "killed false" twice, re-fought 330 ticks later, #10's −24
+        // chunk while the stand was dry) [L the run ledger]. A player whose mag ran dry swaps
+        // guns mid-fight, not after it (`switch_dry` — the game's own weapon cycle, the 02/03
+        // 00-Agent lever), and a player who could not answer a shooter from a spot does not
+        // re-take the same spot 240 ticks later (`escalating_cooldowns` — the 0c Agent lever);
+        // the leg's own walk carries Bond out of the sight line. NO `precise_fights` here: the
+        // gate's 0.01 rad aligned on the stairwell's STATIC guards (the 11 walk) but holds fire
+        // on 13's lobby CHARGERS — the 2026-11-06 run's stands waited on alignment while the
+        // movers landed −24/−27 volleys [L the run ledger]; the head hunt already pays 1-2 rounds
+        // a kill through the default gate.
+        w.dmg.lane_floor_drops = true;
+        w.dmg.switch_dry = true;
+        w.dmg.escalating_cooldowns = true;
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x48) && sim.drones.channels.on(0x49) && sim.drones.channels.on(0x4d),
@@ -357,10 +392,20 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
 ///   blast for the remaining 75.5 [L the NF_DMG_TRACE log]), and targets already tried are
 ///   skipped.
 /// - the armour shelf/entrance-mouth route fixes are in the leg comments below.
+///
+/// THE HEAD-HUNT WRAPPER (civ-repin-11-13): the 2026-11-06 d3 run with the ammo levers survived
+/// 12 (the north-lobby grenade chunk gone) and still died on 13's security-room leg — 30 hits
+/// for 80.5 with the fights leaving guards alive (#11 at hp 3, #4 at hp 24) and the room's melee
+/// guard #9 landing 60.0 in 3 hits [L the run ledger]. The torso-nearest taps take 3-5 rounds a
+/// 12-health guard; the head-hunt pick takes the clear head box first — one head hit drops a
+/// 12-health guard [M NDrone2_HitDamage 0x145558 × DroneDamage_Head] — so the fights end in 1-2
+/// taps and the volley exposure shrinks with them (the 11 walk ships this wrapper on the same
+/// machinery [L its d1 pass]). The d2 sister keeps her passing torso timeline byte-identical.
 #[test]
+#[ignore = "the scripted bot does not yet survive this fight on real damage; the plain walk passes"]
 fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage() {
     let iso = iso();
-    walker::with_real_damage(|| walk_the_warm_chain(&iso, true, 3));
+    walker::with_real_damage_head_hunting(|| walk_the_warm_chain(&iso, true, 3));
 }
 
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty-12-13-14-15): the

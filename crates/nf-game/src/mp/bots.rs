@@ -3240,6 +3240,28 @@ impl BotBrain {
         input.jump = std::mem::take(&mut self.jump_next);
         self.body.cel = None;
         self.body.tick_ctx(ctx.world, &crate::player::LadderCtx::default(), &input);
+        // The launch/head-bump queue is DROPPED: the game's MP bots never play either sound.
+        // `Player_HandleJump` 0x1916b0 is the only code in ACTION.ELF that plays 0xA3 (the
+        // launch, :184, disasm `addiu a0,zero,0xa3` 0x1918d8 → `Sound_Play3D` 0x191924) or the
+        // head bump 0x5FB/0xA3 (:195-198, 0x1919e4/0x191a14) — a whole-binary immediate scan of
+        // every `Sound_Play3D` 0x1dd548 / `Sound_Play` 0x1dd880 call site finds no other
+        // producer (SLUS_205.79 / DRIVING.ELF either). Its only caller is `Player_SSWalk` (jal
+        // 0x192474), whose only caller is `Player_Update` case 0 (jal 0x193964) — and
+        // `Player_Update` is the movement handler of object classes 3 and 0x12 ONLY
+        // (`control_funcs` 0x26f890 +0x24/+0xd8, read by `control_movement_object_handler`
+        // 0x1336f8:62 as `control_funcs[obj+0xff · 0xc]`). The bots' objects are class-2 drones
+        // (`MP_Start` 0x183a50 → `BOT_init` 0x1249e8 → `Drone_Create` 0x136be0 with a zeroed
+        // DIVars → `NDrone2_CreateObj` 0x14d7c8 writes obj+0xff = 2; the disabled shell's 0x11
+        // comes from `BOT_respawn` 0x124f7c / `MP_CheckForEndCondition` 0x1845ac), and classes
+        // 2/0x11 dispatch `Drone_Control` (control_funcs +0x18/+0xcc) — the NDrone2
+        // anim/root-motion mover. The only class-3 write outside `Player_Init` 0x1912c4 is
+        // `MP_ReSpawn` 0x185474/0x185578, reached only for objects ALREADY class 3/0x12 (the
+        // humans; a bot's class-2 object takes the reposition arm 0x185368:69-76; the human
+        // corpse's 0x12 is `Player_CheckForDeath` 0x1909ec). So a bot never reaches
+        // `Player_HandleJump` and neither sound plays for it; this stand-in body (the human
+        // movement core) DOES queue them on a launch, and the drop here is what keeps the
+        // game's silence. The humans' bodies keep their drains (the local into `drones.audio`,
+        // the remotes into `mp_fx.body_sounds`).
         self.body.sfx_out.clear();
         self.body.yaw = byaw;
         self.pos = [self.body.pos[0], self.body.pos[1] + crate::player::EYE, self.body.pos[2]];
@@ -5324,6 +5346,58 @@ mod brain_tests {
             last = p;
         }
         assert!(walked > 2.0, "the bot walked up to the wall, walked {walked}");
+    }
+
+    /// mp-bot-body-sounds: a bot that JUMPS plays neither body sound. The game's MP bots never
+    /// reach `Player_HandleJump` 0x1916b0 (the only 0xA3 launch / 0x5FB·0xA3 bump producer in
+    /// ACTION.ELF — see the citation on `walk_body`'s `sfx_out.clear()`): their objects are
+    /// class-2 drones moved by `Drone_Control`, never class-3/0x12 bodies running
+    /// `Player_Update` case 0. The port's stand-in body queues the launch exactly like a
+    /// human's, so the pin drives the REAL `walk_body` (through `BotBrain::step`, the path the
+    /// sim runs every tick) with a wedged walk: a full-span wall stops the body, the stuck
+    /// watch fires the jump (the bot's only jump source), and the launch must leave NO sound —
+    /// the queue is empty after every step, even the launch ticks.
+    #[test]
+    fn a_bot_that_jumps_plays_no_launch_sound() {
+        let mut r = Rig::new();
+        // floor_rig's wall has an end the walker rounds; the wedge needs a full-span wall.
+        let mut t = vec![
+            [[-50.0, 0.0, -50.0], [-50.0, 0.0, 50.0], [50.0, 0.0, -50.0]],
+            [[50.0, 0.0, -50.0], [-50.0, 0.0, 50.0], [50.0, 0.0, 50.0]],
+        ];
+        let (a, b, c, d) = ([3.0, 0.0, -50.0], [3.0, 0.0, 50.0], [3.0, 3.0, 50.0], [3.0, 3.0, -50.0]);
+        t.extend([[a, b, c], [a, c, d], [a, c, b], [a, d, c]]);
+        r.world = CollisionWorld::from_triangles(t);
+        let eye = 1.1 + crate::player::EYE;
+        let mut rec = INITIAL_BOT_RECORDS[0].clone();
+        rec.0[0x0E] = 1;
+        r.brain = BotBrain::bot_init(&rec, 4, [0.0, eye, 0.0], 0.0);
+        r.brain.weapon = BotWeapon { interval: 6, burst: 3, aggression_mul: 1.0 };
+        r.brain.vars.weapon_id = 0x02;
+        r.brain.vars.clip_rounds = 50;
+        // The pickup beyond the wall is the goal: the bot's own `pick_goal` → `steer_to` walk
+        // (nav: None in the rig → the straight steer) pushes into the wall and wedges.
+        r.pickups[0].pos = [6.0, 0.3, 0.0];
+        r.others[0].pos = [10.0, eye, 0.0];
+        r.others[1].pos = [0.0, eye, 0.0];
+
+        let mut launched = false;
+        let mut airborne = false;
+        for tick in 0..240 {
+            r.step();
+            assert!(r.brain.body.sfx_out.is_empty(),
+                "tick {tick}: the jumping bot's body queued {:?} — walk_body must drop the queue (the game's bots never reach Player_HandleJump 0x1916b0)",
+                r.brain.body.sfx_out);
+            // The launch: a RISING airborne body. The only upward velocity write in the
+            // movement core is the launch impulse [M player.rs `self.vel = [0.0, -GRAVITY *
+            // 0.4, 0.0]`, the `Player_HandleJump` 0x1916b0:118-147 arm]; the tick's gravity
+            // integration runs after it, so the post-step sample is already below 3.92 —
+            // rising is the signature (falls are negative; steps move the position, not vel).
+            if r.brain.body.vel[1] > 2.0 && !r.brain.body.grounded { launched = true; }
+            if !r.brain.body.grounded { airborne = true; }
+        }
+        assert!(launched && airborne,
+            "the wedged bot never jumped through the stuck watch (launched {launched}, airborne {airborne}) — the wedge must fire before this pin means anything");
     }
 }
 
