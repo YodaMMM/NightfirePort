@@ -125,3 +125,12 @@ walk_the_chasers_defeat_completes_the_mission_on_real_damage; kill the chip shoo
 exposed at 4.6-13 u, route the defeat walk's end around the hurt volume at (-5.8, -163) (identified from placements [D]
 first); radii are the game's, test-side only, helpers opt-in; keep the d2/d3 sisters' measured ignores unless they go
 green; run walkreal_07000016_live whole and quote it, then nf-game.
+
+## guard-lines-finish
+Started 2026-11-06 07:50 UTC. Branch s/guard-lines-finish = origin/s/guard-batch-repin merged with
+origin/s/guard-radii-01-d3, origin/s/guard-radii-16-chasers and origin/master (all clean; WORKLOG kept both
+lineages + appended). Task: the two non-walk reds from blocked/10-guard-batch-repin.md — (1) enemy_accuracy_live
+astronauts_hit_like_the_chain (harness's stream-calibrated expectation; make measure()'s acquisition window
+stream-independent), (2) the kiko pit-squad shoot red (kiko_button_real_walk_live.rs:319, reproduced not diagnosed —
+find the cause and cite it). Then walks for 01, 16, 1b + enemy_accuracy_live, each binary whole, counts quoted;
+d2/d3 ignores on 16 stay unless green on their own.
