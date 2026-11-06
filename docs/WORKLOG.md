@@ -549,3 +549,15 @@ no [L] pin loosening, no walk-driven game code).
   wobble stamp after CreateObj): game-shaped [M]. The red tests pin the PRE-port (draw-less)
   stream — stale pins over the game-correct one; several asserts cite live traces, so re-pins
   need live re-measurement (the driver's [L]-pin rule).
+- (21:55) the non-walk reds: abseil (the rope-follow hang 143 vs 144), escort_follow +
+  fix_npc_doors (the 01 escort settles at (3.0,6.3,7.3) — one shared advance wedge), goggles
+  (the captain laser key stuck mode 0), upward_shot 0c (0/2, batch-3-documented), mayhew_hold +
+  fix_npc_doors + start_corridor d2 (batch-3-documented pre-existing) — all red at batch-3
+  already per its report except escort_follow/abseil (not in its battery; escort shows the same
+  settle point as mayhew/npc_doors' escort wedge).
+- (21:56) the walkreal battery (11 binaries, --test-threads=1, real ISO): 03 4/2/2, 04 8/2,
+  06 4/2/1, 08 5/1, 0b 6/1, 0c 2/1/1, 0d 1/1/1, 12 2/1, 13 1/2, 14 6/3/1, 15 5/1/1 —
+  total 44 passed / 17 failed / 7 ignored. vs batch-5's battery: 0b IMPROVED (5/2 → 6/1, the
+  agent leg recovered on the joined tree), 14 gained the tripbomb red (6310fc1d2 pinned it
+  9/0+1i on gas-rng-draws-6 — the placed tripbomb not stuck at the retreat, a fight/flush
+  shift). The rest match batch-5's reds leg-for-leg (the real-damage/Agent/00agent lane).
