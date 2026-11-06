@@ -43,3 +43,20 @@ explain the 600 zero ticks at d 63.6); 08 whole mission real_damage_00agent (sta
 the declared branch, else measured ignore for the 00 Agent sister only). No [L] loosening beyond
 item 3's, no game-code changes to suit a walk. Finish binaries: those whole plus walkreal 01, 06,
 16, 1b, enemy_accuracy_live.
+guard-repin-master-2 OUTCOME (2026-11-06 ~12:56 UTC): 03 real_damage_agent GREEN — the
+mid-courtyard angle walk-back leg (the fights' own fight line 10.4-11.5,−20.8; from the leg-end
+anchor both #10/#11 measured "hitting true exposed false") + the 06 stand_shooters_down sweeps
+level-local at the servant/exit leg ends (eye-ray set — the strict gun-ray set saw nothing) +
+the 08 walks' hurting_first arm (the #4 26-chip drain 36.7 was answered nearest-first). The
+report's far-shooter theory was corpse-distance misleading: #11 died point-blank at d 2.9 after
+soaking three fight windows; the door ambush #5/#3 took exactly the remaining 34.6. 13: the
+north-west sweep landed (death 3006→3472, same #8 crossing; #5's 28.0 lands frames 1914-2101,
+before the west-mid sweep), the east-lane spot measured-and-dropped (a killing floor, death
+1384 mid-sweep) — NOT green, the budget lever that stands is a doorway-crossing answer. 0d: the
+zero-hit promise retired for the PCSX2-measured strip budget (14 hits/45 s held, rounds cross
+class 0x1d at four points), the 600-tick zero documented as the bay-guard box/position question
++ live check — the walk still red at the drop phase (9300, 94.0). 08: the task-allowed measured
+ignore on the 00agent station red only (the ledger in the ignore text); the binary green 5/0/1.
+Battery (no --include-ignored): 08 5/0/1 (117s), 06 6/0/1 (20s), 13 2/1 (35s), 0d 1/1/1 (27s);
+03 whole + 01/16/1b/accuracy did not fit the window. Report:
+docs/reports/guard-repin-master-2.md.
