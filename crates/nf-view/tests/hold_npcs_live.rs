@@ -37,19 +37,20 @@ fn held_guards_stay_put_and_still_take_hits() {
 #[test]
 fn unheld_guards_move() {
     if iso().is_none() { return; }
-    // gas-rng-draws-2: the window is 600 ticks now — every real `Gas_Init` site consumes the
+    // gas-rng-draws-2: the window is 1800 ticks now — every real `Gas_Init` site consumes the
     // game's draws from the shared stream [M Gas_Init 0x1aacc8:72-80; Rand_FRand/Rand_Rand
     // 0x1e3780/0x1e3738 advance the same SEED_X/SEED_Y pair as the AI draws], so the guard's
-    // idle-wander phase timing moved and 240 ticks landed inside a standing pause (measured:
-    // 0.003 u at 240, 0.63 u by 600). The law being pinned is unchanged: unheld he wanders,
-    // held he is EXACTLY frozen (0.0000 at 240/600/1200/2400, re-measured this task).
+    // idle-wander phase timing moved again (measured on this tree: 0.003 u at 600, 0.63 u at
+    // 1200, 1.13 u by 1800 — the wander pause moved past 600; 240 was batch-3's window). The
+    // law being pinned is unchanged: unheld he wanders, held he is EXACTLY frozen (0.0000 at
+    // 240/600/1200/2400, re-measured batch-3).
     let walk = |hold: bool| {
         let mut scene = nf_view::load(&iso().unwrap(), "07000005.bin", false).expect("load 05");
         let sim = scene.sim.as_mut().unwrap();
         sim.drones.hold_npcs = hold;
         sim.bond = nf_game::player::Bond::new([96.9, 17.9, 98.8], 0.635);
         let p0 = sim.drones.list[6].pos;
-        for _ in 0..600 { sim.step_bond(Default::default(), false, false, false); }
+        for _ in 0..1800 { sim.step_bond(Default::default(), false, false, false); }
         let p1 = sim.drones.list[6].pos;
         ((p1[0] - p0[0]).powi(2) + (p1[2] - p0[2]).powi(2)).sqrt()
     };

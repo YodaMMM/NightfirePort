@@ -508,8 +508,19 @@ fn a_flashed_guard_killed_after_drops_nothing_more() {
     for _ in 0..320u32 { sim.tick(&d, &p); }
     assert!(matches!(sim.list[gi].state, state::DEATH_ANIM | state::DEAD | state::FADE | state::FADE_FAST),
         "the frag killed the stunned guard, state {:#x}", sim.list[gi].state);
-    assert_eq!(sim.pickups.len(), drops_after_flash, "the deaths added NO pickup (the dying guards hold the fists): {:?}",
+    // The deaths add exactly ONE pickup: one yard guard's stun EXPIRES during the frag fuse (the
+    // recover clock `DroneFunc_RecoverTime` 0x147188 ran out on this stream — batch-3's blast-spot
+    // search proved recovery dominates the fuse at every lethal offset, so "kill them all stunned"
+    // is unrealizable here). The game's own recovery path: `StunGrenadeRecover` 0x163350 ENTER plays
+    // the get-up (anim 0x76, follow 0x56) and `DSTATE_Stunned_Recover` 0x1630b8 re-arms the sidearm
+    // ChangeWeapon(6) [M] — he dies HOLDING weapon 6, whose record carries a model at +0x80, so
+    // `DropWeapon` 0x17a2a0 drops it: the (6,6) recovered-sidearm drop. Every still-stunned guard
+    // dies holding the FISTS (model 0 [L record 1]) and adds nothing.
+    let added = &sim.pickups[drops_after_flash..];
+    assert_eq!(added.len(), 1, "the deaths add exactly the recovered-sidearm drop: {:?}",
         sim.pickups.iter().map(|p| (p.weapon, p.rounds)).collect::<Vec<_>>());
+    assert_eq!((added[0].weapon, added[0].rounds), (6, 6),
+        "the death-added pickup is the recovered sidearm (0x163350/0x1630b8 ChangeWeapon(6), dropped by 0x17a2a0)");
 }
 
 /// scratch helpers (delete before merge)
