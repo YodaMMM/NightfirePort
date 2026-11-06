@@ -313,7 +313,30 @@ fn the_alarm_switch_fails_objective_1() {
         let _ = w.try_walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("the alarm switch nav {k}"));
         clear_live_guards(&mut w, &format!("the alarm switch nav {k}"));
     }
-    assert!(w.try_walk_to(Wp::new(spot[0], spot[1], spot[2]).r(0.95), "the alarm switch final approach"),
+    // The final approach, BEAT-SPLIT (spawn-pick-and-dart-stamps re-pin, by route): a
+    // dart-stamped sleeper wakes 7200 ticks after his dart [L docs/systems/tranq-dart.md — the
+    // K5's DroneFunc_RecoverTime 120 s], and a woken tower guard carries the alarm-run plumbing
+    // the dart's stamp block armed [M 0x1469b8:331-357 — the game's own wake behaviour, the same
+    // block the tase stamps]. The old single approach hop ran 3769 ticks and gave the waker a
+    // clear run to a switch — the alarm rose mid-approach. The hops are short (≈1.5 u), each
+    // preceded by a clearing beat, so a wake is re-darted long before any switch press.
+    let mut reached = false;
+    loop {
+        clear_live_guards(&mut w, "the alarm switch approach beat");
+        {
+            let p = w.scene.sim.as_ref().unwrap().bond.pos;
+            if dxz(p, spot) < 0.95 && (p[1] - spot[1]).abs() < 2.0 { reached = true; break; }
+        }
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        let (dx, dz) = (spot[0] - p[0], spot[2] - p[2]);
+        let l = (dx * dx + dz * dz).sqrt();
+        if l < 0.95 { reached = dxz(p, spot) < 0.95 && (p[1] - spot[1]).abs() < 2.0; break; }
+        let step = 1.5_f32.min(l);
+        let nx = p[0] + dx / l * step;
+        let nz = p[2] + dz / l * step;
+        if !w.try_walk_to(Wp::new(nx, spot[1], nz).r(0.8), "the alarm switch approach hop") { break; }
+    }
+    assert!(reached,
         "the walk must reach the ch-124 switch at {spot:?} — Walker movement only, no sim.bond.pos writes");
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -790,6 +813,62 @@ fn the_challenge_state_guard_sleeps_to_a_dart_and_loses_no_health() {
         || d.corpse, "the challenge-state guard sleeps to the darts (the 0x50-0x52 family [M 0x1469b8 case 0x19]), got {:#x}", d.state);
     assert_eq!(d.health, hp0, "the darts lose NO health (msg 0x19 never reaches HitDamage [M 0x13fff0:269-306])");
     assert!(!sim.drones.channels.on(0x61), "no alarm while the challenger sleeps (the press never ran)");
+}
+
+/// The dart's Tower stamp block [M 0x1469b8:331-357 — the case-0x19 copy of the block the tase's
+/// case-7 arm runs at :103-128]: a SIGHTED tower guard who takes a dart gets the whole
+/// alert-plumbing block stamped — first-attack latch off (`+0x4F8 &= ~0x02000000`), alt state
+/// 0x89 RunToAlarm (`+0x5A4`), `+0x16 = 0`, alert bits 0 (`+0x4FC`), the `+0xC48 == 100`
+/// first-behaviour scratch, mode 9 / alt mode 7 (`+0xC5/+0xC6`), sight latch off
+/// (`+0x4F8 &= ~0x04000000`), return state 0x14 (`+0x5A2`) — and the impact resume 0x15. The
+/// challenger scenario IS the sighted arm: he walked to the panel Bond and challenged him, so
+/// the sight latch is set when the dart lands. The pre-fix port picked only the resume and
+/// skipped the block body (the tase ran it whole — docs/systems/tranq-dart.md "the Tower band"),
+/// so a darted guard woke without the 0x89 alarm run the tasEd one makes.
+#[test]
+fn the_dart_stamps_the_tower_alert_block_like_the_tase() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000009.bin", false).expect("load 07000009"));
+    w.top_up_health = true;
+    w.wait(10);
+    let sim = w.scene.sim.as_mut().unwrap();
+    sim.bond.pos = [-18.3, -368.4, 27.0];
+    sim.bond.yaw = 3.1416;
+    let mut challenge = None;
+    for t in 0..4500u32 {
+        w.tick(nf_game::player::Input::default(), false);
+        if let Some(i) = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| d.present && !d.corpse && d.state == nf_game::drone::state::CIVILIAN_CHALLENGE) {
+            challenge = Some((t, i));
+            break;
+        }
+    }
+    let Some((t_ch, di)) = challenge else { panic!("no guard challenged the panel Bond within the window"); };
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let d = &sim.drones.list[di];
+        eprintln!("[09-dart-stamp] challenge at +{t_ch}: drone {di} state {:#x} sighted {} mode {} alt_state {:#x}",
+            d.state, d.sighted as u8, d.mode, d.alt_state);
+        assert!(d.sighted, "the challenger has seen Bond — the sighted arm's gate [+0x4F8 & 0x4000000]");
+    }
+    // The darts ARE the load weapon (0x43, selected at the level start [M 0x1a7ef8 case
+    // 0x7000009]) — fire through the real path.
+    let shot = w.shoot(di, "the challenger");
+    let sim = w.scene.sim.as_ref().unwrap();
+    let d = &sim.drones.list[di];
+    eprintln!("[09-dart-stamp] after the darts (shot {shot}): state {:#x} mode {} alt_mode {} alt_state {:#x} sighted {} return_state {:#x} resume {:#x} alarm_run {} alert_bits {:#x} first_attack {}",
+        d.state, d.mode, d.alt_mode, d.alt_state, d.sighted as u8, d.return_state, d.impact_resume, d.alarm_run as u8, d.alert_bits, d.first_attack_done as u8);
+    assert!(matches!(d.state, nf_game::drone::state::STUN_DART_IMPACT | nf_game::drone::state::STUN_DART_LOOP | nf_game::drone::state::STUN_DART_RECOVER)
+        || d.corpse, "the dart sleeps him (the 0x50-0x52 family [M 0x1469b8 case 0x19]), got {:#x}", d.state);
+    // THE STAMP BLOCK [M 0x1469b8:331-357, the sighted arm]:
+    assert!(!d.first_attack_done, "+0x4F8 &= ~0x02000000: the first-attack latch cleared [M :337]");
+    assert_eq!(d.alt_state, nf_game::kiko::RUN_TO_ALARM, "+0x5A4 = 0x89 RunToAlarm [M :338]");
+    assert!(!d.alarm_run, "+0x16 = 0 [M :339]");
+    assert_eq!(d.alert_bits, 0, "+0x4FC = 0 [M :340]");
+    assert_eq!(d.mode, 9, "+0xC5 = 9 [M :350]");
+    assert_eq!(d.alt_mode, 7, "+0xC6 = 7 [M :351]");
+    assert!(!d.sighted, "+0x4F8 &= ~0x04000000: the sight latch cleared [M :352-353]");
+    assert_eq!(d.return_state, nf_game::drone::state::CIVILIAN_PATROL, "+0x5A2 = 0x14 [M :354]");
+    assert_eq!(d.impact_resume, nf_game::drone::state::RETURN_TO_PATROL_PATH, "SMI+0x10 = 0x15 [M :355]");
 }
 
 /// Real damage: the same walk with the health top-up off for every walker it makes (the

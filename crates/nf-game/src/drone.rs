@@ -6997,12 +6997,29 @@ impl Drone {
         let u10 = self.state;
         if u10 != 0 && !(0x53..=0x55).contains(&u10) { self.impact_resume = u10; }
         // The Tower band (level ∈ {0x07000009, 0x0700000a}; `GameState._12_4_ + 0xf8fffff7 < 2`):
-        // unsighted → the resume slot = 0x14 CivilianPatrol; sighted → the alert-plumbing block
-        // (unmodelled, the same block the port's flash path skips) and the resume = 0x15
-        // ReturnToPatrolPath [M 0x1469b8:331-357]. The tower guards are team 3 — `IsCivilian`
-        // civilians — so THIS resume is what their wake follows [M 0x163700:19-29, 0x14aae0].
-        if d.level == 0x0700_0009 || d.level == 0x0700_000a {
-            self.impact_resume = if !self.sighted { CIVILIAN_PATROL } else { RETURN_TO_PATROL_PATH };
+        // the SAME stamp block the tase's case-7 arm runs — the decomp's case 0x19 carries the
+        // block byte-identical at 0x1469b8:331-357 (the tase's at :103-128): unsighted → the
+        // resume slot = 0x14 CivilianPatrol; sighted → the alert-plumbing block and the resume =
+        // 0x15 ReturnToPatrolPath. The tower guards are team 3 — `IsCivilian` civilians — so the
+        // first_attack/sight/alt-state/mode stamps are what their wake follows [M 0x163700:19-29,
+        // 0x14aae0]. (The port's old arm picked only the resume and skipped the block body — the
+        // tase ran the whole thing, so a darted tower guard woke without the 0x89 alarm run the
+        // tasEd one makes, docs/systems/tranq-dart.md "the Tower band".)
+        if matches!(d.level, 0x0700_0009 | 0x0700_000a) {
+            if !self.sighted {
+                self.impact_resume = CIVILIAN_PATROL;
+            } else {
+                self.first_attack_done = false; // `+0x4F8 &= ~0x02000000` [M 0x1469b8:337]
+                self.alt_state = crate::kiko::RUN_TO_ALARM; // `+0x5A4 = 0x89` [M :338]
+                self.alarm_run = false; // `+0x16 = 0` [M :339]
+                self.alert_bits = 0; // `+0x4FC = 0` [M :340]
+                self.set_1st_behaviour(); // `+0xC48 == 100` → `+0x29 = 0`, `+0x4D8 = +0x4DC` [M :342-344]
+                self.mode = 9; // `+0xC5 = 9` [M :350]
+                self.alt_mode = 7; // `+0xC6 = 7` [M :351]
+                self.sighted = false; // `+0x4F8 &= ~0x04000000` [M :352-353]
+                self.return_state = CIVILIAN_PATROL; // `+0x5A2 = 0x14` [M :354]
+                self.impact_resume = RETURN_TO_PATROL_PATH; // `SMI+0x10 = 0x15` [M :355]
+            }
         }
         self.set_state(STUN_DART_IMPACT);
         true
@@ -19775,6 +19792,41 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             dr.recover = st.recover;
                             dr.health = st.health as f32;
                             dr.max_health = st.health as f32;
+                            // The DefaultInit sight-constant re-roll [M 0x14b300:382-461]: the spawn
+                            // re-runs the full init, so the param-14 class switch draws AGAIN — the
+                            // same block `Drone::new_with_stats` runs at load (there the draws ride
+                            // the pre-snapshot stream; here they consume the live one, which is the
+                            // stream the spawner waves shift). Two draws per spawn (case 4's combat
+                            // range draws none — the game's `goto LAB_0014bb44`), then the +0xF4
+                            // tail draw [M :435 — `Rand_FRand(0)` consumes the stream; the value is
+                            // +0xEC(4.0) + 0.0, and the port has no +0xF4 field], then the
+                            // 0x7000011/0x7000014 engage/combat overrides [M :437-461].
+                            let p14 = params.iter().find(|(j, _)| *j == 14).map_or(0u32, |&(_, v)| v);
+                            let (e8, f0_base, f0_rand, fc_add) = match p14 { 1 => (12.0, 12.0, 3.0, 1.0), 2 => (16.0, 12.0, 3.0, 1.0),
+                                3 => (40.0, 25.0, 6.0, 100.0), 4 => (1000.0, 75.0, 8.0, 1000.0), 5 => (0.0, 12.0, 4.0, 1.0), _ => (24.0, 12.0, 4.0, 1.0) };
+                            let f0 = f0_base + rng.frand(f0_rand);
+                            let fc = match p14 { 3 => fc_add + rng.frand(6.0), 4 => 1000.0, _ => f0 + fc_add + rng.frand(f0_rand) };
+                            let _f4_tail = rng.frand(0.0); // `+0xF4 = +0xEC + Rand_FRand(0)` [M :435]
+                            dr.sight_range = e8;
+                            dr.half_fov = crate::trig::HALF_PI; // `+0xE4 = π/2`, LAB_0014bb44's unconditional write [M :463]
+                            dr.engage_range = f0;
+                            dr.combat_range = fc;
+                            match d.level {
+                                // [M :437-447] the decomp's `(uVar9 < 4) || (uVar9 < 7) || (uVar9 != 9)`
+                                // reduces to `uVar9 != 9` (the anim set at +0xDA).
+                                0x0700_0011 => {
+                                    if dr.anim_set == 9 { dr.engage_range = 10.0; dr.combat_range = 8.0; }
+                                    else { dr.engage_range = 12.0; dr.combat_range = 9.0; }
+                                }
+                                // [M :448-461] anim set 5 keeps the switch values; 9 → 7.0; every
+                                // other set → 10.0.
+                                0x0700_0014 => {
+                                    if dr.anim_set != 5 {
+                                        dr.engage_range = if dr.anim_set == 9 { 7.0 } else { 10.0 };
+                                    }
+                                }
+                                _ => {}
+                            }
                             // The spawn is a fresh Drone_Create: DefaultInit's family blocks run
                             // AFTER the DoModeSettingsNEW read — the mode-0xd ninja health 100
                             // [M 0x14b300:744-753; the port's type_setup], `captain_setup`'s
@@ -19795,6 +19847,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 dr.health = dr.max_health;
                             }
                         }
+                        // SpawnDrone's own stamp [M 0x137cb0:58-59]: `Rand_Rand(10000)` → obj+0xEC —
+                        // the spawn re-rolls the miss-wobble phase (Drone_Create's own draw is the
+                        // LOAD path's; the spawner path draws HERE, after the CreateObj init the
+                        // game's call order gives). Unconditional — it is not inside the stats
+                        // block's params gate.
+                        dr.wobble = rng.rand(10000);
                         dr.present = true; dr.enabled = true; dr.started = false;
                         // `control_add_object_to_list` prepends [M 0x134698]: a drone spawned this frame updates
                         // before every placement object from its NEXT frame on, and NOT in the frame it spawned
