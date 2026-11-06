@@ -655,7 +655,7 @@ fn cross(a: V3, b: V3) -> V3 { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * 
 ///   own ride grounds on (the ray tolerance is exceeded at the skin-rest equilibrium on that
 ///   steep a face, so the pick arm must fire); confirming the gate is an
 ///   open live check.
-fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, top_guard: bool, ref_v: V3) -> bool {
+fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, top_guard: bool, walk_flat_hold: bool, ref_v: V3) -> bool {
     let tl = [0, 1, 2].map(|k| t[0][k].min(t[1][k]).min(t[2][k]));
     let th = [0, 1, 2].map(|k| t[0][k].max(t[1][k]).max(t[2][k]));
     let (sl, sh) = ([0, 1, 2].map(|k| a[k].min(b[k]) - grow), [0, 1, 2].map(|k| a[k].max(b[k]) + grow));
@@ -798,12 +798,47 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     let spine_dir = if dist > 1e-6 { [v[0] / dist, v[1] / dist, v[2] / dist] } else if dot(n, sub(*a, q)) >= 0.0 { n } else { [-n[0], -n[1], -n[2]] };
     let vr = sub(q, ref_v);
     let dist_r = dot(vr, vr).sqrt();
-    let (dir, mag) = if dist_r > 1e-6 && dist_r < r && dot(vr, n) > 0.0 {
-        ([vr[0] / dist_r, vr[1] / dist_r, vr[2] / dist_r], r - dist_r)
+    let (dir, mag, radial) = if dist_r > 1e-6 && dist_r < r && dot(vr, n) > 0.0 {
+        ([vr[0] / dist_r, vr[1] / dist_r, vr[2] / dist_r], r - dist_r, true)
     } else {
-        (spine_dir, r - dist)
+        (spine_dir, r - dist, false)
     };
-    let push = [dir[0] * mag, dir[1] * mag, dir[2] * mag];
+    // level-14-landing-float: the failed-ref UP-FACING hold — the walk path drops the [S] spine
+    // fallback's displacement for a flat up-facing face UNDER the capsule (q below the spine
+    // bottom). The game's push tail is [M Intersect_CylGeom 0x109da0:431-447] the radial arm
+    // alone: `0 < dot(q − HITTEST+0x50, n)` AND `|q − HITTEST+0x50| < radius`, ref = the
+    // lifetime DeltaP accumulator [M Collide_Intersect 0x1ebaa8:353-373; L ee_start_* boots
+    // (0,0,0); L ee_snapshot drifts ~15 m from the owner] — for a face under the capsule
+    // dot(q − ref, n) is the q-vs-ref height difference against an UP normal and the tail does
+    // not push (the same gates the port's radial arm replicates — when the radial arm fails, the
+    // game's tail gives NONE; there is no fallback in the decompile). The port's [S] spine
+    // fallback (dir = v̂ = p − q ≈ +Y, mag = r − dist) is what holds a falling capsule at the
+    // r-equilibrium above such a face FOREVER: probe14_pocket_settle measured the 1.72-landing
+    // hover — Bond parked at (33.9712, 0.6500, 30.9501) grounded=false for 240 quiet ticks with
+    // the fallback push (0, +0.0027, 0) every tick (d 0.5473, r 0.55) off the flat y≈0 floor
+    // (n = (0,1,0), cent (34.320, 0.000, 32.067)), the band failing by dy 0.65 > cc + 0.1. The
+    // walk keeps the CONTACT (walkable/pick below — the feet band grounds on the real floor
+    // once the fall completes) and keeps the SLOPED/wall fallbacks (n[1] ≤ 0.7: the 07000015
+    // settle-escape through-push the settle-6-c revert protects) and keeps the radial arm
+    // wherever its gates pass (that IS the game's tail). Scope: the Bond walk query only
+    // (walk_flat_hold) — the climb, the pick-contact and the rigid-body queries keep master
+    // behaviour.
+    // The scope is the QUIET-DITHER regime only (level-14-landing-float): the fallback's mag at
+    // the hover equilibrium is r − dist ≈ 0.0027 (the tick's re-accumulated fall — probe14_
+    // pocket_settle), while the same fallback class at real work — the jump arcs' band lift, the
+    // landing cushions, the stair-edge rolls — fires at large mag (the arc dips deep into the
+    // r-shell). mag < 0.02 skips only the hold that never does work: the capsule sinks the last
+    // ~0.02 into the band (dy ≤ cc + 0.1 grounds) before the push would matter. Measured: the
+    // 07000014 stairwell pit-band jump (a big-mag lift the walks depend on) is preserved; the
+    // pocket rest grounds (hist 0xf) where the flat-only skip without the mag gate also broke
+    // the stairwell approach.
+    let flat_hold = walk_flat_hold && !radial && n[1] > 0.7 && q[1] < b[1] && mag < 0.02;
+    let push = if flat_hold { [0f32; 3] } else { [dir[0] * mag, dir[1] * mag, dir[2] * mag] };
+    if flat_hold && caps_log() {
+        eprintln!("[cap] HOLD-SKIP cent=({:.3},{:.3},{:.3}) q=({:.3},{:.3},{:.3}) d={dist:.4} n=({:.3},{:.3},{:.3}) b=({:.3},{:.3},{:.3})",
+            (t[0][0]+t[1][0]+t[2][0])/3.0, (t[0][1]+t[1][1]+t[2][1])/3.0, (t[0][2]+t[1][2]+t[2][2])/3.0,
+            q[0], q[1], q[2], n[0], n[1], n[2], b[0], b[1], b[2]);
+    }
     if caps_log() {
         eprintln!("[cap] PUSH cent=({:.3},{:.3},{:.3}) q=({:.3},{:.3},{:.3}) p=({:.3},{:.3},{:.3}) d={dist:.4} push=({:.4},{:.4},{:.4}) n=({:.3},{:.3},{:.3}) edge={on_edge} a=({:.3},{:.3},{:.3}) b=({:.3},{:.3},{:.3})",
             (t[0][0]+t[1][0]+t[2][0])/3.0, (t[0][1]+t[1][1]+t[2][1])/3.0, (t[0][2]+t[1][2]+t[2][2])/3.0,
@@ -1539,8 +1574,18 @@ impl CollisionWorld {
     /// The actor capsule against the straddle cells' static geometry (`capsule_push` over the cel
     /// scope; falls back to the flat world when there is no scope or the query's cell is unmapped).
     pub fn capsule_push_scoped(&self, cell: Option<usize>, a: V3, b: V3, r: f32, top_guard: bool, ref_v: V3) -> (V3, bool) {
-        let Some(cell) = cell else { return self.capsule_push(a, b, r, top_guard, ref_v) };
-        let Some(runs) = self.scoped_runs(cell, &mut Self::capsule_portal_hit(a, b, r)) else { return self.capsule_push(a, b, r, top_guard, ref_v) };
+        self.capsule_push_scoped_impl(cell, a, b, r, top_guard, false, ref_v)
+    }
+
+    /// The walk pass's own query (level-14-landing-float): identical to `capsule_push_scoped`
+    /// with the failed-ref up-facing hold skip on (see `capsule_tri_contact`'s walk_flat_hold).
+    pub fn capsule_push_scoped_hold(&self, cell: Option<usize>, a: V3, b: V3, r: f32, top_guard: bool, ref_v: V3) -> (V3, bool) {
+        self.capsule_push_scoped_impl(cell, a, b, r, top_guard, true, ref_v)
+    }
+
+    fn capsule_push_scoped_impl(&self, cell: Option<usize>, a: V3, b: V3, r: f32, top_guard: bool, walk_flat_hold: bool, ref_v: V3) -> (V3, bool) {
+        let Some(cell) = cell else { return self.capsule_push_impl(a, b, r, top_guard, walk_flat_hold, ref_v) };
+        let Some(runs) = self.scoped_runs(cell, &mut Self::capsule_portal_hit(a, b, r)) else { return self.capsule_push_impl(a, b, r, top_guard, walk_flat_hold, ref_v) };
         let dynamic = self.dynamic.read().unwrap();
         let (mut a, mut b) = (a, b);
         // ref_v = the caller's HITTEST+0x50 lifetime push accumulator (the radial arm's ref — see
@@ -1554,7 +1599,7 @@ impl CollisionWorld {
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         let stat = &self.stat;
         let mut test = |t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, total: &mut V3, walkable: &mut bool, pick: &mut bool| {
-                capsule_tri_contact(t, mat, a, b, r, grow, total, walkable, pick, top_guard, ref_v);
+                capsule_tri_contact(t, mat, a, b, r, grow, total, walkable, pick, top_guard, walk_flat_hold, ref_v);
         };
         for r in runs {
             let o = &stat.objects[r as usize];
@@ -1593,7 +1638,7 @@ impl CollisionWorld {
         for run in runs {
             let o = &stat.objects[run as usize];
             if !(0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) {
-                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v); }
+                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, false, ref_v); }
             }
         }
         total
@@ -1634,12 +1679,12 @@ impl CollisionWorld {
         for run in runs {
             let o = &stat.objects[run as usize];
             if !(0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) {
-                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v); }
+                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, false, ref_v); }
             }
         }
         for g in [&dynamic.geo] {
             for o in overlapping(g, lo, hi) {
-                for k in o.tris.clone() { capsule_tri_contact(&g.tris[k], g.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v); }
+                for k in o.tris.clone() { capsule_tri_contact(&g.tris[k], g.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, false, ref_v); }
             }
         }
         // dot2 pass-global [M 0x10a66c-0x10a6a0; the collapse argument in the doc above]: the
@@ -1659,34 +1704,13 @@ impl CollisionWorld {
         let mut hi = [0f32; 3];
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         self.near_actor(lo, hi, |t, mat| {
-            capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v);
+            capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, false, ref_v);
         });
         pick && pick_ref_y < b_pre_y
     }
 
     /// The floor ray against the straddle cells' static geometry (the walk's `segment_hit`).
     pub fn segment_hit_scoped(&self, cell: Option<usize>, from: V3, to: V3) -> Option<(f32, V3)> {
-        self.segment_hit_scoped_impl(cell, from, to, false)
-    }
-
-    /// The feet ray's own cast (level-14-float-narrow): identical to `segment_hit_scoped` but the
-    /// returned t is the game's plane form. `Player_FeetOnPoint` 0x194188 casts the feet ray
-    /// through `Intersect_RayGeom` 0x10a8c8, whose t is the PLANE form [M :176-185 — one division
-    /// `t = −planeDist(from)/dot(dir, n)`, then `hit = from + dir·t` :176-179, the store to
-    /// HITDATA+0x40 :252-256] and the band consumes `|from − hit|` [M :312-325 the sqrt-of-squares
-    /// of `from − HITDATA+0x40`]. The port's cast is Möller–Trumbore (`tt = dot(e2, q)·inv`), whose
-    /// rounding differs from the plane form by ulps — at the 07000014 pocket the MT t reads the
-    /// pushed ride's dy at 0x3f266668, one ulp above the game's crouched rest edge 0x3f266667 [L
-    /// the crouched vent rest], and the band `hit − 0.1 ≤ cc` [M 0x194188:106] misses by that one
-    /// ulp (probe14_pocket_settle: grounded flickers true/false, hist never reaches 0xf; master's
-    /// spine fallback push is the ride holder — the lift and stair flights need it, the A/B in the
-    /// report). The plane-form recompute reproduces the game's HITDATA+0xC at the same contact.
-    /// Feet ray only: every other ray consumer keeps the MT t.
-    pub fn segment_hit_scoped_feet(&self, cell: Option<usize>, from: V3, to: V3) -> Option<(f32, V3)> {
-        self.segment_hit_scoped_impl(cell, from, to, true)
-    }
-
-    fn segment_hit_scoped_impl(&self, cell: Option<usize>, from: V3, to: V3, plane_t: bool) -> Option<(f32, V3)> {
         let Some(cell) = cell else { return self.segment_hit(from, to) };
         let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to)) else { return self.segment_hit(from, to) };
         let d = sub(to, from);
@@ -1717,12 +1741,7 @@ impl CollisionWorld {
                 if (0.0..=1.0).contains(&tt) && best.is_none_or(|b| tt < b.0) {
                     let n = cross(e1, e2);
                     let l = dot(n, n).sqrt().max(1e-12);
-                    // level-14-float-narrow: the feet ray returns the game's plane-form t [M
-                    // 0x10a8c8:176-185] — `t = dot(v0 − from, n)/dot(dir, n)` on the hit
-                    // triangle's own plane (scale-invariant, one division). MT's tt stays the
-                    // HIT SELECTOR; only the returned t changes shape.
-                    let t_ret = if plane_t { dot(sub(t[0], from), n) / dot(d, n) } else { tt };
-                    best = Some((t_ret, [n[0] / l, n[1] / l, n[2] / l]));
+                    best = Some((tt, [n[0] / l, n[1] / l, n[2] / l]));
                 }
             }
         }
@@ -1747,8 +1766,7 @@ impl CollisionWorld {
                 if (0.0..=1.0).contains(&tt) && best.is_none_or(|b| tt < b.0) {
                     let n = cross(e1, e2);
                     let l = dot(n, n).sqrt().max(1e-12);
-                    let t_ret = if plane_t { dot(sub(t[0], from), n) / dot(d, n) } else { tt };
-                    best = Some((t_ret, [n[0] / l, n[1] / l, n[2] / l]));
+                    best = Some((tt, [n[0] / l, n[1] / l, n[2] / l]));
                 }
             }
         }
@@ -2466,6 +2484,16 @@ impl CollisionWorld {
     /// 0.70-0.763 band (≈45-77° slopes above the capsule) is gone — those faces push, as the
     /// game's non-head-on path tests them.
     pub fn capsule_push(&self, a: V3, b: V3, r: f32, top_guard: bool, ref_v: V3) -> (V3, bool) {
+        self.capsule_push_impl(a, b, r, top_guard, false, ref_v)
+    }
+
+    /// The walk pass's flat-world fallback (level-14-landing-float): the hold skip on — see
+    /// `capsule_push_scoped_hold`.
+    pub fn capsule_push_hold(&self, a: V3, b: V3, r: f32, top_guard: bool, ref_v: V3) -> (V3, bool) {
+        self.capsule_push_impl(a, b, r, top_guard, true, ref_v)
+    }
+
+    fn capsule_push_impl(&self, a: V3, b: V3, r: f32, top_guard: bool, walk_flat_hold: bool, ref_v: V3) -> (V3, bool) {
         let (mut a, mut b) = (a, b);
         let mut total = [0f32; 3];
         let mut walkable = false;
@@ -2475,7 +2503,7 @@ impl CollisionWorld {
         let mut hi = [0f32; 3];
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         self.near_actor(lo, hi, |t, mat| {
-                capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, top_guard, ref_v);
+                capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, top_guard, walk_flat_hold, ref_v);
         });
         (total, walkable)
     }

@@ -24,3 +24,11 @@ then the walkreal set whole. No digest or walk re-pins to absorb the change.
   cast Möller–Trumbore; new segment_hit_scoped_feet (feet band only, 2 sites) returns
   dot(v0−from,n)/dot(d,n) on the hit triangle's plane. Trio re-measured: probe14 PASS,
   elevator PASS, 11 route PASS.
+  Narrowed further (2026-11-06 12:56 UTC): the plane-form feet ray moved the MP digest
+  (mp_perf_16 pinned digest differs) — any band-arithmetic change reaches the MP sims.
+  Final shape: master's band/collision everywhere + the base branch's flat-hold skip
+  CROUCH-GATED at the two walk call sites (self.cc == CROUCH_ROOT_HEIGHT). Gate re-run:
+  probe14 PASS, elevator PASS, 11 route PASS, npc_doors PASS, mp_net_slots PASS;
+  mp_perf_16's pinned digest STILL differs (the MP sim reaches the crouched hold regime —
+  left for the next message). The plane-form feet ray lives in history 834ee5974 as the
+  [M]-faithful alternative.
