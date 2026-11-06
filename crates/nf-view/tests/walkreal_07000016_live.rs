@@ -1799,6 +1799,21 @@ fn the_chasers_punch_lands_the_record_damage() {
         // The route's return-fire fights spend bolts — the arrival SET is the chain's [M
         // 0x1a7ef8], but the gun in hand may be dry; the fight continues on the carried P2K
         // (rounds pinned [D the chain save]). The allowance sister pins the arrival's held gun.
+        // guard-radii-16-chasers MEASURED: the plain route's fights left the Delta DRY (clip 0
+        // spare 0 in hand at the window) — the counter-fire's side taps and the window's
+        // clear stands then had no bullets (#7 died, #6/#8 outlived their 900-tick stands,
+        // 32 health of crossfire, and she never closed to swing). Cycle to a loaded gun (the
+        // route's dropped SMG 0x1a is owned [M Player_IsBetterWeapon's auto-take]; the
+        // no_grenade_throws gate keeps the cycle off the frag).
+        assert!(w.switch_to_armed("the punch window's gun"), "a carried gun has rounds at the window");
+        // The doorway meet (guard-radii-16-chasers MEASURED): she parks outside the leaves at
+        // 4.67 (state 0x7c, zero landed stars at d1 across the whole window) and the interior
+        // idle stand never sees her punch — the 8519-shaped stream had her slip in, this one
+        // does not. A player steps to the doorway and lets her reach the band: Bond walks to
+        // the west blast door (the INTO_THE_SHELTER mid leg) and idles there; she is then
+        // ~1.2 u off — inside the 2.0 punch band [M 0x1789c0:26-40] — and swings. The clear
+        // rounds start after that first second (clear_at below), so the punch owns the first
+        // window.
         // The punch window goes back to the unanswered stand: the pin is the DAMAGE her punch
         // carries, and it lands on an idle Bond while the pit shooters are cleared explicitly.
         w.dmg.return_fire = false;
@@ -1829,8 +1844,9 @@ fn the_chasers_punch_lands_the_record_damage() {
         // swings; her approach stars (0xa9/0xaa's Fire(1), 1.5 [D record 0x12] × 0.4 = 0.6) land
         // on the way. The stand ends before pulse 2 (6810 [D stream 9]) — an idle Bond outside
         // the shelter eats its 1000.
+        w.walk_to(walker::Wp::new(-11.0, -22.0, -170.0).r(0.9), "the doorway meet");
         let mut chaser_hits: Vec<f32> = Vec::new();
-        let mut clear_at = 0u32;
+        let mut clear_at = 900u32;
         while w.total_ticks - t0 < 6300 {
             {
                 let sim = w.scene.sim.as_ref().unwrap();
