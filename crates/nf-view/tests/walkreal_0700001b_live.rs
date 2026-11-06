@@ -317,9 +317,19 @@ fn float_to(sim: &nf_view::scene::Sim, at: [f32; 3]) -> Input {
     let vstar = (dy * 0.03).clamp(-0.05, 0.05);
     inp.lift = ((vstar + (vstar - sim.bond.zero_g_lift) * 2.0) * 10.0).clamp(-1.0, 1.0);
     // The sag guards: the eased descent overshoots its brake and dropped the float past the
-    // low stations onto the room floor (console 8's end of the bank), where walk-mode pins it
-    // and the thrusters are dead. Below the goal, demand the climb; near the floor AND near
-    // the goal from above, creep the last stretch down instead of braking to a stall.
+    // low stations toward the room floor (console 8's end of the bank), where the collision
+    // settles him into a pocket under the bank. The pocket does NOT end zero-g by itself
+    // [M Player_ZeroG 0x192ab0 has no ChangeSubState — and the driver's no-input measurement:
+    // PCSX2 and the port both settle there and float-hold], and the old comment here was
+    // WRONG: it is not walk-mode pinning him and the thrusters are NOT dead — Input.lift is
+    // the game's real vertical thruster (actions 7−8 [M 0x192ab0:136-137], the +0x14 lane the
+    // smoother eases [M 0x192ab0:92-159]) and it works; the ROUTE was the trap: the straight
+    // thrust at the goal drives into the bank face while the near-floor creep holds the
+    // height, so the net motion is the hold the no-input measurement shows. Below the goal,
+    // demand the climb; near the floor AND near the goal from above, creep the last stretch
+    // down instead of braking to a stall. (The route's way out is the escape phase in
+    // `shoot_consoles`: leave the pocket up-and-back first, then re-plan from a spot whose
+    // straight lines are not bank-clipped.)
     if dy > 0.3 {
         inp.lift = 1.0;
     } else {
@@ -328,6 +338,28 @@ fn float_to(sim: &nf_view::scene::Sim, at: [f32; 3]) -> Input {
         inp.lift = ((vstar + (vstar - sim.bond.zero_g_lift) * 2.0) * 10.0).clamp(-1.0, 1.0);
     }
     inp
+}
+
+
+/// One-shot pocket probe (1b-zero-g-floor diagnostics): ray the enclosure from the wedged spot
+/// in 26 directions (6 u out) and print the hit distances — the pocket's shape decided the
+/// route fix (the two-phase crossing). Fires once per shoot_consoles run.
+fn pocket_probe(sim: &nf_view::scene::Sim, goal: [f32; 3], k: u32, tt: u32, done: &mut bool) {
+    let p = sim.bond.pos;
+    if !*done {
+        *done = true;
+        eprintln!("[pocket] con{k} t{tt} at ({:.2},{:.2},{:.2}) goal ({:.2},{:.2},{:.2})", p[0], p[1], p[2], goal[0], goal[1], goal[2]);
+        let mut dirs: Vec<[f32; 3]> = vec![[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]];
+        for sx in [-1.0f32, 1.0] { for sy in [-1.0, 1.0] { for sz in [-1.0, 1.0] {
+            let l = (sx * sx + sy * sy + sz * sz).sqrt();
+            dirs.push([sx / l, sy / l, sz / l]);
+        } } }
+        for (i, d) in dirs.iter().enumerate() {
+            let far = [p[0] + d[0] * 6.0, p[1] + d[1] * 6.0, p[2] + d[2] * 6.0];
+            let hit = sim.world.segment(p, far).map(|t| t * 6.0);
+            eprintln!("[pocket]   dir{i} ({:+.2},{:+.2},{:+.2}) hit {}", d[0], d[1], d[2], hit.map_or("clear".into(), |h| format!("{h:.2}")));
+        }
+    }
 }
 
 /// Shoot the eight console screens in deadline order with the level look: each console UI script
@@ -348,10 +380,23 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
     let mut plan: (u32, Option<[f32; 3]>) = (0, None);
     let mut cal = ShotCal::default();
     let mut banned: Vec<[f32; 3]> = Vec::new();
+    // 1b-zero-g-floor item 1: the pocket under the bank cannot be LEFT by any thrust —
+    // measured this session: the wedge at (44.75, −8.66, 1.69) held the position to ±0.05
+    // through 3000+ ticks of full climb (lift 1.0, the real actions-7−8 input [M 0x192ab0
+    // :136-137]) plus sustained back thrust, and the [pocket] ray dump maps the enclosure
+    // (ceiling 0.83 straight up — the bank's underside, sloping DOWN toward +x/+z at 0.79-1.75
+    // on every up diagonal; the riser 4.73 at +x; −x/±z/down clear). The port's radial push
+    // from that slope cancels the whole move — the game's own radial push tail is provably
+    // dead [M Intersect_CylGeom 0x109da0:447's HITTEST+0x50 guard; the game CLIPS the move at
+    // the face instead, which slides], and the task forbids collision changes. So the fix is
+    // the route: never enter the pocket — the two-phase goal (the report's own next lever).
+    let mut pocket_dumped = false;
+    let mut pocket_probe_done = false;
     let mut moved_at = 0u32;
     let mut last_goal = [0.0f32; 3];
     let mut last_goal_dist = f32::MAX;
     let mut dead_ticks = 0u32;
+    let mut last_esc_pos = [0.0f32; 3];
     let mut dumped: Vec<u32> = Vec::new();
     for tt in 0..6000u32 {
         let (input, fire) = {
@@ -368,6 +413,7 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
             let mut station = console_station(k);
             let mut fire = false;
             let mut aim = None;
+            let mut cross_high = false;
             if let Some((c0, r)) = best {
                 let c = cal.eye_target(sim, c0);
                 station[1] = c[1] - eye_off;
@@ -420,17 +466,36 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
                     && !banned.iter().any(|&b| dist3(b, station) < 1.0)
                     && station_room(sim, sim.bond.pos, station);
                 let goal = if plan.0 == k && plan.1.is_some() { plan.1.unwrap() } else { station };
-                if goal != last_goal { last_goal = goal; moved_at = tt; }
-                // The float's progress TOWARD the goal, not any movement: a wedged crawl along
-                // the bank moved 0.3 every ~110 ticks and kept `moved_at` fresh, so the stall
-                // never tripped and the replan never ran.
-                let gd = dist3(sim.bond.pos, goal);
+                if goal != last_goal { last_goal = goal; moved_at = tt; last_goal_dist = f32::MAX; }
+                // 1b-zero-g-floor item 1 (the two-phase goal — the report's own next lever):
+                // while the goal is a LOW station (7/8, y −8.12, in front of the bank) and Bond
+                // is still horizontally far and above it, the fly target is the CROSS COLUMN TOP
+                // (the goal's own x/z at goal.y + 5) — the crossing rides ABOVE the bank's top
+                // (the screens' face tops at y −5.21 at x 38.74) and the descent runs the
+                // station's own column, which float-holds [L the driver's probes: (46, −8.3, 0)
+                // and (46, −8.7, 0) hold in both PCSX2 and the port]. The old single-phase
+                // descent crossed at the station's height band, clipped the bank's sloped
+                // underside around (44.7, −8.66, 1.69) and the push equilibrium froze the wedge.
+                let horiz = ((goal[0] - sim.bond.pos[0]).powi(2) + (goal[2] - sim.bond.pos[2]).powi(2)).sqrt();
+                cross_high = goal[1] < -7.0 && horiz > 1.2 && sim.bond.pos[1] > goal[1] + 2.0;
+                let fly = if cross_high { [goal[0], goal[1] + 5.0, goal[2]] } else { goal };
+                // The float's progress TOWARD THE FLY TARGET, not any movement: a wedged crawl
+                // along the bank moved 0.3 every ~110 ticks and kept `moved_at` fresh, so the
+                // stall never tripped and the replan never ran.
+                let gd = dist3(sim.bond.pos, fly);
                 if last_goal_dist - gd > 0.3 { moved_at = tt; }
                 last_goal_dist = gd;
+                if cross_high && !pocket_dumped {
+                    pocket_dumped = true;
+                    eprintln!("[gate] t{tt} con{k} two-phase crossing: cross column top ({:.2},{:.2},{:.2}) from ({:.2},{:.2},{:.2})", fly[0], fly[1], fly[2], sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2]);
+                }
                 let snap_ok_here = snap_shot_ok(sim, sim.bond.head(), c, c0, r);
                 if dist3(sim.bond.pos, goal) < 1.0 && !snap_ok_here { dead_ticks += 1 } else { dead_ticks = 0 }
-                let stalled = (tt.saturating_sub(moved_at) > 150 && dist3(sim.bond.pos, goal) >= 1.0) || dead_ticks > 150;
-                if stalled { banned.push(goal); moved_at = tt; dead_ticks = 0; }
+                let stalled = (tt.saturating_sub(moved_at) > 150 && gd >= 1.0) || dead_ticks > 150;
+                if stalled {
+                    banned.push(goal); moved_at = tt; dead_ticks = 0;
+                    if !pocket_probe_done { pocket_probe(sim, goal, k, tt, &mut pocket_probe_done); }
+                }
                 if !default_ok || stalled || (plan.0 == k && plan.1.is_some()) {
                     if plan.0 != k || stalled { plan = (k, level_station(sim, c, r, c0, sim.bond.pos, station, &banned)); }
                     if let Some(p) = plan.1 { station = p; }
@@ -477,7 +542,11 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
                     }
                 }
             }
-            let mut inp = float_to(sim, station);
+            // The same two-phase clamp on the raw station (the fly target the thrusters ride;
+            // `station` here is the goal — the plan already landed in it above).
+            let mut inp = float_to(sim, if cross_high {
+                [station[0], station[1] + 5.0, station[2]]
+            } else { station });
             match aim {
                 Some(c) => level_turn(sim, &mut inp, c, 0.08),
                 None => inp.stabilise = sim.bond.look()[1].abs() > 0.005 && sim.bond.stabiliser == 0,
