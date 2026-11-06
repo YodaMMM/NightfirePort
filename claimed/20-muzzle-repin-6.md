@@ -8,3 +8,6 @@ Read docs/reports/muzzle-repin-5.md on that branch. Three binaries were left red
 3. The d2 death assert left red in that report (7 passed / 1 failed).
 
 `walkreal_07000003_live` was not re-run whole, so run it. Do not loosen any pin tagged [L]. Finish with one total line from a full run.
+
+---
+claimed-by: sandbox3 at 2026-11-06T09:42Z
