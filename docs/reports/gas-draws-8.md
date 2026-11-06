@@ -172,3 +172,19 @@ ran whole instead, plus all of nf-game.
 
 not visible to me (no token, credit or context-window figures are exposed to this session;
 nothing in the sandbox reports them).
+
+## ntfy failed
+
+All three fallbacks failed in order (2026-11-06 ~08:53-08:55 UTC):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "... urllib.request ..."`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "gas-draws-8: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → rc=124 (killed at the 40 s timeout), no output.
+
+The finish step itself succeeded (`bash ../nf-queue/finish.sh 20-gas-draws-8 done
+docs/reports/gas-draws-8.md` → `OK done 20-gas-draws-8`; the script's stderr noted its own
+`cat docs/reports/...` ran from the queue worktree's cwd — the report file is in the repo,
+pushed at 393f8feb0). ntfy.sh was equally unreachable in the gas-rng-draws-7 and
+guard-radii-finish sessions.
