@@ -349,6 +349,8 @@ impl MpCombat {
                 // 0x3b family (the record's +0x02 base).
                 burn: if u16::from_le_bytes([w[2], w[3]]) == 0x3b { 100 } else { 0 },
                 defused: false,
+                // obj+0xec = GameState at creation (the trail gates' phase; fx-muzzle-and-trail).
+                born: frame as u8,
             });
             return;
         }

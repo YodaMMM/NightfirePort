@@ -168,15 +168,17 @@ fn the_wall_gun_burst_scatters_and_draws_in_the_game_order() {
     // Any change to the cone draws' order or the spread law moves these numbers.
     let measured: Vec<(u32, u64)> = pattern.iter().map(|(d, dr)| ((*d * 10000.0).round() as u32, *dr)).collect();
     eprintln!("[turret-spread] GOLDEN {:?}", measured);
-    // The goldens, measured 2026-11-04 on this tree (bit-exact, the fixed-60 Hz sim): the
-    // per-shot damage is the record's flat player damage (the cylinder path has no part boxes,
-    // so the ±0.0112 rad cone at 40 u keeps every round on one number) and the draw counts are
-    // the shared-stream positions at each shot — the pre-fix port (dead-on, no cone draws) sat
-    // 4 draws/shot lower and every later count desynced. The +454 draws between consecutive
-    // shots = the game's 4 (the cone 3 + the GT pad) + the level's per-tick consumers.
+    // The goldens, re-measured 2026-11-05 on the fx-muzzle-and-trail stream (bit-exact, the
+    // fixed-60 Hz sim): the per-shot damage is STILL the record's flat player damage (the
+    // cylinder path has no part boxes, so the ±0.0112 rad cone at 40 u keeps every round on one
+    // number — the damage law did not move), and the draw counts are the shared-stream positions
+    // at each shot. The stream correction (the guards' per-shot muzzle-flash draws, live-confirmed
+    // 0x178f68 ×40) moved the burst's start (+12) and put 460-draw gaps between rounds where a
+    // level consumer (a guard's own shot) now spends its game draws between turret rounds — the
+    // +454 floor is the game's 4 (the cone 3 + the GT pad) + the level's per-tick consumers.
     assert_eq!(measured, &[
-        (24000, 11673), (24000, 12127), (24000, 12581), (24000, 13035),
-        (24000, 13489), (24000, 13943), (24000, 14397), (24000, 14851),
-        (24000, 15305), (24000, 15759), (24000, 16213), (24000, 16667),
+        (24000, 11685), (24000, 12145), (24000, 12599), (24000, 13059),
+        (24000, 13513), (24000, 13973), (24000, 14427), (24000, 14887),
+        (24000, 15341), (24000, 15801), (24000, 16255), (24000, 16715),
     ], "the burst's damage/draw pattern matches the game-ordered stream");
 }

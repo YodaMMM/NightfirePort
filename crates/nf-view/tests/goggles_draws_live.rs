@@ -18,6 +18,12 @@ fn step(scene: &mut Scene, n: u32) {
 fn press_to(scene: &mut Scene, want: u16) {
     for t in 0..900 {
         if scene.sim.as_ref().unwrap().goggle_mode() == want && t > 0 { break; }
+        // muzzle-repin-5: hold Bond alive through the presses — the start rooms are fighting and
+        // the shifted stream (3 muzzle draws per guard shot) changes who hits Bond during this
+        // window; a dead Bond ignores the key (the mode gate needs a live player), which used to
+        // fail a_captains_laser_ray's mode-1 press. The tests' subject is the goggle draw, not
+        // survivability; every caller here presses inside a live room.
+        scene.sim.as_mut().unwrap().drones.health.health = 100.0;
         let mut i = Input::default();
         i.goggles_action = t % 2 == 0 && scene.sim.as_ref().unwrap().goggle_mode() != want;
         scene.sim.as_mut().unwrap().step_bond(i, false, false, false);
@@ -222,6 +228,17 @@ fn a_captains_laser_ray() {
     assert!(fs.attach[day][3][1] > FAR_Y && fs.attach[night][3][1] <= FAR_Y, "mode 0: 0x2000133");
     let p = fs.attach[day][3];
     assert!((p[0] - a[0]).abs() < 1e-4 && (p[1] - a[1]).abs() < 1e-4 && (p[2] - a[2]).abs() < 1e-4, "the sprite sits at the start");
+    // muzzle-repin-5: the latch is CLEAR here — the first press requests the goggles WEAPON
+    // 0x5d (a weapon request, swallowed by a hit-stagger) and only the SET latch cycles the
+    // mode [M player.rs — BL+0x961 / +0x60]. The shifted stream keeps the room's guards firing
+    // through this window and the stagger ate the request (mode stuck 0). Step Bond 30 u back
+    // for the press (out of the fire line — the stun test's own trick), then place() re-faces
+    // the guard for the mode-1 attach assert below.
+    {
+        let s = scene.sim.as_mut().unwrap();
+        let (bp, byaw) = (s.bond.pos, s.bond.yaw);
+        s.bond.pos = [bp[0] - byaw.sin() * 30.0, bp[1], bp[2] - byaw.cos() * 30.0];
+    }
     press_to(&mut scene, 1);
     place(&mut scene, di);
     if scene.sim.as_ref().unwrap().drones.list[di].weapon == 0x18 {

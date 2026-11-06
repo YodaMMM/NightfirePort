@@ -256,6 +256,11 @@ fn guard_takes_cover_like_the_game() {
     // only because the stream shifted. Seeds 0-40 on this model: 3, 15, 16, 18, 23, 25, 28, 29,
     // 30 and 36 pass every pin; 1, 4, 7, 9, 11, 12, 17, 19, 31 and 37 hold the 90-tick lean in
     // UnderCoverAim (live 37), the rest pick another first move or cover spot; 9 had 9).
+    // Seed 16 (re-picked at fx-muzzle-and-trail: the guard's shots now consume the
+    // muzzle-flash sprite's three orientation draws [M DroneWeap_FireWeapon 0x178f68:189-213 —
+    // control_create_object 0x1344e0 is a plain Mem_Malloc, so the live game makes the draws on
+    // every shot], shifting the shared stream; the seeds that pass every pin on the corrected
+    // stream are 1, 11, 16, 17, 19 and 23. 16 also passed every pin on the pre-flash-draw model.
     // Seed 9 (re-picked at the single blend-out word: `Ready2Fire` reads `Drone+0x538`, which the
     // first replaced script to die clears [M 0x13b1c8:76-77, 0x1c14f0:26-29], so the guard's Combat
     // shots before the cover run land on other ticks and the shared stream shifts. Seeds 0-24 on
@@ -272,7 +277,11 @@ fn guard_takes_cover_like_the_game() {
     // the Effect_Bullet gas entries through that same call [M 0x1cea98], so the stream shifts on
     // every shot. 9 had 61.342/9; seeds 0-24 on this model: 4 passes every pin, 0/2 pick another
     // first move, 1/3 hold the 90-tick lean in UnderCoverAim (live 37)).
-    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 4);
+    // Seed 16 (re-picked at fx-muzzle-and-trail — kept at the stream-batch join over gas-rng-draws'
+    // 4: 16 was measured at 11:09 UTC on the muzzle tree, 4 at ~03:35 UTC on the gas+guard tree, so
+    // 16 is the more recent measurement; the joined tree carries BOTH lever families and re-pins
+    // from its own run).
+    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 16);
     let mut sim = l.sim(drones, rng);
     let player = bond_at([79.86, 22.92, 96.0]);
     for _ in 0..700 { sim.tick(&d, &player); }
@@ -1427,7 +1436,7 @@ fn grenade_bounce_scares_the_guard_into_the_flee_family() {
         pos: drop, velocity: [0.0, -5.0, 0.0], speed: 5.0, travelled: 0.0, range: 100000.0,
         damage: 1.0, radius: 1.0, weapon_type: 0x34, mesh: 0, owner: usize::MAX, state: 1, bounces: 0, smoke_popped: false, resting: false,
         stuck: false, seek_target: None,
-        phase: None, burn: 0, defused: false,
+        phase: None, burn: 0, defused: false, born: 0,
     });
     let mut saw_87 = false; let mut dist_at_87 = 0.0f32;
     for k in 0..400 {
@@ -1522,3 +1531,4 @@ fn auto_aim_from_a_moving_shooter_is_the_same_instantaneous_geometry() {
     for k in 0..3 { assert!((dir2[k] - to2[k] / n2).abs() < 1e-3, "the riding ray re-snaps to the bone 2 from the new head"); }
     assert!((off[1] - off2[1]).abs() < 0.02, "the assist offset tracks the geometry, not a velocity history ({off:?} vs {off2:?})");
 }
+

@@ -146,6 +146,7 @@ fn the_frag_and_the_rocket_keep_the_generic_blast_script() {
             damage: 100.0, radius: 8.0, weapon_type: 0x34, owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: false, stuck: false, seek_target: None, mesh, phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
         defused: false,
+        born: 0,
         });
     }
     let mut frag_exploded = false;

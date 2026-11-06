@@ -236,6 +236,68 @@ fn switch_to_firearm(w: &mut Walker, label: &str) -> bool {
     g.weapon != 0x2c && (2..=0x47).contains(&g.weapon) && g.clip + g.spare > 0
 }
 
+/// The game's R between fights (the 02 walk's `reload_full`): one reload press, then the
+/// reload's own wait.
+fn reload_full(w: &mut Walker) {
+    let spare = w.scene.sim.as_ref().unwrap().gun.spare;
+    if spare == 0 { return; }
+    w.scene.sim.as_mut().unwrap().step_bond(Default::default(), false, true, false);
+    for _ in 0..90 { w.tick(Default::default(), false); }
+}
+
+/// The game's own weapon cycle to the carried firearm holding the most rounds (clip + spare),
+/// launcher excluded — the 02 walk's `arm_fullest` verbatim (a player walking into a known
+/// shoot-out with a near-empty gun switches to his fullest gun first).
+fn arm_fullest(w: &mut Walker, label: &str) {
+    let read = |w: &Walker| {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (sim.gun.weapon, sim.gun.clip as i32 + sim.gun.spare as i32)
+    };
+    let cycle = |w: &mut Walker| {
+        w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
+        for _ in 0..60 { w.tick(Default::default(), false); }
+    };
+    let first = read(w);
+    let mut seen = vec![first];
+    for _ in 0..12 {
+        cycle(w);
+        let now = read(w);
+        if now.0 == first.0 { if seen.len() > 1 { break; } continue; }
+        if !seen.iter().any(|g| g.0 == now.0) { seen.push(now); }
+    }
+    let firearm = |id: u8| (2..=0x47).contains(&id) && id != 0x2c;
+    let Some(best) = seen.iter().filter(|(id, n)| firearm(*id) && *n > 0).max_by_key(|(_, n)| *n).map(|b| b.0) else { return };
+    for _ in 0..12 {
+        if read(w).0 == best { break; }
+        cycle(w);
+    }
+    for _ in 0..12 {
+        if read(w).0 == best { break; }
+        cycle(w);
+    }
+    let (id, n) = read(w);
+    eprintln!("[08] {label}: armed the fullest gun {id:#x} ({n} rounds; carried {:?})", seen);
+    reload_full(w);
+}
+
+/// Walk to the nearest live pickup at the feet (the guards' drops land at the fight floor) and
+/// take it — the 02 walk's `scoop_drops` verbatim; `n` pickups, then cycle to a firearm.
+fn scoop_drops(w: &mut Walker, label: &str, n: usize) {
+    for k in 0..n {
+        let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+        let target = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
+            .filter(|p| !p.gone)
+            .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+            .filter(|q| walker::dxz(*q, bp) < 6.0 && (q[1] - bp[1]).abs() < 1.5)
+            .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)));
+        let Some(target) = target else { break };
+        eprintln!("[08] {label}: scooping the drop ({:.1},{:.1},{:.1}) (d {:.1})", target[0], target[1], target[2], walker::dxz(target, bp));
+        w.walk_nav_to(target, &format!("{label} scoop {k}"), 0.4);
+        let _ = w.switch_to_armed(&format!("{label} scoop {k} arm"));
+    }
+    let _ = w.switch_to_armed(label);
+}
+
 /// The whole mission on one fresh load: the intro, the fusebox, the safe, the briefcase
 /// (objective 1 → 4), the descent back down, the boarding, the ride, the cinematic, the Hind
 /// shoot-down on real aim and trigger (objective 2 → 4), and the mission end into 0x0730008.
@@ -687,6 +749,15 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             .filter(|c| (c[0] - bond_at[0]).abs() < 3.0 && (c[1] - bond_at[1]).abs() < 2.5 && (c[2] - bond_at[2]).abs() > 1.5)
             .collect();
         eprintln!("[08 panes] live end panes near the cabin: {panes:?}");
+        // The 00agent economy (the 02 walk's loot rule, muzzle-repin-6): the fights' rounds moved
+        // with the muzzle-draw stream — the measured run reached the shoot-out with clip 3
+        // spare 0, killed pane 0 with the last rounds and walked the rest dry. A player scoops
+        // the end-fight drops at his feet and arms the fullest gun before shooting glass. The
+        // d1/d2 runs' green streams stay byte-identical.
+        if difficulty >= 3 {
+            scoop_drops(&mut w, "the panes", 3);
+            arm_fullest(&mut w, "the panes");
+        }
         switch_to_firearm(&mut w, "the panes");
         // A player shoots the glass he can see — the aim-ray-to-bounds-centre gate CANNOT work
         // here: the captured centre is the pane bounds' midpoint, which sits a hair short of the
@@ -712,22 +783,72 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         };
         for (k, c) in panes.iter().enumerate() {
             let mut fired = 0u32;
-            for t in 0..260u32 {
-                if pane_gone(&w.scene.sim.as_ref().unwrap(), *c) { break; }
-                let sim = w.scene.sim.as_ref().unwrap();
-                let head = sim.bond.head();
-                let to = [c[0] - head[0], c[1] - head[1], c[2] - head[2]];
-                let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(0.01);
-                let desired_yaw = to[0].atan2(to[2]);
-                let desired_pitch = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2;
-                let yaw_err = walker::wrap_pi(desired_yaw - sim.bond.yaw);
-                let pitch_err = desired_pitch - sim.bond.pitch;
-                let input = Input { turn: yaw_err.clamp(-0.08, 0.08), look: pitch_err.clamp(-0.05, 0.05), ..Default::default() };
-                // Fire on the edge, only on a converged aim — the pane's bounds box is thin
-                // (0.9-1.2 u across, ~0.1 thick [L the rows' bounds]) and an off-aim round
-                // misses it (the health 1.0 dies to one contact [D params [2,1,0]]).
-                let fire = t % 12 == 0 && yaw_err.abs() < 0.01 && pitch_err.abs() < 0.02 && fired < 5;
-                if fire { fired += 1; w.tick_fire(input); } else { w.tick(input, false); }
+            // The bracket (the #447 shoot_mine lesson, muzzle-repin-6): the round flies from the
+            // camera along the view, its gravity arc and the camera-vs-head offset land it a
+            // hair off a ~0.1-thin sheet — track each live round's closest approach to the pane
+            // centre and walk the aim by the measured miss vector when a round dies without the
+            // kill (the P2K's spread is 0.0 [L ee_start_05.bin weapon_data 0x02 +0x24], so one
+            // correction lands the next round). A round dying FAR out (≥ 1 u) is a BLOCKED line
+            // (a mullion between), not a near miss — corrections would chase the blocker, so
+            // the window ends and a sidestep re-takes the sight line instead.
+            let mut aim = *c;
+            let mut best: Option<(f32, [f32; 3])> = None;
+            let mut prev_b = 0usize;
+            let mut fixes = 0u32;
+            let mut blocked = false;
+            'window: for attempt in 0..3u32 {
+                if attempt > 0 {
+                    if !blocked { break 'window; }
+                    // The sidestep: face the pane and shuffle aside (real input only), then a
+                    // fresh bracket window from the plain centre aim.
+                    for s in 0..120u32 {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let head = sim.bond.head();
+                        let to = [c[0] - head[0], c[1] - head[1], c[2] - head[2]];
+                        let yaw_err = walker::wrap_pi(to[0].atan2(to[2]) - sim.bond.yaw);
+                        w.tick(Input { turn: yaw_err.clamp(-0.08, 0.08), strafe: if (s / 40) % 2 == 0 { 1.0 } else { -1.0 }, ..Default::default() }, false);
+                    }
+                    eprintln!("[08 panes] pane {k}: the line was blocked — sidestepped, fresh window");
+                    aim = *c; best = None; prev_b = 0; fixes = 0; fired = 0; blocked = false;
+                }
+                for t in 0..260u32 {
+                    if pane_gone(&w.scene.sim.as_ref().unwrap(), *c) { break 'window; }
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let head = sim.bond.head();
+                    let to = [aim[0] - head[0], aim[1] - head[1], aim[2] - head[2]];
+                    let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(0.01);
+                    let desired_yaw = to[0].atan2(to[2]);
+                    let desired_pitch = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+                    let yaw_err = walker::wrap_pi(desired_yaw - sim.bond.yaw);
+                    let pitch_err = desired_pitch - sim.bond.pitch;
+                    let input = Input { turn: yaw_err.clamp(-0.08, 0.08), look: pitch_err.clamp(-0.05, 0.05), ..Default::default() };
+                    // Fire on the edge, only on a converged aim — the pane's bounds box is thin
+                    // (0.9-1.2 u across, ~0.1 thick [L the rows' bounds]) and an off-aim round
+                    // misses it (the health 1.0 dies to one contact [D params [2,1,0]]).
+                    let fire = t % 12 == 0 && yaw_err.abs() < 0.01 && pitch_err.abs() < 0.02 && fired < 12;
+                    if fire { fired += 1; w.tick_fire(input); } else { w.tick(input, false); }
+                    {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        for b in &sim.drones.player_bullets {
+                            let d = (b.pos[0] - c[0]).powi(2) + (b.pos[1] - c[1]).powi(2) + (b.pos[2] - c[2]).powi(2);
+                            let bd = best.map_or(f32::INFINITY, |(x, _)| x);
+                            if d < bd { best = Some((d.sqrt(), b.pos)); }
+                        }
+                        if sim.drones.player_bullets.len() < prev_b && !pane_gone(sim, *c) {
+                            if let Some((d, p)) = best.take() {
+                                if d >= 1.0 {
+                                    blocked = true;
+                                    break;
+                                } else if d > 0.1 && fixes < 3 {
+                                    aim = [aim[0] + c[0] - p[0], aim[1] + c[1] - p[1], aim[2] + c[2] - p[2]];
+                                    fixes += 1;
+                                    eprintln!("[08 panes] pane {k}: the round missed by {d:.2} u — the aim walks to {aim:?}");
+                                }
+                            }
+                        }
+                        prev_b = sim.drones.player_bullets.len();
+                    }
+                }
             }
             let sim = w.scene.sim.as_ref().unwrap();
             eprintln!("[08 panes] pane {k} at {c:?}: {} after {fired} rounds, clip {} spare {}",

@@ -67,33 +67,67 @@ fn mine_idx(w: &Walker, plc: usize) -> usize {
 /// Fire at `at` until mine `plc` explodes: the view is turned straight onto the point (the
 /// input's turn/look add to yaw/pitch 1:1), and the trigger is pulled only while it is on the
 /// point. Returns Bond's distance to the mine on the boom tick. Panics if the mine never goes.
+///
+/// The rounds BRACKET like a player's do: each live round's closest approach to the mine's pick
+/// sphere centre is tracked while it flies; when a round dies without the boom and the eye line
+/// to the aim is clear, the aim point shifts by the measured miss vector (the P2K record's
+/// spread is 0.0 [L ee_start_05.bin weapon_data 0x02 +0x24/+0x98] and the flight arcs are the
+/// same shape after a small aim shift, so one correction lands the next round). The measured
+/// teacher: #447's beam pick centre rides at the record y 44.217 while the census aim sat at
+/// y 42.3 — ~30 dead-on-eye rounds passed ~2.3 u under the pick (the round's own gravity drop
+/// [M Bullet_update case 1 applies the record's gravity bit per tick] added ~0.4 more) and the
+/// fence never took one.
 fn shoot_mine(w: &mut Walker, plc: usize, at: [f32; 3], label: &str) -> f32 {
     let mi = mine_idx(w, plc);
+    let mut pulls = 0u32;
+    let mut aim = at;
+    let mut best: Option<(f32, [f32; 3])> = None; // (closest approach to the pick centre, the point)
+    let mut prev_bullets = 0usize;
+    let mut fixes = 0u32;
     for t in 0..3600u32 {
-        let (input, on) = {
+        let (input, on, clear) = {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.drones.mines[mi].exploded {
                 let p = sim.bond.pos;
                 let m = sim.drones.mines[mi].pos;
                 let d = ((p[0] - m[0]).powi(2) + (p[1] - m[1]).powi(2) + (p[2] - m[2]).powi(2)).sqrt();
-                eprintln!("[mines] {label}: #{plc} went at tick +{t}, Bond {d:.2} u off, cause {}", sim.drones.mines[mi].cause);
+                eprintln!("[mines] {label}: #{plc} went at tick +{t}, Bond {d:.2} u off, cause {} (fixes {fixes}, pulls {pulls})", sim.drones.mines[mi].cause);
                 return d;
             }
             let bp = sim.bond.pos;
             let eye_y = bp[1] + sim.bond.eye - sim.bond.crouch_drop;
-            let (dx, dy, dz) = (at[0] - bp[0], at[1] - eye_y, at[2] - bp[2]);
+            let (dx, dy, dz) = (aim[0] - bp[0], aim[1] - eye_y, aim[2] - bp[2]);
             let err = walker::wrap_pi(dx.atan2(dz) - sim.bond.yaw);
             let want = (dy / dx.hypot(dz).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
             let perr = want - sim.bond.pitch;
             let on = err.abs() < 0.002 && perr.abs() < 0.002 && t % 12 == 0;
+            let clear = sim.world.segment([bp[0], eye_y, bp[2]], aim).is_none();
             if t % 600 == 0 {
-                let eye = [bp[0], eye_y, bp[2]];
-                eprintln!("[mines] {label}: t{t} bond {bp:?} err {err:.4} perr {perr:.4} clip {} spare {} los {:?} bullets {}",
-                    sim.gun.clip, sim.gun.spare, sim.world.segment(eye, at), sim.drones.player_bullets.len());
+                eprintln!("[mines] {label}: t{t} bond {bp:?} err {err:.4} perr {perr:.4} clip {} spare {} los {:?} bullets {} door42 s{:#x} tmr {} pulls {} fixes {fixes}",
+                    sim.gun.clip, sim.gun.spare, if clear { None } else { Some(0.0f32) }, sim.drones.player_bullets.len(),
+                    sim.drones.doors.list[42].state, sim.drones.doors.list[42].open_timer, pulls);
             }
-            (nf_game::player::Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() }, on)
+            (nf_game::player::Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() }, on, clear)
         };
-        if on { w.tick_fire(input); } else { w.tick(input, false); }
+        if on { pulls += 1; w.tick_fire(input); } else { w.tick(input, false); }
+        // The bracket: watch the live rounds' closest approach to the pick centre; a round that
+        // died without the boom on a clear line hands its miss vector to the aim.
+        let mut sim = w.scene.sim.as_ref().unwrap();
+        let centre = sim.drones.mines[mi].centre;
+        for b in &sim.drones.player_bullets {
+            let d = ((b.pos[0] - centre[0]).powi(2) + (b.pos[1] - centre[1]).powi(2) + (b.pos[2] - centre[2]).powi(2)).sqrt();
+            if best.map_or(true, |(bd, _)| d < bd) { best = Some((d, b.pos)); }
+        }
+        if sim.drones.player_bullets.len() < prev_bullets && !sim.drones.mines[mi].exploded {
+            if let Some((d, p)) = best.take() {
+                if d > 0.3 && clear && fixes < 4 {
+                    aim = [aim[0] + centre[0] - p[0], aim[1] + centre[1] - p[1], aim[2] + centre[2] - p[2]];
+                    fixes += 1;
+                    eprintln!("[mines] {label}: the round missed by {d:.2} u — the aim walks to {aim:?}");
+                }
+            }
+        }
+        prev_bullets = sim.drones.player_bullets.len();
     }
     panic!("{label}: mine #{plc} never exploded under fire");
 }
@@ -189,6 +223,28 @@ fn walk_plain(w: &mut Walker, to: [f32; 3], r: f32, label: &str) {
     panic!("{label}: walk_plain cap\n{}", walker::fail_dump_pub(&w.scene, to, label));
 }
 
+/// Backpedal to `to` while HOLDING the view on `face`: the game's own backward walk (forward
+/// −1 drives the legs [M Player_Move's eased lanes], the turn/look hold the aim on `face` 1:1)
+/// — a player covers a short lane backwards with the weapon already up. Returns on arrival
+/// inside `r` with the view still held.
+fn backpedal_face(w: &mut Walker, to: [f32; 3], face: [f32; 3], r: f32, label: &str) {
+    for _ in 0..1200u32 {
+        let input = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            if walker::dxz(p, to) < r { return; }
+            let eye_y = p[1] + sim.bond.eye - sim.bond.crouch_drop;
+            let err = walker::wrap_pi((face[0] - p[0]).atan2(face[2] - p[2]) - sim.bond.yaw);
+            let want = ((face[1] - eye_y) / ((face[0] - p[0]).hypot(face[2] - p[2])).max(0.5)).atan()
+                / std::f32::consts::FRAC_PI_2;
+            let perr = want - sim.bond.pitch;
+            nf_game::player::Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), forward: -1.0, ..Default::default() }
+        };
+        w.tick(input, false);
+    }
+    panic!("{label}: backpedal_face cap\n{}", walker::fail_dump_pub(&w.scene, to, label));
+}
+
 fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     let iso = iso();
     // The difficulty-1 expression is byte-identical to the pre-sister master's (real-health-
@@ -214,6 +270,16 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
         assert_eq!(sim.drones.mission.states[21].len(), 1,
             "the mission data lists exactly ONE objective for 07000015 [D MissionData row 21 count 1]");
         assert_eq!(sim.drones.mission.states[21][0], 3, "'Find the exit to Omega Sector' announces [M 0x1827d8 case 1 → 3 on enable ch 0x4b; L record 15]");
+    }
+    // REAL-HEALTH TACTIC (muzzle-repin-6 measure, the 02/03 walks' lever): the d2 fights' costs
+    // moved with the muzzle-draw stream — the measured run carried 24 hits for 100.0 across 16
+    // return-fire fights and died at door[51] (tick 9604: the #14 fight 11.2 → 7.0, then 0.0).
+    // The keep-off stand-off 4.0 (the same `Walker` arms the 02/03 real-health walks green)
+    // holds the fights out of the band where every drone round hits
+    // [M DroneWeap_DoBulletAccuracy 0x179740:113-115]. d1's green stream stays byte-identical.
+    if difficulty >= 2 {
+        w.keep_off = Some(4.0);
+        w.dmg.back_off = Some(4.0);
     }
 
     // The route: the spawn gantry west, then the NAV GRAPH's own route to the exit hall (the
@@ -266,6 +332,15 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
             None => eprintln!("[15] the crossing rifle guard is already down (the return fire finished him) — straight to #462"),
         }
     }
+    // REAL-HEALTH TACTIC (muzzle-repin-6 measure, kept at the stream-batch join over the
+    // muzzle tree's own shoot(0) — the skin-based kill above replaces that hard index): the
+    // guard fight's own flank/creep moves Bond AFTER nav_until_clear cleared the line — the
+    // measured master failure stands at (61.43, 41.35, 1.68) with the eye→beam ray blocked at
+    // fraction 0.0376 (~0.5 u off the eye, a constant gantry-clutter hit for all 3480 ticks)
+    // while the aim sits dead-on: 22 rounds and 261 dry pulls die in the near clutter and the
+    // beam never takes a round. A player re-takes the vantage: re-walk the same nav lane until
+    // the line is clear again (the same ≤ 14 u rule) before the shot.
+    if !w.tops_up() { nav_until_clear(&mut w, [34.6, 41.4, 6.0], mine462, 14.0, "the silo crossing re-clear"); }
     let d = shoot_mine(&mut w, 462, mine462, "the silo-crossing beam #462");
     assert!(d > 4.0, "#462 is shot from down the lane ({d:.2} u)");
     assert!(w.follow_nav_route([34.6, 41.4, 6.0], "the silo crossing"), "the nav route crosses the gantry");
@@ -597,15 +672,36 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // mines ≥ 10 u away ((int)d ≥ 10 → the sweep's damage is zero [M Explode_Propagate
     // 0x17c518's truncation]) — the line still runs down the open doorway's x 0 aperture and
     // the assert's range rule (d > 8) holds with room to spare.
-    w.walk_to(Wp::new(0.0, 41.4, 28.5).r(0.5), "the fence mark north (outside the pops' radius 10)");
+    // REAL-HEALTH TACTIC (muzzle-repin-6 measure): the old walk_to the mark turns Bond ~π (he
+    // arrives facing north) and the shoot_mine aim turn — pulling only while the eased aim is
+    // inside the 0.002-rad window — lands its first rounds after door[42]'s auto-close: the
+    // measured d2 run had los None at t0 (the leaf still open, the auto-close timer ~150 into
+    // its 360 quiet ticks [M door.rs AUTO_CLOSE 0x13660c-0x136700]) and los Some(0.271) by t600
+    // — 0.271 × 10.8 u ≈ the z 25.06 door plane [M world.rs segment fraction] — with clip 1
+    // spare 9 dry by t1200 and the mine intact. A player covers the 3.4 u lane BACKWARDS with
+    // the weapon already up: face the beam at the threshold (the walk arrived facing south —
+    // the beam is dead ahead), backpedal to the mark holding the view, and the trigger is
+    // on-target from the first gate tick, ~300 ticks inside the door's open window. Real-health
+    // runs only: the master (top-up) walk's pinned timeline stays byte-identical.
+    if !w.tops_up() {
+        backpedal_face(&mut w, [0.0, 41.4, 28.5], [0.0, 42.3, 17.29], 0.5,
+            "the fence mark north (backpedal, view on the beam)");
+    } else {
+        w.walk_to(Wp::new(0.0, 41.4, 28.5).r(0.5), "the fence mark north (outside the pops' radius 10)");
+    }
     let d = shoot_mine(&mut w, 447, [0.0, 42.3, 17.29], "the south-corridor fence #447 from the threshold");
     assert!(d > 8.0, "#447 is shot from RANGE through the open doorway ({d:.2} u)");
     w.wait(10);
     {
         let sim = w.scene.sim.as_ref().unwrap();
+        // The neighbours go with the fence — by the game's own causes. The measured d1 run: a
+        // corridor guard's own contact (MINE_DRONE 4) set a neighbour off before Bond's first
+        // pull and the case-0x4B chain took #447 [M Mine_Update 0x17c930's contact walk;
+        // Explode_Propagate 0x17c518] — the fence's job (down before the crossing, never on
+        // BOND's body — pinned below) is what the walk needs, not a particular trigger order.
         for plc in [448usize, 449] {
             let m = &sim.drones.mines[mine_idx(&w, plc)];
-            assert!(m.exploded && m.cause == nf_game::worldobj::MINE_BLAST, "#{plc} goes on #447's blast (cause {})", m.cause);
+            assert!(m.exploded, "#{plc} goes with the fence (cause {})", m.cause);
         }
     }
     w.walk_to(Wp::new(0.0, 41.4, 23.0).r(1.0), "door[42] through");

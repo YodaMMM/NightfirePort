@@ -271,7 +271,11 @@ fn rifle_guards_hit_as_often_and_as_hard_as_the_chain() {
                 let Some(t) = measured("07000002.bin", diff, dist, weapon) else { eprintln!("[acc] {weapon:#x} diff {diff} d {dist}: no corridor"); continue };
                 report(&format!("02 {weapon:#x} diff {diff} d {dist}"), &t);
                 assert!(rolls_match(&t, 0x0700_0002, diff), "{weapon:#x} diff {diff} d {dist}: {} rolled of {} shots", t.rolled, t.shots);
-                assert!(t.hits <= t.rolled + 1, "{weapon:#x} diff {diff} d {dist}: {} hits from {} rolled — misses are landing", t.hits, t.rolled);
+                // +2, not +1: a rolled miss still flies its wobble-offset bullet [M 0x178f68:233-241 —
+                // the FireWeapon loop runs whatever the roll], a live round that can clip Bond's
+                // boxes (the fx-muzzle-and-trail stream realization did at 20 u). The old +1 was
+                // calibrated on the pre-fix stream.
+                assert!(t.hits <= t.rolled + 2, "{weapon:#x} diff {diff} d {dist}: {} hits from {} rolled — misses are landing", t.hits, t.rolled);
                 assert!(t.hits + 3 >= t.rolled, "{weapon:#x} diff {diff} d {dist}: only {} of {} rolled hits landed", t.hits, t.rolled);
                 for &d in &t.damage {
                     let ok = [1.0f32, 2.0].iter().any(|m| (d - raw * m * dmod(&t02, diff)).abs() < 1e-4);
@@ -343,10 +347,16 @@ fn measured_regular(level: &str, diff: u32, dist: f32, weapon: u32) -> Option<Ta
 /// stats [M 0x179740; L drone_stats] and are pinned at the measured deterministic value ± max(2, 20%).
 /// The diff-3 5-u cell is 24 since the placement stats met master's sight changes (the shared stream
 /// moved; 26 of 42 shots rolled a hit against p = 60 %, the old 32 was the upper tail of the same p).
-/// The gas-init draws re-land on the SAME shared stream (gas-rng-draws-2/3: Gas_Init 0x1aacc8:72-80
-/// draws Rand_Rand/FRand 0x1e3738/0x1e3780, the ONE seed pair every gameplay draw shares), so the
-/// guards' burst timings shifted again and two 0x12 cells re-measured outside the old ± tails:
-/// diff 1 d 5 = 8 (was 15), diff 2 d 5 = 25 (was 17) — same p, different draw order [M 0x1aacc8].
+/// The fx-muzzle-and-trail stream (the guard's per-shot muzzle-flash draws, live-confirmed on
+/// 07000005) moved the realization again: the 0x12 diff-1 cells re-measured 11/10/17 (5/10/20 u),
+/// diff-2 d 20 re-measured 17, the 0x0e diff-1 cell 3 (all against the decomp's own chance —
+/// `rolls_match` holds); the pins are the corrected-stream realizations. Kept at the stream-batch
+/// join over the gas-model pins (gas-rng-draws-2/3 measured ~03:35 UTC) because the muzzle pins are
+/// the more recent measurement (11:09 UTC); the joined tree carries both lever families and re-pins
+/// from its own run.
+/// Sister note from the gas model (gas-rng-draws-2/3: Gas_Init 0x1aacc8:72-80 draws
+/// Rand_Rand/FRand 0x1e3738/0x1e3780, the ONE seed pair every gameplay draw shares) — that model
+/// re-measured diff 1 d 5 = 8, diff 2 d 5 = 25; the joined tree supersedes both.
 /// Sister: the old chain (accuracy 5, aggression 0, the pistol at ×1) — its 0x12 cells landed
 /// 8/2/7/11/16/16 at 5/20 u (60 in all) and its 0x0E hits cost half — fails the totals and the per-hit.
 #[test]
@@ -354,10 +364,10 @@ fn hits_per_10s_and_damage_per_hit_are_pinned() {
     if iso().is_none() { eprintln!("NF_ISO not set — skipping"); return; }
     // (archive, level, weapon, raw × +0x100, diff, dist, pinned hits / 10 s)
     const PINS: &[(&str, u32, u32, f32, u32, f32, usize)] = &[
-        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 5.0, 8), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 10.0, 11), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 20.0, 9),
-        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 5.0, 25), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 10.0, 21), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 20.0, 10),
+        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 5.0, 11), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 10.0, 11), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 20.0, 17),
+        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 5.0, 17), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 10.0, 21), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 20.0, 17),
         ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 5.0, 24), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 10.0, 24), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 20.0, 20),
-        ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 1, 5.0, 0), ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 2, 5.0, 3), ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 3, 5.0, 3),
+        ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 1, 5.0, 3), ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 2, 5.0, 3), ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 3, 5.0, 3),
         ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 1, 5.0, 0), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 1, 10.0, 1), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 1, 20.0, 0),
         ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 2, 5.0, 0), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 2, 10.0, 1), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 2, 20.0, 0),
         ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 3, 5.0, 0), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 3, 10.0, 2), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 3, 20.0, 1),
