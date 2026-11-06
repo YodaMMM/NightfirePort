@@ -536,3 +536,16 @@ None", anim_events, tase_silent) across stream-batch-5's removal of the re-acqui
 and the spawn-pick merge; then the 0x5c follow wedge (the d2 stall), then non-walk reds, then
 the walks (real damage, Agent, 00 Agent; ignore with a measured reason only for 00 Agent walks;
 no [L] pin loosening, no walk-driven game code).
+- (21:50) BISECT DONE, 7 binaries, --test-threads=1, real ISO. batch-3 659429d32: ALL GREEN
+  (37/5/4/1/4/9/2). batch-4 tip 95772586e, batch-5 pre-AI 15e02952c, the joined tip: the SAME
+  16 reds — so 116695f5a (the re-acquire exit removal + the scoped ray) is CLEARED. Inside
+  batch-4: the spawn-pick merge 369c1b33e red; its ancestry → 29c667a30 (the dart-stamps base)
+  GREEN; c4b2d38ce (the spawner pick draws Rand_Rand over the WHOLE template list [M
+  0x137cb0:19, :31-56]) turns spawner_kill 2/7 red — **spawner_kill's 7 = c4b2d38ce**;
+  f1f37ba47 (the spawn-chain draws [M 0x14b300:382-461] + the dart Tower stamp block [M
+  0x1469b8:331-357]) turns ai_live/anim_events/guard_barks/guard_reaction/guard_side_gates/
+  tase_silent red — **the other 10 = f1f37ba47**. Both commits' draws VERIFIED against the
+  decompile this session (draw counts + order per param-14 class; the pick rank walk; the
+  wobble stamp after CreateObj): game-shaped [M]. The red tests pin the PRE-port (draw-less)
+  stream — stale pins over the game-correct one; several asserts cite live traces, so re-pins
+  need live re-measurement (the driver's [L]-pin rule).
