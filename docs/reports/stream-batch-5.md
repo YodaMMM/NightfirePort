@@ -113,3 +113,10 @@ start_corridor + mayhew_hold + fix_npc_doors above are the grep-derived consumer
 ## Usage
 
 not visible to me
+
+## ntfy
+
+Fallback 1 `curl` → `curl: (28) Connection timed out after 15001 milliseconds`, exit 28.
+Fallback 2 python urllib → `URLError: <urlopen error [Errno 101] Network is unreachable>`.
+Fallback 3 `wget -q -O- --post-data "stream-batch-5: done" https://ntfy.sh/nightfire-yoda-8k3x`
+→ exit 0 (silent; the delivery path that worked for stream-batch-4).
