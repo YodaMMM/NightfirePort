@@ -203,16 +203,28 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
         eprintln!("[0d] the strip kills: perch dead {} pool {:.1} -> {:.1}", perch_dead, health_before_kills, h);
         assert!(h > health_before_kills - 48.0, "the strip kills must not eat the pool, {health_before_kills} -> {h}");
     }
-    // The blind strip transit (zero-hit while moving in every run — the wedge + the moving
-    // target): the drop point → the ladder base along z −228..−235. THE #10 KILL rides the
-    // transit (level-0d-real-health-crossfire-3, the driver's lever "take #10 before the climb
-    // shots"): at the leg-2 stand (196, −228.5) — exactly where the transit already pauses —
-    // probe_0d_ray_stands reads the eye→chest ray to the bay guard #10 (placement (214.21,
-    // 12.09, −289.44), woken with the platform-drop group [L probe part E]) CLEAR at d 63.6,
-    // while EVERY other shooter's ray to the stand stays blocked (g16 0.881, g18 0.521, the
-    // roofs 0.83-0.86, the canopy pair 0.56). #10 never fired on the moving transit (zero-hit in
-    // every run) — the stand is the same line. A player stops at the strip mouth and takes the
-    // bay guard out through his own sight line before climbing into it.
+    // The blind strip transit (guard-repin-master-2 item 3: the ZERO-HIT promise is retired —
+    // the game's own measurement says the strip is NOT a zero-hit lane). Measured in PCSX2 on
+    // 0700000d, Bond held at (208.62, 1.04, −229.64) for 45 s: 14 hits on Bond, and single
+    // rounds crossing class 0x1d objects at (163.9, 7.2), (173.9, 6.2), (189.5, 4.6), (200.1,
+    // 3.6) and flying on along one line [L the PCSX2 hold + the round-line dump] — the bay
+    // rounds pass the glass intact and the strip takes real fire. The port's budget for this
+    // lane: the moving transit (#10 never fired on the moving transit in the port's runs, but
+    // the bay snipers #10/#18/#32 do plink it — the d1 death at tick 2627 took 16.0 × 4 from
+    // #16 d 36.8 and #18 d 61.2 [L the guard-repin-master ledger]) may cost up to ~35 of the
+    // pool before the ladder base; the walk's own budget assert (the strip-kills guard above)
+    // is the lane's real budget line. The old "zero-hit while moving in every run" reading was
+    // the glass-shield property of the PRE-radii branch (the guards' rounds died on the panes),
+    // not the game's law.
+    //
+    // The strip-mouth #10 kill (the 180-tick dwell below) itself needs a look: 600 ticks of
+    // converged, ray-CLEAR shots at d 63.6 scored ZERO — the walker's aim-bit zero-spread act
+    // [M Bullet_init 0x12c5a0:139-170] converged on the guard's box centre from (196, −228.5)
+    // and no round landed, while probe_0d_ray_stands reads the eye→chest ray CLEAR. If the
+    // guard's hit boxes sit elsewhere than his world position says (the radii work may settle
+    // him off his placement (214.21, 12.09, −289.44) [D]), that is a game-code bug, not a walk
+    // problem — the live check for the main agent stands (read Drone+0x8EC, the state and the
+    // hit_boxes world position vs the placement while the player stands at the strip mouth).
     for (at, r, label) in [
         ([188.0f32, 0.5, -228.0], 2.0, "the blind strip east 1"),
         ([196.0, 0.5, -228.5], 2.0, "the blind strip east 2"),

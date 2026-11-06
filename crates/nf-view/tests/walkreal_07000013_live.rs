@@ -373,6 +373,10 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // cel crosses 21→28 through the stateful relink's portal arm (Cel_ObjectLeftCel 0x1e0d58)
     // and the room's own floor (cel 28's bucket) holds him.
     w.walk_to(Wp::new(5.0, -368.4, 26.5).r(1.5), "13: the lobby east lane");
+    // guard-repin-master-2 item 2, MEASURED-AND-DROPPED: an east-lane-leg-end sweep here stood
+    // Bond in the lobby's open mouth and the crossfire killed the walk at tick 1384 (34 hits
+    // for 79.0 mid-sweep) — the leg end is a killing floor, not a stand. The budget lever that
+    // stands is the north-west sweep below (the death moved 3006 → 3472 with it).
     // guard-repin-master re-anchor: the west-mid leg's return-fire fights (the north-lobby
     // shooters) displaced Bond SOUTH of the lane line into the lobby pocket at (0.60, −368.30,
     // 25.66) — the guards' per-goal arrival radii [M 0x152548:174-181] close the pursuit to
@@ -405,6 +409,15 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         clear_the_visible(&mut w, "13: the lobby west mid", 24.0);
     }
     w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west");
+    // guard-repin-master-2 item 2 (the lobby budget): the west-mid sweep's spot moved WEST/NORTH
+    // to this leg end — the measured red reached the security room at 21 hp with #5 (skin
+    // 0x5000004 at (−14.8, −368.4, 45.6)) having landed 28.0 in 8 hits across the re-anchor +
+    // west-mid legs, and #8's point-blank 31.5 finished exactly that. From here #5 is d ~5.6
+    // at his own post; the ray-gated sweep takes whoever's boxes open from the lobby's
+    // north-west lane before the room legs spend the budget.
+    if real_damage && difficulty == 3 {
+        clear_the_visible(&mut w, "13: the lobby north-west", 24.0);
+    }
     w.walk_to(Wp::new(-22.0, -368.4, 39.5).r(1.5), "13: past the glass band");
     w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: at the security-room door");
     w.walk_to(Wp::at(-26.65, -368.36, 37.44, walker::Act::Use { use_ticks: 90 }).r(1.4), "13: E the security-room door");

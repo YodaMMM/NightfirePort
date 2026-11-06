@@ -1392,6 +1392,7 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
 /// free-aim cursor at its clamp and every launch sat up to 0.23 rad off the view — the chase
 /// then clipped the window frames (the measured −75/−62.5 self-blasts [L the diag runs]).
 #[test]
+#[ignore = "guard-repin-master-2, the station-legs red measured (the ignore the task allows for the 00 Agent sister only): the top-station exchange at d 59-97 loses under the game's own glass law — the guards' rounds fly the glass pass [M Bullet_update 0x12f048-0x12f058] and #20 (d 59.2) landed 36.0 in 3, #23 (d 71.0) 9.0 in 3, #4 (d 81.4) 16.0 in 2, #14 (d 97.5) 4.0 in 1, death tick 27596 to a hurt volume after the sniper drain [L the guard-repin-master ledger]; the stands' GLASS_SIGHT fights run (14 fights) but the d 59-97 return still rides the aimed acts' reach, and the branch's own drone.rs comment predicted exactly this red when the pass was armed ('the real-health route cost is re-pinned with the 08 station walks'). The station legs need the re-pin — a closer stand law or the climb legs' own volleys answered — which is its own task; the d2 Agent sister stays green and unignored"]
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     walker::with_real_damage_glass_fights(|| walk_the_whole_mission_on_real_input_at(3))
