@@ -147,14 +147,32 @@ fn the_laser_cuts_the_visible_cables() {
         {
             let sim = scene.sim.as_mut().unwrap();
             let b = &sim.bond;
-            let eye = [b.pos[0], b.pos[1] + b.eye, b.pos[2]];
+            // THE SHOT'S RAY RUNS FROM THE HEAD [M Player_WeaponInitBullet 0x1a4bf0:152-159 —
+            // Player_GetHeadPos through Player_GetAimingPoint], not the eye: the head sits 0.45
+            // under the eye, and an eye-anchored aim pitched the crosshair 0.26 rad below the
+            // cable (the measured beam crossing y -1.056 vs the slab's -0.728..-0.503). The
+            // fusebox_06 burn_wire aims from the head.
+            let eye = b.head();
             let d = [aim_t[0] - eye[0], aim_t[1] - eye[1], aim_t[2] - eye[2]];
             let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
-            let yaw = d[0].atan2(d[2]);
-            let pitch = (d[1] / len).asin() / std::f32::consts::FRAC_PI_2;
-            let ye = wrap(yaw - b.yaw).clamp(-0.08, 0.08);
-            let pe = (pitch - b.pitch).clamp(-0.08, 0.08);
-            sim.step_bond(nf_game::player::Input { turn: ye, look: pe, aiming: true, ..Default::default() }, true, false, false);
+            // THE PLAYER'S AIM IS THE VIEW: the crosshair goes on the cable by moving the view
+            // (bond.yaw/pitch — the same set the door E-press uses above), NOT by steering
+            // through aim-mode inputs. With `aiming: true` the pad's free-aim cursor absorbs the
+            // per-tick turn/look (scene.rs step_bond: the cursor window ±0.296/±0.4, the view
+            // only turns past its edge) — the loop's per-tick look error saturated the cursor at
+            // [-0.296, +0.4] within 60 ticks and the crosshair rode the cursor's west-up offset
+            // (~0.228 rad west) for every shot after: the measured beam crossing landed at
+            // x ≈ -89.75 with zero wire contacts, the "west-up bend" the previous session
+            // documented. aim_offset's ease follows the cursor, so the input path cannot
+            // converge here; the direct view set converges in one tick (the fusebox_06
+            // burn_wire's pattern, and interactables' wire_aim_point aim).
+            sim.bond.yaw = d[0].atan2(d[2]);
+            sim.bond.pitch = (d[1] / len).asin() / std::f32::consts::FRAC_PI_2;
+            // HIP fire (the fusebox_06 burn_wire pattern): with the aim bit set the laser's raise
+            // script holds the view pitch at the pre-aim value for the raise's whole play — the
+            // measured shots kept pitch 0.100 (the walk's value) through 900 set-ticks and the
+            // crosshair aimed 0.26 rad BELOW the cable. The hip shot's dir is the view itself.
+            sim.step_bond(nf_game::player::Input::default(), true, false, false);
         }
         // The newest round's miss against the slab centre shifts the aim.
         let miss = {
@@ -192,8 +210,7 @@ fn the_laser_cuts_the_visible_cables() {
         };
         if let Some(d3) = miss { for k in 0..3 { delta[k] = (delta[k] + d3[k]).clamp(-0.8, 0.8); } }
     }
-    let sim = scene.sim.as_ref().unwrap();
-    {
+    let sim = scene.sim.as_ref().unwrap();    {
         let d = &sim.drones.doors.list[di];
         let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
         if let Some(tris) = sim.data().world.shape(d.glist) {
