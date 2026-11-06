@@ -113,6 +113,17 @@ the port now runs the same arm — the poke tests prove it at the two measured s
    touched; a live check whether SP drones visibly re-appear after a strip fall would pin
    whether a follow-up drone task is warranted.
 
+## ntfy failed
+
+All three fallbacks, in order, with their exact output:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "void-recovery: done — ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'void-recovery: done', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "void-recovery: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out after 30 s, killed (no output).
+
 ## Usage
 
 not visible to me — this environment shows no token, credit or context-window figures for the session.
