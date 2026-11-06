@@ -42,7 +42,10 @@ Callers: CombatNoRoute's timer (both setters, `+0x5A2` unchanged), SearchArea gi
   `+0x514` = 0.01 · loudness, alertness += it; the loudest sound's position becomes the alert target and msg 0x14 is
   sent (at most once a second unless louder).
 - `DroneVision_AlertSound` (0x177800): ignored more than 50 units from the opponent (the player) or when already
-  attacking; normal guards → HeardNoise 0xA2 when `+0x514` > 0.2 or alertness > 0.66.
+  attacking; the sighted gate — `+0x4F8 & 0x4000000` set → 0 [M :48-50] — stands before the mode rows, so a guard
+  that already sighted never falls through to HeardNoise on a sound; normal guards → HeardNoise 0xA2 when `+0x514` >
+  0.2 or alertness > 0.66. The alarm (EnemyAlerts case 0x1e [M 0x177c18:107-118]) keeps its own gates (the mode rows
+  and the bot arm) with no 0x4000000 check.
 - Chain: HeardNoise 0xA2 → Aware 0xA3 (first time: look around 0x22, back to `+0x5A0`) → Suspect 0xA4 (route to the
   sound with radius 2.0; turn (0x61) if more than 135° away; prop 0x21 → AlertToPosition 0x62 then SearchArea 0x65) →
   Alert 0xA5 (face the opponent → Attack). Any further msg 0x14 in Suspect → Attack. The noise level `Drone+0x43`
