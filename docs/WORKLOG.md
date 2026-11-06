@@ -587,3 +587,12 @@ no [L] pin loosening, no walk-driven game code).
   2 (the SG5 burst pin, the UnderCoverAim 90-vs-37 window), tase P2K-hearing (the only
   headroom witness at 0.00 rise — live measurement wanted). The walk lane not reached;
   no ignores added. Full suite did not fit; every named binary ran whole.
+
+## stream-batch-8 (2026-11-07, UTC)
+
+Branch `s/stream-batch-8` off `origin/s/stream-batch-7b` (d725c4855). Plan: merge
+`origin/master`, then `origin/s/bullet-pass-water`, then `origin/s/level-gates-world`
+without its Player_Move x0.9 change; run the full suite; then fix the listed red set —
+non-walk binaries first with a named cause each, then plain walks, real damage, Agent,
+00 Agent (ignore with a measured reason allowed for 00 Agent walks only). Checkpoints
+pushed as each merge and each fix lands.
