@@ -68,8 +68,17 @@ fn iso() -> Option<String> {
 // parents' game-faithful changes ride in one stream; the machines' per-tick hashes still agree.
 // gas-guard-repin re-pin pending: the master merge (water splash/wading, sighted alert fold)
 // rides the same stream — re-measured below after the merge, see the digest update.
+// stream-batch re-pin (2026-11-06, the joined gas+guard+muzzle tree): 0x986f_90e8_e5d6_b12f →
+// 0xbbb6_911c_6656_9440. Attribution: the run is fixed-input deterministic (2 humans' scripted
+// walk + 14 NEUTRAL bots, fixed 60 Hz, no wall clock), so any sim change moves the fold; the
+// only sim changes this merge carries are the three lever families — the gas init draws [M
+// Gas_Init 0x1aacc8:72-80 + the kind-7 wind 0x1ab138-0x1ab1c8], the guard muzzle-flash
+// orientation draws [M DroneWeap_FireWeapon 0x178f68:189-213] and the guard arrival-radii/glass
+// levers [M 0x152548:174-181] — and the MP arena exercises all three (bots fire, smoke pops,
+// guards/bots use the shared arrival radii). The kills path still runs (35 kills, the sister
+// asserts hold); the pin moves, the pin's job (catching an UNintended change) is intact.
 /// The 2-humans + 14-bots fixed run's hash fold; the pin's job (catching an UNintended change) is intact.
-const PINNED_DIGEST: u64 = 0x986f_90e8_e5d6_b12f;
+const PINNED_DIGEST: u64 = 0xbbb6_911c_6656_9440;
 
 const TICKS: u32 = 3600;
 
