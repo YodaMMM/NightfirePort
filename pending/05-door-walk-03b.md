@@ -9,6 +9,3 @@ Fix that one walk test-side. The reroute changed the fight order, so read its de
 Also say whether Bond falling out of the world needs a game fix: the report says he fell to y -62000 off the route. Where did he leave the geometry, and could a player do the same? Give the exact spot; do not fix it here.
 
 Finish with the whole 03 binary.
-
----
-claimed-by: sandbox1 at 2026-11-06T16:35Z
