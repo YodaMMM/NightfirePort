@@ -396,7 +396,92 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         // drops (the kill-loot cycle) — the fights shorten with every kill.
         clear_near(&mut w, 9.0, "the servants' ground");
         loot_the_drops_03(&mut w, "the servants' ground");
-        w.walk_nav_to([at[0], at[1] - 0.3, at[2]], &format!("servant {si}"), 1.7);
+        if difficulty >= 3 && si == 0 {
+            // 00 Agent (real-health-00agent-02-03-4): the direct servant-0 nav wedges (run 1:
+            // (25.26,5.45,-1.89), node (22.85,4.74,-3.66), d 2.99, segment clear) and the nav's
+            // OWN re-derivation walks the north wing — into the point-blank shotgun post (#5
+            // (22.8,6.3,9.8) d 2.3: 3x7.2 pellets a volley, 31.6 in 8 hits; #4/#3 at (25,14.8))
+            // — Bond died at t222034 with 36.4 -> 0 in ~90 ticks, too fast for any fight to
+            // answer. The d1 run's nav takes the EAST line instead (its first node (34.95,-4.07),
+            // the door-8 side) and only wedges AT door 8 (35.6,6.5,2.7), which is survivable. A
+            // player denied the ambush backs off EAST and re-takes the line: sidestep east,
+            // retry the walk — each retry re-derives from further east, and the north wing is
+            // never entered. If both retries wedge, skip (the d1 pattern: the rescue can
+            // complete through the early save while the walk stands off).
+            let servant_at = [at[0], at[1] - 0.3, at[2]];
+            let near = |w: &Walker| walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, servant_at) < 4.0;
+            // The door-state dump (real-health-00agent-02-03-4): the d1 nav takes the east line
+            // (first node (34.95,-4.07)) and the d3 nav the north wing from the SAME plate stand
+            // — the web's cross-path hops run move_test against the world, doors included
+            // [M walker.rs nav_route_global], so a leaf's state flips the route. Dump every door
+            // near Bond at this leg's start.
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                for (di, dr) in sim.drones.doors.list.iter().enumerate() {
+                    if walker::dxz(dr.pos, bp) < 14.0 {
+                        eprintln!("[03] door {di} at ({:.1},{:.1},{:.1}) state {:#x}", dr.pos[0], dr.pos[1], dr.pos[2], dr.state);
+                    }
+                }
+            }
+            // OPEN THE EAST-LINE DOORS FIRST (run-4 dump [L]: doors 4/5/6/9/10 all read CLOSED=2
+            // [M door.rs] at this stand — the nav's cross-path hops move_test the world, doors
+            // included [M walker.rs nav_route_global], so the d3 web detours north into the
+            // shotgun post; the d1 web's east corridor was open). Walk each door's centre — the
+            // walk's E arm opens it and steps through the threshold — then the nav re-derives
+            // with the line open.
+            for (dp, lbl) in [([26.6f32, 5.9, -14.6], "door 6"), ([32.2, 5.9, -13.3], "door 9")] {
+                w.walk_to(Wp::new(dp[0], dp[1], dp[2]).r(1.3), &format!("servant 0: open {lbl} (the east line)"));
+                w.lenient = true;
+            }
+            // THE CORRIDOR PRE-CLEAR (run-5/6 lesson): the door E-noise pulls the cluster in —
+            // run 5/6: #2 (the captor, 0x5000038 shotgun) closed to (29.1,6.2,-13.1) d 3.4 and
+            // #19 (0x500003a) at (27.2,-13.5) d 1.8 engaged the door-9 walk and the exchange
+            // cost 34.0 (36.4 -> 2.4) before the fights killed #2. A player clears the corridor
+            // from the doorway BEFORE stepping in: hp-ascending, real fire, the resupply retry —
+            // the -3's rally pre-clear pattern, moved to the corridor the routes gave them.
+            {
+                let escorts: Vec<usize> = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let mut es: Vec<(f32, usize)> = sim.drones.list.iter().enumerate()
+                        .filter(|(_, d)| d.present && !d.corpse && d.health > 0.0 && d.team == 1
+                            && walker::dxz(d.pos, [27.5, 6.2, -13.3]) <= 6.5)
+                        .map(|(i, d)| (d.health, i)).collect();
+                    es.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    es.into_iter().map(|(_, i)| i).collect()
+                };
+                for gi in escorts {
+                    let (alive, gp, hp) = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let g = &sim.drones.list[gi];
+                        (!g.corpse && g.health > 0.0, g.pos, g.health)
+                    };
+                    if !alive { continue; }
+                    eprintln!("[03] corridor guard #{gi} at ({:.1},{:.1},{:.1}) hp {hp:.1} — pre-clear", gp[0], gp[1], gp[2]);
+                    if !w.shoot(gi, &format!("servant 0 corridor guard {gi}")) {
+                        if w.resupply("corridor ammo") {
+                            w.shoot(gi, &format!("servant 0 corridor guard {gi} (retry)"));
+                        }
+                    }
+                }
+            }
+            // The EAST anchor first (the d1 run's own first node (34.95,5.68,-4.07) [L the d1
+            // ledger]): from it the servant is a 4.4-u hop south-west and the nav has no north
+            // option left. The north wing is the ambush (#5's point-blank shotgun post).
+            w.walk_nav_to([34.95, 5.9, -4.07], "servant 0 east anchor (the d1 line)", 1.6);
+            w.walk_nav_to(servant_at, "servant 0", 1.7);
+            for round in 0..2 {
+                if near(&w) { break; }
+                let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+                w.walk_nav_to([bp[0] + 2.5, bp[1], bp[2] + 1.5], &format!("servant 0: the east sidestep {round} (the wedged nav's ladder)"), 1.2);
+                w.walk_nav_to(servant_at, &format!("servant 0 (after the east sidestep {round})"), 1.7);
+            }
+            if !near(&w) {
+                eprintln!("[03] servant 0: the east sidesteps wedged too — standing off (the early-save path)");
+            }
+        } else {
+            w.walk_nav_to([at[0], at[1] - 0.3, at[2]], &format!("servant {si}"), 1.7);
+        }
         let sim = w.scene.sim.as_ref().unwrap();
         let d = &sim.drones.list[si];
         assert!(!d.corpse, "servant {si} alive when Bond arrives");
