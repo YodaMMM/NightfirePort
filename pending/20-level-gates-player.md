@@ -7,6 +7,3 @@ Your set: every `Player_*`, `Bullet_*`, `Gun*`, `Weapon*`, menu and HUD function
 Start with these two, already confirmed missing:
 1. `Player_Move` 0x191dd0:139-141: on 07000007 with channel 0x48 clear the move scale is x0.9. Read which axes it reaches. This changes how walking feels, so keep it in its own commit and say so; it will not merge without a hands-on check.
 2. `Player_CollisionHandler` 0x1949a8:104-108: on 07000012, below y -10, channel 0x7c is set. Find what reads 0x7c.
-
----
-claimed-by: sandbox3 at 2026-11-06T13:33Z
