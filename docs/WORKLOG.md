@@ -134,3 +134,19 @@ solar_panel_hits, fusebox_geometry_07000014, interactables_07000014; then walkre
 
 Progress log:
 - Branch cut + WORKLOG; pushed.
+- The node-rule hypothesis FALSIFIED [D]: the 08 shutter leaves' collision bytes are
+  {3:52, 4:64, 10:146} (Shutter_1/3) and {16:18} (Shutter_2) — no byte carries 0x40; the
+  glist words 0x0/0x201 have no 0x60; the walk's pass sources (the node word, the surface
+  byte 0x40/0x80, the glass class, obj+0xF0 & 0x60) are ALL quiet on the shutters, yet [L]
+  the round passes with the object in the chain. The stand-in stays; the live check (the
+  shutter object's runtime obj+0xF0 + the walked node's +0x51 during a pass shot) goes to
+  the report. The walk's loop decoded [M 0x12d800-0x12d810]: a passed node sets state 1
+  and continues; the first non-passed node exits with its state-2 verdict.
+- The mask gate + the cel-linked doors LANDED in the aim ray; glass08 3/0, stop_plane08
+  4/0 green (last session's red was the f0-based bullet_pass, not the snap).
+- The fusebox_geometry test walks the player's route: the door stance (the model test's
+  dpos+(0,0.6,1.6) pattern), the E press via step_bond's 4th arg opens the leaf (state
+  0x8 -> 0x4, standing open at the stance), the walk out to the pinned spot. The cut stays
+  red: the beam bends west-up off the wire slab (the posed centre (-89.41, -0.62, 30.89),
+  the round crossing at x -89.75) — the snap's posed-glist west shift, the stage report's
+  documented pivot question. interactables' rewrite not started (the same blocker).
