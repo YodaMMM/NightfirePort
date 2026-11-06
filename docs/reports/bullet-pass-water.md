@@ -139,3 +139,17 @@ bullet query; the census this task re-ran: 1054 pass-flagged water tris on 02, a
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks, in order, with their exact output:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "bullet-pass-water: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'bullet-pass-water: done …', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "bullet-pass-water: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → killed at the 30 s shell timeout with no output (no response; the connection never opened).
+
+github.com pushes worked throughout (the branch and the queue are up), so the failure is
+ntfy.sh-specific egress from this sandbox, not general connectivity.
