@@ -109,7 +109,11 @@ walkreals 44/17/7.**
 
 not visible to me
 
-## ntfy
+## ntfy failed
 
-sent via wget (curl timed out exit 28; python urllib Errno 101 — the same two failures every
-batch this stream).
+Fallback 1 `curl -sS -m 20 -H "Title: NightfirePort" -d "stream-batch-6: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+→ `curl: (28) Connection timed out after 20002 milliseconds`, exit 28.
+Fallback 2 python urllib → `URLError: <urlopen error [Errno 101] Network is unreachable>` (the
+same failure the void-recovery-2 window recorded).
+Fallback 3 `wget -q -O- --timeout=20 --post-data "stream-batch-6: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+→ exit 4 (network failure), no body. All three failed this window.
