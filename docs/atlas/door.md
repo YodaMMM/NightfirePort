@@ -151,8 +151,10 @@ Door_Activate(obj, player, from_E) [M]:
 - busy `ext+0x70 & 0x10` → return 0;
 - lock channel defined and `ch[lock] == 0` and `state & 0x12` (closed family) →
   `Sound_Play3D(ext+0x64)` (locked sound) + return 0 (decomp :53-61, :83-87);
-- ext+0x76 one-sided direction memory block (dot of player−door vs the door's facing;
-  can refuse with the locked sound);
+- ext+0x76 one-sided direction memory block (dot of door−player vs the door's facing
+  [M 0x135be0:71-74, `_vsub(door+0xc0, act+0xc0)` — the old player−door read here mirrored
+  both refusals; fixed by sound-gates-sweep 2026-11-06]; mode 1 refuses dot<0, mode 2 dot>0,
+  a pass clears the byte; can refuse with the locked sound);
 - **kind 0 (swing)**: anti-crush — RotPreTransVec of the player's position into the closed-pose
   matrix; aborts the close (busy only) when the player is within obj+0x8C of the swing plane
   (decomp :98-133, disasm 0x135d90-0x135e30); otherwise toggles: closed family →

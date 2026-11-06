@@ -221,6 +221,25 @@ fn hostage_dead_is_a_corpse_that_fades_after_ten_seconds() {
     assert!((580..=620).contains(&t), "the fade lands on the 600-tick timer [M 0x172628:22], got {t}");
 }
 
+/// `NDrone2_DSTATE_HostageSaved` 0x15ccf0:20-21 [M]: the state's ENTER posts `Music_Event(0x10, 1)`.
+/// The port's state arms have no `Music` access, so the cue rides the `music_reqs` outbox and
+/// `Drones::tick` drains it onto `drones.music`'s board, which the tick's own `Music::update`
+/// consumes (the `events = [0; 64]` tail [M 0x114e70] clears it in the same tick — the board is
+/// not observable from outside). sound-gates-sweep: the outbox existed but nothing drained it,
+/// so the 0x10 sat queued forever and never reached the engine.
+#[test]
+fn hostage_saved_posts_the_0x10_music_event() {
+    let Some(l) = LevelX::load(L05) else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data(L05);
+    let (mut sim, gi) = guard_sim(&l);
+    enter(&mut sim, &d, gi, state::HOSTAGE_SAVED, &bond_far());
+    assert!(sim.list[gi].music_reqs.is_empty(),
+        "the control walk drained the save's music cue onto the board (the unfixed outbox keeps it)");
+    // Sister: the drain fires the board write with the game's param — event 0x10, value 1 (the
+    // `Music_Event(0x10, 1)` tail), consumed by `Music::update`'s e[16] readers (the Mayhew-B
+    // ch15/16 latch, music.rs `mayhew_b` [M 0x112270:96-103]).
+}
+
 /// Dead 0x47's UPDATE reads `obj+0xFC`, the drawn-GRACE counter — set to 2 by the draw pass
 /// [`M 0x1e62d8:71`], decremented once per control pass [`M 0x1336f8:242-246`] — so an undrawn
 /// guard corpse is disabled + deleted on the 3rd control pass off-screen, not the first

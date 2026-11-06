@@ -185,9 +185,11 @@ fn lock_burn_through_plays_0x249_not_0x5dd() {
     assert_eq!(n_249, 1, "a burned lock does not re-burn (one 0x249 node)");
 }
 
-/// [M NDrone2_DSTATE_SpecialDeath_Anim 0x163c68 case 5]: a drone entering the special death with
-/// script 0x0600021F (at its spot, facing) plays the cry 0x148 at the drone — the game's
-/// `glb_players != 0` gate holds (the tick always carries the player).
+/// [M NDrone2_DSTATE_SpecialDeath_Anim 0x163c68 case 5, disasm 0x163f38-0x163f80]: the cry 0x148
+/// rides the death script's COMPLETION (case 5 = the ANIM_DONE message), plays at the PLAYER's
+/// position (`glb_players+0x30`), gated on the 0x0600021F script and `glb_players != 0`. The
+/// state's ENTER queues nothing (sound-gates-sweep: it used to fire the cry on ENTER, at the
+/// drone — right id, wrong event).
 #[test]
 fn special_death_0x0600021f_plays_0x148() {
     let Some(l) = Level02::load() else { eprintln!("skip: NF_ISO not set"); return };
@@ -207,11 +209,22 @@ fn special_death_0x0600021f_plays_0x148() {
         let mut rng = Rng::new(0x0bad_f00d);
         dr.send(&d, &mut rng, 100, nf_game::drone::msg::ENTER);
     }
-    assert!(!sim.list[gi].sfx_reqs.is_empty(), "the ENTER queued the cry");
+    assert!(sim.list[gi].sfx_reqs.is_empty(), "the ENTER queues nothing — the cry is the ANIM_DONE event");
     let bond = bond_at([sim.list[gi].pos[0] + 5.0, sim.list[gi].pos[1], sim.list[gi].pos[2]]);
+    {
+        let dr = &mut sim.list[gi];
+        dr.player_pos = bond.pos;
+        let mut rng = Rng::new(0x0bad_f00d);
+        // The completion message, delivered the same way the machine delivers it when the death
+        // script ends (play_script's msg::ANIM_DONE tail).
+        dr.send(&d, &mut rng, 140, nf_game::drone::msg::ANIM_DONE);
+    }
+    let queued = sim.list[gi].sfx_reqs.clone();
+    assert!(queued.iter().any(|&(id, p)| id == 0x148 && p == bond.pos),
+        "the completion queues 0x148 at the PLAYER's position, got {queued:?}");
     sim.tick(&d, &bond);
     assert!(sim.audio.active_ids().contains(&0x148),
-        "the scripted special-death cry 0x148 plays at the drone");
+        "the scripted special-death cry 0x148 plays at the player");
 
     // Sister: the game's gate — a special death whose script is NOT 0x0600021F gets no cry
     // ([M 0x163c68 case 5's `+0xbd4 == 0x600021f` check]).
@@ -226,6 +239,7 @@ fn special_death_0x0600021f_plays_0x148() {
         dr.state = state::SPECIAL_DEATH;
         let mut rng = Rng::new(0x0bad_f00d);
         dr.send(&d, &mut rng, 100, nf_game::drone::msg::ENTER);
+        dr.send(&d, &mut rng, 140, nf_game::drone::msg::ANIM_DONE);
     }
     assert!(sim2.list[gj].sfx_reqs.is_empty(), "no cry for other special-death scripts");
 }
