@@ -479,3 +479,12 @@ binary that touches spawners.
   The 06 re-pin is the next session's first item. Report: docs/reports/spawn-pick-walk-05.md.
 - void-recovery: branch from origin/master a6665d115; WORKLOG entry started
 - void-recovery: the out-of-cel recovery arm shipped — control_handle_cel_change 0x133288's default arm (pos := obj+0x40 clamped into the old cel box minus the 1.0576 world-sphere radius [L ee_start_05 M_CONTROL+0x8C], relink the old cel) on the SP bond, the MP bodies and the poke path; both measured spots reproduced (the (12,6.3,-32) poke returns to the poke origin, the (16.5,6.3,-33) poke clamps to cel 8's max x - 1.0576 = 15.98 vs the measured 15.99); 4 live tests on 07000003 red-proven on the old code; walkreal 03 whole 6/0/1, sisters 02 3/0/1 and 04 10/0, mp_perf_16 2/0; the (16.5) stable-stand residual is the ground-contact model, live-check asked. Report: docs/reports/void-recovery.md.
+
+## stream-batch-4
+Started 2026-11-06 18:24 UTC. Branch s/stream-batch-4 (from origin/s/stream-batch-3;
+origin/s/spawn-pick-walk-05 + origin/master + origin/s/void-recovery merged — the 03
+walkreal conflict composed both pre-servant blocks, the door-8 mouth self-gate first then
+the door-walk-03b east-lawn saddle, braces rebuilt). Task: the three suspects named with
+citations (d2 start-corridor lost_sight latch, 13 void fall, 0c new red), the two measured
+test fixes (hold_npcs window 1800, fix_pickups_ammo box-id search), the flashbang drop
+count, then stream-batch-3's list, plain walks first.
