@@ -9,3 +9,6 @@ Branch from it, push to `s/level-14-float-narrow`.
 3. Before anything else, run `fix_autoaim_elevator_live`, `walkreal_07000011_route_live`, `mp_net_slots_post_move_live`, `mp_perf_16_live`, `fix_npc_doors_live` and `probe14_pocket_settle`. All must pass, with the MP digests unmoved. Then the walkreal set whole.
 
 Do not re-pin digests or walks to absorb this change.
+
+---
+claimed-by: sandbox1 at 2026-11-06T11:16Z
