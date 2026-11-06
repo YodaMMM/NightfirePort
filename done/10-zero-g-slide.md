@@ -10,3 +10,8 @@ Port, same spot (docs/reports/1b-zero-g-floor.md on `s/1b-zero-g-floor`): positi
 Find what the game does to the move at that face: the report says it clips the move, which slides, where the port's radial push cancels it [M Intersect_CylGeom 0x109da0:431-447; check this, do not take it as given]. Fix it for the zero-g substates only. The walk, climb and pick paths must stay byte-identical: a broad collision change failed the suite 31 times on `s/level-14-float-on-master`.
 
 Test on the real level, proved red on the old code: from that spot, hold lift, and assert the same slide. Gate on `walkreal_0700001b_live`, `mp_perf_16_live`, `mp_net_slots_post_move_live`. Zero-g feel is hands-on, so say plainly if the speed differs from the numbers above.
+
+---
+## Report (closed, no change needed)
+
+The premise was wrong. Unmodified master slides under lift exactly as PCSX2 does, and every thrust leaves the pocket. Only lift plus back thrust holds still, because the two oppose the slide.
