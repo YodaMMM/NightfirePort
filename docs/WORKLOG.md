@@ -561,3 +561,17 @@ no [L] pin loosening, no walk-driven game code).
   agent leg recovered on the joined tree), 14 gained the tripbomb red (6310fc1d2 pinned it
   9/0+1i on gas-rng-draws-6 — the placed tripbomb not stuck at the retreat, a fight/flush
   shift). The rest match batch-5's reds leg-for-leg (the real-damage/Agent/00agent lane).
+
+## stream-batch-7 — (2026-11-06, UTC)
+
+- (22:05) Branch `s/stream-batch-7` cut from `origin/s/stream-batch-6` (1c1719195), merged
+  `origin/master` (e4fb1c512). The merge's 28 conflicts were all one shape: the batch-6 line
+  added the grenade `born` field while master added the `loop_handle` field — both kept,
+  fields on their own lines; `cargo check --release` clean after the merge.
+- Task from the driver: the 16 stale pins (c4b2d38ce, f1f37ba47) get RULE assertions instead of
+  stream-position pins (the draws are the game's; a live trace of one run does not make that
+  exact value a law) — for each test state the rule from the decompile and what the old pinned
+  value was. spawner_kill's 7 tests get fixed to the whole-template draw (which can spawn
+  nothing). Then the walk lane: real-damage/Agent/00-Agent walks, 04's stats tests, 14's
+  tripbomb wedge, escort_follow, abseil, goggles, upward_shot; ignore with a measured reason
+  allowed for 00 Agent walks only. Finish with the still-red list by name.
