@@ -74,56 +74,21 @@ fn the_missile_launch_sequence_reaches_each_phase_and_disarms() {
         // The launch order (AND #202's output; the test drives it — see the module doc).
         sim.drones.channels.set(19, 1, sim.drones.frame);
     }
-    // Phase 1 — state 0 arms per missile at launch + seed·60 gated ticks (COUNTDOWN_STEP =
-    // REC_FRAME_RATE 1/60 [M 0x1aa1f0-0x1aa208]; the p3 seeds by index 105/105/40/20/0/60/105/60
-    // s [D placement params 2026-11-06]) — the exits STAGGER over 0..6300 ticks: missile 5
-    // (seed 0) first, 4 at +1200, 3 at +2400, 6/8 at +3600, 1/2/7 at +6300.
-    // ch 19 is the AND[193,194] mux's out — the mux writes it EVERY tick from its inputs
-    // [M triggers.rs's AND case], so a direct ch-19 poke is overwritten by the mux's 0-write
-    // before the next gated tick (the raw-write-does-nothing live observation); the drive here
-    // pokes the mux's INPUTS every tick, which holds ch 19 through the whole stagger (the
-    // klaxon test's poke_gate hold, which measurably arms m3 under this countdown).
-    let mut armed = false;
-    for _ in 0..7000u32 {
-        {
-            let sim = scene.sim.as_mut().unwrap();
-            sim.drones.channels.set(193, 1, sim.drones.frame);
-            sim.drones.channels.set(194, 1, sim.drones.frame);
-        }
-        step_alive(scene.sim.as_mut().unwrap());
-        if scene.sim.as_ref().unwrap().drones.missile_deploy.iter().all(|&b| b == 1) { armed = true; break; }
-    }
-    {
-        let sim = scene.sim.as_ref().unwrap();
-        assert!(armed,
-            "state 0 → MissileDeploy[k] = 1 for all eight, each at its seed·60 [M 0x1aa210-238], got {:?}", sim.drones.missile_deploy);
-        assert!(sim.drones.space_missiles.iter().all(|m| m.state == 1), "every missile is in state 1 [M 0x1aa21c]");
-    }
-    // Phase 2 — each p0's gate write at ITS armed+359 [D P0_GATE] (the last at +6659);
-    // missile 4 wrote ch 192 at its t1 [D] — already on (armed at launch+1).
-    let mut gates = false;
-    for _ in 0..1500u32 {
-        {
-            let sim = scene.sim.as_mut().unwrap();
-            sim.drones.channels.set(193, 1, sim.drones.frame);
-            sim.drones.channels.set(194, 1, sim.drones.frame);
-        }
-        step_alive(scene.sim.as_mut().unwrap());
-        let sim = scene.sim.as_ref().unwrap();
-        if [31u32, 32, 33, 35, 36, 37, 38].iter().all(|&g| sim.drones.channels.on(g)) && sim.drones.channels.on(192) { gates = true; break; }
-    }
-    {
-        let sim = scene.sim.as_ref().unwrap();
-        assert!(gates, "the p0 scripts' t359 gate writes ch 31..38 and missile 4's ch 192 [D], got {:?}",
-            [31u32, 32, 33, 35, 36, 37, 38].iter().map(|&g| sim.drones.channels.on(g)).collect::<Vec<_>>());
-    }
-    // The console chain: the port's SPs #213–220 play on gates 31..38, the console scripts write
-    // ch 1..8 at their t682 [D] (gate 34's ch 34 rise — SP #216 — is disc-positive in the port).
-    // The gates stagger (armed+359 each), so the last UI (missiles 1/6/7, armed +6301) latches
-    // ~+7391 — the loop starts at ~+6660 and needs ~800 of its 2000. The mux-input hold
-    // continues (the real path's AND[193,194] stays true — the wave-death channels latch).
+    // (The old phase-1 "all eight armed in state 1" pin is gone: on the disc clocks the early
+    // missiles' state-2 reads (+1800..+6000) pass while the late seeds (105 s) still count, and
+    // every missile's branch depends on ITS console's latch — the merged loop below shoots the
+    // held UIs from the first gate and pins the outcome as all-disarm instead.)
+    // Phase 2+the console chain MERGED: the gates stagger (armed+359 each) and each missile's
+    // state-2 read follows at armed+P0_LEN−1 [M 0x1aa25c] — on the disc clocks console k must
+    // latch inside ITS OWN window (m5's read at +1800, m4's at +3000, m3's at +4200, m6/m8's at
+    // +6000), so the drive shoots the held UI scripts from the FIRST gate on. The fast
+    // countdown let the old shape wait for all eight gates (+359) before the first shot; the
+    // disc does not. The all-armed MissileDeploy==1 pin of the old phase 1 is gone with it:
+    // once shooting starts, the early missiles take the disarm branch (deploy 2) before the
+    // late seeds (m1/m2/m7, +6300) have armed.
     let mut console = Vec::new();
-    for _ in 0..2000u32 {
+    let mut gates_seen = false;
+    for _ in 0..9500u32 {
         {
             let sim = scene.sim.as_mut().unwrap();
             sim.drones.channels.set(193, 1, sim.drones.frame);
@@ -133,11 +98,13 @@ fn the_missile_launch_sequence_reaches_each_phase_and_disarms() {
         shoot_held_disarm_sps(scene.sim.as_mut().unwrap());
         let sim = scene.sim.as_ref().unwrap();
         for k in 1..=8u32 { if sim.drones.channels.on(k) && !console.contains(&k) { console.push(k); } }
-        if console.len() == 8 { break; }
+        if [31u32, 32, 33, 35, 36, 37, 38].iter().all(|&g| sim.drones.channels.on(g)) && sim.drones.channels.on(192) { gates_seen = true; }
+        if gates_seen && console.len() == 8 { break; }
     }
     {
         let sim = scene.sim.as_ref().unwrap();
-        assert_eq!(console.len(), 8, "the console scripts write ch 1..8 at t682 [D], got {console:?}");
+        assert!(gates_seen, "the p0 scripts' t359 gate writes ch 31..38 and missile 5's ch 192 at its t1 [D P0_GATE + 06000a30]");
+        assert_eq!(console.len(), 8, "the console scripts write ch 1..8 at their t682 [D], got {console:?}");
     }
     // Phase 3 — each p0 end (state-1 tick L−1 [D t3299/1799/2399]) → state 2 → the disarm branch
     // (ch[k] set) → MissileDeploy[k] = 2; the state-3 p2 waits [D per-missile 1170..1710] →
