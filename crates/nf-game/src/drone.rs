@@ -21750,30 +21750,31 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // red on the gas stream (the frag bounced 11.52 u out, rolled back toward the thrower, and no
         // second scan ever ran). Conditions per guard are unchanged [M 0x1435f0:30-52]: fear prop,
         // within the radius, sees the object.
+        // THE ONE-RECORD LAW [M 0x1435f0:35-47, stream-batch-2 review]: the game's walk BREAKS on the
+        // FIRST kind-2 record that is in radius with the fear prop — whether or not its visibility
+        // check passes — and sends at most ONE 0x21 per drone per frame; later grenades are not
+        // scanned this frame (every frame rescans, so a nearer grenade catches the next tick). The
+        // port's explosive-outer loop walked on to later grenades (a guard in radius of two sent two
+        // 0x21s); the drone-outer loop below restores the break.
         let live_explosives: Vec<(V3, u16)> = self.grenades.iter().filter(|g| g.state < 2).map(|g| (g.pos, g.weapon_type)).collect();
-        let exp_probe = std::env::var_os("NF_EXPPROBE").is_some();
-        for (p, wt) in live_explosives {
-            let cls = match wt {
-                0x34 => Some((12.0f32, 4.0f32, 120u32, 0x87u8)),
-                0x3b..=0x40 => Some((12.0, 14.0, 600, 0x87)),
-                _ => None,
-            };
-            if exp_probe { eprintln!("[expprobe] explosive {:?} wt {wt:#x} cls {cls:?} queue_raw {}", p, self.grenades.len()); }
-            let Some((radius, run, ticks, ret)) = cls else { continue };
-            let Drones { list, rng, .. } = self;
-            for dr in list.iter_mut() {
+        let Drones { list, rng, .. } = self;
+        for dr in list.iter_mut() {
+            if !dr.present || dr.corpse || !dr.enabled { continue; }
+            if !dr.prop(d, 0x3a) && !dr.prop(d, 0x3b) { continue; }
+            for &(p, wt) in &live_explosives {
+                let Some((radius, run, ticks, ret)) = (match wt {
+                    0x34 => Some((12.0f32, 4.0f32, 120u32, 0x87u8)),
+                    0x3b..=0x40 => Some((12.0, 14.0, 600, 0x87)),
+                    _ => None,
+                }) else { continue };
                 let (dx, dy, dz) = (dr.pos[0] - p[0], dr.pos[1] - p[1], dr.pos[2] - p[2]);
-                if exp_probe && dr.index == 0 {
-                    let los = d.world.line_of_sight([dr.pos[0], dr.pos[1] + 1.0, dr.pos[2]], p, crate::world::LOS_GUARD_VISION);
-                    eprintln!("[expprobe] guard0 present {} corpse {} enabled {} d2 {:.3} (r2 {:.3}) p3a {} p3b {} scared {} state {:#x} los {}",
-                        dr.present, dr.corpse, dr.enabled, dx*dx+dy*dy+dz*dz, radius*radius, dr.prop(d, 0x3a), dr.prop(d, 0x3b), dr.scared, dr.state, los);
-                }
-                if !dr.present || dr.corpse || !dr.enabled { continue; }
                 if dx * dx + dy * dy + dz * dz > radius * radius { continue; }
-                if !dr.prop(d, 0x3a) && !dr.prop(d, 0x3b) { continue; }
-                if !d.world.line_of_sight([dr.pos[0], dr.pos[1] + 1.0, dr.pos[2]], p, crate::world::LOS_GUARD_VISION) { continue; }
+                // The first in-radius record ends the walk pass or fail [M 0x1435f0:46 `break`]:
+                // a sight failure sends nothing this frame and does NOT look at later grenades.
+                if !d.world.line_of_sight([dr.pos[0], dr.pos[1] + 1.0, dr.pos[2]], p, crate::world::LOS_GUARD_VISION) { break; }
                 dr.explosive_msg = Some((p, run, ret, frame + ticks));
                 dr.send(d, rng, frame, msg::EXPLOSIVE);
+                break;
             }
         }
         self.health.flash = (self.health.flash - 1.0).max(0.0);
