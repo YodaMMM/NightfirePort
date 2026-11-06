@@ -29,17 +29,6 @@
 //! only the level shot lands where the view looks. The cost: a target above or below must be met
 //! at its own height, so the band the later waves float in (y 2.5–8.7, above the deck) is fought
 //! from inside it or not at all — the full walks wait those waves out under the deck.
-//!
-//! AMENDMENT (gas-draws-8, 2026-11-06): the "pitched shoots off the view" half is STALE for the
-//! current tree. The zero-g branch composes the look pitch into `zero_g_rot` every tick
-//! (`rot_matrix(-look·π/2, turn, 0)` then m·R, player.rs physics_tick — the game's own
-//! body-frame composition [M Player_ZeroG 0x192ab0:76-90,160-162]), and `Bond::look` returns the
-//! matrix's forward row — the same row `ray_on` checks and the laser round flies along
-//! (scene.rs `shot_from`: the round aims at `camera + look·256`). A pitched row therefore shoots
-//! exactly where the pitched view looks, and the walk can AIM UP in zero-g with real input. The
-//! level-look convention stays for every pre-existing fight; the one pitched shooter is the
-//! Drake fight (`fight_opts`'s `pitched` — see its doc), whose target hovers out of every
-//! reachable hold's level band.
 
 #[path = "common/walker.rs"]
 mod walker;
@@ -183,10 +172,26 @@ fn console_station(k: u32) -> [f32; 3] {
     match k { 7 | 8 => [46.0, -7.0, 0.0], 1 | 2 => [20.0, -2.0, 0.0], _ => [32.0, -1.7, 0.0] }
 }
 
-/// The deadline order: the missiles' p0 scripts end at state-1 ticks 1799 (3/4/5), 2399 (6/8)
-/// and 3299 (1/2/7) [D P0_LEN — space_missile.rs], and state 2 reads the console channel then
-/// [M 0x1aa25c].
-const CONSOLE_ORDER: [u32; 8] = [3, 4, 5, 6, 8, 7, 1, 2];
+/// The deadline order under the disc countdown (COUNTDOWN_STEP = REC_FRAME_RATE 1/60
+/// [M 0x1aa1f0-0x1aa208], the p3 seeds by missile index 105/105/40/20/0/60/105/60 s [D
+/// placement params 2026-11-06]): missile k's state-0 exit (MissileDeploy 0→1 [M 0x1aa218])
+/// lands at launch + seed·60, its p0 ends P0_LEN[k−1] − 1 later, and state 2 reads the console
+/// channel then [M 0x1aa25c] — so console k's read deadline is launch + seed·60 + P0_LEN[k−1] − 1:
+/// k5 +1799 (seed 0), k4 +2999 (20), k3 +4199 (40), k6/k8 +5999 (60), k1/k2/k7 +9599 (105).
+/// The order below serves the deadlines, weighted by when each console's UI script can first
+/// hold (its gate 30+k fires at ITS missile's armed+359 [D P0_GATE] — k5's UI at +359, k4's at
+/// +1559, k3's at +2759, k6/k8's at +3959, k1/k2/k7's at +6659): k6 before k8 keeps both inside
+/// +5999 without a double crossing (k6 shares the x32 station with 3/4/5 — no travel — and the
+/// 6→8 crossing then lands k8 ~+5480). The tail [1, 2, 7] serves the SHARED +9599 deadline in
+/// any order, and 1/2 before 7 keeps the real-health walk alive: the station's astronaut wave
+/// is on Bond from ~launch+6810 (measured: the ring's 2.0-damage hits at d 5.6-9.8 from frame
+/// 9559 = launch+6812, 50 hits for the full 100.0, health 0 before the loop's end — the wave's
+/// own spawn sits near the m1/m2/m7 p0 sync writes ch 181..188 @t10 [D P0_SYNC, ~launch+6310]
+/// [S — the spawn trigger itself is not pinned]), which is exactly the [7,1,2] hover at the
+/// x46 nest waiting for 7's UI (+6659). Waiting for 1/2's holds at their x20 station (25 units
+/// from the nest) spends the same window out of the ring, and the single return crossing lands
+/// 7 at ~+7450, ~2150 inside its deadline [S — the measured margins are the latch log below].
+const CONSOLE_ORDER: [u32; 8] = [5, 4, 3, 6, 8, 1, 2, 7];
 
 /// The level look's yaw error toward `at` (about world up — the forward row's heading), the
 /// height of `at` over the eye, and the horizontal range.
@@ -324,10 +329,39 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
     let mut moved_at = 0u32;
     let mut last_pos = [0.0f32; 3];
     let mut last_goal = [0.0f32; 3];
-    for tt in 0..6000u32 {
+    // aim-route-4: the disc countdown (seed·60 gated ticks) spreads the console phase — the
+    // last deadline group (k1/k2/k7, armed at launch+6300) sits at launch+9599 and the last
+    // latch lands ~8300 ticks after ch 19 (measured on the aim branch), past the old 6000 cap.
+    for tt in 0..12000u32 {
         {
             let p = w.scene.sim.as_ref().unwrap().bond.pos;
             if dist3(p, last_pos) > 0.3 { moved_at = tt; last_pos = p; }
+        }
+        // The wave defense, TAIL CONSOLES ONLY: the station's astronaut wave follows Bond across
+        // the map (measured on the real-health run: 3.0-damage hits at d 3-13 from frame 9414
+        // while he hovered the k1/k2 wait — 43 hits for the full 100.0, dead before the UIs
+        // held; it also cut the [7,1,2] x46 hover short in the pre-reorder run). The early
+        // chains have no wave to fight (first measured contact ~launch+6650) and no margin to
+        // spend: k5/k4/k3/k6/k8 sit ~560-880 inside their one-tick branch reads (+1799/+2999/
+        // +4199/+5999), and an unrestricted detour measured +829 on k3 — m3 then read its
+        // console CLEAR at the +4199 branch and took the LAUNCH arm (MissileDeploy [2,2,3,...],
+        // mission fail). Whenever the wave closes inside 25 u on a tail console, fight it with
+        // the proven first-wave killer — the fight's own dry-clip cover discipline (float away
+        // at <12, back out at 60) paces the laser's 100-round pool against the 12-a-tap drain
+        // [M 0x193eb8-0x19405c] — and resume the console work the tick it thins out. The shared
+        // +9599 tail deadline absorbs the detour (the plain-walk margins were ~1500-2200).
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let all_latched = CONSOLE_ORDER.iter().all(|&k| sim.drones.channels.on(k));
+            let k = if all_latched { 0 } else { *CONSOLE_ORDER.iter().find(|&&k| !sim.drones.channels.on(k)).unwrap() };
+            let wave_close = (k == 1 || k == 2 || k == 7)
+                && live_astronauts(sim).iter().any(|&i| dist3(sim.drones.list[i].pos, sim.bond.pos) < 25.0);
+            if wave_close {
+                fight(w, console_station(k), None,
+                    |s| !live_astronauts(s).iter().any(|&i| dist3(s.drones.list[i].pos, s.bond.pos) < 25.0),
+                    2800);
+                continue;
+            }
         }
         let (input, fire) = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -474,7 +508,7 @@ fn best_float_point(sim: &nf_view::scene::Sim, from: [f32; 3], rad: f32, ys: &[f
 /// new-sighting clock [M 0x179740:103-105] — and comes back out at 60 rounds. Returns at `done`
 /// or the tick cap.
 fn fight(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
-    fight_opts(w, hold, prio, false, false, done, cap)
+    fight_opts(w, hold, prio, false, done, cap)
 }
 
 /// `fight` with the Agent tactics switch (real-health-agent-difficulty-16-1b-41-4a, opt-in —
@@ -486,21 +520,7 @@ fn fight(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, done: impl Fn(&nf_
 /// while every aim re-pick still chose Drake). A player clears the add waves and takes the
 /// boss last; the fight's `done` gate is the prio target's death, so the waves dying never
 /// ends it early.
-/// `fight` with `pitched`: the view YAWS AND PITCHES to the aim point and the level-look fire
-/// gate is lifted (gas-draws-8). The game's zero-g view pitch is the player's own input composed
-/// body-frame into the object matrix every tick [M Player_ZeroG 0x192ab0:76-90 — the pitch
-/// action's −1.2566371·REC_FRAME_RATE rate at BL+0x34/+0x30 — through RotMatrix 0x1e2368 +
-/// Concat 0x1e4a90 at :160-162], and the port does the same (`rot_matrix(-look·π/2, turn, 0)`
-/// then m·R, player.rs physics_tick; `Bond::look` returns the matrix's forward row, so the view
-/// ray, `ray_on`'s check and the laser round — which flies at `camera + look·256`, scene.rs
-/// `shot_from` — all ride the SAME pitched row). The merged stream's Drake (the task's own
-/// hover check) floats the game's own astronaut-combat band y 4.2-7.6 over the deck while every
-/// reachable hold sits below it [L the gas-rng-draws-7 probe], so a level-only fight can never
-/// meet him at his height — a player aims up. The hold never chases the target's height in this
-/// mode (the under-deck wedge at (12.7, −3.0, −1.6) WAS that chase: Bond thrusting up into the
-/// slab); the cover re-pick runs every 30 ticks instead, out to 15 u, scored with the same
-/// prio-blind +50 so the hold keeps a clear 3-D ray to Drake.
-fn fight_opts(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: bool, pitched: bool, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
+fn fight_opts(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: bool, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
     let mut last_tap = 0u32;
     let mut target: Option<(usize, [f32; 3])> = None;
     let mut recharging = false;
@@ -511,7 +531,7 @@ fn fight_opts(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: 
         let eye_off = sim.bond.head()[1] - sim.bond.pos[1];
         if sim.gun.clip < 12 { recharging = true; }
         if sim.gun.clip >= 60 { recharging = false; }
-        if (recharging || waves_first || pitched) && t % 30 == 0 {
+        if (recharging || waves_first) && t % 30 == 0 {
             let p = sim.bond.pos;
             // waves_first: a hold that cannot ANSWER the prio target is as bad as an exposed one
             // (the first sheltered run floated out Drake's whole 6000-tick cap without a shot):
@@ -528,11 +548,7 @@ fn fight_opts(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: 
                 (s as f32 + 4.0 * cl as f32) + if prio_blind(c, c[1] + eye_off) { 50.0 } else { 0.0 }
             };
             let mut best = (sc(p), p);
-            // pitched: the slab's shadow is wider than the ±5 ladder — the gas-rng-draws-7 scan's
-            // clear-ray holds ((10,−6,0) exp7/8, (6,−6,0) exp6/10, (14,−6,0) exp8/11) sit 10-15 u
-            // from the wedged spot, so the pitched re-pick reaches out to 15 (each candidate still
-            // needs the straight float line clear, line 509's segment check).
-            for &r in if pitched { [2.5f32, 5.0, 10.0, 15.0].as_slice() } else { [2.5f32, 5.0].as_slice() } {
+            for r in [2.5f32, 5.0] {
                 for o in [[r, 0.0, 0.0], [-r, 0.0, 0.0], [0.0, r, 0.0], [0.0, -r, 0.0], [0.0, 0.0, r], [0.0, 0.0, -r]] {
                     let c = [hold[0] + o[0], hold[1] + o[1], hold[2] + o[2]];
                     if sim.world.segment(p, c).is_some() { continue; }
@@ -577,30 +593,11 @@ fn fight_opts(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: 
             // measured deaths: 43 and 41 hits for 100.0). Drake closes in through the float, so
             // the sheltered hold keeps him shootable (the exposure scoring is the same
             // fewest-astronauts-see-me rule the recharge arm already used).
-            let mut spot = if recharging || waves_first || pitched { cover } else { hold };
-            // pitched: the hold stays put (the height-chase is what wedged Bond under the slab —
-            // see fight_opts's doc) and the AIM climbs instead.
-            if let Some((_, a)) = target { if !recharging && !pitched { spot[1] = a[1] - eye_off; } }
+            let mut spot = if recharging || waves_first { cover } else { hold };
+            if let Some((_, a)) = target { if !recharging { spot[1] = a[1] - eye_off; } }
             let mut inp = thrust_to(sim, spot);
             let mut fire = false;
             match target {
-                Some((i, a)) if pitched => {
-                    // The pitched turn: yaw err as level_turn's, the pitch err as an elevation
-                    // angle on the same row (asin of the forward row's y → the aim elevation
-                    // atan2(dy, dxz)), fed to the zero-g look lane in its π/2 units (the tick's
-                    // x-angle is −look·π/2 [M 0x192ab0:76-90; player.rs]) — 0.05 ≈ the yaw
-                    // clamp's 0.08 rad/tick. No stabiliser press while tracking: it would slerp
-                    // the row back to world up against the aim [M 0x192ab0:163-199].
-                    let e = sim.bond.head();
-                    let f = sim.bond.look();
-                    let dyaw = walker::wrap_pi((a[0] - e[0]).atan2(a[2] - e[2]) - f[0].atan2(f[2]));
-                    inp.turn = dyaw.clamp(-0.08, 0.08);
-                    let dxz = ((a[0] - e[0]).powi(2) + (a[2] - e[2]).powi(2)).sqrt().max(0.3);
-                    let el = f[1].clamp(-1.0, 1.0).asin();
-                    let el_t = (a[1] - e[1]).atan2(dxz);
-                    inp.look = ((el_t - el) / std::f32::consts::FRAC_PI_2).clamp(-0.05, 0.05);
-                    fire = ray_on(sim, i) && sim.gun.clip >= 12 && t.saturating_sub(last_tap) >= 12;
-                }
                 Some((i, a)) => {
                     level_turn(sim, &mut inp, a, 0.08);
                     fire = ray_on(sim, i) && view_level(sim) && sim.gun.clip >= 12 && t.saturating_sub(last_tap) >= 12;
@@ -737,53 +734,37 @@ fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) ->
 
     // 4. Drake, then the defeat NIS plays out (no skip, so its channel writes land).
     w.skip_cutscenes = false;
-    // gas-draws-8: the Drake fight rides the pitched view (fight_opts's `pitched`) — his merged-
-    // stream hover band y 4.2-7.6 over the deck is the game's own astronaut-combat strafe
-    // (destinations = the opponent + a random 3-D 10-20 u offset [M DroneMove_AstronautCombat
-    // 0x154618:80-105], flown at 2.0 [M 0x174550:16]) and no reachable hold meets it at height
-    // [L the gas-rng-draws-7 scan], so the level-only gate could never land a shot (hp 60.0
-    // through the whole 9000-tick window). A player aims up.
-    fight_opts(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, true, |s| s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s), 9000);
+    fight_opts(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, |s| s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s), 6000);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(alive(sim), "Bond survives Drake's fight (health {:.1})", sim.drones.health.health);
-        assert!(sim.drones.list[drake].health <= 0.0, "Drake dies to Bond's fire in the float (Drake hp {:.1} left — the merged stream's fight rolls run the 6000-tick window out [L gas-rng-draws-6])", sim.drones.list[drake].health);
+        assert!(sim.drones.list[drake].health <= 0.0, "Drake dies to Bond's fire in the float");
         assert!(sim.drones.channels.on(0x0e), "Drake's death channel ch 0x0e rises with the kill [D #186 p12 = 14; M 0x1747b8/0x13e660]");
         // The order's middle hinge, in the window between Drake's death (ch 0x0e) and the defeat
         // NIS's ch 0x0b write (its t600 [D 0x06000a20] — the NIS only starts on 0x0e, so 0x0b is
-        // still 600 ticks out): the missiles' p2 scripts ended during the fight, so AND #139 has
-        // raised ch 0x09 and the monitor completed objective 1 [M 0x1827d8:78-85], while
-        // objective 2 is announced (its enable ch 0x09 fired [M 0x1827d8:55-67]) and not yet
-        // complete — the game's order: obj 1 completes BEFORE obj 2.
+        // still 600 ticks out): objective 2 is announced (its enable ch 0x09 fired [M
+        // 0x1827d8:55-67]) and not yet complete, while objective 1 completes on the monitor's ch
+        // 0x09 read [M 0x1827d8:78-85] — the game's order: obj 1 completes BEFORE obj 2.
         assert!(!sim.drones.channels.on(0x0b),
             "the defeat NIS's ch 0x0b write sits at its t600, after the death tick [D 0x06000a20]");
-        drop(sim);
-        // gas-rng-draws: the shared stream's console latches moved (3/4/5/6/8/7/1/2 at
-        // 4150-6208 [L the run log]), so the missiles' p2 END timers now land AFTER a fast
-        // Drake kill — the old premise "the p2 ends raised ch 0x09 DURING the fight" was a
-        // timeline accident, not a law (the p2 ends are the scripts' own t-timers [M
-        // 0x1aa33c-3d0 — the writes sit behind Script_IsPlaying's bne], not Drake-derived).
-        // The game's ORDER still stands and is what gets pinned: ch 0x09 (AND #139 of the
-        // p2 ends) rises before the monitor completes obj 1, and obj 1 completes before obj
-        // 2 is announced. Wait the p2 ends out (bounded 3000 — the last latch 6208 plus the
-        // longest p2 lands well inside), then pin the order.
-        for _ in 0..3000u32 {
-            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x09) { break; }
-            w.wait(1);
-        }
-        // The monitor folds obj 1 on its own scan AFTER ch 0x09 [M 0x1827d8 case 3 reads the
-        // watch channel each monitor pass] — give it a few ticks before the state pin.
-        for _ in 0..60u32 {
+        // On the disc clocks m1/m2/m7 disarm at their own state-2 entries (p0 = 3300 ticks [D
+        // P0_LEN] after armed+6300 — ~launch+9600, past Drake's spawn), so the last p2 end
+        // (m1's, disarm+1710 [D 0600091c]) lands ~450 ticks AFTER the fight gate — a fast kill
+        // (measured: Drake died inside that window on the raw aim) precedes ch 0x09. The order
+        // that always holds: ch 0x09 (obj 1 complete) strictly before the NIS's 0x0b (obj 2's
+        // completion read) — 0x0b sits at death+600 [D 0x06000a20], ch 0x09 within ~450 of the
+        // death. Wait for it bounded inside that gap (550 < 600) and pin obj 2 still un-complete.
+        for _ in 0..550u32 {
             if w.scene.sim.as_ref().unwrap().drones.mission.states[23][0] == 4 { break; }
-            w.wait(1);
+            w.tick(Default::default(), false);
         }
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x09),
-            "the p2 ends raised ch 0x09 by death+3000 [M 0x1aa33c-3d0 + D the p2 lengths]");
+        assert!(sim.drones.channels.on(0x09) && sim.drones.mission.states[23][0] == 4,
+            "the p2 ends raised ch 0x09 and the monitor completed objective 1 before the NIS's 0x0b [M 0x1aa33c-3d0 / 0x1827d8:78-85 + D the p2 lengths/P0_LEN]");
         assert_eq!(sim.drones.mission.states[23][0], 4,
-            "objective 1 is COMPLETE by Drake's death [M 0x1827d8:78-85]");
+            "objective 1 is COMPLETE once ch 0x09 reads [M 0x1827d8:78-85]");
         assert_eq!(sim.drones.mission.states[23][1], 3,
-            "objective 2 is announced and not complete at Drake's death [M 0x1827d8:55-67]");
+            "objective 2 is announced and not complete while the NIS's 0x0b is still 600 ticks out [M 0x1827d8:55-67]");
     }
     hide_and_snipe(w, 12.0, |s| s.drones.mission.status() == 6 || !alive(s), 2400);
     w.skip_cutscenes = true;
@@ -1322,17 +1303,9 @@ fn walk_arrival_to_drakes_defeat_on_real_health_at(difficulty: u32) {
         .unwrap_or_else(|| panic!("ch {c} was written on the walk"));
     assert!(t(0x0b) < t(100), "obj 2's 0x0b lands before the mission-end ch 100 [D 0x06000a20 t600/t720]");
     // Sister: the damage path ran for real — the rounds cost the armour and then health (no top-up).
-    // gas-rng-draws: the shared stream's wave rolls got kinder (13 hits for 39.0, every point
-    // absorbed by the armour — 50 → 11.0, health never touched [L the run log]); the old
-    // ≥15-hits ∧ armour-0 ∧ health-lost shape was that roll's accident, not a law. The law
-    // the pin needs: the waves really hit (the player_hits ledger is the real-damage path's
-    // own record) and NOTHING was restored — the armour took the damage and stayed down (the
-    // walk makes no armour or health writes; top_up_health is off above).
-    assert!(sim.drones.player_hits.len() >= 10 && sim.drones.health.armour < 45.0,
+    assert!(sim.drones.player_hits.len() >= 15 && sim.drones.health.armour == 0.0 && lost > 0.0,
         "the waves really hurt Bond on the way ({} hits, armour {:.1}, {lost:.1} health) — no allowance", sim.drones.player_hits.len(), sim.drones.health.armour);
-    assert!(sim.drones.health.health < 100.0 || sim.drones.health.armour < 45.0,
-        "nothing was topped up (health {:.1}, armour {:.1} — this stream's rolls left the armour as the witness)",
-        sim.drones.health.health, sim.drones.health.armour);
+    assert!(sim.drones.health.health < 100.0, "health is never topped up");
 }
 
 #[test]
