@@ -142,7 +142,16 @@ fn a_frag_blast_flees_a_guard_with_his_death_bark() {
         .unwrap_or_else(|| panic!("no flee-capable guard on 07000005 [D: props read from ACTION.ELF tables]"));
     let at = sim.list[ai].pos;
     // The blast 1.0 off the guard: inside the 12.0 scare radius, a non-degenerate LOS ray.
-    sim.explosive_queue.push(([at[0] + 1.0, at[1], at[2]], 0x34)); // the frag weapon type [M 0x2a/0x34 drain map, drone.rs tick]
+    // gas-draws-8 (ffcb70a5d): the HandleExplosives broadcast walks the LIVE grenades every
+    // frame [M 0x1435f0:20-52 + 0x138b10:18-19] — the take-once explosive_queue is gone — so
+    // the scare is driven by a live frag at rest beside the guard (state 1, the 0x34 fuse is
+    // 210 ticks [L record 0x34], one tick can't kill it).
+    sim.grenades.push(nf_game::grenade::Grenade {
+        pos: [at[0] + 1.0, at[1], at[2]], velocity: [0.0, 0.0, 0.0], speed: 0.0, travelled: 0.0,
+        range: 210.0, damage: 8.0, radius: 12.0, weapon_type: 0x34, mesh: 0, owner: usize::MAX,
+        state: 1, bounces: 0, smoke_popped: false, resting: true, stuck: false, seek_target: None,
+        phase: None, burn: 0, defused: false, born: 0,
+    }); // the frag weapon type [M 0x2a/0x34 drain map, drone.rs tick]
     sim.tick(&d, &bond_at([0.0, 0.0, 0.0]));
     assert_eq!(sim.list[ai].state, state::RUN_AWAY_FROM_OBJECT,
         "the scary blast flees the guard [M 0x1431c0:194-195]");
