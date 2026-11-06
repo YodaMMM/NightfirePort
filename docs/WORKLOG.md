@@ -389,3 +389,26 @@ touching any test; then the walks 01, 06, 08, 0b, 0c, 0d, 11, 12, 13, 14, 15, 16
 6000-tick-cap failures need a look at what stands there). `goggles_draws_live` run with
 `--test-threads=1` before calling it red. Ignore only for 00 Agent walks with a measured reason;
 no [L] loosening; no game code changed to suit a walk.
+Outcome (17:26 UTC): the merge delta itself is exculpatory [git diff df294b666..9faf17a46 — 3
+files +63: the void_fall flag (player.rs, consumed ONLY on 07000012 in scene.rs) + a test], so
+the 28 are the batch-2 tree's own. All 10 named non-walk binaries re-run whole (--test-threads=1):
+goggles 4/5 with the single-thread run (the captain mode-0 press swallow survives its own 30 u
+lever), hold_npcs 1/2 (0.003 park over the full 600 window), guard_drops 5/6 (the deaths' extra
+(6,6) is the game's own recovered-sidearm drop [M 0x163350 case 1] — the searched 12-spot blast
+lever REFUTED: recovery dominates the frag fuse at every lethal spot; reverted), smg 0/1 (6 u
+pistol leg, the unconditional cone-draw stream shift [M Bullet_init 0x12c5a0:171-180]),
+enemy_accuracy 4/5 (5 cells, mixed directions = stream position; the law sisters all pass),
+upward_shot 0/2 (walks complete, hp 10→10 — the documented realization move), fix_pickups 3/4
+(the take + composition + placement-sound asserts pass; the post-take sound window is EMPTY —
+needs the box-take sound ledger), start_corridor 7/8 — REAL-REGRESSION SUSPECT: d2's guards
+deliver exactly 6×12 (health parks at 28.0) then hold lost_sight=true/seen_ticks=0 for 14000+
+ticks at an idle visible Bond (a 20000-tick probe; window restored to 10000, the finding kept in
+comments, 424aac6c1). Walks: every PLAIN walk green (01,06,08,0b,0c,11,12,13,14,15,16); the
+real-health d2/d3 family dies as its own queue tasks expect; 14 reproduced tick-exact (t5063);
+0d real = the fall law holds (18.99 = ~43 pre-fall − 24 game-law damage) with the upstream bleed
+moved; 0c real NEW red (t8216 rifle plinks); 13 real NEW failure mode SUSPECT — a void fall to
+y −368 at t4169 inside the 11→12→4A chain (the only red touching the merge's 07000012 behavior).
+No [L] loosened, no ignore added, no game code changed; two levers tried, one reverted whole.
+The full-suite line did not fit again (the batch-2 chunk ceiling stands); every touched-adjacent
+binary ran whole with per-binary counts in the report. Live-check asks: the d2 re-see latch, the
+deck-sentry stand, the 13-chain shaft transit. Report: docs/reports/stream-batch-3.md.
