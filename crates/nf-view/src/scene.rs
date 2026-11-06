@@ -3224,30 +3224,10 @@ impl Sim {
                 // `bond.pos` writes (the tests' placements) get the same treatment [S: the 3.0 bound
                 // sits above any per-tick move the sim produces — the walk ~0.1, the accelerated fall
                 // ~0.3 even seconds in — and below every placement jump].
-                // void-recovery: a poke differs from `Player_StandAtNewPosition` — the game's memory
-                // write touches obj+0x30 ONLY, so obj+0x40 keeps the pre-teleport position and
-                // obj+0x20 keeps the old cel; the next `control_handle_cel_change` runs the default
-                // arm's recovery (`out_of_cel_recovery` below, [M 0x133288:186-231]) when no room cel
-                // holds the target. Measured [D live]: the (12.0, 6.3, −32) teleport on 07000003
-                // returns to the pre-teleport position inside 1 s. The recovery source is the
-                // PRE-teleport `prev_pos` (the game's obj+0x40), read before the copy below.
-                let old_prev = self.bond.prev_pos;
                 self.bond.prev_pos = self.bond.pos;
-                match self.world.find_cel(self.bond.pos) {
-                    Some(c) => Some(c),
-                    None => self.world.out_of_cel_recovery(self.bond.cel, old_prev, nf_game::player::Bond::SPHERE_RADIUS)
-                        .map(|(cell, p)| { self.bond.pos = p; cell }),
-                }
+                self.world.find_cel(self.bond.pos)
             } else {
-                match self.world.player_cel_relink(self.bond.cel, self.bond.prev_pos, self.bond.pos, self.bond.pos) {
-                    Some(c) => Some(c),
-                    // void-recovery: the cel-change default arm — the move left the cel's box, no
-                    // portal crossed, `build_FindCel` found nothing: `pos := obj+0x40` clamped into
-                    // the OLD cel's box, stay linked [M 0x133288:186-231]. The port's `prev_pos` IS
-                    // obj+0x40 (the `Bond` field's own doc).
-                    None => self.world.out_of_cel_recovery(self.bond.cel, self.bond.prev_pos, nf_game::player::Bond::SPHERE_RADIUS)
-                        .map(|(cell, p)| { self.bond.pos = p; cell }),
-                }
+                self.world.player_cel_relink(self.bond.cel, self.bond.prev_pos, self.bond.pos, self.bond.pos)
             };
             let water = bond_cel.and_then(|cell| self.room_cell.iter().position(|&c| c == Some(cell)))
                 .map(|r| self.cels[r].water).filter(|w| *w > -400.0);
@@ -14096,24 +14076,10 @@ impl Sim {
                 }
             }
             let cel = if (0..3).any(|k| (b.pos[k] - b.prev_pos[k]).abs() > 3.0) {
-                // void-recovery: the teleport arm runs the game's poke semantics too — obj+0x40
-                // (here `prev_pos`) survives the poke, so a FindCel miss recovers from the
-                // PRE-jump position [M 0x133288:186-231].
-                let old_prev = b.prev_pos;
                 b.prev_pos = b.pos;
-                match self.world.find_cel(b.pos) {
-                    Some(c) => Some(c),
-                    None => self.world.out_of_cel_recovery(b.cel, old_prev, nf_game::player::Bond::SPHERE_RADIUS)
-                        .map(|(cell, p)| { b.pos = p; cell }),
-                }
+                self.world.find_cel(b.pos)
             } else {
-                match self.world.player_cel_relink(b.cel, b.prev_pos, b.pos, b.pos) {
-                    Some(c) => Some(c),
-                    // void-recovery: the cel-change default arm [M 0x133288:186-231] — same as the
-                    // single-player site above.
-                    None => self.world.out_of_cel_recovery(b.cel, b.prev_pos, nf_game::player::Bond::SPHERE_RADIUS)
-                        .map(|(cell, p)| { b.pos = p; cell }),
-                }
+                self.world.player_cel_relink(b.cel, b.prev_pos, b.pos, b.pos)
             };
             let water = cel.and_then(|cell| self.room_cell.iter().position(|&c| c == Some(cell)))
                 .map(|r| self.cels[r].water).filter(|w| *w > -400.0);
