@@ -167,3 +167,6 @@ No [L] pin loosened.
   gfx-frame snap (live check 2's fix) is already in aim_snap's wire branch. interactables
   07000014: 9/1 unchanged (the cut rewrite not started — the window went to the diagnosis);
   the fix's three findings are the rewrite's recipe.
+
+## aim-finish
+Started 2026-11-06 07:22 UTC. Branch s/aim-finish (from origin/s/aim-node-pass-2 cb62c58e; origin/master c2c4a6e already contained — the merge is a no-op). Task: finish the 14 cut re-quote — rewrite interactables_07000014_live's cut loop the fusebox_geometry way (aim from bond.head(), set yaw/pitch directly, hip-fire plain input; keep every assertion), re-run the aim-stack binaries on the merged tree (fusebox_geometry 14, interactables 14, rocket_stop_plane08, rocket_glass08, rocket_origin, solar_panel_hits, walkreal 08/0c/14/16/1b), and check the two aim filters read inst.placement.flags (not the object flags) with a measured filtered-instance count per level.
