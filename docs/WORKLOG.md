@@ -332,3 +332,23 @@ explain the 600 zero ticks at d 63.6); 08 whole mission real_damage_00agent (sta
 the declared branch, else measured ignore for the 00 Agent sister only). No [L] loosening beyond
 item 3's, no game-code changes to suit a walk. Finish binaries: those whole plus walkreal 01, 06,
 16, 1b, enemy_accuracy_live.
+## stream-batch (2026-11-06)
+Started 2026-11-49 UTC. Branch s/stream-batch cut from origin/s/gas-guard-repin ee3a7dade,
+merging origin/s/muzzle-on-master-2 3dbc1a3c7, origin/s/guard-repin-master 0cc4409fd,
+origin/s/guard-repin-master-2 c6b6851dc (landed), then origin/master d6245281a (already
+contained). Task: one batch re-pin — the gas, guard and muzzle draw families measured and
+re-pinned on the JOINED tree so the real-damage walks balance once; keep every gas and
+muzzle draw. Merge resolutions (the "most recent tree" rule, per walk): ai_live guard_takes_
+cover seed 16 (muzzle tree, 11:09 UTC) over gas's 4 (~03:35 UTC); enemy_accuracy taken
+WHOLESALE from guard-repin-master — its harness carries the fixed-stream measure() reset
+(Rng::new(0xacd_1b6a), guard-batch-repin's bisect) with its own re-measured pins; the muzzle
+branch's no-reset pins (11/11/17 …) ride a different harness model and are superseded by the
+joined re-run (the muzzle GAME-code draws stay, nothing lost). walkreal_07000001: kept the gas
+lineage's far-field sweep machinery + un-gated lip fights (07:56 UTC, answers the d3 4163
+far-pair death; the guard side's poll loop is common ground). walkreal_07000014: kept the gas
+side's nudge_west_of_the_door_jamb (the newest tree with a full 26-binary battery on record,
+gas-guard-repin 202/23/15). walkreal_07000015: UNION — the guard-lineage skin-based crossing
+kill AND the muzzle tree's post-fight nav_until_clear re-clear (different levers, both kept).
+walkreal_07000016: kept the gas side's full route economy `true` (a1d200d3c, conditioned on
+the gas draws the joined tree carries). docs/WORKLOG.md was add/add (absent on master):
+gas-lineage file kept whole, guard-repin-master's entry appended, never rewritten.
