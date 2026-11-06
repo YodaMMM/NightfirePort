@@ -247,6 +247,15 @@ fn guard_takes_cover_like_the_game() {
     // moves the first sighting, shifting the shared stream). Seed 2 (re-picked at the attack-reentry-choice merge, 913: Attack's own fallback sends the level's
     // mode-2 guard to SniperAim 0x2a [M 0x164210:85-88] instead of Combat, shifting the shared stream;
     // fix-impact-remainder2 had 4, fix-ai-remainder 1).
+    // Seed 3 (re-picked at guard-goal-arrival-radii form 1: FindCover sets its own goal's arrival
+    // radius from the chosen node's kind byte — 0.5 for kind 0/1, else 1.0 [M 0x152548:174-181,
+    // `pcVar7` walks the 0xb0-stride node array] — where the port's flat 2.0 stand-in sat, so the
+    // cover run arrives deeper and the shared stream shifts. The live pins do NOT move: the game's
+    // cover radius was always 0.5, the in-cover pin (58.83, 99.32) was measured under it, and the
+    // re-scanned seeds land back on it (err 0.01-0.03) — only the aim-duration pin disagreed, and
+    // only because the stream shifted. Seeds 0-40 on this model: 3, 15, 16, 18, 23, 25, 28, 29,
+    // 30 and 36 pass every pin; 1, 4, 7, 9, 11, 12, 17, 19, 31 and 37 hold the 90-tick lean in
+    // UnderCoverAim (live 37), the rest pick another first move or cover spot; 9 had 9).
     // Seed 9 (re-picked at the single blend-out word: `Ready2Fire` reads `Drone+0x538`, which the
     // first replaced script to die clears [M 0x13b1c8:76-77, 0x1c14f0:26-29], so the guard's Combat
     // shots before the cover run land on other ticks and the shared stream shifts. Seeds 0-24 on

@@ -244,7 +244,28 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // fights (its pinned timeline has no return fire — the "enemies may be disabled" allowance),
     // so an unconditional shoot(0) there burns the clip on an untouched guard at 10 u and the
     // crossing arrives dry (the measured master failure: clip 0 spare 0 at #462).
-    if !w.tops_up() { w.shoot(0, "the silo rifle guard (placement 699)"); }
+    // guard-radii-finish: the shoot resolves the guard by his skin at the crossing spot, not a
+    // hard port index — on the merged tree the crossing's own return fire kills skin 0x5000087
+    // as port index 1 at tick 977 [L the kill trace on this tree: his last stands (61.99, 41.28,
+    // 1.99) → (61.55, 41.28, 2.21), the two P2K hits 4.8 → −0.5], so the old shoot(0) aimed at a
+    // different guard whose parts never expose from the lane (37 P2K rounds, his health 25
+    // unchanged, the 2026-11-06 run) and the #462 shot arrived dry. A player shoots the guard who
+    // is actually plinking the crossing; when the return fire has already dropped him, Bond
+    // crosses and shoots the beam — no ammo spent on a corpse or on a guard behind the lip.
+    if !w.tops_up() {
+        let guard = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
+            d.team == 1 && !d.corpse && d.health > 0.0 && d.skin == 0x5000087
+                && walker::dxz(d.pos, [61.99, 41.28, 1.99]) < 4.0
+        });
+        match guard {
+            Some(g) => {
+                if !w.shoot(g, "the silo rifle guard (placement 699, at the crossing spot)") {
+                    if w.resupply("silo rifle ammo") { w.shoot(g, "the silo rifle guard (placement 699, at the crossing spot) retry"); }
+                }
+            }
+            None => eprintln!("[15] the crossing rifle guard is already down (the return fire finished him) — straight to #462"),
+        }
+    }
     let d = shoot_mine(&mut w, 462, mine462, "the silo-crossing beam #462");
     assert!(d > 4.0, "#462 is shot from down the lane ({d:.2} u)");
     assert!(w.follow_nav_route([34.6, 41.4, 6.0], "the silo crossing"), "the nav route crosses the gantry");
