@@ -53,3 +53,13 @@ binary that touches spawners.
 - Plan: reproduce the death (t9526, −35.02,38.49,−43.14), trace the shifted stream into 05's
   proximity-spawner attempts, then read the decompile of the spawner pick [M 0x137cb0:21,
   0x137aa0:31-32,41-56,88-96] again on the 05 templates to classify moved-vs-wrong.
+- **spawn-pick-walk-05 (2026-11-06, ~16:55 UTC)**: the change re-verified RIGHT against the decompile
+  [M 0x137aa0:31-32; 0x137cb0:21,30-47,88-96]; the 05 chain moved on the shifted stream and died to a
+  point-blank AUTO-HIT [M 0x179740:113-115 — d < 3.0 = the zero-vector aim] the ditch stand's flanks
+  walked Bond into (−60.0 at d 1.1, t1574). Re-pinned test-side: keep_off 3.5 bounds the sniper stands
+  (walker.rs's own opt-in, doc cites the same line). walkreal_07000005_live whole: 14/0 (the 00agent
+  chain end health 53.2, exit 0x07000006); walkreal_0700001b_live 17/0/2; nf-game lib 688/0/5.
+  NEW FINDING: the merge turns walkreal_07000006_live's real_damage + real_damage_agent red (4/2/1)
+  — proven green with master's drone.rs+spawners.rs over this tree (the merge's only source files);
+  the d1/d2 deaths sit in the searchlight courtyard (the guard-repin fd3f231ab prior art is unmerged).
+  The 06 re-pin is the next session's first item. Report: docs/reports/spawn-pick-walk-05.md.
