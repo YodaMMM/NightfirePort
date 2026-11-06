@@ -120,9 +120,9 @@ fn mission_row() -> (usize, usize, usize, usize) {
 ///   the drive targets the cursor position that puts the effective aim on the part;
 /// - the STILL gate: tap only after the guard holds still 18 ticks — a stepping guard is not
 ///   where the view was when the round lands (the round FLIES [M Bullet_update 0x12e7b0]);
-/// - the STRICT gun-ray exposure re-pick every 10 ticks (`DamageLog::exposed_part_gun_rays` —
-///   the muzzle-lane ray set, the fights' own idiom) with the 200-tick unseen bail (the 06 roof
-///   guard's lean-in flicker: a window that lasts ~100 ticks still ends in a tap within 200).
+/// - the STRICT exposure re-pick every 10 ticks (`DamageLog::exposed_part` — the eye-ray set, THE
+///   shared rule this walk's own plain fights fight with) with the 200-tick unseen bail (the 06
+///   roof guard's lean-in flicker: a window that lasts ~100 ticks still ends in a tap within 200).
 /// Never writes health, armour or ammo; the only inputs are the view drives + the trigger taps.
 fn aimed_stand_03(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
     // Settle: no input until the switch anim is done, then the raise loop (the 0c idiom).
@@ -176,7 +176,7 @@ fn aimed_stand_03(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                     eprintln!("[03] the aimed stand ({label}): drone #{di} bailed NO-HIT at +{t} (still {still})");
                     return false;
                 }
-                if t % 10 == 0 { aim = walker::DamageLog::exposed_part_gun_rays(&sim, di); }
+                if t % 10 == 0 { aim = walker::DamageLog::exposed_part(&sim, di); }
                 if aim.is_none() { unseen += 1; if unseen > 200 { eprintln!("[03] the aimed stand ({label}): drone #{di} bailed UNSEEN at +{t}"); return false; } } else { unseen = 0; }
                 let b = sim.bond.pos;
                 let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
@@ -260,7 +260,7 @@ fn stand_shooters_down_03(w: &mut Walker, label: &str, radius: f32) {
                     .take_while(|h| now.saturating_sub(h.0) <= 600)
                     .any(|h| h.1 == i);
                 if !hitting { continue; }
-                if walker::DamageLog::exposed_part_gun_rays(&sim, i).is_none() { continue; }
+                if walker::DamageLog::exposed_part(&sim, i).is_none() { continue; }
                 best = Some(i);
                 break;
             }
@@ -390,6 +390,15 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         // game's own mid-fight cycle [L the 00agent-02-03-2 ledger].
         w.dmg.switch_dry = true;
     }
+    if difficulty >= 2 {
+        // guard-repin-master-2, measured on the sweep run's ledger: the fights answered the
+        // east-lawn post #4's 26-chip volley (36.7 across the servant-0 navs, ticks 40215-40329)
+        // only after fighting the nearer #3/#5 first — the nearest-first pick ignores who is
+        // actually draining. The damage-weighted pick (the 08 walks' hurting_first arm, opt-in
+        // [M the DamageLog::return_fire pick doc]) answers the biggest current damager first;
+        // the visibility gate and the windows are untouched.
+        w.dmg.hurting_first = true;
+    }
     let (li, o0, o1, o2) = mission_row();
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -435,6 +444,23 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     ] {
         w.walk_nav_to(at, name, 1.6);
     }
+    // guard-repin-master-2 item 1 (the 06 stand_shooters_down law, d-gated), measured on the
+    // fatal NF_DMG_TRACE ledger: the courtyard cluster opens on the mid-courtyard leg (#11
+    // skin 0x5000038 hp 24 fires at tick 7523 from (14.5,−29.0) d 9.1) and the plain fights
+    // need three windows (7931/9419/9952) to take him — during the west-lawn legs he CHARGED
+    // to d 2.9 and dealt 56.0, and the walk reached the servant legs at 34.6 where the door
+    // ambush (#5 + #3, exactly 34.6 dealt at the (22.3,10.9) door) finished Bond at 51805.
+    // From the leg-end anchor (13,−18) neither #10 nor #11 has a reachable box (the sweep's
+    // own cand dump: both "hitting true exposed false"), but the fights fought them from the
+    // nav's mid-leg stops (10.4..11.5, −20.8) — the ray line needs the courtyard's east lane.
+    // A player steps back to the angle he fought from and drops the posts: the walk-back leg
+    // re-takes that line, the aimed stands (the aim-bit zero-spread act [M Bullet_init
+    // 0x12c5a0:139-170]) take the 5-hp #10 and the 24-hp #11 before the west-lawn legs feed
+    // the charge.
+    if difficulty >= 2 {
+        w.walk_to(Wp { at: [11.0, 6.5, -21.5], act: Act::None, arrive: 1.0 }, "the mid-courtyard angle (the shooters' fight line)");
+        stand_shooters_down_03(&mut w, "the mid-courtyard shooters", 40.0);
+    }
 
     // 1. "Rescue Mayhew's servants" — the leaves 0x4f (servant #389) and 0x50 (#388) are the
     //    placements' param 6 [D probe]. Each servant's enable plate (p3) enables the servant AND
@@ -471,6 +497,13 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x21),
             "the west-lane approach stands inside the west 0x21 plate's footprint [D lo/hi x 7.3..10.7 z −35.0..−33.7]");
+    }
+    // guard-repin-master-2 item 1 (the 06 stand_shooters_down law, d-gated), measured on the
+    // first run: #11 is already dead (the plain fights killed him at 9952 during the west-lawn
+    // legs) by this leg end — the sweep here is the law's placement for the legs AHEAD (any
+    // shooter who opened on the moat legs).
+    if difficulty >= 2 {
+        stand_shooters_down_03(&mut w, "the gate-plate-lawn shooters", 40.0);
     }
     // Back to the servants' ground by the east lane the "mid courtyard" leg itself walked
     // (x 10.0-10.6 from the moat to the door at (11.8, 6.5, -20.2): the nav stops Bond reached
