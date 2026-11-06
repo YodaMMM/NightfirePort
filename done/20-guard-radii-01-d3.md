@@ -25,3 +25,8 @@ claimed-by: sandbox7 at 2026-11-06T03:23Z
 ---
 ## Report (done, 2026-11-06T05:21Z)
 
+
+---
+## Report from the worker (done, 2026-11-06T05:21Z)
+
+Closed by the driver: the report is on `s/guard-radii-01-d3` (docs/reports/guard-radii-01-d3.md); the worker didn't run finish.sh.
