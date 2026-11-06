@@ -37,59 +37,59 @@ burn-through, 0x148 special-death cry.
 
 | Caller @ addr | Target | Id | Trigger | Status |
 |---|---|---|---|---|
-| `Player_HandleJump` 0x1916b0:111 | Sound_Play | 0x1DB | level 0x0700007 & ch 0x48 off: the refused jump | PORTED `nf-view/src/scene.rs:2294` |
-| `Player_HandleJump` 0x1916b0:184 | Sound_Play3D | 0xA3 | jump press: the launch | PORTED `player.rs` `sfx_out` → `scene.rs:2324` + test |
+| `Player_HandleJump` 0x1916b0:111 | Sound_Play | 0x1DB | level 0x0700007 & ch 0x48 off: the refused jump (action-7 edge, grounded-history ≠ 0, head-hit flag clear; returns without launching) | MISSING — no port path (rg: only comments); the port launches the jump and plays 0xA3 where the game refuses (sweep 2026-11-06; condition pinned in the report) |
+| `Player_HandleJump` 0x1916b0:184 | Sound_Play3D | 0xA3 | jump press: the launch | PORTED `player.rs:1673-1694` `sfx_out` → `scene.rs:3461` + test |
 | `Player_HandleJump` 0x1916b0:195-198 | Sound_Play3D | 0x5FB / 0xA3 | jump landing (flag 8, feet on ground; a head hit, flag 0x20, is silent [M :68-71]); 0x5FB when the feet ray's first hit byte `- 0xd < 2` (0xD/0xE, water), else 0xA3 | PORTED `player.rs` landing arm + `jump_landing_sound_live` |
-| `Player_HandlePain` 0x1902c8:113 | Sound_Play3D | 0x88 | pain (1-in-4 roll) | PORTED `drone.rs:6725,8333` |
-| `Player_DealWithObjHit` 0x194458:231-255 | Sound_Play/3D | 0x600, 0x412, 0x171 | Bond hit by an object (the 0x180 gate) | PORTED `drone.rs:8335-8350` |
-| `Player_CheckForDeath` 0x190810:41,88 | Music_Event / Sound_Play3D | 6 / 0x89 | Bond dies: the music pulse + the death grunt | PORTED `music.rs` event 6, `death.rs:215` |
-| `Player_MonitorAir` 0x191a70:106-141 | Sound_Play/3D/Stop | 0x60B, 0x60C, 0x27 | the dive loop 0x27 on under-entry, the gasp 0x60C on exit, 0x60B low-air | PORTED `scene.rs:2381-2394`, `sound.rs` swim gate |
-| `Player_ChangeSubState` 0x190630:83-85 / `Player_Init` 0x1910f8:41-43 | Sound_StopAllWithId | 0x12, 0x3D, 0xF0 | substate change: the loop stops | PORTED `audio.stop_all_with_id` (`scene.rs:2398,2712`) |
-| `Player_SetWeaponAnimObj` 0x1a2e38:227-295 | Sound_Play | 0x283/0x280 holster, 0x281/0x282 draw | the weapon-change machine (gadgets 0x4A..0x5E vs weapons) | PORTED `scene.rs:2715,2744,2787,2851` |
+| `Player_HandlePain` 0x1902c8:113 | Sound_Play3D | 0x88 | pain (1-in-4 roll; type-7 with cheats on skips) | PORTED `bullet.rs:356` roll → `drone.rs:21104`, `scene.rs:3522/3678` |
+| `Player_DealWithObjHit` 0x194458:231-255 | Sound_Play/3D | 0x600, 0x412, 0x171 | Bond hit by an object (the 0x180 gate; 0x600 is the MP head-zone arm) | PORTED `drone.rs:21108-21123` |
+| `Player_CheckForDeath` 0x190810:41,88 | Music_Event / Sound_Play3D | 6 / 0x89 | Bond dies: the music pulse + the death grunt | PORTED `music.rs` event 6, `death.rs:223-241` |
+| `Player_MonitorAir` 0x191a70:106-141 | Sound_Play/3D/Stop | 0x60B, 0x60C, 0x27 | the dive loop 0x27 on the under-entry edge, the gasp 0x60C + stop on the surfaced edge, 0x60B + pain every 30 ticks at air < 1.0 | PORTED `scene.rs:3565-3580` + `3525-3529` (swim latch `sound.rs:55-58`) |
+| `Player_ChangeSubState` 0x190630:83-85 / `Player_Init` 0x1910f8:41-43 | Sound_StopAllWithId | 0x12, 0x3D, 0xF0 | substate change into [1..3]∪[5..0x10] (NOT 0, NOT 4-crouch; Player_Init unconditional) stops the loops | MISSING — the port's `stop_all_with_id` sites fire on other events (weapon switch `scene.rs:4288/4303`, swim `scene.rs:3576`, script `scene.rs:4947`, drone anims `drone.rs:20686`); a live gadget loop survives a substate change where the game silences it (sweep 2026-11-06) |
+| `Player_SetWeaponAnimObj` 0x1a2e38:227-295 | Sound_Play | 0x283/0x280 holster, 0x281/0x282 draw | the weapon-change machine: gadget id in [0x4A,0x5E] → 0x280/0x281, else 0x283/0x282; keyed on the old (holster) / new (draw) record, silent when its anim script (+0xC4/+0xC0) is absent | PORTED `scene.rs:4297/4328/4374/4441` (the 4374 site misses the no-draw-script silence) |
 | `Player_WeaponChange` 0x1a6f80:128 | Sound_Play | 0x1DB | the change refused, `level_tag+0x62 == 1` | MISSING (the tag byte is unparsed) |
-| `Player_WeaponInitBullet` 0x1a4bf0:262 | Sound_Play | 0xEC | per bullet of a base-0x54 record (the Micro-Camera's shutter) | PORTED `drone.rs` `fire_player` (`MICRO_CAMERA_SHUTTER_SFX`) + test |
-| `Player_Zoom` 0x1a1a70:31-84 / `Player_Weapon` 0x1a24c8:164 | Sound_Stop | [BL+0x898] | scope/weapon exit stops the gadget loop | PORTED `scene.rs:2712` (`gadget_loop_ids`) |
-| `Player_Creep` 0x1969d0:85 / `Player_Wire` 0x197658:107 | Music_Event | 0xD | the creep/wire stealth music | PORTED `music.rs` event 13 |
+| `Player_WeaponInitBullet` 0x1a4bf0:262 | Sound_Play | 0xEC | per bullet of a base-0x54 record (the Micro-Camera's shutter) | PORTED `drone.rs:14102-14109` + test |
+| `Player_Zoom` 0x1a1a70:31-84 / `Player_Weapon` 0x1a24c8:164 | Sound_Stop | [BL+0x898] | scope/weapon exit stops the gadget loop — DEAD CODE in the game: +0x898 is only ever zeroed (ELF-wide immediate scan over ACTION.ELF/SLUS/DRIVING), the guard never passes | PORTED as a documented deviation `scene.rs:4288/4303` (stops the old weapon's loop ids at the switch — matching it literally would kill loop sounds) |
+| `Player_Creep` 0x1969d0:85 / `Player_Wire` 0x197658:107 | Music_Event | 0xD | every tick of creep (substate 7) / wire (6) | PORTED `scene.rs:3497-3506` (the port's `on_wire` adds SS_ZIPLINE — substate 0xf is silent in the game; dead in shipped data, both wires type 0) |
 | `Player_Update` 0x193600:121 | Music_Event | `level_tag+0xA1` byte | the level's constant music event | MISSING (byte unparsed; low impact) |
-| `HUD_UpdateStatusPane` 0x19c310:221-233 | Sound_Play | PlayMe1st=**0x5FC** / 0x1D4, PlayMe2nd=**0x1D5** / 1 (id table [M dis 0x19c618-0x19c664]; [L 0x30ccbc=0x5fc]) | the objective banner: the flash jingle / the new-objective sting | PORTED `scene.rs:3925` (1532/469/468) |
+| `HUD_UpdateStatusPane` 0x19c310:221-233 | Sound_Play | PlayMe1st=**0x5FC** / 0x1D4, PlayMe2nd=**0x1D5** / 1 (id table [M dis 0x19c618-0x19c664]; [L 0x30ccbc=0x5fc]) | the objective banner: the flash jingle / the new-objective sting | PORTED `scene.rs:6416-6434` (1532/469/468) |
 
 ### Weapons and bullets
 
 | Caller @ addr | Target | Id | Trigger | Status |
 |---|---|---|---|---|
-| `Bullet_init` 0x12c5a0:273 | Sound_Play3D | `param_7` | the caller-passed fire sound (guards' `weapon_data` fire id) | PORTED `drone.rs:7595,7641,7653` |
-| `Bullet_init` 0x12c5a0:285-291 | Sound_Play3D | **0x10E** | ammo type (+0x90) 0x0E = the grenade pool: the launch whoosh | **PORTED this pass** `drone.rs` `fire_player` + test |
-| `Bullet_init` 0x12c5a0:293-296 | Sound_Play3D | 0x5EF | weapon class (+2) 0x45: the grenade-bounce kin | PORTED `drone.rs:5173,8108` |
-| `Bullet_CollisionHandler` 0x12ce80:316-432 | Sound_Play3D | 0x4A7, 0x446, 0x51C, surface id / 0x15, 0x13 | bullet impacts by surface/material | PORTED `drone.rs:8379-8543`, `SurfaceSounds` |
-| `Bullet_DoTrails` 0x12d890:250 | Sound_Play3D | 0x1DC | the fly-by (closest-to-viewer + 1-in-5 roll) | PORTED `drone.rs:8355` (WORKLOG 0076) |
-| `Bullet_DoTrails` 0x12d890:292,411 | Sound_Play3D | 0x16, 0x14 | explosion/gas trail events | PORTED `drone.rs:8607,8658` |
-| `Bullet_DoTrails` 0x12d890:442 | Sound_Play3D | 0x447 | the smoke-trail tick | PORTED `drone.rs:8512` |
-| `Bullet_DoTrails` 0x12d890:473 | Sound_Play3D | **0x5DD** | the Lazer-Watch beam's burn life ends (0x4E/0x4F) | **PORTED this pass** (with the lock clunk) + test |
-| `Bullet_update` 0x12e7b0:104,290,327 | SetPosition / Stop / Play3D 0x27C | — | the in-flight loop follows the grenade; the bounce | PORTED `grenade.rs:114`, `drone.rs:8506` |
-| `Bullet_Delete` 0x12e660:14,53 | Stop / Play3D 0x28D | — / 0x28D | the loop stop; the claw bolt (+0x70 & 0x40) dying on a class-'Q' (0x51) grapple point plays 0x28D before `Player_SetGrapplePoint` | PORTED `scene.rs` `GRAPPLE_LATCH_SFX` at the latch + `gadget_grapple_live` |
-| `Bullet_casing_update` 0x12faa0:97 | Sound_Play3D | 0x1FE-0x204 by material | the casing lands | PORTED `casing.rs:168-223` |
+| `Bullet_init` 0x12c5a0:273 | Sound_Play3D | `param_7` | the caller-passed fire sound — NOTE: the guards (`DroneWeap_FireWeapon` 0x178f68) and the player's `Player_WeaponInitBullet` pass 0xffff and are silent here; their real fire ids ride FireWeapon's own `Sound_Play3D(+0x60)` (0x179490) and the fire script's op-1 (0x1c1b38:320) — only the anim-script fire op feeds a real id, unused in ported SP paths | PORTED `drone.rs:11283-11287` (the guards' real fire event) + `scene.rs:4918` (op-1) |
+| `Bullet_init` 0x12c5a0:277-282 | Sound_Play3D | **0x10E** | ammo type (+0x90) 0x0E = the grenade pool: the launch whoosh | **PORTED this pass** `drone.rs:14098` + test |
+| `Bullet_init` 0x12c5a0:286-290 | Sound_Play3D | 0x5EF | weapon class (+2) == 0x45 — the record is **Oddjob's hat** (base 0x45, +0x60 = 0x5ef, looped), not a grenade kin (grenades base to 0x2c/0x2e/0x30/0x6d) | MISSING — the port plays 0x5EF nowhere (the grenade-throw play was removed correctly; the hat spawn `scene.rs:5235` is silent); MP-only record, SP audibility open ([L SFXOutputData 0x5ef: looped, weight 0]) (sweep 2026-11-06) |
+| `Bullet_CollisionHandler` 0x12ce80:316-432 | Sound_Play3D | 0x4A7, 0x446, 0x51C, surface id / 0x15, 0x13 | bullet impacts: 0x4A7 the 0x100-family stick clang (satchel/hat), 0x446 the 0x80000 stick (tripbomb), 0x51C the even-count bounce block, 0x15/0x13 the 0x2000/0x20000 first bounces; the surface-id leg is callee `Effect_Bullet` 0x1ce8a8:86-90 | PORTED `drone.rs:21312, 21369-21372, 21008-21010` + `SurfaceSounds` |
+| `Bullet_DoTrails` 0x12d890:250 | Sound_Play3D | 0x1DC | the fly-by (weapon +0x6c & 0x40000, not the player's own shot, closest-point SqDist < 9, 1-in-5 roll) | PORTED `bullet.rs:264-268` → `drone.rs:21128` |
+| `Bullet_DoTrails` 0x12d890:292,411 | Sound_Play3D | 0x16, 0x14 | 0x16 the stun-grenade flash pop (the 0x2000 fuse expiry), 0x14 the smoke canister pop (the 0x20000 first expiry, re-arms +0xfc) — neither is the frag blast | PORTED `drone.rs:21429, 21461-21466` |
+| `Bullet_DoTrails` 0x12d890:442 | Sound_Play3D | 0x447 | the satchel-charge (base 0x3b) countdown beep, on the quarter-second digit change at the (qs&3)/sec<10/sec<5 cadence — there is no smoke-trail sound in DoTrails | PORTED `drone.rs:11657-11661` → `21324-21327` (label fixed 2026-11-06 sweep) |
+| `Bullet_DoTrails` 0x12d890:473 | Sound_Play3D | **0x5DD** | the satchel charge's burn life ends under the Lazer-Watch beam (the charge's +0x102 counter drains on class-5 contacts of 0x4E/0x4F rounds) | **PORTED this pass** `drone.rs:15464-15495` + tests (the old label read the beam's life backwards — the ids and event were right) |
+| `Bullet_update` 0x12e7b0:104,290,327 | SetPosition / Stop / Play3D 0x27C | — | :104 the in-flight loop follows the grenade; :290 the state-3 stop on landing; :327 the 0x80000 arm-clock expiry creates the beam obj and plays 0x27C — the **tripbomb's laser-arm sound**, not a bounce | PORTED `drone.rs:14809-14812, 15969, 21318-21319` (`grenade.rs:308-315` raises the Arm) |
+| `Bullet_Delete` 0x12e660:14,53 | Stop / Play3D 0x28D | — / 0x28D | the loop stop; the claw bolt (+0x70 & 0x40, player-owned, stuck) dying on a class-'Q' (0x51) grapple point plays 0x28D before `Player_SetGrapplePoint` (latch ⇔ sound) | PORTED `scene.rs:3193-3205` `GRAPPLE_LATCH_SFX` + `gadget_grapple_live` (the port fires at the fire-press latch — no bolt flight) |
+| `Bullet_casing_update` 0x12faa0:97 | Sound_Play3D | 0x1FD-0x204 by material | the casing lands (once; state ∉ {2,3}, y ≤ the eject-set landing plane) | PORTED `casing.rs:276-282, 320-331` |
 | `Break_Kill` 0x12b970:69-75 | Sound_Play3D | 0x5F2 (41% roll) / 0x5F3 / 0x2E | a breakable (class 0x20) dies | MISSING — the Break class is unported (`parsemap` case 0x20 → `Break_Create`; no port list) |
 
 ### World objects
 
 | Caller @ addr | Target | Id | Trigger | Status |
 |---|---|---|---|---|
-| `Door_SetState` 0x135618:11-18 / `Door_Activate` 0x135be0:84 | Sound_Play3D | DOOR data +0x60/+0x62/+0x64 | entering state 8 / 0x10; the locked-hit feedback | PORTED `door.rs:337-345` (`SoundEvent` outbox) |
-| `Lock_Update` 0x1ae3d8:92 | Sound_Play3D | **0x249** | the laser burn drops +0x105 below 4 → `Lock_Unlock` | **PORTED this pass** (with 0x5DD) + test |
+| `Door_SetState` 0x135618:11-18 / `Door_Activate` 0x135be0:84 | Sound_Play3D | DOOR data +0x60/+0x62/+0x64 | entering state 8 → +0x60, entering 0x10 → +0x62 (both edge-gated); the locked-hit +0x64 (lock channel off & state & 0x12) and the one-way approach gate (dot = (door−activator)·facing, mode 1 dot<0 / mode 2 dot>0) | PORTED `door.rs:461-462, 696-708` (`SoundEvent` outbox) — the one-way dot was mirrored until this sweep (fixed + `one_way_door_refuses_from_the_game_side`) |
+| `Lock_Update` 0x1ae3d8:92 | Sound_Play3D | **0x249** | the laser burn drops +0x105 below 4 → `Lock_Unlock` | **PORTED this pass** `lock.rs:172-181` → `drone.rs:15423-15434` + `sound_coverage_live.rs:161` |
 | `Lock_Update` 0x1ae3d8:282 | Sound_Play3D | (unlock click) | the picklock sequence's unlock | MISSING — the picklock minigame is unported (lock.rs covers the burn only) |
-| `Lock_Update` 0x1ae3d8:368,374 | Sound_Play | 0x5DB, 0x5DA | the picklock ticks / the success | MISSING (same) |
+| `Lock_Update` 0x1ae3d8:368,374 | Sound_Play | 0x5DB, 0x5DA | the picklock ticks / the success | PORTED `lock.rs` `pending_sounds` + `lock_sounds_live.rs` (was MISSING when this table was written) |
 | `Lock_Activate` 0x1aed00:27-32 / `Lock_Unlock` 0x1b0650:18 | Sound_Play3D | LOCK words [2]/[3] = placement params 3/4 (0 → 0xFFFF) | the key-lock rattle / the unlock | DEAD DATA: 0xFFFF on every disc 0x2E placement [D]; `Lock::key_channels` keeps them, the keypad solve plays word [2] |
-| `Searchlight_Update` 0x1cb900:401,455 | Sound_Play3D | 0xE5, 0xE6 | the searchlight's sweep/alarm | PORTED `searchlight.rs:279,449` |
-| `Sensor_Update` 0x1af618:103-255 | Sound_Play3D | 0x4AA (activate), 0x4A9 (accelerating beep: 0.5→0.25→0.125 s), 0x4DD (sweep ends) | the security camera (placement 0x28) | PORTED `sensor.rs` (`SFX_HUM`/`SFX_SERVO`/`SFX_BEEP`) + `sensor_live` |
-| `Pickup_Handler` 0x18e650:336 | Sound_Play3D | PICKUPINFO +0x2A (kind overrides 0xF5/0x141/0x14C) | the pickup taken | PORTED `pickup.rs:81-126` |
-| `Hint_Update` 0x1b3380:26 | Sound_Play | HINT data [0] | the hint volume fires | PORTED `scene.rs:2295` |
+| `Searchlight_Update` 0x1cb900:401,455 | Sound_Play3D | 0xE5, 0xE6 | 0xE5 the state-3 off→on relay clunk (the on-channel byte 0x34); 0xE6 the >0-damage bullet contact glass break | PORTED `searchlight.rs:377-385, 605-623` |
+| `Sensor_Update` 0x1af618:103-255 | Sound_Play3D | 0x4AA (activate), 0x4A9 (accelerating beep: 0.5→0.25→0.125 s), 0x4DD (sweep midpoint + wrap) | the security camera (placement 0x28) | PORTED `sensor.rs` (`SFX_HUM`/`SFX_SERVO`/`SFX_BEEP`) + `sensor_live` |
+| `Pickup_Handler` 0x18e650:336 | Sound_Play3D | PICKUPINFO +0x2A (kind overrides 0xF5/0x141/0x14C) | the pickup taken (past the equip/ammo/armour refusals; 0xffff = Pickup_Create's no-sound sentinel) | PORTED `drone.rs:17286-17294` |
+| `Hint_Update` 0x1b3380:26 | Sound_Play | HINT data [0] | the hint volume fires (first player-entry, ON-channel set/OFF-channel clear, one-shot by self-delete) | PORTED `scene.rs:3383-3396` (2-D in the game, the port plays 3-D at Bond's head) |
 | `SoundTrigger_Update` 0x1b2790:30-59 | Play3D/Play/Stop | TRIGGER data `puVar2[3]`, loop stop | the channel-gated emitter | PORTED `sound.rs` `SoundTriggers::tick` |
-| `MusicTrigger_Update` 0x1b31a0:24 | Music_Event | TRIGGER data [0] | the music trigger volume | PORTED `music.rs` (the trigger volumes feed the event table) |
+| `MusicTrigger_Update` 0x1b31a0:24 | Music_Event | TRIGGER data [0] | the music trigger: a channel-gated 30-tick repeater (`Music_Event(id, 2)` per countdown tick, p1 channel deletes), not a volume test | PORTED `worldobj.rs:514-529, 566-574` (label + location fixed 2026-11-06 sweep) |
 | `Hurt_Update` 0x17e5d0:120 | Sound_Play3D | HURT data +0x1A | the hurt volume's activation sound | DEAD DATA — `hurt.rs` `sound` (param 3) is 0xFFFF on every surveyed placement [D] |
 | `Light_Update` 0x1cafb8:27 | Sound_Play3D | LIGHT data +0x2C | the flicker counter wraps through 0xF000 | MISSING in code but **dead data**: the placement call sites never write +0x2C (`light.rs:145-148`) |
-| `AnimObjectUpdate` 0x1befd8:205 | Sound_Play3D | 0x286 | the anim object's event | PORTED `scene.rs:2402,2424` |
+| `AnimObjectUpdate` 0x1befd8:205 | Sound_Play3D | 0x286 | the anim object's event — the ladder rung step: Bond (obj+0xff==3), the stride-accumulator footstep bit (anim+0x60 & 4), substate 1 climb | PORTED `scene.rs:3598-3630` |
 | `AnimProcessScriptCmds` 0x1c1b38:320,388 | Play3D / StopAllWithId | the anim script's sound cmd | the animation-script sounds | PORTED (`anim_sounds`, `d.sfx` paths) |
-| `RB_RestingContact(Rot)` 0x1d7168:111 / 0x1d73a0:121 | Sound_Play3D | RIGIDBODY+0x158 (level_tag+0x3c, 0 → 0xFFFF) | a class-5 contact on a rigid body | PORTED `rigid_body.rs` (was playing the 100.0f volume word as the id); 0xFFFF on every disc 0xD8 placement [D] |
+| `RB_RestingContact(Rot)` 0x1d7168:111 / 0x1d73a0:121 | Sound_Play3D | RIGIDBODY+0x158 (level_tag+0x3c, 0 → 0xFFFF) | a class-5 contact on a rigid body | PORTED `rigid_body.rs:722-729, 874-899` (id at :1203; drain `drone.rs:19649`), 0xFFFF on every disc 0xD8 placement [D] |
 | `SS_Update` 0x1a9948:86 | Sound_Play3D | SS data +0x14/+0x26 | the SS (0x25) playback state 0x40 | MISSING — the port's `ss.rs` runs activation only, not the playhead states |
 | `SpaceLaser_Update` 0x1aa3f8:82-194 | Play 0x5DE / Play3D 0x46A / Stops | — | the laser grid: the trip hum (2-D) and the beam hit | MISSING — class 0x50 unported |
 | `View_DrawSky` 0x1e5ad0:104-107 | Sound_Play | 0x5D (`LightningType==0`) / 0x5E | the sky slot's thunder countdown hits 1 | PORTED `drone.rs` `sky_frame` (0700000a/0b slot 3 [D]) + `sensor_live` thunder test |
@@ -102,13 +102,13 @@ burn-through, 0x148 special-death cry.
 | Caller @ addr | Target | Id | Trigger | Status |
 |---|---|---|---|---|
 | `NDrone2_PlaySFX` 0x141848:121 | Sound_Play3D | `Drone_SfxInfo` entry | the state arms' foley one-shots | PORTED (`foley_reqs` drain, fix-room-sound) |
-| `NDrone2_DoHitEffects` 0x1458e0:108-111 | Sound_Play3D | 0x601 (HITDATA+0x52==5) / 0x413 | the guard body hit | PORTED `drone.rs:6343-6346` (0075) |
-| `NDrone2_DSTATE_SpecialDeath_Anim` 0x163c68 case 5 | Sound_Play3D | **0x148** | the special death of script 0x0600021F, `glb_players != 0` | **PORTED this pass** (`sfx_reqs` drain) + test |
-| `DroneWeap_FireWeapon` 0x178f68:277 | Sound_Play3D | the weapon's fire sound | the guard fires | PORTED (the weapon-data fire path) |
+| `NDrone2_DoHitEffects` 0x1458e0:108-111 | Sound_Play3D | 0x601 (HITDATA+0x52==5) / 0x413 | the guard body hit (damage > 0.5, the firing weapon's +0x70 & 0x180 clear) | PORTED `drone.rs:15571-15576` |
+| `NDrone2_DSTATE_SpecialDeath_Anim` 0x163c68 case 5 | Sound_Play3D | **0x148** | the special death of script 0x0600021F: case 5 = the ANIM_DONE message (the script's completion), at the PLAYER's position (`glb_players+0x30`), `glb_players != 0` | **REPAIRED this sweep** — was queued on state ENTER at the drone (right id, wrong event/pos); now `drone.rs:4745-4756` (ANIM_DONE arm) + test (`special_death_0x0600021f_plays_0x148`) |
+| `DroneWeap_FireWeapon` 0x178f68:277 | Sound_Play3D | the weapon's fire sound | the guard fires (weapon_data +0x60, skip 0x5EF; the `Rand(500)−250` pitch draw is not consumed — fix-guard-weapons3) | PORTED `drone.rs:11283-11287` |
 | `BOT_handlePain` 0x125ed8 / `BOT_soundEffect` 0x126618 | Playing_Ref / Stop_Ref | [DCVars+0x73C] | the pain-grunt loop ref | PORTED (`pain_grunt`, fix-room-sound) |
-| `DroneVision_HaveOpponentSight` 0x175ef0:90 / `NDrone2_SeenAndAttacking` 0x145150:68 / `DroneFunc_CheckAlarmRaised` 0x1453a8:15-42 / `Drone_EnableAll` 0x1383e8:28 / `Drone_InitComms` 0x139520:195 / `NDrone2_DSTATE_HostageSaved` 0x15ccf0:21 | Music_Event | 0xF seen, 0x2 combat, 0xE comms, 0x10 hostage | the combat-music state machine | PORTED `music.rs` (`seen_and_attacking`, `attack_gate`, events) |
+| `DroneVision_HaveOpponentSight` 0x175ef0:90 / `NDrone2_SeenAndAttacking` 0x145150:68 / `DroneFunc_CheckAlarmRaised` 0x1453a8:15-42 / `Drone_EnableAll` 0x1383e8:28 / `Drone_InitComms` 0x139520:195 / `NDrone2_DSTATE_HostageSaved` 0x15ccf0:21 | Music_Event | 0xF seen, 0x2 combat, 0xE comms, 0x10 hostage | the combat-music state machine | PORTED `music.rs` (`seen_and_attacking`, `attack_gate`, events); the 0x10 hostage cue's outbox drain repaired this sweep (`drone.rs:20585-20592` + `hostage_saved_posts_the_0x10_music_event`); `EnableAll`'s 0xF rides the 0x600001b script (not live on ported levels) |
 | `Mission_Update` 0x182c60:25-36 / `Mission_MonitorObjectives` 0x1827d8:122 / `Player_CheckForDeath` 0x190810:41 | Music_Event | 8 objective, 7 fail, 6 death | the mission music pulses | PORTED `drone.rs:7108-7110`, `music.rs` |
-| `Trigger_Activate` 0x1b2318:109 | Music_Event | 3 | the exit trigger's end sting | PORTED `drone.rs:7612` (LOAD_LEVEL) |
+| `Trigger_Activate` 0x1b2318:109 | Music_Event | 3 | the exit trigger's end sting | PORTED `drone.rs:19585-19592` (LOAD_LEVEL) — deviation: the port also fires (3,1) on the script 0x12 LoadLevel path (`drone.rs:17049`) where the game's `Script_EventHandler` posts nothing |
 | `Copter_Update` 0x17dbb8:189 / `Sub_Update` 0x1ad200:116 / `Sub_DeployTorpedoes` 0x1acf68:74 / `MiniSubState_Attack` 0x181b00:216 / `GT_Update` 0x180498:291 | Music_Event | 2 | the vehicle combat music | N/A (driving) |
 | `Script_SoundStart` 0x1d8820:36-40 / `Script_KillStream` 0x1d9860:83 / `Script_Interp` 0x1d9a08:224-233 | Play/Play3D, Stop, SetVolume/SetPosition | the script stream's id | the NIS/script sounds (follow, fade, stop) | PORTED (`script_sounds`, sound.md) |
 | `Script_CameraStart` 0x1d9140:48 / `Script_FFwd` 0x1dac78:55 / `Script_KillStream` 0x1d9860:74 / `Script_Play` 0x1db588:40 | Music_Event | 0xB, 5, 0xC, 6 | the NIS music markers | PORTED `music.rs` (`nis_state`) |
