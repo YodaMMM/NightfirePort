@@ -169,6 +169,12 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
         // 1.9 u (4.0, the last health) and round 1's flight-B blocker stood 1.6 u. A player
         // back-pedals out of the free-hit band while shooting (the opt-in steps back, aim held).
         w.dmg.back_off = Some(2.6);
+        // The eye-ray stands (real-health-00agent-11-3): the strip guards fire across the
+        // flights while the lane fights' muzzle stand-in rays clip the flight lips — the
+        // measured crossings drained the armour 43→0 with NO fight triggered (the pick returned
+        // None while the volleys kept landing). Answer what he sees (the opt-in flag; every
+        // other walk keeps the lane gun-ray pick).
+        w.dmg.eye_ray_stands = true;
     }
 
     // THE 00 AGENT PRE-LEG (real-health-00agent-11-2): take the top-floor BodyArmour BEFORE the
@@ -629,7 +635,20 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage_agent() {
 /// Player_HandlePain 0x1902c8:40-41; DroneWeap_DoBulletAccuracy 0x179740:74-88; damage.rs];
 /// the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input only.
 #[test]
-#[ignore = "00 Agent (round 2, s/real-health-00agent-11-2): the armour pre-leg is measured (the desk-maze corridor-BFS to the take ring, armour 50 on [M 0x18e650] at +2922 ticks; round 1's 70-cost landing fights now cost 0) and the walk reaches the 18.9 strips on the 130 budget (80 health + 50 armour) — it dies at connector 2 (tick 5973, 20 hits for 100.0, 16 fights won) with the 23.0/18.9 pairs' crossfire the remaining ~40-health hole; docs/reports/real-health-00agent-11-2.md"]
+/// UN-IGNORED (real-health-00agent-11-3, 2026-11-06): GREEN — the round-2 hole (the
+/// 23.0/18.9 pairs' crossfire, the ~40-health binder) closed by the `eye_ray_stands` opt-in
+/// alone: the strip guards' boxes sit behind their flight lips — the lane fights' muzzle
+/// stand-in rays could never see them (the pick returned None) while their own sight cleared
+/// the lip, so every crossing drained the armour with no fight triggerable. With the stands
+/// answering what Bond SEES (the plain eye ray [M DamageLog::exposed_part], the opt-in flag,
+/// damage_log.rs), the pairs die in the walk's own fights (the measured run: #33/#34 on the
+/// 23.0 strip, #28 at flight A, #36 at the Load Point) and the walked chain reaches the Load
+/// Point exit and the real 07000012 load on the 130 budget with 17.0 to spare. The frag
+/// pair-break levers were built, thrown and measured THREE ways (4.7 u / 7.9 u / 9.0 u aimed)
+/// and are REMOVED: the lip occludes the blast from above too (zero guard damage each time,
+/// 21-63 self-cost) — the grenade lever is dead against lip-covered strips. Round 2's ledger
+/// lives in docs/reports/real-health-00agent-11-2.md.
+#[test]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage_00agent() {
     walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||
