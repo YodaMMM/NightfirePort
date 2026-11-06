@@ -796,6 +796,7 @@ impl Walker {
         // own view of the target's death walk; tick_inner's traces don't run here (this loop
         // calls step_bond directly).
         let kill_trace = std::env::var_os("NF_KILL_TRACE").is_some();
+        let kill_trace_pos = std::env::var_os("NF_KILL_TRACE_POS").is_some();
         let mut kt_health = f32::MAX;
         let mut kt_state = 0xffu8;
         for t in 0..cap {
@@ -808,6 +809,11 @@ impl Walker {
                             kt_health, d.health, d.state, d.mode, d.corpse, d.raise,
                             sim.drones.channels.on(0x0e), d.last_damage, d.hit.map(|h| h.part));
                         kt_health = d.health; kt_state = d.state;
+                    }
+                    if kill_trace_pos && t % 300 == 0 {
+                        let bp = sim.bond.pos;
+                        eprintln!("[killtrace] {label} +{t} d{di} bond {:?} d {:?} aim {:?} st {:#x} los {}", bp, d.pos, aim, d.state,
+                            aim.map(|a| sim.world.segment([bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]], a)).is_none());
                     }
                 }
                 if sim.drones.list[di].corpse || sim.drones.list[di].health <= 0.0 { return true; }
@@ -870,6 +876,12 @@ impl Walker {
                 let clip_empty = sim.gun.clip == 0 && sim.gun.spare > 0;
                 let reload = clip_empty && t % 20 == 0;
                 let blocked = aim.is_none() || shield_block;
+                if kill_trace_pos && t % 30 == 0 {
+                    let dist_now = dxz(bp, dp);
+                    eprintln!("[killtrace] {label} +{t} d{di} err {err:+.4} perr {perr:+.4} yaw {:.3} pitch {:.3} dist {dist_now:.1} clip {} spare {} zg {} blocked {blocked} w {:#x} rs {} rb {} fs {} pend {} tm {:.1}",
+                        sim.bond.yaw, sim.bond.pitch, sim.gun.clip, sim.gun.spare, sim.bond.zero_g_active,
+                        sim.gun.weapon, sim.gun.reload_state, sim.gun.refire_blocked, sim.gun.fire_state, sim.gun.pending, sim.gun.timer);
+                }
                 blocked_streak = if blocked { blocked_streak + 1 } else { 0 };
                 // Tap only when the view is ON the part (the boxes are ~0.3 wide; the fixed-period
                 // taps sprayed ammo at a drifting aim) and SOMETHING is exposed.
