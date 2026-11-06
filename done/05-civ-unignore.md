@@ -4,3 +4,7 @@ Branch from `origin/master`, push to `s/civ-unignore`. Three walks are `#[ignore
 
 ---
 claimed-by: sandbox4 at 2026-11-05T23:21Z
+
+---
+## Report (done, 2026-11-06T00:17Z)
+
