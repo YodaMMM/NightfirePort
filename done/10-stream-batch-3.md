@@ -25,7 +25,7 @@ claimed-by: sandbox7 at 2026-11-06T16:18Z
 ---
 
 ---
-## Report (done, 2026-11-06T17:21Z)
+## Report (done, 2026-11-06T17:24Z
 
 # stream-batch-3 — the 28 reds: reproduced, attributed, two levers tried
 
@@ -133,3 +133,15 @@ harness edits above are diagnostics, one reverted entirely.
 
 Token/credit/context figures: not visible to me. (No token, cost or context-window display is
 available in this sandbox; nothing to copy.)
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-06 ~17:22-17:24 UTC; GitHub push from the same sandbox worked
+seconds earlier, so the sandbox had network):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "stream-batch-3: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → exit 28, `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'...'), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "stream-batch-3: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output, killed at the 40 s tool timeout (still hanging).
