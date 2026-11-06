@@ -180,18 +180,23 @@ impl Spawner {
         }
         let may = if self.mode == 3 { living == 0 || self.immediate } else { living < self.max_alive };
         if !may { return Action::None; }
-        // Selection [M 0x137cb0:21-43]: one `Rand_Rand` over the group, walked down once per USABLE
-        // template — usable = unused this epoch AND, with screening on (+0x1F == 0), the spot at
-        // least `min_dist` (block+0x18) from the player. The distance is therefore a
-        // PRE-selection usability test: a too-close spot is skipped without consuming the draw, and
-        // the attempt never fails on distance — unlike the old port model, which drew over ALL
-        // unused templates and aborted the tick after the pick (a different RNG sequence whenever
-        // any spot was too close).
+        // Selection [M 0x137cb0:21-56]: ONE `Rand_Rand` over the WHOLE template list, drawn
+        // BEFORE the walk — `DroneSpawner_Init` 0x137aa0:31-32 writes the SAME count to `+0x8`
+        // (the walk bound) and `+0x2E` (the draw modulus), both the template total. The walk then
+        // goes down the list once; only USABLE templates — unused this epoch, plus the min-distance
+        // screen when screening is on (+0x1F == 0) — decrement the drawn rank (:41); a used or
+        // too-close record is walked past without consuming it (:88-91). The picked template is
+        // the (rank+1)-th USABLE one, so when the rank passes the last usable record the loop
+        // falls through and `SpawnDrone` returns 0 — NOTHING spawns this call and `Control`
+        // retries next tick with a fresh draw. (The port's old model drew `rand(usable.len())`,
+        // which always lands inside the usable set and always spawns — waves arrived at the wrong
+        // rate whenever any template was used or too close.)
+        let rank = rand(self.templates.len() as u32) as usize;
         let usable: Vec<usize> = (0..self.templates.len())
             .filter(|&k| !self.used[k] && (self.immediate || dist_ok(self.templates[k], self.min_dist)))
             .collect();
-        if usable.is_empty() { return Action::None; }
-        let k = usable[(rand(usable.len() as u32) as usize).min(usable.len() - 1)];
+        if rank >= usable.len() { return Action::None; }
+        let k = usable[rank];
         let i = self.templates[k];
         // The POST-selection abort [M 0x137cb0:43]: with screening on, a spot visible to Bond fails
         // the attempt (returns 0) — the slot persists and the same spot can win the next draw.
@@ -200,5 +205,62 @@ impl Spawner {
         self.spawned.push(i);
         self.this_wave += 1;
         Action::Spawn(i)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spawner(n: usize) -> Spawner {
+        // mode 2, group 1, no start/stop channels → active and immediate (+0x1F set, the
+        // no-screening arm [M 0x137aa0:33-45]).
+        Spawner::new(0, |p| if p == 0 { 2 } else if p == 1 { 1 } else { 0 }, (0..n).collect(),
+            &Channels::default()).unwrap()
+    }
+
+    /// [M 0x137cb0:21 + 0x137aa0:31-32] the pick draw is `Rand_Rand` over the WHOLE template
+    /// list — `+0x2E` and `+0x8` are both the template count `DroneSpawner_Init` writes from the
+    /// census table — and only USABLE templates (unused this epoch; plus the distance screen when
+    /// +0x1F is clear) decrement the counter (:41). A draw whose rank passes the last usable
+    /// template spawns NOTHING this call (:88-96 fall through the loop → `return 0`) — `Control`
+    /// retries next tick with a fresh draw. The old port drew `rand(usable.len())` and always
+    /// spawned, so waves arrived at the wrong rate.
+    #[test]
+    fn the_pick_draws_over_all_templates_and_a_missed_rank_spawns_nothing() {
+        let mut s = spawner(4);
+        s.used[0] = true;
+        s.used[1] = true; // 2 of 4 templates usable
+        let mut moduli: Vec<u32> = Vec::new();
+        let a = s.update(&mut Channels::default(), 0, 0, |_| false, |_| false, |_, _| true, |_| false,
+            &mut |n| { moduli.push(n); 3 });
+        assert_eq!(moduli, vec![4], "the draw modulus is the whole template list, not the usable count [M 0x137cb0:21]");
+        assert_eq!(a, Action::None, "rank 3 of 2 usable → nothing spawns this call [M 0x137cb0:88-96]");
+    }
+
+    /// The draw's rank indexes the USABLE walk: rank r spawns the (r+1)-th usable template
+    /// [M 0x137cb0:41-56 — each usable record decrements, the −1 arm creates].
+    #[test]
+    fn the_draw_rank_indexes_the_usable_walk() {
+        let mut s = spawner(4);
+        s.used[0] = true;
+        s.used[1] = true; // usable = templates 2, 3
+        let mut moduli: Vec<u32> = Vec::new();
+        let a = s.update(&mut Channels::default(), 0, 0, |_| false, |_| false, |_, _| true, |_| false,
+            &mut |n| { moduli.push(n); 1 });
+        assert_eq!(moduli, vec![4], "the draw modulus is the whole template list [M 0x137cb0:21]");
+        assert_eq!(a, Action::Spawn(3), "rank 1 of usable [2, 3] → the second usable template [M 0x137cb0:41-56]");
+        assert!(s.used[3], "the picked template is used this epoch [M :82]");
+    }
+
+    /// A rank inside the usable count spawns even with used templates before it — the used ones
+    /// are walked past without consuming the rank [M :41-56].
+    #[test]
+    fn a_rank_zero_spawns_the_first_usable() {
+        let mut s = spawner(4);
+        s.used[0] = true;
+        let a = s.update(&mut Channels::default(), 0, 0, |_| false, |_| false, |_, _| true, |_| false,
+            &mut |_| 0);
+        assert_eq!(a, Action::Spawn(1), "rank 0 → the first usable template [M 0x137cb0:41-56]");
     }
 }
