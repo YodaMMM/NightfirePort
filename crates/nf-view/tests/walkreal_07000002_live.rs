@@ -323,7 +323,7 @@ fn reload_full(w: &mut Walker) {
 /// 0x1c shotgun drop [L the arm_fullest carry log]), and at DroneFiring_Accuracy_Hard 1.0 the
 /// fights must end in one tap, not one per reload cycle.
 fn scoop_drops(w: &mut Walker, label: &str, n: usize) {
-    scoop_drops_within(w, label, n, 6.0);
+    scoop_drops_within(w, label, n, 6.0, 1.5);
 }
 
 /// The deliberate resupply pass (`scoop_drops` with a wider reach, real-health-00agent-02-5):
@@ -332,13 +332,13 @@ fn scoop_drops(w: &mut Walker, label: &str, n: usize) {
 /// rounds], and a player who just cleared a corridor walks back a few u and takes a fallen
 /// guard's rifle before the next contact. Same real-input shape as `scoop_drops`: Bond's own
 /// feet via `walk_nav_to`, the take through the capsule, then the game's weapon cycle.
-fn scoop_drops_within(w: &mut Walker, label: &str, n: usize, radius: f32) {
+fn scoop_drops_within(w: &mut Walker, label: &str, n: usize, radius: f32, y_tol: f32) {
     for k in 0..n {
         let bp = w.scene.sim.as_ref().unwrap().bond.pos;
         let target = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
             .filter(|p| !p.gone)
             .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
-            .filter(|q| dxz(*q, bp) < radius && (q[1] - bp[1]).abs() < 1.5)
+            .filter(|q| dxz(*q, bp) < radius && (q[1] - bp[1]).abs() < y_tol)
             .min_by(|a, b| dxz(*a, bp).total_cmp(&dxz(*b, bp)));
         let Some(target) = target else { break };
         eprintln!("[02] {label}: scooping the drop ({:.1},{:.1},{:.1}) (d {:.1})", target[0], target[1], target[2], dxz(target, bp));
@@ -676,7 +676,7 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
                 // (−31.35,6.46,8.40), the 00agent-02-03-4 repro — unchanged on master
                 // e4fb1c512). A player walks back up the dead corridor and takes a fallen
                 // guard's rifle before the room.
-                scoop_drops_within(&mut w, "the south-hall drops", 2, 12.0);
+                scoop_drops_within(&mut w, "the south-hall drops", 2, 12.0, 1.5);
                 arm_fullest(&mut w, "after the south-hall scoop");
             }
         }
@@ -685,7 +685,7 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         // Whatever the corridor still holds within reach (the #2 drop sat ~14 u back on the
         // repro run's geometry): the same walk-back pass, once, before the wheel is read for
         // the room (real-health-00agent-02-5).
-        scoop_drops_within(&mut w, "the west-wing drops", 1, 14.0);
+        scoop_drops_within(&mut w, "the west-wing drops", 1, 14.0, 1.5);
     }
     arm_fullest(&mut w, "before the geisha-1 room");
     // NOTE (real-health-00agent-02-03-04): no pre-room drop scoop here — the walk to the drops
@@ -853,7 +853,12 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             // drone #9 (killed true)"] — but his shot reaches the DESCENT, so the stand must
             // not wait for the leg to hand him over. The stair top never exposed him (the
             // aimed duel there never fired, clip 32 at the status [L the same run]). Here:
-            // the fullest gun, the aim held for the 19-25-u stand, then restored.
+            // the aim held for the 19-25-u stand, then restored. real-health-00agent-02-5:
+            // NO arm_fullest before the leg — the stair-top hook armed the fullest gun and a
+            // full wheel cycle (~6 guns × 61 ticks) is ~500 ticks more standing in his lane;
+            // the run-4/5/6 deaths all sat inside that dwell (shot 1 at +335, shot 2 lethal at
+            // +508 from the bottom arrival). The 61-tick lottery stand keeps the cheap
+            // early window; the real answer is the aimed duel from the lane mouth BELOW.
             let di = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let bp = sim.bond.pos;
@@ -864,34 +869,38 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             };
             if let Some(di) = di {
                 w.dmg.aimed_fights = true;
-                arm_fullest(&mut w, "the lane-mouth sniper duel");
                 let _ = w.stand_and_fire(di, 1200);
                 w.dmg.aimed_fights = false;
-                status(&w, "the lane-mouth sniper duel");
             }
         }
         leg_to(&mut w, at, name, 1.6);
         status(&w, name);
-        if difficulty >= 3 && (name == "stair bottom" || name == "courtyard lane") {
+        if difficulty >= 3 && name == "stair bottom" {
+            // real-health-00agent-02-5: the scoop ONLY — no rearm, no stand. The sniper's window
+            // opens only from inside the lane (the stair-top and bottom stands both gave up on
+            // aim None [L the run-4/5 traces]), so every tick at the bottom lip is standing in
+            // his lane: the run-4/5 deaths sat +335/+508 ticks after the bottom arrival while
+            // the old arm_fullest here cycled a full unchanged wheel (~300 ticks) first — the
+            // −48.0 landed DURING the hooks. The stair-top hook already armed the fullest gun,
+            // so the crossing starts at once and the lane hooks rearm after it. The reach is
+            // wider than the plain scoop AND the y-tolerance loosened: the descent fights'
+            // drops land ON the crossing line below the lip (the run-7 drone-11 drop sat at
+            // (−40.8, 4.4, −0.9), 3.9 u ahead and 1.85 u down — filtered by the 1.5 gate at
+            // the lip, taken at d 1.2 from the lane AFTER the death). A player descending
+            // grabs it on the way — the crossing's return fire needs the rounds (the run-7
+            // fight answered the sniper with 7 rounds and died dry).
+            scoop_drops_within(&mut w, &format!("{name} drops"), 1, 8.0, 2.2);
+        }
+        if difficulty >= 3 && name == "courtyard lane" {
             // 00 Agent (real-health-00agent-02-03-2): the kills here (the sniper at the lane's
             // mouth) drop their guns on the route and the fights behind ran DRY on the lane —
             // the hp-5 rifle chaser finished a clip-0 Bond [L the 00agent-02-03-2 ledger]. A
             // player low on rounds grabs what dropped before walking on (the file's own loot
-            // rule): one scoop, then the fullest gun.
+            // rule): one scoop, then the fullest gun — and the sniper answered from the mouth
+            // he is actually exposed from (the run-4/5/6 geometry: neither the stair top nor
+            // the bottom lip ever showed him; the lane does).
             scoop_drops(&mut w, &format!("{name} drops"), 1);
             arm_fullest(&mut w, &format!("{name} rearm"));
-        }
-        if difficulty >= 3 && name == "stair bottom" {
-            // real-health-00agent-02-5: the stair-top duel's own comment says the sniper's shot
-            // reaches the DESCENT, and the run-4 trace made it exact — the stair-top stand gave
-            // up on aim None (his window never opened from up there) and the sniper (0x1e, 12 hp
-            // [L the probe/trace], post (−52.0, 6.3, −14.8) [D placement]) acquired Bond at the
-            // bottom 335 ticks after the arrival and put −48.0 then −30.0 into him at 21.2 u
-            // [L the run-4 damage log, death t14648]. A player who cannot see the muzzle from
-            // the top answers him from the bottom lip — the same lane the lane-mouth stand
-            // wins, one leg earlier — instead of crossing exposed. The aimed stand kills the
-            // 12-hp class in three body rounds [L the 00agent-02-03-2 ledger]; nothing exposed
-            // from here = the stand gives up on its own and the lane-mouth duel answers.
             let di = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let bp = sim.bond.pos;
@@ -904,7 +913,7 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
                 w.dmg.aimed_fights = true;
                 let _ = w.stand_and_fire(di, 1200);
                 w.dmg.aimed_fights = false;
-                status(&w, "the stair-bottom sniper duel");
+                status(&w, "the lane-mouth sniper duel");
             }
         }
     }
