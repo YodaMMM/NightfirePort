@@ -201,3 +201,14 @@ Window 2 (2026-11-06 10:44-12:00 UTC). Branch s/aim-console-phase (from origin/s
 - 11:25-11:30: the snap-aware planner wired anyway (the task's step 2, kept as correct-by-evidence): snap_shot_ok (the traced twin on the stance's crosshair ray, the same candidates the snap sees) gates level_station's ring, the default station, and fire; the stall now measures GOAL progress (a wedged crawl moved 0.3 every ~110 ticks and kept moved_at fresh — the stall never tripped); the replan anchors on the console's default station when the wedged spot's straight lines are all bank-clipped; the float grew climb/creep sag guards. Consoles 8/7/1/2 still red (the landing itself not yet prevented — the crossing-waypoint attempt went pathologically slow and was reverted).
 - 11:35-11:46: the battery, every number the aim-candidates profile: fusebox_geometry_07000014_live 1/0, interactables_07000014_live 10/0, rocket_stop_plane08_live 4/0, rocket_glass08_live 3/0, rocket_origin_live 1/0, solar_panel_hits_live 1/0; walkreal 08 5/1, 0c 2/1, 14 6/3/1 (single-threaded — 2 threads OOM-killed), 16 13/1, 1b 15/2. The src change is behavior-preserving; the seven reds (08 0c 14x3 16) are the pre-existing aim-finish ones, untouched.
 - LEFT: the six reds' per-level triage (the task's step 3) not started beyond 1b; the first wave's death ledger besides channel 19 (step 4) not compiled; 1b's console 8 landing fix (the zero-g volume boundary vs the low stations) open; the full suite not run this window (the battery above + 1b's 15/2 only).
+
+## 1b-zero-g-floor
+Started 2026-11-06 12:02 UTC. Branch s/1b-zero-g-floor (from origin/s/aim-console-phase, already
+up to date with origin/master). Task: the float wedge on 1b is the WALK's, not the game's (the
+driver's correction: with no input PCSX2 and the port settle identically; the pocket under the
+bank never ends zero-g by itself [M Player_ZeroG 0x192ab0 has no ChangeSubState]); fix the
+comment, find why the walk's thrust cannot leave the pocket (the bank-face thrust or float_to's
+lift input), re-run the 1b walks until consoles 7 and 8 latch, and run the [ring]/[gate] probe
+on 08, 0c, 14 x3 and 16 to classify snap faults vs route/raw-aim tuning (14's three are the nav
+stick at "the corridor south to the leg-2 spot"). No zero-g or collision code changes. Keep the
+[L] 08 pins and the 0x30000000 fix.
