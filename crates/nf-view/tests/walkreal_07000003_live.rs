@@ -100,6 +100,171 @@ fn clear_near(w: &mut Walker, r: f32, label: &str) {
     }
 }
 
+/// real-health-00agent-03-5: the 06 walk's aimed stand, copied test-local (no shared-helper
+/// change). Never writes health, armour or ammo; the only inputs are the view drives + the
+/// trigger taps.
+fn aimed_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
+    // Settle: no input until the switch anim is done, then the raise loop (the 0c idiom).
+    for _ in 0..90 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.gun.switch_state == 0 && !sim.gun.fire_state { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
+    }
+    for _ in 0..240 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.aiming { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { aiming: true, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    const STILL_NEED: u32 = 18;
+    let prev = w.dmg.aimed_fights;
+    w.dmg.aimed_fights = true;
+    eprintln!("[03] the aimed stand ({label}): engaging drone #{di}");
+    let killed = {
+        let mut unseen = 0u32;
+        let mut last_tap = 0u32;
+        let mut aim: Option<[f32; 3]> = None;
+        let mut hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
+        let mut last_hit = 0u32;
+        let mut still = 0u32;
+        let mut last_pos = [0.0f32; 3];
+        let mut have_pos = false;
+        for t in 0..cap {
+            let (input, fire, reload) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[di];
+                if d.corpse || d.health <= 0.0 || !d.present {
+                    eprintln!("[03] the aimed stand ({label}): drone #{di} VANISHED at +{t} (corpse {} health {:.1} present {})", d.corpse, d.health, d.present);
+                    return true;
+                }
+                if sim.disabled { return false; }
+                if sim.gun.clip == 0 && sim.gun.spare == 0 {
+                    eprintln!("[03] the aimed stand ({label}): drone #{di} bailed DRY at +{t} (clip 0 spare 0)");
+                    return false;
+                }
+                // The still gate: root motion only (the 0c measurement — the box sway rides the
+                // anim; the root is what carries the chest out of the round's path).
+                let moved = have_pos && ((d.pos[0] - last_pos[0]).powi(2)
+                    + (d.pos[1] - last_pos[1]).powi(2) + (d.pos[2] - last_pos[2]).powi(2)).sqrt() > 0.03;
+                have_pos = true;
+                last_pos = d.pos;
+                still = if moved { 0 } else { still.saturating_add(1) };
+                if d.health < hp0 { hp0 = d.health; last_hit = t; }
+                // 1500: the far posts (d 27+) expose in firing windows — the 500 default aborted
+                // before a first hit ever landed on the 06 runs (the mouth census). A landing
+                // round kills a 12-hp guard, so the wait is the tactic, not a stall (the cap
+                // still bounds it).
+                if t - last_hit > 1500 {
+                    eprintln!("[03] the aimed stand ({label}): drone #{di} bailed NO-HIT at +{t} (still {still}, aiming {})", sim.aiming);
+                    return false;
+                }
+                if t % 10 == 0 { aim = walker::DamageLog::exposed_part_gun_rays(&sim, di); }
+                // 200 (the 06 roof-guard ledger): a lean-out window that lasts 100 ticks still
+                // ends in a tap within 200.
+                if aim.is_none() { unseen += 1; if unseen > 200 { eprintln!("[03] the aimed stand ({label}): drone #{di} bailed UNSEEN at +{t}"); return false; } } else { unseen = 0; }
+                let b = sim.bond.pos;
+                let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
+                let at = aim.unwrap_or([d.pos[0], d.pos[1] + 0.3, d.pos[2]]);
+                let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
+                let h = (dx * dx + dz * dz).sqrt().max(0.5);
+                let desired_yaw = dx.atan2(dz);
+                let desired_pitch = (dy / h).atan();
+                // The cursor drive + the effective-aim error (the 0c convergence — the round
+                // obeys the view + the eased offsets, not the view alone).
+                let yaw_err = { let mut a = desired_yaw - sim.bond.yaw;
+                    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
+                let cx_want_raw = -yaw_err / 0.76966;
+                let cy_want_raw = pitch_err / 0.57724;
+                let cur = sim.cursor;
+                let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
+                let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
+                let aoff = sim.drones.aim_offset;
+                let err = { let mut a = yaw_err - aoff[0];
+                    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                let perr = pitch_err - aoff[1];
+                let reload = sim.gun.clip == 0;
+                // The tap: the aim bit ON, the effective aim converged, the guard still.
+                let fire = sim.aiming && !reload && unseen == 0 && err.abs() < 0.01 && perr.abs() < 0.01
+                    && still >= STILL_NEED && t.saturating_sub(last_tap) >= 8;
+                (nf_game::player::Input { turn, look, aiming: true, ..Default::default() }, fire, reload)
+            };
+            if reload {
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, true, false);
+                w.total_ticks += 1;
+                w.after_step();
+                for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+            } else if fire {
+                last_tap = t;
+                w.tick_fire(input);
+            } else {
+                w.tick(input, false);
+            }
+        }
+        w.scene.sim.as_ref().unwrap().drones.list[di].health <= 0.0
+    };
+    w.dmg.aimed_fights = prev;
+    // Level the view back (the fights' own idiom) so the next nav leg steers from level pitch.
+    for _ in 0..90 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pitch;
+        if p.abs() < 0.01 { break; }
+        w.tick(nf_game::player::Input { look: (-p).clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[03] the aimed stand ({label}): drone #{di} killed {killed}, health {:.1}",
+        sim.drones.health.health);
+    killed
+}
+
+/// real-health-00agent-03-5: the 06 walk's `stand_shooters_down`, copied test-local. The aimed
+/// sweep with the pick GATED on "actually shot Bond" — a recent hitter (any range to `radius`)
+/// the strict gun rays expose, recent-hitter first. The plain 20 u shooters window is why the
+/// far posts plink free: 27+ u is outside it but inside their own.
+fn stand_shooters_down(w: &mut Walker, label: &str, radius: f32, recency: u32) {
+    w.switch_to_armed(label);
+    for _ in 0..8 {
+        let di_opt = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let now = sim.drones.frame;
+            let b = sim.bond.pos;
+            let mut best: Option<usize> = None;
+            for i in 0..sim.drones.list.len() {
+                let d = &sim.drones.list[i];
+                if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { continue; }
+                let d_v = ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt();
+                if d_v > radius { continue; }
+                let hitting = sim.drones.player_hits.iter().rev()
+                    .take_while(|h| now.saturating_sub(h.0) <= recency)
+                    .any(|h| h.1 == i);
+                if !hitting { continue; }
+                // Point-blank hitters (d < 8) are fights regardless of the ray check — at 2-5 u
+                // the strict gun rays clip the moat-band lip while the guard's own rounds land
+                // (the run-4 ledger: #17 hit 4×15.0 at d 2.3-4.6 and the pick still returned
+                // None). Past 8 u the exposed gate keeps the far+unexposed skip's doctrine.
+                let close = d_v < 8.0;
+                if !close && walker::DamageLog::exposed_part_gun_rays(&sim, i).is_none() { continue; }
+                best = Some(i);
+                break;
+            }
+            best
+        };
+        let Some(di) = di_opt else { break };
+        aimed_stand(w, di, label, 2400);
+    }
+}
+
+/// The sweep call site (the 06 walk's radius 40 — the guards' real reach). Recency 2400, not
+/// the 06 walk's 600: this level's legs run thousands of ticks (the door wedges, the rescue
+/// loop) and the baseline run's moat plinker #17 aged out of every 600-tick window before a
+/// sweep could answer him [L the NF_DMG_TRACE run]. An exposed guard who hit Bond within the
+/// last 10 s of game time is a fight a player takes.
+fn shooter_sweep(w: &mut Walker, label: &str) {
+    stand_shooters_down(w, label, 40.0, 2400);
+}
+
 fn mission_row() -> (usize, usize, usize, usize) {
     let li = nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0003).expect("the 07000003 mission record");
     (li, 0, 1, 2)
@@ -271,11 +436,41 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
 
     // The route legs up to the servants' ground (the guard-enable plates 0x21/0x23/0x24/0x25 fire
     // under Bond's feet as he crosses them [D the TouchOnce census]).
-    for (name, at) in [
-        ("courtyard east", [0.0f32, 5.9, -20.0]),
-        ("mid courtyard", [13.0, 5.9, -18.0]),
-    ] {
-        w.walk_nav_to(at, name, 1.6);
+    w.walk_nav_to([0.0f32, 5.9, -20.0], "courtyard east", 1.6);
+    if difficulty >= 3 {
+        // real-health-00agent-03-5 (the 02-03-4 ledger lever 1): the mid-courtyard #9 fight cost
+        // 32.4 at 00 Agent on the 02-03-4 tree and 28.8 in 8 hits on this tree's baseline run —
+        // the lane guard posted at (18.7,-24.0) [L the 02-03-4 repro ledger] lands everything at
+        // DroneFiring_Accuracy_Hard 1.0. A player who sees him at the courtyard's east edge takes
+        // him BEFORE the first volley: the pre-emptive aimed stand. When he is not exposed the
+        // stand bails UNSEEN in ~210 ticks and costs nothing (a guard the strict rays cannot
+        // reach is not hitting Bond either — the rays run both ways [M the same test the fights'
+        // blocker hold uses]).
+        let nine = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            sim.drones.list.iter().enumerate()
+                .filter(|(_, d)| d.team == 1 && d.enabled && d.present && !d.corpse && d.health > 0.0
+                    && walker::dxz(d.pos, [18.7, 6.3, -24.0]) < 4.5)
+                .min_by(|a, c| walker::dxz(a.1.pos, [18.7, 6.3, -24.0]).total_cmp(&walker::dxz(c.1.pos, [18.7, 6.3, -24.0])))
+                .map(|(i, _)| i)
+        };
+        if let Some(ni) = nine {
+            aimed_stand(&mut w, ni, "the mid-courtyard lane guard (pre-emptive)", 2400);
+        }
+    }
+    // real-health-00agent-03-5: this leg STAYS at 00 Agent. Skipping it (the run-2 experiment)
+    // walks Bond into the lane-doors block with the whole lane cluster alive and the shotgun #9
+    // rushes the door gap to 2.6 u — 80.8 in 16 hits, death t81787 [L the run-2 ledger]. The
+    // leg's own wedge fight sequence (the return fire kills #10 first, then #9) is the better
+    // shape; #9's 28.8 in the wedge is answered by the fights themselves (killed true at 7890
+    // [L the NF_DMG_TRACE run]) and the wide-recency sweeps cut the cross-map bleed instead.
+    w.walk_nav_to([13.0, 5.9, -18.0], "mid courtyard", 1.6);
+    if difficulty >= 3 {
+        // real-health-00agent-03-5: the wedge fight's #9 volleys (28.8 in 8, ticks 7734-7845
+        // [L the NF_DMG_TRACE run]) are answered by the fights themselves (killed true at
+        // 7890); the sweep right after the leg catches whoever is STILL shooting before the
+        // lane-doors passage.
+        shooter_sweep(&mut w, "after the mid courtyard");
     }
 
     // 1. "Rescue Mayhew's servants" — the leaves 0x4f (servant #389) and 0x50 (#388) are the
@@ -344,6 +539,11 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         if got != u32::MAX { on_lane = true; break; }
     }
     assert!(on_lane, "the lane north never reached (the doorway held)");
+    if difficulty >= 3 {
+        // real-health-00agent-03-5: whoever shot during the door passage is answered from the
+        // covered lane node before the moat legs (the sweep's recency covers the wedge ticks).
+        shooter_sweep(&mut w, "after the lane north");
+    }
     for (name, at) in [
         ("the lane south", [10.41f32, 6.08, -28.74]),
         ("the moat east", [9.95, 5.84, -34.41]),
@@ -354,6 +554,15 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         ("gate plate lawn", [11.0, 5.9, -35.0]),
     ] {
         w.walk_nav_to(at, name, 1.6);
+        if difficulty >= 3 {
+            // real-health-00agent-03-5: the baseline ledger's biggest hole — the far shooter #17
+            // at (3.0,5.8,-33.4) (the moat band's west end) plinked 60.0 in 4 full hits from past
+            // the fights' 20 u shooters window (d 27.4 at the last hit) [L the baseline run's
+            // damage log]. The 06 walk's ready lever (door-walk-03b named it for exactly this
+            // bleed): a recent-hitter aimed sweep at every pause the route already makes. Idle
+            // (no hitter in the last 600 frames inside 40 u) it is a few ticks.
+            shooter_sweep(&mut w, &format!("after {name} (trip 1)"));
+        }
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -400,6 +609,11 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         }
     }
     w.lenient = false;
+    if difficulty >= 3 {
+        // real-health-00agent-03-5: the east-lane return legs' shooters answered before the
+        // servants' ground (the same recent-hitter rule; idle no-op when nobody hit).
+        shooter_sweep(&mut w, "after the east-lane return");
+    }
     if difficulty >= 2 {
         // 00 Agent (real-health-00agent-02-03-2): the servants' ground is a running fight (the
         // 0x24/0x25 guards and their captains) and the real-damage hook's resupply is the lane
@@ -573,6 +787,9 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
             // run's ledger]. The player walks the chase's last leg: restore the green
             // continuation point (the flank's own nav link, walked there in the green run).
             w.walk_nav_to([38.4, 5.9, 0.8], "the east flank end", 1.6);
+            // real-health-00agent-03-5: the flank end stands in the east wing's open ground — the
+            // rescue-fight shooters answered before the west-lawn reroute (idle no-op when idle).
+            shooter_sweep(&mut w, "after the east flank end");
         }
     }
     w.wait(10);
@@ -600,6 +817,11 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         ("along the moat", [8.0, 5.9, -36.0]),
     ] {
         w.walk_nav_to(at, name, 1.6);
+        if difficulty >= 3 {
+            // real-health-00agent-03-5: the second trip passes the west moat posts again — the
+            // same recent-hitter sweep (idle no-op when nobody hit).
+            shooter_sweep(&mut w, &format!("after {name} (trip 2)"));
+        }
     }
     let sim = w.scene.sim.as_ref().unwrap();
     let gate_plate = sim.drones.triggers.iter()
