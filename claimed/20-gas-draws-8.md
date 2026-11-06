@@ -7,3 +7,6 @@ Branch from `origin/s/gas-rng-draws-7`, merge current `origin/master`, push to `
 3. The 16 chasers pair and the 01 d3 walk are also red here. `10-guard-lines-finish` works on them, so merge `s/guard-lines-finish` if it has landed, and do not redo that work.
 
 Quote walkreal 1b, 01 and 16 whole.
+
+---
+claimed-by: sandbox3 at 2026-11-06T07:50Z
