@@ -488,3 +488,15 @@ the door-walk-03b east-lawn saddle, braces rebuilt). Task: the three suspects na
 citations (d2 start-corridor lost_sight latch, 13 void fall, 0c new red), the two measured
 test fixes (hold_npcs window 1800, fix_pickups_ammo box-id search), the flashbang drop
 count, then stream-batch-3's list, plain walks first.
+
+## stream-batch-5 (2026-11-06)
+Started 19:10 UTC. Branch `s/stream-batch-5` cut from `origin/s/stream-batch-4` 95772586e,
+`origin/master` ab80ac6ed merged (clean, 3 files +858: zoe_abandon_live, port-map/drones.md,
+07000008 VIP-abandon law). Task: void recovery OUT (revert b5e916d84's player.rs/world.rs/
+scene.rs changes + drop void_recovery_07000003_live — held, it pushes Bond at valid spots);
+re-enable the combat_state re-acquire exit (`if false &&` drone.rs:10900) with the game's own
+0x5c shape [M 0x148338:67-70/151/235, 0x164838:26-35]; re-prove the 06/09/16 abseil/door-chase/
+bathhouse guards; then the 03 composed blocks, plain walks 01/06/08/0b/0c/11/12/13/14/15/16,
+mayhew_hold, fix_npc_doors, enemy_accuracy re-pin, start_corridor d3 owner point; then real
+damage / Agent / 00 Agent.
+- (19:10) branch start, merge clean, WORKLOG entry.
