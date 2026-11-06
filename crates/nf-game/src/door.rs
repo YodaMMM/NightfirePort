@@ -700,9 +700,11 @@ impl Doors {
             if d.ch_lock != 0 && !channels.on(d.ch_lock as u32) && d.state & 0x12 != 0 { hit(); return false; }
             if d.flags & 0x10 != 0 { return false; }
         }
-        // The approach side (one-shot): the activator's offset along the door's facing (`Mat_GetDir`).
+        // The approach side (one-shot): the DOOR-minus-activator offset along the door's facing
+        // (`Mat_GetDir`) — [M Door_Activate 0x135be0:71-74, disasm `_vsub(door+0xc0, act+0xc0)`;
+        // sound-gates-sweep: the old read was activator-minus-door, mirroring both modes].
         if self.list[i].approach != 0 {
-            let dot = actors.first().map_or(0.0, |a| dot3(sub(a.0, self.list[i].pos), row(&self.list[i].matrix, 2)));
+            let dot = actors.first().map_or(0.0, |a| dot3(sub(self.list[i].pos, a.0), row(&self.list[i].matrix, 2)));
             if self.list[i].approach == 1 && dot < 0.0 { hit(); return false; }
             if self.list[i].approach == 2 {
                 if dot > 0.0 { hit(); return false; }
@@ -1316,6 +1318,52 @@ mod tests {
         doors3.prev_channels[200] = 1;
         doors3.update(0, &mut ch2, &[], 1);
         assert_eq!(doors3.list[0].ch_lock, 200);
+    }
+
+    /// The one-way approach gate [M Door_Activate 0x135be0:71-85]: the dot is (door − activator)·facing
+    /// (`_vsub(door+0xc0, act+0xc0)` then `Mat_GetDir` of `door+0x90`), mode 1 clunks + refuses the
+    /// FACING side (dot < 0), mode 2 the opposite side (dot > 0, one-shot — a pass clears +0x76).
+    /// Identity matrix faces +Z. Sister: docs/atlas/door.md's old activator-minus-door read mirrored
+    /// both refusals (sound-gates-sweep).
+    #[test]
+    fn one_way_door_refuses_from_the_game_side() {
+        let mk = |approach: u8| {
+            let mut doors = Doors::default();
+            doors.list.push(Door {
+                placement: 0, kind: 0, group: 0, ch_open: 0, ch_lock: 0, straddle: false,
+                snd_open: 285, snd_close: 284, snd_hit: 320, flags: 1, approach, locked_flag: 0,
+                keys: Some(swing_keys()), frames: 2, state: CLOSED, pos01: 0.5, speed: 1.0 / 14.0,
+                dir: 0.0, swing: -1.0, timer: 0, open_timer: 0, msg_shown: false,
+                matrix: quat_matrix([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0]),
+                inv_closed: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+                pos: [0.0, 0.0, 0.0], sph: ([0.0, 1.1, 0.0], 1.28), sph_centre: [0.0, 1.1, 0.0], glist: 7,
+            });
+            doors
+        };
+        let mut ch = channels();
+        // Mode 1, the activator on the facing side (+Z beyond the door): dot = −2 < 0 → the +0x64
+        // clunk and the refusal (the door stays shut).
+        let mut doors = mk(1);
+        let mut sounds = Vec::new();
+        assert!(!doors.activate(0, &[([0.0, 1.0, 2.0], 0.4f32, false)], true, &mut ch, 0, &mut sounds));
+        assert_eq!(sounds, vec![(320, [0.0, 0.0, 0.0])], "the +0x64 clunk on the facing side");
+        assert_eq!(doors.list[0].state, CLOSED, "refused");
+        assert_eq!(doors.list[0].approach, 1, "the mode survives a refusal");
+        // Sister: from the back (−Z) there is no clunk and the door opens.
+        let mut doors = mk(1);
+        let mut sounds = Vec::new();
+        assert!(doors.activate(0, &[([0.0, 1.0, -2.0], 0.4f32, false)], true, &mut ch, 0, &mut sounds));
+        assert_eq!(sounds, vec![(285, [0.0, 0.0, 0.0])], "the open sound only — no 320 clunk from the back");
+        assert_eq!(doors.list[0].state, OPENING);
+        // Mode 2 refuses the back side once, then the pass from the facing side clears the mode.
+        let mut doors = mk(2);
+        let mut sounds = Vec::new();
+        assert!(!doors.activate(0, &[([0.0, 1.0, -2.0], 0.4f32, false)], true, &mut ch, 0, &mut sounds));
+        assert_eq!(sounds, vec![(320, [0.0, 0.0, 0.0])]);
+        let mut doors2 = mk(2);
+        let mut sounds = Vec::new();
+        assert!(doors2.activate(0, &[([0.0, 1.0, 2.0], 0.4f32, false)], true, &mut ch, 0, &mut sounds));
+        assert_eq!(doors2.list[0].approach, 0, "the mode cleared on the pass");
     }
 
     /// The lock channel's rising edge, full law [M 0x1363c8:96-107]: the label (0x2000003,
