@@ -113,3 +113,12 @@ tests are the pins that go red if a regression breaks any of the four behaviours
 
 not visible to me — this environment shows no token, credit, cost or context-window figures for
 this session.
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-06 ~13:25 UTC):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "shallow-water-wade: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "... urllib.request ..."` → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "shallow-water-wade: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output within 30 s (killed at the tool timeout)
