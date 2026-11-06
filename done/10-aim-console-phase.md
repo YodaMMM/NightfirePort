@@ -19,3 +19,7 @@ Keep the [L] 08 pins and the 0x30000000 fix. Quote the six aim binaries and walk
 
 ---
 claimed-by: sandbox4 at 2026-11-06T10:42Z
+
+---
+## Report (done, 2026-11-06T11:47Z)
+
