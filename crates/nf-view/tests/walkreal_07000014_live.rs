@@ -1066,6 +1066,14 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
         // Opt-in per difficulty: the difficulty-1 call sites keep master behaviour.
         w.dmg.back_off = Some(4.0);
         w.dmg.lane_fights = true;
+        // eye_ray_stands (the 07000011 00 Agent walk's law, level-14-landing-float): the stands
+        // answer through the plain eye ray (exposed_part) instead of the muzzle stand-ins
+        // (exposed_part_gun_rays) — the grind's AIM guards' stands fail "unseen" on the gun-ray
+        // pick while the plain eye ray is clear (the level-14-ignored-walks next-lever note),
+        // and each failed stand is stood exposure at 1.3 accuracy (the landing-hover window's
+        // tick-6786 death took 45.0 in that grind; this run died at 6437 with #11 0x5000090 at
+        // (27.2, 1.0, 30.7) d 2.2 taking 65.0 in 14 hits through failed stands).
+        w.dmg.eye_ray_stands = true;
         // Escalating cooldowns (level-14-landing-hover, measured on this window's master): the
         // west route's far guards (#8 skin 0x5000087 at (27.7, 1.0, 46.2) [L the death run's
         // ledger]) sit behind geometry the fights' gun rays never clear from any route spot —

@@ -823,7 +823,16 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     // wherever its gates pass (that IS the game's tail). Scope: the Bond walk query only
     // (walk_flat_hold) — the climb, the pick-contact and the rigid-body queries keep master
     // behaviour.
-    let flat_hold = walk_flat_hold && !radial && n[1] > 0.7 && q[1] < b[1];
+    // The scope is the QUIET-DITHER regime only (level-14-landing-float): the fallback's mag at
+    // the hover equilibrium is r − dist ≈ 0.0027 (the tick's re-accumulated fall — probe14_
+    // pocket_settle), while the same fallback class at real work — the jump arcs' band lift, the
+    // landing cushions, the stair-edge rolls — fires at large mag (the arc dips deep into the
+    // r-shell). mag < 0.02 skips only the hold that never does work: the capsule sinks the last
+    // ~0.02 into the band (dy ≤ cc + 0.1 grounds) before the push would matter. Measured: the
+    // 07000014 stairwell pit-band jump (a big-mag lift the walks depend on) is preserved; the
+    // pocket rest grounds (hist 0xf) where the flat-only skip without the mag gate also broke
+    // the stairwell approach.
+    let flat_hold = walk_flat_hold && !radial && n[1] > 0.7 && q[1] < b[1] && mag < 0.02;
     let push = if flat_hold { [0f32; 3] } else { [dir[0] * mag, dir[1] * mag, dir[2] * mag] };
     if flat_hold && caps_log() {
         eprintln!("[cap] HOLD-SKIP cent=({:.3},{:.3},{:.3}) q=({:.3},{:.3},{:.3}) d={dist:.4} n=({:.3},{:.3},{:.3}) b=({:.3},{:.3},{:.3})",
