@@ -3,6 +3,3 @@ The game hard-codes per-level behaviour: 127 comparisons of `GameState._12_4_` a
 For every branch in your set, read it, trace what it does, and find the port's code. Report one line each: PORTED with the port location, or MISSING. A comment describing the branch does not count as ported; look for the code. Fix each MISSING one with a test on the real level, proved red on the old code. Do not rely on hand-built geometry.
 
 Your set: everything else: `Destroy_*`, `Break_*`, `Door_*`, `Car_*`, spawners, scripts, level setup, and the `*Talk*` functions.
-
----
-claimed-by: sandbox1 at 2026-11-06T18:31Z
