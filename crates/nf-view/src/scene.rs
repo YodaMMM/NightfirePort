@@ -3245,8 +3245,9 @@ impl Sim {
                     // portal crossed, `build_FindCel` found nothing: `pos := obj+0x40` clamped into
                     // the OLD cel's box, stay linked [M 0x133288:186-231]. The port's `prev_pos` IS
                     // obj+0x40 (the `Bond` field's own doc).
-                    None => self.world.out_of_cel_recovery(self.bond.cel, self.bond.prev_pos, nf_game::player::Bond::SPHERE_RADIUS)
-                        .map(|(cell, p)| { self.bond.pos = p; cell }),
+                    // The `build_FindCel` retry comes first [M 0x133288]: only a full miss recovers.
+                    None => match self.world.find_cel(self.bond.pos) { Some(c) => Some(c), None => self.world.out_of_cel_recovery(self.bond.cel, self.bond.prev_pos, nf_game::player::Bond::SPHERE_RADIUS)
+                        .map(|(cell, p)| { self.bond.pos = p; cell }) },
                 }
             };
             let water = bond_cel.and_then(|cell| self.room_cell.iter().position(|&c| c == Some(cell)))
