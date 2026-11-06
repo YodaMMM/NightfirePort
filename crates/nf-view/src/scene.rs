@@ -5713,6 +5713,24 @@ impl Sim {
                     if owner == usize::MAX { m.damage_site(dmg, local); }
                 }
                 if bullets > 0.0 { m.damage_site(bullets, local); }
+                // mp-site-destruction-blast: the offline pipeline's death-blast drain — the
+                // queued blast rides the drones' shared pending_blasts slot (the copter death
+                // blast's route), so the NEXT tick's `spawn_blast` propagates it at the site's
+                // obj+0x80: Bond's body, the breakables/destroyables, the mines — the game's
+                // explosion object propagates on its first update, one frame after the death
+                // [M Explode_CollisionHandler 0x17cde0's one-shot latch]. The owner is the
+                // copter's not-the-player mark usize::MAX - 1 (the game's NULL attacker
+                // [M 0x187474]) — NOT usize::MAX, which the drones' slot reads as "Bond's
+                // throw" and would re-feed the site. Script 0x060004f, scale 5.0, debris 0 —
+                // the call's a3/f12/stack-u16 [M 0x1870a0:144-146]. Online the shared combat
+                // owns the propagation (`step_net_combat`'s drain) — this arm is the offline
+                // gate's sister.
+                if self.net_rng.is_none() && self.net_rng_shared.is_none() {
+                    let queued = std::mem::take(&mut m.objects_rt.pending_blasts);
+                    for (pos, radius, damage, _) in queued {
+                        self.drones.pending_blasts.push((pos, radius, damage, usize::MAX - 1, 0, 0x0600_004f, 5.0, 0));
+                    }
+                }
             }
         }
         // death-blood-pane: `Player_CheckForDeath` runs `Player_WeaponNone` 0x1a9858 on the death
@@ -14571,6 +14589,12 @@ impl Sim {
             Hurt::Bullet { victim, attacker, amount, part, dir, .. } => (victim, attacker, amount, part, dir, true),
             Hurt::Blast { victim, attacker, amount, .. } => (victim, attacker, amount, cb::part::NONE, [0.0; 3], false),
         };
+        // mp-site-destruction-blast: a blast owner >= MAX_AGENTS is the site death blast's NULL
+        // attacker [M 0x1870a0:145, t3 = 0 at 0x187474] — `Explode_Propagate`'s case-3
+        // registration gate skips a NULL attacker [M 0x17c518:128-134], so no last-shooter
+        // registration and no kill credit: the hurt still applies in full.
+        let blast_null_owner = matches!(h, Hurt::Blast { .. }) && attacker >= nf_net::MAX_AGENTS;
+        let attacker = if blast_null_owner { usize::MAX } else { attacker };
         // A bot.
         if let Some(j) = m.bots.iter().position(|b| b.slot == victim) {
             if m.bots[j].dead { return; }
@@ -14595,7 +14619,10 @@ impl Sim {
                 // The same death arm's visit-row reset [M 0x171518:17 — the game's BotDead
                 // runs it on every death path; the combat kill is this site's shape].
                 nf_game::mp::reset_pickup_bot_visit_times(&mut self.mp_bot_pickups, j);
-                m.player_killed(victim, Some(attacker), false, false, &mut self.drones.rng);
+                // mp-site-destruction-blast: the NULL-attacker blast credits nobody [M the gate
+                // at 0x17c518:128-134].
+                let killer = if blast_null_owner { None } else { Some(attacker) };
+                m.player_killed(victim, killer, false, false, &mut self.drones.rng);
             }
             return;
         }
@@ -14651,7 +14678,10 @@ impl Sim {
         if self.mp_hp[victim] <= 0.0 {
             self.mp_hp[victim] = 0.0;
             self.mp_dead_ticks[victim] = 1;
-            if let Some(m) = self.mp.as_mut() { m.player_killed(victim, Some(attacker), false, false, &mut self.drones.rng); }
+            // mp-site-destruction-blast: the NULL-attacker blast credits nobody [M the gate at
+            // 0x17c518:128-134].
+            let killer = if blast_null_owner { None } else { Some(attacker) };
+            if let Some(m) = self.mp.as_mut() { m.player_killed(victim, killer, false, false, &mut self.drones.rng); }
             eprintln!("[mp] slot {attacker} killed slot {victim} (frame {})", self.drones.frame);
         }
     }
@@ -14723,7 +14753,15 @@ impl Sim {
         let bodies = self.mp_combat_bodies(local);
         let steer: [(f32, f32); nf_game::mp::MP_MAX_SLOTS] = std::array::from_fn(|s| if s < nf_net::MAX_AGENTS { (inputs[s].turn, inputs[s].look) } else { (0.0, 0.0) });
         let site = self.mp.as_ref().and_then(|m| m.site_sphere());
-        let hurts = self.mp_combat.step(&self.world, &self.weapons, &bodies, site, &steer, &mut self.drones.rng, frame);
+        // mp-site-destruction-blast: the site's death blast drains here, the tick after the
+        // death (the game's explosion object propagates on its first update [M
+        // Explode_CollisionHandler 0x17cde0's one-shot latch]), through the shared combat's
+        // blast pass so it reaches the bodies and the bots on every machine the same way.
+        let site_blasts = match self.mp.as_mut() {
+            Some(m) => std::mem::take(&mut m.objects_rt.pending_blasts),
+            None => Vec::new(),
+        };
+        let hurts = self.mp_combat.step(&self.world, &self.weapons, &bodies, site, &steer, &mut self.drones.rng, frame, &site_blasts);
         for h in hurts { self.mp_hurt(h, local); }
         // The guided ride: this machine's camera follows its own slot's shared rocket, and the
         // local body holds still exactly while the shared ride says so (`step_bond`'s online arm).
