@@ -30,3 +30,19 @@ Progress (continued):
   the 00 Agent walk on that tree, read the death ledger, then the levers (door-9 high-health
   corridor start, (35.6, 8.7) door stall, exit-lawn #16 volley, stand_shooters_down if the
   ledger shows far-shooter bleed).
+- [23:25 UTC, Nov 6] real-health-00agent-03-5: the 00 Agent walk re-run on the merged 03b tree
+  (master e4fb1c512 + s/door-walk-03b, the 03b doc rows taken over the stale sweep rows) and
+  the ledger read: death t404475 at (22.24,5.46,-13.99), 28 hits for 100 — #17's moat-west
+  point-blank P99 burst 60.0 in 4 volleys (the NF_DMG_TRACE run: ticks 14353-14576 at d
+  2.3-4.6, the fight machinery's failed-fight cooldown covered the whole burst, killed true
+  only at 14690), the mid-courtyard wedge #9 28.8 (ticks 7734-7845, killed true 7890, the
+  same cooldown cover), the corridor cluster finishing 11.2 at 11.2 health. Eight runs of
+  levers: the 06 aimed-stand sweep (test-local, recency 600->2400) never engaged (the bursts
+  land between sweeps), the leg-skip experiment rushed the lane cluster into the door gap
+  (80.8, run 2), the trip-1 clear_near woke the dodger #8 (47.2, run 6), the 8-u aimed clear
+  bailed into the same trap (59.2, run 7), the point-blank aimed stand stood in the line and
+  died fastest (71.2 in 3 volleys, run 8) — every stand feeds the shooter at d3. All
+  experiments reverted; the test file is back at the merged shape with the ledger + the next
+  lever (an OPT-IN walker.rs fights flag: immediate re-engage when the 240-tick cooldown
+  delays refighting a guard within 8 u who is hitting Bond) in the ignore message. The d1/d2
+  sisters and the whole-03 binary re-run on the final tree (see the report).
