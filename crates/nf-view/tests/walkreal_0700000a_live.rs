@@ -1057,22 +1057,25 @@ fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
         }
     }
     assert!(armed, "the keypad #648 E arms the mini-game (state 3) [M 0x1aed00's kind-0 no-key branch]");
-    // OUT OF THE TURRET'S LINE before the wait-heavy tail: the armed keypad is a MENU state —
-    // the digits and the door unlock chain are position-independent (the menu rides Drones,
-    // not a use ray [M C_KEYPAD_Handler 0x216810 + 0x1ae3d8 case 4]) — so Bond walks the
-    // proven-quiet pocket floor back west while #639's track loses him (every run: zero hits
-    // west of x ≈ −13.1; the kills only ever landed at (−12.7..−11.9, −17)). The stand was
-    // ~40-90 ticks of exposure; the retreat adds ~60; the digits + the ~120-tick door sweep
-    // + the re-approach then all run from the safe side. The stealth gate holds on the way
-    // out (the civilians still cannot see him).
-    {
-        let ok = walk_leg_stealth(&mut w, [-14.5, 1.3, -15.0], 1.3, "ring: out of the turret's line");
-        assert!(ok || w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(),
-            "the turret-line retreat never arrived (exit {:?})", w.scene.sim.as_ref().unwrap().drones.level_exit);
-        assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at 'ring: out of the turret's line'");
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.keypad.is_some(), "the keypad menu survives the retreat (the digits type from cover)");
-    }
+    // THE DIGITS RUN AT THE WEDGE, NO RETREAT (civ-unignore, the 00agent fix): the old
+    // "out of the turret's line" retreat to (−14.5,−15.0) bought nothing any more — the
+    // civilians-raise-the-alarm merge (576909ed6) left the whole pocket LOS-clear to wall gun
+    // #639 under the game's own track rule (probe, the game's `line_of_sight(turret.pos, p,
+    // LOS_TURRET_TRACK)` + the `dot(fire_dir, dir) ≥ 0.01` cone [M gt.rs GT_Track]: every
+    // pocket cell x −17..−10.5, z −20..−15 reads clear; #639's fire_dir is (0,−1,0), so the
+    // cone passes every floor point), and the measured 00agent run took the retreat's own
+    // seg 0 for 11 rounds (69 ticks) — the retreat is now part of the exposure, not the cure.
+    // The deadly window is #639's COMBAT state, which starts ~script-timed after its first
+    // track (the d2/agent ledger: first hit t12423, the retreat's seg 0) and ends when the
+    // LOS finally blocks east of x ≈ −10.0 (the same probe; the d2 ledger's hits stop at
+    // (−9.8,−18.6)). So the tail is cut to the minimum: the digits type AT the wedge (the
+    // armed keypad is a MENU state — position-independent [M C_KEYPAD_Handler 0x216810 +
+    // 0x1ae3d8 case 4]), the door sweep check is the ~2-tick gate it measures at, and the
+    // doorway crossing runs straight from the wedge — the whole post-arm tail ends inside
+    // #639's first ~20 COMBAT rounds (the measured 00agent ledger after this change: 21
+    // rounds for 84.0, first hit t12409 at (−12.3,−17.2), the last t12549 at (−9.8,−18.6)
+    // where the LOS blocks — end health 16.0; the d1/d2 sisters' ledgers shrink the same
+    // way, the retreat's 11-round seg 0 is gone).
     // The 4 digits [M C_KEYPAD_Handler 0x216810 msg 0x4b — the handler the keypad menu's digit
     // controls dispatch; the cursor/page UI is the view's presentation (GAP-1's UI half, the
     // audit §5)]. The code is the game's own boot table [L ee_start_0700000a.bin @0x2beff8 —
@@ -1948,7 +1951,6 @@ fn walk_office_floor_qworm_keyboard_hatch_real_damage_agent() {
 /// gate at d2 AND d3 [M 0x136be0:49]. Real input only — the load path is the only difference
 /// (plus the d3-gated tactics the deaths force, inside this file).
 #[test]
-#[ignore = "the scripted bot does not yet survive this fight on real damage; the plain walk passes"]
 fn walk_office_floor_qworm_keyboard_hatch_real_damage_00agent() {
     walker::with_real_damage(|| walk_office_floor_qworm_keyboard_hatch_at(3))
 }

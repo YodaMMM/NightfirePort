@@ -43,6 +43,161 @@ use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
+/// File-local pre-clear (civ-unignore-2, the 00 Agent lobby answer): stand where Bond stands and
+/// drop every hostile in `radius` whose boxes the gun-ray set exposes from HERE, through the
+/// ordinary fight machinery (`Walker::stand_and_fire` — aim, converge, tap, reload; no movement
+/// beyond the fight's own back-off/creep flags, none of which are set on this walk's stands). A
+/// player walking a known-guarded lobby shoots the posted guards from the doorway before
+/// crossing their pocket; the damage-weighted return-fire pick only answers whoever is ALREADY
+/// hurting Bond, so the posted rifle guard 13 u across the floor is engaged by this sweep
+/// instead of after his first point-blank volley (the measured master ledger: death tick 1666
+/// with #3's three −14 rifle hits at d 2.6-2.7 after the leg walked Bond into the pocket the
+/// fights never pre-engaged). The sweep's rules are the fights' own: `DamageLog::
+/// exposed_part_gun_rays` (the lane ray set the 13 walk fights with) gates each pick, so a
+/// guard behind the lobby furniture is skipped, not crept toward. No position writes, no RNG
+/// draws, no health/ammo writes; the only inputs are the view drives and the trigger taps.
+fn clear_the_visible(w: &mut Walker, label: &str, radius: f32) {
+    w.switch_to_armed(label);
+    for _ in 0..12 {
+        let target = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (0..sim.drones.list.len()).find(|&i| {
+                let d = &sim.drones.list[i];
+                d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && walker::dxz(d.pos, sim.bond.pos) < radius
+                    && walker::DamageLog::exposed_part_gun_rays(&sim, i).is_some()
+            })
+        };
+        let Some(di) = target else { return };
+        let killed = aimed_stand(w, di, label, 2400);
+        // aimed_stand's early gives-ups (dry, disabled) return before its own restore: force the
+        // walk's default back — 13's fights must keep the plain tap gate (the precise_fights
+        // lesson: the tight gate holds fire on the lobby chargers).
+        w.dmg.aimed_fights = false;
+        eprintln!("[013] {label}: the pre-clear stand on drone #{di} killed {killed}");
+        if !killed { w.resupply(label); }
+    }
+}
+
+/// One STILL-gATE aimed stand on drone `di` (civ-unignore-2; the 07000006 file's own idiom,
+/// level-local here per the merge rules — shared helpers stay opt-in, and this copy runs only
+/// inside this file's d3 pre-clears). The parts that make far stands land, each measured on the
+/// 0c/06 branches:
+/// - the aim-RAISE loop: release, let the switch anim finish, then hold aim until the bit sets —
+///   the raise queues only on the aim-PRESSED edge from the idle machine [M Player_Weapon
+///   0x1a24c8:113-152; the finish sets the bit 0x1a2e38:554-561];
+/// - the AIM-BIT tap gate: with the bit unset every round rides the HIP cone (spread base 100.0
+///   [L ee_start_05.bin @ 0x2c10b8 +0x24] — ~6 u of scatter at the mezzanine sniper's 45 u),
+///   with it set the aimed act is zero-spread [M Bullet_init 0x12c5a0:139-170];
+/// - the CURSOR-aware convergence: the fired round obeys the view PLUS the eased cursor offsets
+///   [M scene.rs free-aim; Player_AutoAim 0x1a7c98:50-59];
+/// - the STILL gate: tap only after the guard holds still 18 ticks — a stepping guard is not
+///   where the view was when the round lands (the round FLIES [M Bullet_update 0x12e7b0]);
+/// - the STRICT gun-ray exposure re-pick every 10 ticks (`exposed_part_gun_rays`).
+/// Never writes health, armour or ammo; the only inputs are the view drives + the trigger taps.
+fn aimed_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
+    // Settle: no input until the switch anim is done, then the raise loop (the 0c idiom).
+    for _ in 0..90 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.gun.switch_state == 0 && !sim.gun.fire_state { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
+    }
+    for _ in 0..240 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.aiming { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { aiming: true, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    const STILL_NEED: u32 = 18;
+    let prev = w.dmg.aimed_fights;
+    w.dmg.aimed_fights = true;
+    let killed = {
+        let mut unseen = 0u32;
+        let mut last_tap = 0u32;
+        let mut aim: Option<[f32; 3]> = None;
+        let mut hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
+        let mut last_hit = 0u32;
+        let mut still = 0u32;
+        let mut last_pos = [0.0f32; 3];
+        let mut have_pos = false;
+        for t in 0..cap {
+            let (input, fire, reload) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[di];
+                if d.corpse || d.health <= 0.0 || !d.present { return true; }
+                if sim.disabled { return false; }
+                if sim.gun.clip == 0 && sim.gun.spare == 0 { return false; }
+                // The still gate: root motion only (the 0c measurement — the box sway rides the
+                // anim; the root is what carries the chest out of the round's path).
+                let moved = have_pos && ((d.pos[0] - last_pos[0]).powi(2)
+                    + (d.pos[1] - last_pos[1]).powi(2) + (d.pos[2] - last_pos[2]).powi(2)).sqrt() > 0.03;
+                have_pos = true;
+                last_pos = d.pos;
+                still = if moved { 0 } else { still.saturating_add(1) };
+                if d.health < hp0 { hp0 = d.health; last_hit = t; }
+                // 1500: a far post exposes in firing windows — the 500 default aborted before a
+                // first hit ever landed on the 06 mouth runs. A landing round kills a 12-health
+                // guard, so the wait is the tactic, not a stall (the cap still bounds it).
+                if t - last_hit > 1500 { return false; }
+                if t % 10 == 0 { aim = walker::DamageLog::exposed_part_gun_rays(&sim, di); }
+                if aim.is_none() { unseen += 1; if unseen > 80 { return false; } } else { unseen = 0; }
+                let b = sim.bond.pos;
+                let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
+                let at = aim.unwrap_or([d.pos[0], d.pos[1] + 0.3, d.pos[2]]);
+                let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
+                let h = (dx * dx + dz * dz).sqrt().max(0.5);
+                let desired_yaw = dx.atan2(dz);
+                let desired_pitch = (dy / h).atan();
+                // The cursor drive + the effective-aim error (the round obeys the view + the
+                // eased offsets, not the view alone).
+                let yaw_err = { let mut a = desired_yaw - sim.bond.yaw;
+                    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
+                let cx_want_raw = -yaw_err / 0.76966;
+                let cy_want_raw = pitch_err / 0.57724;
+                let cur = sim.cursor;
+                let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
+                let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
+                let aoff = sim.drones.aim_offset;
+                let err = { let mut a = yaw_err - aoff[0];
+                    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                let perr = pitch_err - aoff[1];
+                let reload = sim.gun.clip == 0;
+                // The tap: the aim bit ON, the effective aim converged, the guard still.
+                let fire = sim.aiming && !reload && unseen == 0 && err.abs() < 0.01 && perr.abs() < 0.01
+                    && still >= STILL_NEED && t.saturating_sub(last_tap) >= 8;
+                (nf_game::player::Input { turn, look, aiming: true, ..Default::default() }, fire, reload)
+            };
+            if reload {
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, true, false);
+                w.total_ticks += 1;
+                w.after_step();
+                for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+            } else if fire {
+                last_tap = t;
+                w.tick_fire(input);
+            } else {
+                w.tick(input, false);
+            }
+        }
+        w.scene.sim.as_ref().unwrap().drones.list[di].health <= 0.0
+    };
+    w.dmg.aimed_fights = prev;
+    // Level the view back (the fights' own idiom) so the next nav leg steers from level pitch.
+    for _ in 0..90 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pitch;
+        if p.abs() < 0.01 { break; }
+        w.tick(nf_game::player::Input { look: (-p).clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[013] the aimed stand ({label}): drone #{di} killed {killed}, health {:.1}",
+        sim.drones.health.health);
+    killed
+}
+
 /// The whole warm chain (12 → 4A → 13 → out) on real input. `real_damage` = the armour detour
 /// (see the real-damage test below); the wrapper turns the top-up off for every walker the walk
 /// makes. `difficulty` = the menu pick the chain runs at (the front-end's launch path [M
@@ -84,6 +239,15 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             // plain kit and stays byte-identical.
             w.dmg.lane_floor_drops = true;
             w.dmg.precise_fights = true;
+            // civ-unignore (the measured pre-engagement burst): #10's first fire on the bend→
+            // corridor walk is ONE tick of 8 × −3.0 shotgun pellets at d 3.5 (t2723, Bond at
+            // (16.8,−12.0)) — the −24 chunk that sends 13 the 62 instead of 86, the exact leak the
+            // civ-repin-finish report ranked first (its live check asked what wrote 86.0 → 62.0
+            // between ticks 2531 and 2764; NF_DMG_TRACE answers: guard #10, weapon 0x1c, one
+            // frame). The opt-in tower2 flag stands at the "the south corridor east" leg end and
+            // kills him through the ordinary fight machinery before his sight opens. OFF for every
+            // other caller (the 07000012 and campaign walks set nothing).
+            tower2::PRE_CLEAR_SOUTH_CORRIDOR.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         tower2::walk_12(&mut w);
         tower2::walk_12_exit(&mut w);
@@ -167,6 +331,17 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             "0x04000035 'Escape from the tower' still announced at 13's load [L c07000011.rs; M 0x1827d8:119-123 — its AND writer first fires here]");
         assert!(!sim.drones.channels.on(100), "ch 100 is off at 13's load — the success touches are its first writer [D]");
     }
+    // civ-unignore-2 (the d3 pre-clear): the spawn pocket's posted guards (#3 rifle hp 24 at
+    // (6.6,−368.4,27.5), #7 shotgun hp 12 at (1.5,−368.4,24.0), the melee pair beside them) are
+    // exposed from the spawn floor — the master baseline's own fights #1/#2 prove the gun rays
+    // reach (6.6,−368.4,28.2) and (4.9,−368.4,24.9) from d 15+ — but the damage-weighted
+    // return-fire pick never engages them until they hit, and the leg then walks Bond INTO the
+    // pocket: #3 landed three −14 volleys at d 2.6-2.7 and the shotgun finished the run (death
+    // tick 1666 at (3.57,−368.36,25.09), 86.0 consumed). A player shoots the posted guards from
+    // the doorway before crossing their pocket.
+    if real_damage && difficulty == 3 {
+        clear_the_visible(&mut w, "13: the spawn pocket", 24.0);
+    }
 
     // THE SECURITY GATE: the "Shutters2" SimpleScript #149 (out ch 0x23 [D param 3]) is the
     // entrance mouth's panel (the SS cel's glist spans x −8.54..−4.97 at z 65.02 [D the object
@@ -199,6 +374,14 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // and the room's own floor (cel 28's bucket) holds him.
     w.walk_to(Wp::new(5.0, -368.4, 26.5).r(1.5), "13: the lobby east lane");
     w.walk_to(Wp::new(-6.0, -368.4, 40.0).r(1.5), "13: the lobby west mid");
+    // civ-unignore-2 (the d3 pre-clear, second leg): the north-lobby shooters the east lane's
+    // fights only ever answered UNSEEN (the master baseline: fights #0/#4, aim None, killed
+    // false, the creep dragging Bond backward into the pocket) become the sweep's targets from
+    // the west-mid leg end when their boxes open — and a guard this sweep still cannot see is
+    // left to the legs' own return fire exactly as before.
+    if real_damage && difficulty == 3 {
+        clear_the_visible(&mut w, "13: the lobby west mid", 24.0);
+    }
     w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west");
     w.walk_to(Wp::new(-22.0, -368.4, 39.5).r(1.5), "13: past the glass band");
     w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: at the security-room door");
@@ -401,8 +584,17 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
 /// 12-health guard [M NDrone2_HitDamage 0x145558 × DroneDamage_Head] — so the fights end in 1-2
 /// taps and the volley exposure shrinks with them (the 11 walk ships this wrapper on the same
 /// machinery [L its d1 pass]). The d2 sister keeps her passing torso timeline byte-identical.
+/// GREEN (civ-unignore-2): the file-local `clear_the_visible` pre-clears stand at the leg ends
+/// and take the posted guards BEFORE the legs walk into them — the master baseline died walking
+/// INTO the spawn pocket (#3's three −14 volleys at d 2.6, death t1666, 86.0 consumed) because
+/// the damage-weighted return-fire pick only answers whoever is ALREADY hurting Bond; the
+/// spawn-pocket sweep (#1, #2) plus the west-mid sweep whose AIMED stand drops the mezzanine
+/// sniper #4 (the fights' own hip-cone taps at his 45 u scatter ~6 u — the aim bit's zero-spread
+/// act [M Bullet_init 0x12c5a0:139-170] is what lands at that range) bring the chain home: end
+/// health 8.5 + armour 50, 14 hits for 77.5, 13 return-fire fights, 0 stuck, 0 falls [L this
+/// tree's run]. The carries question from civ-unignore (62/72/86 all consumed) is moot — the
+/// sniper who ate 69 of the 86 dies at the west-mid leg end, before the security-room legs.
 #[test]
-#[ignore = "the scripted bot does not yet survive this fight on real damage; the plain walk passes"]
 fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage() {
     let iso = iso();
     walker::with_real_damage_head_hunting(|| walk_the_warm_chain(&iso, true, 3));
