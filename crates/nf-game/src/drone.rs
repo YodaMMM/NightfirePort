@@ -1029,7 +1029,14 @@ pub struct Drone {
     pub alarm_patrol: u8,
     /// `Drone+0xA70`: the assigned AI point (`AssignAIPath` 0x154190 / `FindAlarmPoint` 0x153008's
     /// reuse arm) — the port keeps the point's (yaw, position).
-    pub alarm_point: Option<(f32, V3)>,
+    pub alarm_point: Option<(f32, V3, f32)>,
+    /// `Drone+0x8EC` via route+0x8C: the goal arrival radius. Seeded 2.0 by `DefaultInit`
+    /// [M 0x14b300:579 — both +0x8EC and +0x8F0 = 0x40000000], rewritten by
+    /// `SetupRouteToPosition` from each goal's radius argument (0 -> 2.0) [M 0x158b10] and NOT
+    /// touched by the combat route build [M 0x158948]; `MoveToGoalPosition` arrives when the
+    /// route distance drops under it [M 0x1517d8:49-52]. Form 1 (this task): every position-goal
+    /// setter carries its game radius here; `move_to_goal` arrives under it.
+    pub goal_arrival: f32,
     /// The level's AI points, stamped by `attach_level` (`Drone_AIPoint` 0x137550): (kind = param 0,
     /// position = the placement translation, yaw = the placement rotation y). Kind 8 = the alarm
     /// panels [D: 12 on 07000009 map39, 9 on 0700000a map37, 0 elsewhere].
@@ -1782,9 +1789,12 @@ pub struct Drone {
     /// on landing (AbseilSlide 0x169730:35 / StepOff 0x1738e0:18).
     pub saved_anim_set: u16,
     /// `Drone+0xc4`: the attack type the landing restores into the mode byte (`+0xc5 = +0xc4`,
-    /// AbseilSlide 0x169730:36 / StepOff 0x1738e0:21). The OLD chain never writes it (the only
-    /// decomp writer is the astronaut's at 0x14b300:725) — a fresh allocation reads 0, so the
-    /// landed abseiler becomes mode 0 (the generic guard row).
+    /// AbseilSlide 0x169730:36 / StepOff 0x1738e0:21) and the GoToGoalPosition arrival keeps
+    /// (0x165640:78-79). Written for EVERY drone at creation: `+0xc4 = GetDTYPENEW(+0xc7, 0)`
+    /// [M NDrone2_GetDroneTypeAttackTypeFriend 0x14cbd8:22-23, reached through DoModeSettingsNEW
+    /// 0x14c600:80 — and DoModeSettingsOLD tail-calls NEW, 0x14cfa0:16]; the astronaut kind-0x18
+    /// arm then overwrites it with 0x1D [M DefaultInit 0x14b300:725]. Block 0: prop 0x10 → 0x10,
+    /// dtype 0xa/0xb → 9/0x12/10, else the block-0 tail 0.
     pub attack_mode: u8,
     /// `Drone+0xcc0/0xcc4/0xcc8` scratch of the hang re-slide hysteresis: `DCVars+0x1c =
     /// (int)Rand_FRand(1.0)` — truncates to 0 (0x169940:21-22, held across the hang ↔ slide flips).
@@ -2026,6 +2036,7 @@ impl Drone {
             dist: 0.0, yaw_to_opp: 0.0,
             state: state::GLOBAL, prev_state: 0, next_state: None, entered: 0, timer_c: None, timer_d: None,
             alarm_yaw: 0.0, alarm_run: false, timer_c_payload: 0, alarm_patrol: param(23) as u8, alarm_point: None,
+            goal_arrival: 2.0, // the DefaultInit seed [M 0x14b300:579]
             ai_points: Vec::new(), alarm_switches: Vec::new(),
             explosive_pos: pos, explosive_run_dist: 0.0,
             anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), blend_out: false, started: false, early_end: false, len_cap: None },
@@ -2275,17 +2286,24 @@ impl Drone {
         match block { 2 => if self.alert >= 1.0 { 0x19 } else { 2 }, 3 => if self.prop(d, 0x56) { 0xe } else { 7 }, 4 => 4, 5 => 0x15, _ => 0 }
     }
 
-    /// `NDrone2_GetDroneTypeAttackTypeFriend` (0x14cbd8) at creation: modes, team, the type's init function (the
+    /// `NDrone2_GetDroneTypeAttackTypeFriend` (0x14cbd8) at creation: the attack type `+0xc4`, modes, team, the
+    /// type's init function (the
     /// sniper's sets the stationary flag), the alternate state `+0x5A4`; a second tag `+0x13A` is dropped when both
     /// blocks have the same mode, and set to 100 when there is an alternate state but no tag. (The 07000007 property
-    /// writes inside `GetDTYPENEW` are not modelled.)
+    /// writes inside `GetDTYPENEW` are modelled in `dtype_of`, in the game's block-0-first order.)
     fn type_setup(&mut self, d: &Data) {
         if self.mode_normal == self.mode_alert || self.second_tag == 0x65 { self.second_tag = 0; }
+        // `+0xc4 = GetDTYPENEW(+0xc7, 0)` [M 0x14cbd8:22-23] — the game writes the attack type
+        // BEFORE the mode byte, so the block-0 prop writes (the 07000007 party guests) land in
+        // the game's order.
+        self.attack_mode = self.dtype_of(d, self.dtype, 0);
         self.mode = self.dtype_of(d, self.dtype, self.mode_normal);
         // DefaultInit skin kind 0x18: dtype = 0x1D regardless of the placement dtype, no saved
         // dtype and no restore state [M 0x14b300:722-727] — start_state then reads DroneTypeSettings
-        // row 29 (start 0xBD) [D docs/fields/dronetype-tables.md:111].
+        // row 29 (start 0xBD) [D docs/fields/dronetype-tables.md:111]. The arm also rewrites
+        // `+0xc4 = 0x1d` [M 0x14b300:725] — an astronaut abseiler lands back into the astronaut mode.
         if self.kind == 0x18 { self.mode = 0x1D; }
+        if self.kind == 0x18 { self.attack_mode = 0x1D; }
         // `NDrone2_DefaultInit` (0x14b300): +0xEC = 4.0 for everyone (:378); mode 0xd (the ninja,
         // :744-753) also sets health 100.0, +0x8F0 = 8.0, the props 0x35/0x36/0x3c, +0xB4 = 0 and
         // +0xEC = 2.0 — the melee band the ninja attack states roll their evasions under.
@@ -3196,14 +3214,14 @@ impl Drone {
             pos: self.pos, dir: [s, 0.0, c], speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
             damage: f32_at(0x0c), owner, state: 0, weapon: record as u16,
             flyby: d.weapons.flyby(record), bounces: 0,
-            // The guard-side flight keeps the port's documented deviation (the glass pass NOT
-            // modelled [S]): the real-health routes stand behind station glass (the 08 d2
-            // platform-mouth wave cleared at zero cost while the rounds stopped on it) — arming
-            // the pass here turned walk_the_whole_mission_on_real_input_real_damage_agent red at
-            // tick 25178 (#23/#19 volleys through the top-station glass). The player-side flight
-            // carries the pass (update_player_bullets' flight_glass) where the Hind fight needs
-            // it; the guard-side route work lands with the next session.
-            glass_pass: false,
+            // The flight's glass pass from the record [M Bullet_update 0x12e7b0 disasm
+            // 0x12f048-0x12f058 — HITTEST+0x9a = 0x20 unless weapon_data+0x6c & 0x800;
+            // Collide_Update 0x1ea398:216-229 passes the surface-byte-0x10 contacts] — the
+            // same per-round law update_player_bullets computes for Bond's rounds. The old
+            // hard-wired false was a documented shortcut whose real-health route cost is
+            // re-pinned with the 08 station walks (the game clears the stop for every
+            // record without the bit).
+            glass_pass: u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0,
             ..crate::bullet::Bullet::TAIL
         })
     }
@@ -5506,6 +5524,10 @@ impl Drone {
         self.cover = Some(i);
         self.croute = None;
         self.goal = Some(goal);
+        // `NDrone2_FindCover` 0x152548:174-181 — SetupGoalPosition(0.5, …) for cover-node kind 0
+        // (corner) / 1 (low), else 1.0; the chosen node is `pcVar7` walking the 0xb0-stride node
+        // array, its first byte the kind.
+        self.goal_arrival = if n.kind <= 1 { 0.5 } else { 1.0 };
         self.cover_rt[i].owner = Some(self.index);
         self.cover_side = side;
         self.cover_point = n.position(bits, false).map_or(goal, |p| p.0);
@@ -5534,6 +5556,8 @@ impl Drone {
         self.cover = Some(i);
         self.croute = None;
         self.goal = Some(goal);
+        // `NDrone2_FindAmbushCover` 0x152958:207-208 — SetupGoalPosition(0.5, …) always.
+        self.goal_arrival = 0.5;
         self.cover_rt[i].owner = Some(self.index);
         self.cover_side = side;
         self.cover_point = n.position(bits, false).map_or(goal, |p| p.0);
@@ -5607,6 +5631,7 @@ impl Drone {
         if len < 0.001 { return false; }
         let goal = [scary[0] + dx / len * dist, scary[1] + 0.5, scary[2] + dz / len * dist];
         self.goal = Some(goal);
+        self.goal_arrival = 1.0; // SetupGoalPosition(1.0, …) [M 0x152250:126-127, 163-164]
         self.croute = None; // ResetRoute + InvalidateRoute [M 0x152250:128-129]
         self.move_to_goal(d); // build the route now (the deadline bounds a dead route)
         true
@@ -5693,9 +5718,11 @@ impl Drone {
     /// code band 0..3 on the fresh path and always 1 on the reuse path [M-dis jump tables 0x2f6390 /
     /// 0x2f63d0]; the port keeps the boolean the callers use.
     fn find_alarm_point(&mut self, d: &Data) -> bool {
-        if let Some((yaw, pos)) = self.alarm_point {
+        if let Some((yaw, pos, acc)) = self.alarm_point {
             self.alarm_yaw = yaw;
             self.goal = Some(pos);
+            // the reuse arm re-runs SetupGoalPosition with the SAME point accuracy [M 0x153008:45-48]
+            self.goal_arrival = acc;
             self.move_to_goal(d);
             return true;
         }
@@ -5709,10 +5736,12 @@ impl Drone {
         let path = self.nav_path.flatten();
         let Some(pi) = crate::aipoint::closest(d.ai_points, d.nav, d.world, path, self.pos, 8, owner) else { return false };
         self.goal = Some(d.ai_points[pi].pos);
+        // SetupGoalPosition(point+0x14, …) — the AIPoint's own accuracy [M 0x153008:20-23].
+        self.goal_arrival = d.ai_points[pi].accuracy;
         // The game's fresh path returns the `MoveToGoalPosition` code band 0..3 [M-dis 0x2f63d0].
         if !matches!(self.move_to_goal(d), 0..=3) { return false; }
         self.alarm_yaw = f32::from_bits(d.ai_points[pi].yaw_bits); // `Drone+0x734` [M 0x153008:24; M-dis 0x1530c8-30]
-        self.alarm_point = Some((self.alarm_yaw, d.ai_points[pi].pos));
+        self.alarm_point = Some((self.alarm_yaw, d.ai_points[pi].pos, d.ai_points[pi].accuracy));
         true
     }
 
@@ -5824,6 +5853,8 @@ impl Drone {
             .or_else(|| if group == 2 { crate::aipoint::closest(d.ai_points, d.nav, d.world, path, self.pos, 1, owner) } else { None });
         let Some(pi) = hit else { return false };
         self.goal = Some(d.ai_points[pi].pos);
+        // SetupGoalPosition(point+0x14, …) — the AIPoint's own accuracy [M 0x153168:39-43].
+        self.goal_arrival = d.ai_points[pi].accuracy;
         // `AINetwork_InvalidateRoute(drone+0x860)` before SetupGoalPosition/MoveToGoalPosition —
         // every ask rebuilds the route even when a stale valid one exists [M 0x153168:41, 76].
         self.croute = None;
@@ -5894,6 +5925,7 @@ impl Drone {
         let Some((k, _)) = anchor else {
             self.croute = None; // ResetRoute + InvalidateRoute(+0x860) [M :166-167]
             self.goal = Some(self.player_pos); // SetupGoalPosition(2.0, the player) [M :168-169]
+            self.goal_arrival = 2.0;
             return false;
         };
         {
@@ -5904,7 +5936,10 @@ impl Drone {
         }
         self.croute = None; // InvalidateRoute(+0x860) [M :139-140, 203-204]
         let np = node_pos(self.route.as_ref().unwrap(), k);
-        self.goal = Some(np); // SetupGoalPosition(2.0 / 1.0, the node) [M :141-142, 205-206]
+        self.goal = Some(np);
+        // SetupGoalPosition(1.0, the node) on the fresh path [M 0x153a30:141-142]; the fallback
+        // route builds at :168/:205 carry 2.0 — the port's retry arms below set it.
+        self.goal_arrival = 1.0;
         let code = self.move_to_goal(d); // [M :143-144, 207-208]
         if best_reach.is_some() { return true; }
         if matches!(code, 0..=3) {
@@ -5913,6 +5948,7 @@ impl Drone {
         }
         self.croute = None;
         self.goal = Some(self.player_pos); // the waypoint route failed → the player [M :160-169]
+        self.goal_arrival = 2.0; // [M :168-169]
         false
     }
 
@@ -5952,7 +5988,9 @@ impl Drone {
         let (code, reached) = {
             let route = self.croute.as_mut().unwrap();
             route.remaining = route.distance(d.nav, feet);
-            if route.remaining < 2.0 { return 3; }
+            // `MoveToGoalPosition` 0x1517d8:49-52 — the arrival is route+0x8C = Drone+0x8EC, the
+            // goal's own radius (form 1), not a global 2.0.
+            if route.remaining < self.goal_arrival { return 3; }
             let ppos = self.player_pos;
             let r = route.follow(d.nav, feet, &|p| Drone::ppos_near(ppos, p));
             // `LinkCreep_Handler` (0x15a2c8) runs `ReachedDestNode` for EVERY followed route — the
@@ -5976,11 +6014,13 @@ impl Drone {
     /// wall, if a route there exists and the drone is not already within 2.0 of it.
     fn set_goal_to_closer_position(&mut self, d: &Data) -> bool {
         let Some(p) = d.nav.first_wall_hit(self.pos, self.target.pos) else { return false };
-        let (old_goal, old_route) = (self.goal, self.croute.take());
+        let (old_goal, old_route, old_arrival) = (self.goal, self.croute.take(), self.goal_arrival);
         self.goal = Some(p);
+        self.goal_arrival = 3.0; // MoveToGoalPosition(3.0, …) [M 0x155e10:30]
         if self.move_to_goal(d) < 3 { return true; }
         self.goal = old_goal;
         self.croute = old_route;
+        self.goal_arrival = old_arrival;
         false
     }
 
@@ -5989,11 +6029,13 @@ impl Drone {
     fn set_goal_to_drone_with_los(&mut self, d: &Data, rng: &mut Rng) -> bool {
         for (i, pos, sees) in self.peers.clone() {
             if i == self.index || !sees || rng.rand(4) != 0 { continue; }
-            let (old_goal, old_route) = (self.goal, self.croute.take());
+            let (old_goal, old_route, old_arrival) = (self.goal, self.croute.take(), self.goal_arrival);
             self.goal = Some(pos);
+            self.goal_arrival = 3.0; // MoveToGoalPosition(3.0, …) [M 0x1543f8:100-101]
             if matches!(self.move_to_goal(d), 0 | 2) { return true; }
             self.goal = old_goal;
             self.croute = old_route;
+            self.goal_arrival = old_arrival;
         }
         false
     }
@@ -7891,6 +7933,7 @@ impl Drone {
                 if self.stays(d) { self.call_anim_variant(d, anim_state::ALERT_LOOK, 1, back, 0); return true; }
                 // `NDrone2_SetSoundAlertRoute` (0x154aa8): the goal becomes the sound (radius 2.0).
                 self.goal = Some(self.sound_pos);
+                self.goal_arrival = 2.0; // [M 0x154aa8:11-13]
                 self.croute = None;
                 if self.turned && self.prop(d, 0x21) { self.set_state(ALERT_TO_POSITION); return true; }
                 let to = atan2_approx(self.sound_pos[0] - self.pos[0], self.sound_pos[2] - self.pos[2]);
@@ -8658,6 +8701,7 @@ impl Drone {
                     self.target.pos
                 };
                 self.goal = Some(goal);
+                self.goal_arrival = 10.0; // the interrogate assist's radius [M 0x15add0 + callers]
                 if matches!(self.move_to_goal(d), 0..=3) {
                     self.return_state = INTEROGATE_ASSIST_WAIT;
                     self.set_state(GO_TO_GOAL);
@@ -11441,9 +11485,9 @@ impl Drone {
             let dir = crate::bullet::spread(aim, f32_at(0x24), flags68, rng);
             let mut b = crate::bullet::Bullet { pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage, owner, state: 0,
                 weapon: self.weapon as u16, flyby: d.weapons.flyby(self.weapon as usize), bounces: 0,
-                // Guard-side deviation: the glass pass stays unmodelled (see the close-combat
-                // spawn above — the real-health routes stand behind station glass).
-                glass_pass: false,
+                // The flight's glass pass from the record [M Bullet_update 0x12e7b0 disasm
+                // 0x12f048-0x12f058; Collide_Update 0x1ea398:216-229] — the player-side law.
+                glass_pass: u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0,
                 ..crate::bullet::Bullet::TAIL };
             b.init_fuse(w);
             b
@@ -13318,9 +13362,9 @@ impl Drones {
                 pos, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
                 damage: f32_at(0x0c), owner: usize::MAX, state: 0, weapon,
                 flyby: d.weapons.flyby(weapon as usize), bounces: 0,
-                // Guard-side deviation: the glass pass stays unmodelled (see the close-combat
-                // spawn in drone.rs).
-                glass_pass: false,
+                // The flight's glass pass from the record [M Bullet_update 0x12e7b0 disasm
+                // 0x12f048-0x12f058; Collide_Update 0x1ea398:216-229] — the player-side law.
+                glass_pass: u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0,
                 ..crate::bullet::Bullet::TAIL
             };
             b.init_fuse(w);
@@ -17856,9 +17900,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 damage: f32_at(0x0c), owner: usize::MAX, state: 0,
                                 weapon: crate::gt::TURRET_WEAPON_RECORD as u16,
                                 flyby: d.weapons.flyby(crate::gt::TURRET_WEAPON_RECORD), bounces: 0,
-                                // Guard-side deviation: the glass pass stays unmodelled (see the
-                                // close-combat spawn in drone.rs).
-                                glass_pass: false,
+                                // The flight's glass pass from the record [M Bullet_update
+                                // 0x12e7b0 disasm 0x12f048-0x12f058] — the player-side law.
+                                glass_pass: u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0,
                                 ..crate::bullet::Bullet::TAIL
                             };
                             b.init_fuse(w);
@@ -18114,9 +18158,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                     pos: from, dir, speed: f32_at(0x20), travelled: 0.0,
                                     range: f32_at(0x1c), damage: f32_at(0x0c), owner: usize::MAX,
                                     state: 0, weapon: 107, flyby: d.weapons.flyby(107), bounces: 0,
-                                    // Guard-side deviation: the glass pass stays unmodelled (see the
-                                    // close-combat spawn in drone.rs).
-                                    glass_pass: false,
+                                    // The flight's glass pass from the record [M Bullet_update
+                                    // 0x12e7b0 disasm 0x12f048-0x12f058] — the player-side law.
+                                    glass_pass: u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0,
                                     ..crate::bullet::Bullet::TAIL
                                 };
                                 b.init_fuse(w);
@@ -22159,6 +22203,7 @@ mod tests {
             seen_ticks: 0, unseen_ticks: 0, vision_on: false, dist: 0.0, yaw_to_opp: 0.0,
             state: 0, prev_state: 0, next_state: None, entered: 0, timer_c: None, timer_d: None,
             alarm_yaw: 0.0, alarm_run: false, timer_c_payload: 0, alarm_patrol: 0, alarm_point: None,
+            goal_arrival: 2.0, // the DefaultInit seed [M 0x14b300:579]
             ai_points: Vec::new(), alarm_switches: Vec::new(),
             explosive_pos: pos, explosive_run_dist: 0.0,
             anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), blend_out: false, started: false, early_end: false, len_cap: None },
