@@ -17,9 +17,14 @@
 //!   0x310000−0x2f24 = **0x30d0dc** (symtab `0030d0dc` = `REC_FRAME_RATE`; disassembled
 //!   2026-11-06: 0x1aa1f0 `lui $at,0x31` / 0x1aa1f4 `lwc1 $f1,-0x2f24($at)` / 0x1aa1fc
 //!   `sub.s $f0,$f0,$f1` / 0x1aa200 `c.olt.s $f0,$f0,0` / 0x1aa208 `bc1f`), and the p3 seeds
-//!   are SECONDS [D 105/40/20/0/60/105/105/60] — the countdown runs seed·60 gated ticks, so the
-//!   eight missiles leave state 0 STAGGERED (0/1200/2400/3600/6300 ticks after the ch-19 gate;
-//!   only missile 4's 0 s seed expires immediately). The tree shipped 512.0/tick (every seed
+//!   are SECONDS [D placement params, re-dumped 2026-11-06: #129 105 · #131 105 · #132 40 ·
+//!   #133 20 · #134 0 · #135 60 · #136 105 · #137 60 — i.e. by missile INDEX 1..8:
+//!   **105/105/40/20/0/60/105/60**; the older "105/40/20/0/60/105/105/60" list in this note was
+//!   mis-ordered against the p4 indices — the placement dump and the measured state-0 arming
+//!   under the held gate (m5 at the first gated tick, m4 at +1200, m3 at +2400) both read the
+//!   index map above] — the countdown runs seed·60 gated ticks, so the eight missiles leave
+//!   state 0 STAGGERED (missile 5's 0 s seed expires on the first gated tick; 4 at +1200,
+//!   3 at +2400, 6/8 at +3600, 1/2/7 at +6300). The tree shipped 512.0/tick (every seed
 //!   spent in one gated tick, all eight state-0 exits the same frame) until aim-route-4; the
 //!   1/60 step re-paces the 0700001b mission flow (console deadlines move to
 //!   launch + seed·60 + P0_LEN − 1 — the walkreal_0700001b walks were re-ordered onto the
@@ -132,7 +137,10 @@ pub const P2_WRITES: [&[(u32, u16)]; 8] = [
 /// The state-0 countdown decrement: `REC_FRAME_RATE` = 1/60.0 per gated tick [M the state-0
 /// body 0x1aa1f0-0x1aa208 loads 0x30d0dc with `lui $at,0x31; lwc1 $f1,-0x2f24($at)`; symtab
 /// `0030d0dc` = REC_FRAME_RATE; the compare/branch is c.olt.s/bc1f 0x1aa200-208]. The p3 seeds
-/// are seconds [D 105/40/20/0/60/105/105/60], so a seed spends seed·60 gated ticks in state 0.
+/// are seconds [D placement params re-dumped 2026-11-06: by missile index 1..8
+/// 105/105/40/20/0/60/105/60 — the older "105/40/20/0/60/105/105/60" note was mis-ordered
+/// against the p4 indices; the dump and the measured arming agree], so a seed spends seed·60
+/// gated ticks in state 0.
 pub const COUNTDOWN_STEP: f32 = 1.0 / 60.0;
 
 /// One kind-0x39 placement's missile object (the ext block at obj+0xE0 plus obj+0xf4/0xf6 [M]).
@@ -147,7 +155,8 @@ pub struct SpaceMissile {
     pub done_channel: u16,
     /// ext+0x12: the launch-order gate (p7 = 19 on all eight [D]).
     pub gate_channel: u16,
-    /// ext+0x14: the state-0 countdown (p3: 105/40/20/0/60/105/105/60 [D]).
+    /// ext+0x14: the state-0 countdown (p3: by index 1..8 105/105/40/20/0/60/105/60 [D
+    /// placement params 2026-11-06]).
     pub countdown: f32,
     /// obj+0xf4: the state 0..4 [M].
     pub state: u16,
