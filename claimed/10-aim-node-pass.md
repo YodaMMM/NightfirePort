@@ -7,3 +7,6 @@ Branch from `origin/s/aim-object-flags`, push to `s/aim-node-pass`. Read its rep
 3. The two 14 fusebox tests teleport in with the door closed. Rewrite them to walk the real route so the leaf stands open, as a player's would. Keep what they assert.
 
 Must end green: rocket_stop_plane08_live, rocket_glass08_live, rocket_origin_live, solar_panel_hits_live, fusebox_geometry_07000014_live, interactables_07000014_live. Then report walkreal 08, 0c, 14, 16, 1b. Do not loosen a pin tagged [L]. Run each binary whole and quote results.
+
+---
+claimed-by: sandbox3 at 2026-11-06T01:06Z
