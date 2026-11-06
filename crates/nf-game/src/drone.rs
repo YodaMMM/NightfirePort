@@ -14159,8 +14159,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// built-sphere broad phase per object (obj+0x80..0x8c [M Control_BuildWorldSph 0x133070])
     /// and `Collide_Intersect` 0x1ebaa8's type-0x201 arm (the segment vs the object's own glist
     /// triangles, first hit wins [M 0x1ec690's `param_9 & 0x10` stop]). The port's object
-    /// candidates: every loaded script's stream entities (`sp_bullet_targets`' set — the game's
-    /// pick covers every object with a built sphere), the drones (the hit boxes, the port's
+    /// candidates: the loaded scripts' stream entities gated on the game's chain membership
+    /// (find_cel — the game's pick covers its linked objects, the per-cel chains + ForcedList), the drones (the hit boxes, the port's
     /// guard geometry [M AnimGetCollData]), and the solar panels (kept: their exact
     /// world.shape triangles under the same sphere gate — the panel-only triangle stage).
     pub fn aim_snap(&self, d: &Data, from: V3, to: V3, glass: bool) -> V3 {
@@ -14180,33 +14180,56 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `sp_bullet_targets` returns exactly that pair per stream entity), then
         // `Collide_Intersect` 0x1ebaa8's type-0x201 arm — the segment vs the object's OWN
         // glist triangles posed by the object's own matrix, back-face-culled, first hit wins
-        // [M 0x1ec690's `param_9 & 0x10` stop]. Candidates: every loaded script's stream
-        // entities (the game's pick covers every object with a built sphere). An object whose
-        // glist has no parsed triangles never enters the 0x201 hit chain — the sphere alone
+        // [M 0x1ec690's `param_9 & 0x10` stop — the aim passes refine type 0, disasm
+        // 0x1a4d78, so no early stop]. Candidates: the game's pick covers its LINKED objects —
+        // the straddle cels' cel+8 chains plus ForcedList [M 0x1eb8e8-0x1eb93c / 0x1eba38-0x1eba5c];
+        // the port models chain membership with find_cel (the gate inside the loop). An object
+        // whose glist has no parsed triangles never enters the 0x201 hit chain — the sphere alone
         // does not stop the ray [L the 0700001b breakpoints: no hit entry without a triangle
         // touch]. The posing is the ENTITY's own matrix (obj+0x90); the 0x1eae80 flag-word gate
-        // (the 0x60 mask for the aim/bullet hittest 0x20a + the per-cel walk's f0 & 0x3000
-        // pre-filter, the word = glist+0x44 [M 0x134960:11 / 0x1d1508]) is SOURCED now
-        // (world.glist_flags) but NOT wired into this stage: wired alone it re-snaps the 08
-        // corridor's straight shot off the glass pane (the pick-ups' 0x8c0 words it rightly
-        // skips were carrying the calibrated snap) and the pinned [L] -100 pierce breaks; the
-        // game-side chain also walks the CEL-LINKED DOORS (the closed shutters' leaves are the
-        // game's snap target there) — both halves together are the next stage (the report).
+        // (the 0x60 mask for the aim hittest flags word 0x20a/0x208 [M disasm 0x1a4d68-0x1a4d88]
+        // + the per-cel walk's f0 & 0x30000000 pre-filter [M disasm 0x1eb910: lui s1,0x3000], the
+        // word = glist+0x44 | old & 0x30008000 [M 0x134960:13]) is wired into this stage. The
+        // game-side chain also walks the CEL-LINKED DOORS
+        // (the closed shutters' leaves are the game's snap target there) — the doors loop below.
         // The per-cel object walk itself: 0x1eb8e8-0x1eb93c (the straddle cels' cel+8 chains)
         // + the ForcedList second walk 0x1eba44-0x1eba5c.
         {
             for (_pi, c, r, mesh) in &self.scripts.sp_bullet_targets(d) {
                 let Some((hash, m)) = mesh else { continue };
-                // THE PICK GATE [M Collide_PickObj 0x1eae80 disasm 0x1eafc-0x1eb2c + the per-cel
-                // object walk 0x1eb914]: the aim/bullet hittest word 0x20a/0x208 [M
-                // Player_WeaponInitBullet 0x1a4bf0:154 / Bullet_update 0x12ef18 t3=522] builds
-                // the skip mask 0x20 | 0x40 (bit 0x8) = 0x60 — skip every candidate whose
-                // obj+0xF0 & mask != 0; the object walk adds the f0 & 0x3000 pre-filter. The
-                // word = glist+0x44 [M 0x134960:11 / 0x1d1508] = world.glist_flags. [L the
-                // 0700001b audits]: the whole panel f0 0x81 (kept), the pieces 0xc1 (skipped);
-                // the disc words match both (nf-formats' glist_flags_probe).
+                // THE CANDIDATE QUESTION (the remaining stage, see the report): the game's object
+                // pick covers only its LINKED objects — the straddle cels' cel+8 chains plus
+                // ForcedList [M Collide_Pick 0x1eb8e8-0x1eb93c (disasm: cel+8 head, obj+8 next,
+                // per-object PickObj) and 0x1eba38-0x1eba5c]. A script entity joins a chain only
+                // once its EntityStart arm has positioned it and its world sphere lands in a room
+                // cel [M Script_EntityStart 0x1d8d78:111-115 — Control_BuildWorldSph then
+                // build_LinkToRoom; build_LinkToRoom 0x1c9680:39-49 links via build_FindCel]. An
+                // object whose sphere is in NO room cel stays unlinked (obj+0x20 == 0, retried
+                // each tick [M control_handle_cel_change 0x133288:61-67]), never joins ForcedList
+                // (0x1c9680:62-67 inserts only f0 & 0x20000000 objects) and the straddle rule
+                // needs >= 2 straddle cels [M 0x133288:103-111]. A find_cel(centre) gate alone
+                // proved a no-op on 0700001b (every candidate measures in-cel) and is NOT wired
+                // here until the real discriminator (creation state vs pose vs a kept-apart list)
+                // is pinned; shipping it unverified risks the 14 wire legs.
+                // THE PICK GATES [M Collide_PickObj 0x1eae80 with the aim hittest]: RayIntersect
+                // is called with the FLAGS word 0x20a/0x208 (disasm 0x1a4d5c-0x1a4d88: t3 0x20a,
+                // movn 0x208 on weapon+0x6c & 0x800, in the o7 slot = hittest+0x98; the type
+                // word +0x94 is 0x201 [M 0x1ec690's store] and the refine arg is 0 [M 0x1a4d78
+                // sw $zero,($sp)]). The mask builds 0x20 | (0x40 on the flags' bit 0x8) = 0x60 —
+                // skip every candidate whose obj+0xF0 & 0x60 != 0. The flags' bit 0x200 skips
+                // class-5 objects (bullets [M Bullet_init 0x12c5a0:87]) — the port's candidate
+                // set holds no bullet, so that gate is vacuous here. The word = glist+0x44 |
+                // old & 0x30008000 [M Control_SetGList 0x134960:13] = world.glist_flags for
+                // level objects. The per-cel walk's PRE-FILTER is f0 & 0x30000000 [M Collide_Pick
+                // disasm 0x1eb910: lui s1,0x3000] — NOT 0x3000. Type 0x201 != 0x100 also demands
+                // obj+0xfa & 8 (the AnimObject-sphere bit — Script_EntityStart sets 0xe4
+                // [M 0x1d8d78:109], so every script entity passes) or a glist with a collision
+                // block (glist+8 != 0 [M parsemap_block_Coll_Data_New 0x1d1810:23-40]) — the
+                // shape() requirement below is that gate. [L the 0700001b audits]: the whole
+                // panel f0 0x81 (kept), the pieces 0xc1 (skipped); the disc words match both
+                // (nf-formats' glist_flags_probe).
                 let f0 = d.world.glist_flags(*hash).unwrap_or(0);
-                if f0 & 0x60 != 0 || f0 & 0x3000 != 0 { continue; }
+                if f0 & 0x60 != 0 || f0 & 0x30000000 != 0 { continue; }
                 // The wire entities ride their GFX-bounds frame end to end (the flight's contact
                 // note below): the posed COLLISION glist measured ~0.1-0.3 u behind the room's
                 // stat wall face on 07000014 [L the flight-stop trace vs the aim-stage probe],
@@ -14258,7 +14281,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for dr in &self.doors.list {
             if dr.glist == 0 { continue; }
             let f0 = d.world.glist_flags(dr.glist).unwrap_or(0);
-            if f0 & 0x60 != 0 || f0 & 0x3000 != 0 { continue; }
+            // The same PickObj mask (0x60 on the 0x20a/0x208 flags word) and the per-cel walk's
+            // pre-filter f0 & 0x30000000 [M Collide_Pick disasm 0x1eb910: lui s1,0x3000].
+            if f0 & 0x60 != 0 || f0 & 0x30000000 != 0 { continue; }
             let (c, r) = dr.live_sph();
             if !Self::segment_hits_sphere(from, to, c, r) { continue; }
             let Some(tris) = d.world.shape(dr.glist) else { continue };
