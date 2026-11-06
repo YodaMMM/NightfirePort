@@ -10,3 +10,7 @@ Finish with one total line from a full run, not per-binary counts alone.
 
 ---
 claimed-by: sandbox1 at 2026-11-06T09:37Z
+
+---
+## Report (done, 2026-11-06T11:11Z)
+
