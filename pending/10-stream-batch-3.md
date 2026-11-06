@@ -18,6 +18,3 @@ These do not look like route drift. Treat each as a possible real regression unt
 Then the walks: 01, 06, 08, 0b, 0c, 0d, 11, 12, 13, 14, 15, 16. "walk_to ... 6000-tick cap" failures need a look at what stands there; a guard parked on a route is a behaviour question. Do the plain walks first.
 
 An ignore with a measured reason is allowed for 00 Agent walks only. Do not loosen pins tagged [L] and do not change game code to suit a walk.
-
----
-claimed-by: sandbox1 at 2026-11-06T16:13Z
