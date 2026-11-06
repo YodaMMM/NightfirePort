@@ -114,3 +114,7 @@ no-move on the settled spot and must not shift the shot sequence), interactables
 
 (not visible to me — this sandbox exposes no token, cost or context-window figures for the
 session; nothing to copy)
+
+## ntfy failed
+
+curl: `curl: (28) Connection timed out after 20001 milliseconds`. python urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`. wget: `WGET_REAL_EXIT 4` (network failure), no body. All three fallbacks failed.
