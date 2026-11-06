@@ -172,10 +172,20 @@ fn console_station(k: u32) -> [f32; 3] {
     match k { 7 | 8 => [46.0, -7.0, 0.0], 1 | 2 => [20.0, -2.0, 0.0], _ => [32.0, -1.7, 0.0] }
 }
 
-/// The deadline order: the missiles' p0 scripts end at state-1 ticks 1799 (3/4/5), 2399 (6/8)
-/// and 3299 (1/2/7) [D P0_LEN — space_missile.rs], and state 2 reads the console channel then
-/// [M 0x1aa25c].
-const CONSOLE_ORDER: [u32; 8] = [3, 4, 5, 6, 8, 7, 1, 2];
+/// The deadline order under the disc countdown (COUNTDOWN_STEP = REC_FRAME_RATE 1/60
+/// [M 0x1aa1f0-0x1aa208], the p3 seeds by missile index 105/105/40/20/0/60/105/60 s [D
+/// placement params 2026-11-06]): missile k's state-0 exit (MissileDeploy 0→1 [M 0x1aa218])
+/// lands at launch + seed·60, its p0 ends P0_LEN[k−1] − 1 later, and state 2 reads the console
+/// channel then [M 0x1aa25c] — so console k's read deadline is launch + seed·60 + P0_LEN[k−1] − 1:
+/// k5 +1799 (seed 0), k4 +2999 (20), k3 +4199 (40), k6/k8 +5999 (60), k1/k2/k7 +9599 (105).
+/// The order below serves the deadlines, weighted by when each console's UI script can first
+/// hold (its gate 30+k fires at ITS missile's armed+359 [D P0_GATE] — k5's UI at +359, k4's at
+/// +1559, k3's at +2759, k6/k8's at +3959, k1/k2/k7's at +6659): k6 before k8 keeps both inside
+/// +5999 without a double crossing (k6 shares the x32 station with 3/4/5 — no travel — and the
+/// 6→8 crossing then lands k8 ~+5480; k8 first would push the return 8→6 past +5900), and
+/// k7 rides the x46 station k8 just used before the single 7→1/2 cross serves k1/k2 [S — the
+/// measured margins are the latch log below].
+const CONSOLE_ORDER: [u32; 8] = [5, 4, 3, 6, 8, 7, 1, 2];
 
 /// The level look's yaw error toward `at` (about world up — the forward row's heading), the
 /// height of `at` over the eye, and the horizontal range.
@@ -411,7 +421,10 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
     let mut dead_ticks = 0u32;
     let mut last_esc_pos = [0.0f32; 3];
     let mut dumped: Vec<u32> = Vec::new();
-    for tt in 0..6000u32 {
+    // aim-route-4: the disc countdown (seed·60 gated ticks) spreads the console phase — the
+    // last deadline group (k1/k2/k7, armed at launch+6300) sits at launch+9599 and the last
+    // latch lands ~8300 ticks after ch 19 (measured below), past the old 6000 cap.
+    for tt in 0..12000u32 {
         let (input, fire) = {
             let sim = w.scene.sim.as_ref().unwrap();
             for &k in &CONSOLE_ORDER {

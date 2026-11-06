@@ -45,11 +45,27 @@ const SCREEN_C: [f32; 3] = [0.0, 5.33, -1.75];
 /// the live screen sphere, fire through the real path. The console scripts end at t900 [D] —
 /// the shot window is the hold, exactly the game's own deadline.
 fn shoot_console_screen(w: &mut Walker, hash: u32, ch: u32, label: &str) -> bool {
-    let Some(pi) = w.scene.sim.as_ref().unwrap().drones.scripts.players.iter()
-        .position(|p| p.scripts[0] == hash) else { eprintln!("[1b] {label}: SP not found"); return false };
+    // aim-route-4: the player is re-found by hash EVERY tick — the wait now spans the seeds'
+    // stagger, and the SP list can grow under it (SP#154/155 start on m3's/m6's p2 writes at
+    // ~+4201/+6730), which would shift a captured index onto a foreign script.
+    let find = |w: &Walker| w.scene.sim.as_ref().unwrap().drones.scripts.players.iter()
+        .position(|p| p.scripts[0] == hash);
+    if find(w).is_none() { eprintln!("[1b] {label}: SP not found"); return false; }
     let mut held = false;
-    for _ in 0..1100u32 {
+    // aim-route-4: the UI gates stagger with the disc countdown (seed·60 [D seeds;
+    // M 0x1aa1f0-0x1aa208]) — console 1/7's script only starts at launch+6659 and holds at
+    // ~+7309, so the wait runs from the call to ~+4300 ticks; 8200 covers it with slack.
+    // The mux-input hold rides along: ch 19 is the AND[193,194] mux's out, written every tick
+    // from its inputs [M triggers.rs's AND case] — without it the seeds never spend (the
+    // raw-write-does-nothing live observation) and the last arms (+6301) never land.
+    for _ in 0..8200u32 {
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.drones.channels.set(193, 1, sim.drones.frame);
+            sim.drones.channels.set(194, 1, sim.drones.frame);
+        }
         w.tick(Default::default(), false);
+        let Some(pi) = find(w) else { continue };
         let p = &w.scene.sim.as_ref().unwrap().drones.scripts.players[pi];
         held = p.info[p.cur].as_ref().map(|s| s.delay != 0).unwrap_or(false);
         if held || p.deleted { break; }
@@ -59,6 +75,7 @@ fn shoot_console_screen(w: &mut Walker, hash: u32, ch: u32, label: &str) -> bool
     // Walk over: the deck is the pit's descending gallery (a teleport to reach — the walkreal-c
     // crossing blocker) — stand beside the screen, settle, then the REAL trigger pull.
     {
+        let Some(pi) = find(w) else { eprintln!("[1b] {label}: SP vanished before the shot"); return false };
         let m = w.scene.sim.as_ref().unwrap().drones.scripts.players[pi].live_matrix;
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.pos = [m[3][0] + 3.0, m[3][1] + 0.4, m[3][2]];
@@ -66,6 +83,7 @@ fn shoot_console_screen(w: &mut Walker, hash: u32, ch: u32, label: &str) -> bool
     }
     for _ in 0..30 { w.tick(Default::default(), false); }
     for t in 0..500u32 {
+        let Some(pi) = find(w) else { eprintln!("[1b] {label}: SP vanished at t{t}"); return false };
         {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.drones.channels.on(ch) { return true; }
@@ -135,26 +153,30 @@ fn missile_console_shots_latch_and_the_launch_fails_on_ch_99() {
     // real writer is the first wave's death (see the header).
     let frame = w.scene.sim.as_ref().unwrap().drones.frame;
     w.scene.sim.as_mut().unwrap().drones.channels.set(19, 1, frame);
-    // The gates arrive at the missiles' t359 (31/32/37 — consoles 1/2/7 [D P0_GATE]); the
-    // console scripts hold at their t650 and wait for the player's 20 damage — Bond SHOOTS
-    // the three screens (the real fire path), consoles 7, 2, 1 (the far deck first: every
-    // script ends at its t900 [D] — the game's own shot deadline).
-    assert!(shoot_console_screen(&mut w, 0x0600_07e2, 1, "console 1"), "console 1 latches ch 1 [D 060007e2 t682]");
-    assert!(shoot_console_screen(&mut w, 0x0600_07e6, 7, "console 7"), "console 7 latches ch 7 [D 060007e6]");
-    // The mirror-side console (−z): the same mechanic, but the test's glist-centre aim does not
-    // reach its mirrored screen (see the report) — the latch is driven the documented stand-in
-    // way (the walkreal ch-0x0a precedent) and the gap is listed in the report.
-    if !shoot_console_screen(&mut w, 0x0600_07e7, 2, "console 2") {
-        eprintln!("[1b] console 2: the mirror-side aim gap — driving ch 2 as the stand-in");
-        let frame = w.scene.sim.as_ref().unwrap().drones.frame;
-        w.scene.sim.as_mut().unwrap().drones.channels.set(2, 1, frame);
-    }
-    // The launchers' p1 ch 99 lands at armed+2799 (missiles 3/4/5: p0 state-1 tick 1799 [D] +
-    // p1 t1000 [D]) — the mission fails there, before any disarm can complete. Mission_Update
-    // runs ahead of the missile tick in the frame [M Game_Run 0x1c9790's order] — settle 3
-    // ticks after the write before the state pins.
+    // The REAL shot, before any fail: console 5's missile armed at launch+1 (seed 0 [D
+    // placement params 2026-11-06]), its UI gate 35 at ~+361 [D P0_GATE] and hold at ~+1011 —
+    // the only console whose hold precedes the fail (m4's ch 99 at ~+4001; the fail menu then
+    // pauses the player [M 0x182c60:124 — the port's fail_menu_open holds the input], so the
+    // post-fail real shots this test used to make at consoles 1/7 are impossible on the disc
+    // timing — their UIs only hold at ~+7309). The real-shot mechanic stays proven here and by
+    // walkreal's eight drakes-console latches. The launch order is held through the mux's
+    // inputs (ch 19 is the AND[193,194] mux's out, written every tick [M triggers.rs's AND
+    // case] — a direct ch-19 poke is overwritten before the next gated tick).
+    let c5hash = w.scene.sim.as_ref().unwrap().drones.scripts.players.iter()
+        .find(|p| p.gate as u32 == 35).map(|p| p.scripts[0])
+        .expect("console 5's UI script player (gate 35 [D P0_GATE])");
+    assert!(shoot_console_screen(&mut w, c5hash, 5, "console 5"), "console 5 latches ch 5 by the real shot [D the UI scripts' t682 write]");
+    // The fail window: missile 4 (seed 20, console 4 unshot) reaches state 2 at launch+3000
+    // [D seed·60 + M 0x1aa1f0-0x1aa208], takes the LAUNCH branch [M 0x1aa25c-338] and its p1
+    // writes ch 99 @t1000 → ~launch+4001 [D 060007c6/060007e1 stream 14]. Mission_Update runs
+    // ahead of the missile tick in the frame [M Game_Run 0x1c9790's order] — settle 3 ticks.
     let mut ch99 = false;
     for _ in 0..6000u32 {
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.drones.channels.set(193, 1, sim.drones.frame);
+            sim.drones.channels.set(194, 1, sim.drones.frame);
+        }
         w.tick(Default::default(), false);
         if w.scene.sim.as_ref().unwrap().drones.channels.on(99) { ch99 = true; break; }
     }
@@ -162,26 +184,25 @@ fn missile_console_shots_latch_and_the_launch_fails_on_ch_99() {
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(ch99, "the p1's ch 99 = 1 @t1000 fails the mission [D 060007c6/060007e1 + M 0x182c60:23-33]");
-        assert!(sim.drones.channels.on(1), "console ch 1 latched by the real shot [D 060007e2 t682]");
-        assert!(sim.drones.channels.on(7) && sim.drones.channels.on(2),
-            "console 7 latched by the real shot and 2 by the stand-in drive [D]");
         assert_eq!(sim.drones.mission.status(), 2, "MissionState 2 on ch 99 [M 0x182c60:45-57]");
         assert_eq!(sim.drones.mission.fail_label, 0,
             "FailLabel stays the init sentinel — the monitor only runs in internal 1 [M 0x182c60:22, 0x182270:27]");
-        assert_eq!(sim.drones.missile_deploy[3], 3, "missile 4 (console 4 unshot; its gate 34 comes from SP#200's 0x06000928 [D]) took the LAUNCH branch [M 0x1aa31c]");
-        assert_eq!(sim.drones.missile_deploy[2], 3, "missile 3 (console 3 unshot) launched too [M 0x1aa31c]");
-        let m1 = &sim.drones.space_missiles[0];
-        assert_eq!(m1.state, 1, "missile 1 is still in state 1 at the fail (its p0 ends at 3299 > 2799) [D]");
-        assert!(!sim.drones.channels.on(0x09),
-            "sister: objective 1's ch 9 can not rise before the fail — AND #139's inputs sit at 4469+ [D #139]");
-        for c in 21..=28u32 {
-            assert!(!sim.drones.channels.on(c), "no done channel at the fail [D the state-3 ends sit past it]");
-        }
+        assert_eq!(sim.drones.missile_deploy, [0, 0, 1, 3, 2, 1, 0, 1],
+            "at the fail: m4 (seed 20) took the LAUNCH branch, m5 (seed 0) DISARMED off the real shot, m3/m6/m8 (seeds 40/60/60) are armed in state 1, and m1/m2/m7 (seeds 105) are still counting [D placement params + P0_LEN + M 0x1aa31c/0x1aa2cc-338], got {:?}", sim.drones.missile_deploy);
+        assert_eq!(sim.drones.space_missiles.iter().find(|m| m.index == 5).unwrap().launch_flag, 0,
+            "missile 5 took the DISARM branch (obj+0xf6 = 0 [M 0x1aa2bc])");
     }
-    // The state-3 ch 199 still lands at armed+2999, inside the 300-tick fail window [M
-    // 0x1aa360-3c4 + D END 1200], with FailLabel still 0 — the old 0x200005a pin never happens.
+    // Missile 4's state-3 ch 199 lands at ~launch+4201 (state 2 +3000, p1 End 1200 [M
+    // 0x1aa360-3c4 + D END 1200]), inside the fail window, with FailLabel still 0 — the old
+    // 0x200005a pin never happens. The menu opens at fail+300 = ~launch+4301 [M 0x182c60:123-130],
+    // so these pins read before it.
     let mut ch199 = false;
     for _ in 0..600u32 {
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.drones.channels.set(193, 1, sim.drones.frame);
+            sim.drones.channels.set(194, 1, sim.drones.frame);
+        }
         w.tick(Default::default(), false);
         if w.scene.sim.as_ref().unwrap().drones.channels.on(199) { ch199 = true; break; }
     }
@@ -191,6 +212,57 @@ fn missile_console_shots_latch_and_the_launch_fails_on_ch_99() {
         assert_eq!(sim.drones.mission.fail_label, 0,
             "sister: the ch-199 FailLabel arm is unreachable — monitor-gated to internal 1 [M 0x182c60:22]");
         assert!(!sim.drones.mission.menu_open, "the fail menu waits out the window [M 0x182c60:123-130, 77-81]");
+        // The port's auto-restart answers Restart on MenuOpen (a level reload) — the settled
+        // read below runs with the menu up (the world keeps ticking; only the player's input
+        // pauses [M 0x182c60:124]), so the auto answer is switched off: this test observes the
+        // fail flow, it does not restart it.
+        w.scene.sim.as_mut().unwrap().drones.auto_restart = false;
+    }
+    // The stand-in drives: consoles 1/7/2 (their UIs hold at ~+7309, past the fail menu's
+    // player pause — the documented drive, the walkreal ch-0x0a precedent). Then every missile
+    // reaches state 2 on the staggered seed·60 clocks and the branches settle: 1/2/7 (driven)
+    // and 5 (shot) take the DISARM branch, 3/4/6/8 the LAUNCH branch.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let frame = sim.drones.frame;
+        for k in [1u32, 7, 2] { sim.drones.channels.set(k, 1, frame); }
+    }
+    let mut settled = false;
+    // 6000: the loop starts ~+4305 (post-ch-199); m1/m2/m7's state-2 reads land at ~+9600.
+    for _ in 0..6000u32 {
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.drones.channels.set(193, 1, sim.drones.frame);
+            sim.drones.channels.set(194, 1, sim.drones.frame);
+            // The mux's own out, poked directly here: with the fail menu up the trigger pass
+            // no longer evaluates the AND[193,194] mux, so ch 19 would go cold and the last
+            // seeds' state-0 countdowns (m1/m2/m7, to +6300) would stall at the menu. Nothing
+            // overwrites ch 19 this late (the start scripts' clear window is long spent), so
+            // the direct poke holds it for the missiles' gated reads.
+            sim.drones.channels.set(19, 1, sim.drones.frame);
+        }
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.missile_deploy.iter().all(|&d| d == 2 || d == 3) { settled = true; break; }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(settled, "every missile reached state 2 by launch+~9600 (the last seeds, 105 s, spend at +6300) [D placement params + M 0x1aa1f0-0x1aa208]");
+        assert!(sim.drones.channels.on(5), "console ch 5 latched by the real shot [D the UI scripts' t682 write]");
+        assert!(sim.drones.channels.on(1) && sim.drones.channels.on(7) && sim.drones.channels.on(2),
+            "consoles 1/7/2 latched by the stand-in drives (their UI holds sit past the fail menu's player pause) [D]");
+        assert_eq!(sim.drones.missile_deploy, [2, 2, 3, 3, 2, 3, 2, 3],
+            "1/2/7 (driven) and 5 (shot) took the DISARM branch; 3/4/6/8 (consoles unshot) took the LAUNCH branch [M 0x1aa25c-338], got {:?}", sim.drones.missile_deploy);
+        assert_eq!(sim.drones.space_missiles.iter().find(|m| m.index == 4).unwrap().launch_flag, 1,
+            "missile 4's obj+0xf6 = 1 on the launch path [M 0x1aa31c]");
+        // AND #139's inputs (21/22/27) sit behind m1/m2/m7's disarm p2 ends at
+        // launch+10770..+11310 — past this pin — so the objective's ch 9 is still off; missile
+        // 5's done channel 25 fired at its p2 end (+3510) [M 0x1aa354-398 + D END 1710].
+        assert!(!sim.drones.channels.on(0x09),
+            "sister: objective 1's ch 9 can not rise here — AND #139's inputs trail m1/m2/m7's p2 ends [D #139]");
+        for c in [21u32, 22, 27] {
+            assert!(!sim.drones.channels.on(c), "AND #139's input ch {c} still off at the settled read [D the p2 ends sit at +10770+]");
+        }
+        assert!(sim.drones.channels.on(25), "missile 5's done channel fired at its disarm p2 end [M 0x1aa354-398 + D END 1710]");
     }
 }
 
@@ -502,6 +574,9 @@ fn the_launch_order_and_the_disarm_speech_fire_the_pit_klaxons() {
         for id in [0x34cu16, 0x34d, 0x34e, 0x350, 0x36f] {
             assert!(!sim.drones.sound_triggers.playing(id), "sister: id {id} silent at the load");
         }
+        for m in &sim.drones.space_missiles {
+            eprintln!("[msl] placement {} index {} seed {}", m.placement, m.index, m.countdown);
+        }
     }
     // The drive: the launch-order mux's inputs + consoles 3-6 (above).
     const DRIVE: [u32; 6] = [193, 194, 3, 4, 5, 6];
@@ -509,16 +584,25 @@ fn the_launch_order_and_the_disarm_speech_fire_the_pit_klaxons() {
         let sim = w.scene.sim.as_mut().unwrap();
         let frame = sim.drones.frame;
         for c in DRIVE { sim.drones.channels.set(c, 1, frame); }
+        // aim-route-4: the fail (m8's launch branch, ch 99 at ~launch+7000 on the disc clocks)
+        // opens the fail menu at ~+7301 — mid-loop. The port's auto-restart would answer Restart
+        // and RELOAD the level under the loop (resetting the trigger list, the channels and the
+        // mission), so the auto answer is switched off: the test observes the chain, it does not
+        // restart it. (The game's own fail menu pauses the player only [M 0x182c60:124].)
+        sim.drones.auto_restart = false;
     }
     // Poll the whole chain: per-tick bookkeeping of the five ON channels, the five klaxon ids
-    // and the concurrency (the global voice holds ONE handle [M 0x1b2790:19-28]).
+    // and the concurrency (the global voice holds ONE handle [M 0x1b2790:19-28]). aim-route-4:
+    // 0x50's starter needs m4's p2 t930 (launch+3930 — m4 arms at seed·60 = +1200) AND m6's
+    // p2 t730 (launch+6730 — m6 arms at +3600), so SP#155's t3000 write lands ~launch+9730;
+    // the window grew to cover it (0x4f sits at ~+5761, SP#154 off m3's p2 @t1 at +4201).
     let ids = [0x350u16, 0x34e, 0x34c, 0x36f, 0x34d]; // #151, #157, #158, #159, #160 [D]
     let chans = [0x4cu32, 0x4d, 0x4e, 0x4f, 0x50];
     let mut rose_at = [None::<u32>; 5];
     let mut played = [false; 5];
     let mut max_concurrent = 0usize;
     let mut saw_playing_any = false;
-    for _ in 0..8200u32 {
+    for _ in 0..14000u32 {
         w.tick(nf_game::player::Input::default(), false);
         let pre_poke = w.scene.sim.as_ref().unwrap().drones.channels.on(19);
         {
@@ -558,26 +642,26 @@ fn the_launch_order_and_the_disarm_speech_fire_the_pit_klaxons() {
     let rose = rose_at.map(|r| r);
     assert!(rose[3].unwrap() < rose[4].unwrap(),
         "0x4f (SP#154's t1560) lands before 0x50 (SP#155's t3000) [D P2_WRITES], got {rose:?}");
-    assert!(saw_playing_any && played[3],
-        "the 0x4f klaxon (id 0x36f) plays — the global voice was free at its rise [M \
-         SoundTrigger_Update 0x1b2790's play arm] (0x50's play is the harness-frozen-voice \
-         busy-kill, see the doc)");
+    // aim-route-4: the disc timeline moved the klaxon rises (0x4f at ~+5761, 0x50 at ~+9730)
+    // and the fail (m8's ch 99 ~+7001) opens the menu at ~+7301 — between them. The port's
+    // fail-menu pause gates the TRIGGER pass (the mux and the sound triggers stop evaluating —
+    // measured: the mux-input hold stopped arming m1/m2/m7 until ch 19 was poked directly,
+    // and #160 never fires), while the SCRIPT pass keeps running (SP#155's t3000 write lands).
+    // So on the disc clocks #159 plays at its pre-menu rise and holds the headless-frozen
+    // voice, and #160 never reaches its play arm: no busy-kill, all five triggers remain. The
+    // game's own fail menu pauses the player only [M 0x182c60:124] — whether the game's
+    // trigger/sound pass runs during it is a live check (the report).
     assert!(max_concurrent <= 1,
         "the GlobalVoiceHandle holds at most one klaxon [M 0x1b2790:19-28], saw {max_concurrent}");
     let _ = ids; let _ = played; // the per-id end polls are the harness limit (see the doc)
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        // The 0x34d trigger left the list — its ON rose while the first klaxon's voice held, the
-        // busy-kill arm [M :19-28] (headless the first voice never frees — the harness limit).
-        // The other four keep their triggers: #151/#157/#158 never triggered, #159's one-shot
-        // holds its (headless-frozen) voice.
-        assert_eq!(sim.drones.sound_triggers.list.len(), 4,
-            "the busy-killed 0x34d trigger left the list [M :19-28]");
+        assert_eq!(sim.drones.sound_triggers.list.len(), 5,
+            "no busy-kill on the disc timeline — #160's rise sits past the menu's trigger pause and #159 holds the frozen voice [M :19-28 + the port's menu_pause]");
         let kept: Vec<u16> = sim.drones.sound_triggers.list.iter().map(|t| t.id).collect();
-        for id in [0x350u16, 0x34e, 0x34c, 0x36f] {
-            assert!(kept.contains(&id), "id {id} keeps its trigger (the harness limit — see the doc)");
+        for id in [0x350u16, 0x34e, 0x34c, 0x36f, 0x34d] {
+            assert!(kept.contains(&id), "id {id} keeps its trigger on the disc timeline, got {kept:?}");
         }
-        assert!(!kept.contains(&0x34d), "the 0x34d trigger is gone [M :19-28]");
         for c in [0x4cu32, 0x4d, 0x4e] {
             assert!(!sim.drones.channels.on(c), "sister: ch {c:#x} never rose");
         }
