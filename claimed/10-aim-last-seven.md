@@ -7,3 +7,6 @@ Then `panel_sequence_07000014_live` x2 (one_cut_box_arms_nothing..., the_panel_s
 Then `walkreal_07000015_live` real_damage_agent. `walkreal_07000001_live` 00agent and `walkreal_07000008_live` 00agent may take an ignore with a measured reason.
 
 Keep the [L] 08 pins and the 0x30000000 fix. Quote one total line.
+
+---
+claimed-by: sandbox1 at 2026-11-06T22:33Z
