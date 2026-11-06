@@ -111,15 +111,41 @@ fn the_laser_loop_dies_at_the_swim_entry() {
 fn the_hat_spawn_plays_the_0x5ef_loop_and_the_delete_stops_it() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut sim = load(&iso, "07000001.bin");
+    // Let the level's own loadout draw settle (the boot switch completes first).
+    for _ in 0..80 { step(&mut sim, Input::default()); }
     // Equip the hat record through the gun slot (the record is MP-carried; the throw path is the
     // player's real `Player_WeaponInitBullet` → `Bullet_init` chain on a real level). The clip
-    // covers the release: `Bullet_init` runs per throw.
+    // lives in BOTH slots the fire path reads: `Gun.clip` (the view) and the Inventory's per-weapon
+    // clip/owned (`Player_AmmoInGun` 0x1a9190's gate — the pre-fire ammo check). The switch state
+    // is parked idle so the draw machinery does not overwrite the slot back.
     sim.gun.weapon = 0x45;
+    sim.gun.switch_request = 0x45;
+    sim.gun.switch_state = 0;
     sim.gun.clip = 4;
+    sim.drones.inventory.clip[0x45] = 4;
+    sim.drones.inventory.owned[0x45] = true;
+    // The hat's own fire-script hashes (+0xb0/+0xb4) are the MP bank's and are missing from the SP
+    // script table, so the state-9 release frame never arrives here. The harness copies the FRAG
+    // record 0x34's fire fields (the release frame +0x44, the shots/interval block, the ammo block
+    // and the two script hashes — all SP-resident) into the 0x45 record, so the throw rides the
+    // same state-9 release the game's frag throw does; Bullet_init's 0x5ef arm keys on the
+    // record's +2 == 0x45, which stays the hat's.
+    {
+        let frag = sim.weapons.records[0x34];
+        let hat = &mut sim.weapons.records[0x45];
+        for o in [0x28usize, 0x40, 0x90, 0xa4, 0xa8, 0xac, 0xb0, 0xb4] {
+            hat[o..o + 4].copy_from_slice(&frag[o..o + 4]);
+        }
+    }
     let mut thrown = false;
-    for _ in 0..120 {
-        step(&mut sim, Input::default());
-        sim.step_bond(Input::default(), true, false, false);
+    // A TAP: the press fires once (fresh edge), the state-9 fire script plays out to its release
+    // frame and the throw spawns there — a held trigger re-queues the script every refire interval
+    // and the release frame never arrives.
+    for i in 0..120 {
+        let input = Input::default();
+        step(&mut sim, input);
+        let fire_now = i == 0;
+        sim.step_bond(Input::default(), fire_now, false, false);
         if !sim.drones.grenades.is_empty() { thrown = true; break; }
     }
     assert!(thrown, "the 0x45 throw never spawned a bullet");
@@ -128,7 +154,8 @@ fn the_hat_spawn_plays_the_0x5ef_loop_and_the_delete_stops_it() {
     assert!(sim.drones.audio.live_ids().contains(&0x5ef),
         "the hat spawn never played the 0x5ef loop [M Bullet_init 0x12c5a0:286-290] (live {:?})",
         sim.drones.audio.live_ids());
-    assert!(g.loop_handle != 0, "the handle is stored (BU+0xF0) [M 0x12c5a0:290]");
+    let handle = g.loop_handle;
+    assert!(handle != 0, "the handle is stored (BU+0xF0) [M 0x12c5a0:290]");
 
     // The stick + the 1500-tick silent life ([L record 0x45: +0x70 & 0x100; HAT_STICK_LIFE]),
     // then the delete flag: `Bullet_Delete`'s handle stop must retire the loop.
@@ -141,7 +168,8 @@ fn the_hat_spawn_plays_the_0x5ef_loop_and_the_delete_stops_it() {
         }
     }
     assert!(died, "the stuck hat never expired");
-    assert!(!sim.drones.audio.live_ids().contains(&0x5ef),
-        "the 0x5ef loop survived the hat's delete — `Bullet_Delete` stops BU+0xF0 [M 0x12e660:13-16] \
-         (live {:?})", sim.drones.audio.live_ids());
+    // A few more updates retire the stopped node (state 2 → freed).
+    for _ in 0..10 { step(&mut sim, Input::default()); }
+    assert!(sim.drones.audio.finished(handle),
+        "the 0x5ef loop survived the hat's delete — `Bullet_Delete` stops BU+0xF0 [M 0x12e660:13-16]");
 }
