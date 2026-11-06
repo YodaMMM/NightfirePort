@@ -379,3 +379,15 @@ six aim binaries green (fusebox_geometry_14 1/0, interactables_14 10/0, rocket_g
 rocket_origin 1/0, rocket_stop_plane08 4/0, solar_panel_hits 1/0). No `crates/*/src` file
 changed; the [L] 08 pins and the 0x30000000 fix untouched. Report:
 docs/reports/aim-route-6.md.
+
+## aim-last-seven
+
+Branch `s/aim-last-seven` from `origin/s/aim-on-master` (24cca34f8 — aim-route-6 merged with
+master). Task: the last seven reds. Priority order per the task: the 11 stairwell
+`stairwell_impacts_render_07000011_live every_stairwell_impact_sits_on_drawn_geometry` (a
+player-visible snap fault, name the cause first), then the two `panel_sequence_07000014_live`
+tests and `walk_07000014_live the_facility_chain_runs_to_the_delta_sector_exit` (the 14 route
+or the cut shot; see the aim-route-finish 14-walk fix), then `walkreal_07000015_live`
+real_damage_agent; `walkreal_07000001_live` and `walkreal_07000008_live` 00agent may take an
+ignore with a measured reason. Keep the [L] 08 pins and the 0x30000000 fix. Entry started —
+work follows.
