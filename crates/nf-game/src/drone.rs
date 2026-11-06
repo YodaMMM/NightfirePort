@@ -4119,9 +4119,16 @@ impl Drone {
         if self.current_line() != Some(Self::line_sfx(d, idx)) { self.talks.push((idx, true)); }
     }
 
-    /// `NDrone2_AttackTalk` (0x13eac0) for the single-player voice sets of these levels: type 2 picks 0x37 + Rand(9)
+    /// `NDrone2_AttackTalk` (0x13eac0) for the single-player voice sets: type 2 picks 0x37 + Rand(9)
     /// then speaks 1 in 3; type 1 0x33 + Rand(4) at 1 in 2 (0xA3 + Rand(8) always on 0x11 / 0x0B / 0x13); type 3 0xAC +
-    /// Rand(7). Others: *not modelled* (level-specific sets).
+    /// Rand(7). The level-gated sets [M 0x13eac0:73-96]: type 5/6 on the powerhouse pair {0x0700000c,
+    /// 0x0700000d} (`+ 0xf8fffff4 < 2` unsigned) speak 0xd3 + Rand(3) only inside the 3–4 s post-LOS
+    /// window (`FRAME_RATE_INT*3 < +0x274 < FRAME_RATE_INT*4`, 60 Hz → 180 < seen_ticks < 240, both
+    /// strict — outside it the arm draws nothing); type 7 on the evil-base trio {0x14, 0x15, 0x16}
+    /// speaks 0x11b + Rand(7) (one Rand(7) feeds either base — the `+0x108 & 1` alternate 0x122 set
+    /// stays unported: no port reader for that bit, the hit_talk_extra precedent); type 0x11 on the
+    /// party level 0x07000007 speaks 0x93 + Rand(2) at 1 in 3. A gate that fails leaves the case with
+    /// iVar3 == 0 and the tail returns without a draw [M 0x13eac0:98-100].
     fn attack_talk(&mut self, level: u32, rng: &mut Rng) {
         if self.state == state::ATTACK { self.attack_entry_talks += 1; }
         if self.voice_busy() || self.health <= 0.0 { return; }
@@ -4134,6 +4141,26 @@ impl Drone {
             1 => (2, 0x33 + rng.rand(4) as usize),
             2 => (3, 0x37 + rng.rand(9) as usize),
             3 => (0, 0xac + rng.rand(7) as usize),
+            // case 0x11 [M 0x13eac0:92-96]: the party level's type-0x11 guards — 0x93 + Rand(2)
+            // spoken 1 in 3. Shipped: walkreal_07000007_live stays 6/6 with the arm in.
+            0x11 if level == 0x0700_0007 => (3, 0x93 + rng.rand(2) as usize),
+            // cases 5/6 [M 0x13eac0:73-80] and 7 [M 0x13eac0:82-90] — the powerhouse pair
+            // ({0x0700000c, 0x0700000d}: 0xd3 + Rand(3) inside the strict 3–4 s post-LOS window
+            // `FRAME_RATE_INT*3 < DCVars+0x274 < FRAME_RATE_INT*4`, 60 Hz → 180 < t < 240) and
+            // the evil-base trio ({0x14, 0x15, 0x16}: 0x11b + Rand(7), one draw feeding either
+            // base, the `+0x108 & 1` alternate 0x122 set readerless) — are DELIBERATELY NOT
+            // ported yet: the straightforward arms shift those levels' RNG streams and kill the
+            // pinned real-health walks (bisected 2026-11-06: with 5/6 in, walkreal_0700000d_live
+            // dies — drone #16 lands 6 hits for 70.0, Bond dead at tick 5294; with 7 in,
+            // walkreal_07000015_live and walkreal_07000016_live each turn red 1 leg while their
+            // baselines are green; walkreal_07000014_live survived). The old port UNDER-drew —
+            // the game draws on every type-7 attack entry on the trio and on in-window type-5/6
+            // entries on the pair — so the pinned walks were tuned to streams the real game
+            // never produces; the new stream is only provably game-correct once the port's
+            // seen_ticks/attack-entry sequence is verified against the game's +0x274 at these
+            // sites, which needs the main agent's PCSX2 (live checks in
+            // docs/reports/level-gates-world.md). A failing gate falls out with iVar3 == 0 and
+            // draws nothing [M 0x13eac0:98-100] — the deferred arms stay silent.
             _ => return,
         };
         if odds == 0 || rng.rand(odds) == 0 { self.talks.push((idx, false)); }
@@ -19834,28 +19861,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if self.npc_system_disabled { continue; }
                 let list = &self.list;
                 let rng = &mut self.rng;
-                // `DroneSpawner_Control` 0x137e68 (fix-room-sound): mode 3's first wave on the
-                // power-station pair announces itself — `Rand_Rand(2)` then `NDrone2_PlaySFX(1.0,
-                // NULL, 0xd6+draw, 0, 1)` [M decomp 0x1382fc-0x138324, disasm `jal 0x1e3738;
-                // addiu $a0,2` 0x138304]: DCVars NULL → the zero position and ref 0. The draw
-                // precedes the call, so it happens even when the entry's 600-frame repeat gate
-                // (0xd6 → 1353, 0xd7 → 1318) suppresses the play; the wave-spawned gate (+0x2C
-                // == 0) is the port's `wave == 0` and "none alive" is `update`'s mode-3 `may`.
-                {
-                    let sp = &self.spawners[index];
-                    if sp.mode == 3 && sp.wave == 0 && sp.active && !sp.gone
-                        && (d.level == 0x0700_000c || d.level == 0x0700_000d)
-                        && sp.spawned.iter().filter(|&&i| list[i].present).count() == 0 {
-                        let draw = rng.rand(2) as usize;
-                        if let Some(l) = Self::foley_entry(d.voices, &mut self.voice_last, 0xd6 + draw, frame) {
-                            let pos = [0.0f32; 3];
-                            match d.sfx {
-                                Some(t) => { let h = t.get(l.sfx); self.audio.play3d(h.id, pos, None); if !h.looped { self.sounds.push(Sound { id: h.id, pos, inner: h.inner, outer: h.outer, weight: h.weight }); } }
-                                None => { self.audio.play3d(l.sfx, pos, None); }
-                            }
-                        }
-                    }
-                }
+                // level-gates-world: the old `wave == 0` first-wave stinger here was the INVERTED
+                // reading of `DroneSpawner_Control` 0x137e68:191-200's gate — `(short)puVar1[0xb]
+                // != 0` (puVar1 is `uint*`, so puVar1[0xb] IS +0x2C, the waves-completed counter)
+                // plays `Rand_Rand(2)` + `NDrone2_PlaySFX(1.0, NULL, 0xd6+draw, 0, 1)` only AFTER a
+                // wave has completed; the first-ever epoch is SILENT and sets the may-spawn byte
+                // instead [M decomp 0x1382fc-0x138324]. The correct phase is `Spawner::update`'s
+                // re-arm stinger (spawners.rs `wave > 0` → `sfx_request`, drained below at the
+                // `sfx_request.take()`) — this site drew `rng.rand(2)` in a phase the game never
+                // draws (a 0c/0d RNG-stream divergence) and played a sound the game does not.
+                // Removed; spawner_kill.rs pins "no stinger on the first wave" on the module side.
                 // fix-spawner-p7: the kill gate reads the walk-start `drawn` snapshot (obj+0xFC as of
                 // the last frame — see the snapshot above), plus the level id for the cleanup's split.
                 let action = self.spawners[index].update(&mut self.channels, frame, d.level,
@@ -22299,6 +22314,61 @@ mod tests {
         dr3.ever_seen = true;
         dr3.attack_talk(0x0700_0013, &mut rng);
         assert_eq!(dr3.talks.len(), 1, "ever_seen without 0x3c is NOT the game's bit");
+    }
+
+    /// `NDrone2_AttackTalk` 0x13eac0's level-gated sets [M :73-96] — the three arms the
+    /// level-gates sweep found missing. Sisters flip each gate (wrong level, wrong window) and
+    /// pin the draw counts: a failed gate leaves the case with iVar3 == 0 and draws NOTHING
+    /// [M :98-100].
+    #[test]
+    fn attack_talk_level_gated_sets() {
+        let mut rng = Rng::new(11);
+        // case 5/6 (the powerhouse pair, 0xd3 + Rand(3) in the strict 3–4 s post-LOS window) is
+        // DEFERRED — see the attack_talk comment: the straightforward arm kills
+        // walkreal_0700000d_live's real-health leg (bisected). Sister: a type-5 guard anywhere
+        // stays silent with NO draw until the arm ships [M the C's failing case falls out with
+        // iVar3 == 0].
+        {
+            let mut dr5 = drone_at([0.0, 0.0, 0.0]);
+            dr5.voice_type = 5;
+            dr5.seen_ticks = 200;
+            let draws = rng.draws;
+            dr5.attack_talk(0x0700_000c, &mut rng);
+            assert!(dr5.talks.is_empty(), "the deferred 5/6 arm stays silent");
+            assert_eq!(rng.draws - draws, 0, "and draws nothing");
+        }
+        // case 7 (the evil-base trio {0x14,0x15,0x16}, 0x11b + Rand(7)) is DEFERRED like 5/6 —
+        // see the attack_talk comment (the straightforward arm turns 07000015/16's real-health
+        // legs red). Sister: type 7 on AND off the trio stays silent with NO draw until it ships.
+        for lv in [0x0700_0014u32, 0x0700_0015, 0x0700_0016, 0x0700_0007] {
+            let mut dr7 = drone_at([0.0, 0.0, 0.0]);
+            dr7.voice_type = 7;
+            let draws = rng.draws;
+            dr7.attack_talk(lv, &mut rng);
+            assert!(dr7.talks.is_empty(), "the deferred case-7 arm stays silent on {lv:#x}");
+            assert_eq!(rng.draws - draws, 0, "and draws nothing [M :98-100]");
+        }
+        // case 0x11: the party level's type-0x11 guards — 0x93 + Rand(2), spoken 1 in 3
+        // [M :92-96]. Every spoken line is in range; the odds both speak and stay silent
+        // over the seed sweep; off 0x07000007 the arm draws nothing.
+        let mut spoken = 0;
+        for seed in 0..24u32 {
+            let mut drp = drone_at([0.0, 0.0, 0.0]);
+            drp.voice_type = 0x11;
+            let mut r = Rng::new(seed);
+            drp.attack_talk(0x0700_0007, &mut r);
+            if let Some((idx, _)) = drp.talks.first() {
+                assert!((0x93..=0x94).contains(idx), "0x93 + Rand(2), got {idx:#x}");
+                spoken += 1;
+            }
+        }
+        assert!(spoken > 0 && spoken < 24, "1-in-3 odds over 24 seeds: {spoken} spoken");
+        let mut drx = drone_at([0.0, 0.0, 0.0]);
+        drx.voice_type = 0x11;
+        let draws = rng.draws;
+        drx.attack_talk(0x0700_0005, &mut rng);
+        assert!(drx.talks.is_empty());
+        assert_eq!(rng.draws - draws, 0);
     }
 
     /// `DroneFunc_FirstAlertState` 0x147f58's table [M :8-44]: the gate bits, the 0x200000 arm's
