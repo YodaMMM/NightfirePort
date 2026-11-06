@@ -500,3 +500,20 @@ bathhouse guards; then the 03 composed blocks, plain walks 01/06/08/0b/0c/11/12/
 mayhew_hold, fix_npc_doors, enemy_accuracy re-pin, start_corridor d3 owner point; then real
 damage / Agent / 00 Agent.
 - (19:10) branch start, merge clean, WORKLOG entry.
+- (19:20) void recovery OUT: e8b14adb5 reverted clean (player.rs/world.rs/scene.rs, the 4-test
+  file dropped); nf-game/nf-view libs compile.
+- (19:30) the re-acquire chase: the game's shape read from the decomp — the router sends blind
+  guards to 0x5c from three arms [M 0x148338:67-70/151/235], 0x5c re-runs the router [M
+  0x164838:26-35], and 0x60 comes ONLY from the no-opponent gate — which the SP FindOpponent
+  can never fire while Bond lives [M 0x1424e0:100-121 re-points +0x170 every tick; the CanSee
+  clear at :148-153 runs only with no player target]. So the `if false &&` NO_OPPONENT exit is
+  NOT the game's shape; removed with the citation trail. The real freeze cause found by probe:
+  the port's sight ray is UNscoped (the game scopes guard→Bond LOS from the TARGET's cel
+  [M 0x176f18:60-77]); world::line_of_sight_scoped added and seek_opponent_los rewired to it.
+- (19:40) the 11 d2 stall diagnosed one layer deeper with the probe (los_probe11): both guards
+  park at (−2.34,47.78,22.22) behind a thin column (x −1.63..−1.35, y 47.03..51.12, z ~23.7,
+  mat 0x0f + 0x05/0x06 trim patches at y 48.23/48.36), ALL 7 view-bone rays blocked; in 0x5c
+  mv=0 with route remaining 4.10 FROZEN for 10000+ ticks — route.follow reports MOVING while
+  the body never advances (the creep wedge behind the column). The scoped ray does not clear
+  this stall (the column is inside the port's Bond-cel chain); the next lead is the 0x5c
+  follow wedge (the game's guard re-positions out of it). [ai:5c] diag added under NF_AILOG.

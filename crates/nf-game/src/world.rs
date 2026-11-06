@@ -2520,6 +2520,80 @@ impl CollisionWorld {
         self.line_of_sight_masked(a, b, mask)
     }
 
+    /// The guard-sight ray scoped the way the game scopes it [M DroneVision_CanSeeObjectFrom
+    /// 0x176f18:60-77 — `Collide_LineOfSight(from, to, iStack_60, param_2, …)` with
+    /// `iStack_60 = *(int *)(target + 0x20)`, the TARGET's cel, so `Collide_Pick` 0x1eb320's BFS
+    /// admits only the cels that chain reaches through the portals the ray touches]. The port's
+    /// unscoped `line_of_sight` walks the global grid and over-blocks: on 07000011 the d2
+    /// idle-Bond stall's ray (chest (−0.388,48.028,25.819) → guard head (−2.337,48.379,22.223))
+    /// grazes a 0.33×0.18 horizontal patch at y 48.232 (mat 0x06, t 0.581) that sits between the
+    /// two corridor guards and the spawn — geometry the game's cel-scoped pick does not test,
+    /// which held both guards `lost_sight` for 10000+ ticks at a visible Bond (the start_corridor
+    /// d2 stall). The same masked drop semantics as `line_of_sight_masked`; `cell = None` falls
+    /// back to the unscoped walk (the pre-scoping behaviour), and a portal-BFS miss keeps the
+    /// unscoped walk too [S — the game's `AINetwork_TestRayCels` 0x15ab78 REFUSES sight when the
+    /// cel chain fails (:63-67), but the port's graph is coarser and the conservative fallback
+    /// keeps every walk that relies on cross-graph sight green].
+    pub fn line_of_sight_scoped(&self, cell: Option<usize>, a: V3, b: V3, mask: u32) -> bool {
+        let Some(cell) = cell else { return self.line_of_sight(a, b, mask) };
+        if !LOS_MASKS_ON { let _ = mask; return self.segment_clear(a, b); }
+        let d = sub(b, a);
+        let dynamic = self.dynamic.read().unwrap();
+        let skip_cage = mask & 0x20 != 0;
+        let (drop_node, drop_surface, drop_de, drop_10) =
+            (mask & 0x8 != 0, mask & 0x800 != 0, mask & 0x1 != 0, mask & 0x2 != 0);
+        let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(a, b)) else {
+            return self.line_of_sight_masked(a, b, mask);
+        };
+        let stat = &self.stat;
+        for r in runs {
+            let o = &stat.objects[r as usize];
+            for k in o.tris.clone() {
+                let m = stat.mats[k];
+                let low = m & 0x3f;
+                if drop_node && (stat.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                if drop_surface && m & 0x40 != 0 { continue; }
+                if drop_de && (low == 0xd || low == 0xe) { continue; }
+                if drop_10 && low == 0x10 { continue; }
+                let t = &stat.tris[k];
+                if dot(cross(sub(t[1], t[0]), sub(t[2], t[0])), d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
+                if seg_tri_hit(a, b, t) { return false; }
+            }
+        }
+        if !skip_cage {
+            for o in along(&self.missile, a, b) {
+                for k in o.tris.clone() {
+                    let m = self.missile.mats[k];
+                    let low = m & 0x3f;
+                    if drop_node && (self.missile.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                    if drop_surface && m & 0x40 != 0 { continue; }
+                    if drop_de && (low == 0xd || low == 0xe) { continue; }
+                    if drop_10 && low == 0x10 { continue; }
+                    let t = &self.missile.tris[k];
+                    if dot(cross(sub(t[1], t[0]), sub(t[2], t[0])), d) >= 0.0 { continue; }
+                    if seg_tri_hit(a, b, t) { return false; }
+                }
+            }
+        }
+        {
+            let g = &dynamic.geo;
+            for o in along(g, a, b) {
+                for k in o.tris.clone() {
+                    let m = g.mats[k];
+                    let low = m & 0x3f;
+                    if drop_node && (g.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                    if drop_surface && m & 0x40 != 0 { continue; }
+                    if drop_de && (low == 0xd || low == 0xe) { continue; }
+                    if drop_10 && low == 0x10 { continue; }
+                    let t = &g.tris[k];
+                    if dot(cross(sub(t[1], t[0]), sub(t[2], t[0])), d) >= 0.0 { continue; }
+                    if seg_tri_hit(a, b, t) { return false; }
+                }
+            }
+        }
+        true
+    }
+
     /// The masked `Collide_LineOfSight` 0x1edf50 body, applied unconditionally — the per-caller
     /// drop semantics of `Collide_Intersect` 0x1ebaa8:300-319 (and `Collide_Pick` 0x1eb320:140-152):
     /// mask 0x800 drops hits whose per-triangle surface byte has bit 0x40; mask 0x1 drops surface
@@ -2600,6 +2674,95 @@ impl CollisionWorld {
                     if v < 0.0 || u + v > 1.0 { continue; }
                     let tt = dot(e2, q) * inv;
                     if (0.0..=1.0).contains(&tt) && best.is_none_or(|bb| tt < bb) { best = Some(tt); }
+                }
+            }
+        }
+        best
+    }
+
+    /// LOS-probe diagnostic (stream-batch-5, the blind-guard hunt): the closest blocking hit of
+    /// the same masked walk `line_of_sight_masked` runs, with the blocking TRIANGLE and its
+    /// material byte so a probe can say WHICH geometry blocks a guard's sight ray. Read-only;
+    /// no behaviour rides it.
+    pub fn los_debug_hit(&self, a: V3, b: V3, mask: u32) -> Option<(f32, [V3; 3], u8)> {
+        self.los_debug_hit_scoped(None, a, b, mask)
+    }
+
+    /// The cel-scoped variant: the same masked drops over `scoped_runs(cell, ray_portal_hit)`
+    /// (what `line_of_sight_scoped` tests), returning the blocking triangle + material. The
+    /// dynamic/cage sets keep the unscoped bucket walk (the scoped runs cover the static set
+    /// only, exactly as `line_of_sight_scoped` does).
+    pub fn los_debug_hit_scoped(&self, cell: Option<usize>, a: V3, b: V3, mask: u32) -> Option<(f32, [V3; 3], u8)> {
+        let d = sub(b, a);
+        let dynamic = self.dynamic.read().unwrap();
+        let skip_cage = mask & 0x20 != 0;
+        let (drop_node, drop_surface, drop_de, drop_10) =
+            (mask & 0x8 != 0, mask & 0x800 != 0, mask & 0x1 != 0, mask & 0x2 != 0);
+        let mut best: Option<(f32, [V3; 3], u8)> = None;
+        let mut consider = |tt: f32, tri: [V3; 3], m: u8, best: &mut Option<(f32, [V3; 3], u8)>| {
+            if (0.0..=1.0).contains(&tt) && best.as_ref().is_none_or(|(bb, _, _)| tt < *bb) {
+                *best = Some((tt, tri, m));
+            }
+        };
+        match cell {
+            Some(cell) => {
+                let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(a, b)) else {
+                    return self.los_debug_hit(a, b, mask);
+                };
+                let stat = &self.stat;
+                for r in runs {
+                    let o = &stat.objects[r as usize];
+                    for k in o.tris.clone() {
+                        let m = stat.mats[k];
+                        let low = m & 0x3f;
+                        if drop_node && (stat.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                        if drop_surface && m & 0x40 != 0 { continue; }
+                        if drop_de && (low == 0xd || low == 0xe) { continue; }
+                        if drop_10 && low == 0x10 { continue; }
+                        let t = &stat.tris[k];
+                        let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+                        if dot(cross(e1, e2), d) >= 0.0 { continue; }
+                        let p = cross(d, e2);
+                        let det = dot(e1, p);
+                        if det.abs() < 1e-12 { continue; }
+                        let inv = 1.0 / det;
+                        let s = sub(a, t[0]);
+                        let u = dot(s, p) * inv;
+                        if !(0.0..=1.0).contains(&u) { continue; }
+                        let q = cross(s, e1);
+                        let v = dot(d, q) * inv;
+                        if v < 0.0 || u + v > 1.0 { continue; }
+                        consider(dot(e2, q) * inv, *t, m, &mut best);
+                    }
+                }
+            }
+            None => {
+                let sets: [Option<&Geo>; 3] = [Some(&self.stat), (!skip_cage).then_some(&self.missile), Some(&dynamic.geo)];
+                for g in sets.into_iter().flatten() {
+                    for o in along(g, a, b) {
+                        for k in o.tris.clone() {
+                            let m = g.mats[k];
+                            let low = m & 0x3f;
+                            if drop_node && (g.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                            if drop_surface && m & 0x40 != 0 { continue; }
+                            if drop_de && (low == 0xd || low == 0xe) { continue; }
+                            if drop_10 && low == 0x10 { continue; }
+                            let t = &g.tris[k];
+                            let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+                            if dot(cross(e1, e2), d) >= 0.0 { continue; }
+                            let p = cross(d, e2);
+                            let det = dot(e1, p);
+                            if det.abs() < 1e-12 { continue; }
+                            let inv = 1.0 / det;
+                            let s = sub(a, t[0]);
+                            let u = dot(s, p) * inv;
+                            if !(0.0..=1.0).contains(&u) { continue; }
+                            let q = cross(s, e1);
+                            let v = dot(d, q) * inv;
+                            if v < 0.0 || u + v > 1.0 { continue; }
+                            consider(dot(e2, q) * inv, *t, m, &mut best);
+                        }
+                    }
                 }
             }
         }

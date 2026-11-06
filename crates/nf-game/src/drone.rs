@@ -10883,25 +10883,20 @@ impl Drone {
         // (30 ticks since the last seen stamp) expired → NoOpponent 0x60. Team 1 keeps its
         // implicit player opponent (Bond alive) — the gate never fires for them.
         if !self.has_opponent(frame) { return NO_OPPONENT; }
-        // The router's head [M 0x148338:19-31]: the opponent pointer gone (+0x170 == 0 —
-        // FindOpponent 0x1424e0:149-157 clears it the tick CanSeeObject fails) with no fresh
-        // +0x238 hold (0, or 30 frames stale — HasOpponent 0x14ad58) returns NoOpponent 0x60:
-        // combat cannot outlast the hold. The switch's own cases (0x58/0x68/0x70 minus 0x58 =
-        // 0x00/0x10/0x18 [M 0x148338:39-44]) route COMBAT and both fire states through here.
-        // The port's `seen`/`unseen_ticks` are the same sight machinery (unseen_ticks = the
-        // game's +0x274 ticks-since-LOS [M 0x176a28:216-223]); the >15 gate is the port's
-        // established stand-in for the hold window (the same gate that enters 0x5c) // [S] the
-        // window length: the game's hold is the +0x238 30-frame stamp, the port reuses 15.
-        // Without this exit the port's 0x5c (whose UPDATE is ONLY SeenAndAttacking + the
-        // router [M 0x164838:26-35]) parks a sight-lost guard forever — the 07000001 hall
-        // guard's 56k-tick COMBAT_NO_SIGHT freeze that stalled both escort walks.
-        // Off [S]: with the 15-tick stand-in for the +0x238 hold, this exit stalled searchlight,
-        // abseil, door-chase and bathhouse guards on 06/09/16. It returns with the game's own hold.
-        if false && matches!(from, COMBAT | COMBAT_OUT_OF_RANGE | COMBAT_NO_SIGHT | AIM_STAND_FIRE | AIM_CROUCH_FIRE)
-            && !self.seen && self.unseen_ticks > 15
-        {
-            return NO_OPPONENT;
-        }
+        // The re-acquire is the game's own 0x5c shape, no extra exit: the router sends a blind
+        // guard (sight flag 4 clear, +0x274 > 0xf) to CombatNoSight 0x5c from the three arms
+        // [M DroneFunc_CombatState 0x148338:67-70/151/235], 0x5c's UPDATE re-runs this router
+        // every tick [M NDrone2_DSTATE_CombatNoSight 0x164838:26-35], and with the ray back the
+        // case-4 sight arm returns 0x5b (the arms below) — firing resumes. The game NEVER
+        // returns 0x60 from sight loss (the SP FindOpponent re-points +0x170 at Bond every tick
+        // [M 0x1424e0:100-121], so the no-opponent gate above cannot fire while he lives): the
+        // old `unseen > 15 → NO_OPPONENT` exit parked behind `if false &&` here was a
+        // workaround for the port's UNscoped sight ray over-blocking (the 07000011 d2
+        // idle-Bond stall) and it broke the 06/09/16 abseil/door-chase/bathhouse guards by
+        // kicking game-blind-but-actually-visible guards out of combat. The ray now rides the
+        // game's cel scope (seek_opponent_los → world::line_of_sight_scoped), so the freeze
+        // class is fixed at its cause and this exit stays OUT (removed 2026-11-06,
+        // stream-batch-5).
         if self.in_transition() { return 0; }
         let follow = !matches!(from, AIM_STAND_FIRE | AIM_CROUCH_FIRE);
         let mv = self.move_to_object(d, self.engage_range.min(6.0), follow);
@@ -10926,6 +10921,10 @@ impl Drone {
                 self.moving_result(d, rng, mv, true)
             }
             COMBAT_NO_SIGHT => {
+                if std::env::var_os("NF_AILOG").is_some() && self.unseen_ticks % 300 == 0 {
+                    eprintln!("[ai:5c] guard {} mv {} routed {} oor {} remaining {:.2} seen {} unseen {} pos ({:.2},{:.2},{:.2})",
+                        self.index, mv, routed, out_of_range, self.croute.as_ref().map_or(-1.0, |r| r.remaining), self.seen, self.unseen_ticks, self.pos[0], self.pos[1], self.pos[2]);
+                }
                 if no_move { return COMBAT_NO_MOVE; }
                 if self.cover_available(d, true) { return RUN_FOR_COVER; }
                 if self.seen { return COMBAT_NEW_SIGHTING; }
@@ -11638,11 +11637,17 @@ impl Drone {
     /// dropped, :95-98 — no effect.)
     /// Without posed bones (`bones == None`) the port's single chest point stands in.
     pub fn seek_opponent_los(&mut self, d: &Data, player: &Player, bones: Option<&[V3; 7]>) -> bool {
+        // The ray rides the game's cel scope [M DroneVision_CanSeeObjectFrom 0x176f18:60-77 —
+        // Collide_LineOfSight's cel arg is the TARGET's obj+0x20, so Collide_Pick's BFS admits
+        // only the target-cel chain's geometry]: the port's unscoped grid walk over-blocked on
+        // 07000011 (the d2 idle-Bond stall — a 0.33×0.18 mat-0x06 patch at y 48.232 grazing the
+        // ray between the corridor guards and the spawn; world.rs::line_of_sight_scoped). A
+        // snapshot without a cel (None) and a portal-BFS miss keep the unscoped walk.
         let Some(b) = bones else {
-            return d.world.line_of_sight(self.head(), player.target, crate::world::LOS_GUARD_VISION);
+            return d.world.line_of_sight_scoped(player.cel, self.head(), player.target, crate::world::LOS_GUARD_VISION);
         };
         let eye = self.head();
-        let ray = |i: usize| d.world.line_of_sight(clamp_to_cylinder(player.pos, b[i]), eye, crate::world::LOS_GUARD_VISION);
+        let ray = |i: usize| d.world.line_of_sight_scoped(player.cel, clamp_to_cylinder(player.pos, b[i]), eye, crate::world::LOS_GUARD_VISION);
         view_bone_pick(self.los, self.team, &mut self.view_bone, ray)
     }
 }
