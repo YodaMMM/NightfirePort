@@ -14171,30 +14171,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // entities (the game's pick covers every object with a built sphere). An object whose
         // glist has no parsed triangles never enters the 0x201 hit chain — the sphere alone
         // does not stop the ray [L the 0700001b breakpoints: no hit entry without a triangle
-        // touch]. The posing is the ENTITY's own matrix (obj+0x90); the flag-word pick gate
-        // (0x1eae80's mask + the walk's 0x3000 pre-filter) is modeled below — the word is the
-        // glist record's +0x44, sourced from the disc (glist_flags).
+        // touch]. The posing is the ENTITY's own matrix (obj+0x90); the 0x1eae80 flag-word gate
+        // (the 0x60 mask for the aim/bullet hittest 0x20a + the per-cel walk's f0 & 0x3000
+        // pre-filter, the word = glist+0x44 [M 0x134960:11 / 0x1d1508]) is SOURCED now
+        // (world.glist_flags) but NOT wired into this stage: wired alone it re-snaps the 08
+        // corridor's straight shot off the glass pane (the pick-ups' 0x8c0 words it rightly
+        // skips were carrying the calibrated snap) and the pinned [L] -100 pierce breaks; the
+        // game-side chain also walks the CEL-LINKED DOORS (the closed shutters' leaves are the
+        // game's snap target there) — both halves together are the next stage (the report).
+        // The per-cel object walk itself: 0x1eb8e8-0x1eb93c (the straddle cels' cel+8 chains)
+        // + the ForcedList second walk 0x1eba44-0x1eba5c.
         {
             for (_pi, c, r, mesh) in &self.scripts.sp_bullet_targets(d) {
                 let Some((hash, m)) = mesh else { continue };
-                // THE PICK GATE [M Collide_PickObj 0x1eae80 + the per-cel object walk 0x1eb8e8]:
-                // the game's ray/bullet pick (hittest 0x20a/0x208, Player_WeaponInitBullet
-                // 0x1a4bf0:154 / Bullet_update disasm 0x12ef18) builds the skip mask 0x20 base,
-                // | 0x40 for the hittest's bit 0x8 (both words carry it) = 0x60, and skips every
-                // object whose obj+0xF0 & mask != 0 (disasm 0x1eafc-0x1eb2c: the and/addiu/movn
-                // chain then the `and`/`bne` on obj+0xF0, lw at 0x1eaf04); obj+0xF0 = the glist
-                // record's +0x44 word [M Control_SetGList 0x134960:11] — the disc word the
-                // port's glist_flags carries. The per-cel object walk adds the pre-filter
-                // obj+0xF0 & 0x3000 (disasm 0x1eb914-0x1eb91c) and the type arm's glist
-                // requirement (the object needs collision geometry, glist+8 = the surface-byte
-                // pointer [M 0x1d1508 / parsemap_block_Coll_Data_New] — the port's `shape()`
-                // emptiness, which the refine below already required). Live anchors [L the
-                // 0700001b audits]: the whole solar panel f0 0x81 (kept — & 0x60 = 0), the panel
-                // pieces 0xc1 (skipped — & 0x60 = 0x40), the disc words match both
-                // (nf-formats' glist_flags_probe). The hittest's 0x200 bit (exclude class-5
-                // bullet objects) has no candidate in this set (script stream entities).
-                let f0 = d.world.glist_flags(*hash).unwrap_or(0);
-                if f0 & 0x60 != 0 || f0 & 0x3000 != 0 { continue; }
                 // The wire entities ride their GFX-bounds frame end to end (the flight's contact
                 // note below): the posed COLLISION glist measured ~0.1-0.3 u behind the room's
                 // stat wall face on 07000014 [L the flight-stop trace vs the aim-stage probe],

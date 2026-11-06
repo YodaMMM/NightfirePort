@@ -434,7 +434,7 @@ impl Doors {
                 f0,
                 // obj+0xF0 = glist+0x44 (no create param on the Door_Create path) [M 0x134960:11];
                 // the flight's pass rule reads its 0x60 bits [M 0x12cf18].
-                bullet_pass: f0 & 0x60 != 0,
+                bullet_pass: p.flags & 0x60 != 0,
             };
             if d.kind == 0 {
                 // `Door_SetupSwing`: the swing covers half the range, so the speed re-quantises to whole ticks

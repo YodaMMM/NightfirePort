@@ -40,6 +40,12 @@ fn probe_glist_flags() {
                 p.translation[0], p.translation[1], p.translation[2], p.by_hash(), p.hashcode, p.index, hash, ow,
                 ow & 0x60 != 0, p.flags & 0x60 != 0, ow & 0x60 != 0);
         }
+        // The gate-filtered words' names on every probed level.
+        for (o, ob) in lvl.maps[m].objects.iter().enumerate() {
+            if ob.flags & 0x60 != 0 || ob.flags & 0x3000 != 0 {
+                eprintln!("GATE obj[{o}] hash {:#x} '{}' flags {:#x}", ob.hashcode, ob.name, ob.flags);
+            }
+        }
         // The pass-capable words' names on every probed level.
         for (o, ob) in lvl.maps[m].objects.iter().enumerate() {
             if matches!(ob.flags & 0xffff, 0x30 | 0x50 | 0xc1 | 0x20 | 0x81 | 0x21 | 0x221) && ob.name.to_uppercase().contains("SHUT") || ob.flags & 0x60 != 0 {
