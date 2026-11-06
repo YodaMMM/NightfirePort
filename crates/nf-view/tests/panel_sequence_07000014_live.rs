@@ -126,6 +126,19 @@ fn cut_box(scene: &mut nf_view::scene::Scene, want: u32) {
         {
             let sim = scene.sim.as_mut().unwrap();
             top_up(sim);
+            // The game removes a DYING wire's entity [M FuseBox_Update 0x1adfe8 →
+            // `Effect_RemoveSObjs` 0x1cf360 — the port's `Cut::RemoveWire` arm]: a wire an
+            // earlier beam already cut has no aim left. One burn can cut both of the box's
+            // wires — the slabs are coplanar and adjacent (posed x -89.474..-89.349 and
+            // -89.342..-89.148 on the same z 30.895 plane [L the probe]) and the burn's aim
+            // sweep clips both [L one burn on wire 17 rose both words 0x87+0x71 and removed
+            // both entities] — so a later wire of a dead box is skipped, not aimed at the
+            // origin; the box's group words verify the cut at the call sites.
+            if !matches!(sim.drones.scripts.objects.list.get(*obj),
+                Some(Some(nf_game::nis::Obj::Entity { .. })))
+            {
+                continue;
+            }
             let bp = sim.drones.fuseboxes[fb].pos;
             let aim = wire_aim_point(sim, *obj);
             let cands = [[0.6f32, -1.2, 0.0], [-0.6, -1.2, 0.0], [0.0, -1.2, 0.6], [0.0, -1.2, -0.6]];
@@ -374,3 +387,4 @@ fn one_cut_box_arms_nothing_and_the_door_stays_locked() {
             "the door stays locked [M 0x1363c8:93-96]");
     }
 }
+
