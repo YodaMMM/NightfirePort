@@ -12245,8 +12245,6 @@ pub struct Drones {
     /// draws mesh 0x2000133 [M the beam create's `hashtable_set_object_to_entity_gfx(uVar9,0x2000133)`]
     /// between them.
     pub tripbomb_beams: Vec<(V3, V3)>,
-    /// Bounced grenades awaiting the `DroneFunc_HandleExplosives` broadcast (position, weapon record id).
-    pub explosive_queue: Vec<(V3, u16)>,
     /// Explosions this tick: (pos, radius, damage, owner, weapon_type) for the sound + camera shake.
     pub explosions: Vec<(V3, f32, f32, usize, u16)>,
     /// fix-weapon-effects: blasts queued this tick (`Explode_Create` 0x17cbd0's call sites inside the
@@ -13247,8 +13245,6 @@ impl Drones {
             // 0x1ffb90:22 writes 1) put 1 there [L ee_start_*.bin]; the direct-level load replays it
             // (scene.rs `drones.difficulty = 1`).
             difficulty: 2,
-            // fix-cover-remainder: the HandleExplosives queue.
-            explosive_queue: Vec::new(),
             // fix-grenade-throw: the smoke grenade's occluder clouds (`Occlude_Create` 0x17ea80).
             smoke_clouds: Vec::new(),
             // fix-satchel-tripbomb: the tripbomb beams.
@@ -21418,9 +21414,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         }
                         // `DroneFunc_HandleExplosives` (0x1435f0): the kind-2 explosive entries — a guard with the
                         // fear props within the entry's radius that sees the object sends itself msg 0x21
-                        // [M 0x1435f0:30-52]. The port triggers once at the bounce (the game rescans every frame
-                        // while the object exists; a documented deviation).
-                        self.explosive_queue.push((p, g.weapon_type));
+                        // [M 0x1435f0:30-52]. The broadcast walks the LIVE objects every frame (see the
+                        // drain's comment) — nothing to queue here.
                         break;
                     }
                     crate::grenade::GrenadeEvent::Explode { pos, radius, damage, owner, weapon_type } => {
@@ -21684,18 +21679,33 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // port's old 0x35 arm (r 8.0, run 10.0) made the 07000011 corridor guards flee #127's own stun lob
         // the moment the faithful flee gate [M 0x1431c0:40-67] landed — the game's #126 (no grenades, p11=0
         // [D 07000011 ordinal 126]) never moves off its StepAim cycle.
-        let queued = std::mem::take(&mut self.explosive_queue);
-        for (p, wt) in queued {
+        // The kind-2 explosive scan [M DroneFunc_HandleExplosives 0x1435f0:20-48 — called every frame
+        // from ControlSTANDARD 0x1490f0, walking Drone_BuildDynamicAwarePoints' 0x138b10 point records,
+        // which track the object while it exists]: the LIVE grenade list, not a bounce snapshot. The
+        // port's take-once bounce queue deviated (its own comment called it that): a frag that bounces
+        // outside the guard's sight and rolls back inside was never scanned — grenade_live's 0x68 flee
+        // red on the gas stream (the frag bounced 11.52 u out, rolled back toward the thrower, and no
+        // second scan ever ran). Conditions per guard are unchanged [M 0x1435f0:30-52]: fear prop,
+        // within the radius, sees the object.
+        let live_explosives: Vec<(V3, u16)> = self.grenades.iter().filter(|g| g.state < 2).map(|g| (g.pos, g.weapon_type)).collect();
+        let exp_probe = std::env::var_os("NF_EXPPROBE").is_some();
+        for (p, wt) in live_explosives {
             let cls = match wt {
                 0x34 => Some((12.0f32, 4.0f32, 120u32, 0x87u8)),
                 0x3b..=0x40 => Some((12.0, 14.0, 600, 0x87)),
                 _ => None,
             };
+            if exp_probe { eprintln!("[expprobe] explosive {:?} wt {wt:#x} cls {cls:?} queue_raw {}", p, self.grenades.len()); }
             let Some((radius, run, ticks, ret)) = cls else { continue };
             let Drones { list, rng, .. } = self;
             for dr in list.iter_mut() {
-                if !dr.present || dr.corpse || !dr.enabled { continue; }
                 let (dx, dy, dz) = (dr.pos[0] - p[0], dr.pos[1] - p[1], dr.pos[2] - p[2]);
+                if exp_probe && dr.index == 0 {
+                    let los = d.world.line_of_sight([dr.pos[0], dr.pos[1] + 1.0, dr.pos[2]], p, crate::world::LOS_GUARD_VISION);
+                    eprintln!("[expprobe] guard0 present {} corpse {} enabled {} d2 {:.3} (r2 {:.3}) p3a {} p3b {} scared {} state {:#x} los {}",
+                        dr.present, dr.corpse, dr.enabled, dx*dx+dy*dy+dz*dz, radius*radius, dr.prop(d, 0x3a), dr.prop(d, 0x3b), dr.scared, dr.state, los);
+                }
+                if !dr.present || dr.corpse || !dr.enabled { continue; }
                 if dx * dx + dy * dy + dz * dz > radius * radius { continue; }
                 if !dr.prop(d, 0x3a) && !dr.prop(d, 0x3b) { continue; }
                 if !d.world.line_of_sight([dr.pos[0], dr.pos[1] + 1.0, dr.pos[2]], p, crate::world::LOS_GUARD_VISION) { continue; }
