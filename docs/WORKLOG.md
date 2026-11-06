@@ -383,11 +383,38 @@ docs/reports/aim-route-6.md.
 ## aim-last-seven
 
 Branch `s/aim-last-seven` from `origin/s/aim-on-master` (24cca34f8 — aim-route-6 merged with
-master). Task: the last seven reds. Priority order per the task: the 11 stairwell
-`stairwell_impacts_render_07000011_live every_stairwell_impact_sits_on_drawn_geometry` (a
-player-visible snap fault, name the cause first), then the two `panel_sequence_07000014_live`
-tests and `walk_07000014_live the_facility_chain_runs_to_the_delta_sector_exit` (the 14 route
-or the cut shot; see the aim-route-finish 14-walk fix), then `walkreal_07000015_live`
-real_damage_agent; `walkreal_07000001_live` and `walkreal_07000008_live` 00agent may take an
-ignore with a measured reason. Keep the [L] 08 pins and the 0x30000000 fix. Entry started —
-work follows.
+master). Test-side only — no `crates/*/src` file changed; the [L] 08 pins and the 0x30000000
+fix untouched.
+
+Outcome: four of the seven reds taken out. The 11 stairwell pin: the snap did NOT move bullet
+marks off drawn geometry — 272 decals 0 mid-air BOTH sides of the change; the red was the
+sister check's stale premise (the fan's 0x40 pass records hugged the mesh once the game's own
+convergence law [M 0x1a4bf0:154-164] aimed every round at the crosshair's hit point ON drawn
+geometry: 8 off-surface pass records pre-convergence 0e0cfdd01 [L], 6 in-band after, worst
+0.200) — the sister now probes the DECLARED fudge plane (map43#126) itself: the probe point
+(21.782, 34.802, 1.415) must answer the collision query with the bare 0x40 face and measure
+> HOLE_ON_SURFACE_MAX (2.139 [L]) from the drawn mesh. The 14 wire tests (both
+panel_sequence + the walk): one burn cuts BOTH of the box's wires — the slabs coplanar and
+adjacent (posed x −89.474..−89.349 / −89.342..−89.148 on the z 30.895 plane [L probe]) and
+the aim sweep clips both, one burn rose both words 0x87+0x71 and removed both entities [M
+FuseBox_Update 0x1adfe8 → Effect_RemoveSObjs 0x1cf360] — cut_box skips wires whose entity the
+game already removed; the box's group words verify the cut. The 01/08 00agent walks took the
+task's measured ignores: 01 — the AND(0x11,0x12,0x13) hall gate can't complete, guard #11 (hp
+6) never exposes (exposed false through the 10800-tick bound at 3.6-4.7 u [L], ch 153 never
+fires, Bond at 82.0 health — the budget is NOT the blocker); 08 — the chase's own mid-flight
+curve self-blasts at 27975 (−62.5/−15.5, the effective-aim corridor clear for the first 12 u
+[L], the aim-route-6 §3 ledger re-run on this branch) — the forecast gate is the next lever.
+The 15 agent walk red stands, measured: the base death at 9422 takes exactly 100.0 (the world
+48.0 = the #526 rim blast −41.6 + the pops; #11's launcher −8.4 + grenade −15.0; #13's
+grenade −17.5 — the thrown grenades outlive the throwers); four levers measured and reverted
+(the spot pre-shoots miss — the guards walk off their spots and the spawner hold keeps them
+unspawned at the rim; the threshold proximity sweep kills #11 but the flank dance + #10's
+direct rounds died the run EARLIER at 7318; the #526 threshold lob is DEAD — the 0x1a record
+has no gravity bit (f6c 0x40050 [L the dump: speed 15.35, range 400, dmg 3.5]) and the
+straight round dies on the rim's face, los 0.924 [L]; the wait-and-sweep invites the swarm —
+6860 with 18 hits, and a −34.3 point-blank pop at 6669) — the walk needs a structural pre-
+throw kill stand (the 0c sniper_stands pattern) or the live-checked throw cycle. Whole
+binaries (single-threaded): stairwell_impacts_render_07000011_live 1/0/1, panel_sequence
+07000014_live 2/0, walk_07000014_live 2/0, walkreal_07000015_live 5/1/1 (the agent red,
+unchanged from the base), walkreal_07000001_live 7/0/1 green, walkreal_07000008_live 5/0/1
+green. Report: docs/reports/aim-last-seven.md.
