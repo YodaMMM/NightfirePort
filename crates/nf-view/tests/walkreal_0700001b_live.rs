@@ -285,8 +285,10 @@ fn station_room(sim: &nf_view::scene::Sim, from: [f32; 3], st: [f32; 3]) -> bool
 
 /// Where to float for a level shot at the sphere (c, r): the eye at the centre's height on a ring
 /// around it (6–14 u out, 24 bearings), the shot clear (`sphere_shot_ok`) AND unstealable by the
-/// aim snap (`snap_shot_ok` — the same candidates the snap sees), room for the body
-/// (`station_room`), not a station the float already stalled short of; the nearest to `pref`.
+/// aim snap (`snap_shot_ok` — the same candidates the snap sees), room for the body (`station_room`
+/// — from the float's own spot, or from `pref` the console's default anchor when the float has
+/// wedged and its straight lines are all bank-clipped), not a station the float already stalled
+/// short of; the nearest to `pref`.
 fn level_station(sim: &nf_view::scene::Sim, c: [f32; 3], r: f32, c0: [f32; 3], from: [f32; 3], pref: [f32; 3], banned: &[[f32; 3]]) -> Option<[f32; 3]> {
     let eye_off = sim.bond.head()[1] - sim.bond.pos[1];
     let mut best: Option<(f32, [f32; 3])> = None;
@@ -295,7 +297,8 @@ fn level_station(sim: &nf_view::scene::Sim, c: [f32; 3], r: f32, c0: [f32; 3], f
             let a = k as f32 * std::f32::consts::TAU / 24.0;
             let eye = [c[0] + rad * a.sin(), c[1], c[2] + rad * a.cos()];
             let st = [eye[0], eye[1] - eye_off, eye[2]];
-            if !sphere_shot_ok(sim, eye, c, r) || !snap_shot_ok(sim, eye, c, c0, r) || !station_room(sim, from, st) { continue; }
+            if !sphere_shot_ok(sim, eye, c, r) || !snap_shot_ok(sim, eye, c, c0, r)
+                || !(station_room(sim, from, st) || station_room(sim, pref, st)) { continue; }
             if banned.iter().any(|b| dist3(*b, st) < 1.0) { continue; }
             let dd = dist3(st, pref);
             if best.map_or(true, |b| dd < b.0) { best = Some((dd, st)); }
@@ -313,6 +316,17 @@ fn float_to(sim: &nf_view::scene::Sim, at: [f32; 3]) -> Input {
     let dy = at[1] - sim.bond.pos[1];
     let vstar = (dy * 0.03).clamp(-0.05, 0.05);
     inp.lift = ((vstar + (vstar - sim.bond.zero_g_lift) * 2.0) * 10.0).clamp(-1.0, 1.0);
+    // The sag guards: the eased descent overshoots its brake and dropped the float past the
+    // low stations onto the room floor (console 8's end of the bank), where walk-mode pins it
+    // and the thrusters are dead. Below the goal, demand the climb; near the floor AND near
+    // the goal from above, creep the last stretch down instead of braking to a stall.
+    if dy > 0.3 {
+        inp.lift = 1.0;
+    } else {
+        let near_floor = sim.world.segment(sim.bond.pos, [sim.bond.pos[0], sim.bond.pos[1] - 2.2, sim.bond.pos[2]]).is_some();
+        let vstar = if near_floor && dy > -1.5 { (dy * 0.03).clamp(-0.012, 0.05) } else { vstar };
+        inp.lift = ((vstar + (vstar - sim.bond.zero_g_lift) * 2.0) * 10.0).clamp(-1.0, 1.0);
+    }
     inp
 }
 
@@ -335,15 +349,11 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
     let mut cal = ShotCal::default();
     let mut banned: Vec<[f32; 3]> = Vec::new();
     let mut moved_at = 0u32;
-    let mut last_pos = [0.0f32; 3];
     let mut last_goal = [0.0f32; 3];
+    let mut last_goal_dist = f32::MAX;
     let mut dead_ticks = 0u32;
     let mut dumped: Vec<u32> = Vec::new();
     for tt in 0..6000u32 {
-        {
-            let p = w.scene.sim.as_ref().unwrap().bond.pos;
-            if dist3(p, last_pos) > 0.3 { moved_at = tt; last_pos = p; }
-        }
         let (input, fire) = {
             let sim = w.scene.sim.as_ref().unwrap();
             for &k in &CONSOLE_ORDER {
@@ -379,13 +389,19 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
                     let glass = dp.weapons.records.get(sim.gun.weapon as usize)
                         .map_or(true, |w| u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap()) & 0x800 == 0);
                     let mut clean = 0usize;
+                    let mut world_ok = 0usize;
+                    let mut room_ok = 0usize;
                     for rad in [6.0f32, 8.0, 10.0, 12.0, 14.0] {
                         for j in 0..24 {
                             let a = j as f32 * std::f32::consts::TAU / 24.0;
                             let eye = [c[0] + rad * a.sin(), c[1], c[2] + rad * a.cos()];
+                            let st = [eye[0], eye[1] - eye_off, eye[2]];
                             let world = sphere_shot_ok(sim, eye, c, r);
                             let snap = snap_shot_ok(sim, eye, c, c0, r);
-                            if snap { clean += 1; continue; }
+                            if world { world_ok += 1; }
+                            if snap { clean += 1; }
+                            if world && snap && (station_room(sim, sim.bond.pos, st) || station_room(sim, station, st)) { room_ok += 1; }
+                            if snap && world { continue; }
                             let v = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
                             let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
                             let raw = [eye[0] + v[0] / l * 256.0, eye[1] + v[1] / l * 256.0, eye[2] + v[2] / l * 256.0];
@@ -394,7 +410,7 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
                             eprintln!("[ring] con{k} t{tt} rad{rad:.0} b{j} eye({:.1},{:.1},{:.1}) world{world} hits [{ws}]", eye[0], eye[1], eye[2]);
                         }
                     }
-                    eprintln!("[ring] con{k} t{tt}: {clean}/120 bearings the snap leaves alive");
+                    eprintln!("[ring] con{k} t{tt}: {clean}/120 snap-clean, {world_ok}/120 world-clean, {room_ok}/120 shootable+roomed");
                 }
                 // The default station when its level shot is clear, unstealable by the aim snap
                 // (the same candidates the snap sees) and the body fits; else (or once the float
@@ -405,6 +421,12 @@ fn shoot_consoles(w: &mut Walker) -> Vec<(u32, u32)> {
                     && station_room(sim, sim.bond.pos, station);
                 let goal = if plan.0 == k && plan.1.is_some() { plan.1.unwrap() } else { station };
                 if goal != last_goal { last_goal = goal; moved_at = tt; }
+                // The float's progress TOWARD the goal, not any movement: a wedged crawl along
+                // the bank moved 0.3 every ~110 ticks and kept `moved_at` fresh, so the stall
+                // never tripped and the replan never ran.
+                let gd = dist3(sim.bond.pos, goal);
+                if last_goal_dist - gd > 0.3 { moved_at = tt; }
+                last_goal_dist = gd;
                 let snap_ok_here = snap_shot_ok(sim, sim.bond.head(), c, c0, r);
                 if dist3(sim.bond.pos, goal) < 1.0 && !snap_ok_here { dead_ticks += 1 } else { dead_ticks = 0 }
                 let stalled = (tt.saturating_sub(moved_at) > 150 && dist3(sim.bond.pos, goal) >= 1.0) || dead_ticks > 150;
