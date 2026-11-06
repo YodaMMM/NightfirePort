@@ -252,3 +252,17 @@ allowed slim-ISO 3), identity_disc = the onfoot sector-count artifact (volume/se
 match); the door-test 4-tuple compile debt (aim-object-flags' missed files) fixed. The rest of
 nf-view not run (test-file-only changes: 14 and 1b; no src/, no common/ helper). Report:
 docs/reports/aim-route-finish.md.
+
+
+## aim-route-3
+Started 2026-11-06 ~15:36 UTC. Branch s/aim-route-3 (cut from origin/s/aim-route-finish
+85ce433f4, merged origin/master a6665d115). Task: (1) 1b: build the aim-route-finish recipe
+— count answered holds per console, pre-fly to the next station on the last hold's answer;
+measure the estimated 150-tick lateness of 8; goal MissileDeploy clear and both drakes walks
+green. (2) 08 x1, 0c x1, 16 x1: the report's levers; 0c finishers sit at d 61-90 — check the
+weapon Bond holds before any stand (pistol range 50 vs rifle 150+ [weapon_data +0x1c]).
+Test-side only; the [L] 08 pins and the 0x30000000 fix stay. Finish with the aim binaries and
+walkreal 08 / 0c / 14 / 16 / 1b whole.
+
+Progress log:
+- Sandbox reset; fresh clone, branch cut, master merged, pushed.
