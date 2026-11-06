@@ -11,3 +11,7 @@ Keep the [L] 08 pins and the 0x30000000 fix. Walk changes are test-side only.
 
 ---
 claimed-by: sandbox5 at 2026-11-06T16:52Z
+
+---
+## Report (done, 2026-11-06T18:12Z)
+
