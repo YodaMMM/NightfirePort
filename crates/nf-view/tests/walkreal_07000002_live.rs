@@ -764,8 +764,13 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             // closing captain (dist 1.6 at the shot, 50.4 health for the kill [L the
             // 00agent-02-03-2 run]). The stand holds the plate and duels — Bond does not move
             // (the back_off 4.0 retreat keeps the under-3.0-u rule out of play).
-            let _ = w.stand_and_fire(di, 900);
+            let killed = w.stand_and_fire(di, 900);
             status(&w, &format!("geisha 1 round-0 stand-off {k}"));
+            if !killed { continue; } // real-health-00agent-02-5: nobody died, nothing dropped — a
+            // player with a loaded rifle keeps fighting instead of rummaging the wheel for a
+            // shotgun he does not own: the old unconditional arm_weapon(0x1c) hunt cycled the
+            // empty wheel up to ~730 ticks per round while the closing captor volleyed Bond
+            // from 88.8 to 6.0 across one such gap [L the run-2/3 duel trace, t7561].
             // The kill's drop is the resupply (the guards' own guns; the dead captain's shells).
             scoop_drops(&mut w, &format!("geisha 1 stand-off {k} drop"), 1);
             arm_weapon(&mut w, 0x1c, &format!("geisha 1 stand-off {k} shotgun"));
@@ -875,6 +880,32 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             // rule): one scoop, then the fullest gun.
             scoop_drops(&mut w, &format!("{name} drops"), 1);
             arm_fullest(&mut w, &format!("{name} rearm"));
+        }
+        if difficulty >= 3 && name == "stair bottom" {
+            // real-health-00agent-02-5: the stair-top duel's own comment says the sniper's shot
+            // reaches the DESCENT, and the run-4 trace made it exact — the stair-top stand gave
+            // up on aim None (his window never opened from up there) and the sniper (0x1e, 12 hp
+            // [L the probe/trace], post (−52.0, 6.3, −14.8) [D placement]) acquired Bond at the
+            // bottom 335 ticks after the arrival and put −48.0 then −30.0 into him at 21.2 u
+            // [L the run-4 damage log, death t14648]. A player who cannot see the muzzle from
+            // the top answers him from the bottom lip — the same lane the lane-mouth stand
+            // wins, one leg earlier — instead of crossing exposed. The aimed stand kills the
+            // 12-hp class in three body rounds [L the 00agent-02-03-2 ledger]; nothing exposed
+            // from here = the stand gives up on its own and the lane-mouth duel answers.
+            let di = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
+                        && d.weapon == 0x1e && dxz(d.pos, bp) < 30.0)
+                    .map(|(i, _)| i).next()
+            };
+            if let Some(di) = di {
+                w.dmg.aimed_fights = true;
+                let _ = w.stand_and_fire(di, 1200);
+                w.dmg.aimed_fights = false;
+                status(&w, "the stair-bottom sniper duel");
+            }
         }
     }
     {
