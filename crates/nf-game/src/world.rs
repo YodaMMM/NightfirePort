@@ -2841,7 +2841,7 @@ mod tests {
         graph.portals.push(ScopePortal { tris: [[[1.8, 0.0, -4.0], [1.8, 4.0, -4.0], [1.8, 4.0, 4.0]], [[1.8, 0.0, -4.0], [1.8, 4.0, 4.0], [1.8, 0.0, 4.0]]], a: 0, b: 1, centre: [1.8, 2.0, 0.0] });
         scope_cells[1].push(0);
         let w2 = mk(graph, scope_cells);
-        let (scoped2, _) = w2.capsule_push_scoped(Some(0), [1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
+        let (scoped2, _, _) = w2.capsule_push_scoped(Some(0), [1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert!(scoped2[0] < -0.1, "with the straddled portal the wall blocks again {scoped2:?}");
         // The take ray's surface filter: a mat-0xd triangle in the START cell is skipped by
         // segment_take_scoped (the 0x721 bit 0x1) while the flat segment_actor still hits it.
@@ -3087,10 +3087,10 @@ mod tests {
         let w = world(floor);
         // The climb spine: 1.31 long, vertical. Crossing at f = a_y / 1.31.
         // f = 0.4 (crossing near the top): the game's cull skips — pass-through from below.
-        let (push, _) = w.capsule_push([0.0, 0.524, 0.0], [0.0, 0.524 - 1.31, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
+        let (push, _, _) = w.capsule_push([0.0, 0.524, 0.0], [0.0, 0.524 - 1.31, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert_eq!(push, [0.0; 3], "f=0.4: the up-floor is jumped through from below (push {push:?})");
         // Sister (can fail): f = 0.6 (crossing near the bottom end): solid — pushed up onto the floor.
-        let (push, _) = w.capsule_push([0.0, 0.786, 0.0], [0.0, 0.786 - 1.31, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
+        let (push, _, _) = w.capsule_push([0.0, 0.786, 0.0], [0.0, 0.786 - 1.31, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert!(push[1] > 0.3, "f=0.6: the up-floor is solid underfoot (push {push:?})");
         // The 0.70-0.763 band the old stand-in over-culled: an UP-facing face with n_y = +0.73
         // (≈43°) hanging above the capsule. The game's raw dot 0.73·1.31 = 0.956 < 0.999 does not
@@ -3104,7 +3104,7 @@ mod tests {
             [2.0, 3.5 - 3.745, 2.0],
         ]];
         let w = world(slope);
-        let (push, _) = w.capsule_push([0.0, 1.2, 0.0], [0.0, 1.2 - 1.31, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
+        let (push, _, _) = w.capsule_push([0.0, 1.2, 0.0], [0.0, 1.2 - 1.31, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert!(push[1] < -0.05, "n·y=0.73 (in the old 0.7-0.763 over-cull band): the game's cull \
             does not skip it — the capsule is pushed off the underside (push {push:?})");
     }
@@ -3123,10 +3123,10 @@ mod tests {
             [[-10.0, 0.0, -10.0], [10.0, 0.0, 10.0], [10.0, 0.0, -10.0]],
         ];
         let w = world(floor);
-        let (push, _) = w.capsule_push([0.0, 0.30388, 0.0], [0.0, 0.30388 - 0.7597, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
+        let (push, _, _) = w.capsule_push([0.0, 0.30388, 0.0], [0.0, 0.30388 - 0.7597, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert_eq!(push, [0.0; 3], "walk spine, flat floor at f=0.4: the game's cull skips it (push {push:?})");
         // Sister (can fail): the same floor crossed in the BOTTOM half (f = 0.6): solid.
-        let (push, _) = w.capsule_push([0.0, 0.4558, 0.0], [0.0, 0.4558 - 0.7597, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
+        let (push, _, _) = w.capsule_push([0.0, 0.4558, 0.0], [0.0, 0.4558 - 0.7597, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert!(push[1] > 0.3, "walk spine, flat floor at f=0.6: solid underfoot (push {push:?})");
         // The 43° slope above the capsule: n·d̂ = 0.73 < 0.999 — NOT culled (the old |n·y| > 0.7
         // rule skipped it outright); the capsule below is pushed off the underside.
@@ -3136,7 +3136,7 @@ mod tests {
             [2.0, 3.5 - 3.745, 2.0],
         ]];
         let w = world(slope);
-        let (push, _) = w.capsule_push([0.0, 1.2, 0.0], [0.0, 1.2 - 0.7597, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
+        let (push, _, _) = w.capsule_push([0.0, 1.2, 0.0], [0.0, 1.2 - 0.7597, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert!(push[1] < -0.05, "n·y=0.73 on the walk spine: no cull — pushed off the underside (push {push:?})");
     }
 
