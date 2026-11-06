@@ -118,3 +118,19 @@ noted so the next session does not retry it blind.
 
 not visible to me — this environment shows no token, credit or context-window figures for the
 session, so there are no numbers to copy.
+
+## ntfy failed
+
+All three fallbacks attempted in order; all failed (the same measured pattern as the previous
+sessions — no outbound route to ntfy.sh from this sandbox):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "…" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "import urllib.request as u; …"` →
+   `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `timeout 25 wget -q -O- --post-data "…" https://ntfy.sh/nightfire-yoda-8k3x`
+   → killed by the 25 s timeout, no output.
+
+The notification could not be delivered; the queue marker (`OK done 20-spawn-pick-walk-05`, report
+path passed to finish.sh) and this report on the branch are the delivery of record.
+Recorded 2026-11-06 ~17:01 UTC.
