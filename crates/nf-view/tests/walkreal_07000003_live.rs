@@ -260,6 +260,14 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         s
     };
     assert_eq!(servants.len(), 3, "three protected servants [D the dump]");
+    // The servants stand IN the east-lane fights' field (servant 1 at (15.4,6.3,−27.0); the
+    // lane guards #9/#10 at (18.7,−24.0)/(19.8,−26.1) miss Bond into him) — a crossfire kill
+    // raises ch 0x60, the standing fail hook fails the mission and the auto-restart sets
+    // level_exit, which latches the walker's stop_on_exit and dead-walks the rest of the route
+    // (the fix4 run: "level_exit reached at +0 ticks" from the east-lane resupply on). The
+    // walk keeps them alive the way the escort walks keep their allies alive (the walker's own
+    // keep_alive arm); every rescue assert below still reads the REAL save path.
+    w.keep_alive = servants.iter().map(|(i, _, _)| *i).collect();
 
     // The route legs up to the servants' ground (the guard-enable plates 0x21/0x23/0x24/0x25 fire
     // under Bond's feet as he crosses them [D the TouchOnce census]).
@@ -291,12 +299,58 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         .find(|t| t.kind == walker::trigger_kind::TOUCH_ONCE && t.out == 0x25).map(|t| t.centre())
         .expect("servant #388's enable plate");
     drop(sim);
-    // The 0x21 enable: the west lane to the gate-plate lawn (each leg [D the plate lo/hi] — the
-    // last one's nav node stands inside the west twin's footprint).
+    // The 0x21 enable: out of the courtyard the way a player must — the LANE (through the
+    // double lane doors (11.83/10.02, −20.23) [D the door dump]) south to the moat band's east
+    // end, then west along the band. NOT the one-way door[1] (13.96, 6.63, −30.27, approach 1
+    // [L the door dump]): its E refuses the courtyard side since the door-direction fix
+    // (Door_Activate 0x135be0:71-74 reads door−activator [M]), and the pre-fix route rode that
+    // mirrored read — the walk's A* snapped onto the building's upper floor (nav path 3's
+    // y-9.49/9.64 row), dropped Bond at the shut door, the wedge ladder stood him on the door
+    // top and the diagonal steer across the ditch dropped him through the moat into the void
+    // (the red run: Bond at y −62818 by the servant walk, clip dry, captor #11 alive).
+    // The courtyard→lane hop is walked DIRECT (the doors are 1.6 u ahead; the stuck handler
+    // E-opens them) and lands ON the lane node (10.65,5.81,−21.62): a walk_nav_to from the
+    // courtyard start snaps its A* onto the upper row (node (13.52,9.49,−19.06) is dxz 0.9 —
+    // nearer than the ground n8) and the whole leg rides the roof. The band legs are safe as
+    // nav hops — path 0 spans only the moat band, no upper row to snap to [D the nav dump].
+    // The courtyard→lane hop: E on the lane door DIRECTLY (use_door's own aim/press cycle —
+    // the doors are approach 0, no refusal [D the door dump]). A plain walk_to from the
+    // courtyard start wedges on the closed leaf and its rail/jump ladder throws Bond onto
+    // the door top (the fix2 roof detour: "arrived" at y 10.22 while the anchor sat at 5.81 —
+    // walk_to's arrive is horizontal), and from the upper row the A* rides the roof to the
+    // garden. After the press, use_door walks Bond through the opening (its open-state arm).
+    let lane_door = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
+        .position(|d| walker::dxz(d.pos, [11.83, 6.45, -20.23]) < 0.5)
+        .expect("the lane door at (11.83,6.45,-20.23)");
+    let mut on_lane = false;
+    for attempt in 0..3 {
+        w.use_door(lane_door, "the lane doors");
+        if attempt > 0 {
+            // The door noise draws an awake guard into the doorway (the fix3 run: drone #9,
+            // state 0x68, stood at (10.7,6.3,-20.1) and held the open doors the whole 6000-tick
+            // leg). A player shoots the blocker — the same arm the 0x25 doorway uses below.
+            let blockers: Vec<usize> = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.present && !d.corpse && d.health > 0.0 && d.team != 3
+                        && walker::dxz(d.pos, [10.9, 6.4, -20.2]) < 3.0)
+                    .map(|(i, _)| i).collect()
+            };
+            for gi in blockers { w.shoot(gi, "the guard in the lane doorway"); }
+        }
+        w.lenient = true;
+        let got = w.walk_to(Wp { at: [10.65, 5.81, -21.62], act: Act::None, arrive: 1.2 }, "the lane north");
+        w.lenient = false;
+        if got != u32::MAX { on_lane = true; break; }
+    }
+    assert!(on_lane, "the lane north never reached (the doorway held)");
     for (name, at) in [
-        ("west lawn", [0.0f32, 5.9, -30.0]),
+        ("the lane south", [10.41f32, 6.08, -28.74]),
+        ("the moat east", [9.95, 5.84, -34.41]),
+        ("along the moat west", [6.87, 5.84, -33.47]),
+        ("the moat west end", [2.08, 5.30, -33.39]),
+        ("west lawn", [0.0, 5.9, -30.0]),
         ("the west lane", [1.0, 5.9, -33.0]),
-        ("along the moat", [8.0, 5.9, -36.0]),
         ("gate plate lawn", [11.0, 5.9, -35.0]),
     ] {
         w.walk_nav_to(at, name, 1.6);
@@ -508,8 +562,16 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     //    writes 0x31; the door starts locked behind it and the gate SS #502 listens on 0x31. The
     //    approach is the west lane (z≈−33..−36): the straight courtyard line crosses the garden
     //    moat ditch ((11.8,−34.5) and (16,−31) drop into the water [D the dump's 5 water cels]).
+    //    Rerouted the same way as the first visit (the fix6 run: the nav from the servants'
+    //    east wing to west lawn rode the upper row again and Bond fell through the moat into
+    //    the void, y −105962): courtyard ground → the lane node → the band's east end, then the
+    //    original anchors. UNVERIFIED on this branch (the round's window ended) — next message
+    //    runs it first.
     for (name, at) in [
-        ("west lawn", [0.0f32, 5.9, -30.0]),
+        ("the courtyard mid", [13.02f32, 5.81, -22.00]),
+        ("the lane south", [10.41, 6.08, -28.74]),
+        ("the moat east", [9.95, 5.84, -34.41]),
+        ("west lawn", [0.0, 5.9, -30.0]),
         ("the west lane", [1.0, 5.9, -33.0]),
         ("along the moat", [8.0, 5.9, -36.0]),
     ] {
