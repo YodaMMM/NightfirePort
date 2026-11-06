@@ -545,9 +545,11 @@ impl Effects {
         // draws only when `EffectInfo+0x1a != 0` [M 0x1cf290].
         if flags70 & 0x10 != 0 && bounces < 3 && rec.ricochet_n != 0 {
             // The mask: 8 for a world hit, 9 when the hit object carries +0x3c & 0x400000, and 0
-            // on a PIERCE contact — the roll still draws, but can never reflect [M 0x12d6f8:
-            // `uVar16 = 8; … if (bVar7 != 0) uVar16 = 0;`].
-            if rng.rand(rec.ricochet_n as u32) as u8 & ricochet_mask as u8 != 0 {
+            // on a PASS/PIERCE contact — and `Effect_RicochetProb` 0x1cf290 returns 0 for mask 0
+            // BEFORE its `Rand_Rand` (the `else if (param_2 == 0)` arm), so a pass contact draws
+            // NOTHING here; the old port drew anyway — an RNG draw the game never makes
+            // (bullet-pass-water).
+            if ricochet_mask != 0 && rng.rand(rec.ricochet_n as u32) as u8 & ricochet_mask as u8 != 0 {
                 if std::env::var_os("NF_RNGLOG").is_some() {
                     eprintln!("[rnglog] ricochet_roll +1 (draw #{})", rng.draws);
                 }
