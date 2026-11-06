@@ -14,3 +14,6 @@ Do not change zero-g or collision code for this.
 3. Run the `[ring]`/`[gate]` probe on 08, 0c, 14 x3 and 16, one at a time, and say which are snap faults and which are route or raw-aim tuning. 14's three are a nav stick at "the corridor south to the leg-2 spot": look at what stands there.
 
 Keep the [L] 08 pins and the 0x30000000 fix. This branch changes where rounds land, so say what it does to the walks; it may need to join `s/stream-batch`.
+
+---
+claimed-by: sandbox5 at 2026-11-06T11:58Z
