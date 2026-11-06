@@ -129,3 +129,10 @@ The full four-crate suite did not fit this window; every binary listed above ran
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed this window, same as stream-batch-6:
+- `curl -sS -m 20 ...` → `curl: (28) Connection timed out after 20002 milliseconds`
+- python urllib → `URLError: <urlopen error [Errno 101] Network is unreachable>`
+- `wget --timeout=20 --post-data ...` → exit 4 (network failure), no body.
