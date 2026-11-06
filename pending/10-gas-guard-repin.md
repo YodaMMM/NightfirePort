@@ -7,6 +7,3 @@ Read docs/reports/gas-draws-8.md section 5 for the list: 14 reds on 11 levels (0
 For each red say whether the walk's route is tuned to the old stream or a guard behaves wrongly. Stream-tuned walks get route and timing levers; the 03 keep-off on master is an example. Do not loosen pins tagged [L], do not add ignores to pass, and do not change game code to suit a walk. A guard that behaves wrongly gets a fix with a decompile citation.
 
 Finish with one total line from a full run, not per-binary counts alone.
-
----
-claimed-by: sandbox3 at 2026-11-06T09:19Z
