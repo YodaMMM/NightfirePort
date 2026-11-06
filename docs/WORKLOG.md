@@ -65,3 +65,10 @@ rewritten by SetupRouteToPosition from the goal's radius (0 -> 2.0) [M 0x158b10]
 move_to_object). Census [M]: alarm point + run-to point = AiPoint +0x14 accuracy; sound/drone alert 2.0; cover 0.5/1.0;
 ambush 0.5; safety 1.0; mission fresh 1.0 / retry 2.0; closer-probe 3.0; interrogate 10.0. level-12's fix regressed the
 001 real-damage walks (Bond dies) and was reverted — form 1 first, walks re-routed per-level opt-in, never weaken.
+
+## guard-radii-finish
+Started 2026-11-06 01:49 UTC. Branch s/guard-radii-finish (origin/s/guard-goal-arrival-radii 70c2f9e57 merged with
+origin/master c4c00c7ec, clean merge). Task: finish guard-goal-arrival-radii — the radii are the game's, fix the red
+real-damage walks test-side per walk, decide the ai_live cover pin from its [L] source (guard_takes_cover_like_the_game
+was measured live; if it disagrees with radius 0.5, find out why before changing it), run each binary whole and quote
+results.
