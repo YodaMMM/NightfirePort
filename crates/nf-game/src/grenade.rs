@@ -86,6 +86,12 @@ pub struct Grenade {
     /// GameState and read back as a BYTE by the trail gates (`(GameState + (u8)obj[0xec]) & 3`
     /// fast / `% 15` big [M Bullet_trail_effect_smoke 0x12cba8]).
     pub born: u8,
+    /// sound-sweep-leftovers: `Bullet_init` 0x12c5a0:286-290 — the +2 == 0x45 record (Oddjob's
+    /// hat) plays the LOOPED 0x5ef at the spawn and stores the handle at BU+0xF0;
+    /// `Bullet_Delete` 0x12e660:13-16 stops it when the bullet dies (the hat's silent post-stick
+    /// expiry included — the +0x70 & 7 = 0 effect kind spawns nothing but the stop still runs).
+    /// 0 = none (every non-0x45 spawn). The MP combat carries no audio sink, so its throws keep 0.
+    pub loop_handle: u32,
 }
 
 /// fix-satchel-tripbomb: the stuck state of a +0x100 satchel/tripbomb (`Grenade.phase` — one box;
@@ -679,6 +685,7 @@ mod tests {
             phase: None,
             burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
             born: 0,
+            loop_handle: 0,
         };
         let mut rng = Rng::new(0);
         let mut bounced = false;
@@ -704,6 +711,7 @@ mod tests {
             phase: None,
             burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
             born: 0,
+            loop_handle: 0,
         };
         let mut rng = Rng::new(0);
         let mut bounced = false;
@@ -730,6 +738,7 @@ mod tests {
             phase: None,
             burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
             born: 0,
+            loop_handle: 0,
         };
         if let Some(ev) = g.update(&w, &mut rng) { assert!(matches!(ev, GrenadeEvent::Bounce(_)), "one short: a bounce, got {ev:?}"); }
         else { assert!(g.bounces == BOUNCE_MAX, "the bounce counted"); }
@@ -747,6 +756,7 @@ mod tests {
             phase: None,
             burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
             born: 0,
+            loop_handle: 0,
         };
         let mut rng = Rng::new(0);
         let mut events = Vec::new();
@@ -791,6 +801,7 @@ mod tests {
             burn: 100, // [M Bullet_init 0x12c5a0:211 — the 0x3b family's counter]
             defused: false,
             born: 0,
+            loop_handle: 0,
         }
     }
 
@@ -920,6 +931,7 @@ mod tests {
             bounces: 0, smoke_popped: false, resting: false, stuck: false, seek_target: None, phase: None,
             burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
             born: 0,
+            loop_handle: 0,
         };
         let mut rng = Rng::new(0);
         let mut stuck_tick = None;
@@ -961,6 +973,7 @@ mod tests {
             bounces: 0, smoke_popped: false, resting: true, stuck: true, seek_target: None, phase: Some(Box::new(ph)),
             burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
             born: 0,
+            loop_handle: 0,
         };
         let (lo, hi) = ([-0.2278f32, -0.1042, -0.2064], [0.2278f32, 0.1042, 0.0064]);
         let c = |i: usize| [if i & 1 != 0 { hi[0] } else { lo[0] }, if i & 2 != 0 { hi[1] } else { lo[1] }, if i & 4 != 0 { hi[2] } else { lo[2] }];

@@ -351,6 +351,7 @@ impl MpCombat {
                 defused: false,
                 // obj+0xec = GameState at creation (the trail gates' phase; fx-muzzle-and-trail).
                 born: frame as u8,
+                loop_handle: 0,
             });
             return;
         }

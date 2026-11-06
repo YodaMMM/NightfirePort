@@ -11241,6 +11241,10 @@ impl Drone {
             // obj+0xec = GameState at creation, read as a byte by the trail gates
             // [M control_init_object 0x134630:15; Bullet_trail_effect_smoke 0x12cba8].
             born: frame as u8,
+            // sound-sweep-leftovers: the MP combat has no audio sink — a thrown hat's 0x5ef
+            // spawn loop (`Bullet_init` 0x12c5a0:286-290) has no MP play site yet (see the
+            // report's remaining-gap note).
+            loop_handle: 0,
         })
     }
 
@@ -21832,6 +21836,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let blasts = std::mem::take(&mut self.pending_blasts);
         for (pos, radius, damage, owner, weapon_type, script, scale, debris_kind) in blasts {
             self.spawn_blast(d, pos, radius, damage, owner, weapon_type, player.pos, frame, script, scale, debris_kind);
+        }
+        // sound-sweep-leftovers `Bullet_Delete` 0x12e660:13-16: the dying bullet's stored loop
+        // handle (BU+0xF0) is stopped — the 0x5ef hat loop `Bullet_init` 0x12c5a0:286-290 started
+        // (the grenade's `loop_handle`; the hat's own post-stick expiry is a SILENT death but the
+        // stop still runs).
+        for g in self.grenades.iter().filter(|g| g.state >= 2) {
+            if g.loop_handle != 0 { self.audio.stop(g.loop_handle); }
         }
         self.grenades.retain(|g| g.state < 2);
         // The mid-pass death drain. A blast kills through the victim's own `send(EXPLOSION)` from

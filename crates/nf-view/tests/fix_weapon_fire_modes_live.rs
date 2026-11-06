@@ -188,6 +188,7 @@ fn grenade_events_match_the_records() {
     burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
     defused: false,
     born: 0,
+    loop_handle: 0,
     };
     let mut rng = nf_game::drone::Rng::new(0);
     // 0x2A: the first contact is ONE Bounce event (the Sim's Bounce arm blasts on it)…

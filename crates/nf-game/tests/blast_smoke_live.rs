@@ -129,6 +129,8 @@ pub fn grenade_at(d: &Data, weapon_type: u16, pos: [f32; 3]) -> nf_game::grenade
         stuck: false,
         seek_target: None,
         phase: None, burn: 0, defused: false, born: 0,
+        phase: None, burn: 0, defused: false,
+        loop_handle: 0,
     }
 }
 

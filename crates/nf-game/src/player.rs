@@ -561,6 +561,12 @@ pub struct Bond {
     /// quad is the thruster pair `local` [M Player_ZeroG 0x192ab0:113,135], which the viewer hands
     /// to the guards as `Drones::player_move_local`; these lanes stay zeroed there.
     pub move_local: [f32; 2],
+    /// `Player_ChangeSubState` 0x190630:83-85's hardcoded loop-stop trio outbox: on the way into
+    /// the new substate, the game runs `Sound_StopAllWithId(0x12)`, `(0x3d)`, `(0xf0)` when the
+    /// NEW value is in [1..3]∪[5..0x10] (disasm 0x1907b4-0x1907e8: substate 4-crouch returns at
+    /// 0x1907b4 with NO stops, 0 skips the outer `0 < param_2`, > 0x10 jumps past). Drained by
+    /// the Sim into `drones.audio` next to the `sfx_out` drain.
+    pub substate_stops: Vec<u32>,
 }
 
 impl Bond {
@@ -590,6 +596,7 @@ impl Bond {
             sfx_out: Vec::new(),
             jump_locked: false,
             jump_refused: false,
+            substate_stops: Vec::new(),
             void_fall: false,
             land_step: false,
             land_countdown: 0,
@@ -799,7 +806,7 @@ impl Bond {
         // read-player-move: 6d1ef8e95 made the shared tick zero CLIMB-only and the grapple lost
         // its 566f1d298-era guarantee along with it).
         self.move_local = [0.0; 2];
-        let Some(st) = self.grapple.as_mut() else { self.substate = SS_WALK; return };
+        let Some(st) = self.grapple.as_mut() else { self.change_substate(SS_WALK); return };
         let mut pos = self.pos;
         let fire = input.fire;
         let released = crate::gadget::grapple_tick(&mut pos, st, fire);
@@ -825,7 +832,7 @@ impl Bond {
         if released {
             self.grapple = None;
             self.grapple_drift = [0.0; 2];
-            self.substate = SS_WALK;
+            self.change_substate(SS_WALK);
         }
         // No capsule push on the drift: the game's push tail is dead for the player's own move
         // pass [M Intersect_CylGeom 0x109da0:447 — the DeltaP guard kills every walk contact; the
@@ -842,10 +849,10 @@ impl Bond {
     /// capsule switch when `cel+0x90 > obj+0x34`].
     fn swim_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input) {
         self.physics_tick(world, ctx, input, true, false);
-        let Some(w) = ctx.water else { self.substate = SS_WALK; return };
+        let Some(w) = ctx.water else { self.change_substate(SS_WALK); return };
         if self.grounded && w <= self.pos[1] - 0.3 {
             // Leave the water [M case 3: `(AnimObj+0x60 & 8) && cel+0x90 <= pos.y − 0.3` → substate 0].
-            self.substate = SS_WALK;
+            self.change_substate(SS_WALK);
             self.ladder = None;
             return;
         }
@@ -947,7 +954,7 @@ impl Bond {
             self.vel[0] = 0.0;
             self.vel[2] = 0.0;
             self.mode = 1;
-            self.substate = SS_CLIMB;
+            self.change_substate(SS_CLIMB);
             self.ladder = Some(i);
             break;
         }
@@ -968,7 +975,7 @@ impl Bond {
     fn climb_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input) {
         let li = match self.ladder {
             Some(li) if ctx.ladders.get(li).is_some() => li,
-            _ => { self.substate = SS_WALK; self.ladder = None; self.physics_tick(world, ctx, input, false, false); return; }
+            _ => { self.change_substate(SS_WALK); self.ladder = None; self.physics_tick(world, ctx, input, false, false); return; }
         };
         let lad = &ctx.ladders[li];
         // The yaw clamp+ease [M 0x196310:18-33]: target = ladder.yaw + π (facing the ladder). The ease
@@ -1066,7 +1073,7 @@ impl Bond {
     fn dismount(&mut self) {
         self.regrab = 60;
         self.saved_sub = SS_CLIMB as u16;
-        self.substate = SS_WALK;
+        self.change_substate(SS_WALK);
         self.ladder = None;
         self.local[1] = 0.0; // the dismounts write BLData+0x14 = 0 [M]
     }
@@ -1164,6 +1171,21 @@ impl Bond {
         self.push_fwd = 0.0;
     }
 
+    /// `Player_ChangeSubState` 0x190630 — the substate write plus the game's loop-stop trio.
+    /// Every game substate change routes through this function; its tail (decomp :83-85, disasm
+    /// 0x1907b4-0x1907e8) stops the loop ids 0x12/0x3d/0xf0 when the NEW substate is in
+    /// [1..3]∪[5..0x10]: 0 fails the outer `0 < param_2`, 4-crouch returns at 0x1907b4 before
+    /// the calls, > 0x10 jumps past. `Sound_StopAllWithId` on an id with no live loop is a
+    /// no-op, so the unconditional trio is the game's own behaviour for every caller.
+    /// `Player_Init` 0x1910f8:41-43 runs the same trio at the player's creation — the pool is
+    /// fresh there and nothing can be looping yet (the port models it as the no-op it is).
+    pub fn change_substate(&mut self, new: u8) {
+        if matches!(new, 1..=3 | 5..=0x10) {
+            self.substate_stops.extend_from_slice(&[0x12, 0x3d, 0xf0]);
+        }
+        self.substate = new;
+    }
+
     /// `Player_CollWire` 0x197130 — the grab. Guards [M 0x19716c-0x1971a8]: the regrab lockout
     /// `+0x951 == 0`, health `+0x894 > 0` (the caller checks — the port keeps health in the Sim, like
     /// the ladder grab), wire type ≠ 1, and the substate ≠ the type's target (6 for type 0, 0xF for
@@ -1193,7 +1215,7 @@ impl Bond {
         }
         let closest = Wire::closest_point(a, b, self.pos);
         self.clear_inertia();
-        self.substate = target;
+        self.change_substate(target);
         self.wire = Some(wi);
         self.auto_drop = 0.0;
         // The yaw: the nearer of wire.yaw ± π/2 to Bond's old yaw [M 0x1973f8-0x197430; type 2 flips by
@@ -1288,7 +1310,7 @@ impl Bond {
     fn wire_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input) {
         let wi = match self.wire {
             Some(wi) if ctx.wires.get(wi).is_some() => wi,
-            _ => { self.substate = SS_WALK; self.wire = None; self.physics_tick(world, ctx, input, false, false); return; }
+            _ => { self.change_substate(SS_WALK); self.wire = None; self.physics_tick(world, ctx, input, false, false); return; }
         };
         let wire = ctx.wires[wi].clone();
         let hang = 1.0207f32;
@@ -1315,7 +1337,7 @@ impl Bond {
         //    re-equip carry) and the channel 0 (the Sim).
         if input.jump || self.auto_drop > 100.0 {
             self.saved_sub = SS_WIRE as u16;
-            self.substate = SS_WALK;
+            self.change_substate(SS_WALK);
             self.cam_mode = 0;
             self.auto_drop = 0.0;
             self.regrab = 0x1e;
@@ -1408,7 +1430,7 @@ impl Bond {
         }
         self.yaw = w.yaw + std::f32::consts::PI; // [M 0x196758:80 + 102: wall.yaw + π/2 + π/2]
         self.clear_inertia();
-        self.substate = SS_CREEP;
+        self.change_substate(SS_CREEP);
         self.mode = 0;
         self.cam_mode = 0xB;
         self.creep = Some(wi);
@@ -1430,8 +1452,8 @@ impl Bond {
     /// forward push out) and the channel cleared [M 0x1969d0:134-156]. The music event (0xD,1) and the
     /// channel set ride the Sim's tick (the port keeps `switch_channels` in the drones).
     fn creep_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, input: &Input) {
-        let Some(wi) = self.creep else { self.substate = SS_WALK; return };
-        let Some(w) = ctx.creepwalls.get(wi) else { self.substate = SS_WALK; self.creep = None; return };
+        let Some(wi) = self.creep else { self.change_substate(SS_WALK); return };
+        let Some(w) = ctx.creepwalls.get(wi) else { self.change_substate(SS_WALK); self.creep = None; return };
         let crawl_yaw = crate::trig::ee_add(w.yaw, crate::trig::PI); // [M 0x1969d0:118 add.s, stored to obj+0x54]
         self.yaw = crawl_yaw;
         let closest = w.closest_point(self.pos);
@@ -1460,7 +1482,7 @@ impl Bond {
         if exit {
             // [M 0x1969d0:134-156] the shared exit tail; the yaw turn: nearer the A end → −π/2.
             self.saved_sub = SS_CREEP as u16;
-            self.substate = SS_WALK;
+            self.change_substate(SS_WALK);
             self.creep = None;
             self.cam_mode = 0;
             self.yaw = crawl_yaw + if nearer_a { -std::f32::consts::FRAC_PI_2 } else { std::f32::consts::FRAC_PI_2 };
@@ -1501,13 +1523,13 @@ impl Bond {
     fn zipline_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, _input: &Input) {
         let wi = match self.wire {
             Some(wi) if ctx.wires.get(wi).is_some() => wi,
-            _ => { self.substate = SS_WALK; self.wire = None; self.physics_tick(world, ctx, _input, false, false); return; }
+            _ => { self.change_substate(SS_WALK); self.wire = None; self.physics_tick(world, ctx, _input, false, false); return; }
         };
         let wire = ctx.wires[wi].clone();
         if self.mode == 9 {
             if self.wire_anim_advance(ctx) {
                 self.saved_sub = SS_ZIPLINE as u16;
-                self.substate = SS_WALK;
+                self.change_substate(SS_WALK);
                 self.cam_mode = 0;
                 self.regrab = 60;
                 self.wire = None;
@@ -1553,7 +1575,7 @@ impl Bond {
         let Some(w) = ctx.water else { return false };
         if self.pos[1] - 0.3 >= w { return false; }
         if self.substate != SS_SWIM {
-            self.substate = SS_SWIM;
+            self.change_substate(SS_SWIM);
             self.jump = 0;        // +0x94C = 0 [M]
             self.local[1] = 0.0;  // +0x14 = 0 [M]
             self.regrab = 5;      // (u8)(FRAME_RATE_DIV·5) [M]

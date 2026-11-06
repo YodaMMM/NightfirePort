@@ -407,6 +407,7 @@ fn thrown_grenade_flies_and_explodes_with_sound_and_damage() {
         burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
         defused: false,
         born: 0,
+        loop_handle: 0,
         });
         let mut hurt = false;
         for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); if sim.drones.list[gi2].health < hp0 { hurt = true; break; } }

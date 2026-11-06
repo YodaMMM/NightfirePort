@@ -149,6 +149,7 @@ fn the_real_end_condition_posts_the_mission_complete_banner() {
             burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
             defused: false,
             born: 0,
+            loop_handle: 0,
             });
             for _ in 0..300u32 {
                 sim.step_bond(Input::default(), false, false, false);

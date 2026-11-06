@@ -201,6 +201,7 @@ fn a_guard_owned_blast_logs_neither_stat_and_the_player_owned_one_logs_dispatche
     burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
     defused: false,
     born: 0,
+    loop_handle: 0,
     };
     let mut tallies = [0u32; 2];
     for (case, owner) in [(0usize, 1usize), (1, usize::MAX)] {
