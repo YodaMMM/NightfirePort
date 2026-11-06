@@ -1789,9 +1789,12 @@ pub struct Drone {
     /// on landing (AbseilSlide 0x169730:35 / StepOff 0x1738e0:18).
     pub saved_anim_set: u16,
     /// `Drone+0xc4`: the attack type the landing restores into the mode byte (`+0xc5 = +0xc4`,
-    /// AbseilSlide 0x169730:36 / StepOff 0x1738e0:21). The OLD chain never writes it (the only
-    /// decomp writer is the astronaut's at 0x14b300:725) — a fresh allocation reads 0, so the
-    /// landed abseiler becomes mode 0 (the generic guard row).
+    /// AbseilSlide 0x169730:36 / StepOff 0x1738e0:21) and the GoToGoalPosition arrival keeps
+    /// (0x165640:78-79). Written for EVERY drone at creation: `+0xc4 = GetDTYPENEW(+0xc7, 0)`
+    /// [M NDrone2_GetDroneTypeAttackTypeFriend 0x14cbd8:22-23, reached through DoModeSettingsNEW
+    /// 0x14c600:80 — and DoModeSettingsOLD tail-calls NEW, 0x14cfa0:16]; the astronaut kind-0x18
+    /// arm then overwrites it with 0x1D [M DefaultInit 0x14b300:725]. Block 0: prop 0x10 → 0x10,
+    /// dtype 0xa/0xb → 9/0x12/10, else the block-0 tail 0.
     pub attack_mode: u8,
     /// `Drone+0xcc0/0xcc4/0xcc8` scratch of the hang re-slide hysteresis: `DCVars+0x1c =
     /// (int)Rand_FRand(1.0)` — truncates to 0 (0x169940:21-22, held across the hang ↔ slide flips).
@@ -2283,17 +2286,24 @@ impl Drone {
         match block { 2 => if self.alert >= 1.0 { 0x19 } else { 2 }, 3 => if self.prop(d, 0x56) { 0xe } else { 7 }, 4 => 4, 5 => 0x15, _ => 0 }
     }
 
-    /// `NDrone2_GetDroneTypeAttackTypeFriend` (0x14cbd8) at creation: modes, team, the type's init function (the
+    /// `NDrone2_GetDroneTypeAttackTypeFriend` (0x14cbd8) at creation: the attack type `+0xc4`, modes, team, the
+    /// type's init function (the
     /// sniper's sets the stationary flag), the alternate state `+0x5A4`; a second tag `+0x13A` is dropped when both
     /// blocks have the same mode, and set to 100 when there is an alternate state but no tag. (The 07000007 property
-    /// writes inside `GetDTYPENEW` are not modelled.)
+    /// writes inside `GetDTYPENEW` are modelled in `dtype_of`, in the game's block-0-first order.)
     fn type_setup(&mut self, d: &Data) {
         if self.mode_normal == self.mode_alert || self.second_tag == 0x65 { self.second_tag = 0; }
+        // `+0xc4 = GetDTYPENEW(+0xc7, 0)` [M 0x14cbd8:22-23] — the game writes the attack type
+        // BEFORE the mode byte, so the block-0 prop writes (the 07000007 party guests) land in
+        // the game's order.
+        self.attack_mode = self.dtype_of(d, self.dtype, 0);
         self.mode = self.dtype_of(d, self.dtype, self.mode_normal);
         // DefaultInit skin kind 0x18: dtype = 0x1D regardless of the placement dtype, no saved
         // dtype and no restore state [M 0x14b300:722-727] — start_state then reads DroneTypeSettings
-        // row 29 (start 0xBD) [D docs/fields/dronetype-tables.md:111].
+        // row 29 (start 0xBD) [D docs/fields/dronetype-tables.md:111]. The arm also rewrites
+        // `+0xc4 = 0x1d` [M 0x14b300:725] — an astronaut abseiler lands back into the astronaut mode.
         if self.kind == 0x18 { self.mode = 0x1D; }
+        if self.kind == 0x18 { self.attack_mode = 0x1D; }
         // `NDrone2_DefaultInit` (0x14b300): +0xEC = 4.0 for everyone (:378); mode 0xd (the ninja,
         // :744-753) also sets health 100.0, +0x8F0 = 8.0, the props 0x35/0x36/0x3c, +0xB4 = 0 and
         // +0xEC = 2.0 — the melee band the ninja attack states roll their evasions under.
@@ -3204,14 +3214,14 @@ impl Drone {
             pos: self.pos, dir: [s, 0.0, c], speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
             damage: f32_at(0x0c), owner, state: 0, weapon: record as u16,
             flyby: d.weapons.flyby(record), bounces: 0,
-            // The guard-side flight keeps the port's documented deviation (the glass pass NOT
-            // modelled [S]): the real-health routes stand behind station glass (the 08 d2
-            // platform-mouth wave cleared at zero cost while the rounds stopped on it) — arming
-            // the pass here turned walk_the_whole_mission_on_real_input_real_damage_agent red at
-            // tick 25178 (#23/#19 volleys through the top-station glass). The player-side flight
-            // carries the pass (update_player_bullets' flight_glass) where the Hind fight needs
-            // it; the guard-side route work lands with the next session.
-            glass_pass: false,
+            // The flight's glass pass from the record [M Bullet_update 0x12e7b0 disasm
+            // 0x12f048-0x12f058 — HITTEST+0x9a = 0x20 unless weapon_data+0x6c & 0x800;
+            // Collide_Update 0x1ea398:216-229 passes the surface-byte-0x10 contacts] — the
+            // same per-round law update_player_bullets computes for Bond's rounds. The old
+            // hard-wired false was a documented shortcut whose real-health route cost is
+            // re-pinned with the 08 station walks (the game clears the stop for every
+            // record without the bit).
+            glass_pass: u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0,
             ..crate::bullet::Bullet::TAIL
         })
     }
@@ -11458,9 +11468,9 @@ impl Drone {
             let dir = crate::bullet::spread(aim, f32_at(0x24), flags68, rng);
             let mut b = crate::bullet::Bullet { pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage, owner, state: 0,
                 weapon: self.weapon as u16, flyby: d.weapons.flyby(self.weapon as usize), bounces: 0,
-                // Guard-side deviation: the glass pass stays unmodelled (see the close-combat
-                // spawn above — the real-health routes stand behind station glass).
-                glass_pass: false,
+                // The flight's glass pass from the record [M Bullet_update 0x12e7b0 disasm
+                // 0x12f048-0x12f058; Collide_Update 0x1ea398:216-229] — the player-side law.
+                glass_pass: u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0,
                 ..crate::bullet::Bullet::TAIL };
             b.init_fuse(w);
             b
@@ -13335,9 +13345,9 @@ impl Drones {
                 pos, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
                 damage: f32_at(0x0c), owner: usize::MAX, state: 0, weapon,
                 flyby: d.weapons.flyby(weapon as usize), bounces: 0,
-                // Guard-side deviation: the glass pass stays unmodelled (see the close-combat
-                // spawn in drone.rs).
-                glass_pass: false,
+                // The flight's glass pass from the record [M Bullet_update 0x12e7b0 disasm
+                // 0x12f048-0x12f058; Collide_Update 0x1ea398:216-229] — the player-side law.
+                glass_pass: u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0,
                 ..crate::bullet::Bullet::TAIL
             };
             b.init_fuse(w);
@@ -17873,9 +17883,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 damage: f32_at(0x0c), owner: usize::MAX, state: 0,
                                 weapon: crate::gt::TURRET_WEAPON_RECORD as u16,
                                 flyby: d.weapons.flyby(crate::gt::TURRET_WEAPON_RECORD), bounces: 0,
-                                // Guard-side deviation: the glass pass stays unmodelled (see the
-                                // close-combat spawn in drone.rs).
-                                glass_pass: false,
+                                // The flight's glass pass from the record [M Bullet_update
+                                // 0x12e7b0 disasm 0x12f048-0x12f058] — the player-side law.
+                                glass_pass: u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0,
                                 ..crate::bullet::Bullet::TAIL
                             };
                             b.init_fuse(w);
@@ -18131,9 +18141,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                     pos: from, dir, speed: f32_at(0x20), travelled: 0.0,
                                     range: f32_at(0x1c), damage: f32_at(0x0c), owner: usize::MAX,
                                     state: 0, weapon: 107, flyby: d.weapons.flyby(107), bounces: 0,
-                                    // Guard-side deviation: the glass pass stays unmodelled (see the
-                                    // close-combat spawn in drone.rs).
-                                    glass_pass: false,
+                                    // The flight's glass pass from the record [M Bullet_update
+                                    // 0x12e7b0 disasm 0x12f048-0x12f058] — the player-side law.
+                                    glass_pass: u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0,
                                     ..crate::bullet::Bullet::TAIL
                                 };
                                 b.init_fuse(w);
