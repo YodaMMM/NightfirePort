@@ -3270,7 +3270,7 @@ impl Sim {
                     .map(|x| ([x.pos[0], x.pos[1] + 0.4, x.pos[2]], [x.pos[0], x.pos[1] - 0.6, x.pos[2]], 0.4f32))
                     .collect()
             };
-            let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, level_bump_5fb: false, straddle: &straddle_cells, bot_capsules: &bot_capsules };
+            let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, straddle: &straddle_cells, bot_capsules: &bot_capsules };
             // The third-icon context [M ThirdIcon_Update 0x196e80 + Player_CollisionHandler 0x1949a8:22]:
             // the tick starts with +0x95F = 0xFF (none), then every ENABLED icon (its param-1 channel on,
             // or param 1 == 0 = always [M ThirdIcon_Create 0x197070:27-32]) whose straddle-cel set holds
@@ -14055,7 +14055,7 @@ impl Sim {
             }
             let ctx = nf_game::player::LadderCtx {
                 ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims),
-                water, sink: input.crouch, creepwalls: &self.creepwalls, level_bump_5fb: false,
+                water, sink: input.crouch, creepwalls: &self.creepwalls,
                 straddle: &[], // MP remotes carry no per-body cel link yet — no scoping.
                 bot_capsules: &[], // the remotes are bodies, not bots — no actor-actor push.
             };

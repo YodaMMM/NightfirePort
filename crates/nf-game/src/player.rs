@@ -192,11 +192,6 @@ pub struct LadderCtx<'a> {
     pub sink: bool,
     /// The level's creepwall objects (class 0x2B '+', placement 0x3F), in placement order.
     pub creepwalls: &'a [crate::creepwall::CreepWall],
-    /// The head-bump sound gate: `Player_HandleJump` 0x1916b0:196-198 picks the metal clang 0x5FB
-    /// when `level_tag+0x50` (a byte the port's loader does not read) is 0xD/0xE, else the flesh
-    /// thud 0xA3. The Sim sets it per level once the byte is identified (live check in
-    /// docs/systems/sound-coverage.md); default false = the 0xA3 arm.
-    pub level_bump_5fb: bool,
     /// The cels Bond's pick capsule straddles this tick — `Collide_StraddleCels` 0x1eac98's BFS from
     /// the HITTEST home cel through the capsule-touching portals [M Collide_Pick 0x1eb320:125-134
     /// admits a candidate object only from a straddled cel's chain]. The Sim fills it from
@@ -214,7 +209,7 @@ pub struct LadderCtx<'a> {
 }
 
 impl Default for LadderCtx<'_> {
-    fn default() -> Self { LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[], bot_capsules: &[] } }
+    fn default() -> Self { LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], straddle: &[], bot_capsules: &[] } }
 }
 
 /// The current substate's pick arm — the HITTEST the game builds for `Player_Collision` 0x194df0's
@@ -372,6 +367,11 @@ pub struct Bond {
     pub fall_timer: u32,
     /// AnimObj flag 0x20: something touched above.
     pub head_bump: bool,
+    /// head-bump-surface-sound: the raw surface byte of the ceiling contact that pushed down
+    /// (the walk tick's collision; 0 = none). `Player_HandleJump` 0x1916b0:194-198 plays the
+    /// bump sound from the contact byte: `- 0xd < 2` (0xD/0xE, the two WATERs — the pond
+    /// undersides) → 0x5FB, else 0xA3.
+    pub bump_surface: u8,
     /// Damage from the last landing (`Player_HandlePain` type 6), for the caller to apply.
     pub fall_damage: Option<f32>,
     /// `obj+0xF6`: the substate id ([M Player_Update 0x193600 dispatch]; 0 walk, 1 climb, 3 swim here).
@@ -556,7 +556,7 @@ impl Bond {
     /// Standing at `pos` (`Player_StandAtNewPosition`: the floor point + 1.1) facing `yaw`.
     pub fn new(pos: V3, yaw: f32) -> Bond {
         Bond { pos, yaw, pitch: 0.0, local: [0.0; 2], vel: [0.0; 3], grounded: true, floor_ny: 1.0, grounded_history: 8, jump: 0, land_delay: 0,
-            crouched: false, lockout: 0, cc: ROOT_HEIGHT, crouch_drop: 0.0, eye: EYE, fall_timer: 0, head_bump: false, fall_damage: None,
+            crouched: false, lockout: 0, cc: ROOT_HEIGHT, crouch_drop: 0.0, eye: EYE, fall_timer: 0, head_bump: false, bump_surface: 0, fall_damage: None,
             substate: SS_WALK, ladder: None, climb_top: 0.0, climb_bottom: 0.0, regrab: 0, mode: 0, saved_sub: 0, air: 100.0, drown_damage: None, underwater: false,
             water_fade: 0.0, air_tick: 0, push_fwd: 0.0, wire: None, auto_drop: 0.0, wire_anim: 0, wire_anim_time: 0.0, wire_anim_rate: 1.0, cam_mode: 0, fall_speed: 0.0, grapple: None,
             icon_ctx: 0xff,
@@ -1082,7 +1082,7 @@ impl Bond {
         // OWN list (`*(cel + 0x18)`) — walls hanging on other rooms' cels never block. `self.cel`
         // is that relink (obj+0x20; the Sim refreshes it off the position each tick, the
         // `build_LinkToRoom` 0x1c9680 order); `None` falls back to the flat world.
-        let (push, walkable) = world.capsule_push_scoped(self.cel, a, b, CLIMB_RADIUS, false, self.pick_ref);
+        let (push, walkable, _) = world.capsule_push_scoped(self.cel, a, b, CLIMB_RADIUS, false, self.pick_ref);
         // The pick-contact bit is measured but NOT gated into `grounded` (hatch-crouch-0c4):
         // `Player_FeetOnPoint` 0x194188 registers the stand-on contact on the ridden object's
         // `obj+0xD0` list through `Coll_AddHitToList` 0x1ede68 (dist forced 1.0, normal =
@@ -1862,7 +1862,7 @@ self.local = [vs / k, vf / k];
         // (Intersect_CylGeom 0x109da0's `dot(q − A, B − A) > 0` gate + the 02 fin wedge the PS2
         // rounds [L]); the port's walk/NPC paths still depend on the unguarded through-push
         // (escort_follow_07000001_live regressed with it on) — a known port divergence.
-        let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS, swimming, self.pick_ref);
+        let (mut push, mut walkable, mut bump_mat) = world.capsule_push_scoped(self.cel, a, b, RADIUS, swimming, self.pick_ref);
         // walk-move-clip EXPERIMENT (`NF_WALK_CLIP=1`): the game's move-clip walk model — the
         // tick's move clipped at the capsule's face contacts, the radial push tail dead (see
         // capsule_tri_clip). Replaces the push displacement AND the pick_ref feed (the game's
@@ -1906,14 +1906,18 @@ self.local = [vs / k, vf / k];
         // wall stays out of it.
         let mut pick = world.capsule_pick_contact_scoped(self.cel, a, b, RADIUS, self.pick_ref[1], self.pick_ref);
         if floor.is_none() {
-            let (fp, fw) = if walk_clip() {
+            let (fp, fw, fm) = if walk_clip() {
                 let move_v = [self.pos[0] - pre_move_pos[0], self.pos[1] - pre_move_pos[1], self.pos[2] - pre_move_pos[2]];
-                world.capsule_clip(a, b, RADIUS, swimming, move_v)
+                // The clip experiment carries no ceiling material (its contact body is
+                // capsule_tri_clip) — the bump stays on the 0xA3 arm under NF_WALK_CLIP.
+                let (cp, cw) = world.capsule_clip(a, b, RADIUS, swimming, move_v);
+                (cp, cw, 0u8)
             } else {
                 world.capsule_push(a, b, RADIUS, swimming, self.pick_ref)
             };
             push = if walk_ghost() && !walk_clip() { [0.0; 3] } else { fp };
             walkable = fw;
+            bump_mat = fm;
             pick = world.capsule_pick_contact(a, b, RADIUS, self.pick_ref[1], self.pick_ref);
             floor = world.segment_hit(self.pos, to);
         }
@@ -1974,6 +1978,11 @@ self.local = [vs / k, vf / k];
             _ => 1.0,
         };
         self.head_bump = push[1] < -1e-4;
+        // head-bump-surface-sound: the ceiling contact's raw surface byte rides the downward push
+        // (capsule_push_scoped's third return; 0 when nothing pushed down). `Player_HandleJump`
+        // 0x1916b0:194-198 plays from the contact byte `- 0xd < 2` — 0xD/0xE (the two WATERs) →
+        // 0x5FB, else 0xA3.
+        if push[1] < -1e-4 { self.bump_surface = bump_mat; }
         // The DeltaP add-back [M Collide_Intersect 0x1ebaa8:353-373]: every applied push
         // accumulates into HITTEST+0x50 (+0x10 feeds the handler's obj+0x30 add at
         // 0x1949a8:136-140 — the port's `pos += push` — and +0x50 feeds the pick bit's dot2).
@@ -2043,9 +2052,10 @@ self.local = [vs / k, vf / k];
         if !settle_held && self.jump == 1 && self.head_bump {
             self.vel = [0.0; 3];
             self.jump = 2;
-            // [M Player_HandleJump 0x1916b0:195-198]: the bump zeroes the velocity and plays
-            // 0x5FB on levels whose `level_tag+0x50` byte is 0xD/0xE, else 0xA3.
-            self.sfx_out.push((if ctx.level_bump_5fb { 0x5fb } else { 0xa3 }, self.pos));
+            // [M Player_HandleJump 0x1916b0:195-198]: the bump zeroes the velocity and plays from
+            // the contact's surface byte — `byte - 0xd < 2` (0xD/0xE, the two WATERs
+            // [M docs/fields/hitdata-spawner-ally.md +0x50]) → 0x5FB, else 0xA3.
+            self.sfx_out.push((if self.bump_surface.wrapping_sub(0xd) < 2 { 0x5fb } else { 0xa3 }, self.pos));
         }
         self.land_delay = self.land_delay.saturating_sub(1);
         if !settle_held && self.jump != 0 && self.land_delay == 0 && self.grounded && self.vel[1] <= 0.0 { self.vel = [0.0; 3]; self.jump = 0; }
@@ -2742,7 +2752,7 @@ mod tests {
     fn the_ladder_grab_gate_excludes_only_climb_and_grapple() {
         let world = CollisionWorld::from_triangles(Vec::new());
         let lad = Ladder::simple([10.0, 3.0, 20.0], 2.0, 0.0);
-        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[], bot_capsules: &[] };
+        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], straddle: &[], bot_capsules: &[] };
         // SWIM grabs: one tick in the water context attaches (pre-fix it stayed SS_SWIM).
         let mut b = Bond::new([10.0, 3.0, 20.5], lad.yaw + std::f32::consts::PI);
         b.substate = SS_SWIM;
@@ -2775,7 +2785,7 @@ mod tests {
         let grab = |straddle: &[usize]| {
             let mut b = Bond::new([10.0, 3.0, 20.5], lad.yaw + std::f32::consts::PI);
             b.substate = SS_SWIM;
-            b.tick_ctx(&world, &LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle, bot_capsules: &[] }, &Input { forward: 1.0, ..Default::default() });
+            b.tick_ctx(&world, &LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], straddle, bot_capsules: &[] }, &Input { forward: 1.0, ..Default::default() });
             b.substate
         };
         // The ladder's cel NOT in the straddle set: no grab (the pick never admitted it).
@@ -2788,7 +2798,7 @@ mod tests {
         unlinked.cell = None;
         let mut b2 = Bond::new([10.0, 3.0, 20.5], unlinked.yaw + std::f32::consts::PI);
         b2.substate = SS_SWIM;
-        b2.tick_ctx(&world, &LadderCtx { ladders: &[unlinked], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[3], bot_capsules: &[] }, &Input { forward: 1.0, ..Default::default() });
+        b2.tick_ctx(&world, &LadderCtx { ladders: &[unlinked], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], straddle: &[3], bot_capsules: &[] }, &Input { forward: 1.0, ..Default::default() });
         assert_eq!(b2.substate, SS_SWIM, "an unlinked ladder (cell None) must not grab while scoping is active");
         // The empty set scopes nothing (no cel graph): the grab goes through.
         assert_eq!(grab(&[]), SS_CLIMB, "the no-graph path must keep the unscoped pick");
@@ -2802,7 +2812,7 @@ mod tests {
     #[test]
     fn swim_moves_along_the_look_direction_and_the_surface_clamps() {
         let world = CollisionWorld::from_triangles(Vec::new());
-        let ctx = LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: Some(3.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[], bot_capsules: &[] };
+        let ctx = LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: Some(3.0), sink: false, creepwalls: &[], straddle: &[], bot_capsules: &[] };
         let mut b = Bond::new([0.0, 2.7, 0.0], 0.0); // below surface − 0.3? 2.7 < 2.7 is false — at the ceiling
         b.substate = SS_SWIM;
         // Look down-ish (pitch −0.5: dir = (0, −sin π/4, cos π/4)), swim forward: the position must
@@ -2862,7 +2872,7 @@ mod tests {
     fn climb_look_turns_within_the_ladder_window_and_pitch_is_free() {
         let world = CollisionWorld::from_triangles(Vec::new());
         let lad = Ladder::simple([10.0, 3.0, 20.0], 2.0, 0.0);
-        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[], bot_capsules: &[] };
+        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], straddle: &[], bot_capsules: &[] };
         let mut b = Bond::new([10.0, 3.0, 20.0 + 0.5], lad.yaw + std::f32::consts::PI);
         b.substate = SS_CLIMB;
         b.ladder = Some(0);

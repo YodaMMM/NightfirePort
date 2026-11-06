@@ -655,13 +655,11 @@ fn cross(a: V3, b: V3) -> V3 { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * 
 ///   own ride grounds on (the ray tolerance is exceeded at the skin-rest equilibrium on that
 ///   steep a face, so the pick arm must fire); confirming the gate is an
 ///   open live check.
-fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, top_guard: bool, ref_v: V3) -> bool {
+fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, top_guard: bool, ref_v: V3, bump_mat: &mut u8) -> bool {
     let tl = [0, 1, 2].map(|k| t[0][k].min(t[1][k]).min(t[2][k]));
     let th = [0, 1, 2].map(|k| t[0][k].max(t[1][k]).max(t[2][k]));
     let (sl, sh) = ([0, 1, 2].map(|k| a[k].min(b[k]) - grow), [0, 1, 2].map(|k| a[k].max(b[k]) + grow));
     if (0..3).any(|k| th[k] < sl[k] || tl[k] > sh[k]) { return false; }
-    // Water surfaces never collide the player (the cel scoping — see capsule_push).
-    if mat & 0x3f == 0xE { return false; }
     // NO mat-0x40 (glass) skip here. The body query never filter-rejects glass:
     // [M Collide_Filter 0x1ed888:7-9] rejects `(surf & 0x40) && (flags & 0x800)` — but the flags
     // word is HITTEST+0x98, and Player_Collision 0x194df0:88 writes it to **0** for every
@@ -683,6 +681,15 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     let nl = dot(n, n).sqrt();
     if nl < 1e-12 { return false; }
     let n = [n[0] / nl, n[1] / nl, n[2] / nl];
+    // Water surfaces: the SWIM path (top_guard) skips every 0xE face (the surface clamp owns the
+    // interface), and the up-facing/vertical water planes stay pass-through for everyone (the
+    // pond tops must not block the wade-in — the pre-head-bump-surface-sound rule, kept). A
+    // DOWN-facing water plane collides the walk/NPC capsule: the game's Intersect_CylGeom
+    // 0x109da0 tests every triangle whatever the material (the byte only picks the effects
+    // [M docs/fields/hitdata-spawner-ally.md +0x50]), and the 07000002 culvert's pond underside
+    // (raw 0xE at y 4.34 over a dry 0xA floor) is the real ceiling Bond jump-bumps for the
+    // 0x5FB head-bump arm [M Player_HandleJump 0x1916b0:194-198].
+    if mat & 0x3f == 0xE && (top_guard || n[1] > -0.7) { return false; }
     // The game's head-on cull [M Intersect_CylGeom 0x109da0:302-322, inside the |n·d| > 0.0002
     // branch]: the 0.999 compare is unit-scale, and the spine is NORMALIZED before the triangle
     // loop [M the Vec_Normalise 0x1e3000 call at 0x109f74, immediately before the per-box walk;
@@ -804,6 +811,7 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
         (spine_dir, r - dist)
     };
     let push = [dir[0] * mag, dir[1] * mag, dir[2] * mag];
+    if push[1] < 0.0 { *bump_mat = mat; } // the downward push = the ceiling contact's surface byte
     if caps_log() {
         eprintln!("[cap] PUSH cent=({:.3},{:.3},{:.3}) q=({:.3},{:.3},{:.3}) p=({:.3},{:.3},{:.3}) d={dist:.4} push=({:.4},{:.4},{:.4}) n=({:.3},{:.3},{:.3}) edge={on_edge} a=({:.3},{:.3},{:.3}) b=({:.3},{:.3},{:.3})",
             (t[0][0]+t[1][0]+t[2][0])/3.0, (t[0][1]+t[1][1]+t[2][1])/3.0, (t[0][2]+t[1][2]+t[2][2])/3.0,
@@ -1538,7 +1546,12 @@ impl CollisionWorld {
 
     /// The actor capsule against the straddle cells' static geometry (`capsule_push` over the cel
     /// scope; falls back to the flat world when there is no scope or the query's cell is unmapped).
-    pub fn capsule_push_scoped(&self, cell: Option<usize>, a: V3, b: V3, r: f32, top_guard: bool, ref_v: V3) -> (V3, bool) {
+    /// `capsule_push_scoped`'s third return: the raw surface byte of the last contact whose push
+    /// pointed DOWN (the ceiling contact — the head-bump sound's material
+    /// [M `Player_HandleJump` 0x1916b0:194-198 reads the contact byte `- 0xd < 2`]), 0 when no
+    /// downward contact happened (the game's own no-hit sentinel [M `Player_FeetOnPoint`
+    /// 0x194188:104 drops a material-0 hit]).
+    pub fn capsule_push_scoped(&self, cell: Option<usize>, a: V3, b: V3, r: f32, top_guard: bool, ref_v: V3) -> (V3, bool, u8) {
         let Some(cell) = cell else { return self.capsule_push(a, b, r, top_guard, ref_v) };
         let Some(runs) = self.scoped_runs(cell, &mut Self::capsule_portal_hit(a, b, r)) else { return self.capsule_push(a, b, r, top_guard, ref_v) };
         let dynamic = self.dynamic.read().unwrap();
@@ -1548,26 +1561,27 @@ impl CollisionWorld {
         let mut total = [0f32; 3];
         let mut walkable = false;
         let mut pick = false;
+        let mut bump_mat = 0u8;
         let grow = r + 0.1;
         let mut lo = [0f32; 3];
         let mut hi = [0f32; 3];
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         let stat = &self.stat;
-        let mut test = |t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, total: &mut V3, walkable: &mut bool, pick: &mut bool| {
-                capsule_tri_contact(t, mat, a, b, r, grow, total, walkable, pick, top_guard, ref_v);
+        let mut test = |t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, total: &mut V3, walkable: &mut bool, pick: &mut bool, bump_mat: &mut u8| {
+                capsule_tri_contact(t, mat, a, b, r, grow, total, walkable, pick, top_guard, ref_v, bump_mat);
         };
         for r in runs {
             let o = &stat.objects[r as usize];
             if !(0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) {
-                for k in o.tris.clone() { test(&stat.tris[k], stat.mats[k], &mut a, &mut b, &mut total, &mut walkable, &mut pick); }
+                for k in o.tris.clone() { test(&stat.tris[k], stat.mats[k], &mut a, &mut b, &mut total, &mut walkable, &mut pick, &mut bump_mat); }
             }
         }
         for g in [&dynamic.geo] {
             for o in overlapping(g, lo, hi) {
-                for k in o.tris.clone() { test(&g.tris[k], g.mats[k], &mut a, &mut b, &mut total, &mut walkable, &mut pick); }
+                for k in o.tris.clone() { test(&g.tris[k], g.mats[k], &mut a, &mut b, &mut total, &mut walkable, &mut pick, &mut bump_mat); }
             }
         }
-        (total, walkable)
+        (total, walkable, bump_mat)
     }
 
     /// The static-only, single-cel cylinder push the rigid-body sweep drives:
@@ -1590,10 +1604,11 @@ impl CollisionWorld {
         let mut hi = [0f32; 3];
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         let stat = &self.stat;
+        let mut bm = 0u8;
         for run in runs {
             let o = &stat.objects[run as usize];
             if !(0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) {
-                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v); }
+                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v, &mut bm); }
             }
         }
         total
@@ -1631,15 +1646,16 @@ impl CollisionWorld {
         let mut hi = [0f32; 3];
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         let stat = &self.stat;
+        let mut bm = 0u8;
         for run in runs {
             let o = &stat.objects[run as usize];
             if !(0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) {
-                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v); }
+                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v, &mut bm); }
             }
         }
         for g in [&dynamic.geo] {
             for o in overlapping(g, lo, hi) {
-                for k in o.tris.clone() { capsule_tri_contact(&g.tris[k], g.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v); }
+                for k in o.tris.clone() { capsule_tri_contact(&g.tris[k], g.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v, &mut bm); }
             }
         }
         // dot2 pass-global [M 0x10a66c-0x10a6a0; the collapse argument in the doc above]: the
@@ -1659,7 +1675,8 @@ impl CollisionWorld {
         let mut hi = [0f32; 3];
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         self.near_actor(lo, hi, |t, mat| {
-            capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v);
+            let mut bm = 0u8;
+            capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v, &mut bm);
         });
         pick && pick_ref_y < b_pre_y
     }
@@ -2438,19 +2455,20 @@ impl CollisionWorld {
     /// is jumped through from below; the BOTTOM half is solid. The old stand-in's wider
     /// 0.70-0.763 band (≈45-77° slopes above the capsule) is gone — those faces push, as the
     /// game's non-head-on path tests them.
-    pub fn capsule_push(&self, a: V3, b: V3, r: f32, top_guard: bool, ref_v: V3) -> (V3, bool) {
+    pub fn capsule_push(&self, a: V3, b: V3, r: f32, top_guard: bool, ref_v: V3) -> (V3, bool, u8) {
         let (mut a, mut b) = (a, b);
         let mut total = [0f32; 3];
         let mut walkable = false;
         let mut pick = false;
+        let mut bump_mat = 0u8;
         let grow = r + 0.1;
         let mut lo = [0f32; 3];
         let mut hi = [0f32; 3];
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         self.near_actor(lo, hi, |t, mat| {
-                capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, top_guard, ref_v);
+                capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, top_guard, ref_v, &mut bump_mat);
         });
-        (total, walkable)
+        (total, walkable, bump_mat)
     }
 
     /// The move-clip walk query (`NF_WALK_CLIP=1` — see `capsule_tri_clip`): the actor capsule
@@ -2812,9 +2830,9 @@ mod tests {
         let w = mk(graph.clone(), scope_cells.clone());
         // The capsule stands in cell 0, 1 unit west of the wall: the flat world pushes it out; the
         // scoped one does not (cell 1 is portal-unreachable).
-        let (flat, _) = w.capsule_push([1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
+        let (flat, _, _) = w.capsule_push([1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert!(flat[0] < -0.1, "flat: pushed west of the wall {flat:?}");
-        let (scoped, _) = w.capsule_push_scoped(Some(0), [1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
+        let (scoped, _, _) = w.capsule_push_scoped(Some(0), [1.6, 1.0, 0.0], [1.6, 1.2, 0.0], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
         assert_eq!(scoped, [0.0; 3], "scoped: the portal-unreachable wall is not tested");
         // The floor ray behaves the same way: a ray THROUGH the wall plane.
         assert!(w.segment_hit([1.5, 1.0, 0.0], [2.5, 1.0, 0.0]).is_some(), "flat segment_hit still sees the wall");
