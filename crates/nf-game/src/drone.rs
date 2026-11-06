@@ -20992,7 +20992,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             if let Some(ev) = b.update(d.world, &vol, viewer, &mut self.rng) {
                 match ev {
-                    crate::bullet::BulletEvent::World(p) => {
+                    crate::bullet::BulletEvent::World { at: p, pass: ref pass_v } => {
+                        // The pass contacts' `Effect_Create` bursts FIRST, in the sorted walk's
+                        // order: the handler passes each pass-flagged contact with its material's
+                        // emitter burst + `Effect_Bullet`'s gas and decal + the +0x14 impact sound,
+                        // re-arms the flight (state 1) and moves to the next contact — NO ricochet
+                        // (prob id 0 → `Effect_RicochetProb` 0x1cf290 returns before its draw) and
+                        // NO damage [M 0x12cff0 `bne s4,zero,0012d020`, the tail `+0xf4 = 1`]. The
+                        // 02 watersurfaces (glist 0x241, cel+0x94 bit 0x40 [D]) are exactly these:
+                        // a round into the shallows splashes at the surface and stops at the floor
+                        // below. bullet-pass-water.
+                        for (pp, pn, pm, phost) in pass_v.iter().copied() {
+                            let flags70_p = d.weapons.records.get(b.weapon as usize)
+                                .map_or(0u32, |r| u32::from_le_bytes(r[0x70..0x74].try_into().unwrap()));
+                            if flags70_p & 2 != 0 {
+                                if let Some(s) = d.surfaces.as_ref() {
+                                    if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, pm) { self.audio.play3d(id, pp, None); }
+                                }
+                            }
+                            self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, pp, pn, pm, b.dir, flags70_p, b.bounces, false, 0, phost);
+                        }
                         // The satchel charge LANDS instead of dying [M Bullet_CollisionHandler
                         // 0x12ce80 @0x12d1fc]: family +0x02 == 0x3b, the `+0x70 & 0x100` arm,
                         // no struck object → obj+0xF4 = 3 (landed), the rest clank

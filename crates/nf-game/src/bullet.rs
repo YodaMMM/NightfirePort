@@ -144,10 +144,22 @@ impl Bullet {
     }
 }
 
+/// A pass contact's effect site in world space: position, front-face normal, the RAW surface
+/// byte, the decal host — `Bullet_CollisionHandler` 0x12ce80's per-contact `Effect_Create`
+/// inputs. bullet-pass-water.
+pub type PassSite = (V3, V3, u8, crate::world::HitHost);
+
 /// What a bullet did this tick.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum BulletEvent {
-    World(V3),
+    /// The round stopped on the world. `pass` = the pass-flagged contacts the tick's segment held
+    /// BEFORE the stop, in distance order — the water surface a round splashes through, the
+    /// foliage leaves — `Bullet_CollisionHandler` 0x12ce80's sorted walk passes each with its
+    /// `Effect_Create` treatment (the material's emitter burst + `Effect_Bullet`'s gas and decal,
+    /// NO ricochet and NO damage) and stops at the first solid contact [M 0x12cff0 `bne s4,zero,
+    /// 0012d020` skips the state-2 store; the loop tail `*(iVar19 + 0xf4) = 1` re-arms the
+    /// flight]. bullet-pass-water.
+    World { at: V3, pass: Vec<PassSite> },
     Player { damage: f32, at: V3 },
     /// `Bullet_DoTrails` fly-by (sound id 0x1dc): a bullet whizzed past the viewer. Played at the closest point on
     /// the bullet's line to the camera, only for weapons with `+0x6C & 0x40000`, in single player, when the bullet's
@@ -230,12 +242,15 @@ impl Bullet {
         if self.travelled > self.range { step -= self.travelled - self.range; }
         let l = step.max(1.0);
         let end = [self.pos[0] + self.dir[0] * l, self.pos[1] + self.dir[1] * l, self.pos[2] + self.dir[2] * l];
-        // The flight trace drops the pass-flagged hits (segment_bullet) — the same rule the
-        // player-bullet flight walks [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f058 arms the
-        // HITTEST pick every flying tick (+0x94 = 0x101/0x201, +0x9a = the surface mask), and
-        // Collide_Update 0x1ea398:216-229 walks the sorted contact list past every pass-flagged
-        // hit (glist node 0x40 / surface byte 0x40, Collide_Intersect disasm 0x1ebf78-0x1ebf80)
-        // to the first solid one]. Drone-fired rounds run the same Bullet_update.
+        // The flight trace keeps the pass-flagged hits and reports them alongside the stop: the
+        // game's flying round runs the pick every tick with HITTEST+0x98 = 0 and the intersect
+        // mask +0x9a = 0x20 [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f058] — no intersect
+        // drop at all — and Collide_Update 0x1ea398 / Bullet_CollisionHandler 0x12ce80 walk the
+        // sorted contact list, passing every pass-flagged hit (the cel word's bit 0x40 — the
+        // 02 watersurfaces' glist 0x241 [D] — the byte's 0x40/0x80, or the glass rule) WITH its
+        // Effect_Create burst and stopping at the first solid one [M 0x12cff0]. The old port
+        // swallowed them in the query — a bullet into the 02 shallows never splashed.
+        // Drone-fired rounds run the same Bullet_update.
         // The candidate set is the game's cel-scoped pick, not the whole world: the bullet is
         // cel-linked at spawn (obj+0x20 = build_LinkToRoom 0x1c9680 [M Bullet_init disasm
         // 0x12c8d0-0x12c8d8]) and the flight query seeds Collide_RayIntersect with that cel,
@@ -244,14 +259,17 @@ impl Bullet {
         // a candidate [M Collide_Pick 0x1eb320:125 → Collide_StraddleCels 0x1eac98]. The port
         // re-derives the cel with build_FindCel 0x1c8cb0 each tick, exactly like the PlayerBullet
         // flight next door; the no-scope fallback is the flat ray.
-        let tw = world.segment_flight_scoped(world.find_cel(self.pos), self.pos, end, self.glass_pass);
+        let (tw, tw_pass) = world.segment_flight_contacts_scoped(world.find_cel(self.pos), self.pos, end, self.glass_pass);
         let tp = segment_cylinder(self.pos, end, player);
         let at = |t: f32| [self.pos[0] + (end[0] - self.pos[0]) * t, self.pos[1] + (end[1] - self.pos[1]) * t, self.pos[2] + (end[2] - self.pos[2]) * t];
         // CompHitData 0x1d33c0 [M] — QuickSort comparator id 2 (Collide_Update 0x1ea398 / Collide_RayIntersect 0x1ec690 / Collide_SphereIntersect 0x1ec940 / Collide_CylinderIntersect 0x1ecc00 / Collide_FilterBullets 0x1ece30 sort their hit lists by the f32 at HITDATA+0xc, ascending); the port keeps no hit list — the nearest-of comparison below replaces the sort.
         let ev = match (tw, tp) {
             (Some(w), Some(p)) if p < w => Some(BulletEvent::Player { damage: self.damage, at: at(p) }),
             (_, Some(p)) if tw.is_none() => Some(BulletEvent::Player { damage: self.damage, at: at(p) }),
-            (Some(w), _) => Some(BulletEvent::World(at(w))),
+            (Some(w), _) => Some(BulletEvent::World {
+                at: at(w),
+                pass: tw_pass.into_iter().map(|h| (at(h.t), h.normal, h.mat, h.host)).collect(),
+            }),
             _ => None,
         };
         if ev.is_some() { self.state = 2; return ev; }
