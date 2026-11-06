@@ -11,3 +11,6 @@ Measured with Bond teleported, no input, same spots in both (god mode in the gam
 Find what the game does for an object outside every cel, and for the push at x 16.5. Start from `control_handle_cel_change` 0x133288 and `build_LinkToRoom` 0x1c9680 (the unlinked retry), `Player_StandAtNewPosition` 0x190d88, and the collision the port misses at x 16: is it geometry the port's cel scoping drops once `bond.cel` is None? Cite it.
 
 A teleport is not a walk: also reproduce it with real input off the moat edge in the port, and say whether the game's recovery would run there. Fix the port with a test on the real level, proved red on the old code. Keep the change to the out-of-cel case: broad collision changes failed the suite on `s/level-14-float-on-master`. Gate on walkreal 03, the walkreal set, and `mp_perf_16_live`.
+
+---
+claimed-by: sandbox7 at 2026-11-06T17:24Z
