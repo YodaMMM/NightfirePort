@@ -9,3 +9,7 @@ Test-side only. Keep the [L] 08 pins and the 0x30000000 fix. Finish with the aim
 
 ---
 claimed-by: sandbox3 at 2026-11-06T15:31Z
+
+---
+## Report (done, 2026-11-06T16:46Z)
+
