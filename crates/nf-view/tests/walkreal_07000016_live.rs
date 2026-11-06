@@ -1811,7 +1811,14 @@ fn the_chasers_punch_lands_the_record_damage() {
         // The head tap (×5 [M NDrone2_HitDamage's part-5]) keeps the pit shooters' clears inside
         // their hp-10 budgets and the window's stands short.
         w.prefer_head = true;
-        let (chaser, t0) = walk_to_the_chaser_fight(&mut w, false, false);
+        // gas-draws-8: the merged stream's plain route bleeds out before the window (the
+        // measured 1843 run: 86.8 of 100 through the corridor from the gallery/ring pair alone —
+        // hits at 66-90 u the reactive fights never answer — Bond at the window with ~9, the
+        // chaser shot out of the punch window by the counter-fire loop). The defeat walk's FULL
+        // economy (the ring legs' level clears, the pit stand) is what held this route on the
+        // gas stream (the defeat walk: green in the same binary); the punch pin's only stake is
+        // the armour-0 window (station_armour stays false — the #596 straps stay on the rack).
+        let (chaser, t0) = walk_to_the_chaser_fight(&mut w, true, false);
         // The route's return-fire fights spend bolts — the arrival SET is the chain's [M
         // 0x1a7ef8], but the gun in hand may be dry; the fight continues on the carried P2K
         // (rounds pinned [D the chain save]). The allowance sister pins the arrival's held gun.
