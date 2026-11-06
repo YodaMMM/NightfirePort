@@ -90,6 +90,22 @@ fn with_agent_path_clear<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+thread_local! {
+    /// `with_trench_stand`'s switch: the 00 Agent trench fight runs on this test's thread only
+    /// (libtest isolates threads); every other difficulty's call site is untouched by construction.
+    static TRENCH_STAND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `with_trench_stand`: the 00 Agent trench guard fight answers with the return-fire stand
+/// (kill_the_trench_guard_270's d3 branch) instead of the torso-gated loose taps.
+fn with_trench_stand<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { TRENCH_STAND.with(|c| c.set(false)); } }
+    TRENCH_STAND.with(|c| c.set(true));
+    let _reset = Reset;
+    f()
+}
+
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 /// The wire object's VISIBLE geometry (copied from walk_07000014_live's helpers): its local
@@ -996,7 +1012,7 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 #[test]
 #[ignore = "00 Agent: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
-    walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(3)));
+    walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| with_trench_stand(|| walk_the_infiltration_to_the_delta_exit_at(3))));
 }
 
 fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
@@ -1781,6 +1797,81 @@ fn kill_the_trench_guard_270(w: &mut Walker) {
     let di = w.scene.sim.as_ref().unwrap().drones.list.iter()
         .position(|d| d.placement == 270).expect("the trench guard placement #270 exists");
     assert!(w.switch_to_armed("the trench guard's kill"), "a carried gun has rounds");
+    if TRENCH_STAND.with(|c| c.get()) {
+        // The 00 Agent stand (2026-11-06 measured run): the torso-gated loose taps LOST the race
+        // — the guard closed to d 1.2 before the first tap and 13 of his rounds landed for 65.0
+        // (every round hits inside 3.0 [M DoBulletAccuracy 0x179740:113-115]; the P2K's clip 3
+        // spare 9 could not out-race his bursts — the dry walk died at tick 4587 at the corridor
+        // fetch). The stand is the walk's own proven fight: the exposed-part aim takes the clear
+        // HEAD box first (part 5 within 6 u — the head-hunt wrap is on), the back_off 4.0 band is
+        // held by the stand's own backpedal, and the reload runs the real R path. Real input only.
+        assert!(w.switch_to_gun("the trench guard's kill"), "a gun is in hand");
+        let killed = w.stand_and_fire(di, 2400);
+        for _ in 0..90 {
+            let p = w.scene.sim.as_ref().unwrap().bond.pitch;
+            if p.abs() < 0.01 { break; }
+            w.tick(nf_game::player::Input { look: (-p).clamp(-0.08, 0.08), ..Default::default() }, false);
+        }
+        eprintln!("[014] the trench stand: drone #{di} killed {killed}, health {:.1}",
+            w.scene.sim.as_ref().unwrap().drones.health.health);
+        // His gun lies at his feet (the death spot, ~3 u off the crossing landing, the same
+        // trench floor): a player scoops the drop before walking on — it is the whole d3 ammo
+        // budget (the measured run's P2K 12 rounds were gone by tick 3353 and the dry fights
+        // could not drop the landing's AIM guards, who then chewed 85.0 down to 0 by tick 4672).
+        // The bounded test-local loot pass (clear_hostiles' pattern, the backpedal widened to
+        // 9 u): the shared lane resupply's 0.5 floor band EXCLUDED this drop on the measured
+        // run (resupply done (false) with the drop untouched) — the stand's own back_off 4.0
+        // backpedal carries Bond off the drop's floor band before the fetch. Real input only.
+        if killed {
+            let target = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                sim.drones.pickups.iter().filter(|p| !p.gone)
+                    .filter(|p| (p.m[3][1] - bp[1]).abs() < 1.0)
+                    .map(|p| ([p.m[3][0], p.m[3][1], p.m[3][2]], p.weapon))
+                    .min_by(|a, b| walker::dxz(a.0, bp).total_cmp(&walker::dxz(b.0, bp)))
+                    .filter(|(t, _)| walker::dxz(*t, bp) < 9.0)
+            };
+            match target {
+                Some((t, wpid)) => {
+                    eprintln!("[014] the trench drop at ({:.2},{:.2},{:.2}) weapon {:#x}, bond {:?} clip {} spare {}",
+                        t[0], t[1], t[2], wpid, w.scene.sim.as_ref().unwrap().bond.pos,
+                        w.scene.sim.as_ref().unwrap().gun.clip, w.scene.sim.as_ref().unwrap().gun.spare);
+                    // The 0.6 arrive is the lane resupply's own law: the take test is the pickup's
+                    // sphere within bounds.radius + 1.1 of player+0x30 [M 0x18e148:203-214] and a
+                    // small-model gun drop stops taking at ≈ 1.4 — the 1.2 arrive stopped 1.17
+                    // short on the measured run and the take never fired (clip 2 spare 9 →
+                    // unchanged). Walk BOND ONTO the drop.
+                    w.walk_nav_to(t, "the trench guard's drop fetch", 0.6);
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    eprintln!("[014] the trench drop fetched: clip {} spare {} at {:?}",
+                        sim.gun.clip, sim.gun.spare, sim.bond.pos);
+                    // Draw the taken gun NOW (the player's own wheel press): the fights'
+                    // switch_to_gun returns true while the P2K still holds rounds and never
+                    // cycles to the richer taken weapon — the measured run fought the pads'
+                    // 15 return-fire fights on the drying P2K ("killed false" ×15) while the
+                    // taken SMG's 11 rounds sat owned in the inventory. The direct switch_to
+                    // press is the GADGET draw (the crossing's 0x50, the tripbomb's 0x3a) —
+                    // the measured run's 40 held presses left gun 0x11 in hand — so this is
+                    // the wheel: the same weapon_cycle press + draw wait switch_to_gun runs.
+                    for _ in 0..12 {
+                        if (w.scene.sim.as_ref().unwrap().gun.weapon as u16) == wpid { break; }
+                        w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
+                        for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); } // the holster/draw cycle
+                    }
+                    {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        eprintln!("[014] the wheel stops on {:#x} (want {wpid:#x}): clip {} spare {}",
+                            sim.gun.weapon, sim.gun.clip, sim.gun.spare);
+                    }
+                }
+                None => eprintln!("[014] no trench drop in reach from {:?}",
+                    w.scene.sim.as_ref().unwrap().bond.pos),
+            }
+        }
+        assert!(killed, "the trench guard must fall (the game's hunt block chases the walker down)");
+        return;
+    }
     // The hunter closes — the LOOSE aim gate (the patrolling-target pattern) keeps the taps
     // landing while he sweeps between ticks; the band under 3.0 is his, so the kill must land
     // before he arrives (hp 25 [L the death log]).
