@@ -10,10 +10,25 @@ spots above the panels. Cite the rule for the rocket's midpoint gate or leave it
 Strip the NF_AIMPROBE prints.
 
 Progress log:
-- Sandbox reused (repo, work/, ISO, cargo, nf-queue all present).
-- Branch created from origin/s/aim-snap-final and pushed; aim-snap-objects +
-  panel-model-glist reports read.
-- Studying the aim-ray implementation next.
+- Sandbox reused; branch pushed; both predecessor reports read.
+- The object stage built in aim_snap: sp_bullet_targets candidates, the built-sphere broad
+  phase (0x133070's pair), the 0x201 posed-glist refine; the 0x94 & 0x20 skip confirmed in
+  the decomp (0x1eb320:141-144) and left unmodeled ([S]).
+- Measured: the wire entities' collision glist poses ~0.1-0.3 u behind the 14 stat wall
+  face and the models sphere poses 10+ u off — the wires ride the gfx-bounds frame end to
+  end (the aim candidate and the flight contact); the panels keep the glist path (the
+  walkway pin stays green).
+- The doors-in-aim-ray experiment (world.rs dynamic walk, two runs) measured out and was
+  reverted: the near-door snap breaks the 14 cut and the calibrated 08 lines. The 08
+  shutter snap stays the tip's stat answer pending the obj+0xF0 live check.
+- NF_AIMPROBE stripped everywhere (grep 0).
+- Final: rocket_glass08 3/0, rocket_stop_plane08 4/0, rocket_origin 1/0,
+  solar_panel_hits 1/0 GREEN; fusebox_geometry 0/1 and interactables 9/1 red (the measured
+  chain: the near door leaf stops the laser round — the obj+0xF0 proxy + the glist pivot
+  are the live checks). Walkreals quoted in the report: 08 5/1, 0c 2/1/1 (the real_damage
+  death — my stage vs the tip's unrun sweep, one checkout A/Bs it), 14 6/3/1, 16 13/1/2,
+  1b 15/2/2 (console 1 unchanged).
+- Done 2026-11-06 ~00:15 UTC.
 
 
 ## beam-weapon-panels-1b
