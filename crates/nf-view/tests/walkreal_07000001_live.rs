@@ -438,6 +438,57 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 }
             }
         }
+        // guard-radii-finish (d3 only): a named guard ACROSS the aperture with no part from the
+        // hold line must not take the shoot machinery's flank — on the merged tree the flank nav
+        // opened the hall door and walked Bond INTO the hall, where the 12-hp shotgunner #6
+        // (0x5000036, 0x1c) stood 1.9 u off and the ×2 TooClose band [M Drone_ModBulletDamage
+        // 0x139f50] took 58.0 in 8 hits (the 19098 death, the 2026-11-06 run). The player's line
+        // is the threshold fight: step into the already-open aperture (7.9, 10.6 — the flank
+        // nav's own door-opening proves the line), fight his live position from there (the
+        // structure's jamb ends at the door plane, so his torso clears from the threshold), and
+        // step back south to the hold line on the first wound — his volleys at >3.0 are outside
+        // the forced band. He still dies for the AND; the hold line invariant survives.
+        let (across, alive) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.list[g];
+            (d.pos[2] > 11.2, !d.corpse && d.health > 0.0)
+        };
+        if difficulty >= 3 && across && alive {
+            let mut fought = false;
+            for _ in 0..2 {
+                w.walk_nav_to([7.9, 6.4, 10.6], &format!("hall guard {g} the aperture threshold"), 0.5);
+                let hp0 = w.scene.sim.as_ref().unwrap().drones.health.health;
+                for t in 0..1200u32 {
+                    let (input, trigger, done) = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let d = &sim.drones.list[g];
+                        if d.corpse || d.health <= 0.0 { (Input::default(), false, true) }
+                        else if sim.drones.health.health <= hp0 - 2.0 { (Input::default(), false, true) }
+                        else {
+                            let bp = sim.bond.pos;
+                            let at = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
+                            let desired = (at[0] - bp[0]).atan2(at[2] - bp[2]);
+                            let err = walker::wrap_pi(desired - sim.bond.yaw);
+                            let want_pitch = ((at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop)) / walker::dxz(bp, at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+                            let perr = want_pitch - sim.bond.pitch;
+                            (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() },
+                                err.abs() < 0.02 && perr.abs() < 0.028 && t % 16 == 0, false)
+                        }
+                    };
+                    if done { fought = true; break; }
+                    w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
+                    w.total_ticks += 1;
+                    w.after_step();
+                    if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                }
+                // Back to the hold line: the fight ran inside his 3.0-u forced band for at most
+                // the first wound — the band's own backing rule.
+                w.walk_nav_to([7.2, 6.4, 7.6], &format!("hall guard {g} back off the threshold"), 1.0);
+                let dead = w.scene.sim.as_ref().unwrap().drones.list[g].health <= 0.0;
+                if dead { fought = true; break; }
+            }
+            if fought { continue; }
+        }
         if !w.shoot(g, &format!("hall guard {g}")) {
             if w.resupply("hall ammo") { w.shoot(g, &format!("hall guard {g}")); }
         }
