@@ -517,3 +517,11 @@ damage / Agent / 00 Agent.
   the body never advances (the creep wedge behind the column). The scoped ray does not clear
   this stall (the column is inside the port's Bond-cel chain); the next lead is the 0x5c
   follow wedge (the game's guard re-positions out of it). [ai:5c] diag added under NF_AILOG.
+- (20:15) the battery: walks 09 9/0/0, 16 14/0/2, 06 4/2/1 (the 2 real-damage reds
+  baseline-proven pre-existing by rolling my src back), 01 6/2, 08 5/1, 0b 5/2, 0c 2/1/1,
+  12 2/1, 13 1/2, 14 7/2/1, 15 5/1/1 — every red a real-health/Agent/00agent leg except the
+  two start_corridor reds (6/2, unchanged by my change: the d2 stall = the follow wedge, the
+  d3 owner point = batch-4's finding); mayhew_hold 0/1 and fix_npc_doors 0/1 both
+  baseline-proven pre-existing; enemy_accuracy did not fit the window. No plain walk
+  regressed under the scoped ray.
+- (20:35) report: docs/reports/stream-batch-5.md.
