@@ -317,27 +317,30 @@ fn the_alarm_switch_fails_objective_1() {
     // dart-stamped sleeper wakes 7200 ticks after his dart [L docs/systems/tranq-dart.md — the
     // K5's DroneFunc_RecoverTime 120 s], and a woken tower guard carries the alarm-run plumbing
     // the dart's stamp block armed [M 0x1469b8:331-357 — the game's own wake behaviour, the same
-    // block the tase stamps]. The old single approach hop ran 3769 ticks and gave the waker a
-    // clear run to a switch — the alarm rose mid-approach. The hops are short (≈1.5 u), each
-    // preceded by a clearing beat, so a wake is re-darted long before any switch press.
+    // block the tase stamps]. The measured failure: the old single approach hop WEDGED ~3769
+    // ticks at the switch's ~1.08 u floor (its "arrival" was the level-exit latch passing the
+    // assert truthy) and the waker pressed inside that window. The hops accept the PRESS reach —
+    // dxz < 1.4, the arrival assert below — so the loop stops at the same spot the old run
+    // reached, minus the wedge that gifted the waker his window; each hop is preceded by a
+    // clearing beat.
     let mut reached = false;
     loop {
         clear_live_guards(&mut w, "the alarm switch approach beat");
         {
             let p = w.scene.sim.as_ref().unwrap().bond.pos;
-            if dxz(p, spot) < 0.95 && (p[1] - spot[1]).abs() < 2.0 { reached = true; break; }
+            if dxz(p, spot) < 1.4 && (p[1] - spot[1]).abs() < 2.0 { reached = true; break; }
         }
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
         let (dx, dz) = (spot[0] - p[0], spot[2] - p[2]);
         let l = (dx * dx + dz * dz).sqrt();
-        if l < 0.95 { reached = dxz(p, spot) < 0.95 && (p[1] - spot[1]).abs() < 2.0; break; }
-        let step = 1.5_f32.min(l);
+        if l < 1.4 { reached = (p[1] - spot[1]).abs() < 2.0; break; }
+        let step = 1.5_f32.min(l - 1.0); // stop the hop 1.0 short: never wedge on the final 1.08 floor
         let nx = p[0] + dx / l * step;
         let nz = p[2] + dz / l * step;
         if !w.try_walk_to(Wp::new(nx, spot[1], nz).r(0.8), "the alarm switch approach hop") { break; }
     }
     assert!(reached,
-        "the walk must reach the ch-124 switch at {spot:?} — Walker movement only, no sim.bond.pos writes");
+        "the walk must reach the ch-124 switch's press reach at {spot:?} — Walker movement only, no sim.bond.pos writes");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
