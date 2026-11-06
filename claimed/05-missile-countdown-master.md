@@ -5,3 +5,6 @@ The fix is proved and it should not wait for the aim branch. Live, PCSX2 0700001
 Branch from current `origin/master`, push to `s/missile-countdown-master`. Take only: `COUNTDOWN_STEP` = 1/60 and the corrected seed order (085b88ca7 on `s/aim-route-4`), and the test re-pacing it needs on master's raw aim: CONSOLE_ORDER, the phase cap, `drake_fight_live`, `interactables_0700001b_live`, the klaxon test (bec12dff9, 8e4094c45). No aim snap code and no other aim-stack commit.
 
 Master has no aim snap, so its console shots may behave differently from that branch. Goal: `walkreal_0700001b_live`, `drake_fight_live`, `interactables_0700001b_live` whole and green on master. Report any Drake-fight red with its cause. Test-side changes only besides the constant and seed order.
+
+---
+claimed-by: sandbox3 at 2026-11-06T18:45Z
