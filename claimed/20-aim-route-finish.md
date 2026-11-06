@@ -7,3 +7,6 @@ Branch from `origin/s/1b-zero-g-floor`, merge current `origin/master`, push to `
 3. 08, 0c, 16: the report's classification.
 
 Do not change collision, zero-g or snap code; `10-zero-g-slide` handles zero-g separately, and if it lands, drop any lever that only exists to avoid the pocket. Keep the [L] 08 pins and the 0x30000000 fix. This branch moves where rounds land, so report what it does to the stream batch: if it needs joining `s/stream-batch`, say so rather than re-pinning twice.
+
+---
+claimed-by: sandbox7 at 2026-11-06T13:22Z
