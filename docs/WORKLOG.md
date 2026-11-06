@@ -72,3 +72,11 @@ origin/master c4c00c7ec, clean merge). Task: finish guard-goal-arrival-radii —
 real-damage walks test-side per walk, decide the ai_live cover pin from its [L] source (guard_takes_cover_like_the_game
 was measured live; if it disagrees with radius 0.5, find out why before changing it), run each binary whole and quote
 results.
+
+## guard-radii-16-chasers
+Started 2026-11-06 03:42 UTC. Branch s/guard-radii-16-chasers (origin/s/guard-radii-finish e88867f93, master already
+merged). Task: the 016 chasers reds under the game's guard radii — the_chasers_punch_lands_the_record_damage and
+walk_the_chasers_defeat_completes_the_mission_on_real_damage; kill the chip shooters #6/#7/#9 in the early phases while
+exposed at 4.6-13 u, route the defeat walk's end around the hurt volume at (-5.8, -163) (identified from placements [D]
+first); radii are the game's, test-side only, helpers opt-in; keep the d2/d3 sisters' measured ignores unless they go
+green; run walkreal_07000016_live whole and quote it, then nf-game.
