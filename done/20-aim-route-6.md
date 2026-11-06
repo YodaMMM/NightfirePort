@@ -4,3 +4,8 @@ Branch from `origin/s/aim-route-5`, merge current `origin/master`, push to `s/ai
 
 ---
 claimed-by: sandbox3 at 2026-11-06T21:06Z
+
+---
+## Report (done, 2026-11-06T22:06Z)
+
+Closed by the driver: the report is on `s/aim-route-6` (docs/reports/aim-route-6.md); the worker didn't run finish.sh.
