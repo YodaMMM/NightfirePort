@@ -84,6 +84,15 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             // plain kit and stays byte-identical.
             w.dmg.lane_floor_drops = true;
             w.dmg.precise_fights = true;
+            // civ-unignore (the measured pre-engagement burst): #10's first fire on the bend→
+            // corridor walk is ONE tick of 8 × −3.0 shotgun pellets at d 3.5 (t2723, Bond at
+            // (16.8,−12.0)) — the −24 chunk that sends 13 the 62 instead of 86, the exact leak the
+            // civ-repin-finish report ranked first (its live check asked what wrote 86.0 → 62.0
+            // between ticks 2531 and 2764; NF_DMG_TRACE answers: guard #10, weapon 0x1c, one
+            // frame). The opt-in tower2 flag stands at the "the south corridor east" leg end and
+            // kills him through the ordinary fight machinery before his sight opens. OFF for every
+            // other caller (the 07000012 and campaign walks set nothing).
+            tower2::PRE_CLEAR_SOUTH_CORRIDOR.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         tower2::walk_12(&mut w);
         tower2::walk_12_exit(&mut w);
@@ -401,6 +410,11 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
 /// 12-health guard [M NDrone2_HitDamage 0x145558 × DroneDamage_Head] — so the fights end in 1-2
 /// taps and the volley exposure shrinks with them (the 11 walk ships this wrapper on the same
 /// machinery [L its d1 pass]). The d2 sister keeps her passing torso timeline byte-identical.
+/// STILL IGNORED (civ-unignore 2026-11-05): the tower2 pre-clear now delivers 86 hp + 50 armour
+/// (the −24 burst gone, the stand clean) and the walk still dies — the lobby swarm consumed
+/// EVERY measured carry to the point (62 → 62, 72 → 72, 86 → 86, deaths t1810/t1745/t1666):
+/// the fight-loop attrition is uncapped, not carry-limited; a fight-position answer (cover) is
+/// the missing machinery. See docs/reports/civ-unignore.md.
 #[test]
 #[ignore = "the scripted bot does not yet survive this fight on real damage; the plain walk passes"]
 fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage() {
