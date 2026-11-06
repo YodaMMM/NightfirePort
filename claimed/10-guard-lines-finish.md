@@ -7,3 +7,6 @@ Read blocked/10-guard-batch-repin.md for the two non-walk reds:
 2. The kiko pit-squad shoot red: reproduced, not diagnosed. Find the cause and cite it.
 
 Then run the walks for 01, 16 and 1b plus enemy_accuracy_live and quote counts. Keep the d2/d3 ignores on 16 unless they go green on their own.
+
+---
+claimed-by: sandbox1 at 2026-11-06T07:44Z
