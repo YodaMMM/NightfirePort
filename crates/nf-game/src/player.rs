@@ -324,6 +324,13 @@ fn walk_clip() -> bool {
     *ON.get_or_init(|| std::env::var("NF_WALK_CLIP").is_ok())
 }
 
+/// level-14-landing-float scratch: `NF_WALK_DBG=1` prints the walk pass's per-tick grounded
+/// internals (the hover-dither diagnosis). Assertion-free, default off.
+fn walk_dbg() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("NF_WALK_DBG").is_ok())
+}
+
 #[derive(Clone, Debug)]
 pub struct Bond {
     /// `obj+0x30`.
@@ -1864,7 +1871,10 @@ self.local = [vs / k, vf / k];
         // (Intersect_CylGeom 0x109da0's `dot(q − A, B − A) > 0` gate + the 02 fin wedge the PS2
         // rounds [L]); the port's walk/NPC paths still depend on the unguarded through-push
         // (escort_follow_07000001_live regressed with it on) — a known port divergence.
-        let (mut push, mut walkable) = world.capsule_push_scoped(self.cel, a, b, RADIUS, swimming, self.pick_ref);
+        // The walk pass runs with the failed-ref up-facing hold skip on (level-14-landing-float:
+        // the game's dead push tail must not hold the capsule at the r-equilibrium above a flat
+        // up-facing face — the 1.72-landing hover; see capsule_tri_contact's walk_flat_hold).
+        let (mut push, mut walkable) = world.capsule_push_scoped_hold(self.cel, a, b, RADIUS, swimming, self.pick_ref);
         // walk-move-clip EXPERIMENT (`NF_WALK_CLIP=1`): the game's move-clip walk model — the
         // tick's move clipped at the capsule's face contacts, the radial push tail dead (see
         // capsule_tri_clip). Replaces the push displacement AND the pick_ref feed (the game's
@@ -1912,7 +1922,7 @@ self.local = [vs / k, vf / k];
                 let move_v = [self.pos[0] - pre_move_pos[0], self.pos[1] - pre_move_pos[1], self.pos[2] - pre_move_pos[2]];
                 world.capsule_clip(a, b, RADIUS, swimming, move_v)
             } else {
-                world.capsule_push(a, b, RADIUS, swimming, self.pick_ref)
+                world.capsule_push_hold(a, b, RADIUS, swimming, self.pick_ref)
             };
             push = if walk_ghost() && !walk_clip() { [0.0; 3] } else { fp };
             walkable = fw;
@@ -1956,6 +1966,12 @@ self.local = [vs / k, vf / k];
             let dy = self.pos[1] - hit_y;
             (dy * dy).sqrt() - 0.1 <= self.cc
         });
+        // level-14-landing-float scratch (NF_WALK_DBG=1): the hover dither's per-tick internals.
+        if walk_dbg() {
+            let dy = floor.as_ref().map(|(t, _)| { let d_y = to[1] - self.pos[1]; self.pos[1] - (self.pos[1] + t * d_y) });
+            eprintln!("[wdbg] pos_y {:.5} vel_y {:.5} to_y {:.5} floor {:?} dy {:?} cc {:.3} walkable {} band {} push_y {:.5} grounded {}",
+                self.pos[1], self.vel[1], to[1], floor.as_ref().map(|(t, _)| t), dy, self.cc, walkable, band, push[1], walkable || band);
+        }
         // The pick arm is NOT gated into grounded — the pick result is measured only (see the pick
         // bit block above).
         self.grounded = walkable || band;
