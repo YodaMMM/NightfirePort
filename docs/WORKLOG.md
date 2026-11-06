@@ -122,3 +122,12 @@ Started 2026-11-06 02:56 UTC. Branch s/gas-rng-draws-7 (cut from origin/s/gas-rn
 landing the gas draws — merge master first (the voice draws landed since), keep every draw, fix 1b's Drake fight
 (both walk_arrival_to_drakes_defeat and its real-health sister: Drake hp 60.0 after 9000 fight ticks from the hold
 spot [L draws-6]), then run every walkreal binary and report each.
+Progress 2026-11-06 03:20 UTC: master merged (402e4f57c, one test-file conflict resolved to
+the gas branch's generalized doorway blocks; every gas draw kept), the FULL walkreal list run
+whole on the merged tree (26 binaries quoted in the report — 03/14 stay green, the task's
+named gap closed), 1b's Drake fight root-caused with probe data: the merged stream's Drake
+hovers y 4.2-7.6 above the deck while every reachable hold sits below it and the fight's
+level-look fire gate cannot hit up — a static re-anchored hold cannot fix this stream; the
+next lever is the rise-window intercept (t0-360, ray true at t0, blocked by the last_tap=0
+init) or a floating pursuit. 1b (2), 016 (2), 01 d3 (1) remain red — all carried, ledgers in
+the report.
