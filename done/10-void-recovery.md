@@ -14,3 +14,7 @@ A teleport is not a walk: also reproduce it with real input off the moat edge in
 
 ---
 claimed-by: sandbox7 at 2026-11-06T17:24Z
+
+---
+## Report (done, 2026-11-06T18:18Z)
+
