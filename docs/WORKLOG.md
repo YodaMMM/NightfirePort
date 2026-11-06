@@ -157,3 +157,13 @@ origin/master — 4 files, clean). Task: finish the 14 cut — rewrite interacta
 walk-and-E pattern of the fusebox test, fix the snap per the report's live check, keep the assertions, re-quote
 rocket_stop_plane08 / rocket_glass08 / rocket_origin / solar_panel_hits and the walkreal 08 0c 14 16 1b binaries.
 No [L] pin loosened.
+  Results (2026-11-06 06:57 UTC): the fusebox cut is GREEN — the west-up bend was the test's
+  own aim, not the snap: the loop aimed from the EYE (the game's shot ray runs from the HEAD
+  [M 0x1a4bf0:152-159], 0.45 lower — the crossing measured y -1.056 vs the slab -0.728..-0.503),
+  the aim-mode steering fed the free-aim cursor (saturated [-0.296,+0.4] in 60 ticks, the
+  crosshair ~0.228 rad west-up — the measured bend), and the laser's raise script held the view
+  pitch through 900 aim-mode ticks. Fix: the head-anchored direct view + hip fire (the 06
+  burn_wire pattern); assertions untouched. fusebox_geometry_07000014_live 1/0 (1.76 s). The
+  gfx-frame snap (live check 2's fix) is already in aim_snap's wire branch. interactables
+  07000014: 9/1 unchanged (the cut rewrite not started — the window went to the diagnosis);
+  the fix's three findings are the rewrite's recipe.
