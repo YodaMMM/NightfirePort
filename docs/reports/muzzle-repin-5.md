@@ -114,3 +114,12 @@ wedges exceed this window; the driver's suite line (timeout) stands as its state
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed in this sandbox (the same block the drone-delete-turret-blast
+session hit):
+- `curl -sS -m 20 … https://ntfy.sh/nightfire-yoda-8k3x` → `curl: (28) Connection timed out
+  after 20001 milliseconds`
+- python urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+- `wget -q -O- --post-data=…` → exit 124 (timeout at the 25 s wrapper; no output)
