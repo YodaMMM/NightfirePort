@@ -235,3 +235,20 @@ gate to 36, the 7->1 flight gets the two-phase treatment), (2) the 14 x3 doorway
 (~x 31.8, z 36.3) before the leg-2 spot, (3) the 08/0c/16 route re-pins per the report's
 classification. No collision/zero-g/snap changes; the [L] 08 pins and the 0x30000000 fix stay;
 zero-g-slide has not landed, so the pocket-avoidance levers stay.
+aim-route-finish OUTCOME (2026-11-06 ~14:50 UTC): the 14 x3 route reds LATCH — the leg-2
+approach re-anchored on the probe's west lane (29.7, 0.8, 36.2) at both sites; the report's
+doorway waypoint (31.8, 36.3) measured WEDGED (the walker's E toggles vs use_door's 0x8
+early-return, the leaf's sliding live sphere keeps the kind-2 door cycling — stuck dump 0x8
+pos01 0.77, d 1.55, 6000 ticks); whole walkreal_07000014_live 9/0/1 (was 6/3/1). The 1b missile
+deadline MEASURED across three drakes runs: the burst gate kept at 48 (36 regressed 5 by +126
+and 8 by +348 — the hold-chain recharge churn); the 7→1 departure-side two-phase kept (console
+1 36 ticks early, 2 by 24); the anticipation arm added but measured dead (the console scripts
+WAIT at holds — best is Some — so the next console's flight runs inside its own hold window;
+the next-window lever: count answered holds (3/script [D]) and pre-fly on the last one).
+MissileDeploy still [3,3,2,2,3]. 08/0c/16 untouched (the classification carried). The stream
+batch: do NOT join yet (the 1b drakes walks must go green first — one stable timeline).
+Suite: nf-game/nf-formats/nf-audio --no-fail-fast 162 binaries, 160 ok, disc_golden 11/3 (the
+allowed slim-ISO 3), identity_disc = the onfoot sector-count artifact (volume/serial/NTSC/1.00
+match); the door-test 4-tuple compile debt (aim-object-flags' missed files) fixed. The rest of
+nf-view not run (test-file-only changes: 14 and 1b; no src/, no common/ helper). Report:
+docs/reports/aim-route-finish.md.
