@@ -43,3 +43,13 @@ binary that touches spawners.
   13 hits for 100.0): the shifted stream made the 00-fights costlier (40.0 hp at t2174, 23.5 by
   t4321) and the courtyard descent finished him — a real-damage 00 re-pin, not started.
   walkreal_0700000c/0d/12 built but not run in the window.
+
+### spawn-pick-walk-05 started (2026-11-06, ~15:40 UTC)
+
+- Branch `s/spawn-pick-walk-05` = origin/master a6665d115 + merge of origin/s/spawn-pick-and-dart-stamps
+  (59072b88c, clean). Task: settle the one red the reviewed branch left — walkreal_07000005_live's
+  00agent 05→06 chain — by finding WHY the chain moved; re-route the walk test-side if the new spawn
+  rank merely changes who spawns where, fix the change if it is itself wrong (cite the decompile).
+- Plan: reproduce the death (t9526, −35.02,38.49,−43.14), trace the shifted stream into 05's
+  proximity-spawner attempts, then read the decompile of the spawner pick [M 0x137cb0:21,
+  0x137aa0:31-32,41-56,88-96] again on the 05 templates to classify moved-vs-wrong.
