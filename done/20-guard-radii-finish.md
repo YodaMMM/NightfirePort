@@ -4,3 +4,7 @@ Merge `origin/master` into `origin/s/guard-goal-arrival-radii`, push as `s/guard
 
 ---
 claimed-by: sandbox3 at 2026-11-06T01:46Z
+
+---
+## Report (done, 2026-11-06T02:52Z)
+
