@@ -749,9 +749,25 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32) {
         // while it is still 8 u out instead of inside the gun's TooClose band.
         clear_the_spot(w, 8.0);
     }
+    if difficulty == 1 && walker::no_topup_env() {
+        // guard-radii-finish (the d1 real-damage run only; the d2 sister's green timeline keeps
+        // its measured shape): the true goal radii stand the alarm's reinforcement pair at their
+        // EAST posts — #20 (29.0, 42.0, −37.0) hp 20 and #21 (28.8, 42.0, −34.5) hp 10 [L the
+        // 2026-11-06 ledger: both visible in the mouth census at d 29.6 with rays0] — and the
+        // east-courtyard leg walks Bond past them at 8.8-9.2 u without a fight arm (the d3
+        // clears are difficulty-gated off): the corner fight left him at 33.5 and #20's 0x16
+        // rounds finished him at (20.27, 41.13, −37.97), tick 5217. A player crossing a courtyard
+        // with two riflemen posted on its east wall shoots them from the open west — the stands
+        // run at the strip/corner arrivals, where the courtyard's open west reaches the posts
+        // (the strip census: rays1 at d 16 [L the same session]).
+        aimed_stand_the_mouth(w);
+    }
     w.walk_nav_to([14.0, 41.9, -36.7], "the courtyard's south-east corner", 1.6);
     if difficulty >= 3 {
         clear_the_spot(w, 8.0);
+    }
+    if difficulty == 1 && walker::no_topup_env() {
+        aimed_stand_the_mouth(w);
     }
     w.walk_nav_to([25.3, 42.6, -40.6], "the east courtyard floor", 1.6);
     if difficulty >= 3 {
