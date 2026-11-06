@@ -5,3 +5,6 @@
 Sweep every PORTED row of docs/systems/sound-coverage.md. For each one read the branch conditions around the call in the decompile, name the flag or state that reaches it, and confirm the port fires on that same event. Trace flags to their writers instead of trusting the row's label.
 
 Report one line per row: MATCH or WRONG with the citation. Fix each WRONG row with a test that drives the event, and correct the row.
+
+---
+claimed-by: sandbox5 at 2026-11-06T12:51Z
