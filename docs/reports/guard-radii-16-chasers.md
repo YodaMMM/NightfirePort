@@ -100,3 +100,17 @@ binary and the four-crate suite on this tree before merging.
 
 not visible to me — this environment shows no token, credit, cost or context-window figures
 anywhere I can read (no banner, no status line, no API surface exposed to the worker).
+
+## ntfy failed
+
+All three fallbacks failed, then one extra curl retry:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "guard-radii-16-chasers: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20000 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'guard-radii-16-chasers: done', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "guard-radii-16-chasers: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output within the tool's 30 s cap; killed by the tool timeout.
+4. Retry: `curl -sS -m 15 …` → `curl: (28) Connection timed out after 15000 milliseconds`, exit 28.
+
+(The queue finish step itself succeeded: `finish.sh` printed `OK done 20-guard-radii-16-chasers`.)
