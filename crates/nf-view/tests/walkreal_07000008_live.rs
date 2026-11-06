@@ -870,6 +870,31 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                     .segment_flight(from, [from[0] + aim_dir[0] * 12.0, from[1] + aim_dir[1] * 12.0, from[2] + aim_dir[2] * 12.0], true)
                     .is_none() })
         };
+        // level-08-hind-selfblast-2 (d3): the round's FIRST ticks fly along the EFFECTIVE aim —
+        // the view plus the eased cursor offsets (the yard-stand law; on d3 the crosshair law
+        // saturates the tracker and the measured launches sat up to 0.23 rad off the view [L
+        // the diag runs, the file's own sister note]) — so the aim-direction corridor above is
+        // NOT the corridor the round flies. The measured 28178 death: every gate cleared on
+        // the aim direction and the round detonated on the east wall band 2.7 u from Bond (the
+        // [dmg] explosion at (113.6, 14.3, −180.3), −75.0, kind 44, owner −1) — 0.23 rad at
+        // 2.7 u is 0.6 u of lateral error, the jamb's width. The same three-source 12 u cast
+        // along the effective aim direction (view + aim_offset, the yard-stand effective-aim
+        // convention): a launch whose own first 12 u are clear air cannot detonate on the
+        // cabin next to Bond. D3-GATED: the sisters' timelines stay byte-exact.
+        let effective_corridor_clear = difficulty < 3 || {
+            let ey = sim.bond.yaw + sim.drones.aim_offset[0];
+            let ep = sim.bond.pitch * std::f32::consts::FRAC_PI_2 + sim.drones.aim_offset[1];
+            let eff = [ey.sin() * ep.cos(), ep.sin(), ey.cos() * ep.cos()];
+            let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+            let right = [cy, 0.0, -fy];
+            [eye,
+             [eye[0] + right[0] * 0.25, eye[1] - 0.15, eye[2] + right[2] * 0.25],
+             [eye[0] - right[0] * 0.25, eye[1] - 0.15, eye[2] - right[2] * 0.25]]
+                .iter()
+                .all(|from| { let from = *from; sim.world
+                    .segment_flight(from, [from[0] + eff[0] * 12.0, from[1] + eff[1] * 12.0, from[2] + eff[2] * 12.0], true)
+                    .is_none() })
+        };
         let line_ok = slit_clear && launch_line_clear(sim, cp);
         // The doorway fight: Bond rode down INSIDE the carriage (the cabin floor is the origin's
         // −4.5 [D stream 1; the ride logs]) and the game's fight is fought from in here — the
@@ -931,7 +956,8 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         let ready = rocket.is_none() && sim.missile_cam.is_none()
             && yaw_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
             && pitch_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
-            && l >= if difficulty >= 3 { 16.0 } else { 10.0 } && slit_clear && corridor_clear && eye_sees && machine_lane_clear;
+            && l >= if difficulty >= 3 { 16.0 } else { 10.0 } && slit_clear && corridor_clear
+            && effective_corridor_clear && eye_sees && machine_lane_clear;
         if ready { w.tick_fire(input); } else { w.tick(input, false); }
         if t % 100 == 0 {
             let sim = w.scene.sim.as_ref().unwrap();

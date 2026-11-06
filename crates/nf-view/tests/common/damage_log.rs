@@ -238,6 +238,21 @@ pub struct DamageLog {
     /// 0c snipers keep the button (`aimed_fights`) — their zero spread needs the bit
     /// [M Bullet_init 0x12c5a0:139-170].
     pub precise_fights: bool,
+    /// OPT-IN (`sniper_stands`, set by the 0700000c real-health walks): the return-fire stand
+    /// against the FAR snipers (d 61-90, the 0x1e family) runs the level's PROVEN still-gate
+    /// aimed stand (walkreal0c.rs's `yard_stand_aimed`, the deck-sentry proof): the aim button
+    /// held from a settled gun (the raise queues ONLY on the aim-PRESSED edge from the idle
+    /// machine [M 0x1a24c8:113-152]), the CURSOR driven to the position that puts the EFFECTIVE
+    /// aim (the view + the eased offsets [M scene.rs free-aim]) on the part, and the tap gated
+    /// on the aim BIT plus the effective error 0.01 plus the target's root holding still 18
+    /// ticks — a guard that steps during the round's flight is not where the view was
+    /// [M Bullet_update 0x12e7b0 — the round steps its speed per tick]. Measured on 0c (the
+    /// 2026-11-06 window): the plain stands' converged VIEW taps (err 0.000, perr 0.000,
+    /// blocked false) drained clips on the d 61-90 snipers without one landing — the hip cone
+    /// (the 0x1e spread base 100.0 [L ee_start_05.bin @ 0x2c10b8 +0x24]) scatters multiples of
+    /// the chest box at that range, and the wiggle-step ±0.1 u beats the flight. Off = the
+    /// plain stand everywhere else — no other walk changes.
+    pub sniper_stands: bool,
     /// OPT-IN (`escalating_cooldowns`, set by the 0700000c Agent walk, real-health-agent-0c-0d):
     /// a fight the stand did not drop doubles its re-fight wait each further failure on the same
     /// drone — 240, 480, 960, 1920 (capped). The master 240 keeps re-fighting a shooter whose
@@ -751,6 +766,21 @@ impl Walker {
         let mut blocked_runs = 0u32;
         // switch_dry: the cycle press + draw wait (see the field doc).
         let mut cycle_wait = 0u32;
+        // sniper_stands: the still-gate state (the target's root, per tick — see the field doc).
+        let mut still = 0u32;
+        let mut gate_pos = [0.0f32; 3];
+        let mut have_gate_pos = false;
+        // sniper_stands: the raise queues ONLY on the aim-PRESSED edge from the idle machine
+        // [M 0x1a24c8:113-152] — a press fired into the switch anim or a live fire script never
+        // queues it (the level-0c-yard-climb-real-health-4 measurement), so a player lets the
+        // gun settle before the first press; the loop's aim hold then runs the raise.
+        if self.dmg.sniper_stands {
+            for _ in 0..90 {
+                let s = self.scene.sim.as_ref().unwrap();
+                if s.gun.switch_state == 0 && !s.gun.fire_state { break; }
+                self.tick(Input::default(), false);
+            }
+        }
         for t in 0..cap {
             if self.dmg.switch_dry {
                 let clip_dry = { let s = self.scene.sim.as_ref().unwrap(); s.gun.clip == 0 && s.gun.spare == 0 };
@@ -773,13 +803,27 @@ impl Walker {
                 if self.dmg.tranq_fights && nf_game::drone::Drone::dart_asleep_state(d.state) { return true; }
                 if sim.disabled { return false; }
                 if sim.gun.clip == 0 && sim.gun.spare == 0 { return false; }
+                // sniper_stands: the still gate — root motion only (the box sway rides the anim;
+                // the root is what carries the chest out of the round's path mid-flight
+                // [M Bullet_update 0x12e7b0 — the round steps its speed per tick]). The tap
+                // waits for STILL_NEED still ticks (the level file's own still-gate note;
+                // walkreal0c.rs's yard_stand_aimed is the proof).
+                if self.dmg.sniper_stands {
+                    let moved = have_gate_pos && ((d.pos[0] - gate_pos[0]).powi(2)
+                        + (d.pos[1] - gate_pos[1]).powi(2) + (d.pos[2] - gate_pos[2]).powi(2)).sqrt() > 0.03;
+                    have_gate_pos = true;
+                    gate_pos = d.pos;
+                    still = if moved { 0 } else { still.saturating_add(1) };
+                }
                 let b = sim.bond.pos;
                 let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
                 let torso = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
                 // Re-pick the exposed part every 10 ticks (the guard animates, cover buries a part).
-                // The ray set follows the fight's pick: lane fights use the gun stand-ins, the
+                // The ray set follows the fight's pick: sniper stands use the strict muzzle
+                // stand-ins (the yard stand's idiom — the round leaves low-right of the eye and
+                // the predictor gap is the measured miss), lane fights use the gun stand-ins, the
                 // shared walks the plain eye ray (master behaviour; level-13-lobby-rifles-2).
-                if t % 10 == 0 { aim = if self.dmg.lane_fights && !self.dmg.eye_ray_stands { DamageLog::exposed_part_gun_rays(sim, di) } else { DamageLog::exposed_part(sim, di) }; }
+                if t % 10 == 0 { aim = if self.dmg.sniper_stands || (self.dmg.lane_fights && !self.dmg.eye_ray_stands) { DamageLog::exposed_part_gun_rays(sim, di) } else { DamageLog::exposed_part(sim, di) }; }
                 if aim.is_none() { unseen += 1; if unseen > if self.dmg.lane_fights { 120 } else { 60 } { return false; } } else { unseen = 0; }
                 // No round landed for 300 ticks: walk on (a guard in cover the stand cannot reach;
                 // the 13 lobby stand took 40 health that way). tranq_fights: the dart's HitDamage
@@ -796,6 +840,33 @@ impl Walker {
                     while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                     while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
                 let perr = (dy / h).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+                // sniper_stands: with the aim bit held the fired round obeys the VIEW PLUS the
+                // eased cursor offsets [M scene.rs free-aim], so the drive targets the CURSOR
+                // position that puts the effective aim on the part and the gate reads the
+                // EFFECTIVE error (the yard stand's measured rounds steered −12° off on the
+                // view-only converge — walkreal0c.rs's a04k trace). The drive uses the UNCLAMPED
+                // target: at the window edge the overflow becomes the free-aim spill and turns
+                // the VIEW (the clamped drive fed zero there and the aim stalled — a04m).
+                let (drive_turn, drive_look, gate_err, gate_perr) = if self.dmg.sniper_stands {
+                    let desired_yaw = dx.atan2(dz);
+                    let desired_pitch = (dy / h).atan();
+                    let yaw_err = { let mut a = desired_yaw - sim.bond.yaw;
+                        while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                        while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                    let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
+                    let cx_want_raw = -yaw_err / 0.76966;
+                    let cy_want_raw = pitch_err / 0.57724;
+                    let cur = sim.cursor;
+                    let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
+                    let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
+                    let aoff = sim.drones.aim_offset;
+                    let eff = { let mut a = yaw_err - aoff[0];
+                        while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                        while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                    (turn, look, eff, pitch_err - aoff[1])
+                } else {
+                    (err.clamp(-0.08, 0.08), perr.clamp(-0.08, 0.08), err, perr)
+                };
                 // Another drone on the line, short of the target: hold the tap. With the opt-in
                 // `shoot_blockers`, a blocker that is itself a LIVE HOSTILE (team 1, enabled,
                 // alive) becomes the new target — a player whose line a guard walks into shoots
@@ -831,6 +902,8 @@ impl Walker {
                             last_hit = t;
                             aim = None;
                             unseen = 0;
+                            have_gate_pos = false;
+                            still = 0;
                         }
                     }
                 }
@@ -842,9 +915,14 @@ impl Walker {
                 // an exact view and the loose stand dried clips on the same box. 0.01 / 0.01 =
                 // ±0.35 u / ±0.55 u at 35 u — inside the box, still reachable by the ±0.08/tick
                 // converge.
-                let (err_gate, perr_gate) = if self.dmg.aimed_fights || self.dmg.precise_fights { (0.01, 0.01) } else { (0.03, 0.04) };
-                let fire = !reload && unseen == 0 && !blocked && err.abs() < err_gate && perr.abs() < perr_gate
-                    && t.saturating_sub(last_tap) >= 8;
+                let (err_gate, perr_gate) = if self.dmg.aimed_fights || self.dmg.precise_fights || self.dmg.sniper_stands { (0.01, 0.01) } else { (0.03, 0.04) };
+                let fire = !reload && unseen == 0 && !blocked && gate_err.abs() < err_gate && gate_perr.abs() < perr_gate
+                    && t.saturating_sub(last_tap) >= 8
+                    // sniper_stands: the aim BIT (the raise finished — a tap before it rides the
+                    // hip cone [M Player_SetWeaponAnimObj case 0xf, the level-0c-yard-climb-
+                    // real-health-4 shot trace]) and the STILL gate (the root held still — the
+                    // wiggle-step beats the flight).
+                    && (!self.dmg.sniper_stands || (sim.aiming && still >= 18));
                 // NF_RF_TAPS: every tap's aim state (the 2026-11-03 level-11 investigation needed
                 // the per-tap error against the recorded hits — the t%60 lines only sample).
                 if fire && std::env::var_os("NF_RF_TAPS").is_some() {
@@ -872,7 +950,7 @@ impl Walker {
                 // snipers [L ee_start_05.bin @ 0x2c10b8 flags68 0x408050]) fires its zero spread
                 // [M Bullet_init 0x12c5a0:139-170]. Off (every other walk) the bit never sets and
                 // the pull keeps the record's hip cone [M 0x12c5a0:139-170 mul = 1].
-                (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), forward: if crowd { -1.0 } else if creep { 0.5 } else { 0.0 }, aiming: self.dmg.aimed_fights, ..Default::default() }, fire, reload)
+                (Input { turn: drive_turn, look: drive_look, forward: if crowd { -1.0 } else if creep { 0.5 } else { 0.0 }, aiming: self.dmg.aimed_fights || self.dmg.sniper_stands, ..Default::default() }, fire, reload)
             };
             if reload {
                 self.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, true, false);
