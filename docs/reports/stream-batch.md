@@ -82,10 +82,14 @@ both guard lever sets; no game-code draw was dropped or reordered in any merge.
 
 ## Triage so far (task step 4 — incomplete)
 
-- **16's armed pins** look like walk-tuned-to-old-stream: the joined stream's route economy hands
-  Bond one more weapon (26) by the chaser fight — a pickup the old stream didn't reach. Re-pin
-  candidate (add 26 to the expected load), not a behaviour bug; needs the one-test rerun with the
-  pickup ledger read before pinning.
+- **16's armed pins** (NOT re-pinned — an attempted re-pin was reverted): the two `bond_is_armed`
+  tests fail differently depending on test ORDER. In the whole-binary run both actuals measured
+  `[1, 2, 17, 26, 52, 55, 78, 80, 84]` (9 weapons); filtered to just the two tests, the handoff
+  arrival measures `[1, 2, 17, 52, 55, 78, 84]` (7) and the cold load `[1, 2, 17, 52, 55, 78, 80, 84]`
+  (8) — the original pins. So the binary carries cross-test state (or an order-dependent shared
+  cache) that the whole run exposes: **a look-item in itself** (which test leaks what into the
+  later tests — the "loadout: switch request N" lines differ 7 vs 8 vs 9 owned). The re-pin must
+  wait for that to be understood; the pins stay as they were.
 - **14's descent death at (31.73,1.76,33.83)** is on the exact leg where the merge chose the gas
   nudge over the muzzle lane-leg; the muzzle variant is the first lever to try.
 - **01/06/0d/08 deaths** sit in the same families the guard-repin battery already classified
