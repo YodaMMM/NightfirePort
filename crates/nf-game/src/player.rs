@@ -465,6 +465,10 @@ pub struct Bond {
     /// the landing 0xA3/0x5FB [`Player_HandleJump` 0x1916b0:184, 195-198]. Drained by the Sim
     /// into `drones.audio` (the Sim's sound list) and cleared there.
     pub sfx_out: Vec<(u32, V3)>,
+    /// 07000007 before channel 0x48: the jump press is refused [M Player_HandleJump 0x1916b0:106-113].
+    /// The Sim sets `jump_locked` each tick; `jump_refused` asks it to play 0x1db.
+    pub jump_locked: bool,
+    pub jump_refused: bool,
     /// The jump landing's `BL+0x924 = 999.0` [M 0x1916b0:201]: the next step block fires a step.
     pub land_step: bool,
     /// `BL+0x966` [M 0x1916b0:200]: set to 8 on a jump landing; reaching 0 forces one more step
@@ -577,6 +581,8 @@ impl Bond {
             // into `drones.audio`); `Player_HandleJump` 0x1916b0 plays 0xA3 at launch (:184) and
             // 0xA3/0x5FB at the head bump (:195-198).
             sfx_out: Vec::new(),
+            jump_locked: false,
+            jump_refused: false,
             land_step: false,
             land_countdown: 0,
             // unported-front-end-menus-3: no orbit until Player_SetCamMode(BL, 1) (0x195928
@@ -1670,6 +1676,8 @@ impl Bond {
             self.crouched = false;
             self.cc = ROOT_HEIGHT;
             self.lockout = 60;
+        } else if !self.crouched && self.jump == 0 && input.jump && self.grounded_history != 0 && !self.head_bump && self.jump_locked {
+            self.jump_refused = true;
         } else if !self.crouched && self.jump == 0 && input.jump && self.grounded_history != 0 && !self.head_bump && headroom(world) {
             // `Player_HandleJump` 0x1916b0:118-147 — the jump grab: with the third-icon context 3 (the
             // wire icon, `BLData+0x95F`), the press scans the level's wires for the NEAREST class-0x2C

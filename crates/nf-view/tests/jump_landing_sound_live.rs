@@ -105,3 +105,25 @@ fn landing_in_the_02_shallows_splashes_and_wades() {
     assert!(heard.contains(&0x5fb), "the landing splashes: {heard:x?}");
     assert!(heard.contains(&0x28), "the forced steps wade: {heard:x?}");
 }
+
+/// 07000007 refuses the jump until channel 0x48 [M Player_HandleJump 0x1916b0:106-113]. [L PCSX2:
+/// the press leaves Bond at y 44.089 with channel 0x48 clear.]
+#[test]
+fn the_07_party_refuses_the_jump_until_channel_48() {
+    let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set"); return };
+    let mut scene = nf_view::load(&iso, "07000007.bin", false).expect("load 07000007");
+    let sim = scene.sim.as_mut().unwrap();
+    for _ in 0..2000 { sim.step_bond(Default::default(), false, false, false); if !sim.disabled { break; } }
+    for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); }
+    assert!(!sim.drones.channels.on(0x48), "the walk starts before channel 0x48");
+    let y = sim.bond.pos[1];
+    sim.step_bond(Input { jump: true, ..Default::default() }, false, false, false);
+    assert!(sim.drones.audio.active_ids().contains(&0x1db), "the refused press plays 0x1db");
+    assert_eq!(sim.bond.jump, 0, "no launch");
+    for _ in 0..20 { sim.step_bond(Default::default(), false, false, false); }
+    assert!((sim.bond.pos[1] - y).abs() < 0.05, "Bond stays down: {y} -> {}", sim.bond.pos[1]);
+    let f = sim.drones.frame;
+    sim.drones.channels.set(0x48, 1, f);
+    sim.step_bond(Input { jump: true, ..Default::default() }, false, false, false);
+    assert_eq!(sim.bond.jump, 1, "channel 0x48 frees the jump");
+}
