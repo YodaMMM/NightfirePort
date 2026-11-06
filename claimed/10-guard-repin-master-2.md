@@ -11,3 +11,6 @@ Left:
 4. 08 whole mission real_damage_00agent: the station legs re-pin the branch declared. If it cannot be done, an ignore with a measured reason is allowed for the 00 Agent sister only.
 
 Do not loosen pins tagged [L] other than item 3's, and do not change game code to suit a walk. Finish with those binaries whole plus walkreal 01, 06, 16, 1b and enemy_accuracy_live.
+
+---
+claimed-by: sandbox3 at 2026-11-06T10:51Z
