@@ -310,3 +310,15 @@ Progress log (aim-route-4 continued):
 - interactables 9/9, drake_fight 3/3, space_laser 4/4, nf-game space_missile 6/6;
   walkreal_0700001b 15/2/2 — the two drakes walks now red LATER: Drake's fight (run 1) and the
   real-health console starvation on 7/1/2 (run 2). Report: docs/reports/aim-route-4.md.
+
+## aim-route-5
+
+Branch `s/aim-route-5` from `origin/s/aim-route-4` (b991dc45d), merged `origin/master`
+(ab80ac6ed — the one-way doors + the escort VIP fail, clean). Scope per the driver: the
+console phase is green (aim-route-4 §2); the next reds are Drake's fight and the real-health
+clip (§4), then 08/0c/16 with the levers in docs/reports/1b-zero-g-floor.md §3 — for 0c check
+what Bond holds first (pistol-class range 50 vs the d 61-90 snipers). Test-side only; the
+[L] 08 pins and the 0x30000000 fix stay. Carry-over from the missile-countdown-master window:
+on master's RAW aim both drakes walks went green (17/0/2 whole) with the tail [1,2,7], the
+tail-only wave defense (the first-wave fight), and the bounded ch-0x09 monitor-read wait —
+Drake's fight is green on raw aim, so the aim-side fight red is the snap stack's own shape.
