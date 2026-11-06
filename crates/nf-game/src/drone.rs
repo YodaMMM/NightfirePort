@@ -20246,6 +20246,36 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if let Some(t) = dr.timer_d { if frame >= t { dr.timer_d = None; dr.send(d, rng, frame, msg::TIMER_D); } }
             if let Some(t) = dr.idle_timeout { if frame >= t { dr.idle_timeout = None; dr.send(d, rng, frame, msg::IDLE_TIMEOUT); } }
             if let Some((t, m)) = dr.delayed { if frame >= t { dr.delayed = None; dr.send(d, rng, frame, m); } }
+            // `NDrone2_ControlDTYPE_Zoe` 0x14b058 — DroneTypeSettings row 0x11's control fn
+            // (`Drone_Control` 0x139268:60-64 dispatches `+0xC5 * 0xC + 8`; row 17 holds it [D
+            // table 0x29aee8+204], slot 0 = the start state 4). The row is REACHED: the 07000008
+            // escort VIP is dtype 12 + kind 0xc → `NDrone2_GetDTYPENEW` 0x14c938 case 0xc gives
+            // +0xC5 = 0x11 [M 0x14c938:54-59; docs/levels/07000008.md §3]. The monitor runs AHEAD
+            // of the ControlSTANDARD tail-call, so before the body below: switch channel 1 arms
+            // the global 0x9b, and while 0x9b is armed and a player exists,
+            // Vec_Dist3D(obj+0x30, glb_players+0x30) > 10.0 fails the escort every tick —
+            // `DroneFunc_SetMissionFailReason` 0x13e560's default arm (reason 0xf: switch channel
+            // 99, no FailLabel — `mission_fail_reason`'s `_` row). The drain below applies it.
+            if dr.mode == 0x11 {
+                // The arm: switch_channels[0x9b] = 1 while channel 1 is on [M 0x14b058:5-8] — the
+                // real channel byte (one global shared by every drone), NOT a per-drone latch: a
+                // mode-0x11 drone spawning after the script raised ch 1 still arms. The GameState
+                // stamp `DAT_002703fc` beside it has no reader [M write-only].
+                if self.channels.on(1) { self.channels.set(0x9b, 1, frame); }
+                // The monitor: while 0x9b is armed (it LATCHES — ch 1 may clear), a player exists,
+                // and Vec_Dist3D(obj+0x30, glb_players+0x30) > 10.0, fail the escort every tick —
+                // DroneFunc_SetMissionFailReason 0x13e560's default arm (reason 0xf: switch
+                // channel 99, no FailLabel — `mission_fail_reason`'s `_` row). The drain below
+                // applies it.
+                if self.channels.on(0x9b) {
+                    let dx = player.pos[0] - dr.pos[0];
+                    let dy = player.pos[1] - dr.pos[1];
+                    let dz = player.pos[2] - dr.pos[2];
+                    if (dx * dx + dy * dy + dz * dz).sqrt() > 10.0 {
+                        dr.fail_reason = Some(crate::ally::mission_fail_reason(0xf));
+                    }
+                }
+            }
             // `NDrone2_ControlSTANDARD` 0x1490f0:65-67: alertness above 1 clamps to 1 first (the
             // sound shares add unclamped [M 0x148a30:62]), so the sight range never grows past
             // ×3 [M 0x175af0:56].
