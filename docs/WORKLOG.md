@@ -426,3 +426,27 @@ lifts Bond in the doorway — every doorway contact pushes horizontally in the p
 what the game does that the port lacks. Fix + remove the ignores, or report the measured next
 lead. Quote walkreal 0a and two other levels' walks.
 - (18:31) branch start, WORKLOG entry; reading the ignore reasons next.
+- (18:40-19:30) the decompile chain read end to end: Player_Collision 0x194df0 (the capsule
+  arms, cc read fresh per tick), Player_CollisionHandler 0x1949a8 (the FeetOnPoint call, the
+  obj+0x30 += BL+0x750 push add, the DealWithObjHit dispatch), Player_DealWithObjHit 0x194458
+  (pain-only — NOT the wall response), Collide_Update 0x1ea398 (t+0x9c=0, Collide_Pick, one
+  Collide_Intersect per pick, nearest-first sort), Collide_Intersect 0x1ebaa8 (the 0x800
+  dispatch, the tail add-back +0x10/0x20/0x30/0x50/0x60 += _DeltaP), Intersect_CylGeom
+  0x109da0 (the push tail |closest − ref| < r), Player_FeetOnPoint 0x194188 (the ray, the
+  band, the hit-list adds — a tolerance, not a snap).
+- (19:05) the tail PROVEN dead on 0a: the boot body HITTEST located in ee_start_0700000a.bin
+  by signature at EE 0x1b78e90 (spheres the spawn pose), ref +0x50 = 0x1b78ee0 ALL-ZERO [L];
+  the ref's only writer is the add-back, fed only by the tail's own ≤r pushes — from (0,0,0)
+  it can never reach the spheres (|closest| ≈ 10-25): the tail cannot fire, ever, on 0a.
+- (19:10) the port's doorway trace (NF_CAPS_LOG through-line): every jamb contact pushes
+  horizontally (the vertical spine's closest point shares q's y); settle 1.0905 — the port
+  never lifts. The corner wedge identified as the port's own spine-dir fallback lift at
+  below-B edges; with NF_WALK_KILL=1 the corner CROSSES (836 ticks, the exit trigger fires)
+  but not at walk speed and still y-short — the kill stays env-gated (the 01 plate approach
+  re-paths under it).
+- (19:20) the game's numbers re-read: y-HOLD (the placed 1.12 corner probe stays 1.1186→1.1159)
+  plus a doorway ACQUIRE (+0.038, held 1.1285), both game walked settles just inside the band
+  top edge — the acquire's writer unpinned (the stub anim cannot bob [D 0x2b91b0]); four live
+  checks named in the report. Both ignore notes re-pinned; no code changed.
+- (19:30) walks quoted: walkreal 0a whole 13/0/2, 02 whole 3/0/1, 05 whole 14/0/0. Report:
+  docs/reports/level-0a-west-hall.md.
