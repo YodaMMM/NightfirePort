@@ -80,3 +80,19 @@ origin/master — merge was a no-op). Task: walkreal_07000001_live ..._real_dama
 24 hp takes the last 24). Levers from the finish report item 5: resupply BEFORE the hall phase at difficulty 3, and
 re-run the lip block's scan once the escort crossing begins. Test-side only, helpers opt-in, radii/damage/health
 untouched.
+  Results (2026-11-06 04:47 UTC): both levers shipped d3-gated in
+  crates/nf-view/tests/walkreal_07000001_live.rs — (1) the pre-hall block now sweeps the
+  corridor's resupply boxes onto the wheel at d3 (repeated resupply() calls; the taken box is
+  gone so each call advances); (2) the door-lip scan/fight extracted verbatim into
+  door_lip_scan/door_lip_fight and re-run as the escort crossing begins — the post-AND poll
+  (≤20 × 30-tick waits from the hold line) catches #5 the tick he surfaces (iter traces: the
+  first lip scan missed him still-disabled, the pre-clear leg then ate his 0.9-u volley). A
+  second escort-loop re-scan sits before the follow rounds as the late net. walkreal_07000001_live
+  whole 8 passed / 0 failed (40.19 s); the d3 walk's death 70165 → level_exit 07000002 at tick
+  10042 with 69.4 health (15 hits for 30.6, 10 return-fire fights; AND 3679, lip re-scan +2
+  polls found [5]). d1/d2 byte-paths untouched (their walks stay green in the same binary).
+  nf_game lib 683/0/5. Full suite chunked (background jobs die in this sandbox): 357/1134
+  binaries, 1174 passed / 4 failed / 113 ignored — the 4: missing_scenery_live ×2 +
+  glass_guards_14_live ×1 (wgpu `adapter: NotFound` — this recycled sandbox has no GPU
+  adapter), enemy_accuracy_live ×1 (rc 124 — my chunked 240 s per-binary limit vs the suite's
+  documented 600 s; net_soak_faults_live likewise starved, direct run exits ok).
