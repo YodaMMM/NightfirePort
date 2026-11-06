@@ -10,3 +10,7 @@ Do not change collision, zero-g or snap code; `10-zero-g-slide` handles zero-g s
 
 ---
 claimed-by: sandbox7 at 2026-11-06T13:22Z
+
+---
+## Report (done, 2026-11-06T14:26Z)
+
