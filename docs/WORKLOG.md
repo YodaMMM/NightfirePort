@@ -352,3 +352,12 @@ kill AND the muzzle tree's post-fight nav_until_clear re-clear (different levers
 walkreal_07000016: kept the gas side's full route economy `true` (a1d200d3c, conditioned on
 the gas draws the joined tree carries). docs/WORKLOG.md was add/add (absent on master):
 gas-lineage file kept whole, guard-repin-master's entry appended, never rewritten.
+
+## stream-batch-2 (2026-11-06)
+Started 14:23 UTC. Branch `s/stream-batch-2` cut from `origin/s/stream-batch` 05ec1cc55,
+`origin/master` 38fd3151e merged (clean). Task: the 31 reds of the joined tree's full run
+(driver's line on 8e72343f8: 4397 passed / 31 failed / 353 ignored) — non-walk reds first, each
+with a stale-pin-vs-merge-break reason; then the walks plain → real damage → Agent → 00 Agent;
+the `DroneFunc_HandleExplosives` 0x1435f0 break-after-first-kind-2 review; NF_EXPPROBE removed
+from drone.rs; one total line from a full run. Ignore only for 00 Agent walks with a measured
+reason; no [L] loosening; no game code changed to suit a walk.
