@@ -14,3 +14,32 @@ Cut from origin/master c4c00c7ec (same tree the civ-unignore tasks ran). Plan: r
 decompile sites + the port's spawners.rs/drone.rs dart path, write the fail-first tests, port,
 then re-pin any walk the new draws shift BY ROUTE (never by removing draws), and run every live
 binary that touches spawners.
+
+### spawn-pick-and-dart-stamps progress (2026-11-06, ~03:55 UTC)
+
+- **The spawner pick is ported** [M 0x137cb0:21 + 0x137aa0:31-32, :41-56, :88-96]: one
+  Rand_Rand over the WHOLE template list (+0x2E == +0x8, both the census count), drawn BEFORE
+  the walk; only usable records decrement; a rank past the last usable spawns NOTHING this
+  call. The old rand(usable.len()) always spawned. Fail-first unit tests in the module (the
+  modulus assert + the missed-rank assert both failed pre-fix; a_rank_zero passes both models).
+- **The spawn-chain draws are ported** [M 0x14b300:382-461 + 0x137cb0:58]: the param-14 class
+  switch re-rolls at every spawn (the same block the constructor runs at load — 2 draws, case 4
+  draws none), the +0xF4 tail Rand_FRand(0) consumes the stream [M :435], the 0x7000011/14
+  engage/combat overrides, and SpawnDrone's Rand_Rand(10000) → obj+0xEC re-rolls the wobble
+  (the "unidentified writer" the port's wobble doc carried — it is the spawner path's own stamp).
+- **The dart's Tower stamp block is ported** [M 0x1469b8:331-357 — byte-identical to the tase's
+  :103-128]: fail-first live pin `the_dart_stamps_the_tower_alert_block_like_the_tase` in
+  walkreal_07000009_live.rs (the challenger is sighted; the pre-fix run printed sighted 1,
+  alt_mode 14, return_state 0x10, first_attack 1 — all wrong).
+- **Walk re-pins by route**: walkreal_07000009's alarm-switch approach now beat-splits and
+  accepts the press reach (1.4) — the measured failure was the old single hop WEDGING 3769
+  ticks at the switch's 1.08 floor (its "arrival" was the level-exit latch passing the assert
+  truthy) while a woken sleeper pressed.
+- **Whole-binary results (quoted, --test-threads=1)**: nf-game lib 686/0/5 (incl. the 3 new
+  unit tests); walkreal_0700001b_live 17/0/2 (124.16 s — the Drake spawner waves survive the
+  new draws); walkreal_07000009_live 9/0/0 (13.72 s); walkreal_0700000a_live 13/0/2 (48.01 s);
+  npc_doors_live 6/0/1; fix_guard_misc_live 6/0/0; drake_fight_live 3/0/0;
+  walkreal_07000005_live 13/1 — the 00agent 05→06 chain died at t9526 (−35.02,38.49,−43.14,
+  13 hits for 100.0): the shifted stream made the 00-fights costlier (40.0 hp at t2174, 23.5 by
+  t4321) and the courtyard descent finished him — a real-damage 00 re-pin, not started.
+  walkreal_0700000c/0d/12 built but not run in the window.
