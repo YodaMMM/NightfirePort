@@ -11,3 +11,8 @@ If the lookup cannot be made to match, report that and leave the fall as it is: 
 
 ---
 claimed-by: sandbox1 at 2026-11-06T19:44Z
+
+---
+## Report (done, 2026-11-06T21:01Z)
+
+Closed by the driver: the report is on `s/void-recovery-2` (docs/reports/void-recovery-2.md); the worker didn't run finish.sh.
