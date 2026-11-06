@@ -79,6 +79,12 @@ made without it.
 | walkreal_07000014_live | 6/3/1 | real_damage, agent, + the tripbomb route (pinned 9/0+1i on gas-rng-draws-6; here the placed tripbomb is no longer stuck at the retreat — a fight/flush shift) |
 | walkreal_07000015_live | 5/1/1 | real_damage_agent |
 
+Interactables (the last listed binary): interactables_07000001_live 9/1 —
+`the_bond_bonus_walk_over_takes_it` hits a walk_to cap: Bond stuck at (−9.52, 7.10, 9.40)
+1.40 from the target (−9.50, 5.80, 8.00), grounded, no doors/triggers nearby — the walker
+cannot descend the 1.3 floor step to the bonus (the "walk_to cap needs a look at what stands
+there" item).
+
 No plain walk regressed against batch-5's battery; every red is a real-damage/Agent/00-Agent leg
 (the item-4 lane) except 04's two stats tests and 14's tripbomb.
 
@@ -90,8 +96,14 @@ No plain walk regressed against batch-5's battery; every red is a real-damage/Ag
 2. The 0x5c follow wedge after the main agent's two live checks (batch-5 report §3).
 3. The item-4 lane: the real-damage/Agent/00-Agent legs above, 04's stats tests, 14's tripbomb
    wedge, escort_follow/abseil/goggles/upward_shot.
-4. The full four-crate suite did not fit this window; the bisect binaries and the walkreal
-   battery above ran whole.
+4. The full four-crate suite did not fit this window; the bisect binaries, the non-walk set
+   and the walkreal battery above ran whole.
+
+## Total
+
+**110 passed / 42 failed / 7 ignored across the 25 binaries this window ran whole
+(--test-threads=1, real ISO): the 7 bisect binaries 45/17, the non-walk set 21/8, the 11
+walkreals 44/17/7.**
 
 ## Usage
 
