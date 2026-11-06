@@ -322,3 +322,17 @@ what Bond holds first (pistol-class range 50 vs the d 61-90 snipers). Test-side 
 on master's RAW aim both drakes walks went green (17/0/2 whole) with the tail [1,2,7], the
 tail-only wave defense (the first-wave fight), and the bounded ch-0x09 monitor-read wait —
 Drake's fight is green on raw aim, so the aim-side fight red is the snap stack's own shape.
+
+Outcome: the merge (master, tests/docs only) + one walkreal port commit. BOTH aim-route-4 §4
+reds resolved on the snap stack: the real-health walk survives the astronaut wave (the tail
+[1,2,7] + the tail-only wave defense via the first-wave fight — the same shape master's raw
+aim proved), and Drake's fight KILLS — the cause settled: the wave, alive at the fight in the
+old shape, stole the fight's 3.5-u always-hit band target picks; with it answered mid-phase
+the fight faces Drake alone. walkreal_0700001b_live 17/0/2 whole, drake_fight_live 3/0,
+interactables_0700001b_live 9/0, space_laser_1b_live 4/0, nf-game --lib 686/0/5;
+08 5/1 and 16 13/1/2 unchanged (their pre-existing single reds; the merge changed no src).
+0c re-ran red at the same tick; the weapon check cleared (Bond holds 0x1e, +0x1C = 1200) and
+the cause pinned one level deeper: the return-fire stands' converged aimed rounds miss a
+STEPPING guard (the level file's own still-gate note records the identical mechanism for the
+deck sentry) — the window (95,13) and the unseen-fights opt-ins both measured the identical
+13461 death and were reverted. Report: docs/reports/aim-route-5.md.
