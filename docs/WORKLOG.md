@@ -291,3 +291,9 @@ Progress log (continued):
   the classification and the 0c weapon-range hint.
 - Suite not run (time): one test file changed (walkreal_0700001b_live.rs), no src/, no
   common/; the drakes walks ran 3× whole.
+
+## aim-route-4
+Task: fix the missile countdown (SpaceMissile_Update state 0 loads 0x30d0dc = REC_FRAME_RATE = 1/60 [M 0x1aa1f0-0x1aa1f4], so COUNTDOWN_STEP 512.0 in space_missile.rs is wrong and the seeds are seconds), then re-pace the two drake walks in 1b from the true deadlines (launch + seed x 60 + P0 length) and the console order they imply, then 08 / 0c / 16 with the levers in 1b-zero-g-floor.md section 3. Test-side only; the [L] 08 pins and the 0x30000000 fix stay.
+
+Progress log:
+- Branch cut from origin/s/aim-route-3 (f49ded65a); origin/master already an ancestor, merge a no-op. Pushed.
