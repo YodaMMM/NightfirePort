@@ -1092,6 +1092,13 @@ pub struct Drone {
     /// weapons (the mounted-minigun deploy branch returns before the roll and `shots` still
     /// grows — 952's tests only use plain weapons).
     pub shot_rolls: Vec<bool>,
+    /// Per shot (frame, [j0, j1, j2]) — the muzzle-flash sprite object's three orientation draws
+    /// (fx-muzzle-and-trail): `DroneWeap_FireWeapon` 0x178f68:189-213 creates the kind-0x40 sprite
+    /// at the muzzle (`control_create_object` 0x1344e0 — a `Mem_Malloc`, so it succeeds and makes
+    /// its draws on every live shot) and jitters its spherical aim by `FRand(2π)` → obj+0x50,
+    /// `FRandHalf(0.2)` → obj+0x54 (+π/2), `FRandHalf(0.2)` → obj+0x58 [M 0x17925c-0x1792b0].
+    /// Aligned with `shots`; the viewer builds the flash matrix from the recorded jitters.
+    pub shot_flashes: Vec<(u32, [f32; 3])>,
     /// Root translation at the previous tick (root motion).
     pub root_prev: Option<V3>,
     /// `+0x2A` Bond's crosshair on this drone (until the given frame) and `+0x17` another drone within 3 units.
@@ -2036,6 +2043,7 @@ impl Drone {
             shot_aims: Vec::new(),
             // 952: the raw accuracy roll per shot, parallel to `shots`.
             shot_rolls: Vec::new(),
+            shot_flashes: Vec::new(),
             // sniper-spawn-stats-2: set for spawner templates by `level_drones` (see the field).
             spawn_stats_params: None,
             // drone-abseil-elevator: the +0x23 rope fields. `move_ok`
@@ -11101,7 +11109,7 @@ impl Drone {
     /// computes the throw direction from the right-hand bone (0x15) with a ±π/4 yaw lob
     /// (dist < 10 → +π/4 lob; dist > 18 → −π/4 flat), and creates a `Grenade` projectile. The muzzle falls back to the
     /// drone's chest if the skeleton's bone 0x15 is not posed.
-    fn throw_grenade(&mut self, d: &Data, rng: &mut Rng, owner: usize) -> Option<crate::grenade::Grenade> {
+    fn throw_grenade(&mut self, d: &Data, rng: &mut Rng, owner: usize, frame: u32) -> Option<crate::grenade::Grenade> {
         let w = self.grenade_weapon;
         if self.grenade_count > 0 { self.grenade_count -= 1; }
         // Mode 0xD (sniper): 1/3 chance of the smoke 0x36, else the stun 0x35 [M 0x1795a8].
@@ -11160,6 +11168,9 @@ impl Drone {
             // family (this site's weapon_type IS the record's +0x02 base).
             burn: if weapon_type == 0x3b { 100 } else { 0 },
             defused: false,
+            // obj+0xec = GameState at creation, read as a byte by the trail gates
+            // [M control_init_object 0x134630:15; Bullet_trail_effect_smoke 0x12cba8].
+            born: frame as u8,
         })
     }
 
@@ -11412,15 +11423,26 @@ impl Drone {
         // `Light_Create(radius 7.0, intensity 1.0, the muzzle, rgb = weapon_data+0x56/+0x55/+0x54,
         // channel 0, life 0 → +0x20 = 1 (one tick), kind 1)` — before the bullet's spread draws.
         lights.create(7.0, 1.0, muzzle, [w[0x56], w[0x55], w[0x54]], 0, 0, 1, 0, rng);
-        // fix-guard-weapons3: the game's next three draws — the flash-sprite orientation jitter
-        // FRand(2π) 0x179268 / FRandHalf(0.2) 0x179288 / 0x1792ac — sit INSIDE
-        // `if (lVar9 != 0)` (FireWeapon 0x17925c-0x1792b0): they run only when the kind-0x40
-        // muzzle-flash sprite object (`control_create_object(0x40, …)` 0x179248) is created. The
-        // port's sim creates no render sprite, so the branch's draws never fire here — consuming
-        // them unconditionally shifted the shared stream (a cover test's 90-vs-37 and
-        // the matrix's re-rolled rates; the live-calibrated `ai_live::guard_takes_cover_like_the_game`
-        // pins the per-shot stream at roll + Light_Create's Rand(param_11) + the spread draws).
-        // A live check settles the object-create side with gdbwatch.
+        // fx-muzzle-and-trail (row 14): the kind-0x40 muzzle-flash sprite object
+        // [M DroneWeap_FireWeapon 0x178f68:189-213]. `control_create_object` 0x1344e0 is a
+        // `Mem_Malloc(kind + 0x110)` — it returns 0 only on heap exhaustion, so the live game
+        // creates the object and makes its three draws on EVERY shot that passes the
+        // hitdata+0xc8-bit-0 gate [M 0x179114-0x17925c]. The object starts at the muzzle
+        // (fStack_150, the same vector the light used) with the aim's spherical angles —
+        // obj+0x50 = −elevation [M Vec_Cartesian_2_Spherical 0x1e39e8: out = (atan2(y, √(x²+z²)),
+        // atan2(x, z), ‖v‖), then the caller's `fStack_120 = -fStack_120` 0x179258], +0x54 =
+        // azimuth, +0x58 = 0 — and the three draws jitter them [M 0x17925c-0x1792b0]:
+        // FRand(2π) → +0x50, FRandHalf(0.2) → +0x54 (which then also gains +π/2), FRandHalf(0.2)
+        // → +0x58. The port consumes them in order (they sit between the light's `Rand_Rand`
+        // and the per-pellet spread draws on the shared stream) and records the jitters for the
+        // viewer's flash matrix (the fake-seed stand-in drew an unmoored orientation).
+        let flash_j = [rng.frand(6.2831853), rng.frand_half(0.2), rng.frand_half(0.2)];
+        self.shot_flashes.push((frame, flash_j));
+        // fix-guard-weapons3 history: that task left these three draws unconsumed because the
+        // port created no render sprite, and consuming them shifted the seed-calibrated cover
+        // tests (90-vs-37). fx-muzzle-and-trail now consumes them (the game makes them on every
+        // live shot — `control_create_object` is a plain `Mem_Malloc`) and the affected tests
+        // re-pick their seeds on the corrected stream; see shot_flashes above and the report.
         let aim = [self.opp_target[0] + off[0] - muzzle[0], self.opp_target[1] + off[1] - muzzle[1], self.opp_target[2] + off[2] - muzzle[2]];
         let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
         // The raw damage: weapon_data+0x0C. `Drone+0x100` (the ×mul) is applied at HIT time by
@@ -16406,6 +16428,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             bond.pitch = pitch;
             bond.vel = [0.0; 3];
         }
+        // fx-muzzle-and-trail (row 6, the GunImp site): the OVERHEAT smoke — while the hot byte
+        // (ext+0x9c) stands, every 6th game tick (`GameState % 6 == 0` [M 0x132480-0x13248c
+        // divu/mfhi]) `Gas_Init(0.05, 0.25, cel, pos, rot, NULL-vel, 0x2000039, 7, 0x484030e4, 1)`
+        // with life 128 [M GunImp_Update 0x1320d8:218-247]. The position is the barrel-tip base
+        // (the SAME vector `Bullet_init` spawns the round from — auStack_150, the port's
+        // `muzzle()` [M :336]) offset by `−(ext's obj+0x8c) · FRand(1.0)` along
+        // `Mat_GetDir(obj+0x90)` [M :224-241]; the ROT z = the caller's `FRand(2π)` [M :242-244].
+        // The game emits this BEFORE the input read (both the hot and the not-hot paths reach
+        // `Input_Action` through here), so it sits ahead of the port's fire/stop block.
+        if self.props.gunimps[gi].hot && self.frame % 6 == 0 {
+            let g = &self.props.gunimps[gi];
+            let (muzzle, dir, radius) = (g.muzzle(), g.barrel_dir(), g.radius);
+            self.gas.init_gunimp_smoke(&mut self.rng, muzzle, [-dir[0], -dir[1], -dir[2]], radius);
+        }
         // The fire/stop block [M GunImp_Update 0x1320d8:247-278]: released or hot → the stop
         // path — `Sound_Stop(ext+0x98)` + handle zero (the 0x61 arm adds its spin-down 0x5e6 at
         // :262-264) — and RETURN (the port's per-shot `play3d` was the fire-audio stutter: a
@@ -17765,6 +17801,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     out.iter().find_map(|e| match e { crate::gt::GTEvent::Smoke { pos } => Some(*pos), _ => None })
                 {
                     self.gas.init_gt_smoke(&mut self.rng, pos);
+                }
+                // The SHOT smoke (audit-effect-calls row 6): the fire tails' alternate-shot
+                // `Gas_Init(0.05, 0.1, …, kind 7, 0x48403080, 1)` — emitted here (before the next
+                // turret's update) so the six shared draws land at the game's stream position.
+                for e in out.iter() {
+                    if let crate::gt::GTEvent::ShotSmoke { muzzle } = e {
+                        self.gas.init_gt_shot_smoke(&mut self.rng, *muzzle);
+                    }
                 }
                 // The rewind writes land at once: zero both mounted players' delays so the
                 // looping deploy/fold anims replay from their parks [M 0x180498:223-227,
@@ -20523,7 +20567,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // fix-guard-weapons3]); `Bullet_init`'s own 0x5ef arm belongs to the hat record (+2 == 0x45
             // [M 0x12c5a0:286-290]) whose handle `Bullet_Delete` stops [M 0x12e660:13-16]. [M]
             if std::mem::take(&mut dr.pending_grenade) {
-                if let Some(g) = dr.throw_grenade(d, rng, index) {
+                if let Some(g) = dr.throw_grenade(d, rng, index, frame) {
                     self.grenades.push(g);
                 }
             }
@@ -21287,8 +21331,27 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if let Some(r) = d.weapons.records.get(g.weapon_type as usize) {
                 let f6c = u32::from_le_bytes(r[0x6c..0x70].try_into().unwrap());
                 let rng = &mut self.rng;
-                if f6c & 0x2 != 0 && self.frame & 3 == 0 {
-                    self.gas.init_trail_smoke(rng, g.pos);
+                // The game's tick gates carry the bullet's creation stamp: `(GameState + (u8)obj[0xec])
+                // & 3 == 0` for the fast arm [M 0x12cbf4-0x12cc08], `% 15 == 0` for the big arm
+                // [M 0x12cc7c-0x12cca0]. obj+0xec = GameState at the object's creation
+                // [M control_init_object 0x134630:15], read as a BYTE by the trail.
+                let tick = self.frame.wrapping_add(u32::from(g.born));
+                if f6c & 0x2 != 0 {
+                    if g.bounces == 0 {
+                        if tick & 3 == 0 {
+                            self.gas.init_trail_smoke(rng, g.pos);
+                        }
+                    } else if tick % 15 == 0 {
+                        // The BIG puff (audit-effect-calls row 12): the post-first-hit arm —
+                        // `Bullet_DoTrails` 0x12d890:397-400 latches obj+0xf6 = 1 (with state
+                        // +0xf4 = 1) on the bullet's FIRST bounce (the +0x70-bit-0x20000
+                        // no-explode path) and `Bullet_trail_effect_smoke` 0x12cba8:29-53's
+                        // `+0xf6 != 0` arm then runs on `% 15 == 0`; DoTrails keeps running
+                        // through the bounced states [M 0x12e7b0:376/:475]. The smoke-bearing
+                        // records 0x1b/0x36/0x69 [L ee_start_05.bin @ 0x2bf150 sweep] are
+                        // bouncy 40mm/stun rounds, so `bounces > 0` IS the latch's arm.
+                        self.gas.init_trail_big_puff(rng, g.pos);
+                    }
                 }
                 if f6c & 0x20 != 0 && self.frame % 3 == 0 {
                     self.gas.init_exhaust_puff(rng, g.pos);
@@ -22166,6 +22229,7 @@ mod tests {
             grenade_weapon: 0x35, grenade_count: 0, pending_grenade: false, shots: Vec::new(),
             // 952: the raw accuracy roll per shot, parallel to `shots`.
             shot_rolls: Vec::new(),
+            shot_flashes: Vec::new(),
             surrender_logged: false, hit_log: 0, detected_logged: false,
             hip_anim: 1.0,
             shot_aims: Vec::new(), log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script: 0, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, wobble: 0, lost_sight: false,

@@ -5259,6 +5259,8 @@ impl Sim {
                         // the 0x3b family (the record's +0x02 base, in scope as `base`).
                         burn: if base == 0x3b { 100 } else { 0 },
                         defused: false,
+                        // obj+0xec = GameState at creation (the trail gates' phase; fx-muzzle-and-trail).
+                        born: self.drones.frame as u8,
                     });
                 } else {
                     // The muzzle light runs on every shot tick for the light-gated records — the
@@ -7607,14 +7609,18 @@ fn player_flash_matrix(datum: &Mat4, seed: u32) -> Mat4 {
 fn muzzle_flash_matrix(datum: &Mat4, seed: u32) -> Mat4 {
     let mut s = seed.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
     let mut rand = || { s ^= s << 13; s ^= s >> 17; s ^= s << 5; (s >> 8) as f32 / (1u32 << 24) as f32 };
+    flash_matrix_jitters(datum, rand() * std::f32::consts::TAU, (rand() - 0.5) * 0.2, (rand() - 0.5) * 0.2)
+}
+
+/// fx-muzzle-and-trail: the game's flash-sprite orientation with the REAL drawn jitters — the
+/// sim's `Drone.shot_flashes` record (`FRand(2π)` → +0x50, `FRandHalf(0.2)` → +0x54 (+π/2),
+/// `FRandHalf(0.2)` → +0x58 [M DroneWeap_FireWeapon 0x17925c-0x1792b0]). Same base as the
+/// seed stand-in above: the muzzle datum's −X column through the spherical conversion.
+fn flash_matrix_jitters(datum: &Mat4, j0: f32, j1: f32, j2: f32) -> Mat4 {
     let d = [-datum[0][0], -datum[0][1], -datum[0][2]];
     let horiz = (d[0] * d[0] + d[2] * d[2]).sqrt();
     let sph = [d[1].atan2(horiz), d[0].atan2(d[2]), (horiz * horiz + d[1] * d[1]).sqrt()];
-    let rot = [
-        sph[0] + rand() * std::f32::consts::TAU,
-        sph[1] + (rand() - 0.5) * 0.2 + std::f32::consts::FRAC_PI_2,
-        sph[2] + (rand() - 0.5) * 0.2,
-    ];
+    let rot = [sph[0] + j0, sph[1] + j1 + std::f32::consts::FRAC_PI_2, sph[2] + j2];
     nf_formats::placement::object_matrix(rot, [datum[3][0], datum[3][1], datum[3][2]])
 }
 
@@ -11662,11 +11668,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     None => collapse(&datum),
                 };
             }
-            // AI-driven: the flash object lives 2 ticks after each shot (`DroneWeap_FireWeapon`).
+            // AI-driven: the flash object lives 2 ticks after each shot (`DroneWeap_FireWeapon`);
+            // fx-muzzle-and-trail: the orientation now comes from the sim's REAL drawn jitters
+            // (`shot_flashes`, recorded at the shot) instead of the fake-seed stand-in.
             if let Some((s, di)) = drone_of(a.character as usize) {
                 let now = s.drones.frame;
-                return match s.drones.list[di].shots.iter().rev().find(|&&f| now.saturating_sub(f) < 2) {
-                    Some(&f) => muzzle_flash_matrix(&datum, f ^ (k as u32).wrapping_mul(0x9e37_79b9)),
+                return match s.drones.list[di].shot_flashes.iter().rev().find(|(f, _)| now.saturating_sub(*f) < 2) {
+                    Some((_, j)) => flash_matrix_jitters(&datum, j[0], j[1], j[2]),
                     None => collapse(&datum),
                 };
             }

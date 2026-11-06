@@ -857,6 +857,12 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     // The ch-0x81 ambush group (3 guards [D]) holds the bunker corridor — clear it before the
     // computer shot (real health: the shot needs Bond alive at the walkway vantage).
     clear_pursuers(&mut w, 16.0, "bunker ambush");
+    // muzzle-repin-5: the shifted fights burned the 0x12 dry before the computer shot (measured
+    // clip 0 spare 0 at the walkway vantage — the shoot_point capped, ch 0x48 never rose). The
+    // file's own loot rule (the 00agent legs): scoop what the ambush kill dropped, then the
+    // fullest gun, before the corridor walk.
+    scoop_drops(&mut w, "bunker ambush drops", 2);
+    arm_fullest(&mut w, "bunker ambush rearm");
     // The computer's bounds centre [L port props]: (−48.86, 6.44, −23.64), on the desk over the
     // corridor's LOWER walkway. The raised-floor approaches' down-shot clips the desk in front of
     // the Destroy prop's bounds (the anim-prev-2 report — three leg variants all arrived on the

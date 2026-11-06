@@ -201,7 +201,11 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     // volleys cost ~3.3 health a pellet at Plr_DMod_Normal 0.7 (the sister's first run died at
     // tick 40108: 52.1 in 16 hits from a guard at 2.8 u). The 02 walk's keep_off/back_off 4.0
     // (the same `Walker` arms its real-health walk pins green).
-    // Difficulty 1 too: the door-8 shotgun closed to 1.9 u and took 48.5 of its real-health 100.
+    // Difficulty 1 too [master 2ea70f9d2]: the door-8 shotgun closed to 1.9 u and took 48.5 of
+    // its real-health 100. fx-muzzle-repin-2 measured: 6.5 changed nothing on the corrected
+    // stream (the same t62511 death, the same 60.4 ledger — the fights' stand movement does not
+    // read keep_off), so the pinned 4.0 stays and the fight-back lever is the fights' pick, not
+    // the stand-off.
     if difficulty >= 1 {
         w.keep_off = Some(4.0);
         w.dmg.back_off = Some(4.0);
@@ -725,7 +729,13 @@ fn killing_a_servant_fails_the_mission() {
 /// only — the load path is the only difference.
 #[test]
 fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
-    walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(2));
+    // fx-muzzle-repin-2: the fights' pick is the fight-back lever. The corrected-stream Agent run
+    // died at t62511 with #5 (0x500003a, 0x1c) at 60.4 across 16 hits while the torso-nearest
+    // return-fire taps took him 12 -> 7 across 12 fights — the attrition law the head-hunting
+    // opt-in documents (the torso-nearest taps take 3-5 rounds a 12-health guard while his own
+    // volley lands): one head hit drops him [M NDrone2_HitDamage 0x145558]. The 4.0 stand-off and
+    // the plain walks' pinned timelines keep their pick.
+    walker::with_real_damage_head_hunting(|| walk_the_full_route_and_complete_every_objective_at(2))
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage_agent` (real-health-00agent-02-03-04): the

@@ -765,14 +765,27 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
         // 0.17 along from (30.33, 0.55, 35.44)); the corridor lane west of it (x ≈ 29.7) is the
         // crossing the probe walked ((29.99, 0.61, 38.00) grounded).
         let _ = w.try_walk_to(Wp::new(29.7, 0.8, 34.7).r(0.9), "the corridor west of the door wall");
+        // fx-muzzle-repin-4: the shifted stream lands the drop east of the lane ((30.52, 0.55,
+        // 34.13) measured) and the west leg's radius-edge arrival (30.48, 34.26) leaves the jamb
+        // in the south leg's line — the walk then E-opens the landing door whose swung leaf
+        // (kind 2 at x 32.0 reaches x ≈ 30.3 open) blocks the lane, and the opener/auto-close
+        // loop eats the 6000-tick cap (all three descent walkers, 2026-11-05). Stay WEST of the
+        // jamb until z is past it (the probe's own lane, 0.9 clear of the bar), then take the
+        // leg-2 spot.
+        let _ = w.try_walk_to(Wp::new(29.4, 0.8, 36.7).r(0.8), "the lane south past the jamb");
         w.walk_to(Wp::new(30.09, 0.65, 38.73).r(1.2), "the corridor south to the leg-2 spot");
-        if !w.tops_up() { clear_hostiles(w, 24.0, 900); }
         {
             let p = w.scene.sim.as_ref().unwrap().bond.pos;
             assert!((27.0..33.5).contains(&p[0]) && p[1] > 0.5 && p[1] < 1.6 && (36.5..40.5).contains(&p[2]),
                 "the descent lands on the facility corridor floor at the leg-2 start (the walked route, probe landing (29.99, 0.61, 38.00)), got {p:?}");
             eprintln!("[014] the descent landed {p:?}");
         }
+        // The hostile clear (real damage only) runs AFTER the landing pin (fx-muzzle-repin-4):
+        // the fights displace Bond (the ledger's backpedal + the loot passes) and the clear's
+        // own walk home is lenient — on the shifted stream it gave up 8 u short (z 30.75) and
+        // the post-clear position is no longer the descent's pin. The descent's geometry is
+        // what this block pins; the clear's displacement is the fight phase's own.
+        if !w.tops_up() { clear_hostiles(w, 24.0, 900); }
     }
 
     // Leg 2: west to the Kiko cut-scene touch #381 — the walk's OWN route (level-14-delta-exit-walk).
@@ -1941,6 +1954,10 @@ fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
         }
         let _ = w.try_walk_to(Wp::new(30.4, 1.1, 34.9).r(0.8), "down onto the corridor floor (0.0)");
         let _ = w.try_walk_to(Wp::new(29.7, 0.8, 34.7).r(0.9), "the corridor west of the door wall");
+        // The jamb-lane leg (fx-muzzle-repin-4): the shared west route's own fix — the shifted
+        // stream lands the drop east of the lane and the open leaf blocks the direct south
+        // steer; see walk_the_west_route_to_the_switch_band's block for the measurement.
+        let _ = w.try_walk_to(Wp::new(29.4, 0.8, 36.7).r(0.8), "the lane south past the jamb");
         w.walk_to(Wp::new(30.09, 0.65, 38.73).r(1.2), "the corridor south to the leg-2 spot");
     }
 

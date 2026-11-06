@@ -353,6 +353,7 @@ fn castle_d_intro_enables_the_assassin_and_the_kill_ends_the_mission_to_the_outr
         phase: None,
     burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
     defused: false,
+    born: 0,
     });
     let mut objective_at = None;
     for _ in 0..900u32 {
@@ -425,6 +426,7 @@ fn a_double_cross_death_opens_no_transition() {
         phase: None,
     burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
     defused: false,
+    born: 0,
     });
     let mut failed = false;
     for _ in 0..600u32 {
