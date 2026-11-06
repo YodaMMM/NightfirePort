@@ -610,6 +610,9 @@ pub struct Sim {
     /// control_handle_cel_change 0x133288:186-231]) since the level load — the walks' gate metric:
     /// it should sit near zero on real input.
     pub recovery_count: u64,
+    /// void-recovery-2: the last recovery's where-and-from (tick, the clamped pos, the pre-clamp
+    /// prev, the old cel) for the env-gated log (`NF_RECOVERY_LOG=1` prints each fire).
+    pub recovery_last: (u64, [f32; 3], [f32; 3], Option<usize>),
     /// fix-weapon-fire-modes: the guided-missile camera (`Bullet_init` 0x12c5a0:234-254 for a weapon
     /// record with `+0x6C & 4` — only the AT-420 Sentinel 'Guided' 0x2C [L ee_start_05.bin]). While
     /// `Some`, the view rides the projectile: position/direction = the bullet's [M
@@ -2590,6 +2593,40 @@ impl Sim {
         Some((m.debriefing(), m.settings.clone()))
     }
 
+    /// void-recovery-2: one recovery fire — the gate metric plus the env-gated log line
+    /// (`NF_RECOVERY_LOG=1`), recording the sim tick, the clamped position, the pre-clamp prev
+    /// and the old cel.
+    fn recovery_fired(&mut self, pos: [f32; 3], prev: [f32; 3], cel: Option<usize>) {
+        self.recovery_count += 1;
+        self.recovery_last = (self.drones.frame as u64, pos, prev, cel);
+        static LOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *LOG.get_or_init(|| std::env::var_os("NF_RECOVERY_LOG").is_some()) {
+            eprintln!("[recovery] tick {} pos {pos:?} prev {prev:?} cel {cel:?}", self.drones.frame);
+        }
+    }
+
+    /// The mid-session placement — `Player_StandAtNewPosition` 0x190d88's relink core [M]: the
+    /// game writes obj+0x30 AND obj+0x40 to the new position (:21-28), clears the inertia
+    /// (`Player_ClearInertia`; the port zeroes `vel`), then `control_unlink_object` (:118) and
+    /// `build_LinkToRoom` (:119) — its `build_FindCel` 0x1c8cb0 at the position +0.1y (:104-108)
+    /// relinks, and a MISS leaves the object UNLINKED: the unlinked retry path
+    /// (`control_handle_cel_change` 0x133288:63-73) never runs the out-of-cel recovery — for the
+    /// class-2 player it only raises the fell-out flag (`Drone_FellOutMap` 0x13a878: obj+0xfe |= 1
+    /// + NDrone2_Enable(0), no reposition). So a PLACED player at a spot no room cel holds stays
+    /// there unlinked; only a raw poke of obj+0x30 (obj+0x40 keeping the old position — the
+    /// state `step_bond`'s >3.0 arm models) recovers into the old cel [D live, the measured
+    /// 07000003 teleports]. The game's floor snap (`build_PointOnFloor` 0x1c95a8, y = floor+1.1
+    /// :104-114) applies only when the FindCel hit found a cel; the port keeps the caller's y
+    /// here [S — the placement tests' spots stand near floors and settle by physics, and the
+    /// snap's scoped floor probe is the load spawn's `Bond::stand_at` shape, not this path's].
+    pub fn place_bond(&mut self, p: nf_game::world::V3, yaw: f32) {
+        self.bond.pos = p;
+        self.bond.prev_pos = p;
+        self.bond.vel = [0.0; 3];
+        self.bond.yaw = yaw;
+        self.bond.cel = self.world.find_cel([p[0], p[1] + 0.1, p[2]]);
+    }
+
     pub fn step_bond(&mut self, mut input: nf_game::player::Input, trigger: bool, reload: bool, use_key: bool) {
         // The game's frame clock — `UpdateT0Count` 0x109468, called from `VBlankInt` 0x124088:76
         // (`PS2DrawFrameTime`), `psiPreDraw`/`psiPostDraw` (`PS2DrawCodeTime`), `psiPreGame_Run` /
@@ -3241,7 +3278,7 @@ impl Sim {
                 match self.world.find_cel(self.bond.pos) {
                     Some(c) => Some(c),
                     None => self.world.out_of_cel_recovery(self.bond.cel, old_prev, nf_game::player::Bond::SPHERE_RADIUS)
-                        .map(|(cell, p)| { self.recovery_count += 1; self.bond.pos = p; cell }),
+                        .map(|(cell, p)| { self.recovery_fired(p, old_prev, self.bond.cel); self.bond.pos = p; cell }),
                 }
             } else {
                 match self.world.player_cel_relink(self.bond.cel, self.bond.prev_pos, self.bond.pos, self.bond.pos) {
@@ -3252,7 +3289,7 @@ impl Sim {
                     // obj+0x40 (the `Bond` field's own doc).
                     // The `build_FindCel` retry comes first [M 0x133288]: only a full miss recovers.
                     None => match self.world.find_cel(self.bond.pos) { Some(c) => Some(c), None => self.world.out_of_cel_recovery(self.bond.cel, self.bond.prev_pos, nf_game::player::Bond::SPHERE_RADIUS)
-                        .map(|(cell, p)| { self.recovery_count += 1; self.bond.pos = p; cell }) },
+                        .map(|(cell, p)| { self.recovery_fired(p, self.bond.prev_pos, self.bond.cel); self.bond.pos = p; cell }) },
                 }
             };
             let water = bond_cel.and_then(|cell| self.room_cell.iter().position(|&c| c == Some(cell)))
@@ -10569,6 +10606,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 swing_phase: 0.0,
                 // void-recovery-2: the walks' recovery-fire counter (its own line, lesson 4).
                 recovery_count: 0,
+                recovery_last: (0, [0.0; 3], [0.0; 3], None),
             })
         });
         let fog = drones.and_then(|d| fog_for(d.level_id));

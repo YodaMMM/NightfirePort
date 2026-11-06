@@ -35,7 +35,11 @@ fn load_06(iso: &str, extra: &[u32]) -> nf_view::scene::Scene {
 fn settle_near(scene: &mut nf_view::scene::Scene, spot: [f32; 3]) {
     let sim = scene.sim.as_mut().unwrap();
     let floor = sim.world.segment(spot, [spot[0], spot[1] - 30.0, spot[2]]).map(|t| spot[1] - 30.0 * t);
-    if let Some(f) = floor { sim.bond.pos = [spot[0], f + 0.1, spot[2]]; } else { sim.bond.pos = spot; }
+    // The game's placement, not a poke (`Player_StandAtNewPosition` 0x190d88 writes obj+0x40 too):
+    // a FindCel miss leaves Bond unlinked AT the spot, never shoved back [M 0x133288:63-73].
+    let yaw = sim.bond.yaw;
+    let p = floor.map_or(spot, |f| [spot[0], f + 0.1, spot[2]]);
+    sim.place_bond(p, yaw);
     for _ in 0..60 { sim.step_bond(Input::default(), false, false, false); }
 }
 
