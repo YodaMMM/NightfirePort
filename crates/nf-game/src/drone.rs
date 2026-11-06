@@ -5388,13 +5388,17 @@ impl Drone {
 
     /// `DroneVision_EnemyAlerts(msg 0x14)` (0x177c18) → `DroneVision_AlertSound` (0x177800): saves the return state and
     /// home the first time, then HeardNoise when the sound's share > 0.2 or alertness > 0.66. Ignored without prop 0x1F,
-    /// more than 50 units from the opponent, or when already attacking.
-    fn enemy_alerts(&mut self, d: &Data, s: u8) -> Option<u8> {
+    /// more than 50 units from the opponent, or when already attacking. Message-aware (`m`): the SOUND fall-through
+    /// carries AlertSound's sighted gate — a drone with the 0x4000000 sighting flag returns 0 there [M 0x177800:48-50] —
+    /// while the alarm (EnemyAlerts case 0x1e [M 0x177c18:107-118]) keeps its own gates (the mode rows and the bot arm;
+    /// that path has no 0x4000000 check).
+    fn enemy_alerts(&mut self, d: &Data, s: u8, m: u8) -> Option<u8> {
         if !self.investigating {
             self.resume_state = s;
             self.home = self.feet();
         }
         if !self.prop(d, 0x1f) || self.dist > 50.0 || self.alert_bits & 0x10 != 0 { return None; }
+        if m == msg::SOUND && self.sighted { return None; } // AlertSound 0x177800:48-50
         (self.sound_share > 0.2 || self.alert > 0.66).then_some(state::HEARD_NOISE)
     }
 
@@ -5404,7 +5408,7 @@ impl Drone {
             if !self.investigating { self.resume_state = s; self.home = self.feet(); }
             return Some(state::ATTACK);
         }
-        self.enemy_alerts(d, s)
+        self.enemy_alerts(d, s, m)
     }
 
     /// AlertToPosition's move (`MoveToAlertPosition`): run when the route is 10 or longer, else the alert walk;
@@ -5768,6 +5772,19 @@ impl Drone {
             first = if self.prop(d, 0x1b) { if rng.rand(2) == 0 { 0 } else { self.choose_combat_move(d, rng) } }
                 else if self.prop(d, 0x18) { 0 } else if self.prop(d, 0x19) { self.choose_combat_move(d, rng) } else { 0 };
             if first_sight && first == 0 { self.attack_talk(d.level, rng); }
+            // The tail's prop-0x52 fail [M 0x148010:95-98]: `behaviour_util_getProperty(0x52,
+            // Drone+0x4d8)` non-zero → `DroneFunc_SetMissionFailReason(drone, 8)` —
+            // `Mission_SetFailLabel(0x4000033 "Cover Lost")` + `switch_channels[99] = 1` [M
+            // 0x13e560 case 8 → the 2/4/5/7/8/10/0xb/0xc arm + the default]. It rides the
+            // first-attack tail right after `AttackTalk` [M :94], so the game's early returns
+            // skip it [M :24-36 — a FirstAlertState / FirstSightState pick returns before :94]:
+            // only the `first == 0` pass reaches it here, before the alt-state tail [M :99+].
+            // The disc's 0x52 carriers are all on 07000007 (38 drone placements, map47 — the
+            // [D] census, probe_prop52_census); the ported 0xb reader [M 0x160140:64-67] is the
+            // PartyGirl UPDATE's own arm and stays as-is.
+            if first == 0 && self.prop(d, 0x52) {
+                self.fail_reason = Some(crate::ally::mission_fail_reason(8));
+            }
         }
         if first != 0 { return first; }
         // G-055: `FirstAttack`'s alternate-state tail [M 0x148010:100-131] — with the alt
@@ -7551,7 +7568,7 @@ impl Drone {
                         self.set_state(ATTACK);
                     }
                     true
-                } else if let Some(n) = self.enemy_alerts(d, s) {
+                } else if let Some(n) = self.enemy_alerts(d, s, m) {
                     self.set_state(n);
                     true
                 } else {
@@ -7749,7 +7766,7 @@ impl Drone {
                     self.set_state(ATTACK);
                     return true;
                 }
-                if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); }
+                if let Some(n) = self.enemy_alerts(d, s, m) { self.set_state(n); }
                 true
             }
             // Sniper (0x15fab0 / 0x15fc18 / 0x15fd88 / 0x15ff80). SniperIdle: anim 0x0E, stationary, look for Bond.
@@ -8226,7 +8243,7 @@ impl Drone {
                 else if self.alert < 0.66 { self.set_state(IDLE); } // `+0x50c` = the AlertStatusSet share
                 true
             }
-            (INVESTIGATE, msg::SHOUT | msg::SCREAM | msg::SOUND) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
+            (INVESTIGATE, msg::SHOUT | msg::SCREAM | msg::SOUND) => { if let Some(n) = self.enemy_alerts(d, s, m) { self.set_state(n); } true }
             (INVESTIGATE, msg::ALARM) => {
                 // EnemyAlerts case 0x1E [M 0x177c18]: the first-time stamps then Attack 0x56.
                 if !self.investigating { self.resume_state = s; self.home = self.feet(); }
@@ -8609,7 +8626,7 @@ impl Drone {
             }
             // The alert messages [M cases 0x11/0x12/0x14/0x15/0x16/0x1e → `DroneVision_EnemyAlerts`].
             (INTEROGATE | INTEROGATE_ASSIST_WAIT, msg::SOUND | msg::SCREAM | msg::SHOUT | msg::ALARM) => {
-                if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n) }
+                if let Some(n) = self.enemy_alerts(d, s, m) { self.set_state(n) }
                 true
             }
             // Msg 0x1f → `DroneFunc_DoForcedAttack` [M case 0x1f]; msg 0x21 → ConsiderExplosive(…, 0x56).
@@ -8799,7 +8816,7 @@ impl Drone {
             // [M 0x160ed0:95-103] — msg 0x14 (SOUND) has no arm (default → 0, unhandled): gunfire sounds
             // never move him. The port's SOUND half ran the guard heard-noise chain (0xa3 → DrawWeapon 0x66,
             // anim set 12 → 4) — the guard-death symptom. The scare path is NearArmedBond (case 3).
-            (TRUCK_DRIVER_IDLE, msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
+            (TRUCK_DRIVER_IDLE, msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s, m) { self.set_state(n); } true }
             (TRUCK_DRIVER_IDLE, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
             // TruckDriverMission (0x161030): ENTER clears the sit ready bits and plays the walk
             // (`CallAnim(0, 0x37, …)`) + the BondTalk timer (+0xcc0=1, +0xcc4=60 ticks, +0xcc8=0 —
@@ -8829,7 +8846,7 @@ impl Drone {
                 true
             }
             (TRUCK_DRIVER_MISSION, msg::BULLET) => self.on_bullet_resume(d, rng, frame, CIVILIAN_SCARED, false),
-            (TRUCK_DRIVER_MISSION, msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
+            (TRUCK_DRIVER_MISSION, msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s, m) { self.set_state(n); } true }
             (TRUCK_DRIVER_MISSION, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
             // PartyGirlInit (0x1728c0) ENTER: prop 0x1d → AssignAIPath(8) — with a route → CivilianMission
             // (0x16, the walkers); else the prop clears and PartyGirl (0x2f) [M 0x1728c0:17-25]. The game's NIS
@@ -8873,7 +8890,7 @@ impl Drone {
                 true
             }
             (PARTY_GIRL, msg::BULLET) => self.on_bullet_resume(d, rng, frame, CIVILIAN_SCARED, false),
-            (PARTY_GIRL, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
+            (PARTY_GIRL, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s, m) { self.set_state(n); } true }
             (PARTY_GIRL, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
             // CivilianGuard (0x1603a8): stands a post — look-around (0x21) at alert ≥ 0.66, stand idle (0x24) below;
             // armed person within 20 (0x41a00000) or armed Bond in sight (`+0x228 & 4`) → Attack (0x56);
@@ -8910,7 +8927,7 @@ impl Drone {
                 true
             }
             (CIVILIAN_GUARD, msg::BULLET) => self.on_bullet_resume(d, rng, frame, ATTACK, false),
-            (CIVILIAN_GUARD, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
+            (CIVILIAN_GUARD, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s, m) { self.set_state(n); } true }
             (CIVILIAN_GUARD, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
             // CivilianInit (0x172730) ENTER: voice 0xd → PartyGirl; prop 0x1d → AssignAIPath(8) — with a route →
             // CivilianMission (0x16); else the prop clears, AssignAIPath(4): route → CivilianPatrol (0x14),
@@ -8984,7 +9001,7 @@ impl Drone {
                 if self.voice_type == 0x13 { true } else { self.set_state(CIVILIAN_MISSION_WAIT); true }
             }
             (CIVILIAN_MISSION, msg::BULLET) => self.on_bullet_resume(d, rng, frame, CIVILIAN_SCARED, false),
-            (CIVILIAN_MISSION, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
+            (CIVILIAN_MISSION, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s, m) { self.set_state(n); } true }
             (CIVILIAN_MISSION, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
             // CivilianMissionWait (0x15dbb0, `NDrone2_StateFuncs[0x17]` [L 0x29b300]). ENTER: the ready
             // flags, stand idle at alert < 0.66 else the look-around 0x21, timer C armed 2 s
@@ -9044,7 +9061,7 @@ impl Drone {
             // pre-dispatch handles it with the ATTACK resume the state's case 0x21 asks for
             // [M 0x15dbb0:132-135 → ConsiderExplosive(…, 0x56)].
             (CIVILIAN_MISSION_WAIT, msg::WAIT_PAUSE) => { self.timer_c = Some(frame + 120); true }
-            (CIVILIAN_MISSION_WAIT, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
+            (CIVILIAN_MISSION_WAIT, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s, m) { self.set_state(n); } true }
             (CIVILIAN_MISSION_WAIT, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
             // EnemyMission 0x1b (`NDrone2_DSTATE_EnemyMission` 0x15e1e8, `NDrone2_StateFuncs[0x1b]`
             // [L 0x29b300 + symtab]): the ENEMY side of the prop-0x1D mission walks — the Idle/Alert
@@ -9138,7 +9155,7 @@ impl Drone {
             // `DroneVision_EnemyAlerts`, a pick SetStates (0x11/0x12 ride the shared SHOUT/SCREAM
             // row above; 0x1e the shared ALARM row above; 0x15/0x16 have no decompiled sender — the
             // msg census).
-            (ENEMY_MISSION, msg::SOUND) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
+            (ENEMY_MISSION, msg::SOUND) => { if let Some(n) = self.enemy_alerts(d, s, m) { self.set_state(n); } true }
             // [M 0x15e1e8:113-115] `DroneFunc_DoForcedAttack` — the shared arm's body.
             (ENEMY_MISSION, msg::FORCED_ATTACK) => {
                 if self.alerted_by_drone && !self.first_attack_done {
@@ -9181,7 +9198,7 @@ impl Drone {
                 true
             }
             (CIVILIAN_PATROL, msg::BULLET) => self.on_bullet_resume(d, rng, frame, ATTACK, false), // HandleImpact(0x56, 0)
-            (CIVILIAN_PATROL, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
+            (CIVILIAN_PATROL, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s, m) { self.set_state(n); } true }
             (CIVILIAN_PATROL, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
             // CivilianChallenge 0x3E (`NDrone2_DSTATE_CivilianChallenge` 0x162558): ENTER —
             // `+0x4F8 |= 0x10000`, `+0x4FC |= 0x20` (the interrogate flag — no port reader; not
@@ -9238,7 +9255,7 @@ impl Drone {
                 true
             }
             (CIVILIAN, msg::BULLET) => self.on_bullet_resume(d, rng, frame, CIVILIAN_SCARED, false),
-            (CIVILIAN, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s) { self.set_state(n); } true }
+            (CIVILIAN, msg::SOUND | msg::ALARM) => { if let Some(n) = self.enemy_alerts(d, s, m) { self.set_state(n); } true }
             (CIVILIAN, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
             // CivilianScared (0x15d3a0) ENTER: vision on, alert 2 (`Drone_AlertStatusSet(2)`), the scared talk;
             // with the scared-run mode (+0xC6 == 7) `FindRunToPoint` first — found → return state 0x13 and
@@ -23093,5 +23110,69 @@ mod abseil_tests {
         dr2.send(&d, &mut rng, 100, msg::SOUND);
         assert_eq!(dr2.state, state::PLAY_SCRIPT,
             "the 0x4000000 bit deafens the scripted attack row [M 0x177800:48-50]");
+    }
+
+    /// REGRESSION (enemy-alerts-sighted-gate): the shared `enemy_alerts` fold carries AlertSound's
+    /// sighted gate for the SOUND fall-through — `(+0x4F8 & 0x4000000) != 0` → 0 [M
+    /// DroneVision_AlertSound 0x177800:48-50] — so a sighted guard in a fold-routed state (Idle
+    /// here) ignores a share > 0.2 sound instead of falling into HeardNoise 0xa2. The alarm keeps
+    /// its own gates: EnemyAlerts case 0x1e re-checks 0x800000 and the mode rows only, with no
+    /// 0x4000000 check on that path [M 0x177c18:107-118], so the same sighted guard's alarm still
+    /// attacks (the shared IDLE-family ALARM arm).
+    #[test]
+    fn sound_spares_a_sighted_guard_in_the_fold_but_the_alarm_keeps_its_own_gates() {
+        // prop 0x1f needs REAL table wiring — `empty_data!`'s empty descs return 0 for every
+        // prop, which would stub the fold's first gate. One desc (0x1f → word 0, shift 0,
+        // masks[0] = 1) is enough: `get`/`set` are the game's bitDescs/bitMasks decode
+        // [M nf-formats::drone::PropertyTables 0x1c7de8's reader shape].
+        let keep = (
+            CollisionWorld::empty(),
+            nf_formats::drone::DroneAnimData { states: Vec::new(), info: Vec::new(), tables: Vec::new() },
+            nf_formats::drone::PropertyTables { descs: vec![[0u8, 0u8]; 0x20], masks: vec![1u32], types: Vec::new() },
+            std::collections::HashMap::<u32, nf_formats::anim::Script>::new(),
+            nf_formats::weapon::WeaponData { records: Vec::new(), ammo_cap: Vec::new(), ammo_raw: Vec::new() },
+            nf_formats::tuning::Tuning::default(),
+            std::collections::HashMap::<u32, nf_formats::anim::Sequence>::new(),
+            std::collections::HashMap::<u32, nf_formats::character::Skin>::new(),
+            std::collections::HashMap::<u8, nf_formats::character::Skeleton>::new(),
+            crate::nav::Network::default(),
+            Vec::<crate::cover::CoverNode>::new(),
+            nf_formats::hitbox::CollisionBones { human: Vec::new(), astronaut: Vec::new() },
+            Vec::<crate::aivolume::AiVolume>::new(),
+            std::collections::HashMap::<u32, crate::pickup::Model>::new(),
+            Vec::<crate::aipoint::AiPoint>::new(),
+        );
+        let d = Data { tables: &keep.1, props: &keep.2, scripts: &keep.3, weapons: &keep.4, world: &keep.0, level: 0x0700_0001,
+            sequences: &keep.6, skins: &keep.7, skeletons: &keep.8, nav: &keep.9, covers: &keep.10, tuning: &keep.5,
+            hitboxes: &keep.11, volumes: &keep.12, sfx: None, models: &keep.13, surfaces: None, voices: None,
+            difficulty: 2, ai_points: &keep.14 };
+        let mut rng = Rng::new(0x5eed);
+        // Sighted Idle guard, share 0.5 sound: the gate returns 0 — no HeardNoise, no transition.
+        let mut dr = drone_at([10.0, 0.0, 10.0]);
+        d.props.set(0x1f, &mut dr.props, 1); // the hearing prop [M 0x177800:20-21]
+        assert!(dr.prop(&d, 0x1f), "the wired prop reads back");
+        dr.state = state::IDLE;
+        dr.sighted = true;
+        dr.sound_share = 0.5;
+        dr.send(&d, &mut rng, 100, msg::SOUND);
+        assert_eq!(dr.state, state::IDLE,
+            "the 0x4000000 gate stands before the fall-through [M 0x177800:48-50]; log {:?}", dr.log);
+        // Sister: unsighted, the same sound takes the fall-through → HeardNoise 0xa2
+        // [M 0x177800:74-79 — the bVar6 arm's 0xa2 unless share ≤ 0.2 and alertness ≤ 0.66].
+        let mut dr2 = drone_at([10.0, 0.0, 10.0]);
+        d.props.set(0x1f, &mut dr2.props, 1);
+        dr2.state = state::IDLE;
+        dr2.sound_share = 0.5;
+        dr2.send(&d, &mut rng, 100, msg::SOUND);
+        assert!(dr2.log.iter().any(|&(f, n)| f == 100 && n == state::HEARD_NOISE),
+            "the unsighted fall-through reaches HeardNoise [M 0x177800:74-79]; log {:?}", dr2.log);
+        // The alarm keeps its own gates [M 0x177c18 case 0x1e — no 0x4000000 check on that path]:
+        // the same sighted guard's alarm still attacks.
+        let mut dr3 = drone_at([10.0, 0.0, 10.0]);
+        dr3.state = state::IDLE;
+        dr3.sighted = true;
+        dr3.send(&d, &mut rng, 100, msg::ALARM);
+        assert!(dr3.log.iter().any(|&(f, n)| f == 100 && n == state::ATTACK),
+            "the alarm path keeps its own gates [M 0x177c18 case 0x1e]; log {:?}", dr3.log);
     }
 }

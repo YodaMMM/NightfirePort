@@ -3270,7 +3270,7 @@ impl Sim {
                     .map(|x| ([x.pos[0], x.pos[1] + 0.4, x.pos[2]], [x.pos[0], x.pos[1] - 0.6, x.pos[2]], 0.4f32))
                     .collect()
             };
-            let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, level_bump_5fb: false, straddle: &straddle_cells, bot_capsules: &bot_capsules };
+            let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, straddle: &straddle_cells, bot_capsules: &bot_capsules };
             // The third-icon context [M ThirdIcon_Update 0x196e80 + Player_CollisionHandler 0x1949a8:22]:
             // the tick starts with +0x95F = 0xFF (none), then every ENABLED icon (its param-1 channel on,
             // or param 1 == 0 = always [M ThirdIcon_Create 0x197070:27-32]) whose straddle-cel set holds
@@ -3609,6 +3609,12 @@ impl Sim {
         let moved_h = (dx * dx + dz * dz).sqrt();
         let climbing = self.bond.substate == nf_game::player::SS_CLIMB;
         let moved = if climbing { (moved_h * moved_h + dy * dy).sqrt() } else { moved_h };
+        let stride = if climbing { 0.4125 } else { 1.65 };
+        // A jump landing forces two steps: `BL+0x924 = 999.0` fires the next one, and `BL+0x966`
+        // counts 8 down to one more [M 0x1916b0:200-201, 0x1befd8:168-171].
+        if std::mem::take(&mut self.bond.land_step) { self.step_dist = 999.0; }
+        let forced_step = self.bond.land_countdown == 1;
+        self.bond.land_countdown = self.bond.land_countdown.saturating_sub(1);
         if self.bond.grounded && !self.disabled && self.bond.substate != nf_game::player::SS_SWIM {
             // The swim gate [M]: the game's step is `Effect_Create` off the CACHED ground hit
             // (0x1ce688:63 early-outs unless `(hit+0x50 & 0x3f) != 0`); the swim capsule (0x194df0
@@ -3616,14 +3622,14 @@ impl Sim {
             // footstep. The port's floor ray still
             // finds the bed mid-pond, so the substate is the gate here.
             self.step_dist += moved;
-            let stride = if climbing { 0.4125 } else { 1.65 };
+            if forced_step { self.step_dist = stride + 0.0001; }
             if self.step_dist > stride {
                 self.step_dist %= stride;
                 let p = self.bond.pos;
                 if climbing {
                     self.drones.audio.play3d(0x286, p, None);
                 } else if let (Some(s), Some((t, n, m, _pass, host))) =
-                    (self.surfaces.as_ref(), self.world.segment_surface_host(p, [p[0], p[1] - 1.6347, p[2]], true))
+                    (self.surfaces.as_ref(), self.world.segment_surface_host(p, [p[0], p[1] - 1.6347, p[2]], false))
                 {
                     if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.footstep, m) {
                         self.drones.audio.play3d(id, [p[0], p[1] - 1.6347 * t, p[2]], None);
@@ -3633,9 +3639,8 @@ impl Sim {
                     // the water material pair runs `Env_WaterRipple(hit)` [M]. `env_water_ripple`
                     // re-checks `(mat & 0x3f) - 0xd < 2` [M 0x17c118:9] and spawns the kind-1 ring
                     // at the ground hit point (HITDATA+0x40 [M docs/fields/hitdata-spawner-ally.md]).
-                    // The port's probe is the grounding variant (no_water drops only the 0xE planes
-                    // — world.rs `segment_surface`), so 0xD floors ripple; the game's collide hit
-                    // can also be 0xE [S — the port's footstep probe never sees those planes].
+                    // The probe keeps the water planes: wading steps are the 0xE surface's own
+                    // [L PCSX2 07000002 (-79, 28): byte 0xE, step 0x28].
                     nf_game::env::env_water_ripple(&mut self.drones.gas, m, [p[0], p[1] - 1.6347 * t, p[2]]);
                     // The footprint decal arm — audit-effect-calls: the game's step is the FULL
                     // `Effect_Create(…, foot | 0x42)` [M 0x1befd8:196-201], flag 0x2 →
@@ -5709,6 +5714,24 @@ impl Sim {
                     if owner == usize::MAX { m.damage_site(dmg, local); }
                 }
                 if bullets > 0.0 { m.damage_site(bullets, local); }
+                // mp-site-destruction-blast: the offline pipeline's death-blast drain — the
+                // queued blast rides the drones' shared pending_blasts slot (the copter death
+                // blast's route), so the NEXT tick's `spawn_blast` propagates it at the site's
+                // obj+0x80: Bond's body, the breakables/destroyables, the mines — the game's
+                // explosion object propagates on its first update, one frame after the death
+                // [M Explode_CollisionHandler 0x17cde0's one-shot latch]. The owner is the
+                // copter's not-the-player mark usize::MAX - 1 (the game's NULL attacker
+                // [M 0x187474]) — NOT usize::MAX, which the drones' slot reads as "Bond's
+                // throw" and would re-feed the site. Script 0x060004f, scale 5.0, debris 0 —
+                // the call's script, scale and stack-u16 args [M 0x1870a0:144-146]. Online the shared combat
+                // owns the propagation (`step_net_combat`'s drain) — this arm is the offline
+                // gate's sister.
+                if self.net_rng.is_none() && self.net_rng_shared.is_none() {
+                    let queued = std::mem::take(&mut m.objects_rt.pending_blasts);
+                    for (pos, radius, damage, _) in queued {
+                        self.drones.pending_blasts.push((pos, radius, damage, usize::MAX - 1, 0, 0x0600_004f, 5.0, 0));
+                    }
+                }
             }
         }
         // death-blood-pane: `Player_CheckForDeath` runs `Player_WeaponNone` 0x1a9858 on the death
@@ -14063,7 +14086,7 @@ impl Sim {
             }
             let ctx = nf_game::player::LadderCtx {
                 ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims),
-                water, sink: input.crouch, creepwalls: &self.creepwalls, level_bump_5fb: false,
+                water, sink: input.crouch, creepwalls: &self.creepwalls,
                 straddle: &[], // MP remotes carry no per-body cel link yet — no scoping.
                 bot_capsules: &[], // the remotes are bodies, not bots — no actor-actor push.
             };
@@ -14573,6 +14596,12 @@ impl Sim {
             Hurt::Bullet { victim, attacker, amount, part, dir, .. } => (victim, attacker, amount, part, dir, true),
             Hurt::Blast { victim, attacker, amount, .. } => (victim, attacker, amount, cb::part::NONE, [0.0; 3], false),
         };
+        // mp-site-destruction-blast: a blast owner >= MAX_AGENTS is the site death blast's NULL
+        // attacker [M 0x1870a0:145, t3 = 0 at 0x187474] — `Explode_Propagate`'s case-3
+        // registration gate skips a NULL attacker [M 0x17c518:128-134], so no last-shooter
+        // registration and no kill credit: the hurt still applies in full.
+        let blast_null_owner = matches!(h, Hurt::Blast { .. }) && attacker >= nf_net::MAX_AGENTS;
+        let attacker = if blast_null_owner { usize::MAX } else { attacker };
         // A bot.
         if let Some(j) = m.bots.iter().position(|b| b.slot == victim) {
             if m.bots[j].dead { return; }
@@ -14597,7 +14626,10 @@ impl Sim {
                 // The same death arm's visit-row reset [M 0x171518:17 — the game's BotDead
                 // runs it on every death path; the combat kill is this site's shape].
                 nf_game::mp::reset_pickup_bot_visit_times(&mut self.mp_bot_pickups, j);
-                m.player_killed(victim, Some(attacker), false, false, &mut self.drones.rng);
+                // mp-site-destruction-blast: the NULL-attacker blast credits nobody [M the gate
+                // at 0x17c518:128-134].
+                let killer = if blast_null_owner { None } else { Some(attacker) };
+                m.player_killed(victim, killer, false, false, &mut self.drones.rng);
             }
             return;
         }
@@ -14653,7 +14685,10 @@ impl Sim {
         if self.mp_hp[victim] <= 0.0 {
             self.mp_hp[victim] = 0.0;
             self.mp_dead_ticks[victim] = 1;
-            if let Some(m) = self.mp.as_mut() { m.player_killed(victim, Some(attacker), false, false, &mut self.drones.rng); }
+            // mp-site-destruction-blast: the NULL-attacker blast credits nobody [M the gate at
+            // 0x17c518:128-134].
+            let killer = if blast_null_owner { None } else { Some(attacker) };
+            if let Some(m) = self.mp.as_mut() { m.player_killed(victim, killer, false, false, &mut self.drones.rng); }
             eprintln!("[mp] slot {attacker} killed slot {victim} (frame {})", self.drones.frame);
         }
     }
@@ -14725,7 +14760,15 @@ impl Sim {
         let bodies = self.mp_combat_bodies(local);
         let steer: [(f32, f32); nf_game::mp::MP_MAX_SLOTS] = std::array::from_fn(|s| if s < nf_net::MAX_AGENTS { (inputs[s].turn, inputs[s].look) } else { (0.0, 0.0) });
         let site = self.mp.as_ref().and_then(|m| m.site_sphere());
-        let hurts = self.mp_combat.step(&self.world, &self.weapons, &bodies, site, &steer, &mut self.drones.rng, frame);
+        // mp-site-destruction-blast: the site's death blast drains here, the tick after the
+        // death (the game's explosion object propagates on its first update [M
+        // Explode_CollisionHandler 0x17cde0's one-shot latch]), through the shared combat's
+        // blast pass so it reaches the bodies and the bots on every machine the same way.
+        let site_blasts = match self.mp.as_mut() {
+            Some(m) => std::mem::take(&mut m.objects_rt.pending_blasts),
+            None => Vec::new(),
+        };
+        let hurts = self.mp_combat.step(&self.world, &self.weapons, &bodies, site, &steer, &mut self.drones.rng, frame, &site_blasts);
         for h in hurts { self.mp_hurt(h, local); }
         // The guided ride: this machine's camera follows its own slot's shared rocket, and the
         // local body holds still exactly while the shared ride says so (`step_bond`'s online arm).

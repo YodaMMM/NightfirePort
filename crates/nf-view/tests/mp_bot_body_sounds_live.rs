@@ -1,8 +1,8 @@
-//! mp-bot-body-sounds: the MP bots' jump launch and head-bump sounds stay SILENT.
+//! mp-bot-body-sounds: the MP bots' jump launch and landing sounds stay SILENT.
 //!
 //! The decompile says the game's bots never play either sound. `Player_HandleJump` 0x1916b0 is
 //! the ONLY code in ACTION.ELF that plays them (the launch 0xA3 [M :184, disasm `addiu a0,
-//! zero,0xa3` at 0x1918d8 → `Sound_Play3D` 0x191924]; the head bump 0x5FB/0xA3 [M :195-198,
+//! zero,0xa3` at 0x1918d8 → `Sound_Play3D` 0x191924]; the landing 0x5FB/0xA3 [M :195-198,
 //! 0x1919e4/0x191a14]) — a whole-binary immediate scan of every `Sound_Play3D` 0x1dd548 and
 //! `Sound_Play` 0x1dd880 call site finds no other producer, in SLUS_205.79 or DRIVING.ELF
 //! either. Its only caller is `Player_SSWalk` (jal 0x192474), whose only caller is
@@ -56,7 +56,7 @@ fn quick_game() -> MpSettings {
 }
 
 #[test]
-fn a_bot_that_jumps_plays_no_launch_or_head_bump_sound() {
+fn a_bot_that_jumps_plays_no_launch_or_landing_sound() {
     let Some(path) = iso() else { eprintln!("skip: NF_ISO not set"); return };
     let s = quick_game();
     let arena = format!("{:08x}.bin", s.level_code);
@@ -79,7 +79,7 @@ fn a_bot_that_jumps_plays_no_launch_or_head_bump_sound() {
                 }
             }
         }
-        // No jump/head-bump id reaches the match's sound stream through any channel (the
+        // No jump/landing id reaches the match's sound stream through any channel (the
         // remote bodies' `mpfx_play3d` records here; only player.rs's launch/bump arms
         // produce these ids, and the bots' queue is dropped before any drain).
         for &(_, id, _, _) in &sim.mp_fx.started[seen..] {

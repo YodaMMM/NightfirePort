@@ -192,11 +192,6 @@ pub struct LadderCtx<'a> {
     pub sink: bool,
     /// The level's creepwall objects (class 0x2B '+', placement 0x3F), in placement order.
     pub creepwalls: &'a [crate::creepwall::CreepWall],
-    /// The head-bump sound gate: `Player_HandleJump` 0x1916b0:196-198 picks the metal clang 0x5FB
-    /// when `level_tag+0x50` (a byte the port's loader does not read) is 0xD/0xE, else the flesh
-    /// thud 0xA3. The Sim sets it per level once the byte is identified (live check in
-    /// docs/systems/sound-coverage.md); default false = the 0xA3 arm.
-    pub level_bump_5fb: bool,
     /// The cels Bond's pick capsule straddles this tick — `Collide_StraddleCels` 0x1eac98's BFS from
     /// the HITTEST home cel through the capsule-touching portals [M Collide_Pick 0x1eb320:125-134
     /// admits a candidate object only from a straddled cel's chain]. The Sim fills it from
@@ -214,7 +209,7 @@ pub struct LadderCtx<'a> {
 }
 
 impl Default for LadderCtx<'_> {
-    fn default() -> Self { LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[], bot_capsules: &[] } }
+    fn default() -> Self { LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], straddle: &[], bot_capsules: &[] } }
 }
 
 /// The current substate's pick arm — the HITTEST the game builds for `Player_Collision` 0x194df0's
@@ -467,9 +462,14 @@ pub struct Bond {
     /// (the death-anim pick, see `death_script`). fix-world-gravity.
     pub world_gravity: [f32; 3],
     /// audit-sound-calls: the jump sounds this tick produced, `(id, pos)` — the launch 0xA3 and
-    /// the head bump 0xA3/0x5FB [`Player_HandleJump` 0x1916b0:184, 195-198]. Drained by the Sim
+    /// the landing 0xA3/0x5FB [`Player_HandleJump` 0x1916b0:184, 195-198]. Drained by the Sim
     /// into `drones.audio` (the Sim's sound list) and cleared there.
     pub sfx_out: Vec<(u32, V3)>,
+    /// The jump landing's `BL+0x924 = 999.0` [M 0x1916b0:201]: the next step block fires a step.
+    pub land_step: bool,
+    /// `BL+0x966` [M 0x1916b0:200]: set to 8 on a jump landing; reaching 0 forces one more step
+    /// [M AnimObjectUpdate 0x1befd8:168-171].
+    pub land_countdown: u8,
     /// The zero-g orientation: obj+0x90's rotation rows (right/up/forward, the game's row-vector
     /// convention). `Player_ZeroG` composes the look rates body-frame (`m := m·R`, Concat [M
     /// 0x1e4a90]) and the auto-stabiliser slerps it world-up [M 0x192ab0:160-199]; the walk
@@ -577,6 +577,8 @@ impl Bond {
             // into `drones.audio`); `Player_HandleJump` 0x1916b0 plays 0xA3 at launch (:184) and
             // 0xA3/0x5FB at the head bump (:195-198).
             sfx_out: Vec::new(),
+            land_step: false,
+            land_countdown: 0,
             // unported-front-end-menus-3: no orbit until Player_SetCamMode(BL, 1) (0x195928
             // case 1) arms it.
             orbit: None,
@@ -2043,12 +2045,24 @@ self.local = [vs / k, vf / k];
         if !settle_held && self.jump == 1 && self.head_bump {
             self.vel = [0.0; 3];
             self.jump = 2;
-            // [M Player_HandleJump 0x1916b0:195-198]: the bump zeroes the velocity and plays
-            // 0x5FB on levels whose `level_tag+0x50` byte is 0xD/0xE, else 0xA3.
-            self.sfx_out.push((if ctx.level_bump_5fb { 0x5fb } else { 0xa3 }, self.pos));
+            // No sound: the flag-0x20 arm returns right here [M Player_HandleJump 0x1916b0:68-71].
         }
         self.land_delay = self.land_delay.saturating_sub(1);
-        if !settle_held && self.jump != 0 && self.land_delay == 0 && self.grounded && self.vel[1] <= 0.0 { self.vel = [0.0; 3]; self.jump = 0; }
+        if !settle_held && self.jump != 0 && self.land_delay == 0 && self.grounded && self.vel[1] <= 0.0 {
+            self.vel = [0.0; 3];
+            self.jump = 0;
+            // The landing arm [M Player_HandleJump 0x1916b0:191-201], gated on flag 8 (feet on
+            // ground [M Player_FeetOnPoint 0x194188:185]): 0x5FB when the contact byte is
+            // 0xD/0xE, else 0xA3. The byte is the feet ray's first hit [M 0x194188:187-192]: the
+            // ray runs cc + 0.6 down and keeps the water planes, and it is copied only while
+            // surfaced. [L PCSX2 07000002 (-79, 28): byte 0xE, 0x5FB.] The port's bullet query
+            // drops those planes on the disc's data, so this is the plain one.
+            let feet = [self.pos[0], self.pos[1] - (self.cc + 0.6), self.pos[2]];
+            let byte = if self.underwater { 0 } else { world.segment_surface(self.pos, feet, false).map_or(0, |h| h.2) };
+            self.sfx_out.push((if byte.wrapping_sub(0xd) < 2 { 0x5fb } else { 0xa3 }, self.pos));
+            self.land_step = true;
+            self.land_countdown = 8;
+        }
         if !settle_held && self.grounded && self.jump == 0 { self.vel[1] = 0.0; }
         // `Player_PositionCamera` 0x18f5d8 (its viewer write is `Camera_Set` 0x1bbbf8 — the
         // `View_RotTransMatrix` 0x1e5168 matrix into viewer+0x120, the rot copy to +0xE0, the
@@ -2742,7 +2756,7 @@ mod tests {
     fn the_ladder_grab_gate_excludes_only_climb_and_grapple() {
         let world = CollisionWorld::from_triangles(Vec::new());
         let lad = Ladder::simple([10.0, 3.0, 20.0], 2.0, 0.0);
-        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[], bot_capsules: &[] };
+        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], straddle: &[], bot_capsules: &[] };
         // SWIM grabs: one tick in the water context attaches (pre-fix it stayed SS_SWIM).
         let mut b = Bond::new([10.0, 3.0, 20.5], lad.yaw + std::f32::consts::PI);
         b.substate = SS_SWIM;
@@ -2775,7 +2789,7 @@ mod tests {
         let grab = |straddle: &[usize]| {
             let mut b = Bond::new([10.0, 3.0, 20.5], lad.yaw + std::f32::consts::PI);
             b.substate = SS_SWIM;
-            b.tick_ctx(&world, &LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle, bot_capsules: &[] }, &Input { forward: 1.0, ..Default::default() });
+            b.tick_ctx(&world, &LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], straddle, bot_capsules: &[] }, &Input { forward: 1.0, ..Default::default() });
             b.substate
         };
         // The ladder's cel NOT in the straddle set: no grab (the pick never admitted it).
@@ -2788,7 +2802,7 @@ mod tests {
         unlinked.cell = None;
         let mut b2 = Bond::new([10.0, 3.0, 20.5], unlinked.yaw + std::f32::consts::PI);
         b2.substate = SS_SWIM;
-        b2.tick_ctx(&world, &LadderCtx { ladders: &[unlinked], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[3], bot_capsules: &[] }, &Input { forward: 1.0, ..Default::default() });
+        b2.tick_ctx(&world, &LadderCtx { ladders: &[unlinked], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], straddle: &[3], bot_capsules: &[] }, &Input { forward: 1.0, ..Default::default() });
         assert_eq!(b2.substate, SS_SWIM, "an unlinked ladder (cell None) must not grab while scoping is active");
         // The empty set scopes nothing (no cel graph): the grab goes through.
         assert_eq!(grab(&[]), SS_CLIMB, "the no-graph path must keep the unscoped pick");
@@ -2802,7 +2816,7 @@ mod tests {
     #[test]
     fn swim_moves_along_the_look_direction_and_the_surface_clamps() {
         let world = CollisionWorld::from_triangles(Vec::new());
-        let ctx = LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: Some(3.0), sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[], bot_capsules: &[] };
+        let ctx = LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: Some(3.0), sink: false, creepwalls: &[], straddle: &[], bot_capsules: &[] };
         let mut b = Bond::new([0.0, 2.7, 0.0], 0.0); // below surface − 0.3? 2.7 < 2.7 is false — at the ceiling
         b.substate = SS_SWIM;
         // Look down-ish (pitch −0.5: dir = (0, −sin π/4, cos π/4)), swim forward: the position must
@@ -2862,7 +2876,7 @@ mod tests {
     fn climb_look_turns_within_the_ladder_window_and_pitch_is_free() {
         let world = CollisionWorld::from_triangles(Vec::new());
         let lad = Ladder::simple([10.0, 3.0, 20.0], 2.0, 0.0);
-        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], level_bump_5fb: false, straddle: &[], bot_capsules: &[] };
+        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], straddle: &[], bot_capsules: &[] };
         let mut b = Bond::new([10.0, 3.0, 20.0 + 0.5], lad.yaw + std::f32::consts::PI);
         b.substate = SS_CLIMB;
         b.ladder = Some(0);

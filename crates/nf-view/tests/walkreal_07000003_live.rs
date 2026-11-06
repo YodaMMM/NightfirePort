@@ -201,10 +201,12 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     // volleys cost ~3.3 health a pellet at Plr_DMod_Normal 0.7 (the sister's first run died at
     // tick 40108: 52.1 in 16 hits from a guard at 2.8 u). The 02 walk's keep_off/back_off 4.0
     // (the same `Walker` arms its real-health walk pins green).
-    // fx-muzzle-repin-2 measured: 6.5 changed nothing on the corrected stream (the same t62511
-    // death, the same 60.4 ledger — the fights' stand movement does not read keep_off), so the
-    // pinned 4.0 stays and the fight-back lever is the fights' pick, not the stand-off.
-    if difficulty >= 2 {
+    // Difficulty 1 too [master 2ea70f9d2]: the door-8 shotgun closed to 1.9 u and took 48.5 of
+    // its real-health 100. fx-muzzle-repin-2 measured: 6.5 changed nothing on the corrected
+    // stream (the same t62511 death, the same 60.4 ledger — the fights' stand movement does not
+    // read keep_off), so the pinned 4.0 stays and the fight-back lever is the fights' pick, not
+    // the stand-off.
+    if difficulty >= 1 {
         w.keep_off = Some(4.0);
         w.dmg.back_off = Some(4.0);
     }
