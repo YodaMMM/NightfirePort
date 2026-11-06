@@ -37,3 +37,6 @@ Then the walks, plain before real damage before Agent before 00 Agent:
 Also, one review point: `DroneFunc_HandleExplosives` 0x1435f0 `break`s after the FIRST kind-2 record in radius, whether or not that record passes the visibility check, then sends at most one 0x21. Check the port's live-grenade loop does the same; it reads as walking on to later grenades. Remove the NF_EXPPROBE debug print from drone.rs.
 
 An ignore with a measured reason is allowed for 00 Agent walks only. Do not loosen pins tagged [L] and do not change game code to suit a walk. Finish with one total line from a full run.
+
+---
+claimed-by: sandbox5 at 2026-11-06T14:20Z
