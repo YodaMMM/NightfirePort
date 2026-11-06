@@ -86,3 +86,10 @@ the stand-off so the drop lands before the duel.
 
 not visible to me — this environment shows no token, credit, or context-window figures for the
 session (nothing to copy).
+
+## ntfy
+
+1. `curl -sS -m 15 ...` → `curl: (28) Connection timed out after 15002 milliseconds`
+2. python3 urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data ...` → **succeeded (exit 0)** — the notification went out on the
+   third fallback.
