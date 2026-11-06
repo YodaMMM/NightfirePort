@@ -1357,7 +1357,7 @@ mod tests {
         let mk = |approach: u8| {
             let mut doors = Doors::default();
             doors.list.push(Door {
-                placement: 0, kind: 0, group: 0, ch_open: 0, ch_lock: 0, straddle: false,
+                placement: 0, kind: 0, group: 0, ch_open: 0, ch_lock: 0, straddle: false, bullet_pass: false, f0: 0,
                 snd_open: 285, snd_close: 284, snd_hit: 320, flags: 1, approach, locked_flag: 0,
                 keys: Some(swing_keys()), frames: 2, state: CLOSED, pos01: 0.5, speed: 1.0 / 14.0,
                 dir: 0.0, swing: -1.0, timer: 0, open_timer: 0, msg_shown: false,
