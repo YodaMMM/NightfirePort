@@ -274,3 +274,9 @@ whole 14/0/2i. The 01 d3 red moved to tick 5974 (the ch-0xF slab crossing, arriv
 ledger in the report). The master wave (walk un-ignores + drone.rs cover-lost) × the gas
 stream reds 14 tests on 11 levels — all run whole and tabled in the report; grenade_live's
 0x68 flee red reproduces on pristine gas-7 (inherited).
+
+## gas-guard-repin (2026-11-06)
+
+Branch from s/gas-draws-8 (7e8051e18), merging current origin/master. Carries the guard radii,
+guard glass and gas work on one branch. Re-measuring the §5 red list first (master moved: jump
+landings force two steps, landing/step probes read water, the sighted guard ignores sound).
