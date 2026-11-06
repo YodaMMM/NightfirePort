@@ -265,3 +265,12 @@ merge state), origin/master and origin/s/guard-lines-finish merged in. Task: the
 verify the merged-stream hover band (x 9-17.8, y 4.2-7.6, states 0xc0/0xc1) against the
 decompile, then either the rise-window fight (t0-360) or a climbing pursuit; 16 chasers pair and
 01 d3 come from guard-lines-finish, not redone.
+Outcome (same session, 08:55 UTC): the Drake hover verified against the decompile — the game's
+own astronaut-combat strafe [M 0x154618:80-105 / 0x174550:15-23], the port matches line for
+line, no game fix; the fight fixed with the opt-in pitched zero-g mode (aim up, no height
+chase, 15 u cover ladder) — 1b whole 17/0/2i, the pair green. guard-lines-finish merged (three
+conflicts by hand, both sides kept); the 16 punch rides the defeat walk's full economy — 16
+whole 14/0/2i. The 01 d3 red moved to tick 5974 (the ch-0xF slab crossing, arrival health ~10,
+ledger in the report). The master wave (walk un-ignores + drone.rs cover-lost) × the gas
+stream reds 14 tests on 11 levels — all run whole and tabled in the report; grenade_live's
+0x68 flee red reproduces on pristine gas-7 (inherited).
