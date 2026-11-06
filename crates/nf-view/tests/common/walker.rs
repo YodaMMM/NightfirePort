@@ -1142,7 +1142,14 @@ impl Walker {
             let sim = self.scene.sim.as_ref().unwrap();
             if self.stop_on_exit && sim.drones.level_exit.is_some() {
                 self.report.legs.push((label.to_string(), self.total_ticks - start_ticks, self.pos));
-                eprintln!("[walk] {label}: level_exit reached at +{} ticks", self.total_ticks - start_ticks);
+                if std::env::var_os("NF_RF_TRACE").is_some() {
+                    eprintln!("[walk] {label}: level_exit reached at +{} ticks (exit {:?} cold {} restart {} mission state {} internal {} fail_label {:#x} menu_open {} health {:.1})",
+                        self.total_ticks - start_ticks, sim.drones.level_exit, sim.drones.level_exit_cold,
+                        sim.drones.level_exit_restart, sim.drones.mission.state, sim.drones.mission.internal,
+                        sim.drones.mission.fail_label, sim.drones.mission.menu_open, sim.drones.health.health);
+                } else {
+                    eprintln!("[walk] {label}: level_exit reached at +{} ticks", self.total_ticks - start_ticks);
+                }
                 return self.total_ticks - start_ticks;
             }
             if self.scene.sim.as_ref().unwrap().disabled {

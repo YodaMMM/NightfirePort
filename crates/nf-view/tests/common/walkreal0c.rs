@@ -1141,10 +1141,15 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
     // Player_Wire 0x197658], the drop the action press [M 0x197758].
     let grabbed = {
         let mut got = false;
+        let trace = std::env::var_os("NF_RF_TRACE").is_some();
         for t in 0..240u32 {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.bond.substate == nf_game::player::SS_WIRE { got = true; break; }
             let (p, grounded) = (sim.bond.pos, sim.bond.grounded);
+            if trace && t % 20 == 0 {
+                eprintln!("[0c wire-grab] t{t} pos ({:.2},{:.2},{:.2}) grounded {grounded} substate {:#x} yaw {:.2} level_exit {:?} mission_end {:?} disabled {}",
+                    p[0], p[1], p[2], sim.bond.substate, sim.bond.yaw, sim.drones.level_exit, sim.drones.mission_end, sim.disabled);
+            }
             if !grounded && p[1] < 9.0 { break; }
             let desired = (-4.6f32 - p[0]).atan2(-209.9f32 - p[2]);
             let err = walker::wrap_pi(desired - sim.bond.yaw);
