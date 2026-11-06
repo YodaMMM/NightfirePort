@@ -68,7 +68,9 @@ fn grenade_at(sim: &mut nf_view::scene::Sim, pos: [f32; 3]) {
         phase: None,
     burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
     defused: false,
-    });
+    
+    loop_handle: 0,
+});
 }
 
 /// Ticks until `done`, or panics with `what` after `max` (the walkreal shape).
