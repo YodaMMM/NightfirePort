@@ -5722,7 +5722,7 @@ impl Sim {
                 // copter's not-the-player mark usize::MAX - 1 (the game's NULL attacker
                 // [M 0x187474]) — NOT usize::MAX, which the drones' slot reads as "Bond's
                 // throw" and would re-feed the site. Script 0x060004f, scale 5.0, debris 0 —
-                // the call's a3/f12/stack-u16 [M 0x1870a0:144-146]. Online the shared combat
+                // the call's script, scale and stack-u16 args [M 0x1870a0:144-146]. Online the shared combat
                 // owns the propagation (`step_net_combat`'s drain) — this arm is the offline
                 // gate's sister.
                 if self.net_rng.is_none() && self.net_rng_shared.is_none() {

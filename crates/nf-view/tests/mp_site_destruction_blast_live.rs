@@ -1,7 +1,7 @@
 //! mp-site-destruction-blast: the Demolition/Protection site's death blast —
 //! `MP_DemolitionProtectionUpdate` 0x1870a0:144-146's
 //! `Explode_Create(5.0, 5.0, 500.0, site_obj, obj+0x80, 0x2d6210, 0x600004f, 0xff, 0xff, 100, 0)`
-//! (f12/f13 = 5.0 scale/radius, f14 = 500.0 damage, pos a1 = the site's obj+0x80 — the contact
+//! (float args 5.0 scale, 5.0 radius, 500.0 damage, pos a1 = the site's obj+0x80 — the contact
 //! sphere's world centre; the attacker t3 = 0 NULL [M 0x187474 `daddu t3,zero,zero`]). The port
 //! queues it at the death (`MpObjectsRt::pending_blasts`) and propagates it the NEXT tick
 //! through the shared blast pass — the game's explosion object runs its contact on its first

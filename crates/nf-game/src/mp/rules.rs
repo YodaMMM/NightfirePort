@@ -175,7 +175,7 @@ pub struct MpObjectsRt {
     pub ge_strike_pos: Option<[f32; 3]>,
     /// mp-site-destruction-blast: the site's death blast, queued the tick the site falls
     /// (`Explode_Create(5.0, 5.0, 500.0, site_obj, obj+0x80, 0x2d6210, 0x600004f, 0xff, 0xff,
-    /// 100, 0)` [M 0x1870a0:144-146 — f12/f13 5.0, f14 500.0, pos a1 = obj+0x80, script a3 =
+    /// 100, 0)` [M 0x1870a0:144-146 — the float args 5.0, 5.0, 500.0, pos a1 = obj+0x80, script a3 =
     /// 0x600004f; the attacker t3 = 0 NULL [M 0x187474 `daddu t3,zero,zero`]]) and drained by the
     /// shared blast pass the NEXT tick — the game's explosion object propagates on its first
     /// update [M Explode_CollisionHandler 0x17cde0's one-shot latch]. Tuple: (pos, radius 5.0,
