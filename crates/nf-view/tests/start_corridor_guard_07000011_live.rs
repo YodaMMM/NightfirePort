@@ -173,6 +173,14 @@ fn at_difficulty_3_the_guards_walk_their_disc_owner_points() {
 /// port-measured post-fix timing, not a fresh PCSX2 [L]). muzzle-repin-5: the 3 muzzle draws per
 /// guard shot shift the hit-roll stream and d2's death moved past t4000 (measured this branch);
 /// the window opens to 6000 — the per-hit [L] pins and the death REQUIREMENT stay.
+/// stream-batch-3: on stream-batch-2 + master a6665d115 the same roll-stream shift moved d2's
+/// death past t10000 AND past a 20000 probe (window opened to 20000 for the probe, restored to
+/// 10000): the guards deliver EXACTLY 6 hits × 12 (health parks at 28.0 — the assert comment's
+/// own number) and then hold lost_sight=true / seen_ticks=0 for 14000+ ticks with an IDLE VISIBLE
+/// Bond at the spawn — the combat sight-loss re-acquire chain stalls (state 0x5c, opp_target the
+/// spawn). REAL-REGRESSION SUSPECT, not a timing re-pin: the d1/d3 legs and the 7 sister pins
+/// (approach, arrival switch, step-aim+fire) all pass. Needs the re-acquire decomp review
+/// (Drone2 sight-loss exit/re-see) before this window moves again.
 #[test]
 fn idle_bond_is_approached_and_shot_at_every_selectable_difficulty() {
     let start = [-0.40f32, 25.83];
@@ -252,7 +260,8 @@ fn idle_bond_is_approached_and_shot_at_every_selectable_difficulty() {
                 }
                 eprintln!("muzzle-repin-5 diag d{diff}: player_hits {} total {} — bond health {:.1}", sim.drones.player_hits.len(), sim.drones.player_hits.iter().map(|h| h.2).sum::<f32>(), sim.drones.health.health);
             }
-            assert!(dead_at.is_some(), "d{diff}: the idle Bond dies within 10000 ticks (muzzle-repin-5 measured: d2's guards fire the whole window but the shifted roll stream landed 6 hits × 12 by t6000 — health 28 — death ~t8300; d2 ~t3500/d3 ~t501 pre-muzzle)");
+            if let Some(t) = dead_at { eprintln!("stream-batch-3 diag d{diff}: the idle Bond died at t{t}"); }
+            assert!(dead_at.is_some(), "d{diff}: the idle Bond dies within 10000 ticks (muzzle-repin-5 measured: d2's guards fire the whole window, the shifted roll stream landed 6 hits × 12 by t6000 — death ~t8300; stream-batch-3 measured: the 6 hits land but then the guards hold lost_sight=true/seen_ticks=0 for 14000+ ticks at the idle Bond — the re-acquire chain stalls, see the diag lines)");
         }
     }
 }
