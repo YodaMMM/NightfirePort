@@ -139,3 +139,8 @@ above. The diagnostics change no sim behaviour with the env unset.
 ## Usage
 
 not visible to me
+
+## ntfy
+
+curl timed out (exit 28, 20 s) and python urllib got errno 101 (network unreachable); the
+wget fallback delivered (exit 0, ~19:45 UTC 2026-11-06).
