@@ -175,6 +175,48 @@ fn the_lock_holds_the_shot_refused() {
     }
 }
 
+/// The refused weapon change itself: while the lock holds, each weapon-cycle press routes to
+/// `Player_WeaponChange` mode 2 [M `Player_Weapon` 0x1a24c8:265-275 — the only mode-2 call sites],
+/// whose cycle is bounded to [0,2) [M 0x1a6f80:124-126, disasm 001a71ec-001a71f0] — from the fists
+/// (id 1, the lock's only weapon: `Player_InitWeapon` 0x1a7ef8:184 `anim[0x63] = 1` for case
+/// 0x07000007) it re-picks the fists, so the weapon stays — and the held==1 arm plays the refused
+/// click: `Sound_Play(100.0, 0x1db, 0, 0)` [M 0x1a6f80:127-129, disasm 001a7200-001a7214: f12
+/// 0x42c80000, a0 475]. The old "level_tag+0x62" in the sound table misattributed the struct: the
+/// reader dereferences `obj+0xDC` — the AnimObject — whose +0x62 is the held weapon id
+/// [M obj-tag.md +0xDC; animobject.md +0x62]. The headless Sim never advances the nodes
+/// (`sound_tick` is the render loop's pump), so each press leaves one more state-0 node and the
+/// per-press count proves a fresh play per press.
+#[test]
+fn the_lock_refuses_the_cycle_with_the_click() {
+    let Some(mut scene) = load() else { eprintln!("NF_ISO not set — skipping"); return };
+    let sim = scene.sim.as_mut().unwrap();
+    free(sim);
+    // The loadout draw (request 1, the fists [M 0x1a7ef8 case 0x7000007]) settles after the intro
+    // hands back — the walkreal's wait(60).
+    for _ in 0..60 { sim.step_bond(Input::default(), false, false, false); }
+    assert_eq!(sim.gun.weapon, 1, "Bond holds the fists once the draw settles [M 0x1a7ef8:184]");
+    assert!(!sim.drones.channels.on(0x48), "the lock channel holds before the hall plate [D #412]");
+    // The view loop's per-tick merge: weapon_lock_input, then step_bond with the cycle press —
+    // what a player pressing Q / the wheel notch does under the lock (next and prev both).
+    let mut prev = sim.drones.channels.on(nf_game::player::WEAPON_LOCK_CHANNEL);
+    for press in 0..4u32 {
+        let dir = if press % 2 == 0 { 1i8 } else { -1 };
+        let mut input = Input { weapon_cycle: dir, ..Input::default() };
+        nf_game::player::weapon_lock_input(sim.level, prev, &mut input);
+        sim.step_bond(input, false, false, false);
+        prev = sim.drones.channels.on(nf_game::player::WEAPON_LOCK_CHANNEL);
+        assert_eq!(sim.gun.weapon, 1, "press {press} ({dir:+}): the weapon stays the fists [M 0x1a6f80:134-137]");
+        let plays = sim.drones.audio.active_ids().iter().filter(|&&id| id == 0x1db).count();
+        assert!(plays >= press as usize + 1,
+            "press {press} ({dir:+}): the refused change plays 0x1db, seen {plays} [M 0x1a6f80:127-129]");
+    }
+    // And the sister path stays refused: a direct P2K request still cannot leave the fists.
+    let mut input = Input { switch_to: Some(2), ..Input::default() };
+    nf_game::player::weapon_lock_input(sim.level, prev, &mut input);
+    sim.step_bond(input, false, false, false);
+    assert_eq!(sim.gun.weapon, 1, "the direct selection is still refused [M 0x1a24c8:243-246]");
+}
+
 /// Sister: walking the party without firing leaves every breakable standing.
 #[test]
 fn walking_the_party_breaks_nothing() {
