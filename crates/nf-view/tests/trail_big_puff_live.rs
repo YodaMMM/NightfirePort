@@ -38,6 +38,7 @@ fn a_bounced_smoke_grenade_switches_the_trail_to_the_big_puff() {
     // The fuse stays long so the test ends before the smoke cloud pops (that is a different site).
     let born = sim.drones.frame as u8; // obj+0xec = GameState at creation [M 0x134630:15]
     sim.drones.grenades.push(nf_game::grenade::Grenade {
+        loop_handle: 0,
         pos: [100.0, 31.0, 108.0], velocity: [0.0, -1.0, 0.0], speed: 1.0, travelled: 0.0,
         range: 100000.0, damage: 0.0, radius: 0.0,
         weapon_type: 0x36, mesh: 0, owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false,
