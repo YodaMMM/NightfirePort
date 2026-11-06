@@ -109,3 +109,13 @@ Progress log:
   f0 0x0 on all five doors [L]. The game-real flow opens the leaf (the walk-in proximity);
   the tests teleport in. Next: the tests walk the real route, or the live check settles
   the door's runtime pose/f0 on 14.
+- The mask gate + the cel-linked door stage measured UNLANDABLE alone: either half re-snaps
+  the 08 straight shot off the glass pane and the [L] -100 pierce breaks. The proxy's secret
+  is out: p.flags & 0x60 reads the kind byte (0xdb & 0x60 = 0x40) — every door passed by
+  accident; the true word (the shutters 0x0/0x201) stops the round the game passes, so the
+  game's shutter pass rides the node-0x40 flag [M HITDATA+0x51 bit 1, 0x12cea0] — next
+  stage. The 14 near leaf measured game-honest: its built sphere catches a closed-door
+  beam (sqDist 0.0147 < r^2 0.2437), word 0x0, no door-path f0 writer; the tests teleport
+  in with the leaf closed. Report: docs/reports/aim-object-flags.md. Runs: glass08 3/0,
+  stop_plane08 4/0, origin 1/0, panel_hits 1/0, fusebox_geometry 0/1, interactables 9/1,
+  walkreal_08 5/1 — all equal to the stage tip (the branch is sim-identical, f0 additive).
