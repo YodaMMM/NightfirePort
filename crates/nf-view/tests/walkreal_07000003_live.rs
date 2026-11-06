@@ -105,6 +105,172 @@ fn mission_row() -> (usize, usize, usize, usize) {
     (li, 0, 1, 2)
 }
 
+/// One STILL-gate aimed stand on drone `di` — the 07000006 file's own idiom, level-local here
+/// per the merge rules (shared helpers stay opt-in; this copy runs only inside this file's
+/// d2+ shooter sweeps). The parts that make far stands land, each measured on the 0c/06
+/// branches:
+/// - the aim-RAISE loop: release, let the switch anim finish (switch_state 0), then hold aim
+///   until the bit sets — the raise queues only on the aim-PRESSED edge from the idle machine
+///   [M Player_Weapon 0x1a24c8:113-152; the finish sets the bit 0x1a2e38:554-561];
+/// - the AIM-BIT tap gate: with the bit unset every round rides the HIP cone (spread base 100.0
+///   [L ee_start_05.bin @ 0x2c10b8 +0x24] — 4.9 u of scatter at 35 u), with it set the aimed act
+///   is zero-spread [M Bullet_init 0x12c5a0:139-170];
+/// - the CURSOR-aware convergence: the fired round obeys the view PLUS the eased cursor offsets
+///   [M scene.rs free-aim; Player_AutoAim 0x1a7c98:50-59 eases the offsets every aim tick], so
+///   the drive targets the cursor position that puts the effective aim on the part;
+/// - the STILL gate: tap only after the guard holds still 18 ticks — a stepping guard is not
+///   where the view was when the round lands (the round FLIES [M Bullet_update 0x12e7b0]);
+/// - the STRICT exposure re-pick every 10 ticks (`DamageLog::exposed_part` — the eye-ray set, THE
+///   shared rule this walk's own plain fights fight with) with the 200-tick unseen bail (the 06
+///   roof guard's lean-in flicker: a window that lasts ~100 ticks still ends in a tap within 200).
+/// Never writes health, armour or ammo; the only inputs are the view drives + the trigger taps.
+fn aimed_stand_03(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
+    // Settle: no input until the switch anim is done, then the raise loop (the 0c idiom).
+    for _ in 0..90 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.gun.switch_state == 0 && !sim.gun.fire_state { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
+    }
+    for _ in 0..240 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.aiming { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { aiming: true, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    const STILL_NEED: u32 = 18;
+    let prev = w.dmg.aimed_fights;
+    w.dmg.aimed_fights = true;
+    eprintln!("[03] the aimed stand ({label}): engaging drone #{di}");
+    let killed = {
+        let mut unseen = 0u32;
+        let mut last_tap = 0u32;
+        let mut aim: Option<[f32; 3]> = None;
+        let mut hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
+        let mut last_hit = 0u32;
+        let mut still = 0u32;
+        let mut last_pos = [0.0f32; 3];
+        let mut have_pos = false;
+        for t in 0..cap {
+            let (input, fire, reload) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[di];
+                if d.corpse || d.health <= 0.0 || !d.present { return true; }
+                if sim.disabled { return false; }
+                if sim.gun.clip == 0 && sim.gun.spare == 0 {
+                    eprintln!("[03] the aimed stand ({label}): drone #{di} bailed DRY at +{t}");
+                    return false;
+                }
+                // The still gate: root motion only (the 0c measurement — the box sway rides the
+                // anim; the root is what carries the chest out of the round's path).
+                let moved = have_pos && ((d.pos[0] - last_pos[0]).powi(2)
+                    + (d.pos[1] - last_pos[1]).powi(2) + (d.pos[2] - last_pos[2]).powi(2)).sqrt() > 0.03;
+                have_pos = true;
+                last_pos = d.pos;
+                still = if moved { 0 } else { still.saturating_add(1) };
+                if d.health < hp0 { hp0 = d.health; last_hit = t; }
+                // 1500: the far posts (d 30-40) expose in firing windows — the 500 default
+                // aborted before a first hit ever landed on the 06 mouth runs. A landing round
+                // kills a guard, so the wait is the tactic, not a stall (the cap still bounds it).
+                if t - last_hit > 1500 {
+                    eprintln!("[03] the aimed stand ({label}): drone #{di} bailed NO-HIT at +{t} (still {still})");
+                    return false;
+                }
+                if t % 10 == 0 { aim = walker::DamageLog::exposed_part(&sim, di); }
+                if aim.is_none() { unseen += 1; if unseen > 200 { eprintln!("[03] the aimed stand ({label}): drone #{di} bailed UNSEEN at +{t}"); return false; } } else { unseen = 0; }
+                let b = sim.bond.pos;
+                let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
+                let at = aim.unwrap_or([d.pos[0], d.pos[1] + 0.3, d.pos[2]]);
+                let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
+                let h = (dx * dx + dz * dz).sqrt().max(0.5);
+                let desired_yaw = dx.atan2(dz);
+                let desired_pitch = (dy / h).atan();
+                // The cursor drive + the effective-aim error (the round obeys the view + the
+                // eased offsets, not the view alone).
+                let yaw_err = { let mut a = desired_yaw - sim.bond.yaw;
+                    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
+                let cx_want_raw = -yaw_err / 0.76966;
+                let cy_want_raw = pitch_err / 0.57724;
+                let cur = sim.cursor;
+                let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
+                let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
+                let aoff = sim.drones.aim_offset;
+                let err = { let mut a = yaw_err - aoff[0];
+                    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                let perr = pitch_err - aoff[1];
+                let reload = sim.gun.clip == 0;
+                // The tap: the aim bit ON, the effective aim converged, the guard still.
+                let fire = sim.aiming && !reload && unseen == 0 && err.abs() < 0.01 && perr.abs() < 0.01
+                    && still >= STILL_NEED && t.saturating_sub(last_tap) >= 8;
+                (nf_game::player::Input { turn, look, aiming: true, ..Default::default() }, fire, reload)
+            };
+            if reload {
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, true, false);
+                w.total_ticks += 1;
+                w.after_step();
+                for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+            } else if fire {
+                last_tap = t;
+                w.tick_fire(input);
+            } else {
+                w.tick(input, false);
+            }
+        }
+        w.scene.sim.as_ref().unwrap().drones.list[di].health <= 0.0
+    };
+    w.dmg.aimed_fights = prev;
+    // Level the view back (the fights' own idiom) so the next nav leg steers from level pitch.
+    for _ in 0..90 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pitch;
+        if p.abs() < 0.01 { break; }
+        w.tick(nf_game::player::Input { look: (-p).clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[03] the aimed stand ({label}): drone #{di} killed {killed}, health {:.1}", sim.drones.health.health);
+    killed
+}
+
+/// The 07000006 dock-guard law, level-local here (guard-repin-master-2 item 1): answer a
+/// hostile who has hit Bond in the last 600 frames — ANY range to `radius`, the fights'
+/// plain 20 u shooters window widened to the guards' real reach — with one aimed stand, up
+/// to 8 of them, each target the strict gun rays expose from where Bond stands. The measured
+/// red (the agent death at tick 51805 at (23.09, 6.37, 10.54)): the far shooters #11 (13.6,
+/// 6.3, −28.5, d 40.2) and #10 (19.4, 6.3, −19.6, d 30.3) plinked the servant/exit legs
+/// through glass from OUTSIDE the fights' plain 20 u window — the return fire never answered
+/// them and the drain finished Bond (29 hits for 100.0, 12 fights). A player answers whoever
+/// is shooting him. [M the glass pass 0x12f048-0x12f058 — their rounds reach through glass;
+/// the recent-hitter pick is the 06 `stand_shooters_down` law]
+fn stand_shooters_down_03(w: &mut Walker, label: &str, radius: f32) {
+    w.switch_to_armed(label);
+    for _ in 0..8 {
+        let di_opt = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let now = sim.drones.frame;
+            let b = sim.bond.pos;
+            let mut best: Option<usize> = None;
+            for i in 0..sim.drones.list.len() {
+                let d = &sim.drones.list[i];
+                if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { continue; }
+                let d_v = ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt();
+                if d_v > radius { continue; }
+                let hitting = sim.drones.player_hits.iter().rev()
+                    .take_while(|h| now.saturating_sub(h.0) <= 600)
+                    .any(|h| h.1 == i);
+                if !hitting { continue; }
+                if walker::DamageLog::exposed_part(&sim, i).is_none() { continue; }
+                best = Some(i);
+                break;
+            }
+            best
+        };
+        let Some(di) = di_opt else { break };
+        aimed_stand_03(w, di, label, 2400);
+    }
+}
+
 #[test]
 fn walk_the_alpine_route_to_the_exit() {
     let iso = iso();
@@ -228,6 +394,15 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         // game's own mid-fight cycle [L the 00agent-02-03-2 ledger].
         w.dmg.switch_dry = true;
     }
+    if difficulty >= 2 {
+        // guard-repin-master-2, measured on the sweep run's ledger: the fights answered the
+        // east-lawn post #4's 26-chip volley (36.7 across the servant-0 navs, ticks 40215-40329)
+        // only after fighting the nearer #3/#5 first — the nearest-first pick ignores who is
+        // actually draining. The damage-weighted pick (the 08 walks' hurting_first arm, opt-in
+        // [M the DamageLog::return_fire pick doc]) answers the biggest current damager first;
+        // the visibility gate and the windows are untouched.
+        w.dmg.hurting_first = true;
+    }
     let (li, o0, o1, o2) = mission_row();
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -273,6 +448,23 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     ] {
         w.walk_nav_to(at, name, 1.6);
     }
+    // guard-repin-master-2 item 1 (the 06 stand_shooters_down law, d-gated), measured on the
+    // fatal NF_DMG_TRACE ledger: the courtyard cluster opens on the mid-courtyard leg (#11
+    // skin 0x5000038 hp 24 fires at tick 7523 from (14.5,−29.0) d 9.1) and the plain fights
+    // need three windows (7931/9419/9952) to take him — during the west-lawn legs he CHARGED
+    // to d 2.9 and dealt 56.0, and the walk reached the servant legs at 34.6 where the door
+    // ambush (#5 + #3, exactly 34.6 dealt at the (22.3,10.9) door) finished Bond at 51805.
+    // From the leg-end anchor (13,−18) neither #10 nor #11 has a reachable box (the sweep's
+    // own cand dump: both "hitting true exposed false"), but the fights fought them from the
+    // nav's mid-leg stops (10.4..11.5, −20.8) — the ray line needs the courtyard's east lane.
+    // A player steps back to the angle he fought from and drops the posts: the walk-back leg
+    // re-takes that line, the aimed stands (the aim-bit zero-spread act [M Bullet_init
+    // 0x12c5a0:139-170]) take the 5-hp #10 and the 24-hp #11 before the west-lawn legs feed
+    // the charge.
+    if difficulty >= 2 {
+        w.walk_to(Wp { at: [11.0, 6.5, -21.5], act: Act::None, arrive: 1.0 }, "the mid-courtyard angle (the shooters' fight line)");
+        stand_shooters_down_03(&mut w, "the mid-courtyard shooters", 40.0);
+    }
 
     // 1. "Rescue Mayhew's servants" — the leaves 0x4f (servant #389) and 0x50 (#388) are the
     //    placements' param 6 [D probe]. Each servant's enable plate (p3) enables the servant AND
@@ -309,6 +501,13 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x21),
             "the west-lane approach stands inside the west 0x21 plate's footprint [D lo/hi x 7.3..10.7 z −35.0..−33.7]");
+    }
+    // guard-repin-master-2 item 1 (the 06 stand_shooters_down law, d-gated), measured on the
+    // first run: #11 is already dead (the plain fights killed him at 9952 during the west-lawn
+    // legs) by this leg end — the sweep here is the law's placement for the legs AHEAD (any
+    // shooter who opened on the moat legs).
+    if difficulty >= 2 {
+        stand_shooters_down_03(&mut w, "the gate-plate-lawn shooters", 40.0);
     }
     // Back to the servants' ground by the east lane the "mid courtyard" leg itself walked
     // (x 10.0-10.6 from the moat to the door at (11.8, 6.5, -20.2): the nav stops Bond reached
@@ -550,6 +749,13 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
             // continuation point (the flank's own nav link, walked there in the green run).
             w.walk_nav_to([38.4, 5.9, 0.8], "the east flank end", 1.6);
         }
+        // guard-repin-master-2 item 1 (the 06 stand_shooters_down law, d-gated): at the servant
+        // leg end answer whoever hit Bond across the leg — the far shooters outside the fights'
+        // plain 20 u window (#11 at d 40.2, #10 at d 30.3 [L the agent death ledger, tick
+        // 51805]) plinked the legs through glass and the return fire never answered them.
+        if difficulty >= 2 {
+            stand_shooters_down_03(&mut w, "the servant ground shooters", 40.0);
+        }
     }
     w.wait(10);
     {
@@ -704,6 +910,14 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     let exit = sim.drones.triggers.iter().find(|t| t.kind == walker::trigger_kind::LOAD_LEVEL).map(|t| t.centre()).expect("the Load Point");
     drop(sim);
     w.walk_nav_to([18.5, 5.9, 13.0], "the exit lawn", 1.6);
+    // guard-repin-master-2 item 1 (the 06 stand_shooters_down law, d-gated): the exit legs are
+    // the second measured drain — the death spot (23.09, 6.37, 10.54) sits on the east-lawn →
+    // exit-lawn line, with #11 (d 40.2) and #10 (d 30.3) still alive and shooting from the
+    // courtyard through glass [L the agent death ledger]. Answer them from the exit lawn
+    // before the E.
+    if difficulty >= 2 {
+        stand_shooters_down_03(&mut w, "the exit lawn shooters", 40.0);
+    }
     w.walk_to(Wp { at: exit, act: Act::Use { use_ticks: 90 }, arrive: 1.6 }, "E the exit");
     let sim = w.scene.sim.as_ref().unwrap();
     assert_eq!(sim.drones.level_exit, Some(0x0700_0004), "the exit loads 07000004 [D param 0]");
