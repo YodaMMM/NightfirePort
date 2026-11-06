@@ -8,3 +8,8 @@ Master has no aim snap, so its console shots may behave differently from that br
 
 ---
 claimed-by: sandbox3 at 2026-11-06T18:45Z
+
+---
+## Report (done, 2026-11-06T19:36Z)
+
+Closed by the driver: the report is on `s/missile-countdown-master` (docs/reports/missile-countdown-master.md); the worker didn't run finish.sh.
