@@ -79,3 +79,17 @@ word's 0x60 bits) applied in flush_world_impacts, with the world impact recorded
 explosion point. rocket_glass08_live 3/0, rocket_stop_plane08_live 4/0, rocket_origin_live 1/0,
 fusebox_geometry_07000014_live 1/0 (all whole, quoted); interactables_07000014_live 9/1 (the
 east-wing laser cut needs the aim ray's object stage). Report: docs/reports/panel-model-glist.md.
+
+## aim-object-flags
+Started 2026-11-06 ~00:15 UTC. Branch s/aim-object-flags = origin/s/aim-object-stage
+504ccdf75 + origin/master merged. Task: the 14 security room's near door leaf stops the
+laser because Door.bullet_pass reads the placement flags as a stand-in for
+obj+0xF0 = glist_record+0x44 | create_param [M Control_CreateObjEx 0x1343c8:36]. Parse
+glist+0x44 from the disc; use the true word for the flight's pass rule (andi 0x60 at
+0x12cf18) and Collide_PickObj's gate (obj+0xF0 & mask, 0x20 + 0x1020/0x40/0x10 by hittest
+flags [M 0x1eae80]). Live anchors: panels f0 0x81, shutter pieces 0xc1, debris 0xa8a0 [L
+0700001b audits]. Then fusebox_geometry_07000014_live, interactables_07000014_live, and
+every walkreal the earlier reports list red (08, 0c, 14, 16, 1b with firing spots).
+
+Progress log:
+- Branch cut + master merged clean; pushed.
