@@ -5760,6 +5760,19 @@ impl Drone {
             first = if self.prop(d, 0x1b) { if rng.rand(2) == 0 { 0 } else { self.choose_combat_move(d, rng) } }
                 else if self.prop(d, 0x18) { 0 } else if self.prop(d, 0x19) { self.choose_combat_move(d, rng) } else { 0 };
             if first_sight && first == 0 { self.attack_talk(d.level, rng); }
+            // The tail's prop-0x52 fail [M 0x148010:95-98]: `behaviour_util_getProperty(0x52,
+            // Drone+0x4d8)` non-zero → `DroneFunc_SetMissionFailReason(drone, 8)` —
+            // `Mission_SetFailLabel(0x4000033 "Cover Lost")` + `switch_channels[99] = 1` [M
+            // 0x13e560 case 8 → the 2/4/5/7/8/10/0xb/0xc arm + the default]. It rides the
+            // first-attack tail right after `AttackTalk` [M :94], so the game's early returns
+            // skip it [M :24-36 — a FirstAlertState / FirstSightState pick returns before :94]:
+            // only the `first == 0` pass reaches it here, before the alt-state tail [M :99+].
+            // The disc's 0x52 carriers are all on 07000007 (38 drone placements, map47 — the
+            // [D] census, probe_prop52_census); the ported 0xb reader [M 0x160140:64-67] is the
+            // PartyGirl UPDATE's own arm and stays as-is.
+            if first == 0 && self.prop(d, 0x52) {
+                self.fail_reason = Some(crate::ally::mission_fail_reason(8));
+            }
         }
         if first != 0 { return first; }
         // G-055: `FirstAttack`'s alternate-state tail [M 0x148010:100-131] — with the alt
