@@ -3368,7 +3368,9 @@ impl Drone {
     /// the port's own requirement.]
     fn probe_move(&self, d: &Data, step: [f32; 2]) -> bool {
         let to = [self.pos[0] + step[0], self.pos[1], self.pos[2] + step[1]];
-        let walled = !(self.bounded && d.nav.bounds);
+        // The game's guard move has no world gate at all, only the bounds push (above). Scoped to
+        // 07000012 for now: everywhere else the real-health routes are pinned on the rays.
+        let walled = !(d.level == 0x0700_0012 && self.bounded && d.nav.bounds);
         let probe = |y: f32| {
             let from = [self.pos[0], y, self.pos[2]];
             let end = [to[0] + step[0].signum() * 0.4 * (step[0].abs() > 1e-6) as i32 as f32, y, to[2] + step[1].signum() * 0.4 * (step[1].abs() > 1e-6) as i32 as f32];
@@ -15033,7 +15035,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             // Read before the pane arm below can delete a struck pane's object: the contact stands
             // on the chain either way.
-            let sp_hit = self.scripts.sp_contact(d, b.pos, end);
+            let sp_hit = self.scripts.sp_contact(d, b.pos, end, false);
             if !net_world {
                 // The round's world stop rides the game's cel-scoped pick [M Collide_Pick 0x1eb320:125
                 // candidate nodes from Collide_StraddleCels 0x1eac98 only; Bullet_update re-feeds
@@ -21081,7 +21083,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     Some(crate::bullet::BulletEvent::Player { at, .. }) => *at,
                     _ => b.pos,
                 };
-                if let Some((pi, held)) = self.scripts.sp_contact(d, from, reached) {
+                if let Some((pi, held)) = self.scripts.sp_contact(d, from, reached, true) {
                     if held { self.sp_enemy_damage.push((pi, d.weapons.bullet_contact_damage(b.weapon))); }
                     self.scripts.add_bullet_hit(pi, rec.map_or(0u16, |r| u16::from_le_bytes([r[0x00], r[0x01]])));
                 }

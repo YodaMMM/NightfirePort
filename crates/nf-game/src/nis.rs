@@ -2166,8 +2166,10 @@ impl Scripts {
     /// round anywhere near started its break script and every overlapping sphere counted the same
     /// round again. Objects with no collision data keep the sphere [M 0x133070:19-27], and so do
     /// props under a unit radius: the sphere hugs them, and the urn's and the radio's pinned shots
-    /// land on it. One object per segment: the round's first contact.
-    pub fn sp_contact(&self, w: &dyn World, a: [f32; 3], b: [f32; 3]) -> Option<(usize, bool)> {
+    /// land on it. `exact` drops that allowance: the enemy rounds fly past props all the time, and
+    /// a near miss must not push a panel's script along. One object per segment: the round's
+    /// first contact.
+    pub fn sp_contact(&self, w: &dyn World, a: [f32; 3], b: [f32; 3], exact: bool) -> Option<(usize, bool)> {
         let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
         let len2 = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).max(1e-12);
         let xf = |m: &Mat4, c: [f32; 3]| [
@@ -2194,7 +2196,7 @@ impl Scripts {
                 let t = ((e[0] * d[0] + e[1] * d[1] + e[2] * d[2]) / len2).clamp(0.0, 1.0);
                 let q = [e[0] - d[0] * t, e[1] - d[1] * t, e[2] - d[2] * t];
                 if q[0] * q[0] + q[1] * q[1] + q[2] * q[2] > r * r { continue; }
-                let t = match w.glist_shape(hash).filter(|sh| entity && r >= 1.0 && !sh.is_empty()) {
+                let t = match w.glist_shape(hash).filter(|sh| entity && (exact || r >= 1.0) && !sh.is_empty()) {
                     Some(shape) => {
                         let hit = shape.iter()
                             .filter_map(|tri| crate::world::seg_tri_t(a, b, &[xf(&m, tri[0]), xf(&m, tri[1]), xf(&m, tri[2])]))
