@@ -10,3 +10,7 @@ Timing values must come from a fresh-load reading where one exists; do not deriv
 
 ---
 claimed-by: sandbox4 at 2026-11-07T09:01Z
+
+---
+## Report (done, 2026-11-07T10:40Z)
+
