@@ -216,3 +216,70 @@ fn bot_alert_shouts_resolve_to_the_seen_states() {
     assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x13, 0x05, none, true), None);
     assert_eq!(nf_game::mp::bots::react_to_drone_alert_msg(0x15, 0x0b, all, false), None, "out of shouting range [M 0x1437a0:305]");
 }
+
+// ==== guard-dead-body-shout (2026-11-07): the shout-range law, the SP receiver jumptable,
+// ==== and the shout-receiver property census ====================================================
+
+/// `NDrone2_InShoutingRange` 0x1788a0 (the port's `mp::bots::in_shouting_range`) and the SP
+/// receiver tail of `DroneVision_ShoutFromOtherDrone` 0x177a30 (the port's `sp_shout_outcome`).
+/// The decompiler dropped 0x177a30's body (23 "removing unreachable block" warnings, an empty
+/// `return 0`), so the pins cite the disassembly and the jumptable bytes:
+/// 0x2fb6c0 → 0x177b80 (0x11), 0x2fb6c4 → 0x177b80 (0x12), 0x2fb6c8 → 0x177bf4 (0x13, return 0),
+/// 0x2fb6cc → 0x177bc4 (0x14), 0x2fb6d0 → 0x177bf4 (0x15, return 0), 0x2fb6d4 → 0x177b80 (0x16)
+/// [D ACTION.ELF, read with tools/crosscheck/mipsdis.py].
+#[test]
+fn shouting_range_law_and_the_sp_shout_jumptable() {
+    use nf_game::mp::bots::{in_shouting_range, sp_shout_outcome};
+    // The level bands [M 0x1788a0:14-25]: level > 0x0700000f or < 0x0700000c → 15.0/20.0;
+    // 0x0700000c..=0x0700000f → 40.0/100.0. Inside the first bound always in; inside the
+    // second only with the cel word `*(sender obj+0x20) == *(receiver obj+0x20)`; else out
+    // [M 0x1788a0:30-33, 41-44; the f32 c.lt.s compares].
+    assert!(in_shouting_range(14.9, 0x0700_0001, false), "under the near bound (15.0) — in range with no cel match [M 0x1788a0:47-53]");
+    assert!(!in_shouting_range(15.0, 0x0700_0001, false), "at 15.0 the c.lt.s fails → the cel band [M 0x1788a0:53]");
+    assert!(in_shouting_range(15.0, 0x0700_0001, true), "15.0..20.0 is the same-cel band [M 0x1788a0:55-61]");
+    assert!(in_shouting_range(19.9, 0x0700_0001, true));
+    assert!(!in_shouting_range(19.9, 0x0700_0001, false), "the mid band without the cel word → out [M 0x1788a0:56]");
+    assert!(!in_shouting_range(20.0, 0x0700_0001, true), "≥ 20.0 out of range at any cel [M 0x1788a0:60]");
+    assert!(in_shouting_range(39.9, 0x0700_000c, false), "level 0x0700000c switches to the 40/100 band [M 0x1788a0:23-35]");
+    assert!(in_shouting_range(40.0, 0x0700_000c, true), "40.0..100.0 same-cel [M 0x1788a0:37-44]");
+    assert!(!in_shouting_range(40.0, 0x0700_000c, false));
+    assert!(in_shouting_range(99.9, 0x0700_000f, true));
+    assert!(!in_shouting_range(99.9, 0x0700_000f, false));
+    assert!(!in_shouting_range(100.0, 0x0700_000f, true), "≥ 100.0 out [M 0x1788a0:42]");
+    assert!(in_shouting_range(39.9, 0x0700_0010, false), "level 0x07000010 leaves the band → 15/20 again [M 0x1788a0:16-19]");
+    assert!(!in_shouting_range(39.9, 0x0700_0010, true), "…so 39.9 is out there");
+    // The SP jumptable [D 0x2fb6c0]: the dead-body 0x15 and surrender 0x13 shouts land in the
+    // return-0 entries — an SP guard NEVER reacts to them; the armed-intruder/scream/team
+    // shouts take the Attack arm (the receiver's `+0x4F8 |= 0x4000000 | 0x20000000`, 0x56 [M
+    // 0x177bc8-bf0], the caller's SM pending slot +0x1C [M 0x15bf18 Idle's alert case]).
+    assert_eq!(sp_shout_outcome(0x15), None, "the dead-body shout: jumptable 0x2fb6d0 → return 0 [D]");
+    assert_eq!(sp_shout_outcome(0x13), None, "the surrender shout: jumptable 0x2fb6c8 → return 0 [D]");
+    assert_eq!(sp_shout_outcome(0x11), Some(0x56), "armed intruder → the Attack arm [D 0x2fb6c0]");
+    assert_eq!(sp_shout_outcome(0x12), Some(0x56), "scream → the Attack arm [D 0x2fb6c4]");
+    assert_eq!(sp_shout_outcome(0x16), Some(0x56), "team shout → the Attack arm [D 0x2fb6d4]");
+    // Sister: the state table itself — 0x9E/0x9F are the two Seen states, 0x56 Attack [D
+    // 0x29b300+id·4: 0x9e → 0x16acd0 SeenDeadBody, 0x9f → 0x16ade0 SeenSurrenderedDrone,
+    // 0x56 → 0x164210 Attack]. The port never reaches them: nothing SetStates 0x9E/0x9F
+    // (the only computor of those ids, `NDrone2_ReactToDroneAlertMsg` 0x1437a0, drops its
+    // only possible callers — mode-0x1E bots — in both the 0x15 [M :320-321] and 0x13 [M
+    // :283-290] arms).
+    assert_eq!(nf_game::drone::state::ATTACK, 0x56);
+}
+
+/// The shout-receiver property census on the disc — `behaviour_util_getProperty(0x29/0x4F,
+/// Drone+0x4D8)` read from the levels' placement data through the port's parser (`Drone::prop`
+/// = the game's property tables) [D ISO level bins via the port's nf-formats loader; the gate
+/// sites are 0x1437a0:300-303 (0x29, the dead-body receiver) and :271-275 (0x4F, the surrender
+/// receiver)]. The two levels the task names; the counts are the cast list any live pin uses.
+#[test]
+fn shout_receiver_props_census_07000001_and_07000009() {
+    for code in [0x0700_0001u32, 0x0700_0009] {
+        let l = LevelX::load(code).expect("NF_ISO");
+        let d = l.data(code);
+        let (drones, _rng) = l.drones(code);
+        let p29 = drones.iter().filter(|g| g.prop(&d, 0x29)).count();
+        let p4f = drones.iter().filter(|g| g.prop(&d, 0x4f)).count();
+        println!("level {code:08x}: {p29} guards with prop 0x29, {p4f} with prop 0x4f, {} guards total", drones.len());
+        assert!(p29 > 0, "{code:08x} carries prop-0x29 (dead-body receiver) guards [D]");
+    }
+}

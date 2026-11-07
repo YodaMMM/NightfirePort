@@ -606,6 +606,52 @@ pub fn react_to_drone_alert_msg(
     }
 }
 
+/// `NDrone2_InShoutingRange` 0x1788a0 — the shout-range law both receiver paths fold in: the
+/// bots' `NDrone2_ReactToDroneAlertMsg` 0x1437a0 calls it (:181, :227) and the SP
+/// `DroneVision_ShoutFromOtherDrone` 0x177a30 carries the identical code inline
+/// (0x177aa0-0x177b54 — the decompiler dropped that body; disassembly). `dist` is the 3D
+/// distance between the two drones' feet (`Vec_Dist3D` of obj+0x30 [M 0x1788a0:12-13]),
+/// `level` the game's level code (the global at 0x2a003774 [M 0x1788a0:14-22]), `same_cel`
+/// the word test `*(sender obj+0x20) == *(receiver obj+0x20)` [M 0x1788a0:30-33, 41-44].
+/// Bands [M 0x1788a0:23-44]: level 0x0700000c..=0x0700000f → 40.0 then 100.0; every other
+/// level → 15.0 then 20.0. Inside the first bound always in range; inside the second only
+/// with the same cel word; else out (the comparisons are f32 `c.lt.s`, the port's `<`).
+pub fn in_shouting_range(dist: f32, level: u32, same_cel: bool) -> bool {
+    let (near, far) = if (0x0700_000c..=0x0700_000f).contains(&level) { (40.0, 100.0) } else { (15.0, 20.0) };
+    dist < near || (dist < far && same_cel)
+}
+
+/// The SP receiver tail of `DroneVision_ShoutFromOtherDrone` 0x177a30 — the function the SP
+/// states' alert arm reaches through `DroneVision_EnemyAlerts` 0x177c18 (cases 0x11/0x12/0x13/0x15/0x16
+/// after the fleeing gate `+0x4F8 & 0x800000` [M 0x177c18:14-17] and the property gates 0x28/0x27/0x4F/0x29
+/// [M 0x177c18:41-77]; the resume/home save `+0x5A0/+0x5B0/+0x5C0` runs before them [M 0x177c18:20-33]).
+/// The decompiler dropped 0x177a30's body ("removing unreachable block" ×23) — this is read off the
+/// disassembly: after the sender gates (the alert block's sender must be a drone, `obj+0xff == 2` →
+/// its DCVars at `obj+0xE0` [M 0x177a5c-70]; a missing sender → return 0 [M 0x177a8c]) and the
+/// shouting range above, the alert-id jumptable at 0x2fb6c0 picks [M 0x177b5c-78 + the table]:
+/// - 0x11/0x12/0x16 → the Attack arm [M 0x177bc8-bf0]: the receiver's `+0x4F8 |= 0x4000000` (the
+///   sighting bit `AlertSound` 0x177800:48-50 reads) and `+0x4F8 |= 0x20000000`, then 0x56 — the
+///   caller stores it in the SM's pending slot `+0x1C` → Attack [M 0x15bf18, Idle's alert case];
+/// - **0x13 and 0x15 → return 0 — NO reaction** [M the table's 0x2fb6c8/0x2fb6d0 entries →
+///   LAB_00177bf4]. The dead-body and surrender shouts do nothing to a single-player guard: the
+///   states `NDrone2_DSTATE_SeenDeadBody` 0x16ACD0 (0x9E) and `NDrone2_DSTATE_SeenSurrenderedDrone`
+///   0x16ADE0 (0x9F) are unreachable in SP — and for the MP bots too, because the only caller of
+///   `NDrone2_ReactToDroneAlertMsg` 0x1437a0 is `NDrone2_DSTATE_BotGlobal` 0x16E060 and both the
+///   0x15 arm ([M 0x1437a0:320-321]) and the 0x13 arm ([M :283-290, `case 0x1e` → the return-0
+///   LAB_00143e48]) drop mode-0x1E receivers.
+/// The mode-0x1E receivers that DO get here take the MP arm [M 0x177b80-bc0: same-team check, then
+/// `BOT_reactToDroneAlertMsg` 0x1263c0 → 0xCF] — the bots' own alert path, not this table.
+pub fn sp_shout_outcome(alert: u8) -> Option<u8> {
+    match alert {
+        // 0x13 surrender, 0x15 dead body — the jumptable's return-0 entries [M 0x2fb6c8, 0x2fb6d0].
+        0x13 | 0x15 => None,
+        // 0x11/0x12/0x14/0x16 → the table's Attack arm; an id outside 0x11..0x16 skips the table
+        // entirely into the same arm [M 0x177b60 `beq v0,zero,00177bc4`]. `EnemyAlerts` only ever
+        // forwards 0x11/0x12/0x13/0x15/0x16 here.
+        _ => Some(0x56),
+    }
+}
+
 // ============================================================================
 // 6. Phase 4 (`mp-bots-states`): the ported state machine — the goal machine,
 //    the roam states (0xF9/0xEB) and the attack/fire decision (0xCF/0xD2)

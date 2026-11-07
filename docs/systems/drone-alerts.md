@@ -61,8 +61,17 @@ Callers: CombatNoRoute's timer (both setters, `+0x5A2` unchanged), SearchArea gi
 - **Port** (WORKLOG 0029): `nf-formats::sfx` reads `SFXOutputData`; `Drones::play_sound` queues a sound for the next
   tick's `HandleSoundAlerts`; the chain above, AlertToPosition and SearchArea are ported. Not yet checked live (U-033);
   Bond's gunfire does not make sounds yet (G-026).
-- Drone-to-drone shouts (msgs 0x11, 0x12, 0x13, 0x15, 0x16) are dead code in this build (`ShoutFromOtherDrone`
-  returns 0). The alarm (msg 0x1E, every 30 frames while `switch_channels[0x96]`) → Attack.
+- Drone-to-drone shouts (msgs 0x11, 0x12, 0x13, 0x15, 0x16) reach `DroneVision_ShoutFromOtherDrone` (0x177a30) — the
+  decompiler drops its body (23 "removing unreachable block" warnings), but the disassembly shows a sender gate (the
+  alert block's sender must be a drone, `obj+0xFF == 2` → its DCVars [M 0x177a5c-70]), the inlined `InShoutingRange`
+  0x1788a0 law, then an alert-id jumptable at 0x2FB6C0 [D ACTION.ELF]: 0x11/0x12/0x16 → the Attack arm (the receiver's
+  `+0x4F8 |= 0x4000000` and `|= 0x20000000`, return 0x56 [M 0x177bc8-bf0]); **0x13 and 0x15 → return 0 — no SP
+  reaction** [D 0x2FB6C8/0x2FB6D0 → LAB_00177bf4]. The alarm (msg 0x1E, every 30 frames while `switch_channels[0x96]`)
+  → Attack. Corrections (guard-dead-body-shout 2026-11-07): the old "all shouts are dead code" line was too broad —
+  0x11/0x12/0x16 do attack — and the Seen states 0x9E/0x9F are unreachable everywhere: `NDrone2_ReactToDroneAlertMsg`
+  0x1437A0 (the only computor of those ids, called only from `NDrone2_DSTATE_BotGlobal` 0x16E060) drops mode-0x1E
+  receivers in both its 0x15 arm [M 0x1437a0:320-321] and 0x13 arm [M :283-290], and SP never calls it. The port pins
+  the law in `mp::bots::in_shouting_range` / `sp_shout_outcome` (guard_ai_other4_live).
 
 ## Hit reactions [M]
 
