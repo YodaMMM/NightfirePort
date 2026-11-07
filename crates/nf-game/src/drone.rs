@@ -20854,11 +20854,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         // The script-created breakables (`Script_CreateEntity` 0x1d8968's 0x20 arm — the
         // gondola's 16 windows ride the carriage): upsert/refresh each live 0x20 entity's pane
-        // row every tick. The game re-poses obj+0x90 from the stream keys per `Script_Interp`
-        // [M 0x1d9a08:94-112] and the bullet's `Collide_Intersect` tests the pane's CURRENT local
-        // space [M 0x1ebaa8:157-177]; the port re-derives the pane's world bounds from the live
-        // matrix (the same shapes the dynamic set carries). A pane whose object died (the kill's
-        // deletion, a `Script_KillStream`) drops its row.
+        // row every tick. This sync IS the arm's drain — the game calls `Break_Create` 0x12c230
+        // inside the create (kind/health/filter from the op-7 params [M 0x1d8d78:80-87 →
+        // 0x12c230:21-35]) and `Script_Interp` re-poses obj+0x90 from the stream keys per tick
+        // [M 0x1d9a08:94-112]; the port re-derives the pane's world bounds from the live matrix
+        // (the same shapes the dynamic set carries). The SINGLE path: the former
+        // `Objects::pending_breaks` queue was pushed by nis.rs and never read — dead code
+        // removed (script-break-drain); the upsert keyed on the object index keeps the reuse
+        // path from adding a second breakable [M 0x1d8a68-0x1d8a80]. A pane whose object died
+        // (the kill's deletion, a `Script_KillStream`) drops its row.
         {
             let live: Vec<usize> = self.scripts.objects.list.iter().enumerate().filter_map(|(i, o)| match o {
                 Some(crate::nis::Obj::Entity { kind: 0x20, .. }) => Some(i),
