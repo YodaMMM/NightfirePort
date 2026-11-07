@@ -14242,6 +14242,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.bullet_paths.len()
     }
 
+    /// The per-tick flight segments (`b.pos` → `end` per flying round, `update_player_bullets`'s
+    /// `bullet_paths` pushes) — a read-only view for the hurt volumes' class-5 starter (the game
+    /// adds the round to the volume's obj+0xD0 hit chain from the same walk [M Collide_Update
+    /// 0x1ea398; Hurt_Update 0x17e5d0:57-95's state-0 who-mask AND]).
+    pub fn bullet_flight_segments(&self) -> &[(V3, V3)] {
+        &self.bullet_paths
+    }
+
     pub fn fire_remote_cosmetic(&mut self, d: &Data, from: V3, dir: V3, weapon: u8, rng: &mut Rng) {
         let Some(w) = d.weapons.records.get(weapon as usize) else { return };
         let w = &w[..];

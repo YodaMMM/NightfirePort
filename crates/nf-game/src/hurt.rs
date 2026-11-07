@@ -94,6 +94,30 @@ pub struct Hurt {
     /// "the volumes stay armed" pin reads it; the game's equivalent is the mirrored hit on
     /// obj+0xD0).
     pub hits: u32,
+    /// The placement's raw +0x40 u16 — the path's key count [M the loader 0x1d1b68:88-92 stores
+    /// it at level_tag+0x02, Hurt_Create 0x17e870 stores `count − 1` at ext+0x0C]. 0 = a static
+    /// volume (the loader leaves level_tag+0x08 null; state 1 parks [M 0x17e5d0:106-108]).
+    pub count: u16,
+    /// The placement's raw +0x42 u16 — the flight rate: `ext[1] = (count−1) · (1/60) · (60/rate)`
+    /// per tick [M 0x17e870 disasm 0x17e968-0x17e998; the constants 0x30d0dc = 1/60 and
+    /// 0x30d0d0 = 60.0 [D ACTION.ELF]], so one traversal takes `rate` ticks.
+    pub rate: u16,
+    /// The resolved `m_paths` entry [M 0x1d1b68:88-92 — level_tag+0x08 = `m_paths[raw+0x44]`,
+    /// Hurt_Create stores it at ext+0x08], the block-0x19 keys (28-byte KEYED_POSROT records,
+    /// `door::parse_keys`). None = no path (every non-07000046 volume [D census]).
+    pub path: Option<Vec<crate::door::Key>>,
+    /// ext[0]: the flight clock [M 0x17e5d0:119-131 — advanced by ext[1] every state-1 tick,
+    /// reset to 0 when it passes count−1].
+    pub t: f32,
+    /// `obj+0xF4 == 1`: state 1, the flight (the port's flag; the game enters it from state 0's
+    /// who-mask law [M 0x17e5d0:51-102] and retires through state 2 [M :129-132]).
+    pub flying: bool,
+    /// The object-space collision (the glist tris before the pose) — state 1 re-poses them every
+    /// tick: `Spline_Interp` writes obj+0x90 directly [M 0x17e5d0:121-123].
+    pub local_tris: Vec<[V3; 3]>,
+    /// obj+0x90: the current world pose — the placement's until state 1 [M 0x17e870:17], then the
+    /// spline's matrix (world-space keys [D: 07000046 path 14's key 0 = the Icicle's hang spot]).
+    pub pose: [[f32; 4]; 4],
 }
 
 impl Hurt {
@@ -119,6 +143,20 @@ impl Hurt {
             let mut hi = [-f32::MAX; 3];
             for t in &tris { for v in t { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } } }
             let gate = param(2) as u16;
+            // The flight triple [M the loader 0x1d1b68:88-92 + Hurt_Create 0x17e870:18-27]: the raw
+            // +0x40/+0x42/+0x44 u16s (extra[7] low/high, extra[8] low); the +0x44 index resolves
+            // through the main map's 0x19 blocks (the game's m_paths table) only when count != 0 —
+            // the loader skips the store otherwise and the pointer stays null.
+            let (count, rate, path_idx) = ((p.extra[7] & 0xffff) as u16, (p.extra[7] >> 16) as u16, p.extra[8] & 0xffff);
+            let path = if count != 0 {
+                level.path_blocks().get(path_idx as usize).map(|b| crate::door::parse_keys(b))
+            } else { None };
+            let local_tris: Vec<[V3; 3]> = target
+                .and_then(|(om, oi)| level.maps[om].objects[oi].collision.as_ref())
+                .map(|c| c.triangles().into_iter().map(|t| t.map(|v| [v[0], v[1], v[2]])).collect())
+                .unwrap_or_default();
+            // The create pose [M 0x17e870:17 — CCO(0) → View_RotTransMatrix; obj+0x90 until state 1].
+            let pose = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
             out.push(Hurt {
                 placement: i,
                 kind: param(0) as u8,
@@ -133,6 +171,13 @@ impl Hurt {
                 disabled: gate != 0,
                 fired: false,
                 hits: 0,
+                count,
+                rate,
+                path,
+                t: 0.0,
+                flying: false,
+                local_tris,
+                pose,
             });
         }
         out
@@ -144,6 +189,56 @@ impl Hurt {
         if self.tris.is_empty() { return false; }
         if (0..3).any(|k| (a[k] < self.lo[k] - r && b[k] < self.lo[k] - r) || (a[k] > self.hi[k] + r && b[k] > self.hi[k] + r)) { return false; }
         capsule_hits_tris(a, b, r, &self.tris)
+    }
+
+    /// `ext[1]`, the per-tick flight step [M Hurt_Create 0x17e870 disasm 0x17e968-0x17e998:
+    /// `(count−1) · (1/60) · (60/rate)` — the constants 0x30d0dc = 1/60, 0x30d0d0 = 60.0
+    /// [D ACTION.ELF] — so the whole path takes `rate` ticks]. The count−1 term is ext+0x0C.
+    pub fn step(&self) -> f32 {
+        let countm1 = self.count.saturating_sub(1) as f32;
+        countm1 * (1.0 / 60.0) * (60.0 / self.rate as f32)
+    }
+
+    /// State 0 → 1 [M Hurt_Update 0x17e5d0:51-102]: `uVar5 = who & collected` non-zero arms the
+    /// flight. `collected` here is the class-5 bit (2): the caller feeds a player bullet's flight
+    /// segment against the volume's tris (the game adds the contact to the volume's obj+0xD0 hit
+    /// chain [M Collide_Update 0x1ea398]). The seven 07000046 volumes carry who 0x2 — bullet-only
+    /// starters [D params]. No-op without a path or already flying/retired/disabled.
+    pub fn start_flight(&mut self) {
+        if self.flying || self.fired || self.disabled { return; }
+        if self.path.is_some() && self.count >= 2 { self.flying = true; }
+    }
+
+    /// State 1's per-tick body [M Hurt_Update 0x17e5d0:104-132]: pose at `t` (`Spline_Interp(t,
+    /// ext+0x08, 0, count−1, obj+0x90, 0, 2)` — the Catmull-Rom/slerp tail the door port pins),
+    /// then `t += ext[1]`; passing count−1 resets t to 0 and a one-shot parks state 2 (retire).
+    /// The `t == 0` sound arm (:119-123) is not ported (no surveyed volume sets a sound id [D];
+    /// the port's hurt sound note stands). Re-poses the world tris + AABB from the spline matrix.
+    pub fn tick_flight(&mut self) {
+        if !self.flying { return; }
+        let Some(keys) = self.path.clone() else { return; };
+        let countm1 = self.count.saturating_sub(1);
+        let old = self.t;
+        if let Some(m) = crate::door::interp(&keys, 0, countm1, old, true) {
+            self.pose = m;
+            let mut lo = [f32::MAX; 3];
+            let mut hi = [-f32::MAX; 3];
+            self.tris = self.local_tris.iter().map(|t| {
+                let w = t.map(|v| transform(&m, v));
+                for v in &w { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } }
+                w
+            }).collect();
+            self.lo = lo;
+            self.hi = hi;
+        }
+        self.t = old + self.step();
+        if self.t > countm1 as f32 {
+            self.t = 0.0;
+            if self.one_shot {
+                self.flying = false;
+                self.fired = true;
+            }
+        }
     }
 
     /// `Hurt_Update` 0x17e5d0's gate maintenance + state-0 start law, and the class-0x27 contact
@@ -189,6 +284,14 @@ impl Hurt {
     }
 }
 
+/// The class-5 starter's narrow phase: the round's flight segment against the volume's current
+/// tris — the trigger walk's segment-triangle test at radius 0 (a degenerate capsule = the
+/// segment) [S: the port's approximation of the game's obj+0xD0 chain add; the class arm and the
+/// who-mask law above are the [M] side].
+pub fn segment_hits_tris(a: V3, b: V3, tris: &[[V3; 3]]) -> bool {
+    crate::triggers::capsule_hits_tris(a, b, 0.0, tris)
+}
+
 fn transform(m: &[[f32; 4]; 4], v: V3) -> V3 {
     [
         m[0][0] * v[0] + m[1][0] * v[1] + m[2][0] * v[2] + m[3][0],
@@ -207,7 +310,14 @@ mod tests {
             [[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.0, 1.0]],
             [[-1.0, 0.0, -1.0], [1.0, 0.0, 1.0], [-1.0, 0.0, 1.0]],
         ];
-        Hurt { placement: 0, kind: 1, damage: 1.0, gate, sound: 0xffff, who: 0, one_shot: false, tris, lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], disabled: gate != 0, fired: false, hits: 0 }
+        Hurt {
+            placement: 0, kind: 1, damage: 1.0, gate, sound: 0xffff, who: 0, one_shot: false,
+            tris: tris.clone(), lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], disabled: gate != 0,
+            fired: false, hits: 0,
+            // Own lines (lesson 4): the flight fields — a static unit volume.
+            count: 0, rate: 0, path: None, t: 0.0, flying: false,
+            local_tris: tris, pose: [[0.0; 4]; 4],
+        }
     }
 
     #[test]
@@ -282,6 +392,53 @@ mod tests {
         h3.who = 1;
         assert!(h3.update_touch(true, [0.0, 0.0, 0.0], [0.0, 1.8, 0.0], 0.4, true).is_none(),
             "who 1 collects nothing, drone included [M :57-95]");
+    }
+
+    #[test]
+    fn the_flight_step_is_count_minus_one_over_rate_per_tick() {
+        // [M Hurt_Create 0x17e870 disasm 0x17e968-0x17e998: ext[1] = (count−1)·(1/60)·(60/rate);
+        // the constants 1/60 [D 0x30d0dc] and 60.0 [D 0x30d0d0]. 07000046's Icicles: count 6,
+        // rate 0x5A [D raw +0x40/+0x42] → 5/90 per tick, a traversal every 90 ticks.]
+        let mut h = hurt(0);
+        h.count = 6;
+        h.rate = 90;
+        assert!((h.step() - 5.0 / 90.0).abs() < 1e-6, "step = (count−1)/rate, got {}", h.step());
+    }
+
+    #[test]
+    fn the_flight_clock_wraps_at_count_minus_one_and_a_one_shot_retires() {
+        // [M Hurt_Update 0x17e5d0:121-132: Spline_Interp at t, then t += ext[1]; past count−1
+        // t resets to 0 and param 5 == 1 parks state 2 — the retire.]
+        let mut h = hurt(0);
+        h.count = 6;
+        h.rate = 60; // step 5/60: the f32 sum crosses 5.0 at the 60th add (rate 90's 5/90 may
+                     // accumulate to 4.999… and never wrap — a live-check question, see the report)
+        h.one_shot = true;
+        h.local_tris = h.tris.clone();
+        h.path = Some(vec![crate::door::Key { pos: [0.0, 10.0, 0.0], quat: [0.0, 0.0, 0.0, 1.0] }; 6]);
+        h.start_flight();
+        assert!(h.flying, "the path arms the flight");
+        for _ in 0..61 { h.tick_flight(); }
+        assert!(h.fired, "the one-shot retired at the first wrap");
+        assert_eq!(h.t, 0.0, "the clock reset at the wrap [M]");
+        assert!((h.pose[3][1] - 10.0).abs() < 1e-4, "the pose rode the keys (the last key's y)");
+        assert!(h.update(true, [0.0, 0.0, 0.0]).is_none(), "the retired volume never hurts again");
+    }
+
+    #[test]
+    fn the_flight_without_a_path_or_a_short_count_never_arms() {
+        // [M the loader 0x1d1b68: the pointer stays null when raw +0x40 == 0; Hurt_Update
+        // 0x17e5d0:106-108 parks state 1 on ext+0x0C == 0.]
+        let mut h = hurt(0);
+        h.count = 0;
+        h.start_flight();
+        assert!(!h.flying);
+        let mut h2 = hurt(0);
+        h2.count = 1; // ext+0x0C = 0
+        h2.rate = 90;
+        h2.path = Some(vec![crate::door::Key { pos: [0.0; 3], quat: [0.0, 0.0, 0.0, 1.0] }]);
+        h2.start_flight();
+        assert!(!h2.flying, "count 1 parks (ext+0x0C == 0)");
     }
 
     #[test]

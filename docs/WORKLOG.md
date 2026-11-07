@@ -59,3 +59,17 @@ seven volumes are in play and what starts state 1; plumb the path reference to t
 path table; port state 1 with the game's rate and end behaviour, other states untouched;
 pin through the real level (flies at the game's pace, Bond in the way takes the damage,
 clear he does not); run the hurt binaries, the 07000046 binaries, nf-game. Entry started.
+
+Round (2026-11-07 ~19:45 UTC): the flight ported and unit-pinned. Hurt_Create's triple
+(count/rate/path = raw +0x40/42/44) plumbed through the loader's m_paths resolution
+[0x1d1b68:88-92] to door::parse_keys keys; Hurt_Update's state 1 = door::interp pose per
+tick, t += (count−1)/60·(60/rate) [constants 0x30d0dc/0x30d0d0], wrap at count−1, one-shot
+retires. The seven 07000046 volumes identified: Icicles, damage 105, who 0x2 = the class-5
+BULLET starter (shot down, never touch-started), paths 14..20 = 28.4 m vertical drops.
+scene.rs ticks the clock + the bullet-segment starter (drone.rs gained a read-only
+bullet_flight_segments accessor). nf-game lib 691 passed (10 hurt units); 106 walkreal
+binaries 255 passed / 0 failed. The live pin (hurt_07000046_live) is red-on-old but not
+green yet: the test harness cannot drive the fire ray onto the icicle (the fire dir comes
+from the camera/aim pipeline, not 1:1 from bond.pitch; the directly-under shot exceeds the
+~77° fire-ray cap) — the next session fixes the aim and the tests should go green. Full
+suite did not fit (rootfs filled at 100%, target pruned; the background runner dies here).

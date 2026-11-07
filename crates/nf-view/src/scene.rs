@@ -3565,6 +3565,28 @@ impl Sim {
                 // 0x191a70:135-143: every FRAME_RATE·0.5 ticks, Sound_Play(100, 0x60b) + HandlePain].
                 self.drones.audio.play(0x60b);
             }
+            // The flight clock [M Hurt_Update 0x17e5d0:104-132 — the control pass runs before the
+            // collide pass, so the pose lands before this step's contacts; a volume started THIS
+            // step (below) takes its first pose tick next step, the game's own order].
+            for h in self.hurts.iter_mut() {
+                h.tick_flight();
+            }
+            // The class-5 starter [M Hurt_Update 0x17e5d0:57-95 — the who-mask AND over the hit
+            // chain's contact classes: a player bullet (class 5) contributes bit 2; the seven
+            // 07000046 Icicles carry who 0x2 [D params] — shot down, never touch-started]. The
+            // bullet's flight segment tests the volume's current tris (the game's pick feeds the
+            // same glist to the collide pass [M Collide_Update 0x1ea398]).
+            {
+                let segments: Vec<([f32; 3], [f32; 3])> = self.drones.bullet_flight_segments().to_vec();
+                if !segments.is_empty() {
+                    for h in self.hurts.iter_mut() {
+                        if h.flying || h.fired || h.who & 0x2 == 0 { continue; }
+                        if segments.iter().any(|(a, b)| nf_game::hurt::segment_hits_tris(*a, *b, &h.tris)) {
+                            h.start_flight();
+                        }
+                    }
+                }
+            }
             // Hurt volumes (0xE4): the collide contact `Player_DealWithObjHit` 0x194458:94-101 — a
             // class-0x27 hit calls `Player_HandlePain(pain + Hurt_GetDamage, …, Hurt_GetType, −1)`,
             // the same full pipeline as the drown tick (difficulty factor, no armour for types 1..7
