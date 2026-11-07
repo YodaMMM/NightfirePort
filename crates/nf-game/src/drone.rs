@@ -12433,6 +12433,9 @@ pub struct Drones {
     pub channels: crate::triggers::Channels,
     pub triggers: Vec<crate::triggers::Trigger>,
     pub spawners: Vec<crate::spawners::Spawner>,
+    /// The spawner templates as first spawned, by drone index — the DIVars each spawner saved at
+    /// `DroneSpawner_Init` 0x137aa0, which every later `DroneSpawner_SpawnDrone` builds from.
+    pub spawn_templates: std::collections::HashMap<usize, Drone>,
     /// sniper-spawn-stats-2: the level's shared `drone_stats` table (0x31aa30, BSS) — the game
     /// re-runs `behaviour_util_get` at every spawner spawn, so a template's section (and the record it
     /// leaves) feeds every later spawn's `DoModeSettingsNEW` read [M 0x137cb0 → 0x1c7a98/0x14c600].
@@ -13225,7 +13228,7 @@ impl Drones {
             if let Some(g) = &mut dr.body_glow { g.owner = i; }
         }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, player_move_local: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), stats_table: Default::default(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, player_move_local: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), spawn_templates: Default::default(), stats_table: Default::default(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             // The game's `DAT_00299092` (the shared LOS-probe counter; see the field) — zeroed
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
@@ -14080,6 +14083,7 @@ impl Drones {
         // dispatches through `control_funcs[class*0xC+8]` [M 0x26FAD8 entry, symtab `control_funcs`
         // 0x26F890]; the port's spawner slot leaving `self.spawners` is that cleanup.)
         self.spawners.clear();
+        self.spawn_templates.clear();
         for (i, p) in level.maps[m].placements.iter().enumerate().filter(|(_, p)| p.flags & 0xff == 0xf1) {
             let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map(|&(_, v)| v).unwrap_or(0);
             if param(0) <= 1 || param(1) == 0 { continue; }
@@ -19891,20 +19895,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if self.npc_system_disabled { continue; }
                 let list = &self.list;
                 let rng = &mut self.rng;
-                // level-gates-world: the old `wave == 0` first-wave stinger here was the INVERTED
-                // reading of `DroneSpawner_Control` 0x137e68:191-200's gate — `(short)puVar1[0xb]
-                // != 0` (puVar1 is `uint*`, so puVar1[0xb] IS +0x2C, the waves-completed counter)
-                // plays `Rand_Rand(2)` + `NDrone2_PlaySFX(1.0, NULL, 0xd6+draw, 0, 1)` only AFTER a
-                // wave has completed; the first-ever epoch is SILENT and sets the may-spawn byte
-                // instead [M decomp 0x1382fc-0x138324]. The correct phase is `Spawner::update`'s
-                // re-arm stinger (spawners.rs `wave > 0` → `sfx_request`, drained below at the
-                // `sfx_request.take()`) — this site drew `rng.rand(2)` in a phase the game never
-                // draws (a 0c/0d RNG-stream divergence) and played a sound the game does not.
-                // Removed; spawner_kill.rs pins "no stinger on the first wave" on the module side.
                 // fix-spawner-p7: the kill gate reads the walk-start `drawn` snapshot (obj+0xFC as of
                 // the last frame — see the snapshot above), plus the level id for the cleanup's split.
+                let templates = &self.spawn_templates;
                 let action = self.spawners[index].update(&mut self.channels, frame, d.level,
-                    |i| list[i].present, |i| drawn_prev[i],
+                    // The slot scan [M 0x137e68:95-124]: a drone holds its slot while it is not
+                    // flagged dead (`+0x4F8 & 0x600`) and its health `+0xAC` is above zero — the
+                    // corpse leaves the wave the moment it falls, not when it fades.
+                    |i| list[i].present && !list[i].corpse && list[i].health > 0.0, |i| drawn_prev[i],
                     // Pre-selection usability: the spot at least `min_dist` from the player — the
                     // game's compare is `Vec_SqDist3D(player+0x30, spot) >= min*min` [M 0x137cb0:28-31:
                     // `Vec_SqDist3D` is the 3-D squared distance, usable templates are skipped without
@@ -19913,17 +19911,25 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // away in x/z for the whole descent, so the screen rejected every template forever
                     // (level-4a-every-objective probe: armed on ch 0x17, d 7.6-7.7, rays blocked, no
                     // spawn); in 3-D the descending rider leaves the sphere and the garrison releases.
-                    |i, min| { let q = list[i].pos; let dd = ((q[0] - player.pos[0]).powi(2) + (q[1] - player.pos[1]).powi(2) + (q[2] - player.pos[2]).powi(2)).sqrt();
+                    |i, min| { let q = templates.get(&i).map_or(list[i].pos, |t| t.pos); let dd = ((q[0] - player.pos[0]).powi(2) + (q[1] - player.pos[1]).powi(2) + (q[2] - player.pos[2]).powi(2)).sqrt();
                         dd >= min },
                     // Post-selection abort: the picked spot visible to Bond fails the attempt
                     // [M 0x137cb0:43 — the slot persists and retries next tick]. The game's test is
                     // `Drone_PositionVisible` (0x13a7a0), NOT the drawn gate — its ONE 0xa27 ray is the
                     // FLAT segment, so guards-0c's bullet-segment drawn rays must not feed it
                     // (guards-0c-b: they aborted every Drake spawn on 0700001b, fix_finale_live).
-                    |i| { let q = list[i].pos; drone_position_visible(player, d.world, q) },
+                    |i| { let q = templates.get(&i).map_or(list[i].pos, |t| t.pos); drone_position_visible(player, d.world, q) },
+                    |i| !list[i].present,
                     &mut |n| rng.rand(n));
                 match action {
                     crate::spawners::Action::Spawn(i) => {
+                        // `DroneSpawner_SpawnDrone` 0x137cb0 builds a NEW object from the DIVars the
+                        // spawner saved at Init every time [M :48-67 `NDrone2_CreateObj`; 0x137aa0:58-63]:
+                        // a later wave's guard starts at the template spot with the template's state,
+                        // not where the last one fell. The port's record is untouched until its first
+                        // spawn, so the snapshot is taken there.
+                        if self.list[i].spawn_seq == 0 { self.spawn_templates.insert(i, self.list[i].clone()); }
+                        else if let Some(t) = self.spawn_templates.get(&i) { self.list[i] = t.clone(); }
                         let dr = &mut self.list[i];
                         // sniper-spawn-stats-2: `DroneSpawner_SpawnDrone` 0x137cb0 re-runs the
                         // full drone init — `behaviour_util_get` 0x1c7a98 writes the template's stats
@@ -20026,7 +20032,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         self.spawn_counter += 1;
                         dr.spawn_seq = self.spawn_counter;
                         dr.spawn_frame = frame;
-                        self.llist.push(i);
+                        if !self.llist.contains(&i) { self.llist.push(i); }
                         // `NDrone2_DefaultInit` 0x14b300:609 → `PlrStat_LogEnemySpawned(0)` per created
                         // drone (fix-progress).
                         self.progress.log_enemy_spawned(self.mission.status());

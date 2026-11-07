@@ -77,13 +77,17 @@ fn the_east_room_touch_wakes_its_squad() {
         if sim.drones.spawners[0].spawned.iter().any(|&i| sim.drones.list[i].present) { came = true; break; }
         w.tick(nf_game::player::Input::default(), false);
     }
-    let sim = w.scene.sim.as_ref().unwrap();
     assert!(came, "the ch-0xf6 start brings the group-1 templates in [M DroneSpawner_Control 0x137e68's trigger path]");
-    // Mode 3 spawns only when none of its own are alive [M 0x137e68's mode arm `living == 0`], so
-    // the first tick brings ONE drone in; the second follows once the first dies (max alive 2 [D
-    // param 2]). The initial-fill flag is clear (start 0xf6 was off at create [M 0x137aa0:33-45]),
-    // so no immediate fill.
-    assert_eq!(sim.drones.spawners[0].spawned.len(), 1, "the first template spawns (mode 3 holds the second until none is alive [M 0x137e68])");
+    // Mode 3 opens a whole wave: the +0x1C latch set with nobody alive stays up while the first
+    // drone stands, so the second follows a tick or so later (max alive 2 [D param 2]; M 0x137e68
+    // :176-210). The initial-fill flag is clear (start 0xf6 was off at create [M 0x137aa0:33-45]),
+    // so the spawn screens stay on and a screened attempt waits a tick.
+    for _ in 0..120 {
+        if w.scene.sim.as_ref().unwrap().drones.spawners[0].spawned.len() == 2 { break; }
+        w.tick(nf_game::player::Input::default(), false);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert_eq!(sim.drones.spawners[0].spawned.len(), 2, "both templates of the wave spawn [M 0x137e68:176-210; D max 2]");
     assert!(sim.drones.spawners[0].spawned.iter().all(|&i| sim.drones.list[i].present),
         "the spawned drone stands in the world [M 0x137aa0's live-slot array]");
     assert!(sim.drones.spawners[0].spawned.iter().all(|&i| sim.drones.list[i].switch_channel == 0xf6 && sim.drones.list[i].channel_on),

@@ -30,14 +30,14 @@ fn spawner_params(extra: impl Fn(u32) -> u32) -> Spawner {
 /// in two ticks. (The old counting stub 0,1,.. pinned the port's pre-c4b2d38ce draw-over-usable
 /// model, which always landed inside the usable set and always spawned.)
 fn setup(sp: &mut Spawner, ch: &mut Channels, drawn: [bool; 2]) {
-    let mut rand = |_: u32| 0u32;
+    let mut rand = |_: u32| 0u32; // draw 0: the first usable template each tick
     let alive = |_: usize| true;
     let drawnf = |i: usize| drawn[i];
     let spot = |_: usize, _: f32| true;
     // The no-trigger spawner is active at load: two updates spawn both templates (one per tick).
-    let a = sp.update(ch, 1, 0x0700_0005, alive, drawnf, spot, |_: usize| false, &mut rand);
+    let a = sp.update(ch, 1, 0x0700_0005, alive, drawnf, spot, |_: usize| false, |_: usize| true, &mut rand);
     assert!(matches!(a, Action::Spawn(0) | Action::Spawn(1)), "first spawn, got {a:?}");
-    let a = sp.update(ch, 2, 0x0700_0005, alive, drawnf, spot, |_: usize| false, &mut rand);
+    let a = sp.update(ch, 2, 0x0700_0005, alive, drawnf, spot, |_: usize| false, |_: usize| true, &mut rand);
     assert!(matches!(a, Action::Spawn(_) ), "second spawn, got {a:?}");
     assert_eq!(sp.spawned.len(), 2);
 }
@@ -52,7 +52,7 @@ fn p7_on_a_kill_all_level_removes_every_spawned_drone_and_the_spawner() {
     setup(&mut sp, &mut ch, [true, true]); // even drawn ones go on a kill-all level
     ch.set(0x43, 1, 3);
     let mut rand = |_: u32| 0u32;
-    let a = sp.update(&mut ch, 4, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, &mut rand);
+    let a = sp.update(&mut ch, 4, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
     match a {
         Action::Remove(v) => assert_eq!(v.len(), 2, "both spawned drones removed [L 15 → 13]"),
         other => panic!("expected Remove, got {other:?}"),
@@ -61,7 +61,7 @@ fn p7_on_a_kill_all_level_removes_every_spawned_drone_and_the_spawner() {
     assert!(!sp.active, "+0x1E = 0 [M 0x137e68:287]");
     assert!(sp.spawned.is_empty(), "the slots zeroed [M `sw $zero, ($v1)` 0x138094]");
     // And it never spawns again.
-    let a = sp.update(&mut ch, 5, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, &mut rand);
+    let a = sp.update(&mut ch, 5, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
     assert_eq!(a, Action::None, "the latched spawner is gone");
 }
 
@@ -76,18 +76,18 @@ fn p7_on_a_keep_level_removes_only_the_undrawn_and_keeps_the_spawner() {
     ch.set(0x1d, 1, 3);
     let mut rand = |_: u32| 0u32;
     let drawn = [true, false];
-    let a = sp.update(&mut ch, 4, 0x0700_0011, |_: usize| true, |i| drawn[i], |_: usize, _: f32| true, |_: usize| false, &mut rand);
+    let a = sp.update(&mut ch, 4, 0x0700_0011, |_: usize| true, |i| drawn[i], |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
     match a {
         Action::Remove(v) => assert_eq!(v, vec![1], "only the undrawn drone (obj+0xFC == 0) is removed"),
         other => panic!("expected Remove, got {other:?}"),
     }
     assert!(!sp.gone, "the spawner stays while a drawn drone remains [M 0x138081: `if (sVar8 != 0) return`]");
     // The survivor stays: the next update removes nothing more while it is drawn.
-    let a = sp.update(&mut ch, 5, 0x0700_0011, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, &mut rand);
+    let a = sp.update(&mut ch, 5, 0x0700_0011, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
     assert_eq!(a, Action::Remove(Vec::new()), "nothing more to remove");
     assert!(!sp.gone);
     // Drawn → undrawn: the next pass removes it too and the spawner deletes itself.
-    let a = sp.update(&mut ch, 6, 0x0700_0011, |_: usize| false, |_: usize| false, |_: usize, _: f32| true, |_: usize| false, &mut rand);
+    let a = sp.update(&mut ch, 6, 0x0700_0011, |_: usize| false, |_: usize| false, |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
     assert_eq!(a, Action::Remove(Vec::new()));
     assert!(sp.gone, "once none remain the spawner deletes itself [M 0x137e68:281-286]");
 }
@@ -103,7 +103,7 @@ fn the_kill_all_level_split_matches_the_disasm() {
         setup(&mut sp, &mut ch, [true, true]);
         ch.set(0x43, 1, 3);
         let mut rand = |_: u32| 0u32;
-        let a = sp.update(&mut ch, 4, level, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, &mut rand);
+        let a = sp.update(&mut ch, 4, level, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
         let removed = matches!(a, Action::Remove(ref v) if v.len() == 2);
         removed && sp.gone // a drawn pair survives only on the keep levels
     };
@@ -132,12 +132,12 @@ fn the_stop_channel_pauses_a_latched_spawner_and_deletes_an_unlatched_one() {
     ch.set(0x43, 1, 3);
     ch.set(0x16, 1, 3); // the stop channel
     let mut rand = |_: u32| 0u32;
-    let a = sp.update(&mut ch, 4, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, &mut rand);
+    let a = sp.update(&mut ch, 4, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
     assert_eq!(a, Action::None, "latched + stop: un-trigger and pause [M 0x137e68:79-81]");
     assert!(!sp.gone, "the latched spawner survives the stop channel this tick");
     assert!(!sp.active, "+0x1E = 0");
     // The next tick (stop still on, latch still set): still a pause.
-    let a = sp.update(&mut ch, 5, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, &mut rand);
+    let a = sp.update(&mut ch, 5, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
     assert_eq!(a, Action::None);
     assert!(!sp.gone);
     // An un-latched spawner with the stop channel deletes itself [M 0x137e68:82].
@@ -145,7 +145,7 @@ fn the_stop_channel_pauses_a_latched_spawner_and_deletes_an_unlatched_one() {
     let mut ch2 = Channels::default();
     setup(&mut sp2, &mut ch2, [true, true]);
     ch2.set(0x16, 1, 3);
-    let a = sp2.update(&mut ch2, 4, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, &mut rand);
+    let a = sp2.update(&mut ch2, 4, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
     assert_eq!(a, Action::None);
     assert!(sp2.gone, "the un-latched spawner deletes itself on the stop channel");
 }
@@ -162,21 +162,21 @@ fn the_done_path_waits_for_the_spawned_when_p6_or_p7_is_set() {
     setup(&mut sp, &mut ch, [true, true]);
     let mut rand = |_: u32| 0u32;
     // The wave is full (2 of 2 spawned) → the rollover resets the epoch [M :145-172].
-    let a = sp.update(&mut ch, 4, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, &mut rand);
+    let a = sp.update(&mut ch, 4, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
     assert_eq!(a, Action::None);
     assert_eq!(sp.wave, 1, "wave 1 completed");
     assert!(!sp.gone);
     // Now the counter check fires: waves(1) completed >= max(1) — p7 set, drones alive → wait.
-    let a = sp.update(&mut ch, 5, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, &mut rand);
+    let a = sp.update(&mut ch, 5, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
     assert_eq!(a, Action::None, "p7 set: wait for the spawned drones");
     assert!(!sp.gone, "still waiting");
     // p6 and p7 clear: the immediate disable.
     let mut sp = Spawner::new(0, |k| match k { 0 => 2, 1 => 1, 2 => 2, 3 => 1, _ => 0 }, vec![0, 1], &Channels::default()).unwrap();
     let mut ch = Channels::default();
     setup(&mut sp, &mut ch, [true, true]);
-    let a = sp.update(&mut ch, 4, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, &mut rand);
+    let a = sp.update(&mut ch, 4, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
     assert_eq!(a, Action::None, "the rollover tick");
-    let a = sp.update(&mut ch, 5, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, &mut rand);
+    let a = sp.update(&mut ch, 5, 0x0700_0005, |_: usize| true, |_: usize| true, |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
     assert_eq!(a, Action::None);
     assert!(sp.gone, "p6 == 0 && p7 == 0: the immediate disable [M 0x137e68:127-129]");
 }
@@ -206,28 +206,28 @@ fn mode3_rearm_requests_the_power_station_stinger_in_game_order() {
     let mut rand = logging_rand(log.clone());
     // Tick 1: the initial fill spawns (mode 3, immediate overrides the alive rule) — silent.
     let a = sp.update(&mut ch, 1, 0x0700_000c, alive, |_: usize| false,
-        |_: usize, _: f32| true, |_: usize| false, &mut rand);
+        |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
     assert!(matches!(a, Action::Spawn(0)));
     assert_eq!(*log.borrow(), vec![1], "one draw: the selection over the 1 usable template — no stinger on the first wave");
     assert_eq!(sp.sfx_request, None);
     // Tick 2: the wave is full → rollover (+0x1F cleared, wave 1 completed) — no draws at all.
     log.borrow_mut().clear();
     let a = sp.update(&mut ch, 2, 0x0700_000c, alive, |_: usize| false,
-        |_: usize, _: f32| true, |_: usize| false, &mut rand);
+        |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
     assert_eq!(a, Action::None);
     assert!(log.borrow().is_empty(), "the rollover returns before the mode arm — no stinger draw [M :145-172]");
     assert!(!sp.immediate, "+0x1F cleared at the rollover [M :148]");
     // Tick 3: the wave-1 guard still alive → the mode-3 gate stays shut, no stinger.
     log.borrow_mut().clear();
     let a = sp.update(&mut ch, 3, 0x0700_000c, alive, |_: usize| false,
-        |_: usize, _: f32| true, |_: usize| false, &mut rand);
+        |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
     assert_eq!(a, Action::None);
     assert!(log.borrow().is_empty(), "alive == 1 → the stinger branch is not reached [M :187-190]");
     // Tick 4: the guard died → the re-arm: Rand_Rand(2) FIRST, then the selection draw.
     log.borrow_mut().clear();
     let dead = |_: usize| false;
     let a = sp.update(&mut ch, 4, 0x0700_000c, dead, |_: usize| false,
-        |_: usize, _: f32| true, |_: usize| false, &mut rand);
+        |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
     assert!(matches!(a, Action::Spawn(0)), "nobody alive → the gate reopens and the wave respawns");
     assert_eq!(*log.borrow(), vec![2, 1], "the stinger draw (Rand_Rand(2)) precedes the selection draw [M :199 then 0x137cb0:21]");
     assert_eq!(sp.sfx_request, Some(0xd6), "draw 0 → Drone_SfxInfo[0xD6] (sfx 0x549) [L ee_snapshot Drone_SfxInfo+0x20*0xD6]");
@@ -238,8 +238,8 @@ fn mode3_rearm_requests_the_power_station_stinger_in_game_order() {
     let mut sp = Spawner::new(0, |k| match k { 0 => 3, 1 => 1, 2 => 1, 3 => 2, _ => 0 },
         vec![0], &ch).unwrap();
     let mut one = |n: u32| if n == 2 { 1u32 } else { 0 };
-    for t in 1..=3 { let _ = sp.update(&mut ch, t, 0x0700_000c, alive, |_: usize| false, |_: usize, _: f32| true, |_: usize| false, &mut one); }
-    let _ = sp.update(&mut ch, 4, 0x0700_000c, dead, |_: usize| false, |_: usize, _: f32| true, |_: usize| false, &mut one);
+    for t in 1..=3 { let _ = sp.update(&mut ch, t, 0x0700_000c, alive, |_: usize| false, |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut one); }
+    let _ = sp.update(&mut ch, 4, 0x0700_000c, dead, |_: usize| false, |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut one);
     assert_eq!(sp.sfx_request, Some(0xd7), "draw 1 → Drone_SfxInfo[0xD7] (sfx 0x526)");
 }
 
@@ -253,10 +253,10 @@ fn the_stinger_is_gated_to_the_power_station_pair_and_the_first_wave() {
             vec![0], &ch).unwrap();
         let log = draw_log();
         let mut rand = logging_rand(log.clone());
-        let _ = sp.update(&mut ch, 1, level, |_: usize| true, |_: usize| false, |_: usize, _: f32| true, |_: usize| false, &mut rand);
+        let _ = sp.update(&mut ch, 1, level, |_: usize| true, |_: usize| false, |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
         let dead = |_: usize| false;
-        let _ = sp.update(&mut ch, 2, level, dead, |_: usize| false, |_: usize, _: f32| true, |_: usize| false, &mut rand);
-        let _ = sp.update(&mut ch, 3, level, dead, |_: usize| false, |_: usize, _: f32| true, |_: usize| false, &mut rand);
+        let _ = sp.update(&mut ch, 2, level, dead, |_: usize| false, |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
+        let _ = sp.update(&mut ch, 3, level, dead, |_: usize| false, |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
         assert_eq!(sp.sfx_request, None, "level {level:#x} is outside {:#x}..{:#x} — no stinger [M 0x137e68:191-197]", 0x0700_000c, 0x0700_000d);
         assert!(log.borrow().iter().all(|&n| n == 1), "only selection draws on level {level:#x}");
     }
@@ -279,9 +279,74 @@ fn the_min_distance_skips_a_template_without_consuming_the_draw() {
     let mut rand = logging_rand(log.clone()); // always returns 0 → the FIRST usable template wins
     // Template 0's spot is too close; template 1's is fine.
     let dist_ok = |i: usize, _: f32| i == 1;
-    let a = sp.update(&mut ch, 2, 0x0700_0005, |_: usize| false, |_: usize| false, dist_ok, |_: usize| false, &mut rand);
-    assert_eq!(a, Action::Spawn(1), "the draw lands on the first USABLE template — template 0 is skipped, not picked-and-failed [M 0x137cb0:41-56]");
-    assert_eq!(*log.borrow(), vec![2], "ONE selection draw, its modulus the WHOLE template list (2) [M 0x137cb0:21] — the too-close template 0 is walked past without a second draw or a shifted rank [M :88-91]");
+    let a = sp.update(&mut ch, 2, 0x0700_0005, |_: usize| false, |_: usize| false, dist_ok, |_: usize| false, |_: usize| true, &mut rand);
+    assert_eq!(a, Action::Spawn(1), "the draw lands on the first USABLE template — template 0 is skipped, not picked-and-failed");
+    assert_eq!(*log.borrow(), vec![2], "one draw over the group's template count +0x2E [M 0x137cb0:21, 0x137aa0:32]");
+}
+
+/// A draw past the last usable template falls off the walk: that attempt fails, and the slot walk
+/// tries the next empty slot in the same tick with a fresh draw [M 0x137cb0:27-92, 0x137e68:212-232].
+#[test]
+fn a_draw_past_the_usable_templates_fails_and_the_next_slot_draws_again() {
+    let mut ch = Channels::default();
+    let mut sp = Spawner::new(0, |k| match k { 0 => 2, 1 => 1, 2 => 2, 3 => 1, 4 => 5, _ => 0 },
+        vec![0, 1], &ch).unwrap();
+    ch.set(5, 1, 1);
+    let log = draw_log();
+    let l2 = log.clone();
+    let mut rand = move |n: u32| { l2.borrow_mut().push(n); if l2.borrow().len() == 1 { 1 } else { 0 } };
+    // Template 0 too close: one usable. Draw 1 walks off it; slot two draws 0 and spawns.
+    let a = sp.update(&mut ch, 2, 0x0700_0005, |_: usize| false, |_: usize| false,
+        |i: usize, _: f32| i == 1, |_: usize| false, |_: usize| true, &mut rand);
+    assert_eq!(a, Action::Spawn(1));
+    assert_eq!(*log.borrow(), vec![2, 2], "two attempts in the tick, each drawing over the template count");
+}
+
+/// Mode 3 opens a whole wave: the +0x1C latch goes up with nobody alive and stays up while the
+/// wave's first drones stand, one spawn a tick, until the rollover drops it; then the spawner waits
+/// for the wave to die [M 0x137e68:145-172, :176-210]. 07000013's lift squad is the shape (max 4).
+#[test]
+fn mode3_fills_the_wave_then_waits_for_it_to_die() {
+    let mut ch = Channels::default();
+    let mut sp = Spawner::new(0, |k| match k { 0 => 3, 1 => 1, 2 => 3, 3 => 2, 4 => 5, _ => 0 },
+        vec![0, 1, 2], &ch).unwrap();
+    assert!(!sp.immediate, "armed by a channel that was off at load: the screens are on");
+    ch.set(5, 1, 1);
+    let mut rand = |_: u32| 0u32;
+    let live = std::cell::RefCell::new(Vec::<usize>::new());
+    let mut tick = |sp: &mut Spawner, ch: &mut Channels, t: u32, rand: &mut dyn FnMut(u32) -> u32| {
+        let snapshot = live.borrow().clone();
+        let a = sp.update(ch, t, 0x0700_0013, |i: usize| snapshot.contains(&i), |_: usize| false,
+            |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut |n| rand(n));
+        if let Action::Spawn(i) = a { live.borrow_mut().push(i); }
+        a
+    };
+    assert_eq!(tick(&mut sp, &mut ch, 1, &mut rand), Action::Spawn(0));
+    assert_eq!(tick(&mut sp, &mut ch, 2, &mut rand), Action::Spawn(1), "the latch holds with one standing");
+    assert_eq!(tick(&mut sp, &mut ch, 3, &mut rand), Action::Spawn(2), "and with two");
+    assert_eq!(tick(&mut sp, &mut ch, 4, &mut rand), Action::None, "the rollover tick");
+    assert_eq!(sp.wave, 1);
+    assert_eq!(tick(&mut sp, &mut ch, 5, &mut rand), Action::None, "the latch is down: the wave stands");
+    live.borrow_mut().remove(0);
+    assert_eq!(tick(&mut sp, &mut ch, 6, &mut rand), Action::None, "one of three down is not nobody alive");
+    live.borrow_mut().clear();
+    assert!(matches!(tick(&mut sp, &mut ch, 7, &mut rand), Action::Spawn(_)), "nobody alive reopens the next wave");
+}
+
+/// Mode 2 re-decides the latch every tick: it tops up while alive < max [M 0x137e68:176-178].
+#[test]
+fn mode2_tops_up_below_max_and_stops_at_max() {
+    let mut ch = Channels::default();
+    let mut sp = Spawner::new(0, |k| match k { 0 => 2, 1 => 1, 2 => 1, 3 => 5, 4 => 5, _ => 0 },
+        vec![0, 1], &ch).unwrap();
+    ch.set(5, 1, 1);
+    let mut rand = |_: u32| 0u32;
+    assert_eq!(sp.update(&mut ch, 1, 0x0700_0005, |_: usize| false, |_: usize| false,
+        |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand), Action::Spawn(0));
+    assert_eq!(sp.update(&mut ch, 2, 0x0700_0005, |_: usize| true, |_: usize| false,
+        |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand), Action::None, "rollover");
+    assert_eq!(sp.update(&mut ch, 3, 0x0700_0005, |_: usize| true, |_: usize| false,
+        |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand), Action::None, "alive == max");
 }
 
 /// Sister: the visible-spot abort is POST-selection [M 0x137cb0:43] — the draw is consumed, nothing
@@ -295,12 +360,12 @@ fn a_visible_spot_aborts_after_the_draw_and_retries() {
     let log = draw_log();
     let mut rand = logging_rand(log.clone());
     let a = sp.update(&mut ch, 2, 0x0700_0005, |_: usize| false, |_: usize| false,
-        |_: usize, _: f32| true, |i: usize| i == 0, &mut rand);
+        |_: usize, _: f32| true, |i: usize| i == 0, |_: usize| true, &mut rand);
     assert_eq!(a, Action::None, "the picked spot is visible → the attempt fails");
     assert_eq!(*log.borrow(), vec![2], "the selection draw was consumed (2 usable templates)");
     assert!(!sp.used[0], "the slot persists — the spot is usable again next tick");
     // Next tick, the same draw picks template 0 again; with it now hidden it spawns.
     let a = sp.update(&mut ch, 3, 0x0700_0005, |_: usize| false, |_: usize| false,
-        |_: usize, _: f32| true, |_: usize| false, &mut rand);
+        |_: usize, _: f32| true, |_: usize| false, |_: usize| true, &mut rand);
     assert_eq!(a, Action::Spawn(0));
 }
