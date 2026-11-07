@@ -14226,18 +14226,28 @@ impl Sim {
         }
     }
 
-    /// One world-damage application to a human slot's shared health (`Player_HandlePain`
-    /// 0x1902c8's body: × the level's damage factor, armour absorbing only for pain type 0
-    /// [M 0x1902c8:84-104]); a death goes through `MP_PlayerKilled` 0x188f70 like the combat's
-    /// (the credit is the attacker when another slot caused it; `explosive` = pain types 4..7).
+    /// One world-damage application to a human slot's shared health, through the ported
+    /// `player_pain_mp` (`Player_HandlePain` 0x1902c8's MP arm). The world routes all arrive with
+    /// location −1 — the hurt volumes (`Player_DealWithObjHit` 0x194458 case 0x27, the type the
+    /// volume carries), a fall (`Player_CollisionHandler` 0x1949a8:120, type 6) and a drowning
+    /// (`Player_MonitorAir` 0x191a70:142, type 7) — so the arm applies NO difficulty factor and no
+    /// part multiplier [M 0x1902c8:28-53, the `master != 0` arm; the SP `damage_factor` scale the
+    /// old shape applied is not in it], only the Player Mods options [M :51-82] and the type's
+    /// armour fraction (types 1..7 take the health whole [M :84-104]) with the below-1.0 floor
+    /// [M :131-133]. A death goes through `MP_PlayerKilled` 0x188f70 like the combat's (the credit
+    /// is the attacker when another slot caused it; `explosive` = pain types 4..7).
     fn net_world_pain(&mut self, slot: usize, damage: f32, pain_type: u32, killer: Option<usize>) {
         if self.mp_dead_ticks[slot] > 0 || self.mp_hp[slot] <= 0.0 || damage <= 0.0 { return; }
-        let d = damage * nf_game::bullet::damage_factor(self.level, self.drones.difficulty);
-        let absorbed = if pain_type == 0 { d.min(self.mp_armour[slot]) } else { 0.0 };
-        self.mp_armour[slot] -= absorbed;
-        self.mp_hp[slot] = (self.mp_hp[slot] - (d - absorbed)).max(0.0);
+        use nf_game::mp::combat::{self as cb, PainRules};
+        let Some(m) = self.mp.as_ref() else { return };
+        let rules = cb::PainRules::new(&self.tuning, m.settings.location_damage != 0, m.settings.capture_reward != 0);
+        let mut hp = self.mp_hp[slot];
+        let mut armour = self.mp_armour[slot];
+        let d = nf_game::mp::botweap::player_pain_mp(&mut hp, &mut armour, damage, &rules, cb::part::NONE, pain_type as u16);
+        self.mp_armour[slot] = armour;
+        self.mp_hp[slot] = hp;
         if slot == self.mp_local_slot {
-            // The pain flash (presentation; `Player_HandlePain`'s +0x968 write).
+            // The pain flash (presentation; `Player_HandlePain`'s +0x968 write [M :126]).
             self.drones.health.flash = nf_game::bullet::PlayerHealth::pain_glow(self.drones.health.flash, d);
         }
         if self.mp_hp[slot] <= 0.0 {
@@ -14620,11 +14630,14 @@ impl Sim {
     /// `MP_RegisterBulletHit` 0x1857c0 — the team game's friendly-fire gate, the last-shooter
     /// word); a blast reaches `Player_Hurt` 0x196060 directly (no gate). The assassination rule
     /// [M 0x194458:44-74]: the assassin's round on the target kills outright on the head (part 5)
-    /// and on parts 1..4 from within 70° of the target's back. Then `Player_HandlePain` 0x1902c8:
-    /// the MP multipliers (`mp_damage`), armour first, health below 1 → 0, the pain grunt's
-    /// `Rand_Rand(4)` on the shared stream [M :111]. A bot victim: `BOT_handlePain` 0x125ed8's
-    /// identical multipliers (the bots carry no armour here). A kill scores through
-    /// `player_killed` [M MP_PlayerKilled 0x188f70] with the round/blast owner as the killer.
+    /// and on parts 1..4 from within 70° of the target's back. Then `Player_HandlePain` 0x1902c8
+    /// through the ported `player_pain_mp`: the MP multipliers with the match's Player Mods
+    /// settings, the type-0 armour fraction, armour first, health below 1 → 0, the pain grunt's
+    /// `Rand_Rand(4)` on the shared stream [M :111]. A bot victim: `BOT_handlePain` 0x125ed8
+    /// through the ported `bot_pain` — the identical multipliers and the armour pool absorbing a
+    /// type-0 hit first [M :80-92] (the pool the armour pickup's case 3 fills [M 0x18e650:119-133]).
+    /// A kill scores through `player_killed` [M MP_PlayerKilled 0x188f70] with the round/blast
+    /// owner as the killer.
     pub fn mp_hurt(&mut self, h: nf_game::mp::combat::Hurt, local: usize) {
         use nf_game::mp::combat::{self as cb, Hurt};
         let frame = self.drones.frame;
@@ -14645,8 +14658,12 @@ impl Sim {
         if let Some(j) = m.bots.iter().position(|b| b.slot == victim) {
             if m.bots[j].dead { return; }
             if located && !m.register_bullet_hit(victim, attacker) { return; }
-            let d = cb::mp_damage(&rules, amount, part);
-            m.bots[j].health -= d;
+            // `BOT_handlePain` 0x125ed8 through the ported `bot_pain`: the shared multiplier block
+            // and the armour pool (`BOT_vars+0x769` — the take's case 3 fills it [M 0x18e650:119-133])
+            // absorbing a type-0 hit first [M 0x125ed8:80-92]. Type 0: every shared-combat hit.
+            let (loss, armour_after) = nf_game::mp::botweap::bot_pain(amount, &rules, part, 0, m.bots[j].brain.vars.arsenal.armour);
+            m.bots[j].health -= loss;
+            m.bots[j].brain.vars.arsenal.armour = armour_after;
             // mp-bot-voices: the hit's pain bark — the game's DealWithObjHit case 0x27 MP arm
             // barks right after the damage write, before the death check [M 0x1401b0 → 0x1401d0,
             // `addiu a1,zero,31`]; this site is the port's `NDrone2_HitDamage` 0x145558 →
@@ -14694,9 +14711,13 @@ impl Sim {
                 }
             }
         }
-        let d = cb::mp_damage(&rules, amount, part);
-        if !(d > 0.0) { return; }
-        let (hp, armour) = cb::apply_pain(self.mp_hp[victim], self.mp_armour[victim], d);
+        if !(amount > 0.0) { return; } // [M 0x1902c8:21-23 — the raw-damage gate]
+        // `Player_HandlePain` 0x1902c8's MP arm through the ported `player_pain_mp` — the
+        // multipliers with the match's Player Mods settings, the type-0 armour fraction, the
+        // armour first, below 1.0 → 0 [M :51-134]; it draws nothing (the grunt's draw is here).
+        let mut hp = self.mp_hp[victim];
+        let mut armour = self.mp_armour[victim];
+        let d = nf_game::mp::botweap::player_pain_mp(&mut hp, &mut armour, amount, &rules, part, 0);
         if std::env::var_os("NF_MPCOMBAT_LOG").is_some() {
             eprintln!("[mpcombat] frame {frame}: slot {attacker} -> slot {victim} {} part {part} raw {amount} dealt {d} hp {} -> {hp}", if located { "round" } else { "blast" }, self.mp_hp[victim]);
         }
