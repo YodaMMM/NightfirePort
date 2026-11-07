@@ -24,3 +24,7 @@ decompile, ported with the port location or not reached with the reason, to
 count as ported; find the code. Any function a real level reaches with no port code is a
 gap: fix with a real-level test proved red on old code, one commit per fix. Checkpoints
 pushed as the table grows.
+- (02:35, 11-07) The family map landed: docs/port-map/scripts.md, 97 rows (59 ported, 29
+  folded, 9 not ported with per-row reasons), the in-family MISSING class empty; one
+  adjacent gap recorded (Script_CreateEntity 0x20 arm pushes pending_breaks, no drain —
+  the 07000008 gondola panes never get Breaks records) with a proposed next-round fix.
