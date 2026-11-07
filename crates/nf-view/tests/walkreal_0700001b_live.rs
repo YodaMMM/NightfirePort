@@ -1319,7 +1319,7 @@ fn walk_arrival_to_drakes_defeat_on_real_health() {
 /// astronauts' hit chance by Accuracy Normal 0.8 [M DroneWeap_DoBulletAccuracy 0x179740:74-88].
 /// Real input only; no health/ammo/channel writes.
 #[test]
-#[ignore = "Agent: Bond dies on real health, tactics not a port gap (the s/real-health-agent-difficulty-16-1b-41-4a report); follow-up real-health-agent-16-1b-2"]
+#[ignore = "Agent: Bond dies on real health — RE-MEASURED on master 22d5836b with the disc missile countdown in (real-health-00agent-16-1b-2): the console phase's wave, not the Drake fight — tick 8628 at (20.36,-4.41,0.01), 43 hits for 100.0 (the wave ring 0x5000078 weapon 0x6a at -3.5 Normal, floating y 4.9-10.6 ABOVE the k1/k2 station Bond hovers at -4.4; the tail wave-defense fight fired but could not answer the above-deck band from the station). The console phase is deadline-locked: each console's UI latch has ~720 ticks of margin over its read deadline (measured latches 5@4130/4@5288/3@6488 vs the ~7250 k3 read), so a same-station wave fight shifts the wave's intercept and slips the shots past their reads (measured: the k4/k6/k8 fights landed k6@9170/k8@9446 past the shared +5999 read — MissileDeploy [2,2,2,2,2,3,2,3], m6+m8 launched); next lever: a route-level re-plan (a chosen intercept spot BEFORE the wave reaches the console stations, or an undisturbed k3/k6/k8 rush with the wave fought only on the x46/x20 crossing legs)"]
 fn walk_arrival_to_drakes_defeat_on_real_health_agent() {
     walk_arrival_to_drakes_defeat_on_real_health_at(2);
 }
@@ -1330,7 +1330,7 @@ fn walk_arrival_to_drakes_defeat_on_real_health_agent() {
 /// astronauts' hit chance by Accuracy Hard [M DroneWeap_DoBulletAccuracy 0x179740:74-88].
 /// Real input only; no health/ammo/channel writes.
 #[test]
-#[ignore = "00 Agent: Bond dies in the Drake fight on real health — tick 8426 at (12.26,5.83,0.27), 26 hits for 100.0 (the waves' 0x6a at -5.0 Hard and Drake's 0x30 at -20.0 [M 0x1d3a80 case 0x700001b: Hard 0x3f800000]; the d2 death was 32 hits at tick 10695), Accuracy Hard on the game's own pipeline; next lever: the d2 stand work first (real-health-agent-16-1b-2 — Bond's dps/reload cadence, the waves' sight-lines), then the d3 pressure"]
+#[ignore = "00 Agent: Bond dies in the console phase on real health — RE-MEASURED on master 22d5836b with the disc missile countdown in (real-health-00agent-16-1b-2): tick 7590 at (32.00,-5.36,-0.00) at the k6 hub wait, 30 hits for 100.0, ALL the wave ring (0x5000078 weapon 0x6a at -5.0 Hard [M 0x1d3a80 case 0x700001b: Hard 0x3f800000], six shooters d 8-13.2 y 1.6-6.2, hits from frame 6936); consoles 5@4130/4@5288/3@6488 latched, k6 never did, and the tail-only wave-defense (k 1/2/7) never covers the k6/k8 waits. The console phase is deadline-locked (~720-tick UI margins vs the wave's ~12/s at 6 shooters): a same-station defense fight repositions Bond, shifts the wave's intercept and slips the UI shots past their reads (measured: the k3 fight → MissileDeploy [2,2,3,2,2,2,2,2], m3 launched; the k4/k6/k8 fights → k6@9170/k8@9446, m6+m8 launched). The wave now catches the console phase BEFORE Drake — the old tick-8426 Drake-fight ledger is downstream of this leg; next lever: a route-level re-plan (an intercept spot before the wave reaches the stations, or an undisturbed k3/k6/k8 rush with the wave fought only on the crossing legs)"]
 fn walk_arrival_to_drakes_defeat_on_real_health_00agent() {
     walk_arrival_to_drakes_defeat_on_real_health_at(3);
 }
