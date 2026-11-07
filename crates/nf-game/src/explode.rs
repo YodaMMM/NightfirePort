@@ -47,9 +47,10 @@ pub struct Explosion {
     pub lifetime: u16,
     /// `EXPLODEINFO+0x34 != 0`: a script was loaded (the port's script player carries the visual).
     pub script: bool,
-    /// `EXPLODEINFO+0x38`: the debris kind (`Explode_Update`'s switch; the port has no debris system —
-    /// the game's own debris only spawns for kinds 5/6 (metal) and 8/10/0xB (stone, 0x7000008 only)
-    /// after a random gate [M 0x17c350:31-67]).
+    /// `EXPLODEINFO+0x38`: the debris kind (`Explode_Update`'s switch; the port's `debris_arm`
+    /// spawns the particles — `Debris_CreateEx` 0x1ac808 — but only for kinds 5/6 (metal) and
+    /// 8/10/0xB (stone, 0x7000008 + channel 0x53 only) after a random gate [M 0x17c350:31-67;
+    /// `debris_arm` below]).
     pub debris: u16,
     /// `EXPLODEINFO+0x3A`: the propagate latch (`Explode_CollisionHandler`).
     pub propagated: bool,
@@ -95,8 +96,8 @@ impl Explosion {
 
     /// `Explode_Update` (0x17c350): the script player runs first (`Script_Update`); when it stops the
     /// object dies (`obj+0xFE |= 1` [M 0x17c394-0x17c3a0]). Without a script the lifetime ticks out.
-    /// The debris spawns (kinds 5/6/8/10/0xB) are not ported — the port has no debris system; the
-    /// gate was `lifetime>>2 < age` then `age % (Rand(5)+10) == 0` [M 0x17c3d8-0x17c460].
+    /// The debris spawns (kinds 5/6/8/10/0xB) land in `debris_arm` below (the `Debris_CreateEx`
+    /// port); the gate was `lifetime>>2 < age` then `age % (Rand(5)+10) == 0` [M 0x17c3d8-0x17c460].
     /// Returns false when the explosion is done.
     pub fn update(&mut self) -> bool {
         self.age += 1;

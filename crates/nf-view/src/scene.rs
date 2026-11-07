@@ -9502,8 +9502,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         //   kind byte OneSided_Create writes at obj+0xff = 0x4c is exactly (0x26fc20 − control_funcs
         //   0x26f890)/0xC [M symtab + decomp]] — dots (obj pos − cam pos) against the obj matrix's dir and
         //   sets obj+0xF0 bit 0x10 when facing away; reached whenever a level places type-0xd5 objects —
-        //   07000041 does [D levels.md census]. The port's per-triangle backface cull of the placed glist
-        //   is the same job at draw time) · 0xD8 RB_Create 0x1d6bf0:52 (rigid bodies evolve obj+0x90 once
+        //   07000041 does [D levels.md census]. CORRECTED by control-funcs-update: the port has NO
+        //   per-triangle backface cull (`cull_mode: None` in every wgpu pipeline [M gpu.rs]) — the old
+        //   "same job at draw time" claim was wrong. The update is ported in `worldobj::OneSided`
+        //   (create + per-tick dot, [M 0x1e7ce8/0x1e7d58]); the hidden flag's draw consumer (the
+        //   palette FAR-write) is an open hand-off stub — this static instance always draws) · 0xD8 RB_Create 0x1d6bf0:52 (rigid bodies evolve obj+0x90 once
         //   disturbed; at rest = placement) · 0xE1 Destroy_Create 0x12c318:23 (death hides the
         //   mesh: Destroy_Smash 0x12bb60 swaps the glist to tag+0x00 — the LOD pointer or the
         //   next 0x50 glist slot, undrawable for the C5 leaves [L]; see destroy_object_state

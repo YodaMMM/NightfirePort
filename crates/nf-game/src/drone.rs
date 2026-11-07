@@ -14363,8 +14363,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// `Explode_Create` 0x17cbd0's blast, shared by the fuse death (`Bullet_handle_object_destruction`
     /// 0x12e1c0), the impact explode (`Bullet_CollisionHandler` 0x12d068-0x12d0bc [M, disassembled])
     /// and the grenade contact. `Explode_Propagate` 0x17c518 through `explode::propagate`: the full
-    /// 12-case dispatch (drones msg 9, Bond `Player_Hurt`, breakables, destroyables; the port has no
-    /// copter/vehicle/MP/GT/sensor/monitor/sub lists yet). `script` = the per-source effect script the
+    /// 12-case dispatch (drones msg 9, Bond `Player_Hurt`, breakables, destroyables; the copter
+    /// parts, the MP site and the GT arms are swept in this function below, the mine chain 0x4B
+    /// and the grenade cook-off 5 too; the remaining arms are closed by census: sensor 0x37 /
+    /// monitor 0x38 are empty 8-byte stubs in the game [M symtab 0x1b08a8/0x1b0968, size 8 —
+    /// Sensor_ApplyDamage / Monitor_ApplyDamage], sub 0x3d is never placeable [D docs/port-map/unreached.md], the
+    /// vehicle 0x28 lives only on the MP archives [D the collide-column census]). `script` = the per-source effect script the
     /// caller passes (the game's a3): 0x6000052 from the fuse/contact call sites, 0x60007c4 from the
     /// Samurai bolt's 0x100000/0x200000 arms, the destroyable's type script from `Destroy_Smash`
     /// [M each site's disasm]. `scale` = the game's
@@ -14435,6 +14439,39 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // case 0x4B → the mines' referenced hit entry (the chain: a mine's blast sets off the
         // mines in its reach on their next update) [M 0x17c518 case 0x4b; Mine::blast_reaches].
         self.blast_mines(pos, radius, damage);
+        // case 5 → the blast cooks off the grenade-family bullets in reach [M 0x17c518:141-162 →
+        // `Bullet_handle_object_destruction` 0x12cd98]. Two gates, both data-driven: the case's
+        // id gate (the bullet's ammo-record id ∈ {0x2B, 0x34..0x37, 0x3A}) and 0x12cd98's record
+        // gate `(rec+0x68 & 0x4000) && (rec+0x70 & 0x80204)` — which drops the 0x2B (its record
+        // +0x68 = 0x10000 lacks 0x4000 [L ee_start_05.bin @0x2bf150 + 0x2B·0x10C]), so the set
+        // that really cooks is {0x34 frag, 0x35 stun, 0x36 smoke, 0x37 remote mine, 0x3a
+        // tripbomb} [L the same dump: 0x3b satchel fails both]. The reached round is
+        // delete-marked (+0xFE |= 1) and `Explode_Create(rec+0x08, rec+0x08, rec+0x0C, bullet,
+        // bullet_pos, up, 0x6000052, 0xff, 0xff, 100, BU+0x30)` fires [M 0x12cd98:20-26] — the
+        // fuse-death shape, so the blast queues for the next tick: the game's new explosion
+        // object propagates on its first collide pass, the frame AFTER the cooking blast (the
+        // dispatch walk never revisits the list head it started past — the same order the
+        // destroy-twin queue models). The falloff amount is only the reach gate — the case never
+        // reads it, a reached grenade cooks at FULL record power [M 0x17c518 case 5 arms]. The
+        // victim's world sphere (obj+0x80/+0x8C) is the projectile mesh's bounding sphere; the
+        // port keeps no mesh radius — 0.25 stands in [S, the sweep's only synthetic constant].
+        // The 0x80000 tail (the tripbomb 0x3a alone [L record]) also deletes the beam object at
+        // BU+0x38 — the port recomputes the beams per tick from the stuck grenade, so state=2
+        // removes it with the round [M 0x12cd98:28-34; grenade.rs's beam note].
+        for g in self.grenades.iter_mut() {
+            if g.state >= 2 { continue; }
+            if !matches!(g.weapon_type, 0x2B | 0x34..=0x37 | 0x3A) { continue; }
+            let Some(rec) = d.weapons.records.get(g.weapon_type as usize) else { continue };
+            let f68 = u32::from_le_bytes(rec[0x68..0x6c].try_into().unwrap());
+            let f70 = u32::from_le_bytes(rec[0x70..0x74].try_into().unwrap());
+            if f68 & 0x4000 == 0 || f70 & 0x80204 == 0 { continue; }
+            let reach = crate::mp::combat::blast_falloff(pos, radius, damage, g.pos, 0.25);
+            if reach < 0.0002 { continue; }
+            let rec_r = f32::from_le_bytes(rec[0x08..0x0c].try_into().unwrap());
+            let rec_d = f32::from_le_bytes(rec[0x0c..0x10].try_into().unwrap());
+            self.pending_blasts.push((g.pos, rec_r, rec_d, g.owner, g.weapon_type, 0x0600_0052, rec_r, 0));
+            g.state = 2;
+        }
         // case 0x21 → `Destroy_Smash` [M 0x17c518:141-177 → 0x12bb60]: the channel write is the
         // smash's, the twin's blast queued like the beam path's (script by the type byte, owner
         // the blast's owner).
@@ -16733,6 +16770,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 &crate::explode::Targets { drones: &drones_t, player: player_pos, breaks: &breaks_t,
                     destroys: &destroys, copters: &[] });
             self.blast_mines(pos, radius, damage); // case 0x4B [M 0x17c518]
+            // case 5 — the same cook-off sweep spawn_blast runs (the game's ONE Propagate
+            // serves every blast source; the beam blast reaching a landed grenade cooks it
+            // exactly as an explosion's blast does [M 0x17c518:141-162]).
+            for g in self.grenades.iter_mut() {
+                if g.state >= 2 { continue; }
+                if !matches!(g.weapon_type, 0x2B | 0x34..=0x37 | 0x3A) { continue; }
+                let Some(rec) = d.weapons.records.get(g.weapon_type as usize) else { continue };
+                let f68 = u32::from_le_bytes(rec[0x68..0x6c].try_into().unwrap());
+                let f70 = u32::from_le_bytes(rec[0x70..0x74].try_into().unwrap());
+                if f68 & 0x4000 == 0 || f70 & 0x80204 == 0 { continue; }
+                let reach = crate::mp::combat::blast_falloff(pos, radius, damage, g.pos, 0.25);
+                if reach < 0.0002 { continue; }
+                let rec_r = f32::from_le_bytes(rec[0x08..0x0c].try_into().unwrap());
+                let rec_d = f32::from_le_bytes(rec[0x0c..0x10].try_into().unwrap());
+                self.pending_blasts.push((g.pos, rec_r, rec_d, g.owner, g.weapon_type, 0x0600_0052, rec_r, 0));
+                g.state = 2;
+            }
             // case 0x21 → `Destroy_Smash` [M 0x17c518:141-177 → 0x12bb60]: the channel write is
             // the smash's, the blast queued like the bullet-kill path's (script by the type
             // byte, owner the imp — not the player).
