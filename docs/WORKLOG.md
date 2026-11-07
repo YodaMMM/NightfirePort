@@ -49,3 +49,18 @@ if guards really brush the sheets, re-route the walk or its fights (level-gated 
 lower damage/health). Then `PANE_RIDE` on, remove both dead_pane ignores, keep the kind-0/1
 props out of the set, run dead_pane_live, glass_pass_every_level_live, every walkreal_*_live,
 the ai binaries and nf-game.
+
+2026-11-07 13:02 UTC — the bisection is settled: the 01 real-damage cascade's first divergence
+is tick 683, guard 13 at (−0.87, 6.34, −0.47), and the pane there is k=27 (placement 136,
+object (53,113), the thin kind-2 sheet at z −1.167, x −1.9..−0.1). The game's movement query
+reads the room flood (start room + portals within queryR·1.5, ≤126 rooms [M Collide_Pick
+0x1eb320:125,313-329; NDrone2_Collision 0x140e90]) and the pane links into the room containing
+its sphere centre (build_LinkToRoom's 0 is the straddle flag, not a room index [M 0x12c29c;
+build_FindCel 0x1c8cb0]) — the game's own guards brush these sheets, so per-cel capsule scoping
+is not the fix and the walk is what changes. Landed: finish_fights for the 01 real-damage walks
+(the 07000016 opt-in, gated to !tops_up()) — the Operative sister passes under the ride (3.0
+health, deterministic); the Agent sister still dies to the unfought west-door SMG pack (#3/#12/
+#17, 64.3 combined with no fight window). PANE_RIDE stays OFF, both dead_pane ignores carry the
+updated reason, the three real-damage walks verified unchanged on the landed tree (1/0 each).
+Report docs/reports/pane-ride-on.md with the live checks (the guard-vs-sheet deflection is the
+pinnable one).
