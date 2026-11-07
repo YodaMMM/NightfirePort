@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox1 at 2026-11-07T02:48Z
+
+---
+## Report (done, 2026-11-07T04:10Z)
+
+Closed by the driver: the report is on `s/smash-stat-gate-02` (docs/reports/smash-stat-gate-02.md); the worker didn't run finish.sh.
