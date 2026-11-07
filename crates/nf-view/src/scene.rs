@@ -10394,15 +10394,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // `TurretGuns[weapon set]` (Random: `Rand_Rand(10)`) [M :52-63]; `Destroy_Create`
             // 0x12c318 creates nothing in MP while Explosive Scenery (+0x1D4) is off [M :14]. The
             // Random turret draws from the lockstep seed's own stream, not the shared one [S, the
-            // weapon_row note].
+            // weapon_row note — gunimp.rs apply_mp_turrets].
             if let Some(ms) = mp {
                 if ms.gun_emplacements == 0 {
                     drones.props.gunimps.clear();
                 } else {
-                    let mut trng = nf_game::drone::Rng::new(ms.seed ^ 0x4755_4e49);
-                    for g in drones.props.gunimps.iter_mut() {
-                        g.turret = if ms.weapon_set >= 10 { trng.rand(10) as u8 } else { ms.weapon_set as u8 };
-                    }
+                    nf_game::gunimp::apply_mp_turrets(&mut drones.props.gunimps, ms.weapon_set, ms.seed);
                 }
                 if ms.explosive_scenery == 0 { drones.props.destroy.clear(); }
             }
@@ -15199,6 +15196,21 @@ impl Sim {
         for x in &d.breaks.list { h.f32(x.health); h.bool(x.dead); }
         for x in &d.sss.list { h.u32(x.state as u32); h.f32(x.t); }
         for x in &self.hurts { h.bool(x.disabled); h.bool(x.fired); }
+        // mp-enviro-mods-apply: the mounted guns ride the world hash — the turret pick (the
+        // Random weapon set's seeded draw [S]) and the aim/mount/heat state must agree on every
+        // machine. `fire_handle` (the looped fire sound's voice) and `beam` (the shot's draw
+        // quad) stay out: the handle is machine-local audio state, the quad a per-shot visual.
+        for g in &d.props.gunimps {
+            h.u32(g.turret as u32);
+            h.bool(g.active);
+            h.bool(g.hot);
+            h.f32(g.pitch);
+            h.f32(g.yaw);
+            h.f32(g.pitch_s);
+            h.f32(g.yaw_s);
+            h.f32(g.heat);
+            h.f32(g.cooldown);
+        }
     }
 
     /// mp-world-sync: the shared world's fields as text (the desync hunts' field-by-field diff).

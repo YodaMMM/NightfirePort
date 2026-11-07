@@ -9023,11 +9023,19 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                 }
                 Page::MpEnviroMods => {
                     let e = fe.mp_envmods;
-                    vec![(0x1af, bind([0x1b0, 0x1b1, 0x1b2][(e[0] as usize).min(2)]), 143.0, 0x1000_00a2, e[0] as i32),
-                         (0x1ab, onoff(e[1] != 0), 177.0, 0x1000_009f, e[1] as i32),
-                         (0x1aa, if e[2] == 0x10 { bind(0x100_0076) } else { onoff(e[2] != 0) }, 209.0, 0x1000_019b, e[2] as i32),
-                         (0x328, onoff(e[3] != 0), 241.0, 0x1000_0227, e[3] as i32),
-                         (0x5b9, bind([0x1b6, 0x100_02d8, 0x100_02d9, 0x1b2][(e[4] as usize).min(3)]), 273.0, 0x1000_0228, e[4] as i32)]
+                    // mp-enviro-mods-apply: the rows' value text is the one decompile-derived
+                    // node list — `mp_enviro_value_label` (P_MPENVIROMODS 0x210030's msg-0x10
+                    // binds [M]) — not a second copy here. Row 2 (the locked Explosive-Scenery
+                    // row) binds by the unlock flag [M 0x210030:35-44]: a locked row shows the
+                    // single Locked item (0x1000076 at node 0x10) whatever the stored value,
+                    // and an unlocked row with the stale 0x10 shows the first-bound On node
+                    // (the spin control's value 0x10 matches neither 0 nor 1) [S — the same
+                    // display mp_defaults_setup pins on the label fn].
+                    vec![(0x1af, bind(fe.mp_enviro_value_label(0)), 143.0, 0x1000_00a2, e[0] as i32),
+                         (0x1ab, bind(fe.mp_enviro_value_label(1)), 177.0, 0x1000_009f, e[1] as i32),
+                         (0x1aa, bind(fe.mp_enviro_value_label(2)), 209.0, 0x1000_019b, e[2] as i32),
+                         (0x328, bind(fe.mp_enviro_value_label(3)), 241.0, 0x1000_0227, e[3] as i32),
+                         (0x5b9, bind(fe.mp_enviro_value_label(4)), 273.0, 0x1000_0228, e[4] as i32)]
                 }
                 _ => {
                     let b = &fe.mp_bots[fe.mp_bot_slot.min(3)];

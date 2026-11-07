@@ -1742,12 +1742,22 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             m.start_assassin(&mut sim.drones.rng);
             // The SP mission machine stays off for the match [M 0x182c60:16-18 — Drones::mp_master].
             sim.drones.mp_master = m.settings.master;
-            // mp-world-sync (agent 9): an MP match creates no mounted gun unless the Enviro-Mods
-            // word `MPSettings+0x1B8` is set — `GunImp_Create` 0x131f20:52-58 returns 0 for
-            // `MPSettings+0x180 != 0 && +0x1B8 == 0` [M]; the boot value is 0 [M bootup 0x1c7e78,
-            // L the EE snapshots; menu.rs mp_envmods] and the match settings carry no such word yet,
-            // so the arenas' 0x34 placements stay uncreated (a mount was one machine's alone).
-            sim.drones.props.gunimps.clear();
+            // mp-enviro-mods-apply: `GunImp_Create` 0x131f20's MP arm — the mount object exists
+            // only while `MPSettings+0x1B8` (Gun Emplacements) is set, and its turret entry is
+            // the weapon set (Random, set 10: a `Rand_Rand(10)` pick) [M 0x131f20:52-63]. The
+            // boot value is 0 [M bootup 0x1c7e78:38; L the EE snapshots; menu.rs mp_envmods].
+            // load_impl's build applied the same gate when the settings rode the load (the menu
+            // confirm and the online handover); the local `--mp` default builds without them,
+            // so re-apply here from the match's own settings — the assignment is idempotent
+            // (the Random pick draws a private seed-keyed stream, not the shared Rand stream
+            // [S — gunimp.rs apply_mp_turrets; the game draws the shared one at create,
+            // 0x1e3738 through 0x131f20:61]). Before this the mounts were cleared for every
+            // match, so no arena mount ever reached a game.
+            if m.settings.gun_emplacements == 0 {
+                sim.drones.props.gunimps.clear();
+            } else {
+                nf_game::gunimp::apply_mp_turrets(&mut sim.drones.props.gunimps, m.settings.weapon_set, m.settings.seed);
+            }
             sim.mp = Some(m);
             eprintln!("mp: arena {level_id:08x} — {spawn_count} spawn points registered, {humans} human(s), Bond at spawn {sp} ({:.2}, {:.2}, {:.2}) yaw {:.3}",
                 sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.yaw);
