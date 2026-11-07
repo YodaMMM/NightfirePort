@@ -1244,6 +1244,17 @@ pub struct BotBrain {
     pub stuck_hits: u8,
     /// One jump on the next body tick (the stuck recovery [S]).
     jump_next: bool,
+    /// `Drone+0xDA` — the held-weapon animation set. `BOTWEAP_changeWeapon` 0x12a028 writes
+    /// `BOTWEAP_getWeaponAnimSet` 0x12b140's result here after the `+0x768` weapon byte and
+    /// before the clip pair [M 0x12a028:31-33]; the SP guards' value comes from
+    /// `NDrone2_DefaultInit` 0x14b300's skin/mode switch instead (the same field, a different
+    /// writer — the port's SP `Drone::anim_set`). The bot's init value is that DefaultInit
+    /// write, which the port does not lift for MP bots yet (the bot drone's dtype/skin mapping
+    /// is unverified) — 0 until the first real change. Readers: the drone danim choosers
+    /// (`DroneAnim_SetDAnimInternal` 0x13aee8's `Drone_AnimTables[danim][set]` column pick and
+    /// the SP combat-anim family); the MP body's locomotion sets key off the weapon's
+    /// `weapon_data+0x84` class byte instead [M PlayerAnimSetInitNormal 0x18fcd8], not this.
+    pub anim_set: u16,
 }
 
 /// The port's route over the arena AI network: the game's `AINetwork_CalcRouteToPosition` →
@@ -1403,6 +1414,7 @@ impl BotBrain {
             stuck_ref: ([pos[0], pos[1] - crate::player::EYE, pos[2]], 0),
             stuck_hits: 0,
             jump_next: false,
+            anim_set: 0, // the game's spawn value is `NDrone2_DefaultInit` 0x14b300's write — not lifted for MP bots (see the field's note)
         };
         // The spawn loadout: weapon pickups are not taken by bots yet, so a bot holding nothing
         // (weapon 0) starts with the match's start weapon, the P2K (2), and its clip — with
@@ -3896,6 +3908,10 @@ impl BotBrain {
             if w != 0 && w != self.vars.weapon_id {
                 if let Some(g) = self.vars.arsenal.change_weapon(t, w) {
                     self.vars.weapon_id = w;
+                    // `BOTWEAP_changeWeapon` 0x12a028:31-33 — the `+0xDA` anim-set write sits
+                    // between the `+0x768` weapon byte and the clip pair, all inside the
+                    // has-weapon guard; the value is `BOTWEAP_getWeaponAnimSet` 0x12b140's.
+                    self.anim_set = crate::mp::botweap::weapon_anim_set(w) as u16;
                     self.vars.clip_rounds = g;
                     self.apply_weapon_params(t);
                 }
@@ -4820,6 +4836,8 @@ mod brain_tests {
         stationary: bool,
         /// The `CanSeeObject` stand-in: when false the human row never carries the seen bit.
         vision: bool,
+        /// The arena's weapon table the ctx carries (`weapons: Some`), so the weapon states run.
+        table: Option<crate::mp::botweap::BotWeaponTable>,
     }
 
     impl Rig {
@@ -4851,6 +4869,7 @@ mod brain_tests {
                 now: 0.0,
                 stationary: false,
                 vision: false,
+                table: None,
             }
         }
 
@@ -4859,6 +4878,7 @@ mod brain_tests {
         fn build_ctx<'a>(
             now: f32, pickups: &'a [BotPickup], others: &'a [OtherPlayer],
             world: &'a CollisionWorld, stationary: bool,
+            table: Option<&'a crate::mp::botweap::BotWeaponTable>,
         ) -> BotCtx<'a> {
             BotCtx {
                 now,
@@ -4874,7 +4894,7 @@ mod brain_tests {
                 stationary,
                 lazy_sight: false,
                 objectives: None,
-                weapons: None,
+                weapons: table,
                 start_weapon: 0,
             }
         }
@@ -4892,7 +4912,7 @@ mod brain_tests {
             }
             {
                 let ctx =
-                    Self::build_ctx(self.now, &self.pickups, &others, &self.world, self.stationary);
+                    Self::build_ctx(self.now, &self.pickups, &others, &self.world, self.stationary, self.table.as_ref());
                 self.brain.step(&ctx, &mut self.rng, true);
             }
             self.now += 1.0 / 60.0;
@@ -4971,6 +4991,48 @@ mod brain_tests {
         assert_eq!(r.brain.choose_unarmed_attack_anim(&mut r.rng), None, "dist > 1.5 refuses [M 0x1549e0:17]");
     }
 
+    /// bot-weapon-anim-set: the change enter (`BotAttackChangeWeapon` 0x1701??'s tail — the
+    /// port's `bot_attack_change_weapon_enter`, `BOTWEAP_changeWeapon` 0x12a028's port) stores
+    /// `BOTWEAP_getWeaponAnimSet` 0x12b140's value on `Drone+0xDA` in the game's order — the
+    /// `+0x768` byte, then `+0xDA`, then the `+0xBBC` clip [M 0x12a028:29-33] — one weapon per
+    /// switch arm (the seven sets). The announce payload (`+0x76A`, the msg-0x42 outcome) is
+    /// seeded per weapon; the equip goes through the real take (Pickup_Handler's class-2 arm).
+    /// The full SM chain (take → announce → 0xDE) runs in the live match
+    /// (nf-view mp_bot_weapons_live pins the set on every natural switch).
+    #[test]
+    fn brain_change_weapon_stores_the_anim_set_per_set() {
+        // a table that can hold every set's representative: rows selectable with a clip
+        let mut rows = vec![crate::mp::botweap::BotWeaponRow::default(); crate::mp::botweap::BOT_WEAPONS];
+        for &w in &[0x01u8, 0x02, 0x0d, 0x0e, 0x12, 0x16, 0x2c] {
+            rows[w as usize] = crate::mp::botweap::BotWeaponRow {
+                base: w, selectable: true, twin: false, class: 1, min_range: 0.0, damage: 5.0,
+                bullets: 1, range: 50.0, spread: 0.0, burst: 1, interval: 8, flags: 0,
+                ammo_type: 2, clip: 12, usable: true,
+            };
+        }
+        let mut ammo_cap = vec![0i16; crate::mp::botweap::AMMO_TYPES];
+        ammo_cap[2] = 90;
+        let t = crate::mp::botweap::BotWeaponTable { rows, ammo_cap };
+        let mut r = Rig::new();
+        r.brain.vars.arsenal.init(&t, 0x02, crate::mp::scenario::DEATHMATCH, 0, 0);
+        r.brain.vars.weapon_id = 0x02;
+        for (w, set) in [(0x01u8, 0x18u8), (0x02, 0x16), (0x0d, 0x1a), (0x0e, 0x17), (0x12, 0x15), (0x16, 0x14), (0x2c, 0x19)] {
+            // the real take (Pickup_Handler's class-2 arm) so the has-weapon guard passes
+            let mut hp = r.brain.vars.max_hp as f32;
+            let taken = r.brain.take_pickup(&t, 0, w as u16, 12, 0, &mut hp);
+            assert!(matches!(taken, crate::mp::botweap::BotTake::Taken { .. }), "weapon {w:#x} equips");
+            r.brain.vars.announced_weapon = w; // the msg-0x42 payload the choice produced
+            let others = r.others.clone();
+            let ctx = Rig::build_ctx(r.now, &r.pickups, &others, &r.world, false, Some(&t));
+            r.brain.bot_attack_change_weapon_enter(&ctx);
+            assert_eq!(r.brain.vars.weapon_id, w, "the enter changed to the announced weapon [M 0x12a028:29]");
+            assert_eq!(r.brain.anim_set, set as u16, "weapon {w:#x} → anim set {set:#x} [M 0x12b140 via 0x12a028:31-33]");
+        }
+        // the set survives a tick (a stored field, not a one-tick scratch)
+        r.step();
+        assert_eq!(r.brain.anim_set, 0x19, "0x2c's set stays [M 0x12a028 — no other +0xDA writer on the bot path]");
+    }
+
     /// `BOTWEAP_getWeaponAnimSet` 0x12b140 — table spots from every arm plus the default.
     #[test]
     fn brain_rest_weapon_anim_set() {
@@ -4996,7 +5058,7 @@ mod brain_tests {
         let mut r = Rig::new();
         let world = CollisionWorld::from_triangles(Vec::new());
         let others = r.others.clone();
-        let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false);
+        let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false, None);
         for _ in 0..3 {
             let pick = r.brain.handle_opponent_history(&ctx, Some(0));
             assert_eq!(pick, Some(0));
@@ -5008,7 +5070,7 @@ mod brain_tests {
         // best == −1 tail keeps param_2), and the held opponent is not re-Set [M :85-91]
         let mut dead = others.clone();
         dead[0].alive = false;
-        let ctx2 = Rig::build_ctx(0.0, &r.pickups, &dead, &world, false);
+        let ctx2 = Rig::build_ctx(0.0, &r.pickups, &dead, &world, false, None);
         r.brain.vars.opponent = Some(0);
         assert_eq!(r.brain.handle_opponent_history(&ctx2, Some(0)), Some(0), "the candidate passes through [M 0x1257c0:85-91]");
         assert_eq!(r.brain.vars.opponent, Some(0), "no re-Set for the held opponent [M :92]");
@@ -5028,7 +5090,7 @@ mod brain_tests {
         r.brain.vars.opponent = Some(0);
         let world = CollisionWorld::from_triangles(Vec::new());
         let others = r.others.clone();
-        let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false);
+        let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false, None);
         let mut rng = Rng::new(7);
         assert!(matches!(r.brain.validate_state_change(state::BOT_IMPACT_BULLET, &ctx, &mut rng), StateChange::Refuse), "0xEF refused [M 0x124fb0:31-34]");
         assert!(matches!(r.brain.validate_state_change(state::BOT_IMPACT_EXPLOSIVE, &ctx, &mut rng), StateChange::Refuse), "0xF0 refused [M :35-39]");
@@ -5049,7 +5111,7 @@ mod brain_tests {
             r.brain.vars.sighted = 0;
             assert!(r.brain.is_distracted(), "no active goal: distracted [M 0x129c58:11-13]");
             let others = r.others.clone();
-            let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false);
+            let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false, None);
             assert_eq!(state_type(state::BOT_ATTACK as u32), 4, "0xCF is a type-4 (combat) state");
             assert!(matches!(r.brain.validate_state_change(state::BOT_ATTACK, &ctx, &mut rng), StateChange::Refuse),
                 "distracted + unseen: refused [M 0x124fb0:83-100]");
@@ -5062,7 +5124,7 @@ mod brain_tests {
                 r.brain.state = t5;
                 let before = r.brain.vars.distraction;
                 let others = r.others.clone();
-                let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false);
+                let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false, None);
                 assert!(matches!(r.brain.validate_state_change(state::BOT_SEEN_OPPONENT, &ctx, &mut rng), StateChange::Allow(_)),
                     "type-5 state {t5:#x} (not 0xEB) allows 0xEC outright");
                 assert_eq!(r.brain.vars.distraction, before, "and charges no distraction");
@@ -5076,7 +5138,7 @@ mod brain_tests {
             r.brain.vars.weapon_id = 1;
             r.brain.vars.flag_word |= 4;
             let others = r.others.clone();
-            let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false);
+            let ctx = Rig::build_ctx(0.0, &r.pickups, &others, &world, false, None);
             if state_type(state::BOT_ATTACK_CHANGE_WEAPON as u32) == 4 {
                 assert!(matches!(r.brain.validate_state_change(state::BOT_ATTACK_CHANGE_WEAPON, &ctx, &mut rng), StateChange::Refuse),
                     "0xDE with fists, outside the band, carrier bit set: refused by :101-104");
@@ -5250,7 +5312,7 @@ mod brain_tests {
         r.brain.uninit_goal(0);
         r.brain.set_goal_pick_prefs(0.0, 0.0, 0.0, 1.0, 1, 0, 0, 100.0, 1.0, 1.0);
         assert!(r.brain.pick_goal(
-            &Rig::build_ctx(r.now, &r.pickups, &r.others, &r.world, false), &mut r.rng, 1
+            &Rig::build_ctx(r.now, &r.pickups, &r.others, &r.world, false, None), &mut r.rng, 1
         ), "the second pick finds pickup 1");
         let second = r.brain.vars.goals[r.brain.vars.active_goal as usize].target;
         assert_eq!(second, 1, "the visited pickup is skipped (passes 0..2)");
