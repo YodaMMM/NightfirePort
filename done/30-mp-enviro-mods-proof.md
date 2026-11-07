@@ -166,3 +166,14 @@ test file).
 ## Usage
 
 not visible to me
+
+---
+## Addendum from the worker (2026-11-07T19:0xZ)
+
+The branch carries the final report (5160caaa0): the reruns reached 175 binaries — 1,397
+passed, 4 failed (the sanctioned slim-ISO disc pins: disc_golden ×3 + identity_disc's
+full-disc sector count), 11 ignored; the nf-game integration sweep covered all 106 binaries
+green; mp_online_failures' join_in_progress hangs pre-existing on both trees in this sandbox;
+mp_stress_explosives_live killed at 500 s (no result). ntfy: all three fallbacks failed
+(curl 28; python Errno 101; wget 124 at the TLS connect) — the exact records are in the
+branch report under "ntfy failed".
