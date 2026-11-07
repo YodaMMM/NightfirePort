@@ -171,3 +171,54 @@ fn decryptor_opens_the_kind0_lock_through_the_real_path_and_the_sisters_hold() {
     // (the first lock unlocked, the second decayed, the laser-kind can never scan).
     assert!(sim.decryptor_scan().is_none(), "no scan runs after the sisters (the draw getter)");
 }
+
+/// player-map-gap (`Player_UnEquipKey` 0x1a97b8, the family-map's MISSING): the game's keypad
+/// law is a single-use key. `Lock_Unlock` 0x1b0650's state-5 arm — reached from the solve —
+/// calls `Player_EquipKey(BL, record u16[+2])` [M 0x1b0650]; the case-1 tick holds the out
+/// channel on [M Lock_Update 0x1ae3d8:193-196] and its framelist tail leaves the lock in state
+/// 2 [M :199-220]; from state 2 the case-2 tick re-arms the kind-0 lock the moment the out
+/// channel reads 0, through `Lock_ReLock` 0x1b0750 — the state word back to 0 and
+/// `Player_UnEquipKey(BL, u16[+2])` [M 0x1b0750:5-10]: the key leaves the ring. The pre-fix
+/// port solved into a permanent `unlocked`, equipped nothing, and had no re-lock at all
+/// (lock.rs's recorded key-ring gap) — RED below on both halves before the wiring.
+#[test]
+fn the_solved_keypad_equips_its_key_and_a_dropped_channel_relocks_the_lock() {
+    let (mut scene, li, pos) = load();
+    let sim = scene.sim.as_mut().unwrap();
+    let mut equipped = false;
+    for _ in 0..400 {
+        sim.step_bond(Default::default(), false, false, false);
+        if sim.gun.weapon == 0x56 && sim.gun.switch_state == 0 { equipped = true; break; }
+    }
+    assert!(equipped, "the Decryptor (0x56) must equip; weapon now {:#x}", sim.gun.weapon);
+    let lp0 = sim.drones.locks[li].pos;
+    let base_spot = [lp0[0] + 1.2, lp0[1], lp0[2]];
+    sim.bond.pos = base_spot;
+    for _ in 0..90 { aim_and_fire(sim, lp0, base_spot, false); }
+    let spot = sim.bond.pos;
+    let mut unlocked_tick = None;
+    for t in 0..900 {
+        let lpos = sim.drones.locks[li].pos;
+        aim_and_fire(sim, lpos, spot, true);
+        if sim.drones.locks[li].unlocked { unlocked_tick = Some(t); break; }
+    }
+    unlocked_tick.expect("the held decryptor scan must unlock the lock inside 900 ticks");
+    assert!(sim.drones.channels.on(10), "the solve writes the out channel [M :193-196]");
+    let code = sim.drones.locks[li].code as usize;
+    // The equip half (RED pre-fix): the solve armed the ring slot [M 0x1b0650 → 0x1a97a0].
+    assert!(sim.drones.inventory.keys[code],
+        "the solve must equip the lock's key (ring slot {code}) [M Lock_Unlock 0x1b0650 state-5 arm]");
+    // Held ticks: the channel stays up, so no re-arm yet [M case 2's `== 0` guard, :231].
+    for _ in 0..5 { sim.step_bond(Default::default(), false, false, false); }
+    assert!(sim.drones.locks[li].unlocked, "no re-arm while the out channel holds [M 0x1ae3d8:231]");
+    // The drop — the game's door-close writer clears the channel the same way
+    // [M Door_SetState 0x135618:26-29 mirrors motion into the open channel]:
+    let frame = sim.drones.frame;
+    sim.drones.channels.set(10, 0, frame);
+    sim.step_bond(Default::default(), false, false, false);
+    // The re-arm half (RED pre-fix): state 0 again and the key off the ring.
+    assert!(!sim.drones.locks[li].unlocked,
+        "the dropped channel re-arms the kind-0 lock [M 0x1ae3d8 case 2 → Lock_ReLock 0x1b0750]");
+    assert!(!sim.drones.inventory.keys[code],
+        "Player_UnEquipKey clears the ring slot [M 0x1b0750:8 → 0x1a97b8]");
+}

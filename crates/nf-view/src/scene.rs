@@ -2817,16 +2817,40 @@ impl Sim {
         // mutably and the audio handle lives on the same `drones`.
         let mut lock_sounds: Vec<(u32, [f32; 3])> = Vec::new();
         for (i, l) in self.drones.locks.iter_mut().enumerate() {
-            match scanned_due.filter(|(li, _)| *li == i) {
+            let solved = match scanned_due.filter(|(li, _)| *li == i) {
                 Some((_, upgraded)) => {
                     let ch = &mut self.drones.channels;
-                    l.decrypt_tick(1, upgraded, ch, self.drones.frame);
+                    l.decrypt_tick(1, upgraded, ch, self.drones.frame)
                 }
                 None if l.scanning => {
                     let ch = &mut self.drones.channels;
-                    l.decrypt_tick(0, false, ch, self.drones.frame);
+                    l.decrypt_tick(0, false, ch, self.drones.frame)
                 }
-                None => {}
+                None => false,
+            };
+            // player-map-gap (Lock_Unlock 0x1b0650's state-5 arm): the solve equips the lock's
+            // key — `Player_EquipKey(BL, record u16[+2])` [M 0x1b0650; the port's ring is
+            // `Inventory::keys`], the slot `Lock_ReLock` 0x1b0750's `Player_UnEquipKey` clears.
+            if solved {
+                self.drones.inventory.keys[l.code as usize] = true;
+            }
+            // Case 1's channel hold [M 0x1ae3d8:193-196] plus the phase flip: the case-1 tail
+            // leaves the lock in state 2 once its open framelist ends [M :199-220]; the port
+            // models no framelist, so the phase begins this first pass tick (Lock::open_done).
+            if l.unlocked && !l.open_done {
+                if l.out != 0 {
+                    let ch = &mut self.drones.channels;
+                    ch.set(l.out as u32, 1, self.drones.frame);
+                }
+                l.open_done = true;
+            }
+            // Case 2's re-lock arm [M 0x1ae3d8:220-232 → Lock_ReLock 0x1b0750 →
+            // Player_UnEquipKey 0x1a97b8]: the kind-0 lock whose out channel dropped re-arms
+            // and the single-use key leaves the ring.
+            if l.unlocked && l.open_done {
+                if let Some(key) = l.relock_if_dropped(self.drones.channels.on(u32::from(l.out))) {
+                    self.drones.inventory.keys[key as usize] = false;
+                }
             }
             // `Control_NextLOD` on the unlock (Lock_Unlock 0x1b0650:23 / case 1's framelist end): the
             // keypad's model becomes its LOD variant and keeps it (see `Lock::lod_next`).

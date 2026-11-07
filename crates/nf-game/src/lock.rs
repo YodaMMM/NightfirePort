@@ -122,6 +122,14 @@ pub struct Lock {
     /// use-pick facing gate's direction: `Player_Activate` 0x1a5170's class-0x3A arm refuses the
     /// activation when `dir · (user+0xC0 − lock+0xC0) < 0` (behind the panel) [M 0x1a5170:158-166].
     pub facing: V3,
+    /// The port's state-2 phase flag: the game's case-1 tail writes the lock's state word
+    /// +0xf4 = 2 once the open framelist ends [M 0x1ae3d8:199-220]; from state 2 the case-2
+    /// tick watches the out channel for the re-lock [M :220-232]. The port models no framelist
+    /// (render-side), so the phase begins the first pass tick after the unlock — the shipped
+    /// 07000012 records' framelist presence is unverified [S]; the observable re-lock law
+    /// (armed again when the channel drops) is unaffected, only its earliest tick could differ
+    /// if a shipped record animates its open.
+    pub open_done: bool,
 }
 
 impl Lock {
@@ -156,6 +164,7 @@ impl Lock {
                 pending_sounds: Vec::new(),
                 scanning: false,
                 lod_next: false,
+                open_done: false,
                 facing: [m[2][0], m[2][1], m[2][2]],
             });
         }
@@ -233,6 +242,28 @@ impl Lock {
             return self.re_lock();
         }
         None
+    }
+
+    /// `Lock_Update` 0x1ae3d8 case 2's re-lock arm for the port's decryptor state-2 phase
+    /// (`unlocked && open_done` — the game's framelist end wrote state 2 [M 0x1ae3d8:217];
+    /// the port has no framelist, see `open_done`): when the lock's out channel DROPS
+    /// (`switch_channels[u16[+8]] == 0` [M :231]) the kind-0 lock re-arms through
+    /// `Lock_ReLock` 0x1b0750 — the state word back to 0, `Control_NextLOD`, and
+    /// `Player_UnEquipKey(BL, record u16[+2])` [M 0x1b0750:5-10]. Returns the key id for the
+    /// caller to clear (the port's `Inventory::keys`, the ring `Player_EquipKey` 0x1a97a0 set
+    /// at the solve [M Lock_Unlock 0x1b0650's state-5 arm]). Kind 1 (the laser-burn locks)
+    /// never re-arms — the game's guard is `u16[0] == 0` [M :231]. The `burned` (laser) state
+    /// machine stays in `update_burnt_open`; this arm is the decryptor's state-2 view.
+    pub fn relock_if_dropped(&mut self, channel_on: bool) -> Option<u16> {
+        if self.kind != 0 || self.out == 0 || !(self.unlocked && self.open_done) {
+            return None;
+        }
+        if channel_on {
+            return None;
+        }
+        self.unlocked = false; // Lock_ReLock 0x1b0750: the state word +0xf4 = 0 [M :7]
+        self.lod_next = true; // Control_NextLOD [M 0x1b0750:9]
+        Some(self.code)
     }
 
     /// The lock of a placement index (the render's per-instance lookup, when the meshes land).
@@ -456,6 +487,7 @@ mod tests {
             placement: 0, pos: [0.0; 3], radius: 1.0, out, key_channels: [0xffff; 2],
             burn: 0, burned: false, unlock_on_operative: false, unlocked: false,
             kind, code, scan_progress: 0, scan_solved: 0, pending_sounds: Vec::new(), scanning: false, lod_next: false,
+            open_done: false,
             burn_a: 0xff, burn_b: 0xff, grace: 0,
             facing: [0.0, 0.0, 1.0],
         }
