@@ -14044,6 +14044,22 @@ fn closest_on_segment(a: V3, b: V3, c: V3) -> V3 {
     [a[0] + ab[0] * t, a[1] + ab[1] * t, a[2] + ab[2] * t]
 }
 
+/// Where the segment first meets a glist's triangles posed by `m`, as the fraction along it: the
+/// test runs in object space, as `Collide_Intersect` 0x1ebaa8 does through `Mat_Inverse`.
+fn segment_posed_mesh_t(m: &nf_formats::anim::Mat4, tris: &[[V3; 3]], a: V3, b: V3) -> Option<f32> {
+    let dot = |x: V3, y: V3| x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+    let row = |k: usize| [m[k][0], m[k][1], m[k][2]];
+    let (r0, r1, r2) = (row(0), row(1), row(2));
+    let (s0, s1, s2) = (dot(r0, r0).max(1e-9), dot(r1, r1).max(1e-9), dot(r2, r2).max(1e-9));
+    let local = |p: V3| {
+        let w = [p[0] - m[3][0], p[1] - m[3][1], p[2] - m[3][2]];
+        [dot(w, r0) / s0, dot(w, r1) / s1, dot(w, r2) / s2]
+    };
+    let (la, lb) = (local(a), local(b));
+    let ld = [lb[0] - la[0], lb[1] - la[1], lb[2] - la[2]];
+    tris.iter().filter_map(|t| crate::world::ray_tri_t(la, ld, t)).min_by(f32::total_cmp)
+}
+
 fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
@@ -14786,7 +14802,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.site_blast_hits.clear();
         // The held hit-point scripts' stream objects — `SP_GetHitDamage` 0x1dc5f8's read set
         // (GAPS G-047: the 0700001b solar panels). Each bullet contact below adds its damage.
-        let held_targets = self.scripts.held_hit_targets(d);
+        let held_targets = self.scripts.held_hit_volumes(d);
         // `SP_Hit` 0x1dc470's bit-2 read set: the current stream objects of EVERY script
         // player — no hit-point or hold gate (the urn is hp 0 and still reacts [M]).
         let sp_bullet_targets = self.scripts.sp_bullet_targets(d);
@@ -15323,10 +15339,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // accumulates it until the player's hit points. Player bullets only [*deviation*:
             // the game's Collide pass covers the drone rounds too; the port's drone-bullet pass
             // is separate and stays out of the read set].
-            for (pi, c, r) in &held_targets {
-                if Self::segment_hits_sphere(b.pos, end, *c, *r) {
-                    self.scripts.add_hit_damage(*pi, b.damage);
-                }
+            // The sphere is only the broad phase: `Collide_PickObj` 0x1eae80 queues the object and
+            // `Collide_Update` 0x1ea398 keeps it only if `Collide_Intersect` 0x1ebaa8 (the flight's
+            // 0x201 pick into `Intersect_RayGeom` 0x10a8c8) meets its glist's triangles; a miss
+            // stays at 1e8 and is freed, so no contact reaches obj+0xD0. An object with no
+            // collision block never passes the pick [M 0x1eae80: glist+8 for a non-0x100 test].
+            // The mirror walk stops at the first solid node, so a nearer wall or guard shields
+            // the object [M 0x1ea398:216-229].
+            let solid_t = best.map_or(tw.unwrap_or(f32::INFINITY), |(_, _, dt)| tw.map_or(dt, |w| w.min(dt)));
+            let meets = |c: &[f32; 3], r: f32, mesh: &Option<(u32, nf_formats::anim::Mat4)>| {
+                Self::segment_hits_sphere(b.pos, end, *c, r) && mesh.as_ref().is_none_or(|(hash, m)| {
+                    d.world.shape(*hash)
+                        .and_then(|tris| Self::segment_posed_mesh_t(m, tris, b.pos, end))
+                        .is_some_and(|t| t <= solid_t + 1e-4)
+                })
+            };
+            for (pi, c, r, mesh) in &held_targets {
+                if meets(c, *r, mesh) { self.scripts.add_hit_damage(*pi, b.damage); }
             }
             // The SP_Hit bullet arm records the contact per player — the weapon id is the
             // bullet's `weapon_data+0x00` u16 [M docs/fields/weapon_data.md: the id = the
@@ -15336,10 +15365,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // player-bullets-only scope as the damage gather above [*deviation*].
             let sp_weapon_id = d.weapons.records.get(b.weapon as usize)
                 .map_or(0u16, |r| u16::from_le_bytes([r[0x00], r[0x01]]));
-            for (pi, c, r) in &sp_bullet_targets {
-                if Self::segment_hits_sphere(b.pos, end, *c, *r) {
-                    self.scripts.add_bullet_hit(*pi, sp_weapon_id);
-                }
+            for (pi, c, r, mesh) in &sp_bullet_targets {
+                if meets(c, *r, mesh) { self.scripts.add_bullet_hit(*pi, sp_weapon_id); }
             }
             // mp-site-damage-offline: the site takes the bullet this tick — the game's collision
             // pass appends the contact to the site SP's stream objects' `obj+0xD0` chain and the

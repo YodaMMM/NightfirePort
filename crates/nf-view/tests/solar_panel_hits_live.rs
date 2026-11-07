@@ -1,0 +1,56 @@
+//! The 0700001b solar panels take a round on their triangles, not their bounding sphere: the
+//! sphere only queues the object [M Collide_PickObj 0x1eae80] and `Collide_Update` 0x1ea398 drops
+//! it unless `Collide_Intersect` 0x1ebaa8 (the flight's 0x201 pick into `Intersect_RayGeom`
+//! 0x10a8c8) meets the glist's triangles. The panel's sphere is 4.77 [D glist 0x02000a42], so
+//! the walkway above it sits inside the sphere of the panel under Bond's feet and the next one.
+//! NF_ISO-gated.
+
+use nf_game::player::Input;
+
+fn broken(sim: &nf_view::scene::Sim) -> Vec<u32> {
+    sim.drones.scripts.players.iter().filter(|p| (41..=56).contains(&p.placement))
+        .filter(|p| !p.info[p.cur].as_ref().is_some_and(|s| s.delay != 0)).map(|p| p.placement as u32).collect()
+}
+
+/// Bond at the walkway spot; the load's float faces -x, `about_face` turns the zero-g body round.
+fn at_the_walkway(iso: &str, about_face: bool) -> nf_view::scene::Scene {
+    let mut scene = nf_view::load_with_carry_difficulty(iso, "0700001b.bin", false, None, 1).unwrap();
+    for _ in 0..3000 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+    let sim = scene.sim.as_mut().unwrap();
+    sim.bond.pos = [16.74, -1.84, 4.62];
+    if about_face {
+        let m = &mut sim.bond.zero_g_rot;
+        for k in [0, 2] { for c in 0..3 { m[k][c] = -m[k][c]; } }
+    }
+    for _ in 0..60 { sim.step_bond(Input::default(), false, false, false); }
+    assert!(broken(sim).is_empty());
+    scene
+}
+
+/// Facing down the slope the row falls away from the round for the first panels, so a tap
+/// leaves #50 under Bond's feet whole; #51-56 stay below the rising line too.
+#[test]
+fn firing_down_the_row_breaks_no_panel() {
+    let Ok(iso) = std::env::var("NF_ISO") else { return };
+    let mut scene = at_the_walkway(&iso, true);
+    let sim = scene.sim.as_mut().unwrap();
+    for i in 0..120 { sim.step_bond(Input::default(), i < 2, false, false); }
+    assert!(broken(sim).is_empty(), "{:?}", broken(sim));
+}
+
+/// Facing up the slope the panel under Bond's feet (#50) and the one ahead keep their place while
+/// the round flies 1.6 above them inside their spheres; the row's rising surface only meets the
+/// round at the far end of #49, x 7.4 [D glist 0x02000a42 at (10.14, -1.72, 4.62)], on the tick
+/// the flight reaches it.
+#[test]
+fn the_round_breaks_only_the_panel_it_crosses() {
+    let Ok(iso) = std::env::var("NF_ISO") else { return };
+    let mut scene = at_the_walkway(&iso, false);
+    let sim = scene.sim.as_mut().unwrap();
+    sim.step_bond(Input::default(), true, false, false);
+    assert!(broken(sim).is_empty(), "the first tick spans x 16.2 to 13.5 over #50: {:?}", broken(sim));
+    sim.step_bond(Input::default(), true, false, false);
+    assert!(broken(sim).is_empty(), "the second tick ends at x 9.2 over #49: {:?}", broken(sim));
+    for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
+    assert_eq!(broken(sim), vec![49], "the third tick crosses #49's surface and stops there");
+}
