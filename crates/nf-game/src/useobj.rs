@@ -123,6 +123,14 @@ pub struct SwitchObj {
     /// no-op [M SP_GetState 0x1dc900:8-10]). Set by `Drones::attach_level` (crate::drone) after the
     /// players are mounted (laser-scripts).
     pub sp: Option<usize>,
+    /// param 6: the SSys slot this switch ARMS — `Switch_Create` 0x1adcc0:39-41 writes the
+    /// switch's own channel (param 0) into `SSysItems[param6·8 + 4]` (the slot's channel byte)
+    /// whenever param 6 is non-zero, so `SSys_Monitor` 0x1ad998 runs its 240 s countdown for that
+    /// security subsystem while the switch's channel is on and switches the channel back OFF at
+    /// the expiry [M 0x1ad998 case 2]. The census (2026-11-07): non-zero on 07000009 (slot 1),
+    /// 0700000a (slot 2) and 07000046 (slot 1), zero everywhere else; 0 / unused on every other
+    /// placement.
+    pub ssys_slot: u8,
 }
 
 /// The level's use objects, in placement order.
@@ -180,6 +188,7 @@ impl UseObjects {
                     latch: 0,
                     placement: pi,
                     sp: None,
+                    ssys_slot: par(6) as u8,
                 });
             }
         }
@@ -626,7 +635,7 @@ mod tests {
         // (5,0,0) (TestWorld 0x11, entity matrix identity → obj+0xC0 = the origin).
         let (sp, objs) = sp_with_entity(0, 0, 1, 0x11);
         let mut u = UseObjects::default();
-        u.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 0, rest: 0, busy: false,
+        u.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 0, rest: 0, busy: false, ssys_slot: 0,
             auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
         let mut scripts = crate::nis::Scripts::default();
         scripts.players = vec![sp];
@@ -653,7 +662,7 @@ mod tests {
         // [M 0x1dc338:59-61] — the pick point is inside the entity's sphere here.
         let (sp4, objs4) = sp_with_entity(0, 0, 1, 0x11);
         let mut u4 = UseObjects::default();
-        u4.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 0, rest: 0, busy: false,
+        u4.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 0, rest: 0, busy: false, ssys_slot: 0,
             auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
         let mut scripts4 = crate::nis::Scripts::default();
         scripts4.players = vec![sp4];
@@ -667,7 +676,7 @@ mod tests {
         // 0x1dc900:15 returns true and Switch_Activate 0x1b02a8:23 refuses [M].
         let (sp5, objs5) = sp_with_entity(0, 0, 1, 0x11);
         let mut u5 = UseObjects::default();
-        u5.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 0, rest: 0, busy: false,
+        u5.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 0, rest: 0, busy: false, ssys_slot: 0,
             auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
         let mut scripts5 = crate::nis::Scripts::default();
         scripts5.players = vec![sp5];
@@ -679,7 +688,7 @@ mod tests {
         // Sister 4: the inhibit gate ON blocks the SP route [M 0x1b02a8:22].
         let (sp2, objs2) = sp_with_entity(0, 0, 1, 0x11);
         let mut u2 = UseObjects::default();
-        u2.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 7, rest: 0, busy: false,
+        u2.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 7, rest: 0, busy: false, ssys_slot: 0,
             auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
         let mut scripts2 = crate::nis::Scripts::default();
         scripts2.players = vec![sp2];
@@ -692,7 +701,7 @@ mod tests {
         // Sister 5: a ch-0x61 switch refuses through the SP route too [M 0x1b02a8:20-21].
         let (sp3, objs3) = sp_with_entity(0, 0, 1, 0x11);
         let mut u3 = UseObjects::default();
-        u3.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x61, gate: 0, rest: 0, busy: false,
+        u3.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x61, gate: 0, rest: 0, busy: false, ssys_slot: 0,
             auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
         let mut scripts3 = crate::nis::Scripts::default();
         scripts3.players = vec![sp3];
@@ -764,7 +773,7 @@ mod tests {
     #[test]
     fn switch_inhibit_gate_blocks_only_while_on() {
         let mut u = UseObjects::default();
-        u.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 7, rest: 0, busy: false,
+        u.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 7, rest: 0, busy: false, ssys_slot: 0,
             auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None });
         // Gate channel OFF: the switch activates.
         let mut scripts = crate::nis::Scripts::default();
@@ -773,7 +782,7 @@ mod tests {
         assert!(used && ch.on(9), "gate channel OFF → the switch activates");
         // Sister: the same switch with its gate channel ON never activates.
         let mut u2 = UseObjects::default();
-        u2.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 7, rest: 0, busy: false,
+        u2.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 7, rest: 0, busy: false, ssys_slot: 0,
             auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None });
         let mut scripts2 = crate::nis::Scripts::default();
         let mut ch2 = chans(&[7]);
@@ -781,7 +790,7 @@ mod tests {
         assert!(!used2 && !ch2.on(9), "gate channel ON → blocked");
         // Sister 2: gate 0 always allows.
         let mut u3 = UseObjects::default();
-        u3.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 0, rest: 0, busy: false,
+        u3.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 0, rest: 0, busy: false, ssys_slot: 0,
             auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None });
         let mut scripts3 = crate::nis::Scripts::default();
         let mut ch3 = Channels::default();
@@ -795,7 +804,7 @@ mod tests {
     #[test]
     fn switch_busy_is_one_shot_never_rearms() {
         let mut u = UseObjects::default();
-        u.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 0, rest: 0, busy: true,
+        u.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 0, rest: 0, busy: true, ssys_slot: 0,
             auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None });
         let mut scripts = crate::nis::Scripts::default();
         let mut ch = Channels::default();

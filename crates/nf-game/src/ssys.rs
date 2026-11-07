@@ -142,12 +142,13 @@ impl Ssys {
     /// `set_channel(c, on)` writes it (the state-2 expiry and the laser-2 delay path both flip
     /// channels). Returns the `(item, msg_id)` pairs to play this tick, in the game's play order.
     /// The caller owns the `ScriptCam == 0` and not-paused gates [M 0x1ad998:10, Game_Run].
-    pub fn monitor(
-        &mut self,
-        mut channel_on: impl FnMut(u8) -> bool,
-        mut set_channel: impl FnMut(u8, bool),
-    ) -> Vec<(usize, u8)> {
+    /// Returns the msg events `(item, msg)` and the raw channel writes `(channel, on)` — the
+    /// game's `switch_channels[..] = ..` stores happen mid-walk (the laser-2 arm) but their only
+    /// readers run on LATER ticks, so the port collects them for the caller to apply after the
+    /// call (same behaviour, no aliasing closures).
+    pub fn monitor(&mut self, mut channel_on: impl FnMut(u8) -> bool) -> (Vec<(usize, u8)>, Vec<(u8, bool)>) {
         let mut out = Vec::new();
+        let mut writes: Vec<(u8, bool)> = Vec::new();
         for i in 1..5usize {
             let ch = self.items[i].channel;
             if ch == 0xff {
@@ -171,7 +172,7 @@ impl Ssys {
                     if self.items[1].channel != 0xff {
                         out.push((1, 0));
                         self.items[1].timer = -1.0;
-                        set_channel(self.items[1].channel, true);
+                        writes.push((self.items[1].channel, true));
                         self.items[1].channel = 0xff;
                         self.delay_timer = LASER2_DELAY;
                         self.items[1].state = 0;
@@ -213,7 +214,7 @@ impl Ssys {
                     if self.items[i].timer <= 0.0 {
                         out.push((i, 1));
                         if self.items[i].channel != 0 {
-                            set_channel(self.items[i].channel, false);
+                            writes.push((self.items[i].channel, false));
                         }
                         self.items[i].state = 0;
                         self.items[i].timer = -1.0;
@@ -222,7 +223,7 @@ impl Ssys {
                 _ => {}
             }
         }
-        out
+        (out, writes)
     }
 }
 
@@ -281,31 +282,33 @@ mod tests {
         let chans: std::cell::RefCell<std::collections::BTreeMap<u8, bool>> =
             std::cell::RefCell::new(std::collections::BTreeMap::from([(0x52u8, true)]));
         let on = |c: u8| chans.borrow().get(&c).copied().unwrap_or(false);
-        let mut set = |c: u8, v: bool| { chans.borrow_mut().insert(c, v); };
         // Arm tick: 240.0 + state 6 + msg 6.
-        let msgs = s.monitor(on, &mut set);
+        let (msgs, _) = s.monitor(on);
         assert_eq!(msgs, vec![(1, 6)]);
         assert_eq!(s.items[1].timer, ARM_TIME);
         assert_eq!(s.items[1].state, 6);
         // Drive the timer to each threshold.
         let mut seen: Vec<(usize, u8)> = Vec::new();
+        let mut chan_writes: Vec<(u8, bool)> = Vec::new();
         // 240 s at REC_FRAME_RATE per tick = 14400 ticks [M 0x1ad998:43].
         for _ in 0..14_500 {
-            seen.extend(s.monitor(on, &mut set));
+            let (m, w) = s.monitor(on); seen.extend(m);
+            // The caller applies the raw writes after the call (the sim does the same).
+            for &(c, v) in &w { chans.borrow_mut().insert(c, v); }
+            chan_writes.extend(w);
         }
         let got: Vec<u8> = seen.iter().filter(|(i, _)| *i == 1).map(|(_, m)| *m).collect();
         assert_eq!(got, vec![5, 4, 3, 2, 1], "the countdown order 6→5→4→3→2→1");
         // State 2's expiry switched the channel off and disarmed.
+        assert_eq!(chan_writes.last(), Some(&(0x52u8, false)));
         assert_eq!(chans.borrow().get(&0x52).copied(), Some(false));
         assert_eq!(s.items[1].state, 0);
         assert_eq!(s.items[1].timer, -1.0);
         // Sister (can fail): with the channel off, a disarmed item does NOT re-arm.
-        let msgs = s.monitor(on, &mut set);
-        assert!(msgs.is_empty());
+        assert!(s.monitor(on).0.is_empty());
         // A re-set channel re-arms through msg 6 again.
         chans.borrow_mut().insert(0x52, true);
-        let msgs = s.monitor(on, &mut set);
-        assert_eq!(msgs, vec![(1, 6)]);
+        assert_eq!(s.monitor(on).0, vec![(1, 6)]);
     }
 
     #[test]
@@ -318,14 +321,23 @@ mod tests {
             std::cell::RefCell::new(std::collections::BTreeMap::from([(0x53u8, true), (0x54u8, true)]));
         let on = |c: u8| chans.borrow().get(&c).copied().unwrap_or(false);
         let forced: std::cell::RefCell<Vec<(u8, bool)>> = std::cell::RefCell::new(Vec::new());
-        let mut set = |c: u8, v: bool| { chans.borrow_mut().insert(c, v); forced.borrow_mut().push((c, v)); };
+        let set = |w: &[(u8, bool)]| {
+            for &(c, v) in w {
+                chans.borrow_mut().insert(c, v);
+                forced.borrow_mut().push((c, v));
+            }
+        };
         // Laser 1 arms at once; laser 2 waits behind the delay.
-        assert_eq!(s.monitor(on, &mut set), vec![(1, 6)]);
+        let (m, w) = s.monitor(on);
+        set(&w);
+        assert_eq!(m, vec![(1, 6)]);
         let mut msgs;
         let mut waited = 0;
         let mut laser1_msg_at = None;
         loop {
-            msgs = s.monitor(on, &mut set);
+            let (m, w) = s.monitor(on);
+            set(&w);
+            msgs = m;
             if msgs.contains(&(1usize, 0u8)) {
                 laser1_msg_at = Some(waited);
             }

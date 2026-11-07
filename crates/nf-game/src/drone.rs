@@ -12643,6 +12643,13 @@ pub struct Drones {
     /// The use objects (map-tower): the Q-Worm PCs (0x35) and switches (0x29) of
     /// `Player_Activate` 0x1a5170 — crate::useobj.
     pub useobjs: crate::useobj::UseObjects,
+    /// The security subsystems (SSysItems 0x2befd0, crate::ssys): SSys_Init 0x1b01b0 zeroes
+    /// them at ResetMap_GameInit 0x1d5080 [M ssys.rs], and every switch placement with a
+    /// non-zero param 6 ARMS its slot with the switch's channel at Switch_Create 0x1adcc0:39-41
+    /// (unread-params-switches: the arm sites are 07000009 slot 1, 0700000a slot 2, 07000046
+    /// slot 1 — zero elsewhere [D census]). SSys_Monitor 0x1ad998 ticks it from Game_Run
+    /// 0x1c9790 while ScriptCam == 0 and not paused.
+    pub ssys: crate::ssys::Ssys,
     /// The level's doors (docs/systems/world-objects.md "Doors"); created in `attach_level`, updated in `tick`'s
     /// control-list order (`Door_Update`), the group sync (`Doors_Calc`) at the pass's end.
     pub doors: crate::door::Doors,
@@ -13118,6 +13125,7 @@ impl Drones {
             los_probes: 0,
             movie_request: None,
             info_labels: Vec::new(),
+            ssys: crate::ssys::Ssys::new(),
             info_codes: Vec::new(),
             hostage_saves: 0,
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
@@ -13527,6 +13535,16 @@ impl Drones {
         self.useobjs = crate::useobj::UseObjects::create(&level.maps[mm].placements);
         self.useobjs.set_pc_spheres(level, mm);
         self.useobjs.init_channels(&mut self.channels, self.frame);
+        // The switch param-6 SSys arm [M Switch_Create 0x1adcc0:39-43]: for every switch with a
+        // non-zero param 6 the switch's own channel (param 0) becomes the SSys slot's channel
+        // byte — SSysItems[slot*8 + 4] = ext+0x12. The game's store is unconditional on the
+        // channel value; slots beyond 4 are the game's out-of-bounds writes (none on the disc
+        // [D census — param 6 is 1 or 2]) and the port clamps them to no-op.
+        for sw in &self.useobjs.switches {
+            if sw.ssys_slot != 0 && (sw.ssys_slot as usize) < self.ssys.items.len() {
+                self.ssys.items[sw.ssys_slot as usize].channel = sw.ch;
+            }
+        }
         let Some(m) = level.main_map() else { return };
         // Searchlights (`Searchlight_Create`, placement order; every part draws `Rand_Rand(480)`, spots another
         // `Rand_Rand(0)` — the shared stream, in this order). The game interleaves these draws with the other
@@ -21789,6 +21807,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // The sound triggers (`SoundTrigger_Update` 0x1b2790 — the object walk's per-frame pass;
         // fix-06-alarm): the alarm siren starts the same frame its ON channel is up.
         { let _p = crate::prof::scope("phase: sound batch"); self.sound_triggers.tick(&mut self.audio, &self.channels); }
+        // The security subsystems (SSys_Monitor 0x1ad998, from Game_Run 0x1c9790 after the
+        // pause gate — the same once-per-frame pass as the sound triggers; runs only while
+        // ScriptCam == 0 [M 0x1ad998:9]). The channel writes are the game's raw
+        // switch_channels[..] = 0/1 stores — no switch_channels_time stamp [M 0x1ad998:31, 76]
+        // — so the port writes the value vector directly. The msg events play their table
+        // sounds (SSys_Msg 0x1ad878, Sound_Play 100.0f) through the same audio tree.
+        if self.scripts.camera().is_none() {
+            let (events, writes) = self.ssys.monitor(|c| self.channels.on(c as u32));
+            for (c, on) in writes {
+                if let Some(v) = self.channels.v.get_mut(c as usize) { *v = if on { 1 } else { 0 } }
+            }
+            let ch76 = self.channels.on(0x76);
+            for (item, msg) in events {
+                if let Some(id) = self.ssys.msg_sound(item, msg, d.level, !ch76) { self.audio.play(id); }
+            }
+        }
         // `Mission_Update` moved to the top of the tick (fix-objective-banner): the game's Game_Run
         // order — see the block before `fx.tick` above.
         // fix-progress: the tally folds — the per-drone `PlrStat_Log*` outboxes, `Trigger_Calc`'s
