@@ -14407,6 +14407,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
                 self.pending_blasts.push((c, r, dmg, owner, 0, script, r, 0));
             }
+            // The stat arm rides every Destroy_Smash [M 0x12bb60:42-55 — the C has no path
+            // distinction; the blast-propagate case 0x21 reaches the same function].
+            self.smash_stat_check();
         }
         // case 0x20 → `Break_ApplyDamage` [M 0x17c518:163-167 — hitdata+8 = the amount; the same
         // subtract `Break_Update` 0x12bfd8:37 makes], the kill the bullet walk's.
@@ -15259,6 +15262,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // explicit 0 — `sw $zero,($sp)` [M 0x12bcf8]; no destroyable blast spawns debris.
                 self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
             }
+            // The stat arm rides every Destroy_Smash — the bullet kill reaches it through
+            // `Destroy_CollisionHandler` 0x12bd48 → 0x12bb60 [M]; bullet_hit's internal smashes
+            // set the scratch, consumed here per round.
+            self.smash_stat_check();
             // The solid leaf took the round: it dies here, after the drain registered — the
             // game's one contact per round [M Bullet_CollisionHandler 0x12ce80's state-2 death;
             // the [D] collision note above].
@@ -16619,6 +16626,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
                     self.pending_blasts.push((c, r, dmg, owner, 0, script, r, 0));
                 }
+                // The stat arm rides every Destroy_Smash [M 0x12bb60:42-55].
+                self.smash_stat_check();
             }
             // case 0x20 → `Break_ApplyDamage` [M 0x17c518:163-167 — hitdata+8 = the amount;
             // the same subtract `Break_Update` 0x12bfd8:37 makes], the kill the bullet walk's.
@@ -17573,6 +17582,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.grenades.iter().enumerate()
             .filter(|(_, g)| g.weapon_type == weapon_type && g.stuck && g.state < 2)
             .map(|(i, _)| i).collect()
+    }
+
+    /// `Destroy_Smash` 0x12bb60:42-55's stat arm, consumed at the sim. The smash set
+    /// `props.stat_hit` when the destroyed leaf's smashed-model hash is the named one
+    /// (`SMASH_STAT_HASH` 0x020001d9 — Mayhew's computer's destroyed glist, "Computer2"
+    /// [D map 51 object 12; the sibling chain in `Props::create`'s 0xe1 arm]). The game's level
+    /// gate `GameState._12_4_ == 0x7000002` [M 0x12bb60:42] is here, where the sim's level id
+    /// lives; the call is `PlrStat_LogShotHitScenery(0)` [M 0x12bc44-48, arg 0 from
+    /// 0x12bc48 `move $a0, $zero`] — the accuracy denominator (`PlrMissionStats+0x04`) drops
+    /// one, behind the function's own MP/Mission_Status gate [M 0x198408:11-19]. Runs AFTER the
+    /// smash's channel write (the flag is set there, order preserved within the tick).
+    fn smash_stat_check(&mut self) {
+        if !self.props.stat_hit { return; }
+        self.props.stat_hit = false;
+        if self.level_current == 0x0700_0002 {
+            self.progress.log_shot_hit_scenery(self.mission.status());
+        }
     }
 
     fn tick_inner(&mut self, d: &Data, player: &Player) {
@@ -19511,6 +19537,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // explode-debris-spawn: kind 0 — the same Destroy_Smash call as the bullet path [M 0x12bcf8].
             self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
         }
+        // The stat arm rides every Destroy_Smash — the external-kill path reaches it through
+        // `Destroy_Update` 0x12c4f8's watch arm → 0x12bb60 [M]. channel_kills' internal smashes
+        // set the scratch, consumed here per tick.
+        self.smash_stat_check();
         // The destroy leaves' colour pair steps once per tick — the tail of every non-death
         // `Destroy_CollisionHandler` call [M 0x12bd48:61-95]: the beam-contact leaves flash
         // (−5), the rest recover (+1). Runs after the bullet pass so this tick's contacts are

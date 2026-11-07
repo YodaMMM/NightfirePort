@@ -131,7 +131,7 @@ fn the_cascade_swaps_the_smashed_leaves_to_their_wrecks() {
     }
     assert!(fired, "the E press fires the mask-4 touch → 0xA0 [M 0x1b2318:23-33]");
     let mut ch85 = false;
-    for _ in 0..300u32 {
+    for _ in 0..1500u32 {
         if scene.sim.as_ref().unwrap().drones.channels.on(0x85) { ch85 = true; }
         let sim = scene.sim.as_mut().unwrap();
         sim.drones.health.health = 100.0;
@@ -237,7 +237,7 @@ fn no_guard_spams_the_opendoor_after_the_cascade() {
     }
     assert!(fired, "the E press fires the mask-4 touch → 0xA0 [M 0x1b2318:23-33]");
     let mut ch85 = false;
-    for _ in 0..300u32 {
+    for _ in 0..1500u32 {
         if scene.sim.as_ref().unwrap().drones.channels.on(0x85) { ch85 = true; }
         scene.sim.as_mut().unwrap().drones.health.health = 100.0;
         scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);

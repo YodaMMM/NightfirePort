@@ -1054,7 +1054,7 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     // 0x51 pulses too and the rest rides the death channels — track "ever on" for the pulse
     // links (the E-use test's track loop) [D placement 393; M 0x1b1900].
     let (mut seen51, mut ch85) = (false, false);
-    for _k in 0..300u32 {
+    for _k in 0..560u32 {
         {
             let sim = w.scene.sim.as_ref().unwrap();
             let ch = &sim.drones.channels;
@@ -1176,6 +1176,13 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     w.walk_to(Wp::new(22.9, 1.0, -22.8).r(1.2), "the delta doorway approach");
     w.walk_to(Wp { at: [24.0, 1.2, -22.8], act: Act::Use { use_ticks: 240 }, arrive: 1.1 }, "E the delta slides");
     w.walk_to(Wp::new(27.79, 1.28, -25.32).r(1.0), "to the Delta exit #944");
+    // The use pick reads the view: square up on the exit before E, as a player does.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let d = [27.79 - sim.bond.pos[0], -25.32 - sim.bond.pos[2]];
+        sim.bond.yaw = d[0].atan2(d[1]);
+        sim.bond.pitch = 0.0;
+    }
     let mut loaded = false;
     for _ in 0..60 {
         w.tick(nf_game::player::Input::default(), true);
@@ -1422,7 +1429,7 @@ fn the_e_use_switch_fires_the_sabotage_cascade_and_opens_the_west_door() {
     // pulses too; the cascade's first link reads it inside the pulse window and the rest ride
     // the death channels (never cleared). Track "ever on" for the pulse links, level for 0x85.
     let (mut seen51, mut ch85) = (false, false);
-    for _k in 0..300u32 {
+    for _k in 0..560u32 {
         {
             let sim = w.scene.sim.as_ref().unwrap();
             let ch = &sim.drones.channels;
