@@ -613,3 +613,12 @@ pushed as each merge and each fix lands.
   gate (needs name-table resolution), the View_DrawSky wiring (visual), the 5/6+7
   unblocking via the main agent's debugger.
 (stream-batch-8 merge note: the ×0.9 party walk lock above is NOT carried — the merge drops the Player_Move x0.9 change per the task; AttackTalk 0x11 and the stinger fix ARE carried.)
+
+- (00:55, 11-07) The three merges landed and pushed (master clean; bullet-pass-water
+  already contained; level-gates-world WITHOUT the Player_Move ×0.9 change — the
+  move_locked feature removed whole, AttackTalk 0x11 + the stinger fix carried). Build
+  green (1145 test binaries). Suite map on the merged tree, chunked+resumable:
+  193/1145 binaries, 739/20/33; all 20 reds match the round's list with their carried
+  causes (batch-3/5/6/7), walkreal_07000007 GREEN 6/0 (the level-gates fixes hold), and
+  one NEW item: mp_stress_explosives_live killed at exit −9 (OOM-shaped). No ignores
+  added. The unmeasured walk lane (01..1b) resumes from the state file.
