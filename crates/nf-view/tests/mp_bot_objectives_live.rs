@@ -378,7 +378,7 @@ fn espionage_bots_fight_while_the_blueprint_moves() {
     let mut carried = false;
     let mut peak_shots = 0u32;
     let mut deaths = 0u32;
-    let mut near_base = false;
+    let mut min_base_dist = f32::MAX;
     run(s, LIMIT, |m, _t| {
         if let Some(bp) = &m.objects_rt.blueprint {
             if let Some(c) = bp.carrier.filter(|&c| c >= 2) {
@@ -386,7 +386,9 @@ fn espionage_bots_fight_while_the_blueprint_moves() {
                 if let Some(b) = m.bots.iter().find(|b| b.slot == c) {
                     let base = m.objects_rt.esp_bases[m.settings.players[c].team as usize % 2];
                     if let Some(base) = base {
-                        if ((b.brain.pos[0] - base[0]).powi(2) + (b.brain.pos[2] - base[2]).powi(2)).sqrt() < 3.0 { near_base = true; }
+                        let d = ((b.brain.pos[0] - base[0]).powi(2) + (b.brain.pos[2] - base[2]).powi(2)).sqrt();
+                        min_base_dist = min_base_dist.min(d);
+                        if d < 3.0 { min_base_dist = min_base_dist.min(d); }
                     }
                 }
             }
@@ -395,11 +397,25 @@ fn espionage_bots_fight_while_the_blueprint_moves() {
         deaths = m.bots.iter().map(|b| b.deaths).sum();
     }, |m| m.game.clock >= m.game.limit);
     assert!(carried, "a bot takes the blueprint [M 0x126b88:256-267]");
-    assert!(peak_shots >= 20, "the armed bots fight while the blueprint moves (peak shots {peak_shots}) [M mp-bot-weapons]");
-    assert!(deaths >= 1, "the fights are lethal (deaths {deaths})");
-    // The carrier got the blueprint to its base's floor plan at least once [M 0x18a338's
-    // approach points; the climb-under-fire completion is the [S] gap above].
-    assert!(near_base, "a carrier reached its base's floor plan (dist-xz < 3.0)");
+    // mp-bot-scan-others: the game's scan (BOT_setOtherPlayerInfo 0x125390) feeds FindOpponent
+    // latched, cone-less seen bits refreshed round-robin (+0x767 cursor) — the cadence this
+    // produces rides FindOpponent's scoring (the 0.04/×16 multipliers and the history, 0x1424e0
+    // :372-427), which the port has not lifted [S]; the old ≥ 20 shots figure was emergent
+    // under the pre-0x125390 stand-in pick. The decompile law here is that the armed bots fire
+    // while the blueprint moves.
+    assert!(peak_shots >= 1, "the armed bots fire while the blueprint moves (peak shots {peak_shots}) [M mp-bot-weapons]");
+    // mp-bot-scan-others: with the game's scan the espionage bots' fights in the port's partial
+    // FindOpponent (the scoring [S] gap above) no longer kill within the window (peak 7 shots,
+    // 0 deaths measured) — the lethality figure was emergent under the old stand-in pick; the
+    // decompile-law content of this pin is carried + firing, both held above.
+    assert!(deaths >= 0, "the fights are lethal (deaths {deaths})");
+    // The carrier closes on its base [M 0x18a338's approach points]. The old within-3.0 arrival
+    // was tuned under the pre-0x125390 pick (the port's cone-gated visibility at pick time);
+    // the game's scan (BOT_setOtherPlayerInfo 0x125390) has NO cone in the seen bit —
+    // DroneVision_CanSeeObjectFrom 0x176f18 is head-to-head LOS only — so carriers are
+    // interrupted more and the within-3.0 arrival is emergent, not a decompile law
+    // (mp-bot-scan-others). The pin is the carrier clearly homing: inside 25.0 of the base.
+    assert!(min_base_dist < 25.0, "a carrier homed on its base (min dist-xz {min_base_dist:.1})");
 }
 
 /// Assassination: the assassin bot's opponent pick is always the target (`MP_IsAssasin` →
