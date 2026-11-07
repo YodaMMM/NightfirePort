@@ -434,15 +434,6 @@ pub struct Bond {
     /// 0x1bb6d8:21 calls the viewer's updator (`Player_PositionCamera` 0x18f5d8) which switches on
     /// BLData+0x950 — this byte — per frame [M].
     pub cam_mode: u16,
-    /// `BLData+0x18`: the local velocity's FORWARD lane — the +0x10 quad is (x strafe, y vertical,
-    /// z forward) and `Player_Move` writes the z lane fresh every walk tick from the +0x28 smoother
-    /// [M Player_Move 0x191dd0:167 `+0x18 = fStack_e8 · mult`], integrated along the matrix rows for
-    /// every substate [M Player_Update 0x193600:284-295]. The zipline ride accumulates 0.15/tick into
-    /// it [M Player_Zipline 0x197f50:121 `+= FRAME_RATE_MUL·0.15`] and the creep exit pushes 0.05 of
-    /// it [M Player_Creep's exit tail]. The port's zipline integration rides this field downward (a
-    /// port shape) — the ride itself is unreachable in the shipped game: both live wires are type 0
-    /// [D placements probe, grab_wire's census], so the zipline substate is never entered.
-    pub fall_speed: f32,
     /// The Q-Claw grapple's runtime state (`BLData+0x140..0x160` narrowed; fix-gadgets). `Some`
     /// while the substate 2 runs [M Player_SetGrapplePoint 0x195da0 → ChangeSubState(2)].
     pub grapple: Option<crate::gadget::GrappleState>,
@@ -575,7 +566,7 @@ impl Bond {
         Bond { pos, yaw, pitch: 0.0, local: [0.0; 2], vel: [0.0; 3], grounded: true, floor_ny: 1.0, grounded_history: 8, jump: 0, land_delay: 0,
             crouched: false, lockout: 0, cc: ROOT_HEIGHT, crouch_drop: 0.0, eye: EYE, fall_timer: 0, head_bump: false, fall_damage: None,
             substate: SS_WALK, ladder: None, climb_top: 0.0, climb_bottom: 0.0, regrab: 0, mode: 0, saved_sub: 0, air: 100.0, drown_damage: None, underwater: false,
-            water_fade: 0.0, air_tick: 0, push_fwd: 0.0, wire: None, auto_drop: 0.0, wire_anim: 0, wire_anim_time: 0.0, wire_anim_rate: 1.0, cam_mode: 0, fall_speed: 0.0, grapple: None,
+            water_fade: 0.0, air_tick: 0, push_fwd: 0.0, wire: None, auto_drop: 0.0, wire_anim: 0, wire_anim_time: 0.0, wire_anim_rate: 1.0, cam_mode: 0, grapple: None,
             icon_ctx: 0xff,
             cel: None,
             move_local: [0.0; 2],
@@ -1218,11 +1209,16 @@ impl Bond {
         self.change_substate(target);
         self.wire = Some(wi);
         self.auto_drop = 0.0;
-        // The yaw: the nearer of wire.yaw ± π/2 to Bond's old yaw [M 0x1973f8-0x197430; type 2 flips by
-        // the slope — both live wires are type 0 [D placements probe]].
+        // The yaw: type 0 takes the nearer of wire.yaw ± π/2 to Bond's old yaw [M 0x1973f8-0x197430];
+        // a zipline faces down the slope: wire.yaw + π/2 when the segment's first end is the lower
+        // one, else wire.yaw − π/2 [M 0x197130 `if (fStack_12c < fStack_11c)`].
         let old = self.yaw;
         let mut new_yaw = w.yaw - std::f32::consts::FRAC_PI_2;
-        if wrap_pi(new_yaw - old).abs() > std::f32::consts::FRAC_PI_2 { new_yaw += std::f32::consts::PI; }
+        if w.wire_type == 2 {
+            if a[1] < b[1] { new_yaw = w.yaw + std::f32::consts::FRAC_PI_2; }
+        } else if wrap_pi(new_yaw - old).abs() > std::f32::consts::FRAC_PI_2 {
+            new_yaw += std::f32::consts::PI;
+        }
         self.yaw = new_yaw;
         self.pos = [closest[0], closest[1], closest[2]];
         if w.wire_type == 2 {
@@ -1512,14 +1508,13 @@ impl Bond {
     /// (60), `AnimObj[99] = [100]` (the Sim's carry) and the channel 0. Otherwise: the ride anim
     /// 0x06000096 re-added whenever stopped, the FULL-radius pitch segment, Bond's y lifted 1.17363 for
     /// the lower-end test — within 1.0 of it → mode 9 + anim 0x06000094 — then pos = the closest point
-    /// at `closest.y − 1.17363` and the fall-speed accumulator `BLData+0x18 += FRAME_RATE_MUL·0.15`
-    /// (the port integrates it as a downward velocity: the game's `Player_Move` writes BLData+0x18
-    /// as the local velocity's FORWARD lane [M 0x191dd0:167] and the integration applies the +0x10
-    /// quad along the matrix rows [M 0x193600:284-295]; the zipline accumulates it at 0.15/tick
-    /// [M 0x197f50:121]). The ride is unreachable in the shipped game — both live wires are type 0
-    /// [D placements probe, grab_wire's census] — so the port's downward integration is
-    /// dead-in-shipped-play bookkeeping; the clamp projects the fall onto the line, so Bond slides
-    /// down a sloped zipline and accelerates.
+    /// at `closest.y − 1.17363`, and `BLData+0x18 += FRAME_RATE_MUL·0.15` [M 0x197f50:121]. +0x18 is the
+    /// FORWARD lane of the local velocity [M 0x191dd0:167]; `Player_Update` zeroes the whole quad at
+    /// the top of every live tick (obj+0xF4 == 1 — the object state, not the substate [M disasm
+    /// 0x1937e0 `lh v1,244(s3)`, 0x193830 `Vec_Zero(BL+0x10)`]) and adds it along the object's matrix
+    /// rows after the dispatch [M 0x193600:284-295]. So the ride is a constant 0.15 per tick along
+    /// the facing, which the next tick's projection folds back onto the line. The live zipline is
+    /// 07000008's #19 [D p1 = 2].
     fn zipline_tick(&mut self, world: &CollisionWorld, ctx: &LadderCtx, _input: &Input) {
         let wi = match self.wire {
             Some(wi) if ctx.wires.get(wi).is_some() => wi,
@@ -1537,35 +1532,27 @@ impl Bond {
             }
             return;
         }
-        if self.wire_anim_advance(ctx) && self.wire_anim != 0x0600_0094 {
+        if self.wire_anim_advance(ctx) {
             self.wire_anim_add(0x0600_0096, 1.0, 0.0, self.pos, 0.0);
         }
         let (a, b) = wire.zipline_segment();
         // The lower-end test runs on the LIFTED position (the decompile lifts Bond's y onto the wire
-        // first [M 0x197ff8: `pos.y += 1.17363`], checks `Dist3D(pos, lower) < 1.0`, and only then
-        // re-projects and hangs him back 1.17363 below the line).
+        // first [M 0x197ff8: `pos.y += 1.17363`], checks `Dist3D(pos, lower) < 1.0`, and falls
+        // through to the same tick's projection and lane write [M 0x197f50:109-121]).
         let lifted = [self.pos[0], self.pos[1] + 1.17363, self.pos[2]];
         let low = if a[1] < b[1] { a } else { b };
         if dist3_sq(lifted, low) < 1.0 {
             self.mode = 9;
             self.wire_anim_add(0x0600_0094, 1.0, 0.0, self.pos, 0.0);
-            return;
         }
-        // The fall-speed accumulator `BLData+0x18` [M 0x19804c-0x198054: += FRAME_RATE_MUL·0.15 per
-        // tick. The game's `Player_Move` writes BLData+0x18 as the forward lane of the local velocity
-        // [M 0x191dd0:167] and the integration applies the +0x10 quad along the matrix rows
-        // [M 0x193600:284-295]. The port applies it downward for the zipline ride (unreachable in
-        // the shipped game — both live wires are type 0 [D placements probe]). The clamp below
-        // projects the ride onto the line, so Bond slides down a sloped zipline and accelerates.
-        self.fall_speed += 0.15;
-        // The same write lands on the RETAINED quad (the game's Vec_Zero pair is walk-ticks-only
-        // [M 0x193600:129-134]) — [M 0x197f50:121 `+0x18 += fVar7·0.15`]: the guards' moving test
-        // reads a riding Bond as moving.
-        self.move_local[1] += 0.15;
-        self.pos[1] -= self.fall_speed / 60.0;
-        let lifted = [self.pos[0], self.pos[1] + 1.17363, self.pos[2]];
         let closest = Wire::closest_point(a, b, lifted);
         self.pos = [closest[0], closest[1] - 1.17363, closest[2]];
+        // The forward lane and its integration (see the doc above). The quad starts each game tick at
+        // zero, so the guards' moving read sees exactly this lane [M 0x179a48:34-41].
+        self.move_local = [0.0, 0.15];
+        let (sin, cos) = self.yaw.sin_cos();
+        self.pos[0] += 0.15 * sin;
+        self.pos[2] += 0.15 * cos;
     }
 
     /// `Player_InWater` 0x195e50 [M]: with a water cel and `pos.y − 0.3 < surface`, enter the swim

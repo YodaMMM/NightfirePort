@@ -102,8 +102,11 @@ and a hand-offset correction from anim 0x4000536 frames 0/0x170 (−0.082 x rota
 7. **No RNG calls** [M grep of all 12 wire/grapple decomp files]. No direct sounds (music event 0xD
    only; the ChangeSubState(6) entry stops looped sounds once).
 
-Zipline (`Player_Zipline` 0x197f50, substate 0xF): loops anim 0x6000096, accumulates fall speed
-`BLData+0x18 += FRAME_RATE_MUL·0.15` per tick; within 1.0 of the lower end → mode 9 + anim
+Zipline (`Player_Zipline` 0x197f50, substate 0xF; the live one is 07000008's #19): loops anim
+0x6000096, adds `FRAME_RATE_MUL·0.15` to the forward lane `BLData+0x18`. `Player_Update` zeroes that
+quad at the top of every live tick (obj+0xF4 == 1 [M disasm 0x1937e0, 0x193830]), so the ride is a
+constant 0.15 per tick along the facing, projected back on the line next tick. The grab faces the
+rider down the slope. Within 1.0 of the lower end → mode 9 + anim
 0x6000094; when that anim stops → `ChangeSubState(0)`, cam 0, `+0x951 = (u8)FRAME_RATE`, channel 0.
 
 ## The grapple [M]
@@ -150,7 +153,7 @@ No RNG [M grep].
 | off | type | meaning | writers | readers |
 |---|---|---|---|---|
 | +0x10..0x1F | 4×u32 | wish/physics velocity triple (zeroed each tick by `Player_Update`) | Player_Update, Player_Move | SSGrapple commit |
-| +0x18 | f32 | fall-speed accumulator (zipline `+= FRAME_RATE_MUL·0.15`; creep drop `+= 0.05`) | Zipline, Creep | Player_Move [S] |
+| +0x18 | f32 | forward lane of the local velocity (zipline `+= FRAME_RATE_MUL·0.15`; creep drop `+= 0.05`) | Zipline, Creep | Player_Move [S] |
 | +0x20..0x2F | 4×u32 | applied velocity (commit target) | SSGrapple | movement [S] |
 | +0x130 | u8 | = 2 on wire/creep-wall grab | CollWire, CollCreepWall | unverified |
 | +0x140..0x14C | VECTOR | grapple target point | SetGrapplePoint, SSGrapple carry | SSGrapple, GrappleSetRope |
