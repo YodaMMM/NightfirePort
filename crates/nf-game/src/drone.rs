@@ -12200,7 +12200,15 @@ pub fn player_hit_damage(t: &nf_formats::tuning::Tuning, level: u32, raw: f32, w
 /// `segment_in_sets_drop_pass_glass`), so `segment_bullet`'s first stop is the real scenery
 /// behind the breakable — never the breakable's own mesh — and the bounds contact (grown 0.1)
 /// always fires at or before it.
-const BREAK_WORLD_STOP: bool = true;
+/// The pane-collision ride's switch (drone.rs's `pane_parts` block): the pairing and the
+/// machinery are proven and landed (world.rs's PANE_PART ray skip, the census), and the 08/09
+/// batteries run green with it on — but the 07000001 real-damage walks' guard-melee cascade
+/// under the panes' capsule solidity is not settled (the report's Live checks), so master's
+/// walks stay green with the ride off. The world stop rides the same switch: with the meshes
+/// out of the ray sets the bounds contact always fires at or before the scenery stop; with
+/// them still static the 07000007 point-blank vase pathology returns.
+const PANE_RIDE: bool = false;
+const BREAK_WORLD_STOP: bool = PANE_RIDE;
 
 pub struct Drones {
     pub list: Vec<Drone>,
@@ -15046,7 +15054,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // before its bounds at 0.058) is gone with the ride.
                     else if BREAK_WORLD_STOP && !tstop.is_none_or(|ts| t <= ts) { contact = None; }
                 }
-                if let Some((t, i)) = contact {
+                if let Some((_, i)) = contact {
                     // The round dies on the first solid object hit — the glass absorbs it
                     // [M 0x12cff0-4]; nothing behind it scores or stops it this tick.
                     // EXCEPT the glass panes: the game's walk (Collide_Update 0x1ea398:216-229,
@@ -15067,15 +15075,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         .is_some_and(|w| u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0);
                     if !glass_pass { b.dead = true; }
                     br.health -= contact_dmg;
-                    // The contact registers its world impact AT the sheet — the game's
-                    // Effect_Create runs on the breakable contact for PASS and STOP alike
-                    // [M Bullet_CollisionHandler 0x12ce80 0x12d0a0..0x12d0d0 — the HITDATA
-                    // position; both the pass arm (LAB_0012d020) and the stop arm
-                    // (LAB_0012cff0) converge on the call] — the accuracy scenery hit rides
-                    // the same world-hit fold (fix-progress).
-                    let ct = [b.pos[0] + (end[0] - b.pos[0]) * t, b.pos[1] + (end[1] - b.pos[1]) * t, b.pos[2] + (end[2] - b.pos[2]) * t];
-                    self.player_impacts.push(PlayerImpact::World(ct));
-                    self.progress.log_shot_hit_scenery(self.mission.status());
                     if br.health < 0.0 {
                         // fx-broken-object-bark: the bullet kill is the one `Break_Kill` entry whose
                         // hitdata +0x58 is the BULLET (kind 5 [M 0x12c5a0:87]) from the PLAYER's
@@ -19316,7 +19315,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // BEFORE Break_Kill takes the collision away (the contact list is the collide pass's
             // product, Break_Update walks it same tick), so the tick's deferred HITDATA re-trace
             // still sees the sheet.
-            // RIDDEN (pane-collision-pairing): the parts join the set below, carrying the
+            // RIDDEN (pane-collision-pairing): the GLASS panes join the set below, carrying the
             // PANE_PART id bit (world.rs) — the RAY sets skip them (the game's ray walks are
             // per-cel object walks a cross-room pane never joins [M Collide_LineOfSight 0x1edf50
             // → Collide_RayIntersect 0x1ec690 → Collide_PickObj 0x1eae80]) while the CAPSULE
@@ -19331,11 +19330,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // prints the parts next to the placements on 01/09/0a/0b/14 (0b has no 0x20 rows at
             // all) — every row's part lands exactly on its placement bounds, all rows the game
             // creates, no static double — and the census assertion holds over every SP level.
-            let pane_parts: Vec<(u64, u32, nf_formats::anim::Mat4)> = drones.breaks.list.iter().enumerate()
-                .filter(|(_, b)| (!b.dead || b.dead_frame == drones.frame) && b.shape_key != 0)
-                .map(|(k, b)| (crate::world::PANE_PART | k as u64, b.shape_key, b.matrix))
-                .collect();
-            if !pane_parts.is_empty() { parts.extend(pane_parts); }
+            // The census also found the rows whose target object is NOT a pane: kind 0/1 (the
+            // 07000001 museum-hall props stand on the walkable floor, 96–434-tri objects) — the
+            // game's pane laws here (solid while alive, out when killed, the class-5 damage
+            // arms) are read and pinned for the kind-2 glass [D params; M 0x12c230:21], so the
+            // ride takes the kind-2 rows; a prop row keeps master's out-of-world status quo
+            // [S unverified: the props' movement solidity is not proven either way, and making
+            // them solid re-routes every 01 walk]. One rule for script and placed panes: the
+            // script-entity arm above keeps the same dead/death-tick grace, and a script pane's
+            // row is kind-2 the same way (the gondola's windows ride it).
+            if PANE_RIDE {
+                let pane_parts: Vec<(u64, u32, nf_formats::anim::Mat4)> = drones.breaks.list.iter().enumerate()
+                    .filter(|(_, b)| b.kind == 2 && (!b.dead || b.dead_frame == drones.frame) && b.shape_key != 0)
+                    .map(|(k, b)| (crate::world::PANE_PART | k as u64, b.shape_key, b.matrix))
+                    .collect();
+                if !pane_parts.is_empty() { parts.extend(pane_parts); }
+            }
             // The rigid bodies (rigid-body-wiring): the kind-0xD8 props collide at their live
             // obj+0x90 matrix (`Collide_PickObj` walks the cel-linked objects; RB_Create's
             // build_LinkToRoom links the body into the room's cel chain [M 0x1d6bf0]). Id:
