@@ -40,7 +40,7 @@ pub type Mat4 = [[f32; 4]; 4];
 /// `FRAME_RATE` (0x30d0d0) while the level is being built: the doors are created at load and the fallback speed
 /// 1/30 measures 0.03333 in the snapshot [L], although the global reads 60.0 during play (the video rate is set
 /// after loading; the auto-close below uses the play value).
-const CREATE_FRAME_RATE: f32 = 30.0;
+pub(crate) const CREATE_FRAME_RATE: f32 = 30.0;
 /// `FRAME_RATE_INT` (60 during play) × 6: ticks an open door waits before it closes on its own.
 const AUTO_CLOSE: u32 = 360;
 /// `Door_Activate`'s wrong-side margin (0x3e99999a).

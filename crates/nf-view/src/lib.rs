@@ -2066,8 +2066,12 @@ fn posed_vertices(scene: &scene::Scene, choice: Option<usize>, time: f32, opts: 
 fn dead_destroy_centres(scene: &scene::Scene) -> Vec<[u32; 3]> {
     let Some(sim) = scene.sim.as_ref() else { return Vec::new() };
     scene.destroy_centres.iter()
-        // The pair carries the leaf's PLACEMENT index, not its slot in `props.destroy`.
-        .filter(|(_, pl)| sim.drones.props.destroy.iter().any(|d| d.placement == *pl && d.dead))
+        // The pair carries the leaf's PLACEMENT index, not its slot in `props.destroy`. The gate
+        // is the SMASH (`latched`), not the class-1 death: `Destroy_Smash` 0x12bb60:26-28 runs
+        // the `Control_SetGList` swap itself, while a p6 ≠ 0 leaf keeps class 0x21 (undead)
+        // until the countdown fires — 07000014's 17 such rows [D placement_param_census_live]
+        // must show the wreck from the smash tick on. For p6 = 0 the two flags set together.
+        .filter(|(_, pl)| sim.drones.props.destroy.iter().any(|d| d.placement == *pl && d.latched))
         .map(|(c, _)| c.map(f32::to_bits))
         .collect()
 }
@@ -2079,7 +2083,7 @@ fn dead_destroy_centres(scene: &scene::Scene) -> Vec<[u32; 3]> {
 fn wreck_draw_centres(scene: &scene::Scene) -> Vec<[u32; 3]> {
     let Some(sim) = scene.sim.as_ref() else { return Vec::new() };
     scene.destroy_wrecks.iter()
-        .filter(|(_, pl)| sim.drones.props.destroy.iter().any(|d| d.placement == *pl && d.dead))
+        .filter(|(_, pl)| sim.drones.props.destroy.iter().any(|d| d.placement == *pl && d.latched))
         .map(|(c, _)| c.map(f32::to_bits))
         .collect()
 }

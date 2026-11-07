@@ -13,7 +13,11 @@
 //!   health (+0x04 = placement param 3 [M 0x12c318:36]); at health < 0 it writes
 //!   `switch_channels[tag+0x12] = 1` (tag+0x12 = placement param 0 [M 0x12c318:35]) and smashes.
 //!   The 0700000d "C5" doors (#93/#96 `bigdoor01/02`) carry ch 0x1f and health 1000/10000
-//!   [D placements; Destroy_Update 0x12c4f8's p6 countdown arm is not ported — inert there, p6 = 0].
+//!   [D placements; Destroy_Update 0x12c4f8's p6 countdown arm is inert there, p6 = 0 [D the
+//!   census] — it is LIVE on 07000014 (17 non-zero p6 rows [D placement_param_census_live])
+//!   and IS ported: `Destroy.countdown` (p6 · −30 at create [L the load-time FRAME_RATE]),
+//!   negated by the smash, counted down by `channel_kills`' first arm — the death channel
+//!   fires p6·30 ticks after the smash].
 //!   The second arm IS ported (`Destroy::kill_channel`, `Props::channel_kills`): every tick a live
 //!   destroyable whose +0x10 word (placement param 1 [M 0x12c318:36 — `piVar1+4 = tag+0x30`]) names
 //!   an ON channel smashes (the word then clears [M 0x12c4f8:32]). It is inert on 0700000d (no
@@ -90,6 +94,20 @@ pub struct Destroy {
     /// Tick scratch: a class-5 contact whose weapon is 0x67 reached this leaf this tick (the
     /// colour step's drop half [M 0x12bd48:32-34]). Cleared by `destroy_colour_tick`.
     pub hit67: bool,
+    /// `tag+0x17` — `Destroy_Smash`'s one-shot latch [M 0x12bb60:17-20]: the first smash sets it
+    /// and every later call returns at once. A p6-smashed leaf latches WITHOUT dying (the class
+    /// byte stays 0x21 until the countdown fires), so the draw-side model swap rides THIS flag
+    /// (the game's `Control_SetGList` swap runs inside the smash [M 0x12bb60:26-28]), not `dead`.
+    pub latched: bool,
+    /// `tag+0x0C` — the post-smash countdown [M `Destroy_Create` 0x12c318:57 stores
+    /// `(int)(param6 · −FRAME_RATE)`; `Destroy_Smash` 0x12bb60:31 negates it; `Destroy_Update`
+    /// 0x12c4f8:17-25 decrements it while > 0 and at 0 fires the output channel + reclasses to 1].
+    /// FRAME_RATE reads 30 during the load (the doors' `CREATE_FRAME_RATE` [L door.rs — the 1/30
+    /// fallback measured in the snapshot]), so the scale is 30 ticks per p6 unit. Old code left
+    /// p6 unread — "inert" held only for 0700000d (p6 = 0 there); the census pins 17 non-zero
+    /// rows on 07000014, max 10 [D placement_param_census_live]. A p6 ≠ 0 leaf's channel write
+    /// happens p6·30 ticks AFTER its smash — the 07000014 generator cascade staggers per link.
+    pub countdown: i32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -171,7 +189,11 @@ impl Props {
                 0xe1 => props.destroy.push(Destroy { placement: i, pos: p.translation, sphere: object_radius(level, m, p), lo, hi, channel: param(0) as u8, health: param(3) as f32, dead: false, kind: (param(2) & 0xff) as u8, blast_damage: param(5) as f32 * 0.01,
                     kill_channel: param(1) as u16,
                     mask: (param(4) == 0).then_some(0).unwrap_or(!(param(4) as u16)),
-                    colour: [0xff, 0xff], hit67: false }),
+                    colour: [0xff, 0xff], hit67: false,
+                    // `(int)((float)param6 * -FRAME_RATE)` [M 0x12c318:57] with the load-time
+                    // FRAME_RATE 30 [L door.rs CREATE_FRAME_RATE].
+                    countdown: ((param(6) as f32) * -crate::door::CREATE_FRAME_RATE) as i32,
+                    latched: false }),
                 // `GunImp_Create` 0x131f20 (placement 0x34, class 0x47): the SP arm mounts the
                 // TurretGuns[0xb] hardware (the laser) [M 0x131f20:52-63]; the base transform is
                 // `Quat_QuatToMat` on the placement's +0x24 quaternion with `Mat_SetTrans` writing
@@ -269,20 +291,28 @@ impl Props {
         }
     }
 
-    /// `Destroy_Smash` 0x12bb60's death half for leaf `i`: the one-shot latch, the dead mark
-    /// (obj+0xff = 1 [M :33/:41]), the channel write `switch_channels[+0x12] = 1` [M :40 — the
-    /// same write `Destroy_CollisionHandler` 0x12bd48:42 reaches through the bullet-contact path]
-    /// and the type-script blast [M :58-76: kind 1 → 0x6000027 ×4, kind 2 → 0x600004f ×2, other
-    /// non-zero → 0x6000052 ×3; the port keeps its established radius/damage stand-ins, see the
-    /// bullet_hit note]. Returns the blast tuple the caller queues.
+    /// `Destroy_Smash` 0x12bb60's death half for leaf `i`: the one-shot latch [M :17-20], the
+    /// countdown negation [M :31 `piVar1[3] = -iVar2` — the create value is negative, so the
+    /// smash ARMS the count], the dead mark (obj+0xff = 1 [M :33/:41]) and the channel write
+    /// `switch_channels[+0x12] = 1` [M :40] — that write happens NOW only when the negated
+    /// countdown lands on 0 (p6 = 0); a p6 ≠ 0 leaf defers it to `Destroy_Update`'s count
+    /// (channel_kills' first arm) and keeps class 0x21. Then the type-script blast [M :58-76:
+    /// kind 1 → 0x6000027 ×4, kind 2 → 0x600004f ×2, other non-zero → 0x6000052 ×3; the port
+    /// keeps its established radius/damage stand-ins, see the bullet_hit note]. Returns the
+    /// blast tuple the caller queues.
     pub fn smash(&mut self, i: usize, ch: &mut Channels, frame: u32) -> Option<(V3, f32, f32, u8)> {
         let d = self.destroy.get_mut(i)?;
-        if d.dead { return None; }
-        d.dead = true;
-        // The channel-0 arm [M 0x12bb60:34-37]: a tag whose channel word is 0 only flips
-        // obj+0xff (the class byte) — no switch_channels write. The write is the else arm's
-        // (0x12bb60:40), for a non-zero channel.
-        if d.channel != 0 { ch.set(d.channel as u32, 1, frame); }
+        if d.latched { return None; }
+        d.latched = true;
+        // The negation [M 0x12bb60:31]. The channel-0 arm [M :33-37] only reclasses; the
+        // non-zero-channel arm fires + reclasses only when the negated word reads 0 [M :39-41].
+        d.countdown = -d.countdown;
+        if d.channel == 0 {
+            d.dead = true;
+        } else if d.countdown == 0 {
+            ch.set(d.channel as u32, 1, frame);
+            d.dead = true;
+        }
         if d.kind == 0 { return None; }
         // The box centre stands in for the object's position; a leaf without bounds (the C5
         // pair's bigdoor01) has none, so it blasts at its placement — at the box's (0,0,0) its
@@ -328,6 +358,14 @@ impl Props {
                     // contact and reaches the death through `Destroy_Smash` — the channel write
                     // and the blast are the smash's [M 0x12bb60:40,:58-76]. The handler RETURNS
                     // here, so the death tick skips the colour step (the freeze at death).
+                    // The handler's own arm [M 0x12bd48:41-49] runs first: a channel-armed leaf
+                    // with a NON-ZERO countdown flips its sign (the smash's negation then
+                    // restores the create value — a first p6 ≠ 0 bullet death leaves the count
+                    // unstarted, exactly as the decompile's double flip reads); the countdown-0
+                    // fire is the smash's (the port keeps the single write of the pair).
+                    if self.destroy[i].channel != 0 && self.destroy[i].countdown != 0 {
+                        self.destroy[i].countdown = -self.destroy[i].countdown;
+                    }
                     if let Some(s) = self.smash(i, ch, frame) { smashes.push(s); }
                 }
             }
@@ -351,21 +389,39 @@ impl Props {
         }
     }
 
-    /// `Destroy_Update` 0x12c4f8's second arm (30-35): every tick a live destroyable whose +0x10
-    /// word names an ON channel smashes and the word clears. The smash is the game's full
-    /// `Destroy_Smash` 0x12bb60 [M 0x12c4f8:35], so it WRITES the tag's death channel
-    /// `switch_channels[+0x12] = 1` for a non-zero channel [M 0x12bb60:40] — the same write the
-    /// bullet path's smash makes. On 07000014 the generator-hall cascade runs through exactly
-    /// those writes: box #726 (kill ch 0x51, death 0x52 [D the census]) → GENERATORS_Intact #1113
-    /// (kill 0x52, death 0x4e) → box #727 (kill 0x4e, death 0x53) → generator #1152 (0x5c) → box
-    /// #728 (0xaf) → generator #1154 (0x5a) → box #730 (0xc9) → generator #1153 (0x5b) → box #729
-    /// (kill 0x5b, death **0x85** — Door_Slide_11A/B's lock channel [D placements; M 0x1363c8
-    /// reads +0x68]). The walk order is the control walk's newest-first object order [M
-    /// 0x1336f8:54-68, the order drone.rs' dispatch sorts by], so one cascade link propagates
-    /// per tick. Returns the same blast tuples as `bullet_hit`.
+    /// `Destroy_Update` 0x12c4f8 over the leaves, newest placement first (the control walk's
+    /// order). FIRST the countdown arm [M :16-28]: every live leaf whose output channel word
+    /// (p0) is non-zero ticks its count down while it reads positive and — landing on 0 —
+    /// fires `switch_channels[p0]` and reclasses to 1; the game RETURNS here while counting,
+    /// so the watch arm below only sees leaves whose count is ≤ 0 (or p0 = 0). A p6-smashed
+    /// leaf keeps class 0x21 — its update still runs — until this fires. THEN the watch arm
+    /// (30-35): every tick a live destroyable whose +0x10 word names an ON channel smashes and
+    /// the word clears. The smash is the game's full `Destroy_Smash` 0x12bb60 [M 0x12c4f8:35],
+    /// so for p6 = 0 it WRITES the tag's death channel `switch_channels[+0x12] = 1` for a
+    /// non-zero channel [M 0x12bb60:40] — the same write the bullet path's smash makes — and
+    /// for p6 ≠ 0 it arms the countdown instead. On 07000014 the generator-hall cascade runs
+    /// through exactly those writes: box #726 (kill ch 0x51, death 0x52 [D the census]) →
+    /// GENERATORS_Intact #1113 (kill 0x52, death 0x4e) → box #727 (kill 0x4e, death 0x53) →
+    /// generator #1152 (0x5c) → box #728 (0xaf) → generator #1154 (0x5a) → box #730 (0xc9) →
+    /// generator #1153 (0x5b) → box #729 (kill 0x5b, death **0x85** — Door_Slide_11A/B's lock
+    /// channel [D placements; M 0x1363c8 reads +0x68]); the level's 17 non-zero p6 rows make
+    /// each link's death channel fire p6·30 ticks after its smash (census max 10 → 300 ticks),
+    /// the stagger the old code collapsed. The walk order is the control walk's newest-first
+    /// object order [M 0x1336f8:54-68, the order drone.rs' dispatch sorts by]. Returns the
+    /// same blast tuples as `bullet_hit`.
     pub fn channel_kills(&mut self, ch: &mut Channels, frame: u32) -> Vec<(V3, f32, f32, u8)> {
         let mut smashes = Vec::new();
         for i in (0..self.destroy.len()).rev() {
+            // The countdown arm [M 0x12c4f8:16-28]: p0 armed + count positive → tick; 0 lands
+            // the channel write + the reclass; the return skips the watch arm this tick.
+            if self.destroy[i].channel != 0 && self.destroy[i].countdown > 0 {
+                self.destroy[i].countdown -= 1;
+                if self.destroy[i].countdown == 0 {
+                    ch.set(self.destroy[i].channel as u32, 1, frame);
+                    self.destroy[i].dead = true; // obj+0xff = 1 [M 0x12c4f8:26]
+                }
+                continue;
+            }
             if self.destroy[i].dead || self.destroy[i].kill_channel == 0 { continue; }
             if !ch.on(self.destroy[i].kill_channel as u32) { continue; }
             self.destroy[i].kill_channel = 0; // the game clears the word [M 0x12c4f8:32]
@@ -383,7 +439,8 @@ mod tests {
         Props {
             subjects: vec![CamSubject { placement: 0, lo: [4.0, 7.0, -111.0], hi: [6.0, 9.0, -109.0], channel: 0x1c, hit: false }],
             destroy: vec![Destroy { placement: 1, pos: [0.0; 3], sphere: 0.0, lo: [133.0, 4.0, -270.0], hi: [137.0, 7.0, -268.0], channel: 0x1f, health: 100.0, dead: false,
-            kind: 1, blast_damage: 100.0, kill_channel: 0, mask: 0xffef, colour: [0xff, 0xff], hit67: false }],
+            kind: 1, blast_damage: 100.0, kill_channel: 0, mask: 0xffef, colour: [0xff, 0xff], hit67: false,
+            latched: false, countdown: 0 }],
             gunimps: Vec::new(),
         }
     }
@@ -539,8 +596,8 @@ mod tests {
         let mut p = Props::default();
         // Two tags: placement 0 kills on ch 5 and dies writing ch 6; placement 1 (newer) kills on
         // ch 6 and dies writing ch 7. A single pass after ch 5 rises smashes only the OLDER tag.
-        p.destroy.push(Destroy { placement: 0, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3], channel: 6, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 5, mask: 0, colour: [0xff, 0xff], hit67: false });
-        p.destroy.push(Destroy { placement: 1, pos: [0.0; 3], sphere: 0.0, lo: [2.0; 3], hi: [3.0; 3], channel: 7, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 6, mask: 0, colour: [0xff, 0xff], hit67: false });
+        p.destroy.push(Destroy { placement: 0, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3], channel: 6, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 5, mask: 0, colour: [0xff, 0xff], hit67: false, latched: false, countdown: 0 });
+        p.destroy.push(Destroy { placement: 1, pos: [0.0; 3], sphere: 0.0, lo: [2.0; 3], hi: [3.0; 3], channel: 7, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 6, mask: 0, colour: [0xff, 0xff], hit67: false, latched: false, countdown: 0 });
         let mut ch = Channels::default();
         ch.set(5, 1, 1);
         let s = p.channel_kills(&mut ch, 1);
@@ -549,5 +606,98 @@ mod tests {
         assert!(!p.destroy[1].dead, "the newer tag (checked first, newest-first) waits a tick [M 0x1336f8:54-68]");
         p.channel_kills(&mut ch, 2);
         assert!(p.destroy[1].dead && ch.on(7), "the cascade links one tick later");
+    }
+}
+// -- unread-params-doors: the p6 post-smash countdown (`Destroy_Create` 0x12c318:57,
+//    `Destroy_Smash` 0x12bb60:31, `Destroy_Update` 0x12c4f8:16-28) --
+
+#[cfg(test)]
+mod p6_tests {
+    use super::*;
+
+    /// A channel-armed tag with p6 = 100 (countdown −3000 at create [M 0x12c318:57 with the
+    /// load-time FRAME_RATE 30, L door.rs CREATE_FRAME_RATE]).
+    fn armed() -> Props {
+        Props {
+            subjects: Vec::new(),
+            destroy: vec![Destroy {
+                placement: 0, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3],
+                channel: 9, health: 10.0, dead: false, kind: 0, blast_damage: 0.0,
+                kill_channel: 5, mask: 0, colour: [0xff, 0xff], hit67: false,
+                latched: false, countdown: -3000,
+            }],
+            gunimps: Vec::new(),
+        }
+    }
+
+    /// The watch-arm smash arms the count instead of firing [M 0x12bb60:31,39-41]: no channel
+    /// write, no death, until `Destroy_Update`'s count lands on 0 — p6·30 ticks later
+    /// ([M 0x12c4f8:17-25]; the old code fired in the smash call — this test is red there).
+    #[test]
+    fn the_p6_countdown_defers_the_death_channel_by_p6_times_30_ticks() {
+        let mut p = armed();
+        let mut ch = Channels::default();
+        ch.set(5, 1, 1); // the watch channel rises
+        let s = p.channel_kills(&mut ch, 1);
+        assert!(s.is_empty(), "a kind-0 smash returns no blast [M 0x12bc50's kind gate]");
+        let d = &p.destroy[0];
+        assert!(d.latched, "the smash latched [M 0x12bb60:17-20]");
+        assert!(!d.dead, "a p6 ≠ 0 leaf keeps class 0x21 — no death yet [M 0x12bb60's non-zero arm]");
+        assert_eq!(d.countdown, 3000, "the smash negated the create value [M 0x12bb60:31]");
+        assert!(!ch.on(9), "the death channel did NOT fire in the smash tick [M 0x12bb60:39-41]");
+        // 2999 more ticks: still counting ([M 0x12c4f8:17-22's return-while-positive]) —
+        // the count reads 3000 at the smash, so the fire is the 3000th update after it.
+        for f in 2..3001u32 { p.channel_kills(&mut ch, f); }
+        assert_eq!(p.destroy[0].countdown, 1, "the count ticked 3000 → 1");
+        assert!(!ch.on(9) && !p.destroy[0].dead, "still counting after 2999 ticks [M]");
+        // The 3000th tick lands on 0: the channel fires and the leaf reclasses [M 0x12c4f8:23-26].
+        p.channel_kills(&mut ch, 3001);
+        assert!(ch.on(9), "the death channel fires when the count lands on 0 [M 0x12c4f8:23]");
+        assert!(p.destroy[0].dead, "the fire reclasses the leaf [M 0x12c4f8:25]");
+        // A second watch trigger does nothing (the leaf is dead; the game's class-1 update is gone).
+        let writes_before = ch.writes.as_ref().map(|w| w.len()).unwrap_or(0);
+        p.channel_kills(&mut ch, 3001);
+        assert_eq!(ch.writes.as_ref().map(|w| w.len()).unwrap_or(0), writes_before, "no re-fire");
+    }
+
+    /// The bullet path's double flip [M 0x12bd48:41-49 + 0x12bb60:31]: the handler flips the
+    /// non-zero count, the smash flips it back — a first bullet death leaves the count
+    /// unstarted and unfired; the NEXT bullet death (the latch keeps class 0x21 alive, so the
+    /// handler still runs) re-arms it and the count then runs to the fire.
+    #[test]
+    fn a_p6_bullet_death_leaves_the_count_unstarted_and_the_next_hit_rearms_it() {
+        let mut p = armed();
+        p.destroy[0].mask = 0;
+        let mut ch = Channels::default();
+        // The killing round through the box ([M 0x12bd48:31-49] — the health drains below 0).
+        p.bullet_hit([0.5, 0.5, 0.5], [0.5, 0.5, 0.5], 0x1e, 0x0020, 50.0, &mut ch, 1);
+        let d = &p.destroy[0];
+        assert!(d.latched && !d.dead, "smashed, not dead [M]");
+        assert_eq!(d.countdown, -3000, "the handler flip + the smash flip cancel [M the double negate]");
+        assert!(!ch.on(9), "no death write [M 0x12bb60:39-41]");
+        // A second round: the handler's flip runs again (the latch only gates the smash) —
+        // the count arms positive and the update then fires it 3000 ticks later [M].
+        p.bullet_hit([0.5, 0.5, 0.5], [0.5, 0.5, 0.5], 0x1e, 0x0020, 50.0, &mut ch, 2);
+        assert_eq!(p.destroy[0].countdown, 3000, "the second hit's handler flip re-arms [M 0x12bd48:47-49]");
+        for f in 3..3003u32 { p.channel_kills(&mut ch, f); }
+        p.channel_kills(&mut ch, 3003);
+        assert!(ch.on(9) && p.destroy[0].dead, "the re-armed count fires [M 0x12c4f8:23-25]");
+    }
+
+    /// p6 = 0 keeps the old behaviour bit for bit: the smash writes the channel and dies in
+    /// the same call ([M 0x12bb60:39-41] — the negated word lands on 0).
+    #[test]
+    fn a_p6_0_leaf_still_fires_in_its_smash_tick() {
+        let mut p = armed();
+        p.destroy[0].countdown = 0; // p6 = 0
+        p.destroy[0].kill_channel = 0;
+        let mut ch = Channels::default();
+        p.channel_kills(&mut ch, 1); // nothing armed; no-op
+        assert!(!p.destroy[0].latched, "the watch arm needs its channel");
+        p.destroy[0].kill_channel = 5;
+        ch.set(5, 1, 1);
+        p.channel_kills(&mut ch, 1);
+        assert!(ch.on(9) && p.destroy[0].dead && p.destroy[0].latched,
+            "the p6 = 0 smash fires + dies in the call [M 0x12bb60:39-41]");
     }
 }
