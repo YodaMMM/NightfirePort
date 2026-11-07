@@ -15,3 +15,14 @@ follow-up record/copter sweeps proved the class-0 arm a REAL gap — fixed in th
 PlayerBullet homing block (own commit) with the placement sweeps as the reachability
 proof; the live red/green harness is on the branch, ignored until the give draws the
 0x2e; the class-3 Bond arm is the slice still missing.
+
+## homing-copter-2
+
+Branch `s/homing-copter-2` from `origin/s/port-map-bullets` (70d0fbf04). Task: finish the
+arm — (1) the game seeks a copter body only while its obj+0xfc byte is non-zero; trace
+what writes it (SP_HideObj, the gate's first ON tick, Copter_Update 0x17dbb8), carry that
+state, and never let a hidden or gated copter be a homing candidate; red test for the
+dormant case. (2) Un-ignore `homing_copter_07000012_live`: drive the gate channel on the
+real level, equip through the path the level allows (pickups #2aa / #2f0), and show a
+fired round turning onto the body, red without the arm. Plus an audit of `Bullet_homing`
+0x12f358 past the target pick. Entry started.
