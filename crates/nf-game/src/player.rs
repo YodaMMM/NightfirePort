@@ -302,6 +302,18 @@ pub struct Input {
     /// goggle mode 0 → 1 (night) → 2 (x-ray) → 0 — unless the aim bit (+0x60 bit 0) is up.
     /// Keyboard: N. Local view state, not net-encoded (the `stabilise` precedent).
     pub goggles_action: bool,
+    /// The menu-select button's newly-pressed edge — the game's pad ✕ on the in-game pages:
+    /// the manager's edge dispatch plays the select sound (`Menu_PlaySound(0)` = sample 0x1da
+    /// [M `Label_Update` 0x218cb8's edge-1 arm; `Menu_PlaySound` 0x1f3278 case 0]) and sends
+    /// msg 0x4b to the control under the page cursor [M 0x218cb8] — the keypad page's digit
+    /// type [M `C_KEYPAD_Handler` 0x216810:8-22]. Keyboard: the view's mapping (the sim reads
+    /// the edge only). Local view state, not net-encoded (the `goggles_action` precedent).
+    pub keypad_confirm: bool,
+    /// The menu-back button's newly-pressed edge — the game's pad ○: the manager's edge-2
+    /// dispatch (`Menu_PlaySound(2)` → the same 0x1da sample [M 0x1f3278 case 2]) closes the
+    /// page; the lock's case-4 then reads the manager gone → state 0, re-armable
+    /// [M 0x1ae3d8:292-295]. Keyboard: the view's mapping. Local view state, not net-encoded.
+    pub keypad_back: bool,
 }
 
 /// level-0a-office-hatch-10 experiment switch: `NF_WALK_GHOST=1` drops the walk capsule's

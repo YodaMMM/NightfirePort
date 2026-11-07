@@ -13347,6 +13347,41 @@ impl Drones {
         self.keypad.as_ref().map(|(_, kp)| kp.display())
     }
 
+    /// The page cursor's point (the view draws it; the tests steer by it).
+    pub fn keypad_cursor(&self) -> Option<[f32; 2]> {
+        self.keypad.as_ref().map(|(_, kp)| kp.cursor())
+    }
+
+    /// The digit under the page cursor (the tests' steering read).
+    pub fn keypad_digit_under(&self) -> Option<u32> {
+        self.keypad.as_ref().and_then(|(_, kp)| kp.digit_under_cursor())
+    }
+
+    /// One tick of the armed keypad page's input — the game's in-game menu owns the pad while
+    /// the page stands: the analog cursor moves (`Menu_GetControl` 0x1f14f8 resolves the control
+    /// under the point each tick), the select edge types the digit under the cursor
+    /// (`C_KEYPAD_Handler` 0x216810:8-22 via the manager's msg-0x4b dispatch [M 0x218cb8]), the
+    /// back edge closes the page (the lock's case-4 Exists==0 arm → state 0, re-armable [M
+    /// 0x1ae3d8:292-295]). Both edges play the menu sound 0x1da [M 0x1f3278 cases 0/2]. The
+    /// cursor rate is [S] — 3.0 units/tick per full stick (the game's analog sensitivity is not
+    /// pinned); scene.rs routes this while `keypad.is_some()` and zeroes Bond's own input, the
+    /// monitor-viewing shape.
+    pub fn keypad_page_input(&mut self, input: &crate::player::Input) {
+        const CURSOR_RATE: f32 = 3.0; // [S unverified — see above]
+        let Some((_, kp)) = self.keypad.as_mut() else { return };
+        kp.move_cursor(input.strafe * CURSOR_RATE, -input.forward * CURSOR_RATE);
+        let select = input.keypad_confirm;
+        let back = input.keypad_back;
+        if select {
+            kp.select();
+            self.audio.play(0x1da); // Menu_PlaySound(0) [M 0x1f3278 case 0]
+        }
+        if back {
+            kp.close(); // the manager's back edge → the page closes [M 0x218cb8's edge-2 arm]
+            self.audio.play(0x1da); // Menu_PlaySound(2) → the same sample [M 0x1f3278 case 2]
+        }
+    }
+
     /// mayhew-end-transition: one tick of the exit hold — the fade counts down (the game advances
     /// it on the every-frame `Camera_UpdateAll` [M 0x1c9790 tail]) while the world stays frozen;
     /// returns true while the WORLD must skip this tick. The expiry tick stays frozen too: the
@@ -18038,8 +18073,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // lock [D]) —
         // and the NEXT tick's case 1 holds the out channel (the hold loop above; the game's
         // channel write lands one tick after the solve the same way). The page closed without a
-        // match → state 0, re-armable (the Keypad::close arm — the view owns the close; the sim
-        // keeps the page until solved).
+        // match (the back edge — keypad_page_input) → the manager gone, state := 0, re-armable
+        // [M 0x1ae3d8:292-295].
         if let Some((li, kp)) = self.keypad.as_mut() {
             if kp.tick() {
                 // The unlock sound `Sound_Play3D(record u16[2])` [M 0x1ae3d8:282-283]: placement
@@ -18049,6 +18084,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let pos = self.locks[*li].pos;
                 self.audio.play3d(snd, pos, None);
                 self.locks[*li].unlocked = true;
+                self.keypad = None;
+            } else if !kp.open {
+                // The page closed without a match (the back edge): the game's case-4 else-arm
+                // reads the manager gone → `+0x94a = 1`, state := 0 — re-armable [M
+                // 0x1ae3d8:292-295]. The port drops the page; the next use re-arms (the arm
+                // gate skips only the lock with a page standing).
                 self.keypad = None;
             }
         }

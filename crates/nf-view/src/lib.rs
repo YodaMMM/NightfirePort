@@ -5384,6 +5384,13 @@ impl App {
                                     // the key arms night sight on every on-foot level and then cycles
                                     // 1 → 2 → 0. The catch-all key arm lands V in `just`.
                                     goggles_action: self.just.remove(&KeyCode::KeyV),
+                                    // keypad-entry: the page's ✕/○ edges on the keyboard — Enter
+                                    // confirms (the FE's Confirm precedent [M menu.rs's keyboard
+                                    // action table]), Backspace backs (Escape pauses a mission;
+                                    // no clash). [S] the app's own key choice — the sim reads
+                                    // the lanes only.
+                                    keypad_confirm: self.just.remove(&KeyCode::Enter),
+                                    keypad_back: self.just.remove(&KeyCode::Backspace),
                                 };
                                 (input, self.trigger, self.just.remove(&KeyCode::KeyR), self.just.remove(&KeyCode::KeyE))
                             };

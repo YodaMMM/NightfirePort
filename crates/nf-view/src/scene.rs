@@ -2910,6 +2910,24 @@ impl Sim {
             self.use_key_prev = use_key;
             (Default::default(), false, false, use_key)
         } else { (input, trigger, reload, use_key) };
+        // keypad-entry: the armed keypad's page owns the pad while it stands — the game's
+        // in-game menu (MenuManager 0x80000003, page 0x40000021) reads the pad through the
+        // manager's edge dispatch [M `Label_Update` 0x218cb8: the select edge plays
+        // `Menu_PlaySound(0)` (sample 0x1da [M 0x1f3278 case 0]) and sends msg 0x4b to the
+        // control under the page cursor; the back edge closes the manager → the lock's case-4
+        // Exists==0 arm → state 0, re-armable [M 0x1ae3d8:292-295]]. The port routes the page
+        // input here and zeroes Bond's own input (the monitor-viewing shape above): the stick
+        // moves the page cursor ([S] the rate — drone.rs's `keypad_page_input`), ✕ types the
+        // digit under it, ○ closes. The page's draw is the view's (the live checks in the
+        // report); the sim holds the cursor and the machine (lock.rs `Keypad`).
+        let (mut input, trigger, reload, use_key) = if self.drones.keypad.is_some() {
+            self.drones.keypad_page_input(&input);
+            // The use edge dies with the rest: the page owns the pad — the arm gate skips the
+            // armed lock anyway, and no other use arm may fire under the menu [S the pad
+            // ownership; the monitor-viewing shape]. The use_key_prev bookkeeping below still
+            // records the held key, so the page-close's next use press is a fresh edge.
+            (Default::default(), false, false, false)
+        } else { (input, trigger, reload, use_key) };
         // fix-aim-raise: the aim BIT, not the raw button — a raise-script weapon defers it to the
         // raise's last tick. fix-aim-raise2: aim_gate owns the bit and the raise/lower advance+
         // finish (one advance); the QUEUE is the view chain's edge arm, which reads the RAW button

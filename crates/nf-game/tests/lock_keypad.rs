@@ -33,7 +33,11 @@ fn locks_init_table_shape_and_digit_domain() {
 #[test]
 fn keypad_digit_append_wraps_and_display_is_inclusive() {
     let mut kp = Keypad::arm([b'1', b'2', b'3', b'4'], false);
-    assert_eq!(kp.display(), "", "the armed display: nothing typed yet");
+    // keypad-entry FIX (the test was wrong): the count-0 display is the game's msg-0x51 refresh
+    // sprintf — the literal "****" — not an empty string [M 0x216810:24-29 `sprintf(&buf_250,
+    // &DAT_0030d330)`; the format bytes at 0x30d330 are `2a 2a 2a 2a 00` [D the ELF]]. The old
+    // assertion read "" — it predated the 0x51 arm's discovery.
+    assert_eq!(kp.display(), "****", "the armed display: the msg-0x51 refresh's four masks");
     kp.digit(7);
     assert_eq!(kp.display(), "7", "typed[0..=0] — the just-typed digit only [M the inclusive copy]");
     kp.digit(0);

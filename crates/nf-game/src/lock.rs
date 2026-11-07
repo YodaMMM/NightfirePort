@@ -340,6 +340,22 @@ impl KeyCodes {
     }
 }
 
+/// The keypad page's ten digit controls, def order — page 0x40000021's id-0x100000ba controls
+/// [D 07000003.bin / 07000005.bin (identical); the census test (`keypad_census.rs`) pins every
+/// census level's page to this table]. (x, y, w, h) in the page's 640×480 menu space; the
+/// authored digit value rides the control's post-header dword — `C_KEYPAD_Handler` types
+/// `'0' + *(control+0x20)` [M 0x216810:13], and the disc's ten controls carry exactly 1..9,0
+/// in the layout 1 2 3 / 4 5 6 / 7 8 9 / _ 0 _.
+pub const KEYPAD_DIGIT_RECTS: [(i16, i16, i16, i16); 10] = [
+    (268, 188, 34, 34), (304, 188, 34, 34), (339, 188, 34, 34),
+    (268, 223, 34, 34), (304, 223, 34, 34), (339, 223, 34, 34),
+    (268, 258, 34, 34), (304, 258, 34, 34), (339, 258, 34, 34),
+    (304, 293, 34, 34),
+];
+
+/// The digits behind `KEYPAD_DIGIT_RECTS`, same order [D the census dump].
+pub const KEYPAD_DIGIT_VALUES: [u32; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
+
 /// The in-game keypad mini-game — page 0x40000021 of the per-level menu def (kind-8 entry
 /// 08000001, page file-hash 0x80000003 [D census: present with control 0x100000ba in
 /// 07000003/05/08/09/0b/0c/0d/11/12/13/14/15/16/1b/23/25/26/27/28.bin]), created by
@@ -380,12 +396,21 @@ pub struct Keypad {
     pub open: bool,
     /// The match fired (`Lock_Unlock` ran) — the caller writes the lock's out channel + state 1.
     pub solved: bool,
+    /// The page cursor's point in the page's 640×480 menu space — the game's cursor is a SCREEN
+    /// POSITION the manager resolves against the control rects each tick (`Menu_GetControl`
+    /// 0x1f14f8: the selected control = the top-most non-hidden control whose rect contains the
+    /// point; the manager's cursor control carries the position at +0x24/+0x26 [M]). The port
+    /// starts it at the page centre [S unverified — the game's cursor home on page open is a
+    /// runtime state this port does not pin] and the input moves it (the analog cursor rate is
+    /// [S] too — 3.0 units/tick per full stick, scene.rs's routing).
+    pub cursor: [f32; 2],
 }
 
 impl Keypad {
-    /// `Lock_Update` case 3's arming [M 0x1ae3d8:176-190].
+    /// `Lock_Update` case 3's arming [M 0x1ae3d8:176-190]. The cursor starts at the page centre
+    /// [S unverified].
     pub fn arm(code: [u8; 4], code_shown: bool) -> Keypad {
-        Keypad { code, code_shown, typed: [b'*'; 4], cap: 4, count: 0, open: true, solved: false }
+        Keypad { code, code_shown, typed: [b'*'; 4], cap: 4, count: 0, open: true, solved: false, cursor: [320.0, 240.0] }
     }
 
     /// `C_KEYPAD_Handler` 0x216810 msg 0x4b — a digit button press. `d` is the button's
@@ -402,8 +427,12 @@ impl Keypad {
     /// The display string for the label control 0x10000075 (msg 0x18 set-text target
     /// [M 0x216810:13-22]): the game copies typed[0..=count_before] INCLUSIVE — the just-typed
     /// digit included, i.e. `typed[..count]` with the post-increment count — then NULs the tail.
+    /// At the count-0 open the game's msg-0x51 refresh sprintf's the literal `"****"` into the
+    /// same buffer [M 0x216810:24-29 — the format at 0x30d330 is the four masks], so the page's
+    /// resting display is the four masks.
     pub fn display(&self) -> String {
         let n = (self.count as usize).min(4);
+        if n == 0 { return "****".to_string(); }
         String::from_utf8_lossy(&self.typed[..n]).into_owned()
     }
 
@@ -434,6 +463,49 @@ impl Keypad {
     /// [M 0x1ae3d8:292-295]).
     pub fn close(&mut self) {
         self.open = false;
+    }
+
+    /// The page cursor's point (the view draws it; the input routes it).
+    pub fn cursor(&self) -> [f32; 2] {
+        self.cursor
+    }
+
+    /// One tick of cursor movement — the analog stick [S the rate: scene.rs's routing scales the
+    /// stick by 3.0 units/tick; the game's sensitivity constant is not pinned]. Clamped to the
+    /// page's 640×480 space.
+    pub fn move_cursor(&mut self, dx: f32, dy: f32) {
+        if !self.open { return; }
+        self.cursor[0] = (self.cursor[0] + dx).clamp(0.0, 640.0);
+        self.cursor[1] = (self.cursor[1] + dy).clamp(0.0, 480.0);
+    }
+
+    /// The digit under the cursor point — `Menu_GetControl`'s rect law over the digit controls
+    /// [M 0x1f14f8: the control whose rect contains the point; the port takes the first matching
+    /// digit in def order — [S] the game's tie-break on overlapping rects never fires on this
+    /// page, the ten rects are disjoint [D the census]].
+    pub fn digit_under_cursor(&self) -> Option<u32> {
+        if !self.open { return None; }
+        let (cx, cy) = (self.cursor[0], self.cursor[1]);
+        for (i, &(x, y, w, h)) in KEYPAD_DIGIT_RECTS.iter().enumerate() {
+            if cx >= x as f32 && cx < (x + w) as f32 && cy >= y as f32 && cy < (y + h) as f32 {
+                return Some(KEYPAD_DIGIT_VALUES[i]);
+            }
+        }
+        None
+    }
+
+    /// The select edge on the page: the digit under the cursor types (`C_KEYPAD_Handler`'s msg
+    /// 0x4b arm [M 0x216810:8-22 — the wrap at the cap, `typed[count]`, the display update,
+    /// count++]). Returns whether a digit sat under the cursor.
+    pub fn select(&mut self) -> bool {
+        if !self.open { return false; }
+        match self.digit_under_cursor() {
+            Some(d) => {
+                self.digit(d);
+                true
+            }
+            None => false,
+        }
     }
 }
 
