@@ -171,7 +171,8 @@ impl WeaponData {
     /// `Player_Init` (0x1910f8 lines 83-113): overrides `weapon_data[1]+0xDC` (the fists skin) with a
     /// level-specific value from the `PunchSkin.204` table at vaddr 0x2b9430 (4 u32 hashcodes). The static
     /// initialiser sets `weapon_data[1]+0xDC = 0x0500003d`; `Player_Init` overrides it per level [M].
-    /// Also sets `weapon_data[0x37]+0x05 = 1` (shares_base_clip for the variant).
+    /// Also sets `weapon_data[0x37]+0x05 = 1` (the twin/variant link; see `apply_player_init_mp_override`
+    /// for the readers). The single-player arm [M 0x1910f8:83-107, disasm 0x191358-0x191394].
     pub fn apply_player_init_override(&mut self, level_id: u32) {
         // PunchSkin.204 [L ee_start_05.bin @ 0x2b9430]: [0x050000ab, 0x05000099, 0x0500003d, 0x050000a1].
         const PUNCH_SKIN: [u32; 4] = [0x0500_00ab, 0x0500_0099, 0x0500_003d, 0x0500_00a1];
@@ -184,9 +185,49 @@ impl WeaponData {
         if self.records.len() > 1 {
             self.records[1][0xdc..0xe0].copy_from_slice(&PUNCH_SKIN[idx].to_le_bytes());
         }
-        // `weapon_data[0x37]+0x05 = 1` (shares_base_clip for the variant) [M Player_Init].
+        // `weapon_data[0x3999] = 1` [M 0x19138c `sb $v0, 0x3999($v1)`, $v0 = 1] — a single-BYTE store at
+        // weapon_data + 0x3999 = record 0x37 + 5 (0x37·0x10c = 0x3994).
         if self.records.len() > 0x37 {
             self.records[0x37][5] = 1;
+        }
+    }
+
+    /// `Player_Init`'s multiplayer arm [M 0x1910f8:108-113, disasm 0x191398-0x1913c4; runs when
+    /// `MPSettings+0x180` (Ghidra's decimal `MPSettings._384_4_`) != 0]: the MP match overwrites the SAME
+    /// two `weapon_data` fields the single-player arm writes, with the MP values. `weapon_data+0x1E8`
+    /// (record 1 + 0xDC, the fists' first-person skin — Ghidra's DECIMAL `weapon_data._488_4_`) =
+    /// 0x050000b0 [M 0x1913bc `sw $v1, 0x1e8($a0)` after `lui $v1, 0x0500 / ori $v1, 0xb0`], and
+    /// `weapon_data+0x3999` (record 0x37 + 5, the twin/variant link — one byte) = 2 [M 0x1913c4
+    /// `sb $a3, 0x3999($a0)`, $a3 = 2 from 0x1913a8]. weapon_data itself is at 0x2bf150 [M the
+    /// `lui $v1, 0x2c / addiu $v1, -0x0eb0` pair at 0x191378-0x191380 — the SP arm's same base].
+    ///
+    /// The MP arm's per-player half is NOT weapon_data: `AnimObjectNew(obj, MP_skins[row].skin)` [M
+    /// 0x1913d4] and `BLData+0x965 = MP_skins[row].sleeve` [M 0x1913e0], row = `MPSettings +
+    /// slot·0x30 + 0x24` — the port carries those in `nf_game::mp::slot_skin` and the scene's
+    /// `MpBody.sleeve`. 0x050000b0 is on none of the 29 `MP_skins` records [D ELF 0x26d488]; the MP
+    /// arenas' own archives carry it [D the mp_fists_skin_live scan]. The skin is NOT gated by
+    /// `MP_NeedSkin` (a hash on no `MP_skins` record loads unfiltered [M 0x120c48]).
+    ///
+    /// Readers of the two fields, so each gets the right value in a match: the +0x05 link's ~20
+    /// `!= 0` readers (`Player_AmmoIndex` 0x1a9148, `Player_RoundToFire` 0x1a18e0, `Player_WeaponFiring`
+    /// 0x1a5460, `Player_EquipWeapon` 0x1a8a58, `Player_EquipAmmo` 0x1a8d18, `Player_AmmoInGun`
+    /// 0x1a9190, `Player_ReloadAmmoType` 0x1a1988, `Player_SetFiringAnim` 0x1a3c70, the BOTWEAP_*
+    /// family 0x129d28/0x12a028/0x12a138/0x12a308/0x12a470/0x12ae40/0x12afa0 — docs/fields/
+    /// weapon_data.md:28) resolve the twin through the record's +0x02 short, but three read the VALUE
+    /// as an index offset: `Player_HandleHasNoAmmo` 0x1a2ba8:40 (`next = w + (s8)link` when +0x68 &
+    /// 0x10), `Player_LaserPointer` 0x1a65d8:100 and `Player_WeaponFiring` 0x1a5460:112 (both
+    /// `w + (s8)link`) — so 1 (SP) vs 2 (MP) selects different linked records. The port's readers:
+    /// `gun::fire_mode_switch` (`new = w + twin`, scene.rs's mode press) and `botweap::BotWeaponTable`
+    /// (`twin: r[5] != 0`). The +0xDC skin's readers: `Player_CheckWeaponsLoaded` 0x1a97c8 (the
+    /// loadout's hashtable gate), `Player_EquipWeapon` 0x1a8a58 (refuses an unloaded model),
+    /// `Player_WeaponFiring` 0x1a5460 (the first-person arms' anim object) and the port's
+    /// `botweap` fp/`loaded` lift + the view-model build.
+    pub fn apply_player_init_mp_override(&mut self) {
+        if self.records.len() > 1 {
+            self.records[1][0xdc..0xe0].copy_from_slice(&0x0500_00b0u32.to_le_bytes());
+        }
+        if self.records.len() > 0x37 {
+            self.records[0x37][5] = 2;
         }
     }
 

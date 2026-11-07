@@ -1037,7 +1037,15 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         // one the DroneContext consumes below; `--dev` used to run it twice).
         let elf = iso.read_file(iso.find("/ACTION.ELF").context("no ACTION.ELF on the disc")?)?;
         weapons_table = match nf_formats::weapon::WeaponData::from_action_elf(&elf) {
-            Ok(mut w) => { w.apply_player_init_override(u32::from_str_radix(&archive[..8], 16).unwrap_or(0)); Some(w) }
+            // Player_Init 0x1910f8:83-113 runs ONE arm by the MPSettings master enable: an MP match
+            // writes the MP fists skin 0x050000b0 + the 2 link over the same two fields the SP arm
+            // fills with its PunchSkin row + the 1 [M 0x191358-0x1913c4]. The menu/`--mp` loads carry
+            // the match settings (or the bare `--mp` flag builds the local default).
+            Ok(mut w) => {
+                if mp || mp_settings.is_some() { w.apply_player_init_mp_override(); }
+                else { w.apply_player_init_override(u32::from_str_radix(&archive[..8], 16).unwrap_or(0)); }
+                Some(w)
+            }
             Err(e) => { eprintln!("weapon_data: {e} — drones drawn unarmed"); None }
         };
         if let Some(wd) = weapons_table.as_ref() {
@@ -1068,7 +1076,12 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         None => match nf_formats::weapon::WeaponData::from_action_elf(&{
             iso.read_file(iso.find("/ACTION.ELF").context("no ACTION.ELF on the disc")?)?
         }) {
-            Ok(mut w) => { w.apply_player_init_override(u32::from_str_radix(&archive[..8], 16).unwrap_or(0)); Some(w) }
+            // The same one-arm pick as the merge path above [M Player_Init 0x1910f8:83-113].
+            Ok(mut w) => {
+                if mp || mp_settings.is_some() { w.apply_player_init_mp_override(); }
+                else { w.apply_player_init_override(u32::from_str_radix(&archive[..8], 16).unwrap_or(0)); }
+                Some(w)
+            }
             Err(e) => { eprintln!("weapon_data: {e} — drones drawn unarmed"); None }
         },
     };
