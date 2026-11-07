@@ -748,6 +748,11 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         // and answers the 24-hp captain at 4+ u, where the volley is the 4-u band's 21.6 and
         // the under-3.0-u rule is out of play [M DroneWeap_DoBulletAccuracy 0x179740:113-115]).
         for k in 0..4 {
+            // real-health-00agent-02-6 (lever 2, the k=0/k=1 headroom): the MEASURED ring — the
+            // 8.0 experiment REGRESSED the pool (55.2 vs 78.0 at the stair top [L the run-2
+            // trace]: the wider retreat walked Bond out of the corridor's line and the cascaded
+            // draws cost a full extra volley) — the 6.0 ring stays; the headroom lever is the
+            // ammo/position shape downstream, not the ring.
             w.dmg.back_off = Some(6.0);
             let di = {
                 let sim = w.scene.sim.as_ref().unwrap();
@@ -814,7 +819,13 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     ] {
         if name == "bunker door" {
             // Into the bunker with the fullest gun (the ch-0x81 ambush is next [D #389]).
-            arm_fullest(&mut w, "before the bunker");
+            // real-health-00agent-02-6: at 00 Agent the shotgun RIDES — the band stand at the
+            // door below fires the 0x1c first (8-pellet taps inside the ≤12-u band), and the
+            // arm_fullest wheel read here would swap it back for the 0x12 before the leg. The
+            // d1/d2 walks keep the rearm.
+            if difficulty < 3 {
+                arm_fullest(&mut w, "before the bunker");
+            }
         }
         if name == "west wing stair" && difficulty >= 3 {
             // 00 Agent (real-health-00agent-02-03-2): the courtyard sniper (weapon 0x1e) covers
@@ -844,6 +855,11 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
                 let _ = w.stand_and_fire(di, 1200);
                 w.dmg.aimed_fights = false;
                 status(&w, "the courtyard sniper from the stair top");
+                // real-health-00agent-02-6 (lever 1): the 0x1c shells are the band answer (run 2:
+                // ONE shell at 13.2 u took the 12-hp sniper to hp 2 [L the run-2 trace]) — but
+                // the arm happens at the STAIR BOTTOM, after the descent fights, so they burn
+                // the 0x12's rounds and not the shells (run 2 armed up here and the descent's
+                // captain fight ate 2 of the 4).
             }
         }
         if name == "courtyard lane" && difficulty >= 3 {
@@ -868,9 +884,24 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
                     .map(|(i, _)| i).next()
             };
             if let Some(di) = di {
-                w.dmg.aimed_fights = true;
-                let _ = w.stand_and_fire(di, 1200);
-                w.dmg.aimed_fights = false;
+                // real-health-00agent-02-6: the 61-tick lottery stand here is a MEASURED dead
+                // end — this tree's run stood at the lip (21 u) with aim Some from t0, err
+                // converged to 0.000 by t60, fired 25 rifle rounds into the slit and hit NOTHING
+                // (his hp pinned 12.0 t0→t180 [L the run-1 rf-trace]; the tap spread is 21
+                // [M Bullet_init 0x12c5a0:139-170 — the 0x12's 16 + the 5 bloom, no 0x400000
+                // record] = ±0.62 u at 21 u, and the wall eats every round off the sliver).
+                // Standing here also parked Bond inside shot 1 (+335) and shot 2 (+501) — the
+                // death. A player does NOT duel a slit at 21 u: he crosses FIRST and answers
+                // inside the ≤12-u band (the bunker door leg passes 10.3 u from the post
+                // [D placement (−52.05,6.34,−14.43) vs the door (−46.1,5.9,−23.2)]). Suppress
+                // the leg's own return fire on him until the door is reached — the crossing and
+                // the door leg walk CLEAN (the fight's 300-tick no-damage give-up and the
+                // failed-fight cooldown would otherwise park Bond mid-lane exactly as the
+                // lottery stand did).
+                let until = w.total_ticks + 1400;
+                w.dmg.cooldown.retain(|e| e.0 != di);
+                w.dmg.cooldown.push((di, until));
+                status(&w, "the lane crossing: the sniper answered from the band, not the lip");
             }
         }
         leg_to(&mut w, at, name, 1.6);
@@ -890,17 +921,31 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             // grabs it on the way — the crossing's return fire needs the rounds (the run-7
             // fight answered the sniper with 7 rounds and died dry).
             scoop_drops_within(&mut w, &format!("{name} drops"), 1, 8.0, 2.2);
+            // real-health-00agent-02-6 (lever 1): the shells ride from HERE — after the descent
+            // fights (they burn the 0x12's rounds, not the 0x1c's shells [L the run-2 trace:
+            // the stair-top arm lost 2 of 4 shells to the descent's captain]). Run 2's own
+            // measurement is the payoff: the leg's engage_in_view met the sniper EXPOSED at
+            // 13.2 u and one shell took him 12.0 → 2.0 — two shells kill him in the band
+            // without any stand. The arm's ~120 ticks still beat shot 1 (+335): the crossing
+            // reaches the mouth at ~+210 (run 2: 74 ticks bottom→mouth without the arm).
+            arm_weapon(&mut w, 0x1c, "the lane shotgun");
         }
         if difficulty >= 3 && name == "courtyard lane" {
-            // 00 Agent (real-health-00agent-02-03-2): the kills here (the sniper at the lane's
-            // mouth) drop their guns on the route and the fights behind ran DRY on the lane —
-            // the hp-5 rifle chaser finished a clip-0 Bond [L the 00agent-02-03-2 ledger]. A
-            // player low on rounds grabs what dropped before walking on (the file's own loot
-            // rule): one scoop, then the fullest gun — and the sniper answered from the mouth
-            // he is actually exposed from (the run-4/5/6 geometry: neither the stair top nor
-            // the bottom lip ever showed him; the lane does).
-            scoop_drops(&mut w, &format!("{name} drops"), 1);
-            arm_fullest(&mut w, &format!("{name} rearm"));
+            // real-health-00agent-02-6: NO dwell at the mouth — the old scoop+arm_fullest+duel
+            // hook walked Bond 4.3 u BACK EAST into the lane, cycled the wheel and dueled at
+            // 15.7 u, all inside shot 1's window; the shotgun is already in hand (the
+            // stair-bottom arm) and the 0x12 holds ~28 rounds behind it (the lip-drop take [L
+            // the run-1 trace: the take at d 0.5, +21 spare]). The band stand at the bunker
+            // door is the answer (10.3 u); every tick here is shot-1/shot-2 window.
+            status(&w, "the lane mouth: straight through, the shotgun rides");
+        }
+        if difficulty >= 3 && name == "bunker door" {
+            // real-health-00agent-02-6 (lever 1): the band stand. The door (−46.1,5.9,−23.2)
+            // stands 10.3 u from the sniper's post [D placement] — inside the ≤12-u band where
+            // the 02-03-2 ledger's own return fire killed him. The 0x1c's 8-pellet taps are the
+            // captor one-tap mechanic at this range; switch_dry (set at the geisha-1 loop)
+            // falls through to the 0x12's 28 rounds when the shells run out. The suppression
+            // from the lip expired on the walk in — this stand is the walk's own answer.
             let di = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let bp = sim.bond.pos;
@@ -911,10 +956,18 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             };
             if let Some(di) = di {
                 w.dmg.aimed_fights = true;
-                let _ = w.stand_and_fire(di, 1200);
+                let killed = w.stand_and_fire(di, 1200);
                 w.dmg.aimed_fights = false;
-                status(&w, "the lane-mouth sniper duel");
+                status(&w, &format!("the band stand at the door (killed {killed})"));
+            } else {
+                status(&w, "the band stand at the door: the sniper is already down");
             }
+            // real-health-00agent-02-6: the corridor rearm — the ambush (the ch-0x81 group
+            // [D #389]) fights run on the fullest gun (run 3: the shotgun's last shells burned
+            // on the corridor's in-view fights and the dry cycle ended at the cuffs [L the
+            // run-3 trace: "shooters [13, 15] none visible ... clip 0 spare 0", the 54.0
+            // volley at 11.7]). The sniper is down here — the arm's dwell is safe.
+            arm_fullest(&mut w, "after the band stand");
         }
     }
     {
