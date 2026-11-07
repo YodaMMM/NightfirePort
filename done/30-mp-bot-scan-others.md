@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-11-07T04:04Z
+
+---
+## Report (done, 2026-11-07T05:06Z)
+
+Closed by the driver: the report is on `s/mp-bot-scan-others` (docs/reports/mp-bot-scan-others.md); the worker didn't run finish.sh.
