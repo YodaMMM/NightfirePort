@@ -3217,7 +3217,8 @@ impl Sim {
             {
                 let head = self.bond.head();
                 let dir = self.bond.look();
-                if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, claw)) {
+                let world = &self.world;
+                if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, claw), |a, b| world.segment_bullet_clear_dynamic(a, b)) {
                     // The claw's latch clunk: `Bullet_Delete` 0x12e660:50-55 — the claw bolt (+0x70 &
                     // 0x40) dying on a class-'Q' (0x51) grapple object plays `Sound_Play3D(100, -1,
                     // -1, 0x28d, bullet+0xC0)` right before `Player_SetGrapplePoint` [M disasm $a0
@@ -14113,7 +14114,7 @@ impl Sim {
                     && nf_game::gadget::is_grapple(r[slot].held)
                 {
                     let (head, dir) = (b.head(), b.look());
-                    if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, r[slot].held)) {
+                    if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, r[slot].held), |a, b| self.world.segment_bullet_clear_dynamic(a, b)) {
                         b.grapple = Some(nf_game::gadget::GrappleState { point, phase: 1, pull: 0.0 });
                         b.change_substate(nf_game::player::SS_GRAPPLE);
                         b.vel = [0.0; 3];

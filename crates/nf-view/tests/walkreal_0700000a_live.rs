@@ -1286,10 +1286,9 @@ fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
         // the plate plays the May-Hatch line on EARLY approaches (ch 0x3A still off) and is dead
         // once the keyboard is done, which is the state this walk arrives in.
         assert!(!sim.drones.channels.on(0xb7), "the voice plate #757 is lock-disabled once ch 0x3A is on [M triggers.rs's lock gate]");
-        // The keyboard-lasers switch (#643, out ch 0x3B, gate ch 0x3C [D]) never fired: its gate
-        // has no writer in 0a's data [D trig/nis dumps] and the switch sits at the origin
-        // (placement transform [D]) — inert on fresh-boot data, asserted end-to-end here.
-        assert!(!sim.drones.channels.on(0x3b), "the keyboard-lasers switch stays inert through the whole route [D+M 0x1b02a8's gate check]");
+        // The keyboard-lasers switch (#643, out ch 0x3B, gate ch 0x3C [D]) is usable (nothing
+        // writes its gate) but this route never presses it: keyboard_lasers_0a_live covers the press.
+        assert!(!sim.drones.channels.on(0x3b), "the walk leaves the laser keyboard alone");
     }
     eprintln!("[0a] walked to the hatch in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
     for f in &w.report.falls { eprintln!("[0a] fall: {f}"); }

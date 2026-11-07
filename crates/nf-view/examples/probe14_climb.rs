@@ -35,7 +35,7 @@ fn main() {
                     from[2] + (gp[2] - from[2]) * t,
                 ]
             });
-            let pick = nf_game::gadget::pick_grapple_point(&sim.drones.grapple_points, from, dir, 60.0);
+            let pick = nf_game::gadget::pick_grapple_point(&sim.drones.grapple_points, from, dir, 60.0, |_, _| true);
             println!(
                 "  stand ({:.2}, {:.2}, {:.2}): ray len {:.2}; blocked {:?}; pick {:?}",
                 s[0], s[1], s[2], len, hit, pick

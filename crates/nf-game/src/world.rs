@@ -2237,6 +2237,18 @@ impl CollisionWorld {
         false
     }
 
+    /// `segment_bullet_clear` over the dynamic set alone: the script-posed parts (doors, lids,
+    /// SS panels), early-out.
+    pub fn segment_bullet_clear_dynamic(&self, from: V3, to: V3) -> bool {
+        let d = sub(to, from);
+        let dynamic = self.dynamic.read().unwrap();
+        let g = &dynamic.geo;
+        !match g.any_hit(from, to, &mut |o| obj_blocks(g, o, from, d, true)) {
+            Some(r) => r,
+            None => along(g, from, to).any(|o| obj_blocks(g, o, from, d, true)),
+        }
+    }
+
     /// First hit along `from → to`: the fraction in [0, 1] and the unit normal of the triangle hit (facing `from`).
     /// The player's GROUNDING variant: water surfaces (material 0xE) never ground him — the cel scoping
     /// of `Player_FeetOnPoint` 0x194188 (the ray tests only the current cel `obj+0x20`; the water planes

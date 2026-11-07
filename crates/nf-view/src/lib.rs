@@ -1564,11 +1564,17 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         // equals the saved block record (the exit save is the last writer before the load) and
         // on a death restart is the live record the serve carries (fail_restart_save). The
         // port's fresh Sim starts at the SSys_Init defaults, so the skip's "keep" is planted
-        // from the block first — then `ram_load`'s skip leaves it standing, byte-identical to
-        // the game's .data persistence.
+        // from the block first — then `ram_load`'s skip leaves it standing. The CHANNEL byte is
+        // not carried: this level's `Switch_Create` 0x1adcc0:29-31 stored #643's 0x3b into the
+        // same record during the load and the skip never touches it, so a run arriving from
+        // 07000009 (whose block holds 0xff there, no item-2 switch on that level) still reads
+        // 0x3b, as the load snapshot does [L ee_start_0700000a.bin @0x2befd0].
         if let Some(s) = save {
             if let Some(block) = s.ssys {
-                if level_id == 0x0700_000a { sim.drones.ssys.items[2] = block[1]; }
+                if level_id == 0x0700_000a {
+                    let channel = sim.drones.ssys.items[2].channel;
+                    sim.drones.ssys.items[2] = nf_game::ssys::SsysItem { channel, ..block[1] };
+                }
                 sim.drones.ssys.ram_load(&block, level_id);
             }
         }

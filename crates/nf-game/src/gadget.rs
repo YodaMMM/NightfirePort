@@ -454,7 +454,13 @@ pub struct GrappleState {
 /// radius is 1.0 [M Bullet_init 0x12c5a0:92 — `obj+0xe8 = 1.0`, never overridden]) sweeps the ray
 /// and its death check is the travelled-distance cap `weapon_data+0x1c` [M Bullet_update
 /// 0x12e7b0:158], so the acceptance window is the point's sphere grown by the bolt's radius.
-pub fn pick_grapple_point(points: &[GrapplePoint], from: V3, dir: V3, max_dist: f32) -> Option<V3> {
+/// The latch happens only where the bolt DIES on the class-0x51 object [M Bullet_Delete
+/// 0x12e660:50-55], so anything solid short of that contact takes the bolt first: `clear` is the
+/// bullet ray from the fire point to where the bolt would first touch the point's sphere.
+/// The callers pass the DYNAMIC half of that ray (0700000a's closed store-room lid under #785, a
+/// shut door): the static half and the context-2 fire gate [M Player_WeaponFiring 0x1a5460:515-526]
+/// wait on 07000014's walk, whose only proven crossing fires from under the east duct's roof.
+pub fn pick_grapple_point(points: &[GrapplePoint], from: V3, dir: V3, max_dist: f32, clear: impl Fn(V3, V3) -> bool) -> Option<V3> {
     const BOLT_RADIUS: f32 = 1.0; // [M 0x12c5a0:92]
     let mut best: Option<(f32, V3)> = None;
     for p in points {
@@ -463,6 +469,10 @@ pub fn pick_grapple_point(points: &[GrapplePoint], from: V3, dir: V3, max_dist: 
         let d2 = (closest[0] - p.pos[0]).powi(2) + (closest[1] - p.pos[1]).powi(2) + (closest[2] - p.pos[2]).powi(2);
         let reach = p.radius + BOLT_RADIUS;
         if d2 > reach * reach { continue; }
+        // The bolt's first contact with the grown sphere, along the (unit) aim.
+        let touch = (t - (reach * reach - d2).sqrt()).max(0.0);
+        let stop = [from[0] + dir[0] * touch, from[1] + dir[1] * touch, from[2] + dir[2] * touch];
+        if !clear(from, stop) { continue; }
         if best.is_none_or(|(bt, _)| t < bt) { best = Some((t, p.pos)); }
     }
     best.map(|(_, pos)| pos)
@@ -524,7 +534,7 @@ mod grapple_tests {
     #[test]
     fn grapple_reels_bond_to_the_point_and_hangs_while_the_fire_is_held() {
         let points = vec![GrapplePoint { pos: [10.0, 20.0, 0.0], radius: 2.0 }];
-        let Some(point) = pick_grapple_point(&points, [0.0, 12.0, 0.0], [1.0, 1.0, 0.0].map(|v| v / 2f32.sqrt().powi(2) * 2f32.sqrt()), 100.0) else {
+        let Some(point) = pick_grapple_point(&points, [0.0, 12.0, 0.0], [1.0, 1.0, 0.0].map(|v| v / 2f32.sqrt().powi(2) * 2f32.sqrt()), 100.0, |_, _| true) else {
             panic!("the aim ray through the point's sphere picks it");
         };
         let mut state = GrappleState { point, phase: 1, pull: 0.0 };
@@ -550,7 +560,7 @@ mod grapple_tests {
         // bare ray but the game's bolt (radius 1.0 [M 0x12c5a0:92]) hits.
         let points = vec![GrapplePoint { pos: [10.0, 0.0, 0.0], radius: 0.64 }];
         let dir = [10.0f32, 1.2, 0.0].map(|v| v / (10.0f32 * 10.0 + 1.2 * 1.2).sqrt());
-        assert!(pick_grapple_point(&points, [0.0, 0.0, 0.0], dir, 100.0).is_some(),
+        assert!(pick_grapple_point(&points, [0.0, 0.0, 0.0], dir, 100.0, |_, _| true).is_some(),
             "the bolt sweep (radius 1.0) accepts a 1.2-unit pass");
         // The range is the record's own weapon_data+0x1c [M 0x12e7b0:158; L ee_start_05.bin]:
         // 50.0 for the claw (0x50), 100.0 for the upgrade (0x51).
