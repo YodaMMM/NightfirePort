@@ -78,6 +78,7 @@ fn mode_press_on_the_q_worm_moves_nothing_and_the_switch_completes() {
     // Switch away through the request lane (obj+0x63), then back through the number-key lane.
     {
         let sim = scene.sim.as_mut().unwrap();
+        sim.drones.inventory.clip[6] = 16; // a loaded gun: a dry one hands over [M 0x1a2ba8]
         sim.drones.weapon_switch_request = Some(6);
     }
     tick(&mut scene, 300);

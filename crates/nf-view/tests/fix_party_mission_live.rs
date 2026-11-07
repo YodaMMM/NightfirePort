@@ -674,6 +674,11 @@ fn the_07000008_safe_chain_works_in_play() {
     }
     for _ in 0..40 { scene.sim.as_mut().unwrap().step_bond(Input { switch_to: Some(0x4e), ..Default::default() }, false, false, false); }
     assert_eq!(scene.sim.as_ref().unwrap().gun.weapon, 0x4e, "the Laser is selected [D USATxt 0x05000043]");
+    // The draw plays out first: a press under it spends itself on the view-state gate [M 0x1a5460:631-648].
+    for _ in 0..120 {
+        if scene.sim.as_ref().unwrap().gun.switch_state == 0 { break; }
+        scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+    }
     let mut ch137 = false;
     for _ in 0..200u32 {
         {

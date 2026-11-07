@@ -231,6 +231,21 @@ impl UseObjects {
         }
     }
 
+    /// The Q-Worm's use gate [M Player_WeaponFiring 0x1a5460 `uVar6 == 0x58`]: the aim target
+    /// (`BLData+0x880`, `Check_Target` 0x1a7810's crosshair ray) is a class-'I' PC in state 0 and
+    /// `Vec_Dist3D(player, target) <= weapon+0x1C`. The port has no PC collision, so the ray test is
+    /// against the contact sphere `tick` uses (r 0.7) [S].
+    pub fn qworm_target(&self, eye: V3, dir: V3, player: V3, range: f32) -> bool {
+        self.pcs.iter().any(|pc| {
+            let v = [pc.pos[0] - eye[0], pc.pos[1] - eye[1], pc.pos[2] - eye[2]];
+            let t = v[0] * dir[0] + v[1] * dir[1] + v[2] * dir[2];
+            let c = [eye[0] + dir[0] * t, eye[1] + dir[1] * t, eye[2] + dir[2] * t];
+            let miss = (c[0] - pc.pos[0]).powi(2) + (c[1] - pc.pos[1]).powi(2) + (c[2] - pc.pos[2]).powi(2);
+            let d = ((pc.pos[0] - player[0]).powi(2) + (pc.pos[1] - player[1]).powi(2) + (pc.pos[2] - player[2]).powi(2)).sqrt();
+            pc.state == 0 && t > 0.0 && miss <= 0.7 * 0.7 && d <= range
+        })
+    }
+
     /// `PCQWorm_Update` 0x1aee20 + `Switch_Update` 0x1adea8, once per tick. `bullets` are this
     /// tick's player-bullet shots as (from, to, weapon) — the game reads the PC's class-5 contact
     /// list (a bullet with weapon 0x58 entering the object's box); the port's equivalent is the

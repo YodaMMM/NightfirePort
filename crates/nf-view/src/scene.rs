@@ -593,6 +593,11 @@ pub struct Sim {
     /// REVERSE — the port plays it forward, deviation documented) on the aim-off edge, from the
     /// fully idle machine).
     pub prev_aiming: bool,
+    /// The aim bit was cleared under a held button by the view state (`aim_gate`): no lower script when
+    /// the button finally comes up [M 0x1a24c8:117-152 — the lower queues only on the bit's own fall].
+    pub aim_forced_off: bool,
+    /// The trigger's level last tick, for the guided ride's fire press.
+    pub ride_trigger_prev: bool,
     /// fix-weapon-anims + fix-aim-raise2: the aim raise/lower script currently playing
     /// (`Player_Weapon` 0x1a24c8:121-152 — the raise +0xB8 @1.25 is the game's state 0xF, the
     /// lower +0xBC @1.25 (or +0xB8 reversed) is state 0x10). Some(hash): the hash this anim plays;
@@ -2467,6 +2472,26 @@ impl Sim {
     /// stops [M 0x1a2e38:554-561]. The zoom target (+0x8D4) leaves 1.0 on the bit's rise and
     /// `Player_AutoAim` 0x1a7c98 keeps scanning until then — both read the bit this returns. A
     /// weapon without +0xB8 aims at once [M 0x1a24c8:36-64].
+    /// The record bases of Bond's own bullets in the world — `Player_WeaponHasAmmo` 0x1a16c0's object walk
+    /// (class 5, record `+2` equal, owner the player [M :28-51]).
+    fn placed_bases(&self) -> Vec<u16> {
+        self.drones.grenades.iter().filter(|g| g.owner == usize::MAX && g.state < 2)
+            .map(|g| self.weapons.base(g.weapon_type as usize) as u16).collect()
+    }
+
+    /// `Player_HandleHasNoAmmo` 0x1a2ba8's request for the held weapon.
+    fn no_ammo_request(&self) -> Option<u8> {
+        let weapons = &self.weapons;
+        let (carried, clip) = (&self.drones.inventory.carried, clip_view(weapons, &self.drones.inventory.clip));
+        let placed = self.placed_bases();
+        let slot = |x: u8| nf_game::gun::Gun::ammo_in_gun_slot(x, |y| weapons.base(y as usize) as u8, |y| weapons.ammo_type(y as usize) as u8);
+        let has_ammo = |id: u8| nf_game::gun::Gun::has_ammo(id, carried, &clip, |x| weapons.ammo_type(x as usize), |x| weapons.flags(x as usize), slot)
+            || nf_game::gun::Gun::placed_keeps_ammo(weapons.ammo_type(id as usize), weapons.flags(id as usize), weapons.base(id as usize) as u16, &placed);
+        let w = self.gun.weapon as usize;
+        let twin = weapons.records.get(w).map_or(0, |r| r[5] as i8);
+        self.gun.no_ammo_request(twin, weapons.flags(w), &nf_game::pickup::BEST_WEAPON, |b| weapons.base(b as usize) as u8, &self.drones.inventory.owned, has_ammo)
+    }
+
     fn aim_gate(&mut self, button: bool) -> bool {
         // The advance + finish half (`AnimObjectUpdate`, then case 0xf/0x10: the script stopped →
         // the raise sets the aim bit and returns to state 0 [M 0x1a2e38:554-561], the lower just
@@ -2494,11 +2519,21 @@ impl Sim {
                 }
             }
         }
+        // The view states that clear the bit [M 0x1a24c8:66-99, the two state switches]: every record in
+        // the holster/draw (1-4), the scoped records (+0x68 & 0x40) also in the reload (6, 7), the variant
+        // swap (8) — a scope drops for its reload and comes back up after it — and in a fire script (9) of
+        // a +0x8000 record only when the bit was not already set (an aimed shot keeps the scope).
+        let flags = self.weapons.flags(self.gun.weapon as usize);
+        let scoped = flags & 0x40 != 0;
+        let forced = match self.gun.switch_state { 0 => false, 8 => scoped, _ => true }
+            || (scoped && matches!(self.gun.reload_state, 6 | 7))
+            || (scoped && self.gun.fire_state && flags & 0x8000 != 0 && !self.aiming);
+        if forced && self.aiming { self.aim_forced_off = true; }
         let raise = self.weapons.raise_script(self.gun.weapon as usize);
         if raise == 0 {
             // No raise script: the aim bit follows the button at once [M 0x1a24c8:36-64].
-            self.aiming = button;
-            return button;
+            self.aiming = button && !forced;
+            return self.aiming;
         }
         // The hold-aim bit dynamics with the raise gate (the game's hold branch 0x1a24c8:36-47:
         // the bit clears with the button up and sets while it is held; case D :145-152 re-clears
@@ -2511,6 +2546,7 @@ impl Sim {
         } else if !button {
             self.aiming = false; // hold-aim: the bit follows the button down [M 0x1a24c8:46]
         }
+        if forced { self.aiming = false; }
         self.aiming
     }
 
@@ -2741,6 +2777,10 @@ impl Sim {
             }
             input = nf_game::player::Input::default();
         } else if let Some(cam) = self.missile_cam.as_mut() {
+            // The fire press on the ride [M Player_WeaponFiring 0x1a5460: `Input_Action(9, 4)` with
+            // `obj+0xF6 == 10` → `Bullet_handle_object_destruction(BL+0x878, player)`]: the rocket
+            // blows where it is. The press that launched it is still held here, so the edge is its own.
+            if trigger && !self.ride_trigger_prev { self.drones.detonate_guided(&self.weapons); }
             let live = self.drones.player_bullets.iter_mut().find(|b| b.guided_cam && !b.dead);
             if let Some(b) = live {
                 // `steer_missile` takes the game's analog units (full stick = 1.0 → π/128 per tick). The
@@ -2769,6 +2809,7 @@ impl Sim {
             // holds the trigger [M 0x193600 case 10 — nothing else runs].
             input = nf_game::player::Input::default();
         }
+        self.ride_trigger_prev = trigger;
         let trigger = trigger && self.missile_cam.is_none();
         // The smoke puffs tick with the sim — the port's rise+fade presentation; the game's real
         // per-particle model (gases_smoke 0x1ab2d0: damping, gravity, params-driven scale) is
@@ -2943,8 +2984,7 @@ impl Sim {
         // 0x4A..0x5E); number keys select directly [M disassembly 0x1a707c].
         // The toggle-back: if cycling weapons from a gadget, jump to the last weapon; if cycling gadgets from a
         // weapon, jump to the last gadget [M 0x1a6f80 lines 66-121].
-        // If the cycle finds nothing, `Player_WeaponNone` (0x1a9858) → hands (id 0x47), then `Player_GetBestWeapon`
-        // (0x1a9680) scans the BestWeapon table for the first owned+has-ammo weapon.
+        // If the cycle finds nothing the request stays where it was [M 0x1a6f80:200].
         // `Player_WeaponChange` (0x1a6f80:33-47) refuses EVERY switch while the view-anim state is 9 (a fire
         // script playing) [M the state switch maps 9 → case 8: return] — the port approximates state 9 with its
         // fire-script gate (fix-player2: this is the half of the grenade bug that wedged the weapon after a
@@ -3020,7 +3060,9 @@ impl Sim {
                     // pick — the Overcharge twin 0x32's dry check reads the base's clip[0x33] (the
                     // give fills the base's slot), else the mode press is forever inert.
                     let slot = |x: u8| nf_game::gun::Gun::ammo_in_gun_slot(x, |y| weapons.base(y as usize) as u8, |y| weapons.ammo_type(y as usize) as u8);
-                    let has_ammo = |id: u8| nf_game::gun::Gun::has_ammo(id, &carried, &clip, |x| weapons.ammo_type(x as usize), |x| weapons.flags(x as usize), slot);
+                    let placed = self.placed_bases();
+                    let has_ammo = |id: u8| nf_game::gun::Gun::has_ammo(id, &carried, &clip, |x| weapons.ammo_type(x as usize), |x| weapons.flags(x as usize), slot)
+                        || nf_game::gun::Gun::placed_keeps_ammo(weapons.ammo_type(id as usize), weapons.flags(id as usize), weapons.base(id as usize) as u16, &placed);
                     let sw = nf_game::gun::fire_mode_switch(self.gun.weapon, twin, mode_count, mode, has_ammo);
                     if let Some(new) = sw.new_weapon {
                         // The twin switch writes `obj+0x63` (the switch request) [M 0x1a24c8:246-260].
@@ -3074,8 +3116,15 @@ impl Sim {
         // per-tick). The cycle arms keep the idle gate below (the game's states 0xa/0xc have no
         // port counterpart).
         let idle = self.gun.switch_state == 0;
-        let can_request = (idle || self.gun.switch_state == 2 || self.gun.switch_state == 3)
+        // The port's state 1 is the game's 1 + 2 (the holster playing), and the game's 2 is allowed:
+        // a press during the holster moves the request, and case 2's tail draws the latest one.
+        let can_request = (idle || matches!(self.gun.switch_state, 1 | 2 | 3))
             && self.gun.reload_state == 0 && !fire_busy;
+        // `Player_WeaponChange`'s own refusals [M 0x1a6f80:24-58]: the substates {2, 10, 12, 13, 16}; the
+        // held ids 0x47 (hands — on a ladder or wire the weapon comes back with the dismount, not the
+        // cycle) and 0x5D/0x5E; and the aim bit (no cycling with the gun raised).
+        let cycle_ok = can_request && !self.aiming && !matches!(self.gun.weapon, 0x47 | 0x5d | 0x5e)
+            && !matches!(self.bond.substate, 2 | 10 | 12 | 13 | 0x10);
         if can_request {
             let owned = self.drones.inventory.owned.clone();
             let carried = self.drones.inventory.carried.clone();
@@ -3085,7 +3134,9 @@ impl Sim {
             let flags_of = |w: u8| weapons.flags(w as usize);
             // fix-samurai-fire: `Player_AmmoInGun` 0x1a9190's shared-slot pick for the clip half.
             let slot = |x: u8| nf_game::gun::Gun::ammo_in_gun_slot(x, |y| weapons.base(y as usize) as u8, |y| ammo_type_of(y) as u8);
-            let has_ammo = |w: u8| nf_game::gun::Gun::has_ammo(w, &carried, &clip, ammo_type_of, flags_of, slot);
+            let placed = self.placed_bases();
+            let has_ammo = |w: u8| nf_game::gun::Gun::has_ammo(w, &carried, &clip, ammo_type_of, flags_of, slot)
+                || nf_game::gun::Gun::placed_keeps_ammo(ammo_type_of(w), flags_of(w), weapons.base(w as usize) as u16, &placed);
             let selectable = |w: u8| weapons.selectable(w);
             // D-003 REMOVED: the root cause was the missing `Player_Init` override of weapon_data[1]+0xDC
             // (the fists skin). With the override applied in main.rs, the fists skin (0x050000ab) is found
@@ -3101,7 +3152,7 @@ impl Sim {
             // chain so the GetBestWeapon tail below can skip a handled press (the game's mode 2
             // always resolves: the [0,2) walk lands on the fists — it never falls to
             // `Player_WeaponNone`'s best-weapon scan).
-            let party_cycle = idle && input.weapon_cycle != 0
+            let party_cycle = idle && cycle_ok && input.weapon_cycle != 0
                 && self.level == nf_game::player::WEAPON_LOCK_LEVEL
                 && !self.drones.channels.on(nf_game::player::WEAPON_LOCK_CHANNEL);
             let target = if let Some(id) = input.switch_to {
@@ -3123,12 +3174,12 @@ impl Sim {
                 // only landable id), so request that — no click, matching the held==1 gate
                 // [M 0x1a6f80:134-137,162-198].
                 if self.gun.weapon == 1 { self.drones.audio.play(0x1db); None } else { Some(1u8) }
-            } else if idle && input.weapon_cycle != 0 {
+            } else if cycle_ok && input.weapon_cycle != 0 {
                 let t = self.gun.toggle_back(nf_game::gun::CycleMode::Weapons, &owned, has_ammo, selectable, base_of);
-                t.or_else(|| self.gun.cycle(input.weapon_cycle, nf_game::gun::CycleMode::Weapons, &owned, has_ammo, selectable))
-            } else if idle && input.gadget_cycle != 0 {
+                t.or_else(|| self.gun.cycle(input.weapon_cycle, nf_game::gun::CycleMode::Weapons, &owned, has_ammo, selectable, base_of))
+            } else if cycle_ok && input.gadget_cycle != 0 {
                 let t = self.gun.toggle_back(nf_game::gun::CycleMode::Gadgets, &owned, has_ammo, selectable, base_of);
-                t.or_else(|| self.gun.cycle(input.gadget_cycle, nf_game::gun::CycleMode::Gadgets, &owned, has_ammo, selectable))
+                t.or_else(|| self.gun.cycle(input.gadget_cycle, nf_game::gun::CycleMode::Gadgets, &owned, has_ammo, selectable, base_of))
             } else { None };
             if let Some(id) = target {
                 // Update prev_weapon/prev_gadget [M 0x1a6f80 lines 134-141]: if current is a weapon, save to
@@ -3139,20 +3190,6 @@ impl Sim {
                 self.gun.switch_request = id;
                 if std::env::var_os("NF_SOUNDLOG").is_some() {
                     eprintln!("[weapon-switch] tick {}: requesting switch from {:#x} to {:#x}", self.drones.frame, self.gun.weapon, id);
-                }
-            } else if idle && !party_cycle && (input.weapon_cycle != 0 || input.gadget_cycle != 0) {
-                // The cycle found nothing: go to hands, then try GetBestWeapon [M Player_WeaponNone + Player_GetBestWeapon].
-                const BEST_WEAPON: [u16; 18] = [0x42, 0x32, 0x1a, 0x18, 0x1c, 0x16, 0x15, 0x08, 0x10, 0x0e, 0x0d, 0x0c, 0x12, 0x06, 0x04, 0x02, 0x0a, 0x01];
-                self.gun.go_to_hands();
-                let base_of = |w: u8| self.weapons.base(w as usize) as u8;
-                if let Some(id) = self.gun.get_best_weapon(&BEST_WEAPON, base_of, &owned, has_ammo) {
-                    let cur = self.gun.weapon;
-                    if cur >= 1 && cur <= 0x47 { self.gun.prev_weapon = cur; }
-                    if cur >= 0x4a && cur <= 0x5e { self.gun.prev_gadget = if cur == 0x55 { 0x54 } else { cur }; }
-                    self.gun.switch_request = id;
-                    if std::env::var_os("NF_SOUNDLOG").is_some() {
-                        eprintln!("[weapon-switch] tick {}: hands → GetBestWeapon → {:#x}", self.drones.frame, id);
-                    }
                 }
             }
         }
@@ -3214,6 +3251,8 @@ impl Sim {
                 && self.bond.substate == nf_game::player::SS_WALK
                 && self.bond.grapple.is_none()
                 && nf_game::gadget::is_grapple(claw)
+                // The bolt flies only from a type-2 third icon's arm, or in MP [M 0x1a5460 `uVar6 − 0x50 < 2`].
+                && (self.bond.icon_ctx == 2 || self.mp.is_some())
             {
                 let head = self.bond.head();
                 let dir = self.bond.look();
@@ -4149,9 +4188,14 @@ impl Sim {
         // param; the gated BIT is `self.aiming`, which `aim_gate` maintained before run) — before
         // the level is overwritten (the queue arm deep in the view chain reads the EDGE)
         // [M Player_Weapon 0x1a24c8:117-152: the arm fires on the tick the input flips the bit].
-        let aim_on_edge = aiming && !self.prev_aiming;
-        let aim_off_edge = !aiming && self.prev_aiming;
+        // The rise reads the LEVEL: the button down with the bit clear re-queues the raise as soon as the
+        // machine is idle again, so a scope the reload dropped comes back with the button still held
+        // [M 0x1a24c8:36-47 sets the bit from the held button every tick, :117-152 turns the flip into
+        // state 0xF]. The lower needs the bit to have fallen with the button, not under a reload.
+        let aim_on_edge = aiming && !self.aiming;
+        let aim_off_edge = !aiming && self.prev_aiming && !self.aim_forced_off;
         self.prev_aiming = aiming;
+        if !aiming { self.aim_forced_off = false; }
         // The drones aim at and look for Bond's chest (`Drone_View_Bones`; one point here, 0.45 under the eye).
         let hanging = matches!(self.bond.substate, nf_game::player::SS_WIRE | nf_game::player::SS_ZIPLINE);
         // The game's collision capsule off `pos` (= Bond's obj+0x30): standing (case 0/6) ends
@@ -4554,7 +4598,8 @@ impl Sim {
             // variant-swap tick could start a reload whose +0xA4 script overwrote the +0xC8 variant
             // script, and the state-8 wait (which reads the variant's length) never completed.
             let len_of = |h: u32| self.scripts.get(&h).map_or(0.0, |s| s.length as f32);
-            let busy = switching || (self.view_script == rd0(0xb0) || self.view_script == rd0(0xb4)) && self.view_time < len_of(self.view_script) - 1.0;
+            let busy = switching || self.view_aim_anim.is_some() || self.missile_cam.is_some()
+                || (self.view_script == rd0(0xb0) || self.view_script == rd0(0xb4)) && self.view_time < len_of(self.view_script) - 1.0;
             // Block the trigger and reload while the holster/draw cycle plays.
             // The hands class 'G' (0x47) cannot fire: its record carries no fire scripts (+0xB0/+0xB4 = 0
             // [D probe_ladder2]; also no idle +0xA0) and the round spawn runs from the state-9 fire-script
@@ -4603,7 +4648,12 @@ impl Sim {
                     self.drones.lights.create(5.0, 1.5 * frame / falen as f32, pos, [0, 0xff, 0xff], 0, 0, 1, 0, &mut self.drones.rng);
                 }
             }
-            let (trigger, reload) = if can_fire && (has_fire_script || !hands) { (trigger, reload) } else { (false, reload) };
+            // The trigger's level still reaches the machine through the holster/draw — the press edge
+            // must not re-arm when the draw ends under a held trigger [M 0x1a5460: the shot is refused by
+            // the view-state gate below, `Input_Action(9, 4)` stays a press]. The reload key is refused
+            // with a scope raised [M 0x1a5460: the aim bit ∧ +0x68 & 0x40 reads as "activated"].
+            let (trigger, reload) = if has_fire_script || !hands { (trigger, reload) } else { (false, reload) };
+            let reload = reload && !(self.aiming && rd0(0x68) & 0x40 != 0);
             // decryptor-hold-real-path: the Q-Decryptor's use gate runs BEFORE `Player_RoundToFire`
             // [M Player_WeaponFiring 0x1a5460:551-590 — on the fire-held branch the aim target
             // (`BLData+0x880`, Check_Target 0x1a7810's 50-unit crosshair ray :114-125) must be a
@@ -4631,8 +4681,36 @@ impl Sim {
             // still playing) a `+0x68 & 0x8000` record takes no shot — the pump Frinesi 0x1c (fire
             // script 80 ticks vs +0x40 = 60) and the snipers (130 vs 120) refire only once the script
             // ends [D 07000005 first-person scripts; L weapon_data +0x40/+0x68].
-            self.gun.refire_blocked = self.gun.fire_state && rd0(0x68) & 0x8000 != 0;
-            let fired = if under_block { false } else { self.gun.update_with(trigger, reload, busy, params) };
+            // [M 0x1a5460:631-648] The holster/draw and the aim raise/lower (view states 1-4, 8, 0xF, 0x10)
+            // are outside {0, 9, 0xB}: the countdown runs, the shot does not.
+            self.gun.refire_blocked = !can_fire || self.view_aim_anim.is_some() || (self.gun.fire_state && rd0(0x68) & 0x8000 != 0);
+            self.gun.dry = false;
+            // The use gates on the trigger-held arm, ahead of `Player_RoundToFire` — a refused press
+            // RETURNS: no fire script, no shot, no shutter [M 0x1a5460, `uVar6` = the record's +2]:
+            // - the Micro-Camera 0x54 fires only from the aim bit;
+            // - the Q-Claw 0x50/0x51 only inside a type-2 third icon's arm (`BL+0x95F == 2`) or in MP,
+            //   not while reeling (`substate 2 ∧ +0x15C == 1`);
+            // - the Q-Worm 0x58 only at an idle target PC (class 'I', `obj+0xF4 == 0`) that the aim ray
+            //   picked, with `Vec_Dist3D(player, target) <= +0x1C`.
+            let use_block = trigger && match u16::from_le_bytes([w[2], w[3]]) {
+                0x54 => !self.aiming,
+                0x50 | 0x51 => {
+                    let reeling = self.bond.substate == nf_game::player::SS_GRAPPLE && self.bond.grapple.as_ref().is_some_and(|g| g.phase == 1);
+                    reeling || (self.bond.icon_ctx != 2 && self.mp.is_none())
+                }
+                0x58 => {
+                    let range = f32::from_le_bytes(w[0x1c..0x20].try_into().unwrap());
+                    !self.drones.useobjs.qworm_target(camera, self.bond.look(), self.bond.pos, range)
+                }
+                _ => false,
+            };
+            if under_block || use_block { self.gun.hold_trigger(trigger); }
+            let fired = if under_block || use_block { false } else { self.gun.update_with(trigger, reload, busy, params) };
+            // `Player_HandleHasNoAmmo` 0x1a2ba8 from the release arm [M 0x1a5460]: the disabled player and
+            // the guided ride (`obj+0xF6 == 10` returns first) run none of it.
+            if self.gun.dry && !self.disabled && self.missile_cam.is_none() && !self.drones.death.active {
+                if let Some(id) = self.no_ammo_request() { self.gun.switch_request = id; }
+            }
             // `Player_HandleHasNoAmmo` 0x1a2ba8's 'R' arm, reached from `Player_WeaponFiring`
             // 0x1a5460:442-455 (fire released, no round, view idle, `Player_ReloadAmmoType` fails):
             // the deployed Ronin's clip (`BLData+0x590`) under 1 → owned[0x52] = 0 (+0x592),
@@ -4799,7 +4877,10 @@ impl Sim {
             // then idle]. `end_len` is the CURRENT view script's (the game reads the playing script's own
             // stop state); on a just-restarted fire script (view_time 0) the check is a natural no-op.
             let fire_last = rd(0xb4);
-            let holding = flags & 0x400 != 0 && fire_last != 0 && self.view_script == rd(0xb0) && trigger;
+            // Case 9's 0x400 arm holds only while `Player_WeaponHasAmmo` passes [M 0x1a2e38:432-441]: a meter
+            // run dry under the held trigger ends the script, the view leaves state 9 and the meter refills.
+            let holding = flags & 0x400 != 0 && fire_last != 0 && self.view_script == rd(0xb0) && trigger
+                && (params.ammo_type == 0 || self.gun.clip > 0 || self.gun.spare > 0);
             let end_len = self.scripts.get(&self.view_script).map_or(0.0, |s| s.length as f32);
             if self.gun.fire_state && !holding && (self.view_script == rd(0xb0) || (fire_last != 0 && self.view_script == fire_last))
                 && self.view_time >= end_len - 1.0 {
@@ -4828,7 +4909,13 @@ impl Sim {
                         // between throws). The dry arm
                         // (Player_HandleHasNoAmmo :524-543) stays with the auto-reload path below.
                         let p = nf_game::gun::GunParams::from_record(w, self.drones.inventory.fire_mode.get(self.gun.weapon as usize).copied().unwrap_or(0) as usize, |h| scripts.get(&h).map(|s| s.length as u32));
-                        self.gun.reload_one(p);
+                        let refilled = self.gun.reload_one(p);
+                        // The dry arm [M 0x1a2e38 case 0xc :524-543]: `Player_HandleHasNoAmmo` writes the
+                        // request and the state still goes to 3; the draw below then reverses straight
+                        // away on the state-3 arm's retarget, as case 4 does.
+                        if !refilled && self.gun.clip < p.ammo_per_shot {
+                            if let Some(id) = self.no_ammo_request() { self.gun.switch_request = id; }
+                        }
                         let draw = self.weapons.draw_script(self.gun.weapon as usize);
                         if draw != 0 {
                             self.view_script = draw;
@@ -10558,7 +10645,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 pda_lock: None,
                 hints, hint_cels, hint_fired, icon_msg_timers, trigger_link_cels,
                 view_alert: false,
-                prev_aiming: false,
+                prev_aiming: false, aim_forced_off: false, ride_trigger_prev: false,
                 view_aim_anim: None,
                 view_aim_raising: false,
                 mp: None,

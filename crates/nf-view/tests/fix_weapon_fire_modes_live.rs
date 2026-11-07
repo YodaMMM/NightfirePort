@@ -104,6 +104,7 @@ fn mgl_grenade_0x2a_detonates_on_impact_and_delay_0x2b_runs_its_fuse() {
         sim.gun.weapon = 0x2a;
         sim.gun.switch_request = 0x2a;
         sim.gun.switch_state = 0;
+        sim.drones.inventory.clip[0x2a] = 6; // a loaded gun: a dry one hands over [M 0x1a2ba8]
     }
     tick(&mut scene, 10);
     let boom = explosion_tick(&mut scene, 240).expect("0x2A 'Grenade' explodes on impact");
