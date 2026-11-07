@@ -26,3 +26,7 @@ claimed-by: sandbox4 at 2026-11-07T13:25Z
 ## Report (done, 2026-11-07T14:17Z)
 
 Closed by the driver: the report is on `s/real-health-00agent-03-7` (docs/reports/real-health-00agent-03-7.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-11-07T14:17Z)
+
