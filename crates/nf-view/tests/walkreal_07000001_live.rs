@@ -426,7 +426,11 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             if w.resupply("hall ammo") { w.shoot(g, &format!("hall guard {g}")); }
         }
     }
-    w.wait(30);
+    // The last guard's channel lands with the end of his fall [M 0x1637f8 case 2], up to 213 ticks.
+    for _ in 0..300 {
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x99) { break; }
+        w.tick(Default::default(), false);
+    }
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x99),
         "AND(0x11,0x12,0x13) must raise ch 153 once the three named guards are dead [D mux placement]");
     eprintln!("[01] the hall AND fired: ch 153 on at tick {}", w.total_ticks);
@@ -1356,7 +1360,11 @@ fn following_mayhew_down_completes_the_level() {
             if w.resupply("hall ammo") { w.shoot(g, &format!("hall guard {g}")); }
         }
     }
-    w.wait(30);
+    // The last guard's channel lands with the end of his fall [M 0x1637f8 case 2], up to 213 ticks.
+    for _ in 0..300 {
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x99) { break; }
+        w.tick(Default::default(), false);
+    }
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x99), "the hall AND must fire ch 0x99");
     // Follow the contact out of the hall to the stairwell head (the main test's follow loop, but
     // stopping AT the head — the FOLLOW begins at the descent).

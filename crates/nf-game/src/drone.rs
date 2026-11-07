@@ -4652,6 +4652,25 @@ impl Drone {
         if self.death_channel != 0 && self.death_channel != 0x63 { self.raise = Some(self.death_channel); }
     }
 
+    /// The 07000002-only half of the Death_Anim / DeathByExplosion ENTER: timer C at frame + 90
+    /// (`FRAME_RATE_DIV` 1.0), so the death channel lands at most 90 ticks into a longer fall
+    /// [M 0x1637f8:55-61, 0x163a80:28-33]; every other level waits for the anim's end.
+    fn death_channel_timer(&mut self, d: &Data, frame: u32) {
+        if d.level == 0x0700_0002 { self.timer_c = Some(frame + 90); }
+    }
+
+    /// `NDrone2_DSTATE_Death_Anim` 0x1637f8 case 3's channel half [M :76-90]: with ch 0x35 on (the
+    /// 07000002 bathhouse scene's start), a guard still falling whose death channel is one of the
+    /// scene's own inputs 0x88/0x29/0x2a raises any pending channel and is removed on the spot,
+    /// so he is not frozen mid-fall through the scene. `Drones::tick` holds the channel table.
+    pub fn scene_removal(&mut self) {
+        if self.state != state::DEATH_ANIM || !matches!(self.death_channel, 0x88 | 0x29 | 0x2a) { return; }
+        if self.death_pending { self.set_death_channel(); self.death_pending = false; }
+        self.delete_me = true;
+        self.present = false;
+        self.enabled = false;
+    }
+
     /// Death_Anim 0x44, SpecialDeath 0x46, Dead 0x47, Fade 0x48, FadeFast 0x49 (0x1637f8, 0x163fe8, 0x172cd8, 0x172dd8).
     fn handle_death(&mut self, d: &Data, rng: &mut Rng, frame: u32, s: u8, m: u8) -> Option<bool> {
         use state::*;
@@ -4689,6 +4708,7 @@ impl Drone {
                 if self.team == 1 && !self.knocked_out && self.hit_by_player { self.dispatched_logged = true; }
                 if !self.silent_kill { self.death_talk(d); }
                 self.drop_grenades(d);
+                self.death_channel_timer(d, frame);
                 self.location_death_anim(d, rng, DEAD);
                 true
             }
@@ -4757,13 +4777,12 @@ impl Drone {
             (DEATH_ANIM, msg::EXIT) => { if self.death_pending { self.set_death_channel(); } true }
             (DEATH_ANIM, msg::TIMER_C) => { if self.death_pending { self.set_death_channel(); self.death_pending = false; } true }
             (SPECIAL_DEATH, msg::TIMER_C) => { self.death_pending = true; true }
-            // Update: the gun drops while the firing flag (`+0x3B`) is clear or the anim set is 4 / 9.
-            // Death_Anim's msg-2 raises the death channel every update while `+0xCD8` is set — NOT on
-            // the anim's end [M 0x1637f8 case 2: `if (+0xcd8 != 0) SetDeathChannel()`] — the fix
-            // that lets a drone whose death danim never completes (0700001b's Drake) still raise it.
+            // Update: the gun drops while the firing flag (`+0x3B`) is clear or the anim set is 4 / 9
+            // [M 0x1637f8 case 3]. The death channel is NOT raised here: msg 2 is the state EXIT
+            // (`Drone_SM_RouteMsgDCV` 0x171df8), so it rides the fall anim's end [M case 2] or the
+            // 07000002 timer [M case 0xc]. Case 3's channel-0x35 removal is `scene_removal`.
             (DEATH_ANIM, msg::UPDATE) => {
                 if !self.firing || matches!(self.anim_set, 4 | 9) { self.drop_weapon(d, rng); }
-                if self.death_pending { self.set_death_channel(); }
                 true
             }
             (DEAD, msg::ENTER) => {
@@ -4996,6 +5015,7 @@ impl Drone {
                 if self.team == 1 && !self.knocked_out && self.hit_by_player { self.dispatched_logged = true; }
                 if !self.silent_kill { self.death_talk(d); }
                 self.drop_grenades(d);
+                self.death_channel_timer(d, frame);
                 let v = self.blast_variant();
                 self.call_anim_variant(d, anim_state::DEATH_EXPLOSION, v, DEAD, 0);
                 true
@@ -5007,7 +5027,6 @@ impl Drone {
             // UPDATE (case 3): the weapon drop behind the +0x3B/anim-set gate (the DEATH_ANIM arm's).
             (DEATH_BY_EXPLOSION, msg::UPDATE) => {
                 if !self.firing || matches!(self.anim_set, 4 | 9) { self.drop_weapon(d, rng); }
-                if self.death_pending { self.set_death_channel(); }
                 true
             }
             _ => false,
@@ -9287,13 +9306,22 @@ impl Drone {
                 true
             }
             (CIVILIAN_HIDING, msg::BULLET) => self.on_bullet_resume(d, rng, frame, CIVILIAN_SCARED, false),
-            // HostageIdle (0x15ce60 — state 0x0d [L NDrone2_StateFuncs 0x29b300]) ENTER: stand idle, alert 0;
-            // UPDATE: an armed drone within 20 → HostageHide (0xe — not ported; the hostages stay here). Bullets
+            // HostageIdle (0x15ce60 — state 0x0d [L NDrone2_StateFuncs 0x29b300]) ENTER: the sight
+            // bit and prop 0x4C on, alert 0, the 0x4000000 bit clear, face the opponent, stand idle
+            // [M :17-24]; UPDATE: an armed drone within 20 → HostageHide 0xe [M :28-33]. Bullets
             // HandleImpact(0xe, …) — resume 0 keeps the state.
             (HOSTAGE_IDLE, msg::ENTER) => {
+                self.ever_seen_3c = true; // `+0x228 |= 8` [M 0x15ce60:17]
+                d.props.set(0x4c, &mut self.props, 1); // [M :18]
                 self.alert = 0.0; // `+0x50C = 0` [M 0x15ce60:19]
+                self.sighted = false; // `+0x4F8 &= ~0x4000000` [M :20]
                 self.alert_status_set(0, frame);
+                self.desired_yaw = self.yaw_to_opp; // SetAngleToObj(opponent) [M :22-23]
                 self.call_anim(d, anim_state::STAND_IDLE, 0, 0);
+                true
+            }
+            (HOSTAGE_IDLE, msg::UPDATE) => {
+                if self.armed_peer_dist <= 20.0 { self.set_state(HOSTAGE_HIDE); }
                 true
             }
             (HOSTAGE_IDLE, msg::BULLET) => self.on_bullet_resume(d, rng, frame, 0, false),
@@ -9413,7 +9441,7 @@ impl Drone {
                 true
             }
             // HostageHide (0x15cfe0 — state 0x0e [L 0x29b300]) ENTER: +0x4f8 |= 0x4000000 (the
-            // drawn-flag bit the port keys on `enabled`), +0x50c = 1.0, alert 2, the cower anim
+            // sighting bit), +0x50c = 1.0, alert 2, the cower anim
             // 0x19 [M 0x15cfe0:12-16]; case 3 → nobody armed within 20 → HostageIdle 0x0d [M
             // 0x15cfe0:23-29 — there IS no msg-3 clock in the game: HostageHide's case 3 is the
             // per-UPDATE re-poll `NearArmedDrone(20.0, flag 0)` [M 0x15cfe0:23-29 — 0x41a00000 =
@@ -9422,9 +9450,14 @@ impl Drone {
             // hold between UPDATEs is just message-idle (case 0 returns 1)].
             (HOSTAGE_HIDE, msg::ENTER) => {
                 self.enabled = true;
+                self.sighted = true; // `+0x4F8 |= 0x4000000` [M 0x15cfe0:13]
                 self.alert = 1.0; // `+0x50C = 1.0` [M 0x15cfe0:14]
                 self.alert_status_set(2, frame); // [M 0x15cfe0:15]
                 self.call_anim(d, anim_state::COWER, 0, 0);
+                true
+            }
+            (HOSTAGE_HIDE, msg::UPDATE) => {
+                if self.armed_peer_dist > 20.0 { self.set_state(HOSTAGE_IDLE); }
                 true
             }
             (HOSTAGE_HIDE, msg::BULLET) => self.on_bullet_resume(d, rng, frame, 0, false),
@@ -17588,6 +17621,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     }
 
     fn tick_inner(&mut self, d: &Data, player: &Player) {
+        // The game's walk reaches the drones after the trigger that raises ch 0x35 and before the
+        // script player that freezes them (07000002 #496 > #442-466 > #399 in the reverse-order
+        // walk), so the removal runs ahead of this tick's script pass and its `Drone_EnableAll(0)`.
+        if self.channels.on(0x35) {
+            for dr in &mut self.list {
+                dr.scene_removal();
+                if let Some(c) = dr.raise.take() { self.channels.set(c as u32, 1, self.frame); }
+            }
+        }
         // options-census: the health-pane fade alpha decays while the Advanced row (0x1000_023b,
         // PlayerSetting+0x0b) is set [M Player_Update 0x193600:414-429 — BLData+0x8bc loses
         // 0.0020833·FRAME_RATE_MUL per tick, clamped at 0; row 0 pins it to 1.0].
