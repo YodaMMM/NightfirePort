@@ -4188,7 +4188,7 @@ impl Sim {
             // (level-0a-ceiling-gun-route).
             crouched: self.bond.crouched,
             move_local: self.bond.move_local,
-            riding: self.riding, spawn_settle: self.bond.settle_hold > 0 };
+            riding: self.riding, grounded: self.bond.grounded };
         let d = nf_game::drone::Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: self.level, sequences: &self.seqs, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models, surfaces: self.surfaces.as_ref(), voices: self.voices.as_deref(), difficulty: self.drones.difficulty,
             ai_points: &self.ai_points };
         // `Player_WeaponFiring` → `Player_WeaponInitBullet` from the eye along the view (*deviation*: no auto-aim and
