@@ -17,7 +17,9 @@ fn the_14_cascade_draws_more_than_one_fireball() {
         let sim = scene.sim.as_mut().unwrap();
         for _ in 0..4000 { sim.step_bond(Default::default(), false, false, false); if !sim.disabled { break; } }
         let f = sim.drones.frame;
-        sim.drones.channels.set(0x51, 1, f); // the cascade root [D box #400 kill channel]
+        // The chain itself runs ~30 ticks a stage [L]; raising every kill channel at once smashes
+        // the leaves on one tick, the concurrent case the draw slots exist for.
+        for c in [0x51, 0x52, 0x4e, 0x53, 0x5c, 0xaf, 0x5a, 0xc9, 0x5b] { sim.drones.channels.set(c, 1, f); }
         for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); }
     }
     let sim = scene.sim.as_ref().unwrap();

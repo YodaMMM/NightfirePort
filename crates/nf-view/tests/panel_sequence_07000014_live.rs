@@ -273,7 +273,7 @@ fn the_panel_sequence_runs_from_the_capture_handback_to_the_unlocked_door() {
         cascade.iter().map(|(kill, _)| destroy_by_kill(sim, *kill)).collect()
     };
     let mut step = 0usize;
-    for tick in 0..60u32 {
+    for tick in 0..560u32 {
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
         top_up(scene.sim.as_mut().unwrap()); // the cascade blasts splash; the pin is the chain
         while step < cascade.len() && scene.sim.as_ref().unwrap().drones.channels.on(cascade[step].1) {
