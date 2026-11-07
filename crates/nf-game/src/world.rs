@@ -932,6 +932,26 @@ fn box_of(from: V3, to: V3) -> (V3, V3) {
 
 /// Whether the segment `from → to` crosses the triangle `t` (Möller–Trumbore, t in [0, 1]).
 /// TWO-SIDED — the portal crossing's semantics; do not "fix" onto the ray walks' one-sided rule.
+/// The fraction along `from → to` where the segment crosses the triangle from its front, the
+/// world traces' own rule [M 0x10a8c8:168 — the back face is no contact].
+pub fn seg_tri_t(from: V3, to: V3, t: &[V3; 3]) -> Option<f32> {
+    let d = sub(to, from);
+    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+    if dot(cross(e1, e2), d) >= 0.0 { return None; }
+    let p = cross(d, e2);
+    let det = dot(e1, p);
+    if det.abs() < 1e-12 { return None; }
+    let inv = 1.0 / det;
+    let s = sub(from, t[0]);
+    let u = dot(s, p) * inv;
+    if !(0.0..=1.0).contains(&u) { return None; }
+    let q = cross(s, e1);
+    let v = dot(d, q) * inv;
+    if v < 0.0 || u + v > 1.0 { return None; }
+    let tt = dot(e2, q) * inv;
+    (0.0..=1.0).contains(&tt).then_some(tt)
+}
+
 fn seg_tri_hit(from: V3, to: V3, t: &[V3; 3]) -> bool {
     let d = sub(to, from);
     let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));

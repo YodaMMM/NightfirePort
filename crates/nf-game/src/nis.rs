@@ -381,6 +381,10 @@ pub trait World {
     /// `Control_BuildWorldSph` 0x133070 transforms the centre by the object matrix into obj+0x80,
     /// obj+0x8C carries the radius). `None` = the hash resolves to nothing above nf-game.
     fn glist_sphere(&self, hash: u32) -> Option<([f32; 3], f32)> { let _ = hash; None }
+    /// The glist's collision triangles in object space — the narrow phase `Collide_Intersect`
+    /// 0x1ebaa8 runs after `Collide_PickObj`'s sphere. `None`: no collision data, the sphere alone
+    /// decides.
+    fn glist_shape(&self, hash: u32) -> Option<&[[[f32; 3]; 3]]> { let _ = hash; None }
     /// `Sound_IsLooping` (0x1de260): the SFX table's loop bit for the sound id (`SFXOutputData
     /// [id*0x18+0x14]`) — `Script_SoundEnd` (0x1daf60) stops only a looping sound at its marker.
     /// Default true (stop): no-table callers behave as before.
@@ -2150,6 +2154,59 @@ impl Scripts {
             }
         }
         out
+    }
+
+    /// The script object a round's flown segment `a → b` strikes: `(player, held)`, nearest first,
+    /// `held` = the player's `SP_GetHitDamage` tail is live (hit points set, the script holding).
+    ///
+    /// `Collide_PickObj` 0x1eae80 only nominates an object from its world sphere; `Collide_Intersect`
+    /// 0x1ebaa8 then runs the glist's triangles and a miss leaves the HITDATA at t = 1e8, dropped
+    /// from the list [M 0x1ebaa8:300-321]. Without that second step a sphere stands in for the
+    /// object: the 07000012 sky bridge's arches carry spheres of radius 5.7-8.5, so one stray
+    /// round anywhere near started its break script and every overlapping sphere counted the same
+    /// round again. Objects with no collision data keep the sphere [M 0x133070:19-27]. One object
+    /// per segment: the round's first contact.
+    pub fn sp_contact(&self, w: &dyn World, a: [f32; 3], b: [f32; 3]) -> Option<(usize, bool)> {
+        let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let len2 = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).max(1e-12);
+        let xf = |m: &Mat4, c: [f32; 3]| [
+            m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2] + m[3][0],
+            m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2] + m[3][1],
+            m[0][2] * c[0] + m[1][2] * c[1] + m[2][2] * c[2] + m[3][2]];
+        let mut best: Option<(f32, usize, bool)> = None;
+        for (pi, p) in self.players.iter().enumerate() {
+            if p.deleted { continue; }
+            let Some(s) = p.info[p.cur].as_ref() else { continue };
+            let held = p.hit_points != 0.0 && s.delay != 0;
+            for i in 0..s.streams.len() {
+                if !matches!(s.streams[i].kind, 1 | 2) { continue; }
+                let Some(o) = s.streams[i].obj else { continue };
+                let Some(Some(obj)) = self.objects.list.get(o) else { continue };
+                let (m, hash, entity) = match obj {
+                    Obj::Entity { hash, matrix, .. } => (*matrix, *hash, true),
+                    Obj::Anim { skin, .. } => match s.stream_matrix(i, &self.objects, w) { Some(m) => (m, *skin, false), None => continue },
+                    _ => match s.stream_matrix(i, &self.objects, w) { Some(m) => (m, 0, false), None => continue },
+                };
+                let (c, r) = w.glist_sphere(hash).unwrap_or(([0.0; 3], 0.1));
+                let c = xf(&m, c);
+                let e = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+                let t = ((e[0] * d[0] + e[1] * d[1] + e[2] * d[2]) / len2).clamp(0.0, 1.0);
+                let q = [e[0] - d[0] * t, e[1] - d[1] * t, e[2] - d[2] * t];
+                if q[0] * q[0] + q[1] * q[1] + q[2] * q[2] > r * r { continue; }
+                let t = match w.glist_shape(hash).filter(|sh| entity && !sh.is_empty()) {
+                    Some(shape) => {
+                        let hit = shape.iter()
+                            .filter_map(|tri| crate::world::seg_tri_t(a, b, &[xf(&m, tri[0]), xf(&m, tri[1]), xf(&m, tri[2])]))
+                            .fold(None::<f32>, |acc, x| Some(acc.map_or(x, |y| y.min(x))));
+                        let Some(t) = hit else { continue };
+                        t
+                    }
+                    None => t,
+                };
+                if best.is_none_or(|(bt, ..)| t < bt) { best = Some((t, pi, held)); }
+            }
+        }
+        best.map(|(_, pi, held)| (pi, held))
     }
 
     /// One player-bullet contact on a script player's stream objects this tick — the game's
