@@ -177,3 +177,5 @@ green; mp_online_failures' join_in_progress hangs pre-existing on both trees in 
 mp_stress_explosives_live killed at 500 s (no result). ntfy: all three fallbacks failed
 (curl 28; python Errno 101; wget 124 at the TLS connect) — the exact records are in the
 branch report under "ntfy failed".
+Correction: the final totals are 198 binaries — 1,457 passed, 4 failed, 11 ignored (the
+nf-formats censuses were built and swept after the first addendum; branch 23b4e0cf0).
