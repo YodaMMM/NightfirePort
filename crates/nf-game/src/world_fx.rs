@@ -23,7 +23,8 @@
 //!   param1·60 (the remaining/total countdown in ticks), +8 u16 = param 0 (the latch channel), +0xa =
 //!   param 2 (rumble), +0xc byte = param 3 (whiteout), +0xd byte = param 4 (flashbang), +0xe byte =
 //!   the armed latch. Once `switch_channels[param0]` the latch sets for good; the countdown then runs,
-//!   the viewer's whiteout value `glb_viewer+0x200 = remaining·5/total` rises, the rumble/flashbang
+//!   the viewer's camera shake `glb_viewer+0x200 = remaining·5/total` (the word `Camera_Shake`
+//!   0x1bc430 stores and `Camera_Update` 0x1bb6d8 spends) is held up, the rumble/flashbang
 //!   params feed their (unported) systems, and at 0 the object self-destructs [M 0x18d4f0].
 //! - **Emitter** (`Emitter_CreatePlist` 0x17b848 → `Emitter_Create` 0x17ae00 / `Emitter_Update`
 //!   0x17b080 / `Emitter_Draw` 0x17b708): param 0 = the def hash (block 0x30, `Emitter_LoadDefs`
@@ -378,7 +379,7 @@ pub struct ApocalypseFx {
     /// likewise `Input_RumblePause` 0x17f710, `SP_LoadScript` 0x1dbc08:20's stop-all-pads
     /// call before the blocking load, is a no-op here [M 0x17f710:4-9]).
     pub rumble: u16,
-    /// param 3 / param 4: the whiteout / flashbang flags.
+    /// param 3 / param 4: the camera-shake / flashbang flags.
     pub whiteout: bool,
     pub flashbang: bool,
     /// data[0]/data[1]: the remaining/total countdown in ticks.
@@ -386,7 +387,7 @@ pub struct ApocalypseFx {
     pub total: f32,
     /// data+0xe: latched once the channel fires.
     pub armed: bool,
-    /// The viewer whiteout value `remaining·5/total` [M 0x18d4f0] the renderer would apply.
+    /// The viewer shake value `remaining·5/total` [M 0x18d4f0]; no view reads a shake yet.
     pub fade: f32,
 }
 
