@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox7 at 2026-11-07T13:05Z
+
+---
+## Report (done, 2026-11-07T14:11Z)
+
+Closed by the driver: the report is on `s/mp-team-aim-marker` (docs/reports/mp-team-aim-marker.md); the worker didn't run finish.sh.
