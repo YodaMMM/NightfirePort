@@ -117,6 +117,10 @@ pub struct Music {
     may_c_t9: i32,
     may_c_which_calm: i32,
     may_c_which_attack: i32,
+    /// `MusicTemp1/2` as `UpdateMFX_02MayhewD` 0x112bf8 uses them (07000004): the first
+    /// `SfxNisMusicTrigger`'s latch and the 0x6000082 story-scene latch.
+    may_d_t1: i32,
+    may_d_t2: i32,
     /// `MusicTemp1/2` as `UpdateMFX_03TowerC` 0x113a20 uses them (0700000b): the 0..6 state
     /// machine and the combat latch.
     tower_c_t1: i32,
@@ -148,7 +152,7 @@ impl Default for Music {
             temp1: false, temp2: 0, temp3: 0, temp4: false, sfx_paused: false, nis_trigger: false, c_temp1: 0, c_temp2: 0, c_temp4: false,
             tower2b_temp1: 0, evil_base_t1: 0, evil_base_t2: 0, evil_base_t3: 0, evil_base_t4: 0, evil_base_t6: 0, evil_base_c_t1: 0,
             b_wait_nis: 0, may_b_t1: 0, may_b_t2: 0, may_b_t3: 0, may_b_t4: 0, may_b_t5: 0, may_b_t9: 0, may_b_which: 0,
-            may_c_t1: 0, may_c_t2: 0, may_c_t3: 0, may_c_t9: 0, may_c_which_calm: 0, may_c_which_attack: 0,
+            may_c_t1: 0, may_c_t2: 0, may_c_t3: 0, may_c_t9: 0, may_c_which_calm: 0, may_c_which_attack: 0, may_d_t1: 0, may_d_t2: 0,
             tower_c_t1: 0, tower_c_t2: 0, gate_writes: Vec::new() }
     }
 }
@@ -216,6 +220,7 @@ impl Music {
                 (self.tower2b_temp1, self.evil_base_t1, self.evil_base_t2, self.evil_base_t3, self.evil_base_t4, self.evil_base_t6, self.evil_base_c_t1) = (0, 0, 0, 0, 0, 0, 0);
                 (self.b_wait_nis, self.may_b_t1, self.may_b_t2, self.may_b_t3, self.may_b_t4, self.may_b_t5, self.may_b_t9) = (0, 0, 0, 0, 0, 0, 0);
                 (self.may_c_t1, self.may_c_t2, self.may_c_t3, self.may_c_t9, self.tower_c_t1, self.tower_c_t2) = (0, 0, 0, 0, 0, 0);
+                (self.may_d_t1, self.may_d_t2) = (0, 0);
                 (self.under_attack, self.which_stealth, self.which_combat, self.bonus) = (false, 0, 0, 0);
                 self.delay_timer = 10;
                 self.entry = Some(m);
@@ -290,6 +295,8 @@ impl Music {
             // (07000003) — the trigger/sight machines behind the shared exit block above.
             if m.level == 0x0700_0002 { self.mayhew_b(&e, &m); }
             if m.level == 0x0700_0003 { self.mayhew_c(&e, &m); }
+            // `UpdateMFX_02MayhewD` 0x112bf8 (07000004) — the story scene's three markers.
+            if m.level == 0x0700_0004 { self.mayhew_d(&e); }
             // `UpdateMFX_03TowerC` 0x113a20 (0700000b) — the NIS-id + cel-zone state machine.
             if m.level == 0x0700_000b { self.tower_c(&e); }
             // The HT-level updaters with a per-level half (docs/systems/ht-music-updaters.md).
@@ -680,6 +687,28 @@ impl Music {
         }
     }
 
+    /// `UpdateMFX_02MayhewD` 0x112bf8 (07000004), after the shared exit block above. The
+    /// 0x6000082 story scene's start (e[11]) jumps marker 2 and latches `MusicTemp2` [M :41-45];
+    /// the first `SfxNisMusicTrigger` (the scene's 0x172 sound) jumps marker 3 and latches
+    /// `MusicTemp1` [M :50-55]; the next trigger, or the skip event e[5] once the scene has
+    /// started, jumps marker 4, the section the fight runs on [M :46-49, :59-61]. All instant.
+    fn mayhew_d(&mut self, e: &[u32; 64]) {
+        if e[0xb] == 0x0600_0082 {
+            self.jump(2, true);
+            self.may_d_t2 = 1;
+        }
+        if !self.nis_trigger {
+            if e[5] == 0 || self.may_d_t2 == 0 { return; }
+        } else if self.may_d_t1 == 0 {
+            self.jump(3, true);
+            self.nis_trigger = false;
+            self.may_d_t1 = 1;
+            return;
+        }
+        self.jump(4, true);
+        self.nis_trigger = false;
+    }
+
     /// `UpdateMFX_03TowerC` 0x113a20 (0700000b), whole — the 0b row is NOT in the shared
     /// exit-block range: the game's updater has no `e[3]/e[8]` head; its only exit arm is state
     /// 6's fixed 0xe jump, reachable only after the finale NIS pair [M 0x113a20:8-76 vs the
@@ -714,6 +743,43 @@ impl Music {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The 04 row's shape for the updater tests: only the level matters to `mayhew_d`.
+    fn mayhew_d_board() -> Music {
+        let mut m = Music::new(vec![MapMusic { level: 0x0700_0004, track: 22, start: 0, on_death: 19, on_fail: 18, end_combat: 16, end_calm: 17, alert_frames: 10, calm_frames: 160, combat: vec![], stealth: vec![] }]);
+        m.event(0, 0x0700_0004); m.event(1, 1);
+        m.update(0);
+        m
+    }
+
+    /// [M 0x112bf8:41-61] the story start, the first 0x172, the second 0x172.
+    #[test]
+    fn mayhew_d_walks_the_story_markers() {
+        let mut m = mayhew_d_board();
+        m.update(0);
+        assert_eq!(m.last_request, -1, "nothing moves before the scene");
+        m.event(0xb, 0x0600_0082); m.update(0);
+        assert_eq!(m.last_request, 2);
+        m.nis_trigger = true; m.update(0);
+        assert_eq!(m.last_request, 3);
+        assert!(!m.nis_trigger);
+        m.update(0);
+        assert_eq!(m.last_request, 3, "the marker holds between the sounds");
+        m.nis_trigger = true; m.update(0);
+        assert_eq!(m.last_request, 4);
+    }
+
+    /// [M 0x112bf8:46-49] the skip event moves the score only once the story scene has started:
+    /// skipping the 0x6000083 intro leaves it, skipping the story lands on marker 4.
+    #[test]
+    fn mayhew_d_skip_needs_the_story_scene() {
+        let mut m = mayhew_d_board();
+        m.event(5, 0x0600_0083); m.update(0);
+        assert_eq!(m.last_request, -1, "the intro's skip");
+        m.event(0xb, 0x0600_0082); m.update(0);
+        m.event(5, 0x0600_0082); m.update(0);
+        assert_eq!(m.last_request, 4, "the story's skip");
+    }
 
     fn castle() -> MapMusic {
         MapMusic { level: 0x0700_0005, track: 15, start: 0, on_death: 11, on_fail: 10, end_combat: 8, end_calm: 9, alert_frames: 10, calm_frames: 160, combat: vec![4, 12, 14], stealth: vec![6, 16, 18] }

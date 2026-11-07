@@ -56,7 +56,8 @@
 //! then SetState(0xa7) unless the BLIND_DRONES cheat [M]. **NinjaAttack 0xa7** (0x16bb50) ENTER:
 //! alert = 1.0, `+0x4F8 |= 0x80000000` (bounded); by distance `+0x1a0`: >12 → 0xa8, >6 → 0xa9,
 //! >2 → 0xaa; < `+0xEC` (the melee band, 2.0 for mode 0xd [M 0x14b300:751]) → 10% sideflip (0xaf
-//! via CanMoveToRelativePos ±3), else backflip test (0xae), else Rand(2): ≤2 → 0xac, else 0xb2.
+//! via CanMoveToRelativePos ±3), then the backflip test (0xae) on any miss; with neither, Rand(2):
+//! ≤2 → 0xac, else 0xb2.
 //! UPDATE: SeenAndAttacking + SetAngleToObj + the same re-route; the close band backflips first,
 //! then rolls the 10% sideflip [M]. 0xa8 LongRange (0x16bfc0): ENTER anim 0x67 + `DroneWeap_Fire(1)`;
 //! UPDATE dist ≤ 12 → 0xa7, MoveToObject(2.0) arrived → 0xb2, moving → anim 0x67 (+0x2C8/rolls

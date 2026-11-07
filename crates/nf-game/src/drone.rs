@@ -2316,7 +2316,12 @@ impl Drone {
         // :744-753) also sets health 100.0, +0x8F0 = 8.0, the props 0x35/0x36/0x3c, +0xB4 = 0 and
         // +0xEC = 2.0 — the melee band the ninja attack states roll their evasions under.
         self.melee_min_dist = if self.mode == 0xd { 2.0 } else { 4.0 };
-        if self.mode == 0xd { self.health = 100.0; self.max_health = 100.0; }
+        if self.mode == 0xd {
+            self.health = 100.0;
+            self.max_health = 100.0;
+            self.accuracy = 0; // +0xB4 = 0, after DoModeSettingsNEW's table read [M 0x14b300:501, :752]
+            for p in [0x3c, 0x36, 0x35] { d.props.set(p, &mut self.props, 1); } // [M 0x14b300:746-748]
+        }
         self.alt_mode = if self.second_tag == 0 || self.second_tag == 0x65 { 0 }
             else if self.second_channel == 0 && self.alert_floor >= 1.0 { 0 }
             else { self.dtype_of(d, self.dtype, self.mode_alert) };
@@ -4037,7 +4042,12 @@ impl Drone {
         let Some(h) = self.hit else { return };
         self.hits_taken += 1;
         let target = crate::damage::Target { damageable: self.damageable, armour: 0, mode: 0, skin: self.skin, kind: self.kind };
-        let r = crate::damage::hit_damage(d.tuning, target, nf_formats::ps2float::mul(h.damage, self.damage_taken), h.part, h.weapon, false, d.difficulty, d.level);
+        // The ninja's sword and flip states call `NDrone2_DoHitEffects` with 0.5, every other state
+        // with 1.0: HIT+8 × the arg, then HitDamage's +0x14C [M 0x1458e0:113-114; 0x16cdd0:39,49,
+        // 0x16cf68:39,49, 0x16d100:44,54, 0x16d298:35,45, 0x16d430:35,45].
+        let hit_scale = if matches!(self.state, crate::kiko::NINJA_SWORD | crate::kiko::NINJA_SOMERSAULT | crate::kiko::NINJA_BACKFLIP
+            | crate::kiko::NINJA_SIDEFLIP_LEFT | crate::kiko::NINJA_SIDEFLIP_RIGHT) { 0.5 } else { 1.0 };
+        let r = crate::damage::hit_damage(d.tuning, target, nf_formats::ps2float::mul(nf_formats::ps2float::mul(h.damage, hit_scale), self.damage_taken), h.part, h.weapon, false, d.difficulty, d.level);
         // `NDrone2_HitDamage` 0x145558:57-60 (and the explosive arm :129-130): a hit on a team-1
         // drone from the player (+0x2B4 == the player object) logs the accuracy numerator
         // (`PlrStat_LogShotHitEnemy` 0x199840). Outboxed; the tick folds it into the tally.
@@ -9968,10 +9978,11 @@ impl Drone {
                     if self.dist > 6.0 || self.dist <= 2.0 {
                         self.set_state(crate::kiko::NINJA_ATTACK);
                     } else {
-                        // dist < +0xEC → Rand(10) evasion roll (dead with the ninja's 2.0 band
-                        // inside 2<dist≤6, kept for the generic 4.0) [M 0x16c650:53-79].
-                        if self.dist < self.melee_min_dist && rng.rand(10) == 0 {
-                            if self.can_move(d, 3.0, 0.0) || self.can_move(d, -3.0, 0.0) { self.set_state(crate::kiko::NINJA_SIDEFLIP); }
+                        // dist < +0xEC → the Rand(10) sideflip roll, then the −5 backflip probe
+                        // whichever way the roll went (dead with the ninja's 2.0 band inside
+                        // 2<dist≤6, kept for the generic 4.0) [M 0x16c650:53-79].
+                        if self.dist < self.melee_min_dist {
+                            if rng.rand(10) == 0 && (self.can_move(d, 3.0, 0.0) || self.can_move(d, -3.0, 0.0)) { self.set_state(crate::kiko::NINJA_SIDEFLIP); }
                             else if self.can_move(d, 0.0, -5.0) { self.set_state(crate::kiko::NINJA_BACKFLIP); }
                         }
                         if self.next_state.is_none() && !(!self.burst_done && self.firing) {
@@ -10017,12 +10028,12 @@ impl Drone {
                         self.set_state(crate::kiko::NINJA_SWORD);
                     } else {
                         match self.move_to_object(d, 2.0, true) {
-                            2 => {
-                                if self.can_move(d, 0.0, 5.0) && self.dist > 5.0 && self.dist < 7.0 {
-                                    self.set_state(crate::kiko::NINJA_SOMERSAULT);
-                                } else { self.ninja_refire(d, rng, frame); }
+                            // Case 2 without the hop falls through into the moving arm: no break
+                            // before case 0/1 [M 0x16cb70:51-61].
+                            2 if self.can_move(d, 0.0, 5.0) && self.dist > 5.0 && self.dist < 7.0 => {
+                                self.set_state(crate::kiko::NINJA_SOMERSAULT);
                             }
-                            0 | 1 => {
+                            0..=2 => {
                                 self.call_anim(d, anim_state::NINJA_ADVANCE, 0, 0);
                                 self.ninja_refire(d, rng, frame);
                             }
@@ -10097,8 +10108,10 @@ impl Drone {
                 self.fire(d, rng, frame, true);
                 true
             }
+            // Only the somersault turns to the opponent: the flips' case 3 has no SetAngleToObj
+            // [M 0x16d298 case 3 against 0x16cdd0, 0x16cf68, 0x16d430 case 3].
             (crate::kiko::NINJA_SOMERSAULT | crate::kiko::NINJA_BACKFLIP | crate::kiko::NINJA_SIDEFLIP_LEFT | crate::kiko::NINJA_SIDEFLIP_RIGHT, msg::UPDATE) => {
-                self.desired_yaw = self.yaw_to_opp;
+                if self.state == crate::kiko::NINJA_SOMERSAULT { self.desired_yaw = self.yaw_to_opp; }
                 if self.burst_done || !self.firing { self.fire(d, rng, frame, true); }
                 true
             }
@@ -10139,6 +10152,7 @@ impl Drone {
                 self.vision_on = true;
                 self.call_anim(d, anim_state::NINJA_RUN_IN, 0, 0);
                 self.fire(d, rng, frame, true);
+                self.firing = self.los; // the shared tail: +0x3B = (+0x228 >> 2) & 1 [M 0x16d878:27-29]
                 true
             }
             (crate::kiko::NINJA_NO_ROUTE, msg::UPDATE) => {
@@ -10658,8 +10672,8 @@ impl Drone {
     fn can_backoff(&self, d: &Data) -> bool { self.prop(d, 0x06) && self.can_do(d, anim_state::BACKOFF) && self.can_move(d, 0.0, -1.8) }
 
     /// NinjaAttack 0xa7's ENTER/UPDATE routing [M 0x16bb50 case 1/case 3]: >12 → 0xa8, >6 → 0xa9,
-    /// 2<≤6 → 0xaa; the close band (≤2) rolls inline — ENTER: dist < +0xEC → 10% ±3 sideflip (0xaf)
-    /// else the −5 backflip test (0xae), then Rand(2): sword 0xac inside (0, 2], else 0xb2;
+    /// 2<≤6 → 0xaa; the close band (≤2) rolls inline — ENTER: dist < +0xEC → 10% ±3 sideflip (0xaf),
+    /// else the −5 backflip test (0xae); with neither, Rand(2): sword 0xac inside (0, 2], else 0xb2;
     /// UPDATE: ≥ the band → stay, else the backflip first and then the 10% sideflip.
     fn ninja_attack_route(&mut self, d: &Data, rng: &mut Rng, _frame: u32, enter: bool) {
         if self.dist > 2.0 {
@@ -10667,8 +10681,10 @@ impl Drone {
             return;
         }
         if enter {
-            if self.dist < self.melee_min_dist && rng.rand(10) == 0 {
-                if self.can_move(d, 3.0, 0.0) || self.can_move(d, -3.0, 0.0) { self.set_state(crate::kiko::NINJA_SIDEFLIP); return; }
+            // The Rand(10) gates the sideflip only: its miss, and a blocked ±3, both reach the −5
+            // backflip probe at LAB_0016bd08 [M 0x16bb50:48-69].
+            if self.dist < self.melee_min_dist {
+                if rng.rand(10) == 0 && (self.can_move(d, 3.0, 0.0) || self.can_move(d, -3.0, 0.0)) { self.set_state(crate::kiko::NINJA_SIDEFLIP); return; }
                 if self.can_move(d, 0.0, -5.0) { self.set_state(crate::kiko::NINJA_BACKFLIP); return; }
             }
             if rng.rand(2) == 0 {
@@ -20007,7 +20023,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             // `Drone::new_with_stats` runs after its stats read). Drake 0x1b's
                             // spawn pinned the order: his 60.0 health is TakeXHits(2, 0x33)×3,
                             // not the table record [M above].
-                            if dr.mode == 0x0d { dr.health = 100.0; dr.max_health = 100.0; }
+                            if dr.mode == 0x0d { dr.health = 100.0; dr.max_health = 100.0; dr.accuracy = 0; }
                             dr.captain_setup(d);
                             if dr.kind == 0x18 {
                                 let dmg = if d.difficulty == 1 { 1.0 } else { 2.0 };
