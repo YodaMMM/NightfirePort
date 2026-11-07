@@ -273,8 +273,34 @@ pub struct DamageLog {
     /// strip fights met Bond with the armour gone. A player answers what he SEES. Off = master
     /// behaviour (the lane gun-ray pick) everywhere else — no other walk sets it.
     pub eye_ray_stands: bool,
+    /// OPT-IN (`pre_throw_stands`, set by the 07000015 real-damage Agent walk): a
+    /// spawner-released hostile pre-empts the return-fire pick (nearest first, visible only,
+    /// inside `PRE_THROW_WINDOW_TICKS` of the game's own birth stamp), and `stand_and_fire`
+    /// runs the 0c `sniper_stands` pattern minus the aim bit — the settle (the raise/switch
+    /// anims drained before the first tap [M 0x1a24c8:113-152's pressed-edge law]) and the
+    /// tap gated on the exposed part at the 0.01-rad gate — so the kill lands the tick after
+    /// the release, BEFORE the guard's first throw. The base ledger's kills always came AFTER
+    /// the throw: #11 was killed at 6524 and its grenade still landed 6730 for −15.0; #13 was
+    /// killed at 9248 and its grenade −17.5 landed at the death tick 9422 [L the
+    /// aim-last-seven §3 NF_DMG_TRACE ledger] — the guards' throw cycle beats the ~90-tick
+    /// plain kill from every measured stance (the four position levers all measured worse).
+    /// The birth stamp is the game's own: the spawner release writes `Drone::spawn_frame` =
+    /// the sim frame alongside `present`/`enabled` [M nf-game drone.rs spawner arm], and
+    /// placement drones carry 0 for life, so a non-zero stamp inside the window IS a release.
+    /// Off = master behaviour everywhere else — no other walk sets it.
+    pub pre_throw_stands: bool,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
+    /// The live-hostile drones this log has already seen alive, with the walker tick of the
+    /// first sighting — `pre_throw_stands`'s release detector. A drone's first alive tick IS
+    /// its release: spawner templates are written `present` the frame the spawner releases
+    /// them [M nf-game drone.rs — the spawner arm also stamps `Drone::spawn_frame`], and a
+    /// channel-held placement sits present-but-disabled until its channel fires [M drone.rs
+    /// switch_channel/channel_on] — either way the first poll that sees it alive is within
+    /// 10 walker ticks of the release (the poll cadence). Seeded on the first poll after the
+    /// walk's own `wait_enabled`+`wait` prologue, so the level's standing garrison is born
+    /// outside every window that matters.
+    alive_seen: Vec<(usize, u32)>,
 }
 
 impl DamageLog {
@@ -528,6 +554,19 @@ impl DamageLog {
     }
 }
 
+/// `pre_throw_stands`'s window: a spawner release is answered for this many sim frames after
+/// its `spawn_frame` (the return-fire poll runs every 10 walker ticks, so the window must
+/// cover a poll plus the converge; 1200 = 20 s at the fixed 60 Hz). The measured release→sight
+/// gap on 07000015 is the reason it is not tighter: the west-room pair releases at the
+/// door[32] threshold leg (~28 u away, BEHIND the west wall — the door[29] doorway's z band
+/// blocks every ray from there [L the 2026-11-07 run-1 trace: no PRE-THROW line for #10/#11])
+/// and rounds the corner into sight only during the route_c legs, ~1000 frames later — a
+/// 120 window expired before the first sight and the pair was left to the jog sweep's flank
+/// machinery (21.0). A fight started inside 1200 still precedes the guard's SECOND throw
+/// cycle; a failed fight's 240-tick cooldown lets a release be fought at most ~5 times by
+/// this path, and the plain shooters take over from there.
+const PRE_THROW_WINDOW_TICKS: u32 = 1200;
+
 // The return-fire response, shared by both walkers (this file is `include!`d into each walker
 // module, so `Walker` is that module's walker; both carry `tick`, `tick_fire`, `switch_to_gun`,
 // `tops_up`, `scene`, `total_ticks` and `dmg`).
@@ -581,7 +620,40 @@ impl Walker {
                     .filter(|&i| nf_game::drone::Drone::dart_impact_state_ok(sim.drones.list[i].state))
                     .collect::<Vec<usize>>()
             } else { cands };
-            let pick = if !self.dmg.lane_fights {
+            // OPT-IN pre_throw_stands (the field doc): the spawner-released hostile inside
+            // the pre-throw window pre-empts the plain pick — nearest first, VISIBLE only (an
+            // unseen release is left to the plain path: a 60-tick unseen stand would burn the
+            // window while the throw cycle runs), within the plain shooters' own 20 u reach
+            // (every ledger fight sat at ≤ 14.4 u [L the aim-last-seven §3 ledger]). The
+            // release detector is the first-seen-alive tick (`alive_seen`): it catches BOTH
+            // the spawner templates (present written at the release) and the channel-held
+            // placements (enabled flips at the release, no spawn stamp — the run-2 trace saw
+            // no PRE-THROW for the west-room pair off the spawn_frame check alone).
+            let newborn = if self.dmg.pre_throw_stands {
+                let bp = sim.bond.pos;
+                let now = self.total_ticks;
+                let mut nb: Vec<(f32, usize)> = Vec::new();
+                for (i, d) in sim.drones.list.iter().enumerate() {
+                    if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { continue; }
+                    let born = match self.dmg.alive_seen.iter().find(|e| e.0 == i) {
+                        Some(e) => e.1,
+                        None => { self.dmg.alive_seen.push((i, now)); now }
+                    };
+                    if now.saturating_sub(born) <= PRE_THROW_WINDOW_TICKS
+                        && ((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)).sqrt() <= 20.0 {
+                        nb.push((((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)) as f32, i));
+                    }
+                }
+                nb.sort_by(|a, c| a.0.total_cmp(&c.0));
+                nb.into_iter().map(|(_, i)| i).find(|&i| DamageLog::visible(sim, i))
+            } else { None };
+            if trace && newborn.is_some() {
+                let d = &sim.drones.list[newborn.unwrap()];
+                eprintln!("[rf-trace] {label} tick {}: PRE-THROW fight on drone #{} (weapon {:#x}, hp {:.1}, at ({:.1},{:.1},{:.1}); bond gun {:#x} clip {} spare {})",
+                    self.total_ticks, newborn.unwrap(), d.weapon, d.health,
+                    d.pos[0], d.pos[1], d.pos[2], sim.gun.weapon, sim.gun.clip, sim.gun.spare);
+            }
+            let pick = newborn.or_else(|| if !self.dmg.lane_fights {
                 match cands.iter().copied().find(|&i| DamageLog::visible(sim, i)) {
                     Some(i) => Some(i),
                     // The unseen-cover fallback, opt-in (`with_real_damage_unseen_fights`): the
@@ -621,7 +693,7 @@ impl Walker {
                             .or_else(|| cands.first().copied())
                     }
                 }
-            };
+            });
             self.dmg.unseen_fight = unseen_fight;
             if trace && pick.is_none() && !cands.is_empty() {
                 eprintln!("[rf-trace] {label} tick {}: shooters {:?} none visible (bond {:?}, health {:.1}, clip {} spare {})",
@@ -774,7 +846,10 @@ impl Walker {
         // [M 0x1a24c8:113-152] — a press fired into the switch anim or a live fire script never
         // queues it (the level-0c-yard-climb-real-health-4 measurement), so a player lets the
         // gun settle before the first press; the loop's aim hold then runs the raise.
-        if self.dmg.sniper_stands {
+        // pre_throw_stands runs the same settle: a tap fired into a live switch anim or fire
+        // script is a wasted round from the pre-throw window (the walk legs hold the gun idle,
+        // so the loop breaks on its first tick there).
+        if self.dmg.sniper_stands || self.dmg.pre_throw_stands {
             for _ in 0..90 {
                 let s = self.scene.sim.as_ref().unwrap();
                 if s.gun.switch_state == 0 && !s.gun.fire_state { break; }
@@ -915,7 +990,11 @@ impl Walker {
                 // an exact view and the loose stand dried clips on the same box. 0.01 / 0.01 =
                 // ±0.35 u / ±0.55 u at 35 u — inside the box, still reachable by the ±0.08/tick
                 // converge.
-                let (err_gate, perr_gate) = if self.dmg.aimed_fights || self.dmg.precise_fights || self.dmg.sniper_stands { (0.01, 0.01) } else { (0.03, 0.04) };
+                // pre_throw_stands: the tap gated on the exposed part at the same 0.01-rad
+                // gate (the 0c pattern minus the aim bit — the walk's P2K/AR are not 0x400000
+                // records, and the aim-bit hold would hand the drive to the cursor law
+                // [M scene.rs free-aim, the precise_fights measurement]).
+                let (err_gate, perr_gate) = if self.dmg.aimed_fights || self.dmg.precise_fights || self.dmg.sniper_stands || self.dmg.pre_throw_stands { (0.01, 0.01) } else { (0.03, 0.04) };
                 let fire = !reload && unseen == 0 && !blocked && gate_err.abs() < err_gate && gate_perr.abs() < perr_gate
                     && t.saturating_sub(last_tap) >= 8
                     // sniper_stands: the aim BIT (the raise finished — a tap before it rides the
