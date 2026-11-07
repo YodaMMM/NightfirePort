@@ -10,3 +10,6 @@ Timing values must come from a fresh-load reading where one exists; do not deriv
 
 ---
 claimed-by: worker-unread-params-drones at 2026-11-07T09:07Z
+
+---
+claimed-by: sandbox5 at 2026-11-07T09:10Z
