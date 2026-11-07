@@ -11,7 +11,7 @@ fn main() {
     for d in &sim.drones.props.destroy {
         println!(
             "  placement {} kill {:#06x} death {:#06x} kind {} health {} blast {:.2} lo {:?} hi {:?}",
-            d.placement, d.kill_channel, d.channel, d.kind, d.health, d.blast_damage, d.lo, d.hi
+            d.placement, d.kill_channel, d.channel, d.kind, d.health, d.blast_radius, d.lo, d.hi
         );
     }
     for _ in 0..10 { sim.step_bond(Input::default(), false, false, false); }

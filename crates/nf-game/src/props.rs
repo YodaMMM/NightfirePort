@@ -54,6 +54,23 @@ pub struct CamSubject {
 /// leaf (one field — no level-wide name table) and compares it here.
 pub const SMASH_STAT_HASH: u32 = 0x0200_01d9;
 
+/// One `Destroy_Smash` 0x12bb60 blast, `Explode_Create`'s three floats as the call loads them
+/// [M 0x12bcdc-0x12bd0c]: f12 = obj+0x8C × the type multiplier (`scale`, SCRIPTINFO+0x94 — the
+/// script's size only), f13 = tag+8 (`radius`), f14 = the signed type byte × 10.0 (`damage`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Smash {
+    pub pos: V3,
+    pub radius: f32,
+    pub damage: f32,
+    pub kind: u8,
+    pub scale: f32,
+}
+
+impl Smash {
+    /// The blast script by the type byte [M 0x12bc50-0x12bc98].
+    pub fn script(&self) -> u32 { match self.kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 } }
+}
+
 #[derive(Clone, Debug)]
 pub struct Destroy {
     pub placement: usize,
@@ -76,12 +93,12 @@ pub struct Destroy {
     /// script on it — 1 → 0x6000027 (radius ×4), 2 → 0x600004f (×2), other non-zero → 0x6000052
     /// (×3); a type-0 tag plays NO script (`if (cVar4 != 0)` [M 0x12bc50]).
     pub kind: u8,
-    /// `tag+0x08` — the smash blast's damage float (placement param 5 [M 0x12c424 disasm
-    /// `lw v0,64(s0)` → decoded → tag+8]; `Destroy_Smash` passes it as `Explode_Create`'s f13-slot
-    /// damage [M 0x12bd04 `lwc1 f13,8(s1)`]). The disc's destroyables all carry small positive
-    /// ints here (10…3000 [D census]), the only branch the port decodes. `Destroy_Create` stores
-    /// them ×0.01 (`tag+8 = (float)param5 * 0.01` [M 0x12c318:48]), so the blasts deal 0.1…30.
-    pub blast_damage: f32,
+    /// `tag+0x08` — the smash blast's RADIUS float (placement param 5 ×0.01 [M 0x12c45c-0x12c470:
+    /// `mul.s` by 0.01, `swc1` to tag+8, no truncate]). `Destroy_Smash` loads it as f13
+    /// [M 0x12bd04 `lwc1 f13,8(s1)`], `Explode_Create`'s radius slot — the falloff divisor
+    /// `EXPLODEINFO+0x2C`, the `Camera_Shake` amount and the `< 0.5` damage gate [M 0x17cbd0:60-65,
+    /// the same slot the monitor's r and the grenade's weapon+0x08 fill].
+    pub blast_radius: f32,
     /// `tag+0x10` — the external-kill channel (placement param 1 [M 0x12c318:36]): the second arm
     /// of `Destroy_Update` 0x12c4f8:30-35 smashes the tag when the channel is ON and clears the
     /// word. 0 = inert. #234 on 07000008 carries 137 (the fusebox's channel) [D the census].
@@ -120,6 +137,14 @@ pub struct Destroy {
     /// write. 07000014's generator hall runs on this: each stage of 0x51 → … → 0x85 waits out its
     /// own p6.
     pub countdown: i32,
+}
+
+impl Destroy {
+    /// `Explode_Create`'s damage for this leaf: the signed type byte × 10.0 [M 0x12bcd8-0x12bd0c:
+    /// `sll/sra` 24, `cvt.s.w`, `mul.s` by 10.0], zeroed under radius 0.5 [M 0x17cbd0:60-61].
+    pub fn blast_damage(&self) -> f32 {
+        if self.blast_radius < 0.5 { 0.0 } else { self.kind as i8 as f32 * 10.0 }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -213,7 +238,7 @@ impl Props {
                         let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else { Some((m, p.index as usize)) };
                         target.and_then(|(mm, oo)| level.maps[mm].objects.get(oo + 1)).map_or(0, |o| o.hashcode)
                     };
-                    props.destroy.push(Destroy { placement: i, pos: p.translation, sphere: object_radius(level, m, p), lo, hi, channel: param(0) as u8, health: param(3) as f32, dead: false, kind: (param(2) & 0xff) as u8, blast_damage: param(5) as f32 * 0.01,
+                    props.destroy.push(Destroy { placement: i, pos: p.translation, sphere: object_radius(level, m, p), lo, hi, channel: param(0) as u8, health: param(3) as f32, dead: false, kind: (param(2) & 0xff) as u8, blast_radius: param(5) as f32 * 0.01,
                         kill_channel: param(1) as u16,
                         mask: (param(4) == 0).then_some(0).unwrap_or(!(param(4) as u16)),
                         colour: [0xff, 0xff], hit67: false,
@@ -322,9 +347,9 @@ impl Props {
     /// (obj+0xff = 1 [M :33/:41]), the channel write `switch_channels[+0x12] = 1` [M :40 — the
     /// same write `Destroy_CollisionHandler` 0x12bd48:42 reaches through the bullet-contact path]
     /// and the type-script blast [M :58-76: kind 1 → 0x6000027 ×4, kind 2 → 0x600004f ×2, other
-    /// non-zero → 0x6000052 ×3; the port keeps its established radius/damage stand-ins, see the
-    /// bullet_hit note]. Returns the blast tuple the caller queues.
-    pub fn smash(&mut self, i: usize, ch: &mut Channels, frame: u32) -> Option<(V3, f32, f32, u8)> {
+    /// non-zero → 0x6000052 ×3 — the multiplier scales the script, see `Smash`]. Returns the blast
+    /// the caller queues.
+    pub fn smash(&mut self, i: usize, ch: &mut Channels, frame: u32) -> Option<Smash> {
         let d = self.destroy.get_mut(i)?;
         if d.dead { return None; }
         d.dead = true;
@@ -357,7 +382,7 @@ impl Props {
         // twin no longer hides the C5 fireball, and the game's twin-door smash (bigdoor01's
         // leaf carries the sentinel object bounds [D #93 obj 91 min/max ±1e7]) spawns too.
         let mult = match d.kind { 1 => 4.0f32, 2 => 2.0, _ => 3.0 };
-        Some((c, sphere * mult, d.blast_damage, d.kind))
+        Some(Smash { pos: c, radius: d.blast_radius, damage: d.blast_damage(), kind: d.kind, scale: sphere * mult })
     }
 
     /// `weapon_word` is the round's `weapon_data+0x10` category word [M 0x1ece30:26] — the
@@ -366,7 +391,7 @@ impl Props {
     /// non-zero is dropped — set to the 1e8 dead distance and removed from the list [M
     /// 0x1ece30:30, the 0x4cbebc20 store]), so a dropped contact deals NOTHING and never
     /// reaches the handler's walk or the colour arms.
-    pub fn bullet_hit(&mut self, a: V3, b: V3, weapon: u16, weapon_word: u16, damage: f32, ch: &mut Channels, frame: u32) -> Vec<(V3, f32, f32, u8)> {
+    pub fn bullet_hit(&mut self, a: V3, b: V3, weapon: u16, weapon_word: u16, damage: f32, ch: &mut Channels, frame: u32) -> Vec<Smash> {
         let mut smashes = Vec::new();
         self.camera_shot_hit(a, b, weapon, ch, frame);
         for i in 0..self.destroy.len() {
@@ -425,7 +450,7 @@ impl Props {
     /// reads +0x68]). The walk order is the control walk's newest-first object order [M
     /// 0x1336f8:54-68, the order drone.rs' dispatch sorts by], so one cascade link propagates
     /// per tick. Returns the same blast tuples as `bullet_hit`.
-    pub fn channel_kills(&mut self, ch: &mut Channels, frame: u32) -> Vec<(V3, f32, f32, u8)> {
+    pub fn channel_kills(&mut self, ch: &mut Channels, frame: u32) -> Vec<Smash> {
         let mut smashes = Vec::new();
         for i in (0..self.destroy.len()).rev() {
             // The countdown arm runs first and ends the leaf's tick [M 0x12c518-48].
@@ -452,7 +477,7 @@ mod tests {
         Props {
             subjects: vec![CamSubject { placement: 0, lo: [4.0, 7.0, -111.0], hi: [6.0, 9.0, -109.0], channel: 0x1c, hit: false }],
             destroy: vec![Destroy { placement: 1, pos: [0.0; 3], sphere: 0.0, lo: [133.0, 4.0, -270.0], hi: [137.0, 7.0, -268.0], channel: 0x1f, health: 100.0, dead: false,
-            kind: 1, blast_damage: 100.0, kill_channel: 0, mask: 0xffef, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown: 0 }],
+            kind: 1, blast_radius: 100.0, kill_channel: 0, mask: 0xffef, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown: 0 }],
             gunimps: Vec::new(),
             stat_hit: false,
         }
@@ -589,7 +614,7 @@ mod tests {
         ch.set(137, 1, 10);
         let s = p.channel_kills(&mut ch, 10);
         assert_eq!(s.len(), 1, "the channel kill smashes [M 0x12c4f8:32-35 → Destroy_Smash]");
-        assert_eq!(s[0].3, 1, "the kind rides the blast tuple (the type-1 script 0x06000027 ×4 radius [M 0x12bc70-0x12bc98])");
+        assert_eq!(s[0].script(), 0x0600_0027, "the type-1 script [M 0x12bc70-0x12bc98]");
         assert!(p.destroy[0].dead, "the tag is dead");
         assert!(ch.on(0x1f), "the death channel rides the remote smash [M 0x12c4f8:35 → 0x12bb60:40]");
         // The word cleared: a second pass never re-smashes [M 0x12c4f8:32's `+0x10 = 0`].
@@ -609,8 +634,8 @@ mod tests {
         let mut p = Props::default();
         // Two tags: placement 0 kills on ch 5 and dies writing ch 6; placement 1 (newer) kills on
         // ch 6 and dies writing ch 7. A single pass after ch 5 rises smashes only the OLDER tag.
-        p.destroy.push(Destroy { placement: 0, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3], channel: 6, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 5, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown: 0 });
-        p.destroy.push(Destroy { placement: 1, pos: [0.0; 3], sphere: 0.0, lo: [2.0; 3], hi: [3.0; 3], channel: 7, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 6, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown: 0 });
+        p.destroy.push(Destroy { placement: 0, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3], channel: 6, health: 1.0, dead: false, kind: 0, blast_radius: 0.0, kill_channel: 5, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown: 0 });
+        p.destroy.push(Destroy { placement: 1, pos: [0.0; 3], sphere: 0.0, lo: [2.0; 3], hi: [3.0; 3], channel: 7, health: 1.0, dead: false, kind: 0, blast_radius: 0.0, kill_channel: 6, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown: 0 });
         let mut ch = Channels::default();
         ch.set(5, 1, 1);
         let s = p.channel_kills(&mut ch, 1);
@@ -621,6 +646,23 @@ mod tests {
         assert!(p.destroy[1].dead && ch.on(7), "the cascade links one tick later");
     }
 
+    /// `Destroy_Smash`'s three floats [M 0x12bcdc-0x12bd0c]: the sphere scales the script, tag+8 is
+    /// the radius, the type byte × 10 the damage; `Explode_Create` zeroes the damage under radius
+    /// 0.5 [M 0x17cbd0:60-61]. Type 0x32 with p5 1000 is 07000014's wrong-wire blast [D #713/#714].
+    #[test]
+    fn the_smash_hands_explode_create_radius_tag8_and_damage_type_times_ten() {
+        let leaf = |kind, blast_radius| Destroy { placement: 0, pos: [0.0; 3], sphere: 2.0, lo: [0.0; 3], hi: [1.0; 3], channel: 0, health: 1.0, dead: false,
+            kind, blast_radius, kill_channel: 0, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown: 0 };
+        let mut p = Props::default();
+        p.destroy.push(leaf(0x32, 10.0));
+        p.destroy.push(leaf(1, 0.4));
+        let mut ch = Channels::default();
+        let s = p.smash(0, &mut ch, 1).expect("a blast");
+        assert_eq!((s.radius, s.damage, s.scale, s.script()), (10.0, 500.0, 6.0, 0x0600_0052));
+        let s = p.smash(1, &mut ch, 1).expect("a blast");
+        assert_eq!((s.radius, s.damage, s.scale, s.script()), (0.4, 0.0, 8.0, 0x0600_0027), "under 0.5 the blast only shows");
+    }
+
     /// `Destroy_Update` 0x12c4f8's countdown arm: a timed leaf's smash writes nothing, the channel
     /// rises on the tick the countdown reaches zero [M 0x12c518-40], and the next leaf in a chain
     /// smashes off that write. A shot-out timed leaf never counts: the handler and the smash both
@@ -628,7 +670,7 @@ mod tests {
     #[test]
     fn a_timed_leaf_writes_its_channel_when_the_countdown_ends() {
         let leaf = |placement, kill_channel, channel, countdown| Destroy { placement, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3],
-            channel, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown };
+            channel, health: 1.0, dead: false, kind: 0, blast_radius: 0.0, kill_channel, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown };
         let mut p = Props::default();
         p.destroy.push(leaf(0, 0x52, 0x4e, -120));
         p.destroy.push(leaf(1, 0x51, 0x52, -60));
@@ -662,8 +704,8 @@ mod tests {
         let mut p = Props::default();
         // The named leaf (Mayhew's computer's smashed model) and an unnamed sibling (the cable
         // light's 0xffffffff [D pl[394] → "cable light1b"]).
-        p.destroy.push(Destroy { placement: 0, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3], channel: 0x48, health: 0.0, dead: false, kind: 1, blast_damage: 1.0, kill_channel: 0, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: SMASH_STAT_HASH, countdown: 0 });
-        p.destroy.push(Destroy { placement: 1, pos: [2.0; 3], sphere: 0.0, lo: [2.0; 3], hi: [3.0; 3], channel: 0, health: 0.0, dead: false, kind: 1, blast_damage: 1.0, kill_channel: 0, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0xffff_ffff, countdown: 0 });
+        p.destroy.push(Destroy { placement: 0, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3], channel: 0x48, health: 0.0, dead: false, kind: 1, blast_radius: 1.0, kill_channel: 0, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: SMASH_STAT_HASH, countdown: 0 });
+        p.destroy.push(Destroy { placement: 1, pos: [2.0; 3], sphere: 0.0, lo: [2.0; 3], hi: [3.0; 3], channel: 0, health: 0.0, dead: false, kind: 1, blast_radius: 1.0, kill_channel: 0, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0xffff_ffff, countdown: 0 });
         let mut ch = Channels::default();
         p.smash(1, &mut ch, 1);
         assert!(p.destroy[1].dead && !p.stat_hit, "the unnamed sibling's smash sets nothing [M 0x12bc3c-40's miss]");

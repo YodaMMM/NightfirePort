@@ -14391,9 +14391,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // smash's, the twin's blast queued like the beam path's (script by the type byte, owner
         // the blast's owner).
         for i in hits.destroys {
-            if let Some((c, r, dmg, kind)) = self.props.smash(i, &mut self.channels, frame) {
-                let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
-                self.pending_blasts.push((c, r, dmg, owner, 0, script, r, 0));
+            if let Some(s) = self.props.smash(i, &mut self.channels, frame) {
+                self.pending_blasts.push((s.pos, s.radius, s.damage, owner, 0, s.script(), s.scale, 0));
             }
             // The stat arm rides every Destroy_Smash [M 0x12bb60:42-55 — the C has no path
             // distinction; the blast-propagate case 0x21 reaches the same function].
@@ -15239,14 +15238,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     }
                 }
             }
-            for (pos, radius, damage, kind) in if net_world { Vec::new() } else { self.props.bullet_hit(b.pos, end, b.weapon, weapon_word, b.damage, &mut self.channels, frame) } {
-                let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
-                // fix-blast-scripts2: Destroy_Smash's f12 reads the tag's +0x8c [M 0x12bcdc `lwc1
-                // $f12, 140($16)`] — the port keeps the historical scale = radius here (no disc
-                // contradiction surfaced; the green destroy test pins the script, not the scale).
+            for s in if net_world { Vec::new() } else { self.props.bullet_hit(b.pos, end, b.weapon, weapon_word, b.damage, &mut self.channels, frame) } {
                 // explode-debris-spawn: Destroy_Smash's 12th arg (the u16 debris kind) is an
                 // explicit 0 — `sw $zero,($sp)` [M 0x12bcf8]; no destroyable blast spawns debris.
-                self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
+                self.pending_blasts.push((s.pos, s.radius, s.damage, usize::MAX, 0, s.script(), s.scale, 0));
             }
             // The stat arm rides every Destroy_Smash — the bullet kill reaches it through
             // `Destroy_CollisionHandler` 0x12bd48 → 0x12bb60 [M]; bullet_hit's internal smashes
@@ -16608,9 +16603,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // the smash's, the blast queued like the bullet-kill path's (script by the type
             // byte, owner the imp — not the player).
             for i in hits.destroys {
-                if let Some((c, r, dmg, kind)) = self.props.smash(i, &mut self.channels, frame) {
-                    let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
-                    self.pending_blasts.push((c, r, dmg, owner, 0, script, r, 0));
+                if let Some(s) = self.props.smash(i, &mut self.channels, frame) {
+                    self.pending_blasts.push((s.pos, s.radius, s.damage, owner, 0, s.script(), s.scale, 0));
                 }
                 // The stat arm rides every Destroy_Smash [M 0x12bb60:42-55].
                 self.smash_stat_check();
@@ -19493,11 +19487,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // generator-hall cascade to box #729's death ch 0x85 — Door_Slide_11A/B's lock channel
         // [D the census; M 0x1363c8:88-107] — so the sabotage sequence ends at the door unlock.
         // The blast rides the same queue the bullet-path smash uses (Destroy_Smash 0x12bb60's
-        // Explode_Create, the damage = param 5 × 0.01 [M 0x12c424]).
-        for (pos, radius, damage, kind) in self.props.channel_kills(&mut self.channels, frame) {
-            let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
+        // Explode_Create, `props::Smash`).
+        for s in self.props.channel_kills(&mut self.channels, frame) {
             // explode-debris-spawn: kind 0 — the same Destroy_Smash call as the bullet path [M 0x12bcf8].
-            self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
+            self.pending_blasts.push((s.pos, s.radius, s.damage, usize::MAX, 0, s.script(), s.scale, 0));
         }
         // The stat arm rides every Destroy_Smash — the external-kill path reaches it through
         // `Destroy_Update` 0x12c4f8's watch arm → 0x12bb60 [M]. channel_kills' internal smashes
