@@ -12,3 +12,11 @@ locked look and behaviour, replace the `[S mapping]` comment for `burned` with
 the decompile, census kind-0 placements with a non-zero out channel [D], pin a
 real level from the census (decrypt → drop → re-lock → decrypt again), keep a
 kind-1 laser-burn lock open. Entry started — work follows.
+
+Work (same entry): the case-2 tick wired into the per-tick pass (drone.rs) with the real
+channel read and the Player_UnEquipKey clear; the refill + re-lock check in the game's
+order inside update_burnt_open; decrypt/keypad unlocks land in the state-2 fold
+(burned) with the completion memset's scan_solved clear; the hold loop split to the
+game's state-1-only window; census probes (placement/writer/all-map/script sweeps): the
+arm is unreachable on shipped data — every kind-0 lock's out channel feeds a door's
+ch_lock and nothing writes it low; unit pins + one decompile-contradicting test fixed.
