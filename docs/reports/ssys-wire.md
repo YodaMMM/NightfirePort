@@ -166,3 +166,14 @@ instead, each to completion, plus every required `walkreal_*_live`.
 - Input tokens / output tokens / context used / cost: not visible to me. (No token, credit
   or context-window figures are shown anywhere in this environment; the sandbox only
   exposes a wall clock — 01:08 UTC at session start, expiry ~03:07 UTC.)
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-07 ~02:40 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "ssys-wire: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'ssys-wire: done …', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "ssys-wire: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output, killed at the 40 s tool timeout (connection never established).
