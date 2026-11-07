@@ -2060,6 +2060,12 @@ impl Scripts {
     /// sphere by the stream matrix (the discrete object 0 the game keys into obj+0x90); no glist →
     /// the translation + radius 0.1 [M 0x133070:19-27].
     pub fn held_hit_targets(&self, w: &dyn World) -> Vec<(usize, [f32; 3], f32)> {
+        self.held_hit_volumes(w).into_iter().map(|(p, c, r, _)| (p, c, r)).collect()
+    }
+
+    /// [`Scripts::held_hit_targets`] with each entity's glist and pose: the sphere is only the
+    /// broad phase, `Collide_Intersect` 0x1ebaa8 then tests the glist's triangles.
+    pub fn held_hit_volumes(&self, w: &dyn World) -> Vec<(usize, [f32; 3], f32, Option<(u32, Mat4)>)> {
         let mut out = Vec::new();
         for (pi, p) in self.players.iter().enumerate() {
             if p.deleted || p.hit_points == 0.0 { continue; }
@@ -2076,7 +2082,7 @@ impl Scripts {
                             matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
                             matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
                             matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2]];
-                        out.push((pi, centre, r));
+                        out.push((pi, centre, r, Some((*hash, *matrix))));
                     }
                     Obj::Anim { skin, .. } => {
                         // The anim object's BuildWorldSph volume: its own model glist (obj+0xD8 = the
@@ -2089,12 +2095,12 @@ impl Scripts {
                                 m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2] + m[3][0],
                                 m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2] + m[3][1],
                                 m[0][2] * c[0] + m[1][2] * c[1] + m[2][2] * c[2] + m[3][2]];
-                            out.push((pi, centre, r));
+                            out.push((pi, centre, r, None));
                         }
                     }
                     _ => {
                         if let Some(m) = s.stream_matrix(i, &self.objects, w) {
-                            out.push((pi, [m[3][0], m[3][1], m[3][2]], 0.1));
+                            out.push((pi, [m[3][0], m[3][1], m[3][2]], 0.1, None));
                         }
                     }
                 }
@@ -2110,7 +2116,7 @@ impl Scripts {
     /// Same `(player, centre, radius)` shape and sphere as `held_hit_targets` — the game's
     /// `Control_BuildWorldSph` volume [M 0x133070:36-48; no glist → the translation + 0.1,
     /// :19-27]. Read-only; the bullet pass records contacts through `add_bullet_hit`.
-    pub fn sp_bullet_targets(&self, w: &dyn World) -> Vec<(usize, [f32; 3], f32)> {
+    pub fn sp_bullet_targets(&self, w: &dyn World) -> Vec<(usize, [f32; 3], f32, Option<(u32, Mat4)>)> {
         let mut out = Vec::new();
         for (pi, p) in self.players.iter().enumerate() {
             if p.deleted { continue; }
@@ -2126,7 +2132,7 @@ impl Scripts {
                             matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
                             matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
                             matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2]];
-                        out.push((pi, centre, r));
+                        out.push((pi, centre, r, Some((*hash, *matrix))));
                     }
                     Obj::Anim { skin, .. } => {
                         // The anim object's BuildWorldSph volume: its own model glist (obj+0xD8 =
@@ -2138,12 +2144,12 @@ impl Scripts {
                                 m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2] + m[3][0],
                                 m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2] + m[3][1],
                                 m[0][2] * c[0] + m[1][2] * c[1] + m[2][2] * c[2] + m[3][2]];
-                            out.push((pi, centre, r));
+                            out.push((pi, centre, r, None));
                         }
                     }
                     _ => {
                         if let Some(m) = s.stream_matrix(i, &self.objects, w) {
-                            out.push((pi, [m[3][0], m[3][1], m[3][2]], 0.1));
+                            out.push((pi, [m[3][0], m[3][1], m[3][2]], 0.1, None));
                         }
                     }
                 }

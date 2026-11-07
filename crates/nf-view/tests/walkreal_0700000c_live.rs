@@ -476,7 +476,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(difficulty: u32) {
 #[test]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
     walker::with_yard_aimed_stands(|| {
-        walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff)
+        walker::with_far_sniper_stands(|| walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff))
     });
 }
 
