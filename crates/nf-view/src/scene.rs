@@ -2910,6 +2910,16 @@ impl Sim {
             self.use_key_prev = use_key;
             (Default::default(), false, false, use_key)
         } else { (input, trigger, reload, use_key) };
+        // The keypad page owns the pad while it stands: `Lock_Update` case 3 writes `+0x94a = 0` and
+        // `Player_Update` returns before any input arm [M 0x1ae3d8 case 3; 0x193600:80-87], and the
+        // manager reads the pad instead. Only a page the view draws may do that: an undrawn page
+        // leaves Bond free (`keypad_page_drawn`). The use key's previous state is recorded here as
+        // in the monitor arm above, so a key still held at the close is not a fresh press.
+        let (mut input, trigger, reload, use_key) = if self.drones.keypad.is_some() && self.drones.keypad_page_drawn {
+            self.drones.keypad_page_input(&input, crate::menu::keypad_step);
+            self.use_key_prev = use_key;
+            (Default::default(), false, false, use_key)
+        } else { (input, trigger, reload, use_key) };
         // fix-aim-raise: the aim BIT, not the raw button — a raise-script weapon defers it to the
         // raise's last tick. fix-aim-raise2: aim_gate owns the bit and the raise/lower advance+
         // finish (one advance); the QUEUE is the view chain's edge arm, which reads the RAW button

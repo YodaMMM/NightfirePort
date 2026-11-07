@@ -12958,6 +12958,11 @@ pub struct Drones {
     /// the lock pass (the match fires `Lock_Unlock` 0x1b0650 → the hold loop's channel). `None`
     /// = no keypad open (the game's state 0/1/2/5 locks refuse the E).
     pub keypad: Option<(usize, crate::lock::Keypad)>,
+    /// The view draws the keypad page. While this is false the page takes no input and Bond
+    /// stays free, because a page nobody can see must not hold the player; the page's draw sets
+    /// it true (`Sim::step_bond` then gives the pad to the page, the game's `+0x94a = 0`
+    /// [M 0x1ae3d8 case 3, 0x193600:80-87]). Nothing sets it yet.
+    pub keypad_page_drawn: bool,
     /// hind-flight-pin: the game's `attackmode_159` global [M Copter_Update 0x17dbb8:184] —
     /// `Rand_Rand(10)` on every case-2 entry, the missile/gun pick reads `& 1`. One word shared
     /// by every copter, like the game's.
@@ -13285,6 +13290,7 @@ impl Drones {
             // override with the snapshot's own table [L].
             key_codes: crate::lock::KeyCodes::init(&mut Rng::new(0x1b0548), 0),
             keypad: None,
+            keypad_page_drawn: false,
             // subtitles-do-spoken: `Snd2Lbl` (0x2d25d8) rows (label | 0x80000000 always-show,
             // sound id) and `SFXOutputData[id]+0x10` seconds — `Sound_DoSubtitle` 0x1dde58's data,
             // attached by the host from ACTION.ELF (`attach_snd2lbl`); empty = no spoken subtitles.
@@ -13378,6 +13384,44 @@ impl Drones {
     /// The armed keypad's display (the menu's label control text) — for tests/renders.
     pub fn keypad_display(&self) -> Option<String> {
         self.keypad.as_ref().map(|(_, kp)| kp.display())
+    }
+
+    /// The digit the page cursor stands on.
+    pub fn keypad_focus_digit(&self) -> Option<u32> {
+        self.keypad.as_ref().map(|(_, kp)| kp.focus_digit())
+    }
+
+    /// One tick of the armed keypad page's input, in the frame's order. `MenuManager_Update`
+    /// reads the close first and returns [M 0x21c3d8:77-105]: `Menu_PlaySound(8)` (sample 0x1d9,
+    /// flag 8 is on for this page [M 0x1f3278 case 8; `Menu_EnableSounds` 0x1f31f0 default 9]),
+    /// then `MenuManager_Monitor` deletes the manager on the same action [M 0x21d508:29-37; the
+    /// order, `Game_Run` 0x1c9790:13-14] and the lock's case 4 reads it gone. Then the steps
+    /// (`step`: `Menu_FindControl` over the digit rects, which live in the view). Then
+    /// `Page_Update` sees the control change and plays `Menu_PlaySound(7)` = 0x1da once, however
+    /// many directions fired [M 0x21edc8:32-52]; a press that finds no control is silent. Last
+    /// the focused button reads the select, so a step and a press on one frame type the new
+    /// digit: `Menu_PlaySound(0)` = 0x1da, msg 0x4b [M 0x1ef948:74,105-107]. The □ and ○ arms
+    /// send 0x5d/0x5e, which the handler ignores, under sound flags 2 and 4, which this page
+    /// has off, so they do nothing and have no lane.
+    pub fn keypad_page_input(&mut self, input: &crate::player::Input, step: impl Fn(usize, u8) -> usize) {
+        let Some((_, kp)) = self.keypad.as_mut() else { return };
+        let e = kp.edges(input.keypad_nav, input.keypad_confirm, input.keypad_back);
+        if e.back {
+            self.audio.play(0x1d9);
+            kp.close();
+            return;
+        }
+        let from = kp.focus;
+        for bit in crate::lock::KEYPAD_NAV_ORDER {
+            if e.nav & bit != 0 { kp.focus = step(kp.focus, bit); }
+        }
+        if kp.focus != from { self.audio.play(0x1da); }
+        if e.confirm {
+            kp.select();
+            self.audio.play(0x1da);
+        } else if e.confirm_repeat {
+            self.audio.play(0x1da);
+        }
     }
 
     /// mayhew-end-transition: one tick of the exit hold — the fade counts down (the game advances
@@ -16829,9 +16873,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // sim is never paused — the structural gate lock.rs documents), user class 3 (the port's
         // use path is always the player), the lock state ∈ {0, 5} (the port: not unlocked/burned —
         // states 1/2 — and not scanning — state 5 — and no keypad already armed — states 3/4); then
-        // kind 0 with an EMPTY key-ring slot → state 3 (arm the keypad). The port's lock side does
-        // not consult the key ring (the recorded gap, lock.rs header — `Lock_ReLock`'s clear is the
-        // only writer there), so the slot reads empty [S, same documented limitation].
+        // kind 0 with an EMPTY key-ring slot → state 3 (arm the keypad); a FILLED slot → state 1
+        // and the record's sound, no page [M 0x1aed00:18-33] (a solved code equips its slot, so a
+        // sister keypad on the same code opens on the press).
         // Kind 1 (the laser-burn locks) E-plays the hit sound only — presentation, skipped.
         {
             let use_point = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
@@ -16839,6 +16883,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let d = (use_point[0] - c[0]).powi(2) + (use_point[1] - c[1]).powi(2) + (use_point[2] - c[2]).powi(2);
                 d <= (1.0 + r) * (1.0 + r)
             };
+            let mut keyed = None;
             for (li, l) in self.locks.iter().enumerate() {
                 if l.kind != 0 || l.unlocked || l.burned || l.scanning { continue; }
                 if self.keypad.as_ref().is_some_and(|(cur, _)| *cur == li) { continue; } // state 3/4 [M 0x1aed00's state gate]
@@ -16846,6 +16891,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // The facing gate [M 0x1a5170:158-166] — the OBJECT translations (+0xC0).
                 let to = [body[0] - l.pos[0], body[1] - l.pos[1], body[2] - l.pos[2]];
                 if l.facing[0] * to[0] + l.facing[1] * to[1] + l.facing[2] * to[2] < 0.0 { continue; }
+                if self.inventory.keys.get(l.code as usize).copied().unwrap_or(false) {
+                    keyed = Some(li);
+                    break;
+                }
                 // Kind-0, no key → state := 3, GlobalVars/user saved [M 0x1aed00:001aed7c-90]:
                 // the keypad arms with `Lock_Update` case 3's data — the code copy happens there
                 // (the port's Keypad::arm takes the table's entry directly — the same bytes).
@@ -16856,6 +16905,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if shown { self.info_codes.push((code, 180.0)); }
                 self.keypad = Some((li, crate::lock::Keypad::arm(code, shown)));
                 break;
+            }
+            if let Some(li) = keyed {
+                // State 1, as the solve below folds it: unlocked, the state-2 fold and the out
+                // channel on this tick.
+                let (snd, pos) = (self.locks[li].key_channels[0] as u32, self.locks[li].pos);
+                self.locks[li].unlocked = true;
+                self.locks[li].burned = true;
+                if self.locks[li].out != 0 { self.channels.set(self.locks[li].out as u32, 1, self.frame); }
+                self.audio.play3d(snd, pos, None);
             }
         }
         // `Player_Activate`'s class-0x38 monitor path (`Monitor_Activate` 0x1b0058): the use
@@ -18219,8 +18277,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // lock [D]) —
         // the out channel lands ON the solve tick (the port's framelist fold — the game's write
         // is case 1's, one tick later [M :192-196]; see the solve branch below). The page closed
-        // without a match → state 0, re-armable (the Keypad::close arm — the view owns the
-        // close; the sim keeps the page until solved).
+        // without a match (the back edge — keypad_page_input) → the manager gone, state := 0,
+        // re-armable [M 0x1ae3d8:292-295].
         if let Some((li, kp)) = self.keypad.as_mut() {
             if kp.tick() {
                 // The unlock sound `Sound_Play3D(record u16[2])` [M 0x1ae3d8:282-283]: placement
@@ -18235,9 +18293,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // channel, so the write lands on the solve tick — one tick early vs the game,
                 // observation-free on the disc data: the census finds no writer that ever
                 // drops a lock's out channel). `burned` is the state-2 fold [M case 1's end].
+                // `Lock_Unlock` with param_3 0 equips the lock's key first
+                // [M 0x1ae3d8:278; 0x1b0650:15; `Player_EquipKey` 0x1a97a0].
+                let key = self.locks[*li].code as usize;
+                if let Some(k) = self.inventory.keys.get_mut(key) { *k = true; }
                 self.locks[*li].unlocked = true;
                 self.locks[*li].burned = true;
                 if self.locks[*li].out != 0 { self.channels.set(self.locks[*li].out as u32, 1, frame); }
+                self.keypad = None;
+            } else if !kp.open {
+                // The page closed without a match (the back edge): the game's case-4 else-arm
+                // reads the manager gone → `+0x94a = 1`, state := 0 — re-armable [M
+                // 0x1ae3d8:292-295]. The port drops the page; the next use re-arms (the arm
+                // gate skips only the lock with a page standing).
                 self.keypad = None;
             }
         }

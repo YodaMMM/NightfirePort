@@ -302,6 +302,17 @@ pub struct Input {
     /// goggle mode 0 → 1 (night) → 2 (x-ray) → 0 — unless the aim bit (+0x60 bit 0) is up.
     /// Keyboard: N. Local view state, not net-encoded (the `stabilise` precedent).
     pub goggles_action: bool,
+    /// The keypad page's select button, HELD level: the game's ✕ (action 0x1f). `Keypad::edges`
+    /// runs the game's action machine over it. Keyboard: Enter. Local view state, not net-encoded
+    /// (the `goggles_action` precedent).
+    pub keypad_confirm: bool,
+    /// The keypad page's back button, HELD level: the game's △ (action 0x22, the manager's exit
+    /// action [M `Lock_Update` 0x1ae3d8:243's create args]). Keyboard: Backspace.
+    pub keypad_back: bool,
+    /// The keypad page's directions, HELD, as `Menu_FindControl`'s bits (1 up, 2 down, 4 left,
+    /// 8 right): the game's actions 0x1a-0x1d, the d-pad or the left stick past half
+    /// [M psiInput_MapInputs 0x10cd80:380-410]. Keyboard: the arrows or W/A/S/D.
+    pub keypad_nav: u8,
 }
 
 /// level-0a-office-hatch-10 experiment switch: `NF_WALK_GHOST=1` drops the walk capsule's
