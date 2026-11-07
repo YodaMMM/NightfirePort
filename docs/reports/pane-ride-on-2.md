@@ -114,8 +114,15 @@ session). The extraction itself found and fixed one real order bug — master sa
 ghost branch — but one coupling remains unexplained. With ~25 minutes left there was no room
 to bisect it, so the working tree was reverted and the landed tree verified green instead of
 pushing a red branch. Next session: re-apply the three patches (Law 1, Law 2, the crack law),
-run d2-ride-on + d3-ride-off, and bisect the coupling by staging the gates (flank_hold_x
-alone; + ambush; + crack) — the divergence is deterministic (tick 17321 every run).
+run d2-ride-on + d3-ride-off. THE COUPLING IS SOLVED (a post-report bisect stage, 17:29 UTC):
+Law 1 ALONE (flank_hold_x + the gated flank arm, d3 path untouched) leaves the ghost d3 GREEN
+(9.54 s run) — the ghost-d3 break came from the CRACK LAW's trigger: it fires on
+`difficulty >= 3 && lip_engaged_at_and == 0`, and the lip set is ALSO empty at the AND on the
+ghost timeline (the parent's lip block did nothing there; the step survived because the ghost
+#5 never fires the volley), so the crack's aperture legs ran on the ghost d3 and moved the
+timeline. The crack needs a gate that separates the timelines — the door's open state at the
+step (the ghost named loop pre-opens it; the ride-on walk's own leg does the opening) is the
+candidate to verify.
 
 ## Runs (this session, NF_ISO set, --test-threads=1)
 
@@ -163,4 +170,4 @@ alone; + ambush; + crack) — the divergence is deterministic (tick 17321 every 
 
 The session's input/output tokens, context used and cost: not visible to me. (The environment
 exposed no token counters this session; the WORKLOG records the wall-clock instead: start
-16:14 UTC, report written 17:32 UTC, sandbox deadline 18:14 UTC.)
+16:14 UTC, report written 17:29 UTC, sandbox deadline 18:14 UTC.)
