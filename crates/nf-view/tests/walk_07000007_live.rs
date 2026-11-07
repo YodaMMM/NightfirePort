@@ -38,8 +38,9 @@ fn the_party_starts_locked_reveals_unlocks_at_the_hall_and_exits_to_the_gondola(
         let sim = scene.sim.as_mut().unwrap();
         let c = touch(sim, 0x48);
         sim.bond.pos = [c[0], c[1], c[2]];
-        // The viewer's input mapping (nf-view lib.rs 989/997): the lock swallows the cycle while
-        // ch 0x48 is off, and its rising edge auto-draws the P2K.
+        // The viewer's input mapping (nf-view lib.rs 989/997): the lock's cycle presses pass
+        // through to the Sim's mode-2 route while ch 0x48 is off (this walk presses none), and
+        // the lock's rising edge auto-draws the P2K.
         let mut prev = sim.drones.channels.on(nf_game::player::WEAPON_LOCK_CHANNEL);
         for _ in 0..120 {
             let mut input = Input::default();
