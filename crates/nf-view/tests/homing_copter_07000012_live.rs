@@ -121,18 +121,9 @@ fn raise_gate(scene: &mut nf_view::scene::Scene) {
 }
 
 #[test]
-#[ignore = "homing-copter-2: the arm's own LOS self-blocks on the port's dynamic set. The game's \
-Collide_LineOfSight carries the ray's SUBJECT objects (Collide_RayIntersect args 4/5 — Bullet_homing \
-0x12f358:92-93 passes the bullet obj and the CANDIDATE obj) and drops the candidate's own collision \
-nodes — a ray whose endpoint sits inside the target's own glist could never return clear, so no lock \
-could ever exist. The port's segment_bullet_clear has no exclusion, and the copter's script entities \
-pose into set_dynamic (drone.rs script_parts) — measured: after the opening ticks the segment from \
-the (20,4.4,15) shelf to the body's rest pose hits at t=0.943, at (61.9,4.38,19.3), 2.5 units off the \
-body (64.44,4.30,19.53) — the body cluster's own mesh. The fix (next round): an exclude-by-shape-hash \
-bullet-clear (the dynamic set's last_objects carry the hashes) fed the candidate copter's SP stream \
-hashes (nis.rs' hidden_stream_objects precedent), then this test runs red-then-green as written. \
-Everything up to the fire loop runs green: the level's own pickup grants the 0x2e, the switch draws \
-it, the gate raises and the body flies."]
+/// (homing-copter-2 measured the self-block this test used to carry an ignore for; fixed in
+/// homing-copter-3: the homing LOS excludes the candidate's own SP stream shapes — the port of
+/// `Collide_LineOfSight`'s subject-argument rule [M Bullet_homing 0x12f358:92-93].)
 fn the_scorpions_homing_round_locks_the_copter_body_on_07000012() {
     let mut scene = nf_view::load_weapons(&iso(), "07000012.bin", false, &[0x2e])
         .expect("load 07000012 with the AT-600 Scorpion");
@@ -156,7 +147,10 @@ fn the_scorpions_homing_round_locks_the_copter_body_on_07000012() {
             let Some(fy) = sim.world.floor_below([sx, 45.0, sz], 120.0) else { eprintln!("  spot ({sx},{sz}): no floor"); continue };
             if fy < -5.0 || fy > 20.0 { eprintln!("  spot ({sx},{sz}): floor {fy} out of band"); continue; }
             let eye = [sx, fy + 1.6, sz];
-            let los = sim.world.segment_bullet_clear(eye, c0);
+            // The game's subject rule: the candidate's own shapes don't block its lock ray
+            // [M Bullet_homing 0x12f358:92-93] — the same exclusion the homing scan now runs.
+            let ex = sim.drones.copter_stream_hashes(ci);
+            let los = sim.world.segment_bullet_clear_excluding(eye, c0, &ex);
             eprintln!("  spot ({sx},{sz}): floor {fy:.1} eye {:?} → c0 {:?} los {los}", eye, c0);
             if !los { continue; }
             found = Some([sx, fy, sz]);
@@ -217,6 +211,76 @@ fn the_scorpions_homing_round_locks_the_copter_body_on_07000012() {
         "a steered round must converge onto the body: spawn dot {early:.4} → best {best_dot:.4} — \
          the old code's rounds flew straight past (their dot only drops)");
     eprintln!("lock proof: spawn dot {early:.4} → best {best_dot:.4}, locked");
+}
+
+/// The wall half: the subject rule excludes only the CANDIDATE's own shapes — the static and
+/// missile sets never exclude (`Collide_LineOfSight`'s subjects are the bullet and the
+/// candidate obj, not the world [M Bullet_homing 0x12f358:92-93]), so a wall between the
+/// shooter and the body still stops the lock. The firing spot is picked with the EXCLUDING
+/// clear reading FALSE (the body's own cluster removed, a real occluder left), the fire loop
+/// releases the trigger only while the live eye→body ray stays blocked, and no round may ever
+/// carry a copter target.
+#[test]
+fn a_wall_between_still_stops_the_lock_on_07000012() {
+    let mut scene = nf_view::load_weapons(&iso(), "07000012.bin", false, &[0x2e])
+        .expect("load 07000012 with the AT-600 Scorpion");
+    assert_eq!(scene.sim.as_ref().unwrap().drones.copters.len(), 1, "07000012 carries exactly one kind-0 copter [D #707]");
+    take_and_draw_scorpion(&mut scene);
+    raise_gate(&mut scene);
+    let c0 = copter_pose(scene.sim.as_ref().unwrap());
+
+    // The wall spot: a standable cell whose STATIC bullet path to the body's rest pose is
+    // blocked (the candidate's own shapes excluded — with them gone, whatever blocks is the
+    // world: walls, floors, terrain [D the level's own geometry]).
+    let spot = {
+        let sim = scene.sim.as_ref().unwrap();
+        let ex = sim.drones.copter_stream_hashes(0);
+        let mut found = None;
+        for (sx, sz) in [(20.0f32, 15.0), (25.0, 35.0), (-15.0, 30.0), (10.0, 30.0), (5.0, 25.0), (30.0, 20.0), (-10.0, 10.0), (0.0, 20.0), (15.0, 35.0)] {
+            let Some(fy) = sim.world.floor_below([sx, 45.0, sz], 120.0) else { continue };
+            if fy < -5.0 || fy > 20.0 { continue; }
+            let eye = [sx, fy + 1.6, sz];
+            if sim.world.segment_bullet_clear_excluding(eye, c0, &ex) { continue; }
+            eprintln!("wall spot ({sx},{sz}): floor {fy:.1} — the static path to the body is blocked");
+            found = Some([sx, fy, sz]);
+            break;
+        }
+        found.expect("a standable spot with a static occluder toward the body's route exists on 07000012")
+    };
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond = nf_game::player::Bond::stand_at(&sim.world, spot, 0.0);
+    }
+
+    // Fire only while the live eye→body ray is statically blocked (the wall half's premise);
+    // the homing scan runs the same predicate per acquisition tick, so a blocked ray can
+    // never yield the copter target.
+    let mut fired = 0usize;
+    let mut locked = false;
+    for t in 0..420 {
+        let blocked = {
+            let sim = scene.sim.as_ref().unwrap();
+            let Some(cp0) = sim.drones.copters.first().map(|c| c.pos()) else { break };
+            let eye = [sim.bond.pos[0], sim.bond.pos[1] + 1.6, sim.bond.pos[2]];
+            let ex = sim.drones.copter_stream_hashes(0);
+            !sim.world.segment_bullet_clear_excluding(eye, cp0, &ex)
+        };
+        if blocked {
+            aim_at(scene.sim.as_mut().unwrap(), [c0[0], c0[1] + 0.5, c0[2] + 8.0], true);
+            fired += 1;
+        } else {
+            aim_at(scene.sim.as_mut().unwrap(), [c0[0], c0[1] + 0.5, c0[2] + 8.0], false);
+        }
+        let sim = scene.sim.as_ref().unwrap();
+        if sim.drones.player_bullets.iter().any(|b| b.weapon == 0x2e && b.homing && b.target_copter) {
+            locked = true;
+        }
+        let _ = t;
+    }
+    assert!(fired > 0, "the wall window must have fired (the body's route passes behind the occluder)");
+    assert!(!locked, "no homing round may lock the copter while a static wall blocks the ray \
+        [M Bullet_homing 0x12f358:92 — the LOS bit-0x8 drop trace gates the class-0 arm]");
+    eprintln!("wall proof: {fired} rounds fired behind the occluder, none locked");
 }
 
 /// The dormant half [M Bullet_heatseekable 0x12f248:29 — the class-0 arm's `+0xfc != 0` gate]:

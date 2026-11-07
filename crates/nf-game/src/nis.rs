@@ -2392,6 +2392,32 @@ impl Scripts {
         out
     }
 
+    /// The glist hashcodes of the SP player running `placement`'s CURRENT script's stream
+    /// objects — the shapes its entities pose into the collide world (`script_parts` pushes
+    /// every colliding script Entity with its hash). The homing LOS's candidate exclusion
+    /// feeds on this: the game's `Collide_LineOfSight` carries the ray's SUBJECT objects
+    /// ([M Bullet_homing 0x12f358:92-93] — the bullet obj and the CANDIDATE obj; [M
+    /// Copter_Update 0x17dbb8:171-172] — the copter obj and Bond) and a subject's own
+    /// collision nodes never block its ray, so the candidate's own shapes must be excludable.
+    /// Same walk as `hidden_stream_objects`, keyed on the copter's placement instead of the
+    /// hidden flag.
+    pub fn stream_hashes_for_placement(&self, placement: usize) -> Vec<u32> {
+        let mut out = Vec::new();
+        for p in &self.players {
+            if p.placement != placement { continue; }
+            if let Some(s) = p.info[p.cur].as_ref() {
+                for st in &s.streams {
+                    if let Some(o) = st.obj {
+                        if let Some(crate::nis::Obj::Entity { hash, .. }) = self.objects.list.get(o).and_then(|x| x.as_ref()) {
+                            out.push(*hash);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Any script player playing a non-looping script right now — the game's skip window (`SP_Update` state 2
     /// with `Script_IsPlaying`). The viewer's key handler asks this before mapping a key press to the skip.
     pub fn cutscene_playing(&self) -> bool {

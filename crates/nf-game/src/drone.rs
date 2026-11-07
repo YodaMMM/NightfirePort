@@ -14771,6 +14771,21 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
     }
 
+    /// The candidate copter's own SP stream shape hashes — the shapes its script entities
+    /// currently pose into the dynamic set (`script_parts` pushes every colliding script
+    /// Entity with its glist hash; the copter's body cluster among them). This is the port's
+    /// stand-in for `Collide_LineOfSight`'s SUBJECT-argument rule: the game passes the ray's
+    /// subject objects (`Bullet_homing` 0x12f358:92-93 — the bullet obj and the CANDIDATE
+    /// obj; the copter's own spot check [M 0x17dbb8:171-172] — the copter obj and Bond) and
+    /// a subject's own collision nodes never block its ray. The SP-player lookup mirrors
+    /// nis.rs' `hidden_stream_objects` (the same `players[placement]` → `info[cur].streams`
+    /// walk, keyed on the copter's own placement instead of the hidden flag). Hashes, not
+    /// indices: the dynamic set's `last_objects` carry the shape hash per object.
+    pub fn copter_stream_hashes(&self, ci: usize) -> Vec<u32> {
+        let Some(c) = self.copters.get(ci) else { return Vec::new() };
+        self.scripts.stream_hashes_for_placement(c.placement)
+    }
+
     fn update_player_bullets(&mut self, d: &Data, player_pos: V3) {
         self.player_impacts.clear();
         self.bullet_paths.clear();
@@ -15779,7 +15794,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         if dot <= 0.66 { continue; }
                         // The homing LOS is the game's ONE bit-0x8 DROP trace (`Collide_LineOfSight
                         // (…, 8)` [M 0x12f358:92]) — pass-flagged hits (foliage) don't block the
-                        // lock — the port's `segment_bullet`, not the flight `segment`.
+                        // lock — the port's `segment_bullet`, not the flight `segment`. The game
+                        // passes the candidate guard obj as the ray's SUBJECT (0x12f358:92-93) and
+                        // a subject's own nodes never block; the port needs no exclusion here —
+                        // the guards' bodies are not script entities and never enter the dynamic
+                        // set (`script_parts` walks scripts.objects only), so nothing of the
+                        // guard's own is in the ray's path (their locks engaged green through
+                        // every homing test binary — the measured warrant).
                         if !d.world.segment_bullet_clear(b.pos, dr.pos) { continue; }
                         best = Some((i, dist, false));
                     }
@@ -15797,7 +15818,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         let n = [to[0] / dist, to[1] / dist, to[2] / dist];
                         let dot = n[0] * b.dir[0] + n[1] * b.dir[1] + n[2] * b.dir[2];
                         if dot <= 0.66 { continue; }
-                        if !d.world.segment_bullet_clear(b.pos, cp) { continue; }
+                        // The subject rule, copter side: the ray's endpoint sits INSIDE the
+                        // candidate's own script-entity cluster (the body poses into the dynamic
+                        // set), so the plain clear self-blocks (homing-copter-2's measured t=0.943
+                        // hit 2.5 u off the body). Exclude the candidate's own SP stream shapes —
+                        // the port of `Collide_LineOfSight`'s subject args [M 0x12f358:92-93].
+                        let ex = self.copter_stream_hashes(ci);
+                        if !d.world.segment_bullet_clear_excluding(b.pos, cp, &ex) { continue; }
                         best = Some((ci, dist, true));
                     }
                     if let Some((i, _, copter)) = best { target = Some(i); target_copter = copter; }
