@@ -90,7 +90,7 @@ pub fn report_id() -> String {
 // ── the entry save (the carried state a level starts with) ─────────────────────────────────────────────────────
 
 const SAV_MAGIC: &[u8; 4] = b"NFES";
-const SAV_VERSION: u16 = 3; // 2: + the mission tally (RamSave.tally); 3: + the warm chain's difficulty carry (RamSave.difficulty); 1 still decodes
+const SAV_VERSION: u16 = 4; // 2: + the mission tally (RamSave.tally); 3: + the warm chain's difficulty carry (RamSave.difficulty); 4: + the SSYS block (RamSave.ssys, ssys-wire); 1 still decodes
 
 fn put_u32(o: &mut Vec<u8>, v: u32) { o.extend_from_slice(&v.to_le_bytes()); }
 
@@ -139,6 +139,19 @@ pub fn encode_ram_save(s: &nf_game::player::RamSave) -> Vec<u8> {
     // survives the level change untouched (see `RamSave::difficulty`); a bug replay re-seeds it
     // through `load_with_carry` instead of falling back to 1.
     put_u32(&mut o, s.difficulty);
+    // v4: the SSYS block (ssys-wire) — the 4 live records `SSys_RamLoad` 0x1b0208 restores
+    // (`Player_RamSave` 0x195670:9 copies all 5; the header record is constant 0s).
+    match &s.ssys {
+        None => o.push(0),
+        Some(block) => {
+            o.push(1);
+            for it in block {
+                o.extend_from_slice(&it.timer.to_le_bytes());
+                o.push(it.channel);
+                o.push(it.state);
+            }
+        }
+    }
     o
 }
 
@@ -190,6 +203,15 @@ pub fn decode_ram_save(b: &[u8]) -> Result<nf_game::player::RamSave, String> {
         s.tally = Some(nf_game::player::TallySave { stats, bond_moments: bm });
     }
     if ver >= 3 { s.difficulty = r.u32()?; }
+    if ver >= 4 && r.u8()? == 1 {
+        let mut block = [nf_game::ssys::SsysItem { timer: 0.0, channel: 0, state: 0 }; 4];
+        for it in block.iter_mut() {
+            it.timer = r.f32()?;
+            it.channel = r.u8()?;
+            it.state = r.u8()?;
+        }
+        s.ssys = Some(block);
+    }
     Ok(s)
 }
 
@@ -566,6 +588,12 @@ mod tests {
                 bond_moments: [1, 0, 2, 0, 0, 0, 0, 0, 0, 3],
             }),
             difficulty: 3,
+            ssys: Some([
+                nf_game::ssys::SsysItem { timer: -1.0, channel: 0x37, state: 0 },
+                nf_game::ssys::SsysItem { timer: 118.5, channel: 0x3b, state: 4 },
+                nf_game::ssys::SsysItem { timer: -1.0, channel: 0xff, state: 0 },
+                nf_game::ssys::SsysItem { timer: 240.0, channel: 0x51, state: 6 },
+            ]),
         };
         let b = encode_ram_save(&s);
         let r = decode_ram_save(&b).expect("decodes");

@@ -12643,6 +12643,14 @@ pub struct Drones {
     /// The use objects (map-tower): the Q-Worm PCs (0x35) and switches (0x29) of
     /// `Player_Activate` 0x1a5170 — crate::useobj.
     pub useobjs: crate::useobj::UseObjects,
+    /// `SSysItems` 0x2befd0 + `SSysDelayTimer` 0x30cd94 — the security-subsystem alarm state
+    /// machine (crate::ssys). Created fresh per level (the game's `SSys_Init` 0x1b01b0 cold arm,
+    /// `ResetMap_GameInit` 0x1d5080:46); the switch-create channel store (`Switch_Create`
+    /// 0x1adcc0:29-31) lands in `attach_level_id`, the warm-load block restore (`SSys_RamLoad`
+    /// 0x1b0208, from `Player_RamLoad` 0x1957a8) rides the `RamSave::ssys` carry, and the per-tick
+    /// pass (`SSys_Monitor` 0x1ad998, from `Game_Run` 0x1c9790:32) runs at the top of `tick_inner`
+    /// — before the object-handler passes, with the game's `ScriptCam == 0` gate.
+    pub ssys: crate::ssys::Ssys,
     /// The level's doors (docs/systems/world-objects.md "Doors"); created in `attach_level`, updated in `tick`'s
     /// control-list order (`Door_Update`), the group sync (`Doors_Calc`) at the pass's end.
     pub doors: crate::door::Doors,
@@ -13154,6 +13162,12 @@ impl Drones {
             swooshes: Vec::new(),
             // fix-death-restart: the death sequence + the fail-menu policy.
             letterbox: false, view_fade: None, view_fade_script: false, script_cam_prev: false, script_msgs: Vec::new(), text_flush: false,
+            // ssys-wire: `SSys_Init` 0x1b01b0's cold arm — items 1..=5 = {-1.0, 0xff, 0} [M]; the
+            // game runs it from `ResetMap_GameInit` 0x1d5080:46 on EVERY load but its body is gated
+            // on `IsWarmReset == 0`, so a warm load keeps the .data records until `SSys_RamLoad`
+            // overwrites them from the RamSave block (the port's fresh Sim starts here and the
+            // carry apply lands on top).
+            ssys: crate::ssys::Ssys::new(),
             // ScriptFootstepFoot 0x30cde0 [M]: the game's bss boot value 0 (foot 4 first).
             script_footstep_foot: false,
             // subtitles-data: the fresh profile's Subtitles byte is Off [M profile.rs]; the host
@@ -13526,6 +13540,19 @@ impl Drones {
         let mm = level.main_map().unwrap_or(0);
         self.useobjs = crate::useobj::UseObjects::create(&level.maps[mm].placements);
         self.useobjs.set_pc_spheres(level, mm);
+        // ssys-wire — `Switch_Create` 0x1adcc0:29-31, the SSys arm store, BEFORE the load beat's
+        // switch_channels write (:39-43, `init_channels` below — the game's create order): a
+        // switch whose placement param 6 (`level_tag`+0x44) is non-zero stores its own channel id
+        // (ext+0x12 = param 0) into `SSysItems[param6].channel` — the +4 byte of the 8-byte record
+        // [M `SSysItems[idx*8+4] = *(u8 *)(ext+0x12)`; [L ee_start_0700000a.bin @0x2befd0 — item 2
+        // reads ch 0x3b after the cold boot, switch #643's param 6 = 2 / param 0 = 0x3b, while the
+        // SSys_Init'd items 1/3/4 still read 0xff]. The game indexes the 5-record array raw; every
+        // disc placement carries 1 or 2 [D the ssys_switch_census], so the port bounds-checks.
+        for sw in &self.useobjs.switches {
+            if sw.ssys_item != 0 && (sw.ssys_item as usize) < self.ssys.items.len() {
+                self.ssys.items[sw.ssys_item as usize].channel = sw.ch;
+            }
+        }
         self.useobjs.init_channels(&mut self.channels, self.frame);
         let Some(m) = level.main_map() else { return };
         // Searchlights (`Searchlight_Create`, placement order; every part draws `Rand_Rand(480)`, spots another
@@ -17994,6 +18021,51 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // the draw, then the cel walk, then UpdateDrops].
             self.rbodies.tick_winds(gust);
             env.update(&mut self.rng, &mut self.fill_rng, player.eye, atan2_approx(player.aim[0], player.aim[2]));
+        }
+        // ssys-wire — `SSys_Monitor` 0x1ad998, called from `Game_Run` 0x1c9790:32-34 RIGHT HERE:
+        // after `Env_Update` and inside the `GS_IsPaused == 0` arm (the port's tick only runs
+        // unpaused — the game's :30-38 else-arm freezes the monitor alongside `Light_Update` and
+        // `control_movement_object_handler`), BEFORE the object-handler passes below. So the
+        // monitor reads and writes the switch channels as the PREVIOUS tick's walk left them,
+        // ahead of this tick's triggers/scripts/switches — the game's tick order. The monitor's
+        // own `ScriptCam == 0` gate [M 0x1ad998:8] rides the port's `scripts.camera()` stand-in
+        // (the same one the muzzle-light gate cites, 0x1befd8:191-195).
+        if self.scripts.camera().is_none() {
+            let level = d.level; // GameState+0xc [M 0x1d5080:6]
+            let ch76_off = !self.channels.on(0x76); // switch_channels[0x76] [M 0x1ad878:7]
+            // The two callbacks alias `self.channels` while `self.ssys` is borrowed: a RefCell
+            // over the field borrow keeps both alive (the reads happen between the writes).
+            let ch = std::cell::RefCell::new(&mut self.channels);
+            let msgs = self.ssys.monitor(
+                |c| ch.borrow().on(c as u32),
+                |c, v| {
+                    if v {
+                        // The laser-2 arm's `switch_channels[ch] = 1` — a BARE store, NO
+                        // switch_channels_time stamp [M 0x1ad998 disasm 0x1adaa0-0x1adacc: the
+                        // only array write is `sb $v1, ($v0)`; the time cell keeps its old
+                        // value]. `Channels::set` stamps every nonzero write like the
+                        // trigger/script writers, so this arm writes the array directly (the
+                        // channel-persistence probe records the direct writer too, as at
+                        // Drone_InitComms' 0x97 [M 0x139520:198-201]).
+                        let mut ch = ch.borrow_mut();
+                        ch.v[c as usize] = 1;
+                        if let Some(w) = &mut ch.writes { w.push((c, 1, frame, 0)); }
+                    } else {
+                        // The state-2 expiry's `switch_channels[ch] = 0` [M 0x1adc64] — a zero
+                        // write; `set` stamps only nonzero values, so it matches the game.
+                        ch.borrow_mut().set(c as u32, 0, frame);
+                    }
+                },
+            );
+            // `SSys_Msg` 0x1ad878 per announcement, in the monitor's own play order, through the
+            // port's normal sound path — the game's `Sound_Play(100.0f, table[id], 0, 0)` 2-D
+            // play [M 0x1ad878:15, :33] — with the level gates `msg_sound` models
+            // [M 0x1ad878:9-12 (0x0700000b + ch 0x76 off), :26 (camera 1 silent on 0x0700000a)].
+            for (item, msg) in msgs {
+                if let Some(id) = self.ssys.msg_sound(item, msg, level, ch76_off) {
+                    self.audio.play(id);
+                }
+            }
         }
         // objective-77: `Lock_Update` case 1 (0x1ae3d8:192-196 — `case 1:
         // switch_channels[puVar1[4]] = 1; switch_channels_time[...] = GameState._52_4_`) writes the

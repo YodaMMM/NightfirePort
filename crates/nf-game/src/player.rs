@@ -2217,6 +2217,14 @@ pub struct RamSave {
     /// (see the `mission` field). 0 = not carried (the plain `capture`): the warm load falls back
     /// to 1, the old direct-load replay parity.
     pub difficulty: u32,
+    /// The SSYS save block — `Player_RamSave` 0x195670:9's `amemcpy(0x2b9a14, SSysItems, 0x28)`
+    /// (the whole 5-record array; the port carries the 4 live records 1..=4 that `SSys_RamLoad`
+    /// 0x1b0208 reads back — block[i−1] = saved record i, the same shape `Ssys::ram_load` takes).
+    /// `Player_RamLoad` 0x1957a8:13 calls `SSys_RamLoad(0x2b9a14)` inside its `IsWarmReset` body,
+    /// so a cold load (save `None`) never restores — the port's fresh `Ssys::new()` cold arm
+    /// stands. `None` = a capture that predates the block (the plain `capture` / the test
+    /// helpers): the warm load falls back to the fresh defaults, the old shape.
+    pub ssys: Option<[crate::ssys::SsysItem; 4]>,
 }
 
 /// `ContinueHealthBoostEasy` / `ContinueHealthBoostMedium` / `ContinueHealthBoostHard`
@@ -2249,6 +2257,7 @@ impl RamSave {
             mission: None,
             tally: None,
             difficulty: 0,
+            ssys: None,
         }
     }
 
@@ -2296,6 +2305,16 @@ impl RamSave {
     /// the states.
     pub fn with_mission_snapshot(mut self, m: crate::mission::MissionSave) -> RamSave {
         self.mission = Some(m);
+        self
+    }
+
+    /// Attaches the SSYS block — the game's `Player_RamSave` copies it unconditionally on every
+    /// save [M 0x195670:9] and `Player_RamLoad` 0x1957a8:13 restores it on every warm load. The
+    /// port keeps it a builder step like `with_tally`, so the plain `capture` signature (and its
+    /// many test call sites) stays; the game-path captures attach it.
+    pub fn with_ssys(mut self, s: &crate::ssys::Ssys) -> RamSave {
+        let [_, ref a, ref b, ref c, ref d] = s.items;
+        self.ssys = Some([*a, *b, *c, *d]);
         self
     }
 

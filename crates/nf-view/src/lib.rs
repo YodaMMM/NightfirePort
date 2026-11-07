@@ -833,6 +833,15 @@ pub fn fail_restart_save(entry: Option<&nf_game::player::RamSave>, sim: &scene::
         }
     }
     s = s.with_mission_snapshot(ms);
+    // ssys-wire, the 0a keep: `SSys_RamLoad` 0x1b0208:13 skips record 2 when the level is
+    // 0x0700000a — the game's .data item 2 keeps the DEATH-TIME record through the restart (the
+    // warm reload resets only what it copies). The serve therefore swaps the block's record-2 slot
+    // for the live one; the reload's pre-seed (load_impl) plants it before `ram_load`'s skip, so
+    // the kept value is the death-time record exactly as the game keeps it. On every other level
+    // the entry checkpoint's own record stands (RamLoad copies it verbatim).
+    if sim.drones.level_current == 0x0700_000a {
+        if let Some(block) = s.ssys.as_mut() { block[1] = sim.drones.ssys.items[2]; }
+    }
     s
 }
 
@@ -846,7 +855,8 @@ pub fn fail_restart_save(entry: Option<&nf_game::player::RamSave>, sim: &scene::
 pub fn entry_checkpoint_save(sim: &scene::Sim) -> nf_game::player::RamSave {
     let mut s = nf_game::player::RamSave::capture(
         &sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
-        .with_mission(&sim.drones.mission);
+        .with_mission(&sim.drones.mission)
+        .with_ssys(&sim.drones.ssys);
     // 987-mission-stats-carry: the game's re-save tail copies the RESIDENT tally — which on a warm
     // load already holds the `Player_RamLoad` 0x1957a8:15-16 restore, because `Player_RamLoad` runs
     // inside `Player_InitWeapon` BEFORE the re-save [M 0x1a7ef8 arms → 0x1a8a00 → :325]. The port
@@ -869,6 +879,9 @@ pub fn warm_exit_save(sim: &scene::Sim) -> nf_game::player::RamSave {
         &sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
         .with_mission(&sim.drones.mission)
         .with_tally(&sim.drones.progress)
+        // ssys-wire: the SSYS block rides the save — `Player_RamSave` 0x195670:9 copies it
+        // unconditionally on the game's exit-path save.
+        .with_ssys(&sim.drones.ssys)
         // The difficulty global survives the level change in the game (no transition-path writer;
         // see `RamSave::difficulty`) — attach the sim's mirror so a `load_with_carry` of this save
         // re-seeds it. The front-end load wrappers take the pick as a parameter and ignore it.
@@ -1543,6 +1556,22 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         // 987-mission-stats-carry: the mission tally rides the same RamSave (the game's
         // `Player_RamSave` 0x195670:10-11 / `Player_RamLoad` 0x1957a8:15-16 pair).
         sim.drones.tally_carry = save.and_then(|s| s.tally);
+        // ssys-wire: the SSYS block restore — `Player_RamLoad` 0x1957a8:13 → `SSys_RamLoad`
+        // 0x1b0208 runs inside the warm load's `IsWarmReset` body [M 0x1957a8:9]; a cold load
+        // (save `None`) keeps the fresh `SSys_Init` 0x1b01b0 state the Sim was built with. The
+        // 0a pre-seed: the game's item 2 survives a warm 0x0700000a load because RamLoad SKIPS
+        // it [M 0x1b0208:13] — its .data record is the pre-load value, which on the exit path
+        // equals the saved block record (the exit save is the last writer before the load) and
+        // on a death restart is the live record the serve carries (fail_restart_save). The
+        // port's fresh Sim starts at the SSys_Init defaults, so the skip's "keep" is planted
+        // from the block first — then `ram_load`'s skip leaves it standing, byte-identical to
+        // the game's .data persistence.
+        if let Some(s) = save {
+            if let Some(block) = s.ssys {
+                if level_id == 0x0700_000a { sim.drones.ssys.items[2] = block[1]; }
+                sim.drones.ssys.ram_load(&block, level_id);
+            }
+        }
         let starts: Vec<nf_game::player::LevelStart> = level_starts(&level);
         if !starts.is_empty() {
             // The gate scan reads the carried channels on a warm transition (the save mirrors the live
