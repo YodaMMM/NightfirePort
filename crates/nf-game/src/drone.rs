@@ -3368,7 +3368,12 @@ impl Drone {
     /// the port's own requirement.]
     fn probe_move(&self, d: &Data, step: [f32; 2]) -> bool {
         let to = [self.pos[0] + step[0], self.pos[1], self.pos[2] + step[1]];
-        let probe = |y: f32| d.world.line_of_sight([self.pos[0], y, self.pos[2]], [to[0] + step[0].signum() * 0.4 * (step[0].abs() > 1e-6) as i32 as f32, y, to[2] + step[1].signum() * 0.4 * (step[1].abs() > 1e-6) as i32 as f32], crate::world::LOS_PROBE_8);
+        let walled = !(self.bounded && d.nav.bounds);
+        let probe = |y: f32| {
+            let from = [self.pos[0], y, self.pos[2]];
+            let end = [to[0] + step[0].signum() * 0.4 * (step[0].abs() > 1e-6) as i32 as f32, y, to[2] + step[1].signum() * 0.4 * (step[1].abs() > 1e-6) as i32 as f32];
+            if walled { d.world.line_of_sight(from, end, crate::world::LOS_PROBE_8) } else { d.world.segment_clear_dynamic(from, end) }
+        };
         probe(self.pos[1]) && probe(self.pos[1] + 0.5)
     }
 

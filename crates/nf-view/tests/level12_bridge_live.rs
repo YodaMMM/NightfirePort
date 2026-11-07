@@ -127,3 +127,45 @@ fn a_round_on_a_held_bridge_counts_once() {
     for _ in 0..6 { step(sim); }
     assert_eq!(bridge(sim).damage - before, 3.5, "one round, one contact");
 }
+
+/// The guards' walk has no world-collision gate: root motion moves them and the only horizontal
+/// constraint is the AI-network bounds push [M DroneAnim_PreTransCallback 0x13b490,
+/// AINetwork_GetBoundsPushVectorForSphere 0x157bd0]. On a level with bounds a guard running its
+/// route never stands rejected by scenery; only a shut door (the moving set) holds him.
+#[test]
+fn woken_guards_do_not_stall_against_scenery() {
+    use nf_game::drone::state as st;
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mover = |s: u8| matches!(s, st::ATTACK | st::RUN_FOR_COVER | st::ALERT_TO_POSITION | st::SEARCH_AREA
+        | st::GO_TO_GOAL | st::PATROL | st::COMBAT_OUT_OF_RANGE | st::UNDER_COVER_RETURN);
+    let mut stalls = Vec::new();
+    for spot in [[-15.0f32, 1.0, 28.6], [-30.0, 1.0, -10.0]] {
+        let mut scene = nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, 3).expect("load 07000012");
+        let sim = scene.sim.as_mut().unwrap();
+        for _ in 0..200 { step(sim); }
+        sim.bond.pos = spot;
+        for c in [1u32, 2, 3, 5, 7, 8, 9, 0x21, 0x34, 0x41, 0x44] { let f = sim.drones.frame; sim.drones.channels.set(c, 1, f); }
+        let mut anchor = vec![([0.0f32; 3], 0u32, 0u32); sim.drones.list.len() + 32];
+        for t in 1..3000u32 {
+            step(sim);
+            sim.drones.health.health = 100.0;
+            sim.bond.pos[0] = spot[0];
+            sim.bond.pos[2] = spot[2];
+            for (i, d) in sim.drones.list.iter().enumerate().take(anchor.len()) {
+                if !d.present || !d.enabled || d.corpse || d.health <= 0.0 || !mover(d.state) || d.blocked_reach == 0.0 {
+                    anchor[i].1 = 0;
+                    continue;
+                }
+                let moved = ((d.pos[0] - anchor[i].0[0]).powi(2) + (d.pos[2] - anchor[i].0[2]).powi(2)).sqrt();
+                if anchor[i].1 == 0 || moved >= 0.1 { anchor[i] = (d.pos, t, 0); continue; }
+                if t - anchor[i].1 >= 120 {
+                    let door = sim.world.dynamic_boxes().iter().any(|(_, lo, hi)|
+                        (lo[0] - 1.5..hi[0] + 1.5).contains(&d.pos[0]) && (lo[2] - 1.5..hi[2] + 1.5).contains(&d.pos[2]));
+                    if !door { stalls.push((i, d.state, d.pos)); }
+                    anchor[i].1 = t;
+                }
+            }
+        }
+    }
+    assert!(stalls.is_empty(), "guards stood rejected by scenery: {stalls:?}");
+}

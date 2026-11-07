@@ -2149,6 +2149,18 @@ impl CollisionWorld {
     /// `segment(from, to).is_none()`, early-out (see `segment_blocked`).
     pub fn segment_clear(&self, from: V3, to: V3) -> bool { !self.segment_blocked(from, to, true, false) }
 
+    /// `segment_clear` over the moving set alone: doors and script objects, no static geometry.
+    pub fn segment_clear_dynamic(&self, from: V3, to: V3) -> bool {
+        let d = sub(to, from);
+        let dynamic = self.dynamic.read().unwrap();
+        let g = &dynamic.geo;
+        let blocked = match g.any_hit(from, to, &mut |o| obj_blocks(g, o, from, d, false)) {
+            Some(r) => r,
+            None => along(g, from, to).any(|o| obj_blocks(g, o, from, d, false)),
+        };
+        !blocked
+    }
+
     /// `segment_surface_bullet(from, to).is_none()` (= `segment_bullet(..).is_none()`: the same
     /// sets, pass drop and triangle test), early-out (see `segment_blocked`).
     pub fn segment_bullet_clear(&self, from: V3, to: V3) -> bool { !self.segment_blocked(from, to, true, true) }
