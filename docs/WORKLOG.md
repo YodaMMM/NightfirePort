@@ -22,3 +22,10 @@ keep a unit pin. Run every mp_*_live binary, mp_world_sync_live and nf-game.
 - [x] setup: repo survived at /home/z/my-project/NightfirePort; ISO salvaged from the
   stale /home/z/my-project/nf copy (7.8 GB freed); branch cut from origin/master
   10956badb; WORKLOG started; pushing checkpoint before code work.
+
+- [x] 11:10 UTC: the sweep ported and wired — `MpMatch::object_being_deleted` (the 0x18ac90
+  row sweep + the per-object 0x3D queue), `BotBrain::cancel_goal_to_obj`/`msg_goal_cancel`
+  (0x128590 + the 0x16E060:626-634 arm), the `restart_scenario` sweep (0x183fc0's delete-all
+  + site re-create), the `step_mp_bots` per-bot slot-order drain; 6 unit pins; the finding:
+  the between-rounds sweep is the one provable in-play deletion (mid-round candidates are
+  [S], live checks listed in the report).
