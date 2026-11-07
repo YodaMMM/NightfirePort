@@ -81,3 +81,11 @@ Progress (continued):
   16/1b/41/4a + the probe binaries not reached in the window. The four-crate full suite
   did not fit (the background start is killed between tool calls; the sweep ran as
   foreground batches). Report: docs/reports/real-health-00agent-03-6.md.
+
+## real-health-00agent-03-7 (2026-11-07)
+
+Branch from 03-6, master merged (clean). Goal: 07000003 walked to the end on 00 Agent
+with real health — the walk dies at t410740; take 03-6's next levers (longer aim-None
+tolerance on the close-hitter unseen stand for #3's ~150-tick corner, then the
+close-hitter radius past 8 u for #9's 10.3 u door-gap wedge, then the ledger).
+close_hitter_reengage and dry_fight_resupply stay. All new flags opt-in default-off.
