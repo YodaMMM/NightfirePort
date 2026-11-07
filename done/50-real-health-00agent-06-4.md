@@ -4,3 +4,8 @@
 
 ---
 claimed-by: sandbox4 at 2026-11-07T06:01Z
+
+---
+## Report (done, 2026-11-07T06:41Z)
+
+Closed by the driver: the report is on `s/real-health-00agent-06-4` (docs/reports/real-health-00agent-06-4.md); the worker didn't run finish.sh.
