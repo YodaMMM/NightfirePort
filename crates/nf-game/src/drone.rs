@@ -18002,7 +18002,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // the held channel sat dead (07000012's Operative warm leg: locks #656/#694 unlocked, ch
         // 0xa = 0 forever, the Q-Decryptor burn route unreachable). The game's object pass re-holds
         // it every frame; the port does the same here (the object-handler slot, after Env_Update).
-        for l in self.locks.iter().filter(|l| (l.unlocked || l.burned) && l.out != 0) {
+        // lock-relock-channel: the hold is the game's STATE-1 window only [M the case-1 dispatch,
+        // :192-196] — a state-2 lock (the port's `burned`, set by the event unlocks' framelist
+        // fold) never re-writes its channel, so the filter drops it: a burned lock's channel was
+        // written once at the unlock and is ownerless from the next tick, exactly the game's
+        // state-2 table. (The create-unlock locks stay `unlocked && !burned` — the warm-load hold
+        // above is theirs. The disc census finds no writer that ever drops a lock's out channel,
+        // so the split is observation-free on shipped data.)
+        for l in self.locks.iter().filter(|l| l.unlocked && !l.burned && l.out != 0) {
             self.channels.set(l.out as u32, 1, frame);
         }
         // The armed keypad's tick (`Lock_Update` 0x1ae3d8 case 4 [M :262-296]): the full typed
@@ -18010,10 +18017,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // state := 1 (the port's `unlocked`), the manager deleted, the unlock sound (record
         // u16[2] = placement param 3, `Lock::key_channels[0]`; 0xffff — no sound — on every disc
         // lock [D]) —
-        // and the NEXT tick's case 1 holds the out channel (the hold loop above; the game's
-        // channel write lands one tick after the solve the same way). The page closed without a
-        // match → state 0, re-armable (the Keypad::close arm — the view owns the close; the sim
-        // keeps the page until solved).
+        // the out channel lands ON the solve tick (the port's framelist fold — the game's write
+        // is case 1's, one tick later [M :192-196]; see the solve branch below). The page closed
+        // without a match → state 0, re-armable (the Keypad::close arm — the view owns the
+        // close; the sim keeps the page until solved).
         if let Some((li, kp)) = self.keypad.as_mut() {
             if kp.tick() {
                 // The unlock sound `Sound_Play3D(record u16[2])` [M 0x1ae3d8:282-283]: placement
@@ -18022,7 +18029,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let snd = self.locks[*li].key_channels[0] as u32;
                 let pos = self.locks[*li].pos;
                 self.audio.play3d(snd, pos, None);
+                // The solve: `Lock_Unlock` then `+0xf4 = 1` [M 0x1ae3d8:278-281] — and, the
+                // port's framelist fold, the out channel HERE (the game's write is case 1's,
+                // the NEXT tick [M :192-196]; the state-2 fold below must not re-hold the
+                // channel, so the write lands on the solve tick — one tick early vs the game,
+                // observation-free on the disc data: the census finds no writer that ever
+                // drops a lock's out channel). `burned` is the state-2 fold [M case 1's end].
                 self.locks[*li].unlocked = true;
+                self.locks[*li].burned = true;
+                if self.locks[*li].out != 0 { self.channels.set(self.locks[*li].out as u32, 1, frame); }
                 self.keypad = None;
             }
         }
@@ -18278,6 +18293,24 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // in the bullet pass, so the grace this stores (2) counts down from the NEXT tick exactly
         // as the game's same-tick tail does.
         for l in self.locks.iter_mut() { l.idle_tick(); }
+        // `Lock_Update` 0x1ae3d8 case 2 (the burnt-open tick) — the same control pass, the other
+        // arm of the per-lock state dispatch (a state-2 lock runs case 2 and not case 0 [M the
+        // switch at :34; the port's `idle_tick` early-returns on `burned`, so the two calls are
+        // exclusive]). The re-lock check reads the REAL switch channel, the game's
+        // `switch_channels[record u16[+8]]` [M :231]. The burn-byte refill runs inside
+        // `update_burnt_open` first, in the game's order. A re-lock returns the key id
+        // `Lock_ReLock` 0x1b0750:8 unequips — `Player_UnEquipKey(player->BLData, record
+        // u16[+2])` clears `BL[0x70C + id]` [M 0x1a97b8:6]; the port's key ring is
+        // `Inventory::keys` (the +0x70C slots) and this is its only clear (the equip side is
+        // pickup.rs's — the recorded gap, lock.rs header). (The game's player-class-3 guard
+        // holds structurally: the caller is the player's own sim pass, the same gate lock.rs
+        // documents for `Lock_Activate` [S, same documented limitation].)
+        for li in 0..self.locks.len() {
+            let on = self.locks[li].out != 0 && self.channels.on(self.locks[li].out as u32);
+            if let Some(key) = self.locks[li].update_burnt_open(on) {
+                if (key as usize) < self.inventory.keys.len() { self.inventory.keys[key as usize] = false; }
+            }
+        }
         // The use objects' per-tick halves (`PCQWorm_Update` 0x1aee20's bullet install +
         // `Switch_Update` 0x1adea8's value/auto-return; map-tower, crate::useobj). The bullet
         // segments are this tick's paths — the game reads the class-5 contact list the same pass.
