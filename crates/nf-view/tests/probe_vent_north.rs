@@ -104,6 +104,23 @@ fn probe_trench_north_map() {
         println!();
     }
 
+    // F. The side walls: rays along −x/+x from inside the trench at body heights — is the
+    //    glass-roof ledge open to the case (6.27) at any body height, or walled at 4.78/6.74?
+    println!("-- F. rays -x from x 6.4 to x 3.8 (rows y, cols z) / +x from x 5.0 to x 7.6 --");
+    for y in [11.9f32, 12.2, 12.5, 12.8, 13.1, 13.4, 13.7, 14.0, 14.3] {
+        print!("y {:5.2} -x: ", y);
+        for z in [-110.6f32, -111.0, -111.4, -111.8] {
+            let hit = sim.world.segment_hit([6.4, y, z], [3.8, y, z]);
+            print!(" z{:7.1}{}", z, if hit.is_some() { "X" } else { "." });
+        }
+        print!("  | +x:");
+        for z in [-110.6f32, -111.0, -111.4, -111.8] {
+            let hit = sim.world.segment_hit([5.0, y, z], [7.6, y, z]);
+            print!(" z{:7.1}{}", z, if hit.is_some() { "X" } else { "." });
+        }
+        println!();
+    }
+
     // E. The crate stack route (#443 at 4.65,12.56,−114.24): tops and the space between crates
     //    and the trench's south face.
     println!("-- E. crate columns (from 16 down to 10.8) --");
