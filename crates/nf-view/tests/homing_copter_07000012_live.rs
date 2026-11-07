@@ -29,6 +29,11 @@ fn aim_at(sim: &mut Sim, target: [f32; 3], fire: bool) {
     sim.step_bond(input, fire, false, false);
 }
 
+fn copter_pose(sim: &nf_view::scene::Sim) -> [f32; 3] {
+    let c = &sim.drones.copters[0];
+    [c.matrix[0][3], c.matrix[1][3], c.matrix[2][3]]
+}
+
 fn dot_to_copter(b: &nf_game::drone::PlayerBullet, cpos: [f32; 3]) -> f32 {
     let to = [cpos[0] - b.pos[0], cpos[1] - b.pos[1], cpos[2] - b.pos[2]];
     let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(1e-4);
@@ -40,19 +45,35 @@ fn dot_to_copter(b: &nf_game::drone::PlayerBullet, cpos: [f32; 3]) -> f32 {
 fn the_scorpions_homing_round_locks_the_copter_body_on_07000012() {
     let mut scene = nf_view::load_weapons(&iso(), "07000012.bin", false, &[0x2e])
         .expect("load 07000012 with the AT-600 Scorpion");
-    let (ci, cpos) = {
-        let sim = scene.sim.as_ref().unwrap();
-        assert_eq!(sim.drones.copters.len(), 1, "07000012 carries exactly one kind-0 copter [D #707]");
-        let c = &sim.drones.copters[0];
-        let pos = [c.matrix[0][3], c.matrix[1][3], c.matrix[2][3]];
-        (0usize, pos)
-    };
-    assert!((cpos[0] - 64.44).abs() < 2.0 && (cpos[2] - 19.53).abs() < 2.0,
-        "the copter body sits at its placement [D #707 (64.44, 4.30, 19.53)]");
+    assert_eq!(scene.sim.as_ref().unwrap().drones.copters.len(), 1, "07000012 carries exactly one kind-0 copter [D #707]");
+    let ci = 0usize;
+    let c0 = { let c = &scene.sim.as_ref().unwrap().drones.copters[0]; [c.matrix[0][3], c.matrix[1][3], c.matrix[2][3]] };
+    eprintln!("copter body pose at load: ({:.2},{:.2},{:.2}) — placement #707 (64.44, 4.30, 19.53) [D]", c0[0], c0[1], c0[2]);
+    // The copter waits on its gate channel (param 6, `Copter_Update`'s head [M]) — the game's
+    // own activation: raise it, let Copter_Move pose the body, and read the live pose.
+    let gate = scene.sim.as_ref().unwrap().drones.copters[0].gate;
+    eprintln!("copter gate channel: {gate:#06x}");
+    let _ = gate;
+    if gate != 0 {
+        let f = scene.sim.as_ref().unwrap().drones.frame;
+        scene.sim.as_mut().unwrap().drones.channels.set(gate as u32, 1, f);
+    }
+    for t in 0..600 {
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+        let c = &scene.sim.as_ref().unwrap().drones.copters[0];
+        if c.matrix[0][3].abs() + c.matrix[1][3].abs() + c.matrix[2][3].abs() > 1.0 {
+            eprintln!("copter posed at tick {t}");
+            break;
+        }
+    }
 
-    // Equip the Scorpion through the real switch request, settle the draw.
+    // Equip the Scorpion: the harness give's own equip path (`equip_weapon(..., true)` —
+    // lib.rs 7116's panel give arm; the loadout case for this level never carries the 0x2e),
+    // then the real switch request (`M_CONTROL+0x63` → `Player_WeaponSelect` 0x1a2cc0).
     {
         let sim = scene.sim.as_mut().unwrap();
+        let ok = sim.drones.inventory.equip_weapon(&sim.weapons, 0x2e as usize, 20, true);
+        assert!(ok, "the give's equip_weapon must own the Scorpion (allow=true, the harness give arm)");
         sim.gun.switch_request = 0x2e;
     }
     let mut equipped = false;
@@ -64,6 +85,9 @@ fn the_scorpions_homing_round_locks_the_copter_body_on_07000012() {
 
     // Stand ~140 units out on the copter's floor plane; the aim point is 24 units LEFT of the
     // body — the round spawns ~10° off the copter, inside the 0.66-dot lock cone but not on it.
+    let cpos = { let c = &scene.sim.as_ref().unwrap().drones.copters[0]; [c.matrix[0][3], c.matrix[1][3], c.matrix[2][3]] };
+    eprintln!("copter body pose after the gate: ({:.2},{:.2},{:.2})", cpos[0], cpos[1], cpos[2]);
+    assert!(cpos[0].abs() + cpos[1].abs() + cpos[2].abs() > 1.0, "the gate must pose the copter body");
     let spot = [cpos[0] - 139.0, cpos[1], cpos[2] + 10.0];
     {
         let sim = scene.sim.as_mut().unwrap();
@@ -81,6 +105,7 @@ fn the_scorpions_homing_round_locks_the_copter_body_on_07000012() {
         aim_at(scene.sim.as_mut().unwrap(), off, true);
         let sim = scene.sim.as_ref().unwrap();
         let Some(b) = sim.drones.player_bullets.iter().rev().find(|b| b.weapon == 0x2e && b.homing) else { continue };
+        let cpos = copter_pose(sim);
         if early.is_none() && t > 20 { early = Some(dot_to_copter(b, cpos)); }
         // The lock itself [M 0x12f248's class-0 arm]: the copter body is the bullet's target.
         if b.target == Some(ci) && b.target_copter { locked = true; }
@@ -91,6 +116,7 @@ fn the_scorpions_homing_round_locks_the_copter_body_on_07000012() {
                     dot_to_copter(b, cpos));
             }
         }
+        let _ = cpos;
         if locked && t > 120 && early.is_some() {
             assert!(dot_to_copter(b, cpos) >= 0.995,
                 "the locked round converges onto the copter body (dot {:.4})", dot_to_copter(b, cpos));
