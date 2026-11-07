@@ -39,7 +39,9 @@ fn ss_operate_emits_the_trap_sample() {
     }).expect("the west-cluster trap #353");
     assert_eq!(ss.list[k].channel, 0xe, "#353's out word is ch 14 [D]");
     assert_eq!(ss.list[k].state, 0x40, "armed at create [M 0x1a9c58]");
-    let pos0 = [ss.list[k].matrix[0][3], ss.list[k].matrix[1][3], ss.list[k].matrix[2][3]];
+    let pos0 = ss.list[k].pos();
+    // The placement's own spot, not the origin [D #353 (6.41, 39.47, 2.35)].
+    assert!((pos0[1] - 39.47).abs() < 0.1, "the trap stands at its placement: {pos0:?}");
 
     let mut ch = nf_game::triggers::Channels::default();
     ch.set(0xe, 1, 0);
@@ -49,8 +51,10 @@ fn ss_operate_emits_the_trap_sample() {
     // arms both; the 0xffff sisters (#355-365) operate silently on the same channel.
     assert_eq!(ss.pending_sounds.len(), 2, "the two 0x11b west traps fired on ch 14");
     assert!(ss.pending_sounds.iter().all(|(id, _)| *id == 0x11b), "sample 283 [D census]");
-    assert!(ss.pending_sounds.iter().all(|(_, p)| (0..3).all(|a| (p[a] - pos0[a]).abs() < 0.01)),
-        "the position is the object's own matrix translation [M 0x1a9948 obj+0x80]");
+    // Both traps of the cluster sound from the barrels [D #353 (6.41, 39.47, 2.35), #354 (6.01, 38.87,
+    // 2.16)], the object's own matrix translation [M 0x1a9948 obj+0x80].
+    assert!(ss.pending_sounds.iter().all(|(_, p)| (0..3).all(|a| (p[a] - pos0[a]).abs() < 1.0)),
+        "the position is the object's own matrix translation: {:?}", ss.pending_sounds);
     assert_eq!(ss.list[k].state, 1, "latched to playing [M 0x1a9948's 0x40 arm]");
 
     // The east cluster (#389/#390, ch 0x2b) adds its two samples; the silent traps add none.

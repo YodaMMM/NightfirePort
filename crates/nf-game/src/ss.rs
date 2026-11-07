@@ -206,7 +206,7 @@ impl SsList {
                     // fires on this transition when the sample word is not 0xffff — the
                     // object's own matrix translation is the position.
                     if s.sound != 0xffff {
-                        self.pending_sounds.push((s.sound, [s.matrix[0][3], s.matrix[1][3], s.matrix[2][3]]));
+                        self.pending_sounds.push((s.sound, s.pos()));
                     }
                     s.state = 1;
                     Self::sweep(s, last, step);

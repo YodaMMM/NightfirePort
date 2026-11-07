@@ -147,6 +147,10 @@ pub struct Trigger {
     /// HITTEST segment touches. Its low reach is proven on these [L ch 0x24]; on floor plates it
     /// fires ahead of the measured box and moves scripted sequences. // [S] scope, not a game rule
     pub seg_beam: bool,
+    /// The glist flags carry bit 0x40: `Collide_Intersect` 0x1ebaa8:93-99 routes the trigger through
+    /// `Intersect_CylGeom` 0x109da0's raw refine [M]. Only the spawn-settle toucher reads it: while
+    /// Bond walks, the floor plates stay on the measured box (`seg_beam`'s scope note).
+    pub raw_glist: bool,
     pub lo: V3,
     pub hi: V3,
     /// TouchOnce removed itself (its channel was on).
@@ -234,6 +238,10 @@ impl Motion {
 /// A body that can touch triggers: capsule axis from `a` to `b`, radius, drone (true) or Bond, drone skin hash.
 /// The `skin` marker of the riding deep-reach toucher: it touches script plates only.
 pub const RIDE_TOUCHER: u32 = u32::MAX;
+/// The `skin` marker of the spawn-settle toucher: the standing HITTEST segment on the ticks Bond
+/// stands where `Player_StandAtNewPosition` put him. It reads every bit-0x40 glist through the raw
+/// law (see `Trigger::raw_glist`), so a reveal plate under a start fires however low it sits.
+pub const SPAWN_TOUCHER: u32 = u32::MAX - 1;
 
 #[derive(Clone, Copy, Debug)]
 /// `contain`: whether the volume-containment contact (see `Trigger::touched_by`) applies to this toucher.
@@ -519,7 +527,7 @@ impl Trigger {
         let mask = if mask == 0 { 2 } else { mask };
         if matches!(kind, kind::TOUCH | kind::TOUCH_ONCE) && out_ch == 0x7d { return None; }
         let filter_gate = if matches!(kind, kind::TOUCH | kind::TOUCH_ONCE) { list.get(4).copied().unwrap_or(0) as u8 } else { 0 };
-        let mut t = Trigger { placement, kind, out: out_ch as u8, mask, list, lock: lock as u8, hide, glist_0x10: true, filter_gate, tris: Vec::new(), seg_beam: false, planes: Vec::new(), lo: [0.0; 3], hi: [0.0; 3], gone: false, script: None, next_level, gate, key_gate, success, fallback, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None };
+        let mut t = Trigger { placement, kind, out: out_ch as u8, mask, list, lock: lock as u8, hide, glist_0x10: true, filter_gate, tris: Vec::new(), seg_beam: false, raw_glist: false, planes: Vec::new(), lo: [0.0; 3], hi: [0.0; 3], gone: false, script: None, next_level, gate, key_gate, success, fallback, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None };
         if kind == kind::MOVIE { t.movie_code = out_ch; }
         t.set_tris(tris);
         Some(t)
@@ -622,7 +630,8 @@ impl Trigger {
             // script-stream plates, e.g. 07000005's gatehouse ch 0x5C quad) has no side to read:
             // the standing segment stays off it (the box keeps the both-sided capsule): the
             // low reach waits on a measured ride contact.
-            if !self.seg_beam || self.planes.is_empty() { return false; }
+            let raw = self.seg_beam || (c.skin == SPAWN_TOUCHER && self.raw_glist);
+            if !raw || self.planes.is_empty() { return false; }
             return self.tris.iter().enumerate().any(|(i, t)| match self.planes.get(i) {
                 Some((n, d)) => seg_touches_tri_raw(c.a, c.b, c.r, t, n, *d),
                 None => { let (n, d) = winding_plane(t); seg_touches_tri_raw(c.a, c.b, c.r, t, &n, d) }
@@ -936,6 +945,7 @@ pub fn build(level: &Level) -> Vec<Trigger> {
                 if nw.iter().all(|x| x.is_finite()) && dw.is_finite() && i < t.planes.len() { t.planes[i] = (*nw, *dw); }
             }
             t.seg_beam = target.is_some_and(|(om, oi)| level.maps[om].objects[oi].flags == 0x645);
+            t.raw_glist = target.is_some_and(|(om, oi)| level.maps[om].objects[oi].flags & 0x40 != 0);
             t.motion = motion; t
         }) {
             Some(mut t) if raw_dc => {
@@ -1020,6 +1030,7 @@ mod tests {
         Trigger { placement: 0, kind, out, mask, list, lock: 0, hide: false, glist_0x10: true, filter_gate: 0, tris: vec![[a, c, b], [a, d, c]],
             // not a laser-beam glist (flags 0x645) — the test plates keep master's contact.
             seg_beam: false,
+            raw_glist: false,
             planes: Vec::new(), lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], gone: false, script: None, next_level: 0, gate: 0, key_gate: 0, success: 0, fallback: 0, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None }
     }
 
