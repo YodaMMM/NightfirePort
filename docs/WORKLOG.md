@@ -25,3 +25,14 @@ the body out (the trench-exit live check 1 — never answered: the [L 2026-10-26
 measured SOUTH only; the game's north walk was never measured), and the port's rest-region
 divergence (port rests AGAINST the north wall at −110.95; game rests at −111.38 — 0.43 further
 south, bay floor shape lives partly in the cel glist). Probe 2 (real input through the real
+walker harness) and the −x/+x side-wall rays are next — DONE in the same probe (F section):
+the trench's E/W walls (x 4.78/6.74) are ALSO solid at every body height y 11.9..14.3. The
+port's shaft is a sealed box: N/E/W/S all solid at body height; the only opening is the vent
+hole 15.03..17.42, 3.2 m over the floor — a one-way drop. The real-input drive probe hit the
+walkway harness gap (the naive south walk wedged at the spawn — the real walk needs the
+walkreal0c walker's route logic; queued for the next session). Remaining question, per the
+trench-exit live check 1 (never answered): does the GAME's body also stay sealed in the shaft
+(its [L 2026-10-26] hold was measured SOUTH only — N/E/W never measured), and where do the
+roomvent #480/#481 grilles sit (CEL positions live in the glist, not the audit) — if a grille
+is set in the shaft's north wall and the game crawls through it, the port's wall is the bug.
+No engine code changed this session (probe + docs only). Report + finish steps follow.
