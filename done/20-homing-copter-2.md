@@ -11,3 +11,8 @@ Also read `Bullet_homing` 0x12f358 past the target pick: check the re-validation
 
 ---
 claimed-by: sandbox3 at 2026-11-07T10:20Z
+
+---
+## Report (done, 2026-11-07T11:23Z)
+
+Closed by the driver: the report is on `s/homing-copter-2` (docs/reports/homing-copter-2.md); the worker didn't run finish.sh.
