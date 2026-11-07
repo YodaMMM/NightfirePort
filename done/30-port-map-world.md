@@ -6,3 +6,7 @@ Family: every `Door_*`, `Break_*`, `Destroy_*`, `Lock*`, `PC*`, `Trigger_*`, `Se
 
 ---
 claimed-by: sandbox3 at 2026-11-07T02:23Z
+
+---
+## Report (done, 2026-11-07T02:50Z)
+
