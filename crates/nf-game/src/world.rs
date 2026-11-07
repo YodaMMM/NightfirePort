@@ -736,6 +736,10 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     if *CAPS_D2.get_or_init(|| std::env::var("NF_CAPS_D2").is_ok()) && dot(sub(p, t[0]), n) < 0.0 {
         return false;
     }
+    // The blocker faces (surface byte 0x40) take that rule now: they are one-way panes. 0700000c's
+    // `ventblocker_01` faces south, so the crawl out of the display vent passes it from the north
+    // and the hall side is shut; the disc's portal #212-#285 sits in the same opening.
+    if mat & 0x40 != 0 && dot(sub(p, t[0]), n) < 0.0 { return false; }
     let (q, on_edge) = closest_on_triangle(p, t);
     // level-0a-band-settle-6-c: the settle-6-b Delta 3 (the on-edge second query, the tail's
     // Q = Q2 [M 0x10a344-0x10a4fc] with the caller's flags-99 gate on the re-run
