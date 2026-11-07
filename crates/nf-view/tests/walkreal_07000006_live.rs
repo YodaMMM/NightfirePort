@@ -357,7 +357,7 @@ fn aimed_stand(w: &mut Walker, di: usize, label: &str, cap: u32, back: f32) -> b
 /// fights on the merged tree (the courtyard's own volume raises the alarm regardless of the cut
 /// [D census]) and grinds from the strip. A player stands at the plaza, aims and drops each one
 /// as it pauses. The recent-hitter first: whoever is actually hitting Bond dies before the rest.
-fn aimed_stand_the_mouth(w: &mut Walker, back: f32, patience: u32) {
+fn aimed_stand_the_mouth(w: &mut Walker, back: f32, patience: u32, cap: u32) {
     // The pick's census (scratch): every alive hostile within 40 u and its ray state.
     let mut idle = 0u32;
     {
@@ -409,11 +409,14 @@ fn aimed_stand_the_mouth(w: &mut Walker, back: f32, patience: u32) {
             for _ in 0..120 { w.tick(Input::default(), false); }
             continue;
         };
-        // 06-4: the cap is 600, not the old 2400 — the roof guard #11's losing stands (r1 at
-        // pick, untappable in his lean cycle) burned 1500 NO-HIT ticks each in his own fire
-        // lane (run 7: 47.8 in 9 across three patience tiers). A target not dead in 600 is
-        // walked past; the pair's measured kills fit in 400.
-        aimed_stand(w, di, "the mouth", 600, back);
+        // 06-4: the cap is `cap` — 600 at 00, the old 2400 at d1/d2. The bound exists for the
+        // roof guard #11's losing stands (r1 at pick, untappable in his lean cycle) that
+        // burned 1500 NO-HIT ticks each in his own fire lane (run 7: 47.8 in 9 across three
+        // patience tiers); a target not dead in 600 is walked past, and the pair's measured
+        // kills fit in 400. d1/d2 keep 2400: their measured-green stands ride longer windows
+        // (the d2 walk's margin on master is 3.7 hp — run 10's binary caught the 600 cap
+        // killing it at the east posts).
+        aimed_stand(w, di, "the mouth", cap, back);
     }
 }
 
@@ -753,12 +756,9 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
     // #20 landed 10 × 5.5 during his own kill). Backing along the aim drags the stand past
     // the 12 u sight line; d1/d2 keep their plain measured stands.
     let mouth_back = if difficulty >= 3 { 14.5 } else { 0.0 };
-    // 06-4: the strip/descent stands wait out the posts' lean-outs at 00 (6 × 120 ticks);
-    // d1/d2 keep the plain tier.
-    let mouth_patience = if difficulty >= 3 { 6 } else { 0 };
     if difficulty >= 3 {
         w.walk_nav_to([10.5, 47.1, -21.8], "the balcony's west reach", 1.6);
-        aimed_stand_the_mouth(w, 0.0, 0);
+        aimed_stand_the_mouth(w, 0.0, 0, if difficulty >= 3 { 600 } else { 2400 });
         cen.snap(&w, "balcony stands done");
         // THE DROP (real-health-00agent-06-3, measured on master c2c4a6e): with the stands
         // done the player walks west off the balcony — the game's own route (the d1 pin: the
@@ -854,7 +854,7 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
         // INSIDE his sight, and the duel killed the walk — 64.2 in 12 hits at 5.5 a hit). The
         // player crosses the mouth quietly and takes the pair at their posts from the landing.
         if difficulty < 3 {
-            aimed_stand_the_mouth(w, 0.0, 0);
+            aimed_stand_the_mouth(w, 0.0, 0, if difficulty >= 3 { 600 } else { 2400 });
             clear_the_spot(w, 13.0, false);
         }
         // The mouth rays DON'T reach the strip posts — the mouth pick census reads rays0 for
@@ -897,10 +897,10 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
             // waits safely for the pause and the tap lands. 06-4: patience 0 here ON PURPOSE
             // — run 4 measured the engagement AT the r1 edge (d 12.3-12.5, their sight 12
             // [D props]) at 16.5 total (run 2/3's post-pause engagement at d 11.8 cost 60.4).
-            aimed_stand_the_mouth(w, mouth_back, 0);
+            aimed_stand_the_mouth(w, mouth_back, 0, if difficulty >= 3 { 600 } else { 2400 });
         }
         clear_the_spot(w, 20.0, false);
-        aimed_stand_the_mouth(w, mouth_back, 0);
+        aimed_stand_the_mouth(w, mouth_back, 0, if difficulty >= 3 { 600 } else { 2400 });
         if difficulty >= 3 { cen.snap(&w, "landing stands done"); }
     }
     // South across the courtyard to the tunnel door's approach (3.75, 42.00, −51.13) [D leg
@@ -922,7 +922,7 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
         // lever 2 replaced is a trap on this master: the mouth plaza is the tunnel-roof guard
         // #11's killing field at d 41 (run 9: standing there ate 42.2 in 8 FULL hits) and the
         // pair's advance lane. The stands at the strip arrival answer the rest.
-        aimed_stand_the_mouth(w, mouth_back, 0);
+        aimed_stand_the_mouth(w, mouth_back, 0, if difficulty >= 3 { 600 } else { 2400 });
         // 00-Agent tactics (real-health-00agent-06-3, runs 10-12 MEASURED NEGATIVE): the pair's
         // posts read rays0 from the landing (d 21) AND from the sight's edge (5.48,−24.92: d
         // 17.0/16.4, rays0) and rays1 only at d ≤ 10-13 — the muzzle-ray opening zone on the
@@ -937,21 +937,28 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
             // the pair at their posts acquire from here (d ~16), do the rays ever open, does
             // #11 open up? 600 ticks standing, a snap every 120.
             cen.watch(w, "the sight-edge watch", 600, 120);
-            aimed_stand_the_mouth(w, mouth_back, 0);
+            aimed_stand_the_mouth(w, mouth_back, 0, if difficulty >= 3 { 600 } else { 2400 });
             cen.snap(&w, "sight-edge stands done");
         }
         w.walk_nav_to([6.0, 42.0, -34.0], "the courtyard's strip approach", 1.6);
         cen.snap(&w, "strip arrived");
-        // 06-4: ONE patience round here — the roof guard #11 died FREE at this tier in runs
-        // 2/3 when his lean-out was open at the pick, and stayed alive in run 4 (r0, the tier
-        // broke). 120 idle ticks buy one re-pick; longer waits stand in his lane (run 7).
-        aimed_stand_the_mouth(w, mouth_back, 1);
+        // 06-4: a FULL patience hold here — the roof guard #11 died FREE at this tier in runs
+        // 2/3 when his lean-out was open at the pick, and stayed alive at hp 20 through runs
+        // 4/8 (r0 at the pick instant) to deal 22-23 on the crossing below. The strip
+        // stand-off itself is safe: run 4's sight-edge watch + strip stands took ZERO hits at
+        // d 19-21 [L] — his fire lands on the crossing legs, not here. The tier's 8 slots cap
+        // the hold (~7 idle rounds ~ 840 ticks); each r1 pick becomes a 600-capped stand.
+        // d1/d2 keep the plain tier (their measured walks are razor-thin — the d2 margin on
+        // master is 3.7 hp — and the hold shifted the east-posts timeline into a death).
+        aimed_stand_the_mouth(w, mouth_back,
+            if difficulty >= 3 { 12 } else { 0 },
+            if difficulty >= 3 { 600 } else { 2400 });
         fight_through(w);
         if difficulty >= 3 { cen.snap(&w, "strip done"); }
     }
     w.walk_nav_to([4.4, 42.0, -48.5], "down the searchlight courtyard", 1.6);
     if real_tactics {
-        aimed_stand_the_mouth(w, mouth_back, 0);
+        aimed_stand_the_mouth(w, mouth_back, 0, if difficulty >= 3 { 600 } else { 2400 });
     }
     fight_through(w);
     if difficulty >= 3 { cen.snap(&w, "courtyard crossed"); }
@@ -1050,7 +1057,7 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32) {
     // 06-4: the ledge legs' patience at 00 — the east posts (#24/#25) pace their lane and the
     // rays open in lean-outs (run 4's ledger: #25 ended hp 6 after the plain tier — one hit
     // landed, the rest of his 24.8 came free). 0 at d1/d2 (tick-identical).
-    let ledge_patience = if difficulty >= 3 { 4 } else { 0 };
+    let ledge_patience = if difficulty >= 3 { 6 } else { 0 };
     w.walk_nav_to([10.5, 42.4, -34.3], "the courtyard's east strip", 1.6);
     if difficulty >= 3 {
         // 00-Agent tactics (real-health-00agent-06, measured): the ch-55 alarm's reinforcement
@@ -1061,23 +1068,23 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32) {
         // while it is still 8 u out instead of inside the gun's TooClose band.
         clear_the_spot(w, 8.0, false);
     }
-    if ledge_stands { aimed_stand_the_mouth(w, 0.0, ledge_patience); }
+    if ledge_stands { aimed_stand_the_mouth(w, 0.0, ledge_patience, if difficulty >= 3 { 600 } else { 2400 }); }
     w.walk_nav_to([14.0, 41.9, -36.7], "the courtyard's south-east corner", 1.6);
     if difficulty >= 3 {
         clear_the_spot(w, 8.0, false);
     }
-    if ledge_stands { aimed_stand_the_mouth(w, 0.0, ledge_patience); }
+    if ledge_stands { aimed_stand_the_mouth(w, 0.0, ledge_patience, if difficulty >= 3 { 600 } else { 2400 }); }
     w.walk_nav_to([25.3, 42.6, -40.6], "the east courtyard floor", 1.6);
     if difficulty >= 3 {
         clear_the_spot(w, 8.0, false);
     }
-    if ledge_stands { aimed_stand_the_mouth(w, 0.0, ledge_patience); }
+    if ledge_stands { aimed_stand_the_mouth(w, 0.0, ledge_patience, if difficulty >= 3 { 600 } else { 2400 }); }
     // South to the web's 41.15 band and the step's foot [D nodes 355/457/371].
     w.walk_nav_to([25.2, 42.3, -47.3], "the 43-step's foot", 1.6);
     if difficulty >= 3 {
         clear_the_spot(w, 8.0, false);
     }
-    if ledge_stands { aimed_stand_the_mouth(w, 0.0, ledge_patience); }
+    if ledge_stands { aimed_stand_the_mouth(w, 0.0, ledge_patience, if difficulty >= 3 { 600 } else { 2400 }); }
     w.walk_nav_to([24.1, 42.3, -50.0], "south along the step's foot", 1.4);
     // Up the 43.0 step (band C z −48: 43.0 at x 18..20 [D]; node 370 (19.96, 43.27, −49.95))
     // and onto the ledge's north end (node 363 (17.49, 43.49, −50.34)).
@@ -1371,7 +1378,7 @@ fn walk_the_castle_interior_to_the_party_real_damage_agent() {
 /// [M 0x1ae1f8:67-69]. Real input only — the
 /// load path is the only difference; no health, ammo or channel writes, no teleports.
 #[test]
-#[ignore = "00 Agent: the mouth->strip lane on master c2c4a6e — the ch-55 pair (#19/#20) charges the landing engagement from inside its 12 u sight (runs 6/7: the duel at d 10.1, 64.2 in 12 hits) and the tunnel-roof guard #11 (y 55.5) holds the whole mouth-strip band in a full-damage lane (runs 8-10: 38-42 per phase at d 23-41) while the still-gate stand cannot land on a mover or his parapet flicker; the session's test-side levers (the door-#47 re-open + the d1-aligned guardroom nav, the guardroom ammo-box loot, the d3 balcony drop, the nearest-first stand triage — #20 died to it) got the walk from the guardroom wedge to the strip at 64.2 hp; follow-up real-health-00agent-06-4"]
+#[ignore = "00 Agent: measured on master 22d5836b7 (real-health-00agent-06-4, runs 1-10): the walk now clears the whole mouth->strip courtyard that killed 06-3 — the ch-55 pair dies at its sight edge for 16.5 (the fixed 600 landing watch engages both at d 12.3-12.5, OUTSIDE their 12 u sight [D props]; the post-pause engagement cost 60.4 and the mid-walk one never tapped), the tunnel-roof guard #11 dies to the strip patience hold for 11.0 (his lean-out opens there; he dealt 22-47 in every run that lost him), and the ledge patience kills the east post #24 — but the walk still ends at 100.0 at the east-strip arrive (9.73,-35.26) t8893: #4's guardroom melee (12 x 2.75, every run, no lever found — the pre-door fight displaced the route into a wedge, the kite is a no-op [M player.rs:1006] the aim stance pins forward) plus #24's east lane (33.0 in 6 at d 19 during the legs, he survives at hp 7) plus #24/#19/#11 residues sum past 100 with the landing pair's 16.5. The next ~33 hp: finish #24 before the east-strip legs (his rays open from the east floor side — a stand spot east of (14,-36.7) is the unmeasured lever) or shave #4's doorway fight; the ledge/dressing phases have never been reached at 00 (unknown costs); follow-up real-health-00agent-06-5"]
 fn walk_the_castle_interior_to_the_party_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(3));
 }
