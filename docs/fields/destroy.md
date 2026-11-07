@@ -20,7 +20,7 @@ explosion), then after a delay fires its output channel and re-classes to 1 (a d
 | +0x10 | u16 | watch channel (param 1): when the glist id changed and `switch_channels[+0x10]` is on → clear it and `Destroy_Smash` | [M* create 0x12c318:31; Update 0x12c4f8:29-32] |
 | +0x12 | u16 | output channel (param 0): set to 1 when the countdown expires (`Destroy_Update`) or immediately on bullet kill when the timer is 0 (`Destroy_CollisionHandler`) or on a script smash with `p0 != 0` (`Destroy_Smash`) | [M* Update 0x12c4f8:23; CollisionHandler 0x12bd48:42; Smash 0x12bb60:40] |
 | +0x14 | u16 | bullet filter for the object's HITDATA list: `Collide_FilterBullets(obj+0xD0, +0x14)` = `~(u16)param4` (0 when param 4 is 0) | [M* create 0x12c318:41-47; read 0x12bd48:22] |
-| +0x16 | u8 | explosion kind (param 2, low byte): 0 = no explosion; 1 = script 0x6000027, scale 4; 2 = script 0x600004f, scale 2; anything else = script 0x6000052, scale 3 (the scale multiplies obj+0x8C into f12, the script's size only); the signed kind ×10.0 is f14, the blast damage | [M* create 0x12c318:33; read 0x12bb60:57-75] |
+| +0x16 | u8 | explosion kind (param 2, low byte): 0 = no explosion; 1 = script 0x6000027, scale 4; 2 = script 0x600004f, scale 2; anything else = script 0x6000052, scale 3 (the scale multiplies obj+0x8C into the first float, the script's size only); the signed kind ×10.0 is f14, the blast damage | [M* create 0x12c318:33; read 0x12bb60:57-75] |
 | +0x17 | u8 | smashed latch: `Destroy_Smash` returns immediately when it is 1, then sets it | [M* 0x12bb60:17-20] |
 
 `piVar1[3]` in the decompile is +0x0C, `piVar1[4]` +0x10 (int*-indexed).

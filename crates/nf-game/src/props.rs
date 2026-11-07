@@ -55,8 +55,8 @@ pub struct CamSubject {
 pub const SMASH_STAT_HASH: u32 = 0x0200_01d9;
 
 /// One `Destroy_Smash` 0x12bb60 blast, `Explode_Create`'s three floats as the call loads them
-/// [M 0x12bcdc-0x12bd0c]: f12 = obj+0x8C × the type multiplier (`scale`, SCRIPTINFO+0x94 — the
-/// script's size only), f13 = tag+8 (`radius`), f14 = the signed type byte × 10.0 (`damage`).
+/// [M 0x12bcdc-0x12bd0c]: first obj+0x8C × the type multiplier (`scale`, SCRIPTINFO+0x94 — the
+/// script's size only), then tag+8 (`radius`), then the signed type byte × 10.0 (`damage`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Smash {
     pub pos: V3,
