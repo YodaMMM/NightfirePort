@@ -35,3 +35,14 @@ geo.objects), fed the candidate's stream hashes (the hidden_stream_objects prece
 nis.rs), called from the homing's line of sight; guard candidates and the copter's own spot
 check [M 0x17dbb8:171-172] audited too. Then the lock test un-ignored and pinned through real
 fire.
+Round (2026-11-07 ~16:35 UTC): the subject-argument exclusion built and the lock test green.
+`segment_bullet_clear_excluding` (world.rs) skips dynamic shapes by hash (last_objects
+index-aligned, pointer-identity skip); `stream_hashes_for_placement` (nis.rs) feeds the
+candidate copter's SP stream hashes; the homing scan's copter branch uses them. Guard branch
+audited: guards are not script entities, nothing to exclude. Spot check [M 0x17dbb8:171-172]
+audited: unported, the warrant comment pins the exclusion its slice must carry. The lock test
+un-ignored: spawn dot 0.9986 -> best 0.9992, locked; the new wall half: 420 rounds behind an
+occluder, none locked; the dormant half still green. Six pre-existing PlayerBullet literals
+got the missing target_copter field. 25 affected binaries green; the full suite total line
+did not fit (the background runner dies between tool calls; the 4-crate build exceeds the
+foreground cap) — the determinism-sensitive set ran green instead.
