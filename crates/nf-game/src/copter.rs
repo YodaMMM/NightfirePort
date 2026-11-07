@@ -548,6 +548,14 @@ impl Copter {
                 // Case 1 [M :138-187]: Copter_Move, then the spot check. The Mayhew latch keeps
                 // +0x74 == 100 copters out of the spot test entirely [M :140] — the 05 patrols
                 // carry that value [L the level's params] and never attack.
+                // SPOT-CHECK WARRANT (homing-copter-3, unported — the spot gate itself stays
+                // unported, `timer` never moves): the game's spot LOS is
+                // `Collide_LineOfSight(aimpoint, obj+0x80, cel, copter_obj, bond_obj, 0x2e)`
+                // [M 0x17dbb8:171-172] — the ray's SUBJECT objects are the COPTER OBJ and
+                // BOND'S OBJ, so neither the copter's own mesh nor Bond's can block it. When
+                // this slice lands, its ray must exclude both subjects' shapes (the port's
+                // dynamic-set analogue: the copter's SP stream hashes via
+                // `Drones::copter_stream_hashes`, and Bond's own shapes if any pose).
                 let (_, p) = self.move_tick(paths, rng);
                 posed = p;
                 if self.arrival != 100 {
