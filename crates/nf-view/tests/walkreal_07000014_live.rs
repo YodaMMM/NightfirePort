@@ -774,13 +774,18 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
         // fights' own damage-weighted law (back_off 4.0 + lane_fights) is the answer that
         // works — it only needs rounds. d1 and the cascade test never set the flag — master
         // behaviour, byte-identical.
-        if AGENT_PATH_CLEAR.with(|c| c.get()) { reload_full_b2(w); }
+        // The gates carry `!w.tops_up()`: the d2 TOP-UP sister also sets AGENT_PATH_CLEAR, and
+        // its route legs are phase-pinned green — the reload pulses and the clear's flank walks
+        // re-rolled its phases and wedged the corridor-south door leg (the 6000-tick cap, the
+        // door at (32.0, 2.1, 35.8) [L the run on this tree, 2026-11-07]). The sisters' laws run
+        // on REAL DAMAGE only (lesson 10: a change must not turn a green test red).
+        if AGENT_PATH_CLEAR.with(|c| c.get()) && !w.tops_up() { reload_full_b2(w); }
         // The door wall's west jamb bars the direct south steer at x ≥ 30.3 (the segment hit
         // 0.17 along from (30.33, 0.55, 35.44)); the corridor lane west of it (x ≈ 29.7) is the
         // crossing the probe walked ((29.99, 0.61, 38.00) grounded).
         let _ = w.try_walk_to(Wp::new(29.7, 0.8, 34.7).r(0.9), "the corridor west of the door wall");
         w.walk_to(Wp::new(30.09, 0.65, 38.73).r(1.2), "the corridor south to the leg-2 spot");
-        if AGENT_PATH_CLEAR.with(|c| c.get()) {
+        if AGENT_PATH_CLEAR.with(|c| c.get()) && !w.tops_up() {
             reload_full_b2(w);
             // The sisters' clear runs WITHOUT the loot pass (measured [L the d3 run on this
             // tree, 2026-11-07]): the fights (now with rounds — the reload above) killed seven
@@ -979,15 +984,21 @@ fn walk_the_infiltration_to_the_delta_exit() {
 fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
     // The lane-fight + path-clear laws (opt-in, this level's sister only — set inside the body
     // behind the difficulty gate; see the body comment for the measured deaths). STILL TOP-UP
-    // (level-14-landing-hover): the `with_real_damage` wrap was MEASURED this window with the
-    // new d2/d3 laws and is NOT landed yet — the walk crossed the 1.72 landing and the whole
-    // descent cleanly (the wedge this branch's laws fix — the landing leg arrived at +280
-    // ticks, the drop west cleared, the descent assert passed on every run), then spent the
-    // budget to 3.2 in the escape-loop grind and died at tick 18851 at (23.08, 1.13, -21.36),
-    // one leg short of the delta doorway. The laws below (the stationary descent, the
-    // escalating cooldowns, the head-hunt) are the measured ground the wrap lands on next
-    // window; the fights' remaining stood-tick exposure (~13-15 in two stands) is the named
-    // leftover. The d3 sister's note carries the full record.
+    // (real-health-14-00agent-6 re-measure): the `with_real_damage` wrap was MEASURED this
+    // window (NF_WALK_NO_TOPUP over this very test, the same tree) and is NOT landed yet — the
+    // grind is FIXED (the trench head-shot: the hand-back reached with 91.0, 3 hits for 9.0
+    // [L the run's real-damage summary, 2026-11-07]; the landing-hover window's same ground died at 3.2 ONE
+    // LEG short of the delta doorway, tick 18851) but THIS run's re-rolled phases pinned the
+    // drop-west: Bond died at tick 5151 at (33.71, 1.20, 34.23) — the hover pocket's north-west
+    // corner, y 1.2 held ungrounded over the 0.8 floor (the -5 report's hover dither, reached
+    // by the drop-west leg's own path, not by fight displacement) — while three corridor-block
+    // guards (0x5000090 at (35.0..35.3, 24.9..31.2)) burst 1.5/round through the fights' five
+    // failed stands (all "killed false" from the landing spots; the fights that landed on the
+    // d3 twin's runs killed seven guards from the CORRIDOR FLOOR spots this run never reached).
+    // The wrap is one line on ground the next window must first re-stabilise: the drop-west's
+    // pocket crossing is phase-luck (the d1/d3 runs cleared it; this d2 run held), and the
+    // sim-side scoped hover fix (the -5 lever 1, a fresh-boot [L] reading) is the named
+    // structural unblocker. The d3 sister's note carries the full record.
     with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(2));
 }
 
@@ -1004,25 +1015,31 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// 05-07 sisters' law: at 1.3 accuracy every stood tick is a tick of bursts); the d3-only
 /// deaths get their own d3-gated blocks. Real input only; no health, ammo or channel writes.
 ///
-/// IGNORED (level-14-landing-hover re-measure): the landing wedge is FIXED walk-side — the
-/// descent's stationary-stand window (`descent_stationary_fights`, set for every
-/// `difficulty >= 2` body call) ties the fights' feet through the mezzanine descent, so the
-/// back_off shove / creep / lane-resupply fetches never carry Bond under the 1.72 landing slab
-/// into the hover pocket (the port's fallback radial push holds a mid-fall capsule in a HOVER
-/// DITHER there; the mechanism and the game's own dead push tail are on
-/// s/real-health-14-00agent-5's report, [M 0x109da0:431-447]). Measured this window: every run
-/// crossed the landing cleanly (the landing leg arrived at +280 ticks, the drop west cleared,
-/// the descent assert passed). The d3 walk's blocker is now the FIGHTS' BUDGET at accuracy 1.3
-/// [M DroneWeap_DoBulletAccuracy 0x179740:74-88]: the infiltration grind alone took 45.0 (the
-/// pad west stood at health 55.0), the failed stands vs the geometry-blocked far guards #7/#8
-/// took most of the rest (one stand cost 17.5), and the walk died at tick 6786 at (30.27,
-/// 0.55, 35.45) right after the descent — the d2 twin with the same laws reached the delta
-/// doorway (tick 18851, 3.2 left). NEXT LEVERS, in order: the infiltration grind's smoother
-/// early game (the 05-07 sniper-stand law on the stairwell's AIM pairs — the -5 note's third
-/// lever), then the wrap on d2 (one line, the ground is measured), then this un-ignore.
-/// Real input only; no health, ammo or channel writes.
+/// IGNORED (real-health-14-00agent-6 re-measure on the merged tree, master 22d5836b7 + the
+/// landing-hover laws): the landing wedge is STILL fixed walk-side (the stationary-stand
+/// window — every run this window crossed the landing cleanly; the fights' stands through
+/// the descent cost 0.0). THIS window moved the grind's drain: the "stairwell AIM pairs"
+/// lever was a MISREAD — the fresh ledger puts 65.0 of the budget on the TRENCH GUARD #0's
+/// point-blank trade (the 25-hp hunter closes across the gun raise; 13 of his 5.0 rounds at
+/// 1.2 u [M DroneWeap_DoBulletAccuracy 0x179740:113-115]) and only tail costs elsewhere. The
+/// answer shipped this window: the sisters' head-box loose gate (the trench guard dies at
+/// +49 ticks to one 35-damage P2K head round [M NDrone2_HitDamage 0x145558 ×
+/// DroneDamage_Head]; the grind then costs 15.0, and the d2 twin's grind through the
+/// hand-back measured 9.0 total). The leg-2 block answered too: the sisters' reloads at the
+/// corridor floor (the stationary window skips the fights' resupply fetches — the dry-gun
+/// stand cannot trade) let the fights kill SEVEN guards for 27.5 [L the d3 run on this
+/// tree]. REMAINING BLOCKER, measured: the corridor block's HUNTERS (#9/#56-class, skin
+/// 0x5000087) are never picked by the fights at all (no fight line names them across five
+/// measured runs) and burst 30.0-65.0 in the cooldown gaps (the 4904 death: #9 27 hits for
+/// 65.0 at d 3.6). Tried and measured NEGATIVE this window: a corridor-mouth pre-clear
+/// (the hunters close while the clear stands at far picks — death at 5021), the loot pass
+/// in the block (the fetch walked into the surviving pair's 1.7-2.2 u band — 47.5 in 230
+/// ticks), and the `eye_ray_stands` law (a byte-identical no-op — the pick, not the aim, is
+/// the blocker). NEXT LEVERS: the fights' pick trace against the real game (the -5 report's
+/// live check 2 — what picks a hunter the gun rays never clear?), then this un-ignore; the
+/// d2 twin's own re-measure sits on the drop-west hover re-roll (its note).
 #[test]
-#[ignore = "00 Agent: the fights' budget at accuracy 1.3 — the infiltration grind took 45.0 and the failed stands vs the geometry-blocked far guards the rest; died at tick 6786 at (30.27, 0.55, 35.45) just past the descent. The 1.72-landing wedge is FIXED (the stationary-stand window — every run crossed the landing cleanly); levers: the stairwell AIM-pair stands for the grind, then the d2 wrap, then this"]
+#[ignore = "00 Agent: the fights never pick the corridor block's hunters (skin 0x5000087 — no fight line names them across five measured runs) and their cooldown-gap bursts run 30.0-65.0 wide; the grind itself is fixed (the trench head-shot: 65.0 -> 15.0) and the leg-2 block's seven kills for 27.5 prove the fights work with rounds. Levers: the fights' pick trace vs the real game (the -5 live check 2), then this"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(3)));
 }
@@ -1848,9 +1865,10 @@ fn kill_the_trench_guard_270(w: &mut Walker) {
     // is already at 1.2 u (he closes across the raise) and his 5.0 rounds land 13 times for
     // 65.0 before the eight 3.5 torso taps finish him. One P2K HEAD round is 35
     // [M NDrone2_HitDamage 0x145558 × DroneDamage_Head; the P2K's 3.5 → 35] — one kills him
-    // outright, before the under-3.0 band collects the shootout's price. The d1 walk's pinned
-    // timeline keeps master behaviour (AGENT_PATH_CLEAR is the sisters' thread flag).
-    if AGENT_PATH_CLEAR.with(|c| c.get()) && shoot_head_loose(w, di, "the trench guard's head", 700) {
+    // outright, before the under-3.0 band collects the shootout's price. The gate carries
+    // `!w.tops_up()`: the d1 walk AND the d2 top-up sister keep master behaviour (lesson 10).
+    if AGENT_PATH_CLEAR.with(|c| c.get()) && !w.tops_up()
+        && shoot_head_loose(w, di, "the trench guard's head", 700) {
         return;
     }
     // The hunter closes — the LOOSE aim gate (the patrolling-target pattern) keeps the taps
