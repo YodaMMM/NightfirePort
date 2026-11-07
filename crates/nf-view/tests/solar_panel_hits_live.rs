@@ -54,3 +54,45 @@ fn the_round_breaks_only_the_panel_it_crosses() {
     for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
     assert_eq!(broken(sim), vec![49], "the third tick crosses #49's surface and stops there");
 }
+
+/// The astronauts' rounds go through the same Collide pass, so they chip the panels too: the
+/// round's 5.0 [D weapon 0x6a] sums to the panel's 20 hit points on the fourth, and only on
+/// the panel it crosses [M SP_GetHitDamage 0x1dc5f8 reads every class-5 contact].
+#[test]
+fn enemy_rounds_wear_a_panel_down() {
+    let Ok(iso) = std::env::var("NF_ISO") else { return };
+    let mut scene = at_the_walkway(&iso, false);
+    let sim = scene.sim.as_mut().unwrap();
+    sim.bond.pos = [30.0, 6.0, 0.0];
+    let round = |sim: &mut nf_view::scene::Sim| {
+        sim.drones.bullets.push(nf_game::bullet::Bullet {
+            pos: [16.7, 0.0, 4.6], dir: [0.0, -1.0, 0.0], speed: 4.25, travelled: 0.0, range: 200.0,
+            damage: 5.0, owner: 0, state: 0, weapon: 0x6a, flyby: false, bounces: 0, ..nf_game::bullet::Bullet::TAIL
+        });
+        for _ in 0..8 { sim.step_bond(Input::default(), false, false, false); }
+    };
+    for _ in 0..3 { round(sim); }
+    assert!(broken(sim).is_empty(), "15 of 20: {:?}", broken(sim));
+    round(sim);
+    assert_eq!(broken(sim), vec![50], "the fourth round reaches the hit points");
+}
+
+/// The missile state machine clocks its scripts from tables: every channel write in them is
+/// the disc's, and only the disc's. The disarm scripts' later write is the Apocalypse latch
+/// 0x83..0x8a; ch 89 and 90 belong to the AND triggers #150 and #149 alone [D].
+#[test]
+fn missile_tables_match_the_disc() {
+    use nf_game::space_missile::{P1_WRITES, P2_WRITES};
+    let Ok(iso) = std::env::var("NF_ISO") else { return };
+    let scene = nf_view::load_with_carry_difficulty(&iso, "0700001b.bin", false, None, 1).unwrap();
+    let sim = scene.sim.as_ref().unwrap();
+    let writes = |h: u32| {
+        let mut v: Vec<(u32, u16)> = nf_game::nis::channel_writes(&sim.drones.scripts.lib[&h]).iter().map(|&(t, c, _)| (t, c as u16)).collect();
+        v.sort();
+        v
+    };
+    for (i, h) in [0x0600091cu32, 0x06000920, 0x06000921, 0x06000922, 0x0600091b, 0x06000923, 0x06000924, 0x06000925].into_iter().enumerate() {
+        assert_eq!(writes(h), P2_WRITES[i].to_vec(), "missile {} disarm script {h:#x}", i + 1);
+    }
+    for h in [0x060007c6u32, 0x060007e1] { assert_eq!(writes(h), P1_WRITES.to_vec(), "launch script {h:#x}"); }
+}

@@ -123,16 +123,17 @@ pub const P2_LEN: [u32; 8] = [1710, 1170, 1230, 1610, 1710, 1410, 1610, 1170];
 /// The p1 scripts' in-stream channel writes (stream tick, channel) [D decode 2026-10-22:
 /// ch 99 = 1 @t1000 in both scripts].
 pub const P1_WRITES: &[(u32, u16)] = &[(1000, 99)];
-/// The p2 scripts' in-stream channel writes per missile index 1..8 [D decode 2026-10-22].
+/// The p2 scripts' in-stream channel writes per missile index 1..8 [D decode 2026-10-22]: the
+/// later column is 0x83..0x8a, the Apocalypse placements' latch channels.
 pub const P2_WRITES: [&[(u32, u16)]; 8] = [
-    &[(1, 81), (1000, 46), (1030, 83)],
-    &[(1, 82), (490, 84)],
-    &[(1, 83), (550, 85)],
-    &[(1, 84), (930, 86), (990, 41)],
-    &[(1, 85), (1030, 87), (1130, 42)],
-    &[(1, 86), (730, 88), (830, 43)],
-    &[(1, 87), (930, 89)],
-    &[(1, 88), (490, 90)],
+    &[(1, 81), (1000, 46), (1030, 131)],
+    &[(1, 82), (490, 132)],
+    &[(1, 83), (550, 133)],
+    &[(1, 84), (930, 134), (990, 41)],
+    &[(1, 85), (1030, 135), (1130, 42)],
+    &[(1, 86), (730, 136), (830, 43)],
+    &[(1, 87), (930, 137)],
+    &[(1, 88), (490, 138)],
 ];
 /// The state-0 countdown decrement: `REC_FRAME_RATE` = 1/60.0 per gated tick [M the state-0
 /// body 0x1aa1f0-0x1aa208 loads 0x30d0dc with `lui $at,0x31; lwc1 $f1,-0x2f24($at)`; symtab

@@ -12,6 +12,25 @@ use nf_formats::placement::Placement;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// A script's event-0xD channel writes, `(stream tick, channel, value)` [M Script_EventHandler
+/// 0x1d94c0 case 0xD; D the stream decode], for an owner that clocks the script itself.
+pub fn channel_writes(nis: &Nis) -> Vec<(u32, u32, u8)> {
+    let mut out = Vec::new();
+    for st in &nis.streams {
+        let mut t = 0u32;
+        for c in st.decode() {
+            match c {
+                nf_formats::nis::Cmd::Wait(w) => t = w as u32,
+                nf_formats::nis::Cmd::Event { kind: 0x0d, params } if params.len() >= 2 && params[0] != 0 => {
+                    out.push((t, params[0], params[1] as u8));
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 /// A script object's bullet volume: `(player index, world centre, radius, glist and pose)`. The
 /// sphere is the built `Control_BuildWorldSph` 0x133070 one; the glist is present on a glist
 /// entity, whose triangles the round has to meet [M Collide_Intersect 0x1ebaa8].
@@ -2252,6 +2271,22 @@ impl Scripts {
             out[slot] = m;
         }
         out
+    }
+
+    /// Where script `hash`'s first entity of `obj_type` stands on the script's first update, from
+    /// the origin base: `Script_EntityStart` 0x1d8d78 tails with `Script_Interp`, so the object is
+    /// keyed the moment it exists. Plays a throwaway copy; no state here changes.
+    pub fn keyed_entity_pos(&self, hash: u32, obj_type: u8, w: &dyn World) -> Option<[f32; 3]> {
+        let nis = self.lib.get(&hash)?.clone();
+        let ident = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+        let mut s = Script::load(nis, ident, 1.0);
+        s.start(false);
+        let (mut subs, mut objs, mut ch, mut out) = (Vec::new(), Objects::default(), Channels::default(), Vec::new());
+        s.update(&mut subs, &self.lib, &mut objs, &mut ch, w, 0, &mut out);
+        objs.list.iter().flatten().find_map(|o| match o {
+            Obj::Entity { kind, matrix, .. } if *kind == obj_type => Some([matrix[3][0], matrix[3][1], matrix[3][2]]),
+            _ => None,
+        })
     }
 
     /// A synthetic one-shot player (fix-objects2): mode 1 (plays once from spawn), no gate, no
