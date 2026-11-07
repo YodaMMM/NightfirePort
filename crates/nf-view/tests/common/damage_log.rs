@@ -258,6 +258,33 @@ pub struct DamageLog {
     /// strip fights met Bond with the armour gone. A player answers what he SEES. Off = master
     /// behaviour (the lane gun-ray pick) everywhere else — no other walk sets it.
     pub eye_ray_stands: bool,
+    /// OPT-IN (`close_hitter_reengage`, set by the 07000003 00 Agent walk,
+    /// real-health-00agent-03-6): the flat 240-tick failed-fight cooldown does not delay
+    /// re-fighting a guard who is hitting Bond RIGHT NOW from within 8 u. The 03 ledger: the
+    /// moat-west guard #17 answered at 14171 (killed false) kept his whole 4-volley burst
+    /// 60.0 (ticks 14353-14576, d 2.3-4.6) inside the cooldown — the re-fight ran only after
+    /// the wait and killed at 14690 — and the mid-courtyard shotgun #9's 28.8 (ticks
+    /// 7734-7845) is the same cover before the 7890 answer [L the NF_DMG_TRACE runs on the
+    /// merged 03b tree]. A player whose attacker is still on him at arm's length does not
+    /// stand off for 4 seconds — he answers again at once. The re-engage keeps the fight
+    /// machinery's own shape (the same pick, the same stand, the same caps): only the WAIT is
+    /// lifted, and only while the close guard is actually landing rounds (a player_hit on him
+    /// in the last 240 frames — the shooters window). Off = master behaviour (the flat 240)
+    /// everywhere else — no other walk sets it, every other walk stays byte-identical.
+    pub close_hitter_reengage: bool,
+    /// OPT-IN (`dry_fight_resupply`, set by the 07000003 00 Agent walk, real-health-00agent-03-6):
+    /// when a fight is wanted and the gun is DRY (clip+spare 0 in hand, nothing owned with
+    /// rounds), run ONE resupply pass before the silent give-up — the lane arm only, NOT the
+    /// pre-fight low-ammo or post-fight restocks (the 03-6 run 2: the unseen-fights mode's
+    /// restocks re-directed the flank nav back to the moat drops and wedged at 3000-tick caps
+    /// x5, and woke the dodger #8 — proven worse, reverted). The ledger: the 410384 fight
+    /// emptied the 0x12 ("cycling weapons (0) (weapon 0x12 clip 0 spare 0)"), #5's point-blank
+    /// shotgun volley (20.8, d 3.8) landed at 410390, and the plain !armed give-up left 111
+    /// ticks of unanswered fire to the death at 410501. A player out of rounds grabs the dead
+    /// guards' drops lying where the fights killed them (#6/#7's, a few u back at the plate —
+    /// the nearest on-trail pickup). Off = master behaviour (the silent give-up) everywhere
+    /// else — no other walk sets it.
+    pub dry_fight_resupply: bool,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
 }
@@ -569,6 +596,26 @@ impl Walker {
             let pick = if !self.dmg.lane_fights {
                 match cands.iter().copied().find(|&i| DamageLog::visible(sim, i)) {
                     Some(i) => Some(i),
+                    // The close-hitter fallback (opt-in `close_hitter_reengage`, the 07000003
+                    // 00 Agent walk): a guard within 8 u who is LANDING ROUNDS is fought even
+                    // when no box's centre ray clears the world — his pellets reach Bond
+                    // through the same gap the eye ray cannot reverse (the servants' ground
+                    // shotgun #5: 20.8 at d 3.8 through the door corner at 410390 while every
+                    // pick returned None — the run-3 ledger; the fights never answered and the
+                    // dry gun finished the walk). The unseen fight's creep/back-off stand
+                    // (cap 300) is the answer; the flag's cooldown lift above re-arms it.
+                    None if self.dmg.close_hitter_reengage => {
+                        unseen_fight = true;
+                        cands.iter().copied().find(|&i| {
+                            let d = &sim.drones.list[i];
+                            let dxz = ((d.pos[0] - sim.bond.pos[0]).powi(2)
+                                + (d.pos[2] - sim.bond.pos[2]).powi(2)).sqrt();
+                            dxz <= 8.0
+                                && sim.drones.player_hits.iter().rev()
+                                    .take_while(|h| now.saturating_sub(h.0) <= 240)
+                                    .any(|h| h.1 == i)
+                        })
+                    }
                     // The unseen-cover fallback, opt-in (`with_real_damage_unseen_fights`): the
                     // same hurting-first pick the lane fights run, so a desk guard the eye rays
                     // cannot reach is still answered (the creep opens the line).
@@ -629,7 +676,22 @@ impl Walker {
             for &i in self.dmg.shooters(sim).iter() { DamageLog::geom_dump(sim, i); }
         }
         let Some(di) = di else { return false };
-        if self.dmg.cooldown.iter().any(|&(i, until)| i == di && self.total_ticks < until) { return false; }
+        if self.dmg.cooldown.iter().any(|&(i, until)| i == di && self.total_ticks < until) {
+            // OPT-IN `close_hitter_reengage` (the 07000003 00 Agent walk): lift the wait only
+            // while the cooldown's guard is STILL hitting Bond from within 8 u — a point-blank
+            // shooter's volley lands inside the flat 240 (the ledger above); anything else
+            // keeps the master wait (the leg walks on, the re-fight comes from the next spot).
+            let reengage = self.dmg.close_hitter_reengage && {
+                let sim = self.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[di];
+                let dxz = ((d.pos[0] - sim.bond.pos[0]).powi(2) + (d.pos[2] - sim.bond.pos[2]).powi(2)).sqrt();
+                dxz <= 8.0
+                    && sim.drones.player_hits.iter().rev()
+                        .take_while(|h| sim.drones.frame.saturating_sub(h.0) <= 240)
+                        .any(|h| h.1 == di)
+            };
+            if !reengage { return false; }
+        }
         // tranq_fights: the dart is slow and the win is a sleep, not a wound — the caller's
         // "killed" bookkeeping below keys on stand_and_fire's return, which reads the dart
         // family, so no extra cooldown plumbing is needed here.
@@ -655,8 +717,19 @@ impl Walker {
         // at the shotgun guard's door — the fights' silent `!armed` return left Bond standing
         // in the lane [L the walkreal_07000012_real_damage run, 2026-11-02]).
         let lane = self.dmg.lane_fights || UNSEEN_FIGHTS.with(|c| c.get());
-        if !armed(self) {
-            if lane && !self.dmg.resupplying {
+        // dry_fight_resupply: the IN-HAND gun dry counts as dry even when `armed`'s inventory
+        // scan finds rounds somewhere (the 03-6 run 4: the servants' ground — the scan passed
+        // on rounds the wheel could not reach in time, the fight opened on switch_to_gun's
+        // 12-cycle stand ("cycling weapons (0) (weapon 0x12 clip 0 spare 0)") and #5's volleys
+        // finished Bond mid-draw at 410501; a player whose gun is empty grabs the box at his
+        // feet, he does not stand in the line working the wheel).
+        let in_hand_dry = self.dmg.dry_fight_resupply && {
+            let sim = self.scene.sim.as_ref().unwrap();
+            let g = &sim.gun;
+            (2..=0x47).contains(&g.weapon) && g.clip + g.spare == 0
+        };
+        if !armed(self) || in_hand_dry {
+            if (lane || self.dmg.dry_fight_resupply) && !self.dmg.resupplying {
                 self.dmg.resupplying = true;
                 self.resupply(label);
                 self.dmg.resupplying = false;

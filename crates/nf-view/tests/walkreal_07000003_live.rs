@@ -223,6 +223,18 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         // The lane's dry in-hand fights (the 0x12 clip 0 vs the P99's 15 in reserve) — the
         // game's own mid-fight cycle [L the 00agent-02-03-2 ledger].
         w.dmg.switch_dry = true;
+        // real-health-00agent-03-6 (the 03-5 ledger's lever): the failed-fight cooldown must
+        // not cover a point-blank guard's burst — #17's 4-volley 60.0 (ticks 14353-14576) and
+        // #9's shotgun 28.8 (ticks 7734-7845) both landed inside the flat 240-tick wait while
+        // the fight machinery stood off [L the NF_DMG_TRACE runs]. The opt-in re-engage: when
+        // the cooldown's guard is within 8 u and STILL landing rounds, answer again at once.
+        w.dmg.close_hitter_reengage = true;
+        // real-health-00agent-03-6, the run-1 ledger's death: the 410384 fight emptied the
+        // 0x12 ("cycling weapons (0) (weapon 0x12 clip 0 spare 0)"), #5's point-blank shotgun
+        // volley (20.8 at 410390, d 3.8) landed, and the plain !armed give-up left 111 ticks
+        // of unanswered fire to the death at 410501 — the resupply is a lane-only arm. A
+        // player out of rounds grabs the dead guards' drops (#6/#7's, a few u back).
+        w.dmg.dry_fight_resupply = true;
     }
     let (li, o0, o1, o2) = mission_row();
     {
@@ -825,7 +837,7 @@ fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
 /// placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the load path is the
 /// only difference.
 #[test]
-#[ignore = "00 Agent (the real-health-00agent-03-5 ledger, the merged 03b tree): death t404475 at (22.24,5.46,-13.99), 28 hits for 100 — the moat-west guard #17's point-blank P99 burst 60.0 in 4 volleys (ticks 14353-14576, d 2.3-4.6; the fight machinery's failed-fight cooldown covered it, killed true only at 14690) + the mid-courtyard wedge #9 28.8 (ticks 7734-7845, killed true 7890, same cooldown cover) + the corridor cluster #18+#19 11.2 at 11.2 health. Standing-based pre-emption is PROVEN WORSE (run 7: the 8-u clear woke the dodger #8, 59.2 in 26; run 8: the point-blank aimed stand ate 71.2 in 3 volleys while waiting for aim windows) — the next lever is an OPT-IN walker.rs fights flag (lesson 7): re-engage immediately when the 240-tick post-fight cooldown would delay refighting a guard within 8 u who is hitting Bond (the fights then drop #17 by ~14500 — 1-2 volleys land, not 4; the same flag covers #9's wedge). Then the (35.6,8.7) door stall and the exit-lawn #16 post-kill volley (still unexercised at d3); an approach that stays north of door 8 (the green run fought from (36.2,5.7) THROUGH the open doorway)"]
+#[ignore = "00 Agent (the real-health-00agent-03-6 ledger, the two-lever tree): death t410740 at (24.04,6.37,12.89), 21 hits for 100 — the moat-west guard #17 36.0 in 2 hits (the close_hitter_reengage cooldown lift cut his burst 60.0->36.0: the re-fight killed at 14615 vs 14690) + the servants'-ground captain #3 (0x5000038, weapon 0xe, hp 18) 35.2 in 4 hits — two 12.0 volleys through the same corner gap the fights could not land through (killed false x2: the first stand died dry in 7 ticks, the second ran 280 ticks during the dry-resupply nav with the taps waiting on an aim the eye ray never found; the unseen stand's 60-tick aim-None give-up is shorter than the corner-round) + the mid-courtyard wedge #9 28.8 unchanged (his volleys 7734-7845 at d 10.3 — outside the 8-u close-hitter gate; the pellets come through the closed lane doors the eye ray cannot reverse). The levers that WORKED (keep them): the opt-in close_hitter_reengage cooldown lift + the close-hitter pick fallback (a guard within 8 u landing rounds is fought even when no box's centre ray clears the world) dropped #5 28.0->0 (killed true 410290) and #4 7.2->0 (killed true 410181); the opt-in dry_fight_resupply (in-hand dry -> one resupply pass, NOT the unseen-fights mode whose extra restock arms nav'd Bond back across the moat and wedged — run 2, reverted) armed the #5 fight. Standing pre-emption is still PROVEN WORSE (03-5 runs 2-8). Next lever: give the close-hitter unseen stand a longer aim-None tolerance (60 ticks cannot round the corner the 12.0 shooter hides behind — the #3 fights need ~150+), and consider widening the close-hitter radius past 8 u to cover #9's 10.3 door-gap wedge; the corridor cluster, the (35.6,8.7) door stall and the exit-lawn #16 volley are still unexercised at d3 (the walk has never passed the servants' ground on real health)"]
 fn walk_the_full_route_and_complete_every_objective_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(3));
 }
