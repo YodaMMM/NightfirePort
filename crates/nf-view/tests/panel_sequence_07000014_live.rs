@@ -255,36 +255,56 @@ fn the_panel_sequence_runs_from_the_capture_handback_to_the_unlocked_door() {
     // checks): the kill→death chain [M 0x12c4f8:30-35 → 0x12bb60:32-45] and the door's unlock.
     scene.sim.as_mut().unwrap().drones.channels.set(0x51, 1, 1);
 
-    // The cascade, one link per tick (newest-first [M 0x1336f8:54-68]): the ordered deaths and
-    // their channel writes [D the kill→death pairs; M 0x12c4f8:35 → 0x12bb60:40].
-    let cascade: [(u16, u32); 9] = [
-        (0x51, 0x52), // #726
-        (0x52, 0x4e), // GENERATORS_Intact #1113
-        (0x4e, 0x53), // #727
-        (0x53, 0x5c), // generator #1152
-        (0x5c, 0xaf), // #728
-        (0xaf, 0x5a), // generator #1154
-        (0x5a, 0xc9), // #730
-        (0xc9, 0x5b), // generator #1153
-        (0x5b, 0x85), // #729 — the door channel
+    // The cascade, one link per p6·30 ticks ([D 07000014.bin's p6 params; M `Destroy_Create`
+    // 0x12c318:57 stores p6·−FRAME_RATE with the load FRAME_RATE 30 [L door.rs
+    // CREATE_FRAME_RATE], `Destroy_Smash` 0x12bb60:31 negates, `Destroy_Update` 0x12c4f8:17-25
+    // counts to the death write]: the game staggers the generator-hall blowout — the leaves
+    // ARE the p6 carriers, #400/#787/#401/#826/#402/#828/#404/#827/#403; the old code fired
+    // every death in its smash tick and the whole chain ran in ~9 ticks). The delays below
+    // are the disc's own p6·30 per link [D the census dump: p6 1,1,2,1,2,2,1,1,6].
+    let cascade: [(u16, u16, u32); 9] = [
+        (0x51, 0x52, 30),  // #400  (kill 81 → death 82, p6 1)
+        (0x52, 0x4e, 30),  // #787  (kill 82 → death 78, p6 1)
+        (0x4e, 0x53, 60),  // #401  (kill 78 → death 83, p6 2)
+        (0x53, 0x5c, 30),  // #826  (kill 83 → death 92, p6 1)
+        (0x5c, 0xaf, 60),  // #402  (kill 92 → death 175, p6 2)
+        (0xaf, 0x5a, 60),  // #828  (kill 175 → death 90, p6 2)
+        (0x5a, 0xc9, 30),  // #404  (kill 90 → death 201, p6 1)
+        (0xc9, 0x5b, 30),  // #827  (kill 201 → death 91, p6 1)
+        (0x5b, 0x85, 180), // #403  (kill 91 → death 133, p6 6) — the door channel
     ];
     let tags: Vec<usize> = {
         let sim = scene.sim.as_ref().unwrap();
-        cascade.iter().map(|(kill, _)| destroy_by_kill(sim, *kill)).collect()
+        cascade.iter().map(|(kill, _, _)| destroy_by_kill(sim, *kill)).collect()
     };
     let mut step = 0usize;
-    for tick in 0..60u32 {
+    // Each link's own smash tick (the `latched` flip) — the death must rise EXACTLY p6·30
+    // ticks after it [M 0x12c4f8:17-25; the kill-rose-based window would wobble by the
+    // walk's newest-first order: a watcher newer than its writer smashes one tick late].
+    let mut smashed_at = [None; 9];
+    for tick in 0..700u32 {
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
         top_up(scene.sim.as_mut().unwrap()); // the cascade blasts splash; the pin is the chain
-        while step < cascade.len() && scene.sim.as_ref().unwrap().drones.channels.on(cascade[step].1) {
-            let (kill, death, idx) = (cascade[step].0, cascade[step].1, tags[step]);
-            assert!(scene.sim.as_ref().unwrap().drones.props.destroy[idx].dead,
-                "cascade link {step} (kill {kill:#x}) smashed before its death {death:#x} rose");
+        {
+            let sim = scene.sim.as_ref().unwrap();
+            for k in step..cascade.len() {
+                if smashed_at[k].is_none() && sim.drones.props.destroy[tags[k]].latched {
+                    smashed_at[k] = Some(tick);
+                }
+            }
+        }
+        while step < cascade.len() && scene.sim.as_ref().unwrap().drones.channels.on(cascade[step].1 as u32) {
+            let (kill, death, delay) = cascade[step];
+            let sm = smashed_at[step].expect("the link smashed before its death rose [M]");
+            assert_eq!(tick - sm, delay,
+                "cascade link {step} (kill {kill:#x} → death {death:#x}) fires p6·30 = {delay} ticks after its own smash [D the leaf's p6; M 0x12c4f8:17-25]");
+            assert!(scene.sim.as_ref().unwrap().drones.props.destroy[tags[step]].dead,
+                "cascade link {step} (kill {kill:#x}) reclasses as its death {death:#x} rises [M 0x12c4f8:25]");
             step += 1;
         }
         if step == cascade.len() { eprintln!("[panel] cascade done at tick {tick}"); break; }
     }
-    assert_eq!(step, cascade.len(), "the cascade runs to box #729's death 0x85 [D the pairs]");
+    assert_eq!(step, cascade.len(), "the cascade runs to #403's death 0x85 [D the pairs]");
     {
         let sim = scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x85), "box #729's death writes the door channel 0x85 [D]");
