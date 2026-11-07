@@ -123,3 +123,14 @@ Per level (34 rows, `nf_view::dev::LEVELS`), class × non-zero param counts — 
 
 not visible to me (this environment shows no token, credit, context-window or cost figures for
 the session; nothing to copy).
+
+## ntfy failed
+
+All three fallbacks were tried in order and all failed:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "unread-params-switches: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'unread-params-switches: done …', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "unread-params-switches: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output within 25 s; the command was killed by the tool timeout.
