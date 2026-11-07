@@ -235,6 +235,18 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         // of unanswered fire to the death at 410501 — the resupply is a lane-only arm. A
         // player out of rounds grabs the dead guards' drops (#6/#7's, a few u back).
         w.dmg.dry_fight_resupply = true;
+        // real-health-00agent-03-7 (the 03-6 ledger's two levers): the death at t410740 was
+        // #17 36.0 + #3 35.2 + #9 28.8 = exactly 100. (1) The close-hitter unseen stand's
+        // 60-tick aim-None give-up is shorter than the corner-round — #3 (0x5000038, weapon
+        // 0xe, hp 18) at d 5.3 behind the corner gap fired 35.2 through two answered fights
+        // (killed false x2); the creep toward the muzzle needs ~150+ ticks to round the
+        // corner and land on an 18 hp target [L the NF_DMG_TRACE runs] — the stand holds
+        // 180. (2) #9's volleys (7734-7845) ran at d 10.3 — OUTSIDE the 8-u close-hitter
+        // gate, the pellets coming through the closed lane doors the eye ray cannot reverse
+        // — the gates reach 12 u. The landing-rounds gate still applies in both: only a
+        // guard actually hurting Bond is ever answered.
+        w.dmg.close_hitter_stand_ticks = 180;
+        w.dmg.close_hitter_radius = 12.0;
     }
     let (li, o0, o1, o2) = mission_row();
     {

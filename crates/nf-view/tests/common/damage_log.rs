@@ -285,6 +285,29 @@ pub struct DamageLog {
     /// the nearest on-trail pickup). Off = master behaviour (the silent give-up) everywhere
     /// else — no other walk sets it.
     pub dry_fight_resupply: bool,
+    /// OPT-IN (`close_hitter_stand_ticks`, set by the 07000003 00 Agent walk,
+    /// real-health-00agent-03-7): the close-hitter unseen stand's aim-None give-up widens
+    /// from the master 60 ticks to this many. The 03-6 ledger: the servants'-ground captain
+    /// #3 (0x5000038, weapon 0xe, hp 18) at d 5.3 behind the corner gap fired 35.2 through
+    /// two answered fights (killed false x2 — the first stood dry in 7 ticks, the second ran
+    /// 280 ticks during the dry-resupply nav with the taps waiting on an aim the eye ray
+    /// never found); the unseen stand's 60-tick give-up is shorter than the corner-round —
+    /// the creep toward the muzzle needs ~150+ ticks to round the corner and land on an
+    /// 18 hp target [L the NF_DMG_TRACE runs]. Only a fight an unseen fallback picked
+    /// (`unseen_fight`) is widened; the lane stands keep 120 and every plain stand keeps
+    /// the master 60. 0 = off (the master 60) — no other walk sets it, every other walk
+    /// stays byte-identical.
+    pub close_hitter_stand_ticks: u32,
+    /// OPT-IN (`close_hitter_radius`, set by the 07000003 00 Agent walk,
+    /// real-health-00agent-03-7): both close-hitter gates — the pick fallback and the
+    /// re-engage lift — widen from 8.0 u to this radius. The 03-6 ledger: the mid-courtyard
+    /// wedge #9 landed 28.8 (volleys 7734-7845) at d 10.3 — OUTSIDE the 8-u gate, the
+    /// pellets coming through the closed lane doors the eye ray cannot reverse [L the
+    /// NF_DMG_TRACE runs]. The landing-rounds gate still applies (a player_hit on him in
+    /// the last 240 frames — the shooters window), so only a guard actually hurting Bond
+    /// is ever answered at the wider reach. 0 = off (the master 8.0) — no other walk sets
+    /// it, every other walk stays byte-identical.
+    pub close_hitter_radius: f32,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
 }
@@ -610,7 +633,7 @@ impl Walker {
                             let d = &sim.drones.list[i];
                             let dxz = ((d.pos[0] - sim.bond.pos[0]).powi(2)
                                 + (d.pos[2] - sim.bond.pos[2]).powi(2)).sqrt();
-                            dxz <= 8.0
+                            dxz <= self.dmg.close_hitter_radius.max(8.0)
                                 && sim.drones.player_hits.iter().rev()
                                     .take_while(|h| now.saturating_sub(h.0) <= 240)
                                     .any(|h| h.1 == i)
@@ -685,7 +708,7 @@ impl Walker {
                 let sim = self.scene.sim.as_ref().unwrap();
                 let d = &sim.drones.list[di];
                 let dxz = ((d.pos[0] - sim.bond.pos[0]).powi(2) + (d.pos[2] - sim.bond.pos[2]).powi(2)).sqrt();
-                dxz <= 8.0
+                dxz <= self.dmg.close_hitter_radius.max(8.0)
                     && sim.drones.player_hits.iter().rev()
                         .take_while(|h| sim.drones.frame.saturating_sub(h.0) <= 240)
                         .any(|h| h.1 == di)
@@ -853,7 +876,19 @@ impl Walker {
                 // The ray set follows the fight's pick: lane fights use the gun stand-ins, the
                 // shared walks the plain eye ray (master behaviour; level-13-lobby-rifles-2).
                 if t % 10 == 0 { aim = if self.dmg.lane_fights && !self.dmg.eye_ray_stands { DamageLog::exposed_part_gun_rays(sim, di) } else { DamageLog::exposed_part(sim, di) }; }
-                if aim.is_none() { unseen += 1; if unseen > if self.dmg.lane_fights { 120 } else { 60 } { return false; } } else { unseen = 0; }
+                if aim.is_none() {
+                    unseen += 1;
+                    // The close-hitter unseen stand's aim-None tolerance (opt-in
+                    // `close_hitter_stand_ticks`, the 07000003 00 Agent walk): the corner
+                    // between Bond and the shooter needs more creep ticks than the master 60
+                    // to open the eye ray (the 03-6 ledger's #3: two fights, both killed
+                    // false on the 60-tick give-up, 35.2 for it). Lane keeps 120; every
+                    // plain stand keeps 60; the flag rides `unseen_fight` only.
+                    let tol = if self.dmg.lane_fights { 120 }
+                        else if self.dmg.close_hitter_stand_ticks > 0 && self.dmg.unseen_fight { self.dmg.close_hitter_stand_ticks }
+                        else { 60 };
+                    if unseen > tol { return false; }
+                } else { unseen = 0; }
                 // No round landed for 300 ticks: walk on (a guard in cover the stand cannot reach;
                 // the 13 lobby stand took 40 health that way). tranq_fights: the dart's HitDamage
                 // is never called [M 0x13fff0:269-306] — progress is a dart LANDING (the target
