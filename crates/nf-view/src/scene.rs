@@ -5610,6 +5610,29 @@ impl Sim {
         // 181-182]. `HUD_UpdateCrossHair` (0x19e6d0) renders state 3 as the red "no" mark (HUDCrossCoords
         // state 3 [L 0x2bec48]). The game also marks the target (+0x2A = 1, +0x2C4 = the clock) for the
         // civilian AI — the port's aimed_at marking in `Drones::tick` covers that arm.
+        //
+        // mp-team-aim-marker — the multiplayer arm [M 0x1a7810:128-150]: ONE hitlist, the NEAREST
+        // hit's class byte (obj+0xff) dispatches [M :124-127]. Class 3 = a live player
+        // (Player_Init 0x1910f8:76 / MP_ReSpawn 0x185368:83 write it; the bots ride MP_ReSpawn on
+        // every respawn too [M BOT_respawn 0x124e38:77-79]): when MPSettings._388_4_ (DECIMAL
+        // 388 = 0x184 — the port's `master_copy`; MP_Start 0x183a50:70 copies the master enable
+        // there) and _408_4_ (DECIMAL 408 = 0x198 — the port's `friendly_fire`) are set and
+        // MP_isObjectOnTeam 0x18b720 puts the hit on the aiming player's team (MP_getObjectTeam
+        // 0x18b6c0 of the aimER — 2 outside a team scenario / Assassin; its gate folds into
+        // mp_is_object_on_team's), the marker bytes BLData+0x132 = 1, +0x133 = 3 — and NOTHING
+        // else: the aim-latch stores (+0x2a / +0x2c4) sit in the class-2 arm only, so aiming at
+        // a teammate is never latched [M 0x1a7810:128-133]. Class 2 = a drone-classed obj — an
+        // SP NPC (NDrone2_CreateObj 0x14d7c8:14): the same mark gates through `ext+0xc`'s body
+        // and KEEPS the weapon/level gate of the shared !bVar6 tail [M 0x1a7810:136-183], while
+        // the aim latch is stored UNCONDITIONALLY (the disassembly: `sb $v1,0x2a($s0)` 0x1a7aa8
+        // and `sw $v0,0x2c4($s0)` 0x1a7ab4 run before the `bnez $s1` exit 0x1a7ab0). The port
+        // carries no latch on MP bodies — the bot AI (the BOT_update family) never reads +0x2a
+        // (no BOT_* decompile file touches it; the readers are the SP NDrone2 paths the SP block
+        // keeps), and a written byte with no reader is not modelled. A fresh bot's pre-respawn
+        // class is unwritten (Drone_Create 0x136be0 sets no +0xff) — the port models the
+        // respawned steady state (class 3) [S, live check owns it].
+        // The MP objective models are class 0x35 (MP_CreateObject 0x185de8:122) — no
+        // Check_Target arm, so aiming at one leaves the normal crosshair.
         if self.drones.frame % 6 == 0 {
             let far = [camera[0] + look[0] * 50.0, camera[1] + look[1] * 50.0, camera[2] + look[2] * 50.0];
             let wall = self.world.segment(camera, far).unwrap_or(1.0);
@@ -5619,20 +5642,47 @@ impl Sim {
                     let vol = nf_game::bullet::PlayerVolume { feet: [dr.pos[0], dr.pos[1] - 1.0, dr.pos[2]], height: 1.8, radius: 0.4 };
                     nf_game::bullet::segment_cylinder(camera, far, &vol).filter(|&t| t < wall).map(|t| (i, t))
                 }).min_by(|a, b| a.1.total_cmp(&b.1));
-            self.cross_state = match hit {
+            // The player/bot bodies on the same ray (the same cylinders the MP rounds hit) —
+            // dead bodies take no arm (a dead player is class 0x12 [M Player_CheckForDeath
+            // 0x190810:59]) and are skipped like the SP block skips corpses; the aimER's own
+            // body is excluded the way the game's ray excludes its aimER (Collide_RayIntersect's
+            // obj_tag argument IS the aiming obj, param_1 [M 0x1a7810:122-123]).
+            let local = self.mp_local_slot;
+            let body_hit = self.mp.as_ref().and_then(|_m| {
+                self.mp_combat_bodies(local).iter()
+                    .filter(|b| b.alive && b.slot != local)
+                    .filter_map(|b| b.segment_hit(camera, far).filter(|&t| t < wall).map(|t| (b.slot, t)))
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+            });
+            self.cross_state = match (self.mp.as_ref(), body_hit) {
+                // The nearest hit is a body: its class dispatches (a drone nearer than the body
+                // would take the class-2 arm — the arenas carry no drones, and the port's drone
+                // team path has no MP link, so no mark either way).
+                (Some(m), Some((slot, bt))) if hit.as_ref().map_or(true, |(_, dt)| bt < *dt) => {
+                    let my_team = m.settings.players.get(local).map_or(2, |p| p.team); // MP_getObjectTeam 0x18b6c0
+                    let on_team = m.settings.master_copy != 0      // _388_4_ (0x184) [M 0x1a7810:129]
+                        && m.settings.friendly_fire != 0           // _408_4_ (0x198) [M 0x1a7810:129, :143]
+                        && m.mp_is_object_on_team(slot, my_team);  // [M 0x18b720; the port: rules.rs]
+                    if on_team { 3 } else { 2 }                    // the mark has NO weapon gate on class 3 [M 0x1a7810:128-133]
+                }
+                (Some(_), _) => 2, // MP: nothing (or a drone) nearest — the normal crosshair
+                (None, _) => match hit {
                 Some((i, _)) if self.drones.list[i].team != 1 => {
                     // civilian-no-shoot [M 0x1a7810:152-183]: the no-shoot mark is ALSO keyed on the
                     // held weapon id (animData+0x62) and the level. Weapon ids {1, 0x35, 0x36, 0x43,
                     // 0x44} — the fists and the throw family (grenades 0x35/0x36; 0x43/0x44 the other
                     // throwables) — keep the NORMAL crosshair over the same civilian (you may punch or
-                    // blast him; the damage path has no team gate either), and levels 0x7000005..0x7000008
-                    // (`0x7000008 < level || level < 0x7000005` guards the mark) never mark at all.
-                    // Everything else marks +0x132 = 1, +0x133 = 3.
+                    // blast him; the damage path has no team gate either). Levels 0x7000005..0x7000008
+                    // SKIP the weapon check and always mark [M 0x1a7810:152; the disassembly
+                    // 0x1a7ad0-0x1a7adc: `sltu $v1, $v0(0x7000004), $a0` then `bnez $v1, 0x1a7b48`
+                    // jumps straight to the mark stores — the port carried this inverted until
+                    // mp-team-aim-marker]. Everything else marks +0x132 = 1, +0x133 = 3.
                     let w = self.gun.weapon;
-                    let level_exempt = (0x0700_0005..=0x0700_0008).contains(&self.level);
-                    if level_exempt || matches!(w, 1 | 0x35 | 0x36 | 0x43 | 0x44) { 2 } else { 3 }
+                    let level_always = (0x0700_0005..=0x0700_0008).contains(&self.level);
+                    if level_always || !matches!(w, 1 | 0x35 | 0x36 | 0x43 | 0x44) { 3 } else { 2 }
                 }
                 _ => 2,
+                },
             };
             // door-text-labels: the SAME ray's class-0x1C door arm [M 0x1a79e8-0x1a7bc8]. The game's ONE
             // hitlist decides: the nearest hit object takes the hit, so a drone in front of the door

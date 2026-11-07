@@ -163,9 +163,13 @@ pub struct MpSettings {
     /// 0 [M 0x183a50:72-74, 0x184bd0:14, 0x1d04f0 case 0x25], and `Mission_Update` returns when it
     /// is NOT 0 [M 0x182c60:16-18].
     pub master: u32,
-    /// +0x388: `MP_Start` copies the master enable here [M 0x183a50:70].
+    /// +0x184 (Ghidra `MPSettings._388_4_` — the 388 is DECIMAL; this said +0x388 before, but the
+    /// symbol is 476 bytes and hex 0x388 does not exist): `MP_Start` copies the master enable
+    /// here [M 0x183a50:70]. Check_Target 0x1a7810:103,129,138 gates the MP aim arms on it.
     pub master_copy: u32,
-    /// +0x396: the team game — derived by `MP_Init` as `(scenario >> 29) & 1` [M 0x183438:41].
+    /// +0x18C (Ghidra `_396_4_` — DECIMAL; this said +0x396 before): the team game — derived by
+    /// `MP_Init` as `(scenario >> 29) & 1` [M 0x183438:41]. `MP_isObjectOnTeam` 0x18b720 and
+    /// `MP_getObjectTeam` 0x18b6c0 gate on it.
     pub team_game: u32,
     /// +0x400: the bit30 flag — `(scenario >> 30) & 1` [M 0x183438:42]; gates kill-scoring.
     pub bit30: u32,

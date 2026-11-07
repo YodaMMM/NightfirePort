@@ -1601,13 +1601,16 @@ impl MpMatch {
         mine.team == theirs.team
     }
 
-    /// `MP_isObjectOnTeam` 0x18b720 (128 bytes): only in a team game (`MPSettings+0x18c`) or
-    /// Assassin (`MPSettings+0x1a4 == 0x400`) — then `obj`'s team word == `team`, with the word
-    /// 2 sentinel (unassigned) answering false [M]. `Check_Target` 0x1a7810:129-144 asks it for
-    /// the aim-ray's hit (class 3 = the objective models directly, class 2 = a body through
-    /// `ext+0xc`) to gate the friendly markers [M]; `Player_AutoAim` 0x1a7c98 calls Check_Target
-    /// from `Player_Weapon` 0x1a24c8 — every on-foot match while aiming. The port keys the
-    /// lookup on the slot (`Control_Plr2Ind`'s result).
+    /// `MP_isObjectOnTeam` 0x18b720 (128 bytes): only in a team game (`MPSettings+0x18C`, Ghidra
+    /// `_396_4_` DECIMAL) or Assassin (`MPSettings+0x1A4 == 0x400`, Ghidra `_420_4_`) — then
+    /// `obj`'s team word == `team`, with the word 2 sentinel (unassigned) answering false [M].
+    /// `Check_Target` 0x1a7810:128-150 asks it for the aim-ray's nearest hit — class 3 (a live
+    /// player: the port's `mp_combat_bodies`, humans and bots alike) to gate the teammate marker
+    /// bytes BLData+0x132/+0x133 (with `_388_4_` = 0x184 `master_copy` and `_408_4_` = 0x198
+    /// `friendly_fire` [M 0x1a7810:129], no aim latch on this arm), class 2 (an SP NPC drone)
+    /// about the body behind `ext+0xc` [M :136-148]. The port keys the lookup on the slot
+    /// (`Control_Plr2Ind`'s result). The caller lives in `Sim::run`'s Check_Target block
+    /// (crates/nf-view/src/scene.rs).
     pub fn mp_is_object_on_team(&self, slot: usize, team: u32) -> bool {
         if self.settings.team_game == 0 && self.settings.scenario != scenario::ASSASSIN {
             return false;
