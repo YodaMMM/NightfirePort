@@ -40,9 +40,9 @@ fn blast_until_dead(sim: &mut nf_view::scene::Sim, target_i: usize) {
             phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
         defused: false,
-        
+        born: 0,
         loop_handle: 0,
-});
+        });
         for _ in 0..60u32 {
             sim.step_bond(Default::default(), false, false, false);
             if sim.drones.list[target_i].corpse { return; }

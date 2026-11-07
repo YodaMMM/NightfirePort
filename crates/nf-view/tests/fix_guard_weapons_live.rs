@@ -107,6 +107,18 @@ fn collect_shots(scene: &mut nf_view::scene::Scene, weapon: u32, wanted: u32, wa
     // ai-sight-drawn-gate-3: the fire-time guard distance per collected shot (the band split).
     let mut gate_dist: Vec<f32> = Vec::new();
     'guards: for &cand in &candidates {
+        // fx-muzzle-repin: trip the candidate's own switch channel first (the game's Enable path —
+        // the same affordance enemy_accuracy's measure() uses). On the corrected stream the 0x0e
+        // fight no longer leaves 07000001's 0x12 guards sight-capable (they sit WaitSwitch-disabled,
+        // vision-off — no sight pipeline at all [M 0x176a28: the 0x10000 bit]), so every candidate
+        // stayed cold at seen 0 whatever the park did. The channel is the guard's OWN scripted
+        // activator [M NDrone2_DSTATE_WaitSwitch → NDrone2_Enable].
+        {
+            let sim = scene.sim.as_mut().unwrap();
+            let ch = sim.drones.list[cand].switch_channel;
+            let f = sim.drones.frame;
+            if ch != 0 { sim.drones.channels.set(ch as u32, 1, f); }
+        }
         // ai-sight-drawn-gate-3: the park-distance ladder 10/7/5 (extended), now in `try_park`.
         // The frustum sight gate moved the spawn/patrol frames (Drone_PositionVisible 0x13a7a0 is
         // the frustum(2.0) test, far narrower than the old 120-degree cone [M 0x137cb0:43's

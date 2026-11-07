@@ -74,9 +74,9 @@ fn a_blast_hurts_the_hiding_escort() {
             smoke_popped: false, resting: false, stuck: false, seek_target: None, phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
         defused: false,
-        
+        born: 0,
         loop_handle: 0,
-});
+        });
         for _ in 0..30u32 { sim.step_bond(Input::default(), false, false, false); if sim.drones.grenades.is_empty() { break; } }
         assert!(sim.drones.grenades.is_empty(), "the zero-range grenade blows at once");
     };

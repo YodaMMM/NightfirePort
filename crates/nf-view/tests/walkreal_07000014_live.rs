@@ -205,6 +205,33 @@ fn set_crouch(w: &mut Walker, on: bool) {
     for _ in 0..15 { w.tick(nf_game::player::Input::default(), false); }
 }
 
+/// The door wall's west jamb (its face meets the direct south steer 0.17 along the segment
+/// (30.33, 0.55, 35.44) → (30.09, 0.65, 38.73) [L all four merged-tree stuck dumps —
+/// walker_b2's 6000-tick caps at the identical bond spot, with door #834 fully open state 0x4
+/// pos01 1.00 and "drones nearby: none", so the block is the wall itself]) bars the corridor
+/// south leg whenever the west step lands east of the jamb's north face — on the merged stream
+/// the step caps 0.97 from its (29.7, 34.7) r 0.9 band, at x 30.33. A player sideslips west
+/// past the jamb's north face, then walks the corridor lane the probe crossed (x ≈ 29.7-30.0
+/// [L scratch_l14d l14d_door834's (29.99, 0.61, 38.00) grounded]). Bounded west nudge: a raw
+/// tick loop (no stuck detector — the slide along the face is the point); a no-op when the
+/// west step already arrived (the green streams stay byte-identical).
+fn nudge_west_of_the_door_jamb(w: &mut Walker) {
+    let start = w.total_ticks;
+    while w.total_ticks - start < 1200 {
+        if w.scene.sim.as_ref().unwrap().bond.pos[0] < 29.9 { return; }
+        let sim = w.scene.sim.as_ref().unwrap();
+        let b = &sim.bond;
+        let inp = nf_game::player::Input {
+            forward: 1.0,
+            turn: wrap_pi((29.2f32 - b.pos[0]).atan2(34.9f32 - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
+            ..Default::default()
+        };
+        w.tick(inp, false);
+    }
+    eprintln!("[014] the west nudge capped at {:?} — the south leg runs from east of the jamb",
+        w.scene.sim.as_ref().unwrap().bond.pos);
+}
+
 /// The east route, REWRITTEN (level-14-east-walkway) — the old drop-leg premise (render-only slot
 /// lids) is refuted and the route now walks the game's own crossing:
 ///
@@ -765,14 +792,20 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
         // 0.17 along from (30.33, 0.55, 35.44)); the corridor lane west of it (x ≈ 29.7) is the
         // crossing the probe walked ((29.99, 0.61, 38.00) grounded).
         let _ = w.try_walk_to(Wp::new(29.7, 0.8, 34.7).r(0.9), "the corridor west of the door wall");
+        nudge_west_of_the_door_jamb(&mut w);
         w.walk_to(Wp::new(30.09, 0.65, 38.73).r(1.2), "the corridor south to the leg-2 spot");
-        if !w.tops_up() { clear_hostiles(w, 24.0, 900); }
         {
+            // The landing pin samples the WALK's arrival. The hostile clear after it (the
+            // route's own running fight before leg 2) legitimately repositions Bond — the
+            // merged-tree d1 run arrived (29.79, 0.56, 37.59) in-band and the 10-fight clear
+            // then dragged him to (25.97, 0.65, 36.40) [L this tree's ledger] — and must not
+            // eat the pin.
             let p = w.scene.sim.as_ref().unwrap().bond.pos;
             assert!((27.0..33.5).contains(&p[0]) && p[1] > 0.5 && p[1] < 1.6 && (36.5..40.5).contains(&p[2]),
                 "the descent lands on the facility corridor floor at the leg-2 start (the walked route, probe landing (29.99, 0.61, 38.00)), got {p:?}");
             eprintln!("[014] the descent landed {p:?}");
         }
+        if !w.tops_up() { clear_hostiles(w, 24.0, 900); }
     }
 
     // Leg 2: west to the Kiko cut-scene touch #381 — the walk's OWN route (level-14-delta-exit-walk).
@@ -1176,6 +1209,11 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     w.walk_to(Wp::new(22.9, 1.0, -22.8).r(1.2), "the delta doorway approach");
     w.walk_to(Wp { at: [24.0, 1.2, -22.8], act: Act::Use { use_ticks: 240 }, arrive: 1.1 }, "E the delta slides");
     w.walk_to(Wp::new(27.79, 1.28, -25.32).r(1.0), "to the Delta exit #944");
+    // A player at the exit door clears the room before pressing E: a live guard between Bond
+    // and the exit object eats the use ray (the mask-4 ray hits whatever stands in it), and
+    // the d1 plain run's pocket was exactly that shape — the sisters' identical exit sequence
+    // loaded warm, the d1 run's 180 pulsed ticks did nothing [L this tree's logs].
+    clear_hostiles(&mut w, 12.0, 600);
     // The use pick reads the view: square up on the exit before E, as a player does.
     {
         let sim = w.scene.sim.as_mut().unwrap();
@@ -1183,9 +1221,24 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
         sim.bond.yaw = d[0].atan2(d[1]);
         sim.bond.pitch = 0.0;
     }
+    // E pulses (the edge-triggered mask 4 [M Input_Action]) while squared up on the trigger —
+    // the old held-use loop spent its single edge on the loop's first tick, and when the
+    // arrive band parked Bond on the rim (this tree's d1 run: arrived (26.94, 1.13, −24.81),
+    // 0.99 from the #944 spot, "loaded" false after 60 held ticks [L]) the edge missed the
+    // volume and the 59 held ticks after it were dead input. A player taps E facing the exit.
     let mut loaded = false;
-    for _ in 0..60 {
-        w.tick(nf_game::player::Input::default(), true);
+    for k in 0..180 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let (bp, yaw) = (sim.bond.pos, sim.bond.yaw);
+        let d = dxz(bp, [27.79, 1.28, -25.32]);
+        let desired = (27.79f32 - bp[0]).atan2(-25.32f32 - bp[2]);
+        drop(sim);
+        let inp = nf_game::player::Input {
+            turn: wrap_pi(desired - yaw).clamp(-0.08, 0.08),
+            forward: if d > 0.55 { 0.4 } else { 0.0 },
+            ..Default::default()
+        };
+        w.tick(inp, k % 6 == 0);
         if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { loaded = true; break; }
     }
     {
@@ -1948,6 +2001,7 @@ fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
         }
         let _ = w.try_walk_to(Wp::new(30.4, 1.1, 34.9).r(0.8), "down onto the corridor floor (0.0)");
         let _ = w.try_walk_to(Wp::new(29.7, 0.8, 34.7).r(0.9), "the corridor west of the door wall");
+        nudge_west_of_the_door_jamb(&mut w);
         w.walk_to(Wp::new(30.09, 0.65, 38.73).r(1.2), "the corridor south to the leg-2 spot");
     }
 

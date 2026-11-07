@@ -155,12 +155,20 @@ fn melee_event_creates_the_close_combat_bullet() {
         player.sph = player.pos;
         player.capsule = ([player.pos[0], player.pos[1] + 1.086, player.pos[2]], player.pos);
         sim.tick(&d, &player);
-        // The punch bullet flies and connects inside the same tick, so the outcome is the hit on
-        // Bond (the record's id rides the Hit): in range → one hit by weapon 0x65; out → none.
+        // The punch bullet flies and connects within its flight window: the record's speed is
+        // 1.5/tick over the ≤1.75 gap, so the hit lands on the swing tick or the next one — under
+        // the post-f1f37ba47 stream the first flight tick clamps at the capsule contact
+        // (travelled 0.9467 of the 1.5) and the hit lands the tick after (the old same-tick pin
+        // held one stream position of the contact path). The damage/owner/range pins stay exact.
         if dist < 1.75 {
+            for _ in 0..2 {
+                if sim.player_hits.len() == 1 { break; }
+                sim.tick(&d, &player);
+            }
             assert_eq!(sim.player_hits.len(), 1, "the punch connects in range (dist {dist})");
             assert_eq!(sim.player_hits[0].1, gi, "the hit is the melee guard's bullet");
         } else {
+            sim.tick(&d, &player);
             assert!(sim.player_hits.is_empty(), "out of the 1.75 punch range (dist {dist}): {:?}", sim.player_hits);
         }
     }

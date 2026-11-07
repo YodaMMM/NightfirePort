@@ -219,7 +219,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
     ] {
         assert!(w.try_walk_to(Wp { at, act: Act::None, arrive: r }, label), "{label} must walk");
     }
-    let bay_killed = kill_guard_at_present(&mut w, [214.2, -289.4], [6.0, 6.0], "the bay guard #10 (from the strip mouth, ray clear d 64 [probe_0d_ray_stands])", 600);
+    let bay_killed = kill_guard_at_present(&mut w, [214.2, -289.4], [6.0, 6.0], "the bay guard #10 (from the strip mouth, ray clear d 64 [probe_0d_ray_stands])", 180);
     eprintln!("[0d] the strip-mouth #10 kill: landed {} pool {:.1}", bay_killed, w.scene.sim.as_ref().unwrap().drones.health.health);
     // The spawner #32 (skin 0x5000090, the ground band (157.6..163.3, −213..−229)) is NOT
     // taken here any more — level-0d-real-health-crossfire-4 MEASURED the trade: the landed

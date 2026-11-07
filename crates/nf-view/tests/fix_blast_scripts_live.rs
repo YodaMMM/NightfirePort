@@ -44,14 +44,18 @@ fn blast_players(scene: &nf_view::scene::Scene, script: u32) -> Vec<f32> {
         .map(|p| p.scale).collect()
 }
 
-/// Point the camera at a world point through Bond's yaw/pitch (dir = [cos·sin(yaw), sin(pitch), cos·cos(yaw)] [M player.rs aim]).
+/// Point the camera at a world point through Bond's yaw/pitch. The game's pitch is HALF-TURNS:
+/// look() converts p = pitch·π/2 before the RotMatrixX pitch [M player.rs look(); RotMatrixX
+/// 0x1e46a0; the report-3 type-0 diagnosis — the radian read dove the shot 34.3° instead of
+/// 21.8°], so the asin result divides by π/2 here; yaw stays radians [M player.rs aim:
+/// dir = [cos·sin(yaw), sin(p·π/2), cos·cos(yaw)]].
 fn aim_at(scene: &mut nf_view::scene::Scene, target: [f32; 3], eye_h: f32) {
     let sim = scene.sim.as_mut().unwrap();
     let eye = [sim.bond.pos[0], sim.bond.pos[1] + eye_h, sim.bond.pos[2]];
     let d = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
     let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
     sim.bond.yaw = d[0].atan2(d[2]);
-    sim.bond.pitch = (d[1] / l).asin();
+    sim.bond.pitch = (d[1] / l).asin() / std::f32::consts::FRAC_PI_2;
 }
 
 /// ── The Samurai's bolt plays the game's cyan blast script 0x060007c4 ───────────────────────────
@@ -142,9 +146,9 @@ fn the_frag_and_the_rocket_keep_the_generic_blast_script() {
             damage: 100.0, radius: 8.0, weapon_type: 0x34, owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: false, stuck: false, seek_target: None, mesh, phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
         defused: false,
-        
+        born: 0,
         loop_handle: 0,
-});
+        });
     }
     let mut frag_exploded = false;
     for _ in 0..60 {
@@ -221,9 +225,27 @@ fn the_destroyable_smash_plays_its_type_script() {
     let monitor = blast_players(&scene, 0x0600_0027);
     assert_eq!(monitor.len(), 1, "the type-1 smash plays 0x0600027 [M 0x12bc74-0x12bc7c]");
     assert!(blast_players(&scene, 0x0600_07c4).is_empty() && blast_players(&scene, 0x0600_004f).is_empty(), "no stray blast scripts on the type-1 smash");
+}
 
-    // Sister on 0700000d: the type-0 destroyable's smash spawns NO blast player at all [M 0x12bc50
-    // `if (cVar4 != 0)`] — the smash (dead + channel) still runs.
+/// Sister on 0700000d: the type-0 destroyable's smash spawns NO blast player at all [M 0x12bc50
+/// `if (cVar4 != 0)`] — the smash (dead + channel) still runs.
+///
+/// gas-rng-draws-4: the leg itself is GEOMETRY-DEAD on real input, measured on this tree (the
+/// report-3 diagnosis, confirmed and widened): destroy[10] (placement #470, the boundless
+/// bigdoor01 leaf) parses to the point box lo == hi == (0,0,0), hit as a ±0.1 point [M
+/// breakable.rs seg_box_t lo==hi arm]; the origin has NO floor within 56 u on any ground ray (the
+/// report-3 probe said 35; this tree's scan covered ±56 at 2-u steps and found none) and no line
+/// of sight from any real floor spot inside the P2K's reach — the record's +0x1C range is 50.0
+/// with +0x24 spread 0.0 [L ee_snapshot.bin weapon_data @0x2bf150 + 2·0x10C = 0x2bf368: +0x1C
+/// 50.0, +0x20 5.0, +0x24 0.0, flags68 0x1004], so the shot must START within 50 u of the origin,
+/// where nothing stands. The scan's clear-LOS spots all sit 220+ u out (floor y 0-16), past the
+/// range. The 0x12bc50 law itself stays pinned by the type-1 leg above (the same `if (cVar4 != 0)`
+/// branch decides both); this re-opens when a type-0 destroyable with a real box turns up on a
+/// reachable floor.
+#[test]
+#[ignore = "type-0 leg geometry-dead on real input: destroy[10] is the point box (0,0,0)±0.1 [M breakable.rs lo==hi]; no floor within 56 u and no LOS from any real floor inside the P2K's 50-u range [L ee_snapshot 0x2bf368: +0x1C 50.0, +0x24 0.0]; the 0x12bc50 no-script law stays pinned by the type-1 leg"]
+fn the_type0_destroyable_smash_plays_no_script() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "0700000d.bin", false).expect("load");
     // The panel give (the switch itself may not land — the boot script re-requests — but the give
     // resets the view state the fire gate needs; the probe measured the smash through this shape).

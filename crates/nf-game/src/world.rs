@@ -349,13 +349,17 @@ impl Geo {
     }
 
     /// Whether a hit on triangle `k` carries the game's bullet-pass bit (`HITDATA+0x51` bit 1):
-    /// the node's glist flags bit 0x40 OR the surface byte's bit 0x40 — `Collide_Intersect`
-    /// 0x1ebaa8 sets the flag from either (the node word at :143-145, the surface byte at
-    /// disasm 0x1ebf78-0x1ebf80, no query-flag gate on either). The surface byte's bit 0x80 does
-    /// NOT set it for the bullet queries: that OR is guarded by HITTEST+0x98 bit 0x1
-    /// (disasm 0x1ebf8c-0x1ebf94), which the 0x20a/0x208 bullet flags clear — their 50/50 stays
-    /// in the walk's roll (`Collide_Update` 0x1ea398:217-220, `Bullet_CollisionHandler` 0x12cfd0).
-    /// fix-foliage-bullets.
+    /// the placement's glist flags bit 0x40 OR the surface byte's bit 0x40 — `Collide_Intersect`
+    /// 0x1ebaa8 sets the flag from either (the node word at disasm 0x1ebaec-fc — the runtime cel's
+    /// `+0x94` = the placement's `celglist+0x44` word [M parsemap_block_map_data_static 0x1d1998
+    /// disasm 0x1d1ac0-0x1d1ad0], the surface byte at disasm 0x1ebf78-0x1ebf80, no query-flag gate
+    /// on either). The surface byte's bit 0x80 sets the same pass bit UNCONDITIONALLY too (disasm
+    /// 0x1ebf94's `movn a1,v0,a0` sits in the beq's DELAY SLOT — it executes whatever the mask),
+    /// so the bit-0x8 queries hard-drop 0x80-byte hits as well; the port leaves that source out
+    /// because no shipped surface byte carries 0x80 (the 02 census: bytes 0x00..0x15, 0x40 [D]) —
+    /// and because for the flying round the handler re-decides the byte's 0x80 with a 50/50 roll
+    /// (`Bullet_CollisionHandler` 0x12ce80 disasm 0x12cf90-0x12cfac, `Rand_Rand(0x3f) & 1`), which
+    /// stays in the walk's roll (`penetration_roll_node`, effect.rs). fix-foliage-bullets.
     fn bullet_pass(&self, k: usize) -> bool { self.pass[k] || self.mats[k] & 0x40 != 0 }
 
     /// Split every object into runs of `n` consecutive triangles with their own bounds. Static geometry only: its
@@ -440,6 +444,25 @@ pub enum HitHost {
     Object(u64, Mat4),
 }
 
+/// A pass-flagged contact the flying round's trace walks PAST — one entry of
+/// `Bullet_CollisionHandler` 0x12ce80's sorted contact walk: the fraction, the front-face normal,
+/// the RAW surface byte (`HITDATA+0x50`, the game never masks it on store [M Intersect_RayGeom
+/// 0x10a8c8:326]) and the decal host. The game's flight trace (the bullet's HITTEST+0x9a = 0x20
+/// [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f058]) drops NOTHING at the intersect — the mask
+/// bits 0x1/0x2/0x8/0x10/0x800 are all clear — so every contact lands in the sorted list and the
+/// handler decides per contact: pass (the node/cel word's bit 0x40, the byte's bits 0x40/0x80 or
+/// the glass rule) → `Effect_Create` at the contact (the material's `EffectInfo+0x84` emitter —
+/// the water splash for byte 0xE — plus `Effect_Bullet`'s gas and decal), state stays 1, next
+/// contact [M 0x12cff0 `bne s4,zero,0012d020` skips the state-2 store]; solid → state 2, the
+/// round stops there. bullet-pass-water.
+#[derive(Clone, Copy, Debug)]
+pub struct FlightPass {
+    pub t: f32,
+    pub normal: V3,
+    pub mat: u8,
+    pub host: HitHost,
+}
+
 /// Static geometry, plus moving objects (script animations' discrete parts: docs/systems/script-player.md) placed each
 /// tick with `set_dynamic` — `Collide_PickObj` (0x1eae80) tests any object linked into a cel with collision data
 /// (`obj+0xD8`) whatever moves it.
@@ -464,7 +487,14 @@ pub struct CollisionWorld {
     scope: Option<ScopeData>,
 }
 
-/// Whether the segment `from + t·d`, t in [0, 1], passes through the box (slab test, a little padding).
+/// The triangle's unit normal (= +cross(v1−v0, v2−v0), the stored-plane orientation the port's
+/// one-sided tests use — docs/formats/collision.md's whole-disc check).
+pub(crate) fn tri_normal(t: &[V3; 3]) -> V3 {
+    let n = cross(sub(t[1], t[0]), sub(t[2], t[0]));
+    let l = dot(n, n).sqrt().max(1e-12);
+    [n[0] / l, n[1] / l, n[2] / l]
+}
+
 /// The scalar stand-in for the game's slab tests: `ASH_Intersect_RayBox` 0x109ad0 (the VU0
 /// ray-vs-leaf-box test `Intersect_RayGeom` 0x10a8c8 drives — origin +0x20, per-axis deltas
 /// +0x40, length cap +0x8c, the parallel-axis ±inf stand-in DAT_0030c748 [M]) and the
@@ -1471,24 +1501,52 @@ impl CollisionWorld {
     }
 
     fn flight_scoped_impl(&self, cell: Option<usize>, from: V3, to: V3, glass: bool) -> Option<f32> {
-        let Some(cell) = cell else { return self.segment_flight(from, to, glass) };
+        self.flight_scoped_contacts_impl(cell, from, to, glass).0
+    }
+
+    /// [`Self::segment_flight_scoped`] with the pass contacts — the same walk, collecting every
+    /// pass-flagged or glass-pass contact nearer than the stop. The game's flight intersect mask
+    /// (+0x9a = 0x20 [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f058]) drops NOTHING — the
+    /// handler's sorted contact walk passes these with their `Effect_Create` treatment and stops
+    /// at the first solid one [M Bullet_CollisionHandler 0x12ce80 disasm 0x12cff0 `bne s4,zero,
+    /// 0012d020` — the pass skips the state-2 store]. Falls back to the flat
+    /// [`Self::segment_flight_contacts`] when there is no scope or the cell is unknown — the
+    /// caller's safety net, same as the scoped actor queries. bullet-pass-water.
+    pub fn segment_flight_contacts_scoped(&self, cell: Option<usize>, from: V3, to: V3, glass: bool) -> (Option<f32>, Vec<FlightPass>) {
+        self.flight_scoped_contacts_impl(cell, from, to, glass)
+    }
+
+    /// The flat twin of [`Self::segment_flight_contacts_scoped`] (no cel scope).
+    pub fn segment_flight_contacts(&self, from: V3, to: V3, glass: bool) -> (Option<f32>, Vec<FlightPass>) {
+        self.flight_contacts_impl(from, to, true, true, glass)
+    }
+
+    fn flight_scoped_contacts_impl(&self, cell: Option<usize>, from: V3, to: V3, glass: bool) -> (Option<f32>, Vec<FlightPass>) {
+        let Some(cell) = cell else { return self.segment_flight_contacts(from, to, glass) };
         // An out-of-range cell is a caller bug: the flat answer is the conservative fallback (the
         // scoped actor queries instead test nothing — their callers keep a valid `bond.cel`).
         let in_range = self.scope.as_ref().is_some_and(|sc| cell < sc.graph.cells.len());
-        if !in_range { return self.segment_flight(from, to, glass); }
-        let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to)) else { return self.segment_flight(from, to, glass) };
+        if !in_range { return self.segment_flight_contacts(from, to, glass); }
+        let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to)) else { return self.segment_flight_contacts(from, to, glass) };
         let d = sub(to, from);
         let mut best = None::<f32>;
+        let mut pass: Vec<FlightPass> = Vec::new();
         {
             let stat = &self.stat;
             for r in &runs {
                 let o = &stat.objects[*r as usize];
+                let host = HitHost::Cel(Some(u32::MAX - *r));
                 for k in o.tris.clone() {
-                    if stat.bullet_pass(k) { continue; } // the pass-flagged hits the bit-0x8 queries drop [M 0x1ebff0]
-                    if glass && stat.mats[k] & 0x3f == 0x10 { continue; } // the glass pass [M 0x1ea398:216-229]
+                    let is_pass = stat.bullet_pass(k);
+                    let is_glass = glass && stat.mats[k] & 0x3f == 0x10;
                     let t = &stat.tris[k];
-                    if let Some(tt) = ray_tri_t(from, d, t) {
-                        if best.is_none_or(|b| tt < b) { best = Some(tt); }
+                    let Some(tt) = ray_tri_t(from, d, t) else { continue };
+                    if is_pass || is_glass {
+                        if best.is_none_or(|b| tt < b) {
+                            pass.push(FlightPass { t: tt, normal: tri_normal(t), mat: stat.mats[k], host });
+                        }
+                    } else if best.is_none_or(|b| tt < b) {
+                        best = Some(tt);
                     }
                 }
             }
@@ -1497,16 +1555,26 @@ impl CollisionWorld {
         for g in [&self.missile, &dynamic.geo] {
             for o in along(g, from, to) {
                 for k in o.tris.clone() {
-                    if g.bullet_pass(k) { continue; } // [M 0x1ebff0]
-                    if glass && g.mats[k] & 0x3f == 0x10 { continue; } // the glass pass [M 0x1ea398:216-229]
+                    let is_pass = g.bullet_pass(k);
+                    let is_glass = glass && g.mats[k] & 0x3f == 0x10;
                     let t = &g.tris[k];
-                    if let Some(tt) = ray_tri_t(from, d, t) {
-                        if best.is_none_or(|b| tt < b) { best = Some(tt); }
+                    let Some(tt) = ray_tri_t(from, d, t) else { continue };
+                    if is_pass || is_glass {
+                        if best.is_none_or(|b| tt < b) {
+                            pass.push(FlightPass { t: tt, normal: tri_normal(t), mat: g.mats[k], host: HitHost::Cel(None) });
+                        }
+                    } else if best.is_none_or(|b| tt < b) {
+                        best = Some(tt);
                     }
                 }
             }
         }
-        best
+        drop(dynamic);
+        pass.retain(|p| best.is_none_or(|b| p.t < b));
+        pass.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+        let scope_runs = |h: &mut HitHost| if let HitHost::Cel(Some(k)) = h { let kk = *k; *h = HitHost::Cel(self.run_cell((u32::MAX - kk) as usize)); };
+        for p in &mut pass { scope_runs(&mut p.host); }
+        (best, pass)
     }
 
     /// The actor-capsule portal test (`Intersect_Portal`'s 0x800 path [M 0x1ea7b8]: the point on the
@@ -2071,37 +2139,80 @@ impl CollisionWorld {
     /// HITTEST+0x9a carries 0x20 [M Collide_Update 0x1ea398:216-229; Bullet_update 0x12e7b0
     /// disasm 0x12f048-0x12f058]).
     fn segment_in_sets_drop_pass_glass(&self, from: V3, to: V3, with_missile: bool, drop_pass: bool, glass: bool) -> Option<f32> {
+        self.flight_contacts_impl(from, to, with_missile, drop_pass, glass).0
+    }
+
+    /// The flight trace WITH the pass contacts: the first solid fraction (the same nearest-of the
+    /// flat walk returns, term for term) plus every pass-flagged or glass-pass contact nearer than
+    /// it, in distance order — `Bullet_CollisionHandler` 0x12ce80's sorted walk. The stop comes out
+    /// of the SAME per-triangle arithmetic as [`Self::segment_in_sets_drop_pass_glass`]; the pass
+    /// entries are the contacts the walk used to swallow silently. bullet-pass-water.
+    fn flight_contacts_impl(&self, from: V3, to: V3, with_missile: bool, drop_pass: bool, glass: bool) -> (Option<f32>, Vec<FlightPass>) {
         let d = sub(to, from);
-        let (mut best, mut lo, mut hi) = (None::<f32>, [0f32; 3], [0f32; 3]);
-        for k in 0..3 { lo[k] = from[k].min(to[k]); hi[k] = from[k].max(to[k]); }
-        let _ = (lo, hi);
+        let mut best = None::<f32>;
+        let mut pass: Vec<FlightPass> = Vec::new();
         let dynamic = self.dynamic.read().unwrap();
-        // perf-240g: the same sets in the same order, without a Vec per ray.
-        let sets: [Option<&Geo>; 3] = [Some(&self.stat), with_missile.then_some(&self.missile), Some(&dynamic.geo)];
-        for g in sets.into_iter().flatten() {
-            for o in along(g, from, to) {
-                for k in o.tris.clone() {
-                    if drop_pass && g.bullet_pass(k) { continue; } // the pass-flagged hits the bit-0x8 queries drop [M 0x1ebff0]
-                    if glass && g.mats[k] & 0x3f == 0x10 { continue; } // the glass pass [M 0x1ea398:216-229]
-                    let t = &g.tris[k];
-                    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
-                    if dot(cross(e1, e2), d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
-                    let p = cross(d, e2);
-                    let det = dot(e1, p);
-                    if det.abs() < 1e-12 { continue; }
-                    let inv = 1.0 / det;
-                    let s = sub(from, t[0]);
-                    let u = dot(s, p) * inv;
-                    if !(0.0..=1.0).contains(&u) { continue; }
-                    let q = cross(s, e1);
-                    let v = dot(d, q) * inv;
-                    if v < 0.0 || u + v > 1.0 { continue; }
-                    let tt = dot(e2, q) * inv;
-                    if (0.0..=1.0).contains(&tt) && best.is_none_or(|b| tt < b) { best = Some(tt); }
+        // The stat set's run identity rides as Cel(Some(u32::MAX − run)) until the walk ends
+        // (segment_surface_host's trick), then resolves once.
+        let base = self.stat.objects.as_ptr() as usize;
+        for o in along(&self.stat, from, to) {
+            let run = (o as *const Object as usize - base) / std::mem::size_of::<Object>();
+            let host = HitHost::Cel(Some(u32::MAX - run as u32));
+            for k in o.tris.clone() {
+                let is_pass = drop_pass && self.stat.bullet_pass(k);
+                let is_glass = glass && self.stat.mats[k] & 0x3f == 0x10;
+                let t = &self.stat.tris[k];
+                let Some(tt) = ray_tri_t(from, d, t) else { continue };
+                if is_pass || is_glass {
+                    if best.is_none_or(|b| tt < b) {
+                        pass.push(FlightPass { t: tt, normal: tri_normal(t), mat: self.stat.mats[k], host });
+                    }
+                } else if best.is_none_or(|b| tt < b) {
+                    best = Some(tt);
                 }
             }
         }
-        best
+        if with_missile {
+            for o in along(&self.missile, from, to) {
+                for k in o.tris.clone() {
+                    let is_pass = drop_pass && self.missile.bullet_pass(k);
+                    let is_glass = glass && self.missile.mats[k] & 0x3f == 0x10;
+                    let t = &self.missile.tris[k];
+                    let Some(tt) = ray_tri_t(from, d, t) else { continue };
+                    if is_pass || is_glass {
+                        if best.is_none_or(|b| tt < b) {
+                            pass.push(FlightPass { t: tt, normal: tri_normal(t), mat: self.missile.mats[k], host: HitHost::Cel(None) });
+                        }
+                    } else if best.is_none_or(|b| tt < b) {
+                        best = Some(tt);
+                    }
+                }
+            }
+        }
+        for (i, o) in dynamic.geo.objects.iter().enumerate() {
+            if !seg_box(from, d, o.lo, o.hi) { continue; }
+            let host = dynamic.movers.get(i).map_or(HitHost::Cel(None), |&(id, _, m)| HitHost::Object(id, m));
+            for k in o.tris.clone() {
+                let is_pass = drop_pass && dynamic.geo.bullet_pass(k);
+                let is_glass = glass && dynamic.geo.mats[k] & 0x3f == 0x10;
+                let t = &dynamic.geo.tris[k];
+                let Some(tt) = ray_tri_t(from, d, t) else { continue };
+                if is_pass || is_glass {
+                    if best.is_none_or(|b| tt < b) {
+                        pass.push(FlightPass { t: tt, normal: tri_normal(t), mat: dynamic.geo.mats[k], host });
+                    }
+                } else if best.is_none_or(|b| tt < b) {
+                    best = Some(tt);
+                }
+            }
+        }
+        drop(dynamic);
+        pass.retain(|p| best.is_none_or(|b| p.t < b));
+        pass.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+        // The winner's stat run resolves once (the same post-pass segment_surface_host uses).
+        let scope_runs = |h: &mut HitHost| if let HitHost::Cel(Some(k)) = h { let kk = *k; *h = HitHost::Cel(self.run_cell((u32::MAX - kk) as usize)); };
+        for p in &mut pass { scope_runs(&mut p.host); }
+        (best, pass)
     }
 
     /// mp-perf-16: whether ANY triangle of the sets blocks `from → to` — the exact predicate
@@ -2520,6 +2631,80 @@ impl CollisionWorld {
         self.line_of_sight_masked(a, b, mask)
     }
 
+    /// The guard-sight ray scoped the way the game scopes it [M DroneVision_CanSeeObjectFrom
+    /// 0x176f18:60-77 — `Collide_LineOfSight(from, to, iStack_60, param_2, …)` with
+    /// `iStack_60 = *(int *)(target + 0x20)`, the TARGET's cel, so `Collide_Pick` 0x1eb320's BFS
+    /// admits only the cels that chain reaches through the portals the ray touches]. The port's
+    /// unscoped `line_of_sight` walks the global grid and over-blocks: on 07000011 the d2
+    /// idle-Bond stall's ray (chest (−0.388,48.028,25.819) → guard head (−2.337,48.379,22.223))
+    /// grazes a 0.33×0.18 horizontal patch at y 48.232 (mat 0x06, t 0.581) that sits between the
+    /// two corridor guards and the spawn — geometry the game's cel-scoped pick does not test,
+    /// which held both guards `lost_sight` for 10000+ ticks at a visible Bond (the start_corridor
+    /// d2 stall). The same masked drop semantics as `line_of_sight_masked`; `cell = None` falls
+    /// back to the unscoped walk (the pre-scoping behaviour), and a portal-BFS miss keeps the
+    /// unscoped walk too [S — the game's `AINetwork_TestRayCels` 0x15ab78 REFUSES sight when the
+    /// cel chain fails (:63-67), but the port's graph is coarser and the conservative fallback
+    /// keeps every walk that relies on cross-graph sight green].
+    pub fn line_of_sight_scoped(&self, cell: Option<usize>, a: V3, b: V3, mask: u32) -> bool {
+        let Some(cell) = cell else { return self.line_of_sight(a, b, mask) };
+        if !LOS_MASKS_ON { let _ = mask; return self.segment_clear(a, b); }
+        let d = sub(b, a);
+        let dynamic = self.dynamic.read().unwrap();
+        let skip_cage = mask & 0x20 != 0;
+        let (drop_node, drop_surface, drop_de, drop_10) =
+            (mask & 0x8 != 0, mask & 0x800 != 0, mask & 0x1 != 0, mask & 0x2 != 0);
+        let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(a, b)) else {
+            return self.line_of_sight_masked(a, b, mask);
+        };
+        let stat = &self.stat;
+        for r in runs {
+            let o = &stat.objects[r as usize];
+            for k in o.tris.clone() {
+                let m = stat.mats[k];
+                let low = m & 0x3f;
+                if drop_node && (stat.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                if drop_surface && m & 0x40 != 0 { continue; }
+                if drop_de && (low == 0xd || low == 0xe) { continue; }
+                if drop_10 && low == 0x10 { continue; }
+                let t = &stat.tris[k];
+                if dot(cross(sub(t[1], t[0]), sub(t[2], t[0])), d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
+                if seg_tri_hit(a, b, t) { return false; }
+            }
+        }
+        if !skip_cage {
+            for o in along(&self.missile, a, b) {
+                for k in o.tris.clone() {
+                    let m = self.missile.mats[k];
+                    let low = m & 0x3f;
+                    if drop_node && (self.missile.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                    if drop_surface && m & 0x40 != 0 { continue; }
+                    if drop_de && (low == 0xd || low == 0xe) { continue; }
+                    if drop_10 && low == 0x10 { continue; }
+                    let t = &self.missile.tris[k];
+                    if dot(cross(sub(t[1], t[0]), sub(t[2], t[0])), d) >= 0.0 { continue; }
+                    if seg_tri_hit(a, b, t) { return false; }
+                }
+            }
+        }
+        {
+            let g = &dynamic.geo;
+            for o in along(g, a, b) {
+                for k in o.tris.clone() {
+                    let m = g.mats[k];
+                    let low = m & 0x3f;
+                    if drop_node && (g.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                    if drop_surface && m & 0x40 != 0 { continue; }
+                    if drop_de && (low == 0xd || low == 0xe) { continue; }
+                    if drop_10 && low == 0x10 { continue; }
+                    let t = &g.tris[k];
+                    if dot(cross(sub(t[1], t[0]), sub(t[2], t[0])), d) >= 0.0 { continue; }
+                    if seg_tri_hit(a, b, t) { return false; }
+                }
+            }
+        }
+        true
+    }
+
     /// The masked `Collide_LineOfSight` 0x1edf50 body, applied unconditionally — the per-caller
     /// drop semantics of `Collide_Intersect` 0x1ebaa8:300-319 (and `Collide_Pick` 0x1eb320:140-152):
     /// mask 0x800 drops hits whose per-triangle surface byte has bit 0x40; mask 0x1 drops surface
@@ -2600,6 +2785,95 @@ impl CollisionWorld {
                     if v < 0.0 || u + v > 1.0 { continue; }
                     let tt = dot(e2, q) * inv;
                     if (0.0..=1.0).contains(&tt) && best.is_none_or(|bb| tt < bb) { best = Some(tt); }
+                }
+            }
+        }
+        best
+    }
+
+    /// LOS-probe diagnostic (stream-batch-5, the blind-guard hunt): the closest blocking hit of
+    /// the same masked walk `line_of_sight_masked` runs, with the blocking TRIANGLE and its
+    /// material byte so a probe can say WHICH geometry blocks a guard's sight ray. Read-only;
+    /// no behaviour rides it.
+    pub fn los_debug_hit(&self, a: V3, b: V3, mask: u32) -> Option<(f32, [V3; 3], u8)> {
+        self.los_debug_hit_scoped(None, a, b, mask)
+    }
+
+    /// The cel-scoped variant: the same masked drops over `scoped_runs(cell, ray_portal_hit)`
+    /// (what `line_of_sight_scoped` tests), returning the blocking triangle + material. The
+    /// dynamic/cage sets keep the unscoped bucket walk (the scoped runs cover the static set
+    /// only, exactly as `line_of_sight_scoped` does).
+    pub fn los_debug_hit_scoped(&self, cell: Option<usize>, a: V3, b: V3, mask: u32) -> Option<(f32, [V3; 3], u8)> {
+        let d = sub(b, a);
+        let dynamic = self.dynamic.read().unwrap();
+        let skip_cage = mask & 0x20 != 0;
+        let (drop_node, drop_surface, drop_de, drop_10) =
+            (mask & 0x8 != 0, mask & 0x800 != 0, mask & 0x1 != 0, mask & 0x2 != 0);
+        let mut best: Option<(f32, [V3; 3], u8)> = None;
+        let mut consider = |tt: f32, tri: [V3; 3], m: u8, best: &mut Option<(f32, [V3; 3], u8)>| {
+            if (0.0..=1.0).contains(&tt) && best.as_ref().is_none_or(|(bb, _, _)| tt < *bb) {
+                *best = Some((tt, tri, m));
+            }
+        };
+        match cell {
+            Some(cell) => {
+                let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(a, b)) else {
+                    return self.los_debug_hit(a, b, mask);
+                };
+                let stat = &self.stat;
+                for r in runs {
+                    let o = &stat.objects[r as usize];
+                    for k in o.tris.clone() {
+                        let m = stat.mats[k];
+                        let low = m & 0x3f;
+                        if drop_node && (stat.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                        if drop_surface && m & 0x40 != 0 { continue; }
+                        if drop_de && (low == 0xd || low == 0xe) { continue; }
+                        if drop_10 && low == 0x10 { continue; }
+                        let t = &stat.tris[k];
+                        let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+                        if dot(cross(e1, e2), d) >= 0.0 { continue; }
+                        let p = cross(d, e2);
+                        let det = dot(e1, p);
+                        if det.abs() < 1e-12 { continue; }
+                        let inv = 1.0 / det;
+                        let s = sub(a, t[0]);
+                        let u = dot(s, p) * inv;
+                        if !(0.0..=1.0).contains(&u) { continue; }
+                        let q = cross(s, e1);
+                        let v = dot(d, q) * inv;
+                        if v < 0.0 || u + v > 1.0 { continue; }
+                        consider(dot(e2, q) * inv, *t, m, &mut best);
+                    }
+                }
+            }
+            None => {
+                let sets: [Option<&Geo>; 3] = [Some(&self.stat), (!skip_cage).then_some(&self.missile), Some(&dynamic.geo)];
+                for g in sets.into_iter().flatten() {
+                    for o in along(g, a, b) {
+                        for k in o.tris.clone() {
+                            let m = g.mats[k];
+                            let low = m & 0x3f;
+                            if drop_node && (g.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                            if drop_surface && m & 0x40 != 0 { continue; }
+                            if drop_de && (low == 0xd || low == 0xe) { continue; }
+                            if drop_10 && low == 0x10 { continue; }
+                            let t = &g.tris[k];
+                            let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+                            if dot(cross(e1, e2), d) >= 0.0 { continue; }
+                            let p = cross(d, e2);
+                            let det = dot(e1, p);
+                            if det.abs() < 1e-12 { continue; }
+                            let inv = 1.0 / det;
+                            let s = sub(a, t[0]);
+                            let u = dot(s, p) * inv;
+                            if !(0.0..=1.0).contains(&u) { continue; }
+                            let q = cross(s, e1);
+                            let v = dot(d, q) * inv;
+                            if v < 0.0 || u + v > 1.0 { continue; }
+                            consider(dot(e2, q) * inv, *t, m, &mut best);
+                        }
+                    }
                 }
             }
         }
@@ -3168,7 +3442,72 @@ mod tests {
         }
     }
 
+    /// bullet-pass-water: the flying round's trace on the real 07000002 shallows. The water
+    /// surface planes are the game's PASS contacts (the placements' glist flags 0x241 — cel+0x94
+    /// bit 0x40 [M parsemap 0x1d1998 → Collide_Intersect 0x1ebaec-fc; D the entity-params words]
+    /// — and the raw byte 0x0E carries no pass bits), so a round fired down into the shallows
+    /// SPLASHES at the surface (the handler's Effect_Create burst) and stops at the submerged
+    /// floor — the contacts the flight used to swallow silently [M Bullet_CollisionHandler
+    /// 0x12ce80 disasm 0x12cff0: the pass skips the state-2 store]. The intersect-class bullet
+    /// queries (the homing LOS, mask 0x8 [M Bullet_homing 0x12f358:92]) still drop the plane:
+    /// their game masks carry bit 0x8 and the water cel IS pass-flagged.
+    #[test]
+    fn flight_into_the_02_shallows_splashes_the_surface_and_stops_at_the_floor() {
+        use nf_formats::iso9660::IsoImage;
+        let iso = std::env::var("NF_ISO").expect("NF_ISO");
+        let img = IsoImage::open(&iso).expect("open iso");
+        let (entries, bin) = nf_formats::disc::files_bin_entries(&img).expect("FILES.BIN");
+        let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("07000002.bin")).expect("archive");
+        let data = img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).expect("read");
+        let level = Level::parse(&data).expect("parse 07000002");
+        let instances = level.instances(true).0;
+        let w = CollisionWorld::build(&level, &instances);
+        // The PCSX2-measured shallows spot [L wade_real_live]: the water plane (southwater1,
+        // glist 0x241, byte 0x0E) sits at y ≈ 3.765, the submerged floor (mat 7) 0.15 under it (y 3.615).
+        let from = [-79.0, 6.0, 28.0];
+        let to = [-79.0, 0.68, 28.0];
+        let cell = w.find_cel(from);
+        // The homing-class query (intersect mask 0x8) drops the pass-flagged water plane: the
+        // first hit is the FLOOR (the old behavior the port already had).
+        let homing_t = w.segment_bullet(from, to).expect("the floor stops a mask-0x8 ray");
+        assert!(homing_t > 0.43, "the mask-0x8 ray reaches past the water plane: {homing_t}");
+        // The flight trace keeps the plane as a PASS contact and stops at the floor.
+        let (stop, pass) = w.segment_flight_contacts_scoped(cell, from, to, false);
+        let stop_t = stop.expect("the submerged floor stops the round");
+        assert!((stop_t - homing_t).abs() < 1e-4, "the flight stops at the same floor: {stop_t} vs {homing_t}");
+        assert_eq!(pass.len(), 1, "exactly the water plane passes: {pass:?}");
+        assert_eq!(pass[0].mat & 0x3f, 0xE, "the pass contact is the water surface");
+        assert!(pass[0].t < stop_t, "the splash is nearer than the stop: {} < {}", pass[0].t, stop_t);
+        let splash_y = from[1] + (to[1] - from[1]) * pass[0].t;
+        assert!((splash_y - 3.765).abs() < 0.05, "the splash sits on the water plane, y {splash_y}");
+        // Through Bullet::update: the World event carries the splash site before the stop.
+        let mut b = crate::bullet::Bullet {
+            pos: from, dir: [0.0, -1.0, 0.0], speed: 300.0, range: 300.0, damage: 1.0,
+            owner: 0, state: 0, weapon: 0x02, flyby: false, bounces: 0, ..crate::bullet::Bullet::TAIL };
+        let mut rng = crate::drone::Rng::new(3);
+        let vol = crate::bullet::PlayerVolume { feet: [1e4, 0.0, 1e4], height: 1.0, radius: 0.1 };
+        let mut saw_splash = false;
+        for _ in 0..20 {
+            match b.update(&w, &vol, [1e4, 0.0, 1e4], &mut rng) {
+                Some(crate::bullet::BulletEvent::World { at, pass }) => {
+                    assert!(!pass.is_empty(), "the round splashes through the water before the floor");
+                    let (pp, _, pm, _) = pass[0];
+                    assert_eq!(pm & 0x3f, 0xE, "the splash is the water surface");
+                    assert!(pp[1] > 3.5 && pp[1] < 4.0, "the splash sits on the plane: {pp:?}");
+                    assert!(at[1] < 3.7, "the stop is the submerged floor (y 3.615 at this spot): {at:?}");
+                    saw_splash = true;
+                    break;
+                }
+                Some(_) => {}
+                None if b.state >= 2 => break,
+                None => {}
+            }
+        }
+        assert!(saw_splash, "the round never splashed (the old flight swallowed the water contact)");
+    }
+
     /// level-11-stairwell-bullet-wall: the assertion-free bullet-path census. From each reported
+
     /// Bond spot toward the rope guards [D the reported spot], list EVERY triangle the port's collision
     /// sets hold on the ray (static / missile cage / dynamic), with the owner's identity (map,
     /// object, name, glist flags), the material byte and the pass flags — the candidate invisible

@@ -242,8 +242,10 @@ fn the_captor_and_hostage_alternate_mission_lines() {
 /// LOOP itself on the real path, on BOTH placed pairs — the ch-0x17 bathhouse-floor pair and the
 /// ch-0x19 tunnel-pond pair [D placements #447/#465 and #458/#466] — with per-pair period censuses
 /// (the same correlation rules as the alternation test above): ≥ 4 full alternations each, strict
-/// alternation, no overlap, the killer opens, the step machine is seen cycling through both 1 and
-/// 2, and the hostage-directed sends keep recurring past the first exchange. A same-side repeat is
+/// alternation, no overlap, the killer opens (unless his opener roll is the pool's silent 0x2E —
+/// no voice, his step-1 advance sends to the hostage and her expected reply opens), the step
+/// machine is seen cycling through both 1 and 2, and the hostage-directed sends keep recurring
+/// past the first exchange. A same-side repeat is
 /// accepted only across a provably silent captor turn (his pool's 0x2E carries sfxId 0 [D]; see the
 /// in-test comment).
 #[test]
@@ -278,10 +280,18 @@ fn the_captor_and_hostage_conversations_loop_on_both_pairs() {
         /// Gap tracking: the drone whose period just closed, whether the OTHER drone showed a voice
         /// in the gap, and the killer's step values seen in the gap.
         gap_after: Option<usize>, gap_killer_voice: bool, gap_steps: std::collections::BTreeSet<u16>,
+        /// The captor showed a mission voice at some census tick (before the first period closed).
+        k_voice_seen: bool,
+        /// The FIRST period opened by the HOSTAGE while the captor had shown no voice at all: his
+        /// opener roll was the pool's silent 0x2E [D 0x2E.sfx=0] — the same game-proven exception
+        /// the repeat rule accepts, on the FIRST turn [M 0x14a8b8 Rand(6); M 0x141b00; M
+        /// 0x144340:10-24 step-1 advance]. Set only when her voice was expected (his 1→2 send). 
+        silent_opener: bool,
     }
     impl Pair {
         fn step(&mut self, sim: &nf_view::scene::Sim, t: u32, vk: &std::collections::HashSet<u32>, vh: &std::collections::HashSet<u32>) {
             let (k, h) = (&sim.drones.list[self.ki], &sim.drones.list[self.hi]);
+            if k.voice.is_some() { self.k_voice_seen = true; }
             if !self.paired {
                 self.paired = k.hostage_target == Some(self.hi) && k.state == nf_game::drone::state::HOSTAGE_KILLER;
                 if !self.paired { return; }
@@ -317,6 +327,9 @@ fn the_captor_and_hostage_conversations_loop_on_both_pairs() {
                             if opener || expected { self.overlap = Some(t); break; }
                         } else if opener || expected {
                             let silent_gap = self.gap_after == Some(di) && !self.gap_killer_voice;
+                            if self.periods.is_empty() && di == self.hi && expected && !self.k_voice_seen {
+                                self.silent_opener = true;
+                            }
                             self.open = Some((di, t, v.0));
                             self.expect = None;
                             self.open_gap = silent_gap;
@@ -330,8 +343,8 @@ fn the_captor_and_hostage_conversations_loop_on_both_pairs() {
         }
         fn done(&self) -> bool { self.periods.len() >= 8 }
     }
-    let mut p1 = Pair { ki: k1, hi: h1, paired: false, hostage_sends: 0, overlap: None, periods: Vec::new(), open: None, expect: None, last_handles: [None; 2], steps_seen: Default::default(), k_prev_step: 0, open_gap: false, gap_after: None, gap_killer_voice: false, gap_steps: Default::default() };
-    let mut p2 = Pair { ki: k2, hi: h2, paired: false, hostage_sends: 0, overlap: None, periods: Vec::new(), open: None, expect: None, last_handles: [None; 2], steps_seen: Default::default(), k_prev_step: 0, open_gap: false, gap_after: None, gap_killer_voice: false, gap_steps: Default::default() };
+    let mut p1 = Pair { ki: k1, hi: h1, paired: false, hostage_sends: 0, overlap: None, periods: Vec::new(), open: None, expect: None, last_handles: [None; 2], steps_seen: Default::default(), k_prev_step: 0, open_gap: false, gap_after: None, gap_killer_voice: false, gap_steps: Default::default(), k_voice_seen: false, silent_opener: false };
+    let mut p2 = Pair { ki: k2, hi: h2, paired: false, hostage_sends: 0, overlap: None, periods: Vec::new(), open: None, expect: None, last_handles: [None; 2], steps_seen: Default::default(), k_prev_step: 0, open_gap: false, gap_after: None, gap_killer_voice: false, gap_steps: Default::default(), k_voice_seen: false, silent_opener: false };
     for t in 0..6000u32 {
         w.wait(1);
         audio_step(&mut w.scene);
@@ -356,7 +369,9 @@ fn the_captor_and_hostage_conversations_loop_on_both_pairs() {
             p.hostage_sends);
         assert!(p.periods.len() >= 8, "{name}: the conversation loops — 4 full alternations expected, got {} periods {periods:?}",
             p.periods.len(), periods = p.periods);
-        assert_eq!(p.periods[0].2, p.ki, "{name}: the opener is the captor's own line [M 0x144340:34-40]");
+        assert!(p.periods[0].2 == p.ki || p.silent_opener,
+            "{name}: the opener is the captor's own line [M 0x144340:34-40], except when his FIRST roll is the pool's silent 0x2E — no voice at any census tick, the step-1 busy test advances at once and his 1→2 send opens with the hostage's expected reply [M 0x14a8b8 Rand(6) + D 0x2E.sfx=0 + M 0x141b00 + M 0x144340:10-24]; periods {periods:?}",
+            periods = p.periods);
         for i in 1..p.periods.len() {
             // Strict alternation, with one game-proven exception: a 1-in-6 killer turn rolls the
             // pool's silent line 0x2E (sfxId 0 [D Drone_SfxInfo]; SpeechSFX no-ops an sfx-0 entry

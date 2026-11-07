@@ -3679,8 +3679,9 @@ impl Sim {
                     // re-checks `(mat & 0x3f) - 0xd < 2` [M 0x17c118:9] and spawns the kind-1 ring
                     // at the ground hit point (HITDATA+0x40 [M docs/fields/hitdata-spawner-ally.md]).
                     // The probe keeps the water planes: wading steps are the 0xE surface's own
-                    // [L PCSX2 07000002 (-79, 28): byte 0xE, step 0x28].
-                    nf_game::env::env_water_ripple(&mut self.drones.gas, m, [p[0], p[1] - 1.6347 * t, p[2]]);
+                    // [L PCSX2 07000002 (-79, 28): byte 0xE, step 0x28]. The gas draw keeps its
+                    // explicit rng arg (the gas-draws re-pin this branch carries).
+                    nf_game::env::env_water_ripple(&mut self.drones.gas, &mut self.drones.rng, m, [p[0], p[1] - 1.6347 * t, p[2]]);
                     // The footprint decal arm — audit-effect-calls: the game's step is the FULL
                     // `Effect_Create(…, foot | 0x42)` [M 0x1befd8:196-201], flag 0x2 →
                     // `Effect_Player` 0x1cec48:59-140: sound (0x40, above) PLUS the foot decal.
@@ -5298,6 +5299,8 @@ impl Sim {
                         // the 0x3b family (the record's +0x02 base, in scope as `base`).
                         burn: if base == 0x3b { 100 } else { 0 },
                         defused: false,
+                        // obj+0xec = GameState at creation (the trail gates' phase; fx-muzzle-and-trail).
+                        born: self.drones.frame as u8,
                         // sound-sweep-leftovers `Bullet_init` 0x12c5a0:286-290: the +2 == 0x45
                         // record — Oddjob's hat ([L SFXOutputData 0x5ef: looped, weight 0]; the
                         // record's own +0x60 fire id 0x5ef is the one FireWeapon SKIPS) — plays
@@ -5340,12 +5343,15 @@ impl Sim {
                             // (the draw keeps the shared RNG's draw count bit-exact).
                             let _angle = self.drones.rng.frand(6.2831854820251465);
                             // The puff itself: models-misc's gas system (`Gas_Init(0.05, 0.1, …, 0x2000039, 7,
-                            // 0x48403080, end 1)` [M 0x1a4298]); Gas_Init's own draws stay un-consumed (G-033).
+                            // 0x48403080, end 1)` [M 0x1a4298; disasm 0x1a43ec-0x1a443c: the 2π draw is the
+                            // quaternion z, a3 = 0 is a NULL velocity, so kind 7 takes the wind branch]).
+                            // Gas_Init's own draws (spin, sign, wind ×3) now come out of the shared
+                            // stream via init_ex [M 0x1aacc8:72-80, 108-116] — the G-033 gap.
                             // rocket-trail-gas: the decomp-dropped 11th arg (the life) is 0x80 = 128 ticks
                             // [M 0x1a43f8 `li $v0, 0x80` → 0x1a442c `sw $v0, 0($sp)`] — the old value 8 was a guess —
                             // and the packed END rgba is 1 = bytes (0,0,0,1), so the alpha rate is
                             // (1−0x80)/128 [M 0x1a4440 delay slot `li $t3, 1`].
-                            self.drones.gas.init_ex(nf_game::gas::SMOKE_QUAD, pos, 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0);
+                            self.drones.gas.init_ex(&mut self.drones.rng, nf_game::gas::SMOKE_QUAD, pos, 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0);
                         }
                     }
                     if spawn_shot {
@@ -5939,7 +5945,7 @@ impl Sim {
             }
         }
         for (phase, pos, dir, underwater) in spawns {
-            nf_game::env::env_breath(&mut self.drones.gas, frame, phase, pos, dir, 1, underwater, mode, Some(gate));
+            nf_game::env::env_breath(&mut self.drones.gas, &mut self.drones.rng, frame, phase, pos, dir, 1, underwater, mode, Some(gate));
         }
     }
 
@@ -7652,14 +7658,18 @@ fn player_flash_matrix(datum: &Mat4, seed: u32) -> Mat4 {
 fn muzzle_flash_matrix(datum: &Mat4, seed: u32) -> Mat4 {
     let mut s = seed.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
     let mut rand = || { s ^= s << 13; s ^= s >> 17; s ^= s << 5; (s >> 8) as f32 / (1u32 << 24) as f32 };
+    flash_matrix_jitters(datum, rand() * std::f32::consts::TAU, (rand() - 0.5) * 0.2, (rand() - 0.5) * 0.2)
+}
+
+/// fx-muzzle-and-trail: the game's flash-sprite orientation with the REAL drawn jitters — the
+/// sim's `Drone.shot_flashes` record (`FRand(2π)` → +0x50, `FRandHalf(0.2)` → +0x54 (+π/2),
+/// `FRandHalf(0.2)` → +0x58 [M DroneWeap_FireWeapon 0x17925c-0x1792b0]). Same base as the
+/// seed stand-in above: the muzzle datum's −X column through the spherical conversion.
+fn flash_matrix_jitters(datum: &Mat4, j0: f32, j1: f32, j2: f32) -> Mat4 {
     let d = [-datum[0][0], -datum[0][1], -datum[0][2]];
     let horiz = (d[0] * d[0] + d[2] * d[2]).sqrt();
     let sph = [d[1].atan2(horiz), d[0].atan2(d[2]), (horiz * horiz + d[1] * d[1]).sqrt()];
-    let rot = [
-        sph[0] + rand() * std::f32::consts::TAU,
-        sph[1] + (rand() - 0.5) * 0.2 + std::f32::consts::FRAC_PI_2,
-        sph[2] + (rand() - 0.5) * 0.2,
-    ];
+    let rot = [sph[0] + j0, sph[1] + j1 + std::f32::consts::FRAC_PI_2, sph[2] + j2];
     nf_formats::placement::object_matrix(rot, [datum[3][0], datum[3][1], datum[3][2]])
 }
 
@@ -11707,11 +11717,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     None => collapse(&datum),
                 };
             }
-            // AI-driven: the flash object lives 2 ticks after each shot (`DroneWeap_FireWeapon`).
+            // AI-driven: the flash object lives 2 ticks after each shot (`DroneWeap_FireWeapon`);
+            // fx-muzzle-and-trail: the orientation now comes from the sim's REAL drawn jitters
+            // (`shot_flashes`, recorded at the shot) instead of the fake-seed stand-in.
             if let Some((s, di)) = drone_of(a.character as usize) {
                 let now = s.drones.frame;
-                return match s.drones.list[di].shots.iter().rev().find(|&&f| now.saturating_sub(f) < 2) {
-                    Some(&f) => muzzle_flash_matrix(&datum, f ^ (k as u32).wrapping_mul(0x9e37_79b9)),
+                return match s.drones.list[di].shot_flashes.iter().rev().find(|(f, _)| now.saturating_sub(*f) < 2) {
+                    Some((_, j)) => flash_matrix_jitters(&datum, j[0], j[1], j[2]),
                     None => collapse(&datum),
                 };
             }

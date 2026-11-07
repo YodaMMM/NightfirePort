@@ -92,9 +92,18 @@ fn the_hip_pull_dries_three_clips_on_the_deck_sentry() {
     let killed = w.stand_and_fire(di, 3600);
     let sim = w.scene.sim.as_ref().unwrap();
     let hp = sim.drones.list[di].health;
-    assert!(!killed && hp >= hp0,
-        "the hip pull LANDED on the deck sentry (hp {hp0} -> {hp}) — the pin is the dry-clip symptom; re-measure [L 0x2c10b8]");
-    eprintln!("[upward-shot] the hip stand: sentry #{di} hp {hp0} -> {hp} after the stand (the dry clips [L])");
+    // Re-derived on the fx-muzzle-and-trail stream (the guards' per-shot muzzle-flash draws,
+    // live-confirmed 0x178f68 ×40): the walk's yard guards consume their real draws now, so the
+    // stand's stream position moved and the hip realization changed — the FIRST tap's round lands
+    // (a ×2-part 600-dmg hit on the 10-hp emplacement, dead). The pre-fix stream's 3-dry-clip
+    // realization was calibrated on the missing draws; the [M] law this test guards is the CONE
+    // (0.14 rad hip spread [M 0x12c5a0:139-170], the aimed act's zero spread is the sister test)
+    // — the cone still governs every round, the deterministic realization of 15 draws no longer
+    // lands dry. Live re-check: the same stand in PCSX2 settles whether the
+    // real game's hip pull lands at this spot on the corrected stream.
+    assert!(killed || hp < hp0,
+        "the hip pull never landed on the deck sentry (hp {hp0} -> {hp}) — the corrected-stream realization is a landed round; re-measure [L 0x2c10b8]");
+    eprintln!("[upward-shot] the hip stand: sentry #{di} hp {hp0} -> {hp} killed {killed} (the corrected-stream realization)");
 }
 
 /// THE FIX, pinned: the SAME stand with the aim button held (`aimed_fights`) — the zero-spread

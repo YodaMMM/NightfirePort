@@ -373,6 +373,28 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // cel crosses 21→28 through the stateful relink's portal arm (Cel_ObjectLeftCel 0x1e0d58)
     // and the room's own floor (cel 28's bucket) holds him.
     w.walk_to(Wp::new(5.0, -368.4, 26.5).r(1.5), "13: the lobby east lane");
+    // guard-repin-master re-anchor: the west-mid leg's return-fire fights (the north-lobby
+    // shooters) displaced Bond SOUTH of the lane line into the lobby pocket at (0.60, −368.30,
+    // 25.66) — the guards' per-goal arrival radii [M 0x152548:174-181] close the pursuit to
+    // 1.0-2.0, the stands' back-off geometry moved, and from that spot the direct segment to
+    // the west-mid clips the lounge furniture corner at ~(0.3, 26.3) (the measured 6000-tick
+    // cap: segment_to_target hit at t 0.042, d 15.78, all nearby guards dead). The re-anchor
+    // pulls the route back up to the east lane's proven line before the west leg: from the
+    // pocket the segment to (2.5, 30.5) runs north-east, clear of the furniture corner, and
+    // the west-mid line from there rides the old path.
+    w.walk_to(Wp::new(2.5, -368.4, 30.5).r(1.5), "13: the lobby mid re-anchor");
+    // civ-unignore-2's law at the re-anchor end (guard-repin-master): the same ray-gated sweep
+    // runs one leg EARLIER — the west-mid route's fights used to be answered mid-leg from the
+    // lane, but the guards' per-goal arrival radii [M 0x152548:174-181] close the pursuit to
+    // 1.0-2.0 and the stands' displacement parked Bond in the lobby pocket (the measured
+    // 6000-tick cap at (0.60, −368.30, 25.66), then the re-anchor's measured cost: #5 (skin
+    // 0x5000004 at (−14.8, −368.4, 45.6)) landed 28.0 in 8 hits across the re-anchor + west-mid
+    // legs and Bond reached the security room at 21 hp to lose the point-blank #8 exchange).
+    // Taking the shooters at the re-anchor end — where #11 (3.8, 33.9) is d ~4.5 and the
+    // mezzanine/west boxes open — keeps the west legs' budget for the room.
+    if real_damage && difficulty == 3 {
+        clear_the_visible(&mut w, "13: the lobby mid re-anchor", 24.0);
+    }
     w.walk_to(Wp::new(-6.0, -368.4, 40.0).r(1.5), "13: the lobby west mid");
     // civ-unignore-2 (the d3 pre-clear, second leg): the north-lobby shooters the east lane's
     // fights only ever answered UNSEEN (the master baseline: fights #0/#4, aim None, killed
@@ -387,6 +409,17 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: at the security-room door");
     w.walk_to(Wp::at(-26.65, -368.36, 37.44, walker::Act::Use { use_ticks: 90 }).r(1.4), "13: E the security-room door");
     w.wait(120); // the sliding door finishes [probe: state 0x8 → 0x4 within the wait]
+    // guard-repin-master doorway pre-clear (d3): with the lobby budget spent on the west legs
+    // (the measured red reached the room at 21 hp), the room guard #8 (skin 0x5000004, weapon
+    // 0x10, posted at (−26.9, −368.4, 29.5)) met the doorway crossing point-blank — one
+    // 31.5 blast at d 2.9 killed the walk at tick 3006. His rays never open from any of the
+    // leg ends (the room's own walls), but through the OPEN door the line runs straight down
+    // the room — the sweep takes him from the threshold before the crossing, exactly the
+    // civ-unignore-2 law (the pre-clear stands at the leg ends and takes the posted guards
+    // BEFORE the legs walk into them).
+    if real_damage && difficulty == 3 {
+        clear_the_visible(&mut w, "13: the security-room doorway", 12.0);
+    }
     w.walk_to(Wp::new(-27.0, -368.4, 37.0).r(1.0), "13: through the doorway");
     w.walk_to(Wp::new(-27.0, -368.4, 35.0).r(1.2), "13: inside the security room");
     {

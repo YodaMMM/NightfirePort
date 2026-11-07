@@ -23,9 +23,14 @@ fn spawner_params(extra: impl Fn(u32) -> u32) -> Spawner {
 }
 
 /// Two spawned drones; the closure set says both are alive; `drawn` controls the obj+0xFC gate.
+/// The pick draw is `Rand_Rand` over the WHOLE template list, drawn BEFORE the walk [M
+/// SpawnDrone 0x137cb0:21 + DroneSpawner_Init 0x137aa0:31-32]: only USABLE templates decrement
+/// the rank (:41-56) and a rank past the last usable record spawns nothing (:88-96) — a rank-0
+/// stub always picks the FIRST usable template, which is the game-shaped way to fill both slots
+/// in two ticks. (The old counting stub 0,1,.. pinned the port's pre-c4b2d38ce draw-over-usable
+/// model, which always landed inside the usable set and always spawned.)
 fn setup(sp: &mut Spawner, ch: &mut Channels, drawn: [bool; 2]) {
-    let mut rng_out = 0u32;
-    let mut rand = |_: u32| { rng_out += 1; rng_out - 1 };
+    let mut rand = |_: u32| 0u32;
     let alive = |_: usize| true;
     let drawnf = |i: usize| drawn[i];
     let spot = |_: usize, _: f32| true;
@@ -226,10 +231,13 @@ fn mode3_rearm_requests_the_power_station_stinger_in_game_order() {
     assert!(matches!(a, Action::Spawn(0)), "nobody alive → the gate reopens and the wave respawns");
     assert_eq!(*log.borrow(), vec![2, 1], "the stinger draw (Rand_Rand(2)) precedes the selection draw [M :199 then 0x137cb0:21]");
     assert_eq!(sp.sfx_request, Some(0xd6), "draw 0 → Drone_SfxInfo[0xD6] (sfx 0x549) [L ee_snapshot Drone_SfxInfo+0x20*0xD6]");
-    // Sister: the second draw value picks [0xD7].
+    // Sister: the second draw value picks [0xD7]. The stub is draw-size-aware: the stinger's
+    // `Rand_Rand(2)` roll returns 1 while the selection draw (`Rand_Rand(1)` — ONE template, the
+    // whole-list modulus [M 0x137cb0:21]) returns 0, because under the whole-template draw a rank
+    // past the usable count spawns nothing (:88-96) and the wave would never fill.
     let mut sp = Spawner::new(0, |k| match k { 0 => 3, 1 => 1, 2 => 1, 3 => 2, _ => 0 },
         vec![0], &ch).unwrap();
-    let mut one = |_: u32| 1u32;
+    let mut one = |n: u32| if n == 2 { 1u32 } else { 0 };
     for t in 1..=3 { let _ = sp.update(&mut ch, t, 0x0700_000c, alive, |_: usize| false, |_: usize, _: f32| true, |_: usize| false, &mut one); }
     let _ = sp.update(&mut ch, 4, 0x0700_000c, dead, |_: usize| false, |_: usize, _: f32| true, |_: usize| false, &mut one);
     assert_eq!(sp.sfx_request, Some(0xd7), "draw 1 → Drone_SfxInfo[0xD7] (sfx 0x526)");
@@ -272,8 +280,8 @@ fn the_min_distance_skips_a_template_without_consuming_the_draw() {
     // Template 0's spot is too close; template 1's is fine.
     let dist_ok = |i: usize, _: f32| i == 1;
     let a = sp.update(&mut ch, 2, 0x0700_0005, |_: usize| false, |_: usize| false, dist_ok, |_: usize| false, &mut rand);
-    assert_eq!(a, Action::Spawn(1), "the draw lands on the first USABLE template — template 0 is skipped, not picked-and-failed");
-    assert_eq!(*log.borrow(), vec![1], "one draw over ONE usable template [M the candidate loop]");
+    assert_eq!(a, Action::Spawn(1), "the draw lands on the first USABLE template — template 0 is skipped, not picked-and-failed [M 0x137cb0:41-56]");
+    assert_eq!(*log.borrow(), vec![2], "ONE selection draw, its modulus the WHOLE template list (2) [M 0x137cb0:21] — the too-close template 0 is walked past without a second draw or a shifted rank [M :88-91]");
 }
 
 /// Sister: the visible-spot abort is POST-selection [M 0x137cb0:43] — the draw is consumed, nothing

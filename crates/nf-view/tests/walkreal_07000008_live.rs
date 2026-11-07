@@ -128,12 +128,31 @@ fn launch_line_clear(sim: &nf_view::scene::Sim, to: [f32; 3]) -> bool {
 /// REAL-DAMAGE ONLY (gated on `tops_up()`): the tactic exists for the run that has to survive
 /// its own damage; the topped-up sister's fight timeline stays exactly as pinned.
 fn fight_close_guards(w: &mut Walker, label: &str, max_ticks: u32) {
+    fight_close_guards_opts(w, label, max_ticks, false)
+}
+
+/// The VISIBLE-only sister (guard-glass-finish): the pick keeps only close guards a sight ray
+/// reaches, and the loop breaks the moment the nearest close guard is buried — a stand on a
+/// guard the world trace cannot see is pure exposure: the 07000008 stairwell-mouth stands ran
+/// eleven 61-tick stands on the burst pair 3-10 u behind the mouth's solid wall band (aim None
+/// every stand, NF_RF_TRACE 2026-11-06) while the pair walked 8.5 u to point-blank and the
+/// stairwell-top pair (#23/#24) landed free hits into the `fighting=true` window — the d2 run
+/// died at tick 25036 with the pair at d 0.6-0.7. The shared `stand_and_fire` cannot retarget
+/// mid-stand, so a buried nearest guard must not open a stand at all: the legs' own return fire
+/// answers these guards the moment they round the mouth's opening. The plain sister keeps every
+/// pinned timeline (each existing call site passes false).
+fn fight_close_guards_visible(w: &mut Walker, label: &str, max_ticks: u32) {
+    fight_close_guards_opts(w, label, max_ticks, true)
+}
+
+fn fight_close_guards_opts(w: &mut Walker, label: &str, max_ticks: u32, visible_only: bool) {
     if w.tops_up() { return; }
     let close = |sim: &nf_view::scene::Sim| -> Option<usize> {
         let b = sim.bond.pos;
         sim.drones.list.iter().enumerate()
             .filter(|(_, d)| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1)
             .filter(|(_, d)| ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt() < 12.0 && (d.pos[1] - b[1]).abs() < 4.0)
+            .filter(|(i, _)| !visible_only || walker::DamageLog::visible(sim, *i))
             .min_by(|x, y| {
                 let dx = (x.1.pos[0] - b[0]).powi(2) + (x.1.pos[2] - b[2]).powi(2);
                 let dy = (y.1.pos[0] - b[0]).powi(2) + (y.1.pos[2] - b[2]).powi(2);
@@ -148,7 +167,12 @@ fn fight_close_guards(w: &mut Walker, label: &str, max_ticks: u32) {
             eprintln!("[08 guards] {label}: fight cap at tick {} (health {:.1})", w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
             break;
         }
-        let Some(di) = close(&w.scene.sim.as_ref().unwrap()) else { break };
+        let Some(di) = close(&w.scene.sim.as_ref().unwrap()) else {
+            if visible_only {
+                eprintln!("[08 guards] {label}: no visible close guard at tick {} (health {:.1}) — walk on", w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
+            }
+            break;
+        };
         if skipped.contains(&di) && skipped.len() >= w.scene.sim.as_ref().unwrap().drones.list.iter().enumerate()
             .filter(|(_, d)| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1).count() {
             break; // every close guard has had its stand; walk on
@@ -210,6 +234,68 @@ fn switch_to_firearm(w: &mut Walker, label: &str) -> bool {
     let sim = w.scene.sim.as_ref().unwrap();
     let g = &sim.gun;
     g.weapon != 0x2c && (2..=0x47).contains(&g.weapon) && g.clip + g.spare > 0
+}
+
+/// The game's R between fights (the 02 walk's `reload_full`): one reload press, then the
+/// reload's own wait.
+fn reload_full(w: &mut Walker) {
+    let spare = w.scene.sim.as_ref().unwrap().gun.spare;
+    if spare == 0 { return; }
+    w.scene.sim.as_mut().unwrap().step_bond(Default::default(), false, true, false);
+    for _ in 0..90 { w.tick(Default::default(), false); }
+}
+
+/// The game's own weapon cycle to the carried firearm holding the most rounds (clip + spare),
+/// launcher excluded — the 02 walk's `arm_fullest` verbatim (a player walking into a known
+/// shoot-out with a near-empty gun switches to his fullest gun first).
+fn arm_fullest(w: &mut Walker, label: &str) {
+    let read = |w: &Walker| {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (sim.gun.weapon, sim.gun.clip as i32 + sim.gun.spare as i32)
+    };
+    let cycle = |w: &mut Walker| {
+        w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
+        for _ in 0..60 { w.tick(Default::default(), false); }
+    };
+    let first = read(w);
+    let mut seen = vec![first];
+    for _ in 0..12 {
+        cycle(w);
+        let now = read(w);
+        if now.0 == first.0 { if seen.len() > 1 { break; } continue; }
+        if !seen.iter().any(|g| g.0 == now.0) { seen.push(now); }
+    }
+    let firearm = |id: u8| (2..=0x47).contains(&id) && id != 0x2c;
+    let Some(best) = seen.iter().filter(|(id, n)| firearm(*id) && *n > 0).max_by_key(|(_, n)| *n).map(|b| b.0) else { return };
+    for _ in 0..12 {
+        if read(w).0 == best { break; }
+        cycle(w);
+    }
+    for _ in 0..12 {
+        if read(w).0 == best { break; }
+        cycle(w);
+    }
+    let (id, n) = read(w);
+    eprintln!("[08] {label}: armed the fullest gun {id:#x} ({n} rounds; carried {:?})", seen);
+    reload_full(w);
+}
+
+/// Walk to the nearest live pickup at the feet (the guards' drops land at the fight floor) and
+/// take it — the 02 walk's `scoop_drops` verbatim; `n` pickups, then cycle to a firearm.
+fn scoop_drops(w: &mut Walker, label: &str, n: usize) {
+    for k in 0..n {
+        let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+        let target = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
+            .filter(|p| !p.gone)
+            .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+            .filter(|q| walker::dxz(*q, bp) < 6.0 && (q[1] - bp[1]).abs() < 1.5)
+            .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)));
+        let Some(target) = target else { break };
+        eprintln!("[08] {label}: scooping the drop ({:.1},{:.1},{:.1}) (d {:.1})", target[0], target[1], target[2], walker::dxz(target, bp));
+        w.walk_nav_to(target, &format!("{label} scoop {k}"), 0.4);
+        let _ = w.switch_to_armed(&format!("{label} scoop {k} arm"));
+    }
+    let _ = w.switch_to_armed(label);
 }
 
 /// The whole mission on one fresh load: the intro, the fusebox, the safe, the briefcase
@@ -467,12 +553,37 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         assert!(sim.drones.channels.on(0x2a) || sim.drones.channels.on(0x2b) || sim.drones.channels.on(0x2c),
             "the walked descent crossed the walkway ambush plates (42/43/44) [D]");
     }
+    // guard-glass-finish RE-PIN (Agent + 00 Agent, merged-master tree): the stairwell-top pair
+    // (#23/#24, weapon 0x0, ~1-2 u from the top stop, VISIBLE — the same guards the return fire
+    // fought from the foot at 11.6 u [L the 2026-11-06 NF_RF_TRACE run]) shoot down the shaft
+    // while Bond descends — climb_stairs has NO return-fire hook, so the descent ate their
+    // volleys unanswered. A player clears the two men at the stairwell's head BEFORE stepping
+    // down. VISIBLE-ONLY stand: a buried guard must not open a stand (the d2 death's mechanism).
+    // D2/D3-GATED: the Operative/Agent sisters' timelines stay byte-exact.
+    if difficulty >= 2 {
+        fight_close_guards_visible(&mut w, "the stairwell top", 4200);
+    }
     w.climb_stairs([107.25, 27.7, -119.5], "the stairwell down", 1.6, 4200);
     // 00 Agent (difficulty 3): the descent's return-fire stands drained the clip — the 05
     // sisters' rule: the fights must not open on a drained clip (a mid-fight reload is free
     // burst time for the platform pair). D3-GATED.
     if difficulty >= 3 {
         w.reload_full();
+    }
+    // guard-glass-finish RE-PIN (Agent + 00 Agent, merged-master tree): the stairwell foot's
+    // sight into the platform is blocked by the mouth's SOLID wall band (the eye ray stops at
+    // x≈105.25 inside the owner-22 runs — the 2026-11-06 NF_RF_GEOM dump; NOT glass, the
+    // glass-pass sight trace clears nothing here), so the guard-mode-c4-glass foot stands ran
+    // eleven 61-tick stands on the burst pair (#19/#20) while it walked 8.5 u to point-blank —
+    // the d2 run died at tick 25036 at the foot with the pair at d 0.6-0.7. A player does NOT
+    // stand at the foot firing at a wall: he fights whatever he can SEE (this stand), walks the
+    // short legs out, and takes the pair from the platform (the "platform mouth" stand below;
+    // the "platform west" stands of the d3 runs killed #19 there [L the run logs]). VISIBLE-ONLY:
+    // the legs' return fire answers the pair the moment it rounds the mouth's opening. The
+    // Operative sister stays topped-up (the stand no-ops under tops_up) and its timeline is
+    // untouched.
+    if difficulty >= 2 {
+        fight_close_guards_visible(&mut w, "the stairwell mouth", 4200);
     }
     // The boarding ([D the floor probe]): the platform (y 27.25, z −121..−122.5) ends at the car
     // shaft — the middle (x 112) is open below (the cabin hangs there; its floor is the plate at
@@ -486,14 +597,16 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         ("the west ledge at the cabin", [110.0, 27.0, -126.3]),
     ] {
         w.walk_nav_to(at, name, 1.4);
-        // 00 Agent (difficulty 3): the burst-rifle pair (#19/#20, weapon 0x15, skin 0x500002f,
-        // at (101.9-104.5, 28.2, -122.3/-122.6), 7-10 u west [L the d3 ledgers]) fires into
-        // the boarding legs from the platform's west — the d3 runs died in the legs (ticks
-        // 25164/25382/25426) before the `before the boarding` stand below ran. A player fights
-        // the pair the moment the platform mouth opens (the "platform west" stand of the same
-        // runs killed #19 from there) instead of walking the burst lane first. D3-GATED: the
-        // Operative/Agent sisters' timelines stay byte-exact.
-        if difficulty >= 3 && name == "the lower level east" {
+        // 00 Agent (difficulty 3) + guard-mode-c4-glass Agent re-pin: the burst-rifle pair
+        // (#19/#20, weapon 0x15, skin 0x500002f, at (101.9-104.5, 28.2, -122.3/-122.6), 7-10 u
+        // west [L the d3 ledgers]) fires into the boarding legs from the platform's west — the
+        // d3 runs died in the legs (ticks 25164/25382/25426) before the `before the boarding`
+        // stand below ran, and the Agent run died at tick 25209 once the guard rounds passed
+        // the panes [M 0x12e7b0 disasm]. A player fights the pair the moment the platform mouth
+        // opens (the "platform west" stand of the same runs killed #19 from there) instead of
+        // walking the burst lane first. D2/D3-GATED: the Operative sister's timeline stays
+        // byte-exact.
+        if difficulty >= 2 && name == "the lower level east" {
             // 00 Agent (difficulty 3): the descent's fights can leave the FIREARMS dry while the
             // AT-420 sits owned with clip 4 — the 25773 death's stand cycled the dry pistol onto
             // the LAUNCHER (see firearm_armed) and stood into #20's interval-4 bursts (13 × 6.0,
@@ -505,7 +618,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             // byte-exact.
             if !firearm_armed(&w.scene.sim.as_ref().unwrap()) { w.resupply("the platform mouth"); }
             switch_to_firearm(&mut w, "the platform mouth");
-            fight_close_guards(&mut w, "the platform mouth", 4200);
+            fight_close_guards_visible(&mut w, "the platform mouth", 4200);
         }
     }
     // 00 Agent (difficulty 3): the same firearm hygiene before the last pre-boarding stand —
@@ -636,7 +749,24 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             .filter(|c| (c[0] - bond_at[0]).abs() < 3.0 && (c[1] - bond_at[1]).abs() < 2.5 && (c[2] - bond_at[2]).abs() > 1.5)
             .collect();
         eprintln!("[08 panes] live end panes near the cabin: {panes:?}");
+        // The 00agent economy (the 02 walk's loot rule, muzzle-repin-6): the fights' rounds moved
+        // with the muzzle-draw stream — the measured run reached the shoot-out with clip 3
+        // spare 0, killed pane 0 with the last rounds and walked the rest dry. A player scoops
+        // the end-fight drops at his feet and arms the fullest gun before shooting glass. The
+        // d1/d2 runs' green streams stay byte-identical.
+        if difficulty >= 3 {
+            scoop_drops(&mut w, "the panes", 3);
+            arm_fullest(&mut w, "the panes");
+        }
         switch_to_firearm(&mut w, "the panes");
+        // The shoot-out's rounds must be LIVE rounds (guard-repin-master): the cabin fights'
+        // ammo drift decides the clip state here (the fights' shape moved with the guards'
+        // per-goal arrival radii), and the measured red ran pane 1 dry (clip 0 spare 33) so
+        // pane 2's five pulls were dry-fire clicks until the walker's own reload landed
+        // mid-loop — "STILL GLAZED after 5 rounds". A player reloads before a planned glass
+        // shoot: the game's R held to a full clip [M Player_WeaponFiring's reload branch],
+        // real input, no ammo writes (reload_full is the walker's additive R law).
+        w.reload_full();
         // A player shoots the glass he can see — the aim-ray-to-bounds-centre gate CANNOT work
         // here: the captured centre is the pane bounds' midpoint, which sits a hair short of the
         // sheet plane (the north pane's centre ray eye→centre reads OPEN while a perpendicular
@@ -661,22 +791,72 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         };
         for (k, c) in panes.iter().enumerate() {
             let mut fired = 0u32;
-            for t in 0..260u32 {
-                if pane_gone(&w.scene.sim.as_ref().unwrap(), *c) { break; }
-                let sim = w.scene.sim.as_ref().unwrap();
-                let head = sim.bond.head();
-                let to = [c[0] - head[0], c[1] - head[1], c[2] - head[2]];
-                let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(0.01);
-                let desired_yaw = to[0].atan2(to[2]);
-                let desired_pitch = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2;
-                let yaw_err = walker::wrap_pi(desired_yaw - sim.bond.yaw);
-                let pitch_err = desired_pitch - sim.bond.pitch;
-                let input = Input { turn: yaw_err.clamp(-0.08, 0.08), look: pitch_err.clamp(-0.05, 0.05), ..Default::default() };
-                // Fire on the edge, only on a converged aim — the pane's bounds box is thin
-                // (0.9-1.2 u across, ~0.1 thick [L the rows' bounds]) and an off-aim round
-                // misses it (the health 1.0 dies to one contact [D params [2,1,0]]).
-                let fire = t % 12 == 0 && yaw_err.abs() < 0.01 && pitch_err.abs() < 0.02 && fired < 5;
-                if fire { fired += 1; w.tick_fire(input); } else { w.tick(input, false); }
+            // The bracket (the #447 shoot_mine lesson, muzzle-repin-6): the round flies from the
+            // camera along the view, its gravity arc and the camera-vs-head offset land it a
+            // hair off a ~0.1-thin sheet — track each live round's closest approach to the pane
+            // centre and walk the aim by the measured miss vector when a round dies without the
+            // kill (the P2K's spread is 0.0 [L ee_start_05.bin weapon_data 0x02 +0x24], so one
+            // correction lands the next round). A round dying FAR out (≥ 1 u) is a BLOCKED line
+            // (a mullion between), not a near miss — corrections would chase the blocker, so
+            // the window ends and a sidestep re-takes the sight line instead.
+            let mut aim = *c;
+            let mut best: Option<(f32, [f32; 3])> = None;
+            let mut prev_b = 0usize;
+            let mut fixes = 0u32;
+            let mut blocked = false;
+            'window: for attempt in 0..3u32 {
+                if attempt > 0 {
+                    if !blocked { break 'window; }
+                    // The sidestep: face the pane and shuffle aside (real input only), then a
+                    // fresh bracket window from the plain centre aim.
+                    for s in 0..120u32 {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let head = sim.bond.head();
+                        let to = [c[0] - head[0], c[1] - head[1], c[2] - head[2]];
+                        let yaw_err = walker::wrap_pi(to[0].atan2(to[2]) - sim.bond.yaw);
+                        w.tick(Input { turn: yaw_err.clamp(-0.08, 0.08), strafe: if (s / 40) % 2 == 0 { 1.0 } else { -1.0 }, ..Default::default() }, false);
+                    }
+                    eprintln!("[08 panes] pane {k}: the line was blocked — sidestepped, fresh window");
+                    aim = *c; best = None; prev_b = 0; fixes = 0; fired = 0; blocked = false;
+                }
+                for t in 0..260u32 {
+                    if pane_gone(&w.scene.sim.as_ref().unwrap(), *c) { break 'window; }
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let head = sim.bond.head();
+                    let to = [aim[0] - head[0], aim[1] - head[1], aim[2] - head[2]];
+                    let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(0.01);
+                    let desired_yaw = to[0].atan2(to[2]);
+                    let desired_pitch = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+                    let yaw_err = walker::wrap_pi(desired_yaw - sim.bond.yaw);
+                    let pitch_err = desired_pitch - sim.bond.pitch;
+                    let input = Input { turn: yaw_err.clamp(-0.08, 0.08), look: pitch_err.clamp(-0.05, 0.05), ..Default::default() };
+                    // Fire on the edge, only on a converged aim — the pane's bounds box is thin
+                    // (0.9-1.2 u across, ~0.1 thick [L the rows' bounds]) and an off-aim round
+                    // misses it (the health 1.0 dies to one contact [D params [2,1,0]]).
+                    let fire = t % 12 == 0 && yaw_err.abs() < 0.01 && pitch_err.abs() < 0.02 && fired < 12;
+                    if fire { fired += 1; w.tick_fire(input); } else { w.tick(input, false); }
+                    {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        for b in &sim.drones.player_bullets {
+                            let d = (b.pos[0] - c[0]).powi(2) + (b.pos[1] - c[1]).powi(2) + (b.pos[2] - c[2]).powi(2);
+                            let bd = best.map_or(f32::INFINITY, |(x, _)| x);
+                            if d < bd { best = Some((d.sqrt(), b.pos)); }
+                        }
+                        if sim.drones.player_bullets.len() < prev_b && !pane_gone(sim, *c) {
+                            if let Some((d, p)) = best.take() {
+                                if d >= 1.0 {
+                                    blocked = true;
+                                    break;
+                                } else if d > 0.1 && fixes < 3 {
+                                    aim = [aim[0] + c[0] - p[0], aim[1] + c[1] - p[1], aim[2] + c[2] - p[2]];
+                                    fixes += 1;
+                                    eprintln!("[08 panes] pane {k}: the round missed by {d:.2} u — the aim walks to {aim:?}");
+                                }
+                            }
+                        }
+                        prev_b = sim.drones.player_bullets.len();
+                    }
+                }
             }
             let sim = w.scene.sim.as_ref().unwrap();
             eprintln!("[08 panes] pane {k} at {c:?}: {} after {fired} rounds, clip {} spare {}",
@@ -742,6 +922,15 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     let mut riding = false;
     let mut launch_damage = 0.0f32;
     let mut best_rocket = 0.0f32;
+    // guard-glass-finish: the free-aim cursor's stillness tracker (d3 only). RETIRED: the two
+    // launch-gate variants built on it (a |cross| < 0.05 magnitude gate and a 20-tick stillness
+    // gate) both failed the fight — the magnitude gate starved it (0 launches, the Hind's own
+    // rocket blasts chipped Bond down, death 29996), and the stillness gate opened t43 with the
+    // cursor frozen yet the round STILL flew ~0.13 rad off the gated corridor and died on the
+    // pane-8 frame band (death 27559) — the spawn-tick bearing is not recoverable from the
+    // gate-tick cursor state. The d3 launch self-blast stays OPEN (see the report).
+    let mut cross_prev = [0.0f32; 2];
+    let mut cross_still = 0u32;
     // hind-flight-pin: the every-30-ticks flight record (pos, state, path, t) [M Copter_Move
     // 0x17d628 / Copter_Update 0x17dbb8].
     let mut flight_samples: Vec<([f32; 3], u16, Option<usize>, f32)> = Vec::new();
@@ -759,6 +948,13 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     for t in 0..20000u32 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b) { ch4b = true; break; }
         let sim = w.scene.sim.as_ref().unwrap();
+        // The cursor's stillness tick — tracked for the report's diagnostics, not gated on (see
+        // the tracker's declaration above).
+        {
+            let cn = sim.cross;
+            if (cn[0] - cross_prev[0]).abs() < 0.003 && (cn[1] - cross_prev[1]).abs() < 0.003 { cross_still += 1 } else { cross_still = 0; }
+            cross_prev = cn;
+        }
         // hind-flight-pin: the fight log — every 30 ticks to the death [M the death tail writes
         // ch 0x4B at 0x17e3bc-0x17e3c8].
         if sim.drones.frame % 30 == 0 {
@@ -860,14 +1056,28 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         let corridor_clear = difficulty < 3 || {
             let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
             let right = [cy, 0.0, -fy];
-            // The flight query with the glass pass: the round's own world trace — the live
-            // panes' mat-0x10 quads pass, the mat-0x06 frames/walls stop [M 0x1ea398:216-229].
+            // guard-glass-finish: the round's bearing is set at the SPAWN tick — the launcher's
+            // release frame, ticks after this gate — and the tracker's free-aim cursor has moved
+            // by then (the measured launches sat up to 0.23 rad off the gated bearing [L the diag
+            // runs]; the 2026-11-06 runs: a clear 12-u corridor gated, and the round still
+            // detonated at (113.6, 14.4, −177.6), 0.13 rad east of the copter bearing, on the
+            // pane-8 frame band — the −26 world hit at tick 27552). The CONE form of this gate
+            // (clearing yaw ±0.30 × pitch ±0.15) starves the fight instead — from inside the
+            // cabin every bearing is within ~3 u of a frame band and only the shot-out pane
+            // holes thread at all — so the spawn error is killed at its SOURCE instead: the
+            // `cursor_settled` launch condition below holds the trigger until the free-aim
+            // cursor has decayed to centre (the tracker's view-convergence drains it — scene.rs
+            // `want = cursor − turn/0.76966`), at which point the spawn-tick bearing IS the
+            // gated bearing. The corridor stays the single-ray flight query (the live panes'
+            // mat-0x10 quads pass, the mat-0x06 frames stop [M 0x1ea398:216-229]).
+            let (dyaw, dpitch) = (aim_dir[0].atan2(aim_dir[2]), (aim_dir[1].clamp(-1.0, 1.0)).asin());
+            let d = [dyaw.sin() * dpitch.cos(), dpitch.sin(), dyaw.cos() * dpitch.cos()];
             [eye,
              [eye[0] + right[0] * 0.25, eye[1] - 0.15, eye[2] + right[2] * 0.25],
              [eye[0] - right[0] * 0.25, eye[1] - 0.15, eye[2] - right[2] * 0.25]]
                 .iter()
                 .all(|from| { let from = *from; sim.world
-                    .segment_flight(from, [from[0] + aim_dir[0] * 12.0, from[1] + aim_dir[1] * 12.0, from[2] + aim_dir[2] * 12.0], true)
+                    .segment_flight(from, [from[0] + d[0] * 12.0, from[1] + d[1] * 12.0, from[2] + d[2] * 12.0], true)
                     .is_none() })
         };
         let line_ok = slit_clear && launch_line_clear(sim, cp);
@@ -935,7 +1145,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         if ready { w.tick_fire(input); } else { w.tick(input, false); }
         if t % 100 == 0 {
             let sim = w.scene.sim.as_ref().unwrap();
-            eprintln!("[08 hind t{t} f{}] dist {l:.1} line_ok {line_ok} exit {exit_ticks} damage {:.1} hp {hp} weapon {:#x} clip {} bond {:?} copter {:?} st {} bullets {:?}",
+            eprintln!("[08 hind t{t} f{}] dist {l:.1} line_ok {line_ok} exit {exit_ticks} cross_still {cross_still} damage {:.1} hp {hp} weapon {:#x} clip {} bond {:?} copter {:?} st {} bullets {:?}",
                 w.total_ticks,
                 sim.drones.copters[ci].damage, sim.gun.weapon, sim.gun.clip, sim.bond.pos, cp, sim.drones.copters[ci].state,
                 sim.drones.player_bullets.iter().filter(|b| !b.dead).map(|b| [(b.pos[0]*10.0).round()/10.0, (b.pos[1]*10.0).round()/10.0, (b.pos[2]*10.0).round()/10.0]).collect::<Vec<_>>());
@@ -1278,7 +1488,12 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
     // burst tick, so the fights take the clear head box first (one head hit drops a 12-health
     // guard [M NDrone2_HitDamage 0x145558 × DroneDamage_Head]) instead of grinding bodies —
     // the plain pick's nearest-body order let the walkway shotgun guard #20 land 10 × −4.2.
-    walker::with_real_damage_head_hunting(|| walk_the_whole_mission_on_real_input_at(2))
+    // GLASS-SIGHT (guard-glass-finish): the mouth's fight is THROUGH the intact panes — the
+    // guards' rounds already fly the game's glass pass [M Bullet_update 0x12f048-0x12f058;
+    // L weapon_data every gun bit 0x800 clear] and Bond's own rounds fly the same pass, so
+    // the sight rule must too (the plain rule held fire through eleven 61-tick stands on the
+    // pair 3-10 u behind the mouth's panes while it walked point-blank and killed Bond).
+    walker::with_real_damage_glass_fights(|| walk_the_whole_mission_on_real_input_at(2))
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-08-09-0a-0b): the same
@@ -1299,5 +1514,6 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
 /// then clipped the window frames (the measured −75/−62.5 self-blasts [L the diag runs]).
 #[test]
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
-    walker::with_real_damage_head_hunting(|| walk_the_whole_mission_on_real_input_at(3))
+    // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
+    walker::with_real_damage_glass_fights(|| walk_the_whole_mission_on_real_input_at(3))
 }

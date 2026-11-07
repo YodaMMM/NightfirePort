@@ -103,7 +103,7 @@ fn the_sniper_record_rounds_fly_far_past_the_p2k_boundary() {
     let mut rng = nf_game::drone::Rng::new(5);
     let mut hit = None;
     for _ in 0..40 {
-        if let Some(nf_game::bullet::BulletEvent::World(p)) = b.update(&sim.world, &vol, [1e4, 0.0, 1e4], &mut rng) {
+        if let Some(nf_game::bullet::BulletEvent::World { at: p, .. }) = b.update(&sim.world, &vol, [1e4, 0.0, 1e4], &mut rng) {
             hit = Some(p);
             break;
         }

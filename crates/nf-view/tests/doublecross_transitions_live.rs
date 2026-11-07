@@ -353,12 +353,25 @@ fn castle_d_intro_enables_the_assassin_and_the_kill_ends_the_mission_to_the_outr
         phase: None,
     burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
     defused: false,
-    
+    born: 0,
     loop_handle: 0,
-});
+    });
+    // gas-rng-draws-2: the frag now FOLLOWS the assassin — his idle walk is stream-driven (every
+    // real `Gas_Init` site consumes the shared stream's draws [M 0x1aacc8:72-80; 0x1e3780/
+    // 0x1e3738 = the AI seeds]), so the one-shot push at the recorded spot no longer catches
+    // him inside the 3-u radius before the fuse pops. The harness re-aims the live grenade at
+    // his feet each tick; the pinned laws are the CHANNELS, not the throw: his death raises
+    // ch 0x54 [D param 12] and the mission ends to the outro [M 0x182c60 case 6].
     let mut objective_at = None;
     for _ in 0..900u32 {
-        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+        {
+            let sim = scene.sim.as_mut().unwrap();
+            let now = sim.drones.list[i].pos;
+            for g in sim.drones.grenades.iter_mut() {
+                g.pos = [now[0], now[1] + 0.5, now[2]];
+            }
+            sim.step_bond(Default::default(), false, false, false);
+        }
         if scene.sim.as_ref().unwrap().drones.channels.on(0x54) { objective_at = Some(true); break; }
     }
     assert!(objective_at.is_some(), "the assassin's death channel 0x54 (param 12) must raise [D]");
@@ -427,9 +440,9 @@ fn a_double_cross_death_opens_no_transition() {
         phase: None,
     burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
     defused: false,
-    
+    born: 0,
     loop_handle: 0,
-});
+    });
     let mut failed = false;
     for _ in 0..600u32 {
         scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
