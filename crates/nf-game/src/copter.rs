@@ -721,6 +721,20 @@ impl Copter {
         self.body_obj // [M 0x17e4b8:9 — *(rec+0x38)]
     }
 
+    /// The body's `SP_HideObj` state — the heat-seek gate. `Copter_Create` hides the SP at create
+    /// when the gate channel is off [M 0x17d340:73-76]; `Copter_Update`'s head unhides on the
+    /// gate's first ON tick and clears the channel [M 0x17dbb8:91-97, the port clears `self.gate`
+    /// on that tick]. The game's heat-seek pick reads the body obj's `+0xFC` in-view counter
+    /// [M `Bullet_heatseekable` 0x12f248:29], which a hidden body cannot pass: the view never
+    /// adds it (the `Script_HideObj` cascade sets obj+0xF0 bit 0x10 [M 0x1db808:27-32] and the
+    /// view skips hidden cels), so `control_movement_object_handler` 0x1336f8:242-246 decays the
+    /// counter from `control_init_object`'s 2 [M 0x134630:16] to 0 within three ticks. The port
+    /// has no per-frame SP view cull, so shown/hidden is the whole gate: hidden ⇒ never a homing
+    /// candidate; shown ⇒ the counter rides the view-add as on the disc.
+    pub fn body_shown(&self) -> bool {
+        self.gate == 0
+    }
+
     /// `Copter_FireGun` 0x17d828 — one attack tick. Only gun A (`rec+0x44`, slot 5) counts and
     /// fires [M :58-65]; gun B (`rec+0x48`) is only re-primed to 2 after a shot (with its +0xf0
     /// bit 0x10 cleared) when present [M :94-96]. `gun` is gun A's

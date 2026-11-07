@@ -15723,18 +15723,37 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // excluded by health 0, not by its own flag.
                 let seekable = |dr: &Drone| dr.drawn && dr.health > 0.0 && dr.state != state::WAIT_SWITCH;
                 // The class-0 arm [M 0x12f248 — `if (bVar1 == 0) { if (+0xfc != 0) walk CopterList:
-                // Copter_GetBody(node) == obj → seekable }`]: a copter BODY is seekable while drawn,
-                // with NO health read. The port's copter entity IS the body (`Copter_GetBody`
-                // 0x17e4b8 reads rec+0x38 = part slot 2); the port carries no per-body +0xfc decay,
-                // so a created copter is a candidate for as long as it exists (the drone arm's
-                // documented one-tick-earlier note, same shape). Reached on the disc: Bond's 0x2e
-                // rounds on 0700000b/#15d and 07000012/#2aa/#2f0 [D the placement sweep].
-                let copter_body_pos = |c: &crate::copter::Copter| [c.matrix[0][3], c.matrix[1][3], c.matrix[2][3]];
+                // Copter_GetBody(node) == obj → seekable }`]: a copter BODY is seekable while its
+                // +0xFC in-view counter is non-zero, with NO health read. The counter's writers:
+                // `control_init_object` 0x134630:16 sets 2 at the obj's creation,
+                // `control_movement_object_handler` 0x1336f8:242-246 decrements it per tick, and
+                // `View_AddObjects` 0x1e62d8:71 re-sets 2 every drawn frame — so the gate is the
+                // body's SHOWN state: `Copter_Create` 0x17d340:73-76 SP_HideObj's the copter's SP
+                // at create while its gate channel is off (the hidden body is never view-added —
+                // the Script_HideObj cascade sets obj+0xF0 bit 0x10 [M 0x1db808:27-32] — and the
+                // counter decays to 0 within three ticks), and `Copter_Update` 0x17dbb8:91-97
+                // unhides it on the gate's first ON tick. `Copter::body_shown` carries exactly
+                // that state (the port has no per-frame SP view cull — documented). The port's
+                // copter entity IS the body (`Copter_GetBody` 0x17e4b8 reads rec+0x38 = part slot
+                // 2). Reached on the disc: Bond's 0x2e rounds on 0700000b/#15d and 07000012/#2aa/
+                // #2f0 [D the placement sweep].
+                // The body's world position is the copter matrix's TRANSLATION ROW (row 3) — the
+                // SP_SetPosRot rides obj+0x90 [M Copter_Move 0x17d628:115] and the port's Mat4 is
+                // row-major with row 3 the translation (`view_rot_trans_matrix` writes [trans, 1]
+                // there; `Copter::pos` reads it). The branch's first cut read column 3 of rows
+                // 0-2 — the projection row, (0,0,0) for every rigid matrix — which steered every
+                // copter lock at the world origin (homing-copter-2).
+                let copter_body_pos = |c: &crate::copter::Copter| c.pos();
                 let mut target = b.target;
                 let mut target_copter = b.target_copter;
                 if let Some(ti) = target {
                     let alive = if target_copter {
-                        self.copters.get(ti).is_some()
+                        // The re-validation [M 0x12f358:107 — `if (target+0xfe & 1) target = 0`]:
+                        // the port's `landed` IS obj+0xFE bit 0 (Copter_Move's +0x74 == 100 latch,
+                        // state 5's arrival and state 6's death [M 0x17dbb8:274]); the retain that
+                        // removes the copter runs later in the tick, so the bit, not the removal,
+                        // is the game's drop.
+                        self.copters.get(ti).is_some_and(|c| !c.landed)
                     } else {
                         self.list.get(ti).is_some_and(&seekable)
                     };
@@ -15758,8 +15777,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         best = Some((i, dist, false));
                     }
                     // The copter bodies, after the drones (the port's two-list fold of the game's
-                    // one object walk; equal distance keeps the earlier candidate).
+                    // one object walk; equal distance keeps the earlier candidate). The gate is
+                    // the class-0 arm's `+0xfc != 0` — a hidden (gated) body is never a candidate
+                    // [M 0x12f248:29 + the counter trace above].
                     for (ci, c) in self.copters.iter().enumerate() {
+                        if !c.body_shown() { continue; }
                         let cp = copter_body_pos(c);
                         let to = [cp[0] - b.pos[0], cp[1] - b.pos[1], cp[2] - b.pos[2]];
                         let dist = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
@@ -15776,7 +15798,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 b.target = target;
                 b.target_copter = target_copter;
                 if let Some(ti) = target {
-                    let tp = if target_copter { copter_body_pos(&self.copters[ti]) } else { self.list[ti].pos };
+                    let tp = if target_copter { self.copters[ti].pos() } else { self.list[ti].pos };
                     let to = [tp[0] - b.pos[0], tp[1] - b.pos[1], tp[2] - b.pos[2]];
                     let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
                     if l > 0.0 {
