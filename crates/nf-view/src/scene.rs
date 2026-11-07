@@ -13599,30 +13599,27 @@ impl Sim {
             let health = m.bots[i].health;
             let max_health = m.bots[i].max_health;
             let my_team = m.settings.players[m.bots[i].slot].team;
-            // This bot's view of the others: the squared distance and the candidate + seen bits
-            // `find_opponent` reads (bit1|bit2 [M the CanSeeObject bit]) — the eye-to-chest line
-            // clear of the world. The driver passed every row with flags 0 / dist2 0, so no bot
-            // ever acquired anyone and they idled in 0xF9 all match. PROVEN the game's rule: bot vision is LOS-only —
-            // DroneVision_CanSeePosition 0x178438:54-75 gates on the same nav cel /
-            // AINetwork_TestRayCels then Collide_LineOfSight, with NO FOV cone or range constant
-            // anywhere [M; 0x176f18:56-104 the same for objects] — the port's LOS-only read IS
-            // the game's rule (standins-scene-929).
+            // This bot's view of the others: `BOT_setOtherPlayerInfo` 0x125390's +0xB0 rows,
+            // rebuilt from the slot view each tick and filled by the ported pass below. The
+            // game's rule the pass implements: the seen bit is head-to-head LOS only —
+            // DroneVision_CanSeeObjectFrom 0x176f18 gates on the nav cel /
+            // AINetwork_TestRayCels then Collide_LineOfSight (mask 0xa27), with NO FOV cone or
+            // range constant anywhere [M; 0x178438:54-75 the same for positions] — the port's
+            // collision-world segment IS that read's stand-in (standins-scene-929).
             let me = m.bots[i].brain.pos;
             let mut seen: Vec<nf_game::mp::bots::OtherPlayer> = others.to_vec();
-            // mp-perf-16: the eye-to-chest sight line (`segment_surface_bullet`, eye = `me`, chest =
-            // the other's eye − 0.4) is not run for every pair here (14 bots × 15 others = 210
-            // segments a tick, 75% of the 16-participant tick): `find_opponent` — its only reader
-            // whose result depends on it — runs it lazily for the candidates that can change its
-            // pick (`BotCtx::lazy_sight`). The cheap bits (candidate, team-mate) stay precomputed.
-            for o in seen.iter_mut() {
-                if !o.alive || o.index == m.bots[i].slot { continue; }
-                let d = [o.pos[0] - me[0], o.pos[1] - me[1], o.pos[2] - me[2]];
-                o.dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-                // bit1 candidate for every present player [M 0x125390:99-101], bit3 the team-mate
-                // in the team view [M :100-102] (mp-bot-objectives), bit2 seen (lazily, in `find_opponent`)
-                o.flags |= 0x2;
-                if team_view && o.team == my_team { o.flags |= 0x8; }
-            }
+            // `BOT_setOtherPlayerInfo` 0x125390 — the ported scan pass, at the game's point:
+            // `NDrone2_ControlSTANDARD` 0x1490f0:164 runs it for the bots' drone type 0x1E right
+            // before `NDrone2_FindOpponent` (= `brain.step`'s `find_opponent` below). It fills
+            // each row's candidate/team bits, the enemy dist², the round-robin CanSeeObject seen
+            // bit (+0x767 cursor, latched between refreshes) and the +0x770 scan flag. The old
+            // inline stand-in (dist² + candidate for every row, the seen answer re-derived per
+            // pick in `find_opponent` via the lazy sight) is gone (mp-bot-scan-others).
+            let my_slot = m.bots[i].slot;
+            m.bots[i].brain.scan_others(
+                my_slot, my_team, team_view, world, &mut seen,
+                m.settings.human_count as usize,
+            );
             // mp-bot-objectives: the standing Demolition/Protection site rides the objective row
             // (`OBJ_ROW`) — the attackers take it as their opponent (`NDrone2_FindOpponent`
             // 0x1424e0:519-560 sets the site obj as `Drone+0x170` [M]); the row's position is the
@@ -13651,7 +13648,9 @@ impl Sim {
                 health,
                 max_health,
                 stationary: false,
-                lazy_sight: true,
+                // the pass above precomputed the seen bits (0x125390's round-robin latch) —
+                // `find_opponent` reads them instead of re-deriving a sight line per pick
+                lazy_sight: false,
                 objectives: Some(&objectives),
                 weapons: wtable,
                 start_weapon,

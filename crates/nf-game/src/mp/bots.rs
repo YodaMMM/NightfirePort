@@ -1080,6 +1080,18 @@ pub struct BotVars {
     pub last_pickup: i8,      // +0x76E (the last chosen pickup index — pickGoal skip/ writer [M 0x126b88:397,496])
     pub guard_near_flag: u8,  // +0x76F (BotIdle's sphere-box result [M 0x171b80:96])
     pub scan_flag: u8,        // +0x770 (set when the +0xB0 scan found a live candidate)
+    /// `BOT_vars+0x767` — the scan's round-robin cursor: the one slot whose row gets the
+    /// `NDrone2_CanSeeObject` seen-bit refresh this tick (`BOT_setOtherPlayerInfo` 0x125390
+    /// reads it at :67/:77, advances it at :174, resets it to 0 at :171 when the cursor slot
+    /// could not run the LOS branch).
+    pub scan_cursor: u8,
+    /// The port's latch of the +0xB0 rows' bit-2 seen bits, keyed by player slot. The game
+    /// latches the bit IN the persistent `BOT_vars+0xB0` rows (a row's bit 2 survives until the
+    /// row's own refresh overwrites it — 0x125390:115 `& 0xfffffff6` keeps bit 2, :145/:153
+    /// rewrite it); the port rebuilds the row slice every tick, so the latch rides here.
+    /// Derived per-bot state — deliberately NOT folded into `state_hash` (mp-bot-scan-others:
+    /// the hash must stay unchanged; the latch is a pure function of already-synced positions).
+    pub scan_seen: u8,
     pub attack_latch: u8,     // +0x771 (the attack re-entry latch)
     // combat state (Drone_tag fields the states read; carried here so the brain is self-contained)
     pub opponent: Option<usize>, // Drone+0x170 (index into ctx.others)
@@ -1153,6 +1165,8 @@ impl Default for BotVars {
             last_pickup: -1,
             guard_near_flag: 0,
             scan_flag: 0,
+            scan_cursor: 0,
+            scan_seen: 0,
             attack_latch: 0,
             opponent: None,
             sighted: 0,
@@ -2465,20 +2479,91 @@ impl BotBrain {
         }
     }
 
-    /// `BOT_setOtherPlayerInfo` 0x125390 (the port's pass): bit1 candidate, bit3 same team,
-    /// bit2 seen (the LOS via the collision world — the game's `NDrone2_CanSeeObject`), the
-    /// +0x04 dist², and the +0x770 scan flag. Called once per tick like ControlSTANDARD:164.
-    pub fn scan_others(&mut self, ctx: &BotCtx) {
-        self.vars.scan_flag = 0;
-        let mut seen_any = false;
-        for o in ctx.others {
-            if o.index == ctx.my_index || o.index >= OBJ_ROW || !o.alive {
+    /// `BOT_setOtherPlayerInfo` 0x125390 — the ported per-tick scan pass, run at the game's
+    /// `NDrone2_ControlSTANDARD` 0x1490f0:164 point (for the bots' drone type 0x1E) right before
+    /// `NDrone2_FindOpponent` (= this brain's `find_opponent` inside [`Self::step`]). Per slot
+    /// row of the `BOT_vars+0xB0` block it writes, from the decompile:
+    /// - the +0x770 scan flag (:35 zero, :61 set — the game's walk of the MPGame bot chain; the
+    ///   port's chain is the bot slots themselves, so "another bot row present" [S chain head]);
+    /// - empty / self / dead rows: flags `& ~0xA` (bits 1+3 cleared, :87-97 — the 0x11/0x12
+    ///   dead classes and the empty slot);
+    /// - live rows: bit1 candidate + bit3 same team (`& ~0x8 | 2 | same`, :99-102), with the
+    ///   team view of :63-75 (FFA compares team 3 → no team-mates) passed as `team_view`;
+    /// - enemy rows only: the +0x04 dist² (`Vec_SqDist3D`, :148-149) and the bit-2 seen bit.
+    ///   The seen bit is the game's ROUND-ROBIN: the `BOT_vars+0x767` cursor picks the ONE slot
+    ///   whose row runs `NDrone2_CanSeeObject(drone, obj, 5, 0)` this tick (:151 — head-to-head
+    ///   `Collide_LineOfSight` mask 0xa27 behind `DroneVision_CanSeeObjectFrom` 0x176f18, no
+    ///   cone and no range), the bit survives in the row between refreshes (:115 `& 0xfffffff6`
+    ///   keeps bit 2), and the tail advances the cursor or resets it to 0 when the cursor slot
+    ///   could not run the LOS branch (:169-176). The port's CanSeeObject stand-in is the
+    ///   collision-world segment (the documented `Collide_LineOfSight` stand-in, same line the
+    ///   lazy sight ran), latched per slot in `vars.scan_seen`.
+    /// Not lifted ([S], the readers are not ported either): the bit-0 alive byte and the
+    /// 2-frame just-died grace (:105-127), the row+0x0 MPGame time stamp (:117) and the row+0x8
+    /// angle (:131-139), and the later-slot copy of an earlier bot's dist²/seen (:141-146 — the
+    /// same head-to-head line, so each bot's own answer agrees).
+    pub fn scan_others(
+        &mut self,
+        my_index: usize,
+        my_team: u32,
+        team_view: bool,
+        world: &CollisionWorld,
+        rows: &mut [OtherPlayer],
+        first_bot_slot: usize,
+    ) {
+        self.vars.scan_flag = if rows.iter().any(|o| {
+            o.index != my_index && o.index >= first_bot_slot && o.index < OBJ_ROW
+        }) {
+            1
+        } else {
+            0
+        };
+        let mut consumed = false;
+        for o in rows.iter_mut() {
+            if o.index >= OBJ_ROW {
+                continue; // the port's site row — no game counterpart
+            }
+            if o.index == my_index || !o.alive {
+                o.flags &= !0xA; // [M 0x125390:87-97]
                 continue;
             }
-            seen_any = true;
+            let same_team = team_view && o.team == my_team;
+            let latch = (self.vars.scan_seen >> o.index) & 1;
+            if same_team {
+                // [M :164 — `old & ~0xA | same`]: bit 1 cleared, bit 3 set, bit 2 latched on
+                o.flags = (o.flags & !0xA) | 0x8 | (u32::from(latch) << 2);
+                continue;
+            }
+            // [M :115 — `old & ~0x9 | 2 | alive`]: bit 3 cleared, bit 1 set, bit 0 not ported
+            o.flags = (o.flags & !0x9) | 0x2;
+            let d = [
+                o.pos[0] - self.pos[0],
+                o.pos[1] - self.pos[1],
+                o.pos[2] - self.pos[2],
+            ];
+            o.dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2]; // [M :148-149]
+            if o.index == self.vars.scan_cursor as usize {
+                let seen = world.segment_clear(self.pos, o.pos); // the CanSeeObject stand-in [S]
+                if seen {
+                    self.vars.scan_seen |= 1 << o.index;
+                } else {
+                    self.vars.scan_seen &= !(1 << o.index);
+                }
+                o.flags = (o.flags & !0x4) | ((seen as u32) << 2); // [M :151-153]
+                consumed = true;
+            } else {
+                o.flags = (o.flags & !0x4) | (u32::from(latch) << 2); // the row's own latch [M :115]
+            }
         }
-        if seen_any {
-            self.vars.scan_flag = 1; // [M 0x125390:61]
+        // the cursor tail [M :169-176]: consumed → advance (the :77 entry check wraps >7 to 0),
+        // the cursor slot unable to run the LOS branch → reset to 0
+        if consumed {
+            self.vars.scan_cursor += 1;
+            if self.vars.scan_cursor > 7 {
+                self.vars.scan_cursor = 0;
+            }
+        } else {
+            self.vars.scan_cursor = 0;
         }
     }
 
