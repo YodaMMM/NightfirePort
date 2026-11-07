@@ -11,3 +11,7 @@ claimed-by: sandbox7 at 2026-11-07T01:51Z
 ## Report (done, 2026-11-07T02:31Z)
 
 Closed by the driver: the report is on `s/port-map-scripts` (docs/reports/port-map-scripts.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-11-07T02:32Z)
+
