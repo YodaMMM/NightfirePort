@@ -21316,7 +21316,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // copter's fire this way].
             if alive_in {
                 let reached = match &event {
-                    Some(crate::bullet::BulletEvent::World(p)) => *p,
+                    Some(crate::bullet::BulletEvent::World { at: p, .. }) => *p,
                     Some(crate::bullet::BulletEvent::Player { at, .. }) => *at,
                     _ => b.pos,
                 };
@@ -21369,7 +21369,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             };
             let explosive = flags70 & (0x4 | 0x10_0000 | 0x20_0000) != 0 && b.bounces == 0;
             let blast_world = explosive.then_some(()).and_then(|_| match &event {
-                Some(crate::bullet::BulletEvent::World(p)) => Some(*p),
+                Some(crate::bullet::BulletEvent::World { at: p, .. }) => Some(*p),
                 _ => None,
             });
             let blast_player = explosive.then_some(()).and_then(|_| match &event {
