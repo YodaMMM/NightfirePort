@@ -7,3 +7,6 @@ Method. For each class below read its `*_Create` in the disassembly and list eve
 Why: `Destroy_Update`'s p6 countdown was noted inert because p6 is 0 on 0700000d. 07000014 has 17 leaves with non-zero p6, and its generator chain ran 100 times too fast.
 
 Timing values must come from a fresh-load reading where one exists; do not derive a tick count from a symbol name (that countdown's scale is 30 per p6, not FRAME_RATE). Branch from origin/master, push to `s/unread-params-switches`, report in docs/reports/unread-params-switches.md with the census table. No draw changes, no driving levels. Do not pin anything you have not traced.
+
+---
+claimed-by: sandbox7 at 2026-11-07T09:14Z
