@@ -1196,6 +1196,30 @@ pub struct BotShot {
     pub weapon: u8,
 }
 
+/// The MP damage-perk scale a bot shooter applies to its own hits
+/// [M `NDrone2_DoHitEffects` 0x1458e0:43-56 and `Player_DealWithObjHit` 0x194458:120-140 —
+/// the same pair in both hit pipelines: `HITDATA+0x08` (the damage, docs/fields/
+/// hitdata-spawner-ally.md:32 "MP perk scaling") is multiplied before
+/// `NDrone2_HitDamage`/`Player_HandlePain`]. The flags byte is the shooter bot's record copy
+/// (`BLData+0xe0` control → `+0x30` obj → `+0xe0` → `+0xd1c` → `+0xac` [M 0x194458:122-127]),
+/// gated by `Control_Plr2Ind(shooter) > 3` — a bot (the port's only callers are the bot-shot
+/// resolutions). The weapon test reads the SHOOTER's current weapon (`Control+0x44` [M
+/// 0x194458:124] — the port's `BotShot::weapon`): the fists family (1, 100, 101, 102) with
+/// flag bit 0x04 → ×1.5, any other weapon with flag bit 0x02 → ×1.25, else unchanged.
+pub fn bot_damage_trait_scale(flags: u8, weapon: u8, dmg: f32) -> f32 {
+    if weapon == 1 || weapon == 100 || weapon == 101 || weapon == 102 {
+        if flags & 0x04 != 0 {
+            dmg * 1.5
+        } else {
+            dmg
+        }
+    } else if flags & 0x02 != 0 {
+        dmg * 1.25
+    } else {
+        dmg
+    }
+}
+
 
 /// One MP bot brain: the `BotVars` slot, the SM state and the per-tick driver
 /// (`Drone_Control` → `ControlSTANDARD` → `SendMsgSelf(3)` → `RouteMsgDCV` order).
@@ -1244,6 +1268,12 @@ pub struct BotBrain {
     pub stuck_hits: u8,
     /// One jump on the next body tick (the stuck recovery [S]).
     jump_next: bool,
+    /// The HP-regen heal this tick fired [M 0x16e060:225-231]: `Some(new_health)` when the
+    /// +0x738 deadline fired (flag byte bit 0x10). The game writes `Drone+0xac` through
+    /// `BOT_SetHealth` 0x126758 directly; the port's health float is the match layer's
+    /// `MpBot::health` (mp/mod.rs), so the new value rides here for the caller to fold
+    /// right after `step` (the brain owns the decision, the match owns the float).
+    pub regen_heal: Option<f32>,
 }
 
 /// The port's route over the arena AI network: the game's `AINetwork_CalcRouteToPosition` →
@@ -1382,6 +1412,7 @@ impl BotBrain {
         // marks the bot object; the port's brain is always a bot — no flag [S].)
         vars.combat_range_default = vars.combat_range;
         let mut brain = BotBrain {
+            regen_heal: None,
             vars,
             state: 0xC3, // BotInit
             pos,
@@ -2528,13 +2559,23 @@ impl BotBrain {
             }
         }
         let mut best: Option<(usize, f32)> = None;
+        // mp-bot-traits: the 360° bit's reach [M 0x1424e0:364-366 — the score gate is
+        // `(row & 4) != 0 || vision_bit` (the seen bit is NOT required with the flag) and the
+        // cone-reject tail is `else if (vision_bit == 0)`; the candidate bit `(row & 2) != 0`
+        // still wraps both arms] — so a wide bot skips the bit2 pre-gate and the lazy sight
+        // chain below, not just the ±90° cone and the 576.0² range.
+        let wide = self.vars.flags & 0x08 != 0;
         for o in ctx.others {
             if o.index == ctx.my_index || o.index >= OBJ_ROW || !o.alive {
                 continue;
             }
-            if !ctx.lazy_sight && o.flags & 0x6 != 0x6 {
-                continue; // bit1 candidate + bit2 seen (the game's CanSeeObject bit [S — the
-                          // vision query's range/params are not lifted; the caller supplies it])
+            if o.flags & 0x2 == 0 {
+                continue; // the candidate bit wraps both arms [M :363]
+            }
+            if !ctx.lazy_sight && !wide && o.flags & 0x4 == 0 {
+                continue; // bit2 seen, required without the 360° flag [M :364 `(row & 4) != 0 ||
+                          // vision_bit`; the vision query's range/params are not lifted — the
+                          // caller supplies it]
             }
             if o.flags & 8 != 0 {
                 continue; // a team-mate (`(uVar3 & 8) == 0` gates the scoring [M :364])
@@ -2542,10 +2583,10 @@ impl BotBrain {
             // mp-bot-objectives: the sight range and cone — `fVar24 = Drone+0xE8²` (the
             // drones' default 24.0 [M 0x14b300:386]) and the half-angle `Drone+0xE4` (π/2 [M
             // 0x14b300:427]); the 360° bit (stats +0x0C & 8) widens the range to 300.0 and drops
-            // the cone [M 0x1424e0:277-300]. (The bots' own `DefaultInit` arm is not confirmed —
-            // the default row is the port's pick [S].) Unlimited LOS made every bot fight every
-            // bot it could see across the arena, and no objective was ever reached.
-            let wide = self.vars.flags & 0x08 != 0;
+            // the cone and the seen requirement [M 0x1424e0:277-300, :364-366]. (The bots' own
+            // `DefaultInit` arm is not confirmed — the default row is the port's pick [S].)
+            // Unlimited LOS made every bot fight every bot it could see across the arena, and
+            // no objective was ever reached.
             if o.dist2 >= if wide { 90000.0 } else { 576.0 } {
                 continue;
             }
@@ -2562,14 +2603,15 @@ impl BotBrain {
             if best.is_some_and(|(_, bd)| d >= bd) {
                 continue; // the earlier pick stays on a tie
             }
-            if ctx.lazy_sight {
+            if ctx.lazy_sight && !wide {
                 // mp-perf-16: only a candidate that would take the pick pays for its sight line —
                 // the same answer as the precomputed bit2, without the per-pair segments. The test
                 // is the perception ack's own chain (bot-weapons-finish-3): the segment to the aim
                 // point plus the `OpponentVisibility` ≥ 0.7 cone+range score. A looser bare
                 // segment kept re-picking an opponent the sight chain never acked, which starved
                 // the scan tail's site arm: the protection attackers stood "attacking" a defender
-                // they could not sight and never shot the site.
+                // they could not sight and never shot the site. (mp-bot-traits: the wide arm
+                // skips the chain — the game's seen-bit gate exempts it [M :364-366].)
                 let seen = o.flags & 0x6 == 0x6
                     || (ctx.world.segment_clear(self.pos, o.pos) && self.opponent_visibility(o) >= 0.7);
                 if !seen { continue; }
@@ -2680,11 +2722,41 @@ impl BotBrain {
             }
             self.vars.requested_state = 0;
         }
-        // HP regen [M :209-233]: +5 clamp to max, the +0x738 deadline re-arm
-        // regen_deadline is a TICK count — compare ticks exactly (the old now*60 f32 fold
-        // drifted above 2^24; the tick compare is the same predicate, exact).
+        // The 360-vision sight ack [M :186-218]: with the flag byte's bit 0x08 (read off the
+        // +0xd1c record copy at +0xac), a held PLAYER opponent whose perception row reads
+        // candidate+seen (`BOT_vars+0xbc[opp] & 6 == 6`, gated by `Control_Plr2Ind != -1`) sets
+        // Drone+0x228 bit 2 at once. The game's row bit 2 is the vision chain's raw
+        // CanSeeObject — LOS-only, no cone, no reaction delay [M standins-scene-929] — and the
+        // port's player rows never carry it precomputed (lazy sight), so the segment test IS
+        // the row's seen bit here; the site pseudo-opponent (≥ OBJ_ROW) is not a player and
+        // the game's Plr2Ind gate skips it. The game's reaction-time ack (HaveOpponentSight
+        // 0x175ef0, the port's `seen_ticks >= 10` above) still applies to non-360 bots; this
+        // arm does not write the +0x238 stamp and neither do we.
+        if self.vars.flags & 0x08 != 0 && self.vars.sighted & 4 == 0 {
+            if let Some(o) = self.vars.opponent {
+                if o < OBJ_ROW {
+                    if let Some(t) = ctx.others.get(o) {
+                        if t.alive && t.flags & 0x2 != 0 && ctx.world.segment_clear(self.pos, t.pos)
+                        {
+                            self.vars.sighted |= 4;
+                        }
+                    }
+                }
+            }
+        }
+        // HP regen [M :209-233]: the fired +0x738 tick heals +5.0 [M :225-227], clamps to the
+        // stats' max HP (`BOT_vars+0xa4` u16 [M :228-229]; the port's 0-record 100.0 guard [S]
+        // rides `ctx.max_health`, the same effective max create_bots_inner arms), calls
+        // BOT_SetHealth [M :231] and re-arms +0x738 = now + FRAME_RATE_INT [M :232; 60 per
+        // second — bots.rs:634, the game's 0x30d0cc global]. regen_deadline is a TICK count —
+        // compare ticks exactly (the old now*60 f32 fold drifted above 2^24; the tick compare
+        // is the same predicate, exact). The wrap arm [M :211-221] (a sign-negative deadline
+        // ticks when now < 0x100000) is unreachable here: the u32 tick counter wraps only
+        // after 2^32 ticks (~2.3 y at 60 Hz) and the f32 compare keeps the game's unsigned
+        // predicate below 2^24.
         if self.vars.flags & 0x10 != 0 && self.tick as f32 >= self.vars.regen_deadline as f32 {
             self.vars.regen_deadline += FRAME_RATE_INT;
+            self.regen_heal = Some((ctx.health + 5.0).min(ctx.max_health));
         }
         let ty = self.vars.state_type;
         // mp-bot-objectives: the defenders' guard latch [M :244-268] — in a type-5 (goal walk)
@@ -5542,4 +5614,187 @@ mod fell_out_tests {
         assert_eq!(m.bots[1].brain.vars.nav_node, other_nav, "the spared bot's nav node");
         assert_eq!(m.bots[1].brain.vars.opponent, other_opp, "the spared bot's opponent");
     }
+}
+
+// ---- mp-bot-traits: the flag-byte traits (+0xac of the +0xd1c record copy) ----
+
+/// A minimal single-opponent rig for the trait pins: a bot record with the flags byte under
+/// test, one other-player row, and a caller-held health float the rig folds back exactly like
+/// scene.rs does after `brain.step` (the game's `Drone+0xac` is the port's `MpBot::health`).
+struct TraitRig {
+    brain: BotBrain,
+    others: Vec<OtherPlayer>,
+    world: CollisionWorld,
+    rng: Rng,
+    health: f32,
+    max_health: f32,
+}
+
+impl TraitRig {
+    fn new(flags: u8) -> TraitRig {
+        let mut rec = INITIAL_BOT_RECORDS[0].clone();
+        rec.0[0x0C] = flags; // the stats flags byte → BOT_vars+0xac [M 0x1249e8:141 amemcpy]
+        rec.0[0x0E] = 1; // enabled [M Menu_PrepareBots]
+        let brain = BotBrain::bot_init(&rec, 4, [0.0, 1.6, 0.0], 0.0);
+        TraitRig {
+            brain,
+            others: vec![OtherPlayer {
+                index: 0,
+                pos: [-10.0, 1.6, 0.0], // BEHIND a yaw-0 bot (forward = (cos, sin))
+                alive: true,
+                team: 0,
+                flags: 0x2, // candidate only — the seen bit is never set [M 0x125390:99]
+                dist2: 0.0,
+                health: 100.0,
+                score: 0.0,
+            }],
+            world: CollisionWorld::from_triangles(Vec::new()),
+            rng: Rng::new(0xB077),
+            health: 100.0,
+            max_health: 150.0, // record 0's stats max HP (0x96) [L INITIAL_BOT_RECORDS]
+        }
+    }
+
+    fn step(&mut self) {
+        let mut others = self.others.clone();
+        for o in others.iter_mut() {
+            let d = [
+                o.pos[0] - self.brain.pos[0],
+                o.pos[1] - self.brain.pos[1],
+                o.pos[2] - self.brain.pos[2],
+            ];
+            o.dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+            o.flags |= 0x2; // the candidate bit, every present row [M 0x125390:99]
+        }
+        let ctx = BotCtx {
+            now: 0.0,
+            scenario: 0x1,
+            my_index: 4,
+            my_team: 0,
+            pickups: &[],
+            others: &others,
+            world: &self.world,
+            nav: None,
+            health: self.health,
+            max_health: self.max_health,
+            stationary: true,
+            lazy_sight: false,
+            objectives: None,
+            weapons: None,
+            start_weapon: 0,
+        };
+        self.brain.step(&ctx, &mut self.rng, false);
+        // the scene's fold-back (scene.rs, the mp-bot-traits hunk)
+        if let Some(h) = self.brain.regen_heal.take() {
+            self.health = h;
+        }
+    }
+}
+
+/// The regen trait [M BOT_init 0x1249e8:165-167 arms +0x738 at FRAME_RATE_INT when the flag
+/// byte reads 0x10; NDrone2_DSTATE_BotGlobal 0x16e060:209-233 heals +5.0 on the fired tick,
+/// clamps to the stats' max HP and re-arms +60]: a damaged 0x10 bot heals exactly +5.0 per
+/// second toward the stats' max (150 for record 0), and the heal rides `regen_heal` folded
+/// into the rig's health float.
+#[test]
+fn bot_trait_hp_regen_heals_five_per_second() {
+    let mut r = TraitRig::new(0x10);
+    assert_eq!(r.brain.vars.regen_deadline, FRAME_RATE_INT, "the init arm [M 0x1249e8:165-167]");
+    r.health = 50.0;
+    for _ in 0..59 {
+        r.step();
+    }
+    assert_eq!(r.health, 50.0, "no heal before the +0x738 deadline (tick 59 < 60)");
+    r.step(); // tick 60
+    assert_eq!(r.health, 55.0, "the fired tick heals +5.0 [M 0x16e060:225-227]");
+    assert_eq!(r.brain.vars.regen_deadline, 2 * FRAME_RATE_INT, "re-armed +FRAME_RATE_INT [M :232]");
+    for _ in 0..(FRAME_RATE_INT - 1) {
+        r.step();
+    }
+    assert_eq!(r.health, 55.0, "still 55 one tick before the next deadline");
+    r.step(); // tick 120
+    assert_eq!(r.health, 60.0, "+5.0 per second, not per tick");
+    // The clamp [M :228-229]: heal up to the stats' max and check the ceiling.
+    r.health = 148.0;
+    for _ in 0..(2 * FRAME_RATE_INT) {
+        r.step();
+    }
+    assert_eq!(r.health, 150.0, "clamped to the stats' max HP, record 0 = 150 [L INITIAL_BOT_RECORDS]");
+    for _ in 0..(2 * FRAME_RATE_INT) {
+        r.step();
+    }
+    assert_eq!(r.health, 150.0, "the clamp holds at max");
+}
+
+/// Sister: without the bit no deadline is armed and no heal ever fires [M 0x1249e8 the
+/// flags & 0x10 gate; :209 the per-tick gate].
+#[test]
+fn bot_trait_no_regen_without_the_bit() {
+    let mut r = TraitRig::new(0x00);
+    assert_eq!(r.brain.vars.regen_deadline, 0, "unarmed [M 0x1249e8:164-167 the skipped arm]");
+    r.health = 50.0;
+    for _ in 0..(3 * FRAME_RATE_INT) {
+        r.step();
+        assert!(r.brain.regen_heal.is_none());
+    }
+    assert_eq!(r.health, 50.0, "a bit-less bot never heals [M 0x16e060:209-211]");
+}
+
+/// The 360-vision acquisition [M 0x1424e0:288-299: with the flag the acquisition limit is
+/// 90000.0 and the cone drops; :364-366: the score gate is `(row & 4) != 0 || vision_bit`, so
+/// a wide bot takes an UNSEEN candidate]: a bot with the bit acquires a target directly behind
+/// it that carries no seen bit; the same rig without the bit does not.
+#[test]
+fn bot_trait_360_vision_acquires_target_behind() {
+    let mut wide = TraitRig::new(0x08);
+    wide.step();
+    assert_eq!(wide.brain.vars.opponent, Some(0), "the wide bot takes the unseen target behind it [M 0x1424e0:288-289, :364-366]");
+    let mut narrow = TraitRig::new(0x00);
+    narrow.step();
+    assert_eq!(narrow.brain.vars.opponent, None, "without the bit the unseen behind-target never scores [M :364]");
+    // Sister: the range arm — the same unseen behind-target at 301² > 90000 stays out of even
+    // the wide bot's reach [M :288-289 fVar24 = 90000.0 = 300²].
+    let mut far = TraitRig::new(0x08);
+    far.others[0].pos = [-301.0, 1.6, 0.0];
+    far.step();
+    assert_eq!(far.brain.vars.opponent, None, "90000.0 is the wide limit [M :288-289]");
+}
+
+/// The 360-vision sight ack [M 0x16e060:186-218 — with the flag, a held opponent with the raw
+/// seen state sets Drone+0x228 bit 2 the same tick]: the wide rig acks on the step that
+/// acquired the behind-target; without the bit the ack needs the reaction chain (the port's
+/// seen_ticks >= 10 [M 0x175ef0:41-67]) which an unseen behind-target never satisfies.
+#[test]
+fn bot_trait_360_vision_fast_sight_ack() {
+    let mut wide = TraitRig::new(0x08);
+    wide.step();
+    assert_ne!(wide.brain.vars.sighted & 4, 0, "the 360 ack lands the acquisition tick [M 0x16e060:186-218]");
+    let mut narrow = TraitRig::new(0x00);
+    for _ in 0..12 {
+        narrow.step();
+    }
+    assert_eq!(narrow.brain.vars.sighted & 4, 0, "no bit, no ack — the target was never seen [M :187-189]");
+}
+
+/// The damage-perk scale [M 0x1458e0:43-56 / 0x194458:120-140]: the fists family (1, 100,
+/// 101, 102) with flag bit 0x04 → ×1.5; any other weapon with bit 0x02 → ×1.25; a bit-1 bot's
+/// fists hit is NOT scaled (the else-if); a bit-less bot never scales.
+#[test]
+fn bot_trait_damage_scale_by_shooter_flags() {
+    // bit 0x04, the fists family [M the sVar1 == 1 || 100/0x65/0x66 test]
+    assert_eq!(bot_damage_trait_scale(0x04, 1, 10.0), 15.0);
+    assert_eq!(bot_damage_trait_scale(0x04, 100, 10.0), 15.0);
+    assert_eq!(bot_damage_trait_scale(0x04, 101, 10.0), 15.0);
+    assert_eq!(bot_damage_trait_scale(0x04, 102, 10.0), 15.0);
+    // bit 0x04 with a gun → NOT scaled (the ×1.25 else-if is skipped) [M the if/else-if]
+    assert_eq!(bot_damage_trait_scale(0x04, 2, 10.0), 10.0);
+    // bit 0x02 with a gun → ×1.25; with the fists → unchanged [M the else-if arm]
+    assert_eq!(bot_damage_trait_scale(0x02, 2, 10.0), 12.5);
+    assert_eq!(bot_damage_trait_scale(0x02, 1, 10.0), 10.0);
+    // no flags → unchanged
+    assert_eq!(bot_damage_trait_scale(0x00, 1, 10.0), 10.0);
+    assert_eq!(bot_damage_trait_scale(0x00, 2, 10.0), 10.0);
+    // both bits: the fists test wins for the fists family, the gun takes ×1.25
+    assert_eq!(bot_damage_trait_scale(0x06, 1, 10.0), 15.0);
+    assert_eq!(bot_damage_trait_scale(0x06, 2, 10.0), 12.5);
 }

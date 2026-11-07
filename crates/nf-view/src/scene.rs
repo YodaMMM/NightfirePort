@@ -13659,6 +13659,13 @@ impl Sim {
             let before = m.bots[i].brain.shots.len();
             let held_before = m.bots[i].brain.vars.weapon_id;
             { let _p = nf_game::prof::scope("bots: brain.step"); m.bots[i].brain.step(&ctx, &mut self.drones.rng, true); }
+            // mp-bot-traits: the HP-regen fold-back [M 0x16e060:225-231] — the game writes
+            // Drone+0xac through BOT_SetHealth inside the heartbeat; the port's health float
+            // lives on MpBot, so the brain's fired tick lands here, right after the step that
+            // produced it (deterministic on every machine: no RNG, same tick order).
+            if let Some(h) = m.bots[i].brain.regen_heal.take() {
+                m.bots[i].health = h;
+            }
             if std::env::var_os("NF_BOTLOG").is_some() && held_before != m.bots[i].brain.vars.weapon_id && m.bots[i].brain.tick > 2 {
                 eprintln!("[botlog] f{} bot{} switches {:#x} -> {:#x} (state {:#x}, opp dist {:.1})", frame, i, held_before,
                     m.bots[i].brain.vars.weapon_id, m.bots[i].brain.state, m.bots[i].brain.vars.opp_dist);
@@ -13792,6 +13799,10 @@ impl Sim {
                         // capsule has no bot-specific part split (the bullet event chain takes
                         // its part from the hit on the model [M the shared bullet system]);
                         // documented (standins-scene-929).
+                        // mp-bot-traits: the shooter's damage-perk scale [M 0x194458:120-140 —
+                        // HITDATA+0x08 is scaled before HandlePain: flag bit 0x04 with the fists
+                        // family (1, 100, 101, 102) → ×1.5, bit 0x02 with any other weapon → ×1.25].
+                        let dmg = nf_game::mp::bots::bot_damage_trait_scale(m.bots[i].brain.vars.flags, shot.weapon, dmg);
                         let dmg = nf_game::mp::equip::mp_pain(&m.settings, &pain, dmg, nf_game::mp::equip::PART_TORSO);
                         if online {
                             // The per-slot online combat owns the health and the death (every machine).
@@ -13813,6 +13824,9 @@ impl Sim {
                     // team-mate bots at full damage before.
                     let (vs, ks) = (m.bots[j].slot, m.bots[i].slot);
                     if !m.register_bullet_hit(vs, ks) { continue; }
+                    // mp-bot-traits: the same shooter perk scale on the bot victim [M
+                    // 0x1458e0:43-56 — DoHitEffects scales HITDATA+0x08 before NDrone2_HitDamage].
+                    let dmg = nf_game::mp::bots::bot_damage_trait_scale(m.bots[i].brain.vars.flags, shot.weapon, dmg);
                     let dmg = nf_game::mp::equip::mp_pain(&m.settings, &pain, dmg, nf_game::mp::equip::PART_TORSO);
                     m.bots[j].health -= dmg;
                     // mp-bot-voices: the hit's pain bark — the game's DealWithObjHit case 0x27 MP
