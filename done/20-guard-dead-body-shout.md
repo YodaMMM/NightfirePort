@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox3 at 2026-11-07T07:22Z
+
+---
+## Report (done, 2026-11-07T08:16Z)
+
+Closed by the driver: the report is on `s/guard-dead-body-shout` (docs/reports/guard-dead-body-shout.md); the worker didn't run finish.sh.
