@@ -30,5 +30,15 @@ the corpse alert (`DroneVision_ShoutFromOtherDrone` returns 0 in this build, so 
 - Other levels: the per-level music machines for 04, 09, 0a, 0c and 0d are also absent from music.rs (`UpdateMFX_02MayhewD`, `03TowerA`,
   `03TowerB`, `PowerStationA1`, `PowerStationA2`). Not touched here.
 
+## Tests
+New: `death_channel_timing_live` (3 of 4 red on old code; the fourth is the sister), `hostage_save_07000002_live::the_saved_geisha_stands_when_no_armed_guard_is_near`
+and `music_unported_consumers_live::the_01_intro_end_starts_the_level_sections` (both red on old code), the unit `the_07000001_machine_intro_alarm_and_calm_sections`.
+All 26 level walkreal binaries were run. Re-pinned for the later channel: 01 and 02 (wait for the channel), 14 (Rook read), 04 (the return-fire kill ends the mission mid-leg).
+nf-game lib 689/0. drake_fight_live, fix_finale_live, fix_npcs_live, explode_live, hostage_killer, walk_01/02 green.
+
+**Red on this branch:** `walkreal_07000016_live::walk_the_chasers_defeat_completes_the_mission_on_real_damage`. Green on old code, where Bond ended on 9.6 health.
+The shifted pacing kills him in the pit squad fight. It is a thin walker margin, not traced to a game fault; it needs the batch re-pin.
+Not run: digest pins and other non-walk binaries that hold the stream.
+
 ## Unproven
 The new timings are from the decompile, not a live capture.
