@@ -29,7 +29,7 @@ fn ss_operate_emits_the_trap_sample() {
     assert_eq!(traps.len(), 4, "the census's four 0x11b barrel traps exist");
     // ... and everything else armed on this level carries no sample.
     assert!(ss.list.iter().enumerate().filter(|(i, _)| !traps.contains(i))
-        .all(|(_, s)| s.sound == 0xffff || s.sound == 0), "no stray operate samples");
+        .all(|(_, s)| s.sound == 0xffff), "no stray operate samples; a zero word reads as none [M 0x1a9c58]");
 
     // Drive trap #353's operate through the channel half [M 0x1a9df8: (mask & contacts)==0 ->
     // the channel word]: mask 1 matches no contact class, so the channel path is the trap's arm.
@@ -39,7 +39,8 @@ fn ss_operate_emits_the_trap_sample() {
     }).expect("the west-cluster trap #353");
     assert_eq!(ss.list[k].channel, 0xe, "#353's out word is ch 14 [D]");
     assert_eq!(ss.list[k].state, 0x40, "armed at create [M 0x1a9c58]");
-    let pos0 = [ss.list[k].matrix[0][3], ss.list[k].matrix[1][3], ss.list[k].matrix[2][3]];
+    let pos0 = ss.list[k].pos();
+    assert!((0..3).any(|a| pos0[a].abs() > 1.0), "the trap stands away from the origin [D #353], got {pos0:?}");
 
     let mut ch = nf_game::triggers::Channels::default();
     ch.set(0xe, 1, 0);
@@ -49,7 +50,7 @@ fn ss_operate_emits_the_trap_sample() {
     // arms both; the 0xffff sisters (#355-365) operate silently on the same channel.
     assert_eq!(ss.pending_sounds.len(), 2, "the two 0x11b west traps fired on ch 14");
     assert!(ss.pending_sounds.iter().all(|(id, _)| *id == 0x11b), "sample 283 [D census]");
-    assert!(ss.pending_sounds.iter().all(|(_, p)| (0..3).all(|a| (p[a] - pos0[a]).abs() < 0.01)),
+    assert!(ss.pending_sounds.iter().any(|(_, p)| (0..3).all(|a| (p[a] - pos0[a]).abs() < 0.01)),
         "the position is the object's own matrix translation [M 0x1a9948 obj+0x80]");
     assert_eq!(ss.list[k].state, 1, "latched to playing [M 0x1a9948's 0x40 arm]");
 

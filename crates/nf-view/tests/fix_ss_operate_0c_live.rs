@@ -188,3 +188,28 @@ fn shoot_sweeping(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, 
         w.after_step();
     }
 }
+
+/// The hatch's grind plays AT the hatch, and the secret door, whose sample word is 0, plays
+/// nothing: `SS_Update`'s operate arm takes obj+0x80 and `SS_Create` turns a zero word into
+/// 0xffff [M 0x1a9948:86-89; 0x1a9c58].
+#[test]
+fn the_operate_sample_plays_at_the_object_and_a_zero_word_is_none() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "0700000c.bin", false).unwrap());
+    w.wait_enabled(3000, "the intro");
+    let sim = w.scene.sim.as_mut().unwrap();
+    let door = sim.drones.sss.list.iter().find(|s| s.channel == 8).expect("Door_secret1 #544");
+    assert_eq!(door.sound, 0xffff, "#544 carries p4 = 0 [D]");
+    let mut ch = nf_game::triggers::Channels::default();
+    ch.set(18, 1, 0);
+    ch.set(8, 1, 0);
+    let contacts = vec![0u8; sim.drones.sss.list.len()];
+    sim.drones.sss.pending_sounds.clear();
+    sim.drones.sss.tick(&mut ch, &contacts, 1);
+    let sounds = sim.drones.sss.pending_sounds.clone();
+    assert_eq!(sounds.len(), 1, "only the hatch #138 carries a sample among chs 18 and 8 [D], got {sounds:?}");
+    let (id, p) = sounds[0];
+    assert_eq!(id, 0x1d6, "the hatch sample [D #138 p4]");
+    assert!((p[0] - 5.8).abs() < 1.5 && (p[1] - 16.4).abs() < 1.5 && (p[2] + 112.3).abs() < 1.5,
+        "the grind plays at the hatch (5.8, 16.4, -112.3) [D #138], got {p:?}");
+}
