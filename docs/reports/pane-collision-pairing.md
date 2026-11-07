@@ -134,3 +134,10 @@ scoped exactly like the rays — the port has no per-room object graph for capsu
 
 not visible to me (no token, credit or context-window figures are shown in this
 environment; the session's sandbox expires ~10:04 UTC per the driver message).
+
+## ntfy failed
+
+All three fallbacks failed:
+1. `curl -sS -m 20 …` → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 urllib` → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data …` → timed out after 30 s, killed
