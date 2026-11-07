@@ -53,7 +53,9 @@ draw, and 0700000d's mount reaches the GunImp set), and each has port code.
 | 0x1cf360 | `Effect_RemoveSObjs` | ported | `crates/nf-game/src/effect.rs` `follow_hosts` (206; the deleted-host frees its holes test at 758) |
 | 0x1cf400 | `Effect_Body` | ported | `crates/nf-game/src/death.rs` (the corpse contact's surface sound from `EffectInfo+0x18` with `Sound_ModAlertness(0.5)` [M 0x1de220]; the material-0 guard [M 0x1ce688]) |
 
-Counts: **32 ported, 0 not reached, 0 missing.**
+Counts: **31 fully ported, 1 ported-with-a-gap-slice** (`Bullet_heatseekable`: 3 of its 4
+class arms on the branch — the class-3 Bond arm is the remaining slice), **0 not reached,
+1 missing slice** (details in the row and the notes).
 
 Notes:
 
@@ -62,11 +64,21 @@ Notes:
   ricochet pool), `gunimp.rs` (the mounted gun), with the per-tick folds in `drone.rs`
   (the bullet pass, the trails, the homing, the gunimp tick) and the render-side folds in
   `nf-view/src/scene.rs` (the footsteps) — the same split the drones map documents.
-- **0 gaps**: unlike the drones sweep (which found the 08 escort fail), every family
-  function a real level reaches has implementing code — the two closest-to-missing rows
-  were `Effect_Player` and `Effect_Body`, whose port homes are OUTSIDE the family's own
-  files (`nf-view/src/scene.rs`'s step path and `death.rs`'s corpse contact); both are
-  real code with [M]-cited arms, not comments.
+- **1 gap found and fixed on this branch**: the sweep + the weapon-record probe
+  (`homing_record_probe.rs` — the 0x20000 homing carriers are 0x2e/0x30/0x45/0x6d [L
+  ee_start_05.bin @0x2bf150]) and the copter-vs-pickup sweep (`copter_homing_probe.rs` —
+  0700000b copter #148 + the 0x2e pickup #15d; 07000012 copter #707 + pickups #2aa/#2f0
+  [D]) proved `Bullet_heatseekable`'s class-0 arm REACHED on the disc while the port's
+  homing scan knew only drones. Fixed in `drone.rs` (the PlayerBullet homing block, own
+  commit); the live red/green harness lands `#[ignore]`d — the give path refuses the 0x2e
+  equip on 07000012 (the fp-model gate), so the run itself is the next round's first item.
+  **One slice remains missing**: the class-3 arm (Bond as a homing target) in SP — the
+  copter's own 0x6d rounds at Bond reach it [M copter.rs:147], the port's SP scan cannot
+  name Bond; the MP fold has it (`mp/combat.rs:462-489`).
+- The two closest-to-missing rows were `Effect_Player` and `Effect_Body`, whose port homes
+  are OUTSIDE the family's own files (`nf-view/src/scene.rs`'s step path and `death.rs`'s
+  corpse contact); both are real code with [M]-cited arms, not comments (the independent
+  audit confirmed them).
 - The two documented [S] folds in the family (not gaps, port choices with the game rule
   cited): `Effect_Player`'s foot decal sits at the body's ground point instead of the foot
   bone (the port does not build first-person Bond's bone matrices), and
