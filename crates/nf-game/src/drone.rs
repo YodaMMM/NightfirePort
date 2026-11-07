@@ -2532,11 +2532,14 @@ impl Drone {
     /// `DroneAnim_SetWalkIdleAnim` (0x13cc70): in Patrol (the SM serial) % 3 + 0x37, or 0x37 when the set lacks it.
     /// The game's per-set danim existence test (`Drone_AnimTables[set]` + the state's record, then set 0) is
     /// `can_do`; the level override and the 0x37..=0x39 cap are the game's own [M 0x13cc70:11-30]. The game
-    /// reads the +0x108 serial directly [M disasm 0x13ccc0: `lw $v1, 0x108($s0)` then the %3 chain] — the
+    /// reads the +0x108 serial [M disasm 0x13ccc0: `lw $v1, 0x108($s0)`, +1 at 0x13ccd0, then the %3] — the
     /// port's `sm_id` carries that serial (1-based, see the `sm_serial` field).
+    /// (serial + 1) % 3 + 0x37 [M 0x13cc70; disasm 0x13ccd0 `addiu v1,v1,1` ahead of the `divu` at 0x13ccd4].
+    fn walk_variant(serial: u32) -> u16 { ((serial + 1) % 3) as u16 + anim_state::WALK }
+
     fn walk_anim(&self, d: &Data) -> u16 {
         // 07000014 always asks for 0x39.
-        let a = if d.level == 0x0700_0014 { 0x39 } else { (self.sm_id % 3) as u16 + anim_state::WALK };
+        let a = if d.level == 0x0700_0014 { 0x39 } else { Self::walk_variant(self.sm_id) };
         if self.can_do(d, a) { a } else { anim_state::WALK }
     }
 
@@ -12972,7 +12975,7 @@ pub struct Drones {
     /// probes; the other consumers are not instrumented yet (open in the report).
     pub los_probes: u16,
     /// `Drone_SM_InitObject` 0x175838's running serial counter — the game's `DAT_00299090 + 0x280`
-    /// halfword at 0x299310 [M disasm 0x175858/0x175874: `lhu $v0, 0x280($a3)` / `sh $v0, 0x280($a3)`
+    /// halfword at 0x299090 (0x298e10 + 0x280) [M disasm 0x175858/0x175874: `lhu $v0, 0x280($a3)` / `sh $v0, 0x280($a3)`
     /// with a3 = 0x2a0000-0x71f0], zeroed by `Drone_LevelReset` 0x13a5a8 [M disasm 0x13a614:
     /// `sh $zero, 0x280($s0)`] and incremented once per `Drone_SM_InitObject` call with a non-null
     /// object [M 0x175840's `beqz $t1` early-out skips the increment]. The serial stored at
@@ -14053,7 +14056,7 @@ impl Drones {
         }
         // THE +0x108 SERIALS [M Drone_SM_InitObject 0x175838 — see the `sm_serial` field]: the
         // level load's `NDrone2_PostLoad_Init` walk [M Drone_PostLoad_Init 0x136b80-0x136ba8 —
-        // the list at 0x299094 head, `LList_Add` append order = the creation order] numbers the
+        // the list at 0x298e14 head, `LList_Add` append order = the creation order] numbers the
         // drones the level CREATES, in list order. The spawner templates have no object until
         // their spawn (drone.md; the port's own block above) — they take the later serials at
         // spawn [M DroneSpawner_SpawnDrone 0x137e04 → PostLoad_Init], as do the NIS
@@ -22453,6 +22456,12 @@ mod tests {
         let mut last4 = 0u32;
         dr4.powerstation_talk(0x0700_000c, &ch4, &mut last4);
         assert!(dr4.talks.is_empty(), "switch_channels[0x98] gates the chatter [M 0x13e770:39-41]");
+    }
+
+    /// `DroneAnim_SetWalkIdleAnim` adds 1 to the serial before the %3 [M disasm 0x13ccd0].
+    #[test]
+    fn walk_variant_adds_one_to_the_serial() {
+        assert_eq!([1, 2, 3].map(Drone::walk_variant), [0x39, 0x37, 0x38]);
     }
 
     /// The +0x108 serial's parity arms (guard-alt-voice-set): HitTalkExtra's 0x133|0x138 [M

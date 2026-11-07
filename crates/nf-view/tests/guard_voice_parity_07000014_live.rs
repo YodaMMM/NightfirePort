@@ -1,7 +1,7 @@
 //! guard-alt-voice-set: the +0x108 serial parity pinned through real play on 07000014.
 //!
 //! `Drone_SM_InitObject` 0x175838 stores a running serial at SMI+0x108 — the counter
-//! [M disasm 0x175858/0x175874: the halfword at 0x299310, `lhu`/`sh`, incremented per call with
+//! [M disasm 0x175858/0x175874: the halfword at 0x299090, `lhu`/`sh`, incremented per call with
 //! a non-null object] + 1 [M 0x175878: `sw $a2, 0x108($v1)` with a2 = counter + 1] — and six
 //! talk sites read its low bit to pick a second line set [M NDrone2_HitTalkExtra 0x13ed38 disasm
 //! 0x13ee5c-0x13ee6c, NDrone2_AttackTalk 0x13eac0's type-7 arm disasm 0x13ecb4-0x13ecc4,

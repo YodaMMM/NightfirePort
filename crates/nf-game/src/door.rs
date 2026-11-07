@@ -238,8 +238,8 @@ pub struct Door {
     pub f0: u32,
     /// `Bullet_CollisionHandler` 0x12ce80's object-hit pass: `obj+0xF0 & 0x60 != 0` [M the
     /// andi 0x60 at 0x12cf18] — the TRUE word (`f0`), not the placement flags stand-in this
-    /// field read before (every 07000014 door placement's word is the bare kind 0xdb, so the
-    /// stand-in read false for every door on the level).
+    /// field read before (the placement word is the bare kind 0xdb, whose 0x40 bit made the
+    /// stand-in true for every door).
     pub bullet_pass: bool,
 }
 
@@ -434,7 +434,7 @@ impl Doors {
                 f0,
                 // obj+0xF0 = glist+0x44 (no create param on the Door_Create path) [M 0x134960:11];
                 // the flight's pass rule reads its 0x60 bits [M 0x12cf18].
-                bullet_pass: p.flags & 0x60 != 0,
+                bullet_pass: f0 & 0x60 != 0,
             };
             if d.kind == 0 {
                 // `Door_SetupSwing`: the swing covers half the range, so the speed re-quantises to whole ticks
