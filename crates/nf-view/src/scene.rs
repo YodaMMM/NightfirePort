@@ -438,6 +438,9 @@ pub struct Sim {
     pub level: u32,
     /// Per character: its drone.
     pub char_drone: Vec<Option<usize>>,
+    /// The hidden pool bodies by skin: what a guard from a later spawner wave draws with while his
+    /// template's own character is still in use.
+    pub spawn_pool: Vec<(u32, Vec<usize>)>,
     /// Per character: its script stream when the character is a script object (`Scene::Character::script`).
     pub char_script: Vec<Option<(u32, u8)>>,
     /// Per character: its skin hashcode (for `characters_script_pos`'s entity lookup).
@@ -5729,7 +5732,9 @@ impl Sim {
             None
         };
         let mp_death_was_active = self.drones.death.active;
+        self.drones.spawn_bodies = Some(self.free_spawn_bodies());
         self.drones.tick(&d, &player);
+        self.bind_spawn_bodies();
         // mp-site-damage-offline: the local pipeline's site contacts land the game's way — the
         // frame's blasts first (the case-0x35 direct `MP_ApplyDamage` per blast [M 0x17c518:187]),
         // then the frame's bullet sum as ONE store (the game's `SP_GetHitDamage` chain read
@@ -6542,6 +6547,33 @@ impl Sim {
     /// hidden, `Player_WeaponFiring` 0x1a5460:88-98).
     pub fn laser_sight(&self) -> Option<(nf_game::world::V3, nf_game::world::V3, Option<(nf_game::world::V3, nf_game::world::V3)>)> {
         self.laser_sight
+    }
+
+    /// A pool body is free when no present drone draws with it.
+    fn spawn_body_free(&self, chars: &[usize]) -> bool {
+        chars.iter().all(|&c| self.char_drone.get(c).copied().flatten().map_or(true, |di| !self.drones.list[di].present))
+    }
+
+    /// The free pool bodies per skin, for the spawners' `can_body` check.
+    fn free_spawn_bodies(&self) -> Vec<(u32, u32)> {
+        let mut out: Vec<(u32, u32)> = Vec::new();
+        for (skin, chars) in &self.spawn_pool {
+            let free = self.spawn_body_free(chars) as u32;
+            match out.iter_mut().find(|e| e.0 == *skin) { Some(e) => e.1 += free, None => out.push((*skin, free)) }
+        }
+        out
+    }
+
+    /// Gives each guard a spawner added this tick a free pool body.
+    fn bind_spawn_bodies(&mut self) {
+        for idx in std::mem::take(&mut self.drones.spawn_bound) {
+            let skin = self.drones.list[idx].skin;
+            let Some(k) = (0..self.spawn_pool.len()).find(|&k| self.spawn_pool[k].0 == skin && self.spawn_body_free(&self.spawn_pool[k].1)) else { continue };
+            for c in self.spawn_pool[k].1.clone() {
+                if let Some(cd) = self.char_drone.get_mut(c) { *cd = Some(idx); }
+                if let Some(a) = self.char_ambient.get_mut(c) { *a = [0xff; 3]; }
+            }
+        }
     }
 
     /// Characters whose drone is present but whose animation cannot be shown (drawn in the bind pose): (character,
@@ -10529,7 +10561,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
-            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, zoom_saved: Vec::new(), zoom_aim_prev: false, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, step_foot: false, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), drone_draw_cache: (0..crate::pose_pool::MAX_SLOTS).map(|_| Default::default()).collect(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), bond_anim: nf_game::mp::body_anim::MpBodyAnim::new(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
+            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, spawn_pool: npc_pool.iter().map(|n| (n.skin, n.chars.clone())).collect(), char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, zoom_saved: Vec::new(), zoom_aim_prev: false, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, step_foot: false, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), drone_draw_cache: (0..crate::pose_pool::MAX_SLOTS).map(|_| Default::default()).collect(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), bond_anim: nf_game::mp::body_anim::MpBodyAnim::new(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [const { None }; nf_net::MAX_AGENTS],
             mp_local_slot: 0,
             mp_body_speed: [0.0; nf_net::MAX_AGENTS],

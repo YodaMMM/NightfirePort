@@ -12205,6 +12205,13 @@ pub struct Drones {
     /// The game's drone list (0x298E14, `LList_Add` appends): drones created at load in placement order, spawned ones
     /// appended — the order of the line-of-sight round robin.
     pub llist: Vec<usize>,
+    /// Each spawner template's record as it stood before its first spawn, by list index.
+    pub spawn_pristine: HashMap<usize, Drone>,
+    /// Free draw bodies per skin for guards added beside a template that is still in use (None:
+    /// no renderer, no limit). Refreshed by the view before each tick.
+    pub spawn_bodies: Option<Vec<(u32, u32)>>,
+    /// Guards added this tick that need a draw body.
+    pub spawn_bound: Vec<usize>,
     pub rng: Rng,
     pub bullets: Vec<crate::bullet::Bullet>,
     /// Grenades in flight (`Bullet_init` with a gravity-affected weapon; WORKLOG 0080).
@@ -13112,7 +13119,7 @@ impl Drones {
             if let Some(g) = &mut dr.body_glow { g.owner = i; }
         }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, player_move_local: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), stats_table: Default::default(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, spawn_pristine: HashMap::new(), spawn_bodies: None, spawn_bound: Vec::new(), rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, player_move_local: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), stats_table: Default::default(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             // The game's `DAT_00299092` (the shared LOS-probe counter; see the field) — zeroed
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
@@ -19782,8 +19789,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
                 // fix-spawner-p7: the kill gate reads the walk-start `drawn` snapshot (obj+0xFC as of
                 // the last frame — see the snapshot above), plus the level id for the cleanup's split.
+                // A template's spot is its record's [M 0x137cb0: `piVar10 + 8`], not where an
+                // earlier guard made from it ended up.
+                let pristine = &self.spawn_pristine;
+                let spot = |i: usize| pristine.get(&i).map_or(list[i].pos, |p| p.pos);
+                let bodies = &self.spawn_bodies;
                 let action = self.spawners[index].update(&mut self.channels, frame, d.level,
-                    |i| list[i].present, |i| drawn_prev[i],
+                    // The alive scan [M 0x137e68:96-124]: a slot holds a guard while his health is
+                    // above zero and neither +0x4F8 0x200 (`NDrone2_SetAsDead`) nor 0x400 (the
+                    // pending death) is set: a corpse frees the slot at once, it does not wait for
+                    // the fade.
+                    |i| list[i].present && !list[i].corpse && list[i].health > 0.0, |i| drawn_prev[i],
                     // Pre-selection usability: the spot at least `min_dist` from the player — the
                     // game's compare is `Vec_SqDist3D(player+0x30, spot) >= min*min` [M 0x137cb0:28-31:
                     // `Vec_SqDist3D` is the 3-D squared distance, usable templates are skipped without
@@ -19792,17 +19808,47 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // away in x/z for the whole descent, so the screen rejected every template forever
                     // (level-4a-every-objective probe: armed on ch 0x17, d 7.6-7.7, rays blocked, no
                     // spawn); in 3-D the descending rider leaves the sphere and the garrison releases.
-                    |i, min| { let q = list[i].pos; let dd = ((q[0] - player.pos[0]).powi(2) + (q[1] - player.pos[1]).powi(2) + (q[2] - player.pos[2]).powi(2)).sqrt();
+                    |i, min| { let q = spot(i); let dd = ((q[0] - player.pos[0]).powi(2) + (q[1] - player.pos[1]).powi(2) + (q[2] - player.pos[2]).powi(2)).sqrt();
                         dd >= min },
                     // Post-selection abort: the picked spot visible to Bond fails the attempt
                     // [M 0x137cb0:43 — the slot persists and retries next tick]. The game's test is
                     // `Drone_PositionVisible` (0x13a7a0), NOT the drawn gate — its ONE 0xa27 ray is the
                     // FLAT segment, so guards-0c's bullet-segment drawn rays must not feed it
                     // (guards-0c-b: they aborted every Drake spawn on 0700001b, fix_finale_live).
-                    |i| { let q = list[i].pos; drone_position_visible(player, d.world, q) },
+                    |i| { let q = spot(i); drone_position_visible(player, d.world, q) },
+                    |i| !list[i].present || bodies.as_ref().map_or(true, |b| b.iter().any(|&(s, n)| s == list[i].skin && n > 0)),
                     &mut |n| rng.rand(n));
                 match action {
-                    crate::spawners::Action::Spawn(i) => {
+                    crate::spawners::Action::Spawn(t) => {
+                        // `DroneSpawner_SpawnDrone` 0x137cb0 builds a NEW object from the template
+                        // record each time [M `NDrone2_CreateObj` + the 0xC0-byte record copy], and
+                        // the record survives: a later wave reuses it whether or not the earlier
+                        // guard from it is still standing or lying there. The port's list entry is
+                        // both record and object, so the first spawn snapshots the record; a later
+                        // one restores it in place, or adds a guard when the entry is still in use.
+                        let i = match self.spawn_pristine.get(&t) {
+                            None => { self.spawn_pristine.insert(t, self.list[t].clone()); t }
+                            Some(rec) if !self.list[t].present => {
+                                self.list[t] = rec.clone();
+                                self.llist.retain(|&k| k != t);
+                                t
+                            }
+                            Some(rec) => {
+                                let mut dr = rec.clone();
+                                let idx = self.list.len();
+                                dr.index = idx;
+                                dr.sm_id = idx as u32;
+                                if let Some(g) = &mut dr.body_glow { g.owner = idx; }
+                                self.list.push(dr);
+                                self.spawn_bound.push(idx);
+                                if let Some(b) = &mut self.spawn_bodies {
+                                    let skin = self.list[idx].skin;
+                                    if let Some(e) = b.iter_mut().find(|e| e.0 == skin) { e.1 = e.1.saturating_sub(1); }
+                                }
+                                if let Some(last) = self.spawners[index].spawned.last_mut() { *last = idx; }
+                                idx
+                            }
+                        };
                         let dr = &mut self.list[i];
                         // sniper-spawn-stats-2: `DroneSpawner_SpawnDrone` 0x137cb0 re-runs the
                         // full drone init — `behaviour_util_get` 0x1c7a98 writes the template's stats
