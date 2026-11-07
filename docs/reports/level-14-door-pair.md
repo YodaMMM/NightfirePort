@@ -93,6 +93,20 @@ game's own chain.** Proven end to end:
    crates/nf-game/src/nav.rs `astar`]) — that model difference is real but its behavioural
    consequence on THIS chain could not be proven from the decompile alone.
 
+## ntfy failed
+
+All three fallbacks were tried in order and all failed:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-14-door-pair: done — …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'level-14-door-pair: done …', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>` (the first attempt with a
+   non-ASCII body failed with `SyntaxError: bytes can only contain ASCII literal characters`; the retry
+   with an ASCII body produced the URLError above)
+3. `wget -q -O- --post-data "level-14-door-pair: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output within 30 s; the command was killed by the tool timeout (`Command timed out after 30.0
+   seconds and was killed`).
+
 ## Usage
 
 not visible to me (this environment shows no token, credit, context-window or cost figures for
