@@ -1429,8 +1429,19 @@ fn walk_the_castle_all_objectives_real_health_agent() {
 /// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 01-04 group]; the min-difficulty
 /// placements pass Drone_Create's gate [M 0x136be0:49] and the captain criterion reads prop 8
 /// [M 0x14b300:504-535]. Real input only — the load path is the only difference.
+///
+/// GREEN (real-health-00agent-02-6, 22463 ticks, 78.0 health at the bunker door, no falls).
+/// The sniper ledger this walk now pins: the lip lottery stand is a measured dead end (aim Some
+/// at 21 u, 25 rifle rounds, zero hits — the 0x12's tap spread is 21 [M Bullet_init 0x12c5a0
+/// :139-170: the 16 base + the 5 bloom, no 0x400000 record] = ±0.62 u, and the wall eats every
+/// round off the slit's sliver); the answer is the ≤12-u band with the 0x1c's 8-pellet taps
+/// (one shell at 13.3 u killed the 12-hp sniper [L the run-3 trace]) — the leg's own
+/// engage_in_view lands it once the lip fight is suppressed (`dmg.cooldown` until the door leg)
+/// and the shells ride from the stair-bottom scoop (the descent fights burn the 0x12, not the
+/// shells [L the run-2 trace]); the 8.0 stand-off ring REGRESSED the pool (55.2 vs 78.0 at the
+/// stair top [L the run-2 trace]) and stays at 6.0; the bunker rearm after the band stand arms
+/// the 0x12 (47 rounds) for the ch-0x81 ambush.
 #[test]
-#[ignore = "00 Agent: still red at the courtyard sniper, one death past the 03-04 one — ledger on s/real-health-00agent-02-5: the geisha-1 stand-off is WON (the corridor-drop resupply before the plate + the kill-gated resupply; 78.0 health into the room, captors killed on the scooped 0x1c, the touch zone raised, the courtyard fights drones 10/11 taken at zero cost); the NEW death is the courtyard sniper #9 (0x1e, 12 hp [D placement], post (−52.0, 6.3, −14.8)): he acquires Bond at the stair bottom, shot 1 −48.0 lands +335..+557 after the bottom arrival wherever Bond is (the lip, 1-3 u into the lane — the crossing cannot outrun it), shot 2 is lethal at 30.0 health, and the walker's return fire answered with the 7 in-hand rifle rounds and missed (the plain stand's hip cone at 15-18 u [L the run-7 trace]; the aim raise does not zero a non-0x400000 record [M Bullet_init 0x12c5a0:139-170]). The next lever: kill him from the lane mouth BEFORE shot 2 (the aimed lane-mouth duel now runs after the crossing — its first live chance is this tree) or close to the ≤12-u band before answering, or keep 88.8 to the lane (the stand-off k=1's 10.8 is the pool hole; 48+30 leaves 10.8 alive)"]
 fn walk_the_castle_all_objectives_real_health_00agent() {
     walk_the_castle_all_objectives_real_health_at(3);
 }
