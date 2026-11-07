@@ -85,7 +85,6 @@ release) is ported; the missing piece is purely the visible rope.
 | 0x190bb0 | Player_HandleDeath | ported | `nf-game/src/death.rs:216` (`Drones::death_tick`) — the per-dead-tick block :244-260 (blood pane, 448-tick cover, ✕ skip, ch 0x62 once) |
 | 0x190d88 | Player_StandAtNewPosition | ported | `nf-game/src/player.rs:627` (`Bond::stand_at`) — the floor ray + 1.1 placement; the aim-ease tail (:122) not modeled |
 | 0x190fd0 | Player_Start | ported | `nf-game/src/player.rs:2392` (`pick_start`) — the two-pass kind-1 gate scan verbatim; consumed at load_impl (nf-view lib.rs:1554) |
-| 0x1910f8 | Player_Init | ported | `nf-view/src/lib.rs:1557` (`load_impl`) — stand_at, settle, WldGravity p3==2, substate 8/4 + crouch drop; loadout via `init_level_loadout` (player.rs:2468) |
 | 0x1916b0 | Player_HandleJump | ported | `nf-game/src/player.rs:1689` (`physics_tick` jump block) — crouch toggle, context-3 wire grab, launch vel + 0xA3 (:1727-1732); the landing arm :2094-2107 |
 | 0x191a70 | Player_MonitorAir | ported | `nf-game/src/player.rs:1600` (`Bond::monitor_air`) — air drain/refill, underwater fade, drown damage each 30 ticks; the HUD air pane/breath loop not ported |
 | 0x191dd0 | Player_Move | ported | `nf-game/src/player.rs:1668` (`physics_tick` ease lanes) — target lanes, 0.2 ease, ±0.1 clamp, dead-zone, multiplier k; the swim look-dir add in swim_tick |
@@ -115,7 +114,6 @@ release) is ported; the missing piece is purely the visible rope.
 | 0x195da0 | Player_SetGrapplePoint | ported | `nf-view/src/scene.rs:3226` (`Sim::step_bond`) — the latch: point, phase 1, pull 0, ChangeSubState(2); the remote arm scene.rs:14116 |
 | 0x195e08 | Player_ClearInertia | ported | `nf-game/src/player.rs:1168` (`Bond::clear_inertia`) — zeroes vel/local/push_fwd (the +0x10/+0x20/+0x30/+0x40 triples) |
 | 0x195e50 | Player_InWater | ported | `nf-game/src/player.rs:1574` (`Bond::enter_water`) — the swim entry arm: ChangeSubState(3), deltas cleared, regrab 5; the MP skip and the +0x100 flag not modeled |
-| 0x195f70 | Player_Disable | ported | `nf-view/src/scene.rs:3797` (`Sim::step_bond`) — Request::PlayerDisable → self.disabled + timer-pause + goggles clear; obj+0xF0 bit's later life not ported |
 | 0x195fc8 | Player_Cam2Mode | ported | `nf-view/src/scene.rs:3823` (`Sim::step_bond`) — Request::Cam2Mode: mode 3 → cam_mode 2; else cam_mode 0 + ChangeSubState(0) |
 | 0x196040 | Player_SetFlashBang | ported | `nf-game/src/drone.rs:21478` (`Drones::tick`) — the flash writes BL+0x963/0x918/0x91C as flash_alpha/flashbang/flash_total; the Apocalypse re-call world_fx.rs:859 |
 | 0x196060 | Player_Hurt | ported | `nf-game/src/drone.rs:14327` (`Drones::spawn_blast`) — blast → PropagateHits.player → pain_generic (HandlePain type 0) at 14416; the MP blast route mp_hurt/combat.rs:193 |
@@ -127,9 +125,7 @@ release) is ported; the missing piece is purely the visible rope.
 | 0x1969d0 | Player_Creep | ported | `nf-game/src/player.rs:1454` (`Bond::creep_tick`) — the crawl tick: snap 0.275, end exits with push-out; the anim-root motion replaced by constant speed (documented) |
 | 0x197130 | Player_CollWire | ported | `nf-game/src/player.rs:1203` (`Bond::grab_wire`) — the grab guards, the closest point, substate 6/0xF, yaw ±π/2, hang offsets, the hand-reach correction |
 | 0x197658 | Player_Wire | ported | `nf-game/src/player.rs:1310` (`Bond::wire_tick`) — hand-over-hand: the travel segment, the auto-drop, the drop/strafe mode bytes, exits |
-| 0x197f50 | Player_Zipline | ported | `nf-game/src/player.rs:1523` (`Bond::zipline_tick`) — the ride: fall += 0.15/tick, the line projection, the lower-end arrival mode 9; unreachable in the shipped game, ported for the dispatch's sake |
 | 0x1a16c0 | Player_WeaponHasAmmo | ported | `nf-game/src/gun.rs:155` (`Gun::has_ammo`) — the 0x45 grenade-belt test, carried/clip/ammo_type-0 arms; the 0x20000 ground scan documented STANDIN |
-| 0x1a17f8 | Player_InitAmmoWeapons | ported | `nf-game/src/player.rs:2406` (`init_ammo_weapons`) — the boot arm: carried/clip/owned zeroed; the SQRT(+0x88) zoom lives in gun.rs:375; the ammo-cheat arm not ported |
 | 0x1a18e0 | Player_RoundToFire | ported | `nf-game/src/gun.rs:529` (`Gun::update_with`) — the ammo_type-0 free arm, the clip check + the raw +0x91 spend (ammo_per_shot, gun.rs:430); the fire-rate cheat not ported |
 | 0x1a1988 | Player_ReloadAmmoType | ported | `nf-game/src/gun.rs:220` (`Gun::reload_tick`) — rounds-move at case 6 (min(spare, clip−size), one-at-a-time); the twin clip-slot pick `Sim::clip_slot` scene.rs:4100 |
 | 0x1a1a70 | Player_Zoom | ported | `nf-game/src/gun.rs:350` (`zoom_tick`) — the ×1.025 axis ramp, the ×1.15 idle ease, the [1,min(max,50)] clamp, remembered zoom; wired at scene.rs:3787 |
@@ -149,9 +145,7 @@ release) is ported; the missing piece is purely the visible rope.
 | 0x1a65d8 | Player_LaserPointer | ported | `nf-game/src/gadget.rs:140` (`gadget::laser_tick`) — the watch beam endpoints (scene.rs:5170); the SG5 sight-dot block scene.rs:5877-5891 |
 | 0x1a69d0 | Player_SetWatch | ported | `nf-game/src/watch.rs:50` (`watch::hand_angle`) — the clock data + hand rates; the mesh attach scene.rs:8740; the per-tick pose scene.rs:11579 |
 | 0x1a6eb0 | Player_IsBetterWeapon | ported | `nf-game/src/pickup.rs:537` (`Inventory::is_better_weapon`) — the gadget guard + the BestWeapon ranking, drives the pickup auto-switch |
-| 0x1a6f80 | Player_WeaponChange | ported | `nf-game/src/gun.rs:85` (`Gun::cycle`) — the cycle bounds + twin step; toggle_back gun.rs:120; wired scene.rs:3127 writing +0x63 |
 | 0x1a7c98 | Player_AutoAim | ported | `nf-game/src/drone.rs:15996` (`Drones::auto_aim`) — the target scan, the Q-Claw grapple arm, the lock-on ×1.4, the difficulty muls |
-| 0x1a7ef8 | Player_InitWeapon | ported | `nf-game/src/player.rs:2468` (`init_level_loadout`) — the per-level loadout switch, the RamLoad cases, the common equip tail |
 | 0x1a8a58 | Player_EquipWeapon | ported | `nf-game/src/pickup.rs:456` (`Inventory::equip_weapon`) — the loaded gate, the base-slot owned, the clip fill/carry, the cap clamp |
 | 0x1a8d18 | Player_EquipAmmo | ported | `nf-game/src/pickup.rs:477` (`Inventory::equip_ammo`) — the 0x10 empty-clip fill, the cap clamp; the id remap upgrade_ammo_id (pickup.rs:553) |
 | 0x1a9148 | Player_AmmoIndex | ported | `nf-game/src/gun.rs:178` (`Gun::ammo_in_gun_slot`) — the same twin/base+ammo-type predicate; also `Inventory::clip_slot` (pickup.rs:448) |
