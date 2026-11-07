@@ -260,7 +260,7 @@ mod tests {
         let mut moduli: Vec<u32> = Vec::new();
         let a = s.update(&mut Channels::default(), 0, 0, |_| false, |_| false, |_, _| true, |_| false, |_| true,
             &mut |n| { moduli.push(n); 3 });
-        assert_eq!(moduli, vec![4], "the draw modulus is the whole template list, not the usable count [M 0x137cb0:21]");
+        assert_eq!(moduli, vec![4; 4], "each empty slot makes its own attempt, every draw over the whole template list, not the usable count [M 0x137cb0:21, 0x137e68:212-232]");
         assert_eq!(a, Action::None, "rank 3 of 2 usable → nothing spawns this call [M 0x137cb0:88-96]");
     }
 

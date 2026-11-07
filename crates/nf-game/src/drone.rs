@@ -1923,6 +1923,27 @@ pub struct Drone {
 }
 
 /// Normalise a vector (the grenade throw direction helper).
+/// `NF_AILOG`, read once: the AI trace sites sit on per-guard, per-tick paths.
+fn ailog() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var_os("NF_AILOG").is_some())
+}
+
+/// `NDrone2_DefaultInit`'s level overrides of `+0xF0` engage and `+0xFC` combat range
+/// [M 0x14b300 LAB_0014bb44], taken after the param-14 switch on the load and the spawn path alike.
+/// 07000011: anim set 9 → 5.0 / 8.0, else 6.0 / 9.0 (the decomp's `(u < 4) || (u < 7) || (u != 9)`
+/// reduces to `u != 9`). 07000014: set 5 keeps the switch values, 9 → 7.0, others 10.0; `+0xFC` kept.
+fn level_engage_override(level: u32, anim_set: u16, f0: f32, fc: f32) -> (f32, f32) {
+    match level {
+        0x0700_0011 if anim_set == 9 => (5.0, 8.0),
+        0x0700_0011 => (6.0, 9.0),
+        0x0700_0014 if anim_set == 5 => (f0, fc),
+        0x0700_0014 if anim_set == 9 => (7.0, fc),
+        0x0700_0014 => (10.0, fc),
+        _ => (f0, fc),
+    }
+}
+
 fn norm(v: V3) -> V3 { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt(); if l > 0.0 { [v[0] / l, v[1] / l, v[2] / l] } else { v } }
 
 /// Rodrigues' rotation about the unit `axis` by `ang` radians, as a 4×4 (the pose rotations of
@@ -2004,6 +2025,7 @@ impl Drone {
             3 => (40.0, 25.0, 6.0, 100.0), 4 => (1000.0, 75.0, 8.0, 1000.0), 5 => (0.0, 12.0, 4.0, 1.0), _ => (24.0, 12.0, 4.0, 1.0) };
         let f0 = f0_base + rng.frand(f0_rand);
         let fc = match param(14) { 3 => fc_add + rng.frand(6.0), 4 => 1000.0, _ => f0 + fc_add + rng.frand(f0_rand) };
+        let (f0, fc) = level_engage_override(d.level, anim_set, f0, fc);
         let clip = match weapon { 0x16 | 0x18..=0x1b => 0x40, 0x1e | 0x1f | 0x24 | 0x25 => 5, _ => 0x40 };
         // `NDrone2_DefaultInit` (0x14b300 lines 348-376): `+0xBCC` and `+0xBCE` come from **param 11** —
         // `uVar4 = piVar19[0x18]`, and params start at `piVar19[13]` (`Drone_Create` 0x136be0 copies
@@ -4134,7 +4156,7 @@ impl Drone {
     /// then speaks 1 in 3; type 1 0x33 + Rand(4) at 1 in 2 (0xA3 + Rand(8) always on 0x11 / 0x0B / 0x13); type 3 0xAC +
     /// Rand(7). The level-gated sets [M 0x13eac0:73-96]: type 5/6 on the powerhouse pair {0x0700000c,
     /// 0x0700000d} (`+ 0xf8fffff4 < 2` unsigned) speak 0xd3 + Rand(3) only inside the 3–4 s post-LOS
-    /// window (`FRAME_RATE_INT*3 < +0x274 < FRAME_RATE_INT*4`, 60 Hz → 180 < seen_ticks < 240, both
+    /// window (`FRAME_RATE_INT*3 < +0x274 < FRAME_RATE_INT*4`, 60 Hz → 180 < unseen_ticks < 240, both
     /// strict — outside it the arm draws nothing); type 7 on the evil-base trio {0x14, 0x15, 0x16}
     /// speaks 0x11b + Rand(7) (one Rand(7) feeds either base — the `+0x108 & 1` alternate 0x122 set
     /// stays unported: no port reader for that bit, the hit_talk_extra precedent); type 0x11 on the
@@ -4155,23 +4177,15 @@ impl Drone {
             // case 0x11 [M 0x13eac0:92-96]: the party level's type-0x11 guards — 0x93 + Rand(2)
             // spoken 1 in 3. Shipped: walkreal_07000007_live stays 6/6 with the arm in.
             0x11 if level == 0x0700_0007 => (3, 0x93 + rng.rand(2) as usize),
-            // cases 5/6 [M 0x13eac0:73-80] and 7 [M 0x13eac0:82-90] — the powerhouse pair
-            // ({0x0700000c, 0x0700000d}: 0xd3 + Rand(3) inside the strict 3–4 s post-LOS window
-            // `FRAME_RATE_INT*3 < DCVars+0x274 < FRAME_RATE_INT*4`, 60 Hz → 180 < t < 240) and
-            // the evil-base trio ({0x14, 0x15, 0x16}: 0x11b + Rand(7), one draw feeding either
-            // base, the `+0x108 & 1` alternate 0x122 set readerless) — are DELIBERATELY NOT
-            // ported yet: the straightforward arms shift those levels' RNG streams and kill the
-            // pinned real-health walks (bisected 2026-11-06: with 5/6 in, walkreal_0700000d_live
-            // dies — drone #16 lands 6 hits for 70.0, Bond dead at tick 5294; with 7 in,
-            // walkreal_07000015_live and walkreal_07000016_live each turn red 1 leg while their
-            // baselines are green; walkreal_07000014_live survived). The old port UNDER-drew —
-            // the game draws on every type-7 attack entry on the trio and on in-window type-5/6
-            // entries on the pair — so the pinned walks were tuned to streams the real game
-            // never produces; the new stream is only provably game-correct once the port's
-            // seen_ticks/attack-entry sequence is verified against the game's +0x274 at these
-            // sites, which needs the main agent's PCSX2 (live checks in
-            // docs/reports/level-gates-world.md). A failing gate falls out with iVar3 == 0 and
-            // draws nothing [M 0x13eac0:98-100] — the deferred arms stay silent.
+            // cases 5/6 [M 0x13eac0:73-80]: the powerhouse pair, inside the window on `+0x274`,
+            // which is the UNSEEN counter [M 0x176a28:198-201 counts it up out of sight, :221
+            // zeroes it]: `FRAME_RATE_INT*3 < +0x274 < FRAME_RATE_INT*4`, both strict.
+            5 | 6 if matches!(level, 0x0700_000c | 0x0700_000d) && self.unseen_ticks > 180 && self.unseen_ticks < 240
+                => (0, 0xd3 + rng.rand(3) as usize),
+            // case 7 [M 0x13eac0:82-90]: the evil-base trio. One Rand(7) feeds either base; the
+            // `+0x108 & 1` alternate 0x122 base needs the game's serial, which `sm_id` is not.
+            7 if matches!(level, 0x0700_0014 | 0x0700_0015 | 0x0700_0016) => (0, 0x11b + rng.rand(7) as usize),
+            // A failing gate leaves iVar3 == 0 and the tail returns without a draw [M 0x13eac0:98-100].
             _ => return,
         };
         if odds == 0 || rng.rand(odds) == 0 { self.talks.push((idx, false)); }
@@ -5654,7 +5668,7 @@ impl Drone {
         // guard in AimStandFire 0x68 never fled a grenade. (0x2d is the throw itself — GRENADE_THROW.)
         if matches!(self.state, 0x28 | 0x2d | 0x4a | 0x4b | 0x53..=0x55 | 0x63 | 0x86..=0x88) { return; }
         if self.scared { return; }
-        if std::env::var_os("NF_AILOG").is_some() {
+        if ailog() {
             eprintln!("[ailog] drone {} (placement {}) skin {:#x} state {:#x} flees explosive at {:?} run {run_dist:.1} ret {ret:#x} deadline {deadline}",
                 self.index, self.placement, self.skin, self.state, pos);
         }
@@ -7162,7 +7176,7 @@ impl Drone {
 
     pub fn set_state(&mut self, s: u8) {
         if s != 0 {
-            if std::env::var_os("NF_AILOG").is_some() {
+            if ailog() {
                 eprintln!("[ailog] guard {} state {:#x} -> {:#x}", self.index, self.state, s);
             }
             self.next_state = Some(s);
@@ -7668,7 +7682,7 @@ impl Drone {
                 // 0x15ba68 case 5 [M :128/:135/:153]; the port's start_script zeroes at the same
                 // message, the PLAY_SCRIPT msg::ANIM_DONE arm).
                 if self.start_script == 0x6000_168 || self.start_script == 0x6000_169 || self.start_script == 0x6000_7ac {
-                    if std::env::var_os("NF_AILOG").is_some() {
+                    if ailog() {
                         eprintln!("[ailog] guard {} PlayScript SOUND: script {:#x} holds +0x4F8 0x400000 — deaf to gunfire [M 0x177800:19-21]", self.index, self.start_script);
                     }
                     return true;
@@ -7678,7 +7692,7 @@ impl Drone {
                 // them) takes the HeardNoise branch (0xa2 when share > 0.2 or alert > 0.66). The
                 // level-0x0700000c/0xd skin-kind-5/6 shortcut of 0x177800:24-33 is level-specific
                 // and unmodelled here.
-                if std::env::var_os("NF_AILOG").is_some() {
+                if ailog() {
                     eprintln!("[ailog] guard {} PlayScript SOUND: mode {:#x} alert {:.2} dist {:.1} share {:.2} prop1f {} script {:#x}",
                         self.index, self.mode, self.alert, self.dist, self.sound_share, self.prop(d, 0x1f), self.start_script);
                 }
@@ -7710,7 +7724,7 @@ impl Drone {
                 // arm (alertness = 1.0 → BOT_reactToDroneAlertMsg → 0xcf) is the MP bot path, not
                 // ported here. The rest → Attack, with the same save-return-state/home first step
                 // the idle states' ALARM arm runs.
-                if std::env::var_os("NF_AILOG").is_some() {
+                if ailog() {
                     eprintln!("[ailog] guard {} PlayScript ALARM: mode {:#x} alert {:.2} script {:#x}",
                         self.index, self.mode, self.alert, self.start_script);
                 }
@@ -8500,7 +8514,7 @@ impl Drone {
                 if self.dist <= 4.0 && self.can_backoff(d) { self.set_state(AIM_BACKOFF); return true; }
                 if self.unseen_ticks >= 16 { self.set_state(COMBAT_NO_SIGHT); return true; }
                 if self.firing && !self.burst_done {
-                    if std::env::var_os("NF_AILOG").is_some() && self.grenade_count > 0 {
+                    if ailog() && self.grenade_count > 0 {
                         eprintln!("[ailog] guard {} AIM_STAND_FIRE UPDATE: firing={} burst_done={} -- combat_state skipped (mid-burst)",
                             self.index, self.firing, self.burst_done);
                     }
@@ -9605,7 +9619,7 @@ impl Drone {
                 // `behaviour_util_getProperty` 0x1c7d98 — the port's `prop`] — without it the cower
                 // arm is dead in the game, so the port gates the enter on the same bit.
                 if self.prop(d, 0x50) && self.armed_peer_dist <= 10.0 {
-                    if std::env::var_os("NF_AILOG").is_some() { eprintln!("[ailog] escort {} → LeadHide (peer {:.1})", self.index, self.armed_peer_dist); }
+                    if ailog() { eprintln!("[ailog] escort {} → LeadHide (peer {:.1})", self.index, self.armed_peer_dist); }
                     self.lead_take_cover(d);
                     return true;
                 }
@@ -9638,7 +9652,7 @@ impl Drone {
                 let pd = self.object_mission_path_distance(d, 5.0, self.player_pos);
                 self.mission_path_dist = pd;
                 if pd < -9.0 || (pd == 0.0 && crate::nav::dist2d(self.pos, self.player_pos) >= 5.0) {
-                    if std::env::var_os("NF_AILOG").is_some() { eprintln!("[ailog] escort {} → LeadWait (path {pd:.1})", self.index); }
+                    if ailog() { eprintln!("[ailog] escort {} → LeadWait (path {pd:.1})", self.index); }
                     self.set_state(ALLY_LEAD_WAIT);
                 }
                 true
@@ -10590,13 +10604,13 @@ impl Drone {
             // [M :52-83] `+0x4fc & 0x20` set → 0, else Attack 0x56 (the `+0x4f8 & 0x800` gate is
             // not modelled — no port reader).
             if self.opp_drone.is_none() {
-                if std::env::var_os("NF_AILOG").is_some() {
+                if ailog() {
                     eprintln!("[ailog] guard {} look_for_opponent: team 2 — no drone opponent", self.index);
                 }
                 return None;
             }
             let go = self.opp_los && self.seen && self.prop(d, 0x3c) && self.obj_armed() && self.alert_bits & 0x20 == 0;
-            if std::env::var_os("NF_AILOG").is_some() {
+            if ailog() {
                 eprintln!("[ailog] guard {} look_for_opponent: team 2 opp {:?} los {} seen {} -> {}",
                     self.index, self.opp_drone, self.opp_los, self.seen, if go { "ATTACK" } else { "none" });
             }
@@ -10606,20 +10620,20 @@ impl Drone {
         // [M 0x177ed0:29-38] team 3 (civilian) refusal; the 0x07000009/0x0700000a exception is
         // not ported (existing gap, unchanged).
         if self.team == 3 {
-            if std::env::var_os("NF_AILOG").is_some() {
+            if ailog() {
                 eprintln!("[ailog] guard {} look_for_opponent: team {} — no player opponent", self.index, self.team);
             }
             return None;
         }
         // [M 0x177ed0:12-14] the PlayScript full-alert gate: `if (SM state == 3 && 1.0 <= +0x50c) return 0`.
         if self.state == state::PLAY_SCRIPT && self.alert >= 1.0 {
-            if std::env::var_os("NF_AILOG").is_some() {
+            if ailog() {
                 eprintln!("[ailog] guard {} look_for_opponent: state 3 at alert {:.2} — the script is not interrupted [M 0x177ed0:12-14]", self.index, self.alert);
             }
             return None;
         }
         let go = self.seen && self.prop(d, 0x3c) && (self.alert >= 0.66 || self.prop(d, 0x51));
-        if { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var_os("NF_AILOG").is_some()) } {
+        if ailog() {
             eprintln!("[ailog] guard {} look_for_opponent: seen={} prop_3c={} alert={:.2} prop_51={} -> {}",
                 self.index, self.seen, self.prop(d, 0x3c), self.alert, self.prop(d, 0x51), if go { "ATTACK" } else { "none" });
         }
@@ -10998,7 +11012,7 @@ impl Drone {
                 self.moving_result(d, rng, mv, true)
             }
             COMBAT_NO_SIGHT => {
-                if std::env::var_os("NF_AILOG").is_some() && self.unseen_ticks % 300 == 0 {
+                if ailog() && self.unseen_ticks % 300 == 0 {
                     eprintln!("[ai:5c] guard {} mv {} routed {} oor {} remaining {:.2} seen {} unseen {} pos ({:.2},{:.2},{:.2})",
                         self.index, mv, routed, out_of_range, self.croute.as_ref().map_or(-1.0, |r| r.remaining), self.seen, self.unseen_ticks, self.pos[0], self.pos[1], self.pos[2]);
                 }
@@ -11031,7 +11045,7 @@ impl Drone {
                 // and its class-only gate let a class-2 danim that is NOT AIM_STAND roll (and throw)
                 // where the game's anim-id half of the gate refuses.
                 let aim_stand = self.anim.class == 2 && self.anim.state == anim_state::AIM_STAND;
-                if std::env::var_os("NF_AILOG").is_some() && self.grenade_count > 0 {
+                if ailog() && self.grenade_count > 0 {
                     eprintln!("[ai:gate] guard {} AIM_STAND_FIRE gate: anim={}.{} aim_stand {} dist {:.1} unseen {} cover {} clip {} grenades {}x{:#x}",
                         self.index, self.anim.class, self.anim.state, aim_stand, self.dist, self.unseen_ticks, cover, self.clip, self.grenade_count, self.grenade_weapon);
                 }
@@ -11049,7 +11063,7 @@ impl Drone {
                 let cover = self.cover_available(d, true);
                 if cover { return RUN_FOR_COVER; }
                 let can_throw = self.grenade_count > 0 && self.dist >= 8.0 && self.dist <= 20.0;
-                if std::env::var_os("NF_AILOG").is_some() && can_throw {
+                if ailog() && can_throw {
                     let roll = { let mut r = rng.clone(); r.rand(2) };
                     eprintln!("[ailog] guard {} AIM_CROUCH_FIRE: dist {:.1} cover={} grenades={} gw={:#x} anim.class={} can_do_0x49={} rng_roll={}",
                         self.index, self.dist, cover, self.grenade_count, self.grenade_weapon, self.anim.class, self.can_do(d, anim_state::GRENADE_THROW), roll);
@@ -11235,7 +11249,7 @@ impl Drone {
     /// an opponent exists, `8.0 ≤ dist ≤ 20.0`, and the throw anim (0x49) is in the drone's anim set.
     /// `NF_AILOG` logs every evaluation's inputs.
     pub fn can_throw_grenade(&self, d: &Data, rng: &mut Rng) -> bool {
-        let log = std::env::var_os("NF_AILOG").is_some();
+        let log = ailog();
         if self.grenade_weapon == 0 || self.grenade_count <= 0 {
             if log { eprintln!("[ai:ctg] guard {} weapon={} count={} -> none", self.index, self.grenade_weapon, self.grenade_count); }
             return false;
@@ -11665,6 +11679,17 @@ impl Drone {
         // bits and full alertness. [L] 07000005 start: Bond stands in a 0.25 shadow volume (WORKLOG 0032).
         if !(self.alert_bits != 0 && self.alert >= 1.0) && self.light != 1.0 { vis *= self.light; }
         vis.max(0.0)
+    }
+
+    /// `DroneVision_ObjectVisibility` 0x1781a8, which answers 0 or 1: under 2 units always; over 50
+    /// never; else inside the half-FOV `+0xE4` (0 skips the cone) of the heading and within `+0xE8`.
+    pub fn object_in_view(&self, p: V3) -> bool {
+        let v = [p[0] - self.pos[0], p[1] - self.pos[1], p[2] - self.pos[2]];
+        let dist = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if dist < 2.0 { return true; }
+        if dist > 50.0 { return false; }
+        if self.half_fov != 0.0 && self.half_fov - angle_difference(self.yaw, atan2_approx(v[0], v[2])).abs() < 0.0 { return false; }
+        dist <= self.sight_range
     }
 
     /// `DroneFunc_ReactionTime` (ticks).
@@ -15351,7 +15376,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // the mine: the guard arm demands the strict t.
                     if tw.is_none_or(|ts| t <= ts) && gadget_t.is_none_or(|gt| t < gt)
                         && best.is_none_or(|(_, _, dt)| t <= dt) {
-                        if std::env::var_os("NF_AILOG").is_some() {
+                        if ailog() {
                             eprintln!("[ailog] player bullet → mine {} (placement {}) at frame {frame}, from {:?} dir {:?}, t {t:.3}, weapon {:#x}",
                                 i, self.mines[i].placement, b.pos, b.dir, b.weapon);
                         }
@@ -18690,7 +18715,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // 222-231 on every opponent-visible tick, NO team gate; HasOpponent
                     // 0x14ad58:11-14 honours it for every team).
                     dr.opp_have_frame = frame;
-                    if !dr.seen && { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| std::env::var_os("NF_AILOG").is_some()) } {
+                    if !dr.seen && ailog() {
                         eprintln!("[ailog] guard {} SEEN! (seen_ticks={} >= reaction_time={}, dist={:.1}, state={:#x})",
                             dr.index, dr.seen_ticks, dr.reaction_time(d.level), dr.dist, dr.state);
                     }
@@ -19990,6 +20015,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         if self.list[i].spawn_seq == 0 { self.spawn_templates.insert(i, self.list[i].clone()); }
                         else if let Some(t) = self.spawn_templates.get(&i) { self.list[i] = t.clone(); }
                         let dr = &mut self.list[i];
+                        // SpawnDrone's own stamp [M 0x137cb0:58-59]: `Rand_Rand(10000)` → obj+0xEC,
+                        // the miss-wobble phase. It comes straight after `NDrone2_CreateObj`, which
+                        // does not run DefaultInit, so it draws BEFORE the sight constants below
+                        // (`NDrone2_PostLoad_Init` 0x14d890 → DefaultInit, [M 0x137cb0:81]).
+                        // Unconditional: it is not inside the stats block's params gate.
+                        dr.wobble = rng.rand(10000);
                         // sniper-spawn-stats-2: `DroneSpawner_SpawnDrone` 0x137cb0 re-runs the
                         // full drone init — `behaviour_util_get` 0x1c7a98 writes the template's stats
                         // section into the GLOBAL `drone_stats` table (0x31aa30) and `DoModeSettingsNEW`
@@ -20041,22 +20072,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             dr.half_fov = crate::trig::HALF_PI; // `+0xE4 = π/2`, LAB_0014bb44's unconditional write [M :463]
                             dr.engage_range = f0;
                             dr.combat_range = fc;
-                            match d.level {
-                                // [M :437-447] the decomp's `(uVar9 < 4) || (uVar9 < 7) || (uVar9 != 9)`
-                                // reduces to `uVar9 != 9` (the anim set at +0xDA).
-                                0x0700_0011 => {
-                                    if dr.anim_set == 9 { dr.engage_range = 10.0; dr.combat_range = 8.0; }
-                                    else { dr.engage_range = 12.0; dr.combat_range = 9.0; }
-                                }
-                                // [M :448-461] anim set 5 keeps the switch values; 9 → 7.0; every
-                                // other set → 10.0.
-                                0x0700_0014 => {
-                                    if dr.anim_set != 5 {
-                                        dr.engage_range = if dr.anim_set == 9 { 7.0 } else { 10.0 };
-                                    }
-                                }
-                                _ => {}
-                            }
+                            (dr.engage_range, dr.combat_range) = level_engage_override(d.level, dr.anim_set, f0, fc);
                             // The spawn is a fresh Drone_Create: DefaultInit's family blocks run
                             // AFTER the DoModeSettingsNEW read — the mode-0xd ninja health 100
                             // [M 0x14b300:744-753; the port's type_setup], `captain_setup`'s
@@ -20077,12 +20093,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 dr.health = dr.max_health;
                             }
                         }
-                        // SpawnDrone's own stamp [M 0x137cb0:58-59]: `Rand_Rand(10000)` → obj+0xEC —
-                        // the spawn re-rolls the miss-wobble phase (Drone_Create's own draw is the
-                        // LOAD path's; the spawner path draws HERE, after the CreateObj init the
-                        // game's call order gives). Unconditional — it is not inside the stats
-                        // block's params gate.
-                        dr.wobble = rng.rand(10000);
                         dr.present = true; dr.enabled = true; dr.started = false;
                         // `control_add_object_to_list` prepends [M 0x134698]: a drone spawned this frame updates
                         // before every placement object from its NEXT frame on, and NOT in the frame it spawned
@@ -22011,6 +22021,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let Drones { list, rng, .. } = self;
         for dr in list.iter_mut() {
             if !dr.present || dr.corpse || !dr.enabled { continue; }
+            if dr.scared { continue; } // `+0x2B` [M 0x1435f0:18], set while the guard already flees or hides
             if !dr.prop(d, 0x3a) && !dr.prop(d, 0x3b) { continue; }
             for &(p, wt) in &live_explosives {
                 let Some((radius, run, ticks, ret)) = (match wt {
@@ -22019,10 +22030,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     _ => None,
                 }) else { continue };
                 let (dx, dy, dz) = (dr.pos[0] - p[0], dr.pos[1] - p[1], dr.pos[2] - p[2]);
-                if dx * dx + dy * dy + dz * dz > radius * radius { continue; }
+                if dx * dx + dy * dy + dz * dz >= radius * radius { continue; }
                 // The first in-radius record ends the walk pass or fail [M 0x1435f0:46 `break`]:
                 // a sight failure sends nothing this frame and does NOT look at later grenades.
-                if !d.world.line_of_sight([dr.pos[0], dr.pos[1] + 1.0, dr.pos[2]], p, crate::world::LOS_GUARD_VISION) { break; }
+                // The guard must have the object in view (`DroneVision_ObjectVisibility` >= 0.7
+                // [M 0x1435f0:37-39]; the function returns 0 or 1) and a clear ray from the head
+                // (`NDrone2_CanSeeObject` 0x1785e0).
+                if !dr.object_in_view(p) { break; }
+                if !d.world.line_of_sight(dr.head(), p, crate::world::LOS_GUARD_VISION) { break; }
                 dr.explosive_msg = Some((p, run, ret, frame + ticks));
                 dr.send(d, rng, frame, msg::EXPLOSIVE);
                 break;
@@ -22418,30 +22433,29 @@ mod tests {
     #[test]
     fn attack_talk_level_gated_sets() {
         let mut rng = Rng::new(11);
-        // case 5/6 (the powerhouse pair, 0xd3 + Rand(3) in the strict 3–4 s post-LOS window) is
-        // DEFERRED — see the attack_talk comment: the straightforward arm kills
-        // walkreal_0700000d_live's real-health leg (bisected). Sister: a type-5 guard anywhere
-        // stays silent with NO draw until the arm ships [M the C's failing case falls out with
-        // iVar3 == 0].
-        {
+        // case 5/6: the powerhouse pair, 0xd3 + Rand(3), strictly inside the +0x274 window (the
+        // unseen counter [M 0x176a28:198-221]). Sisters: each edge, and the arm off the pair.
+        for (lv, unseen, speaks) in [(0x0700_000cu32, 200u32, true), (0x0700_000d, 181, true), (0x0700_000c, 180, false),
+                                     (0x0700_000c, 240, false), (0x0700_0005, 200, false)] {
             let mut dr5 = drone_at([0.0, 0.0, 0.0]);
             dr5.voice_type = 5;
-            dr5.seen_ticks = 200;
+            dr5.unseen_ticks = unseen;
+            dr5.seen_ticks = 200; // not the window's counter
             let draws = rng.draws;
-            dr5.attack_talk(0x0700_000c, &mut rng);
-            assert!(dr5.talks.is_empty(), "the deferred 5/6 arm stays silent");
-            assert_eq!(rng.draws - draws, 0, "and draws nothing");
+            dr5.attack_talk(lv, &mut rng);
+            assert_eq!(rng.draws - draws, speaks as u64, "one draw in the window, none out of it ({lv:#x}, {unseen})");
+            assert_eq!(dr5.talks.len(), speaks as usize);
+            if let Some((idx, _)) = dr5.talks.first() { assert!((0xd3..=0xd5).contains(idx), "0xd3 + Rand(3), got {idx:#x}"); }
         }
-        // case 7 (the evil-base trio {0x14,0x15,0x16}, 0x11b + Rand(7)) is DEFERRED like 5/6 —
-        // see the attack_talk comment (the straightforward arm turns 07000015/16's real-health
-        // legs red). Sister: type 7 on AND off the trio stays silent with NO draw until it ships.
-        for lv in [0x0700_0014u32, 0x0700_0015, 0x0700_0016, 0x0700_0007] {
+        // case 7: the evil-base trio, 0x11b + Rand(7), always spoken; silent with no draw elsewhere.
+        for (lv, speaks) in [(0x0700_0014u32, true), (0x0700_0015, true), (0x0700_0016, true), (0x0700_0007, false)] {
             let mut dr7 = drone_at([0.0, 0.0, 0.0]);
             dr7.voice_type = 7;
             let draws = rng.draws;
             dr7.attack_talk(lv, &mut rng);
-            assert!(dr7.talks.is_empty(), "the deferred case-7 arm stays silent on {lv:#x}");
-            assert_eq!(rng.draws - draws, 0, "and draws nothing [M :98-100]");
+            assert_eq!(rng.draws - draws, speaks as u64, "[M :98-100] on {lv:#x}");
+            assert_eq!(dr7.talks.len(), speaks as usize);
+            if let Some((idx, _)) = dr7.talks.first() { assert!((0x11b..=0x121).contains(idx), "0x11b + Rand(7), got {idx:#x}"); }
         }
         // case 0x11: the party level's type-0x11 guards — 0x93 + Rand(2), spoken 1 in 3
         // [M :92-96]. Every spoken line is in range; the odds both speak and stay silent
