@@ -101,3 +101,20 @@ with the ignore removed, or a fresher measured reason.
 - [06:50 UTC] Sandbox start: repo + work/ + ISO present (hosting sandbox continued), branch cut,
   WORKLOG restored from the s/real-health-agent-16-1b-2 running copy. Queue worktree refreshed.
   Reading the four ignore messages + the blocked round-2 report next, then fresh baselines.
+- [07:15-08:15 UTC] The round outcome. The missile countdown (c70343b3a) re-timed 1b's console
+  phase and moved BOTH sisters' deaths: d3 now dies at tick 7590 at the k6 hub wait (30 hits ×
+  5.0, the wave ring; consoles 5@4130/4@5288/3@6488, k6 never latched — the tail-only wave
+  defense never covers k6), d2 at tick 8628 at the k1/k2 wait (43 hits × 3.5, the wave floating
+  y 4.9-10.6 above the station Bond hovers at −4.4). The named levers tried, measured, and
+  reverted: the wave-defense extension (same-station fights) SURVIVES the phase (one run: all
+  8 latched, health 100/armour 40) but repositions Bond, shifts the wave's intercept and slips
+  the UI shots past their reads — the k3 fight → m3 launched [2,2,3,2,2,2,2,2]; the k4/k6/k8
+  fights → k6@9170/k8@9446 past the shared +5999 read, m6+m8 launched [2,2,2,2,2,3,2,3]; the
+  exposure re-weight (above-term ×20 + the +6 scan) raised the holds but the fight-time cost
+  dominates; the Drake early window never got reached. The console phase is DEADLINE-LOCKED
+  (~720-tick UI margins vs a 6-shooter wave at ~12/s): the next lever is a route-level re-plan
+  (an intercept spot before the wave reaches the stations, or an undisturbed k3/k6/k8 rush
+  with the wave fought only on the crossing legs). All changes reverted; the 1b file is
+  master+fresh-ledger ignores only. 16: both sisters re-measured on this tree — d3 tick 1030
+  (was 1141), d2 tick 1638, both at the ramp foot (12.12,0.93,−88.14) — same law, ignores
+  carry the fresh ledgers.
