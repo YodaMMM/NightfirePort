@@ -88,10 +88,21 @@ Key state facts [M]:
 2/4/5/7/8/10/11/12 → **0x4000033 "Cover Lost"** + ch 99; other (0xF = Zoe abandoned) → ch 99, no label;
 0x10 → the nearest alarm switch's channel (0x61 → **0x4000032 "Alarm Raised"**).
 
-`OnInitDeath` on a drone death, by team and the protected-actor props **0x53/0x54**:
-- team 1: prop 0x54 → reason 2, else prop 0x53 → reason 4 — "Cover Lost", the mission fails;
-- team 2/3: prop 0x54 → reason 1 (a drone killer) / 3 (the player's kill); else prop 0x53 → reason 3 —
-  "Killed Civilians", the mission fails.
+`OnInitDeath` on a drone death, by the protected-actor props **0x53/0x54** and the killer. Its test is
+`killer obj+0xFF == 3`, and class 3 is the player [M `Player_Init` 0x1910f8:76]:
+- the player's kill with either prop → reason 2 on team 1, 1 on team 2/3;
+- any other killer with prop 0x53 → reason 4 on team 1, 3 on team 2/3;
+- any other killer with prop 0x54 alone → no fail from this function.
+Team 1 reasons are "Cover Lost", team 2/3 "Killed Civilians". The killer is the LAST hitter (+0x2B4).
+
+`SetDeathChannel` 0x13e660 runs later and ignores the props: param 12 = 0x60 writes ch 0x60, so that
+actor fails the mission on any killer (07000001 #161, 07000002 #463); param 12 = 0x63 is not a channel
+write but reason 2/4 (team 1) or 1/3 (team 2/3), so it fails on any killer too (07000012 #1, 07000006
+#494, 07000011 #130, 07000007 #414) [D].
+
+Prop 0x54 alone with no failing death channel: 07000012 #23 and #25 in their normal block, 07000016
+#287, 07000008 #265 (who takes no damage). 07000007 #413 also qualifies on paper but its block 5 is
+`DeleteMe`. Test: `fix_ally_death_live`.
 The monitor's standing hooks (ch 0x60/0x61 → the label + ch 99 [M 0x1827d8:98-107]) turn these into the fail.
 **85 drones across 14 levels carry the props** — every party guest (07), the office workers (0a, 11, 12), the
 hotel staff (09), the mayhew/Zoe VIPs (01, 02, 08), the 06 driver, the 02/03 staff.

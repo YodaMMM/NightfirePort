@@ -2277,8 +2277,7 @@ impl Drone {
 
     /// `NDrone2_GetDroneTypeAttackTypeFriend` (0x14cbd8) at creation: modes, team, the type's init function (the
     /// sniper's sets the stationary flag), the alternate state `+0x5A4`; a second tag `+0x13A` is dropped when both
-    /// blocks have the same mode, and set to 100 when there is an alternate state but no tag. (The 07000007 property
-    /// writes inside `GetDTYPENEW` are not modelled.)
+    /// blocks have the same mode, and set to 100 when there is an alternate state but no tag.
     fn type_setup(&mut self, d: &Data) {
         if self.mode_normal == self.mode_alert || self.second_tag == 0x65 { self.second_tag = 0; }
         self.mode = self.dtype_of(d, self.dtype, self.mode_normal);
@@ -4647,9 +4646,14 @@ impl Drone {
         self.call_anim_variant(d, anim_state::DEATH, v, next, 0);
     }
 
-    /// `DroneFunc_SetDeathChannel` (0x13e660): raise `+0x13C` (0x63 = mission-fail reasons, not modelled).
+    /// `DroneFunc_SetDeathChannel` (0x13e660): raise `+0x13C`; 0 raises nothing, and 0x63 is not a
+    /// channel write but `SetMissionFailReason` by team and killer [M :21-44].
     fn set_death_channel(&mut self) {
-        if self.death_channel != 0 && self.death_channel != 0x63 { self.raise = Some(self.death_channel); }
+        match self.death_channel {
+            0 => {}
+            0x63 => self.fail_reason = Some(crate::ally::death_channel_fail(self.team, self.hit_by_player)),
+            c => self.raise = Some(c),
+        }
     }
 
     /// Death_Anim 0x44, SpecialDeath 0x46, Dead 0x47, Fade 0x48, FadeFast 0x49 (0x1637f8, 0x163fe8, 0x172cd8, 0x172dd8).
@@ -6712,6 +6716,11 @@ impl Drone {
                     self.drop_weapon(d, rng);
                     self.change_weapon(1);
                 }
+                // Mode +0xC5 0x11/0x0C (the escorted allies) → SetMissionFailReason(0xD), the default
+                // arm: ch 99, no label [M 0x162b98:39-41 → 0x13e560].
+                if matches!(self.mode, 0x11 | 0x0c) {
+                    self.fail_reason = Some(crate::ally::mission_fail_reason(0xd));
+                }
                 self.alert_status_set(2, frame); // AlertStatusSet(2) [M 0x162b98:42] — the status byte; no +0x50C write
                 self.vision_on = false;
                 self.firing = false;
@@ -6910,7 +6919,7 @@ impl Drone {
                     self.drop_weapon(d, rng);
                     self.change_weapon(1);
                 }
-                if self.dtype == 0x11 || self.dtype == 0x0c {
+                if matches!(self.mode, 0x11 | 0x0c) {
                     self.fail_reason = Some(crate::ally::mission_fail_reason(0xe));
                 }
                 self.alert_status_set(0, frame); // [M 0x163430 case 1] — the status byte; no +0x50C write
@@ -14486,8 +14495,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for (di, ddmg) in hits.drones {
             if let Some(dr) = self.list.get_mut(di) {
                 dr.last_damage = ddmg;
-                // The owner's grenade: usize::MAX = the player's throw [M +0x2B4 = the thrower; fix-actors].
-                if owner == usize::MAX { dr.hit_by_player = true; }
+                // The owner's grenade: usize::MAX = the player's throw. `Drone_ExplosiveHit` overwrites
+                // +0x2B4 with every blast [M 0x13aab8:20], so a guard's blast after Bond's shot makes
+                // the guard the killer.
+                dr.hit_by_player = owner == usize::MAX;
                 dr.blast = Some(pos); // DroneImpact+0x10: the blast VECTOR (the anim bearing)
                 dr.send(d, &mut self.rng, frame, msg::EXPLOSION);
             }
@@ -16636,7 +16647,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             for (di, ddmg) in hits.drones {
                 if let Some(dr) = self.list.get_mut(di) {
                     dr.last_damage = ddmg;
-                    if owner == usize::MAX { dr.hit_by_player = true; }
+                    dr.hit_by_player = owner == usize::MAX; // [M 0x13aab8:20] the last blast's owner
                     dr.blast = Some(pos); // DroneImpact+0x10: the blast VECTOR (the anim bearing)
                     dr.send(d, &mut self.rng, frame, msg::EXPLOSION);
                 }
@@ -19497,7 +19508,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for (pos, radius, damage, kind) in self.props.channel_kills(&mut self.channels, frame) {
             let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
             // explode-debris-spawn: kind 0 — the same Destroy_Smash call as the bullet path [M 0x12bcf8].
-            self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
+            // The channel kill has no owner: `Destroy_Update` calls `Destroy_Smash(obj, 0, 0)` [M
+            // 0x12c4f8:32], so nobody is credited (`usize::MAX - 1`, the copter blast's mark).
+            self.pending_blasts.push((pos, radius, damage, usize::MAX - 1, 0, script, radius, 0));
         }
         // The stat arm rides every Destroy_Smash — the external-kill path reaches it through
         // `Destroy_Update` 0x12c4f8's watch arm → 0x12bb60 [M]. channel_kills' internal smashes
@@ -19873,11 +19886,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         // 0x07000016's kill first raises each removed drone's death channel
                         // [M `jal 0x13e660` at 0x138074 → DroneFunc_SetDeathChannel 0x13e660:
                         // `switch_channels[+0x13C] = 1` + the time stamp; 0x63 = the mission-fail
-                        // reasons, not modelled — the same rule as the port's set_death_channel].
+                        // reasons, which the tail's drain applies].
                         if d.level == 0x0700_0016 {
                             for &i in &v {
-                                let ch = self.list[i].death_channel;
-                                if ch != 0 && ch != 0x63 { self.channels.set(ch as u32, 1, frame); }
+                                let dr = &mut self.list[i];
+                                dr.set_death_channel();
+                                if let Some(c) = dr.raise.take() { self.channels.set(c as u32, 1, frame); }
                             }
                         }
                         for i in v {

@@ -46,36 +46,35 @@ pub fn apply_fail_reason(reason: u32, ch: &mut Channels, frame: u32, fail_label:
     r
 }
 
-/// `DroneFunc_OnInitDeath`'s mission-fail half (0x145bd0) [M], corner-exact per the every-reader map
-/// (`docs/fields/drone.md`; 044y-fields-actors):
-/// - team 1 (the KO check opens the team-1 arm [M 0x145bd0:20-22] — the caller passes it): prop 0x54
-///   → a drone killer (killer obj class 3) reasons 2; a non-drone killer falls through to the
-///   prop-0x53 check — set → reason 4, unset → **no fail** [M LAB_00145cc8]; prop 0x53 without 0x54 →
-///   a drone killer reasons 2, else 4 [M `if (bVar7) goto LAB_00145ce4`];
-/// - team 2/3: prop 0x54 → a drone killer reasons 1; a non-drone killer falls through to prop 0x53 —
-///   set → reason 3, unset → no fail [M LAB_00145c3c]; prop 0x53 alone → drone killer reasons 1, else
-///   3 [M `if (bVar7) goto LAB_00145c58`]. (No KO gate in this arm.)
-/// `team` = Drone+0x44, `prop53`/`prop54` = behaviour properties 0x53/0x54 (the protected-actor flags),
-/// `killed_by_player` = the killer (+0x2B4) was not a class-3 obj — in SP the killer is the player or
-/// a drone, so this equals `!bVar7` there (the port records no other killer classes).
+/// `DroneFunc_OnInitDeath`'s mission-fail half (0x145bd0) [M]. `bVar7` there is "the killer (+0x2B4) is
+/// an object of class 3", and class 3 is the player: `Player_Init` 0x1910f8:76 and `MP_ReSpawn`
+/// 0x185368:83 are the only writers of `obj+0xFF = 3`; drones are class 2 [M `NDrone2_CreateObj`
+/// 0x14d7c8:14]. So, with reason A/B = 2/4 on team 1 and 1/3 on team 2/3:
+/// - prop 0x54 and the player's kill → A [M `if (!bVar7) goto LAB_00145cc8` / `LAB_00145c3c`];
+/// - prop 0x53 and the player's kill → A; prop 0x53 and any other killer → B [M `if (bVar7) goto
+///   LAB_00145ce4` / `LAB_00145c58`];
+/// - prop 0x54 alone and any other killer → no fail here. A guard's kill of such an actor is not the
+///   player's fault; its death channel (`SetDeathChannel`) still fails the mission when it carries
+///   0x60 or 0x63 [D 07000001 #161, 07000002 #463, 07000012 #1].
+///
+/// `team` = Drone+0x44, `prop53`/`prop54` = behaviour properties 0x53/0x54, `killed_by_player` = the
+/// last hit (+0x2B4) came from the player. The team-1 KO gate [M 0x145bd0:20-22] is the caller's.
 pub fn on_init_death(team: u8, prop53: bool, prop54: bool, killed_by_player: bool) -> Option<FailReason> {
-    let drone_kill = !killed_by_player;
-    if team == 1 {
-        if prop54 {
-            if drone_kill { return Some(mission_fail_reason(2)); }
-            // The non-drone killer re-checks prop 0x53 before failing [M 0x145bd0 LAB_00145cc8].
-            return prop53.then(|| mission_fail_reason(4));
-        }
-        if prop53 { return Some(mission_fail_reason(if drone_kill { 2 } else { 4 })); }
-        None
-    } else {
-        if prop54 {
-            if drone_kill { return Some(mission_fail_reason(1)); }
-            return prop53.then(|| mission_fail_reason(3)); // [M 0x145bd0 LAB_00145c3c]
-        }
-        if prop53 { return Some(mission_fail_reason(if drone_kill { 1 } else { 3 })); }
-        None
-    }
+    let (by_player, by_other) = if team == 1 { (2, 4) } else { (1, 3) };
+    if killed_by_player && (prop53 || prop54) { return Some(mission_fail_reason(by_player)); }
+    prop53.then(|| mission_fail_reason(by_other))
+}
+
+/// `DroneFunc_SetDeathChannel` 0x13e660's 0x63 arm [M :21-44]: a drone whose death channel byte
+/// (+0x13C) is 0x63 does not write the channel directly, it fails the mission through
+/// `SetMissionFailReason` — team 1 reasons 2 (killer = the player) / 4, any other team 1 / 3.
+pub fn death_channel_fail(team: u8, killed_by_player: bool) -> FailReason {
+    mission_fail_reason(match (team == 1, killed_by_player) {
+        (true, true) => 2,
+        (true, false) => 4,
+        (false, true) => 1,
+        (false, false) => 3,
+    })
 }
 
 /// The ally states the port dispatches here (0x1E/0x1F/0x21/0x22/0x24–0x28 — the AllyLead sub-states
@@ -144,11 +143,11 @@ mod tests {
         assert!(on_init_death(1, false, false, true).is_none(), "an ordinary guard's death never fails");
         let r = on_init_death(1, true, false, true).unwrap();
         assert_eq!((r.label, r.channel), (FAIL_COVER, 99));
-        let r = on_init_death(1, false, true, false).unwrap();
+        let r = on_init_death(1, false, true, true).unwrap();
         assert_eq!((r.label, r.channel), (FAIL_COVER, 99));
         let r = on_init_death(3, true, false, true).unwrap();
         assert_eq!((r.label, r.channel), (FAIL_CIVILIANS, 0x60));
-        let r = on_init_death(2, false, true, false).unwrap(); // a drone killed the VIP
+        let r = on_init_death(2, false, true, true).unwrap(); // the player killed the VIP
         assert_eq!((r.label, r.channel), (FAIL_CIVILIANS, 0x60));
         assert!(on_init_death(3, false, false, true).is_none(), "an unprotected ally's death does not fail");
     }
@@ -165,26 +164,35 @@ mod tests {
         assert_eq!(ch.time[0x60], 7);
     }
 
-    /// The OnInitDeath corners (044y-fields-actors' every-reader map, `docs/fields/drone.md`):
-    /// - a prop-0x54 kill by a NON-drone falls through to the prop-0x53 check — prop 0x53 unset → NO
-    ///   fail [M 0x145bd0: `if (!bVar7) goto LAB_00145cc8` / `LAB_00145c3c`];
-    /// - prop 0x53 + a DRONE killer (killer obj class 3) → reason 2 (team 1) / 1 (team 2/3) [M
-    ///   0x145bd0: `if (bVar7) goto LAB_00145ce4` / `LAB_00145c58`], not the player-kill reason.
-    /// `killed_by_player` = the killer is not a class-3 obj — in SP the killer is the player or a
-    /// drone, so `killed_by_player == !bVar7` there (the port records no other killer classes).
+    /// The OnInitDeath truth table [M 0x145bd0], bVar7 = the killer's class is 3, the player's
+    /// [M `Player_Init` 0x1910f8:76].
     #[test]
     fn oninitdeath_corners_match_the_decompile() {
-        // team 1: prop 0x54 + player kill → the game re-checks prop 0x53: unset → no fail, set → 4.
-        assert!(on_init_death(1, false, true, true).is_none(),
-            "prop 0x54 + player kill + no prop 0x53 → no fail [M 0x145bd0 LAB_00145cc8]");
-        assert_eq!(on_init_death(1, true, true, true).map(|r| r.label), Some(FAIL_COVER),
-            "prop 0x54 + player kill re-checks prop 0x53 → reason 4 [M 0x145bd0]");
-        // team 1: prop 0x53 + drone killer → reason 2 (not 4) [M 0x145bd0 `if (bVar7) goto 00145ce4`].
-        assert_eq!(on_init_death(1, true, false, false).map(|r| r.label), Some(FAIL_COVER));
-        // team 2/3: prop 0x54 + player kill → re-checks prop 0x53: unset → no fail, set → 3.
-        assert!(on_init_death(2, false, true, true).is_none(),
-            "prop 0x54 + player kill + no prop 0x53 → no fail [M 0x145bd0 LAB_00145c3c]");
-        // team 2/3: prop 0x53 + drone killer → reason 1 (not 3) [M 0x145bd0 `if (bVar7) goto 00145c58`].
-        assert_eq!(on_init_death(3, true, false, false).map(|r| r.channel), Some(0x60));
+        for team in [1u8, 2, 3] {
+            let want = if team == 1 { (FAIL_COVER, 99) } else { (FAIL_CIVILIANS, 0x60) };
+            let got = |p53, p54, by_player| on_init_death(team, p53, p54, by_player).map(|r| (r.label, r.channel));
+            assert_eq!(got(false, true, true), Some(want), "prop 0x54 alone, the player's kill fails");
+            assert_eq!(got(false, true, false), None, "prop 0x54 alone, a guard's kill does not");
+            assert_eq!(got(true, false, true), Some(want));
+            assert_eq!(got(true, false, false), Some(want), "prop 0x53 fails on any killer");
+            assert_eq!(got(true, true, true), Some(want));
+            assert_eq!(got(true, true, false), Some(want));
+            assert_eq!(got(false, false, true), None);
+            assert_eq!(got(false, false, false), None);
+        }
+    }
+
+    /// The 0x63 death channel [M 0x13e660:21-44]: the team picks the reason family, both killers
+    /// land in it.
+    #[test]
+    fn the_0x63_death_channel_is_a_fail_reason() {
+        for by_player in [true, false] {
+            let r = death_channel_fail(1, by_player);
+            assert_eq!((r.label, r.channel), (FAIL_COVER, 99));
+            for team in [2, 3] {
+                let r = death_channel_fail(team, by_player);
+                assert_eq!((r.label, r.channel), (FAIL_CIVILIANS, 0x60));
+            }
+        }
     }
 }
