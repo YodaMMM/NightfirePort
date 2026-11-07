@@ -99,3 +99,43 @@ fn killing_the_captor_saves_geisha_1() {
          HOSTAGE_IDLE 0x0d is the resume arm's state, never reached with +0x135 = 0x49 (daily-audit 2026-10-17), got {:#x}",
         sim.drones.list[gi].state);
 }
+
+/// `NDrone2_DSTATE_HostageHide` 0x15cfe0:23-29 / `HostageIdle` 0x15ce60:28-33: a saved geisha
+/// cowers while an armed guard is in sight within 20, stands once none is, and cowers again if
+/// one comes back. On the old code the two states had no update: she cowered for good.
+#[test]
+fn the_saved_geisha_stands_when_no_armed_guard_is_near() {
+    use nf_game::drone::state;
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000002.bin", false).expect("load 07000002"));
+    w.wait(120);
+    let g = geisha(w.scene.sim.as_ref().unwrap(), 0x49).expect("geisha 1");
+    let sim = w.scene.sim.as_mut().unwrap();
+    sim.drones.channels.set(0x17, 1, sim.drones.frame);
+    w.wait(60);
+    let sim = w.scene.sim.as_mut().unwrap();
+    let at = sim.drones.list[g].pos;
+    sim.bond.pos = [at[0] + 2.5, at[1], at[2]];
+    w.wait(30);
+    // All three guards of the room down, by the real fire path.
+    for ch in [0x88u8, 0x29, 0x2a] {
+        let i = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| d.death_channel == ch).expect("guard");
+        w.reload_full();
+        w.shoot(i, "a room guard");
+    }
+    let state_of = |w: &Walker| w.scene.sim.as_ref().unwrap().drones.list[g].state;
+    for _ in 0..1800 {
+        w.tick(Default::default(), false);
+        if state_of(&w) == state::HOSTAGE_IDLE { break; }
+    }
+    assert_eq!(state_of(&w), state::HOSTAGE_IDLE, "nobody armed in sight: she stands [M 0x15cfe0:23-29]");
+    // An armed guard comes back into sight: another live guard stood beside her.
+    let sim = w.scene.sim.as_mut().unwrap();
+    let other = sim.drones.list.iter().position(|d| d.death_channel == 138).expect("guard #443");
+    sim.drones.channels.set(21, 1, sim.drones.frame);
+    w.wait(30);
+    let at = w.scene.sim.as_ref().unwrap().drones.list[g].pos;
+    w.scene.sim.as_mut().unwrap().drones.list[other].pos = [at[0] + 1.5, at[1], at[2]];
+    w.wait(3);
+    assert_eq!(state_of(&w), state::HOSTAGE_HIDE, "an armed guard within 20 in sight [M 0x15ce60:28-33]");
+}

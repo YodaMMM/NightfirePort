@@ -1164,13 +1164,11 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
         assert!(w.resupply(&format!("Rook attempt {attempt}")), "no ammo for the Rook kill");
     }
     assert!(dead, "Rook must die to the walked gun path");
-    // The death channel's delivery [M 0x13e660 via the death DSTATEs - DeathByExplosion 0x163a80:44
-    // (case 2), :59 (case 0xc), the case-3 drain] runs on the death state's own ticks, at least one
-    // after the ENTER that lands the corpse. The walked kill completes inside one walker tick and the
-    // channel lands the next - a same-tick read is not the game's contract (level-13-guards-7: with
-    // the sight bit Rook dies out of the combat chain, whose final bullet ticks one slot later).
+    // The death channel's delivery [M 0x13e660 via the death DSTATEs: Death_Anim 0x1637f8 and
+    // DeathByExplosion 0x163a80, case 2 = the state EXIT] waits for the end of the fall; only
+    // 07000002 arms the case-0xc timer. So the read allows a whole fall, up to 213 ticks measured.
     let mut ch54 = false;
-    for _ in 0..30 {
+    for _ in 0..300 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x54) { ch54 = true; break; }
         w.tick(nf_game::player::Input::default(), false);
     }

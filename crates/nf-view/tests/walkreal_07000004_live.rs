@@ -117,14 +117,18 @@ fn walk_the_full_mission_start_to_finish_at(difficulty: u32) {
     // Bond, heads first, as a player would. Operative keeps the pickup lap.
     w.prefer_head = difficulty >= 2;
     if difficulty < 2 {
+    // On real damage the walk's return fire can kill the assassin on the way to the pickups. The
+    // channel lands at the end of the fall [M 0x1637f8 case 2], the mission ends mid-leg, and the
+    // pickups no longer matter: the armament pins hold only while the target lives.
+    let target_alive = |w: &Walker| w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| d.skin == 0x0500_001e && d.health > 0.0);
     w.walk_nav_to(uzi, "the StormUzi pickup", 0.4);
-    {
+    if target_alive(&w) {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.inventory.owned.get(18).copied().unwrap_or(false),
             "walking over the pickup owns weapon 18 [M Pickup_Handler 0x18e650 type-0 arm]");
     }
-    w.walk_nav_to(armour, "the armour pickup", 0.4);
-    {
+    if target_alive(&w) { w.walk_nav_to(armour, "the armour pickup", 0.4); }
+    if target_alive(&w) {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.pickups.iter().all(|p| p.kind != 3 || p.gone),
             "the armour case is consumed (respawn param 5 absent → deleted [D params; M 0x18e650:338-348])");

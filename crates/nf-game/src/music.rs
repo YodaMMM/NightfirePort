@@ -108,6 +108,13 @@ pub struct Music {
     may_b_t4: i32,
     may_b_t5: i32,
     may_b_t9: i32,
+    /// `UpdateMFX_02MayhewA` 0x111ed8's `MusicTemp1/2/3`, zeroed with the restart [M 0x114e70:39-54].
+    may_a_t1: i32,
+    may_a_t2: i32,
+    may_a_t3: i32,
+    /// Its `WhichNonAttack_181` / `WhichAttack_180` statics: no restart clears them.
+    may_a_which_calm: i32,
+    may_a_which_attack: i32,
     may_b_which: i32,
     /// `MusicTemp1..3/9` + `WhichNonAttack_190` 0x30c90c / `WhichAttack_189` 0x30c910 as
     /// `UpdateMFX_02MayhewC` 0x112730 uses them (07000003).
@@ -151,6 +158,7 @@ impl Default for Music {
             last_request: -1, wait_for_end: false, under_attack: false, count: 0, count2: 0, bonus: 0, which_combat: 0, which_stealth: 0,
             temp1: false, temp2: 0, temp3: 0, temp4: false, sfx_paused: false, nis_trigger: false, c_temp1: 0, c_temp2: 0, c_temp4: false,
             tower2b_temp1: 0, evil_base_t1: 0, evil_base_t2: 0, evil_base_t3: 0, evil_base_t4: 0, evil_base_t6: 0, evil_base_c_t1: 0,
+            may_a_t1: 0, may_a_t2: 0, may_a_t3: 0, may_a_which_calm: 0, may_a_which_attack: 0,
             b_wait_nis: 0, may_b_t1: 0, may_b_t2: 0, may_b_t3: 0, may_b_t4: 0, may_b_t5: 0, may_b_t9: 0, may_b_which: 0,
             may_c_t1: 0, may_c_t2: 0, may_c_t3: 0, may_c_t9: 0, may_c_which_calm: 0, may_c_which_attack: 0, may_d_t1: 0, may_d_t2: 0,
             tower_c_t1: 0, tower_c_t2: 0, gate_writes: Vec::new() }
@@ -218,6 +226,7 @@ impl Music {
                 // 0x114e70:39-54] — the per-level machines' latches below; the WhichNonAttack/Attack
                 // round-robins are NOT in that list and survive a restart [M 0x114e70:40-52].
                 (self.tower2b_temp1, self.evil_base_t1, self.evil_base_t2, self.evil_base_t3, self.evil_base_t4, self.evil_base_t6, self.evil_base_c_t1) = (0, 0, 0, 0, 0, 0, 0);
+                (self.may_a_t1, self.may_a_t2, self.may_a_t3) = (0, 0, 0);
                 (self.b_wait_nis, self.may_b_t1, self.may_b_t2, self.may_b_t3, self.may_b_t4, self.may_b_t5, self.may_b_t9) = (0, 0, 0, 0, 0, 0, 0);
                 (self.may_c_t1, self.may_c_t2, self.may_c_t3, self.may_c_t9, self.tower_c_t1, self.tower_c_t2) = (0, 0, 0, 0, 0, 0);
                 (self.may_d_t1, self.may_d_t2) = (0, 0);
@@ -291,6 +300,9 @@ impl Music {
             if m.level == 0x0700_0005 { self.castle_a(&e, &m); }
             // `UpdateMFX_01CastleB` 0x113060 (07000006), whole — see `castle_b` below.
             if m.level == 0x0700_0006 { self.castle_b(&e, &m); }
+            // `UpdateMFX_02MayhewA` 0x111ed8 (07000001): its own machine runs only while the exit
+            // block above has not raised the end-wait [M :40].
+            if m.level == 0x0700_0001 && !self.wait_for_end { self.mayhew_a(&e, &m); }
             // `UpdateMFX_02MayhewB` 0x112270 (07000002) and `UpdateMFX_02MayhewC` 0x112730
             // (07000003) — the trigger/sight machines behind the shared exit block above.
             if m.level == 0x0700_0002 { self.mayhew_b(&e, &m); }
@@ -540,6 +552,42 @@ impl Music {
             self.nis_trigger = false;
             self.wait_for_end = true;
         }
+    }
+
+    /// `UpdateMFX_02MayhewA` 0x111ed8:40-end (07000001). The intro's end (hash 0x6000087 in e[0xc])
+    /// or the first alarm takes the attack arm: section 3 once, with a 500-frame hold on the calm
+    /// arm [M :116-120], then, outside the combat set on both the IOP section and the request,
+    /// the 0xb/0xe round-robin. Calm with the hold spent and the IOP in a combat section: section
+    /// 5 once, then the 7/9 round-robin while the request is outside the stealth set. The hold
+    /// counter falls every frame [M tail].
+    fn mayhew_a(&mut self, e: &[u32; 64], m: &MapMusic) {
+        if !self.under_attack && e[0xc] != 0x0600_0087 {
+            if self.may_a_t3 < 0 && m.combat.contains(&self.last_jump) {
+                if self.may_a_t1 == 0 {
+                    self.jump(5, false);
+                    self.may_a_t1 = 1;
+                }
+                if !m.stealth.contains(&self.last_request) {
+                    if self.may_a_which_calm == 0 { self.jump(7, false); }
+                    if self.may_a_which_calm == 1 { self.jump(9, false); }
+                    self.may_a_which_calm += 1;
+                    if self.may_a_which_calm > 1 { self.may_a_which_calm = 0; }
+                }
+            }
+        } else {
+            if self.may_a_t2 == 0 {
+                self.jump(3, false);
+                self.may_a_t2 = 1;
+                self.may_a_t3 = 500;
+            }
+            if !m.combat.contains(&self.last_jump) && !m.combat.contains(&self.last_request) {
+                if self.may_a_which_attack == 0 { self.jump(0xb, false); }
+                if self.may_a_which_attack == 1 { self.jump(0xe, false); }
+                self.may_a_which_attack += 1;
+                if self.may_a_which_attack > 1 { self.may_a_which_attack = 0; }
+            }
+        }
+        self.may_a_t3 -= 1;
     }
 
     /// `UpdateMFX_02MayhewB` 0x112270 (07000002), after the shared exit block above. Level-start
@@ -1231,6 +1279,51 @@ mod tests {
     /// The real 03 row [D disc MapMusic 0x24f4d8, level 0x07000003].
     fn may_c_row() -> MapMusic {
         MapMusic { level: 0x0700_0003, track: 21, start: 0, on_death: 19, on_fail: 18, end_combat: 16, end_calm: 17, alert_frames: 10, calm_frames: 160, combat: vec![2, 4, 14], stealth: vec![0, 6, 8] }
+    }
+
+    /// The real 01 row [D disc MapMusic 0x24f4d8, level 0x07000001].
+    fn may_a_row() -> MapMusic {
+        MapMusic { level: 0x0700_0001, track: 19, start: 0, on_death: 21, on_fail: 20, end_combat: 19, end_calm: 18, alert_frames: 10, calm_frames: 160, combat: vec![3, 11, 14], stealth: vec![5, 7, 9] }
+    }
+
+    fn jumps(m: &mut Music) -> Vec<i32> {
+        m.out.drain(..).filter_map(|c| if let Cmd::Jump { section, .. } = c { Some(section) } else { None }).collect()
+    }
+
+    /// `UpdateMFX_02MayhewA` 0x111ed8: the intro's end jumps 3 once, the hold keeps the calm arm
+    /// out for 500 frames, then the 5 bridge; alarms and calms then alternate the 0xb/0xe and 7/9
+    /// round-robins. Sister: no intro hash and no alarm, no jump at all.
+    #[test]
+    fn the_07000001_machine_intro_alarm_and_calm_sections() {
+        let mut m = Music::new(vec![may_a_row()]);
+        m.event(0, 0x0700_0001); m.event(1, 1);
+        for _ in 0..30 { m.update(0); }
+        m.out.clear();
+        for _ in 0..30 { m.update(0); }
+        assert!(jumps(&mut m).is_empty(), "calm before the intro's end stays at the start section");
+        m.events[0xc] = 0x0600_0087;
+        m.update(0);
+        assert_eq!(jumps(&mut m), vec![3], "the intro's end; 3 is in the combat set, so no pick [M :116-160]");
+        for _ in 0..500 { m.update(3); }
+        assert!(jumps(&mut m).is_empty(), "the 500-frame hold");
+        m.update(3);
+        assert_eq!(jumps(&mut m), vec![5], "hold spent, IOP in combat: the bridge, which is in the stealth set");
+        m.update(5);
+        assert!(jumps(&mut m).is_empty());
+        m.event(2, 2);
+        m.update(5);
+        assert_eq!(jumps(&mut m), vec![0xb], "the alarm's first pick");
+        m.update(5);
+        assert!(jumps(&mut m).is_empty(), "a combat request stands");
+        (m.bonus, m.count) = (-1, -1);
+        m.update(0xb);
+        assert_eq!(jumps(&mut m), vec![7], "calm in a combat section: the first calm pick");
+        m.event(2, 2);
+        m.update(7);
+        assert_eq!(jumps(&mut m), vec![0xe], "the round-robin's second attack section");
+        (m.bonus, m.count) = (-1, -1);
+        m.update(0xe);
+        assert_eq!(jumps(&mut m), vec![9], "and the second calm section");
     }
 
     /// `UpdateMFX_03TowerC` 0x113a20's full chain, with the cel-zone channels the disc carries
