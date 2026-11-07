@@ -12195,11 +12195,11 @@ pub fn player_hit_damage(t: &nf_formats::tuning::Tuning, level: u32, raw: f32, w
 
 /// All drones of a level plus the round-robin line-of-sight cursor.
 /// Whether a breakable contact must come before the static world's first bullet stop (see the
-/// breaks arm of `update_player_bullets`). ON: the live breakables' meshes ride the dynamic set
-/// as PANE_PART parts the ray sets skip (world.rs, the room-scope note at
-/// `segment_in_sets_drop_pass_glass`), so `segment_bullet`'s first stop is the real scenery
-/// behind the breakable — never the breakable's own mesh — and the bounds contact (grown 0.1)
-/// always fires at or before it.
+/// breaks arm of `update_player_bullets`). Off with `PANE_RIDE` below. When on, the live
+/// breakables' meshes ride the dynamic set as PANE_PART parts the ray sets skip (world.rs, the
+/// note at `segment_in_sets_drop_pass_glass`), so `segment_bullet`'s first stop is the real
+/// scenery behind the breakable — never the breakable's own mesh — and the bounds contact
+/// (grown 0.1) always fires at or before it.
 /// The pane-collision ride's switch (drone.rs's `pane_parts` block): the pairing and the
 /// machinery are proven and landed (world.rs's PANE_PART ray skip, the census), and the 08/09
 /// batteries run green with it on — but the 07000001 real-damage walks' guard-melee cascade
@@ -15048,10 +15048,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // the scenery takes the round instead [M 0x1ea398:216-229]. The application
                     // (the hit + the AI message) stays in the match below.
                     if !best.as_ref().is_none_or(|(_, _, bt)| t < *bt) { contact = None; }
-                    // The world stop (BREAK_WORLD_STOP): the contact survives when it fires at or
-                    // before the world's first bullet stop. The live breakables' meshes ride the
-                    // dynamic set as PANE_PART parts the ray sets skip (world.rs, the room-scope
-                    // note), so `segment_bullet`'s first stop is the scenery BEHIND the breakable
+                    // The world stop (BREAK_WORLD_STOP, off with PANE_RIDE): the contact survives
+                    // when it fires at or before the world's first bullet stop. With the ride on,
+                    // the live breakables' meshes ride the dynamic set as PANE_PART parts the ray
+                    // sets skip (world.rs), so `segment_bullet`'s first stop is the scenery BEHIND the breakable
                     // — the breakable's own mesh never beats its bounds contact, and the old
                     // point-blank pathology (a 07000007 vase's mesh stopping the world at t 0.01
                     // before its bounds at 0.058) is gone with the ride.
@@ -19341,10 +19341,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // BEFORE Break_Kill takes the collision away (the contact list is the collide pass's
             // product, Break_Update walks it same tick), so the tick's deferred HITDATA re-trace
             // still sees the sheet.
-            // RIDDEN (pane-collision-pairing): the GLASS panes join the set below, carrying the
-            // PANE_PART id bit (world.rs) — the RAY sets skip them (the game's ray walks are
-            // per-cel object walks a cross-room pane never joins [M Collide_LineOfSight 0x1edf50
-            // → Collide_RayIntersect 0x1ec690 → Collide_PickObj 0x1eae80]) while the CAPSULE
+            // Behind PANE_RIDE (off): the GLASS panes join the set below, carrying the
+            // PANE_PART id bit (world.rs) — the RAY sets skip them [S, the stand-in PANE_PART's
+            // note describes] while the CAPSULE
             // queries and the effect walks keep them solid, and `update_player_bullets` engages
             // the pane through the bounds contact (the game's class-5 contact + Break_Update).
             // The pairing is proven from the game + the disc: `Break_Create` 0x12c230 takes the

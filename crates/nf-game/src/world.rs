@@ -51,11 +51,11 @@ pub const LOS_MASKS_ON: bool = false;
 
 /// The `set_dynamic` part id bit of the breakable panes' collision parts (drone.rs's
 /// `0x400_0000_0000 | breaks index`). The RAY queries skip these parts (see
-/// `segment_in_sets_drop_pass_glass` / `segment_blocked` — the game's ray walks are per-cel
-/// object walks a cross-room pane never joins [M Collide_LineOfSight 0x1edf50's single
-/// `cel_tag*` into Collide_RayIntersect 0x1ec690, whose object stage Collide_PickObj 0x1eae80
-/// tests the objects of THAT walk; Collide_Pick 0x1eb320:314-329 walks the candidate cel's
-/// linked objects]); the CAPSULE queries (the movement pass) and the effect/impact walks read
+/// `segment_in_sets_drop_pass_glass` / `segment_blocked`) — a port stand-in [S], not a game
+/// rule: `Collide_RayIntersect` 0x1ec690 runs `Collide_Pick` 0x1eb320, the same
+/// `Collide_StraddleCels` candidate-room walk the movement queries use [M 0x1eb320:125,
+/// 313-329], so a game ray can test a pane its candidate rooms hold. The port has no per-room
+/// object graph to scope that with. The CAPSULE queries (the movement pass) and the effect/impact walks read
 /// them, so an intact pane stops Bond while alive and a killed one (`Break_Kill` 0x12b970:60,
 /// obj+0xFE |= 1, the delete) drops out of the set.
 pub const PANE_PART: u64 = 0x400_0000_0000;
@@ -2093,12 +2093,10 @@ impl CollisionWorld {
         let _ = (lo, hi);
         let dynamic = self.dynamic.read().unwrap();
         // perf-240g: the same sets in the same order, without a Vec per ray. The DYNAMIC set is
-        // walked separately below: its pane parts (`PANE_PART` ids) are not ray targets — the
-        // game's ray queries walk ONE cel's linked objects (`Collide_LineOfSight` 0x1edf50's
-        // single `cel_tag*` argument into `Collide_RayIntersect` 0x1ec690, whose object stage
-        // `Collide_PickObj` 0x1eae80 tests the objects of THAT walk), so a pane object in
-        // another room never tests against a cross-room ray. The port has no per-room object
-        // graph; the pinned behaviours all show the game's rays passing the panes (the
+        // walked separately below: its pane parts (`PANE_PART` ids) are not ray targets [S] —
+        // the stand-in PANE_PART's note describes; the game's rays do walk the candidate rooms'
+        // objects [M Collide_Pick 0x1eb320:125, 313-329]. The port has no per-room object
+        // graph; the pinned behaviours show the game's rays passing the panes (the
         // 07000001 start guards' sight ack lands during the scripted walk with the drive's
         // glass square across the ray [L 01-doors.trace], the escort's cover run crosses the
         // sheet). The panes stay solid to the CAPSULE queries (the movement pass) and to the
