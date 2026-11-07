@@ -52,3 +52,10 @@ Progress (continued):
   binaries green on the final tree (03 whole 6/0/1, 02 3/0/1, 04 10/0, interactables_03 9/0);
   the full suite did not fit (test-file+docs-only diff — the other binaries are master's by
   construction).
+- [02:58 UTC, Nov 7] real-health-00agent-03-6 started: branch cut from
+  origin/s/real-health-00agent-03-5, origin/master merged clean (e75efe5c2). Plan per the
+  driver: build the opt-in walker.rs fights re-engage flag (immediate re-engage when the
+  240-tick post-fight cooldown would delay refighting a guard within 8 u who is hitting
+  Bond; default off so every other walk stays byte-identical), then take the corridor
+  cluster, the (35.6, 8.7) door stall and the exit-lawn #16 volley in the ledger's order;
+  remove the ignore when green. Reading the 03-5 blocked report + ignore message next.
