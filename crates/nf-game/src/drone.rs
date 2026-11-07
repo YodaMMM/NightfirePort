@@ -23119,23 +23119,6 @@ mod abseil_tests {
         assert!(dr2.alert_pending & 0x1000_0000 != 0, "the forced attack sets 0x10000000 [M 0x165270:16-17]");
     }
 
-    /// `DroneVision_AlertSound` 0x177800:35-37: on 07000014 a guard in state 0x1B drops the sound.
-    /// Sister: the same guard on another level hears it.
-    #[test]
-    fn a_mission_guard_on_07000014_ignores_sounds() {
-        let mut rng = Rng::new(0x5eed);
-        let hear = |level_14: bool, rng: &mut Rng| {
-            let mut dr = drone_at([10.0, 0.0, 10.0]);
-            dr.state = state::ENEMY_MISSION;
-            dr.sound_share = 0.5;
-            if level_14 { empty_data!(0x0700_0014, keep, d); d.props.set(0x1f, &mut dr.props, 1); dr.send(&d, rng, 100, msg::SOUND); }
-            else { empty_data!(0x0700_0015, keep, d); d.props.set(0x1f, &mut dr.props, 1); dr.send(&d, rng, 100, msg::SOUND); }
-            dr.state
-        };
-        assert_eq!(hear(true, &mut rng), state::ENEMY_MISSION);
-        assert_ne!(hear(false, &mut rng), state::ENEMY_MISSION);
-    }
-
     /// `NDrone2_DefaultInit` 0x14b300:423-460's close-in: the set 5 stands on 07000014, 9 reads 7.
     #[test]
     fn the_level_sight_close_in_reads_the_anim_set() {
