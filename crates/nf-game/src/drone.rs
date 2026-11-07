@@ -3567,9 +3567,10 @@ impl Drone {
             return true;
         }
         if s == HOSTAGE_IDLE || s == HOSTAGE_HIDE {
-            // 0x15ce60 / 0x15cfe0 case 9 → HandleImpact(0, 1): the resume stamps the current
-            // hostage state and the surviving geisha takes the 0x54 stagger [M 0x15cfe0:34-40].
-            let u10 = self.state;
+            // 0x15ce60 case 9 → HandleImpact(0xe, 1), 0x15cfe0 case 9 → HandleImpact(0, 1): the
+            // resume is HostageHide or the current state, and the surviving geisha takes the
+            // 0x54 stagger [M 0x15ce60:36-46, 0x15cfe0:34-40].
+            let u10 = if s == HOSTAGE_IDLE { HOSTAGE_HIDE } else { self.state };
             if u10 != 0 && !(0x53..=0x55).contains(&u10) { self.impact_resume = u10; }
             self.set_state(EXPLOSIVE_IMPACT);
             return true;
@@ -3739,7 +3740,7 @@ impl Drone {
             TRUCK_DRIVER_IDLE | TRUCK_DRIVER_MISSION | PARTY_GIRL | CIVILIAN | CIVILIAN_SCARED | CIVILIAN_HIDING => (CIVILIAN_SCARED, false),
             CIVILIAN_MISSION | CIVILIAN_MISSION_WAIT | CIVILIAN_GUARD | CIVILIAN_PATROL | CIVILIAN_DOOR_GUARD => (ATTACK, false), // 0x15d860 case 6 tail: HandleImpact(0x56, 0); 0x15dbb0 case 6 the same
             CIVILIAN_CHALLENGE => (crate::kiko::RUN_TO_ALARM, false), // 0x162558 case 6: HandleImpact(0x89, 0)
-            HOSTAGE_IDLE => (0, false),
+            HOSTAGE_IDLE => (HOSTAGE_HIDE, false),
             _ => return self.on_impact(d, rng, frame, s, true),
         };
         self.on_punch_resume(d, rng, frame, resume, allow)
@@ -9309,7 +9310,7 @@ impl Drone {
             // HostageIdle (0x15ce60 — state 0x0d [L NDrone2_StateFuncs 0x29b300]) ENTER: the sight
             // bit and prop 0x4C on, alert 0, the 0x4000000 bit clear, face the opponent, stand idle
             // [M :17-24]; UPDATE: an armed drone within 20 → HostageHide 0xe [M :28-33]. Bullets
-            // HandleImpact(0xe, …) — resume 0 keeps the state.
+            // HandleImpact(0xe, …): she comes out of it hiding [M :36-46].
             (HOSTAGE_IDLE, msg::ENTER) => {
                 self.ever_seen_3c = true; // `+0x228 |= 8` [M 0x15ce60:17]
                 d.props.set(0x4c, &mut self.props, 1); // [M :18]
@@ -9324,7 +9325,7 @@ impl Drone {
                 if self.armed_peer_dist <= 20.0 { self.set_state(HOSTAGE_HIDE); }
                 true
             }
-            (HOSTAGE_IDLE, msg::BULLET) => self.on_bullet_resume(d, rng, frame, 0, false),
+            (HOSTAGE_IDLE, msg::BULLET) => self.on_bullet_resume(d, rng, frame, HOSTAGE_HIDE, false),
             // Hostage (0x15cb78 — state 0x0a [L NDrone2_StateFuncs 0x29b300]) ENTER:
             // `Drone_AlertStatusSet(2)` [M 0x15cb78 case 1 — the old port's status-0 read missed the
             // case-1 arm; status 2 = the 0x2f5cc8 table row 0.66 [D ee_start_07000001.bin @ 0x2f5cc8]]
