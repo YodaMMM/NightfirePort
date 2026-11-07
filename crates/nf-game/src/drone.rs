@@ -11717,8 +11717,15 @@ pub struct PlayerBullet { pub pos: V3, pub dir: V3, pub speed: f32, pub travelle
     pub homing: bool,
     /// `BU+0x40`: the current heat-seek target — an index into `Drones::list` (`Bullet_homing`'s
     /// `*(int*)(BU+0x40)` object pointer; none = re-scan, and the scan re-runs when the target
-    /// dies [M 0x12f3b4: the `+0xfe & 1` clear-and-rescan]).
+    /// dies [M 0x12f3b4: the `+0xfe & 1` clear-and-rescan]). `target_copter` selects the index
+    /// space: the game's `Bullet_heatseekable` 0x12f248 has a class-0 arm that accepts a copter
+    /// BODY (the `CopterList` walk — `Copter_GetBody(node) == obj`, drawn, NO health read) and
+    /// the missile launcher's rounds reach one on the disc (0700000b pickup #15d and 07000012
+    /// pickups #2aa/#2f0 grant the 0x2e where a copter flies [D the placement sweep]).
     pub target: Option<usize>,
+    /// port-map-bullets: true = `target` indexes `Drones::copters` (the class-0 arm's body),
+    /// false = it indexes `Drones::list` (the class-2 drones) [M 0x12f248]. Own line (lesson 4).
+    pub target_copter: bool,
     /// delta-repeater: `weapon_data+0x6C & 0x8` — the GRAVITY bit `Bullet_update` 0x12e7b0's case 1
     /// applies to any bullet (`velocity = dir·speed; velocity += WldGravity·FRAME_RATE_DIV·
     /// REC_FRAME_RATE²; dir = norm(velocity), speed = len`), not a grenade-family marker. The Delta
@@ -12195,8 +12202,20 @@ pub fn player_hit_damage(t: &nf_formats::tuning::Tuning, level: u32, raw: f32, w
 
 /// All drones of a level plus the round-robin line-of-sight cursor.
 /// Whether a breakable contact must come before the static world's first bullet stop (see the
-/// breaks arm of `update_player_bullets`).
-const BREAK_WORLD_STOP: bool = false;
+/// breaks arm of `update_player_bullets`). Off with `PANE_RIDE` below. When on, the live
+/// breakables' meshes ride the dynamic set as PANE_PART parts the ray sets skip (world.rs, the
+/// note at `segment_in_sets_drop_pass_glass`), so `segment_bullet`'s first stop is the real
+/// scenery behind the breakable — never the breakable's own mesh — and the bounds contact
+/// (grown 0.1) always fires at or before it.
+/// The pane-collision ride's switch (drone.rs's `pane_parts` block): the pairing and the
+/// machinery are proven and landed (world.rs's PANE_PART ray skip, the census), and the 08/09
+/// batteries run green with it on — but the 07000001 real-damage walks' guard-melee cascade
+/// under the panes' capsule solidity is not settled (the report's Live checks), so master's
+/// walks stay green with the ride off. The world stop rides the same switch: with the meshes
+/// out of the ray sets the bounds contact always fires at or before the scenery stop; with
+/// them still static the 07000007 point-blank vase pathology returns.
+const PANE_RIDE: bool = false;
+const BREAK_WORLD_STOP: bool = PANE_RIDE;
 
 pub struct Drones {
     pub list: Vec<Drone>,
@@ -12643,6 +12662,14 @@ pub struct Drones {
     /// The use objects (map-tower): the Q-Worm PCs (0x35) and switches (0x29) of
     /// `Player_Activate` 0x1a5170 — crate::useobj.
     pub useobjs: crate::useobj::UseObjects,
+    /// `SSysItems` 0x2befd0 + `SSysDelayTimer` 0x30cd94 — the security-subsystem alarm state
+    /// machine (crate::ssys). Created fresh per level (the game's `SSys_Init` 0x1b01b0 cold arm,
+    /// `ResetMap_GameInit` 0x1d5080:46); the switch-create channel store (`Switch_Create`
+    /// 0x1adcc0:29-31) lands in `attach_level_id`, the warm-load block restore (`SSys_RamLoad`
+    /// 0x1b0208, from `Player_RamLoad` 0x1957a8) rides the `RamSave::ssys` carry, and the per-tick
+    /// pass (`SSys_Monitor` 0x1ad998, from `Game_Run` 0x1c9790:32) runs at the top of `tick_inner`
+    /// — before the object-handler passes, with the game's `ScriptCam == 0` gate.
+    pub ssys: crate::ssys::Ssys,
     /// The level's doors (docs/systems/world-objects.md "Doors"); created in `attach_level`, updated in `tick`'s
     /// control-list order (`Door_Update`), the group sync (`Doors_Calc`) at the pass's end.
     pub doors: crate::door::Doors,
@@ -13154,6 +13181,12 @@ impl Drones {
             swooshes: Vec::new(),
             // fix-death-restart: the death sequence + the fail-menu policy.
             letterbox: false, view_fade: None, view_fade_script: false, script_cam_prev: false, script_msgs: Vec::new(), text_flush: false,
+            // ssys-wire: `SSys_Init` 0x1b01b0's cold arm — items 1..=5 = {-1.0, 0xff, 0} [M]; the
+            // game runs it from `ResetMap_GameInit` 0x1d5080:46 on EVERY load but its body is gated
+            // on `IsWarmReset == 0`, so a warm load keeps the .data records until `SSys_RamLoad`
+            // overwrites them from the RamSave block (the port's fresh Sim starts here and the
+            // carry apply lands on top).
+            ssys: crate::ssys::Ssys::new(),
             // ScriptFootstepFoot 0x30cde0 [M]: the game's bss boot value 0 (foot 4 first).
             script_footstep_foot: false,
             // subtitles-data: the fresh profile's Subtitles byte is Off [M profile.rs]; the host
@@ -13526,6 +13559,19 @@ impl Drones {
         let mm = level.main_map().unwrap_or(0);
         self.useobjs = crate::useobj::UseObjects::create(&level.maps[mm].placements);
         self.useobjs.set_pc_spheres(level, mm);
+        // ssys-wire — `Switch_Create` 0x1adcc0:29-31, the SSys arm store, BEFORE the load beat's
+        // switch_channels write (:39-43, `init_channels` below — the game's create order): a
+        // switch whose placement param 6 (`level_tag`+0x44) is non-zero stores its own channel id
+        // (ext+0x12 = param 0) into `SSysItems[param6].channel` — the +4 byte of the 8-byte record
+        // [M `SSysItems[idx*8+4] = *(u8 *)(ext+0x12)`; [L ee_start_0700000a.bin @0x2befd0 — item 2
+        // reads ch 0x3b after the cold boot, switch #643's param 6 = 2 / param 0 = 0x3b, while the
+        // SSys_Init'd items 1/3/4 still read 0xff]. The game indexes the 5-record array raw; every
+        // disc placement carries 1 or 2 [D the ssys_switch_census], so the port bounds-checks.
+        for sw in &self.useobjs.switches {
+            if sw.ssys_item != 0 && (sw.ssys_item as usize) < self.ssys.items.len() {
+                self.ssys.items[sw.ssys_item as usize].channel = sw.ch;
+            }
+        }
         self.useobjs.init_channels(&mut self.channels, self.frame);
         let Some(m) = level.main_map() else { return };
         // Searchlights (`Searchlight_Create`, placement order; every part draws `Rand_Rand(480)`, spots another
@@ -14190,6 +14236,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 pos: from, dir, speed, travelled: 0.0, range: bullet_range, damage: f(0x0c), weapon: weapon as u16, first: true, dead: false, bounces: 0,
                 homing: u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap()) & 0x2_0000 != 0,
                 target: None,
+                target_copter: false,
                 // delta-repeater: `Bullet_init` spawns the record's bullet with the gravity bit
                 // untouched; `Bullet_update` case 1 applies it per flight tick [M 0x12e7b0]. The
                 // spawn tick (state 0's half step) applies none — the game's gravity arm lives in
@@ -14284,6 +14331,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 pos: from, dir, speed, travelled: 0.0, range: bullet_range, damage: f(0x0c), weapon: weapon as u16, first: true, dead: false, bounces: 0,
                 homing: flags6c & 0x2_0000 != 0,
                 target: None,
+                target_copter: false,
                 gravity: flags6c & 0x8 != 0,
                 guided_cam: flags6c & 0x4 != 0,
                 snd: whoosh,
@@ -14762,6 +14810,21 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
     }
 
+    /// The candidate copter's own SP stream shape hashes — the shapes its script entities
+    /// currently pose into the dynamic set (`script_parts` pushes every colliding script
+    /// Entity with its glist hash; the copter's body cluster among them). This is the port's
+    /// stand-in for `Collide_LineOfSight`'s SUBJECT-argument rule: the game passes the ray's
+    /// subject objects (`Bullet_homing` 0x12f358:92-93 — the bullet obj and the CANDIDATE
+    /// obj; the copter's own spot check [M 0x17dbb8:171-172] — the copter obj and Bond) and
+    /// a subject's own collision nodes never block its ray. The SP-player lookup mirrors
+    /// nis.rs' `hidden_stream_objects` (the same `players[placement]` → `info[cur].streams`
+    /// walk, keyed on the copter's own placement instead of the hidden flag). Hashes, not
+    /// indices: the dynamic set's `last_objects` carry the shape hash per object.
+    pub fn copter_stream_hashes(&self, ci: usize) -> Vec<u32> {
+        let Some(c) = self.copters.get(ci) else { return Vec::new() };
+        self.scripts.stream_hashes_for_placement(c.placement)
+    }
+
     fn update_player_bullets(&mut self, d: &Data, player_pos: V3) {
         self.player_impacts.clear();
         self.bullet_paths.clear();
@@ -15036,11 +15099,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // the scenery takes the round instead [M 0x1ea398:216-229]. The application
                     // (the hit + the AI message) stays in the match below.
                     if !best.as_ref().is_none_or(|(_, _, bt)| t < *bt) { contact = None; }
-                    // The world stop is not applied yet [S]: the breakables' own meshes still sit in
-                    // the static world, so `segment_bullet` reports the pane or vase itself (or the
-                    // surface it rests on) before its bounds — a 07000007 vase at point-blank range
-                    // stopped every round at t 0.01. It returns once the live breakables leave the
-                    // static set (the pane collision work).
+                    // The world stop (BREAK_WORLD_STOP, off with PANE_RIDE): the contact survives
+                    // when it fires at or before the world's first bullet stop. With the ride on,
+                    // the live breakables' meshes ride the dynamic set as PANE_PART parts the ray
+                    // sets skip (world.rs), so `segment_bullet`'s first stop is the scenery BEHIND the breakable
+                    // — the breakable's own mesh never beats its bounds contact, and the old
+                    // point-blank pathology (a 07000007 vase's mesh stopping the world at t 0.01
+                    // before its bounds at 0.058) is gone with the ride.
                     else if BREAK_WORLD_STOP && !tstop.is_none_or(|ts| t <= ts) { contact = None; }
                 }
                 if let Some((_, i)) = contact {
@@ -15720,32 +15785,95 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // NOT read the +0xF0 enable byte here (the port used `enabled`) and a corpse is
                 // excluded by health 0, not by its own flag.
                 let seekable = |dr: &Drone| dr.drawn && dr.health > 0.0 && dr.state != state::WAIT_SWITCH;
+                // The class-0 arm [M 0x12f248 — `if (bVar1 == 0) { if (+0xfc != 0) walk CopterList:
+                // Copter_GetBody(node) == obj → seekable }`]: a copter BODY is seekable while its
+                // +0xFC in-view counter is non-zero, with NO health read. The counter's writers:
+                // `control_init_object` 0x134630:16 sets 2 at the obj's creation,
+                // `control_movement_object_handler` 0x1336f8:242-246 decrements it per tick, and
+                // `View_AddObjects` 0x1e62d8:71 re-sets 2 every drawn frame — so the gate is the
+                // body's SHOWN state: `Copter_Create` 0x17d340:73-76 SP_HideObj's the copter's SP
+                // at create while its gate channel is off (the hidden body is never view-added —
+                // the Script_HideObj cascade sets obj+0xF0 bit 0x10 [M 0x1db808:27-32] — and the
+                // counter decays to 0 within three ticks), and `Copter_Update` 0x17dbb8:91-97
+                // unhides it on the gate's first ON tick. `Copter::body_shown` carries exactly
+                // that state (the port has no per-frame SP view cull — documented). The port's
+                // copter entity IS the body (`Copter_GetBody` 0x17e4b8 reads rec+0x38 = part slot
+                // 2). Reached on the disc: Bond's 0x2e rounds on 0700000b/#15d and 07000012/#2aa/
+                // #2f0 [D the placement sweep].
+                // The body's world position is the copter matrix's TRANSLATION ROW (row 3) — the
+                // SP_SetPosRot rides obj+0x90 [M Copter_Move 0x17d628:115] and the port's Mat4 is
+                // row-major with row 3 the translation (`view_rot_trans_matrix` writes [trans, 1]
+                // there; `Copter::pos` reads it). The branch's first cut read column 3 of rows
+                // 0-2 — the projection row, (0,0,0) for every rigid matrix — which steered every
+                // copter lock at the world origin (homing-copter-2).
+                let copter_body_pos = |c: &crate::copter::Copter| c.pos();
                 let mut target = b.target;
+                let mut target_copter = b.target_copter;
                 if let Some(ti) = target {
-                    if !seekable(&self.list[ti]) { target = None; }
+                    let alive = if target_copter {
+                        // The re-validation [M 0x12f358:107 — `if (target+0xfe & 1) target = 0`]:
+                        // the port's `landed` IS obj+0xFE bit 0 (Copter_Move's +0x74 == 100 latch,
+                        // state 5's arrival and state 6's death [M 0x17dbb8:274]); the retain that
+                        // removes the copter runs later in the tick, so the bit, not the removal,
+                        // is the game's drop.
+                        self.copters.get(ti).is_some_and(|c| !c.landed)
+                    } else {
+                        self.list.get(ti).is_some_and(&seekable)
+                    };
+                    if !alive { target = None; target_copter = false; }
                 }
                 if target.is_none() {
-                    let mut best: Option<(usize, f32)> = None;
+                    let mut best: Option<(usize, f32, bool)> = None;
                     for (i, dr) in self.list.iter().enumerate() {
                         if !seekable(dr) { continue; }
                         let to = [dr.pos[0] - b.pos[0], dr.pos[1] - b.pos[1], dr.pos[2] - b.pos[2]];
                         let dist = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
                         if dist <= 0.0 || dist > 1000.0 { continue; }
-                        if best.is_some_and(|(_, bd)| dist >= bd) { continue; }
+                        if best.is_some_and(|(_, bd, _)| dist >= bd) { continue; }
                         let n = [to[0] / dist, to[1] / dist, to[2] / dist];
                         let dot = n[0] * b.dir[0] + n[1] * b.dir[1] + n[2] * b.dir[2];
                         if dot <= 0.66 { continue; }
                         // The homing LOS is the game's ONE bit-0x8 DROP trace (`Collide_LineOfSight
                         // (…, 8)` [M 0x12f358:92]) — pass-flagged hits (foliage) don't block the
-                        // lock — the port's `segment_bullet`, not the flight `segment`.
+                        // lock — the port's `segment_bullet`, not the flight `segment`. The game
+                        // passes the candidate guard obj as the ray's SUBJECT (0x12f358:92-93) and
+                        // a subject's own nodes never block; the port needs no exclusion here —
+                        // the guards' bodies are not script entities and never enter the dynamic
+                        // set (`script_parts` walks scripts.objects only), so nothing of the
+                        // guard's own is in the ray's path (their locks engaged green through
+                        // every homing test binary — the measured warrant).
                         if !d.world.segment_bullet_clear(b.pos, dr.pos) { continue; }
-                        best = Some((i, dist));
+                        best = Some((i, dist, false));
                     }
-                    target = best.map(|(i, _)| i);
+                    // The copter bodies, after the drones (the port's two-list fold of the game's
+                    // one object walk; equal distance keeps the earlier candidate). The gate is
+                    // the class-0 arm's `+0xfc != 0` — a hidden (gated) body is never a candidate
+                    // [M 0x12f248:29 + the counter trace above].
+                    for (ci, c) in self.copters.iter().enumerate() {
+                        if !c.body_shown() { continue; }
+                        let cp = copter_body_pos(c);
+                        let to = [cp[0] - b.pos[0], cp[1] - b.pos[1], cp[2] - b.pos[2]];
+                        let dist = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+                        if dist <= 0.0 || dist > 1000.0 { continue; }
+                        if best.is_some_and(|(_, bd, _)| dist >= bd) { continue; }
+                        let n = [to[0] / dist, to[1] / dist, to[2] / dist];
+                        let dot = n[0] * b.dir[0] + n[1] * b.dir[1] + n[2] * b.dir[2];
+                        if dot <= 0.66 { continue; }
+                        // The subject rule, copter side: the ray's endpoint sits INSIDE the
+                        // candidate's own script-entity cluster (the body poses into the dynamic
+                        // set), so the plain clear self-blocks (homing-copter-2's measured t=0.943
+                        // hit 2.5 u off the body). Exclude the candidate's own SP stream shapes —
+                        // the port of `Collide_LineOfSight`'s subject args [M 0x12f358:92-93].
+                        let ex = self.copter_stream_hashes(ci);
+                        if !d.world.segment_bullet_clear_excluding(b.pos, cp, &ex) { continue; }
+                        best = Some((ci, dist, true));
+                    }
+                    if let Some((i, _, copter)) = best { target = Some(i); target_copter = copter; }
                 }
                 b.target = target;
+                b.target_copter = target_copter;
                 if let Some(ti) = target {
-                    let tp = self.list[ti].pos;
+                    let tp = if target_copter { self.copters[ti].pos() } else { self.list[ti].pos };
                     let to = [tp[0] - b.pos[0], tp[1] - b.pos[1], tp[2] - b.pos[2]];
                     let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
                     if l > 0.0 {
@@ -16504,6 +16632,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             pos: muzzle, dir, speed, travelled: 0.0, range: f(0x1c), damage: f(0x0c), weapon: weapon as u16,
             first: true, dead: false, bounces: 0,
             homing: flags6c & 0x2_0000 != 0, target: None,
+            target_copter: false,
             gravity: flags6c & 0x8 != 0,
             guided_cam: false, // 0x67's +0x6C is 0 [L] — the arm is inert either way
             snd: 0, swoosh: None, born: self.frame,
@@ -17848,7 +17977,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             self.player_bullets.push(PlayerBullet {
                                 pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage: f32_at(0x0c),
                                 weapon: crate::gt::TURRET_WEAPON_RECORD as u16, first: true, dead: false, bounces: 0,
-                                homing: f6c & 0x2_0000 != 0, target: None, gravity: f6c & 0x8 != 0, guided_cam: false,
+                                homing: f6c & 0x2_0000 != 0, target: None, target_copter: false, gravity: f6c & 0x8 != 0, guided_cam: false,
                                 snd: 0, swoosh: None, born: frame,
                             });
                         }
@@ -18021,6 +18150,51 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             self.rbodies.tick_winds(gust);
             env.update(&mut self.rng, &mut self.fill_rng, player.eye, atan2_approx(player.aim[0], player.aim[2]));
         }
+        // ssys-wire — `SSys_Monitor` 0x1ad998, called from `Game_Run` 0x1c9790:32-34 RIGHT HERE:
+        // after `Env_Update` and inside the `GS_IsPaused == 0` arm (the port's tick only runs
+        // unpaused — the game's :30-38 else-arm freezes the monitor alongside `Light_Update` and
+        // `control_movement_object_handler`), BEFORE the object-handler passes below. So the
+        // monitor reads and writes the switch channels as the PREVIOUS tick's walk left them,
+        // ahead of this tick's triggers/scripts/switches — the game's tick order. The monitor's
+        // own `ScriptCam == 0` gate [M 0x1ad998:8] rides the port's `scripts.camera()` stand-in
+        // (the same one the muzzle-light gate cites, 0x1befd8:191-195).
+        if self.scripts.camera().is_none() {
+            let level = d.level; // GameState+0xc [M 0x1d5080:6]
+            let ch76_off = !self.channels.on(0x76); // switch_channels[0x76] [M 0x1ad878:7]
+            // The two callbacks alias `self.channels` while `self.ssys` is borrowed: a RefCell
+            // over the field borrow keeps both alive (the reads happen between the writes).
+            let ch = std::cell::RefCell::new(&mut self.channels);
+            let msgs = self.ssys.monitor(
+                |c| ch.borrow().on(c as u32),
+                |c, v| {
+                    if v {
+                        // The laser-2 arm's `switch_channels[ch] = 1` — a BARE store, NO
+                        // switch_channels_time stamp [M 0x1ad998 disasm 0x1adaa0-0x1adacc: the
+                        // only array write is `sb $v1, ($v0)`; the time cell keeps its old
+                        // value]. `Channels::set` stamps every nonzero write like the
+                        // trigger/script writers, so this arm writes the array directly (the
+                        // channel-persistence probe records the direct writer too, as at
+                        // Drone_InitComms' 0x97 [M 0x139520:198-201]).
+                        let mut ch = ch.borrow_mut();
+                        ch.v[c as usize] = 1;
+                        if let Some(w) = &mut ch.writes { w.push((c, 1, frame, 0)); }
+                    } else {
+                        // The state-2 expiry's `switch_channels[ch] = 0` [M 0x1adc64] — a zero
+                        // write; `set` stamps only nonzero values, so it matches the game.
+                        ch.borrow_mut().set(c as u32, 0, frame);
+                    }
+                },
+            );
+            // `SSys_Msg` 0x1ad878 per announcement, in the monitor's own play order, through the
+            // port's normal sound path — the game's `Sound_Play(100.0f, table[id], 0, 0)` 2-D
+            // play [M 0x1ad878:15, :33] — with the level gates `msg_sound` models
+            // [M 0x1ad878:9-12 (0x0700000b + ch 0x76 off), :26 (camera 1 silent on 0x0700000a)].
+            for (item, msg) in msgs {
+                if let Some(id) = self.ssys.msg_sound(item, msg, level, ch76_off) {
+                    self.audio.play(id);
+                }
+            }
+        }
         // objective-77: `Lock_Update` case 1 (0x1ae3d8:192-196 — `case 1:
         // switch_channels[puVar1[4]] = 1; switch_channels_time[...] = GameState._52_4_`) writes the
         // unlocked lock's out channel EVERY tick — the create-time one-shot hold in `Drones::create`
@@ -18028,7 +18202,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // the held channel sat dead (07000012's Operative warm leg: locks #656/#694 unlocked, ch
         // 0xa = 0 forever, the Q-Decryptor burn route unreachable). The game's object pass re-holds
         // it every frame; the port does the same here (the object-handler slot, after Env_Update).
-        for l in self.locks.iter().filter(|l| (l.unlocked || l.burned) && l.out != 0) {
+        // lock-relock-channel: the hold is the game's STATE-1 window only [M the case-1 dispatch,
+        // :192-196] — a state-2 lock (the port's `burned`, set by the event unlocks' framelist
+        // fold) never re-writes its channel, so the filter drops it: a burned lock's channel was
+        // written once at the unlock and is ownerless from the next tick, exactly the game's
+        // state-2 table. (The create-unlock locks stay `unlocked && !burned` — the warm-load hold
+        // above is theirs. The disc census finds no writer that ever drops a lock's out channel,
+        // so the split is observation-free on shipped data.)
+        for l in self.locks.iter().filter(|l| l.unlocked && !l.burned && l.out != 0) {
             self.channels.set(l.out as u32, 1, frame);
         }
         // The armed keypad's tick (`Lock_Update` 0x1ae3d8 case 4 [M :262-296]): the full typed
@@ -18036,10 +18217,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // state := 1 (the port's `unlocked`), the manager deleted, the unlock sound (record
         // u16[2] = placement param 3, `Lock::key_channels[0]`; 0xffff — no sound — on every disc
         // lock [D]) —
-        // and the NEXT tick's case 1 holds the out channel (the hold loop above; the game's
-        // channel write lands one tick after the solve the same way). The page closed without a
-        // match → state 0, re-armable (the Keypad::close arm — the view owns the close; the sim
-        // keeps the page until solved).
+        // the out channel lands ON the solve tick (the port's framelist fold — the game's write
+        // is case 1's, one tick later [M :192-196]; see the solve branch below). The page closed
+        // without a match → state 0, re-armable (the Keypad::close arm — the view owns the
+        // close; the sim keeps the page until solved).
         if let Some((li, kp)) = self.keypad.as_mut() {
             if kp.tick() {
                 // The unlock sound `Sound_Play3D(record u16[2])` [M 0x1ae3d8:282-283]: placement
@@ -18048,7 +18229,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let snd = self.locks[*li].key_channels[0] as u32;
                 let pos = self.locks[*li].pos;
                 self.audio.play3d(snd, pos, None);
+                // The solve: `Lock_Unlock` then `+0xf4 = 1` [M 0x1ae3d8:278-281] — and, the
+                // port's framelist fold, the out channel HERE (the game's write is case 1's,
+                // the NEXT tick [M :192-196]; the state-2 fold below must not re-hold the
+                // channel, so the write lands on the solve tick — one tick early vs the game,
+                // observation-free on the disc data: the census finds no writer that ever
+                // drops a lock's out channel). `burned` is the state-2 fold [M case 1's end].
                 self.locks[*li].unlocked = true;
+                self.locks[*li].burned = true;
+                if self.locks[*li].out != 0 { self.channels.set(self.locks[*li].out as u32, 1, frame); }
                 self.keypad = None;
             }
         }
@@ -18304,6 +18493,24 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // in the bullet pass, so the grace this stores (2) counts down from the NEXT tick exactly
         // as the game's same-tick tail does.
         for l in self.locks.iter_mut() { l.idle_tick(); }
+        // `Lock_Update` 0x1ae3d8 case 2 (the burnt-open tick) — the same control pass, the other
+        // arm of the per-lock state dispatch (a state-2 lock runs case 2 and not case 0 [M the
+        // switch at :34; the port's `idle_tick` early-returns on `burned`, so the two calls are
+        // exclusive]). The re-lock check reads the REAL switch channel, the game's
+        // `switch_channels[record u16[+8]]` [M :231]. The burn-byte refill runs inside
+        // `update_burnt_open` first, in the game's order. A re-lock returns the key id
+        // `Lock_ReLock` 0x1b0750:8 unequips — `Player_UnEquipKey(player->BLData, record
+        // u16[+2])` clears `BL[0x70C + id]` [M 0x1a97b8:6]; the port's key ring is
+        // `Inventory::keys` (the +0x70C slots) and this is its only clear (the equip side is
+        // pickup.rs's — the recorded gap, lock.rs header). (The game's player-class-3 guard
+        // holds structurally: the caller is the player's own sim pass, the same gate lock.rs
+        // documents for `Lock_Activate` [S, same documented limitation].)
+        for li in 0..self.locks.len() {
+            let on = self.locks[li].out != 0 && self.channels.on(self.locks[li].out as u32);
+            if let Some(key) = self.locks[li].update_burnt_open(on) {
+                if (key as usize) < self.inventory.keys.len() { self.inventory.keys[key as usize] = false; }
+            }
+        }
         // The use objects' per-tick halves (`PCQWorm_Update` 0x1aee20's bullet install +
         // `Switch_Update` 0x1adea8's value/auto-return; map-tower, crate::useobj). The bullet
         // segments are this tick's paths — the game reads the class-5 contact list the same pass.
@@ -19327,13 +19534,36 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // BEFORE Break_Kill takes the collision away (the contact list is the collide pass's
             // product, Break_Update walks it same tick), so the tick's deferred HITDATA re-trace
             // still sees the sheet.
-            // NOT ridden yet [S]: with these parts in the set, real-path walks, guard sight and
-            // dropped items on 01/09/0a/0b/14 stop at shapes where no pane stands in the game
-            // (the shape-key/matrix pairing is unresolved), so the panes stay out of the
-            // collision world until that pairing is proven.
-            let _pane_parts = drones.breaks.list.iter().enumerate()
-                .filter(|(_, b)| (!b.dead || b.dead_frame == drones.frame) && b.shape_key != 0)
-                .map(|(k, b)| (0x400_0000_0000 | k as u64, b.shape_key, b.matrix));
+            // Behind PANE_RIDE (off): the GLASS panes join the set below, carrying the
+            // PANE_PART id bit (world.rs) — the RAY sets skip them [S, the stand-in PANE_PART's
+            // note describes] while the CAPSULE
+            // queries and the effect walks keep them solid, and `update_player_bullets` engages
+            // the pane through the bounds contact (the game's class-5 contact + Break_Update).
+            // The pairing is proven from the game + the disc: `Break_Create` 0x12c230 takes the
+            // glist from its caller (`Control_SetGList` 0x134960 → obj+0xD8; the placement path
+            // passes the record's resolved object, `pCelList[index]` or the hash-table hit,
+            // NULL → no create [M 0x1d1b68:77-96], and the 0x8000/0x2000 flag rows never create
+            // [M 0x1d1b68:93]) and builds the object matrix with quaternion 0 — the placement's
+            // View_RotTransMatrix [M 0x12c230:12]. crates/nf-game/tests/pane_pairing_census.rs
+            // prints the parts next to the placements on 01/09/0a/0b/14 (0b has no 0x20 rows at
+            // all) — every row's part lands exactly on its placement bounds, all rows the game
+            // creates, no static double — and the census assertion holds over every SP level.
+            // The census also found the rows whose target object is NOT a pane: kind 0/1 (the
+            // 07000001 museum-hall props stand on the walkable floor, 96–434-tri objects) — the
+            // game's pane laws here (solid while alive, out when killed, the class-5 damage
+            // arms) are read and pinned for the kind-2 glass [D params; M 0x12c230:21], so the
+            // ride takes the kind-2 rows; a prop row keeps master's out-of-world status quo
+            // [S unverified: the props' movement solidity is not proven either way, and making
+            // them solid re-routes every 01 walk]. One rule for script and placed panes: the
+            // script-entity arm above keeps the same dead/death-tick grace, and a script pane's
+            // row is kind-2 the same way (the gondola's windows ride it).
+            if PANE_RIDE {
+                let pane_parts: Vec<(u64, u32, nf_formats::anim::Mat4)> = drones.breaks.list.iter().enumerate()
+                    .filter(|(_, b)| b.kind == 2 && (!b.dead || b.dead_frame == drones.frame) && b.shape_key != 0)
+                    .map(|(k, b)| (crate::world::PANE_PART | k as u64, b.shape_key, b.matrix))
+                    .collect();
+                if !pane_parts.is_empty() { parts.extend(pane_parts); }
+            }
             // The rigid bodies (rigid-body-wiring): the kind-0xD8 props collide at their live
             // obj+0x90 matrix (`Collide_PickObj` walks the cel-linked objects; RB_Create's
             // build_LinkToRoom links the body into the room's cel chain [M 0x1d6bf0]). Id:
@@ -20884,11 +21114,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         // The script-created breakables (`Script_CreateEntity` 0x1d8968's 0x20 arm — the
         // gondola's 16 windows ride the carriage): upsert/refresh each live 0x20 entity's pane
-        // row every tick. The game re-poses obj+0x90 from the stream keys per `Script_Interp`
-        // [M 0x1d9a08:94-112] and the bullet's `Collide_Intersect` tests the pane's CURRENT local
-        // space [M 0x1ebaa8:157-177]; the port re-derives the pane's world bounds from the live
-        // matrix (the same shapes the dynamic set carries). A pane whose object died (the kill's
-        // deletion, a `Script_KillStream`) drops its row.
+        // row every tick. This sync IS the arm's drain — the game calls `Break_Create` 0x12c230
+        // inside the create (kind/health/filter from the op-7 params [M 0x1d8d78:80-87 →
+        // 0x12c230:21-35]) and `Script_Interp` re-poses obj+0x90 from the stream keys per tick
+        // [M 0x1d9a08:94-112]; the port re-derives the pane's world bounds from the live matrix
+        // (the same shapes the dynamic set carries). The SINGLE path: the former
+        // `Objects::pending_breaks` queue was pushed by nis.rs and never read — dead code
+        // removed (script-break-drain); the upsert keyed on the object index keeps the reuse
+        // path from adding a second breakable [M 0x1d8a68-0x1d8a80]. A pane whose object died
+        // (the kill's deletion, a `Script_KillStream`) drops its row.
         {
             let live: Vec<usize> = self.scripts.objects.list.iter().enumerate().filter_map(|(i, o)| match o {
                 Some(crate::nis::Obj::Entity { kind: 0x20, .. }) => Some(i),

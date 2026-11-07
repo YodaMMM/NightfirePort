@@ -36,7 +36,7 @@ fn p2k_round(from: [f32; 3], at: [f32; 3]) -> nf_game::drone::PlayerBullet {
     nf_game::drone::PlayerBullet {
         pos: from, dir: [d[0] / l, d[1] / l, d[2] / l],
         speed: 13.2, travelled: 0.0, range: 50.0, damage: 3.5, weapon: 2,
-        first: true, dead: false, bounces: 0, homing: false, target: None,
+        first: true, dead: false, bounces: 0, homing: false, target: None, target_copter: false,
         gravity: false, guided_cam: false, snd: 0, swoosh: None, born: 0,
     }
 }

@@ -155,15 +155,29 @@ fn the_wall_hug_scene_holds_the_gate_pair_and_swaps_the_pairs_at_its_end() {
 /// live (EventList[2] = 5). `SP_Update`'s state-0 start checks [M 0x1dbda8:80-106] refuse the ledge
 /// cut-scene for exactly this script: `script == 0x6000994 && Get_Music_Event(2) != 0` → the player goes
 /// to state 5 and deletes itself (stay=1), so NO Drone_EnableAll(0) ever runs: the plate's only effects
-/// are the spawner's kill (the spawned pair removed on the next tick) and the placed pair's
+/// are the spawner's kill (the spawned pair removed on the plate tick) and the placed pair's
 /// WAIT_SWITCH→IDLE at their posts (trace: state 1 → 4, same spots), and the AI walks on. Here the
 /// combat event comes through the level's own alarm path [M DroneFunc_CheckAlarmRaised 0x1453a8: a
 /// death on ch 0xA4 posts event 2 = 3 for the first 58 ticks]: Bond kills ch-0xA4 death-channel guard
 /// #65 through the real weapon path. Sister:
 /// `the_wall_hug_scene_holds_the_gate_pair_and_swaps_the_pairs_at_its_end` — with the event QUIET (the
 /// hand-written ch 0x43 probed over PINE) the same script DOES start and freezes.
+///
+/// Tick order on the plate tick, why the spawned pair is ALREADY gone when the step returns [M
+/// control_movement_object_handler 0x1336f8:54-68 — one newest-first walk runs every control func;
+/// Trigger_Calc 0x1b1900's pre-walk pass takes type 2 only, so the type-1 TouchOnce plate #301 fires
+/// in `Trigger_Update` at its own walk slot — docs/systems/triggers.md's type table]: the placed pair
+/// (placements 302/303) walk first and read ch 0x43 still off; the plate (301) writes ch 0x43; SP #298
+/// (298) refuses; the spawner (268) reads its p7 kill channel and — the same `DroneSpawner_Control`
+/// call — latches and runs the kill scan [M 0x137e68:50-52 then 235-288]. The trace's frame 174328
+/// still shows the pair because the trace's frame sample sits mid-walk between the plate's write and
+/// the spawner's Control (frame 174329 then has the removal AND the placed pair's next-tick wake —
+/// they walk before the plate, so the channel reaches them one walk later). The earlier draft of this
+/// test asserted the pair present at the tick boundary — that state only exists mid-walk; the test was
+/// wrong, not the port (the old ignore text's "stray death during the yard wait" was this same-tick
+/// removal misread: nothing damages the pair — hp stays at the game's type-1 default 10 [M
+/// 0x14c600:81-95, `drone_stats[type][1]` word 2 else 10; 07000005's guards have no record [L]]).
 #[test]
-#[ignore = "the fix's own assertions all pass (no freeze, SP #298 refused to state 5, npc_enabled stays up); the remaining failure is TEST SETUP: the spawned gate pair reads hp 10 at spawn [L probe] and takes a stray death during the yard wait, so the pair-present assertions can't hold yet — the next session re-tunes the wait (shorter, or a quieter yard spot)"]
 fn the_wall_hug_plate_swaps_without_the_cut_scene_while_the_combat_music_is_on() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
@@ -201,6 +215,10 @@ fn the_wall_hug_plate_swaps_without_the_cut_scene_while_the_combat_music_is_on()
         if scene.sim.as_ref().unwrap().drones.prev_event2 != 0 { combat_at = Some(k); break; }
     }
     assert!(combat_at.is_some(), "the yard's attack gate posted the combat event (EventList[2] = 5) [M 0x145150; D trace 173533+]");
+    // The pair rides the wait out untouched — nothing in the yard damages it (the spawned guards'
+    // health stays the game's type-1 default 10 [M 0x14c600:81-95]; guards only ever shoot Bond).
+    assert_eq!(present(scene.sim.as_ref().unwrap(), &group2(scene.sim.as_ref().unwrap())), 2,
+        "the gate pair intact after the yard wait — no stray death [L probe: hp 10 throughout]");
     scene.sim.as_mut().unwrap().bond.pos = [104.9, 25.7, 108.8]; // the walk-to-the-ledge stand-in
     scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
     assert!(scene.sim.as_ref().unwrap().drones.prev_event2 != 0, "the event is still live on the walk to the ledge [D trace: 800 frames of the sniper's cycle]");
@@ -211,39 +229,67 @@ fn the_wall_hug_plate_swaps_without_the_cut_scene_while_the_combat_music_is_on()
         sim.bond.pos = touch_centre(sim, 0x43);
     }
     scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
-    // THE PLATE TICK (the trace's 174328): the channel is on, the spawner latches, and — the fix —
-    // the script does NOT start: no freeze, the pair still present, the placed pair still waiting.
-    let walker_pos_0 = scene.sim.as_ref().unwrap().drones.list[walker].pos;
+    // THE PLATE TICK (the trace's 174328): the channel is on, the script does NOT start (no
+    // freeze), and the spawner's kill lands IN THE SAME WALK (see the tick-order note above):
+    // by the tick boundary the spawned pair is removed and the spawner is gone.
     {
         let sim = scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x43), "the plate fired ch 0x43 [D trace 174328]");
         assert!(sim.drones.prev_event2 != 0, "the combat event is live at the plate [D trace 174328: the sniper's cycle]");
-        assert!(sim.drones.npc_enabled, "no Drone_EnableAll(0) on the plate tick [D trace 174328: the walkers move on]");
-        assert_eq!(present(sim, &group2(sim)), 2, "the gate pair still present on the plate tick [D trace 174328]");
+        assert!(sim.drones.npc_enabled, "no Drone_EnableAll(0) on the plate tick — the refusal, not a freeze [D trace 174328: the walkers move on; M 0x1dbda8]");
+        assert_eq!(present(sim, &group2(sim)), 0, "the spawned pair removed on the plate tick — the spawner's Control walks after the plate (301) and kills in the same call [M 0x137e68:50-52 then 235-288]");
         let sp = sim.drones.spawners.iter().find(|sp| sp.group == 2).expect("the gate spawner");
-        assert!(!sp.gone, "the spawner is alive [D trace 174328]");
+        assert!(sp.gone && sp.kill_latch, "the spawner latched (p7) and deleted itself in that Control call [M 0x137e68:50-52, 286]");
+        let waiting: Vec<usize> = sim.drones.list.iter().enumerate()
+            .filter(|(_, d)| d.switch_channel == 0x43 && d.present).map(|(i, _)| i).collect();
+        assert_eq!(waiting.len(), 2, "the placed pair (placements 302/303) present but still held [D]");
+        for &i in &waiting {
+            assert_eq!(sim.drones.list[i].state, nf_game::drone::state::WAIT_SWITCH,
+                "the placed pair still WAIT_SWITCH on the plate tick — they walk BEFORE the plate (302/303 > 301, newest-first) and read ch 0x43 one walk later [M 0x1336f8:54-68]");
+        }
     }
-    // THE NEXT TICK (the trace's 174329): the spawned pair removed, the placed pair active at their
-    // posts (WAIT_SWITCH 1 → IDLE 4), the walker keeps moving, and the script player deleted itself.
+    // THE NEXT TICK (the trace's 174329): the placed pair activates at their posts (WAIT_SWITCH 1 →
+    // IDLE 4) — the visible swap completes; the script player deleted itself after the refusal;
+    // the AI-walks-on pin follows below over a window.
     scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
-    let walker_pos_1 = scene.sim.as_ref().unwrap().drones.list[walker].pos;
     {
         let sim = scene.sim.as_ref().unwrap();
-        assert_eq!(present(sim, &group2(sim)), 0, "the spawned pair removed on the next tick [D trace 174329]");
+        assert_eq!(present(sim, &group2(sim)), 0, "the spawned pair stays gone [D trace 174329]");
         let placed: Vec<usize> = sim.drones.list.iter().enumerate()
             .filter(|(_, d)| d.switch_channel == 0x43 && d.present).map(|(i, _)| i).collect();
         assert_eq!(placed.len(), 2, "the placed pair (placements 302/303) present [D]");
         for &i in &placed {
             assert_eq!(sim.drones.list[i].state, nf_game::drone::state::IDLE,
                 "the placed pair active: WAIT_SWITCH → IDLE at their posts [D trace 174329: state 1 → 4]");
+            assert!(sim.drones.list[i].enabled, "the placed pair enabled with the wake (obj flags 0x8b0 → 0x880) [L hitdata-spawner-ally]");
         }
-        assert!(walker_pos_1 != walker_pos_0, "the patrolling guard keeps moving [D trace: 2/10 moving after]");
         assert!(sim.drones.npc_enabled, "the AI never froze [D trace: no state stall through +1,500 frames]");
         let sp = sim.drones.scripts.players.iter().find(|p| p.placement == 298).expect("SP #298");
         assert!(sp.deleted || sp.state == 5, "SP #298 refused the script and deletes itself [M 0x1dbda8 state 5]");
     }
     // And the scene never plays late: walk out, wait past the alarm window, no freeze ever lands.
-    for _ in 0..300 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
+    // The AI "walks on" pin is a WINDOW, not one tick: the yard guards are mid-combat with Bond
+    // standing on the plate, and an aiming guard legitimately stands still for a tick [D trace:
+    // 2/10 moving per frame, not all]. Over 120 ticks the yard's live AI keeps producing motion;
+    // a state stall (the old freeze bug) produces none at all.
+    let live_pos = |sim: &nf_view::scene::Sim| -> Vec<([f32; 3], usize)> {
+        sim.drones.list.iter().enumerate()
+            .filter(|(_, d)| d.present && !d.corpse && d.enabled && d.state != nf_game::drone::state::WAIT_SWITCH)
+            .map(|(i, d)| (d.pos, i)).collect()
+    };
+    let before = live_pos(scene.sim.as_ref().unwrap());
+    for _ in 0..120 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        let after = live_pos(sim);
+        let moved = after.iter().any(|(p, i)| {
+            before.iter().find(|(_, j)| j == i).is_some_and(|(q, _)| (p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2) > 0.05 * 0.05)
+        });
+        assert!(moved, "the yard's AI walks on — some live guard moves within 120 ticks of the plate [D trace: 2/10 moving after]");
+        assert!(sim.drones.npc_enabled, "no late freeze [D trace: 1,500 frames after the plate, no stall]");
+        assert_eq!(present(sim, &group2(sim)), 0, "the swap is final [D]");
+    }
+    for _ in 0..180 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     let sim = scene.sim.as_ref().unwrap();
     assert!(sim.drones.npc_enabled, "no late freeze [D trace: 1,500 frames after the plate, no stall]");
     assert_eq!(present(sim, &group2(sim)), 0, "the swap is final [D]");

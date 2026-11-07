@@ -310,9 +310,13 @@ mod tests {
         let mut last = false;
         while !l.unlocked && ticks < 100_000 {
             ticks += 1;
+            // The count is read BEFORE the tick: the completion's `memset(&GlobalVars, 0, 0x18)`
+            // clears DAT_002a37e3 inside the unlock tick itself [M Lock_Update 0x1ae3d8:373], so
+            // after it the count is already 0 — the solve that lands there is the pre-tick
+            // count's (3 → 4 then cleared).
             let was = l.scan_solved;
             last = l.decrypt_tick(1, false, &mut ch, ticks);
-            if l.scan_solved != was && (l.scan_solved as usize) <= 4 { solved_at[(l.scan_solved - 1) as usize] = ticks; }
+            if was < 4 && (l.scan_solved == was + 1 || (last && was == 3)) { solved_at[was as usize] = ticks; }
         }
         assert!(l.unlocked, "4 of 4 digits unlock the lock");
         assert!(last, "decrypt_tick returned true exactly on the unlock tick");

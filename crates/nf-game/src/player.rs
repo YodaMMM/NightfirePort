@@ -2217,6 +2217,14 @@ pub struct RamSave {
     /// (see the `mission` field). 0 = not carried (the plain `capture`): the warm load falls back
     /// to 1, the old direct-load replay parity.
     pub difficulty: u32,
+    /// The SSYS save block — `Player_RamSave` 0x195670:9's `amemcpy(0x2b9a14, SSysItems, 0x28)`
+    /// (the whole 5-record array; the port carries the 4 live records 1..=4 that `SSys_RamLoad`
+    /// 0x1b0208 reads back — block[i−1] = saved record i, the same shape `Ssys::ram_load` takes).
+    /// `Player_RamLoad` 0x1957a8:13 calls `SSys_RamLoad(0x2b9a14)` inside its `IsWarmReset` body,
+    /// so a cold load (save `None`) never restores — the port's fresh `Ssys::new()` cold arm
+    /// stands. `None` = a capture that predates the block (the plain `capture` / the test
+    /// helpers): the warm load falls back to the fresh defaults, the old shape.
+    pub ssys: Option<[crate::ssys::SsysItem; 4]>,
 }
 
 /// `ContinueHealthBoostEasy` / `ContinueHealthBoostMedium` / `ContinueHealthBoostHard`
@@ -2249,6 +2257,7 @@ impl RamSave {
             mission: None,
             tally: None,
             difficulty: 0,
+            ssys: None,
         }
     }
 
@@ -2296,6 +2305,16 @@ impl RamSave {
     /// the states.
     pub fn with_mission_snapshot(mut self, m: crate::mission::MissionSave) -> RamSave {
         self.mission = Some(m);
+        self
+    }
+
+    /// Attaches the SSYS block — the game's `Player_RamSave` copies it unconditionally on every
+    /// save [M 0x195670:9] and `Player_RamLoad` 0x1957a8:13 restores it on every warm load. The
+    /// port keeps it a builder step like `with_tally`, so the plain `capture` signature (and its
+    /// many test call sites) stays; the game-path captures attach it.
+    pub fn with_ssys(mut self, s: &crate::ssys::Ssys) -> RamSave {
+        let [_, ref a, ref b, ref c, ref d] = s.items;
+        self.ssys = Some([*a, *b, *c, *d]);
         self
     }
 
@@ -2693,8 +2712,9 @@ pub fn weapon_lock_auto_draw(level: u32, on: bool, prev: bool) -> bool {
 /// `inst+0x00` = param 1 (**the sound id** — `Sound_Play(100.0, sound, 0, 0)` on fire; 0 = silent),
 /// `inst+0x04` = param 0 (**the text label** — `Txt_BindLabel(param 0)`; the safe's is 0x1000336
 /// [D USATxt.dat entry 1822]), `inst+0x08` = param 3 (**the on-channel** — the hint only fires
-/// while the channel is 0 (never armed) or on), `inst+0x0C` = param 4 (**the off-channel** — when
-/// it is non-zero and ON the hint stays silent) [M 0x1b3248:33-37, 0x1b3380:17-22].
+/// while the channel is 0 (never armed) or on), `inst+0x0C` = param 4 (**the off-channel** — read
+/// once the on-channel passes: non-zero and ON deletes the marker for good, so it never fires
+/// even if the channel drops again) [M 0x1b3248:33-37, 0x1b3380:13-15, 42-44].
 ///
 /// `Hint_Update` 0x1b3380 fires it once: with a class-3 object (the player) in the marker's
 /// obj+0xD0 chain (the same straddle-cel occupancy the third icons arm through — the marker's
@@ -2725,7 +2745,7 @@ pub struct Hint {
     pub sound: u32,
     /// Param 3: the on-channel (0 = always armed).
     pub on_channel: u32,
-    /// Param 4: the off-channel (when non-zero and ON the hint never fires).
+    /// Param 4: the off-channel (when non-zero and ON the marker is deleted unfired).
     pub off_channel: u32,
     /// Param 2: the difficulty stage gate (`Hint_Create` 0x1b3248:12-25): 0 = always; 1..=4 =
     /// a difficulty CEILING (the hint is refused when `stage < difficulty`, so stage 1 shows

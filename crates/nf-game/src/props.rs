@@ -120,6 +120,12 @@ pub struct Destroy {
     /// write. 07000014's generator hall runs on this: each stage of 0x51 → … → 0x85 waits out its
     /// own p6.
     pub countdown: i32,
+    /// tag+0x17, `Destroy_Smash`'s one-shot latch [M 0x12bb60:17-20]: the first smash sets it and
+    /// every later call returns at once. A timed leaf latches WITHOUT dying: the class byte stays
+    /// 0x21 until the countdown writes [M 0x12bb60:39-41, 0x12c4f8:26], so its handler and update
+    /// keep running. The wreck swap rides this flag, the swap being the smash's own
+    /// [M 0x12bb60:26-28].
+    pub latched: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -219,6 +225,7 @@ impl Props {
                         colour: [0xff, 0xff], hit67: false,
                         smashed_hash,
                         countdown: -(param(6) as i32 * 30),
+                        latched: false,
                     });
                 }
                 // `GunImp_Create` 0x131f20 (placement 0x34, class 0x47): the SP arm mounts the
@@ -326,8 +333,8 @@ impl Props {
     /// bullet_hit note]. Returns the blast tuple the caller queues.
     pub fn smash(&mut self, i: usize, ch: &mut Channels, frame: u32) -> Option<(V3, f32, f32, u8)> {
         let d = self.destroy.get_mut(i)?;
-        if d.dead { return None; }
-        d.dead = true;
+        if d.latched { return None; }
+        d.latched = true;
         d.countdown = -d.countdown;
         // The channel-0 arm [M 0x12bb60:34-37]: a tag whose channel word is 0 only flips
         // obj+0xff (the class byte) — no switch_channels write. The write is the else arm's
@@ -335,6 +342,9 @@ impl Props {
         // one leaves the write to `channel_kills`.
         let write = d.channel != 0 && d.countdown == 0;
         if write { ch.set(d.channel as u32, 1, frame); }
+        // obj+0xff = 1 on the two arms that end the leaf [M 0x12bb60:33, :41]; a running countdown
+        // keeps class 0x21 until `channel_kills` writes.
+        if d.channel == 0 || write { d.dead = true; }
         // The 07000002-only stat arm's identity half [M 0x12bb60:42-55]: AFTER the channel write
         // the game compares the smashed glist (obj+0xD8, swapped to the sibling at 0x12bbb8-bc4)
         // with `hashtable_getitem(0x020001d9)` and calls `PlrStat_LogShotHitScenery(0)`
@@ -388,7 +398,9 @@ impl Props {
                     // and the blast are the smash's [M 0x12bb60:40,:58-76]. The handler RETURNS
                     // here, so the death tick skips the colour step (the freeze at death). A
                     // countdown is negated here AND in the smash [M 0x12bde4-e00, 0x12bbd4-dc], so
-                    // a shot-out timed leaf never counts and never writes its channel.
+                    // the killing round leaves a timed leaf uncounted. The leaf stays class 0x21,
+                    // so the next round's flip stands alone (the latch returns the smash early)
+                    // and starts the count.
                     if self.destroy[i].channel != 0 { self.destroy[i].countdown = -self.destroy[i].countdown; }
                     if let Some(s) = self.smash(i, ch, frame) { smashes.push(s); }
                 }
@@ -432,7 +444,10 @@ impl Props {
             let d = &mut self.destroy[i];
             if d.channel != 0 && d.countdown > 0 {
                 d.countdown -= 1;
-                if d.countdown == 0 { ch.set(d.channel as u32, 1, frame); }
+                if d.countdown == 0 {
+                    ch.set(d.channel as u32, 1, frame);
+                    d.dead = true; // obj+0xff = 1 [M 0x12c4f8:26]
+                }
                 continue;
             }
             if self.destroy[i].dead || self.destroy[i].kill_channel == 0 { continue; }
@@ -452,7 +467,7 @@ mod tests {
         Props {
             subjects: vec![CamSubject { placement: 0, lo: [4.0, 7.0, -111.0], hi: [6.0, 9.0, -109.0], channel: 0x1c, hit: false }],
             destroy: vec![Destroy { placement: 1, pos: [0.0; 3], sphere: 0.0, lo: [133.0, 4.0, -270.0], hi: [137.0, 7.0, -268.0], channel: 0x1f, health: 100.0, dead: false,
-            kind: 1, blast_damage: 100.0, kill_channel: 0, mask: 0xffef, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown: 0 }],
+            kind: 1, blast_damage: 100.0, kill_channel: 0, mask: 0xffef, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown: 0, latched: false }],
             gunimps: Vec::new(),
             stat_hit: false,
         }
@@ -609,8 +624,8 @@ mod tests {
         let mut p = Props::default();
         // Two tags: placement 0 kills on ch 5 and dies writing ch 6; placement 1 (newer) kills on
         // ch 6 and dies writing ch 7. A single pass after ch 5 rises smashes only the OLDER tag.
-        p.destroy.push(Destroy { placement: 0, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3], channel: 6, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 5, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown: 0 });
-        p.destroy.push(Destroy { placement: 1, pos: [0.0; 3], sphere: 0.0, lo: [2.0; 3], hi: [3.0; 3], channel: 7, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 6, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown: 0 });
+        p.destroy.push(Destroy { placement: 0, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3], channel: 6, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 5, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown: 0, latched: false });
+        p.destroy.push(Destroy { placement: 1, pos: [0.0; 3], sphere: 0.0, lo: [2.0; 3], hi: [3.0; 3], channel: 7, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 6, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown: 0, latched: false });
         let mut ch = Channels::default();
         ch.set(5, 1, 1);
         let s = p.channel_kills(&mut ch, 1);
@@ -628,18 +643,18 @@ mod tests {
     #[test]
     fn a_timed_leaf_writes_its_channel_when_the_countdown_ends() {
         let leaf = |placement, kill_channel, channel, countdown| Destroy { placement, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3],
-            channel, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown };
+            channel, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown, latched: false };
         let mut p = Props::default();
         p.destroy.push(leaf(0, 0x52, 0x4e, -120));
         p.destroy.push(leaf(1, 0x51, 0x52, -60));
         let mut ch = Channels::default();
         ch.set(0x51, 1, 0);
         p.channel_kills(&mut ch, 0);
-        assert!(p.destroy[1].dead && !ch.on(0x52), "the smash lands now, the write waits");
+        assert!(p.destroy[1].latched && !p.destroy[1].dead && !ch.on(0x52), "the smash lands now, the write and the reclass wait");
         for f in 1..60 { p.channel_kills(&mut ch, f); }
         assert!(!ch.on(0x52), "59 ticks on the channel is still down");
         p.channel_kills(&mut ch, 60);
-        assert!(ch.on(0x52), "the 60th tick writes it");
+        assert!(ch.on(0x52) && p.destroy[1].dead, "the 60th tick writes it and reclasses the leaf");
         for f in 61..180 { p.channel_kills(&mut ch, f); assert!(!ch.on(0x4e), "tick {f}"); }
         p.channel_kills(&mut ch, 180);
         assert!(ch.on(0x4e), "the second stage waits out its own 120 ticks after its smash");
@@ -648,9 +663,16 @@ mod tests {
         q.destroy.push(leaf(0, 0, 0x52, -60));
         let mut ch = Channels::default();
         q.bullet_hit([0.5, -1.0, 0.5], [0.5, 2.0, 0.5], 1, 0, 50.0, &mut ch, 1);
-        assert!(q.destroy[0].dead);
+        assert!(q.destroy[0].latched && !q.destroy[0].dead);
         for f in 2..200 { q.channel_kills(&mut ch, f); }
-        assert!(!ch.on(0x52), "the double negate leaves the shot-out leaf silent");
+        assert!(!ch.on(0x52), "the double negate leaves the shot-out leaf uncounted");
+        // Still class 0x21: the next round flips alone and the count runs [M 0x12bd48:41-49].
+        q.bullet_hit([0.5, -1.0, 0.5], [0.5, 2.0, 0.5], 1, 0, 50.0, &mut ch, 200);
+        assert_eq!(q.destroy[0].countdown, 60, "the second round starts the count");
+        for f in 201..260 { q.channel_kills(&mut ch, f); }
+        assert!(!ch.on(0x52), "59 ticks on it still counts");
+        q.channel_kills(&mut ch, 260);
+        assert!(ch.on(0x52) && q.destroy[0].dead, "the 60th writes the channel");
     }
 
     /// `Destroy_Smash` 0x12bb60:42-55's identity half: the scratch rises only on the leaf whose
@@ -662,8 +684,8 @@ mod tests {
         let mut p = Props::default();
         // The named leaf (Mayhew's computer's smashed model) and an unnamed sibling (the cable
         // light's 0xffffffff [D pl[394] → "cable light1b"]).
-        p.destroy.push(Destroy { placement: 0, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3], channel: 0x48, health: 0.0, dead: false, kind: 1, blast_damage: 1.0, kill_channel: 0, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: SMASH_STAT_HASH, countdown: 0 });
-        p.destroy.push(Destroy { placement: 1, pos: [2.0; 3], sphere: 0.0, lo: [2.0; 3], hi: [3.0; 3], channel: 0, health: 0.0, dead: false, kind: 1, blast_damage: 1.0, kill_channel: 0, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0xffff_ffff, countdown: 0 });
+        p.destroy.push(Destroy { placement: 0, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3], channel: 0x48, health: 0.0, dead: false, kind: 1, blast_damage: 1.0, kill_channel: 0, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: SMASH_STAT_HASH, countdown: 0, latched: false });
+        p.destroy.push(Destroy { placement: 1, pos: [2.0; 3], sphere: 0.0, lo: [2.0; 3], hi: [3.0; 3], channel: 0, health: 0.0, dead: false, kind: 1, blast_damage: 1.0, kill_channel: 0, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0xffff_ffff, countdown: 0, latched: false });
         let mut ch = Channels::default();
         p.smash(1, &mut ch, 1);
         assert!(p.destroy[1].dead && !p.stat_hit, "the unnamed sibling's smash sets nothing [M 0x12bc3c-40's miss]");
