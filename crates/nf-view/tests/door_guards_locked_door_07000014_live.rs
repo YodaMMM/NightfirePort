@@ -99,7 +99,7 @@ fn released_guards_do_not_work_the_locked_west_door() {
 /// Un-ignore when the release-to-door chain and the 014 walk re-pin land; the assert below is
 /// the game's behaviour and must not be weakened.
 #[test]
-#[ignore = "TWO named blockers, both evidence-backed with the faithful scan landed behind NB_SCAN_LIVE (drone-nobunching-side-bits): (1) the scan is now PORTED (Steer-pairing keeper 3.0 [M 0x14eba8:83-85], the obstacle's movement-lock refusal [M 0x150ad0:22], the +0x17 return byte [M 0x150ad0:56-62]) and flips green on 01 (walkreal_07000001_live 5/0 with it on, measured on this branch) — but the flip regresses walkreal_07000014_live 6/0 → 4/2 (two corridor legs wedge at the 6000-tick cap; the pre-flip tree passes, stash-verified) so it stays inert pending that walk's live re-pin; (2) with the scan live the pairing STILL never bites because only #783 routes to the door — the released group-9 pair #778/#780 wake into no-route combat at their own spawns and shuffle ±1.8 there (end-state dump (-29.25,15.12)/(-22.87,40.10) 0x73 vs [D audit] spawns (-30.58,13.36)/(-23.52,36.03)) while the game's two guards stop 2.4 apart at (-51.6,41.2)/(-51.2,38.8) [L 2026-10-30] — the release-to-door divergence must land first so the scan has a neighbor to pair"]
+#[ignore = "TWO named blockers, both evidence-backed with the faithful scan landed behind NB_SCAN_LIVE (drone-nobunching-side-bits): (1) the scan is now PORTED (Steer-pairing keeper 3.0 [M 0x14eba8:83-85], the obstacle's movement-lock refusal [M 0x150ad0:22], the +0x17 return byte [M 0x150ad0:56-62]) and flips green on 01 (walkreal_07000001_live 5/0 with it on, measured on that branch) — but the flip regresses walkreal_07000014_live 6/0 → 4/2 (two corridor legs wedge at the 6000-tick cap; the pre-flip tree passes, stash-verified) so it stays inert pending that walk's live re-pin; (2) at Operative only #783 walks to the door: the released group-9 pair #778/#780 spawn at alertness 1.0 (prop 0x20 = param 19 & 3 = 3 [M bitDescs 0x2c7250; 0x14c600:61-66]) so the game's own wake fold sends them to ATTACK 0x56 [M 0x14cbd8:122-155] and their combat route to a hall-side goal cannot cross the locked door link [M 0x1571b0:262-271] — the decompile chain holds them no-route at their spawns in the game too; the [L] door pair (-51.6,41.2)/(-51.2,38.8) is the MISSION-WALKER pair (#783 + #784), which both exist only at Agent and up — the port reproduces that end state at Agent (at_agent_the_two_mission_walkers_hold_at_the_locked_door_like_the_game) — and the [L] boot's difficulty and guard ids are the live check in docs/reports/level-14-door-pair.md"]
 fn the_door_guards_hold_combat_no_route_like_the_game() {
     let mut scene = nf_view::load(&iso(), "07000014.bin", false).expect("load 07000014");
     for _ in 0..400 {
@@ -182,6 +182,12 @@ const RELEASED: [usize; 11] = [721, 722, 723, 724, 783, 784, 785, 778, 779, 780,
 /// The ambush QUARTET's audit ids and [D] positions — #723 shares prop word 0xf1dfc8c1 with
 /// #721/#722/#724 [D audit :73-76/:85-87], so it is AmbushWait too, not a door router.
 const QUARTET: [(usize, f32, f32); 4] = [(721, -51.33, 32.42), (722, -47.87, 33.48), (723, -32.78, 28.48), (724, -40.24, 25.15)];
+/// The [D] spawn positions of the release's two mission walkers: #783 (the one full-alert
+/// group-0xd template at Operative) and #784 (the second, param 2 = 0x2, Agent and up).
+const WALKERS: [(u32, f32, f32); 2] = [(783, -37.73, 25.86), (784, -36.18, 27.76)];
+/// The east node of the locked west door pair (the mission paths' end) [D node dump:
+/// path 0 node 124 (-51.4,0.4,39.6), flags 0x2 door-type, bound to the ch-0x85 door].
+const DOOR_NODE: (f32, f32) = (-51.4, 39.6);
 
 fn hold_and_release(difficulty: u32) -> (nf_view::scene::Scene, std::collections::HashSet<usize>) {
     let mut scene = if difficulty == 1 {
@@ -278,5 +284,63 @@ fn at_00_agent_the_tagged_templates_exist_and_the_release_spawns_nine() {
             .unwrap_or_else(|| panic!("00 Agent: ambush template #{id} must be released at its placement ({x},{z}) [D audit]"));
         assert_eq!(d.state, AMBUSH_WAIT,
             "00 Agent: #{id} still holds 0x38 — the ambush props are difficulty-independent [D audit :85-87; M 0x161560]");
+    }
+}
+
+/// The game's door pair [L 2026-10-30: two guards stop 2.4 apart at (-51.6,41.2) / (-51.2,38.8),
+/// CUR 0x5f / PREV 0x5a] is the release's MISSION-WALKER pair at the boot difficulty, not the
+/// group-9 pair. At Agent (+0x28 = 2 — the game's boot default [M bootup 0x1c7e78:25 @0x1c7f88])
+/// #784 (param 2 = 0x2 [D audit :85-87]) exists beside #783, and BOTH carry the walker props:
+/// prop 0x20 (word 1 bits 0-1 [M bitDescs 0x2c7250 prop 0x20 = word 1 mask 0x3]; param 19
+/// 0xee738fe6 → 2) reads 0.66 off the static alertness table {0, 0, 0.66, 1.0} [M 0x14c600:61-66,
+/// table 0x2f5cc8], so GetDroneTypeAttackTypeFriend's `1.0 <= +0x50c` fold does NOT fire and both
+/// wake to start 4 [M 0x14cbd8:122-155]; IDLE's prop-0x1d arm (word 0 bit 0x20000000, set in both
+/// words 0xf1dec9c1/0xf1dec8e1 [M bitDescs prop 0x1d]) assigns the kind-8 MissionPath and
+/// SetStates 0x1b EnemyMission [M 0x15bf18:32-56], whose walk ends at the east door node
+/// (-51.4,39.6) [D node dump]. The group-9 templates (param 19 0xee738fe7 → 3 → alertness 1.0)
+/// take the fold to ATTACK 0x56 in the game's own chain [M 0x14cbd8:122-155] — their combat route
+/// to a hall-side goal cannot cross the locked door link [M AINetwork_DoAStarPath 0x1571b0:262-271;
+/// the goal-node set around Bond is hall-side, NDrone2_NavNodeCache 0x155cd8 → BuildAITarget
+/// 0x15ac78 → NodeSearchCel 0x156e18:59-62 radius 15.0], so a spawn-parked no-route hold is the
+/// game's own Operative picture for them; which two guards the [L] boot held at the door is a
+/// live check (the report's). This pin: at Agent BOTH walkers reach the door node and hold there,
+/// and neither works the locked door — the [L] end state on the port.
+#[test]
+fn at_agent_the_two_mission_walkers_hold_at_the_locked_door_like_the_game() {
+    let (mut scene, _pre) = hold_and_release(2);
+    let hall = [-76.8, -1.1 + 1.0347, 46.5];
+    let mut walkers: Vec<(u32, usize)> = Vec::new();
+    let mut walked = [0.0f32; 2];
+    for t in 0..2400u32 {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond.pos = hall;
+        sim.step_bond(nf_game::player::Input::default(), false, false, false);
+        let sim = scene.sim.as_ref().unwrap();
+        for (id, x, z) in WALKERS {
+            if walkers.iter().any(|(w, _)| *w == id) { continue; }
+            if let Some(i) = sim.drones.list.iter().position(|d| d.enabled && d.health > 0.0
+                && (d.pos[0] - x).powi(2) + (d.pos[2] - z).powi(2) < 0.25) {
+                walkers.push((id, i));
+            }
+        }
+        for (k, (id, i)) in walkers.iter().enumerate() {
+            let d = &sim.drones.list[*i];
+            assert_ne!(d.state, OPEN_DOOR,
+                "t{t}: walker {k} (#{id}) works the LOCKED door at ({:.1},{:.1}) [M 0x1571b0:262-271]", d.pos[0], d.pos[2]);
+            walked[k] = walked[k].max((d.pos[0] - WALKERS.iter().find(|w| w.0 == *id).unwrap().1).hypot(d.pos[2] - WALKERS.iter().find(|w| w.0 == *id).unwrap().2));
+        }
+    }
+    let sim = scene.sim.as_ref().unwrap();
+    assert_eq!(walkers.len(), 2, "both mission walkers must spawn at Agent [D audit :85-87]");
+    for (k, (id, i)) in walkers.iter().enumerate() {
+        let d = &sim.drones.list[*i];
+        assert!(walked[k] > 10.0,
+            "walker {k} (#{id}) must WALK to the door (max leg {:.1}) [M 0x15bf18:32-56 the kind-8 assign]", walked[k]);
+        let dd = (d.pos[0] - DOOR_NODE.0).powi(2) + (d.pos[2] - DOOR_NODE.1).powi(2);
+        assert!(dd < 9.0,
+            "walker {k} (#{id}) must hold at the door node (-51.4,39.6) [L (-51.6,41.2)/(-51.2,38.8) 2.4 apart]; it is at ({:.2},{:.2}), d2 {dd:.2}",
+            d.pos[0], d.pos[2]);
+        eprintln!("[014-agent] walker {k} (#{id}) end ({:.2},{:.2}) state {:#04x} leg {:.1}",
+            d.pos[0], d.pos[2], d.state, walked[k]);
     }
 }
