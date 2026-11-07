@@ -185,6 +185,17 @@ fn the_facility_chain_runs_to_the_delta_sector_exit() {
                 // object's world bounds), draw, aim through it, burn.
                 let sim = scene.sim.as_mut().unwrap();
                 sim.drones.health.health = 100.0; // the Walker::top_up_health law (the satellite-box splash, the 996 note)
+                // The game removes a DYING wire's entity [M FuseBox_Update 0x1adfe8 →
+                // `Effect_RemoveSObjs` 0x1cf360 — the port's `Cut::RemoveWire` arm]: one burn can
+                // cut both of the box's wires (the slabs coplanar+adjacent [L], the aim sweep
+                // clips both — one burn on the 0x87 box's group-0 wire rose BOTH words 0x87+0x71
+                // and removed both entities), so a later wire of a dead box is skipped, not
+                // aimed at the origin; the box's group words verify the cut below.
+                if !matches!(sim.drones.scripts.objects.list.get(*obj),
+                    Some(Some(nf_game::nis::Obj::Entity { .. })))
+                {
+                    continue;
+                }
                 let bp = sim.drones.fuseboxes[fb].pos;
                 let aim = wire_aim_point(sim, *obj);
                 let cands = [[0.6f32, -1.2, 0.0], [-0.6, -1.2, 0.0], [0.0, -1.2, 0.6], [0.0, -1.2, -0.6]];

@@ -971,6 +971,48 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool) -> (usize, u32) {
     (chaser, t0)
 }
 
+/// The melee band hold, factored (level-16-pit-squad-real-damage-2): while any LIVE HOSTILE
+/// (team 1 — the fists clones AND the pit-room AR guards alike) stands inside the 3.0
+/// always-hit band [M DroneWeap_DoBulletAccuracy 0x179740:113-115 — under it every drone
+/// round hits], backpedal facing the nearest and tap its exposed aim until the band opens
+/// (cap `cap`). The punches fire only inside 2.0 [M DroneWeap_CloseCombatImpact 0x1789c0:
+/// 26-40], so holding the band outside that keeps them whiffing; the AR guards' first landed
+/// round inside the band is guaranteed — the measured 14656 death's finishers were #15/#14
+/// (skins 0x50000b2/0x50000b1, weapon 0x14, hp 14/10) at d 1.2-1.3 in Bond's back while the
+/// old clone-only hold faced away. A player surrounded turns to the nearest muzzle.
+fn hold_the_band(w: &mut Walker, cap: u32) {
+    let mut held = 0u32;
+    while held < cap {
+        let close = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            sim.drones.list.iter().enumerate()
+                .filter(|(_, d)| d.present && !d.corpse && d.health > 0.0 && d.team == 1
+                    && walker::dxz(d.pos, bp) < 3.0)
+                .min_by(|a, b| walker::dxz(a.1.pos, bp).total_cmp(&walker::dxz(b.1.pos, bp)))
+                .map(|(mi, _)| mi)
+        };
+        let Some(mi) = close else { break };
+        held += 1;
+        let (input, fire) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = &sim.bond;
+            let dp = sim.drones.list[mi].pos;
+            let dist = walker::dxz(dp, b.pos);
+            let aim = w.exposed_aim(mi);
+            let at = aim.unwrap_or([dp[0], dp[1] + 0.3, dp[2]]);
+            let eye = [b.pos[0], b.pos[1] + b.eye - b.crouch_drop, b.pos[2]];
+            let err = walker::wrap_pi((at[0] - b.pos[0]).atan2(at[2] - b.pos[2]) - b.yaw);
+            let want_pitch = ((at[1] - eye[1]) / dist.max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+            let perr = want_pitch - b.pitch;
+            let on = err.abs() < 0.03 && perr.abs() < 0.04 && held % 16 == 0;
+            (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), forward: -1.0, ..Default::default() },
+             aim.is_some() && on)
+        };
+        if fire { w.tick_fire(input); } else { w.tick(input, false); }
+    }
+}
+
 /// After the chaser's death: pulse 2, the pit squad, the lift-out cinema, the button.
 fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
     for _ in 0..100 { w.tick(Input::default(), false); }
@@ -1026,48 +1068,25 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
         };
         let Some(i) = next else { break };
         eprintln!("[finale] squad #{i} (death ch {:#x}) at {:?}", w.scene.sim.as_ref().unwrap().drones.list[i].death_channel, w.scene.sim.as_ref().unwrap().drones.list[i].pos);
-        // The melee band hold (input-only, the chaser idiom): the squad's clones are skin
-        // 0x500001e → kind 0xb — the fists [M NDrone2_DefaultInit 0x14b300's switch], and their
-        // punch fires only inside the 2.0 band [M DroneWeap_CloseCombatImpact 0x1789c0:26-40]
-        // for record 99 [D +0x0C = 50.0 → 20.0 at Operative, M 0x1d4424's 0.4 row]. While any
-        // live clone stands inside 3.0 (under it every drone round hits [M DoBulletAccuracy
-        // 0x179740:113-115]), backpedal facing the nearest with taps on the exposed aim until
-        // the band opens (cap 240) — the pit's open floor holds the lane [D collision].
-        let mut held = 0u32;
-        while held < 240 {
-            let close = {
-                let sim = w.scene.sim.as_ref().unwrap();
-                let bp = sim.bond.pos;
-                sim.drones.list.iter().enumerate()
-                    .filter(|(_, d)| d.present && !d.corpse && d.health > 0.0 && matches!(d.death_channel, 23..=26)
-                        && d.skin & 0xffff == 0x1e && walker::dxz(d.pos, bp) < 3.0)
-                    .min_by(|a, b| walker::dxz(a.1.pos, bp).total_cmp(&walker::dxz(b.1.pos, bp)))
-                    .map(|(mi, _)| mi)
-            };
-            let Some(mi) = close else { break };
-            held += 1;
-            let (input, fire) = {
-                let sim = w.scene.sim.as_ref().unwrap();
-                let b = &sim.bond;
-                let dp = sim.drones.list[mi].pos;
-                let dist = walker::dxz(dp, b.pos);
-                let aim = w.exposed_aim(mi);
-                let at = aim.unwrap_or([dp[0], dp[1] + 0.3, dp[2]]);
-                let eye = [b.pos[0], b.pos[1] + b.eye - b.crouch_drop, b.pos[2]];
-                let err = walker::wrap_pi((at[0] - b.pos[0]).atan2(at[2] - b.pos[2]) - b.yaw);
-                let want_pitch = ((at[1] - eye[1]) / dist.max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
-                let perr = want_pitch - b.pitch;
-                let on = err.abs() < 0.03 && perr.abs() < 0.04 && held % 16 == 0;
-                (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), forward: -1.0, ..Default::default() },
-                 aim.is_some() && on)
-            };
-            if fire { w.tick_fire(input); } else { w.tick(input, false); }
-        }
+        // The melee band hold — the factored `hold_the_band` (its doc carries the 14656
+        // cause: the pit-room AR guards closed INSIDE the band while the old clone-only hold
+        // faced away). The threat set is ANY live hostile inside 3.0.
+        hold_the_band(w, 240);
         // Dry mid-fight: another carried gun with ammo or the fallen squad's guns, then fight on.
         // (consider-explosive-gate-3: a 3-step re-arm ladder was tried here and REVERTED — its
         // extra wheel cycles shifted the top-up walk's measured stream and broke its pass. The
         // real-damage finale walk's remaining blocker is upstream ammo, not this ladder.)
-        let killed = w.shoot(i, "the pit squad")
+        // level-16-pit-squad-real-damage-2: the kill runs in BOUNDED slices with the band hold
+        // re-checked between them — the member kill is a fixed-target loop (`shoot_bounded`
+        // drives Bond directly, no threat reaction), and the measured death sat INSIDE it
+        // while the pit guards walked to point blank over ~7300 ticks. A player answers the
+        // muzzle that closes on him the tick it arrives, then returns to the squad member.
+        let mut killed = false;
+        for _ in 0..12 {
+            hold_the_band(w, 240);
+            if w.shoot_bounded(i, "the pit squad", 900) { killed = true; break; }
+        }
+        let killed = killed
             || ((w.switch_to_armed("the pit squad ammo") || w.resupply("the pit squad ammo")) && w.shoot(i, "the pit squad"));
         assert!(killed, "the pit squad member #{i} dies to Bond's fire");
     }
@@ -1926,6 +1945,15 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(difficulty: u
     // than the bleed, and the route has no hard window).
     if difficulty == 1 {
         w.dmg.finish_fights = true;
+        // The melee band (1b-zero-g-floor §3, the 14656 death): the route's chasers closed to
+        // d 0.8-1.3 on the stands and finished Bond INSIDE the 3.0 always-hit band
+        // [M DroneWeap_DoBulletAccuracy 0x179740:113-115 — under it every drone round hits] —
+        // the plain stand held position while they swam in. A player backs out of the band
+        // while he answers: the opt-in back-off (the 08 walk's 4.0 idiom, 3.5 here — just
+        // over the band) steps Bond back, aim held, while any live guard stands inside, so
+        // the chasers' rounds ride the outside-of-band accuracy instead of the guaranteed
+        // hits, and the punches (only inside 2.0 [M 0x1789c0:26-40]) never reach.
+        w.dmg.back_off = Some(3.5);
         // drone-block-swaps-g055-4: the reactive pick skips the ring guards a level above
         // (the shared flag's doc) — the ground legs keep moving under the overhead fire and
         // the ring legs clear at level.
