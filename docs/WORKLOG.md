@@ -26,3 +26,12 @@ dormant case. (2) Un-ignore `homing_copter_07000012_live`: drive the gate channe
 real level, equip through the path the level allows (pickups #2aa / #2f0), and show a
 fired round turning onto the body, red without the arm. Plus an audit of `Bullet_homing`
 0x12f358 past the target pick. Entry started.
+
+## homing-copter-3 (2026-11-07, branch s/homing-copter-3)
+
+Continuing from s/homing-copter-2 (master merged). Building the report's fix: a bullet-clear in
+world.rs that excludes by shape hash (the dynamic set's last_objects index-aligned with
+geo.objects), fed the candidate's stream hashes (the hidden_stream_objects precedent in
+nis.rs), called from the homing's line of sight; guard candidates and the copter's own spot
+check [M 0x17dbb8:171-172] audited too. Then the lock test un-ignored and pinned through real
+fire.
