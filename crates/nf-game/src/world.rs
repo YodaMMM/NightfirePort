@@ -2133,6 +2133,49 @@ impl CollisionWorld {
     /// sets, pass drop and triangle test), early-out (see `segment_blocked`).
     pub fn segment_bullet_clear(&self, from: V3, to: V3) -> bool { !self.segment_blocked(from, to, true, true) }
 
+    /// `segment_surface_bullet(from, to).is_none()` with the ray's SUBJECT shapes excluded from
+    /// the DYNAMIC set — `Collide_LineOfSight`'s subject-argument rule: the game passes the ray's
+    /// subject objects to `Collide_RayIntersect` (args 4/5) and the ray cannot report its own
+    /// subjects' collision nodes — a ray whose endpoint sits inside a subject's glist would never
+    /// return clear, so no LOS gated on it could ever pass
+    /// [M Bullet_homing 0x12f358:92-93 — the bullet obj and the CANDIDATE obj;
+    /// M Copter_Update 0x17dbb8:171-172 — the copter obj and Bond]. The port's script entities
+    /// (the copter SP streams among them) pose into the dynamic set (`script_parts` →
+    /// `set_dynamic`), whose `last_objects` carry each part's shape hash, index-aligned with
+    /// `geo.objects` — `exclude_hashes` keys on those hashes. The static and missile sets never
+    /// exclude: a wall between the shooter and the candidate still stops the ray.
+    ///
+    /// The per-object skip keys on pointer identity against the `last_objects`-derived object
+    /// addresses: the read guard is held across the whole walk, so the addresses are stable, and
+    /// the grid's `any_hit` closure hands back references into the same `geo.objects` vec.
+    pub fn segment_bullet_clear_excluding(&self, from: V3, to: V3, exclude_hashes: &[u32]) -> bool {
+        if exclude_hashes.is_empty() { return self.segment_bullet_clear(from, to); }
+        let d = sub(to, from);
+        let dynamic = self.dynamic.read().unwrap();
+        // last_objects is index-aligned with geo.objects (set_dynamic pushes one entry per
+        // object it builds); `take` is belt-and-braces for any future drift.
+        let skip: Vec<*const Object> = dynamic.last_objects.iter().take(dynamic.geo.objects.len())
+            .enumerate()
+            .filter(|(_, (_, h, _))| exclude_hashes.contains(h))
+            .map(|(i, _)| &dynamic.geo.objects[i] as *const Object)
+            .collect();
+        let sets: [(&Geo, bool); 3] = [(&self.stat, false), (&self.missile, false), (&dynamic.geo, true)];
+        for (g, is_dynamic) in sets {
+            let mut blocked = |o: &Object| -> bool {
+                if is_dynamic && skip.iter().any(|p| std::ptr::eq(*p, o as *const Object)) { return false; }
+                obj_blocks(g, o, from, d, true)
+            };
+            // perf-240e: the same grid-first walk as `segment_blocked` (the answer is order-
+            // independent; the skip set only removes candidate objects).
+            match g.any_hit(from, to, &mut blocked) {
+                Some(true) => return true,
+                Some(false) => {}
+                None => { for o in along(g, from, to) { if blocked(o) { return true; } } }
+            }
+        }
+        false
+    }
+
     /// First hit along `from → to`: the fraction in [0, 1] and the unit normal of the triangle hit (facing `from`).
     /// The player's GROUNDING variant: water surfaces (material 0xE) never ground him — the cel scoping
     /// of `Player_FeetOnPoint` 0x194188 (the ray tests only the current cel `obj+0x20`; the water planes

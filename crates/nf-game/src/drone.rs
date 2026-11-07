@@ -11717,8 +11717,15 @@ pub struct PlayerBullet { pub pos: V3, pub dir: V3, pub speed: f32, pub travelle
     pub homing: bool,
     /// `BU+0x40`: the current heat-seek target — an index into `Drones::list` (`Bullet_homing`'s
     /// `*(int*)(BU+0x40)` object pointer; none = re-scan, and the scan re-runs when the target
-    /// dies [M 0x12f3b4: the `+0xfe & 1` clear-and-rescan]).
+    /// dies [M 0x12f3b4: the `+0xfe & 1` clear-and-rescan]). `target_copter` selects the index
+    /// space: the game's `Bullet_heatseekable` 0x12f248 has a class-0 arm that accepts a copter
+    /// BODY (the `CopterList` walk — `Copter_GetBody(node) == obj`, drawn, NO health read) and
+    /// the missile launcher's rounds reach one on the disc (0700000b pickup #15d and 07000012
+    /// pickups #2aa/#2f0 grant the 0x2e where a copter flies [D the placement sweep]).
     pub target: Option<usize>,
+    /// port-map-bullets: true = `target` indexes `Drones::copters` (the class-0 arm's body),
+    /// false = it indexes `Drones::list` (the class-2 drones) [M 0x12f248]. Own line (lesson 4).
+    pub target_copter: bool,
     /// delta-repeater: `weapon_data+0x6C & 0x8` — the GRAVITY bit `Bullet_update` 0x12e7b0's case 1
     /// applies to any bullet (`velocity = dir·speed; velocity += WldGravity·FRAME_RATE_DIV·
     /// REC_FRAME_RATE²; dir = norm(velocity), speed = len`), not a grenade-family marker. The Delta
@@ -14190,6 +14197,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 pos: from, dir, speed, travelled: 0.0, range: bullet_range, damage: f(0x0c), weapon: weapon as u16, first: true, dead: false, bounces: 0,
                 homing: u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap()) & 0x2_0000 != 0,
                 target: None,
+                target_copter: false,
                 // delta-repeater: `Bullet_init` spawns the record's bullet with the gravity bit
                 // untouched; `Bullet_update` case 1 applies it per flight tick [M 0x12e7b0]. The
                 // spawn tick (state 0's half step) applies none — the game's gravity arm lives in
@@ -14284,6 +14292,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 pos: from, dir, speed, travelled: 0.0, range: bullet_range, damage: f(0x0c), weapon: weapon as u16, first: true, dead: false, bounces: 0,
                 homing: flags6c & 0x2_0000 != 0,
                 target: None,
+                target_copter: false,
                 gravity: flags6c & 0x8 != 0,
                 guided_cam: flags6c & 0x4 != 0,
                 snd: whoosh,
@@ -14760,6 +14769,21 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 s.head[1] += 0.001; s.tail[1] += 0.001;
             }
         }
+    }
+
+    /// The candidate copter's own SP stream shape hashes — the shapes its script entities
+    /// currently pose into the dynamic set (`script_parts` pushes every colliding script
+    /// Entity with its glist hash; the copter's body cluster among them). This is the port's
+    /// stand-in for `Collide_LineOfSight`'s SUBJECT-argument rule: the game passes the ray's
+    /// subject objects (`Bullet_homing` 0x12f358:92-93 — the bullet obj and the CANDIDATE
+    /// obj; the copter's own spot check [M 0x17dbb8:171-172] — the copter obj and Bond) and
+    /// a subject's own collision nodes never block its ray. The SP-player lookup mirrors
+    /// nis.rs' `hidden_stream_objects` (the same `players[placement]` → `info[cur].streams`
+    /// walk, keyed on the copter's own placement instead of the hidden flag). Hashes, not
+    /// indices: the dynamic set's `last_objects` carry the shape hash per object.
+    pub fn copter_stream_hashes(&self, ci: usize) -> Vec<u32> {
+        let Some(c) = self.copters.get(ci) else { return Vec::new() };
+        self.scripts.stream_hashes_for_placement(c.placement)
     }
 
     fn update_player_bullets(&mut self, d: &Data, player_pos: V3) {
@@ -15720,32 +15744,95 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // NOT read the +0xF0 enable byte here (the port used `enabled`) and a corpse is
                 // excluded by health 0, not by its own flag.
                 let seekable = |dr: &Drone| dr.drawn && dr.health > 0.0 && dr.state != state::WAIT_SWITCH;
+                // The class-0 arm [M 0x12f248 — `if (bVar1 == 0) { if (+0xfc != 0) walk CopterList:
+                // Copter_GetBody(node) == obj → seekable }`]: a copter BODY is seekable while its
+                // +0xFC in-view counter is non-zero, with NO health read. The counter's writers:
+                // `control_init_object` 0x134630:16 sets 2 at the obj's creation,
+                // `control_movement_object_handler` 0x1336f8:242-246 decrements it per tick, and
+                // `View_AddObjects` 0x1e62d8:71 re-sets 2 every drawn frame — so the gate is the
+                // body's SHOWN state: `Copter_Create` 0x17d340:73-76 SP_HideObj's the copter's SP
+                // at create while its gate channel is off (the hidden body is never view-added —
+                // the Script_HideObj cascade sets obj+0xF0 bit 0x10 [M 0x1db808:27-32] — and the
+                // counter decays to 0 within three ticks), and `Copter_Update` 0x17dbb8:91-97
+                // unhides it on the gate's first ON tick. `Copter::body_shown` carries exactly
+                // that state (the port has no per-frame SP view cull — documented). The port's
+                // copter entity IS the body (`Copter_GetBody` 0x17e4b8 reads rec+0x38 = part slot
+                // 2). Reached on the disc: Bond's 0x2e rounds on 0700000b/#15d and 07000012/#2aa/
+                // #2f0 [D the placement sweep].
+                // The body's world position is the copter matrix's TRANSLATION ROW (row 3) — the
+                // SP_SetPosRot rides obj+0x90 [M Copter_Move 0x17d628:115] and the port's Mat4 is
+                // row-major with row 3 the translation (`view_rot_trans_matrix` writes [trans, 1]
+                // there; `Copter::pos` reads it). The branch's first cut read column 3 of rows
+                // 0-2 — the projection row, (0,0,0) for every rigid matrix — which steered every
+                // copter lock at the world origin (homing-copter-2).
+                let copter_body_pos = |c: &crate::copter::Copter| c.pos();
                 let mut target = b.target;
+                let mut target_copter = b.target_copter;
                 if let Some(ti) = target {
-                    if !seekable(&self.list[ti]) { target = None; }
+                    let alive = if target_copter {
+                        // The re-validation [M 0x12f358:107 — `if (target+0xfe & 1) target = 0`]:
+                        // the port's `landed` IS obj+0xFE bit 0 (Copter_Move's +0x74 == 100 latch,
+                        // state 5's arrival and state 6's death [M 0x17dbb8:274]); the retain that
+                        // removes the copter runs later in the tick, so the bit, not the removal,
+                        // is the game's drop.
+                        self.copters.get(ti).is_some_and(|c| !c.landed)
+                    } else {
+                        self.list.get(ti).is_some_and(&seekable)
+                    };
+                    if !alive { target = None; target_copter = false; }
                 }
                 if target.is_none() {
-                    let mut best: Option<(usize, f32)> = None;
+                    let mut best: Option<(usize, f32, bool)> = None;
                     for (i, dr) in self.list.iter().enumerate() {
                         if !seekable(dr) { continue; }
                         let to = [dr.pos[0] - b.pos[0], dr.pos[1] - b.pos[1], dr.pos[2] - b.pos[2]];
                         let dist = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
                         if dist <= 0.0 || dist > 1000.0 { continue; }
-                        if best.is_some_and(|(_, bd)| dist >= bd) { continue; }
+                        if best.is_some_and(|(_, bd, _)| dist >= bd) { continue; }
                         let n = [to[0] / dist, to[1] / dist, to[2] / dist];
                         let dot = n[0] * b.dir[0] + n[1] * b.dir[1] + n[2] * b.dir[2];
                         if dot <= 0.66 { continue; }
                         // The homing LOS is the game's ONE bit-0x8 DROP trace (`Collide_LineOfSight
                         // (…, 8)` [M 0x12f358:92]) — pass-flagged hits (foliage) don't block the
-                        // lock — the port's `segment_bullet`, not the flight `segment`.
+                        // lock — the port's `segment_bullet`, not the flight `segment`. The game
+                        // passes the candidate guard obj as the ray's SUBJECT (0x12f358:92-93) and
+                        // a subject's own nodes never block; the port needs no exclusion here —
+                        // the guards' bodies are not script entities and never enter the dynamic
+                        // set (`script_parts` walks scripts.objects only), so nothing of the
+                        // guard's own is in the ray's path (their locks engaged green through
+                        // every homing test binary — the measured warrant).
                         if !d.world.segment_bullet_clear(b.pos, dr.pos) { continue; }
-                        best = Some((i, dist));
+                        best = Some((i, dist, false));
                     }
-                    target = best.map(|(i, _)| i);
+                    // The copter bodies, after the drones (the port's two-list fold of the game's
+                    // one object walk; equal distance keeps the earlier candidate). The gate is
+                    // the class-0 arm's `+0xfc != 0` — a hidden (gated) body is never a candidate
+                    // [M 0x12f248:29 + the counter trace above].
+                    for (ci, c) in self.copters.iter().enumerate() {
+                        if !c.body_shown() { continue; }
+                        let cp = copter_body_pos(c);
+                        let to = [cp[0] - b.pos[0], cp[1] - b.pos[1], cp[2] - b.pos[2]];
+                        let dist = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+                        if dist <= 0.0 || dist > 1000.0 { continue; }
+                        if best.is_some_and(|(_, bd, _)| dist >= bd) { continue; }
+                        let n = [to[0] / dist, to[1] / dist, to[2] / dist];
+                        let dot = n[0] * b.dir[0] + n[1] * b.dir[1] + n[2] * b.dir[2];
+                        if dot <= 0.66 { continue; }
+                        // The subject rule, copter side: the ray's endpoint sits INSIDE the
+                        // candidate's own script-entity cluster (the body poses into the dynamic
+                        // set), so the plain clear self-blocks (homing-copter-2's measured t=0.943
+                        // hit 2.5 u off the body). Exclude the candidate's own SP stream shapes —
+                        // the port of `Collide_LineOfSight`'s subject args [M 0x12f358:92-93].
+                        let ex = self.copter_stream_hashes(ci);
+                        if !d.world.segment_bullet_clear_excluding(b.pos, cp, &ex) { continue; }
+                        best = Some((ci, dist, true));
+                    }
+                    if let Some((i, _, copter)) = best { target = Some(i); target_copter = copter; }
                 }
                 b.target = target;
+                b.target_copter = target_copter;
                 if let Some(ti) = target {
-                    let tp = self.list[ti].pos;
+                    let tp = if target_copter { self.copters[ti].pos() } else { self.list[ti].pos };
                     let to = [tp[0] - b.pos[0], tp[1] - b.pos[1], tp[2] - b.pos[2]];
                     let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
                     if l > 0.0 {
@@ -16504,6 +16591,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             pos: muzzle, dir, speed, travelled: 0.0, range: f(0x1c), damage: f(0x0c), weapon: weapon as u16,
             first: true, dead: false, bounces: 0,
             homing: flags6c & 0x2_0000 != 0, target: None,
+            target_copter: false,
             gravity: flags6c & 0x8 != 0,
             guided_cam: false, // 0x67's +0x6C is 0 [L] — the arm is inert either way
             snd: 0, swoosh: None, born: self.frame,
@@ -17848,7 +17936,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             self.player_bullets.push(PlayerBullet {
                                 pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage: f32_at(0x0c),
                                 weapon: crate::gt::TURRET_WEAPON_RECORD as u16, first: true, dead: false, bounces: 0,
-                                homing: f6c & 0x2_0000 != 0, target: None, gravity: f6c & 0x8 != 0, guided_cam: false,
+                                homing: f6c & 0x2_0000 != 0, target: None, target_copter: false, gravity: f6c & 0x8 != 0, guided_cam: false,
                                 snd: 0, swoosh: None, born: frame,
                             });
                         }

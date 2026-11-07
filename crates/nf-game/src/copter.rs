@@ -548,6 +548,14 @@ impl Copter {
                 // Case 1 [M :138-187]: Copter_Move, then the spot check. The Mayhew latch keeps
                 // +0x74 == 100 copters out of the spot test entirely [M :140] — the 05 patrols
                 // carry that value [L the level's params] and never attack.
+                // SPOT-CHECK WARRANT (homing-copter-3, unported — the spot gate itself stays
+                // unported, `timer` never moves): the game's spot LOS is
+                // `Collide_LineOfSight(aimpoint, obj+0x80, cel, copter_obj, bond_obj, 0x2e)`
+                // [M 0x17dbb8:171-172] — the ray's SUBJECT objects are the COPTER OBJ and
+                // BOND'S OBJ, so neither the copter's own mesh nor Bond's can block it. When
+                // this slice lands, its ray must exclude both subjects' shapes (the port's
+                // dynamic-set analogue: the copter's SP stream hashes via
+                // `Drones::copter_stream_hashes`, and Bond's own shapes if any pose).
                 let (_, p) = self.move_tick(paths, rng);
                 posed = p;
                 if self.arrival != 100 {
@@ -719,6 +727,20 @@ impl Copter {
             return None; // [M 0x17e4b8:6-8]
         }
         self.body_obj // [M 0x17e4b8:9 — *(rec+0x38)]
+    }
+
+    /// The body's `SP_HideObj` state — the heat-seek gate. `Copter_Create` hides the SP at create
+    /// when the gate channel is off [M 0x17d340:73-76]; `Copter_Update`'s head unhides on the
+    /// gate's first ON tick and clears the channel [M 0x17dbb8:91-97, the port clears `self.gate`
+    /// on that tick]. The game's heat-seek pick reads the body obj's `+0xFC` in-view counter
+    /// [M `Bullet_heatseekable` 0x12f248:29], which a hidden body cannot pass: the view never
+    /// adds it (the `Script_HideObj` cascade sets obj+0xF0 bit 0x10 [M 0x1db808:27-32] and the
+    /// view skips hidden cels), so `control_movement_object_handler` 0x1336f8:242-246 decays the
+    /// counter from `control_init_object`'s 2 [M 0x134630:16] to 0 within three ticks. The port
+    /// has no per-frame SP view cull, so shown/hidden is the whole gate: hidden ⇒ never a homing
+    /// candidate; shown ⇒ the counter rides the view-add as on the disc.
+    pub fn body_shown(&self) -> bool {
+        self.gate == 0
     }
 
     /// `Copter_FireGun` 0x17d828 — one attack tick. Only gun A (`rec+0x44`, slot 5) counts and
