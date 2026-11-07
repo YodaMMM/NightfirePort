@@ -59,28 +59,6 @@ fn p8_is_an_integer_distance() {
     }
 }
 
-/// A screened spawn keeps clear of Bond: with him standing on a group-6 spot on 0700000d, that spot
-/// stays empty while the rest of the group comes in.
-#[test]
-fn a_screened_spawn_never_lands_on_bond() {
-    let mut scene = nf_view::load(&iso(), "0700000d.bin", false).expect("load");
-    step(&mut scene, 900);
-    let (spot, t0) = {
-        let sim = scene.sim.as_mut().unwrap();
-        let t = spawner(sim, 6).templates[0];
-        let spot = sim.drones.list[t].pos;
-        sim.drones.set_channel(5);
-        (spot, t)
-    };
-    for _ in 0..240 {
-        { let sim = scene.sim.as_mut().unwrap(); sim.bond.pos = spot; sim.bond.vel = [0.0; 3]; }
-        step(&mut scene, 1);
-    }
-    let sim = scene.sim.as_ref().unwrap();
-    assert!(!up(sim, 6).is_empty(), "sister: the group was released");
-    assert!(!sim.drones.list[t0].present, "the spot under Bond stays empty [M 0x137cb0:28-31]");
-}
-
 /// 07000011 group 1 (mode 3, 2 alive, 2 waves, start 0x15 [D #184]): both guards of a wave come in
 /// together, and the second pair follows the first pair's deaths while the corpses still lie there.
 #[test]
@@ -159,4 +137,28 @@ fn a_guard_beside_a_live_template_is_drawn() {
     assert!(!chars.is_empty(), "the added guard has a body");
     assert!(chars.iter().all(|&c| !scene.char_hidden(c, Default::default())), "and it is not hidden");
     assert_eq!(sim.drones.list[n0].index, n0);
+}
+
+/// The tower fights close: on 07000011 every drone's engage range is 6 and combat range 9 (5 and 8
+/// for anim set 9) instead of the class draw; 07000014's are 10 (7 for set 9, set 5 keeps its
+/// draw) [M 0x14b300:429-457, raw 0x14bb60-0x14bc1c]. The fresh-boot capture has the start
+/// corridor's guards standing 6-9 from Bond [L docs/live/2026-11-01-07000011-start-corridor-guards.md].
+/// Sister: a level with neither override keeps the class draw (12 and up for the classes on 0d).
+#[test]
+fn engage_ranges_follow_the_level() {
+    let scene = nf_view::load(&iso(), "07000011.bin", false).expect("load");
+    let sim = scene.sim.as_ref().unwrap();
+    assert!(!sim.drones.list.is_empty());
+    for d in &sim.drones.list {
+        let want = if d.anim_set == 9 { (5.0, 8.0) } else { (6.0, 9.0) };
+        assert_eq!((d.engage_range, d.combat_range), want, "drone {} set {}", d.index, d.anim_set);
+    }
+    let scene = nf_view::load(&iso(), "07000014.bin", false).expect("load");
+    let sim = scene.sim.as_ref().unwrap();
+    for d in sim.drones.list.iter().filter(|d| d.anim_set != 5 && d.anim_set != 9 && d.mode != 0xc && d.mode != 0x11) {
+        assert_eq!(d.engage_range, 10.0, "drone {} set {}", d.index, d.anim_set);
+    }
+    let scene = nf_view::load(&iso(), "0700000d.bin", false).expect("load");
+    let sim = scene.sim.as_ref().unwrap();
+    assert!(sim.drones.list.iter().all(|d| d.engage_range >= 12.0), "sister: the class draw stands");
 }

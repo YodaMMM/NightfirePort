@@ -507,10 +507,32 @@ fn crane_ladder_grab_and_climb() {
 #[test]
 fn qclaw_reels_to_the_crane_pulley() {
     let mut w = load_warm();
-    // Stand on the dock under the pulley, ~4 m away.
+    // A stand with a clear bolt line to the pulley: the ground under it sees only the crane deck.
+    let target0 = [213.62f32, 15.77, -234.77];
+    let stand = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let mut found = None;
+        'scan: for i in 0..24 {
+            for j in 0..24 {
+                let (x, z) = (201.0 + i as f32, -247.0 + j as f32);
+                let Some((f, _)) = sim.world.segment_hit([x, 19.0, z], [x, 8.0, z]) else { continue };
+                let y = 19.0 - 11.0 * f;
+                let head = [x, y + 1.7, z];
+                let d = [target0[0] - head[0], target0[1] - head[1], target0[2] - head[2]];
+                let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                if !(3.0..15.0).contains(&l) { continue; }
+                let k = (l - 1.6) / l;
+                if sim.world.segment_bullet_clear(head, [head[0] + d[0] * k, head[1] + d[1] * k, head[2] + d[2] * k]) {
+                    found = Some([x, y + 1.1, z]);
+                    break 'scan;
+                }
+            }
+        }
+        found.expect("a stand sees the pulley #259")
+    };
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [212.4, 11.0, -236.6];
+        sim.bond.pos = stand;
         sim.bond.vel = [0.0; 3];
         sim.gun.switch_request = 0x50;
     }
@@ -542,4 +564,38 @@ fn aim_at(w: &Walker, target: [f32; 3]) -> (f32, f32) {
     let err = walker::wrap_pi(desired - sim.bond.yaw);
     let want_pitch = (dy / walker::dxz(bp, target).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
     (err.clamp(-0.08, 0.08), (want_pitch - sim.bond.pitch).clamp(-0.08, 0.08))
+}
+
+/// The claw is a flying bolt [M Bullet_Delete 0x12e660:50-55]: from the control corner the pulley
+/// #310 (203.40, 14.64, -291.32) stands behind the corner wall and the fire does not latch; the
+/// pulley #370 in the same spot's clear view does (the sister).
+#[test]
+fn the_claw_stops_at_a_wall() {
+    let mut w = load_warm();
+    let point = |w: &Walker, x: f32| w.scene.sim.as_ref().unwrap().drones.grapple_points.iter()
+        .find(|p| (p.pos[0] - x).abs() < 0.5).expect("the pulley [D]").pos;
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [189.0, 10.9, -288.0];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(30);
+    for _ in 0..20 { w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false, false, false); }
+    let fire_at = |w: &mut Walker, gp: [f32; 3]| -> bool {
+        for k in 0..30 {
+            let sim = w.scene.sim.as_mut().unwrap();
+            let h = sim.bond.head();
+            let d = [gp[0] - h[0], gp[1] - h[1], gp[2] - h[2]];
+            let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-4);
+            sim.bond.yaw = d[0].atan2(d[2]);
+            sim.bond.pitch = (d[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+            sim.step_bond(Default::default(), k % 2 == 0, false, false);
+            if sim.bond.grapple.is_some() { return true; }
+        }
+        false
+    };
+    let behind = point(&w, 203.4);
+    assert!(!fire_at(&mut w, behind), "the wall takes the bolt [M 0x12e660:50-55]");
+    let clear = point(&w, 178.77);
+    assert!(fire_at(&mut w, clear), "sister: the clear pulley latches [M 0x195da0]");
 }

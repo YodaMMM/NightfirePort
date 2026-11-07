@@ -314,6 +314,72 @@ fn pickups_taken_by_walking_over() {
         "no gold medal → the kind-6 bonus is not created [M 0x18dda0:93-95]");
 }
 
+/// A stand on the atrium ledge with a clear line to the SkyBridge pulley #265 [D the floor scan].
+const LEDGE_11: [f32; 3] = [-5.8, 47.9, 24.4];
+
+/// The vent route into the storeroom, on the player's inputs from the ledge: the claw to the
+/// SkyBridge pulley, the drop on the bridge roof, E on the exterior grill #312 [D mask 4], the duct
+/// (x -0.5 south, then x 0.5..9 east at z 19.5 [D the floor scan]), E on the interior grill #84, the
+/// fall through plate #235 (ch 0x66, the level's Bond moment [M Trigger_Calc 0x1b1900:12-17]) and
+/// the walk onto plate #283 (ch 0x5A), which unlocks the storeroom door from inside [D #213].
+#[test]
+fn the_vent_route_reaches_the_storeroom() {
+    let mut scene = nf_view::load_weapons(&iso(), "07000011.bin", false, &[0x50]).expect("load with the claw");
+    fn tick(scene: &mut nf_view::scene::Scene, n: u32, i: nf_game::player::Input, fire: bool, usek: bool) {
+        for _ in 0..n { scene.sim.as_mut().unwrap().step_bond(i.clone(), fire, false, usek); }
+    }
+    fn press_e(scene: &mut nf_view::scene::Scene) {
+        for _ in 0..20 { tick(scene, 1, Default::default(), false, true); tick(scene, 1, Default::default(), false, false); }
+    }
+    fn walk(scene: &mut nf_view::scene::Scene, to: [f32; 2]) {
+        for _ in 0..400 {
+            let p = scene.sim.as_ref().unwrap().bond.pos;
+            let (dx, dz) = (to[0] - p[0], to[1] - p[2]);
+            if (dx * dx + dz * dz).sqrt() < 0.3 { return; }
+            scene.sim.as_mut().unwrap().bond.yaw = dx.atan2(dz);
+            tick(scene, 1, nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false);
+        }
+    }
+    tick(&mut scene, 600, Default::default(), false, false);
+    let gp = scene.sim.as_ref().unwrap().drones.grapple_points[0].pos;
+    { let sim = scene.sim.as_mut().unwrap(); sim.bond.pos = LEDGE_11; sim.bond.vel = [0.0; 3]; }
+    tick(&mut scene, 20, nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false, false);
+    for _ in 0..60 {
+        let sim = scene.sim.as_mut().unwrap();
+        let h = sim.bond.head();
+        let d = [gp[0] - h[0], gp[1] - h[1], gp[2] - h[2]];
+        let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-4);
+        sim.bond.yaw = d[0].atan2(d[2]);
+        sim.bond.pitch = (d[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+        sim.step_bond(Default::default(), true, false, false);
+        if sim.bond.grapple.is_some() { break; }
+    }
+    assert!(scene.sim.as_ref().unwrap().bond.grapple.is_some(), "the claw latches from the ledge [M 0x195da0]");
+    tick(&mut scene, 200, Default::default(), true, false);
+    { let sim = scene.sim.as_mut().unwrap(); sim.bond.yaw = std::f32::consts::PI; sim.bond.pitch = 0.0; }
+    tick(&mut scene, 30, nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false);
+    tick(&mut scene, 40, Default::default(), false, false);
+    assert!(scene.sim.as_ref().unwrap().bond.pos[1] > 53.0, "Bond stands on the bridge roof");
+    let grill = |s: &nf_view::scene::Scene, k: usize| s.sim.as_ref().unwrap().drones.sss.list[k].pos();
+    let closed = grill(&scene, 1);
+    press_e(&mut scene);
+    tick(&mut scene, 180, Default::default(), false, false);
+    assert!(grill(&scene, 1) != closed, "E opens the exterior grill #312 [M SS_Activate 0x1a9ea8]");
+    for to in [[-0.5, 23.3], [-0.5, 19.5], [8.0, 19.5], [9.3, 19.6]] { walk(&mut scene, to); }
+    assert!(!scene.sim.as_ref().unwrap().drones.channels.on(0x5a), "sister: the storeroom plate is still unfired");
+    scene.sim.as_mut().unwrap().bond.pitch = -0.95;
+    press_e(&mut scene);
+    tick(&mut scene, 200, Default::default(), false, false);
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(sim.bond.pos[1] < 48.5, "Bond drops into the storeroom, got {:?}", sim.bond.pos);
+        assert!(sim.drones.channels.on(0x66), "the fall crosses the Bond-moment plate #235 [D]");
+    }
+    scene.sim.as_mut().unwrap().bond.pitch = 0.0;
+    for to in [[10.5, 19.6], [12.7, 19.6]] { walk(&mut scene, to); }
+    assert!(scene.sim.as_ref().unwrap().drones.channels.on(0x5a), "plate #283 unlocks the door from inside [D]");
+}
+
 /// The Q-Claw grapple (0x3A #265 "GRAPPLEPOINT_SkyBridge" [D]; the level kit grants the claw 0x50
 /// [M 0x1a7ef8 case 0x7000011]): the fire latches the aim ray's point [M Player_SetGrapplePoint
 /// 0x195da0] and the reel lifts Bond [M Player_SSGrapple 0x192860]. Sister: no grapple before the fire.
@@ -323,10 +389,11 @@ fn grapple_point_reels_bond_up() {
     let mut scene = nf_view::load_weapons(&iso, "07000011.bin", false, &[0x50]).expect("load with the claw");
     let gp = scene.sim.as_ref().unwrap().drones.grapple_points.iter().find(|p| (p.pos[1] - 55.55).abs() < 0.5)
         .expect("the SkyBridge grapple point [D #265]").pos;
-    // Bond on the office floor under the point (the atrium side), claw out.
+    // Bond on the atrium ledge, the 45.4 strip the plates #281/#284 lie on, where the bridge roof
+    // leaves the line clear; the corridor under the point sees only the ceiling. Claw out.
     {
         let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = [gp[0], 46.5, gp[2] - 4.0];
+        sim.bond.pos = LEDGE_11;
         sim.bond.vel = [0.0; 3];
         for _ in 0..20 { sim.step_bond(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false, false, false); }
     }

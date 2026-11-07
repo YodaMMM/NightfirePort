@@ -1987,6 +1987,17 @@ impl Drone {
             3 => (40.0, 25.0, 6.0, 100.0), 4 => (1000.0, 75.0, 8.0, 1000.0), 5 => (0.0, 12.0, 4.0, 1.0), _ => (24.0, 12.0, 4.0, 1.0) };
         let f0 = f0_base + rng.frand(f0_rand);
         let fc = match param(14) { 3 => fc_add + rng.frand(6.0), 4 => 1000.0, _ => f0 + fc_add + rng.frand(f0_rand) };
+        // The two level overrides, by the anim set +0xDA, after the class draws [M 0x14b300:429-457,
+        // raw 0x14bb60-0x14bc1c]: the tower's offices and stairwell fight close, 07000014's guards
+        // engage at 10 (7 for set 9, set 5 keeps its class range).
+        let (f0, fc) = match (d.level, setup.anim_set) {
+            (0x0700_0011, 9) => (5.0, 8.0),
+            (0x0700_0011, _) => (6.0, 9.0),
+            (0x0700_0014, 5) => (f0, fc),
+            (0x0700_0014, 9) => (7.0, fc),
+            (0x0700_0014, _) => (10.0, fc),
+            _ => (f0, fc),
+        };
         let clip = match weapon { 0x16 | 0x18..=0x1b => 0x40, 0x1e | 0x1f | 0x24 | 0x25 => 5, _ => 0x40 };
         // `NDrone2_DefaultInit` (0x14b300 lines 348-376): `+0xBCC` and `+0xBCE` come from **param 11** —
         // `uVar4 = piVar19[0x18]`, and params start at `piVar19[13]` (`Drone_Create` 0x136be0 copies

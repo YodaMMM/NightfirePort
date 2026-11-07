@@ -3220,7 +3220,7 @@ impl Sim {
             {
                 let head = self.bond.head();
                 let dir = self.bond.look();
-                if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, claw)) {
+                if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, claw)).filter(|&p| Self::claw_clear(&self.world, head, p)) {
                     // The claw's latch clunk: `Bullet_Delete` 0x12e660:50-55 — the claw bolt (+0x70 &
                     // 0x40) dying on a class-'Q' (0x51) grapple object plays `Sound_Play3D(100, -1,
                     // -1, 0x28d, bullet+0xC0)` right before `Player_SetGrapplePoint` [M disasm $a0
@@ -6547,6 +6547,17 @@ impl Sim {
     /// hidden, `Player_WeaponFiring` 0x1a5460:88-98).
     pub fn laser_sight(&self) -> Option<(nf_game::world::V3, nf_game::world::V3, Option<(nf_game::world::V3, nf_game::world::V3)>)> {
         self.laser_sight
+    }
+
+    /// The claw is a flying bolt that latches only on a class-'Q' hit [M Bullet_Delete 0x12e660:50-55
+    /// -> Player_SetGrapplePoint 0x195da0]: a wall before the point takes it. The segment stops
+    /// short of the point's own sphere and the bolt's radius.
+    fn claw_clear(world: &nf_game::world::CollisionWorld, head: [f32; 3], point: [f32; 3]) -> bool {
+        let d = [point[0] - head[0], point[1] - head[1], point[2] - head[2]];
+        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        if len <= 1.6 { return true; }
+        let k = (len - 1.6) / len;
+        world.segment_bullet_clear(head, [head[0] + d[0] * k, head[1] + d[1] * k, head[2] + d[2] * k])
     }
 
     /// A pool body is free when no present drone draws with it.
@@ -14144,7 +14155,7 @@ impl Sim {
                     && nf_game::gadget::is_grapple(r[slot].held)
                 {
                     let (head, dir) = (b.head(), b.look());
-                    if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, r[slot].held)) {
+                    if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, r[slot].held)).filter(|&p| Self::claw_clear(&self.world, head, p)) {
                         b.grapple = Some(nf_game::gadget::GrappleState { point, phase: 1, pull: 0.0 });
                         b.change_substate(nf_game::player::SS_GRAPPLE);
                         b.vel = [0.0; 3];
