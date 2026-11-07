@@ -13,7 +13,8 @@
 //!   health (+0x04 = placement param 3 [M 0x12c318:36]); at health < 0 it writes
 //!   `switch_channels[tag+0x12] = 1` (tag+0x12 = placement param 0 [M 0x12c318:35]) and smashes.
 //!   The 0700000d "C5" doors (#93/#96 `bigdoor01/02`) carry ch 0x1f and health 1000/10000
-//!   [D placements; Destroy_Update 0x12c4f8's p6 countdown arm is not ported — inert there, p6 = 0].
+//!   [D placements; p6 = 0 there]. `Destroy_Update` 0x12c4f8's p6 countdown is `Destroy::countdown`:
+//!   only 07000014 carries non-zero p6 (17 leaves [D the all-level census]).
 //!   The second arm IS ported (`Destroy::kill_channel`, `Props::channel_kills`): every tick a live
 //!   destroyable whose +0x10 word (placement param 1 [M 0x12c318:36 — `piVar1+4 = tag+0x30`]) names
 //!   an ON channel smashes (the word then clears [M 0x12c4f8:32]). It is inert on 0700000d (no
@@ -41,6 +42,17 @@ pub struct CamSubject {
     pub channel: u8,
     pub hit: bool,
 }
+
+/// `Destroy_Smash` 0x12bb60:42-55's named-glist hash [M 0x12bc2c-0x12bc48: `lw $v0, 0xd8($s7)` /
+/// `jal hashtable_getitem` with `lui $a0, 0x200 / ori $a0, 0x1d9` → the compare
+/// `obj+0xD8 == hashtable_getitem(0x020001d9)`; the map parser registers hashcode → celglist
+/// pointer 0x1d1508:28-29]. On 07000002 it resolves to the "Computer2" map object [D map 51
+/// object 12] — the glist SIBLING (+0x50) of the destroy placement's own target "Computer1"
+/// [D pl[14] hash 0x020001d8; the sibling chain in `Destroy::smashed_hash`]. The smash swaps
+/// obj+0xD8 to that sibling before the compare [M 0x12bbb8-0x12bbc4], so the arm fires exactly
+/// on the leaf whose smashed-model hash is this one. The port carries the sibling hash on the
+/// leaf (one field — no level-wide name table) and compares it here.
+pub const SMASH_STAT_HASH: u32 = 0x0200_01d9;
 
 #[derive(Clone, Debug)]
 pub struct Destroy {
@@ -90,6 +102,24 @@ pub struct Destroy {
     /// Tick scratch: a class-5 contact whose weapon is 0x67 reached this leaf this tick (the
     /// colour step's drop half [M 0x12bd48:32-34]). Cleared by `destroy_colour_tick`.
     pub hit67: bool,
+    /// The hashcode of the glist the smash swaps into obj+0xD8 — the glist SIBLING (+0x50) of the
+    /// placement's target object [M 0x1d1b68:63 computes `pCelList + idx·0x50 + 0x50` and :96
+    /// passes it; the dispatcher's `move $t0, $t1` 0x1d04fc hands it to `Destroy_Create`'s 5th
+    /// arg; 0x12c318:25-30 stores it into the tag's +0x00 when the target glist's +0x40 is 0 —
+    /// 0 on every placement glist [L ee_snapshot.bin: 4/4 walked read 0]; the smash's
+    /// `Control_SetGList(obj, BL[0])` 0x12bbb8-bc4 then swaps it in]. 0xffffffff (an unnamed
+    /// object) or 0 when the target is the map's last object. On 07000002 the computer pair
+    /// pl[14] (target "Computer1" 0x020001d8) carries **0x020001d9** ("Computer2") [D map 51
+    /// objects 11/12] — the hash `Destroy_Smash` compares against (see `SMASH_STAT_HASH`).
+    pub smashed_hash: u32,
+    /// tag+0x0C, the post-smash countdown in ticks: −30 per p6 at create (FRAME_RATE reads 30 while the level builds, `door::CREATE_FRAME_RATE`) [L 
+    /// −300/−90/−60/−30 on p6 10/3/2/1 at rest on 07000014; M 0x12c474-0x12c4c0], negative until
+    /// the smash negates it [M 0x12bbd4-dc].
+    /// While it runs positive `Destroy_Update` counts it down and only at zero writes the output
+    /// channel [M 0x12c518-40]; the smash itself writes nothing [M 0x12bbe8]. 0 = the immediate
+    /// write. 07000014's generator hall runs on this: each stage of 0x51 → … → 0x85 waits out its
+    /// own p6.
+    pub countdown: i32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -98,7 +128,12 @@ pub struct Props {
     pub destroy: Vec<Destroy>,
     /// The mounted-gun implementations (`GunImp_Create` 0x131f20, placement 0x34).
     pub gunimps: Vec<crate::gunimp::GunImp>,
-
+    /// `Destroy_Smash` 0x12bb60:42-55's stat arm scratch: a smash of a leaf whose smashed-model
+    /// hash is the named one set this; the sim readers (drone.rs `smash_stat_check`) consume and
+    /// clear it — the level gate and the tally call live there, where the sim's level id and the
+    /// mission status live. Cleared-on-read, so a set without a reader is lost (no such path:
+    /// every smash caller checks).
+    pub stat_hit: bool,
 }
 
 /// One placement's target object's bounds placed by the placement transform (the game's contact
@@ -168,10 +203,24 @@ impl Props {
                 // param 2's low byte, tag+0x08 (smash blast damage) = param 5, tag+0x14 (the
                 // bullet mask) = ~param 4 with 0 staying 0 [M 0x12c318:47-52 disasm]. The colour
                 // pair starts white (recovery clamps at 255 [M 0x12bd48:62-68]).
-                0xe1 => props.destroy.push(Destroy { placement: i, pos: p.translation, sphere: object_radius(level, m, p), lo, hi, channel: param(0) as u8, health: param(3) as f32, dead: false, kind: (param(2) & 0xff) as u8, blast_damage: param(5) as f32 * 0.01,
-                    kill_channel: param(1) as u16,
-                    mask: (param(4) == 0).then_some(0).unwrap_or(!(param(4) as u16)),
-                    colour: [0xff, 0xff], hit67: false }),
+                0xe1 => {
+                    // The smashed-model hash: the target object's glist SIBLING (+0x50 in the cel
+                    // array = the next map object in parse order) — the create stores it into the
+                    // tag's +0x00 (the target glist's +0x40 is 0 on every placement glist [L
+                    // ee_snapshot.bin]) and the smash swaps it into obj+0xD8 [M 0x1d1b68:63,96 →
+                    // 0x1d04fc → 0x12c318:25-30 → 0x12bbb8-bc4; `Destroy::smashed_hash`].
+                    let smashed_hash = {
+                        let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else { Some((m, p.index as usize)) };
+                        target.and_then(|(mm, oo)| level.maps[mm].objects.get(oo + 1)).map_or(0, |o| o.hashcode)
+                    };
+                    props.destroy.push(Destroy { placement: i, pos: p.translation, sphere: object_radius(level, m, p), lo, hi, channel: param(0) as u8, health: param(3) as f32, dead: false, kind: (param(2) & 0xff) as u8, blast_damage: param(5) as f32 * 0.01,
+                        kill_channel: param(1) as u16,
+                        mask: (param(4) == 0).then_some(0).unwrap_or(!(param(4) as u16)),
+                        colour: [0xff, 0xff], hit67: false,
+                        smashed_hash,
+                        countdown: -(param(6) as i32 * 30),
+                    });
+                }
                 // `GunImp_Create` 0x131f20 (placement 0x34, class 0x47): the SP arm mounts the
                 // TurretGuns[0xb] hardware (the laser) [M 0x131f20:52-63]; the base transform is
                 // `Quat_QuatToMat` on the placement's +0x24 quaternion with `Mat_SetTrans` writing
@@ -279,10 +328,20 @@ impl Props {
         let d = self.destroy.get_mut(i)?;
         if d.dead { return None; }
         d.dead = true;
+        d.countdown = -d.countdown;
         // The channel-0 arm [M 0x12bb60:34-37]: a tag whose channel word is 0 only flips
         // obj+0xff (the class byte) — no switch_channels write. The write is the else arm's
-        // (0x12bb60:40), for a non-zero channel.
-        if d.channel != 0 { ch.set(d.channel as u32, 1, frame); }
+        // (0x12bb60:40), for a non-zero channel with no countdown running [M 0x12bbe8]; a running
+        // one leaves the write to `channel_kills`.
+        let write = d.channel != 0 && d.countdown == 0;
+        if write { ch.set(d.channel as u32, 1, frame); }
+        // The 07000002-only stat arm's identity half [M 0x12bb60:42-55]: AFTER the channel write
+        // the game compares the smashed glist (obj+0xD8, swapped to the sibling at 0x12bbb8-bc4)
+        // with `hashtable_getitem(0x020001d9)` and calls `PlrStat_LogShotHitScenery(0)`
+        // [M 0x12bc44-48]. The port carries the sibling hash on the leaf; the LEVEL gate and the
+        // tally call are the sim readers' (drone.rs `smash_stat_check` — the level id and the
+        // mission status live there).
+        if write && d.smashed_hash == SMASH_STAT_HASH { self.stat_hit = true; }
         if d.kind == 0 { return None; }
         // The box centre stands in for the object's position; a leaf without bounds (the C5
         // pair's bigdoor01) has none, so it blasts at its placement — at the box's (0,0,0) its
@@ -327,7 +386,10 @@ impl Props {
                     // `Destroy_CollisionHandler` 0x12bd48:31-49 drains HITDATA+8 per class-5
                     // contact and reaches the death through `Destroy_Smash` — the channel write
                     // and the blast are the smash's [M 0x12bb60:40,:58-76]. The handler RETURNS
-                    // here, so the death tick skips the colour step (the freeze at death).
+                    // here, so the death tick skips the colour step (the freeze at death). A
+                    // countdown is negated here AND in the smash [M 0x12bde4-e00, 0x12bbd4-dc], so
+                    // a shot-out timed leaf never counts and never writes its channel.
+                    if self.destroy[i].channel != 0 { self.destroy[i].countdown = -self.destroy[i].countdown; }
                     if let Some(s) = self.smash(i, ch, frame) { smashes.push(s); }
                 }
             }
@@ -366,6 +428,13 @@ impl Props {
     pub fn channel_kills(&mut self, ch: &mut Channels, frame: u32) -> Vec<(V3, f32, f32, u8)> {
         let mut smashes = Vec::new();
         for i in (0..self.destroy.len()).rev() {
+            // The countdown arm runs first and ends the leaf's tick [M 0x12c518-48].
+            let d = &mut self.destroy[i];
+            if d.channel != 0 && d.countdown > 0 {
+                d.countdown -= 1;
+                if d.countdown == 0 { ch.set(d.channel as u32, 1, frame); }
+                continue;
+            }
             if self.destroy[i].dead || self.destroy[i].kill_channel == 0 { continue; }
             if !ch.on(self.destroy[i].kill_channel as u32) { continue; }
             self.destroy[i].kill_channel = 0; // the game clears the word [M 0x12c4f8:32]
@@ -383,8 +452,9 @@ mod tests {
         Props {
             subjects: vec![CamSubject { placement: 0, lo: [4.0, 7.0, -111.0], hi: [6.0, 9.0, -109.0], channel: 0x1c, hit: false }],
             destroy: vec![Destroy { placement: 1, pos: [0.0; 3], sphere: 0.0, lo: [133.0, 4.0, -270.0], hi: [137.0, 7.0, -268.0], channel: 0x1f, health: 100.0, dead: false,
-            kind: 1, blast_damage: 100.0, kill_channel: 0, mask: 0xffef, colour: [0xff, 0xff], hit67: false }],
+            kind: 1, blast_damage: 100.0, kill_channel: 0, mask: 0xffef, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown: 0 }],
             gunimps: Vec::new(),
+            stat_hit: false,
         }
     }
 
@@ -539,8 +609,8 @@ mod tests {
         let mut p = Props::default();
         // Two tags: placement 0 kills on ch 5 and dies writing ch 6; placement 1 (newer) kills on
         // ch 6 and dies writing ch 7. A single pass after ch 5 rises smashes only the OLDER tag.
-        p.destroy.push(Destroy { placement: 0, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3], channel: 6, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 5, mask: 0, colour: [0xff, 0xff], hit67: false });
-        p.destroy.push(Destroy { placement: 1, pos: [0.0; 3], sphere: 0.0, lo: [2.0; 3], hi: [3.0; 3], channel: 7, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 6, mask: 0, colour: [0xff, 0xff], hit67: false });
+        p.destroy.push(Destroy { placement: 0, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3], channel: 6, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 5, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown: 0 });
+        p.destroy.push(Destroy { placement: 1, pos: [0.0; 3], sphere: 0.0, lo: [2.0; 3], hi: [3.0; 3], channel: 7, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel: 6, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown: 0 });
         let mut ch = Channels::default();
         ch.set(5, 1, 1);
         let s = p.channel_kills(&mut ch, 1);
@@ -549,5 +619,55 @@ mod tests {
         assert!(!p.destroy[1].dead, "the newer tag (checked first, newest-first) waits a tick [M 0x1336f8:54-68]");
         p.channel_kills(&mut ch, 2);
         assert!(p.destroy[1].dead && ch.on(7), "the cascade links one tick later");
+    }
+
+    /// `Destroy_Update` 0x12c4f8's countdown arm: a timed leaf's smash writes nothing, the channel
+    /// rises on the tick the countdown reaches zero [M 0x12c518-40], and the next leaf in a chain
+    /// smashes off that write. A shot-out timed leaf never counts: the handler and the smash both
+    /// negate [M 0x12bde4-e00, 0x12bbd4-dc].
+    #[test]
+    fn a_timed_leaf_writes_its_channel_when_the_countdown_ends() {
+        let leaf = |placement, kill_channel, channel, countdown| Destroy { placement, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3],
+            channel, health: 1.0, dead: false, kind: 0, blast_damage: 0.0, kill_channel, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0, countdown };
+        let mut p = Props::default();
+        p.destroy.push(leaf(0, 0x52, 0x4e, -120));
+        p.destroy.push(leaf(1, 0x51, 0x52, -60));
+        let mut ch = Channels::default();
+        ch.set(0x51, 1, 0);
+        p.channel_kills(&mut ch, 0);
+        assert!(p.destroy[1].dead && !ch.on(0x52), "the smash lands now, the write waits");
+        for f in 1..60 { p.channel_kills(&mut ch, f); }
+        assert!(!ch.on(0x52), "59 ticks on the channel is still down");
+        p.channel_kills(&mut ch, 60);
+        assert!(ch.on(0x52), "the 60th tick writes it");
+        for f in 61..180 { p.channel_kills(&mut ch, f); assert!(!ch.on(0x4e), "tick {f}"); }
+        p.channel_kills(&mut ch, 180);
+        assert!(ch.on(0x4e), "the second stage waits out its own 120 ticks after its smash");
+
+        let mut q = Props::default();
+        q.destroy.push(leaf(0, 0, 0x52, -60));
+        let mut ch = Channels::default();
+        q.bullet_hit([0.5, -1.0, 0.5], [0.5, 2.0, 0.5], 1, 0, 50.0, &mut ch, 1);
+        assert!(q.destroy[0].dead);
+        for f in 2..200 { q.channel_kills(&mut ch, f); }
+        assert!(!ch.on(0x52), "the double negate leaves the shot-out leaf silent");
+    }
+
+    /// `Destroy_Smash` 0x12bb60:42-55's identity half: the scratch rises only on the leaf whose
+    /// smashed-model hash is the named one, and never on a sibling-hash miss [M 0x12bc3c-48's
+    /// compare; the port carries the sibling hash on the leaf]. The level gate and the log are
+    /// the sim readers' (drone.rs `smash_stat_check`).
+    #[test]
+    fn the_stat_scratch_rises_only_on_the_named_smashed_hash() {
+        let mut p = Props::default();
+        // The named leaf (Mayhew's computer's smashed model) and an unnamed sibling (the cable
+        // light's 0xffffffff [D pl[394] → "cable light1b"]).
+        p.destroy.push(Destroy { placement: 0, pos: [0.0; 3], sphere: 0.0, lo: [0.0; 3], hi: [1.0; 3], channel: 0x48, health: 0.0, dead: false, kind: 1, blast_damage: 1.0, kill_channel: 0, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: SMASH_STAT_HASH, countdown: 0 });
+        p.destroy.push(Destroy { placement: 1, pos: [2.0; 3], sphere: 0.0, lo: [2.0; 3], hi: [3.0; 3], channel: 0, health: 0.0, dead: false, kind: 1, blast_damage: 1.0, kill_channel: 0, mask: 0, colour: [0xff, 0xff], hit67: false, smashed_hash: 0xffff_ffff, countdown: 0 });
+        let mut ch = Channels::default();
+        p.smash(1, &mut ch, 1);
+        assert!(p.destroy[1].dead && !p.stat_hit, "the unnamed sibling's smash sets nothing [M 0x12bc3c-40's miss]");
+        p.smash(0, &mut ch, 2);
+        assert!(p.destroy[0].dead && p.stat_hit, "the named leaf's smash sets the scratch [M 0x12bc44-48's match]");
     }
 }
