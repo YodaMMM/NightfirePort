@@ -2067,7 +2067,7 @@ fn dead_destroy_centres(scene: &scene::Scene) -> Vec<[u32; 3]> {
     let Some(sim) = scene.sim.as_ref() else { return Vec::new() };
     scene.destroy_centres.iter()
         // The pair carries the leaf's PLACEMENT index, not its slot in `props.destroy`.
-        .filter(|(_, pl)| sim.drones.props.destroy.iter().any(|d| d.placement == *pl && d.dead))
+        .filter(|(_, pl)| sim.drones.props.destroy.iter().any(|d| d.placement == *pl && d.latched))
         .map(|(c, _)| c.map(f32::to_bits))
         .collect()
 }
@@ -2079,7 +2079,7 @@ fn dead_destroy_centres(scene: &scene::Scene) -> Vec<[u32; 3]> {
 fn wreck_draw_centres(scene: &scene::Scene) -> Vec<[u32; 3]> {
     let Some(sim) = scene.sim.as_ref() else { return Vec::new() };
     scene.destroy_wrecks.iter()
-        .filter(|(_, pl)| sim.drones.props.destroy.iter().any(|d| d.placement == *pl && d.dead))
+        .filter(|(_, pl)| sim.drones.props.destroy.iter().any(|d| d.placement == *pl && d.latched))
         .map(|(c, _)| c.map(f32::to_bits))
         .collect()
 }
