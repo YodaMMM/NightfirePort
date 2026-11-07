@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox4 at 2026-11-07T10:41Z
+
+---
+## Report (done, 2026-11-07T11:11Z)
+
+Closed by the driver: the report is on `s/mp-object-deleted` (docs/reports/mp-object-deleted.md); the worker didn't run finish.sh.
