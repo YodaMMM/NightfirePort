@@ -77,3 +77,12 @@ fix with a real-level test proved red first, one commit per fix.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+Fallback 1 `curl -sS -m 20 -H "Title: NightfirePort" -d "port-map-player: …" https://ntfy.sh/nightfire-yoda-8k3x`
+→ `curl: (28) Connection timed out after 20002 milliseconds`, exit 28.
+Fallback 2 python urllib → `URLError: <urlopen error [Errno 101] Network is unreachable>`.
+Fallback 3 `wget -q -O- --timeout=20 --post-data "port-map-player: …" https://ntfy.sh/nightfire-yoda-8k3x`
+→ exit 4 (network failure), no body. All three failed this window (the same shape the
+stream-batch-6/7/8 windows recorded).
