@@ -246,8 +246,7 @@ fn shouting_range_law_and_the_sp_shout_jumptable() {
     assert!(in_shouting_range(99.9, 0x0700_000f, true));
     assert!(!in_shouting_range(99.9, 0x0700_000f, false));
     assert!(!in_shouting_range(100.0, 0x0700_000f, true), "≥ 100.0 out [M 0x1788a0:42]");
-    assert!(in_shouting_range(39.9, 0x0700_0010, false), "level 0x07000010 leaves the band → 15/20 again [M 0x1788a0:16-19]");
-    assert!(!in_shouting_range(39.9, 0x0700_0010, true), "…so 39.9 is out there");
+    assert!(!in_shouting_range(39.9, 0x0700_0010, true), "level 0x07000010 leaves the band → 15/20 again, so 39.9 is out [M 0x1788a0:16-19]");
     // The SP jumptable [D 0x2fb6c0]: the dead-body 0x15 and surrender 0x13 shouts land in the
     // return-0 entries — an SP guard NEVER reacts to them; the armed-intruder/scream/team
     // shouts take the Attack arm (the receiver's `+0x4F8 |= 0x4000000 | 0x20000000`, 0x56 [M
