@@ -6,3 +6,8 @@ Family: every `Bullet_*`, `Gun*`, `Weapon*`, `Explode_*`, `Effect_*` function.
 
 ---
 claimed-by: sandbox3 at 2026-11-07T00:22Z
+
+---
+## Report (done, 2026-11-07T01:04Z)
+
+Closed by the driver: the report is on `s/port-map-bullets` (docs/reports/port-map-bullets.md); the worker didn't run finish.sh.
