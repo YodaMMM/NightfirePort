@@ -377,7 +377,10 @@ impl Copter {
             return false;
         }
         let probe = [cp[0] + dir[0] * 4.0, cp[1] + dir[1] * 4.0, cp[2] + dir[2] * 4.0]; // [M :156-169]
-        world.line_of_sight(probe, psph, 0x2e) // [M :171-172 — the game's flags word]
+        // The masked body directly, not the `LOS_MASKS_ON`-gated wrapper: 0x2e's bit 2 drops the
+        // class-0x10 glass surfaces [M Collide_Intersect 0x1ebaa8:315-317], so the copter spots
+        // Bond through a window. Unmasked, the 07000012 sky bridge's panes hid him on every tick.
+        world.line_of_sight_masked(probe, psph, 0x2e) // [M :171-172 — the game's flags word]
     }
 
     /// `Copter_Create` over the main map's 0x2F placements: the kind-0 ones get the copter
