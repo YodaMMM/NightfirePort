@@ -1119,7 +1119,10 @@ pub struct Drone {
     pub last_wait: Option<u16>,
     pub idle_timeout: Option<u32>,
     pub delayed: Option<(u32, u8)>,
-    /// State-machine id (`Drone+0x108`, a creation counter) and the stand-idle hold (`+0x59C`).
+    /// State-machine serial (`Drone_SM_InitObject` 0x175838's SMI+0x108 — the creation counter's
+    /// post-increment value, 1-based; every reader that picks a line set or the walk-anim
+    /// alternation reads this record [M 0x13ed38 0x13eac0 0x13f1d0 0x13fa20 0x13fd08 0x13cc70])
+    /// and the stand-idle hold (`+0x59C`).
     pub sm_id: u32,
     pub stand_until: u32,
     /// Combat route (`Drone+0x860`), the drone's navigation path (`+0x954`), the move quad (`+0x3C6`), the anim yaw
@@ -2526,12 +2529,14 @@ impl Drone {
         if self.anim.call.is_none() && self.anim.state != anim { self.call_anim(d, anim, 0, 0) }
     }
 
-    /// `DroneAnim_SetWalkIdleAnim` (0x13cc70): in Patrol (SM id + 1) % 3 + 0x37, or 0x37 when the set lacks it.
+    /// `DroneAnim_SetWalkIdleAnim` (0x13cc70): in Patrol (the SM serial) % 3 + 0x37, or 0x37 when the set lacks it.
     /// The game's per-set danim existence test (`Drone_AnimTables[set]` + the state's record, then set 0) is
-    /// `can_do`; the level override and the 0x37..=0x39 cap are the game's own [M 0x13cc70:11-30].
+    /// `can_do`; the level override and the 0x37..=0x39 cap are the game's own [M 0x13cc70:11-30]. The game
+    /// reads the +0x108 serial directly [M disasm 0x13ccc0: `lw $v1, 0x108($s0)` then the %3 chain] — the
+    /// port's `sm_id` carries that serial (1-based, see the `sm_serial` field).
     fn walk_anim(&self, d: &Data) -> u16 {
         // 07000014 always asks for 0x39.
-        let a = if d.level == 0x0700_0014 { 0x39 } else { ((self.sm_id + 1) % 3) as u16 + anim_state::WALK };
+        let a = if d.level == 0x0700_0014 { 0x39 } else { (self.sm_id % 3) as u16 + anim_state::WALK };
         if self.can_do(d, a) { a } else { anim_state::WALK }
     }
 
@@ -4073,11 +4078,14 @@ impl Drone {
         if self.voice_busy() || self.health <= 0.0 { return false; }
         if frame < self.last_voice + 180 && rng.rand(5) == 0 { return false; }
         let idx = match self.voice_type {
-            // `+0x108 & 1` (the state-machine info's first word, the alternate set) has no port
-            // reader yet — the base set 0x133 stands in [*suggested*, speech.md §2.1; the alternate
-            // 0x138 arm stays out of pass/fail until the bit has a port source].
+            // `+0x108 & 1` picks the second line set [M NDrone2_HitTalkExtra 0x13ed38 disasm
+            // 0x13ee5c-0x13ee6c: `lw $v0, 0x108($s0)`; `andi $v0, $v0, 1`; `beqz` keeps the
+            // delay's `addiu $a1, $v1, 0x133` (bit clear — the base), the set arm runs
+            // `addiu $a1, $v1, 0x138`]; the serial is `Drone_SM_InitObject` 0x175838's counter
+            // + 1 [M disasm 0x175858-0x175878], the port's `sm_id`.
             5..=7 if matches!(d.level, 0x0700_0014 | 0x0700_0015 | 0x0700_0016) => {
-                0x133 + rng.rand(5) as usize
+                let alt = self.sm_id & 1 != 0;
+                0x133 + rng.rand(5) as usize + if alt { 5 } else { 0 }
             }
             0x10 => 0xec + rng.rand(7) as usize,
             _ => return false,
@@ -4108,13 +4116,25 @@ impl Drone {
             1 => (2, 0x33 + rng.rand(4) as usize),
             2 => (3, 0x37 + rng.rand(9) as usize),
             3 => (0, 0xac + rng.rand(7) as usize),
+            // `Drone_SM_InitObject`'s +0x108 serial picks the second line set [M NDrone2_AttackTalk
+            // 0x13eac0's type-7 arm — the jump table at 0x2f4a30 entry 7 → 0x13ec78; disasm
+            // 0x13ec78-0x13ecc8: the level gate 0x14/0x15/0x16, then `jal Rand(7)`, `lw $v0,
+            // 0x108($s0)`, `andi 1`, the delay `addiu $a1, $v1, 0x11b` (bit clear) vs
+            // `addiu $a1, $v1, 0x122` (bit set); s3 (the odds) never set → s1 speaks whenever
+            // the busy/health gates let it through].
+            7 if matches!(level, 0x0700_0014 | 0x0700_0015 | 0x0700_0016) =>
+                (0, 0x11b + rng.rand(7) as usize + if self.sm_id & 1 != 0 { 7 } else { 0 }),
             _ => return,
         };
         if odds == 0 || rng.rand(odds) == 0 { self.talks.push((idx, false)); }
     }
 
     /// `NDrone2_SeenPlayerTalk` (0x13f1d0): 1 in 3, then the level's set (05–08: type 2 0x49 + Rand(6), else 0x21;
-    /// 09 / 0A: 0xC3 + Rand(9); 0x12 / 0x4A: 0xAC + Rand(7); 0x14–0x16 *not modelled*).
+    /// 09 / 0A: 0xC3 + Rand(9); 0x12 / 0x4A: 0xAC + Rand(7); 14–16: [M the level jump table at 0x2f4b20 —
+    /// 0x14 → 0x13f2d8, 0x15 → 0x13f30c, 0x16 → 0x13f340; disasm 0x13f2d8-0x13f390: `jal Rand(2)` picks
+    /// the level's own pair (1) vs the common tail pair (0 — 0x13f374), `jal Rand(2)` picks the offset
+    /// within the pair, and `+0x108 & 1` picks the pair's base: 0x14 0x13f3|0x13f5, 0x15 0x13f7|0x13f9,
+    /// 0x16 0x13fb|0x13fd, the tail 0x10d|0x10f].
     fn seen_player_talk(&mut self, d: &Data, rng: &mut Rng) {
         if self.voice_busy() || self.health <= 0.0 { return; }
         if rng.rand(3) != 0 || self.voice_type == 0x10 { return; }
@@ -4122,6 +4142,24 @@ impl Drone {
             0x0700_0005..=0x0700_0008 => if self.voice_type == 2 { 0x49 + rng.rand(6) as usize } else { 0x21 },
             0x0700_0009 | 0x0700_000a => 0xc3 + rng.rand(9) as usize,
             0x0700_0012 | 0x0700_004a => 0xac + rng.rand(7) as usize,
+            // The 14–16 arms [M the disasm cited above]: the first Rand(2) — 0 falls to the
+            // COMMON tail pair (one draw there: the offset), 1 stays in the level's own pair
+            // (a second draw: the offset); `+0x108 & 1` then picks the pair's base.
+            0x0700_0014 | 0x0700_0015 | 0x0700_0016 => {
+                let tail = rng.rand(2) == 0;
+                let off = rng.rand(2) as usize;
+                let odd = self.sm_id & 1 != 0;
+                if tail {
+                    if odd { 0x10f + off } else { 0x10d + off }
+                } else {
+                    let (base, alt) = match d.level {
+                        0x0700_0014 => (0xf3, 0xf5),
+                        0x0700_0015 => (0xf7, 0xf9),
+                        _ => (0xfb, 0xfd),
+                    };
+                    if odd { alt + off } else { base + off }
+                }
+            }
             _ => return,
         };
         self.talks.push((idx, false));
@@ -4261,16 +4299,19 @@ impl Drone {
             MpChatter::Injured => match d.level {
                 0x0700_000c | 0x0700_000d => Some(0xcc + rng.rand(6) as usize),
                 0x0700_0011..=0x0700_0013 | 0x0700_004a => Some(0xb9),
-                // 14–16 alt half 0x138+Rand(5) needs the `+0x108 & 1` second-weapon-set bit —
-                // not modelled (no ported drone carries it), so the primary half only.
-                0x0700_0014..=0x0700_0016 if self.voice_type != 0x10 => Some(0x133 + rng.rand(5) as usize),
+                // 14–16 alt half 0x138+Rand(5) by the `+0x108 & 1` bit [M DroneFunc_InjuredTalk
+                // 0x13fa20 disasm 0x13fb10-0x13fb20 — the same shape as HitTalkExtra's].
+                0x0700_0014..=0x0700_0016 if self.voice_type != 0x10 =>
+                    Some(0x133 + rng.rand(5) as usize + if self.sm_id & 1 != 0 { 5 } else { 0 }),
                 _ => None,
             },
             MpChatter::RunForCover => match d.level {
                 0x0700_000c | 0x0700_000d => Some(0xd0 + rng.rand(2) as usize),
                 0x0700_0011..=0x0700_0013 | 0x0700_004a => Some(0xbd),
-                // 14–16 alt half 0x122+Rand(7): same unmodelled `+0x108 & 1` bit.
-                0x0700_0014..=0x0700_0016 if self.voice_type != 0x10 => Some(0x11b + rng.rand(7) as usize),
+                // 14–16 alt half 0x122+Rand(7) by the `+0x108 & 1` bit [M DroneFunc_RunForCoverTalk
+                // 0x13fd08 disasm 0x13fdf8-0x13fe08 — the same shape as HitTalkExtra's].
+                0x0700_0014..=0x0700_0016 if self.voice_type != 0x10 =>
+                    Some(0x11b + rng.rand(7) as usize + if self.sm_id & 1 != 0 { 7 } else { 0 }),
                 _ => None,
             },
             MpChatter::UnderCover => match d.level {
@@ -12919,6 +12960,14 @@ pub struct Drones {
     /// `DroneSpawner_Control` 0x137e68:216/:224). The port increments it at the team-2 pick's
     /// probes; the other consumers are not instrumented yet (open in the report).
     pub los_probes: u16,
+    /// `Drone_SM_InitObject` 0x175838's running serial counter — the game's `DAT_00299090 + 0x280`
+    /// halfword at 0x299310 [M disasm 0x175858/0x175874: `lhu $v0, 0x280($a3)` / `sh $v0, 0x280($a3)`
+    /// with a3 = 0x2a0000-0x71f0], zeroed by `Drone_LevelReset` 0x13a5a8 [M disasm 0x13a614:
+    /// `sh $zero, 0x280($s0)`] and incremented once per `Drone_SM_InitObject` call with a non-null
+    /// object [M 0x175840's `beqz $t1` early-out skips the increment]. The serial stored at
+    /// SMI+0x108 is the counter AFTER the increment (counter + 1) [M 0x175878: `sw $a2, 0x108($v1)`
+    /// with a2 = v0 + 1] — the first object of a level takes serial 1.
+    pub sm_serial: u16,
     /// `Locks_Init` 0x1b0548's keypad-code table — the game generates it during boot with the
     /// SHARED stream (`Rand_Random` per digit, warmup `GameState+0x34·10 & 0x1ff` [M 0x1b0548]),
     /// draws that sit BEFORE the level-start snapshots' capture point, so the port generates on a
@@ -13105,9 +13154,13 @@ impl Drones {
         // 600-frame `DAT_00298F58`, 0.5 into `DAT_0029AA80` and 3 into `DAT_00298F5C`, then
         // `Drone_SM_Init` [M 0013a5a8 decompile]; this constructor + `target_registry`'s fresh state
         // is the port's level reset of the same globals.)
-        // `Drone_SM_InitObject` numbers state machines in creation order (the base is not known: 0 here).
+        // The +0x108 serials are handed out where the spawner templates are known (see the
+        // spawner block below): `Drone_SM_InitObject` numbers the objects `NDrone2_PostLoad_Init`
+        // runs on [M 0x14d8f0 — its only caller set: Drone_PostLoad_Init's level-load walk
+        // 0x136b90, the spawner's 0x137e04, the CoderCreate's 0x13a19c, BOT_init's 0x124df4],
+        // and the level-load walk covers exactly the drones the level CREATES — the spawner
+        // templates have no object until their spawn (drone.md), so they take the later serials.
         for (i, dr) in list.iter_mut().enumerate() {
-            dr.sm_id = i as u32;
             dr.index = i;
             if let Some(g) = &mut dr.body_glow { g.owner = i; }
         }
@@ -13116,6 +13169,9 @@ impl Drones {
             // The game's `DAT_00299092` (the shared LOS-probe counter; see the field) — zeroed
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
+            // `Drone_SM_InitObject`'s serial counter (see the field) — `Drone_LevelReset`
+            // 0x13a5a8 zeroes it at level reset [M disasm 0x13a614].
+            sm_serial: 0,
             movie_request: None,
             info_labels: Vec::new(),
             info_codes: Vec::new(),
@@ -13981,6 +14037,23 @@ impl Drones {
                 self.llist.retain(|i| !templates.contains(i));
                 self.spawners.push(sp);
             }
+        }
+        // THE +0x108 SERIALS [M Drone_SM_InitObject 0x175838 — see the `sm_serial` field]: the
+        // level load's `NDrone2_PostLoad_Init` walk [M Drone_PostLoad_Init 0x136b80-0x136ba8 —
+        // the list at 0x299094 head, `LList_Add` append order = the creation order] numbers the
+        // drones the level CREATES, in list order. The spawner templates have no object until
+        // their spawn (drone.md; the port's own block above) — they take the later serials at
+        // spawn [M DroneSpawner_SpawnDrone 0x137e04 → PostLoad_Init], as do the NIS
+        // CoderCreate spawns [M Drone_CoderCreate 0x13a19c]. Serial k = counter k, 1-based.
+        {
+            let held: Vec<usize> = self.spawners.iter().flat_map(|s| s.templates.iter().copied()).collect();
+            let mut serial = 0u16;
+            for (i, dr) in self.list.iter_mut().enumerate() {
+                if held.contains(&i) { continue; }
+                serial = serial.wrapping_add(1);
+                dr.sm_id = serial as u32;
+            }
+            self.sm_serial = serial;
         }
     }
 
@@ -17132,7 +17205,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     dr.spawn_frame = self.frame;
                     let idx = self.list.len();
                     dr.index = idx;
-                    dr.sm_id = idx as u32;
+                    // `Drone_CoderCreate` → `NDrone2_PostLoad_Init` [M 0x13a19c → 0x14d890 →
+                    // 0x14d8f0 → Drone_SM_InitObject]: the spawn takes the NEXT serial.
+                    self.sm_serial = self.sm_serial.wrapping_add(1);
+                    dr.sm_id = self.sm_serial as u32;
                     if let Some(g) = &mut dr.body_glow { g.owner = idx; }
                     self.list.push(dr);
                     self.llist.push(idx);
@@ -19803,7 +19879,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     &mut |n| rng.rand(n));
                 match action {
                     crate::spawners::Action::Spawn(i) => {
+                        // `DroneSpawner_SpawnDrone` 0x137cb0 → `NDrone2_PostLoad_Init` 0x137e04 →
+                        // `Drone_SM_InitObject`: the spawned template takes the NEXT serial [M].
+                        self.sm_serial = self.sm_serial.wrapping_add(1);
+                        let sm_id = self.sm_serial as u32;
                         let dr = &mut self.list[i];
+                        dr.sm_id = sm_id;
                         // sniper-spawn-stats-2: `DroneSpawner_SpawnDrone` 0x137cb0 re-runs the
                         // full drone init — `behaviour_util_get` 0x1c7a98 writes the template's stats
                         // section into the GLOBAL `drone_stats` table (0x31aa30) and `DoModeSettingsNEW`
@@ -22053,6 +22134,79 @@ mod tests {
         let mut last4 = 0u32;
         dr4.powerstation_talk(0x0700_000c, &ch4, &mut last4);
         assert!(dr4.talks.is_empty(), "switch_channels[0x98] gates the chatter [M 0x13e770:39-41]");
+    }
+
+    /// The +0x108 serial's parity arms (guard-alt-voice-set): HitTalkExtra's 0x133|0x138 [M
+    /// 0x13ed38 disasm 0x13ee5c-0x13ee6c], SeenPlayerTalk's 14 pair 0xf3|0xf5 + the tail
+    /// 0x10d|0x10f [M 0x13f1d0 disasm 0x13f2d8-0x13f390], AttackTalk's type-7 0x11b|0x122 [M
+    /// 0x13eac0's table entry 7 → 0x13ec78, disasm 0x13ecb4-0x13ecc4]. The bit-set arm takes the
+    /// UPPER base; the draw counts are the game's own (the parity never adds a draw).
+    #[test]
+    fn alt_voice_set_follows_the_serial_parity() {
+        let world = CollisionWorld::empty();
+        let tables = nf_formats::drone::DroneAnimData { states: Vec::new(), info: Vec::new(), tables: Vec::new() };
+        let props = nf_formats::drone::PropertyTables { descs: Vec::new(), masks: Vec::new(), types: Vec::new() };
+        let scripts = std::collections::HashMap::new();
+        let weapons = nf_formats::weapon::WeaponData { records: Vec::new(), ammo_cap: Vec::new(), ammo_raw: Vec::new() };
+        let seqs = std::collections::HashMap::new();
+        let skins = std::collections::HashMap::new();
+        let skeletons = std::collections::HashMap::new();
+        let nav = crate::nav::Network::default();
+        let covers = Vec::new();
+        let mut tuning = nf_formats::tuning::Tuning::default();
+        crate::tuning::read_tuning_vars(&mut tuning, 0x0700_0014);
+        let hitboxes = nf_formats::hitbox::CollisionBones { human: Vec::new(), astronaut: Vec::new() };
+        let volumes = Vec::new();
+        let models = std::collections::HashMap::new();
+        let ai_points = Vec::new();
+        let data_14 = Data { tables: &tables, props: &props, scripts: &scripts, weapons: &weapons, world: &world, level: 0x0700_0014,
+            sequences: &seqs, skins: &skins, skeletons: &skeletons, nav: &nav, covers: &covers, tuning: &tuning,
+            hitboxes: &hitboxes, volumes: &volumes, sfx: None, models: &models, surfaces: None, voices: None,
+            difficulty: 2, ai_points: &ai_points };
+        let mut rng = Rng::new(11);
+        // HitTalkExtra (types 5..7, level 14): odd serial → 0x138..0x13c, even → 0x133..0x137.
+        let mut dr = drone_at([0.0, 0.0, 0.0]);
+        dr.voice_type = 6;
+        dr.sm_id = 3; // odd
+        dr.last_voice = 0;
+        assert!(dr.hit_talk_extra(&data_14, &mut rng, 1000));
+        assert!((0x138..=0x13c).contains(&dr.talks[0].0), "odd serial takes the alternate set, got {:#x}", dr.talks[0].0);
+        let mut dr2 = drone_at([0.0, 0.0, 0.0]);
+        dr2.voice_type = 6;
+        dr2.sm_id = 2; // even
+        dr2.last_voice = 0;
+        assert!(dr2.hit_talk_extra(&data_14, &mut rng, 1000));
+        assert!((0x133..=0x137).contains(&dr2.talks[0].0), "even serial takes the base set, got {:#x}", dr2.talks[0].0);
+        // SeenPlayerTalk (level 14): odd → {0xf5,0xf6} ∪ {0x10f,0x110}, even → {0xf3,0xf4} ∪ {0x10d,0x10e}.
+        let mut saw_alt = false;
+        let mut saw_base = false;
+        for k in 0..64 {
+            let mut dr3 = drone_at([0.0, 0.0, 0.0]);
+            dr3.voice_type = 6;
+            dr3.sm_id = if k % 2 == 0 { 2 } else { 3 };
+            dr3.seen_player_talk(&data_14, &mut rng);
+            if let Some(&(idx, _)) = dr3.talks.last() {
+                let alt_half = matches!(idx, 0xf5 | 0xf6 | 0x10f | 0x110);
+                let base_half = matches!(idx, 0xf3 | 0xf4 | 0x10d | 0x10e);
+                assert!(alt_half || base_half, "a 14 seen line at all, got {:#x}", idx);
+                assert_eq!(alt_half, dr3.sm_id & 1 != 0, "the half matches the serial's low bit, idx {:#x} serial {}", idx, dr3.sm_id);
+                saw_alt |= alt_half;
+                saw_base |= base_half;
+            }
+        }
+        assert!(saw_alt && saw_base, "both halves reachable across the draws");
+        // AttackTalk type 7 (level 14): odd → 0x122..0x128, even → 0x11b..0x121.
+        let mut dr4 = drone_at([0.0, 0.0, 0.0]);
+        dr4.voice_type = 7;
+        dr4.sm_id = 3;
+        dr4.attack_talk(0x0700_0014, &mut rng);
+        assert_eq!(dr4.talks.len(), 1, "the type-7 arm's odds are 0 (always) [M 0x13eccc-0x13ed10]");
+        assert!((0x122..=0x128).contains(&dr4.talks[0].0), "odd serial takes 0x122+Rand(7), got {:#x}", dr4.talks[0].0);
+        let mut dr5 = drone_at([0.0, 0.0, 0.0]);
+        dr5.voice_type = 7;
+        dr5.sm_id = 2;
+        dr5.attack_talk(0x0700_0014, &mut rng);
+        assert!((0x11b..=0x121).contains(&dr5.talks[0].0), "even serial takes 0x11b+Rand(7), got {:#x}", dr5.talks[0].0);
     }
 
     /// `DroneFunc_NewSightTalk` 0x13f420 / `DroneFunc_LostSightTalk` 0x13f550: the level pair
