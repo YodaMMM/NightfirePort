@@ -2615,16 +2615,28 @@ impl Sim {
     /// + NDrone2_Enable(0), no reposition). So a PLACED player at a spot no room cel holds stays
     /// there unlinked; only a raw poke of obj+0x30 (obj+0x40 keeping the old position — the
     /// state `step_bond`'s >3.0 arm models) recovers into the old cel [D live, the measured
-    /// 07000003 teleports]. The game's floor snap (`build_PointOnFloor` 0x1c95a8, y = floor+1.1
-    /// :104-114) applies only when the FindCel hit found a cel; the port keeps the caller's y
-    /// here [S — the placement tests' spots stand near floors and settle by physics, and the
-    /// snap's scoped floor probe is the load spawn's `Bond::stand_at` shape, not this path's].
+    /// 07000003 teleports]. The game's floor snap [M 0x190d88:104-116] runs the probe 0.1 above
+    /// the placement y (`fStack_3c = obj+0x34 + 0.1`), `build_PointOnFloor` 0x1c95a8 casts the
+    /// down ray (0,−1,0) × 3.0f IN-OUT from there (on a hit the VECTOR becomes the hit point
+    /// [M 0x1c95a8:30-35, HITDATA+0x40..0x4c], scoped to the FindCel cel — its cel argument),
+    /// then the store adds 1.1 UNCONDITIONALLY (`fStack_3c += 1.1` :110-112; on a miss the y is
+    /// therefore placement + 1.2) and writes obj+0x30 — obj+0x40 keeps the RAW param position
+    /// (:21-28, never re-snapped). The ray's NULL-cel arm (FindCel missed) passes cel NULL into
+    /// `Collide_RayIntersect` [M 0x190d88:107]; the port's `segment_hit_scoped(None, …)` falls
+    /// back to the flat world [S — the game's NULL-cel ray scope not read from the disassembly;
+    /// every placement this port makes that matters lands with a cel].
     pub fn place_bond(&mut self, p: nf_game::world::V3, yaw: f32) {
-        self.bond.pos = p;
+        let mut v = [p[0], p[1] + 0.1, p[2]];
+        let cel = self.world.find_cel(v);
+        if let Some((t, _)) = self.world.segment_hit_scoped(cel, v, [v[0], v[1] - 3.0, v[2]]) {
+            v[1] -= t * 3.0;
+        }
+        v[1] += 1.1;
+        self.bond.pos = v;
         self.bond.prev_pos = p;
         self.bond.vel = [0.0; 3];
         self.bond.yaw = yaw;
-        self.bond.cel = self.world.find_cel([p[0], p[1] + 0.1, p[2]]);
+        self.bond.cel = cel;
     }
 
     pub fn step_bond(&mut self, mut input: nf_game::player::Input, trigger: bool, reload: bool, use_key: bool) {
