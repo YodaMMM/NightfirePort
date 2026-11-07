@@ -418,3 +418,6 @@ binaries (single-threaded): stairwell_impacts_render_07000011_live 1/0/1, panel_
 07000014_live 2/0, walk_07000014_live 2/0, walkreal_07000015_live 5/1/1 (the agent red,
 unchanged from the base), walkreal_07000001_live 7/0/1 green, walkreal_07000008_live 5/0/1
 green. Report: docs/reports/aim-last-seven.md.
+
+## aim-15-agent (started)
+Branch `s/aim-15-agent` cut from `origin/s/aim-on-master-2` (4433 passed, 1 failed, 354 ignored baseline). Task: the one red — `walkreal_07000015_live walk_spawn_to_the_omega_sector_exit_real_damage_agent` — gets the opt-in pre-throw kill stand in `DamageLog::stand_and_fire` (the 0c `sniper_stands` pattern), test-side only. Report: docs/reports/aim-15-agent.md.
