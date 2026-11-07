@@ -8,3 +8,8 @@ claimed-by: sandbox4 at 2026-11-07T02:31Z
 ---
 ## Report (done, 2026-11-07T04:07Z)
 
+
+---
+## Report from the worker (done, 2026-11-07T04:07Z)
+
+Closed by the driver: the report is on `s/recovery-loop-07` (docs/reports/recovery-loop-07.md); the worker didn't run finish.sh.
