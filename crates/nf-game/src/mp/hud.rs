@@ -528,10 +528,15 @@ impl MpScorePane {
             icons.push(MpPaneIcon { sprite: 3 + k, tex: *tex, x: 16.0, y: s3_y + 18.0 * k as f32, rgba: 0x7f7f_7fff, layer: 0x1e, additive: true });
         }
         // The text [M 0x19f0a0:47-70; MP_GetTeamScore 0x18b338, MP_GetPlayerScore 0x189730].
+        // The player string through the ported split [`MpScoreRow::score_lines`] — the game's
+        // 0x189730 branch: 0x400/0x40000800 print `score\nkills\ndeads` [M :13-19], the rest
+        // `kills\ndeads` [M :20-27]; the two-line sprintf formats are `"\n%d\n%d"` (FFA,
+        // [L ee_snapshot 0x30cc18]) and `"%d\n%d"` (team, [L 0x30cc10]) — the FFA form's
+        // leading newline is the blank first line where the 3-line arm prints the score.
         let row = snap.rows.iter().find(|r| r.slot == snap.viewer_slot);
-        let (score, kills, deaths) = row.map_or((0.0, 0, 0), |r| (r.score, r.kills, r.deaths));
-        let player = if sc == scenario::ASSASSIN || sc == scenario::KOTH_FFA {
-            format!("{}\n{}\n{}", score as i32, kills, deaths)
+        let (lines, score, kills, deaths) = row.map_or((2, 0.0, 0, 0), |r| r.score_lines(sc));
+        let player = if lines == 3 {
+            format!("{}\n{}\n{}", score as i32, kills, deaths) // the (int) float cast [M :17]
         } else if team_game == 0 {
             format!("\n{kills}\n{deaths}")
         } else {
