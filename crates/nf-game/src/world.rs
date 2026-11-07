@@ -48,6 +48,17 @@ pub const LOS_TURRET_TRACK: u32 = 0x72f; // GT_Track 0x17f9c8:258 — the target
 /// The per-caller masks are not applied yet [S]: with them on, guard cover, turret shots and
 /// several real-path walks broke; `line_of_sight` keeps the static-world segment test until then.
 pub const LOS_MASKS_ON: bool = false;
+
+/// The `set_dynamic` part id bit of the breakable panes' collision parts (drone.rs's
+/// `0x400_0000_0000 | breaks index`). The RAY queries skip these parts (see
+/// `segment_in_sets_drop_pass_glass` / `segment_blocked` — the game's ray walks are per-cel
+/// object walks a cross-room pane never joins [M Collide_LineOfSight 0x1edf50's single
+/// `cel_tag*` into Collide_RayIntersect 0x1ec690, whose object stage Collide_PickObj 0x1eae80
+/// tests the objects of THAT walk; Collide_Pick 0x1eb320:314-329 walks the candidate cel's
+/// linked objects]); the CAPSULE queries (the movement pass) and the effect/impact walks read
+/// them, so an intact pane stops Bond while alive and a killed one (`Break_Kill` 0x12b970:60,
+/// obj+0xFE |= 1, the delete) drops out of the set.
+pub const PANE_PART: u64 = 0x400_0000_0000;
 /// The normalized-spine head-on cull [M Intersect_CylGeom 0x109da0:302-322]. level-0a-office-hatch-9
 /// measured the arms' orientation: the game skips the horizontal face BELOW the spine (the
 /// corner walk's y-0.19 floor-band lifter — the port dithered 1.13→1.21 on it while the game
@@ -1273,8 +1284,13 @@ impl CollisionWorld {
             // block (the same floats the transform re-derives) — on the animating levels the
             // resting doors/static SS objects were paying a full re-transform every tick
             // (sim-tick-cost's `drones: set_dynamic` 0.4–0.6 ms on 07000008/16/1b). The `pass`
-            // bytes ride along (the dynamic build always pushes node_pass = false, the same
-            // value a re-transform would store).
+            // bytes ride along (the dynamic build pushes node_pass = false except the pane
+            // parts, the same value a re-transform would store).
+            // The breakable panes' parts carry the node pass flag: the RAY sets drop them (see
+            // PANE_PART's room-scope note) exactly as the bit-0x8 bullet queries drop every
+            // pass-flagged node [M Collide_Intersect 0x1ebff0]. The capsule queries and the
+            // effect/impact walks read the triangles regardless.
+            let pane_part = id & PANE_PART != 0;
             let reused = d.last_objects.get(n).copied().is_some_and(|(pid, ph, pm)| pid == id && ph == h && pm == m)
                 && n < d.geo.objects.len();
             if reused {
@@ -1282,10 +1298,10 @@ impl CollisionWorld {
                 let (start, end) = (po.tris.start, po.tris.end);
                 geo.tris.extend_from_slice(&d.geo.tris[start..end]);
                 geo.mats.extend_from_slice(&d.geo.mats[start..end]);
-                geo.pass.extend(std::iter::repeat(false).take(end - start));
+                geo.pass.extend(std::iter::repeat(pane_part).take(end - start));
                 geo.objects.push(Object { lo: po.lo, hi: po.hi, tris: geo.tris.len() - (end - start)..geo.tris.len() });
             } else {
-                geo.push(t.iter().enumerate().map(|(k, t)| (t.map(|p| transform(&m, p)), mats.and_then(|v| v.get(k).copied()).unwrap_or(0))));
+                geo.push_flags(t.iter().enumerate().map(|(k, t)| (t.map(|p| transform(&m, p)), mats.and_then(|v| v.get(k).copied()).unwrap_or(0))), pane_part);
             }
             if geo.objects.len() > n { movers.push((id, d.last.get(&id).copied().unwrap_or(m), m)); last_objects.push((id, h, m)); }
         }
@@ -2076,8 +2092,21 @@ impl CollisionWorld {
         for k in 0..3 { lo[k] = from[k].min(to[k]); hi[k] = from[k].max(to[k]); }
         let _ = (lo, hi);
         let dynamic = self.dynamic.read().unwrap();
-        // perf-240g: the same sets in the same order, without a Vec per ray.
-        let sets: [Option<&Geo>; 3] = [Some(&self.stat), with_missile.then_some(&self.missile), Some(&dynamic.geo)];
+        // perf-240g: the same sets in the same order, without a Vec per ray. The DYNAMIC set is
+        // walked separately below: its pane parts (`PANE_PART` ids) are not ray targets — the
+        // game's ray queries walk ONE cel's linked objects (`Collide_LineOfSight` 0x1edf50's
+        // single `cel_tag*` argument into `Collide_RayIntersect` 0x1ec690, whose object stage
+        // `Collide_PickObj` 0x1eae80 tests the objects of THAT walk), so a pane object in
+        // another room never tests against a cross-room ray. The port has no per-room object
+        // graph; the pinned behaviours all show the game's rays passing the panes (the
+        // 07000001 start guards' sight ack lands during the scripted walk with the drive's
+        // glass square across the ray [L 01-doors.trace], the escort's cover run crosses the
+        // sheet). The panes stay solid to the CAPSULE queries (the movement pass) and to the
+        // bullet world's own breaks contact (`update_player_bullets`' bounds walk — the game's
+        // class-5 contact + `Break_Update`); their triangles also carry the node pass flag for
+        // the bit-0x8 drop in the bullet queries (the pane's own mesh never stops the
+        // world-stop comparison).
+        let sets: [Option<&Geo>; 2] = [Some(&self.stat), with_missile.then_some(&self.missile)];
         for g in sets.into_iter().flatten() {
             for o in along(g, from, to) {
                 for k in o.tris.clone() {
@@ -2101,6 +2130,32 @@ impl CollisionWorld {
                 }
             }
         }
+        // The dynamic set: the objects ride in `movers` order (set_dynamic pushes both in
+        // lockstep), so the id rides the zip. Pane parts are skipped (see the note above);
+        // every other dynamic part is a ray target exactly as before.
+        for (o, (id, _, _)) in dynamic.geo.objects.iter().zip(&dynamic.movers) {
+            if id & PANE_PART != 0 { continue; }
+            if !seg_box(from, d, o.lo, o.hi) { continue; }
+            for k in o.tris.clone() {
+                if drop_pass && dynamic.geo.bullet_pass(k) { continue; } // [M 0x1ebff0]
+                if glass && dynamic.geo.mats[k] & 0x3f == 0x10 { continue; } // the glass pass [M 0x1ea398:216-229]
+                let t = &dynamic.geo.tris[k];
+                let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+                if dot(cross(e1, e2), d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
+                let p = cross(d, e2);
+                let det = dot(e1, p);
+                if det.abs() < 1e-12 { continue; }
+                let inv = 1.0 / det;
+                let s = sub(from, t[0]);
+                let u = dot(s, p) * inv;
+                if !(0.0..=1.0).contains(&u) { continue; }
+                let q = cross(s, e1);
+                let v = dot(d, q) * inv;
+                if v < 0.0 || u + v > 1.0 { continue; }
+                let tt = dot(e2, q) * inv;
+                if (0.0..=1.0).contains(&tt) && best.is_none_or(|b| tt < b) { best = Some(tt); }
+            }
+        }
         best
     }
 
@@ -2113,7 +2168,7 @@ impl CollisionWorld {
     fn segment_blocked(&self, from: V3, to: V3, with_missile: bool, drop_pass: bool) -> bool {
         let d = sub(to, from);
         let dynamic = self.dynamic.read().unwrap();
-        let sets: [Option<&Geo>; 3] = [Some(&self.stat), with_missile.then_some(&self.missile), Some(&dynamic.geo)];
+        let sets: [Option<&Geo>; 2] = [Some(&self.stat), with_missile.then_some(&self.missile)];
         for g in sets.into_iter().flatten() {
             // perf-240e: the grid's lazy near-to-far walk where the set has one (the same object
             // set, the answer independent of the order — `Geo::any_hit`), the scan otherwise.
@@ -2122,6 +2177,14 @@ impl CollisionWorld {
                 Some(false) => {}
                 None => { for o in along(g, from, to) { if obj_blocks(g, o, from, d, drop_pass) { return true; } } }
             }
+        }
+        // The dynamic set, pane parts skipped (the room-scope note at
+        // `segment_in_sets_drop_pass_glass`): the objects ride in `movers` order, so the id
+        // rides the zip.
+        for (o, (id, _, _)) in dynamic.geo.objects.iter().zip(&dynamic.movers) {
+            if id & PANE_PART != 0 { continue; }
+            if !seg_box(from, d, o.lo, o.hi) { continue; }
+            if obj_blocks(&dynamic.geo, o, from, d, drop_pass) { return true; }
         }
         false
     }

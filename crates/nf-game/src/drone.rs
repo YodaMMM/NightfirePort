@@ -12195,8 +12195,12 @@ pub fn player_hit_damage(t: &nf_formats::tuning::Tuning, level: u32, raw: f32, w
 
 /// All drones of a level plus the round-robin line-of-sight cursor.
 /// Whether a breakable contact must come before the static world's first bullet stop (see the
-/// breaks arm of `update_player_bullets`).
-const BREAK_WORLD_STOP: bool = false;
+/// breaks arm of `update_player_bullets`). ON: the live breakables' meshes ride the dynamic set
+/// as PANE_PART parts the ray sets skip (world.rs, the room-scope note at
+/// `segment_in_sets_drop_pass_glass`), so `segment_bullet`'s first stop is the real scenery
+/// behind the breakable — never the breakable's own mesh — and the bounds contact (grown 0.1)
+/// always fires at or before it.
+const BREAK_WORLD_STOP: bool = true;
 
 pub struct Drones {
     pub list: Vec<Drone>,
@@ -15033,14 +15037,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // the scenery takes the round instead [M 0x1ea398:216-229]. The application
                     // (the hit + the AI message) stays in the match below.
                     if !best.as_ref().is_none_or(|(_, _, bt)| t < *bt) { contact = None; }
-                    // The world stop is not applied yet [S]: the breakables' own meshes still sit in
-                    // the static world, so `segment_bullet` reports the pane or vase itself (or the
-                    // surface it rests on) before its bounds — a 07000007 vase at point-blank range
-                    // stopped every round at t 0.01. It returns once the live breakables leave the
-                    // static set (the pane collision work).
+                    // The world stop (BREAK_WORLD_STOP): the contact survives when it fires at or
+                    // before the world's first bullet stop. The live breakables' meshes ride the
+                    // dynamic set as PANE_PART parts the ray sets skip (world.rs, the room-scope
+                    // note), so `segment_bullet`'s first stop is the scenery BEHIND the breakable
+                    // — the breakable's own mesh never beats its bounds contact, and the old
+                    // point-blank pathology (a 07000007 vase's mesh stopping the world at t 0.01
+                    // before its bounds at 0.058) is gone with the ride.
                     else if BREAK_WORLD_STOP && !tstop.is_none_or(|ts| t <= ts) { contact = None; }
                 }
-                if let Some((_, i)) = contact {
+                if let Some((t, i)) = contact {
                     // The round dies on the first solid object hit — the glass absorbs it
                     // [M 0x12cff0-4]; nothing behind it scores or stops it this tick.
                     // EXCEPT the glass panes: the game's walk (Collide_Update 0x1ea398:216-229,
@@ -15061,6 +15067,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         .is_some_and(|w| u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0);
                     if !glass_pass { b.dead = true; }
                     br.health -= contact_dmg;
+                    // The contact registers its world impact AT the sheet — the game's
+                    // Effect_Create runs on the breakable contact for PASS and STOP alike
+                    // [M Bullet_CollisionHandler 0x12ce80 0x12d0a0..0x12d0d0 — the HITDATA
+                    // position; both the pass arm (LAB_0012d020) and the stop arm
+                    // (LAB_0012cff0) converge on the call] — the accuracy scenery hit rides
+                    // the same world-hit fold (fix-progress).
+                    let ct = [b.pos[0] + (end[0] - b.pos[0]) * t, b.pos[1] + (end[1] - b.pos[1]) * t, b.pos[2] + (end[2] - b.pos[2]) * t];
+                    self.player_impacts.push(PlayerImpact::World(ct));
+                    self.progress.log_shot_hit_scenery(self.mission.status());
                     if br.health < 0.0 {
                         // fx-broken-object-bark: the bullet kill is the one `Break_Kill` entry whose
                         // hitdata +0x58 is the BULLET (kind 5 [M 0x12c5a0:87]) from the PLAYER's
@@ -19301,13 +19316,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // BEFORE Break_Kill takes the collision away (the contact list is the collide pass's
             // product, Break_Update walks it same tick), so the tick's deferred HITDATA re-trace
             // still sees the sheet.
-            // NOT ridden yet [S]: with these parts in the set, real-path walks, guard sight and
-            // dropped items on 01/09/0a/0b/14 stop at shapes where no pane stands in the game
-            // (the shape-key/matrix pairing is unresolved), so the panes stay out of the
-            // collision world until that pairing is proven.
-            let _pane_parts = drones.breaks.list.iter().enumerate()
+            // RIDDEN (pane-collision-pairing): the parts join the set below, carrying the
+            // PANE_PART id bit (world.rs) — the RAY sets skip them (the game's ray walks are
+            // per-cel object walks a cross-room pane never joins [M Collide_LineOfSight 0x1edf50
+            // → Collide_RayIntersect 0x1ec690 → Collide_PickObj 0x1eae80]) while the CAPSULE
+            // queries and the effect walks keep them solid, and `update_player_bullets` engages
+            // the pane through the bounds contact (the game's class-5 contact + Break_Update).
+            // The pairing is proven from the game + the disc: `Break_Create` 0x12c230 takes the
+            // glist from its caller (`Control_SetGList` 0x134960 → obj+0xD8; the placement path
+            // passes the record's resolved object, `pCelList[index]` or the hash-table hit,
+            // NULL → no create [M 0x1d1b68:77-96], and the 0x8000/0x2000 flag rows never create
+            // [M 0x1d1b68:93]) and builds the object matrix with quaternion 0 — the placement's
+            // View_RotTransMatrix [M 0x12c230:12]. crates/nf-game/tests/pane_pairing_census.rs
+            // prints the parts next to the placements on 01/09/0a/0b/14 (0b has no 0x20 rows at
+            // all) — every row's part lands exactly on its placement bounds, all rows the game
+            // creates, no static double — and the census assertion holds over every SP level.
+            let pane_parts: Vec<(u64, u32, nf_formats::anim::Mat4)> = drones.breaks.list.iter().enumerate()
                 .filter(|(_, b)| (!b.dead || b.dead_frame == drones.frame) && b.shape_key != 0)
-                .map(|(k, b)| (0x400_0000_0000 | k as u64, b.shape_key, b.matrix));
+                .map(|(k, b)| (crate::world::PANE_PART | k as u64, b.shape_key, b.matrix))
+                .collect();
+            if !pane_parts.is_empty() { parts.extend(pane_parts); }
             // The rigid bodies (rigid-body-wiring): the kind-0xD8 props collide at their live
             // obj+0x90 matrix (`Collide_PickObj` walks the cel-linked objects; RB_Create's
             // build_LinkToRoom links the body into the room's cel chain [M 0x1d6bf0]). Id:
