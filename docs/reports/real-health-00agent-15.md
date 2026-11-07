@@ -97,6 +97,17 @@ plane at x 32.6 / 37.2, outside its aperture) — geometry, not aim.
    14.0 u — a `--bond 60.8,41.4,0.6` render looking west would show whether 14.5-15.0 u is
    reachable on the lane (the (int) law makes 15.0+ free and 14.x half-price).
 
+## ntfy failed
+
+All three fallbacks failed in order (2026-11-07 ~08:03 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "real-health-00agent-15: done — …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "…u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', …), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "real-health-00agent-15: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out; the command was killed at 60 s with no output (no bytes received).
+
 ## Usage
 
 not visible to me — no token, credit, cost or context-window figures are exposed anywhere in
