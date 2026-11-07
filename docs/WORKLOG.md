@@ -89,3 +89,12 @@ with real health — the walk dies at t410740; take 03-6's next levers (longer a
 tolerance on the close-hitter unseen stand for #3's ~150-tick corner, then the
 close-hitter radius past 8 u for #9's 10.3 u door-gap wedge, then the ledger).
 close_hitter_reengage and dry_fight_resupply stay. All new flags opt-in default-off.
+Outcome (same session): the walk is STILL RED at the same t410740 — the 7b/7c runs
+measured the two levers (close_hitter_stand_ticks a no-op: the #3 fights' aim was Some,
+they died on ammo + hip-cone spread; close_hitter_radius=12 answers #9, killed true 7890,
+but his 28.8 was pre-fight) and killed the 03-6 corner theory. aimed_fights TRIED and
+REVERTED (7c: the free-aim cursor path, death t8342, 40 hits). New ledger + the next
+lever (return_fire stands down while resupplying) in the ignore message. The four
+required binaries green (6/0/1, 3/0/1, 10/0, 9/0); the fast runner background start and
+the rest of the walkreal sweep did not fit the window (the background start is killed
+between tool calls here, as in 03-6). Report: docs/reports/real-health-00agent-03-7.md.
