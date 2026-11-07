@@ -47,3 +47,27 @@ Merge origin/master first.
 - [x] merged `s/level-14-landing-hover` (the wedge fix + the measured budget ground) on top of
   origin/master; conflicts resolved additively (both DamageLog opt-ins kept, the newer 014
   notes kept, WORKLOG entries concatenated).
+**Outcome (same window):** the named lever measured to its root — the "stairwell AIM pairs"
+were a misread, the grind's real drain is the trench guard #0's point-blank trade (65.0 in 13
+hits at 1.2 u), and the sisters' head-box loose gate (`shoot_head_loose`, file-local, one
+35-damage P2K head round [M NDrone2_HitDamage × DroneDamage_Head]) kills him at +49 ticks:
+the d3 grind then costs 15.0 and the d2 twin's grind through the hand-back 9.0. The leg-2
+block answered to the sisters' reloads (`reload_full_b2` — the stationary window's dry-gun
+stands cannot trade; with rounds the fights killed seven guards for 27.5). Tried and measured
+NEGATIVE/no-op and reverted with the records in the comments: the corridor-mouth pre-clear
+(the block hunts — death at 5021), the loot pass inside the block (the fetch walked into the
+surviving pair's 1.7-2.2 u band — 47.5 in 230 ticks; the sisters' clear is loot-less now,
+`clear_hostiles` gained a `loot: bool`, d1 call sites unchanged), and `eye_ray_stands` (a
+byte-identical no-op — the 0x5000087 hunters are never PICKED, so the aim law has nothing to
+aim). A self-inflicted regression caught by the whole-binary run: the first gates used
+AGENT_PATH_CLEAR alone, which the d2 TOP-UP sister also sets — its phase-pinned route wedged
+at the corridor-south door; all three laws now carry `!w.tops_up()`. The d2 wrap and the d3
+un-ignore did NOT land: the wrap's re-rolled run pinned the drop-west hover (death 5151 at
+(33.71, 1.20, 34.23)) and the d3 walk's remaining blocker is the never-picked hunter class
+bursting 30.0-65.0 in the cooldown gaps — both parked in their master forms, notes rewritten
+with the ledgers. Verified: the whole 014 binary 9/0/1 (149.2 s); the twins 13 (3 passed),
+12 (3 passed), 11 (5 passed); nf-game 92/0; nf-formats+nf-audio 233 passed / 4 failed (the
+slim-ISO disc-golden trio + the identity check; those crates byte-identical to master); the
+rest of the walkreal battery did not fit the window (the flags default false; the note and
+the merge-time ask are in the report). Report:
+docs/reports/real-health-14-00agent-6.md.
