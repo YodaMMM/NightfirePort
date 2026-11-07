@@ -14,3 +14,11 @@ read the panel text), list render frames for the main agent.
 
 - [x] setup: the sandbox survived (repo/work/ISO from the mp-object-deleted session); branch
   cut from origin/master, WORKLOG started, pushing before code work.
+
+- [x] 12:10 UTC: done — the live panel's player lines now go through `MpScoreRow::score_lines`
+  (the 0x189730 split; the inline scenario branch deleted from `MpScorePane::build`); the
+  pane's values/order/colour/format verified line-by-line against 0x19f0a0 + 0x189730 +
+  0x18b338 (already faithful); the trio pin (Assassin "5\n1\n0" via the +5 target kill, KOTH
+  FFA "0\n1\n0" — the bit30 gate blocks the kill score, DM "\n1\n0"); 1181 tests green across
+  nf-game lib + every mp_*_live + mp_world_sync_live + the mp hud binaries (2 stress/net
+  binaries SIGKILLed by the sandbox, see the report).
