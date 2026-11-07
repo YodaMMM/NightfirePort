@@ -806,3 +806,17 @@ fn the_apocalypse_countdown_runs_out_and_floors() {
         assert_eq!(a.fade, 0.0, "the mirror floors with it and stays [M 0x18d4f0]");
     }
 }
+
+/// The death plates carry the one-shot flag but no keys [D #794-#801/#855: p5 = 1, key count 0]:
+/// `Hurt_Update` returns on a zero duration before the one-shot expiry [M 0x17e5d0:106-108,
+/// :129-132], so a guard that drops into a shaft first leaves the plate armed for Bond.
+#[test]
+fn a_guard_on_the_death_plate_leaves_it_armed_for_bond() {
+    let mut w = load15();
+    let sim = w.scene.sim.as_mut().unwrap();
+    let h = sim.hurts.iter_mut().find(|h| h.damage == 1000.0 && (h.lo[0] - 71.0).abs() < 8.0 && h.lo[2].abs() < 8.0).expect("plate #794 [D]");
+    let c = [(h.lo[0] + h.hi[0]) * 0.5, h.lo[1], (h.lo[2] + h.hi[2]) * 0.5];
+    assert!(h.one_shot && h.duration == 0, "the plate's params [D]");
+    assert!(h.update_touch(true, [c[0], c[1] - 0.5, c[2]], [c[0], c[1] + 1.0, c[2]], 0.4, true).is_some(), "the guard's contact");
+    assert!(h.update(true, [c[0], c[1] - 0.5, c[2]]).is_some(), "the plate kills Bond after the guard [M 0x17e5d0:106-108]");
+}

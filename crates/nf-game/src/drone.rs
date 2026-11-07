@@ -1477,6 +1477,8 @@ pub struct Drone {
     /// that sound has finished (set before each update), `SpeechSFX` requests of this update (line, force), and the
     /// patrol-talk cooldown (global `0x298FC4`, lent by `Drones::tick`).
     pub voice_type: u16,
+    /// `Drone+0x1B`: impact messages do nothing (see `handle`).
+    pub no_impact: bool,
     /// `+0x15`: a female voice (the default pain / death lines).
     pub female: bool,
     pub voice: Option<(u32, u32)>,
@@ -2069,6 +2071,8 @@ impl Drone {
             // captain ×`DroneCaptain_Mod_Health` follows in `captain_setup` ([L] ee_02b.bin: type-2
             // guards 12, their captains 24).
             health: stats.health as f32, max_health: stats.health as f32, damage_taken: 1.0, damageable: !matches!(skin, 0x0500_003b | 0x0500_003c | 0x0500_0053), kind: setup.kind,
+            // `Drone+0x1B`: skin 0x05000053 [M 0x14b300:207-208], and voice 0x13 on 0x07000016 [M :699-700].
+            no_impact: skin == 0x0500_0053 || (voice_type(skin) == 0x13 && d.level == 0x0700_0016),
             last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0, attack_entry_talks: 0,
             blast: None,
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
@@ -7296,6 +7300,9 @@ impl Drone {
 
     fn handle(&mut self, d: &Data, rng: &mut Rng, frame: u32, s: u8, m: u8) -> bool {
         use state::*;
+        // `Drone+0x1B`: `DroneFunc_HandleImpact` 0x1469b8:23-25 and `NDrone2_PunchImpact` 0x145f28:20-22
+        // return at their first line, so no impact message damages, flinches or alerts this drone.
+        if self.no_impact && matches!(m, msg::PUNCH | msg::TASE | msg::BULLET | msg::EXPLOSION | msg::SMOKE | msg::FLASH | msg::STUN_DART) { return true; }
         if m == msg::BULLET { return self.on_bullet(d, rng, frame, s); }
         if m == msg::PUNCH { return self.on_punch(d, rng, frame, s); }
         // fix-guard-drops-flashbang: the flash broadcast rides the state machine like every other
@@ -22307,7 +22314,7 @@ mod tests {
             // ninja-melee: the melee band +0xEC and the +0x2C8 attack-hold counter (defaults).
             melee_min_dist: 4.0, attack_hold: 0,
             captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(),
-            voice_type: 0, female: false, voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0,
+            no_impact: false, voice_type: 0, female: false, voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0,
             talk_step: 0, hostage_voice: 0, hostage_voice_clear: false,
             // obj+0xFE bit 0 (delete-me; docs/fields/obj-tag.md:44) — see the field.
             delete_me: false,

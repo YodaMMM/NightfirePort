@@ -78,6 +78,10 @@ pub struct Hurt {
     /// ext+0x15 = param 5: the one-shot flag — state 1's expiry parks state 2, which retires the
     /// volume [M 0x17e5d0:129-132 + :41-47].
     pub one_shot: bool,
+    /// ext+0xC: the last key index (`level_tag+2` − 1, 0 when the count is 0 [M 0x17e870:26-30]).
+    /// State 1 returns at once on 0, so a zero-duration volume never reaches the one-shot expiry
+    /// [M 0x17e5d0:106-108, :129-132].
+    pub duration: u16,
     /// The volume's cels: the placement's object collision triangles in world space (the glist
     /// `Control_SetGList` links at create [M 0x17e870:44]; the same source the trigger builder
     /// reads — `level_tag` object collision, placement matrix applied).
@@ -127,6 +131,7 @@ impl Hurt {
                 sound: param(3) as u16,
                 who: param(4) as u16,
                 one_shot: param(5) & 0xff == 1,
+                duration: ((p.extra[7] & 0xffff) as u16).saturating_sub(1),
                 tris, lo, hi,
                 // Hurt_Create's tail [M]: the gate set and low at create → obj+0xF0 |= 0x20. The
                 // switch channels start zeroed, so a gated volume always loads disabled.
@@ -180,10 +185,11 @@ impl Hurt {
         if self.gate == 0 && self.who != 0 && self.who & if drone { 0x8 } else { 0x10 } == 0 { return None; }
         // The collide contact: the victim's capsule against the volume's glist tris.
         if !self.contains(a, b, r) { return None; }
-        // The one-shot expiry [M 0x17e5d0:129-132 → :41-47]: state 2 retires the volume. The
-        // anim-clock path (the state-1 t/inc advance) is presentation — the port parks on the
-        // first contact pass [S for the timing; no survey level sets param 5 [D]].
-        if self.one_shot { self.fired = true; }
+        // The one-shot expiry [M 0x17e5d0:129-132 → :41-47]: state 2 retires the volume, but only
+        // a volume with keys gets there [M :106-108]: 07000015's death plates and 07000025's
+        // one-shots carry none [D] and stay armed. The anim clock of a keyed volume (07000046's
+        // seven [D]) is not modelled: it retires on the first contact pass [S for the timing].
+        if self.one_shot && self.duration != 0 { self.fired = true; }
         self.hits += 1;
         Some((self.damage, self.kind))
     }
@@ -207,7 +213,7 @@ mod tests {
             [[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.0, 1.0]],
             [[-1.0, 0.0, -1.0], [1.0, 0.0, 1.0], [-1.0, 0.0, 1.0]],
         ];
-        Hurt { placement: 0, kind: 1, damage: 1.0, gate, sound: 0xffff, who: 0, one_shot: false, tris, lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], disabled: gate != 0, fired: false, hits: 0 }
+        Hurt { placement: 0, kind: 1, damage: 1.0, gate, sound: 0xffff, who: 0, one_shot: false, duration: 0, tris, lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], disabled: gate != 0, fired: false, hits: 0 }
     }
 
     #[test]
@@ -285,10 +291,21 @@ mod tests {
     }
 
     #[test]
+    fn a_one_shot_without_keys_never_retires() {
+        // [M 0x17e5d0:106-108: duration 0 returns before the expiry at :129-132.]
+        let mut h = hurt(0);
+        h.one_shot = true;
+        assert!(h.update(true, [0.0, 0.0, 0.0]).is_some());
+        assert!(!h.fired);
+        assert!(h.update(true, [0.0, 0.0, 0.0]).is_some(), "still armed");
+    }
+
+    #[test]
     fn one_shot_retires_after_the_first_pass() {
         // [M 0x17e5d0:129-132 → :41-47: state 2 overwrites obj+0xFF = 1 — the volume retires.]
         let mut h = hurt(0);
         h.one_shot = true;
+        h.duration = 5;
         assert!(h.update(true, [0.0, 0.0, 0.0]).is_some(), "the first pass hurts");
         assert!(h.fired);
         assert!(h.update(true, [0.0, 0.0, 0.0]).is_none(), "the retired volume never hurts again");
