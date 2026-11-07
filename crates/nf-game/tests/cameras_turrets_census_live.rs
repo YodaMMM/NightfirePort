@@ -52,7 +52,7 @@ fn port_counts(level: &Level) -> (usize, usize, usize, usize, usize) {
     let sensors = nf_game::sensor::Sensors::create(&level.maps[m].placements, &paths).list.len();
     let monitors = nf_game::monitor::Monitors::create(level).list.len();
     let props = nf_game::props::Props::create(level);
-    let world = nf_game::worldobj::WorldObjects::create(&level.maps[m].placements, &paths, |_| (0, [0.0; 3]));
+    let world = nf_game::worldobj::WorldObjects::create(&level.maps[m].placements, &paths, |_| (0, [0.0; 3], 0));
     let gts = level.maps[m].placements.iter()
         .filter(|p| p.flags & 0xff == 0x27 && p.flags & 0xa000 == 0)
         .filter(|p| nf_game::gt::from_placement(0, &p.params).is_some()).count();

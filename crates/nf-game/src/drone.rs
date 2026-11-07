@@ -13575,9 +13575,9 @@ impl Drones {
         // The world objects (InverterTrigger 0x41, Shooter 0xd2, DynamicObject 0x3b, ThirdCam 0xe7;
         // parsemap_create_dynamic_objects 0x1d04f0 cases, crate::worldobj — placement order, no RNG).
         self.worldobjs = crate::worldobj::WorldObjects::create(&level.maps[m].placements, &path_blocks, |p| {
-            let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
-                else { level.maps[m].objects.get(p.index as usize) };
-            obj.map_or((0, [0.0; 3]), |o| (o.flags, o.centre))
+            let at = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else { Some((m, p.index as usize)) };
+            let Some(((map, object), o)) = at.and_then(|(map, object)| Some(((map, object), level.maps.get(map)?.objects.get(object)?))) else { return (0, [0.0; 3], 0) };
+            (o.flags, o.centre, if o.hashcode == u32::MAX { 0x8000_0000 | ((map as u32) << 16) | object as u32 } else { o.hashcode })
         });
         // Fuseboxes (`FuseBox_Create` 0x1b0448, placement 0x31 with a script hash): 07000014's
         // OBJECT_FuseBox1 security-sabotage boxes (map-tower2).
@@ -19327,13 +19327,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // BEFORE Break_Kill takes the collision away (the contact list is the collide pass's
             // product, Break_Update walks it same tick), so the tick's deferred HITDATA re-trace
             // still sees the sheet.
-            // NOT ridden yet [S]: with these parts in the set, real-path walks, guard sight and
-            // dropped items on 01/09/0a/0b/14 stop at shapes where no pane stands in the game
-            // (the shape-key/matrix pairing is unresolved), so the panes stay out of the
-            // collision world until that pairing is proven.
-            let _pane_parts = drones.breaks.list.iter().enumerate()
-                .filter(|(_, b)| (!b.dead || b.dead_frame == drones.frame) && b.shape_key != 0)
-                .map(|(k, b)| (0x400_0000_0000 | k as u64, b.shape_key, b.matrix));
+            // 07000001 and 07000014 stay out for now: their walked routes cross panes the walks do
+            // not break first, and which of those panes the game's route meets is an open live check.
+            let panes_solid = !matches!(d.level, 0x0700_0001 | 0x0700_0014);
+            parts.extend(drones.breaks.list.iter().enumerate()
+                .filter(|(_, b)| panes_solid && b.script_obj.is_none() && (!b.dead || b.dead_frame == drones.frame) && b.shape_key != 0)
+                .map(|(k, b)| (0x400_0000_0000 | k as u64, b.shape_key, b.matrix)));
             // The rigid bodies (rigid-body-wiring): the kind-0xD8 props collide at their live
             // obj+0x90 matrix (`Collide_PickObj` walks the cel-linked objects; RB_Create's
             // build_LinkToRoom links the body into the room's cel chain [M 0x1d6bf0]). Id:
@@ -19355,6 +19354,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // mirrors the contact onto the body's own obj+0xD0 list.
             parts.extend(drones.rbodies.list.iter().enumerate()
                 .map(|(k, x)| (0x800_0000_0000 | k as u64, x.shape_key, x.matrix())));
+            // The gated dynamic objects (placement 0x3b): `DynamicObject_Create` 0x18dbf8 gives the
+            // object its glist (obj+0xD8) and links it into the room's cel chain, so `Collide_PickObj`
+            // 0x1eae80 admits it like any cel-linked object while obj+0xF0 lacks bit 0x20 — the party's
+            // rope barriers stand solid, and a gated one (|0x30 from the create until its channel
+            // rises [M 0x18dbf8:27-29]) or an armed mode-1 one is not there. A deleted one leaves the
+            // list. Id: bit 44 + the create slot. The mode-1 wall-hug blockers of 07000005/0700000d
+            // stay out: they switch on the crawl channel and the walked routes there stop at them,
+            // so how they meet a walking Bond is an open live check.
+            parts.extend(drones.worldobjs.dynobjs.iter()
+                .filter(|x| x.shape_key != 0 && x.flags & 0x20 == 0 && x.mode == 0)
+                .map(|x| (0x1000_0000_0000 | x.slot as u64, x.shape_key, x.matrix)));
             parts
         };
         // Script triggers (`Trigger_TouchOnce` / `Trigger_Touch` made by `Script_CreateEntity`): one per live entity,

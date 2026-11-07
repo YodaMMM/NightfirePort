@@ -136,6 +136,11 @@ pub struct DynObject {
     /// The create order among the level's 0x3b placements (the draw's posed slot; the delete pass
     /// removes dead objects from the list, so the list index is not stable).
     pub slot: u16,
+    /// The glist's collision shape key (`CollisionWorld::shape`; the synthetic (map, object) key
+    /// for an anonymous object, as `RbObj::shape_key`), 0 without an object.
+    pub shape_key: u32,
+    /// obj+0x90: the placement matrix the collision mesh stands at [M 0x18dbf8:13, 0x1344e0:26-29].
+    pub matrix: nf_formats::anim::Mat4,
 }
 
 impl DynObject {
@@ -448,13 +453,13 @@ impl WorldObjects {
     /// The placement scan (`p.flags & 0xff` kinds 0x41 / 0xd2 / 0x3b / 0xe7). `path_blocks` is the
     /// main map's 0x19 key-list payloads (`m_paths`), indexed by the placement's +0x44 word.
     /// `glist` resolves the placement's object to its glist's +0x44 draw-flags word (the word
-    /// `DynamicObject_Create` copies to obj+0xF0) and its sphere centre (`celglist+0x20..+0x2C`,
-    /// docs/fields/glist.md) — the world sphere obj+0x80 the fade reads starts at the matrix
+    /// `DynamicObject_Create` copies to obj+0xF0), its sphere centre (`celglist+0x20..+0x2C`,
+    /// docs/fields/glist.md) and its collision shape key — the world sphere obj+0x80 the fade reads starts at the matrix
     /// translation + the glist centre (0x1336f8 pass 6 rebuilds it from the same two).
     pub fn create(
         placements: &[nf_formats::placement::Placement],
         path_blocks: &[&[u8]],
-        glist: impl Fn(&nf_formats::placement::Placement) -> (u32, V3),
+        glist: impl Fn(&nf_formats::placement::Placement) -> (u32, V3, u32),
     ) -> WorldObjects {
         let mut w = WorldObjects::default();
         for p in placements {
@@ -480,7 +485,7 @@ impl WorldObjects {
                 0x3b => {
                     // DynamicObject_Create 0x18dbf8: p0/p1 (u16), p2 (u16), p3 (u8); obj+0xF0 = the
                     // glist's +0x44 word (0x18dbf8:15-16), |0x30 when p0 != 0 (0x18dbf8:27-29).
-                    let (base, centre) = glist(p);
+                    let (base, centre, shape_key) = glist(p);
                     // obj+0x90: CCO(0) → View_RotTransMatrix [M 0x18dbf8:13, 0x1344e0:26-29].
                     let m = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
                     let slot = w.dynobjs.len() as u16;
@@ -497,6 +502,8 @@ impl WorldObjects {
                         flags: if param(0) != 0 { base | 0x30 } else { base },
                         alpha: 0xff,
                         dead: false,
+                        shape_key,
+                        matrix: m,
                     });
                 }
                 0xe7 => {
@@ -588,13 +595,13 @@ mod music_trigger_tests {
     /// record is params (13, 0, 2, 1) and 07000011's is (18, 0, 255, 0) [D placement bytes].
     #[test]
     fn create_gates_and_param_map() {
-        let w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 1)])], &[], |_| (0, [0.0; 3]));
+        let w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 1)])], &[], |_| (0, [0.0; 3], 0));
         assert_eq!(w.music_triggers.len(), 1);
         let t = &w.music_triggers[0];
         assert_eq!((t.event_id, t.ch_on, t.ch_flag, t.flag_byte), (2, 13, 0, 1));
         assert_eq!(t.countdown, 0);
-        assert!(WorldObjects::create(&[place(0xfb, &[(0, 18), (1, 0), (2, 255), (3, 0)])], &[], |_| (0, [0.0; 3])).music_triggers.is_empty(), "p2 == 0xff → no object");
-        assert!(WorldObjects::create(&[place(0xfb, &[(0, 0), (1, 0), (2, 5), (3, 0)])], &[], |_| (0, [0.0; 3])).music_triggers.is_empty(), "p0 == 0 → no object");
+        assert!(WorldObjects::create(&[place(0xfb, &[(0, 18), (1, 0), (2, 255), (3, 0)])], &[], |_| (0, [0.0; 3], 0)).music_triggers.is_empty(), "p2 == 0xff → no object");
+        assert!(WorldObjects::create(&[place(0xfb, &[(0, 0), (1, 0), (2, 5), (3, 0)])], &[], |_| (0, [0.0; 3], 0)).music_triggers.is_empty(), "p0 == 0 → no object");
     }
 
     /// `MusicTrigger_Update` 0x1b31a0: the channel re-arms 0x1e; each tick the countdown runs fires
@@ -602,7 +609,7 @@ mod music_trigger_tests {
     /// (≤ 30 ticks) and then stops.
     #[test]
     fn countdown_rearms_fires_and_expires() {
-        let mut w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 1)])], &[], |_| (0, [0.0; 3]));
+        let mut w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 1)])], &[], |_| (0, [0.0; 3], 0));
         let mut ch = Channels::default();
         let mut music = crate::music::Music::default();
         let mut rng = crate::drone::Rng::new(1);
