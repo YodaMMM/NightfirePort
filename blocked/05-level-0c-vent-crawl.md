@@ -6,3 +6,7 @@ Reproduce on the real level first through real input, not a teleport; a report t
 
 ---
 claimed-by: sandbox1 at 2026-11-07T21:41Z
+
+---
+## Report (blocked, 2026-11-07T23:18Z)
+
