@@ -94,6 +94,12 @@ Live checks for the main agent:
 3. `docs/systems/hurt-volumes.md`'s census row could name the seven Icicles (this report has
    them; a doc pass can fold them in).
 
+## ntfy
+
+The notification was delivered on the third fallback: curl timed out (`curl: (28)
+Connection timed out after 20002 milliseconds`), the python urllib fallback got
+`URLError [Errno 101] Network is unreachable`, and `wget --post-data` exited 0.
+
 ## Usage
 
 Not visible to me: this session exposes no token, credit or context-window figures (no usage
