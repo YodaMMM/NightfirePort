@@ -70,12 +70,14 @@ impl Spawner {
         // There is no delay value anywhere in the spawner family; the gap between mode-3 waves is
         // purely the alive-scan == 0 wait.
         let immediate = (start == 0 || ch.on(start)) && !ch.on(param(5));
-        let min = f32::from_bits(param(8));
+        // +0x18: param 8 is an integer the create converts to float (`cvt.s.w` at 0x1379d4), 0 → 10.0
+        // [M 0x1378d0:33-37].
+        let min = param(8) as f32;
         Some(Spawner {
             placement, mode: param(0), group: param(1), max_alive: if max == 0 || max > n { n } else { max },
             waves: if param(3) == 0 { 32000 } else { param(3) }, start, stop: param(5), done: param(6),
             kill: param(7), kill_latch: false,
-            min_dist: if min > 0.0 && min.is_finite() { min } else { 10.0 },
+            min_dist: if min != 0.0 { min } else { 10.0 },
             used: vec![false; n], templates, spawned: Vec::new(), active: start == 0, immediate, wave: 0, this_wave: 0, gone: false,
             sfx_request: None,
         })

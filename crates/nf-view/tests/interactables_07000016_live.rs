@@ -478,3 +478,19 @@ fn kiko_takes_no_damage_and_still_reaches_the_tripwire() {
     assert!(landed, "no round reached Kiko, so the test proved nothing");
     assert!(sim.drones.channels.on(0x7b), "Kiko never reached the tripwire #613 (at {:?}, state {:#x})", sim.drones.list[i].pos, sim.drones.list[i].state);
 }
+
+/// Spawner +0x18 is param 8 converted from an integer [M 0x1378d0:33-37, `cvt.s.w` at 0x1379d4]:
+/// every spawner here carries 1 [D], so a template spot closer than 1.0 is screened; 07000006 has
+/// spawners carrying 10 [D]. Param 0 falls back to 10.0 [M].
+#[test]
+fn the_spawner_screen_distance_is_the_integer_param() {
+    let w = load16();
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(!sim.drones.spawners.is_empty());
+    for s in &sim.drones.spawners { assert_eq!(s.min_dist, 1.0, "spawner {}", s.placement); }
+    let six = nf_view::load(&iso(), "07000006.bin", false).unwrap();
+    let sim = six.sim.as_ref().unwrap();
+    assert!(!sim.drones.spawners.is_empty());
+    assert!(sim.drones.spawners.iter().any(|s| s.min_dist == 10.0), "07000006 carries 10 [D]");
+    assert!(sim.drones.spawners.iter().all(|s| s.min_dist >= 1.0), "no spawner screen collapses to nothing");
+}
