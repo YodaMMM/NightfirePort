@@ -605,6 +605,14 @@ pub struct Sim {
     /// [M `Player_SetWeaponAnimObj` case 0xf 0x1a2e38:554-561]; false for the lower — its finish
     /// leaves the bit clear (case 0x10, [M 0x1a2e38:562-567]).
     pub view_aim_raising: bool,
+    /// void-recovery-2: how often the out-of-cel recovery actually FIRED (a `build_FindCel`
+    /// 0x1c8cb0 miss at the relink, the move clamped back into the old cel's box [M
+    /// control_handle_cel_change 0x133288:186-231]) since the level load — the walks' gate metric:
+    /// it should sit near zero on real input.
+    pub recovery_count: u64,
+    /// void-recovery-2: the last recovery's where-and-from (tick, the clamped pos, the pre-clamp
+    /// prev, the old cel) for the env-gated log (`NF_RECOVERY_LOG=1` prints each fire).
+    pub recovery_last: (u64, [f32; 3], [f32; 3], Option<usize>),
     /// fix-weapon-fire-modes: the guided-missile camera (`Bullet_init` 0x12c5a0:234-254 for a weapon
     /// record with `+0x6C & 4` — only the AT-420 Sentinel 'Guided' 0x2C [L ee_start_05.bin]). While
     /// `Some`, the view rides the projectile: position/direction = the bullet's [M
@@ -2585,6 +2593,52 @@ impl Sim {
         Some((m.debriefing(), m.settings.clone()))
     }
 
+    /// void-recovery-2: one recovery fire — the gate metric plus the env-gated log line
+    /// (`NF_RECOVERY_LOG=1`), recording the sim tick, the clamped position, the pre-clamp prev
+    /// and the old cel.
+    fn recovery_fired(&mut self, pos: [f32; 3], prev: [f32; 3], cel: Option<usize>) {
+        self.recovery_count += 1;
+        self.recovery_last = (self.drones.frame as u64, pos, prev, cel);
+        static LOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *LOG.get_or_init(|| std::env::var_os("NF_RECOVERY_LOG").is_some()) {
+            eprintln!("[recovery] tick {} pos {pos:?} prev {prev:?} cel {cel:?}", self.drones.frame);
+        }
+    }
+
+    /// The mid-session placement — `Player_StandAtNewPosition` 0x190d88's relink core [M]: the
+    /// game writes obj+0x30 AND obj+0x40 to the new position (:21-28), clears the inertia
+    /// (`Player_ClearInertia`; the port zeroes `vel`), then `control_unlink_object` (:118) and
+    /// `build_LinkToRoom` (:119) — its `build_FindCel` 0x1c8cb0 at the position +0.1y (:104-108)
+    /// relinks, and a MISS leaves the object UNLINKED: the unlinked retry path
+    /// (`control_handle_cel_change` 0x133288:63-73) never runs the out-of-cel recovery — for the
+    /// class-2 player it only raises the fell-out flag (`Drone_FellOutMap` 0x13a878: obj+0xfe |= 1
+    /// + NDrone2_Enable(0), no reposition). So a PLACED player at a spot no room cel holds stays
+    /// there unlinked; only a raw poke of obj+0x30 (obj+0x40 keeping the old position — the
+    /// state `step_bond`'s >3.0 arm models) recovers into the old cel [D live, the measured
+    /// 07000003 teleports]. The game's floor snap [M 0x190d88:104-116] runs the probe 0.1 above
+    /// the placement y (`fStack_3c = obj+0x34 + 0.1`), `build_PointOnFloor` 0x1c95a8 casts the
+    /// down ray (0,−1,0) × 3.0f IN-OUT from there (on a hit the VECTOR becomes the hit point
+    /// [M 0x1c95a8:30-35, HITDATA+0x40..0x4c], scoped to the FindCel cel — its cel argument),
+    /// then the store adds 1.1 UNCONDITIONALLY (`fStack_3c += 1.1` :110-112; on a miss the y is
+    /// therefore placement + 1.2) and writes obj+0x30 — obj+0x40 keeps the RAW param position
+    /// (:21-28, never re-snapped). The ray's NULL-cel arm (FindCel missed) passes cel NULL into
+    /// `Collide_RayIntersect` [M 0x190d88:107]; the port's `segment_hit_scoped(None, …)` falls
+    /// back to the flat world [S — the game's NULL-cel ray scope not read from the disassembly;
+    /// every placement this port makes that matters lands with a cel].
+    pub fn place_bond(&mut self, p: nf_game::world::V3, yaw: f32) {
+        let mut v = [p[0], p[1] + 0.1, p[2]];
+        let cel = self.world.find_cel(v);
+        if let Some((t, _)) = self.world.segment_hit_scoped(cel, v, [v[0], v[1] - 3.0, v[2]]) {
+            v[1] -= t * 3.0;
+        }
+        v[1] += 1.1;
+        self.bond.pos = v;
+        self.bond.prev_pos = p;
+        self.bond.vel = [0.0; 3];
+        self.bond.yaw = yaw;
+        self.bond.cel = cel;
+    }
+
     pub fn step_bond(&mut self, mut input: nf_game::player::Input, trigger: bool, reload: bool, use_key: bool) {
         // The game's frame clock — `UpdateT0Count` 0x109468, called from `VBlankInt` 0x124088:76
         // (`PS2DrawFrameTime`), `psiPreDraw`/`psiPostDraw` (`PS2DrawCodeTime`), `psiPreGame_Run` /
@@ -3244,10 +3298,31 @@ impl Sim {
                 // `bond.pos` writes (the tests' placements) get the same treatment [S: the 3.0 bound
                 // sits above any per-tick move the sim produces — the walk ~0.1, the accelerated fall
                 // ~0.3 even seconds in — and below every placement jump].
+                // void-recovery: a poke differs from `Player_StandAtNewPosition` — the game's memory
+                // write touches obj+0x30 ONLY, so obj+0x40 keeps the pre-teleport position and
+                // obj+0x20 keeps the old cel; the next `control_handle_cel_change` runs the default
+                // arm's recovery (`out_of_cel_recovery` below, [M 0x133288:186-231]) when no room cel
+                // holds the target. Measured [D live]: the (12.0, 6.3, −32) teleport on 07000003
+                // returns to the pre-teleport position inside 1 s. The recovery source is the
+                // PRE-teleport `prev_pos` (the game's obj+0x40), read before the copy below.
+                let old_prev = self.bond.prev_pos;
                 self.bond.prev_pos = self.bond.pos;
-                self.world.find_cel(self.bond.pos)
+                match self.world.find_cel(self.bond.pos) {
+                    Some(c) => Some(c),
+                    None => self.world.out_of_cel_recovery(self.bond.cel, old_prev, nf_game::player::Bond::SPHERE_RADIUS)
+                        .map(|(cell, p)| { self.recovery_fired(p, old_prev, self.bond.cel); self.bond.pos = p; cell }),
+                }
             } else {
-                self.world.player_cel_relink(self.bond.cel, self.bond.prev_pos, self.bond.pos, self.bond.pos)
+                match self.world.player_cel_relink(self.bond.cel, self.bond.prev_pos, self.bond.pos, self.bond.pos) {
+                    Some(c) => Some(c),
+                    // void-recovery: the cel-change default arm — the move left the cel's box, no
+                    // portal crossed, `build_FindCel` found nothing: `pos := obj+0x40` clamped into
+                    // the OLD cel's box, stay linked [M 0x133288:186-231]. The port's `prev_pos` IS
+                    // obj+0x40 (the `Bond` field's own doc).
+                    // The `build_FindCel` retry comes first [M 0x133288]: only a full miss recovers.
+                    None => match self.world.find_cel(self.bond.pos) { Some(c) => Some(c), None => self.world.out_of_cel_recovery(self.bond.cel, self.bond.prev_pos, nf_game::player::Bond::SPHERE_RADIUS)
+                        .map(|(cell, p)| { self.recovery_fired(p, self.bond.prev_pos, self.bond.cel); self.bond.pos = p; cell }) },
+                }
             };
             let water = bond_cel.and_then(|cell| self.room_cell.iter().position(|&c| c == Some(cell)))
                 .map(|r| self.cels[r].water).filter(|w| *w > -400.0);
@@ -10574,6 +10649,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 shear_phase: 0.0,
                 global_blur: 0,
                 swing_phase: 0.0,
+                // void-recovery-2: the walks' recovery-fire counter (its own line, lesson 4).
+                recovery_count: 0,
+                recovery_last: (0, [0.0; 3], [0.0; 3], None),
             })
         });
         let fog = drones.and_then(|d| fog_for(d.level_id));
@@ -14097,10 +14175,24 @@ impl Sim {
                 }
             }
             let cel = if (0..3).any(|k| (b.pos[k] - b.prev_pos[k]).abs() > 3.0) {
+                // void-recovery: the teleport arm runs the game's poke semantics too — obj+0x40
+                // (here `prev_pos`) survives the poke, so a FindCel miss recovers from the
+                // PRE-jump position [M 0x133288:186-231].
+                let old_prev = b.prev_pos;
                 b.prev_pos = b.pos;
-                self.world.find_cel(b.pos)
+                match self.world.find_cel(b.pos) {
+                    Some(c) => Some(c),
+                    None => self.world.out_of_cel_recovery(b.cel, old_prev, nf_game::player::Bond::SPHERE_RADIUS)
+                        .map(|(cell, p)| { self.recovery_count += 1; b.pos = p; cell }),
+                }
             } else {
-                self.world.player_cel_relink(b.cel, b.prev_pos, b.pos, b.pos)
+                match self.world.player_cel_relink(b.cel, b.prev_pos, b.pos, b.pos) {
+                    Some(c) => Some(c),
+                    // void-recovery: the cel-change default arm [M 0x133288:186-231] — same as the
+                    // single-player site above.
+                    None => self.world.out_of_cel_recovery(b.cel, b.prev_pos, nf_game::player::Bond::SPHERE_RADIUS)
+                        .map(|(cell, p)| { self.recovery_count += 1; b.pos = p; cell }),
+                }
             };
             let water = cel.and_then(|cell| self.room_cell.iter().position(|&c| c == Some(cell)))
                 .map(|r| self.cels[r].water).filter(|w| *w > -400.0);

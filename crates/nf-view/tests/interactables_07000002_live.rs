@@ -63,14 +63,13 @@ fn load_gold() -> Walker {
     w
 }
 
-/// Teleport Bond to a spot and settle him (the stand-in transit — see the header).
+/// Teleport Bond to a spot and settle him (the stand-in transit — see the header). The game's
+/// placement (`Player_StandAtNewPosition` 0x190d88: obj+0x30 = obj+0x40 = the spot, unlink,
+/// relink) — a FindCel miss leaves him unlinked AT the spot, never shoved back [M 0x133288:63-73].
 fn place(w: &mut Walker, x: f32, y: f32, z: f32) {
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [x, y, z];
-        sim.bond.vel = [0.0; 3];
-        sim.bond.prev_pos = sim.bond.pos;
-    }
+    let sim = w.scene.sim.as_mut().unwrap();
+    let yaw = sim.bond.yaw;
+    sim.place_bond([x, y, z], yaw);
     w.wait(20);
 }
 
