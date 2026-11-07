@@ -16,3 +16,20 @@ it through checkpoint and Death-and-Replay. Msg sounds through the normal
 sound path with level gates. Keep the game's tick order. Pin through the real
 path on a census level (trip → announcements at 180/120/60/6 s → channel
 drops at 0 → reactions). Entry started — work follows.
+
+Progress (same session): confirmed `Ssys` had zero callers outside ssys.rs [M grep]. Wired
+all four: `Switch_Create` 0x1adcc0:29-31's channel store (param 6 = `level_tag`+0x44 →
+`SSysItems[idx].channel`, in `UseObjects::create` + `attach_level_id`, before the load
+beat), `SSys_Monitor` 0x1ad998 into `tick_inner` at `Game_Run` 0x1c9790:32's slot (after
+`Env_Update`, before the object-handler passes, `ScriptCam == 0` [M 0x1ad998:8]), the
+`SSys_Msg` announcements through `Sounds::play` with the level gates, and `SSys_RamLoad`
+0x1b0208 through `RamSave::ssys` (+ `with_ssys`) on `warm_exit_save` /
+`entry_checkpoint_save` / the death serve, applied in `load_with_carry` (the 0a item-2
+skip keeps the carried record; the death serve swaps the live record into the block's
+record-2 slot). Disassembly checks: the monitor's channel writes carry NO
+`switch_channels_time` stamp [M 0x1adaa0-0x1adacc, 0x1adc64] — the laser-2 arm writes the
+array directly. Census [D]: only two switches on the disc carry param 6 — 07000009 #71
+(item 1, ch 0x37) and 0700000a #643 (item 2, ch 0x3b, gate 0x3c); the 0a load snapshot
+proves the store live [L ee_start_0700000a @0x2befd0: item 2 = {−1.0, 0x3b, 0}]. Real-path
+pin on 09 passes: trip → arm 240 → announcements at 180/120/60/6 → drop at 240 s → the
+show's AMBER reaction. Tests green (see the report). Commit abdd3b82a.
