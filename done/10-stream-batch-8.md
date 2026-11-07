@@ -41,3 +41,7 @@ Non-walk first, a named cause each. Then plain walks, real damage, Agent, 00 Age
 
 ---
 claimed-by: sandbox7 at 2026-11-06T23:17Z
+
+---
+## Report (done, 2026-11-07T00:58Z)
+
