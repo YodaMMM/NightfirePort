@@ -59,3 +59,25 @@ Progress (continued):
   Bond; default off so every other walk stays byte-identical), then take the corridor
   cluster, the (35.6, 8.7) door stall and the exit-lawn #16 volley in the ledger's order;
   remove the ignore when green. Reading the 03-5 blocked report + ignore message next.
+- [04:30 UTC, Nov 7] real-health-00agent-03-6 wrapped (the walk still RED, keeps its
+  #[ignore]): branch cut from 03-5, master merged clean. Two opt-in default-off fights
+  flags built (common/damage_log.rs — the fights machinery module): close_hitter_reengage
+  (the 240-tick failed-fight cooldown does not delay re-fighting a guard within 8 u who is
+  landing rounds + the close-hitter pick fallback: such a guard is fought even when no
+  box's centre ray clears the world — his pellets reach Bond through the same gap) and
+  dry_fight_resupply (an in-hand-dry gun runs ONE resupply pass before the fight; the
+  unseen-fights mode was tried for the same holes and REVERTED — its extra restock arms
+  nav'd Bond back across the moat and wedged the flank nav, run 2). Proven on the 00agent
+  ledger: #17's moat burst 60.0 -> 36.0 (the re-fight killed at 14615 vs 14690), #5
+  28.0 -> 0 (killed true 410290 — the fights now answer the servants'-ground shotgunner
+  through the door corner), #4 7.2 -> 0; the death moved t404475 -> t410740 (the walk is
+  at the margin: the three remaining holes #17 36.0 + #3 35.2 + #9 28.8 sum to exactly
+  100). The new ledger + next lever (a longer aim-None tolerance for the close-hitter
+  unseen stand; the #9 radius) pushed in the ignore message. The four required binaries
+  green (03 whole 6/0/1, 02 3/0/1, 04 10/0, interactables_03 9/0); the sweep: 01 8/0,
+  05 14/0, 06 6/0/1, 07 6/0, 08 6/0, 09 8/0, 0a 13/0/2, 0b 7/0, 0c 3/0/1, 0d 2/0/1,
+  13 3/0 all green; walkreal 11/14/15 SIGKILLed by the sandbox OOM (3.4 GB RSS on a
+  4 GB box, dmesg oom-kill x3 — environment, the flags are off in those walks);
+  16/1b/41/4a + the probe binaries not reached in the window. The four-crate full suite
+  did not fit (the background start is killed between tool calls; the sweep ran as
+  foreground batches). Report: docs/reports/real-health-00agent-03-6.md.
