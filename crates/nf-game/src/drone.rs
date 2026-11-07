@@ -4077,11 +4077,8 @@ impl Drone {
         if self.voice_busy() || self.health <= 0.0 { return false; }
         if frame < self.last_voice + 180 && rng.rand(5) == 0 { return false; }
         let idx = match self.voice_type {
-            // `+0x108 & 1` (the state-machine info's first word, the alternate set) has no port
-            // reader yet — the base set 0x133 stands in [*suggested*, speech.md §2.1; the alternate
-            // 0x138 arm stays out of pass/fail until the bit has a port source].
             5..=7 if matches!(d.level, 0x0700_0014 | 0x0700_0015 | 0x0700_0016) => {
-                0x133 + rng.rand(5) as usize
+                rng.rand(5) as usize + if self.alt_voice() { 0x138 } else { 0x133 }
             }
             0x10 => 0xec + rng.rand(7) as usize,
             _ => return false,
@@ -4097,9 +4094,14 @@ impl Drone {
         if self.current_line() != Some(Self::line_sfx(d, idx)) { self.talks.push((idx, true)); }
     }
 
+    /// `+0x108 & 1`: the state-machine id's parity picks the second voice of the 14-16 sets
+    /// [M 0x13eac0, 0x13ed38, 0x13f1d0]. The id is `++DAT_00299090` [M 0x175838:11-13], 1-based
+    /// against the port's `sm_id`; a spawned drone's value is the port's index [S].
+    fn alt_voice(&self) -> bool { (self.sm_id + 1) & 1 != 0 }
+
     /// `NDrone2_AttackTalk` (0x13eac0) for the single-player voice sets of these levels: type 2 picks 0x37 + Rand(9)
     /// then speaks 1 in 3; type 1 0x33 + Rand(4) at 1 in 2 (0xA3 + Rand(8) always on 0x11 / 0x0B / 0x13); type 3 0xAC +
-    /// Rand(7). Others: *not modelled* (level-specific sets).
+    /// Rand(7); type 7 on 14-16 0x11B + Rand(7), or 0x122 on the second voice. Others: *not modelled*.
     fn attack_talk(&mut self, level: u32, rng: &mut Rng) {
         if self.state == state::ATTACK { self.attack_entry_talks += 1; }
         if self.voice_busy() || self.health <= 0.0 { return; }
@@ -4112,13 +4114,16 @@ impl Drone {
             1 => (2, 0x33 + rng.rand(4) as usize),
             2 => (3, 0x37 + rng.rand(9) as usize),
             3 => (0, 0xac + rng.rand(7) as usize),
+            7 if matches!(level, 0x0700_0014..=0x0700_0016) => (0, rng.rand(7) as usize + if self.alt_voice() { 0x122 } else { 0x11b }),
             _ => return,
         };
         if odds == 0 || rng.rand(odds) == 0 { self.talks.push((idx, false)); }
     }
 
     /// `NDrone2_SeenPlayerTalk` (0x13f1d0): 1 in 3, then the level's set (05–08: type 2 0x49 + Rand(6), else 0x21;
-    /// 09 / 0A: 0xC3 + Rand(9); 0x12 / 0x4A: 0xAC + Rand(7); 0x14–0x16 *not modelled*).
+    /// 09 / 0A: 0xC3 + Rand(9); 0x12 / 0x4A: 0xAC + Rand(7); 0x14 / 0x15 / 0x16: Rand(2) ≠ 0 picks the
+    /// level's pair 0xF3 / 0xF7 / 0xFB + Rand(2), else the shared pair 0x10D + Rand(2), each +2 on
+    /// the second voice [M 0x13f1d0:64-97]).
     fn seen_player_talk(&mut self, d: &Data, rng: &mut Rng) {
         if self.voice_busy() || self.health <= 0.0 { return; }
         if rng.rand(3) != 0 || self.voice_type == 0x10 { return; }
@@ -4126,6 +4131,11 @@ impl Drone {
             0x0700_0005..=0x0700_0008 => if self.voice_type == 2 { 0x49 + rng.rand(6) as usize } else { 0x21 },
             0x0700_0009 | 0x0700_000a => 0xc3 + rng.rand(9) as usize,
             0x0700_0012 | 0x0700_004a => 0xac + rng.rand(7) as usize,
+            0x0700_0014..=0x0700_0016 => {
+                let own = match d.level { 0x0700_0014 => 0xf3, 0x0700_0015 => 0xf7, _ => 0xfb };
+                let base = if rng.rand(2) != 0 { own } else { 0x10d };
+                rng.rand(2) as usize + base + if self.alt_voice() { 2 } else { 0 }
+            }
             _ => return,
         };
         self.talks.push((idx, false));
