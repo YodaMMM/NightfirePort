@@ -268,3 +268,103 @@ fn the_window_bounds_follow_the_carriage_down_the_ride() {
     assert!(lo1[1] < lo0[1] && hi1[1] < hi0[1], "the whole pane moved with the ride [M 0x1d9a08]");
     assert!(!sim.drones.channels.on(0x7c), "the plunge never fired on the ride [D §6]");
 }
+
+/// script-break-drain: the pane is shot WHILE the ride moves and breaks AT ITS MOVED POSITION.
+/// The kill observables: the row's bounds had followed the carriage (>1.5 u from the
+/// first-seen centre by the kill tick), the aim and the trigger rode the REAL input at the
+/// live centre (the walkreal-08 pattern), the kill registers for THIS pane's object
+/// [M Break_Kill 0x12b970 → the (obj, kind, sound) record], and the kill-tick bullet flight
+/// passes through the pane's MOVED bounds (`seg_box_t` over the last-synced row — the game
+/// tests the segment in the pane's current local space [M Collide_Intersect 0x1ebaa8:157-177]).
+#[test]
+fn a_pane_shot_while_the_ride_moves_breaks_at_its_moved_position() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000008.bin", false).expect("load 07000008"));
+    board_the_ride(&mut w);
+    let mut n_panes = 0usize;
+    for _ in 0..1500 {
+        n_panes = w.scene.sim.as_ref().unwrap().drones.breaks.list.iter().filter(|b| b.script_obj.is_some()).count();
+        if n_panes >= 14 { break; }
+        w.tick(Input::default(), false);
+    }
+    assert!(n_panes >= 14, "the windows registered as script panes [D decode: 16 streams]");
+    arm_a_gun(&mut w);
+    // First-seen centre per pane object (the pane is already moving with the carriage).
+    let mut first: std::collections::HashMap<usize, [f32; 3]> = std::collections::HashMap::new();
+    let mut target_obj: usize = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let head = sim.bond.head();
+        sim.drones.breaks.list.iter().filter(|b| b.script_obj.is_some() && !b.dead)
+            .min_by(|a, c| {
+                let d = |b: &nf_game::breakable::Break| (b.lo[0] - head[0]).powi(2) + (b.lo[1] - head[1]).powi(2) + (b.lo[2] - head[2]).powi(2);
+                d(a).partial_cmp(&d(c)).unwrap()
+            }).and_then(|b| b.script_obj).expect("a target pane")
+    };
+    // Ride ~300 ticks (the carriage descends ~0.03 u/tick [D stream 1]) while tracking the
+    // target's live centre; the aim converges WITHOUT firing (the first test's loop).
+    let mut last_centre = [0.0f32; 3];
+    let mut last_bounds = ([0.0f32; 3], [0.0f32; 3]);
+    let mut moved = 0.0f32;
+    let mut fires = 0u32;
+    let mut kill: Option<(usize, u8, u16)> = None;
+    let mut paths_at_kill: Vec<([f32; 3], [f32; 3])> = Vec::new();
+    for t in 0..2600u32 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let Some(br) = sim.drones.breaks.list.iter().find(|b| b.script_obj == Some(target_obj) && !b.dead) else {
+            // The churn re-pick (a stream's later Entity of another class recreates the pane).
+            let head = sim.bond.head();
+            match sim.drones.breaks.list.iter().filter(|b| b.script_obj.is_some() && !b.dead)
+                .min_by(|a, c| {
+                    let d = |b: &nf_game::breakable::Break| (b.lo[0] - head[0]).powi(2) + (b.lo[1] - head[1]).powi(2) + (b.lo[2] - head[2]).powi(2);
+                    d(a).partial_cmp(&d(c)).unwrap()
+                }).and_then(|b| b.script_obj) {
+                Some(o) => { target_obj = o; w.tick(Input::default(), false); continue; }
+                None => panic!("every pane died before the shot"),
+            }
+        };
+        let centre = [(br.lo[0] + br.hi[0]) / 2.0, (br.lo[1] + br.hi[1]) / 2.0, (br.lo[2] + br.hi[2]) / 2.0];
+        first.entry(target_obj).or_insert(centre);
+        last_centre = centre;
+        last_bounds = (br.lo, br.hi);
+        let head = sim.bond.head();
+        let to = [centre[0] - head[0], centre[1] - head[1], centre[2] - head[2]];
+        let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(1e-4);
+        let desired_yaw = to[0].atan2(to[2]);
+        let desired_pitch = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+        let yaw_err = walker::wrap_pi(desired_yaw - sim.bond.yaw);
+        let pitch_err = desired_pitch - sim.bond.pitch;
+        let converged = yaw_err.abs() < 0.03 && pitch_err.abs() < 0.02;
+        moved = ((centre[0] - first[&target_obj][0]).powi(2) + (centre[1] - first[&target_obj][1]).powi(2) + (centre[2] - first[&target_obj][2]).powi(2)).sqrt();
+        let kills_before = sim.drones.break_kills.iter().filter(|k| k.0 == target_obj).count();
+        let paths_before = sim.drones.bullet_paths().0.len();
+        // Hold the fire until the carriage has descended (~420 ticks ≈ 12 u [D stream 1]) —
+        // the shot must happen WELL away from the create spot for the moved-position pin.
+        let fire = converged && fires < 5 && t >= 420 && t % 12 == 0;
+        if fire { fires += 1; }
+        let aim_input = Input { turn: yaw_err.clamp(-0.08, 0.08), look: pitch_err.clamp(-0.05, 0.05), ..Default::default() };
+        drop(sim);
+        if fire { w.tick_fire(aim_input); } else {
+            w.tick(aim_input, false);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.drones.break_kills.iter().filter(|k| k.0 == target_obj).count() > kills_before {
+            kill = sim.drones.break_kills.iter().find(|k| k.0 == target_obj).copied();
+            paths_at_kill = sim.drones.bullet_paths().0[paths_before..].to_vec();
+            break;
+        }
+    }
+    let (k_obj, k_kind, k_sound) = kill.expect("the pane broke under the real fire while the ride moved");
+    assert_eq!((k_kind, k_sound), (2, 0x2E), "the glass kill [M 0x12b970:64-76]");
+    eprintln!("[gondola moved] pane {k_obj} killed: moved {moved:.2} u since first seen, last centre {last_centre:?}");
+    assert!(moved > 1.5, "the pane had MOVED with the ride by the kill tick ({moved:.2} u), not broken at its create spot");
+    // The kill-tick flight passes through the pane's MOVED bounds — the break happened at the
+    // moved position, not the create spot [M Collide_Intersect 0x1ebaa8:157-177].
+    let (lo, hi) = last_bounds;
+    assert!(!paths_at_kill.is_empty() && paths_at_kill.iter()
+        .any(|&(a, b)| nf_game::breakable::Breaks::seg_box_t(a, b, lo, hi).is_some()),
+        "the kill-tick bullet flight crosses the pane's moved bounds ({:?}..{:?})", lo, hi);
+    // The row and the entity are gone (the kill's deletion).
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(sim.drones.breaks.list.iter().all(|b| b.script_obj != Some(k_obj)), "the row dropped");
+    assert!(sim.drones.scripts.objects.list.get(k_obj).is_none_or(|o| o.is_none()), "the entity deleted [M 0x12b970:60]");
+}
