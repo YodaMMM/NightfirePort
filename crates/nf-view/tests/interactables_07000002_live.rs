@@ -721,7 +721,7 @@ fn the_music_triggers_carry_the_disc_params_and_fire_on_their_channel() {
             .map(|t| (t.ch_on, t.event_id)).collect();
         assert!(ts.contains(&(0x17, 31)), "the garden's music trigger (ch 0x17 → event 31) exists [D #378]");
         assert!(ts.contains(&(0x19, 32)), "the west wing's music trigger (ch 0x19 → event 32) exists [D #379]");
-        assert!(sim.drones.worldobjs.music_triggers.iter().all(|t| t.countdown == 0 && !t.playing),
+        assert!(sim.drones.worldobjs.music_triggers.iter().all(|t| t.countdown == 0 && !t.dead),
             "sister: disarmed while the channels are off");
     }
     // The real walk onto plate #342 (out 0x17 [D]) — the stand-in transit to its floor, then the
@@ -745,7 +745,7 @@ fn the_music_triggers_carry_the_disc_params_and_fire_on_their_channel() {
         w.tick(Input::default(), false);
         let sim = w.scene.sim.as_ref().unwrap();
         let mt = sim.drones.worldobjs.music_triggers.iter().find(|t| t.ch_on == 0x17).unwrap();
-        if mt.countdown != 0 || mt.playing { beat = true; break; }
+        if mt.countdown != 0 || mt.dead { beat = true; break; }
     }
     assert!(beat, "the trigger arms its 30-tick countdown on the channel [M 0x1b31a0:19-27]");
 }

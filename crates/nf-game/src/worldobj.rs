@@ -204,22 +204,23 @@ impl ThirdCam {
 /// MusicTrigger (placement 0xfb → `MusicTrigger_Create` 0x1b30e0, class 0xc): while switch
 /// channel `ch_on` (p0) is on it re-arms a 30-tick countdown; every tick the countdown runs fires
 /// `Music_Event(event_id, 2)` [M 0x1b31a0:19-27] — so the event keeps firing for up to 30 ticks
-/// after the channel clears. `ch_flag` (p1) is an optional second channel and `flag_byte` (p3) a
-/// byte that also set the game's obj+0xfe bit 0 (`playing` here — no port-side reader found;
-/// [M 0x1b31a0:15,26-27] for the writers).
+/// after the channel clears. `ch_flag` (p1) is a kill channel and `flag_byte` (p3) a one-shot byte:
+/// both set obj+0xfe bit 0, the delete flag [M 0x1b31a0:15,26-27], and the movement handler's delete
+/// pass removes the object that tick [M 0x1336f8:86-87]. So a p3 = 1 trigger posts its event for ONE
+/// tick, however long the channel stays on (07000001's event 2, the alarm slot, then decays).
 pub struct MusicTrigger {
     /// p2 — the `Music_Event` board slot ([D] 07000001: 2, 07000002: 31/32, 07000007: 13 …).
     pub event_id: u32,
     /// p0 — the switch channel that re-arms the countdown (create skips the object when 0).
     pub ch_on: u16,
-    /// p1 — optional second channel driving `playing`.
+    /// p1 — optional kill channel (deletes the object, after this tick's update has run).
     pub ch_flag: u16,
     /// p3.
     pub flag_byte: u8,
     /// The game's countdown short at inst+8 (`0x1e` armed, drained per tick).
     pub countdown: i16,
-    /// The game's obj+0xfe bit 0.
-    pub playing: bool,
+    /// The game's obj+0xfe bit 0: deleted by the delete pass the same tick.
+    pub dead: bool,
 }
 
 /// Rotor (placement 0x71 → `rotor_init` 0x18f4b8, `rotor_update` 0x18f568, class 7): a spinning
@@ -523,7 +524,7 @@ impl WorldObjects {
                             ch_flag: param(1) as u16,
                             flag_byte: param(3) as u8,
                             countdown: 0,
-                            playing: false,
+                            dead: false,
                         });
                     }
                 }
@@ -564,14 +565,15 @@ impl WorldObjects {
         // the p3 flag) — the event board slot reads 2 while the countdown runs and stops 30 ticks
         // after the channel clears.
         for t in &mut self.music_triggers {
-            if t.ch_flag != 0 && channels.on(t.ch_flag as u32) { t.playing = true; }
+            if t.ch_flag != 0 && channels.on(t.ch_flag as u32) { t.dead = true; }
             if t.ch_on != 0 && channels.on(t.ch_on as u32) { t.countdown = 30; }
             if t.countdown != 0 {
                 t.countdown -= 1;
                 music.event(t.event_id as usize, 2);
-                if t.flag_byte != 0 { t.playing = true; }
+                if t.flag_byte != 0 { t.dead = true; }
             }
         }
+        self.music_triggers.retain(|t| !t.dead);
     }
 }
 
@@ -602,7 +604,7 @@ mod music_trigger_tests {
     /// (≤ 30 ticks) and then stops.
     #[test]
     fn countdown_rearms_fires_and_expires() {
-        let mut w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 1)])], &[], |_| (0, [0.0; 3]));
+        let mut w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 0)])], &[], |_| (0, [0.0; 3]));
         let mut ch = Channels::default();
         let mut music = crate::music::Music::default();
         let mut rng = crate::drone::Rng::new(1);
@@ -625,7 +627,7 @@ mod music_trigger_tests {
             consume(&mut music);
         }
         assert!(w.music_triggers[0].countdown > 0 && w.music_triggers[0].countdown < 30);
-        assert!(w.music_triggers[0].playing, "p3 = 1 sets the game's obj+0xfe bit 0");
+        assert!(!w.music_triggers[0].dead, "p3 = 0 keeps the object");
         // Channel off: the countdown drains and the event fires until it hits 0 (the armed 0x1e
         // [M 0x1b31a0:20] — the last fire is the tick the countdown reaches 0).
         ch.set(13, 0, 6);
@@ -637,6 +639,53 @@ mod music_trigger_tests {
         }
         assert_eq!(w.music_triggers[0].countdown, 0, "the countdown expired at the game's tick");
         assert_eq!(last_fire, 6 + 28, "the event stops 0x1e ticks after the re-arm stops");
+    }
+}
+
+#[cfg(test)]
+mod music_trigger_delete_tests {
+    use super::*;
+    use crate::triggers::Channels;
+
+    fn run(params: &[(u32, u32)], ch: &mut Channels, ticks: u32) -> (WorldObjects, u32) {
+        let p = nf_formats::placement::Placement { index: 0, hashcode: u32::MAX, flags: 0xfb, translation: [0.0; 3], rotation: [0.0; 3], params: params.to_vec(), extra: [0; 9] };
+        let mut w = WorldObjects::create(&[p], &[], |_| (0, [0.0; 3]));
+        let (mut music, mut rng) = (crate::music::Music::default(), crate::drone::Rng::new(1));
+        let (weapons, mut bullets) = (nf_formats::weapon::WeaponData::default(), Vec::new());
+        let mut fires = 0;
+        for f in 0..ticks {
+            w.tick(ch, [0.0; 3], &weapons, &mut rng, &mut bullets, f, &mut music);
+            if music.events[2] == 2 { fires += 1; }
+            music.update(0);
+        }
+        (w, fires)
+    }
+
+    /// p3 = 1 [M 0x1b31a0:26-27]: the object posts once and is deleted [M 0x1336f8:86-87].
+    #[test]
+    fn a_one_shot_trigger_posts_for_one_tick_and_goes() {
+        let mut ch = Channels::default();
+        ch.set(13, 1, 0);
+        let (w, fires) = run(&[(0, 13), (1, 0), (2, 2), (3, 1)], &mut ch, 100);
+        assert_eq!(fires, 1, "07000001's record posts once with the channel held 100 ticks");
+        assert!(w.music_triggers.is_empty());
+    }
+
+    /// p1 [M 0x1b31a0:15]: the kill channel deletes the object, but the update still finishes:
+    /// a re-arm on the same tick posts once. Sister: no kill, no delete.
+    #[test]
+    fn the_kill_channel_lets_the_tick_finish() {
+        let mut ch = Channels::default();
+        ch.set(13, 1, 0);
+        ch.set(0x96, 1, 0);
+        let (w, fires) = run(&[(0, 13), (1, 0x96), (2, 2), (3, 0)], &mut ch, 10);
+        assert_eq!(fires, 1);
+        assert!(w.music_triggers.is_empty());
+        let mut ch = Channels::default();
+        ch.set(13, 1, 0);
+        let (w, fires) = run(&[(0, 13), (1, 0x96), (2, 2), (3, 0)], &mut ch, 10);
+        assert_eq!(fires, 10, "the channel holds, the kill channel is off");
+        assert_eq!(w.music_triggers.len(), 1);
     }
 }
 

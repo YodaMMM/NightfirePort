@@ -3332,8 +3332,8 @@ impl Sim {
             //   (05 trench ledge).
             self.bond.icon_ctx = 0xff;
             let bond_cell = find_cell_raycast(&self.cel_graph, self.bond.pos, Some(&self.world));
-            for (ii, icon) in self.icons.iter().enumerate() {
-                if icon.on_channel != 0 && !self.drones.channels.on(u32::from(icon.on_channel)) { continue; }
+            for (ii, icon) in self.icons.iter_mut().enumerate() {
+                if !icon.gate(&self.drones.channels) { continue; }
                 let Some(cells) = self.icon_cels.get(ii) else { continue };
                 if cells.is_empty() { continue; }
                 if !bond_cell.is_some_and(|bc| cells.contains(&bc)) { continue; }
@@ -3403,7 +3403,8 @@ impl Sim {
             for (hi, h) in self.hints.iter().enumerate() {
                 if self.hint_fired.get(hi).copied().unwrap_or(true) { continue; }
                 if h.on_channel != 0 && !self.drones.channels.on(h.on_channel) { continue; }
-                if h.off_channel != 0 && self.drones.channels.on(h.off_channel) { continue; }
+                // The off-channel deletes the marker, not just this tick's fire [M 0x1b3380:15, 42-44].
+                if h.off_channel != 0 && self.drones.channels.on(h.off_channel) { self.hint_fired[hi] = true; continue; }
                 let Some(cells) = self.hint_cels.get(hi) else { continue; };
                 if cells.is_empty() { continue; }
                 if !bond_cell.is_some_and(|bc| cells.contains(&bc)) { continue; }

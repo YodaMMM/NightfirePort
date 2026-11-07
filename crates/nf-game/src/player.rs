@@ -2693,8 +2693,9 @@ pub fn weapon_lock_auto_draw(level: u32, on: bool, prev: bool) -> bool {
 /// `inst+0x00` = param 1 (**the sound id** — `Sound_Play(100.0, sound, 0, 0)` on fire; 0 = silent),
 /// `inst+0x04` = param 0 (**the text label** — `Txt_BindLabel(param 0)`; the safe's is 0x1000336
 /// [D USATxt.dat entry 1822]), `inst+0x08` = param 3 (**the on-channel** — the hint only fires
-/// while the channel is 0 (never armed) or on), `inst+0x0C` = param 4 (**the off-channel** — when
-/// it is non-zero and ON the hint stays silent) [M 0x1b3248:33-37, 0x1b3380:17-22].
+/// while the channel is 0 (never armed) or on), `inst+0x0C` = param 4 (**the off-channel** — read
+/// once the on-channel passes: non-zero and ON deletes the marker for good, so it never fires
+/// even if the channel drops again) [M 0x1b3248:33-37, 0x1b3380:13-15, 42-44].
 ///
 /// `Hint_Update` 0x1b3380 fires it once: with a class-3 object (the player) in the marker's
 /// obj+0xD0 chain (the same straddle-cel occupancy the third icons arm through — the marker's
@@ -2725,7 +2726,7 @@ pub struct Hint {
     pub sound: u32,
     /// Param 3: the on-channel (0 = always armed).
     pub on_channel: u32,
-    /// Param 4: the off-channel (when non-zero and ON the hint never fires).
+    /// Param 4: the off-channel (when non-zero and ON the marker is deleted unfired).
     pub off_channel: u32,
     /// Param 2: the difficulty stage gate (`Hint_Create` 0x1b3248:12-25): 0 = always; 1..=4 =
     /// a difficulty CEILING (the hint is refused when `stage < difficulty`, so stage 1 shows
