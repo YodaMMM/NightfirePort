@@ -75,12 +75,13 @@ impl Spawner {
         // There is no delay value anywhere in the spawner family; the gap between mode-3 waves is
         // purely the alive-scan == 0 wait.
         let immediate = (start == 0 || ch.on(start)) && !ch.on(param(5));
-        let min = f32::from_bits(param(8));
+        // +0x18: `cvt.s.w` of p8, 0 → 10.0 [M 0x1379c0-0x137a1c] — a number on the disc, not float bits.
+        let min = param(8) as i32 as f32;
         Some(Spawner {
             placement, mode: param(0), group: param(1), max_alive: if max == 0 || max > n { n } else { max },
             waves: if param(3) == 0 { 32000 } else { param(3) }, start, stop: param(5), done: param(6),
             kill: param(7), kill_latch: false,
-            min_dist: if min > 0.0 && min.is_finite() { min } else { 10.0 },
+            min_dist: if min == 0.0 { 10.0 } else { min },
             used: vec![false; n], templates, spawned: Vec::new(), active: start == 0, immediate, spawn_on: false, wave: 0, this_wave: 0,
             // No template on this difficulty: `DroneSpawner_Init` deletes the spawner [M 0x137aa0:16-19].
             gone: n == 0,

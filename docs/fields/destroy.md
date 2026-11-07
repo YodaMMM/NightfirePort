@@ -15,12 +15,12 @@ explosion), then after a delay fires its output channel and re-classes to 1 (a d
 |---|---|---|---|
 | +0x00 | u32 | the glist id this object was created with (`glist+0x40`, cleared to 0 when `obj+0xF0 & 0x10`); `Destroy_Update` compares it against the *current* `obj+0xD8`'s `+0x40` — a change means the paired breakable swapped the model, which triggers the smash watch below | [M1 create 0x12c318:25-30,58-60] |
 | +0x04 | f32 | health/armour: bullet damage is subtracted from it; `< 0.0` → smash | [M* create 0x12c318:34-40 (p3 read as float bits); Destroy_CollisionHandler 0x12bd48:31,36] |
-| +0x08 | i32 | blast-radius word (float bits) = `(int)(param5 · 0.01)`; passed to `Explode_Create` as the 2nd float arg | [M1 create 0x12c318:48; read 0x12bb60:73] |
+| +0x08 | f32 | blast radius = `param5 · 0.01`; `Explode_Create`'s f13 | [M create 0x12c45c-0x12c470 `mul.s`/`swc1`; read 0x12bd04] |
 | +0x0C | s32 | the post-smash countdown: create stores `(int)(param6 · −FRAME_RATE)`, FRAME_RATE reading 30 at load [L −300/−90/−60/−30 on p6 10/3/2/1, 07000014] (negative = not counting); on destruction it is negated (positive), `Destroy_Update` decrements it while > 0 and at 0 fires the channel and re-classes | [M* create 0x12c318:57; Update 0x12c4f8:17-25; CollisionHandler 0x12bd48:41-45 (negate); Smash 0x12bb60:31] |
 | +0x10 | u16 | watch channel (param 1): when the glist id changed and `switch_channels[+0x10]` is on → clear it and `Destroy_Smash` | [M* create 0x12c318:31; Update 0x12c4f8:29-32] |
 | +0x12 | u16 | output channel (param 0): set to 1 when the countdown expires (`Destroy_Update`) or immediately on bullet kill when the timer is 0 (`Destroy_CollisionHandler`) or on a script smash with `p0 != 0` (`Destroy_Smash`) | [M* Update 0x12c4f8:23; CollisionHandler 0x12bd48:42; Smash 0x12bb60:40] |
 | +0x14 | u16 | bullet filter for the object's HITDATA list: `Collide_FilterBullets(obj+0xD0, +0x14)` = `~(u16)param4` (0 when param 4 is 0) | [M* create 0x12c318:41-47; read 0x12bd48:22] |
-| +0x16 | u8 | explosion kind (param 2, low byte): 0 = no explosion; 1 = script 0x6000027, scale 4; 2 = script 0x600004f, scale 2; anything else = script 0x6000052, scale 3; the kind (as a float, ×10.0) also goes to `Explode_Create`'s 3rd arg | [M* create 0x12c318:33; read 0x12bb60:57-75] |
+| +0x16 | u8 | explosion kind (param 2, low byte): 0 = no explosion; 1 = script 0x6000027, scale 4; 2 = script 0x600004f, scale 2; anything else = script 0x6000052, scale 3 (the scale multiplies obj+0x8C into the first float, the script's size only); the signed kind ×10.0 is f14, the blast damage | [M* create 0x12c318:33; read 0x12bb60:57-75] |
 | +0x17 | u8 | smashed latch: `Destroy_Smash` returns immediately when it is 1, then sets it | [M* 0x12bb60:17-20] |
 
 `piVar1[3]` in the decompile is +0x0C, `piVar1[4]` +0x10 (int*-indexed).
@@ -55,13 +55,9 @@ The dispatcher passes only 4 args (0x1d04f0:358-363); the decompiler's 5th param
 `Destroy_Create` (a second `level_tag*`, stored to +0x00 when `glist+0x40 == 0`) is an artifact of
 the register being live — no caller sets it meaningfully [M1 0x12c318:27-29; S on the fallback].
 
-## Port check (crates/nf-game/src/props.rs + grep)
+## Port check
 
-The port has no Destroy object at all: `grep -rn "Destroy" crates/nf-game/src/` finds only
-comments in props.rs about destroyed props and `props.rs`'s `destroyed` flag on its own
-prop model. Nothing reads placement 0xE1 (grep `0xe1|0xE1` in crates/nf-formats/src/placement.rs
-→ absent). **Missing feature, not a mismatch**: bullet-destroyable scenery whose debris model
-swap, explosion script and delayed channel all come from this struct.
+`crates/nf-game/src/props.rs` (`Destroy`, `Smash`, `Props::smash`, `Props::channel_kills`).
 
 ## [L-read] spot checks (work/ee_start_05.bin)
 
@@ -71,15 +67,3 @@ the level's breakables use the Break class instead. Cross-checked in
 shot-out scenery); instance +0x04 health values are large-positive floats and +0x0C is negative
 (not yet smashed) — consistent with the create-time stores. (Values recorded in the session
 transcript; the doc keeps addresses only.)
-
-## Live checks
-
-No probe needed until the port models 0xE1: the struct is inert unless the level ships a
-Destroy placement. When it does:
-
-1. Find the object live: `DynamicObjList 0x2705a0 → head+0x14 → obj+0xFF == 0x21 → obj+0xE0`.
-2. `watch` instance+0x04 (health) while shooting the prop — it should decrease by each bullet's
-   damage; the screen shows the prop's model swap + explosion when it goes negative.
-3. `poke` instance+0x0C to a small positive value after a smash — the output channel
-   (`switch_channels[+0x12]`) should turn on ~that many frames later (drive whatever the channel
-   opens, e.g. a door, and watch it open).

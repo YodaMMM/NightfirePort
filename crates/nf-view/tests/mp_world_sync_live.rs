@@ -47,7 +47,7 @@ fn arena_interaction_inventory() {
             eprintln!("  hurt #{} kind {} damage {} gate {} who {:#x} one_shot {} tris {} lo {:?} hi {:?}", h.placement, h.kind, h.damage, h.gate, h.who, h.one_shot, h.tris.len(), h.lo, h.hi);
         }
         for x in &d.props.destroy {
-            eprintln!("  destroy #{} ch {} hp {} kind {} blast {} lo {:?} hi {:?}", x.placement, x.channel, x.health, x.kind, x.blast_damage, x.lo, x.hi);
+            eprintln!("  destroy #{} ch {} hp {} kind {} blast {} lo {:?} hi {:?}", x.placement, x.channel, x.health, x.kind, x.blast_radius, x.lo, x.hi);
         }
     }
 }

@@ -149,11 +149,12 @@ fn a_player_round_detonates_the_oil_barrel_and_the_blast_takes_the_twin() {
         let b = &sim.drones.props.destroy[i321];
         // The disc row [D 07000006 #321: p0 0x29, p1 0, p2 0xa, p3 0x14, p4 0xf8, p5 0x12c; M
         // Destroy_Create 0x12c318:31-48's param map — p0 the OUT channel, p2 the smash type, p3
-        // the health pool, p4 the ~bullet mask, p5·0.01 the blast damage].
+        // the health pool, p4 the ~bullet mask, p5·0.01 the blast radius].
         assert_eq!((b.channel, b.kind), (0x29, 0xa), "the barrel's out channel and smash type [D p0/p2]");
         assert_eq!(b.mask, 0xff07, "~p4 = 0xFF07 [D p4 0xf8; M 0x12c318:41-47]");
         assert!((b.health - 20.0).abs() < 0.01, "the health pool p3 0x14 [D]");
-        assert!((b.blast_damage - 3.0).abs() < 0.01, "the blast damage p5 0x12c·0.01 [D; M 0x12c318:48]");
+        assert!((b.blast_radius - 3.0).abs() < 0.01, "the blast radius p5 0x12c·0.01 [D; M 0x12c318:48, 0x12bd04]");
+        assert_eq!(b.blast_damage(), 100.0, "the blast damage = the type byte 0xa ×10 [M 0x12bcd8-0x12bd0c]");
         assert!(!b.dead, "sister: the barrel stands before the shot");
         assert!(!sim.drones.props.destroy[i322].dead, "sister: the twin #322 stands before the shot");
         assert!(!sim.drones.channels.on(0x29), "sister: ch 0x29 silent before the shot");

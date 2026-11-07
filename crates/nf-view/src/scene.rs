@@ -14420,30 +14420,28 @@ impl Sim {
             de.health -= damage;
             if de.health >= 0.0 { continue; }
             de.dead = true;
-            let (channel, kind, blast_damage, lo, hi) = (de.channel, de.kind, de.blast_damage, de.lo, de.hi);
+            let (channel, kind, radius, blast_damage, lo, hi) = (de.channel, de.kind, de.blast_radius, de.blast_damage(), de.lo, de.hi);
             self.drones.channels.set(channel as u32, 1, frame);
             if kind == 0 { continue; }
-            // `Destroy_Smash` 0x12bb60's blast: radius = the obj's +0x8C sphere × the type
-            // multiplier {1→4, 2→2, else 3} [M 0x12bcdc `lwc1 $f12, 0x8c($s0)`;
-            // 0x12bc74/0x12bc84/0x12bc94], the script {1→0x06000027, 2→0x0600004f, else
-            // 0x06000052} [M 0x12bc70-0x12bc98], the damage = the record's info+0x08 float (the
-            // level's param 5) [M 0x12bd04 `lwc1 $f13, 8($s1)`; a second float arg carries
-            // kind×10.0, 0x12bd0c]. Position: the bounds centre. The +0x8C sphere itself is
-            // props.rs's half-diagonal approximation (its comment carries the live check).
+            // `Destroy_Smash` 0x12bb60's blast, `props::Smash`'s three floats [M 0x12bcdc-0x12bd0c]:
+            // scale = the obj's +0x8C sphere × the type multiplier {1→4, 2→2, else 3}, radius =
+            // tag+8, damage = the type byte × 10.0. The script {1→0x06000027, 2→0x0600004f, else
+            // 0x06000052} [M 0x12bc70-0x12bc98]. Position: the bounds centre. The +0x8C sphere
+            // itself is props.rs's half-diagonal approximation (its comment carries the live check).
             let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0];
             let ext = [(hi[0] - lo[0]) / 2.0, (hi[1] - lo[1]) / 2.0, (hi[2] - lo[2]) / 2.0];
-            let radius = (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt() * match kind { 1 => 4.0f32, 2 => 2.0, _ => 3.0 };
+            let scale = (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt() * match kind { 1 => 4.0f32, 2 => 2.0, _ => 3.0 };
             let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
             // The look only (damage 0): the drones' blast pass plays the script next tick.
             // explode-debris-spawn: Destroy_Smash's 12th arg is 0 [M 0x12bcf8].
-            self.drones.pending_blasts.push((c, radius, 0.0, usize::MAX, 0, script, radius, 0));
+            self.drones.pending_blasts.push((c, radius, 0.0, usize::MAX, 0, script, scale, 0));
             let bots: Vec<(usize, [f32; 3], f32)> = self.mp.as_ref().map_or(Vec::new(), |m| m.bots.iter().enumerate()
                 .filter(|(_, b)| !b.dead).map(|(j, b)| (j, [b.brain.pos[0], b.brain.pos[1] - BOT_EYE, b.brain.pos[2]], 0.4)).collect());
             for slot in 0..nf_net::MAX_AGENTS {
                 if self.mp_dead_ticks[slot] > 0 { continue; }
                 let Some(v) = self.net_body(slot) else { continue };
                 let hits = nf_game::explode::propagate(c, radius, blast_damage, shooter,
-                    &nf_game::explode::Targets { drones: &[], player: v.pos, breaks: &[], destroys: &[], copters: &[] });
+                    &nf_game::explode::Targets { drones: &[], player: v.sphere_centre(), breaks: &[], destroys: &[], copters: &[] });
                 if let Some(ph) = hits.player { self.net_world_pain(slot, ph, 0, Some(shooter)); }
             }
             let hits = nf_game::explode::propagate(c, radius, blast_damage, shooter,

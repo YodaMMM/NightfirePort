@@ -417,9 +417,8 @@ impl Mine {
         best
     }
 
-    /// `Explode_Propagate` 0x17c518's reach for one mine: the falloff `damage · (1 − (int)(dist −
-    /// obj+0x8C) / radius)` (dist from the blast to the world sphere centre, the truncation toward
-    /// zero, clamped at ≥ 0) must reach 0.0002 [M 0x17c518, the gate before the class switch]; the
+    /// `Explode_Propagate` 0x17c518's reach for one mine: `explode::falloff` over the distance from
+    /// the blast to the world sphere's edge must reach 0.0002 [M 0x17c518, the gate before the class switch]; the
     /// case-0x4B arm then hangs a
     /// HITDATA on the mine whose +0x58 is the blast's attacker (`Coll_AddHitToList(…, obj+0xD0, 0,
     /// param_5)` [M 0x17c518 case 0x4b]). A mine's own blast passes `EXPLODEINFO+0x24` = the mine
@@ -429,8 +428,7 @@ impl Mine {
         if self.exploded || !(damage >= 0.0002) || !(radius >= 0.0002) { return false; }
         let d = [self.centre[0] - pos[0], self.centre[1] - pos[1], self.centre[2] - pos[2]];
         let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() - self.sph_r;
-        let truncated = if dist > 0.0 { (dist as i32) as f32 } else { 0.0 };
-        damage * (1.0 - truncated / radius) >= 0.0002
+        crate::explode::falloff(damage, radius, dist) >= 0.0002
     }
 }
 
@@ -698,11 +696,11 @@ mod mine_tests {
     }
 
     #[test]
-    fn the_blast_reach_truncates_the_distance_like_explode_propagate() {
+    fn the_blast_reach_is_explode_propagates_falloff() {
         let m = beam_mine();
-        // dist − sph_r: 16.02 − 2.02 = 14.0 → int 14 → 80·(1 − 14/15) > 0: reached [M 0x17c518].
+        // dist − sph_r: 16.02 − 2.02 = 14.0 → 80·(1 − 14/15) > 0: reached [M 0x17c518].
         assert!(m.blast_reaches([2.0, 16.02, 0.0], 15.0, 80.0));
-        // 17.03 − 2.02 = 15.01 → int 15 → 80·(1 − 15/15) = 0 < 0.0002: not reached (sister).
+        // 17.03 − 2.02 = 15.01 → below 0: not reached (sister).
         assert!(!m.blast_reaches([2.0, 17.03, 0.0], 15.0, 80.0));
         // Inside the sphere: full reach; a zero radius reaches nothing.
         assert!(m.blast_reaches([2.0, 0.0, 0.0], 10.0, 80.0));

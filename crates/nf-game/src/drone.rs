@@ -1929,21 +1929,6 @@ fn ailog() -> bool {
     *F.get_or_init(|| std::env::var_os("NF_AILOG").is_some())
 }
 
-/// `NDrone2_DefaultInit`'s level overrides of `+0xF0` engage and `+0xFC` combat range
-/// [M 0x14b300 LAB_0014bb44], taken after the param-14 switch on the load and the spawn path alike.
-/// 07000011: anim set 9 → 5.0 / 8.0, else 6.0 / 9.0 (the decomp's `(u < 4) || (u < 7) || (u != 9)`
-/// reduces to `u != 9`). 07000014: set 5 keeps the switch values, 9 → 7.0, others 10.0; `+0xFC` kept.
-fn level_engage_override(level: u32, anim_set: u16, f0: f32, fc: f32) -> (f32, f32) {
-    match level {
-        0x0700_0011 if anim_set == 9 => (5.0, 8.0),
-        0x0700_0011 => (6.0, 9.0),
-        0x0700_0014 if anim_set == 5 => (f0, fc),
-        0x0700_0014 if anim_set == 9 => (7.0, fc),
-        0x0700_0014 => (10.0, fc),
-        _ => (f0, fc),
-    }
-}
-
 fn norm(v: V3) -> V3 { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt(); if l > 0.0 { [v[0] / l, v[1] / l, v[2] / l] } else { v } }
 
 /// Rodrigues' rotation about the unit `axis` by `ang` radians, as a 4×4 (the pose rotations of
@@ -2025,7 +2010,7 @@ impl Drone {
             3 => (40.0, 25.0, 6.0, 100.0), 4 => (1000.0, 75.0, 8.0, 1000.0), 5 => (0.0, 12.0, 4.0, 1.0), _ => (24.0, 12.0, 4.0, 1.0) };
         let f0 = f0_base + rng.frand(f0_rand);
         let fc = match param(14) { 3 => fc_add + rng.frand(6.0), 4 => 1000.0, _ => f0 + fc_add + rng.frand(f0_rand) };
-        let (f0, fc) = level_engage_override(d.level, anim_set, f0, fc);
+        let (f0, fc) = level_sight(d.level, anim_set, f0, fc);
         let clip = match weapon { 0x16 | 0x18..=0x1b => 0x40, 0x1e | 0x1f | 0x24 | 0x25 => 5, _ => 0x40 };
         // `NDrone2_DefaultInit` (0x14b300 lines 348-376): `+0xBCC` and `+0xBCE` come from **param 11** —
         // `uVar4 = piVar19[0x18]`, and params start at `piVar19[13]` (`Drone_Create` 0x136be0 copies
@@ -2247,6 +2232,12 @@ impl Drone {
         // DefaultInit kind 0x18: health = DroneInit_TakeXHits(dmg, 0x33) — the weapon_data[0x33]
         // record's +0xc float × (1.0 easy / 2.0 higher difficulty) [M 0x14b300:728-739 +
         // 0x14d928:6-8], ×3 for the Drake model 0x50000ba [M 0x14c270 via 0x14b300:736-739].
+        // Rook: kind 0x10 on 07000014 stands three times the health [M 0x14b300:708-713], and the
+        // max follows the +0xAC it copies [M :776].
+        if dr.kind == 0x10 && d.level == 0x0700_0014 {
+            dr.health *= 3.0;
+            dr.max_health = dr.health;
+        }
         if dr.kind == 0x18 {
             let dmg = if d.difficulty == 1 { 1.0 } else { 2.0 };
             let per = d.weapons.records.get(0x33)
@@ -5504,6 +5495,8 @@ impl Drone {
         }
         if !self.prop(d, 0x1f) || self.dist > 50.0 || self.alert_bits & 0x10 != 0 { return None; }
         if m == msg::SOUND && self.sighted { return None; } // AlertSound 0x177800:48-50
+        // A guard on his mission route on 07000014 ignores sounds [M 0x177800:35-37].
+        if m == msg::SOUND && d.level == 0x0700_0014 && s == state::ENEMY_MISSION { return None; }
         (self.sound_share > 0.2 || self.alert > 0.66).then_some(state::HEARD_NOISE)
     }
 
@@ -12044,15 +12037,29 @@ pub fn hazard_link_flag(weapon_type: u16, stuck: bool) -> Option<(f32, u16)> {
     }
 }
 
+/// An awake guard's obj+0x8C, what a blast measures to [L ee_start_05.bin: 1.019..1.064 on the
+/// animated guards].
+const DRONE_SPHERE_R: f32 = 1.05;
+
+/// `NDrone2_DefaultInit`'s per-level close-in after the sight class [M 0x14b300:423-460]: the
+/// engage range (and on 07000011 the combat sight) by the anim set +0xDA, the draws already spent.
+fn level_sight(level: u32, anim_set: u16, f0: f32, fc: f32) -> (f32, f32) {
+    match level {
+        0x0700_0011 => if anim_set == 9 { (5.0, 8.0) } else { (6.0, 9.0) },
+        0x0700_0014 => match anim_set { 5 => (f0, fc), 9 => (7.0, fc), _ => (10.0, fc) },
+        _ => (f0, fc),
+    }
+}
+
 /// The per-viewer shake amount `Camera_Shake` 0x1bc430:12-26 writes [M]: with range = 2·radius
-/// and d ≤ range, `min((int)(range·(1 − (d/range)²)), 10)`; 0 outside. Explode_Create 0x17cc28
-/// only calls it from radius ≥ 0.5.
+/// and d ≤ range, `min(range·(1 − (d/range)²), 10)`, a float (the decompile prints `min.s` as an
+/// int select); 0 outside. Explode_Create 0x17cc28 only calls it from radius ≥ 0.5.
 #[allow(dead_code)] // not wired yet
 pub fn camera_shake_amount(radius: f32, dist: f32) -> f32 {
     let range = radius * 2.0;
     if dist > range { return 0.0; }
     let inten = range * (1.0 - (dist / range) * (dist / range));
-    if inten <= 0.0 { 0.0 } else { (inten as i32).min(10) as f32 }
+    if inten <= 0.0 { 0.0 } else { inten.min(10.0) }
 }
 
 pub fn flash_amount(head: V3, blast: V3, px: f32, pz: f32, yaw: f32, has_los: bool) -> f32 {
@@ -12638,6 +12645,8 @@ pub struct Drones {
     /// kept-down test is the game's live `DroneFunc_AnyoneNear` positional query [M 0x14a718 via
     /// 0x1631c0 case 0xc], not the drone's cached opp distance (a stunned guard's perception never
     /// refreshes that, and the old `self.dist` read held him down forever).
+    /// Bond's world sphere centre (`Player::sph`), what a blast measures to [M 0x17c518:80].
+    pub player_sph: V3,
     pub player_pos: V3,
     /// `DAT_0029aa86` — the interrogate latch: 0 while the party is calm, 1 once an interrogation began
     /// (`DroneVision_BeginInterogate` 0x1782a8; `EndInterogate` 0x1782c8 never clears it on 07000007).
@@ -13314,7 +13323,7 @@ impl Drones {
             if let Some(g) = &mut dr.body_glow { g.owner = i; }
         }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, player_move_local: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), spawn_templates: Default::default(), stats_table: Default::default(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], player_sph: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, player_move_local: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), spawn_templates: Default::default(), stats_table: Default::default(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             // The game's `DAT_00299092` (the shared LOS-probe counter; see the field) — zeroed
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
@@ -14538,7 +14547,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // game's own Collide_SphereIntersect list skips obj+0xF0 & 0x20 for DISABLED guards is an
         // open live check).
         let drones: Vec<(usize, V3, f32)> = self.list.iter().enumerate()
-            .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, 0.4)).collect();
+            .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, DRONE_SPHERE_R)).collect();
         // copter-hitdata-damage: the parts' world spheres for the case-0 sweep (the SP part
         // targets, the same volumes the bullet pass tests).
         let copter_parts: Vec<(usize, Vec<(V3, f32)>)> = self.copters.iter().enumerate()
@@ -14584,7 +14593,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // explosion object's contact runs on its first update [M Explode_CollisionHandler
         // 0x17cde0's one-shot latch]).
         let hits = crate::explode::propagate(pos, radius, damage, owner,
-            &crate::explode::Targets { drones: &drones, player: player_pos, breaks: &breaks_t,
+            &crate::explode::Targets { drones: &drones, player: self.player_sph, breaks: &breaks_t,
                 destroys: &destroys,
                 // copter-hitdata-damage: the blast sweeps the copter's parts — Explode_Propagate's
                 // case 0 adds the falloff straight into rec+0x64 and rec+0x6c, no Bits scaling,
@@ -14598,9 +14607,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // smash's, the twin's blast queued like the beam path's (script by the type byte, owner
         // the blast's owner).
         for i in hits.destroys {
-            if let Some((c, r, dmg, kind)) = self.props.smash(i, &mut self.channels, frame) {
-                let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
-                self.pending_blasts.push((c, r, dmg, owner, 0, script, r, 0));
+            if let Some(s) = self.props.smash(i, &mut self.channels, frame) {
+                self.pending_blasts.push((s.pos, s.radius, s.damage, owner, 0, s.script(), s.scale, 0));
             }
             // The stat arm rides every Destroy_Smash [M 0x12bb60:42-55 — the C has no path
             // distinction; the blast-propagate case 0x21 reaches the same function].
@@ -14700,7 +14708,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
         }
         // `Explode_Propagate` case 0x36 [M 0x17c518:190-193]: `GT_ApplyDamage(falloff, obj)`
-        // then `GT_Disable(obj)` — the same integer-truncated falloff as propagate, with the
+        // then `GT_Disable(obj)` — the same falloff as propagate, with the
         // turret as a point (the port builds no turret world sphere; the game reads the
         // object's — [S] unverified stand-in).
         for t in self.gt_turrets.iter_mut() {
@@ -14709,9 +14717,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let dy = t.pos[1] - pos[1];
             let dz = t.pos[2] - pos[2];
             let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-            let truncated = if dist > 0.0 { dist as i32 as f32 }
-                else if dist < 0.0 { -((-dist) as i32) as f32 } else { 0.0 };
-            let amount = damage * (1.0 - truncated / radius);
+            let amount = crate::explode::falloff(damage, radius, dist);
             if amount >= 0.0002 {
                 t.apply_damage(amount);
                 t.disable();
@@ -15447,14 +15453,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     }
                 }
             }
-            for (pos, radius, damage, kind) in if net_world { Vec::new() } else { self.props.bullet_hit(b.pos, end, b.weapon, weapon_word, b.damage, &mut self.channels, frame) } {
-                let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
-                // fix-blast-scripts2: Destroy_Smash's f12 reads the tag's +0x8c [M 0x12bcdc `lwc1
-                // $f12, 140($16)`] — the port keeps the historical scale = radius here (no disc
-                // contradiction surfaced; the green destroy test pins the script, not the scale).
+            for s in if net_world { Vec::new() } else { self.props.bullet_hit(b.pos, end, b.weapon, weapon_word, b.damage, &mut self.channels, frame) } {
                 // explode-debris-spawn: Destroy_Smash's 12th arg (the u16 debris kind) is an
                 // explicit 0 — `sw $zero,($sp)` [M 0x12bcf8]; no destroyable blast spawns debris.
-                self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
+                self.pending_blasts.push((s.pos, s.radius, s.damage, usize::MAX, 0, s.script(), s.scale, 0));
             }
             // The stat arm rides every Destroy_Smash — the bullet kill reaches it through
             // `Destroy_CollisionHandler` 0x12bd48 → 0x12bb60 [M]; bullet_hit's internal smashes
@@ -15604,8 +15606,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // [L ee_start_05.bin @0x2bf150]. The port dropped the blast here (the round died
                 // on the body with only its 1.0 contact [M Bullet_update's id override]). The
                 // contact point is the segment's sphere entry [S: the game's HITDATA+0x40 for an
-                // object pick — the sweep's (int) truncation makes any point within a unit of the
-                // surface the same full amount].
+                // object pick].
                 if copter_stop && b.bounces == 0 {
                     let rec = d.weapons.records.get(b.weapon as usize);
                     let flags70c = rec.map_or(0u32, |r| u32::from_le_bytes(r[0x70..0x74].try_into().unwrap()));
@@ -16809,21 +16810,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }).collect();
             // The sweep's candidates are the game's `Collide_SphereIntersect(pos, radius, cel,
             // …, 0xc0)` hits [M 0x17c518:67-68]; the port passes its live lists, the falloff
-            // gate inside `propagate` picks the reached ones. The drones' 0.4 hit radius is the
-            // spawn_blast convention (the guards' body sphere stand-in).
+            // gate inside `propagate` picks the reached ones.
             let drones_t: Vec<(usize, V3, f32)> = self.list.iter().enumerate()
-                .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, 0.4)).collect();
+                .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, DRONE_SPHERE_R)).collect();
             let hits = crate::explode::propagate(pos, radius, damage, owner,
-                &crate::explode::Targets { drones: &drones_t, player: player_pos, breaks: &breaks_t,
+                &crate::explode::Targets { drones: &drones_t, player: self.player_sph, breaks: &breaks_t,
                     destroys: &destroys, copters: &[] });
             self.blast_mines(pos, radius, damage); // case 0x4B [M 0x17c518]
             // case 0x21 → `Destroy_Smash` [M 0x17c518:141-177 → 0x12bb60]: the channel write is
             // the smash's, the blast queued like the bullet-kill path's (script by the type
             // byte, owner the imp — not the player).
             for i in hits.destroys {
-                if let Some((c, r, dmg, kind)) = self.props.smash(i, &mut self.channels, frame) {
-                    let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
-                    self.pending_blasts.push((c, r, dmg, owner, 0, script, r, 0));
+                if let Some(s) = self.props.smash(i, &mut self.channels, frame) {
+                    self.pending_blasts.push((s.pos, s.radius, s.damage, owner, 0, s.script(), s.scale, 0));
                 }
                 // The stat arm rides every Destroy_Smash [M 0x12bb60:42-55].
                 self.smash_stat_check();
@@ -17833,6 +17832,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `bullet_contacts_prev`.
         self.bullet_contacts_prev = std::mem::take(&mut self.bullet_contacts_now);
         self.player_pos = player.pos;
+        self.player_sph = player.sph;
         // `Drone_InitComms` 0x139520:263-273: the latch `0x298f84 = 0x298fa0` then `0x298fa0 = 0` —
         // the per-frame sight counter becomes "saw last frame"; this tick's sight accumulates below.
         self.saw_opp_last_frame = self.saw_opp_this_frame;
@@ -19723,11 +19723,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // generator-hall cascade to box #729's death ch 0x85 — Door_Slide_11A/B's lock channel
         // [D the census; M 0x1363c8:88-107] — so the sabotage sequence ends at the door unlock.
         // The blast rides the same queue the bullet-path smash uses (Destroy_Smash 0x12bb60's
-        // Explode_Create, the damage = param 5 × 0.01 [M 0x12c424]).
-        for (pos, radius, damage, kind) in self.props.channel_kills(&mut self.channels, frame) {
-            let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
+        // Explode_Create, `props::Smash`).
+        for s in self.props.channel_kills(&mut self.channels, frame) {
             // explode-debris-spawn: kind 0 — the same Destroy_Smash call as the bullet path [M 0x12bcf8].
-            self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
+            self.pending_blasts.push((s.pos, s.radius, s.damage, usize::MAX, 0, s.script(), s.scale, 0));
         }
         // The stat arm rides every Destroy_Smash — the external-kill path reaches it through
         // `Destroy_Update` 0x12c4f8's watch arm → 0x12bb60 [M]. channel_kills' internal smashes
@@ -20081,7 +20080,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             dr.half_fov = crate::trig::HALF_PI; // `+0xE4 = π/2`, LAB_0014bb44's unconditional write [M :463]
                             dr.engage_range = f0;
                             dr.combat_range = fc;
-                            (dr.engage_range, dr.combat_range) = level_engage_override(d.level, dr.anim_set, f0, fc);
+                            (dr.engage_range, dr.combat_range) = level_sight(d.level, dr.anim_set, f0, fc);
                             // The spawn is a fresh Drone_Create: DefaultInit's family blocks run
                             // AFTER the DoModeSettingsNEW read — the mode-0xd ninja health 100
                             // [M 0x14b300:744-753; the port's type_setup], `captain_setup`'s
@@ -22680,7 +22679,7 @@ mod tests {
     fn the_shake_amount_follows_camera_shake() {
         assert_eq!(camera_shake_amount(8.0, 0.0), 10.0, "2·8 = 16 at the centre → capped 10");
         assert_eq!(camera_shake_amount(3.0, 0.0), 6.0, "2·3 = 6, under the cap");
-        assert_eq!(camera_shake_amount(3.0, 1.5), 5.0, "6·(1−0.0625) = 5.625 → (int) 5");
+        assert_eq!(camera_shake_amount(3.0, 1.5), 5.625, "6·(1−0.0625)");
         assert_eq!(camera_shake_amount(3.0, 6.0), 0.0, "d = 2r → intensity 0");
         assert_eq!(camera_shake_amount(3.0, 6.5), 0.0, "d > 2r → outside, 0");
         assert_eq!(camera_shake_amount(1.0, 0.0), 2.0, "2·1 = 2 — the 0.5 floor's smallest real shake");
@@ -23554,6 +23553,17 @@ mod abseil_tests {
             "the unsighted forced attack [M 0x165270/0x165bf0 case 0x14]; log {:?}", dr2.log);
         assert!(dr2.sighted, "the forced attack sets 0x4000000 [M 0x165270:14-16]");
         assert!(dr2.alert_pending & 0x1000_0000 != 0, "the forced attack sets 0x10000000 [M 0x165270:16-17]");
+    }
+
+    /// `NDrone2_DefaultInit` 0x14b300:423-460's close-in: the set 5 stands on 07000014, 9 reads 7.
+    #[test]
+    fn the_level_sight_close_in_reads_the_anim_set() {
+        assert_eq!(level_sight(0x0700_0014, 0xc, 13.0, 15.0), (10.0, 15.0));
+        assert_eq!(level_sight(0x0700_0014, 9, 13.0, 15.0), (7.0, 15.0));
+        assert_eq!(level_sight(0x0700_0014, 5, 13.0, 15.0), (13.0, 15.0));
+        assert_eq!(level_sight(0x0700_0011, 0xc, 13.0, 15.0), (6.0, 9.0));
+        assert_eq!(level_sight(0x0700_0011, 9, 13.0, 15.0), (5.0, 8.0));
+        assert_eq!(level_sight(0x0700_0015, 0xc, 13.0, 15.0), (13.0, 15.0));
     }
 
     /// REGRESSION (regression-read-drone-ai): AlertSound's pre-mode gates stand before the

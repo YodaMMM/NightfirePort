@@ -805,7 +805,11 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
                 "the descent lands on the facility corridor floor at the leg-2 start (the walked route, probe landing (29.99, 0.61, 38.00)), got {p:?}");
             eprintln!("[014] the descent landed {p:?}");
         }
-        if !w.tops_up() { clear_hostiles(w, 24.0, 900); }
+        // The fight can pull Bond off the spot; leg 2 starts from it.
+        if !w.tops_up() {
+            clear_hostiles(w, 24.0, 900);
+            w.walk_nav_to([30.09, 0.65, 38.73], "back to the leg-2 spot", 1.2);
+        }
     }
 
     // Leg 2: west to the Kiko cut-scene touch #381 — the walk's OWN route (level-14-delta-exit-walk).

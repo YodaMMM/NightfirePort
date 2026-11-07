@@ -287,10 +287,12 @@ fn the_07000014_sabotage_cuts_through_the_real_laser() {
             let fb = &sim.drones.fuseboxes[f];
             eprintln!("[sab] box {} ch {:?} wires {:?}", fb.placement, fb.ch,
                 fb.alive_wires().map(|(g, k, o)| (g, k, o)).collect::<Vec<_>>());
-            let list: Vec<(usize, usize, usize)> = fb.alive_wires().map(|(g, k, o)| (g, k, o)).collect();
+            // Group 0 only: group 1's channel smashes the 500-damage leaf beside the box
+            // (destroy_blast_07000014_live).
+            let list: Vec<(usize, usize, usize)> = fb.alive_wires().filter(|(g, _, _)| *g == 0).map(|(g, k, o)| (g, k, o)).collect();
             (f, list)
         };
-        assert!(!wires.is_empty(), "box {fb}: the script registered wires (group 0 AND group 1 [L NF_SCRIPTLOG])");
+        assert!(!wires.is_empty(), "box {fb}: the script registered wires (group 0 [L NF_SCRIPTLOG])");
         // Burn each wire: settle near the box, slide inside the Laser's range toward the VISIBLE
         // cable (the wire object's world bounds — on 07000014 the entity translation sits 1.5 m
         // below the cables [D OBJECT_GreenWire1/BlueWire1 local y 1.49..1.72]), aim through it,
@@ -322,9 +324,5 @@ fn the_07000014_sabotage_cuts_through_the_real_laser() {
     }
     let sim = scene.sim.as_ref().unwrap();
     assert!(sim.drones.channels.on(0x8c), "AND #391 [0x87, 0x88] raises 0x8C [D]");
-    // The no-hurt polarity: the fusebox hurt (`Player_Hurt(5.0, …)` at the dying group-1 wire
-    // [M 0x1adfe8:99-101]) is counted on its own — the satellite boxes' channel smashes also hurt
-    // Bond through the blast path. Every box here carries param 2 non-zero [D], so the group-1
-    // deaths never hurt.
     assert_eq!(sim.drones.fusebox_hurts, 0, "no live-wire hurt with +0x56 configured [M 0x1adfe8:99-101]");
 }
