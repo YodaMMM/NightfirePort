@@ -8,3 +8,6 @@ Two gaps:
 2. `homing_copter_07000012_live` is ignored: the give path refuses 0x2e on 07000012, and the copter never poses. Remove the ignore. Reach the real state by driving the gate channel on the real level and equipping through the path the level allows (07000012 carries pickups #2aa and #2f0). The test must show a fired round turning onto the body, and it must fail without the arm.
 
 Also read `Bullet_homing` 0x12f358 past the target pick: check the re-validation and the steering against the branch. Report in docs/reports/homing-copter-2.md.
+
+---
+claimed-by: sandbox1 at 2026-11-07T09:53Z
