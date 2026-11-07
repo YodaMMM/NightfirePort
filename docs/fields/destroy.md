@@ -16,7 +16,7 @@ explosion), then after a delay fires its output channel and re-classes to 1 (a d
 | +0x00 | u32 | the glist id this object was created with (`glist+0x40`, cleared to 0 when `obj+0xF0 & 0x10`); `Destroy_Update` compares it against the *current* `obj+0xD8`'s `+0x40` — a change means the paired breakable swapped the model, which triggers the smash watch below | [M1 create 0x12c318:25-30,58-60] |
 | +0x04 | f32 | health/armour: bullet damage is subtracted from it; `< 0.0` → smash | [M* create 0x12c318:34-40 (p3 read as float bits); Destroy_CollisionHandler 0x12bd48:31,36] |
 | +0x08 | i32 | blast-radius word (float bits) = `(int)(param5 · 0.01)`; passed to `Explode_Create` as the 2nd float arg | [M1 create 0x12c318:48; read 0x12bb60:73] |
-| +0x0C | s32 | the post-smash countdown: create stores `(int)(param6 · −FRAME_RATE)` (negative = not counting); on destruction it is negated (positive), `Destroy_Update` decrements it while > 0 and at 0 fires the channel and re-classes | [M* create 0x12c318:57; Update 0x12c4f8:17-25; CollisionHandler 0x12bd48:41-45 (negate); Smash 0x12bb60:31] |
+| +0x0C | s32 | the post-smash countdown: create stores `(int)(param6 · −FRAME_RATE)`, FRAME_RATE reading 30 at load [L −300/−90/−60/−30 on p6 10/3/2/1, 07000014] (negative = not counting); on destruction it is negated (positive), `Destroy_Update` decrements it while > 0 and at 0 fires the channel and re-classes | [M* create 0x12c318:57; Update 0x12c4f8:17-25; CollisionHandler 0x12bd48:41-45 (negate); Smash 0x12bb60:31] |
 | +0x10 | u16 | watch channel (param 1): when the glist id changed and `switch_channels[+0x10]` is on → clear it and `Destroy_Smash` | [M* create 0x12c318:31; Update 0x12c4f8:29-32] |
 | +0x12 | u16 | output channel (param 0): set to 1 when the countdown expires (`Destroy_Update`) or immediately on bullet kill when the timer is 0 (`Destroy_CollisionHandler`) or on a script smash with `p0 != 0` (`Destroy_Smash`) | [M* Update 0x12c4f8:23; CollisionHandler 0x12bd48:42; Smash 0x12bb60:40] |
 | +0x14 | u16 | bullet filter for the object's HITDATA list: `Collide_FilterBullets(obj+0xD0, +0x14)` = `~(u16)param4` (0 when param 4 is 0) | [M* create 0x12c318:41-47; read 0x12bd48:22] |
@@ -49,7 +49,7 @@ explosion), then after a delay fires its output channel and re-classes to 1 (a d
 | p3 (+0x38) u32 (float bits) | +0x04 health |
 | p4 (+0x3C) u16 (inverted) | +0x14 bullet filter |
 | p5 (+0x40) u32 ·0.01 | +0x08 blast radius |
-| p6 (+0x44) u32 ·−FRAME_RATE | +0x0C post-smash countdown |
+| p6 (+0x44) u32 ·−30 | +0x0C post-smash countdown |
 
 The dispatcher passes only 4 args (0x1d04f0:358-363); the decompiler's 5th param of
 `Destroy_Create` (a second `level_tag*`, stored to +0x00 when `glist+0x40 == 0`) is an artifact of
