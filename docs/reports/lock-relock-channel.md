@@ -141,3 +141,18 @@ The arm is disc-unreachable, so these need a poke to exercise (PCSX2, fresh boot
 
 not visible to me (no token, context-window or cost figures are exposed to this session;
 the driver's message is the only source and carries no numbers for this worker).
+
+## ntfy failed
+
+All three fallbacks, in order, with their exact output:
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "lock-relock-channel: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. python urllib (`urlopen(Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'…', headers={'Title':'NightfirePort'}), timeout=20)`)
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+   (a first attempt with an em dash in the payload died locally: `SyntaxError: bytes can only
+   contain ASCII literal characters`; retried ASCII-only)
+3. `wget -q -O- --post-data "lock-relock-channel: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output; the call was killed at the 30 s tool timeout (host unreachable)
+
+The branch, the report and the queue entry (done/, report attached) are all pushed; only the
+push notification itself could not leave the sandbox.
