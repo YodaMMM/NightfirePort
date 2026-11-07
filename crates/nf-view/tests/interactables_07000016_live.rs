@@ -494,3 +494,36 @@ fn the_spawner_screen_distance_is_the_integer_param() {
     assert!(sim.drones.spawners.iter().any(|s| s.min_dist == 10.0), "07000006 carries 10 [D]");
     assert!(sim.drones.spawners.iter().all(|s| s.min_dist >= 1.0), "no spawner screen collapses to nothing");
 }
+
+/// Blocking_polys_lift_shaft1 #532 (kind 0x3b, p0 = 0xcc, p1 = 0xcd, z −158.17..−157.74 [D]) closes
+/// the lift shaft's pit mouth from ch 204 to ch 205, while the cab lands [D 0600090a s22]. Hidden it
+/// carries obj+0xF0 0x30 and `Collide_PickObj` skips it [M 0x18dbf8:27-29, 0x1eae80:28-40]; restored
+/// it stops Bond; ch 205 deletes it [M 0x18d3b8:24-26].
+#[test]
+fn the_lift_shaft_blocker_stops_bond_only_between_its_channels() {
+    let mut w = load16();
+    let walk_in = |w: &mut Walker| -> f32 {
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.bond.pos = [2.5, -22.2, -155.5];
+            sim.bond.vel = [0.0; 3];
+        }
+        w.wait(30);
+        let mut min_z = f32::MAX;
+        for _ in 0..150u32 {
+            w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
+            w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false);
+            min_z = min_z.min(w.scene.sim.as_ref().unwrap().bond.pos[2]);
+        }
+        min_z
+    };
+    let set = |w: &mut Walker, ch: u32| { let sim = w.scene.sim.as_mut().unwrap(); let f = sim.drones.frame; sim.drones.channels.set(ch, 1, f); };
+    let open = walk_in(&mut w);
+    assert!(open < -158.6, "hidden, the blocker lets Bond through (min z {open:.2})");
+    set(&mut w, 0xcc);
+    let shut = walk_in(&mut w);
+    assert!(shut > -158.2, "restored, the blocker stops Bond (min z {shut:.2})");
+    set(&mut w, 0xcd);
+    let gone = walk_in(&mut w);
+    assert!(gone < -158.6, "deleted, the way is open again (min z {gone:.2})");
+}

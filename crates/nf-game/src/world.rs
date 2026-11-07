@@ -48,6 +48,9 @@ pub const LOS_TURRET_TRACK: u32 = 0x72f; // GT_Track 0x17f9c8:258 — the target
 /// The per-caller masks are not applied yet [S]: with them on, guard cover, turret shots and
 /// several real-path walks broke; `line_of_sight` keeps the static-world segment test until then.
 pub const LOS_MASKS_ON: bool = false;
+/// Set in a dynamic part's id when the sight ray skips it: obj+0xF0 bit 0x10 against HITTEST+0x98
+/// bit 4 [M Collide_PickObj 0x1eae80:33-35].
+pub const SIGHT_THROUGH_PART: u64 = 0x2000_0000_0000;
 /// The normalized-spine head-on cull [M Intersect_CylGeom 0x109da0:302-322]. level-0a-office-hatch-9
 /// measured the arms' orientation: the game skips the horizontal face BELOW the spine (the
 /// corner walk's y-0.19 floor-band lifter — the port dithered 1.13→1.21 on it while the game
@@ -2032,7 +2035,12 @@ impl CollisionWorld {
         let mut best = None::<f32>;
         let dynamic = self.dynamic.read().unwrap();
         for g in [&self.stat, &dynamic.geo] {
+            let moving = std::ptr::eq(g, &dynamic.geo);
             for o in along(g, from, to) {
+                if moving {
+                    let i = (o as *const Object as usize - g.objects.as_ptr() as usize) / std::mem::size_of::<Object>();
+                    if dynamic.movers.get(i).is_some_and(|m| m.0 & SIGHT_THROUGH_PART != 0) { continue; }
+                }
                 for k in o.tris.clone() {
                     let m = g.mats[k];
                     let low = m & 0x3f;

@@ -13592,9 +13592,13 @@ impl Drones {
         // The world objects (InverterTrigger 0x41, Shooter 0xd2, DynamicObject 0x3b, ThirdCam 0xe7;
         // parsemap_create_dynamic_objects 0x1d04f0 cases, crate::worldobj — placement order, no RNG).
         self.worldobjs = crate::worldobj::WorldObjects::create(&level.maps[m].placements, &path_blocks, |p| {
-            let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
-                else { level.maps[m].objects.get(p.index as usize) };
-            obj.map_or((0, [0.0; 3]), |o| (o.flags, o.centre))
+            let at = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                else { Some((m, p.index as usize)).filter(|&(_, o)| o < level.maps[m].objects.len()) };
+            at.map_or((0, [0.0; 3], 0), |(map, object)| {
+                let o = &level.maps[map].objects[object];
+                let shape = if o.hashcode == u32::MAX { 0x8000_0000 | ((map as u32) << 16) | object as u32 } else { o.hashcode };
+                (o.flags, o.centre, shape)
+            })
         });
         // Fuseboxes (`FuseBox_Create` 0x1b0448, placement 0x31 with a script hash): 07000014's
         // OBJECT_FuseBox1 security-sabotage boxes (map-tower2).
@@ -19372,6 +19376,25 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // mirrors the contact onto the body's own obj+0xD0 list.
             parts.extend(drones.rbodies.list.iter().enumerate()
                 .map(|(k, x)| (0x800_0000_0000 | k as u64, x.shape_key, x.matrix())));
+            // The DynamicObjects (kind 0x3b): `DynamicObject_Create` 0x18dbf8 links the object into its
+            // room and `Collide_PickObj` 0x1eae80 tests it unless obj+0xF0 carries 0x20 [M :28-40],
+            // which the create and the channels set and clear. A deleted one leaves the world. An
+            // object with 0x10 is also skipped by the queries with HITTEST+0x98 bit 4 [M :33-35],
+            // every `Collide_LineOfSight` [M 0x1edf54]. Id: bit 44 + the create slot.
+            // The crawl exits of 07000005 leave Bond inside the invisible blocker's box (the wall's end
+            // is 1.0 inside it [D #35/#325; M 0x1969d0:107-112]). The port's contact push works from
+            // the closest point and would hold him in, so a 0x10 part stays out until he has left [S].
+            let inside = |o: &crate::worldobj::DynObject| o.flags & 0x10 != 0 && d.world.shape(o.shape).is_some_and(|s| {
+                let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+                for v in s.iter().flatten().map(|&v| nf_formats::placement::transform(&o.matrix, v)) {
+                    for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); }
+                }
+                let c = [player.pos[0], player.pos[1] + 0.9, player.pos[2]];
+                (0..3).all(|k| lo[k] < c[k] && c[k] < hi[k])
+            });
+            parts.extend(drones.worldobjs.dynobjs.iter()
+                .filter(|o| o.flags & 0x20 == 0 && o.shape != 0 && !inside(o))
+                .map(|o| (0x1000_0000_0000 | o.slot as u64 | if o.flags & 0x10 != 0 { crate::world::SIGHT_THROUGH_PART } else { 0 }, o.shape, o.matrix)));
             parts
         };
         // Script triggers (`Trigger_TouchOnce` / `Trigger_Touch` made by `Script_CreateEntity`): one per live entity,

@@ -384,8 +384,7 @@ pub fn walk_to_the_slab_east_end(w: &mut Walker) {
     // the slab's east end. THE STOP: the slab crossing west is the parked round-4 leg (see
     // `the_cable_legs_the_crawl_notch_and_ride`'s reason).
     for (name, at) in [
-        ("the ledge north 1", [25.5f32, 31.1, 63.0]),
-        ("the ledge north 2", [25.4, 31.2, 59.0]),
+        ("the ledge north", [25.4f32, 31.2, 59.0]),
         ("the ledge steps", [25.6, 31.9, 54.0]),
         ("the slab east end", [25.4, 33.0, 50.5]),
     ] {
