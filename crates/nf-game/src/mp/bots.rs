@@ -1788,6 +1788,72 @@ impl BotBrain {
         g.scratch = 0.0;
     }
 
+    /// `BOTSTATE_cancelGoalToObj` 0x128590 [M :20-55]: the two goal slots walk; a type-2
+    /// (objective) slot cancels when its objective is gone or is the deleted object — the
+    /// game derefs the slot's obj pointer and also cancels on NULL [M :22-25]; a type-3
+    /// (hunt) slot cancels on the direct match [M :26-29]. The canceled slot: the +0x734
+    /// flag-carrier bit (bit2) follows the slot's subtype-1 word [M :33-41], the active byte
+    /// (+0x765) clears when it pointed here [M :43-45], and the slot's +0x4A/+0x45/+0x44/
+    /// +0x48/+0x20 words zero [M :46-50]. `target` is the port's obj_id for the deleted
+    /// object (the game's arg is the deleted obj pointer — `MP_objectBeingDeleted` routes it
+    /// as msg 0x3D [M 0x18ac90:268-276]).
+    /// Returns whether the bot's active goal — read BEFORE the clear, the game's +0x765 byte
+    /// [M :21] — was the canceled slot; the BotGlobal 0x3D arm then SetStates to 0xF9
+    /// ([`Self::msg_goal_cancel`]) [M 0x16E060:626-634].
+    pub fn cancel_goal_to_obj(&mut self, target: usize) -> bool {
+        let mut active_was_here = false;
+        for slot in 0..2 {
+            let (ty, sub, cur) = {
+                let g = &self.vars.goals[slot];
+                (g.goal_type, g.subtype, g.target)
+            };
+            let hit = if ty == 2 {
+                cur == 0 || cur == target // the NULL objective cancels too [M 0x128590:22-25]
+            } else if ty == 3 {
+                cur == target // [M 0x128590:26-29]
+            } else {
+                false
+            };
+            if !hit {
+                continue;
+            }
+            if self.vars.active_goal == slot as u8 {
+                active_was_here = true; // the pre-clear +0x765 [M 0x128590:21,52-55]
+            }
+            if sub == 1 {
+                self.vars.flag_word |= 4;
+            } else {
+                self.vars.flag_word &= !4;
+            } // [M 0x128590:33-41]
+            if self.vars.active_goal == slot as u8 {
+                self.vars.active_goal = 0xFF; // [M 0x128590:43-45]
+            }
+            let g = &mut self.vars.goals[slot];
+            g.subtype = 0; // +0x4A [M 0x128590:48]
+            g.goal_type = 0; // +0x45 [M 0x128590:49]
+            g.complete = 0; // +0x44 [M 0x128590:50]
+            g.route_code = 0; // +0x48 [M 0x128590:51]
+            g.scratch = 0.0; // +0x20 [M 0x128590:52]
+        }
+        active_was_here
+    }
+
+    /// The BotGlobal msg 0x3D arm [M 0x16E060:626-634]: `BOTSTATE_cancelGoalToObj(arg)`, then
+    /// SetState(0xF9) when the canceled slot was the bot's active goal. This is the consumer
+    /// side of [`super::MpMatch::object_being_deleted`]'s msg-0x3D route — the driver drains
+    /// `MpMatch::pending_goal_cancels` through here per bot in slot order, the game's
+    /// delivery order (every BotGlobal drone gets the RouteMsg the tick the delete runs).
+    pub fn msg_goal_cancel(&mut self, target: usize) -> bool {
+        let active = self.cancel_goal_to_obj(target);
+        if active {
+            // `BOTSTATE_setStateChange` — SetState + the +0x72C record [M 0x128590:52-55,
+            // 0x129ce8:6-7]; the SMI commits the pending 0xF9 on the state machine's next pass
+            // (the same tick's commit at the step tail [M 0x171df8]).
+            self.set_state_change(state::BOT_IDLE); // [M 0x16E060:626-634]
+        }
+        active
+    }
+
     /// `BOTSTATE_setGoalComplete` 0x129510: `+0x44 |= 1` [M :9-10].
     pub fn set_goal_complete(&mut self, slot: usize) {
         if slot < 2 {
@@ -5541,5 +5607,154 @@ mod fell_out_tests {
         assert_eq!(m.bots[1].brain.pos, other_pos, "the spared bot's position");
         assert_eq!(m.bots[1].brain.vars.nav_node, other_nav, "the spared bot's nav node");
         assert_eq!(m.bots[1].brain.vars.opponent, other_opp, "the spared bot's opponent");
+    }
+}
+
+#[cfg(test)]
+mod object_deleted_tests {
+    use super::*;
+    use crate::mp::scenario;
+
+    /// A match in `scenario` with the RT rows the test fills by hand — the sweeps run on the
+    /// rows, no level load involved.
+    fn scenario_match(scenario: u32) -> crate::mp::MpMatch {
+        let mut settings = crate::mp::MpSettings::deathmatch(0x07000023);
+        settings.scenario = scenario;
+        crate::mp::MpMatch::init(settings)
+    }
+
+    fn fresh_brain() -> BotBrain {
+        let mut rec = INITIAL_BOT_RECORDS[0].clone();
+        rec.0[0x0E] = 1;
+        BotBrain::bot_init(&rec, 4, [0.0, 1.6, 0.0], 0.0)
+    }
+
+    /// `MP_objectBeingDeleted` 0x18ac90's scenario match [M :27-253]: a CTC delete clears the
+    /// matching flag row only, queues the 0x3D route once; a repeat delete misses (the row is
+    /// already cleared, the game's `bVar4` stays false [M :16, :277]); a hill id under CTC
+    /// matches nothing (the mode rows are selected by `MPSettings+0x420` [M :27-118]).
+    #[test]
+    fn delete_clears_the_scenarios_rows_and_queues_the_0x3d() {
+        let mut m = scenario_match(scenario::CAPTURE_THE_FLAG);
+        m.objects_rt.flags[0] = Some(Default::default());
+        m.objects_rt.flags[1] = Some(Default::default());
+        m.objects_rt.bases[0] = Some([1.0, 2.0, 3.0]);
+        assert!(m.object_being_deleted(obj_id::FLAG), "the flag row matched [M :21-26]");
+        assert!(m.objects_rt.flags[0].is_none() && m.objects_rt.flags[1].is_some());
+        assert!(m.objects_rt.bases[0].is_some(), "the base row is a different obj [M :128-140]");
+        assert_eq!(m.pending_goal_cancels, vec![obj_id::FLAG], "the msg-0x3D route [M :268-276]");
+        assert!(!m.object_being_deleted(obj_id::FLAG), "the cleared row misses [M :21-26]");
+        assert_eq!(m.pending_goal_cancels.len(), 1, "no second route for a cleared row");
+        assert!(!m.object_being_deleted(obj_id::HILL), "the scenario gate [M :105-118]");
+    }
+
+    /// Demolition's site row [M :179-205] and Protection's [M :206-231] — the one site row
+    /// clears on the site id; the scenario arms are exclusive.
+    #[test]
+    fn delete_clears_the_site_row_under_the_site_scenarios() {
+        for s in [scenario::DEMOLITION, scenario::PROTECTION] {
+            let mut m = scenario_match(s);
+            m.objects_rt.site = Some(Default::default());
+            assert!(m.object_being_deleted(obj_id::SITE), "the site row matched [M :179-231]");
+            assert!(m.objects_rt.site.is_none());
+            assert_eq!(m.pending_goal_cancels, vec![obj_id::SITE]);
+            assert!(!m.object_being_deleted(obj_id::UPLINK), "the scenario gate [M :206-231]");
+        }
+    }
+
+    /// Uplink's count-gated sweep [M :145-177]: only the `UplinkCount` rows are in the sweep.
+    #[test]
+    fn delete_sweeps_the_uplink_rows_under_uplink() {
+        let mut m = scenario_match(scenario::UPLINK);
+        m.objects_rt.uplinks = vec![Default::default(), Default::default(), Default::default()];
+        assert!(m.object_being_deleted(obj_id::UPLINK | 1));
+        assert!(m.object_being_deleted(obj_id::UPLINK | 2));
+        assert!(!m.object_being_deleted(obj_id::UPLINK | 3), "past the registered rows [M :146]");
+        assert_eq!(m.pending_goal_cancels, vec![obj_id::UPLINK | 1, obj_id::UPLINK | 2]);
+    }
+
+    /// `BOTSTATE_cancelGoalToObj` 0x128590 + the BotGlobal 0x3D arm 0x16E060:626-634: the
+    /// active type-2 slot targeting the deleted object cancels (the slot words zero, the
+    /// +0x765 byte to 0xff, the +0x734 bit2 per the subtype-1 word) and the bot SetStates to
+    /// 0xF9; a type-3 slot targeting something else keeps.
+    #[test]
+    fn goal_cancel_drops_the_active_objective_goal() {
+        let mut b = fresh_brain();
+        b.vars.goals[1] = GoalSlot { goal_type: 2, subtype: 1, target: obj_id::SITE, ..Default::default() };
+        b.vars.active_goal = 1;
+        b.vars.flag_word = 0;
+        assert!(b.msg_goal_cancel(obj_id::SITE), "the active slot canceled [M 0x128590:22-25,52-55]");
+        assert_eq!(b.pending, Some(state::BOT_IDLE), "the 0x3D arm's SetState(0xF9), SMI-pending [M 0x16E060:626-634]");
+        assert_eq!(b.vars.requested_state, state::BOT_IDLE as u32, "the +0x72C record [M 0x128590:52-55]");
+        let g = &b.vars.goals[1];
+        assert_eq!((g.goal_type, g.subtype, g.complete, g.route_code, g.scratch), (0, 0, 0, 0, 0.0), "the slot clear [M 0x128590:46-52]");
+        assert_eq!(b.vars.active_goal, 0xFF, "the +0x765 clear [M 0x128590:43-45]");
+        assert_eq!(b.vars.flag_word & 4, 4, "bit2 set for the subtype-1 slot [M 0x128590:33-41]");
+        // a type-3 slot on another target: no cancel, no state move
+        let mut b = fresh_brain();
+        b.vars.goals[0] = GoalSlot { goal_type: 3, subtype: 9, target: obj_id::SITE, ..Default::default() };
+        b.vars.active_goal = 0;
+        let before = b.state;
+        assert!(!b.msg_goal_cancel(obj_id::FLAG), "the hunt slot targets the site, not the flag [M 0x128590:26-29]");
+        assert_eq!(b.state, before, "no SetState without a canceled active slot");
+        assert_eq!(b.vars.goals[0].goal_type, 3, "the slot keeps");
+        // the same slot cancels on its own target
+        assert!(b.msg_goal_cancel(obj_id::SITE), "the direct type-3 match [M 0x128590:26-29]");
+        assert_eq!(b.pending, Some(state::BOT_IDLE));
+    }
+
+    /// The pin through the port's one real delete path: `restart_scenario` runs the game's
+    /// sweep (`Control_DeleteAllObjectsOfType(0x35)` + the MPObjects SP sweep [M 0x183fc0:14-39])
+    /// through `object_being_deleted` — the bots' queue gets one 0x3D per deleted object — and
+    /// re-creates ONLY the Demolition/Protection site [M :41-56]; the other scenarios' rows
+    /// stay gone. A bot holding the site as its active objective leaves the goal when the
+    /// driver drains the queue (the `step_mp_bots` drain order).
+    #[test]
+    fn restart_sweeps_the_rows_recreates_the_site_and_cancels_the_bot_goal() {
+        let mut settings = crate::mp::MpSettings::deathmatch(0x07000023);
+        settings.scenario = scenario::DEMOLITION;
+        settings.human_count = 4; // the game's bot slot base: `4 + i` [M 0x183a50:138]
+        settings.player_count = 4;
+        settings.bot_count = 1;
+        let mut m = crate::mp::MpMatch::init(settings);
+        m.objects.demolition.push(crate::mp::MpObjectRecord {
+            matrix: [[0.0; 4]; 4], config: [3, 0, 0, 0, 0, 0, 0], cel: 0, bounds: None,
+        });
+        m.objects.demolition[0].matrix[3] = [5.0, 6.0, 7.0, 1.0];
+        m.objects_rt.site = Some(crate::mp::rules::MpObjState { state: 1234, sub: 1, ..Default::default() });
+        m.create_bots(&mut Rng::new(11));
+        let mut b = &mut m.bots[0].brain;
+        b.vars.goals[1] = GoalSlot { goal_type: 2, subtype: 8, target: obj_id::SITE, ..Default::default() };
+        b.vars.active_goal = 1;
+        let mut rng = Rng::new(9);
+        m.restart_scenario(&mut rng);
+        let site = m.objects_rt.site.as_ref().expect("the re-create [M 0x183fc0:41-56]");
+        assert_eq!((site.state, site.sub, site.last_hitter), (2000, 0, -1), "the fresh site [M 0x185de8:130-131,174]");
+        assert_eq!(site.pos, [5.0, 6.0, 7.0], "the picked place's translation [M 0x183fc0:42-55]");
+        assert_eq!(m.pending_goal_cancels, vec![obj_id::SITE], "one 0x3D per deleted object [M 0x18ac90:268-276]");
+        // the driver's drain, per bot in slot order, before the bot's own tick:
+        let cancels = std::mem::take(&mut m.pending_goal_cancels);
+        for b in m.bots.iter_mut() {
+            for &id in &cancels {
+                b.brain.msg_goal_cancel(id);
+            }
+        }
+        let g = &m.bots[0].brain.vars.goals[1];
+        assert_eq!(g.goal_type, 0, "the bot left the goal");
+        assert_eq!(m.bots[0].brain.pending, Some(state::BOT_IDLE), "the 0x3D arm's SetState(0xF9) armed");
+        assert_eq!(m.bots[0].brain.vars.active_goal, 0xFF);
+    }
+
+    /// CTC's restart leaves the flags and bases gone — the game deletes every created mode
+    /// object and nothing re-creates them [M 0x183fc0:14-39 has no create outside the site
+    /// arms :41-56].
+    #[test]
+    fn restart_leaves_the_ctc_rows_gone() {
+        let mut m = scenario_match(scenario::CAPTURE_THE_FLAG);
+        m.objects_rt.flags[0] = Some(Default::default());
+        m.objects_rt.bases[1] = Some([1.0, 1.0, 1.0]);
+        m.restart_scenario(&mut Rng::new(3));
+        assert!(m.objects_rt.flags[0].is_none() && m.objects_rt.bases[1].is_none());
+        assert_eq!(m.pending_goal_cancels, vec![obj_id::FLAG, obj_id::BASE | 1]);
     }
 }

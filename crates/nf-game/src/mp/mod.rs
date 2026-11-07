@@ -569,6 +569,14 @@ pub struct MpMatch {
     /// [`MpMatch::update_objects`] (the fixed 60 Hz) — only differences inside the 4-frame window
     /// read it [S alignment]. Zero on the struct literal path.
     pub tick: u32,
+    /// mp-object-deleted: the msg-0x3D routes `MP_objectBeingDeleted` raised since the bots last
+    /// drained them — one entry per deleted mode object, oldest first, as the port's obj_id
+    /// ([`crate::mp::bots::obj_id`]; the game's arg is the deleted obj pointer [M 0x18ac90:268-276]).
+    /// The game delivers through `Drone_SM_RouteMsg` (dispatch now, delay 0 [M 0x172128]); the
+    /// port's driver drains the queue per bot in slot order before the bot's own tick
+    /// ([`crate::mp::bots::BotBrain::msg_goal_cancel`], the BotGlobal 0x3D arm) — the same tick,
+    /// the game's order.
+    pub pending_goal_cancels: Vec<usize>,
 }
 
 /// One MP bot: the ported brain (`BOT_vars` stand-in) plus the per-slot bookkeeping the match
@@ -638,6 +646,7 @@ impl MpMatch {
             bots: Vec::new(),
             bot_start: None,
             tick: 0,
+            pending_goal_cancels: Vec::new(),
         }
     }
 
@@ -1272,19 +1281,94 @@ pub fn get_obj_ext_obj(current: usize, script_obj: usize) -> (usize, bool) {
     }
 }
 
-/// `MP_objectBeingDeleted` 0x18ac90's shape [M :66-278]: clear every mode-object row (and its
-/// AI emitter) that holds the deleted obj — the flag/bases (0x20000100), GoldenEye (0x20000200),
-/// Hill (0x40000800/0x60001000), Uplinks (0x60000008), Demolition (0x20000040),
-/// Protection (0x20000080), Flags/Bases (0x20000004) — plus the 64 `MPObjects` slots, then
-/// route msg 0x3D to BotGlobal when anything matched [M :259-272]. The port's rows are the
-/// per-store obj ids; the 0x3D route is `BotGlobalOutcome::GoalCancel` (bots.rs) [S].
-pub fn object_being_deleted(objs: &mut [usize], obj: usize) -> bool {
+impl MpMatch {
+/// `MP_objectBeingDeleted` 0x18ac90 [M :8-278] — the port of the delete sweep
+/// `control_delete_object` 0x133178:20-22 runs under the MP gate (`MPSettings+0x388 != 0`
+/// [M 0x133178:20-21]; the game returns early when MP is off or the obj is NULL [M 0x18ac90:12-15]).
+/// The game compares the deleted OBJ POINTER against every mode row's obj word; the port's
+/// `id` is the same address space the bots' goal slots use ([`crate::mp::bots::obj_id`]), so a
+/// deletion and a goal target name the same object.
+///
+/// What the game clears, arm by arm [M 0x18ac90]:
+/// - the 8 player-slot obj words `MPGame+slot·0x30+0x1c` [M :18-25] — the port keeps no player
+///   world objects (the slots are [`MpSlot`] fields, bots are [`MpBot`]s), so the sweep folds
+///   away; the slot's +0x26 status bits are NOT touched by the game either [M :18-25];
+/// - the current scenario's mode rows, the match on `MPSettings+0x420` [M :27-253]:
+///   CTC 0x20000004 → `Flags[2]`/`Bases[2]`; Demolition 0x20000040 / Protection 0x20000080 →
+///   the one site row; Blueprint 0x20000100 → `BluePrint` + `EsponageBase[2]`; GoldenEye
+///   0x20000200 → the two item rows; KOTH 0x40000800/0x60001000 → `Hill`; Uplink 0x60000008 →
+///   `Uplinks[0..UplinkCount]`. The port's rows are [`MpObjectsRt`]'s (a base row is its
+///   position + bounds; the game also frees the row's AI emitter first [M :33-36, :48-52] —
+///   nothing in the port owns those emitters, see the module doc);
+/// - the 64 `MPObjects` slots [M :256-266] — the port's created records
+///   ([`MpObjects::created`]) carry no per-object ids, the RT row drop is the fold.
+/// A hit in the mode rows or the MPObjects slots routes msg 0x3D to BotGlobal (0xc5, the
+/// deleted obj as the arg) through `Drone_SM_RouteMsg` [M :268-276] — the port queues the id
+/// in [`MpMatch::pending_goal_cancels`]; the driver delivers it to every bot in slot order
+/// ([`crate::mp::bots::BotBrain::msg_goal_cancel`], the BotGlobal 0x3D arm).
+/// Returns whether anything matched (the game's `bVar4`) [M :16, :277].
+pub fn object_being_deleted(&mut self, id: usize) -> bool {
+    use crate::mp::bots::obj_id;
+    use crate::mp::scenario;
     let mut hit = false;
-    for r in objs.iter_mut() {
-        if *r == obj {
-            *r = 0; // the game's `*piVar2 = 0` [M :250]
-            hit = true;
+    let kind = id & obj_id::KIND;
+    let idx = id & !obj_id::KIND;
+    // the scenario-gated mode-row sweep [M 0x18ac90:27-253]
+    match self.settings.scenario {
+        scenario::CAPTURE_THE_FLAG => {
+            if kind == obj_id::FLAG && idx < 2 && self.objects_rt.flags[idx].is_some() {
+                self.objects_rt.flags[idx] = None;
+                hit = true;
+            }
+            if kind == obj_id::BASE && idx < 2 && self.objects_rt.bases[idx].is_some() {
+                self.objects_rt.bases[idx] = None;
+                self.objects_rt.bases_bounds[idx] = None;
+                hit = true;
+            }
         }
+        scenario::DEMOLITION | scenario::PROTECTION => {
+            if kind == obj_id::SITE && self.objects_rt.site.is_some() {
+                self.objects_rt.site = None;
+                hit = true;
+            }
+        }
+        scenario::BLUEPRINT => {
+            if kind == obj_id::BLUEPRINT && self.objects_rt.blueprint.is_some() {
+                self.objects_rt.blueprint = None;
+                hit = true;
+            }
+            if kind == obj_id::ESP_BASE && idx < 2 && self.objects_rt.esp_bases[idx].is_some() {
+                self.objects_rt.esp_bases[idx] = None;
+                self.objects_rt.esp_bases_bounds[idx] = None;
+                hit = true;
+            }
+        }
+        scenario::GOLDENEYE => {
+            if kind == obj_id::GOLDENEYE && idx < 2 && self.objects_rt.ge[idx].is_some() {
+                self.objects_rt.ge[idx] = None;
+                hit = true;
+            }
+        }
+        scenario::KOTH_FFA | scenario::KOTH_TEAM => {
+            if kind == obj_id::HILL && self.objects_rt.hill.is_some() {
+                self.objects_rt.hill = None;
+                hit = true;
+            }
+        }
+        scenario::UPLINK => {
+            if kind == obj_id::UPLINK && idx < self.objects_rt.uplinks.len() {
+                self.objects_rt.uplinks[idx].state = 0;
+                self.objects_rt.uplinks[idx].sub = 0;
+                hit = true;
+            }
+        }
+        _ => {}
     }
-    hit // the caller routes msg 0x3D to BotGlobal [M :259-272]
+    if hit {
+        // the msg 0x3D route to BotGlobal [M 0x18ac90:268-276]; the game sends one message
+        // per deleted object, arg = the obj — the queue keeps that per-object order.
+        self.pending_goal_cancels.push(id);
+    }
+    hit
+}
 }

@@ -13517,6 +13517,12 @@ impl Sim {
         }
         let pickups = std::mem::take(&mut self.mp_bot_pickups);
         let Some(m) = self.mp.as_mut() else { self.mp_bot_pickups = pickups; return };
+        // mp-object-deleted: the msg-0x3D routes `MP_objectBeingDeleted` raised this tick (one
+        // per deleted mode object, oldest first [M 0x18ac90:268-276]). The game's
+        // `Drone_SM_RouteMsg` dispatches now — every BotGlobal drone has handled each delete
+        // before its next state tick [M 0x172128]; the port drains the snapshot per bot in slot
+        // order at the bot's step below.
+        let goal_cancels = std::mem::take(&mut m.pending_goal_cancels);
         let mut stamps: Vec<(usize, (usize, f32))> = Vec::new();
         let frame = self.drones.frame;
         let scenario = m.settings.scenario;
@@ -13658,6 +13664,11 @@ impl Sim {
             };
             let before = m.bots[i].brain.shots.len();
             let held_before = m.bots[i].brain.vars.weapon_id;
+            // mp-object-deleted: the BotGlobal 0x3D arm — `cancelGoalToObj(arg)` then
+            // SetState(0xF9) when the canceled slot was the active one [M 0x16E060:626-634].
+            for &id in &goal_cancels {
+                m.bots[i].brain.msg_goal_cancel(id);
+            }
             { let _p = nf_game::prof::scope("bots: brain.step"); m.bots[i].brain.step(&ctx, &mut self.drones.rng, true); }
             if std::env::var_os("NF_BOTLOG").is_some() && held_before != m.bots[i].brain.vars.weapon_id && m.bots[i].brain.tick > 2 {
                 eprintln!("[botlog] f{} bot{} switches {:#x} -> {:#x} (state {:#x}, opp dist {:.1})", frame, i, held_before,

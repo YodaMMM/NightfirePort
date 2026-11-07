@@ -690,25 +690,58 @@ impl MpMatch {
         // mp-site-destruction-blast: the restart's class-5 sweep deletes the round's explosion
         // objects with everything else [M 0x183fc0:14-17] — an undrained death blast goes too.
         self.objects_rt.pending_blasts.clear();
+        // mp-object-deleted: the restart deletes every created mode object —
+        // `Control_DeleteAllObjectsOfType(5/0x35/0x10/0xe)` [M 0x183fc0:14-17] plus the
+        // MPObjects SP-obj sweep (`+0xfe |= 1` [M :29-39]); the control pump deletes each on
+        // its next pass [M 0x1336f8:70-77] and every delete runs `MP_objectBeingDeleted`
+        // 0x18ac90 — the scenario's mode rows clear and msg 0x3D queues for the bots
+        // ([`MpMatch::pending_goal_cancels`], drained per bot in slot order by `step_mp_bots`).
+        // The port sweeps its rows in a fixed order standing in for the game's MPObjects array
+        // (creation) order [S]: flags, bases, uplinks, hill, the site, the GoldenEye items,
+        // the blueprint, the espionage bases. The game re-creates ONLY the Demolition/
+        // Protection site after the sweep [M 0x183fc0:41-56] — the other scenarios' rows stay
+        // gone, as in the game.
+        {
+            use crate::mp::bots::obj_id;
+            for i in 0..2usize { self.object_being_deleted(obj_id::FLAG | i); }
+            for i in 0..2usize { self.object_being_deleted(obj_id::BASE | i); }
+            for i in 0..self.objects_rt.uplinks.len() { self.object_being_deleted(obj_id::UPLINK | i); }
+            self.object_being_deleted(obj_id::HILL);
+            self.object_being_deleted(obj_id::SITE);
+            for i in 0..2usize { self.object_being_deleted(obj_id::GOLDENEYE | i); }
+            self.object_being_deleted(obj_id::BLUEPRINT);
+            for i in 0..2usize { self.object_being_deleted(obj_id::ESP_BASE | i); }
+        }
         let s = self.settings.scenario;
         if s == scenario::DEMOLITION || s == scenario::PROTECTION {
             let pool: Vec<usize> = match s {
                 scenario::DEMOLITION => (0..self.objects.demolition.len()).collect(),
                 _ => (0..self.objects.protection.len()).collect(),
             };
-            if let Some(site) = &mut self.objects_rt.site {
-                site.sub = 0;
-                site.state = 2000; // the HP re-inits [M 0x185de8:174]
-                site.counter = 0;
-                site.last_hitter = -1; // the re-create's 0xffff [M 0x185de8:130-131]
-                if !pool.is_empty() {
-                    let pick = pool[rng.rand(pool.len() as u32) as usize] as usize; // [M 0x183fc0:40-53]
-                    let recs = if s == scenario::DEMOLITION { &self.objects.demolition } else { &self.objects.protection };
-                    site.pos = MpObjectsRt::obj_at(recs, pick);
-                    site.home = site.pos;
-                    site.bounds = MpObjectsRt::bounds_at(recs, pick);
-                }
-            }
+            // The re-create [M 0x183fc0:41-56]: the sweep deleted the site row — a fresh one
+            // picks a random registered place (`Rand_Rand`) with the HP/last-hitter inits
+            // [M 0x185de8:130-131,174] and the limit re-inits (`MPGame+0x400 = 0`,
+            // [M 0x183fc0:56]).
+            self.game.limit = 0.0;
+            let pick = if pool.is_empty() { None } else {
+                Some(pool[rng.rand(pool.len() as u32) as usize] as usize) // [M 0x183fc0:42-53]
+            };
+            let recs_demolition = s == scenario::DEMOLITION;
+            let (pos, bounds) = match (recs_demolition, pick) {
+                (true, Some(i)) => (MpObjectsRt::obj_at(&self.objects.demolition, i), MpObjectsRt::bounds_at(&self.objects.demolition, i)),
+                (false, Some(i)) => (MpObjectsRt::obj_at(&self.objects.protection, i), MpObjectsRt::bounds_at(&self.objects.protection, i)),
+                _ => ([0.0; 3], None),
+            };
+            self.objects_rt.site = Some(MpObjState {
+                state: 2000, // the HP re-init [M 0x185de8:174]
+                sub: 0,
+                counter: 0,
+                last_hitter: -1, // the re-create's 0xffff [M 0x185de8:130-131]
+                controller: -1,
+                team: if recs_demolition { 0 } else { 1 },
+                pos, home: pos, bounds,
+                ..Default::default()
+            });
         }
         for slot in &mut self.game.slots {
             slot.last_killer = 0xffff; // [M 0x183fc0:55-82]
