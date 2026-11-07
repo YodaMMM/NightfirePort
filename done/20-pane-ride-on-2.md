@@ -26,3 +26,7 @@ claimed-by: sandbox1 at 2026-11-07T16:11Z
 ## Report (done, 2026-11-07T17:29Z)
 
 Closed by the driver: the report is on `s/pane-ride-on-2` (docs/reports/pane-ride-on-2.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-11-07T17:30Z)
+
