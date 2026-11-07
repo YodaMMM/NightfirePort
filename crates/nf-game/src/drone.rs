@@ -11717,8 +11717,15 @@ pub struct PlayerBullet { pub pos: V3, pub dir: V3, pub speed: f32, pub travelle
     pub homing: bool,
     /// `BU+0x40`: the current heat-seek target — an index into `Drones::list` (`Bullet_homing`'s
     /// `*(int*)(BU+0x40)` object pointer; none = re-scan, and the scan re-runs when the target
-    /// dies [M 0x12f3b4: the `+0xfe & 1` clear-and-rescan]).
+    /// dies [M 0x12f3b4: the `+0xfe & 1` clear-and-rescan]). `target_copter` selects the index
+    /// space: the game's `Bullet_heatseekable` 0x12f248 has a class-0 arm that accepts a copter
+    /// BODY (the `CopterList` walk — `Copter_GetBody(node) == obj`, drawn, NO health read) and
+    /// the missile launcher's rounds reach one on the disc (0700000b pickup #15d and 07000012
+    /// pickups #2aa/#2f0 grant the 0x2e where a copter flies [D the placement sweep]).
     pub target: Option<usize>,
+    /// port-map-bullets: true = `target` indexes `Drones::copters` (the class-0 arm's body),
+    /// false = it indexes `Drones::list` (the class-2 drones) [M 0x12f248]. Own line (lesson 4).
+    pub target_copter: bool,
     /// delta-repeater: `weapon_data+0x6C & 0x8` — the GRAVITY bit `Bullet_update` 0x12e7b0's case 1
     /// applies to any bullet (`velocity = dir·speed; velocity += WldGravity·FRAME_RATE_DIV·
     /// REC_FRAME_RATE²; dir = norm(velocity), speed = len`), not a grenade-family marker. The Delta
@@ -14190,6 +14197,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 pos: from, dir, speed, travelled: 0.0, range: bullet_range, damage: f(0x0c), weapon: weapon as u16, first: true, dead: false, bounces: 0,
                 homing: u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap()) & 0x2_0000 != 0,
                 target: None,
+                target_copter: false,
                 // delta-repeater: `Bullet_init` spawns the record's bullet with the gravity bit
                 // untouched; `Bullet_update` case 1 applies it per flight tick [M 0x12e7b0]. The
                 // spawn tick (state 0's half step) applies none — the game's gravity arm lives in
@@ -14284,6 +14292,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 pos: from, dir, speed, travelled: 0.0, range: bullet_range, damage: f(0x0c), weapon: weapon as u16, first: true, dead: false, bounces: 0,
                 homing: flags6c & 0x2_0000 != 0,
                 target: None,
+                target_copter: false,
                 gravity: flags6c & 0x8 != 0,
                 guided_cam: flags6c & 0x4 != 0,
                 snd: whoosh,
@@ -15713,18 +15722,32 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // NOT read the +0xF0 enable byte here (the port used `enabled`) and a corpse is
                 // excluded by health 0, not by its own flag.
                 let seekable = |dr: &Drone| dr.drawn && dr.health > 0.0 && dr.state != state::WAIT_SWITCH;
+                // The class-0 arm [M 0x12f248 — `if (bVar1 == 0) { if (+0xfc != 0) walk CopterList:
+                // Copter_GetBody(node) == obj → seekable }`]: a copter BODY is seekable while drawn,
+                // with NO health read. The port's copter entity IS the body (`Copter_GetBody`
+                // 0x17e4b8 reads rec+0x38 = part slot 2); the port carries no per-body +0xfc decay,
+                // so a created copter is a candidate for as long as it exists (the drone arm's
+                // documented one-tick-earlier note, same shape). Reached on the disc: Bond's 0x2e
+                // rounds on 0700000b/#15d and 07000012/#2aa/#2f0 [D the placement sweep].
+                let copter_body_pos = |c: &crate::copter::Copter| [c.matrix[0][3], c.matrix[1][3], c.matrix[2][3]];
                 let mut target = b.target;
+                let mut target_copter = b.target_copter;
                 if let Some(ti) = target {
-                    if !seekable(&self.list[ti]) { target = None; }
+                    let alive = if target_copter {
+                        self.copters.get(ti).is_some()
+                    } else {
+                        self.list.get(ti).is_some_and(&seekable)
+                    };
+                    if !alive { target = None; target_copter = false; }
                 }
                 if target.is_none() {
-                    let mut best: Option<(usize, f32)> = None;
+                    let mut best: Option<(usize, f32, bool)> = None;
                     for (i, dr) in self.list.iter().enumerate() {
                         if !seekable(dr) { continue; }
                         let to = [dr.pos[0] - b.pos[0], dr.pos[1] - b.pos[1], dr.pos[2] - b.pos[2]];
                         let dist = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
                         if dist <= 0.0 || dist > 1000.0 { continue; }
-                        if best.is_some_and(|(_, bd)| dist >= bd) { continue; }
+                        if best.is_some_and(|(_, bd, _)| dist >= bd) { continue; }
                         let n = [to[0] / dist, to[1] / dist, to[2] / dist];
                         let dot = n[0] * b.dir[0] + n[1] * b.dir[1] + n[2] * b.dir[2];
                         if dot <= 0.66 { continue; }
@@ -15732,13 +15755,28 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         // (…, 8)` [M 0x12f358:92]) — pass-flagged hits (foliage) don't block the
                         // lock — the port's `segment_bullet`, not the flight `segment`.
                         if !d.world.segment_bullet_clear(b.pos, dr.pos) { continue; }
-                        best = Some((i, dist));
+                        best = Some((i, dist, false));
                     }
-                    target = best.map(|(i, _)| i);
+                    // The copter bodies, after the drones (the port's two-list fold of the game's
+                    // one object walk; equal distance keeps the earlier candidate).
+                    for (ci, c) in self.copters.iter().enumerate() {
+                        let cp = copter_body_pos(c);
+                        let to = [cp[0] - b.pos[0], cp[1] - b.pos[1], cp[2] - b.pos[2]];
+                        let dist = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+                        if dist <= 0.0 || dist > 1000.0 { continue; }
+                        if best.is_some_and(|(_, bd, _)| dist >= bd) { continue; }
+                        let n = [to[0] / dist, to[1] / dist, to[2] / dist];
+                        let dot = n[0] * b.dir[0] + n[1] * b.dir[1] + n[2] * b.dir[2];
+                        if dot <= 0.66 { continue; }
+                        if !d.world.segment_bullet_clear(b.pos, cp) { continue; }
+                        best = Some((ci, dist, true));
+                    }
+                    if let Some((i, _, copter)) = best { target = Some(i); target_copter = copter; }
                 }
                 b.target = target;
+                b.target_copter = target_copter;
                 if let Some(ti) = target {
-                    let tp = self.list[ti].pos;
+                    let tp = if target_copter { copter_body_pos(&self.copters[ti]) } else { self.list[ti].pos };
                     let to = [tp[0] - b.pos[0], tp[1] - b.pos[1], tp[2] - b.pos[2]];
                     let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
                     if l > 0.0 {
@@ -16497,6 +16535,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             pos: muzzle, dir, speed, travelled: 0.0, range: f(0x1c), damage: f(0x0c), weapon: weapon as u16,
             first: true, dead: false, bounces: 0,
             homing: flags6c & 0x2_0000 != 0, target: None,
+            target_copter: false,
             gravity: flags6c & 0x8 != 0,
             guided_cam: false, // 0x67's +0x6C is 0 [L] — the arm is inert either way
             snd: 0, swoosh: None, born: self.frame,
@@ -17822,7 +17861,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             self.player_bullets.push(PlayerBullet {
                                 pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage: f32_at(0x0c),
                                 weapon: crate::gt::TURRET_WEAPON_RECORD as u16, first: true, dead: false, bounces: 0,
-                                homing: f6c & 0x2_0000 != 0, target: None, gravity: f6c & 0x8 != 0, guided_cam: false,
+                                homing: f6c & 0x2_0000 != 0, target: None, target_copter: false, gravity: f6c & 0x8 != 0, guided_cam: false,
                                 snd: 0, swoosh: None, born: frame,
                             });
                         }
