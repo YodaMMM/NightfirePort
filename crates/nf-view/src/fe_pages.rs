@@ -728,3 +728,104 @@ pub fn hintbox_elems(v: &HintBoxView) -> Vec<PageElem> {
     }
     out
 }
+
+// ── The in-game keypad page 0x40000021 ──────────────────────────────────────────────────────
+
+/// What one keypad-page control draws (see [`KEYPAD_PAGE`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeypadPart {
+    /// The display label 0x10000075: the typed digits (`Keypad::display`).
+    Display,
+    /// A texture label: the msg-0x2d words (u << 16 | v, uw << 16 | vh) and its texture.
+    Tex { tex: u32, uv_a: u32, uv_b: u32 },
+    /// A digit button 0x100000ba, index into `nf_game::lock::KEYPAD_DIGIT_RECTS`; its SET 9.
+    Digit(usize),
+    /// The frame button 0x10000001 on SET 0xb.
+    Frame,
+}
+
+/// One control of page 0x40000021: (id, type byte, authored x, y, w, h, layer word, colour, part).
+pub type KeypadCtrl = (u32, u8, i32, i32, i32, i32, u16, u32, KeypadPart);
+
+/// Page 0x40000021 of the mission menu defs (kind-8 entry 0x08000001, file hash 0x80000003),
+/// controls [1]..[23] in def order [D 0700000A / 07000012; `keypad_page_draw_live` pins the table
+/// to every level carrying the page]. Control [0] is the type-0xd page window itself.
+/// The layer word is the NEW_CONTROL word after the rect, which lands at +0x78 [M Label_Init
+/// 0x218638:32-34]; the sprite's layer is +0x78 − the page's +0x78 (0) [M Label_Update 0x218cb8]: 0x28 the frame at the back, 0x27 the
+/// display plate and the keys, 0x26 the text and the digit glyphs in front.
+/// Colours are the msg-0x1b words; the ten digit buttons' own labels (LBL 0..0xa) carry colour 0
+/// (msg 0x1b/0x1c 0), so they draw nothing and are left out.
+pub const KEYPAD_PAGE: [KeypadCtrl; 23] = {
+    const G: u32 = 0x7f7f_7fff;
+    const T: u32 = 0x0300_017c;
+    [
+        (0x1000_0075, 5, 274, 165, 93, 17, 0x26, 0x0702_02ff, KeypadPart::Display),
+        (0x1000_0001, 5, 271, 166, 98, 21, 0x27, 0x2632_07ff, KeypadPart::Tex { tex: ATLAS_BUTTONS, uv_a: 0x0025_0013, uv_b: 0x0002_0002 }),
+        (0x1000_00ba, 1, 268, 188, 34, 34, 0x27, 0, KeypadPart::Digit(0)),
+        (0x1000_00ba, 1, 304, 188, 34, 34, 0x27, 0, KeypadPart::Digit(1)),
+        (0x1000_00ba, 1, 339, 188, 34, 34, 0x27, 0, KeypadPart::Digit(2)),
+        (0x1000_00ba, 1, 268, 223, 34, 34, 0x27, 0, KeypadPart::Digit(3)),
+        (0x1000_00ba, 1, 304, 223, 34, 34, 0x27, 0, KeypadPart::Digit(4)),
+        (0x1000_00ba, 1, 339, 223, 34, 34, 0x27, 0, KeypadPart::Digit(5)),
+        (0x1000_00ba, 1, 268, 258, 34, 34, 0x27, 0, KeypadPart::Digit(6)),
+        (0x1000_00ba, 1, 304, 258, 34, 34, 0x27, 0, KeypadPart::Digit(7)),
+        (0x1000_00ba, 1, 339, 258, 34, 34, 0x27, 0, KeypadPart::Digit(8)),
+        (0x1000_00ba, 1, 304, 293, 34, 34, 0x27, 0, KeypadPart::Digit(9)),
+        (0x1000_0001, 5, 269, 189, 32, 32, 0x26, G, KeypadPart::Tex { tex: T, uv_a: 0x0001_0001, uv_b: 0x0029_001f }),
+        (0x1000_0001, 5, 305, 189, 32, 32, 0x26, G, KeypadPart::Tex { tex: T, uv_a: 0x002b_0001, uv_b: 0x0029_001e }),
+        (0x1000_0001, 5, 340, 189, 32, 32, 0x26, G, KeypadPart::Tex { tex: T, uv_a: 0x0056_0001, uv_b: 0x0029_001e }),
+        (0x1000_0001, 5, 269, 224, 32, 32, 0x26, G, KeypadPart::Tex { tex: T, uv_a: 0x0001_0020, uv_b: 0x0029_001e }),
+        (0x1000_0001, 5, 305, 224, 32, 32, 0x26, G, KeypadPart::Tex { tex: T, uv_a: 0x002b_0020, uv_b: 0x0029_001e }),
+        (0x1000_0001, 5, 340, 224, 32, 32, 0x26, G, KeypadPart::Tex { tex: T, uv_a: 0x0056_0020, uv_b: 0x0029_001e }),
+        (0x1000_0001, 5, 269, 259, 32, 32, 0x26, G, KeypadPart::Tex { tex: T, uv_a: 0x0001_0040, uv_b: 0x0029_001e }),
+        (0x1000_0001, 5, 305, 259, 32, 32, 0x26, G, KeypadPart::Tex { tex: T, uv_a: 0x002b_0040, uv_b: 0x0029_001e }),
+        (0x1000_0001, 5, 340, 259, 32, 32, 0x26, G, KeypadPart::Tex { tex: T, uv_a: 0x0056_0040, uv_b: 0x0029_001e }),
+        (0x1000_0001, 5, 305, 294, 32, 32, 0x26, G, KeypadPart::Tex { tex: T, uv_a: 0x0056_0060, uv_b: 0x0029_001e }),
+        (0x1000_0001, 1, 267, 163, 107, 165, 0x28, 0, KeypadPart::Frame),
+    ]
+};
+
+/// The keypad page's digit-glyph texture (the glyph labels' msg 0x24 [D]).
+pub const KEYPAD_GLYPHS_TEX: u32 = 0x0300_017c;
+
+/// SET 9 COMPONENT 0 of the mission menu defs — the digit buttons' set (`f2` 9 [D]): one
+/// instance, the white texel (38,19) of [`ATLAS_BUTTONS`] stretched over the key (fractions 1, 1)
+/// in red 0x7f0000ff, masks 0x40 | 0x80 only, centred (anchors 4 | 8) [D 0700000A / 07000012
+/// 08000001]. So only the focused key shows it, held or not; the others (mask 0x20) draw nothing.
+pub const SET9_KEYPAD_KEY: [CompInst; 1] = [ci([0, 0, 8, 8, 38, 19, 1, 1], 0x7f00_00ff, 0xcc, 1.0, 1.0)];
+
+/// A label's msg-0x2d words as the sprite's uv rect: +0xd4 = a >> 16, +0xd6 = a, +0xd8 = b >> 16,
+/// +0xda = b [M Label_SendMessage 0x218890 case 0x2d] — the sprite's (u, v, uw, vh) at +0x30..+0x36,
+/// which the sprite pass hands to the GS as u .. u + uw, v .. v + vh [M View_DrawSprites 0x1e5290].
+pub fn msg2d_uv(a: u32, b: u32) -> [f32; 4] {
+    [(a >> 16) as f32, (a & 0xffff) as f32, (b >> 16) as f32, (b & 0xffff) as f32]
+}
+
+/// The keypad page this frame, back to front: (layer word, component sprite, element). A
+/// component sprite (the frame, a key's highlight) is drawn with the sprite pass's alpha; the
+/// rest are labels.
+/// `display` = `Keypad::display`; `focus` = the cursor's digit index; `confirm_held` = ✕ down.
+/// Button masks follow `Button_Update` 0x1ef948:56-87: every digit button shares the focused
+/// control's id, so a key whose +0x20 digit differs from the focused one gets 0x20, the focused
+/// key 0x80, or 0x40 while ✕ is down (`Menu_InputAction(0x1f, 1)`); the frame's id differs from
+/// the focus, so it gets 0x10.
+pub fn keypad_elems(display: &str, focus: usize, confirm_held: bool) -> Vec<(u16, bool, PageElem)> {
+    let mut out: Vec<(u16, bool, PageElem)> = Vec::new();
+    for &(id, b, x, y, w, h, layer, colour, part) in KEYPAD_PAGE.iter() {
+        let rect = control_rect(id, b, x, y, w, h);
+        match part {
+            KeypadPart::Display => out.push((layer, false, PageElem { ctrl: id, rect, colour, what: ElemWhat::Text { label: None, s: display.to_string(), face: 2, align: Align::Centre, shadow: false } })),
+            KeypadPart::Tex { tex, uv_a, uv_b } => out.push((layer, false, PageElem { ctrl: id, rect, colour, what: ElemWhat::Tex { tex, uv: msg2d_uv(uv_a, uv_b) } })),
+            KeypadPart::Digit(i) => {
+                let mask = if i != focus { 0x20 } else if confirm_held { 0x40 } else { 0x80 };
+                for e in component_elems(id, &SET9_KEYPAD_KEY, ATLAS_BUTTONS, mask, rect, 0) { out.push((layer, true, e)); }
+            }
+            KeypadPart::Frame => {
+                for e in button_elems(id, 0xb, rect, 0, BUTTON_IDLE, 0) { out.push((layer, true, e)); }
+            }
+        }
+    }
+    // Back to front: the higher layer word draws first; equal layers keep def order.
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out
+}

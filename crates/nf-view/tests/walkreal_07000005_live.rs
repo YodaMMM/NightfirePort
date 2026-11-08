@@ -384,8 +384,7 @@ pub fn walk_to_the_slab_east_end(w: &mut Walker) {
     // the slab's east end. THE STOP: the slab crossing west is the parked round-4 leg (see
     // `the_cable_legs_the_crawl_notch_and_ride`'s reason).
     for (name, at) in [
-        ("the ledge north 1", [25.5f32, 31.1, 63.0]),
-        ("the ledge north 2", [25.4, 31.2, 59.0]),
+        ("the ledge north", [25.4f32, 31.2, 59.0]),
         ("the ledge steps", [25.6, 31.9, 54.0]),
         ("the slab east end", [25.4, 33.0, 50.5]),
     ] {
@@ -1080,7 +1079,10 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker, difficulty: u32) {
     // (−22.76, 37.15, −72.36) out 0x42] ----
     // The z −77 band runs east (x −33..−29.5: 37-38), rises through the z −76/−75 spine
     // (x −30.5..−27: 37) onto the battlement lane (z −73.5..−72.5: x −28.5..−16 at 37). The
-    // plate sits on the lane at x −22.76 — the walk fires it.
+    // plate sits on the lane at x −22.76 — the walk fires it. The lane's south side has a
+    // crenel notch at x −24.5..−21.0 (no floor south of z −73.0 [D the floor grid: z −73.2 open
+    // at x −24..−22.5, z −73.4 at x −24..−21.5]); the switch leg keeps to the lane's middle
+    // (z −72.7) instead of the notch's lip, where the capsule only held by its rim.
     walk_legs(w, &[
         ([-32.8, 37.4, -77.4], "the band east 1"),
         ([-31.0, 37.2, -76.8], "the band east 2"),
@@ -1088,7 +1090,8 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker, difficulty: u32) {
         ([-29.0, 37.0, -75.4], "the spine north 2"),
         ([-28.0, 37.0, -74.4], "the spine north 3"),
         ([-26.5, 37.0, -73.6], "the battlement west"),
-        ([-23.0, 37.0, -73.2], "the battlement at the switch"),
+        ([-25.0, 37.0, -72.8], "the battlement short of the notch"),
+        ([-23.0, 37.0, -72.7], "the battlement at the switch"),
         ([-20.0, 37.0, -72.6], "the battlement east 1"),
         ([-17.0, 37.0, -72.4], "the battlement east 2"),
         ([-15.8, 37.0, -72.4], "the battlement's east end"),
@@ -1535,6 +1538,13 @@ fn the_door_band_exit_chains_to_07000006_walked_at(difficulty: u32) {
     // push opens the blocked down-ray as Bond closes). The Operative master (d1) skips — the
     // placements don't pass Drone_Create's min-difficulty gate [M 0x136be0:49].
     if difficulty >= 3 {
+        // [M DroneWeap_DoBulletAccuracy 0x179740:113-115] inside 3.0 u the shot is an AUTO-HIT
+        // (`if (fVar9 < 3.0) bVar2 = true` — the aim vector becomes the zero vector, dead on),
+        // and the ditch stand's flanks previously walked Bond onto the ditch lip: the a05-shift
+        // ledger's 60.0 rolled at d 1.1 with the sniper already at hp 2.3 (t1574, kill t1579).
+        // keep_off holds Bond off the lip while the aim opens from the rim (the field's own
+        // shape: "a fight at 1-2 u takes the whole volley").
+        w.keep_off = Some(3.5);
         for (at, label) in [([99.7f32, 16.8, 101.6], "the ditch sniper"), ([62.1, 34.5, 104.2], "the courtyard wall sniper")] {
             let sniper = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
                 d.team == 1 && d.present && !d.corpse && d.health > 0.0
@@ -1545,11 +1555,16 @@ fn the_door_band_exit_chains_to_07000006_walked_at(difficulty: u32) {
                 eprintln!("[05a] {label} stand: killed {killed} at tick {}", w.total_ticks);
             }
         }
+        w.keep_off = None;
         // The stands drain the clip (the ditch stand's 1500 ticks of aim + taps): reload BEFORE
         // the walk so the return-fire fights never open on a drained clip — the a05g repro's
         // fight#3 opened at 0.9 u with clip 1 and reloaded mid-fight, standing in the guard's
         // TooClose field (Walker::reload_full, the additive API).
         w.reload_full();
+        // (The disc's own Body Armour Heavy #278 ((59.65, 33.57, 86.11) [D placements]) was
+        // tried here as a detour — the nav-lenient walk descended to the valley floor
+        // (42.5, 8.9, 88.3), fell for 53.0, and the pickup is not nav-reachable from the road;
+        // the keep_off bound alone carries the ledger.)
     }
     walk_the_cable_route_to_the_stairs_top(&mut w, difficulty);
     probe_vis(&w, "the stairs top");

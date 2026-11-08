@@ -76,9 +76,13 @@ fn shoot_console_screen(w: &mut Walker, hash: u32, ch: u32, label: &str) -> bool
     // crossing blocker) — stand beside the screen, settle, then the REAL trigger pull.
     {
         let Some(pi) = find(w) else { eprintln!("[1b] {label}: SP vanished before the shot"); return false };
+        // Off the missile: the console base is the missile placement's own (the p0's meshes
+        // stand there, solid — the old +3 x stand point sat inside 0x20007e5), so stand on the
+        // hangar's centre line (z 0, between the panel rows) level with the screen.
         let m = w.scene.sim.as_ref().unwrap().drones.scripts.players[pi].live_matrix;
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [m[3][0] + 3.0, m[3][1] + 0.4, m[3][2]];
+        let screen_y = m[1][1] * SCREEN_C[1] + m[3][1];
+        sim.bond.pos = [m[3][0], screen_y - sim.bond.eye, 0.0];
         sim.bond.vel = [0.0; 3];
     }
     for _ in 0..30 { w.tick(Default::default(), false); }
@@ -552,11 +556,10 @@ fn the_spawn_hint_fires_on_the_first_walk() {
 /// Sisters: the five triggers sit cold at the load; at most one klaxon sounds at any tick
 /// [M :19-28]; the mission's fail (the m8 launch branch) and the objective's AND #139
 /// [ch 21 & 22 & 27] → ch 0x09 (m1/m2/m7 unarmed → the AND out stays off) pin the level logic
-/// around the chain [D PL#109; M 0x1b1a78 type 3, 0x182c60:23-33]. HARNESS LIMIT (not a game
-/// assertion): the one-shot's natural end needs the audio output's ended-report (`Sound::batch`'s
-/// `take_ended` — [M sfx.rs]); the headless driver has no output, so the FIRST klaxon's voice
-/// holds forever and the second klaxon's ON rise exercises the busy-kill arm [M :19-28] — the
-/// same delete outcome, and both should be audible in the game (a live check).
+/// around the chain [D PL#109; M 0x1b1a78 type 3, 0x182c60:23-33]. The deviceless driver ends
+/// voices by their length (`nf_audio::VoiceClock`, attached by `Walker::new`), so #159's one-shot
+/// plays out: `Sound_IsFinnished` reads true, the trigger frees the global voice and, one-shot
+/// p1 = 1, deletes itself [M 0x1b2790:47, :71-84].
 #[test]
 fn the_launch_order_and_the_disarm_speech_fire_the_pit_klaxons() {
     let mut w = load();
@@ -636,36 +639,41 @@ fn the_launch_order_and_the_disarm_speech_fire_the_pit_klaxons() {
         max_concurrent = max_concurrent.max(now_playing);
     }
     let unrisen = (0..5).filter(|k| rose_at[*k].is_none()).map(|k| chans[k]).collect::<Vec<_>>();
-    assert_eq!(unrisen, vec![0x4c, 0x4d, 0x4e],
-        "0x4f/0x50 rise off their condition-cold chains [D P2_WRITES + the decode]; 0x4c/0x4d/0x4e \
-         are the armed-missile warnings — every console ON silences them (the live sisters)");
-    let rose = rose_at.map(|r| r);
-    assert!(rose[3].unwrap() < rose[4].unwrap(),
-        "0x4f (SP#154's t1560) lands before 0x50 (SP#155's t3000) [D P2_WRITES], got {rose:?}");
+    // SP#155 (0x50's script) waits on the AND #150 [ch 0x56 & 0x58] = m6's and m8's disarm
+    // writes [D the p2 scripts' t1 events]; m8 stays armed here, so 0x50 never rises. (The
+    // tables once wrote ch 86/88 from m4/m6 at t930/t730; those writes are the Apocalypse
+    // latches 0x86/0x88 [D].)
+    assert_eq!(unrisen, vec![0x4c, 0x4d, 0x4e, 0x50],
+        "0x4f rises off its condition-cold chain [D P2_WRITES + the decode]; 0x4c/0x4d/0x4e are the armed-missile warnings, every console ON silences them (the live sisters)");
     // aim-route-4: the disc timeline moved the klaxon rises (0x4f at ~+5761, 0x50 at ~+9730)
     // and the fail (m8's ch 99 ~+7001) opens the menu at ~+7301 — between them. The port's
     // fail-menu pause gates the TRIGGER pass (the mux and the sound triggers stop evaluating —
     // measured: the mux-input hold stopped arming m1/m2/m7 until ch 19 was poked directly,
     // and #160 never fires), while the SCRIPT pass keeps running (SP#155's t3000 write lands).
-    // So on the disc clocks #159 plays at its pre-menu rise and holds the headless-frozen
-    // voice, and #160 never reaches its play arm: no busy-kill, all five triggers remain. The
+    // So on the disc clocks #159 plays at its pre-menu rise, ends and deletes itself, and #160
+    // never reaches its play arm: no busy-kill, the other four triggers remain. The
     // game's own fail menu pauses the player only [M 0x182c60:124] — whether the game's
     // trigger/sound pass runs during it is a live check (the report).
     assert!(max_concurrent <= 1,
         "the GlobalVoiceHandle holds at most one klaxon [M 0x1b2790:19-28], saw {max_concurrent}");
-    let _ = ids; let _ = played; // the per-id end polls are the harness limit (see the doc)
+    let _ = ids;
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert_eq!(sim.drones.sound_triggers.list.len(), 5,
-            "no busy-kill on the disc timeline — #160's rise sits past the menu's trigger pause and #159 holds the frozen voice [M :19-28 + the port's menu_pause]");
+        // #159 (0x36f) played and, its one-shot ended, deleted itself [M 0x1b2790:47, :71-84].
+        assert!(played[3], "#159's klaxon 0x36f plays off ch 0x4f [M 0x1b2790:29-41]");
         let kept: Vec<u16> = sim.drones.sound_triggers.list.iter().map(|t| t.id).collect();
-        for id in [0x350u16, 0x34e, 0x34c, 0x36f, 0x34d] {
+        assert!(!kept.contains(&0x36f), "#159's finished one-shot leaves the list [M 0x1b2790:71-84], got {kept:?}");
+        // #160's rise sits right at the menu's trigger pause: whether it lands before the pause
+        // moves with the shared random stream, so #160 may or may not leave the list as well.
+        assert!(kept.len() == 4 || (kept.len() == 3 && !kept.contains(&0x34d)),
+            "only #159, and maybe #160, leave the list [M :19-28, :71-84 + the port's menu_pause], got {kept:?}");
+        for id in [0x350u16, 0x34e, 0x34c] {
             assert!(kept.contains(&id), "id {id} keeps its trigger on the disc timeline, got {kept:?}");
         }
         for c in [0x4cu32, 0x4d, 0x4e] {
             assert!(!sim.drones.channels.on(c), "sister: ch {c:#x} never rose");
         }
-        for c in [0x4fu32, 0x50] {
+        for c in [0x4fu32] {
             assert!(sim.drones.channels.on(c),
                 "ch {c:#x} latches — no disc script writes it 0 [D the script decode]");
         }

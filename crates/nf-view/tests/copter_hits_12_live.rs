@@ -39,7 +39,7 @@ fn round(weapon: u16, from: [f32; 3], at: [f32; 3]) -> nf_game::drone::PlayerBul
         // homing-copter-3: the copter-target flag (homing-copter-2 added the field; this
         // literal predates it) — a plain round carries no copter target.
         target_copter: false,
-        gravity: false, guided_cam: false, snd: 0, swoosh: None, born: 0,
+        gravity: false, guided_cam: false, snd: 0, swoosh: None, born: 0, from_turret: None,
     }
 }
 

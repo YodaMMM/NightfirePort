@@ -45,7 +45,7 @@ fn onesided_update_pins_on_07000041() {
 
     // The 0xd5 arm creates the record from that map's placements (red on the old code: no arm, no
     // record — and the master comment claimed a draw-side cull that does not exist).
-    let w = nf_game::worldobj::WorldObjects::create(&main.placements, &[], |_| (0, [0.0; 3]));
+    let w = nf_game::worldobj::WorldObjects::create(&main.placements, &[], |_| (0, [0.0; 3], 0));
     assert_eq!(w.onesided.len(), 1, "the 0xd5 placement creates one OneSided record [M 0x1e7ce8]");
     assert!(w.onesided[0].placement == d5[0].index as usize, "the record joins back to the placement");
 
@@ -65,7 +65,7 @@ fn onesided_update_pins_on_07000041() {
     let os = &w.onesided[0];
     let front = [os.pos[0] + os.dir[0] * step, os.pos[1] + os.dir[1] * step, os.pos[2] + os.dir[2] * step];
     let back = [os.pos[0] - os.dir[0] * step, os.pos[1] - os.dir[1] * step, os.pos[2] - os.dir[2] * step];
-    let mut w2 = nf_game::worldobj::WorldObjects::create(&main.placements, &[], |_| (0, [0.0; 3]));
+    let mut w2 = nf_game::worldobj::WorldObjects::create(&main.placements, &[], |_| (0, [0.0; 3], 0));
     let (mut ch, mut music, mut rng) = (nf_game::triggers::Channels::default(), nf_game::music::Music::default(), nf_game::drone::Rng::new(1));
     let (weapons, mut bullets) = (nf_formats::weapon::WeaponData::default(), Vec::new());
     w2.tick(&mut ch, front, &weapons, &mut rng, &mut bullets, 1, &mut music);

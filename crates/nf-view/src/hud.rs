@@ -1494,6 +1494,9 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
     }
     // The MP match's own panes (radar, clock, team score, standings) — nothing on SP levels.
     if s.mp.is_some() { mp_panes(&mut h, s, t); }
+    // The keypad page (`Lock_Update` case 3's `MenuManager_Create(0x80000003, 0x40000021)`
+    // [M 0x1ae3d8:242-243]) while it stands; the world runs on behind it.
+    if let Some((_, kp)) = s.drones.keypad.as_ref() { crate::menu::draw_keypad_page(&mut h, kp, &t.font); }
     h.finish()
 }
 

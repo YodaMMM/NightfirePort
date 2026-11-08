@@ -32,17 +32,17 @@ fn scroll_from_hands_finds_a_visible_weapon() {
 
     // Gun::cycle (without the D-003 filter) finds weapon 1 (fists) from hands.
     let mut g = nf_game::gun::Gun::new(0x47, 0, 0);
-    assert_eq!(g.cycle(1, nf_game::gun::CycleMode::Weapons, &owned, has_ammo, selectable), Some(1),
+    assert_eq!(g.cycle(1, nf_game::gun::CycleMode::Weapons, &owned, has_ammo, selectable, |w| wd.base(w as usize) as u8), Some(1),
         "Gun::cycle finds fists (weapon 1) — the Sim's D-003 filter is what skips it in play");
 
     // From fists (1), Gun::cycle finds the P2K (2).
     let mut g2 = nf_game::gun::Gun::new(1, 1, 0);
-    assert_eq!(g2.cycle(1, nf_game::gun::CycleMode::Weapons, &owned, has_ammo, selectable), Some(2),
+    assert_eq!(g2.cycle(1, nf_game::gun::CycleMode::Weapons, &owned, has_ammo, selectable, |w| wd.base(w as usize) as u8), Some(2),
         "Gun::cycle from fists finds the P2K (weapon 2)");
 
     // Sister: from the P2K (2), cycle +1 wraps to fists (1).
     let mut g3 = nf_game::gun::Gun::new(2, 7, 41);
-    assert_eq!(g3.cycle(1, nf_game::gun::CycleMode::Weapons, &owned, has_ammo, selectable), Some(1),
+    assert_eq!(g3.cycle(1, nf_game::gun::CycleMode::Weapons, &owned, has_ammo, selectable, |w| wd.base(w as usize) as u8), Some(1),
         "scroll from the P2K wraps to fists");
 }
 

@@ -88,7 +88,13 @@ fn the_rope_follows_the_opponent_down_and_lands() {
     let sim = scene.sim.as_mut().unwrap();
     let idx: Vec<usize> = sim.drones.list.iter().enumerate().filter(|(_, d)| d.mode == 0x1c).map(|(i, _)| i).collect();
     assert_eq!(idx.len(), 1, "one abseiler at difficulty 1");
-    // The trigger: ch 13 releases the abseiler from its WAIT_SWITCH gate [D param 3].
+    // The trigger: ch 13 releases the abseiler from its WAIT_SWITCH gate [D param 3]. One idle
+    // tick first (the player reaches the trigger a tick later): join-reds-a — on the joined stream
+    // the release on tick 1 drew AbseilInit's `Rand_Rand(60)` = 0 [M 0x169610 case 1], so timer C
+    // fired on the ENTER tick and the Slide's first UPDATE read the standing tick's feet flag
+    // (anim+0x60 & 8 [M 0x169730:32]) and landed the roper at the rope top. That zero draw is
+    // the edge case the report leaves open; this test pins the rope follow.
+    sim.step_bond(Input::default(), false, false, false);
     sim.drones.channels.set(0x13, 1, sim.drones.frame);
     for _ in 0..120 { sim.step_bond(Input::default(), false, false, false); }
     let i = idx[0];

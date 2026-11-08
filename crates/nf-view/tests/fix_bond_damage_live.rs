@@ -62,16 +62,20 @@ fn shoot_from_front(scene: &mut nf_view::scene::Scene, damage: f32, weapon: u16)
 /// [L 07000005 difficulty 1 = 0.6, work/ee_start_05 + ReadTuningVars 0x1d3a80 case 0x7000005-08],
 /// the flash at 127 end-of-tick (the pain writes 128, the pane's −1/tick fade [M 0x19b9c8] runs in
 /// the same tick), both-sides direction bits (the shot straight at the eye [M 0x194458:204-226]) and
-/// `Sound_Play(100, 0x412)` (the record's `+0x70 & 0x180 == 0` [L weapon_data 0x2c: 0x4]
+/// `Sound_Play(100, 0x412)` (the record's `+0x70 & 0x180 == 0` [D weapon_data 0x10: 0x12]
 /// [M 0x194458:229-236]).
 #[test]
 fn guard_bullet_hit_without_armour_costs_the_game_s_numbers_and_plays_0x412() {
     let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_at([128.0, 2.0, 128.0]);
-    // The 0x2c guard rifle's record damage is 100.0 [L weapon_data 0x2c +0x0C]; the staged bullet
-    // carries the game's pre-mod number (the port mods at fire time, the game at hit time — same
-    // value; the ASSERTION is the armour/factor arithmetic).
-    shoot_from_front(&mut scene, 100.0, 0x2c);
+    // The staged bullet carries a 100.0 pre-mod number (the port mods at fire time, the game at
+    // hit time — same value; the ASSERTION is the armour/factor arithmetic). The record is 0x10, the
+    // 07000005 guards' own weapon (+0x70 = 0x12: no 0x180, no explode bit [D weapon_data]). Record
+    // 0x2c is a rocket (+0x70 = 0x4, radius 8, damage 100 [D]): since the stream join its contact
+    // on Bond also runs `Explode_Create` [M Bullet_CollisionHandler 0x12ce80 LAB_0012cff0 →
+    // LAB_0012d020 → the +0x70 & 4 arm, pierce flag clear on a body], so it no longer isolates
+    // the contact arithmetic.
+    shoot_from_front(&mut scene, 100.0, 0x10);
     let started = flush_started(scene.sim.as_mut().unwrap());
     let sim = scene.sim.as_ref().unwrap();
     assert!((sim.drones.health.health - 40.0).abs() < 1e-3,
@@ -91,7 +95,7 @@ fn armour_absorbs_first_then_health() {
     let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_at([128.0, 2.0, 128.0]);
     scene.sim.as_mut().unwrap().drones.health.armour = 50.0;
-    shoot_from_front(&mut scene, 100.0, 0x2c);
+    shoot_from_front(&mut scene, 100.0, 0x10); // the plain guard round (see the test above)
     let started = flush_started(scene.sim.as_mut().unwrap());
     let sim = scene.sim.as_ref().unwrap();
     assert!((sim.drones.health.armour - 0.0).abs() < 1e-3,

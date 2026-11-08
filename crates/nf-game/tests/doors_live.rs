@@ -50,7 +50,7 @@ fn the_live_doors_reproduce() {
     assert_eq!(blocks.len(), 7, "the level's m_paths table (7 blocks of 0x19)");
     let doors = nf_game::door::Doors::create(ps, &blocks, |p| {
         let o = object(&level, m, p);
-        Some((o.hashcode, o.centre, o.radius))
+        Some((o.hashcode, o.centre, o.radius, o.flags))
     });
     let expect: Vec<usize> = GOLDEN.iter().map(|&(i, ..)| i).collect();
     assert_eq!(nf_game::door::door_placements(ps), expect, "the 5 type-0xDB placements, in record order");

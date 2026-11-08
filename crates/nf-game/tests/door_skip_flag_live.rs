@@ -43,7 +43,7 @@ fn doors_01() -> Option<Doors> {
     Some(Doors::create(ps, &blocks, |p| {
         let o = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(om, oi)| &level.maps[om].objects[oi]) }
                 else { level.maps[m].objects.get(p.index as usize) };
-        o.map(|o| (o.hashcode, o.centre, o.radius))
+        o.map(|o| (o.hashcode, o.centre, o.radius, o.flags))
     }))
 }
 

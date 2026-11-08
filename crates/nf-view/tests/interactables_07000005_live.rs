@@ -186,11 +186,17 @@ fn the_ledge_touch_pair_arms_the_alarm_or_chain() {
     // crossing is pinned by the walk through it.
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [-35.12, 38.0, -27.98];
+        // Root 37.85: the capsule top (root + 0.275) stays under the 07000005 invisible blocker's
+        // slab at y 38.165 over this stretch of the ledge (a 0x3B DynamicObject, solid to the body
+        // since `DynamicObject_Create` 0x18dbf8 links it into the room [M Collide_PickObj
+        // 0x1eae80:28-40]). Dropped from 38.0 the capsule straddled the slab and stood on it. The
+        // drop lands on the ledge's east side (x -34.7, the plate run's own line): at x -35.12 the
+        // shorter fall slid Bond off the west slope (mat 0xa) into the plunge shells.
+        sim.bond.pos = [-34.7, 37.85, -27.98];
         sim.bond.vel = [0.0; 3];
     }
     w.wait(30);
-    w.walk_to(walker::Wp::new(-35.12, 37.3, -27.0).r(0.5), "the walk across cut-scene plate #60");
+    w.walk_to(walker::Wp::new(-34.7, 37.3, -27.0).r(0.5), "the walk across cut-scene plate #60");
     let sim = w.scene.sim.as_ref().unwrap();
     assert!(sim.drones.channels.on(85), "the ledge walk raises #60's ch 85 [D out 0x55]");
     assert!(sim.drones.channels.on(161),
@@ -398,11 +404,15 @@ fn the_quiet_window_ledge_run_fires_all_four_plates_and_the_dead_and_stays_dead(
     // y 35.4, inside plunge shell #291's top 35.47, which fires the death NIS — the census's
     // open item, re-measured this task), settle, then walk south 1.4 through the box — the real
     // crossing input. The TouchOnce outs latch, so each assert survives the transit.
+    // The sample's start: the headless run ends a one-shot by its length (`attach_headless_sound`),
+    // so #81's handle is read while the crossings run, not only after them.
+    let mut heard_332 = false;
     for (label, spot, zto, out) in [
-        ("#311", [-34.7f32, 37.9, -28.0], -29.4, 127u32),
-        ("#312", [-34.7, 37.9, -31.45], -32.8, 128),
-        ("#313", [-34.7, 37.9, -35.0], -36.3, 129),
-        ("#314", [-34.7, 37.9, -37.4], -38.7, 133),
+        // Root 37.85, under the invisible blocker's 38.165 slab (see the pair test's drop).
+        ("#311", [-34.7f32, 37.85, -28.0], -29.4, 127u32),
+        ("#312", [-34.7, 37.85, -31.45], -32.8, 128),
+        ("#313", [-34.7, 37.85, -35.0], -36.3, 129),
+        ("#314", [-34.7, 37.85, -37.4], -38.7, 133),
     ] {
         {
             let sim = w.scene.sim.as_mut().unwrap();
@@ -418,6 +428,7 @@ fn the_quiet_window_ledge_run_fires_all_four_plates_and_the_dead_and_stays_dead(
                 sim.bond.yaw = to[0].atan2(to[2]);
             }
             w.tick(Input { forward: 1.0, ..Default::default() }, false);
+            heard_332 |= w.scene.sim.as_ref().unwrap().drones.sound_triggers.playing(332);
         }
         let sim = w.scene.sim.as_ref().unwrap();
         eprintln!("[05i] {label}: bond {:?} {} {} 190 {}", sim.bond.pos, out,
@@ -435,7 +446,7 @@ fn the_quiet_window_ledge_run_fires_all_four_plates_and_the_dead_and_stays_dead(
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(105),
             "mux #80's AND {{127,128,129,133}} completes on the latched outs [D row; M Trigger_MultiplexIn]");
-        assert!(sim.drones.sound_triggers.playing(332),
+        assert!(heard_332 || sim.drones.sound_triggers.playing(332),
             "SoundTrigger #81 plays sample 332 on ch 105 [D row; M SoundTrigger_Update 0x1b2790]");
         assert!(!sim.drones.channels.on(0x6f),
             "no alarm ever fired → the engine latch never set the lock [M 0x1b1900:21-23]");
@@ -462,11 +473,17 @@ fn the_quiet_window_ledge_run_fires_all_four_plates_and_the_dead_and_stays_dead(
         let sim = w.scene.sim.as_mut().unwrap();
         // The pair test's own second drop — right on #60's box, so the walk across is short and
         // the end stand holds 85 (the AND's live input) while the asserts run.
-        sim.bond.pos = [-35.12, 38.0, -27.98];
+        // Root 37.85: the capsule top (root + 0.275) stays under the 07000005 invisible blocker's
+        // slab at y 38.165 over this stretch of the ledge (a 0x3B DynamicObject, solid to the body
+        // since `DynamicObject_Create` 0x18dbf8 links it into the room [M Collide_PickObj
+        // 0x1eae80:28-40]). Dropped from 38.0 the capsule straddled the slab and stood on it. The
+        // drop lands on the ledge's east side (x -34.7, the plate run's own line): at x -35.12 the
+        // shorter fall slid Bond off the west slope (mat 0xa) into the plunge shells.
+        sim.bond.pos = [-34.7, 37.85, -27.98];
         sim.bond.vel = [0.0; 3];
     }
     w.wait(30);
-    w.walk_to(walker::Wp::new(-35.12, 37.3, -27.0).r(0.5), "the walk across #60 (the pair test's)");
+    w.walk_to(walker::Wp::new(-34.7, 37.3, -27.0).r(0.5), "the walk across #60 (the pair test's)");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         eprintln!("[05i] pair end: 84 {} 85 {} 161 {} 164 {} 0x6f {}",

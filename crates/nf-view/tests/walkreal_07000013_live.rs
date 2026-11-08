@@ -373,6 +373,28 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // cel crosses 21→28 through the stateful relink's portal arm (Cel_ObjectLeftCel 0x1e0d58)
     // and the room's own floor (cel 28's bucket) holds him.
     w.walk_to(Wp::new(5.0, -368.4, 26.5).r(1.5), "13: the lobby east lane");
+    // guard-repin-master re-anchor: the west-mid leg's return-fire fights (the north-lobby
+    // shooters) displaced Bond SOUTH of the lane line into the lobby pocket at (0.60, −368.30,
+    // 25.66) — the guards' per-goal arrival radii [M 0x152548:174-181] close the pursuit to
+    // 1.0-2.0, the stands' back-off geometry moved, and from that spot the direct segment to
+    // the west-mid clips the lounge furniture corner at ~(0.3, 26.3) (the measured 6000-tick
+    // cap: segment_to_target hit at t 0.042, d 15.78, all nearby guards dead). The re-anchor
+    // pulls the route back up to the east lane's proven line before the west leg: from the
+    // pocket the segment to (2.5, 30.5) runs north-east, clear of the furniture corner, and
+    // the west-mid line from there rides the old path.
+    w.walk_to(Wp::new(2.5, -368.4, 30.5).r(1.5), "13: the lobby mid re-anchor");
+    // civ-unignore-2's law at the re-anchor end (guard-repin-master): the same ray-gated sweep
+    // runs one leg EARLIER — the west-mid route's fights used to be answered mid-leg from the
+    // lane, but the guards' per-goal arrival radii [M 0x152548:174-181] close the pursuit to
+    // 1.0-2.0 and the stands' displacement parked Bond in the lobby pocket (the measured
+    // 6000-tick cap at (0.60, −368.30, 25.66), then the re-anchor's measured cost: #5 (skin
+    // 0x5000004 at (−14.8, −368.4, 45.6)) landed 28.0 in 8 hits across the re-anchor + west-mid
+    // legs and Bond reached the security room at 21 hp to lose the point-blank #8 exchange).
+    // Taking the shooters at the re-anchor end — where #11 (3.8, 33.9) is d ~4.5 and the
+    // mezzanine/west boxes open — keeps the west legs' budget for the room.
+    if real_damage && difficulty == 3 {
+        clear_the_visible(&mut w, "13: the lobby mid re-anchor", 24.0);
+    }
     w.walk_to(Wp::new(-6.0, -368.4, 40.0).r(1.5), "13: the lobby west mid");
     // civ-unignore-2 (the d3 pre-clear, second leg): the north-lobby shooters the east lane's
     // fights only ever answered UNSEEN (the master baseline: fights #0/#4, aim None, killed
@@ -387,6 +409,17 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: at the security-room door");
     w.walk_to(Wp::at(-26.65, -368.36, 37.44, walker::Act::Use { use_ticks: 90 }).r(1.4), "13: E the security-room door");
     w.wait(120); // the sliding door finishes [probe: state 0x8 → 0x4 within the wait]
+    // guard-repin-master doorway pre-clear (d3): with the lobby budget spent on the west legs
+    // (the measured red reached the room at 21 hp), the room guard #8 (skin 0x5000004, weapon
+    // 0x10, posted at (−26.9, −368.4, 29.5)) met the doorway crossing point-blank — one
+    // 31.5 blast at d 2.9 killed the walk at tick 3006. His rays never open from any of the
+    // leg ends (the room's own walls), but through the OPEN door the line runs straight down
+    // the room — the sweep takes him from the threshold before the crossing, exactly the
+    // civ-unignore-2 law (the pre-clear stands at the leg ends and takes the posted guards
+    // BEFORE the legs walk into them).
+    if real_damage && difficulty == 3 {
+        clear_the_visible(&mut w, "13: the security-room doorway", 12.0);
+    }
     w.walk_to(Wp::new(-27.0, -368.4, 37.0).r(1.0), "13: through the doorway");
     w.walk_to(Wp::new(-27.0, -368.4, 35.0).r(1.2), "13: inside the security room");
     {
@@ -427,12 +460,23 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(!sim.drones.channels.on(0x23), "ch 0x23 off before the panel E [D]");
     }
+    // The aim: the panel entity's posed collision box middle (-19.49, -368.23, 25.01) [D the
+    // entity glist 0x2000a2c posed by its stream matrix — probe], straight ahead of the walked
+    // stand. The use pick keeps the panel only with the use point within 1.0 in front of one of
+    // its faces [M Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8; nf_game::usepick].
     let mut ch23 = false;
     for t in 0..150 {
         let sim = w.scene.sim.as_ref().unwrap();
-        let desired = (-18.08f32 - sim.bond.pos[0]).atan2(25.01 - sim.bond.pos[2]);
+        let h = sim.bond.head();
+        let to = [-19.49f32 - h[0], -368.23 - h[1], 25.01 - h[2]];
+        let desired = to[0].atan2(to[2]);
         let err = walker::wrap_pi(desired - sim.bond.yaw);
-        let input = nf_game::player::Input { turn: err.clamp(-0.05, 0.05), ..Default::default() };
+        let want_pitch = (to[1] / to[0].hypot(to[2])).atan() / std::f32::consts::FRAC_PI_2;
+        // Close in to 1.7 of the box middle while pressing: the use point (head + look, 1.0) must
+        // land within 1.0 in front of a panel face, and the fight-shifted stands (26.8..27.0 z)
+        // leave it at the edge of that band.
+        let forward = if to[0].hypot(to[2]) > 1.7 && err.abs() < 0.3 { 0.3 } else { 0.0 };
+        let input = nf_game::player::Input { turn: err.clamp(-0.05, 0.05), look: (want_pitch - sim.bond.pitch).clamp(-0.05, 0.05), forward, ..Default::default() };
         w.tick(input, t % 6 == 0);
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x23) { ch23 = true; break; }
     }
@@ -448,19 +492,32 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     let di = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
         .position(|d| walker::dxz(d.pos, [-26.65, -368.36, 37.44]) < 2.0).expect("the security-room door");
     let mut out = false;
-    for _ in 0..900 {
-        let (door_closed, bp) = {
+    // The E pulses (the press is an edge [M Input_Action 0x17f208 bit 4]) with the view level:
+    // the pick keeps the leaf only once the use point is within 1.0 in front of it
+    // [M Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8; nf_game::usepick], so the
+    // first press from across the room cannot be the one that opens it.
+    for k in 0..900u32 {
+        let (door_closed, door_swinging, bp) = {
             let sim = w.scene.sim.as_ref().unwrap();
             let d = &sim.drones.doors.list[di];
-            (d.state & 0xc == 0, sim.bond.pos)
+            (d.state & 0xc == 0, d.state & 0x8 != 0, sim.bond.pos)
         };
         if bp[2] > 38.4 && (-28.0..=-25.5).contains(&bp[0]) { out = true; break; }
-        let dx = -27.05f32 - bp[0];
-        let dz = 38.7 - bp[2];
+        // Line up in front of the doorway first: east of x −26.7 the room's north wall (z 37.23,
+        // x −26.46..−24.74) stands between Bond and the exit, and the straight line to (−27.05, 38.7)
+        // pins him on its face.
+        let (tx, tz) = if bp[0] > -26.7 && bp[2] < 37.0 { (-27.05f32, 36.3f32) } else { (-27.05, 38.7) };
+        let dx = tx - bp[0];
+        let dz = tz - bp[2];
         let desired = dx.atan2(dz);
         let err = walker::wrap_pi(desired - w.scene.sim.as_ref().unwrap().bond.yaw);
-        let input = nf_game::player::Input { turn: err.clamp(-0.05, 0.05), forward: 1.0, ..Default::default() };
-        w.tick(input, door_closed);
+        let pitch = w.scene.sim.as_ref().unwrap().bond.pitch;
+        // The press now lands within 1.0 of the leaf (the use pick's refine), so Bond stands in its
+        // swing: he steps back while it opens, as a player would, or the leaf stops on him and
+        // holds at 0.79 (state 0x8) for good.
+        let forward = if door_swinging { -0.6 } else { 1.0 };
+        let input = nf_game::player::Input { turn: err.clamp(-0.05, 0.05), look: (-pitch).clamp(-0.05, 0.05), forward, ..Default::default() };
+        w.tick(input, door_closed && k % 6 == 0);
     }
     assert!(out, "13: out through the doorway while the door's open window holds [probe]");
     w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: out of the room");

@@ -30,7 +30,12 @@ fn the_load_point_refuses_without_the_key_channel_and_loads_07000004_with_it() {
     assert_eq!(exit.next_level, 0x0700_0004);
     assert_eq!(exit.key_gate, 0x52);
     let centre = [(exit.lo[0] + exit.hi[0]) * 0.5, (exit.lo[1] + exit.hi[1]) * 0.5, (exit.lo[2] + exit.hi[2]) * 0.5];
-    sim.bond.pos = centre;
+    // Bond stands 2.0 out from the plate (x 18.08-18.13 [D the trigger bounds]) facing it, where a
+    // player walking up presses E. Since the stream join the old stance — the root dropped into the
+    // middle of the plate — is pushed 0.42 out along +x on the first tick, and from there the use
+    // point (head + the facing row) lies 1.2 beyond the plate, outside the 1.0 refine [M
+    // Intersect_PointGeom 0x1e92d8:200]. The push's source is not traced.
+    sim.bond = nf_game::player::Bond::stand_at(&sim.world, [centre[0] + 2.0, centre[1], centre[2]], -std::f32::consts::FRAC_PI_2);
     for _ in 0..6 { sim.step_bond(Default::default(), false, false, true); }
     assert_eq!(sim.drones.level_exit, None, "the key gate must refuse the exit while ch 0x52 is off");
     sim.drones.set_channel(0x52);

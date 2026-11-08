@@ -176,7 +176,17 @@ fn firing_at_a_ride_window_breaks_it_dead_bit_glass_sound_entity_gone() {
             drop(sim);
             w.tick_fire(input);
         }
-        for _ in 0..7 { w.tick(Input::default(), false); }
+        // The kill is read on the tick it lands (fire tick or the idle ticks after): the paths are
+        // cleared at the head of every tick's bullet update, so reading them up to 7 ticks later
+        // only held while a later round was still flying. With the stream join's pane ride the
+        // ride's panes are dynamic parts and the round's flight ends sooner, so the read moves to
+        // the kill tick itself.
+        let kill_now = |w: &Walker| w.scene.sim.as_ref().unwrap().drones.break_kills.len() > kills_before;
+        if kill_now(&w) { continue; }
+        for _ in 0..7 {
+            w.tick(Input::default(), false);
+            if kill_now(&w) { break; }
+        }
     }
     eprintln!("[gondola] new kills {new_kills:?}");
     assert!(!new_kills.is_empty(), "a window broke under the real fire [M Break_Kill 0x12b970]");

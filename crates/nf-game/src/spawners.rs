@@ -33,6 +33,11 @@ pub struct Spawner {
     pub spawned: Vec<usize>,
     pub active: bool,
     pub immediate: bool,
+    /// +0x1C, the spawn latch: the mode arm decides it and the wave rollover alone clears it
+    /// [M 0x137e68:145-172, :176-210]. Mode 2 re-decides it every tick (alive < max); mode 3 only
+    /// sets it (the initial fill, or nobody alive), so one empty moment opens a whole wave: the
+    /// latch stays up while the wave's first drones stand, until `this_wave` reaches `max_alive`.
+    pub spawn_on: bool,
     /// p7 (+0x14): the **kill channel** [L-verified; M 0x137e68:50-52]. `Control` latches `ch[p7]` into
     /// +0x20; the latched path runs the cleanup block and never spawns again. (fix-actors' "ARM channel"
     /// reading was refuted by the live measurement.)
@@ -70,13 +75,16 @@ impl Spawner {
         // There is no delay value anywhere in the spawner family; the gap between mode-3 waves is
         // purely the alive-scan == 0 wait.
         let immediate = (start == 0 || ch.on(start)) && !ch.on(param(5));
-        let min = f32::from_bits(param(8));
+        // +0x18: `cvt.s.w` of p8, 0 → 10.0 [M 0x1379c0-0x137a1c] — a number on the disc, not float bits.
+        let min = param(8) as i32 as f32;
         Some(Spawner {
             placement, mode: param(0), group: param(1), max_alive: if max == 0 || max > n { n } else { max },
             waves: if param(3) == 0 { 32000 } else { param(3) }, start, stop: param(5), done: param(6),
             kill: param(7), kill_latch: false,
-            min_dist: if min > 0.0 && min.is_finite() { min } else { 10.0 },
-            used: vec![false; n], templates, spawned: Vec::new(), active: start == 0, immediate, wave: 0, this_wave: 0, gone: false,
+            min_dist: if min == 0.0 { 10.0 } else { min },
+            used: vec![false; n], templates, spawned: Vec::new(), active: start == 0, immediate, spawn_on: false, wave: 0, this_wave: 0,
+            // No template on this difficulty: `DroneSpawner_Init` deletes the spawner [M 0x137aa0:16-19].
+            gone: n == 0,
             sfx_request: None,
         })
     }
@@ -87,10 +95,11 @@ impl Spawner {
     /// template i's spot is at least `min_dist` from the player (a PRE-selection usability test —
     /// the candidate loop only decrements the draw for templates that pass it, 0x137cb0:30);
     /// `visible(i)`: the spot is visible to Bond (a POST-selection abort, 0x137cb0:43 — the attempt
-    /// fails and retries next tick); `rand(n)`: `Rand_Rand`.
+    /// fails and the next empty slot tries); `free(i)`: the port can give template i's new guard a
+    /// body (the game's record outlives its guards; the port's draw pool is finite); `rand(n)`: `Rand_Rand`.
     pub fn update(&mut self, ch: &mut Channels, frame: u32, level: u32, alive: impl Fn(usize) -> bool,
                   drawn: impl Fn(usize) -> bool, dist_ok: impl Fn(usize, f32) -> bool,
-                  visible: impl Fn(usize) -> bool,
+                  visible: impl Fn(usize) -> bool, free: impl Fn(usize) -> bool,
                   rand: &mut impl FnMut(u32) -> u32) -> Action {
         if self.gone { return Action::None; }
         // The p7 kill latch [M 0x137e68:50-52; L-verified 07000005: +0x20 → 1 once the ch-0x43 script
@@ -140,7 +149,9 @@ impl Spawner {
             }
             return Action::Remove(removed);
         }
-        let living = self.spawned.iter().filter(|&&i| alive(i)).count();
+        // The alive scan zeroes the slot of a dead or removed guard [M 0x137e68:96-124].
+        self.spawned.retain(|&i| alive(i));
+        let living = self.spawned.len();
         if self.wave >= self.waves {
             // All waves spawned: `if ((ushort)puVar1[3] <= (ushort)puVar1[0xb])` — max waves (+0x0C)
             // vs waves completed (+0x2C), a pure counter compare with NO template-exhaustion term
@@ -162,6 +173,7 @@ impl Spawner {
             self.wave += 1;
             self.this_wave = 0;
             self.immediate = false;
+            self.spawn_on = false;
             for u in self.used.iter_mut() { *u = false; }
             return Action::None;
         }
@@ -178,27 +190,105 @@ impl Spawner {
             && (level == 0x0700_000c || level == 0x0700_000d) {
             self.sfx_request = Some(rand(2) + 0xd6);
         }
-        let may = if self.mode == 3 { living == 0 || self.immediate } else { living < self.max_alive };
-        if !may { return Action::None; }
-        // Selection [M 0x137cb0:21-43]: one `Rand_Rand` over the group, walked down once per USABLE
-        // template — usable = unused this epoch AND, with screening on (+0x1F == 0), the spot at
-        // least `min_dist` (block+0x18) from the player. The distance is therefore a
-        // PRE-selection usability test: a too-close spot is skipped without consuming the draw, and
-        // the attempt never fails on distance — unlike the old port model, which drew over ALL
-        // unused templates and aborted the tick after the pick (a different RNG sequence whenever
-        // any spot was too close).
-        let usable: Vec<usize> = (0..self.templates.len())
-            .filter(|&k| !self.used[k] && (self.immediate || dist_ok(self.templates[k], self.min_dist)))
-            .collect();
-        if usable.is_empty() { return Action::None; }
-        let k = usable[(rand(usable.len() as u32) as usize).min(usable.len() - 1)];
-        let i = self.templates[k];
-        // The POST-selection abort [M 0x137cb0:43]: with screening on, a spot visible to Bond fails
-        // the attempt (returns 0) — the slot persists and the same spot can win the next draw.
-        if !self.immediate && visible(i) { return Action::None; }
-        self.used[k] = true;
-        self.spawned.push(i);
-        self.this_wave += 1;
-        Action::Spawn(i)
+        // The mode arm [M 0x137e68:176-210]: mode 2 re-decides the +0x1C latch every tick; mode 3
+        // sets it for the initial fill and whenever nobody is alive and otherwise leaves it as it
+        // stands, so a wave fills up to `max_alive` (one drone a tick) before the rollover drops
+        // the latch and the spawner waits for the wave to die. Other modes never touch it.
+        match self.mode {
+            2 => self.spawn_on = living < self.max_alive,
+            3 => if self.immediate || living == 0 { self.spawn_on = true; },
+            _ => {}
+        }
+        if !self.spawn_on { return Action::None; }
+        // The slot walk [M 0x137e68:212-232]: every empty slot of the +0xA-long array calls
+        // `DroneSpawner_SpawnDrone` until one succeeds; a failure moves on to the next slot in the
+        // same tick (the `DAT_00299092` line-of-sight counter only moves in the sight code, and
+        // `Drone_PositionVisible` does not touch it). Each attempt is its own draw.
+        for _ in 0..self.max_alive.saturating_sub(living) {
+            // Selection [M 0x137cb0:21-43]: one `Rand_Rand(+0x2E)` — the group's TEMPLATE COUNT,
+            // set once by `DroneSpawner_Init` 0x137aa0:32 — walked down once per usable template.
+            // Usable = unused this epoch AND, with screening on (+0x1F == 0), the spot at least
+            // `min_dist` (block+0x18) from the player; a too-close spot is skipped without
+            // consuming the draw. A draw past the last usable template falls off the walk and the
+            // attempt fails.
+            let mut left = rand(self.templates.len() as u32) as i32;
+            let mut pick = None;
+            for k in 0..self.templates.len() {
+                if !self.immediate && !dist_ok(self.templates[k], self.min_dist) { continue; }
+                if self.used[k] { continue; }
+                left -= 1;
+                if left == -1 { pick = Some(k); break; }
+            }
+            let Some(k) = pick else { continue };
+            let i = self.templates[k];
+            // The POST-selection abort [M 0x137cb0:43]: with screening on, a spot visible to Bond
+            // fails the attempt (returns 0) — the same spot can win a later draw.
+            if !self.immediate && visible(i) { continue; }
+            // The game's spawn is a new object, so a corpse of the same template lies on untouched;
+            // the port adds a guard for a template still in use, while it has a body to draw.
+            if !free(i) { continue; }
+            self.used[k] = true;
+            if !self.spawned.contains(&i) { self.spawned.push(i); } // one record per template
+            self.this_wave += 1;
+            return Action::Spawn(i);
+        }
+        Action::None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spawner(n: usize) -> Spawner {
+        // mode 2, group 1, no start/stop channels → active and immediate (+0x1F set, the
+        // no-screening arm [M 0x137aa0:33-45]).
+        Spawner::new(0, |p| if p == 0 { 2 } else if p == 1 { 1 } else { 0 }, (0..n).collect(),
+            &Channels::default()).unwrap()
+    }
+
+    /// [M 0x137cb0:21 + 0x137aa0:31-32] the pick draw is `Rand_Rand` over the WHOLE template
+    /// list — `+0x2E` and `+0x8` are both the template count `DroneSpawner_Init` writes from the
+    /// census table — and only USABLE templates (unused this epoch; plus the distance screen when
+    /// +0x1F is clear) decrement the counter (:41). A draw whose rank passes the last usable
+    /// template spawns NOTHING this call (:88-96 fall through the loop → `return 0`) — `Control`
+    /// retries next tick with a fresh draw. The old port drew `rand(usable.len())` and always
+    /// spawned, so waves arrived at the wrong rate.
+    #[test]
+    fn the_pick_draws_over_all_templates_and_a_missed_rank_spawns_nothing() {
+        let mut s = spawner(4);
+        s.used[0] = true;
+        s.used[1] = true; // 2 of 4 templates usable
+        let mut moduli: Vec<u32> = Vec::new();
+        let a = s.update(&mut Channels::default(), 0, 0, |_| false, |_| false, |_, _| true, |_| false, |_| true,
+            &mut |n| { moduli.push(n); 3 });
+        assert_eq!(moduli, vec![4; 4], "each empty slot makes its own attempt, every draw over the whole template list, not the usable count [M 0x137cb0:21, 0x137e68:212-232]");
+        assert_eq!(a, Action::None, "rank 3 of 2 usable → nothing spawns this call [M 0x137cb0:88-96]");
+    }
+
+    /// The draw's rank indexes the USABLE walk: rank r spawns the (r+1)-th usable template
+    /// [M 0x137cb0:41-56 — each usable record decrements, the −1 arm creates].
+    #[test]
+    fn the_draw_rank_indexes_the_usable_walk() {
+        let mut s = spawner(4);
+        s.used[0] = true;
+        s.used[1] = true; // usable = templates 2, 3
+        let mut moduli: Vec<u32> = Vec::new();
+        let a = s.update(&mut Channels::default(), 0, 0, |_| false, |_| false, |_, _| true, |_| false, |_| true,
+            &mut |n| { moduli.push(n); 1 });
+        assert_eq!(moduli, vec![4], "the draw modulus is the whole template list [M 0x137cb0:21]");
+        assert_eq!(a, Action::Spawn(3), "rank 1 of usable [2, 3] → the second usable template [M 0x137cb0:41-56]");
+        assert!(s.used[3], "the picked template is used this epoch [M :82]");
+    }
+
+    /// A rank inside the usable count spawns even with used templates before it — the used ones
+    /// are walked past without consuming the rank [M :41-56].
+    #[test]
+    fn a_rank_zero_spawns_the_first_usable() {
+        let mut s = spawner(4);
+        s.used[0] = true;
+        let a = s.update(&mut Channels::default(), 0, 0, |_| false, |_| false, |_, _| true, |_| false, |_| true,
+            &mut |_| 0);
+        assert_eq!(a, Action::Spawn(1), "rank 0 → the first usable template [M 0x137cb0:41-56]");
     }
 }

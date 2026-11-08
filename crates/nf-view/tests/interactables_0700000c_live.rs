@@ -402,3 +402,36 @@ fn the_sniper_ammo_pickup_credits_the_pool_and_the_tower_pair_sits() {
     assert_eq!(owned_now, owned_before, "the ammo take never arms the weapon — case 1 has no equip arm [M 0x18e650]");
     assert!(!gone(&w, i520), "sister: the tower pair #520 still sits");
 }
+
+/// The display vent's way out is a crawl: the pocket at the shaft's south end opens into the hall
+/// through `ventblocker_01` #457, a one-way pane whose normal faces the hall [D; M Dist2Tri
+/// 0x109770's behind-plane code 99]. It is the only way off the start walkway. Sister: the same
+/// crawl from the hall side stays shut.
+#[test]
+fn the_vent_crawl_passes_the_one_way_pane_and_the_hall_side_stays_shut() {
+    let mut w = ready();
+    let crawl = |w: &mut Walker, yaw: f32, ticks: u32| {
+        for t in 0..ticks {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let err = walker::wrap_pi(yaw - sim.bond.yaw);
+            let input = nf_game::player::Input {
+                crouch: t < 2,
+                turn: err.clamp(-0.08, 0.08),
+                forward: if err.abs() > 0.3 { 0.0 } else { 1.0 },
+                ..Default::default()
+            };
+            w.tick(input, false);
+        }
+    };
+    let start = drop_at(&mut w, [5.6, 12.9, -111.0]);
+    assert!((12.5..13.2).contains(&start[1]), "the shaft floor 11.84 [D], got {start:?}");
+    crawl(&mut w, std::f32::consts::PI, 240);
+    let out = w.scene.sim.as_ref().unwrap().bond.pos;
+    assert!(out[2] < -112.8 && out[1] < 12.6, "the crawl leaves the shaft into the hall (11.27 [D]), got {out:?}");
+
+    let mut w = ready();
+    drop_at(&mut w, [5.6, 12.4, -113.3]);
+    crawl(&mut w, 0.0, 240);
+    let back = w.scene.sim.as_ref().unwrap().bond.pos;
+    assert!(back[2] < -112.4, "the pane shuts the hall side (z -112.363 [D]), got {back:?}");
+}

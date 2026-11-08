@@ -88,17 +88,20 @@ fn the_intro_freeze_disables_every_drone_and_shields_them_from_bullets() {
     let _ = all_disabled;
 }
 
-/// The searchlight's spot ray must pick the player: the ray's pick flags 0x18 do not exclude the player's
-/// class [M Collide_PickObj 0x1eae80:26-40 — the class-3 exclusion is mask 0x400], so when the beam is on
-/// Bond the spot lands on his world sphere (`obj+0x80` centre, `obj+0x8C` radius 1.0576 [L]) instead of
-/// running past him to the ground behind, and the arm test `Vec_Dist3D(spot, glb_players+0x30) <= 2.0`
-/// [M Searchlight_Update 0x1cb900:251] fires. The test drives the REAL `Searchlights::update` against the
-/// real 07000006 world with a pinned head (`half = 0` holds the sweep at the set yaw/pitch) beaming over
-/// the open spawn courtyard: the ray crosses Bond's chest and its static continuation hits the ground ~3
-/// units past him — pre-fix the spot lands there (dist > 2.0, no arm); post-fix the sphere hit replaces it,
-/// the spot lands on him, and the light arms (state 0 → 1) and raises its alarm channel.
+/// The searchlight's spot ray does not pick the player. `Searchlight_Update` calls
+/// `Collide_RayIntersect(head, end, cel, self, 0, &hits, 0, 0x18)`: the 0x18 rides t3 in the jal's
+/// delay slot (`li t3,0x18` at 0x1cbe2c; the ninth argument is `sw zero,0(sp)` at 0x1cbe10) into
+/// HITTEST+0x98 [M 0x1cb900:206-208, 0x1ec690:110]. Bit 0x10 of that word skips the cel object walk
+/// that calls `Collide_PickObj` and the forced list [M Collide_Pick 0x1eb320:314-328, 370-374], so
+/// the ray meets static geometry only, Bond never. The arm test `Vec_Dist3D(spot, glb_players+0x30)
+/// <= 2.0` [M 0x1cb900:251] therefore reads the ground spot. The test drives the REAL
+/// `Searchlights::update` against the real 07000006 world with a pinned head (`half = 0` holds the
+/// sweep) and Bond in the open sky above the map (y 150, above every tower): the beam crosses his
+/// chest, the static ray finds nothing, the spot stays undrawn at its -10000 park, the light never
+/// arms and raises no alarm. (The earlier form of this test pinned a port-only ray-vs-player-sphere
+/// pick, the spot resting on Bond; it fails on that pick.)
 #[test]
-fn the_spot_ray_picks_bond_and_arms_the_light_from_his_sphere() {
+fn the_spot_ray_passes_bond_and_the_light_stays_unarmed() {
     let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load("07000006.bin");
     {
@@ -110,10 +113,10 @@ fn the_spot_ray_picks_bond_and_arms_the_light_from_his_sphere() {
         // The discriminator needs 100 units of clear air along the ray, which the castle's terraces and
         // doors never offer at chest height (measured by probe: the gate courtyards are covered, the high
         // terraces are parapet-stepped and door-gapped). So the pinned head and Bond go into the open sky
-        // above the map (y 150 — above every tower), where the level ray finds nothing at all: pre-fix the
-        // static ray misses, the spot never draws and the light never arms; post-fix the player-pick sphere
-        // is the ray's first hit, the spot lands on Bond, and the arm test fires. The ray decision itself —
-        // the thing the fix changes — is exercised against the real `Searchlights::update` and world data.
+        // above the map (y 150 — above every tower), where the level ray finds nothing at all: the game's
+        // static-only ray misses, the spot never draws and the light never arms; the old port-only
+        // player-pick sphere made Bond the ray's first hit and armed the light. The ray decision itself
+        // is exercised against the real `Searchlights::update` and world data.
         let bond_pos = [40.0f32, 150.0, -4.3];
         let centre = [bond_pos[0] - 0.1347, bond_pos[1] - 0.1267, bond_pos[2] + 0.2402];
         let head_pos = [40.0f32, centre[1], -2.9];
@@ -151,9 +154,10 @@ fn the_spot_ray_picks_bond_and_arms_the_light_from_his_sphere() {
             if dist <= 2.0 { on_him = true; }
             eprintln!("[ray] spot ({:.2},{:.2},{:.2}) dist {dist:.2} state {}", sp[0], sp[1], sp[2], sl.parts[0].state);
         }
-        assert!(on_him, "the spot lands on Bond (dist <= 2.0): the ray picked his world sphere, not the ground behind him");
-        assert!(armed, "the arm test fires (state 0 → 1) [M 0x1cb900:251]");
-        assert!(alarmed, "tracking raises the alarm channel [M state-1 entry]");
+        assert!(!on_him, "the spot never lands on Bond: the 0x18 ray skips every object [M 0x1eb320:314-328]");
+        assert!(sl.parts[1].pos[1] < -9000.0 && !sl.parts[1].drawn, "no static hit in open sky: the spot stays parked and undrawn [M 0x1cb900:210-212]");
+        assert!(!armed, "the arm test never fires (state stays 0) [M 0x1cb900:251]");
+        assert!(!alarmed, "no tracking, no alarm channel");
     }
 }
 

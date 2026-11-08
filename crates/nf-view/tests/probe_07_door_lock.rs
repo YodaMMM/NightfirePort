@@ -32,6 +32,34 @@ fn probe_the_door_across_the_scene() {
         for _ in 0..400 { sim.step_bond(Input::default(), false, false, false); if !sim.disabled { break; } }
         dump(sim, "boot");
     }
+    // Drake's reveal first, as the real route crosses it (TouchOnce #356, out 0x15): ch 0x15 is the
+    // library door pair's second channel, so #404/#417 leave their post [D p6 = 21]. A Bond put on
+    // #412 while they still stand is past their line, and the pair fails the mission at once
+    // (zone 3, reason 0xc [M NDrone2_DoorGuardHandler 0x1416d8; 0x160648:84-94]).
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        let c = sim.drones.triggers.iter()
+            .find(|t| t.kind == nf_game::triggers::kind::TOUCH_ONCE && u32::from(t.out) == 0x15)
+            .map(|t| t.centre()).expect("TouchOnce #356");
+        sim.bond.pos = [c[0], c[1], c[2]];
+    }
+    for t in 0..4000u32 {
+        let sim = scene.sim.as_mut().unwrap();
+        if !sim.disabled && t > 60 { break; }
+        sim.drones.scripts.skip_request = sim.disabled;
+        sim.step_bond(Input::default(), false, false, false);
+    }
+    for _ in 0..600 {
+        let sim = scene.sim.as_mut().unwrap();
+        if sim.drones.list.iter().filter(|d| d.placement == 404 || d.placement == 417).all(|d| d.state != 0x31) { break; }
+        sim.step_bond(Input::default(), false, false, false);
+    }
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x15), "the reveal plate raised ch 0x15");
+        assert!(!sim.drones.channels.on(99), "the reveal walk failed nothing");
+        dump(sim, "after the reveal");
+    }
     // Teleport onto the hall walk-in plate (the interact style) — the real trigger runs the scene.
     {
         let sim = scene.sim.as_mut().unwrap();

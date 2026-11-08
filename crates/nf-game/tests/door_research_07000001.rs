@@ -27,7 +27,7 @@ fn door_research_07000001() {
     let doors = Doors::create(ps, &blocks, |p| {
         let o = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(om, oi)| &level.maps[om].objects[oi]) }
                 else { level.maps[m].objects.get(p.index as usize) };
-        o.map(|o| (o.hashcode, o.centre, o.radius))
+        o.map(|o| (o.hashcode, o.centre, o.radius, o.flags))
     });
 
     // Build the collision world exactly like Drones::attach_level / scene.rs does:
@@ -129,7 +129,7 @@ fn door_autoclose_blocked_diagnostic_07000001() {
     let mut doors = Doors::create(ps, &blocks, |p| {
         let o = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(om, oi)| &level.maps[om].objects[oi]) }
                 else { level.maps[m].objects.get(p.index as usize) };
-        o.map(|o| (o.hashcode, o.centre, o.radius))
+        o.map(|o| (o.hashcode, o.centre, o.radius, o.flags))
     });
     let mut ch = Channels::default();
 

@@ -78,7 +78,14 @@ fn equip(scene: &mut nf_view::scene::Scene, w: u8) {
     let draw = Input { switch_to: Some(w), ..Default::default() };
     for _ in 0..60 {
         scene.sim.as_mut().unwrap().step_bond(draw, false, false, false);
-        if scene.sim.as_ref().unwrap().gun.weapon == w { return; }
+        if scene.sim.as_ref().unwrap().gun.weapon == w {
+            // The draw must end before the fire press: the trigger's press edge reaches `Player_WeaponFiring`
+            // through the holster/draw and is spent there (the view-state gate refuses that shot and a held
+            // trigger never re-arms) [M 0x1a5460: Input_Action(9, 4) before the +0xF4 gate]. A player lets the
+            // draw finish, then presses.
+            for _ in 0..300 { if scene.sim.as_ref().unwrap().gun.switch_state == 0 { return } scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+            panic!("the {w:#x} draw did not end");
+        }
     }
     panic!("weapon {w:#x} did not equip");
 }
@@ -282,8 +289,10 @@ fn the_tased_guard_killed_while_down_drops_nothing() {
     place_bond(&mut scene, gi, 2.5, false);
     let before = scene.sim.as_ref().unwrap().drones.pickups.len();
     let mut died_at = None;
-    for _ in 0..1500u32 {
-        steer_at(&mut scene, gi, true, 0.3);
+    // A tap every 9th tick, as the semi-auto P2K is fired: with the draw now finished first (see
+    // `equip`), a held trigger would spend its one press before the steer has turned Bond onto him.
+    for t in 0..1500u32 {
+        steer_at(&mut scene, gi, t % 9 == 0, 0.3);
         if is_dead(scene.sim.as_ref().unwrap().drones.list[gi].state) { died_at = Some(()); break; }
     }
     died_at.expect("the downed guard dies under P2K fire");

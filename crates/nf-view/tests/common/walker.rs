@@ -122,6 +122,9 @@ pub struct Walker {
     pub skip_cutscenes: bool,
     pub report: Report,
     pub total_ticks: u32,
+    /// Called after every stepped tick with the scene and the tick count (an observer: a probe or a
+    /// per-tick invariant check over a walk). `None` by default.
+    pub on_step: Option<Box<dyn FnMut(&Scene, u32)>>,
     pos: V3,
     last_sample: V3,
     sample_tick: u32,
@@ -169,6 +172,22 @@ pub struct Walker {
     /// length. `DroneWeap_DoBulletAccuracy` 0x179740 forces every round to hit under 3.0 u
     /// (`if (dist < 3.0) bVar2 = true` [M :113-115]), so a fight at 1-2 u takes the whole volley.
     pub keep_off: Option<f32>,
+    /// OPT-IN (guard-radii-16-chasers): a fire tap with a grenade-family weapon in hand is a
+    /// THROW, not a shot — the frag's 210-tick fuse then detonates beside Bond's own follow-up
+    /// path (the measured 10959 self-blast death at (−5.83, −21.99, −163.14): the kill loop's
+    /// dry re-arm cycled onto the frag 0x34, the next taps threw it, and the loot walks strolled
+    /// into the blast — the ledger's two −10.00/−2.60 "world" hits, the frag record's own
+    /// radius 8 / damage 100 [L USATxt.dat]). When set, `tick_fire` downgrades the throw to an
+    /// idle tick and `switch_to_armed` cycles past the grenade hands, so every tap is a bullet.
+    /// Default OFF — every other walk keeps master's behaviour.
+    pub no_grenade_throws: bool,
+    /// The first `no_grenade_throws` downgrade was logged (one line per walk, not per tap).
+    grenade_downgrade_logged: bool,
+    /// OPT-IN: in `shoot_bounded`, a walled target west of this x is never flanked: the flank's
+    /// perpendicular point lands inside a pocket beside the guard's pack, where a player would
+    /// not walk to reach a guard he cannot see. Bond holds instead and returns after three holds,
+    /// so the caller's round loop gets the window.
+    pub flank_hold_x: Option<f32>,
     /// The walked path: a coarse breadcrumb of ground Bond actually covered (pushed in
     /// tick_inner, ~2 u resolution, 512 points). The resupply rule draws its corridor from it —
     /// see `resupply` for why the harness must not take off-path ammo detours.
@@ -242,7 +261,9 @@ impl Walker {
     /// The walked breadcrumb (public for the escort's plate-box probe — break-debris-shatter-2).
     pub fn trail_points(&self) -> &[V3] { &self.trail }
 
-    pub fn new(scene: Scene) -> Walker {
+    pub fn new(mut scene: Scene) -> Walker {
+        // The walk's sound runs as in play: voices end by their length, so the 256-node pool frees.
+        nf_view::attach_headless_sound(&mut scene);
         let pos = scene.sim.as_ref().unwrap().bond.pos;
         let drone_watch: Vec<usize> = std::env::var("NF_DRONE_WATCH").ok()
             .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_default();
@@ -250,7 +271,7 @@ impl Walker {
         Walker {
             scene, top_up_health: true, dmg: DamageLog::new(), keep_alive: Vec::new(), stop_on_exit: true, skip_cutscenes: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
-            total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0,
+            total_ticks: 0, on_step: None, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0,
             sidestep: 0, sidestep_decays: false, max_y: pos[1], lenient: false,
             trail: Vec::new(),
             alarm_last: Vec::new(),
@@ -264,6 +285,9 @@ impl Walker {
             rises: Vec::new(),
             prefer_head: false,
             keep_off: None,
+            no_grenade_throws: false,
+            grenade_downgrade_logged: false,
+            flank_hold_x: None,
         }
     }
 
@@ -283,6 +307,7 @@ impl Walker {
             if let Some(d) = &self.dmg.died { panic!("[real-damage] {d}"); }
         }
         if self.tops_up() { self.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+        if let Some(f) = self.on_step.as_mut() { f(&self.scene, tick); }
     }
 
     fn sim(&mut self) -> &mut nf_view::scene::Sim { self.scene.sim.as_mut().unwrap() }
@@ -400,9 +425,41 @@ impl Walker {
     /// An empty clip with spare ammo reloads on this tick instead (the game's R; shoot_point's long
     /// windows outlive one clip — the walkreal corridor shot emptied on the captors before the box).
     pub fn tick_fire(&mut self, input: Input) {
+        if self.no_grenade_throws && self.gun_throws() {
+            // OPT-IN downgrade (the field's doc): the tap would THROW, and the frag's fuse
+            // detonates beside Bond's own follow-up path. A plain tick instead — the trigger
+            // stays cold; the walker's own re-arms cycle to a real gun.
+            if !self.grenade_downgrade_logged {
+                self.grenade_downgrade_logged = true;
+                let (w, c, s) = { let sim = self.scene.sim.as_ref().unwrap(); (sim.gun.weapon, sim.gun.clip, sim.gun.spare) };
+                eprintln!("[walk] no_grenade_throws: the tap with {w:#04x} (clip {c} spare {s}) in hand would THROW it — downgraded to an idle tick");
+            }
+            self.tick(input, false);
+            return;
+        }
         let (clip, spare) = { let sim = self.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare) };
-        let reload = clip == 0 && spare > 0;
-        self.tick_inner(input, false, true, reload);
+        // Guns only: the gadgets' meters recharge on their own, and a held beam stays held.
+        let gun = self.scene.sim.as_ref().unwrap().gun.weapon < 0x48;
+        let reload = gun && clip == 0 && spare > 0;
+        // The reload key needs the trigger up, and a press under a draw is spent on the view-state
+        // gate [M Player_WeaponFiring 0x1a5460]: the held fire waits for both.
+        let drawing = self.scene.sim.as_ref().unwrap().gun.switch_state != 0;
+        self.tick_inner(input, false, !reload && !drawing, reload);
+    }
+
+    /// The in-hand weapon's fired round is a grenade-family projectile: the port's own spawn gate
+    /// for the Grenade object — the record's gravity bit AND a contact-explode/bounce/stick
+    /// collision flag [M 0x12c5a0 + Bullet_CollisionHandler 0x12ce80's arms; the delta-repeater
+    /// comment in scene.rs's throw path pins the same predicate and moves the 0x11 bolt OFF it].
+    /// The chain into 16 owns exactly the frag 0x34 and the mine 0x37 of this family [M 0x1a7ef8].
+    fn gun_throws(&self) -> bool {
+        let sim = self.scene.sim.as_ref().unwrap();
+        let w = sim.gun.weapon as usize;
+        if !(2..=0x47).contains(&sim.gun.weapon) { return false; }
+        let r = &sim.data().weapons.records[w];
+        let f6c = u32::from_le_bytes(r[0x6c..0x70].try_into().unwrap());
+        let f70 = u32::from_le_bytes(r[0x70..0x74].try_into().unwrap());
+        f6c & 0x8 != 0 && f70 & (0x4 | 0x80 | 0x100) != 0
     }
 
     fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool, reload: bool) {
@@ -427,10 +484,14 @@ impl Walker {
         for (k, &c) in self.rise_watch.iter().enumerate() {
             if watch_before[k] || !sim.drones.channels.on(c as u32) { continue; }
             // The writer ran inside this step: test the capsule at both ends of the tick's move (the
-            // sim's own player toucher sits at pos − 0.6, drone.rs `Toucher::player`).
+            // sim's own player toucher sits at pos − 0.6, drone.rs `Toucher::player`), and Bond's
+            // collide segment for the raw plates (`Toucher::raw`).
+            let (sa, sb) = sim.bond.capsule_seg();
+            let (da, db) = (sa[1] - sim.bond.pos[1], sb[1] - sim.bond.pos[1]);
             let touching: Vec<usize> = sim.drones.triggers.iter()
                 .filter(|t| t.out == c && !t.tris.is_empty())
-                .filter(|t| [feet_before, sim.bond.pos].iter().any(|&f| t.touched_by(&nf_game::triggers::Toucher::player([f[0], f[1] - 0.6, f[2]]))))
+                .filter(|t| [feet_before, sim.bond.pos].iter().any(|&f| t.touched_by(&nf_game::triggers::Toucher::player([f[0], f[1] - 0.6, f[2]]))
+                    || t.touched_by(&nf_game::triggers::Toucher::raw([f[0], f[1] + da, f[2]], [f[0], f[1] + db, f[2]], 0.55))))
                 .map(|t| t.placement).collect();
             self.rises.push((c, self.total_ticks, sim.bond.pos, touching));
         }
@@ -616,7 +677,11 @@ impl Walker {
                 let sim = self.scene.sim.as_ref().unwrap();
                 (sim.gun.weapon, sim.gun.clip, sim.gun.spare)
             };
-            if w >= 2 && w <= 0x47 && c + s > 0 { return true; }
+            // no_grenade_throws (opt-in): a grenade hand is not a fightable gun — the tap would
+            // THROW (tick_fire's downgrade) — so the cycle passes it like an empty weapon.
+            let armed = w >= 2 && w <= 0x47 && c + s > 0
+                && !(self.no_grenade_throws && self.gun_throws());
+            if armed { return true; }
             eprintln!("[walk] {label}: cycling weapons ({k}) (weapon {w:#x} clip {c} spare {s})");
             self.tick(Input { weapon_cycle: 1, ..Default::default() }, false);
             for _ in 0..60 { self.tick(Input::default(), false); } // the holster/draw cycle
@@ -625,7 +690,7 @@ impl Walker {
             let sim = self.scene.sim.as_ref().unwrap();
             (sim.gun.weapon, sim.gun.clip, sim.gun.spare)
         };
-        w >= 2 && w <= 0x47 && c + s > 0
+        w >= 2 && w <= 0x47 && c + s > 0 && !(self.no_grenade_throws && self.gun_throws())
     }
 
     /// The return-fire switch (damage_log.rs): this walker's `switch_to_armed` already cycles
@@ -672,7 +737,14 @@ impl Walker {
             // [world.rs:1626-1628]. level-02-every-objective-4 2026-10-31.
             let ray = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
             let Some(t_box) = nf_game::damage::ray_box(eye, ray, &b) else { continue };
-            let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, c);
+            // GLASS_SIGHT (opt-in, damage_log.rs with_glass_sight, glass-pierce-2): the sight ray
+            // takes the flight's own mat-0x10 drop — the game's gun rounds pass intact glass and
+            // the walker's fights must answer the shooter behind it.
+            let tw = if GLASS_SIGHT.with(|c| c.get()) {
+                sim.world.segment_flight_scoped(sim.world.find_cel(eye), eye, c, true)
+            } else {
+                sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, c)
+            };
             if tw.is_some_and(|w| w < t_box) { continue; }
             // Close in only: the head box is ~0.2 u, and past ~6 u Bond's own spread covers more
             // than that (the 02 geisha-2 captor at 11.2 u took 23 head-aimed rounds unhurt).
@@ -752,6 +824,7 @@ impl Walker {
         // own view of the target's death walk; tick_inner's traces don't run here (this loop
         // calls step_bond directly).
         let kill_trace = std::env::var_os("NF_KILL_TRACE").is_some();
+        let kill_trace_pos = std::env::var_os("NF_KILL_TRACE_POS").is_some();
         let mut kt_health = f32::MAX;
         let mut kt_state = 0xffu8;
         for t in 0..cap {
@@ -764,6 +837,11 @@ impl Walker {
                             kt_health, d.health, d.state, d.mode, d.corpse, d.raise,
                             sim.drones.channels.on(0x0e), d.last_damage, d.hit.map(|h| h.part));
                         kt_health = d.health; kt_state = d.state;
+                    }
+                    if kill_trace_pos && t % 300 == 0 {
+                        let bp = sim.bond.pos;
+                        eprintln!("[killtrace] {label} +{t} d{di} bond {:?} d {:?} aim {:?} st {:#x} los {}", bp, d.pos, aim, d.state,
+                            aim.map(|a| sim.world.segment([bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]], a)).is_none());
                     }
                 }
                 if sim.drones.list[di].corpse || sim.drones.list[di].health <= 0.0 { return true; }
@@ -826,6 +904,12 @@ impl Walker {
                 let clip_empty = sim.gun.clip == 0 && sim.gun.spare > 0;
                 let reload = clip_empty && t % 20 == 0;
                 let blocked = aim.is_none() || shield_block;
+                if kill_trace_pos && t % 30 == 0 {
+                    let dist_now = dxz(bp, dp);
+                    eprintln!("[killtrace] {label} +{t} d{di} err {err:+.4} perr {perr:+.4} yaw {:.3} pitch {:.3} dist {dist_now:.1} clip {} spare {} zg {} blocked {blocked} w {:#x} rs {} rb {} fs {} pend {} tm {:.1}",
+                        sim.bond.yaw, sim.bond.pitch, sim.gun.clip, sim.gun.spare, sim.bond.zero_g_active,
+                        sim.gun.weapon, sim.gun.reload_state, sim.gun.refire_blocked, sim.gun.fire_state, sim.gun.pending, sim.gun.timer);
+                }
                 blocked_streak = if blocked { blocked_streak + 1 } else { 0 };
                 // Tap only when the view is ON the part (the boxes are ~0.3 wide; the fixed-period
                 // taps sprayed ammo at a drifting aim) and SOMETHING is exposed.
@@ -868,6 +952,15 @@ impl Walker {
             // graph to a flank point: perpendicular to the guard bearing, alternating the side,
             // growing the offset 3→5→7. This is the player's walk-around-the-cover; it ends when a
             // part's segment clears (the loop above picks it up).
+            if blocked_streak >= 540 && flanks < 6
+                && self.flank_hold_x.is_some_and(|wx| self.scene.sim.as_ref().unwrap().drones.list[di].pos[0] < wx) {
+                flanks += 1;
+                blocked_streak = 0;
+                last_progress = t;
+                eprintln!("[walk] {label}: no exposed part for 540 ticks: holding (no flank into the pocket, hold {flanks})");
+                if flanks >= 3 { return false; }
+                continue;
+            }
             if blocked_streak >= 540 && flanks < 6 {
                 flanks += 1;
                 let side = if flanks % 2 == 1 { 1.0 } else { -1.0 };
@@ -1086,7 +1179,14 @@ impl Walker {
             let sim = self.scene.sim.as_ref().unwrap();
             if self.stop_on_exit && sim.drones.level_exit.is_some() {
                 self.report.legs.push((label.to_string(), self.total_ticks - start_ticks, self.pos));
-                eprintln!("[walk] {label}: level_exit reached at +{} ticks", self.total_ticks - start_ticks);
+                if std::env::var_os("NF_RF_TRACE").is_some() {
+                    eprintln!("[walk] {label}: level_exit reached at +{} ticks (exit {:?} cold {} restart {} mission state {} internal {} fail_label {:#x} menu_open {} health {:.1})",
+                        self.total_ticks - start_ticks, sim.drones.level_exit, sim.drones.level_exit_cold,
+                        sim.drones.level_exit_restart, sim.drones.mission.state, sim.drones.mission.internal,
+                        sim.drones.mission.fail_label, sim.drones.mission.menu_open, sim.drones.health.health);
+                } else {
+                    eprintln!("[walk] {label}: level_exit reached at +{} ticks", self.total_ticks - start_ticks);
+                }
                 return self.total_ticks - start_ticks;
             }
             if self.scene.sim.as_ref().unwrap().disabled {
@@ -1451,19 +1551,25 @@ impl Walker {
                 self.tick(input, false);
             }
         }
-        for k in 0..60u32 {
+        for k in 0..150u32 {
             let sim = self.scene.sim.as_ref().unwrap();
-            let desired = (dpos[0] - sim.bond.pos[0]).atan2(dpos[2] - sim.bond.pos[2]);
+            let lc = sim.drones.doors.list[di].live_sph().0;
+            let desired = (lc[0] - sim.bond.pos[0]).atan2(lc[2] - sim.bond.pos[2]);
             let err = wrap_pi(desired - sim.bond.yaw);
-            // The use point is head + look (radius 1, doors' reach 2.5 [M 0x1a5170; door.rs
-            // player_use]): aim the LOOK at the door's centre (the placement pos is its base — a
-            // door a floor below the approach needs the pitched look, or the E misses).
-            let centre = [dpos[0], dpos[1] + 1.0, dpos[2]];
+            // The use point is head + look (radius 1 [M 0x1a5170]): the pick keeps the door when
+            // that point is inside its live world sphere and within 1.0 in front of a leaf face
+            // [M Collide_PickObj 0x1eae80; Collide_Intersect 0x1ebaa8 → Intersect_PointGeom
+            // 0x1e92d8; nf_game::usepick] — aim the LOOK at the leaf's live sphere centre (the
+            // placement pos is its hinge base — a door a floor below the approach needs the
+            // pitched look, or the E misses).
+            let centre = sim.drones.doors.list[di].live_sph().0;
             let to = [centre[0] - sim.bond.pos[0], centre[1] - (sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop), centre[2] - sim.bond.pos[2]];
             let want_pitch = (to[1] / to[0].hypot(to[2]).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
             let perr = want_pitch - sim.bond.pitch;
             let d = &sim.drones.doors.list[di];
-            let far = dxz(sim.bond.pos, dpos) > 1.7;
+            // Close in to 1.85 of the leaf's centre: the use point then sits ~0.85 in front of
+            // the leaf (inside the refine's 1.0), and Bond stays out of a 1-unit leaf's swing.
+            let far = dxz(sim.bond.pos, centre) > 1.85;
             let pressing = d.state & 0xc == 0 && k % 6 == 0; // one edge per 6 ticks
             let input = Input {
                 turn: err.clamp(-0.08, 0.08),
@@ -1472,7 +1578,24 @@ impl Walker {
                 ..Default::default()
             };
             self.tick(input, pressing);
+            if std::env::var_os("NF_WALK_DOOR_DBG").is_some() {
+                let sim = self.scene.sim.as_ref().unwrap();
+                let st: Vec<(usize, u16, f32)> = sim.drones.doors.list.iter().enumerate().filter(|(_, d)| dxz(d.pos, dpos) < 3.0).map(|(j, d)| (j, d.state, d.pos01)).collect();
+                eprintln!("[door-dbg] k {k} press {pressing} bond {:?} yaw {:.2} pitch {:.2} doors {:?}", sim.bond.pos, sim.bond.yaw, sim.bond.pitch, st);
+            }
             if self.scene.sim.as_ref().unwrap().drones.doors.list[di].state & 0x8 != 0 { break; } // opening
+            // A double door: the press the pick gave to the twin leaf counts — pressing on would
+            // toggle the twin shut again.
+            if pressing && self.scene.sim.as_ref().unwrap().drones.doors.list.iter().enumerate()
+                .any(|(j, d)| j != di && dxz(d.pos, dpos) < 3.0 && d.state & 0x8 != 0) { break; }
+        }
+        // Let the swing finish before walking on (the press lands from ~1.8 out — the pick's
+        // refine reach — so a leaf still swinging meets Bond in the doorway and reverses).
+        for _ in 0..90u32 {
+            let swinging = self.scene.sim.as_ref().unwrap().drones.doors.list.iter()
+                .any(|d| dxz(d.pos, dpos) < 3.0 && d.state & 0x8 != 0);
+            if !swinging { break; }
+            self.tick(Input::default(), false);
         }
     }
 
@@ -1660,7 +1783,72 @@ pub fn hall_restage(w: &mut Walker, label: &str) {
 /// Dry inside the hall: a player steps out the door he came in by. East door (7.9,5.3,11.1)
 /// [D placement] → the corridor boxes (resupply's walked-path corridor) → back inside.
 pub fn hall_ammo_ladder(w: &mut Walker, label: &str) {
+    // Along the hall's east side first: straight from the hall middle the leg wedges at
+    // (5.45, 11.6) beside the door frame.
+    w.walk_nav_to([5.6, 6.37, 14.8], &format!("{label}: the hall's east side"), 1.0);
     w.walk_nav_to([7.9, 5.3, 11.1], &format!("{label}: out the hall's east door"), 1.6);
     w.resupply(label);
     hall_restage(w, label);
+}
+
+/// Drake's reveal from the hall floor (83.1, −50.5): south along the hall's own nodes ([D path-0
+/// dump]: 26 (83.1,−56.2) → 41 (83.1,−61.1) the stair foot), up the west stairs (nodes 41→42→43:
+/// (83.1,43.4,−61.1)→(83.2,46.4,−70.2)→(95.6,49.4,−70.6)), north onto the balcony and into
+/// TouchOnce #356 (box 92.9–98.0, 49.0–53.8, −79.8–−78.9 [D]) → ch 0x15 → SP #419 (0x06000072, the
+/// party fly-through where Bond first sees Drake, 3000 ticks [M levels.md §5.1]), skipped with the
+/// game's own skip action; then back down the west stairs to the hall floor. Ch 21 is the door
+/// guards' second channel: #404/#417 (the library door) and #441/#442 (the east corridor) leave on
+/// it [D p6 = 21, p8 = 100 — the port's second-tag arm].
+#[allow(dead_code)]
+pub fn drakes_reveal_07(w: &mut Walker) {
+    for (name, at) in [
+        ("the hall south-west node", [83.1f32, 43.6, -56.2]),
+        ("to the west stair foot", [83.1, 43.6, -61.1]),
+    ] {
+        w.walk_nav_to(at, name, 1.4);
+    }
+    w.climb_stairs([83.2, 46.4, -70.2], "the west stairs", 1.6, 4200);
+    w.climb_stairs([95.6, 49.4, -70.6], "the stair head", 1.6, 4200);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[07] upstairs at tick {} bond {:?}", w.total_ticks, sim.bond.pos);
+        assert!(sim.bond.pos[1] > 48.0, "Bond must stand on the upper floor (y {:.2})", sim.bond.pos[1]);
+        assert!(!sim.drones.channels.on(21), "ch 21 is off before the reveal plate");
+    }
+    w.walk_nav_to([95.5, 49.4, -76.5], "the balcony north", 1.5);
+    {
+        let target = [95.4f32, 49.4, -79.4]; // inside #356's XZ (92.9–98.0, −79.8–−78.9 [D])
+        for t in 0..1500u32 {
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x15) { break; }
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            let desired = (target[0] - p[0]).atan2(target[2] - p[2]);
+            let err = wrap_pi(desired - sim.bond.yaw);
+            let input = Input { turn: err.clamp(-0.08, 0.08), forward: if err.abs() > 1.0 { 0.0 } else { 1.0 }, ..Default::default() };
+            w.tick(input, false);
+            if t % 300 == 0 { eprintln!("[07 reveal t{t}] bond {:?} 0x15 {}", w.scene.sim.as_ref().unwrap().bond.pos,
+                w.scene.sim.as_ref().unwrap().drones.channels.on(0x15) as u8); }
+        }
+    }
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x15), "Drake's reveal plate #356 fired ch 0x15 [D placements]");
+    // The fly-through holds Bond; the walker's tick carries the game's skip action until it ends.
+    w.wait_enabled(4200, "the Drake fly-through");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.scripts.players.iter()
+            .any(|p| p.scripts.contains(&0x0600_0072) && p.state >= 3),
+            "the Drake fly-through (0x06000072) ran through the real trigger [M levels.md §5.1]");
+        let guards: Vec<usize> = sim.drones.list.iter()
+            .filter(|g| matches!(g.placement, 404 | 417) && g.present).map(|g| g.placement).collect();
+        assert!(guards.is_empty(), "the library door guards leave on ch 21 [D p6 = 21], still there: {guards:?}");
+    }
+    w.walk_nav_to([95.6, 49.4, -70.6], "back on the west balcony", 1.4);
+    w.climb_stairs([83.2, 46.4, -70.2], "down the west stairs", 1.6, 4200);
+    for (name, at) in [
+        ("the west stair foot", [83.1f32, 43.4, -61.1]),
+        ("the hall south-west node", [83.1, 43.6, -56.2]),
+        ("the hall floor", [83.1, 43.6, -50.5]),
+    ] {
+        w.walk_nav_to(at, name, 1.4);
+    }
 }

@@ -32,6 +32,14 @@ one tick in six to respect the edge trigger.
   own object excluded; every hit is walked (HITDATA+0x58 = object), so walls do not stop the
   list. **There is no global facing cone** — directionality comes from the 1-unit forward
   offset plus the per-class checks below.
+- Which objects the sphere keeps (use-pick, `crates/nf-game/src/usepick.rs`, shared by every
+  class arm): (1) `|centre − obj+0x80| < 1.0 + obj+0x8C` — obj+0x80 is the glist's local bounds
+  centre posed by the object matrix (`Control_BuildWorldSph` 0x133070), NOT the matrix
+  translation [M Collide_PickObj 0x1eae80]; (2) the centre lies within 1.0 in front of one of
+  the glist's collision triangles (`Collide_Intersect` 0x1ebaa8 → `Intersect_PointGeom`
+  0x1e92d8; a miss leaves the node at 1e8 and 0x1ec940 frees it). Consequence: a floor grate
+  answers when Bond looks down at it (0700000b #98: standing on it, roughly 55° down or more), not when
+  he looks level over it.
 - Dispatch switch on `obj+0xFF` (:126-175): `0 (obj+0xE4 != 0)` → `SP_Activate`, 0x1C → Door,
   0x1D → Trigger, 0x25 → SimpleScript, 0x28 → Car, 0x36 → GunTurret, 0x38 → Monitor,
   0x3A → Lock (with an inline `dot >= 0` gate), 0x47 → GunImplacement, 0x49 → PCQWorm.

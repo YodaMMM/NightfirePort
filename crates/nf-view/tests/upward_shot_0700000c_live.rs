@@ -92,9 +92,16 @@ fn the_hip_pull_dries_three_clips_on_the_deck_sentry() {
     let killed = w.stand_and_fire(di, 3600);
     let sim = w.scene.sim.as_ref().unwrap();
     let hp = sim.drones.list[di].health;
+    // The realization of the 15 hip draws is the shared stream's: master's stream dried the
+    // clips, the stream join's (spawn miss wobble [M 0x137cb0:58-59], guard rounds on the
+    // breakables, the joined walk fixes) landed the first tap, and join-final's stream dries
+    // them again (measured on 3c94fa9ea: hp 10 -> 10, not killed). The [M] law this test guards
+    // is the CONE (0.14 rad hip spread [M 0x12c5a0:139-170]; the aimed act's zero spread is the
+    // sister test); the pin follows the tree's measured realization. Live re-check: the same
+    // stand in PCSX2 settles whether the real game's hip pull lands at this spot.
     assert!(!killed && hp >= hp0,
-        "the hip pull LANDED on the deck sentry (hp {hp0} -> {hp}) — the pin is the dry-clip symptom; re-measure [L 0x2c10b8]");
-    eprintln!("[upward-shot] the hip stand: sentry #{di} hp {hp0} -> {hp} after the stand (the dry clips [L])");
+        "the hip pull LANDED on the deck sentry (hp {hp0} -> {hp}) — the pin is the measured dry-clip realization; re-measure [L 0x2c10b8]");
+    eprintln!("[upward-shot] the hip stand: sentry #{di} hp {hp0} -> {hp} killed {killed} (the measured realization)");
 }
 
 /// THE FIX, pinned: the SAME stand with the aim button held (`aimed_fights`) — the zero-spread

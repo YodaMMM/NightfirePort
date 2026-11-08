@@ -16,7 +16,7 @@
 //! - obj+0xff = 0x50 (class), obj+0xf4 = 0 (the update state).
 //!
 //! `SpaceLaser_Update` 0x1aa3f8 and `SpaceLaser_Register` 0x1aa9e8 are ported below (the
-//! script lifecycle behind a `script_playing` input). Sound: `sound-coverage.md:95` lists class
+//! script lifecycle behind the `script_playing` / `script_half` inputs). Sound: `sound-coverage.md:95` lists class
 //! 0x50 as MISSING (ids 0x46a / 0x5de here).
 
 /// One kind-0x38 placement's laser object (the ext block at obj+0xE0 plus obj+0xf4 [M 001aa8b8]).
@@ -60,17 +60,13 @@ pub struct SpaceLaser {
     pub deleted: bool,
     /// ext lane 3+0x0C as a bool: the whine handle being live (the port has no sound runtime).
     pub whine_on: bool,
-    /// The loaded script's tick clock — the port's `Script_Update` stand-in (the game runs
-    /// `Script_Update` every tick in states 1 and 3 [M 0x1aa3f8:116/:176]; `Script_IsPlaying`
-    /// 0x1db630 reports the play head against the stream's End marker [M Script_StreamEnd
-    /// 0x1db420 clears the play bit]). Advanced by the sim wiring after each `tick`.
-    pub script_ticks: u32,
-    /// The loaded script's [D] length (the lib record's `length` field; the wiring fills it at
-    /// the `LoadScript` hand-off from `Data::scripts` — 360/360/10 for the 1b records
-    /// [D docs/levels/0700001b-audit.md:606-612]). 0 = no script loaded (a missing script is
-    /// the game's own `Script_Load` failure — `Script_IsPlaying(0)` reports 0 and state 1
-    /// exits on the next tick).
-    pub script_len: u32,
+    /// Lane 2+0x0C: the loaded script's handle in the sim's creator-owned scripts
+    /// (`Scripts::owned`) — `Script_Load(id, 0x2d6200, 0x2d6200, …)` [M :87-112]; state 1's end
+    /// clears it without a free [M :122-126]. `None` = NULL.
+    pub script: Option<usize>,
+    /// The loaded script carries the `SpaceLaser_Register` 0x1aa9e8 callback (the tracking
+    /// pair's load passes it, the dead script's does not [M :100-108 / :87-94]).
+    pub script_register: bool,
     /// The live whine handle (`Sound_Play(100.0, 0x5de, 0, 0)`'s return, stored at
     /// ext lane 3+0x0C [M 0x1aa3f8:119-121]; `Sound_Stop`ed on the shared tail [M :231-235]).
     /// 0 = none. Written by the sim wiring only.
@@ -103,8 +99,8 @@ pub fn from_placement(placement: usize, params: &[(u32, u32)]) -> SpaceLaser {
         cooldown: 10.0,
         deleted: false,
         whine_on: false,
-        script_ticks: 0,
-        script_len: 0,
+        script: None,
+        script_register: false,
         whine_handle: 0,
     }
 }
@@ -116,9 +112,9 @@ pub fn from_placement(placement: usize, params: &[(u32, u32)]) -> SpaceLaser {
 /// lane 4 = the channels (p5 write / p6 kill / p7 arm).
 ///
 /// What one `SpaceLaser_Update` 0x1aa3f8 tick does to the outside world. The script lifecycle
-/// is abstracted: `SpaceLaserUpdate::script_playing` is fed by the caller each tick (the port's
-/// script-player wiring for these 0x060007c0/0x060007c1/0x060007e3 scripts is the same pending
-/// integration `space_missile.rs` documents — its pinned-decode approach applies here too).
+/// is the caller's: it plays the 0x060007c0/0x060007c1/0x060007e3 scripts as creator-owned
+/// SCRIPTINFOs (`Scripts::owned_*`), runs their `Script_Update` in states 1/3 before the tick and
+/// feeds `script_playing` / `script_half` from them.
 #[derive(Debug, PartialEq)]
 pub enum LaserOut {
     /// `Script_Load(id, 0x2d6200, 0x2d6200, 0,0,0, [callback], ext)` + `Script_Play(mode)` +
@@ -162,12 +158,16 @@ pub struct LaserBeam {
 }
 
 /// The per-tick inputs: the live channels, GameState+0x52, the player position quad
-/// (glb_players+0x30), whether the loaded script is still playing.
+/// (glb_players+0x30), and the loaded script after this tick's `Script_Update` (which the
+/// caller runs first in states 1 and 3 [M :116/:176]): `Script_IsPlaying` [M :122] and the
+/// whine gate `(u16)(SI+0xab0) >> 1 < SI+0xa0` — half the script's length behind its clock
+/// [M :117-118; SI+0xab0 = the header length, SI+0xa0 = the clock: Script_Load 0x1d8248:133/141].
 pub struct SpaceLaserTick<'a> {
     pub ch: &'a mut crate::triggers::Channels,
     pub frame: u32,
     pub player: V3,
     pub script_playing: bool,
+    pub script_half: bool,
 }
 
 impl SpaceLaser {
@@ -206,10 +206,9 @@ impl SpaceLaser {
                 }
             }
             1 => {
-                // [M :115-126 — Script_Update, the whine gate, the IsPlaying exit. The whine's
-                // volume compare `(u16)(SI+0xab0)>>1 < *(f32*)(SI+0xa0)` is script-internal;
-                // the port starts it on the first tick the handle is free.]
-                if !self.whine_on {
+                // [M :115-126 — Script_Update (the caller's), the whine gate (past half the
+                // script's length, the handle free), the IsPlaying exit.]
+                if t.script_half && !self.whine_on {
                     out.push(LaserOut::WhineStart);
                     self.whine_on = true;
                 }
@@ -306,7 +305,7 @@ mod tests {
 
     fn tick(l: &mut SpaceLaser, ch: &mut Channels, frame: u32, script_playing: bool) -> Vec<LaserOut> {
         let mut out = Vec::new();
-        let mut t = SpaceLaserTick { ch, frame, player: [1.0, 2.0, 3.0], script_playing };
+        let mut t = SpaceLaserTick { ch, frame, player: [1.0, 2.0, 3.0], script_playing, script_half: true };
         let mut rng = Rng::new(0);
         l.tick(&mut t, &mut rng, &mut out);
         out
@@ -322,7 +321,7 @@ mod tests {
         let mut rng_draws = Rng::new(0);
         for f in 0..600u32 {
             let mut out = Vec::new();
-            let mut t = SpaceLaserTick { ch: &mut ch, frame: f, player: [1.0, 2.0, 3.0], script_playing: false };
+            let mut t = SpaceLaserTick { ch: &mut ch, frame: f, player: [1.0, 2.0, 3.0], script_playing: false, script_half: false };
             l.tick(&mut t, &mut rng_draws, &mut out);
             assert!(out.is_empty());
             assert_eq!(l.state, 0);

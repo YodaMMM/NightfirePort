@@ -35,11 +35,10 @@
 //!   exit Event-3 (stream op 0x12 kind 3, param 0 → `+0x9c = −1` [M Script_EventHandler
 //!   0x1d94c0:97-101], nonzero) sits at Wait(L−1) [D decode: t3299/1799/2399 per script] and
 //!   fires on the update whose entry clock is L−1 — **state-1 tick L−1** (L = the p0 header
-//!   length [D]). The port plays the same stream as a tick counter with the [D]-decoded writes:
-//!   the lengths and every in-stream channel write below are disc reads, and the flow pins are
-//!   the [M] states — the observable behaviour (channel writes at ticks, the state exits) is the
-//!   script's; its anim-entity/sound streams are visual/audio and unported like the rest of the
-//!   object-side gfx.
+//!   length [D]). The sim plays the real scripts through the script runtime as creator-owned
+//!   SCRIPTINFOs (`Scripts::owned_*`, via `MissileScripts`): their entity, light and sound
+//!   streams run, and the channel writes and the exit hold come from the streams themselves.
+//!   The [D] tables below are the decode those streams carry; the unit tests replay them.
 //! - **state 2** [M 0x1aa25c]: `switch_channels[p4]` (the console channel 1..8) set → free the p0
 //!   script, load+play+`Script_Update` the **p2** script (ext+0x08 — its FIRST update runs on the
 //!   state-2 tick [M 0x1aa2b0]), `obj+0xf6 = 0`, `MissileDeploy[p4−1]=2`, state 3; not set → the
@@ -89,12 +88,13 @@
 //! scripts (060007c6 for missiles 1/3/5/7, 060007e1 for 2/4/6/8 [D]) end at **1200** and write
 //! ch 99 = 1 @t1000 [D]; the p2 scripts are per-missile (0600091c/06000920/06000921/06000922/
 //! 0600091b/06000923/06000924/06000925 [D]) ending at **1710/1170/1230/1610/1710/1410/1610/1170**
-//! with the per-missile writes in `P2_WRITES` [D]. The p1/p2 scripts carry no sub-scripts [D
-//! decode]; their EVENT kind 0x0c (@t End−5) sets `SCRIPTINFO+0xaa8 |= 0x10` [M 0x1d94c0:159-161],
-//! consumed only by the camera-fade path gated on `+0xaa8 & 0x40` [M 0x1da998:47-51] — camera
-//! false on every missile script [D header] — so it is sim-invisible. Their ENTITY type-0x31
-//! streams (the launch-bay meshes) and sounds 0x466/0x465/0x393 are visual/audio, unported like
-//! the port's other object gfx.
+//! with the per-missile writes in `P2_WRITES` [D]. The p2 scripts run op-0x1b sub-scripts
+//! (0600091b: 0x0600091a @t120, 0x060009f2 @t1000, 0x0600096e @t1120/t1132 [D decode]); their
+//! EVENT kind 0x0c (@t End−5) sets `SCRIPTINFO+0xaa8 |= 0x10` [M 0x1d94c0:159-161], the keep-
+//! objects bit, so the end leaves the meshes standing. Their ENTITY streams (the launch-bay
+//! meshes; the p1 flame 0x20007e1 is obj type 0xE4, which `Script_CreateEntity` 0x1d8968 has
+//! no arm for — a plain class-0 object, no hurt volume [M disasm 0x1d8990-0x1d8a18]) and sounds
+//! 0x466/0x465/0x393 now play.
 
 use crate::triggers::Channels;
 
@@ -123,16 +123,17 @@ pub const P2_LEN: [u32; 8] = [1710, 1170, 1230, 1610, 1710, 1410, 1610, 1170];
 /// The p1 scripts' in-stream channel writes (stream tick, channel) [D decode 2026-10-22:
 /// ch 99 = 1 @t1000 in both scripts].
 pub const P1_WRITES: &[(u32, u16)] = &[(1000, 99)];
-/// The p2 scripts' in-stream channel writes per missile index 1..8 [D decode 2026-10-22].
+/// The p2 scripts' in-stream channel writes per missile index 1..8 [D decode 2026-10-22]: the
+/// later column is 0x83..0x8a, the Apocalypse placements' latch channels.
 pub const P2_WRITES: [&[(u32, u16)]; 8] = [
-    &[(1, 81), (1000, 46), (1030, 83)],
-    &[(1, 82), (490, 84)],
-    &[(1, 83), (550, 85)],
-    &[(1, 84), (930, 86), (990, 41)],
-    &[(1, 85), (1030, 87), (1130, 42)],
-    &[(1, 86), (730, 88), (830, 43)],
-    &[(1, 87), (930, 89)],
-    &[(1, 88), (490, 90)],
+    &[(1, 81), (1000, 46), (1030, 131)],
+    &[(1, 82), (490, 132)],
+    &[(1, 83), (550, 133)],
+    &[(1, 84), (930, 134), (990, 41)],
+    &[(1, 85), (1030, 135), (1130, 42)],
+    &[(1, 86), (730, 136), (830, 43)],
+    &[(1, 87), (930, 137)],
+    &[(1, 88), (490, 138)],
 ];
 /// The state-0 countdown decrement: `REC_FRAME_RATE` = 1/60.0 per gated tick [M the state-0
 /// body 0x1aa1f0-0x1aa208 loads 0x30d0dc with `lui $at,0x31; lwc1 $f1,-0x2f24($at)`; symtab
@@ -142,6 +143,25 @@ pub const P2_WRITES: [&[(u32, u16)]; 8] = [
 /// against the p4 indices; the dump and the measured arming agree], so a seed spends seed·60
 /// gated ticks in state 0.
 pub const COUNTDOWN_STEP: f32 = 1.0 / 60.0;
+
+/// What `SpaceMissile_Update` asks of the script runtime — the creator-owned SCRIPTINFO calls
+/// [M 0x1a9ef0:46-73, 0x1aa23c-0x1aa350]. The sim wires it to `Scripts::owned_*`; the unit tests
+/// below drive a stand-in built from the [D] decode tables above.
+pub trait MissileScripts {
+    /// `Script_Load(hash, obj+0x30, obj+0x50, 0,0,0,0)` + `Script_Play(si, 0)` [M 0x1aa280-0x1aa2a8,
+    /// 0x1a9ef0:46-48] — `matrix` is the object's placement transform. `None` = the NULL load.
+    fn load(&mut self, hash: u32, matrix: Mat4) -> Option<usize>;
+    /// `Script_Update(si)` [M 0x1da998].
+    fn update(&mut self, h: usize, ch: &mut Channels, frame: u32);
+    /// `SCRIPTINFO+0x9c` — event 3's hold (`p0 − 1`) [M 0x1d94c0:97-101].
+    fn delay(&self, h: usize) -> i32;
+    /// `Script_IsPlaying(si)` [M 0x1db630].
+    fn playing(&self, h: usize) -> bool;
+    /// `Script_Free(si)` [M 0x1da880].
+    fn free(&mut self, h: usize);
+}
+
+pub type Mat4 = [[f32; 4]; 4];
 
 /// One kind-0x39 placement's missile object (the ext block at obj+0xE0 plus obj+0xf4/0xf6 [M]).
 #[derive(Clone, Debug, PartialEq)]
@@ -162,23 +182,59 @@ pub struct SpaceMissile {
     pub state: u16,
     /// obj+0xf6: 0 = the disarm branch, 1 = the launch branch (set in state 2 [M 0x1aa2bc/0x1aa31c]).
     pub launch_flag: u16,
-    /// The running script's stream clock, in ticks: state 2 seeds 0 (the state-2 tick is the
-    /// branch script's FIRST update [M 0x1aa2b0/0x1aa30c — entry clock 0]) and state 3 advances
-    /// one per tick [M Script_Update 0x1da998:33-43]; the End-marker time ends the wait
-    /// [M 0x1db420 + 0x1db630]. State 1 reuses it as the p0's tick counter from the state-0 exit.
-    pub timer: u32,
+    /// The object's placement transform — `Control_CreateObjEx`'s obj+0x30/+0x50, the two
+    /// VECTORs every `Script_Load` of this object passes [M 0x1a9ef0:46, disasm 0x1aa284/0x1aa29c].
+    pub matrix: Mat4,
+    /// The script hashes: [0] the launch anim (record +0x2c), [1] ext+0x04 the launched-away
+    /// script (+0x30), [2] ext+0x08 the disarmed script (+0x34) [M 0x1a9ef0:21-23].
+    pub scripts: [u32; 3],
+    /// Records +0x4c..+0x58: up to four side scripts, loaded and played at create, updated in
+    /// states 1-3 [M 0x1a9ef0:49-72, 0x1aa118:13-38]. All four are 0 on the disc [D params 8..11].
+    pub side_scripts: [u32; 4],
+    /// ext+0x00: the running script's handle (`MissileScripts`); `None` = NULL — the whole
+    /// update is skipped then [M 0x1aa118:12]. State 3's end clears it without a free
+    /// [M disasm 0x1aa3dc `sw $zero,($s0)`].
+    pub info: Option<usize>,
+    /// ext+0x18..+0x24: the side scripts' handles [M 0x1a9ef0:52-71].
+    pub side_info: [Option<usize>; 4],
+    /// The create beat ran (`Create_SpaceMissile`'s loads and its one `Script_Update`, which the
+    /// game runs at level load; the sim runs it on the first tick, before the first update).
+    pub created: bool,
 }
 
 impl SpaceMissile {
+    /// `Create_SpaceMissile` 0x1a9ef0's script beat: the p0 load + `Script_Play(_, 0)`, the side
+    /// scripts' load + play, then ONE `Script_Update` of p0 [M 0x1a9ef0:46-73].
+    pub fn create(&mut self, host: &mut dyn MissileScripts, ch: &mut Channels, frame: u32) {
+        self.created = true;
+        self.info = host.load(self.scripts[0], self.matrix);
+        for k in 0..4 {
+            if self.side_scripts[k] != 0 {
+                self.side_info[k] = host.load(self.side_scripts[k], self.matrix);
+            }
+        }
+        if let Some(h) = self.info {
+            host.update(h, ch, frame);
+        }
+    }
+
     /// `SpaceMissile_Update` 0x1aa118, one tick. `deploy` is `MissileDeploy` (8 bytes, 0x30cd70).
-    pub fn tick(&mut self, ch: &mut Channels, deploy: &mut [u8; 8], frame: u32) {
+    pub fn tick(&mut self, host: &mut dyn MissileScripts, ch: &mut Channels, deploy: &mut [u8; 8], frame: u32) {
+        // [M 0x1aa118:12] a NULL ext[0] skips everything.
+        let Some(h) = self.info else { return };
+        // [M 0x1aa118:13-38] the side scripts update in states 1..3.
+        if self.state != 0 && self.state != 4 {
+            for s in self.side_info.iter().flatten() {
+                host.update(*s, ch, frame);
+            }
+        }
         match self.state {
             0 => {
                 // [M 0x1aa1c8-1e4]: the gate first — no countdown while switch_channels[p7] is clear.
                 if self.gate_channel != 0 && !ch.on(self.gate_channel as u32) {
                     return;
                 }
-                // [M 0x1aa1ec-20c]: countdown -= 512.0; stay while >= 0 (c.lt.s f0,f2 + bc1f).
+                // [M 0x1aa1ec-20c]: countdown -= REC_FRAME_RATE; stay while >= 0.
                 self.countdown -= COUNTDOWN_STEP;
                 if self.countdown >= 0.0 {
                     return;
@@ -188,68 +244,44 @@ impl SpaceMissile {
                     deploy[slot] = 1;
                 }
                 self.state = 1;
-                self.timer = 0;
             }
             1 => {
-                // [M 0x1aa23c-258]: the p0 script plays; done → state 2. The in-stream writes are [D].
-                self.timer += 1;
-                let idx = (self.index.clamp(1, 8) - 1) as usize;
-                if self.timer == P0_SYNC_AT && P0_SYNC_CH[idx] != 0 {
-                    ch.set(P0_SYNC_CH[idx] as u32, 1, frame); // [D t10 → ch 181..188; m4: none]
-                }
-                if self.timer == 1 && self.index == 4 {
-                    ch.set(P0_ALT_WRITE as u32, 1, frame); // [D 06000a30 t1 → ch 192]
-                }
-                let gate = P0_GATE[idx];
-                if self.timer == 359 && gate != 0 {
-                    ch.set(gate as u32, 1, frame); // [D t359 → ch 31..38]
-                }
-                if self.timer + P0_PRE_END == P0_LEN[idx] && P0_PRE_END_CH[idx] != 0 {
-                    ch.set(P0_PRE_END_CH[idx] as u32, 1, frame); // [D t(L−60) → ch 171..178; m4: none]
-                }
-                // The exit Event-3 sits at Wait(L−1) [D] and fires on the update whose entry
-                // clock is L−1 — state-1 tick L−1 (create ran update 1 [M 0x1a9ef0:61]);
-                // `+0x9c != 0` reads the same tick [M 0x1aa244-24c].
-                if self.timer >= P0_LEN[idx] - 1 {
-                    self.state = 2; // [M 0x1aa250-258]
+                // [M 0x1aa23c-258]: Script_Update(ext[0]); +0x9c != 0 (the exit event 3's hold)
+                // → state 2 the same tick.
+                host.update(h, ch, frame);
+                if host.delay(h) != 0 {
+                    self.state = 2;
                 }
             }
             2 => {
-                // [M 0x1aa25c-338]: the console channel decides the branch.
-                if ch.on(self.index as u32) {
-                    self.launch_flag = 0; // [M 0x1aa2bc] — the p2 (disarmed) script
-                    if let Some(slot) = self.deploy_slot() {
-                        deploy[slot] = 2; // [M 0x1aa2cc-338, a0 = 2]
-                    }
-                } else {
-                    self.launch_flag = 1; // [M 0x1aa31c] — the p1 (launched-away) script
-                    if let Some(slot) = self.deploy_slot() {
-                        deploy[slot] = 3; // [M a0 = 3]
-                    }
+                // [M 0x1aa25c-338]: Script_Free(ext[0]); the console channel picks the branch
+                // script; Script_Load + Script_Play(_, 0) + Script_Update.
+                host.free(h);
+                let disarmed = ch.on(self.index as u32);
+                let (script, flag, lamp) = if disarmed { (self.scripts[2], 0, 2) } else { (self.scripts[1], 1, 3) };
+                self.info = host.load(script, self.matrix);
+                if let Some(n) = self.info {
+                    host.update(n, ch, frame);
                 }
-                // The state-2 tick runs the branch script's FIRST Script_Update [M 0x1aa2b0 /
-                // 0x1aa30c] — the clock seeds 0 and state 3 counts from there.
-                self.timer = 0;
-                self.state = 3; // [M 0x1aa2c0/0x1aa328]
+                self.launch_flag = flag; // [M 0x1aa2bc / 0x1aa31c]
+                self.state = 3; // [M 0x1aa2c0 / 0x1aa328]
+                if let Some(slot) = self.deploy_slot() {
+                    deploy[slot] = lamp; // [M 0x1aa2cc-338: a0 = 2 / 3]
+                }
             }
             3 => {
-                // [M 0x1aa33c-3d0]: the branch script plays; on end the channel write + state 4.
-                self.timer += 1;
-                let idx = (self.index.clamp(1, 8) - 1) as usize;
-                let writes = if self.launch_flag == 0 { P2_WRITES[idx] } else { P1_WRITES };
-                for &(t, c) in writes {
-                    if self.timer == t {
-                        ch.set(c as u32, 1, frame); // [D decode — the scripts' own kind-0x0d events]
-                    }
+                // [M 0x1aa33c-3d0]: Script_Update + Script_IsPlaying; on the end the channel
+                // write, state 4, ext[0] = 0 (no free [M disasm 0x1aa3dc]).
+                host.update(h, ch, frame);
+                if host.playing(h) {
+                    return;
                 }
-                if self.timer >= self.wait_len() {
-                    if self.launch_flag == 0 {
-                        ch.set(self.done_channel as u32, 1, frame); // [M 0x1aa354-398: ch[p6]]
-                    } else {
-                        ch.set(self.fail_channel as u32, 1, frame); // [M 0x1aa360-3c4: ch[p5] = 199]
-                    }
-                    self.state = 4; // [M 0x1aa3d4-3d8]
+                let c = if self.launch_flag == 0 { self.done_channel } else { self.fail_channel };
+                if c != 0 {
+                    ch.set(c as u32, 1, frame); // [M 0x1aa354-3d0: ch[p6] / ch[p5] + its time]
                 }
+                self.state = 4;
+                self.info = None;
             }
             _ => {} // [M 0x1aa3e0]: state 4 is the epilogue — inert.
         }
@@ -262,10 +294,6 @@ impl SpaceMissile {
             None
         }
     }
-
-    fn wait_len(&self) -> u32 {
-        if self.launch_flag == 0 { P2_LEN[(self.index.clamp(1, 8) - 1) as usize] } else { P1_LEN }
-    }
 }
 
 #[cfg(test)]
@@ -273,117 +301,170 @@ mod tests {
     use super::*;
     use crate::triggers::Channels;
 
-    /// A missile past its gate and countdown, in state 1. Countdown 0.0 = missile 4's real seed
-    /// [D p3 = 0 for #133], so state 0 exits on the first gated tick (0 − 1/60 < 0 [M 0x1aa1ec-238]).
-    fn launch(index: u16) -> (SpaceMissile, Channels, [u8; 8]) {
-        let mut m = SpaceMissile {
-            placement: 0,
-            index,
-            fail_channel: 199,
-            done_channel: 20 + index,
-            gate_channel: 19,
-            countdown: 0.0,
-            state: 0,
-            launch_flag: 0,
-            timer: 0,
-        };
-        let mut ch = Channels::default();
-        let mut deploy = [0u8; 8];
-        ch.set(19, 1, 0);
-        m.tick(&mut ch, &mut deploy, 1); // 0 − REC_FRAME_RATE < 0 → deploy + state 1 [M 0x1aa1ec-238]
-        assert_eq!(m.state, 1);
-        (m, ch, deploy)
+    /// A stand-in script runtime from the [D] decode tables: each loaded script is (hash, update
+    /// count, playing); update k runs at stream clock k−1 and fires the table's writes at their
+    /// clock; a p0 holds (event 3) after its clock-(L−1) update; a p1/p2 stops on the update that
+    /// reaches its End time.
+    #[derive(Default)]
+    struct Disc { scripts: Vec<Option<(u32, u32, bool)>>, freed: Vec<u32> }
+    const P0: [u32; 8] = [0x0600092a, 0x0600092b, 0x06000929, 0x06000a30, 0x06000927, 0x0600092c, 0x0600092e, 0x0600092d];
+    const P2: [u32; 8] = [0x0600091c, 0x06000920, 0x06000921, 0x06000922, 0x0600091b, 0x06000923, 0x06000924, 0x06000925];
+    fn writes(hash: u32, clock: u32) -> Vec<u16> {
+        let mut out = Vec::new();
+        if let Some(k) = P0.iter().position(|&h| h == hash) {
+            if clock == P0_SYNC_AT && P0_SYNC_CH[k] != 0 { out.push(P0_SYNC_CH[k]); }
+            if clock == 1 && k == 3 { out.push(P0_ALT_WRITE); }
+            if clock == 359 && P0_GATE[k] != 0 { out.push(P0_GATE[k]); }
+            if clock + P0_PRE_END == P0_LEN[k] && P0_PRE_END_CH[k] != 0 { out.push(P0_PRE_END_CH[k]); }
+        } else if let Some(k) = P2.iter().position(|&h| h == hash) {
+            out.extend(P2_WRITES[k].iter().filter(|(t, _)| *t == clock).map(|(_, c)| *c));
+        } else {
+            out.extend(P1_WRITES.iter().filter(|(t, _)| *t == clock).map(|(_, c)| *c));
+        }
+        out
+    }
+    impl Disc {
+        fn held(hash: u32, n: u32) -> bool {
+            P0.iter().position(|&x| x == hash).is_some_and(|k| n >= P0_LEN[k])
+        }
+    }
+    impl MissileScripts for Disc {
+        fn load(&mut self, hash: u32, _m: Mat4) -> Option<usize> {
+            self.scripts.push(Some((hash, 0, true)));
+            Some(self.scripts.len() - 1)
+        }
+        fn update(&mut self, h: usize, ch: &mut Channels, frame: u32) {
+            let Some(Some((hash, n, playing))) = self.scripts.get_mut(h) else { return };
+            if !*playing || Disc::held(*hash, *n) { return; }
+            let clock = *n;
+            *n += 1;
+            for c in writes(*hash, clock) { ch.set(c as u32, 1, frame); }
+            if let Some(k) = P2.iter().position(|&x| x == *hash) {
+                if clock >= P2_LEN[k] { *playing = false; }
+            } else if !P0.contains(hash) && clock >= P1_LEN {
+                *playing = false;
+            }
+        }
+        fn delay(&self, h: usize) -> i32 { self.scripts[h].map_or(0, |(hash, n, _)| if Disc::held(hash, n) { -1 } else { 0 }) }
+        fn playing(&self, h: usize) -> bool { self.scripts[h].is_some_and(|s| s.2) }
+        fn free(&mut self, h: usize) { if let Some(s) = self.scripts[h].take() { self.freed.push(s.0); } }
     }
 
-    /// Sister: a gated-out missile never counts down [M 0x1aa1c8-1e4] — ch 19 off leaves the
-    /// seed untouched and deploy 0.
+    fn missile(index: u16) -> SpaceMissile {
+        let k = (index - 1) as usize;
+        SpaceMissile {
+            placement: 0, index, fail_channel: 199, done_channel: 20 + index, gate_channel: 19,
+            countdown: 0.0, state: 0, launch_flag: 0, matrix: [[0.0; 4]; 4],
+            scripts: [P0[k], if index % 2 == 1 { 0x060007c6 } else { 0x060007e1 }, P2[k]],
+            side_scripts: [0; 4], info: None, side_info: [None; 4], created: false,
+        }
+    }
+
+    /// A created missile past its gate and countdown, in state 1 (countdown 0.0 exits state 0
+    /// on the first gated tick: 0 − 1/60 < 0 [M 0x1aa1ec-238]).
+    fn launch(index: u16) -> (SpaceMissile, Disc, Channels, [u8; 8]) {
+        let mut m = missile(index);
+        let mut d = Disc::default();
+        let mut ch = Channels::default();
+        let mut deploy = [0u8; 8];
+        m.create(&mut d, &mut ch, 0); // the create beat's one update ran clock 0 [M 0x1a9ef0:73]
+        ch.set(19, 1, 0);
+        m.tick(&mut d, &mut ch, &mut deploy, 1);
+        assert_eq!(m.state, 1);
+        (m, d, ch, deploy)
+    }
+
+    /// Sister: a gated-out missile never counts down [M 0x1aa1c8-1e4] and its p0 never runs
+    /// past the create beat (state 0 runs no Script_Update).
     #[test]
     fn state0_holds_while_the_gate_is_clear() {
-        let mut m = SpaceMissile { placement: 0, index: 4, fail_channel: 199, done_channel: 24,
-            gate_channel: 19, countdown: 0.0, state: 0, launch_flag: 0, timer: 0 };
-        let mut ch = Channels::default();
-        let mut deploy = [0u8; 8];
-        for _ in 0..600 { m.tick(&mut ch, &mut deploy, 1); }
+        let mut m = missile(4);
+        let (mut d, mut ch, mut deploy) = (Disc::default(), Channels::default(), [0u8; 8]);
+        m.create(&mut d, &mut ch, 0);
+        for _ in 0..600 { m.tick(&mut d, &mut ch, &mut deploy, 1); }
         assert_eq!(m.state, 0, "gate 19 clear — no countdown, no deploy [M 0x1aa1c8-1e4]");
         assert_eq!(deploy[3], 0);
+        assert_eq!(d.scripts[0].unwrap().1, 1, "only the create beat's update ran [M 0x1a9ef0:73]");
     }
 
-    /// The state-1 exit lands on tick L−1 (the create-time update eats clock 0 [M 0x1a9ef0:61];
-    /// the exit Event-3 at Wait(L−1) [D 0600092a t3299]). Fails on the pre-task tree, which ran
-    /// to the full L.
+    /// A NULL p0 load leaves the whole object inert [M 0x1aa118:12].
+    #[test]
+    fn a_missing_launch_script_leaves_the_missile_inert() {
+        struct Miss;
+        impl MissileScripts for Miss {
+            fn load(&mut self, _: u32, _: Mat4) -> Option<usize> { None }
+            fn update(&mut self, _: usize, _: &mut Channels, _: u32) {}
+            fn delay(&self, _: usize) -> i32 { 0 }
+            fn playing(&self, _: usize) -> bool { false }
+            fn free(&mut self, _: usize) {}
+        }
+        let mut m = missile(5);
+        let (mut ch, mut deploy) = (Channels::default(), [0u8; 8]);
+        m.create(&mut Miss, &mut ch, 0);
+        ch.set(19, 1, 0);
+        for f in 0..10 { m.tick(&mut Miss, &mut ch, &mut deploy, f); }
+        assert_eq!((m.state, deploy[4]), (0, 0));
+    }
+
+    /// The state-1 exit lands on tick L−1: the create-time update ate clock 0 [M 0x1a9ef0:73],
+    /// the exit event 3 sits at Wait(L−1) [D 0600092a t3299].
     #[test]
     fn state1_exits_at_header_length_minus_one() {
-        let (mut m, mut ch, mut deploy) = launch(1);
-        for t in 1..=3298u32 { m.tick(&mut ch, &mut deploy, t); }
+        let (mut m, mut d, mut ch, mut deploy) = launch(1);
+        for t in 1..=3298u32 { m.tick(&mut d, &mut ch, &mut deploy, t); }
         assert_eq!(m.state, 1, "still tracking the p0 script on tick 3298 [D t3299]");
-        m.tick(&mut ch, &mut deploy, 3299);
-        assert_eq!(m.state, 2, "the exit Event-3 fires on state-1 tick 3299 = L−1 [M 0x1a9ef0:61 + D t3299]");
+        m.tick(&mut d, &mut ch, &mut deploy, 3299);
+        assert_eq!(m.state, 2, "the exit event 3 holds the script on state-1 tick 3299 = L−1");
     }
 
-    /// Sister: the gate and sync writes still land at their [D] ticks while state 1 runs.
+    /// Sister: the p0's writes land at their [D] ticks while state 1 runs.
     #[test]
     fn state1_writes_gates_and_sync_channels() {
-        let (mut m, mut ch, mut deploy) = launch(1);
+        let (mut m, mut d, mut ch, mut deploy) = launch(1);
         let mut fired = [false; 3];
         for t in 1..=3299u32 {
-            m.tick(&mut ch, &mut deploy, t);
-            if t == 10 { fired[0] = ch.on(181); } // [D t10 → ch 181..188]
-            if t == 359 { fired[1] = ch.on(31); } // [D t359 → ch 31..38]
-            if t == 3240 { fired[2] = ch.on(171); } // [D t(L−60) → ch 171..178]
+            m.tick(&mut d, &mut ch, &mut deploy, t);
+            if t == 10 { fired[0] = ch.on(181); }
+            if t == 359 { fired[1] = ch.on(31); }
+            if t == 3240 { fired[2] = ch.on(171); }
         }
         assert!(fired.iter().all(|&f| f), "the p0's t10/t359/t(L−60) writes all landed [D]");
         assert!(!ch.on(182) && !ch.on(172), "sister: missile 1 writes only ITS lanes [D 0600092a]");
     }
 
-    /// Missile 4's 06000a30 carries ONLY ch 192 @t1 and the exit @t1799 — no t10 sync, no
-    /// t(L−60) lane, no gate [D probe: 2 streams]. Fails on a tree that writes ch 184/174 for it.
-    #[test]
-    fn missile4_p0_writes_only_its_alt_channel() {
-        let (mut m, mut ch, mut deploy) = launch(4);
-        for t in 1..=1799u32 {
-            m.tick(&mut ch, &mut deploy, t);
-            if t == 1 { assert!(ch.on(192), "06000a30's ch 192 @t1 [D]"); }
-            assert!(!ch.on(184) && !ch.on(174) && !ch.on(34), "no sync/pre-end/gate lanes for missile 4 [D 06000a30]");
-        }
-        assert_eq!(m.state, 2, "the exit fires at 1799 = L−1 like the other p0s [D t1799]");
-    }
-
-    /// The disarm branch: state 2 seeds the clock at 0 (the state-2 tick is the branch script's
-    /// first update [M 0x1aa2b0]) and the done channel fires on state-3 tick END = 1710 for
-    /// missile 1 [D 0600091c], with the script's own writes along the way. Fails on the pre-task
-    /// tree, which seeded timer = LEN−1 and fired on the FIRST state-3 tick.
+    /// The disarm branch: state 2 frees the p0, loads the p2 and runs its first update; the done
+    /// channel fires on state-3 tick END = 1710 for missile 1 [D 0600091c].
     #[test]
     fn disarm_branch_runs_the_p2_wait_and_writes() {
-        let (mut m, mut ch, mut deploy) = launch(1);
-        for t in 1..=3299u32 { m.tick(&mut ch, &mut deploy, t); }
-        ch.set(1, 1, 4000); // the console channel latches [D 060007e2 t682]
-        m.tick(&mut ch, &mut deploy, 3300);
-        assert_eq!(m.state, 3, "state 2 ran on the latched console channel [M 0x1aa25c]");
-        assert_eq!(m.launch_flag, 0, "the disarm branch [M 0x1aa2bc]");
-        assert_eq!(deploy[0], 2, "MissileDeploy = 2 [M 0x1aa2cc-338]");
+        let (mut m, mut d, mut ch, mut deploy) = launch(1);
+        for t in 1..=3299u32 { m.tick(&mut d, &mut ch, &mut deploy, t); }
+        ch.set(1, 1, 4000);
+        m.tick(&mut d, &mut ch, &mut deploy, 3300);
+        assert_eq!((m.state, m.launch_flag, deploy[0]), (3, 0, 2), "the disarm branch [M 0x1aa25c-338]");
+        assert_eq!(d.freed, vec![0x0600092a], "Script_Free(ext[0]) on the p0 [M 0x1aa278]");
         assert!(!ch.on(21), "sister: the done channel does not fire while the p2 script runs [D END 1710]");
-        for t in 1..=1709u32 { m.tick(&mut ch, &mut deploy, 3300 + t); }
-        assert!(ch.on(81) && ch.on(46) && ch.on(83), "the p2's own writes @t1/t1000/t1030 [D 0600091c]");
+        for t in 1..=1709u32 { m.tick(&mut d, &mut ch, &mut deploy, 3300 + t); }
+        assert!(ch.on(81) && ch.on(46) && ch.on(131), "the p2's own writes @t1/t1000/t1030 [D 0600091c]");
         assert!(!ch.on(21), "the p2 wait elapses 1709 ticks [D END 1710]");
-        m.tick(&mut ch, &mut deploy, 5010);
+        m.tick(&mut d, &mut ch, &mut deploy, 5010);
         assert!(ch.on(21), "the done channel fires on state-3 tick 1710 [M 0x1aa354-398 + D END]");
-        assert_eq!(m.state, 4, "the epilogue [M 0x1aa3d4-3d8]");
+        assert_eq!((m.state, m.info), (4, None), "the epilogue clears ext[0] [M 0x1aa3d4-3dc]");
+        assert_eq!(d.freed.len(), 1, "no free at the end [M 0x1aa3dc]");
     }
 
-    /// Sister for the launch branch: missile 4 (no console writer on disc [D]) runs the p1's
-    /// 1200-tick End and aborts through ch 199 [M 0x1aa360-3c4].
+    /// Sister for the launch branch: missile 4 runs the p1's 1200-tick End and aborts through
+    /// ch 199 [M 0x1aa360-3c4].
     #[test]
     fn launch_branch_runs_the_p1_wait_then_aborts() {
-        let (mut m, mut ch, mut deploy) = launch(4);
-        for t in 1..=1799u32 { m.tick(&mut ch, &mut deploy, t); } // p0 L = 1800 [D 06000a30]
-        m.tick(&mut ch, &mut deploy, 1800); // state 2: ch 4 clear → launch [M 0x1aa31c]
-        assert_eq!(m.launch_flag, 1, "the launch branch [M 0x1aa31c]");
-        assert_eq!(deploy[3], 3, "MissileDeploy = 3 [M a0 = 3]");
-        for t in 1..=1199u32 { m.tick(&mut ch, &mut deploy, 1800 + t); }
+        let (mut m, mut d, mut ch, mut deploy) = launch(4);
+        for t in 1..=1799u32 { m.tick(&mut d, &mut ch, &mut deploy, t); }
+        m.tick(&mut d, &mut ch, &mut deploy, 1800);
+        assert_eq!((m.launch_flag, deploy[3]), (1, 3), "the launch branch [M 0x1aa31c]");
+        for t in 1..=1199u32 { m.tick(&mut d, &mut ch, &mut deploy, 1800 + t); }
         assert!(ch.on(99), "the p1's ch 99 = 1 @t1000 [D 060007c6/060007e1]");
         assert!(!ch.on(199), "sister: the abort waits out the 1200-tick p1 End [D]");
-        m.tick(&mut ch, &mut deploy, 3000);
+        m.tick(&mut d, &mut ch, &mut deploy, 3000);
         assert!(ch.on(199), "ch 199 fires on state-3 tick 1200 [M 0x1aa360-3c4 + D END 1200]");
-        assert_eq!(m.state, 4, "the epilogue [M 0x1aa3d4-3d8]");
+        assert_eq!(m.state, 4);
     }
 }

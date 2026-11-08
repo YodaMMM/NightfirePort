@@ -18,6 +18,12 @@ fn step(scene: &mut Scene, n: u32) {
 fn press_to(scene: &mut Scene, want: u16) {
     for t in 0..900 {
         if scene.sim.as_ref().unwrap().goggle_mode() == want && t > 0 { break; }
+        // muzzle-repin-5: hold Bond alive through the presses — the start rooms are fighting and
+        // the shifted stream (3 muzzle draws per guard shot) changes who hits Bond during this
+        // window; a dead Bond ignores the key (the mode gate needs a live player), which used to
+        // fail a_captains_laser_ray's mode-1 press. The tests' subject is the goggle draw, not
+        // survivability; every caller here presses inside a live room.
+        scene.sim.as_mut().unwrap().drones.health.health = 100.0;
         let mut i = Input::default();
         i.goggles_action = t % 2 == 0 && scene.sim.as_ref().unwrap().goggle_mode() != want;
         scene.sim.as_mut().unwrap().step_bond(i, false, false, false);
@@ -222,6 +228,9 @@ fn a_captains_laser_ray() {
     assert!(fs.attach[day][3][1] > FAR_Y && fs.attach[night][3][1] <= FAR_Y, "mode 0: 0x2000133");
     let p = fs.attach[day][3];
     assert!((p[0] - a[0]).abs() < 1e-4 && (p[1] - a[1]).abs() < 1e-4 && (p[2] - a[2]).abs() < 1e-4, "the sprite sits at the start");
+    // The press happens where `place` stood Bond. A raw 30 u step back (an earlier re-route) put him
+    // over open air on 07000012: he fell (y 1.0 -> -9.7) into the level's fall cut-scene, which
+    // disables the player, and the key never reached mode 1. press_to's health hold covers the fire.
     press_to(&mut scene, 1);
     place(&mut scene, di);
     if scene.sim.as_ref().unwrap().drones.list[di].weapon == 0x18 {

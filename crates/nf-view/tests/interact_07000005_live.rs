@@ -349,15 +349,25 @@ fn the_ledge_plate_plays_the_sound_trigger() {
         assert!(!sim.drones.sound_triggers.playing(368), "sister: sound 368 not playing");
     }
     let mut w = load(&iso);
+    // The plate's box hangs over the roof ridge south (x 23.76..25.89, y 31.39..32.37, z 67.08..68.10
+    // [D #253]). The old stand east of it (25.0, 33.0, 69.0) is inside the DynamicObject blocker on
+    // the ridge (kind 0x3b slot 0, flag 0x10, x 25.04..25.75 — solid to the walk query
+    // [M Collide_PickObj 0x1eae80:28-40; Player_Collision 0x194df0 kind 0x800, +0x98 = 0]): its push
+    // drops Bond off the roof before he reaches the plate. A teleport into the plate's west half,
+    // clear of the blocker, lets the body cross the box on the way down — the touch is the operation.
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        // A teleport to reach the upper ledge south; the walk onto the plate is the operation.
-        sim.bond.pos = [25.0, 33.0, 69.0];
+        sim.bond.pos = [24.45, 33.0, 67.6];
+        sim.bond.prev_pos = sim.bond.pos;
+        sim.bond.cel = sim.world.find_cel(sim.bond.pos);
     }
-    w.wait(60);
-    w.walk_nav_to([24.82, 31.8, 67.5], "plate #253", 0.5);
+    let mut raised = None;
+    for t in 0..120u32 {
+        w.wait(1);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(139) { raised = Some(t); break; }
+    }
     let sim = w.scene.sim.as_ref().unwrap();
-    assert!(sim.drones.channels.on(139), "the plate raises ch 139 [D out]");
+    assert!(raised.is_some(), "the plate raises ch 139 [D out]");
     assert!(sim.drones.sound_triggers.playing(368), "the ch-139 trigger plays sound 368 [M 0x1b2790]");
 }
 
@@ -412,10 +422,10 @@ fn the_grapple_point_aims_for_the_watch() {
     let dir = [p[0] - from[0], p[1] - (from[1] + 1.0), p[2] - from[2]];
     let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
     let dir = [dir[0] / len, dir[1] / len, dir[2] / len];
-    let hit = nf_game::gadget::pick_grapple_point(&sim.drones.grapple_points, from, dir, 60.0);
+    let hit = nf_game::gadget::pick_grapple_point(&sim.drones.grapple_points, from, dir, 60.0, |_, _| true);
     assert!(hit.is_some(), "aiming at #282 resolves the grapple point [M Grapple_Create/fix-gadgets]");
-    let away = nf_game::gadget::pick_grapple_point(&sim.drones.grapple_points, from, [dir[0], 0.0, dir[2]], 60.0);
+    let away = nf_game::gadget::pick_grapple_point(&sim.drones.grapple_points, from, [dir[0], 0.0, dir[2]], 60.0, |_, _| true);
     let _ = away; // the away-aim may still hit the other point — the sister is the MISS below.
-    let miss = nf_game::gadget::pick_grapple_point(&sim.drones.grapple_points, from, [-dir[0], -dir[1], -dir[2]], 60.0);
+    let miss = nf_game::gadget::pick_grapple_point(&sim.drones.grapple_points, from, [-dir[0], -dir[1], -dir[2]], 60.0, |_, _| true);
     assert!(miss.is_none(), "sister: aiming the opposite way misses both points");
 }

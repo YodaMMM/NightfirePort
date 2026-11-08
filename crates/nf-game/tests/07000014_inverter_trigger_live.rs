@@ -72,7 +72,7 @@ fn the_14_inverters_are_the_0x41_placements_and_the_f9_rows_are_voice_lines() {
     );
 
     // The port builds exactly these through the game's creator path, in placement order.
-    let w = nf_game::worldobj::WorldObjects::create(placements, &[], |_| (0, [0.0; 3]));
+    let w = nf_game::worldobj::WorldObjects::create(placements, &[], |_| (0, [0.0; 3], 0));
     let got: Vec<(u16, u16)> = w.inverters.iter().map(|i| (i.ch_in, i.ch_out)).collect();
     assert_eq!(
         got,

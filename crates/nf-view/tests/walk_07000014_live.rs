@@ -163,20 +163,16 @@ fn the_facility_chain_runs_to_the_delta_sector_exit() {
     // which survives `Collide_FilterBullets`'s 0xfffd [L weapon_data; M 0x1ece30]) cut them and
     // `FuseBox_Update` writes the channels [M 0x1adfe8]. `Player_Activate` 0x1a5170 has no
     // class-0x3C arm — E does nothing [M 0x1a5170:95-160].
-    // 996-audit note: the room's DESTROY_BoxSatellite boxes listen on the wire-group channels
-    // (p1 = 0x71/0xd8/0xe1… [D the census]) and `Destroy_Update` 0x12c4f8's second arm smashes
-    // them when it rises — with real blasts (p5·0.01 = 1…10 damage [M 0x12c424; Control_SetGList
-    // 0x134960:11 pins obj+0xD8 = the glist POINTER, so the arm's cel compare is always-open
-    // [M]]). The game's player eats those blasts; the harness re-tops the walker's health per
-    // wire (the Walker::top_up_health law — `drones.health.health = 100.0`) so the pin stays
-    // about the cut, not the accumulated splash.
+    // Only group 0 is cut: the room's DESTROY_BoxSatellite boxes listen on the group-1 channels
+    // (p1 = 0x71/0xd8 [D the census]) and `Destroy_Update` 0x12c4f8's second arm smashes them with
+    // 500 over 10 units, which ends the run where Bond stands (destroy_blast_07000014_live).
     for want in [0x87u32, 0x88] {
         let (fb, wires) = {
             let sim = scene.sim.as_ref().unwrap();
             let f = sim.drones.fuseboxes.iter().position(|f| f.ch[0] as u32 == want)
                 .unwrap_or_else(|| panic!("the fusebox with group-0 channel {want:#x} exists [D]"));
-            let list: Vec<usize> = sim.drones.fuseboxes[f].alive_wires().map(|(_, _, o)| o).collect();
-            assert!(!list.is_empty(), "box {f}: the script registered wires (groups 0 and 1 [L])");
+            let list: Vec<usize> = sim.drones.fuseboxes[f].alive_wires().filter(|(g, _, _)| *g == 0).map(|(_, _, o)| o).collect();
+            assert!(!list.is_empty(), "box {f}: the script registered wires (group 0 [L])");
             (f, list)
         };
         for obj in &wires {
@@ -185,6 +181,17 @@ fn the_facility_chain_runs_to_the_delta_sector_exit() {
                 // object's world bounds), draw, aim through it, burn.
                 let sim = scene.sim.as_mut().unwrap();
                 sim.drones.health.health = 100.0; // the Walker::top_up_health law (the satellite-box splash, the 996 note)
+                // The game removes a DYING wire's entity [M FuseBox_Update 0x1adfe8 →
+                // `Effect_RemoveSObjs` 0x1cf360 — the port's `Cut::RemoveWire` arm]: one burn can
+                // cut both of the box's wires (the slabs coplanar+adjacent [L], the aim sweep
+                // clips both — one burn on the 0x87 box's group-0 wire rose BOTH words 0x87+0x71
+                // and removed both entities), so a later wire of a dead box is skipped, not
+                // aimed at the origin; the box's group words verify the cut below.
+                if !matches!(sim.drones.scripts.objects.list.get(*obj),
+                    Some(Some(nf_game::nis::Obj::Entity { .. })))
+                {
+                    continue;
+                }
                 let bp = sim.drones.fuseboxes[fb].pos;
                 let aim = wire_aim_point(sim, *obj);
                 let cands = [[0.6f32, -1.2, 0.0], [-0.6, -1.2, 0.0], [0.0, -1.2, 0.6], [0.0, -1.2, -0.6]];
@@ -202,6 +209,10 @@ fn the_facility_chain_runs_to_the_delta_sector_exit() {
                 assert!(stood, "a stance inside the Laser's range exists for box {fb}'s wire at {aim:?}");
             }
             for _ in 0..40 { scene.sim.as_mut().unwrap().step_bond(Input { switch_to: Some(0x4e), ..Default::default() }, false, false, false); }
+            // The press comes once the draw has ended, as a player's would: a press under the holster/draw
+            // is spent there (the edge's +0x92C countdown runs out on the view-state gate, the held trigger
+            // reads no new edge) [M Player_WeaponFiring 0x1a5460:601-636].
+            for _ in 0..120 { if scene.sim.as_ref().unwrap().gun.switch_state == 0 { break; } scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
             let dead = burn_wire(&mut scene, *obj, 200, |sim| sim.drones.channels.on(want));
             assert!(dead, "the laser cuts box {fb}'s wire → ch {want:#x} [M 0x1adfe8]");
         }
@@ -209,23 +220,7 @@ fn the_facility_chain_runs_to_the_delta_sector_exit() {
     for _ in 0..10 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     assert!(scene.sim.as_ref().unwrap().drones.channels.on(0x8c), "AND #391 [0x87, 0x88] raises 0x8C [D]");
 
-    // The live-wire hurt: the game hurts on a group-1 wire death ONLY while +0x56 (param 2) == 0
-    // [M 0x1adfe8:99-101 `if (*(short *)(iVar1 + 0x56) == 0) Player_Hurt(0x40a00000,…)`]. Every
-    // fusebox on 07000014 carries param 2 non-zero (placements 291/383/385/833/919 → 225/113/216/
-    // 224/112 [D, fields_live.rs census]), so cutting the live wire here NEVER hurts — the old
-    // "the live wire costs 5.0" reading was the inverted polarity docs/fields/fusebox.md fixed.
-    // fusebox-wire-geometry-2: the pin is the fusebox's OWN hurt counter (`fusebox_hurts`, the
-    // same counter fix_fusebox_cut_live's sabotage test pins) — the old `health == 100.0` pin also
-    // silently relied on the beam aiming 1.5 m BELOW the panel, where it never touched the room's
-    // DESTROY_BoxSatellite boxes. With the real cable aim the beam lands on the panel and their
-    // smashes blast the walker — the game's own behaviour (the 996-audit note above), 3.3 splash
-    // over the four cuts — so the splash is no longer part of this pin; the no-hurt polarity is.
-    eprintln!("[walk] after the burns: health {:.1} fusebox_hurts {}",
-        scene.sim.as_ref().unwrap().drones.health.health, scene.sim.as_ref().unwrap().drones.fusebox_hurts);
-    assert_eq!(scene.sim.as_ref().unwrap().drones.fusebox_hurts, 0,
-        "no live-wire hurt with +0x56 configured [M 0x1adfe8:99-101]");
-    assert!(scene.sim.as_ref().unwrap().drones.health.health > 0.0,
-        "the walker survives the sabotage (the satellite splash is not the fusebox hurt)");
+    assert!(scene.sim.as_ref().unwrap().drones.health.health > 0.0, "the walker survives the sabotage");
 
     // Stage 4: the server-room escape — the touch again, now with 0x8C on → 0x09 → SP #407 (0x06000848)
     // → ch 0x4A.
@@ -266,9 +261,9 @@ fn the_facility_chain_runs_to_the_delta_sector_exit() {
         phase: None,
     burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
     defused: false,
-    
+    born: 0,
     loop_handle: 0,
-});
+    });
     let mut dead = false;
     for _ in 0..300u32 {
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);

@@ -48,6 +48,11 @@ const MARGIN: f32 = 0.3;
 /// `Door_ReactToHit`'s reversal threshold (ABS compares against 0.0002).
 const HIT_EPS: f32 = 0.0002;
 
+/// The refine's radius slack [S]: the game records the contact inside the same collide pass that
+/// pushes the mover out (`Collide_Update` 0x1ea398 → `Collide_Intersect` per node), so a mover
+/// pressing into a leaf contacts it every tick. The port tests the mover's capsule AFTER its
+/// movement push already resolved it to the radius, so the test reaches a hair past it.
+pub const CONTACT_SLACK: f32 = 0.02;
 /// States (`obj+0xF4`): 2 closed, 4 open, 8 opening (pos moves away from closed), 0x10 closing.
 pub const CLOSED: u16 = 2;
 pub const OPEN: u16 = 4;
@@ -222,6 +227,25 @@ pub struct Door {
     pub sph_centre: V3,
     /// The object's hashcode (the drawn mesh and the collision shape).
     pub glist: u32,
+    /// The object's TRUE `obj+0xF0` flags word. Doors are created by `Door_Create` 0x136100
+    /// (plain `control_create_object` — memset 0, no CreateObjEx create param) whose
+    /// `Control_SetGList` 0x134960:11 writes `obj+0xF0 = glist+0x44 | (old & 0x30008000)`;
+    /// nothing else touches the word on the door path, so obj+0xF0 = the glist record's +0x44
+    /// word exactly. That word is the entity-params payload +4 [M `parsemap_block_entity_params`
+    /// 0x1d1508: `pCurrCelList[0x11] = *(int *)(FileNextBlock + 8)` — the runtime record's
+    /// +0x44 dword; the port's `MapObject.flags`], parsed from the disc per object.
+    /// `Bullet_CollisionHandler` 0x12ce80's object-hit arm passes any hit whose object carries
+    /// obj+0xF0 & 0x60 (the andi 0x60 at 0x12cf18) — the flight's object pass the AIM ray's
+    /// pick does not apply as a pass (the same word instead SKIPS the object in
+    /// `Collide_PickObj` 0x1eae80's mask, see the aim stage). Live anchors [L the 0700001b
+    /// audits]: the whole solar panel reads f0 0x81, the panel pieces 0xc1 — the disc words
+    /// match both (nf-formats' glist_flags_probe).
+    pub f0: u32,
+    /// `Bullet_CollisionHandler` 0x12ce80's object-hit pass: `obj+0xF0 & 0x60 != 0` [M the
+    /// andi 0x60 at 0x12cf18] — the TRUE word (`f0`), not the placement flags stand-in this
+    /// field read before (the placement word is the bare kind 0xdb, whose 0x40 bit made the
+    /// stand-in true for every door).
+    pub bullet_pass: bool,
 }
 
 impl Door {
@@ -346,6 +370,11 @@ pub struct DoorMover {
     pub a: V3,
     pub b: V3,
     pub radius: f32,
+    /// The body capsule (A, B, radius) the refine's `Intersect_CylGeom` contact runs on: the game
+    /// drives the movement push and the contact with one HITTEST in one pass [M `Collide_Update`
+    /// 0x1ea398 → `Collide_Intersect` 0x1ebaa8] — the player's body HITTEST (the BLData+0x740
+    /// arms). A guard's entry (its swept root point at 0.4) is carried but not refined.
+    pub body: (V3, V3, f32),
     pub centre: V3,
     /// class 3 — the player: the contact selection takes it unconditionally [M 0x135980:65].
     pub player: bool,
@@ -377,7 +406,7 @@ impl Doors {
     pub fn create(
         placements: &[Placement],
         path_blocks: &[&[u8]],
-        mut object: impl FnMut(&Placement) -> Option<(u32, V3, f32)>,
+        mut object: impl FnMut(&Placement) -> Option<(u32, V3, f32, u32)>,
     ) -> Doors {
         let mut list = Vec::new();
         for &pi in door_placements(placements).iter() {
@@ -390,7 +419,7 @@ impl Doors {
             let rate = (p.extra[7] >> 16) as u16;
             let index = (p.extra[8] & 0xffff) as usize;
             let keys = if count != 0 { path_blocks.get(index).map(|b| parse_keys(b)) } else { None };
-            let (glist, centre, radius) = object(p).unwrap_or((0, p.translation, 0.0));
+            let (glist, centre, radius, f0) = object(p).unwrap_or((0, p.translation, 0.0, 0));
             // Door_Create's pre-spline seed matrix: CCO(0) → View_RotTransMatrix; the swing/sliding
             // key paths overwrite obj+0x90 from Spline_Interp afterwards [M 0x136100:21,83-91].
             let m = view_rot_trans_matrix(p.rotation, p.translation);
@@ -412,6 +441,10 @@ impl Doors {
                 dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
                 matrix: m, inv_closed: [[0.0; 4]; 4],
                 pos: p.translation, sph: (transform(&m, centre), radius), sph_centre: centre, glist,
+                f0,
+                // obj+0xF0 = glist+0x44 (no create param on the Door_Create path) [M 0x134960:11];
+                // the flight's pass rule reads its 0x60 bits [M 0x12cf18].
+                bullet_pass: f0 & 0x60 != 0,
             };
             if d.kind == 0 {
                 // `Door_SetupSwing`: the swing covers half the range, so the speed re-quantises to whole ticks
@@ -785,10 +818,24 @@ impl Doors {
     /// `BLData+0x7cc`: 0.55 on the walk/default arm, 0.275 on the climb 0/6 arm [M 0x194df0:316/:204]].
     /// REVERT of the level-0b-waiting-room-doors pick change (the door's radius alone): that law is
     /// the 0x200/0x201 arm [M 0x1eae80:91-107], not the player's 0x800 arm.
-    pub fn collide_step(&mut self, movers: &[DoorMover], channels: &mut Channels, frame: u32) -> Vec<SoundEvent> {
+    ///
+    /// Refine [M `Collide_Intersect` 0x1ebaa8, the 0x800 arm 0x1ebe00-0x1ebe68]: the pick's node
+    /// distance is preset to 1e8 and only `Intersect_CylGeom` 0x109da0 — the mover's capsule
+    /// against the door's coll data (`obj+0xd8`, the glist's collision shape posed by the live
+    /// matrix) — overwrites it on a contact; `Collide_Update` 0x1ea398 frees every 1e8 node
+    /// before it mirrors the survivors onto the door's own `+0xD0` list. So the door's
+    /// `Door_ReactToHit` sees a mover only when its capsule touches the leaf, not when it merely
+    /// stands inside the sphere reach (a player 1.7 behind a hinge reversed every swing). The
+    /// refine runs for the player's entry; the guards' entries keep the sphere stage (below).
+    /// `Collide_Intersect` returns before the refine when the object has no coll data
+    /// (`obj+0xd8 == 0` [M 0x1ebaa8 head]), keeping the pick's distance: a door with no shape in
+    /// `world` (or no `world`, the unit tests) keeps the sphere-only contact.
+    pub fn collide_step(&mut self, movers: &[DoorMover], channels: &mut Channels, frame: u32, world: Option<&CollisionWorld>) -> Vec<SoundEvent> {
         let mut sounds = Vec::new();
         if self.contacts.len() != self.list.len() { self.contacts.resize_with(self.list.len(), Vec::new); }
         for h in self.contacts.iter_mut() { h.clear(); }   // the clear pass: every +0xD0 to the pool [M 0x1ea398:25-53]
+        // The live-posed collision shape per door, built on first need this step.
+        let mut posed: Vec<Option<Option<Vec<[V3; 3]>>>> = vec![None; self.list.len()];
         for m in movers {
             let ab = [m.b[0] - m.a[0], m.b[1] - m.a[1], m.b[2] - m.a[2]];
             for i in 0..self.list.len() {
@@ -804,6 +851,18 @@ impl Doors {
                 let dy = m.a[1] + ab[1] * t - c[1];
                 let dz = m.a[2] + ab[2] * t - c[2];
                 if dx * dx + dy * dy + dz * dz < r * r {
+                    let shape = posed[i].get_or_insert_with(|| {
+                        let d = &self.list[i];
+                        world.and_then(|w| if d.glist != 0 { w.shape(d.glist) } else { None })
+                            .map(|t| t.iter().map(|t| t.map(|p| transform(&d.matrix, p))).collect())
+                    });
+                    // The player only: the guards' collide HITTEST (`NDrone2_Collision` 0x140e90's
+                    // capsule arms) is unported — their mover is a swept root point stand-in, and
+                    // refining a stand-in against the leaf would decide on geometry the game never
+                    // tests. The guards keep the sphere-stage contact [S].
+                    if let (true, Some(tris)) = (m.player, shape) {
+                        if !CollisionWorld::capsule_meets_tris(m.body.0, m.body.1, m.body.2 + CONTACT_SLACK, tris) { continue; }
+                    }
                     self.contacts[i].push(DoorContact { centre: m.centre, player: m.player, valid: m.valid });
                 }
             }
@@ -904,7 +963,7 @@ impl Doors {
     /// `Player_Activate`'s door part (0x1a5310): the use sphere — radius 1 at one unit ahead of the head —
     /// activates every door it meets (the game walks the whole hit list; walls do not stop it). `head` is also
     /// the activator's position for the side tests.
-    pub fn player_use(&mut self, head: V3, look: V3, channels: &mut Channels, frame: u32, _world: &CollisionWorld) -> (Vec<SoundEvent>, usize) {
+    pub fn player_use(&mut self, head: V3, look: V3, channels: &mut Channels, frame: u32, world: &CollisionWorld) -> (Vec<SoundEvent>, usize) {
         // `Player_Activate` (0x1a5170:100-133): the pick is `Collide_SphereIntersect(1.0, head +
         // Mat_GetDir(viewer)·1.0, player cel, player, body obj, &list, 0, 0, 0, 0)`, and the walk
         // dispatches `Door_Activate(obj, player, 1)` on EVERY class-0x1c node — no distance gate
@@ -912,9 +971,12 @@ impl Doors {
         // not a mesh test:
         //   - `Collide_SphereIntersect` 0x1ec940 fills the HITTEST (mask +0x94 = 0x101 — param 8
         //     is 0 — the pick centre at +0x60, the radius at +0x6c) and calls `Collide_Pick`
-        //     0x1eb320; the post-pick loop then runs `Collide_Intersect` per node but uses its
-        //     return ONLY for the `param_10 & 0x10` early-out (param_10 is 0 here) — a failed
-        //     refinement NEVER removes the node [M 0x1ec940's do/while after `Collide_Pick`].
+        //     0x1eb320; the post-pick loop then runs `Collide_Intersect` per node, which for mask
+        //     0x101 presets the node's distance to 1e8 and lets `Intersect_PointGeom` overwrite it
+        //     only on a triangle hit [M 0x1ebaa8:186-189, 0x1e92d8:313-331]; the finalize frees
+        //     every 1e8 node [M 0x1ec940 `if (fVar10 == 1e+08) LList_Add`]. So the refine DOES
+        //     decide (use-pick: the earlier reading here — "a failed refinement never removes the
+        //     node" — looked only at the return value and missed the 1e8 drop).
         //   - `Collide_Pick` 0x1eb320 walks the straddled cels; for mask 0x101 its linked-object
         //     arm tests `|pick_centre − obj+0x80|² < (pick_radius + obj+0x8C)²` (the AABB variant
         //     only when obj+0x3c & 0x8000000), and its object walk calls `Collide_PickObj`
@@ -926,12 +988,10 @@ impl Doors {
         //     posed by the object matrix (`Control_BuildWorldSph` 0x133070: obj+0x80 = glist+0x10
         //     × the matrix rows, obj+0x8C = glist+0x1c · |obj+0xe8|; the moved pass rebuilds it
         //     [M 0x1336f8:209]) — the port's `live_sph()`.
-        // So the game's E reach is the use sphere touching the door's live world sphere, and the
-        // leaf mesh never gates the activation. (The 820b leaf-mesh pick was a misread of the
-        // chain — its own T1 "2.3-out must not open" pin rested on that misread; the master
-        // merge's full suite failed the three real-path E tests because the mesh, a thin plane,
-        // sits 1.2-3.0 from those use points while the door's world sphere is touched. See
-        // docs/systems/door-use.md.)
+        // So the game's E reach is the use sphere touching the door's live world sphere AND lying
+        // within 1.0 in front of one of the door glist's collision triangles (crate::usepick).
+        // (The 820b leaf-mesh pick tested the render leaf instead of the collision glist and had
+        // no world-sphere stage; see docs/systems/door-use.md.)
         // A door with NO resolved glist (glist 0 — no obj+0xd8) is E-DEAD, as in the game: the use
         // pick admits a 0x101-mask object only via `obj+0xd8 != 0 && *(obj+0xd8+8) != 0` [M
         // Collide_PickObj 0x1eae80:88-90 — Door_Create 0x136100 ORs obj+0xfa |= 0xc4, so the
@@ -960,12 +1020,11 @@ impl Doors {
             // world sphere (obj+0x80 centre, obj+0x8C radius) [M Collide_PickObj 0x1eae80's
             // 0x100/0x101 arm; Collide_Pick 0x1eb320's linked-object arm]. Strict `<`: the
             // game returns (no node) when `radius² <= sqdist` [M both sites].
-            let (c, r) = d.live_sph();
-            let sx = use_point[0] - c[0];
-            let sy = use_point[1] - c[1];
-            let sz = use_point[2] - c[2];
-            let reach = 1.0 + r;
-            if sx * sx + sy * sy + sz * sz < reach * reach {
+            // use-pick: then the glist refine — the use sphere in the door's object space
+            // against its collision triangles, front side only; a miss leaves the node at 1e8
+            // and 0x1ec940's finalize frees it before the class walk [M Collide_Intersect
+            // 0x1ebaa8:186-189 → Intersect_PointGeom 0x1e92d8:331; crate::usepick].
+            if crate::usepick::picks_in(world, use_point, d.live_sph(), &d.matrix, d.glist) {
                 self.activate(i, &[(head, 0.0, false)], true, channels, frame, &mut sounds);
                 hits += 1;
             }
@@ -1256,6 +1315,8 @@ mod tests {
             matrix: quat_matrix([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0]),
             inv_closed: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             pos: [0.0, 0.0, 0.0], sph: ([0.0, 1.1, 0.0], 1.28), sph_centre: [0.0, 1.1, 0.0], glist: 7,
+            f0: 0,
+            bullet_pass: false,
         });
         doors
     }
@@ -1300,6 +1361,8 @@ mod tests {
             dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
             matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 1.1, 0.0], 1.28), sph_centre: [10.0, 1.1, 0.0], glist: 8,
+            f0: 0,
+            bullet_pass: false,
         });
         let mut ch = channels();
         let mut sounds = Vec::new();
@@ -1330,7 +1393,7 @@ mod tests {
         let mk = |approach: u8| {
             let mut doors = Doors::default();
             doors.list.push(Door {
-                placement: 0, kind: 0, group: 0, ch_open: 0, ch_lock: 0, straddle: false,
+                placement: 0, kind: 0, group: 0, ch_open: 0, ch_lock: 0, straddle: false, bullet_pass: false, f0: 0,
                 snd_open: 285, snd_close: 284, snd_hit: 320, flags: 1, approach, locked_flag: 0,
                 keys: Some(swing_keys()), frames: 2, state: CLOSED, pos01: 0.5, speed: 1.0 / 14.0,
                 dir: 0.0, swing: -1.0, timer: 0, open_timer: 0, msg_shown: false,
@@ -1380,6 +1443,8 @@ mod tests {
             dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
             matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 1.1, 0.0], 1.28), sph_centre: [10.0, 1.1, 0.0], glist: 8,
+            f0: 0,
+            bullet_pass: false,
         });
         let mut ch = channels();
         ch.set(0x12, 1, 1); // 07000011: Lock #177's burn / TouchOnce #283's out channel
@@ -1409,6 +1474,8 @@ mod tests {
             matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             // The create fallback's sphere: the placement translation, radius 0.0.
             inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 0.0, 0.0], 0.0), sph_centre: [10.0, 0.0, 0.0], glist: 0,
+            f0: 0,
+            bullet_pass: false,
         });
         let mut ch = channels();
         // The use point 2.0 out (head + look): inside the old stand-in's 2.5, so the deleted arm
@@ -1436,6 +1503,8 @@ mod tests {
             dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
             matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 1.1, 0.0], 1.28), sph_centre: [10.0, 1.1, 0.0], glist: 8,
+            f0: 0,
+            bullet_pass: false,
         });
         let mut ch = channels();
         // The use point 1.0 from the live sphere centre [10, 1.1, 0]: reach = 1.0 + 1.28 = 2.28 → hit.
@@ -1455,6 +1524,8 @@ mod tests {
                 dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
                 matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
                 inv_closed: [[0.0; 4]; 4], pos: [k as f32, 0.0, 0.0], sph: ([k as f32, 1.1, 0.0], 1.28), sph_centre: [k as f32, 1.1, 0.0], glist: 9,
+            f0: 0,
+            bullet_pass: false,
             });
         }
         let mut ch = channels();
@@ -1477,6 +1548,8 @@ mod tests {
             speed: 1.0 / 30.0, dir, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
             matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 1.1, 0.0], 1.28), sph_centre: [10.0, 1.1, 0.0], glist: 8,
+            f0: 0,
+            bullet_pass: false,
         });
         doors
     }
@@ -1484,7 +1557,7 @@ mod tests {
     /// The standing walk pick capsule at the door's threshold (the 0x194df0 case-0/6 arm).
     fn player_at(x: f32, z: f32) -> crate::door::DoorMover {
         let p = [x, 0.0, z];
-        crate::door::DoorMover { a: [p[0], p[1] + 0.55, p[2]], b: [p[0], p[1] + 0.275 - 1.0347, p[2]], radius: 0.275, centre: p, player: true, valid: false }
+        crate::door::DoorMover { a: [p[0], p[1] + 0.55, p[2]], b: [p[0], p[1] + 0.275 - 1.0347, p[2]], radius: 0.275, body: ([p[0], p[1] + 0.275, p[2]], [p[0], p[1] + 0.55 - 1.0347, p[2]], 0.55), centre: p, player: true, valid: false }
     }
 
     #[test]
@@ -1492,7 +1565,7 @@ mod tests {
         let mut doors = slide_door(CLOSING, -1.0);
         let mut ch = channels();
         // Bond in the doorway: the pick capsule crosses the door's live sphere ×1.5.
-        let evs = doors.collide_step(&[player_at(10.0, 0.0)], &mut ch, 0);
+        let evs = doors.collide_step(&[player_at(10.0, 0.0)], &mut ch, 0, None);
         let d = &doors.list[0];
         assert_eq!(d.state, OPENING, "the kind-2 reversal: CLOSING → OPENING [M 0x135980]");
         assert_eq!(d.dir, 1.0, "dir flipped");
@@ -1500,12 +1573,12 @@ mod tests {
         assert_eq!(d.flags & 0x10, 0x10, "the busy marker [M 0x135980:111]");
         // Sister: an open door ignores the contact (the kind-2 arm needs CLOSING).
         let mut open = slide_door(OPEN, 1.0);
-        let evs2 = open.collide_step(&[player_at(10.0, 0.0)], &mut ch, 0);
+        let evs2 = open.collide_step(&[player_at(10.0, 0.0)], &mut ch, 0, None);
         assert_eq!(open.list[0].state, OPEN, "an open slide door does not reverse");
         assert!(evs.is_empty() && evs2.is_empty(), "no sounds (0xffff ids)");
         // And a far player makes no contact at all.
         let mut away = slide_door(CLOSING, -1.0);
-        away.collide_step(&[player_at(30.0, 20.0)], &mut ch, 0);
+        away.collide_step(&[player_at(30.0, 20.0)], &mut ch, 0, None);
         assert_eq!(away.list[0].state, CLOSING, "no contact, no reversal");
     }
 
@@ -1514,17 +1587,17 @@ mod tests {
         let mut ch = channels();
         // A dead guard's contact (invalid) does not reverse; a live one behind it does [M 0x135980:53-60].
         let mut doors = slide_door(CLOSING, -1.0);
-        let dead = crate::door::DoorMover { a: [10.0, 0.0, 0.0], b: [10.0, 0.0, 0.0], radius: 0.4, centre: [10.0, 0.9, 0.0], player: false, valid: false };
-        let alive = crate::door::DoorMover { a: [10.0, 0.0, 0.0], b: [10.0, 0.0, 0.0], radius: 0.4, centre: [10.0, 0.9, 0.0], player: false, valid: true };
-        doors.collide_step(&[dead], &mut ch, 0);
+        let dead = crate::door::DoorMover { a: [10.0, 0.0, 0.0], b: [10.0, 0.0, 0.0], radius: 0.4, body: ([10.0, 0.0, 0.0], [10.0, 0.0, 0.0], 0.4), centre: [10.0, 0.9, 0.0], player: false, valid: false };
+        let alive = crate::door::DoorMover { a: [10.0, 0.0, 0.0], b: [10.0, 0.0, 0.0], radius: 0.4, body: ([10.0, 0.0, 0.0], [10.0, 0.0, 0.0], 0.4), centre: [10.0, 0.9, 0.0], player: false, valid: true };
+        doors.collide_step(&[dead], &mut ch, 0, None);
         assert_eq!(doors.list[0].state, CLOSING, "an invalid (dead) drone contact never reverses");
-        doors.collide_step(&[dead, alive], &mut ch, 0);
+        doors.collide_step(&[dead, alive], &mut ch, 0, None);
         assert_eq!(doors.list[0].state, OPENING, "the first valid drone in list order reverses it");
         // The 2-tick lockout: an immediate re-run does nothing (timer != 0) [M 0x135980:44].
         let mut doors2 = slide_door(CLOSING, -1.0);
-        doors2.collide_step(&[alive], &mut ch, 0);
+        doors2.collide_step(&[alive], &mut ch, 0, None);
         assert_eq!(doors2.list[0].state, OPENING);
-        doors2.collide_step(&[alive], &mut ch, 0);
+        doors2.collide_step(&[alive], &mut ch, 0, None);
         assert_eq!(doors2.list[0].state, OPENING, "still OPENING (the reversal fired once; the timer gates the tail)");
         assert_eq!(doors2.list[0].timer, 2, "the tail did not re-fire");
     }
@@ -1535,7 +1608,7 @@ mod tests {
         // Kind 1: contacts but nothing happens [M 0x135980:75].
         let mut k1 = slide_door(CLOSING, -1.0);
         k1.list[0].kind = 1;
-        k1.collide_step(&[player_at(10.0, 0.0)], &mut ch, 0);
+        k1.collide_step(&[player_at(10.0, 0.0)], &mut ch, 0, None);
         assert_eq!(k1.list[0].state, CLOSING);
         assert_eq!(k1.list[0].timer, 0, "kind 1 never reaches the tail");
         // Kind 0 swing, CLOSING (pos01 0.6 heading down, dir −1 — Door_Activate's close path), the
@@ -1545,7 +1618,7 @@ mod tests {
         doors.list[0].state = CLOSING;
         doors.list[0].pos01 = 0.6;
         doors.list[0].dir = -1.0;
-        doors.collide_step(&[player_at(0.0, -2.0)], &mut ch, 0);
+        doors.collide_step(&[player_at(0.0, -2.0)], &mut ch, 0, None);
         assert_eq!(doors.list[0].state, OPENING, "the swing anti-crush reopens");
         assert_eq!(doors.list[0].dir, 1.0, "dir flipped");
         // Sister: the same door with nobody near finishes the close in update (state → CLOSED).
@@ -1574,6 +1647,8 @@ mod world_helper_tests {
             timer: 0, open_timer: 0, msg_shown: false, matrix: [[0.0; 4]; 4],
             inv_closed: [[0.0; 4]; 4], pos: [0.0; 3], sph: ([0.0; 3], 0.0),
             sph_centre: [0.0; 3], glist: 0,
+            f0: 0,
+            bullet_pass: false,
         };
         let mut doors = Doors::default();
         doors.list.push(mk(0x5A)); // a wired lock channel

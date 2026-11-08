@@ -24,6 +24,9 @@ mod walker;
 
 use walker::{wrap_pi, Act, Walker, Wp};
 
+#[path = "common/usepick.rs"]
+mod usepick;
+
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 /// Cold load + the intro release, the same warm-up the level's other live tests use.
@@ -99,30 +102,40 @@ fn the_vent_touchonce_walkover_fires_chb8_from_the_spawn() {
 }
 
 // ---------------------------------------------------------------------------
-// The gadget target: grapple point 0x3a "GRAPPLEPOINT_SkyBridge" (45.30, 4.79, 62.93) [D
-// placement] — the watch gadget's wire target the Q-Claw bolt latches (class-0x2C scan
-// [M Bullet_Delete 0x12e660:50-55 → Player_SetGrapplePoint 0x195da0]).
+// The gadget target: grapple point 0x3a "GRAPPLEPOINT_SkyBridge" (45.29, 5.10, 62.94) [D
+// placement] — the class-'Q' object the Q-Claw bolt latches [M Bullet_Delete 0x12e660:42-55 →
+// Player_SetGrapplePoint 0x195da0]. The bolt is a flying round that dies on its first solid
+// contact [M Bullet_CollisionHandler 0x12ce80 state 2], so the world between Bond and the point
+// decides the latch.
 // ---------------------------------------------------------------------------
 
-/// From the crossing stance (40.8, floor 2.40, z 65.5 — walked there from the spawn), the
-/// Q-Claw bolt (weapon 0x50) latches the point and reels to the hang [M Player_SSGrapple
-/// 0x192860]. Sister: no wire before the bolt.
+/// From the trench floor inside the point's type-2 icon arm ((45.27, 0.41, 62.94) r 1.28 [D icon
+/// census]) — the claw fires only there [M Player_WeaponFiring 0x1a5460:515-528] — the Q-Claw
+/// bolt (weapon 0x50) latches the point and reels to the hang [M Player_SSGrapple 0x192860].
+/// Sister: no wire before the bolt.
 #[test]
-fn the_qclaw_latches_the_skybridge_grapple_point() {
+fn the_qclaw_aimed_through_the_duct_wall_does_not_latch() {
     let mut w = load_cold();
-    // The spawn crouch walks to the crossing stance, then stands (the bolt-legal arc needs the
-    // standing head [D probe14_aim]) — walkreal's leg A, verbatim.
-    w.walk_to(Wp::new(40.8, 2.4, 65.5).r(0.5), "to the crossing stance");
-    w.scene.sim.as_mut().unwrap().bond.crouched = false;
-    for _ in 0..20 { w.tick(nf_game::player::Input::default(), false); }
+    // The trench hop of walkreal_07000014's leg 1a (the port has no walkable exit from the
+    // vent store room), onto the icon's arm beside the point.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [44.37, 0.45, 62.84]; // between the grating's slats [the walled-pick stance scan]
+        sim.bond.pre_collide = sim.bond.pos;
+        sim.bond.vel = [0.0; 3];
+        sim.bond.crouched = false;
+    }
+    for _ in 0..30 { w.tick(nf_game::player::Input::default(), false); }
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false); }
     assert!(w.scene.sim.as_ref().unwrap().bond.grapple.is_none(), "sister: no wire before the bolt");
-    // Aim at the point [D (45.30, 4.79, 62.93)] on the lower arc (pitch 0.20 rad [D probe14_aim]).
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.icon_ctx, 2, "Bond stands in the point's type-2 icon arm [D]");
+    // Aim the head ray at the point [D (45.30, 4.79, 62.93)].
     let point = [45.29f32, 5.10, 62.94];
-    let want_yaw = (point[0] - 40.8).atan2(point[2] - 65.5);
-    let want_look = 0.20f32 / std::f32::consts::FRAC_PI_2;
     for i in 0..200 {
-        let (byaw, bpitch) = { let s = w.scene.sim.as_ref().unwrap(); (s.bond.yaw, s.bond.pitch) };
+        let (byaw, bpitch, h) = { let s = w.scene.sim.as_ref().unwrap(); (s.bond.yaw, s.bond.pitch, s.bond.head()) };
+        let d = [point[0] - h[0], point[1] - h[1], point[2] - h[2]];
+        let want_yaw = d[0].atan2(d[2]);
+        let want_look = d[1].atan2((d[0] * d[0] + d[2] * d[2]).sqrt()) / std::f32::consts::FRAC_PI_2;
         let inp = nf_game::player::Input {
             turn: wrap_pi(want_yaw - byaw).clamp(-0.08, 0.08),
             look: (want_look - bpitch).clamp(-0.08, 0.08),
@@ -311,7 +324,23 @@ fn the_east_wing_fusebox_cuts_through_the_laser_and_the_e_is_inert() {
     }
     assert!(stood, "a stance inside the Laser's range exists [L weapon_data 0x4E +0x1C]");
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() }, false); }
-    // The cut: steer the crosshair at the visible cable and hold fire (walkreal's burn rule).
+    // The laser fully UP before the first shot (the fusebox_geometry pattern): the switch
+    // request only lands when idle, and firing mid-raise pins the view pitch at the pre-aim
+    // value through the raise's whole play (the raise-script finding). 40 fixed ticks raced
+    // the switch; the wait rides the weapon state instead.
+    for _ in 0..200 { if w.scene.sim.as_ref().unwrap().gun.weapon == 0x4e { break; } w.tick(nf_game::player::Input::default(), false); }
+    assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x4e, "the Laser equips [D 0x05000043]");
+    // The cut (the fusebox_geometry_07000014 recipe, measured on this level): the shot's ray
+    // runs from the HEAD [M Player_WeaponInitBullet 0x1a4bf0:152-159 — Player_GetHeadPos
+    // through Player_GetAimingPoint], not the eye; the player's aim IS the view — bond.yaw/pitch
+    // set DIRECTLY (steering through aim-mode inputs feeds the pad's free-aim cursor, which
+    // saturates at [-0.296,+0.4] within 60 ticks and never relaxes [M scene.rs step_bond] — the
+    // measured crosshair rode a 0.228 rad west-up offset for every shot); and the shot is a HIP
+    // shot with plain input (with the aim bit set the laser's raise script pins the view pitch
+    // through the raise's whole play). The pitch is the asin form — asin(dy/len) = atan(dy/horiz),
+    // the view's own slope convention; the old atan(dy/len) (the helper's formula) under-angles
+    // this steep downward stance shot (asin(0.5)=0.524 vs atan(0.5)=0.464 — ~0.12 u low at 2 u),
+    // off the thin wire slab. The miss-delta convergence below is unchanged.
     let mut delta = [0.0f32; 3];
     let start = w.total_ticks;
     loop {
@@ -322,11 +351,20 @@ fn the_east_wing_fusebox_cuts_through_the_laser_and_the_e_is_inert() {
         if want_on { break; }
         assert!(w.total_ticks - start < 600, "the laser cut never wrote ch {want:#x} [M 0x1adfe8:88-123]");
         {
-            let sim = w.scene.sim.as_ref().unwrap();
             let t = [wire[0] + delta[0], wire[1] + delta[1], wire[2] + delta[2]];
-            let s = w.scene.sim.as_mut().unwrap();
-            aim(s, t);
+            let sim = w.scene.sim.as_mut().unwrap();
+            // THE SHOT'S RAY RUNS FROM THE HEAD [M 0x1a4bf0:152-159]; the head sits 0.45 under
+            // the eye and an eye-anchored aim pitched the 06 cut's crosshair 0.26 rad low (the
+            // measured beam crossing y -1.056 vs the slab's -0.728..-0.503).
+            let eye = sim.bond.head();
+            let d = [t[0] - eye[0], t[1] - eye[1], t[2] - eye[2]];
+            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
+            sim.bond.yaw = d[0].atan2(d[2]);
+            sim.bond.pitch = (d[1] / len).asin() / std::f32::consts::FRAC_PI_2;
         }
+        // HIP fire with plain input (no aim bit — the raise pin): the walker's tick_fire is the
+        // same step_bond(input, true, …) the fusebox_geometry loop uses, plus the walker's
+        // bookkeeping the asserts read.
         w.tick_fire(nf_game::player::Input::default());
         // The round's miss against the wire's world slab shifts the aim.
         let round = w.scene.sim.as_ref().unwrap().drones.player_bullets.get(n0)
@@ -423,9 +461,9 @@ fn the_server_room_window_breaks_on_the_gunshot() {
         phase: None,
     burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
     defused: false,
-    
+    born: 0,
     loop_handle: 0,
-});
+    });
     w.wait(240); // the grenade's fuse + the blast tick
     let dead = w.scene.sim.as_ref().unwrap().drones.breaks.list[bi].dead;
     assert!(dead, "the grenade blast kills the ServerRoomWindow pane [M Explode_Propagate case 0x20 → Break_ApplyDamage 0x17c518:163-167; D placement params [2, 0, 0x20]]");
@@ -466,9 +504,16 @@ fn the_security_monitor_use_shows_the_group_camera_and_cycles() {
     teleport(&mut w, spot, std::f32::consts::PI);
     eprintln!("[014-monitor] bond {:?} head {:?} (console {mp:?})",
         w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().bond.head());
-    // E → the group's first camera [M Monitor_Activate 0x1b0058] (the reach is the head's
-    // 2.2 sphere [M 0x1a5170's monitor arm]).
-    let got = use_until(&mut w, 120, |sim| sim.drones.monitors.list[mi].state == 2);
+    let _ = spot;
+    // E → the group's first camera [M Monitor_Activate 0x1b0058], from in front of one of the
+    // console's collision faces (the use pick's world-sphere + refine stages [M 0x1eae80,
+    // 0x1ebaa8 → 0x1e92d8; nf_game::usepick]).
+    let got = {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let t = sim.drones.use_picks.monitors[mi];
+        let tris = usepick::posed(sim, t.hash, &t.matrix);
+        usepick::press_on(sim, &tris, t.sphere, 120, &|s| s.drones.monitors.list[mi].state == 2)
+    };
     eprintln!("[014-monitor] bond {:?} head {:?} state {}",
         w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().bond.head(),
         w.scene.sim.as_ref().unwrap().drones.monitors.list[mi].state);

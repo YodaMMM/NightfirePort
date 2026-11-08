@@ -158,6 +158,15 @@ fn run(humans: usize, bots: u32, ticks: u32) -> Option<Tally> {
             if v.weapon_id != prev_weapon[i] && v.arsenal.armed && bot.brain.tick > 2 {
                 tally.switches += 1;
                 eprintln!("t{t} bot{i} switches {:#x} -> {:#x} (state {:#x}, opp dist {:.1})", prev_weapon[i], v.weapon_id, bot.brain.state, v.opp_dist);
+                // bot-weapon-anim-set: the change enter stored `BOTWEAP_getWeaponAnimSet`
+                // 0x12b140's value on the brain's `Drone+0xDA` [M 0x12a028:31-33] — the pair
+                // must agree on every natural switch of the live match.
+                assert_eq!(
+                    bot.brain.anim_set,
+                    nf_game::mp::botweap::weapon_anim_set(v.weapon_id) as u16,
+                    "t{t} bot{i}: weapon {:#x} carries anim set {:#x}, expected {:#x} [M 0x12b140]",
+                    v.weapon_id, bot.brain.anim_set, nf_game::mp::botweap::weapon_anim_set(v.weapon_id),
+                );
             }
             prev_weapon[i] = v.weapon_id;
             let pools: i32 = v.arsenal.pool.iter().map(|&p| p as i32).sum();

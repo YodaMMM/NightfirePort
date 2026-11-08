@@ -236,6 +236,75 @@ pub struct Output {
 /// The SPU's output rate: pitch 0x1000 advances one sample per tick at this rate.
 pub const SPU_RATE: f64 = 48_000.0;
 
+/// The SPU's end flags with no output device: the mixer's voice timing (`Mixer::mix`) without the mix.
+///
+/// With a device, a voice ends when the mixer runs it past its last sample (a looping sample wraps
+/// instead) or when its key-off release reaches silence, and the next batch reads those end flags
+/// (`Output::take_ended`). With no device the flags never came, so no one-shot ever ended: the
+/// driver's items, the EE's sound nodes and their handles lived for the whole run. This clock runs
+/// each voice through the same steps as the mixer, at the SPU's own 48 kHz, one game frame
+/// (`SPU_RATE / 60` samples) per batch: the key-on delay, `pitch / 0x1000` samples a tick, the
+/// loop wrap and the `RELEASE_SAMPLES` release.
+#[derive(Default)]
+pub struct VoiceClock { voices: Vec<ClockVoice> }
+
+struct ClockVoice { id: u32, len: usize, looped: bool, pos: f64, pitch: u32, wait: usize, releasing: bool, rel: f64 }
+
+/// SPU samples per game frame (the port's fixed 60 Hz logic step, docs/PLAN.md "Timing").
+pub const CLOCK_FRAME: usize = 800;
+
+impl VoiceClock {
+    /// The batch's voice commands, as the mixer takes them at the start of its next mix.
+    pub fn apply(&mut self, cmds: &[Cmd]) {
+        for c in cmds {
+            match c {
+                Cmd::Play { voice, pcm, pitch, delay, .. } => {
+                    self.voices.retain(|v| v.id != *voice);
+                    let looped = pcm.loop_start.is_some_and(|l| l < pcm.data.len());
+                    self.voices.push(ClockVoice { id: *voice, len: pcm.data.len(), looped, pos: 0.0, pitch: *pitch,
+                        wait: (delay * SPU_RATE as f32).round() as usize, releasing: false, rel: 0.0 });
+                }
+                Cmd::Set { voice, pitch, .. } => if let Some(v) = self.voices.iter_mut().find(|v| v.id == *voice) { v.pitch = *pitch; },
+                Cmd::Stop { voice } => if let Some(v) = self.voices.iter_mut().find(|v| v.id == *voice) { v.releasing = true; },
+                Cmd::StopAll => for v in &mut self.voices { v.releasing = true; },
+                _ => {}
+            }
+        }
+    }
+
+    /// One game frame of playback: the voices that reached their end in it (the mixer's `ended`).
+    pub fn advance(&mut self) -> Vec<u32> {
+        let mut ended = Vec::new();
+        for v in &mut self.voices {
+            let mut left = CLOCK_FRAME;
+            let w = v.wait.min(left);
+            v.wait -= w;
+            left -= w;
+            if left == 0 { continue; }
+            let step = v.pitch as f64 / 4096.0;
+            if v.releasing {
+                // The mixer ends a releasing voice at the first frame its envelope reads 0: after
+                // `RELEASE_SAMPLES` frames of release (a past-the-end voice keeps releasing).
+                let need = (RELEASE_SAMPLES - v.rel).max(0.0).ceil() as usize;
+                if need < left { ended.push(v.id); } else { v.rel += left as f64; v.pos += step * left as f64; }
+                continue;
+            }
+            if v.looped { v.pos += step * left as f64; continue; }
+            // The frame that reads at or past the end ends the voice; pitch 0 (a paused voice) never gets there.
+            let rest = v.len as f64 - v.pos;
+            if rest <= 0.0 { ended.push(v.id); continue; }
+            if step <= 0.0 { continue; }
+            let need = (rest / step).ceil() as usize;
+            if need < left { ended.push(v.id); } else { v.pos += step * left as f64; }
+        }
+        self.voices.retain(|v| !ended.contains(&v.id));
+        ended
+    }
+
+    /// Voices the clock still runs (tests).
+    pub fn live(&self) -> usize { self.voices.len() }
+}
+
 /// The SPU's 4-point Gaussian interpolation coefficients (G-032d): 512 16-bit entries from the nocash PSX-SPX
 /// documentation, "SPU ADPCM Sample Decoding" → "4-Point Gaussian Interpolation" (problemkaputt.de/psx-spx.htm;
 /// the PS2 SPU2 uses the same table and formula — nocash documents the SPU2 pitch counter's bit 4–11 as the
@@ -432,6 +501,38 @@ mod tests {
         // interpolation would start at x[0] exactly, so the kernel is not a disguised linear one.
         assert_eq!(resample_gauss(&x, 0.0), -1);
         assert_ne!(resample_gauss(&x, 1.5), (x[1] + x[2]) / 2, "not linear midpoint");
+    }
+
+    /// The no-device clock ends each voice on the same game frame as the mixer at 48 kHz: one-shots
+    /// at several pitches and a key-on delay end by their length, a key-off ends inside its frame,
+    /// a loop and a pitch-0 voice never end. Before the clock, a deviceless run never ended any.
+    #[test]
+    fn the_no_device_clock_ends_voices_on_the_mixers_frame() {
+        let mut s = Shared::default();
+        let mut m = Mixer { voices: Vec::new(), music: MusicVoice::default(), reverb: Reverb::new(48_000), rate: 48_000, channels: 2, music_step: MUSIC_RATE / 48_000.0, step_scale: SPU_RATE / 48_000.0 / 4096.0 };
+        let mut c = VoiceClock::default();
+        let pcm = |n: usize, l: Option<usize>| Arc::new(Pcm { data: vec![100; n], loop_start: l });
+        let play = |voice, n, l, pitch, delay| Cmd::Play { voice, pcm: pcm(n, l), pitch, left: 1.0, right: 1.0, delay, reverb: false };
+        let first = vec![play(1, 1600, None, 0x1000, 0.0), play(2, 5000, None, 0x759, 0.0), play(3, 3000, None, 0x2000, 0.0005),
+            play(4, 700, Some(0), 0x1000, 0.0), play(5, 900, None, 0, 0.0), play(6, 40_000, None, 0x1000, 0.0)];
+        let (mut mix_end, mut clk_end) = (Vec::new(), Vec::new());
+        let mut buf = vec![0.0f32; CLOCK_FRAME * 2];
+        for frame in 0..30 {
+            // Frame 3: key-off voice 6 mid-sample (the driver's kill pass).
+            let cmds = match frame { 0 => first.clone(), 3 => vec![Cmd::Stop { voice: 6 }], _ => Vec::new() };
+            let e = std::mem::take(&mut s.ended);
+            mix_end.extend(e.into_iter().map(|v| (v, frame)));
+            clk_end.extend(c.advance().into_iter().map(|v| (v, frame)));
+            s.cmds.extend(cmds.iter().cloned());
+            c.apply(&cmds);
+            m.mix(&mut s, &mut buf);
+        }
+        mix_end.sort();
+        clk_end.sort();
+        assert_eq!(clk_end, mix_end);
+        let ids: Vec<u32> = clk_end.iter().map(|e| e.0).collect();
+        assert_eq!(ids, [1, 2, 3, 6], "the one-shots and the key-off end; the loop and the pitch-0 voice hold");
+        assert_eq!(c.live(), 2);
     }
 
     /// The pause at the output (`SFXPauseAllStreams` op 0x16 / `SFXUnPauseAllStreams` op 0x17 —

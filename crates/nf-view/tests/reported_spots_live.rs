@@ -10,6 +10,9 @@
 //!
 //! The object positions are the disc placements ([D]) the cited tests already assert against.
 
+#[path = "common/reveal07.rs"]
+mod reveal07;
+
 use nf_game::player::{Bond, Input};
 use nf_game::triggers::kind;
 use nf_game::world::V3;
@@ -437,6 +440,9 @@ fn spots_07000007_kimiko_trigger_fires() {
     let mut scene = nf_view::load(&iso, "07000007.bin", false).expect("load 07000007");
     let sim = scene.sim.as_mut().unwrap();
     free(sim);
+    // The real order: Drake's reveal takes the library door pair off first (their zone-3 band
+    // covers this plate before ch 21).
+    reveal07::drakes_reveal(sim);
     // The trigger's own box centre, from the parse [D #412].
     let trig = sim.drones.triggers.iter().find(|t| t.kind == kind::TOUCH_ONCE && u32::from(t.out) == 0x48)
         .expect("the ch-0x48 TouchOnce #412 parses [D]");
@@ -519,6 +525,8 @@ fn spots_0700000a_qworm_pc_installs() {
     sim.drones.inventory.owned[0x58] = true;
     sim.gun.weapon = 0x58;
     sim.gun.switch_request = 0x58;
+    // The level's own draw plays out first: a press under it is spent [M 0x1a5460:631-648].
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     // The gadget fires only with the PC first under the crosshair, within weapon_data+0x1C [M
     // Player_WeaponFiring 0x1a5460:531-545; Check_Target 0x1a7810 every 6th frame]: aim the eye at
     // the PC's own mesh (y ±0.34 about the placement [D the glist's collision bounds]) and hold it

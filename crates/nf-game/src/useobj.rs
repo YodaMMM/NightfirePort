@@ -89,6 +89,9 @@ pub struct PcQworm {
     /// (the model-less arm puts obj+0x80 = obj+0xC0, the matrix translation) until
     /// `set_pc_spheres` poses it.
     pub sph_centre: V3,
+    /// obj+0x90 and the glist hash — the use pick's refine inputs (crate::usepick).
+    pub pick_matrix: [[f32; 4]; 4],
+    pub pick_hash: u32,
     /// The collision world's shape key of the PC's glist (`obj+0xD8`, `CollisionWorld::shape`):
     /// the object's own triangles the aim ray tests [M Collide_Intersect 0x1ebaa8's 0x201 arm].
     /// `None` until `set_pc_spheres` resolves it, or when the glist has no collision.
@@ -187,7 +190,7 @@ impl UseObjects {
             if p.flags & 0xff == 0x35 {
                 // PCQWorm_Create 0x1b07a8: ext[1] = param 1 (the channel), ext[2] byte = param 2.
                 u.pcs.push(PcQworm { keys: par(0) as u16, pos, ch: par(1) as u8, e_usable: par(2) as u8, armed: par(3) != 0, state: 0, radius: 0.0,
-                    sph_centre: pos, shape: None, matrix: nf_formats::placement::view_rot_trans_matrix(p.rotation, pos), obj_flags: 0 });
+                    sph_centre: pos, shape: None, matrix: nf_formats::placement::view_rot_trans_matrix(p.rotation, pos), obj_flags: 0, pick_matrix: nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation), pick_hash: 0 });
             } else {
                 // Switch_Create 0x1adcc0: +0x12 = param 0, +0x10 = param 2, +0x16 = param 3,
                 // +0x19 = param 4, +0x14 = param 5; obj+0xF4 starts at param 3.
@@ -246,6 +249,9 @@ impl UseObjects {
                     let s: f32 = p.scale().iter().map(|v| v.abs()).product();
                     pc.sph_centre = nf_formats::placement::transform(&mx, o.centre);
                     pc.radius = o.radius * s;
+                    let t = crate::usepick::placed(level, m, p);
+                    pc.pick_matrix = t.matrix;
+                    pc.pick_hash = t.hash;
                 }
                 None => {
                     // 0x133070:23-31 — no model: obj+0x80 = obj+0xC0 (the matrix translation,
@@ -425,10 +431,6 @@ impl UseObjects {
     ) -> bool {
         let p = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
         let near = |q: V3| (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) + (q[2] - p[2]).powi(2) <= 1.0;
-        let in_sphere = |c: [f32; 3], r: f32| {
-            let d = (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2);
-            d <= (1.0 + r) * (1.0 + r)
-        };
         let mut used = false;
         // SP_Activate 0x1dc338: mask & 4, the gate channel, and the out-channel gate when
         // mask & 1; then `ext+0x2C = 1` — the SP's own update plays it and holds its out.
@@ -440,9 +442,10 @@ impl UseObjects {
                 if sp.mask & 1 != 0 && !ch.on(sp.out as u32) { continue; }
                 // The entity targets — the ONLY pick targets [M 0x1a5170:121-122 +
                 // 0x1d8d78:108-110 + 0x133070's posed spheres]. No model/placement fallback.
-                let hit = sp.entity_use_targets(&scripts.objects, w)
+                // use-pick: candidate + glist refine (crate::usepick).
+                let hit = sp.entity_use_picks(&scripts.objects, w)
                     .into_iter()
-                    .any(|(c, r)| in_sphere(c, r));
+                    .any(|(c, r, _, _, h, m)| crate::usepick::picks(p, (c, r), &m, w.use_shape(h)));
                 if hit {
                     sp.activated = true;
                     // SP_Activate 0x1dc338:84-86's second write: the current SCRIPTINFO's
@@ -474,9 +477,10 @@ impl UseObjects {
             // (behind the panel) refuses, before any sphere read. The dot positions are the
             // OBJECT translation rows (the player's `body`, the entity's matrix translation),
             // not the posed sphere centres and not the head.
-            let hit = sp.entity_use_targets_dir(&scripts.objects, w).into_iter().any(|(c, r, dir, epos)| {
+            let hit = sp.entity_use_picks(&scripts.objects, w).into_iter().any(|(c, r, dir, epos, h, m)| {
                 let to_p = [body[0] - epos[0], body[1] - epos[1], body[2] - epos[2]];
-                dir[0] * to_p[0] + dir[1] * to_p[1] + dir[2] * to_p[2] >= 0.0 && in_sphere(c, r)
+                dir[0] * to_p[0] + dir[1] * to_p[1] + dir[2] * to_p[2] >= 0.0
+                    && crate::usepick::picks(p, (c, r), &m, w.use_shape(h))
             });
             if !hit { continue; }
             // `Switch_Activate` 0x1b02a8's gate chain — identical to the direct walk below
@@ -558,7 +562,9 @@ impl UseObjects {
         // object reads as a point at the placement translation, the create-time state).
         for pc in self.pcs.iter_mut() {
             if pc.e_usable == 0 || pc.state != 0 { continue; }
-            if in_sphere(pc.sph_centre, pc.radius) {
+            // use-pick: candidate + glist refine (crate::usepick); `pick_hash` 0 (no model, or
+            // before `set_pc_spheres`) leaves the candidate alone.
+            if crate::usepick::picks(p, (pc.sph_centre, pc.radius), &pc.pick_matrix, if pc.pick_hash != 0 { w.use_shape(pc.pick_hash) } else { None }) {
                 pc.state = 1;
                 used = true;
             }

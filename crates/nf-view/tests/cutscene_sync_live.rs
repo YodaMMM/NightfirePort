@@ -27,6 +27,32 @@ fn bare_sound(scene: &mut nf_view::scene::Scene) -> nf_audio::sfx::Sound {
     snd
 }
 
+/// The key-on probe: the batch's voice key-ons captured each tick, matched to the line ids by the
+/// started sample's hash (`Driver::played_sample_hash` while the item lives = `pcm_hash` of the
+/// key-on's PCM). The first key-on tick per id is the line's real start; an item's first
+/// appearance can be its precache, armed up to 55 ticks earlier [M 0x1c1b38 case 1].
+#[derive(Default)]
+struct KeyOns { log: std::sync::Arc<std::sync::Mutex<Vec<nf_audio::Cmd>>>, by_hash: std::collections::HashMap<u64, u32>, id_hash: std::collections::HashMap<u32, u64> }
+
+impl KeyOns {
+    fn attach(snd: &mut nf_audio::sfx::Sound) -> KeyOns {
+        let k = KeyOns::default();
+        snd.captured = Some(k.log.clone());
+        k
+    }
+    /// After each tick's `sound_tick`.
+    fn tick(&mut self, snd: &nf_audio::sfx::Sound, t: u32) {
+        for c in std::mem::take(&mut *self.log.lock().unwrap()) {
+            if let nf_audio::Cmd::Play { pcm, .. } = c { self.by_hash.entry(nf_audio::sfx::pcm_hash(&pcm)).or_insert(t); }
+        }
+        for id in snd.driver.ids() {
+            if let Some(h) = snd.driver.played_sample_hash(id) { self.id_hash.entry(id).or_insert(h); }
+        }
+    }
+    fn start(&self, id: u32) -> Option<u32> { self.id_hash.get(&id).and_then(|h| self.by_hash.get(h)).copied() }
+    fn decoded(&self, id: u32) -> bool { self.id_hash.contains_key(&id) }
+}
+
 /// 07000002's boot intro (NIS 0x0600_0084): the actors' anim scripts' op-1 voice lines fire on
 /// their authored frames, and each line's driver item must appear at least 5 ticks BEFORE the
 /// line starts (the precache), with its PCM already decoded (sample_hash set) at the start.
@@ -36,6 +62,7 @@ fn the_intro_lines_precache_ahead_of_their_authored_frame() {
     unsafe { std::env::set_var("NF_SILENT", "1"); }
     let mut scene = nf_view::load(&iso, "07000002.bin", false).expect("load 07000002");
     let mut snd = bare_sound(&mut scene);
+    let mut keyons = KeyOns::attach(&mut snd);
     // Let the SP start so its scripts parse (the intro's NIS loads on the SP's start tick).
     for _ in 0..60 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     nf_view::sound_tick(&mut snd, scene.sim.as_mut().unwrap());
@@ -78,6 +105,7 @@ fn the_intro_lines_precache_ahead_of_their_authored_frame() {
     for t in 60..900u32 {
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
         nf_view::sound_tick(&mut snd, scene.sim.as_mut().unwrap());
+        keyons.tick(&snd, t);
         let mut now: std::collections::BTreeMap<u32, i32> = Default::default();
         for (id, del, _, _, _) in snd.driver.items_probe() { if !del { *now.entry(id).or_insert(0) += 1; } }
         for (&id, &n) in &now {
@@ -108,12 +136,15 @@ fn the_intro_lines_precache_ahead_of_their_authored_frame() {
     // two lines of the SAME script fire exactly their authored frames apart (± 2 catch-up).
     for s in [0x0600_0503u32, 0x0600_0504] {
         let mut lines: Vec<(i32, u32, u32)> = op1.iter().filter(|(sc, _, _)| *sc == s)
-            .filter(|(_, _, sfx)| first_start.contains_key(sfx))
-            .map(|&(_, f, sfx)| (f, sfx, first_start[&sfx])).collect();
+            .filter_map(|&(_, f, sfx)| keyons.start(sfx).map(|k| (f, sfx, k))).collect();
         lines.sort();
         for w in lines.windows(2) {
             let (f1, _, t1) = (w[0].0, w[0].1, w[0].2);
             let (f2, id2, t2) = (w[1].0, w[1].1, w[1].2);
+            // A line keyed on by the setup's first `sound_tick` (the probe's tick 60) was
+            // requested during the 60 setup steps, which run no sound: its key-on is the
+            // setup's, not its frame's (0x20c, frame 23). The pairs after it carry the pin.
+            if t1 == 60 { eprintln!("[02] script {s:#x} line {f1} keyed on by the setup's first sound tick — no delta"); continue; }
             let d = (t2 as i64 - t1 as i64) - (f2 as i64 - f1 as i64);
             eprintln!("[02] script {s:#x} lines {f1}@t{t1} → {f2}@t{t2}: tick delta vs frame delta {d}");
             assert!(d.abs() <= 2, "script {s:#x} drifted: frames {f1}→{f2} but ticks {t1}→{t2} (delta {d})");
@@ -133,7 +164,7 @@ fn the_intro_lines_precache_ahead_of_their_authored_frame() {
         let lead = *fs as i64 - seen as i64;
         eprintln!("[02] line {sfx:#x} (script {script:#x}) authored frame {f} started t{fs} first seen t{seen} (lead {lead})");
         // The decode happened off the play tick (the sample hash is set).
-        assert!(snd.driver.played_sample_hash(sfx).is_some(), "line {sfx:#x} never decoded its sample");
+        assert!(keyons.decoded(sfx), "line {sfx:#x} never decoded its sample");
         if best_lead.map_or(true, |(_, l)| lead > l) { best_lead = Some((sfx, lead)); }
         checked += 1;
     }
@@ -170,6 +201,7 @@ fn the_station_intro_lines_precache_ahead_of_their_frames() {
     unsafe { std::env::set_var("NF_SILENT", "1"); }
     let mut scene = nf_view::load(&iso, "07000008.bin", false).expect("load 07000008");
     let mut snd = bare_sound(&mut scene);
+    let mut keyons = KeyOns::attach(&mut snd);
     // Walk into plate #237 through the real input path.
     let mut input = Input::default();
     input.forward = 1.0;
@@ -206,6 +238,7 @@ fn the_station_intro_lines_precache_ahead_of_their_frames() {
     for t in 400..4900u32 {
         scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
         nf_view::sound_tick(&mut snd, scene.sim.as_mut().unwrap());
+        keyons.tick(&snd, t);
         let mut now: std::collections::BTreeMap<u32, i32> = Default::default();
         for (id, del, _, _, _) in snd.driver.items_probe() { if !del { *now.entry(id).or_insert(0) += 1; } }
         for (&id, &n) in &now {
@@ -219,8 +252,7 @@ fn the_station_intro_lines_precache_ahead_of_their_frames() {
     // Sync: same-script consecutive lines fire exactly their authored frames apart (± 2).
     for s in op1.iter().map(|(s, _, _)| *s).collect::<std::collections::BTreeSet<_>>() {
         let mut lines: Vec<(i32, u32, u32)> = op1.iter().filter(|(sc, _, _)| *sc == s)
-            .filter(|(_, _, sfx)| first_start.contains_key(sfx))
-            .map(|&(_, f, sfx)| (f, sfx, first_start[&sfx])).collect();
+            .filter_map(|&(_, f, sfx)| keyons.start(sfx).map(|k| (f, sfx, k))).collect();
         lines.sort();
         for w in lines.windows(2) {
             let (f1, _, t1) = (w[0].0, w[0].1, w[0].2);
@@ -238,7 +270,7 @@ fn the_station_intro_lines_precache_ahead_of_their_frames() {
         let seen = first_seen.get(&sfx).copied().unwrap_or(*fs);
         let lead = *fs as i64 - seen as i64;
         eprintln!("[08] line {sfx:#x} (script {script:#x}) authored frame {f} started t{fs} first seen t{seen} (lead {lead})");
-        assert!(snd.driver.played_sample_hash(sfx).is_some(), "line {sfx:#x} never decoded its sample");
+        assert!(keyons.decoded(sfx), "line {sfx:#x} never decoded its sample");
         if best_lead.map_or(true, |(_, l)| lead > l) { best_lead = Some((sfx, lead)); }
     }
     // The station intro's dialogue turns out to be op-0x16 stream sounds (the 8 fired lines

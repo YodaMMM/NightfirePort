@@ -33,13 +33,18 @@ fn the_gate0_copter_flies_its_route_from_the_load() {
     assert!(near < 4.0, "the copter sits at its placement spot (95.92, 65.28, −50.18) [D the census]; at {p0:?}");
     assert_eq!(sim.drones.copters[ci].state, 0, "obj+0xF4 starts 0 [M 0x17d340:63]");
     // The route: its own node is the [D] framelist — placement 241, kind 0, group 1, pick 0,
-    // count 381, reset 0, step 0.09525, keys 382 (the census printout).
+    // count 381, reset 0, keys 382 (the census printout); step 0.1905 = 381/2000, the node's +0xc
+    // in the live RAM [L ee_start_05.bin @0x16df66c = 0x3e43126e] (the port once built 0.09525, half).
     let paths = sim.drones.copter_paths.clone();
     let pi = sim.drones.copters[ci].path.expect("rec+0x54 = its own node [M 0x17d340:52]");
     assert_eq!(paths[pi].placement, 241, "its node is #241's [D the census]");
     assert_eq!((paths[pi].count, paths[pi].keys.as_ref().map_or(0, |k| k.len())), (381, 382),
         "the route facts [D the census printout]");
-    assert!((paths[pi].step - 0.09525).abs() < 1e-4, "the t step [D the census printout; M 0x17d340:33-41]");
+    assert!((paths[pi].step - 0.1905).abs() < 1e-6, "the t step {} [L ee_start_05.bin node +0xc; M 0x17d340:33-41]", paths[pi].step);
+    // The gate-66 copter #242's node: step 0.272 (count 272) [L ee_start_05.bin @0x16dde4c = 0x3e8b4395].
+    let p2 = sim.drones.copters.iter().find(|c| c.gate == 66).and_then(|c| c.path).expect("the gate-66 copter's node");
+    assert_eq!(paths[p2].count, 272, "#242's count [L ee_start_05.bin @0x16dde50]");
+    assert!((paths[p2].step - 0.272).abs() < 1e-6, "#242's t step {} [L ee_start_05.bin node +0xc]", paths[p2].step);
 
     // Sister — the audit's frozen symptom: the copter is NOT static over the first 120 ticks.
     let mut p60 = p0;
@@ -56,7 +61,7 @@ fn the_gate0_copter_flies_its_route_from_the_load() {
     // The route tolerance: every flown tick's pose is the spline of the [D] framelist at the
     // record's own t [M Copter_Move 0x17d628:45-55] — the matrix is interpolated from the t
     // BEFORE this tick's increment, so the expectation is interp(t − step). The window (600
-    // ticks ≈ Δt 57) never reaches the count-381 overflow, so no transition bookkeeping.
+    // ticks ≈ Δt 114, t ≤ 137 with the sister's 120) never reaches the count-381 overflow, so no transition bookkeeping.
     let f0 = sim.drones.frame;
     for k in 0..600 {
         sim.step_bond(Default::default(), false, false, false);

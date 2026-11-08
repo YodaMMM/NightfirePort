@@ -105,7 +105,16 @@ fn the_escort_opens_the_interior_doors_on_his_route() {
     let enabled_at = enabled_at.expect("the intro must write ch 0xB (the contact's enable channel)");
     eprintln!("[01] intro ch 0xB at tick {enabled_at}");
     w.wait_enabled(6000, "the intro tail (event 6 re-places Bond)");
-    w.wait(300);
+    // The intro leaves the contact standing on the line from the start-room guard #0 (-5.3, -0.5)
+    // to Bond (-8.5, -9.8), and since the stream join a guard's round lands on any drone of the
+    // other side it meets [M NDrone2_DealWithObjHit 0x13fff0:181-232: a team-1 shooter lands on
+    // teams 2/3]: idling there lets guard #0's rounds aimed at Bond kill the contact. A player
+    // steps out of the line first, as walkreal_07000001's walk does: 1.6 east.
+    {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        w.walk_to(Wp { at: [p[0] + 1.6, p[1], p[2] - 0.4], act: Act::None, arrive: 0.3 }, "out of the contact's line");
+    }
+    w.wait(240);
 
     let sim = w.scene.sim.as_ref().unwrap();
     let ci = sim.drones.list.iter().position(|d| d.skin == 0x0500_004f).expect("the contact");
@@ -196,6 +205,21 @@ fn the_escort_opens_the_interior_doors_on_his_route() {
             // A round cap: the escort stopped (10 s still inside w.follow's sense is not visible
             // here; 4500 ticks of no round progress = stalled).
             if w.total_ticks - round_start > 4500 { break; }
+            // The lead hides from an armed guard within 14 [M AllyLeadHide 0x15ec08], and since the
+            // stream join that guard's rounds at Bond land on the lead when he cowers on their line
+            // [M NDrone2_DealWithObjHit 0x13fff0:181-232]: on the joined tree the follow stood still
+            // 4 u east of the hiding lead while guard 14 fired at Bond from the west, and two 7.5
+            // rounds killed him (hp 10, state 0x44). A player answers the threat that sent the lead
+            // into cover at once, not 4500 ticks later.
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let c = &sim.drones.list[ci];
+                let threat = c.state == nf_game::drone::state::LEAD_HIDE && sim.drones.list.iter().enumerate().any(|(i, d)| {
+                    i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                        && walker::dxz(d.pos, c.pos) < 14.0 && !cleared.contains(&i)
+                });
+                if threat { break; }
+            }
             // The budget follows the walkreal test's own precedent (12 rounds × 12000): master's
             // walk-order (fix-script-start-tick) and weapons merges re-position the stairwell-head
             // guard group, so the escort now takes more hide pauses (AllyLeadHide 0x15ec08 [M]) on

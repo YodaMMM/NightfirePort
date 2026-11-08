@@ -50,20 +50,43 @@ fn iso() -> Option<String> {
 // Re-pinned for standins-scene-930: an online bot's armour pickup now runs Pickup_Handler's class-2 case 3
 // (BOT_vars+0xA4 / the armour byte += amount, capped 50 [M 0x18e650:119-133]) instead of the old +20 health,
 // so the fights run differently — kills 37; the two machines' per-tick hashes still agree.
-// local-match-bot-pickups re-pin: two game-faithful changes land inside this online run, both
-// simulated identically on every machine (the lockstep holds — ha == hb every tick): (1) the
-// bots' pickup rows read the REGISTERED law — pickGoal skips only a row whose registered
-// object is GONE [M 0x126b88:386-390], so the bots now also target hidden (respawning) rows;
-// (2) NDrone2_DSTATE_BotDead zeroes the dead bot's pickup visit rows [M 0x171518:17]. The old
-// digest baked the port's two deviations in (the state-2 skip and the never-reset stamps).
-/// The 2-humans + 14-bots fixed run's hash fold. The golden moved with mp-bot-voices: the bots'
-/// pain/death barks are real shared-stream draws now (`BOT_soundEffect` 0x126618's arms — the
-/// one `Rand_Rand(n)` per bark [M 0x1266b4]), so the simulated result legitimately differs from
-/// the pre-bark 0x89cb_fcb6_ae45_c2ac; the pin's job (catching an UNintended change) is intact.
-/// agent-crouch-2 moved it again: the crouch smoothers ease from the 0.75-scaled lane [M
-/// Player_Update 0x193600:296-299, Player_Move 0x191dd0:166-170]; restoring only the old unscaled
-/// crouch read-back on that tree gives back the previous 0x7e8f_c618_440c_28c1.
-const PINNED_DIGEST: u64 = 0x6055_65ac_490b_d56d;
+// gas-rng-draws-6 re-pin (the merge of s/gas-rng-draws-5 + master): BOTH parents moved the
+// digest, each game-faithfully, and the merged tree carries both:
+// (a) gas-rng-draws-2's re-pin: every real `Gas_Init` site consumes the game's draws from the
+//     shared stream [M Gas_Init 0x1aacc8:72-80 — spin Rand_FRand 0x1ab060 + sign Rand_Rand
+//     0x1ab08c (+ the kind-7 wind draws 0x1ab160/184/1a4); Rand_FRand/Rand_Rand 0x1e3780/
+//     0x1e3738 advance the same SEED_X/SEED_Y pair the AI accuracy (DroneWeap_DoBulletAccuracy
+//     0x179740) and the bullet spread (Bullet_init 0x12c5a0) draw from], so every bot decision
+//     after a puff moves. The pin exists to catch UNintended optimisation drift; this is the
+//     intended behaviour change.
+// (b) master's local-match-bot-pickups re-pin: the bots' pickup rows read the REGISTERED law —
+//     pickGoal skips only a row whose registered object is GONE [M 0x126b88:386-390] — and
+//     NDrone2_DSTATE_BotDead zeroes the dead bot's pickup visit rows [M 0x171518:17]; plus the
+//     bots' pain/death barks are real shared-stream draws now (`BOT_soundEffect` 0x126618's
+//     arms — the one `Rand_Rand(n)` per bark [M 0x1266b4]).
+// Measured on the merged tree (gas-rng-draws-6): kills 35, digest 0x986f_90e8_e5d6_b12f — both
+// parents' game-faithful changes ride in one stream; the machines' per-tick hashes still agree.
+// gas-guard-repin re-pin pending: the master merge (water splash/wading, sighted alert fold)
+// rides the same stream — re-measured below after the merge, see the digest update.
+// stream-batch re-pin (2026-11-06, the joined gas+guard+muzzle tree): 0x986f_90e8_e5d6_b12f →
+// 0xbbb6_911c_6656_9440. Attribution: the run is fixed-input deterministic (2 humans' scripted
+// walk + 14 NEUTRAL bots, fixed 60 Hz, no wall clock), so any sim change moves the fold; the
+// only sim changes this merge carries are the three lever families — the gas init draws [M
+// Gas_Init 0x1aacc8:72-80 + the kind-7 wind 0x1ab138-0x1ab1c8], the guard muzzle-flash
+// orientation draws [M DroneWeap_FireWeapon 0x178f68:189-213] and the guard arrival-radii/glass
+// levers [M 0x152548:174-181] — and the MP arena exercises all three (bots fire, smoke pops,
+// guards/bots use the shared arrival radii). The kills path still runs (35 kills, the sister
+// asserts hold); the pin moves, the pin's job (catching an UNintended change) is intact.
+/// The 2-humans + 14-bots fixed run's hash fold; the pin's job (catching an UNintended change) is intact.
+// stream-join re-pin (2026-11-08): the joined stream branches (spawner waves, guard sight and
+// rounds, blasts, aim and use picks) move the bots' shared-stream draws; the same tree gives the
+// same digest run to run (two runs, 43 kills, 0x6555_3962_1008_763f). 0xbbb6_911c_6656_9440 →
+// 0x6555_3962_1008_763f.
+// join-reds-c re-pin: join-final merged the MP batch (bot scan pass, team rows, round timer, world
+// grunt) on top of the stream join, whose pin the merge kept; neither side's pin covers the joined
+// tree (mp-batch alone pinned 0xd90a_0986_f0c4_fcb1). Two runs on 3c94fa9ea agree, 41 kills.
+// 0x6555_3962_1008_763f → 0x823b_c904_7317_1ab5.
+const PINNED_DIGEST: u64 = 0x823b_c904_7317_1ab5;
 
 const TICKS: u32 = 3600;
 

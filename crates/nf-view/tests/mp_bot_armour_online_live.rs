@@ -53,7 +53,12 @@ fn bot_armour_take_online_raises_the_brains_armour_pool() {
     let mut armour_takes: u32 = 0;
     let mut weapon_takes: u32 = 0;
     let mut armour_take: Option<(i16, Option<u8>)> = None; // (the pickup's amount, the pool after)
-    for t in 0..3000u32 {
+    // gas-rng-draws-2: the window is 9000 ticks now — the bots fight (muzzle smoke, impact
+    // puffs), and every real `Gas_Init` site consumes the shared stream's draws [M Gas_Init
+    // 0x1aacc8:72-80; Rand_FRand/Rand_Rand 0x1e3780/0x1e3738 = the one SEED_X/SEED_Y pair],
+    // so the bots' wander reaches the armour later than the old stream's. The pinned law is
+    // unchanged: an online bot armour take raises the brains' armour pool.
+    for t in 0..9000u32 {
         let row: [nf_net::Input; nf_net::MAX_AGENTS] =
             std::array::from_fn(|sl| if sl < 2 { walk(t, sl) } else { NEUTRAL });
         let ha = nf_view::net_tick(a.sim.as_mut().unwrap(), &row, 0);

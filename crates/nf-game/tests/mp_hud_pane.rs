@@ -129,3 +129,39 @@ fn the_status_line_follows_the_sort() {
     m.game.end_status = MpEndStatus::Won("Bond".into());
     assert_eq!(status_line(&m), vec![StatusPart::Format(0x0200_0022, "Bond".into())]);
 }
+
+/// mp-score-lines: the task's three real-match pins — score a kill through the match's real
+/// scoring (`player_killed`, the port of `MP_PlayerKilled` 0x188f70) and read the panel text.
+/// Assassin and KOTH FFA print three lines score\nkills\ndeaths [M MP_GetPlayerScore
+/// 0x189730:13-19]; Deathmatch prints the FFA two-line form whose sprintf format is
+/// "\n%d\n%d" — the first line stays blank [L ee_snapshot 0x30cc18].
+#[test]
+fn the_panel_text_after_a_kill_in_the_three_pinned_scenarios() {
+    // Assassin: the target kill as the assassin — score +5 [M 0x188f70:229-233], kills +1
+    // [M :157-163] → "5\n1\n0". The victim's pane reads "0\n0\n1".
+    let mut rng = Rng::new(5);
+    let mut m = make(scenario::ASSASSIN);
+    m.assassin = Some(0);
+    m.assassin_target = Some(1);
+    m.player_killed(1, Some(0), false, false, &mut rng);
+    let p = pane(&m, 0);
+    assert_eq!(p.text, "5\n1\n0", "the 0x400 three-line arm [M 0x189730:13-19]");
+    assert_eq!(pane(&m, 1).text, "0\n0\n1", "the victim's own three lines");
+
+    // KOTH FFA: a plain kill — the kills counter counts [M :157-163] but the score word does
+    // not move: the personal gate needs MPSettings+0x400 == 0 [M :178-182] and 0x40000800 has
+    // bit30 set — the pane's score line reads 0.
+    let mut rng = Rng::new(6);
+    let mut k = make(scenario::KOTH_FFA);
+    k.player_killed(1, Some(0), false, false, &mut rng);
+    let p = pane(&k, 0);
+    assert_eq!(p.text, "0\n1\n0", "the 0x40000800 three-line arm [M 0x189730:13-19]");
+
+    // Deathmatch: the two-line FFA form — the score word (+1, [M :178-182]) is NOT printed;
+    // the text is the blank line, kills, deaths [L 0x30cc18].
+    let mut rng = Rng::new(7);
+    let mut d = make(scenario::DEATHMATCH);
+    d.player_killed(1, Some(0), false, false, &mut rng);
+    let p = pane(&d, 0);
+    assert_eq!(p.text, "\n1\n0", "the FFA two-line form [M 0x189730:20-24; L 0x30cc18]");
+}

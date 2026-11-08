@@ -632,6 +632,17 @@ fn run_cell(scene: &mut Scene, id: u8, snap: &Snap) -> Cell {
     // raise completes inside the first press), the way a player takes the photo.
     let aim_cell = scene.sim.as_ref().unwrap().weapons.base(id as usize) == 0x54;
     let fire_in = nf_game::player::Input { aiming: aim_cell, ..Default::default() };
+    // The raise plays first, with the trigger up: the aim raise (view state 0xF) is outside the
+    // {0, 9, 0xB} set, so a press made during it is spent on the refused tick and the held trigger
+    // never re-arms [M Player_WeaponFiring 0x1a5460:601-648]. A player raises the camera, then presses.
+    if aim_cell {
+        for _ in 0..120 {
+            step(scene, fire_in, false, false, false);
+            sample(&mut c, scene);
+            let sim = scene.sim.as_ref().unwrap();
+            if sim.aiming && sim.view_aim_anim.is_none() { break; }
+        }
+    }
     for _attempt in 0..3 {
         let hold = if id >= 0x48 { 45 } else { 60 };
         let (shots_before, gren_before) = (c.shots, c.grenades);

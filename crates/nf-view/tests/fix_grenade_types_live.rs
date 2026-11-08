@@ -231,22 +231,34 @@ fn the_stun_stuns_the_guard_for_3600_and_drops_his_weapon() {
     }
     // Bond 3 u to the guard's right (perpendicular −), facing him. [L] measured: the only tried
     // offset near list[2] where the floor holds Bond, the grenade pops and the flash reaches him.
+    // stream-batch-2: the delivery premise (the head→blast line of sight [M 0x12e0c0 +
+    // NDrone2_CanSeeObject's AI-net ray]) is geometry-fragile — the joined tree's streams drift
+    // the guard's warm-up position slightly and the ray clips the wall edge, so the offset is a
+    // searched lever over the measured spot; the stun-law asserts below are unchanged.
     let (sy, cy) = (gyaw.sin(), gyaw.cos());
     let mut dev = nf_view::dev::Dev { scenario: None, ..Default::default() };
-    dev.teleport(&mut scene, [gx + cy * 0.0 - sy * -3.0, gy, gz + sy * 0.0 + cy * -3.0], gyaw + std::f32::consts::PI);
-    for _ in 0..30 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
-    scene.sim.as_mut().unwrap().bond.pitch = -0.9; // at the floor just ahead
-    let mut popped = None;
-    for _ in 0..600u32 {
-        scene.sim.as_mut().unwrap().step_bond(Input::default(), true, false, false);
-        if scene.sim.as_ref().unwrap().drones.health.flashbang > 0.0 { popped = Some(()); break; }
+    let mut stun_offset = None;
+    for off in [-3.0f32, -2.5, -3.5, -2.0, -4.0] {
+        dev.teleport(&mut scene, [gx + cy * 0.0 - sy * off, gy, gz + sy * 0.0 + cy * off], gyaw + std::f32::consts::PI);
+        scene.sim.as_mut().unwrap().bond.pitch = -0.9; // at the floor just ahead
+        let mut popped = false;
+        for _ in 0..600u32 {
+            scene.sim.as_mut().unwrap().step_bond(Input::default(), true, false, false);
+            if scene.sim.as_ref().unwrap().drones.health.flashbang > 0.0 { popped = true; break; }
+        }
+        if !popped { continue; } // this offset never popped — next lever
+        // set_state queues next_state — give the SM a pass to land 0x4D. Bond then steps back 30 u
+        // (the proper teleport re-cells him): the Loop's case 0xC holds the guard down while anyone
+        // is within 2.0 [M 0x1631c0 case 0xc], and he is spawned ~3 u from Bond — the release is the
+        // 3600 timer only from a distance.
+        for _ in 0..2 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+        let dr = &scene.sim.as_ref().unwrap().drones.list[gi];
+        if dr.state != nf_game::drone::state::STUN_GRENADE_IMPACT { continue; } // the flash missed — next lever
+        stun_offset = Some(off);
+        break;
     }
-    popped.expect("the stun flashed");
-    // set_state queues next_state — give the SM a pass to land 0x4D. Bond then steps back 30 u
-    // (the proper teleport re-cells him): the Loop's case 0xC holds the guard down while anyone
-    // is within 2.0 [M 0x1631c0 case 0xc], and he is spawned ~3 u from Bond — the release is the
-    // 3600 timer only from a distance.
-    for _ in 0..2 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+    let off = stun_offset.expect("no offset near list[2] delivered the flash premise — the harness needs a new lever (the stun law asserts below are unchanged)");
+    eprintln!("gate: the flash premise held at offset {off}");
     let bp = scene.sim.as_ref().unwrap().bond.pos;
     let byaw = scene.sim.as_ref().unwrap().bond.yaw;
     dev.teleport(&mut scene, [bp[0] - byaw.sin() * 30.0, bp[1], bp[2] - byaw.cos() * 30.0], byaw);
@@ -288,7 +300,8 @@ fn the_stun_stuns_the_guard_for_3600_and_drops_his_weapon() {
     assert!(exit_state == nf_game::drone::state::ATTACK || exit_state == nf_game::drone::state::DRAW_WEAPON,
         "the recovered guard wakes into Attack 0x56 (the get-up's follow-on; 0x66 = Attack's draw of the sidearm he holds fists after the drop) [M 0x163350 case 1], got {exit_state:#x}");
     assert!(held > 3600, "the Loop's fresh re-arm holds 3600 from the Loop's first tick — the chain cannot finish before it [M 0x1631c0 case 1], got {held}");
-    assert!(held <= 4300, "the hold is 3600 + the fall and get-up clips, not an endless stall, got {held}");
+    // The two falls differ by the `Rand_Rand(2)` pick [M 0x172bb0 case 1]; the long one is 322 ticks, the get-up 439.
+    assert!(held <= 4400, "the hold is 3600 + the fall and get-up clips, not an endless stall, got {held}");
 }
 
 /// ── The 0x69 smoke: a 5-tick fuse into a 3600-tick cloud ────────────────────────────────────────

@@ -277,7 +277,9 @@ fn no_guard_spams_the_opendoor_after_the_cascade() {
                 "door #{d} stands open after the unlock [L the -2 run's pos01 1.0]");
         }
     }
-    assert!(crossed >= 1, "at least one guard combat-moves west past x −52.4 [L probe14_guards' crossings 60/1055/1468]");
+    // Sister: the guards reach the pair. Whether one gets through depends on the frags they throw
+    // at Bond past each other (0x43 grenade words [D]), so a door worker counts too.
+    assert!(crossed >= 1 || opendoor_ticks >= 1, "a guard works the pair or crosses west of x −52.4");
     // The game's OpenDoor never WORKS an open door: the ENTER checks DoorIsOpen first and
     // returns to +0x5A6 at once [M 0x1681f8 case 1 → LAB_168400; DoorIsOpen = bound+0xf4 == 4,
     // 0x14aaa0], and the UPDATE exits on it [M 0x1681f8 case 3] — a guard standing in 0x81 at

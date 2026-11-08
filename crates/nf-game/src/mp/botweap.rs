@@ -196,54 +196,68 @@ pub fn is_preferred_weapon(t: &BotWeaponTable, class_pref: u8, w: u8) -> bool {
     }
 }
 
-/// `BOT_handlePain` 0x125ed8:58-96 — the damage a hit does to a bot after the MP modifiers and the
-/// armour: `× Plr_DMod_Multi` when the hit carries a location (`param_4 != −1`), the locational
-/// factor (`MPSettings+0x1C8`, head 5 → ×4.0, the upper limbs 0x14/0x15/0x20/0x23 → ×0.8, the lower
-/// limbs 0x31..0x38 → ×0.8), `× 3.0` when `MPSettings+0x1BC` is set; the armour absorbs pain types
-/// 0 and > 7 only (`min(d, armour)`, the pool keeps the u8 remainder). Returns (health loss,
-/// armour after). `location` = the bone id or −1; `multi` = the level's `Plr_DMod_Multi`
-/// ([`DMOD_MULTI`] on every arena).
-pub fn bot_pain(damage: f32, multi: f32, location: i16, pain_type: u16, armour: u8, locational: bool, triple: bool) -> (f32, u8) {
-    let mut d = damage;
-    if location != -1 {
-        d *= multi;
-    }
-    if locational {
-        match location - 5 {
-            0 => d *= DMOD_HEAD,
-            0xf | 0x10 | 0x1b | 0x1e => d *= DMOD_LIMB,
-            0x2c..=0x33 => d *= DMOD_LIMB,
-            _ => {}
-        }
-    }
-    if triple {
-        d *= 3.0;
-    }
-    let frac = if pain_type == 0 || pain_type > 7 { 1.0 } else { 0.0 };
+/// `BOT_handlePain` 0x125ed8:48-93 — the damage a hit does to a bot after the MP modifiers and the
+/// armour: `× Plr_DMod_Multi` when the hit carries a location (`param_4 != −1`, [M :48-50]), the
+/// locational factors with Location Damage on (`MPSettings._456_4_` = +0x1C8, [M :51-75]: head 5 →
+/// ×4.0, the upper limbs 0x14/0x15/0x20/0x23 → ×0.8, the lower limbs 0x31..0x38 → ×0.8), `× 3.0`
+/// with Professional Mode (`MPSettings._444_4_` = +0x1BC, [M :77-79]); the armour pool
+/// (`BOT_vars+0x769`) absorbs pain types 0 and > 7 only (`min(d, armour)`, [M :80-92] — types 1..7
+/// take the health whole), the pool keeps the u8 remainder. Returns (health loss, armour after).
+/// `location` = the bone id or −1; `rules` = the level's `Plr_DMod_*` plus the two Player Mods
+/// words ([`super::combat::PainRules`] — the same globals `Player_HandlePain` reads).
+pub fn bot_pain(damage: f32, rules: &super::combat::PainRules, location: i16, pain_type: u16, armour: u8) -> (f32, u8) {
+    let d = super::combat::mp_damage(rules, damage, location); // [M 0x125ed8:48-79]
+    let frac = if pain_type == 0 || pain_type > 7 { 1.0 } else { 0.0 }; // [M :80-87]
     let a = armour as f32;
-    let absorbed = (d * frac).min(a);
-    ((d - absorbed), (a - absorbed) as u8)
+    let absorbed = (d * frac).min(a); // [M :88-90]
+    ((d - absorbed), (a - absorbed) as u8) // [M :91-92]
 }
 
-/// `Player_HandlePain` 0x1902c8's MP arm for a bullet hit on a human (pain type 0 with a hit
-/// location): `× Plr_DMod_Multi` [M :51-53] (the locational/×3 options as in [`bot_pain`] are off —
-/// the port's settings carry no +0x1BC/+0x1C8), the armour (`BL+0x8B0`) absorbs `min(d, armour)`
-/// [M :96-101], the health floors at 0 and anything below 1.0 reads 0 [M :103-106, 130-133].
-pub fn player_pain_mp(health: &mut f32, armour: &mut f32, damage: f32, multi: f32) {
+/// `Player_HandlePain` 0x1902c8's MP arm — the whole hurt a hit deals a human in a match, all of
+/// it gated on `MPSettings._384_4_` = the MP master enable being set ([M :28-50]; the port's MP
+/// callers only run in a match):
+///
+/// - the early-outs: the victim's health (`BL+0x894`) ≤ 0 or the raw damage ≤ 0 return untouched
+///   [M :17-23]; the `master_copy` + GameFlow gate [M :24-26] and the `BL+0x8BC = 1.0` write
+///   [M :27] live with the caller (the match tick; the port's BL carries no such word);
+/// - `× Plr_DMod_Multi` when the hit has a location (`param_5 != −1`) [M :51-53], the locational
+///   factors with Location Damage on (`MPSettings._456_4_` = +0x1C8 [M :54-78], the same switch as
+///   [`bot_pain`]) and Professional Mode × 3.0 (`MPSettings._444_4_` = +0x1BC [M :80-82]) — the
+///   block [`super::combat::mp_damage`] carries, [`PainRules`] carrying the settings the old doc
+///   comment called missing (`MpSettings::location_damage` / `::capture_reward`);
+/// - the pain-type switch [M :84-99]: types 1..7 take the health whole (armourFraction 0.0 — a
+///   hurt volume, a fall 6 or a drowning 7 cannot be absorbed), types 0 and > 7 are armour
+///   fractions 1.0 (bullets `Player_DealWithObjHit` 0x194458:195 and blasts `Player_Hurt`
+///   0x196060 arrive as 0); types 5/6/7 also stamp the MPGame last-shooter word 0xfffe
+///   [M :91-93] — the caller's match state owns that word, the port's death credit covers it;
+/// - the armour (`BL+0x8B0`) absorbs `min(d, armour)` [M :100-104], the health loses the rest
+///   [M :105-108], anything below 1.0 reads 0 [M :131-133] and `Player_SetHealth` writes it
+///   [M :134]. The `CheatInfo` guard [M :106-110] is the god-mode cheat's — not ported [S];
+/// - the pain grunt's `Rand_Rand(4)` [M :110-119] and the HUD flash `+0x968` / glow `+0x967`
+///   [M :120-129] stay with the caller; the flash accumulates the RETURNED value (the scaled
+///   amount, `param_1 × 21.333334` [M :126]).
+///
+/// Draws nothing from the shared stream. Returns the scaled damage (0.0 on an early-out).
+pub fn player_pain_mp(health: &mut f32, armour: &mut f32, damage: f32, rules: &super::combat::PainRules, location: i16, pain_type: u16) -> f32 {
     if *health <= 0.0 || damage <= 0.0 {
-        return; // [M :17-23]
+        return 0.0; // [M :17-23]
     }
-    let d = damage * multi;
-    let absorbed = d.min(*armour);
+    let d = super::combat::mp_damage(rules, damage, location); // [M :51-82]
+    let frac = if pain_type == 0 || pain_type > 7 { 1.0 } else { 0.0 }; // [M :84-99]
+    // The armour's SHARE is d × frac, capped by the pool [M :100-104]; the HEALTH loses the full
+    // scaled damage minus that share [M :105-108 — `fVar4 = param_1 - absorbed`, param_1 = d] —
+    // types 1..7 take the health whole.
+    let absorbed = (d * frac).min(*armour);
     *armour -= absorbed;
     let mut h = *health - (d - absorbed);
     if h <= 0.0 {
         h = 0.0;
     }
     if h < 1.0 {
-        h = 0.0;
+        h = 0.0; // [M :131-133]
     }
-    *health = h;
+    *health = h; // [M :134 — Player_SetHealth]
+    d
 }
 
 /// What a pickup did for a bot (`Pickup_Handler`'s class-2 arm).
@@ -717,23 +731,42 @@ mod tests {
     }
 
     /// `BOT_handlePain`: ×4.0 (MP) then the armour absorbs; pain types 1..7 bypass the armour; the
-    /// locational head factor ×4.0.
+    /// locational head factor ×4.0. The human arm: the same multipliers with the settings, the
+    /// armour first, below 1.0 → 0, the pain-type fractions.
     #[test]
     fn pain_multi_and_armour() {
-        assert_eq!(bot_pain(5.0, DMOD_MULTI, 0, 0, 0, false, false), (20.0, 0));
-        assert_eq!(bot_pain(5.0, DMOD_MULTI, 0, 0, 50, false, false), (0.0, 30));
-        assert_eq!(bot_pain(5.0, DMOD_MULTI, 0, 0, 12, false, false), (8.0, 0));
-        assert_eq!(bot_pain(5.0, DMOD_MULTI, 0, 3, 50, false, false), (20.0, 50), "type 3 bypasses the armour");
-        assert_eq!(bot_pain(5.0, DMOD_MULTI, -1, 0, 0, false, false), (5.0, 0), "no location → no ×4");
-        assert_eq!(bot_pain(5.0, DMOD_MULTI, 5, 0, 0, true, false), (80.0, 0), "head with locational damage");
-        assert_eq!(bot_pain(5.0, DMOD_MULTI, 5, 0, 0, false, true), (60.0, 0), "the ×3 flag");
-        // the human arm: ×4, the armour first, below 1.0 → 0
+        use super::super::combat::PainRules;
+        let rules = PainRules { multi: DMOD_MULTI, head: DMOD_HEAD, upper: DMOD_LIMB, lower: DMOD_LIMB, location: false, professional: false };
+        assert_eq!(bot_pain(5.0, &rules, 0, 0, 0), (20.0, 0));
+        assert_eq!(bot_pain(5.0, &rules, 0, 0, 50), (0.0, 30));
+        assert_eq!(bot_pain(5.0, &rules, 0, 0, 12), (8.0, 0));
+        assert_eq!(bot_pain(5.0, &rules, 0, 3, 50), (20.0, 50), "type 3 bypasses the armour");
+        assert_eq!(bot_pain(5.0, &rules, -1, 0, 0), (5.0, 0), "no location → no ×4");
+        let loc = PainRules { location: true, ..rules };
+        assert_eq!(bot_pain(5.0, &loc, 5, 0, 0), (80.0, 0), "head with locational damage");
+        let pro = PainRules { professional: true, ..rules };
+        assert_eq!(bot_pain(5.0, &pro, 5, 0, 0), (60.0, 0), "the ×3 flag");
+        // the human arm: ×4, the armour first, below 1.0 → 0, the options and the pain types
         let (mut h, mut a) = (100.0, 10.0);
-        player_pain_mp(&mut h, &mut a, 5.0, DMOD_MULTI);
-        assert_eq!((h, a), (90.0, 0.0));
+        let d = player_pain_mp(&mut h, &mut a, 5.0, &rules, 0, 0);
+        assert_eq!((d, h, a), (20.0, 90.0, 0.0));
         let (mut h, mut a) = (20.5, 0.0);
-        player_pain_mp(&mut h, &mut a, 5.0, DMOD_MULTI);
+        player_pain_mp(&mut h, &mut a, 5.0, &rules, 0, 0);
         assert_eq!(h, 0.0, "0.5 left reads as dead");
+        let (mut h, mut a) = (100.0, 50.0);
+        player_pain_mp(&mut h, &mut a, 5.0, &loc, 5, 0);
+        assert_eq!((h, a), (70.0, 0.0), "80 − the 50 armour first, the health pays 30");
+        let (mut h, mut a) = (100.0, 0.0);
+        let d = player_pain_mp(&mut h, &mut a, 5.0, &pro, -1, 0);
+        assert_eq!((d, h), (15.0, 85.0), "a blast with Professional Mode: no part multiplier, ×3");
+        let (mut h, mut a) = (100.0, 50.0);
+        player_pain_mp(&mut h, &mut a, 5.0, &rules, -1, 6);
+        assert_eq!((h, a), (95.0, 50.0), "pain type 6 (a fall): the armour takes nothing");
+        let (mut h, mut a) = (100.0, 50.0);
+        player_pain_mp(&mut h, &mut a, 5.0, &rules, 0, 0);
+        assert_eq!((h, a), (100.0, 30.0), "type 0: the pool pays the scaled 20 first");
+        let (mut h, mut a) = (0.0, 50.0);
+        assert_eq!(player_pain_mp(&mut h, &mut a, 5.0, &rules, 0, 0), 0.0, "a dead victim takes nothing");
     }
 
     #[test]

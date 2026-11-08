@@ -51,11 +51,26 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// 0x18e650] files the weapon + its clip — and holds the best-fed owned gun. Test-local (the
 /// g055-4 idiom): the shared resupply and every other walk stay master's.
 fn loot_the_drops(w: &mut Walker, label: &str) {
+    loot_the_drops_up_to(w, label, 1.5);
+}
+
+/// The stairwell-bottom variant (fx-muzzle-repin-4): the fights' earlier kill-drops lie UP the
+/// flights Bond has already descended (the shifted stream left #17's drop at y 24.0 and #14's
+/// at 21.3 above the 18.9 strip), and the |Δy| < 1.5 band ratchets him back up one take at a
+/// time — the 2026-11-05 run's loot tour climbed to y 24.01 and the flight-A assert fired
+/// ("the descent never reached the lower floor"). A player descending scoops the drops at his
+/// FEET: the band's up-side caps at the standing floor (drops above it are left behind).
+fn loot_the_drops_floor(w: &mut Walker, label: &str) {
+    loot_the_drops_up_to(w, label, 0.0);
+}
+
+fn loot_the_drops_up_to(w: &mut Walker, label: &str, up: f32) {
     for _ in 0..4 {
         let sim = w.scene.sim.as_ref().unwrap();
         let bp = sim.bond.pos;
         let t = sim.drones.pickups.iter().filter(|p| !p.gone)
             .filter(|p| (p.m[3][1] - bp[1]).abs() < 1.5)
+            .filter(|p| p.m[3][1] - bp[1] <= up)
             .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
             .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)))
             .filter(|t| walker::dxz(*t, bp) < 8.0);
@@ -96,6 +111,12 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
                 p.m[3][0], p.m[3][1], p.m[3][2], p.kind, p.weapon, p.rounds);
         }
     }
+    // The grenade launcher #290 lies in the locked storeroom [D].
+    w.no_fetch.push([10.54, 47.47, 18.10]);
+    // The two armour vests (kind 3, `nf_game::pickup::kind::ARMOUR` [D placements]) carry
+    // no rounds: a dry Bond does not walk to them for ammo.
+    w.no_fetch.push([23.12, 47.62, 22.88]);
+    w.no_fetch.push([15.79, 15.08, 4.57]);
     if difficulty != 1 {
         assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
             "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
@@ -226,6 +247,39 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
         ];
         for (label, x, z, r) in maze {
             w.walk_to(Wp::new(*x, 47.4, *z).r(*r), &format!("d3 pre-leg: {label}"));
+            if *label == "the east wall north" {
+                // The armour room's pair, held at its doorway: #1 (placement 122, unarmed) and #2
+                // (placement 123, weapon 0x1d). With the 5.0/6.0 engage ranges [M 0x14b300
+                // LAB_0014bb44] #1 now closes to a 40.0 punch on Bond in the doorway, and #2's
+                // point-blank volleys at 2.0 u finished him at tick 2033 (8 x 8.0 in one tick) as
+                // he walked in. A player shoots them from the doorway as they come: any guard on
+                // this floor within 7 is fought; one still within 12 is waited for (bounded).
+                let start = w.total_ticks;
+                while w.total_ticks - start < 900 {
+                    let (near, far) = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let live = |d: &&nf_game::drone::Drone| d.present && !d.corpse && d.health > 0.0 && d.team == 1
+                            && (d.pos[1] - sim.bond.pos[1]).abs() < 2.0;
+                        (sim.drones.list.iter().position(|d| live(&d) && walker::dxz(d.pos, sim.bond.pos) < 7.0),
+                         sim.drones.list.iter().any(|d| live(&d) && walker::dxz(d.pos, sim.bond.pos) < 12.0))
+                    };
+                    if let Some(di) = near {
+                        let k = w.stand_and_fire(di, 600);
+                        eprintln!("[011] d3 armour-room stand: #{di} killed {k} health {}", w.scene.sim.as_ref().unwrap().drones.health.health);
+                    } else if far {
+                        w.tick(nf_game::player::Input::default(), false);
+                    } else { break; }
+                }
+                // The doorway stand's own turns and recoil can carry Bond off the wall lane
+                // (join-reds2-0, 00 Agent on the stream join: the run east then started from the
+                // desk side and wedged on a desk top at (20.87, 48.28, 14.89), grounded false).
+                // A player steps back onto the lane before the run east.
+                let off = walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, [*x, 47.4, *z]);
+                if off > 0.7 {
+                    eprintln!("[011] d3 armour-room stand left Bond {off:.2} u off the wall lane — back onto it");
+                    w.walk_to(Wp::new(*x, 47.4, *z).r(0.45), "d3 pre-leg: the east wall north, back on the lane");
+                }
+            }
         }
         // The take fires from the ring around the armour (radius 0.477 + 1.1 with a clear
         // sphere→centre line [M 0x18e148:203-214; the walkreal probe this task]) — the take spot
@@ -429,7 +483,9 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     w.walk_to(Wp::new(23.0, 19.3, 3.8).r(1.0), "the east connector down (23.0→18.9)");
     band(&w, 18.2, 21.3, "connector 2's bottom");
     w.walk_to(Wp::new(15.0, 19.2, 4.8).r(1.0), "the south strip 18.9 west");
-    loot_the_drops(&mut w, "the 18.9 strip");
+    loot_the_drops_floor(&mut w, "the 18.9 strip");
+    // A drop can lie at the strip's east end: back to the flight head before the descent.
+    w.walk_to(Wp::new(15.0, 19.2, 4.8).r(1.0), "back along the 18.9 strip");
     w.walk_to(Wp::new(14.8, 15.4, -2.6).r(1.0), "the west flight A down (18.9→15.0)");
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -516,6 +572,7 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
         w2.dmg.lane_fights = true;
         w2.dmg.lane_floor_drops = true;
         w2.dmg.back_off = Some(3.0);
+        if difficulty >= 2 { tower2::EAST_WING_WEST_SIDE.with(|c| c.set(true)); }
     }
     w2.wait_enabled(3000, "07000012's intro");
     w2.wait(90);

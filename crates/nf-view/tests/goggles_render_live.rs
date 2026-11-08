@@ -286,7 +286,8 @@ fn night_sight_quarters_the_gas_puff_alpha() {
         let sim = scene.sim.as_mut().unwrap();
         let yaw = sim.bond.yaw;
         let p = [sim.bond.pos[0] + yaw.sin() * 2.0, sim.bond.head()[1], sim.bond.pos[2] + yaw.cos() * 2.0];
-        sim.drones.gas.init(p, 0.0, [0.0; 3], 0.5, 0.5, 0, [0xff, 0xff, 0xff, 0xc8], 6000.0);
+        let mut rng = nf_game::drone::Rng::new(0x21d);
+        sim.drones.gas.init(&mut rng, p, 0.0, [0.0; 3], 0.5, 0.5, 0, [0xff, 0xff, 0xff, 0xc8], 6000.0);
     }
     // (the pool's alpha byte, the GPU colour slot alpha, the CPU vertex alpha, the mesh's vertex alpha)
     let read = |scene: &Scene| -> (u8, f32, u8, u8) {

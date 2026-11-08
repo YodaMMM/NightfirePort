@@ -16,6 +16,28 @@ use crate::walker::Wp;
 /// from the leg end (d 2.0), and a kill there means the burst never exists.
 pub static PRE_CLEAR_SOUTH_CORRIDOR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// OPT-IN (set only by the 07000011 chain's Agent and 00 Agent walks; the 07000012 and 07000013
+/// walks never set it, so their legs are unchanged): "the east wing" leg aims at the corridor's
+/// west side (x 23.2; the wall stops Bond near x 24.0). The office civilian #24 stands at
+/// (25.35, 1.0, -0.04), 1.3 east of the old leg end, and a guard's round ends on the first body
+/// on its line [M Bullet_CollisionHandler 0x12ce80 state 2; NDrone2_DealWithObjHit 0x13fff0:
+/// 181-232 — a team-1 shooter lands on team 3]. The chain's Agent run had guard #3 open fire up
+/// the wing as Bond stood at that leg end; his rounds killed her 19 ticks later ("Killed
+/// Civilians", the restart). With this aim the run measured guard #3 dead at the next leg with
+/// her alive. It changes where and when the fight starts; it does not keep her out of every line.
+/// Per thread: the 07000011 binary runs its difficulties side by side.
+thread_local! { pub static EAST_WING_WEST_SIDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
+/// OPT-IN (set only by the campaign_flow 12 leg; the 07000011/12/13 walks never set it, so their
+/// legs are unchanged): at "the east wing corner" leg end, the wing guard placement #9 (weapon
+/// 0x19) stands 2.7 u east of Bond, and on the joined tree he opened fire down the wing at Bond's
+/// back as the route walked south; office civilian #24 had stepped into the wing (24.2-24.8, -1.9
+/// to -2.6) and his round ended on her first ("Killed Civilians", the restart) — a team-1 round
+/// lands on team 3 [M NDrone2_DealWithObjHit 0x13fff0:181-232]. A player deals with the gunman
+/// he walks past instead of turning his back on him: the stand runs only while that guard lives
+/// within 6 u of the corner.
+thread_local! { pub static CLEAR_EAST_WING_GUARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
 /// The walkreal-12 route: spawn → the keypad burn → the console E. Used again by the 07000013
 /// test's warm chain.
 pub fn walk_12(w: &mut crate::walker::Walker) {
@@ -218,7 +240,32 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
         (5.75, -22.75, "the south hall"), (-9.75, -22.25, "the south hall west"),
     ];
     for &(x, z, label) in legs {
+        let x = if label == "the east wing" && EAST_WING_WEST_SIDE.with(|c| c.get()) { 23.2 } else { x };
         w.walk_to(Wp::new(x, 1.1, z).r(1.0), label);
+        if label == "the east wing corner" && CLEAR_EAST_WING_GUARD.with(|c| c.get()) {
+            let di = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
+                d.placement == 9 && d.present && !d.corpse && d.health > 0.0 && d.team == 1
+                    && crate::walker::dxz(d.pos, w.scene.sim.as_ref().unwrap().bond.pos) < 6.0
+            });
+            if let Some(di) = di {
+                // The loadout's pistol (0x10, clip 7 on this chain) — the keypad burn left the
+                // Q-Decryptor in hand. A real wheel request, then the draw.
+                for _ in 0..4 {
+                    if w.scene.sim.as_ref().unwrap().gun.weapon == 0x10 { break; }
+                    w.tick(nf_game::player::Input { switch_to: Some(0x10), ..Default::default() }, false);
+                    for _ in 0..60 {
+                        let g = &w.scene.sim.as_ref().unwrap().gun;
+                        if g.weapon == 0x10 && g.switch_state == 0 { break; }
+                        w.tick(nf_game::player::Input::default(), false);
+                    }
+                }
+                let armed = w.scene.sim.as_ref().unwrap().gun.weapon == 0x10;
+                let t0 = w.total_ticks;
+                let killed = armed && w.stand_and_fire(di, 600);
+                eprintln!("[012] the east wing guard #{di} (placement 9) from the corner: armed {armed} (gun {:#x}) killed {killed} in {} ticks",
+                    w.scene.sim.as_ref().unwrap().gun.weapon, w.total_ticks - t0);
+            }
+        }
         if label == "the south-east bend 2" && PRE_CLEAR_SOUTH_CORRIDOR.load(std::sync::atomic::Ordering::Relaxed) {
             let di = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
                 d.present && !d.corpse && d.health > 0.0 && d.team == 1

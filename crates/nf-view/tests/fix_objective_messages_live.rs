@@ -32,6 +32,8 @@
 //!    0x1ee3e0 case 4 byte 3 → flag 2; `Font_DrawText` 0x1eee48 `flags & 2 → x -= width*0.5`) — the
 //!    port passed its right-justify flag instead, shifting both rows left by half their width.
 
+#[path = "common/reveal07.rs"]
+mod reveal07;
 use nf_game::mission::LEVELS;
 use nf_game::player::Input;
 
@@ -172,6 +174,10 @@ fn an_objective_complete_banner_draws_one_row_not_two() {
         // (07's own rec0 stays at its real state — the start scripts announced it, so the trigger's
         // ch 0x48 still has a completion to post.)
         for _ in 0..118 { sim.step_bond(Input::default(), false, false, false); }
+        // Drake's reveal first, the real path's order: until ch 21 takes them off, the library door
+        // pair's zone-3 band covers #412 and Bond there fails the mission ("Cover Lost", ch 99, which
+        // locks the plate [D #412 lock 99]) [M NDrone2_DSTATE_CivilianDoorGuard 0x160648:89-94].
+        reveal07::drakes_reveal(sim);
         sim.hud.objective_msgs.clear();
         sim.bond.pos = [94.2, 43.7, -45.9]; // TouchOnce #412's volume
     }

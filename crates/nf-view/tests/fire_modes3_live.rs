@@ -283,8 +283,12 @@ fn grenade_attachment_0x1b_is_a_straight_impact_round() {
 
 /// The launcher family (AT-420 Sentinel 0x2C ↔ 0x2D): the guided mode rides the missile camera,
 /// the unguided twin does not and fires its own 4 rounds per pull [L 0x2D +0x28 = 4].
+/// Un-ignored (fire-modes-real-press): DRIVE ORDER, not the port — the old 400-tick wait pressed
+/// INSIDE the ride, and the game's substate-10 arm runs only the restore countdown, never
+/// `Player_Weapon` [M Player_Update 0x193600 case 10:242-256], so the press is swallowed for a
+/// player too; the drive now waits out the ride (the 200 u range at 0.25 u/tick [L 0x2C
+/// +0x1C/+0x20] + the 15-tick restore [M Bullet_Delete 0x12e660:28]) before the press.
 #[test]
-#[ignore = "harness: the 0x2D mode press is refused after the 0x2C camera ride in this drive order (the matrix's fresh-machine presses pass); next window"]
 fn launcher_guided_rides_and_unguided_fires_four() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load(&iso);
@@ -333,8 +337,12 @@ fn launcher_guided_rides_and_unguided_fires_four() {
 /// The MGL family (Militek MGL 0x2A ↔ 0x2B): 'Grenade' 0x2A detonates ON the
 /// wall (contact, within ~2 s), 'Delay' 0x2B never does and dies on its 210-tick fuse
 /// [M Bullet_DoTrails 0x12d890:262-281] — both through the REAL mode press.
+/// Un-ignored (fire-modes-real-press): HARNESS MEASUREMENT, not the port — the old "trigger
+/// edge" read was the `shot_tick` pulse, the BULLET path's spawn presentation; the MGL is the
+/// grenade class (`Bullet_init` 0x12c5a0's class-3 arm spawns a grenade object) with no bullet
+/// pulse, so the old `shots >= 1` assert measured nothing. The grenade spawn + fuse death are
+/// the fire (see the comment at the assert).
 #[test]
-#[ignore = "harness: 0x2A's impact leg passes, the 0x2B leg's trigger edge misses in this drive order (fix_weapon_fire_modes_live covers the same pair green); next window"]
 fn mgl_impact_and_delay_through_the_real_mode_press() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load(&iso);
@@ -376,8 +384,13 @@ fn mgl_impact_and_delay_through_the_real_mode_press() {
 /// script's end (fire-anim length 280 [L 0x32 +0x44]) and its impact blasts with the record's
 /// radius 8 / damage 256 through the +0x70 & 0x100000 arm [M Bullet_CollisionHandler 0x12ce80:207-216].
 /// The beam twin spends 12 per shot [L 0x33 +0x91] at its 30-tick interval.
+/// Un-ignored (fire-modes-real-press): PORT BUG (fixed on master, fd1f5f32c) — the switch_to
+/// owned read used the VARIANT's own slot, but a variant owns nothing: the give writes the
+/// BASE's owned byte (`BL+0x1BA + base·0xC` [M Player_EquipWeapon 0x1a8a58:39-41]), so the
+/// 0x32 request was refused on owned[0x32] and the draw never started; the read moved to the
+/// base's slot (scene.rs switch_to gate).
 #[test]
-#[ignore = "harness: the 0x32 give lands (sw Some(0x32)) but the draw stalls — the fp-model resolve for the sel=0 variant needs the matrix's exact merge order; next window"]
+#[ignore = "the 0x32 charge leg passes on this tree; the 0x33 beam leg spends nothing over 100 held ticks (clip 100 -> 100) — not traced yet"]
 fn samurai_charge_drains_and_blasts_and_beam_spends_twelve() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load(&iso);

@@ -40,35 +40,35 @@ glist bounds centre (glist+0x10) posed by the object matrix, radius glist+0x1c �
 the door's moved pass rebuilds it after the walk [M 0x1336f8:209] — the port's
 `Door::live_sph()`.
 
-**The refinement cannot reject the candidate.** `Collide_SphereIntersect` 0x1ec940's post-pick
-loop calls `Collide_Intersect` 0x1ebaa8 per node (sphere vs the object's mesh triangles), but
-uses its return ONLY for the `param_10 & 0x10` early-out — param_10 is 0 here. A node whose
-mesh test fails keeps its sphere-candidate distance and stays in the list; the class walk
-dispatches it anyway. `Collide_Intersect`'s `obj+0xFD & 4` fast path (mask 0x101) is purely
-spherical too (it recomputes the contact from the two spheres).
+**The refinement decides (use-pick, correcting the earlier reading of this page).**
+`Collide_SphereIntersect` 0x1ec940's post-pick loop calls `Collide_Intersect` 0x1ebaa8 per node.
+For mask 0x101 it copies obj+0x90, inverts it, moves the pick centre into object space, presets the
+node's distance to 1e8 (:186-189) and runs `Intersect_PointGeom` 0x1e92d8 over the glist's
+collision triangles: a triangle registers when the signed plane distance lies in (0, 1.0] (front
+side only — HITTEST+0x9a is 0, so `fVar25 = 0`) and the clamped point-to-triangle distance is
+≤ 1.0; with no triangle the distance stays 1e8 (:331). The finalize after the loop frees every
+1e8 node before the list is returned [M 0x1ec940 `if (fVar10 == 1e+08) LList_Add(free list)`].
+The earlier reading looked only at `Collide_Intersect`'s return value (used for the
+`param_10 & 0x10` early-out) and missed the 1e8 drop. `Collide_Intersect`'s `obj+0xFD & 4` fast
+path is purely spherical, but no door/SS create sets that bit (Door_Create ORs obj+0xfd with 8
+only; SS_Create sets obj+0xfa |= 0x44).
 
 ## 3. Consequences [M ⇒ the port's rule]
 
-- The E reaches a door iff `|use_point − door.live_sphere_centre| < 1.0 + door.sphere_radius`.
-- No occlusion test exists anywhere in the chain — the door opens through a wall when the
-  sphere is touched from beside the doorway (pinned by doors_remainder_live's span-side stand).
-- The leaf mesh never gates the activation; the reach is the world sphere, which for a door is
-  the whole doorway's bounds sphere (r ≈ 1.3-1.6 on the census doors), not a thin plane.
-- The open leaf's sphere is the moved one: a kind-2 slide's sphere travels with the leaf
-  (07000001's door #0: z 1.94 → 3.53 open; 07000016's lift door: y 1.02 → 3.30 — probe), so
-  the E-close must be aimed at the moved leaf, and a stand inside the leaf's sweep gets the
-  close reversed by the anti-crush (`Door_ReactToHit` 0x135980's kind-2 arm reopens a CLOSING
-  door that meets an actor) [M].
+- The E reaches a door iff `|use_point − door.live_sphere_centre| < 1.0 + door.sphere_radius`
+  AND the use point lies within 1.0 in front of one of the door glist's collision triangles.
+- No occlusion test exists anywhere in the chain: a wall between Bond and the leaf does not stop
+  the E when both stages pass.
+- A use point inside the leaf (behind every face) or more than 1.0 off its surface misses: the
+  press lands from roughly 0.5-1.9 off the leaf, looking at it.
+- The open leaf's sphere and faces are the moved ones: a kind-2 slide's sphere travels with the
+  leaf (07000001's door #0: z 1.94 → 3.53 open; 07000016's lift door: y 1.02 → 3.30 — probe), so
+  the E-close must be aimed at the moved leaf.
 
-Port: `crates/nf-game/src/door.rs` `Doors::player_use` — the use sphere vs `live_sph()`
-(glist-resolved doors); doors whose glist never resolved keep the pre-sphere placement-distance
-stand-in (< 2.5) [S]. The aim-hint route (`Doors::pick_target`, Check_Target 0x1a7810) is a
-different pick and keeps its own documented stand-in.
-
-Tests: `doors_remainder_live::the_use_pick_is_the_world_sphere_candidate` (4.0 out short /
-1.2 out opens / 2.3 span-side opens through the wall), the three existing E tests
-(interactables_0700000b `waiting_room_door_opens_on_use`, level_end
-`door_e_opens_then_e_closes_on_07000001`, `the_walkin_leaves_a_closing_straddle_door_alone_on_07000016`).
+Port: `crates/nf-game/src/usepick.rs` (both stages, shared by every use class) called from
+`Doors::player_use`. Tests: `use_pick_census_live` (every story level's doors, SimpleScripts,
+locks, PCs and monitors from each face the shape allows), `doors_remainder_live`,
+`fix_door_react_path_live`, `level_end_live`.
 
 ## The glist-0 door stand-in is gone (door-glist0-use-standin, 2026-10-22)
 

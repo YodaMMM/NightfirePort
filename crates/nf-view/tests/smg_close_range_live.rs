@@ -705,6 +705,16 @@ fn smg_rounds_damage_a_close_guard_and_the_pistol_sister() {
             let expected: f32 = tr.impacts.iter().map(|(_, e, _)| *e).sum();
             eprintln!("[smg] SMG {dist} u: spawned {} rounds, {} impacts (ally {}), hp {:.1} -> {:.1} (drop {drop:.3}, expected {expected:.3}), ticks {}",
                 tr.spawned, tr.impacts.len(), tr.ally_impacts, tr.hp0, tr.hp1, tr.ticks);
+            // fx-muzzle-repin: a neighbour's shotgun (0x1c) can spray the target while Bond stands
+            // 1 u from him — on the corrected stream the hall guards' blast ate d#6 (3 pellet
+            // impacts, 13.5 damage) before the SMG rounds landed. A player re-picks: the leg's
+            // premise is the SMG's OWN rounds damaging the guard, so an ally-killed target is
+            // skipped for the next candidate (the asserts below stay for the my-weapon path).
+            if tr.impacts.is_empty() && tr.ally_impacts > 0 && tr.hp1 <= 0.0 {
+                eprintln!("[smg] d#{tg}: died to ally fire before the SMG landed — next candidate");
+                live.remove(0);
+                continue;
+            }
             assert!(drop > 0.0, "SMG rounds at {dist} u must damage the guard: spawned {}, impacts {}, hp {:.1}->{:.1}",
                 tr.spawned, tr.impacts.len(), tr.hp0, tr.hp1);
             let dead = tr.hp1 <= 0.0;

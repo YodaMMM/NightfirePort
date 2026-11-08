@@ -530,7 +530,7 @@ impl Effects {
                         [0.0; 3]
                     };
                     let rgba = [((g.rgba[0] >> 24) & 0xff) as u8, ((g.rgba[0] >> 16) & 0xff) as u8, ((g.rgba[0] >> 8) & 0xff) as u8, (g.rgba[0] & 0xff) as u8];
-                    gas.init_ex_rot(g.mesh, p, 0.0, [0.0; 3], g.scale[0], g.scale[1], g.kind as u8, rgba, g.rgba[1], g.life as f32, rot);
+                    gas.init_ex_rot(rng, g.mesh, p, 0.0, [0.0; 3], g.scale[0], g.scale[1], g.kind as u8, rgba, g.rgba[1], g.life as f32, rot);
                 }
             }
             // The decal: `EffectInfo+4` != 0 → take a pool node, evicting the OLDEST when the 200 are
@@ -545,9 +545,11 @@ impl Effects {
         // draws only when `EffectInfo+0x1a != 0` [M 0x1cf290].
         if flags70 & 0x10 != 0 && bounces < 3 && rec.ricochet_n != 0 {
             // The mask: 8 for a world hit, 9 when the hit object carries +0x3c & 0x400000, and 0
-            // on a PIERCE contact — the roll still draws, but can never reflect [M 0x12d6f8:
-            // `uVar16 = 8; … if (bVar7 != 0) uVar16 = 0;`].
-            if rng.rand(rec.ricochet_n as u32) as u8 & ricochet_mask as u8 != 0 {
+            // on a PASS/PIERCE contact — and `Effect_RicochetProb` 0x1cf290 returns 0 for mask 0
+            // BEFORE its `Rand_Rand` (the `else if (param_2 == 0)` arm), so a pass contact draws
+            // NOTHING here; the old port drew anyway — an RNG draw the game never makes
+            // (bullet-pass-water).
+            if ricochet_mask != 0 && rng.rand(rec.ricochet_n as u32) as u8 & ricochet_mask as u8 != 0 {
                 if std::env::var_os("NF_RNGLOG").is_some() {
                     eprintln!("[rnglog] ricochet_roll +1 (draw #{})", rng.draws);
                 }
@@ -855,14 +857,22 @@ mod tests {
         assert!((d[0] - 0.995).abs() < 0.01, "the tangential component survives");
         assert!(d[2].abs() < 0.01, "the normal component is removed (e ≈ 0)");
         assert!((d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - 1.0).abs() < 1e-4, "normalised");
-        // Sister: N = 0 → no draw, no reflection.
+        // Sister: N = 0 → no ricochet draw, no reflection. The stream still moves: the record's
+        // kind-9 gas puff spawns through `Gas_Init`, whose spin and sign are shared-stream draws
+        // [M 0x1aacc8:72-80 — unconditional for every puff; kind 9 takes the no-draw position arm
+        // :105-141]. gas-rng-draws: the old pin read 0 total draws — that was only true while the
+        // port's Gas_Init consumed nothing; Effect_RicochetProb itself still draws nothing, so the
+        // twin replay of the puff's 2 draws must land on the exact state the call leaves.
         let r3 = EffectRecord { debris_enable: 0, ..rec(0, 0) };
         let surf3 = table(r3);
         let mut e3 = Effects::new();
         let mut rng3 = Rng::new(1);
-        let before3 = (rng3.x, rng3.y);
+        let mut twin = Rng::new(1);
+        twin.frand(std::f32::consts::FRAC_PI_2 * crate::gas::REC_FRAME_RATE); // the spin [M 0x1ab060]
+        twin.rand(0x100); // the sign coin [M 0x1ab08c]
         assert!(e3.bullet_impact(&mut rng3, Some(&surf3), &mut gas, &mut fx(), [0.0; 3], n, 10, dir, 0x12, 0, true, 8).is_none());
-        assert_eq!((rng3.x, rng3.y), before3, "N = 0: Effect_RicochetProb draws nothing");
+        assert_eq!((rng3.x, rng3.y), (twin.x, twin.y), "N = 0: exactly the puff's 2 Gas_Init draws, no ricochet draw");
+        assert_eq!(rng3.draws, 2);
     }
 
     /// `Vec_MakeOrthonormalBasis` 0x1e4b78: the basis sum is orthogonal to the normal.

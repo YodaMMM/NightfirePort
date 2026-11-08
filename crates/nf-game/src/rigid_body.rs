@@ -14,12 +14,25 @@
 //! The port draws kind-0xD8 props as static instances at the placement transform
 //! (`crates/nf-view/src/scene.rs`, the models-misc comment: "0xD8 RB_Create 0x1d6bf0:52 (rigid
 //! bodies evolve obj+0x90 once disturbed; at rest = placement)") — the at-rest state IS the
-//! post-RB_Init/RB_Build/RB_SetState state. The disturbed-body evolution (`RB_Update` 0x1d6e38,
-//! `RB_EulerEvolve` 0x1d7810, `RB_ApplyImpulses` 0x1d6ff8, `RB_RestingContact` 0x1d7168) is the
-//! tracked gap (docs/systems/levels.md §7.1, the level reports) — this module ports the four
-//! init functions so the evolution port has its base. When that evolution port lands, its drag
-//! term is the game's `expf` 0x232f70 (libm; jal at 0x1d78a8/0x1d7904 in `RB_EulerEvolve` [M ELF
-//! jal scan]) — Rust's native `f32::exp` replaces it there [M unported-misc-7].
+//! post-RB_Init/RB_Build/RB_SetState state. (The older header called the disturbed-body
+//! evolution a tracked gap (docs/systems/levels.md §7.1); that is history now — what actually
+//! runs on master, checked against the decompiles:
+//! - `RB_Update` 0x1d6e38 = `rb_update`/`Rbodies::tick_one`: the buoyancy gate + its ONE
+//!   `Rand_FRand(0.15)` draw, `RB_ApplyWind` 0x1d7c78 (the cel wind), `RB_EulerEvolve` 0x1d7810
+//!   (drag term = the game's `expf` 0x232f70, jal at 0x1d78a8/0x1d7904 [M ELF jal scan] —
+//!   Rust's native `f32::exp` replaces it [M unported-misc-7]);
+//! - `RB_CollisionHandler` 0x1d7a80 = `rb_collision_handler` per body per tick (the kind-7
+//!   control entry, the {0x1d6e38, 0x1d7a80} dispatch pair): `RB_RestingContact` 0x1d7168 for
+//!   type 0 / `RB_RestingContactRot` 0x1d73a0 otherwise, over the body's obj+0xD0 chain — the
+//!   bullet contacts `update_player_bullets`' rigid-body-bullet arm appends (class 5 = the
+//!   round, `Bullet_init` 0x12c5a0:87);
+//! - the class-5 arms' `Sound_Play3D(100.0, −1.0, −1.0, *(rb+0x158), obj+0xC0)` (the placement
+//!   p4 impact id [M 0x1d6bf0:108-112]) collects into a pool the control walk plays through
+//!   `Sounds::play3d` — the normal sound path (0xFFFF = none, gated there too);
+//! - `RB_Update`'s type != 0 carry-light tail (rb+0x154 = placement p3 → `Light_FindMapLight`)
+//!   is ported as the data says: the lookup 0x1cc3d0 is an 8-byte stub returning 0 [M
+//!   decompile], so rb+0x150 never arms and no light follows a moving prop in this build
+//!   (`light_find_map_light` + `RbState::s150` mirror it; the report lists the render check).)
 //!
 //! All offsets are the RIGIDBODY ext block (obj+0xE0, 0x160 bytes [M RB_Init memset]).
 //!
@@ -185,6 +198,11 @@ pub struct RbState {
     /// persists across ticks like the game's embedded HITTEST (memset once at RB_Init) —
     /// [S] unverified beyond those reads; a live check is listed in the report.
     pub cyl_deltap: [f32; 3],
+    /// +0x150: the carry-light handle (`Light_FindMapLight`'s return, cached). The lookup is an
+    /// 8-byte stub returning 0 on this build [M 0x1cc3d0 decompile], so the handle stays 0 and
+    /// `RB_Update`'s position sync (rb+0x100 → light+0x10 [M 0x1d6e38:99-102]) never runs —
+    /// mirrored, not resurrected: `Rbodies::tick_one` runs the same gated lookup.
+    pub s150: u32,
 }
 
 impl RbState {
@@ -203,8 +221,19 @@ impl RbState {
             s9c: 0.0,
             s13c: 0.0,
             cyl_deltap: [0.0; 3],
+            s150: 0,
         }
     }
+}
+
+/// `Light_FindMapLight` 0x1cc3d0 [M decompile — an 8-byte function whose whole body is
+/// `return 0` on this build]: the map-light lookup `RB_Update`'s carry-light tail calls for a
+/// type != 0 body with rb+0x154 (placement p3) set. Ported as the stub, so the cached handle
+/// (`RbState::s150`) never arms and the light-position sync never runs — the retail game
+/// carries no light on a moving prop. (The flicker effect's reader documents the same stub
+/// [M world_fx.rs `find_map_light`].)
+pub fn light_find_map_light() -> u32 {
+    0
 }
 
 /// `Vec_IsEqual`'s tolerance argument at both RB call sites: 0x3951b717 [M 0x1d6ff8:0x1d7014-18,
@@ -944,8 +973,9 @@ pub struct RbObj {
     pub flags: u16,
     /// rb+0xAA: 0x101 default, 0 for types 2/3/4/others per RB_Create's tail [M 0x1d6bf0:80-96].
     pub s_aa: u16,
-    /// rb+0x154 / rb+0x158 (the light flag byte; the sound id the class-5 contact arm plays —
-    /// placement param 6, 0 → 0xFFFF = none) [M :100-104, 0x1d7168:111-112].
+    /// rb+0x154 / rb+0x158 (the light flag byte — placement p3; the sound id the class-5
+    /// contact arm plays — placement p4, 0 → 0xFFFF = none) [M 0x1d6bf0:107-112,
+    /// 0x1d7168:111-112].
     pub s154: u8,
     pub s158: u32,
     /// obj+0xE0 → the RIGIDBODY: the init/build fields and the runtime slots.
@@ -1226,8 +1256,8 @@ impl Rbodies {
     /// `RB_Update` 0x1d6e38 [M] per body: the buoyancy gate (the body's own cel's water
     /// surface, `None` when the cel did not resolve), the cel wind (`Env_GetWindVel` 0x17c048
     /// — zero without a wind cel), the evolve, and the flags bookkeeping the sim reads
-    /// (obj+0xFA |= 0x20 [M :tail]; the +0x100 light-position sync is the visual layer —
-    /// not ported).
+    /// (obj+0xFA |= 0x20 [M :tail]). The type != 0 carry-light tail [M :76-103] runs in
+    /// `tick_one` (it owns the type): see there.
     pub fn tick(&mut self, frame: u32, rng: &mut crate::drone::Rng) {
         for j in 0..self.list.len() {
             self.tick_one(j, frame, rng);
@@ -1240,6 +1270,17 @@ impl Rbodies {
     /// ([M 0x1d6e38 disasm], see `rb_update`) for the caller's gas pool.
     pub fn tick_one(&mut self, j: usize, frame: u32, rng: &mut crate::drone::Rng) -> Option<[f32; 3]> {
         let Some(o) = self.list.get_mut(j) else { return None };
+        // RB_Update 0x1d6e38:76-103, the type != 0 carry-light tail [M]: with rb+0x154 (the
+        // placement p3 byte) set and the cached handle at rb+0x150 zero, the game looks a map
+        // light up once (`Light_FindMapLight(rb+0x13c radius, rb+0x100 pos)`) and — while the
+        // handle stays non-zero — syncs rb+0x100 (the cylinder base point, RB_RestingContactRot
+        // 0x1d73a0:90 writes it) into light+0x10 every tick. The lookup is an 8-byte stub
+        // returning 0 on this build [M 0x1cc3d0], so the handle never arms and the sync never
+        // runs — no light follows a moving prop in the retail game. Ported as the stub: the
+        // gated lookup runs, the sync is unreachable behind it.
+        if o.rb.ty != 0 && o.s154 != 0 && o.st.s150 == 0 {
+            o.st.s150 = crate::rigid_body::light_find_map_light(); // [M 0x1cc3d0 — always 0]
+        }
         // Env_GetWindVel(cel, obj+0xc0) [M 0x1d7c78] — obj+0xc0 is the object's world position;
         // the port's stand-in is the drawn translation (identical for the Rot census bodies,
         // which never translate [M EulerEvolve]) [S].
@@ -1384,6 +1425,38 @@ mod evolve_tests {
         st.trans = st.pos;
         st.matrix = rb_set_state(&rb); // identity quat → identity rotation
         (rb, st)
+    }
+
+    /// [M RB_Update 0x1d6e38:76-103 + Light_FindMapLight 0x1cc3d0] The carry-light tail with
+    /// placement p3 set (the census's lamps: 07000004's two, 07000001/02's set [D the report's
+    /// census]): the gated lookup runs, but the stub keeps the handle at rb+0x150 = 0 — the
+    /// +0x100 → light+0x10 sync is unreachable, no light follows a moving prop. Sister: a p3 = 0
+    /// body skips the lookup entirely.
+    #[test]
+    fn carry_light_lookup_stays_inert_behind_the_stub() {
+        let rbs = |s154: u8| {
+            let (rb, st) = barrel();
+            Rbodies {
+                list: vec![RbObj {
+                    placement: 0, glist: 0, shape_key: 0, flags: 0x44, s_aa: 0, s154, s158: 0xffff,
+                    rb, st, hits: Vec::new(), sph_centre: [0.0; 3], sph_radius: 1.0, wind: None, buoy: None,
+                }],
+                winds: Vec::new(),
+            }
+        };
+        assert_eq!(rbs(1).list[0].rb.ty, -1, "barrel() is the 0xFFFF type — any non-zero type takes the tail [M 0x1d6e38:76]");
+        let mut carried = rbs(1);
+        let mut silent = rbs(0);
+        for _ in 0..5 {
+            carried.tick_one(0, 1, &mut crate::drone::Rng::new(1));
+            silent.tick_one(0, 1, &mut crate::drone::Rng::new(1));
+        }
+        assert_eq!(carried.list[0].st.s150, 0, "the stub keeps the handle 0 [M 0x1cc3d0]");
+        assert_eq!(silent.list[0].st.s150, 0, "p3 = 0 never looks up [M 0x1d6e38:78]");
+        // The sister that can fail: the port carries the flag the game reads (the branch at
+        // 0x1d6f58 is real), so the tick must actually REACH the lookup for a p3 body — a port
+        // that dropped s154 entirely would pass the two asserts above while deleting the read.
+        assert_eq!(carried.list[0].s154, 1);
     }
 
     /// [M 0x1d7810 + bootup 0x1c7e78:73] A resting barrel never moves: WldGravity never

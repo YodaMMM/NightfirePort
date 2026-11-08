@@ -14,6 +14,9 @@ mod walker;
 
 use walker::{Walker, Wp};
 
+#[path = "common/usepick.rs"]
+mod usepick;
+
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 fn load() -> Walker {
@@ -391,17 +394,14 @@ fn the_monitor_enters_the_camera_view_on_e() {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.drones.monitors.list[mon.0].state, 0, "idle before the E [M 0x1b0058]");
     }
-    {
+    // The press from in front of one of the monitor's collision faces (the use pick's
+    // world-sphere + refine stages [M 0x1eae80, 0x1ebaa8 → 0x1e92d8; nf_game::usepick]).
+    let entered = {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [mon.1[0] + 0.4, mon.1[1] - 1.0, mon.1[2] - 0.8];
-        sim.bond.yaw = 0.0;
-        sim.bond.vel = [0.0; 3];
-    }
-    let mut entered = false;
-    for _ in 0..60 {
-        w.tick(nf_game::player::Input::default(), true);
-        if w.scene.sim.as_ref().unwrap().drones.monitors.list[mon.0].state == 2 { entered = true; break; }
-    }
+        let t = sim.drones.use_picks.monitors[mon.0];
+        let tris = usepick::posed(sim, t.hash, &t.matrix);
+        usepick::press_on(sim, &tris, t.sphere, 60, &|s| s.drones.monitors.list[mon.0].state == 2)
+    };
     assert!(entered, "E on the monitor enters the camera view [M 0x1b0058]");
     let sim = w.scene.sim.as_ref().unwrap();
     let watched = sim.drones.monitors.list[mon.0].watched.expect("a watched sensor [M 0x1b0058]");
@@ -446,21 +446,32 @@ fn the_hack_computer_starts_the_q_worm_sp() {
     // x −20..−18.5 z −25..−26.5, the south channel x −16.25..−13.25 z −27..−30).
     w.walk_to(Wp::new(14.0, 1.1, 6.0).r(1.2), "the lobby south");
     w.walk_to(Wp::new(10.0, 1.1, 2.0).r(1.2), "the floor south 2");
-    w.walk_to(Wp::new(9.3, 1.1, -0.6).r(1.0), "the keypad approach");
+    // The office floor and the east corridor are split by the window row z −4.71 (panes
+    // #120/#143-#147, x −6.68..6.05 [D the break bounds]), solid to Bond's walk while whole
+    // (`Player_Collision` 0x194df0:88 queries with mask 0, which filters no pane [M]), and the
+    // guns cannot break it (filter 0xffdf passes weapon words 0 and 0x20 only). The old legs
+    // crossed it through #145. The walk takes the floor's free way instead: tower2.rs walk_12's
+    // corridor and south-wing legs round to the south hall, then door plc 545 (E only [L PCSX2
+    // 2026-10-31]) into the west hall.
+    let legs: &[(f32, f32, &str)] = &[
+        (10.75, -0.50, "the corridor"), (11.25, 1.25, "the corridor north"), (13.25, 3.25, "the east lobby"),
+        (21.00, 3.50, "the east lobby east"), (24.25, 2.75, "the east wing corner"), (24.00, -1.00, "the east wing"),
+        (23.50, -4.50, "the east wing south"), (22.25, -7.25, "the south-east bend"), (20.75, -9.75, "the south-east bend 2"),
+        (19.00, -12.00, "the south corridor east"), (15.00, -12.00, "the south corridor"), (11.00, -12.00, "the south corridor west"),
+        (8.50, -13.50, "through door plc 543"), (6.50, -15.50, "the south passage"), (6.50, -19.50, "the south passage 2"),
+        (5.75, -22.75, "the south hall"), (-9.75, -22.25, "the south hall west"),
+    ];
+    for &(x, z, label) in legs { w.walk_to(Wp::new(x, 1.1, z).r(1.0), label); }
+    w.walk_to(Wp::new(-9.90, 1.1, -20.60).r(0.4), "door plc 545, the approach");
     {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [6.4, 1.03, -1.5];
-        sim.bond.vel = [0.0; 3];
+        let di = w.scene.sim.as_ref().unwrap().drones.doors.list.iter().position(|d| d.placement == 545)
+            .expect("door plc 545 [D]");
+        w.use_door(di, "door plc 545");
+        for _ in 0..30 { w.tick(nf_game::player::Input { forward: -0.6, ..Default::default() }, false); } // clear the swing
+        for _ in 0..90 { w.tick(nf_game::player::Input::default(), false); }
     }
-    w.wait(10);
-    w.walk_to(Wp::new(1.0, 1.1, 4.0).r(1.5), "the office floor north");
-    w.walk_to(Wp::new(2.0, 1.0, 1.0).r(1.5), "the floor east jog");
-    w.walk_to(Wp::new(1.0, 0.5, -3.0).r(1.5), "the floor east 2");
-    w.walk_to(Wp::new(0.5, 0.5, -6.5).r(1.5), "the east corridor");
-    w.walk_to(Wp::new(-5.0, 0.5, -7.8).r(1.5), "the corridor west");
-    w.walk_to(Wp::new(-8.0, 0.5, -10.5).r(1.5), "the wing corridor 1");
-    w.walk_to(Wp::new(-8.0, 0.5, -16.5).r(1.5), "the wing corridor 2");
-    w.walk_to(Wp::new(-9.0, 0.5, -19.4).r(1.5), "the corridor mouth");
+    w.walk_to(Wp::new(-10.0, 1.1, -18.8).r(1.0), "through door plc 545");
+    w.walk_to(Wp::new(-12.4, 1.1, -18.7).r(1.0), "door plc 545, the west side");
     w.walk_to(Wp::new(-14.0, 0.5, -20.8).r(1.5), "the west open");
     w.walk_to(Wp::new(-16.0, 0.5, -23.0).r(1.5), "the sw room");
     w.walk_to(Wp::new(-19.0, 0.5, -25.9).r(1.2), "the west pinch");
@@ -499,13 +510,16 @@ fn the_hack_computer_starts_the_q_worm_sp() {
         if err.abs() < 0.1 && perr.abs() < 0.15 { aimed = true; break; }
     }
     assert!(aimed, "the walk-real aim converges on the PC [M Player_Aiming 0x1a1d28's shape]");
-    // E: pulse the use key through the real edge (Input_Action's fresh-press bit [M 0x17f208]).
-    let mut hacked = false;
-    for _ in 0..8 {
-        w.tick(nf_game::player::Input::default(), true);
-        for _ in 0..6 { w.tick(nf_game::player::Input::default(), false); }
-        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x34) { hacked = true; break; }
-    }
+    // E: pulse the use key through the real edge (Input_Action's fresh-press bit [M 0x17f208]),
+    // from in front of one of the PC's collision faces (the use pick's world-sphere + refine
+    // stages [M 0x1eae80, 0x1ebaa8 → 0x1e92d8; nf_game::usepick]).
+    let hacked = {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let pc = sim.drones.useobjs.pcs.iter().find(|p| p.ch == 0x34).expect("the hack PC");
+        let (m, h, sph) = (pc.pick_matrix, pc.pick_hash, (pc.sph_centre, pc.radius));
+        let tris = usepick::posed(sim, h, &m);
+        usepick::press_on(sim, &tris, sph, 240, &|s| s.drones.channels.on(0x34))
+    };
     assert!(hacked, "E at the hack computer writes ch 0x34 [D param 1; M PCQWorm_Update 0x1aee20]");
     {
         let sim = w.scene.sim.as_ref().unwrap();
