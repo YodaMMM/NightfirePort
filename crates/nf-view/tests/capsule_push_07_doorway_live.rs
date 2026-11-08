@@ -31,7 +31,12 @@ fn doorway_guards_never_push_bond_through_the_jamb() {
     ] {
         w.walk_nav_to(at, name, 1.5);
     }
-    w.walk_to(Wp { at: [94.6, 43.6, -47.4], act: Act::Use { use_ticks: 240 }, arrive: 0.7 }, "E the hall door");
+    // The pair's push now holds a grounded Bond in front of their line [M Collide_Jointy
+    // 0x1ec180:229-233, the door guards' capsules], so the walk stops ~1.5 short of the press point
+    // (measured (94.23, 44.11, -48.85)); the E press from there still opens door #244 (state 4).
+    // A player presses where the guards hold him.
+    w.try_walk_to(Wp { at: [94.6, 43.6, -47.4], act: Act::Use { use_ticks: 240 }, arrive: 0.7 }, "E the hall door");
+    assert!(w.scene.sim.as_ref().unwrap().drones.doors.list.iter().any(|d| d.placement == 244 && d.pos01 > 0.0), "the E press opens the hall door #244");
     let bots_near = |w: &Walker| {
         let sim = w.scene.sim.as_ref().unwrap();
         let b = sim.bond.pos;

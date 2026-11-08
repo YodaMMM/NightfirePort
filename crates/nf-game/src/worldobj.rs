@@ -99,6 +99,7 @@ impl Shooter {
             weapon: self.weapon,
             flyby: flags68 & 0x40_0000 != 0,
             bounces: 0,
+            glass_pass: crate::bullet::glass_pass_of(w),
             ..crate::bullet::Bullet::TAIL
         };
         b.init_fuse(w);
@@ -137,6 +138,10 @@ pub struct DynObject {
     /// The create order among the level's 0x3b placements (the draw's posed slot; the delete pass
     /// removes dead objects from the list, so the list index is not stable).
     pub slot: u16,
+    /// The collision world's key for the glist; 0 when it has no shape.
+    pub shape: u32,
+    /// obj+0x90.
+    pub matrix: [[f32; 4]; 4],
 }
 
 impl DynObject {
@@ -419,9 +424,8 @@ impl Mine {
         best
     }
 
-    /// `Explode_Propagate` 0x17c518's reach for one mine: the falloff `damage · (1 − (int)(dist −
-    /// obj+0x8C) / radius)` (dist from the blast to the world sphere centre, the truncation toward
-    /// zero, clamped at ≥ 0) must reach 0.0002 [M 0x17c518, the gate before the class switch]; the
+    /// `Explode_Propagate` 0x17c518's reach for one mine: `explode::falloff` over the distance from
+    /// the blast to the world sphere's edge must reach 0.0002 [M 0x17c518, the gate before the class switch]; the
     /// case-0x4B arm then hangs a
     /// HITDATA on the mine whose +0x58 is the blast's attacker (`Coll_AddHitToList(…, obj+0xD0, 0,
     /// param_5)` [M 0x17c518 case 0x4b]). A mine's own blast passes `EXPLODEINFO+0x24` = the mine
@@ -431,8 +435,7 @@ impl Mine {
         if self.exploded || !(damage >= 0.0002) || !(radius >= 0.0002) { return false; }
         let d = [self.centre[0] - pos[0], self.centre[1] - pos[1], self.centre[2] - pos[2]];
         let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() - self.sph_r;
-        let truncated = if dist > 0.0 { (dist as i32) as f32 } else { 0.0 };
-        damage * (1.0 - truncated / radius) >= 0.0002
+        crate::explode::falloff(damage, radius, dist) >= 0.0002
     }
 }
 
@@ -483,13 +486,13 @@ impl WorldObjects {
     /// The placement scan (`p.flags & 0xff` kinds 0x41 / 0xd2 / 0x3b / 0xe7 / 0x71 / 0xfb / 0xd5). `path_blocks` is the
     /// main map's 0x19 key-list payloads (`m_paths`), indexed by the placement's +0x44 word.
     /// `glist` resolves the placement's object to its glist's +0x44 draw-flags word (the word
-    /// `DynamicObject_Create` copies to obj+0xF0) and its sphere centre (`celglist+0x20..+0x2C`,
-    /// docs/fields/glist.md) — the world sphere obj+0x80 the fade reads starts at the matrix
+    /// `DynamicObject_Create` copies to obj+0xF0), its sphere centre (`celglist+0x20..+0x2C`,
+    /// docs/fields/glist.md) and its collision shape key — the world sphere obj+0x80 the fade reads starts at the matrix
     /// translation + the glist centre (0x1336f8 pass 6 rebuilds it from the same two).
     pub fn create(
         placements: &[nf_formats::placement::Placement],
         path_blocks: &[&[u8]],
-        glist: impl Fn(&nf_formats::placement::Placement) -> (u32, V3),
+        glist: impl Fn(&nf_formats::placement::Placement) -> (u32, V3, u32),
     ) -> WorldObjects {
         let mut w = WorldObjects::default();
         for p in placements {
@@ -529,7 +532,7 @@ impl WorldObjects {
                 0x3b => {
                     // DynamicObject_Create 0x18dbf8: p0/p1 (u16), p2 (u16), p3 (u8); obj+0xF0 = the
                     // glist's +0x44 word (0x18dbf8:15-16), |0x30 when p0 != 0 (0x18dbf8:27-29).
-                    let (base, centre) = glist(p);
+                    let (base, centre, shape) = glist(p);
                     // obj+0x90: CCO(0) → View_RotTransMatrix [M 0x18dbf8:13, 0x1344e0:26-29].
                     let m = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
                     let slot = w.dynobjs.len() as u16;
@@ -546,6 +549,8 @@ impl WorldObjects {
                         flags: if param(0) != 0 { base | 0x30 } else { base },
                         alpha: 0xff,
                         dead: false,
+                        shape,
+                        matrix: m,
                     });
                 }
                 0xe7 => {
@@ -643,13 +648,13 @@ mod music_trigger_tests {
     /// record is params (13, 0, 2, 1) and 07000011's is (18, 0, 255, 0) [D placement bytes].
     #[test]
     fn create_gates_and_param_map() {
-        let w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 1)])], &[], |_| (0, [0.0; 3]));
+        let w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 1)])], &[], |_| (0, [0.0; 3], 0));
         assert_eq!(w.music_triggers.len(), 1);
         let t = &w.music_triggers[0];
         assert_eq!((t.event_id, t.ch_on, t.ch_flag, t.flag_byte), (2, 13, 0, 1));
         assert_eq!(t.countdown, 0);
-        assert!(WorldObjects::create(&[place(0xfb, &[(0, 18), (1, 0), (2, 255), (3, 0)])], &[], |_| (0, [0.0; 3])).music_triggers.is_empty(), "p2 == 0xff → no object");
-        assert!(WorldObjects::create(&[place(0xfb, &[(0, 0), (1, 0), (2, 5), (3, 0)])], &[], |_| (0, [0.0; 3])).music_triggers.is_empty(), "p0 == 0 → no object");
+        assert!(WorldObjects::create(&[place(0xfb, &[(0, 18), (1, 0), (2, 255), (3, 0)])], &[], |_| (0, [0.0; 3], 0)).music_triggers.is_empty(), "p2 == 0xff → no object");
+        assert!(WorldObjects::create(&[place(0xfb, &[(0, 0), (1, 0), (2, 5), (3, 0)])], &[], |_| (0, [0.0; 3], 0)).music_triggers.is_empty(), "p0 == 0 → no object");
     }
 
     /// `MusicTrigger_Update` 0x1b31a0: the channel re-arms 0x1e; each tick the countdown runs fires
@@ -657,7 +662,7 @@ mod music_trigger_tests {
     /// (≤ 30 ticks) and then stops.
     #[test]
     fn countdown_rearms_fires_and_expires() {
-        let mut w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 0)])], &[], |_| (0, [0.0; 3]));
+        let mut w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 0)])], &[], |_| (0, [0.0; 3], 0));
         let mut ch = Channels::default();
         let mut music = crate::music::Music::default();
         let mut rng = crate::drone::Rng::new(1);
@@ -702,7 +707,7 @@ mod music_trigger_delete_tests {
 
     fn run(params: &[(u32, u32)], ch: &mut Channels, ticks: u32) -> (WorldObjects, u32) {
         let p = nf_formats::placement::Placement { index: 0, hashcode: u32::MAX, flags: 0xfb, translation: [0.0; 3], rotation: [0.0; 3], params: params.to_vec(), extra: [0; 9] };
-        let mut w = WorldObjects::create(&[p], &[], |_| (0, [0.0; 3]));
+        let mut w = WorldObjects::create(&[p], &[], |_| (0, [0.0; 3], 0));
         let (mut music, mut rng) = (crate::music::Music::default(), crate::drone::Rng::new(1));
         let (weapons, mut bullets) = (nf_formats::weapon::WeaponData::default(), Vec::new());
         let mut fires = 0;
@@ -800,11 +805,11 @@ mod mine_tests {
     }
 
     #[test]
-    fn the_blast_reach_truncates_the_distance_like_explode_propagate() {
+    fn the_blast_reach_is_explode_propagates_falloff() {
         let m = beam_mine();
-        // dist − sph_r: 16.02 − 2.02 = 14.0 → int 14 → 80·(1 − 14/15) > 0: reached [M 0x17c518].
+        // dist − sph_r: 16.02 − 2.02 = 14.0 → 80·(1 − 14/15) > 0: reached [M 0x17c518].
         assert!(m.blast_reaches([2.0, 16.02, 0.0], 15.0, 80.0));
-        // 17.03 − 2.02 = 15.01 → int 15 → 80·(1 − 15/15) = 0 < 0.0002: not reached (sister).
+        // 17.03 − 2.02 = 15.01 → below 0: not reached (sister).
         assert!(!m.blast_reaches([2.0, 17.03, 0.0], 15.0, 80.0));
         // Inside the sphere: full reach; a zero radius reaches nothing.
         assert!(m.blast_reaches([2.0, 0.0, 0.0], 10.0, 80.0));

@@ -492,6 +492,22 @@ pub fn build_sound(scene: &mut scene::Scene) -> Option<nf_audio::sfx::Sound> {
     sound
 }
 
+/// The headless runs' sound: the level's banks and streams in a driver with no output device, run by
+/// `Sim::step_bond` after each step the way the window loop runs `sound_tick`. Its voices end by their
+/// length (`nf_audio::VoiceClock`), so the EE pool frees one-shots and their handles report finished
+/// when the line or effect has played, as in play. The music stream is left out: its now-playing
+/// section feeds `UpdateMusicalEvents`, and headless runs keep that at the deviceless 0. Takes the
+/// scene's banks and streams (as `build_sound` does); a level without a bank gets none.
+pub fn attach_headless_sound(scene: &mut scene::Scene) {
+    let Some((slot, bank, sbf)) = scene.sound_bank.take() else { return };
+    let mut driver = nf_audio::sfx::Driver::new();
+    driver.load_bank(slot, bank, sbf);
+    for (slot, bank, sbf) in std::mem::take(&mut scene.sound_spares) { driver.load_spare_bank(slot, bank, sbf); }
+    if let Some((lut, bin)) = scene.streams.take() { driver.load_streams(lut, std::sync::Arc::new(bin)); }
+    let s = nf_audio::sfx::Sound { driver, output: None, captured: None, music_files: None, music: None, music_pending: Vec::new() };
+    if let Some(sim) = scene.sim.as_mut() { sim.headless_sound = Some(Box::new((s, 0))); }
+}
+
 /// `Sound_Ready`'s music wiring [M docs/systems/music.md]: the MapMusic/MapDroneData tables into the
 /// sim's music logic + the attack gate, then `Music_Event(0, level)` / `Music_Event(1, 1)` — the start
 /// pulse the first `UpdateMusicalEvents` consumes. fix-party-mission: the tests' `load` path now wires
@@ -1063,7 +1079,15 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         // one the DroneContext consumes below; `--dev` used to run it twice).
         let elf = iso.read_file(iso.find("/ACTION.ELF").context("no ACTION.ELF on the disc")?)?;
         weapons_table = match nf_formats::weapon::WeaponData::from_action_elf(&elf) {
-            Ok(mut w) => { w.apply_player_init_override(u32::from_str_radix(&archive[..8], 16).unwrap_or(0)); Some(w) }
+            // Player_Init 0x1910f8:83-113 runs ONE arm by the MPSettings master enable: an MP match
+            // writes the MP fists skin 0x050000b0 + the 2 link over the same two fields the SP arm
+            // fills with its PunchSkin row + the 1 [M 0x191358-0x1913c4]. The menu/`--mp` loads carry
+            // the match settings (or the bare `--mp` flag builds the local default).
+            Ok(mut w) => {
+                if mp || mp_settings.is_some() { w.apply_player_init_mp_override(); }
+                else { w.apply_player_init_override(u32::from_str_radix(&archive[..8], 16).unwrap_or(0)); }
+                Some(w)
+            }
             Err(e) => { eprintln!("weapon_data: {e} — drones drawn unarmed"); None }
         };
         if let Some(wd) = weapons_table.as_ref() {
@@ -1094,7 +1118,12 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         None => match nf_formats::weapon::WeaponData::from_action_elf(&{
             iso.read_file(iso.find("/ACTION.ELF").context("no ACTION.ELF on the disc")?)?
         }) {
-            Ok(mut w) => { w.apply_player_init_override(u32::from_str_radix(&archive[..8], 16).unwrap_or(0)); Some(w) }
+            // The same one-arm pick as the merge path above [M Player_Init 0x1910f8:83-113].
+            Ok(mut w) => {
+                if mp || mp_settings.is_some() { w.apply_player_init_mp_override(); }
+                else { w.apply_player_init_override(u32::from_str_radix(&archive[..8], 16).unwrap_or(0)); }
+                Some(w)
+            }
             Err(e) => { eprintln!("weapon_data: {e} — drones drawn unarmed"); None }
         },
     };
@@ -1577,11 +1606,17 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
         // equals the saved block record (the exit save is the last writer before the load) and
         // on a death restart is the live record the serve carries (fail_restart_save). The
         // port's fresh Sim starts at the SSys_Init defaults, so the skip's "keep" is planted
-        // from the block first — then `ram_load`'s skip leaves it standing, byte-identical to
-        // the game's .data persistence.
+        // from the block first — then `ram_load`'s skip leaves it standing. The CHANNEL byte is
+        // not carried: this level's `Switch_Create` 0x1adcc0:29-31 stored #643's 0x3b into the
+        // same record during the load and the skip never touches it, so a run arriving from
+        // 07000009 (whose block holds 0xff there, no item-2 switch on that level) still reads
+        // 0x3b, as the load snapshot does [L ee_start_0700000a.bin @0x2befd0].
         if let Some(s) = save {
             if let Some(block) = s.ssys {
-                if level_id == 0x0700_000a { sim.drones.ssys.items[2] = block[1]; }
+                if level_id == 0x0700_000a {
+                    let channel = sim.drones.ssys.items[2].channel;
+                    sim.drones.ssys.items[2] = nf_game::ssys::SsysItem { channel, ..block[1] };
+                }
                 sim.drones.ssys.ram_load(&block, level_id);
             }
         }
@@ -1714,6 +1749,16 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
                     }
                 }
             }
+            // The 0xDA remote vehicles: `parsemap_create_dynamic_objects` 0x1d04f0 case 0xda →
+            // `Car_Create` 0x1305b0 — the main map's placements in placement order, in the SAME
+            // pass as the 0x25/0x26 registrations above (the game's parsemap epilogue), BEFORE
+            // MP_Start's spawn draws (the parse runs first in the game's load). The gates ride
+            // the match's own settings copy (the vehicles word = MPSettings+0x460).
+            {
+                let mut cars = nf_game::car::CarSystem::init();
+                cars.create_walk(&level, true, m.settings.vehicles, m.settings.level_code, &mut sim.drones.rng);
+                m.cars = cars.tanks.iter().take(cars.num_tanks).flatten().cloned().collect();
+            }
             m.start(&mut sim.drones.rng);
             // mp-host-match-logic: the mode objects build here — `MP_Start` 0x183a50:77-114 creates
             // them (the demo/prot/blueprint/GE draws — Deathmatch/CTF draw nothing) BEFORE the
@@ -1784,12 +1829,22 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             m.start_assassin(&mut sim.drones.rng);
             // The SP mission machine stays off for the match [M 0x182c60:16-18 — Drones::mp_master].
             sim.drones.mp_master = m.settings.master;
-            // mp-world-sync (agent 9): an MP match creates no mounted gun unless the Enviro-Mods
-            // word `MPSettings+0x1B8` is set — `GunImp_Create` 0x131f20:52-58 returns 0 for
-            // `MPSettings+0x180 != 0 && +0x1B8 == 0` [M]; the boot value is 0 [M bootup 0x1c7e78,
-            // L the EE snapshots; menu.rs mp_envmods] and the match settings carry no such word yet,
-            // so the arenas' 0x34 placements stay uncreated (a mount was one machine's alone).
-            sim.drones.props.gunimps.clear();
+            // mp-enviro-mods-apply: `GunImp_Create` 0x131f20's MP arm — the mount object exists
+            // only while `MPSettings+0x1B8` (Gun Emplacements) is set, and its turret entry is
+            // the weapon set (Random, set 10: a `Rand_Rand(10)` pick) [M 0x131f20:52-63]. The
+            // boot value is 0 [M bootup 0x1c7e78:38; L the EE snapshots; menu.rs mp_envmods].
+            // load_impl's build applied the same gate when the settings rode the load (the menu
+            // confirm and the online handover); the local `--mp` default builds without them,
+            // so re-apply here from the match's own settings — the assignment is idempotent
+            // (the Random pick draws a private seed-keyed stream, not the shared Rand stream
+            // [S — gunimp.rs apply_mp_turrets; the game draws the shared one at create,
+            // 0x1e3738 through 0x131f20:61]). Before this the mounts were cleared for every
+            // match, so no arena mount ever reached a game.
+            if m.settings.gun_emplacements == 0 {
+                sim.drones.props.gunimps.clear();
+            } else {
+                nf_game::gunimp::apply_mp_turrets(&mut sim.drones.props.gunimps, m.settings.weapon_set, m.settings.seed);
+            }
             sim.mp = Some(m);
             eprintln!("mp: arena {level_id:08x} — {spawn_count} spawn points registered, {humans} human(s), Bond at spawn {sp} ({:.2}, {:.2}, {:.2}) yaw {:.3}",
                 sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.yaw);
@@ -2111,6 +2166,9 @@ fn dead_destroy_centres(scene: &scene::Scene) -> Vec<[u32; 3]> {
         // The pair carries the leaf's PLACEMENT index, not its slot in `props.destroy`.
         .filter(|(_, pl)| sim.drones.props.destroy.iter().any(|d| d.placement == *pl && d.latched))
         .map(|(c, _)| c.map(f32::to_bits))
+        // cutscene-cel-dup: the scene camera also drops the 0x40000 inner-chain cels
+        // [M View_AddCels 0x1e6ba0:57] — the same World-draw centre gate.
+        .chain(scene.scene_hidden_world_centres())
         .collect()
 }
 
@@ -2411,6 +2469,49 @@ pub fn settle_start_draw(sim: &mut scene::Sim) -> u32 {
         sim.step_bond(Default::default(), false, false, false);
     }
     600
+}
+
+/// Render aid / test aid (keypad page): Bond stands 1.2 in front of the level's `n`-th kind-0 lock
+/// looking at its centre (the documented stand-in transit), presses use (the real edge), then
+/// types `digits` on the page: each digit is reached by direction presses over the page's own
+/// step (`menu::keypad_step`) and typed with ✕, all through `Sim::step_bond`'s keypad lanes.
+pub fn keypad_drive(sim: &mut scene::Sim, n: usize, digits: &str) -> Result<()> {
+    use nf_game::player::Input;
+    let li = sim.drones.locks.iter().enumerate().filter(|(_, l)| l.kind == 0).nth(n).map(|(i, _)| i).context("no such kind-0 lock")?;
+    let (pos, facing) = { let l = &sim.drones.locks[li]; (l.pos, l.facing) };
+    let at = [pos[0] + facing[0] * 1.2, pos[1] + facing[1] * 1.2, pos[2] + facing[2] * 1.2];
+    let yaw = (pos[0] - at[0]).atan2(pos[2] - at[2]);
+    sim.bond = nf_game::player::Bond::stand_at(&sim.world, at, yaw);
+    let eye = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
+    let (dx, dy, dz) = (pos[0] - eye[0], pos[1] - eye[1], pos[2] - eye[2]);
+    sim.bond.pitch = (dy / (dx * dx + dz * dz).sqrt().max(0.5)).atan();
+    sim.bond.vel = [0.0; 3];
+    for _ in 0..10 { sim.step_bond(Input::default(), false, false, false); }
+    sim.step_bond(Input::default(), false, false, true);
+    sim.step_bond(Input::default(), false, false, false);
+    anyhow::ensure!(sim.drones.keypad.is_some(), "the use press armed no keypad");
+    for ch in digits.chars() {
+        let want = ch.to_digit(10).context("--keypad: digits only")?;
+        let to = nf_game::lock::KEYPAD_DIGIT_VALUES.iter().position(|&v| v == want).context("a digit")?;
+        // Breadth-first over the page's step: the presses from the focus to the digit.
+        let from = sim.drones.keypad.as_ref().map_or(0, |(_, kp)| kp.focus);
+        let mut seen: Vec<Option<Vec<u8>>> = vec![None; 10];
+        seen[from] = Some(Vec::new());
+        let mut queue = std::collections::VecDeque::from([from]);
+        while let Some(c) = queue.pop_front() {
+            for bit in [1u8, 2, 4, 8] {
+                let nx = menu::keypad_step(c, bit);
+                if seen[nx].is_none() { let mut p = seen[c].clone().unwrap_or_default(); p.push(bit); seen[nx] = Some(p); queue.push_back(nx); }
+            }
+        }
+        for bit in seen[to].clone().context("every digit is reachable")? {
+            sim.step_bond(Input { keypad_nav: bit, ..Default::default() }, false, false, false);
+            sim.step_bond(Input::default(), false, false, false);
+        }
+        sim.step_bond(Input { keypad_confirm: true, ..Default::default() }, false, false, false);
+        sim.step_bond(Input::default(), false, false, false);
+    }
+    Ok(())
 }
 
 /// `movie_up`: a movie frame is on screen (see `scene_overlay_up`).
@@ -5518,6 +5619,61 @@ impl App {
                                     }
                                 }
                             }
+                            // Test aid (NF_NET_AUTOMOUNT="a-b", mp-enviro-check): on match ticks a..=b
+                            // walk this player to the nearest idle gun mount's seat, face the gun and
+                            // press the use key every 20 ticks there — the two-window mount check
+                            // without a hand on either window. Input only; the sim is untouched.
+                            let use_key = if self.net.is_some() && std::env::var("NF_NET_AUTOMOUNT").ok()
+                                .and_then(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))))
+                                .is_some_and(|(a, b)| (a..=b).contains(&self.net_tick))
+                            {
+                                let b = &sim.bond;
+                                let d2 = |p: &[f32; 3]| (p[0] - b.pos[0]).powi(2) + (p[2] - b.pos[2]).powi(2);
+                                // NF_NET_AUTOMOUNT_WATCH=1: walk to a spot 4 units beside the nearest mount
+                                // (idle or not), face it and never press — the spectator of the other
+                                // window's mount.
+                                let watch = std::env::var_os("NF_NET_AUTOMOUNT_WATCH").is_some();
+                                let seat = sim.drones.props.gunimps.iter().filter(|g| watch || !g.active)
+                                    .map(|g| { let (sy, cy) = g.yaw_base.sin_cos();
+                                        if watch { ([g.pos[0] + cy * 4.0 + sy * g.seat, g.pos[1], g.pos[2] - sy * 4.0 + cy * g.seat], g.pos) }
+                                        else { ([g.pos[0] + sy * g.seat * 1.3, g.pos[1], g.pos[2] + cy * g.seat * 1.3], g.pos) } })
+                                    .min_by(|x, y| d2(&x.0).total_cmp(&d2(&y.0)));
+                                let mut press = false;
+                                // NF_NET_AUTOMOUNT_VIA="x,z;x,z;…": walk these points first, in order
+                                // (the arena's route around a wall a straight walk sticks on).
+                                static VIA_AT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                                let via: Vec<[f32; 2]> = std::env::var("NF_NET_AUTOMOUNT_VIA").ok().map(|v| v.split(';')
+                                    .filter_map(|p| p.split_once(',').and_then(|(x, z)| Some([x.trim().parse().ok()?, z.trim().parse().ok()?]))).collect()).unwrap_or_default();
+                                let mut vi = VIA_AT.load(std::sync::atomic::Ordering::Relaxed);
+                                while let Some(w) = via.get(vi) {
+                                    if ((w[0] - b.pos[0]).powi(2) + (w[1] - b.pos[2]).powi(2)).sqrt() < 1.5 { vi += 1; } else { break; }
+                                }
+                                VIA_AT.store(vi, std::sync::atomic::Ordering::Relaxed);
+                                let seat = match via.get(vi) { Some(w) => Some(([w[0], b.pos[1], w[1]], seat.map_or([w[0], b.pos[1], w[1]], |s| s.1))), None => seat };
+                                if let Some((st, gp)) = seat {
+                                    let close = d2(&st).sqrt() < 0.6;
+                                    let tg = if close { gp } else { st };
+                                    let want = (tg[0] - b.pos[0]).atan2(tg[2] - b.pos[2]);
+                                    let mut dy = (want - b.yaw) % std::f32::consts::TAU;
+                                    if dy > std::f32::consts::PI { dy -= std::f32::consts::TAU; }
+                                    if dy < -std::f32::consts::PI { dy += std::f32::consts::TAU; }
+                                    input.turn = dy.clamp(-0.08, 0.08);
+                                    input.forward = if close { 0.0 } else if dy.abs() < 0.6 { if d2(&st).sqrt() < 2.0 { 0.3 } else { 1.0 } } else { 0.1 };
+                                    input.look = (-0.15 - b.pitch).clamp(-0.05, 0.05);
+                                    input.jump = !close && self.net_tick % 97 == 0;
+                                    press = !watch && close && dy.abs() < 0.15 && self.net_tick % 20 == 0;
+                                    if watch && close { input.look = (0.0 - b.pitch).clamp(-0.05, 0.05); }
+                                    if self.net_tick % 60 == 0 || press {
+                                        eprintln!("[net] automount tick {} pos ({:.2},{:.2},{:.2}) seat ({:.2},{:.2},{:.2}) gun ({:.2},{:.2},{:.2}) dist {:.2} press {press}",
+                                            self.net_tick, b.pos[0], b.pos[1], b.pos[2], st[0], st[1], st[2], gp[0], gp[1], gp[2], d2(&st).sqrt());
+                                    }
+                                }
+                                use_key || press
+                            } else { use_key };
+                            // Test aid (NF_NET_USE_AT="t,t,…"): press the use key on those match ticks
+                            // (the two-window dismount check).
+                            let use_key = use_key || (self.net.is_some() && std::env::var("NF_NET_USE_AT").ok()
+                                .is_some_and(|v| v.split(',').any(|t| t.trim().parse::<u32>().ok() == Some(self.net_tick))));
                             // weapon-matrix: the dev menu's "Test weapon" run (dev.rs) merges its
                             // inputs into this tick — the same lanes the keyboard uses
                             // (`switch_to`, the trigger, the R edge), never during a replay
@@ -7063,6 +7219,11 @@ pub fn run() -> Result<()> {
             load_mp_carry(&iso, &level, all, None, st)?
         }
         else if args.iter().any(|a| a == "--mp") { load_mp(&iso, &level, all)? }
+        // Render aid: `--difficulty N` loads at that difficulty (3 = Agent, whose keypads are not
+        // unlocked at create, so `--keypad` can arm one on 07000012).
+        else if let Some(i) = args.iter().position(|a| a == "--difficulty") {
+            load_with_carry_difficulty(&iso, &level, all, None, args.get(i + 1).context("--difficulty needs N")?.parse()?)?
+        }
         else { load(&iso, &level, all)? };
     let mut cam = start_camera(&scene);
     if let Some(i) = args.iter().position(|a| a == "--cam") {
@@ -7266,6 +7427,13 @@ pub fn run() -> Result<()> {
                 if let Some((ct, cc)) = std::env::var("NF_CH_AT").ok().and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)))) {
                     if ct == t { let f = sim.drones.frame; sim.drones.channels.set(cc, 1, f); }
                 }
+                // Render aid (script-draw-1b): `NF_CH_HOLD=a,b,..` holds those switch channels on every
+                // tick (a mux output such as 0700001b's ch 19 = AND(193, 194) is re-evaluated each tick,
+                // so a one-shot set does not stay up; holding its inputs does).
+                if let Ok(v) = std::env::var("NF_CH_HOLD") {
+                    let f = sim.drones.frame;
+                    for c in v.split(',').filter_map(|c| c.trim().parse::<u32>().ok()) { sim.drones.channels.set(c, 1, f); }
+                }
                 // Render aid (pc-screen): `NF_QWORM_AT=t:ch` starts the install of the PCQWorm PCs whose
                 // param 1 is `ch` on tick t (`all` = every PC) — the state `PCQWorm_Activate` 0x1b0840 /
                 // the Q-Worm bullet leave (obj+0xF4 = 1), so `PCQWorm_Update` 0x1aee20 state 1 runs next.
@@ -7408,6 +7576,14 @@ pub fn run() -> Result<()> {
                     let settle: u32 = args.iter().position(|a| a == "--settle").and_then(|k| args.get(k + 1)).and_then(|s| s.parse().ok()).unwrap_or(1);
                     if v.len() >= 3 { for _ in 1..settle { sim.step_bond(shot_input, false, false, false); } }
                 }
+            }
+            // Render aid (keypad page): `--keypad <n>[:<digits>]` — after the ticks, Bond stands in
+            // front of the level's n-th kind-0 lock and presses use, then types the digits with real
+            // page presses (`keypad_drive`), so the shot shows the page, its focus and the display.
+            if let Some(k) = args.iter().position(|a| a == "--keypad") {
+                let spec = args.get(k + 1).context("--keypad needs <n>[:<digits>]")?;
+                let (n, digits) = spec.split_once(':').unwrap_or((spec.as_str(), ""));
+                keypad_drive(sim, n.parse().context("--keypad: the lock number")?, digits)?;
             }
             // Render aid (fix-hud-parity): `NF_HUD_PROBE=k=v,…` sets HUD-facing state after the ticks so
             // one --shot shows a HUD situation: `dmg=<bits>:<alpha>` (BL+0x967 / +0x968), `hp=<n>`,
@@ -7747,6 +7923,14 @@ pub fn run() -> Result<()> {
                 if let Ok(t) = t.trim().parse::<u32>() { st.players[slot].team = t; }
             }
         }
+        // Test aid (NF_NET_FF=0|1): the Player Mods friendly-fire row (+0x198) on the flag path —
+        // the team aim marker's gate reads it [M Check_Target 0x1a7810:129, :143].
+        if let Some(ff) = std::env::var("NF_NET_FF").ok().and_then(|v| v.parse::<u32>().ok()) { st.friendly_fire = ff; }
+        // Test aids (NF_NET_GUNS=0|1, NF_NET_WSET=n, mp-enviro-check): the Enviro-Mods Gun
+        // Emplacements row (+0x1B8) and the weapon set (+0x1B4, the mounts' turret entry
+        // [M GunImp_Create 0x131f20:52-63]) on the flag path.
+        if let Some(g) = std::env::var("NF_NET_GUNS").ok().and_then(|v| v.parse::<u32>().ok()) { st.gun_emplacements = g; }
+        if let Some(w) = std::env::var("NF_NET_WSET").ok().and_then(|v| v.parse::<u32>().ok()) { st.weapon_set = w; }
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(1);
         st.seed = nanos | 1;
         app.net_armed = Some(st);
@@ -9149,12 +9333,22 @@ mod headless_app_harness {
                 assert!(guard < 6000, "{label}: the load never enabled");
             }
             h.frames((2.0 * frames_per_tick) as u32);
-            // Hold W through the aim and the fire — the walk lanes are live at the latch, which
-            // is the shape the regression needs (a grapple entered WHILE WALKING).
-            h.key(KeyCode::KeyW);
+            // The claw fires only from a type-2 third icon's arm [M Player_WeaponFiring
+            // 0x1a5460:515-528] (joined with the stream batch): the SkyBridge point's arm is the
+            // trench floor under it ((45.27, 0.41, 62.94) r 1.28 [D icon census]), not the vent
+            // store room the old stance fired from. The trench hop of walkreal_07000014's leg 1a
+            // (the port has no walkable exit from the store room), between the grating's slats —
+            // the stance interactables_07000014_live latches from.
+            {
+                let sim = h.app.scene.sim.as_mut().unwrap();
+                sim.bond.pos = [44.37, 0.45, 62.84];
+                sim.bond.pre_collide = sim.bond.pos;
+                sim.bond.vel = [0.0; 3];
+                sim.bond.crouched = false;
+            }
+            h.frames((30.0 * frames_per_tick) as u32);
             // The Q-Claw (0x50) through the real switch lane [L gadget is_grapple: 0x50/0x51].
             let point = [45.2888f32, 5.0961, 62.9362]; // [D placement; the port's resolution]
-            let want_look = 0.20f32 / std::f32::consts::FRAC_PI_2; // the bolt-legal arc [D probe14_aim]
             let mut switched = false;
             for _ in 0..200 {
                 h.app.weapon_switch_to = Some(0x50);
@@ -9163,19 +9357,29 @@ mod headless_app_harness {
             }
             assert!(switched, "{label}: the Q-Claw switch never landed");
             // Steer onto the point and fire to latch [M 0x12e660:50-55; the 1.0 sweep 0x12c5a0:92].
+            // W goes down on the frame the aim lands and stays held through the fire — the walk
+            // lanes are live at the latch, which is the shape the regression needs (a grapple
+            // entered WHILE WALKING). The trench under the point is a 1-unit channel, so a W held
+            // through the aim circles there and never settles the aim. The press waits for the
+            // draw: a press during it is spent [M Player_WeaponFiring 0x1a5460:601-646].
             let wrap = |a: f32| a - std::f32::consts::TAU * ((a + std::f32::consts::PI) / std::f32::consts::TAU).round();
             let mut latched = false;
+            let mut w_down = false;
             for _ in 0..900 {
                 {
                     let s = h.app.scene.sim.as_ref().unwrap();
                     let b = &s.bond;
-                    let dyaw = wrap((point[0] - b.pos[0]).atan2(point[2] - b.pos[2]) - b.yaw);
+                    let hd = b.head();
+                    let dv = [point[0] - hd[0], point[1] - hd[1], point[2] - hd[2]];
+                    let dyaw = wrap(dv[0].atan2(dv[2]) - b.yaw);
+                    let want_look = dv[1].atan2((dv[0] * dv[0] + dv[2] * dv[2]).sqrt()) / std::f32::consts::FRAC_PI_2;
                     let dlook = want_look - b.pitch;
                     let k = step * 60.0; // the same per-tick steer rate at either frame step
                     h.app.turn += dyaw.clamp(-0.08, 0.08) * k;
                     h.app.look += dlook.clamp(-0.08, 0.08) * k;
-                    h.app.trigger = dyaw.abs() < 0.05 && dlook.abs() < 0.03;
+                    h.app.trigger = w_down || (dyaw.abs() < 0.05 && dlook.abs() < 0.03 && s.gun.switch_state == 0);
                 }
+                if h.app.trigger && !w_down { h.key(KeyCode::KeyW); w_down = true; }
                 h.frame(step);
                 if h.app.scene.sim.as_ref().unwrap().bond.grapple.is_some() { latched = true; break; }
             }

@@ -220,9 +220,10 @@ fn cycle_to(w: &mut Walker, want: &dyn Fn(u8) -> bool) -> bool {
 
 /// One trigger pull 10 units behind the 09 guard (out of the cone, facing away). The P2K's fire
 /// script plays 0x403 at frame 1 [D 0x06000823 op 1]; its table row (inner/outer/weight [D
-/// ACTION.ELF sound table]) sets the loudness exactly, alertness gains 0.01 of it and the drone
-/// takes msg 0x14 → HeardNoise 0xa2 → HeardNoiseAware 0xa3 the same tick [M 0x177800 →
-/// 0x173be8]. Sister: the K5 dart's 0x5ce (0x06000948 op 1 [D]) carries weight 0 — no loudness,
+/// ACTION.ELF sound table]) sets the loudness exactly and alertness gains 0.01 of it. The guard is
+/// mode 9, which never investigates: `AlertSound` zeroes its HeardNoise flag for that mode [M-dis
+/// 0x177928-0x177980, then `beq s3,zero` 0x1779b4] and attacks only above alertness 0.7, so a shot
+/// this far off changes nothing. Sister: the K5 dart's 0x5ce (0x06000948 op 1 [D]) carries weight 0 — no loudness,
 /// no alertness, no state change: the dart is silent to guards.
 #[test]
 fn hearing_09_gunshot_vs_dart() {
@@ -255,8 +256,9 @@ fn hearing_09_gunshot_vs_dart() {
             eprintln!("heard at k{k}: loud {loud} alert {alert} log {log:?}");
             assert!((loud - want).abs() < 0.05, "loudness {loud} = the 0x403 row at {d:.2}u ({want})");
             assert!((alert - 0.01 * loud).abs() < 1e-3, "alertness gains 0.01 × loudness (decay ≤ 1/3000 a tick)");
-            let tail: Vec<u8> = log.iter().rev().take(2).map(|e| e.1).collect();
-            assert_eq!(tail, vec![nf_game::drone::state::HEARD_NOISE_AWARE, nf_game::drone::state::HEARD_NOISE], "msg 0x14 → 0xa2 → 0xa3");
+            assert!(alert <= 0.7, "the shot alone stays under the attack row, {alert}");
+            assert!(!log.iter().any(|e| e.1 == nf_game::drone::state::HEARD_NOISE), "mode 9 has no HeardNoise row: {log:?}");
+            assert_eq!(g.state, nf_game::drone::state::CIVILIAN, "and no reaction at this alertness");
         } else {
             assert_eq!(h.weight, 0.0, "the dart's sound row carries no alert weight [D]");
             assert!(heard.is_none(), "the dart shot is silent to the guard");

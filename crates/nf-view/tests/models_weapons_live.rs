@@ -274,6 +274,11 @@ fn a_thrown_grenade_draws_its_weapon_mesh() {
     let mut input = nf_game::player::Input { switch_to: switch, ..Default::default() };
     for _ in 0..90 { sim.step_bond(input, false, false, false); if sim.gun.weapon == 0x35 { break; } input = Default::default(); }
     assert_eq!(sim.gun.weapon, 0x35, "the stun grenade is drawn");
+    // The draw plays out with the trigger up: a press made during it is spent on the refused tick
+    // (view state outside {0, 9, 0xB}) and a held trigger never re-arms [M Player_WeaponFiring
+    // 0x1a5460:601-648] — a player presses once the grenade is in hand.
+    for _ in 0..120 { if sim.gun.switch_state == 0 { break; } sim.step_bond(nf_game::player::Input::default(), false, false, false); }
+    assert_eq!(sim.gun.switch_state, 0, "the draw ends");
     // Pull the trigger until the grenade spawns (the fire anim runs first; the round spawns when the
     // fire script's frame reaches `fire_anim_len` +0x44 [M Player_SetWeaponAnimObj case 9]).
     let mut thrown = false;

@@ -262,6 +262,14 @@ fn gadget_cells_run_the_cycle_on_07000005() {
         assert!(c.draw_ok, "{id:#04x}: the gadget cycle must equip it");
         // The stunner with no guard in the aim ray spawns nothing by the game's own rule
         // ([M 0x1a4bf0:169-200] — the no-target arm); the rest must show their event.
+        // The claw fires only inside a type-2 third icon's arm [M Player_WeaponFiring
+        // 0x1a5460:515-528]; the matrix stance has none, so its press must show nothing
+        // (qclaw_icon_gate_live pins the armed side).
+        if id == 0x50 {
+            assert_eq!(c.fire_events(), 0, "0x50: no fire outside a type-2 icon's arm [M 0x1a5460:515-528]");
+            assert!(c.away_ok && c.back_ok, "{id:#04x}: away {}/back {}", c.away_ok, c.back_ok);
+            continue;
+        }
         assert!(c.fire_events() > 0 || c.no_target, "{id:#04x}: the fire must show (beam/bolt/camera/shot)");
         assert!(!(c.sounds.is_empty() && c.started.is_empty()), "{id:#04x}: the equip/fire must sound");
         assert!(c.away_ok && c.back_ok, "{id:#04x}: away {}/back {}", c.away_ok, c.back_ok);

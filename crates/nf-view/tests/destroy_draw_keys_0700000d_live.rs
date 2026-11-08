@@ -52,8 +52,15 @@ fn the_c5_smash_sets_off_one_fireball_at_the_door() {
     let blasts: Vec<_> = sim.drones.blasts.iter().filter(|b| b.script_hash == 0x0600_0052).collect();
     assert_eq!(blasts.len(), 2, "the game's two same-tick C5 blasts [M 0x12bb60 + 0x12c4f8:29-33], got {:?}",
         blasts.iter().map(|b| (b.pos, b.radius)).collect::<Vec<_>>());
-    let big = blasts.iter().find(|b| b.radius > 1.0).expect("the door blast has a real size");
-    let p = big.pos;
-    assert!((p[2] + 269.5).abs() < 1.0 && (p[0] - 134.4).abs() < 3.0, "the blast sits at the C5 door, got {p:?}");
-    assert!((big.radius - 3.144_156 * 3.0).abs() < 0.01, "the door blast's radius is the leaf sphere·3 [M 0x12bcdc], got {}", big.radius);
+    let big = blasts.iter().find(|b| (b.pos[2] + 269.5).abs() < 1.0 && (b.pos[0] - 134.4).abs() < 3.0)
+        .unwrap_or_else(|| panic!("a blast sits at the C5 door, got {:?}", blasts.iter().map(|b| b.pos).collect::<Vec<_>>()));
+    // `Destroy_Smash` hands `Explode_Create` the leaf sphere·3 in FPR 12 and tag+8 in FPR 13 [M 0x12bcdc
+    // the 140($16) load · 3, 0x12bd04 the 8($17) load]; `Explode_Create` stores FPR 12 as the
+    // SCRIPT's scale (the 0x94($v0) store from FPR 22 = FPR 12) and FPR 13 as EXPLODEINFO+0x2C, the radius
+    // (the 0x2c($s0) store from FPR 20 = FPR 13) [M 0x17cbe0, 0x17cc14, 0x17ccc4, 0x17ccfc]. bigdoor02's
+    // tag+8 is placement param 5 × 0.01 [M 0x12c45c-0x12c470] = 1000 × 0.01 [D #96].
+    let leaf = sim.drones.props.destroy.iter().find(|d| d.placement == 96).expect("bigdoor02 #96 [D]");
+    assert!((leaf.blast_radius - 10.0).abs() < 1e-4, "bigdoor02's tag+8 is 10.0 [D #96 p5 1000], got {}", leaf.blast_radius);
+    assert!((big.radius - leaf.blast_radius).abs() < 1e-4, "the door blast's radius is the leaf's tag+8 [M 0x12bd04 → 0x17ccc4], got {}", big.radius);
+    assert!((leaf.sphere * 3.0 - 3.144_156 * 3.0).abs() < 0.01, "the script scale stays the leaf sphere·3 [M 0x12bcdc → 0x17ccfc], sphere {}", leaf.sphere);
 }

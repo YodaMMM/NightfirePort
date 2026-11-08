@@ -126,6 +126,19 @@ fn cut_box(scene: &mut nf_view::scene::Scene, want: u32) {
         {
             let sim = scene.sim.as_mut().unwrap();
             top_up(sim);
+            // The game removes a DYING wire's entity [M FuseBox_Update 0x1adfe8 →
+            // `Effect_RemoveSObjs` 0x1cf360 — the port's `Cut::RemoveWire` arm]: a wire an
+            // earlier beam already cut has no aim left. One burn can cut both of the box's
+            // wires — the slabs are coplanar and adjacent (posed x -89.474..-89.349 and
+            // -89.342..-89.148 on the same z 30.895 plane [L the probe]) and the burn's aim
+            // sweep clips both [L one burn on wire 17 rose both words 0x87+0x71 and removed
+            // both entities] — so a later wire of a dead box is skipped, not aimed at the
+            // origin; the box's group words verify the cut at the call sites.
+            if !matches!(sim.drones.scripts.objects.list.get(*obj),
+                Some(Some(nf_game::nis::Obj::Entity { .. })))
+            {
+                continue;
+            }
             let bp = sim.drones.fuseboxes[fb].pos;
             let aim = wire_aim_point(sim, *obj);
             let cands = [[0.6f32, -1.2, 0.0], [-0.6, -1.2, 0.0], [0.0, -1.2, 0.6], [0.0, -1.2, -0.6]];
@@ -142,7 +155,13 @@ fn cut_box(scene: &mut nf_view::scene::Scene, want: u32) {
             }
             assert!(stood, "a stance inside the Laser's range exists for box {fb}'s wire at {aim:?}");
         }
-        for _ in 0..40 { scene.sim.as_mut().unwrap().step_bond(Input { switch_to: Some(0x4e), ..Default::default() }, false, false, false); }
+        // The draw plays out with the trigger up: a press inside the holster/draw is spent on the
+        // refused tick and a held trigger never re-arms [M Player_WeaponFiring 0x1a5460:601-648].
+        for t in 0..120 {
+            let sim = scene.sim.as_mut().unwrap();
+            if t >= 40 && sim.gun.weapon == 0x4e && sim.gun.switch_state == 0 { break; }
+            sim.step_bond(Input { switch_to: Some(0x4e), ..Default::default() }, false, false, false);
+        }
         let dead = burn_wire(scene, *obj, 200, |sim| sim.drones.channels.on(want));
         assert!(dead, "the laser cuts box {fb}'s wire → ch {want:#x} [M 0x1adfe8]");
     }
@@ -374,3 +393,4 @@ fn one_cut_box_arms_nothing_and_the_door_stays_locked() {
             "the door stays locked [M 0x1363c8:93-96]");
     }
 }
+

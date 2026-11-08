@@ -50,20 +50,18 @@ fn the_qclaw_ride_crosses_the_skybridge() {
         assert!((p[0] - 11.5).abs() < 1.5 && (p[2] - 27.5).abs() < 1.8,
             "the route reaches the strip below the grapple point, got {p:?}");
     }
-    // The crossing stance: the deck's east parapet at (11, 28), surface 4.58 — the game's deck
-    // entry is the open item (the report); the stand-in reaches the stance, everything after it
-    // is the real input path.
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [11.0, 4.63, 28.0];
-        sim.bond.vel = [0.0; 3];
-    }
-    w.wait(20);
+    // The crossing stance: the claw fires only inside a type-2 third icon's arm [M
+    // Player_WeaponFiring 0x1a5460:515-528]. The level's one type-2 icon, #680 3RD_Person_Icon
+    // (-9.79, 1.17, 32.78), arms on ch 0x3C [D params 0:2 1:0x3c], whose only writer is the "Sky
+    // bridge" ScriptPlayer #660 (script 0x06000530 stream 8, event 0xD [D the level audit]). What
+    // starts that script in play is not traced: the stand-in raises ch 0x3C and places Bond on the
+    // icon; everything after it is the real input path.
+    stand_in_the_icon_arm(&mut w);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let b = &sim.bond;
-        assert!(b.grounded && b.pos[1] > 4.4 && b.pos[1] < 5.8,
-            "Bond stands on the parapet stance, got {:?} grounded {}", b.pos, b.grounded);
+        assert!(b.grounded && b.icon_ctx == 2,
+            "Bond stands in #680's arm, got {:?} grounded {} ctx {}", b.pos, b.grounded, b.icon_ctx);
         assert!(sim.drones.inventory.owned.get(0x50).copied().unwrap_or(false),
             "the fresh 07000012 kit owns the Grapple 0x50 [M 0x1a7ef8 case 0x7000012 -> the fresh_11 kit]");
     }
@@ -75,9 +73,9 @@ fn the_qclaw_ride_crosses_the_skybridge() {
     }
     assert!(have, "the Q-Claw (0x50) is held [L gadget is_grapple: 0x50/0x51; +0x70 & 0x40]");
     // Aim at the point with the real look inputs (turn/look, the walkreal-14 pattern).
-    let want_yaw = (POINT[0] - 11.0).atan2(POINT[2] - 28.0);
-    let head_y = w.scene.sim.as_ref().unwrap().bond.pos[1] + 0.5;
-    let to = [POINT[0] - 11.0, POINT[1] - head_y, POINT[2] - 28.0];
+    let h = w.scene.sim.as_ref().unwrap().bond.head();
+    let want_yaw = (POINT[0] - h[0]).atan2(POINT[2] - h[2]);
+    let to = [POINT[0] - h[0], POINT[1] - h[1], POINT[2] - h[2]];
     let horiz = (to[0] * to[0] + to[2] * to[2]).sqrt().max(1e-4);
     let want_look = (to[1] / horiz).atan() / std::f32::consts::FRAC_PI_2;
     for _ in 0..120 {
@@ -149,12 +147,7 @@ fn the_qclaw_ride_crosses_the_skybridge() {
     // Sister: aiming the opposite way from the stance latches nothing.
     let mut w2 = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000012.bin", false, None, 3).unwrap());
     w2.wait_enabled(3000, "the intro");
-    {
-        let sim = w2.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [11.0, 4.63, 28.0];
-        sim.bond.vel = [0.0; 3];
-    }
-    w2.wait(20);
+    stand_in_the_icon_arm(&mut w2);
     for _ in 0..40 { w2.tick(Input { switch_to: Some(0x50), ..Default::default() }, false); }
     for _ in 0..60 {
         let b = &w2.scene.sim.as_ref().unwrap().bond;
@@ -163,4 +156,22 @@ fn the_qclaw_ride_crosses_the_skybridge() {
     for _ in 0..30 { w2.tick_fire(Input::default()); }
     assert!(w2.scene.sim.as_ref().unwrap().bond.grapple.is_none(),
         "sister: aiming away from the point latches nothing [M the pick needs the ray on the sphere]");
+}
+
+/// The stand-in of the ride's stance: ch 0x3C (the "Sky bridge" script's write [D]) raised, and
+/// Bond placed over #680 3RD_Person_Icon (-9.79, 1.17, 32.78) [D] on the 3.25 deck. join-reds-a:
+/// the joined walled bolt (the claw round dies on the first solid contact [M Bullet_CollisionHandler
+/// 0x12ce80 state 2; Bullet_Delete 0x12e660:42-55]) stops a fire from the floor at the icon on the
+/// deck's underside 3.2 units out (2.95 high); on the deck the arm still reads ctx 2 and the bolt
+/// line to #130 is clear.
+fn stand_in_the_icon_arm(w: &mut Walker) {
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.drones.channels.set_script(0x3c, 1, 0);
+        sim.bond.pos = [-9.79, 3.4, 32.78];
+        sim.bond.pre_collide = sim.bond.pos;
+        sim.bond.vel = [0.0; 3];
+        sim.bond.crouched = false;
+    }
+    w.wait(30);
 }

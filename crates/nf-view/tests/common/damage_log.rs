@@ -21,6 +21,12 @@ thread_local! {
     /// eye ray reaches (desk cover) — the hurting-first fallback pick plus the stand's creep,
     /// the `lane_fights` machinery without the lane windows.
     static UNSEEN_FIGHTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `with_real_damage_glass_sight`: the sight ray passes INTACT GLASS like the game's own
+    /// round flights do (see `exposed_impl`).
+    static GLASS_SIGHT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `with_real_damage_glass_fights`: the return-fire pick fights the shooter who is actually
+    /// hurting Bond first and skips cooled-down candidates (see `return_fire`).
+    static HURTING_FIRST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The latest real-damage summary on this thread (refreshed every 60 ticks and at a death).
     static LAST_SUMMARY: std::cell::RefCell<Option<(u32, String)>> = const { std::cell::RefCell::new(None) };
 }
@@ -56,6 +62,19 @@ pub fn with_real_damage<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// `with_real_damage_head_hunting` plus the fights' glass sight (glass-pierce-2): the sight
+/// rays drop the intact mat-0x10 static glass — see the GLASS_SIGHT field doc. Opt-in per test:
+/// the walks whose fights must answer shooters behind intact station windows (the 08 real-damage
+/// Agent sisters); every other walk's fight timelines stay byte-exact.
+#[allow(dead_code)]
+pub fn with_glass_sight<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { GLASS_SIGHT.with(|c| c.set(false)); } }
+    GLASS_SIGHT.with(|c| c.set(true));
+    let _reset = Reset;
+    f()
+}
+
 /// `with_real_damage` plus the fights' head-hunting pick: the real-health runs whose fights
 /// burn Bond down by attrition (the return fire's torso-nearest taps take 3-5 rounds a
 /// 12-health guard while the guard's own volley lands) take the clear head box first — one
@@ -87,6 +106,29 @@ pub fn with_real_damage_unseen_fights<R>(f: impl FnOnce() -> R) -> R {
     UNSEEN_FIGHTS.with(|c| c.set(true));
     let _reset = Reset;
     with_real_damage(f)
+}
+
+/// The 07000008 Agent-sisters' fight tactic (guard-glass-finish): `with_real_damage` + the
+/// head-hunting pick + the GLASS-SIGHT sight rule (see `exposed_impl`) + the HURTING-FIRST
+/// return-fire retargeting (see `return_fire`). The three laws answer the merged-master tree's
+/// measured deaths: the mouth's solid wall band made every foot stand on the burst pair blind
+/// (eleven 61-tick stands, aim None) while the pair walked 8.5 u to point-blank and the
+/// stairwell-top pair landed free hits into the `fighting=true` window (d2, tick 25036); a
+/// failed stand cooled the pick's first candidate and bailed the whole response, and the next
+/// stand fought a zero-damage guard at 11 u while the 59-damage burst rifle chewed 4.4 u away
+/// (d3, tick 25116). Opt-in per test: the master-green real-damage walks keep every pinned
+/// timeline (none of them sets it).
+#[allow(dead_code)]
+pub fn with_real_damage_glass_fights<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) {
+        GLASS_SIGHT.with(|c| c.set(false));
+        HURTING_FIRST.with(|c| c.set(false));
+    } }
+    GLASS_SIGHT.with(|c| c.set(true));
+    HURTING_FIRST.with(|c| c.set(true));
+    let _reset = Reset;
+    with_real_damage_head_hunting(f)
 }
 
 /// `with_real_damage` for a route whose legs were laid for an unanswered walk (a return-fire
@@ -210,6 +252,15 @@ pub struct DamageLog {
     /// `stand_and_fire` reads a dart landing (the target entering the dart family) as progress and
     /// the under states as the win.
     pub tranq_fights: bool,
+    /// OPT-IN (`hurting_first`, set by the 07000008 Agent sisters, `with_real_damage_glass_fights`):
+    /// the return-fire pick orders the VISIBLE shooters by the damage they dealt Bond over the
+    /// same 240-frame window (nearest on ties — the lane pick's order, the plain eye rays and
+    /// windows), and candidates a failed fight just put on cooldown are dropped instead of
+    /// bailing the whole response. Measured d3 death (tick 25116): the pick fought the
+    /// zero-damage #23 at 11 u while #20 (59.0 in 7 hits, 4.4 u) chewed, after the failed #20
+    /// stand's cooldown silenced the response outright. Off = master behaviour (nearest visible
+    /// first, cooldown bails) everywhere else.
+    pub hurting_first: bool,
     /// OPT-IN (`shooters_window`, the 07000005 00 Agent walk): the shooters list's (horizontal,
     /// vertical) reach in u, replacing the plain (20.0, 6.0) / lane (48.0, 7.5) windows. The 05
     /// castle-approach spine is fired on from 16.6 u BELOW (the gallery riflemen #8/#9 stand at y
@@ -238,6 +289,21 @@ pub struct DamageLog {
     /// 0c snipers keep the button (`aimed_fights`) — their zero spread needs the bit
     /// [M Bullet_init 0x12c5a0:139-170].
     pub precise_fights: bool,
+    /// OPT-IN (`sniper_stands`, set by the 0700000c real-health walks): the return-fire stand
+    /// against the FAR snipers (d 61-90, the 0x1e family) runs the level's PROVEN still-gate
+    /// aimed stand (walkreal0c.rs's `yard_stand_aimed`, the deck-sentry proof): the aim button
+    /// held from a settled gun (the raise queues ONLY on the aim-PRESSED edge from the idle
+    /// machine [M 0x1a24c8:113-152]), the CURSOR driven to the position that puts the EFFECTIVE
+    /// aim (the view + the eased offsets [M scene.rs free-aim]) on the part, and the tap gated
+    /// on the aim BIT plus the effective error 0.01 plus the target's root holding still 18
+    /// ticks — a guard that steps during the round's flight is not where the view was
+    /// [M Bullet_update 0x12e7b0 — the round steps its speed per tick]. Measured on 0c (the
+    /// 2026-11-06 window): the plain stands' converged VIEW taps (err 0.000, perr 0.000,
+    /// blocked false) drained clips on the d 61-90 snipers without one landing — the hip cone
+    /// (the 0x1e spread base 100.0 [L ee_start_05.bin @ 0x2c10b8 +0x24]) scatters multiples of
+    /// the chest box at that range, and the wiggle-step ±0.1 u beats the flight. Off = the
+    /// plain stand everywhere else — no other walk changes.
+    pub sniper_stands: bool,
     /// OPT-IN (`escalating_cooldowns`, set by the 0700000c Agent walk, real-health-agent-0c-0d):
     /// a fight the stand did not drop doubles its re-fight wait each further failure on the same
     /// drone — 240, 480, 960, 1920 (capped). The master 240 keeps re-fighting a shooter whose
@@ -258,13 +324,39 @@ pub struct DamageLog {
     /// strip fights met Bond with the armour gone. A player answers what he SEES. Off = master
     /// behaviour (the lane gun-ray pick) everywhere else — no other walk sets it.
     pub eye_ray_stands: bool,
+    /// OPT-IN (`pre_throw_stands`, set by the 07000015 real-damage Agent walk): a
+    /// spawner-released hostile pre-empts the return-fire pick (nearest first, visible only,
+    /// inside `PRE_THROW_WINDOW_TICKS` of the game's own birth stamp), and `stand_and_fire`
+    /// runs the 0c `sniper_stands` pattern minus the aim bit — the settle (the raise/switch
+    /// anims drained before the first tap [M 0x1a24c8:113-152's pressed-edge law]) and the
+    /// tap gated on the exposed part at the 0.01-rad gate — so the kill lands the tick after
+    /// the release, BEFORE the guard's first throw. The base ledger's kills always came AFTER
+    /// the throw: #11 was killed at 6524 and its grenade still landed 6730 for −15.0; #13 was
+    /// killed at 9248 and its grenade −17.5 landed at the death tick 9422 [L the
+    /// aim-last-seven §3 NF_DMG_TRACE ledger] — the guards' throw cycle beats the ~90-tick
+    /// plain kill from every measured stance (the four position levers all measured worse).
+    /// The birth stamp is the game's own: the spawner release writes `Drone::spawn_frame` =
+    /// the sim frame alongside `present`/`enabled` [M nf-game drone.rs spawner arm], and
+    /// placement drones carry 0 for life, so a non-zero stamp inside the window IS a release.
+    /// Off = master behaviour everywhere else — no other walk sets it.
+    pub pre_throw_stands: bool,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
+    /// The live-hostile drones this log has already seen alive, with the walker tick of the
+    /// first sighting — `pre_throw_stands`'s release detector. A drone's first alive tick IS
+    /// its release: spawner templates are written `present` the frame the spawner releases
+    /// them [M nf-game drone.rs — the spawner arm also stamps `Drone::spawn_frame`], and a
+    /// channel-held placement sits present-but-disabled until its channel fires [M drone.rs
+    /// switch_channel/channel_on] — either way the first poll that sees it alive is within
+    /// 10 walker ticks of the release (the poll cadence). Seeded on the first poll after the
+    /// walk's own `wait_enabled`+`wait` prologue, so the level's standing garrison is born
+    /// outside every window that matters.
+    alive_seen: Vec<(usize, u32)>,
 }
 
 impl DamageLog {
     pub fn new() -> DamageLog {
-        DamageLog { min_health: 100.0, last_health: 100.0, die_panics: no_topup_env(), active: no_topup_env(), return_fire: !NO_RETURN_FIRE.with(|c| c.get()) && std::env::var_os("NF_WALK_NO_RETURN_FIRE").is_none(), ..Default::default() }
+        DamageLog { min_health: 100.0, last_health: 100.0, die_panics: no_topup_env(), active: no_topup_env(), return_fire: !NO_RETURN_FIRE.with(|c| c.get()) && std::env::var_os("NF_WALK_NO_RETURN_FIRE").is_none(), hurting_first: HURTING_FIRST.with(|c| c.get()), ..Default::default() }
     }
 
     fn owner_desc(sim: &nf_view::scene::Sim, owner: usize) -> String {
@@ -298,6 +390,12 @@ impl DamageLog {
                         let d = ((e.0[0] - p[0]).powi(2) + (e.0[1] - p[1]).powi(2) + (e.0[2] - p[2]).powi(2)).sqrt();
                         eprintln!("[dmg]   explosion at ({:.1},{:.1},{:.1}) d {d:.1} radius {:.1} damage {:.1} owner {} kind {}",
                             e.0[0], e.0[1], e.0[2], e.1, e.2, e.3 as isize, e.4);
+                    }
+                    // scratch-16-diag: grenades in flight (owner, weapon, pos) around a world hit.
+                    for (gi, g) in sim.drones.grenades.iter().enumerate() {
+                        let d = ((g.pos[0] - p[0]).powi(2) + (g.pos[1] - p[1]).powi(2) + (g.pos[2] - p[2]).powi(2)).sqrt();
+                        eprintln!("[dmg]   grenade #{gi} at ({:.1},{:.1},{:.1}) d {d:.1} owner {} weapon {:#x} state {}",
+                            g.pos[0], g.pos[1], g.pos[2], g.owner as isize, g.weapon_type, g.state);
                     }
                 }
             }
@@ -410,16 +508,25 @@ impl DamageLog {
             let c = [b.m[3][0], b.m[3][1], b.m[3][2]];
             let ray = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
             let Some(t_box) = nf_game::damage::ray_box(eye, ray, &b) else { continue };
+            // GLASS_SIGHT (opt-in): the world trace runs the flight's GLASS PASS — a mat-0x10
+            // pane contact is a PASS [M Collide_Update 0x1ea398:216-229], the same law the
+            // guards' and Bond's own gun rounds fly under ([L weapon_data] bit 0x800 clear).
+            let glass = GLASS_SIGHT.with(|c| c.get());
+            let sight = |g: [f32; 3]| if glass {
+                sim.world.segment_flight_scoped(sim.world.find_cel(g), g, c, true)
+            } else {
+                sim.world.segment_bullet_scoped(sim.world.find_cel(g), g, c)
+            };
             if gun_rays {
                 let mut clear = true;
                 for g in &gun_spots {
                     let gr = [c[0] - g[0], c[1] - g[1], c[2] - g[2]];
-                    let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(*g), *g, c);
+                    let tw = sight(*g);
                     if tw.is_some_and(|w| w < t_box) { clear = false; break; }
                 }
                 if !clear { continue; }
             } else {
-                let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, c);
+                let tw = sight(eye);
                 if tw.is_some_and(|w| w < t_box) { continue; }
             }
             let dev = ((c[0] - torso[0]).powi(2) + (c[1] - torso[1]).powi(2) + (c[2] - torso[2]).powi(2)).sqrt();
@@ -513,6 +620,19 @@ impl DamageLog {
     }
 }
 
+/// `pre_throw_stands`'s window: a spawner release is answered for this many sim frames after
+/// its `spawn_frame` (the return-fire poll runs every 10 walker ticks, so the window must
+/// cover a poll plus the converge; 1200 = 20 s at the fixed 60 Hz). The measured release→sight
+/// gap on 07000015 is the reason it is not tighter: the west-room pair releases at the
+/// door[32] threshold leg (~28 u away, BEHIND the west wall — the door[29] doorway's z band
+/// blocks every ray from there [L the 2026-11-07 run-1 trace: no PRE-THROW line for #10/#11])
+/// and rounds the corner into sight only during the route_c legs, ~1000 frames later — a
+/// 120 window expired before the first sight and the pair was left to the jog sweep's flank
+/// machinery (21.0). A fight started inside 1200 still precedes the guard's SECOND throw
+/// cycle; a failed fight's 240-tick cooldown lets a release be fought at most ~5 times by
+/// this path, and the plain shooters take over from there.
+const PRE_THROW_WINDOW_TICKS: u32 = 1200;
+
 // The return-fire response, shared by both walkers (this file is `include!`d into each walker
 // module, so `Walker` is that module's walker; both carry `tick`, `tick_fire`, `switch_to_gun`,
 // `tops_up`, `scene`, `total_ticks` and `dmg`).
@@ -566,7 +686,75 @@ impl Walker {
                     .filter(|&i| nf_game::drone::Drone::dart_impact_state_ok(sim.drones.list[i].state))
                     .collect::<Vec<usize>>()
             } else { cands };
-            let pick = if !self.dmg.lane_fights {
+            // HURTING-FIRST (opt-in, `hurting_first`, the 07000008 Agent sisters, guard-glass-finish):
+            // two retarget laws the plain pick lacks, both measured in the same d3 death (tick 25116):
+            // 1. A guard a failed fight just put on cooldown does not silence the whole response: the
+            //    failed #20 stand (he ducked behind the mouth's wall band mid-fight, aim None at t60)
+            //    cooled #20 for 240 ticks and the pick returned #20 first and BAILED — #19 (fightable,
+            //    hp 10, 6 u) was never considered, and the pair burst Bond down unanswereded. The
+            //    filter drops cooled candidates so the response moves to the next answerable shooter.
+            // 2. The pick fights the shooter who is actually HURTING Bond first (the lane pick's
+            //    damage-weighted order, the PLAIN eye-ray visibility and the plain windows — see the
+            //    pick arm below): the same run's later stand fought the zero-damage stairwell-top
+            //    guard #23 at 11 u while the burst rifle #20 (59.0 in 7 hits, 4.4 u, visible) chewed
+            //    health 68 → 0 in 107 ticks inside the `fighting=true` window.
+            let cands = if self.dmg.hurting_first {
+                let tick = self.total_ticks;
+                let now = sim.drones.frame;
+                cands.into_iter()
+                    .filter(|&i| !self.dmg.cooldown.iter().any(|&(ci, until)| ci == i && tick < until)
+                        // The lethality override: a guard the stand CAN see right now who dealt
+                        // real damage over the last 240 frames is answered even inside his
+                        // cooldown — the cooldown exists to stop re-standing on a guard the world
+                        // trace cannot see, and visibility is re-tested here every pick. The d3
+                        // death run's #20 sat cooled until tick 25061 (the failed fight on his
+                        // mid-fight duck behind the mouth's wall band) while his bursts took
+                        // health 68 → 5 — every retarget and re-pick skipped him BECAUSE he was
+                        // cooled, and Bond died at 25116 with #20 at full hp.
+                        || dmg_of(i) > 15.0)
+                    .collect::<Vec<usize>>()
+            } else { cands };
+            // OPT-IN pre_throw_stands (the field doc): the spawner-released hostile inside
+            // the pre-throw window pre-empts the plain pick — nearest first, VISIBLE only (an
+            // unseen release is left to the plain path: a 60-tick unseen stand would burn the
+            // window while the throw cycle runs), within the plain shooters' own 20 u reach
+            // (every ledger fight sat at ≤ 14.4 u [L the aim-last-seven §3 ledger]). The
+            // release detector is the first-seen-alive tick (`alive_seen`): it catches BOTH
+            // the spawner templates (present written at the release) and the channel-held
+            // placements (enabled flips at the release, no spawn stamp — the run-2 trace saw
+            // no PRE-THROW for the west-room pair off the spawn_frame check alone).
+            let newborn = if self.dmg.pre_throw_stands {
+                let bp = sim.bond.pos;
+                let now = self.total_ticks;
+                let mut nb: Vec<(f32, usize)> = Vec::new();
+                for (i, d) in sim.drones.list.iter().enumerate() {
+                    if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { continue; }
+                    let born = match self.dmg.alive_seen.iter().find(|e| e.0 == i) {
+                        Some(e) => e.1,
+                        None => { self.dmg.alive_seen.push((i, now)); now }
+                    };
+                    if now.saturating_sub(born) <= PRE_THROW_WINDOW_TICKS
+                        && ((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)).sqrt() <= 20.0 {
+                        nb.push((((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)) as f32, i));
+                    }
+                }
+                nb.sort_by(|a, c| a.0.total_cmp(&c.0));
+                nb.into_iter().map(|(_, i)| i).find(|&i| DamageLog::visible(sim, i))
+            } else { None };
+            if trace && newborn.is_some() {
+                let d = &sim.drones.list[newborn.unwrap()];
+                eprintln!("[rf-trace] {label} tick {}: PRE-THROW fight on drone #{} (weapon {:#x}, hp {:.1}, at ({:.1},{:.1},{:.1}); bond gun {:#x} clip {} spare {})",
+                    self.total_ticks, newborn.unwrap(), d.weapon, d.health,
+                    d.pos[0], d.pos[1], d.pos[2], sim.gun.weapon, sim.gun.clip, sim.gun.spare);
+            }
+            let pick = newborn.or_else(|| if self.dmg.hurting_first {
+                cands.iter().copied()
+                    .filter(|&i| DamageLog::visible(sim, i))
+                    .min_by(|&a, &b| {
+                        dmg_of(b).total_cmp(&dmg_of(a))
+                            .then(dist_of(a).total_cmp(&dist_of(b)))
+                    })
+            } else if !self.dmg.lane_fights {
                 match cands.iter().copied().find(|&i| DamageLog::visible(sim, i)) {
                     Some(i) => Some(i),
                     // The unseen-cover fallback, opt-in (`with_real_damage_unseen_fights`): the
@@ -606,7 +794,7 @@ impl Walker {
                             .or_else(|| cands.first().copied())
                     }
                 }
-            };
+            });
             self.dmg.unseen_fight = unseen_fight;
             if trace && pick.is_none() && !cands.is_empty() {
                 eprintln!("[rf-trace] {label} tick {}: shooters {:?} none visible (bond {:?}, health {:.1}, clip {} spare {})",
@@ -617,6 +805,12 @@ impl Walker {
                 if std::env::var_os("NF_RF_GEOM").is_some() && self.total_ticks % 60 == 0 {
                     for &i in &cands { DamageLog::geom_dump(sim, i); }
                 }
+            }
+            if std::env::var_os("NF_RF_TRACE").is_some() && self.dmg.hurting_first {
+                let dmgs: Vec<(usize, f32, f32)> = cands.iter().copied()
+                    .map(|i| (i, dmg_of(i), dist_of(i))).collect();
+                eprintln!("[hf] {label} tick {}: cands (i,dmg,dist) {dmgs:?} pick {pick:?} cooling {:?}", self.total_ticks,
+                    self.dmg.cooldown.iter().filter(|&&(i, u)| u > self.total_ticks).map(|e| e.0).collect::<Vec<_>>());
             }
             picked = pick;
             pick
@@ -751,6 +945,24 @@ impl Walker {
         let mut blocked_runs = 0u32;
         // switch_dry: the cycle press + draw wait (see the field doc).
         let mut cycle_wait = 0u32;
+        // sniper_stands: the still-gate state (the target's root, per tick — see the field doc).
+        let mut still = 0u32;
+        let mut gate_pos = [0.0f32; 3];
+        let mut have_gate_pos = false;
+        // sniper_stands: the raise queues ONLY on the aim-PRESSED edge from the idle machine
+        // [M 0x1a24c8:113-152] — a press fired into the switch anim or a live fire script never
+        // queues it (the level-0c-yard-climb-real-health-4 measurement), so a player lets the
+        // gun settle before the first press; the loop's aim hold then runs the raise.
+        // pre_throw_stands runs the same settle: a tap fired into a live switch anim or fire
+        // script is a wasted round from the pre-throw window (the walk legs hold the gun idle,
+        // so the loop breaks on its first tick there).
+        if self.dmg.sniper_stands || self.dmg.pre_throw_stands {
+            for _ in 0..90 {
+                let s = self.scene.sim.as_ref().unwrap();
+                if s.gun.switch_state == 0 && !s.gun.fire_state { break; }
+                self.tick(Input::default(), false);
+            }
+        }
         for t in 0..cap {
             if self.dmg.switch_dry {
                 let clip_dry = { let s = self.scene.sim.as_ref().unwrap(); s.gun.clip == 0 && s.gun.spare == 0 };
@@ -765,6 +977,49 @@ impl Walker {
             }
             let (input, fire, reload) = {
                 let sim = self.scene.sim.as_ref().unwrap();
+                // RETARGET (opt-in `hurting_first`, the 07000008 Agent sisters): every 30 ticks the
+                // fight re-reads who is actually hurting Bond and switches to the worst VISIBLE,
+                // off-cooldown shooter when his 240-frame damage beats the current target's by
+                // more than 3.0. The pick's blind spot is the fight's first seconds: the d3 run's
+                // fight#23 opened at tick 24850 when the zero-damage pistol guard #23 (14 u) was
+                // the ONLY candidate, and ten ticks later the burst rifle #20 (4-7 u) opened up —
+                // 59.0 in 7 hits while the stand stayed on #23 (his ledger total: 0.0) and chewed
+                // health 68 → 0 (death tick 25116). A player under new, closer fire switches
+                // targets; the shared fight never did. The switch resets the fight's own progress
+                // trackers (hp0/last_hit/aim/unseen) for the new target.
+                if self.dmg.hurting_first && t > 0 && t % 30 == 0 {
+                    let now = sim.drones.frame;
+                    let dmg_of = |i: usize| -> f32 {
+                        sim.drones.player_hits.iter().rev()
+                            .take_while(|h| now.saturating_sub(h.0) <= 240)
+                            .filter(|h| h.1 == i)
+                            .map(|h| h.2).sum::<f32>()
+                    };
+                    let cur = dmg_of(di);
+                    let better = self.dmg.shooters(sim).into_iter()
+                        .filter(|&i| i != di)
+                        .filter(|&i| DamageLog::visible(sim, i))
+                        // The cooldown bends to active lethality (see the pick-side note): a
+                        // guard visibly dealing > 15 over the window is switchable even inside
+                        // his cooldown — the cooldown guards against INVISIBLE re-stands.
+                        .filter(|&i| !self.dmg.cooldown.iter().any(|&(ci, until)| ci == i && self.total_ticks < until)
+                            || dmg_of(i) > 15.0)
+                        .max_by(|&a, &b| dmg_of(a).total_cmp(&dmg_of(b))
+                            .then(b.cmp(&a)));
+                    if let Some(i) = better {
+                        let nd = dmg_of(i);
+                        if nd > cur + 3.0 {
+                            if trace {
+                                eprintln!("[rf-trace] fight#{di} t{t}: retarget to #{i} (dmg {nd:.1} vs {cur:.1})");
+                            }
+                            di = i;
+                            hp0 = sim.drones.list[di].health;
+                            last_hit = t;
+                            aim = None;
+                            unseen = 0;
+                        }
+                    }
+                }
                 let d = &sim.drones.list[di];
                 if d.corpse || d.health <= 0.0 { return true; }
                 // tranq_fights: the K5's win is the sleep itself — the fall 0x50 and the asleep
@@ -773,14 +1028,35 @@ impl Walker {
                 if self.dmg.tranq_fights && nf_game::drone::Drone::dart_asleep_state(d.state) { return true; }
                 if sim.disabled { return false; }
                 if sim.gun.clip == 0 && sim.gun.spare == 0 { return false; }
+                // sniper_stands: the still gate — root motion only (the box sway rides the anim;
+                // the root is what carries the chest out of the round's path mid-flight
+                // [M Bullet_update 0x12e7b0 — the round steps its speed per tick]). The tap
+                // waits for STILL_NEED still ticks (the level file's own still-gate note;
+                // walkreal0c.rs's yard_stand_aimed is the proof).
+                if self.dmg.sniper_stands {
+                    let moved = have_gate_pos && ((d.pos[0] - gate_pos[0]).powi(2)
+                        + (d.pos[1] - gate_pos[1]).powi(2) + (d.pos[2] - gate_pos[2]).powi(2)).sqrt() > 0.03;
+                    have_gate_pos = true;
+                    gate_pos = d.pos;
+                    still = if moved { 0 } else { still.saturating_add(1) };
+                }
                 let b = sim.bond.pos;
                 let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
                 let torso = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
                 // Re-pick the exposed part every 10 ticks (the guard animates, cover buries a part).
-                // The ray set follows the fight's pick: lane fights use the gun stand-ins, the
+                // The ray set follows the fight's pick: sniper stands use the strict muzzle
+                // stand-ins (the yard stand's idiom — the round leaves low-right of the eye and
+                // the predictor gap is the measured miss), lane fights use the gun stand-ins, the
                 // shared walks the plain eye ray (master behaviour; level-13-lobby-rifles-2).
-                if t % 10 == 0 { aim = if self.dmg.lane_fights && !self.dmg.eye_ray_stands { DamageLog::exposed_part_gun_rays(sim, di) } else { DamageLog::exposed_part(sim, di) }; }
-                if aim.is_none() { unseen += 1; if unseen > if self.dmg.lane_fights { 120 } else { 60 } { return false; } } else { unseen = 0; }
+                if t % 10 == 0 { aim = if self.dmg.sniper_stands || (self.dmg.lane_fights && !self.dmg.eye_ray_stands) { DamageLog::exposed_part_gun_rays(sim, di) } else { DamageLog::exposed_part(sim, di) }; }
+                if aim.is_none() {
+                    unseen += 1;
+                    // NF_RF_GEOM: name the world stop that buries the target on the stand's first
+                    // blind tick (the 08 mouth investigation — the diagnostic return_fire already
+                    // runs, wired to the direct stands too).
+                    if unseen == 1 && std::env::var_os("NF_RF_GEOM").is_some() { DamageLog::geom_dump(sim, di); }
+                    if unseen > if self.dmg.lane_fights { 120 } else { 60 } { return false; }
+                } else { unseen = 0; }
                 // No round landed for 300 ticks: walk on (a guard in cover the stand cannot reach;
                 // the 13 lobby stand took 40 health that way). tranq_fights: the dart's HitDamage
                 // is never called [M 0x13fff0:269-306] — progress is a dart LANDING (the target
@@ -796,6 +1072,33 @@ impl Walker {
                     while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                     while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
                 let perr = (dy / h).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+                // sniper_stands: with the aim bit held the fired round obeys the VIEW PLUS the
+                // eased cursor offsets [M scene.rs free-aim], so the drive targets the CURSOR
+                // position that puts the effective aim on the part and the gate reads the
+                // EFFECTIVE error (the yard stand's measured rounds steered −12° off on the
+                // view-only converge — walkreal0c.rs's a04k trace). The drive uses the UNCLAMPED
+                // target: at the window edge the overflow becomes the free-aim spill and turns
+                // the VIEW (the clamped drive fed zero there and the aim stalled — a04m).
+                let (drive_turn, drive_look, gate_err, gate_perr) = if self.dmg.sniper_stands {
+                    let desired_yaw = dx.atan2(dz);
+                    let desired_pitch = (dy / h).atan();
+                    let yaw_err = { let mut a = desired_yaw - sim.bond.yaw;
+                        while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                        while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                    let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
+                    let cx_want_raw = -yaw_err / 0.76966;
+                    let cy_want_raw = pitch_err / 0.57724;
+                    let cur = sim.cursor;
+                    let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
+                    let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
+                    let aoff = sim.drones.aim_offset;
+                    let eff = { let mut a = yaw_err - aoff[0];
+                        while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                        while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                    (turn, look, eff, pitch_err - aoff[1])
+                } else {
+                    (err.clamp(-0.08, 0.08), perr.clamp(-0.08, 0.08), err, perr)
+                };
                 // Another drone on the line, short of the target: hold the tap. With the opt-in
                 // `shoot_blockers`, a blocker that is itself a LIVE HOSTILE (team 1, enabled,
                 // alive) becomes the new target — a player whose line a guard walks into shoots
@@ -831,6 +1134,8 @@ impl Walker {
                             last_hit = t;
                             aim = None;
                             unseen = 0;
+                            have_gate_pos = false;
+                            still = 0;
                         }
                     }
                 }
@@ -842,9 +1147,18 @@ impl Walker {
                 // an exact view and the loose stand dried clips on the same box. 0.01 / 0.01 =
                 // ±0.35 u / ±0.55 u at 35 u — inside the box, still reachable by the ±0.08/tick
                 // converge.
-                let (err_gate, perr_gate) = if self.dmg.aimed_fights || self.dmg.precise_fights { (0.01, 0.01) } else { (0.03, 0.04) };
-                let fire = !reload && unseen == 0 && !blocked && err.abs() < err_gate && perr.abs() < perr_gate
-                    && t.saturating_sub(last_tap) >= 8;
+                // pre_throw_stands: the tap gated on the exposed part at the same 0.01-rad
+                // gate (the 0c pattern minus the aim bit — the walk's P2K/AR are not 0x400000
+                // records, and the aim-bit hold would hand the drive to the cursor law
+                // [M scene.rs free-aim, the precise_fights measurement]).
+                let (err_gate, perr_gate) = if self.dmg.aimed_fights || self.dmg.precise_fights || self.dmg.sniper_stands || self.dmg.pre_throw_stands { (0.01, 0.01) } else { (0.03, 0.04) };
+                let fire = !reload && unseen == 0 && !blocked && gate_err.abs() < err_gate && gate_perr.abs() < perr_gate
+                    && t.saturating_sub(last_tap) >= 8
+                    // sniper_stands: the aim BIT (the raise finished — a tap before it rides the
+                    // hip cone [M Player_SetWeaponAnimObj case 0xf, the level-0c-yard-climb-
+                    // real-health-4 shot trace]) and the STILL gate (the root held still — the
+                    // wiggle-step beats the flight).
+                    && (!self.dmg.sniper_stands || (sim.aiming && still >= 18));
                 // NF_RF_TAPS: every tap's aim state (the 2026-11-03 level-11 investigation needed
                 // the per-tap error against the recorded hits — the t%60 lines only sample).
                 if fire && std::env::var_os("NF_RF_TAPS").is_some() {
@@ -872,7 +1186,7 @@ impl Walker {
                 // snipers [L ee_start_05.bin @ 0x2c10b8 flags68 0x408050]) fires its zero spread
                 // [M Bullet_init 0x12c5a0:139-170]. Off (every other walk) the bit never sets and
                 // the pull keeps the record's hip cone [M 0x12c5a0:139-170 mul = 1].
-                (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), forward: if crowd { -1.0 } else if creep { 0.5 } else { 0.0 }, aiming: self.dmg.aimed_fights, ..Default::default() }, fire, reload)
+                (Input { turn: drive_turn, look: drive_look, forward: if crowd { -1.0 } else if creep { 0.5 } else { 0.0 }, aiming: self.dmg.aimed_fights || self.dmg.sniper_stands, ..Default::default() }, fire, reload)
             };
             if reload {
                 self.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, true, false);

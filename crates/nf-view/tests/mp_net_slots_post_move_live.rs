@@ -248,12 +248,16 @@ fn four_human_session_digest_is_pinned() {
     // mp-site-destruction-blast re-measured both: the match hash fold gained the site death
     // blast's one-tick queue (`MpObjectsRt::pending_blasts`, hash.rs) — the fold appends its
     // len word even when empty, so every digest moves once.
-    const PINNED_TICK0: u64 = 0xce70_fc98_9d36_0d1f;
+    // mp-fists-skin moved both: `Player_Init`'s MP arm writes the MP fists skin 0x050000b0 and the
+    // record 0x37 link 2 [M 0x1910f8:108-113], so a match's fists load and `MP_EquipPlayer` owns
+    // them from tick 0. With only that arm switched off, the merged tree gives back the previous
+    // 0xce70_fc98_9d36_0d1f / 0xbd72_3c3b_1d6a_7ae2 exactly.
+    const PINNED_TICK0: u64 = 0x7338_3456_8495_ef39;
     // agent-crouch-2 re-measured the final: the crouch smoothers ease from the 0.75-scaled lane
     // [M Player_Update 0x193600:296-299 copies the scaled +0x10 quad to +0x20; Player_Move
     // 0x191dd0:166-170], so the scripted crouch ticks (t % 47) move slower. Restoring the old
     // unscaled read-back alone on the batch head gives back the old 0xca2f_e7f4_f872_763f.
-    const PINNED_FINAL: u64 = 0xbd72_3c3b_1d6a_7ae2;
+    const PINNED_FINAL: u64 = 0xe587_dad9_0fc6_bf40;
     const HUMANS: usize = 4;
     let (_s, mut peers, mut simmed) = bring_up(&path, PORT_4, HUMANS, &[0, 2]);
     let mut ms: u64 = 0;

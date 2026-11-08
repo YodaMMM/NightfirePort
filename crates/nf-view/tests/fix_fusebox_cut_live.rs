@@ -87,9 +87,41 @@ fn wire_world_box(sim: &nf_view::scene::Sim, obj: usize) -> Option<([f32; 3], [f
 /// Where a player aims to burn the wire: the VISIBLE cable's centre, else the translation.
 fn wire_aim_point(sim: &nf_view::scene::Sim, obj: usize) -> [f32; 3] {
     if let Some((lo, hi)) = wire_world_box(sim, obj) {
-        return [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5];
+        let mut c = [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5];
+        // A sibling cable a hand away (07000014's two cables per box sit side by side [D #383/#385]):
+        // the round stops on the FIRST wire it meets [M Collide_Update 0x1ea398:212-229], so aim at
+        // the far half of this cable, away from the seam, as a player keeps the beam on its colour.
+        let sibling = sim.drones.fuseboxes.iter().flat_map(|f| f.alive_wires()).filter(|&(_, _, o)| o != obj)
+            .filter_map(|(_, _, o)| wire_world_box(sim, o))
+            .map(|(l, h)| [(l[0] + h[0]) * 0.5, (l[1] + h[1]) * 0.5, (l[2] + h[2]) * 0.5])
+            .filter(|s| (0..3).map(|k| (s[k] - c[k]).powi(2)).sum::<f32>() < 0.36)
+            .min_by(|a, b| {
+                let da: f32 = (0..3).map(|k| (a[k] - c[k]).powi(2)).sum();
+                let db: f32 = (0..3).map(|k| (b[k] - c[k]).powi(2)).sum();
+                da.total_cmp(&db)
+            });
+        if let Some(s) = sibling {
+            for k in 0..3 {
+                if (s[k] - c[k]).abs() > 1e-3 { c[k] -= (s[k] - c[k]).signum() * 0.25 * (hi[k] - lo[k]); }
+            }
+        }
+        return c;
     }
     nf_game::drone::Drones::script_obj_pos(&sim.drones.scripts, &sim.data(), obj).unwrap_or([0.0; 3])
+}
+
+/// Draw the weapon and let the draw play out with the trigger up. The holster/draw is outside the
+/// {0, 9, 0xB} view states: a press made during it is spent on the refused tick and a held trigger
+/// never re-arms [M Player_WeaponFiring 0x1a5460:601-648] — a player fires once the weapon is up.
+fn draw_weapon(scene: &mut nf_view::scene::Scene, draw: Input) {
+    let want = draw.switch_to;
+    for t in 0..120 {
+        let sim = scene.sim.as_mut().unwrap();
+        if t >= 40 && Some(sim.gun.weapon) == want && sim.gun.switch_state == 0 { break; }
+        sim.step_bond(draw, false, false, false);
+    }
+    let sim = scene.sim.as_ref().unwrap();
+    eprintln!("[draw] weapon {:#x} switch state {}", sim.gun.weapon, sim.gun.switch_state);
 }
 
 /// Hold fire and walk the crosshair onto the wire's VISIBLE geometry the way a player does: each
@@ -164,7 +196,7 @@ fn the_laser_cuts_the_guardroom_fusebox_wire_to_ch137() {
         assert!(dist < 3.6, "the stance reaches the wire (Laser range 4.0)");
     }
     let draw = Input { switch_to: Some(0x4e), ..Default::default() };
-    for _ in 0..40 { scene.sim.as_mut().unwrap().step_bond(draw, false, false, false); }
+    draw_weapon(&mut scene, draw);
     assert_eq!(scene.sim.as_ref().unwrap().gun.weapon, 0x4e, "the Laser is selected [D USATxt label 0x05000043]");
     let mut ch137 = false;
     for t in 0..200u32 {
@@ -244,7 +276,7 @@ fn gunfire_never_cuts_the_wire() {
         sim.bond.pos = [wire_pos[0] + 1.8, wire_pos[1] - 1.0, wire_pos[2]];
     }
     let draw = Input { switch_to: Some(0x02), ..Default::default() };
-    for _ in 0..40 { scene.sim.as_mut().unwrap().step_bond(draw, false, false, false); }
+    draw_weapon(&mut scene, draw);
     let w = scene.sim.as_ref().unwrap().gun.weapon;
     eprintln!("[gun] weapon {w:#x}");
     assert!((0x02..=0x11).contains(&w), "a gun is selected (its kind word is 0x0008 [L])");
@@ -287,10 +319,12 @@ fn the_07000014_sabotage_cuts_through_the_real_laser() {
             let fb = &sim.drones.fuseboxes[f];
             eprintln!("[sab] box {} ch {:?} wires {:?}", fb.placement, fb.ch,
                 fb.alive_wires().map(|(g, k, o)| (g, k, o)).collect::<Vec<_>>());
-            let list: Vec<(usize, usize, usize)> = fb.alive_wires().map(|(g, k, o)| (g, k, o)).collect();
+            // Group 0 only: group 1's channel smashes the 500-damage leaf beside the box
+            // (destroy_blast_07000014_live).
+            let list: Vec<(usize, usize, usize)> = fb.alive_wires().filter(|(g, _, _)| *g == 0).map(|(g, k, o)| (g, k, o)).collect();
             (f, list)
         };
-        assert!(!wires.is_empty(), "box {fb}: the script registered wires (group 0 AND group 1 [L NF_SCRIPTLOG])");
+        assert!(!wires.is_empty(), "box {fb}: the script registered wires (group 0 [L NF_SCRIPTLOG])");
         // Burn each wire: settle near the box, slide inside the Laser's range toward the VISIBLE
         // cable (the wire object's world bounds — on 07000014 the entity translation sits 1.5 m
         // below the cables [D OBJECT_GreenWire1/BlueWire1 local y 1.49..1.72]), aim through it,
@@ -305,7 +339,7 @@ fn the_07000014_sabotage_cuts_through_the_real_laser() {
                 assert!(dist < 3.6, "the stance reaches box {fb}'s wire (Laser range 4.0)");
             }
             let draw = Input { switch_to: Some(0x4e), ..Default::default() };
-            for _ in 0..40 { scene.sim.as_mut().unwrap().step_bond(draw, false, false, false); }
+            draw_weapon(&mut scene, draw);
             let dead = burn_wire(&mut scene, obj, 200, |sim| sim.drones.fuseboxes[fb].groups[g].slots[k].is_none());
             eprintln!("[sab] box {fb} wire g{g}k{k} dead {dead} ch {want:#x} {}", scene.sim.as_ref().unwrap().drones.channels.on(want as u32));
             assert!(dead, "the laser burns box {fb}'s group-{g} wire");
@@ -322,9 +356,55 @@ fn the_07000014_sabotage_cuts_through_the_real_laser() {
     }
     let sim = scene.sim.as_ref().unwrap();
     assert!(sim.drones.channels.on(0x8c), "AND #391 [0x87, 0x88] raises 0x8C [D]");
-    // The no-hurt polarity: the fusebox hurt (`Player_Hurt(5.0, …)` at the dying group-1 wire
-    // [M 0x1adfe8:99-101]) is counted on its own — the satellite boxes' channel smashes also hurt
-    // Bond through the blast path. Every box here carries param 2 non-zero [D], so the group-1
-    // deaths never hurt.
     assert_eq!(sim.drones.fusebox_hurts, 0, "no live-wire hurt with +0x56 configured [M 0x1adfe8:99-101]");
+}
+
+
+/// One round, one wire: `Collide_Update` 0x1ea398 mirrors a round's distance-sorted contacts onto
+/// the hit objects and stops at the first contact that does not pass; an object contact is
+/// memset by `Collide_PickObj` 0x1eae80 (+0x50/+0x51 = 0), so it never passes [M 0x1ea398:212-229].
+/// 07000014 box 1's two cables sit side by side [D #383]: a beam aimed at the green cable's middle
+/// first crosses the plane on the seam, inside both cables' bounds. The green or the blue cable
+/// takes it, never both — the blue one's death is the box's 500-damage wrong-wire blast (#388 on
+/// ch 113 [D]). Fail-first: the old pass marked every wire the segment crossed; both died on the
+/// one tick and the blast killed Bond.
+#[test]
+fn a_round_across_both_cables_cuts_only_one() {
+    let iso = iso();
+    let mut scene = load(&iso, "07000014.bin");
+    for _ in 0..120 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+    let (fb, green) = {
+        let sim = scene.sim.as_ref().unwrap();
+        let f = sim.drones.fuseboxes.iter().position(|f| f.ch[0] == 0x87).expect("box #383 (ch 0x87) [D]");
+        let g = sim.drones.fuseboxes[f].alive_wires().find(|w| w.0 == 0).expect("group-0 wire").2;
+        (f, g)
+    };
+    let centre = {
+        let (lo, hi) = wire_world_box(scene.sim.as_ref().unwrap(), green).expect("green cable bounds");
+        [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5]
+    };
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        let bp = sim.drones.fuseboxes[fb].pos;
+        assert!(take_burning_stance(sim, bp, centre) < 3.6, "the stance reaches the box");
+    }
+    draw_weapon(&mut scene, Input { switch_to: Some(0x4e), ..Default::default() });
+    let mut cut = None;
+    for t in 0..60 {
+        {
+            let sim = scene.sim.as_mut().unwrap();
+            let head = sim.bond.head();
+            let dir = [centre[0] - head[0], centre[1] - head[1], centre[2] - head[2]];
+            let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
+            sim.bond.yaw = dir[0].atan2(dir[2]);
+            sim.bond.pitch = (dir[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+        }
+        scene.sim.as_mut().unwrap().step_bond(Input::default(), true, false, false);
+        let alive = scene.sim.as_ref().unwrap().drones.fuseboxes[fb].alive_wires().count();
+        if alive < 2 { cut = Some((t, alive)); break; }
+    }
+    let sim = scene.sim.as_ref().unwrap();
+    eprintln!("[seam] cut {cut:?} health {}", sim.drones.health.health);
+    let (_, alive) = cut.expect("the beam cuts a cable");
+    assert_eq!(alive, 1, "one round cuts one cable");
 }

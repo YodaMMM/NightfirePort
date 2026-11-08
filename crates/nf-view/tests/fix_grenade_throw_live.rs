@@ -64,7 +64,8 @@ fn started_ids(scene: &mut nf_view::scene::Scene) -> Vec<u32> {
 
 /// ── The throw timing: the release frame and the refire interval ─────────────────────────────────
 /// The pin sound (the fire script's op-1, frame 16 [D 07000026.bin]) precedes the spawn (frame 26
-/// [L +0x44; M 0x1a2e38:416-420]); the held refire honours +0x40 = 63 [L; M 0x1a5460:652-654].
+/// [L +0x44; M 0x1a2e38:416-420]); the next press honours +0x40 = 63 [L; M 0x1a5460:652-654]. A held
+/// trigger throws once: spp 1, and the press edge does not come back [M 0x1a5460:601-629].
 #[test]
 fn the_frag_throws_on_the_release_frame_and_refires_at_the_interval() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -75,7 +76,8 @@ fn the_frag_throws_on_the_release_frame_and_refires_at_the_interval() {
     let mut fired_tick = None;
     for t in 0..400u32 {
         let sim = scene.sim.as_mut().unwrap();
-        sim.step_bond(Input::default(), true, false, false); // hold the trigger the whole time
+        // Held through the first throw, then tapped.
+        sim.step_bond(Input::default(), t < 100 || t % 2 == 0, false, false);
         let ids = started_ids(&mut scene);
         let sim = scene.sim.as_ref().unwrap();
         if fired_tick.is_none() && sim.gun.fire_state { fired_tick = Some(t); }
@@ -93,11 +95,11 @@ fn the_frag_throws_on_the_release_frame_and_refires_at_the_interval() {
     assert!(pin < first, "the pin sound (frame 16) precedes the throw (the +0xB4 playhead 26) [D script; L +0x44]");
     if spawn_ticks.len() > 1 {
         let gap = spawn_ticks[1] - spawn_ticks[0];
-        eprintln!("held-trigger refire gap {gap}");
-        assert!(gap >= 63, "the held refire honours the interval (+0x40 = 63 [L record]), got {gap}");
+        eprintln!("refire gap {gap}");
+        assert!(gap >= 63, "the refire honours the interval (+0x40 = 63 [L record]), got {gap}");
         assert!(gap < 130, "the next grenade is not 'forever' away [L +0x40 = 63, script 70], got {gap}");
     } else {
-        panic!("a second grenade never spawned while holding for 400 ticks");
+        panic!("a second grenade never spawned with the taps");
     }
 }
 

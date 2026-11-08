@@ -12,6 +12,37 @@ use nf_formats::placement::Placement;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// A script's event-0xD channel writes, `(stream tick, channel, value)` [M Script_EventHandler
+/// 0x1d94c0 case 0xD; D the stream decode], for an owner that clocks the script itself.
+pub fn channel_writes(nis: &Nis) -> Vec<(u32, u32, u8)> {
+    let mut out = Vec::new();
+    for st in &nis.streams {
+        let mut t = 0u32;
+        for c in st.decode() {
+            match c {
+                nf_formats::nis::Cmd::Wait(w) => t = w as u32,
+                nf_formats::nis::Cmd::Event { kind: 0x0d, params } if params.len() >= 2 && params[0] != 0 => {
+                    out.push((t, params[0], params[1] as u8));
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// A script object's bullet volume: `(player index, world centre, radius, glist and pose)`. The
+/// sphere is the built `Control_BuildWorldSph` 0x133070 one; the glist is present on a glist
+/// entity, whose triangles the round has to meet [M Collide_Intersect 0x1ebaa8].
+pub type HitVolume = (usize, [f32; 3], f32, Option<(u32, Mat4)>);
+
+/// The object's own scale off its matrix rows: `|obj+0xE8|` in the built radius
+/// `glist+0x1C · |obj+0xE8|` [M Control_BuildWorldSph 0x133070].
+fn mat_scale(m: &Mat4) -> f32 {
+    let norm = |k: usize| (m[k][0] * m[k][0] + m[k][1] * m[k][1] + m[k][2] * m[k][2]).sqrt();
+    (norm(0) + norm(1) + norm(2)) / 3.0
+}
+
 /// An object a script created (`Script_CreateEntity` / `Script_AnimStart`).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Obj {
@@ -126,7 +157,8 @@ pub enum Request {
     /// (`NPCGlobals = on`). Event 5 disables (mid-cut-scene); `Script_Free` re-enables when the script set flag 0x80
     /// (event 7) [M Script_EventHandler 0x1d94c0 case 5, Script_Free 0x1da880:41-43, Drone_EnableAll 0x1383e8].
     /// The two hash-specific enable extras (0x600001b → msg 10 + Music_Event(0xf), 0x600002e → msg 0xe walk) are
-    /// not ported — neither script is live on the ported levels.
+    /// not ported — neither script ships in ANY on-foot level archive (inert-notes-world census:
+    /// `Level::parse` over all 34 `nf_view::dev::LEVELS`, 0 hits), so the arm is unreachable.
     DroneEnable { on: bool },
     /// Event 0xF: the SP create-callback hand-off (`Script_EventHandler` 0x1d94c0:172-175 case 0xF
     /// calls `SPINFO+0x84` with the CURRENT stream's entity and the event's param 0) — the owning
@@ -315,6 +347,9 @@ pub struct PendingPickup {
 /// matrix of the skin's first rigid part's bone).
 pub trait World {
     fn anim_length(&self, script: u32) -> Option<u16>;
+    /// A glist's object-space collision triangles (the use pick's refine input,
+    /// crate::usepick). `None` (the default): no shape held — the pick's candidate stage decides.
+    fn use_shape(&self, hash: u32) -> Option<&[[[f32; 3]; 3]]> { let _ = hash; None }
     fn discrete0(&self, skin: u32, script: u32, frame: f32) -> Option<Mat4>;
     /// An animated object's own world matrix at `frame` — the game's obj+0x90 that
     /// `Script_EventHandler` case 6 snapshots from the previous stream's object [M 0x1d94c0:125-134;
@@ -353,6 +388,10 @@ pub trait World {
     /// `Control_BuildWorldSph` 0x133070 transforms the centre by the object matrix into obj+0x80,
     /// obj+0x8C carries the radius). `None` = the hash resolves to nothing above nf-game.
     fn glist_sphere(&self, hash: u32) -> Option<([f32; 3], f32)> { let _ = hash; None }
+    /// The glist's collision triangles in object space — the narrow phase `Collide_Intersect`
+    /// 0x1ebaa8 runs after `Collide_PickObj`'s sphere. `None`: no collision data, the sphere alone
+    /// decides.
+    fn glist_shape(&self, hash: u32) -> Option<&[[[f32; 3]; 3]]> { let _ = hash; None }
     /// `Sound_IsLooping` (0x1de260): the SFX table's loop bit for the sound id (`SFXOutputData
     /// [id*0x18+0x14]`) — `Script_SoundEnd` (0x1daf60) stops only a looping sound at its marker.
     /// Default true (stop): no-table callers behave as before.
@@ -1639,6 +1678,12 @@ impl Player {
     /// matrix origin): `(centre, radius, dir, pos)`. The basis is the stored matrix's z row —
     /// the same column math `entity_use_targets` transforms centres with.
     pub fn entity_use_targets_dir(&self, objects: &Objects, w: &dyn World) -> Vec<([f32; 3], f32, [f32; 3], [f32; 3])> {
+        self.entity_use_picks(objects, w).into_iter().map(|(c, r, dir, pos, _, _)| (c, r, dir, pos)).collect()
+    }
+
+    /// The same targets with the entity's glist hash and obj+0x90 — the use pick's refine
+    /// inputs (crate::usepick): `(centre, radius, dir, pos, hash, matrix)`.
+    pub fn entity_use_picks(&self, objects: &Objects, w: &dyn World) -> Vec<([f32; 3], f32, [f32; 3], [f32; 3], u32, Mat4)> {
         let mut out = Vec::new();
         if self.deleted { return out; }
         let Some(s) = self.info[self.cur].as_ref() else { return out };
@@ -1657,7 +1702,7 @@ impl Player {
             // obj+0xC0: the matrix's translation row (Script_EntityStart 0x1d8d78:118 copies it
             // to obj+0x40/0x30 — the entity's object position).
             let pos = [matrix[3][0], matrix[3][1], matrix[3][2]];
-            out.push((centre, r, dir, pos));
+            out.push((centre, r, dir, pos, *hash, *matrix));
         }
         out
     }
@@ -1974,9 +2019,84 @@ pub struct Scripts {
     /// `Script_HideObj` cascade) — the turret's registered[0] muzzle flash
     /// (`GT_Update` 0x180498:110-122). Indices into `objects.list`.
     pub hidden_objs: Vec<usize>,
+    /// Creator-owned SCRIPTINFOs: scripts an object's own code loads with `Script_Load` and
+    /// drives with `Script_Update` / `Script_IsPlaying` itself, with no ScriptPlayer around them
+    /// (`Create_SpaceMissile` 0x1a9ef0:46-61, `SpaceMissile_Update` 0x1aa118 states 1-3,
+    /// `SpaceLaser_Update` 0x1aa3f8:87-126/:176). Their stream objects live in `objects` like any
+    /// script's. Indices stay valid; `None` = freed.
+    pub owned: Vec<Option<Owned>>,
 }
 
+/// One creator-owned script (see `Scripts::owned`): the SCRIPTINFO and its op-0x1b sub-scripts.
+#[derive(Clone, Debug)]
+pub struct Owned {
+    pub script: Script,
+    pub subs: Vec<Option<Script>>,
+}
+
+/// The `Script::player` tag of a creator-owned script: out of every placement's range, so the
+/// player-keyed request consumers (the event-0xF wire hand-off) never match a placed player.
+pub const OWNED_PLAYER: usize = usize::MAX - 0x5c;
+
 impl Scripts {
+    /// `Script_Load(hash, pos, rot, …)` + `Script_Play(si, looping)` for a creator-owned script
+    /// [M 0x1d8248 / 0x1db588] — `matrix` is `View_RotTransMatrix(rot, pos)` of the two VECTORs
+    /// the creator passes. A hash the level does not carry is `Script_Load`'s NULL: `None`.
+    /// No update runs here — every caller runs its own `Script_Update` right after
+    /// (`owned_update`), as the game's creators do.
+    pub fn owned_load(&mut self, hash: u32, matrix: Mat4, looping: bool) -> Option<usize> {
+        let nis = self.lib.get(&hash)?.clone();
+        let mut s = Script::load(nis, matrix, 1.0);
+        s.player = OWNED_PLAYER;
+        s.start(looping);
+        self.owned.push(Some(Owned { script: s, subs: Vec::new() }));
+        Some(self.owned.len() - 1)
+    }
+
+    /// `Script_Update` 0x1da998 on creator-owned script `h`. Its requests (sounds, lights' ends,
+    /// sub-script effects) join `requests`; the event-0xF create-callback hand-offs come back to
+    /// the caller as the registered objects' world positions (the callback the creator passed
+    /// to `Script_Load` — `SpaceLaser_Register` 0x1aa9e8 copies the object's +0xC0 [M :12-20]).
+    pub fn owned_update(&mut self, h: usize, ch: &mut Channels, w: &dyn World, frame: u32) -> Vec<[f32; 3]> {
+        let Some(Some(o)) = self.owned.get_mut(h) else { return Vec::new() };
+        let mut out = Vec::new();
+        o.script.update(&mut o.subs, &self.lib, &mut self.objects, ch, w, frame, &mut out);
+        let mut registered = Vec::new();
+        for r in out {
+            match r {
+                Request::WireRegister { obj, .. } => {
+                    if let Some(Some(Obj::Entity { matrix, .. })) = self.objects.list.get(obj) {
+                        registered.push([matrix[3][0], matrix[3][1], matrix[3][2]]);
+                    }
+                }
+                r => self.requests.push(r),
+            }
+        }
+        registered
+    }
+
+    /// Creator-owned script `h` (read-only): `None` once freed.
+    pub fn owned(&self, h: usize) -> Option<&Script> {
+        self.owned.get(h).and_then(|o| o.as_ref()).map(|o| &o.script)
+    }
+
+    /// `Script_IsPlaying` 0x1db630 on creator-owned script `h` — a freed/absent script reads 0.
+    pub fn owned_playing(&self, h: usize) -> bool { self.owned(h).is_some_and(Script::playing) }
+
+    /// `Script_Free` 0x1da880 on creator-owned script `h`: its streams' objects go.
+    pub fn owned_free(&mut self, h: usize) {
+        let Some(slot) = self.owned.get_mut(h) else { return };
+        let Some(mut o) = slot.take() else { return };
+        let mut out = Vec::new();
+        o.script.free(&mut o.subs, &mut self.objects, &mut out); // the kind-7 kills free the subs [M 0x1d9860:115-123]
+        self.requests.extend(out.into_iter().filter(|r| !matches!(r, Request::WireRegister { .. })));
+    }
+
+    /// Every live object of creator-owned script `h`'s streams (read-only probe accessor).
+    pub fn owned_objects(&self, h: usize) -> Vec<usize> {
+        self.owned(h).map(|s| s.streams.iter().filter_map(|st| st.obj).collect()).unwrap_or_default()
+    }
+
     /// Sets or clears one object's own hidden bit (see `hidden_objs`).
     pub fn set_obj_hidden(&mut self, obj: usize, hidden: bool) {
         let at = self.hidden_objs.iter().position(|&o| o == obj);
@@ -2013,7 +2133,7 @@ impl Scripts {
         // all four heads within 2.8 s of the load wherever Bond was: a PS2 capture teleported into
         // the courtyard without crossing a plate shows the four heads dark (no beams, no coronas,
         // lenses at pitch 0), while the port drew two full-size coronas over the wall.
-        Scripts { lib, players, objects: Objects::default(), requests: Vec::new(), primed: false, skip_request: false, hidden_objs: Vec::new() }
+        Scripts { lib, players, objects: Objects::default(), requests: Vec::new(), primed: false, skip_request: false, hidden_objs: Vec::new(), owned: Vec::new() }
     }
 
     /// `SP_GetHitDamage` 0x1dc5f8's read set: the current script's stream objects of every player
@@ -2028,6 +2148,12 @@ impl Scripts {
     /// sphere by the stream matrix (the discrete object 0 the game keys into obj+0x90); no glist →
     /// the translation + radius 0.1 [M 0x133070:19-27].
     pub fn held_hit_targets(&self, w: &dyn World) -> Vec<(usize, [f32; 3], f32)> {
+        self.held_hit_volumes(w).into_iter().map(|(p, c, r, _)| (p, c, r)).collect()
+    }
+
+    /// [`Scripts::held_hit_targets`] with each entity's glist and pose: the sphere is only
+    /// `Collide_PickObj`'s broad phase, the round then has to meet the glist's triangles.
+    pub fn held_hit_volumes(&self, w: &dyn World) -> Vec<HitVolume> {
         let mut out = Vec::new();
         for (pi, p) in self.players.iter().enumerate() {
             if p.deleted || p.hit_points == 0.0 { continue; }
@@ -2044,7 +2170,7 @@ impl Scripts {
                             matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
                             matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
                             matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2]];
-                        out.push((pi, centre, r));
+                        out.push((pi, centre, r * mat_scale(matrix), Some((*hash, *matrix))));
                     }
                     Obj::Anim { skin, .. } => {
                         // The anim object's BuildWorldSph volume: its own model glist (obj+0xD8 = the
@@ -2057,12 +2183,12 @@ impl Scripts {
                                 m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2] + m[3][0],
                                 m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2] + m[3][1],
                                 m[0][2] * c[0] + m[1][2] * c[1] + m[2][2] * c[2] + m[3][2]];
-                            out.push((pi, centre, r));
+                            out.push((pi, centre, r, None));
                         }
                     }
                     _ => {
                         if let Some(m) = s.stream_matrix(i, &self.objects, w) {
-                            out.push((pi, [m[3][0], m[3][1], m[3][2]], 0.1));
+                            out.push((pi, [m[3][0], m[3][1], m[3][2]], 0.1, None));
                         }
                     }
                 }
@@ -2078,7 +2204,7 @@ impl Scripts {
     /// Same `(player, centre, radius)` shape and sphere as `held_hit_targets` — the game's
     /// `Control_BuildWorldSph` volume [M 0x133070:36-48; no glist → the translation + 0.1,
     /// :19-27]. Read-only; the bullet pass records contacts through `add_bullet_hit`.
-    pub fn sp_bullet_targets(&self, w: &dyn World) -> Vec<(usize, [f32; 3], f32)> {
+    pub fn sp_bullet_targets(&self, w: &dyn World) -> Vec<HitVolume> {
         let mut out = Vec::new();
         for (pi, p) in self.players.iter().enumerate() {
             if p.deleted { continue; }
@@ -2094,7 +2220,7 @@ impl Scripts {
                             matrix[0][0] * c[0] + matrix[1][0] * c[1] + matrix[2][0] * c[2] + matrix[3][0],
                             matrix[0][1] * c[0] + matrix[1][1] * c[1] + matrix[2][1] * c[2] + matrix[3][1],
                             matrix[0][2] * c[0] + matrix[1][2] * c[1] + matrix[2][2] * c[2] + matrix[3][2]];
-                        out.push((pi, centre, r));
+                        out.push((pi, centre, r * mat_scale(matrix), Some((*hash, *matrix))));
                     }
                     Obj::Anim { skin, .. } => {
                         // The anim object's BuildWorldSph volume: its own model glist (obj+0xD8 =
@@ -2106,15 +2232,94 @@ impl Scripts {
                                 m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2] + m[3][0],
                                 m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2] + m[3][1],
                                 m[0][2] * c[0] + m[1][2] * c[1] + m[2][2] * c[2] + m[3][2]];
-                            out.push((pi, centre, r));
+                            out.push((pi, centre, r, None));
                         }
                     }
                     _ => {
                         if let Some(m) = s.stream_matrix(i, &self.objects, w) {
-                            out.push((pi, [m[3][0], m[3][1], m[3][2]], 0.1));
+                            out.push((pi, [m[3][0], m[3][1], m[3][2]], 0.1, None));
                         }
                     }
                 }
+            }
+        }
+        out
+    }
+
+    /// The script object a round's flown segment `a → b` strikes: `(player, held)`, nearest first,
+    /// `held` = the player's `SP_GetHitDamage` tail is live (hit points set, the script holding).
+    ///
+    /// `Collide_PickObj` 0x1eae80 only nominates an object from its world sphere; `Collide_Intersect`
+    /// 0x1ebaa8 then runs the glist's triangles and a miss leaves the HITDATA at t = 1e8, dropped
+    /// from the list [M 0x1ebaa8:300-321]. Without that second step a sphere stands in for the
+    /// object: the 07000012 sky bridge's arches carry spheres of radius 5.7-8.5, so one stray
+    /// round anywhere near started its break script and every overlapping sphere counted the same
+    /// round again. Objects with no collision data keep the sphere [M 0x133070:19-27], and so do
+    /// props under a unit radius: the sphere hugs them, and the urn's and the radio's pinned shots
+    /// land on it. `exact` drops that allowance: the enemy rounds fly past props all the time, and
+    /// a near miss must not push a panel's script along. One object per segment: the round's
+    /// first contact.
+    pub fn sp_contact(&self, w: &dyn World, a: [f32; 3], b: [f32; 3], exact: bool) -> Option<(usize, bool)> {
+        let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let len2 = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).max(1e-12);
+        let xf = |m: &Mat4, c: [f32; 3]| [
+            m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2] + m[3][0],
+            m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2] + m[3][1],
+            m[0][2] * c[0] + m[1][2] * c[1] + m[2][2] * c[2] + m[3][2]];
+        let mut best: Option<(f32, usize, bool)> = None;
+        for (pi, p) in self.players.iter().enumerate() {
+            if p.deleted { continue; }
+            let Some(s) = p.info[p.cur].as_ref() else { continue };
+            let held = p.hit_points != 0.0 && s.delay != 0;
+            for i in 0..s.streams.len() {
+                if !matches!(s.streams[i].kind, 1 | 2) { continue; }
+                let Some(o) = s.streams[i].obj else { continue };
+                let Some(Some(obj)) = self.objects.list.get(o) else { continue };
+                let (m, hash, entity) = match obj {
+                    Obj::Entity { hash, matrix, .. } => (*matrix, *hash, true),
+                    Obj::Anim { skin, .. } => match s.stream_matrix(i, &self.objects, w) { Some(m) => (m, *skin, false), None => continue },
+                    _ => match s.stream_matrix(i, &self.objects, w) { Some(m) => (m, 0, false), None => continue },
+                };
+                let (c, r) = w.glist_sphere(hash).unwrap_or(([0.0; 3], 0.1));
+                let c = xf(&m, c);
+                let e = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+                let t = ((e[0] * d[0] + e[1] * d[1] + e[2] * d[2]) / len2).clamp(0.0, 1.0);
+                let q = [e[0] - d[0] * t, e[1] - d[1] * t, e[2] - d[2] * t];
+                if q[0] * q[0] + q[1] * q[1] + q[2] * q[2] > r * r { continue; }
+                let t = match w.glist_shape(hash).filter(|sh| entity && (exact || r >= 1.0) && !sh.is_empty()) {
+                    Some(shape) => {
+                        let hit = shape.iter()
+                            .filter_map(|tri| crate::world::seg_tri_t(a, b, &[xf(&m, tri[0]), xf(&m, tri[1]), xf(&m, tri[2])]))
+                            .fold(None::<f32>, |acc, x| Some(acc.map_or(x, |y| y.min(x))));
+                        let Some(t) = hit else { continue };
+                        t
+                    }
+                    None => t,
+                };
+                if best.is_none_or(|(bt, ..)| t < bt) { best = Some((t, pi, held)); }
+            }
+        }
+        best.map(|(_, pi, held)| (pi, held))
+    }
+
+    /// One script player's stream entities as the collide pass sees them: `(object index, glist,
+    /// obj+0x90)` for every current kind-1/2 stream object — `Script_GetObj` 0x1db688's walk, the
+    /// same read set as [`Scripts::sp_bullet_targets`]. The caller's shape test drops a glist with
+    /// no collision triangles: `Collide_PickObj` 0x1eae80:88-90 admits only a glist with collision
+    /// data [M]. Entities only (an entity's glist is its hash, its dynamic-set part id
+    /// `object << 6`); the one reader is the turrets, whose script pairs on 0a, 0b, 12 and the Ronin
+    /// stream entities only [D].
+    pub fn stream_glists(&self, player: usize) -> Vec<(usize, u32, Mat4)> {
+        let mut out = Vec::new();
+        let Some(p) = self.players.get(player) else { return out };
+        if p.deleted { return out; }
+        let Some(s) = p.info[p.cur].as_ref() else { return out };
+        for i in 0..s.streams.len() {
+            if !matches!(s.streams[i].kind, 1 | 2) { continue; }
+            let Some(o) = s.streams[i].obj else { continue };
+            match self.objects.list.get(o) {
+                Some(Some(Obj::Entity { hash, matrix, .. })) => out.push((o, *hash, *matrix)),
+                _ => {}
             }
         }
         out
@@ -2202,6 +2407,22 @@ impl Scripts {
             out[slot] = m;
         }
         out
+    }
+
+    /// Where script `hash`'s first entity of `obj_type` stands on the script's first update, from
+    /// the origin base: `Script_EntityStart` 0x1d8d78 tails with `Script_Interp`, so the object is
+    /// keyed the moment it exists. Plays a throwaway copy; no state here changes.
+    pub fn keyed_entity_pos(&self, hash: u32, obj_type: u8, w: &dyn World) -> Option<[f32; 3]> {
+        let nis = self.lib.get(&hash)?.clone();
+        let ident = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+        let mut s = Script::load(nis, ident, 1.0);
+        s.start(false);
+        let (mut subs, mut objs, mut ch, mut out) = (Vec::new(), Objects::default(), Channels::default(), Vec::new());
+        s.update(&mut subs, &self.lib, &mut objs, &mut ch, w, 0, &mut out);
+        objs.list.iter().flatten().find_map(|o| match o {
+            Obj::Entity { kind, matrix, .. } if *kind == obj_type => Some([matrix[3][0], matrix[3][1], matrix[3][2]]),
+            _ => None,
+        })
     }
 
     /// A synthetic one-shot player (fix-objects2): mode 1 (plays once from spawn), no gate, no

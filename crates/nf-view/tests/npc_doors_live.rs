@@ -626,7 +626,11 @@ fn the_06_guard_chasing_bond_opens_the_closed_door() {
             opened = true;
             eprintln!("[06c] +{t}: door #{di} OPENED by the chasing guard");
         }
-        if gp[2] < dpos[2] - 1.0 { crossed = true; }
+        // Through the leaf plane into the doorway. Since the AI target search keeps to the nodes
+        // filed under Bond's own cel (the engage-range join), the guard holds in the doorway once he
+        // has Bond in his range and fires from there (z −16.7, 0.45 past the plane, AimStandFire
+        // 0x68); the earlier pin (1.0 past) measured the old chase that ran on to Bond.
+        if gp[2] < dpos[2] - 0.3 { crossed = true; }
         if crossed && opened { break; }
         if t % 900 == 0 {
             eprintln!("[06c] +{t}: guard #{gi} state {st:#x} at ({:.1},{:.1},{:.1}); door {} {:#x} pos01 {:.2}; bond {:?} shots {shots}",

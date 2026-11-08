@@ -72,6 +72,7 @@ fn blast_at(sim: &mut Sim, pos: [f32; 3], owner: usize, damage: f32) {
         burn: 0,
         defused: false,
         loop_handle: 0,
+        born: 0,
     });
 }
 
@@ -107,9 +108,11 @@ fn kill_and_watch(level: u32, placement: usize, by_bond: bool) -> (bool, u32) {
 /// - 01 #161, 02 #463: prop 0x54 alone, param 12 = 0x60, so a guard's kill fails through the channel;
 /// - 07 #349: a party guest, prop 0x53, which fails on any killer;
 /// - 06 #494: param 12 = 0x63 with prop 0x53;
-/// - 12 #23, #25, 16 #287: prop 0x54 alone, no death channel;
+/// - 12 #23, #25: prop 0x54 alone, no death channel;
 /// - 12 #1: prop 0x54 alone with param 12 = 0x63, so a guard's kill fails too.
-const CASES: [(u32, usize, bool, bool); 8] = [
+///
+/// 16 #287 (prop 0x54 alone) is not here: it takes no impact at all (`the_16_actor_takes_no_impact`).
+const CASES: [(u32, usize, bool, bool); 7] = [
     (0x0700_0001, 161, true, true),
     (0x0700_0002, 463, true, true),
     (0x0700_0006, 494, true, true),
@@ -117,8 +120,30 @@ const CASES: [(u32, usize, bool, bool); 8] = [
     (0x0700_0012, 23, true, false),
     (0x0700_0012, 25, true, false),
     (0x0700_0012, 1, true, true),
-    (0x0700_0016, 287, true, false),
 ];
+
+/// 07000016 #287 is a voice-0x13 actor, and on 0x07000016 `NDrone2_DefaultInit` sets `Drone+0x1B`
+/// for voice 0x13 [M 0x14b300:699-700]. `Drone_ExplosiveHit` only sends the drone message 9 [M
+/// 0x13aab8], and `DroneFunc_HandleImpact` returns at its first line with +0x1B set [M 0x1469b8:23-25],
+/// so the blast that kills every other actor here leaves him standing, whoever owns it.
+#[test]
+fn the_16_actor_takes_no_impact() {
+    for by_bond in [true, false] {
+        let mut scene = load(0x0700_0016);
+        let sim = scene.sim.as_mut().unwrap();
+        let i = actor(sim, 287);
+        assert_eq!(sim.drones.list[i].voice_type, 0x13, "#287 carries voice 0x13");
+        wake(sim, i);
+        let owner = if by_bond { usize::MAX } else { a_guard(sim) };
+        let p = sim.drones.list[i].pos;
+        let h0 = sim.drones.list[i].health;
+        blast_at(sim, [p[0], p[1] + 0.5, p[2]], owner, 100.0);
+        step(sim, 300);
+        let d = &sim.drones.list[i];
+        assert!(!d.corpse && d.health == h0, "#287 by {}: no damage (health {} of {h0})", if by_bond { "Bond" } else { "a guard" }, d.health);
+        assert!(!sim.drones.channels.on(99), "the mission stays open");
+    }
+}
 
 #[test]
 fn each_protected_actor_fails_the_mission_on_the_games_killers() {

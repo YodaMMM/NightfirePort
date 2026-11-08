@@ -168,15 +168,21 @@ fn the_wall_gun_burst_scatters_and_draws_in_the_game_order() {
     // Any change to the cone draws' order or the spread law moves these numbers.
     let measured: Vec<(u32, u64)> = pattern.iter().map(|(d, dr)| ((*d * 10000.0).round() as u32, *dr)).collect();
     eprintln!("[turret-spread] GOLDEN {:?}", measured);
-    // The goldens, measured 2026-11-04 on this tree (bit-exact, the fixed-60 Hz sim): the
-    // per-shot damage is the record's flat player damage (the cylinder path has no part boxes,
-    // so the ±0.0112 rad cone at 40 u keeps every round on one number) and the draw counts are
-    // the shared-stream positions at each shot — the pre-fix port (dead-on, no cone draws) sat
-    // 4 draws/shot lower and every later count desynced. The +454 draws between consecutive
-    // shots = the game's 4 (the cone 3 + the GT pad) + the level's per-tick consumers.
+    // The goldens, re-measured 2026-11-06 on the joined stream-batch tree (bit-exact, the
+    // fixed-60 Hz sim): the per-shot damage is STILL the record's flat player damage (the
+    // cylinder path has no part boxes, so the ±0.0112 rad cone at 40 u keeps every round on one
+    // number — the damage law did not move), and the draw counts are the shared-stream positions
+    // at each shot. The stream correction (the guards' per-shot muzzle-flash draws, live-confirmed
+    // 0x178f68 ×40) moved the burst's start (+12) and put 460-draw gaps between rounds where a
+    // level consumer (a guard's own shot) now spends its game draws between turret rounds — the
+    // +454 floor is the game's 4 (the cone 3 + the GT pad) + the level's per-tick consumers.
+    // stream-batch-2 re-pin: EVERY draw moved +8 as a block (damage identical, the gaps
+    // identical) — the joined tree's ambient consumers (gas puffs, guard muzzle flashes, guard
+    // radii-driven fights) spent exactly 8 more shared draws upstream of the burst; the turret's
+    // own per-shot law did not move.
     assert_eq!(measured, &[
-        (24000, 11673), (24000, 12127), (24000, 12581), (24000, 13035),
-        (24000, 13489), (24000, 13943), (24000, 14397), (24000, 14851),
-        (24000, 15305), (24000, 15759), (24000, 16213), (24000, 16667),
+        (24000, 11693), (24000, 12153), (24000, 12607), (24000, 13067),
+        (24000, 13521), (24000, 13981), (24000, 14435), (24000, 14895),
+        (24000, 15349), (24000, 15809), (24000, 16263), (24000, 16723),
     ], "the burst's damage/draw pattern matches the game-ordered stream");
 }

@@ -243,15 +243,14 @@ impl MpLobby {
              if self.radar != 0 { 0x1b7 } else { 0x1b6 }, String::new(),
              host_can, true, &mut self.focus);
         for i in 0..5u8 {
-            let (vid, enabled) = match i {
-                0 => ([0x1b0, 0x1b1, 0x1b2][self.envmods[0].min(2) as usize], true),
-                1 => (if self.envmods[1] != 0 { 0x1b7 } else { 0x1b6 }, true),
-                2 => (if !self.explosive_unlocked() { 0x0100_0076 } else if self.envmods[2] == 0 { 0x1b6 } else { 0x1b7 }, self.explosive_unlocked()),
-                3 => (if self.envmods[3] != 0 { 0x1b7 } else { 0x1b6 }, true),
-                _ => ([0x1b6, 0x0100_02d8, 0x0100_02d9, 0x1b2][self.envmods[4].min(3) as usize], true),
-            };
             // The couch Enviro-Mods page's labels [L USATxt]: Respawn, Fixed Gun Emplacements, Explosive Scenery,
-            // Grapple, Mini Vehicles (the lobby showed "Enviro-Mod 1..5").
+            // Grapple, Mini Vehicles (the lobby showed "Enviro-Mod 1..5"). The rows' value text is
+            // the ONE decompile-derived node list — mp_enviro_value_label's list (P_MPENVIROMODS
+            // 0x210030's msg-0x10 binds [M]; the locked row 2 binds by the unlock flag [M
+            // 0x210030:35-44]) — mp-enviro-mods-proof retired the lobby's inline second copy.
+            let unlocked = self.explosive_unlocked();
+            let vid = crate::menu::mp_enviro_row_label(&self.envmods, unlocked, i as usize);
+            let enabled = i != 2 || unlocked;
             push(MpLobbyRowId::Enviro(i), [0x1af, 0x1ab, 0x1aa, 0x328, 0x5b9][i as usize], "Enviro-Mod", vid, String::new(), host_can, enabled, &mut self.focus);
         }
         // Ravine takes no bots: the game locks the AI Bots row there [M P_MPMAP 0x217678:20-25] and the match start

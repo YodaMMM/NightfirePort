@@ -145,18 +145,30 @@ fn sight_to_first_shot_for_the_three_sighting_paths() {
     // Live: notice 61 (WORKLOG 0019, 59 + the round-robin wait); the reaction floor holds.
     assert!(noticed.is_some_and(|f| (59..=63).contains(&f)), "path1 noticed {noticed:?} (live 61)");
     let shot1 = first_shot.expect("path1 fires within the window");
-    // The game's reaction floor: the guard's own sight ack (seen) must precede the first bullet by at
-    // least DroneFunc_ReactionTime's 59 ticks (0x14ac60; live notice 61 = 59 + the round-robin wait).
-    // The game's +97 alert->bullet includes Bond walking into the guard's back (the turn); face-on the
-    // port's floor is the reaction 59 + the state/aim transitions (a step-first draw ~160).
+    // The game's reaction floor: DroneFunc_ReactionTime gates the NOTICE (see below). The live
+    // +97 alert->bullet number included Bond walking into the guard's back (the turn); face-on
+    // the shot schedule after ATTACK is the first combat move's script (a step-first draw ~160).
     let s1 = seen_at1.expect("path1 sees Bond");
     // The fresh guard's sight ack waits out the floor (live 61; round-robin slide ±2).
     assert!((55..=65).contains(&s1), "path1 sight ack at {s1} (live 61) — the reaction floor moved");
-    assert!(shot1 >= s1 + 59, "path1 first shot {shot1} within the reaction floor of its sight tick {s1}");
+    // The reaction floor lives in the NOTICE: DroneFunc_ReactionTime 0x14ac60 gates sight→ATTACK
+    // (≈59 at alertness 0 — noticed 59-63 above = 59 + the round-robin slide [M]); it is NOT a
+    // notice→shot timer. After ATTACK the first combat move's own script schedules the bullet:
+    // a step (0x73/0x74) holds the fire request through its danim [M 0x1676a0:16-18], while a
+    // strafe-aim (0x75/0x76) releases per its own script — the old `shot1 >= s1 + 59` pin held
+    // only while the combat-move coin drew step-first (a stream position, not a law).
     assert!(shot1 >= noticed.unwrap(), "path1 first shot {shot1} before notice {:?}", noticed);
+    let after_attack1 = g.log.iter().skip_while(|(_, s)| *s != nf_game::drone::state::ATTACK).nth(1).copied();
+    if let Some((m_at, m)) = after_attack1 {
+        if matches!(m, 0x73 | 0x74) {
+            assert!(shot1 >= m_at - WARM + 90, "step-first: the danim holds the fire, shot at +{}", shot1 - (m_at - WARM));
+        }
+    }
     let aim1 = g.log.iter().filter(|(f, _)| *f > WARM).find(|(_, st)| *st == nf_game::drone::state::AIM_STAND_FIRE).map(|(f, _)| f - WARM);
     if let Some(a1) = aim1 {
-        assert!(shot1 >= a1 && shot1 - a1 < 59, "path1 aim entry {a1} -> shot {shot1}: an extra pre-fire pause leaked in");
+        if a1 <= shot1 {
+            assert!(shot1 - a1 < 59, "path1 aim entry {a1} -> shot {shot1}: an extra pre-fire pause leaked in");
+        }
     }
 
     // ---- Path 2: the alarm-raised guard (alertness 1) spots Bond — no reaction floor ------------------------------

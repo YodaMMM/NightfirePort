@@ -142,3 +142,45 @@ fn the_07000005_patrols_fly_their_route_once_and_are_deleted() {
     // Sister: before the route end it was flying (not deleted at once).
     assert!(gone_at.unwrap() > 60, "it flew its route first (deleted at tick {gone_at:?})");
 }
+
+/// The flight rate on every copter level: each tick adds the node's +0xc step to t
+/// [M Copter_Move 0x17d628:53], and that step is `count / scale` — `REC_FRAME_RATE` and
+/// `FRAME_RATE` come from one `GS_SetRefreshRate` call and cancel [M 0x17d2b8:9-16; L
+/// ee_start_05.bin: 0.1905 = 381/2000 on #241]. Prints the measured speed (units/s at 60 ticks/s,
+/// heading deg/s) for each copter over 300 flown ticks.
+#[test]
+fn every_copter_route_advances_count_over_scale_per_tick() {
+    let Some(iso) = iso() else { eprintln!("skip: NF_ISO not set"); return };
+    for (name, _explode) in LEVELS {
+        let mut scene = nf_view::load(&iso, name, false).unwrap_or_else(|e| panic!("load {name}: {e}"));
+        let sim = scene.sim.as_mut().unwrap();
+        let paths = sim.drones.copter_paths.clone();
+        for (ci, c) in sim.drones.copters.clone().iter().enumerate() {
+            let pi = c.path.unwrap();
+            if c.gate != 0 { let f = sim.drones.frame; sim.drones.channels.set(c.gate as u32, 1, f); }
+            // Fly until case 1 has run one Copter_Move, then measure 300 ticks.
+            for _ in 0..5 { sim.step_bond(Default::default(), false, false, false); }
+            let (t0, p0, d0) = { let c = &sim.drones.copters[ci]; (c.t, c.pos(), { let m = c.matrix; [m[2][0], m[2][1], m[2][2]] }) };
+            let mut dist = 0.0f32; let mut turn = 0.0f32; let mut prev = p0; let mut pd = d0;
+            let mut n = 0u32;
+            for _ in 0..300 {
+                sim.step_bond(Default::default(), false, false, false);
+                let c = &sim.drones.copters[ci];
+                if c.path != Some(pi) || c.state != 1 { break; } // a transition or a state change ends the window
+                let p = c.pos(); let d = { let m = c.matrix; [m[2][0], m[2][1], m[2][2]] };
+                dist += ((p[0]-prev[0]).powi(2) + (p[1]-prev[1]).powi(2) + (p[2]-prev[2]).powi(2)).sqrt();
+                let (a0, a1) = (pd[0].atan2(pd[2]), d[0].atan2(d[2]));
+                let mut da = a1 - a0; while da > std::f32::consts::PI { da -= std::f32::consts::TAU; } while da < -std::f32::consts::PI { da += std::f32::consts::TAU; }
+                turn += da.abs(); prev = p; pd = d; n += 1;
+            }
+            let t1 = sim.drones.copters[ci].t;
+            let step = paths[pi].step;
+            eprintln!("{name} copter {ci} (#{}): count {} step {step:.5} ticks {n} dt {:.3} speed {:.2} u/s turn {:.1} deg/s",
+                c.placement, paths[pi].count, t1 - t0, dist / n.max(1) as f32 * 60.0, turn.to_degrees() / n.max(1) as f32 * 60.0);
+            if n > 0 {
+                assert!(((t1 - t0) - step * n as f32).abs() < 1e-2 * n as f32 * step + 1e-3,
+                    "{name} copter {ci}: t advances one step per tick [M 0x17d628:53]");
+            }
+        }
+    }
+}

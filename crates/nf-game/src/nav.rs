@@ -30,6 +30,10 @@ pub struct NavNode {
     pub pos: V3,
     /// MAPNODE +4: 1 wait, 2 door, 4 kick, 8 action anim, 0x20 ally wait, 0x40 fiddle, 0x10000.. Mayhew lines.
     pub flags: u32,
+    /// MAPNODE +0xC: the room cel `AIPath_Link2Cel` 0x1d2ec8 files the node under —
+    /// `build_FindCel(node+0x10)`, the node head-inserted into that cel's +0x24 node list [M]. `None`
+    /// when FindCel misses (the node is on no cel's list) or the world has no cel scope.
+    pub cel: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -86,7 +90,7 @@ impl Network {
                     walls.push(Wall { a: a.0, b: b.0, ha: a.1, hb: b.1, flags: 0 });
                 }
             } else {
-                let nodes: Vec<NavNode> = p.nodes.iter().map(|n| NavNode { pos: pos(n), flags: match n.raw[0] { 0x2468_abce => 0, f => f } }).collect();
+                let nodes: Vec<NavNode> = p.nodes.iter().map(|n| NavNode { pos: pos(n), flags: match n.raw[0] { 0x2468_abce => 0, f => f }, cel: world.find_cel(pos(n)) }).collect();
                 let links = p.links.iter().map(|l| NavLink { a: l.a, b: l.b, len: dist3(nodes[l.a as usize].pos, nodes[l.b as usize].pos) }).collect();
                 paths.push(NavPath { name: p.name.clone(), kind: p.kind, adj: p.adjacency(), nodes, links });
             }
@@ -175,7 +179,7 @@ impl Network {
         // Deviation: portal connectivity → static collision line of sight at +1.
         // [S] the stand-in mask: the game's NDrone2_MoveTest 0x155330 runs AINetwork_BoundsTest only
         // (no collision LOS) — the port's probe takes the nearest evidenced ray mask (8 | 4).
-        if !world.line_of_sight([a[0], a[1] + 1.0, a[2]], [b[0], b[1] + 1.0, b[2]], crate::world::LOS_PROBE_8) { return (0, None); }
+        if !world.move_probe_clear([a[0], a[1] + 1.0, a[2]], [b[0], b[1] + 1.0, b[2]]) { return (0, None); }
         if !self.bounds { return (1, None); }
         self.bounds_test(a, b, near, want_hit)
     }
@@ -274,8 +278,20 @@ impl Network {
     /// target node set; also the port form of `NDrone2_NearestNode` (0x1558d8) / `NearestNodeDCV`
     /// (0x155958)'s nearest-node ask.
     pub fn target_nodes(&self, world: &CollisionWorld, path: usize, pos: V3, r2: f32) -> TargetNodes {
+        self.target_nodes_in(world, path, pos, r2, None)
+    }
+
+    /// `target_nodes` restricted to the nodes filed under room cel `cel`. `AINetwork_NodesForPosition`
+    /// 0x1586a8 searches the CelPos's own cel: `AINetwork_NodeSearchCel` 0x156e18 walks
+    /// `cel+0x24` (the `AIPath_Link2Cel` list) and returns 0 at once for a null cel; the no-hit
+    /// retry over `cel+0x28` [M 0x1587dc-0x158858] hands NodeSearchCel the same search block, so it
+    /// re-walks the same cel. A position whose cel holds no node of the path gives neither a found
+    /// node nor a fallback, and `AINetwork_DoAStarPath` then returns 4 [M 0x1571b0:52-68].
+    /// `cel = None` keeps the one-cel search (the port's flat worlds and an unlinked player).
+    pub fn target_nodes_in(&self, world: &CollisionWorld, path: usize, pos: V3, r2: f32, cel: Option<usize>) -> TargetNodes {
         let mut t = TargetNodes::default();
         for i in self.candidates(path, pos, r2) {
+            if cel.is_some() && self.paths[path].nodes[i].cel != cel { continue; }
             if self.move_test(world, self.paths[path].nodes[i].pos, pos, false, false).0 == 1 { t.found = Some(i as u16); break; }
             if t.fallback.is_none() { t.fallback = Some(i as u16) }
         }
@@ -679,7 +695,14 @@ impl Route {
     }
 
     /// `AINetwork_SetupNextNode(±1)`.
-    /// `AINetwork_RouteNodeOffset` (0x15a820): flag&7 — 2 loops, 3 bounces (not ported), else clamp.
+    /// `AINetwork_RouteNodeOffset` (0x15a820): flag&7 — 2 loops, 3 bounces, else clamp. The flag 3
+    /// arm is DEAD on the shipped game: the route's flag word (DCVars+0x970, the AIRoute's first
+    /// u16) is written ONLY by `NDrone2_InitAIPath` 0x153720:59-65 — `path+0x80 & 4` clear → 1,
+    /// set → 2, never 3 (every other +0x970 writer ORs unrelated bits 0x20/0x80 or only calls
+    /// LinkCreep_Calc [M decomp scan: AssignAIPath 0x154190, ReFindMissionPath 0x153a30, the
+    /// AllyLead states, DefaultInit, Player_Init]). The port's RouteMode::{OneWayEnd, Loop} are
+    /// exactly the game's 1/2 (inert-notes-world census: no on-foot level's data can reach the
+    /// bounce either).
     fn next_node(&mut self, net: &Network, dir: i32) {
         let count = self.nodes.len() as i32;
         self.index += dir;
@@ -722,7 +745,11 @@ impl Route {
 
     /// `AINetwork_FollowRoute` + `LinkCreep_Handler`: updates the move target. Returns the result code and the node
     /// reached when a special node was reached this tick (`NDrone2_ReachedDestNode`).
-    pub fn follow(&mut self, net: &Network, feet: V3, near_pos: &dyn Fn(V3) -> bool) -> (u8, Option<u16>) {
+    /// `hit_door`: the drone's `+0xBA8` door binding stands. [M 0x15a2c8:67-69] the Handler then
+    /// jumps straight to `LinkCreep_Increment` (LAB_0015a410), skipping the bounds flag, the 1.0
+    /// escape, `BoundsNodeTest` and `LinkCreep_Decrement`: a drone bound to a door creeps through
+    /// its doorway without the blocked test.
+    pub fn follow(&mut self, net: &Network, feet: V3, near_pos: &dyn Fn(V3) -> bool, hit_door: bool) -> (u8, Option<u16>) {
         self.remaining = self.distance(net, feet);
         let count = self.nodes.len() as i32;
         if self.index >= count && self.mode != RouteMode::Loop && self.remaining < self.radius { return (follow::ARRIVED, None); }
@@ -742,7 +769,8 @@ impl Route {
         // Blocked toward the target: step back (`LinkCreep_Decrement`).
         // [M 0x15a2c8] the Handler gates the whole block check on `Vec_SqDist2D(feet, target) < 1.0`
         // (2D) — within 1.0 of the step point the guard walks, no boundary read.
-        if net.bounds && (feet[0] - self.target[0]).powi(2) + (feet[2] - self.target[2]).powi(2) >= 1.0
+        // [M 0x15a2c8:67-69] skipped whole while `Drone+0xBA8` (hit_door) stands.
+        if !hit_door && net.bounds && (feet[0] - self.target[0]).powi(2) + (feet[2] - self.target[2]).powi(2) >= 1.0
             && !net.bounds_node_test(0.2, feet, self.target) {
             // [M 0x15a148] the step-back's own test carries the same 1.0 escape: within 1.0 of the
             // PREVIOUS step point the game steps back without consulting the boundary posts
@@ -804,7 +832,7 @@ mod tests {
     use super::*;
 
     fn net(nodes: &[V3], links: &[(u16, u16)], kind: u32) -> Network {
-        let nodes: Vec<NavNode> = nodes.iter().map(|&p| NavNode { pos: p, flags: 0 }).collect();
+        let nodes: Vec<NavNode> = nodes.iter().map(|&p| NavNode { pos: p, flags: 0, cel: None }).collect();
         let links: Vec<NavLink> = links.iter().map(|&(a, b)| NavLink { a, b, len: dist3(nodes[a as usize].pos, nodes[b as usize].pos) }).collect();
         let mut adj = vec![Vec::new(); nodes.len()];
         for (k, l) in links.iter().enumerate() { adj[l.a as usize].push(k as u16); adj[l.b as usize].push(k as u16); }
@@ -892,14 +920,14 @@ mod tests {
         // escape (0.4² = 0.16 < 1.0) advances anyway. The old port ran the test and froze here.
         let feet = [1.2, 0.0, 0.0];
         assert!(!n.bounds_node_test(0.4, feet, r.creep.point(4)), "the post really blocks the segment — the case is live");
-        let (code, _) = r.follow(&n, feet, &|_| false);
+        let (code, _) = r.follow(&n, feet, &|_| false, false);
         assert_eq!((code, r.creep.step), (follow::MOVING, 4), "within 1.0 of q the game advances without the post test [M 0x159f28]");
         // Sister: feet 1.1 from the same q (past the escape band) — the post holds the step.
         let mut r = Route::for_path(&n, 0, 0);
         r.creep.step = 3;
         r.target = r.creep.point(3);
         let feet = [0.5, 0.0, 0.0];
-        let (code, _) = r.follow(&n, feet, &|_| false);
+        let (code, _) = r.follow(&n, feet, &|_| false, false);
         assert_eq!((code, r.creep.step), (follow::MOVING, 3), "past 1.0 the 0.4 post test holds the step [M 0x159f28]");
     }
 
@@ -920,8 +948,32 @@ mod tests {
         let feet = [0.1, 0.0, 0.0];
         assert!(!n.bounds_node_test(0.2, feet, r.creep.point(3)), "blocked toward the target");
         assert!(!n.bounds_node_test(0.1, feet, r.creep.point(2)), "the bare 0.1 test on prev fails — only the 1.0 escape steps back");
-        let (code, _) = r.follow(&n, feet, &|_| false);
+        let (code, _) = r.follow(&n, feet, &|_| false, false);
         assert_eq!((code, r.creep.step), (follow::MOVING, 2), "within 1.0 of prev the game steps back without the post read [M 0x15a148]");
+    }
+
+    /// `LinkCreep_Handler` 0x15a2c8:67-69: while the drone's `+0xBA8` door binding stands the
+    /// Handler jumps to `LinkCreep_Increment` and never runs the blocked test or the step-back.
+    /// Same blocked setup as the decrement test above: unbound, the drone steps back to 2; bound,
+    /// no step-back (the Increment runs with its own post test).
+    #[test]
+    fn a_door_bound_drone_skips_the_blocked_test() {
+        let mut n = net(&[[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]], &[(0, 1)], 4);
+        n.bounds = true;
+        n.walls.push(Wall { a: [0.83, 0.0, 0.03], b: [0.83, 0.0, 2.0], ha: 2.0, hb: 2.0, flags: 0 });
+        let feet = [0.1, 0.0, 0.0];
+        let mut r = Route::for_path(&n, 0, 0);
+        r.creep.step = 3;
+        r.target = r.creep.point(3);
+        assert!(!n.bounds_node_test(0.2, feet, r.creep.point(3)), "blocked toward the target");
+        let (_, _) = r.follow(&n, feet, &|_| false, false);
+        assert_eq!(r.creep.step, 2, "unbound: the blocked test steps back [M 0x15a148]");
+        let mut r = Route::for_path(&n, 0, 0);
+        r.creep.step = 3;
+        r.target = r.creep.point(3);
+        let (code, _) = r.follow(&n, feet, &|_| false, true);
+        assert_eq!(code, follow::MOVING);
+        assert!(r.creep.step >= 3, "bound to a door: no step-back, the Increment runs [M 0x15a2c8:67-69] (step {})", r.creep.step);
     }
 
     #[test]
@@ -944,7 +996,7 @@ mod tests {
         let mut feet = [0.0, 0.0, 0.0];
         let mut visited = vec![];
         for _ in 0..400 {
-            r.follow(&n, feet, &|_| false);
+            r.follow(&n, feet, &|_| false, false);
             feet = r.target;
             if !visited.contains(&r.index) { visited.push(r.index) }
         }

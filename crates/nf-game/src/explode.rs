@@ -266,10 +266,20 @@ pub struct Targets<'a> {
     pub destroys: &'a [(usize, V3, f32, bool, u16)],
 }
 
+/// The player's obj+0x8C [L ee_start_05.bin, ee_start_07000001.bin: 1.0575536 on both].
+const PLAYER_SPHERE_R: f32 = 1.0576;
+
+/// The falloff at `gap` = distance to the object's sphere edge: `damage · (1 − max(gap, 0) / radius)`,
+/// a straight line [M 0x17c5e8 `mtc1 zero,f3`, 0x17c5f8 `sub.s`, 0x17c608 `max.s f0,f0,f3`,
+/// 0x17c60c `div.s`, 0x17c610 `sub.s`, 0x17c614 `mul.s`]. The decompile's `(int)x * (0 < x)` is how
+/// it prints `max.s`; no integer conversion exists in the function.
+pub fn falloff(damage: f32, radius: f32, gap: f32) -> f32 {
+    damage * (1.0 - gap.max(0.0) / radius)
+}
+
 /// `Explode_Propagate` (0x17c518): a sphere of `radius` from `pos`; for every hit object
-/// `amount = damage · (1 − (int)(dist − obj_radius) / radius)` — the game truncates the
-/// distance-minus-sphere term to an INTEGER [M 0x17c620 `cvt.w.s` / `mtc1` pair], clamped at ≥ 0,
-/// and anything below 0.0002 takes nothing [M 0x17c62c]. Case dispatch on `obj+0xFF`:
+/// `amount = falloff(dist − obj_radius)`, and anything below 0.0002 takes nothing [M 0x17c618].
+/// Case dispatch on `obj+0xFF`:
 /// 0 copter (accumulate), 2 drone, 3 player, 5 destructible models {0x2B, 0x34–0x37, 0x3A},
 /// 0x20 break, 0x21 destroy, 0x28 vehicle, 0x35 MP, 0x36 GT (+ disable), 0x37 sensor, 0x38 monitor,
 /// 0x3D sub (class 'J'), 0x4B hit-list entry — 12 damaging cases plus the default skip.
@@ -281,11 +291,7 @@ pub fn propagate(pos: V3, radius: f32, damage: f32, attacker: usize, t: &Targets
         let dx = px[0] - pos[0];
         let dy = px[1] - pos[1];
         let dz = px[2] - pos[2];
-        let dist = (dx * dx + dy * dy + dz * dz).sqrt() - obj_radius;
-        // `fVar10 = param_2 * (1 - (int)fVar10 / param_1)` — the (int) cast truncates toward zero
-        // [M 0x17c61c-0x17c628]; negative distances (inside the object's sphere) give full damage.
-        let truncated = if dist > 0.0 { (dist as i32) as f32 } else if dist < 0.0 { -((-dist) as i32) as f32 } else { 0.0 };
-        let amount = damage * (1.0 - truncated / radius);
+        let amount = falloff(damage, radius, (dx * dx + dy * dy + dz * dz).sqrt() - obj_radius);
         if amount >= 0.0002 { hit(amount); }
     };
     for &(i, p, r) in t.drones {
@@ -295,7 +301,7 @@ pub fn propagate(pos: V3, radius: f32, damage: f32, attacker: usize, t: &Targets
     }
     {
         let mut p = 0.0f32;
-        sweep(t.player, 0.0, &mut |a| p = a);
+        sweep(t.player, PLAYER_SPHERE_R, &mut |a| p = a);
         if p > 0.0 { out.player = Some(p); }
     }
     for &(i, p, r) in t.breaks {
@@ -346,13 +352,21 @@ mod tests {
     }
 
     #[test]
-    fn propagate_falloff_truncates_the_distance() {
-        // Radius 10, damage 100: a drone at distance 5.7 − radius 1 = 4.7 → (int) 4 → 100·(1−4/10) = 60.
-        // A smooth falloff would give 57; the game's integer truncation gives 60 [M 0x17c61c-0x17c628].
+    fn propagate_falloff_is_a_straight_line_to_the_sphere_edge() {
+        // Radius 10, damage 100: a drone at distance 5.7 − radius 1 = 4.7 → 100·(1−4.7/10) = 53
+        // [M 0x17c5f8-0x17c614, `max.s` and no conversion].
         let t = Targets { drones: &[(0, [5.7, 0.0, 0.0], 1.0)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &t);
         assert_eq!(h.drones.len(), 1);
-        assert!((h.drones[0].1 - 60.0).abs() < 1e-4, "truncated falloff, got {}", h.drones[0].1);
+        assert!((h.drones[0].1 - 53.0).abs() < 1e-3, "straight falloff, got {}", h.drones[0].1);
+        // Bond's sphere counts: 5.7 away is 4.6424 from its edge [L obj+0x8C].
+        let t = Targets { drones: &[], player: [5.7, 0.0, 0.0], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &t);
+        assert!((h.player.unwrap() - 53.576).abs() < 1e-3, "got {:?}", h.player);
+        // Deep inside the object's own sphere: full damage, never more [M 0x17c608's clamp].
+        let t = Targets { drones: &[(0, [-1.5, 0.0, 0.0], 3.0)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &t);
+        assert!((h.drones[0].1 - 100.0).abs() < 1e-4, "got {}", h.drones[0].1);
         // Inside the object's own sphere (dist − radius < 0): full damage, not negative.
         let t = Targets { drones: &[(0, [0.5, 0.0, 0.0], 1.0)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &t);
@@ -377,17 +391,16 @@ mod tests {
 
     #[test]
     fn destroy_case_needs_damage_at_least_one() {
-        // Case 0x21's gate [M 0x17c6a8]: the smash fires only when the falloff reaches 1.0. With the
-        // integer truncation the amounts jump in damage/radius steps: damage 5, radius 10 → a target at
-        // 9.5 (truncated 9) takes 5·(1−9/10) = 0.5 → no smash; at 4.5 (truncated 4) it takes 3 → smash.
+        // Case 0x21's gate [M 0x17c6a8]: the smash fires only when the falloff reaches 1.0: damage 5,
+        // radius 10 → a target at 9.5 takes 0.25 → no smash; at 4.5 it takes 2.75 → smash.
         let far = Targets { drones: &[], player: [1000.0; 3], breaks: &[],
             destroys: &[(0, [9.5, 0.0, 0.0], 0.0, false, 0)], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 5.0, usize::MAX, &far);
-        assert!(h.destroys.is_empty(), "0.5 damage must not smash");
+        assert!(h.destroys.is_empty(), "0.25 damage must not smash");
         let near = Targets { drones: &[], player: [1000.0; 3], breaks: &[],
             destroys: &[(0, [4.5, 0.0, 0.0], 0.0, false, 0), (1, [4.5, 0.0, 0.0], 0.0, true, 0)], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 5.0, usize::MAX, &near);
-        assert_eq!(h.destroys, vec![0], "3 damage smashes the unsmashed one only");
+        assert_eq!(h.destroys, vec![0], "2.75 damage smashes the unsmashed one only");
     }
 
     #[test]

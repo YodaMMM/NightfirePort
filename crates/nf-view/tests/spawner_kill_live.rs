@@ -445,17 +445,17 @@ fn tower2_stairwell_the_kill_channel_keeps_the_drawn_guard() {
     for _ in 0..24u32 {
         scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
         spawned = present(&scene.sim.as_ref().unwrap());
-        if spawned > 0 { break; }
+        if spawned == 2 { break; }
     }
     {
         let sim = scene.sim.as_ref().unwrap();
-        assert_eq!(spawned, 1, "the guard arrives (mode 3: only when none alive [M 0x137e68:180-203])");
+        assert_eq!(spawned, 2, "both guards of the wave arrive (mode 3's permission holds until the rollover [M 0x137e68:176-203])");
     }
     let guard = tpls.iter().copied().find(|&i| scene.sim.as_ref().unwrap().drones.list[i].present).expect("the arrived guard");
     // Sister-in-advance: no kill channel yet, the guard stays. (Short — this level's end-level
     // script chain freezes the NPCs a minute in, and the drawn step below needs him enabled.)
     for _ in 0..12 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
-    assert_eq!(present(&scene.sim.as_ref().unwrap()), 1, "no ch 0x1D: the arrived guard stays");
+    assert_eq!(present(&scene.sim.as_ref().unwrap()), 2, "no ch 0x1D: the arrived guards stay");
     // Bond right next to him: `visible_to`'s l < 2 arm → drawn (the game's renderer sets
     // obj+0xFC = 2 for every drawn object [M 0x1e62d8:71]).
     {

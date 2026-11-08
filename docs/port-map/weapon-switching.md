@@ -8,11 +8,12 @@ Addresses are this build's (ACTION.ELF `e7ffdcb3…`). Tags: [M] decompile, [D] 
 | Address | Name | Status | Notes |
 |---|---|---|---|
 | 0x1a24c8 | `Player_Weapon` | **partial** | The per-tick weapon manager. Reads the d-pad/gadget actions and calls `Player_WeaponChange`. Ported: the trigger, reload, aim-mode toggle, zoom. **Not ported**: the weapon-cycle (actions 0xA/0xB → mode=1 gadget cycle), the gadget-cycle (actions 0xF/0x10 → mode=0 weapon cycle), the `bVar4` gate (switch channel 0x48 on level 07000007), the fire-mode cycle (weapon+0x05, `BLData+0x1BB`), action 0x13 (aim mode toggle). STANDIN: nf-view's `Sim::step_bond` handles switching directly instead of calling this. |
-| 0x1a6f80 | `Player_WeaponChange` | **partial** | The next/prev cycle. Ported: `Gun::next_weapon` iterates owned, selectable, has-ammo weapons. **Not ported**: the weapon/gadget split (mode=0 → weapons 1..0x47, mode=1 → gadgets 0x4A..0x5E), the last-weapon toggle (BLData+0x932), the last-gadget toggle (BLData+0x930), the mode=2 combined cycle, the `Sound_Play(0x1DB)` change click, the `Player_WeaponHasAmmo` check per candidate. STANDIN: `Gun::next_weapon` does not separate weapons from gadgets. |
-| 0x1a6eb0 | `Player_IsBetterWeapon` | **not started** | The `BestWeapon` table for auto-switch on pickup. |
-| 0x1a16c0 | `Player_WeaponHasAmmo` | **not started** | Whether the player has ammo for a weapon (clip + carried). |
-| 0x1a9680 | `Player_GetBestWeapon` | **not started** | Finds the best owned weapon (for auto-switch). |
-| 0x1a9858 | `Player_WeaponNone` | **not started** | Clears the weapon (when out of ammo). |
+| 0x1a6f80 | `Player_WeaponChange` | **ported** | `Gun::cycle` (the walk from the request's base, the twin step, the wrap) + `Gun::toggle_back` (+0x930/+0x932) + the entry refusals in `Sim::step_bond`'s `cycle_ok` (substates 2/10/12/13/16, held 0x47/0x5D/0x5E, the aim bit, the view states). A press during a holster or draw moves the request; a walk that finds nothing leaves it. |
+| 0x1a6eb0 | `Player_IsBetterWeapon` | **ported** | `Inventory::is_better_weapon`. |
+| 0x1a16c0 | `Player_WeaponHasAmmo` | **ported** | `Gun::has_ammo` + `Gun::placed_keeps_ammo` (the +0x68 & 0x20000 object walk: a placed mine keeps its detonator). |
+| 0x1a9680 | `Player_GetBestWeapon` | **ported** | `Gun::get_best_weapon`: base + the family's twin marker, the AIMS-20 on its rifle. |
+| 0x1a2ba8 | `Player_HandleHasNoAmmo` | **ported** | `Gun::no_ammo_request`, from `update_with`'s `dry` flag (the release arm) and the case-0xc dry arm; the 'R' arm stays in `Sim::run`. |
+| 0x1a9858 | `Player_WeaponNone` | **ported** | `Gun::go_to_hands`, from the ladder, wire, creep, gun-mount and death paths only. |
 
 ## The holster/draw state machine (the animation)
 
@@ -73,19 +74,16 @@ flag-0x40000 weapons flip the `BLData+0x958` toggle and alternate strictly. Port
 
 ## Counts
 
-- **Ported**: 7 (`Player_WeaponFiring`, `Player_EquipWeapon`, `Player_EquipAmmo`, `Player_WeaponHasAmmo`,
-  `Player_GetBestWeapon`, `Player_WeaponNone`, `Player_WeaponChange` toggle-back)
-- **Partial**: 4 (`Player_Weapon`, `Player_WeaponChange`, `Player_WeaponSelect`, `Player_SetWeaponAnimObj`)
+- **Ported**: 9 (`Player_WeaponFiring`, `Player_EquipWeapon`, `Player_EquipAmmo`, `Player_WeaponHasAmmo`,
+  `Player_GetBestWeapon`, `Player_WeaponNone`, `Player_WeaponChange`, `Player_IsBetterWeapon`, `Player_HandleHasNoAmmo`)
+- **Partial**: 3 (`Player_Weapon`, `Player_WeaponSelect`, `Player_SetWeaponAnimObj`)
 - **Stub**: 0
-- **Not started**: 1 (`Player_IsBetterWeapon` — the auto-switch on pickup)
+- **Not started**: 0
 
 ## STANDINs (audit-confirmed gaps)
 
 | Item | Reason | Audit |
 |---|---|---|
-| `Gun::cycle` does not implement the last-weapon / last-gadget toggle-back (`+0x930`/`+0x932` early-exit paths) | The toggle-back requires `prev_weapon`/`prev_gadget` fields that are written but never read; the game's early-exit branches are not ported. STANDIN: the cycle always iterates. | audit-batch2 finding 4 |
-| `Gun::prev_weapon` is write-only | Set 4× in scene.rs but never read. The "Last Weapon" key is dead code. STANDIN. | audit-batch2 finding 4 |
-| `+0x1BC` variant-slot / skip-ahead | The cycle loop steps ±1; the game's `+0x1BC` skip-ahead optimisation and the `'T'`/`'U'` special-cases are not ported. STANDIN. | audit-batch2 finding 3d/3e |
 | `0x1DB` change-click sound | The mode-2 "no weapon to switch to" click is not played. STANDIN. | audit-batch2 finding 5 |
 | Case 0 idle-alert sub-state machine | The `+0xCC`/`+0xD0`/`+0xD4` idle-alert scripts, the drone-targeting scans, the `0x959`/`0x93A`/`0x93E` counters are not ported. STANDIN. | audit-batch1 case 0 |
 | `+0xD8` holster variant script | The `holster_variant_flag` accessor is mislabeled (it's a script hashcode, not a flag) and the path is not ported. STANDIN. | audit-batch1 case 1 |

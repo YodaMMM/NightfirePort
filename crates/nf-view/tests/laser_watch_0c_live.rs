@@ -86,6 +86,12 @@ fn the_repro_spot_burns_the_grate_hinge_in_the_games_time() {
     // holds shots until it settles [M Player_WeaponFiring 0x1a5460's switching gate]).
     let draw = Input { switch_to: Some(0x4e), ..Default::default() };
     for _ in 0..40 { sim.step_bond(draw, false, false, false); }
+    // The press comes once the draw has ended, as a player's would: a press under the holster/draw
+    // is spent there. The edge sets +0x92C = 1.0, the countdown runs it out, and the view-state gate
+    // (state 1/3, outside {0, 9, 0xB}) returns before the shot; the held trigger then reads no new
+    // edge [M Player_WeaponFiring 0x1a5460:601-636].
+    for _ in 0..120 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
+    assert_eq!(sim.gun.switch_state, 0, "the laser's draw ends before the press");
     assert_eq!(sim.gun.weapon, 0x4e, "the Laser must equip; weapon {:#x}", sim.gun.weapon);
     let h139 = hinge(sim, 14);
     eprintln!("trace: hinge #139 at {h139:?} (the head-ray closest approach 0.041, r 0.2325 [D probe])");
@@ -196,6 +202,12 @@ fn the_far_latch_takes_no_burn_from_the_repro_spot() {
     sim.bond.pitch = REPRO_PITCH;
     let draw = Input { switch_to: Some(0x4e), ..Default::default() };
     for _ in 0..40 { sim.step_bond(draw, false, false, false); }
+    // The press comes once the draw has ended, as a player's would: a press under the holster/draw
+    // is spent there. The edge sets +0x92C = 1.0, the countdown runs it out, and the view-state gate
+    // (state 1/3, outside {0, 9, 0xB}) returns before the shot; the held trigger then reads no new
+    // edge [M Player_WeaponFiring 0x1a5460:601-636].
+    for _ in 0..120 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
+    assert_eq!(sim.gun.switch_state, 0, "the laser's draw ends before the press");
     let mut done_tick = None;
     for tick in 1..=300u32 {
         scene.sim.as_mut().unwrap().step_bond(Input::default(), true, false, false);

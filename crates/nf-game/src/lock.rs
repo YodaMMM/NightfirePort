@@ -570,6 +570,12 @@ impl Keypad {
         KEYPAD_DIGIT_VALUES[self.focus]
     }
 
+    /// ✕ is down on the page this tick (`Menu_InputAction(0x1f, 1)`, the held read the focused
+    /// button's 0x40 mask takes [M `Button_Update` 0x1ef948:84-86]).
+    pub fn confirm_held(&self) -> bool {
+        self.confirm_frames > 0
+    }
+
     /// One tick of the page's held lanes through the game's action machine. The 0x1f and 0x22
     /// reads refuse each other while the other is held [M `Menu_InputAction` 0x1f1f40: 0x1e/0x1f
     /// return 0 under a held 0x22, and 0x22 returns 0 under a held 0x1f or 0x1e].

@@ -65,8 +65,8 @@ fn the_silenced_twin_survives_a_weapon_swap_round_trip() {
     for &(dir, ticks) in &[(1i8, 300usize), (-1i8, 400usize)] {
         let sim = scene.sim.as_mut().unwrap();
         sim.gun.switch_state = 0; // the previous swap settled above
-        let input = Input { weapon_cycle: dir, ..Input::default() };
-        for _ in 0..ticks { sim.step_bond(input, false, false, false); }
+        sim.step_bond(Input { weapon_cycle: dir, ..Input::default() }, false, false, false);
+        for _ in 0..ticks { sim.step_bond(Input::default(), false, false, false); }
     }
     let sim = scene.sim.as_ref().unwrap();
     assert_eq!(sim.gun.weapon, 3,

@@ -129,7 +129,12 @@ fn the_0c_yard_trigger_and_turbine_zone() {
     r.ticks(40);
     assert!(r.ticks(40).is_empty(), "section 0 is in the stealth set");
     r.place([4.99, 13.27, -222.5]);
-    assert_eq!(r.ticks(20).first(), Some(&(0x22, false)), "the yard volume");
+    // 5 ticks in the yard, not 20: the volume's 0x22 lands on the first tick, and the guard at
+    // (60.4, 9.7, -179.6), 70 u off, enters combat on Bond in the yard 9 ticks after the placement. That
+    // entry posts Music_Event(2, 5) and the 10-frame alert count then raises the attack flag; after
+    // the stream join it rose on the hall tick itself (one frame earlier than before), which takes
+    // the attack arm (7, then 0x36) instead of the calm 0x24 this test pins.
+    assert_eq!(r.ticks(5).first(), Some(&(0x22, false)), "the yard volume");
     r.place([60.0, 1.0, -222.0]);
     let hall = r.ticks(60);
     assert!(hall.contains(&(0x24, true)), "zone 45: {hall:?}");

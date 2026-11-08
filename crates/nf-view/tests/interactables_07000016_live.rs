@@ -431,3 +431,99 @@ fn the_launch_chain_rides_the_shuttle_bay_lift() {
         "the bay drone #634 never woke/rode the cab down (state {st}, y {:.2}) [D #634 p3 = 0x50; M the drone wake + the cab keys]", pos[1]);
     eprintln!("[16] bay drone after: state {st} y {:.2}", pos[1]);
 }
+
+/// Kiko #612 (skin 0x500005e, voice 0x13, wake 0x1b [D]) cannot be hurt here: DefaultInit sets
+/// `Drone+0x1B` for voice 0x13 on 0x07000016 [M 0x14b300:699-700] and HandleImpact returns at once
+/// on it [M 0x1469b8:23-25]. Bond's own rounds land on her and she keeps walking her route to the
+/// tripwire #613, which fails the mission [D #613; M 0x1827d8:108-116]. A shot guard is the sister.
+#[test]
+fn kiko_takes_no_damage_and_still_reaches_the_tripwire() {
+    // A cold load: the fresh kit puts the Delta Repeater in hand [M 0x1a7ef8 case 0x7000016].
+    let mut w = Walker::new(nf_view::load(&iso(), "07000016.bin", false).unwrap());
+    assert!(w.wait_enabled(3000, "the launch-centre arrival"), "the intro releases Bond");
+    w.wait(200);
+    let kiko = {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let i = sim.drones.list.iter().position(|d| d.skin == 0x0500_005e && d.switch_channel == 0x1b).expect("Kiko #612 [D]");
+        let hp = sim.drones.list[i].health;
+        sim.bond.pos = [14.0, 0.9, -154.9];
+        sim.bond.vel = [0.0; 3];
+        let frame = sim.drones.frame;
+        sim.drones.channels.set(0x1b, 1, frame);
+        (i, hp)
+    };
+    let (i, hp) = kiko;
+    let mut landed = false;
+    for t in 0..900u32 {
+        let (input, shoot) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.list[i];
+            let part = walker::DamageLog::exposed_part(sim, i);
+            let at = part.unwrap_or([d.pos[0], d.pos[1] + 0.6, d.pos[2]]);
+            let b = sim.bond.pos;
+            let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
+            let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
+            let err = walker::wrap_pi(dx.atan2(dz) - sim.bond.yaw);
+            let perr = (dy / dx.hypot(dz).max(0.5)).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+            (nf_game::player::Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() },
+             part.is_some() && err.abs() < 0.03 && perr.abs() < 0.04 && t % 8 == 0)
+        };
+        if shoot { w.tick_fire(input); } else { w.tick(input, false); }
+        let sim = w.scene.sim.as_ref().unwrap();
+        landed |= sim.drones.list[i].hit.is_some();
+        assert_eq!(sim.drones.list[i].health, hp, "Kiko lost health at tick {t} [M 0x1469b8:23-25]");
+        if sim.drones.channels.on(0x7b) { break; }
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(landed, "no round reached Kiko, so the test proved nothing");
+    assert!(sim.drones.channels.on(0x7b), "Kiko never reached the tripwire #613 (at {:?}, state {:#x})", sim.drones.list[i].pos, sim.drones.list[i].state);
+}
+
+/// Spawner +0x18 is param 8 converted from an integer [M 0x1378d0:33-37, `cvt.s.w` at 0x1379d4]:
+/// every spawner here carries 1 [D], so a template spot closer than 1.0 is screened; 07000006 has
+/// spawners carrying 10 [D]. Param 0 falls back to 10.0 [M].
+#[test]
+fn the_spawner_screen_distance_is_the_integer_param() {
+    let w = load16();
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(!sim.drones.spawners.is_empty());
+    for s in &sim.drones.spawners { assert_eq!(s.min_dist, 1.0, "spawner {}", s.placement); }
+    let six = nf_view::load(&iso(), "07000006.bin", false).unwrap();
+    let sim = six.sim.as_ref().unwrap();
+    assert!(!sim.drones.spawners.is_empty());
+    assert!(sim.drones.spawners.iter().any(|s| s.min_dist == 10.0), "07000006 carries 10 [D]");
+    assert!(sim.drones.spawners.iter().all(|s| s.min_dist >= 1.0), "no spawner screen collapses to nothing");
+}
+
+/// Blocking_polys_lift_shaft1 #532 (kind 0x3b, p0 = 0xcc, p1 = 0xcd, z −158.17..−157.74 [D]) closes
+/// the lift shaft's pit mouth from ch 204 to ch 205, while the cab lands [D 0600090a s22]. Hidden it
+/// carries obj+0xF0 0x30 and `Collide_PickObj` skips it [M 0x18dbf8:27-29, 0x1eae80:28-40]; restored
+/// it stops Bond; ch 205 deletes it [M 0x18d3b8:24-26].
+#[test]
+fn the_lift_shaft_blocker_stops_bond_only_between_its_channels() {
+    let mut w = load16();
+    let walk_in = |w: &mut Walker| -> f32 {
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.bond.pos = [2.5, -22.2, -155.5];
+            sim.bond.vel = [0.0; 3];
+        }
+        w.wait(30);
+        let mut min_z = f32::MAX;
+        for _ in 0..150u32 {
+            w.scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI;
+            w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false);
+            min_z = min_z.min(w.scene.sim.as_ref().unwrap().bond.pos[2]);
+        }
+        min_z
+    };
+    let set = |w: &mut Walker, ch: u32| { let sim = w.scene.sim.as_mut().unwrap(); let f = sim.drones.frame; sim.drones.channels.set(ch, 1, f); };
+    let open = walk_in(&mut w);
+    assert!(open < -158.6, "hidden, the blocker lets Bond through (min z {open:.2})");
+    set(&mut w, 0xcc);
+    let shut = walk_in(&mut w);
+    assert!(shut > -158.2, "restored, the blocker stops Bond (min z {shut:.2})");
+    set(&mut w, 0xcd);
+    let gone = walk_in(&mut w);
+    assert!(gone < -158.6, "deleted, the way is open again (min z {gone:.2})");
+}

@@ -24,6 +24,28 @@ use nf_game::player::Input;
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
+/// The library door pair #404/#417 (CivilianDoorGuard 0x31) holds the doorway to TouchOnce #412
+/// until Drake's reveal: ch 21 takes them off [D p6 = 21]. Bond inside their zone 3 loses his
+/// cover (reason 0xc: FailLabel 0x4000033 + ch 99 [M 0x160648:89-94]) and ch 99 is #412's lock
+/// [D #412 p10 = 99], so the plate never fires. A player reaches the plate after the reveal, the
+/// route walkreal_07000007 walks: stand on the reveal plate #356, sit out the fly-through, then
+/// step into #412.
+fn drakes_reveal_first(sim: &mut nf_view::scene::Sim) {
+    sim.bond.pos = [95.4, 49.4, -79.4]; // inside #356's XZ (92.9–98.0, −79.8–−78.9 [D])
+    for _ in 0..600 {
+        if sim.drones.channels.on(0x15) { break; }
+        sim.step_bond(Input::default(), false, false, false);
+    }
+    assert!(sim.drones.channels.on(0x15), "Drake's reveal plate #356 fires ch 0x15 [D placements]");
+    for _ in 0..4200 {
+        sim.step_bond(Input::default(), false, false, false);
+        if !sim.disabled { break; }
+    }
+    assert!(!sim.disabled, "the Drake fly-through hands back");
+    let guards: Vec<usize> = sim.drones.list.iter().filter(|g| matches!(g.placement, 404 | 417) && g.present).map(|g| g.placement).collect();
+    assert!(guards.is_empty(), "the library door guards leave on ch 21 [D p6 = 21], still there: {guards:?}");
+}
+
 fn level_index(level: u32) -> usize {
     LEVELS.iter().position(|l| l.level == level).expect("the level is in the mission table")
 }
@@ -65,6 +87,7 @@ fn the_kimiko_scene_holds_the_announce_until_the_handback() {
         // After tick 1's `Mission_Init` reset (the game: ResetMap_GameInit before Game_Run).
         carry_earlier_parts_complete(sim);
         for _ in 0..118 { sim.step_bond(Input::default(), false, false, false); }
+        drakes_reveal_first(sim);
         // The level's own pre-trigger banner ("Rendezvous…", announced by the start scripts before
         // the carry) is session history, not the window under test — drop it (the game's would
         // have timed out long before the rendezvous).

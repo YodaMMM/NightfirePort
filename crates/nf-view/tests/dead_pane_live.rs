@@ -89,7 +89,6 @@ fn load_08(iso: &str) -> nf_view::scene::Scene {
 /// second round through the same spot reaches the far side. [M Break_Kill 0x12b970:60; M
 /// Break_Update 0x12bfd8:44-48]
 #[test]
-#[ignore = "the ride is proven on 01-real-damage-d1 (finish_fights, pane-ride-on) but the 01 Agent/00-Agent sisters still die: the shifted hall timeline leaves the west-door SMG pack (#3/#12/#17) unfought and they shred Bond at 1.0-4.6 u — pane k=27 (plc 136, z -1.167) first shifts guard 13 at tick 683 [M Collide_Pick 0x1eb320:313-329 the movement query tests the start room's object chain, so the game's guards brush these sheets too]; the walk-side fix continues on the branch (pane-ride-on report)"]
 fn the_shot_out_pane_stops_blocking_a_round() {
     let Some(iso) = iso() else { return };
     unsafe { std::env::set_var("NF_SILENT", "1"); }
@@ -122,11 +121,44 @@ fn the_shot_out_pane_stops_blocking_a_round() {
     assert!(past[2] < PANE_Z - 0.15, "the round fired through the dead pane's first hit is past the plane (z {:.3})", past[2]);
 }
 
+/// A round through a sheet that survives it: the sheet shows the hole and sounds the impact, at
+/// the sheet, and the round flies on [M 0x12ce80 the tail at 0x12d020; `Effect_Create` 0x1ce688].
+/// The pane is given health for the test so it outlives the first round; shot out, its hole goes
+/// with it [M 0x1ce8a8:170-186]. On a sheet that dies at once the hole lasts one tick at most.
+#[test]
+fn a_round_through_the_sheet_leaves_its_impact_there() {
+    let Some(iso) = iso() else { return };
+    unsafe { std::env::set_var("NF_SILENT", "1"); }
+    let mut scene = load_08(&iso);
+    let sound = {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond = nf_game::player::Bond::stand_at(&sim.world, [107.25003, 34.9, -121.3], 0.0);
+        for _ in 0..20 { sim.step_bond(Input::default(), false, false, false); }
+        sim.drones.breaks.list.iter_mut().find(|b| b.placement == FRONT).unwrap().health = 30.0;
+        nf_formats::sfx::SurfaceSounds::get(&sim.surfaces.as_ref().unwrap().impact, 0x10).expect("the glass row has an impact sound [D]")
+    };
+    let voices = |sim: &nf_view::scene::Sim| sim.drones.audio.live_ids().iter().filter(|&&x| x == sound).count();
+    let near_sheet = |sim: &nf_view::scene::Sim| sim.drones.effects.decals.iter()
+        .filter(|d| (d.pos[2] - PANE_Z).abs() < 0.2 && (d.pos[0] - FRONT_C[0]).abs() < 1.5).count();
+    let before = voices(scene.sim.as_ref().unwrap());
+    let impacts = fire_one(&mut scene, FRONT_C);
+    let sim = scene.sim.as_ref().unwrap();
+    assert!(!broken(sim).contains(&FRONT), "the sheet outlives the round");
+    // At least one: this round can ricochet off the shell and cross the sheet again.
+    assert!(near_sheet(sim) >= 1, "a hole in the sheet");
+    assert!(voices(sim) > before, "the glass impact sound played");
+    assert!(impacts.iter().any(|p| p[2] < PANE_Z - 0.15), "and the round flew on past the sheet, got {impacts:?}");
+    scene.sim.as_mut().unwrap().drones.breaks.list.iter_mut().find(|b| b.placement == FRONT).unwrap().health = 0.0;
+    fire_one(&mut scene, FRONT_C);
+    let sim = scene.sim.as_ref().unwrap();
+    assert!(broken(sim).contains(&FRONT), "the pane is shot out");
+    assert_eq!(near_sheet(sim), 0, "and its holes go with it");
+}
+
 /// The sister: the intact pane stops Bond's walk (and his walk does not break it — the
 /// player's contact join is unproven, see the report's live checks); shot out, the same walk
 /// crosses the plane off the sill.
 #[test]
-#[ignore = "the ride is proven on 01-real-damage-d1 (finish_fights, pane-ride-on) but the 01 Agent/00-Agent sisters still die: the shifted hall timeline leaves the west-door SMG pack (#3/#12/#17) unfought and they shred Bond at 1.0-4.6 u — pane k=27 (plc 136, z -1.167) first shifts guard 13 at tick 683 [M Collide_Pick 0x1eb320:313-329 the movement query tests the start room's object chain, so the game's guards brush these sheets too]; the walk-side fix continues on the branch (pane-ride-on report)"]
 fn the_intact_pane_stops_bond_and_the_dead_one_lets_him_cross() {
     let Some(iso) = iso() else { return };
     unsafe { std::env::set_var("NF_SILENT", "1"); }
@@ -153,3 +185,4 @@ fn the_intact_pane_stops_bond_and_the_dead_one_lets_him_cross() {
     let min_z = walk_forward(&mut scene, 240);
     assert!(min_z < PANE_Z - 0.05, "Bond crosses where the pane was (min z {min_z:.3} past the plane {PANE_Z:.3})");
 }
+

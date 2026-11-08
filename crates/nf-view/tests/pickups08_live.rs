@@ -44,6 +44,11 @@ fn open_safe(scene: &mut nf_view::scene::Scene) {
     for _ in 0..20 { sim.step_bond(Input::default(), false, false, false); }
     let input = Input { switch_to: Some(0x4e), ..Default::default() };
     for _ in 0..40 { sim.step_bond(input, false, false, false); }
+    // The draw must end before the fire press: the trigger's press edge reaches `Player_WeaponFiring`
+    // through the holster/draw and is spent there (the view-state gate refuses that shot and a held
+    // trigger never re-arms) [M 0x1a5460: Input_Action(9, 4) before the +0xF4 gate]. A player lets the
+    // draw finish, then presses.
+    for _ in 0..300 { if sim.gun.switch_state == 0 { break } sim.step_bond(Input::default(), false, false, false); }
     for out in [134u16, 135] {
         let bolt = sim.drones.locks.iter().position(|l| l.out == out).expect("the safe bolt exists");
         let bp = sim.drones.locks[bolt].pos;

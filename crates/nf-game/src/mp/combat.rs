@@ -22,7 +22,7 @@
 //! - **contact** — the nearest of the world (the bullet-family trace, foliage passes) and the
 //!   bodies; the contact-explode bits `+0x70 & (4 | 0x100000 | 0x200000)` blast at the contact
 //!   [M `Bullet_CollisionHandler` 0x12ce80:194-206].
-//! - **blast** — `Explode_Propagate` 0x17c518's truncated falloff (`explode::propagate`) on every
+//! - **blast** — `Explode_Propagate` 0x17c518's falloff (`explode::propagate`) on every
 //!   body, the owner included.
 //! - **damage** — [`mp_pain`]: `Player_HandlePain` 0x1902c8's MP arm (= `BOT_handlePain`
 //!   0x125ed8's): × `Plr_DMod_Multi` for a located hit, the Location Damage table (+0x1C8), ×3
@@ -101,15 +101,13 @@ pub struct Body {
 pub const BODY_SPHERE_R: f32 = 1.0576;
 
 /// `Explode_Propagate` 0x17c518's falloff for one object [M decomp :82-85]: `d = |obj+0x80 −
-/// pos| − obj+0x8C`, `amount = damage · (1 − (d > 0 ? (int)d : 0) / radius)` — the distance
-/// truncated to an integer, an object reaching into the blast centre takes the full damage; below
-/// 0.0002 nothing. `radius`/`damage` below 0.0002 hit nothing (the early return).
+/// pos| − obj+0x8C`, `explode::falloff` — an object reaching into the blast centre takes the full
+/// damage; below 0.0002 nothing. `radius`/`damage` below 0.0002 hit nothing (the early return).
 pub fn blast_falloff(pos: V3, radius: f32, damage: f32, centre: V3, obj_r: f32) -> f32 {
     if !(radius >= 0.0002) || !(damage >= 0.0002) { return 0.0; }
     let dv = [centre[0] - pos[0], centre[1] - pos[1], centre[2] - pos[2]];
     let d = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt() - obj_r;
-    let ti = if d > 0.0 { (d as i32) as f32 } else { 0.0 };
-    let a = damage * (1.0 - ti / radius);
+    let a = crate::explode::falloff(damage, radius, d);
     if a < 0.0002 { 0.0 } else { a }
 }
 
@@ -349,9 +347,10 @@ impl MpCombat {
                 // 0x3b family (the record's +0x02 base).
                 burn: if u16::from_le_bytes([w[2], w[3]]) == 0x3b { 100 } else { 0 },
                 defused: false,
-            
+                // obj+0xec = GameState at creation (the trail gates' phase; fx-muzzle-and-trail).
+                born: frame as u8,
                 loop_handle: 0,
-});
+            });
             return;
         }
         // The bullet family: `+0x18` pellets [M 0x1a4bf0's per-pellet loop], each spread.
@@ -922,20 +921,19 @@ mod tests {
     }
 
     #[test]
-    fn blast_falloff_truncates_and_saturates() {
-        // Radius 8, damage 100: an object whose sphere edge is 2.7 away takes 100·(1 − 2/8) = 75.
-        assert_eq!(blast_falloff([0.0; 3], 8.0, 100.0, [3.7, 0.0, 0.0], 1.0), 75.0);
-        // Inside its own sphere: the full damage, never more [M 0x17c518:84 — the (d > 0) select].
+    fn blast_falloff_is_linear_and_saturates() {
+        // Radius 8, damage 100: an object whose sphere edge is 2.7 away takes 100·(1 − 2.7/8).
+        assert!((blast_falloff([0.0; 3], 8.0, 100.0, [3.7, 0.0, 0.0], 1.0) - 66.25).abs() < 1e-3);
+        // Inside its own sphere: the full damage, never more [M 0x17c608's `max.s`].
         assert_eq!(blast_falloff([0.0; 3], 8.0, 100.0, [0.5, 0.0, 0.0], 1.0576), 100.0);
         // At the radius: nothing.
         assert_eq!(blast_falloff([0.0; 3], 8.0, 100.0, [9.1, 0.0, 0.0], 1.0), 0.0);
         // The zero-radius stun/smoke: nothing.
         assert_eq!(blast_falloff([0.0; 3], 0.0, 100.0, [0.1, 0.0, 0.0], 1.0), 0.0);
-        // Sister: the port's SP `explode::propagate` overshoots deep inside a sphere (its negative
-        // truncation), the game's select does not.
+        // Sister: the SP `explode::propagate` is the same line.
         let t = crate::explode::Targets { drones: &[(0, [-1.5, 0.0, 0.0], 3.0)], player: [1e6; 3], breaks: &[], destroys: &[], copters: &[] };
         let sp = crate::explode::propagate([0.0; 3], 8.0, 100.0, 0, &t).drones[0].1;
-        assert_ne!(sp, blast_falloff([0.0; 3], 8.0, 100.0, [-1.5, 0.0, 0.0], 3.0));
+        assert_eq!(sp, blast_falloff([0.0; 3], 8.0, 100.0, [-1.5, 0.0, 0.0], 3.0));
     }
 
     #[test]

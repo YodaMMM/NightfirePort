@@ -77,13 +77,17 @@ fn the_east_room_touch_wakes_its_squad() {
         if sim.drones.spawners[0].spawned.iter().any(|&i| sim.drones.list[i].present) { came = true; break; }
         w.tick(nf_game::player::Input::default(), false);
     }
-    let sim = w.scene.sim.as_ref().unwrap();
     assert!(came, "the ch-0xf6 start brings the group-1 templates in [M DroneSpawner_Control 0x137e68's trigger path]");
-    // Mode 3 spawns only when none of its own are alive [M 0x137e68's mode arm `living == 0`], so
-    // the first tick brings ONE drone in; the second follows once the first dies (max alive 2 [D
-    // param 2]). The initial-fill flag is clear (start 0xf6 was off at create [M 0x137aa0:33-45]),
-    // so no immediate fill.
-    assert_eq!(sim.drones.spawners[0].spawned.len(), 1, "the first template spawns (mode 3 holds the second until none is alive [M 0x137e68])");
+    // Mode 3 opens a whole wave: the +0x1C latch set with nobody alive stays up while the first
+    // drone stands, so the second follows a tick or so later (max alive 2 [D param 2]; M 0x137e68
+    // :176-210). The initial-fill flag is clear (start 0xf6 was off at create [M 0x137aa0:33-45]),
+    // so the spawn screens stay on and a screened attempt waits a tick.
+    for _ in 0..120 {
+        if w.scene.sim.as_ref().unwrap().drones.spawners[0].spawned.len() == 2 { break; }
+        w.tick(nf_game::player::Input::default(), false);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert_eq!(sim.drones.spawners[0].spawned.len(), 2, "both templates of the wave spawn [M 0x137e68:176-210; D max 2]");
     assert!(sim.drones.spawners[0].spawned.iter().all(|&i| sim.drones.list[i].present),
         "the spawned drone stands in the world [M 0x137aa0's live-slot array]");
     assert!(sim.drones.spawners[0].spawned.iter().all(|&i| sim.drones.list[i].switch_channel == 0xf6 && sim.drones.list[i].channel_on),
@@ -823,4 +827,47 @@ fn the_apocalypse_countdown_runs_out_and_floors() {
         assert_eq!(a.remaining, 0.0, "the countdown floors at 0 [M 0x18d4f0]");
         assert_eq!(a.fade, 0.0, "the mirror floors with it and stays [M 0x18d4f0]");
     }
+}
+
+/// The death plates carry the one-shot flag but no keys [D #794-#801/#855: p5 = 1, key count 0]:
+/// `Hurt_Update` returns on a zero duration before the one-shot expiry [M 0x17e5d0:106-108,
+/// :129-132], so a guard that drops into a shaft first leaves the plate armed for Bond.
+#[test]
+fn a_guard_on_the_death_plate_leaves_it_armed_for_bond() {
+    let mut w = load15();
+    let sim = w.scene.sim.as_mut().unwrap();
+    let h = sim.hurts.iter_mut().find(|h| h.damage == 1000.0 && (h.lo[0] - 71.0).abs() < 8.0 && h.lo[2].abs() < 8.0).expect("plate #794 [D]");
+    let c = [(h.lo[0] + h.hi[0]) * 0.5, h.lo[1], (h.lo[2] + h.hi[2]) * 0.5];
+    assert!(h.one_shot && h.duration == 0, "the plate's params [D]");
+    assert!(h.update_touch(true, [c[0], c[1] - 0.5, c[2]], [c[0], c[1] + 1.0, c[2]], 0.4, true).is_some(), "the guard's contact");
+    assert!(h.update(true, [c[0], c[1] - 0.5, c[2]]).is_some(), "the plate kills Bond after the guard [M 0x17e5d0:106-108]");
+}
+
+/// The base guards bark here: `NDrone2_SeenPlayerTalk` has this level's pair and the shared pair
+/// [M 0x13f1d0:72-82, :94-98] and `NDrone2_AttackTalk` gives voice 7 its set on 14-16 [M 0x13eac0
+/// case 7]. Bond stands in the room of #748/#751 and the room's guards wake; the sister is that
+/// nobody has spoken any of those lines before the touch.
+#[test]
+fn the_base_guards_call_out_when_they_see_bond() {
+    let mut w = load15();
+    let lines: Vec<u32> = {
+        let v = w.scene.sim.as_ref().unwrap().voices.as_ref().expect("the voice table");
+        [0xf7..=0xfa, 0x10d..=0x110, 0x11b..=0x129].into_iter().flatten().map(|i: usize| v[i].sfx).collect()
+    };
+    let spoke = |sim: &nf_view::scene::Sim| sim.drones.list.iter().any(|d| d.voice.is_some_and(|v| lines.contains(&v.1)));
+    assert!(!spoke(w.scene.sim.as_ref().unwrap()), "sister: silent before any guard sees Bond");
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [34.0, 41.45, 0.0];
+        sim.bond.vel = [0.0; 3];
+        let f = sim.drones.frame;
+        sim.drones.channels.set(0xf8, 1, f);
+    }
+    w.top_up_health = true;
+    let mut heard = false;
+    for _ in 0..1800u32 {
+        w.tick(nf_game::player::Input::default(), false);
+        if spoke(w.scene.sim.as_ref().unwrap()) { heard = true; break; }
+    }
+    assert!(heard, "no guard called out in 30 s [M 0x13f1d0, 0x13eac0]");
 }

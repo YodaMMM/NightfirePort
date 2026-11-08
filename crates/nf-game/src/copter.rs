@@ -8,9 +8,10 @@
 //!   (`if (*(int *)(param_3 + 0x2c) != 0) return 0;`, :43-45) — so kind-2 placements are
 //!   route-only records. The node: `+0x8` the framelist (level_tag+0x8 = `m_paths[record+0x44]`,
 //!   built by `parsemap_block_map_data_dynamic` 0x1d1b68 — the same resolution the doors use),
-//!   `+0xc` the per-tick t step `count · REC_FRAME_RATE · (FRAME_RATE / scale)` with
-//!   `REC_FRAME_RATE` = 1/60 [M 0x1bba38:26-27] and `FRAME_RATE` = 30 at load [M 0x30d0d0 — the
-//!   doors' CREATE_FRAME_RATE; `Copter_Create` also runs at load], `+0x10` count =
+//!   `+0xc` the per-tick t step `count · REC_FRAME_RATE · (FRAME_RATE / scale)` — both rates
+//!   come from the same `GS_SetRefreshRate` call (`REC_FRAME_RATE = 1 / FRAME_RATE`, its only
+//!   writer [M 0x17d2b8:9-16]), so the step is `count / scale` whatever the load-time rate
+//!   [L ee_start_05.bin: #241's node +0xc = 0.1905 = 381/2000], `+0x10` count =
 //!   `frames - 1` (0 when frames is 0), `+0x12` group = param 1, `+0x14` reset-t =
 //!   `min(count, param 3)`, `+0x16` pick index = param 2, `+0x18` kind = param 0. The record:
 //!   `+0x54` = its own path node, `+0x5c` = 0 (the spline t), `+0x70..+0x76` = params 6..9 (the
@@ -72,8 +73,11 @@ use nf_formats::placement::{view_rot_trans_matrix, Placement};
 use nf_formats::anim::Mat4;
 
 /// The load-time `FRAME_RATE` = 30 [M 0x30d0d0 — the doors' CREATE_FRAME_RATE; `Copter_Create`
-/// also runs at load]. The step divides by `REC_FRAME_RATE` = 1/60 separately [M 0x1bba38:26-27].
+/// also runs at load]. `REC_FRAME_RATE` is written beside it as `1 / FRAME_RATE` by the same
+/// `GS_SetRefreshRate` call [M 0x17d2b8:9-16, the only stores to 0x30d0d0/0x30d0dc in the ELF],
+/// so the two cancel: the step is `count / scale`, not half of it [L ee_start_05.bin].
 const CREATE_FRAME_RATE: f32 = 30.0;
+const CREATE_REC_FRAME_RATE: f32 = 1.0 / CREATE_FRAME_RATE;
 
 /// One `CopterPaths` node — the 0x1c record `Copter_Create` mallocs per 0x2F placement
 /// (`Mem_Malloc(0x1c, 0x3304, 0)`, memset 0 [M 0x17d340:18-20]).
@@ -114,7 +118,7 @@ impl CopterPath {
                 let over = param(10); // level_tag+0x54 [M 0x17d340:21-24]
                 if over != 0 { over } else { (p.extra[7] >> 16) as u32 }
             };
-            let step = count as f32 * (1.0 / 60.0) * (CREATE_FRAME_RATE / scale as f32);
+            let step = count as f32 * CREATE_REC_FRAME_RATE * (CREATE_FRAME_RATE / scale as f32); // [M 0x17d340:33-41]
             let keys = if frames != 0 {
                 path_blocks.get((p.extra[8] & 0xffff) as usize).map(|b| door::parse_keys(b))
             } else {
@@ -171,6 +175,12 @@ pub struct CopterCtx<'a> {
     pub part_mats: &'a [Option<Mat4>; 9],
     /// The shared `attackmode_159` global [M :184] — one word for every copter, on `Drones`.
     pub attackmode: &'a mut u32,
+    /// The copter's own SP stream glist hashes (`Drones::copter_stream_hashes`), the port of the
+    /// spot LOS's SUBJECT arguments [M 0x17dbb8:171-172 — the copter obj and Bond's obj; the
+    /// same pair at :228-229 in the case-2 keep gate]: the subject's own collision nodes never
+    /// block its ray, and the copter's body cluster poses into the dynamic set. Bond poses no
+    /// script entities, so his side of the subject pair is already a no-op in the port.
+    pub exclude_hashes: &'a [u32],
 }
 
 #[derive(Clone, Debug)]
@@ -368,9 +378,11 @@ impl Copter {
     /// [M :153-155/210-211] — the player's world sphere, radius 1.0576 [L obj-tag-player.md +0x80,
     /// the same sphere the sensors test, sensor.rs TARGET_RADIUS] — then `Collide_LineOfSight`
     /// from `obj+0xC0 + dir·4.0` (the 0x40800000 probe stand-off [M :156-169]) to the sphere
-    /// centre with flags 0x2e [M :171-172]; the call's excluded objects (the copter, the player)
-    /// are no-ops in the port's world-only LOS.
-    fn spotted(&self, world: &crate::world::CollisionWorld, ppos: V3, psph: V3) -> bool {
+    /// centre with flags 0x2e [M :171-172] and the ray's SUBJECTS (the copter obj, Bond's obj)
+    /// excluded [M the call's args 4/5; the port: `line_of_sight_excluding` over the copter's
+    /// own SP stream hashes — the body cluster poses into the dynamic set and self-blocked the
+    /// plain LOS].
+    fn spotted(&self, world: &crate::world::CollisionWorld, ppos: V3, psph: V3, exclude_hashes: &[u32]) -> bool {
         let cp = self.pos(); // obj+0xC0 = the flight matrix's translation [M 0x1336f8:386-387]
         let d = [ppos[0] - cp[0], ppos[1] - cp[1], ppos[2] - cp[2]];
         if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 1.0e6 { return false; } // [M :151/208]
@@ -379,7 +391,12 @@ impl Copter {
             return false;
         }
         let probe = [cp[0] + dir[0] * 4.0, cp[1] + dir[1] * 4.0, cp[2] + dir[2] * 4.0]; // [M :156-169]
-        world.line_of_sight(probe, psph, 0x2e) // [M :171-172 — the game's flags word]
+        // The masked body directly, not the `LOS_MASKS_ON`-gated wrapper: 0x2e's bit 2 drops the
+        // class-0x10 glass surfaces [M Collide_Intersect 0x1ebaa8:315-317], so the copter spots
+        // Bond through a window. Unmasked, the 07000012 sky bridge's panes hid him on every tick.
+        // The ray subjects (the copter, Bond) never block it: the copter's own SP body shapes are
+        // left out of the dynamic set.
+        world.line_of_sight_excluding(probe, psph, 0x2e, exclude_hashes) // [M :171-172 — the flags + the subject args]
     }
 
     /// `Copter_Create` over the main map's 0x2F placements: the kind-0 ones get the copter
@@ -550,14 +567,11 @@ impl Copter {
                 // Case 1 [M :138-187]: Copter_Move, then the spot check. The Mayhew latch keeps
                 // +0x74 == 100 copters out of the spot test entirely [M :140] — the 05 patrols
                 // carry that value [L the level's params] and never attack.
-                // SPOT-CHECK WARRANT (homing-copter-3, unported — the spot gate itself stays
-                // unported, `timer` never moves): the game's spot LOS is
-                // `Collide_LineOfSight(aimpoint, obj+0x80, cel, copter_obj, bond_obj, 0x2e)`
-                // [M 0x17dbb8:171-172] — the ray's SUBJECT objects are the COPTER OBJ and
-                // BOND'S OBJ, so neither the copter's own mesh nor Bond's can block it. When
-                // this slice lands, its ray must exclude both subjects' shapes (the port's
-                // dynamic-set analogue: the copter's SP stream hashes via
-                // `Drones::copter_stream_hashes`, and Bond's own shapes if any pose).
+                // SPOT-CHECK SUBJECT RULE (homing-copter-4): the spot LOS's ray subjects (the
+                // copter obj, Bond's obj [M 0x17dbb8:171-172]) are excluded from the walk via
+                // ctx.exclude_hashes (the copter's SP stream hashes); Bond poses no script
+                // entities so his side is already a no-op. The gate itself is ported: the
+                // timer moves [M :141-143] and the state-2 transition is [M :180-184].
                 let (_, p) = self.move_tick(paths, rng);
                 posed = p;
                 if self.arrival != 100 {
@@ -565,7 +579,7 @@ impl Copter {
                         self.timer = self.timer.wrapping_add(1); // [M :141-143 the stored i16]
                         // The spot gate: 240/DiffMod ticks [M :142 — FRAME_RATE_INT << 2 / DiffMod]
                         // pass, then the test runs EVERY tick until it lands.
-                        if (4.0f32 * 60.0) / ctx.diff_mod <= self.timer as f32 && self.spotted(ctx.world, ppos, psph) {
+                        if (4.0f32 * 60.0) / ctx.diff_mod <= self.timer as f32 && self.spotted(ctx.world, ppos, psph, ctx.exclude_hashes) {
                             self.timer = 0; // [M :181]
                             self.state = 2; // [M :182]
                             self.attack_acc = 0.0; // [M :183 rec+0x6c = 0]
@@ -614,7 +628,7 @@ impl Copter {
                 if !bail {
                     if self.attack_acc <= 100.0 {
                         if let Some((ppos, psph)) = ctx.player {
-                            bail = !self.spotted(ctx.world, ppos, psph); // [M :205-238 — visible stays]
+                            bail = !self.spotted(ctx.world, ppos, psph, ctx.exclude_hashes); // [M :205-238 — visible stays]
                         }
                     } else {
                         bail = true; // [M :239 — the attack gave the player 100 damage]
@@ -885,6 +899,7 @@ mod tests {
             part_poses: &[None, None, None, None, None, None, None, None, None],
             part_mats: &[None, None, None, None, None, None, None, None, None],
             attackmode: &mut am,
+            exclude_hashes: &[],
         };
         c.update(paths, ch, gas, frame, explode, rng, &mut ctx)
     }
@@ -1155,8 +1170,10 @@ mod tests {
         assert_eq!(n.pick, 2, "param 2");
         assert_eq!(n.reset_t, 10, "min(count, param 3) [M 0x17d340:34-38]");
         assert_eq!(n.kind, 0, "param 0");
-        // step = count · (1/60) · (30/30) = 2.0
-        assert!((n.step - 2.0).abs() < 1e-5, "step = count·REC_FRAME_RATE·(FRAME_RATE/scale) [M 0x17d340:33-41]");
+        // step = count · REC_FRAME_RATE · (FRAME_RATE / scale) = 120 · (1/30) · (30/30) = 4.0 — the
+        // two rates come from one GS_SetRefreshRate call and cancel [M 0x17d2b8:9-16], so the
+        // step is count/scale [L ee_start_05.bin: #241's node +0xc = 0.1905 = 381/2000].
+        assert!((n.step - 4.0).abs() < 1e-5, "step = count/scale [M 0x17d340:33-41; M 0x17d2b8]: {}", n.step);
         assert!(n.keys.is_some(), "m_paths[extra[8]] resolved");
         // A non-zero param 0 (an arrival path) still builds the node [M :42].
         p.params[0] = (0, 2);

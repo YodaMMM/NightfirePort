@@ -46,9 +46,9 @@ fn a_live_grenade_through_the_07000006_plate_fires_it() {
             seek_target: None, phase: None, weapon_type: 0x3b,
         burn: 100, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
         defused: false,
-        
+        born: 0,
         loop_handle: 0,
-});
+        });
     }
     let mut fired_at = None;
     for t in 1..120u32 {
@@ -90,9 +90,9 @@ fn a_grenade_nowhere_near_the_plates_fires_nothing() {
             seek_target: None, phase: None, weapon_type: 0x3b,
         burn: 100, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
         defused: false,
-        
+        born: 0,
         loop_handle: 0,
-});
+        });
     }
     for t in 1..120u32 {
         let sim = scene.sim.as_mut().unwrap();

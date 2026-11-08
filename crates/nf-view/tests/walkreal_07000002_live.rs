@@ -757,6 +757,11 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         w.tick(Default::default(), false);
     }
     assert!(ch_on(&w, 0x49), "geisha 1 saved: ch 0x49 [M 0x1441c0]");
+    // The last captor's channel can lag his death by up to the level's 90-tick timer [M 0x1637f8:55-61].
+    for _ in 0..100 {
+        if ch_on(&w, 0x29) && ch_on(&w, 0x2a) && ch_on(&w, 0x88) { break; }
+        w.tick(Default::default(), false);
+    }
     assert!(ch_on(&w, 0x29) && ch_on(&w, 0x2a) && ch_on(&w, 0x88), "the three captor deaths [D param 12]");
     assert!(ch_on(&w, 0x3b), "AND #397 (0x29,0x2A,0x88,0x49) → 0x3B [D tr[017]]");
 
@@ -838,6 +843,28 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
                 status(&w, "the lane-mouth sniper duel");
             }
         }
+        if name == "bunker corridor" && difficulty == 2 {
+            // join-fix-g (Agent only): on the joined tree the walk reaches the bunker at ~47
+            // health (the courtyard sniper's 13.7 + 28.0 on the lane crossing), and the ch-0x81
+            // ambush pops inside the corridor at 1.8-2.5 u: the leg's in-view fight backed out
+            // to (-39.1, -22.4) with #14 down, then the leg's own "again" walk took Bond back to
+            // the node beside the shotgunner #15 (8 hits, 32.8, dead at t11853). A player who
+            // knows the ambush trips the doorway sensor [D #389 out 0x81], steps back out into
+            // the courtyard with a full clip, and fights the ambush as it comes through the door.
+            arm_fullest(&mut w, "the bunker ambush lure");
+            for p in [[-45.7f32, 6.37, -23.4], [-46.7, 6.37, -21.5]] {
+                if ch_on(&w, 0x81) { break; }
+                w.walk_nav_to(p, "the bunker ambush sensor", 0.6);
+            }
+            status(&w, &format!("the bunker ambush sensor (ch 0x81 {})", ch_on(&w, 0x81)));
+            w.lenient = true;
+            w.walk_to(Wp::new(-45.7, 6.37, -23.4).r(0.6), "the bunker ambush step out");
+            w.walk_to(Wp::new(-40.0, 5.5, -22.6).r(0.8), "the bunker ambush courtyard stand");
+            w.lenient = false;
+            status(&w, "the bunker ambush courtyard stand");
+            clear_pursuers(&mut w, 16.0, "bunker ambush (courtyard)");
+            reload_full(&mut w);
+        }
         leg_to(&mut w, at, name, 1.6);
         status(&w, name);
         if difficulty >= 3 && (name == "stair bottom" || name == "courtyard lane") {
@@ -857,6 +884,12 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     // The ch-0x81 ambush group (3 guards [D]) holds the bunker corridor — clear it before the
     // computer shot (real health: the shot needs Bond alive at the walkway vantage).
     clear_pursuers(&mut w, 16.0, "bunker ambush");
+    // muzzle-repin-5: the shifted fights burned the 0x12 dry before the computer shot (measured
+    // clip 0 spare 0 at the walkway vantage — the shoot_point capped, ch 0x48 never rose). The
+    // file's own loot rule (the 00agent legs): scoop what the ambush kill dropped, then the
+    // fullest gun, before the corridor walk.
+    scoop_drops(&mut w, "bunker ambush drops", 2);
+    arm_fullest(&mut w, "bunker ambush rearm");
     // The computer's bounds centre [L port props]: (−48.86, 6.44, −23.64), on the desk over the
     // corridor's LOWER walkway. The raised-floor approaches' down-shot clips the desk in front of
     // the Destroy prop's bounds (the anim-prev-2 report — three leg variants all arrived on the
@@ -1114,6 +1147,11 @@ fn walk_the_castle_all_objectives_to_the_exit() {
         let near: Vec<String> = sim.drones.list.iter().enumerate().filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse
             && d.pos.iter().zip(at).map(|(a, b)| (a - b).powi(2)).sum::<f32>() < 400.0).map(|(i, d)| format!("{i}:st{:#x} hp{:.0} ({:.1},{:.1},{:.1})", d.state, d.health, d.pos[0], d.pos[1], d.pos[2])).collect();
         assert!(ch_on(&w, 0x49), "geisha 1 saved: ch 0x49 [M 0x1441c0] — geisha state {:#x} health {:.1} captor {:?}; live hostiles within 20 u: {near:?}", g.state, g.health, g.captor);
+    }
+    // The last captor's channel can lag his death by up to the level's 90-tick timer [M 0x1637f8:55-61].
+    for _ in 0..100 {
+        if ch_on(&w, 0x29) && ch_on(&w, 0x2a) && ch_on(&w, 0x88) { break; }
+        w.tick(Default::default(), false);
     }
     assert!(ch_on(&w, 0x29) && ch_on(&w, 0x2a) && ch_on(&w, 0x88), "the three captor deaths [D param 12]");
     assert!(ch_on(&w, 0x3b), "AND #397 (0x29,0x2A,0x88,0x49) → 0x3B [D tr[017]]");

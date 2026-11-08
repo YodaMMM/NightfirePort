@@ -39,9 +39,9 @@ fn grenade_at(sim: &mut nf_view::scene::Sim, pos: [f32; 3]) {
         phase: None,
     burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
     defused: false,
-    
+    born: 0,
     loop_handle: 0,
-});
+    });
 }
 
 fn carry(on: &[u32]) -> RamSave {
@@ -151,6 +151,11 @@ fn the_07000016_kiko_death_button_defeat_completes_the_final_mission() {
     // Back into the shelter before the leaves shut again (6310..6660 [D]); pulse 2 out.
     w.walk_route(INTO_THE_SHELTER);
     assert!(w.total_ticks - t0 < 6310, "back in the room before its door shuts for pulse 2 (+{})", w.total_ticks - t0);
+    // join-reds-a: while the room waits for pulse 2 a spawned rifleman (#260, team 1, death
+    // channel 0 [D]) comes up to the shelter's doorway and fires on the idle Bond until he dies.
+    // Bond is armed: he answers a guard who reaches the doorway, as a player would, and then sits
+    // the pulse out.
+    hold_the_shelter(&mut w, 8000);
     let n2 = sit_out_pulse(&mut w, "pulse 2 in the shelter");
     assert!((500..=520).contains(&n2), "pulse 2 is 6810..7320 = 510 ticks [D stream 9], got {n2}");
 
@@ -213,6 +218,25 @@ fn the_07000016_kiko_death_button_defeat_completes_the_final_mission() {
         assert!(sim.drones.channels.on(100), "mux #618 (out 0x64 ← 0x90) fires ch 100 [D #618]");
         assert_eq!(sim.drones.mission.to_end, 0x0730_0017, "the driving hand-off [M 0x182c60:111-112]");
     }
+}
+
+/// Waits for the ch-243 pulse in the shelter, shooting any live team-1 guard that comes within
+/// 6 units with a line of sight on Bond (not the pit squad, death channels 23..26 [D]).
+fn hold_the_shelter(w: &mut Walker, max: u32) {
+    for _ in 0..max {
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(243) { return; }
+        let near = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            sim.drones.list.iter().position(|d| d.present && !d.corpse && d.health > 0.0 && d.team == 1 && d.los
+                && !matches!(d.death_channel, 23..=26) && walker::dxz(d.pos, bp) < 6.0)
+        };
+        match near {
+            Some(i) => { assert!(w.shoot_bounded(i, "the shelter doorway", 900), "the guard at the shelter doorway dies to Bond's fire"); }
+            None => w.tick(Input::default(), false),
+        }
+    }
+    panic!("the ch-243 pulse never rose");
 }
 
 /// Ticks until `done`, or panics with `what` after `max` (the walkreal shape).

@@ -20,6 +20,9 @@ use nf_view::scene::{Scene, Sim};
 
 type V3 = [f32; 3];
 
+#[path = "common/usepick.rs"]
+mod usepick;
+
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 fn at_origin(p: V3) -> bool { p[0].abs() < 1e-3 && p[1].abs() < 1e-3 && p[2].abs() < 1e-3 }
@@ -79,6 +82,23 @@ fn aim_use(sim: &mut Sim, target: V3, done: &dyn Fn(&Sim) -> bool) -> bool {
             ..Default::default()
         };
         sim.step_bond(input, false, false, k % 6 == 0);
+        if done(sim) { return true; }
+    }
+    false
+}
+
+/// Stand Bond in front of monitor `mi`'s collision faces, looking at one (the use pick keeps it
+/// only with the use point inside its world sphere and within 1.0 in front of a face [M
+/// Collide_PickObj 0x1eae80; Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8;
+/// nf_game::usepick]), then pulse E with that look held until `done`.
+fn use_monitor(sim: &mut Sim, mi: usize, done: &dyn Fn(&Sim) -> bool) -> bool {
+    let t = sim.drones.use_picks.monitors[mi];
+    let tris = usepick::posed(sim, t.hash, &t.matrix);
+    if !usepick::stand_in_front(sim, &tris, t.sphere) { return false; }
+    let (y, p) = (sim.bond.yaw, sim.bond.pitch);
+    for k in 0..36 {
+        sim.bond.yaw = y; sim.bond.pitch = p;
+        sim.step_bond(Default::default(), false, false, k % 6 == 0);
         if done(sim) { return true; }
     }
     false
@@ -156,8 +176,8 @@ fn use_census_07000001() {
         .expect("07000001 carries a usable monitor [D 01.md]");
     let mpos = sim.drones.monitors.list[mi].pos;
     assert!(sim.drones.monitors.list[mi].state == 0, "sister: monitor starts idle");
-    place_near(sim, mpos);
-    assert!(aim_use(sim, mpos, &|s| s.drones.monitors.list[mi].state == 2),
+    let _ = mpos;
+    assert!(use_monitor(sim, mi, &|s| s.drones.monitors.list[mi].state == 2),
         "E on the monitor must enter the camera view [M Monitor_Activate 0x1b0058]");
     assert!(sim.drones.monitors.list[mi].watched.is_some(), "the monitor must watch a camera");
 
@@ -176,8 +196,8 @@ fn use_census_07000002() {
         .expect("07000002 carries a usable monitor [D 02.md]");
     let mpos = sim.drones.monitors.list[mi].pos;
     assert!(sim.drones.monitors.list[mi].state == 0, "sister: monitor starts idle");
-    place_near(sim, mpos);
-    assert!(aim_use(sim, mpos, &|s| s.drones.monitors.list[mi].state == 2),
+    let _ = mpos;
+    assert!(use_monitor(sim, mi, &|s| s.drones.monitors.list[mi].state == 2),
         "E on the monitor must enter the camera view [M Monitor_Activate 0x1b0058]");
 }
 

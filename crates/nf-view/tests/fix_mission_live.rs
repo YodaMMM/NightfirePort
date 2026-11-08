@@ -201,8 +201,17 @@ fn the_07000001_exit_works_end_to_end() {
         // The 01 walk's corner escape (walkreal_07000001 sets it too): a nav leg wedged on the
         // hall's east-door jamb at (5.45, 11.60) re-routes over clear nav nodes.
         w.bridge_wedged_nav = true;
-        // The intro tail's tail (event 6 re-places Bond) — the walkreal's post-intro settle.
-        w.wait(300);
+        // The intro tail's tail (event 6 re-places Bond) — the walkreal's post-intro settle. The
+        // intro leaves the contact on the line from the start-room guard #0 to Bond, and a guard's
+        // round lands on any drone of the other side it meets [M NDrone2_DealWithObjHit
+        // 0x13fff0:181-232]: idling 300 ticks there, the rounds aimed at Bond killed the contact
+        // (measured: health -1.25 at the end of the wait). A player steps out of the line first,
+        // as walkreal_07000001 does: 1.6 east puts the contact 1.1 off it.
+        {
+            let p = w.scene.sim.as_ref().unwrap().bond.pos;
+            w.walk_to(walker::Wp { at: [p[0] + 1.6, p[1], p[2] - 0.4], act: walker::Act::None, arrive: 0.3 }, "out of the contact's line");
+        }
+        w.wait(240);
         w.walk_nav_to([6.8, 6.0, 8.9], "the meet plate (walk ahead into the ambush)", 1.0);
         // The plate is a TOUCH_ONCE on Bond's capsule: walk the centre tightly, then sweep the
         // quad (the walkreal's crossing — a nav stop a hair short never crosses).

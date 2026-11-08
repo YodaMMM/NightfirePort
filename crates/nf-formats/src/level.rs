@@ -508,6 +508,11 @@ impl Level {
     pub fn scene_instances(&self, cels_only: bool) -> (Vec<Instance>, usize) {
         let (mut out, missing) = self.instances(cels_only);
         if cels_only {
+            // The main map's 0xd5 records draw through the scene's placement walk (its
+            // per-triangle backface cull is `OneSided_Update` 0x1e7d58's same job), so the
+            // collision-only instance `instances` appends for them stays out of the cel-graph walk.
+            let main = self.main_map();
+            out.retain(|i| !(Some(i.map) == main && i.placement.flags & 0xff == 0xd5 && !i.placement.creates_cel()));
             // 0xE2 = `SS_Create` 0x1a9c58 ("SimpleScript"): a placed object (class 0x25) with its own glist, drawn
             // (`obj+0xFA |= 0x44`) and room-linked at load; it sits at its placement until a channel activates it
             // (`SS_Activate` 0x1a9ea8) and `SS_Update` 0x1a9948 plays its keys [M]. 07000006's barrel trap
@@ -603,6 +608,29 @@ impl Level {
                     if self.maps[map].objects[object].collision.is_none() { continue; }
                     out.push(Instance { map, object, matrix: placement::object_matrix(p.rotation, p.translation), placement: p.clone() });
                 }
+            }
+            // The main map's class-0xd5 records (`parsemap_create_dynamic_objects` 0x1d04f0 case
+            // 0xd5 → `OneSided_Create` 0x1e7ce8: `control_create_object` + obj+0xD8 = the celglist,
+            // obj+0xff = 0x4c, `build_LinkToRoom`; reached only through the flag-1 pass
+            // `ResetMap_Load` 0x1d6850 over the last block-0x1a = the main map, and only for a
+            // placement the 0xa000 gate admits [M 0x1d1b68:93]). Its glist collision rides the
+            // game's dynamic pick (`Collide_PickObj` 0x1eae80 admits it: obj+0xF0 = 0, no class
+            // mask bit, glist collision non-zero — the mine's admission path), so Bond meets the
+            // wall from BOTH sides — the one-sidedness is draw-only (`OneSided_Update` 0x1e7d58
+            // toggles obj+0xF0 bit 0x10 by viewer side). The placement carries no 0x8000, so the
+            // static-cel pass never builds it and the port's world had a hole there (07000041's
+            // "1-Sided Thing", plc 86: 4/4 probe rays through its plane returned None before this
+            // fold). The object never moves, so the port folds the record's collision into the
+            // static set (the 0x19 precedent); the draw stays with the scene's placement walk
+            // (its per-triangle backface cull is OneSided_Update's same job — scene.rs).
+            let m = &self.maps[main];
+            for p in &m.placements {
+                if p.flags & 0xff != 0xd5 || p.flags & 0xa000 != 0 { continue; }
+                let target = if p.by_hash() { self.by_hash.get(&p.hashcode).copied() } else if (p.index as usize) < m.objects.len() { Some((main, p.index as usize)) } else { None };
+                let Some((map, object)) = target else { missing += 1; continue };
+                if self.maps[map].objects[object].collision.is_none() { continue; }
+                let matrix = placement::object_matrix_for_class(0xd5, false, p.rotation, p.translation, p.quaternion());
+                out.push(Instance { map, object, matrix, placement: p.clone() });
             }
         }
         (out, missing)

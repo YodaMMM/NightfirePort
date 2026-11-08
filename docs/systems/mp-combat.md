@@ -91,24 +91,41 @@ Per blast, in order (a chained blast appends):
 1. A round's hit on a human registers first: `Player_DealWithObjHit` 0x194458 case 5 →
    `MP_RegisterBulletHit` 0x1857c0 (the team game's friendly-fire gate, the last-shooter word). A
    blast reaches `Player_Hurt` 0x196060 directly — no gate (case 3 registers the killer only when
-   the blast killed [M 0x17c518:124-139]).
+   the blast killed [M 0x17c518:124-139]). The game's pain-type arguments: a round (bullet or the
+   fists' melee, case 5) arrives as type 0 with the hit part [M 0x194458:195], a blast as type 0
+   with location −1 [M 0x196060]; the difficulty multipliers and `Drone_ModPlayerHitDamage`
+   0x13a940 are SP-only arms (the latter returns 1 with `MPSettings._388_4_` set [M :5-24]).
 2. Assassination (scenario 0x400) [M 0x194458:44-74]: the assassin's (`MP_IsAssasin`) round on the
    target (`MP_IsTarget`) deals the target's whole health on part 5, and on parts 1..4 when the
    round's direction is within 70° of the target's facing (from behind).
-3. `Player_HandlePain` 0x1902c8's MP arm = `BOT_handlePain` 0x125ed8's [M :49-81 / :49-74]:
-   `× Plr_DMod_Multi` when the hit has a part (rounds; blasts pass −1); with **Location Damage**
-   (+0x1C8, label 0x24e [L USATxt.dat]; boot value 1 [M bootup 0x1c7e78 @0x1c7ff8]) part 5 ×
-   `Plr_DMod_Head`, parts 0x14/0x15/0x20/0x23 × `Plr_DMod_UpperLimb`, 0x31–0x38 ×
-   `Plr_DMod_LowerLimb`; **Professional Mode** (+0x1BC, label 0x1ac — the port's
+3. `Player_HandlePain` 0x1902c8's MP arm (the ported `player_pain_mp`, nf-game mp/botweap.rs) =
+   `BOT_handlePain` 0x125ed8's multiplier block ([M :51-82 / :48-79] — the shared
+   `combat::mp_damage`): `× Plr_DMod_Multi` when the hit has a part (rounds; blasts pass −1); with
+   **Location Damage** (+0x1C8, label 0x24e [L USATxt.dat]; boot value 1 [M bootup 0x1c7e78
+   @0x1c7ff8]) part 5 × `Plr_DMod_Head`, parts 0x14/0x15/0x20/0x23 × `Plr_DMod_UpperLimb`,
+   0x31–0x38 × `Plr_DMod_LowerLimb`; **Professional Mode** (+0x1BC, label 0x1ac — the port's
    `MpSettings::capture_reward` word) × 3. The MP arenas' tuning: Multi 4.0, Head 4.0, limbs 0.8
    [M ReadTuningVars group, nf-game tuning.rs] — a P2K torso round costs 14, a head round 56.
-4. Armour first (`mp_armour`, `BL+0x8B0`): `absorbed = min(d, armour)`, health − the rest, below
-   1 → 0 [M :82-134]; the pain grunt's `Rand_Rand(4)` on the shared stream [M :111]. The local
-   slot's HUD flash (`+0x968`) and hit-direction glow (`+0x967`) are this machine's only.
-   `MP_ReSpawn` zeroes the armour [M 0x185368:69].
+   The MP arm carries no difficulty factor [M 0x1902c8:28-53 — the GameState multipliers live in
+   the `master == 0` SP arm only].
+4. The pain-type switch [M 0x1902c8:84-99, the same shape in `BOT_handlePain` :80-87]: types 1..7
+   take the health whole (armourFraction 0.0 — the hurt volumes' `Hurt_GetType`, a fall 6
+   `Player_CollisionHandler` 0x1949a8:120, a drowning 7 `Player_MonitorAir` 0x191a70:142); types 0
+   and > 7 are armour fractions 1.0. The armour's share is `d × frac` capped by the pool; the
+   HEALTH loses the full scaled damage minus that share [M :100-108] — armour first, and anything
+   below 1.0 reads 0 [M :131-133]. Humans: the pain grunt's `Rand_Rand(4)` on the shared stream
+   [M :111]; the local slot's HUD flash (`+0x968`) and hit-direction glow (`+0x967`) are this
+   machine's only. `MP_ReSpawn` zeroes the armour [M 0x185368:69]. Bots: the pool is the brain's
+   `BOT_vars+0x769` armour byte (the armour pickup's case 3 fills it [M 0x18e650:119-133]) and
+   `BOT_handlePain` drains it the same way [M 0x125ed8:88-92] — the ported `bot_pain` routes the
+   match's bot hits through it, the pool after the hit written back (the state hash covers it).
 5. Health 0 → `mp_dead_ticks = 1` and `player_killed(victim, Some(owner))` [M MP_PlayerKilled
-   0x188f70] — a self-blast is a self-kill. Bots: the same multipliers, no armour, the existing
-   death/respawn bookkeeping.
+   0x188f70] — a self-blast is a self-kill. Types 5/6/7 also stamp the MPGame last-shooter word
+   0xfffe [M 0x1902c8:91-93] — the port's death credit (killer None) covers the message outcome.
+
+The world routes (`step_net_world`: the hurt volumes, the falls, the drownings) apply through the
+same ported arm with location −1 (`net_world_pain`) — no difficulty factor, the type's fraction,
+the 1.0 floor.
 
 The Player Mods words reach the clients in `MatchSettings` (protocol 5 adds `location_damage`
 as its 20th scalar; `capture_reward` rode already) and the host's menu confirm now maps

@@ -17,9 +17,11 @@
 //! ch 100 fires when the monitored AND of ALL 11 records holds [M 0x1827d8:119-123] → MissionState 6
 //! + `LevelToEndTo(0x0700000b)` = 0x0730000b [M Mission_Update 0x182c60:85-122]. The carried
 //! channels 0x46-0x4a model the 0a exit's RamSave carry [M Player_RamSave 0x195670 — the full
-//! 256-byte switch_channels block rides the save]. The balcony→exec lift ride is the game's own
-//! route on real input (the boarding hop, the carry on the script-entity collision set [M
-//! 0x194188 → Control_InheritVelocity 0x133e88], the step-off) and the exec office goes through
+//! 256-byte switch_channels block rides the save]. The balcony→exec leg is the game's own route on
+//! real input: the boarding hop, the carry on the script-entity collision set [M 0x194188 →
+//! Control_InheritVelocity 0x133e88], E plate #327 at the top of the cab's travel, the duct past
+//! the exterior grill, and E on the floor grate #98 into the waiting room (plate #353, ch 0x76).
+//! The real-damage walks keep their tuned step-off and one placement. The exec office goes through
 //! the burned keypad's door (the Laser watch 0x4E on Lock #178 → ch 0x2F → door #151 [M
 //! 0x1ae3d8 case 0; D #178/#151]) — and the waiting-room exit transit (doors #3 and #0) is
 //! WALKED on the E-opened leaves: the pick is the game's 0x800 arm `1.5·r_door + r_pick` [M
@@ -228,6 +230,7 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
             w.tick(Default::default(), false);
         }
         if boarded {
+            if real {
             // Stand on the cab; the ride carries Bond ([M] ground_motion, lifts_ride's pin). Ride
             // until the surface (cy + 4.1) reaches the exec floor 47.77 [D probe], then step off
             // east — a flat walk off the level surface.
@@ -275,6 +278,27 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
                 eprintln!("[0b] the step-off: bond ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
                 rode = p[0] > 2.2 && (44.0..52.0).contains(&p[1]);
             }
+            } else {
+            // Stand on the cab; the ride carries Bond ([M] ground_motion, lifts_ride's pin). Near
+            // the top the exterior vent comes level with the roof: E plate #327 (mask 4, out ch
+            // 0x77 [D]) works the grill #326, and the duct behind it leads into the building.
+            let start = w.total_ticks;
+            let mut used = false;
+            while w.total_ticks - start < 1600 {
+                let cy = cab_y(&w).unwrap_or(0.0);
+                let (p, yaw) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.pos, sim.bond.yaw) };
+                if p[2] < 21.5 && p[1] > 50.0 { rode = true; break; }
+                if p[1] < 49.0 { w.tick(Default::default(), false); continue; }
+                let desired = (-0.55f32 - p[0]).atan2(21.0 - p[2]);
+                let err = walker::wrap_pi(desired - yaw);
+                let input = nf_game::player::Input { turn: err.clamp(-0.08, 0.08), forward: if err.abs() > 0.4 { 0.0 } else { 0.5 }, ..Default::default() };
+                let e = p[1] > 52.5 && w.total_ticks % 6 == 0;
+                w.tick(input, e);
+                if w.scene.sim.as_ref().unwrap().drones.channels.on(0x77) { used = true; }
+            }
+            let p = w.scene.sim.as_ref().unwrap().bond.pos;
+            eprintln!("[0b] the cab top: bond ({:.2},{:.2},{:.2}) plate used {used}", p[0], p[1], p[2]);
+            }
         }
         eprintln!("[0b] diag: post-poll disabled {} ch7b {} boarded->rode {}",
             w.scene.sim.as_ref().unwrap().disabled, w.scene.sim.as_ref().unwrap().drones.channels.on(0x7b), rode);
@@ -284,8 +308,9 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
     // + the bit-exact RNG make the boarding deterministic: once green, always green.
     assert!(rode, "the paternoster cab ride must board and step off on real input [M 0x194188 → Control_InheritVelocity 0x133e88; D the cab keys y 11.0 → 48.44]");
     w.stop_on_exit = true;
-    w.walk_to(Wp::new(8.0, 46.8, 24.8).r(1.3), "the exec floor (the proven z≈25 leg)");
 
+    if real {
+    w.walk_to(Wp::new(8.0, 46.8, 24.8).r(1.3), "the exec floor (the proven z≈25 leg)");
     // The exec floor: the waiting room's walker exit is the two-door transit — door #3
     // (13.71, 46.78, 19.44 [D]) into the east room, south down the room, and door #0
     // (13.82, 46.78, 7.09 [D]) onto the ring's east corridor. The lane east of the room's
@@ -306,6 +331,35 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
         sim.bond.vel = [0.0; 3];
     }
     w.wait(10);
+    } else {
+    // The duct behind the grill runs north, then east down to the interior grill #98 (8.57, 49.73,
+    // 19.60), which E sweeps open [M SS_Activate 0x1a9ea8]; the drop past it lands in the waiting
+    // room on the east side of its barrier, crossing plate #353 (out ch 0x76) on the way.
+    for (x, y, z) in [(-0.6, 53.6, 21.0), (-0.5, 53.6, 19.6), (1.5, 53.5, 19.5), (4.5, 53.1, 19.4), (7.0, 52.9, 19.75)] {
+        w.walk_to(Wp::new(x, y, z).r(0.45), "the duct");
+    }
+    // On the grate Bond looks down at it before E: looking level the use point sits 1.8 above
+    // the grate, past the refine's 1.0 [M Collide_Intersect 0x1ebaa8:186-189 →
+    // Intersect_PointGeom 0x1e92d8; use_pick_census_live's #98 row]. He looks level again
+    // once he has dropped through.
+    for t in 0..400u32 {
+        let (p, yaw, pitch) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.pos, sim.bond.yaw, sim.bond.pitch) };
+        if p[1] < 48.6 && w.scene.sim.as_ref().unwrap().bond.grounded { break; }
+        let on_grate = p[0] > 9.2 && p[1] < 51.2;
+        let want = if on_grate { -std::f32::consts::FRAC_PI_2 } else { std::f32::consts::FRAC_PI_2 };
+        let err = walker::wrap_pi(want - yaw);
+        let look_want = if on_grate { -0.7 } else { 0.0 };
+        let input = nf_game::player::Input { turn: err.clamp(-0.08, 0.08), look: (look_want - pitch).clamp(-0.05, 0.05), forward: if on_grate || err.abs() > 0.3 { 0.0 } else { 1.0 }, ..Default::default() };
+        w.tick(input, on_grate && err.abs() < 0.3 && pitch < -0.6 && t % 6 == 0);
+    }
+    for _ in 0..30 {
+        let pitch = w.scene.sim.as_ref().unwrap().bond.pitch;
+        if pitch.abs() < 0.01 { break; }
+        w.tick(nf_game::player::Input { look: (-pitch).clamp(-0.05, 0.05), ..Default::default() }, false);
+    }
+    eprintln!("[0b] the duct walked: bond {:?} ch76 {}", w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().drones.channels.on(0x76));
+    w.wait(10);
+    }
     // The doors: disc swing doors (kind 0, 3-key symmetric anims — the closed pose at key 1,
     // the open ends at keys 0/2 [D the 0x19 keys]); the E-open runs `dir = sign((inv_closed ·
     // activator).z)·(+0x5C)` [M Door_Activate 0x135be0:136-146], +0x5C from `Door_SetupSwing`
@@ -398,12 +452,26 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
     {
         let input = nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() };
         for _ in 0..40 { w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false); }
+        for _ in 0..200 { if w.scene.sim.as_ref().unwrap().gun.switch_state == 0 { break; } w.scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     }
     // A keypad opens by its typed code or the decryptor; the laser arm is kind 1 only [M 0x1ae3d8:47, :162].
     {
         let sim = w.scene.sim.as_mut().unwrap();
         if let Some(li) = sim.drones.locks.iter().position(|l| l.out == 47 && !l.unlocked) {
             let code = sim.drones.key_codes.code(sim.drones.locks[li].code);
+            sim.drones.keypad = Some((li, nf_game::lock::Keypad::arm(code, false)));
+            for c in code { sim.drones.keypad_digit((c - b'0') as u32); }
+        }
+    }
+    // A keypad opens by its typed code or the decryptor; the laser arm is kind 1 only [M 0x1ae3d8:47, :162].
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        if let Some(li) = sim.drones.locks.iter().position(|l| l.out == 47 && !l.unlocked) {
+            let code = sim.drones.key_codes.code(sim.drones.locks[li].code);
+            // The stand-in arm writes the solved state straight in, with no page shown: the
+            // page's pad hold (`keypad_page_drawn`) stays off for it, so the aim below runs
+            // from its first tick as on the proven route.
+            sim.drones.keypad_page_drawn = false;
             sim.drones.keypad = Some((li, nf_game::lock::Keypad::arm(code, false)));
             for c in code { sim.drones.keypad_digit((c - b'0') as u32); }
         }
@@ -424,6 +492,7 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
         w.scene.sim.as_mut().unwrap().step_bond(input, true, false, false);
     }
     assert!(burned, "the typed code opens the keypad [M Lock_Update 0x1ae3d8 case 4]");
+    w.scene.sim.as_mut().unwrap().drones.keypad_page_drawn = true;
     w.wait(5);
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x2f),
         "the open writes switch_channels[47] [M 0x1ae3d8:194-195]");
@@ -1065,9 +1134,7 @@ fn dxz_w(a: [f32; 3], b: [f32; 3]) -> f32 { ((a[0] - b[0]).powi(2) + (a[2] - b[2
 ///   The AI nav has no balcony→exec route either (`nf-extract route` from the spawn area
 ///   (2.3, 14.0, 25.8) to nav n41 (12.21, 46.9, 19.68): "no route: code 5").
 ///
-/// So the balcony→exec transit CANNOT be the cab ride: the walkreal keeps its documented stand-in
-/// hop above, and the route up stays unpinned ([S docs/levels/0700000b.md:65 "the route up is not
-/// pinned by the dumps"]). The live checks that would settle it are in the session report.
+/// So nobody leaves through the cab's inside: the route rides its roof to the exterior vent.
 #[test]
 fn the_paternoster_cab_is_a_sealed_cage() {
     let mut scene = nf_view::load(&iso(), "0700000b.bin", false).expect("load 0700000b");

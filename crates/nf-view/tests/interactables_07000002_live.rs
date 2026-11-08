@@ -26,6 +26,8 @@ use nf_game::player::{Input, SS_CLIMB, SS_WALK, SS_WIRE};
 
 #[path = "common/walker.rs"]
 mod walker;
+#[path = "common/usepick.rs"]
+mod usepick;
 
 use walker::{Act, Walker, Wp};
 
@@ -304,10 +306,16 @@ fn the_pavillion_grill_sweeps_open_on_the_use_key() {
     let p = w.scene.sim.as_ref().unwrap().drones.sss.list[si].pos();
     // The stand-in transit; the E is the real input (fix_ss_grate_live's stand at 1.2 west,
     // facing the grill — the same reachable spot its test pins).
-    place(&mut w, p[0] - 1.2, p[1], p[2]);
-    w.scene.sim.as_mut().unwrap().bond.yaw = (1.0f32).atan2(0.0);
-    w.walk_to(Wp::at(p[0] - 0.9, p[1], p[2], Act::Use { use_ticks: 200 }), "E the pavillion grill");
-    w.wait(120);
+    let _ = p;
+    {
+        // The press from in front of one of the grill's collision faces (the use pick's
+        // world-sphere + refine stages [M 0x1eae80, 0x1ebaa8 → 0x1e92d8; nf_game::usepick]).
+        let sim = w.scene.sim.as_mut().unwrap();
+        let (tris, sph) = { let s = &sim.drones.sss.list[si]; (usepick::posed(sim, s.hash, &s.matrix), s.world_sphere()) };
+        let st = sim.drones.sss.list[si].state;
+        assert!(usepick::press_on(sim, &tris, sph, 60, &|s| s.drones.sss.list[si].state != st), "E at the pavillion grill");
+    }
+    w.wait(300);
     let s = &w.scene.sim.as_ref().unwrap().drones.sss.list[si];
     let moved = (0..3).map(|k| (s.matrix[3][k] - start[k]).abs()).sum::<f32>();
     assert!(moved > 0.02 && s.state == 0,
@@ -518,7 +526,12 @@ fn a_kitchen_bottle_shatters_under_gunfire() {
     assert!(!w.scene.sim.as_ref().unwrap().drones.breaks.list[bi].dead, "sister: the bottle is intact before");
     // The stand-in transit to the kitchen's firing line (the bottle sits at its object-vert
     // spot; the walkreal route passes the kitchen). The shot is the real input.
-    place(&mut w, centre[0], centre[1] - 2.2, centre[2] + 2.4);
+    // Bond stands on the kitchen floor (5.34 [D the floor ray under the firing spot], the bottle
+    // 0.9 above it). The old spot (centre - 2.2) dropped him onto the floor BELOW the kitchen (3.36)
+    // and the shot reached the bottle through the kitchen floor; the stream join turned the world
+    // stop on (`BREAK_WORLD_STOP` with `PANE_RIDE`), so the scenery nearer than the breakable ends
+    // the round first [M Collide_Update 0x1ea398:216-229, the first solid node ends the walk].
+    place(&mut w, centre[0], centre[1] - 1.0, centre[2] + 2.4);
     let hit = shoot_at(&mut w, centre, 600, &|sim| sim.drones.breaks.list[bi].dead);
     assert!(hit, "the gunfire shatters the bottle [M Break_ApplyDamage 0x12c128; Break_Kill 0x12b970]");
     assert!(w.scene.sim.as_ref().unwrap().drones.breaks.list[bi].dead, "the bottle stays gone");
@@ -585,7 +598,6 @@ fn the_electrocute_volume_hurts_only_once_the_arc_chain_runs() {
             sim.bond.pos = [cx, mid_y, cz];
             sim.bond.prev_pos = sim.bond.pos;
             sim.bond.vel = [0.0; 3];
-            sim.bond.fall_speed = 0.0;
             sim.bond.grounded = false;
         }
         w.wait_enabled(600, "the bunker chat hold");

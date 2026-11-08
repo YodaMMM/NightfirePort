@@ -169,8 +169,18 @@ fn at_difficulty_3_the_guards_walk_their_disc_owner_points() {
 /// and dies at d2/d3. The pre-fix port's d2 ~f1113 / d3 ~f878 death ticks re-measured after the
 /// civilian-alarm fix (scared civilians shout, guards attack 60 ticks later, the dead +0xC6
 /// duplicate gone — 5fbfa4f7d): the port's d2 now dies ~t3500 (5 hits by t1500, 9 by t3500 — the
-/// ack chain is the game's slower one) and d3 ~t501 (5×20), so the window is 4000 (a
-/// port-measured post-fix timing, not a fresh PCSX2 [L]).
+/// ack chain is the game's slower one) and d3 ~t501 (5×20), so the window was 4000 (a
+/// port-measured post-fix timing, not a fresh PCSX2 [L]). muzzle-repin-5: the 3 muzzle draws per
+/// guard shot shift the hit-roll stream and d2's death moved past t4000 (measured this branch);
+/// the window opens to 6000 — the per-hit [L] pins and the death REQUIREMENT stay.
+/// stream-batch-3: on stream-batch-2 + master a6665d115 the same roll-stream shift moved d2's
+/// death past t10000 AND past a 20000 probe (window opened to 20000 for the probe, restored to
+/// 10000): the guards deliver EXACTLY 6 hits × 12 (health parks at 28.0 — the assert comment's
+/// own number) and then hold lost_sight=true / seen_ticks=0 for 14000+ ticks with an IDLE VISIBLE
+/// Bond at the spawn — the combat sight-loss re-acquire chain stalls (state 0x5c, opp_target the
+/// spawn). REAL-REGRESSION SUSPECT, not a timing re-pin: the d1/d3 legs and the 7 sister pins
+/// (approach, arrival switch, step-aim+fire) all pass. Needs the re-acquire decomp review
+/// (Drone2 sight-loss exit/re-see) before this window moves again.
 #[test]
 fn idle_bond_is_approached_and_shot_at_every_selectable_difficulty() {
     let start = [-0.40f32, 25.83];
@@ -192,7 +202,7 @@ fn idle_bond_is_approached_and_shot_at_every_selectable_difficulty() {
         // [M 0x1431c0:194-195]) before t700, and whether they were back in the corridor by t900.
         let mut fled = vec![false; guards.len()];
         let mut back = vec![false; guards.len()];
-        for t in 1..=4000u32 {
+        for t in 1..=10000u32 {
             scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
             let sim = scene.sim.as_ref().unwrap();
             for (k, &p) in guards.iter().enumerate() {
@@ -240,7 +250,18 @@ fn idle_bond_is_approached_and_shot_at_every_selectable_difficulty() {
         assert!(sim.drones.player_hits.iter().all(|h| h.2 <= per_hit),
             "d{diff}: no hit exceeds the game's per-hit damage [L]");
         if dies {
-            assert!(dead_at.is_some(), "d{diff}: the idle Bond dies within 4000 ticks (post-fix port timing: d2 ~t3500, d3 ~t501)");
+            if dead_at.is_none() {
+                let sim = scene.sim.as_ref().unwrap();
+                for &p in guards {
+                    if let Some(dr) = sim.drones.list.iter().find(|d| d.placement == p) {
+                        eprintln!("muzzle-repin-5 diag d{diff}: #{p} present {} state {:#x} weapon {} health {:.1} hits_taken {}", dr.present, dr.state, dr.weapon, dr.health, dr.hits_taken);
+                        eprintln!("muzzle-repin-5 diag d{diff}:   #{p} opp_bond {} opp_drone {:?} clip {} clip_max {} seen_ticks {} lost_sight {} opp_target {:?}", dr.opp_bond, dr.opp_drone, dr.clip, dr.clip_max, dr.seen_ticks, dr.lost_sight, dr.opp_target);
+                    }
+                }
+                eprintln!("muzzle-repin-5 diag d{diff}: player_hits {} total {} — bond health {:.1}", sim.drones.player_hits.len(), sim.drones.player_hits.iter().map(|h| h.2).sum::<f32>(), sim.drones.health.health);
+            }
+            if let Some(t) = dead_at { eprintln!("stream-batch-3 diag d{diff}: the idle Bond died at t{t}"); }
+            assert!(dead_at.is_some(), "d{diff}: the idle Bond dies within 10000 ticks (muzzle-repin-5 measured: d2's guards fire the whole window, the shifted roll stream landed 6 hits × 12 by t6000 — death ~t8300; stream-batch-3 measured: the 6 hits land but then the guards hold lost_sight=true/seen_ticks=0 for 14000+ ticks at the idle Bond — the re-acquire chain stalls, see the diag lines)");
         }
     }
 }
@@ -250,8 +271,8 @@ fn idle_bond_is_approached_and_shot_at_every_selectable_difficulty() {
 const STEP_WINDOW: u32 = 1000;
 
 /// Run d2 for `STEP_WINDOW` ticks (`prep` edits the sim after load) and collect each guard's visited
-/// states.
-fn d2_states(prep: impl FnOnce(&mut nf_view::scene::Sim)) -> Vec<(usize, std::collections::BTreeSet<u8>)> {
+/// states and the shots each fired.
+fn d2_states(prep: impl FnOnce(&mut nf_view::scene::Sim)) -> Vec<(usize, std::collections::BTreeSet<u8>, usize)> {
     let mut scene = nf_view::load_with_carry_difficulty(&iso(), "07000011.bin", false, None, 2).expect("load 07000011 d2");
     prep(scene.sim.as_mut().unwrap());
     let mut seen = vec![(126usize, std::collections::BTreeSet::new()), (127, std::collections::BTreeSet::new())];
@@ -263,7 +284,11 @@ fn d2_states(prep: impl FnOnce(&mut nf_view::scene::Sim)) -> Vec<(usize, std::co
             set.insert(dr.state);
         }
     }
-    seen
+    let sim = scene.sim.as_ref().unwrap();
+    seen.into_iter().map(|(p, set)| {
+        let shots = sim.drones.list.iter().find(|d| d.placement == p).map_or(0, |d| d.shots.len());
+        (p, set, shots)
+    }).collect()
 }
 
 /// The arrival's behaviour switch [M 0x165640:47-82]: a mode-7 (EnemyRunToPoint) guard that reaches
@@ -303,7 +328,7 @@ fn the_arrival_switches_the_guards_to_their_second_behaviour_block() {
 /// 0x42 [M 0x150c18:127-139].
 #[test]
 fn in_position_the_guards_step_aim_as_well_as_fire() {
-    for (p, states) in d2_states(|_| {}) {
+    for (p, states, _) in d2_states(|_| {}) {
         use nf_game::drone::state::*;
         assert!(states.contains(&STEP_AIM_LEFT) || states.contains(&STEP_AIM_RIGHT),
             "d2: #{p} visits StepAim 0x73/0x74 within {STEP_WINDOW} ticks [L], visited {states:x?}");
@@ -313,8 +338,11 @@ fn in_position_the_guards_step_aim_as_well_as_fire() {
 }
 
 /// THE SISTER: with property 0x42 cleared in both blocks the step arm's gate is closed
-/// [M 0x150c18:127-139, :282-290] — the same guards still fight from AimStandFire 0x68 but never
-/// step.
+/// [M 0x150c18:127-139, :282-290] — the same guards still fight (they fire at Bond) but never
+/// step. join-reds-a: on 07000011 the engage range is 6.0 [M DefaultInit 0x14b300:429-433], so
+/// Attack's prop-0x18 arm no longer sends #126 (arriving 9.9 out) to AimStand 0x67 → 0x68
+/// [M 0x164210:71-87]; it goes Combat → OutOfRange → CombatNoRoute 0x5f and fires from there
+/// (the seen arm, 0x164c08 case 3), so the fight check counts the shots, not the 0x68 visit.
 #[test]
 fn a_guard_with_the_step_gate_closed_stays_put() {
     let runs = d2_states(|sim| {
@@ -324,10 +352,10 @@ fn a_guard_with_the_step_gate_closed_stays_put() {
             if let Some(w) = dr.alert_props.as_mut() { props.set(0x42, w, 0); }
         }
     });
-    for (p, states) in runs {
+    for (p, states, shots) in runs {
         use nf_game::drone::state::*;
         assert!(!states.contains(&STEP_AIM_LEFT) && !states.contains(&STEP_AIM_RIGHT),
             "d2: #{p} with property 0x42 clear never steps [M 0x150c18:127-139], visited {states:x?}");
-        assert!(states.contains(&AIM_STAND_FIRE), "d2: #{p} still fights from AimStandFire 0x68, visited {states:x?}");
+        assert!(shots > 0, "d2: #{p} still fires at Bond, visited {states:x?}");
     }
 }

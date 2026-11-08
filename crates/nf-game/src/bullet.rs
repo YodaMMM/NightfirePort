@@ -94,9 +94,18 @@ pub struct Bullet {
     /// The flight's GLASS PASS: the round's weapon record `+0x6C` bit 0x800 CLEAR → the flight's
     /// HITTEST+0x9a carries 0x20 every flying tick and the contact walk passes surface-byte-0x10
     /// (glass) contacts [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f058; Collide_Update
-    /// 0x1ea398:216-229]. Set from the record at construction (the `drone.rs` spawn sites);
+    /// 0x1ea398:216-229]. Set from the record at construction ([`glass_pass_of`]);
     /// false = the bit-0x800 records (the fists 0x01, the laser 0x45) whose flight stops on glass.
     pub glass_pass: bool,
+    /// The firing turret's `sp_key` for a turret round, else None: the own-round skip of the turret
+    /// parts' pick (see `PlayerBullet::from_turret` in drone.rs).
+    pub from_turret: Option<usize>,
+}
+
+/// The flight's glass pass from the weapon record: `+0x6C & 0x800` clear [M Bullet_update 0x12e7b0:390].
+/// `Bullet_update` reads the record alone, so it holds whoever fired the round.
+pub fn glass_pass_of(w: &[u8]) -> bool {
+    u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0
 }
 
 impl Bullet {
@@ -111,6 +120,7 @@ impl Bullet {
         // Own line (lesson 4): the glass pass defaults OFF — the bit-0x800 records; the spawn
         // sites arm it from the record.
         glass_pass: false,
+        from_turret: None,
     };
 
     /// `Bullet_init` 0x12c5a0's fuse block (the tail of the initializer, after the velocity
@@ -144,15 +154,37 @@ impl Bullet {
     }
 }
 
+/// A pass contact's effect site in world space: position, front-face normal, the RAW surface
+/// byte, the decal host — `Bullet_CollisionHandler` 0x12ce80's per-contact `Effect_Create`
+/// inputs. bullet-pass-water.
+pub type PassSite = (V3, V3, u8, crate::world::HitHost);
+
 /// What a bullet did this tick.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum BulletEvent {
-    World(V3),
+    /// The round stopped on the world. `pass` = the pass-flagged contacts the tick's segment held
+    /// BEFORE the stop, in distance order — the water surface a round splashes through, the
+    /// foliage leaves — `Bullet_CollisionHandler` 0x12ce80's sorted walk passes each with its
+    /// `Effect_Create` treatment (the material's emitter burst + `Effect_Bullet`'s gas and decal,
+    /// NO ricochet and NO damage) and stops at the first solid contact [M 0x12cff0 `bne s4,zero,
+    /// 0012d020` skips the state-2 store; the loop tail `*(iVar19 + 0xf4) = 1` re-arms the
+    /// flight]. bullet-pass-water.
+    World { at: V3, pass: Vec<PassSite> },
     Player { damage: f32, at: V3 },
     /// `Bullet_DoTrails` fly-by (sound id 0x1dc): a bullet whizzed past the viewer. Played at the closest point on
     /// the bullet's line to the camera, only for weapons with `+0x6C & 0x40000`, in single player, when the bullet's
     /// owner is not the player, within 3 units, on a 1-in-5 `Rand_Rand(5)` roll [M `Bullet_DoTrails`@0x12d890].
     FlyBy(V3),
+    /// The round reached another drone's body first [M `Bullet_update` 0x12e7b0:389-421 — the
+    /// flight HITTEST's object filter word +0x98 is 0 and its exclusion slot +0x74 is `BU+0x34`,
+    /// the shooter `DroneWeap_FireWeapon` 0x178f68:253 passes twice, so `Collide_PickObj`
+    /// 0x1eae80:57-59 offers every other enabled drone; `Bullet_CollisionHandler` 0x12ce80 sets
+    /// state 2 on an object contact]. `drone` is the index the picker returned, `part` its box,
+    /// `ray` the tick's segment (for the victim's `Hit`).
+    Drone { drone: usize, part: i16, at: V3, ray: V3 },
+    /// The round died on a solid dynamic object (a breakable) nearer than the world, Bond and
+    /// every drone body — the contact itself is the `update_with` caller's (its `objects` hook).
+    Object(V3),
 }
 
 /// Bond's hit volume: an upright cylinder from his feet to above his eye (*deviation*: the game tests 16 boxes on
@@ -222,6 +254,22 @@ impl Bullet {
     /// direction for max(step, 1) units; the nearest of world and Bond wins; ranged-out bullets die.
     /// `viewer`: the camera eye (`glb_viewer + 0xc0`), for the `Bullet_DoTrails` fly-by test [M].
     pub fn update(&mut self, world: &CollisionWorld, player: &PlayerVolume, viewer: V3, rng: &mut crate::drone::Rng) -> Option<BulletEvent> {
+        self.update_with(world, player, viewer, rng, &mut |_, _| None, &mut |_, _, _| None)
+    }
+
+    /// `update` with the round's other nodes of the one sorted contact list [M Collide_Update
+    /// 0x1ea398:120-158, 216-229 — the first solid node ends the walk; Bullet_update
+    /// 0x12e7b0:388-443 arms the same pick for every round, the owner never read]:
+    /// - `pick(from, end)` returns the nearest drone body the segment enters as (index, part,
+    ///   fraction), the shooter already left out;
+    /// - `objects(from, end, limit)` sees the dynamic objects (the breakables): `limit` is the
+    ///   fraction of the nearest world/Bond/drone stop (infinite when none); it records the
+    ///   contacts it takes and returns the fraction of a SOLID object nearer than `limit`.
+    /// The nearest node wins: a solid object → `BulletEvent::Object`, a drone → `Drone`, then
+    /// Bond or the world.
+    pub fn update_with(&mut self, world: &CollisionWorld, player: &PlayerVolume, viewer: V3, rng: &mut crate::drone::Rng,
+            pick: &mut dyn FnMut(V3, V3) -> Option<(usize, i16, f32)>,
+            objects: &mut dyn FnMut(V3, V3, f32) -> Option<f32>) -> Option<BulletEvent> {
         if self.state >= 2 { return None; }
         if self.travelled > self.range { self.state = 2; return None; }
         let mut step = if self.state == 0 { (rng.frand(0.5) + 0.5) * self.speed } else { self.speed };
@@ -230,12 +278,15 @@ impl Bullet {
         if self.travelled > self.range { step -= self.travelled - self.range; }
         let l = step.max(1.0);
         let end = [self.pos[0] + self.dir[0] * l, self.pos[1] + self.dir[1] * l, self.pos[2] + self.dir[2] * l];
-        // The flight trace drops the pass-flagged hits (segment_bullet) — the same rule the
-        // player-bullet flight walks [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f058 arms the
-        // HITTEST pick every flying tick (+0x94 = 0x101/0x201, +0x9a = the surface mask), and
-        // Collide_Update 0x1ea398:216-229 walks the sorted contact list past every pass-flagged
-        // hit (glist node 0x40 / surface byte 0x40, Collide_Intersect disasm 0x1ebf78-0x1ebf80)
-        // to the first solid one]. Drone-fired rounds run the same Bullet_update.
+        // The flight trace keeps the pass-flagged hits and reports them alongside the stop: the
+        // game's flying round runs the pick every tick with HITTEST+0x98 = 0 and the intersect
+        // mask +0x9a = 0x20 [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f058] — no intersect
+        // drop at all — and Collide_Update 0x1ea398 / Bullet_CollisionHandler 0x12ce80 walk the
+        // sorted contact list, passing every pass-flagged hit (the cel word's bit 0x40 — the
+        // 02 watersurfaces' glist 0x241 [D] — the byte's 0x40/0x80, or the glass rule) WITH its
+        // Effect_Create burst and stopping at the first solid one [M 0x12cff0]. The old port
+        // swallowed them in the query — a bullet into the 02 shallows never splashed.
+        // Drone-fired rounds run the same Bullet_update.
         // The candidate set is the game's cel-scoped pick, not the whole world: the bullet is
         // cel-linked at spawn (obj+0x20 = build_LinkToRoom 0x1c9680 [M Bullet_init disasm
         // 0x12c8d0-0x12c8d8]) and the flight query seeds Collide_RayIntersect with that cel,
@@ -244,14 +295,31 @@ impl Bullet {
         // a candidate [M Collide_Pick 0x1eb320:125 → Collide_StraddleCels 0x1eac98]. The port
         // re-derives the cel with build_FindCel 0x1c8cb0 each tick, exactly like the PlayerBullet
         // flight next door; the no-scope fallback is the flat ray.
-        let tw = world.segment_flight_scoped(world.find_cel(self.pos), self.pos, end, self.glass_pass);
+        let (tw, tw_pass) = world.segment_flight_contacts_scoped(world.find_cel(self.pos), self.pos, end, self.glass_pass);
         let tp = segment_cylinder(self.pos, end, player);
         let at = |t: f32| [self.pos[0] + (end[0] - self.pos[0]) * t, self.pos[1] + (end[1] - self.pos[1]) * t, self.pos[2] + (end[2] - self.pos[2]) * t];
         // CompHitData 0x1d33c0 [M] — QuickSort comparator id 2 (Collide_Update 0x1ea398 / Collide_RayIntersect 0x1ec690 / Collide_SphereIntersect 0x1ec940 / Collide_CylinderIntersect 0x1ecc00 / Collide_FilterBullets 0x1ece30 sort their hit lists by the f32 at HITDATA+0xc, ascending); the port keeps no hit list — the nearest-of comparison below replaces the sort.
+        // The drone node of the same sorted list [M Collide_Update 0x1ea398:120-158]: nearest wins.
+        let pd = pick(self.pos, end);
+        let limit = tw.into_iter().chain(tp).chain(pd.map(|(_, _, t)| t)).fold(f32::INFINITY, f32::min);
+        if let Some(to) = objects(self.pos, end, limit).filter(|o| *o < limit) {
+            self.state = 2;
+            return Some(BulletEvent::Object(at(to)));
+        }
+        if let Some((i, part, t)) = pd {
+            if tw.is_none_or(|w| t < w) && tp.is_none_or(|p| t < p) {
+                self.state = 2;
+                let ray = [end[0] - self.pos[0], end[1] - self.pos[1], end[2] - self.pos[2]];
+                return Some(BulletEvent::Drone { drone: i, part, at: at(t), ray });
+            }
+        }
         let ev = match (tw, tp) {
             (Some(w), Some(p)) if p < w => Some(BulletEvent::Player { damage: self.damage, at: at(p) }),
             (_, Some(p)) if tw.is_none() => Some(BulletEvent::Player { damage: self.damage, at: at(p) }),
-            (Some(w), _) => Some(BulletEvent::World(at(w))),
+            (Some(w), _) => Some(BulletEvent::World {
+                at: at(w),
+                pass: tw_pass.into_iter().map(|h| (at(h.t), h.normal, h.mat, h.host)).collect(),
+            }),
             _ => None,
         };
         if ev.is_some() { self.state = 2; return ev; }

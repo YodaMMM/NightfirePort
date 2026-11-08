@@ -112,7 +112,12 @@ fn walk_to_the_lobby(w: &mut Walker) {
     w.walk_to(Wp::new(-7.6, -369.0, 31.7), "lobby west");
     w.walk_to(Wp::new(-11.3, -369.0, 34.2), "west of the desk");
     w.walk_to(Wp::new(-16.6, -369.0, 34.0), "toward the armour corner");
-    w.walk_to(Wp::new(-18.4, -368.8, 27.5), "by the panel");
+    // The straight line from the armour corner crosses the lobby's live glass wall (pane #0,
+    // placement 87: kind 2, health 1, x -18.40..-10.63, z 27.51..35.29 [D]). Live panes are body-
+    // solid since the pane ride (Bond's walk query carries mask 0, so `Collide_PickObj` 0x1eae80
+    // filters no pane out [M Player_Collision 0x194df0:88]); the walk takes the nav graph's own way
+    // round, through the west door.
+    w.walk_nav_to([-18.4, -368.8, 27.5], "by the panel", 0.8);
 }
 
 /// The full route: spawn → the lobby → E on the panel → ch 0x39/0x46, the FX (entity B), the
@@ -193,7 +198,8 @@ fn walk_operate_the_button_and_ride_to_0700000a() {
     }
 
     // Into the lift: through the opened doors, the TOUCH_ONCE #67 box → ch 0x32 → LOAD_LEVEL #63.
-    w.walk_to(Wp::new(LIFT_MOUTH[0], LIFT_MOUTH[1] + 0.5, LIFT_MOUTH[2]), "to the lift mouth");
+    // Back round the glass wall by the nav graph (see `walk_to_the_lobby`'s last leg).
+    w.walk_nav_to([LIFT_MOUTH[0], LIFT_MOUTH[1] + 0.5, LIFT_MOUTH[2]], "to the lift mouth", 0.8);
     w.stop_on_exit = false;
     w.walk_to(Wp::new(IN_CAB[0], IN_CAB[1], IN_CAB[2]), "into the cab");
     {

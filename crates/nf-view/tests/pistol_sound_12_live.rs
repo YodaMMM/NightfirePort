@@ -179,6 +179,15 @@ fn the_start_pistols_sounds_come_from_the_game_owned_banks() {
     }
     let mut sound = nf_view::build_sound(&mut scene).expect("the level has a bank");
     let mut seen = HashMap::new();
+    // The level-start draw plays first: a press made during it is spent by the view-state gate
+    // (draw state 3, outside {0, 9, 0xB}) and a held trigger never refires without a new press
+    // [M Player_WeaponFiring 0x1a5460:601-646] — the stream join's weapon change ported that order,
+    // so the press comes once the draw ends, as a player's would.
+    for _ in 0..120 {
+        if scene.sim.as_ref().unwrap().gun.switch_state == 0 { break; }
+        scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+        tick(&mut sound, &mut scene, &mut seen);
+    }
     // Fire (clip 7): hold the trigger until the remapped fire sound starts.
     let mut fired_at = None;
     for t in 0..40 {

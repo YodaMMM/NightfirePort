@@ -15,7 +15,7 @@
 mod walker;
 
 use nf_game::player::Input;
-use walker::Walker;
+use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
@@ -79,16 +79,49 @@ fn the_sky_bridge_intros_panes_register_at_level_start_and_break_under_fire() {
     // x −12..11, z 30..37 at y 1.5 [L the registered rows]; the walk stops just south of the
     // east end pane (stream 18 at (8.3,1.5,30.3)).
     w.walk_nav_to([9.0, 0.2, 27.0], "the sky-bridge approach", 1.2);
-    // The nearest kind-2 pane, then the gondola harness's converge-and-press loop (real aim
-    // input, the trigger on the edge).
+    // The approach wedges at (9.9, 26.1), where the office wall stands 0.6 in front of the head:
+    // a round fired from there stops on the wall [M Collide_Update 0x1ea398:216-229 — the
+    // breakable's contact counts only ahead of the first solid stop; BREAK_WORLD_STOP rides the
+    // pane ride]. The player steps back east to the approach's own nav point (12.3, 26.65), where
+    // the line to the bridge's glass is clear, and shoots a pane he can see.
+    w.walk_to(Wp::new(12.3, 1.1, 26.65).r(0.5), "the clear stand by the bridge");
+    // A pane is in view when the flight line from the head to its centre meets its box before
+    // any solid stop.
+    let seen = |sim: &nf_view::scene::Sim, b: &nf_game::breakable::Break| {
+        let head = sim.bond.head();
+        let d = sim.data();
+        let c = [(b.lo[0] + b.hi[0]) / 2.0, (b.lo[1] + b.hi[1]) / 2.0, (b.lo[2] + b.hi[2]) / 2.0];
+        let Some(t) = nf_game::breakable::Breaks::seg_box_t(head, c, b.lo, b.hi) else { return false };
+        d.world.segment_flight_scoped(d.world.find_cel(head), head, c, true).is_none_or(|ts| t <= ts)
+    };
+    let any_seen = |sim: &nf_view::scene::Sim| sim.drones.breaks.list.iter()
+        .any(|b| b.script_obj.is_some() && !b.dead && b.kind == 2 && seen(sim, b));
+    // Then north to the bridge mouth's open east half until a pane comes into view (its west
+    // half, x 9.65..11.04 on x − z = −17, is a solid mat-0x15 panel).
+    'stands: for stand in [[11.8f32, 27.8], [11.8, 28.2], [11.8, 28.6]] {
+        for _ in 0..180u32 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if any_seen(sim) { break 'stands; }
+            let p = sim.bond.pos;
+            if (stand[0] - p[0]).hypot(stand[1] - p[2]) < 0.25 { break; }
+            let err = walker::wrap_pi((stand[0] - p[0]).atan2(stand[1] - p[2]) - sim.bond.yaw);
+            let input = Input { turn: err.clamp(-0.08, 0.08), forward: if err.abs() > 0.6 { 0.0 } else { 0.6 }, ..Default::default() };
+            w.tick(input, false);
+        }
+    }
+    for _ in 0..10 { w.tick(Input::default(), false); }
+    eprintln!("[skybridge] the stand {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    // The nearest kind-2 pane in view, then the gondola harness's converge-and-press loop (real
+    // aim input, the trigger on the edge).
     let target_obj = {
         let sim = w.scene.sim.as_ref().unwrap();
         let head = sim.bond.head();
-        sim.drones.breaks.list.iter().filter(|b| b.script_obj.is_some() && !b.dead && b.kind == 2)
+        let seen = |b: &nf_game::breakable::Break| seen(sim, b);
+        sim.drones.breaks.list.iter().filter(|b| b.script_obj.is_some() && !b.dead && b.kind == 2 && seen(b))
             .min_by(|a, c| {
                 let d = |b: &nf_game::breakable::Break| (b.lo[0] - head[0]).powi(2) + (b.lo[1] - head[1]).powi(2) + (b.lo[2] - head[2]).powi(2);
                 d(a).partial_cmp(&d(c)).unwrap()
-            }).and_then(|b| b.script_obj).expect("a kind-2 pane")
+            }).and_then(|b| b.script_obj).expect("a kind-2 pane in clear view of the stand")
     };
     eprintln!("[skybridge] target pane obj {target_obj}");
     let mut kill: Option<(usize, u8, u16)> = None;
@@ -118,6 +151,7 @@ fn the_sky_bridge_intros_panes_register_at_level_start_and_break_under_fire() {
         }
     }
     let (k_obj, k_kind, k_sound) = kill.expect("a sky-bridge pane broke under the real fire");
+    assert!(fires >= 1, "Bond's own press broke the pane");
     assert_eq!((k_kind, k_sound), (2, 0x2E), "the glass kill [M 0x12b970:64-76]");
     let sim = w.scene.sim.as_ref().unwrap();
     assert!(sim.drones.breaks.list.iter().all(|b| b.script_obj != Some(k_obj)), "the row dropped");

@@ -4,7 +4,8 @@
 //! (`MenuManager_Create(0x80000003, 0x40000021, …)` [M `Lock_Update` 0x1ae3d8:242-243]) whose ten
 //! digit buttons (id 0x100000ba) sit at the port's `KEYPAD_DIGIT_RECTS` with the digits 1..9,0;
 //! 15 kind-0 keypad locks across 8 levels. Pinned here:
-//! - with no draw the page holds nothing: Bond walks on after the press;
+//! - with no draw the page holds nothing: Bond walks on after the press (the load now sets the
+//!   flag, so the test clears it);
 //! - with a draw the page owns the pad, the cursor steps control to control
 //!   (`Menu_FindControl` 0x1f16d8) from its home on digit 1, ✕ types the focused digit
 //!   (`Button_Update` 0x1ef948 → `C_KEYPAD_Handler` 0x216810), △ closes it (0x21c3d8, 0x21d508);
@@ -123,6 +124,8 @@ fn open_0a() -> (nf_view::scene::Scene, usize) {
 fn a_page_nothing_draws_leaves_bond_free() {
     let mut scene = nf_view::load(&iso(), "0700000a.bin", false).expect("load 0700000a");
     let sim = scene.sim.as_mut().unwrap();
+    // A view with no page draw (the load sets the flag once the page can draw: keypad_page_draw_live).
+    sim.drones.keypad_page_drawn = false;
     let li = find_lock(sim, 2, 0x31);
     use_lock(sim, li);
     assert!(sim.drones.keypad.is_some(), "the press still arms the lock's state");

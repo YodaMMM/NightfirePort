@@ -27,7 +27,7 @@ fn doors_on_07000001_now_match_their_placements() {
     let doors = Doors::create(ps, &blocks, |p| {
         let o = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(om, oi)| &level.maps[om].objects[oi]) }
                 else { level.maps[m].objects.get(p.index as usize) };
-        o.map(|o| (o.hashcode, o.centre, o.radius))
+        o.map(|o| (o.hashcode, o.centre, o.radius, o.flags))
     });
     assert_eq!(doors.list.len(), 5);
     // Each door's first key position must match its placement's translation (the anim is in world space).
@@ -83,7 +83,7 @@ fn doors_on_07000005_still_match_the_live_snapshot() {
     let doors = Doors::create(ps, &blocks, |p| {
         let o = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(om, oi)| &level.maps[om].objects[oi]) }
                 else { level.maps[m].objects.get(p.index as usize) };
-        o.map(|o| (o.hashcode, o.centre, o.radius))
+        o.map(|o| (o.hashcode, o.centre, o.radius, o.flags))
     });
     assert_eq!(doors.list.len(), 5, "5 doors on 07000005");
     // Door_UNLocked (placement 153) is the swing door with 3 keys at the world position [57.75, 26.00, 89.31].

@@ -363,13 +363,24 @@ fn dump_the_stairwell_impacts_vs_render() {
 ///
 /// 1. Every world impact whose face is NOT a pass face sits ON drawn geometry (≤ HOLE_ON_SURFACE_MAX
 ///    from the nearest drawn World triangle) [L this test].
-/// 2. The off-surface impacts are pass-face records, invisible: they sit on the stairwell's declared
-///    fudge planes (map43#126 "stairwell_blocking_ploys … a fudge!!!!" [D], surface byte 0x40
+/// 2. The off-surface COLLISION is the pass faces, invisible: the stairwell's declared fudge
+///    planes (map43#126 "stairwell_blocking_ploys … a fudge!!!!" [D], surface byte 0x40
 ///    [D 07000011.bin] at x≈15.95/x≈21.78) — the walk forces them to pass
 ///    [M Bullet_CollisionHandler 0x12ce80 0x12cf7c: `HITDATA+0x50 & 0x40 → pass`], and their
 ///    `mat & 0x3f == 0` makes `Effect_Create` return before any effect, the decal included
-///    [M Effect_Create 0x1ce688: the `(HITDATA+0x50 & 0x3f) != 0` gate]. At least one such record
-///    exists and the render measure flags it — the sister check that the distance test can fail.
+///    [M Effect_Create 0x1ce688: the `(HITDATA+0x50 & 0x3f) != 0` gate]. The fan still stops on
+///    them (6 pass-face records measured [L]) — but under the game's convergence law
+///    [M Player_WeaponInitBullet 0x1a4bf0:154-164 — the aiming point snapped to what the
+///    crosshair ray hits, the round fired from the gun converging on it] every round's stop is
+///    aimed at a point ON drawn geometry, so the fan's 0x40 records hug the mesh: the
+///    pre-convergence fan (0e0cfdd01 [L]) measured 8 of 158 pass records off-surface (worst
+///    2.244, the x≈21.78 plane at y≈34.8); the converged fan measures all 6 in-band (worst
+///    0.200) — records moved onto the mesh, NEVER a hole off it (assertion 3 unchanged: 272
+///    decals, 0 mid-air, identical count both sides [L]). The sister check that the distance
+///    test can fail therefore probes the declared fudge plane itself: a point the collision
+///    query answers with the bare 0x40 face at (21.782, 34.802, 1.415) — 2.139 from the drawn
+///    mesh [L 0e0cfdd01] — must still measure > HOLE_ON_SURFACE_MAX, so a mesh that draws over
+///    the bare plane or a measure collapsed to always-0 names itself.
 /// 3. NO hole lies off the drawn mesh. The game puts a bullet hole exactly on the collision face the
 ///    round hit: node position = `HITDATA+0x40 + HITDATA+0x10 · 0.01` [M Effect_Bullet 0x1ce8a8,
 ///    the 0x3c23d70a scale], linked to the hit object when `HITDATA+0x54 == 0` (a door leaf moves
@@ -400,14 +411,15 @@ fn every_stairwell_impact_sits_on_drawn_geometry() {
     let render = RenderSurfaces::build(&scene);
     assert!(!rows.is_empty(), "the fan produced world impacts at all (the gun fired; [L])");
     assert!(decals.len() >= 200, "the fan left its holes (272 measured [L]); got {}", decals.len());
-    // (1) every NON-pass-face impact on drawn geometry; (2) the pass-face records set aside.
+    // (1) every NON-pass-face impact on drawn geometry; the pass-face records counted (they are
+    // invisible, not faults — see the doc's (2)).
     let mut worst: Option<(&ImpactRow, f32)> = None;
-    let mut pass_off_surface = 0usize;
+    let mut pass_rows = 0usize;
     for r in &rows {
         let d = render.dist(r.p);
         if r.mat & 0x40 != 0 || r.node_pass {
-            if d > HOLE_ON_SURFACE_MAX { pass_off_surface += 1; }
-            continue; // the fudge-plane records: expected off-surface, invisible (see the doc)
+            pass_rows += 1;
+            continue; // the fudge-plane records: invisible (no decal, `mat & 0x3f == 0`)
         }
         if worst.is_none_or(|(_, wd)| d > wd) {
             worst = Some((r, d));
@@ -419,10 +431,38 @@ fn every_stairwell_impact_sits_on_drawn_geometry() {
         "mid-air impact on a non-pass face: {} yaw {:+.2} pitch {:+.2} hole ({:.3},{:.3},{:.3})          mat {:#04x} node_pass {} is {:.3} from the nearest drawn triangle (max {HOLE_ON_SURFACE_MAX})",
         r.spot, r.yaw, r.pitch, r.p[0], r.p[1], r.p[2], r.mat, r.node_pass, d
     );
-    // (2) sister: the measure does flag an off-surface point (the 0x40 fudge records, 8 measured [L]).
+    // (2) the fan still exercises the pass faces, and the render measure CAN fail — probed on
+    // the DECLARED fudge plane [D map43#126, surface byte 0x40, x≈21.78], not on the fan's own
+    // shape: the game's convergence law [M 0x1a4bf0:154-164] aims every round at the point the
+    // crosshair ray hits — ON drawn geometry — so the fan's 0x40 stops hug the mesh (8
+    // off-surface pass records pre-convergence [L 0e0cfdd01], 6 in-band after) and the old
+    // fan-shaped sister premise died with it. The probe point answers the collision query with
+    // the bare 0x40 face and sits 2.139 from the drawn mesh [L 0e0cfdd01] — if the mesh ever
+    // draws over the bare plane, or the measure collapses to always-0, this names it.
+    assert!(pass_rows >= 1, "the fan no longer stops on a 0x40 pass face (6 measured [L]); got {pass_rows}");
+    let probe = [21.782_f32, 34.802, 1.415];
+    let (_t, _n, pmat, ppass) = scene
+        .sim
+        .as_ref()
+        .unwrap()
+        .data()
+        .world
+        .segment_surface_flags(
+            // the face's normal is (+1,0,0) [L the fan's rows] and the query culls back-faces —
+            // cast east→west, the shooter's side.
+            [probe[0] + 0.3, probe[1], probe[2]],
+            [probe[0] - 0.3, probe[1], probe[2]],
+            false,
+        )
+        .expect("the declared x≈21.78 fudge plane answers the probe segment [D map43#126]");
     assert!(
-        pass_off_surface >= 1,
-        "the fan's fudge-plane records sit off the drawn mesh and the render measure must flag them"
+        pmat & 0x40 != 0 || ppass,
+        "the probe point lost its fudge face: mat {pmat:#04x} node_pass {ppass}"
+    );
+    let pd = render.dist(probe);
+    assert!(
+        pd > HOLE_ON_SURFACE_MAX,
+        "the render measure can no longer flag an off-surface point: the declared fudge plane at {probe:?} measures {pd:.3} from the drawn mesh (2.139 [L 0e0cfdd01])"
     );
     // (3) no hole off the drawn mesh.
     let mid_air: Vec<([f32; 3], f32)> = decals

@@ -160,7 +160,9 @@ fn p2k_through_two_clips_keeps_every_shot_and_agrees() {
     for t in 0..ticks {
         let mut i = NEUTRAL;
         i.held = 0x02;
-        i.trigger = t % 12 < 2; // the pipeline's trigger lane (step_bond's arg)
+        // The taps stop with the second clip: the dry P2K hands over to the fists on the release
+        // [M Player_HandleHasNoAmmo 0x1a2ba8], and a punch is not this test's shot.
+        i.trigger = t % 12 < 2 && pipeline_fires.len() < rounds as usize; // the pipeline's trigger lane (step_bond's arg)
         i.fire = t % 12 < 2; // the gate's fire lane (`Input::fire`, the level)
         if desc_pending {
             i.shot = true;

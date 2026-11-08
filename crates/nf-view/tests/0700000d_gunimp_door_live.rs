@@ -388,8 +388,8 @@ fn probe_laser_kill_blast_state() {
     }
     eprintln!("[probe] shake {}", sim.drones.shake);
     let b = c5_b(&scene); let a = c5_a(&scene);
-    eprintln!("[probe] bigdoor02 kind {} blast_damage {} sphere {}", b.kind, b.blast_damage, b.sphere);
-    eprintln!("[probe] bigdoor01 kind {} blast_damage {} sphere {}", a.kind, a.blast_damage, a.sphere);
+    eprintln!("[probe] bigdoor02 kind {} blast_radius {} sphere {}", b.kind, b.blast_radius, b.sphere);
+    eprintln!("[probe] bigdoor01 kind {} blast_radius {} sphere {}", a.kind, a.blast_radius, a.sphere);
     {
         let img = nf_formats::iso9660::IsoImage::open(&iso().unwrap()).expect("iso");
         let (entries, bin) = nf_formats::disc::files_bin_entries(&img).unwrap();

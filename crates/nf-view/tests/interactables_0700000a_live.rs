@@ -848,8 +848,12 @@ fn hatch_load_point_refuses_then_loads_through_the_real_chain() {
             sim.hud.info_msgs.iter().map(|m| m.label).collect::<Vec<_>>(), sim.hud.info_labels);
     }
     // The chain, station by station: the keyboard first (silent), then the install.
-    teleport(&mut w, [-3.0, 1.2, 9.68]); // the corridor wedge in front of the keyboard nook (the keyboard test's stand)
-    let kb: [f32; 3] = [-1.54, 1.33, 8.48];
+    // In the security room, in front of the keyboard's screen (its collision faces face −z [D the
+    // entity glist 0x20005e1]); the use pick keeps it only from in front [M Intersect_PointGeom
+    // 0x1e92d8 via Collide_Intersect 0x1ebaa8; nf_game::usepick] — not through the corridor
+    // wall the old sphere-only pick reached it from.
+    teleport(&mut w, [-1.41, 1.09, 7.21]);
+    let kb: [f32; 3] = [-1.55, 1.5, 8.7];
     let fired = use_toward(&mut w, kb, &|sim| sim.drones.channels.on(0x3a), 12);
     assert!(fired, "the keyboard's E writes ch 0x3A [M SP_Activate 0x1dc338]");
     let mut mux49 = false;

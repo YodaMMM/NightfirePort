@@ -191,7 +191,12 @@ fn reload_from_empty_plays_the_1_35x_loop_and_lands_on_idle() {
     let atype = sim.weapons.ammo_type(2);
     sim.drones.inventory.carried[atype] = 0;
     aim_at(sim, [sim.bond.head()[0], sim.bond.head()[1] + 30.0, sim.bond.head()[2] + 5.0]);
-    for t in 0..160 { sim.step_bond(Default::default(), t % 4 == 0, false, false); }
+    // The trigger stays down on the empty clip: released, the dry gun would hand over to the best
+    // weapon left [M Player_HandleHasNoAmmo 0x1a2ba8 from the release arm of 0x1a5460].
+    for t in 0..260 {
+        let dry = sim.drones.inventory.clip[2] == 0;
+        sim.step_bond(Default::default(), t % 4 == 0 || dry, false, false);
+    }
     assert_eq!(sim.drones.inventory.clip[2], 0, "the clip is empty");
     assert_eq!(sim.gun.reload_state, 0, "no auto-reload without spare rounds [M Player_ReloadAmmoType(1) == 0]");
     // Pick up ammo through the real pickup path (a kind-1 ammo pickup, id 2).
@@ -201,8 +206,9 @@ fn reload_from_empty_plays_the_1_35x_loop_and_lands_on_idle() {
     sim.drones.pickups.push(p);
     // The take and the game's auto-reload (branch B: not newly pressed + clip < ammo_per_shot + spare
     // now > 0 [M 0x1a5460:442-462]) land on the SAME tick — the extra R press is a no-op then.
-    sim.step_bond(Default::default(), false, false, false);
+    sim.step_bond(Default::default(), true, false, false);
     assert!(sim.drones.inventory.carried[atype] > 0, "the ammo pickup was taken");
+    sim.step_bond(Default::default(), false, false, false);
     // The two starts differ in the loop's first frame: the auto-reload (branch B, trigger idle)
     // builds the +0xA4 list at frame 6 for flag-0x1000 weapons [M 0x1a5460:471-485, disasm
     // 0x1a62e4-0x1a631c]; the reload KEY (action 0xe, branch A) queues it from frame 0
@@ -406,9 +412,9 @@ fn thrown_grenade_flies_and_explodes_with_sound_and_damage() {
         phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — the 0x3b family carries 100]
         defused: false,
-        
+        born: 0,
         loop_handle: 0,
-});
+        });
         let mut hurt = false;
         for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); if sim.drones.list[gi2].health < hp0 { hurt = true; break; } }
         assert!(!hurt, "the stun grenade (0x35) flash branch deals no damage [M 0x12d890]");

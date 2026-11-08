@@ -97,7 +97,10 @@ fn drops_and_boxes_take_through_the_real_path_with_the_game_numbers() {
     assert_eq!(scene.sim.as_ref().unwrap().drones.pickups[boxes[0]].sound, Some(0xf5), "this level's placement sound is already 0xF5 [D the census]; the forced-sound regression lives in the rocket test (a 0x13F placement)");
 
     let mut dev = dev;
-    let sounds_before = scene.sim.as_ref().unwrap().drones.sounds.len();
+    // No `skip(sounds_before)` here: the per-tick hearing list `drones.sounds` is DRAINED every
+    // tick (the rocket take's own comment below), so a take spread over ticks re-fills the list
+    // from index 0 and the skip walks past the new sound (measured: len 1 before, 1 after). The
+    // guards' anim sounds are scoped out by the position band instead.
     let t1 = take_pickup(&mut scene, boxes[0], Some(&mut dev)).expect("the first box is taken");
     {
         let sim = scene.sim.as_ref().unwrap();
@@ -109,7 +112,7 @@ fn drops_and_boxes_take_through_the_real_path_with_the_game_numbers() {
         // The take sound (this box's placement is 0xF5; the forced-value regression is the rocket test):
         // scoped to the box's position — the guards' own anim sounds share the id space.
         let at = at_of_index(&scene, boxes[0]);
-        assert!(sim.drones.sounds.iter().skip(sounds_before).any(|s| s.id == 0xf5 && (s.pos[0] - at[0]).abs() < 0.5 && (s.pos[2] - at[2]).abs() < 0.5), "the take plays 0xF5 at the box: {:?}", sim.drones.sounds.iter().skip(sounds_before).map(|s| (s.id, s.pos)).collect::<Vec<_>>());
+        assert!(sim.drones.sounds.iter().any(|s| s.id == 0xf5 && (s.pos[0] - at[0]).abs() < 0.5 && (s.pos[2] - at[2]).abs() < 0.5), "the take plays 0xF5 at the box: {:?}", sim.drones.sounds.iter().map(|s| (s.id, s.pos)).collect::<Vec<_>>());
         // The message names the RAW id's ammo type (a game quirk [M 0x18e650 case 1]) with the
         // taken count — the same string `lang.format(0x200000E, [rounds, raw-type name])` builds.
         let sim = scene.sim.as_ref().unwrap();

@@ -210,8 +210,14 @@ fn the_escort_holds_at_the_ally_wait_node_until_the_ambush_clears() {
         }
     }
     // The AND mux (trigger #10: inputs [0x11,0x12,0x13] → out 0x99) updates in the triggers'
-    // pass — give the sim a few ticks after the last death before reading its output.
-    w.wait(5);
+    // pass. A guard's death channel rises when its death anim ends (Death_Anim 0x1637f8 raises
+    // +0x13C at the anim's end; the 90-tick timer is 07000002's only [M 0x1637f8:55-61]), so the
+    // read waits out the last kill's fall: join-reds-a measured the last kill (#11, ch 0x12) at
+    // 237 ticks in danim 211 after the shoot loop returned.
+    for _ in 0..600 {
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x99) { break; }
+        w.wait(1);
+    }
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x99),
         "the ambush guards died but ch 0x99 never rose (the AND mux)");
 
