@@ -2091,6 +2091,25 @@ fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
 
     // 6. Place it on the rack wall with the real fire: aim the eye-ray at the wall face in front
     // of Bond, hold fire until the gadget leaves the gun, then wait out the stick.
+    //
+    // The guards that follow Bond into the armoury throw frags at him. A frag blast that reaches
+    // the placed round sets it off (`Explode_Propagate` 0x17c518 case 5 → 0x12cd98: the 0x3a
+    // passes the id gate and the record gate, reach = the falloff > 0.0002, no line-of-sight
+    // test [M]); on this route a frag landing in the pit 6.4 u away does exactly that. A player
+    // whose bomb went off places the next one — the gun still holds more [spare 4 after
+    // the first throw, this run] — so the placement and the first retreat leg repeat until a
+    // bomb survives it.
+    let mut attempt = 0u32;
+    let mut first_aim_y: Option<f32> = None;
+    let (gi, bomb_pos, bomb_n) = loop {
+    attempt += 1;
+    if attempt > 1 {
+        let ok = w.try_walk_to(Wp::new(-33.73, 1.20, 35.81).r(0.4), "back to the rack-front node");
+        eprintln!("[014-trip] re-place {attempt}: back to the rack-front node ok {ok} bond {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+        for _ in 0..60 {
+            w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false);
+        }
+    }
     let (wall_hit, wall_n) = {
         let sim = w.scene.sim.as_ref().unwrap();
         let b = &sim.bond;
@@ -2103,7 +2122,10 @@ fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
     // sits above the under-shelf band (open y 0.9..2.2 [L the lane-entry probe]) and every 12+
     // u shot line from the catwalk is shadowed by the slab — a bomb at ≈1.7 keeps the P2K's
     // line under the slab (the catwalk eye 2.15 → 1.7 descends through the open band).
-    let aim = [wall_hit[0], (wall_hit[1] - 0.8).max(1.2), wall_hit[2]];
+    // A re-place reuses the first throw's aim height (the walk back can leave the eye a little
+    // higher, and the bomb must still sit under the slab).
+    let aim_y = *first_aim_y.get_or_insert((wall_hit[1] - 0.8).max(1.2));
+    let aim = [wall_hit[0], aim_y, wall_hit[2]];
     // Hold fire only until the gadget leaves the gun — Bond is 0.9 u from the wall, well inside
     // the future beam line, so the retreat must start the moment it sticks (the arm is 120
     // stuck ticks [M 0x12ce80:330]).
@@ -2138,6 +2160,16 @@ fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
         let ok = w.try_walk_to(wp, label);
         eprintln!("[014-trip] retreat {label}: ok {ok} bond {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
     }
+    if trip_stuck_index(w.scene.sim.as_ref().unwrap()).is_some() { break (gi, bomb_pos, bomb_n); }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[014-trip] attempt {attempt}: the placed bomb went off during the first leg; blasts {:?}; tripbombs left {}",
+            sim.drones.explosions, sim.gun.spare + sim.gun.clip);
+        assert!(attempt < 4, "three placed tripbombs went off before the retreat");
+        assert!(sim.gun.weapon == TRIP && sim.gun.spare + sim.gun.clip > 0, "a tripbomb is left to place again");
+    }
+    };
+    let _ = gi;
     // The under-slab crouch crawl west (the approach's crawl reversed; one press crouches,
     // one press stands [M Player_SSCrouch 0x1924c0:84-105]).
     {
