@@ -1342,6 +1342,15 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // [M Drone_ModBulletDamage 0x139f50]); keep the walk's Agent stand-off (6.5) here too.
         let prev_back_off = w.dmg.back_off;
         w.dmg.back_off = Some(6.5);
+        // The game's body push (guard-standing-capsule: every near bot's standing capsule
+        // [M NDrone2_Collision 0x140e90:91-121] pushes a grounded Bond on every contact tick
+        // [M Collide_Jointy 0x1ec180:229-281]) moves Bond's fight positions here — and the
+        // pocket guards' flank offsets then drew Bond into the stairwell mouth, where a wedge
+        // sidestep carried him down onto the contact's plate (the exit fired mid-fight). The
+        // block's own pocket rule below (a guard west of x −27 is shot from where Bond stands)
+        // now bounds the flank too: no approach into the mouth, the exit stays for the plate legs.
+        let prev_flank_hold = w.flank_hold_x;
+        w.flank_hold_x = Some(-27.0);
         for sweep in 0..3 {
             let near: Vec<usize> = {
                 let sim = w.scene.sim.as_ref().unwrap();
@@ -1370,6 +1379,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             let _ = sweep;
         }
         w.dmg.back_off = prev_back_off;
+        w.flank_hold_x = prev_flank_hold;
     }
     // The player route descends the stairwell from the west hall's corner (the AI's own path
     // climbs over the top floor — the sister proved the descent through this anchor).
