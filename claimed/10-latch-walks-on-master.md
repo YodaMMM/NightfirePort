@@ -8,3 +8,6 @@ Branch `s/latch-on-master` is current master plus the drone contact-turn rule (D
 For each, find where the run departs from master (log Bond and the nearest guards per tick on both), decide whether the contact rule is applied wrong in the port (compare with the decompile, including which drones latch and when the latch clears) or whether the walk lost its margin, and fix the port or re-route the walk as a player would. Never lower damage or health, never loosen pinned game values, no new ignores.
 
 Branch from origin/s/latch-on-master, push to `s/latch-walks-on-master`, report in docs/reports/latch-walks-on-master.md. Run each touched binary alone, plus walkreal_07000001, 07000007, 07000009, 07000011, 07000008. No draw changes.
+
+---
+claimed-by: sandbox3 at 2026-11-08T20:45Z
