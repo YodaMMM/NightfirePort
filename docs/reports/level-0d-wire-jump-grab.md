@@ -107,3 +107,13 @@ after it.
 
 not visible to me — this environment shows no token, credit or context-window figures for
 the session; nothing to copy.
+
+## ntfy failed
+
+All three fallbacks failed or stayed unconfirmed from this sandbox: `curl -sS -m 20` →
+`curl: (28) Connection timed out after 20002 milliseconds`; the python3 urllib fallback →
+`urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`; the wget
+fallback → the first `wget -q -O-` run returned rc 0 with no output, but a follow-up
+without `-q` shows the TLS connect to ntfy.sh (159.203.148.75:443) stalling past 20 s —
+the delivery could not be confirmed. The finish.sh step itself reported "OK done
+10-level-0d-wire-jump-grab".
