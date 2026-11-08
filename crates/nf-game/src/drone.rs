@@ -14137,6 +14137,28 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         tris.iter().filter_map(|t| crate::world::ray_tri_t(la, ld, t)).min_by(f32::total_cmp)
     }
 
+    /// The aim ray's refine on one picked object: `Intersect_RayGeom` 0x10a8c8 keeps the NEAREST
+    /// front-facing triangle of the posed glist, and `Collide_Intersect` 0x1ebaa8 then drops the
+    /// whole hit on that triangle's byte or the object's 0x40 word (`world::aim_drops`). A
+    /// glass leaf in front of a wooden one hides the wood from the snap, as in the game.
+    fn aim_posed_mesh_t(m: &nf_formats::anim::Mat4, tris: &[[V3; 3]], mats: Option<&[u8]>, node_pass: bool, glass: bool, a: V3, b: V3) -> Option<f32> {
+        let dot = |x: V3, y: V3| x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+        let row = |k: usize| [m[k][0], m[k][1], m[k][2]];
+        let (r0, r1, r2) = (row(0), row(1), row(2));
+        let (s0, s1, s2) = (dot(r0, r0).max(1e-9), dot(r1, r1).max(1e-9), dot(r2, r2).max(1e-9));
+        let local = |p: V3| {
+            let w = [p[0] - m[3][0], p[1] - m[3][1], p[2] - m[3][2]];
+            [dot(w, r0) / s0, dot(w, r1) / s1, dot(w, r2) / s2]
+        };
+        let (la, lb) = (local(a), local(b));
+        let ld = [lb[0] - la[0], lb[1] - la[1], lb[2] - la[2]];
+        let (tt, k) = tris.iter().enumerate()
+            .filter_map(|(k, t)| crate::world::ray_tri_t(la, ld, t).map(|tt| (tt, k)))
+            .min_by(|x, y| x.0.total_cmp(&y.0))?;
+        let mat = mats.and_then(|ms| ms.get(k)).copied().unwrap_or(0);
+        (!crate::world::aim_drops(node_pass, mat, glass)).then_some(tt)
+    }
+
     /// The t where the segment first enters the world AABB (the slab test), or None.
     fn segment_aabb_entry_t(from: V3, to: V3, lo: V3, hi: V3) -> Option<f32> {
         let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
@@ -14185,8 +14207,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// built-sphere broad phase per object (obj+0x80..0x8c [M Control_BuildWorldSph 0x133070])
     /// and `Collide_Intersect` 0x1ebaa8's type-0x201 arm (the segment vs the object's own glist
     /// triangles, first hit wins [M 0x1ec690's `param_9 & 0x10` stop]). The port's object
-    /// candidates: the loaded scripts' stream entities gated on the game's chain membership
-    /// (find_cel — the game's pick covers its linked objects, the per-cel chains + ForcedList), the drones (the hit boxes, the port's
+    /// candidates: the loaded scripts' stream entities (NOT gated on cel-chain membership: the game's
+    /// pick covers only the straddle cels' chains + ForcedList, the port tests every entity), the drones (the hit boxes, the port's
     /// guard geometry [M AnimGetCollData]), and the solar panels (kept: their exact
     /// world.shape triangles under the same sphere gate — the panel-only triangle stage).
     pub fn aim_snap(&self, d: &Data, from: V3, to: V3, glass: bool) -> V3 {
@@ -14226,7 +14248,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // [M 0x1ec690's `param_9 & 0x10` stop — the aim passes refine type 0, disasm
         // 0x1a4d78, so no early stop]. Candidates: the game's pick covers its LINKED objects —
         // the straddle cels' cel+8 chains plus ForcedList [M 0x1eb8e8-0x1eb93c / 0x1eba38-0x1eba5c];
-        // the port models chain membership with find_cel (the gate inside the loop). An object
+        // the port does NOT model chain membership yet (no gate inside the loop). An object
         // whose glist has no parsed triangles never enters the 0x201 hit chain — the sphere alone
         // does not stop the ray [L the 0700001b breakpoints: no hit entry without a triangle
         // touch]. The posing is the ENTITY's own matrix (obj+0x90); the 0x1eae80 flag-word gate
@@ -14265,14 +14287,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // old & 0x30008000 [M Control_SetGList 0x134960:13] = world.glist_flags for
                 // level objects. The per-cel walk's PRE-FILTER is f0 & 0x30000000 [M Collide_Pick
                 // disasm 0x1eb910: lui s1,0x3000] — NOT 0x3000. Type 0x201 != 0x100 also demands
-                // obj+0xfa & 8 (the AnimObject-sphere bit — Script_EntityStart sets 0xe4
-                // [M 0x1d8d78:109], so every script entity passes) or a glist with a collision
+                // obj+0xfa & 8 (the AnimObject-sphere bit — Script_EntityStart ORs 0xe4, which
+                // lacks bit 8 [M 0x1d8d78:109], so a script entity needs the collision glist) or a glist with a collision
                 // block (glist+8 != 0 [M parsemap_block_Coll_Data_New 0x1d1810:23-40]) — the
                 // shape() requirement below is that gate. [L the 0700001b audits]: the whole
                 // panel f0 0x81 (kept), the pieces 0xc1 (skipped); the disc words match both
                 // (nf-formats' glist_flags_probe).
+                // The cel walk's own `f0 & 0x30000000` test [M Collide_Pick 0x1eb320, disasm
+                // 0x1eb910] only defers the straddlers and the forced objects to the ForcedList
+                // walk (build_LinkToRoom 0x1c9680:62-65 and Controls_StraddleTest 0x134778 add them
+                // with 0x10000000), which picks them [M 0x1eba38-0x1eba5c]: it never removes an
+                // object from the pick, and no disc word carries 0x10000000 alone
+                // (aim_pick_words_probe). Only the PickObj mask gates here.
                 let f0 = d.world.glist_flags(*hash).unwrap_or(0);
-                if f0 & 0x60 != 0 || f0 & 0x30000000 != 0 { continue; }
+                if f0 & 0x60 != 0 { continue; }
                 // The wire entities ride their GFX-bounds frame end to end (the flight's contact
                 // note below): the posed COLLISION glist measured ~0.1-0.3 u behind the room's
                 // stat wall face on 07000014 [L the flight-stop trace vs the aim-stage probe],
@@ -14312,7 +14340,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
                 if !Self::segment_hits_sphere(from, to, *c, *r) { continue; }
                 let Some(tris) = d.world.shape(*hash) else { continue };
-                if let Some(tt) = Self::segment_posed_mesh_t(m, tris, from, to) {
+                if let Some(tt) = Self::aim_posed_mesh_t(m, tris, d.world.shape_materials(*hash), f0 & 0x40 != 0, glass, from, to) {
                     if tt > 1e-4 && tt <= 1.0 && tt < t {
                         t = tt;
                         if let Some(v) = trace.as_mut() { v.push(SnapHit { stage: "object", id: *hash, pi: *pi as u32, t: tt }); }
@@ -14327,21 +14355,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // broad phase (live_sph) then the leaf's own collision triangles at the posed matrix.
         for dr in &self.doors.list {
             if dr.glist == 0 { continue; }
-            let f0 = d.world.glist_flags(dr.glist).unwrap_or(0);
-            // The same PickObj mask (0x60 on the 0x20a/0x208 flags word) and the per-cel walk's
-            // pre-filter f0 & 0x30000000 [M Collide_Pick disasm 0x1eb910: lui s1,0x3000].
-            if f0 & 0x60 != 0 || f0 & 0x30000000 != 0 { continue; }
+            // The same PickObj mask (0x60 on the 0x20a/0x208 flags word) on the door's own
+            // obj+0xF0 (the glist word, `Door::f0`); the cel walk's 0x30000000 test removes
+            // nothing (see the object stage).
+            let f0 = dr.f0;
+            if f0 & 0x60 != 0 { continue; }
             let (c, r) = dr.live_sph();
             if !Self::segment_hits_sphere(from, to, c, r) { continue; }
             let Some(tris) = d.world.shape(dr.glist) else { continue };
-            if let Some(tt) = Self::segment_posed_mesh_t(&dr.matrix, tris, from, to) {
+            if let Some(tt) = Self::aim_posed_mesh_t(&dr.matrix, tris, d.world.shape_materials(dr.glist), f0 & 0x40 != 0, glass, from, to) {
                 if tt > 1e-4 && tt <= 1.0 && tt < t {
                     t = tt;
                     if let Some(v) = trace.as_mut() { v.push(SnapHit { stage: "door", id: dr.glist, pi: u32::MAX, t: tt }); }
                 }
             }
         }
-        // The SCRIPT ENTITIES are NOT in the ray's object set: the live-proven lines say the
+        // (Historical note, superseded by the object stage above, which does test the script
+        // entities through the PickObj mask and the posed collision glist.) Earlier reading: the
         // game's snap ray passes them — the 08 straight rocket's line crosses the shutters' wood
         // band and the round still pierces the pane [L], and the 1b walkway beam clears the
         // panels whose r 4.77 spheres swallow the line [L the breakpoints: no hit entry without
@@ -16129,12 +16159,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // THE OBJECT-HIT PASS ARM [M Bullet_CollisionHandler 0x12ce80 disasm
                 // 0x12cf58-0x12cf5c]: an object hit (HITDATA+0x58 != 0) passes when
                 // obj+0xF0 & 0x60 != 0 — obj+0xF0 = the glist record's +0x44 word | the create
-                // param [M Control_CreateObjEx 0x1343c8:36], the placement's own flag word. The
-                // AIM ray's pick does NOT apply this gate (the same object's glist takes the aim
-                // snap [L the 07000008 breakpoint run: the ray hit the shutter object at
-                // (139.562, 50.792, -96.706)]) — the pass is the flight's alone, and the live
-                // rocket's hit chain lists the shutter object on the crossing step while the
-                // round passes to the -100 back wall.
+                // param [M Control_CreateObjEx 0x1343c8:36]; a door has no create param, so the
+                // word is the glist's (`Door::f0`). No disc door carries 0x60
+                // (door_object_pass_word_live: 0 of 443), so this arm never fires on a shipped
+                // door; it stays as the game's rule. The 08 shutters do NOT pass on it: the aim
+                // pick applies the same 0x60 mask, the wooden leaves take the snap, and a round
+                // that crosses the glass leaf (DOOR_Shutter_2, every byte 0x10) passes on the
+                // glass rule above (no 0x800 in the rocket record's +0x6C), not on this word.
                 if let HitHost::Object(id, _) = host {
                     // The dynamic part ids: bit 40 + the door list index (drone.rs's set_dynamic
                     // parts), bit 41 the SS parts, bit 42 the breakable panes.
@@ -22216,6 +22247,24 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The aim refine keeps the object's NEAREST front-facing triangle and drops the whole hit on
+    /// its byte [M Intersect_RayGeom 0x10a8c8; Collide_Intersect 0x1ebaa8 disasm 0x1ebf78-0x1ec000]:
+    /// a glass leaf (0x10) in front of wood (0x03) hides the wood under the 0x20a ray, stops a
+    /// 0x208 ray, and a 0x80 byte drops the hit under either (the delay-slot `movn` at 0x1ebf94).
+    #[test]
+    fn aim_refine_drops_the_object_on_its_nearest_triangle() {
+        let id: nf_formats::anim::Mat4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+        let tri = |z: f32| [[0.0, 0.0, z], [1.0, 0.0, z], [0.0, 1.0, z]];
+        let tris = [tri(-1.0), tri(-2.0)];
+        let (a, b) = ([0.2, 0.2, 0.0], [0.2, 0.2, -5.0]);
+        let t = |mats: [u8; 2], glass: bool| Drones::aim_posed_mesh_t(&id, &tris, Some(&mats), false, glass, a, b);
+        assert_eq!(t([0x10, 0x03], true), None, "the pane hides the wood behind it on the 0x20a ray");
+        assert_eq!(t([0x10, 0x03], false), Some(0.2), "the 0x208 ray stops on the pane");
+        assert_eq!(t([0x03, 0x10], true), Some(0.2), "wood in front stops the ray");
+        assert_eq!(t([0x83, 0x03], false), None, "a 0x80 byte drops the hit");
+        assert_eq!(Drones::aim_posed_mesh_t(&id, &tris, Some(&[0x03, 0x03]), true, true, a, b), None, "the 0x40 word drops it");
+    }
     use crate::world::CollisionWorld;
 
     /// `DroneVision_SeekOpponentLOS` 0x175cb8:49-72's cursor over the seven view bones [M]. Only

@@ -351,10 +351,10 @@ impl Geo {
     /// Whether a hit on triangle `k` carries the game's bullet-pass bit (`HITDATA+0x51` bit 1):
     /// the node's glist flags bit 0x40 OR the surface byte's bit 0x40 — `Collide_Intersect`
     /// 0x1ebaa8 sets the flag from either (the node word at :143-145, the surface byte at
-    /// disasm 0x1ebf78-0x1ebf80, no query-flag gate on either). The surface byte's bit 0x80 does
-    /// NOT set it for the bullet queries: that OR is guarded by HITTEST+0x98 bit 0x1
-    /// (disasm 0x1ebf8c-0x1ebf94), which the 0x20a/0x208 bullet flags clear — their 50/50 stays
-    /// in the walk's roll (`Collide_Update` 0x1ea398:217-220, `Bullet_CollisionHandler` 0x12cfd0).
+    /// disasm 0x1ebf78-0x1ebf80, no query-flag gate on either). The surface byte's bit 0x80 sets
+    /// it too: its `movn` at 0x1ebf94 sits in the delay slot of the bit-0x1 `beqz` at 0x1ebf90, so
+    /// it runs on every query. This helper leaves 0x80 out; the aim ray applies it (`aim_drops`),
+    /// and the other bit-0x8 callers of this helper are not re-checked against that yet.
     /// fix-foliage-bullets.
     fn bullet_pass(&self, k: usize) -> bool { self.pass[k] || self.mats[k] & 0x40 != 0 }
 
@@ -962,6 +962,16 @@ fn seg_tri_hit(from: V3, to: V3, t: &[V3; 3]) -> bool {
 /// test [M Intersect_RayGeom 0x10a8c8:168: `n·dir >= 0` skips the triangle]) — the same arithmetic
 /// `segment_in_sets_drop_pass` inlines, as a shared body so the scoped and flat bullet walks agree
 /// term for term.
+/// Whether the aim ray (`Collide_RayIntersect` 0x1ec690 with HITTEST+0x98 = 0x20a, or 0x208 for a
+/// record with +0x6C & 0x800) drops a node hit whose nearest triangle carries surface byte `mat`
+/// [M Collide_Intersect 0x1ebaa8 disasm 0x1ebf78-0x1ec000]: glass (byte & 0x3f == 0x10) under
+/// bit 0x2, and the pass bit under bit 0x8 — the node word's 0x40 (`node_pass`), the byte's 0x40,
+/// and the byte's 0x80 (its `movn` at 0x1ebf94 sits in the delay slot of the bit-0x1 branch, so
+/// it always runs).
+pub(crate) fn aim_drops(node_pass: bool, mat: u8, glass: bool) -> bool {
+    node_pass || mat & 0xc0 != 0 || glass && mat & 0x3f == 0x10
+}
+
 pub(crate) fn ray_tri_t(from: V3, d: V3, t: &[V3; 3]) -> Option<f32> {
     let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
     if dot(cross(e1, e2), d) >= 0.0 { return None; } // back face [M 0x10a8c8:168]
@@ -1050,9 +1060,8 @@ impl CollisionWorld {
             // 0x1eb320's cel walk) only ever sees CEL geometry — placements whose flags word
             // carries 0x8000 got the runtime cel [M parsemap_block_map_data_static 0x1d1998:92].
             // The doors (kind 0xdb) and the breakable windows carry NO 0x8000 — they never had a
-            // static cel, so the aim ray passes them (the live-proven 08 straight rocket: its
-            // line's x at the shutters is INSIDE the wood band, yet the game's round pierces the
-            // pane — the snap ray never saw the shutters). The port's stat fold includes them
+            // static cel, so the level walk never sees them (the doors join the pick as cel-linked
+            // OBJECTS instead: `Drones::aim_snap`'s door stage). The port's stat fold includes them
             // (the flight's door stops ride it), so the aim query needs the per-instance flag.
             stat_aim_pick.push(inst.placement.flags & 0x8000 != 0);
             stat.push_kept(c.triangles_with_material().into_iter().map(|(t, m)| (t.map(|p| transform(&inst.matrix, p)), m)), node_pass);
@@ -1503,24 +1512,28 @@ impl CollisionWorld {
         if !in_range { return self.flight_scoped_impl(Some(cell), from, to, glass); }
         let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to)) else { return self.flight_scoped_impl(Some(cell), from, to, glass) };
         let d = sub(to, from);
-        let mut best = None::<f32>;
         let stat = &self.stat;
+        // Per NODE (the pushed instance), not per triangle: `Collide_Intersect` 0x1ebaa8 refines a
+        // picked node with `Intersect_RayGeom` 0x10a8c8, which keeps only the node's NEAREST
+        // front-facing triangle — the per-triangle `Collide_Filter` runs only on HITTEST+0x9a & 0x10,
+        // and the ray query stores only +0x94 and +0x98 [M disasm 0x1ec738/0x1ec750] — and then
+        // drops the whole node hit on that triangle's byte (`aim_drops`). A glass or pass triangle
+        // in front of a solid one of the same node hides the solid one from the snap.
+        let mut nodes: HashMap<u64, (f32, usize)> = HashMap::new();
         for r in &runs {
             // the run's owner instance (post-chunk index -> the pushed instance ordinal)
-            if stat.owners.get(*r as usize).and_then(|si| self.aim_pick.get(*si as usize)).is_some_and(|p| !*p) { continue; }
+            let owner = stat.owners.get(*r as usize).copied();
+            if owner.and_then(|si| self.aim_pick.get(si as usize)).is_some_and(|p| !*p) { continue; }
+            let key = owner.map_or(1u64 << 40 | *r as u64, u64::from);
             let o = &stat.objects[*r as usize];
             for k in o.tris.clone() {
-                if stat.bullet_pass(k) { continue; }
-                if glass && stat.mats[k] & 0x3f == 0x10 { continue; }
-                let t = &stat.tris[k];
-                if let Some(tt) = ray_tri_t(from, d, t) {
-                    if best.is_none_or(|b| tt < b) {
-                        best = Some(tt);
-                    }
+                if let Some(tt) = ray_tri_t(from, d, &stat.tris[k]) {
+                    let e = nodes.entry(key).or_insert((tt, k));
+                    if tt < e.0 { *e = (tt, k); }
                 }
             }
         }
-        best
+        nodes.into_values().filter(|&(_, k)| !aim_drops(stat.pass[k], stat.mats[k], glass)).map(|(t, _)| t).min_by(f32::total_cmp)
     }
 
     /// The flat twin of [`CollisionWorld::segment_flight_scoped`] (no cel scope).
