@@ -210,10 +210,8 @@ together on the protected classes, the observable rule stays "team 1 → 2/4, te
 
 ## 5. Port cross-check (report only — nothing fixed)
 
-- `crates/nf-game/src/ally.rs:52-69` `on_init_death`: team 1 maps prop54 → 2 **regardless of killer** and prop53 → 4;
-  the decompile's prop54+player-kill arm re-checks prop53 (no fail when unset) and prop53+drone-killer → 2. Team 2/3:
-  the port's prop54 → drone?1:3 and prop53 → 3; the decompile's prop53+drone-killer → 1 and prop54+player-kill →
-  (prop53 ? 3 : nothing). Corner-case-only mismatches while the props co-occur; ally.rs:56-57/63-66.
+- `ally.rs::on_init_death`: this section once read bVar7 as a drone killer. Class 3 is the player [M `Player_Init`
+  0x1910f8:76], so a non-player kill is the arm that re-checks prop 0x53. Fixed; see `docs/systems/actors.md` §3.
 - `crates/nf-game/src/ally.rs:104` says AllyGoToGoalPosition returns to "+0x5A6"; the decompile reads `Drone+0x5A2`
   (0x15f938:28/58). ally.rs:85 says the MissionWait channel is "obj+0x12C"; the decompile reads `Drone+0x12C`
   (0x15efc8:17).
