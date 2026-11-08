@@ -70,6 +70,17 @@ zone plus the whole scene run **paced at 1/60 s per tick** (the app's per-frame 
   on screen mid-gesture — if the port's anim object is missing its pose is a draw-side symptom;
   the task is sound-only, so this is context, not a fix target.
 
+## ntfy failed
+
+All three fallbacks, in order, with their output:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-02-bath-line: blocked …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "… urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'level-02-bath-line: blocked - …'))"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "level-02-bath-line: blocked - …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output, killed after 30 s (hang; no exit status)
+
 ## Usage
 
 Token, credit and context-window figures: `not visible to me` (this session exposes no token,
