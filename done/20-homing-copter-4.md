@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-11-08T05:40Z
+
+---
+## Report (done, 2026-11-08T06:36Z)
+
+Closed by the driver: the report is on `s/homing-copter-4` (docs/reports/homing-copter-4.md); the worker didn't run finish.sh.
