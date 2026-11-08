@@ -1491,6 +1491,8 @@ pub struct Drone {
     /// that sound has finished (set before each update), `SpeechSFX` requests of this update (line, force), and the
     /// patrol-talk cooldown (global `0x298FC4`, lent by `Drones::tick`).
     pub voice_type: u16,
+    /// `Drone+0x1B`: impact messages do nothing (see `handle`).
+    pub no_impact: bool,
     /// `+0x15`: a female voice (the default pain / death lines).
     pub female: bool,
     pub voice: Option<(u32, u32)>,
@@ -2095,6 +2097,8 @@ impl Drone {
             // captain ×`DroneCaptain_Mod_Health` follows in `captain_setup` ([L] ee_02b.bin: type-2
             // guards 12, their captains 24).
             health: stats.health as f32, max_health: stats.health as f32, damage_taken: 1.0, damageable: !matches!(skin, 0x0500_003b | 0x0500_003c | 0x0500_0053), kind: setup.kind,
+            // `Drone+0x1B`: skin 0x05000053 [M 0x14b300:207-208], and voice 0x13 on 0x07000016 [M :699-700].
+            no_impact: skin == 0x0500_0053 || (voice_type(skin) == 0x13 && d.level == 0x0700_0016),
             last_damage: 0.0, silent_kill: false, big_hit: false, flinch_at: None, hit: None, impact_resume: 0, hits_taken: 0, attack_entry_talks: 0,
             blast: None,
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
@@ -4130,11 +4134,8 @@ impl Drone {
         if self.voice_busy() || self.health <= 0.0 { return false; }
         if frame < self.last_voice + 180 && rng.rand(5) == 0 { return false; }
         let idx = match self.voice_type {
-            // `+0x108 & 1` (the state-machine info's first word, the alternate set) has no port
-            // reader yet — the base set 0x133 stands in [*suggested*, speech.md §2.1; the alternate
-            // 0x138 arm stays out of pass/fail until the bit has a port source].
             5..=7 if matches!(d.level, 0x0700_0014 | 0x0700_0015 | 0x0700_0016) => {
-                0x133 + rng.rand(5) as usize
+                rng.rand(5) as usize + if self.alt_voice() { 0x138 } else { 0x133 }
             }
             0x10 => 0xec + rng.rand(7) as usize,
             _ => return false,
@@ -4150,14 +4151,19 @@ impl Drone {
         if self.current_line() != Some(Self::line_sfx(d, idx)) { self.talks.push((idx, true)); }
     }
 
+    /// `+0x108 & 1`: the state-machine id's parity picks the second voice of the 14-16 sets
+    /// [M 0x13eac0, 0x13ed38, 0x13f1d0]. The id is `++DAT_00299090` [M 0x175838:11-13], 1-based
+    /// against the port's `sm_id`; a spawned drone's value is the port's index [S].
+    fn alt_voice(&self) -> bool { (self.sm_id + 1) & 1 != 0 }
+
     /// `NDrone2_AttackTalk` (0x13eac0) for the single-player voice sets: type 2 picks 0x37 + Rand(9)
     /// then speaks 1 in 3; type 1 0x33 + Rand(4) at 1 in 2 (0xA3 + Rand(8) always on 0x11 / 0x0B / 0x13); type 3 0xAC +
     /// Rand(7). The level-gated sets [M 0x13eac0:73-96]: type 5/6 on the powerhouse pair {0x0700000c,
     /// 0x0700000d} (`+ 0xf8fffff4 < 2` unsigned) speak 0xd3 + Rand(3) only inside the 3–4 s post-LOS
     /// window (`FRAME_RATE_INT*3 < +0x274 < FRAME_RATE_INT*4`, 60 Hz → 180 < unseen_ticks < 240, both
     /// strict — outside it the arm draws nothing); type 7 on the evil-base trio {0x14, 0x15, 0x16}
-    /// speaks 0x11b + Rand(7) (one Rand(7) feeds either base — the `+0x108 & 1` alternate 0x122 set
-    /// stays unported: no port reader for that bit, the hit_talk_extra precedent); type 0x11 on the
+    /// speaks 0x11b + Rand(7), or 0x122 + Rand(7) on the `+0x108 & 1` second voice (`alt_voice`);
+    /// type 0x11 on the
     /// party level 0x07000007 speaks 0x93 + Rand(2) at 1 in 3. A gate that fails leaves the case with
     /// iVar3 == 0 and the tail returns without a draw [M 0x13eac0:98-100].
     fn attack_talk(&mut self, level: u32, rng: &mut Rng) {
@@ -4180,9 +4186,9 @@ impl Drone {
             // zeroes it]: `FRAME_RATE_INT*3 < +0x274 < FRAME_RATE_INT*4`, both strict.
             5 | 6 if matches!(level, 0x0700_000c | 0x0700_000d) && self.unseen_ticks > 180 && self.unseen_ticks < 240
                 => (0, 0xd3 + rng.rand(3) as usize),
-            // case 7 [M 0x13eac0:82-90]: the evil-base trio. One Rand(7) feeds either base; the
-            // `+0x108 & 1` alternate 0x122 base needs the game's serial, which `sm_id` is not.
-            7 if matches!(level, 0x0700_0014 | 0x0700_0015 | 0x0700_0016) => (0, 0x11b + rng.rand(7) as usize),
+            // case 7 [M 0x13eac0:82-90]: the evil-base trio. One Rand(7) feeds either base: 0x11b,
+            // or 0x122 on the `+0x108 & 1` second voice (`alt_voice`).
+            7 if matches!(level, 0x0700_0014..=0x0700_0016) => (0, rng.rand(7) as usize + if self.alt_voice() { 0x122 } else { 0x11b }),
             // A failing gate leaves iVar3 == 0 and the tail returns without a draw [M 0x13eac0:98-100].
             _ => return,
         };
@@ -4190,7 +4196,9 @@ impl Drone {
     }
 
     /// `NDrone2_SeenPlayerTalk` (0x13f1d0): 1 in 3, then the level's set (05–08: type 2 0x49 + Rand(6), else 0x21;
-    /// 09 / 0A: 0xC3 + Rand(9); 0x12 / 0x4A: 0xAC + Rand(7); 0x14–0x16 *not modelled*).
+    /// 09 / 0A: 0xC3 + Rand(9); 0x12 / 0x4A: 0xAC + Rand(7); 0x14 / 0x15 / 0x16: Rand(2) ≠ 0 picks the
+    /// level's pair 0xF3 / 0xF7 / 0xFB + Rand(2), else the shared pair 0x10D + Rand(2), each +2 on
+    /// the second voice [M 0x13f1d0:64-97]).
     fn seen_player_talk(&mut self, d: &Data, rng: &mut Rng) {
         if self.voice_busy() || self.health <= 0.0 { return; }
         if rng.rand(3) != 0 || self.voice_type == 0x10 { return; }
@@ -4198,6 +4206,11 @@ impl Drone {
             0x0700_0005..=0x0700_0008 => if self.voice_type == 2 { 0x49 + rng.rand(6) as usize } else { 0x21 },
             0x0700_0009 | 0x0700_000a => 0xc3 + rng.rand(9) as usize,
             0x0700_0012 | 0x0700_004a => 0xac + rng.rand(7) as usize,
+            0x0700_0014..=0x0700_0016 => {
+                let own = match d.level { 0x0700_0014 => 0xf3, 0x0700_0015 => 0xf7, _ => 0xfb };
+                let base = if rng.rand(2) != 0 { own } else { 0x10d };
+                rng.rand(2) as usize + base + if self.alt_voice() { 2 } else { 0 }
+            }
             _ => return,
         };
         self.talks.push((idx, false));
@@ -7434,6 +7447,9 @@ impl Drone {
 
     fn handle(&mut self, d: &Data, rng: &mut Rng, frame: u32, s: u8, m: u8) -> bool {
         use state::*;
+        // `Drone+0x1B`: `DroneFunc_HandleImpact` 0x1469b8:23-25 and `NDrone2_PunchImpact` 0x145f28:20-22
+        // return at their first line, so no impact message damages, flinches or alerts this drone.
+        if self.no_impact && matches!(m, msg::PUNCH | msg::TASE | msg::BULLET | msg::EXPLOSION | msg::SMOKE | msg::FLASH | msg::STUN_DART) { return true; }
         if m == msg::BULLET { return self.on_bullet(d, rng, frame, s); }
         if m == msg::PUNCH { return self.on_punch(d, rng, frame, s); }
         // fix-guard-drops-flashbang: the flash broadcast rides the state machine like every other
@@ -13836,9 +13852,13 @@ impl Drones {
         // The world objects (InverterTrigger 0x41, Shooter 0xd2, DynamicObject 0x3b, ThirdCam 0xe7;
         // parsemap_create_dynamic_objects 0x1d04f0 cases, crate::worldobj — placement order, no RNG).
         self.worldobjs = crate::worldobj::WorldObjects::create(&level.maps[m].placements, &path_blocks, |p| {
-            let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
-                else { level.maps[m].objects.get(p.index as usize) };
-            obj.map_or((0, [0.0; 3]), |o| (o.flags, o.centre))
+            let at = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                else { Some((m, p.index as usize)).filter(|&(_, o)| o < level.maps[m].objects.len()) };
+            at.map_or((0, [0.0; 3], 0), |(map, object)| {
+                let o = &level.maps[map].objects[object];
+                let shape = if o.hashcode == u32::MAX { 0x8000_0000 | ((map as u32) << 16) | object as u32 } else { o.hashcode };
+                (o.flags, o.centre, shape)
+            })
         });
         // Fuseboxes (`FuseBox_Create` 0x1b0448, placement 0x31 with a script hash): 07000014's
         // OBJECT_FuseBox1 security-sabotage boxes (map-tower2).
@@ -19815,6 +19835,25 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // mirrors the contact onto the body's own obj+0xD0 list.
             parts.extend(drones.rbodies.list.iter().enumerate()
                 .map(|(k, x)| (0x800_0000_0000 | k as u64, x.shape_key, x.matrix())));
+            // The DynamicObjects (kind 0x3b): `DynamicObject_Create` 0x18dbf8 links the object into its
+            // room and `Collide_PickObj` 0x1eae80 tests it unless obj+0xF0 carries 0x20 [M :28-40],
+            // which the create and the channels set and clear. A deleted one leaves the world. An
+            // object with 0x10 is also skipped by the queries with HITTEST+0x98 bit 4 [M :33-35],
+            // every `Collide_LineOfSight` [M 0x1edf54]. Id: bit 44 + the create slot.
+            // The crawl exits of 07000005 leave Bond inside the invisible blocker's box (the wall's end
+            // is 1.0 inside it [D #35/#325; M 0x1969d0:107-112]). The port's contact push works from
+            // the closest point and would hold him in, so a 0x10 part stays out until he has left [S].
+            let inside = |o: &crate::worldobj::DynObject| o.flags & 0x10 != 0 && d.world.shape(o.shape).is_some_and(|s| {
+                let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+                for v in s.iter().flatten().map(|&v| nf_formats::placement::transform(&o.matrix, v)) {
+                    for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); }
+                }
+                let c = [player.pos[0], player.pos[1] + 0.9, player.pos[2]];
+                (0..3).all(|k| lo[k] < c[k] && c[k] < hi[k])
+            });
+            parts.extend(drones.worldobjs.dynobjs.iter()
+                .filter(|o| o.flags & 0x20 == 0 && o.shape != 0 && !inside(o))
+                .map(|o| (0x1000_0000_0000 | o.slot as u64 | if o.flags & 0x10 != 0 { crate::world::SIGHT_THROUGH_PART } else { 0 }, o.shape, o.matrix)));
             parts
         };
         // Script triggers (`Trigger_TouchOnce` / `Trigger_Touch` made by `Script_CreateEntity`): one per live entity,
@@ -22778,6 +22817,7 @@ mod tests {
         for (lv, speaks) in [(0x0700_0014u32, true), (0x0700_0015, true), (0x0700_0016, true), (0x0700_0007, false)] {
             let mut dr7 = drone_at([0.0, 0.0, 0.0]);
             dr7.voice_type = 7;
+            dr7.sm_id = 1; // serial 2, even: the first voice 0x11b
             let draws = rng.draws;
             dr7.attack_talk(lv, &mut rng);
             assert_eq!(rng.draws - draws, speaks as u64, "[M :98-100] on {lv:#x}");
@@ -22992,7 +23032,7 @@ mod tests {
             // ninja-melee: the melee band +0xEC and the +0x2C8 attack-hold counter (defaults).
             melee_min_dist: 4.0, attack_hold: 0,
             captain: false, snap: 0.0, event_20: false, event_21: false, holstered: false, anim_sounds: Vec::new(),
-            voice_type: 0, female: false, voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0,
+            no_impact: false, voice_type: 0, female: false, voice: None, voice_finished: true, talks: Vec::new(), patrol_cooldown: 0,
             talk_step: 0, hostage_voice: 0, hostage_voice_clear: false,
             // obj+0xFE bit 0 (delete-me; docs/fields/obj-tag.md:44) — see the field.
             delete_me: false,

@@ -22,9 +22,10 @@
 //!
 //! Entry: `NDrone2_DSTATE_CivilianMission` (0x15d860) ENTER `if (drone+0xd8 == 0x13) SetState(0x19)`
 //! [M] — voice 0x13 = skin 0x0500005e (`NDrone2_DefaultInit` 0x14b300 sets +0xD8 from the skin [M];
-//! the port's `voice_type`). No placement on the disc's finale levels reaches CivilianMission
-//! (07000016's drones are dtypes 2/8/0xf/12 [D]) — the port keeps the transition for fidelity and
-//! documents it as unreached.
+//! the port's `voice_type`). This is 07000016's Kiko #612 (wake ch 0x1b, written by 0x06000632
+//! stream 11 at the hand-back [D]): she walks her route from the tower room to the tripwire #613,
+//! about eight seconds, and its ch 0x7b fails the mission. On this level she takes no impacts
+//! (`Drone+0x1B` [M 0x14b300:699-700]), so only the button stops her.
 //!
 //! ## The chaser's defeat (ch 0x90) — the real path (kiko-16-defeat)
 //!
