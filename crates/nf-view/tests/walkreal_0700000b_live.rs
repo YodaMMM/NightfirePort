@@ -453,6 +453,15 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
             for c in code { sim.drones.keypad_digit((c - b'0') as u32); }
         }
     }
+    // A keypad opens by its typed code or the decryptor; the laser arm is kind 1 only [M 0x1ae3d8:47, :162].
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        if let Some(li) = sim.drones.locks.iter().position(|l| l.out == 47 && !l.unlocked) {
+            let code = sim.drones.key_codes.code(sim.drones.locks[li].code);
+            sim.drones.keypad = Some((li, nf_game::lock::Keypad::arm(code, false)));
+            for c in code { sim.drones.keypad_digit((c - b'0') as u32); }
+        }
+    }
     let mut burned = false;
     for _ in 0..240 {
         if w.scene.sim.as_ref().unwrap().drones.locks[lk].unlocked { burned = true; break; }

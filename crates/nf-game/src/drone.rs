@@ -23051,7 +23051,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // runs — the NIS/script pauses stamp +0x34 through the scene's request side
             // [M 0x1d94c0:118-121 + 0x1da880:44-48]). The clock is the port's frame-derived
             // 1/100 s [S — psiGetTimeIn100ths' stand-in; only differences matter].
-            self.progress.log_update_elapsed(crate::progress::PlrMissionStats::now_100ths(self.frame));
+            // mission-flow: the call sits behind `Player_Update`'s `GS_IsPaused(player)` return
+            // [M 0x193600:88-91], which `Mission_Update` case 7's `GS_PausePlayer(1, 0)` raises
+            // from the end banner's first hold tick to the next load [M 0x182c60:124-128] — the
+            // game's clock stops when the "Mission Complete" hold starts; the port's ran on
+            // through the 240-tick banner, so the results' Time row read 4 s long.
+            if !self.mission.player_paused {
+                self.progress.log_update_elapsed(crate::progress::PlrMissionStats::now_100ths(self.frame));
+            }
         }
         // fix-scores-handoff (G-045 remainder): the level-end score-row production. When the
         // level-exit latch stands at the tick's end (the trigger LOAD_LEVELs, the
@@ -23073,16 +23080,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // MayhewB's per-tick re-seat and the trigger arms' `MusicVars = 1` [M 0x112270:56-79, :113,
         // :122; 0x112730:210, :219]. Applied AFTER `update`, so the next frame's SeenAndAttacking
         // pass sees them — the game's frame order (the drone pass precedes 0x114e70).
-        for w in self.music.gate_writes.drain(..) {
-            match w {
-                crate::music::GateWrite::Restore => {
-                    if let Some(row) = self.attack_gate.table_row { self.attack_gate.vars = Some(row); }
-                    else if let Some(v) = &mut self.attack_gate.vars { v.count = 2; v.floor = 8; v.distance = 25.0; }
-                }
-                crate::music::GateWrite::SetDistance(d) => { if let Some(v) = &mut self.attack_gate.vars { v.distance = d; } }
-                crate::music::GateWrite::SetCount(c) => { if let Some(v) = &mut self.attack_gate.vars { v.count = c; } }
-            }
-        }
+        for w in self.music.gate_writes.drain(..) { self.attack_gate.apply(w); }
         // The drone-contact pass ([M Break_Update 0x12bfd8:23-34]: class-2 contacts damage kind-2
         // breakables by the squared step × 20, on 07000001 only). The kills join the view queue;
         // Break_Kill 0x12b970:75 plays the kill sound inline (the same presentation the bullet

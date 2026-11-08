@@ -5940,7 +5940,12 @@ impl Sim {
         }
         // `PlarStat_LogUpdateElapsedTime(0)` 0x1995a0 — `Player_Update` 0x193600:132 calls it once per
         // tick; `now` is the port's frame-derived 1/100 s clock (deterministic; fix-progress).
-        self.drones.progress.log_update_elapsed(nf_game::progress::PlrMissionStats::now_100ths(self.drones.frame));
+        // mission-flow: behind `Player_Update`'s `GS_IsPaused(player)` return [M 0x193600:88-91]
+        // — `Mission_Update` case 7's `GS_PausePlayer(1, 0)` [M 0x182c60:124] (the
+        // `Mission::player_paused` mirror) stops the clock under the end banner.
+        if !self.drones.mission.player_paused {
+            self.drones.progress.log_update_elapsed(nf_game::progress::PlrMissionStats::now_100ths(self.drones.frame));
+        }
         // door-text-labels: `Door_Update`'s unlock message (`Text_AddMsg(0, 0, 1,
         // Txt_BindLabel(0x2000003, 0), 0, 0xb4)` [M 0x1363c8:101-103]) posts straight into the
         // type-1 INFO list in the game; here `Doors::update` queued it and Sim applies the level

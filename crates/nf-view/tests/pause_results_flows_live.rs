@@ -538,3 +538,95 @@ fn the_loading_hold_window_and_the_double_press_guards() {
     assert_eq!(fe.requested_level.take(), Some(0x0700_0005), "the host takes the row's request");
     assert_eq!(fe.requested_level.take(), None, "a second take gets nothing — one request, one load");
 }
+
+/// mission-flow: the pause refuses once the mission is over. `Player_Update` opens the pause page
+/// 0x4000004b only while `GameState+0x24 == 0` [M 0x193600:72]; `Mission_Update` sets +0x24 in
+/// case 2 (the fail), case 3 (the death hand-off) and case 6 (the success) [M 0x182c60:46,60,88],
+/// and nothing clears it before the next load [M ResetMap_GameInit 0x1d5080:9 — its only clear;
+/// C_GCPAUSE_Handler 0x204408:153 only sets it]. The port's Esc arm opened the pause over the
+/// "Mission Complete" / "Mission Fail" banners and in the death's lead-in to the fail menu.
+#[test]
+fn the_pause_refuses_once_the_mission_has_ended() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    // The success arm on 07000005: ch 100 → case 6 → the 240-tick banner hold (case 7).
+    let mut scene = load_level(&iso, "07000005.bin");
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        tick(sim, 10);
+        // The level-start cinema holds ScriptCam; wait it out so only the mission gate is tested.
+        let mut n = 0;
+        while sim.script_camera().is_some() && n < 3000 { tick(sim, 1); n += 1; }
+        assert!(nf_view::pause_allowed(sim), "a live mission can pause [M 0x193600:72 — +0x24 = 0, ScriptCam = 0]");
+        sim.drones.set_channel(0x64);
+        tick(sim, 3);
+        assert_eq!(sim.drones.mission.internal, 7, "the Mission Complete banner hold [M 0x182c60:85-122]");
+        assert!(!nf_view::pause_allowed(sim), "no pause under the Mission Complete banner [M 0x182c60:88 → 0x193600:72]");
+    }
+    // The fail arm: ch 99 → case 2 → the 300-tick "Mission Fail" banner.
+    let mut scene = load_level(&iso, "07000005.bin");
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        tick(sim, 10);
+        let mut n = 0;
+        while sim.script_camera().is_some() && n < 3000 { tick(sim, 1); n += 1; }
+        sim.drones.set_channel(99);
+        tick(sim, 3);
+        assert_eq!(sim.drones.mission.internal, 7, "the Mission Fail banner hold [M 0x182c60:45-57]");
+        assert!(!nf_view::pause_allowed(sim), "no pause under the Mission Fail banner [M 0x182c60:46 → 0x193600:72]");
+    }
+    // The death arm: the pain → the red fade (pause still allowed: +0x24 is not set yet) → ✕ →
+    // ch 0x62 → case 3 sets +0x24.
+    let mut scene = load_level(&iso, "07000005.bin");
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.drones.auto_restart = false;
+        tick(sim, 10);
+        let mut n = 0;
+        while sim.script_camera().is_some() && n < 3000 { tick(sim, 1); n += 1; }
+        let (h, r) = (&mut sim.drones.health, &mut sim.drones.rng);
+        h.pain_generic(r, 500.0, 1, 0x0700_0005, 0);
+        tick(sim, 2);
+        assert!(sim.drones.death.active && !sim.drones.channels.on(0x62), "the red fade runs");
+        assert!(nf_view::pause_allowed(sim), "the red fade itself does not set +0x24 [M 0x182c60:35-42 runs on ch 0x62]");
+        tick_fire(sim, 1);
+        tick(sim, 1);
+        assert!(sim.drones.channels.on(0x62), "the death channel rose [M 0x190bb0:32]");
+        // `Mission_Update` runs at the top of the tick, ahead of the death path [M Game_Run
+        // 0x1c9790:17], so it reads ch 0x62 on the next tick.
+        tick(sim, 1);
+        assert_eq!(sim.drones.mission.state, 3, "the death arm ran [M 0x182c60:58-64]");
+        assert!(!nf_view::pause_allowed(sim), "no pause after the death hand-off [M 0x182c60:60 → 0x193600:72]");
+    }
+}
+
+/// mission-flow: the results' Time row stops when the "Mission Complete" hold starts. The elapsed
+/// clock (`PlarStat_LogUpdateElapsedTime` 0x1995a0) is called from `Player_Update` 0x193600:132,
+/// behind the `GS_IsPaused(player)` return [M :88-91]; `Mission_Update` case 7 raises that pause
+/// every tick of the banner hold (`GS_PausePlayer(1, 0)` [M 0x182c60:124]) and its end keeps it
+/// (`GS_PauseGame(1)` [M :127]) until the next load [M ResetMap_GameInit 0x1d5080:16]. The port
+/// kept counting through the 240-tick banner: the Time row read 4.00 s long.
+#[test]
+fn the_mission_clock_stops_under_the_mission_complete_banner() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = load_level(&iso, "07000005.bin");
+    let sim = scene.sim.as_mut().unwrap();
+    tick(sim, 10);
+    let mut n = 0;
+    while sim.script_camera().is_some() && n < 3000 { tick(sim, 1); n += 1; }
+    tick(sim, 120);
+    let live = sim.drones.progress.stats().elapsed;
+    assert!(live > 0, "the clock runs in play [M 0x1995a0]");
+    sim.drones.set_channel(0x64);
+    let mut at_hold = None;
+    let end = loop {
+        sim.step_bond(Default::default(), false, false, false);
+        if at_hold.is_none() && sim.drones.mission.internal == 7 { at_hold = Some(sim.drones.progress.stats().elapsed); }
+        if let Some(next) = sim.drones.mission_end { break Some(next); }
+        if sim.drones.frame > 20_000 { break None; }
+    };
+    assert!(end.is_some(), "the mission ended [M 0x182c60 case 4]");
+    let at_hold = at_hold.expect("the banner hold ran [M 0x182c60:85-130]");
+    assert!(at_hold > live, "the clock ran until the hold");
+    assert_eq!(sim.drones.progress.stats().elapsed, at_hold,
+        "no time accrues under the Mission Complete banner [M 0x182c60:124 → 0x193600:88-91, :132]");
+}

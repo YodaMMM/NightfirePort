@@ -167,6 +167,19 @@ pub struct Mission {
     pub menu_open: bool,
     /// The player's answer (`C_GCPAUSE_Handler` 0x204408 controls 6/0xc/0xd).
     pub menu_choice: Option<MenuChoice>,
+    /// `GameState+0x24` (Ghidra `GameState._36_4_`): the mission is over. `Mission_Update` sets it
+    /// in case 2 (the fail), case 3 (the death) and case 6 (the success) [M 0x182c60:46,60,88];
+    /// `ResetMap_GameInit` clears it on every load [M 0x1d5080:9]. Its reader is the pause gate:
+    /// `Player_Update` opens the pause menu 0x4000004b only while it is 0 [M 0x193600:72] — so
+    /// no pause over the "Mission Complete" / "Mission Fail" banners or the death hand-off.
+    pub ended: bool,
+    /// Player 0's pause word (`MPGame[0]`, `GS_IsPaused(0)`): `Mission_Update` case 7 writes it 1
+    /// every tick of the banner hold (`GS_PausePlayer(1, 0)` [M 0x182c60:124; 0x17d280]) and the
+    /// hold's end keeps it (`GS_PauseGame(1)` [M 0x182c60:126-128; 0x17d178]); only the next
+    /// load's `GS_PauseGame(0)` clears it [M ResetMap_GameInit 0x1d5080:16]. `Player_Update`
+    /// returns on it before `PlarStat_LogUpdateElapsedTime` [M 0x193600:88-91, :132], so the
+    /// mission clock stops when the end banner's hold starts.
+    pub player_paused: bool,
 }
 
 impl Default for Mission { fn default() -> Self { Self::new() } }
@@ -179,6 +192,8 @@ impl Mission {
             states: LEVELS.iter().map(|l| vec![0; l.objectives.len()]).collect(),
             menu_open: false,
             menu_choice: None,
+            ended: false,
+            player_paused: false,
         }
     }
 
@@ -186,6 +201,10 @@ impl Mission {
     /// (0x1d5080:53 `Mission_Init(GameState._12_4_, IsWarmReset)`).
     pub fn init(&mut self, level: u32, warm: bool, ch: &mut crate::triggers::Channels, frame: u32) {
         self.to_end = 0x0700_0048; // [M 0x182270:20]
+        // `ResetMap_GameInit` clears GameState+0x24 just before it calls `Mission_Init` on every
+        // load [M 0x1d5080:9, :53]; the port's per-load latch stands for both.
+        self.ended = false;
+        self.player_paused = false; // GS_PauseGame(0) [M 0x1d5080:16]
         if !warm { self.base_map = u32::MAX; } // [M 0x182270:22-24 param_2 == 0]
         self.internal = 1;
         self.order = u32::MAX;
@@ -345,6 +364,7 @@ impl Mission {
             2 => {
                 // [M 0x182c60:45-57: MissionState 2, LevelToEndTo 0x7000048, the type-3
                 // "Mission Fail" msg, TimeOut = VIDEO_FRAME_RATE·4 + VIDEO_FRAME_RATE = 300]
+                self.ended = true; // GameState+0x24 [M 0x182c60:46]
                 self.state = 2;
                 self.to_end = 0x0700_0048;
                 self.internal = 7;
@@ -354,6 +374,7 @@ impl Mission {
             3 => {
                 // [M 0x182c60:58-64: TimeOut 1.0, MissionState 3, state 7, to_end 0x7000048]
                 self.timeout = 1.0;
+                self.ended = true; // GameState+0x24 [M 0x182c60:60]
                 self.state = 3;
                 self.internal = 7;
                 self.to_end = 0x0700_0048;
@@ -362,6 +383,7 @@ impl Mission {
                 // [M 0x182c60:85-122: MissionState 6, the per-level LevelToEndTo, the type-3
                 // "Mission Complete" msg, TimeOut = VIDEO_FRAME_RATE << 2 = 240]
                 self.state = 6;
+                self.ended = true; // GameState+0x24 [M 0x182c60:88]
                 self.internal = 7;
                 self.to_end = match level {
                     0x0700_0004 => 0x0730_0004,
@@ -379,6 +401,7 @@ impl Mission {
             }
             7 => {
                 // [M 0x182c60:123-130: GS_PausePlayer(1, 0); TimeOut -= FRAME_RATE_MUL; pause]
+                self.player_paused = true; // GS_PausePlayer(1, 0) [M 0x182c60:124]
                 self.timeout -= 1.0;
                 if self.timeout <= 0.0 { self.internal = 4; }
             }
