@@ -1112,6 +1112,9 @@ pub struct Drone {
     pub aimed_at: bool,
     pub aimed_until: u32,
     pub bunched: bool,
+    /// `NDrone2_NearArmedDrone(20.0, flag 0)` 0x177420 for the hostage states: a living, enabled,
+    /// armed team-1 drone within 20 with a clear line. Rebuilt each tick beside `bunched`.
+    pub armed_drone_near: bool,
     /// The port's copy of the `Rand_Rand(10000)` draw `Drone_Create` 0x136be0 stores to `obj+0xEC`, used as the
     /// miss-wobble phase (`t = frame + obj+0xEC`). The game's live `obj+0xEC` is **rewritten after creation** by an
     /// unidentified writer ([L] 0x1A677 > 10000 on every 07000005 drone — drone-port-check.md #4), so the port keeps
@@ -2058,7 +2061,7 @@ impl Drone {
             anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), blend_out: false, started: false, early_end: false, len_cap: None },
             firing: false, burst_done: false, burst: 0, next_shot: 0, last_shot: 0, clip, clip_max: clip,
             grenade_weapon, grenade_count, pending_grenade: false,
-            shots: Vec::new(), log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, wobble: rng.rand(10000), lost_sight: true, damage_mul: 1.0, alert_bits: 0, light: 1.0, attack_frame: 0, alerted_by_drone: false, watching: false,
+            shots: Vec::new(), log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, armed_drone_near: false, wobble: rng.rand(10000), lost_sight: true, damage_mul: 1.0, alert_bits: 0, light: 1.0, attack_frame: 0, alerted_by_drone: false, watching: false,
             // 957: per shot (frame, muzzle, aim) — the aim at the shot tick (see the field).
             shot_aims: Vec::new(),
             // 952: the raw accuracy roll per shot, parallel to `shots`.
@@ -2337,7 +2340,16 @@ impl Drone {
             self.health = 100.0;
             self.max_health = 100.0;
             self.accuracy = 0; // +0xB4 = 0, after DoModeSettingsNEW's table read [M 0x14b300:501, :752]
-            for p in [0x3c, 0x36, 0x35] { d.props.set(p, &mut self.props, 1); } // [M 0x14b300:746-748]
+        }
+        // `NDrone2_DefaultInit`'s per-mode writes on the active block. Mode 0xD: props 0x3C, 0x36 (smoke
+        // proof) and 0x35 [M 0x14b300:745-748]. Mode 0xC: 0x34/0x36/0x3B/0x3A clear, mode 0x11: 0x3B/0x3A
+        // clear, so these allies do not shy from explosives [M 0x14b300:782-797, 0x1431c0].
+        let set = |w: &mut [u32; 3], ids: &[usize], v: u32| for &p in ids { d.props.set(p, w, v); };
+        match self.mode {
+            0xd => set(&mut self.props, &[0x3c, 0x36, 0x35], 1),
+            0xc => set(&mut self.props, &[0x34, 0x36, 0x3b, 0x3a], 0),
+            0x11 => set(&mut self.props, &[0x3b, 0x3a], 0),
+            _ => {}
         }
         self.alt_mode = if self.second_tag == 0 || self.second_tag == 0x65 { 0 }
             else if self.second_channel == 0 && self.alert_floor >= 1.0 { 0 }
@@ -2429,7 +2441,8 @@ impl Drone {
     /// leaves it on 07000007); `NDrone2_DefaultInit` in single player clears 0x17, and on 07000005/06 gives SG5 guards
     /// (parameter 9 = 0x16) props 0, 1, 6, 0x41, 0x42, clears 0x13 and sets the engage range `+0xF0` to 10. [L] the
     /// level-start snapshot of 07000005 (work/ee_start_05.bin) differs from the placement words by exactly these bits.
-    /// Mode-specific writes (modes 0xC, 0x11, mission scripts) are not ported.
+    /// The per-mode writes (0xC, 0xD, 0x11) are in `type_setup`, where the mode is known. The mission-script
+    /// writes keyed on the start script [M 0x14c600:130-155] are not ported.
     fn init_properties(&mut self, d: &Data, param: &impl Fn(u32) -> u32) {
         let set = |w: &mut [u32; 3], id: usize, v: u32| d.props.set(id, w, v);
         if param(5) < 0x24 {
@@ -3558,7 +3571,18 @@ impl Drone {
         // whitelist like every other non-handling state — the STUN_DART_LOOP/RECOVER 0x51/0x52
         // carry the case and stay in it [M 0x163570/0x163700].
         if !Self::FLASH_HANDLING.contains(&s) { return false; } // unhandled → GLOBAL → dropped
-        if self.prop(d, 0x1c) { return true; }
+        // Prop 0x1C: flash-proof. Anim set 5 still ducks: 0x57, else 0x11, else 0x19 [M 0x1469b8:251-273].
+        if self.prop(d, 0x1c) {
+            if self.anim_set == 5 {
+                let a = if self.can_do(d, 0x57) { 0x57 } else if self.can_do(d, 0x11) { 0x11 } else { 0x19 };
+                self.call_anim(d, a, 0, 0);
+            }
+            return true;
+        }
+        let resume = Self::impact_args(s).map_or(0, |a| a.0);
+        let u10 = if resume != 0 { resume } else { self.state };
+        if u10 != 0 && !(0x53..=0x55).contains(&u10) { self.impact_resume = u10; } // [M 0x1469b8:274-285]
+        self.tower_impact_stamp(d); // [M 0x1469b8:283-305]
         // A flashed guard responds to the real event. The state's own body carries no re-enable
         // [M DSTATE_StunGrenadeImpact 0x172bb0 — 46 lines: RecoverTime, the +0xDA != 4 weapon
         // drop + ChangeWeapon(1), AlertStatusSet(2), the Rand(2) fall anim 0x2e/0x2d — no
@@ -3776,8 +3800,7 @@ impl Drone {
         let Some((resume, _allow)) = Self::impact_args(s) else { return false };
         let u10 = if resume != 0 { resume } else { self.state };
         if u10 != 0 && !(0x53..=0x55).contains(&u10) { self.impact_resume = u10; }
-        // (The 07000009/0A stamp arm 0x1469b8:220-246 is the mission states' +0x89/+0x14 setup —
-        // not the 07000005 path.)
+        self.tower_impact_stamp(d); // [M 0x1469b8:220-246]
         self.set_state(SMOKED_OUT);
         true
     }
@@ -4881,7 +4904,11 @@ impl Drone {
                 self.vision_on = false;
                 self.firing = false;
                 self.timer_c = Some(frame + 600); // `DAT_00298F58` = 10 · FRAME_RATE_INT = 600 [M 0x13a5a8:10, 0x163fe8:22; FRAME_RATE_INT 60 at 0x30d0cc] (daily audit 2026-10-21: was 300)
-                // Prop 0x31 and no silent kill: `DroneAlertToObject(msg 0x15, corpse)` — not modelled (G-026).
+                // Prop 0x31 and no head kill: `+0x4FC |= 8` [M 0x163fe8:29-33]. SetAsDead leaves +0x100 set
+                // [M 0x14a2f0], so the corpse stays a `DetermineAlertCheck` source until it is deleted and
+                // an observer with prop 0x29 takes the alert [M 0x176250:119-193]. The msg-0x15 broadcast
+                // beside it moves nobody: `ShoutFromOtherDrone` returns 0 [M-dis 0x177a78-0x177a8c].
+                if self.prop(d, 0x31) && !self.silent_kill { self.alert_bits |= 8; }
                 true
             }
             (DEAD, msg::UPDATE) => {
@@ -5506,19 +5533,34 @@ impl Drone {
             self.resume_state = s;
             self.home = self.feet();
         }
-        if !self.prop(d, 0x1f) || self.dist > 50.0 || self.alert_bits & 0x10 != 0 { return None; }
-        if m == msg::SOUND && self.sighted { return None; } // AlertSound 0x177800:48-50
-        // A guard on his mission route on 07000014 ignores sounds [M 0x177800:35-37].
-        if m == msg::SOUND && d.level == 0x0700_0014 && s == state::ENEMY_MISSION { return None; }
+        // EnemyAlerts case 0x1E: modes 9 and 0x12 drop the alarm, the rest attack, with none of the
+        // hearing gates [M 0x177c18:107-118].
+        if m == msg::ALARM {
+            if matches!(self.mode, 9 | 0x12) { return None; }
+            self.sighted = true;
+            self.alert_pending |= 0x4000_0000;
+            return Some(state::ATTACK);
+        }
+        // `DroneVision_AlertSound` 0x177800. 0C/0D voice sets 5/6 attack any sound from any distance
+        // [M :32-33, 40-46, 75-78]; state 0x1B on 07000014 is deaf [M :34-36].
+        if !self.prop(d, 0x1f) || self.deaf { return None; }
+        let voice_attack = matches!(d.level, 0x0700_000c | 0x0700_000d) && self.voice_type.wrapping_sub(5) < 2;
+        if d.level == 0x0700_0014 && s == state::ENEMY_MISSION { return None; }
+        if !voice_attack && self.dist > 50.0 { return None; }
+        if self.sighted { return None; } // [M :48-50]
+        // Modes 9/0x12/0x13/0x16 never investigate: above 0.7 they attack, else nothing [M :52-72].
+        let row = matches!(self.mode, 9 | 0x12 | 0x13 | 0x16);
+        if voice_attack || (row && self.alert > 0.7) {
+            self.sighted = true;
+            self.alert_pending |= 0x1000_0000;
+            return Some(state::ATTACK);
+        }
+        if row { return None; }
         (self.sound_share > 0.2 || self.alert > 0.66).then_some(state::HEARD_NOISE)
     }
 
     /// SniperIdle's alert messages through `DroneVision_EnemyAlerts`: a sound as for any guard, the alarm → Attack.
     fn sniper_alerts(&mut self, d: &Data, s: u8, m: u8) -> Option<u8> {
-        if m == msg::ALARM {
-            if !self.investigating { self.resume_state = s; self.home = self.feet(); }
-            return Some(state::ATTACK);
-        }
         self.enemy_alerts(d, s, m)
     }
 
@@ -5854,9 +5896,28 @@ impl Drone {
         self.second_tag = 0;
         self.second_channel = 0;
         if self.attack_frame == 0 { self.attack_frame = frame; }
+        self.sighted = true; // `+0x4F8 |= 0x4000000` [M 0x148010:36]
+        self.first_sight_shout(d);
+        self.first_attack_sight(d);
+        if matches!(d.level, 0x0700_0009 | 0x0700_000a) { state::CIVILIAN_CHALLENGE } else { state::INTEROGATE }
+    }
+
+    /// `DroneFunc_FirstSightState`'s prop-0x33 arm: `+0x4FC |= 1` and the 0x200000 latch, once
+    /// [M 0x147c48:55-90]. The latch is what keeps FirstAttack from raising 0x10 [M 0x148010:85-88].
+    /// The msg-0x11 broadcast beside it moves nobody [M-dis 0x177a78-0x177a8c].
+    fn first_sight_shout(&mut self, d: &Data) {
+        if self.prop(d, 0x33) && !self.scare_shouted {
+            self.alert_bits |= 1;
+            self.scare_shouted = true;
+        }
+    }
+
+    /// FirstAttack's sight widening, skipped on 07000009/0A on both paths [M 0x148010:42-56, 69-83]
+    /// and in `DroneFunc_SetAsAttacking` [M 0x14aed8:17-28]: a tower guard keeps his cone in combat.
+    fn first_attack_sight(&mut self, d: &Data) {
+        if matches!(d.level, 0x0700_0009 | 0x0700_000a) { return; }
         self.sight_range = self.sight_range.max(self.combat_range);
         self.half_fov = 0.0;
-        if matches!(d.level, 0x0700_0009 | 0x0700_000a) { state::CIVILIAN_CHALLENGE } else { state::INTEROGATE }
     }
 
     /// `DroneFunc_FirstAttack` 0x148010: the first attack's stamps, talks and combat pick, once per drone.
@@ -5875,14 +5936,11 @@ impl Drone {
             // combat move [M 0x147c48]. FirstAttack also clears the second switch.
             self.alert = 1.0;
             self.second_channel = 0;
-            // FirstAttack: the attack is visible to others (`+0x4FC |= 0x10`, enemy side), shouts with prop 0x33.
-            // Only the enemy side raises the bit [M 0x148010:73-75]; everyone stamps +0x524 once [M :52-54].
-            if self.team == 1 {
-                if self.alert_bits & 0x10 == 0 { self.attack_frame = frame; }
-                self.alert_bits |= 0x10 | if self.prop(d, 0x33) { 1 } else { 0 };
-            } else if self.attack_frame == 0 { self.attack_frame = frame; }
-            self.sight_range = self.sight_range.max(self.combat_range);
-            self.half_fov = 0.0;
+            // Everyone stamps +0x524 once and takes the sighted bit [M 0x148010:62-65].
+            if self.attack_frame == 0 { self.attack_frame = frame; }
+            self.sighted = true;
+            if self.own_sight { self.first_sight_shout(d); }
+            self.first_attack_sight(d);
             // The talks [M 0x148010]: the own-sight bit `+0x4F8 & 0x8000000` (`own_sight` — set by
             // `DroneVision_EnemyLookForOpponent` 0x177ed0:76-80 with 0x4000000, and by the
             // civilian/party/door-guard/truck-driver armed reactions) routes the first attack
@@ -5891,8 +5949,16 @@ impl Drone {
             // FirstSightState chose no state, or when the bit is clear.
             let first_sight = self.own_sight;
             if first_sight { self.seen_player_talk(d, rng); } else { self.attack_talk(d.level, rng); }
-            first = if self.prop(d, 0x1b) { if rng.rand(2) == 0 { 0 } else { self.choose_combat_move(d, rng) } }
+            // The pick is FirstSightState's, so only an own-sight attack rolls it [M 0x148010:21-29].
+            first = if !first_sight { 0 }
+                else if self.prop(d, 0x1b) { if rng.rand(2) == 0 { 0 } else { self.choose_combat_move(d, rng) } }
                 else if self.prop(d, 0x18) { 0 } else if self.prop(d, 0x19) { self.choose_combat_move(d, rng) } else { 0 };
+            // `+0x4FC |= 0x10`: the enemy side only, behind the 0x200000 latch, and a FirstSightState
+            // pick returns before it [M 0x148010:30-57, 85-88].
+            if first == 0 && self.team == 1 && !self.scare_shouted {
+                self.alert_bits |= 0x10;
+                self.scare_shouted = true;
+            }
             if first_sight && first == 0 { self.attack_talk(d.level, rng); }
             // The tail's prop-0x52 fail [M 0x148010:95-98]: `behaviour_util_getProperty(0x52,
             // Drone+0x4d8)` non-zero → `DroneFunc_SetMissionFailReason(drone, 8)` —
@@ -6754,11 +6820,39 @@ impl Drone {
             (STUN_GRENADE_RECOVER, msg::ENTER) => {
                 self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x163350:16]
                 self.timer_c = None;
-                self.call_anim(d, anim_state::STUN_GET_UP, ATTACK, 0);
+                // `NDrone2_IsCivilian` (`+0x44 != 1`) rises to `+0x118`, the rest to Attack [M 0x163350:18-23].
+                let next = if self.team != 1 { self.impact_resume } else { ATTACK };
+                self.call_anim(d, anim_state::STUN_GET_UP, next, 0);
                 true
             }
             _ => true,
         })
+    }
+
+    /// The 09/0A block of `DroneFunc_HandleImpact`, identical on the tase, smoke, flash and dart
+    /// [M 0x1469b8:103-128, 220-246, 283-305, 331-357]. Without the first-sight latch (`+0x4F8 &
+    /// 0x4000000`, the port's `sighted`): only the resume write, `SMI+0x10` = 0x14 CivilianPatrol
+    /// [SMI = Drone+0x108, so SMI+0x10 = +0x118, the port's `impact_resume`]. With it: the
+    /// first-attack and sight latches clear, the alt state 0x89 RunToAlarm arms (+0x16 = 0, +0x4FC =
+    /// 0), and with `+0xC48 == 100` the FIRST block comes back; then mode 9, alt mode 7, `+0x5A2` =
+    /// 0x14 and `SMI+0x10` = 0x15 ReturnToPatrolPath. After the stun the guard re-enters Attack,
+    /// whose FirstAttack tail consumes the 0x89 — the alarm run, docs/GAPS.md G-055.
+    fn tower_impact_stamp(&mut self, d: &Data) {
+        if !matches!(d.level, 0x0700_0009 | 0x0700_000a) { return; }
+        if !self.sighted {
+            self.impact_resume = state::CIVILIAN_PATROL;
+            return;
+        }
+        self.first_attack_done = false; // `+0x4F8 &= ~0x2000000` [M :108]
+        self.alt_state = crate::kiko::RUN_TO_ALARM; // `+0x5A4 = 0x89` [M :110]
+        self.alarm_run = false; // `+0x16 = 0` [M :111]
+        self.alert_bits = 0; // `+0x4FC = 0` [M :112]
+        self.set_1st_behaviour(); // `+0xC48 == 100` → `+0x29 = 0`, `+0x4D8 = +0x4DC` [M :114-116]
+        self.mode = 9; // `+0xC5 = 9` [M :119]
+        self.alt_mode = 7; // `+0xC6 = 7` [M :120]
+        self.sighted = false; // `+0x4F8 &= ~0x4000000` [M :121-122]
+        self.return_state = state::CIVILIAN_PATROL; // `+0x5A2 = 0x14` [M :123]
+        self.impact_resume = state::RETURN_TO_PATROL_PATH; // `SMI+0x10 = 0x15` [M :124]
     }
 
     /// `DroneFunc_HandleImpact` case 7 (0x1469b8:58-176): the tase. Case 7's FIRST arm is the
@@ -6784,33 +6878,8 @@ impl Drone {
         }
         self.tase_accum = self.tase_accum.saturating_add(1);
         if self.tase_accum as u32 > (self.health as u32) << 1 {
-            // The 09/0A stamp arm [M 0x1469b8:103-128] — only the fall tase reaches it (the
-            // accumulator gate returns 1 earlier, [M :76-88]). Without the first-sight latch
-            // (`+0x4F8 & 0x4000000`, the port's `sighted`): only the resume write, `SMI+0x10`
-            // = 0x14 CivilianPatrol [M :105-106; SMI = Drone+0x108, so SMI+0x10 = +0x118, the
-            // port's `impact_resume`]. With it: the first-attack and sight latches clear, the
-            // alt state 0x89 RunToAlarm arms (+0x16 = 0, +0x4FC = 0), and with `+0xC48 == 100`
-            // the FIRST block comes back (`+0x29 = 0`, `+0x4D8 = +0x4DC` — the Set1st this
-            // task wires, [M :114-116]); then mode 9, alt mode 7, `+0x5A2` = 0x14 and
-            // `SMI+0x10` = 0x15 ReturnToPatrolPath [M :119-124]. After the stun the guard
-            // re-enters Attack, whose FirstAttack tail consumes the 0x89 (`set_2nd_behaviour`
-            // there) — the alarm run, docs/GAPS.md G-055.
-            if matches!(d.level, 0x0700_0009 | 0x0700_000a) {
-                if !self.sighted {
-                    self.impact_resume = state::CIVILIAN_PATROL;
-                } else {
-                    self.first_attack_done = false; // `+0x4F8 &= ~0x2000000` [M :108]
-                    self.alt_state = crate::kiko::RUN_TO_ALARM; // `+0x5A4 = 0x89` [M :110]
-                    self.alarm_run = false; // `+0x16 = 0` [M :111]
-                    self.alert_bits = 0; // `+0x4FC = 0` [M :112]
-                    self.set_1st_behaviour(); // `+0xC48 == 100` → `+0x29 = 0`, `+0x4D8 = +0x4DC` [M :114-116]
-                    self.mode = 9; // `+0xC5 = 9` [M :119]
-                    self.alt_mode = 7; // `+0xC6 = 7` [M :120]
-                    self.sighted = false; // `+0x4F8 &= ~0x4000000` [M :121-122]
-                    self.return_state = state::CIVILIAN_PATROL; // `+0x5A2 = 0x14` [M :123]
-                    self.impact_resume = state::RETURN_TO_PATROL_PATH; // `SMI+0x10 = 0x15` [M :124]
-                }
-            }
+            // Only the fall tase reaches the 09/0A block: the accumulator gate returns earlier [M :76-88].
+            self.tower_impact_stamp(d);
             // `Drone_SM_SetState(0x4a, msg[6])` [M 0x1469b8 case 7] — the ENTER MsgObject's slot 6 is
             // the triggering message's slot 6 (dis 0x171f14-0x171f20), and `DSTATE_Taser` case 1 reads
             // it (`param_4[6]` → `DroneFunc_RecoverTime` [M 0x162b98]) — the same HITDATA `self.hit`
@@ -6946,8 +7015,11 @@ impl Drone {
                 // not weapon handling.) The get-up anim 0x76 with follow-on
                 // Attack 0x56 for non-civilians [M 0x1630b8 case 1].
                 self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1630b8:16]
+                if self.voice_type == 0x10 { self.team = 1; } // `+0x44 = 1` [M 0x1630b8:16-18]
+                // `NDrone2_IsCivilian` rises to `+0x118`, the rest to Attack [M 0x1630b8:19-27].
                 if self.team == 1 { self.change_weapon(6); }
-                self.call_anim(d, anim_state::STUN_GET_UP, ATTACK, 0);
+                let next = if self.team != 1 { self.impact_resume } else { ATTACK };
+                self.call_anim(d, anim_state::STUN_GET_UP, next, 0);
                 true
             }
             (STUNNED_RECOVER, msg::TASE) => {
@@ -7156,31 +7228,9 @@ impl Drone {
         // The resume stamp +0x118 = the current state when valid (≠0, not 0x53..0x55) [M :317-330].
         let u10 = self.state;
         if u10 != 0 && !(0x53..=0x55).contains(&u10) { self.impact_resume = u10; }
-        // The Tower band (level ∈ {0x07000009, 0x0700000a}; `GameState._12_4_ + 0xf8fffff7 < 2`):
-        // the SAME stamp block the tase's case-7 arm runs — the decomp's case 0x19 carries the
-        // block byte-identical at 0x1469b8:331-357 (the tase's at :103-128): unsighted → the
-        // resume slot = 0x14 CivilianPatrol; sighted → the alert-plumbing block and the resume =
-        // 0x15 ReturnToPatrolPath. The tower guards are team 3 — `IsCivilian` civilians — so the
-        // first_attack/sight/alt-state/mode stamps are what their wake follows [M 0x163700:19-29,
-        // 0x14aae0]. (The port's old arm picked only the resume and skipped the block body — the
-        // tase ran the whole thing, so a darted tower guard woke without the 0x89 alarm run the
-        // tasEd one makes, docs/systems/tranq-dart.md "the Tower band".)
-        if matches!(d.level, 0x0700_0009 | 0x0700_000a) {
-            if !self.sighted {
-                self.impact_resume = CIVILIAN_PATROL;
-            } else {
-                self.first_attack_done = false; // `+0x4F8 &= ~0x02000000` [M 0x1469b8:337]
-                self.alt_state = crate::kiko::RUN_TO_ALARM; // `+0x5A4 = 0x89` [M :338]
-                self.alarm_run = false; // `+0x16 = 0` [M :339]
-                self.alert_bits = 0; // `+0x4FC = 0` [M :340]
-                self.set_1st_behaviour(); // `+0xC48 == 100` → `+0x29 = 0`, `+0x4D8 = +0x4DC` [M :342-344]
-                self.mode = 9; // `+0xC5 = 9` [M :350]
-                self.alt_mode = 7; // `+0xC6 = 7` [M :351]
-                self.sighted = false; // `+0x4F8 &= ~0x04000000` [M :352-353]
-                self.return_state = CIVILIAN_PATROL; // `+0x5A2 = 0x14` [M :354]
-                self.impact_resume = RETURN_TO_PATROL_PATH; // `SMI+0x10 = 0x15` [M :355]
-            }
-        }
+        // The tower guards are team 3 — `IsCivilian` civilians — so this resume is what their wake
+        // follows [M 0x1469b8:331-357, 0x163700:19-29, 0x14aae0].
+        self.tower_impact_stamp(d);
         self.set_state(STUN_DART_IMPACT);
         true
     }
@@ -7705,9 +7755,8 @@ impl Drone {
                 }
                 // [M 0x177800:76-100] the mode switch: modes 9/0x12/0x13/0x16 alert only above
                 // alertness 0.7 (→ Attack 0x56); every other mode (the escort/civilian rows among
-                // them) takes the HeardNoise branch (0xa2 when share > 0.2 or alert > 0.66). The
-                // level-0x0700000c/0xd skin-kind-5/6 shortcut of 0x177800:24-33 is level-specific
-                // and unmodelled here.
+                // them) takes the HeardNoise branch (0xa2 when share > 0.2 or alert > 0.66), through
+                // `enemy_alerts`, which also holds the 0C/0D voice arm.
                 if ailog() {
                     eprintln!("[ailog] guard {} PlayScript SOUND: mode {:#x} alert {:.2} dist {:.1} share {:.2} prop1f {} script {:#x}",
                         self.index, self.mode, self.alert, self.dist, self.sound_share, self.prop(d, 0x1f), self.start_script);
@@ -7903,9 +7952,7 @@ impl Drone {
             // the other alert kinds); EnemyMission's case 0x1e is the same EnemyAlerts arm [M 0x15e1e8:102-112].
             (IDLE | ALERT | PATROL | ALERT_TO_POSITION | SEARCH_AREA | HEARD_NOISE_AWARE | HEARD_NOISE_SUSPECT | HEARD_NOISE_ALERT | INTEROGATE_ASSIST_WAIT
                 | ENEMY_MISSION, msg::ALARM) => {
-                if !self.investigating { self.resume_state = s; self.home = self.feet(); }
-                self.alert_pending |= 0x4000_0000;
-                self.set_state(ATTACK);
+                if let Some(n) = self.enemy_alerts(d, s, m) { self.set_state(n); }
                 true
             }
             (IDLE | ALERT | PATROL | ALERT_TO_POSITION | SEARCH_AREA | HEARD_NOISE_AWARE, msg::SOUND) => {
@@ -8193,8 +8240,7 @@ impl Drone {
                 self.second_channel = 0;
                 self.second_tag = 0;
                 if self.attack_frame == 0 { self.attack_frame = frame; }
-                self.sight_range = self.sight_range.max(self.combat_range);
-                self.half_fov = 0.0;
+                self.first_attack_sight(d);
                 self.set_state(SURRENDER_ANIM);
                 true
             }
@@ -8323,7 +8369,9 @@ impl Drone {
             // return state `+0x5A2`. Deaf meanwhile (`+0x4F8` 0x400000 — `deaf`, set/cleared in `send`).
             (GO_TO_GOAL, msg::ENTER) => { self.vision_on = true; true } // guard 0x63 (fix-actors had renamed it to the ally's 0x28)
             (GO_TO_GOAL, msg::UPDATE) => {
-                if self.seen && !(self.ever_seen && self.dist >= self.engage_range) {
+                // 07000009/0A skip the sighting block and go straight to the move [M 0x165640 case 3,
+                // the level test → LAB_0016577c]: the tower guard's alarm run does not stop for Bond.
+                if !matches!(d.level, 0x0700_0009 | 0x0700_000a) && self.seen && !(self.ever_seen && self.dist >= self.engage_range) {
                     if let Some(n) = self.look_for_opponent(d) { self.set_state(n); return true; }
                 }
                 match self.move_to_goal(d) {
@@ -8419,8 +8467,8 @@ impl Drone {
                 // else the `+0x3b = seen ? (+0x1e == 0) : 0` fire re-arm and stay. There is NO
                 // 0x5b/0x5c exit — the old unseen-ticks arm was the 0x59 ↔ 0x5c thrash (with
                 // DroneFunc_CombatState 0x148338:136-142 sending a stationary 0x5c back to 0x59
-                // every tick). The anim-step 0xc Rand(3) → 0x6e roll is not ported (the port's
-                // anim steps are not exposed to the state arms [S]).
+                // every tick). The voice-0xC Rand(3) → 0x6e roll [M 0x1643e8:103-111] is not ported: it
+                // sits behind the +0x3C fire-mode byte, and only 07000008's ally carries that voice.
                 if !self.stays(d) { self.set_state(AIM_STAND); return true; }
                 self.turn_to_opponent(0.5235988);
                 if self.can_alt_attack(d, 0) { self.set_state(ALT_ATTACK); return true; }
@@ -9452,13 +9500,14 @@ impl Drone {
                 d.props.set(0x4c, &mut self.props, 1); // [M :18]
                 self.alert = 0.0; // `+0x50C = 0` [M 0x15ce60:19]
                 self.sighted = false; // `+0x4F8 &= ~0x4000000` [M :20]
+                d.props.set(0x4c, &mut self.props, 1); // [M 0x15ce60:18]
                 self.alert_status_set(0, frame);
                 self.desired_yaw = self.yaw_to_opp; // SetAngleToObj(opponent) [M :22-23]
                 self.call_anim(d, anim_state::STAND_IDLE, 0, 0);
                 true
             }
             (HOSTAGE_IDLE, msg::UPDATE) => {
-                if self.armed_peer_dist <= 20.0 { self.set_state(HOSTAGE_HIDE); }
+                if self.armed_drone_near { self.set_state(HOSTAGE_HIDE); }
                 true
             }
             (HOSTAGE_IDLE, msg::BULLET) => self.on_bullet_resume(d, rng, frame, HOSTAGE_HIDE, false),
@@ -9569,6 +9618,12 @@ impl Drone {
                 // (the handler has no `Drones` access — the `raise` pattern); the tick's drain
                 // counts it and posts through `info_labels`.
                 self.hostage_saved = true;
+                // An alternate state and no second channel: stay put, cowering with an armed person
+                // near [M 0x15ccf0:23-34].
+                if self.alt_state != 0 && self.second_channel == 0 {
+                    self.set_state(if self.near_armed_person(d) { HOSTAGE_HIDE } else { HOSTAGE_IDLE });
+                    return true;
+                }
                 if self.find_run_to_point(d) {
                     self.return_state = HOSTAGE_HIDE; // +0x5a2 = 0xe [M 0x15ccf0:42]
                     self.set_state(HOSTAGE_GO_TO_GOAL);
@@ -9585,16 +9640,13 @@ impl Drone {
             // 20.0f; ENTER arms nothing], transitioning to HostageIdle 0x0d when the coast is
             // clear (HostageIdle 0x15ce60:28-33 is the mirror, into 0xe when one is near); the
             // hold between UPDATEs is just message-idle (case 0 returns 1)].
+            (HOSTAGE_HIDE, msg::UPDATE) => { if !self.armed_drone_near { self.set_state(HOSTAGE_IDLE); } true }
             (HOSTAGE_HIDE, msg::ENTER) => {
                 self.enabled = true;
                 self.sighted = true; // `+0x4F8 |= 0x4000000` [M 0x15cfe0:13]
                 self.alert = 1.0; // `+0x50C = 1.0` [M 0x15cfe0:14]
                 self.alert_status_set(2, frame); // [M 0x15cfe0:15]
                 self.call_anim(d, anim_state::COWER, 0, 0);
-                true
-            }
-            (HOSTAGE_HIDE, msg::UPDATE) => {
-                if self.armed_peer_dist > 20.0 { self.set_state(HOSTAGE_IDLE); }
                 true
             }
             (HOSTAGE_HIDE, msg::BULLET) => self.on_bullet_resume(d, rng, frame, 0, false),
@@ -10633,9 +10685,9 @@ impl Drone {
             if go && !self.sighted { self.sighted = true; self.own_sight = true; }
             return go.then_some(state::ATTACK);
         }
-        // [M 0x177ed0:29-38] team 3 (civilian) refusal; the 0x07000009/0x0700000a exception is
-        // not ported (existing gap, unchanged).
-        if self.team == 3 {
+        // [M 0x177ed0:29-38] team 3 (civilian) refusal, except on 07000009/0A where the tower guards
+        // are team 3.
+        if self.team == 3 && !matches!(d.level, 0x0700_0009 | 0x0700_000a) {
             if ailog() {
                 eprintln!("[ailog] guard {} look_for_opponent: team {} — no player opponent", self.index, self.team);
             }
@@ -10648,8 +10700,12 @@ impl Drone {
             }
             return None;
         }
-        let go = self.seen && self.prop(d, 0x3c) && (self.alert >= 0.66 || self.prop(d, 0x51));
-        if ailog() {
+        // [M 0x177ed0:52-69] an owned cover (`+0x4F8 & 0x800`, the port's `cover_claimed`) and the
+        // interrogate bit refuse, and a mode 7/0xE guard without prop 0x57 runs past the opponent in
+        // states 0x85 and 99.
+        let run_past = !self.prop(d, 0x57) && matches!(self.mode, 7 | 0xe) && matches!(self.state, state::ENEMY_RUN_TO_POINT | state::GO_TO_GOAL);
+        let go = self.seen && self.prop(d, 0x3c) && (self.alert >= 0.66 || self.prop(d, 0x51)) && !self.cover_claimed && self.alert_bits & 0x20 == 0 && !run_past;
+        if { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| ailog()) } {
             eprintln!("[ailog] guard {} look_for_opponent: seen={} prop_3c={} alert={:.2} prop_51={} -> {}",
                 self.index, self.seen, self.prop(d, 0x3c), self.alert, self.prop(d, 0x51), if go { "ATTACK" } else { "none" });
         }
@@ -11100,6 +11156,9 @@ impl Drone {
     fn moving_result(&mut self, d: &Data, rng: &mut Rng, mv: u8, out_of_range_state: bool) -> u8 {
         match mv {
             0..=2 => {
+                // OutOfRange holds in alert idle behind a drone ahead, before the level test
+                // [M 0x148338 case 2 → 0x21]. NoSight goes on to SetCombatMoveAnim's own check.
+                if out_of_range_state && self.no_bunching & 2 != 0 { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); return 0; }
                 let remaining = self.croute.as_ref().map_or(0.0, |r| r.remaining);
                 if !out_of_range_state || matches!(d.level, 0x0700_0005 | 0x0700_0006) { self.set_combat_move_anim(d, rng, remaining) }
                 else { self.call_anim(d, anim_state::RUN, 0, 0) }
@@ -18918,6 +18977,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for (i, dr) in self.list.iter_mut().enumerate() {
             dr.bunched = positions.iter().enumerate().any(|(j, p)| j != i && p.is_some_and(|p| ((p[0] - dr.pos[0]).powi(2) + (p[2] - dr.pos[2]).powi(2)) < 9.0));
         }
+        // `NDrone2_NearArmedDrone` [M 0x177420], for the two hostage states that poll it.
+        for i in 0..self.list.len() {
+            if !matches!(self.list[i].state, state::HOSTAGE_IDLE | state::HOSTAGE_HIDE) { continue; }
+            let (at, eye) = (self.list[i].pos, self.list[i].head());
+            let near = self.list.iter().enumerate().any(|(j, x)| {
+                j != i && x.present && x.enabled && !x.corpse && x.health > 0.0 && x.team == 1
+                    && matches!(x.weapon, 2..=0x46 | 0x6a..=0x71)
+                    && (x.pos[0] - at[0]).powi(2) + (x.pos[1] - at[1]).powi(2) + (x.pos[2] - at[2]).powi(2) <= 400.0
+                    && d.world.line_of_sight(eye, x.head(), crate::world::LOS_GUARD_VISION)
+            });
+            self.list[i].armed_drone_near = near;
+        }
         // The hearing list is drained BEFORE the gate so sounds made during a freeze don't burst out on re-enable.
         let sounds = std::mem::take(&mut self.sounds);
         // The `PlrStat_LogEnemyDetectedPlayer` outbox count (the LogSeenOpponent latches set below,
@@ -19127,7 +19198,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // pair (the game's mid-scan latch order).
         let mut sight_passes = 0usize;
         // `FindAlertedDrones` runs inside the same vision wait [M 0x176a28:56-58].
-        let pair_n = if vision_open { self.list.len() } else { 0 };
+        // It returns at once on 07000004 and 0700001b [M 0x1767d0:26-31].
+        let pair_n = if vision_open && !matches!(d.level, 0x0700_0004 | 0x0700_001b) { self.list.len() } else { 0 };
         'pairs: for oi in 0..pair_n {
             // ---- the observer gates. DetermineAlertCheck needs the observer NOT to qualify, and
             // with the ConsiderAlerted gates below holding (not-latched, enabled, team ≠ 2) that
@@ -23054,7 +23126,7 @@ mod tests {
             shot_flashes: Vec::new(),
             surrender_logged: false, hit_log: 0, detected_logged: false,
             hip_anim: 1.0,
-            shot_aims: Vec::new(), log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script: 0, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, wobble: 0, lost_sight: false,
+            shot_aims: Vec::new(), log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script: 0, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, armed_drone_near: false, wobble: 0, lost_sight: false,
             damage_mul: 1.0, alert_bits: 0, light: 1.0, attack_frame: 0, alerted_by_drone: false, watching: false,
             route: None, last_wait: None, idle_timeout: None, delayed: None, sm_id: 0, stand_until: 0,
             croute: None, nav_path: None, move_quad: 0, yaw_offset: 0.0, no_route_odd: false, target: PlayerTarget::default(), links_used: Vec::new(),
@@ -23910,6 +23982,22 @@ mod abseil_tests {
         assert_eq!(level_sight(0x0700_0011, 0xc, 13.0, 15.0), (6.0, 9.0));
         assert_eq!(level_sight(0x0700_0011, 9, 13.0, 15.0), (5.0, 8.0));
         assert_eq!(level_sight(0x0700_0015, 0xc, 13.0, 15.0), (13.0, 15.0));
+    }
+
+    /// `DroneFunc_CombatState` case 2: OutOfRange holds in alert idle behind a drone ahead, before
+    /// the 05/06 combat-move test [M 0x148338 case 2]; only NoSight goes on to CombatWait.
+    #[test]
+    fn out_of_range_holds_behind_a_drone_ahead_instead_of_parking_in_combat_wait() {
+        empty_data!(0x0700_0005, keep, d);
+        let mut rng = Rng::new(0x5eed);
+        let mut dr = drone_at([10.0, 0.0, 10.0]);
+        dr.no_bunching = 2;
+        dr.moving_result(&d, &mut rng, 0, true);
+        assert_eq!(dr.next_state, None, "OutOfRange plays anim 0x21 and stays [M 0x148338 case 2]");
+        let mut dr = drone_at([10.0, 0.0, 10.0]);
+        dr.no_bunching = 2;
+        dr.moving_result(&d, &mut rng, 0, false);
+        assert_eq!(dr.next_state, Some(state::COMBAT_WAIT), "NoSight takes SetCombatMoveAnim's check [M 0x13cfb0:35-39]");
     }
 
     /// REGRESSION (regression-read-drone-ai): AlertSound's pre-mode gates stand before the

@@ -25,6 +25,18 @@ neither (nothing happening) → the pair is skipped.
 `DroneVision_ConsiderAlerted` (0x176250, `(observer Drone_tag*, source Drone_tag*)`) then
 decides, and `DroneVision_DroneCanSeeDrone` (0x1760b0) supplies the sight test.
 
+## Who raises the source bits
+
+- Bit 1: `FirstSightState`'s prop-0x33 arm on an own-sight first attack, with the 0x200000 latch [M 0x147c48:55-90].
+- Bit 0x10: `FirstAttack`, team 1 only, behind that latch, and only when `FirstSightState` picked no state
+  [M 0x148010:30-57, 85-88]. So an own-sight guard with prop 0x33 (nearly every guard on the disc) raises 1, not 0x10,
+  and only observers with prop 0x28 take it. A guard alerted by another guard skips `FirstSightState` and raises 0x10.
+- Bit 2: the hurt scream [M 0x145e28:14].
+- Bit 8: `DSTATE_Dead` ENTER, prop 0x31 and no head kill (`+0x3A`) [M 0x163fe8:29-33]. `SetAsDead` leaves +0x100 set
+  [M 0x14a2f0], so a corpse stays a source until it is deleted and observers with prop 0x29 react to the body.
+
+`FindAlertedDrones` returns at once on 07000004 and 0700001b [M 0x1767d0:26-31].
+
 ## ConsiderAlerted, exactly
 
 The decompile has `unaff_s0/s1/s2` spill noise; every gate below is verified against the

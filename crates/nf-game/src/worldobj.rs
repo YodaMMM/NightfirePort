@@ -653,7 +653,7 @@ mod music_trigger_delete_tests {
 
     fn run(params: &[(u32, u32)], ch: &mut Channels, ticks: u32) -> (WorldObjects, u32) {
         let p = nf_formats::placement::Placement { index: 0, hashcode: u32::MAX, flags: 0xfb, translation: [0.0; 3], rotation: [0.0; 3], params: params.to_vec(), extra: [0; 9] };
-        let mut w = WorldObjects::create(&[p], &[], |_| (0, [0.0; 3]));
+        let mut w = WorldObjects::create(&[p], &[], |_| (0, [0.0; 3], 0));
         let (mut music, mut rng) = (crate::music::Music::default(), crate::drone::Rng::new(1));
         let (weapons, mut bullets) = (nf_formats::weapon::WeaponData::default(), Vec::new());
         let mut fires = 0;
