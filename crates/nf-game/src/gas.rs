@@ -166,7 +166,17 @@ pub struct GasPool {
 }
 
 /// `Rand_Rand(0x100) > 0x7f`-quality sign/offset from the counter: a 32-bit bit-mix (xxhash-style), no
-/// shared-stream involvement. The game's draws come from Rand_FRand — the port substitutes this [S].
+/// shared-stream involvement. SETTLED (markers-world-objects 2026-11-08): the sites this hash
+/// serves are NOT game `Gas_Init` calls and consume NO shared draws — the swoosh ribbon puff
+/// (`Swoosh_Update` 0x18d200:49-82 has no gas/RNG path) and the GT destroy burst (the port's
+/// presentation of `Emitter_Create` 0x180498:249-257) — so the port drawing nothing is exactly
+/// the game's stream behaviour [M]; the hash only shapes the stand-in visuals. WARNING for the
+/// second user: the game's kind-9/10 emitter children DO draw — each case-9 child re-call
+/// consumes 2 shared draws (spin + sign [M gases_smoke 0x1ab2d0 case 9 = decompile :146-162]),
+/// each case-10 child 5 (spin + sign + the three 0.2 wind spreads, [M :164-186 + Gas_Init's
+/// kind-7 arm 0x1ab160/0x1ab184/0x1ab1a4]). No port caller creates kind-9/10 parents today
+/// (the audit's census), so `push_child` is unreachable — if one ever lands, it must consume
+/// those draws from the shared stream, not this hash.
 fn jitter(counter: u32, salt: u32) -> f32 {
     let mut h = counter ^ salt;
     h = h.wrapping_mul(0x9e37_79b9);
@@ -242,8 +252,18 @@ impl GasPool {
     /// 3. the spin sign `Rand_Rand(0x100)` — negate when ≥ 0x80 (0x1ab08c, decomp :77-80);
     /// 4-6. the type-7/NULL-vel wind spread `Rand_FRand(0.2)` ×3 (0x1ab160/0x1ab184/0x1ab1a4):
     ///     `vel = (wind.x + r − 0.1, wind.y + r, wind.z + r − 0.1) · REC_FRAME_RATE`, wind =
-    ///     `Env_GetWindVel` 0x17c048 = 0 with no cel wind radiator (none ported — [S] the cel wind
-    ///     system stays unported). Fixed args of the site: p1 0.05, p2 0.25, type 7, rgba 0x48403080,
+    ///     `Env_GetWindVel` 0x17c048. CORRECTED (markers-world-objects 2026-11-08): the port
+    ///     passes 0, but the game's cel wind CAN be non-zero on the shipped disc — wind radiators
+    ///     are ordinary 0xDF map placements whose param 3 (·0.1) is `Env_Create` 0x17b968's
+    ///     W+0x34 target, and the disc carries them (07000004 #5 rain, 05 #360/#361, 06 #1,
+    ///     08 #7, 0c #278, 0d #429, 14 #425/#588, 41 #559 [D docs/levels audits; 07000004 pinned
+    ///     live in nf-view's lamp_wind_live]). The port's `Rbodies` already ports the full chain
+    ///     (`env_wind_create`/`env_update_gust`/`env_get_wind_vel`, field-for-field with the
+    ///     decompile) — the gas sites just lack the cel-host plumbing to resolve the spawning
+    ///     object's cel. KEPT deviation [S], with the game's answer now stated: the smoke of a
+    ///     muzzle/impact inside a wind cel drifts with that cel's wind in the game, and stands
+    ///     still in the port. Visual only (no pass/fail assertion reads a puff velocity).
+    ///     Fixed args of the site: p1 0.05, p2 0.25, type 7, rgba 0x48403080,
     ///     end 1 (~0 float bits), life 128 ticks (the decomp-dropped 11th arg = 0x80 [M 0x1cbce0]).
     /// The draws are consumed BEFORE the pool-cap check — the game's RNG has no notion of the port's
     /// cap, and a skipped draw would shift the shared stream.
@@ -504,8 +524,12 @@ impl GasPool {
     /// kind 3 are the call's own [M 0x17dbb8:347-349]; the colour word packs
     /// `amount = (1 − damage/hp)·127` as `amount<<24 | amount<<16 | amount<<8 | (0xbf−amount)`
     /// [M :339-350] — the port reads its bytes as [a, b, g, r] like `init_ex`'s packed end does.
-    /// The decomp drops `Gas_Init`'s life argument here (the 11th, as at 0x1cbce0); the port
-    /// keeps 64.0 — `// [S] unverified`, presentation only, no pass/fail assertion reads it.
+    /// The decompile drops `Gas_Init`'s life argument here — SETTLED by the disassembly
+    /// (markers-world-objects 2026-11-08): the call's single stack word (`sw $v0, ($sp)` at
+    /// 0x17e34c) = 0x1a4 = 420 ticks [M 0x17dbb8 call site 0x17e388; layout confirmed against
+    /// the searchlight call, whose same slot = 0x80 [M 0x1cbce0] — the register file is
+    /// a0-a3 = cel/pos/rot/vel, FPR 12/13 = p1/p2, t0-t3 = mesh/kind/rgba/end, 0($sp) = life].
+    /// The scale rate follows the life (the game's (p2−p1)/life), so the game's /420.0 replaces /64.0 once the longer smoke has had a render check.
     pub fn init_copter_smoke(&mut self, rng: &mut crate::drone::Rng, pos: V3, yaw: f32, size: f32, amount: u8) {
         let spin_mag = rng.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
         let spin = if rng.rand(0x100) >= 0x80 { -spin_mag } else { spin_mag };
@@ -517,11 +541,11 @@ impl GasPool {
             vel: [0.0, REC_FRAME_RATE, 0.0], // [M 0x1aacc8:89-141's else]
             mesh: 0x0200_001f, // [M 0x17dbb8:348]
             scale: 2.0, // [M :347's f12 = 2.0]
-            scale_rate: (size - 2.0) / 64.0,
+            scale_rate: (size - 2.0) / 64.0, // the game: / 420.0 [M 0x17e34c life word 0x1a4]; held for a render + PCSX2 look
             rgba,
             rgba_rate: [0.0; 4],
             spin,
-            life: 64.0, // [S] unverified — the decompile drops the life arg
+            life: 64.0, // the game: 420.0 [M 0x17e34c stack word 0x1a4]; held for a render + PCSX2 look
             kind: 3, // [M :349]
             billboard: false,
             xray_only: false,
@@ -540,8 +564,10 @@ impl GasPool {
     /// velocity branch — kind 4 with a GIVEN velocity: `vel·REC + Rand_FRand(0.05)` on x and z, no
     /// y draw [M 0x1ab21c/0x1ab248; decompile :91-98 — the draw is ADDED raw, not centred]; kind 7
     /// with a NULL velocity (every kind-7 caller here passes NULL — the muzzle 0x1a4428, the
-    /// Effect_Bullet entries 0x1cea80): `Env_GetWindVel` (0 — no wind radiators in the port's rooms
-    /// [S]) + the `(rand−0.1, rand, rand−0.1)` spread over 0.2 [M 0x1ab160/0x1ab184/0x1ab1a4;
+    /// Effect_Bullet entries 0x1cea80): `Env_GetWindVel` — the port passes 0, a KEPT deviation
+    /// [S] with the game's answer stated (see `init_searchlight_smoke`: disc wind radiators
+    /// exist [D 07000004 #5 et al.]; the gas sites lack the cel-host plumbing) + the
+    /// `(rand−0.1, rand, rand−0.1)` spread over 0.2 [M 0x1ab160/0x1ab184/0x1ab1a4;
     /// decompile :108-116]; every other kind: the (0, REC, 0) default, no draws [M decompile
     /// :105-129]. The draws land BEFORE the pool-cap check — the game's RNG has no notion of the
     /// port's cap, and a skipped draw would shift the shared stream. The life gate stays first:
@@ -673,10 +699,17 @@ impl GasPool {
                 // Case 0xb [M 0x1ab2d0 case 0xb = 0x1ab44c, decomp :186-211]: the same motion —
                 // pos += WldGravity·(REC·−0.02·FRM) then pos += the stored velocity — plus the
                 // rot-z spin accumulation (`obj+0x58 += data+0`, the spin rate Gas_Init stored)
-                // and the scale/colour ticks (the common tail). The game also clamps pos.y to
-                // the host cel's +0x54 floor [M :201-203]; the port's puffs carry no cel host
-                // and this puff only rises (vel y > 0.45·REC, buoyancy up), so the clamp is a
-                // no-op for it [S].
+                // and the scale/colour ticks (the common tail). The game also clamps the puff's
+                // pos.y DOWN to the host cel's +0x54 word — `if (cel+0x54 < pos.y) pos.y =
+                // cel+0x54` [M :201-203; cel+0x54 = the glist bbox max y, the room top, the
+                // port's own buoy-surface reading in rigid_body.rs] — a CEILING clamp that the
+                // rising puff (vel (0, REC, 0) + buoyancy up [M 0x1aacc8:105-129's default])
+                // reaches and holds. CORRECTED (markers-world-objects 2026-11-08): the old
+                // "the clamp is a no-op for it [S]" reasoning was wrong — the puff only rises,
+                // which is exactly why the clamp binds. The port's puffs still carry no cel
+                // host, so the clamp stays unported [S]: the port's smoke keeps rising past the
+                // room top where the game's holds at the ceiling (visual only; the 0xb site is
+                // the flashbang puff, drone.rs's Bullet_DoTrails arm).
                 0xb => {
                     for k in 0..3 { g.pos[k] += g.vel[k]; }
                     g.pos[1] += WLD_GRAVITY[1] * -0.02 * REC_FRAME_RATE;

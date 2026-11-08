@@ -998,6 +998,11 @@ pub struct RbObj {
     /// no cel resolved [M parseentity_fixup_entity 0x1d00c0 / parsemap_block_map_data_static
     /// 0x1d1998 via the port's verified fix-ladder doc].
     pub buoy: Option<(f32, f32)>,
+    /// Whether `rb_build`'s moments' triangle check passed for this body ([M 0x1d6bf0's build
+    /// gate — `rb_build` :136-146]). The census test (`rigid_body_census_live.rs`) proves every
+    /// shipped-disc 0xD8 placement builds, so the game's failed-build path (object created, no
+    /// body) is never reached on the disc.
+    pub built: bool,
 }
 
 impl RbObj {
@@ -1083,6 +1088,11 @@ pub struct Rbodies {
     pub list: Vec<RbObj>,
     /// The cels' wind structs, in 0xDF placement order; `RbObj::wind` indexes here.
     pub winds: Vec<EnvWind>,
+    /// 0xD8 placements whose translation's room-cel containment scan matched MORE than one
+    /// cel — the case where the port's first-parse-order pick stands in for the game's
+    /// unported collision-ray tie-break [M build_FindCel 0x1c8cb0's bbox test]. The census
+    /// test proves this is 0 on every shipped level (each 0xD8 placement resolves uniquely).
+    pub cel_ambiguous: u32,
 }
 
 impl Rbodies {
@@ -1100,7 +1110,8 @@ impl Rbodies {
     /// placement on the disc fails the check).
     pub fn create(level: &nf_formats::level::Level) -> Rbodies {
         let mut list = Vec::new();
-        let Some(m) = level.main_map() else { return Rbodies { list, winds: Vec::new() } };
+        let mut cel_ambiguous = 0u32;
+        let Some(m) = level.main_map() else { return Rbodies { list, winds: Vec::new(), cel_ambiguous: 0 } };
         // The room cels + their wind: the main map's cel placements (the parse_cel_graph room
         // half — flags16 0xc023/0xc047, the object's raw glist bbox = the cel's +0x40..0x58 [M
         // parsemap_block_map_data_static 0x1d1998; build_FindCel 0x1c8cb0 tests this box]), the
@@ -1200,7 +1211,7 @@ impl Rbodies {
             let moments = rb_cuboid_moments_of_inertia(mass, ext[0], ext[1], ext[2]);
             let mut rb = rb_init(ty);
             let table = if ty == 0 { BOX_VERTS } else { SPHERE_VERTS };
-            let _built = rb_build(&mut rb, mass, table, moments);
+            let built = rb_build(&mut rb, mass, table, moments);
             let mut st = RbState::zeroed();
             st.pos = p.translation;
             st.trans = p.translation;
@@ -1215,9 +1226,15 @@ impl Rbodies {
             // cels' raw glist bbox [M 0x1c8cb0: the +0x40..0x58 test]). Multiple matches: the
             // game's collision-ray tie-break is not ported — the first parse-order room cel
             // wins [S unverified tie-break; 07000004/06/01 resolve uniquely (the wind probe)].
-            let hit = cels.iter().position(|c| c.min[0] <= st.pos[0] && st.pos[0] <= c.max[0]
+            let matches = cels.iter().filter(|c| c.min[0] <= st.pos[0] && st.pos[0] <= c.max[0]
                 && c.min[1] <= st.pos[1] && st.pos[1] <= c.max[1]
-                && c.min[2] <= st.pos[2] && st.pos[2] <= c.max[2]);
+                && c.min[2] <= st.pos[2] && st.pos[2] <= c.max[2]).count();
+            if matches > 1 { cel_ambiguous += 1; }
+            let hit = if matches > 0 {
+                cels.iter().position(|c| c.min[0] <= st.pos[0] && st.pos[0] <= c.max[0]
+                    && c.min[1] <= st.pos[1] && st.pos[1] <= c.max[1]
+                    && c.min[2] <= st.pos[2] && st.pos[2] <= c.max[2])
+            } else { None };
             let (wind, buoy) = hit.map(|ci| (cels[ci].wind, Some((cels[ci].water, cels[ci].max[1])))).unwrap_or((None, None));
             list.push(RbObj {
                 placement: pi as u16,
@@ -1239,9 +1256,10 @@ impl Rbodies {
                 sph_radius: o.radius,
                 wind,
                 buoy,
+                built,
             });
         }
-        Rbodies { list, winds }
+        Rbodies { list, winds, cel_ambiguous }
     }
 
     /// `Env_Update` 0x17bc88's cel walk [M]: every wind cel steps once per frame from the ONE
@@ -1440,8 +1458,10 @@ mod evolve_tests {
                 list: vec![RbObj {
                     placement: 0, glist: 0, shape_key: 0, flags: 0x44, s_aa: 0, s154, s158: 0xffff,
                     rb, st, hits: Vec::new(), sph_centre: [0.0; 3], sph_radius: 1.0, wind: None, buoy: None,
+                    built: true,
                 }],
                 winds: Vec::new(),
+                cel_ambiguous: 0,
             }
         };
         assert_eq!(rbs(1).list[0].rb.ty, -1, "barrel() is the 0xFFFF type — any non-zero type takes the tail [M 0x1d6e38:76]");
@@ -1775,6 +1795,7 @@ mod evolve_tests {
         let o = RbObj {
             placement: 0, glist: 0, shape_key: 0, flags: 0x44, s_aa: 0, s154: 0, s158: 0xffff,
             rb, st, hits: Vec::new(), sph_centre: [0.0, -1.0, 0.0], sph_radius: 4.0, wind: None, buoy: None,
+            built: true,
         };
         // One unit quad's lower triangle in the z = 0 plane of object space, wound to face +z.
         let tris = [[[-0.5, -0.5, 0.0], [0.5, -0.5, 0.0], [0.5, 0.5, 0.0]]];
