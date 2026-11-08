@@ -747,8 +747,6 @@ pub struct Player {
     /// floor, 07000011's #235 ~0.85 over pos — the documented ref-gate/extent divergence), so the
     /// general deep reach stays blocked by those route pins.
     pub riding: bool,
-    /// Bond's feet are on a floor (`Bond::grounded`): the low-plate toucher reads a standing body.
-    pub grounded: bool,
 }
 
 /// The player as an AI target (`DAT_00298fd0`): his position when the nodes were found, the frame (`+0x54`), and per
@@ -19292,12 +19290,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         if self.net_bodies.is_none() && player.riding && !player.crouched && player.body.2 == 0.55 {
             player_touchers.push(crate::triggers::Toucher { a: player.body.1, b: [player.pos[0], player.pos[1] + 1.26, player.pos[2]], r: 0.55, drone: false, skin: crate::triggers::RIDE_TOUCHER, contain: false, seg_only: false });
         }
-        // The standing segment's low reach over a raw plate (`Trigger::raw_plate`). The box stops at
-        // pos-0.6, under which 07000006's #495/#766 (start #511's arrival pair, the only writers of
-        // ch 0x50) and #524 (the tunnel's ch 0x34 plate) stayed silent.
-        if self.net_bodies.is_none() && player.grounded && !player.crouched && !player.hanging && player.body.2 == 0.55 {
+        // Bond's collide segment over a raw plate (`Trigger::raw_plate`): the game's walk HITTEST
+        // contact, grounded or in the air [M 0x194df0, 0x109da0]. The box stops at pos-0.6, under
+        // which 07000006's #495/#766 (start #511's arrival pair, the only writers of ch 0x50) and
+        // #524 (the tunnel's ch 0x34 plate) stayed silent. Not on a wire or zipline: the wire arm
+        // clears the pick mask (0x194df0:308) and the zipline arm's segment is not split out.
+        if self.net_bodies.is_none() && !player.hanging {
             let (a, b, r) = player.body;
-            player_touchers.push(crate::triggers::Toucher { a, b, r, drone: false, skin: crate::triggers::LOW_TOUCHER, contain: false, seg_only: true });
+            player_touchers.push(crate::triggers::Toucher::raw(a, b, r));
         }
         let touchers: Vec<crate::triggers::Toucher> = player_touchers.into_iter()
             .chain(self.list.iter().filter(|x| x.enabled).map(|x| crate::triggers::Toucher { a: [x.pos[0], x.pos[1] - 1.0, x.pos[2]], b: x.head(), r: 0.4, drone: true, skin: x.skin, contain: true, seg_only: false }))

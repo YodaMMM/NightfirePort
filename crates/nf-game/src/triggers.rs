@@ -147,12 +147,15 @@ pub struct Trigger {
     /// HITTEST segment touches. Its low reach is proven on these [L ch 0x24]; on floor plates it
     /// fires ahead of the measured box and moves scripted sequences. // [S] scope, not a game rule
     pub seg_beam: bool,
-    /// A level plate whose glist flags carry bit 0x40, so `Collide_Intersect` 0x1ebaa8:93-99 routes
-    /// it through `Intersect_CylGeom` 0x109da0's raw refine [M]. The raw reach ends at the segment
-    /// bottom less the radius, pos+0.55-cc-0.55, about the floor; the measured box stops at pos-0.6.
-    /// The low toucher narrows that gap for a Bond standing directly over the plate, a subset of the
-    /// raw contact: 07000006's arrival pair #495/#766 and tunnel plate #524 sit 0.44-0.5 over the floor.
-    /// The sideways reach stays on the box (`seg_beam`'s scope note).
+    /// A flat plate whose glist object flags carry bit 0x40: `Collide_Intersect` 0x1ebaa8:93-99 sets
+    /// HITDATA+0x51 |= 2 for it, and `Intersect_CylGeom` 0x109da0:421 then skips the push-out arm and
+    /// takes any tri whose `Dist2Tri` distance is under the HITTEST radius (:419, :523-531) [M]. The
+    /// walk HITTEST's +0x98 is cleared every tick (`Player_Collision` 0x194df0:88), so none of the
+    /// 0x1ebaa8:301-319 drop masks apply [M]. `RAW_TOUCHER` reads it with Bond's own collide segment:
+    /// standing, A = pos+0.275 down to B = pos+0.55-cc, r 0.55, so a flat plate is touched while it is
+    /// within 0.55 under B over its footprint, about the floor. The measured box stops at pos-0.6;
+    /// 07000006's arrival pair #495/#766 and tunnel plate #524 sit between the two. Bit-0x40 glists
+    /// that are not flat (other than the 0x645 beams, `seg_beam`) keep the box. // [S] scope
     pub raw_plate: bool,
     pub lo: V3,
     pub hi: V3,
@@ -241,19 +244,18 @@ impl Motion {
 /// A body that can touch triggers: capsule axis from `a` to `b`, radius, drone (true) or Bond, drone skin hash.
 /// The `skin` marker of the riding deep-reach toucher: it touches script plates only.
 pub const RIDE_TOUCHER: u32 = u32::MAX;
-/// The `skin` marker of the low-plate toucher: the standing HITTEST segment, read only by
-/// `Trigger::raw_plate` plates (see there).
-pub const LOW_TOUCHER: u32 = u32::MAX - 1;
-/// How far under the segment bottom the low toucher reads. The raw refine reaches the full radius
-/// 0.55 [M 0x109da0]; this stops at about pos-0.75, past 07000006's #495/#766/#524 and short of the
-/// balcony plate #664, whose first contact the walked courtyard reveal pins mid-drop. // [S] scope
-pub const LOW_REACH: f32 = 0.265;
+/// The `skin` marker of the raw-plate toucher: Bond's collide-pass HITTEST segment (`Player_Collision`
+/// 0x194df0's arms, the port's `Player::body`), read only by `Trigger::raw_plate` plates with the
+/// raw refine `seg_touches_tri_raw` (see there).
+pub const RAW_TOUCHER: u32 = u32::MAX - 1;
 
 #[derive(Clone, Copy, Debug)]
 /// `contain`: whether the volume-containment contact (see `Trigger::touched_by`) applies to this toucher.
 pub struct Toucher { pub a: V3, pub b: V3, pub r: f32, pub drone: bool, pub skin: u32, pub contain: bool, pub seg_only: bool }
 
 impl Toucher {
+    /// Bond's collide segment as the raw-plate toucher (`RAW_TOUCHER`).
+    pub fn raw(a: V3, b: V3, r: f32) -> Toucher { Toucher { a, b, r, drone: false, skin: RAW_TOUCHER, contain: false, seg_only: true } }
     /// Bond in the normal stance (`Player_Collision` 0x194DF0, hip height 1.035 read live).
     /// level-0c-display-hatch-2 measured two tighter models against the full battery and
     /// REVERTED both: the walk-capsule SPINE with r 0 (A = pos+0.275, B = pos−0.485 [M
@@ -592,12 +594,8 @@ impl Trigger {
     /// 07000006's LoadPoint #746, an open room-shaped glist [D measured tris]).
     pub fn touched_by(&self, c: &Toucher) -> bool {
         if c.skin == RIDE_TOUCHER && self.script.is_none() { return false; }
-        if c.skin == LOW_TOUCHER {
-            return self.raw_plate && self.tris.iter().enumerate().any(|(i, t)| {
-                let Some((n, d)) = self.planes.get(i) else { return false };
-                t[0][1] >= c.b[1] - LOW_REACH && seg_touches_tri_raw(c.a, c.b, c.r, t, n, *d)
-                    && point_triangle([c.b[0], t[0][1], c.b[2]], t) < 0.001
-            });
+        if c.skin == RAW_TOUCHER {
+            return self.raw_plate && self.tris.iter().zip(&self.planes).any(|(t, (n, d))| seg_touches_tri_raw(c.a, c.b, c.r, t, n, *d));
         }
         let grow = c.r + 0.1;
         let lo = [c.a[0].min(c.b[0]) - grow, c.a[1].min(c.b[1]) - grow, c.a[2].min(c.b[2]) - grow];
