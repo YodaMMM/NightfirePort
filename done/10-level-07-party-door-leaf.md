@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-11-08T04:16Z
+
+---
+## Report (done, 2026-11-08T05:39Z)
+
+Closed by the driver: the report is on `s/level-07-party-door-leaf` (docs/reports/level-07-party-door-leaf.md); the worker didn't run finish.sh.
