@@ -1,9 +1,7 @@
 //! `Player_UnEquipKey` 0x1a97b8 (16 B): `BL[0x70C + (u16)id] = 0` — the key-ring slot clear
 //! [M 0x1a97b8:6]. Sole caller `Lock_ReLock` 0x1b0750:8 (guarded player-class-3), reached from
 //! `Lock_Update` 0x1ae3d8 case 2 when the take channel drops: the single-use key re-locks the
-//! door and removes Bond's key. The port's lock side does not consult or clear the key ring yet
-//! (bldata.md:95's recorded gap — `Inventory::keys` pickup.rs:376 is the pickup side); the clear
-//! itself is one line when `Lock_ReLock` lands.
+//! door and removes Bond's key. `Lock::key_tick` runs that and the case-0 ring read.
 //!
 //! The game gates the keypad mini-game on the pause-menu manager's existence —
 //! `MenuManager_Exists` 0x21de90 (`manager[(id&0xff)·0x1d8 + 0x1D1]`, the in-use byte of the
@@ -122,6 +120,13 @@ pub struct Lock {
     /// use-pick facing gate's direction: `Player_Activate` 0x1a5170's class-0x3A arm refuses the
     /// activation when `dir · (user+0xC0 − lock+0xC0) < 0` (behind the panel) [M 0x1a5170:158-166].
     pub facing: V3,
+    /// The lock sits in `Lock_Update` state 1 this tick: case 1 writes the out channel, then an
+    /// empty framelist ends the state at once [M 0x1ae3d8 case 1]. Set by every unlock and by the
+    /// Operative create-unlock.
+    pub open_pending: bool,
+    /// `Lock_Unlock` 0x1b0650:19 owes `Player_EquipKey(code)`: every unlock by the player, not the
+    /// create-unlock (the param_3 = 1 arm equips nothing [M :28-31]).
+    pub equip_pending: bool,
 }
 
 impl Lock {
@@ -157,6 +162,8 @@ impl Lock {
                 scanning: false,
                 lod_next: false,
                 facing: [m[2][0], m[2][1], m[2][2]],
+                open_pending: param(6) != 0 && difficulty == 1,
+                equip_pending: false,
             });
         }
         out
@@ -170,12 +177,16 @@ impl Lock {
     /// `Lock_Unlock`, which writes `switch_channels[record+8]` [M :194-195, 0x1b0650]. Returns
     /// whether it completed THIS tick.
     pub fn burn(&mut self, amount: u8, ch: &mut Channels, frame: u32) -> bool {
-        if self.burned || self.unlocked { return false; }
+        // The laser arm is kind 1 only: kinds 0/2 read ids 0x56/0x57 and nothing else, so a laser on
+        // a keypad does nothing [M 0x1ae3d8:47 `uVar6 == 1`, :162].
+        if self.kind != 1 || self.burned || self.unlocked { return false; }
         self.grace = 2; // *(lock+0xf6) = 2 on the contact tick [M 0x1ae3d8:79]
         self.burn_a = self.burn_a.saturating_sub(amount);
         self.burn_b = self.burn_b.saturating_sub(amount);
         if self.burn_b >= 4 { return false; }
         self.burned = true;
+        self.open_pending = true;
+        self.equip_pending = true;
         if self.out != 0 { ch.set(self.out as u32, 1, frame); }
         true
     }
@@ -249,6 +260,34 @@ impl Lock {
         None
     }
 
+    /// The key-ring half of `Lock_Update` 0x1ae3d8, once per tick. State 1 writes the out channel
+    /// [M case 1] and moves the lock to state 2 (`burned`; the re-lock there is `update_burnt_open`,
+    /// run by the control pass); a closed kind-0/2 lock with a code opens when the ring holds
+    /// its key [M case 0, :139-147 `Lock_Unlock(glb_players, lock, 0)`, state 1]. The ring is what
+    /// links the paired keypads on the two faces of a door: solving one equips the key
+    /// [M 0x1b0650:19] and the other opens on its next tick. `busy` = this lock is in state 3/4.
+    pub fn key_tick(&mut self, keys: &mut [bool], ch: &mut Channels, frame: u32, busy: bool) {
+        if self.equip_pending {
+            self.equip_pending = false;
+            if let Some(k) = keys.get_mut(self.code as usize) { *k = true; }
+        }
+        if self.open_pending {
+            // State 1 writes the channel; the empty framelist ends it at once, so the next tick is
+            // state 2 (`burned`), where the control pass's `update_burnt_open` reads the re-lock.
+            self.open_pending = false;
+            if self.out != 0 { ch.set(self.out as u32, 1, frame); }
+            self.burned = true;
+            return;
+        }
+        if self.burned || self.unlocked { return; }
+        if (self.kind == 0 || self.kind == 2) && self.code != 0 && !self.scanning && !busy
+            && keys.get(self.code as usize).copied().unwrap_or(false)
+        {
+            self.unlocked = true;
+            self.open_pending = true;
+        }
+    }
+
     /// The lock of a placement index (the render's per-instance lookup, when the meshes land).
     pub fn of_placement(list: &[Lock], placement: usize) -> Option<usize> {
         list.iter().position(|l| l.placement == placement)
@@ -309,6 +348,7 @@ impl Lock {
                 // the port folds it into the completion tick so the case-2 re-lock check is
                 // live from the next tick (update_burnt_open's header).
                 self.burned = true;
+                self.equip_pending = true;
                 self.scanning = false;
                 // fix-decryptor-sounds: the unlock chime [M 0x1ae3d8:374].
                 self.pending_sounds.push(0x5da);
@@ -480,6 +520,7 @@ mod tests {
             kind, code, scan_progress: 0, scan_solved: 0, pending_sounds: Vec::new(), scanning: false, lod_next: false,
             burn_a: 0xff, burn_b: 0xff, grace: 0,
             facing: [0.0, 0.0, 1.0],
+            open_pending: false, equip_pending: false,
         }
     }
 

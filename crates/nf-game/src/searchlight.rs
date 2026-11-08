@@ -339,7 +339,9 @@ impl Searchlights {
             }
             // State 1: hold the alarm channel and steer to Bond [M, disassembly 0x1cbb00].
             1 => {
-                channels.set(self.parts[head].alarm as u32, 1, frame);
+                // Guarded [M 0x1cb900:146-148]: all seven 07000005 heads carry alarm 0, and channel 0 is
+                // a real channel the port must not raise.
+                if self.parts[head].alarm != 0 { channels.set(self.parts[head].alarm as u32, 1, frame); }
                 let h = &mut self.parts[head];
                 let dx = player.pos[0] - pos[0];
                 let dy = player.pos[1] - pos[1];
@@ -433,31 +435,7 @@ impl Searchlights {
             let (yaw, pitch) = (self.parts[head].yaw, self.parts[head].pitch);
             let dir = spherical(100.0, yaw, -pitch);
             let end = [pos[0] + dir[0], pos[1] + dir[1], pos[2] + dir[2]];
-            // The player's pick sphere: centre `obj+0x80` (the `Player.sph` the port fills from
-            // `Bond::sphere_centre`), radius `M_CONTROL+0x8C` = 1.0576 [L ee_start_05.bin].
-            const PLAYER_SPH_R: f32 = 1.0576;
-            let (mut t_hit, mut n_hit) = match d.world.segment_surface(pos, end, false) {
-                Some((t, n, _)) => (Some(t), Some(n)),
-                None => (None, None),
-            };
-            {
-                // The ray is `pos + dir·t` with |dir| = 100 (spherical's length), t ∈ [0, 1] on the segment.
-                let oc = [pos[0] - player.sph[0], pos[1] - player.sph[1], pos[2] - player.sph[2]];
-                let a = dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2];
-                let b = oc[0] * dir[0] + oc[1] * dir[1] + oc[2] * dir[2];
-                let c = oc[0] * oc[0] + oc[1] * oc[1] + oc[2] * oc[2] - PLAYER_SPH_R * PLAYER_SPH_R;
-                let disc = b * b - a * c;
-                if disc >= 0.0 {
-                    let t = (-b - disc.sqrt()) / a;
-                    if t > 0.0 && t_hit.is_none_or(|tw| t < tw) {
-                        let p = [pos[0] + dir[0] * t, pos[1] + dir[1] * t, pos[2] + dir[2] * t];
-                        let inv = 1.0 / PLAYER_SPH_R;
-                        n_hit = Some([(p[0] - player.sph[0]) * inv, (p[1] - player.sph[1]) * inv, (p[2] - player.sph[2]) * inv]);
-                        t_hit = Some(t);
-                    }
-                }
-            }
-            if let (Some(t), Some(n)) = (t_hit, n_hit) {
+            if let Some((t, n, _)) = d.world.segment_surface(pos, end, false) {
                 let hit = [pos[0] + (end[0] - pos[0]) * t, pos[1] + (end[1] - pos[1]) * t, pos[2] + (end[2] - pos[2]) * t];
                 let spot = &mut self.parts[sp];
                 spot.pos = [hit[0] + n[0] * 0.01, hit[1] + n[1] * 0.01, hit[2] + n[2] * 0.01];
@@ -492,7 +470,7 @@ impl Searchlights {
                 } else {
                     let lost = self.parts[sp].phase + 1.0;
                     self.parts[sp].phase = lost;
-                    if lost >= LOST_LIMIT { self.parts[head].state = 0; }
+                    if lost > LOST_LIMIT { self.parts[head].state = 0; } // strict [M 0x1cb900:259]
                 }
             }
         }

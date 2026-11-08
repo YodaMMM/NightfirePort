@@ -187,12 +187,21 @@ fn the_keypad_burn_opens_its_door() {
         cycles += 1;
     }
     // The held beam burns the lock through the real fire path.
+    // A keypad opens by its typed code or the decryptor; the laser arm is kind 1 only [M 0x1ae3d8:47, :162].
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        if let Some(li) = sim.drones.locks.iter().position(|l| l.out == 0xa && !l.unlocked) {
+            let code = sim.drones.key_codes.code(sim.drones.locks[li].code);
+            sim.drones.keypad = Some((li, nf_game::lock::Keypad::arm(code, false)));
+            for c in code { sim.drones.keypad_digit((c - b'0') as u32); }
+        }
+    }
     let lock_at = [7.0f32, 1.6, 0.2];
     let start = w.total_ticks;
     loop {
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.drones.channels.on(0xa) { break; }
-        assert!(w.total_ticks - start < 600, "the beam never burned the keypad lock [M 0x1ae3d8]");
+        assert!(w.total_ticks - start < 600, "the typed code never raised the keypad channel [M 0x1ae3d8 case 4]");
         let p = sim.bond.pos;
         let eye = p[1] + sim.bond.eye - sim.bond.crouch_drop;
         let (dx, dz, dy) = (lock_at[0] - p[0], lock_at[2] - p[2], lock_at[1] - eye);

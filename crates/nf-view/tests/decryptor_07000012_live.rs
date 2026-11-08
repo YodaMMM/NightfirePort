@@ -107,9 +107,15 @@ fn decryptor_opens_the_kind0_lock_through_the_real_path_and_the_sisters_hold() {
     assert!(ut < 850, "the 0x56's scan lands inside its 389-tick + settle budget (took {ut})");
 
     // --- Sister 2: a mid-scan release decays −4/tick to a full reset [M 0x1ae3d8:327-344].
-    // Use the SECOND kind-0 lock (#694, same out channel — still locked after #656's unlock).
+    // The unlock equips code 5, so the pair #694 opens off the ring [M 0x1b0650:19, 0x1ae3d8:139-147];
+    // dropping channel 10 re-locks both and takes the key [M case 2, 0x1b0750], which frees #694 here.
+    for _ in 0..3 { let p = sim.bond.pos; aim_and_fire(sim, lpos_after(sim, li), p, false); }
+    assert!(sim.drones.locks.iter().filter(|l| l.kind == 0 && l.out == 10).all(|l| l.unlocked), "the pair opened together");
+    { let f = sim.drones.frame; sim.drones.channels.set(10, 0, f); }
+    for _ in 0..3 { let p = sim.bond.pos; aim_and_fire(sim, lpos_after(sim, li), p, false); }
+    assert!(!sim.drones.inventory.keys[5], "the re-lock took the key");
     let li2 = sim.drones.locks.iter().position(|l| l.kind == 0 && l.out == 10 && !l.unlocked)
-        .expect("the second kind-0 lock (#694) is still locked");
+        .expect("the second kind-0 lock (#694) re-locked");
     // Settle beside it first (the same place-once as the first spot) — on ITS side of the door:
     // #656 (x 7.01) and #694 (x 6.74) are the two faces of one door, and the gate's target is the
     // nearest lock the ray meets [M 0x1a5460:557-566 on +0x880], so from #656's side the open #656
@@ -171,3 +177,5 @@ fn decryptor_opens_the_kind0_lock_through_the_real_path_and_the_sisters_hold() {
     // (the first lock unlocked, the second decayed, the laser-kind can never scan).
     assert!(sim.decryptor_scan().is_none(), "no scan runs after the sisters (the draw getter)");
 }
+
+fn lpos_after(sim: &nf_view::scene::Sim, li: usize) -> [f32; 3] { sim.drones.locks[li].pos }

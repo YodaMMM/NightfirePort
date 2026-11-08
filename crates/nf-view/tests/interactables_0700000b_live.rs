@@ -112,9 +112,18 @@ fn keypad_lock_burns_open_the_exec_office() {
     for _ in 0..40 { w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false); }
     w.scene.sim.as_mut().unwrap().bond.pos = [lp[0] + 0.6, lp[1] - 0.55, lp[2] + 1.5];
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+    // A keypad opens by its typed code or the decryptor; the laser arm is kind 1 only [M 0x1ae3d8:47, :162].
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        if let Some(li) = sim.drones.locks.iter().position(|l| l.out == 47 && !l.unlocked) {
+            let code = sim.drones.key_codes.code(sim.drones.locks[li].code);
+            sim.drones.keypad = Some((li, nf_game::lock::Keypad::arm(code, false)));
+            for c in code { sim.drones.keypad_digit((c - b'0') as u32); }
+        }
+    }
     let mut burned = false;
     for _ in 0..200 {
-        if w.scene.sim.as_ref().unwrap().drones.locks[lk].burned { burned = true; break; }
+        if w.scene.sim.as_ref().unwrap().drones.locks[lk].unlocked { burned = true; break; }
         let (head, bp) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.head(), lp) };
         let dir = [bp[0] - head[0], bp[1] - head[1], bp[2] - head[2]];
         let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
@@ -125,7 +134,7 @@ fn keypad_lock_burns_open_the_exec_office() {
         }
         w.scene.sim.as_mut().unwrap().step_bond(Default::default(), true, false, false);
     }
-    assert!(burned, "the watch burns the keypad [M Lock_Update 0x1ae3d8 case 0]");
+    assert!(burned, "the typed code opens the keypad [M Lock_Update 0x1ae3d8 case 4]");
     w.wait(5);
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x2f),
         "the open writes switch_channels[47] [M 0x1ae3d8:194-195]");
