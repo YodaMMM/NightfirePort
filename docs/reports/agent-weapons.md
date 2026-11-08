@@ -6,7 +6,8 @@ Scope: `Player_Weapon` 0x1a24c8, `Player_WeaponFiring` 0x1a5460, `Player_WeaponC
 `Player_WeaponInitBullet` 0x1a4bf0, `Bullet_init` 0x12c5a0, the `weapon_data` table.
 
 This branch moves the shared random stream whenever play reaches a changed rule (a dry gun switching,
-a held trigger no longer firing at the end of a draw, a refused gadget press). It stays on its branch.
+a held trigger no longer firing at the end of a draw, the cycle's new first step, a refused press). It stays on its
+branch and needs the stream batch's re-pin: the walks listed under "Still red" pass on master and fail here.
 
 ## Already matching
 
@@ -51,6 +52,19 @@ Existing tests changed because their setup leaned on an old rule: guns poked int
 hand over, so they load the clip; held-trigger second throws became taps; claw tests stand in the icon's arm at
 (-18.28, 38.19, -71.83); the matrix aims the camera first. The stun chain's bound rose to 4400: the long fall clip is
 322 ticks and the removed second throw changed the `Rand_Rand(2)` pick.
+
+## Still red (pass on master, fail here)
+
+- `walkreal_0700000a_live`: 6 tests. After the Q-Worm install an alarm runner (drone 10) is chased and never
+  dropped, and the mission fails on the walk back. Not traced to one rule; the gadget cycle's first step from the
+  K5 (0x4A now, 0x5E before) changes the walk's timing.
+- Real-damage variants, guard fights: `walkreal_07000001` (00agent), `07000003` (agent), `07000006` (agent),
+  `07000008` (00agent), `0700000d` (the fall lands with 35.6 health, needs 40), `07000013`, `07000014`
+  (infiltration), `07000016` (the chaser's punch). On 06 the SG5 and then the P2K run dry and hand over as the
+  game does, and the fight goes differently.
+
+The walk harnesses changed with the rules: `tick_fire` releases the trigger for the reload key and holds no press
+through a draw (`common/walker.rs`, `common/walker_b2.rs`); the gadget meters are not reloaded by key.
 
 ## Unproven
 

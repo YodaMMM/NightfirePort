@@ -191,7 +191,10 @@ impl Walker {
     /// 0x1a5460:601-694], and `Lock_Update` 0x1ae3d8:194 burns the lock the beam touches. The
     /// port's burn runs in `step_bond`'s trigger arm (fix-gadgets2's held-fire model).
     pub fn tick_fire(&mut self, input: Input) {
-        self.tick_inner(input, false, true);
+        // A press under a draw is spent on the view-state gate [M Player_WeaponFiring 0x1a5460]:
+        // the held fire starts once the draw is done.
+        let drawing = self.scene.sim.as_ref().unwrap().gun.switch_state != 0;
+        self.tick_inner(input, false, !drawing);
     }
 
     fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool) {
