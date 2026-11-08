@@ -1824,6 +1824,11 @@ pub struct Drone {
     /// port's probe leaves the body put — the rejected step stands in for the absorbed movement
     /// [S breakable.rs drone_step].
     pub blocked_reach: f32,
+    /// How far this tick's body query pushed the guard out of a pane: the movement the contact
+    /// absorbed, `Breaks::drone_step`'s measure of the pair [S].
+    pub pane_pressed: f32,
+    /// The `Breaks` index of the pane that pushed him this tick.
+    pub pane_contact: Option<usize>,
     /// `Drone+0x174`: the drone's allocated slot in the shared target registry (NPCGlobals,
     /// `DroneFunc_AllocateTargetID` 0x141f28 via `NDrone2_SetOpponent` 0x1422d0; 0xff = none).
     /// The pool lives on `Drones::targets` — docs/systems/dronefunc-rest.md.
@@ -2155,6 +2160,8 @@ impl Drone {
             // glass-breach-guards-4.
             scripted_move: false,
             blocked_reach: 0.0,
+            pane_pressed: 0.0,
+            pane_contact: None,
             // +0x174 — the shared target registry slot, allocated on first sight.
             target_id: 0xff,
             // 0700004a dead-body-keeps-gravity (AbseilDeath's ENTER arm) — see the field.
@@ -3368,7 +3375,7 @@ impl Drone {
     /// the port's own requirement.]
     fn probe_move(&self, d: &Data, step: [f32; 2]) -> bool {
         let to = [self.pos[0] + step[0], self.pos[1], self.pos[2] + step[1]];
-        let probe = |y: f32| d.world.line_of_sight([self.pos[0], y, self.pos[2]], [to[0] + step[0].signum() * 0.4 * (step[0].abs() > 1e-6) as i32 as f32, y, to[2] + step[1].signum() * 0.4 * (step[1].abs() > 1e-6) as i32 as f32], crate::world::LOS_PROBE_8);
+        let probe = |y: f32| d.world.move_probe_clear([self.pos[0], y, self.pos[2]], [to[0] + step[0].signum() * 0.4 * (step[0].abs() > 1e-6) as i32 as f32, y, to[2] + step[1].signum() * 0.4 * (step[1].abs() > 1e-6) as i32 as f32]);
         probe(self.pos[1]) && probe(self.pos[1] + 0.5)
     }
 
@@ -6131,6 +6138,16 @@ impl Drone {
         }
         // `+0x4F8 & 0x4000` cleared at the top.
         self.in_air = false;
+        // The body query's push out of a live pane [M Drone_CollisionHandler 0x140968]: the spine
+        // runs obj + up*r to obj + up*(r - hip), radius r = 0.4, 0.55 for type 0xC [M
+        // NDrone2_Collision 0x140e90:81-117]. `bounded` stands for `NDrone2_DoCollision`
+        // 0x149ec8's +0x4F8 bit 0x20; its +0x570 bit 2 is unmodelled.
+        let r = if self.dtype == 0x0c { 0.55 } else { 0.4 };
+        let (push, pane) = world.pane_push([self.pos[0], self.pos[1] + r, self.pos[2]], [self.pos[0], self.pos[1] + r - self.hip(), self.pos[2]], r);
+        self.pos[0] += push[0];
+        self.pos[2] += push[2];
+        self.pane_contact = pane;
+        self.pane_pressed = (push[0] * push[0] + push[2] * push[2]).sqrt();
         // `NDrone2_DoCollision` / `NDrone2_DoGravity` predicates: the game gates these on the drone
         // flags +0x4F8 (& 0x20 collision / & 0x80 gravity / & 0x200 no-gravity) with voice/drawn
         // refinements [M 0x149ec8 / 0x141e58] — the CORPSE flag obj+0xF0 & 0x20 is read by NEITHER
@@ -10553,7 +10570,7 @@ impl Drone {
         let to = [feet[0] + x * c + z * s, feet[1], feet[2] - x * s + z * c];
         let Some(floor) = d.world.floor_below([to[0], feet[1] + 2.0, to[2]], 6.0) else { return false };
         if (floor - feet[1]).abs() > 4.0 { return false; }
-        [0.5, 1.4].iter().all(|&h| d.world.line_of_sight([feet[0], feet[1] + h, feet[2]], [to[0], floor + h, to[2]], crate::world::LOS_PROBE_8))
+        [0.5, 1.4].iter().all(|&h| d.world.move_probe_clear([feet[0], feet[1] + h, feet[2]], [to[0], floor + h, to[2]]))
     }
 
     /// `NDrone2_CanBackoff` 0x1501a0: prop 0x06, `CanDoAnimState(4)` (the port's `anim_state::BACKOFF`),
@@ -12214,7 +12231,7 @@ pub fn player_hit_damage(t: &nf_formats::tuning::Tuning, level: u32, raw: f32, w
 /// walks stay green with the ride off. The world stop rides the same switch: with the meshes
 /// out of the ray sets the bounds contact always fires at or before the scenery stop; with
 /// them still static the 07000007 point-blank vase pathology returns.
-const PANE_RIDE: bool = false;
+const PANE_RIDE: bool = true;
 const BREAK_WORLD_STOP: bool = PANE_RIDE;
 
 pub struct Drones {
@@ -22108,7 +22125,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // pane #206 never shatters it) but NOT for a start script played in PlayScript: the opening
             // Yakuza's scripted dive shatters #130 [L 2026-10-26, PCSX2 frame 2175].
             let anim_carried = dr.scripted_move && dr.state != state::PLAY_SCRIPT;
-            for k in self.breaks.drone_step(from, dr.pos, level_01, anim_carried, 0.0 /* the rejected-step drain waits on the pane ride [S] */, &mut self.rng) {
+            // The body query's push lands on +0x30 after the walk copied +0x30 to +0x40 [M 0x1336f8:212,
+            // Drone_CollisionHandler 0x140968], so a pressed guard reads the push as his step however
+            // the walk moved him: the root-motion gate does not hide it.
+            let mut kills = self.breaks.drone_step(from, dr.pos, level_01, anim_carried, 0.0, &mut self.rng);
+            if let (true, Some(i)) = (level_01, dr.pane_contact) { kills.extend(self.breaks.drone_pressed(i, dr.pane_pressed, dr.pos, &mut self.rng)); }
+            for k in kills {
                 self.break_kills.push((k.placement, k.kind, k.sound));
                 if std::env::var("TASE_DBG").is_ok() { eprintln!("[brk-contact] f{} placement {} kind {} sound {} at ({:.1},{:.1},{:.1})", self.frame, k.placement, k.kind, k.sound, k.pos[0], k.pos[1], k.pos[2]); }
                 let id = u32::from(k.sound);
@@ -22580,6 +22602,8 @@ mod tests {
             scared: false, deaf: false, flee_return: 0, flee_deadline: None, explosive_msg: None,
             scripted_move: false,
             blocked_reach: 0.0,
+            pane_pressed: 0.0,
+            pane_contact: None,
             // +0x174 — the shared target registry slot.
             target_id: 0xff,
             // 0700004a dead-body-keeps-gravity (AbseilDeath's ENTER arm) — see the field.
