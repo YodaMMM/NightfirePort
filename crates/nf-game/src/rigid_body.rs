@@ -473,8 +473,9 @@ pub fn rb_apply_wind(rb: &mut RigidBody, st: &mut RbState, wind: [f32; 3], obj_p
 }
 
 /// `RB_Update 0x1d6e38` [M disasm], the sim-reachable part: the buoyancy puff (cel +0x90 above
-/// the body's obj+0xc4 y, gated on `GameState & 0xf != 0` — the level's low nibble, true
-/// on every census level [M GameState == the level code, ssys.rs]), then wind, then the evolve.
+/// the body's obj+0xc4 y, gated on `GameState+0x34 & 0xf != 0` — the frame counter, so every
+/// sixteenth tick skips the arm and its draw [M 0x1d6e38:27-28; +0x34 is the word
+/// `switch_channels_time` stamps]), then wind, then the evolve.
 ///
 /// The force block is BUOYANCY, not heat: cel+0x90 is the water surface (`build_alloc_cel`
 /// 0x1c93f8 defaults it to −500.0 = 0xc3fa0000; `parseentity_fixup_entity` 0x1d00c0 sets
@@ -501,14 +502,14 @@ pub fn rb_update(
     st: &mut RbState,
     buoy: Option<(f32, f32)>, // (cel+0x90 water surface, cel+0x54 glist bbox max y) when the cel is set
     obj_y: f32,
-    level_low_nibble: u32,
+    frame: u32, // GameState+0x34
     wind: [f32; 3],    // the caller's `Env_GetWindVel(cel, obj+0xc0)` [M 0x1d7c78]
     obj_pos: [f32; 3], // obj+0xc0 (the wind's application point base)
     frand: impl FnOnce(f32) -> f32,
 ) -> Option<[f32; 3]> {
     let mut puff = None;
     if let Some((surface, top)) = buoy {
-        if obj_y < surface && level_low_nibble != 0 {
+        if obj_y < surface && frame & 0xf != 0 {
             let f = (obj_y - top).abs() * rb.mass * 0.4 + frand(0.15);
             rb_add_impulsive_force(st, [0.0, f, 0.0]);
             puff = Some(obj_pos);
@@ -1227,9 +1228,9 @@ impl Rbodies {
     /// — zero without a wind cel), the evolve, and the flags bookkeeping the sim reads
     /// (obj+0xFA |= 0x20 [M :tail]; the +0x100 light-position sync is the visual layer —
     /// not ported).
-    pub fn tick(&mut self, level_low_nibble: u32, rng: &mut crate::drone::Rng) {
+    pub fn tick(&mut self, frame: u32, rng: &mut crate::drone::Rng) {
         for j in 0..self.list.len() {
-            self.tick_one(j, level_low_nibble, rng);
+            self.tick_one(j, frame, rng);
         }
     }
 
@@ -1237,7 +1238,7 @@ impl Rbodies {
     /// its own update once per frame (the dispatch pair at 0x26f9c8 is per object [M]).
     /// Returns `Some(obj+0xc0)` when the buoyancy arm fired — the game's gas puff position
     /// ([M 0x1d6e38 disasm], see `rb_update`) for the caller's gas pool.
-    pub fn tick_one(&mut self, j: usize, level_low_nibble: u32, rng: &mut crate::drone::Rng) -> Option<[f32; 3]> {
+    pub fn tick_one(&mut self, j: usize, frame: u32, rng: &mut crate::drone::Rng) -> Option<[f32; 3]> {
         let Some(o) = self.list.get_mut(j) else { return None };
         // Env_GetWindVel(cel, obj+0xc0) [M 0x1d7c78] — obj+0xc0 is the object's world position;
         // the port's stand-in is the drawn translation (identical for the Rot census bodies,
@@ -1249,7 +1250,7 @@ impl Rbodies {
         let obj_y = o.st.trans[1];
         let buoy = o.buoy;
         let obj_pos = o.st.trans;
-        let puff = crate::rigid_body::rb_update(&mut o.rb, &mut o.st, buoy, obj_y, level_low_nibble, wind, obj_pos, |m| rng.frand(m));
+        let puff = crate::rigid_body::rb_update(&mut o.rb, &mut o.st, buoy, obj_y, frame, wind, obj_pos, |m| rng.frand(m));
         o.flags |= 0x20;
         puff
     }
@@ -1523,6 +1524,11 @@ mod evolve_tests {
         assert!((st.pos[1] - want).abs() < 1.0e-5, "pos.y {} vs {}", st.pos[1], want);
         // The closed gate draws nothing (the closure would panic).
         let (_, mut st2) = barrel();
+        // The gate is the frame counter: every sixteenth tick has no puff and no draw [M 0x1d6e38:27-28].
+        let mut st16 = RbState::zeroed();
+        let mut called = false;
+        rb_update(&mut rb, &mut st16, Some((5.0, 1.0)), 2.0, 16, [0.0; 3], [0.0; 3], |_| { called = true; 0.0 });
+        assert!(!called, "frame 16 skips the arm");
         rb_update(&mut rb, &mut st2, Some((5.0, 1.0)), 2.0, 0, [0.0; 3], [0.0; 3], |_| panic!("no draw on a closed gate"));
         assert_eq!(st2.lin_impulse, [0.0; 3]);
         // Nibble non-zero but the body above the heat: no draw, no force.

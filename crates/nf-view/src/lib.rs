@@ -507,6 +507,8 @@ fn wire_music(sim: &mut scene::Sim, mm: Vec<nf_formats::music::MapMusic>, vars: 
         .or(Some(nf_formats::music::MusicVars { level: sim.level, count: 2, floor: 0, window: 8, distance: 25.0 }));
     // The pristine table row for the updaters' `GateWrite::Restore` re-seat (MayhewB 0x112270:57-76).
     sim.drones.attack_gate.table_row = vars.iter().find(|v| v.level == sim.level).copied();
+    // The -99 row the alarm seats [M 0x114e70:130-152].
+    sim.drones.attack_gate.alarm_row = vars.iter().find(|v| v.level as i32 == -99).copied();
     sim.drones.music = nf_game::music::Music::new(mm);
     sim.drones.music.event(0, sim.level);
     sim.drones.music.event(1, 1);
@@ -768,6 +770,17 @@ pub fn load_with_carry_difficulty(iso: &str, archive: &str, all: bool, save: Opt
 /// word; the plain `load*` wrappers keep 0 (the fresh-boot BSS state [L ee_start_05 0x2e1b88]).
 pub fn load_with_carry_medals(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, difficulty: u32, bonus: u64) -> Result<scene::Scene> {
     load_impl(iso, archive, all, save, false, &[], false, None, difficulty, bonus)
+}
+
+/// The front end's single-player level load (every mission launch, level change and restart the
+/// app runs): the picked difficulty (GameState+0x28 = 0x2a3790 [M C_SBNFDFCTY_Handler 0x216ca8:15])
+/// and the profile's `bonus[0]` word ride the load whether or not the dev tools are on — the
+/// game has one level-load path, and its create-time gates (`Drone_Create` 0x136be0:49,
+/// `NDrone2_DefaultInit` 0x14b300:504-535, `Lock_Create` 0x1ae1f8:67-69, `Hint_Create`
+/// 0x1b3248:12-25, `SoundTrigger_Create` 0x1b2628:24-40, `Copter_Create` 0x17d340:76-94) and
+/// the tick readers all see the same global. `dev` only adds the dev view-model merge.
+pub fn load_front_end(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, difficulty: u32, bonus: u64) -> Result<scene::Scene> {
+    load_impl(iso, archive, all, save, dev, &[], false, None, difficulty, bonus)
 }
 
 /// difficulty-effects: the warm reload with a weapon-asset set at the selected difficulty.
@@ -2368,6 +2381,16 @@ pub fn hud_under_menu(hud: gpu::HudFrame, menu: &gpu::HudFrame) -> gpu::HudFrame
     f
 }
 
+/// The in-mission pause gate (`Player_Update` 0x193600:71-78): the pause action opens page
+/// 0x4000004b only while `GameState+0x24 == 0` AND `ScriptCam == 0`. `Mission_Update` raises
+/// +0x24 when the mission ends — the fail (case 2), the death hand-off (case 3) and the success
+/// (case 6) [M 0x182c60:46,60,88] — and only the next load clears it [M ResetMap_GameInit
+/// 0x1d5080:9]: the game refuses the pause under the "Mission Complete" / "Mission Fail" banners
+/// and the death menu's lead-in.
+pub fn pause_allowed(sim: &scene::Sim) -> bool {
+    !sim.drones.mission.ended && sim.script_camera().is_none()
+}
+
 /// The pane state the pause's own `HUD_Update` leaves: `HUD_UpdateHealthPane` writes
 /// `BL+0x8BC = 1.0` while `GS_IsPaused` [M 0x19b9c8:116-123], so the health / armour pane's fade
 /// factor F = min(4·BL+0x8BC, 1) is 1 — the ring shows at full strength in the pause (and after
@@ -3907,8 +3930,7 @@ impl App {
         let job = async_load::Job::spawn(move || {
             if let Some(st) = mp_settings {
                 load_mp_carry(&iso, &name, all, save.as_ref(), st)
-            } else if dev { load_with_carry_dev(&iso, &name, all, save.as_ref()) }
-            else { load_with_carry_medals(&iso, &name, all, save.as_ref(), difficulty, bonus) }
+            } else { load_front_end(&iso, &name, all, save.as_ref(), dev, difficulty, bonus) }
                 .map_err(|e| e.to_string())
         });
         self.async_load = Some(LevelLoad { job, next, ptp_return, ready: None });
@@ -6441,8 +6463,9 @@ impl App {
                             // ScriptCam==0 [M Player_Update 0x193600:72] — a script camera up (the
                             // 1b intro cinema 0x0600085c, the Drake NISs) refuses the pause; the
                             // port opened one over the cinema (pause-results-flows live check 1).
+                            // GameState+0x24 (the mission is over) refuses it too — see `pause_allowed`.
                             if self.scene.sim.is_some() && self.level_code != 0 && self.level_code != menu::FRONTEND_LEVEL
-                                && self.scene.sim.as_ref().and_then(|s| s.script_camera()).is_none() {
+                                && self.scene.sim.as_ref().is_some_and(pause_allowed) {
                                 let base = self.scene.sim.as_ref().map(|s| s.drones.mission.base_map).filter(|&b| b != 0 && b != u32::MAX).unwrap_or(self.level_code);
                                 let fresh_fe = self.fe.is_none();
                                 let fe = self.fe.get_or_insert_with(|| {

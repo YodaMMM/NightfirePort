@@ -207,6 +207,9 @@ pub struct Sensor {
     /// hits. The game draws the lens glist with the object's own scale (the +0xFA bit-0x1
     /// OnlyScaleZ the create ORs in, 0x1af010:102 — the stretch rides the mesh's length axis).
     pub beam_len: f32,
+    /// `glb_viewer[4]+0x29`: a script camera owns the view. Both `Sensor_InCone` calls are skipped
+    /// and read as no sight [M 0x1af618:141-143, :204-206].
+    pub blind: bool,
 }
 
 impl Sensor {
@@ -320,7 +323,7 @@ impl Sensor {
                     }
                 }
                 // Detection [M 0x1af618:204-222]: hit → count; `prev > 0x1e` → alert (state 1).
-                let hit = self.in_cone(world, player);
+                let hit = !self.blind && self.in_cone(world, player);
                 self.last_hit = hit;
                 if hit {
                     let prev = self.seen;
@@ -359,7 +362,7 @@ impl Sensor {
                 self.quat = slerp(qa, qb, TRACK);
                 self.matrix = quat_matrix(self.quat, self.pos);
                 // Sight bookkeeping [M 0x1af618:139-150]: 61 lost ticks (FRAME_RATE_INT) → return.
-                let hit = self.in_cone(world, player);
+                let hit = !self.blind && self.in_cone(world, player);
                 self.last_hit = hit;
                 if hit {
                     self.seen = 0;
@@ -496,6 +499,7 @@ impl Sensors {
                 state: 0,
                 detect: 0.0,
                 beam_len: param(2) as i32 as f32,
+                blind: false,
                 beep: 0.0,
                 seen: 0,
                 last_hit: false,
@@ -553,6 +557,7 @@ mod tests {
             last_hit: false,
             unhidden: false,
             beam_len: 0.0,
+            blind: false,
             hum: 0,
         }
     }

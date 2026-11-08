@@ -1897,16 +1897,24 @@ fn trip_stuck_now(sim: &nf_view::scene::Sim) -> usize {
     trip_stuck_index(sim).expect("the placed tripbomb is still stuck")
 }
 
-/// Hold the laser's fire on `at` until the keypad lock's burn completes and its out channel
-/// rises [M Lock_Update 0x1ae3d8 case 0: the 0x4E −3/tick burn writes switch_channels[param 5]
-/// on the open, :57-66 + :194-195].
+/// Type the keypad's code and hold the aim on `at` until its out channel rises [M Lock_Update
+/// 0x1ae3d8 case 4; the 0x4E laser arm is kind 1 only, :47].
 fn burn_keypad(w: &mut Walker, at: V3, ch: u32) {
+    // A keypad opens by its typed code or the decryptor; the laser arm is kind 1 only [M 0x1ae3d8:47, :162].
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        if let Some(li) = sim.drones.locks.iter().position(|l| l.out as u32 == ch && !l.unlocked) {
+            let code = sim.drones.key_codes.code(sim.drones.locks[li].code);
+            sim.drones.keypad = Some((li, nf_game::lock::Keypad::arm(code, false)));
+            for c in code { sim.drones.keypad_digit((c - b'0') as u32); }
+        }
+    }
     for _ in 0..900 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(ch) { break; }
         steer_aim(w, at, true, false);
     }
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(ch),
-        "the keypad burn at {at:?} raises ch {ch} [M Lock_Update 0x1ae3d8:57-66]");
+        "the typed code at {at:?} raises ch {ch} [M Lock_Update 0x1ae3d8 case 4]");
 }
 
 /// The walked tripbomb route: pickup → place → retreat → shoot, everything on real input.

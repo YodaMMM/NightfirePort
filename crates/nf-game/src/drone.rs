@@ -2277,8 +2277,7 @@ impl Drone {
 
     /// `NDrone2_GetDroneTypeAttackTypeFriend` (0x14cbd8) at creation: modes, team, the type's init function (the
     /// sniper's sets the stationary flag), the alternate state `+0x5A4`; a second tag `+0x13A` is dropped when both
-    /// blocks have the same mode, and set to 100 when there is an alternate state but no tag. (The 07000007 property
-    /// writes inside `GetDTYPENEW` are not modelled.)
+    /// blocks have the same mode, and set to 100 when there is an alternate state but no tag.
     fn type_setup(&mut self, d: &Data) {
         if self.mode_normal == self.mode_alert || self.second_tag == 0x65 { self.second_tag = 0; }
         self.mode = self.dtype_of(d, self.dtype, self.mode_normal);
@@ -4647,9 +4646,14 @@ impl Drone {
         self.call_anim_variant(d, anim_state::DEATH, v, next, 0);
     }
 
-    /// `DroneFunc_SetDeathChannel` (0x13e660): raise `+0x13C` (0x63 = mission-fail reasons, not modelled).
+    /// `DroneFunc_SetDeathChannel` (0x13e660): raise `+0x13C`; 0 raises nothing, and 0x63 is not a
+    /// channel write but `SetMissionFailReason` by team and killer [M :21-44].
     fn set_death_channel(&mut self) {
-        if self.death_channel != 0 && self.death_channel != 0x63 { self.raise = Some(self.death_channel); }
+        match self.death_channel {
+            0 => {}
+            0x63 => self.fail_reason = Some(crate::ally::death_channel_fail(self.team, self.hit_by_player)),
+            c => self.raise = Some(c),
+        }
     }
 
     /// Death_Anim 0x44, SpecialDeath 0x46, Dead 0x47, Fade 0x48, FadeFast 0x49 (0x1637f8, 0x163fe8, 0x172cd8, 0x172dd8).
@@ -6712,6 +6716,11 @@ impl Drone {
                     self.drop_weapon(d, rng);
                     self.change_weapon(1);
                 }
+                // Mode +0xC5 0x11/0x0C (the escorted allies) → SetMissionFailReason(0xD), the default
+                // arm: ch 99, no label [M 0x162b98:39-41 → 0x13e560].
+                if matches!(self.mode, 0x11 | 0x0c) {
+                    self.fail_reason = Some(crate::ally::mission_fail_reason(0xd));
+                }
                 self.alert_status_set(2, frame); // AlertStatusSet(2) [M 0x162b98:42] — the status byte; no +0x50C write
                 self.vision_on = false;
                 self.firing = false;
@@ -6910,7 +6919,7 @@ impl Drone {
                     self.drop_weapon(d, rng);
                     self.change_weapon(1);
                 }
-                if self.dtype == 0x11 || self.dtype == 0x0c {
+                if matches!(self.mode, 0x11 | 0x0c) {
                     self.fail_reason = Some(crate::ally::mission_fail_reason(0xe));
                 }
                 self.alert_status_set(0, frame); // [M 0x163430 case 1] — the status byte; no +0x50C write
@@ -14534,8 +14543,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for (di, ddmg) in hits.drones {
             if let Some(dr) = self.list.get_mut(di) {
                 dr.last_damage = ddmg;
-                // The owner's grenade: usize::MAX = the player's throw [M +0x2B4 = the thrower; fix-actors].
-                if owner == usize::MAX { dr.hit_by_player = true; }
+                // The owner's grenade: usize::MAX = the player's throw. `Drone_ExplosiveHit` overwrites
+                // +0x2B4 with every blast [M 0x13aab8:20], so a guard's blast after Bond's shot makes
+                // the guard the killer.
+                dr.hit_by_player = owner == usize::MAX;
                 dr.blast = Some(pos); // DroneImpact+0x10: the blast VECTOR (the anim bearing)
                 dr.send(d, &mut self.rng, frame, msg::EXPLOSION);
             }
@@ -14853,6 +14864,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `SP_Hit` 0x1dc470's bit-2 read set: the current stream objects of EVERY script
         // player — no hit-point or hold gate (the urn is hp 0 and still reacts [M]).
         let sp_bullet_targets = self.scripts.sp_bullet_targets(d);
+        // The turrets' script objects, the same read set: `GT_Update` sums the chains of every
+        // object of script A, and of script B in state 4 [M 00180498:128-176].
+        let gt_targets: Vec<(usize, usize, [f32; 3], f32)> = sp_bullet_targets.iter().filter_map(|&(pi, c, r)| {
+            self.gt_turrets.iter().enumerate().find_map(|(ti, t)| {
+                if t.delete_flag { None }
+                else if t.script_player_a == pi { Some((ti, 0, c, r)) }
+                else if t.script_player_b == pi { Some((ti, 1, c, r)) }
+                else { None }
+            })
+        }).collect();
         // copter-hitdata-damage: the copters' 9 part slots' world spheres, resolved once per
         // tick (the parts pose with the SP player — the documented one-tick script-entity lag;
         // the game's collide pass reads the same last-walk poses [M 0x1336f8:238]).
@@ -15454,6 +15475,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         let tw = *tw_copter.get_or_insert_with(|| d.world.segment_flight_scoped(d.world.find_cel(b.pos), b.pos, end, flight_glass));
                         if tw.is_some_and(|w| w < t) { continue; }
                         self.copters[ci].part_hits.push(crate::copter::PartHit { slot: slot as u8, damage: bcontact, class: bclass });
+                        copter_stop = true;
+                        copter_t = copter_t.min(t);
+                    }
+                }
+                // The turret objects take the round the same way: a wall between takes it first,
+                // and the object is a solid contact [M Collide_Update 0x1ea398:216-229]. A turret's
+                // own rounds (record 96) leave from its barrel and never count against it.
+                if b.weapon as usize != crate::gt::TURRET_WEAPON_RECORD {
+                    for &(ti, slot, centre, r) in &gt_targets {
+                        let Some(t) = Self::segment_sphere_entry(b.pos, end, centre, r) else { continue };
+                        let tw = *tw_copter.get_or_insert_with(|| d.world.segment_flight_scoped(d.world.find_cel(b.pos), b.pos, end, flight_glass));
+                        if tw.is_some_and(|w| w < t) { continue; }
+                        self.gt_turrets[ti].contact[slot] += bcontact;
                         copter_stop = true;
                         copter_t = copter_t.min(t);
                     }
@@ -16765,7 +16799,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             for (di, ddmg) in hits.drones {
                 if let Some(dr) = self.list.get_mut(di) {
                     dr.last_damage = ddmg;
-                    if owner == usize::MAX { dr.hit_by_player = true; }
+                    dr.hit_by_player = owner == usize::MAX; // [M 0x13aab8:20] the last blast's owner
                     dr.blast = Some(pos); // DroneImpact+0x10: the blast VECTOR (the anim bearing)
                     dr.send(d, &mut self.rng, frame, msg::EXPLOSION);
                 }
@@ -16828,24 +16862,34 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // [M 0x1a5170:158-166]. `Lock_Activate`'s gates [M 0x1aed00 disasm]: no pause manager (the
         // sim is never paused — the structural gate lock.rs documents), user class 3 (the port's
         // use path is always the player), the lock state ∈ {0, 5} (the port: not unlocked/burned —
-        // states 1/2 — and not scanning — state 5 — and no keypad already armed — states 3/4); then
-        // kind 0 with an EMPTY key-ring slot → state 3 (arm the keypad). The port's lock side does
-        // not consult the key ring (the recorded gap, lock.rs header — `Lock_ReLock`'s clear is the
-        // only writer there), so the slot reads empty [S, same documented limitation].
-        // Kind 1 (the laser-burn locks) E-plays the hit sound only — presentation, skipped.
+        // states 1/2 — and no keypad already armed — states 3/4; a scanning lock IS accepted); then
+        // the key ring: a held key → state 1 with the unlock sound, any kind [M 0x1aed00:19-33]; an
+        // empty slot on kind 0 → state 3 (arm the keypad); an empty slot on any other kind plays
+        // the record's locked sound only (0xffff, no sound, on every disc lock [D]).
         {
             let use_point = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
             let in_sphere = |c: V3, r: f32| {
                 let d = (use_point[0] - c[0]).powi(2) + (use_point[1] - c[1]).powi(2) + (use_point[2] - c[2]).powi(2);
                 d <= (1.0 + r) * (1.0 + r)
             };
-            for (li, l) in self.locks.iter().enumerate() {
-                if l.kind != 0 || l.unlocked || l.burned || l.scanning { continue; }
+            for li in 0..self.locks.len() {
+                let l = &self.locks[li];
+                if l.unlocked || l.burned { continue; }
                 if self.keypad.as_ref().is_some_and(|(cur, _)| *cur == li) { continue; } // state 3/4 [M 0x1aed00's state gate]
                 if !in_sphere(l.pos, l.radius) { continue; }
                 // The facing gate [M 0x1a5170:158-166] — the OBJECT translations (+0xC0).
                 let to = [body[0] - l.pos[0], body[1] - l.pos[1], body[2] - l.pos[2]];
                 if l.facing[0] * to[0] + l.facing[1] * to[1] + l.facing[2] * to[2] < 0.0 { continue; }
+                if self.inventory.keys.get(l.code as usize).copied().unwrap_or(false) {
+                    let (snd, pos) = (l.key_channels[0] as u32, l.pos);
+                    let l = &mut self.locks[li];
+                    l.unlocked = true;
+                    l.open_pending = true;
+                    l.scanning = false;
+                    self.audio.play3d(snd, pos, None);
+                    break;
+                }
+                if l.kind != 0 { break; }
                 // Kind-0, no key → state := 3, GlobalVars/user saved [M 0x1aed00:001aed7c-90]:
                 // the keypad arms with `Lock_Update` case 3's data — the code copy happens there
                 // (the port's Keypad::arm takes the table's entry directly — the same bytes).
@@ -16854,6 +16898,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // `Lock_Update` case 3 [M 0x1ae3d8:246-257]: a code the Q-Worm already revealed
                 // is posted again as the same INFO message (label 0x2000014, 0xb4 ticks).
                 if shown { self.info_codes.push((code, 180.0)); }
+                self.locks[li].scanning = false;
                 self.keypad = Some((li, crate::lock::Keypad::arm(code, shown)));
                 break;
             }
@@ -18212,6 +18257,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for l in self.locks.iter().filter(|l| l.unlocked && !l.burned && l.out != 0) {
             self.channels.set(l.out as u32, 1, frame);
         }
+        // `Lock::key_tick`: the key-ring half: the unlock's equip [M 0x1b0650:19], the one-tick
+        // state-1 write that then moves the lock to state 2, and case 0's ring read that opens the
+        // paired keypad or a picked-up key's lock [M 0x1ae3d8:139-147].
+        let keypad_lock = self.keypad.as_ref().map(|(li, _)| *li);
+        for (li, l) in self.locks.iter_mut().enumerate() {
+            l.key_tick(&mut self.inventory.keys, &mut self.channels, frame, keypad_lock == Some(li));
+        }
         // The armed keypad's tick (`Lock_Update` 0x1ae3d8 case 4 [M :262-296]): the full typed
         // buffer matching the code with the count at the cap fires `Lock_Unlock` — the lock's
         // state := 1 (the port's `unlocked`), the manager deleted, the unlock sound (record
@@ -18238,6 +18290,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 self.locks[*li].unlocked = true;
                 self.locks[*li].burned = true;
                 if self.locks[*li].out != 0 { self.channels.set(self.locks[*li].out as u32, 1, frame); }
+                self.locks[*li].equip_pending = true;
                 self.keypad = None;
             }
         }
@@ -19727,7 +19780,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for (pos, radius, damage, kind) in self.props.channel_kills(&mut self.channels, frame) {
             let script = match kind { 1 => 0x0600_0027, 2 => 0x0600_004f, _ => 0x0600_0052 };
             // explode-debris-spawn: kind 0 — the same Destroy_Smash call as the bullet path [M 0x12bcf8].
-            self.pending_blasts.push((pos, radius, damage, usize::MAX, 0, script, radius, 0));
+            // The channel kill has no owner: `Destroy_Update` calls `Destroy_Smash(obj, 0, 0)` [M
+            // 0x12c4f8:32], so nobody is credited (`usize::MAX - 1`, the copter blast's mark).
+            self.pending_blasts.push((pos, radius, damage, usize::MAX - 1, 0, script, radius, 0));
         }
         // The stat arm rides every Destroy_Smash — the external-kill path reaches it through
         // `Destroy_Update` 0x12c4f8's watch arm → 0x12bb60 [M]. channel_kills' internal smashes
@@ -19927,7 +19982,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // buoyancy arm's gas puff — `Gas_Init(0.5, 1.0, cel, obj+0xc0, NULL angles, 0,
                 // gfx 0x2000129, kind 1, rgba 0x40008080 → 0x80808008, life 16)` — the same gate and
                 // the same single `Rand_FRand(0.15)` draw as the impulse (which `tick_one` consumed).
-                if let Some(puff) = self.rbodies.tick_one(index, self.level_current & 0xf, &mut self.rng) {
+                if let Some(puff) = self.rbodies.tick_one(index, self.frame, &mut self.rng) {
                     self.gas.init_ex(0x0200_0129, puff, 0.0, [0.0; 3], 0.5, 1.0, 1, [0x40, 0x00, 0x80, 0x80], 0x8080_8008, 16.0);
                 }
                 continue;
@@ -19968,6 +20023,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if what == 6 { let _pw = crate::prof::scope("ctl: kind 6");
                 // `Sensor_Update` 0x1af618 (crate::sensor): the sweep/trip state machine — clears
                 // its out channel while sweeping, writes 1 after 2 s of continuous sight.
+                let blind = self.scripts.camera().is_some();
+                if let Some(s) = self.sensors.list.get_mut(index) { s.blind = blind; }
                 self.sensors.update(index, d.world, player, &mut self.channels, frame, &mut self.audio);
                 // The sensor's `Sound_Play3D`s enter the AI hearing list like any other (looped
                 // ones are skipped by `hear`, as `Sound_Alertness` skips them).
@@ -20103,11 +20160,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         // 0x07000016's kill first raises each removed drone's death channel
                         // [M `jal 0x13e660` at 0x138074 → DroneFunc_SetDeathChannel 0x13e660:
                         // `switch_channels[+0x13C] = 1` + the time stamp; 0x63 = the mission-fail
-                        // reasons, not modelled — the same rule as the port's set_death_channel].
+                        // reasons, which the tail's drain applies].
                         if d.level == 0x0700_0016 {
                             for &i in &v {
-                                let ch = self.list[i].death_channel;
-                                if ch != 0 && ch != 0x63 { self.channels.set(ch as u32, 1, frame); }
+                                let dr = &mut self.list[i];
+                                dr.set_death_channel();
+                                if let Some(c) = dr.raise.take() { self.channels.set(c as u32, 1, frame); }
                             }
                         }
                         for i in v {
@@ -22065,7 +22123,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // runs — the NIS/script pauses stamp +0x34 through the scene's request side
             // [M 0x1d94c0:118-121 + 0x1da880:44-48]). The clock is the port's frame-derived
             // 1/100 s [S — psiGetTimeIn100ths' stand-in; only differences matter].
-            self.progress.log_update_elapsed(crate::progress::PlrMissionStats::now_100ths(self.frame));
+            // mission-flow: the call sits behind `Player_Update`'s `GS_IsPaused(player)` return
+            // [M 0x193600:88-91], which `Mission_Update` case 7's `GS_PausePlayer(1, 0)` raises
+            // from the end banner's first hold tick to the next load [M 0x182c60:124-128] — the
+            // game's clock stops when the "Mission Complete" hold starts; the port's ran on
+            // through the 240-tick banner, so the results' Time row read 4 s long.
+            if !self.mission.player_paused {
+                self.progress.log_update_elapsed(crate::progress::PlrMissionStats::now_100ths(self.frame));
+            }
         }
         // fix-scores-handoff (G-045 remainder): the level-end score-row production. When the
         // level-exit latch stands at the tick's end (the trigger LOAD_LEVELs, the
@@ -22087,16 +22152,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // MayhewB's per-tick re-seat and the trigger arms' `MusicVars = 1` [M 0x112270:56-79, :113,
         // :122; 0x112730:210, :219]. Applied AFTER `update`, so the next frame's SeenAndAttacking
         // pass sees them — the game's frame order (the drone pass precedes 0x114e70).
-        for w in self.music.gate_writes.drain(..) {
-            match w {
-                crate::music::GateWrite::Restore => {
-                    if let Some(row) = self.attack_gate.table_row { self.attack_gate.vars = Some(row); }
-                    else if let Some(v) = &mut self.attack_gate.vars { v.count = 2; v.floor = 8; v.distance = 25.0; }
-                }
-                crate::music::GateWrite::SetDistance(d) => { if let Some(v) = &mut self.attack_gate.vars { v.distance = d; } }
-                crate::music::GateWrite::SetCount(c) => { if let Some(v) = &mut self.attack_gate.vars { v.count = c; } }
-            }
-        }
+        for w in self.music.gate_writes.drain(..) { self.attack_gate.apply(w); }
         // The drone-contact pass ([M Break_Update 0x12bfd8:23-34]: class-2 contacts damage kind-2
         // breakables by the squared step × 20, on 07000001 only). The kills join the view queue;
         // Break_Kill 0x12b970:75 plays the kill sound inline (the same presentation the bullet

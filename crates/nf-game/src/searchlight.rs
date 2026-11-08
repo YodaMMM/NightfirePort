@@ -339,7 +339,9 @@ impl Searchlights {
             }
             // State 1: hold the alarm channel and steer to Bond [M, disassembly 0x1cbb00].
             1 => {
-                channels.set(self.parts[head].alarm as u32, 1, frame);
+                // Guarded [M 0x1cb900:146-148]: all seven 07000005 heads carry alarm 0, and channel 0 is
+                // a real channel the port must not raise.
+                if self.parts[head].alarm != 0 { channels.set(self.parts[head].alarm as u32, 1, frame); }
                 let h = &mut self.parts[head];
                 let dx = player.pos[0] - pos[0];
                 let dy = player.pos[1] - pos[1];
@@ -492,7 +494,7 @@ impl Searchlights {
                 } else {
                     let lost = self.parts[sp].phase + 1.0;
                     self.parts[sp].phase = lost;
-                    if lost >= LOST_LIMIT { self.parts[head].state = 0; }
+                    if lost > LOST_LIMIT { self.parts[head].state = 0; } // strict [M 0x1cb900:259]
                 }
             }
         }
