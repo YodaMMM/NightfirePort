@@ -316,6 +316,47 @@ fn laser_web_crossing_fires_the_alert_channel() {
         "crossing beam #607 fired its out channel ch 0x1F [D triggers dump]");
 }
 
+/// The Q-Worm fires only with a free PC under the crosshair inside the gadget's 2.0 reach
+/// [M Player_WeaponFiring 0x1a5460:531-545]: aimed at the wall, or from past the reach, the pull
+/// returns before the shot. Sister: the same pull at the PC from the stand does fire.
+#[test]
+fn the_qworm_only_fires_at_a_pc_in_reach() {
+    let mut w = load();
+    teleport(&mut w, [-16.8, 1.2, -34.0]);
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.drones.inventory.owned[0x58] = true;
+        sim.gun.weapon = 0x58;
+        sim.gun.switch_request = 0x58;
+    }
+    w.wait(60);
+    let fired = |w: &mut Walker, yaw: f32, pitch: f32| -> bool {
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.bond.yaw = yaw;
+            sim.bond.pitch = pitch;
+        }
+        w.wait(30);
+        let mut seen = false;
+        for _ in 0..6 {
+            w.tick_fire(nf_game::player::Input::default());
+            seen |= w.scene.sim.as_ref().unwrap().gun.fire_state;
+        }
+        w.wait(60);
+        seen
+    };
+    assert!(!fired(&mut w, std::f32::consts::PI * 0.5, 0.0), "aimed along the band: no PC, no shot");
+    let (yaw, pitch) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let pc = sim.drones.useobjs.pcs.iter().find(|p| p.ch == 0x48).unwrap().sph_centre;
+        let b = &sim.bond;
+        let (dx, dz) = (pc[0] - b.pos[0], pc[2] - b.pos[2]);
+        let dy = pc[1] + 0.3 - (b.pos[1] + b.eye);
+        (dx.atan2(dz), (dy / (dx * dx + dz * dz).sqrt()).atan() / std::f32::consts::FRAC_PI_2)
+    };
+    assert!(fired(&mut w, yaw, pitch), "on the PC from the stand the gadget fires");
+}
+
 /// E on an alarm switch does nothing: `Switch_Activate` 0x1b02a8 refuses a class-3 (player)
 /// activator on a ch-0x61 switch (`cVar1 != 3 || ch != 0x61` [M]) — the 8 alarmswitchplayer
 /// placements (#617-631, p0 = 0x61 [D]) cannot be player-fired. The control arm proves the use
@@ -586,7 +627,7 @@ fn qworm_pc_install_needs_the_gadget_and_the_office_pc_reveals_its_code_on_the_e
     // The walked south stand (the walkreal's bullet-clear band [D probe: segment_bullet CLEAR
     // from every stand x −16..−17.8, z −33.5..−34.4]) — the teleport is the stand-in transit;
     // the equip, the trigger pull and the install are the real path.
-    teleport(&mut w, [-16.5, 1.2, -34.3]);
+    teleport(&mut w, [-16.8, 1.2, -34.0]);
     let pc = w.scene.sim.as_ref().unwrap().drones.useobjs.pcs.iter().find(|p| p.ch == 0x48)
         .expect("Q-WORM_PC_1 (0x35, p1 = 0x48) [D]").pos;
     // Sister: the spawn K5 (0x43) round is not the Q-Worm — no install.
@@ -767,7 +808,7 @@ fn hatch_load_point_refuses_then_loads_through_the_real_chain() {
     assert!(mux49, "AND mux #741: ch 0x3A → ch 0x49 [D #741]");
     // The install from the walked south stand — the T4 shape (the K5 primer burst first, then the
     // real gadget-cycle equip; the same stand the T4 install lands from).
-    teleport(&mut w, [-16.5, 1.2, -34.3]);
+    teleport(&mut w, [-16.8, 1.2, -34.0]);
     let pc = w.scene.sim.as_ref().unwrap().drones.useobjs.pcs.iter().find(|p| p.ch == 0x48)
         .expect("Q-WORM_PC_1 [D]").pos;
     let _ = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 3.0, 120, "the K5 primer at the PC", &|_| false);

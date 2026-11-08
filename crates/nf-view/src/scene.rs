@@ -4623,6 +4623,14 @@ impl Sim {
                 nf_game::gadget::pick_decryptor_lock(camera, vdir, self.bond.pos, &self.drones.locks, &self.world, range)
             } else { None };
             let (trigger, reload) = if decryptor_weapon && trigger && decryptor_pick.is_none() { (false, reload) } else { (trigger, reload) };
+            // The Q-Worm's gate, the decryptor's neighbour in the same function [M
+            // Player_WeaponFiring 0x1a5460:531-545]: the crosshair target must be a PC (class 0x49)
+            // in state 0 within `weapon_data+0x1C`, or the firing returns before the pull.
+            let qworm_refused = trigger && self.gun.weapon == 0x58 && {
+                let range = self.weapons.records.get(0x58).map_or(2.0, |r| f32::from_le_bytes(r[0x1c..0x20].try_into().unwrap()));
+                !self.drones.useobjs.qworm_target(camera, self.bond.look(), self.bond.pos, &self.world, range)
+            };
+            let trigger = trigger && !qworm_refused;
             // weapon-handling [M Player_WeaponFiring 0x1a5460:503-506]: with the trigger held and Bond
             // under the surface (`surfaced == 0`, `Player_MonitorAir` 0x191a70:98-125 — the port's
             // `Bond::underwater`), a record without `+0x68 & 0x2` RETURNS before the pull: no shot, no
