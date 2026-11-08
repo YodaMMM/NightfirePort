@@ -35,7 +35,7 @@ fn frag(s: &mut nf_view::scene::Scene, i: usize) {
     sim.drones.grenades.push(nf_game::grenade::Grenade {
         pos: [pos[0], pos[1] + 0.5, pos[2]], velocity: [0.0, 0.0, 0.0], speed: 0.0,
         travelled: 0.0, range: 60.0, damage: 100.0, radius: 3.0, weapon_type: 0x34, mesh: 0x0200_0726, owner: usize::MAX, state: 0, bounces: 0, smoke_popped: false, resting: false,
-        stuck: false, seek_target: None, phase: None, burn: 0, defused: false, loop_handle: 0,
+        stuck: false, seek_target: None, phase: None, burn: 0, defused: false, loop_handle: 0, born: 0,
     });
     for _ in 0..240 {
         s.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
