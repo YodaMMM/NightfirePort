@@ -125,3 +125,5 @@ player sees and answers a shooter through a window. Only this d3 test sets it.
 The session's input/output tokens, context used and cost: not visible to me. (Wall clock per
 the shell: sandbox start 06:24 UTC, the green walk 07:48 UTC, this report 07:52 UTC, sandbox
 deadline 08:23 UTC.)
+
+ntfy failed: all three fallbacks (curl connection timed out 20 s; python3 urllib network unreachable [Errno 101] after an em-dash syntax error on the first try; wget killed at the 60 s tool timeout). The exact errors are in the report body above — see the branch report "ntfy failed" (commit 7bdfeb9cd).
