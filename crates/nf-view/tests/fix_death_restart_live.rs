@@ -276,15 +276,19 @@ fn lethal_fall_reaches_the_death_path_and_the_restart() {
     let spawn = sim.bond.pos;
     // The sister: an 8-unit drop (fall_timer lands near the 60-tick gate [M 0x1949a8:117-126] —
     // velocity is units/second, so one free-fall second covers ~5 units) hurts at most, kills never.
-    sim.bond.pos = [spawn[0], spawn[1] + 8.0, spawn[2]];
-    sim.bond.vel = [0.0; 3];
+    // The game's placement (`Player_StandAtNewPosition` 0x190d88: obj+0x30 = obj+0x40 = the spot,
+    // unlink, relink; a FindCel miss leaves Bond unlinked AT the spot, never shoved back [M
+    // 0x133288:63-73]) — the poke arm's recovery would erase the fall instead.
+    let yaw = sim.bond.yaw;
+    sim.place_bond([spawn[0], spawn[1] + 8.0, spawn[2]], yaw);
     for i in 0..300 { sim.step_bond(Default::default(), false, false, false); if i > 30 && sim.bond.grounded { break; } }
     assert!(sim.drones.health.health > 50.0, "the survivable fall leaves Bond alive (health {:.1})", sim.drones.health.health);
     assert!(!sim.drones.death.active && !sim.drones.channels.on(0x62), "alive: no death sequence");
     assert!(sim.drones.level_exit.is_none(), "alive: no restart");
     // The lethal fall: 400 units onto the atrium floor — the real physics path, no scripted damage.
-    sim.bond.pos = [spawn[0], spawn[1] + 400.0, spawn[2]];
-    sim.bond.vel = [0.0; 3];
+    // The placement semantics again (the poke arm would recover Bond back to the ledge).
+    let yaw = sim.bond.yaw;
+    sim.place_bond([spawn[0], spawn[1] + 400.0, spawn[2]], yaw);
     let mut landed = false;
     for i in 0..900 {
         sim.step_bond(Default::default(), false, false, false);

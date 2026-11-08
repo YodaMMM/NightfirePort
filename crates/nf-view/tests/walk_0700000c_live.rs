@@ -80,11 +80,18 @@ fn the_camera_photograph_writes_the_jetpack_channel() {
     for _ in 0..300 { sim.step_bond(input, false, false, false); }
     sim.bond = nf_game::player::Bond::stand_at(&sim.world, [5.4, 8.0, -113.0], 0.0);
     for _ in 0..60 { sim.step_bond(Input::default(), false, false, false); }
+    // The Micro-Camera photographs only with the aim bit up [M Player_WeaponFiring 0x1a5460:512-514:
+    // base 0x54 without `anim+0x60 & 1` returns]; the bit rises when the raise script stops [M
+    // 0x1a2e38:554-561], so raise it first and hold the aim through the press.
+    let aim = Input { aiming: true, ..Default::default() };
+    for _ in 0..120 { sim.step_bond(aim, false, false, false); if sim.aiming { break; } }
+    assert!(sim.aiming, "the camera's raise completes");
+    for _ in 0..10 { sim.step_bond(aim, false, false, false); }
     sim.bond.yaw = 0.0;
     sim.bond.pitch = 0.0;
     let mut fired = false;
     for _ in 1..=60 {
-        sim.step_bond(Input::default(), true, false, false);
+        sim.step_bond(aim, true, false, false);
         fired |= sim.shot_tick;
         if sim.drones.channels.on(0x1c) { break; }
     }
@@ -130,9 +137,16 @@ fn the_gate_loads_0700000d_only_after_the_photograph() {
     for _ in 0..300 { sim.step_bond(input, false, false, false); }
     sim.bond = nf_game::player::Bond::stand_at(&sim.world, [5.4, 8.0, -113.0], 0.0);
     for _ in 0..60 { sim.step_bond(Input::default(), false, false, false); }
+    // The Micro-Camera photographs only with the aim bit up [M Player_WeaponFiring 0x1a5460:512-514:
+    // base 0x54 without `anim+0x60 & 1` returns]; the bit rises when the raise script stops [M
+    // 0x1a2e38:554-561], so raise it first and hold the aim through the press.
+    let aim = Input { aiming: true, ..Default::default() };
+    for _ in 0..120 { sim.step_bond(aim, false, false, false); if sim.aiming { break; } }
+    assert!(sim.aiming, "the camera's raise completes");
+    for _ in 0..10 { sim.step_bond(aim, false, false, false); }
     sim.bond.yaw = 0.0;
     sim.bond.pitch = 0.0;
-    for _ in 1..=60 { sim.step_bond(Input::default(), true, false, false); if sim.drones.channels.on(0x1c) { break; } }
+    for _ in 1..=60 { sim.step_bond(aim, true, false, false); if sim.drones.channels.on(0x1c) { break; } }
     assert!(sim.drones.channels.on(0x1c), "the photograph unlocks the gate");
     sim.bond = nf_game::player::Bond::stand_at(&sim.world, [95.0, 11.4, -209.7], std::f32::consts::FRAC_PI_2);
     let mut input = Input::default();

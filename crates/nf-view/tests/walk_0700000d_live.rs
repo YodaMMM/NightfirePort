@@ -86,11 +86,18 @@ fn the_camera_photograph_writes_the_laser_channel() {
         for _ in 0..300 { sim.step_bond(input, false, false, false); }
         sim.bond = nf_game::player::Bond::stand_at(&sim.world, [137.0, 5.1, -321.0], std::f32::consts::PI);
         for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
+        // The Micro-Camera photographs only with the aim bit up [M Player_WeaponFiring 0x1a5460:512-514:
+        // base 0x54 without `anim+0x60 & 1` returns]; the bit rises when the raise script stops [M
+        // 0x1a2e38:554-561], so raise it first and hold the aim through the press.
+        let aim = Input { aiming: true, ..Default::default() };
+        for _ in 0..120 { sim.step_bond(aim, false, false, false); if sim.aiming { break; } }
+        assert!(sim.aiming, "the camera's raise completes");
+        for _ in 0..10 { sim.step_bond(aim, false, false, false); }
         sim.bond.yaw = std::f32::consts::PI;
         sim.bond.pitch = 0.28;
         let mut fired = false;
         for _ in 1..=60 {
-            sim.step_bond(Input::default(), true, false, false);
+            sim.step_bond(aim, true, false, false);
             fired |= sim.shot_tick;
             if sim.drones.channels.on(0x1e) { break; }
         }

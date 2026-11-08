@@ -213,9 +213,23 @@ fn from_the_duct_top_the_roof_walk_descends_to_the_balcony() {
     let sim = scene.sim.as_mut().unwrap();
     sim.step_bond(Input { crouch: true, ..Default::default() }, false, false, false);
     assert!(sim.bond.crouched, "the crouch key crouched Bond");
+    // Crouched under the hatch, then standing once past the vent plane (the [L] descent is the
+    // STANDING root: 15.6536 = the balcony 14.61 + 1.0436). The old pin sampled a crouched body
+    // wedged on the balcony's south wall at tick 900, where the root bobs 15.35 <-> 15.62 on a
+    // 90-tick beat; it only matched at the faster pre-game crouch pace's phase. At the game's
+    // crouch pace (0.039/tick [M Player_SSCrouch 0x1924c0:58 + Player_Update 0x193600:296-299])
+    // the same sample read 15.37. A player stands up on the roof: the stand toggle is the real
+    // crouch-key edge, and the read is the walked rest at
+    // z <= -118 (inside the [L] span -116.78..-120.53), before the wall.
     let mut ch27 = false;
+    let mut stand_pressed = false;
     for tick in 1..=900u32 {
-        sim.step_bond(Input { forward: 1.0, ..Default::default() }, false, false, false);
+        let z = sim.bond.pos[2];
+        // Pulsed every 70 ticks: the 60-tick stand/crouch lockout BL+0x960 [M 0x1924c0:84-105].
+        let stand = sim.bond.crouched && z < -113.0 && tick % 70 == 0;
+        if stand { stand_pressed = true; }
+        if stand_pressed && !sim.bond.crouched && z <= -118.0 { break; }
+        sim.step_bond(Input { forward: 1.0, crouch: stand, ..Default::default() }, false, false, false);
         if sim.drones.channels.on(0x1b) { ch27 = true; }
         if tick % 90 == 0 {
             let p = sim.bond.pos;
@@ -223,6 +237,8 @@ fn from_the_duct_top_the_roof_walk_descends_to_the_balcony() {
         }
     }
     let p = sim.bond.pos;
+    eprintln!("the walked rest: ({:.4}, {:.4}, {:.4})", p[0], p[1], p[2]);
+    assert!(!sim.bond.crouched, "Bond stood up past the vent plane (the crouch-key edge)");
     assert!(p[2] < -111.5, "Bond crosses the vent plane; stalled at z {:.2}", p[2]);
     assert!(!ch27, "ch 27 stays 0 the whole roof walk [L 2026-10-26]");
     assert!((p[1] - 15.6536).abs() <= 0.25 && p[2] <= -116.0,

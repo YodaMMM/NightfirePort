@@ -69,3 +69,29 @@ fn the_02_zone_36_hall_starts_the_level_music_through_the_cel_channel() {
     assert!(saw_start || pre_jumps.contains(&2),
         "no section-2 start from the zone-36 hall (out: {:?})", sim.drones.music.out);
 }
+
+/// 07000001's own machine on the real level: the opening scene's end starts the level's sections
+/// [M UpdateMFX_02MayhewA 0x111ed8:116-120]. Before the port had it the music never left the start
+/// section. Sister: while the scene plays, no section jump.
+#[test]
+fn the_01_intro_end_starts_the_level_sections() {
+    use nf_game::music::Cmd;
+    let Some(path) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = nf_view::load(&path, "07000001.bin", false).expect("load 07000001");
+    let sim = scene.sim.as_mut().unwrap();
+    let step = |sim: &mut nf_view::scene::Sim| {
+        sim.step_bond(Default::default(), false, false, false);
+        sim.drones.music.out.drain(..).filter_map(|c| if let Cmd::Jump { section, .. } = c { Some(section) } else { None }).collect::<Vec<i32>>()
+    };
+    for _ in 0..120 {
+        assert!(step(sim).is_empty(), "no section jump while the opening scene plays");
+    }
+    assert!(sim.drones.scripts.cutscene_playing(), "the opening scene is up");
+    let mut got = Vec::new();
+    for _ in 0..600 {
+        if sim.drones.scripts.cutscene_playing() { sim.drones.scripts.skip_request = true; }
+        got.extend(step(sim));
+        if !got.is_empty() { break; }
+    }
+    assert_eq!(got.first(), Some(&3), "the scene's end jumps section 3 [M :116-120]: {got:?}");
+}

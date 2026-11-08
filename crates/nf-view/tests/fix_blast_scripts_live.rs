@@ -235,8 +235,14 @@ fn the_destroyable_smash_plays_its_type_script() {
         let sim = scene.sim.as_mut().unwrap();
         sim.disabled = false; // the boot script's freeze zeroes the trigger (models-misc precedent)
         sim.drones.health.health = 500.0;
-        sim.bond.pos = [1.9717, -0.4, -2.256]; // 3 units from destroy[10]'s box at the origin
-        sim.bond.vel = [0.0; 3];
+        // The game's placement, not a poke: `Player_StandAtNewPosition` 0x190d88 writes obj+0x40
+        // too, so the FindCel miss at this vault spot (no room cel holds it — the nearest room is
+        // 135 units away) leaves Bond unlinked AT the spot instead of recovering him away [M
+        // 0x133288:63-73]. 3 units from destroy[10]'s box at the origin.
+        let yaw = sim.bond.yaw;
+        // No floor here: the miss arm stands him at placement + 1.2 [M 0x190d88:104-116], so −1.6
+        // puts the root at −0.4, level with the box.
+        sim.place_bond([1.9717, -1.6, -2.256], yaw);
     }
     let t0 = [0.0, 0.0, 0.0];
     aim_at(&mut scene, t0, 1.6);

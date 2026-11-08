@@ -402,6 +402,51 @@ impl KeyCodes {
     }
 }
 
+/// The keypad page's ten digit controls, def order — page 0x40000021's id-0x100000ba controls
+/// [D 07000003.bin / 07000005.bin (identical); the census test (`keypad_census.rs`) pins every
+/// census level's page to this table]. (x, y, w, h) in the page's 640×480 menu space; the
+/// authored digit value rides the control's post-header dword — `C_KEYPAD_Handler` types
+/// `'0' + *(control+0x20)` [M 0x216810:13], and the disc's ten controls carry exactly 1..9,0
+/// in the layout 1 2 3 / 4 5 6 / 7 8 9 / _ 0 _.
+pub const KEYPAD_DIGIT_RECTS: [(i16, i16, i16, i16); 10] = [
+    (268, 188, 34, 34), (304, 188, 34, 34), (339, 188, 34, 34),
+    (268, 223, 34, 34), (304, 223, 34, 34), (339, 223, 34, 34),
+    (268, 258, 34, 34), (304, 258, 34, 34), (339, 258, 34, 34),
+    (304, 293, 34, 34),
+];
+
+/// The digits behind `KEYPAD_DIGIT_RECTS`, same order [D the census dump].
+pub const KEYPAD_DIGIT_VALUES: [u32; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
+
+/// `Menu_FindControl` 0x1f16d8's direction byte: 1 up, 2 down, 4 left, 8 right [M], also the bits
+/// of `Input::keypad_nav`. The page's mode is `Page_Init`'s default 1 [M 0x21f1c0; the page def
+/// carries no msg 0x56 [D]], so all four directions run, in `MenuManager_Update`'s order: left,
+/// right, up, down [M 0x21c3d8:163-182].
+pub const KEYPAD_NAV_ORDER: [u8; 4] = [4, 8, 1, 2];
+
+/// `Input_Update` 0x17ee88's auto-repeat, on the count of frames an action has been held: the
+/// fresh bit (mask 4) on the first frame; the repeat bit (mask 8) from frame 46 on when the count
+/// is a multiple of 8 [M raw words 0x17f0d0-0x17f0f0: `sltiu 0x2e`, `andi 7`, `ori 8`].
+fn action_repeats(frames: u16) -> bool {
+    frames >= 0x2e && frames & 7 == 0
+}
+
+/// One tick of the page's input, after the action machine: what fired this tick.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KeypadEdges {
+    /// Directions that fire: the 0x1a-0x1d reads take mask 0xc, fresh or repeat
+    /// [M 0x21c3d8:163-182].
+    pub nav: u8,
+    /// Action 0x1f mask 4: types the focused digit [M `Button_Update` 0x1ef948:74,105-107].
+    pub confirm: bool,
+    /// Action 0x1f mask 8: the button's msg 0x61, which `C_KEYPAD_Handler` ignores, so only its
+    /// `Menu_PlaySound(0)` is heard [M 0x1ef948:75-77,110-113].
+    pub confirm_repeat: bool,
+    /// Action 0x22 mask 4: the close [M `MenuManager_Update` 0x21c3d8:77-105, `MenuManager_Monitor`
+    /// 0x21d508:29-37].
+    pub back: bool,
+}
+
 /// The in-game keypad mini-game — page 0x40000021 of the per-level menu def (kind-8 entry
 /// 08000001, page file-hash 0x80000003 [D census: present with control 0x100000ba in
 /// 07000003/05/08/09/0b/0c/0d/11/12/13/14/15/16/1b/23/25/26/27/28.bin]), created by
@@ -442,12 +487,30 @@ pub struct Keypad {
     pub open: bool,
     /// The match fired (`Lock_Unlock` ran) — the caller writes the lock's out channel + state 1.
     pub solved: bool,
+    /// The digit control the page cursor stands on, an index into `KEYPAD_DIGIT_RECTS`. The game
+    /// has no free cursor: every writer of the manager cursor's +0x24/+0x26 (`Menu_FindControl`,
+    /// `Manager_SendMessage`, `Page_Update`) places it on a control [M]. Only the ten digit
+    /// buttons can hold it: the page's other 13 controls carry msg 0x2b value 6, whose bit 2
+    /// survives the update's `& 0xfb`, so their +0x7a stays non-zero and the walks skip them
+    /// [D the page's control msgs; M 0x1ef948, 0x218cb8:84]. Home is digit 1, index 0: the page
+    /// opens with no usable control (the digits' +0x7a is still 4), so `Page_Update` parks the
+    /// cursor on the backup control at (-100, -100); the next frame's `Menu_GetControl` finds no
+    /// rect there and `Menu_GetFirstControl` returns the first usable control in list order
+    /// [M 0x21edc8:32-38,139-141; 0x1f14f8:90-91; 0x1f2708; `LinkedList_Add` appends].
+    pub focus: usize,
+    /// Frames each direction has been held, in `KEYPAD_NAV_ORDER`.
+    nav_frames: [u16; 4],
+    confirm_frames: u16,
+    back_frames: u16,
+    /// The lanes have been read once. A button already down when the page opens is held, not
+    /// fresh: `Input_Update` keeps counting it across the open.
+    primed: bool,
 }
 
 impl Keypad {
     /// `Lock_Update` case 3's arming [M 0x1ae3d8:176-190].
     pub fn arm(code: [u8; 4], code_shown: bool) -> Keypad {
-        Keypad { code, code_shown, typed: [b'*'; 4], cap: 4, count: 0, open: true, solved: false }
+        Keypad { code, code_shown, typed: [b'*'; 4], cap: 4, count: 0, open: true, solved: false, focus: 0, nav_frames: [0; 4], confirm_frames: 0, back_frames: 0, primed: false }
     }
 
     /// `C_KEYPAD_Handler` 0x216810 msg 0x4b — a digit button press. `d` is the button's
@@ -464,8 +527,12 @@ impl Keypad {
     /// The display string for the label control 0x10000075 (msg 0x18 set-text target
     /// [M 0x216810:13-22]): the game copies typed[0..=count_before] INCLUSIVE — the just-typed
     /// digit included, i.e. `typed[..count]` with the post-increment count — then NULs the tail.
+    /// At the count-0 open the game's msg-0x51 refresh sprintf's the literal `"****"` into the
+    /// same buffer [M 0x216810:24-29 — the format at 0x30d330 is the four masks], so the page's
+    /// resting display is the four masks.
     pub fn display(&self) -> String {
         let n = (self.count as usize).min(4);
+        if n == 0 { return "****".to_string(); }
         String::from_utf8_lossy(&self.typed[..n]).into_owned()
     }
 
@@ -496,6 +563,40 @@ impl Keypad {
     /// [M 0x1ae3d8:292-295]).
     pub fn close(&mut self) {
         self.open = false;
+    }
+
+    /// The digit the page cursor stands on (the page's draw highlights this control).
+    pub fn focus_digit(&self) -> u32 {
+        KEYPAD_DIGIT_VALUES[self.focus]
+    }
+
+    /// One tick of the page's held lanes through the game's action machine. The 0x1f and 0x22
+    /// reads refuse each other while the other is held [M `Menu_InputAction` 0x1f1f40: 0x1e/0x1f
+    /// return 0 under a held 0x22, and 0x22 returns 0 under a held 0x1f or 0x1e].
+    pub fn edges(&mut self, nav: u8, confirm: bool, back: bool) -> KeypadEdges {
+        let primed = self.primed;
+        self.primed = true;
+        let count = |frames: &mut u16, held: bool| {
+            *frames = if !held { 0 } else if !primed { 2 } else { frames.saturating_add(1).min(0x7fff) };
+            *frames
+        };
+        let mut out = KeypadEdges::default();
+        for (i, &bit) in KEYPAD_NAV_ORDER.iter().enumerate() {
+            let c = count(&mut self.nav_frames[i], nav & bit != 0);
+            if c == 1 || action_repeats(c) { out.nav |= bit; }
+        }
+        let c = count(&mut self.confirm_frames, confirm);
+        let b = count(&mut self.back_frames, back);
+        out.confirm = c == 1 && !back;
+        out.confirm_repeat = action_repeats(c) && !back;
+        out.back = b == 1 && !confirm;
+        out
+    }
+
+    /// The select edge on the page: the focused digit types (`C_KEYPAD_Handler`'s msg 0x4b arm
+    /// [M 0x216810:8-22: the wrap at the cap, `typed[count]`, the display update, count++]).
+    pub fn select(&mut self) {
+        if self.open { self.digit(KEYPAD_DIGIT_VALUES[self.focus]); }
     }
 }
 

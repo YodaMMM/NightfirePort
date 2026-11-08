@@ -302,6 +302,17 @@ pub struct Input {
     /// goggle mode 0 → 1 (night) → 2 (x-ray) → 0 — unless the aim bit (+0x60 bit 0) is up.
     /// Keyboard: N. Local view state, not net-encoded (the `stabilise` precedent).
     pub goggles_action: bool,
+    /// The keypad page's select button, HELD level: the game's ✕ (action 0x1f). `Keypad::edges`
+    /// runs the game's action machine over it. Keyboard: Enter. Local view state, not net-encoded
+    /// (the `goggles_action` precedent).
+    pub keypad_confirm: bool,
+    /// The keypad page's back button, HELD level: the game's △ (action 0x22, the manager's exit
+    /// action [M `Lock_Update` 0x1ae3d8:243's create args]). Keyboard: Backspace.
+    pub keypad_back: bool,
+    /// The keypad page's directions, HELD, as `Menu_FindControl`'s bits (1 up, 2 down, 4 left,
+    /// 8 right): the game's actions 0x1a-0x1d, the d-pad or the left stick past half
+    /// [M psiInput_MapInputs 0x10cd80:380-410]. Keyboard: the arrows or W/A/S/D.
+    pub keypad_nav: u8,
 }
 
 /// level-0a-office-hatch-10 experiment switch: `NF_WALK_GHOST=1` drops the walk capsule's
@@ -665,6 +676,14 @@ impl Bond {
         [pos[0] + LOCAL[0] * c + LOCAL[2] * s, pos[1] + LOCAL[1], pos[2] - LOCAL[0] * s + LOCAL[2] * c]
     }
 
+    /// The player's world-sphere radius (`obj+0x8C` = `M_CONTROL+0x8C · |obj+0xE8|`, scale 1.0 at
+    /// rest [M `Control_BuildWorldSph` 0x133070; `L ee_start_05.bin M_CONTROL 0x16cb8a0+0x8C`]):
+    /// 1.0576. This is the radius `control_handle_cel_change` 0x133288's out-of-cel recovery clamps
+    /// the recovered position with (its `obj+0x23` word = byte 0x8C) — the measured (16.5, 6.3, −33)
+    /// teleport on 07000003 lands at x 15.99 = cel 8's max x 17.04 − 1.0576 ≈ 15.98 [D live, the
+    /// void-recovery brief].
+    pub const SPHERE_RADIUS: f32 = 1.0576;
+
     /// The view direction (pitch applied to the forward axis). In the zero-g substates the whole
     /// orientation lives in the object matrix — ZeroG zeroes the scalar pitch BL+0x8a8 EVERY tick
     /// [M Player_ZeroG 0x192ab0:74] — so the view rides the matrix's forward row.
@@ -756,6 +775,15 @@ impl Bond {
         }
         if !(SS_ZEROG_8..=SS_ZEROG_9).contains(&self.substate) {
             self.zero_g_active = false;
+        }
+        // The fall timer BL+0x928 zeroes on every tick of the non-walk substates: the handler's
+        // switch on substate−1 stores 0 for 1, 2, 3, 5, 6, 7, 8, 9, 0xd, 0xe, 0xf [M
+        // Player_CollisionHandler 0x1949a8:103-118], and the climb branch zeroes it on both of
+        // its arms [M :52-70]. Only the walk (0) and the crouch (4) carry a fall across ticks, so
+        // a drop that ends in water, on a ladder, a wire or a grapple never hurts when Bond later
+        // steps onto the ground (the port kept the count and paid it on the next landing).
+        if matches!(self.substate, 1 | 2 | 3 | 5 | 6 | 7 | 8 | 9 | 0xd | 0xe | 0xf) {
+            self.fall_timer = 0;
         }
         self.monitor_air(ctx);
     }
@@ -1666,6 +1694,11 @@ impl Bond {
         // Case 3 calls `Player_Move(1.0, …)` [M 0x193600:181-182] — the swim multiplier is ALWAYS 1.0
         // (the 0.75 is `Player_SSCrouch`'s own call argument 0x1924c0:58, not a crouched flag read).
         let k = if swimming { 1.0 } else if self.crouched { 0.75 } else { 1.0 };
+        // The 07000007 party walk: `Player_Move` scales its multiplier by 0.9 while channel 0x48
+        // is off [M 0x191dd0 — disasm 0x1921d4-0x19220c: GameState+0xC == 0x07000007 and
+        // switch_channels[0x48] == 0 → param_1 · 0x3f666666]. The gate is the jump refusal's own
+        // [M Player_HandleJump 0x1916b0:106-113], which the Sim already carries in `jump_locked`.
+        let k = if self.jump_locked && !zero_g { k * 0.9 } else { k };
         // `Player_Move`: aim mode zeroes forward (and the pad's turn action, which the caller leaves out of `turn`:
         // with a mouse the view turns past the aim box's edge, D-002).
         let (fwd, turn) = if input.aiming { (0.0, input.turn) } else { (input.forward.clamp(-1.0, 1.0), input.turn) };
@@ -1827,7 +1860,10 @@ impl Bond {
         } else {
         self.yaw += turn;
         self.pitch = (self.pitch + input.look).clamp(-1.0, 1.0);
-        let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw)); // G-046: View_RotTransMatrix 0x1e5168:33-36 / RotMatrixX 0x1e46a0 PS2Sinf2 lanes [M]
+        // The swim dir's z (and the horizontal scale of `look`): cos of the view pitch, the same
+        // EE lanes `look` uses.
+        let swim_cp = crate::trig::cosf(nf_formats::ps2float::mul(self.pitch, crate::trig::HALF_PI));
+        let (s, c) =(crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw)); // G-046: View_RotTransMatrix 0x1e5168:33-36 / RotMatrixX 0x1e46a0 PS2Sinf2 lanes [M]
         if swimming {
             // `Player_Move` 0x191dd0:149-165 [M]: in swim the forward speed rides the LOOK direction
             // (`RotMatrixX(obj+0x50 − BL+0x8a8·π/2)` + `Mat_GetDir`, obj+0x50 zeroed on entry — the
@@ -1841,7 +1877,9 @@ impl Bond {
             self.pos[2] += -s * vs + ld[2] * vf;
             // The move quad [M 0x191dd0:152-168]: quad += dir·(forward·k), then x = strafe — the
             // z lane the accuracy read takes carries the look-dir's z component.
-            self.move_local = [vs, ld[2] * vf];
+            // The quad is LOCAL: its z lane is the local dir's z = cos(view pitch) times the
+            // forward lane (the object matrix carries only the yaw), not the world z component.
+            self.move_local = [vs, swim_cp * vf];
             // The world-Y component rides as this tick's vertical velocity; the swim tail clamps it
             // against `surface − 0.3` before integrating (case 3 tail [M 0x193600:201-220]).
             self.vel[1] = ld[1] * vf * 60.0;
@@ -1849,7 +1887,16 @@ impl Bond {
             self.pos[0] += c * vs + s * vf;
             self.pos[2] += -s * vs + c * vf;
         }
-self.local = [vs / k, vf / k];
+        // The smoothers ease from the SCALED lanes: `Player_Update` copies the whole +0x10 quad
+        // into +0x20 after the move [M 0x193600:296-299; disasm 0x193cd4 `lq v0,0x10(s2)` /
+        // 0x193cdc `sq v0,0x20(s2)`], and `Player_Move` stores the lanes already multiplied by
+        // its argument [M 0x191dd0:166-170]. So the party walk (0.9) settles at 0.18/0.28 of the
+        // walk's target. In the swim the forward lane the ease reads back is the quad's local z —
+        // dir.z·forward with dir the RotMatrixX(view pitch) row [M 0x191dd0:149-165] — so a
+        // pitched stroke eases from cos(pitch)·lane.
+        // The crouch (0.75 [M Player_SSCrouch 0x1924c0:58]) rides the same copy: it settles at
+        // 0.15/0.4 = 0.375 of the target — 0.039/tick at full stick, not 0.075.
+        self.local = if swimming { [vs, swim_cp * vf] } else { [vs, vf] };
         if !swimming && !zero_g {
             // The walk quad's own stores [M Player_Move 0x191dd0:166-170: `+0x10 = strafe`,
             // `+0x18 = forward·mult`] — the eased lanes × the substate's multiplier, WITHOUT the
@@ -2050,6 +2097,7 @@ self.local = [vs / k, vf / k];
             if std::env::var("NF_PUSH_DEBUG").is_ok() {
                 eprintln!("[pushdbg] n={} ja={:?} jb={:?} bots={:?}", ctx.bot_capsules.len(), ja, jb, ctx.bot_capsules);
             }
+            let mut jp = [0.0f32; 3];
             for &(ta, tb, tr) in ctx.bot_capsules {
                 let mut p = closest_on_seg(ta, tb, ja);
                 let mut q = closest_on_seg(ja, jb, p);
@@ -2060,10 +2108,24 @@ self.local = [vs / k, vf / k];
                 if dist_sq >= rr * rr { continue; }
                 let dist = dist_sq.sqrt().max(1e-6);
                 let overlap = (rr - dist) / dist; // fVar12 = 1.0 in SP [M :229-233]
-                push[0] -= d[0] * overlap;
-                push[1] -= d[1] * overlap;
-                push[2] -= d[2] * overlap;
+                jp[0] -= d[0] * overlap;
+                jp[1] -= d[1] * overlap;
+                jp[2] -= d[2] * overlap;
             }
+            // The world still bounds the push. Each Jointy shift moves the HITTEST arms (+0x20/+0x30)
+            // and +0x10 in place [M Collide_Jointy 0x1ec180:253-266], and every geometry node that
+            // Collide_Update 0x1ea398 intersects after it tests the SHIFTED capsule [M
+            // Collide_Intersect 0x1ebaa8:353-373 adds each DeltaP to the same arms]; the game's
+            // Jointy runs every tick of contact (grounded too), so each tick's shift is a sliver
+            // the wall pass absorbs. The port's push rides airborne ticks only (above), so the
+            // overlap a grounded walk builds up lands in ONE tick — on 07000007's hall doorway two
+            // guards' 0.7 shove put Bond's spine past the west jamb, the wall pass then resolved
+            // him out the far side and he fell out of the level. [S port structure] the push's
+            // horizontal part is swept against the world from the post-wall-pass capsule and
+            // stopped one radius short of the first wall it would cross.
+            let jp = clip_push_to_world(world, [ja[0] + push[0], ja[1] + push[1], ja[2] + push[2]],
+                [(ja[0] + jb[0]) * 0.5 + push[0], (ja[1] + jb[1]) * 0.5 + push[1], (ja[2] + jb[2]) * 0.5 + push[2]], jp);
+            for k in 0..3 { push[k] += jp[k]; }
         }
         // The pre-push-out snapshot: the game's ladder-grab pick sees the segment built HERE (the
         // hittest from the integrated obj+0x30 [M 0x194df0:361]; the +0x750 push lands in the
@@ -2071,10 +2133,15 @@ self.local = [vs / k, vf / k];
         self.pre_collide = self.pos;
         for k in 0..3 { self.pos[k] += push[k]; }
         self.grounded_history = (self.grounded_history >> 1) | if self.grounded { 8 } else { 0 };
-        // Fall damage: ticks falling with no ground for 4 ticks; on landing, over 60 → (timer − 60) if ≥ 10.
+        // Fall damage [M Player_CollisionHandler 0x1949a8:108-131]: with no ground in the last 4
+        // ticks (BL+0x940 == 0) BL+0x928 counts FRAME_RATE_MUL per falling tick and resets to 0
+        // on any tick whose y velocity is not negative (a head bump, the apex of a launch); with
+        // ground in the history it lands: over 60 → pain (timer − 60) if ≥ 10, then 0. The swim
+        // substate's own reset sits in `tick_ctx` (the handler's substate switch).
         if swimming {
-        } else if self.grounded_history == 0 && self.vel[1] < 0.0 { self.fall_timer += 1; }
-        else if self.grounded {
+        } else if self.grounded_history == 0 {
+            if self.vel[1] < 0.0 { self.fall_timer += 1; } else { self.fall_timer = 0; }
+        } else {
             if self.fall_timer > 60 && self.fall_timer - 60 >= 10 { self.fall_damage = Some((self.fall_timer - 60) as f32); }
             self.fall_timer = 0;
         }
@@ -2119,6 +2186,28 @@ self.local = [vs / k, vf / k];
         // BL+0x908 in every substate while cam mode 0/0xe, not just the walk/swim bodies).
         self.crouch_drop = if self.crouched { (self.crouch_drop + 0.0225).min(0.45) } else { (self.crouch_drop - 0.0225).max(0.0) };
     }
+}
+
+/// The actor push's horizontal part, stopped one `RADIUS` short of the first wall it would carry
+/// the capsule into: rays from the capsule's top and middle along the push, each wall hit (|ny| <
+/// 0.7 — floors and ceilings never stop a lateral shove) caps the travel at the distance that
+/// keeps the spine a radius off that wall's plane. The vertical part rides as computed.
+fn clip_push_to_world(world: &CollisionWorld, top: V3, mid: V3, jp: V3) -> V3 {
+    let len = (jp[0] * jp[0] + jp[2] * jp[2]).sqrt();
+    if len < 1e-6 { return jp; }
+    let dir = [jp[0] / len, 0.0, jp[2] / len];
+    let reach = len + 2.0 * RADIUS;
+    let mut allowed = len;
+    for s in [top, mid] {
+        let to = [s[0] + dir[0] * reach, s[1], s[2] + dir[2] * reach];
+        if let Some((t, n)) = world.segment_hit(s, to) {
+            if n[1].abs() >= 0.7 { continue; }
+            let cos = (n[0] * dir[0] + n[2] * dir[2]).abs().max(0.5);
+            allowed = allowed.min((t * reach - RADIUS / cos).max(0.0));
+        }
+    }
+    let k = allowed / len;
+    [jp[0] * k, jp[1], jp[2] * k]
 }
 
 /// `vecutil_calculate_closest_point_on_line` 0x1e1cb8's form [M — the Jointy spine pair
@@ -3089,7 +3178,7 @@ mod tests {
         for _ in 0..30 { b.tick(&w, &fwd); }
         assert!(b.crouched);
         assert!(b.move_local[1] > 0.0 && b.move_local[1] < 0.08,
-            "crouch walk lane eases toward 0.1·0.75: {:?}", b.move_local);
+            "crouch walk lane eases toward 0.375·0.105: {:?}", b.move_local);
     }
 
     /// The grapple hang reads STILL to the guards: `Player_SSGrapple` stores the quad through

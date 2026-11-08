@@ -39,7 +39,9 @@
 //!   - case 5 (arrived): `Copter_Move`; 0 → plain return (no damage tail); 1 → re-write `+0x72`
 //!     and set obj+0xFE bit 1, every tick [M :255-275].
 //!   - case 6 (explode): write `+0x72`, `Explode_Create` at obj+0x30, obj+0xFE bit 1 [M
-//!     :265-275] — the explosion itself is not ported (no Explode objects in the sim).
+//!     :265-275] — the port fires it as the `death_blast` event, queued into the tick's blast
+//!     drain (`pending_blasts` → `spawn_blast`, drone.rs) with case 6's own radius/damage/script
+//!     constants [M 0x17e120-0x17e168].
 //!   - the damage tail (reached by cases 0-4): the 9 part slots' hit chains accumulate
 //!     `rec+0x64` (damage) and `rec+0x6c` [M :277-320]. The slots are the script's event-0xF
 //!     registrations (`Copter::parts`), and only slot 2 (the body) is pickable — every other

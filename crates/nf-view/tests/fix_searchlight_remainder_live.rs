@@ -199,7 +199,10 @@ fn a_courtyard_head_tracks_bond_until_the_lost_limit() {
     // Bond walks away: the spot's lost counter runs to the game's FRAME_RATE·15 = 900 ticks, then
     // the head returns to the sweep [M 0x1cb900:254-263].
     let sim = scene.sim.as_mut().unwrap();
-    sim.bond.pos = [sim.bond.pos[0] + 80.0, sim.bond.pos[1], sim.bond.pos[2] + 80.0];
+    // A placement, not a poke: no room cel holds the far spot, and a raw write there is sent back
+    // beside the spot by the out-of-cel recovery [M 0x133288:186-221].
+    let (away, yaw) = ([sim.bond.pos[0] + 80.0, sim.bond.pos[1], sim.bond.pos[2] + 80.0], sim.bond.yaw);
+    sim.place_bond(away, yaw);
     let mut back = None;
     for t in 1..=960u32 {
         sim.step_bond(Default::default(), false, false, false);

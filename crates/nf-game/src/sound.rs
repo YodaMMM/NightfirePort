@@ -257,6 +257,9 @@ impl Sounds {
     /// forever, invisible to `active_ids`.
     pub fn live_ids(&self) -> Vec<u32> { self.nodes.iter().flatten().map(|n| n.id).collect() }
 
+    /// Test hook: the ids of the live 2-D nodes (`Sound_Play`), pool order.
+    pub fn live_2d_ids(&self) -> Vec<u32> { self.nodes.iter().flatten().filter(|n| !n.is3d).map(|n| n.id).collect() }
+
     /// `Sound_SetPosition`.
     pub fn set_position(&mut self, h: Handle, pos: V3) { if let Some(Some(n)) = self.node(h) { n.pos = pos; } }
 

@@ -12967,6 +12967,11 @@ pub struct Drones {
     /// the lock pass (the match fires `Lock_Unlock` 0x1b0650 → the hold loop's channel). `None`
     /// = no keypad open (the game's state 0/1/2/5 locks refuse the E).
     pub keypad: Option<(usize, crate::lock::Keypad)>,
+    /// The view draws the keypad page. While this is false the page takes no input and Bond
+    /// stays free, because a page nobody can see must not hold the player; the page's draw sets
+    /// it true (`Sim::step_bond` then gives the pad to the page, the game's `+0x94a = 0`
+    /// [M 0x1ae3d8 case 3, 0x193600:80-87]). Nothing sets it yet.
+    pub keypad_page_drawn: bool,
     /// hind-flight-pin: the game's `attackmode_159` global [M Copter_Update 0x17dbb8:184] —
     /// `Rand_Rand(10)` on every case-2 entry, the missile/gun pick reads `& 1`. One word shared
     /// by every copter, like the game's.
@@ -13294,6 +13299,7 @@ impl Drones {
             // override with the snapshot's own table [L].
             key_codes: crate::lock::KeyCodes::init(&mut Rng::new(0x1b0548), 0),
             keypad: None,
+            keypad_page_drawn: false,
             // subtitles-do-spoken: `Snd2Lbl` (0x2d25d8) rows (label | 0x80000000 always-show,
             // sound id) and `SFXOutputData[id]+0x10` seconds — `Sound_DoSubtitle` 0x1dde58's data,
             // attached by the host from ACTION.ELF (`attach_snd2lbl`); empty = no spoken subtitles.
@@ -13387,6 +13393,44 @@ impl Drones {
     /// The armed keypad's display (the menu's label control text) — for tests/renders.
     pub fn keypad_display(&self) -> Option<String> {
         self.keypad.as_ref().map(|(_, kp)| kp.display())
+    }
+
+    /// The digit the page cursor stands on.
+    pub fn keypad_focus_digit(&self) -> Option<u32> {
+        self.keypad.as_ref().map(|(_, kp)| kp.focus_digit())
+    }
+
+    /// One tick of the armed keypad page's input, in the frame's order. `MenuManager_Update`
+    /// reads the close first and returns [M 0x21c3d8:77-105]: `Menu_PlaySound(8)` (sample 0x1d9,
+    /// flag 8 is on for this page [M 0x1f3278 case 8; `Menu_EnableSounds` 0x1f31f0 default 9]),
+    /// then `MenuManager_Monitor` deletes the manager on the same action [M 0x21d508:29-37; the
+    /// order, `Game_Run` 0x1c9790:13-14] and the lock's case 4 reads it gone. Then the steps
+    /// (`step`: `Menu_FindControl` over the digit rects, which live in the view). Then
+    /// `Page_Update` sees the control change and plays `Menu_PlaySound(7)` = 0x1da once, however
+    /// many directions fired [M 0x21edc8:32-52]; a press that finds no control is silent. Last
+    /// the focused button reads the select, so a step and a press on one frame type the new
+    /// digit: `Menu_PlaySound(0)` = 0x1da, msg 0x4b [M 0x1ef948:74,105-107]. The □ and ○ arms
+    /// send 0x5d/0x5e, which the handler ignores, under sound flags 2 and 4, which this page
+    /// has off, so they do nothing and have no lane.
+    pub fn keypad_page_input(&mut self, input: &crate::player::Input, step: impl Fn(usize, u8) -> usize) {
+        let Some((_, kp)) = self.keypad.as_mut() else { return };
+        let e = kp.edges(input.keypad_nav, input.keypad_confirm, input.keypad_back);
+        if e.back {
+            self.audio.play(0x1d9);
+            kp.close();
+            return;
+        }
+        let from = kp.focus;
+        for bit in crate::lock::KEYPAD_NAV_ORDER {
+            if e.nav & bit != 0 { kp.focus = step(kp.focus, bit); }
+        }
+        if kp.focus != from { self.audio.play(0x1da); }
+        if e.confirm {
+            kp.select();
+            self.audio.play(0x1da);
+        } else if e.confirm_repeat {
+            self.audio.play(0x1da);
+        }
     }
 
     /// mayhew-end-transition: one tick of the exit hold — the fade counts down (the game advances
@@ -14372,8 +14416,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// `Explode_Create` 0x17cbd0's blast, shared by the fuse death (`Bullet_handle_object_destruction`
     /// 0x12e1c0), the impact explode (`Bullet_CollisionHandler` 0x12d068-0x12d0bc [M, disassembled])
     /// and the grenade contact. `Explode_Propagate` 0x17c518 through `explode::propagate`: the full
-    /// 12-case dispatch (drones msg 9, Bond `Player_Hurt`, breakables, destroyables; the port has no
-    /// copter/vehicle/MP/GT/sensor/monitor/sub lists yet). `script` = the per-source effect script the
+    /// 12-case dispatch (drones msg 9, Bond `Player_Hurt`, breakables, destroyables; the copter
+    /// parts, the MP site and the GT arms are swept in this function below, the mine chain 0x4B
+    /// and the grenade cook-off 5 too; the remaining arms are closed by census: sensor 0x37 /
+    /// monitor 0x38 are empty 8-byte stubs in the game [M symtab 0x1b08a8/0x1b0968, size 8 —
+    /// Sensor_ApplyDamage / Monitor_ApplyDamage], sub 0x3d is never placeable [D docs/port-map/unreached.md], the
+    /// vehicle 0x28 lives only on the MP archives [D the collide-column census]). `script` = the per-source effect script the
     /// caller passes (the game's a3): 0x6000052 from the fuse/contact call sites, 0x60007c4 from the
     /// Samurai bolt's 0x100000/0x200000 arms, the destroyable's type script from `Destroy_Smash`
     /// [M each site's disasm]. `scale` = the game's
@@ -14444,6 +14492,43 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // case 0x4B → the mines' referenced hit entry (the chain: a mine's blast sets off the
         // mines in its reach on their next update) [M 0x17c518 case 0x4b; Mine::blast_reaches].
         self.blast_mines(pos, radius, damage);
+        // case 5 → the blast cooks off the grenade-family bullets in reach [M 0x17c518:141-162 →
+        // `Bullet_handle_object_destruction` 0x12cd98]. Two gates, both data-driven: the case's
+        // id gate (the bullet's ammo-record id ∈ {0x2B, 0x34..0x37, 0x3A}) and 0x12cd98's record
+        // gate `(rec+0x68 & 0x4000) && (rec+0x70 & 0x80204)` — which drops the 0x2B (its record
+        // +0x68 = 0x10000 lacks 0x4000 [L ee_start_05.bin @0x2bf150 + 0x2B·0x10C]), so the set
+        // that really cooks is {0x34 frag, 0x35 stun, 0x36 smoke, 0x37 remote mine, 0x3a
+        // tripbomb} [L the same dump: 0x3b satchel fails both]. The reached round is
+        // delete-marked (+0xFE |= 1) and `Explode_Create(rec+0x08, rec+0x08, rec+0x0C, bullet,
+        // bullet_pos, up, 0x6000052, 0xff, 0xff, 100, BU+0x30)` fires [M 0x12cd98:20-26] — the
+        // fuse-death shape, so the blast queues for the next tick: the game's new explosion
+        // object propagates on its first collide pass, the frame AFTER the cooking blast (the
+        // dispatch walk never revisits the list head it started past — the same order the
+        // destroy-twin queue models). The falloff amount is only the reach gate — the case never
+        // reads it, a reached grenade cooks at FULL record power [M 0x17c518 case 5 arms]. The
+        // victim's world sphere (obj+0x80/+0x8C) is the projectile mesh's bounding sphere; the
+        // port keeps no mesh radius — 0.25 stands in [S, the sweep's only synthetic constant].
+        // The 0x80000 tail (the tripbomb 0x3a alone [L record]) also deletes the beam object at
+        // BU+0x38 — the port recomputes the beams per tick from the stuck grenade, so state=2
+        // removes it with the round [M 0x12cd98:28-34; grenade.rs's beam note].
+        for g in self.grenades.iter_mut() {
+            if g.state >= 2 { continue; }
+            if !matches!(g.weapon_type, 0x2B | 0x34..=0x37 | 0x3A) { continue; }
+            let Some(rec) = d.weapons.records.get(g.weapon_type as usize) else { continue };
+            let f68 = u32::from_le_bytes(rec[0x68..0x6c].try_into().unwrap());
+            let f70 = u32::from_le_bytes(rec[0x70..0x74].try_into().unwrap());
+            if f68 & 0x4000 == 0 || f70 & 0x80204 == 0 { continue; }
+            let reach = crate::mp::combat::blast_falloff(pos, radius, damage, g.pos, 0.25);
+            if reach < 0.0002 { continue; }
+            let rec_r = f32::from_le_bytes(rec[0x08..0x0c].try_into().unwrap());
+            let rec_d = f32::from_le_bytes(rec[0x0c..0x10].try_into().unwrap());
+            self.pending_blasts.push((g.pos, rec_r, rec_d, g.owner, g.weapon_type, 0x0600_0052, rec_r, 0));
+            // 0x12cd98:28-34: a record with +0x70 & 0x80000 (the 0x3a alone [L]) also delete-marks
+            // its attached beam object (BU+0x38) in the same call, so the beam is gone this frame
+            // with the round — drop the beam this tick's rebuild already pushed for it.
+            if f70 & 0x80000 != 0 { self.tripbomb_beams.retain(|b| b.0 != g.pos); }
+            g.state = 2;
+        }
         // case 0x21 → `Destroy_Smash` [M 0x17c518:141-177 → 0x12bb60]: the channel write is the
         // smash's, the twin's blast queued like the beam path's (script by the type byte, owner
         // the blast's owner).
@@ -16767,6 +16852,27 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 &crate::explode::Targets { drones: &drones_t, player: player_pos, breaks: &breaks_t,
                     destroys: &destroys, copters: &[] });
             self.blast_mines(pos, radius, damage); // case 0x4B [M 0x17c518]
+            // case 5 — the same cook-off sweep spawn_blast runs (the game's ONE Propagate
+            // serves every blast source; the beam blast reaching a landed grenade cooks it
+            // exactly as an explosion's blast does [M 0x17c518:141-162]).
+            for g in self.grenades.iter_mut() {
+                if g.state >= 2 { continue; }
+                if !matches!(g.weapon_type, 0x2B | 0x34..=0x37 | 0x3A) { continue; }
+                let Some(rec) = d.weapons.records.get(g.weapon_type as usize) else { continue };
+                let f68 = u32::from_le_bytes(rec[0x68..0x6c].try_into().unwrap());
+                let f70 = u32::from_le_bytes(rec[0x70..0x74].try_into().unwrap());
+                if f68 & 0x4000 == 0 || f70 & 0x80204 == 0 { continue; }
+                let reach = crate::mp::combat::blast_falloff(pos, radius, damage, g.pos, 0.25);
+                if reach < 0.0002 { continue; }
+                let rec_r = f32::from_le_bytes(rec[0x08..0x0c].try_into().unwrap());
+                let rec_d = f32::from_le_bytes(rec[0x0c..0x10].try_into().unwrap());
+                self.pending_blasts.push((g.pos, rec_r, rec_d, g.owner, g.weapon_type, 0x0600_0052, rec_r, 0));
+                // 0x12cd98:28-34: a record with +0x70 & 0x80000 (the 0x3a alone [L]) also delete-marks
+                // its attached beam object (BU+0x38) in the same call, so the beam is gone this frame
+                // with the round — drop the beam this tick's rebuild already pushed for it.
+                if f70 & 0x80000 != 0 { self.tripbomb_beams.retain(|b| b.0 != g.pos); }
+                g.state = 2;
+            }
             // case 0x21 → `Destroy_Smash` [M 0x17c518:141-177 → 0x12bb60]: the channel write is
             // the smash's, the blast queued like the bullet-kill path's (script by the type
             // byte, owner the imp — not the player).
@@ -17431,9 +17537,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     pub fn take_pickup(&mut self, d: &Data, k: usize, frame: u32, force: bool) -> Option<crate::pickup::Taken> {
         let p = &mut self.pickups[k];
         let loaded = d.skins.contains_key(&d.weapons.first_person(p.weapon as usize));
-        // `Pickup_Handler`: the armour case writes `BLData+0x8B0`; the clock is `GameState+0x52`
-        // (the 10 → 0xC remap gate) — the port's tick count stands in for it.
-        let clock = frame;
+        // `Pickup_Handler`: the armour case writes `BLData+0x8B0`; `Upgrade_Weapon`'s 10 → 0xC gate
+        // is the game-complete byte `GameState[0x52]` [M 0x1a8f30:18-22; writers 0x1ffa10 /
+        // 0x1c8560 / 0x1f7fa8] — it used to be the tick count here, which is never 0 in play, so
+        // every weapon-10 drop (the 07000007/08/0c/4a guards) handed Bond record 0xC (double
+        // damage, full auto) on a game nobody had finished.
+        let clock = self.progress.game_complete as u32;
         let res = self.inventory.take(d.weapons, p, loaded, &mut self.health.armour, clock);
         // `NF_PICKUPLOG=1`: the take result and why (fix-player2's drop diagnostics; shared file —
         // one env-gated line only).
@@ -17466,6 +17575,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if crate::pickup::Inventory::is_better_weapon(d.weapons, self.bond_weapon, id) {
                     self.weapon_switch_request = Some(id);
                 }
+            }
+            // The Ronin case re-take [M 0x1a8a58:81-85]: holding the remote 0x53 → the request 0x52.
+            if matches!(t, crate::pickup::Taken::Weapon { .. }) {
+                let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock);
+                if let Some(r) = crate::pickup::Inventory::ronin_retake_request(id, self.bond_weapon) { self.weapon_switch_request = Some(r); }
             }
             // `PlrStat_LogBondBonus(0)` 0x1999e0 — `Pickup_Handler` case 6 0x18e650:234-236
             // logs the bonus pickup in the take-effect switch (fix-progress).
@@ -17566,6 +17680,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         if crate::pickup::Inventory::is_better_weapon(d.weapons, self.bond_weapon, id) {
                             self.weapon_switch_request = Some(id);
                         }
+                    }
+                    if matches!(taken, Some(crate::pickup::Taken::Weapon { .. })) {
+                        let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock);
+                        if let Some(r) = crate::pickup::Inventory::ronin_retake_request(id, self.bond_weapon) { self.weapon_switch_request = Some(r); }
                     }
                     if matches!(taken, Some(crate::pickup::Taken::Bonus)) { self.progress.log_bond_bonus(self.mission.status()); }
                     if let Some(t) = taken { self.taken.push((frame, t)); }
@@ -18271,8 +18389,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // lock [D]) —
         // the out channel lands ON the solve tick (the port's framelist fold — the game's write
         // is case 1's, one tick later [M :192-196]; see the solve branch below). The page closed
-        // without a match → state 0, re-armable (the Keypad::close arm — the view owns the
-        // close; the sim keeps the page until solved).
+        // without a match (the back edge — keypad_page_input) → the manager gone, state := 0,
+        // re-armable [M 0x1ae3d8:292-295].
         if let Some((li, kp)) = self.keypad.as_mut() {
             if kp.tick() {
                 // The unlock sound `Sound_Play3D(record u16[2])` [M 0x1ae3d8:282-283]: placement
@@ -18291,6 +18409,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 self.locks[*li].burned = true;
                 if self.locks[*li].out != 0 { self.channels.set(self.locks[*li].out as u32, 1, frame); }
                 self.locks[*li].equip_pending = true;
+                self.keypad = None;
+            } else if !kp.open {
+                // The page closed without a match (the back edge): the game's case-4 else-arm
+                // reads the manager gone → `+0x94a = 1`, state := 0 — re-armable [M
+                // 0x1ae3d8:292-295]. The port drops the page; the next use re-arms (the arm
+                // gate skips only the lock with a page standing).
                 self.keypad = None;
             }
         }
@@ -18435,8 +18559,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // object the same frame's control walk; the port drops it after the tick.
             self.space_lasers.retain(|l| !l.deleted);
         }
-        // Music: `Drone_InitComms` resets the attack gate; `DroneFunc_CheckAlarmRaised` (07000005 / 06) posts event 2 = 3
-        // for the first 58 frames of channel 0xA4, then = 1 for the first 598 of channel 0x37 or 0x61; Bond dead →
+        // Music: `Drone_InitComms` resets the attack gate; `DroneFunc_CheckAlarmRaised` posts event 2 = 3
+        // for the first 58 frames of channel 0xA4, then = 1 for the first 598 of channel 0x37 (both on 05 / 06 only) or 0x61; Bond dead →
         // event 6 (`Player_CheckForDeath`, a player-side call — runs during cut-scenes, not gated).
         self.attack_gate.new_frame();
         // audit-music-events — `Drone_InitComms` 0x139520:163-196, the all-clear scan (game order:
@@ -18458,7 +18582,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         // CheckAlarmRaised sits inside `Drone_InitComms`' `NPCGlobals != 0` block [M 0x139520:124-284]: a cut-scene
         // that disabled the drones (event 5) also mutes the alarm music.
-        if self.npc_enabled && matches!(d.level, 0x0700_0005 | 0x0700_0006) {
+        if self.npc_enabled {
             // Each counter: 0 → 1 when its channel is on, then + 1 per frame (to 0xFFFF); posts while below the limit.
             let ch = &self.channels;
             let mut step = |k: usize, c: u32, limit: u16| -> bool {
@@ -18468,8 +18592,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if n.wrapping_sub(1) < 0xfffe { *n += 1; }
                 *n < limit
             };
+            // Only 05/06 read 0xa4 and 0x37; every level falls through to the alarm channel 0x61
+            // [M 0x1453a8:6-23, `LAB_001454d8`].
+            let castle = matches!(d.level, 0x0700_0005 | 0x0700_0006);
             if d.level == 0x0700_0005 && step(0, 0xa4, 60) { self.music.event(2, 3); }
-            else if step(1, 0x37, 600) || step(2, 0x61, 600) { self.music.event(2, 1); }
+            else if (castle && step(1, 0x37, 600)) || step(2, 0x61, 600) { self.music.event(2, 1); }
         }
         // `Player_CheckForDeath` 0x190810 + `Player_HandleDeath` 0x190bb0 (fix-death-restart): the
         // death sequence gates ch 0x62 on the blood pane's cover or the player's ✕ [M 0x190bb0:29-33].

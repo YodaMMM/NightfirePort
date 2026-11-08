@@ -40,7 +40,13 @@ fn place_near(sim: &mut Sim, pos: V3) -> V3 {
     let mut best = sim.bond.pos;
     let mut best_score = f32::MAX;
     for o in offs {
-        sim.bond.pos = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+        // recovery-loop-07: the placement goes through `place_bond` (the game's
+        // `Player_StandAtNewPosition` shape — vel cleared, the floor snap of 0x190d88:104-116),
+        // not a raw obj+0x30 poke: a raw write keeps the previous tick's velocity and skips the
+        // snap, so a spot half a unit under the corridor floor (door pos sits ON the floor on
+        // 07000007) buried Bond and his fall out of the cel box ran the recovery loop.
+        let yaw = sim.bond.yaw;
+        sim.place_bond([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]], yaw);
         for _ in 0..100 { sim.step_bond(Default::default(), false, false, false); }
         let score = ((sim.bond.pos[0] - pos[0]).powi(2) + (sim.bond.pos[2] - pos[2]).powi(2)).sqrt()
             + (sim.bond.pos[1] - pos[1]).abs();
@@ -52,7 +58,8 @@ fn place_near(sim: &mut Sim, pos: V3) -> V3 {
             + (sim.bond.pos[2] - pos[2]).powi(2)).sqrt();
         if o == offs[0] && dxz <= 3.0 && hd <= 2.0 && sim.drones.level_exit.is_none() { return sim.bond.pos; }
     }
-    sim.bond.pos = best;
+    let yaw = sim.bond.yaw;
+    sim.place_bond(best, yaw);
     for _ in 0..60 { sim.step_bond(Default::default(), false, false, false); }
     sim.bond.pos
 }
@@ -101,7 +108,10 @@ fn use_any_door(sim: &mut Sim, cands: &[usize]) -> Option<usize> {
         let dpos = sim.drones.doors.list[di].pos;
         if near_load_trigger(sim, dpos, 0.0) { continue; }
         for o in offs {
-            sim.bond.pos = [dpos[0] + o[0], dpos[1] + o[1], dpos[2] + o[2]];
+            // recovery-loop-07: through `place_bond` — see place_near above (the 07000007 door
+            // pos sits ON the floor; the raw poke buried Bond half a unit under it).
+            let yaw = sim.bond.yaw;
+            sim.place_bond([dpos[0] + o[0], dpos[1] + o[1], dpos[2] + o[2]], yaw);
             for _ in 0..100 { sim.step_bond(Default::default(), false, false, false); }
             if sim.drones.level_exit.is_some() { return None; }
             let dxz = ((sim.bond.pos[0] - dpos[0]).powi(2) + (sim.bond.pos[2] - dpos[2]).powi(2)).sqrt();
@@ -419,7 +429,9 @@ fn use_census_07000012() {
         let mpos = sim.drones.monitors.list[mi].pos;
         // place_near's first offset hangs over the elevator shaft: the fall sets the plunge
         // channel and the death script takes the level [M 0x1949a8:104-107]. Stand on the floor.
-        sim.bond.pos = [mpos[0], mpos[1] - 0.5, mpos[2] + 1.0];
+        // recovery-loop-07: through `place_bond` — see place_near above.
+        let myaw = sim.bond.yaw;
+        sim.place_bond([mpos[0], mpos[1] - 0.5, mpos[2] + 1.0], myaw);
         for _ in 0..60 { sim.step_bond(Default::default(), false, false, false); }
         assert!(aim_use(sim, mpos, &|s| s.drones.monitors.list[mi].state == 2),
             "E on the monitor must enter the camera view [M 0x1b0058]");

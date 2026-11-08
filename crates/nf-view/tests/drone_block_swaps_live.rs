@@ -139,8 +139,9 @@ fn first_attack_alt_tail_swaps_in_the_second_block() {
         {
             let g = &sim.drones.list[g_i];
             let (p, yaw) = (g.pos, g.yaw);
-            sim.bond.pos = [p[0] + yaw.sin() * 5.0, p[1], p[2] + yaw.cos() * 5.0];
-            sim.bond.vel = [0.0; 3];
+            let at = [p[0] + yaw.sin() * 5.0, p[1], p[2] + yaw.cos() * 5.0];
+            let by = sim.bond.yaw;
+            sim.place_bond(at, by);
         }
         sim.step_bond(Input::default(), false, false, false);
         if sim.drones.list[g_i].first_attack_done { entered = true; break; }
@@ -173,8 +174,9 @@ fn first_attack_alt_tail_swaps_in_the_second_block() {
         {
             let g = &sim.drones.list[s_i];
             let (p, yaw) = (g.pos, g.yaw);
-            sim.bond.pos = [p[0] + yaw.sin() * 5.0, p[1], p[2] + yaw.cos() * 5.0];
-            sim.bond.vel = [0.0; 3];
+            let at = [p[0] + yaw.sin() * 5.0, p[1], p[2] + yaw.cos() * 5.0];
+            let by = sim.bond.yaw;
+            sim.place_bond(at, by);
         }
         sim.step_bond(Input::default(), false, false, false);
         if sim.drones.list[s_i].first_attack_done { entered = true; break; }
@@ -215,8 +217,9 @@ fn tase_fall_on_09_arms_the_alarm_run_stamp() {
         {
             let g = &sim.drones.list[g_i];
             let (p, yaw) = (g.pos, g.yaw);
-            sim.bond.pos = [p[0] + yaw.sin() * 4.0, p[1], p[2] + yaw.cos() * 4.0];
-            sim.bond.vel = [0.0; 3];
+            let at = [p[0] + yaw.sin() * 4.0, p[1], p[2] + yaw.cos() * 4.0];
+            let by = sim.bond.yaw;
+            sim.place_bond(at, by);
         }
         sim.step_bond(Input::default(), false, false, false);
         if sim.drones.list[g_i].sighted { seen = true; break; }

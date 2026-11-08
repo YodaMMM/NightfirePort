@@ -563,6 +563,22 @@ PickRandomStealth()@111c70:
 - Then `MusicLastJumpRequest = stealth[WhichStealth++ % n]`, `SFXJumpToMusicMarker(it, 0)`.
 - Sequence **6, 16, 18, 6, …**.
 
+### 4.5b The other level updaters
+
+Each runs behind the shared exit block; `MusicTemp1..4` restart with the level, `WhichNonAttack_181` /
+`WhichAttack_180` do not. Sets are the level's MapMusic rows.
+
+| Updater | Level | Shape |
+|---|---|---|
+| `02MayhewA`@111ed8 | 01 | attack or e[0xc] == 0x6000087: section 3 once + `MusicTemp3 = 500`, then 0xb/0xe; calm past the hold, in combat: 5 once, then 7/9 |
+| `02MayhewD`@112bf8 | 04 | e[0xb] == 0x6000082: 2 instant; `SfxNisMusicTrigger`: 3 instant the first time, else 4 instant; e[5] after the start: 4 instant. No combat music |
+| `03TowerA`@113558 | 09 | attack: combat. Zone e[0x2b]: 2, or 0xc from combat, until stealth is requested. Calm: 0x10 from combat, 4 from 2, else 0 |
+| `03TowerB`@1137b0 | 0a | as TowerA on e[0x28] with 0x13/0xe in and 0x1c/4/0x1a out; the zone latches `MusicTemp1` |
+| `PowerStationA1`@113c18 | 0c | e[0x2d] once: 0x36 from settled combat, else 0x24 instant, machine stops. Attack: combat. e[0xd]: 0x38 from combat or 0x38, else 0x22. Calm: 0xf from settled combat, else 0x14 instant until stealth |
+| `PowerStationA2`@113fc0 | 0d | e[0xc] == 0x600068f or the trigger: 0x2b instant + 600-tick hold, the trigger not cleared. Then e[0x2d] latches 0x3a (instant from 0x22); attack: combat; e[0xd]: 0x38 or 0x22; calm: 0xc from combat. Nothing runs before the first jump |
+
+"Settled combat" = the last request and the IOP's section are both in the combat set.
+
 ### 4.6 What 07000005 does, concretely [M + D]
 
 | situation | EE request | IOP effect on MFX_1 |

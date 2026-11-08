@@ -605,6 +605,14 @@ pub struct Sim {
     /// [M `Player_SetWeaponAnimObj` case 0xf 0x1a2e38:554-561]; false for the lower — its finish
     /// leaves the bit clear (case 0x10, [M 0x1a2e38:562-567]).
     pub view_aim_raising: bool,
+    /// void-recovery-2: how often the out-of-cel recovery actually FIRED (a `build_FindCel`
+    /// 0x1c8cb0 miss at the relink, the move clamped back into the old cel's box [M
+    /// control_handle_cel_change 0x133288:186-231]) since the level load — the walks' gate metric:
+    /// it should sit near zero on real input.
+    pub recovery_count: u64,
+    /// void-recovery-2: the last recovery's where-and-from (tick, the clamped pos, the pre-clamp
+    /// prev, the old cel) for the env-gated log (`NF_RECOVERY_LOG=1` prints each fire).
+    pub recovery_last: (u64, [f32; 3], [f32; 3], Option<usize>),
     /// fix-weapon-fire-modes: the guided-missile camera (`Bullet_init` 0x12c5a0:234-254 for a weapon
     /// record with `+0x6C & 4` — only the AT-420 Sentinel 'Guided' 0x2C [L ee_start_05.bin]). While
     /// `Some`, the view rides the projectile: position/direction = the bullet's [M
@@ -629,6 +637,12 @@ pub struct Sim {
     /// The crosshair state (BLData+0x133): 2 normal, 3 = the red "no" mark on a non-enemy target.
     /// Set by the `Check_Target` block in `run` every 6th frame, read by the HUD [M 0x1a7810, 0x19e6d0].
     pub cross_state: u8,
+    /// The PC part of the aim target (`BLData+0x880`): the Q-Worm PC (`useobjs.pcs` index) the
+    /// last `Check_Target` 0x1a7810 ray met first, or `None` when its first hit was anything else.
+    /// Written every 6th frame before the firing (`Player_Weapon` 0x1a24c8:278 → `Player_AutoAim`
+    /// → `Check_Target`, then `Player_WeaponFiring` [M Player_Update 0x193600:412-413]), read by
+    /// the Q-Worm's use gate [M 0x1a5460:531-545].
+    pub aim_pc: Option<usize>,
     pub auto_aim: bool,
     /// PC-port option "Rapid fire" (a documented port-only addition, off = the game): while the
     /// trigger is held every weapon fires one round per 60 Hz tick (the record's refire interval
@@ -1193,6 +1207,15 @@ pub fn find_cel(cels: &[Cel], p: [f32; 3]) -> Option<usize> {
             if matches >= 0x40 { break; }
         }
         best
+}
+
+/// The drawn matrix of a wire placement (type 0x3E). `Wire_Create` 0x1981d8 negates the
+/// placement rotation's z before `control_create_object` 0x1344e0 (param_4 == 0) builds `obj+0x90`
+/// with `View_RotTransMatrix` 0x1e5168, and `View_DrawObjectGlist` draws `obj+0xD8` at that matrix
+/// [M]. A tilted wire (07000008's OBJECT_Zip_Line_1, rot.z 0.2094 [D]) slopes the other way
+/// under the plain placement matrix; yaw-only wires (07000002/05) draw the same either way.
+pub fn wire_draw_matrix(p: &nf_formats::placement::Placement) -> [[f32; 4]; 4] {
+    nf_formats::placement::view_rot_trans_matrix([p.rotation[0], p.rotation[1], -p.rotation[2]], p.translation)
 }
 
 /// Squared distance from point `p` to the segment `a`-`b` — the game's 0x800 hittest's
@@ -2585,6 +2608,52 @@ impl Sim {
         Some((m.debriefing(), m.settings.clone()))
     }
 
+    /// void-recovery-2: one recovery fire — the gate metric plus the env-gated log line
+    /// (`NF_RECOVERY_LOG=1`), recording the sim tick, the clamped position, the pre-clamp prev
+    /// and the old cel.
+    fn recovery_fired(&mut self, pos: [f32; 3], prev: [f32; 3], cel: Option<usize>) {
+        self.recovery_count += 1;
+        self.recovery_last = (self.drones.frame as u64, pos, prev, cel);
+        static LOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *LOG.get_or_init(|| std::env::var_os("NF_RECOVERY_LOG").is_some()) {
+            eprintln!("[recovery] tick {} pos {pos:?} prev {prev:?} cel {cel:?}", self.drones.frame);
+        }
+    }
+
+    /// The mid-session placement — `Player_StandAtNewPosition` 0x190d88's relink core [M]: the
+    /// game writes obj+0x30 AND obj+0x40 to the new position (:21-28), clears the inertia
+    /// (`Player_ClearInertia`; the port zeroes `vel`), then `control_unlink_object` (:118) and
+    /// `build_LinkToRoom` (:119) — its `build_FindCel` 0x1c8cb0 at the position +0.1y (:104-108)
+    /// relinks, and a MISS leaves the object UNLINKED: the unlinked retry path
+    /// (`control_handle_cel_change` 0x133288:63-73) never runs the out-of-cel recovery — for the
+    /// class-2 player it only raises the fell-out flag (`Drone_FellOutMap` 0x13a878: obj+0xfe |= 1
+    /// + NDrone2_Enable(0), no reposition). So a PLACED player at a spot no room cel holds stays
+    /// there unlinked; only a raw poke of obj+0x30 (obj+0x40 keeping the old position — the
+    /// state `step_bond`'s >3.0 arm models) recovers into the old cel [D live, the measured
+    /// 07000003 teleports]. The game's floor snap [M 0x190d88:104-116] runs the probe 0.1 above
+    /// the placement y (`fStack_3c = obj+0x34 + 0.1`), `build_PointOnFloor` 0x1c95a8 casts the
+    /// down ray (0,−1,0) × 3.0f IN-OUT from there (on a hit the VECTOR becomes the hit point
+    /// [M 0x1c95a8:30-35, HITDATA+0x40..0x4c], scoped to the FindCel cel — its cel argument),
+    /// then the store adds 1.1 UNCONDITIONALLY (`fStack_3c += 1.1` :110-112; on a miss the y is
+    /// therefore placement + 1.2) and writes obj+0x30 — obj+0x40 keeps the RAW param position
+    /// (:21-28, never re-snapped). The ray's NULL-cel arm (FindCel missed) passes cel NULL into
+    /// `Collide_RayIntersect` [M 0x190d88:107]; the port's `segment_hit_scoped(None, …)` falls
+    /// back to the flat world [S — the game's NULL-cel ray scope not read from the disassembly;
+    /// every placement this port makes that matters lands with a cel].
+    pub fn place_bond(&mut self, p: nf_game::world::V3, yaw: f32) {
+        let mut v = [p[0], p[1] + 0.1, p[2]];
+        let cel = self.world.find_cel(v);
+        if let Some((t, _)) = self.world.segment_hit_scoped(cel, v, [v[0], v[1] - 3.0, v[2]]) {
+            v[1] -= t * 3.0;
+        }
+        v[1] += 1.1;
+        self.bond.pos = v;
+        self.bond.prev_pos = p;
+        self.bond.vel = [0.0; 3];
+        self.bond.yaw = yaw;
+        self.bond.cel = cel;
+    }
+
     pub fn step_bond(&mut self, mut input: nf_game::player::Input, trigger: bool, reload: bool, use_key: bool) {
         // The game's frame clock — `UpdateT0Count` 0x109468, called from `VBlankInt` 0x124088:76
         // (`PS2DrawFrameTime`), `psiPreDraw`/`psiPostDraw` (`PS2DrawCodeTime`), `psiPreGame_Run` /
@@ -2813,9 +2882,9 @@ impl Sim {
         self.decryptor_scanned_lag = self.decryptor_scanned.take();
         // fix-decryptor-sounds: the digit/unlock chimes a scanning lock raised this tick (the
         // [M] `Lock_Update` 0x1ae3d8:368/:374 `Sound_Play` family, played here at the lock's
-        // position through the port's 3-D path). Collected first: the loop holds the locks
+        // 2-D, as the game's calls are). Collected first: the loop holds the locks
         // mutably and the audio handle lives on the same `drones`.
-        let mut lock_sounds: Vec<(u32, [f32; 3])> = Vec::new();
+        let mut lock_sounds: Vec<u32> = Vec::new();
         for (i, l) in self.drones.locks.iter_mut().enumerate() {
             match scanned_due.filter(|(li, _)| *li == i) {
                 Some((_, upgraded)) => {
@@ -2831,12 +2900,9 @@ impl Sim {
             // `Control_NextLOD` on the unlock (Lock_Unlock 0x1b0650:23 / case 1's framelist end): the
             // keypad's model becomes its LOD variant and keeps it (see `Lock::lod_next`).
             if l.unlocked || l.burned { l.lod_next = true; }
-            if !l.pending_sounds.is_empty() {
-                let pos = l.pos;
-                for id in l.pending_sounds.drain(..) { lock_sounds.push((id, pos)); }
-            }
+            lock_sounds.append(&mut l.pending_sounds);
         }
-        for (id, pos) in lock_sounds { self.drones.audio.play3d(id, pos, None); }
+        for id in lock_sounds { self.drones.audio.play(id); }
         self.pda_tick();
         self.smoke.retain(|s| !s.dead());
         let (trigger, reload) = if self.disabled { input = Default::default(); (false, false) } else { (trigger, reload) };
@@ -2907,6 +2973,16 @@ impl Sim {
             if use_key && !self.use_key_prev {
                 self.drones.monitors.cycle(mi, &self.drones.sensors);
             }
+            self.use_key_prev = use_key;
+            (Default::default(), false, false, use_key)
+        } else { (input, trigger, reload, use_key) };
+        // The keypad page owns the pad while it stands: `Lock_Update` case 3 writes `+0x94a = 0` and
+        // `Player_Update` returns before any input arm [M 0x1ae3d8 case 3; 0x193600:80-87], and the
+        // manager reads the pad instead. Only a page the view draws may do that: an undrawn page
+        // leaves Bond free (`keypad_page_drawn`). The use key's previous state is recorded here as
+        // in the monitor arm above, so a key still held at the close is not a fresh press.
+        let (mut input, trigger, reload, use_key) = if self.drones.keypad.is_some() && self.drones.keypad_page_drawn {
+            self.drones.keypad_page_input(&input, crate::menu::keypad_step);
             self.use_key_prev = use_key;
             (Default::default(), false, false, use_key)
         } else { (input, trigger, reload, use_key) };
@@ -3244,10 +3320,31 @@ impl Sim {
                 // `bond.pos` writes (the tests' placements) get the same treatment [S: the 3.0 bound
                 // sits above any per-tick move the sim produces — the walk ~0.1, the accelerated fall
                 // ~0.3 even seconds in — and below every placement jump].
+                // void-recovery: a poke differs from `Player_StandAtNewPosition` — the game's memory
+                // write touches obj+0x30 ONLY, so obj+0x40 keeps the pre-teleport position and
+                // obj+0x20 keeps the old cel; the next `control_handle_cel_change` runs the default
+                // arm's recovery (`out_of_cel_recovery` below, [M 0x133288:186-231]) when no room cel
+                // holds the target. Measured [D live]: the (12.0, 6.3, −32) teleport on 07000003
+                // returns to the pre-teleport position inside 1 s. The recovery source is the
+                // PRE-teleport `prev_pos` (the game's obj+0x40), read before the copy below.
+                let old_prev = self.bond.prev_pos;
                 self.bond.prev_pos = self.bond.pos;
-                self.world.find_cel(self.bond.pos)
+                match self.world.find_cel(self.bond.pos) {
+                    Some(c) => Some(c),
+                    None => self.world.out_of_cel_recovery(self.bond.cel, old_prev, nf_game::player::Bond::SPHERE_RADIUS)
+                        .map(|(cell, p)| { self.recovery_fired(p, old_prev, self.bond.cel); self.bond.pos = p; cell }),
+                }
             } else {
-                self.world.player_cel_relink(self.bond.cel, self.bond.prev_pos, self.bond.pos, self.bond.pos)
+                match self.world.player_cel_relink(self.bond.cel, self.bond.prev_pos, self.bond.pos, self.bond.pos) {
+                    Some(c) => Some(c),
+                    // void-recovery: the cel-change default arm — the move left the cel's box, no
+                    // portal crossed, `build_FindCel` found nothing: `pos := obj+0x40` clamped into
+                    // the OLD cel's box, stay linked [M 0x133288:186-231]. The port's `prev_pos` IS
+                    // obj+0x40 (the `Bond` field's own doc).
+                    // The `build_FindCel` retry comes first [M 0x133288]: only a full miss recovers.
+                    None => match self.world.find_cel(self.bond.pos) { Some(c) => Some(c), None => self.world.out_of_cel_recovery(self.bond.cel, self.bond.prev_pos, nf_game::player::Bond::SPHERE_RADIUS)
+                        .map(|(cell, p)| { self.recovery_fired(p, self.bond.prev_pos, self.bond.cel); self.bond.pos = p; cell }) },
+                }
             };
             let water = bond_cel.and_then(|cell| self.room_cell.iter().position(|&c| c == Some(cell)))
                 .map(|r| self.cels[r].water).filter(|w| *w > -400.0);
@@ -3414,7 +3511,7 @@ impl Sim {
                 if !near { continue; }
                 self.hint_fired[hi] = true;
                 self.hud.info_labels.push_back((h.label, 180.0));
-                if h.sound != 0 { self.drones.audio.play3d(h.sound, self.bond.head(), None); }
+                if h.sound != 0 { self.drones.audio.play(h.sound); } // 2-D [M 0x1b3380:26]
             }
             // No walk-in or use-key wire grab: the game's
             // grab that is certain is the JUMP grab [M Player_HandleJump 0x1916b0:107-147 — action 7 is the
@@ -4622,6 +4719,35 @@ impl Sim {
                 nf_game::gadget::pick_decryptor_lock(camera, vdir, self.bond.pos, &self.drones.locks, &self.world, range)
             } else { None };
             let (trigger, reload) = if decryptor_weapon && trigger && decryptor_pick.is_none() { (false, reload) } else { (trigger, reload) };
+            // gadgets: the Micro-Camera's aim gate [M Player_WeaponFiring 0x1a5460:512-514]: on the
+            // fire-held branch a record whose base (+0x02) is 0x54 — the watch pair 0x54/0x55 —
+            // RETURNS unless the aim bit (`anim+0x60 & 1`, set when the raise script stops [M
+            // 0x1a2e38:554-561]) is up: an unaimed press takes no photograph (the press only reaches
+            // `Player_Weapon`'s 0x54/0x55 mode toggle, above).
+            let camera_base = self.weapons.base(self.gun.weapon as usize) == 0x54;
+            let (trigger, reload) = if camera_base && trigger && !aiming { (false, reload) } else { (trigger, reload) };
+            // The aim target's PC arm (`Check_Target` 0x1a7810, every 6th frame, ahead of the
+            // firing [M 0x1a24c8:278, 0x193600:412-413]): the ray's hit list is sorted by fraction
+            // and only its FIRST node's object becomes `BLData+0x880` [M 0x1ec690:114-160,
+            // 0x1a7810:125-127] — a wall, a desk or a guard in front leaves no PC target. The PC's
+            // own mesh is tested in object space (`UseObjects::aim_pick`); the world is the
+            // flags-0xc ray (bit 8: pass-flagged hits dropped — `segment_bullet`).
+            if self.drones.frame % 6 == 0 {
+                let far = [camera[0] + look[0] * 50.0, camera[1] + look[1] * 50.0, camera[2] + look[2] * 50.0];
+                let world_t = self.world.segment_bullet(camera, far).unwrap_or(f32::INFINITY);
+                let drone_t = self.check_target_drone(camera, look).map_or(f32::INFINITY, |(_, t)| t);
+                self.aim_pc = self.drones.useobjs.aim_pick(camera, look, &self.world)
+                    .filter(|&(_, t)| t < world_t && t < drone_t).map(|(i, _)| i);
+            }
+            // The Q-Worm's use gate, the decryptor's neighbour [M Player_WeaponFiring
+            // 0x1a5460:531-545]: with the trigger held, the cached target must be a PC (class
+            // 0x49) in state 0 within `weapon_data+0x1C` of the player root, or the firing
+            // returns before the pull: no shot, no spend, no fire script.
+            let qworm_refused = trigger && self.gun.weapon == 0x58 && {
+                let range = self.weapons.records.get(0x58).map_or(2.0, |r| f32::from_le_bytes(r[0x1c..0x20].try_into().unwrap()));
+                !self.drones.useobjs.qworm_gate(self.aim_pc, self.bond.pos, range)
+            };
+            let trigger = trigger && !qworm_refused;
             // weapon-handling [M Player_WeaponFiring 0x1a5460:503-506]: with the trigger held and Bond
             // under the surface (`surfaced == 0`, `Player_MonitorAir` 0x191a70:98-125 — the port's
             // `Bond::underwater`), a record without `+0x68 & 0x2` RETURNS before the pull: no shot, no
@@ -5144,6 +5270,12 @@ impl Sim {
                         // length and the 0.4 radius miss where the game and the pinned test hit);
                         // the pinned sphere shape stays until the live check lands (report).
                         let end = [camera[0] + dir[0] * range, camera[1] + dir[1] * range, camera[2] + dir[2] * range];
+                        // gadgets: the game's target is the ray's FIRST hit [M 0x1a4bf0:152-159 —
+                        // `Collide_RayIntersect` head → aiming point, the hit list's head entry; its
+                        // +0x58 object must be class 2/3]: a wall in front of the guard takes the hit,
+                        // so the tick is the free miss (no beam, the spend refunded). The port's
+                        // sphere stand-in ignored the world and tased through walls.
+                        let wall = self.world.segment(camera, end).unwrap_or(1.0) * range;
                         for dr in self.drones.list.iter() {
                             if !dr.present || !dr.enabled || dr.corpse || dr.health <= 0.0 { continue; }
                             let c = [dr.pos[0], dr.pos[1], dr.pos[2]];
@@ -5153,7 +5285,7 @@ impl Sim {
                             let t = if ab2 > 1e-9 { (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / ab2 } else { 0.0 };
                             let cl = [camera[0] + ab[0] * t.clamp(0.0, 1.0), camera[1] + ab[1] * t.clamp(0.0, 1.0), camera[2] + ab[2] * t.clamp(0.0, 1.0)];
                             let d2 = (cl[0] - c[0]).powi(2) + (cl[1] - c[1]).powi(2) + (cl[2] - c[2]).powi(2);
-                            if d2 <= 1.05 * 1.05 { target_hit = true; break; }
+                            if d2 <= 1.05 * 1.05 && wall >= t.clamp(0.0, 1.0) * range - 1.05 { target_hit = true; break; }
                         }
                     }
                     self.stunner_target = Some(target_hit);
@@ -5614,12 +5746,7 @@ impl Sim {
         if self.drones.frame % 6 == 0 {
             let far = [camera[0] + look[0] * 50.0, camera[1] + look[1] * 50.0, camera[2] + look[2] * 50.0];
             let wall = self.world.segment(camera, far).unwrap_or(1.0);
-            let hit = self.drones.list.iter().enumerate()
-                .filter(|(_, dr)| dr.present && dr.enabled && dr.drawn && !dr.corpse)
-                .filter_map(|(i, dr)| {
-                    let vol = nf_game::bullet::PlayerVolume { feet: [dr.pos[0], dr.pos[1] - 1.0, dr.pos[2]], height: 1.8, radius: 0.4 };
-                    nf_game::bullet::segment_cylinder(camera, far, &vol).filter(|&t| t < wall).map(|t| (i, t))
-                }).min_by(|a, b| a.1.total_cmp(&b.1));
+            let hit = self.check_target_drone(camera, look);
             self.cross_state = match hit {
                 Some((i, _)) if self.drones.list[i].team != 1 => {
                     // civilian-no-shoot [M 0x1a7810:152-183]: the no-shoot mark is ALSO keyed on the
@@ -6465,7 +6592,6 @@ impl Sim {
         // that opened the tick before a scene starts waits in its frozen flash window with the chime
         // unplayed, exactly the game's held Triggered1 (objective-banner-timing).
         if let Some(m) = self.hud.objective_msgs.front_mut() {
-            let cam = self.bond.head();
             if !m.opened {
                 // Case 2: the open — bind the header, schedule the pair, no sound yet [M 0x19c310:126-176].
                 m.opened = true;
@@ -6473,7 +6599,7 @@ impl Sim {
                 // Case 3's flash branch: PlayMe1st once (1532 new / 468 complete) [M 0x19c310:219-229].
                 m.sfx1 = true;
                 let id = if m.status == 0x0200_0053 { 468 } else { 1532 };
-                self.drones.audio.play3d(id, cam, None);
+                self.drones.audio.play(id); // 2-D [M 0x19c310:221]
             }
             if m.sfx1 && !m.second && m.status != 0x0200_0053 && m.time <= m.life - 60.0 {
                 // The steady branch: PlayMe2nd (469) once [M 0x19c310:232-235] — only after the
@@ -6481,7 +6607,7 @@ impl Sim {
                 // branch's ScriptCam hold can delay the 1st past; the timer freeze keeps the
                 // ordering 1532 then 469 exactly as the pane plays them).
                 m.second = true;
-                self.drones.audio.play3d(469, cam, None);
+                self.drones.audio.play(469); // 2-D [M 0x19c310:233]
             }
         }
     }
@@ -6503,6 +6629,20 @@ impl Sim {
     /// The crosshair state (`HUD_UpdateCrossHair` 0x19e6d0 reads BLData+0x133): 2 normal, 3 = the red
     /// "no" mark on a non-enemy target (`Check_Target` 0x1a7810:181-182). fix-player2.
     pub fn crosshair_state(&self) -> u8 { self.cross_state }
+
+    /// The drone arm of the `Check_Target` 0x1a7810 aim ray: the first drawn live drone the
+    /// 50-unit view ray meets before the world (body cylinder r 0.4, feet to 1.8 up — the port's
+    /// stand-in for the drone's own collision), as (index, fraction).
+    fn check_target_drone(&self, camera: [f32; 3], look: [f32; 3]) -> Option<(usize, f32)> {
+        let far = [camera[0] + look[0] * 50.0, camera[1] + look[1] * 50.0, camera[2] + look[2] * 50.0];
+        let wall = self.world.segment(camera, far).unwrap_or(1.0);
+        self.drones.list.iter().enumerate()
+            .filter(|(_, dr)| dr.present && dr.enabled && dr.drawn && !dr.corpse)
+            .filter_map(|(i, dr)| {
+                let vol = nf_game::bullet::PlayerVolume { feet: [dr.pos[0], dr.pos[1] - 1.0, dr.pos[2]], height: 1.8, radius: 0.4 };
+                nf_game::bullet::segment_cylinder(camera, far, &vol).filter(|&t| t < wall).map(|t| (i, t))
+            }).min_by(|a, b| a.1.total_cmp(&b.1))
+    }
 
     /// One tick of the decryptor screen (`Player_WeaponFiring` 0x1a5460:155-194 reading the display
     /// buffer `Lock_Update` 0x1ae3d8 fills [M :179-189, :346-369]): a scan start shows "****"; the
@@ -9463,7 +9603,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     // wire glist never draws (none on the disc today; the census pins it). Ladders stay
                     // ungated: `Ladder_Create` 0x1966c0 stores only obj+0xD8 (0x19671c), never obj+0xF0.
                     if level.maps[map].objects[object].flags & 0x10 != 0 { continue; }
-                    let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
+                    let inst = Instance { map, object, matrix: wire_draw_matrix(p), placement: p.clone() };
                     add_instance(level, &inst, Layer::World, None, &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                 }
             }
@@ -9507,8 +9647,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         //   kind byte OneSided_Create writes at obj+0xff = 0x4c is exactly (0x26fc20 − control_funcs
         //   0x26f890)/0xC [M symtab + decomp]] — dots (obj pos − cam pos) against the obj matrix's dir and
         //   sets obj+0xF0 bit 0x10 when facing away; reached whenever a level places type-0xd5 objects —
-        //   07000041 does [D levels.md census]. The port's per-triangle backface cull of the placed glist
-        //   is the same job at draw time) · 0xD8 RB_Create 0x1d6bf0:52 (rigid bodies evolve obj+0x90 once
+        //   07000041 does [D levels.md census]. CORRECTED by control-funcs-update: the port has NO
+        //   per-triangle backface cull (`cull_mode: None` in every wgpu pipeline [M gpu.rs]) — the old
+        //   "same job at draw time" claim was wrong. The update is ported in `worldobj::OneSided`
+        //   (create + per-tick dot, [M 0x1e7ce8/0x1e7d58]); the hidden flag's draw consumer (the
+        //   palette FAR-write) is an open hand-off stub — this static instance always draws) · 0xD8 RB_Create 0x1d6bf0:52 (rigid bodies evolve obj+0x90 once
         //   disturbed; at rest = placement) · 0xE1 Destroy_Create 0x12c318:23 (death hides the
         //   mesh: Destroy_Smash 0x12bb60 swaps the glist to tag+0x00 — the LOD pointer or the
         //   next 0x50 glist slot, undrawable for the C5 leaves [L]; see destroy_object_state
@@ -10535,7 +10678,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
-            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, zoom_saved: Vec::new(), zoom_aim_prev: false, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, step_foot: false, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), drone_draw_cache: (0..crate::pose_pool::MAX_SLOTS).map(|_| Default::default()).collect(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), bond_anim: nf_game::mp::body_anim::MpBodyAnim::new(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
+            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, zoom_saved: Vec::new(), zoom_aim_prev: false, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, step_foot: false, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, aim_pc: None, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), drone_draw_cache: (0..crate::pose_pool::MAX_SLOTS).map(|_| Default::default()).collect(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), bond_anim: nf_game::mp::body_anim::MpBodyAnim::new(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [const { None }; nf_net::MAX_AGENTS],
             mp_local_slot: 0,
             mp_body_speed: [0.0; nf_net::MAX_AGENTS],
@@ -10580,6 +10723,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 shear_phase: 0.0,
                 global_blur: 0,
                 swing_phase: 0.0,
+                // void-recovery-2: the walks' recovery-fire counter (its own line, lesson 4).
+                recovery_count: 0,
+                recovery_last: (0, [0.0; 3], [0.0; 3], None),
             })
         });
         let fog = drones.and_then(|d| fog_for(d.level_id));
@@ -11836,7 +11982,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 Some(q) => q.matrix,
                 // `Break_Kill` 0x12b970: obj+0xFE bit 0 → the delete pass removes the object [M].
                 None => match brk(k) {
-                    Some(b) => if b.dead { FAR } else { b.matrix },
+                    Some(b) => if b.dead || b.draw_hidden { FAR } else { b.matrix },
                     None => self.lock_slot(s, k).unwrap_or(FAR),
                 },
             },
@@ -12193,7 +12339,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 if let Some(q) = s.drones.sss.list.get(dr as usize - s.drones.doors.list.len()) { return transform(&q.matrix, v.pos); }
                 // Past the SSs: the breakables (`Breaks::create` order) — gone once `Break_Kill` 0x12b970 ran.
                 let bi = dr as usize - s.drones.doors.list.len() - s.drones.sss.list.len();
-                if let Some(b) = s.drones.breaks.list.get(bi) { if b.dead { return [0.0, -10000.0, 0.0]; } return transform(&b.matrix, v.pos); }
+                if let Some(b) = s.drones.breaks.list.get(bi) { if b.dead || b.draw_hidden { return [0.0, -10000.0, 0.0]; } return transform(&b.matrix, v.pos); }
                 // Past the breakables: the locks' placed object / LOD variant pairs.
                 let Some(m) = self.lock_slot(s, dr as usize) else { return [0.0, -10000.0, 0.0]; };
                 return transform(&m, v.pos);
@@ -14103,10 +14249,24 @@ impl Sim {
                 }
             }
             let cel = if (0..3).any(|k| (b.pos[k] - b.prev_pos[k]).abs() > 3.0) {
+                // void-recovery: the teleport arm runs the game's poke semantics too — obj+0x40
+                // (here `prev_pos`) survives the poke, so a FindCel miss recovers from the
+                // PRE-jump position [M 0x133288:186-231].
+                let old_prev = b.prev_pos;
                 b.prev_pos = b.pos;
-                self.world.find_cel(b.pos)
+                match self.world.find_cel(b.pos) {
+                    Some(c) => Some(c),
+                    None => self.world.out_of_cel_recovery(b.cel, old_prev, nf_game::player::Bond::SPHERE_RADIUS)
+                        .map(|(cell, p)| { self.recovery_count += 1; b.pos = p; cell }),
+                }
             } else {
-                self.world.player_cel_relink(b.cel, b.prev_pos, b.pos, b.pos)
+                match self.world.player_cel_relink(b.cel, b.prev_pos, b.pos, b.pos) {
+                    Some(c) => Some(c),
+                    // void-recovery: the cel-change default arm [M 0x133288:186-231] — same as the
+                    // single-player site above.
+                    None => self.world.out_of_cel_recovery(b.cel, b.prev_pos, nf_game::player::Bond::SPHERE_RADIUS)
+                        .map(|(cell, p)| { self.recovery_count += 1; b.pos = p; cell }),
+                }
             };
             let water = cel.and_then(|cell| self.room_cell.iter().position(|&c| c == Some(cell)))
                 .map(|r| self.cels[r].water).filter(|w| *w > -400.0);
