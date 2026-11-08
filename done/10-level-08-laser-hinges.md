@@ -6,3 +6,8 @@ Reproduce on the real level first through real input, not a teleport; a report t
 
 ---
 claimed-by: sandbox5 at 2026-11-07T22:51Z
+
+---
+## Report (done, 2026-11-08T00:00Z)
+
+Closed by the driver: the report is on `s/level-08-laser-hinges` (docs/reports/level-08-laser-hinges.md); the worker didn't run finish.sh.
