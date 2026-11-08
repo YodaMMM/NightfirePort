@@ -142,7 +142,9 @@ fn fail_dump(scene: &Scene, target: V3, label: &str) -> String {
 }
 
 impl Walker {
-    pub fn new(scene: Scene) -> Walker {
+    pub fn new(mut scene: Scene) -> Walker {
+        // The walk's sound runs as in play: voices end by their length, so the 256-node pool frees.
+        nf_view::attach_headless_sound(&mut scene);
         let pos = scene.sim.as_ref().unwrap().bond.pos;
         Walker {
             scene, top_up_health: true, dmg: DamageLog::new(), stop_on_exit: true,

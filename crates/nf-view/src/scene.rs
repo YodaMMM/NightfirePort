@@ -868,6 +868,13 @@ pub struct Sim {
     /// unported-front-end-menus-3: `Camera_ApplySwing`'s phase (viewer+0x204) [M 0x1bbf40:10]
     /// — advances 2π/(FRAME_RATE·4) per swaying frame (the 4-second cycle).
     pub swing_phase: f32,
+    /// A deviceless sound driver run inside `step_bond`, for headless runs that have no window loop to
+    /// call `sound_tick` (`crate::attach_headless_sound` sets it; `None` in the app, whose loop runs
+    /// the sound after every step). It ends each voice by its length (`nf_audio::VoiceClock`), so the
+    /// EE pool frees its one-shots as in play instead of filling at 256 and refusing every start.
+    /// `.1`: how many of `drones.music.out`'s commands it has already been sent (the queue is left
+    /// for the caller to read, as in a deviceless run before this driver).
+    pub headless_sound: Option<Box<(nf_audio::sfx::Sound, usize)>>,
 }
 
 /// A status-pane message (`Text_AddMsg` 0x1b0c30's `TXT_MSG` node): the bound text, its remaining ticks,
@@ -2585,7 +2592,24 @@ impl Sim {
         Some((m.debriefing(), m.settings.clone()))
     }
 
-    pub fn step_bond(&mut self, mut input: nf_game::player::Input, trigger: bool, reload: bool, use_key: bool) {
+    pub fn step_bond(&mut self, input: nf_game::player::Input, trigger: bool, reload: bool, use_key: bool) {
+        self.step_bond_sim(input, trigger, reload, use_key);
+        // The app's order: the step, then `sound_tick` (lib.rs's sim loop). Headless runs only.
+        // The music commands stay queued for the caller: the headless driver has no music stream
+        // to take them (the deviceless run keeps them, as before the driver ran here).
+        // The driver sees each command once (the `.1` count of those already sent).
+        if let Some(mut s) = self.headless_sound.take() {
+            let music = self.drones.music.out.clone();
+            if s.1 > music.len() { s.1 = 0; }
+            self.drones.music.out = music[s.1..].to_vec();
+            crate::sound_tick(&mut s.0, self);
+            s.1 = music.len();
+            self.drones.music.out = music;
+            self.headless_sound = Some(s);
+        }
+    }
+
+    fn step_bond_sim(&mut self, mut input: nf_game::player::Input, trigger: bool, reload: bool, use_key: bool) {
         // The game's frame clock — `UpdateT0Count` 0x109468, called from `VBlankInt` 0x124088:76
         // (`PS2DrawFrameTime`), `psiPreDraw`/`psiPostDraw` (`PS2DrawCodeTime`), `psiPreGame_Run` /
         // `psiPostGame_Run` (`PS2GameCodeTime`) and the SFX/DMA probes — accumulates timer-0 deltas
@@ -10575,6 +10599,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 shear_phase: 0.0,
                 global_blur: 0,
                 swing_phase: 0.0,
+                headless_sound: None,
             })
         });
         let fog = drones.and_then(|d| fog_for(d.level_id));

@@ -1547,6 +1547,10 @@ pub struct Drone {
     /// the game mutates the same global `ScriptFootstepFoot` at command time, before the consuming
     /// `Effect_Create` [M 0x1c1b38:372-401 → 0x1befd8:185-208].
     pub footstep_ops: Vec<u8>,
+    /// Body-effect markers this tick (op 4 event 6): `AnimProcessScriptCmds` 0x1c1b38 case 6 calls
+    /// `Effect_Create(1.0, obj+0xdc, obj, 0xc0)` at command time → `Effect_Body` 0x1cf400 (the
+    /// surface's body sound); the death scripts' body-hits-the-ground frames. Drained with the footsteps.
+    pub body_ops: u8,
     pub anim_stops: Vec<u32>,
     /// Pickups this drone made this tick (`DroneWeap_DropWeapon`, `DroneFunc_DropGrenade`), collected by `Drones`.
     pub drops: Vec<crate::pickup::Pickup>,
@@ -2113,7 +2117,7 @@ impl Drone {
             // obj+0xFE bit 0 (delete-me; docs/fields/obj-tag.md:44) — see the field.
             delete_me: false,
             talk_script: 0, talk_cooldown: 0,
-            last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep_ops: Vec::new(), anim_stops: Vec::new(), drops: Vec::new(),
+            last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep_ops: Vec::new(), body_ops: 0, anim_stops: Vec::new(), drops: Vec::new(),
             play_script_talk_gate: 0,
             free_root: false, bounded: true, dtype: param(15) as u8, mode_normal: param(16) as u8, mode_alert: param(21) as u8, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None,
             // `DroneFunc_NearPlayerCollision`'s source array:
@@ -3131,6 +3135,8 @@ impl Drone {
                 // The port applies the queue at the tick's drain, in command order.
                 (4, [f, ev @ (0 | 4 | 5), ..]) if hit(*f as u32) => self.footstep_ops.push(*ev as u8),
                 (4, [f, 3, id, ..]) if hit(*f as u32) => self.anim_stops.push(*id as u32),
+                // The body effect (case 6): one `Effect_Create(…, 0xc0)` per marker [M 0x1c1b38:406-409].
+                (4, [f, 6, ..]) if hit(*f as u32) => self.body_ops = self.body_ops.saturating_add(1),
                 _ => {}
             }
         }
@@ -20995,6 +21001,28 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     }
                 }
             }
+            // The body effect (op 4 event 6, `AnimProcessScriptCmds` 0x1c1b38 case 6): `Effect_Create(1.0,
+            // obj+0xdc, obj, 0xc0)` — no ScriptCam gate (the call is the command's own, not
+            // `AnimObjectUpdate`'s footstep block). `Effect_Create` 0x1ce688 early-outs on a 0
+            // contact material, then (SP: `MPSettings+0x180 == 0`; flag 0x80 with 1/2/0x10 clear)
+            // `Effect_Body` 0x1cf400: flag 0x40 → `Sound_Play3D(100.0, -1.0, -1.0,
+            // EffectInfo[mat]+0x18, hitdata+0x40)` and `Sound_ModAlertness(0.5, h)` — the hearing
+            // entry at half weight [M 0x1cf400:9-16, 0x1de220]. The 0x20 emitter/debris arm is not
+            // in 0xc0. [S] the contact is this tick's feet ray (the footsteps' stand-in for the
+            // stored hitdata, above).
+            for _ in 0..std::mem::take(&mut dr.body_ops) {
+                let feet = dr.feet();
+                let Some(s) = d.surfaces else { break };
+                let Some((t, _n, m, _pass, _host)) = d.world.segment_surface_host([feet[0], feet[1] + 0.5, feet[2]], [feet[0], feet[1] - 1.0, feet[2]], true) else { continue };
+                if m & 0x3f == 0 { continue; }
+                let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.body, m) else { continue };
+                let at = [feet[0], feet[1] + 0.5 - 1.5 * t, feet[2]];
+                self.audio.play3d(id, at, None);
+                if let Some(tb) = d.sfx {
+                    let e = tb.get(id);
+                    if !e.looped { self.sounds.push(Sound { id: e.id, pos: at, inner: e.inner, outer: e.outer, weight: e.weight * 0.5 }); }
+                }
+            }
             for id in std::mem::take(&mut dr.anim_stops) { self.audio.stop_all_with_id(id); }
             if let Some(t) = d.sfx { for id in &snd { let h = t.get(*id); self.audio.play3d(h.id, at, None); if !h.looped { self.sounds.push(Sound { id: h.id, pos: at, inner: h.inner, outer: h.outer, weight: h.weight }); } } }
             for mut p in dr.drops.drain(..) { p.from = Some(index); self.pickups.push(p); }
@@ -22546,7 +22574,7 @@ mod tests {
             // obj+0xFE bit 0 (delete-me; docs/fields/obj-tag.md:44) — see the field.
             delete_me: false,
             talk_script: 0, talk_cooldown: 0,
-            last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep_ops: Vec::new(), anim_stops: Vec::new(), drops: Vec::new(),
+            last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep_ops: Vec::new(), body_ops: 0, anim_stops: Vec::new(), drops: Vec::new(),
             play_script_talk_gate: 0,
             facial_talk: None, facial_talk_start: 0, facial_talk_fired: 0, facial_talk_pending: None, facial_played: Vec::new(), talk_line: None, talk_track: false, talk_track_until: 0, facial_last_stamp: None,
             free_root: false, bounded: true, dtype: 0, mode_normal: 0, mode_alert: 0, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None, alert_block: 0.0,

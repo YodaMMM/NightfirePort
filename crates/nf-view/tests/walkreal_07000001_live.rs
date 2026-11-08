@@ -93,6 +93,14 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // drop the guard keeps shooting: the determined pass on a failed fight (the
         // 07000016 opt-in), 01's real-damage walks only.
         w.dmg.finish_fights = true;
+        // Agent: the return fire stands its ground (no back-away). Measured with the guards'
+        // lines ending by their length (the headless sound driver): the start-room guard #0
+        // no longer freezes in AIM_STAND_FIRE mid-line but side-steps (0x73/0x74), and the
+        // 6.5 back-away carried Bond out of his line to (-8.0, -12.5) — the fight read
+        // `blocked` for 300 ticks while the SMG pair #8/#13 shot on from 12.5 u (dead at tick
+        // 6041/1163). Holding the line keeps the target in the gun ray; the walk's own legs
+        // keep their 6.5 personal space (`keep_off`).
+        if difficulty == 2 { w.dmg.back_off = None; }
     }
     // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
     // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.

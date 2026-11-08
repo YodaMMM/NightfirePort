@@ -242,7 +242,9 @@ impl Walker {
     /// The walked breadcrumb (public for the escort's plate-box probe — break-debris-shatter-2).
     pub fn trail_points(&self) -> &[V3] { &self.trail }
 
-    pub fn new(scene: Scene) -> Walker {
+    pub fn new(mut scene: Scene) -> Walker {
+        // The walk's sound runs as in play: voices end by their length, so the 256-node pool frees.
+        nf_view::attach_headless_sound(&mut scene);
         let pos = scene.sim.as_ref().unwrap().bond.pos;
         let drone_watch: Vec<usize> = std::env::var("NF_DRONE_WATCH").ok()
             .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_default();

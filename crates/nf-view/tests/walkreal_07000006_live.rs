@@ -634,10 +634,35 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
         // the fight delivers Bond into it. The player rounds the pilaster through the east
         // lane (clearance > 0.55 off the x 28.61 face), south of its −21.36 end, then to the
         // door #59 mouth.
-        w.walk_to(Wp::new(29.7, 40.6, -20.9), "the pilaster's east lane");
-        w.walk_to(Wp::new(29.4, 40.6, -22.3), "south of the pilaster");
+        // A fight that already carried Bond south of the pilaster's −21.36 end (the guardroom
+        // fights run longer when the guards' lines end by their length) takes the door from
+        // there: the east-lane leg from the south-west walks back into the same corner.
+        // A fight that already carried Bond west of the pilaster face (the guardroom fights run
+        // longer when the guards' lines end by their length) takes the door from where he is:
+        // the east-lane legs from the west side walk back round the same corner.
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        // From the guardroom's far east (x ≥ 31, where a resupply leg can leave him) the lane
+        // south of the pilaster's end is a straight walk west along z −22.3; the east-lane leg
+        // from there overran into the door #59 swing (the 6000-tick wedge at (27.2, −22.8)).
+        eprintln!("[06] the pilaster legs from {p:?}");
+        if p[0] >= 31.0 {
+            w.walk_to(Wp::new(31.5, 40.6, -22.3), "the guardroom's south lane");
+            w.walk_to(Wp::new(29.4, 40.6, -22.3), "south of the pilaster");
+        } else if p[0] > 28.2 {
+            if p[2] > -21.4 { w.walk_to(Wp::new(29.7, 40.6, -20.9), "the pilaster's east lane"); }
+            w.walk_to(Wp::new(29.4, 40.6, -22.3), "south of the pilaster");
+        }
     } else {
         w.walk_nav_to([27.9, 40.0, -21.0], "before door #59", 1.4);
+        // Real health: a nav stop inside the 1.4 arrival can be the pilaster corner itself
+        // (28.55, −19.16) — the corner-catch the Agent route documents above; from there the
+        // through-leg wedges for its whole cap. Round the pilaster by its east lane as the
+        // Agent route does (only from the catch side, north of its −21.36 end).
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        if !w.tops_up() && p[0] > 28.2 && p[2] > -21.4 {
+            w.walk_to(Wp::new(29.7, 40.6, -20.9), "the pilaster's east lane");
+            w.walk_to(Wp::new(29.4, 40.6, -22.3), "south of the pilaster");
+        }
     }
     {
         let (pos, di) = walker::door_near(w.scene.sim.as_ref().unwrap(), [27.88, 40.0, -23.0])
