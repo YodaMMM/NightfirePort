@@ -13,3 +13,13 @@ Reproduce on the real level first through real input, not a teleport. Compare wi
 decompile, fix, and test red on the old code. No draw changes.
 
 Entry started — decompile reading follows.
+
+Progress (22:50 UTC): the bath scene is SP #399 (script 0600007f, pack 07900002). Its spoken
+lines ride the two Anim streams' op-1 sfx: 0x250 (6000502/skin 5000034, scene tick 2) and
+0x253 (6000501/skin 5000009, tick 286) — both in the level bank (slot 11), both streamed:
+0x250 → STREAMS.LUT[285] (44 544 ADPCM bytes = 77 952 samples = 3.54 s), 0x253 → LUT[284]
+(48 896 bytes = 85 568 samples = 3.88 s). The NIS Sound ops 418/508 are water barks (418 not
+in the bank). Repro (bath_line_repro): real walked route to the scene, the app sound path
+(null mixer, real time). Run 1: 0x250 keyed on at the scene's tick 1 via the precache
+takeover and played its full 77 952/77 952 — no early stop; the run's log window closed at
+scene tick ~286 (0x253 unobserved). Extending the paced window.
