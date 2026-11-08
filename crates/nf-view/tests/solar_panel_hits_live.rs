@@ -96,3 +96,23 @@ fn missile_tables_match_the_disc() {
     }
     for h in [0x060007c6u32, 0x060007e1] { assert_eq!(writes(h), P1_WRITES.to_vec(), "launch script {h:#x}"); }
 }
+
+/// `Pickup_Update` falls by `WldGravity`, and the station zeroes it [M 0x18e148:47-55, Player_Init
+/// 0x1910f8:152-172]: an astronaut's dropped gun (`Pickup_CreateSimple`, weapon 0x6a taken as 0x33
+/// [M 0x18f348]) floats where it was dropped instead of sinking out of the station.
+#[test]
+fn a_dropped_gun_floats_in_zero_g() {
+    let Ok(iso) = std::env::var("NF_ISO") else { return };
+    let mut scene = nf_view::load_with_carry_difficulty(&iso, "0700001b.bin", false, None, 1).unwrap();
+    for _ in 0..60 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+    let sim = scene.sim.as_mut().unwrap();
+    assert_eq!(sim.world.gravity_y(), 0.0, "the station's start has param 3 == 2 [D]");
+    let at = [30.0f32, 6.0, 0.0];
+    let m = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [at[0], at[1], at[2], 1.0]];
+    let p = nf_game::pickup::Pickup::create_simple(&m, 0x6a, 12, 0, &sim.weapons, &sim.models).expect("the drop");
+    let y0 = p.m[3][1];
+    sim.drones.pickups.push(p);
+    for _ in 0..240 { sim.step_bond(Input::default(), false, false, false); }
+    let p = sim.drones.pickups.last().unwrap();
+    assert!((p.m[3][1] - y0).abs() < 1e-3, "the drop stays put: y {y0} -> {}", p.m[3][1]);
+}

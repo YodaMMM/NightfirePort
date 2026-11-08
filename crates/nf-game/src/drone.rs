@@ -6121,7 +6121,7 @@ impl Drone {
             if self.keeps_gravity {
                 self.in_air = true;
                 self.on_surface = false;
-                self.velocity[1] += -9.8 * (1.0 / 60.0);
+                self.velocity[1] += world.gravity_y() * (1.0 / 60.0);
                 let r = 1.0 / 60.0;
                 self.pos[0] += self.velocity[0] * r;
                 self.pos[1] += self.velocity[1] * r;
@@ -6185,7 +6185,7 @@ impl Drone {
         } else {
             self.in_air = true;
             // `velocity += WldGravity · REC_FRAME_RATE` (gravity per tick²).
-            self.velocity[1] += -9.8 * (1.0 / 60.0);
+            self.velocity[1] += world.gravity_y() * (1.0 / 60.0);
         }
         // `pos += velocity · REC_FRAME_RATE` (the game applies this whether or not on the surface — on the surface
         // velocity is zero, so it's a no-op there).
@@ -14860,7 +14860,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // grenade path runs the same integration (grenade.rs, fix-player3).
             if b.gravity && !first {
                 let (vx, vy, vz) = (b.dir[0] * b.speed, b.dir[1] * b.speed, b.dir[2] * b.speed);
-                let vy = vy + crate::grenade::WLD_GRAVITY[1] * crate::grenade::REC_FRAME_RATE * crate::grenade::REC_FRAME_RATE;
+                let vy = vy + d.world.gravity_y() * crate::grenade::REC_FRAME_RATE * crate::grenade::REC_FRAME_RATE;
                 let len = (vx * vx + vy * vy + vz * vz).sqrt();
                 if len > 1e-9 {
                     b.dir = [vx / len, vy / len, vz / len];
