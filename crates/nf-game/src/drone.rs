@@ -18042,12 +18042,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             self.scripts.hidden_objs.clear();
             for (ti, t) in self.gt_turrets.iter_mut().enumerate() {
                 if t.delete_flag { continue; }
-                // The per-candidate LOS walk [M 0x17f9c8:271-278 — one
-                // `Collide_LineOfSight(from, cand+0x80, level, obj, cand, 0x72f)` per scanned
-                // target]. The from-point is the turret's position (obj+0x30; the decompile
-                // reads `*(ext+0xb0)+0x30`, the mounted script's subject transform, which for
-                // these turret rigs is the turret body [S unverified stand-in]). The masked
-                // drop semantics stay behind LOS_MASKS_ON like every other caller.
+                // The per-candidate scan [M GT_Track 0x17f9c8:243-265]: the game's facing gate
+                // normalises cand−`*(ext+0xb0)+0x30` against the placement facing (ext+0x80,
+                // keep ≥ 0.01), then runs one `Collide_LineOfSight(from, cand+0x80, level, obj,
+                // cand, 0x72f)` per surviving target. The cone origin `*(ext+0xb0)+0x30` is the
+                // mounted script's root translation — written once by Script_Load's
+                // View_RotTransMatrix [M 0x1d8248:148] and never moved after (GT_Update reads
+                // it back [M 0x180498:248-251]) — and the turret body object is created from
+                // the same pos/rot [M GT_Create 0x17ffa0:70-71], so the port's `t.pos` equals
+                // it numerically (the old [S] stand-in, proven). The game's LOS segment itself
+                // starts at the BARREL (`*(ext+0xc4)`'s +0xc0 plus its aim dir × `ext+0xd0`
+                // [M 0x17f9c8:232-242]); the port fires from the body position — a documented
+                // deviation (the barrel rig's range scalar is not recovered from the decompile
+                // — live check listed). The masked drop semantics stay behind LOS_MASKS_ON
+                // like every other caller.
                 for c in cands.iter_mut() {
                     c.los_ok = d.world.line_of_sight(t.pos, c.pos, crate::world::LOS_TURRET_TRACK);
                 }
@@ -18199,11 +18207,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     }
                     // The wreck smoke puff [M case 6]: Gas_Init(0.05, 0.25, glist 0x2000039,
                     // 7, 0x48403080, 1) — played INLINE above (the RNG order), so this arm
-                    // never sees it. The destroy burst stays here: `Emitter_Create(10.0, 0,
-                    // -2.0, barrel+0xC0, up)` [M 0x180498:249-257] has no located emitter-def
-                    // mapping yet — the port presents it as a one-shot gas puff at the barrel
+                    // never sees it. The destroy burst stays here: the game calls
+                    // `Emitter_Create(10.0, 0, 0xc000004, barrel+0xc0, barrel_up, 0, 0, 0)`
+                    // [M GT_Update 0x180498:188-201]; the def resolves through the runtime
+                    // hashtable (t_hashtable @ EE 0x0031cbe0, fed from the level's particles
+                    // block [M Emitter_LoadDefs 0x17ab40:147]) and the 0x0c000004 entry in the
+                    // boot snapshots is a 20-particle burst (+0x38 = 20; +0x0c 0.667, +0x10
+                    // 0.0167, +0x14 0.612, +0x18 1.0, +0x1c 2.0) [L ee_start_05.bin
+                    // @0x0031fc10 → def @0x0174c740; identical in 01/0a]. The port's one-shot
+                    // gas puff at the barrel stands in for the per-particle emitter object
                     // // [S] unverified (shape/life are the port's stand-in; the event itself is
-                    // pinned by gt.rs's death-gate test).
+                    // pinned by gt.rs's death-gate test; live check renders the game's burst).
                     crate::gt::GTEvent::Smoke { .. } => {}
                     crate::gt::GTEvent::DestroyedBurst { pos } => {
                         self.gas.init_ex(crate::gas::SMOKE_QUAD, pos, 0.0, [0.0, 0.5, 0.0], 0.3, 1.5, 4, [0xff, 0xff, 0xff, 0xff], 1, 20.0);
@@ -18564,21 +18578,34 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // event 6 (`Player_CheckForDeath`, a player-side call — runs during cut-scenes, not gated).
         self.attack_gate.new_frame();
         // audit-music-events — `Drone_InitComms` 0x139520:163-196, the all-clear scan (game order:
-        // before CheckAlarmRaised :262): walk the drone list, skip the `+0x4F8 & 0x600 != 0` ones
-        // (the port's enabled/non-corpse encode) and clear the all-clear when a plain drone's
-        // alert status (+0x44) is exactly 1. The game's second arm — a `+0x4F8 & 0x100` flagged
-        // drone, aware (+0x50C >= 1.0) within 30 units of its opponent and not in state 2 — clears
-        // it too (and latches switch_channels 0x97/0x98): the port does not carry the 0x100 bit,
-        // so that arm is not modelled [S]. All clear → `Music_Event(0xe, 1)`. The board has NO
+        // before CheckAlarmRaised :262). markers-drone-c: the scan is the game's exact rule [M
+        // Drone_InitComms 0x139520:164-201]. The 0x600 gate never filters (bits 0x200/0x400 of
+        // +0x4F8 have NO writer in ACTION.ELF — the 317-write mask census), so every list drone
+        // is scanned, corpses and unstarted waiters included. Arm 1 (+0x4F8 & 0x100 clear — the
+        // Enable(1) bit [M 0x149dd0:14,27], the port's `enabled` lifecycle): a TEAM-1 drone
+        // (+0x44 is the team byte [M docs/fields/hitdata-spawner-ally.md:196], NOT an alert
+        // status — the old read keyed the facial +0x51C) breaks the all-clear. Arm 2 (0x100
+        // set): awareness +0x50C ≥ 1.0 (the port's `alert`) within 30.0 of the opponent
+        // (+0x1A0, the port's `dist` [M 0x138f68:71]) while team ≠ 2 raises the alarm latch:
+        // all-clear broken, switch_channels[0x97] = 1 (set-only) and [0x98] = the alarm bit
+        // mirrored every frame, scan stopped. All clear → `Music_Event(0xe, 1)`. The board has NO
         // reader for ch 14 anywhere in ACTION.ELF (grep DAT_002d3530 — write-only), so this is
         // board-fidelity only.
         if self.npc_enabled {
             let mut all_clear = true;
+            let mut alarm = false;
             for dr in self.list.iter().filter(|dr| dr.present) {
-                if !dr.enabled || dr.corpse { continue; }
-                if dr.alert_status == 1 { all_clear = false; }
+                if !dr.enabled {
+                    if dr.team == 1 { all_clear = false; }
+                } else if dr.alert >= 1.0 && dr.dist < 30.0 && dr.team != 2 {
+                    all_clear = false;
+                    alarm = true;
+                    break;
+                }
             }
             if all_clear { self.music.event(0xe, 1); }
+            if alarm { self.channels.set(0x97, 1, frame); }
+            self.channels.set(0x98, u8::from(alarm), frame);
         }
         // CheckAlarmRaised sits inside `Drone_InitComms`' `NPCGlobals != 0` block [M 0x139520:124-284]: a cut-scene
         // that disabled the drones (event 5) also mutes the alarm music.
@@ -18661,8 +18688,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     }
                 }
                 // `NDrone2_PreDroneControl` 0x148db0:35-48: the +0x154 per-player distance fill
-                // (Vec_Dist3D of the two obj+0x30s; 100000.0 for a null slot). The port's single
-                // player is slot 0 [S one player]; slots 1..3 keep the empty-slot value.
+                // (Vec_Dist3D of the two obj+0x30s; 100000.0 for a null slot). SP discs run one
+                // player object (slots 1..3 are the net mode's), so slot 0 is the real distance
+                // and slots 1..3 hold the game's own null-slot fill 100000.0 [M 0x148db0:35-48];
+                // the port's MP bodies keep this shared SP fold (the same net-mode deviation as
+                // the door-scan skip bit below — live check listed).
                 let dx = dr.pos[0] - player.pos[0]; let dy = dr.pos[1] - player.pos[1]; let dz = dr.pos[2] - player.pos[2];
                 dr.dist_to_player = [(dx * dx + dy * dy + dz * dz).sqrt(), 100000.0, 100000.0, 100000.0]; }
         }
@@ -18684,7 +18714,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `Inventory::keys` (the +0x70C slots) and this is its only clear (the equip side is
         // pickup.rs's — the recorded gap, lock.rs header). (The game's player-class-3 guard
         // holds structurally: the caller is the player's own sim pass, the same gate lock.rs
-        // documents for `Lock_Activate` [S, same documented limitation].)
+        // documents for `Lock_Activate` [M 0x1aed00:12 — the game refuses only while pause
+        // manager 1 exists; the port's sim never ticks while the pause menu stands, so the
+        // refused path is unreachable here].)
         for li in 0..self.locks.len() {
             let on = self.locks[li].out != 0 && self.channels.on(self.locks[li].out as u32);
             if let Some(key) = self.locks[li].update_burnt_open(on) {
@@ -18820,7 +18852,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // `AINetwork_TestRayCels` 0x15ab78 (the segment against every boundary of the
                 // crossed AI cels, walls first [M 0x15ab78]); the port swaps that for the static
                 // collision world's line of sight — the same deviation the nav `move_test`
-                // documents [S].
+                // documents [S — the cel-graph ray is unported; the live check pins a pair of
+                // spots where the two worlds must disagree].
                 dr.los = dr.seek_opponent_los(d, player, view_bones.as_ref());
                 // `SeekOpponentLOS` 0x175cb8:68-82 — on a successful sight tick the through-wall
                 // flag refreshes: aiming (`+0x22`, the port's `aims_torso()` = the DoTracking
@@ -18943,10 +18976,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // opponent-derived state re-folds here (docs/systems/ally-heard-noise.md §3):
         // an opponent-visible tick resets +0x274 [M 0x176a28:216-223], accumulates the sight
         // counter and — behind the reaction gate — sets the seen flag and stamps +0x238
-        // [M 0x175ef0:40-44, 66-68]. Without an opponent the game leaves +0x274 frozen; the
-        // port forces the refuse value 16 so every `+0x274` gate (DoFiring 0x17a080:24-25
-        // included) refuses — no shot can leave a team-2 drone without a drone opponent [S
-        // safety fold, the frozen-counter case].
+        // [M 0x175ef0:40-44, 66-68]. Without an opponent the game's lost arm runs EVERY
+        // frame — `+0x274++` uncapped, `+0x270 = 0` [M 0x176a28:196-203, the `+0x170 == 0`
+        // jump 214-215]; the port forces 16 instead, which sits inside every reader's band
+        // (`0xf < +0x274` lost-arms [M 0x148338:67/151/235], the `< 0x10` fire gate [M
+        // 0x17a080:24-25] and the `< 180` hold [M 0x13cfb0:73] all match at 16) but deviates
+        // at the ends: the game counts 1..15 before the lost-arms open and expires the hold
+        // at 180, the forced 16 never does. Porting the unbounded counter re-routes the ally
+        // combat states in every opponentless stretch — kept as the residual [S safety fold;
+        // live check below watches +0x274 on an opponentless ally].
         for dr in &mut self.list {
             if !vision_open || !dr.present || dr.team != 2 { continue; }
             if dr.opp_drone.is_some() {
@@ -18983,8 +19021,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 dr.assist_ended = !(b & 0x0020_0020 != 0 && b & 0xffff_ffde == 0);
             }
         }
-        // `DroneVision_FindAlertedDrones` 0x1767d0 walks the list as drone pairs (with the rolling
-        // cursor 0x299098/0x29909c [M :118-125] — the port scans all pairs per frame, [S] budget)
+        // `DroneVision_FindAlertedDrones` 0x1767d0 walks the list as drone pairs — a fresh pass
+        // covers ALL i<j pairs in one frame (the per-ROW unit budget N covers the N−1 rows [M
+        // :93-113]), so the port's all-pairs scan IS the game's fresh pass; the cursors
+        // 0x299098/0x29909c [M :117-122] only matter after a 5-alerted-pair stop ([M :75-80]),
+        // where the game resumes mid-row next frame while the port re-tests from scratch, and
+        // the game's 0x07000004/0x0700001b early-out [M :28-33] is unmodelled (no pair alerts
+        // on those two levels at all — live check listed)
         // and asks `DetermineAlertCheck` 0x1766f8 per pair: exactly one of the pair must qualify
         // (not-latched +0x20000, enabled +0x100, team +0x44 ≠ 2, alert bits +0x4FC ≠ 0 [M
         // :12-31]) — the qualifier is the SOURCE, the other the OBSERVER. `ConsiderAlerted`
@@ -19456,11 +19499,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 crate::triggers::Toucher { contain: !b.hanging, ..crate::triggers::Toucher::player([b.pos[0], b.pos[1] - 0.6, b.pos[2]]) }
             }).collect(),
         };
-        // The standing body's UPPER reach: the HITTEST segment tops at pos+0.825, but plates above
-        // that fire in the game — 07000005's gatehouse ch 0x5C quad at y 27.05 over a standing
-        // pos 25.88 (the truck hand-off, t1884 [D fix-truck]) and 07000011's #235 at ~pos+0.85.
-        // The measured box (feet pos-0.6, top pos+1.26, r 0.55) keeps that reach beside the
-        // segment's low reach until the game's upper contact is pinned. // [S] unverified shape
+        // The standing body's UPPER reach: the game's trigger contact is the movement HITTEST
+        // itself — kind 0x800, A = pos+0.275·up, B = pos+(0.55−hip)·up, r 0.55, mask 0 [M
+        // Player_Collision 0x194df0:313-338,405-408], mirrored onto the trigger's contact list
+        // by Collide_Update [M 0x1ea398:160-215] and read there by Trigger_Hit [M 0x1b1fc8:18-53]
+        // — the capsule spans feet+0.0..feet+1.86, which is how 07000005's gatehouse ch 0x5C
+        // quad at y 27.05 over a standing pos 25.88 fires (the truck hand-off, t1884 [D
+        // fix-truck]) and 07000011's #235 at ~pos+0.85. The port's standing toucher is the raw
+        // segment (seg_only) plus this measured box (feet pos−0.6, top pos+1.26, r 0.55)
+        // standing in for the capsule radius — the capsule-refine port (Intersect_CylGeom's
+        // plane/centroid split, the same gap as the 0x645 scope above) is what would retire it
+        // // [S] unverified shape; live check below pins the game's contact on the 0x5C quad.
         if self.net_bodies.is_none() && !player.crouched {
             player_touchers.push(crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) });
         }
@@ -19714,9 +19763,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // BEFORE Break_Kill takes the collision away (the contact list is the collide pass's
             // product, Break_Update walks it same tick), so the tick's deferred HITDATA re-trace
             // still sees the sheet.
-            // Behind PANE_RIDE (off): the GLASS panes join the set below, carrying the
-            // PANE_PART id bit (world.rs) — the RAY sets skip them [S, the stand-in PANE_PART's
-            // note describes] while the CAPSULE
+            // Behind PANE_RIDE (off — the const is false [M drone.rs:12226], so this arm has
+            // never executed in the built sim): the GLASS panes would join the set below, carrying
+            // the PANE_PART id bit (world.rs) — the RAY sets skip them [S, the stand-in PANE_PART's
+            // note describes; unreachable while PANE_RIDE stands false] while the CAPSULE
             // queries and the effect walks keep them solid, and `update_player_bullets` engages
             // the pane through the bounds contact (the game's class-5 contact + Break_Update).
             // The pairing is proven from the game + the disc: `Break_Create` 0x12c230 takes the
@@ -19932,7 +19982,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         //   `Player_Enable` 0x195498:53,77 clears it (event 6 + `Script_Free` [M 0x1da880:44-48]) —
         //   from the intro hand-back on, the game's Bond is bit-CLEAR and the scan SEES him (the
         //   port's `bond_door_skip`; the boot-only model stalled the 07000001 escort). // [S]
-        //   unverified: the MP bodies' own per-slot lifecycle — the port keeps the shared value.
+        //   unverified in MP only: the MP bodies' own per-slot lifecycle — the port keeps the
+        //   shared value (the SP path above is proven; MP is the local-match tests' reach) —
+        //   live check listed below.
         // • drones — the enable lifecycle: `NDrone2_DefaultInit` 0x14b300:606 clears obj+0xF0 bits
         //   0x10|0x20 when the drone spawns, and `NDrone2_Enable(0,…)` 0x149dd0:12-13 sets them for
         //   every disabled/waiting drone (death states disable the same way [M 0x1637f8:89]). The
@@ -20310,7 +20362,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // at 0x141a1c before the play]. The game passes a NULL position (no DCVars, no
                 // drone object) — and `NDrone2_PlaySFX` 0x141848:99-118 only fills its stack VECTOR
                 // from a non-NULL source, so the stinger plays at the world origin (0, 0, 0) [M
-                // 0x137e68:191-200; the old template-spot fallback was the port's [S], settled here].
+                // 0x137e68:191-200; the old template-spot fallback (a port guess) is retired by
+                // these cites].
                 if let Some(idx) = self.spawners[index].sfx_request.take() {
                     if let Some(l) = Self::foley_entry(d.voices, &mut self.voice_last, idx as usize, frame) {
                         let pos = [0.0f32, 0.0, 0.0];
@@ -20761,7 +20814,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // when a drone has held sight 60+ frames with the 0x298FA8 latch clear (sets fa8, clears
             // fa9); LostSight when unsighted 120+ frames, the fa9 latch clear, nobody saw the
             // opponent last frame (sets fa9, clears fa8) [M speech.md §2.3; the port's `seen_ticks` /
-            // `unseen_ticks` stand in the game's per-drone sight timers — [S] fold, 0c/0d only].
+            // `unseen_ticks` ARE the game's per-drone sight timers: every active frame each
+            // drone takes exactly one arm — lost `+0x274++`/`+0x270 = 0` or sight
+            // `+0x274 = 0`/`+0x270++`, uncapped [M 0x176a28:196-223]; the talk gates read the
+            // same 60/120 thresholds [M :204-205, :225] behind the sticky fa8/fa9 latches [M
+            // :206-210, 229-236]; the 0c/0d scoping lives in the talk fns (speech.md §2.3).
+            // The port's fold is that rule (the opponentless team-2 arm's forced 16 is the
+            // one residual — see the team-2 fold above)].
             // `NDrone2_HandleTalking` 0x13f688 rides the same per-drone walk (the game calls it from
             // `NDrone2_ControlSTANDARD`); `counter_210`/`DAT_00298FCC` are `Drones` globals — disjoint
             // field borrows. The port always has the player in the tick (`glb_players` ≠ 0 in SP).
@@ -20777,7 +20836,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     self.sight_latch = false;
                     // `*(obj+0xc)+0x20 == player+0x20`: the drone stands in Bond's cel [M 0x13f550:41;
                     // obj+0x20 = the cel, docs/fields/obj-tag.md:19]. The drone's cel is the world's
-                    // containing cell for its position [S stand-in: the port does not relink drones].
+                    // containing cell for its position — equal by the relink law: obj+0x20 is
+                    // refreshed every moved tick (the portal-crossing walk, else a same-tick
+                    // full re-find) [M control_handle_cel_change 0x133288:135-175 from
+                    // control_movement_object_handler 0x1336f8:209-210], so the game's stored
+                    // cel IS the containing cel for walking drones and the port's fresh
+                    // find_cel matches it; the only divergence window is a sphere straddling
+                    // two cels, where the game keeps the old cel [M 0x133288:103-111]).
                     let same_cel = d.world.find_cel(dr.pos) == player.cel;
                     dr.lost_sight_talk(d.level, same_cel, rng);
                 }
@@ -21122,9 +21187,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // gated on the accumulator block's `bVar1`, which only the `obj+0xff == 3` kind sets
             // (the player, `Player_Init` 0x1910f8:76 / `MP_ReSpawn` 0x185368:83) [M :159-167].
             // Port stand-ins ([S]): the ground hit is this tick's feet ray (`segment_surface_host`)
-            // — the game uses the STORED hitdata at obj+0xdc its collision handler keeps, which
-            // the port does not cache per drone; the decal's x/z bone matrix is the port's
-            // `palette()` (the upper-body-aim deviation does not reach the feet).
+            // — the game uses the STORED hitdata at obj+0xdc that `Drone_FeetOnPoint` refreshes
+            // every collide tick (ray from obj+0x30 down −(+0xa0+0.6), mask 0xc, scoped to the
+            // drone's cel, accepted within 0.2 of the feet, material zeroed when contact is
+            // lost [M 0x140660:87, 99-102, 202-205]; copied into the anim's low 0x60 bytes from
+            // the collide arms [M 0x140968:76/197]) which the port does not cache per drone;
+            // the decal's x/z bone matrix is the port's `palette()` (the upper-body-aim
+            // deviation does not reach the feet). Live check below pins the stored record on a
+            // footstep frame.
             // The markers' global mutations apply in command order, then ONE consumption — the
             // game's `hitdata+0x60 & 4` is a per-frame FLAG (`AnimObjectUpdate` clears it at
             // :157, the markers raise it, and the consumption block :191-208 fires at most ONE
@@ -21148,13 +21218,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // [M 0x17c118:9] and spawns the kind-1 ring at the hit point (HITDATA+0x40
                     // [M docs/fields/hitdata-spawner-ally.md]). The port's probe is the grounding
                     // variant (no_water drops only the 0xE planes — world.rs `segment_surface`),
-                    // so 0xD floors ripple here; the game's collide hit can also be 0xE [S — the
-                    // port's footstep probe never sees those planes].
+                    // so 0xD floors ripple here; the game's collide hit can also be 0xE [S —
+                    // the port drops 0xE by MATERIAL while the game excludes water spatially:
+                    // the mask-0xc feet ray does NOT drop water (HITTEST+0x98 bit 0x1 is the
+                    // water drop [M 0x1e92d8:273, 0x1ebaa8:310-312], never set here [M
+                    // 0x140660:99]), so a water plane inside the drone's own cel ripples in the
+                    // game but not in the port — live check below].
                     crate::env::env_water_ripple(&mut self.gas, m, [feet[0], feet[1] + 0.5 - 1.5 * t, feet[2]]);
                     // [M Effect_Create 0x1ce688:59 — `(hitdata+0x50 & 0x3f) != 0` or nothing at all.]
                     if m & 0x3f != 0 {
                     // The sound arm (0x40): the surface's footstep id at the ground hit [M 0x1cec48:59-70];
-                    // the position is the ray's [S] (the game plays at the stored hitdata+0x40).
+                    // the position is the ray's [S — the game plays at the STORED hitdata+0x40
+                    // [M Effect_Player 0x1cec48:68-72], refreshed this same tick per the
+                    // FeetOnPoint rule above, so the two agree at a footstep tick when the ray
+                    // hits the same surface].
                     if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.footstep, m) {
                         self.audio.play3d(id, [feet[0], feet[1] + 0.5 - 1.5 * t, feet[2]], None);
                     }
@@ -21163,7 +21240,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // translation (palette slot 55 / 51 [M :89-96]), y = the ground hit's y + 0.05
                     // [M :118-124] behind the |foot_y − hit_y| ≤ 0.2 gate [M :114-116], aligned to
                     // the surface up and cel-hosted [M :125-136] (the shared decal path; its
-                    // align2dir [S] stands in for `Mat_Align2Up`).
+                    // align2dir stands in for `Mat_Align2Up` [M 0x1df4b0:20-85 — the game puts
+                    // the normal on the UP row raw, X = normalize(normal×foot_dir), Z =
+                    // normalize(X×normal) — different rows, cross order and normalization from
+                    // align2dir 0x1df2a8:21-125, so the decal ORIENTATION differs [S] — live
+                    // check below renders both]).
                     if let Some(rec) = s.effects.get((m & 0x3f) as usize) {
                         let foot8 = self.script_footstep_foot;
                         let mesh = if foot8 { rec.foot_decal_8 } else { rec.foot_decal_4 };
@@ -22031,10 +22112,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // the record's base id 0x37, same count/mark]; the cap is PER WEAPON RECORD (the game compares
         // the weapdef POINTER, so 0x3a and 0x37 hold independent counters — five tripbombs plus one
         // mine place six objects), so each id trims its own set here. The satchel family 0x3b-0x40 has
-        // NO cap walk (the id==0x3b arm 0x12ce80:320-324 is sound+park only). Residual [S unverified]:
-        // same-tick ties — the game's strict `<` over the newest-first walk evicts the NEWEST of a
-        // tied pair, the port's first-pushed pick the oldest (one throw per refire interval makes
-        // same-tick ties unreachable in practice).
+        // NO cap walk (the id==0x3b arm 0x12ce80:320-324 is sound+park only). The tie residual is
+        // UNREACHABLE: same-tick ties need two same-weapdef sticks inside one refire interval
+        // (≥26 ticks apart in flight time), so the game's newest-of-a-tied-pair eviction and the
+        // port's oldest never diverge [M 0x12ce80:296-330 + the refire gap].
         let mut placed_trip = self.placed_grenade_ids(0x3a);
         let mut placed_mine = self.placed_grenade_ids(0x37);
         while placed_trip.len() >= 6 { let i = placed_trip.remove(0); self.grenades[i].state = 2; }
@@ -22166,7 +22247,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // was set to FRAME_RATE·f·10 = 600·f ticks [M 0x196040 + 0x12e0b8]). The old self-fraction
         // decay (−f/6 per tick) erased the whiteout in ~6 ticks — invisible.
         self.health.flashbang = (self.health.flashbang - 1.0).max(0.0);
-        self.shake = (self.shake * 0.9 - 0.05).max(0.0); // [S] the old shape; the exact decay is not ported yet
+        self.shake = (self.shake * 0.9 - 0.05).max(0.0); // [S] the old shape; the game decays viewer_tag+0x200 by −Rand_FRand(shake·0.25)/tick, clamp 0 [M Camera_Update 0x1bb6d8:35-43, set by Camera_Shake 0x1bc430:12-24, eye jitter ±shake/60 0x1e00d0:15-22] — porting it adds the game's per-shaking-tick draws (live check below)
         // The SimpleScripts (`SS_Update` 0x1a9948's state machine — grates-02). The `SS_Operate`
         // 0x1a9df8 contacts, from the collision pass's registered dynamic set: the player's
         // capsule box (bit 0) and this tick's player-bullet flight (bit 1) against each SS part's
@@ -22249,7 +22330,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // tick: +0x30 += clock − +0x2C, then +0x2C := clock, gated on +0x34 == 0 (the timer
             // runs — the NIS/script pauses stamp +0x34 through the scene's request side
             // [M 0x1d94c0:118-121 + 0x1da880:44-48]). The clock is the port's frame-derived
-            // 1/100 s [S — psiGetTimeIn100ths' stand-in; only differences matter].
+            // 1/100 s — and that IS the game's clock: psiGetTimeIn100ths =
+            // (VBlankCount − RealTimeCount)·10/6 [M 0x1094a0:5-9], the vblank frame count
+            // re-based at every level load [M ResetMap_Load 0x1d6360:125]; frame-derived like
+            // the port, and floor(f·100/60) = floor(f·10/6) (the same rational), so the
+            // values agree tick for tick].
             // mission-flow: the call sits behind `Player_Update`'s `GS_IsPaused(player)` return
             // [M 0x193600:88-91], which `Mission_Update` case 7's `GS_PausePlayer(1, 0)` raises
             // from the end banner's first hold tick to the next load [M 0x182c60:124-128] — the
@@ -22291,7 +22376,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // pane #206 never shatters it) but NOT for a start script played in PlayScript: the opening
             // Yakuza's scripted dive shatters #130 [L 2026-10-26, PCSX2 frame 2175].
             let anim_carried = dr.scripted_move && dr.state != state::PLAY_SCRIPT;
-            for k in self.breaks.drone_step(from, dr.pos, level_01, anim_carried, 0.0 /* the rejected-step drain waits on the pane ride [S] */, &mut self.rng) {
+            for k in self.breaks.drone_step(from, dr.pos, level_01, anim_carried, 0.0 /* the rejected-step drain waits on the pane ride [S — the game drains by the CORRECTED +0x30 step (breakable.rs cites); plumbing it shifts which panes shatter, so it rides with the pane-ride work + its walk repairs] */, &mut self.rng) {
                 self.break_kills.push((k.placement, k.kind, k.sound));
                 if std::env::var("TASE_DBG").is_ok() { eprintln!("[brk-contact] f{} placement {} kind {} sound {} at ({:.1},{:.1},{:.1})", self.frame, k.placement, k.kind, k.sound, k.pos[0], k.pos[1], k.pos[2]); }
                 let id = u32::from(k.sound);
