@@ -60,6 +60,13 @@ fn teleport(w: &mut Walker, pos: [f32; 3]) {
         sim.place_bond(pos, yaw);
     }
     w.wait(12);
+    // `place_bond`'s +1.1 stand can sit above the walk capsule's rest height; let the root
+    // settle before a caller aims from the head (the Q-Worm aims hit a 0.34-tall mesh).
+    for _ in 0..120 {
+        let y0 = w.scene.sim.as_ref().unwrap().bond.pos[1];
+        w.wait(1);
+        if (w.scene.sim.as_ref().unwrap().bond.pos[1] - y0).abs() < 1e-4 { break; }
+    }
 }
 
 /// Aim the view at a world point and pulse the use key until `ready` (the keyboard test's

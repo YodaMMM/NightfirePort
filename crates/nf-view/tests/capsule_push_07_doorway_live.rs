@@ -39,7 +39,10 @@ fn doorway_guards_never_push_bond_through_the_jamb() {
             && ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt() < 2.0).count()
     };
     assert!(bots_near(&w) >= 2, "the two doorway guards stand beside Bond after the E press");
-    w.walk_to(Wp::new(92.6, 43.6, -47.5), "the doorway's west side");
+    // The press toward the west jamb: at the 07000007 party pace (0.9 [M Player_Move 0x191dd0:139-141])
+    // the guard nearer the jamb can stand between Bond and the west side, so the walk may end
+    // wedged against him; the asserts below are what the push must never break either way.
+    w.try_walk_to(Wp::new(92.6, 43.6, -47.5), "the doorway's west side");
     w.wait(240);
     let p = w.scene.sim.as_ref().unwrap().bond.pos;
     println!("[doorway] bond {p:?}");

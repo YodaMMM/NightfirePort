@@ -261,7 +261,7 @@ fn the_right_code_opens_0700000a_s_keypad_and_writes_its_channel() {
 }
 
 #[test]
-fn a_solved_code_equips_its_key_and_the_sister_keypad_opens_on_the_press() {
+fn a_solved_code_equips_its_key_and_the_sister_keypad_opens_from_the_ring() {
     let (mut scene, li) = open_0a();
     let sim = scene.sim.as_mut().unwrap();
     let sister = sim.drones.locks.iter().enumerate()
@@ -272,9 +272,10 @@ fn a_solved_code_equips_its_key_and_the_sister_keypad_opens_on_the_press() {
     type_code(sim, &code);
     for _ in 0..5 { idle(sim); }
     assert!(sim.drones.inventory.keys[2], "`Lock_Unlock` equips the key [M 0x1b0650:15]");
-    assert!(!sim.drones.locks[sister].unlocked);
-    use_lock(sim, sister);
-    assert!(sim.drones.locks[sister].unlocked, "a filled key slot opens the lock [M 0x1aed00:31]");
+    // `Lock_Update` case 0 reads the ring every frame: a held key on the lock's code fires
+    // `Lock_Unlock` and state 1 with no press [M 0x1ae3d8:139-147], so the sister opens on its own.
+    for _ in 0..5 { idle(sim); }
+    assert!(sim.drones.locks[sister].unlocked, "a filled key slot opens the sister lock [M 0x1ae3d8:139-147]");
     assert!(sim.drones.keypad.is_none(), "with no page");
 }
 
