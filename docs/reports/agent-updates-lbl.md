@@ -24,7 +24,9 @@ that a turret or a lock can now die or open at a different time than before.
    Keypads still open: 0a, 0b, 14 and 15 own the decryptor (0x56) at level start [census test]. 11
    and 12 do not on a cold load, but each has a Q-worm whose param 0 is the lock's code (#216 code 1,
    #684 code 5 [D]), which reveals the code to type. Nine tests pinned the laser route and now type
-   the code; one test's comment had called 0x4E the Q-Decryptor. No other laser path exists:
+   the code; one test's comment had called 0x4E the Q-Decryptor. Two more pins followed the game:
+   12's decryptor test now expects #694 to open with #656 and re-locks both before its second scan,
+   and 14's #776 sister accepts the Operative create-unlock reaching state 2. No other laser path exists:
    `Lock_Unlock` has no caller outside the lock functions and `Player_LaserPointer` reads no lock.
 3. The key ring now drives the locks (`Lock::key_tick`). `Lock_Unlock` equips the code
    [M 0x1b0650:19]; case 0 opens a closed kind-0/2 lock with a code when the ring holds its key
@@ -33,10 +35,11 @@ that a turret or a lock can now die or open at a different time than before.
    are pairs on two door faces [D]. Solving one now opens the other, where the port kept the second
    keypad live. 46's key pickups #10/#56 open locks #9 (use press) and #37 [D]. Keys carry between
    mission parts already (`RamSave`), so 14's code 2 opens 15's #381 as `Player_RamLoad` allows.
-4. `Lock_ReLock` is wired. Case 2 re-locks a kind-0 lock when its channel drops and removes the key
-   [M 0x1ae3d8 case 2, 0x1b0750]. The port wrote the channel every tick for ever, so a drop never
-   held. Case 1 is now one write, as an empty framelist ends state 1 at once. Which script drops a
-   lock channel on a real run is not traced; see Unproven.
+4. State 1 of a create-unlocked lock now ends. Master's re-lock pass (`update_burnt_open`, state 2)
+   already handles the drop; the Operative create-unlock sat in state 1 for ever because nothing
+   moved it on. An empty framelist ends state 1 after its one channel write [M 0x1ae3d8 case 1], so
+   `key_tick` now moves it to state 2. The re-lock then works for every unlock, and the pair test
+   drops channel 0x31 by hand to show it. Which script drops a lock channel on a real run is not traced.
 5. Security cameras are blind during a cut-scene. `Sensor_Update` skips both `Sensor_InCone` calls
    while `glb_viewer[4]+0x29` is set [M 0x1af618:141-143, :204-206]; only `Script_CameraStart`
    writes that for viewer 4 in play [M 0x1d9140:46]. The port kept counting.

@@ -114,7 +114,7 @@ fn decryptor_opens_the_kind0_lock_through_the_real_path_and_the_sisters_hold() {
     { let f = sim.drones.frame; sim.drones.channels.set(10, 0, f); }
     for _ in 0..3 { let p = sim.bond.pos; aim_and_fire(sim, lpos_after(sim, li), p, false); }
     assert!(!sim.drones.inventory.keys[5], "the re-lock took the key");
-    let li2 = sim.drones.locks.iter().position(|l| l.kind == 0 && l.out == 10 && !l.unlocked)
+    let li2 = sim.drones.locks.iter().enumerate().position(|(i, l)| i != li && l.kind == 0 && l.out == 10 && !l.unlocked)
         .expect("the second kind-0 lock (#694) re-locked");
     // Settle beside it first (the same place-once as the first spot) — on ITS side of the door:
     // #656 (x 7.01) and #694 (x 6.74) are the two faces of one door, and the gate's target is the

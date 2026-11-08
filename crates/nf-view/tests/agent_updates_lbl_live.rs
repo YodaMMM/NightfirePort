@@ -20,7 +20,7 @@ fn load(level: &str) -> Option<nf_view::scene::Scene> {
 fn round(pos: [f32; 3], dir: [f32; 3], weapon: u16, frame: u32) -> PlayerBullet {
     PlayerBullet {
         pos, dir, speed: 2.0, travelled: 0.0, range: 200.0, damage: 10.0, weapon, first: true, dead: false, bounces: 0,
-        homing: false, target: None, gravity: false, guided_cam: false, snd: 0, swoosh: None, born: frame,
+        homing: false, target: None, target_copter: false, gravity: false, guided_cam: false, snd: 0, swoosh: None, born: frame,
     }
 }
 

@@ -553,7 +553,11 @@ fn the_keypad_lock_burns_and_its_door_pair_opens_on_e() {
             .expect("the keypad lock #1102 (out ch 0x3C) exists [D]");
         assert!(sim.drones.locks.iter().any(|l| l.out == 0x2c) && sim.drones.locks.iter().any(|l| l.out == 0x2d),
             "the census: the 0x2C/0x2D keypad locks exist too [D #1100/#1101]");
-        assert!(!sim.drones.locks[li].burned, "sister: the lock is whole before the burn");
+        // #776 carries param 6: on Operative it is create-unlocked, and that state 1 ends one tick
+        // later in state 2, the port's `burned` [M Lock_Unlock 0x1b0650:28-31, 0x1ae3d8 case 1].
+        // Whole means no burn: any open state comes from that create-unlock alone.
+        let l = &sim.drones.locks[li];
+        assert!(!l.burned || l.unlocked, "sister: the lock is whole before the burn");
         (li, sim.drones.locks[li].pos)
     };
     let (di, dpos) = {
