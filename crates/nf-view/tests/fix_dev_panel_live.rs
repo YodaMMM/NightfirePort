@@ -225,8 +225,8 @@ fn panel_give_spawns_exactly_the_record() {
             // The give runs the pickups' own take path: `Pickup_Handler` remaps the id through
             // `Upgrade_Weapon` before the owned-check/equip [M 0x18e650:142] — 6 → 2 and 10 → 0xC
             // (the unlock tables, slot 0 without the shop [L ee_start_05.bin]); every other id is
-            // identity. The clock is the sim tick, the give's own `GameState+0x52` stand-in.
-            clock = sim.drones.frame;
+            // identity. 10 → 0xC only with the game-complete byte `GameState[0x52]` [M 0x1a8f30].
+            clock = sim.drones.progress.game_complete as u32;
             fp = sim.weapons.first_person(nf_game::pickup::Inventory::upgrade_weapon(id as u16, 0, clock) as usize);
         }
         let q = [("do".to_string(), "weapon".to_string()), ("id".to_string(), format!("{id}"))];

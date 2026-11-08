@@ -20,6 +20,10 @@ const GRAVITY: f32 = -9.8 * (1.0 / 60.0) * (1.0 / 60.0);
 /// a weapon id; the ranking compares `weapon_data[entry].base` [M Player_IsBetterWeapon 0x1a6eb0.
 /// Live values [L ee_start_05.bin 0x2bede0]. A pickup whose base is not in the table (the rockets
 /// 0x2C/0x2E, the AR's 0x1B, the gadgets) never auto-switches — the game keeps the held gun.
+/// The Phoenix Ronin's records (`crate::gt::RONIN_DEPLOY` / `RONIN_CONTROL`): 0x52 the case, 0x53 the remote.
+const RONIN_CASE: u16 = 0x52;
+const RONIN_REMOTE: u8 = 0x53;
+
 pub const BEST_WEAPON: [u16; 18] = [0x42, 0x32, 0x1a, 0x18, 0x1c, 0x16, 0x15, 0x08, 0x10, 0x0e, 0x0d, 0x0c, 0x12, 0x06, 0x04, 0x02, 0x0a, 0x01];
 
 /// `PickupMatrix` (0x2b9100, 110 bytes) row 0 — the MP weapon-set table `Pickup_CreateFromSet`
@@ -469,7 +473,22 @@ impl Inventory {
             self.carried[t] = self.carried[t].wrapping_add(rounds);
         }
         self.carried[t] = self.carried[t].min(Self::cap(w, t));
+        // The Ronin case [M 0x1a8a58:81-85]: equipping 0x52 clears `BLData+0x59E` — the owned byte
+        // of record 0x53 (`+0x1BA + 0x53·0xC`), the remote the deploy handed over — so the remote
+        // leaves the weapon cycle once the case is carried again. (The hand switch that goes with it,
+        // `+0x63 = 0x52` while `+0x62 == 0x53`, is `ronin_retake_request`.)
+        if id == RONIN_CASE as usize {
+            if let Some(o) = self.owned.get_mut(RONIN_REMOTE as usize) { *o = false; }
+        }
         true
+    }
+
+    /// `Player_EquipWeapon`'s 0x52 tail [M 0x1a8a58:81-85]: after a successful equip of the Ronin case
+    /// (0x52), a player whose current weapon (`M_CONTROL+0x62`) is the remote 0x53 gets the switch
+    /// request `+0x63 = 0x52` — not gated by the auto-switch option, and it overrides the
+    /// `Player_IsBetterWeapon` request (written just before it). `None` = no request from this tail.
+    pub fn ronin_retake_request(equipped: u16, held: u8) -> Option<u16> {
+        (equipped == RONIN_CASE && held == RONIN_REMOTE).then_some(RONIN_CASE)
     }
 
     /// `Player_EquipAmmo`: below the cap and with rounds, they are carried (flag `+0x68 & 0x10` weapons fill an empty
@@ -494,14 +513,18 @@ impl Inventory {
 
     /// `Upgrade_Weapon` (0x1a8f30): the pickup id remap every human-path pickup goes through
     /// (`Pickup_Handler` 0x18e650:142-144). 6 → `UpgradedHandguns[Upgrades]`, 0x1E/0x24/0x43/0x4A/0x4E/0x56
-    /// via their tables, **10 → 0xC when `GameState[0x52]` is non-zero** (the game clock — always, in play)
-    /// [M]. 0x54 mutates the Laser Watch records' zoom (8.0 / 16.0) instead of remapping [M 0x1a8f30:43-51].
+    /// via their tables, **10 → 0xC when `GameState[0x52]` is non-zero** [M]. `GameState[0x52]` is the
+    /// BYTE at +0x52, the game-complete flag (`Progress::game_complete`): `Menu_SetLevelBonus` 0x1ffa10
+    /// sets it on finishing 0x0700001B, `Boot_LoadPTPData` 0x1c8560 / `Menu_MapDefaultCodename`
+    /// 0x1f7fa8 restore it from the profile, `P_CREDITS_Handler` 0x2152b0 reads it [M every writer] —
+    /// NOT the clock (`GameState+0x34`). Record 0xC is the stronger record of 10 (+0x0C damage 4.0 vs
+    /// 2.0, +0x28 full-auto 999 vs 1, its own name 0x05000073) [L weapon_data]. 0x54 mutates the Laser Watch records' zoom (8.0 / 16.0) instead of remapping [M 0x1a8f30:43-51].
     /// The tables' slot 0 holds the base id and `Upgrades` = 0 without the upgrade shop [L ee_start_05.bin:
     /// UpgradedHandguns 0x2bee08 = [2,4,6,8], Snipers 0x2bee28 = [0x1e,0x20,0x22,0x22], SilencedSnipers
     /// 0x2bee38 = [0x24,0x26,0x28,0x28], DartGuns 0x2bee68 = [0x43,0x44,0x44,0x44], Tasers 0x2bee48 =
     /// [0x4a,0x4c,0x4c,0x4c], Lasers 0x2bee18 = [0x4e,0x4f,0x4f,0x4f], PDAs 0x2bee58 = [0x56,0x57,0x57,0x57],
     /// Upgrades 0x2beea8 = 0].
-    pub fn upgrade_weapon(id: u16, upgrades: usize, state_clock: u32) -> u16 {
+    pub fn upgrade_weapon(id: u16, upgrades: usize, game_complete: u32) -> u16 {
         // Table slot `upgrades`; only slot 0 is live without the upgrade shop.
         const HANDGUNS: [u16; 4] = [2, 4, 6, 8];
         const SNIPERS: [u16; 4] = [0x1e, 0x20, 0x22, 0x22];
@@ -513,7 +536,7 @@ impl Inventory {
         let t = |tab: &[u16; 4]| tab[upgrades.min(3)];
         match id {
             6 => t(&HANDGUNS),
-            10 if state_clock != 0 => 0xC,
+            10 if game_complete != 0 => 0xC,
             0x1e => t(&SNIPERS),
             0x24 => t(&SILENCED_SNIPERS),
             0x43 => t(&DART_GUNS),
@@ -550,32 +573,33 @@ impl Inventory {
     /// remap through their BASE's upgrade then +1 — 0x1f → `Upgrade_Weapon(0x1e) + 1`, 0x25 →
     /// `Upgrade_Weapon(0x24) + 1` (identity without the upgrade shop: slot 0). EquipWeapon's remap
     /// (`Upgrade_Weapon` alone) does NOT do this.
-    pub fn upgrade_ammo_id(id: u16, upgrades: usize, state_clock: u32) -> u16 {
+    pub fn upgrade_ammo_id(id: u16, upgrades: usize, game_complete: u32) -> u16 {
         match id {
-            0x1f => Self::upgrade_weapon(0x1e, upgrades, state_clock).wrapping_add(1),
-            0x25 => Self::upgrade_weapon(0x24, upgrades, state_clock).wrapping_add(1),
+            0x1f => Self::upgrade_weapon(0x1e, upgrades, game_complete).wrapping_add(1),
+            0x25 => Self::upgrade_weapon(0x24, upgrades, game_complete).wrapping_add(1),
             _ => id,
         }
     }
 
     /// `Pickup_Handler` (0x18e650) for Bond. `armour` = `BLData+0x8B0` (the taker's armour, written on the
-    /// armour case); `clock` = `GameState+0x52` (the game clock, for the 10 → 0xC remap). Types 0/1: a weapon
+    /// armour case); `game_complete` = `GameState[0x52]` (the game-complete byte, the 10 → 0xC remap gate —
+    /// see `upgrade_weapon`). Types 0/1: a weapon
     /// he lacks is equipped, otherwise its rounds are taken as ammo. Type 2 (key): `Player_EquipKey`, never
     /// refuses [M :217-219]. Type 3 (armour): refused while the armour is ≥ 50.0, else hard-set 50.0 [M
     /// :220-225]. Type 6 (Bond bonus): the game just logs a stat and shows a message — no weapon or ammo
     /// [M :234-236]. D-004: the gold-medal gate is skipped. The remapped id drives the owned-check and the
     /// equip [M 0x18e650:142-144]; the message builds the weapon name from the RAW `+0x24` [M :246], so the
     /// returned `Taken` carries `p.weapon` for display.
-    pub fn take(&mut self, w: &WeaponData, p: &Pickup, loaded: bool, armour: &mut f32, clock: u32) -> Option<Taken> {
+    pub fn take(&mut self, w: &WeaponData, p: &Pickup, loaded: bool, armour: &mut f32, game_complete: u32) -> Option<Taken> {
         // The remapped id decides the owned-check and the equip; the display id stays raw [M 0x18e650:142-144, :246].
-        let id = Self::upgrade_weapon(p.weapon, 0, clock) as usize;
+        let id = Self::upgrade_weapon(p.weapon, 0, game_complete) as usize;
         // The ammo path's id: `Pickup_Handler` passes `uVar5 = Upgrade_Weapon(raw)` to
         // `Player_EquipAmmo` for BOTH the owned kind-0 arm and kind 1 [M 0x18e650:142-144, case 0
         // else branch + case 1], and `Player_EquipAmmo` then applies its own 0x1f/0x25 remap
         // [M 0x1a8d18:11-19] — the COMPOSITION, not the raw id alone. The id-6 ammo boxes
         // (07000001/07000005) therefore credit `weapon_data[2]`'s pool: ammo type 1, cap 70
         // [L weapon_data: record 6 is ammo type 2 cap-90-clipped — the port credited type 2].
-        let ammo_id = Self::upgrade_ammo_id(Self::upgrade_weapon(p.weapon, 0, clock), 0, clock) as usize;
+        let ammo_id = Self::upgrade_ammo_id(Self::upgrade_weapon(p.weapon, 0, game_complete), 0, game_complete) as usize;
         match p.kind {
             kind::WEAPON if !self.owned.get(id).copied().unwrap_or(true) => {
                 self.equip_weapon(w, id, p.rounds, loaded).then_some(Taken::Weapon { weapon: p.weapon })
@@ -666,15 +690,15 @@ mod tests {
     }
 
     /// `Upgrade_Weapon` (0x1a8f30) with the live tables [L ee_start_05.bin 0x2bee08..]: id 6 → 2 with no
-    /// upgrades; 10 → 0xC once the game clock runs (GameState+0x52 ≠ 0); 0x24 → 0x24 (slot 0); the clock
-    /// gate: 10 stays 10 only while the clock is 0 [M 0x1a8f30:18-22].
+    /// upgrades; 10 → 0xC only with the game-complete byte GameState[0x52] set; 0x24 → 0x24 (slot 0)
+    /// [M 0x1a8f30:18-22].
     #[test]
     fn pickup_ids_go_through_upgrade_weapon() {
         assert_eq!(Inventory::upgrade_weapon(6, 0, 100), 2, "UpgradedHandguns[0] = 2 [L]");
         assert_eq!(Inventory::upgrade_weapon(0x24, 0, 100), 0x24, "UpgradedSilencedSnipers[0] = 0x24 [L]");
         assert_eq!(Inventory::upgrade_weapon(0x1e, 0, 100), 0x1e, "UpgradedSnipers[0] = 0x1e [L]");
-        assert_eq!(Inventory::upgrade_weapon(10, 0, 0), 10, "clock 0: 10 is not remapped [M]");
-        assert_eq!(Inventory::upgrade_weapon(10, 0, 1), 0xC, "clock running: 10 → 0xC [M]");
+        assert_eq!(Inventory::upgrade_weapon(10, 0, 0), 10, "game not complete: 10 is not remapped [M]");
+        assert_eq!(Inventory::upgrade_weapon(10, 0, 1), 0xC, "game complete: 10 → 0xC [M]");
         assert_eq!(Inventory::upgrade_weapon(0x35, 0, 100), 0x35, "other ids unchanged");
         // Sister: an upgrade level shifts the table (the shop path).
         assert_eq!(Inventory::upgrade_weapon(6, 2, 100), 6, "UpgradedHandguns[2] = 6 [L]");

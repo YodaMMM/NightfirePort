@@ -259,6 +259,14 @@ fn ronin_remote_view_and_pick_up() {
         if sim.drones.inventory.owned[RONIN_DEPLOY as usize] { break; }
     }
     assert!(sim.drones.inventory.owned[RONIN_DEPLOY as usize], "walking over the case gives the Ronin back");
+    // `Player_EquipWeapon`'s 0x52 tail [M 0x1a8a58:81-85]: the equip clears BLData+0x59E (the
+    // remote 0x53's owned byte) and, with the remote in hand (+0x62 == 0x53), requests 0x52.
+    assert!(!sim.drones.inventory.owned[RONIN_CONTROL as usize], "the remote leaves the inventory with the case re-taken");
+    for _ in 0..120 {
+        sim.step_bond(Input::default(), false, false, false);
+        if sim.gun.weapon == RONIN_DEPLOY && sim.gun.switch_state == 0 { break; }
+    }
+    assert_eq!(sim.gun.weapon, RONIN_DEPLOY, "the hand goes from the remote back to the case");
 }
 
 /// The remote view's eye and parts, against a live capture: 0700000c, the case deployed from #561

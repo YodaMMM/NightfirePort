@@ -508,6 +508,20 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             fight_close_guards(&mut w, "the platform mouth", 4200);
         }
     }
+    // 00 Agent (difficulty 3): the ledge's armour box #282 (kind 3, (109.5, 27.8, −129.4) [D the
+    // placement census]) lies 3 u further down the west ledge Bond is standing on. A player at
+    // 00 Agent takes it before the ride (armour 50 [M Pickup_Handler 0x18e650 case 3]): the Hind
+    // fight's own-rocket blasts (−54/−77 at 2-5 u in the d3 runs) left the walk no margin once
+    // the weapon-10 drops stopped handing Bond the stronger record 0xC [M Upgrade_Weapon
+    // 0x1a8f30:18-22]. D3-GATED: the Operative/Agent sisters' timelines stay byte-exact.
+    if difficulty >= 3 {
+        w.walk_nav_to([109.6, 27.0, -129.2], "the ledge armour", 0.6);
+        eprintln!("[08] the ledge armour: armour {}", w.scene.sim.as_ref().unwrap().drones.health.armour);
+        // Back to the ledge spot the boarding leg starts from (the route's own arrival at
+        // "the west ledge at the cabin", (109.62, 27.88, −125.14) [L the run log]): from 2 u
+        // further south the east walk presses the cabin's west wall and the plate never fires.
+        w.walk_nav_to([109.62, 27.88, -125.14], "back at the cabin", 0.4);
+    }
     // 00 Agent (difficulty 3): the same firearm hygiene before the last pre-boarding stand —
     // the legs' return-fire stands may have spent the clip on the walk over. D3-GATED.
     if difficulty >= 3 {

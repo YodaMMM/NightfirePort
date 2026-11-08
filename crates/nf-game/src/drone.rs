@@ -17386,9 +17386,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     pub fn take_pickup(&mut self, d: &Data, k: usize, frame: u32, force: bool) -> Option<crate::pickup::Taken> {
         let p = &mut self.pickups[k];
         let loaded = d.skins.contains_key(&d.weapons.first_person(p.weapon as usize));
-        // `Pickup_Handler`: the armour case writes `BLData+0x8B0`; the clock is `GameState+0x52`
-        // (the 10 → 0xC remap gate) — the port's tick count stands in for it.
-        let clock = frame;
+        // `Pickup_Handler`: the armour case writes `BLData+0x8B0`; `Upgrade_Weapon`'s 10 → 0xC gate
+        // is the game-complete byte `GameState[0x52]` [M 0x1a8f30:18-22; writers 0x1ffa10 /
+        // 0x1c8560 / 0x1f7fa8] — it used to be the tick count here, which is never 0 in play, so
+        // every weapon-10 drop (the 07000007/08/0c/4a guards) handed Bond record 0xC (double
+        // damage, full auto) on a game nobody had finished.
+        let clock = self.progress.game_complete as u32;
         let res = self.inventory.take(d.weapons, p, loaded, &mut self.health.armour, clock);
         // `NF_PICKUPLOG=1`: the take result and why (fix-player2's drop diagnostics; shared file —
         // one env-gated line only).
@@ -17421,6 +17424,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if crate::pickup::Inventory::is_better_weapon(d.weapons, self.bond_weapon, id) {
                     self.weapon_switch_request = Some(id);
                 }
+            }
+            // The Ronin case re-take [M 0x1a8a58:81-85]: holding the remote 0x53 → the request 0x52.
+            if matches!(t, crate::pickup::Taken::Weapon { .. }) {
+                let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock);
+                if let Some(r) = crate::pickup::Inventory::ronin_retake_request(id, self.bond_weapon) { self.weapon_switch_request = Some(r); }
             }
             // `PlrStat_LogBondBonus(0)` 0x1999e0 — `Pickup_Handler` case 6 0x18e650:234-236
             // logs the bonus pickup in the take-effect switch (fix-progress).
@@ -17521,6 +17529,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         if crate::pickup::Inventory::is_better_weapon(d.weapons, self.bond_weapon, id) {
                             self.weapon_switch_request = Some(id);
                         }
+                    }
+                    if matches!(taken, Some(crate::pickup::Taken::Weapon { .. })) {
+                        let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock);
+                        if let Some(r) = crate::pickup::Inventory::ronin_retake_request(id, self.bond_weapon) { self.weapon_switch_request = Some(r); }
                     }
                     if matches!(taken, Some(crate::pickup::Taken::Bonus)) { self.progress.log_bond_bonus(self.mission.status()); }
                     if let Some(t) = taken { self.taken.push((frame, t)); }
