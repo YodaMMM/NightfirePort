@@ -18382,8 +18382,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // object the same frame's control walk; the port drops it after the tick.
             self.space_lasers.retain(|l| !l.deleted);
         }
-        // Music: `Drone_InitComms` resets the attack gate; `DroneFunc_CheckAlarmRaised` (07000005 / 06) posts event 2 = 3
-        // for the first 58 frames of channel 0xA4, then = 1 for the first 598 of channel 0x37 or 0x61; Bond dead →
+        // Music: `Drone_InitComms` resets the attack gate; `DroneFunc_CheckAlarmRaised` posts event 2 = 3
+        // for the first 58 frames of channel 0xA4, then = 1 for the first 598 of channel 0x37 (both on 05 / 06 only) or 0x61; Bond dead →
         // event 6 (`Player_CheckForDeath`, a player-side call — runs during cut-scenes, not gated).
         self.attack_gate.new_frame();
         // audit-music-events — `Drone_InitComms` 0x139520:163-196, the all-clear scan (game order:
@@ -18405,7 +18405,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         // CheckAlarmRaised sits inside `Drone_InitComms`' `NPCGlobals != 0` block [M 0x139520:124-284]: a cut-scene
         // that disabled the drones (event 5) also mutes the alarm music.
-        if self.npc_enabled && matches!(d.level, 0x0700_0005 | 0x0700_0006) {
+        if self.npc_enabled {
             // Each counter: 0 → 1 when its channel is on, then + 1 per frame (to 0xFFFF); posts while below the limit.
             let ch = &self.channels;
             let mut step = |k: usize, c: u32, limit: u16| -> bool {
@@ -18415,8 +18415,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if n.wrapping_sub(1) < 0xfffe { *n += 1; }
                 *n < limit
             };
+            // Only 05/06 read 0xa4 and 0x37; every level falls through to the alarm channel 0x61
+            // [M 0x1453a8:6-23, `LAB_001454d8`].
+            let castle = matches!(d.level, 0x0700_0005 | 0x0700_0006);
             if d.level == 0x0700_0005 && step(0, 0xa4, 60) { self.music.event(2, 3); }
-            else if step(1, 0x37, 600) || step(2, 0x61, 600) { self.music.event(2, 1); }
+            else if (castle && step(1, 0x37, 600)) || step(2, 0x61, 600) { self.music.event(2, 1); }
         }
         // `Player_CheckForDeath` 0x190810 + `Player_HandleDeath` 0x190bb0 (fix-death-restart): the
         // death sequence gates ch 0x62 on the blood pane's cover or the player's ✕ [M 0x190bb0:29-33].

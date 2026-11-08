@@ -146,6 +146,19 @@ pub struct Music {
     tower_c_t2: i32,
     /// `MusicTemp1` as `UpdateMFX_03TowerB` 0x1137b0 uses it (0700000a): the zone-40 latch.
     tower_b_t1: i32,
+    /// `MusicTemp1/2/3` as `UpdateMFX_02MayhewA` 0x111ed8 uses them (07000001): the bridge latch,
+    /// the intro/alarm latch and the 500-tick calm hold.
+    may_a_t1: i32,
+    may_a_t2: i32,
+    may_a_t3: i32,
+    /// `WhichNonAttack_181` / `WhichAttack_180` (MayhewA's own round-robins, 0 and 1 only): file
+    /// statics the restart does not touch [M 0x114e70:39-54].
+    may_a_which_calm: i32,
+    may_a_which_attack: i32,
+    /// `MusicTemp1/2` as `UpdateMFX_02MayhewD` 0x112bf8 uses them (07000004): the first
+    /// `SfxNisMusicTrigger`'s latch and the 0x6000082 story-scene latch.
+    may_d_t1: i32,
+    may_d_t2: i32,
     /// `MusicTemp1/2/4` as `UpdateMFX_PowerStationA1` 0x113c18 (0700000c: the machine's stop latch
     /// and the e[45] latch) and `UpdateMFX_PowerStationA2` 0x113fc0 (0700000d: the running latch,
     /// the 600-tick hold and the e[45] latch) use them.
@@ -187,7 +200,7 @@ impl Default for Music {
             tower2b_temp1: 0, evil_base_t1: 0, evil_base_t2: 0, evil_base_t3: 0, evil_base_t4: 0, evil_base_t6: 0, evil_base_c_t1: 0,
             b_wait_nis: 0, may_b_t1: 0, may_b_t2: 0, may_b_t3: 0, may_b_t4: 0, may_b_t5: 0, may_b_t9: 0, may_b_which: 0,
             may_c_t1: 0, may_c_t2: 0, may_c_t3: 0, may_c_t9: 0, may_c_which_calm: 0, may_c_which_attack: 0,
-            tower_c_t1: 0, tower_c_t2: 0, tower_b_t1: 0, ps_t1: 0, ps_t2: 0, ps_t4: 0, gate_writes: Vec::new() }
+            tower_c_t1: 0, tower_c_t2: 0, tower_b_t1: 0, ps_t1: 0, ps_t2: 0, ps_t4: 0, may_a_t1: 0, may_a_t2: 0, may_a_t3: 0, may_a_which_calm: 0, may_a_which_attack: 0, may_d_t1: 0, may_d_t2: 0, gate_writes: Vec::new() }
     }
 }
 
@@ -255,6 +268,7 @@ impl Music {
                 (self.b_wait_nis, self.may_b_t1, self.may_b_t2, self.may_b_t3, self.may_b_t4, self.may_b_t5, self.may_b_t9) = (0, 0, 0, 0, 0, 0, 0);
                 (self.may_c_t1, self.may_c_t2, self.may_c_t3, self.may_c_t9, self.tower_c_t1, self.tower_c_t2) = (0, 0, 0, 0, 0, 0);
                 (self.tower_b_t1, self.ps_t1, self.ps_t2, self.ps_t4) = (0, 0, 0, 0);
+                (self.may_a_t1, self.may_a_t2, self.may_a_t3, self.may_d_t1, self.may_d_t2) = (0, 0, 0, 0, 0);
                 (self.under_attack, self.which_stealth, self.which_combat, self.bonus) = (false, 0, 0, 0);
                 self.delay_timer = 10;
                 self.entry = Some(m);
@@ -327,6 +341,23 @@ impl Music {
             if matches!(m.level, 0x0700_0001..=0x0700_0004 | 0x0700_0009..=0x0700_000a | 0x0700_000c..=0x0700_000d | 0x0700_0011..=0x0700_0016 | 0x0700_004a) {
                 self.exit_block(&e, &m);
             }
+            // `UpdateMFX_02MayhewA` 0x111ed8 (07000001), `UpdateMFX_02MayhewD` 0x112bf8 (07000004),
+            // `UpdateMFX_03TowerA` 0x113558 (07000009), `UpdateMFX_03TowerB` 0x1137b0 (0700000a),
+            // `UpdateMFX_PowerStationA1` 0x113c18 (0700000c), `UpdateMFX_PowerStationA2` 0x113fc0
+            // (0700000d): each level half runs only while the exit block above has not raised the
+            // end-wait, so the exit frame stops them [M 0x111ed8:40, 0x112bf8:40, 0x113558:41,
+            // 0x1137b0:41, 0x113c18:42-44, 0x113fc0:41].
+            if !self.wait_for_end {
+                match m.level {
+                    0x0700_0001 => self.mayhew_a(&e, &m),
+                    0x0700_0004 => self.mayhew_d(&e),
+                    0x0700_0009 => self.tower_a(&e, &m),
+                    0x0700_000a => self.tower_b(&e, &m),
+                    0x0700_000c => self.power_station_a1(&e, &m),
+                    0x0700_000d => self.power_station_a2(&e, &m),
+                    _ => {}
+                }
+            }
             if m.level == 0x0700_0007 { self.castle_c(&e, &m); }
             if m.level == 0x0700_0008 { self.castle_d(&e, &m); }
             if m.level == 0x0700_001b { self.space_station_d(&e, &m); }
@@ -337,16 +368,6 @@ impl Music {
             // (07000003) — the trigger/sight machines behind the shared exit block above.
             if m.level == 0x0700_0002 { self.mayhew_b(&e, &m); }
             if m.level == 0x0700_0003 { self.mayhew_c(&e, &m); }
-            // `UpdateMFX_03TowerA` 0x113558 (07000009), `UpdateMFX_03TowerB` 0x1137b0 (0700000a),
-            // `UpdateMFX_PowerStationA1` 0x113c18 (0700000c), `UpdateMFX_PowerStationA2` 0x113fc0
-            // (0700000d): each runs only while the exit block above has not raised the end-wait
-            // [M 0x113558:41, 0x1137b0:41, 0x113c18:42-44, 0x113fc0:41].
-            if !self.wait_for_end {
-                if m.level == 0x0700_0009 { self.tower_a(&e, &m); }
-                if m.level == 0x0700_000a { self.tower_b(&e, &m); }
-                if m.level == 0x0700_000c { self.power_station_a1(&e, &m); }
-                if m.level == 0x0700_000d { self.power_station_a2(&e, &m); }
-            }
             // `UpdateMFX_03TowerC` 0x113a20 (0700000b) — the NIS-id + cel-zone state machine.
             if m.level == 0x0700_000b { self.tower_c(&e); }
             // The HT-level updaters with a per-level half (docs/systems/ht-music-updaters.md).
@@ -369,6 +390,50 @@ impl Music {
         self.jump(s, true);
         self.out.push(Cmd::FadeDown { music: false });
         self.wait_for_end = true;
+    }
+
+    /// `UpdateMFX_02MayhewA` 0x111ed8:40-172 (07000001). Attack, or the frame the 0x6000087 scene
+    /// ends: section 3 once (with a 500-tick calm hold on `MusicTemp3`), then the 0xb/0xe
+    /// round-robin while neither the IOP nor the last request sits in a combat section. Calm,
+    /// past the hold, in a combat section: 5 once, then the 7/9 round-robin until a stealth
+    /// section is requested.
+    fn mayhew_a(&mut self, e: &[u32; 64], m: &MapMusic) {
+        if !self.under_attack && e[0xc] != 0x0600_0087 {
+            if self.may_a_t3 < 0 {
+                let in_combat = Self::in_set(&m.combat, self.last_jump);
+                if in_combat && self.may_a_t1 == 0 { self.jump(5, false); self.may_a_t1 = 1; }
+                if in_combat && !Self::in_set(&m.stealth, self.last_request) {
+                    match self.may_a_which_calm { 0 => self.jump(7, false), 1 => self.jump(9, false), _ => {} }
+                    self.may_a_which_calm += 1;
+                    if self.may_a_which_calm > 1 { self.may_a_which_calm = 0; }
+                }
+            }
+        } else {
+            if self.may_a_t2 == 0 { self.jump(3, false); self.may_a_t2 = 1; self.may_a_t3 = 500; }
+            if !Self::in_set(&m.combat, self.last_jump) && !Self::in_set(&m.combat, self.last_request) {
+                match self.may_a_which_attack { 0 => self.jump(0xb, false), 1 => self.jump(0xe, false), _ => {} }
+                self.may_a_which_attack += 1;
+                if self.may_a_which_attack > 1 { self.may_a_which_attack = 0; }
+            }
+        }
+        self.may_a_t3 -= 1;
+    }
+
+    /// `UpdateMFX_02MayhewD` 0x112bf8:41-65 (07000004): no combat music at all, only the cut-scene
+    /// chain. The 0x6000082 scene's start jumps 2; the cut-scene music sound jumps 3 the first
+    /// time; a second trigger, or a skipped scene once that start has run, jumps 4.
+    fn mayhew_d(&mut self, e: &[u32; 64]) {
+        if e[0xb] == 0x0600_0082 { self.jump(2, true); self.may_d_t2 = 1; }
+        if !self.nis_trigger {
+            if e[5] == 0 || self.may_d_t2 == 0 { return; }
+        } else if self.may_d_t1 == 0 {
+            self.jump(3, true);
+            self.nis_trigger = false;
+            self.may_d_t1 = 1;
+            return;
+        }
+        self.jump(4, true);
+        self.nis_trigger = false;
     }
 
     /// `UpdateMFX_HT_Level_SpaceStationD` 0x114d60 (0700001b, the space-station finale). The
@@ -880,6 +945,264 @@ impl Music {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The disc's MapMusic rows for the six updaters [D ACTION.ELF 0x24f4d8; pinned against the
+    /// disc by music_level_updaters_live].
+    fn row(level: u32, track: i32, start: i32, ends: (i32, i32), combat: &[i32], stealth: &[i32]) -> MapMusic {
+        MapMusic { level, track, start, on_death: 90, on_fail: 91, end_combat: ends.0, end_calm: ends.1, alert_frames: 10, calm_frames: 160,
+            combat: combat.to_vec(), stealth: stealth.to_vec() }
+    }
+    fn begin(r: MapMusic) -> Music {
+        let level = r.level;
+        let mut m = Music::new(vec![r]);
+        m.event(0, level); m.event(1, 1);
+        m.update(0);
+        m
+    }
+    /// One tick with the IOP reporting `at`, the board set by `ev`; the jumps it queued.
+    fn tick(m: &mut Music, at: i32, ev: &[(usize, u32)]) -> Vec<(i32, bool)> {
+        for &(i, v) in ev { m.event(i, v); }
+        m.out.clear();
+        m.delay_timer = -1;
+        m.update(at);
+        m.out.iter().filter_map(|c| match c { Cmd::Jump { section, instant } => Some((*section, *instant)), _ => None }).collect()
+    }
+    /// `Music_Event(2, 5)` ticks until the alert count runs out and `MusicUnderAttack` stands.
+    fn raise_alarm(m: &mut Music, at: i32) {
+        for _ in 0..12 { tick(m, at, &[(2, 5)]); }
+        assert!(m.under_attack);
+    }
+
+    #[test]
+    fn the_01_updater_opens_on_the_intro_end_and_cycles_its_sections() {
+        let mut m = begin(row(0x0700_0001, 19, 0, (19, 18), &[3, 11, 14], &[5, 7, 9]));
+        assert_eq!(tick(&mut m, 0, &[]), vec![], "calm at the start: nothing");
+        // The intro's end [M 0x111ed8:41]: section 3 and the 500-tick hold.
+        assert_eq!(tick(&mut m, 0, &[(0xc, 0x0600_0087)]), vec![(3, false)]);
+        assert_eq!(tick(&mut m, 0, &[(0xc, 0x0600_0086)]), vec![], "another script's end does nothing");
+        for _ in 0..499 { assert_eq!(tick(&mut m, 3, &[]), vec![]); }
+        // The hold over, the IOP in combat section 3: 5, once; it is a stealth section, so the
+        // round-robin waits.
+        assert_eq!(tick(&mut m, 3, &[]), vec![(5, false)]);
+        assert_eq!(tick(&mut m, 3, &[]), vec![]);
+        // Attack from a calm section: 0xb, then quiet (0xb is combat).
+        raise_alarm(&mut m, 5);
+        assert_eq!(m.last_request, 0xb);
+        // Calm in combat: the 7/9 round-robin, 5 stays spent. The next fight takes 0xe.
+        m.under_attack = false;
+        assert_eq!(tick(&mut m, 0xb, &[]), vec![(7, false)]);
+        raise_alarm(&mut m, 7);
+        assert_eq!(m.last_request, 0xe);
+        m.under_attack = false;
+        assert_eq!(tick(&mut m, 0xe, &[]), vec![(9, false)]);
+    }
+
+    #[test]
+    fn the_04_updater_is_the_cut_scene_chain() {
+        let mut m = begin(row(0x0700_0004, 22, 0, (10, 10), &[], &[]));
+        assert_eq!(tick(&mut m, 0, &[(5, 1)]), vec![], "a skip before the scene started does nothing");
+        assert_eq!(tick(&mut m, 0, &[(0xb, 0x0600_0082)]), vec![(2, true)]);
+        m.nis_trigger = true;
+        assert_eq!(tick(&mut m, 2, &[]), vec![(3, true)]);
+        assert!(!m.nis_trigger);
+        m.nis_trigger = true;
+        assert_eq!(tick(&mut m, 3, &[]), vec![(4, true)]);
+        // The skip path once the scene has started.
+        let mut m = begin(row(0x0700_0004, 22, 0, (10, 10), &[], &[]));
+        tick(&mut m, 0, &[(0xb, 0x0600_0082)]);
+        assert_eq!(tick(&mut m, 2, &[(5, 1)]), vec![(4, true)]);
+    }
+
+    #[test]
+    fn the_09_updater_follows_the_zone_and_the_alarm() {
+        let mut m = begin(row(0x0700_0009, 23, 0, (23, 18), &[10, 8, 6], &[12, 2]));
+        assert_eq!(m.last_request, 0, "the first calm tick asks for section 0");
+        assert_eq!(tick(&mut m, 0, &[]), vec![], "and 0 holds");
+        assert_eq!(tick(&mut m, 0, &[(0x2b, 1)]), vec![(2, false)], "the zone");
+        assert_eq!(tick(&mut m, 2, &[(0x2b, 1)]), vec![], "2 is a stealth section: holds");
+        assert_eq!(tick(&mut m, 2, &[]), vec![(4, false)], "out of the zone from 2");
+        raise_alarm(&mut m, 4);
+        assert_eq!(m.last_request, 10, "the first combat section");
+        // Calm again: out through 0x10, or 0xc inside the zone.
+        m.under_attack = false;
+        assert_eq!(tick(&mut m, 10, &[]), vec![(0x10, false)]);
+        m.last_request = 10;
+        assert_eq!(tick(&mut m, 10, &[(0x2b, 1)]), vec![(0xc, false)]);
+    }
+
+    #[test]
+    fn the_0a_updater_latches_its_zone() {
+        let mut m = begin(row(0x0700_000a, 23, 26, (23, 22), &[8, 6, 10], &[19, 14]));
+        assert_eq!(m.last_request, 0x1a);
+        assert_eq!(tick(&mut m, 26, &[(0x28, 2)]), vec![(0x13, false)]);
+        // The latch: with the event gone the calm-out arm stays off.
+        assert_eq!(tick(&mut m, 0x13, &[]), vec![], "0x13 is a stealth section");
+        m.last_request = 0;
+        assert_eq!(tick(&mut m, 0x13, &[]), vec![(0x13, false)], "the in arm, never 4");
+        m.tower_b_t1 = 0;
+        m.last_request = 0x13;
+        assert_eq!(tick(&mut m, 0x13, &[]), vec![(4, false)], "unlatched, 0x13 leaves through 4");
+        raise_alarm(&mut m, 4);
+        assert_eq!(m.last_request, 8);
+        m.under_attack = false;
+        m.last_request = 0;
+        assert_eq!(tick(&mut m, 8, &[]), vec![(0x1c, false)]);
+    }
+
+    #[test]
+    fn the_0c_updater_covers_calm_creep_alarm_and_the_final_zone() {
+        let r = row(0x0700_000c, 36, 0, (38, 38), &[7, 9, 10], &[0, 15, 19, 0, 0]);
+        let mut m = begin(r.clone());
+        assert_eq!(m.last_request, -1, "section 0 is a stealth section: the start holds");
+        assert_eq!(tick(&mut m, 0, &[(0xd, 1)]), vec![(0x22, false)], "creep");
+        assert_eq!(tick(&mut m, 0x22, &[]), vec![(0x14, true)], "out of the creep cue");
+        assert_eq!(tick(&mut m, 0x14, &[(0xd, 1)]), vec![(0x22, false)]);
+        raise_alarm(&mut m, 0x22);
+        assert_eq!(m.last_request, 7);
+        m.under_attack = false;
+        assert_eq!(tick(&mut m, 7, &[]), vec![(0xf, false)], "a settled combat section leaves through 0xf");
+        m.last_request = 7;
+        assert_eq!(tick(&mut m, 7, &[(0xd, 1)]), vec![(0x38, false)], "creep out of combat");
+        // The final zone: once, and the machine stops.
+        m.last_request = 7;
+        assert_eq!(tick(&mut m, 7, &[(0x2d, 1)]), vec![(0x36, false)]);
+        assert_eq!(tick(&mut m, 7, &[(0x2d, 1), (0xd, 1), (2, 5)]), vec![]);
+        let mut m = begin(r);
+        assert_eq!(tick(&mut m, 0, &[(0x2d, 2)]), vec![(0x24, true)], "from calm the final jump is instant");
+    }
+
+    #[test]
+    fn the_0d_updater_waits_for_the_intro_then_holds_600() {
+        let mut m = begin(row(0x0700_000d, 36, 32, (26, 26), &[41, 43], &[]));
+        raise_alarm(&mut m, 32);
+        assert_eq!(m.last_request, -1, "before the intro's end nothing runs, even under attack");
+        m.under_attack = false;
+        assert_eq!(tick(&mut m, 32, &[(0xc, 0x0600_068f)]), vec![(0x2b, true)]);
+        for _ in 0..600 { assert_eq!(tick(&mut m, 0x2b, &[]), vec![], "the hold"); }
+        assert_eq!(tick(&mut m, 0x2b, &[]), vec![(0xc, false)], "0x2b is in the combat set: calm leaves it");
+        assert_eq!(tick(&mut m, 0xc, &[(0xd, 1)]), vec![(0x22, false)], "creep");
+        // The zone latches 0x3a, instant only out of 0x22, and keeps asking.
+        assert_eq!(tick(&mut m, 0x22, &[(0x2d, 1)]), vec![(0x3a, true)]);
+        assert_eq!(tick(&mut m, 0x3a, &[]), vec![(0x3a, false)]);
+    }
+
+    /// The gate re-seats [M 0x114e70]: e[0xa] (the zone-10 rooms) drops the attacker count to one
+    /// for the tick; the bonus running out re-seats the row; `Music_Event(2, 2)` takes the -99 row.
+    #[test]
+    fn the_board_reseats_the_attack_gate() {
+        let mut m = begin(row(0x0700_0001, 19, 0, (19, 18), &[3, 11, 14], &[5, 7, 9]));
+        m.gate_writes.clear();
+        tick(&mut m, 0, &[(0xa, 1)]);
+        assert_eq!(m.gate_writes, vec![GateWrite::SetCount(1)]);
+        m.gate_writes.clear();
+        tick(&mut m, 0, &[(2, 2)]);
+        assert_eq!(m.gate_writes.last(), Some(&GateWrite::Alarm));
+        m.gate_writes.clear();
+        // Sister: while the bonus runs nothing re-seats.
+        tick(&mut m, 0, &[]);
+        assert!(m.gate_writes.is_empty(), "{:?}", m.gate_writes);
+        m.bonus = -1;
+        tick(&mut m, 0, &[]);
+        assert_eq!(m.gate_writes, vec![GateWrite::Restore]);
+    }
+
+    /// The real 01 row [D disc MapMusic 0x24f4d8, level 0x07000001].
+    fn may_a_row() -> MapMusic {
+        MapMusic { level: 0x0700_0001, track: 19, start: 0, on_death: 21, on_fail: 20, end_combat: 19, end_calm: 18, alert_frames: 10, calm_frames: 160, combat: vec![3, 11, 14], stealth: vec![5, 7, 9] }
+    }
+
+    fn jumps(m: &mut Music) -> Vec<i32> {
+        m.out.drain(..).filter_map(|c| if let Cmd::Jump { section, .. } = c { Some(section) } else { None }).collect()
+    }
+
+    /// `UpdateMFX_02MayhewA` 0x111ed8: the intro's end jumps 3 once, the hold keeps the calm arm
+    /// out for 500 frames, then the 5 bridge; alarms and calms then alternate the 0xb/0xe and 7/9
+    /// round-robins. Sister: no intro hash and no alarm, no jump at all.
+    #[test]
+    fn the_07000001_machine_intro_alarm_and_calm_sections() {
+        let mut m = Music::new(vec![may_a_row()]);
+        m.event(0, 0x0700_0001); m.event(1, 1);
+        for _ in 0..30 { m.update(0); }
+        m.out.clear();
+        for _ in 0..30 { m.update(0); }
+        assert!(jumps(&mut m).is_empty(), "calm before the intro's end stays at the start section");
+        m.events[0xc] = 0x0600_0087;
+        m.update(0);
+        assert_eq!(jumps(&mut m), vec![3], "the intro's end; 3 is in the combat set, so no pick [M :116-160]");
+        for _ in 0..500 { m.update(3); }
+        assert!(jumps(&mut m).is_empty(), "the 500-frame hold");
+        m.update(3);
+        assert_eq!(jumps(&mut m), vec![5], "hold spent, IOP in combat: the bridge, which is in the stealth set");
+        m.update(5);
+        assert!(jumps(&mut m).is_empty());
+        m.event(2, 2);
+        m.update(5);
+        assert_eq!(jumps(&mut m), vec![0xb], "the alarm's first pick");
+        m.update(5);
+        assert!(jumps(&mut m).is_empty(), "a combat request stands");
+        (m.bonus, m.count) = (-1, -1);
+        m.update(0xb);
+        assert_eq!(jumps(&mut m), vec![7], "calm in a combat section: the first calm pick");
+        m.event(2, 2);
+        m.update(7);
+        assert_eq!(jumps(&mut m), vec![0xe], "the round-robin's second attack section");
+        (m.bonus, m.count) = (-1, -1);
+        m.update(0xe);
+        assert_eq!(jumps(&mut m), vec![9], "and the second calm section");
+    }
+
+    /// The 04 row's shape for the updater tests: only the level matters to `mayhew_d`.
+    fn mayhew_d_board() -> Music {
+        let mut m = Music::new(vec![MapMusic { level: 0x0700_0004, track: 22, start: 0, on_death: 19, on_fail: 18, end_combat: 16, end_calm: 17, alert_frames: 10, calm_frames: 160, combat: vec![], stealth: vec![] }]);
+        m.event(0, 0x0700_0004); m.event(1, 1);
+        m.update(0);
+        m
+    }
+
+    /// [M 0x112bf8:41-61] the story start, the first 0x172, the second 0x172.
+    #[test]
+    fn mayhew_d_walks_the_story_markers() {
+        let mut m = mayhew_d_board();
+        m.update(0);
+        assert_eq!(m.last_request, -1, "nothing moves before the scene");
+        m.event(0xb, 0x0600_0082); m.update(0);
+        assert_eq!(m.last_request, 2);
+        m.nis_trigger = true; m.update(0);
+        assert_eq!(m.last_request, 3);
+        assert!(!m.nis_trigger);
+        m.update(0);
+        assert_eq!(m.last_request, 3, "the marker holds between the sounds");
+        m.nis_trigger = true; m.update(0);
+        assert_eq!(m.last_request, 4);
+    }
+
+    /// [M 0x112bf8:46-49] the skip event moves the score only once the story scene has started:
+    /// skipping the 0x6000083 intro leaves it, skipping the story lands on marker 4.
+    #[test]
+    fn mayhew_d_skip_needs_the_story_scene() {
+        let mut m = mayhew_d_board();
+        m.event(5, 0x0600_0083); m.update(0);
+        assert_eq!(m.last_request, -1, "the intro's skip");
+        m.event(0xb, 0x0600_0082); m.update(0);
+        m.event(5, 0x0600_0082); m.update(0);
+        assert_eq!(m.last_request, 4, "the story's skip");
+    }
+
+    /// [M 0x112bf8:9-40] the exit block's `MusicWaitForEnd = 1` stops the story markers the same
+    /// frame: a 0x172 trigger landing with the mission's end leaves the end marker as the last
+    /// request. Sister: the same trigger a frame earlier jumps marker 3.
+    #[test]
+    fn mayhew_d_stops_on_the_exit_frame() {
+        let mut m = mayhew_d_board();
+        m.event(0xb, 0x0600_0082); m.update(0);
+        m.nis_trigger = true; m.event(8, 1); m.out.clear(); m.update(0);
+        assert_eq!(m.last_request, 17, "the end marker (end_calm) is the frame's last request");
+        assert!(m.nis_trigger, "the trigger is not eaten once the end-wait stands");
+        let mut m = mayhew_d_board();
+        m.event(0xb, 0x0600_0082); m.update(0);
+        m.nis_trigger = true; m.update(0);
+        assert_eq!(m.last_request, 3);
+    }
 
     fn castle() -> MapMusic {
         MapMusic { level: 0x0700_0005, track: 15, start: 0, on_death: 11, on_fail: 10, end_combat: 8, end_calm: 9, alert_frames: 10, calm_frames: 160, combat: vec![4, 12, 14], stealth: vec![6, 16, 18] }
