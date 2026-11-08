@@ -21,3 +21,18 @@ nf-game, fast-runner suite on the final tree.
 Work log:
 - (22:05) branch created, WORKLOG entry. Note: docs/reports/markers-world-objects.md does not exist on
   that branch (WORKLOG-only stub); the five items come from the LOS_MASKS_ON comment in world.rs.
+- (22:20-22:40) the five envelope items ported into los_walk/line_of_sight_hit/line_of_sight_scoped's
+  dynamic blocks (Moving::pick_pair: obj+0xF0 = placement glist+0x44 via Control_SetGList 0x134960:11-12,
+  RB exception [M 0x1d6bf0:52 no SetGList], live 0x10 via the id bit; classes pane 0x20/RB 0x1a/door
+  0x1c/DynObj 0x52; arms in the game's order); LOS_MASKS_ON=true; the 3885 mask test un-ignored.
+- (22:45-23:00) nf-game lib 749 green; glass_pass_every_level_live 3 green; gun_turrets_live 3,
+  turret_hits_live 3, cameras_turrets_census_live 1, ai_missing_states_live 10, ai_points_live 4,
+  cover_selection_live 2, dtype_sniper_alert_live 1 — all green. ai_live: 36+1 — the second-hit part
+  pin (port-derived, "not yet checked live") contradicted the masked vision chain; un-pinned the part,
+  kept the damage/kill chain [M]; 37 green.
+- (23:00-23:30) walkreal_07000001_live 6/1: the d2 real-damage walk DIES t8977 (guard #4 10 hits);
+  baseline (HEAD~1) passes — first divergence the t678 #8 fight (baseline 100->100, masked 100->93.7):
+  the masked 0xa27 vision (glass 0x10 / node-pass / 0x40-material drops [M 0x1eae80:70-82 +
+  0x1ebaa8:300-319]) engages guards the strict pre-mask ray did not. walkreal_07000002_live 3/1: the
+  real-health agent walk misses the doorway-sensor ch 0x81 assert (timeline/path shift suspected,
+  unrooted). Both repairs need a route/tactics re-tune against the game-faithful vision — next window.
