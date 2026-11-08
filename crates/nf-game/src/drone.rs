@@ -21853,16 +21853,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // MayhewB's per-tick re-seat and the trigger arms' `MusicVars = 1` [M 0x112270:56-79, :113,
         // :122; 0x112730:210, :219]. Applied AFTER `update`, so the next frame's SeenAndAttacking
         // pass sees them — the game's frame order (the drone pass precedes 0x114e70).
-        for w in self.music.gate_writes.drain(..) {
-            match w {
-                crate::music::GateWrite::Restore => {
-                    if let Some(row) = self.attack_gate.table_row { self.attack_gate.vars = Some(row); }
-                    else if let Some(v) = &mut self.attack_gate.vars { v.count = 2; v.floor = 8; v.distance = 25.0; }
-                }
-                crate::music::GateWrite::SetDistance(d) => { if let Some(v) = &mut self.attack_gate.vars { v.distance = d; } }
-                crate::music::GateWrite::SetCount(c) => { if let Some(v) = &mut self.attack_gate.vars { v.count = c; } }
-            }
-        }
+        for w in self.music.gate_writes.drain(..) { self.attack_gate.apply(w); }
         // The drone-contact pass ([M Break_Update 0x12bfd8:23-34]: class-2 contacts damage kind-2
         // breakables by the squared step × 20, on 07000001 only). The kills join the view queue;
         // Break_Kill 0x12b970:75 plays the kill sound inline (the same presentation the bullet

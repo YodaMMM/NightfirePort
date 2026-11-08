@@ -21,8 +21,31 @@ pub enum Cmd {
 pub struct AttackGate { pub vars: Option<MusicVars>, latch: bool, count: u16, counted: Vec<usize>,
     /// The level's own `MapDroneData` row (the `wire_music` seed) — `GateWrite::Restore` re-seats it
     /// (`UpdateMFX_02MayhewB` 0x112270:57-76's per-tick scan; no row on the table → the game's
-    /// default count 2 / floor 8 / distance 25 keeps the window [M 0x112270:72-75]).
-    pub table_row: Option<MusicVars>, }
+    /// default count 2 / floor 0 / window 8 / distance 25 [M 0x112270:72-75]).
+    pub table_row: Option<MusicVars>,
+    /// The table's -99 row, which `UpdateMusicalEvents` seats while the alarm slot e[2] reads 2
+    /// [M 0x114e70:130-152] (`GateWrite::Alarm`).
+    pub alarm_row: Option<MusicVars>, }
+
+/// The scan's default when the table has no row: count 2, floor 0, window 8, distance 25
+/// [M 0x114e70:79-82, :119-122, :148-151, :185-188; 0x112270:72-75].
+pub const DEFAULT_VARS: (u16, u16, u32, f32) = (2, 0, 8, 25.0);
+
+impl AttackGate {
+    /// Applies one of the updaters' direct writes to the gate's vars.
+    pub fn apply(&mut self, w: GateWrite) {
+        let seat = |v: &mut Option<MusicVars>, row: Option<MusicVars>| {
+            if let Some(r) = row { *v = Some(r); }
+            else if let Some(v) = v { (v.count, v.floor, v.window, v.distance) = DEFAULT_VARS; }
+        };
+        match w {
+            GateWrite::Restore => seat(&mut self.vars, self.table_row),
+            GateWrite::Alarm => seat(&mut self.vars, self.alarm_row),
+            GateWrite::SetDistance(d) => { if let Some(v) = &mut self.vars { v.distance = d; } }
+            GateWrite::SetCount(c) => { if let Some(v) = &mut self.vars { v.count = c; } }
+        }
+    }
+}
 
 impl AttackGate {
     /// `Drone_InitComms`' per-frame reset: the latch falls when no more than `floor` drones attacked last frame.
@@ -141,11 +164,18 @@ pub struct Music {
 pub enum GateWrite {
     /// MayhewB 0x112270:56-76's per-tick `MapDroneData` re-scan (every tick the IOP is in a
     /// section and the level's e[37] is low): the vars back to the level's table row (no row →
-    /// the game's default count 2 / floor 8 / distance 25, the window untouched [M 0x112270:72-75]).
+    /// the game's default count 2 / floor 0 / window 8 / distance 25 [M 0x112270:72-75]). The
+    /// dispatcher makes the same write at the level restart [M 0x114e70:33-82], every tick the
+    /// bonus count is negative and e[10] is low [M :102-123], and when the alert count runs out
+    /// [M :166-188].
     Restore,
+    /// The -99 row (count 1, window 10, distance 50 on the disc), seated while e[2] reads 2
+    /// [M 0x114e70:130-152]; no -99 row → the default.
+    Alarm,
     /// `DAT_002707a8 = 1.0` — MayhewB, every tick the level's e[37] holds [M 0x112270:77-79].
     SetDistance(f32),
-    /// `MusicVars = 1` — the trigger arms: MayhewB 0x112270:113/:122, MayhewC 0x112730:210/:219.
+    /// `MusicVars = 1` — the trigger arms: MayhewB 0x112270:113/:122, MayhewC 0x112730:210/:219;
+    /// and the dispatcher, every tick e[10] (the music zones with channel 10) is set [M 0x114e70:125-127].
     SetCount(u16),
 }
 
@@ -228,6 +258,8 @@ impl Music {
                 (self.under_attack, self.which_stealth, self.which_combat, self.bonus) = (false, 0, 0, 0);
                 self.delay_timer = 10;
                 self.entry = Some(m);
+                // The restart seats the level's MapDroneData row [M 0x114e70:33-82].
+                self.gate_writes.push(GateWrite::Restore);
                 // The restart clears `SfxNisMusicTrigger` too [M 0x114e70:38] — a stale cut-scene
                 // trigger from the previous load must not fire the new level's NIS arms.
                 self.nis_trigger = false;
@@ -244,14 +276,20 @@ impl Music {
         if e[0xc] != 0 || e[5] != 0 { self.nis_playing = false; }
         if e[5] != 0 { self.nis_quitten = 5; } else if self.nis_quitten > 0 { self.nis_quitten -= 1; }
         let Some(m) = self.entry.clone() else { self.events = [0; 64]; return };
+        // The attack gate [M 0x114e70:102-127]: e[10] sets `MusicVars = 1` (one attacker is enough);
+        // else, while the bonus count is negative, the level's row goes back.
+        if e[10] != 0 { self.gate_writes.push(GateWrite::SetCount(1)); }
+        else if self.bonus < 0 { self.gate_writes.push(GateWrite::Restore); }
         if !self.nis_playing {
-            if e[2] == 2 { self.bonus = 600; self.under_attack = true; }
+            // e[2] == 2 seats the -99 row [M 0x114e70:130-152].
+            if e[2] == 2 { self.bonus = 600; self.under_attack = true; self.gate_writes.push(GateWrite::Alarm); }
             if e[2] == 0 || e[2] == 2 {
                 let b = self.bonus; self.bonus -= 1;
                 if b < 0 { let c = self.count; self.count -= 1; if c < 0 { self.under_attack = false; self.count2 = m.alert_frames; } }
             } else {
                 let c2 = self.count2; self.count2 -= 1;
-                if c2 < 0 { self.under_attack = true; self.bonus = 0; self.count = m.calm_frames; }
+                // The alert count spent: the level's row back [M 0x114e70:166-193].
+                if c2 < 0 { self.gate_writes.push(GateWrite::Restore); self.under_attack = true; self.bonus = 0; self.count = m.calm_frames; }
             }
         }
         self.delay_timer = t;
