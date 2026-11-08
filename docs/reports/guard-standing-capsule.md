@@ -112,6 +112,18 @@ global (every level's near bots), so the two residuals and the unrun binaries ar
    present NO body. A gdbwatch on 0x149ec8's `+0x570 & 2` branch during a guard's knock-down pin
    names which anims; the port then models the flag.
 
+## ntfy failed
+
+All three fallbacks, in order, with their output:
+
+1. `curl -sS -m 15 -H "Title: NightfirePort" -d "guard-standing-capsule: blocked …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 15001 milliseconds`
+2. python3 urllib (the driver's fallback line, timeout 15)
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -O- --post-data "guard-standing-capsule: blocked …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → DNS resolved (159.203.148.75), the TCP connect printed, then the TLS handshake stalled past
+   the 20 s timeout with no HTTP response — the delivery could not be confirmed.
+
 ## Usage
 
 not visible to me — this environment shows no token, credit or context-window figures for the
