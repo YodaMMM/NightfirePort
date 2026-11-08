@@ -770,6 +770,17 @@ pub fn load_with_carry_medals(iso: &str, archive: &str, all: bool, save: Option<
     load_impl(iso, archive, all, save, false, &[], false, None, difficulty, bonus)
 }
 
+/// The front end's single-player level load (every mission launch, level change and restart the
+/// app runs): the picked difficulty (GameState+0x28 = 0x2a3790 [M C_SBNFDFCTY_Handler 0x216ca8:15])
+/// and the profile's `bonus[0]` word ride the load whether or not the dev tools are on — the
+/// game has one level-load path, and its create-time gates (`Drone_Create` 0x136be0:49,
+/// `NDrone2_DefaultInit` 0x14b300:504-535, `Lock_Create` 0x1ae1f8:67-69, `Hint_Create`
+/// 0x1b3248:12-25, `SoundTrigger_Create` 0x1b2628:24-40, `Copter_Create` 0x17d340:76-94) and
+/// the tick readers all see the same global. `dev` only adds the dev view-model merge.
+pub fn load_front_end(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, difficulty: u32, bonus: u64) -> Result<scene::Scene> {
+    load_impl(iso, archive, all, save, dev, &[], false, None, difficulty, bonus)
+}
+
 /// difficulty-effects: the warm reload with a weapon-asset set at the selected difficulty.
 pub fn load_with_carry_weapons_difficulty(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, wids: &[u8], difficulty: u32) -> Result<scene::Scene> {
     load_impl(iso, archive, all, save, false, wids, false, None, difficulty, 0)
@@ -3907,8 +3918,7 @@ impl App {
         let job = async_load::Job::spawn(move || {
             if let Some(st) = mp_settings {
                 load_mp_carry(&iso, &name, all, save.as_ref(), st)
-            } else if dev { load_with_carry_dev(&iso, &name, all, save.as_ref()) }
-            else { load_with_carry_medals(&iso, &name, all, save.as_ref(), difficulty, bonus) }
+            } else { load_front_end(&iso, &name, all, save.as_ref(), dev, difficulty, bonus) }
                 .map_err(|e| e.to_string())
         });
         self.async_load = Some(LevelLoad { job, next, ptp_return, ready: None });
