@@ -11930,7 +11930,15 @@ impl Drone {
     /// (`+0x3a0 & 0x30000000` adds a second `CanSeeObjectFrom` from `+0x3b0` whose result is
     /// dropped, :95-98 — no effect.)
     /// Without posed bones (`bones == None`) the port's single chest point stands in.
-    pub fn seek_opponent_los(&mut self, d: &Data, player: &Player, bones: Option<&[V3; 7]>) -> bool {
+    ///
+    /// `body(a, b)`: another drone's body stands on the segment. `Collide_LineOfSight` 0x1edf50 is
+    /// `Collide_RayIntersect` 0x1ec690, whose `Collide_Pick` offers every object but the two the
+    /// call names (the looker and the target [M Collide_PickObj 0x1eae80:57-59]); the 0xa27 flags
+    /// carry no 0x100, so the class-2 drones stay in [M 0x1eae80:70-85], and an animated
+    /// character's glist without collision data goes to `Collide_Jointy` [M Collide_Intersect
+    /// 0x1ebaa8:28-31]. So a guard does not see Bond through a guest or another guard. The port's
+    /// body test is the posed bone boxes Bond's rounds use [S for the game's joint test].
+    pub fn seek_opponent_los(&mut self, d: &Data, player: &Player, bones: Option<&[V3; 7]>, body: &dyn Fn(V3, V3) -> bool) -> bool {
         // The ray rides the game's cel scope [M DroneVision_CanSeeObjectFrom 0x176f18:60-77 —
         // Collide_LineOfSight's cel arg is the TARGET's obj+0x20, so Collide_Pick's BFS admits
         // only the target-cel chain's geometry]: the port's unscoped grid walk over-blocked on
@@ -11938,10 +11946,15 @@ impl Drone {
         // ray between the corridor guards and the spawn; world.rs::line_of_sight_scoped). A
         // snapshot without a cel (None) and a portal-BFS miss keep the unscoped walk.
         let Some(b) = bones else {
-            return d.world.line_of_sight_scoped(player.cel, self.head(), player.target, crate::world::LOS_GUARD_VISION);
+            let eye = self.head();
+            return d.world.line_of_sight_scoped(player.cel, eye, player.target, crate::world::LOS_GUARD_VISION)
+                && !body(eye, player.target);
         };
         let eye = self.head();
-        let ray = |i: usize| d.world.line_of_sight_scoped(player.cel, clamp_to_cylinder(player.pos, b[i]), eye, crate::world::LOS_GUARD_VISION);
+        let ray = |i: usize| {
+            let from = clamp_to_cylinder(player.pos, b[i]);
+            d.world.line_of_sight_scoped(player.cel, from, eye, crate::world::LOS_GUARD_VISION) && !body(from, eye)
+        };
         view_bone_pick(self.los, self.team, &mut self.view_bone, ray)
     }
 }
@@ -19592,15 +19605,21 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let view_bones = self.bond_view_bones;
         for k in 0..ln {
             let slot = (self.los_cursor + 1 + k) % ln.max(1);
-            let dr = &mut self.list[self.llist[slot]];
+            let idx = self.llist[slot];
+            let (before, rest) = self.list.split_at_mut(idx);
+            let (dr, after) = rest.split_first_mut().unwrap();
             if dr.visibility >= 0.7 {
+                // The other drones' bodies on the sight ray (`seek_opponent_los`): a disabled
+                // object (+0xF0 & 0x20) is not picked [M 0x1eae80:72-82].
+                let body = |a: V3, b: V3| before.iter().chain(after.iter())
+                    .any(|o| o.present && o.enabled && !o.corpse && drone_ray_part(o, d, a, b).is_some());
                 // The drone-vision LOS: the game's `DroneVision_LineOfSightToObject` 0x178390 /
                 // `CanSeeObjectFrom` 0x176f18 / `CanSeePosition` 0x178438 all ray-test through
                 // `AINetwork_TestRayCels` 0x15ab78 (the segment against every boundary of the
                 // crossed AI cels, walls first [M 0x15ab78]); the port swaps that for the static
                 // collision world's line of sight — the same deviation the nav `move_test`
                 // documents [S].
-                dr.los = dr.seek_opponent_los(d, player, view_bones.as_ref());
+                dr.los = dr.seek_opponent_los(d, player, view_bones.as_ref(), &body);
                 // `SeekOpponentLOS` 0x175cb8:68-82 — on a successful sight tick the through-wall
                 // flag refreshes: aiming (`+0x22`, the port's `aims_torso()` = the DoTracking
                 // 0x1479d8:49 fold) → the `GunThroughWall` 0x178520 ray, else cleared. Ticks without
