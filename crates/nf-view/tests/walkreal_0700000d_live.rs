@@ -281,7 +281,18 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
     // THE DECK GUARD #16 (level-0d-real-health-crossfire-3/4): the -1/-2 routes landed this
     // kill every run (+~200 ticks) from the ladder top — his deck fire rode the -4 run-1 sweep
     // window (38 at d 29.7); with the west roof dying above he is the phase's only shooter.
-    kill_guard_at(&mut w, [198.9, -260.4], [6.0, 4.0], "the deck guard #16 (from the ladder top)");
+    // THE BOX ACT (level-0d-wire-jump-grab measured): the chest act's 4 rounds all MISS him —
+    // he fights from his fire anims (state 0x70/0x71, scripts 0x6000606B/0x60006137) whose
+    // posed hit boxes sit 0.65-1.0 BELOW his origin (the crouch-fire skeleton: the head box
+    // top 14.03 vs the origin 14.04, the torso centre 13.72 [trace:box]) while the aim rides
+    // pos+0.3 — every converged CLEAR-ray round passed 0.21 from his origin above all 16
+    // boxes [trace:raypart first_box None]. The game's standing volume is the origin-centred
+    // capsule A = pos+up·r, B = pos+up·(r−hip), r 0.4 (0.55 mode 0xc) [M NDrone2_Collision
+    // 0x140e90:91-121 — the standing branch's +0x3f0/+0x400/+0x45c writes] which the pass at
+    // 0.21 never escapes — the port's boxes-only refine is the documented deviation
+    // (drone_ray_part's doc). A player aims at the VISIBLE (crouched) body: the box act aims
+    // at a box the port's own law returns.
+    kill_guard_head_present(&mut w, [198.9, -260.4], [6.0, 4.0], "the deck guard #16 (the box act, the crouch-fire boxes)", 600);
     // The west-roof sweep, WALKER-CATCHING (level-0d-real-health-crossfire-3, measured): the
     // guards reposition off their placements (145.6-145.8 — CLEAR rays from the ladder top,
     // d 68-70.5 [probe_0d_ray_stands]) to stable combat spots x ~151.4 (the slab shadow, the
@@ -401,7 +412,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
         // The stick HELD through the jump — a player runs onto the grab with the stick forward
         // and keeps holding; the walk quad's eased lanes then read non-zero at the grab and the
         // RETAINED quad (walk-ticks-only zeroing [M 0x193600:129-134]) reads MOVING through the
-        // ride — the guards' TargetMoving_Accuracy applies [M 0x179a48:34-41 + 0x179740:71-73].
+        // ride — the guards' TargetMoving_Accuracy applies [M 0x179a48:34-41 + 0x179740:71-73].        
         // The released-stick jump dead-zone-snapped the quad to [0,0] at the grab and the rider
         // read still (the wire crossfire hit at stationary accuracy).
         sim.step_bond(nf_game::player::Input { jump: (60..=63).contains(&k), forward: 0.3, ..Default::default() }, false, false, false);
@@ -998,7 +1009,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
 /// every kill fires from a stand the walked route reaches, no health/armour/ammo writes, no
 /// teleports after the load.
 #[test]
-#[ignore = "the real boarding hangs and rides in the open: the measured run reaches the west park at 13.2 health (tick 13080, 12 hits for 80.4: #29 3 x 15.3 from the roof at d 52, #15 and #32's sniper rounds at d 26-70), and the ~10 m drop kills him; the walk's kill list was laid for the old placed boarding, the snipers need their own stands before the ride"]
+#[ignore = "the jump-grab leg is FIXED on this route (level-0d-wire-jump-grab): the deck guard #16's chest act missed him whole — his fire anims (state 0x70/0x71, scripts 0x6000606B/0x60006137) pose his hit boxes 0.65-1.0 BELOW his origin while the game's standing volume is the origin-centred capsule A = pos+up·r, B = pos+up·(r−hip), r 0.4 (0.55 mode 0xc) [M NDrone2_Collision 0x140e90:91-121; the port's boxes-only refine is drone_ray_part's documented deviation] — and his 4×16 deck fire killed Bond mid-face-loop (hp 6.0 -> 0.0 at the grab, the death freeze eats every later input). The box act (clear_box_aim — aim at the visible crouched body) lands the kill at +209 and the wire #271 jump-grab fires at jump tick 60 (icon #297 in context); the ride, the deck, the E on #450 and the annex legs all pass. THE REST is the ride exposure, now measured deeper: tick 12540 alive at 4.8 health (26 hits for 88.8), and the jump-drift hops into the yard slot never leave the ledge — the board offset 1.01 and the apex 138.19 are IDENTICAL to the plain twin, but the box act's changed RNG stream diverges the guard positions and the hops break grounded at k>20 at (138.53, 14.56, -296.13); at 4.8 health the ~10 m slot fall's pain would kill anyway. NEXT: the ride-phase sniper stands (the old lever) to cut the 88.8 drain, then re-leg the slot hop under the diverged guard state; and the port-side question for a live check: the game's capsule vs the port's boxes-only bullet volume on a fire-anim guard"]
 fn walk_arrival_to_the_c5_door_real_damage() {
     walker::with_real_damage(walk_arrival_to_the_c5_door);
 }
