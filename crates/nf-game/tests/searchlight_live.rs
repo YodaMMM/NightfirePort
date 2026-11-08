@@ -226,12 +226,18 @@ fn channels_and_tracking_behave() {
     assert!(nf_game::triggers::Channels::on(&channels, s.parts[hd].alarm as u32) || s.parts[hd].alarm == 0);
 }
 
-/// The spot ray runs under mask 0x18, whose bit 0x10 skips the dynamic objects [M 0x1eb320:314-328,
-/// 370-374]: Bond standing in the beam, far above the ground, does not catch the spot, and the arm
-/// reads the ground spot only [M 0x1cb900:251]. All seven 07000005 heads carry alarm 0, so the
-/// tracking state writes no channel at all [M :146-148]; channel 0 is a real channel.
+/// The spot ray runs under mask 0x18, whose bit 0x10 skips the dynamic walk [M 0x1eb320:314-328,
+/// 370-374], so the game's spot most likely lands on static geometry only. The port still runs its
+/// ray-vs-player-sphere pick on top of the static segment (`Searchlights::update`, radius
+/// M_CONTROL+0x8C = 1.0576 [L ee_start_05.bin]) until a live render settles whether the spot may rest
+/// on Bond: that rule is the one this test follows. Bond standing in the beam catches the spot on his
+/// sphere, inside the arm's `Vec_Dist3D(spot, player) <= 2.0` [M 0x1cb900:251], so the head arms. All
+/// seven 07000005 heads carry alarm 0, so the tracking state writes no channel at all [M :146-148];
+/// channel 0 is a real channel. (An earlier version expected the static-only rule, the beam passing
+/// through Bond; it was red against the port's kept sphere pick. When the live check lands, flip the
+/// pick and this test together.)
 #[test]
-fn the_beam_passes_through_bond_and_a_zero_alarm_writes_nothing() {
+fn the_beam_catches_on_bond_and_a_zero_alarm_writes_nothing() {
     let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
     let d = l.data();
     let mut rng = Rng::new(3);
@@ -254,14 +260,17 @@ fn the_beam_passes_through_bond_and_a_zero_alarm_writes_nothing() {
         let mut bond = bond_at(mid);
         bond.sph = mid;
         s.update(&d, &bond, &mut channels, h, &[], &mut rrng, 7);
-        assert_eq!(s.parts[h].state, 0, "head {h}: Bond {:.1} units up the beam does not arm it", span * 0.5);
+        // The port's player-sphere pick: the spot rests on Bond's sphere (≤ 1.0576 + the 0.01 lift).
+        let caught = s.parts[sp].pos;
+        let off = ((caught[0] - mid[0]).powi(2) + (caught[1] - mid[1]).powi(2) + (caught[2] - mid[2]).powi(2)).sqrt();
+        assert!(off <= 1.0576 + 0.02, "head {h}: the spot rests on Bond {:.1} units up the beam ({off:.3} off)", span * 0.5);
+        assert_eq!(s.parts[h].state, 1, "head {h}: the spot on Bond's sphere arms it");
         checked += 1;
-        // Now on the ground spot: it arms, and alarm 0 raises nothing.
         assert_eq!(s.parts[h].alarm, 0);
-        let on_spot = bond_at(s.parts[sp].pos);
-        s.update(&d, &on_spot, &mut channels, h, &[], &mut rrng, 8);
+        s.update(&d, &bond, &mut channels, h, &[], &mut rrng, 8);
+        assert!(!channels.on(0), "alarm 0 leaves channel 0 alone");
+        s.update(&d, &bond, &mut channels, h, &[], &mut rrng, 9);
         assert_eq!(s.parts[h].state, 1, "head {h} tracks");
-        s.update(&d, &on_spot, &mut channels, h, &[], &mut rrng, 9);
         assert!(!channels.on(0), "alarm 0 leaves channel 0 alone");
     }
     assert!(checked > 0, "a head with a long beam");

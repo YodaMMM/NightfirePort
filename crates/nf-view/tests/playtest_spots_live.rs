@@ -492,7 +492,7 @@ fn spots_07000016_corridor_door_opens() {
 // ---------------------------------------------------------------------------
 
 /// PC #688 "Q-WORM_PC_1" (−16.88, 1.20, −32.15), contact sphere r 0.7, out ch 0x48 [D;
-/// docs/levels/0700000a.md:21,79]: the suite-green install spot [D walk_0700000a_live.rs:74-85].
+/// docs/levels/0700000a.md:21,79]: the walked south install stand, aimed at the PC mesh.
 /// The plant is FIRE, not E [M PCQWorm_Update 0x1aee20; param 2 = 0], the shot's range 2.0
 /// [D weapon_data[0x58]+0x1C] — distance + LOS + the install through the real trigger path.
 #[test]
@@ -501,10 +501,11 @@ fn spots_0700000a_qworm_pc_installs() {
     let mut scene = nf_view::load(&iso, "0700000a.bin", false).expect("load 0700000a");
     let sim = scene.sim.as_mut().unwrap();
     free(sim);
-    // The spot is the suite-green install stand [D walk_0700000a_live.rs:74-85]: placed and FIRED
-    // immediately (the game's gadget use is aim-held fire taps, not a settled stand — the desk edge
-    // slopes and a settled Bond slides ~1.1 off the spot).
-    sim.bond = Bond::new([-16.38, 0.50, -31.65], -2.356);
+    // The spot is the walked south stand, 1.85 from the PC [D walk_0700000a_live.rs
+    // qworm_install_by_firing_the_gadget]. (The old stand 0.71 off the PC's north-east corner has a
+    // partition 0.14 in front of the eye: with the crosshair gate below no PC is ever the target there.)
+    sim.bond = Bond::new([-16.8, 1.2, -34.0], 0.0);
+    for _ in 0..30u32 { sim.step_bond(Input::default(), false, false, false); }
     let pc = sim.drones.useobjs.pcs.iter().find(|p| p.ch == 0x48).map(|p| p.pos)
         .expect("the ch-0x48 Q-Worm PC parses [D #688]");
     let d = d3(sim.bond.pos, pc);
@@ -518,8 +519,21 @@ fn spots_0700000a_qworm_pc_installs() {
     sim.drones.inventory.owned[0x58] = true;
     sim.gun.weapon = 0x58;
     sim.gun.switch_request = 0x58;
+    // The gadget fires only with the PC first under the crosshair, within weapon_data+0x1C [M
+    // Player_WeaponFiring 0x1a5460:531-545; Check_Target 0x1a7810 every 6th frame]: aim the eye at
+    // the PC's own mesh (y ±0.34 about the placement [D the glist's collision bounds]) and hold it
+    // for a full Check_Target cycle before the taps.
+    let aim = |sim: &mut nf_view::scene::Sim| {
+        let eye = sim.bond.head();
+        let t = [pc[0], pc[1] + 0.2, pc[2]];
+        sim.bond.yaw = (t[0] - eye[0]).atan2(t[2] - eye[2]);
+        sim.bond.pitch = ((t[1] - eye[1]) / (t[0] - eye[0]).hypot(t[2] - eye[2])).atan() / std::f32::consts::FRAC_PI_2;
+    };
+    aim(sim);
+    for _ in 0..12u32 { sim.step_bond(Input::default(), false, false, false); aim(sim); }
     let mut installed = false;
     for _ in 0..120u32 {
+        aim(sim);
         sim.step_bond(Input::default(), true, false, false); // trigger taps
         if sim.drones.channels.on(0x48) { installed = true; break; }
     }
