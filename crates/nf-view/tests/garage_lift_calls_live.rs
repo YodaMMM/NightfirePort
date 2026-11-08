@@ -75,14 +75,21 @@ fn any_ent(sim: &nf_view::scene::Sim, src: (u32, u8), hash: u32) -> bool {
 /// The station button (sub-entity 0x020006b2) sits at (−4.62, −375.88, 25.91) [D 0x0600064F
 /// stream 2 keys, composed]; Bond stands ~1.3 units in front of it (z 24.6), eye ~1.5 above the
 /// floor, pitched down at it, yaw 0 = +z (`Bond::look` (cp·sin yaw, sin pitch, cp·cos yaw)).
+/// The station stand: in front of the car-park outer door leaf beside the button (0x020006a9,
+/// the SP's own entity — the button art belongs to the sub-script, owner 0, and is not a use
+/// target [M]). The use pick keeps the leaf only with the use point within 1.0 in front of one
+/// of its faces [M Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8; nf_game::usepick]:
+/// from in front of the button itself (x −4.6) the leaf's edge (x −3.83) is 1.06 from the use
+/// point and the press misses.
 fn stand_at_station(scene: &mut nf_view::scene::Scene) {
     let sim = scene.sim.as_mut().unwrap();
-    sim.bond.pos = [-4.6, -375.98, 24.6];
-    sim.bond.vel = [0.0; 3];
-    sim.bond.yaw = 0.0;
-    sim.bond.pitch = -0.19; // down at the button (−1.4 below the eye, 1.3 ahead)
+    let (tris, sph) = usepick::entity_near(sim, 0x0200_06a9, [-3.29, -375.92, 26.32]).expect("the car-park outer door leaf");
+    assert!(usepick::stand_in_front(sim, &tris, sph), "a stand in front of the outer door leaf");
     sim.step_bond(nf_game::player::Input::default(), false, false, false);
 }
+
+#[path = "common/usepick.rs"]
+mod usepick;
 
 #[test]
 fn the_car_park_call_button_lights_and_calls_the_lift() {

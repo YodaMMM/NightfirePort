@@ -12,6 +12,9 @@ mod walker;
 
 use walker::{Act, Walker, Wp};
 
+#[path = "common/usepick.rs"]
+mod usepick;
+
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 /// The warm carry (the elevator chain from 07000009 — ch 0x46 rides the RamSave [M 0x195670:13]).
@@ -805,14 +808,27 @@ fn walk_to_security_keyboard_at(difficulty: u32) -> Walker {
         assert!(sim.drones.level_exit.is_none(), "the mission ended during the walk-back");
     }
     w.walk_to(Wp::new(-3.2, 0.0, 9.4).r(1.0), "hug the cab east wall south end");
-    let _ = w.try_walk_to(Wp::new(-2.55, 0.0, 8.1).r(1.0), "round the wall end");
+    // use-pick: the keyboard's collision faces face −z (the screen at z ≈ 8.7, normal (0.12, 0,
+    // −0.99) [D the entity glist 0x20005e1 — probe]); the pick keeps it only with the use point
+    // within 1.0 in FRONT of a face [M Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8;
+    // nf_game::usepick], so the press is made from the nook in front of it, not through the
+    // cab wall from the corridor wedge (the old sphere-only pick reached it from there).
+    // KNOWN GAP (stand-in): the security room's own door (#725 at (6.83, 1.1, −1.46), lock ch
+    // 0x31 [D]) is the room's entrance; this walk has no leg through it yet, so Bond is placed
+    // once in the room, in front of the screen [probe: the room floor at (−1.41, 7.21) stands].
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-1.41, 1.09, 7.21];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(5);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
-        assert!((p[0] + 3.0).abs() < 0.3 && (p[2] - 9.68).abs() < 0.3,
-            "the corridor wedge in front of the keyboard nook, got {p:?}");
+        assert!((p[0] + 1.41).abs() < 0.5 && (p[2] - 7.21).abs() < 0.5,
+            "in front of the keyboard, got {p:?}");
     }
-    let kb: [f32; 3] = [-1.54, 1.33, 8.48];
+    let kb: [f32; 3] = [-1.55, 1.5, 8.7];
     let mut kb_fired = false;
     'kb: for _cycle in 0..12u32 {
         for t in 0..40u32 {
@@ -840,6 +856,14 @@ fn walk_to_security_keyboard_at(difficulty: u32) -> Walker {
     }
     assert!(kb_fired, "the keyboard SP's E activation writes ch 0x3A \
         [M SP_Activate 0x1dc338 + SP_Update 0x1dbda8 state 1]");
+    // Back out to the corridor wedge (the reverse of the room stand-in above), where the walk's
+    // next legs start.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-3.0, 1.03, 9.68];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(5);
     // The AND mux #741 follows on the mission graph's own update — wait it out (the old probe's
     // 6-tick window never saw the follow fire; the mux is a mission node, not a same-tick write).
     let mut mux49 = false;
@@ -1028,34 +1052,28 @@ fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
     // facing gate + sphere pick arm the keypad (state 3) [M 0x1a5170:158-166 + 0x1aed00].
     let kp: [f32; 3] = {
         let sim = w.scene.sim.as_ref().unwrap();
-        let l = sim.drones.locks.iter().find(|l| l.placement == 648).expect("keypad #648 [D]");
-        l.pos
+        // The keypad's posed world-sphere centre (use-pick: the local centre through the lock's
+        // matrix [M Control_BuildWorldSph 0x133070]; `Lock.pos` adds the centre unrotated).
+        let li = sim.drones.locks.iter().position(|l| l.placement == 648).expect("keypad #648 [D]");
+        sim.drones.use_picks.locks[li].sphere.0
     };
-    let mut armed = false;
-    'kp: for _cycle in 0..8u32 {
-        for t in 0..30u32 {
-            {
-                let sim = w.scene.sim.as_ref().unwrap();
-                if sim.drones.keypad.is_some() { armed = true; break 'kp; }
-                let bp = sim.bond.pos;
-                let eye = bp[1] + sim.bond.eye - sim.bond.crouch_drop;
-                let dx = kp[0] - bp[0];
-                let dz = kp[2] - bp[2];
-                let dy = kp[1] - eye;
-                let desired = dx.atan2(dz);
-                let err = walker::wrap_pi(desired - sim.bond.yaw);
-                let perr = (dy / walker::dxz(bp, kp).max(0.5)).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
-                let input = nf_game::player::Input {
-                    turn: err.clamp(-0.05, 0.05),
-                    look: perr.clamp(-0.05, 0.05),
-                    ..Default::default()
-                };
-                let hold = t == 15 && err.abs() < 0.2;
-                w.scene.sim.as_mut().unwrap().step_bond(input, false, false, hold);
-            }
-            w.total_ticks += 1;
-        }
-    }
+    let _ = kp;
+    // use-pick: from the wall leg's wedge the use point does not reach within 1.0 in front of the
+    // keypad's faces [M Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8;
+    // nf_game::usepick] — Bond steps to the first stand in front of it (the lock arm's facing
+    // gate [M 0x1a5170:158-166] refuses the ones behind it) and presses there.
+    let armed = {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let li = sim.drones.locks.iter().position(|l| l.placement == 648).expect("keypad #648 [D]");
+        let t = sim.drones.use_picks.locks[li];
+        let tris = usepick::posed(sim, t.hash, &t.matrix);
+        // Only #648's keypad counts: a stand whose press arms a neighbour's is backed out of.
+        usepick::for_each_stand(sim, &tris, t.sphere, &mut |sim| {
+            let hit = usepick::pulse(sim, 12, &|s| s.drones.keypad.is_some());
+            if hit && sim.drones.keypad.as_ref().is_some_and(|(k, _)| *k != li) { sim.drones.keypad = None; return false; }
+            hit
+        })
+    };
     assert!(armed, "the keypad #648 E arms the mini-game (state 3) [M 0x1aed00's kind-0 no-key branch]");
     // THE DIGITS RUN AT THE WEDGE, NO RETREAT (civ-unignore, the 00agent fix): the old
     // "out of the turret's line" retreat to (−14.5,−15.0) bought nothing any more — the

@@ -8,6 +8,9 @@
 //! reach a spot is used only where the walk there is separately documented; the operation itself
 //! always runs through the real input.
 
+#[path = "common/usepick.rs"]
+mod usepick;
+
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 /// A cold load — the level's own boot path [M Player_Start 0x190fd0's gate-0 start].
@@ -256,8 +259,19 @@ fn storeroom_door_unlocks_from_its_touch_plate() {
     assert!(open, "the plate's unlock rising edge must auto-open the storeroom door [M 0x1363c8]");
     {
         let sim = scene.sim.as_mut().unwrap();
-        // One fresh press (the wait loop's ticks released the key): the open unlocked leaf closes.
-        sim.step_bond(Default::default(), false, false, true);
+        // One fresh press from in front of the OPEN leaf (the use pick keeps the door only with the
+        // use point within 1.0 in front of one of its faces [M Collide_Intersect 0x1ebaa8 →
+        // Intersect_PointGeom 0x1e92d8; nf_game::usepick]): the open unlocked leaf closes.
+        // A stand inside the leaf's swing is the busy-marker arm (no close) [M 0x135be0's
+        // in-doorway test]: the first stand out of it closes the door.
+        let d = sim.drones.doors.list[di].clone();
+        let tris = usepick::posed(sim, d.glist, &d.matrix);
+        let closed = usepick::for_each_stand(sim, &tris, d.live_sph(), &mut |sim| {
+            sim.drones.doors.list[di] = d.clone();
+            sim.step_bond(Default::default(), false, false, true);
+            sim.drones.doors.list[di].state == nf_game::door::CLOSING
+        });
+        assert!(closed, "a stand in front of the open leaf, out of its swing");
         let st = sim.drones.doors.list[di].state;
         assert_eq!(st, nf_game::door::CLOSING,
             "E on the open unlocked door closes it [M 0x135be0's state-4/8 arm], got {st:#x}");

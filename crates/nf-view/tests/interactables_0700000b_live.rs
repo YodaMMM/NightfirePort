@@ -17,6 +17,9 @@ mod walker;
 
 use walker::{Act, Walker, Wp};
 
+#[path = "common/usepick.rs"]
+mod usepick;
+
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 /// The warm load the real run hands this level: objectives 3-6 + the hatch unlock carried
@@ -154,25 +157,21 @@ fn waiting_room_door_opens_on_use() {
     // still sliding), so the aim converges on the door AFTER the settle — the stand-in for the
     // player's aim. The candidate the E must touch is the door's LIVE world sphere (obj+0x80,
     // obj+0x8C) [M Collide_PickObj 0x1eae80's 0x100/0x101 arm — the pick sphere (r 1.0 at
-    // head + viewer dir [M 0x1a5170:100-108]) vs the sphere; the Collide_Intersect refinement
-    // cannot remove the node (0x1ec940 ignores its return for param_10 = 0) and the class walk
-    // has no distance gate (0x1a5170:113-137)].
+    // head + viewer dir [M 0x1a5170:100-108]) vs the sphere], and the use point must lie within
+    // 1.0 in front of a leaf face (the Collide_Intersect refine frees the node otherwise
+    // [M 0x1ebaa8:186-189 → 0x1e92d8; 0x1ec940's 1e8 drop]; nf_game::usepick). The class walk
+    // has no distance gate (0x1a5170:113-137).
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [dpos[0], 46.8, dpos[2] + 1.6];
-        sim.bond.vel = [0.0; 3];
+        let d = sim.drones.doors.list[di].clone();
+        let tris = usepick::posed(sim, d.glist, &d.matrix);
+        assert!(usepick::stand_in_front(sim, &tris, d.live_sph()), "a stand in front of the door's leaf");
+        let _ = dpos;
     }
-    w.wait(10);
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        let d = &sim.drones.doors.list[di];
-        let centre = [dpos[0], dpos[1] + 1.0, dpos[2]];
-        let head = sim.bond.head();
-        let to = [centre[0] - head[0], centre[1] - head[1], centre[2] - head[2]];
-        sim.bond.yaw = to[0].atan2(to[2]);
-        sim.bond.pitch = (to[1] / to[0].hypot(to[2])).atan() / std::f32::consts::FRAC_PI_2;
+    for k in 0..36u32 {
+        w.tick(Default::default(), k % 6 == 0);
+        if w.scene.sim.as_ref().unwrap().drones.doors.list[di].state & 0xc != 0 { break; }
     }
-    w.use_door(di, "the waiting-room door");
     let st = w.scene.sim.as_ref().unwrap().drones.doors.list[di].state;
     assert!(st & 0xc != 0, "the unlocked door opens on the E [M Door_Activate], state {st:#x}");
 }
@@ -193,8 +192,19 @@ fn vent_grill_ss_e_sweeps_it_open() {
     w.wait(10);
     assert!((w.scene.sim.as_ref().unwrap().drones.sss.list[gi].matrix[3][2] - start).abs() < 0.05,
         "sister: the grill rests at its key-0 pose before the E");
-    w.walk_to(Wp::at(8.57, 49.6, 20.9, Act::Use { use_ticks: 240 }), "E the vent grill");
-    w.wait(90);
+    // E from the waiting room below, looking up at the grill's middle: the use point (head +
+    // view dir) lands under its bottom face, inside the world sphere (obj+0x80 — the posed local
+    // centre, not the origin corner) [M Collide_PickObj 0x1eae80; Intersect_PointGeom 0x1e92d8].
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let c = sim.drones.sss.list[gi].world_sphere().0;
+        let h = sim.bond.head();
+        let to = [c[0] - h[0], c[1] - h[1], c[2] - h[2]];
+        sim.bond.yaw = to[0].atan2(to[2]);
+        sim.bond.pitch = (to[1] / (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt()).asin() / std::f32::consts::FRAC_PI_2;
+    }
+    for k in 0..24u32 { w.tick(Default::default(), k % 6 == 0); }
+    w.wait(300);
     // The grill's sweep is subtle [D: 2 keys — the measured key-0 → end delta is 0.04 total] and
     // the state-1 sweep wraps back to state 0 holding the end pose [M 0x1a9948:121-126] — both
     // facts assert the E ran the activate → sweep → wrap chain (state was 0x40 at load).
