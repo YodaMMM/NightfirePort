@@ -2339,6 +2339,16 @@ pub fn hud_under_menu(hud: gpu::HudFrame, menu: &gpu::HudFrame) -> gpu::HudFrame
     f
 }
 
+/// The in-mission pause gate (`Player_Update` 0x193600:71-78): the pause action opens page
+/// 0x4000004b only while `GameState+0x24 == 0` AND `ScriptCam == 0`. `Mission_Update` raises
+/// +0x24 when the mission ends — the fail (case 2), the death hand-off (case 3) and the success
+/// (case 6) [M 0x182c60:46,60,88] — and only the next load clears it [M ResetMap_GameInit
+/// 0x1d5080:9]: the game refuses the pause under the "Mission Complete" / "Mission Fail" banners
+/// and the death menu's lead-in.
+pub fn pause_allowed(sim: &scene::Sim) -> bool {
+    !sim.drones.mission.ended && sim.script_camera().is_none()
+}
+
 /// The pane state the pause's own `HUD_Update` leaves: `HUD_UpdateHealthPane` writes
 /// `BL+0x8BC = 1.0` while `GS_IsPaused` [M 0x19b9c8:116-123], so the health / armour pane's fade
 /// factor F = min(4·BL+0x8BC, 1) is 1 — the ring shows at full strength in the pause (and after
@@ -6412,8 +6422,9 @@ impl App {
                             // ScriptCam==0 [M Player_Update 0x193600:72] — a script camera up (the
                             // 1b intro cinema 0x0600085c, the Drake NISs) refuses the pause; the
                             // port opened one over the cinema (pause-results-flows live check 1).
+                            // GameState+0x24 (the mission is over) refuses it too — see `pause_allowed`.
                             if self.scene.sim.is_some() && self.level_code != 0 && self.level_code != menu::FRONTEND_LEVEL
-                                && self.scene.sim.as_ref().and_then(|s| s.script_camera()).is_none() {
+                                && self.scene.sim.as_ref().is_some_and(pause_allowed) {
                                 let base = self.scene.sim.as_ref().map(|s| s.drones.mission.base_map).filter(|&b| b != 0 && b != u32::MAX).unwrap_or(self.level_code);
                                 let fresh_fe = self.fe.is_none();
                                 let fe = self.fe.get_or_insert_with(|| {

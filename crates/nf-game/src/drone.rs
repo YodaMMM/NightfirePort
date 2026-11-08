@@ -21831,7 +21831,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // runs — the NIS/script pauses stamp +0x34 through the scene's request side
             // [M 0x1d94c0:118-121 + 0x1da880:44-48]). The clock is the port's frame-derived
             // 1/100 s [S — psiGetTimeIn100ths' stand-in; only differences matter].
-            self.progress.log_update_elapsed(crate::progress::PlrMissionStats::now_100ths(self.frame));
+            // mission-flow: the call sits behind `Player_Update`'s `GS_IsPaused(player)` return
+            // [M 0x193600:88-91], which `Mission_Update` case 7's `GS_PausePlayer(1, 0)` raises
+            // from the end banner's first hold tick to the next load [M 0x182c60:124-128] — the
+            // game's clock stops when the "Mission Complete" hold starts; the port's ran on
+            // through the 240-tick banner, so the results' Time row read 4 s long.
+            if !self.mission.player_paused {
+                self.progress.log_update_elapsed(crate::progress::PlrMissionStats::now_100ths(self.frame));
+            }
         }
         // fix-scores-handoff (G-045 remainder): the level-end score-row production. When the
         // level-exit latch stands at the tick's end (the trigger LOAD_LEVELs, the
