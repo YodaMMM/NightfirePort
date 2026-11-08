@@ -757,6 +757,15 @@ impl Bond {
         if !(SS_ZEROG_8..=SS_ZEROG_9).contains(&self.substate) {
             self.zero_g_active = false;
         }
+        // The fall timer BL+0x928 zeroes on every tick of the non-walk substates: the handler's
+        // switch on substate−1 stores 0 for 1, 2, 3, 5, 6, 7, 8, 9, 0xd, 0xe, 0xf [M
+        // Player_CollisionHandler 0x1949a8:103-118], and the climb branch zeroes it on both of
+        // its arms [M :52-70]. Only the walk (0) and the crouch (4) carry a fall across ticks, so
+        // a drop that ends in water, on a ladder, a wire or a grapple never hurts when Bond later
+        // steps onto the ground (the port kept the count and paid it on the next landing).
+        if matches!(self.substate, 1 | 2 | 3 | 5 | 6 | 7 | 8 | 9 | 0xd | 0xe | 0xf) {
+            self.fall_timer = 0;
+        }
         self.monitor_air(ctx);
     }
 
@@ -1666,6 +1675,11 @@ impl Bond {
         // Case 3 calls `Player_Move(1.0, …)` [M 0x193600:181-182] — the swim multiplier is ALWAYS 1.0
         // (the 0.75 is `Player_SSCrouch`'s own call argument 0x1924c0:58, not a crouched flag read).
         let k = if swimming { 1.0 } else if self.crouched { 0.75 } else { 1.0 };
+        // The 07000007 party walk: `Player_Move` scales its multiplier by 0.9 while channel 0x48
+        // is off [M 0x191dd0 — disasm 0x1921d4-0x19220c: GameState+0xC == 0x07000007 and
+        // switch_channels[0x48] == 0 → param_1 · 0x3f666666]. The gate is the jump refusal's own
+        // [M Player_HandleJump 0x1916b0:106-113], which the Sim already carries in `jump_locked`.
+        let k = if self.jump_locked && !zero_g { k * 0.9 } else { k };
         // `Player_Move`: aim mode zeroes forward (and the pad's turn action, which the caller leaves out of `turn`:
         // with a mouse the view turns past the aim box's edge, D-002).
         let (fwd, turn) = if input.aiming { (0.0, input.turn) } else { (input.forward.clamp(-1.0, 1.0), input.turn) };
@@ -1827,7 +1841,10 @@ impl Bond {
         } else {
         self.yaw += turn;
         self.pitch = (self.pitch + input.look).clamp(-1.0, 1.0);
-        let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw)); // G-046: View_RotTransMatrix 0x1e5168:33-36 / RotMatrixX 0x1e46a0 PS2Sinf2 lanes [M]
+        // The swim dir's z (and the horizontal scale of `look`): cos of the view pitch, the same
+        // EE lanes `look` uses.
+        let swim_cp = crate::trig::cosf(nf_formats::ps2float::mul(self.pitch, crate::trig::HALF_PI));
+        let (s, c) =(crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw)); // G-046: View_RotTransMatrix 0x1e5168:33-36 / RotMatrixX 0x1e46a0 PS2Sinf2 lanes [M]
         if swimming {
             // `Player_Move` 0x191dd0:149-165 [M]: in swim the forward speed rides the LOOK direction
             // (`RotMatrixX(obj+0x50 − BL+0x8a8·π/2)` + `Mat_GetDir`, obj+0x50 zeroed on entry — the
@@ -1841,7 +1858,9 @@ impl Bond {
             self.pos[2] += -s * vs + ld[2] * vf;
             // The move quad [M 0x191dd0:152-168]: quad += dir·(forward·k), then x = strafe — the
             // z lane the accuracy read takes carries the look-dir's z component.
-            self.move_local = [vs, ld[2] * vf];
+            // The quad is LOCAL: its z lane is the local dir's z = cos(view pitch) times the
+            // forward lane (the object matrix carries only the yaw), not the world z component.
+            self.move_local = [vs, swim_cp * vf];
             // The world-Y component rides as this tick's vertical velocity; the swim tail clamps it
             // against `surface − 0.3` before integrating (case 3 tail [M 0x193600:201-220]).
             self.vel[1] = ld[1] * vf * 60.0;
@@ -1849,7 +1868,19 @@ impl Bond {
             self.pos[0] += c * vs + s * vf;
             self.pos[2] += -s * vs + c * vf;
         }
-self.local = [vs / k, vf / k];
+        // The smoothers ease from the SCALED lanes: `Player_Update` copies the whole +0x10 quad
+        // into +0x20 after the move [M 0x193600:296-299; disasm 0x193cd4 `lq v0,0x10(s2)` /
+        // 0x193cdc `sq v0,0x20(s2)`], and `Player_Move` stores the lanes already multiplied by
+        // its argument [M 0x191dd0:166-170]. So the party walk (0.9) settles at 0.18/0.28 of the
+        // walk's target. In the swim the forward lane the ease reads back is the quad's local z —
+        // dir.z·forward with dir the RotMatrixX(view pitch) row [M 0x191dd0:149-165] — so a
+        // pitched stroke eases from cos(pitch)·lane.
+        // KNOWN DIVERGENCE (kept): the same copy makes the game's crouch (0.75) settle at
+        // 0.15/0.4 = 0.375 of the target, half the port's 0.75. The crouch keeps the unscaled
+        // lane here because the 0a stealth routes are timed on the port's crouch pace; the rule
+        // change rides its own branch (s/agent-player-moves-crouch).
+        let crouch_k = if !swimming && self.crouched { 0.75 } else { 1.0 };
+        self.local = if swimming { [vs, swim_cp * vf] } else { [vs / crouch_k, vf / crouch_k] };
         if !swimming && !zero_g {
             // The walk quad's own stores [M Player_Move 0x191dd0:166-170: `+0x10 = strafe`,
             // `+0x18 = forward·mult`] — the eased lanes × the substate's multiplier, WITHOUT the
@@ -2086,10 +2117,15 @@ self.local = [vs / k, vf / k];
         self.pre_collide = self.pos;
         for k in 0..3 { self.pos[k] += push[k]; }
         self.grounded_history = (self.grounded_history >> 1) | if self.grounded { 8 } else { 0 };
-        // Fall damage: ticks falling with no ground for 4 ticks; on landing, over 60 → (timer − 60) if ≥ 10.
+        // Fall damage [M Player_CollisionHandler 0x1949a8:108-131]: with no ground in the last 4
+        // ticks (BL+0x940 == 0) BL+0x928 counts FRAME_RATE_MUL per falling tick and resets to 0
+        // on any tick whose y velocity is not negative (a head bump, the apex of a launch); with
+        // ground in the history it lands: over 60 → pain (timer − 60) if ≥ 10, then 0. The swim
+        // substate's own reset sits in `tick_ctx` (the handler's substate switch).
         if swimming {
-        } else if self.grounded_history == 0 && self.vel[1] < 0.0 { self.fall_timer += 1; }
-        else if self.grounded {
+        } else if self.grounded_history == 0 {
+            if self.vel[1] < 0.0 { self.fall_timer += 1; } else { self.fall_timer = 0; }
+        } else {
             if self.fall_timer > 60 && self.fall_timer - 60 >= 10 { self.fall_damage = Some((self.fall_timer - 60) as f32); }
             self.fall_timer = 0;
         }
