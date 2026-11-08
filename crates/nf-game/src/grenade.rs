@@ -137,8 +137,11 @@ impl StuckGadget {
 /// What a grenade did this tick.
 #[derive(Clone, Debug, PartialEq)]
 pub enum GrenadeEvent {
-    /// Bounced off the world at `pos` (sound 0x51C).
-    Bounce(V3),
+    /// Bounced off the world at `pos` (sound 0x51C). The second field is the contact's surface
+    /// material byte — the game's `HITDATA+0x50 & 0x3F` [M 0x12d084-0x12d09c], which the
+    /// contact-blast arm passes as `Explode_Create`'s 12th arg (the debris selector); the
+    /// `segment_surface` mat IS that byte [M 0x1e92d8:321, docs/formats/collision.md:27-28].
+    Bounce(V3, u8),
     /// fix-oddjob-hat: the hat (0x45) STUCK to the world at `pos` — the +0x100 arm's state 3
     /// [M 0x12ce80:255]; the caller plays the 0x4a7 contact clang [:317]. The object keeps
     /// existing (no bounce sound, no explosive broadcast).
@@ -601,7 +604,7 @@ impl Grenade {
                     self.velocity = [0.0; 3];
                     self.resting = true;
                 }
-                return Some(GrenadeEvent::Bounce(hit));
+                return Some(GrenadeEvent::Bounce(hit, mat & 0x3f));
             }
         }
         self.pos = end;

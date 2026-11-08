@@ -18050,7 +18050,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // View_RotTransMatrix [M 0x1d8248:148] and never moved after (GT_Update reads
                 // it back [M 0x180498:248-251]) — and the turret body object is created from
                 // the same pos/rot [M GT_Create 0x17ffa0:70-71], so the port's `t.pos` equals
-                // it numerically (the old [S] stand-in, proven). The game's LOS segment itself
+                // it numerically (the old stand-in, proven — markers-drone-c retired the tag). The game's LOS segment itself
                 // starts at the BARREL (`*(ext+0xc4)`'s +0xc0 plus its aim dir × `ext+0xd0`
                 // [M 0x17f9c8:232-242]); the port fires from the body position — a documented
                 // deviation (the barrel rig's range scalar is not recovered from the decompile
@@ -19779,18 +19779,31 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // all) — every row's part lands exactly on its placement bounds, all rows the game
             // creates, no static double — and the census assertion holds over every SP level.
             // The census also found the rows whose target object is NOT a pane: kind 0/1 (the
-            // 07000001 museum-hall props stand on the walkable floor, 96–434-tri objects) — the
-            // game's pane laws here (solid while alive, out when killed, the class-5 damage
-            // arms) are read and pinned for the kind-2 glass [D params; M 0x12c230:21], so the
-            // ride takes the kind-2 rows; a prop row keeps master's out-of-world status quo
-            // [S unverified: the props' movement solidity is not proven either way, and making
-            // them solid re-routes every 01 walk]. One rule for script and placed panes: the
+            // 07000001 museum-hall props stand on the walkable floor, 96–434-tri objects).
+            // markers-drone-c settled their solidity: the game creates a Break for EVERY 0x20
+            // row, kind-blind — the dispatcher's only kind test builds the kind-2 shatter data
+            // [M 0x1d04f0:70-73], then `Break_Create` runs for all rows the flags/glist gates
+            // admit [M 0x1d04f0:74-77, 0x1d1b68:77-96, kind byte merely stored 0x12c230:30]
+            // — and the created object is cel-linked and picked by EVERY collide query
+            // (build_LinkToRoom → cel+8 chain [M 0x1c9680:39-49], Collide_Pick's per-cel walk
+            // [M 0x1eb320:313-329], Collide_PickObj's glist admission [M 0x1eae80:72-90],
+            // Intersect_* over the glist box tree [M 0x1ebaa8:83-107]; rays too [M
+            // 0x1ec690:100-112]) — alive props BLOCK movement and rays, and Break_Kill's
+            // obj+0xFE |= 1 removes them same-frame, kind-blind [M 0x12b970:60 +
+            // 0x1336f8:70-90]. The port's static world carries none of them (breakables only
+            // DRAW there [M level.rs:501-524]; the disc census found no 0x8000/kind-0x19
+            // double for any of the 55 rows on 01), so the ride takes EVERY created row: the
+            // kind-2 glass under PANE_PART, the kind-0/1 props under PROP_PART (rays NOT
+            // skipped — the game's rays hit them, unlike the panes' documented skip). The
+            // whole ride stays behind PANE_RIDE (false) with the pane work + its walk
+            // repairs — turning it on re-routes every 01 walk, by the game's own law.
+            // One rule for script and placed panes: the
             // script-entity arm above keeps the same dead/death-tick grace, and a script pane's
             // row is kind-2 the same way (the gondola's windows ride it).
             if PANE_RIDE {
                 let pane_parts: Vec<(u64, u32, nf_formats::anim::Mat4)> = drones.breaks.list.iter().enumerate()
-                    .filter(|(_, b)| b.kind == 2 && (!b.dead || b.dead_frame == drones.frame) && b.shape_key != 0)
-                    .map(|(k, b)| (crate::world::PANE_PART | k as u64, b.shape_key, b.matrix))
+                    .filter(|(_, b)| matches!(b.kind, 0 | 1 | 2) && (!b.dead || b.dead_frame == drones.frame) && b.shape_key != 0)
+                    .map(|(k, b)| ((if b.kind == 2 { crate::world::PANE_PART } else { crate::world::PROP_PART }) | k as u64, b.shape_key, b.matrix))
                     .collect();
                 if !pane_parts.is_empty() { parts.extend(pane_parts); }
             }
@@ -21908,7 +21921,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         self.sounds.push(Sound { id: 0x447, pos: p, inner: 96.0, outer: -1.0, weight: 0.0 });
                         break;
                     }
-                    crate::grenade::GrenadeEvent::Bounce(p) => {
+                    crate::grenade::GrenadeEvent::Bounce(p, m) => {
                         // fix-weapon-effects: the impact explode — `Bullet_CollisionHandler` 0x12d068-0x12d0bc
                         // [M, disassembled]: when the weapon's `+0x70` carries bit 2 (0x4) and the contact is
                         // not a ricochet re-entry, the bullet's object is destroyed with
@@ -21927,10 +21940,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             let damage = d.weapons.records.get(g.weapon_type as usize)
                                 .map_or(0.0, |r| f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap()));
                             // fix-blast-scripts2: scale = the game's f12 = +0x08 [M 0x12d0ac].
-                            // explode-debris-spawn: the contact arm's 12th arg is HITDATA+0x50 & 0x3F
-                            // [M 0x12d09c] — the port's Bounce event carries no material yet, so the
-                            // stand-in is 0 (no debris) [S unverified — live check in the report].
-                            self.pending_blasts.push((p, radius, damage, g.owner, g.weapon_type, 0x0600_0052, radius, 0));
+                            // explode-debris-spawn, markers-drone-c: the contact arm's 12th arg is
+                            // HITDATA+0x50 & 0x3F [M 0x12d084-0x12d09c, machine-level] and the
+                            // grenade's world contact fills +0x50 with the triangle's surface byte
+                            // [M 0x1e92d8:321] — the port's segment_surface mat IS that byte, so
+                            // the event now carries it and the 8th field is the real selector
+                            // (the old 0 stand-in retired). Downstream the debris arm
+                            // (`Explode_Update` 0x17c350:22-67) draws NOTHING for material 0,
+                            // one `Rand_Rand(5)` per young tick for any other material and
+                            // 10 draws per spawned particle on the metal {5,6} / stone {8,10,0xB}
+                            // selectors [M 0x1ac808:25-41] — these are now the game's own draw
+                            // count (kept bit-exact; only 0x2a/0x1b contact blasts shift RNG).
+                            self.pending_blasts.push((p, radius, damage, g.owner, g.weapon_type, 0x0600_0052, radius, u16::from(m)));
                             g.state = 2; // the object is destroyed by the blast
                             break;
                         }
@@ -22334,7 +22355,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // (VBlankCount − RealTimeCount)·10/6 [M 0x1094a0:5-9], the vblank frame count
             // re-based at every level load [M ResetMap_Load 0x1d6360:125]; frame-derived like
             // the port, and floor(f·100/60) = floor(f·10/6) (the same rational), so the
-            // values agree tick for tick].
+            // values agree tick for tick — markers-drone-c retired the stand-in tag.
             // mission-flow: the call sits behind `Player_Update`'s `GS_IsPaused(player)` return
             // [M 0x193600:88-91], which `Mission_Update` case 7's `GS_PausePlayer(1, 0)` raises
             // from the end banner's first hold tick to the next load [M 0x182c60:124-128] — the

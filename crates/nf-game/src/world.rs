@@ -59,6 +59,12 @@ pub const LOS_MASKS_ON: bool = false;
 /// them, so an intact pane stops Bond while alive and a killed one (`Break_Kill` 0x12b970:60,
 /// obj+0xFE |= 1, the delete) drops out of the set.
 pub const PANE_PART: u64 = 0x400_0000_0000;
+/// The kind-0/1 break-row props (the 07000001 museum-hall pieces, 96–434-tri objects) ride as
+/// dynamic parts under `0x1000_0000_0000 | breaks index` (bit 44). Unlike `PANE_PART` the RAY
+/// queries do NOT skip these: the game's rays hit the props like any cel-chained object
+/// [M Collide_RayIntersect 0x1ec690:100-112 → the same Collide_Pick walk], so the ray sets
+/// must see them while they live and lose them at the kill.
+pub const PROP_PART: u64 = 0x1000_0000_0000;
 /// The normalized-spine head-on cull [M Intersect_CylGeom 0x109da0:302-322]. level-0a-office-hatch-9
 /// measured the arms' orientation: the game skips the horizontal face BELOW the spine (the
 /// corner walk's y-0.19 floor-band lifter — the port dithered 1.13→1.21 on it while the game
