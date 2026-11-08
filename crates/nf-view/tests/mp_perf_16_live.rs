@@ -78,7 +78,11 @@ fn iso() -> Option<String> {
 // guards/bots use the shared arrival radii). The kills path still runs (35 kills, the sister
 // asserts hold); the pin moves, the pin's job (catching an UNintended change) is intact.
 /// The 2-humans + 14-bots fixed run's hash fold; the pin's job (catching an UNintended change) is intact.
-const PINNED_DIGEST: u64 = 0xbbb6_911c_6656_9440;
+// stream-join re-pin (2026-11-08): the joined stream branches (spawner waves, guard sight and
+// rounds, blasts, aim and use picks) move the bots' shared-stream draws; the same tree gives the
+// same digest run to run (two runs, 43 kills, 0x6555_3962_1008_763f). 0xbbb6_911c_6656_9440 →
+// 0x6555_3962_1008_763f.
+const PINNED_DIGEST: u64 = 0x6555_3962_1008_763f;
 
 const TICKS: u32 = 3600;
 
