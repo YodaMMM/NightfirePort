@@ -492,6 +492,22 @@ pub fn build_sound(scene: &mut scene::Scene) -> Option<nf_audio::sfx::Sound> {
     sound
 }
 
+/// The headless runs' sound: the level's banks and streams in a driver with no output device, run by
+/// `Sim::step_bond` after each step the way the window loop runs `sound_tick`. Its voices end by their
+/// length (`nf_audio::VoiceClock`), so the EE pool frees one-shots and their handles report finished
+/// when the line or effect has played, as in play. The music stream is left out: its now-playing
+/// section feeds `UpdateMusicalEvents`, and headless runs keep that at the deviceless 0. Takes the
+/// scene's banks and streams (as `build_sound` does); a level without a bank gets none.
+pub fn attach_headless_sound(scene: &mut scene::Scene) {
+    let Some((slot, bank, sbf)) = scene.sound_bank.take() else { return };
+    let mut driver = nf_audio::sfx::Driver::new();
+    driver.load_bank(slot, bank, sbf);
+    for (slot, bank, sbf) in std::mem::take(&mut scene.sound_spares) { driver.load_spare_bank(slot, bank, sbf); }
+    if let Some((lut, bin)) = scene.streams.take() { driver.load_streams(lut, std::sync::Arc::new(bin)); }
+    let s = nf_audio::sfx::Sound { driver, output: None, captured: None, music_files: None, music: None, music_pending: Vec::new() };
+    if let Some(sim) = scene.sim.as_mut() { sim.headless_sound = Some(Box::new((s, 0))); }
+}
+
 /// `Sound_Ready`'s music wiring [M docs/systems/music.md]: the MapMusic/MapDroneData tables into the
 /// sim's music logic + the attack gate, then `Music_Event(0, level)` / `Music_Event(1, 1)` — the start
 /// pulse the first `UpdateMusicalEvents` consumes. fix-party-mission: the tests' `load` path now wires

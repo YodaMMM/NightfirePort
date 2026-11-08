@@ -467,10 +467,14 @@ fn mezzanine_door_leg(w: &mut Walker) {
     w.walk_to(Wp::new(53.8, 5.8, -164.8).r(0.6), "under the latch");
     // The Q-Laser burn of the VentLatch #182 through the held-fire path (the same shape as the
     // hinge burn above [M Lock_Update 0x1ae3d8:82-101]) — ch 0x54.
-    w.tick(nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() }, false);
-    for _ in 0..60 {
-        if w.scene.sim.as_ref().unwrap().gun.weapon == 0x4e { break; }
-        w.tick(nf_game::player::Input::default(), false);
+    // The switch press waits for the gun to settle, as a player's does: after a fight the sniper
+    // can still be firing or reloading round by round, and the game refuses a change in those
+    // view states [M Player_WeaponChange 0x1a6f80:33-47]. Press once it is idle (up to 900 ticks).
+    for _ in 0..900 {
+        let (held, busy) = { let g = &w.scene.sim.as_ref().unwrap().gun; (g.weapon, g.reload_state != 0 || g.fire_state || g.switch_state != 0) };
+        if held == 0x4e { break; }
+        let press = if busy { None } else { Some(0x4e) };
+        w.tick(nf_game::player::Input { switch_to: press, ..Default::default() }, false);
     }
     assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x4e, "the laser is held [M 0x1a7ef8 case 0x700000c]");
     {
@@ -1245,6 +1249,12 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
     w.walk_to(Wp::new(8.0, 12.4, -222.0).r(1.0), "the ledge to the arc");
     w.walk_to(Wp::new(13.0, 12.4, -218.5).r(1.2), "the arc west end");
     w.walk_to(Wp::new(24.0, 12.4, -218.0).r(1.5), "the ring south-west arc");
+    // The grab line: the 1.5 arrival can stop anywhere on the arc's bend (a guard fight on the arc
+    // shifts it), and a grab walked in from the north-east took the wire facing its A end, where
+    // the strafe has no headway. Step back west, then walk east onto the arc's line through the
+    // sphere HIT at (28, 12.3, -217.5) [D probe blk], as the proven grab did (22.65, -217.36).
+    w.walk_to(Wp::new(21.3, 12.4, -217.4).r(0.4), "the arc's grab line west");
+    w.walk_to(Wp::new(22.65, 12.4, -217.36).r(0.3), "the arc's grab line");
     // REAL: grab wire #283 (`wire_silo2turbine`, A (29.58, 14.44, −216.96) B (35.89, 14.44,
     // −209.44) [D probe blk]) at the arc's east end — the body sphere-HIT is confirmed at
     // (28, 12.3, −217.5) [D probe blk]; icon #12 (28.42, 12.24, −218.43, ctx 3 [D]) marks it.

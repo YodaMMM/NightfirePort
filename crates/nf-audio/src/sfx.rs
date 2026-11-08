@@ -171,6 +171,9 @@ pub struct Driver {
     /// pause are held [M sound.md §8]. The EE keeps the batch flowing while paused; the port's host
     /// stops ticking under a menu, so the pause reaches the output through `set_paused` at once.
     paused: bool,
+    /// The SPU's end flags when no output device runs the voices (`crate::VoiceClock`): `Sound::batch`
+    /// reads it in place of `Output::take_ended`. Kept beside the driver so every `Sound` has one.
+    pub clock: crate::VoiceClock,
 }
 
 /// `Streams[1..2]`: at most two streamed effects at once (slot 0 is the music) [M `SFXInitialiseStream`].
@@ -199,7 +202,7 @@ impl Driver {
             music_master: 70, mute_sfx: 1, indoors: 100, indoors_target: 100, reverb: 0, reverb_target: 0, underwater: false,
             fade: 10000, fade_music_volume: 10000, fade_status: 0, fade_rate: 30, fade_music: 1, fade_start: 0,
             ducker_current: 100, ducker_volume: 100, ducker_duration: 1, ducker_start: 0, timer_ms: 0, nis_quitten: false, nis_playing: false,
-            key_on_frame_delay: 0, paused: false,
+            key_on_frame_delay: 0, paused: false, clock: Default::default(),
             listener_pos: [0; 3], listener_dir: [0, 1000, 0], listener_norm: [-1000, 0, 0], active: Vec::new(), streams: None, stream_pcm: HashMap::new() }
     }
 
@@ -866,7 +869,8 @@ impl Sound {
     pub fn batch(&mut self, f: impl FnOnce(&mut Driver, &mut Vec<Cmd>)) {
         let mut out = Vec::new();
         f(&mut self.driver, &mut out);
-        let ended = self.output.as_ref().map(|o| o.take_ended()).unwrap_or_default();
+        // No device: the clock stands in for the SPU's end flags, so one-shots end by their length.
+        let ended = match &self.output { Some(o) => o.take_ended(), None => self.driver.clock.advance() };
         let reverb_depth = self.driver.update(&mut out, &ended);
         // `PS2_SetupReverb`'s EVOL depth (the reverb send level), written to the output [M sound.md §5.5].
         out.push(Cmd::Reverb { depth: reverb_depth });
@@ -884,7 +888,7 @@ impl Sound {
             out.push(Cmd::MusicGain(p.gain(self.driver.music_master, self.driver.ducker_current, self.driver.fade_music_volume)));
         }
         if let Some(c) = &self.captured { c.lock().unwrap().extend(out.iter().cloned()); }
-        if let Some(o) = &self.output { o.send(out); }
+        match &self.output { Some(o) => o.send(out), None => self.driver.clock.apply(&out) }
     }
 
     /// The pause page's sound hold: `MenuManager_Create` with `pause_sound` runs `SFXPause` (op 9) +
@@ -908,7 +912,7 @@ impl Sound {
     pub fn set_paused(&mut self, paused: bool) {
         let mut out = Vec::new();
         self.driver.set_paused(paused, &mut out);
-        if let Some(o) = &self.output { o.set_paused(paused); o.send(out); }
+        match &self.output { Some(o) => { o.set_paused(paused); o.send(out); } None => self.driver.clock.apply(&out) }
     }
 }
 
