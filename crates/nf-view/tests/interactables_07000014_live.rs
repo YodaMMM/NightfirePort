@@ -358,7 +358,23 @@ fn the_east_wing_fusebox_cuts_through_the_laser_and_the_e_is_inert() {
     }
     assert!(stood, "a stance inside the Laser's range exists [L weapon_data 0x4E +0x1C]");
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() }, false); }
-    // The cut: steer the crosshair at the visible cable and hold fire (walkreal's burn rule).
+    // The laser fully UP before the first shot (the fusebox_geometry pattern): the switch
+    // request only lands when idle, and firing mid-raise pins the view pitch at the pre-aim
+    // value through the raise's whole play (the raise-script finding). 40 fixed ticks raced
+    // the switch; the wait rides the weapon state instead.
+    for _ in 0..200 { if w.scene.sim.as_ref().unwrap().gun.weapon == 0x4e { break; } w.tick(nf_game::player::Input::default(), false); }
+    assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x4e, "the Laser equips [D 0x05000043]");
+    // The cut (the fusebox_geometry_07000014 recipe, measured on this level): the shot's ray
+    // runs from the HEAD [M Player_WeaponInitBullet 0x1a4bf0:152-159 — Player_GetHeadPos
+    // through Player_GetAimingPoint], not the eye; the player's aim IS the view — bond.yaw/pitch
+    // set DIRECTLY (steering through aim-mode inputs feeds the pad's free-aim cursor, which
+    // saturates at [-0.296,+0.4] within 60 ticks and never relaxes [M scene.rs step_bond] — the
+    // measured crosshair rode a 0.228 rad west-up offset for every shot); and the shot is a HIP
+    // shot with plain input (with the aim bit set the laser's raise script pins the view pitch
+    // through the raise's whole play). The pitch is the asin form — asin(dy/len) = atan(dy/horiz),
+    // the view's own slope convention; the old atan(dy/len) (the helper's formula) under-angles
+    // this steep downward stance shot (asin(0.5)=0.524 vs atan(0.5)=0.464 — ~0.12 u low at 2 u),
+    // off the thin wire slab. The miss-delta convergence below is unchanged.
     let mut delta = [0.0f32; 3];
     let start = w.total_ticks;
     loop {
@@ -369,11 +385,20 @@ fn the_east_wing_fusebox_cuts_through_the_laser_and_the_e_is_inert() {
         if want_on { break; }
         assert!(w.total_ticks - start < 600, "the laser cut never wrote ch {want:#x} [M 0x1adfe8:88-123]");
         {
-            let sim = w.scene.sim.as_ref().unwrap();
             let t = [wire[0] + delta[0], wire[1] + delta[1], wire[2] + delta[2]];
-            let s = w.scene.sim.as_mut().unwrap();
-            aim(s, t);
+            let sim = w.scene.sim.as_mut().unwrap();
+            // THE SHOT'S RAY RUNS FROM THE HEAD [M 0x1a4bf0:152-159]; the head sits 0.45 under
+            // the eye and an eye-anchored aim pitched the 06 cut's crosshair 0.26 rad low (the
+            // measured beam crossing y -1.056 vs the slab's -0.728..-0.503).
+            let eye = sim.bond.head();
+            let d = [t[0] - eye[0], t[1] - eye[1], t[2] - eye[2]];
+            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
+            sim.bond.yaw = d[0].atan2(d[2]);
+            sim.bond.pitch = (d[1] / len).asin() / std::f32::consts::FRAC_PI_2;
         }
+        // HIP fire with plain input (no aim bit — the raise pin): the walker's tick_fire is the
+        // same step_bond(input, true, …) the fusebox_geometry loop uses, plus the walker's
+        // bookkeeping the asserts read.
         w.tick_fire(nf_game::player::Input::default());
         // The round's miss against the wire's world slab shifts the aim.
         let round = w.scene.sim.as_ref().unwrap().drones.player_bullets.get(n0)

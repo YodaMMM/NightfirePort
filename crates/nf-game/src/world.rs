@@ -554,10 +554,19 @@ pub struct CollisionWorld {
     gravity_y: f32,
     /// Each shape's glist flags (`MapObject::flags`, `celglist+0x44`), keyed like `shapes`.
     shape_flags: std::collections::HashMap<u32, u32>,
+    /// The objects' glist flags words (celglist+0x44 = the entity-params payload +4 [M
+    /// `parsemap_block_entity_params` 0x1d1508 — the runtime record's +0x44 dword]), keyed like
+    /// `shapes` (real hashcodes and the anonymous `(map, object)` synthetic keys). This is the
+    /// word `Control_SetGList` 0x134960:11 copies into `obj+0xF0` — the pick's gate word
+    /// (`Collide_PickObj` 0x1eae80's mask, the per-cel walk's 0x3000 pre-filter).
+    glist_flags: std::collections::HashMap<u32, u32>,
     /// The cel scope (`build_scoped`): when set, the actor queries (`capsule_push`, the floor ray,
     /// the take ray) test only the cels the game's straddle walk keeps — `Collide_StraddleCels`
     /// 0x1eac98 via `Intersect_Portal` 0x1ea7b8, cap 0x7e cels, the start cel always kept.
     scope: Option<ScopeData>,
+    /// Static only: per pushed instance (the `owners` ordinal), whether it is CEL geometry (the
+    /// placement flags' 0x8000 [M 0x1d1998:92]) — the aim ray's filter (aim-snap-objects).
+    aim_pick: Vec<bool>,
 }
 
 /// The triangle's unit normal (= +cross(v1−v0, v2−v0), the stored-plane orientation the port's
@@ -1085,6 +1094,16 @@ fn seg_tri_hit(from: V3, to: V3, t: &[V3; 3]) -> bool {
 /// test [M Intersect_RayGeom 0x10a8c8:168: `n·dir >= 0` skips the triangle]) — the same arithmetic
 /// `segment_in_sets_drop_pass` inlines, as a shared body so the scoped and flat bullet walks agree
 /// term for term.
+/// Whether the aim ray (`Collide_RayIntersect` 0x1ec690 with HITTEST+0x98 = 0x20a, or 0x208 for a
+/// record with +0x6C & 0x800) drops a node hit whose nearest triangle carries surface byte `mat`
+/// [M Collide_Intersect 0x1ebaa8 disasm 0x1ebf78-0x1ec000]: glass (byte & 0x3f == 0x10) under
+/// bit 0x2, and the pass bit under bit 0x8 — the node word's 0x40 (`node_pass`), the byte's 0x40,
+/// and the byte's 0x80 (its `movn` at 0x1ebf94 sits in the delay slot of the bit-0x1 branch, so
+/// it always runs).
+pub(crate) fn aim_drops(node_pass: bool, mat: u8, glass: bool) -> bool {
+    node_pass || mat & 0xc0 != 0 || glass && mat & 0x3f == 0x10
+}
+
 pub(crate) fn ray_tri_t(from: V3, d: V3, t: &[V3; 3]) -> Option<f32> {
     let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
     if dot(cross(e1, e2), d) >= 0.0 { return None; } // back face [M 0x10a8c8:168]
@@ -1126,6 +1145,8 @@ impl CollisionWorld {
     pub fn build_scoped(level: &Level, instances: &[Instance], graph: Option<ScopeGraph>) -> CollisionWorld {
         let mut stat = Geo::default();
         let mut missile = Geo::default();
+        // Per pushed stat instance: is it CEL geometry (the 0x8000 flag) — the aim ray's filter.
+        let mut stat_aim_pick: Vec<bool> = Vec::new();
         // Per pushed object: its own runtime cel (the pushed ordinal — see the doc above).
         let mut obj_cell: Vec<Option<u32>> = Vec::new();
         for inst in instances {
@@ -1167,6 +1188,14 @@ impl CollisionWorld {
             if graph.is_some() {
                 obj_cell.push(Some(obj_cell.len() as u32));
             }
+            // aim-snap-objects: the game's RAY pick (Collide_RayIntersect 0x1ec690 -> Collide_Pick
+            // 0x1eb320's cel walk) only ever sees CEL geometry — placements whose flags word
+            // carries 0x8000 got the runtime cel [M parsemap_block_map_data_static 0x1d1998:92].
+            // The doors (kind 0xdb) and the breakable windows carry NO 0x8000 — they never had a
+            // static cel, so the level walk never sees them (the doors join the pick as cel-linked
+            // OBJECTS instead: `Drones::aim_snap`'s door stage). The port's stat fold includes them
+            // (the flight's door stops ride it), so the aim query needs the per-instance flag.
+            stat_aim_pick.push(inst.placement.flags & 0x8000 != 0);
             stat.push_kept(c.triangles_with_material().into_iter().map(|(t, m)| (t.map(|p| transform(&inst.matrix, p)), m)), node_pass);
         }
         // Index collision shapes by hashcode, AND by (map,object) packed into a synthetic key for objects whose
@@ -1175,7 +1204,9 @@ impl CollisionWorld {
         let mut shapes: HashMap<u32, Vec<[V3; 3]>> = HashMap::new();
         let mut shape_mats: HashMap<u32, Vec<u8>> = HashMap::new();
         let mut shape_flags: HashMap<u32, u32> = HashMap::new();
+        let mut glist_flags: HashMap<u32, u32> = HashMap::new();
         for (&h, &(m, o)) in &level.by_hash {
+            glist_flags.insert(h, level.maps[m].objects[o].flags);
             if let Some(c) = level.maps[m].objects[o].collision.as_ref() {
                 shapes.insert(h, c.triangles());
                 shape_flags.insert(h, level.maps[m].objects[o].flags);
@@ -1186,8 +1217,9 @@ impl CollisionWorld {
         for (m, map) in level.maps.iter().enumerate() {
             for (o, obj) in map.objects.iter().enumerate() {
                 if obj.hashcode == u32::MAX {
+                    let key = 0x8000_0000 | ((m as u32) << 16) | o as u32;
+                    glist_flags.insert(key, obj.flags);
                     if let Some(c) = obj.collision.as_ref() {
-                        let key = 0x8000_0000 | ((m as u32) << 16) | o as u32;
                         shapes.insert(key, c.triangles());
                         shape_flags.insert(key, obj.flags);
                         shape_mats.insert(key, c.triangles_with_material().into_iter().map(|t| t.1).collect());
@@ -1212,8 +1244,12 @@ impl CollisionWorld {
         });
         let gravity_y = if level.main_map().is_some_and(|m| level.maps[m].placements.iter()
             .any(|p| p.flags & 0xff == 0x24 && p.params.iter().any(|&(k, v)| k == 3 && v == 2))) { 0.0 } else { -9.8 };
-        CollisionWorld { stat, missile, dynamic: Default::default(), shapes, shape_mats, gravity_y, shape_flags, scope }
+        CollisionWorld { stat, missile, dynamic: Default::default(), shapes, shape_mats, gravity_y, shape_flags, glist_flags, scope, aim_pick: stat_aim_pick }
     }
+
+    /// The glist flags word (celglist+0x44) of the object a hash resolves to — the port's
+    /// `obj+0xF0` source [M 0x1d1508 / 0x134960:11]. `None`: the hash is not a level object.
+    pub fn glist_flags(&self, hash: u32) -> Option<u32> { self.glist_flags.get(&hash).copied() }
 
     /// Re-keys the cel-scope buckets by an explicit per-instance attribution — the collision side
     /// of the game's per-cel attribution (`build_link_objects_to_rooms` 0x1c9150 hangs every
@@ -1350,7 +1386,7 @@ impl CollisionWorld {
     pub fn from_triangles(tris: Vec<[V3; 3]>) -> CollisionWorld {
         let mut stat = Geo::default();
         stat.push(tris.into_iter().map(|t| (t, 0)));
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), scope: None }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new() }
     }
 
     /// One object holding these world-space triangles with surface bytes and per-triangle
@@ -1360,7 +1396,7 @@ impl CollisionWorld {
         let pass = tris.iter().map(|(_, _, p)| *p).collect::<Vec<_>>();
         stat.push_flags(tris.into_iter().map(|(t, m, _)| (t, m)), false);
         for (k, p) in pass.into_iter().enumerate() { stat.pass[k] = p; }
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), scope: None }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new() }
     }
 
     /// `WldGravity.y`, see the field.
@@ -1611,6 +1647,41 @@ impl CollisionWorld {
     /// flight leave the bottom-terminal cabin through its windows.
     pub fn segment_flight_scoped(&self, cell: Option<usize>, from: V3, to: V3, glass: bool) -> Option<f32> {
         self.flight_scoped_impl(cell, from, to, glass)
+    }
+
+    /// The AIM-RAY twin (aim-snap-objects): the cel-scoped flight query that additionally skips
+    /// the stat runs owned by NON-cel instances (the placement flags' 0x8000 gate [M
+    /// parsemap_block_map_data_static 0x1d1998:92 — the doors/breakable-windows never had a
+    /// static cel; Collide_RayIntersect's pick walks cels, so it never sees them]). The dynamic
+    /// set is not in the scoped walk anyway.
+    pub fn segment_aim_scoped(&self, cell: Option<usize>, from: V3, to: V3, glass: bool) -> Option<f32> {
+        let Some(cell) = cell else { return self.flight_scoped_impl(cell, from, to, glass) };
+        let in_range = self.scope.as_ref().is_some_and(|sc| cell < sc.graph.cells.len());
+        if !in_range { return self.flight_scoped_impl(Some(cell), from, to, glass); }
+        let Some(runs) = self.scoped_runs(cell, &mut Self::ray_portal_hit(from, to)) else { return self.flight_scoped_impl(Some(cell), from, to, glass) };
+        let d = sub(to, from);
+        let stat = &self.stat;
+        // Per NODE (the pushed instance), not per triangle: `Collide_Intersect` 0x1ebaa8 refines a
+        // picked node with `Intersect_RayGeom` 0x10a8c8, which keeps only the node's NEAREST
+        // front-facing triangle — the per-triangle `Collide_Filter` runs only on HITTEST+0x9a & 0x10,
+        // and the ray query stores only +0x94 and +0x98 [M disasm 0x1ec738/0x1ec750] — and then
+        // drops the whole node hit on that triangle's byte (`aim_drops`). A glass or pass triangle
+        // in front of a solid one of the same node hides the solid one from the snap.
+        let mut nodes: HashMap<u64, (f32, usize)> = HashMap::new();
+        for r in &runs {
+            // the run's owner instance (post-chunk index -> the pushed instance ordinal)
+            let owner = stat.owners.get(*r as usize).copied();
+            if owner.and_then(|si| self.aim_pick.get(si as usize)).is_some_and(|p| !*p) { continue; }
+            let key = owner.map_or(1u64 << 40 | *r as u64, u64::from);
+            let o = &stat.objects[*r as usize];
+            for k in o.tris.clone() {
+                if let Some(tt) = ray_tri_t(from, d, &stat.tris[k]) {
+                    let e = nodes.entry(key).or_insert((tt, k));
+                    if tt < e.0 { *e = (tt, k); }
+                }
+            }
+        }
+        nodes.into_values().filter(|&(_, k)| !aim_drops(stat.pass[k], stat.mats[k], glass)).map(|(t, _)| t).min_by(f32::total_cmp)
     }
 
     /// The flat twin of [`CollisionWorld::segment_flight_scoped`] (no cel scope).
@@ -3319,7 +3390,7 @@ mod tests {
         let n = tris.len();
         let stat = Geo { mats: vec![0; n], tris, objects: vec![Object { lo: [-10.0; 3], hi: [10.0; 3], tris: 0..n }], oneway: vec![false; n], groups: Vec::new(), owners: Vec::new(), grid: None,
             pass: vec![false; n] };
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), scope: None }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new() }
     }
 
     /// fix-safe08b: the straddle walk. A wall assigned to an exterior cell with NO portal from the
@@ -3361,6 +3432,8 @@ mod tests {
             stat: Geo { tris: stat.tris.clone(), mats: stat.mats.clone(), oneway: stat.oneway.clone(), objects: stat.objects.clone(), groups: Vec::new(), owners: Vec::new(), grid: None, pass: stat.pass.clone() },
             missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
             scope: Some(ScopeData { graph, cells, always: always.clone() }),
+            aim_pick: Vec::new(),
+            glist_flags: Default::default(),
         };
         let w = mk(graph.clone(), scope_cells.clone());
         // The capsule stands in cell 0, 1 unit west of the wall: the flat world pushes it out; the
@@ -3387,6 +3460,8 @@ mod tests {
         let w3 = CollisionWorld {
             stat: stat2, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
             scope: Some(ScopeData { graph: ScopeGraph { cells: vec![([-8.0; 3], [8.0; 3])], portals: Vec::new(), room: vec![true] }, cells: vec![vec![0]], always: Vec::new() }),
+            aim_pick: Vec::new(),
+            glist_flags: Default::default(),
         };
         assert!(w3.segment_actor([0.0, 0.5, 0.0], [0.0, 0.5, 4.0]).is_some(), "flat: the mat-0xd tri blocks");
         assert!(w3.segment_take_scoped(Some(0), [0.0, 0.5, 0.0], [0.0, 0.5, 4.0]).is_none(), "the take's 0x721 filter skips the mat-0xd tri");
@@ -3427,6 +3502,8 @@ mod tests {
             stat: Geo { tris: stat.tris.clone(), mats: stat.mats.clone(), oneway: stat.oneway.clone(), objects: stat.objects.clone(), groups: Vec::new(), owners: Vec::new(), grid: None, pass: stat.pass.clone() },
             missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
             scope: Some(ScopeData { graph, cells, always: always.clone() }),
+            aim_pick: Vec::new(),
+            glist_flags: Default::default(),
         };
         let ray = ([1.5, 1.0, 0.0], [3.5, 1.0, 0.0]);
         let w = mk(graph.clone(), scope_cells.clone());
@@ -3450,6 +3527,8 @@ mod tests {
         let w3 = CollisionWorld {
             stat: stat3, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
             scope: Some(ScopeData { graph: ScopeGraph { cells: vec![([-8.0; 3], [8.0; 3])], portals: Vec::new(), room: vec![true] }, cells: vec![vec![0, 1]], always: Vec::new() }),
+            aim_pick: Vec::new(),
+            glist_flags: Default::default(),
         };
         assert_eq!(w3.segment_bullet_scoped(Some(0), [-1.0, 1.0, 0.0], [2.0, 1.0, 0.0]), w3.segment_bullet([-1.0, 1.0, 0.0], [2.0, 1.0, 0.0]),
             "the scoped walk keeps the flat walk's 0x40 drop: the fudge plane passes, the card stops");

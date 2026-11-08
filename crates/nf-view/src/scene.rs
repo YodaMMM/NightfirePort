@@ -5500,7 +5500,11 @@ impl Sim {
                             match (fp_model && !excluded && !zoomed_scope && flags68 & 0x10000 != 0).then(|| self.view_datum(0)).flatten() {
                                 Some(d0) => {
                                     let o = [(camera[0] + d0[0]) * 0.5, (camera[1] + d0[1]) * 0.5, (camera[2] + d0[2]) * 0.5];
-                                    let aim_pt = [camera[0] + dir[0] * 256.0, camera[1] + dir[1] * 256.0, camera[2] + dir[2] * 256.0];
+                                    // The aiming point is snapped to whatever the crosshair ray hits, so the round
+                                    // converges on the crosshair [M 0x1a4bf0:154-164; mask 0x20a, 0x208 with +0x6C & 0x800].
+                                    let aim_pt_raw = [camera[0] + dir[0] * 256.0, camera[1] + dir[1] * 256.0, camera[2] + dir[2] * 256.0];
+                                    let flags6c = u32::from_le_bytes(w[0x6c..0x70].try_into().unwrap());
+                                    let aim_pt = self.drones.aim_snap(&d, camera, aim_pt_raw, flags6c & 0x800 == 0);
                                     let v = [aim_pt[0] - o[0], aim_pt[1] - o[1], aim_pt[2] - o[2]];
                                     let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
                                     (o, [v[0] / l, v[1] / l, v[2] / l])

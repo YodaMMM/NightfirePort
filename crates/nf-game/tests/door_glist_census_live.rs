@@ -38,7 +38,7 @@ fn parse_at(iso: &IsoImage, off: u64, size: u64) -> Level {
 
 /// The EXACT closure `drone.rs` hands `Doors::create` (the resolution under test), plus a reason
 /// tag for a `None` result.
-fn resolve(level: &Level, m: usize, p: &nf_formats::placement::Placement) -> (Option<(u32, [f32; 3], f32)>, &'static str) {
+fn resolve(level: &Level, m: usize, p: &nf_formats::placement::Placement) -> (Option<(u32, [f32; 3], f32, u32)>, &'static str) {
     if p.by_hash() {
         match level.by_hash.get(&p.hashcode) {
             None => (None, "by-hash miss (game: hashtable_getitem NULL -> no create)"),
@@ -47,7 +47,7 @@ fn resolve(level: &Level, m: usize, p: &nf_formats::placement::Placement) -> (Op
                 if o.hashcode == 0 {
                     (None, "by-hash hit, object hashcode 0")
                 } else {
-                    (Some((o.hashcode, o.centre, o.radius)), "")
+                    (Some((o.hashcode, o.centre, o.radius, o.flags)), "")
                 }
             }
         }
@@ -58,11 +58,11 @@ fn resolve(level: &Level, m: usize, p: &nf_formats::placement::Placement) -> (Op
                 // The create site's anonymous-object branch: hashcode u32::MAX -> the synthetic
                 // CollisionWorld key (0x80000000 | map<<16 | index) — never 0.
                 if o.hashcode == u32::MAX {
-                    (Some((0x8000_0000 | ((m as u32) << 16) | p.index as u32, o.centre, o.radius)), "")
+                    (Some((0x8000_0000 | ((m as u32) << 16) | p.index as u32, o.centre, o.radius, o.flags)), "")
                 } else if o.hashcode == 0 {
                     (None, "by-index hit, object hashcode 0 (game: glist = the table entry itself, non-NULL)")
                 } else {
-                    (Some((o.hashcode, o.centre, o.radius)), "")
+                    (Some((o.hashcode, o.centre, o.radius, o.flags)), "")
                 }
             }
         }

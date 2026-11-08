@@ -155,6 +155,29 @@ fn draw(w: &mut Walker, id: u8) {
     assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, id, "the switch to weapon {id:#x} did not take");
 }
 
+/// `draw` with the pressed-edge retries: a switch request fired into a live fire script or
+/// switch anim is DROPPED — the machine queues only on the pressed edge from idle [M
+/// 0x1a24c8:113-152's pressed-edge law; the run-5 rim draw followed shoot_mine's fire window
+/// and timed out]. A player presses the wheel again. Each attempt: one press, the draw wait,
+/// and the check — six attempts cap a wheel the game refuses for a reason the walk should not
+/// paper over (the weapon not owned).
+fn draw_persist(w: &mut Walker, id: u8, label: &str) {
+    for _attempt in 0..6 {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.gun.weapon == id && sim.gun.switch_state == 0 { return; }
+        }
+        w.tick(nf_game::player::Input { switch_to: Some(id), ..Default::default() }, false);
+        for _ in 0..90 {
+            let (wpn, st) = { let s = w.scene.sim.as_ref().unwrap(); (s.gun.weapon, s.gun.switch_state) };
+            if wpn == id && st == 0 { break; }
+            w.tick(nf_game::player::Input::default(), false);
+        }
+    }
+    panic!("{label}: the switch to weapon {id:#x} did not take in 6 presses (gun {:#x})",
+        w.scene.sim.as_ref().unwrap().gun.weapon);
+}
+
 /// Walk the nav route toward `dest` node by node until `aim` is in sight (no world hit on the eye
 /// line) within `max_d`.
 fn nav_until_clear(w: &mut Walker, dest: [f32; 3], aim: [f32; 3], max_d: f32, label: &str) {
@@ -259,6 +282,20 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
         let p = sim.bond.pos;
         assert!(p[0] > 93.0 && p[0] < 96.0 && p[1] > 40.0 && p[1] < 43.0 && p[2] > -2.0 && p[2] < 2.0,
             "the cold start spawns on the silo gantry (#1 [D]), got {p:?}");
+    }
+    // OPT-IN pre_throw_stands (the d2 Agent run ONLY — the field doc in common/damage_log.rs):
+    // the spawner-released hostiles (the west-room grenadier pair spawns during the threshold
+    // leg) are answered the tick after the release, so the kill lands before the guard's first
+    // throw — the base ledger's kills always came after it (the thrown grenades outlived their
+    // throwers for −15.0 + −17.5 [L the aim-last-seven §3 ledger]). The d1 real-damage and
+    // top-up walks keep their pinned timelines; the d3 run is carried by its own report.
+    // switch_dry rides with it: the run-1 ledger fought the west room on the P2K's last rounds
+    // (clip 1-3, spare 0-9 [L the 2026-11-07 run-1 trace, fight#18/fight#10 t0]) — the fights'
+    // master give-up on a dry mag left #10 at full hp; a player whose mag runs dry mid-fight
+    // cycles to the next loaded firearm (the field doc: the 02/03 00agent idiom).
+    if difficulty == 2 && !w.tops_up() {
+        w.dmg.pre_throw_stands = true;
+        w.dmg.switch_dry = true;
     }
     w.wait_enabled(3000, "the silo arrival");
     w.wait(120);
@@ -533,6 +570,17 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     walk_plain(&mut w, [12.8, 41.4, 71.2], 0.35, "east of door[29]'s rim");
     let d = shoot_mine(&mut w, 526, [11.3, 40.70, 71.18], "the door[29] ankle beam #526");
     assert!(d > 1.5, "#526 is shot from east of the rim, not stepped on ({d:.2} u)");
+    // The fights' gun (d2 only): the pre-throw fights spend the P2K's whole 48-round pool on
+    // the crossing and plank kills (the run-3 ledger: clip 0 spare 0 at the #447 fence shot —
+    // the walk died of thirst), and the walk-over take armed the dropped 0x1a at the crossing
+    // whose leftover ~17 rounds sit unused in the wheel. The 0x1a round is ALSO the cheap kill:
+    // a direct hit detonates its blast AT the guard (80 raw, the falloff at d 0) — one round
+    // drops any hp-20 grenadier where the P2K's 3.5 needs six [L the run-3 fight taps; M the
+    // 0x1a record damage 3.5 + the blast]. A player pushes the grenadier room with the
+    // grenade launcher, not a dry pistol. Real wheel request, no writes (the draw no-ops if
+    // the cascade left the 0x1a unowned). The pressed-edge retries: the request follows the
+    // #526 shot's live fire script — a single press is dropped there [M 0x1a24c8:113-152].
+    if difficulty == 2 && !w.tops_up() { draw_persist(&mut w, 0x1a, "the west-room gun"); }
     // REAL-HEALTH TACTIC (level-15-agent-doors): the west-room grenadiers are answered NOW, from
     // east of the rim — the measured v1 run fought them from INSIDE the west room (after
     // route_c's threshold/through legs) and #11's grenade was already in flight when it died:
@@ -624,8 +672,25 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // #5 (port index 5 at the d1 roster; placement 733's spot (6.25, 41.45, 35.69) at d2) sits
     // 9.8-13.6 u south through the open leaf.
     w.use_door(50, "door[50] for the 733 line");
-    for _ in 0..40 { w.tick(nf_game::player::Input::default(), false); }
-    if difficulty >= 2 {
+    // The d2 Agent run settles 12 ticks, not 40: the run-6 ledger lost the great-hall race by
+    // ~20-30 ticks — #5's grenade was already airborne when the pre-shoot's 0x1a round landed
+    // (−27.7 at 8580, the killing hit [L the run-6 death line]); the leaf clears the shot line
+    // in ~25 ticks of its swing [M door.rs update's open arm] and every idle tick hands the
+    // guard's throw cycle a head start. The d1/top-up walks keep the pinned 40.
+    if difficulty == 2 && !w.tops_up() {
+        for _ in 0..12 { w.tick(nf_game::player::Input::default(), false); }
+    } else {
+        for _ in 0..40 { w.tick(nf_game::player::Input::default(), false); }
+    }
+    if difficulty == 2 && !w.tops_up() {
+        if let Some(di) = agent_drone_near(&w, [6.25, 41.45, 35.69], 6.0) {
+            // The pre-throw stand (the 0c sniper_stands pattern minus the aim bit — the field
+            // doc in common/damage_log.rs), not shoot_bounded: the stand holds the doorway and
+            // taps the 0.01-rad gate the tick the line clears — the flank machinery's
+            // sidesteps would walk Bond off the threshold the race is run from.
+            w.stand_and_fire(di, 900);
+        }
+    } else if difficulty >= 2 {
         if let Some(di) = agent_drone_near(&w, [6.25, 41.45, 35.69], 6.0) {
             w.shoot(di, "the great-hall grenade guard (placement 733) from the door[50] threshold");
         }
@@ -694,14 +759,17 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     w.wait(10);
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        // The neighbours go with the fence — by the game's own causes. The measured d1 run: a
-        // corridor guard's own contact (MINE_DRONE 4) set a neighbour off before Bond's first
-        // pull and the case-0x4B chain took #447 [M Mine_Update 0x17c930's contact walk;
-        // Explode_Propagate 0x17c518] — the fence's job (down before the crossing, never on
-        // BOND's body — pinned below) is what the walk needs, not a particular trigger order.
-        for plc in [448usize, 449] {
+        // The fence clears on the ONE round from 11.1 u; no body contact anywhere. The cause
+        // order follows the shot's muzzle: the P2K round (the d1/top-up fence gun) takes the
+        // #447 beam first and the neighbours go on its case-0x4B blast [M 0x17c518]; the d2
+        // fights' gun (the drawn 0x1a — the P2K pool is spent by the west room) is a GRENADE
+        // round whose direct mirrored contact took the #448 diagonal first [L the run-7 shot:
+        // #447 cause 3 blast, #448 cause 2 bullet] and the rest went on the case-0x4B chain.
+        // Either way the proof stands: one round from range, the whole fence gone.
+        for plc in [447usize, 448, 449] {
             let m = &sim.drones.mines[mine_idx(&w, plc)];
-            assert!(m.exploded, "#{plc} goes with the fence (cause {})", m.cause);
+            assert!(m.exploded && m.cause != nf_game::worldobj::MINE_BODY,
+                "#{plc} clears on the range shot (exploded {}, cause {})", m.exploded, m.cause);
         }
     }
     w.walk_to(Wp::new(0.0, 41.4, 23.0).r(1.0), "door[42] through");

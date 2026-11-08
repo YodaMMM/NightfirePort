@@ -15,6 +15,25 @@ thread_local! {
     /// thread only (libtest runs each test on its own thread, so the top-up walk, the
     /// eastroute replay and the upward-shot proofs on master's plain behaviour are untouched).
     static YARD_AIMED_STANDS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `with_far_sniper_stands`'s switch (the real-health walks only): the return-fire fights
+    /// answer the level's FAR snipers (#39 0x5000093 and #20 0x5000087, both weapon 0x1e,
+    /// hp 10, at d 61-90 [L the death ledgers]) — the shooters window opens to their stand-off
+    /// (95, 13) and the fights run the still-gate aimed stand (`dmg.sniper_stands`, the
+    /// yard_stand_aimed shape). The flags ride the walk from the FIRST leg: the snipers open
+    /// up on the band approach INSIDE the prologue (the measured 13461 death), so a flag
+    /// block after `walk_spawn_to_the_band_at` returns never runs. Off = master behaviour
+    /// (the plain 20 u window, the plain stands) for every other caller.
+    static FAR_SNIPER_STANDS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run a walk with the far-sniper fights enabled (OPT-IN, the real-health walks — see the
+/// thread-local's doc). The plain master replay and the probe tests keep master behaviour.
+pub fn with_far_sniper_stands<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { FAR_SNIPER_STANDS.with(|c| c.set(false)); } }
+    FAR_SNIPER_STANDS.with(|c| c.set(true));
+    let _reset = Reset;
+    f()
 }
 
 /// Run a walk with the yard's deck-sniper stands enabled (OPT-IN, level-0c-yard-climb-real-
@@ -980,6 +999,14 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
 pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
     // Legs 1-6 (unchanged — now shared with the yard-deck-sentry test).
     let mut w = walk_spawn_to_the_yard_ladder_base_at(iso, difficulty);
+    // The far-sniper opt-in (with_far_sniper_stands, the real-health walks only): the flags
+    // ride the walk from the first leg — the d 61-90 0x1e snipers open up on the band
+    // approach INSIDE this prologue (the measured 13461 death), so a block after the return
+    // never runs. See the thread-local's doc.
+    if FAR_SNIPER_STANDS.with(|c| c.get()) {
+        w.dmg.shooters_window = Some((95.0, 13.0));
+        w.dmg.sniper_stands = true;
+    }
     // Leg 6b (OPT-IN, the yard's deck snipers, level-0c-yard-climb-real-health-2): on real
     // health the deck snipers (weapon 0x1e, -16 a hit) are the walk's killer chain — outside
     // the plain fights' 7.5 u vertical reach, never answered — so the stand kills them AIMED

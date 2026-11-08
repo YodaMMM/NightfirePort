@@ -222,6 +222,25 @@ pub struct Door {
     pub sph_centre: V3,
     /// The object's hashcode (the drawn mesh and the collision shape).
     pub glist: u32,
+    /// The object's TRUE `obj+0xF0` flags word. Doors are created by `Door_Create` 0x136100
+    /// (plain `control_create_object` — memset 0, no CreateObjEx create param) whose
+    /// `Control_SetGList` 0x134960:11 writes `obj+0xF0 = glist+0x44 | (old & 0x30008000)`;
+    /// nothing else touches the word on the door path, so obj+0xF0 = the glist record's +0x44
+    /// word exactly. That word is the entity-params payload +4 [M `parsemap_block_entity_params`
+    /// 0x1d1508: `pCurrCelList[0x11] = *(int *)(FileNextBlock + 8)` — the runtime record's
+    /// +0x44 dword; the port's `MapObject.flags`], parsed from the disc per object.
+    /// `Bullet_CollisionHandler` 0x12ce80's object-hit arm passes any hit whose object carries
+    /// obj+0xF0 & 0x60 (the andi 0x60 at 0x12cf18) — the flight's object pass the AIM ray's
+    /// pick does not apply as a pass (the same word instead SKIPS the object in
+    /// `Collide_PickObj` 0x1eae80's mask, see the aim stage). Live anchors [L the 0700001b
+    /// audits]: the whole solar panel reads f0 0x81, the panel pieces 0xc1 — the disc words
+    /// match both (nf-formats' glist_flags_probe).
+    pub f0: u32,
+    /// `Bullet_CollisionHandler` 0x12ce80's object-hit pass: `obj+0xF0 & 0x60 != 0` [M the
+    /// andi 0x60 at 0x12cf18] — the TRUE word (`f0`), not the placement flags stand-in this
+    /// field read before (the placement word is the bare kind 0xdb, whose 0x40 bit made the
+    /// stand-in true for every door).
+    pub bullet_pass: bool,
 }
 
 impl Door {
@@ -377,7 +396,7 @@ impl Doors {
     pub fn create(
         placements: &[Placement],
         path_blocks: &[&[u8]],
-        mut object: impl FnMut(&Placement) -> Option<(u32, V3, f32)>,
+        mut object: impl FnMut(&Placement) -> Option<(u32, V3, f32, u32)>,
     ) -> Doors {
         let mut list = Vec::new();
         for &pi in door_placements(placements).iter() {
@@ -390,7 +409,7 @@ impl Doors {
             let rate = (p.extra[7] >> 16) as u16;
             let index = (p.extra[8] & 0xffff) as usize;
             let keys = if count != 0 { path_blocks.get(index).map(|b| parse_keys(b)) } else { None };
-            let (glist, centre, radius) = object(p).unwrap_or((0, p.translation, 0.0));
+            let (glist, centre, radius, f0) = object(p).unwrap_or((0, p.translation, 0.0, 0));
             // Door_Create's pre-spline seed matrix: CCO(0) → View_RotTransMatrix; the swing/sliding
             // key paths overwrite obj+0x90 from Spline_Interp afterwards [M 0x136100:21,83-91].
             let m = view_rot_trans_matrix(p.rotation, p.translation);
@@ -412,6 +431,10 @@ impl Doors {
                 dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
                 matrix: m, inv_closed: [[0.0; 4]; 4],
                 pos: p.translation, sph: (transform(&m, centre), radius), sph_centre: centre, glist,
+                f0,
+                // obj+0xF0 = glist+0x44 (no create param on the Door_Create path) [M 0x134960:11];
+                // the flight's pass rule reads its 0x60 bits [M 0x12cf18].
+                bullet_pass: f0 & 0x60 != 0,
             };
             if d.kind == 0 {
                 // `Door_SetupSwing`: the swing covers half the range, so the speed re-quantises to whole ticks
@@ -1256,6 +1279,8 @@ mod tests {
             matrix: quat_matrix([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0]),
             inv_closed: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             pos: [0.0, 0.0, 0.0], sph: ([0.0, 1.1, 0.0], 1.28), sph_centre: [0.0, 1.1, 0.0], glist: 7,
+            f0: 0,
+            bullet_pass: false,
         });
         doors
     }
@@ -1300,6 +1325,8 @@ mod tests {
             dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
             matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 1.1, 0.0], 1.28), sph_centre: [10.0, 1.1, 0.0], glist: 8,
+            f0: 0,
+            bullet_pass: false,
         });
         let mut ch = channels();
         let mut sounds = Vec::new();
@@ -1330,7 +1357,7 @@ mod tests {
         let mk = |approach: u8| {
             let mut doors = Doors::default();
             doors.list.push(Door {
-                placement: 0, kind: 0, group: 0, ch_open: 0, ch_lock: 0, straddle: false,
+                placement: 0, kind: 0, group: 0, ch_open: 0, ch_lock: 0, straddle: false, bullet_pass: false, f0: 0,
                 snd_open: 285, snd_close: 284, snd_hit: 320, flags: 1, approach, locked_flag: 0,
                 keys: Some(swing_keys()), frames: 2, state: CLOSED, pos01: 0.5, speed: 1.0 / 14.0,
                 dir: 0.0, swing: -1.0, timer: 0, open_timer: 0, msg_shown: false,
@@ -1380,6 +1407,8 @@ mod tests {
             dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
             matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 1.1, 0.0], 1.28), sph_centre: [10.0, 1.1, 0.0], glist: 8,
+            f0: 0,
+            bullet_pass: false,
         });
         let mut ch = channels();
         ch.set(0x12, 1, 1); // 07000011: Lock #177's burn / TouchOnce #283's out channel
@@ -1409,6 +1438,8 @@ mod tests {
             matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             // The create fallback's sphere: the placement translation, radius 0.0.
             inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 0.0, 0.0], 0.0), sph_centre: [10.0, 0.0, 0.0], glist: 0,
+            f0: 0,
+            bullet_pass: false,
         });
         let mut ch = channels();
         // The use point 2.0 out (head + look): inside the old stand-in's 2.5, so the deleted arm
@@ -1436,6 +1467,8 @@ mod tests {
             dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
             matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 1.1, 0.0], 1.28), sph_centre: [10.0, 1.1, 0.0], glist: 8,
+            f0: 0,
+            bullet_pass: false,
         });
         let mut ch = channels();
         // The use point 1.0 from the live sphere centre [10, 1.1, 0]: reach = 1.0 + 1.28 = 2.28 → hit.
@@ -1455,6 +1488,8 @@ mod tests {
                 dir: 0.0, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
                 matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
                 inv_closed: [[0.0; 4]; 4], pos: [k as f32, 0.0, 0.0], sph: ([k as f32, 1.1, 0.0], 1.28), sph_centre: [k as f32, 1.1, 0.0], glist: 9,
+            f0: 0,
+            bullet_pass: false,
             });
         }
         let mut ch = channels();
@@ -1477,6 +1512,8 @@ mod tests {
             speed: 1.0 / 30.0, dir, swing: 0.0, timer: 0, open_timer: 0, msg_shown: false,
             matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             inv_closed: [[0.0; 4]; 4], pos: [10.0, 0.0, 0.0], sph: ([10.0, 1.1, 0.0], 1.28), sph_centre: [10.0, 1.1, 0.0], glist: 8,
+            f0: 0,
+            bullet_pass: false,
         });
         doors
     }
@@ -1574,6 +1611,8 @@ mod world_helper_tests {
             timer: 0, open_timer: 0, msg_shown: false, matrix: [[0.0; 4]; 4],
             inv_closed: [[0.0; 4]; 4], pos: [0.0; 3], sph: ([0.0; 3], 0.0),
             sph_centre: [0.0; 3], glist: 0,
+            f0: 0,
+            bullet_pass: false,
         };
         let mut doors = Doors::default();
         doors.list.push(mk(0x5A)); // a wired lock channel
