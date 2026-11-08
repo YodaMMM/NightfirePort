@@ -12,6 +12,38 @@ is 100.0f/−1.0f/−1.0f/ID [M dis].
 Statuses: **PORTED** (the port plays it — cite), **MISSING** (no port path), **N/A** (MP/driving/
 front-end only). Ported-this-pass items link the test (`crates/nf-game/tests/sound_coverage_live.rs`).
 
+## Re-audit (2026-11-07)
+
+A fresh `jal` scan of ACTION.ELF: 25 `Sound_Play`, 74 `Sound_Play3D`, 29 `Music_Event` sites (128),
+plus the wrappers: 10 `NDrone2_PlaySFX`, 45 speech, 3 `BOT_soundEffect`, 25 `MPSound_Play`. The decompile
+splits many `Sound_Play3D` calls across two lines, so a one-line grep sees 27 of the 74. This section
+overrides the rows below where they differ.
+
+Closed in this pass:
+
+| Site | What was missing | On-foot levels reached |
+|---|---|---|
+| `UpdateMFX_02MayhewA` 0x111ed8, `02MayhewD` 0x112bf8, `03TowerA` 0x113558, `03TowerB` 0x1137b0, `PowerStationA1` 0x113c18, `PowerStationA2` 0x113fc0 | the level half behind the shared exit block; every `Music_Event` these levels post died on the board, so the music stayed on the start section through any fight | 6 (01, 04, 09, 0a, 0c, 0d) |
+| `UpdateMusicalEvents` 0x114e70, the `MusicVars` writes | e[0xa] → count 1 (zone-10 rooms: 01, 06, 07, 12), the -99 row on `Music_Event(2, 2)` (triggers on 01, 03), the row re-seat when the bonus runs out | 5 |
+| `DroneFunc_CheckAlarmRaised` 0x1453a8:34-42 | ch 0x61 posts on every level, not just 05/06 | not counted; mostly masked, the same channel fails the mission |
+| `HUD_UpdateStatusPane` 0x19c310:221,233, `Hint_Update` 0x1b3380:26, `Lock_Update` 0x1ae3d8:368,374 | played 3-D at a fixed point; the game's calls are 2-D `Sound_Play`, so a moving player panned and faded them | all with a banner, hint or scan lock |
+
+Rows below that were stale and are ported: `Player_Update` :121 (the cel zone), `SS_Update` :86,
+`SpaceLaser_Update`, `GunImp_Update`, `Break_Kill`, `SSys_Msg` (the countdown wiring landed separately), `Copter_Update` / `GT_Update` music.
+
+Still without a port counterpart:
+
+| Site | Why it stays | Reach |
+|---|---|---|
+| op 4 kind 6 → `Effect_Create(…, 0xc0)` → `Effect_Body` 0x1cf400:10 | the guards' body-on-the-ground sound (EffectInfo+0x18, half alertness); only Bond's death plays it. A port exists but is held back: headless walks never free EE pool nodes, so the extra nodes move the point where the pool fills, and the 07000001 00-agent walk dies (tick 7682). With an unbounded pool the walk is identical with and without the sound. It lands once the harness frees nodes the way the app does | 20, every level with guards (30 death scripts) |
+| op 4 kind 7, the anim-driven `Bullet_init` 0x12c5a0:273 with the weapon's +0x60 id | 4 commands in one script, 0x06000858 | 07000016 only; what plays that script is not traced |
+| `NDrone2_DSTATE_Interogate` 0x161a40:216,223,240 (0x49, 0x4D, 0x4E) | the 07000005 arm: `DroneFunc_FirstSightState` 0x147c48 returns 0x3C on 07000007 and 07000041 only | 0 |
+| `Light_Update` 0x1cafb8:27 | no 0x4E placement on any level has a flicker period, the arm's gate | 0 |
+| `Hurt_Update` 0x17e5d0:120 | param 3 is 0 or 0xffff on every placement, all levels [D] | 0 |
+| `Lock_Activate` :27-32, `Lock_Unlock` :18, `Lock_Update` :282 | 0xffff on every lock [D] | 0 |
+| `Sub_*`, `MiniSubState_Attack` | no 0x36/0x37 placements on any 07* archive | 0 |
+| `Car_*` | MP arenas only; the drive and fire path is not wired | 0 on foot |
+
 ## Summary
 
 | Class | Sites | Status |
