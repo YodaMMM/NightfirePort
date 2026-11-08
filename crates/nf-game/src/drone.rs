@@ -4014,7 +4014,8 @@ impl Drone {
         // `NDrone2_HitDamage` 0x145558:57-60 (and the explosive arm :129-130): a hit on a team-1
         // drone from the player (+0x2B4 == the player object) logs the accuracy numerator
         // (`PlrStat_LogShotHitEnemy` 0x199840). Outboxed; the tick folds it into the tally.
-        if self.team == 1 { self.hit_log = self.hit_log.saturating_add(1); }
+        // A drone's round stamps +0x2B4 with the drone, which is not the team-1 victim's opponent.
+        if self.team == 1 && self.hit_by_player { self.hit_log = self.hit_log.saturating_add(1); }
         if r.head { self.silent_kill = true; }
         self.health -= r.loss;
         self.last_damage = r.recorded;
@@ -12269,6 +12270,9 @@ pub struct Drones {
     pub health: crate::bullet::PlayerHealth,
     /// Every hit on Bond: (tick, shooting drone, health lost).
     pub player_hits: Vec<(u32, usize, f32)>,
+    /// Every drone round that landed on another drone (`NDrone2_DealWithObjHit` 0x13fff0 case 5):
+    /// (tick, shooting drone, struck drone).
+    pub drone_round_hits: Vec<(u32, usize, usize)>,
     /// The fusebox live-wire hurts on Bond (`Player_Hurt(5.0, …)` at a dying group-1 wire
     /// [M 0x1adfe8:99-101]), counted apart from `player_hits` because blasts also record there
     /// with no drone attacker.
@@ -13121,7 +13125,7 @@ impl Drones {
             if let Some(g) = &mut dr.body_glow { g.owner = i; }
         }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, player_move_local: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), impacts: Vec::new(), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), stats_table: Default::default(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, rng, lights: Default::default(), player_pos: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, player_move_local: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), drone_round_hits: Vec::new(), impacts: Vec::new(), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), stats_table: Default::default(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             // The game's `DAT_00299092` (the shared LOS-probe counter; see the field) — zeroed
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
@@ -15000,31 +15004,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // drones take no damage) and `Collide_PickObj` 0x1eae80:26-30 drops `obj+0xF0 & 0x20`
                 // objects (set by `NDrone2_Enable(0)`) — bullets pass through the frozen drones.
                 if !(self.npc_enabled || self.hold_active) || !dr.present || !dr.enabled || dr.corpse { continue; }
-                let c = [dr.pos[0], dr.pos[1], dr.pos[2]];
-                if seg_point_dist2(b.pos, end, c) > 1.05 * 1.05 * 4.0 { continue; }
-                let fb = crate::damage::first_box_hit(b.pos, ray, &dr.hit_boxes(d));
-                // `NDrone2_Collision` 0x140e90's down branch (+0x2f set [M :65-90]): the shootable
-                // volume is the low sphere — radius 0.3, centre (0.3 − obj+0xa0) above the origin
-                // along the up vector — while a standing guard uses 0.4/0.55 [M 0x140e90:65-90]. The
-                // port's standing volume is the posed bone boxes — the established documented
-                // approximation (the game's two origin-centred standing spheres are what the boxes
-                // refine; the damage tests pin them); a
-                // DOWNED guard's boxes lie along the ground and leave the aimed-at-origin ray
-                // uncovered (a re-tase did nothing), so the game's own sphere is the
-                // contact here. The port's origins rest on the floor when down (the anim root
-                // settles), so the centre is pos + 0.3 up — the lift term drops out.
-                let fb = fb.or_else(|| {
-                    if !dr.down { return None; }
-                    let centre = [dr.pos[0], dr.pos[1] + 0.3, dr.pos[2]];
-                    let ab = [end[0] - b.pos[0], end[1] - b.pos[1], end[2] - b.pos[2]];
-                    let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
-                    let ap = [centre[0] - b.pos[0], centre[1] - b.pos[1], centre[2] - b.pos[2]];
-                    let t = if ab2 > 1e-9 { (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / ab2 } else { 0.0 };
-                    let tc = t.clamp(0.0, 1.0);
-                    let cl = [b.pos[0] + ab[0] * tc, b.pos[1] + ab[1] * tc, b.pos[2] + ab[2] * tc];
-                    let d2 = (cl[0] - centre[0]).powi(2) + (cl[1] - centre[1]).powi(2) + (cl[2] - centre[2]).powi(2);
-                    (d2 <= 0.3 * 0.3).then(|| (i16::MAX, tc))
-                });
+                let fb = drone_ray_part(dr, d, b.pos, end);
                 if let Some((part, t)) = fb {
                     if best.is_none_or(|(_, _, bt)| t < bt) { best = Some((i, part, t)); }
                 }
@@ -21068,7 +21048,30 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps, &mut self.rng);
                 continue;
             }
-            if let Some(ev) = b.update(d.world, &vol, viewer, &mut self.rng) {
+            // The drone pick of the flight HITTEST [M Bullet_update 0x12e7b0:389-421: filter word
+            // +0x98 = 0, exclusion +0x74 = the shooter (Collide_PickObj 0x1eae80:57-59); its :72-82 mask drops the
+            // `obj+0xF0 & 0x20` disabled drones]: only drone-fired rounds (the copter, turret and
+            // laser rounds carry no drone owner and keep their old walk). The satchel family's
+            // body contact is the bounce in the Player arm's rule and carries no damage
+            // [M 0x12ce80 @0x12d150; HITTEST+0x90 forced 0 for 0x3b-0x40], so it stays out.
+            let ev = {
+                let list = &self.list;
+                let owner = b.owner;
+                let pickable = (self.npc_enabled || self.hold_active) && owner < list.len() && b.family(&d.weapons) != 0x3b;
+                let mut pick = |from: V3, end: V3| -> Option<(usize, i16, f32)> {
+                    if !pickable { return None; }
+                    let mut best: Option<(usize, i16, f32)> = None;
+                    for (i, dr) in list.iter().enumerate() {
+                        if i == owner || !dr.present || !dr.enabled || dr.corpse { continue; }
+                        if let Some((part, t)) = drone_ray_part(dr, d, from, end) {
+                            if best.is_none_or(|(_, _, bt)| t < bt) { best = Some((i, part, t)); }
+                        }
+                    }
+                    best
+                };
+                b.update_with(d.world, &vol, viewer, &mut self.rng, &mut pick)
+            };
+            if let Some(ev) = ev {
                 match ev {
                     crate::bullet::BulletEvent::World(p) => {
                         // The satchel charge LANDS instead of dying [M Bullet_CollisionHandler
@@ -21218,6 +21221,36 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             }
                         }
                         self.player_hits.push((frame, b.owner, before - self.health.health));
+                        }
+                    }
+                    // `NDrone2_DealWithObjHit` 0x13fff0 case 5 on the struck drone, the shooter a drone.
+                    crate::bullet::BulletEvent::Drone { drone: vi, part, at, ray } => {
+                        let kind = d.weapons.records.get(b.weapon as usize).map_or(b.weapon, |r| u16::from_le_bytes([r[0], r[1]]));
+                        let shooter_team = self.list.get(b.owner).map_or(0, |s| s.team);
+                        let v = &self.list[vi];
+                        if drone_round_applies(kind, shooter_team, v.team, v.health, v.voice_type) {
+                            let damage = d.weapons.bullet_contact_damage(b.weapon);
+                            // [M 0x13fff0:269-306] the weapon picks the message, as on Bond's rounds.
+                            let m = if matches!(kind, 1 | 0x4b | 0x4d) { msg::PUNCH }
+                                else if matches!(kind, 0x4a | 0x4c) { msg::TASE }
+                                else if matches!(kind, 0x43 | 0x44) { msg::STUN_DART }
+                                else { msg::BULLET };
+                            // `Drone_BulletHit` 0x13a9f8:20 sends nothing for a contact without damage.
+                            if m != msg::BULLET || damage > 0.0 {
+                                // `NDrone2_DoHitEffects` 0x1458e0:102-109: the hit sound, 0x601 on the head.
+                                if damage > 0.5 && d.weapons.hit_flags(b.weapon as usize) & 0x180 == 0 {
+                                    self.audio.play3d(if part == 5 { 0x601 } else { 0x413 }, at, None);
+                                }
+                                let dr = &mut self.list[vi];
+                                // +0x2B4 = the shooting drone [M 0x13a9f8:23, 0x13fff0:302-304].
+                                dr.hit_by_player = false;
+                                dr.hit = Some(Hit { part, ray, point: at, damage, weapon: b.weapon });
+                                dr.global_flinch = self.last_flinch;
+                                dr.bond_aiming = self.bond_aiming;
+                                dr.send(d, &mut self.rng, frame, m);
+                                self.last_flinch = dr.global_flinch;
+                                self.drone_round_hits.push((frame, b.owner, vi));
+                            }
                         }
                     }
                     // `Bullet_DoTrails` fly-by: `Sound_Play3D(0x1dc, closest_point, 100, -1, -1, …, custom 0)` [M].
@@ -23214,4 +23247,52 @@ mod abseil_tests {
         assert!(dr3.log.iter().any(|&(f, n)| f == 100 && n == state::ATTACK),
             "the alarm path keeps its own gates [M 0x177c18 case 0x1e]; log {:?}", dr3.log);
     }
+}
+
+/// The body test both bullet walks run on one drone (`Collide_PickObj` 0x1eae80's sphere, then
+/// `Collide_Jointy` on the posed boxes; the down sphere of `NDrone2_Collision` 0x140e90:65-90):
+/// the part and the fraction along `from → end`. The caller applies the enable gates.
+fn drone_ray_part(dr: &Drone, d: &Data, from: V3, end: V3) -> Option<(i16, f32)> {
+    let c = [dr.pos[0], dr.pos[1], dr.pos[2]];
+    if seg_point_dist2(from, end, c) > 1.05 * 1.05 * 4.0 { return None; }
+    let ray = [end[0] - from[0], end[1] - from[1], end[2] - from[2]];
+    let fb = crate::damage::first_box_hit(from, ray, &dr.hit_boxes(d));
+    // `NDrone2_Collision` 0x140e90's down branch (+0x2f set [M :65-90]): the shootable
+    // volume is the low sphere — radius 0.3, centre (0.3 − obj+0xa0) above the origin
+    // along the up vector — while a standing guard uses 0.4/0.55 [M 0x140e90:65-90]. The
+    // port's standing volume is the posed bone boxes — the established documented
+    // approximation (the game's two origin-centred standing spheres are what the boxes
+    // refine; the damage tests pin them); a
+    // DOWNED guard's boxes lie along the ground and leave the aimed-at-origin ray
+    // uncovered (a re-tase did nothing), so the game's own sphere is the
+    // contact here. The port's origins rest on the floor when down (the anim root
+    // settles), so the centre is pos + 0.3 up — the lift term drops out.
+    let fb = fb.or_else(|| {
+        if !dr.down { return None; }
+        let centre = [dr.pos[0], dr.pos[1] + 0.3, dr.pos[2]];
+        let ab = [end[0] - from[0], end[1] - from[1], end[2] - from[2]];
+        let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+        let ap = [centre[0] - from[0], centre[1] - from[1], centre[2] - from[2]];
+        let t = if ab2 > 1e-9 { (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / ab2 } else { 0.0 };
+        let tc = t.clamp(0.0, 1.0);
+        let cl = [from[0] + ab[0] * tc, from[1] + ab[1] * tc, from[2] + ab[2] * tc];
+        let d2 = (cl[0] - centre[0]).powi(2) + (cl[1] - centre[1]).powi(2) + (cl[2] - centre[2]).powi(2);
+        (d2 <= 0.3 * 0.3).then(|| (i16::MAX, tc))
+    });
+    fb
+}
+
+/// `NDrone2_DealWithObjHit` 0x13fff0 case 5's gates for a round whose shooter is a drone (class 2):
+/// the weapon kinds that never land [M :154-173], the 0x6e round on voice set 0x10 [M :174-178], the
+/// sides [M :181-232 — `bVar4` is the victim's side, team 1 one way, teams 2/3 the other, any other
+/// team with team 1; a team-1 shooter lands on the other side, a team 2/3 shooter on team 1's side,
+/// any other shooter never], and the victim alive [M :229-230].
+pub fn drone_round_applies(kind: u16, shooter_team: u8, victim_team: u8, victim_health: f32, victim_voice: u16) -> bool {
+    if matches!(kind, 0x1b | 0x2a | 0x2b | 0x2e..=0x31 | 0x34..=0x37 | 0x3a | 0x46 | 0x48 | 0x49 | 0x4e | 0x50 | 0x51 | 0x5f) {
+        return false;
+    }
+    if kind == 0x6e && victim_voice == 0x10 { return false; }
+    let victim_side = !matches!(victim_team, 2 | 3);
+    let lands = match shooter_team { 1 => !victim_side, 2 | 3 => victim_side, _ => false };
+    lands && victim_health > 0.0
 }
