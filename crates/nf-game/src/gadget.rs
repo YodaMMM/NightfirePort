@@ -478,6 +478,63 @@ pub fn pick_grapple_point(points: &[GrapplePoint], from: V3, dir: V3, max_dist: 
     best.map(|(_, pos)| pos)
 }
 
+/// The claw bolt's latch with the world in the way. The bolt is a straight-flying round (the claw
+/// records carry no gravity bit, `+0x6c & 8` [L ee_start_05.bin: 0x50's +0x6c = 0x4000]) whose
+/// collision pass stops it on the FIRST non-pass contact along its path: the contacts are sorted
+/// by distance [M Collide_Update 0x1ea398 — the hit list's `QuickSort`] and
+/// `Bullet_CollisionHandler` 0x12ce80 ends the flight (state 2) on the first contact whose pass
+/// bit is clear [M 0x12ce80:117-179]. The claw latches only when that contact is the class-'Q'
+/// grapple object [M Bullet_Delete 0x12e660:42-55 — state 2 and the head contact's +0x58 class
+/// 'Q']; a wall, floor or ceiling first means no latch. The pass contacts are the ones every
+/// flying round passes — the hit's +0x51 bit 1 (a glist node flagged 0x40, or a surface byte with
+/// 0x40 or 0x80 [M Collide_Intersect 0x1ebaa8:93-97, :143-144, :304-310]) and glass (surface
+/// 0x10) for a record with `+0x6c & 0x800` clear [M 0x12ce80:136-139] — exactly the player
+/// rounds' `segment_flight_scoped` trace. (The surface 0x40/0x80 re-test that the handler skips
+/// for the claw ids 0x50/0x51 [M 0x12ce80:145-160] changes nothing: those surfaces already carry
+/// the bit-1 pass.)
+///
+/// `world_stop` is that trace's first stop in units along `dir` from `from` (None = clear). A
+/// point is entered where the bolt's path meets its sphere grown by the bolt radius (the window
+/// `pick_grapple_point` accepts); the bolt latches the point it enters first, when it enters it
+/// before the world stop.
+pub fn pick_grapple_point_walled(points: &[GrapplePoint], from: V3, dir: V3, max_dist: f32, world_stop: Option<f32>) -> Option<V3> {
+    const BOLT_RADIUS: f32 = 1.0; // [M 0x12c5a0:92] — the window pick_grapple_point uses
+    let ab2 = dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2];
+    if ab2 < 1e-9 { return None; }
+    let len = ab2.sqrt();
+    let mut best: Option<(f32, V3)> = None;
+    for p in points {
+        let Some(t) = ray_closest_t(from, dir, p.pos, max_dist) else { continue };
+        let closest = [from[0] + dir[0] * t, from[1] + dir[1] * t, from[2] + dir[2] * t];
+        let d2 = (closest[0] - p.pos[0]).powi(2) + (closest[1] - p.pos[1]).powi(2) + (closest[2] - p.pos[2]).powi(2);
+        let reach = p.radius + BOLT_RADIUS;
+        if d2 > reach * reach { continue; }
+        // The entry along the path, in units (the start may already sit inside the window).
+        let enter = (t * len - (reach * reach - d2).sqrt()).max(0.0);
+        if best.is_none_or(|(bt, _)| enter < bt) { best = Some((enter, p.pos)); }
+    }
+    let (enter, pos) = best?;
+    if world_stop.is_some_and(|w| w < enter) { return None; }
+    Some(pos)
+}
+
+/// The claw bolt's world stop along `from → from + dir·range`: the flying round's own trace
+/// (`CollisionWorld::segment_flight_scoped` from the start cel, the glass pass on for a record
+/// with `+0x6c & 0x800` clear), in units. See [`pick_grapple_point_walled`].
+pub fn grapple_bolt_world_stop(world: &crate::world::CollisionWorld, cell: Option<usize>, from: V3, dir: V3, range: f32, glass: bool) -> Option<f32> {
+    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+    if len < 1e-6 || range <= 0.0 { return None; }
+    let k = range / len;
+    let end = [from[0] + dir[0] * k, from[1] + dir[1] * k, from[2] + dir[2] * k];
+    world.segment_flight_scoped(cell, from, end, glass).map(|t| t * range)
+}
+
+/// Whether the claw record's bolt passes glass: `+0x6c & 0x800` clear [M Bullet_update 0x12e7b0
+/// disasm 0x12f048-0x12f058; Bullet_CollisionHandler 0x12ce80:136-139].
+pub fn grapple_bolt_passes_glass(wd: &nf_formats::weapon::WeaponData, w: u8) -> bool {
+    wd.records.get(w as usize).is_none_or(|r| u32::from_le_bytes(r[0x6c..0x70].try_into().unwrap()) & 0x800 == 0)
+}
+
 /// The claw bolt's range: the weapon's own `weapon_data+0x1c` — the game's bolt-death cap
 /// [M Bullet_update 0x12e7b0:158] — read off the record: 50.0 for the Q-Claw 0x50, 100.0 for the
 /// upgrade 0x51 [L ee_start_05.bin; the fists 1.75 / P2K 50 / sniper 1200 scale confirms the unit.
@@ -577,6 +634,34 @@ mod grapple_tests {
         let far_dir = [1.0f32, 0.0, 0.0];
         assert!(pick_grapple_point(&points, [0.0, 0.0, 0.0], far_dir, grapple_range(&wd, 0x50), |_, _| true).is_none()
             || (far[0] - 0.0) <= grapple_range(&wd, 0x50), "the point within the range still picks");
+    }
+
+    #[test]
+    fn the_bolt_latches_only_when_it_enters_the_point_before_the_world_stop() {
+        // A point 10 out on +x, radius 0.5: the window (0.5 + the bolt's 1.0) is entered at 8.5.
+        let points = vec![GrapplePoint { pos: [10.0, 0.0, 0.0], radius: 0.5 }];
+        let (from, dir) = ([0.0f32, 0.0, 0.0], [1.0f32, 0.0, 0.0]);
+        assert!(pick_grapple_point_walled(&points, from, dir, 50.0, None).is_some(), "a clear path latches");
+        assert!(pick_grapple_point_walled(&points, from, dir, 50.0, Some(9.0)).is_some(),
+            "a wall behind the entry (the point's mount) does not stop the latch");
+        assert!(pick_grapple_point_walled(&points, from, dir, 50.0, Some(4.0)).is_none(),
+            "a wall before the point takes the bolt [M Bullet_CollisionHandler 0x12ce80 state 2]");
+        // Two points on the path: the one entered first takes the bolt.
+        let two = vec![GrapplePoint { pos: [20.0, 0.0, 0.0], radius: 0.5 }, GrapplePoint { pos: [10.0, 0.0, 0.0], radius: 0.5 }];
+        assert_eq!(pick_grapple_point_walled(&two, from, dir, 50.0, None), Some([10.0, 0.0, 0.0]));
+        assert_eq!(pick_grapple_point_walled(&two, from, dir, 50.0, Some(12.0)), Some([10.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn the_bolt_world_stop_is_the_flight_trace_in_units() {
+        // A wall at x = 5 in both windings: exactly one faces the bolt (the one-sided ray test).
+        let a = crate::world::CollisionWorld::from_triangles(vec![[[5.0f32, -5.0, -5.0], [5.0, 5.0, -5.0], [5.0, -5.0, 5.0]]]);
+        let b = crate::world::CollisionWorld::from_triangles(vec![[[5.0f32, -5.0, -5.0], [5.0, -5.0, 5.0], [5.0, 5.0, -5.0]]]);
+        let sa = grapple_bolt_world_stop(&a, None, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], 50.0, true);
+        let sb = grapple_bolt_world_stop(&b, None, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], 50.0, true);
+        assert!(sa.is_none() != sb.is_none(), "one winding stops the bolt, the back face does not [M Intersect_RayGeom 0x10a8c8:168]");
+        let s = sa.or(sb).unwrap();
+        assert!((s - 5.0).abs() < 1e-3, "the stop is in units, got {s}");
     }
 
     #[test]

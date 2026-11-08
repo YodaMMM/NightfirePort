@@ -3255,10 +3255,11 @@ impl Sim {
                 && self.bond.grapple.is_none()
                 && nf_game::gadget::is_grapple(claw)
             {
-                let head = self.bond.head();
-                let dir = self.bond.look();
-                let world = &self.world;
-                if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, claw), |a, b| world.segment_bullet_clear_dynamic(a, b)) {
+                // The bolt flies from the gun's spawn point and dies on the first solid contact: a
+                // wall, floor or ceiling before the point means no latch [M Bullet_CollisionHandler
+                // 0x12ce80 state 2; Bullet_Delete 0x12e660:42-55].
+                let (from, dir) = self.claw_bolt_ray(self.bond.head(), self.bond.look(), claw, claw == self.gun.weapon);
+                if let Some(point) = Self::claw_latch(&self.world, &self.drones.grapple_points, &self.weapons, claw, from, dir) {
                     // The claw's latch clunk: `Bullet_Delete` 0x12e660:50-55 — the claw bolt (+0x70 &
                     // 0x40) dying on a class-'Q' (0x51) grapple object plays `Sound_Play3D(100, -1,
                     // -1, 0x28d, bullet+0xC0)` right before `Player_SetGrapplePoint` [M disasm $a0
@@ -6798,6 +6799,34 @@ impl Sim {
         nf_game::drone::Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: self.level, sequences: &self.seqs, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models , surfaces: self.surfaces.as_ref(), voices: self.voices.as_deref(), difficulty: self.drones.difficulty,
             ai_points: &[],
         }
+    }
+
+    /// The claw bolt's start and direction: `Player_WeaponInitBullet` 0x1a4bf0's rule, the one the
+    /// gun's `fire_player` spawn uses — the head, moved to the midpoint of the head and the view
+    /// model's datum 0 for a record with a first-person model and `+0x68 & 0x10000` (the claw 0x50:
+    /// 0x124a0 [L ee_start_05.bin]) outside a zoomed scope, the direction re-aimed at head + aim·256
+    /// [M 0x1a4bf0:216-245]. A remote body (no view model) fires from the head.
+    fn claw_bolt_ray(&self, head: [f32; 3], dir: [f32; 3], claw: u8, view_model: bool) -> ([f32; 3], [f32; 3]) {
+        let Some(w) = self.weapons.records.get(claw as usize) else { return (head, dir) };
+        let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
+        let fp_model = u32::from_le_bytes(w[0xdc..0xe0].try_into().unwrap()) != 0;
+        let zoomed_scope = self.aiming && flags68 & 0x40 != 0;
+        if !(view_model && fp_model && !zoomed_scope && flags68 & 0x1_0000 != 0) { return (head, dir); }
+        let Some(d0) = self.view_datum(0) else { return (head, dir) };
+        let o = [(head[0] + d0[0]) * 0.5, (head[1] + d0[1]) * 0.5, (head[2] + d0[2]) * 0.5];
+        let aim_pt = [head[0] + dir[0] * 256.0, head[1] + dir[1] * 256.0, head[2] + dir[2] * 256.0];
+        let v = [aim_pt[0] - o[0], aim_pt[1] - o[1], aim_pt[2] - o[2]];
+        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
+        (o, [v[0] / l, v[1] / l, v[2] / l])
+    }
+
+    /// The claw fire's latch: the aim's grapple point, unless the bolt meets the world first
+    /// (`nf_game::gadget::pick_grapple_point_walled`).
+    fn claw_latch(world: &nf_game::world::CollisionWorld, points: &[nf_game::gadget::GrapplePoint], weapons: &nf_formats::weapon::WeaponData, claw: u8, from: [f32; 3], dir: [f32; 3]) -> Option<[f32; 3]> {
+        let range = nf_game::gadget::grapple_range(weapons, claw);
+        let glass = nf_game::gadget::grapple_bolt_passes_glass(weapons, claw);
+        let stop = nf_game::gadget::grapple_bolt_world_stop(world, world.find_cel(from), from, dir, range, glass);
+        nf_game::gadget::pick_grapple_point_walled(points, from, dir, range, stop)
     }
 
     /// (sequence index, frame) the first-person gun's script shows.
@@ -14256,7 +14285,7 @@ impl Sim {
                     && nf_game::gadget::is_grapple(r[slot].held)
                 {
                     let (head, dir) = (b.head(), b.look());
-                    if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, r[slot].held), |a, b| self.world.segment_bullet_clear_dynamic(a, b)) {
+                    if let Some(point) = Self::claw_latch(&self.world, &self.drones.grapple_points, &self.weapons, r[slot].held, head, dir) {
                         b.grapple = Some(nf_game::gadget::GrappleState { point, phase: 1, pull: 0.0 });
                         b.change_substate(nf_game::player::SS_GRAPPLE);
                         b.vel = [0.0; 3];

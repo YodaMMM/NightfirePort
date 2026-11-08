@@ -99,45 +99,92 @@ fn the_vent_touchonce_walkover_fires_chb8_from_the_spawn() {
 }
 
 // ---------------------------------------------------------------------------
-// The gadget target: grapple point 0x3a "GRAPPLEPOINT_SkyBridge" (45.30, 4.79, 62.93) [D
-// placement] — the watch gadget's wire target the Q-Claw bolt latches (class-0x2C scan
-// [M Bullet_Delete 0x12e660:50-55 → Player_SetGrapplePoint 0x195da0]).
+// The gadget target: grapple point 0x3a "GRAPPLEPOINT_SkyBridge" (45.29, 5.10, 62.94) [D
+// placement] — the class-'Q' object the Q-Claw bolt latches [M Bullet_Delete 0x12e660:42-55 →
+// Player_SetGrapplePoint 0x195da0]. The bolt is a flying round that dies on its first solid
+// contact [M Bullet_CollisionHandler 0x12ce80 state 2], so the world between Bond and the point
+// decides the latch.
 // ---------------------------------------------------------------------------
 
-/// From the crossing stance (40.8, floor 2.40, z 65.5 — walked there from the spawn), the
-/// Q-Claw bolt (weapon 0x50) latches the point and reels to the hang [M Player_SSGrapple
-/// 0x192860]. Sister: no wire before the bolt.
+const SKYBRIDGE: [f32; 3] = [45.288754, 5.096143, 62.93624]; // [D placement; the port's resolution]
+
+/// Aim with the real turn/look inputs at `to` (the walker's yaw convention `atan2(dx, dz)`, the
+/// look units asin(dy/len)/(π/2) [M BL+0x8a8·π/2]).
+fn aim_inputs(w: &mut Walker, to: [f32; 3]) {
+    for _ in 0..200 {
+        let (head, byaw, bpitch) = { let s = w.scene.sim.as_ref().unwrap(); (s.bond.head(), s.bond.yaw, s.bond.pitch) };
+        let d = [to[0] - head[0], to[1] - head[1], to[2] - head[2]];
+        let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-4);
+        let (want_yaw, want_look) = (d[0].atan2(d[2]), (d[1] / l).asin() / std::f32::consts::FRAC_PI_2);
+        let (ty, tl) = (wrap_pi(want_yaw - byaw), want_look - bpitch);
+        if ty.abs() < 1e-3 && tl.abs() < 1e-3 { break; }
+        w.tick(nf_game::player::Input { turn: ty.clamp(-0.08, 0.08), look: tl.clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
+}
+
+fn fire_until_latch(w: &mut Walker, ticks: u32) -> bool {
+    for _ in 0..ticks {
+        w.tick_fire(nf_game::player::Input::default());
+        if w.scene.sim.as_ref().unwrap().bond.grapple.is_some() { return true; }
+    }
+    false
+}
+
+/// From the west duct (walked there from the spawn, crouched — the duct roof is 3.86 over a 2.40
+/// floor, and the real crouch press does not stand him up), the claw aimed straight at the
+/// SkyBridge point does NOT latch: the duct's east wall (x 41.53, a mat-5 face [D this level's
+/// collision]) is the bolt's first contact [M Bullet_CollisionHandler 0x12ce80 state 2;
+/// Bullet_Delete 0x12e660:42-55]. No aim from this head reaches the point before the world —
+/// the sweep below checks the whole window. Sister: the aim itself is on the point (the bare
+/// sphere pick takes it, which is what the port latched through the wall before).
 #[test]
-fn the_qclaw_latches_the_skybridge_grapple_point() {
+fn the_qclaw_aimed_through_the_duct_wall_does_not_latch() {
     let mut w = load_cold();
-    // The spawn crouch walks to the crossing stance, then stands (the bolt-legal arc needs the
-    // standing head [D probe14_aim]) — walkreal's leg A, verbatim.
-    w.walk_to(Wp::new(40.8, 2.4, 65.5).r(0.5), "to the crossing stance");
-    w.scene.sim.as_mut().unwrap().bond.crouched = false;
-    for _ in 0..20 { w.tick(nf_game::player::Input::default(), false); }
+    w.walk_to(Wp::new(40.8, 2.4, 65.5).r(0.5), "to the duct's east side");
+    for i in 0..60 { w.tick(nf_game::player::Input { crouch: i == 0, ..Default::default() }, false); }
+    if !w.scene.sim.as_ref().unwrap().bond.crouched {
+        for i in 0..60 { w.tick(nf_game::player::Input { crouch: i == 0, ..Default::default() }, false); }
+    }
+    assert!(w.scene.sim.as_ref().unwrap().bond.crouched, "the duct keeps Bond crouched (no headroom to stand)");
+    for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false); }
+    aim_inputs(&mut w, SKYBRIDGE);
+    {
+        let s = w.scene.sim.as_ref().unwrap();
+        let (head, dir) = (s.bond.head(), s.bond.look());
+        assert!(nf_game::gadget::pick_grapple_point(&s.drones.grapple_points, head, dir, 50.0, |_, _| true).is_some(),
+            "sister: the aim is on the SkyBridge point");
+        let stop = nf_game::gadget::grapple_bolt_world_stop(&s.world, s.world.find_cel(head), head, dir, 50.0, true);
+        assert!(stop.is_some_and(|t| t < 1.5), "the duct wall stands within reach of the head, got {stop:?}");
+        // The whole window: every aim whose path enters the point's sphere meets the world first.
+        let g = s.drones.grapple_points.iter().find(|g| (g.pos[2] - SKYBRIDGE[2]).abs() < 0.1 && (g.pos[0] - SKYBRIDGE[0]).abs() < 0.1).unwrap();
+        let base = (g.pos[0] - head[0]).atan2(g.pos[2] - head[2]);
+        let mut window = 0;
+        for dy in -10..=10 { for pi in -30..=60 {
+            let (yaw, pitch) = (base + dy as f32 * 0.02, pi as f32 * 0.01);
+            let d = [pitch.cos() * yaw.sin(), pitch.sin(), pitch.cos() * yaw.cos()];
+            if nf_game::gadget::pick_grapple_point(std::slice::from_ref(g), head, d, 50.0, |_, _| true).is_none() { continue; }
+            window += 1;
+            let stop = nf_game::gadget::grapple_bolt_world_stop(&s.world, s.world.find_cel(head), head, d, 50.0, true);
+            assert!(nf_game::gadget::pick_grapple_point_walled(std::slice::from_ref(g), head, d, 50.0, stop).is_none(),
+                "no aim from the duct reaches the point before the wall (yaw {yaw:.2} pitch {pitch:.2}, stop {stop:?})");
+        }}
+        assert!(window > 100, "the sweep covers the point's window ({window} aims)");
+    }
+    assert!(!fire_until_latch(&mut w, 30), "the bolt dies on the duct wall: no latch [M 0x12ce80 state 2; 0x12e660:42-55]");
+}
+
+/// From the east walkway beside the point (45.0, floor 2.38, 64.5 — the documented stand-in
+/// transit, the module header), the claw aimed at the point latches with nothing in the way and
+/// reels to the hang [M Player_SSGrapple 0x192860:79-121, :91-94]. Sister: no wire before the bolt.
+#[test]
+fn the_qclaw_latches_the_skybridge_point_from_a_clear_stance() {
+    let mut w = load_cold();
+    teleport(&mut w, [45.0, 3.05, 64.5], std::f32::consts::PI);
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false); }
     assert!(w.scene.sim.as_ref().unwrap().bond.grapple.is_none(), "sister: no wire before the bolt");
-    // Aim at the point [D (45.30, 4.79, 62.93)] on the lower arc (pitch 0.20 rad [D probe14_aim]).
-    let point = [45.29f32, 5.10, 62.94];
-    let want_yaw = (point[0] - 40.8).atan2(point[2] - 65.5);
-    let want_look = 0.20f32 / std::f32::consts::FRAC_PI_2;
-    for i in 0..200 {
-        let (byaw, bpitch) = { let s = w.scene.sim.as_ref().unwrap(); (s.bond.yaw, s.bond.pitch) };
-        let inp = nf_game::player::Input {
-            turn: wrap_pi(want_yaw - byaw).clamp(-0.08, 0.08),
-            look: (want_look - bpitch).clamp(-0.08, 0.08),
-            ..Default::default()
-        };
-        w.tick(inp, false);
-        if i > 150 { break; }
-    }
-    let mut latched = false;
-    for _ in 0..30 {
-        w.tick_fire(nf_game::player::Input::default());
-        if w.scene.sim.as_ref().unwrap().bond.grapple.is_some() { latched = true; break; }
-    }
-    assert!(latched, "the Q-Claw bolt latches the SkyBridge grapple point [M Bullet_Delete 0x12e660:50-55; D placement]");
-    // The reel pulls toward the point and hangs within 2.0 [M 0x192860:79-121, :91-94].
+    aim_inputs(&mut w, SKYBRIDGE);
+    assert!(fire_until_latch(&mut w, 30), "the Q-Claw bolt latches the SkyBridge grapple point [M Bullet_Delete 0x12e660:42-55; D placement], pos {:?}",
+        w.scene.sim.as_ref().unwrap().bond.pos);
     for _ in 0..400 {
         w.tick_fire(nf_game::player::Input::default());
         let sim = w.scene.sim.as_ref().unwrap();

@@ -25,6 +25,8 @@ use nf_game::player::Input;
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 const POINT: [f32; 3] = [11.475247, 9.535462, 30.155592]; // [D #130; the port's sphere resolution]
+/// The crossing stance (x, z) on the 3.25 deck with a clear bolt line to the point.
+const STANCE: [f32; 2] = [10.475, 29.156];
 
 /// The ride: select the claw, aim, fire, reel, hang, release, land, walk on.
 #[test]
@@ -50,20 +52,24 @@ fn the_qclaw_ride_crosses_the_skybridge() {
         assert!((p[0] - 11.5).abs() < 1.5 && (p[2] - 27.5).abs() < 1.8,
             "the route reaches the strip below the grapple point, got {p:?}");
     }
-    // The crossing stance: the deck's east parapet at (11, 28), surface 4.58 — the game's deck
+    // The crossing stance: the 3.25 deck under the point at (10.475, 29.156) — the game's deck
     // entry is the open item (the report); the stand-in reaches the stance, everything after it
-    // is the real input path.
+    // is the real input path. The bolt dies on its first solid contact [M
+    // Bullet_CollisionHandler 0x12ce80 state 2], so the stance needs a clear line: the old (11, 28)
+    // parapet stance stands under a beam 0.42 above the head (y 6.74, mat 10) that takes the bolt
+    // (the whole 4.58 parapet strip sits under it); the deck below the point sees it [D the
+    // walled-pick stance scan].
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [11.0, 4.63, 28.0];
+        sim.bond.pos = [STANCE[0], 4.63, STANCE[1]];
         sim.bond.vel = [0.0; 3];
     }
     w.wait(20);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let b = &sim.bond;
-        assert!(b.grounded && b.pos[1] > 4.4 && b.pos[1] < 5.8,
-            "Bond stands on the parapet stance, got {:?} grounded {}", b.pos, b.grounded);
+        assert!(b.grounded && b.pos[1] > 3.9 && b.pos[1] < 5.0,
+            "Bond stands on the deck stance, got {:?} grounded {}", b.pos, b.grounded);
         assert!(sim.drones.inventory.owned.get(0x50).copied().unwrap_or(false),
             "the fresh 07000012 kit owns the Grapple 0x50 [M 0x1a7ef8 case 0x7000012 -> the fresh_11 kit]");
     }
@@ -75,9 +81,9 @@ fn the_qclaw_ride_crosses_the_skybridge() {
     }
     assert!(have, "the Q-Claw (0x50) is held [L gadget is_grapple: 0x50/0x51; +0x70 & 0x40]");
     // Aim at the point with the real look inputs (turn/look, the walkreal-14 pattern).
-    let want_yaw = (POINT[0] - 11.0).atan2(POINT[2] - 28.0);
+    let want_yaw = (POINT[0] - STANCE[0]).atan2(POINT[2] - STANCE[1]);
     let head_y = w.scene.sim.as_ref().unwrap().bond.pos[1] + 0.5;
-    let to = [POINT[0] - 11.0, POINT[1] - head_y, POINT[2] - 28.0];
+    let to = [POINT[0] - STANCE[0], POINT[1] - head_y, POINT[2] - STANCE[1]];
     let horiz = (to[0] * to[0] + to[2] * to[2]).sqrt().max(1e-4);
     let want_look = (to[1] / horiz).atan() / std::f32::consts::FRAC_PI_2;
     for _ in 0..120 {
@@ -151,7 +157,7 @@ fn the_qclaw_ride_crosses_the_skybridge() {
     w2.wait_enabled(3000, "the intro");
     {
         let sim = w2.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [11.0, 4.63, 28.0];
+        sim.bond.pos = [STANCE[0], 4.63, STANCE[1]];
         sim.bond.vel = [0.0; 3];
     }
     w2.wait(20);
