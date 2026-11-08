@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox3 at 2026-11-08T05:10Z
+
+---
+## Report (done, 2026-11-08T05:45Z)
+
+Closed by the driver: the report is on `s/gt-update-audit` (docs/reports/gt-update-audit.md); the worker didn't run finish.sh.
