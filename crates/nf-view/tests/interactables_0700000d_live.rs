@@ -507,10 +507,14 @@ fn crane_ladder_grab_and_climb() {
 #[test]
 fn qclaw_reels_to_the_crane_pulley() {
     let mut w = load_warm();
-    // Stand on the dock under the pulley, ~4 m away.
+    // A stand with a clear bolt line to the pulley: the bolt dies on its first solid contact [M
+    // Bullet_CollisionHandler 0x12ce80 state 2], and the old dock spot (212.4, floor 2.66,
+    // -236.6) under the crane deck fired through the deck's side (a mat-6 face 2.7 out); the
+    // crane deck at (210.6, 13.66, -235.8), 3 west of the pulley, sees it [D the walled-pick
+    // stance scan].
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [212.4, 11.0, -236.6];
+        sim.bond.pos = [210.6, 14.7, -235.8];
         sim.bond.vel = [0.0; 3];
         sim.gun.switch_request = 0x50;
     }

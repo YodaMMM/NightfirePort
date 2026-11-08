@@ -326,26 +326,18 @@ fn the_q_claw_grapple_latches_the_pulley_and_reels() {
     // Grapple point #500 graple_pulley (−4.60, 13.16, −189.71) [D], class 0x51 [M 0x198298].
     // The Q-Claw (0x50) is in the 0c loadout [M 0x1a7ef8 case 0x700000c]; the fire latches the
     // aimed point and Bond reels [M Player_SetGrapplePoint 0x195da0; scene.rs's fire gate].
+    // The bolt dies on its first solid contact [M Bullet_CollisionHandler 0x12ce80 state 2;
+    // Bullet_Delete 0x12e660:42-55], so the stance needs a clear path: 8.3 east of the point on
+    // its own floor (3.4, 11.09, -187.7) [D the walled-pick stance scan]. From the level start
+    // (42 units out) the same aimed fire meets a wall 5.2 units out (mat 6, x-facing) and does
+    // not latch — `the_q_claw_aimed_from_the_start_meets_the_wall`.
     let mut w = ready(&iso);
+    drop_at(&mut w, [3.4, 12.0, -187.7]);
     // The player-real switch: the Input weapon select [M the switch request writes obj+0x63].
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false); }
     assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x50, "the Q-Claw is held [M 0x1a7ef8 loadout; D the 0c archive has the 0x50 view model]");
     let point = [-4.60, 13.16, -189.71];
-    let mut latched = false;
-    for t in 0..600u32 {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let bp = sim.bond.pos;
-        let desired = (point[0] - bp[0]).atan2(point[2] - bp[2]);
-        let err = wrap_pi_pub(desired - sim.bond.yaw);
-        let dy = point[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
-        let want_pitch = (dy / dxz_pub(bp, point.into()).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
-        let input = nf_game::player::Input { turn: err.clamp(-0.08, 0.08), look: (want_pitch - sim.bond.pitch).clamp(-0.08, 0.08), ..Default::default() };
-        let on = err.abs() < 0.02 && (want_pitch - sim.bond.pitch).abs() < 0.03;
-        w.scene.sim.as_mut().unwrap().step_bond(input, on && t % 24 == 0, false, false);
-        w.total_ticks += 1;
-        if w.scene.sim.as_ref().unwrap().bond.grapple.is_some() { latched = true; break; }
-    }
-    assert!(latched, "the aimed fire latches the grapple point [M 0x195da0]");
+    assert!(aimed_claw_fire(&mut w, point), "the aimed fire latches the grapple point [M 0x195da0]");
     // The reel runs while held: phase 1 advances pull 0.05/tick with no fire test [M
     // 0x192860:79-121]; at the point the hang (phase 2) releases on the dropped fire [M
     // 0x192860:64-66], so the observation window is the first held ticks.
@@ -359,6 +351,43 @@ fn the_q_claw_grapple_latches_the_pulley_and_reels() {
     for _ in 0..40 { w2.tick(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false); }
     for _ in 0..120 { w2.tick(nf_game::player::Input::default(), false); }
     assert!(w2.scene.sim.as_ref().unwrap().bond.grapple.is_none(), "no fire → no latch (the sister)");
+}
+
+/// Turn and pitch onto `point` with the real inputs and press the fire every 24 ticks once on
+/// target (600 ticks); returns whether the wire latched.
+fn aimed_claw_fire(w: &mut Walker, point: [f32; 3]) -> bool {
+    for t in 0..600u32 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        let desired = (point[0] - bp[0]).atan2(point[2] - bp[2]);
+        let err = wrap_pi_pub(desired - sim.bond.yaw);
+        let dy = point[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
+        let want_pitch = (dy / dxz_pub(bp, point.into()).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+        let input = nf_game::player::Input { turn: err.clamp(-0.08, 0.08), look: (want_pitch - sim.bond.pitch).clamp(-0.08, 0.08), ..Default::default() };
+        let on = err.abs() < 0.02 && (want_pitch - sim.bond.pitch).abs() < 0.03;
+        w.scene.sim.as_mut().unwrap().step_bond(input, on && t % 24 == 0, false, false);
+        w.total_ticks += 1;
+        if w.scene.sim.as_ref().unwrap().bond.grapple.is_some() { return true; }
+    }
+    false
+}
+
+/// The same aimed fire from the level start (42 units out): the bolt meets a wall 5.2 units out
+/// (mat 6, x-facing) before the pulley and dies there, so no wire latches [M Bullet_CollisionHandler
+/// 0x12ce80 state 2; Bullet_Delete 0x12e660:42-55]. The port used to latch through it. Sister:
+/// the aim is on the point (the bare sphere pick takes it).
+#[test]
+fn the_q_claw_aimed_from_the_start_meets_the_wall() {
+    let iso = iso();
+    let mut w = ready(&iso);
+    for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false); }
+    let point = [-4.60f32, 13.16, -189.71];
+    assert!(!aimed_claw_fire(&mut w, point), "the bolt dies on the wall between: no latch [M 0x12ce80 state 2]");
+    let s = w.scene.sim.as_ref().unwrap();
+    let (head, dir) = (s.bond.head(), s.bond.look());
+    assert!(nf_game::gadget::pick_grapple_point(&s.drones.grapple_points, head, dir, 50.0).is_some(), "sister: the aim is on the pulley");
+    let stop = nf_game::gadget::grapple_bolt_world_stop(&s.world, s.world.find_cel(head), head, dir, 50.0, true);
+    assert!(stop.is_some_and(|t| t < 10.0), "the wall stands between, got {stop:?}");
 }
 
 #[test]
