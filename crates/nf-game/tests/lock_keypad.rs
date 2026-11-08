@@ -33,7 +33,11 @@ fn locks_init_table_shape_and_digit_domain() {
 #[test]
 fn keypad_digit_append_wraps_and_display_is_inclusive() {
     let mut kp = Keypad::arm([b'1', b'2', b'3', b'4'], false);
-    assert_eq!(kp.display(), "", "the armed display: nothing typed yet");
+    // keypad-entry FIX (the test was wrong): the count-0 display is the game's msg-0x51 refresh
+    // sprintf — the literal "****" — not an empty string [M 0x216810:24-29 `sprintf(&buf_250,
+    // &DAT_0030d330)`; the format bytes at 0x30d330 are `2a 2a 2a 2a 00` [D the ELF]]. The old
+    // assertion read "" — it predated the 0x51 arm's discovery.
+    assert_eq!(kp.display(), "****", "the armed display: the msg-0x51 refresh's four masks");
     kp.digit(7);
     assert_eq!(kp.display(), "7", "typed[0..=0] — the just-typed digit only [M the inclusive copy]");
     kp.digit(0);
@@ -81,4 +85,38 @@ fn keypad_hint_prints_only_after_the_q_worm_flag() {
     assert_eq!(shown.hint(), "0271", "the sprintf'd code [M 0x1ae3d8:252-257]");
     shown.close();
     assert!(!shown.open);
+}
+
+/// `Input_Update`'s machine under the page [M 0x17f0d0-0x17f0f0]: a held direction fires on its
+/// first frame, then from frame 46 on every count divisible by 8.
+#[test]
+fn a_held_direction_repeats_on_the_game_s_frames() {
+    let mut kp = Keypad::arm([b'1', b'2', b'3', b'4'], false);
+    kp.edges(0, false, false);
+    let fired: Vec<u32> = (1..=64).filter(|_| kp.edges(8, false, false).nav == 8).collect();
+    assert_eq!(fired, [1, 48, 56, 64]);
+}
+
+/// A button already down when the page opens is held, not pressed.
+#[test]
+fn a_button_held_through_the_open_is_not_a_press() {
+    let mut kp = Keypad::arm([b'1', b'2', b'3', b'4'], false);
+    let e = kp.edges(2, true, false);
+    assert_eq!((e.nav, e.confirm), (0, false));
+    assert!(!kp.edges(2, true, false).confirm);
+    kp.edges(0, false, false);
+    assert!(kp.edges(0, true, false).confirm, "released and pressed again it fires");
+}
+
+/// 0x1f and 0x22 refuse each other while the other is held [M `Menu_InputAction` 0x1f1f40].
+#[test]
+fn select_and_back_refuse_each_other() {
+    let mut kp = Keypad::arm([b'1', b'2', b'3', b'4'], false);
+    kp.edges(0, false, false);
+    let e = kp.edges(0, true, true);
+    assert_eq!((e.confirm, e.back), (false, false));
+    let mut kp = Keypad::arm([b'1', b'2', b'3', b'4'], false);
+    kp.edges(0, false, false);
+    kp.edges(0, true, false);
+    assert!(!kp.edges(0, true, true).back, "back under a held select");
 }

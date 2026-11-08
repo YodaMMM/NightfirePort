@@ -38,6 +38,12 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 // goggles-draws re-pin (10-31): the breath puff mesh 0x200021d joins the gas pool's draw slots (64, Env_Breath
 // 0x17be00) and the guards' laser-ray pool (4 rays x 0x2000133/0x2000131, AnimObjectDraw 0x1c4490) on every level
 // (+72 attachments, +1 material, +1344 verts, +2688 indices, the same on all five).
+    // agent-cable08 re-pin (02, 05, 0c): the 0x3E wire glists draw at `wire_draw_matrix` —
+    // `Wire_Create` 0x1981d8:12-13 negates the rotation z, then `control_create_object` builds obj+0x90
+    // with View_RotTransMatrix [M] — instead of the placement Euler matrix. Every count unchanged; the
+    // hash moves with the wires' matrices: 02's and 05's yaw-only wires by one ulp in the sin/cos
+    // cells, 0c's three yaw-only wires the same (one ulp, signed zeros) plus one tilted wire (rot.z −0.4887) whose slope now
+    // flips like 08's zip line. 01 and 14 place no wire and are bit-identical.
 const BASELINE: &[(&str, &str)] = &[
     // pickup-medal-gate re-pin: the fresh-boot loads now run `Pickup_Create`'s kind-6 gate
     // [M 0x18dda0:93-95] — the 007 rows (kind 6) create only with the level's gold medal
@@ -78,13 +84,13 @@ const BASELINE: &[(&str, &str)] = &[
     // flags, 05 corona billboard slots, satchel/weather/pc-screen slots) — counts as each branch pinned.
     // goggles-all re-pin (11-01): the goggles chain on the merged master — the body-glow, x-ray,
     // breath (+64) and guard-ray (+8) slots, the same +201 attachments on every pinned level.
-    ("07000002.bin", "9f82e3d28155f362 4528718 9471414 5296 4395409 88 11287 205 28 25 5"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
-    ("07000005.bin", "6f50873ec2563359 4429821 9266439 3618 4345532 74 11185 106 19 16 4"), // re-pinned 11-01 (courtyard-lamps on the merged master): the courtyard corona's sort-list-2 copy on its own searchlight slot, pass 6 [M View_AddObjects 0x1e62d8:57-59; Game_Draw 0x1e6f50:157-176] (+28 verts, +42 indices, +1 material); the placed-corona billboard slots follow it; the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]; re-pinned 10-28: the searchlight heads' block-0x27 LOD meshes (OBJECT_SearchLightBroken) on their own slots [M Control_NextLOD 0x1349b0] (+1134 verts, +1 material)
+    ("07000002.bin", "07f406b0bfe70e12 4528718 9471414 5296 4395409 88 11287 205 28 25 5"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
+    ("07000005.bin", "7f4595e597d12dc1 4429821 9266439 3618 4345532 74 11185 106 19 16 4"), // re-pinned 11-01 (courtyard-lamps on the merged master): the courtyard corona's sort-list-2 copy on its own searchlight slot, pass 6 [M View_AddObjects 0x1e62d8:57-59; Game_Draw 0x1e6f50:157-176] (+28 verts, +42 indices, +1 material); the placed-corona billboard slots follow it; the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]; re-pinned 10-28: the searchlight heads' block-0x27 LOD meshes (OBJECT_SearchLightBroken) on their own slots [M Control_NextLOD 0x1349b0] (+1134 verts, +1 material)
     // lift-indicators-09 re-pin: one draw slot per `Script_SubScriptStart` op per running SP
     // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
     // +1 attachment); 07000014's vent-lid SPs are placed SPs (unchanged), the rest have no
     // multi-SP sub chains.
-    ("0700000c.bin", "94079ec52b004d24 4926782 10356138 8425 4726862 97 12444 170 22 40 11"), // re-pinned 10-26: 0x3b on posed slots
+    ("0700000c.bin", "067ec333c0981d9b 4926782 10356138 8425 4726862 97 12444 170 22 40 11"), // re-pinned 10-26: 0x3b on posed slots
     // script-entity-copies: one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
     // The keypads' LOD pair in the posed slots (Lock_Unlock 0x1b0650 / case 1 `Control_NextLOD`: three

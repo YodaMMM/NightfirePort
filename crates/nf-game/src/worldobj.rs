@@ -1,6 +1,7 @@
 //! The gameplay placement types the port drew as static geometry: the channel inverter (0x41), the
-//! turret shooter (0xd2), the gated dynamic object (0x3b) and the third-person camera spline (0xe7).
-//! All four are created by `parsemap_create_dynamic_objects` 0x1d04f0 from the placements' params
+//! turret shooter (0xd2), the gated dynamic object (0x3b), the third-person camera spline (0xe7),
+//! the one-sided wall (0xd5) and the music trigger (0xfb).
+//! All are created by `parsemap_create_dynamic_objects` 0x1d04f0 from the placements' params
 //! (the level_tag record, docs/fields/level-tag.md) and updated per tick by `control_funcs[class]`
 //! through `control_movement_object_handler` 0x1336f8's update pass. None of the four creators
 //! draws from the shared RNG (checked on each create's decompile), so creating them here does not
@@ -438,6 +439,38 @@ impl Mine {
     }
 }
 
+/// OneSided wall (placement 0xd5 → `OneSided_Create` 0x1e7ce8, class 0x4C). The creator makes a
+/// plain control object (`control_create_object(0, pos, rot, 0)` 0x1e7ce8:9), stores the
+/// placement's celglist at obj+0xD8 (0x1e7ce8:14) and the class byte 0x4C at obj+0xff
+/// (0x1e7ce8:15), then links it into the room (0x1e7ce8:16). Its params are all unused.
+/// `OneSided_Update` 0x1e7d58 (control_funcs[0x4c·0xC] @0x26fc20, run by the update pass
+/// 0x1336f8:54-69): dot the object matrix's dir (`Mat_GetDir` 0x1e3398 reads obj+0x90's third
+/// column) with (obj pos − viewer) — `glb_viewer+0xC0`, the active camera's world position —
+/// and set obj+0xF0 bit 0x10 (hide) when the dot < 0, clear it otherwise (0x1e7d58 C decomp:
+/// the `_vsub`/`_vmul` pair + the 3-float sum; the disassembly confirms the same three floats
+/// feed the `< 0.0` branch). One whole-object plane flip per tick; no RNG, no channels.
+#[derive(Clone, Debug)]
+pub struct OneSided {
+    /// The object position (obj+0x30 = the placement translation).
+    pub pos: V3,
+    /// The matrix dir (`Mat_GetDir(obj+0x90)`, the placement's RotZYX forward, column 2).
+    pub dir: V3,
+    /// The placement index (the join key the draw side needs when it honours the hidden flag).
+    pub placement: usize,
+    /// obj+0xF0 bit 0x10, refreshed every tick by [`OneSided::tick`] (hidden when facing away).
+    pub hidden: bool,
+}
+
+impl OneSided {
+    /// `OneSided_Update` 0x1e7d58: `dot(dir, pos − viewer) < 0` → obj+0xF0 |= 0x10, else clear.
+    /// The viewer is the active camera's world position (`glb_viewer+0xC0`) — the same stand-in
+    /// [`DynObject::tick`]'s fade uses (on-foot first-person = the eye).
+    pub fn tick(&mut self, viewer: V3) {
+        let d = [self.pos[0] - viewer[0], self.pos[1] - viewer[1], self.pos[2] - viewer[2]];
+        self.hidden = self.dir[0] * d[0] + self.dir[1] * d[1] + self.dir[2] * d[2] < 0.0;
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct WorldObjects {
     pub rotors: Vec<Rotor>,
@@ -446,10 +479,11 @@ pub struct WorldObjects {
     pub dynobjs: Vec<DynObject>,
     pub thirdcams: Vec<ThirdCam>,
     pub music_triggers: Vec<MusicTrigger>,
+    pub onesided: Vec<OneSided>,
 }
 
 impl WorldObjects {
-    /// The placement scan (`p.flags & 0xff` kinds 0x41 / 0xd2 / 0x3b / 0xe7). `path_blocks` is the
+    /// The placement scan (`p.flags & 0xff` kinds 0x41 / 0xd2 / 0x3b / 0xe7 / 0x71 / 0xfb / 0xd5). `path_blocks` is the
     /// main map's 0x19 key-list payloads (`m_paths`), indexed by the placement's +0x44 word.
     /// `glist` resolves the placement's object to its glist's +0x44 draw-flags word (the word
     /// `DynamicObject_Create` copies to obj+0xF0), its sphere centre (`celglist+0x20..+0x2C`,
@@ -479,6 +513,20 @@ impl WorldObjects {
                         weapon: param(1) as u16,
                         arm: param(0) as u16,
                         fired: false,
+                    });
+                }
+                0xd5 => {
+                    // OneSided_Create 0x1e7ce8: a plain control object (CCO(0) → the placement
+                    // pos/rot [M 0x1e7ce8:9, 0x1344e0:26-29]), the glist at obj+0xD8, class 0x4C.
+                    // The placement's object still draws (the static misc path scene.rs keeps —
+                    // the hidden flag's consumer is the draw side, a hand-off stub).
+                    let m = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
+                    w.onesided.push(OneSided {
+                        pos: p.translation,
+                        // Mat_GetDir(obj+0x90): the matrix's dir column (identity → +z).
+                        dir: [m[0][2], m[1][2], m[2][2]],
+                        placement: p.index as usize,
+                        hidden: false,
                     });
                 }
                 0x3b => {
@@ -565,6 +613,11 @@ impl WorldObjects {
             ob.tick(viewer, channels);
         }
         self.dynobjs.retain(|ob| !ob.dead);
+        // OneSided_Update 0x1e7d58, per object (the same update pass): the facing flip only —
+        // no channels, no RNG, so its walk order against the other classes is unobservable.
+        for os in &mut self.onesided {
+            os.tick(viewer);
+        }
         // MusicTrigger_Update 0x1b31a0, in its order: the p1 flag arm, the p0 re-arm
         // (`countdown = 0x1e`), then the drain (`countdown != 0` → decrement, `Music_Event(id, 2)`,
         // the p3 flag) — the event board slot reads 2 while the countdown runs and stops 30 ticks

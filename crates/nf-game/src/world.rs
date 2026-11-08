@@ -2199,6 +2199,35 @@ impl CollisionWorld {
         self.find_cel(centre)
     }
 
+    /// The out-of-cel recovery — `control_handle_cel_change` 0x133288's default arm (the tail the
+    /// type-2 drone case falls through to in SP): for an object that was LINKED to `cell`, left
+    /// that cel's box (`build_point_in_bounding_box` 0x1c9500 miss) with no portal crossing
+    /// (`Cel_ObjectLeftCel` 0x1e0d58 miss) and no `build_FindCel` 0x1c8cb0 hit at the retry
+    /// (`build_LinkToRoom` 0x1c9680 → 0), the position resets to `obj+0x40` (the move segment's
+    /// from — the caller's `prev`) and each axis clamps into the OLD cel's box `cel+0x40..0x58`
+    /// minus the world-sphere radius: `if v >= min + r → min(v, max − r) else v := min + r` — the
+    /// else branches PULL IN from the low edge, the then branches cap at the high edge [M
+    /// 0x133288:186-221: x 0x40/0x50, y 0x44/0x54, z 0x48/0x58, r = obj+0x8C; the recovered vector
+    /// is copied to obj+0x70 and obj+0xC0, the object relinks into the old cel's list, and the
+    /// channels refresh]. `None` cell stays `None` — the unlinked retry path (0x133288:63-73)
+    /// returns without any recovery [M]. The guard bit `obj+0xF0 & 0x20` is clear for the player
+    /// [S: the measured recovery runs on Bond]. Measured [D live]: the (12.0, 6.3, −32) teleport on
+    /// 07000003 returns Bond to the pre-teleport position (the level start) inside 1 s, and the
+    /// (16.5, 6.3, −33) teleport lands standing at x 15.99 = cel 8's max x 17.04 − 1.0576 — the
+    /// radius [`Bond::SPHERE_RADIUS` L ee_start_05 M_CONTROL+0x8C] — with the ground disc (r 0.4)
+    /// reaching back onto the floor edge at x 15.59.
+    pub fn out_of_cel_recovery(&self, cur: Option<usize>, prev: V3, radius: f32) -> Option<(usize, V3)> {
+        let cell = cur?;
+        let sc = self.scope.as_ref()?;
+        let (lo, hi) = sc.graph.cells.get(cell).copied()?;
+        let clamp = |v: f32, mn: f32, mx: f32| if v < mn + radius { mn + radius } else { v.min(mx - radius) };
+        Some((cell, [
+            clamp(prev[0], lo[0], hi[0]),
+            clamp(prev[1], lo[1], hi[1]),
+            clamp(prev[2], lo[2], hi[2]),
+        ]))
+    }
+
     /// The take's LOS ray: the straddle cells' static geometry, the 0x1000 missile cage excluded
     /// (`Collide_Pick`'s bit-0x20 skip, flags 0x721 [M 0x1eb480-0x1eb49c + 0x18e148:213-214]) and the
     /// surface classes the take's query-type filter skips — `Collide_Intersect` 0x1ebaa8's tail: the

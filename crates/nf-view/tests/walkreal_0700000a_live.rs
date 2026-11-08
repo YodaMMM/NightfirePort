@@ -884,7 +884,9 @@ fn walk_qworm_and_back_at(difficulty: u32) -> Walker {
         for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
         cycles += 1;
     }
-    let shots = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 3.0, 400, "the Q-Worm install (real, from the walked south stand)", &|sim| sim.drones.channels.on(0x48));
+    // The aim sits on the PC's own mesh (y ±0.34 about the placement [D the glist's collision
+    // bounds]): the Q-Worm fires only with the PC first under the crosshair [M 0x1a5460:531-545].
+    let shots = shoot_at(&mut w, [pc[0], pc[1] + 0.2, pc[2]], 3.0, 400, "the Q-Worm install (real, from the walked south stand)", &|sim| sim.drones.channels.on(0x48));
     w.wait(6);
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x48),
         "ch 0x48 (objective 4) from the REAL install: {shots} shots from the walked south stand [M PCQWorm_Update 0x1aee20]");
@@ -989,6 +991,41 @@ fn walk_office_floor_qworm_keyboard_hatch() { walk_office_floor_qworm_keyboard_h
 
 /// The walk body at `difficulty` (1 Operative = the old warm load's replay parity; 2 Agent rides
 /// the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
+/// The #614 southbound landing and the south-west lane's first legs (the ring's south mouth).
+const LANE_MOUTH: [[f32; 3]; 3] = [[-22.2, 1.3, 9.2], [-22.18, 1.3, 6.5], [-23.04, 1.3, 2.48]];
+
+/// The south mouth's patrol window, waited from the west offices' north corridor (out of the
+/// west corridor's line). The office civilian g8 (team 3, sight 12, 180° cone [the alarm trace's
+/// roster]) loops (−15.3, 6.5) → the mouth (−22, 6.3) → the west room (−26.4, 10.0) → (−35.9, 8.7)
+/// → back east along z ≈ 4-5 → the mouth again (the port's walked trace, ~2400 ticks a lap).
+/// At the game's crouch pace (0.039/tick [M Player_SSCrouch 0x1924c0:58 + the +0x10 → +0x20 copy,
+/// Player_Update 0x193600:296-299]) the ring reaches #614 as he crosses the mouth: he sees the
+/// north-of-beam stand down the corridor (d 9.9) or the landing (d 3.3) → 0x3e → PressAlarm. The
+/// player's answer is to wait in cover until he has gone into the west room walking away, then
+/// make the crossing behind his back: every live non-team-0 drone is either beyond sight range of
+/// the mouth and the lane's first legs, or inside the west room (x < −26.5, z > 9) facing west
+/// (the walker's yaw convention: facing x = sin(yaw)).
+fn wait_mouth_window(w: &mut Walker) {
+    let start = w.total_ticks;
+    loop {
+        let bad: Vec<usize> = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            sim.drones.list.iter().enumerate().filter(|(_, d)| {
+                d.present && !d.corpse && d.health > 0.0 && d.enabled && d.team != 0
+                    && LANE_MOUTH.iter().any(|p| walker::dxz(d.pos, *p) < 12.0)
+                    && !(d.pos[0] < -26.5 && d.pos[2] > 9.0 && d.yaw.sin() < 0.0)
+            }).map(|(i, _)| i).collect()
+        };
+        if bad.is_empty() {
+            eprintln!("[0a] the south mouth's window opened after {} ticks", w.total_ticks - start);
+            return;
+        }
+        assert!(w.total_ticks - start < 6000, "no south-mouth window in 6000 ticks (in range {bad:?})");
+        assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed waiting for the south mouth");
+        w.wait(1);
+    }
+}
+
 fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
     let mut w = walk_qworm_and_back_at(difficulty);
 
@@ -1030,7 +1067,10 @@ fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
         let sweep = label == "ring: sweep-jump beam #614";
         if crouched && !jump && !sweep { set_crouch(&mut w, true); }
         watch_and_clear(&mut w, 16.0);
-        if sweep { sweep_jump_beam614(&mut w, true, wp[0], wp[1], label); }
+        if label == "ring: the west corridor's head" { wait_mouth_window(&mut w); }
+        if sweep {
+            sweep_jump_beam614(&mut w, true, wp[0], wp[1], label);
+        }
         else if jump { jump_over_low_beam(&mut w, BEAM_614, wp, 1.0, label); }
         else { w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label); }
         if crouched && !jump && !sweep { set_crouch(&mut w, false); }
@@ -1639,6 +1679,11 @@ fn bond_stands_at_the_mouth_bridge_edge() {
         ([-11.9, 1.3, -17.5], "ring: the keypad's wall"),
     ];
     for (wp, label) in ring {
+        // The ring's west-office legs cross g8's patrol at his (−18.6, 5.4) pause and the door
+        // jinks south of it; at the game's crouch pace the prologue lands Bond there with him
+        // (bumped at d 0.1 → 0x3e → PressAlarm). Wait in the north corridor for his west-room
+        // leg (the hatch walk's own window, wait_mouth_window).
+        if label == "ring: down the west office block" { wait_mouth_window(&mut w); }
         watch_and_clear(&mut w, 16.0);
         w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label);
         assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed at '{label}'");

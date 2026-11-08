@@ -658,3 +658,14 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage_agent() {
     let iso = iso();
     walker::with_real_damage(|| walk_the_warm_chain(&iso, true, 2));
 }
+
+/// Operative sister of `..._real_damage_agent`: the same walked chain at difficulty 1, so the
+/// mission's objectives are walked on real input at all three difficulties. Operative creates
+/// only the p2 = 1 placements [M Drone_Create 0x136be0:49], auto-unlocks 12's keypad locks at
+/// create [M Lock_Create 0x1ae1f8 tail], and 13's group-2 spawner has no template (both are
+/// p2 >= 2 [D]). Real input only; no health, ammo or channel writes.
+#[test]
+fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage_operative() {
+    let iso = iso();
+    walker::with_real_damage(|| walk_the_warm_chain(&iso, true, 1));
+}

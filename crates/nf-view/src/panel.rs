@@ -317,8 +317,8 @@ pub fn apply(scene: &mut crate::scene::Scene, q: &[(String, String)]) -> (String
             // stays true (a dev give does not depend on the level's model set — the row's
             // "(no fp model)" tag carries that fact), and the switch request below is the panel's
             // own affordance (a pickup switches only when `Player_IsBetterWeapon` 0x1a6eb0 ranks
-            // the pickup higher). `clock` = the sim tick, the port's stand-in for `GameState+0x52`
-            // (the 10 → 0xC remap gate) [M 0x18e650:142; the game-side take call in drone.rs].
+            // the pickup higher). `clock` = the game-complete byte `GameState[0x52]` (the 10 → 0xC
+            // remap gate) [M 0x1a8f30:18-22; the game-side take call in drone.rs].
             let p = nf_game::pickup::Pickup {
                 kind: nf_game::pickup::kind::WEAPON,
                 weapon: id as u16,
@@ -343,7 +343,7 @@ pub fn apply(scene: &mut crate::scene::Scene, q: &[(String, String)]) -> (String
                 label: 0,
             };
             let drones = &mut sim.drones;
-            let clock = drones.frame;
+            let clock = drones.progress.game_complete as u32;
             // The armour lane is untouched by the WEAPON arm (`Pickup_Handler` case 0) — a scratch
             // stands in for the taker's `BLData+0x8B0` the signature shares with the other kinds.
             let mut armour_scratch = 0.0f32;

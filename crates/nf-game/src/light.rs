@@ -124,13 +124,15 @@ impl LightList {
 
     /// `Light_Create` with the full record the 0x4E placements carry: `seed_source` is the game's
     /// param_11 (node+0x26 = `seed>>1`, node+0x28 = `seed + Rand_Rand(seed)` — the draw ALWAYS
-    /// happens, seed 0 included [M 0x1cc3d8]) and `mask` the flicker mask (node+0x2a). `create`
+    /// happens, seed 0 included [M 0x1cc3d8]) and `mask` the flicker mask (node+0x2a). `sound` is
+    /// the wrap-sound id (node+0x2c — the dispatcher passes param 8, 0 → 0xffff [M
+    /// 0x1d0bb0-0x1d0bd0]; the update's play path stays unported). `create`
     /// above is the same machine with seed_source = the period and mask 0 — what its call sites
     /// (muzzle, explosion, radiators) pass implicitly. fix-searchlight-remainder, additive.
     #[allow(clippy::too_many_arguments)]
     pub fn create_full(&mut self, radius: f32, intensity: f32, pos: [f32; 3], rgb: [u8; 3],
                        channel: u16, life_arg: i16, kind: u8, flicker: u16, seed_source: u16,
-                       mask: u16, rng: &mut Rng) -> usize {
+                       mask: u16, sound: i16, rng: &mut Rng) -> usize {
         let drawn = rng.rand(seed_source as u32);
         self.lights.push(Light {
             pos,
@@ -140,7 +142,7 @@ impl LightList {
             flicker_base: seed_source >> 1,
             flicker_count: seed_source.wrapping_add(drawn as u16),
             flicker_mask: mask,
-            sound: 0,
+            sound,
             track: None,
             radius,
             intensity,
@@ -154,8 +156,9 @@ impl LightList {
 
     /// `Light_Update` 0x1cafb8. `channel_on` reads the switch channels; `frame` is
     /// `GameState+0x52` (the main-loop tick counter). The flicker path's `Sound_Play3D`
-    /// (id +0x2C) is not ported: the placement call sites leave the sound id uninitialised and
-    /// no level light showed the sound in play.
+    /// (id +0x2C) is not ported: every placement light on the disc carries param 8 = 0 → the
+    /// game's own 0xffff (silent) [D the census; M 0x1d0bb0-0x1d0bd0], and no level light showed
+    /// the sound in play.
     pub fn update(&mut self, channel_on: &dyn Fn(u16) -> bool, frame: u32, rng: &mut Rng) {
         let mut dead = vec![false; self.lights.len()];
         for (k, l) in self.lights.iter_mut().enumerate() {
@@ -422,27 +425,32 @@ pub fn level_lights(level: &nf_formats::level::Level, rng: &mut Rng, lights: &mu
 }
 
 /// The type-0x4E placement lights for one map (called from the placement walk so the draws
-/// interleave with the drones' create draws in placement order). The record's tail fields are
-/// pinned from the case-0x4E call site [M 0x1d0bd4-0x1d0c04: lhu 0x40 → a7 = the flicker period,
-/// lhu 0x44 → stack+0 = the counter-seed source (Light_Create stores `seed>>1` at +0x26 and
-/// `seed + Rand_Rand(seed)` at +0x28), lhu 0x48 → stack+8 = the flicker MASK (+0x2a), lhu 0x4c
-/// → stack+0x10 = the wrap sound (+0x2c); n32 stack slots are 8-byte spaced]. The old parse
-/// passed only the period and derived the seed from it — the two coincide only when the level
-/// data's +0x44 == +0x40.
+/// interleave with the drones' create draws in placement order). The record's fields come from
+/// the placement's PARAMS block — the block parser scatters the param pairs to
+/// `level_tag+0x2C+4k` [M parsemap_block_map_data_dynamic 0x1d1b68:70-75] and case 0x4e marshals
+/// `Light_Create` from exactly those words [M 0x1d0b8c-0x1d0c04: `lw 0x2c(s1)` radius p0 with
+/// the uint→float `cvt.s.w` and the `bltz` ≥2^31 expansion [M 0x1d0b8c-0x1d0bd0], `lbu
+/// 0x30/0x34/0x38(s1)` rgb p1/p2/p3, `lhu 0x3c(s1)` channel p4, life −1, kind 0, intensity
+/// 1.0 constants, `lhu 0x40(s1)` flicker period p5, `lhu 0x44(s1)` seed p6, `lhu 0x48(s1)`
+/// mask p7, `lw 0x4c(s1)` sound p8 (0 → 0xffff)]. The placement's raw +0x24..+0x44 words are
+/// the quaternion/scale staged for other cases — on 07000001's four lights they read
+/// (0,0,0,1)/(1,1,1) floats [D probe], not light data; the old raw-word read built every
+/// placement light with radius 0 and black rgb (red
+/// crates/nf-view/tests/placement_lights_07000001_live.rs on the old code).
 pub fn placement_light(level: &nf_formats::level::Level, map: usize, index: usize, rng: &mut Rng, lights: &mut LightList) {
     let p = &level.maps[map].placements[index];
     if p.flags & 0xff != 0x4e || p.flags & 0xa000 != 0 { return; }
-    let e = |k: usize| p.extra.get(k).copied().unwrap_or(0);
-    let b = |k: usize| (e(k) & 0xff) as u8;
+    let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map_or(0, |&(_, v)| v);
     // The game converts the radius as an UNSIGNED INT, not float bits: `parsemap_create_dynamic_objects`
     // 0x1d0b8c `lw $v0, 44($s1)` → `mtc1` → `cvt.s.w $f12, $f12`, with the `bltz` arm
     // (0x1d0bb4: `srl v1, v0, 1` / `or v0, v0 & 1, v1` / cvt / `add.s f12, f12, f12`) the standard
     // uint→float expansion for values ≥ 2^31 — the compiler's `(float)(unsigned)placement->radius`
     // [M 0x1d0b8c-0x1d0bd0]. The old `f32::from_bits` made every 0x4E radius ~1e-44, so `1/radius²`
     // overflowed and the light could never contribute (atten = max(0, 1/d² − 1/r²) stayed 0).
-    lights.create_full(e(2) as f32, 1.0, p.translation,
-        [b(3), b(4), b(5)], (e(6) & 0xffff) as u16, -1, 0,
-        (e(7) & 0xffff) as u16, (e(8) & 0xffff) as u16, (e(9) & 0xffff) as u16, rng);
+    lights.create_full(param(0) as f32, 1.0, p.translation,
+        [param(1) as u8, param(2) as u8, param(3) as u8], param(4) as u16, -1, 0,
+        param(5) as u16, param(6) as u16, param(7) as u16,
+        if param(8) == 0 { -1 } else { param(8) as i16 }, rng);
 }
 
 #[cfg(test)]
@@ -552,7 +560,7 @@ mod tests {
         // period, so the record must show the seed's >>1 base, and the stream advances once.
         let mut rng = Rng::new(7);
         let mut l = LightList::default();
-        let i = l.create_full(6.0, 1.0, [1.0, 2.0, 3.0], [0xff, 0x80, 0x40], 9, -1, 0, 60, 200, 0x18, &mut rng);
+        let i = l.create_full(6.0, 1.0, [1.0, 2.0, 3.0], [0xff, 0x80, 0x40], 9, -1, 0, 60, 200, 0x18, -1, &mut rng);
         let li = &l.lights[i];
         assert_eq!(li.flicker_period, 60);
         assert_eq!(li.flicker_base, 100, "seed_source >> 1 [M 0x1cc3d8]");
@@ -561,7 +569,7 @@ mod tests {
         assert_eq!(li.rgb, [0xff, 0x80, 0x40]);
         let before = Rng { x: rng.x, y: rng.y, ..Default::default() };
         let mut rng2 = Rng::new(7);
-        l.create_full(6.0, 1.0, [1.0, 2.0, 3.0], [0xff, 0x80, 0x40], 9, -1, 0, 60, 200, 0x18, &mut rng2);
+        l.create_full(6.0, 1.0, [1.0, 2.0, 3.0], [0xff, 0x80, 0x40], 9, -1, 0, 60, 200, 0x18, -1, &mut rng2);
         let _ = before;
         // Sister: the old create derived the base from the PERIOD (60 >> 1 = 30) — wrong when +0x44 ≠ +0x40.
         let mut old = LightList::default();

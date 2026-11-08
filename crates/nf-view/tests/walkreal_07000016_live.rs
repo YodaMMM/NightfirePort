@@ -1166,12 +1166,16 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
     // ~48-health death) shows deltas above this cap.
     {
         let sim = w.scene.sim.as_ref().unwrap();
+        // The pain row per menu pick: 14-16's Plr_DMod Easy/Normal/Hard = 0.4/0.6/1.0 [M
+        // ReadTuningVars 0x1d3a80 case 0x7000014-16]; the cap is the punch × the pick's row.
+        let row = match sim.drones.difficulty { 1 => 0.4f32, 2 => 0.6, _ => 1.0 };
+        let cap = 50.0 * row;
         let mut audited = 0usize;
         for &(f, owner, delta) in sim.drones.player_hits.iter() {
             if f <= t_squad || owner == usize::MAX { continue; }
             audited += 1;
-            assert!(delta <= 20.0 + 0.02,
-                "squad-phase hit from dealer {owner:?} dealt {delta:.2} health — above the game's strongest squad-phase deal (the punch 50.0 [D record 99] × 0.4 [M 0x1d4424] = 20.0)");
+            assert!(delta <= cap + 0.02,
+                "squad-phase hit from dealer {owner:?} dealt {delta:.2} health — above the game's strongest squad-phase deal (the punch 50.0 [D record 99] × {row} [M 0x1d3a80] = {cap})");
         }
         eprintln!("[real-damage] the squad-phase audit: {audited} hits, every delta within the game's chain [D record 99; M 0x1d4424/0x139fac]");
     }
@@ -2178,6 +2182,20 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(difficulty: u
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.health.health > 0.0, "Bond survives the finale on the port's real damage");
         eprintln!("[real-damage] the finale walked: {}", w.dmg.summary(sim));
+}
+
+/// The objective chain at the other two menu picks with the walker's health allowance: the
+/// min-difficulty placements [M Drone_Create 0x136be0:49] change the roster at Agent (2) and
+/// 00 Agent (3), so each pick's real path to ch 0x8f, the button's ch 0x90 and ch 100 is
+/// walked. The real-health sisters stay the damage pins.
+#[test]
+fn walk_the_chasers_defeat_completes_the_mission_agent() {
+    walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2);
+}
+
+#[test]
+fn walk_the_chasers_defeat_completes_the_mission_00agent() {
+    walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3);
 }
 
 #[test]

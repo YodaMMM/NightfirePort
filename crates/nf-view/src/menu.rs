@@ -1286,6 +1286,24 @@ pub fn cnname_move(cur: usize, dir: crate::menu_engine::FindDir) -> usize {
     menu_find_control(&ctrls, Some(0), cur.min(ctrls.len() - 1), dir).unwrap_or(cur)
 }
 
+/// `Menu_FindControl` 0x1f16d8 over the keypad page's ten digit buttons, the only controls on that
+/// page with +0x7a clear (see `Keypad::focus`). `dir` is the game's direction byte. The rects go
+/// through `FixupResolution` first, as `MenuManager_Create` puts them [M 0x21b908]. Returns `cur`
+/// when no control lies that way, in either sense: the 0 key has nothing left or right of it.
+pub fn keypad_step(cur: usize, dir: u8) -> usize {
+    use crate::menu_engine::{menu_find_control, FindDir, MenuControl};
+    let d = match dir { 1 => FindDir::Up, 2 => FindDir::Down, 4 => FindDir::Left, 8 => FindDir::Right, _ => return cur };
+    let rects = nf_game::lock::KEYPAD_DIGIT_RECTS;
+    let ctrls: Vec<MenuControl> = rects.iter().enumerate().map(|(i, &(x, y, w, h))| {
+        let [x, y, w, h] = crate::fe_pages::fixup_resolution(x as i32, y as i32, w as i32, h as i32, false);
+        MenuControl {
+            next: if i + 1 < rects.len() { Some(i + 1) } else { None },
+            x: x as i16, y: y as i16, w: w as i16, h: h as i16, ctype: 1, ..Default::default()
+        }
+    }).collect();
+    menu_find_control(&ctrls, Some(0), cur.min(ctrls.len() - 1), d).unwrap_or(cur)
+}
+
 /// The grid's cells, digits then letters then the three control cells (0-9, A-Z, ← → ✓ [D the
 /// page's cell set, in the page data's label order — `CNNAME_CELLS` holds their rects]).
 pub static SECRET_GRID: [SecretKey; 39] = {
@@ -11557,6 +11575,19 @@ pub fn pad_menu_action(buttons: u16, prev: &mut u16) -> Option<Action> {
         _ if has(0x2000) => Action::Right,
         _ => return None,
     })
+}
+
+/// The keypad page's pad lanes as held levels, (directions, ✕, △). The directions are actions
+/// 0x1a-0x1d: the d-pad bits, or the left stick past half on either axis, the game's own test
+/// `(byte − 127) · 0.0078125` [M psiInput_MapInputs 0x10cd80:380-410].
+pub fn pad_keypad_lanes(buttons: u16, lx: u8, ly: u8) -> (u8, bool, bool) {
+    let axis = |b: u8| (b as f32 - 127.0) * 0.0078125;
+    let mut nav = 0;
+    if buttons & 0x1000 != 0 || axis(ly) < -0.5 { nav |= 1; }
+    if buttons & 0x4000 != 0 || axis(ly) > 0.5 { nav |= 2; }
+    if buttons & 0x8000 != 0 || axis(lx) < -0.5 { nav |= 4; }
+    if buttons & 0x2000 != 0 || axis(lx) > 0.5 { nav |= 8; }
+    (nav, buttons & 0x40 != 0, buttons & 0x10 != 0)
 }
 
 /// menu-mouse-parity: the host's right-button mapping for the menu — a right PRESS is the pad's

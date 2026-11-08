@@ -249,7 +249,11 @@ fn four_human_session_digest_is_pinned() {
     // blast's one-tick queue (`MpObjectsRt::pending_blasts`, hash.rs) — the fold appends its
     // len word even when empty, so every digest moves once.
     const PINNED_TICK0: u64 = 0xce70_fc98_9d36_0d1f;
-    const PINNED_FINAL: u64 = 0xca2f_e7f4_f872_763f;
+    // agent-crouch-2 re-measured the final: the crouch smoothers ease from the 0.75-scaled lane
+    // [M Player_Update 0x193600:296-299 copies the scaled +0x10 quad to +0x20; Player_Move
+    // 0x191dd0:166-170], so the scripted crouch ticks (t % 47) move slower. Restoring the old
+    // unscaled read-back alone on the batch head gives back the old 0xca2f_e7f4_f872_763f.
+    const PINNED_FINAL: u64 = 0xbd72_3c3b_1d6a_7ae2;
     const HUMANS: usize = 4;
     let (_s, mut peers, mut simmed) = bring_up(&path, PORT_4, HUMANS, &[0, 2]);
     let mut ms: u64 = 0;

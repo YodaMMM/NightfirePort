@@ -95,8 +95,11 @@ fn fire_at(sim: &mut nf_view::scene::Sim, from: [f32; 3], target: [f32; 3]) {
         if !sim.disabled && sim.gun.switch_state == 0 { break; }
         sim.step_bond(Default::default(), false, false, false);
     }
-    sim.bond.pos = from;
-    let eye = [from[0], from[1] + 0.70, from[2]];
+    // A placement, not a poke: a raw write to a spot no room cel holds is sent back by the
+    // out-of-cel recovery [M 0x133288:186-221]. The aim reads where the floor snap stood him.
+    let yaw = sim.bond.yaw;
+    sim.place_bond(from, yaw);
+    let eye = [sim.bond.pos[0], sim.bond.pos[1] + 0.70, sim.bond.pos[2]];
     let d = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
     let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
     let dir = [d[0] / l, d[1] / l, d[2] / l];

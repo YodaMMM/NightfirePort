@@ -75,7 +75,16 @@ fn skip_held_cutscene(sim: &mut nf_view::scene::Sim, what: &str) {
 /// then the yaw and the distance are re-taken from the SETTLED position — the bullet spawns at
 /// the eye [M Player_WeaponInitBullet 0x1a4bf0], so the line must start where Bond stands.
 fn fire_sweep(sim: &mut nf_view::scene::Sim, from: [f32; 3], centre: [f32; 3], idx: usize) -> Option<(usize, usize)> {
-    sim.bond.pos = from;
+    // The game's placement, not a poke: `Player_StandAtNewPosition` 0x190d88 writes obj+0x40 too,
+    // so a FindCel miss leaves Bond unlinked AT the spot (no recovery shove — the vase stand is
+    // 3.1 units north of the hall room's box, where the game finds no room either). Only a real
+    // jump places: the second sweep's `pos = from` is a no-move on the settled spot (the shot
+    // sequence must not shift).
+    if (0..3).any(|k| (from[k] - sim.bond.pos[k]).abs() > 3.0) {
+        sim.place_bond(from, sim.bond.yaw);
+    } else {
+        sim.bond.pos = from;
+    }
     for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
     let p = sim.bond.pos;
     sim.bond.yaw = (centre[0] - p[0]).atan2(centre[2] - p[2]);
