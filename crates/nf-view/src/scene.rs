@@ -4622,6 +4622,13 @@ impl Sim {
                 nf_game::gadget::pick_decryptor_lock(camera, vdir, self.bond.pos, &self.drones.locks, &self.world, range)
             } else { None };
             let (trigger, reload) = if decryptor_weapon && trigger && decryptor_pick.is_none() { (false, reload) } else { (trigger, reload) };
+            // gadgets: the Micro-Camera's aim gate [M Player_WeaponFiring 0x1a5460:512-514]: on the
+            // fire-held branch a record whose base (+0x02) is 0x54 — the watch pair 0x54/0x55 —
+            // RETURNS unless the aim bit (`anim+0x60 & 1`, set when the raise script stops [M
+            // 0x1a2e38:554-561]) is up: an unaimed press takes no photograph (the press only reaches
+            // `Player_Weapon`'s 0x54/0x55 mode toggle, above).
+            let camera_base = self.weapons.base(self.gun.weapon as usize) == 0x54;
+            let (trigger, reload) = if camera_base && trigger && !aiming { (false, reload) } else { (trigger, reload) };
             // weapon-handling [M Player_WeaponFiring 0x1a5460:503-506]: with the trigger held and Bond
             // under the surface (`surfaced == 0`, `Player_MonitorAir` 0x191a70:98-125 — the port's
             // `Bond::underwater`), a record without `+0x68 & 0x2` RETURNS before the pull: no shot, no
@@ -5144,6 +5151,12 @@ impl Sim {
                         // length and the 0.4 radius miss where the game and the pinned test hit);
                         // the pinned sphere shape stays until the live check lands (report).
                         let end = [camera[0] + dir[0] * range, camera[1] + dir[1] * range, camera[2] + dir[2] * range];
+                        // gadgets: the game's target is the ray's FIRST hit [M 0x1a4bf0:152-159 —
+                        // `Collide_RayIntersect` head → aiming point, the hit list's head entry; its
+                        // +0x58 object must be class 2/3]: a wall in front of the guard takes the hit,
+                        // so the tick is the free miss (no beam, the spend refunded). The port's
+                        // sphere stand-in ignored the world and tased through walls.
+                        let wall = self.world.segment(camera, end).unwrap_or(1.0) * range;
                         for dr in self.drones.list.iter() {
                             if !dr.present || !dr.enabled || dr.corpse || dr.health <= 0.0 { continue; }
                             let c = [dr.pos[0], dr.pos[1], dr.pos[2]];
@@ -5153,7 +5166,7 @@ impl Sim {
                             let t = if ab2 > 1e-9 { (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / ab2 } else { 0.0 };
                             let cl = [camera[0] + ab[0] * t.clamp(0.0, 1.0), camera[1] + ab[1] * t.clamp(0.0, 1.0), camera[2] + ab[2] * t.clamp(0.0, 1.0)];
                             let d2 = (cl[0] - c[0]).powi(2) + (cl[1] - c[1]).powi(2) + (cl[2] - c[2]).powi(2);
-                            if d2 <= 1.05 * 1.05 { target_hit = true; break; }
+                            if d2 <= 1.05 * 1.05 && wall >= t.clamp(0.0, 1.0) * range - 1.05 { target_hit = true; break; }
                         }
                     }
                     self.stunner_target = Some(target_hit);
