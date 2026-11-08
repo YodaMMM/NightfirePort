@@ -412,10 +412,10 @@ fn the_grapple_point_aims_for_the_watch() {
     let dir = [p[0] - from[0], p[1] - (from[1] + 1.0), p[2] - from[2]];
     let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
     let dir = [dir[0] / len, dir[1] / len, dir[2] / len];
-    let hit = nf_game::gadget::pick_grapple_point(&sim.drones.grapple_points, from, dir, 60.0);
+    let hit = nf_game::gadget::pick_grapple_point(&sim.drones.grapple_points, from, dir, 60.0, |_, _| true);
     assert!(hit.is_some(), "aiming at #282 resolves the grapple point [M Grapple_Create/fix-gadgets]");
-    let away = nf_game::gadget::pick_grapple_point(&sim.drones.grapple_points, from, [dir[0], 0.0, dir[2]], 60.0);
+    let away = nf_game::gadget::pick_grapple_point(&sim.drones.grapple_points, from, [dir[0], 0.0, dir[2]], 60.0, |_, _| true);
     let _ = away; // the away-aim may still hit the other point — the sister is the MISS below.
-    let miss = nf_game::gadget::pick_grapple_point(&sim.drones.grapple_points, from, [-dir[0], -dir[1], -dir[2]], 60.0);
+    let miss = nf_game::gadget::pick_grapple_point(&sim.drones.grapple_points, from, [-dir[0], -dir[1], -dir[2]], 60.0, |_, _| true);
     assert!(miss.is_none(), "sister: aiming the opposite way misses both points");
 }

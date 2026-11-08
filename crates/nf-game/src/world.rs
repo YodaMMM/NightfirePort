@@ -653,9 +653,14 @@ fn segment_in_tris(tris: &[[V3; 3]], from: V3, to: V3) -> Option<f32> {
 /// Whether any triangle of `o` blocks `from → from + d` — the one-sided Möller–Trumbore test
 /// the yes/no segment queries run per triangle (`segment_blocked`, `segment_blocked_static`),
 /// with the bullet family's pass drop when `drop_pass`.
-fn obj_blocks(g: &Geo, o: &Object, from: V3, d: V3, drop_pass: bool) -> bool {
+fn obj_blocks(g: &Geo, o: &Object, from: V3, d: V3, drop_pass: bool) -> bool { obj_blocks_g(g, o, from, d, drop_pass, false) }
+
+/// `obj_blocks` with an optional glass skip (surface byte 0x10, the `Collide_Update` glass test's
+/// byte [M 0x1ea398:216-229]) for the sight-only rays that stand in for the renderer.
+fn obj_blocks_g(g: &Geo, o: &Object, from: V3, d: V3, drop_pass: bool, glass: bool) -> bool {
     for k in o.tris.clone() {
         if drop_pass && g.bullet_pass(k) { continue; }
+        if glass && g.mats[k] & 0x3f == 0x10 { continue; }
         let t = &g.tris[k];
         let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
         if dot(cross(e1, e2), d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
@@ -2279,16 +2284,25 @@ impl CollisionWorld {
     /// sight lines) only ask "is there a hit", so the answer is bit-identical and the work is the
     /// prefix up to the first hit [S port optimisation].
     fn segment_blocked(&self, from: V3, to: V3, with_missile: bool, drop_pass: bool) -> bool {
+        self.segment_blocked_g(from, to, with_missile, drop_pass, false)
+    }
+
+    /// `segment_bullet_clear` that also sees through glass (surface byte 0x10): the stand-in for
+    /// the renderer's "drawn" verdict (`View_AddObjects` 0x1e62d8 sets `obj+0xFC` from the cel/view
+    /// walk, which no glass pane hides), so a guard walking behind a window counts as drawn.
+    pub fn segment_sight_clear(&self, from: V3, to: V3) -> bool { !self.segment_blocked_g(from, to, true, true, true) }
+
+    fn segment_blocked_g(&self, from: V3, to: V3, with_missile: bool, drop_pass: bool, glass: bool) -> bool {
         let d = sub(to, from);
         let dynamic = self.dynamic.read().unwrap();
         let sets: [Option<&Geo>; 2] = [Some(&self.stat), with_missile.then_some(&self.missile)];
         for g in sets.into_iter().flatten() {
             // perf-240e: the grid's lazy near-to-far walk where the set has one (the same object
             // set, the answer independent of the order — `Geo::any_hit`), the scan otherwise.
-            match g.any_hit(from, to, &mut |o| obj_blocks(g, o, from, d, drop_pass)) {
+            match g.any_hit(from, to, &mut |o| obj_blocks_g(g, o, from, d, drop_pass, glass)) {
                 Some(true) => return true,
                 Some(false) => {}
-                None => { for o in along(g, from, to) { if obj_blocks(g, o, from, d, drop_pass) { return true; } } }
+                None => { for o in along(g, from, to) { if obj_blocks_g(g, o, from, d, drop_pass, glass) { return true; } } }
             }
         }
         // The dynamic set, pane parts skipped (the room-scope note at
@@ -2297,7 +2311,7 @@ impl CollisionWorld {
         for (o, (id, _, _)) in dynamic.geo.objects.iter().zip(&dynamic.movers) {
             if id & PANE_PART != 0 { continue; }
             if !seg_box(from, d, o.lo, o.hi) { continue; }
-            if obj_blocks(&dynamic.geo, o, from, d, drop_pass) { return true; }
+            if obj_blocks_g(&dynamic.geo, o, from, d, drop_pass, glass) { return true; }
         }
         false
     }
@@ -2362,6 +2376,18 @@ impl CollisionWorld {
             }
         }
         false
+    }
+
+    /// `segment_bullet_clear` over the dynamic set alone: the script-posed parts (doors, lids,
+    /// SS panels), early-out.
+    pub fn segment_bullet_clear_dynamic(&self, from: V3, to: V3) -> bool {
+        let d = sub(to, from);
+        let dynamic = self.dynamic.read().unwrap();
+        let g = &dynamic.geo;
+        !match g.any_hit(from, to, &mut |o| obj_blocks(g, o, from, d, true)) {
+            Some(r) => r,
+            None => along(g, from, to).any(|o| obj_blocks(g, o, from, d, true)),
+        }
     }
 
     /// First hit along `from → to`: the fraction in [0, 1] and the unit normal of the triangle hit (facing `from`).

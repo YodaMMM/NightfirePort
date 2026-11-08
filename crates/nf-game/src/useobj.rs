@@ -315,6 +315,31 @@ impl UseObjects {
         }
     }
 
+    /// The Q-Worm's use gate [M Player_WeaponFiring 0x1a5460:531-545 + Check_Target 0x1a7810]: the
+    /// 50-unit crosshair ray's first object must be a PC (class 0x49) in state 0, with the player
+    /// root inside `range` (`weapon_data+0x1C`) of the PC's position. The port's reading of the
+    /// ray is `pick_decryptor_lock`'s: the closest approach inside the PC's world sphere with no
+    /// world hit ahead of it, the same 0.5 margin for the desk the PC stands on.
+    pub fn qworm_target(&self, eye: V3, dir: V3, root: V3, world: &crate::world::CollisionWorld, range: f32) -> bool {
+        const RAY_LEN: f32 = 50.0; // [M 0x1a7810:114-116]
+        let end = [eye[0] + dir[0] * RAY_LEN, eye[1] + dir[1] * RAY_LEN, eye[2] + dir[2] * RAY_LEN];
+        let world_t = world.segment_bullet(eye, end).unwrap_or(1.0) * RAY_LEN; // flags 0xc: bit 8 [M 0x1a7810:121]
+        let mut best: Option<(f32, &PcQworm)> = None;
+        for pc in &self.pcs {
+            let c = pc.sph_centre;
+            let t = (c[0] - eye[0]) * dir[0] + (c[1] - eye[1]) * dir[1] + (c[2] - eye[2]) * dir[2];
+            if !(0.0..=RAY_LEN).contains(&t) { continue; }
+            let q = [eye[0] + dir[0] * t, eye[1] + dir[1] * t, eye[2] + dir[2] * t];
+            let d2 = (q[0] - c[0]).powi(2) + (q[1] - c[1]).powi(2) + (q[2] - c[2]).powi(2);
+            if d2 > pc.radius * pc.radius || world_t < t - pc.radius.max(0.5) { continue; }
+            if best.is_none_or(|(bt, _)| t < bt) { best = Some((t, pc)); }
+        }
+        best.is_some_and(|(_, pc)| {
+            let d = ((pc.pos[0] - root[0]).powi(2) + (pc.pos[1] - root[1]).powi(2) + (pc.pos[2] - root[2]).powi(2)).sqrt();
+            pc.state == 0 && d <= range
+        })
+    }
+
     /// The E-use dispatch (`Player_Activate` 0x1a5170's class walk): SPs (mask & 4, via
     /// `SP_Activate` 0x1dc338) and switches (class 0x39, `Switch_Activate` 0x1b02a8) within the
     /// use sphere (radius 1.0 at head + look [M 0x1a5170's `Collide_SphereIntersect(1.0, …)`]).

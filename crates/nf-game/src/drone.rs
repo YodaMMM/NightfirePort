@@ -12270,6 +12270,10 @@ pub fn in_view(eye: V3, pos: V3, slack: f32, sides: &[V3; 4]) -> bool {
 /// horizontal fan around Bond's aim) is gone: the game's frustum is 60° tall and 2·atan(tan(30°)·4/3)
 /// ≈ 75° wide, and a point behind the eye fails all four side planes — the cone marked guards drawn
 /// (auto-aimable, seek targets, slide-free) that the game leaves off-screen.
+/// Glass (surface byte 0x10) is not pass-flagged, so the bullet rays stopped on window panes the
+/// renderer draws straight through: 0700000a's patroller behind the lounge window (z −4.71 pane,
+/// mat 0x10) walked his whole loop undrawn, sliding with no gait in full view. The rays now skip
+/// glass too (`segment_sight_clear`).
 pub fn visible_to(player: &Player, world: &CollisionWorld, pos: V3, head: V3) -> bool {
     let a2 = player.aim[0] * player.aim[0] + player.aim[1] * player.aim[1] + player.aim[2] * player.aim[2];
     if !(a2 > 1e-12) { return false; }
@@ -12278,7 +12282,7 @@ pub fn visible_to(player: &Player, world: &CollisionWorld, pos: V3, head: V3) ->
     let side = if l > 1e-6 { [-v[2] / l * 0.5, 0.0, v[0] / l * 0.5] } else { [0.0; 3] };
     let pts = [head, pos, [pos[0] + side[0], pos[1] + side[1], pos[2] + side[2]], [pos[0] - side[0], pos[1] - side[1], pos[2] - side[2]], [pos[0], pos[1] - 0.8, pos[2]]];
     in_view(player.eye, pos, DRONE_DRAWN_SLACK, &frustum_sides(player.aim))
-        && pts.iter().any(|&q| world.segment_bullet_clear(player.eye, q))
+        && pts.iter().any(|&q| world.segment_sight_clear(player.eye, q))
 }
 
 /// The spawner's own "player can see the spot" gate — the game's `Drone_PositionVisible`

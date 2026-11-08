@@ -186,7 +186,7 @@ fn the_users_report_spot_latches_within_the_real_range() {
         [d[0] / l, d[1] / l, d[2] / l]
     };
     assert!(nf_game::gadget::pick_grapple_point(&sim.drones.grapple_points, head, dir,
-        nf_game::gadget::grapple_range(&sim.weapons, 0x50)).is_some(),
+        nf_game::gadget::grapple_range(&sim.weapons, 0x50), |_, _| true).is_some(),
         "the bolt sweep accepts the point from the repro spot");
 }
 

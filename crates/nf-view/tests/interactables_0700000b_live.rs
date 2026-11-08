@@ -409,7 +409,7 @@ fn qworm_console_installs_on_the_gadget_shot() {
     w.scene.sim.as_mut().unwrap().bond.pos = [-19.64, 47.2, 31.8];
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     w.wait(10);
-    w.try_walk_to(Wp::new(pc[0] + 0.6, pc[1] - 0.5, pc[2] + 0.9).r(1.0), "the Q-Worm C desk (the walked leg)");
+    w.try_walk_to(Wp::new(pc[0] + 0.6, pc[1] - 0.5, pc[2] + 0.9).r(0.4), "the Q-Worm C desk (the walked leg)");
     // The equip: the game's own gadget cycle (the d-pad's `Player_WeaponChange` mode 1,
     // bounds 0x4A..0x5E [M 0x1a6f80]) steps to the disc-owned Q-Worm 0x58 through the real
     // switch state machine (holster/draw waits between steps).
@@ -427,9 +427,8 @@ fn qworm_console_installs_on_the_gadget_shot() {
     let mut installed = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 2.6, 900,
         "the Q-Worm C shot", &|sim| sim.drones.channels.on(0x4c));
     if !installed {
-        w.scene.sim.as_mut().unwrap().bond.pos = [pc[0] + 0.6, pc[1] - 0.5, pc[2] + 0.9];
-        w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
-        w.wait(10);
+        // The low band from the same stand: the gadget fires only inside its 2.0 reach of the PC
+        // [M Player_WeaponFiring 0x1a5460:531-545], so the second stance stays at the desk.
         installed = shoot_at(&mut w, [pc[0], pc[1] + 0.1, pc[2]], 2.6, 900,
             "the Q-Worm C shot (low band)", &|sim| sim.drones.channels.on(0x4c));
     }

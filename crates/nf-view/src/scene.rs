@@ -3220,7 +3220,8 @@ impl Sim {
             {
                 let head = self.bond.head();
                 let dir = self.bond.look();
-                if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, claw)) {
+                let world = &self.world;
+                if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, claw), |a, b| world.segment_bullet_clear_dynamic(a, b)) {
                     // The claw's latch clunk: `Bullet_Delete` 0x12e660:50-55 — the claw bolt (+0x70 &
                     // 0x40) dying on a class-'Q' (0x51) grapple object plays `Sound_Play3D(100, -1,
                     // -1, 0x28d, bullet+0xC0)` right before `Player_SetGrapplePoint` [M disasm $a0
@@ -4626,6 +4627,14 @@ impl Sim {
                 nf_game::gadget::pick_decryptor_lock(camera, vdir, self.bond.pos, &self.drones.locks, &self.world, range)
             } else { None };
             let (trigger, reload) = if decryptor_weapon && trigger && decryptor_pick.is_none() { (false, reload) } else { (trigger, reload) };
+            // The Q-Worm's gate, the decryptor's neighbour in the same function [M
+            // Player_WeaponFiring 0x1a5460:531-545]: the crosshair target must be a PC (class 0x49)
+            // in state 0 within `weapon_data+0x1C`, or the firing returns before the pull.
+            let qworm_refused = trigger && self.gun.weapon == 0x58 && {
+                let range = self.weapons.records.get(0x58).map_or(2.0, |r| f32::from_le_bytes(r[0x1c..0x20].try_into().unwrap()));
+                !self.drones.useobjs.qworm_target(camera, self.bond.look(), self.bond.pos, &self.world, range)
+            };
+            let trigger = trigger && !qworm_refused;
             // weapon-handling [M Player_WeaponFiring 0x1a5460:503-506]: with the trigger held and Bond
             // under the surface (`surfaced == 0`, `Player_MonitorAir` 0x191a70:98-125 — the port's
             // `Bond::underwater`), a record without `+0x68 & 0x2` RETURNS before the pull: no shot, no
@@ -14157,7 +14166,7 @@ impl Sim {
                     && nf_game::gadget::is_grapple(r[slot].held)
                 {
                     let (head, dir) = (b.head(), b.look());
-                    if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, r[slot].held)) {
+                    if let Some(point) = nf_game::gadget::pick_grapple_point(&self.drones.grapple_points, head, dir, nf_game::gadget::grapple_range(&self.weapons, r[slot].held), |a, b| self.world.segment_bullet_clear_dynamic(a, b)) {
                         b.grapple = Some(nf_game::gadget::GrappleState { point, phase: 1, pull: 0.0 });
                         b.change_substate(nf_game::player::SS_GRAPPLE);
                         b.vel = [0.0; 3];

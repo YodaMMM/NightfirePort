@@ -807,6 +807,15 @@ impl Bond {
         // its 566f1d298-era guarantee along with it).
         self.move_local = [0.0; 2];
         let Some(st) = self.grapple.as_mut() else { self.change_substate(SS_WALK); return };
+        // The view on the rope. `Player_Aiming` 0x1a1d28 runs for every substate up to 7, so the
+        // look works all through the grapple [M 0x193600 tail + 0x1a1d28:21-30, clamp 0x1a92e8].
+        // The turn is `Player_Move` 0x191dd0's, which `Player_SSGrapple` calls first: it zeroes
+        // every input while the claw's view model is in its firing state 9 [M 0x191dd0:61-66],
+        // and `Player_SetWeaponAnimObj` 0x1a2e38:459-461 keeps that state for the whole reel, so
+        // Bond turns from the hang on (the integration is the shared
+        // `bd+0x30 → obj+0x50` add [M 0x193600 tail]).
+        self.pitch = (self.pitch + input.look).clamp(-1.0, 1.0);
+        if st.phase == 2 && input.fire { self.yaw += input.turn; }
         let mut pos = self.pos;
         let fire = input.fire;
         let released = crate::gadget::grapple_tick(&mut pos, st, fire);
