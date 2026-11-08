@@ -5678,22 +5678,27 @@ impl Sim {
             // of the slot viewer's matrix, asm 0x1a5250), through Collide_SphereIntersect 0x1ec940
             // → Collide_Pick 0x1eb320's 0x101 candidate test `dist²(centre, obj+0x80) <
             // (1.0 + obj+0x8C)²` [M Collide_PickObj 0x1eae80:219-228]; the class walk then activates
-            // EVERY hit, nearest first, no break [M 0x1a5170:113-179]. The port's world sphere is
-            // the placement object's gfx sphere (o.centre/o.radius — the Control_BuildWorldSph
-            // source, the same data Doors::create loads); the game's glist refine
-            // (Intersect_PointGeom 0x1e92d8) is not ported — a mesh veto of a sphere hit is left
+            // EVERY hit, nearest first, no break [M 0x1a5170:113-179]. The world sphere is the
+            // placement object's local bounds sphere posed by the object matrix (Control_BuildWorldSph
+            // 0x133070), and the glist refine (Intersect_PointGeom 0x1e92d8) decides after it —
+            // both in nf_game::usepick, shared by every arm. (Formerly: the refine was not ported —
+            // a mesh veto of a sphere hit was left
             // to the live checks (the report lists them).
             // use-pick-head: the SS/gunimp pick's origin is the SAME head [M 0x1a5170:100-108] —
             // one pick serves every class, so no arm may keep its own origin.
             let head = self.bond.head();
             let pick_c = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
             let mut ss_hits: Vec<(f32, usize)> = Vec::new();
+            // use-pick: the candidate is measured from the SS's posed world-sphere centre
+            // (obj+0x80), not its matrix translation, and the glist refine decides
+            // (nf_game::usepick — the game's two stages [M 0x1eae80, 0x1ebaa8 → 0x1e92d8]).
             for (i, s) in self.drones.sss.list.iter().enumerate() {
                 if s.state == 0 || s.mask & 4 == 0 { continue; }
-                let p = s.pos();
+                let sph = s.world_sphere();
+                if !nf_game::usepick::picks_in(&self.world, pick_c, sph, &s.matrix, s.hash) { continue; }
+                let p = sph.0;
                 let d2 = (p[0] - pick_c[0]).powi(2) + (p[1] - pick_c[1]).powi(2) + (p[2] - pick_c[2]).powi(2);
-                let r = 1.0 + s.radius;
-                if d2 <= r * r { ss_hits.push((d2.sqrt(), i)); }
+                ss_hits.push((d2.sqrt(), i));
             }
             ss_hits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
             // The same creepwall arm at the second activation site: icon context 6 ONLY
@@ -5732,14 +5737,14 @@ impl Sim {
             // the sphere at head+look vs the gun's world sphere (1.0 + obj+0x8C, the gfx-sphere
             // radius the props load now carries).
             let mut gbest: Option<(f32, usize)> = None;
+            // use-pick: the gun's posed world sphere + glist refine (nf_game::usepick).
             for (i, g) in self.drones.props.gunimps.iter().enumerate() {
                 if g.active { continue; }
-                let r = 1.0 + g.radius;
-                let d2 = (g.pos[0] - pick_c[0]).powi(2) + (g.pos[1] - pick_c[1]).powi(2) + (g.pos[2] - pick_c[2]).powi(2);
-                if d2 <= r * r {
-                    let dd = d2.sqrt();
-                    if gbest.map_or(true, |(bd, _)| dd < bd) { gbest = Some((dd, i)); }
-                }
+                let Some(pick) = self.drones.use_picks.gunimps.get(i) else { continue };
+                if !pick.picks(&self.world, pick_c) { continue; }
+                let c = pick.sphere.0;
+                let dd = ((c[0] - pick_c[0]).powi(2) + (c[1] - pick_c[1]).powi(2) + (c[2] - pick_c[2]).powi(2)).sqrt();
+                if gbest.map_or(true, |(bd, _)| dd < bd) { gbest = Some((dd, i)); }
             }
             if let Some((_, i)) = gbest {
                 let placement = self.drones.props.gunimps[i].placement;
@@ -10130,7 +10135,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let n_doors = nf_game::door::door_placements(&level.maps[m].placements).len();
             // The same construction the sim's `Drones::attach_level` runs, so the slot order matches
             // the matrix upload's `sss.list` order (deterministic: placement order, same filter).
-            let ss_list = nf_game::ss::SsList::create(&level.maps[m].placements, &level.path_blocks(), |_p| (0, 0.0));
+            let ss_list = nf_game::ss::SsList::create(&level.maps[m].placements, &level.path_blocks(), |_p| (0, [0.0; 3], 0.0));
             // (hash 0 here: the render pass does not need the collision hash — it reads the placement
             // object directly below; the sim's attach_level resolves the real one for set_dynamic.)
             for (si, ss) in ss_list.list.iter().enumerate() {
@@ -14409,11 +14414,10 @@ impl Sim {
     /// Every slot's use key this tick, in slot order (`Player_Activate` 0x1a5170 per player):
     /// the doors its sphere meets (`Door_Activate`), the deferred trigger half, the class-0x25
     /// SS pick (`SS_Activate` 0x1a9ea8 — the state + mask-4 gate, the kind:=1 latch, the channel
-    /// [M 0x1a9ea8:6-12]). The reach is the local path's documented shape (`run`'s SS arm): the
-    /// game's pick is a 1.0-radius `Collide_SphereIntersect` at head+dir walking every hit of the
-    /// use classes [M Player_Activate 0x1a5170:84-88, 120-135]; the port's per-SS probe (proj ≥ 0,
-    /// nearest within 2.2, one activation) is that arm's documented approximation, kept identical
-    /// across the SP and net paths.
+    /// [M 0x1a9ea8:6-12]). The reach is the local path's (`run`'s SS arm): the game's pick is a
+    /// 1.0-radius `Collide_SphereIntersect` at head+dir walking every hit of the use classes
+    /// [M Player_Activate 0x1a5170:84-88, 120-135] — nf_game::usepick (the posed world-sphere
+    /// candidate, then the glist refine), identical across the SP and net paths.
     /// The mounted guns are not created in an MP match (`GunImp_Create` 0x131f20:56-58 returns
     /// unless `MPSettings+0x1B8`), so no slot can mount one.
     fn net_use_pass(&mut self, row: &[nf_net::Input; nf_net::MAX_AGENTS]) {
@@ -14425,19 +14429,19 @@ impl Sim {
             let (evs, _) = self.drones.doors.player_use(head, look, &mut self.drones.channels, frame, &self.world);
             for (id, pos) in evs { self.drones.audio.play3d(id as u32, pos, None); }
             self.drones.net_use_triggers.push((head, look));
-            let mut best: Option<(f32, usize)> = None;
+            // The same pick as the local arm (nf_game::usepick): every SS the sphere keeps
+            // activates, nearest first [M 0x1a5170:113-179 — the walk has no break].
+            let pick_c = nf_game::usepick::point(head, look);
+            let mut hits: Vec<(f32, usize)> = Vec::new();
             for (i, s) in self.drones.sss.list.iter().enumerate() {
                 if s.state == 0 || s.mask & 4 == 0 { continue; }
-                let p = s.pos();
-                let to = [p[0] - head[0], p[1] - head[1], p[2] - head[2]];
-                let proj = to[0] * look[0] + to[1] * look[1] + to[2] * look[2];
-                if proj < 0.0 { continue; }
-                let cl = [head[0] + look[0] * proj, head[1] + look[1] * proj, head[2] + look[2] * proj];
-                let dd = ((p[0] - cl[0]).powi(2) + (p[1] - cl[1]).powi(2) + (p[2] - cl[2]).powi(2)).sqrt();
-                if dd > 2.2 { continue; }
-                if best.map_or(true, |(bd, _)| dd < bd) { best = Some((dd, i)); }
+                let sph = s.world_sphere();
+                if !nf_game::usepick::picks_in(&self.world, pick_c, sph, &s.matrix, s.hash) { continue; }
+                let p = sph.0;
+                hits.push((((p[0] - pick_c[0]).powi(2) + (p[1] - pick_c[1]).powi(2) + (p[2] - pick_c[2]).powi(2)).sqrt(), i));
             }
-            if let Some((_, i)) = best {
+            hits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            for (_, i) in hits {
                 let mut ch = std::mem::take(&mut self.drones.channels);
                 self.drones.sss.list[i].activate(&mut ch, frame);
                 self.drones.channels = ch;

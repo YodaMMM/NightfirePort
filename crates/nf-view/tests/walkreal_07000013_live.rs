@@ -460,12 +460,19 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(!sim.drones.channels.on(0x23), "ch 0x23 off before the panel E [D]");
     }
+    // The aim: the panel entity's posed collision box middle (-19.49, -368.23, 25.01) [D the
+    // entity glist 0x2000a2c posed by its stream matrix — probe], straight ahead of the walked
+    // stand. The use pick keeps the panel only with the use point within 1.0 in front of one of
+    // its faces [M Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8; nf_game::usepick].
     let mut ch23 = false;
     for t in 0..150 {
         let sim = w.scene.sim.as_ref().unwrap();
-        let desired = (-18.08f32 - sim.bond.pos[0]).atan2(25.01 - sim.bond.pos[2]);
+        let h = sim.bond.head();
+        let to = [-19.49f32 - h[0], -368.23 - h[1], 25.01 - h[2]];
+        let desired = to[0].atan2(to[2]);
         let err = walker::wrap_pi(desired - sim.bond.yaw);
-        let input = nf_game::player::Input { turn: err.clamp(-0.05, 0.05), ..Default::default() };
+        let want_pitch = (to[1] / to[0].hypot(to[2])).atan() / std::f32::consts::FRAC_PI_2;
+        let input = nf_game::player::Input { turn: err.clamp(-0.05, 0.05), look: (want_pitch - sim.bond.pitch).clamp(-0.05, 0.05), ..Default::default() };
         w.tick(input, t % 6 == 0);
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x23) { ch23 = true; break; }
     }
@@ -481,7 +488,11 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     let di = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
         .position(|d| walker::dxz(d.pos, [-26.65, -368.36, 37.44]) < 2.0).expect("the security-room door");
     let mut out = false;
-    for _ in 0..900 {
+    // The E pulses (the press is an edge [M Input_Action 0x17f208 bit 4]) with the view level:
+    // the pick keeps the leaf only once the use point is within 1.0 in front of it
+    // [M Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8; nf_game::usepick], so the
+    // first press from across the room cannot be the one that opens it.
+    for k in 0..900u32 {
         let (door_closed, bp) = {
             let sim = w.scene.sim.as_ref().unwrap();
             let d = &sim.drones.doors.list[di];
@@ -492,8 +503,9 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         let dz = 38.7 - bp[2];
         let desired = dx.atan2(dz);
         let err = walker::wrap_pi(desired - w.scene.sim.as_ref().unwrap().bond.yaw);
-        let input = nf_game::player::Input { turn: err.clamp(-0.05, 0.05), forward: 1.0, ..Default::default() };
-        w.tick(input, door_closed);
+        let pitch = w.scene.sim.as_ref().unwrap().bond.pitch;
+        let input = nf_game::player::Input { turn: err.clamp(-0.05, 0.05), look: (-pitch).clamp(-0.05, 0.05), forward: 1.0, ..Default::default() };
+        w.tick(input, door_closed && k % 6 == 0);
     }
     assert!(out, "13: out through the doorway while the door's open window holds [probe]");
     w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: out of the room");

@@ -68,6 +68,10 @@ pub struct Ss {
     /// (`Control_BuildWorldSph` 0x133070:48 takes the glist bound radius × |scale|) — the use-key
     /// pick's candidate radius [M Collide_PickObj 0x1eae80:219-228, `1.0 + obj+0x8C`].
     pub radius: f32,
+    /// The placement object's LOCAL sphere centre (`MapObject.centre`, the glist bounds centre):
+    /// `Control_BuildWorldSph` 0x133070:33-44 poses it through the object matrix into obj+0x80,
+    /// the point the use pick's candidate test measures from [M Collide_PickObj 0x1eae80:219-228].
+    pub centre: V3,
 }
 
 impl Ss {
@@ -83,6 +87,13 @@ impl Ss {
 
     /// The object's world position (the posed matrix's translation).
     pub fn pos(&self) -> V3 { [self.matrix[3][0], self.matrix[3][1], self.matrix[3][2]] }
+
+    /// The live world sphere (obj+0x80, obj+0x8C): the local centre through the posed matrix
+    /// [M Control_BuildWorldSph 0x133070:33-48] — not the matrix translation, which is the
+    /// model's origin (a corner of the 0700000b floor grate #98).
+    pub fn world_sphere(&self) -> (V3, f32) {
+        (nf_formats::placement::transform(&self.matrix, self.centre), self.radius)
+    }
 }
 
 /// Every animated SimpleScript of the level, in placement order.
@@ -97,7 +108,7 @@ pub struct SsList {
 impl SsList {
     /// `SS_Create` over the main map's 0xE2 placements with a non-zero key count. The sphere argument
     /// is unused; the pose comes from the key list alone (key 0 = the placement transform [D]).
-    pub fn create(placements: &[Placement], path_blocks: &[&[u8]], mut hash: impl FnMut(&Placement) -> (u32, f32)) -> SsList {
+    pub fn create(placements: &[Placement], path_blocks: &[&[u8]], mut hash: impl FnMut(&Placement) -> (u32, V3, f32)) -> SsList {
         let mut list = Vec::new();
         for (i, p) in placements.iter().enumerate() {
             if p.flags & 0xff != 0xe2 { continue; }
@@ -115,7 +126,7 @@ impl SsList {
             // ext+0x08's snap [M 0x1a9dbc-0x1a9dd8 disasm]: step * (int)(rest / step).
             let step = last as f32 / rate as f32;
             let rest = if step > 0.0 { step * ((param(5) as f32 / step) as i32) as f32 } else { 0.0 };
-            let (ghash, obj_radius) = hash(p);
+            let (ghash, centre, obj_radius) = hash(p);
             list.push(Ss {
                 placement: i,
                 channel: param(3) as u16,
@@ -132,6 +143,7 @@ impl SsList {
                 // A zero sample word reads as none [M 0x1a9c58: `if (+0x3c == 0) 0xffff`].
                 sound: match param(4) { 0 => 0xffff, v => v as u16 },
                 radius: obj_radius,
+                centre,
             });
         }
         SsList { list, pending_sounds: Vec::new() }

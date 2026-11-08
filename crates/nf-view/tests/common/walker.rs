@@ -1547,19 +1547,25 @@ impl Walker {
                 self.tick(input, false);
             }
         }
-        for k in 0..60u32 {
+        for k in 0..150u32 {
             let sim = self.scene.sim.as_ref().unwrap();
-            let desired = (dpos[0] - sim.bond.pos[0]).atan2(dpos[2] - sim.bond.pos[2]);
+            let lc = sim.drones.doors.list[di].live_sph().0;
+            let desired = (lc[0] - sim.bond.pos[0]).atan2(lc[2] - sim.bond.pos[2]);
             let err = wrap_pi(desired - sim.bond.yaw);
-            // The use point is head + look (radius 1, doors' reach 2.5 [M 0x1a5170; door.rs
-            // player_use]): aim the LOOK at the door's centre (the placement pos is its base — a
-            // door a floor below the approach needs the pitched look, or the E misses).
-            let centre = [dpos[0], dpos[1] + 1.0, dpos[2]];
+            // The use point is head + look (radius 1 [M 0x1a5170]): the pick keeps the door when
+            // that point is inside its live world sphere and within 1.0 in front of a leaf face
+            // [M Collide_PickObj 0x1eae80; Collide_Intersect 0x1ebaa8 → Intersect_PointGeom
+            // 0x1e92d8; nf_game::usepick] — aim the LOOK at the leaf's live sphere centre (the
+            // placement pos is its hinge base — a door a floor below the approach needs the
+            // pitched look, or the E misses).
+            let centre = sim.drones.doors.list[di].live_sph().0;
             let to = [centre[0] - sim.bond.pos[0], centre[1] - (sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop), centre[2] - sim.bond.pos[2]];
             let want_pitch = (to[1] / to[0].hypot(to[2]).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
             let perr = want_pitch - sim.bond.pitch;
             let d = &sim.drones.doors.list[di];
-            let far = dxz(sim.bond.pos, dpos) > 1.7;
+            // Close in to 1.85 of the leaf's centre: the use point then sits ~0.85 in front of
+            // the leaf (inside the refine's 1.0), and Bond stays out of a 1-unit leaf's swing.
+            let far = dxz(sim.bond.pos, centre) > 1.85;
             let pressing = d.state & 0xc == 0 && k % 6 == 0; // one edge per 6 ticks
             let input = Input {
                 turn: err.clamp(-0.08, 0.08),
@@ -1568,7 +1574,24 @@ impl Walker {
                 ..Default::default()
             };
             self.tick(input, pressing);
+            if std::env::var_os("NF_WALK_DOOR_DBG").is_some() {
+                let sim = self.scene.sim.as_ref().unwrap();
+                let st: Vec<(usize, u16, f32)> = sim.drones.doors.list.iter().enumerate().filter(|(_, d)| dxz(d.pos, dpos) < 3.0).map(|(j, d)| (j, d.state, d.pos01)).collect();
+                eprintln!("[door-dbg] k {k} press {pressing} bond {:?} yaw {:.2} pitch {:.2} doors {:?}", sim.bond.pos, sim.bond.yaw, sim.bond.pitch, st);
+            }
             if self.scene.sim.as_ref().unwrap().drones.doors.list[di].state & 0x8 != 0 { break; } // opening
+            // A double door: the press the pick gave to the twin leaf counts — pressing on would
+            // toggle the twin shut again.
+            if pressing && self.scene.sim.as_ref().unwrap().drones.doors.list.iter().enumerate()
+                .any(|(j, d)| j != di && dxz(d.pos, dpos) < 3.0 && d.state & 0x8 != 0) { break; }
+        }
+        // Let the swing finish before walking on (the press lands from ~1.8 out — the pick's
+        // refine reach — so a leaf still swinging meets Bond in the doorway and reverses).
+        for _ in 0..90u32 {
+            let swinging = self.scene.sim.as_ref().unwrap().drones.doors.list.iter()
+                .any(|d| dxz(d.pos, dpos) < 3.0 && d.state & 0x8 != 0);
+            if !swinging { break; }
+            self.tick(Input::default(), false);
         }
     }
 

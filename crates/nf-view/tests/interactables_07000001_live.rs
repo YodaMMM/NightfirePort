@@ -16,6 +16,9 @@ use walker::Walker;
 use nf_game::world::V3;
 use walker::{dxz as dxz_pub, wrap_pi as wrap_pi_pub};
 
+#[path = "common/usepick.rs"]
+mod usepick;
+
 fn iso() -> String {
     std::env::var("NF_ISO").unwrap_or_else(|_| {
         eprintln!("NF_ISO not set — skipping");
@@ -636,18 +639,14 @@ fn e_use_on_the_radio_fax_prints_its_pages() {
         [M 0x1dbc08:41-55; D 0x06000016 stream 6]");
     // The fax desk: walk to the machine's front (the placement's +z face) and pulse E.
     w.walk_nav_to([17.56, 6.21, 0.4], "at the fax desk", 1.2);
-    let (fx, fz) = (17.56062f32, -0.9633102f32);
-    let mut printed = false;
-    for t in 0..240u32 {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let bp = sim.bond.pos;
-        let err = wrap_pi_pub((fx - bp[0]).atan2(fz - bp[2]) - sim.bond.yaw);
-        let input = nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() };
-        let use_key = t % 6 == 0;
-        w.scene.sim.as_mut().unwrap().step_bond(input, false, false, use_key);
-        w.total_ticks += 1;
-        if has(&w, 0x0200_01bd) { printed = true; break; }
-    }
+    // The press from in front of one of the machine body's collision faces, looking at it (the
+    // use pick keeps the entity only with the use point within 1.0 in front of a face
+    // [M Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8; nf_game::usepick]).
+    let printed = {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let (tris, sph) = usepick::entity(sim, 0x0200_01ba).expect("the machine body entity");
+        usepick::press_on(sim, &tris, sph, 240, &|s| s.drones.scripts.entities().iter().any(|e| e.2 == 0x0200_01bd))
+    };
     assert!(printed, "the E restarts the script and the page cycle re-runs to its bd op [M SP_Activate \
         0x1dc338 → 0x1dbda8 case 1's Script_Play; D 0x06000016 stream 6's bd at +0xa], entities {:?}",
         w.scene.sim.as_ref().unwrap().drones.scripts.entities().iter().map(|e| e.2).collect::<Vec<_>>());

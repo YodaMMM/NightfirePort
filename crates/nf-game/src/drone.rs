@@ -13127,6 +13127,9 @@ pub struct Drones {
     /// The use objects (map-tower): the Q-Worm PCs (0x35) and switches (0x29) of
     /// `Player_Activate` 0x1a5170 — crate::useobj.
     pub useobjs: crate::useobj::UseObjects,
+    /// The use pick's data for the locks, monitors and mounted guns (crate::usepick: the posed
+    /// world sphere, obj+0x90 and the glist hash), parallel to their lists.
+    pub use_picks: crate::usepick::Placed,
     /// `SSysItems` 0x2befd0 + `SSysDelayTimer` 0x30cd94 — the security-subsystem alarm state
     /// machine (crate::ssys). Created fresh per level (the game's `SSys_Init` 0x1b01b0 cold arm,
     /// `ResetMap_GameInit` 0x1d5080:46); the switch-create channel store (`Switch_Create`
@@ -13478,6 +13481,7 @@ pub fn voice_type(skin: u32) -> u16 {
 /// The script runtime's view of the level data: animation lengths and an animated object's discrete object 0.
 impl crate::nis::World for Data<'_> {
     fn anim_length(&self, script: u32) -> Option<u16> { self.scripts.get(&script).map(|s| s.length) }
+    fn use_shape(&self, hash: u32) -> Option<&[[[f32; 3]; 3]]> { self.world.shape(hash) }
     /// The anim object's own world matrix (obj+0x90): the posed root at `frame` — the game's
     /// `Control_GetObjMatrix` 0x134210 product with obj+0x30 carrying the animation's root track
     /// [M 0x1befd8:290 → 0x134210; 0x1c35f8:~428-432]. The pose is `script_pose_together`'s (the
@@ -13616,7 +13620,7 @@ impl Drones {
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
             bond_door_skip: false, // the boot value latches at the Mission_Init site (Player_Init 0x1910f8's write)
-            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), bullet_paths: Vec::new(), script_round_damage: Vec::new(), script_round_hits: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
+            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), bullet_paths: Vec::new(), script_round_damage: Vec::new(), script_round_hits: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), use_picks: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             bullet_contacts_now: Vec::new(),
             bullet_contacts_prev: Vec::new(),
             space_laser_beams: Vec::new(),
@@ -14145,8 +14149,10 @@ impl Drones {
             // sphere comes from the same object record [M Control_BuildWorldSph 0x133070:48]).
             let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
                 else { level.maps[m].objects.get(p.index as usize) };
-            obj.map(|o| (if o.hashcode == u32::MAX { 0x8000_0000 | ((m as u32) << 16) | p.index as u32 } else { o.hashcode }, o.radius))
-                .unwrap_or((0, 0.0))
+            // The local sphere centre rides along: obj+0x80 is it posed by the SS matrix
+            // [M Control_BuildWorldSph 0x133070:33-44] — the use pick's candidate centre.
+            obj.map(|o| (if o.hashcode == u32::MAX { 0x8000_0000 | ((m as u32) << 16) | p.index as u32 } else { o.hashcode }, o.centre, o.radius))
+                .unwrap_or((0, [0.0; 3], 0.0))
         });
         // Sensors (`Sensor_Create` 0x1af010, placement 0x28; crate::sensor — placement order, no
         // RNG draw): the security-camera cone detectors; keys from the same 0x19 blocks.
@@ -14170,6 +14176,11 @@ impl Drones {
         for l in self.locks.iter().filter(|l| (l.unlocked || l.burned) && l.out != 0) {
             self.channels.set(l.out as u32, 1, self.frame);
         }
+        // The use pick's data for the locks, monitors and mounted guns (crate::usepick).
+        self.use_picks = crate::usepick::Placed::build(level, m,
+            &self.locks.iter().map(|l| l.placement).collect::<Vec<_>>(),
+            &self.monitors.list.iter().map(|x| x.placement).collect::<Vec<_>>(),
+            &self.props.gunimps.iter().map(|g| g.placement).collect::<Vec<_>>());
         // The grapple points (`Grapple_Create` 0x198298, placement 0x3A, class 0x51; fix-gadgets) —
         // the Q-Claw's fire targets, the same world-sphere shape as the ladders.
         self.grapple_points = crate::gadget::GrapplePoint::create(&level.maps[m].placements, |p| {
@@ -17735,18 +17746,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // empty slot on kind 0 → state 3 (arm the keypad); an empty slot on any other kind plays
         // the record's locked sound only (0xffff, no sound, on every disc lock [D]).
         {
-            let use_point = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
-            let in_sphere = |c: V3, r: f32| {
-                let d = (use_point[0] - c[0]).powi(2) + (use_point[1] - c[1]).powi(2) + (use_point[2] - c[2]).powi(2);
-                d <= (1.0 + r) * (1.0 + r)
-            };
+            let use_point = crate::usepick::point(head, look);
             for li in 0..self.locks.len() {
                 let l = &self.locks[li];
                 if l.unlocked || l.burned { continue; }
                 if self.keypad.as_ref().is_some_and(|(cur, _)| *cur == li) { continue; } // state 3/4 [M 0x1aed00's state gate]
-                if !in_sphere(l.pos, l.radius) { continue; }
-                // The facing gate [M 0x1a5170:158-166] — the OBJECT translations (+0xC0).
-                let to = [body[0] - l.pos[0], body[1] - l.pos[1], body[2] - l.pos[2]];
+                // use-pick: the lock's posed world sphere + glist refine (crate::usepick).
+                let Some(pick) = self.use_picks.locks.get(li) else { continue };
+                if !pick.picks(d.world, use_point) { continue; }
+                // The facing gate [M 0x1a5170:158-166] — the OBJECT translations (+0xC0): the
+                // lock's matrix row 3, not its sphere centre.
+                let lo = pick.origin();
+                let to = [body[0] - lo[0], body[1] - lo[1], body[2] - lo[2]];
                 if l.facing[0] * to[0] + l.facing[1] * to[1] + l.facing[2] * to[2] < 0.0 { continue; }
                 if self.inventory.keys.get(l.code as usize).copied().unwrap_or(false) {
                     let (snd, pos) = (l.key_channels[0] as u32, l.pos);
@@ -17771,15 +17782,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 break;
             }
         }
-        // `Player_Activate`'s class-0x38 monitor path (`Monitor_Activate` 0x1b0058): the use
-        // sphere's nearest monitor within reach activates (or, while viewing, the same 0xE edge
-        // cycles/exits). Reach: the door rule (head+look sphere 1.0 vs the object's sphere) —
-        // 2.2 like the SS arm in the view.
-        for (mi, m) in self.monitors.list.iter().enumerate() {
-            let dx = m.pos[0] - head[0]; let dy = m.pos[1] - head[1]; let dz = m.pos[2] - head[2];
-            if dx*dx + dy*dy + dz*dz <= 2.2f32*2.2f32 {
+        // `Player_Activate`'s class-0x38 monitor path (`Monitor_Activate` 0x1b0058): every
+        // monitor the use pick keeps activates (the class walk has no break [M 0x1a5170:113-179]);
+        // while viewing, the same 0xE edge cycles/exits. use-pick: the monitor's posed world
+        // sphere + glist refine (crate::usepick) — the old 2.2-from-the-head reach was a stand-in.
+        let use_point = crate::usepick::point(head, look);
+        for mi in 0..self.monitors.list.len() {
+            let Some(pick) = self.use_picks.monitors.get(mi) else { continue };
+            if pick.picks(d.world, use_point) {
                 self.monitors.activate(mi, &self.sensors);
-                break;
             }
         }
     }

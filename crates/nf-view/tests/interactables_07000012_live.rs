@@ -14,6 +14,9 @@ mod walker;
 
 use walker::{Walker, Wp};
 
+#[path = "common/usepick.rs"]
+mod usepick;
+
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 fn load() -> Walker {
@@ -391,17 +394,14 @@ fn the_monitor_enters_the_camera_view_on_e() {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.drones.monitors.list[mon.0].state, 0, "idle before the E [M 0x1b0058]");
     }
-    {
+    // The press from in front of one of the monitor's collision faces (the use pick's
+    // world-sphere + refine stages [M 0x1eae80, 0x1ebaa8 → 0x1e92d8; nf_game::usepick]).
+    let entered = {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [mon.1[0] + 0.4, mon.1[1] - 1.0, mon.1[2] - 0.8];
-        sim.bond.yaw = 0.0;
-        sim.bond.vel = [0.0; 3];
-    }
-    let mut entered = false;
-    for _ in 0..60 {
-        w.tick(nf_game::player::Input::default(), true);
-        if w.scene.sim.as_ref().unwrap().drones.monitors.list[mon.0].state == 2 { entered = true; break; }
-    }
+        let t = sim.drones.use_picks.monitors[mon.0];
+        let tris = usepick::posed(sim, t.hash, &t.matrix);
+        usepick::press_on(sim, &tris, t.sphere, 60, &|s| s.drones.monitors.list[mon.0].state == 2)
+    };
     assert!(entered, "E on the monitor enters the camera view [M 0x1b0058]");
     let sim = w.scene.sim.as_ref().unwrap();
     let watched = sim.drones.monitors.list[mon.0].watched.expect("a watched sensor [M 0x1b0058]");
@@ -499,13 +499,16 @@ fn the_hack_computer_starts_the_q_worm_sp() {
         if err.abs() < 0.1 && perr.abs() < 0.15 { aimed = true; break; }
     }
     assert!(aimed, "the walk-real aim converges on the PC [M Player_Aiming 0x1a1d28's shape]");
-    // E: pulse the use key through the real edge (Input_Action's fresh-press bit [M 0x17f208]).
-    let mut hacked = false;
-    for _ in 0..8 {
-        w.tick(nf_game::player::Input::default(), true);
-        for _ in 0..6 { w.tick(nf_game::player::Input::default(), false); }
-        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x34) { hacked = true; break; }
-    }
+    // E: pulse the use key through the real edge (Input_Action's fresh-press bit [M 0x17f208]),
+    // from in front of one of the PC's collision faces (the use pick's world-sphere + refine
+    // stages [M 0x1eae80, 0x1ebaa8 → 0x1e92d8; nf_game::usepick]).
+    let hacked = {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let pc = sim.drones.useobjs.pcs.iter().find(|p| p.ch == 0x34).expect("the hack PC");
+        let (m, h, sph) = (pc.pick_matrix, pc.pick_hash, (pc.sph_centre, pc.radius));
+        let tris = usepick::posed(sim, h, &m);
+        usepick::press_on(sim, &tris, sph, 240, &|s| s.drones.channels.on(0x34))
+    };
     assert!(hacked, "E at the hack computer writes ch 0x34 [D param 1; M PCQWorm_Update 0x1aee20]");
     {
         let sim = w.scene.sim.as_ref().unwrap();

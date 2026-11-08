@@ -1404,7 +1404,10 @@ fn the_ally_fights_only_the_guards_through_the_noise_path() {
     w.wait(60);
     for (name, at) in [
         ("the station hall", [139.0f32, 49.5, -93.0]),
-        ("the station doors", [139.5, 49.5, -97.5]),
+        // No "station doors" stop (the whole-mission walk's note): its nav route runs east
+        // through door (160.6, 45.0, −100.1) and back west along the lower deck, and the leg
+        // aiming 3.4 above that deck wedged and dropped Bond into the station pit — out of the
+        // map here too once the E reach changed the door timing (use-pick).
         ("the walkway head", [144.0, 46.0, -105.0]),
         ("the walkway mid", [145.5, 45.0, -108.6]),
         ("the lower landing", [150.0, 43.5, -116.0]),

@@ -157,12 +157,19 @@ fn the_riders_e_opens_unlocked_landing_doors_and_refuses_on_locked() {
         let v = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
         let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-4);
         let use_pt = [eye[0] + v[0] / len, eye[1] + v[1] / len, eye[2] + v[2] / len];
+        // The game's pick: the world-sphere candidate AND the use point within 1.0 in front of
+        // one of the leaf's collision faces [M Collide_PickObj 0x1eae80; Collide_Intersect
+        // 0x1ebaa8 → Intersect_PointGeom 0x1e92d8; nf_game::usepick].
         let near = (use_pt[0] - c[0]).powi(2) + (use_pt[1] - c[1]).powi(2) + (use_pt[2] - c[2]).powi(2)
-            < (1.0 + rad) * (1.0 + rad);
+            < (1.0 + rad) * (1.0 + rad)
+            && nf_game::usepick::picks_in(&sim.world, use_pt, (c, rad), &d.matrix, d.glist);
         let want_yaw = v[0].atan2(v[2]);
         let err = walker::wrap_pi(want_yaw - b.yaw);
         let want_pitch = (v[1] / len).asin() / std::f32::consts::FRAC_PI_2;
-        let input = Input { turn: err.clamp(-0.08, 0.08), look: (want_pitch - b.pitch).clamp(-0.06, 0.06), ..Default::default() };
+        // Step to the car's edge toward the leaf while out of the pick's reach (the use point
+        // must come within 1.0 of the leaf's face).
+        let far = v[0].hypot(v[2]) > 1.85;
+        let input = Input { turn: err.clamp(-0.08, 0.08), look: (want_pitch - b.pitch).clamp(-0.06, 0.06), forward: if far && err.abs() < 0.3 { 0.6 } else { 0.0 }, ..Default::default() };
         (input, near)
     }
 
@@ -170,7 +177,18 @@ fn the_riders_e_opens_unlocked_landing_doors_and_refuses_on_locked() {
     // with its floor (the landing floors stack every 4 units; the pass window is ~130 ticks at
     // the keyed rate [D keys]).
     let mut opened_a = false;
+    let mut closest = f32::MAX;
     for _ in 0..1600u32 {
+        {
+            let sim = r.w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.doors.list[d106];
+            let h = sim.bond.head();
+            let tris: Vec<[[f32; 3]; 3]> = sim.world.shape(d.glist).map(|t| t.iter().map(|q| q.map(|p| nf_formats::placement::transform(&d.matrix, p))).collect()).unwrap_or_default();
+            // the smallest radius at which a sphere at the head meets a leaf face from in front
+            let mut rr = 0.25f32;
+            while rr < 6.0 && !nf_game::world::CollisionWorld::sphere_meets_tris(h, rr, &tris) { rr += 0.25; }
+            closest = closest.min(rr);
+        }
         let (input, near) = aim_use(&r, d106);
         r.step(input, near && r.t % 6 == 0);
         if r.w.scene.sim.as_ref().unwrap().drones.doors.list[d106].state & 0xc != 0 { opened_a = true; break; }
@@ -178,7 +196,7 @@ fn the_riders_e_opens_unlocked_landing_doors_and_refuses_on_locked() {
     {
         let sim = r.w.scene.sim.as_ref().unwrap();
         assert!(opened_a,
-            "the unlocked −48 pair opens on the rider's E at the pass [M Door_Activate's use path], state {:#x}",
+            "the unlocked −48 pair opens on the rider's E at the pass [M Door_Activate's use path], state {:#x}, the head's closest approach to a leaf face {closest}",
             sim.drones.doors.list[d106].state);
     }
 

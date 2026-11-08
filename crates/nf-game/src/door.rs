@@ -927,7 +927,7 @@ impl Doors {
     /// `Player_Activate`'s door part (0x1a5310): the use sphere — radius 1 at one unit ahead of the head —
     /// activates every door it meets (the game walks the whole hit list; walls do not stop it). `head` is also
     /// the activator's position for the side tests.
-    pub fn player_use(&mut self, head: V3, look: V3, channels: &mut Channels, frame: u32, _world: &CollisionWorld) -> (Vec<SoundEvent>, usize) {
+    pub fn player_use(&mut self, head: V3, look: V3, channels: &mut Channels, frame: u32, world: &CollisionWorld) -> (Vec<SoundEvent>, usize) {
         // `Player_Activate` (0x1a5170:100-133): the pick is `Collide_SphereIntersect(1.0, head +
         // Mat_GetDir(viewer)·1.0, player cel, player, body obj, &list, 0, 0, 0, 0)`, and the walk
         // dispatches `Door_Activate(obj, player, 1)` on EVERY class-0x1c node — no distance gate
@@ -935,9 +935,12 @@ impl Doors {
         // not a mesh test:
         //   - `Collide_SphereIntersect` 0x1ec940 fills the HITTEST (mask +0x94 = 0x101 — param 8
         //     is 0 — the pick centre at +0x60, the radius at +0x6c) and calls `Collide_Pick`
-        //     0x1eb320; the post-pick loop then runs `Collide_Intersect` per node but uses its
-        //     return ONLY for the `param_10 & 0x10` early-out (param_10 is 0 here) — a failed
-        //     refinement NEVER removes the node [M 0x1ec940's do/while after `Collide_Pick`].
+        //     0x1eb320; the post-pick loop then runs `Collide_Intersect` per node, which for mask
+        //     0x101 presets the node's distance to 1e8 and lets `Intersect_PointGeom` overwrite it
+        //     only on a triangle hit [M 0x1ebaa8:186-189, 0x1e92d8:313-331]; the finalize frees
+        //     every 1e8 node [M 0x1ec940 `if (fVar10 == 1e+08) LList_Add`]. So the refine DOES
+        //     decide (use-pick: the earlier reading here — "a failed refinement never removes the
+        //     node" — looked only at the return value and missed the 1e8 drop).
         //   - `Collide_Pick` 0x1eb320 walks the straddled cels; for mask 0x101 its linked-object
         //     arm tests `|pick_centre − obj+0x80|² < (pick_radius + obj+0x8C)²` (the AABB variant
         //     only when obj+0x3c & 0x8000000), and its object walk calls `Collide_PickObj`
@@ -949,12 +952,10 @@ impl Doors {
         //     posed by the object matrix (`Control_BuildWorldSph` 0x133070: obj+0x80 = glist+0x10
         //     × the matrix rows, obj+0x8C = glist+0x1c · |obj+0xe8|; the moved pass rebuilds it
         //     [M 0x1336f8:209]) — the port's `live_sph()`.
-        // So the game's E reach is the use sphere touching the door's live world sphere, and the
-        // leaf mesh never gates the activation. (The 820b leaf-mesh pick was a misread of the
-        // chain — its own T1 "2.3-out must not open" pin rested on that misread; the master
-        // merge's full suite failed the three real-path E tests because the mesh, a thin plane,
-        // sits 1.2-3.0 from those use points while the door's world sphere is touched. See
-        // docs/systems/door-use.md.)
+        // So the game's E reach is the use sphere touching the door's live world sphere AND lying
+        // within 1.0 in front of one of the door glist's collision triangles (crate::usepick).
+        // (The 820b leaf-mesh pick tested the render leaf instead of the collision glist and had
+        // no world-sphere stage; see docs/systems/door-use.md.)
         // A door with NO resolved glist (glist 0 — no obj+0xd8) is E-DEAD, as in the game: the use
         // pick admits a 0x101-mask object only via `obj+0xd8 != 0 && *(obj+0xd8+8) != 0` [M
         // Collide_PickObj 0x1eae80:88-90 — Door_Create 0x136100 ORs obj+0xfa |= 0xc4, so the
@@ -983,12 +984,11 @@ impl Doors {
             // world sphere (obj+0x80 centre, obj+0x8C radius) [M Collide_PickObj 0x1eae80's
             // 0x100/0x101 arm; Collide_Pick 0x1eb320's linked-object arm]. Strict `<`: the
             // game returns (no node) when `radius² <= sqdist` [M both sites].
-            let (c, r) = d.live_sph();
-            let sx = use_point[0] - c[0];
-            let sy = use_point[1] - c[1];
-            let sz = use_point[2] - c[2];
-            let reach = 1.0 + r;
-            if sx * sx + sy * sy + sz * sz < reach * reach {
+            // use-pick: then the glist refine — the use sphere in the door's object space
+            // against its collision triangles, front side only; a miss leaves the node at 1e8
+            // and 0x1ec940's finalize frees it before the class walk [M Collide_Intersect
+            // 0x1ebaa8:186-189 → Intersect_PointGeom 0x1e92d8:331; crate::usepick].
+            if crate::usepick::picks_in(world, use_point, d.live_sph(), &d.matrix, d.glist) {
                 self.activate(i, &[(head, 0.0, false)], true, channels, frame, &mut sounds);
                 hits += 1;
             }

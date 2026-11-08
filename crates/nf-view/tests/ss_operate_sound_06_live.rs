@@ -20,7 +20,7 @@ fn ss_operate_emits_the_trap_sample() {
     let lv = level(&iso, "07000006.bin");
     let mm = lv.main_map().unwrap();
     let pb: Vec<&[u8]> = lv.path_blocks();
-    let mut ss = nf_game::ss::SsList::create(&lv.maps[mm].placements, &pb, |_p| (0, 0.0));
+    let mut ss = nf_game::ss::SsList::create(&lv.maps[mm].placements, &pb, |_p| (0, [0.0; 3], 0.0));
 
     // The disc's four sound-carrying traps [D census #353/#354/#389/#390 p4 = 0x11b].
     let traps: Vec<usize> = ss.list.iter().enumerate()
