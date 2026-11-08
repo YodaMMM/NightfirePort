@@ -6,3 +6,8 @@ Reproduce on the real level first through real input, not a teleport; a repeat m
 
 ---
 claimed-by: sandbox3 at 2026-11-08T13:31Z
+
+---
+## Report (done, 2026-11-08T14:17Z)
+
+Closed by the driver: the report is on `s/level-0a-corner-walk-speed-2` (docs/reports/level-0a-corner-walk-speed-2.md); the worker didn't run finish.sh.
