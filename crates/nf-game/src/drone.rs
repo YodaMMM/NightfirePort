@@ -15125,7 +15125,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // before its bounds at 0.058) is gone with the ride.
                     else if BREAK_WORLD_STOP && !tstop.is_none_or(|ts| t <= ts) { contact = None; }
                 }
-                if let Some((_, i)) = contact {
+                if let Some((t, i)) = contact {
                     // The round dies on the first solid object hit — the glass absorbs it
                     // [M 0x12cff0-4]; nothing behind it scores or stops it this tick.
                     // EXCEPT the glass panes: the game's walk (Collide_Update 0x1ea398:216-229,
@@ -15146,6 +15146,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         .is_some_and(|w| u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0);
                     if !glass_pass { b.dead = true; }
                     br.health -= contact_dmg;
+                    // The contact registers its world impact AT the sheet: `Effect_Create` runs on
+                    // the breakable contact for a passing round and a stopped one alike [M
+                    // Bullet_CollisionHandler 0x12ce80:162-192, both arms reach LAB_0012d020].
+                    let ct = [b.pos[0] + (end[0] - b.pos[0]) * t, b.pos[1] + (end[1] - b.pos[1]) * t, b.pos[2] + (end[2] - b.pos[2]) * t];
+                    self.player_impacts.push(PlayerImpact::World(ct));
                     if br.health < 0.0 {
                         // fx-broken-object-bark: the bullet kill is the one `Break_Kill` entry whose
                         // hitdata +0x58 is the BULLET (kind 5 [M 0x12c5a0:87]) from the PLAYER's
