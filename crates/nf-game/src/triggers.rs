@@ -307,7 +307,7 @@ pub struct Channels { pub v: Vec<u8>, pub time: Vec<u32>,
     /// channel-persistence: every channel a script op has ever written in this level — the script
     /// event 0xD / 0x11 writes (`Script_EventHandler` 0x1d94c0) and the SP out writes — accumulated
     /// so the census can tell script-owned channels (data-driven from the disc's own scripts) from
-    /// a port-only writer. The [S] stand-ins deliberately do NOT land here.
+    /// a port-only writer. The stand-in writers deliberately do NOT land here.
     pub script_channels: std::collections::BTreeSet<u8> }
 
 impl Default for Channels { fn default() -> Channels { Channels { v: vec![0; 256], time: vec![0; 256], writes: None, script_channels: std::collections::BTreeSet::new() } } }
@@ -1002,7 +1002,8 @@ fn apply_raw_dc_map(t: &mut Trigger, q: &impl Fn(u32) -> u32) {
 ///    game's `mask & 4` gate (0x18 & 4 = 0 [D #180 mask; M 0x1b2318:23-25]).
 ///
 /// Returns `(trigger, e_can_fire)`. The fallback choice itself is the port's survey mechanic
-/// (`// [S] unverified` as a resolution rule); every fact it rests on is tagged above. `None`
+/// (`// [S] unverified` as the resolution rule for its own survey fallback — a port mechanic,
+/// not a game claim); every fact it rests on is tagged above. `None`
 /// when the level has no LOAD_LEVEL exit, or a mesh-less one with no reachable gate plate.
 pub fn exit_use_target(triggers: &[Trigger]) -> Option<(&Trigger, bool)> {
     let exit = triggers.iter().find(|t| t.kind == kind::LOAD_LEVEL && t.next_level != 0)?;

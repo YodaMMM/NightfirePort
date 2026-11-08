@@ -68,11 +68,26 @@ fn switch_to_sniper(w: &mut Walker) {
     panic!("the number-key switch to the sniper 0x1e never landed (owned [D the boot loadout])");
 }
 
-/// THE SYMPTOM, pinned: the aim-converged view with the HIP pull (aimed_fights off — the shared
-/// stand's behaviour before this task) dries three clips (15 rounds) on the STATIONARY sentry
-/// and its hp never moves. The game's own hip cone does the same [L 0x2c10b8 +0x24 = 100.0 →
-/// 0.14 rad → 4.9 u at 35 u; M 0x12c5a0:139-170]. Deterministic: the shared bit-exact RNG, no
-/// added draws.
+/// THE SYMPTOM, pinned on the [M]/[L] laws, not on the stream realization: the aim-converged
+/// view with the HIP pull (aimed_fights off — the shared stand's behaviour before the
+/// upward-shot task) dries the gun on the STATIONARY sentry pair — the hip act's 0.14 rad cone
+/// [M Bullet_init 0x12c5a0:139-170] scatters multiples of the ~0.5 u chest box at ~35 u, so the
+/// overwhelming majority of draws miss. The earlier pin hard-asserted `!killed && hp >= hp0` —
+/// but the cone ADMITS a landing (a few percent of draws), so a stream shift that lands one
+/// round turned the pin red with NO game bug (the driver's failure; this session the tree's
+/// realization landed on the 3rd round and killed him, deterministically). The law-backed pins
+/// here hold under every legal outcome:
+/// 1. the ammo math: the loadout 5+30 [D the boot loadout, walkreal0c's leg-1 record; L the
+///    run], clip size 5 [L ee_start_05.bin @ 0x2c10b8 +0x92], one pellet per fire, and the gun
+///    ends DRY — unless a legal draw killed him first (exactly the two [M]-law outcomes pass);
+/// 2. the CONE: NOT every fired round lands on the emplacement — every round landing is the
+///    AIMED zero spread, the exact regression this test guards (an exact hip act would also
+///    pass the old hp pin on a dry stream, which is why the pin moved to the law);
+/// 3. the aimed sister test stays the positive control (the zero-spread act lands and drops).
+/// The hp/kill outcome is reported, not failed: a landing is a legal draw of the game's own
+/// cone ("no draw changes" — nothing to fix in the draws). The default 300-tick no-progress
+/// give-up is bypassed opt-in (dry_walk_on): the legal misses never move the hp.
+/// Deterministic: the shared bit-exact RNG, no added draws.
 #[test]
 fn the_hip_pull_dries_three_clips_on_the_deck_sentry() {
     let mut w = walker::walk_spawn_to_the_yard_ladder_base(&iso());
@@ -85,23 +100,39 @@ fn the_hip_pull_dries_three_clips_on_the_deck_sentry() {
     switch_to_sniper(&mut w);
     let ds = find_sentries(&w);
     let di = ds[0];
-    let hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
-    // 15 shots: 3 clips of 5 [L 0x2c10b8 +0x92 = 5]; the stand taps every >=8 ticks with the
-    // sniper's 130-tick fire script between rounds [D +0x40 = 120; M 0x1a5460:631-636 the
-    // +0x8000 refire gate] and reloads on the empty clip.
-    let killed = w.stand_and_fire(di, 3600);
+    let (hp0, clip0, spare0) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (sim.drones.list[di].health, sim.gun.clip, sim.gun.spare)
+    };
+    assert_eq!((clip0, spare0), (5, 30), "the 0x1e loadout at the stand start [L +0x92 = 5]");
+    // Taps every >=8 ticks with the sniper's 130-tick fire script between rounds [D +0x40 =
+    // 120; M 0x1a5460:631-636 the +0x8000 refire gate], reloads on the empty clip.
+    w.dmg.dry_walk_on = true;
+    w.dmg.record_round_dirs = true;
+    let killed = w.stand_and_fire(di, 9000);
     let sim = w.scene.sim.as_ref().unwrap();
     let hp = sim.drones.list[di].health;
-    // The realization of the 15 hip draws is the shared stream's: master's stream dried the
-    // clips, the stream join's (spawn miss wobble [M 0x137cb0:58-59], guard rounds on the
-    // breakables, the joined walk fixes) landed the first tap, and join-final's stream dries
-    // them again (measured on 3c94fa9ea: hp 10 -> 10, not killed). The [M] law this test guards
-    // is the CONE (0.14 rad hip spread [M 0x12c5a0:139-170]; the aimed act's zero spread is the
-    // sister test); the pin follows the tree's measured realization. Live re-check: the same
-    // stand in PCSX2 settles whether the real game's hip pull lands at this spot.
-    assert!(!killed && hp >= hp0,
-        "the hip pull LANDED on the deck sentry (hp {hp0} -> {hp}) — the pin is the measured dry-clip realization; re-measure [L 0x2c10b8]");
-    eprintln!("[upward-shot] the hip stand: sentry #{di} hp {hp0} -> {hp} killed {killed} (the measured realization)");
+    let (clip, spare) = (sim.gun.clip, sim.gun.spare);
+    let landings = std::mem::take(&mut w.dmg.round_dirs);
+    w.dmg.record_round_dirs = false;
+    let fired = ((clip0 + spare0) - (clip + spare)) as usize;
+    let on_target = landings.iter().filter(|(d, _)| ds.contains(d)).count();
+    eprintln!("[upward-shot] the hip stand: sentry #{di} hp {hp0} -> {hp} killed {killed} fired {fired} landings {on_target} ({landings:?}) (clip {clip0}+{spare0} -> {clip}+{spare})");
+    // 1. the ammo math [L +0x92 = 5; the loadout 5+30]: one pellet per fire, the gun dry
+    //    unless a legal draw killed him first.
+    assert!(fired > 0, "the stand fired nothing");
+    assert!(killed || (clip == 0 && spare == 0),
+        "the stand ended outside the two [M]-law outcomes (the gun dry, or a legal landing \
+         killed him): fired {fired} killed {killed} clip {clip} spare {spare} [L +0x92 = 5, the loadout {clip0}+{spare0}]");
+    // 2. THE CONE [M Bullet_init 0x12c5a0:139-180 — the player owner's spread is
+    //    (+0x24 + bloom)·mul with mul = 0 only when +0x68 & 0x400000 AND the aim bit; the 0x1e
+    //    record carries 0x400000 [L flags68 0x408050, +0x24 = 100.0]; the pull bloom is 0.0
+    //    [L +0x98]; the decompile has NO upward-aim special case]: the hip act keeps its
+    //    100-unit cone — NOT every round lands on the emplacement.
+    assert!(on_target < fired,
+        "every hip round landed on the emplacement ({landings:?} of {fired}) — the act fired the \
+         AIMED zero spread [M 0x12c5a0:139-170: mul = 0 needs the aim bit; the hip pull keeps \
+         the 100-unit cone]");
 }
 
 /// THE FIX, pinned: the SAME stand with the aim button held (`aimed_fights`) — the zero-spread

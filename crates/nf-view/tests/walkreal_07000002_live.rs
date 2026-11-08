@@ -1352,3 +1352,252 @@ fn walk_the_castle_all_objectives_real_health_agent() {
 fn walk_the_castle_all_objectives_real_health_00agent() {
     walk_the_castle_all_objectives_real_health_at(3);
 }
+
+/// The courtyard sniper's pin (courtyard-sniper-pin, level-02-courtyard-sniper): the game's own
+/// numbers for his rounds on Bond, measured through real input at ONE range.
+///
+/// The walk (Agent difficulty 2) takes the spawn-room armour, walks the west wing on real input
+/// (the geisha-1 chain included — the captors die before the descent, else they hunt the stand),
+/// then stands at the stair bottom (−36.9, 5.5, −1.5) with return fire OFF — Bond does not
+/// shoot. The sniper (drone #9, weapon 0x1e) covers the descent from his post at
+/// (−52.05, 6.34, −14.43) [L the 07000002 drone dump] — dxz ≈ 19.9 u from the stair bottom,
+/// inside the 15-25 u pin window, beyond the 3.0 u TooClose ring [M DroneFiring_TooClose_Distance
+/// tuning] and outside the back-shot gate's geometry for a front stand.
+///
+/// What the game's code gives per round there (and what this test pins):
+/// - **Damage 28.0 per body round**: `weapon_data[0x1e]+0x0C` = 40 [D weapon_data 0x2bf150, the
+///   boot initialiser's record; the 00agent ledger's one 25.7-u hit landed 48.0 = 40 ×
+///   Plr_DMod_Hard 1.2, the same record at difficulty 3] × `Drone+0x100` 1.0 [M
+///   Drone_ModBulletDamage 0x139f50:27; the drone carries no captain mod] × Plr_DMod_Normal 0.7
+///   [M Player_HandlePain 0x1902c8:82-95 + the level 0x01..=0x04 tuning group 0x1d3e00]. Armour
+///   splits it: Player_HandlePain drains BL+0x8B0 first [M 0x1902c8:84-104], so a 28-round into
+///   armour A < 28 takes A off the armour and 28 − A off the health (a 28-round into 14.3 armour
+///   costs 13.7 health). The test asserts health_lost + armour_spent == 28.0 for every sniper
+///   round that lands, and the lethal round takes at most the health left.
+/// - **Hit chance at 15-25 u** (`DroneWeap_DoBulletAccuracy` 0x179740): (100 − 5 × accuracy 8
+///   [L the drone dump]) × DroneFiring_Accuracy_Normal 0.7 = 42 %/shot standing (Bond still,
+///   sighted past the 120-tick NewSighting gate 0x179740:93-99), 31.5 %/shot moving (×
+///   TargetMoving 0.75), the first-2 s sight and first-moved windows multiply 0.25. Misses still
+///   FLY a wobbled round [M 0x179740:116-134].
+/// - **Fire rate**: burst 1 [D weapon_data+0x2C], 120-frame interval [D +0x40], between-burst
+///   delay max(15, trunc(45 × 1.33 × (0.5 + FRand 0.5))) ≤ 60 at 15-30 u (aggression 1) [M
+///   DroneWeap_BurstDelay/NextBulletTime 0x179d40] — 149-179 frames between shots.
+///
+/// The stand's records (shots, rolls, per-hit health/armour deltas) print to the run log; the
+/// asserts pin the damage identity, the cadence floor (no two shots closer than the interval +
+/// the smallest burst delay) and that the stand's rolls land (the formula's rate, not a dead
+/// stream).
+#[test]
+fn courtyard_sniper_pin_stair_bottom_agent() {
+    let iso = iso();
+    let mut w = Walker::new(
+        nf_view::load_with_carry_difficulty(&iso, "07000002.bin", false, None, 2)
+            .expect("load 07000002"));
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, 2, "Agent [M GameState+0x28]");
+    w.top_up_health = false;
+    w.body_block_response = true;
+    w.prefer_head = true;
+    w.keep_off = Some(4.0);
+    w.dmg.back_off = Some(4.0);
+    w.scene.sim.as_mut().unwrap().auto_aim = true;
+
+    // The spawn-room body armour (the stand then shows the game's armour split [M 0x1902c8:84-104]).
+    w.lenient = true;
+    for (name, at, arrive) in [
+        ("the spawn-room floor", [-26.6f32, 1.05, 31.3], 0.8),
+        ("the armour platform", [-25.3, 1.67, 34.2], 0.8),
+        ("the spawn-room body armour", [-24.6, 1.67, 34.2], 0.3),
+    ] {
+        w.walk_to(Wp { at, act: Act::None, arrive }, name);
+    }
+    w.lenient = false;
+    assert!(w.scene.sim.as_ref().unwrap().drones.health.armour >= 50.0,
+        "the spawn-room armour is taken [M Pickup_Handler 0x18e650:220-225]");
+
+    // The route on real input (the walk body's own legs; fights answered, real fire both ways).
+    for (name, at) in [
+        ("bunker room south", [-27.2f32, 1.05, 31.5]),
+        ("bunker corridor", [-27.2, 1.05, 36.0]),
+        ("corridor south", [-27.2, 1.05, 39.5]),
+        ("alcove mouth", [-27.2, 1.05, 41.0]),
+    ] {
+        w.walk_to(Wp { at, act: Act::None, arrive: 1.0 }, name);
+    }
+    w.walk_to(Wp { at: [-26.87, 2.54, 42.23], act: Act::Ladder { top_y: 6.0 }, arrive: 0.9 }, "ladder #114");
+    w.walk_to(Wp { at: [-26.0, 5.9, 43.4], act: Act::None, arrive: 1.4 }, "the garden");
+    w.walk_to(Wp { at: [-24.6, 5.9, 42.8], act: Act::None, arrive: 1.4 }, "the garden east");
+    clear_pursuers(&mut w, 18.0, "pin garden");
+    clear_pursuers(&mut w, 18.0, "pin garden second pass");
+    for (name, at) in [
+        ("garden path", [-22.2f32, 5.9, 34.1]),
+        ("south hall", [-23.3, 5.9, 27.6]),
+        ("south hall west", [-31.2, 5.9, 22.1]),
+        ("north of the ch-0x17 plate", [-35.2, 6.5, 8.2]),
+    ] {
+        leg_to(&mut w, at, name, 1.6);
+        status(&w, name);
+        let r = if name == "south hall west" { 24.0 } else { 14.0 };
+        clear_pursuers(&mut w, r, name);
+    }
+    arm_fullest(&mut w, "pin before the geisha-1 room");
+    w.lenient = true;
+    w.walk_to(Wp { at: [-35.2, 6.5, 4.6], act: Act::Wait(10), arrive: 0.9 }, "the ch-0x17 plate");
+    w.lenient = false;
+    assert!(ch_on(&w, 0x17), "the geisha group is enabled [D tr[003] out 0x17]");
+    {
+        // The captors die before the descent (else they hunt the stand): the walk body's own
+        // real-fire clear, then the rescue's channel.
+        let g1 = geisha(&w, 0x49).expect("geisha 1 [D]");
+        let at = w.scene.sim.as_ref().unwrap().drones.list[g1].pos;
+        clear_captors_real(&mut w, at, "pin geisha 1", false);
+        for _ in 0..240 {
+            if ch_on(&w, 0x49) { break; }
+            w.tick(Default::default(), false);
+        }
+        assert!(ch_on(&w, 0x49), "geisha 1 saved: ch 0x49 [M 0x1441c0]");
+    }
+    clear_pursuers(&mut w, 16.0, "pin after the geisha-1 room");
+
+    // Down to the stair bottom. Return fire OFF from the stair top: the stand must not answer
+    // the sniper (the 00agent ledger: from the stair top he was never exposed; his shot reaches
+    // the descent). The shot stream is snapshotted here — the descent legs' shots count too
+    // (the crossing is the scenario under test; the ledger's covering fire).
+    w.dmg.return_fire = false;
+    let shots_at_snapshot = w.scene.sim.as_ref().unwrap().drones.list.iter()
+        .find(|d| d.weapon == 0x1e && d.health > 0.0 && !d.corpse)
+        .map(|d| d.shots.len()).unwrap_or(0);
+    leg_to(&mut w, [-36.7, 5.9, 1.0], "pin west wing stair", 1.6);
+    leg_to(&mut w, [-36.9, 5.5, -1.5], "pin stair bottom", 1.6);
+    status(&w, "pin stair bottom — the stand begins");
+
+    let (sniper, dxz_at_stand) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        let si = sim.drones.list.iter().enumerate()
+            .find(|(_, d)| d.weapon == 0x1e && d.health > 0.0 && !d.corpse)
+            .map(|(i, _)| i)
+            .expect("the courtyard sniper stands his post [L the 07000002 drone dump]");
+        (si, dxz(sim.drones.list[si].pos, bp))
+    };
+    assert!((14.0..=26.0).contains(&dxz_at_stand),
+        "the stand sits in the 15-25 u pin window, got {dxz_at_stand:.2}");
+
+    // The stand: record the sniper's shots with their inputs and Bond's health/armour; up to
+    // 5400 ticks (90 s ≈ 30 cadence shots) or death. Per tick the (health, armour) pair BEFORE
+    // the tick is kept beside any sniper hit the tick carried, so each landed round's armour
+    // context is measured, not inferred.
+    let mut shots_at_stand = shots_at_snapshot;
+    let mut per_shot: Vec<(u32, f32, bool, bool, f32, f32)> = Vec::new(); // frame, dist, moving, first_moved, health, armour
+    let mut hits_seen = w.scene.sim.as_ref().unwrap().drones.player_hits.len();
+    let mut per_hit: Vec<(u32, f32, f32, f32)> = Vec::new(); // frame, health part, armour and health at the tick's start
+    let mut died = false;
+    let mut last_los: Option<bool> = None;
+    let mut last_seen: u32 = 0;
+    let mut flickers = 0u32;
+    for _t in 0..5400 {
+        let (health_at_tick, armour_at_tick) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (sim.drones.health.health, sim.drones.health.armour)
+        };
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let sn = &sim.drones.list[sniper];
+            if last_los != Some(sn.los) {
+                eprintln!("[pin] flicker at t{_t}: los {} (was {:?}) seen_ticks {} visibility {:.3} unseen {} dist {:.1} state {:#x} yaw {:.2} yaw_to_opp {:.2}",
+                    sn.los, last_los, sn.seen_ticks, sn.visibility, sn.unseen_ticks, sn.dist, sn.state, sn.yaw, sn.yaw_to_opp);
+                if last_los.is_some() { flickers += 1; }
+                last_los = Some(sn.los);
+            }
+            if sn.seen_ticks < last_seen {
+                eprintln!("[pin] seen_ticks reset {} -> {} at t{_t}", last_seen, sn.seen_ticks);
+            }
+            last_seen = sn.seen_ticks;
+            if sn.shots.len() > shots_at_stand {
+                let pct = nf_game::drone::hit_chance(sim.data().tuning, sim.data().level,
+                    sim.drones.difficulty, sn.accuracy, sn.dist, sn.target_motion, sn.anim_set);
+                eprintln!("[pin] shot {} gate: seen_ticks {} lost_sight {} accuracy {} dist {:.1} pct {:.1} anim {:#x} mode {}",
+                    shots_at_stand, sn.seen_ticks, sn.lost_sight, sn.accuracy, sn.dist, pct, sn.anim_set, sn.mode);
+                per_shot.push((sn.shots[shots_at_stand], sn.dist, sn.target_motion.moving,
+                    sn.target_motion.first_moved, health_at_tick, armour_at_tick));
+                shots_at_stand += 1;
+            }
+        }
+        w.tick(Default::default(), false);
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            for &(f, o, dmg) in &sim.drones.player_hits[hits_seen..] {
+                if o == sniper { per_hit.push((f, dmg, armour_at_tick, health_at_tick)); }
+            }
+            hits_seen = sim.drones.player_hits.len();
+            if sim.drones.health.health <= 0.0 { died = true; break; }
+        }
+    }
+    eprintln!("[pin] los flickers during the stand: {flickers}");
+
+    // The records.
+    let (stand_rolls, end_health, end_armour, corpse) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let sn = &sim.drones.list[sniper];
+        let rolls = sn.shot_rolls.clone();
+        let first = shots_at_snapshot.min(rolls.len());
+        for (k, (f, d, mv, fm, hp, ar)) in per_shot.iter().enumerate() {
+            eprintln!("[pin] shot {k} frame {f} dist {d:.1} moving {mv} first_moved {fm} (health {hp:.1} armour {ar:.1})");
+        }
+        for &(f, h, a, hp) in &per_hit {
+            eprintln!("[pin] hit frame {f}: health -{h:.3} (armour {a:.2}, health {hp:.2} at the tick's start)");
+        }
+        (rolls[first..].to_vec(), sim.drones.health.health, sim.drones.health.armour, sn.corpse)
+    };
+    let shots = per_shot.len();
+    let hits = stand_rolls.iter().filter(|&&r| r).count();
+    eprintln!("[pin] the stand took {shots} shots ({hits} rolled hits) at dxz {dxz_at_stand:.1}; Bond health {end_health:.1} armour {end_armour:.1} died {died}");
+    assert!(shots >= 1, "the sniper opened fire on the stand at {dxz_at_stand:.1} u (cadence ~2.5-3 s)");
+    assert!(!corpse, "the stand never answers him: he is alive at the end");
+    assert!(flickers == 0, "the sight holds through the stand (the gate's 120-tick window is meaningful)");
+
+    // THE DAMAGE PIN: every landed round's TOTAL cost is 28.0 — weapon_data[0x1e]+0x0C = 40
+    // [D weapon_data 0x2bf150] × Drone+0x100 1.0 [M Drone_ModBulletDamage 0x139f50:27] ×
+    // Plr_DMod_Normal 0.7 [M Player_HandlePain 0x1902c8:82-95 + the 0x01..=0x04 tuning group].
+    // Player_HandlePain drains BL+0x8B0 first [M 0x1902c8:84-104], so the health part is
+    // 28.0 − min(28.0, the armour the round found). The pin: a round into empty armour takes
+    // exactly 28.0 health; a round into armour A takes 28.0 − A (and A ≥ the complement).
+    assert!(hits >= 1, "the stand's rolls at 42 %/shot landed (got {hits}/{})", stand_rolls.len());
+    let mut full_rounds = 0;
+    let mut lethal_rounds = 0;
+    for &(f, h, armour_at_tick, health_at_tick) in &per_hit {
+        assert!(h <= 28.001, "a sniper round never costs more than 28.0 health, frame {f} took {h:.3}");
+        if armour_at_tick < 0.01 && health_at_tick < 29.0 {
+            // The lethal round: the health left (under 28 + the < 1 kill floor [M
+            // 0x1902c8:131-134]) is all it can take.
+            assert!(h <= health_at_tick + 0.01, "the lethal round takes at most the health left {health_at_tick:.2}, frame {f} took {h:.3}");
+            eprintln!("[pin] lethal round frame {f}: health {health_at_tick:.2} -> 0");
+            lethal_rounds += 1;
+        } else if armour_at_tick < 0.01 {
+            assert!((h - 28.0).abs() < 0.01,
+                "a round into empty armour costs exactly 28.0 [M 0x1902c8:84-104 × the record], frame {f} took {h:.3}");
+            full_rounds += 1;
+        } else {
+            let spent = 28.0 - h;
+            assert!(spent <= armour_at_tick + 0.05,
+                "the round's armour part {spent:.3} cannot exceed the armour present {armour_at_tick:.2}, frame {f}");
+            eprintln!("[pin] armoured round frame {f}: health {h:.3} + armour {spent:.3} = 28.0 (armour was {armour_at_tick:.2})");
+        }
+    }
+    assert!(full_rounds >= 1, "at least one round landed on bare health for the exact 28.0 pin");
+    eprintln!("[pin] DAMAGE PINNED: {} full 28.0 round(s) on bare health + {} armoured split(s) totalling 28.0 + {} lethal",
+        full_rounds, per_hit.len() - full_rounds - lethal_rounds, lethal_rounds);
+
+    // The cadence floor: no two shots closer than the interval (120) + the smallest burst delay
+    // (15) — the game's [M 0x179d40] minimum while continuously firing.
+    for pair in per_shot.windows(2) {
+        let gap = pair[1].0 - pair[0].0;
+        eprintln!("[pin] shot gap {}", gap);
+        assert!(gap >= 135, "the sniper never refires inside the interval+delay floor, got {gap}");
+    }
+    // The hit rate is the formula's, not degenerate: the stand's gate-open rolls at 42 %/shot
+    // standing (31.5 % moving) — the raw rolls print with every shot above; the rate over the
+    // stand is the shared stream's sample, pinned by landing (the asserts above) rather than by
+    // a rate figure the small n cannot support.
+    eprintln!("[pin] stand hit rate: {hits}/{} (42 %/shot standing, 31.5 % moving)", stand_rolls.len());
+}
+

@@ -59,8 +59,19 @@ pub const LOS_PLAYER_HEADROOM: u32 = 0xd; // Player_SSCrouch 0x1924c0:100-101 / 
 pub const LOS_PROBE_8: u32 = 0xc; // mask 8 | 4 — Player_SSGrapple 0x192860:86-88, Searchlight_Update 0x1cb900:338-340, Sensor_SetBeam 0x1af398:73-75, Bullet_homing 0x12f358:92-93
 pub const LOS_SENSOR: u32 = 0xe; // Sensor_InCone 0x1af4f0:84-86 / Check_AutoAim 0x1a73f8:164-165 / Bullet_DoTrails flash 0x12d890:343-345 mask 0xa | 4
 pub const LOS_TURRET_TRACK: u32 = 0x72f; // GT_Track 0x17f9c8:258 — the target scan's per-candidate `Collide_LineOfSight(from, cand+0x80, level, obj, cand, 0x72f)` filter (already includes the wrapper's | 4)
-/// The per-caller masks are not applied yet [S]: with them on, guard cover, turret shots and
-/// several real-path walks broke; `line_of_sight` keeps the static-world segment test until then.
+/// The drop-BIT math is the game's, proven: `pick_admits` is `Collide_PickObj` 0x1eae80:72-82
+/// word-for-word and `surface_kept` is `Collide_Intersect` 0x1ebaa8:300-319 (verified
+/// bit-by-bit against the decompile, markers-world-objects 2026-11-08). What is NOT ported is
+/// the APPLICATION ENVELOPE around them [S], which is what broke the walks when the gate was
+/// opened: (1) the game tests the obj+0xF0 skip word of EVERY picked object [M 0x1eae80:82],
+/// the port consults `pick_admits` only for pane parts; (2) the type-byte arms [M 0x1eae80:83-87]
+/// (0x100 rejects obj+0xFF 2/0x11, 0x200 rejects 5, 0x400 rejects 3/0x12 — 0x72f therefore
+/// ignores every body-class object) are unmodeled; (3) `los_walk` ignores `SIGHT_THROUGH_PART`
+/// (mask bit 4 skips glist-0x10 objects, 0x1eae80:79-81); (4) dynamic non-pane parts carry no
+/// obj-pass drop under mask bit 0x8; (5) the subject exclusions (HITTEST+0x74/0x78, 0x1eae80:57-59)
+/// reach only `line_of_sight_excluding`. The envelope work is the porting TODO; the gate stays
+/// off until then (with them on today, guard cover, turret shots and several real-path walks
+/// broke — the measured record of the envelope gaps above).
 pub const LOS_MASKS_ON: bool = false;
 
 /// The body queries' HITTEST+0x98: zero. Bond's walk writes it to 0 on every substate but the
@@ -96,8 +107,20 @@ pub fn surface_kept(mask: u32, mat: u8, glist_flags: u32) -> bool {
 /// the body queries carry 0 and stop on it, `line_of_sight` carries its caller's mask through
 /// `pick_admits` and `surface_kept`, so guard sight (0xa27) passes material-0x10 glass and stops on
 /// a material-0xF pane. The rays with no mask of their own yet (`segment`, `segment_bullet`, the
-/// actor and flight families) still skip every pane: a port stand-in [S], not a game rule, since
-/// `Collide_RayIntersect` 0x1ec690 runs the same `Collide_Pick` 0x1eb320 walk as the body queries.
+/// actor and flight families) still skip every pane. SETTLED against the game
+/// (markers-world-objects 2026-11-08): the game has NO pane-specific ray rule — a pane is an
+/// ordinary class-0xC object [M Break_Create 0x12c230:12-19] picked by any query whose mask
+/// survives the generic filters [M Collide_PickObj 0x1eae80:72-90 — the flying bullet's own
+/// query is mask 0 [M Bullet_update 0x12e7b0:389] and DOES pick panes], and dropped by the
+/// 0x8/0x2-masked families through the generic pass-flag/material rules [M Collide_Intersect
+/// 0x1ebaa8:305-319]. The port's baked `node_pass` on pane triangles reproduces the 0x8-family
+/// drop inside `segment_bullet`'s `drop_pass` walk, and the flying bullet's pane contact lands
+/// through the explicit bounds loop in drone.rs (`Breaks::seg_box_t`, the `Collide_FilterBullets`
+/// weapon-word gate, one drain per bullet per tick like the game's single reciprocal contact
+/// [M Collide_Update 0x1ea398:161-215]) — the served families' OUTCOMES match the game while
+/// the ray walks themselves skip the pane IDs. The skip is kept: blanket-enabling pane IDs in
+/// the unmasked `segment` would make panes solid to stand-ins the game never runs
+/// (`move_probe_clear` has no game query behind it), shifting every walkreal a window sits on.
 /// A killed pane (`Break_Kill` 0x12b970:60, obj+0xFE |= 1) drops out of the set.
 pub const PANE_PART: u64 = 0x400_0000_0000;
 
@@ -662,7 +685,13 @@ fn along_scan<'a>(g: &'a Geo, from: V3, to: V3) -> Along<'a> {
 /// scalar pair `Intersect_CylTriGeom` 0x1e9a70:156 and `Intersect_PointGeom` 0x1e92d8:153
 /// drive) and the VU0 `ASH_RecurseBoxesBox` 0x10ae50 (`Intersect_CylGeom` 0x109da0 drives)
 /// [M]. The port parses the tree (`nf-formats/src/collision.rs`) but queries the flattened
-/// triangle world through this AABB filter instead [S].
+/// triangle world through this AABB filter instead — SETTLED EQUAL
+/// (markers-world-objects 2026-11-08): every triangle lies inside its leaf box [M the tree's
+/// leaf records bound their vertex blocks] and inside its object's exact vertex box (the
+/// port's `Object.lo/hi` = `push_kept`'s min/max over the object's own triangles), and a
+/// hitting triangle lies inside the query box — so both the game's tree recursion and this
+/// filter triangle-test every potentially-hitting triangle; the candidate sets agree and the
+/// first-hit fraction is the same. The filter is an acceleration, not a behaviour claim.
 fn overlapping<'a>(g: &'a Geo, lo: V3, hi: V3) -> impl Iterator<Item = &'a Object> + 'a {
     let out = move |o: &Object| (0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]);
     let all: Box<dyn Iterator<Item = &'a Object>> = if g.groups.is_empty() { Box::new(g.objects.iter()) } else {
@@ -1200,7 +1229,10 @@ impl CollisionWorld {
         }
         // Index collision shapes by hashcode, AND by (map,object) packed into a synthetic key for objects whose
         // hashcode is u32::MAX (anonymous objects — e.g. 4/5 doors on 07000001 have hashcode=MAX, so the hashcode
-        // lookup fails and bullets pass through). The synthetic key is 0x80000000 | (map << 16) | object [S].
+        // lookup fails and bullets pass through). The synthetic key is the port's INTERNAL index
+        // (never a game value): the game needs no hashcode map at all — its pick walks each cel's
+        // object list directly [M Collide_Pick 0x1eb320:314-329] and so reaches hashcode-MAX
+        // objects naturally; the key only restores that reachability in the port's hash index.
         let mut shapes: HashMap<u32, Vec<[V3; 3]>> = HashMap::new();
         let mut shape_mats: HashMap<u32, Vec<u8>> = HashMap::new();
         let mut shape_flags: HashMap<u32, u32> = HashMap::new();
@@ -1213,7 +1245,8 @@ impl CollisionWorld {
                 shape_mats.insert(h, c.triangles_with_material().into_iter().map(|t| t.1).collect());
             }
         }
-        // Also index by (map, object) for anonymous objects (hashcode == MAX) — doors placed by-index [S].
+        // Also index by (map, object) for the anonymous (hashcode == MAX) objects — the doors the
+        // game's list walk reaches without any key [M 0x1eb320:314-329; D 07000001's 4/5 doors].
         for (m, map) in level.maps.iter().enumerate() {
             for (o, obj) in map.objects.iter().enumerate() {
                 if obj.hashcode == u32::MAX {
@@ -2206,8 +2239,11 @@ impl CollisionWorld {
     /// doubly-linked list the movers maintain by hand — `control_unlink_object` 0x134608
     /// (next/prev splice at obj+0xC/+0x8, then +0x20/+0xC/+0x8 cleared [M 0x134608:4-11], 18
     /// call sites from `control_delete_object` 0x133178 to `MP_ReSpawn` 0x185368) — which the
-    /// port's `Vec`-of-objects model replaces: the cel membership is re-derived per tick here
-    /// [S].
+    /// port's `Vec`-of-objects model replaces by re-deriving the SAME membership per tick here:
+    /// storage differs, membership does not — the relink logic above is the game's own
+    /// ([M control_handle_cel_change 0x133288 / build_LinkToRoom 0x1c9680 / Cel_ObjectLeftCel
+    /// 0x1e0d58 / build_point_in_bounding_box 0x1c9500]) and the walkreal battery pins the
+    /// resulting cel attributions on every level.
     pub fn player_cel_relink(&self, cur: Option<usize>, prev: V3, pos: V3, centre: V3) -> Option<usize> {
         if let Some(cell) = cur {
             if let Some(dest) = self.cel_portal_dest(cell, prev, pos) { return Some(dest); }
@@ -2453,8 +2489,10 @@ impl CollisionWorld {
                 }
             }
         }
-        // The dynamic set's pane parts (`PANE_PART` ids) are not ray targets [S] (master's
-        // perf-240g note above the flat walk); every other dynamic part is.
+        // The dynamic set's pane parts (`PANE_PART` ids) are not ray targets (see `PANE_PART`'s
+        // doc: the game reaches pane contacts through its own query masks and the one reciprocal
+        // contact per bullet per tick [M 0x1ea398:161-215], which the port's bounds loop serves;
+        // master's perf-240g note above the flat walk); every other dynamic part is.
         for (i, o) in dynamic.geo.objects.iter().enumerate() {
             if dynamic.movers.get(i).is_some_and(|&(id, _, _)| id & PANE_PART != 0) { continue; }
             if !seg_box(from, d, o.lo, o.hi) { continue; }
@@ -3837,20 +3875,24 @@ mod tests {
 
     /// capsule-headon-cull-redo: `line_of_sight` applies the CALLER's game mask — the drops
     /// differ per mask [M Collide_Intersect 0x1ebaa8:300-319, Collide_Pick 0x1eb320:140-152]:
-    /// guard vision 0xa27 drops surface-0x40 and the classes but NOT node-flagged cels and NOT
-    /// the 0x1000 cage... (0xa27 DOES carry bit 0x20 — the cage is skipped); the crouch/jump
-    /// headroom 0xd (9|4) drops node-flagged cels and the classes but NOT surface-0x40.
+    /// guard vision 0xa27 drops surface-0x40 (bit 0x800) and the classes but NOT node-flagged
+    /// cels and NOT the 0x1000 cage... (0xa27 DOES carry bit 0x20 — the cage is skipped); the
+    /// crouch/jump headroom 0xd (9|4) carries bit 0x8, so it drops node-flagged cels AND the
+    /// surface-0x40/0x80 hits ([M 0x1ebaa8:305-307 sets HITDATA+0x51 |= 2 for surf & 0x40/0x80;
+    /// :317-319 drops the hit when the mask's bit 0x8 sees that bit] — the earlier "but NOT
+    /// surface-0x40" here was the TEST's misread, fixed 2026-11-08 markers-world-objects).
     #[test]
     #[ignore = "LOS_MASKS_ON is off until the masks keep guard cover and the 08 escort green"]
     fn line_of_sight_applies_the_callers_game_mask() {
         let face = |m: u8| [[2.0, 0.0, -1.0], [2.0, 2.0, 1.0], [2.0, 2.0, -1.0]];
-        // A surface-0x40 card between the endpoints: guard vision (0x800) sees through it,
-        // the crouch headroom (no 0x800 bit) does not.
+        // A surface-0x40 card between the endpoints: BOTH caller masks see through it — guard
+        // vision by its 0x800 bit [M 0x1ebaa8:300-302], the headroom by its 0x8 bit against the
+        // HITDATA+0x51 |= 2 the surf-&0x40 hit carries [M 0x1ebaa8:305-307 + :317-319].
         let w = CollisionWorld::from_triangles_flags(vec![(face(0x04), 0x44, false)]);
         assert!(w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], LOS_GUARD_VISION),
             "guard vision drops the surface-0x40 card [M 0x1ebaa8:300-302]");
-        assert!(!w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], LOS_PLAYER_HEADROOM),
-            "the headroom mask (9|4) has no 0x800 bit — the surface-0x40 card blocks");
+        assert!(w.line_of_sight([0.0, 1.0, 0.0], [4.0, 1.0, 0.0], LOS_PLAYER_HEADROOM),
+            "the headroom mask's bit 0x8 drops the surface-0x40 card [M 0x1ebaa8:305-307+317-319]");
         // A NODE-flagged card (the placement glist bit 0x40): the headroom mask's bit 0x8 drops
         // it; guard vision (0xa27 has NO bit 0x8) does NOT — the card blocks.
         let w = CollisionWorld::from_triangles_flags(vec![(face(0x04), 0x04, true)]);

@@ -631,6 +631,67 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 if dead { fought = true; break; }
             }
             if fought { continue; }
+            // Still across and alive after the threshold rounds: on the merged tree the stream
+            // shift parked #6 deeper in the hall (z 17.8 — his boxes walled from the threshold,
+            // health 12 untouched through 2×1200 threshold taps [L the 8604 run]) and the plain
+            // shoot's flank became the killer: its nav opened the hall door and walked Bond
+            // INTO the hall ("hall guard 6 flank 1 nav 2: opening door" [L the same run]),
+            // dry at clip 0, where the shotgun captain #5's 22.8-u pellets finished him at tick
+            // 8604. The player falls back to the sound lure that won the doorway fight: hold
+            // the line, fire at the guard's LIVE position, and let the goal machinery hunt the
+            // gunshot hearing [M DroneFunc_SetNoiseHeard] across the aperture — the taps land
+            // during the crossing (the live-tracking stream; the lure run walked 5/6/7/11 into
+            // the door line, corpses at z 10.2-12.7 [L the lure run note above]). Bounded: no
+            // crossing in 900 ticks (or a still-across guard) leaves him for the escort-round
+            // clears rather than any flank into the hall.
+            {
+                let (still_alive, still_across) = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let d = &sim.drones.list[g];
+                    (!d.corpse && d.health > 0.0, d.pos[2] > 11.2)
+                };
+                if still_alive && still_across {
+                    // Dry at the door phase starves the lure: the run entered the flank at
+                    // clip 4 spare 0 and died dry mid-flank [L the 8604 run]. The walk's own
+                    // resupply idiom (the dry mid-hall block) from the hold line.
+                    if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare < 8 {
+                        w.resupply(&format!("hall guard {g} lure ammo"));
+                        if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, [7.2, 6.4, 8.8]) > 2.0 {
+                            w.walk_nav_to([7.2, 6.4, 8.8], &format!("hall guard {g} back to the hold line for the lure"), 1.0);
+                        }
+                    }
+                    for t in 0..900u32 {
+                        let (input, trigger, done) = {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            let d = &sim.drones.list[g];
+                            if d.corpse || d.health <= 0.0 { (Input::default(), false, true) }
+                            else if d.pos[2] <= 11.2 { (Input::default(), false, true) }
+                            else {
+                                let bp = sim.bond.pos;
+                                let at = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
+                                let desired = (at[0] - bp[0]).atan2(at[2] - bp[2]);
+                                let err = walker::wrap_pi(desired - sim.bond.yaw);
+                                let want_pitch = ((at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop)) / walker::dxz(bp, at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+                                let perr = want_pitch - sim.bond.pitch;
+                                (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() },
+                                    err.abs() < 0.02 && perr.abs() < 0.028 && t % 16 == 0, false)
+                            }
+                        };
+                        if done { break; }
+                        w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
+                        w.total_ticks += 1;
+                        w.after_step();
+                        if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                    }
+                    let (alive, across_now) = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let d = &sim.drones.list[g];
+                        (!d.corpse && d.health > 0.0, d.pos[2] > 11.2)
+                    };
+                    eprintln!("[01] hall guard {g} the aperture lure: alive {alive} across {across_now} at tick {}", w.total_ticks);
+                    if !alive || across_now { continue; } // dead → the AND takes his channel; across → the escort clears, never a flank into the hall
+                }
+            }
         }
         if !w.shoot(g, &format!("hall guard {g}")) {
             if w.resupply("hall ammo") { w.shoot(g, &format!("hall guard {g}")); }
@@ -2261,19 +2322,26 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
 /// the same roster the Agent walk fights, hit more often for less per hit while Bond's pain is
 /// amplified 1.2×. Real input only — the load path is the only difference (plus the
 /// d3-gated tactics the deaths force, inside this file); no health, armour or channel writes.
-/// IGNORED with the measured reason (aim-last-seven, 2026-11-06 [L the run on this branch]):
-/// the walk is not losing the damage budget — Bond crosses the hall fight at 82.0 health
-/// (10 hits for 18.0, 3 return-fire fights, tick 212820) — but the AND(0x11,0x12,0x13) hall
-/// gate [D mux placement] can never complete: hall guard 11 (drone #11, hp 6) never EXPOSES —
-/// the shoot machinery's exposed_aim finds no exposed part through the whole 10800-tick bound
-/// at 3.6-4.7 u ("[walk] hall guard 11: shooting drone 11 at +8400 (health 6, dist 3.6, clip
-/// 32 spare 17, exposed false)" → "drone 11 still alive after 10800 ticks (health 6)"), so
-/// the third named guard's death never rises and the gate's ch 153 never fires. NEXT LEVERS:
-/// a live check of the guard's cower/hide cycle on the 00agent roster (which part buries, and
-/// whether the game's own AI walks it out), or a lure stand (the 01 doorway-step idiom) that
-/// walks the guard out of its cover before the gate is needed.
+/// IGNORED with the measured reason (guard-pane-drain-3, 2026-11-08 [L the runs on the merged
+/// tree 2998b6a76]): the stream shift moved the failure twice in one day. First the plain
+/// shoot's flank killed the walk outright — #6 (12 hp pistol) parked deeper in the hall
+/// (z 17.8, health 12 untouched through 2×1200 threshold taps), exposed_aim false from the
+/// hold line, and the shoot machinery's flank nav OPENED the hall door and walked Bond into
+/// the hall, dry at clip 0, where the shotgun captain #5 (0x1c) at 22.8 u finished him at
+/// tick 8604 (20 hits for 100.0 [L the 8604 run]). This round's lever — the d3-gated aperture
+/// lure in the named loop (the bounded live-tracked gunshot lure + no flank while
+/// still-across) — removed that death: Bond now reaches the AND gate at 85.6 health (8 hits
+/// for 14.4 [L the d3fix run]). But the gate still can't fire: all three named guards stay
+/// across and alive — the door-phase resupplies fail ("no pickup within the walked-path
+/// corridor", clip 1-4 spare 0), the lure's noise dies after 1-4 taps, and a dry gun draws no
+/// hunter across the aperture (the old lure run that walked 5/6/7/11 into the door line was
+/// ARMED: clip 32 spare 16 [L the lure run note]). NEXT LEVERS: ammo at the door phase — the
+/// corridor-rule resupply refuses the off-path pickups at (-7.5,5.3,-6.8)/(-3.3,5.8,-9.1)
+/// (the d3 pre-hall stock attempts), so either a walked detour leg a player would take between
+/// fights, or the named guards' own drops if the port drops them — then the armed sustained
+/// lure draws the crossing and the threshold fight answers at the plane.
 #[test]
-#[ignore = "00 Agent: the AND(0x11,0x12,0x13) hall gate can't complete — guard #11 (hp 6) never exposes (exposed false through the 10800-tick bound at 3.6-4.7 u [L the run]), ch 153 never fires; Bond is at 82.0 health when it stalls, so the budget is not the blocker"]
+#[ignore = "00 Agent: the AND(0x11,0x12,0x13) hall gate can't complete — the aperture-lure round removed the flank death (Bond at the gate at 85.6 hp, tick 22260 [L the d3fix run]) but all three named guards stay across and alive: the door phase is DRY (resupply done false, clip 1-4 spare 0 — 'no pickup within the walked-path corridor'), the lure's noise dies after 1-4 taps and no guard crosses; next lever: ammo at the door phase (the off-path pickups at (-7.5,5.3,-6.8)/(-3.3,5.8,-9.1) the corridor rule refuses, or the guards' drops) then the armed sustained lure"]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(3));
 }
