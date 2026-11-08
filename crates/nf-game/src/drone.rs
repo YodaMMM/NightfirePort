@@ -24840,7 +24840,7 @@ mod abseil_tests {
 /// The body test both bullet walks run on one drone (`Collide_PickObj` 0x1eae80's sphere, then
 /// `Collide_Jointy` on the posed boxes; the down sphere of `NDrone2_Collision` 0x140e90:65-90):
 /// the part and the fraction along `from → end`. The caller applies the enable gates.
-fn drone_ray_part(dr: &Drone, d: &Data, from: V3, end: V3) -> Option<(i16, f32)> {
+pub fn drone_ray_part(dr: &Drone, d: &Data, from: V3, end: V3) -> Option<(i16, f32)> {
     let c = [dr.pos[0], dr.pos[1], dr.pos[2]];
     if seg_point_dist2(from, end, c) > 1.05 * 1.05 * 4.0 { return None; }
     let ray = [end[0] - from[0], end[1] - from[1], end[2] - from[2]];
