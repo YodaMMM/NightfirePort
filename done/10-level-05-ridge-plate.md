@@ -6,3 +6,8 @@ Reproduce on the real level first through real input, not a teleport. Compare wi
 
 ---
 claimed-by: sandbox1 at 2026-11-08T19:35Z
+
+---
+## Report (done, 2026-11-08T19:58Z)
+
+Closed by the driver: the report is on `s/level-05-ridge-plate` (docs/reports/level-05-ridge-plate.md); the worker didn't run finish.sh.
