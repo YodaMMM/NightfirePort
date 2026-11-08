@@ -6255,7 +6255,7 @@ impl Drone {
             if self.keeps_gravity {
                 self.in_air = true;
                 self.on_surface = false;
-                self.velocity[1] += -9.8 * (1.0 / 60.0);
+                self.velocity[1] += world.gravity_y() * (1.0 / 60.0);
                 let r = 1.0 / 60.0;
                 self.pos[0] += self.velocity[0] * r;
                 self.pos[1] += self.velocity[1] * r;
@@ -6319,7 +6319,7 @@ impl Drone {
         } else {
             self.in_air = true;
             // `velocity += WldGravity · REC_FRAME_RATE` (gravity per tick²).
-            self.velocity[1] += -9.8 * (1.0 / 60.0);
+            self.velocity[1] += world.gravity_y() * (1.0 / 60.0);
         }
         // `pos += velocity · REC_FRAME_RATE` (the game applies this whether or not on the surface — on the surface
         // velocity is zero, so it's a no-op there).
@@ -12446,6 +12446,10 @@ pub struct Drones {
     pub llist: Vec<usize>,
     pub rng: Rng,
     pub bullets: Vec<crate::bullet::Bullet>,
+    /// The drone rounds' script-object contacts, held for the next walk: `(player, damage)` for
+    /// `SP_GetHitDamage`'s read, `(player, weapon id)` for `SP_Hit`'s.
+    script_round_damage: Vec<(usize, f32)>,
+    script_round_hits: Vec<(usize, u16)>,
     /// Grenades in flight (`Bullet_init` with a gravity-affected weapon; WORKLOG 0080).
     pub grenades: Vec<crate::grenade::Grenade>,
     /// fix-satchel-tripbomb: the armed tripbombs' laser segments this tick, (start, end) per beam —
@@ -13377,7 +13381,7 @@ impl Drones {
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
             bond_door_skip: false, // the boot value latches at the Mission_Init site (Player_Init 0x1910f8's write)
-            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
+            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), bullet_paths: Vec::new(), script_round_damage: Vec::new(), script_round_hits: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             bullet_contacts_now: Vec::new(),
             bullet_contacts_prev: Vec::new(),
             space_laser_beams: Vec::new(),
@@ -14186,15 +14190,9 @@ impl Drones {
         for (i, p) in level.maps[mi].placements.iter().enumerate() {
             if p.flags & 0xff != 0x38 { continue; }
             let mut l = crate::space_laser::from_placement(i, &p.params);
-            // The fire origin seeds from the placement's own position: the game's lane 0 fills
-            // only through `SpaceLaser_Register` 0x1aa9e8 (the tracking scripts' event callback
-            // [M Script_EventHandler 0x1d94c0:173-174], copying the current entity's obj+0xC0),
-            // and those entities are bare `control_create_object(0, ...)` objects at the zero
-            // quad [M Script_CreateEntity 0x1d8968's fallthrough + Script_EntityStart
-            // 0x1d8d78's `Vec_Copy2(+0xc0, +0x40, +0x30)` of zeros] — the level's kind-0x38
-            // placement IS the "BigLaserBeam Fire Marker" at (0,0,0) [D 0700001b-audit.md:275],
-            // so the registered quad reads the placement's position. The stream decode shows no
-            // position ops [D audit:611-612]; a live check settles the register's result.
+            // The fire origin until the first register: the placement's own position, the
+            // "BigLaserBeam Fire Marker" at (0,0,0) [D 0700001b-audit.md:275]. The tracking
+            // scripts' load overwrites it (see the LoadScript arm below).
             l.fire_origin = p.translation;
             self.space_lasers.push(l);
         }
@@ -14324,6 +14322,22 @@ fn closest_on_segment(a: V3, b: V3, c: V3) -> V3 {
     let len2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
     let t = if len2 <= 0.0 { 0.0 } else { (ac[0] * ab[0] + ac[1] * ab[1] + ac[2] * ab[2]) / len2 }.clamp(0.0, 1.0);
     [a[0] + ab[0] * t, a[1] + ab[1] * t, a[2] + ab[2] * t]
+}
+
+/// Where the segment first meets a glist's triangles posed by `m`, as the fraction along it: the
+/// test runs in object space, as `Collide_Intersect` 0x1ebaa8 does through `Mat_Inverse`.
+fn segment_posed_mesh_t(m: &nf_formats::anim::Mat4, tris: &[[V3; 3]], a: V3, b: V3) -> Option<f32> {
+    let dot = |x: V3, y: V3| x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+    let row = |k: usize| [m[k][0], m[k][1], m[k][2]];
+    let (r0, r1, r2) = (row(0), row(1), row(2));
+    let (s0, s1, s2) = (dot(r0, r0).max(1e-9), dot(r1, r1).max(1e-9), dot(r2, r2).max(1e-9));
+    let local = |p: V3| {
+        let w = [p[0] - m[3][0], p[1] - m[3][1], p[2] - m[3][2]];
+        [dot(w, r0) / s0, dot(w, r1) / s1, dot(w, r2) / s2]
+    };
+    let (la, lb) = (local(a), local(b));
+    let ld = [lb[0] - la[0], lb[1] - la[1], lb[2] - la[2]];
+    tris.iter().filter_map(|t| crate::world::ray_tri_t(la, ld, t)).min_by(f32::total_cmp)
 }
 
 fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
@@ -15082,8 +15096,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for p in &mut self.scripts.players {
             p.bullet_hits = std::mem::take(&mut p.tick_bullet_hits);
         }
+        // The drone rounds' contacts: their pass runs after the walk, as the game's Collide does
+        // [M 0x1336f8:238], so the walk this tick reads what they left last tick.
+        for (pi, dmg) in std::mem::take(&mut self.script_round_damage) { self.scripts.add_hit_damage(pi, dmg); }
+        for (pi, id) in std::mem::take(&mut self.script_round_hits) {
+            if let Some(p) = self.scripts.players.get_mut(pi) { p.bullet_hits.push(id); }
+        }
         self.site_bullet_damage = 0.0;
         self.site_blast_hits.clear();
+        // The held hit-point scripts' stream objects — `SP_GetHitDamage` 0x1dc5f8's read set
+        // (GAPS G-047: the 0700001b solar panels). Each bullet contact below adds its damage.
+        let held_targets = self.scripts.held_hit_volumes(d);
+        // `SP_Hit` 0x1dc470's bit-2 read set: the current stream objects of EVERY script
+        // player — no hit-point or hold gate (the urn is hp 0 and still reacts [M]).
+        let sp_bullet_targets = self.scripts.sp_bullet_targets(d);
         // copter-hitdata-damage: the copters' 9 part slots' world spheres, resolved once per
         // tick (the parts pose with the SP player — the documented one-tick script-entity lag;
         // the game's collide pass reads the same last-walk poses [M 0x1336f8:238]).
@@ -15134,7 +15160,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // grenade path runs the same integration (grenade.rs, fix-player3).
             if b.gravity && !first {
                 let (vx, vy, vz) = (b.dir[0] * b.speed, b.dir[1] * b.speed, b.dir[2] * b.speed);
-                let vy = vy + crate::grenade::WLD_GRAVITY[1] * crate::grenade::REC_FRAME_RATE * crate::grenade::REC_FRAME_RATE;
+                let vy = vy + d.world.gravity_y() * crate::grenade::REC_FRAME_RATE * crate::grenade::REC_FRAME_RATE;
                 let len = (vx * vx + vy * vy + vz * vz).sqrt();
                 if len > 1e-9 {
                     b.dir = [vx / len, vy / len, vz / len];
@@ -15312,9 +15338,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     if best.is_none_or(|(_, _, bt)| t < bt) { best = Some((i, part, t)); }
                 }
             }
-            // Read before the pane arm below can delete a struck pane's object: the contact stands
-            // on the chain either way.
-            let sp_hit = self.scripts.sp_contact(d, b.pos, end, false);
             if !net_world {
                 // The round's world stop rides the game's cel-scoped pick [M Collide_Pick 0x1eb320:125
                 // candidate nodes from Collide_StraddleCels 0x1eac98 only; Bullet_update re-feeds
@@ -15611,21 +15634,39 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
                 for (fi, g, k) in contacts { self.fuseboxes[fi].mark_hit(g, k); }
             }
-            // The script objects take the bullet: the game's Collide pass appends the contact to
-            // the object's +0xD0 HITDATA chain. `SP_GetHitDamage` 0x1dc5f8 sums the chain's damage
-            // (mask 0 filters nothing — the SP_Update call's filter word is 0 [M 0x1ece30:24-31]),
-            // `SP_Update`'s damage tail accumulates it until the player's hit points, and `SP_Hit`'s
-            // bullet arm reads the same chain one tick later (the contact goes into
-            // `tick_bullet_hits`, the NEXT pass's head rotates it into `bullet_hits`; Collide after
-            // the walk [M 0x1336f8:238]). The weapon id is the bullet's `weapon_data+0x00` u16 [M
-            // docs/fields/weapon_data.md: the id = the record index], the `+0x37` filter's
-            // comparison value [M 0x1dc470:64-70]. The enemy rounds' half is in the guard-bullet
-            // pass.
-            if let Some((pi, held)) = sp_hit {
-                if held { self.scripts.add_hit_damage(pi, b.damage); }
-                let sp_weapon_id = d.weapons.records.get(b.weapon as usize)
-                    .map_or(0u16, |r| u16::from_le_bytes([r[0x00], r[0x01]]));
-                self.scripts.add_bullet_hit(pi, sp_weapon_id);
+            // The held hit-point scripts' stream objects take the bullet this tick: the game's
+            // Collide pass appends the contact to the object's +0xD0 HITDATA chain and
+            // `SP_GetHitDamage` 0x1dc5f8 sums the chain's damage (mask 0 filters nothing — the
+            // SP_Update call's filter word is 0 [M 0x1ece30:24-31]); `SP_Update`'s damage tail
+            // accumulates it until the player's hit points. The drone rounds run the same stage
+            // in their own pass below.
+            // The sphere is only the broad phase: `Collide_PickObj` 0x1eae80 queues the object and
+            // `Collide_Update` 0x1ea398 keeps it only if `Collide_Intersect` 0x1ebaa8 (the flight's
+            // 0x201 pick into `Intersect_RayGeom` 0x10a8c8) meets its glist's triangles; a miss
+            // stays at 1e8 and is freed, so no contact reaches obj+0xD0. An object with no
+            // collision block never passes the pick [M 0x1eae80: glist+8 for a non-0x100 test].
+            // The mirror walk stops at the first solid node, so a nearer wall or guard shields
+            // the object [M 0x1ea398:216-229].
+            let solid_t = best.map_or(tw.unwrap_or(f32::INFINITY), |(_, _, dt)| tw.map_or(dt, |w| w.min(dt)));
+            let meets = |c: &[f32; 3], r: f32, mesh: &Option<(u32, nf_formats::anim::Mat4)>| {
+                Self::segment_hits_sphere(b.pos, end, *c, r) && mesh.as_ref().is_none_or(|(hash, m)| {
+                    d.world.shape(*hash)
+                        .and_then(|tris| Self::segment_posed_mesh_t(m, tris, b.pos, end))
+                        .is_some_and(|t| t <= solid_t + 1e-4)
+                })
+            };
+            for (pi, c, r, mesh) in &held_targets {
+                if meets(c, *r, mesh) { self.scripts.add_hit_damage(*pi, b.damage); }
+            }
+            // The SP_Hit bullet arm records the contact per player — the weapon id is the
+            // bullet's `weapon_data+0x00` u16 [M docs/fields/weapon_data.md: the id = the
+            // record index], the `+0x37` filter's comparison value [M 0x1dc470:64-70]. The
+            // gather goes into `tick_bullet_hits`; the NEXT pass's head rotates it into
+            // `bullet_hits` for the walk (Collide after the walk [M 0x1336f8:238]).
+            let sp_weapon_id = d.weapons.records.get(b.weapon as usize)
+                .map_or(0u16, |r| u16::from_le_bytes([r[0x00], r[0x01]]));
+            for (pi, c, r, mesh) in &sp_bullet_targets {
+                if meets(c, *r, mesh) { self.scripts.add_bullet_hit(*pi, sp_weapon_id); }
             }
             // mp-site-damage-offline: the site takes the bullet this tick — the game's collision
             // pass appends the contact to the site SP's stream objects' `obj+0xD0` chain and the
@@ -18547,13 +18588,21 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if l.state == 1 || l.state == 3 { l.script_ticks += 1; }
                 for o in out.drain(..) {
                     match o {
-                        crate::space_laser::LaserOut::LoadScript { id, .. } => {
+                        crate::space_laser::LaserOut::LoadScript { id, register, .. } => {
                             // [D] the lib record's length (the tracking pair 360, the dead
                             // script 10 [D 0700001b-audit.md:606-612]); the port ends the
                             // script at it ([M] `Script_StreamEnd` 0x1db420 clears the play
                             // bit at the End marker). A miss = the game's own Script_Load
                             // failure: IsPlaying reports 0 and state 1 exits next tick.
                             l.script_len = self.scripts.lib.get(&id).map(|n| n.length as u32).unwrap_or(0);
+                            l.script_writes = self.scripts.lib.get(&id).map(|n| crate::nis::channel_writes(n)).unwrap_or_default();
+                            // `SpaceLaser_Register` 0x1aa9e8 runs on the script's t0 event 0xF and
+                            // copies the current entity's obj+0xC0, the type-0x38 entity Script_Interp
+                            // has just keyed [M Script_EntityStart 0x1d8d78's tail; D stream 4 of
+                            // the tracking pair]: the beam leaves the aimed laser, not the placement.
+                            if register {
+                                if let Some(p) = self.scripts.keyed_entity_pos(id, 0x38, d) { l.fire_origin = p; }
+                            }
                             // The load tick runs its own Script_Update [M 0x1aa3f8:103/:112 —
                             // Script_Load + Script_Play + Script_Update inside state 0's arms].
                             l.script_ticks = 1;
@@ -18624,6 +18673,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             // def-hash miss = no object, the placement path's own rule).
                             self.fx.spawn_impact(0xc000010, l.target, [0.0, 1.0, 0.0]);
                         }
+                    }
+                }
+                // The running script's event-0xD writes on the update that reaches their time
+                // (update k runs at stream clock k-1 [M Script_Update 0x1da998:33-43]; the dead
+                // script loops [M 0x1aa3f8 Script_Play(_, 1)]).
+                if (l.state == 1 || l.state == 3) && l.script_len != 0 {
+                    let clock = (l.script_ticks.max(1) - 1) % l.script_len;
+                    for &(t, c, v) in &l.script_writes {
+                        if t == clock { self.channels.set_script(c, v, frame); }
                     }
                 }
             }
@@ -21550,6 +21608,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let eye_y = if player.eye == [0.0; 3] { player.pos[1] + 0.7 } else { player.eye[1] }; // fixtures without an eye
         let vol = crate::bullet::PlayerVolume { feet: [player.pos[0], feet_y, player.pos[2]], height: (eye_y + 0.17 - feet_y).max(0.5), radius: 0.25 };
         let viewer = player.pos;
+        let (script_held, script_sp) = if self.bullets.is_empty() { (Vec::new(), Vec::new()) } else {
+            (self.scripts.held_hit_volumes(d), self.scripts.sp_bullet_targets(d))
+        };
         for b in &mut self.bullets {
             let (from, dir) = (b.pos, b.dir);
             let alive_in = b.state < 2;
@@ -21583,18 +21644,29 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let full = rec.map_or(0.0, |r| f32::from_le_bytes(r[0x20..0x24].try_into().unwrap()));
                 if b.speed < full { b.speed += full * 0.02; }
             }
-            // The round's contact on the script objects, up to where it stopped [M Collide_Update
-            // 0x1ea398 — every class-5 round, whoever fired it; the sky bridge's panes take the
-            // copter's fire this way].
+            // The script objects take the drone-fired round too: one Collide pass serves every
+            // class-5 bullet, whoever fired it [M Collide_Update 0x1ea398 walks all objects with a
+            // HITTEST; Bullet_update 0x12e7b0 arms it per round]. The same broad phase and triangle
+            // stage as the player pass; the round's stop point ends the segment, so the first
+            // solid node shields what lies behind it [M 0x1ea398:216-229].
             if alive_in {
-                let reached = match &event {
-                    Some(crate::bullet::BulletEvent::World { at: p, .. }) => *p,
+                let to = match &event {
+                    Some(crate::bullet::BulletEvent::World { at: p, .. }) => [p[0] + dir[0] * 1e-3, p[1] + dir[1] * 1e-3, p[2] + dir[2] * 1e-3],
                     Some(crate::bullet::BulletEvent::Player { at, .. }) => *at,
                     _ => b.pos,
                 };
-                if let Some((pi, held)) = self.scripts.sp_contact(d, from, reached, true) {
-                    if held { self.sp_enemy_damage.push((pi, d.weapons.bullet_contact_damage(b.weapon))); }
-                    self.scripts.add_bullet_hit(pi, rec.map_or(0u16, |r| u16::from_le_bytes([r[0x00], r[0x01]])));
+                let meets = |c: &[f32; 3], r: f32, mesh: &Option<(u32, nf_formats::anim::Mat4)>| {
+                    Self::segment_hits_sphere(from, to, *c, r) && mesh.as_ref().is_none_or(|(hash, m)| {
+                        d.world.shape(*hash).is_some_and(|tris| Self::segment_posed_mesh_t(m, tris, from, to).is_some())
+                    })
+                };
+                let dmg = d.weapons.bullet_contact_damage(b.weapon);
+                for (pi, c, r, mesh) in &script_held {
+                    if meets(c, *r, mesh) { self.script_round_damage.push((*pi, dmg)); }
+                }
+                let id = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x00], r[0x01]]));
+                for (pi, c, r, mesh) in &script_sp {
+                    if meets(c, *r, mesh) { self.script_round_hits.push((*pi, id)); }
                 }
             }
             // A glass-passing round drains the pane it crosses: the contact joins the pane's

@@ -83,9 +83,7 @@ fn the_laser_arms_charges_and_fires_at_bond() {
             charged = true;
             assert!(l.whine_handle != 0, "the 0x5de whine handle is live in state 1 [M :119-121]");
         }
-        // The fire's durable product is the beam (5 ticks [M 001aac00:20-28]); the bullet dies
-        // the same tick on the pit geometry when the marker's ray is wall-locked — the beam and
-        // the emitter are the observable fire evidence, the bullet's spawn is [M]-wired below.
+        // The fire's durable product is the beam (5 ticks [M 001aac00:20-28]).
         if !sim.drones.space_laser_beams.is_empty() {
             assert!(saw_load, "the shot follows the loaded tracking script [M :100-126]");
             fired_at = Some(w.total_ticks);
@@ -98,11 +96,11 @@ fn the_laser_arms_charges_and_fires_at_bond() {
     assert_eq!(l.state, 0, "back to idle after the shot [M :191]");
     assert_eq!(l.cooldown, 10.0, "the 10 s re-fire timer reset [M :190]");
     // The bullet: `Bullet_init(-1, obj, 0, 0x2c6154, origin, dir, 0xffff)` [M :172-175] — the
-    // weapon def record 107's own speed/range/damage [D weapon_data 0x2bf150 + 107·0x10c]. The
-    // muzzle is the pit-centre marker, so the round can die on the geometry the same tick; the
-    // def wiring itself is pinned by the surviving beam below and the shared bullet path.
+    // weapon def record 107's own speed/range/damage [D weapon_data 0x2bf150 + 107·0x10c].
     if let Some(b) = sim.drones.bullets.iter().find(|b| b.weapon == 107) {
-        assert_eq!(b.pos, l.fire_origin, "the shot leaves the fire origin [M :172-175]");
+        let back = [0, 1, 2].map(|k| b.pos[k] - b.dir[k] * b.travelled);
+        let off = (0..3).map(|k| (back[k] - l.fire_origin[k]).abs()).fold(0.0f32, f32::max);
+        assert!(off < 1e-2, "the shot leaves the fire origin [M :172-175]: {back:?} vs {:?}", l.fire_origin);
         assert!(b.speed > 0.0 && b.range > 0.0 && b.damage > 0.0,
             "record 107's speed/range/damage reach the bullet [M weapon_data+0x20/+0x1C/+0x0C]");
         let to_player = [l.target[0] - b.pos[0], l.target[1] - b.pos[1], l.target[2] - b.pos[2]];
@@ -242,4 +240,57 @@ fn big_laser_beam_hurt_arms_through_its_gate() {
     w.tick(nf_game::player::Input::default(), false);
     assert!(!w.scene.sim.as_ref().unwrap().hurts[idx].disabled,
         "the live gate arms the volume [M :51-102]");
+}
+
+/// The tracking script drives the beam's hurt volume: ch 18 rises at its t120 and falls at t358,
+/// and the beam leaves the aimed laser keyed on the script's type-0x38 entity, not the Fire
+/// Marker at the origin [D 0x060007c0/c1 streams 2/4; M SpaceLaser_Register 0x1aa9e8].
+#[test]
+fn the_tracking_script_arms_the_hurt_and_places_the_origin() {
+    let Some(iso) = iso() else { eprintln!("skip: NF_ISO not set"); return };
+    let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).expect("load 0700001b"));
+    w.wait_enabled(3000, "the station start");
+    let idx = laser_index(&w);
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        for m in sim.drones.space_missiles.iter_mut() { m.state = 4; }
+    }
+    let mut seen = (None, None);
+    for t in 0..1200u32 {
+        poke_gate(&mut w);
+        w.tick(nf_game::player::Input::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        let on = sim.drones.channels.on(18);
+        if on && seen.0.is_none() { seen.0 = Some(t); assert_eq!(sim.drones.space_lasers[idx].state, 1, "it rises while the script tracks"); }
+        if !on && seen.0.is_some() && seen.1.is_none() { seen.1 = Some(t); break; }
+    }
+    let (Some(a), Some(b)) = seen else { panic!("ch 18 never cycled: {seen:?}") };
+    assert_eq!(b - a, 238, "t120 to t358 on the stream clock");
+    let o = w.scene.sim.as_ref().unwrap().drones.space_lasers[idx].fire_origin;
+    assert!(o != [0.0, 0.0, 0.0] && o[0] > 40.0, "the keyed laser, not the marker: {o:?}");
+}
+
+/// The dead script (state 3, the timer out) raises ch 15, the trigger of
+/// ScriptPlayer_LaserOverloadAnim #143 [D 0x060007e3 stream 1, #143 p6], and #143's script then
+/// raises ch 16 [D 0x060008a3 stream 7 t240].
+#[test]
+fn the_dead_script_starts_the_overload() {
+    let Some(iso) = iso() else { eprintln!("skip: NF_ISO not set"); return };
+    let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).expect("load 0700001b"));
+    w.wait_enabled(3000, "the station start");
+    let idx = laser_index(&w);
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        for m in sim.drones.space_missiles.iter_mut() { m.state = 4; }
+        sim.drones.space_lasers[idx].arm_delay = 0.5;
+    }
+    let mut t15 = None;
+    for t in 0..800u32 {
+        poke_gate(&mut w);
+        w.tick(nf_game::player::Input::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if t15.is_none() && sim.drones.channels.on(15) { t15 = Some(t); }
+        if sim.drones.channels.on(16) { assert!(t15.is_some()); return; }
+    }
+    panic!("ch 15 {t15:?}, ch 16 never");
 }

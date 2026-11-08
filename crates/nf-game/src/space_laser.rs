@@ -71,6 +71,11 @@ pub struct SpaceLaser {
     /// the game's own `Script_Load` failure — `Script_IsPlaying(0)` reports 0 and state 1
     /// exits on the next tick).
     pub script_len: u32,
+    /// The loaded script's channel writes, `(stream tick, channel, value)`: its event-0xD
+    /// lines [D], the part of the script the sim reads. The tracking pair raises ch 18 for the
+    /// beam's hurt volume at t120 and drops it at t358; the dead script raises ch 15, the
+    /// overload anim's trigger, at t1 [D 0x060007c0/c1, 0x060007e3].
+    pub script_writes: Vec<(u32, u32, u8)>,
     /// The live whine handle (`Sound_Play(100.0, 0x5de, 0, 0)`'s return, stored at
     /// ext lane 3+0x0C [M 0x1aa3f8:119-121]; `Sound_Stop`ed on the shared tail [M :231-235]).
     /// 0 = none. Written by the sim wiring only.
@@ -105,6 +110,7 @@ pub fn from_placement(placement: usize, params: &[(u32, u32)]) -> SpaceLaser {
         whine_on: false,
         script_ticks: 0,
         script_len: 0,
+        script_writes: Vec::new(),
         whine_handle: 0,
     }
 }

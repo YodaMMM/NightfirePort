@@ -13,8 +13,8 @@ pub const DROP_LIFETIME: u16 = 60 * 120;
 /// `Pickup_CreateFromSet` 0x18f1b0's respawn argument: 3 (×10 s) [M disasm 0x18f21c `addiu s6,zero,3`
 /// → 0x18f25c `sw s6,16(sp)`, `Pickup_Create`'s param 11 → +0x2C].
 pub const SET_RESPAWN: u16 = 3;
-/// `WldGravity.y · REC_FRAME_RATE²` [L]: the fall per tick².
-const GRAVITY: f32 = -9.8 * (1.0 / 60.0) * (1.0 / 60.0);
+/// `REC_FRAME_RATE²`: `WldGravity` times this is the fall per tick² [M 0x18e148:47-55].
+const REC_SQ: f32 = (1.0 / 60.0) * (1.0 / 60.0);
 
 /// `BestWeapon` (0x2bede0, 36 bytes in the symtab): the auto-switch ranking, best first. An entry is
 /// a weapon id; the ranking compares `weapon_data[entry].base` [M Player_IsBetterWeapon 0x1a6eb0.
@@ -311,7 +311,7 @@ impl Pickup {
     /// *Suggested*: `HIT+0x30` taken as the unit ray (U-036).
     pub fn fall(&mut self, world: &CollisionWorld) {
         if self.state != 0 { return; }
-        self.vel[1] += GRAVITY;
+        self.vel[1] += world.gravity_y() * REC_SQ;
         for k in 0..3 { self.m[3][k] += self.vel[k]; }
         let t = trans(&self.m);
         let to = [t[0], t[1] - self.bounds.centre[1].abs(), t[2]];
