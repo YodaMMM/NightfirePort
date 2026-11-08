@@ -694,7 +694,7 @@ mod tests {
         let mut bounced = false;
         for k in 0..2000 {
             if let Some(ev) = g.update(&w, &mut rng) {
-                if matches!(ev, GrenadeEvent::Bounce(_)) { bounced = true; break; }
+                if matches!(ev, GrenadeEvent::Bounce(..)) { bounced = true; break; }
                 if matches!(ev, GrenadeEvent::Explode { .. }) { eprintln!("exploded at tick {k} pos={:?}", g.pos); break; }
             }
         }
@@ -720,7 +720,7 @@ mod tests {
         let mut bounced = false;
         for _ in 0..5 {
             if let Some(ev) = g.update(&w, &mut rng) {
-                assert!(matches!(ev, GrenadeEvent::Bounce(_)), "at the bounce max: a bounce, got {ev:?}");
+                assert!(matches!(ev, GrenadeEvent::Bounce(..)), "at the bounce max: a bounce, got {ev:?}");
                 bounced = true; break;
             }
         }
@@ -743,7 +743,7 @@ mod tests {
             born: 0,
             loop_handle: 0,
         };
-        if let Some(ev) = g.update(&w, &mut rng) { assert!(matches!(ev, GrenadeEvent::Bounce(_)), "one short: a bounce, got {ev:?}"); }
+        if let Some(ev) = g.update(&w, &mut rng) { assert!(matches!(ev, GrenadeEvent::Bounce(..)), "one short: a bounce, got {ev:?}"); }
         else { assert!(g.bounces == BOUNCE_MAX, "the bounce counted"); }
     }
 
@@ -764,7 +764,7 @@ mod tests {
         let mut rng = Rng::new(0);
         let mut events = Vec::new();
         for _ in 0..100 { if let Some(ev) = g.update(&w, &mut rng) { events.push(ev); } }
-        assert!(events.iter().any(|e| matches!(e, GrenadeEvent::Bounce(_))), "it touches the floor");
+        assert!(events.iter().any(|e| matches!(e, GrenadeEvent::Bounce(..))), "it touches the floor");
         assert!(!events.iter().any(|e| matches!(e, GrenadeEvent::Explode { .. })),
             "a slow bounce must sit, not explode [M 0x12ce80]");
         assert_eq!(g.velocity, [0.0; 3], "the slow bounce zeroes the speed");

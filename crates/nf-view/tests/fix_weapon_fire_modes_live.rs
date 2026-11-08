@@ -198,7 +198,7 @@ fn grenade_events_match_the_records() {
     let mut others = Vec::new();
     for t in 0..100 {
         match g.update(&wall, &mut rng) {
-            Some(GrenadeEvent::Bounce(_)) => { bounce_at = Some(t); break; }
+            Some(GrenadeEvent::Bounce(..)) => { bounce_at = Some(t); break; }
             Some(other) => others.push(other),
             None => {}
         }
@@ -217,7 +217,7 @@ fn grenade_events_match_the_records() {
     let mut g = mk(false);
     let mut bounced = false;
     let mut events = Vec::new();
-    for _ in 0..209 { if let Some(ev) = g.update(&wall, &mut rng) { if matches!(ev, GrenadeEvent::Bounce(_)) { bounced = true; } events.push(ev); } }
+    for _ in 0..209 { if let Some(ev) = g.update(&wall, &mut rng) { if matches!(ev, GrenadeEvent::Bounce(..)) { bounced = true; } events.push(ev); } }
     assert!(bounced, "the delay grenade bounces off the wall");
     assert!(!events.iter().any(|e| matches!(e, GrenadeEvent::Explode { .. })), "no wall detonation before the fuse");
     let mut boomed = false;
