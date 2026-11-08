@@ -11970,6 +11970,21 @@ pub const SWOOSH_POOL: usize = 512;
 pub const MICRO_CAMERA_BASE: u16 = 0x54;
 pub const MICRO_CAMERA_SHUTTER_SFX: u32 = 0xec;
 
+/// One turret script entity a round can land on (`Drones::gt_bullet_targets`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GtTarget {
+    /// The `gt_turrets` index and the script (0 = A, 1 = B).
+    pub turret: usize,
+    pub slot: usize,
+    /// The turret's `sp_key` (the own-round skip compares it).
+    pub key: usize,
+    /// The entity's dynamic-set part id (`object << 6`).
+    pub part: u64,
+    /// The world sphere: obj+0x80 / obj+0x8C.
+    pub centre: V3,
+    pub radius: f32,
+}
+
 /// One of Bond's bullets (`Player_WeaponInitBullet` → `Bullet_init` / `Bullet_update` with owner = player).
 #[derive(Clone, Debug)]
 pub struct PlayerBullet { pub pos: V3, pub dir: V3, pub speed: f32, pub travelled: f32, pub range: f32, pub damage: f32, pub weapon: u16, pub first: bool, pub dead: bool,
@@ -12019,6 +12034,14 @@ pub struct PlayerBullet { pub pos: V3, pub dir: V3, pub speed: f32, pub travelle
     /// `obj+0xEC`: the spawn frame — `Bullet_DoTrails` chains a new segment when
     /// `(frame − born) % weapon+0x74 == 0` [M 0x12d890:208].
     pub born: u32,
+    /// The firing turret's `sp_key` for a turret round, else None. The game's pick skips the
+    /// round's HITTEST+0x74 object [M Collide_PickObj 0x1eae80:57-59], which `Bullet_update` fills
+    /// from `Bullet_init`'s third argument [M 0x12e7b0:415-421] — `GT_Update` passes the barrel,
+    /// ext+0xC4 [M 0x180498:347-348, :519-521]. The port skips the firing turret's every part
+    /// instead: its muzzle sits at the turret's placement translation (a placed gun's muzzle
+    /// offset is 0) where the game's is the barrel's obj+0xC0 + dir·ext+0xD0, so a port round can
+    /// start inside the gun's own parts [S]. Other turrets' parts take the round.
+    pub from_turret: Option<usize>,
 }
 
 /// fix-weapon-fire-modes: the guided missile's look-input steering (`Bullet_update` 0x12e7b0:177-244,
@@ -14572,6 +14595,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 snd: whoosh,
                 swoosh: swoosh_seg,
                 born: self.frame,
+                from_turret: None,
             });
         }
         // `Bullet_init_casing` 0x12fde0 (Player_WeaponInitBullet 0x1a4bf0:306, right after the
@@ -14661,6 +14685,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 snd: whoosh,
                 swoosh: swoosh_seg,
                 born: self.frame,
+                from_turret: None,
             });
         }
         // The shell: `Bullet_init_casing` 0x12fde0's one-per-shot eject — at the shooter's body
@@ -15199,6 +15224,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `SP_Hit` 0x1dc470's bit-2 read set: the current stream objects of EVERY script
         // player — no hit-point or hold gate (the urn is hp 0 and still reacts [M]).
         let sp_bullet_targets = self.scripts.sp_bullet_targets(d);
+        // The turrets' script objects: `GT_Update` sums the chains of every object of script A,
+        // and of script B in state 4 [M 00180498:128-176].
+        let gt_targets = self.gt_bullet_targets(d);
         // copter-hitdata-damage: the copters' 9 part slots' world spheres, resolved once per
         // tick (the parts pose with the SP player — the documented one-tick script-entity lag;
         // the game's collide pass reads the same last-walk poses [M 0x1336f8:238]).
@@ -16136,7 +16164,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // [M 0x12d6f8..0x12d7f0] → next HITDATA on pierce, a stop dies
                     // [M 0x12d81c..0x12d82c]. The re-query is RNG-free and the static world cannot
                     // change mid-tick, so the deferred walk is bit-identical to the inline one.
-                    let _ = w;
+                    // A turret part is a solid contact of the same sorted list, and its triangles are
+                    // the dynamic set's: when the world stop IS a turret part, the part's `+0xD0`
+                    // chain takes the round's HITTEST+0x90 [M Collide_Update 0x1ea398:160-215 — the
+                    // mirrored node's +0x8] and `GT_Update` sums it [M 00180498:128-176]. The
+                    // impact effects run as for any world stop (the game's handler sees the object
+                    // contact's surface byte like a cel's).
+                    if let Some((ti, slot, t)) = Self::gt_part_hit(&gt_targets, d.world, b.pos, end, b.from_turret) {
+                        if t <= w {
+                            self.gt_turrets[ti].contact[slot] += d.weapons.bullet_contact_damage(b.weapon);
+                        }
+                    }
                     self.pending_world_impacts.push((bi, b.pos, ray));
                 }
                 _ => b.pos = [b.pos[0] + b.dir[0] * step, b.pos[1] + b.dir[1] * step, b.pos[2] + b.dir[2] * step],
@@ -16778,6 +16816,49 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
     }
 
+    /// The turrets' bullet targets, once per pass: one row per script-A and script-B entity of
+    /// every live turret — `GT_Update` sums the `+0xD0` chain of each [M 00180498:128-176] —
+    /// with its dynamic-set part id and its world sphere (`Control_BuildWorldSph` 0x133070: the
+    /// glist centre through obj+0x90, the glist radius), the broad phase `Collide_PickObj`
+    /// 0x1eae80 tests [M].
+    pub(crate) fn gt_bullet_targets(&self, d: &Data) -> Vec<GtTarget> {
+        let mut out = Vec::new();
+        for (ti, t) in self.gt_turrets.iter().enumerate() {
+            if t.delete_flag { continue; }
+            for (slot, pi) in [(0usize, t.script_player_a), (1, t.script_player_b)] {
+                for (o, hash, m) in self.scripts.stream_glists(pi) {
+                    let Some(model) = d.models.get(&hash) else { continue };
+                    let c = model.centre;
+                    let centre = [
+                        m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2] + m[3][0],
+                        m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2] + m[3][1],
+                        m[0][2] * c[0] + m[1][2] * c[1] + m[2][2] * c[2] + m[3][2]];
+                    out.push(GtTarget { turret: ti, slot, key: t.sp_key, part: (o as u64) << 6, centre, radius: model.radius });
+                }
+            }
+        }
+        out
+    }
+
+    /// The nearest turret part a round's segment `a → b` lands on, as `(turret, slot, fraction)`.
+    /// Two stages, like every object contact of the round's pick [M Collide_Update 0x1ea398]:
+    /// the broad phase is the closest point of the line to the part's world sphere,
+    /// `dist² < r²` (HITTEST+0x94 = 0x201 [M Collide_PickObj 0x1eae80:92-108]); the narrow phase
+    /// is `Collide_Intersect` 0x1ebaa8 → `Intersect_RayGeom` 0x10a8c8 over the part's glist
+    /// triangles at obj+0x90 (`CollisionWorld::segment_dynamic_part`). A sphere alone lands
+    /// nothing: a part whose glist has no triangles (the muzzle flash) is never hit. `from_turret`:
+    /// a turret's own round skips that turret (see `PlayerBullet::from_turret`).
+    pub(crate) fn gt_part_hit(targets: &[GtTarget], world: &crate::world::CollisionWorld, a: V3, b: V3, from_turret: Option<usize>) -> Option<(usize, usize, f32)> {
+        let mut best: Option<(usize, usize, f32)> = None;
+        for g in targets {
+            if from_turret == Some(g.key) { continue; }
+            if seg_point_dist2(a, b, g.centre) >= g.radius * g.radius { continue; }
+            let Some(t) = world.segment_dynamic_part(g.part, a, b) else { continue };
+            if best.is_none_or(|(_, _, bt)| t < bt) { best = Some((g.turret, g.slot, t)); }
+        }
+        best
+    }
+
     /// The Phoenix Ronin's deploy — `Player_WeaponInitBullet` 0x1a4bf0:265-282's id-0x52 arm of
     /// the pellet loop: `pos = player obj+0x30 + Mat_GetDir(obj+0x90)·1.0`, then
     /// `GT_DeployMiniGun(pos, obj+0x90, player)` 0x181560 → `Collide_PlaceObject(0.5, 0.6)` (no
@@ -17062,7 +17143,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             target_copter: false,
             gravity: flags6c & 0x8 != 0,
             guided_cam: false, // 0x67's +0x6C is 0 [L] — the arm is inert either way
-            snd: 0, swoosh: None, born: self.frame,
+            snd: 0, swoosh: None, born: self.frame, from_turret: None,
         });
         // gunimp-beam: the fire arm draws the game's beam quad `0x20005cd` through
         // `PositionBeam(muzzle, ray hit)` (`GunImp_Update` 0x1320d8:394-407). The scene stretches
@@ -17253,24 +17334,34 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // [M 0x1a5170:158-166]. `Lock_Activate`'s gates [M 0x1aed00 disasm]: no pause manager (the
         // sim is never paused — the structural gate lock.rs documents), user class 3 (the port's
         // use path is always the player), the lock state ∈ {0, 5} (the port: not unlocked/burned —
-        // states 1/2 — and not scanning — state 5 — and no keypad already armed — states 3/4); then
-        // kind 0 with an EMPTY key-ring slot → state 3 (arm the keypad). The port's lock side does
-        // not consult the key ring (the recorded gap, lock.rs header — `Lock_ReLock`'s clear is the
-        // only writer there), so the slot reads empty [S, same documented limitation].
-        // Kind 1 (the laser-burn locks) E-plays the hit sound only — presentation, skipped.
+        // states 1/2 — and no keypad already armed — states 3/4; a scanning lock IS accepted); then
+        // the key ring: a held key → state 1 with the unlock sound, any kind [M 0x1aed00:19-33]; an
+        // empty slot on kind 0 → state 3 (arm the keypad); an empty slot on any other kind plays
+        // the record's locked sound only (0xffff, no sound, on every disc lock [D]).
         {
             let use_point = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
             let in_sphere = |c: V3, r: f32| {
                 let d = (use_point[0] - c[0]).powi(2) + (use_point[1] - c[1]).powi(2) + (use_point[2] - c[2]).powi(2);
                 d <= (1.0 + r) * (1.0 + r)
             };
-            for (li, l) in self.locks.iter().enumerate() {
-                if l.kind != 0 || l.unlocked || l.burned || l.scanning { continue; }
+            for li in 0..self.locks.len() {
+                let l = &self.locks[li];
+                if l.unlocked || l.burned { continue; }
                 if self.keypad.as_ref().is_some_and(|(cur, _)| *cur == li) { continue; } // state 3/4 [M 0x1aed00's state gate]
                 if !in_sphere(l.pos, l.radius) { continue; }
                 // The facing gate [M 0x1a5170:158-166] — the OBJECT translations (+0xC0).
                 let to = [body[0] - l.pos[0], body[1] - l.pos[1], body[2] - l.pos[2]];
                 if l.facing[0] * to[0] + l.facing[1] * to[1] + l.facing[2] * to[2] < 0.0 { continue; }
+                if self.inventory.keys.get(l.code as usize).copied().unwrap_or(false) {
+                    let (snd, pos) = (l.key_channels[0] as u32, l.pos);
+                    let l = &mut self.locks[li];
+                    l.unlocked = true;
+                    l.open_pending = true;
+                    l.scanning = false;
+                    self.audio.play3d(snd, pos, None);
+                    break;
+                }
+                if l.kind != 0 { break; }
                 // Kind-0, no key → state := 3, GlobalVars/user saved [M 0x1aed00:001aed7c-90]:
                 // the keypad arms with `Lock_Update` case 3's data — the code copy happens there
                 // (the port's Keypad::arm takes the table's entry directly — the same bytes).
@@ -17279,6 +17370,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // `Lock_Update` case 3 [M 0x1ae3d8:246-257]: a code the Q-Worm already revealed
                 // is posted again as the same INFO message (label 0x2000014, 0xb4 ticks).
                 if shown { self.info_codes.push((code, 180.0)); }
+                self.locks[li].scanning = false;
                 self.keypad = Some((li, crate::lock::Keypad::arm(code, shown)));
                 break;
             }
@@ -18398,6 +18490,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             }
             let owners: Vec<u32> = self.gt_turrets.iter().map(|t| t.owner).collect();
+            // The firing turret of each event, for its rounds' own-part skip (`from_turret`).
+            let keys: Vec<usize> = self.gt_turrets.iter().map(|t| t.sp_key).collect();
             let poses: Vec<(V3, f32)> = self.gt_turrets.iter().map(|t| (t.pos, t.base_yaw())).collect();
             self.gt_turrets.retain(|t| !t.delete_flag);
             for (ti, e) in gt_events {
@@ -18421,7 +18515,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage: f32_at(0x0c),
                                 weapon: crate::gt::TURRET_WEAPON_RECORD as u16, first: true, dead: false, bounces: 0,
                                 homing: f6c & 0x2_0000 != 0, target: None, target_copter: false, gravity: f6c & 0x8 != 0, guided_cam: false,
-                                snd: 0, swoosh: None, born: frame,
+                                snd: 0, swoosh: None, born: frame, from_turret: keys.get(ti).copied(),
                             });
                         }
                     }
@@ -18473,6 +18567,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 // record 96 carries the bit clear [L ee_start_05.bin weapon_data
                                 // 0x2bf150 + 96·0x10c + 0x6c = 0x1000].
                                 glass_pass: d.weapons.glass_pass(crate::gt::TURRET_WEAPON_RECORD),
+                                from_turret: keys.get(ti).copied(),
                                 ..crate::bullet::Bullet::TAIL
                             };
                             b.init_fuse(w);
@@ -18657,6 +18752,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for l in self.locks.iter().filter(|l| l.unlocked && !l.burned && l.out != 0) {
             self.channels.set(l.out as u32, 1, frame);
         }
+        // `Lock::key_tick`: the key-ring half: the unlock's equip [M 0x1b0650:19], the one-tick
+        // state-1 write that then moves the lock to state 2, and case 0's ring read that opens the
+        // paired keypad or a picked-up key's lock [M 0x1ae3d8:139-147].
+        let keypad_lock = self.keypad.as_ref().map(|(li, _)| *li);
+        for (li, l) in self.locks.iter_mut().enumerate() {
+            l.key_tick(&mut self.inventory.keys, &mut self.channels, frame, keypad_lock == Some(li));
+        }
         // The armed keypad's tick (`Lock_Update` 0x1ae3d8 case 4 [M :262-296]): the full typed
         // buffer matching the code with the count at the cap fires `Lock_Unlock` — the lock's
         // state := 1 (the port's `unlocked`), the manager deleted, the unlock sound (record
@@ -18683,6 +18785,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 self.locks[*li].unlocked = true;
                 self.locks[*li].burned = true;
                 if self.locks[*li].out != 0 { self.channels.set(self.locks[*li].out as u32, 1, frame); }
+                self.locks[*li].equip_pending = true;
                 self.keypad = None;
             }
         }
@@ -20463,6 +20566,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if what == 6 { let _pw = crate::prof::scope("ctl: kind 6");
                 // `Sensor_Update` 0x1af618 (crate::sensor): the sweep/trip state machine — clears
                 // its out channel while sweeping, writes 1 after 2 s of continuous sight.
+                let blind = self.scripts.camera().is_some();
+                if let Some(s) = self.sensors.list.get_mut(index) { s.blind = blind; }
                 self.sensors.update(index, d.world, player, &mut self.channels, frame, &mut self.audio);
                 // The sensor's `Sound_Play3D`s enter the AI hearing list like any other (looped
                 // ones are skipped by `hear`, as `Sound_Alertness` skips them).
@@ -21812,6 +21917,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let (script_held, script_sp) = if self.bullets.is_empty() { (Vec::new(), Vec::new()) } else {
             (self.scripts.held_hit_volumes(d), self.scripts.sp_bullet_targets(d))
         };
+        let gt_targets = if self.gt_turrets.is_empty() { Vec::new() } else { self.gt_bullet_targets(d) };
         for b in &mut self.bullets {
             let (from, dir) = (b.pos, b.dir);
             let alive_in = b.state < 2;
@@ -21947,6 +22053,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 }
                             }
                             self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, pp, pn, pm, b.dir, flags70_p, b.bounces, false, 0, phost);
+                        }
+                        // A guard's round lands on a turret part like Bond's does: the game's Collide
+                        // pass is the same for every HITTEST owner, and `GT_Update` sums every node
+                        // of the parts' chains whoever fired [M Collide_Update 0x1ea398:160-215,
+                        // Collide_GetDamageNObjects 0x1ee220]. The world stop IS the part when the
+                        // part's own triangle sits at the stop (the flight trace walks the same
+                        // dynamic-set triangles); the 0.01 slack covers the re-traced segment.
+                        let hit_d = ((p[0] - from[0]).powi(2) + (p[1] - from[1]).powi(2) + (p[2] - from[2]).powi(2)).sqrt();
+                        let past = [p[0] + dir[0] * 0.05, p[1] + dir[1] * 0.05, p[2] + dir[2] * 0.05];
+                        if let Some((ti, slot, t)) = Self::gt_part_hit(&gt_targets, d.world, from, past, b.from_turret) {
+                            if t * (hit_d + 0.05) <= hit_d + 0.01 {
+                                self.gt_turrets[ti].contact[slot] += d.weapons.bullet_contact_damage(b.weapon);
+                            }
                         }
                         // The satchel charge LANDS instead of dying [M Bullet_CollisionHandler
                         // 0x12ce80 @0x12d1fc]: family +0x02 == 0x3b, the `+0x70 & 0x100` arm,

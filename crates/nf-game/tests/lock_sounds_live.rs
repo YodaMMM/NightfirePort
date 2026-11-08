@@ -33,6 +33,8 @@ fn lock() -> Lock {
         scanning: false,
         lod_next: false,
         facing: [0.0, 0.0, 1.0],
+        open_pending: false,
+        equip_pending: false,
     }
 }
 

@@ -159,11 +159,20 @@ fn the_pickups_take_on_the_walk() {
             for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
             cycles += 1;
         }
+        // A keypad opens by its typed code or the decryptor; the laser arm is kind 1 only [M 0x1ae3d8:47, :162].
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            if let Some(li) = sim.drones.locks.iter().position(|l| l.out == 0xf9 && !l.unlocked) {
+                let code = sim.drones.key_codes.code(sim.drones.locks[li].code);
+                sim.drones.keypad = Some((li, nf_game::lock::Keypad::arm(code, false)));
+                for c in code { sim.drones.keypad_digit((c - b'0') as u32); }
+            }
+        }
         let start = w.total_ticks;
         loop {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.drones.channels.on(0xf9) { break; }
-            assert!(w.total_ticks - start < 600, "the beam never burned the #711 keypad (ch 0xf9) [M 0x1ae3d8:194]");
+            assert!(w.total_ticks - start < 600, "the typed code never raised the #711 keypad channel (ch 0xf9) [M 0x1ae3d8 case 4]");
             let p = sim.bond.pos;
             let eye = p[1] + sim.bond.eye - sim.bond.crouch_drop;
             let dx = lock_at[0] - p[0];
@@ -294,12 +303,21 @@ fn the_keypad_burn_unlocks_its_door() {
     assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x4e, "the Q-Decryptor is held [M runs_beam]");
     // The held beam burns the lock (Lock_Update 0x1ae3d8 case 0's weapon band → the out write
     // :194-195).
+    // A keypad opens by its typed code or the decryptor; the laser arm is kind 1 only [M 0x1ae3d8:47, :162].
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        if let Some(li) = sim.drones.locks.iter().position(|l| l.out == 0x95 && !l.unlocked) {
+            let code = sim.drones.key_codes.code(sim.drones.locks[li].code);
+            sim.drones.keypad = Some((li, nf_game::lock::Keypad::arm(code, false)));
+            for c in code { sim.drones.keypad_digit((c - b'0') as u32); }
+        }
+    }
     let lock_at = [10.29f32, 41.96, 33.76];
     let start = w.total_ticks;
     loop {
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.drones.channels.on(0x95) { break; }
-        assert!(w.total_ticks - start < 600, "the beam never burned the keypad lock (ch 0x95) [M 0x1ae3d8:194]");
+        assert!(w.total_ticks - start < 600, "the typed code never raised the keypad channel (ch 0x95) [M 0x1ae3d8 case 4]");
         let p = sim.bond.pos;
         let eye = p[1] + sim.bond.eye - sim.bond.crouch_drop;
         let dx = lock_at[0] - p[0];

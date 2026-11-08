@@ -97,6 +97,9 @@ pub struct Bullet {
     /// 0x1ea398:216-229]. Set from the record at construction (the `drone.rs` spawn sites);
     /// false = the bit-0x800 records (the fists 0x01, the laser 0x45) whose flight stops on glass.
     pub glass_pass: bool,
+    /// The firing turret's `sp_key` for a turret round, else None: the own-round skip of the turret
+    /// parts' pick (see `PlayerBullet::from_turret` in drone.rs).
+    pub from_turret: Option<usize>,
 }
 
 impl Bullet {
@@ -111,6 +114,7 @@ impl Bullet {
         // Own line (lesson 4): the glass pass defaults OFF — the bit-0x800 records; the spawn
         // sites arm it from the record.
         glass_pass: false,
+        from_turret: None,
     };
 
     /// `Bullet_init` 0x12c5a0's fuse block (the tail of the initializer, after the velocity

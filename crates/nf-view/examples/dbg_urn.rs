@@ -61,7 +61,7 @@ fn main() {
         pos: [centre[0], centre[1] - 0.35, centre[2] + 1.5],
         dir: [0.0, 0.222, -0.975], speed: 13.2, travelled: 0.0, range: 50.0, damage: 2.75, weapon: 2,
         first: true, dead: false, bounces: 0, homing: false, target: None, target_copter: false,
-        gravity: false, guided_cam: false, snd: 0, swoosh: None, born: 0,
+        gravity: false, guided_cam: false, snd: 0, swoosh: None, born: 0, from_turret: None,
     });
     println!("pushed: {:?}", scene.sim.as_ref().unwrap().drones.player_bullets.iter().map(|b| (b.pos, b.dir)).collect::<Vec<_>>());
     for t in 0..40u32 {

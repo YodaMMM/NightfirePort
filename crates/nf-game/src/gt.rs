@@ -221,6 +221,11 @@ pub struct GTurret {
     /// ext+0xcc (f32): health, 100.0 at create [M 0017ffa0:84]; `GT_ApplyDamage` 0x1816d8
     /// subtracts; `GT_Update`'s death gate fires at < 0.0 [M 00180498:236-244].
     pub health: f32,
+    /// The damage on the scripts' objects' `obj+0xD0` chains, [script A, script B]: the bullet pass
+    /// sums this tick's contacts (`Collide_GetDamageNObjects` 0x1ee220 with no output list) and
+    /// the next `GT_Update` reads them [M 00180498:128-148 script A every tick, :152-176 script B
+    /// only while the state is 4]; the game's Collide runs after the walk [M 0x1336f8:238].
+    pub contact: [f32; 2],
     /// obj+0xf6 (s16): the previous state — `GT_Disable` 0x1816a8 stores 4 there and state 5
     /// (`GT_Update` case 5) returns to it after 3.0 s [M both].
     pub prev_state: u16,
@@ -322,6 +327,7 @@ pub fn from_placement(placement: usize, params: &[(u32, u32)]) -> Option<GTurret
         hp: if facing == 0 { 200 } else { 0xffff },
         state: 0,
         health: 100.0,
+        contact: [0.0; 2],
         prev_state: 0,
         timer: 0.0,
         fire_timer: 0.0,
@@ -732,6 +738,13 @@ impl GTurret {
                 out.push(GTEvent::Registered0Hidden);
             }
         }
+        // The contact sums [M 00180498:128-176]: script A always, script B in COMBAT only. The
+        // decompile's stun test (id 0x4A/0x4C → `GT_Disable`) reads the class byte of the SCRIPT
+        // OBJECT, not of the contact's hitter (`iVar10 = lVar7` then `iVar10 + 0xff`), and a
+        // script object is never class 5, so that arm does not fire on a bullet.
+        let contact = std::mem::take(&mut self.contact);
+        self.health -= contact[0];
+        if self.state == gt_state::COMBAT { self.health -= contact[1]; }
         // The death gate [M 00180498:236-258]: health < 0 or the shot counter at 0 → 6.
         if (self.health < 0.0 || self.hp == 0) && self.state != gt_state::DESTROYED {
             if self.state == gt_state::MOUNTED {
@@ -975,6 +988,7 @@ impl Default for GTurret {
             hp: 200,
             state: 0,
             health: 100.0,
+            contact: [0.0; 2],
             prev_state: 0,
             timer: 0.0,
             fire_timer: 0.0,

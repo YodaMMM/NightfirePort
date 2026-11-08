@@ -2217,6 +2217,29 @@ impl Scripts {
         best.map(|(_, pi, held)| (pi, held))
     }
 
+    /// One script player's stream entities as the collide pass sees them: `(object index, glist,
+    /// obj+0x90)` for every current kind-1/2 stream object — `Script_GetObj` 0x1db688's walk, the
+    /// same read set as [`Scripts::sp_bullet_targets`]. The caller's shape test drops a glist with
+    /// no collision triangles: `Collide_PickObj` 0x1eae80:88-90 admits only a glist with collision
+    /// data [M]. Entities only (an entity's glist is its hash, its dynamic-set part id
+    /// `object << 6`); the one reader is the turrets, whose script pairs on 0a, 0b, 12 and the Ronin
+    /// stream entities only [D].
+    pub fn stream_glists(&self, player: usize) -> Vec<(usize, u32, Mat4)> {
+        let mut out = Vec::new();
+        let Some(p) = self.players.get(player) else { return out };
+        if p.deleted { return out; }
+        let Some(s) = p.info[p.cur].as_ref() else { return out };
+        for i in 0..s.streams.len() {
+            if !matches!(s.streams[i].kind, 1 | 2) { continue; }
+            let Some(o) = s.streams[i].obj else { continue };
+            match self.objects.list.get(o) {
+                Some(Some(Obj::Entity { hash, matrix, .. })) => out.push((o, *hash, *matrix)),
+                _ => {}
+            }
+        }
+        out
+    }
+
     /// One player-bullet contact on a script player's stream objects this tick — the game's
     /// Collide pass appends the class-5 HITDATA to the object's `+0xD0` chain [M 0x1ea398] and
     /// `SP_Hit`'s walk reads it on the NEXT walk (Collide after the walk [M 0x1336f8:238]).

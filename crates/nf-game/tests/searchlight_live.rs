@@ -225,3 +225,44 @@ fn channels_and_tracking_behave() {
     assert_eq!(s.parts[hd].state, 1, "tracking");
     assert!(nf_game::triggers::Channels::on(&channels, s.parts[hd].alarm as u32) || s.parts[hd].alarm == 0);
 }
+
+/// The spot ray runs under mask 0x18, whose bit 0x10 skips the dynamic objects [M 0x1eb320:314-328,
+/// 370-374]: Bond standing in the beam, far above the ground, does not catch the spot, and the arm
+/// reads the ground spot only [M 0x1cb900:251]. All seven 07000005 heads carry alarm 0, so the
+/// tracking state writes no channel at all [M :146-148]; channel 0 is a real channel.
+#[test]
+fn the_beam_passes_through_bond_and_a_zero_alarm_writes_nothing() {
+    let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let mut rng = Rng::new(3);
+    let mut s = parts(&l, &mut rng);
+    let mut channels = nf_game::triggers::Channels::default();
+    let far_away = bond_at([500.0, 100.0, 500.0]);
+    let mut rrng = Rng::new(11);
+    let heads: Vec<usize> = s.parts.iter().enumerate().filter(|(_, p)| p.kind == 1).map(|(i, _)| i).collect();
+    let mut checked = 0;
+    for h in heads {
+        // The heads with a spot sit in state 3 until their on-channel rises.
+        if s.parts[h].links[2].is_none() || s.parts[h].on == 0 { continue; }
+        let sp = s.parts[h].links[2].unwrap();
+        channels.set(s.parts[h].on as u32, 1, 0);
+        for f in 1..6 { s.update(&d, &far_away, &mut channels, h, &[], &mut rrng, f); }
+        let (head, spot) = (s.parts[h].pos, s.parts[sp].pos);
+        let span = ((spot[0] - head[0]).powi(2) + (spot[1] - head[1]).powi(2) + (spot[2] - head[2]).powi(2)).sqrt();
+        if span < 6.0 || spot[1] < -9000.0 { continue; }
+        let mid = [(head[0] + spot[0]) * 0.5, (head[1] + spot[1]) * 0.5, (head[2] + spot[2]) * 0.5];
+        let mut bond = bond_at(mid);
+        bond.sph = mid;
+        s.update(&d, &bond, &mut channels, h, &[], &mut rrng, 7);
+        assert_eq!(s.parts[h].state, 0, "head {h}: Bond {:.1} units up the beam does not arm it", span * 0.5);
+        checked += 1;
+        // Now on the ground spot: it arms, and alarm 0 raises nothing.
+        assert_eq!(s.parts[h].alarm, 0);
+        let on_spot = bond_at(s.parts[sp].pos);
+        s.update(&d, &on_spot, &mut channels, h, &[], &mut rrng, 8);
+        assert_eq!(s.parts[h].state, 1, "head {h} tracks");
+        s.update(&d, &on_spot, &mut channels, h, &[], &mut rrng, 9);
+        assert!(!channels.on(0), "alarm 0 leaves channel 0 alone");
+    }
+    assert!(checked > 0, "a head with a long beam");
+}
