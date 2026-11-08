@@ -300,11 +300,7 @@ fn the_stun_stuns_the_guard_for_3600_and_drops_his_weapon() {
     assert!(exit_state == nf_game::drone::state::ATTACK || exit_state == nf_game::drone::state::DRAW_WEAPON,
         "the recovered guard wakes into Attack 0x56 (the get-up's follow-on; 0x66 = Attack's draw of the sidearm he holds fists after the drop) [M 0x163350 case 1], got {exit_state:#x}");
     assert!(held > 3600, "the Loop's fresh re-arm holds 3600 from the Loop's first tick — the chain cannot finish before it [M 0x1631c0 case 1], got {held}");
-    // muzzle-repin-5: the 4300 ceiling was derived on the pre-muzzle stream; the muzzle draws
-    // (3 per guard shot, s/muzzle-on-master) shift the chain's own RNG positions (the fall-clip
-    // Rand 0 → 0x2E vs 0x2D pick [M 0x172bb0 case 1], the draw-exit tick) — measured 4361 on the
-    // new stream with the SAME chain shape (Impact→Loop→Recover, exit 0x66, stun_recover 3599
-    // and the no-blast pins above still green). 4400 keeps the stall guard (the cap is 5000).
+    // The two falls differ by the `Rand_Rand(2)` pick [M 0x172bb0 case 1]; the long one is 322 ticks, the get-up 439.
     assert!(held <= 4400, "the hold is 3600 + the fall and get-up clips, not an endless stall, got {held}");
 }
 

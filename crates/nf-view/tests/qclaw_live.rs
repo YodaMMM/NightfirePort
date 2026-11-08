@@ -28,8 +28,8 @@ fn holes(sim: &nf_view::scene::Sim) -> Vec<nf_game::effect::Decal> {
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 /// The check spot, ~4.05 units from point #282 (13.7525, 32.2919, 57.3034 [L ee_start_05.bin obj+0x30]).
-const SPOT: [f32; 3] = [16.5, 29.6, 58.6];
-const TARGET: [f32; 3] = [13.752469, 32.291878, 57.303413];
+const SPOT: [f32; 3] = [-18.28, 38.19, -71.83];
+const TARGET: [f32; 3] = [-3.3962271, 42.940285, -71.76922];
 
 /// Equips the claw the way `--give 0x50` does (lib.rs: `Player_EquipWeapon` 0x1a8a58 + three clips
 /// of ammo + the switch request) through the real inventory/switch path. 07000005 owns the claw at

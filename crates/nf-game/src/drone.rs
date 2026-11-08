@@ -14684,6 +14684,21 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
     }
 
+    /// `Bullet_handle_object_destruction` 0x12cd98 on the ridden rocket (the fire press during a guided
+    /// ride): a record with `+0x68 & 0x4000` and `+0x70 & 0x80204` dies at once with its
+    /// `Explode_Create(+0x08, +0x08, +0x0C, …, 0x6000052)` [M]. `Bullet_Delete` then hands the view back.
+    pub fn detonate_guided(&mut self, weapons: &nf_formats::weapon::WeaponData) -> bool {
+        let Some(b) = self.player_bullets.iter_mut().find(|b| b.guided_cam && !b.dead) else { return false };
+        let Some(w) = weapons.records.get(b.weapon as usize) else { return false };
+        let f = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+        let u = |o: usize| u32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+        if u(0x68) & 0x4000 == 0 || u(0x70) & 0x8_0204 == 0 { return false; }
+        b.dead = true;
+        let (pos, radius, damage, weapon) = (b.pos, f(0x08), f(0x0c), b.weapon);
+        self.pending_blasts.push((pos, radius, damage, usize::MAX, weapon, 0x0600_0052, radius, 0));
+        true
+    }
+
     /// `Explode_Create` 0x17cbd0's blast, shared by the fuse death (`Bullet_handle_object_destruction`
     /// 0x12e1c0), the impact explode (`Bullet_CollisionHandler` 0x12d068-0x12d0bc [M, disassembled])
     /// and the grenade contact. `Explode_Propagate` 0x17c518 through `explode::propagate`: the full

@@ -26,8 +26,9 @@ fn the_q_claw_reels_bond_to_the_grapple_point_and_releases() {
     let sim = scene.sim.as_mut().unwrap();
     assert!(!sim.drones.grapple_points.is_empty(), "07000005 carries grapple points [D #281/#282]");
     assert!(*sim.drones.inventory.owned.get(0x50).unwrap_or(&false), "the claw (0x50) is owned at the level start [L]");
-    // Stand ~4.1 units from point #282, on the ground below it, and draw the claw like --give does.
-    sim.bond.pos = [16.5, 29.6, 58.6];
+    // Stand on the ledge inside the type-2 third icon's arm [D (-18.46, 37.49, -72.49) r 3.39] — the claw
+    // fires only there [M 0x1a5460 `BL+0x95F == 2`] — 15.4 units from point #281, and draw the claw like --give does.
+    sim.bond.pos = [-18.28, 38.19, -71.83];
     sim.bond.yaw = 0.0;
     let wd = sim.weapons.clone();
     let rounds = wd.clip_size(0x50).max(1);
@@ -39,7 +40,7 @@ fn the_q_claw_reels_bond_to_the_grapple_point_and_releases() {
         if sim.gun.weapon == 0x50 { equipped = true; break; }
     }
     assert!(equipped, "the claw (0x50) must draw; weapon {:#x}", sim.gun.weapon);
-    let target = [13.752469f32, 32.291878, 57.303413];
+    let target = [-3.3962271f32, 42.940285, -71.76922];
     // Aim at the point first (no fire), then HOLD the fire: the substate 2 latches and the reel
     // runs while held (phase 1 reads no fire input [M 0x192860:79-121]).
     for _ in 0..200 {

@@ -627,12 +627,21 @@ fn run_cell(scene: &mut Scene, id: u8, snap: &Snap) -> Cell {
     let mut tick: u32 = 0;
     let mut spawn_tick: Option<u32> = None;
     let mut expl_tick: Option<u32> = None;
+    // The Micro-Camera fires only from the aim bit [M Player_WeaponFiring 0x1a5460 `uVar6 == 0x54`]: the
+    // raise plays out first, and the aim stays down through the presses (a press under the raise is spent).
+    let aim_in = nf_game::player::Input { aiming: matches!(id, 0x54 | 0x55), ..Default::default() };
+    if aim_in.aiming {
+        for _ in 0..90 {
+            step(scene, aim_in, false, false, false);
+            if scene.sim.as_ref().unwrap().aiming { break; }
+        }
+    }
     for _attempt in 0..3 {
         let hold = if id >= 0x48 { 45 } else { 60 };
         let (shots_before, gren_before) = (c.shots, c.grenades);
         for _ in 0..hold {
             let (imp0, exp0) = { let sim = scene.sim.as_ref().unwrap(); (sim.drones.impacts.len(), sim.drones.explosions.len()) };
-            step(scene, Default::default(), true, false, false);
+            step(scene, aim_in, true, false, false);
             tick += 1;
             let (st, beam, imp, exp, g, b) = { let sim = scene.sim.as_ref().unwrap();
                 (sim.shot_tick, sim.laser_beam.is_some(), sim.drones.impacts.len(), sim.drones.explosions.len(),
@@ -648,7 +657,7 @@ fn run_cell(scene: &mut Scene, id: u8, snap: &Snap) -> Cell {
         }
         for _ in 0..6 {
             let (imp0, exp0) = { let sim = scene.sim.as_ref().unwrap(); (sim.drones.impacts.len(), sim.drones.explosions.len()) };
-            step(scene, Default::default(), false, false, false);
+            step(scene, aim_in, false, false, false);
             tick += 1;
             let (imp, exp, g, b) = { let sim = scene.sim.as_ref().unwrap();
                 (sim.drones.impacts.len(), sim.drones.explosions.len(), sim.drones.grenades.len(), sim.drones.player_bullets.len()) };

@@ -110,6 +110,7 @@ fn keypad_lock_burns_open_the_exec_office() {
     // The burn: the Laser watch 0x4E through the real fire path (fix_safe08's open_safe pattern).
     let input = nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() };
     for _ in 0..40 { w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false); }
+    for _ in 0..200 { if w.scene.sim.as_ref().unwrap().gun.switch_state == 0 { break; } w.scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     w.scene.sim.as_mut().unwrap().bond.pos = [lp[0] + 0.6, lp[1] - 0.55, lp[2] + 1.5];
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     let mut burned = false;

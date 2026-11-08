@@ -426,8 +426,13 @@ impl Walker {
             return;
         }
         let (clip, spare) = { let sim = self.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare) };
-        let reload = clip == 0 && spare > 0;
-        self.tick_inner(input, false, true, reload);
+        // Guns only: the gadgets' meters recharge on their own, and a held beam stays held.
+        let gun = self.scene.sim.as_ref().unwrap().gun.weapon < 0x48;
+        let reload = gun && clip == 0 && spare > 0;
+        // The reload key needs the trigger up, and a press under a draw is spent on the view-state
+        // gate [M Player_WeaponFiring 0x1a5460]: the held fire waits for both.
+        let drawing = self.scene.sim.as_ref().unwrap().gun.switch_state != 0;
+        self.tick_inner(input, false, !reload && !drawing, reload);
     }
 
     /// The in-hand weapon's fired round is a grenade-family projectile: the port's own spawn gate

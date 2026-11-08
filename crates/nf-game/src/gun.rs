@@ -71,26 +71,39 @@ pub struct Gun {
     /// 0x1a5460:631-648 — state 9 with `+0x68 & 0x8000`, or a state outside {0, 9, 0xB}): the
     /// countdown runs, the shot does not.
     pub refire_blocked: bool,
+    /// Set by `update_with` on the tick `Player_WeaponFiring` 0x1a5460 reaches
+    /// `Player_HandleHasNoAmmo`: trigger up, no round to fire, view idle, and
+    /// `Player_ReloadAmmoType(_, 1)` refused [M 0x1a5460 release arm]. The Sim answers it with
+    /// `Gun::no_ammo_request`.
+    pub dry: bool,
 }
 
 impl Gun {
-    /// `Player_WeaponChange` (0x1a6f80): the weapon cycle (`param_3` = 0, bounds 1..0x47) or the gadget cycle
-    /// (`param_3` = 1, bounds 0x4A..0x5E) [M disassembly 0x1a707c: `li s6,73` for mode=1; 0x1a7084: `li v1,95`
-    /// for mode=1's high bound; 0x1a7120 for mode=0's bounds]. Steps through owned, selectable, has-ammo
-    /// entries starting from `weapon + dir`, wrapping within the range. The game does NOT check the first-person
-    /// model here (that's `Player_WeaponSelect`'s job); weapon 1 (fists) is a valid cycle target.
+    /// `Player_WeaponChange` (0x1a6f80): the weapon cycle (`param_3` = 0) or the gadget cycle (`param_3` = 1).
+    /// The walk [M 0x1a6f80:145-199]: the cursor is the REQUEST byte `+0x63` (so a press during a holster or
+    /// draw walks on from the last request), pulled to the low bound when it sits outside the mode's
+    /// `[lo, hi]` (0..0x48, 0x49..0x5F), then to its record's BASE (`weapon_data[+0x63]+2`) — a held twin
+    /// walks from its family, so the step down from the silenced 0x03 leaves the P2K instead of re-offering
+    /// it. Each step adds `dir` and wraps: `>= hi` → `lo + 1`, `<= lo` → `hi − 1`.
+    /// The game does NOT check the first-person model here (that's `Player_WeaponSelect`'s job); weapon 1
+    /// (fists) is a valid cycle target.
     /// The twin step [M 0x1a6f80:179-198]: a selectable candidate `cand` first offers `cand + twin_skip[cand]`
     /// (the equipped twin) and lands there when it has ammo; when the twin is dry the walk falls back to `cand`
-    /// and CLEARS the marker (the game's `BL+0x1BC[cand] = 0`). Returns the id to switch to, or `None`.
-    pub fn cycle(&mut self, dir: i8, mode: CycleMode, owned: &[bool], has_ammo: impl Fn(u8) -> bool, selectable: impl Fn(u8) -> bool) -> Option<u8> {
+    /// (only for a POSITIVE marker) and CLEARS the marker (the game's `BL+0x1BC[cand] = 0`).
+    /// Returns the id to switch to, or `None` when the walk runs out (the game then writes `+0x63 = +0x62`,
+    /// no change [M :200]).
+    pub fn cycle(&mut self, dir: i8, mode: CycleMode, owned: &[bool], has_ammo: impl Fn(u8) -> bool, selectable: impl Fn(u8) -> bool, base_of: impl Fn(u8) -> u8) -> Option<u8> {
         let dir = dir.signum() as i32;
         if dir == 0 { return None; }
-        let (lo, hi) = mode.bounds();
-        let mut w = self.weapon as i32;
-        for _ in 0..(hi - lo + 1) {
+        let (first, last) = mode.bounds();
+        let (lo, hi) = (first - 1, last + 1);
+        let mut w = self.switch_request as i32;
+        if w < lo || w > hi { w = lo; }
+        w = base_of(w as u8) as i32;
+        for _ in 0..0x72 {
             w += dir;
-            if w > hi { w = lo; }
-            if w < lo { w = hi; }
+            if w >= hi { w = lo + 1; }
+            if w <= lo { w = hi - 1; }
             let wu = w as u8;
             if !selectable(wu) { continue; }
             if !owned.get(wu as usize).copied().unwrap_or(false) { continue; }
@@ -102,7 +115,7 @@ impl Gun {
             let twin_step = skip != 0 && wu != 0x54;
             let offer = if twin_step { (wu as i32 + skip as i32) as u8 } else { wu };
             if has_ammo(offer) { return Some(offer); }
-            if twin_step && has_ammo(wu) {
+            if twin_step && skip > 0 && has_ammo(wu) {
                 self.twin_skip[wu as usize] = 0;
                 return Some(wu);
             }
@@ -148,7 +161,7 @@ impl Gun {
     /// (the grenade-belt pseudo-weapon) checks `(i16)weapon_data[0x45].clip_size (100, = +0x48CE) <=
     /// BLData+0x4F4` — and `+0x4F4` is not a separate field: it is `clip[0x45]` (`0x1B8 + 0x45·0xC`), the
     /// carried grenade count [M 0x1a16c0:14-15; player.md "`+0x4F4` is NOT a separate field"].
-    /// *Deviation*: the 0x20000 ground-pickup scan is a STANDIN (returns false; the pickup list is not in Gun).
+    /// The 0x20000 arm's object scan needs the world's bullets: `placed_keeps_ammo`.
     /// `clip_slot` is `Player_AmmoInGun` 0x1a9190's pick (see `ammo_in_gun_slot`) — the game calls
     /// `Player_AmmoInGun` for this clip half [M 0x1a16c0:22-24], so every caller that holds the weapon
     /// table passes the shared-slot resolver.
@@ -164,8 +177,16 @@ impl Gun {
         if clip.get(clip_slot(w)).copied().unwrap_or(0) != 0 { return true; }
         // `ammo_type == 0`: melee / unlimited weapons (fists, hands, gadgets) always have ammo [M 0x1a16c0].
         if t == 0 { return true; }
-        // Flag 0x20000: check the ground for a matching ammo pickup. STANDIN: not ported (no object list in Gun).
+        // Flag 0x20000's object scan: `placed_keeps_ammo` (no object list in Gun).
         false
+    }
+
+    /// `Player_WeaponHasAmmo` 0x1a16c0's last arm [M :28-51]: a dry `+0x68 & 0x20000` record (the detonators
+    /// 0x38/0x39, 0x5a, 0x5c) with a non-zero ammo type still has ammo while one of the player's own bullets
+    /// of its family is in the world — a placed mine keeps its detonator live. `placed` lists those bullets'
+    /// record bases.
+    pub fn placed_keeps_ammo(ammo_type: usize, flags: u32, base: u16, placed: &[u16]) -> bool {
+        ammo_type != 0 && flags & 0x20000 != 0 && placed.contains(&base)
     }
 
     /// `Player_AmmoInGun` 0x1a9190's clip-slot pick: a twin record (`+0x05 != 0`) reads the BASE's
@@ -181,17 +202,36 @@ impl Gun {
     }
 
     /// `Player_GetBestWeapon` (0x1a9680): scans the `BestWeapon` table (0x2bede0, 18 u16) for the first owned,
-    /// has-ammo weapon. Each BestWeapon entry is a `weapon_data` index; the real weapon id is
-    /// `weapon_data[entry*0x10c+2]` (the base weapon). The per-player entry `+0x1BC` is tail padding / unused
-    /// [M player.md "(reserved)"] — the old "variant-slot adjustment" reading was wrong; nothing to port.
+    /// has-ammo family. An entry is a `weapon_data` index; its family is the record's `+2` base, and the
+    /// candidate is base + the family's twin marker (`BL+0x1BC + base·0xC`, written by `Player_WeaponSelect`) —
+    /// except the AIMS-20 0x1A, which always comes back on its rifle side [M 0x1a9680:18-23]. So a silenced
+    /// P2K comes back silenced. The owned byte is the base's; the ammo check is the candidate's.
     pub fn get_best_weapon(&self, best: &[u16], base_of: impl Fn(u8) -> u8, owned: &[bool], has_ammo: impl Fn(u8) -> bool) -> Option<u8> {
         for &w in best {
-            let real = base_of(w as u8);
-            if owned.get(real as usize).copied().unwrap_or(false) && has_ammo(real) {
-                return Some(real);
+            let base = base_of(w as u8);
+            let id = if base == 0x1a { base } else {
+                (base as i32 + *self.twin_skip.get(base as usize).unwrap_or(&0) as i32) as u8
+            };
+            if owned.get(base as usize).copied().unwrap_or(false) && has_ammo(id) {
+                return Some(id);
             }
         }
         None
+    }
+
+    /// `Player_HandleHasNoAmmo` (0x1a2ba8), the request it writes. The fists 0x01, the Samurai pair 0x32/0x33
+    /// and the recharging gadgets 0x4A..0x51 stay in hand; a `+0x68 & 0x10` record first offers its twin
+    /// (`w + (+0x05)` — the AIMS-20's dry grenade side goes back to the rifle, the thrown-out Remote Mine goes
+    /// to its detonator while a mine is down); everything else takes `Player_GetBestWeapon`. The deployed
+    /// Ronin's 'R' arm sits with its own state in the Sim. `None` = the request stays.
+    pub fn no_ammo_request(&self, twin: i8, flags68: u32, best: &[u16], base_of: impl Fn(u8) -> u8, owned: &[bool], has_ammo: impl Fn(u8) -> bool) -> Option<u8> {
+        let w = self.weapon;
+        if matches!(w, 1 | 0x32 | 0x33 | 0x4a..=0x52) { return None; }
+        if flags68 & 0x10 != 0 {
+            let t = (w as i32 + twin as i32) as u8;
+            if has_ammo(t) { return Some(t); }
+        }
+        self.get_best_weapon(best, base_of, owned, has_ammo)
     }
 
     /// `Player_WeaponNone` (0x1a9858): Bond goes to "hands" (no weapon, weapon id 0x47). Saves the current weapon
@@ -457,7 +497,7 @@ pub fn reload_ticks(start: u32, reload: u32, flags68: u32, script_len: &impl Fn(
 
 impl Gun {
     /// Bond's start on 07000005 (`Player_InitWeapon`): weapon 2 with 7 in the clip and 41 spare [L].
-    pub fn new(weapon: u8, clip: u32, spare: u32) -> Gun { Gun { weapon, clip, spare, timer: 0.0, pending: 0, held: false, reload_state: 0, reload_ticks: 0, reload_loop_restarted: false, switch_request: weapon, saved_weapon: weapon, prev_weapon: 0, prev_gadget: 0, switch_state: 0, fire_state: false, latch: false, alt_fire_toggle: 0, twin_skip: vec![0i8; 0x72], laser_on: false, reload_by_key: false, refire_blocked: false } }
+    pub fn new(weapon: u8, clip: u32, spare: u32) -> Gun { Gun { weapon, clip, spare, timer: 0.0, pending: 0, held: false, reload_state: 0, reload_ticks: 0, reload_loop_restarted: false, switch_request: weapon, saved_weapon: weapon, prev_weapon: 0, prev_gadget: 0, switch_state: 0, fire_state: false, latch: false, alt_fire_toggle: 0, twin_skip: vec![0i8; 0x72], laser_on: false, reload_by_key: false, refire_blocked: false, dry: false } }
 
     /// One tick with the trigger (action 9) `pressed` (no reload key, gun idle).
     pub fn update(&mut self, pressed: bool, p: GunParams) -> bool { self.update_with(pressed, false, false, p) }
@@ -475,51 +515,57 @@ impl Gun {
     /// shell's +0xA4 finishes, the reload aborts to state 7 (+0xAC). The `Sim::run` method in nf-view drives the
     /// view scripts and calls `reload_tick` to advance the state machine.
     pub fn update_with(&mut self, pressed: bool, reload: bool, busy: bool, p: GunParams) -> bool {
-        // If a reload is in progress, the Sim::run method drives it via reload_tick. Here we just block firing.
-        if self.reload_state != 0 {
-            self.held = pressed;
+        // The order is `Player_WeaponFiring`'s [M 0x1a5460 from the first `Input_Action(9, 1)`]: a running
+        // reload is only one more non-idle view state — the refire timer keeps falling through it, and the
+        // state gate below refuses the shot; `Sim::run` drives the reload itself via `reload_tick`.
+        self.dry = false;
+        let view_idle = !busy && self.reload_state == 0;
+        let can_reload = self.spare > 0 && self.clip < p.clip;
+        // `Player_RoundToFire(_, +0x91, 0)`: ammo type 0 always has a round.
+        let round = p.ammo_type == 0 || self.clip >= p.ammo_per_shot;
+        if !pressed {
+            // Branch A: the reload key (action 14) — read only with the trigger's level at 0 [M 0x1a5460:
+            // `if (Input_Action(9, 1) == 0) { if (Input_Action(0xe, 4) …`]; it leaves the refire timer
+            // (disasm 0x1a5f50-0x1a5f84 — no +0x92C store).
+            if reload && view_idle && can_reload {
+                self.start_reload(true, p);
+                return false;
+            }
+            self.pending = 0; // `BL+0x936 = 0`
+            if !round {
+                self.held = false;
+                if !view_idle { return false; } // `if (+0xF4 != 0) return`
+                // Branch B: the auto-reload sits in the trigger's RELEASE path: the level read as 0
+                // (Input_Update 0x17ee88 writes the action byte 0x01 while held, 0x05 on the fresh
+                // press, 0 on release — disasm 0x17f084-0x17f100), so a HELD trigger with an empty clip
+                // reloads nothing until it releases [M 0x1a5460 disasm 0x1a5fe8 → 0x1a61d0]. It also
+                // zeroes the refire timer (`BLData+0x92C = 0`, 0x1a6244).
+                if can_reload {
+                    self.timer = 0.0;
+                    self.start_reload(false, p);
+                } else {
+                    self.dry = true; // → `Player_HandleHasNoAmmo`
+                }
+                return false;
+            }
+        } else if !round {
+            // Held with no round: `if (+0xF6 != 10) return` — before the press read and the countdown.
+            self.held = true;
             return false;
         }
-        let can_reload = !busy && self.spare > 0 && self.clip < p.clip;
-        // Branch A: the reload key (action 14). Branch B: the auto-reload — the game's arm sits in
-        // the trigger's RELEASE path: `Input_Action(player, 9, 1) == 0` is the fire trigger's
-        // LEVEL read as 0 (Input_Update 0x17ee88 writes the action byte 0x01 while held, 0x05 on
-        // the fresh press, 0 on release — disasm 0x17f084-0x17f100; `Player_SetWeaponAnimObj`'s
-        // case-6 shell interrupt reads the same mask as "held" [M 0x1a2e38:360]), so a HELD
-        // trigger with an empty clip reloads nothing until it releases [M 0x1a5460 disasm
-        // 0x1a5fe8 → 0x1a61d0]. Branch B also zeroes the refire timer (`BLData+0x92C = 0`,
-        // 0x1a6244); branch A leaves it (disasm 0x1a5f50-0x1a5f84 — no +0x92C store).
-        let auto_reload = !pressed; // the trigger's level 0 [M 0x1a5fe8 → 0x1a61d0]
-        if can_reload && (reload || (auto_reload && self.clip < p.ammo_per_shot)) {
-            if !reload { self.timer = 0.0; } // branch B: `BLData+0x92C = 0` [M 0x1a6244]
-            // `Player_WeaponFiring` sets anim+0xF4 = 6 and queues +0xA4 at 1.35× — from frame 6 for
-            // flag-0x1000 weapons (AnimListBuild +0x90 = 6.0, disasm 0x1a6300-0x1a631c) — whose tick
-            // count is ceil((len − 6)/1.35): `p.reload_ticks` [M shared tail 0x1a6250-0x1a631c].
-            // With a +0xA8 start script it sets state 5 instead and queues +0xA8 at 1.0 [M 0x1a6260-0x1a626c];
-            // case 5 then queues +0xA4 at 1.0 for the full length (0x1a2e38 case 5).
-            self.reload_state = if p.reload_start_ticks > 0 { 5 } else { 6 };
-            // weapon-handling [M disasm 0x1a5fb0-0x1a5fdc vs 0x1a62e4-0x1a631c]: the key's reload
-            // plays +0xA4 from frame 0; only the auto-reload skips to frame 6 (+0x68 & 0x1000).
-            self.reload_by_key = reload;
-            let loop_ticks = if reload { p.reload_key_ticks } else { p.reload_ticks };
-            self.reload_ticks = if p.reload_start_ticks > 0 { p.reload_start_ticks.max(1) } else { loop_ticks.max(1) };
-            self.pending = 0;
-            self.held = pressed;
-            return false;
-        }
-        if !pressed { self.pending = 0; }
         let fresh = pressed && !self.held;
         if fresh && self.timer <= 0.0 { self.pending = p.shots_per_pull; self.timer = 1.0; }
         self.held = pressed;
         // weapon-handling [M 0x1a5460:601-629]: without a fresh press a run-out timer RETURNS before
         // the countdown — a held trigger whose timer ran out on a refused tick (the state gate below)
         // never refires until the next press.
-        if !fresh && self.timer <= 0.0 { return false; }
+        if self.timer <= 0.0 { return false; }
         self.timer -= 1.0;
-        // weapon-handling [M 0x1a5460:631-648]: the view-state gate after the countdown — a fire
-        // script still playing (state 9) refuses the shot for `+0x68 & 0x8000` records (the pump
-        // Frinesi 0x1c, the snipers 0x1e-0x29: their fire scripts outlast +0x40 [D 07000005 scripts]).
-        if self.refire_blocked { return false; }
+        // weapon-handling [M 0x1a5460:631-648]: the view-state gate after the countdown — a state outside
+        // {0, 9, 0xB} refuses the shot (the reload here, the rest in `refire_blocked`), and state 9
+        // refuses it for `+0x68 & 0x8000` records (the pump Frinesi 0x1c, the snipers 0x1e-0x29: their
+        // fire scripts outlast +0x40 [D 07000005 scripts]).
+        if self.refire_blocked || self.reload_state != 0 { return false; }
         let mut fired = false;
         if self.timer <= 0.0 {
             self.pending -= 1;
@@ -547,6 +593,25 @@ impl Gun {
             } else { self.pending = 0; }
         }
         fired
+    }
+
+    /// A tick on which the trigger's level was read but the pull was refused before the press edge
+    /// (`Player_WeaponFiring`'s early returns): the edge is spent all the same.
+    pub fn hold_trigger(&mut self, pressed: bool) { self.held = pressed; }
+
+    /// A reload starts (`key` = branch A). `Player_WeaponFiring` sets anim+0xF4 = 6 and queues +0xA4 at
+    /// 1.35× — from frame 6 for flag-0x1000 weapons on the auto-reload only (AnimListBuild +0x90 = 6.0,
+    /// disasm 0x1a6300-0x1a631c; the key's reload plays from frame 0, 0x1a5fb0-0x1a5fdc) — whose tick count
+    /// is ceil((len − 6)/1.35): `p.reload_ticks` [M shared tail 0x1a6250-0x1a631c]. With a +0xA8 start script
+    /// it sets state 5 instead and queues +0xA8 at 1.0 [M 0x1a6260-0x1a626c]; case 5 then queues +0xA4 at 1.0
+    /// for the full length (0x1a2e38 case 5).
+    fn start_reload(&mut self, key: bool, p: GunParams) {
+        self.reload_state = if p.reload_start_ticks > 0 { 5 } else { 6 };
+        self.reload_by_key = key;
+        let loop_ticks = if key { p.reload_key_ticks } else { p.reload_ticks };
+        self.reload_ticks = if p.reload_start_ticks > 0 { p.reload_start_ticks.max(1) } else { loop_ticks.max(1) };
+        self.pending = 0;
+        self.held = false;
     }
 
     /// The release frame (`Player_SetWeaponAnimObj` case 9, 0x1a2e38:416-420): the fire script's current
@@ -655,15 +720,15 @@ mod tests {
         let has_ammo = |w: u8| w == 2 || w == 0x16; // 0x24 has no ammo
         let mut g = Gun::new(2, 7, 41);
         // Next from P2K → SG5 (0x16).
-        assert_eq!(g.cycle(1, CycleMode::Weapons, &owned, has_ammo, selectable), Some(0x16));
+        assert_eq!(g.cycle(1, CycleMode::Weapons, &owned, has_ammo, selectable, |w| w), Some(0x16));
         // Next from SG5 → wraps to P2K (0x24 skipped: no ammo).
         let mut g2 = Gun::new(0x16, 30, 60);
-        assert_eq!(g2.cycle(1, CycleMode::Weapons, &owned, has_ammo, selectable), Some(2));
+        assert_eq!(g2.cycle(1, CycleMode::Weapons, &owned, has_ammo, selectable, |w| w), Some(2));
         // Prev from P2K → wraps to SG5 (0x24 skipped).
-        assert_eq!(g.cycle(-1, CycleMode::Weapons, &owned, has_ammo, selectable), Some(0x16));
+        assert_eq!(g.cycle(-1, CycleMode::Weapons, &owned, has_ammo, selectable, |w| w), Some(0x16));
         // Sister: with no ammo at all, cycle returns None.
         let no_ammo = |_w: u8| false;
-        assert_eq!(g.cycle(1, CycleMode::Weapons, &owned, no_ammo, selectable), None);
+        assert_eq!(g.cycle(1, CycleMode::Weapons, &owned, no_ammo, selectable, |w| w), None);
     }
 
     #[test]
@@ -676,14 +741,14 @@ mod tests {
         let has_ammo = |_w: u8| true;
         let mut g = Gun::new(2, 7, 41);
         // Weapon cycle from P2K (2) → wraps to 2 (only weapon).
-        assert_eq!(g.cycle(1, CycleMode::Weapons, &owned, has_ammo, selectable), Some(2));
+        assert_eq!(g.cycle(1, CycleMode::Weapons, &owned, has_ammo, selectable, |w| w), Some(2));
         // Gadget cycle from P2K (2, a weapon) → starts at 2, steps to 0x4A (first gadget).
-        assert_eq!(g.cycle(1, CycleMode::Gadgets, &owned, has_ammo, selectable), Some(0x4a));
+        assert_eq!(g.cycle(1, CycleMode::Gadgets, &owned, has_ammo, selectable, |w| w), Some(0x4a));
         // Gadget cycle from 0x4A → 0x50.
         let mut g2 = Gun::new(0x4a, 1, 1);
-        assert_eq!(g2.cycle(1, CycleMode::Gadgets, &owned, has_ammo, selectable), Some(0x50));
+        assert_eq!(g2.cycle(1, CycleMode::Gadgets, &owned, has_ammo, selectable, |w| w), Some(0x50));
         // Sister: weapon cycle from a gadget (0x4A) → wraps to 2 (first weapon).
-        assert_eq!(g2.cycle(1, CycleMode::Weapons, &owned, has_ammo, selectable), Some(2));
+        assert_eq!(g2.cycle(1, CycleMode::Weapons, &owned, has_ammo, selectable, |w| w), Some(2));
     }
 
     /// The cycle bounds are pinned to the game's disassembly values [M disassembly 0x1a707c/0x1a7084:
@@ -758,6 +823,94 @@ mod tests {
         // Sister: prev_weapon = 0 → no toggle.
         g.prev_weapon = 0;
         assert_eq!(g.toggle_back(CycleMode::Weapons, &owned, has_ammo, selectable, |w| w), None);
+    }
+
+    /// The walk's first step is from the REQUEST's base, inside the mode's bounds [M 0x1a6f80:145-162]:
+    /// the gadget cycle from a weapon opens on the first gadget, the weapon cycle down from a gadget on
+    /// the top of the weapon range, and a twin base above its twin (the Samurai 0x33's 0x32) walks on.
+    #[test]
+    fn the_walk_starts_at_the_requests_base() {
+        let mut owned = vec![false; 0x73];
+        for w in [1usize, 2, 0x33, 0x45, 0x4a, 0x5e] { owned[w] = true; }
+        let selectable = |w: u8| matches!(w, 1 | 2 | 0x33 | 0x45 | 0x4a | 0x5e);
+        let base = |w: u8| if w == 0x03 { 2 } else if w == 0x32 { 0x33 } else { w };
+        let yes = |_w: u8| true;
+        let mut g = Gun::new(2, 7, 41);
+        assert_eq!(g.cycle(1, CycleMode::Gadgets, &owned, yes, selectable, base), Some(0x4a), "first gadget up");
+        assert_eq!(g.cycle(-1, CycleMode::Gadgets, &owned, yes, selectable, base), Some(0x5e), "last gadget down");
+        let mut g = Gun::new(0x4a, 1, 1);
+        assert_eq!(g.cycle(-1, CycleMode::Weapons, &owned, yes, selectable, base), Some(0x45), "the top weapon");
+        assert_eq!(g.cycle(1, CycleMode::Weapons, &owned, yes, selectable, base), Some(1), "the bottom weapon");
+        let mut g = Gun::new(3, 7, 41);
+        g.twin_skip[2] = 1;
+        assert_eq!(g.cycle(-1, CycleMode::Weapons, &owned, yes, selectable, base), Some(1), "out of the family");
+        // The cursor is the request, not the held id.
+        let mut g = Gun::new(1, 1, 0);
+        g.switch_request = 2;
+        assert_eq!(g.cycle(1, CycleMode::Weapons, &owned, yes, selectable, base), Some(0x33), "on from the request");
+        // Only a positive marker falls back to the base [M 0x1a6f80:188, a signed compare].
+        let mut g = Gun::new(2, 7, 41);
+        g.twin_skip[0x33] = -1;
+        let only_base = |w: u8| w != 0x32;
+        assert_eq!(g.cycle(1, CycleMode::Weapons, &owned, only_base, selectable, base), Some(0x45), "a negative marker walks past");
+    }
+
+    /// `Player_GetBestWeapon`: base + the family marker, the AIMS-20 always on its rifle [M 0x1a9680:18-23].
+    #[test]
+    fn best_weapon_reads_the_family_marker() {
+        let mut owned = vec![false; 0x73];
+        owned[0x02] = true;
+        owned[0x1a] = true;
+        let base = |w: u8| match w { 0x03 => 2, 0x1b => 0x1a, _ => w };
+        let mut g = Gun::new(0x16, 0, 0);
+        g.twin_skip[2] = 1;
+        assert_eq!(g.get_best_weapon(&[0x02], base, &owned, |_| true), Some(3), "the silenced twin");
+        assert_eq!(g.get_best_weapon(&[0x02], base, &owned, |w| w == 2), None, "the twin's own ammo decides");
+        g.twin_skip[0x1a] = 1;
+        assert_eq!(g.get_best_weapon(&[0x1a], base, &owned, |_| true), Some(0x1a), "the AIMS-20 ignores the marker");
+    }
+
+    /// `Player_HandleHasNoAmmo`'s exemptions and the `+0x68 & 0x10` twin offer [M 0x1a2ba8].
+    #[test]
+    fn no_ammo_request_exempts_and_offers_the_twin() {
+        let owned = vec![true; 0x73];
+        let id = |w: u8| w;
+        for w in [1u8, 0x32, 0x33, 0x4a, 0x4e, 0x50, 0x51] {
+            assert_eq!(Gun::new(w, 0, 0).no_ammo_request(0, 0, &[2], id, &owned, |_| true), None, "{w:#x} stays");
+        }
+        assert_eq!(Gun::new(0x34, 0, 0).no_ammo_request(0, 0, &[2], id, &owned, |_| true), Some(2), "the frag is not exempt");
+        assert_eq!(Gun::new(0x1b, 0, 0).no_ammo_request(-1, 0x10, &[2], id, &owned, |_| true), Some(0x1a), "the twin first");
+        assert_eq!(Gun::new(0x1b, 0, 0).no_ammo_request(-1, 0x10, &[2], id, &owned, |w| w == 2), Some(2), "a dry twin falls through");
+        assert_eq!(Gun::new(0x16, 0, 0).no_ammo_request(1, 0, &[2], id, &owned, |_| true), Some(2), "no 0x10: no twin offer");
+    }
+
+    /// The trigger's rule on the release arm and the timer through a reload [M 0x1a5460].
+    #[test]
+    fn the_refire_timer_runs_through_a_reload_and_dry_is_flagged() {
+        let p = GunParams { shots_per_pull: 1, interval: 30.0, clip: 9, ammo_per_shot: 1, reload_ticks: 40, reload_key_ticks: 40, one_at_a_time: false, reload_start_ticks: 0, reload_loop_ticks: 40, reload_end_ticks: 0, ammo_type: 3, fire_anim_len: 0, fire_script: 1, fire_last: 0 };
+        let mut g = Gun::new(0xf, 5, 9);
+        assert!(g.update_with(true, false, false, p));
+        assert_eq!(g.timer, 30.0);
+        assert!(!g.update_with(false, true, false, p), "the key takes the release");
+        assert_eq!(g.reload_state, 6);
+        assert_eq!(g.timer, 30.0, "branch A leaves the timer");
+        for _ in 0..40 { g.update_with(false, false, false, p); g.reload_tick(false, p); }
+        assert_eq!(g.reload_state, 0);
+        assert_eq!(g.timer, 0.0, "it ran out during the reload");
+        assert!(g.update_with(true, false, false, p), "the first press after the reload fires");
+        // Dry: the flag rises on the release, with the view idle only.
+        let mut g = Gun::new(0xf, 0, 0);
+        g.update_with(true, false, false, p);
+        assert!(!g.dry, "the held trigger holds it");
+        g.update_with(false, false, true, p);
+        assert!(!g.dry, "a busy view holds it");
+        g.update_with(false, false, false, p);
+        assert!(g.dry);
+        // Sister: ammo type 0 always has a round.
+        let m = GunParams { ammo_type: 0, ..p };
+        let mut g = Gun::new(1, 0, 0);
+        g.update_with(false, false, false, m);
+        assert!(!g.dry);
     }
 
     /// Weapon 0x45's has-ammo is the game's literal comparison `weapon_data[0x45].clip_size (100) <=

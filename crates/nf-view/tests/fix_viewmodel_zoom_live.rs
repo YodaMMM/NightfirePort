@@ -30,6 +30,7 @@ fn the_gun_tilt_divides_by_the_zoom() {
         let sim = scene.sim.as_mut().unwrap();
         sim.gun.weapon = 0x24; // the sniper: flags 0x4080D0 (scoped), zoom 10 [L weapon_data]
         sim.gun.switch_request = 0x24; // clear the loadout's pending switch (it would take the slot back)
+        sim.drones.inventory.clip[0x24] = 5; // a loaded gun: a dry one hands over [M 0x1a2ba8]
         sim.aiming = true;
         // The pad's aim (free-aim: the cursor window) — the crosshair offset below is the pad's; the mouse never
         // enters free-aim (mouse_scope_live).
