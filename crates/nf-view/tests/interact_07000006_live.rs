@@ -214,8 +214,12 @@ fn the_well_shaft_is_open_and_the_hurt_volume_is_game_inert() {
     let sim = scene.sim.as_ref().unwrap();
     eprintln!("[well] centre y {:.2} health {:.1} ch62 {}", sim.bond.pos[1],
         sim.drones.health.health, sim.drones.channels.on(0x62));
-    assert!((39.4..40.4).contains(&sim.bond.pos[1]),
-        "Bond over the mouth centre stands ON body #65, the mouth's own barrel [D the 94-tri block; M 0x1eae80:88-90] (y {:.2})",
+    // The stand height: the placement's floor snap puts the root 1.1 over the hit [M 0x190d88:104-116],
+    // the same 1.1 a walked floor rests at. The top of the barrel is read from the same down ray.
+    let top = sim.world.segment([31.82, 41.0, 17.26], [31.82, 11.0, 17.26]).map(|t| 41.0 - 30.0 * t).expect("the barrel top");
+    // The barrel's rounded top keeps him sliding a little, so the band holds y, not the grounded bit.
+    assert!((top - 40.04).abs() < 0.1 && (sim.bond.pos[1] - (top + 1.1)).abs() < 0.2,
+        "Bond over the mouth centre stands ON body #65, the mouth's own barrel [D the 94-tri block; M 0x1eae80:88-90] (top {top:.2} y {:.2})",
         sim.bond.pos[1]);
     // 0.7 off centre the mouth is open: the drop lands ON the shaft floor (probe 33.59), not through it.
     let mut open = load_06(&iso, &[]);

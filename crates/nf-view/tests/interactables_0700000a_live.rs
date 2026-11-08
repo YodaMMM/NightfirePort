@@ -56,8 +56,8 @@ fn load_warm_snap() -> Walker {
 fn teleport(w: &mut Walker, pos: [f32; 3]) {
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = pos;
-        sim.bond.vel = [0.0; 3];
+        let yaw = sim.bond.yaw;
+        sim.place_bond(pos, yaw);
     }
     w.wait(12);
 }

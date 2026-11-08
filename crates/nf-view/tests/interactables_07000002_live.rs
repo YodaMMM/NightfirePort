@@ -350,18 +350,26 @@ fn pickups_are_taken_by_the_walk_over() {
     };
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.pickups[pi].kind, nf_game::pickup::kind::AMMO,
         "#369 is an ammo pickup [D p0 = 1]");
-    // The boot pool sits at the P2K's 41 rounds [L Inventory::empty's carried[1] = 41] — at the
-    // cap the game REFUSES the take [M Inventory::equip_ammo's cap refusal; Pickup_Handler's
-    // case-1 add path]: the walk-over leaves the pool and the pickup as they were. That refusal
-    // IS the sister; the take-with-room arm is the ammo_pane/gun tests' pin.
-    let ammo0: i32 = w.scene.sim.as_ref().unwrap().drones.inventory.carried.iter().map(|&v| v as i32).sum();
-    let gone0 = w.scene.sim.as_ref().unwrap().drones.pickups[pi].gone;
+    // The take through the placement's stand height [M 0x190d88:104-116]. At the type's cap the game
+    // REFUSES it [M Inventory::equip_ammo's cap refusal; Pickup_Handler's case-1 add path]: the pool
+    // and the pickup stay. Below the cap the same stand takes it (the boot's 41 rounds have room).
+    let t = 1usize; // the P2K/P99 pool [L Inventory::empty's carried[1] = 41]
+    let (boot, cap) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (sim.drones.inventory.carried[t], sim.weapons.ammo_cap[t])
+    };
+    assert!(boot < cap, "the boot pool {boot} sits below the cap {cap}");
+    w.scene.sim.as_mut().unwrap().drones.inventory.carried[t] = cap;
     place(&mut w, ppos[0], ppos[1] - 0.6, ppos[2]);
     w.wait(30);
     let sim = w.scene.sim.as_ref().unwrap();
-    let ammo1: i32 = sim.drones.inventory.carried.iter().map(|&v| v as i32).sum();
-    assert_eq!(ammo1, ammo0, "the full pool refuses the take [M equip_ammo's cap refusal], {ammo0} → {ammo1}");
-    assert_eq!(sim.drones.pickups[pi].gone, gone0, "the refused pickup stays [M Pickup_Handler case 1]");
+    assert_eq!(sim.drones.inventory.carried[t], cap, "the full pool refuses the take [M equip_ammo's cap refusal]");
+    assert!(!sim.drones.pickups[pi].gone, "the refused pickup stays [M Pickup_Handler case 1]");
+    w.scene.sim.as_mut().unwrap().drones.inventory.carried[t] = boot;
+    w.wait(30);
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(sim.drones.inventory.carried[t] > boot && sim.drones.pickups[pi].gone,
+        "with room the walk-over takes #369, pool {boot} -> {}, gone {}", sim.drones.inventory.carried[t], sim.drones.pickups[pi].gone);
 
     // The BOND_BONUS #473 at (−29.08, 5.63, −18.19) [D] (the stand-in transit): consumed by the
     // take path on the walk-over [M 0x18e650:234-236].
