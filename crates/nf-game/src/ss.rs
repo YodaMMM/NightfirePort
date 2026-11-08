@@ -129,7 +129,8 @@ impl SsList {
                 hash: ghash,
                 rest,
                 wrap_flag: param(1) as u16,
-                sound: param(4) as u16,
+                // A zero sample word reads as none [M 0x1a9c58: `if (+0x3c == 0) 0xffff`].
+                sound: match param(4) { 0 => 0xffff, v => v as u16 },
                 radius: obj_radius,
             });
         }
@@ -203,10 +204,11 @@ impl SsList {
                     // a re-required operate stalled the render at t = one step (the shot
                     // winch).
                     // The sound arm [M 0x1a9948:86-89]: `Sound_Play3D(…, ext+0x14, obj+0x80)`
-                    // fires on this transition when the sample word is not 0xffff — the
-                    // object's own matrix translation is the position.
+                    // fires on this transition when the sample word is not 0xffff, at the
+                    // object's world sphere centre (obj+0x80 [M Control_BuildWorldSph 0x133070]),
+                    // which the port takes from the posed matrix's translation row.
                     if s.sound != 0xffff {
-                        self.pending_sounds.push((s.sound, [s.matrix[0][3], s.matrix[1][3], s.matrix[2][3]]));
+                        self.pending_sounds.push((s.sound, s.pos()));
                     }
                     s.state = 1;
                     Self::sweep(s, last, step);
