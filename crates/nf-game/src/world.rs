@@ -128,6 +128,10 @@ struct Geo {
     /// `Bullet_homing`'s LOS 8) drop such hits outright (disasm 0x1ebff0-0x1ec010), so bullets fly
     /// through the whole node. fix-foliage-bullets.
     pass: Vec<bool>,
+    /// Per triangle: part of a dedicated blocker mesh (every face of its object carries the
+    /// surface byte 0x40 exactly, e.g. 0700000c's `ventblocker_01`). Those faces stop a body only
+    /// from their front side — see `body_mat`.
+    oneway: Vec<bool>,
     objects: Vec<Object>,
     /// Static only (`chunk`): bounds over runs of consecutive `objects` (`tris` = an object index range), so a query
     /// skips whole runs. Empty = test every object.
@@ -344,6 +348,8 @@ impl Geo {
             self.mats.push(m);
             self.pass.push(node_pass);
         }
+        let blocker = self.tris.len() > start && self.mats[start..].iter().all(|&m| m == 0x40);
+        self.oneway.extend(std::iter::repeat(blocker).take(self.tris.len() - start));
         self.objects.push(Object { lo, hi, tris: start..self.tris.len() });
         self.tris.len() > start
     }
@@ -356,6 +362,11 @@ impl Geo {
     /// (disasm 0x1ebf8c-0x1ebf94), which the 0x20a/0x208 bullet flags clear — their 50/50 stays
     /// in the walk's roll (`Collide_Update` 0x1ea398:217-220, `Bullet_CollisionHandler` 0x12cfd0).
     /// fix-foliage-bullets.
+    /// The surface byte the body contact sees: a dedicated blocker face reads 0xC0, which
+    /// `capsule_tri_contact` treats as one-way [M Dist2Tri 0x109770: a query point behind the
+    /// face's plane returns code 99, and Intersect_CylGeom 0x109da0 skips the face].
+    fn body_mat(&self, k: usize) -> u8 { if self.oneway.get(k).copied().unwrap_or(false) { 0xC0 } else { self.mats[k] } }
+
     fn bullet_pass(&self, k: usize) -> bool { self.pass[k] || self.mats[k] & 0x40 != 0 }
 
     /// Split every object into runs of `n` consecutive triangles with their own bounds. Static geometry only: its
@@ -736,10 +747,10 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     if *CAPS_D2.get_or_init(|| std::env::var("NF_CAPS_D2").is_ok()) && dot(sub(p, t[0]), n) < 0.0 {
         return false;
     }
-    // The blocker faces (surface byte 0x40) take that rule now: they are one-way panes. 0700000c's
-    // `ventblocker_01` faces south, so the crawl out of the display vent passes it from the north
-    // and the hall side is shut; the disc's portal #212-#285 sits in the same opening.
-    if mat & 0x40 != 0 && dot(sub(p, t[0]), n) < 0.0 { return false; }
+    // Dedicated blocker meshes (`Geo::body_mat` 0xC0) take that rule now: they are one-way panes.
+    // 0700000c's `ventblocker_01` faces south, so the crawl out of the display vent passes it from
+    // the north and the hall side is shut; the disc's portal #212-#285 sits in the same opening.
+    if mat == 0xC0 && dot(sub(p, t[0]), n) < 0.0 { return false; }
     let (q, on_edge) = closest_on_triangle(p, t);
     // level-0a-band-settle-6-c: the settle-6-b Delta 3 (the on-edge second query, the tail's
     // Q = Q2 [M 0x10a344-0x10a4fc] with the caller's flags-99 gate on the re-run
@@ -1287,6 +1298,8 @@ impl CollisionWorld {
                 geo.tris.extend_from_slice(&d.geo.tris[start..end]);
                 geo.mats.extend_from_slice(&d.geo.mats[start..end]);
                 geo.pass.extend(std::iter::repeat(false).take(end - start));
+                geo.oneway.extend_from_slice(&d.geo.oneway[start..end.min(d.geo.oneway.len())]);
+                geo.oneway.resize(geo.tris.len(), false);
                 geo.objects.push(Object { lo: po.lo, hi: po.hi, tris: geo.tris.len() - (end - start)..geo.tris.len() });
             } else {
                 geo.push(t.iter().enumerate().map(|(k, t)| (t.map(|p| transform(&m, p)), mats.and_then(|v| v.get(k).copied()).unwrap_or(0))));
@@ -1358,7 +1371,7 @@ impl CollisionWorld {
         let dynamic = self.dynamic.read().unwrap();
         for g in [&self.stat, &dynamic.geo] {
             for o in overlapping(g, lo, hi) {
-                for k in o.tris.clone() { f(&g.tris[k], g.mats[k]); }
+                for k in o.tris.clone() { f(&g.tris[k], g.body_mat(k)); }
             }
         }
     }
@@ -1563,12 +1576,12 @@ impl CollisionWorld {
         for r in runs {
             let o = &stat.objects[r as usize];
             if !(0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) {
-                for k in o.tris.clone() { test(&stat.tris[k], stat.mats[k], &mut a, &mut b, &mut total, &mut walkable, &mut pick); }
+                for k in o.tris.clone() { test(&stat.tris[k], stat.body_mat(k), &mut a, &mut b, &mut total, &mut walkable, &mut pick); }
             }
         }
         for g in [&dynamic.geo] {
             for o in overlapping(g, lo, hi) {
-                for k in o.tris.clone() { test(&g.tris[k], g.mats[k], &mut a, &mut b, &mut total, &mut walkable, &mut pick); }
+                for k in o.tris.clone() { test(&g.tris[k], g.body_mat(k), &mut a, &mut b, &mut total, &mut walkable, &mut pick); }
             }
         }
         (total, walkable)
@@ -1597,7 +1610,7 @@ impl CollisionWorld {
         for run in runs {
             let o = &stat.objects[run as usize];
             if !(0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) {
-                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v); }
+                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.body_mat(k), &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v); }
             }
         }
         total
@@ -1638,12 +1651,12 @@ impl CollisionWorld {
         for run in runs {
             let o = &stat.objects[run as usize];
             if !(0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) {
-                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v); }
+                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.body_mat(k), &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v); }
             }
         }
         for g in [&dynamic.geo] {
             for o in overlapping(g, lo, hi) {
-                for k in o.tris.clone() { capsule_tri_contact(&g.tris[k], g.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v); }
+                for k in o.tris.clone() { capsule_tri_contact(&g.tris[k], g.body_mat(k), &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, ref_v); }
             }
         }
         // dot2 pass-global [M 0x10a66c-0x10a6a0; the collapse argument in the doc above]: the
@@ -2768,7 +2781,7 @@ mod tests {
 
     fn world(tris: Vec<[V3; 3]>) -> CollisionWorld {
         let n = tris.len();
-        let stat = Geo { mats: vec![0; n], tris, objects: vec![Object { lo: [-10.0; 3], hi: [10.0; 3], tris: 0..n }], groups: Vec::new(), owners: Vec::new(), grid: None,
+        let stat = Geo { mats: vec![0; n], tris, objects: vec![Object { lo: [-10.0; 3], hi: [10.0; 3], tris: 0..n }], oneway: vec![false; n], groups: Vec::new(), owners: Vec::new(), grid: None,
             pass: vec![false; n] };
         CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), scope: None }
     }
@@ -2809,7 +2822,7 @@ mod tests {
             }
         }
         let mk = |graph: ScopeGraph, cells: Vec<Vec<u32>>| CollisionWorld {
-            stat: Geo { tris: stat.tris.clone(), mats: stat.mats.clone(), objects: stat.objects.clone(), groups: Vec::new(), owners: Vec::new(), grid: None, pass: stat.pass.clone() },
+            stat: Geo { tris: stat.tris.clone(), mats: stat.mats.clone(), oneway: stat.oneway.clone(), objects: stat.objects.clone(), groups: Vec::new(), owners: Vec::new(), grid: None, pass: stat.pass.clone() },
             missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(),
             scope: Some(ScopeData { graph, cells, always: always.clone() }),
         };
@@ -2875,7 +2888,7 @@ mod tests {
             }
         }
         let mk = |graph: ScopeGraph, cells: Vec<Vec<u32>>| CollisionWorld {
-            stat: Geo { tris: stat.tris.clone(), mats: stat.mats.clone(), objects: stat.objects.clone(), groups: Vec::new(), owners: Vec::new(), grid: None, pass: stat.pass.clone() },
+            stat: Geo { tris: stat.tris.clone(), mats: stat.mats.clone(), oneway: stat.oneway.clone(), objects: stat.objects.clone(), groups: Vec::new(), owners: Vec::new(), grid: None, pass: stat.pass.clone() },
             missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(),
             scope: Some(ScopeData { graph, cells, always: always.clone() }),
         };
