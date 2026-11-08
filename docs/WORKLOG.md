@@ -23,3 +23,11 @@ in the bank). Repro (bath_line_repro): real walked route to the scene, the app s
 (null mixer, real time). Run 1: 0x250 keyed on at the scene's tick 1 via the precache
 takeover and played its full 77 952/77 952 — no early stop; the run's log window closed at
 scene tick ~286 (0x253 unobserved). Extending the paced window.
+
+Progress (23:05 UTC): run 2 paced the whole scene (740 ticks, frames 18944..19684). Line 0x250
+again full length (key-on f18945, end flag f19153 at 208 updates, kill "sample-ended" — the
+mixer saw 77952/77952). Line 0x253 NEVER reached the driver: no PreCache, no Start in the
+whole log — while both anim scripts sit in sim.scripts with their op-1s (06000501 op1 [286,
+595], 06000502 op1 [2, 592] [L port runtime]). The divergence is upstream of the driver:
+stream 2's case-2 (Obj::Anim tick) never emitted the op-1 requests. Next step: log
+Script::stream_bindings() for 0600007f mid-scene (kind/obj per stream) and the request drain.

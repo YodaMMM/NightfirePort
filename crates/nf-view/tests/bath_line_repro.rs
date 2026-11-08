@@ -116,7 +116,7 @@ fn repro_bath_scene_line_with_the_app_mixer() {
     let target = [-45.4f32, 5.74, 11.7];
     let mut next = std::time::Instant::now() + std::time::Duration::from_millis(17);
     let mut paced = 0u32;
-    let mut since_scene_end = None;
+    let mut scene_ticks = 0u32;
     let mut scene_started = false;
     let frame0 = w.scene.sim.as_ref().unwrap().drones.frame;
     loop {
@@ -135,16 +135,18 @@ fn repro_bath_scene_line_with_the_app_mixer() {
             scene_started = true;
             eprintln!("[02] 0x3C on at sim frame {} (+{paced} paced)", sim.drones.frame);
         }
-        if ch_on(&w, 0x35) && playing(&w, 0x0600_007f) {
-            static ONCE: std::sync::Once = std::sync::Once::new();
-            ONCE.call_once(|| eprintln!("[02] the bath scene (SP #399, 0600007f) started at sim frame {}", sim.drones.frame));
+        if scene_started {
+            scene_ticks += 1;
+            if scene_ticks % 60 == 0 {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let anims: Vec<String> = sim.drones.scripts.objects.list.iter().flatten().filter_map(|o| match o {
+                    nf_game::nis::Obj::Anim { script, skin, frame, .. } => Some(format!("script {script:#x} skin {skin:#x} frame {frame:.0}")),
+                    _ => None }).collect();
+                eprintln!("[02] scene t{scene_ticks}: anims [{}]", anims.join("; "));
+            }
         }
-        if scene_started && !playing(&w, 0x0600_007f) {
-            let n = since_scene_end.unwrap_or(0);
-            since_scene_end = Some(n + 1);
-            if n == 0 { eprintln!("[02] the bath scene ended at sim frame {}", sim.drones.frame); }
-        }
-        if since_scene_end.is_some_and(|n| n > 240) { break; }
+        // The full scene (740 ticks) plus both lines' slack, then 240 to settle.
+        if scene_ticks > 980 { break; }
         // A generous cap: the scene is 740 ticks; the walk-in a few hundred.
         if paced > 3600 { eprintln!("[02] the paced cap hit (scene_started {scene_started})"); break; }
         let now = std::time::Instant::now();
