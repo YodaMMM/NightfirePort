@@ -211,3 +211,68 @@ fn without_the_call_the_lift_stays_parked() {
     // Bond at the panel, a guard raised ch 0x61 within seconds [L 2026-10-17]; 774b's rule).
     assert!(!sim.drones.channels.on(0x39), "no channels moved [M out 0]");
 }
+
+/// What the game's use pick hits at a car-park call button. Bond walks up to the button
+/// (forward input, yaw +z, until the wall stops him), looks at the button art and presses E once.
+/// The button art (0x020006b2) belongs to the sub-script 0x0600064F, whose SCRIPTINFO+0x80 is 0
+/// (`Script_SubScriptStart` 0x1db050 calls `Script_Load` with t0 = 0, asm 0x1db0ec; `Script_Load`
+/// stores t0 at +0x80, asm 0x1d826c/0x1d8458), so its obj+0xE4 is 0 and `Player_Activate`'s class
+/// walk skips it [M 0x1a5170:121-122]. The one owner-stamped entity within the pick's reach is
+/// the car-park outer door leaf beside the button (left column: 0x020006a9, the top-level script's
+/// stream 8; right column: 0x020006a8, stream 7; class 0, a thin slab 1.07 wide at z 26.28-26.35,
+/// world sphere r 1.451 [D]): the press lands on it. Its side face at
+/// the button-side edge is within 1.0 of the use point whenever Bond's head is within about 1.1
+/// of the wall [M 0x1ebaa8 → 0x1e92d8, nf_game::usepick]. Each column's press calls only its own
+/// lift.
+#[test]
+fn a_walk_up_press_at_either_call_button_lands_on_its_outer_door() {
+    let iso = iso();
+    // (SP script, the other SP, the button art spot, the leaf beside the button): the left
+    // column's button sits west of its R leaf, the right column's east of its L leaf [D].
+    for (script, other, btn, leaf) in [(SCRIPT_22, SCRIPT_21, [-4.62f32, -375.88, 25.91], 0x0200_06a9u32),
+                                       (SCRIPT_21, SCRIPT_22, [3.06, -375.88, 25.91], 0x0200_06a8)] {
+        let mut scene = nf_view::load(&iso, "07000009.bin", false).expect("load 07000009");
+        let sim = scene.sim.as_mut().unwrap();
+        sim.step_bond(nf_game::player::Input::default(), false, false, false);
+        // The button art the player sees, at the station.
+        let art = ent_near(sim, (0x0600_064F, 2), 0x0200_06b2, btn).expect("the call-button art");
+        let art = [art[3][0], art[3][1], art[3][2]];
+        assert!((art[0] - btn[0]).abs() < 0.06 && (art[2] - btn[2]).abs() < 0.06, "the art at {btn:?}, got {art:?}");
+        // Walk up to it.
+        sim.bond.pos = [art[0], -375.98, 23.6];
+        sim.bond.vel = [0.0; 3];
+        sim.bond.pitch = 0.0;
+        for _ in 0..90 {
+            sim.bond.yaw = 0.0;
+            sim.step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
+        }
+        for _ in 0..10 { sim.step_bond(nf_game::player::Input::default(), false, false, false); }
+        assert!(sim.bond.pos[2] > 25.0 && (sim.bond.pos[0] - art[0]).abs() < 0.4,
+            "Bond stopped at the wall in front of the button, at {:?}", sim.bond.pos);
+        // Look at the button art.
+        let h = sim.bond.head();
+        let to = [art[0] - h[0], art[1] - h[1], art[2] - h[2]];
+        let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+        sim.bond.yaw = to[0].atan2(to[2]);
+        sim.bond.pitch = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+        // The pick from here keeps exactly the outer door leaf of this column's script, not the art.
+        let u = nf_game::usepick::point(sim.bond.head(), sim.bond.look());
+        let d = sim.data();
+        let hits: Vec<u32> = sp(sim, script).entity_use_picks(&sim.drones.scripts.objects, &d).into_iter()
+            .filter(|(c, r, _, _, h, m)| nf_game::usepick::picks(u, (*c, *r), m, nf_game::nis::World::use_shape(&d, *h)))
+            .map(|t| t.4).collect();
+        assert_eq!(hits, vec![leaf], "the use pick at {btn:?} keeps the outer door leaf beside the button only");
+        drop(d);
+        assert!(sp(sim, script).info[sp(sim, script).cur].as_ref().unwrap().delay < 0, "held before the press");
+        sim.step_bond(nf_game::player::Input::default(), false, false, true);
+        assert_eq!(sp(sim, script).info[sp(sim, script).cur].as_ref().unwrap().delay, 0,
+            "the press released this column's hold [M 0x1dc338:83-85]");
+        assert!(sp(sim, other).info[sp(sim, other).cur].as_ref().unwrap().delay < 0, "the other column stays held");
+        let mut lit = false;
+        for _ in 0..20 {
+            sim.step_bond(nf_game::player::Input::default(), false, false, false);
+            if ent_near(sim, (0x0600_064F, 2), 0x0200_06b3, btn).is_some_and(|m| (m[3][0] - btn[0]).abs() < 0.1) { lit = true; break; }
+        }
+        assert!(lit, "the button at {btn:?} lights (the ON art at sub t7) [D 0x0600064F stream 2]");
+    }
+}
