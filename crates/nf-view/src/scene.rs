@@ -2813,9 +2813,9 @@ impl Sim {
         self.decryptor_scanned_lag = self.decryptor_scanned.take();
         // fix-decryptor-sounds: the digit/unlock chimes a scanning lock raised this tick (the
         // [M] `Lock_Update` 0x1ae3d8:368/:374 `Sound_Play` family, played here at the lock's
-        // position through the port's 3-D path). Collected first: the loop holds the locks
+        // 2-D, as the game's calls are). Collected first: the loop holds the locks
         // mutably and the audio handle lives on the same `drones`.
-        let mut lock_sounds: Vec<(u32, [f32; 3])> = Vec::new();
+        let mut lock_sounds: Vec<u32> = Vec::new();
         for (i, l) in self.drones.locks.iter_mut().enumerate() {
             match scanned_due.filter(|(li, _)| *li == i) {
                 Some((_, upgraded)) => {
@@ -2831,12 +2831,9 @@ impl Sim {
             // `Control_NextLOD` on the unlock (Lock_Unlock 0x1b0650:23 / case 1's framelist end): the
             // keypad's model becomes its LOD variant and keeps it (see `Lock::lod_next`).
             if l.unlocked || l.burned { l.lod_next = true; }
-            if !l.pending_sounds.is_empty() {
-                let pos = l.pos;
-                for id in l.pending_sounds.drain(..) { lock_sounds.push((id, pos)); }
-            }
+            lock_sounds.append(&mut l.pending_sounds);
         }
-        for (id, pos) in lock_sounds { self.drones.audio.play3d(id, pos, None); }
+        for id in lock_sounds { self.drones.audio.play(id); }
         self.pda_tick();
         self.smoke.retain(|s| !s.dead());
         let (trigger, reload) = if self.disabled { input = Default::default(); (false, false) } else { (trigger, reload) };
@@ -3414,7 +3411,7 @@ impl Sim {
                 if !near { continue; }
                 self.hint_fired[hi] = true;
                 self.hud.info_labels.push_back((h.label, 180.0));
-                if h.sound != 0 { self.drones.audio.play3d(h.sound, self.bond.head(), None); }
+                if h.sound != 0 { self.drones.audio.play(h.sound); } // 2-D [M 0x1b3380:26]
             }
             // No walk-in or use-key wire grab: the game's
             // grab that is certain is the JUMP grab [M Player_HandleJump 0x1916b0:107-147 — action 7 is the
@@ -6460,7 +6457,6 @@ impl Sim {
         // that opened the tick before a scene starts waits in its frozen flash window with the chime
         // unplayed, exactly the game's held Triggered1 (objective-banner-timing).
         if let Some(m) = self.hud.objective_msgs.front_mut() {
-            let cam = self.bond.head();
             if !m.opened {
                 // Case 2: the open — bind the header, schedule the pair, no sound yet [M 0x19c310:126-176].
                 m.opened = true;
@@ -6468,7 +6464,7 @@ impl Sim {
                 // Case 3's flash branch: PlayMe1st once (1532 new / 468 complete) [M 0x19c310:219-229].
                 m.sfx1 = true;
                 let id = if m.status == 0x0200_0053 { 468 } else { 1532 };
-                self.drones.audio.play3d(id, cam, None);
+                self.drones.audio.play(id); // 2-D [M 0x19c310:221]
             }
             if m.sfx1 && !m.second && m.status != 0x0200_0053 && m.time <= m.life - 60.0 {
                 // The steady branch: PlayMe2nd (469) once [M 0x19c310:232-235] — only after the
@@ -6476,7 +6472,7 @@ impl Sim {
                 // branch's ScriptCam hold can delay the 1st past; the timer freeze keeps the
                 // ordering 1532 then 469 exactly as the pane plays them).
                 m.second = true;
-                self.drones.audio.play3d(469, cam, None);
+                self.drones.audio.play(469); // 2-D [M 0x19c310:233]
             }
         }
     }
