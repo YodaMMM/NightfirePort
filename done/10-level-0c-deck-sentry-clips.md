@@ -6,3 +6,8 @@ Reproduce on the real level first through real input, not a teleport. Compare wi
 
 ---
 claimed-by: sandbox5 at 2026-11-08T17:25Z
+
+---
+## Report (done, 2026-11-08T18:00Z)
+
+Closed by the driver: the report is on `s/level-0c-deck-sentry-clips` (docs/reports/level-0c-deck-sentry-clips.md); the worker didn't run finish.sh.
