@@ -1894,12 +1894,9 @@ impl Bond {
         // walk's target. In the swim the forward lane the ease reads back is the quad's local z —
         // dir.z·forward with dir the RotMatrixX(view pitch) row [M 0x191dd0:149-165] — so a
         // pitched stroke eases from cos(pitch)·lane.
-        // KNOWN DIVERGENCE (kept): the same copy makes the game's crouch (0.75) settle at
-        // 0.15/0.4 = 0.375 of the target, half the port's 0.75. The crouch keeps the unscaled
-        // lane here because the 0a stealth routes are timed on the port's crouch pace; the rule
-        // change rides its own branch (s/agent-player-moves-crouch).
-        let crouch_k = if !swimming && self.crouched { 0.75 } else { 1.0 };
-        self.local = if swimming { [vs, swim_cp * vf] } else { [vs / crouch_k, vf / crouch_k] };
+        // The crouch (0.75 [M Player_SSCrouch 0x1924c0:58]) rides the same copy: it settles at
+        // 0.15/0.4 = 0.375 of the target — 0.039/tick at full stick, not 0.075.
+        self.local = if swimming { [vs, swim_cp * vf] } else { [vs, vf] };
         if !swimming && !zero_g {
             // The walk quad's own stores [M Player_Move 0x191dd0:166-170: `+0x10 = strafe`,
             // `+0x18 = forward·mult`] — the eased lanes × the substate's multiplier, WITHOUT the
@@ -3181,7 +3178,7 @@ mod tests {
         for _ in 0..30 { b.tick(&w, &fwd); }
         assert!(b.crouched);
         assert!(b.move_local[1] > 0.0 && b.move_local[1] < 0.08,
-            "crouch walk lane eases toward 0.1·0.75: {:?}", b.move_local);
+            "crouch walk lane eases toward 0.375·0.105: {:?}", b.move_local);
     }
 
     /// The grapple hang reads STILL to the guards: `Player_SSGrapple` stores the quad through
