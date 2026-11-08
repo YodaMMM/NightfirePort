@@ -1871,12 +1871,16 @@ impl Bond {
         // The smoothers ease from the SCALED lanes: `Player_Update` copies the whole +0x10 quad
         // into +0x20 after the move [M 0x193600:296-299; disasm 0x193cd4 `lq v0,0x10(s2)` /
         // 0x193cdc `sq v0,0x20(s2)`], and `Player_Move` stores the lanes already multiplied by
-        // its argument [M 0x191dd0:166-170]. So the crouch (0.75) settles at 0.15/0.4 = 0.375 of
-        // the walk's target, not 0.75, and the party walk (0.9) at 0.18/0.28. In the swim the
-        // forward lane the ease reads back is the quad's local z — dir.z·forward with dir the
-        // RotMatrixX(view pitch) row [M 0x191dd0:149-165] — so a pitched stroke eases from
-        // cos(pitch)·lane.
-        self.local = if swimming { [vs, swim_cp * vf] } else { [vs, vf] };
+        // its argument [M 0x191dd0:166-170]. So the party walk (0.9) settles at 0.18/0.28 of the
+        // walk's target. In the swim the forward lane the ease reads back is the quad's local z —
+        // dir.z·forward with dir the RotMatrixX(view pitch) row [M 0x191dd0:149-165] — so a
+        // pitched stroke eases from cos(pitch)·lane.
+        // KNOWN DIVERGENCE (kept): the same copy makes the game's crouch (0.75) settle at
+        // 0.15/0.4 = 0.375 of the target, half the port's 0.75. The crouch keeps the unscaled
+        // lane here because the 0a stealth routes are timed on the port's crouch pace; the rule
+        // change rides its own branch (s/agent-player-moves-crouch).
+        let crouch_k = if !swimming && self.crouched { 0.75 } else { 1.0 };
+        self.local = if swimming { [vs, swim_cp * vf] } else { [vs / crouch_k, vf / crouch_k] };
         if !swimming && !zero_g {
             // The walk quad's own stores [M Player_Move 0x191dd0:166-170: `+0x10 = strafe`,
             // `+0x18 = forward·mult`] — the eased lanes × the substate's multiplier, WITHOUT the
