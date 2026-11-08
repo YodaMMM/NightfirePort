@@ -6,3 +6,6 @@ Branch `s/latch-batch` is current master plus the drone contact-turn rule and it
 - fix_mission_live::the_07000001_exit_works_end_to_end: the courtyard shoji ping-pongs 0x8/0x10 and never opens (NDrone2_DoorIsOpen 0x14aaa0). Log the shoji state and every drone activating it per tick on master and on the branch; this one may be a port bug in who re-activates the door.
 
 For each: decide port bug vs lost walk margin with evidence, fix the port (test red on old code) or re-route as a player would. Never lower damage or health, no loosened pins, no new ignores. Branch from origin/s/latch-batch, push to `s/latch-walks-2`, report in docs/reports/latch-walks-2.md. Run each touched binary alone, then walkreal_07000001, 07, 08, 09, 11.
+
+---
+claimed-by: sandbox1 at 2026-11-08T23:28Z
