@@ -24,6 +24,9 @@ mod walker;
 
 use walker::{wrap_pi, Act, Walker, Wp};
 
+#[path = "common/usepick.rs"]
+mod usepick;
+
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 /// Cold load + the intro release, the same warm-up the level's other live tests use.
@@ -466,9 +469,16 @@ fn the_security_monitor_use_shows_the_group_camera_and_cycles() {
     teleport(&mut w, spot, std::f32::consts::PI);
     eprintln!("[014-monitor] bond {:?} head {:?} (console {mp:?})",
         w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().bond.head());
-    // E → the group's first camera [M Monitor_Activate 0x1b0058] (the reach is the head's
-    // 2.2 sphere [M 0x1a5170's monitor arm]).
-    let got = use_until(&mut w, 120, |sim| sim.drones.monitors.list[mi].state == 2);
+    let _ = spot;
+    // E → the group's first camera [M Monitor_Activate 0x1b0058], from in front of one of the
+    // console's collision faces (the use pick's world-sphere + refine stages [M 0x1eae80,
+    // 0x1ebaa8 → 0x1e92d8; nf_game::usepick]).
+    let got = {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let t = sim.drones.use_picks.monitors[mi];
+        let tris = usepick::posed(sim, t.hash, &t.matrix);
+        usepick::press_on(sim, &tris, t.sphere, 120, &|s| s.drones.monitors.list[mi].state == 2)
+    };
     eprintln!("[014-monitor] bond {:?} head {:?} state {}",
         w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().bond.head(),
         w.scene.sim.as_ref().unwrap().drones.monitors.list[mi].state);

@@ -36,21 +36,21 @@ fn load() -> Walker {
 fn keyboard_sp_activates_through_the_use_key() {
     let mut w = load();
     w.wait(150); // the SS lift doors' create sweep (the walkreal's wait)
-    // Out of the lift cab south, then hug the cab's east wall to its south end — the wall (x ≈ −2.0,
-    // z 8.5–12.5 [D probe segments]) stops the direct east walk, and Bond wedges at
-    // (−3.00, 1.10, 9.68) rounding it (the lenient walk reports the wedge and continues).
-    w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
-    w.walk_to(Wp::new(-3.2, 0.0, 9.4).r(1.0), "hug the cab east wall south end");
-    let _ = w.try_walk_to(Wp::new(-2.55, 0.0, 8.1).r(1.0), "round the wall end");
+    // use-pick: the keyboard's collision faces face −z, into the security room (the screen at
+    // z ≈ 8.7, normal (0.12, 0, −0.99) [D the entity glist 0x20005e1 — probe]), and the use pick
+    // keeps an object only with the use point within 1.0 in front of one of its faces
+    // [M Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8; nf_game::usepick]. The old
+    // stand — the corridor wedge at (−3.00, 1.10, 9.68), behind the cab wall — reached it only
+    // through that wall under the sphere-only pick. The room's door (#725, lock ch 0x31 [D]) is
+    // not walked here: Bond is placed once in the room, in front of the screen.
     {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        assert!((p[0] + 3.0).abs() < 0.3 && (p[2] - 9.68).abs() < 0.3,
-            "the corridor wedge in front of the keyboard nook, got {p:?}");
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-1.41, 1.09, 7.21];
+        sim.bond.vel = [0.0; 3];
     }
-    // The keyboard's entity sphere [D the preload's target — the probe prints it] at
-    // (−1.54, 1.33, 8.48) r 0.66; pulse the use key aimed at it.
-    let target: [f32; 3] = [-1.54, 1.33, 8.48];
+    w.wait(5);
+    // Aim at the screen's middle.
+    let target: [f32; 3] = [-1.55, 1.5, 8.7];
     let mut fired = false;
     for _cycle in 0..12u32 {
         for t in 0..40u32 {

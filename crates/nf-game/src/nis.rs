@@ -315,6 +315,9 @@ pub struct PendingPickup {
 /// matrix of the skin's first rigid part's bone).
 pub trait World {
     fn anim_length(&self, script: u32) -> Option<u16>;
+    /// A glist's object-space collision triangles (the use pick's refine input,
+    /// crate::usepick). `None` (the default): no shape held — the pick's candidate stage decides.
+    fn use_shape(&self, hash: u32) -> Option<&[[[f32; 3]; 3]]> { let _ = hash; None }
     fn discrete0(&self, skin: u32, script: u32, frame: f32) -> Option<Mat4>;
     /// An animated object's own world matrix at `frame` — the game's obj+0x90 that
     /// `Script_EventHandler` case 6 snapshots from the previous stream's object [M 0x1d94c0:125-134;
@@ -1639,6 +1642,12 @@ impl Player {
     /// matrix origin): `(centre, radius, dir, pos)`. The basis is the stored matrix's z row —
     /// the same column math `entity_use_targets` transforms centres with.
     pub fn entity_use_targets_dir(&self, objects: &Objects, w: &dyn World) -> Vec<([f32; 3], f32, [f32; 3], [f32; 3])> {
+        self.entity_use_picks(objects, w).into_iter().map(|(c, r, dir, pos, _, _)| (c, r, dir, pos)).collect()
+    }
+
+    /// The same targets with the entity's glist hash and obj+0x90 — the use pick's refine
+    /// inputs (crate::usepick): `(centre, radius, dir, pos, hash, matrix)`.
+    pub fn entity_use_picks(&self, objects: &Objects, w: &dyn World) -> Vec<([f32; 3], f32, [f32; 3], [f32; 3], u32, Mat4)> {
         let mut out = Vec::new();
         if self.deleted { return out; }
         let Some(s) = self.info[self.cur].as_ref() else { return out };
@@ -1657,7 +1666,7 @@ impl Player {
             // obj+0xC0: the matrix's translation row (Script_EntityStart 0x1d8d78:118 copies it
             // to obj+0x40/0x30 — the entity's object position).
             let pos = [matrix[3][0], matrix[3][1], matrix[3][2]];
-            out.push((centre, r, dir, pos));
+            out.push((centre, r, dir, pos, *hash, *matrix));
         }
         out
     }

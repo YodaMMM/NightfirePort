@@ -26,6 +26,8 @@ use nf_game::player::{Input, SS_CLIMB, SS_WALK, SS_WIRE};
 
 #[path = "common/walker.rs"]
 mod walker;
+#[path = "common/usepick.rs"]
+mod usepick;
 
 use walker::{Act, Walker, Wp};
 
@@ -305,10 +307,16 @@ fn the_pavillion_grill_sweeps_open_on_the_use_key() {
     let p = w.scene.sim.as_ref().unwrap().drones.sss.list[si].pos();
     // The stand-in transit; the E is the real input (fix_ss_grate_live's stand at 1.2 west,
     // facing the grill — the same reachable spot its test pins).
-    place(&mut w, p[0] - 1.2, p[1], p[2]);
-    w.scene.sim.as_mut().unwrap().bond.yaw = (1.0f32).atan2(0.0);
-    w.walk_to(Wp::at(p[0] - 0.9, p[1], p[2], Act::Use { use_ticks: 200 }), "E the pavillion grill");
-    w.wait(120);
+    let _ = p;
+    {
+        // The press from in front of one of the grill's collision faces (the use pick's
+        // world-sphere + refine stages [M 0x1eae80, 0x1ebaa8 → 0x1e92d8; nf_game::usepick]).
+        let sim = w.scene.sim.as_mut().unwrap();
+        let (tris, sph) = { let s = &sim.drones.sss.list[si]; (usepick::posed(sim, s.hash, &s.matrix), s.world_sphere()) };
+        let st = sim.drones.sss.list[si].state;
+        assert!(usepick::press_on(sim, &tris, sph, 60, &|s| s.drones.sss.list[si].state != st), "E at the pavillion grill");
+    }
+    w.wait(300);
     let s = &w.scene.sim.as_ref().unwrap().drones.sss.list[si];
     let moved = (0..3).map(|k| (s.matrix[3][k] - start[k]).abs()).sum::<f32>();
     assert!(moved > 0.02 && s.state == 0,

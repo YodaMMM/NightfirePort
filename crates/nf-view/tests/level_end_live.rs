@@ -13,6 +13,9 @@
 
 use nf_view::dev;
 
+#[path = "common/usepick.rs"]
+mod usepick;
+
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
 /// Load a level and return the scene. Panics on failure (test-only).
@@ -171,8 +174,19 @@ fn door_e_opens_then_e_closes_on_07000001() {
             d2(a.0).total_cmp(&d2(b.0))
         }).unwrap();
     eprintln!("[door] close-E spot {:?} (leaf at {:?})", spot, leaf_centre);
-    step_at(&mut scene, spot, close_yaw, true);
-    tick(&mut scene, 5);
+    // The close-E: the use point must sit within 1.0 in front of a face of the OPEN leaf
+    // (the pick's refine [M Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8;
+    // nf_game::usepick]) — from a stand in front of the leaf, then Bond steps out to the spot.
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        let d = sim.drones.doors.list[door_idx].clone();
+        let tris = usepick::posed(sim, d.glist, &d.matrix);
+        assert!(usepick::stand_in_front(sim, &tris, d.live_sph()), "a stand in front of the open leaf");
+        sim.step_bond(Default::default(), false, false, true);
+    }
+    let _ = close_yaw;
+    step_at(&mut scene, spot, close_yaw, false);
+    tick(&mut scene, 4);
     let state_after_close = scene.sim.as_ref().unwrap().drones.doors.list[door_idx].state;
     eprintln!("[door] after second E: state = 0x{:x} (expect CLOSING=0x10)", state_after_close);
     // E on an open door starts the close [M Door_Activate 0x135be0 — the toggle], and within
@@ -240,24 +254,18 @@ fn the_walkin_leaves_a_closing_straddle_door_alone_on_07000016() {
     // the leaf. Aim through the look input (the walker's converged-aim pattern: per-tick clamped
     // look until the view is on the sphere centre), then one fresh press and release
     // [M 0x1a5ea8-0x1a5ee8: a held use key activates ONCE — the press edge is the event].
-    for _ in 0..40 {
-        let (turn, look, on) = {
-            let sim = scene.sim.as_ref().unwrap();
-            let (c, _r) = sim.drones.doors.list[door_idx].live_sph();
-            let head = sim.bond.head();
-            let to = [c[0] - head[0], c[1] - head[1], c[2] - head[2]];
-            let want_yaw = to[0].atan2(to[2]);
-            let want_pitch = (to[1] / to[0].hypot(to[2])).atan() / std::f32::consts::FRAC_PI_2;
-            let yerr = want_yaw - sim.bond.yaw;
-            let perr = want_pitch - sim.bond.pitch;
-            (yerr.clamp(-0.08, 0.08), perr.clamp(-0.08, 0.08),
-             yerr.abs() < 0.05 && perr.abs() < 0.028)
-        };
-        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { turn, look, ..Default::default() }, false, false, false);
-        if on { break; }
+    // The use point must also sit within 1.0 in front of one of the raised leaf's faces (the
+    // pick's refine [M Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8;
+    // nf_game::usepick]): E from a stand in front of the leaf, one fresh press, then Bond steps
+    // back out to the 2.4 spot for the closing phase.
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        let d = sim.drones.doors.list[door_idx].clone();
+        let tris = usepick::posed(sim, d.glist, &d.matrix);
+        assert!(usepick::stand_in_front(sim, &tris, d.live_sph()), "a stand in front of the raised leaf");
+        sim.step_bond(Default::default(), false, false, true);
     }
-    scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, true);
-    scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+    step_at(&mut scene, [door_pos[0], door_pos[1], door_pos[2] - 2.4], 0.0, false);
     let mut saw_closing = false;
     let mut saw_closed = false;
     for _ in 0..40 {
