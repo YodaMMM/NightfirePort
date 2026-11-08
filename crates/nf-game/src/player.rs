@@ -2050,6 +2050,7 @@ self.local = [vs / k, vf / k];
             if std::env::var("NF_PUSH_DEBUG").is_ok() {
                 eprintln!("[pushdbg] n={} ja={:?} jb={:?} bots={:?}", ctx.bot_capsules.len(), ja, jb, ctx.bot_capsules);
             }
+            let mut jp = [0.0f32; 3];
             for &(ta, tb, tr) in ctx.bot_capsules {
                 let mut p = closest_on_seg(ta, tb, ja);
                 let mut q = closest_on_seg(ja, jb, p);
@@ -2060,10 +2061,24 @@ self.local = [vs / k, vf / k];
                 if dist_sq >= rr * rr { continue; }
                 let dist = dist_sq.sqrt().max(1e-6);
                 let overlap = (rr - dist) / dist; // fVar12 = 1.0 in SP [M :229-233]
-                push[0] -= d[0] * overlap;
-                push[1] -= d[1] * overlap;
-                push[2] -= d[2] * overlap;
+                jp[0] -= d[0] * overlap;
+                jp[1] -= d[1] * overlap;
+                jp[2] -= d[2] * overlap;
             }
+            // The world still bounds the push. Each Jointy shift moves the HITTEST arms (+0x20/+0x30)
+            // and +0x10 in place [M Collide_Jointy 0x1ec180:253-266], and every geometry node that
+            // Collide_Update 0x1ea398 intersects after it tests the SHIFTED capsule [M
+            // Collide_Intersect 0x1ebaa8:353-373 adds each DeltaP to the same arms]; the game's
+            // Jointy runs every tick of contact (grounded too), so each tick's shift is a sliver
+            // the wall pass absorbs. The port's push rides airborne ticks only (above), so the
+            // overlap a grounded walk builds up lands in ONE tick — on 07000007's hall doorway two
+            // guards' 0.7 shove put Bond's spine past the west jamb, the wall pass then resolved
+            // him out the far side and he fell out of the level. [S port structure] the push's
+            // horizontal part is swept against the world from the post-wall-pass capsule and
+            // stopped one radius short of the first wall it would cross.
+            let jp = clip_push_to_world(world, [ja[0] + push[0], ja[1] + push[1], ja[2] + push[2]],
+                [(ja[0] + jb[0]) * 0.5 + push[0], (ja[1] + jb[1]) * 0.5 + push[1], (ja[2] + jb[2]) * 0.5 + push[2]], jp);
+            for k in 0..3 { push[k] += jp[k]; }
         }
         // The pre-push-out snapshot: the game's ladder-grab pick sees the segment built HERE (the
         // hittest from the integrated obj+0x30 [M 0x194df0:361]; the +0x750 push lands in the
@@ -2119,6 +2134,28 @@ self.local = [vs / k, vf / k];
         // BL+0x908 in every substate while cam mode 0/0xe, not just the walk/swim bodies).
         self.crouch_drop = if self.crouched { (self.crouch_drop + 0.0225).min(0.45) } else { (self.crouch_drop - 0.0225).max(0.0) };
     }
+}
+
+/// The actor push's horizontal part, stopped one `RADIUS` short of the first wall it would carry
+/// the capsule into: rays from the capsule's top and middle along the push, each wall hit (|ny| <
+/// 0.7 — floors and ceilings never stop a lateral shove) caps the travel at the distance that
+/// keeps the spine a radius off that wall's plane. The vertical part rides as computed.
+fn clip_push_to_world(world: &CollisionWorld, top: V3, mid: V3, jp: V3) -> V3 {
+    let len = (jp[0] * jp[0] + jp[2] * jp[2]).sqrt();
+    if len < 1e-6 { return jp; }
+    let dir = [jp[0] / len, 0.0, jp[2] / len];
+    let reach = len + 2.0 * RADIUS;
+    let mut allowed = len;
+    for s in [top, mid] {
+        let to = [s[0] + dir[0] * reach, s[1], s[2] + dir[2] * reach];
+        if let Some((t, n)) = world.segment_hit(s, to) {
+            if n[1].abs() >= 0.7 { continue; }
+            let cos = (n[0] * dir[0] + n[2] * dir[2]).abs().max(0.5);
+            allowed = allowed.min((t * reach - RADIUS / cos).max(0.0));
+        }
+    }
+    let k = allowed / len;
+    [jp[0] * k, jp[1], jp[2] * k]
 }
 
 /// `vecutil_calculate_closest_point_on_line` 0x1e1cb8's form [M — the Jointy spine pair
