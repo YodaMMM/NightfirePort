@@ -73,8 +73,8 @@ rollover clears it [M :145-172, :176-210]. At most one spawn per frame, but ever
 succeeds [M :212-232]: each attempt draws `Rand_Rand(+0x2E)`, the group's template count, and walks that many usable
 templates (unused this wave; unless immediate, spot ≥ p8 from the player). A draw past the last usable template fails.
 Unless immediate a spot visible to him (`Drone_PositionVisible`) fails too. Each spawn is a new object built from the
-saved template [M 0x137cb0]. The port's template owns one drone record and one drawn character, so a record is reused
-only after its corpse has gone: a wave can arrive later than the game's while bodies stay in view.
+saved template [M 0x137cb0], so later waves reuse a template while its earlier guard or his corpse is still there; the
+port adds a guard for that case while it has a body to draw.
 
 ## Drones and channels [M]
 

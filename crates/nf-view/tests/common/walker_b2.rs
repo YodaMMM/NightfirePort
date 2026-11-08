@@ -103,6 +103,9 @@ pub struct Walker {
     pub alarm_last: Vec<u8>,
     /// ai-sight-drawn-gate-5: the one-shot roster dump latch.
     alarm_props_dumped: Option<bool>,
+    /// Pickups `resupply` must not walk to: a placed pickup behind a locked door is near on the map
+    /// and no route away.
+    pub no_fetch: Vec<[f32; 3]>,
 }
 
 /// The stuck dump, public for the walkreal tests' own aim loops.
@@ -151,6 +154,7 @@ impl Walker {
             sidestep: 0, max_y: pos[1], lenient: false, stuck_answers: false,
             alarm_last: Vec::new(),
             alarm_props_dumped: None,
+            no_fetch: Vec::new(),
         }
     }
 
@@ -339,6 +343,7 @@ impl Walker {
                 // real guard drops waited farther out). The shared filter keeps the master 1.5.
                 .filter(|p| (p.m[3][1] - self.pos[1]).abs() < if lane { floor_band } else { 1.5 })
                 .filter(|p| !lane || tried.iter().all(|t| dxz(*t, [p.m[3][0], p.m[3][1], p.m[3][2]]) > 2.0))
+                .filter(|p| self.no_fetch.iter().all(|t| dxz(*t, [p.m[3][0], p.m[3][1], p.m[3][2]]) > 1.0))
                 .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
                 .min_by(|a, b| dxz(*a, self.pos).total_cmp(&dxz(*b, self.pos)))
             else { break };

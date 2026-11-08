@@ -507,10 +507,32 @@ fn crane_ladder_grab_and_climb() {
 #[test]
 fn qclaw_reels_to_the_crane_pulley() {
     let mut w = load_warm();
-    // Stand on the dock under the pulley, ~4 m away.
+    // A stand with a clear bolt line to the pulley: the ground under it sees only the crane deck.
+    let target0 = [213.62f32, 15.77, -234.77];
+    let stand = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let mut found = None;
+        'scan: for i in 0..24 {
+            for j in 0..24 {
+                let (x, z) = (201.0 + i as f32, -247.0 + j as f32);
+                let Some((f, _)) = sim.world.segment_hit([x, 19.0, z], [x, 8.0, z]) else { continue };
+                let y = 19.0 - 11.0 * f;
+                let head = [x, y + 1.7, z];
+                let d = [target0[0] - head[0], target0[1] - head[1], target0[2] - head[2]];
+                let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                if !(3.0..15.0).contains(&l) { continue; }
+                let k = (l - 1.6) / l;
+                if sim.world.segment_bullet_clear(head, [head[0] + d[0] * k, head[1] + d[1] * k, head[2] + d[2] * k]) {
+                    found = Some([x, y + 1.1, z]);
+                    break 'scan;
+                }
+            }
+        }
+        found.expect("a stand sees the pulley #259")
+    };
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [212.4, 11.0, -236.6];
+        sim.bond.pos = stand;
         sim.bond.vel = [0.0; 3];
         sim.gun.switch_request = 0x50;
     }

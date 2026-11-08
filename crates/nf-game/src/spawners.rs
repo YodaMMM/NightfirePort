@@ -95,8 +95,8 @@ impl Spawner {
     /// template i's spot is at least `min_dist` from the player (a PRE-selection usability test —
     /// the candidate loop only decrements the draw for templates that pass it, 0x137cb0:30);
     /// `visible(i)`: the spot is visible to Bond (a POST-selection abort, 0x137cb0:43 — the attempt
-    /// fails and the next empty slot tries); `free(i)`: template i's drone record is not still
-    /// held by an earlier occupant (see the selection below); `rand(n)`: `Rand_Rand`.
+    /// fails and the next empty slot tries); `free(i)`: the port can give template i's new guard a
+    /// body (the game's record outlives its guards; the port's draw pool is finite); `rand(n)`: `Rand_Rand`.
     pub fn update(&mut self, ch: &mut Channels, frame: u32, level: u32, alive: impl Fn(usize) -> bool,
                   drawn: impl Fn(usize) -> bool, dist_ok: impl Fn(usize, f32) -> bool,
                   visible: impl Fn(usize) -> bool, free: impl Fn(usize) -> bool,
@@ -149,7 +149,9 @@ impl Spawner {
             }
             return Action::Remove(removed);
         }
-        let living = self.spawned.iter().filter(|&&i| alive(i)).count();
+        // The alive scan zeroes the slot of a dead or removed guard [M 0x137e68:96-124].
+        self.spawned.retain(|&i| alive(i));
+        let living = self.spawned.len();
         if self.wave >= self.waves {
             // All waves spawned: `if ((ushort)puVar1[3] <= (ushort)puVar1[0xb])` — max waves (+0x0C)
             // vs waves completed (+0x2C), a pure counter compare with NO template-exhaustion term
@@ -222,9 +224,8 @@ impl Spawner {
             // The POST-selection abort [M 0x137cb0:43]: with screening on, a spot visible to Bond
             // fails the attempt (returns 0) — the same spot can win a later draw.
             if !self.immediate && visible(i) { continue; }
-            // The game's spawn is a new object, so a corpse of the same template lies on untouched.
-            // The port's template owns one drone record and one drawn character: the record is
-            // reusable once its last occupant has left the world.
+            // The game's spawn is a new object, so a corpse of the same template lies on untouched;
+            // the port adds a guard for a template still in use, while it has a body to draw.
             if !free(i) { continue; }
             self.used[k] = true;
             if !self.spawned.contains(&i) { self.spawned.push(i); } // one record per template

@@ -111,6 +111,8 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
                 p.m[3][0], p.m[3][1], p.m[3][2], p.kind, p.weapon, p.rounds);
         }
     }
+    // The grenade launcher #290 lies in the locked storeroom [D].
+    w.no_fetch.push([10.54, 47.47, 18.10]);
     if difficulty != 1 {
         assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
             "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
@@ -484,6 +486,8 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     band(&w, 18.2, 21.3, "connector 2's bottom");
     w.walk_to(Wp::new(15.0, 19.2, 4.8).r(1.0), "the south strip 18.9 west");
     loot_the_drops_floor(&mut w, "the 18.9 strip");
+    // A drop can lie at the strip's east end: back to the flight head before the descent.
+    w.walk_to(Wp::new(15.0, 19.2, 4.8).r(1.0), "back along the 18.9 strip");
     w.walk_to(Wp::new(14.8, 15.4, -2.6).r(1.0), "the west flight A down (18.9→15.0)");
     {
         let sim = w.scene.sim.as_ref().unwrap();
