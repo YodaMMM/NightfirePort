@@ -14470,6 +14470,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let rec_r = f32::from_le_bytes(rec[0x08..0x0c].try_into().unwrap());
             let rec_d = f32::from_le_bytes(rec[0x0c..0x10].try_into().unwrap());
             self.pending_blasts.push((g.pos, rec_r, rec_d, g.owner, g.weapon_type, 0x0600_0052, rec_r, 0));
+            // 0x12cd98:28-34: a record with +0x70 & 0x80000 (the 0x3a alone [L]) also delete-marks
+            // its attached beam object (BU+0x38) in the same call, so the beam is gone this frame
+            // with the round — drop the beam this tick's rebuild already pushed for it.
+            if f70 & 0x80000 != 0 { self.tripbomb_beams.retain(|b| b.0 != g.pos); }
             g.state = 2;
         }
         // case 0x21 → `Destroy_Smash` [M 0x17c518:141-177 → 0x12bb60]: the channel write is the
@@ -16785,6 +16789,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let rec_r = f32::from_le_bytes(rec[0x08..0x0c].try_into().unwrap());
                 let rec_d = f32::from_le_bytes(rec[0x0c..0x10].try_into().unwrap());
                 self.pending_blasts.push((g.pos, rec_r, rec_d, g.owner, g.weapon_type, 0x0600_0052, rec_r, 0));
+                // 0x12cd98:28-34: a record with +0x70 & 0x80000 (the 0x3a alone [L]) also delete-marks
+                // its attached beam object (BU+0x38) in the same call, so the beam is gone this frame
+                // with the round — drop the beam this tick's rebuild already pushed for it.
+                if f70 & 0x80000 != 0 { self.tripbomb_beams.retain(|b| b.0 != g.pos); }
                 g.state = 2;
             }
             // case 0x21 → `Destroy_Smash` [M 0x17c518:141-177 → 0x12bb60]: the channel write is

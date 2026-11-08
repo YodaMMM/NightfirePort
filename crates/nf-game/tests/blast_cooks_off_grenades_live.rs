@@ -216,3 +216,53 @@ fn blast_out_of_reach_leaves_the_mine_live() {
     assert!(sim.explosions.iter().all(|b| b.4 != 0x37), "no blast from the out-of-reach mine");
     assert!(sim.grenades.iter().any(|g| g.weapon_type == 0x37 && g.state < 2), "the out-of-reach mine is still live (no fuse death)");
 }
+
+/// The tripbomb 0x3a [L ee_start_05.bin @0x2bf150 + 0x3a·0x10C: radius 8, damage 100, +0x70
+/// carries 0x80000 — the attached-beam tail]. No fuse bit: once stuck it lives until something
+/// sets it off.
+fn trip_drop(x: f32, y: f32, z: f32) -> nf_game::grenade::Grenade {
+    nf_game::grenade::Grenade { weapon_type: 0x3a, ..mine_drop(x, y, z) }
+}
+
+/// The cook-off's `+0x70 & 0x80000` tail [M Bullet_handle_object_destruction 0x12cd98:28-34]:
+/// the cooked tripbomb's attached beam object (BU+0x38) is delete-marked in the same call, so
+/// the beam dies with the round on the cooking frame. Red on the old code: the tick rebuilds
+/// `tripbomb_beams` BEFORE the blast drain, so the cooked bomb's beam stayed in the list for
+/// that tick after the round itself was gone.
+#[test]
+fn blast_cooking_a_tripbomb_drops_its_beam_the_same_tick() {
+    let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let away = bond_at([SPOT[0] + 40.0, SPOT[1], SPOT[2]]);
+    let (drones, rng) = {
+        let mut rng = Rng::new(1);
+        let mut lights = nf_game::light::LightList::default();
+        (nf_game::drone::level_drones(&d, &l.level, &mut rng, &mut lights), rng)
+    };
+    let (rest, t_explode) = {
+        let mut sim = l.sim(drones.clone(), Rng::new(1));
+        for dr in &mut sim.list { dr.present = false; }
+        sim.grenades.push(frag_drop(SPOT[0], SPOT[1], SPOT[2]));
+        let (t, b) = first_blast(&mut sim, &d, &away, 400);
+        (b.0, t)
+    };
+    let mut sim = l.sim(drones, Rng::new(1));
+    for dr in &mut sim.list { dr.present = false; }
+    sim.grenades.push(frag_drop(SPOT[0], SPOT[1], SPOT[2]));
+    sim.grenades.push(trip_drop(rest[0] + 1.0, rest[1] + 0.5, rest[2]));
+    for _ in 0..t_explode { sim.tick(&d, &away); }
+    let bomb = sim.grenades.iter().find(|g| g.weapon_type == 0x3a && g.state < 2)
+        .expect("the dropped tripbomb is live before the primer blast");
+    assert!(bomb.stuck && bomb.phase.as_ref().map_or(false, |p| p.armed),
+        "the tripbomb stuck and armed before the frag's fuse ran out (stuck {} phase {:?})", bomb.stuck, bomb.phase.as_ref().map(|p| p.armed));
+    let bomb_pos = bomb.pos;
+    assert!(sim.tripbomb_beams.iter().any(|b| b.0 == bomb_pos), "the armed tripbomb's beam is up");
+    // The primer's tick: its blast reaches the bomb 1 u away and cooks it.
+    sim.tick(&d, &away);
+    assert!(sim.explosions.iter().any(|b| b.4 == 0x34), "the primer blast fires on the measured tick");
+    assert!(!sim.grenades.iter().any(|g| g.weapon_type == 0x3a && g.state < 2), "the cooked tripbomb is removed");
+    assert!(!sim.tripbomb_beams.iter().any(|b| b.0 == bomb_pos),
+        "the cooked tripbomb's beam dies with it on the cooking tick [M 0x12cd98 +0x70 & 0x80000 → BU+0x38]");
+    sim.tick(&d, &away);
+    assert!(sim.explosions.iter().any(|b| b.4 == 0x3a), "the tripbomb's own 8/100 blast follows on the next tick");
+}
