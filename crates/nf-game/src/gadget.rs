@@ -575,14 +575,14 @@ mod grapple_tests {
         // Beyond the range the bolt dies mid-flight — no pick.
         let far = [10.0f32, 0.0, 0.0];
         let far_dir = [1.0f32, 0.0, 0.0];
-        assert!(pick_grapple_point(&points, [0.0, 0.0, 0.0], far_dir, grapple_range(&wd, 0x50)).is_none()
+        assert!(pick_grapple_point(&points, [0.0, 0.0, 0.0], far_dir, grapple_range(&wd, 0x50), |_, _| true).is_none()
             || (far[0] - 0.0) <= grapple_range(&wd, 0x50), "the point within the range still picks");
     }
 
     #[test]
     fn grapple_ignores_points_off_the_ray() {
         let points = vec![GrapplePoint { pos: [10.0, 0.0, 0.0], radius: 2.0 }];
-        assert!(pick_grapple_point(&points, [0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 100.0).is_none(),
+        assert!(pick_grapple_point(&points, [0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 100.0, |_, _| true).is_none(),
             "the ray pointing up misses the point on the +x axis");
     }
 }
