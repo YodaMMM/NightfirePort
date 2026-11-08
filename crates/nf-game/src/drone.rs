@@ -12218,19 +12218,13 @@ pub fn player_hit_damage(t: &nf_formats::tuning::Tuning, level: u32, raw: f32, w
 }
 
 /// All drones of a level plus the round-robin line-of-sight cursor.
-/// Whether a breakable contact must come before the static world's first bullet stop (see the
-/// breaks arm of `update_player_bullets`). Off with `PANE_RIDE` below. When on, the live
-/// breakables' meshes ride the dynamic set as PANE_PART parts the ray sets skip (world.rs, the
-/// note at `segment_in_sets_drop_pass_glass`), so `segment_bullet`'s first stop is the real
-/// scenery behind the breakable — never the breakable's own mesh — and the bounds contact
-/// (grown 0.1) always fires at or before it.
-/// The pane-collision ride's switch (drone.rs's `pane_parts` block): the pairing and the
-/// machinery are proven and landed (world.rs's PANE_PART ray skip, the census), and the 08/09
-/// batteries run green with it on — but the 07000001 real-damage walks' guard-melee cascade
-/// under the panes' capsule solidity is not settled (the report's Live checks), so master's
-/// walks stay green with the ride off. The world stop rides the same switch: with the meshes
-/// out of the ray sets the bounds contact always fires at or before the scenery stop; with
-/// them still static the 07000007 point-blank vase pathology returns.
+/// The pane-collision ride (drone.rs's `pane_parts` block): the live kind-2 panes ride the
+/// per-tick dynamic set, solid to Bond's walk and to the guards' body push (`Drone::collision_handler`,
+/// world.rs's `pane_push`), and a killed one leaves it. The world stop rides the same switch: the
+/// pane meshes are out of the bullet ray sets (world.rs's PANE_PART note), so `segment_bullet`'s
+/// first stop is the scenery behind the breakable and the bounds contact (grown 0.1) always
+/// fires at or before it; with the meshes in the ray sets the 07000007 point-blank vase
+/// pathology returns.
 const PANE_RIDE: bool = true;
 const BREAK_WORLD_STOP: bool = PANE_RIDE;
 
@@ -19556,7 +19550,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // BEFORE Break_Kill takes the collision away (the contact list is the collide pass's
             // product, Break_Update walks it same tick), so the tick's deferred HITDATA re-trace
             // still sees the sheet.
-            // Behind PANE_RIDE (off): the GLASS panes join the set below, carrying the
+            // Behind PANE_RIDE (on): the GLASS panes join the set below, carrying the
             // PANE_PART id bit (world.rs) — the RAY sets skip them [S, the stand-in PANE_PART's
             // note describes] while the CAPSULE
             // queries and the effect walks keep them solid, and `update_player_bullets` engages
@@ -19575,8 +19569,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // game's pane laws here (solid while alive, out when killed, the class-5 damage
             // arms) are read and pinned for the kind-2 glass [D params; M 0x12c230:21], so the
             // ride takes the kind-2 rows; a prop row keeps master's out-of-world status quo
-            // [S unverified: the props' movement solidity is not proven either way, and making
-            // them solid re-routes every 01 walk]. One rule for script and placed panes: the
+            // [S: `Collide_PickObj` 0x1eae80 has no kind test, so a created prop row with collision
+            // reads solid to the body queries in the game too [M 0x1eae80:70-90]; it stays out here
+            // because making the props solid re-routes every 01 walk, a separate change]. One rule for script and placed panes: the
             // script-entity arm above keeps the same dead/death-tick grace, and a script pane's
             // row is kind-2 the same way (the gondola's windows ride it).
             if PANE_RIDE {
