@@ -96,7 +96,7 @@ so their stage-report numbers (0c 2/1/1, 14 6/3/1, 16 13/1/2, 1b 15/2/2) stand. 
 suite did not fit either; the changed-code set (door.rs/world.rs/drone.rs closures) is
 covered by the six binaries above plus the walkreal spot check.
 
-## Live checks for the main agent
+## Live checks
 
 1. **The 08 snap chain** (settles the aim-gate + door-stage landing): with
    gdbwatch on `Collide_PickObj` 0x1eae80 and the aim ray from the gate-0 start

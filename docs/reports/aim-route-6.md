@@ -103,7 +103,7 @@ pin of the round's actual spawn direction (lock-on vs the effective aim) in PCSX
    walks are unchanged by construction (the flags default off) — a full `walkreal_*_live`
    sweep on a longer window would confirm it mechanically.
 
-## Live checks for the main agent
+## Live checks
 
 1. **The 08 rocket's spawn direction** (carried from §3): with the debugger, watch one
    AT-420 round's first 10 ticks at a d3 launch where the view is 0.2 rad off the machine —

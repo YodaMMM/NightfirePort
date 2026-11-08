@@ -1,7 +1,7 @@
 # beam-weapon-panels-1b — the start weapon breaks panels it should not
 
 Branch `s/beam-weapon-panels-1b`, cut from `origin/s/panel-mesh-wip` (786875a4f; origin/master fd8ee385b
-already an ancestor). Sandbox reset before this task: full re-setup (clone, work-slim, ISO, rustup, ALSA
+already an ancestor). Environment reset before this task: full re-setup (clone, work-slim, ISO, rustup, ALSA
 user prefix, cold build). The window closed mid-verification — the fix is pushed UNVERIFIED.
 
 ## What the research established ([M] decompile/EE, [D] live measurement)

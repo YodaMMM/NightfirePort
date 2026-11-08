@@ -105,7 +105,7 @@ broke the [L] 08 pins in that session's measurement. **This session did not touc
   stopping the round) — flipping it is a measured-unsafe change that belongs to the snap work,
   not a drive-by fix.
 
-## Live checks for the main agent
+## Live checks
 
 1. The console shot (the cheapest repro): in PCSX2 on 0700001b, fire one aimed shot at console
    1 from the walk's stance and record the snapped aim point + the bullet's first object

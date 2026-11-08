@@ -105,7 +105,7 @@ at 13606 — and failed LATER, at **Drake's fight** (see §4).
   four 1b binaries above, all run whole) and the three 1b test files; no `crates/*/tests/common/`
   change; no other level's walk reads the missile chain.
 
-## Live checks for the main agent
+## Live checks
 
 1. **The launch gate in the real game**: with the debugger, watch ch 193/194 and ch 19 after the
    first wave's death — confirm the AND mux holds ch 19 for at least 6300 ticks (the m1/m2/m7
@@ -124,13 +124,3 @@ at 13606 — and failed LATER, at **Drake's fight** (see §4).
 
 not visible to me — this session exposes no token, credit, context-window or cost figures to copy.
 
-## ntfy failed
-
-All three fallbacks failed (2026-11-06 ~18:14-18:16 UTC):
-
-1. `curl -sS -m 20 -H "Title: NightfirePort" -d "aim-route-4: …" https://ntfy.sh/nightfire-yoda-8k3x`
-   → `curl: (28) Connection timed out after 20001 milliseconds`
-2. `python3 -c "… urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=…, headers={'Title':'NightfirePort'}), timeout=25)"`
-   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
-3. `wget -q -O- --post-data "aim-route-4: …" https://ntfy.sh/nightfire-yoda-8k3x`
-   → no output, killed at the 45 s tool timeout (no connection established).

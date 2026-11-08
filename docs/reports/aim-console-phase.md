@@ -43,7 +43,7 @@ The full `cargo test` suite did not fit this window; the eleven binaries above p
 - **The first wave's death ledger** (what it does besides channel 19, in order, with citations) for the PCSX2 phase hunt: not compiled.
 - The full suite and the `npc_doors_live`/`fix_guard_misc_live` doors/guard binaries: not run this window (no `drone.rs` behavior change, but the next window should run them).
 
-## Live checks for the main agent
+## Live checks
 
 1. **The rig pieces' pick lifetime** — watch (gdbwatch) the object record for glist hash 20007e6 (the r 1.80 rig piece) from the first wave's death to the console phase: expect its `obj+0x90` matrix to rise from y ≈ −8.8 to ≈ −2.9 between frames 1782–1900, and its stream to leave the script's kind-1/2 set (the pick loses it) once risen — the port sees it as a candidate only mid-rise.
 2. **The console-8 shot at the parked stance** — fieldprobe: place Bond at (44.7, −8.66, 1.68) facing console 8's screen (51.78, −7.51, −9.42), fire one laser round; expect the round to clip the bank's static geometry short of the screen (the port's `sphere_shot_ok` says the world stop is ≥ 0.55 u in front of the sphere centre) — i.e. the miss is the WORLD, not the snap.

@@ -125,7 +125,7 @@ green end to end so the batch picks up a stable timeline.
 4. The full `cargo test` suite and the `npc_doors_live`/`fix_guard_misc_live` binaries: not run
    this window (no `drone.rs`/game-code change landed on this branch).
 
-## Live checks for the main agent
+## Live checks
 
 1. **The pocket's underside slope** — at the wedge (44.76, −8.66, 1.69) with the debugger:
    confirm the face above is the bank's underside and read its normal; the port's push model

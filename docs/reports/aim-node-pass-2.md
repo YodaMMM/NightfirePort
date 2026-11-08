@@ -62,7 +62,7 @@ measured: the contact fires on fi 1 g 0 k 0 the tick the crosshair is honest.
   ~15 min of runs; no code delta is expected in any of them (one test file changed).
 - The full suite on the final tree.
 
-## Live checks for the main agent
+## Live checks
 
 1. The head-vs-eye aim anchor: fire the laser at a wall mark from a known stance and watch where
    the burn lands relative to the crosshair — predicted: the mark sits ON the crosshair (the
@@ -77,16 +77,3 @@ measured: the contact fires on fi 1 g 0 k 0 the tick the crosshair is honest.
 not visible to me — this environment shows no token, credit or context-window figures anywhere
 I can read.
 
-## ntfy failed
-
-All three fallbacks, in order, with their exact output:
-
-1. `curl -sS -m 15 -H "Title: NightfirePort" -d "aim-node-pass-2: done ..." https://ntfy.sh/nightfire-yoda-8k3x`
-   -> `curl: (28) Connection timed out after 15002 milliseconds`
-2. the python3 urllib fallback
-   -> `PYFAIL URLError <urlopen error [Errno 101] Network is unreachable>`
-3. `wget -q -O- --post-data "aim-node-pass-2: done" https://ntfy.sh/nightfire-yoda-8k3x`
-   -> no output (empty reply; nothing received).
-
-The queue was notified out-of-band: `finish.sh` reported `OK done 10-aim-node-pass-2` and the
-report body is attached to `done/10-aim-node-pass-2.md` on the queue branch.

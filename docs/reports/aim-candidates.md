@@ -53,18 +53,12 @@ The five walkreal profiles are **identical to aim-finish's measured regression p
 3. The `Door.bullet_pass` f0-word experiment behind the 08 pins (step 4 of the task).
 4. Full four-crate suite before the final push.
 
-## Live checks for the main agent
+## Live checks
 
 1. **Dynamic list at the 1b console-shot moment** (the decisive one): when the walk reaches the console-1 stance (the shooter near x 20, head ≈ (20, -5.2, 0) aiming at the console), walk the dynamic object list (head 0x2705b4, next +0x14) and print every object's position (+0x80 sphere centre or +0x90·translation) within 5.0 of (38.74, -5.21, ±9.415), (25.72, -2.91, ±9.415), (25.72, -2.90, ±9.60), (25.95, -4.35, -11.37), (25.72, -2.90, -11.39). Expected if "not created yet": still nothing there; if "wrong pose": objects with those hashes at OTHER positions; if "kept apart": the objects there but absent from the cel+8 chains — also walk cel 26's +8 chain (the shooter's cel) and print its members' hashes.
 2. **Panel pickability**: for the panel object at (36.41, -6.36, -4.62) (class 0, f0 0x81): read `obj+0xD8` (glist) and `glist+8` — expected: either `glist+8 == 0` (no collision block → the aim ray can never stop on it, and the port's `shape()` for that hash is the bug) or non-zero (then the game's ray SHOULD stop on it and the 1b NULL needs a different explanation). Also read `obj+0xfa` (expect bit 0x8 clear for a placement object).
 3. **Aim ray return at the same stance**: repeat the 0x1a4d90 check from head (20, -5.2, 0) aimed at console 1's station — expected `hit = NULL` (the port's snap must then also be NULL after the fix).
 
-## ntfy failed
-
-All three fallbacks failed at 09:45 UTC:
-1. `curl -sS -m 20 -H "Title: NightfirePort" -d "aim-candidates: done — pre-filter 0x30000000 fixed+verified (6 aim binaries green, walk profile unchanged), candidate discriminator open, report+live checks pushed" https://ntfy.sh/nightfire-yoda-8k3x` → `curl: (28) Connection timed out after 20002 milliseconds`
-2. python urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
-3. `wget -q -O- --post-data "aim-candidates: done" https://ntfy.sh/nightfire-yoda-8k3x` → no output, killed by the 30 s command timeout (wget made no progress).
 
 ## Usage
 

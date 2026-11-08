@@ -106,7 +106,7 @@ obj+0xF0 answer plus the rocket steer test's re-calibration.
    a decompile citation this session did not produce; the port's real-path equipping
    (the model loads, o = the midpoint) already matches the live evidence.
 
-## Live checks for the main agent
+## Live checks
 
 - **07000014 doors** (gdbwatch on Control_CreateObjEx 0x1343c8:36): dump obj+0xF0 per door
   placement in the security-room + east-wing areas (and the 08 shutters 49-52, carried
@@ -128,16 +128,3 @@ obj+0xF0 answer plus the rocket steer test's re-calibration.
 not visible to me — this environment shows no token, credit, cost or context-window figures
 anywhere I can read.
 
-## ntfy failed
-
-All three fallbacks attempted in order; all failed (the same no-outbound-route pattern as
-the predecessor sessions):
-
-1. `curl -sS -m 20 -H "Title: NightfirePort" -d "aim-object-stage: …" https://ntfy.sh/nightfire-yoda-8k3x`
-   → `curl: (28) Connection timed out after 20001 milliseconds`
-2. `python3 urllib.request.urlopen(Request('https://ntfy.sh/nightfire-yoda-8k3x', …), timeout=20)`
-   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
-3. `wget -q -O /dev/null --post-data "aim-object-stage: done" https://ntfy.sh/nightfire-yoda-8k3x`
-   → killed by the hard 25 s timeout (rc 124), no output.
-
-The notification could not be delivered from this sandbox.

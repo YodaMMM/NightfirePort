@@ -128,7 +128,7 @@ instead of re-pinning twice.
    1b report's §3 levers).
 3. The full `nf-view` suite on a window with room for the walkreal set.
 
-## Live checks for the main agent
+## Live checks
 
 1. **The 14 kind-2 door at (32.0, 2.1, 35.8)** — in PCSX2, stand Bond just west of the jamb
    (30.7, 0.55, 35.2) and watch the door: does the GAME's door cycle open/closed the way the

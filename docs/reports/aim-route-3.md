@@ -117,7 +117,7 @@ swimmers in the 0.8-1.3 always-hit band).
    state-0 countdown; the disc-accurate 1/60 step (REC_FRAME_RATE) moves every deadline by
    seed·60 — re-pin the margins when that lands.
 
-## Live checks for the main agent
+## Live checks
 
 1. (carried from aim-route-finish) The 14 kind-2 door at (32.0, 2.1, 35.8): stand Bond west of
    the jamb (30.7, 0.55, 35.2) — does the GAME's door cycle open/closed the way the port's

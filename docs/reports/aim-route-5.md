@@ -91,7 +91,7 @@ a 0c-file-local pre-clear of #39/#20 with the file's own still-gate stand fn.
    1b-zero-g-floor §3; not attempted this window (the drakes walks consumed the priority).
 3. 07000014's three nav reds (the doorway waypoint, §3) — untouched, not this task's list.
 
-## Live checks for the main agent
+## Live checks
 
 1. **The m8 timeline gap (carried from missile-countdown-master)**: both branches now measure
    k8 latching ~1700 ticks PAST the P0_LEN model's +5999 branch read (aim: 8@10438 margin

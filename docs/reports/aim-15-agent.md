@@ -132,7 +132,7 @@ flag-checked newborn scan (both no-ops at the default `false`).
 4. The d3 (00 Agent) 15 walk stays ignored with its measured 132.3 budget — the pre-throw
    lever is available to it next round by widening the d2 gate.
 
-## Live checks for the main agent
+## Live checks
 
 1. **The 15 west-room throw cycle** (carried from aim-last-seven §3, still the ground truth
    behind the window): the d2 west-room grenadier pair — the tick of the release (the

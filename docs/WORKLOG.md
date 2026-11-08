@@ -10,7 +10,7 @@ spots above the panels. Cite the rule for the rocket's midpoint gate or leave it
 Strip the NF_AIMPROBE prints.
 
 Progress log:
-- Sandbox reused; branch pushed; both predecessor reports read.
+- Environment reused; branch pushed; both predecessor reports read.
 - The object stage built in aim_snap: sp_bullet_targets candidates, the built-sphere broad
   phase (0x133070's pair), the 0x201 posed-glist refine; the 0x94 & 0x20 skip confirmed in
   the decomp (0x1eb320:141-144) and left unmodeled ([S]).
@@ -265,7 +265,7 @@ Test-side only; the [L] 08 pins and the 0x30000000 fix stay. Finish with the aim
 walkreal 08 / 0c / 14 / 16 / 1b whole.
 
 Progress log:
-- Sandbox reset; fresh clone, branch cut, master merged, pushed.
+- Environment reset; fresh clone, branch cut, master merged, pushed.
 
 Progress log (continued):
 - The recipe built + the deadline instrumentation: `answered[pi]` counts SP_UnPause

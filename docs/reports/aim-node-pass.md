@@ -79,7 +79,7 @@ closed). Both keep their assertions; the routes are the only change.
 | interactables_07000014_live | not re-run in the window; the stage-tip number 9/1 stands (the same cut blocker) |
 | walkreal 08 / 0c / 14 / 16 / 1b | not run in the window. The sim delta vs the stage tip is the aim gate + the door stage (the 08 pair re-verified green above); the stage-report walkreal numbers (08 5/1, 0c 2/1/1, 14 6/3/1, 16 13/1/2, 1b 15/2/2) are the baseline the next session must re-quote |
 
-## Live checks for the main agent
+## Live checks
 
 1. **The shutter pass bit** (settles the door arm's replacement): during a live 08 straight
    rocket that passes the shutters, record (a) the shutter object's runtime `obj+0xF0`

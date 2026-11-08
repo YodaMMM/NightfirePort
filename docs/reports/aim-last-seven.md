@@ -142,7 +142,7 @@ this branch touches ran whole and is listed above.
 3. The 01 00agent: the hide-cycle live check / the lure stand.
 4. A full 4-crate suite run on a longer window.
 
-## Live checks for the main agent
+## Live checks
 
 1. **The 15 west-room throw cycle**: with the debugger, watch the d2 west-room grenadier #11
    (spawn spot (−1.87, 41.34, 77.42)) from its spawner release: the tick of its first
