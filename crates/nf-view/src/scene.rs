@@ -1195,6 +1195,15 @@ pub fn find_cel(cels: &[Cel], p: [f32; 3]) -> Option<usize> {
         best
 }
 
+/// The drawn matrix of a wire placement (type 0x3E). `Wire_Create` 0x1981d8 negates the
+/// placement rotation's z before `control_create_object` 0x1344e0 (param_4 == 0) builds `obj+0x90`
+/// with `View_RotTransMatrix` 0x1e5168, and `View_DrawObjectGlist` draws `obj+0xD8` at that matrix
+/// [M]. A tilted wire (07000008's OBJECT_Zip_Line_1, rot.z 0.2094 [D]) slopes the other way
+/// under the plain placement matrix; yaw-only wires (07000002/05) draw the same either way.
+pub fn wire_draw_matrix(p: &nf_formats::placement::Placement) -> [[f32; 4]; 4] {
+    nf_formats::placement::view_rot_trans_matrix([p.rotation[0], p.rotation[1], -p.rotation[2]], p.translation)
+}
+
 /// Squared distance from point `p` to the segment `a`-`b` — the game's 0x800 hittest's
 /// `dist(segment(h+0x20, h+0x30), obj_centre)` [M Collide_PickObj 0x1eae80:163].
 fn seg_point_dist2(a: &[f32; 3], b: &[f32; 3], p: &[f32; 3]) -> f32 {
@@ -9463,7 +9472,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     // wire glist never draws (none on the disc today; the census pins it). Ladders stay
                     // ungated: `Ladder_Create` 0x1966c0 stores only obj+0xD8 (0x19671c), never obj+0xF0.
                     if level.maps[map].objects[object].flags & 0x10 != 0 { continue; }
-                    let inst = Instance { map, object, matrix: nf_formats::placement::object_matrix(p.rotation, p.translation), placement: p.clone() };
+                    let inst = Instance { map, object, matrix: wire_draw_matrix(p), placement: p.clone() };
                     add_instance(level, &inst, Layer::World, None, &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
                 }
             }
