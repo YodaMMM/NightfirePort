@@ -1406,20 +1406,24 @@ pub struct Drone {
     /// `Drone+0xCDC`: the last zone the UPDATE acted on (4 = the ENTER value; the anim replays only
     /// on a change) [M 0x160648:63-103].
     pub door_zone_step: u32,
-    /// The ENTER ran `SetDronePartner` and the pairing pass has not serviced it yet. The game
-    /// pairs inside the ENTER [M 0x160648 case 1 → `SetDronePartner` 0x141360]; the port's
-    /// sequential drone loop cannot reach the partner mid-iteration (the borrow split), so the
-    /// pass services the request at the tick boundary — before the SECOND UPDATE, whose zone
-    /// arm is the first that acts. The one-UPDATE delay is the port's architecture, not a
-    /// guess about the game's rule.
-    pub door_pair_requested: bool,
-    /// audit-fix-door-guard-3: the pairing request is serviced only from the guard's first enabled
-    /// UPDATE in state 0x31 on (the deferral — see `door_guard_pass`'s block comment; the game
-    /// pairs inside the ENTER [M 0x160648 case 1 → 0x141360] and its first UPDATE already sees
-    /// the pair, while the port's first UPDATE sets this watch and the tick-boundary pass
-    /// consumes it — the borrow split again, not an unpinned rule). The 0x31
-    /// UPDATE arm sets this once; the pass consumes it with the request.
-    pub door_pair_watch: bool,
+    /// The ENTER ran `SetDronePartner` and the pairing pass has not serviced it yet: the frame of
+    /// that ENTER. The game pairs inside the ENTER [M 0x160648 case 1 → `SetDronePartner`
+    /// 0x141360]; the port's sequential drone loop cannot reach the partner mid-iteration (the
+    /// borrow split), so the pass services the request at the next tick boundary, in list order,
+    /// with the candidate set the game's scan had at the ENTER (see `post_load_frame`).
+    pub door_pair_requested: Option<u32>,
+    /// The frame of this drone's `NDrone2_PostLoad_Init` 0x14d890 (the port's first ENTER,
+    /// `started`). `Drone_PostLoad_Init` 0x136938 walks the drone list in creation order and runs
+    /// `DefaultInit` then `SM_InitObject` (the start-state ENTER) per drone [M 0x136938 loop,
+    /// 0x14d890:13-21]; a drone later in the list is still the zeroed `control_create_object`
+    /// block [M 0x1344e0:17 memset] — mode byte +0xC5 = 0 and no `+0x4F8 & 0x100` (DefaultInit
+    /// writes both: the flags at [M 0x14b300:60], the mode through DoModeSettingsNEW [M :501]),
+    /// so SetDronePartner's scan at a boot ENTER sees only the drones ahead of the caller
+    /// [M 0x141360:70-87].
+    pub post_load_frame: Option<u32>,
+    /// `Drone+0xC24`: the placement rotation's y [M Drone_Create 0x136be0:73-79], the 0x31 zone-0
+    /// watch facing (`+0x694 = +0xC24` [M 0x160648:99]).
+    pub watch_yaw: f32,
     /// fix-grenade-types: the LIVE player position, mirrored each tick (`Drones::tick`'s shared pass)
     /// — the stun loop's kept-down test is the game's live `DroneFunc_AnyoneNear` positional query
     /// [M 0x14a718 via 0x1631c0 case 0xc], not the cached opp `dist` (a stunned guard's perception
@@ -2129,8 +2133,8 @@ impl Drone {
             stun_until: 0, player_pos: [0.0; 3],
             stun_recover: 0,
             down: false,
-            door_partner: None, door_side: 0, door_planes: [[0.0; 4]; 3], door_zone: 0, door_idle_anim: 0x24, door_zone_step: 0, door_pair_requested: false,
-            door_pair_watch: false,
+            door_partner: None, door_side: 0, door_planes: [[0.0; 4]; 3], door_zone: 0, door_idle_anim: 0x24, door_zone_step: 0, door_pair_requested: None,
+            post_load_frame: None, watch_yaw: yaw,
             tase_accum: 0,
             tase_recover: 0,
             dart_recover: 0,
@@ -5037,7 +5041,7 @@ impl Drone {
             // return state 0x56, anim 0x24 with `+0xCD8 = 0x24`, `+0xCDC = 4`, and timer C at
             // frame + Rand(25)·FRAME_RATE_INT with the payload `+0xCC8 = 1`.
             (CIVILIAN_DOOR_GUARD, msg::ENTER) => {
-                self.door_pair_requested = true; // `NDrone2_SetDronePartner(0x16, dc)` [M 0x160694]
+                self.door_pair_requested = Some(frame); // `NDrone2_SetDronePartner(0x16, dc)` [M 0x160694]
                 self.vision_on = true;
                 self.return_state = ATTACK;
                 self.door_idle_anim = 0x24;
@@ -5052,15 +5056,8 @@ impl Drone {
             // UPDATE (case 3): an armed opponent within the game's gates → hostile; else the zone
             // dispatch (the zone itself is the pre-pass's `door_zone`). The game pairs ONLY in the
             // ENTER [M 0x160648:21 — SetDronePartner's sole call site]; this UPDATE never re-pairs
-            // or rebuilds planes, it consumes them [M 0x160648:38-105], and its zone-0 arm re-faces
-            // the watch yaw `+0x694 = +0xC24` every update [M :99 — the placement rotation's y,
-            // copied to the drone at creation, 0x136be0:73-79; not modelled yet]. audit-fix-door-
-            // guard-3: the port still defers the pairing to the first UPDATE after the ENTER ([S] —
-            // `door_guard_pass`'s block comment; the game's UPDATE delivery is ControlSTANDARD's
-            // unconditional self-send [M 0x1490f0:81 `Drone_SM_SendMsgSelf(3,…)', synchronous via
-            // 0x175a38:30-31], and the `+0x4F8 & 0x100` gate at :140-143 only truncates what follows).
+            // or rebuilds planes, it consumes them [M 0x160648:38-105].
             (CIVILIAN_DOOR_GUARD, msg::UPDATE) => {
-                self.door_pair_watch = true;
                 // `NDrone2_NearArmedPerson(20.0)` 0x1787c8 [M 0x160648:39 — the float 0x41a00000 is
                 // DEAD: no FPU instruction in the body, M-dis 0x1787c8-0x178898]. The real gate —
                 // on 09/0A prop 0x3c + the sight bit only [M 0x1787c8:13-23]; elsewhere voice 0xD
@@ -5099,27 +5096,34 @@ impl Drone {
                             self.door_zone_step = 2;
                             self.call_anim_variant(d, 0x5f, 1, 0, 0);
                             if self.door_side != 0xff {
-                                // DroneFunc_ChooseSFX(0x4f, 0x50) 0x1497e8: a + Rand(b − a) [M].
-                                let id = 0x4f + rng.rand(2) as u32;
-                                self.sfx_reqs.push((id, self.pos));
+                                // `DroneFunc_ChooseSFX(0x4f, 0x50)` 0x1497e8: a + Rand(b − a + 1)
+                                // [M], then `NDrone2_SpeechSFX(dc, line, 0, 1, 1)` — a speech-table
+                                // line, not a raw sound id [M 0x160648:78-79; 0x141b00].
+                                let line = 0x4f + rng.rand(2) as usize;
+                                self.speech_request(d, line, false, frame);
                             }
                         }
                         self.desired_yaw = self.yaw_to_opp;
                     }
                     // zone 3 (0x160648:89-94): the speech, the mission-fail reason 0xc, Attack.
                     3 => {
-                        let id = 0x8f + rng.rand(4) as u32;
-                        self.sfx_reqs.push((id, self.pos));
+                        // `ChooseSFX(0x8f, 0x92)` + `SpeechSFX(dc, line, 0, 1, 1)` [M 0x160648:89-91].
+                        let line = 0x8f + rng.rand(4) as usize;
+                        self.speech_request(d, line, false, frame);
                         self.fail_reason = Some(crate::ally::mission_fail_reason(0xc));
                         self.set_state(ATTACK);
                     }
-                    // zone 0 (0x160648:96-103): `+0x694 = +0xC24`; a step change replays the idle anim.
-                    _ => {
+                    // zone 0 (0x160648:96-103): `+0x694 = +0xC24` (back to the placement facing);
+                    // a step change replays the idle anim.
+                    0 => {
+                        self.desired_yaw = self.watch_yaw;
                         if self.door_zone_step != 0 {
                             self.door_zone_step = 0;
                             self.call_anim(d, self.door_idle_anim as u16, 0, 0);
                         }
                     }
+                    // 0xff (a mirror whose partner holds no planes): no arm [M 0x160648:86-87].
+                    _ => {}
                 }
                 true
             }
@@ -15087,33 +15091,21 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// `NDrone2_SetDronePartner` 0x141360 + `NDrone2_DoorGuardHandler` 0x1416d8, run as a tick
     /// pre-pass over the CivilianDoorGuard (0x31) guards. The game pairs inside the ENTER and
     /// reads the zone inside the 0x31 UPDATE [M 0x160694, 0x160814]; the port's `handle` lacks
-    /// the list access the two need.
+    /// the list access the two need, so the pass services each ENTER's request at the next tick
+    /// boundary, in list order, with the candidate set the game's scan had at that ENTER.
     ///
-    /// audit-fix-door-guard-3 — the pairing deferral ([S] pending the live check): on 07000007 the
-    /// four hall bouncers (placements 404/417/441/442, `p3 = 0` — no watch channel [D]) boot enabled
-    /// into 0x31 at their placement facings (10/19 ≈ 3.14 south, 28/29 ≈ −1.54 west [D]); a
-    /// spawn-time pairing runs the decomp-exact scans at those facings and cascades (10→19 stale,
-    /// 19↔29, 29↔28 — door_guard_live pins the graph), leaving guard 10 the 10↔19 build whose
-    /// normal points SOUTH — Bond crossing the pair's z-line at the hall door reads zone 3 (the
-    /// intrusion arm, 0x160648:89-94) and the walk-in plate never fires. The game's own walk works,
-    /// so its SetDronePartner cannot run at the spawn facings for this pair. The boot chain is
-    /// decomp-proven down to the ENTER (DefaultInit 0x14b300 → DoModeSettingsNEW 0x14c600 →
-    /// GetDroneTypeAttackTypeFriend 0x14cbd8:104 `+0x5A2 = row start 0x31`; SM_InitObject 0x175838:23
-    /// ENTERs GLOBAL; GLOBAL's ENTER 0x15b830 `SetState(obj+0x5A2)`; no +0x554 start script for
-    /// `p1 = 0x6000000` [M 0x14b300:611-613]) — every static turn source for an unpaired 0x31 guard
-    /// (the zone arms need a partner; the idle danims 282/329/344 carry no end-turn flags [L tables])
-    /// is ruled out, so WHAT establishes the game's pairing-time watch facing is not derivable
-    /// statically. The port therefore defers the request (set at the ENTER [M 0x160694]) to the
-    /// guard's first enabled UPDATE in state 0x31 (`door_pair_watch`; the game's own per-tick UPDATE
-    /// dispatch is the unconditional self-send [M 0x1490f0:81 — the `+0x4F8 & 0x100` gate at
-    /// :140-143 only truncates what follows]) and evaluates the decomp's own watch test at that
-    /// UPDATE: a caller
-    /// whose standing facing fails `Vec_AngleDifference(yaw, atan2(dir)) < 0` [M 0x141360:121-123]
-    /// — the spawn facing, not a watch facing — pairs at the watch facing across the pair axis (the
-    /// IF outcome: planes on the partner, normal toward the watched approach; on 07000007 the 10↔19
-    /// build lands on 417 pointing NORTH and Bond reads the challenge band, not the intrusion arm).
-    /// [S] the deferral's timing and the watch-facing re-establishment both await the live check
-    /// (771b's: the bouncers' +0x2BC/+0x2CC/+0x54 at the pairing instant, fresh boot).
+    /// The boot candidate set: the level-start ENTER is `SM_InitObject` inside
+    /// `NDrone2_PostLoad_Init`, which `Drone_PostLoad_Init` 0x136938 runs drone by drone down the
+    /// creation-ordered list (`LList_Add` appends at the tail [M 0x1cca28]; the drones are
+    /// created in placement order). A drone further down is still the zeroed create block
+    /// [M control_create_object 0x1344e0:17] — mode +0xC5 = 0 and no `+0x4F8 & 0x100` until its
+    /// own `DefaultInit` [M 0x14b300:60, 501] — so the scan [M 0x141360:70-87] sees only the
+    /// drones ahead of the caller. On 07000007 (list order 404, 417, 441, 442): 404 finds no one;
+    /// 417 pairs 404 — diff = atan2(417→404) − yaw(417) ≈ 1.59 − 3.11 < 0, so 417 holds 0xff and
+    /// the planes go on 404 with the normal toward the hall [M 0x141360:121-150]; 441 finds both
+    /// claimed; 442 pairs 441 the same way (planes on 441, normal west). The old port let every
+    /// drone be a candidate at boot, which chained 404→417→442↔441 and left 404 and 417 both
+    /// 0xff mirrors of mirrors: the library pair never spoke or failed the mission.
     fn door_guard_pass(&mut self, d: &Data, player: &Player) {
         // ---- SetDronePartner(kind 0x16, dc) [M 0x141360] ----
         // Candidates: drones of the same mode (+0xC5 == 0x16 — the caller passes 0x16), enabled
@@ -15127,13 +15119,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `+0x2CC = 0xff`... the OTHER's — see below), and `plane_from_two_vectors_and_point`
         // 0x1e4498 builds three planes on the evaluating guard.
         for i in 0..self.list.len() {
-            let (requested, watch, mode, my_yaw, my_pos) = {
+            let (requested, mode, my_yaw, my_pos) = {
                 let dr = &self.list[i];
-                (dr.door_pair_requested, dr.door_pair_watch, dr.mode, dr.yaw, dr.pos)
+                (dr.door_pair_requested, dr.mode, dr.yaw, dr.pos)
             };
-            if !requested || !watch { continue; }
-            self.list[i].door_pair_requested = false;
-            self.list[i].door_pair_watch = false;
+            let Some(req_frame) = requested else { continue };
+            self.list[i].door_pair_requested = None;
             let mut best: Option<(usize, f32)> = None;
             for j in 0..self.list.len() {
                 if j == i { continue; }
@@ -15143,6 +15134,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if o.mode != mode || o.mode != 0x16 { continue; }
                 if !o.present || o.corpse || !o.enabled || o.health <= 0.0 { continue; }
                 if o.door_partner.is_some() { continue; }
+                // Initialised before the caller's ENTER (the struct doc above): an earlier frame,
+                // or the same PostLoad pass and ahead in the list.
+                if !o.post_load_frame.is_some_and(|f| f < req_frame || (f == req_frame && j < i)) { continue; }
                 // The HEIGHT gate [M 0x141360:90 `ABS(me+0x34 − cand+0x34) < 2.0` — +0x34 is
                 // position Y on both sides; see the block comment above. The old port read here
                 // pinned a yaw gate — the daily audit 2026-10-17 correction.]
@@ -15169,13 +15163,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if len > 1e-9 { [dx / len, dy / len, dz / len] } else { [0.0, 0.0, 1.0] }
             };
             let diff = angle_difference(my_yaw, atan2_approx(dir[0], dir[2])); // [M 0x141360:121 — this one IS Vec_AngleDifference]
-            // [S] the watch-facing re-establishment (the block comment above): at the deferred
-            // pairing a caller whose standing facing fails the decomp's own watch test (diff ≥ 0 —
-            // the spawn facing, not a watch facing) pairs at the watch facing ACROSS the pair axis:
-            // the IF outcome (planes on the partner, v0 = −dir). The ELSE branch below stays for
-            // the in-ENTER pairing the game runs [M 0x160694] if the deferral is lifted.
-            let watch_across = diff >= 0.0;
-            let (evaluator, anchor, other, neg) = if diff < 0.0 || watch_across {
+            let (evaluator, anchor, other, neg) = if diff < 0.0 {
                 self.list[i].door_side = 0xff;
                 (j, self.list[j].pos, self.list[i].pos, -1.0)
             } else {
@@ -21117,7 +21105,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // `NDrone2_DoorIsOpen` (0x14aaa0) refreshed for this tick: no door in the way → open;
             // else the door's obj+0xF4 == 4.
             dr.hit_door_open = dr.hit_door.map_or(true, |i| self.doors.list[i].state == crate::door::OPEN);
-            if !dr.started { dr.started = true; dr.send(d, rng, frame, msg::ENTER); dr.entered = frame; dr.log.push((frame, dr.state)); }
+            if !dr.started { dr.started = true; dr.post_load_frame = Some(frame); dr.send(d, rng, frame, msg::ENTER); dr.entered = frame; dr.log.push((frame, dr.state)); }
             if let Some(t) = dr.timer_c { if frame >= t { if std::env::var("TASE_DBG").is_ok() { eprintln!("[dbg] timer_c fires frame {} drone {} state {}", frame, index, dr.state); } dr.timer_c = None; dr.send(d, rng, frame, msg::TIMER_C); } }
             if let Some(t) = dr.timer_d { if frame >= t { dr.timer_d = None; dr.send(d, rng, frame, msg::TIMER_D); } }
             if let Some(t) = dr.idle_timeout { if frame >= t { dr.idle_timeout = None; dr.send(d, rng, frame, msg::IDLE_TIMEOUT); } }
@@ -23574,8 +23562,8 @@ mod tests {
             stun_until: 0, player_pos: [0.0; 3],
             stun_recover: 0,
             down: false,
-            door_partner: None, door_side: 0, door_planes: [[0.0; 4]; 3], door_zone: 0, door_idle_anim: 0x24, door_zone_step: 0, door_pair_requested: false,
-            door_pair_watch: false,
+            door_partner: None, door_side: 0, door_planes: [[0.0; 4]; 3], door_zone: 0, door_idle_anim: 0x24, door_zone_step: 0, door_pair_requested: None,
+            post_load_frame: None, watch_yaw: 0.0,
             tase_accum: 0,
             tase_recover: 0,
             dart_recover: 0,

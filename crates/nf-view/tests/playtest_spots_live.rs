@@ -10,6 +10,9 @@
 //!
 //! The object positions are the disc placements ([D]) the cited tests already assert against.
 
+#[path = "common/reveal07.rs"]
+mod reveal07;
+
 use nf_game::player::{Bond, Input};
 use nf_game::triggers::kind;
 use nf_game::world::V3;
@@ -437,6 +440,9 @@ fn spots_07000007_kimiko_trigger_fires() {
     let mut scene = nf_view::load(&iso, "07000007.bin", false).expect("load 07000007");
     let sim = scene.sim.as_mut().unwrap();
     free(sim);
+    // The real order: Drake's reveal takes the library door pair off first (their zone-3 band
+    // covers this plate before ch 21).
+    reveal07::drakes_reveal(sim);
     // The trigger's own box centre, from the parse [D #412].
     let trig = sim.drones.triggers.iter().find(|t| t.kind == kind::TOUCH_ONCE && u32::from(t.out) == 0x48)
         .expect("the ch-0x48 TouchOnce #412 parses [D]");
