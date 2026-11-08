@@ -6,3 +6,7 @@ Reproduce on the real level first through real input, not a teleport. Compare wi
 
 ---
 claimed-by: sandbox5 at 2026-11-08T22:49Z
+
+---
+## Report (done, 2026-11-08T23:16Z)
+
