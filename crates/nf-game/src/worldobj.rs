@@ -451,8 +451,8 @@ impl WorldObjects {
     /// The placement scan (`p.flags & 0xff` kinds 0x41 / 0xd2 / 0x3b / 0xe7). `path_blocks` is the
     /// main map's 0x19 key-list payloads (`m_paths`), indexed by the placement's +0x44 word.
     /// `glist` resolves the placement's object to its glist's +0x44 draw-flags word (the word
-    /// `DynamicObject_Create` copies to obj+0xF0) and its sphere centre (`celglist+0x20..+0x2C`,
-    /// docs/fields/glist.md) — the world sphere obj+0x80 the fade reads starts at the matrix
+    /// `DynamicObject_Create` copies to obj+0xF0), its sphere centre (`celglist+0x20..+0x2C`,
+    /// docs/fields/glist.md) and its collision shape key — the world sphere obj+0x80 the fade reads starts at the matrix
     /// translation + the glist centre (0x1336f8 pass 6 rebuilds it from the same two).
     pub fn create(
         placements: &[nf_formats::placement::Placement],

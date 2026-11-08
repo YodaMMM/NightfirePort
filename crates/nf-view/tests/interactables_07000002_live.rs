@@ -578,7 +578,6 @@ fn the_electrocute_volume_hurts_only_once_the_arc_chain_runs() {
             sim.bond.pos = [cx, mid_y, cz];
             sim.bond.prev_pos = sim.bond.pos;
             sim.bond.vel = [0.0; 3];
-            sim.bond.fall_speed = 0.0;
             sim.bond.grounded = false;
         }
         w.wait_enabled(600, "the bunker chat hold");

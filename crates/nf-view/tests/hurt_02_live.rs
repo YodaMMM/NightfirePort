@@ -67,7 +67,6 @@ fn the_electrocute_volume_hurts_once_the_cable_light_smash_feeds_the_chain() {
         sim.bond.prev_pos = sim.bond.pos;
         // The gap is open below: zero the accumulated fall so Bond stays in the box's band.
         sim.bond.vel = [0.0; 3];
-        sim.bond.fall_speed = 0.0;
         sim.bond.grounded = false;
     };
     let tick_in_box = |w: &mut Walker, y: f32| {
@@ -105,7 +104,6 @@ fn the_electrocute_volume_hurts_once_the_cable_light_smash_feeds_the_chain() {
         sim.bond.pos = [cx + (hi[0] - lo[0]) + 2.5, mid_y, cz];
         sim.bond.prev_pos = sim.bond.pos;
         sim.bond.vel = [0.0; 3];
-        sim.bond.fall_speed = 0.0;
         w.wait_enabled(600, "the bunker chat hold");
         w.wait(1);
     }

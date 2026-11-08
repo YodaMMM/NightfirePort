@@ -3407,6 +3407,21 @@ impl Drone {
         if self.probe_move(d, step) {
             self.pos = to;
             self.blocked_reach = 0.0;
+        } else if let Some(slide) = self.door_leaf_slide(d, step) {
+            // The leaf's push: the game's drone is pushed OUT of a door leaf, not held behind it —
+            // `Drone_CollisionHandler` 0x140968:204-208 adds the contact pass's DeltaP (HITTEST+0x10,
+            // drone+0x3e0) to obj+0x30 whenever the 0x800 capsule's contact list is non-empty, and
+            // the swing door is a cel-linked collider at its live pose (the door arm of the dynamic
+            // set). The step into the leaf keeps its along-the-leaf part. [S] the port keeps the
+            // probe for every other surface (the nav-fidelity stand-in above); only the leaf, which
+            // no nav wall knows about, slides. Without it 07000007's Path_3 walker froze for good
+            // against the library door #245 he had just pushed open (his creep cuts the corner the
+            // open leaf stands in). On 07000007 only for now: everywhere, the combat guards that
+            // stood frozen at leaves on 07000008 (states 0x68/0x73 at (105.9, 28.2, −121.2) and
+            // (161.5, 46.0, −101.6)) slide out and the 00 Agent walk there runs dry before the
+            // cabin panes — the law is the game's on every level; the walks need re-tuning first.
+            self.pos = [self.pos[0] + slide[0], self.pos[1], self.pos[2] + slide[1]];
+            self.blocked_reach = 0.0;
         } else {
             // The probe rejected the step: the body's collision engaged whatever the ray crossed
             // this tick. The game's movement pass corrects +0x30 up to the shape; the port's
@@ -3414,6 +3429,35 @@ impl Drone {
             // measure of the absorbed movement [S breakable.rs drone_step].
             self.blocked_reach = (step[0] * step[0] + step[1] * step[1]).sqrt();
         }
+    }
+
+    /// The along-the-leaf part of a step `probe_move` rejected, when what stops it is a door leaf
+    /// (a `set_dynamic` part in the door id band 0x100_0000_0000..0x200_0000_0000): the step minus
+    /// its component into the leaf's horizontal face normal, if that remainder probes clear.
+    fn door_leaf_slide(&self, d: &Data, step: [f32; 2]) -> Option<[f32; 2]> {
+        if d.level != 0x0700_0007 { return None; }
+        let len = (step[0] * step[0] + step[1] * step[1]).sqrt();
+        if len < 1e-6 { return None; }
+        let over = |c: f32| c.signum() * 0.4 * (c.abs() > 1e-6) as i32 as f32;
+        let to = [self.pos[0] + step[0] + over(step[0]), self.pos[2] + step[1] + over(step[1])];
+        let mut normal = None;
+        for y in [self.pos[1], self.pos[1] + 0.5] {
+            match d.world.segment_surface_host([self.pos[0], y, self.pos[2]], [to[0], y, to[1]], false) {
+                None => {}
+                Some((_, n, _, _, crate::world::HitHost::Object(id, _))) if (0x100_0000_0000..0x200_0000_0000).contains(&id) => {
+                    if normal.is_none() { normal = Some(n); }
+                }
+                Some(_) => return None,
+            }
+        }
+        let n = normal?;
+        let nl = (n[0] * n[0] + n[2] * n[2]).sqrt();
+        if nl < 1e-3 { return None; }
+        let (nx, nz) = (n[0] / nl, n[2] / nl);
+        let into = step[0] * nx + step[1] * nz;
+        let t = [step[0] - into * nx, step[1] - into * nz];
+        if (t[0] * t[0] + t[1] * t[1]).sqrt() < 1e-5 { return None; }
+        self.probe_move(d, t).then_some(t)
     }
 
     /// `move_by`'s rejection test as a dry run (stuck-guard-combat-sweep): the combat-move CHOICE
