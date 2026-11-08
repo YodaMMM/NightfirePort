@@ -18516,7 +18516,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // — its opponent is the drone-list walk's pick (docs/systems/ally-heard-noise.md §1).
             let (team2_picks, team2_cursors) = self.team2_opponent_picks(d);
             for (i, dr) in self.list.iter_mut().enumerate().filter(|(_, x)| x.present) {
-                dr.light = light; dr.opponent_info(player); dr.player_pos = player.pos; if vision_open { dr.seen = false; } dr.bond_armed = armed; dr.stat_ok = stat_ok;
+                // `Drone_GetOpponentInfo` 0x138f68:16-18 returns at once unless `+0x4F8 & 0x100`
+                // (the port's `enabled`; `NDrone2_Enable` 0x149dd0 clears it with the 0xffe7fe5f
+                // mask, sets it with 0x801a0): a WaitSwitch drone keeps the distance (`+0x1a0`) and
+                // bearing it last had, so on release `NDrone2_DSTATE_Attack` 0x164210:71-87 reads
+                // the stale distance in its engage-range pick (0x58 vs 0x67). The aim point stays
+                // live (the `opp_target` fold is SetOpponentAimPos', not this function's).
+                if dr.enabled { dr.opponent_info(player); } else { dr.opp_target = player.target; }
+                dr.light = light; dr.player_pos = player.pos; if vision_open { dr.seen = false; } dr.bond_armed = armed; dr.stat_ok = stat_ok;
                 if dr.team == 2 {
                     // Apply the pick: the guard feeds the opponent-derived fields; no pick is
                     // `SetOpponent(0)` — the aim offset zeroes (the aim position degenerates to
