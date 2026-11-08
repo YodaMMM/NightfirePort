@@ -34,9 +34,7 @@ fn the_intro_and_story_scenes_play_their_scripted_lines() {
             for c in sim.drones.audio.take_commands() {
                 if let Cmd::Start { id, .. } = c { starts.push((t, id)); }
             }
-            // `UpdateMFX_02MayhewD` 0x112bf8 eats the trigger the tick it lands: its first 0x172
-            // shows as the marker-3 jump [M :50-55].
-            if music_trigger_at.is_none() && sim.drones.music.last_request == 3 {
+            if music_trigger_at.is_none() && sim.drones.music.out.contains(&nf_game::music::Cmd::Jump { section: 3, instant: true }) {
                 music_trigger_at = Some(t);
             }
             for ((h, s), _, _) in sim.drones.script_sounds.iter().filter(|((h, _), _, _)| *h == 0x0600_0082) {
@@ -61,5 +59,5 @@ fn the_intro_and_story_scenes_play_their_scripted_lines() {
         "the story's first line lands ≈500 + 43 (the scene starts when the intro writes ch 0x38 [D stream 6]), got tick {:?}", first.first());
     // The NIS music (0x172 @546 [D stream 6]) — the trigger for the level's music updater [M].
     assert!(!started(0x172).is_empty(), "the NIS music 0x172 starts [D stream 6]");
-    assert!(music_trigger_at.is_some(), "the 0x172 start sets the NIS music trigger and the score jumps marker 3 [M SFXStart 0x115a68; 0x112bf8:50-55]");
+    assert!(music_trigger_at.is_some(), "the 0x172 start sets the NIS music trigger and the level updater jumps on it [M SFXStart 0x115a68; 0x112bf8:46-59]");
 }
