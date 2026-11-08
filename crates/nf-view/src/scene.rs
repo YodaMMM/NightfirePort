@@ -11836,7 +11836,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 Some(q) => q.matrix,
                 // `Break_Kill` 0x12b970: obj+0xFE bit 0 → the delete pass removes the object [M].
                 None => match brk(k) {
-                    Some(b) => if b.dead { FAR } else { b.matrix },
+                    Some(b) => if b.dead || b.draw_hidden { FAR } else { b.matrix },
                     None => self.lock_slot(s, k).unwrap_or(FAR),
                 },
             },
@@ -12193,7 +12193,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 if let Some(q) = s.drones.sss.list.get(dr as usize - s.drones.doors.list.len()) { return transform(&q.matrix, v.pos); }
                 // Past the SSs: the breakables (`Breaks::create` order) — gone once `Break_Kill` 0x12b970 ran.
                 let bi = dr as usize - s.drones.doors.list.len() - s.drones.sss.list.len();
-                if let Some(b) = s.drones.breaks.list.get(bi) { if b.dead { return [0.0, -10000.0, 0.0]; } return transform(&b.matrix, v.pos); }
+                if let Some(b) = s.drones.breaks.list.get(bi) { if b.dead || b.draw_hidden { return [0.0, -10000.0, 0.0]; } return transform(&b.matrix, v.pos); }
                 // Past the breakables: the locks' placed object / LOD variant pairs.
                 let Some(m) = self.lock_slot(s, dr as usize) else { return [0.0, -10000.0, 0.0]; };
                 return transform(&m, v.pos);
