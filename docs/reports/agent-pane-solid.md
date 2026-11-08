@@ -40,8 +40,18 @@ This moves the shared random stream: every level with kind-2 panes runs a new ti
   stopped short of the plane while the pane is whole, and crawls through once it is killed. 2/0.
   With `PANE_RIDE = false` the first test fails: Bond reaches z 0.31, through the live pane.
 - dead_pane_live: both ignores removed, 2/0.
-- walkreal_07000001_live 8/0 (the run before the impact restore; the batch re-run is below).
-- RESULTS
+- On the final code: walkreal 01 8/0, 02 3/0 (1 ignored), 06 6/0 (1 ignored), 07 6/0, 08 6/0,
+  09 8/0, 0a 13/0 (2 ignored), 12 3/0, 13 3/0, 41 15/0. glass_pass_every_level_live 3/0
+  (3 ignored, as before). interact_07000001_live 10/0. dead_pane_live 2/0. pane_solid_06_live 2/0.
+- RED: walkreal_07000003_live is 5/1. The Agent real-damage walk dies at tick 106206 at
+  (22.9, 12.5) to #5's shotgun. Master passes it, so the cause is the shifted timeline: there is
+  no pane at the death spot. It is not fixed here.
+- RED: walkreal_07000014_live is 4/5. Its west route steps from the computer room's machine floor
+  down to the corridor at x 30.4, z 34.9, which is straight through CompRoom1Window (placement 97:
+  kind 2, health 1, x 30.62..31.27, z 30.8..35.68, y 1.34..2.97). The window is solid now, so Bond
+  is stopped. Its filter 0xffdf passes only weapon words 0 and 0x20, so the walk's guns cannot
+  break it either. The route needs the game's own way round: the south loop the file's notes name
+  (nav nodes 94-97/150/591-600), or a breaking weapon. Not done here.
 
 ## Unproven / open
 
