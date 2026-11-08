@@ -653,7 +653,6 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage_agent() {
 /// 21-63 self-cost) — the grenade lever is dead against lip-covered strips. Round 2's ledger
 /// lives in docs/reports/real-health-00agent-11-2.md.
 #[test]
-#[ignore = "the guards now close to their real 6-9 range and the fills arrive together: the measured run dies at tick 2358 at (18.09, 48.63, 17.66), the waiting-room doorway, 10 hits for 100.0 with #1 and #2 at d 2.7-3.9; the fights' stands were laid for guards holding 12+ off"]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage_00agent() {
     walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||

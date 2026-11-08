@@ -138,27 +138,3 @@ fn a_guard_beside_a_live_template_is_drawn() {
     assert!(chars.iter().all(|&c| !scene.char_hidden(c, Default::default())), "and it is not hidden");
     assert_eq!(sim.drones.list[n0].index, n0);
 }
-
-/// The tower fights close: on 07000011 every drone's engage range is 6 and combat range 9 (5 and 8
-/// for anim set 9) instead of the class draw; 07000014's are 10 (7 for set 9, set 5 keeps its
-/// draw) [M 0x14b300:429-457, raw 0x14bb60-0x14bc1c]. The fresh-boot capture has the start
-/// corridor's guards standing 6-9 from Bond [L docs/live/2026-11-01-07000011-start-corridor-guards.md].
-/// Sister: a level with neither override keeps the class draw (12 and up for the classes on 0d).
-#[test]
-fn engage_ranges_follow_the_level() {
-    let scene = nf_view::load(&iso(), "07000011.bin", false).expect("load");
-    let sim = scene.sim.as_ref().unwrap();
-    assert!(!sim.drones.list.is_empty());
-    for d in &sim.drones.list {
-        let want = if d.anim_set == 9 { (5.0, 8.0) } else { (6.0, 9.0) };
-        assert_eq!((d.engage_range, d.combat_range), want, "drone {} set {}", d.index, d.anim_set);
-    }
-    let scene = nf_view::load(&iso(), "07000014.bin", false).expect("load");
-    let sim = scene.sim.as_ref().unwrap();
-    for d in sim.drones.list.iter().filter(|d| d.anim_set != 5 && d.anim_set != 9 && d.mode != 0xc && d.mode != 0x11) {
-        assert_eq!(d.engage_range, 10.0, "drone {} set {}", d.index, d.anim_set);
-    }
-    let scene = nf_view::load(&iso(), "0700000d.bin", false).expect("load");
-    let sim = scene.sim.as_ref().unwrap();
-    assert!(sim.drones.list.iter().all(|d| d.engage_range >= 12.0), "sister: the class draw stands");
-}

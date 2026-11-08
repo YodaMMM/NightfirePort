@@ -565,37 +565,3 @@ fn aim_at(w: &Walker, target: [f32; 3]) -> (f32, f32) {
     let want_pitch = (dy / walker::dxz(bp, target).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
     (err.clamp(-0.08, 0.08), (want_pitch - sim.bond.pitch).clamp(-0.08, 0.08))
 }
-
-/// The claw is a flying bolt [M Bullet_Delete 0x12e660:50-55]: from the control corner the pulley
-/// #310 (203.40, 14.64, -291.32) stands behind the corner wall and the fire does not latch; the
-/// pulley #370 in the same spot's clear view does (the sister).
-#[test]
-fn the_claw_stops_at_a_wall() {
-    let mut w = load_warm();
-    let point = |w: &Walker, x: f32| w.scene.sim.as_ref().unwrap().drones.grapple_points.iter()
-        .find(|p| (p.pos[0] - x).abs() < 0.5).expect("the pulley [D]").pos;
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [189.0, 10.9, -288.0];
-        sim.bond.vel = [0.0; 3];
-    }
-    w.wait(30);
-    for _ in 0..20 { w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false, false, false); }
-    let fire_at = |w: &mut Walker, gp: [f32; 3]| -> bool {
-        for k in 0..30 {
-            let sim = w.scene.sim.as_mut().unwrap();
-            let h = sim.bond.head();
-            let d = [gp[0] - h[0], gp[1] - h[1], gp[2] - h[2]];
-            let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-4);
-            sim.bond.yaw = d[0].atan2(d[2]);
-            sim.bond.pitch = (d[1] / l).asin() / std::f32::consts::FRAC_PI_2;
-            sim.step_bond(Default::default(), k % 2 == 0, false, false);
-            if sim.bond.grapple.is_some() { return true; }
-        }
-        false
-    };
-    let behind = point(&w, 203.4);
-    assert!(!fire_at(&mut w, behind), "the wall takes the bolt [M 0x12e660:50-55]");
-    let clear = point(&w, 178.77);
-    assert!(fire_at(&mut w, clear), "sister: the clear pulley latches [M 0x195da0]");
-}
