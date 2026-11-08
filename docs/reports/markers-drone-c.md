@@ -121,3 +121,12 @@ Not run (what's left):
 ## Usage
 
 not visible to me (no token/context-window/cost figures are exposed in this sandbox session; the subagents used in the first session reported their own internal token counts, which are not this session's).
+
+## ntfy failed
+
+All three channels failed in order (2026-11-08 ~19:57 UTC):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "markers-drone-c: ..." https://ntfy.sh/nightfire-yoda-8k3x` → `curl: (28) Connection timed out after 20000 milliseconds`
+2. python3 urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>` (after `OSError: [Errno 101] Network is unreachable` in socket.connect)
+3. `wget -q -O- --post-data "..." --timeout=20 https://ntfy.sh/nightfire-yoda-8k3x` → exit code 4 (network failure), empty output
+
+ntfy.sh is unreachable from this sandbox (github.com and the copyparty mirror worked all session; ntfy.sh specifically does not). The completion signal for the driver is therefore this report file + the queue entry (done/20-markers-drone-c.md with the report attached and pushed).
