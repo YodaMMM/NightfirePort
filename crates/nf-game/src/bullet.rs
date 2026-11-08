@@ -153,6 +153,9 @@ pub enum BulletEvent {
     /// the bullet's line to the camera, only for weapons with `+0x6C & 0x40000`, in single player, when the bullet's
     /// owner is not the player, within 3 units, on a 1-in-5 `Rand_Rand(5)` roll [M `Bullet_DoTrails`@0x12d890].
     FlyBy(V3),
+    /// The round died on a solid dynamic object (a breakable) nearer than the world and Bond —
+    /// the contact itself is the `update_objs` caller's.
+    Object(V3),
 }
 
 /// Bond's hit volume: an upright cylinder from his feet to above his eye (*deviation*: the game tests 16 boxes on
@@ -222,6 +225,17 @@ impl Bullet {
     /// direction for max(step, 1) units; the nearest of world and Bond wins; ranged-out bullets die.
     /// `viewer`: the camera eye (`glb_viewer + 0xc0`), for the `Bullet_DoTrails` fly-by test [M].
     pub fn update(&mut self, world: &CollisionWorld, player: &PlayerVolume, viewer: V3, rng: &mut crate::drone::Rng) -> Option<BulletEvent> {
+        self.update_objs(world, player, viewer, rng, &mut |_, _, _| None)
+    }
+
+    /// `update` with the round's dynamic-object contacts (the breakables): `objects(a, b, limit)`
+    /// sees this tick's flight segment and the fraction of the nearest world/Bond stop (`limit`,
+    /// 1.0+ when none), records the contacts it takes, and returns the fraction of a SOLID object
+    /// hit nearer than `limit` — the round then dies on it (`BulletEvent::Object`) [M Collide_Update
+    /// 0x1ea398:216-229 — one sorted contact list, the first solid node ends the walk; Bullet_update
+    /// 0x12e7b0:388-443 arms the same pick for every round, the owner never read].
+    pub fn update_objs(&mut self, world: &CollisionWorld, player: &PlayerVolume, viewer: V3, rng: &mut crate::drone::Rng,
+                       objects: &mut dyn FnMut(V3, V3, f32) -> Option<f32>) -> Option<BulletEvent> {
         if self.state >= 2 { return None; }
         if self.travelled > self.range { self.state = 2; return None; }
         let mut step = if self.state == 0 { (rng.frand(0.5) + 0.5) * self.speed } else { self.speed };
@@ -248,7 +262,10 @@ impl Bullet {
         let tp = segment_cylinder(self.pos, end, player);
         let at = |t: f32| [self.pos[0] + (end[0] - self.pos[0]) * t, self.pos[1] + (end[1] - self.pos[1]) * t, self.pos[2] + (end[2] - self.pos[2]) * t];
         // CompHitData 0x1d33c0 [M] — QuickSort comparator id 2 (Collide_Update 0x1ea398 / Collide_RayIntersect 0x1ec690 / Collide_SphereIntersect 0x1ec940 / Collide_CylinderIntersect 0x1ecc00 / Collide_FilterBullets 0x1ece30 sort their hit lists by the f32 at HITDATA+0xc, ascending); the port keeps no hit list — the nearest-of comparison below replaces the sort.
+        let limit = tw.into_iter().chain(tp).fold(f32::INFINITY, f32::min);
+        let to = objects(self.pos, end, limit);
         let ev = match (tw, tp) {
+            _ if to.is_some_and(|o| o < limit) => Some(BulletEvent::Object(at(to.unwrap()))),
             (Some(w), Some(p)) if p < w => Some(BulletEvent::Player { damage: self.damage, at: at(p) }),
             (_, Some(p)) if tw.is_none() => Some(BulletEvent::Player { damage: self.damage, at: at(p) }),
             (Some(w), _) => Some(BulletEvent::World(at(w))),

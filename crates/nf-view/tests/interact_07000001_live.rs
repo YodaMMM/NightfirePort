@@ -183,8 +183,13 @@ fn bullets_shatter_the_glass_and_vases_and_the_sister_stays_whole() {
     past_intro(&mut w2);
     let s2 = w2.scene.sim.as_ref().unwrap();
     // The opening Yakuza's dive shatters the hall window #130 on its own [L 2026-10-26, PCSX2 frame 2175];
+    // a guard's round breaks what it crosses (guard-breakables [M 0x12bfd8:15-37 — no owner test]);
     // everything else nobody shot stays whole.
-    assert!(s2.drones.breaks.list.iter().filter(|b| b.placement != 130).all(|b| !b.dead), "unshot scenery stays whole (the sister)");
+    let guard = &s2.drones.guard_break_kills;
+    let stray: Vec<usize> = s2.drones.breaks.list.iter()
+        .filter(|b| b.dead && b.placement != 130 && !guard.contains(&b.placement))
+        .map(|b| b.placement).collect();
+    assert!(stray.is_empty(), "unshot scenery stays whole (the sister), broke {stray:?}");
 }
 
 #[test]

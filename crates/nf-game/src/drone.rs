@@ -12789,6 +12789,9 @@ pub struct Drones {
     /// The breakable kills this tick (`(placement, kind, sound)` — `Break_Kill` 0x12b970's
     /// observable outputs; the view consumes them for the shatter/debris + sound presentation).
     pub break_kills: Vec<(usize, u8, u16)>,
+    /// The placements a guard's round killed (guard-breakables) — the subset of `break_kills`
+    /// whose contact was a drone-fired round.
+    pub guard_break_kills: Vec<usize>,
     mission_inited: bool,
     /// The mission layer's events this tick (`Text_AddMsg` types 2/3, the FailLabel writes, the
     /// level-end/reset decisions) — drained by the view each tick.
@@ -13159,7 +13162,7 @@ impl Drones {
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
             bond_door_skip: false, // the boot value latches at the Mission_Init site (Player_Init 0x1910f8's write)
-            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
+            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), bullet_paths: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), guard_break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             bullet_contacts_now: Vec::new(),
             bullet_contacts_prev: Vec::new(),
             space_laser_beams: Vec::new(),
@@ -21346,8 +21349,72 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 tick_charge_fuse(&d.weapons, b, &mut self.pending_blasts, &mut self.pending_beeps, &mut self.rng);
                 continue;
             }
-            if let Some(ev) = b.update(d.world, &vol, viewer, &mut self.rng) {
+            // guard-breakables: a guard's round takes the breakables its flight crosses, exactly
+            // as Bond's do. `Bullet_update` 0x12e7b0:388-443 arms the same HITTEST pick for every
+            // round (the owner is never read), `Collide_Update` 0x1ea398:216-229 sorts the one
+            // contact list and ends the walk on the first solid node, and `Break_Update` 0x12bfd8:
+            // 15-37 drains every class-5 contact that survives `Collide_FilterBullets(filter |
+            // 0x106)` [M 0x1ece30:24-33] — no owner test on either side. The drain is the round's
+            // HITTEST+0x90 (`bullet_contact_damage`, the record word [M 0x12e7b0:391-416]). A
+            // kind-2 pane passes a gun without `+0x6C & 0x800` (the handler's glass arm [M
+            // 0x12ce80 — `(+0x50 & 0x3f) == 0x10` under the `+0x6c & 0x800` gate]): drained, the
+            // round flies on; every other breakable is solid and the round dies on it [M
+            // 0x12cff0-4]. Online the shared world pass owns the breakables (see the player walk).
+            let weapon_word = d.weapons.records.get(b.weapon as usize).map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
+            let pane_pass = d.weapons.records.get(b.weapon as usize)
+                .is_some_and(|w| u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0);
+            let mut break_contacts: Vec<(usize, V3, V3)> = Vec::new();
+            let net_world = self.net_bodies.is_some();
+            let breaks_list = &self.breaks.list;
+            let mut objects = |a: V3, e: V3, limit: f32| -> Option<f32> {
+                if net_world { return None; }
+                let mut solid: Option<(f32, usize)> = None;
+                let mut passed: Vec<(f32, usize)> = Vec::new();
+                for (i, br) in breaks_list.iter().enumerate().filter(|(_, x)| !x.dead) {
+                    if weapon_word & (br.filter | 0x106) != 0 { continue; }
+                    let Some(t) = crate::breakable::Breaks::seg_box_t(a, e, br.lo, br.hi) else { continue };
+                    if br.kind == 2 && pane_pass { passed.push((t, i)); }
+                    else if solid.is_none_or(|(st, _)| t < st) { solid = Some((t, i)); }
+                }
+                // The walk's end: the nearest solid node — world, Bond or a solid breakable. The
+                // box entry precedes any point inside the box, so a breakable whose own mesh is the
+                // world stop still wins at `t <= limit`.
+                let stop = solid.filter(|(t, _)| *t <= limit);
+                let end_t = stop.map_or(limit, |(t, _)| t);
+                passed.sort_by(|x, y| x.0.total_cmp(&y.0));
+                for (t, i) in passed { if t <= end_t { break_contacts.push((i, a, e)); } }
+                if let Some((_, i)) = stop { break_contacts.push((i, a, e)); }
+                stop.map(|(t, _)| t)
+            };
+            let ev_in = b.update_objs(d.world, &vol, viewer, &mut self.rng, &mut objects);
+            for (i, a, e) in break_contacts {
+                let dmg = d.weapons.bullet_contact_damage(b.weapon);
+                let br = &mut self.breaks.list[i];
+                if br.dead { continue; }
+                br.health -= dmg;
+                if br.health < 0.0 {
+                    // The plain kill: a guard round's hitdata fails `Drone_BrokenObject`'s
+                    // player-weapon-system gate before any draw [M 0x1385ec-0x1385f4].
+                    if let Some(k) = self.breaks.kill(i, a, e, &mut self.rng) {
+                        self.break_kills.push((k.placement, k.kind, k.sound));
+                        self.guard_break_kills.push(k.placement);
+                        if let Some(o) = k.script_obj {
+                            if let Some(slot) = self.scripts.objects.list.get_mut(o) { *slot = None; }
+                        }
+                        // Break_Kill 0x12b970:69,75 — the kill sound at obj+0x80 (see the player walk).
+                        let id = u32::from(k.sound);
+                        self.audio.play3d(id, k.pos, None);
+                        if let Some(t) = d.sfx {
+                            let en = t.get(id);
+                            if !en.looped { self.sounds.push(Sound { id, pos: k.pos, inner: en.inner, outer: en.outer, weight: en.weight }); }
+                        }
+                    }
+                }
+            }
+            if let Some(ev) = ev_in {
                 match ev {
+                    // The round died on a solid breakable (drained above).
+                    crate::bullet::BulletEvent::Object(_) => {}
                     crate::bullet::BulletEvent::World(p) => {
                         // The satchel charge LANDS instead of dying [M Bullet_CollisionHandler
                         // 0x12ce80 @0x12d1fc]: family +0x02 == 0x3b, the `+0x70 & 0x100` arm,
