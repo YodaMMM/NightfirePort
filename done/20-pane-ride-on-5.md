@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox7 at 2026-11-08T11:19Z
+
+---
+## Report (done, 2026-11-08T12:31Z)
+
+Closed by the driver: the report is on `s/pane-ride-on-5` (docs/reports/pane-ride-on-5.md); the worker didn't run finish.sh.
