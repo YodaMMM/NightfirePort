@@ -43,6 +43,37 @@ impl Moving {
         if at >= self.geo.objects.len() || !std::ptr::eq(&self.geo.objects[at], o) { return None; }
         (self.movers.get(at)?.0 & PANE_PART != 0).then(|| self.flags.get(at).copied().unwrap_or(0))
     }
+
+    /// The object's index in `geo.objects` (the `pane_flags` pointer arithmetic, shared).
+    fn obj_index(&self, o: &Object) -> Option<usize> {
+        let base = self.geo.objects.as_ptr() as usize;
+        let at = (o as *const Object as usize).checked_sub(base)? / std::mem::size_of::<Object>();
+        (at < self.geo.objects.len() && std::ptr::eq(&self.geo.objects[at], o)).then_some(at)
+    }
+
+    /// The masked walks' per-object admission pair, index-aligned with `geo.objects`: the part's
+    /// `obj+0xF0` word — `Collide_PickObj` 0x1eae80:70-82 tests it on EVERY picked object (the
+    /// base 0x20 plus 0x1000/0x40/0x10 against query-mask 0x20/8/4) — and its `obj+0xFF` class
+    /// byte for the :83-87 type arms (0x400 rejects 3/0x12, 0x100 rejects 2/0x11, 0x200 rejects 5).
+    /// The word: the placement's `glist+0x44` rides the object through `Control_SetGList`
+    /// 0x134960:11-12 [M — Door_Create 0x136100:71 calls it; the script-entity glist link lands
+    /// there too]; a DynObject's live hide bit (obj+0xF0 bit 0x10, the 0x1af618:58/0x1db808:27
+    /// hide writers) rides the id as `SIGHT_THROUGH_PART`. RB_Create writes obj+0xD8 directly
+    /// [M 0x1d6bf0:52] and never links through Control_SetGList, so a rigid body's word is 0.
+    fn pick_pair(&self, n: usize) -> (u32, u8) {
+        let Some(&(id, _, _)) = self.last_objects.get(n) else { return (0, 0) };
+        let glist = if id & 0x800_0000_0000 != 0 { 0 }
+            else { self.flags.get(n).copied().unwrap_or(0) | if id & SIGHT_THROUGH_PART != 0 { 0x10 } else { 0 } };
+        // [M] pane 0x20 Break_Create 0x12c230:17; rigid body 0x1a RB_Create 0x1d6bf0:49; door
+        // 0x1c Door_Create 0x136100:62; DynamicObject 0x52 DynamicObject_Create 0x18dbf8:22.
+        // Script entities' class is not modeled [S] — 0, which the :83-87 arms never reject.
+        let class = if id & PANE_PART != 0 { 0x20 }
+            else if id & 0x800_0000_0000 != 0 { 0x1a }
+            else if id & 0x100_0000_0000 != 0 { 0x1c }
+            else if id & 0x1000_0000_0000 != 0 { 0x52 }
+            else { 0 };
+        (glist, class)
+    }
 }
 
 /// How the ground under a point moved over the last tick (`Control_InheritVelocity` 0x133e88): the translation, the
@@ -61,18 +92,24 @@ pub const LOS_SENSOR: u32 = 0xe; // Sensor_InCone 0x1af4f0:84-86 / Check_AutoAim
 pub const LOS_TURRET_TRACK: u32 = 0x72f; // GT_Track 0x17f9c8:258 — the target scan's per-candidate `Collide_LineOfSight(from, cand+0x80, level, obj, cand, 0x72f)` filter (already includes the wrapper's | 4)
 /// The drop-BIT math is the game's, proven: `pick_admits` is `Collide_PickObj` 0x1eae80:72-82
 /// word-for-word and `surface_kept` is `Collide_Intersect` 0x1ebaa8:300-319 (verified
-/// bit-by-bit against the decompile, markers-world-objects 2026-11-08). What is NOT ported is
-/// the APPLICATION ENVELOPE around them [S], which is what broke the walks when the gate was
-/// opened: (1) the game tests the obj+0xF0 skip word of EVERY picked object [M 0x1eae80:82],
-/// the port consults `pick_admits` only for pane parts; (2) the type-byte arms [M 0x1eae80:83-87]
+/// bit-by-bit against the decompile, markers-world-objects 2026-11-08). The APPLICATION
+/// ENVELOPE around them is ported (los-mask-envelope 2026-11-08) into every masked walk, in the
+/// game's order: (1) the obj+0xF0 skip word of EVERY picked object [M 0x1eae80:82 — the dynamic
+/// part's word is `Moving::pick_pair`'s: the placement glist+0x44 through Control_SetGList
+/// 0x134960:11-12, the live hide bit 0x10 riding the id]; (2) the type-byte arms [M 0x1eae80:83-87]
 /// (0x100 rejects obj+0xFF 2/0x11, 0x200 rejects 5, 0x400 rejects 3/0x12 — 0x72f therefore
-/// ignores every body-class object) are unmodeled; (3) `los_walk` ignores `SIGHT_THROUGH_PART`
-/// (mask bit 4 skips glist-0x10 objects, 0x1eae80:79-81); (4) dynamic non-pane parts carry no
-/// obj-pass drop under mask bit 0x8; (5) the subject exclusions (HITTEST+0x74/0x78, 0x1eae80:57-59)
-/// reach only `line_of_sight_excluding`. The envelope work is the porting TODO; the gate stays
-/// off until then (with them on today, guard cover, turret shots and several real-path walks
-/// broke — the measured record of the envelope gaps above).
-pub const LOS_MASKS_ON: bool = false;
+/// ignores every body-class object; the port's part classes: pane 0x20 [M 0x12c230:17], rigid
+/// body 0x1a [M 0x1d6bf0:49], door 0x1c [M 0x136100:62], DynamicObject 0x52 [M 0x18dbf8:22] —
+/// none of them in the rejected sets, the arms are carried for the envelope); (3)
+/// `SIGHT_THROUGH_PART` reaches `pick_admits` (mask bit 4 skips glist-0x10 objects,
+/// 0x1eae80:79-81); (4) the obj-pass drop under mask bit 0x8 reaches the dynamic non-pane parts
+/// through the same word (`Collide_Intersect` 0x1ebaa8:93-99 flags the hit, :317 discards it);
+/// (5) the subject exclusions (HITTEST+0x74/0x78, 0x1eae80:57-59) stay on
+/// `line_of_sight_excluding`'s exclude_hashes — the game's other masked callers' subjects (the
+/// seer/target pair DroneVision_CanSeeObjectFrom 0x176f18:69-70, the corona+player pair
+/// Searchlight_Update 0x1cb900:338-340, the pickup Pickup_Update 0x18e148:212-214) are vacuous
+/// in the port: no body object poses into the dynamic set.
+pub const LOS_MASKS_ON: bool = true;
 
 /// The body queries' HITTEST+0x98: zero. Bond's walk writes it to 0 on every substate but the
 /// zipline [M Player_Collision 0x194df0:88, :382], a guard's to 0 every tick [M NDrone2_Collision
@@ -3127,10 +3164,16 @@ impl CollisionWorld {
         {
             let g = &dynamic.geo;
             for o in along(g, a, b) {
+                // The same object admission as `los_walk` (`Collide_PickObj` 0x1eae80:57-87).
+                let (glist_obj, class_obj) = dynamic.obj_index(o).map(|n| dynamic.pick_pair(n)).unwrap_or((0, 0));
+                if !pick_admits(mask, glist_obj) { continue; }
+                if mask & 0x400 != 0 && (class_obj == 3 || class_obj == 0x12) { continue; }
+                if mask & 0x100 != 0 && (class_obj == 2 || class_obj == 0x11) { continue; }
+                if mask & 0x200 != 0 && class_obj == 5 { continue; }
                 for k in o.tris.clone() {
                     let m = g.mats[k];
                     let low = m & 0x3f;
-                    if drop_node && (g.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                    if drop_node && (glist_obj & 0x40 != 0 || g.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
                     if drop_surface && m & 0x40 != 0 { continue; }
                     if drop_de && (low == 0xd || low == 0xe) { continue; }
                     if drop_10 && low == 0x10 { continue; }
@@ -3191,15 +3234,30 @@ impl CollisionWorld {
         let sets: [Option<&Geo>; 3] = [Some(&self.stat), (!skip_cage).then_some(&self.missile), Some(&dynamic.geo)];
         for g in sets.into_iter().flatten() {
             let dyn_set = std::ptr::eq(g as *const Geo, &dynamic.geo as *const Geo);
+            let missile_set = !dyn_set && std::ptr::eq(g as *const Geo, &self.missile as *const Geo);
             for o in along(g, a, b) {
-                let pane = dynamic.pane_flags(o);
-                if pane.is_some_and(|fl| !pick_admits(mask, fl)) { continue; }
+                // The object admission of `Collide_PickObj` 0x1eae80, the game's order: :57-59 the
+                // ray's subject objects never block (the exclude_hashes above); :70-82 the obj+0xF0
+                // skip word of EVERY picked object (the dynamic parts' pair from `pick_pair`; the
+                // missile cage's 0x1000-flagged node word, skipped when mask 0x20 — the same rule
+                // the set gate above applies; the static node walk carries no word); :83-87 the
+                // type-byte arms.
+                let (glist_obj, class_obj) = if dyn_set {
+                    dynamic.obj_index(o).map(|n| dynamic.pick_pair(n)).unwrap_or((0, 0))
+                } else if missile_set { (0x1000, 0) } else { (0, 0) };
                 if dyn_set && exclude_starts.contains(&o.tris.start) { continue; }
+                if !pick_admits(mask, glist_obj) { continue; }
+                if mask & 0x400 != 0 && (class_obj == 3 || class_obj == 0x12) { continue; }
+                if mask & 0x100 != 0 && (class_obj == 2 || class_obj == 0x11) { continue; }
+                if mask & 0x200 != 0 && class_obj == 5 { continue; }
                 for k in o.tris.clone() {
                     let m = g.mats[k];
                     let low = m & 0x3f;
-                    // A pane's stored pass flag is the ray sets' stand-in, not its glist's.
-                    if drop_node && (pane.map_or(g.pass[k], |fl| fl & 0x40 != 0) || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                    // `Collide_Intersect` 0x1ebaa8:300-319: the 0x8 arm's object word — the
+                    // glist's bit 0x40 (:93-99 flags the hit, :317 discards it) — rides
+                    // `glist_obj` for the dynamic parts; the static node walk keeps its
+                    // per-triangle node-pass model.
+                    if drop_node && (glist_obj & 0x40 != 0 || g.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
                     if drop_surface && m & 0x40 != 0 { continue; }
                     if drop_de && (low == 0xd || low == 0xe) { continue; }
                     if drop_10 && low == 0x10 { continue; }
@@ -3234,14 +3292,21 @@ impl CollisionWorld {
         let sets: [Option<&Geo>; 3] = [Some(&self.stat), (!skip_cage).then_some(&self.missile), Some(&dynamic.geo)];
         let mut best = None::<f32>;
         for g in sets.into_iter().flatten() {
+            let dyn_set = std::ptr::eq(g as *const Geo, &dynamic.geo as *const Geo);
+            let missile_set = !dyn_set && std::ptr::eq(g as *const Geo, &self.missile as *const Geo);
             for o in along(g, a, b) {
-                let pane = dynamic.pane_flags(o);
-                if pane.is_some_and(|fl| !pick_admits(mask, fl)) { continue; }
+                // The same object admission as `los_walk` (`Collide_PickObj` 0x1eae80:57-87).
+                let (glist_obj, class_obj) = if dyn_set {
+                    dynamic.obj_index(o).map(|n| dynamic.pick_pair(n)).unwrap_or((0, 0))
+                } else if missile_set { (0x1000, 0) } else { (0, 0) };
+                if !pick_admits(mask, glist_obj) { continue; }
+                if mask & 0x400 != 0 && (class_obj == 3 || class_obj == 0x12) { continue; }
+                if mask & 0x100 != 0 && (class_obj == 2 || class_obj == 0x11) { continue; }
+                if mask & 0x200 != 0 && class_obj == 5 { continue; }
                 for k in o.tris.clone() {
                     let m = g.mats[k];
                     let low = m & 0x3f;
-                    // A pane's stored pass flag is the ray sets' stand-in, not its glist's.
-                    if drop_node && (pane.map_or(g.pass[k], |fl| fl & 0x40 != 0) || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                    if drop_node && (glist_obj & 0x40 != 0 || g.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
                     if drop_surface && m & 0x40 != 0 { continue; }
                     if drop_de && (low == 0xd || low == 0xe) { continue; }
                     if drop_10 && low == 0x10 { continue; }
@@ -3888,7 +3953,6 @@ mod tests {
     /// :317-319 drops the hit when the mask's bit 0x8 sees that bit] — the earlier "but NOT
     /// surface-0x40" here was the TEST's misread, fixed 2026-11-08 markers-world-objects).
     #[test]
-    #[ignore = "LOS_MASKS_ON is off until the masks keep guard cover and the 08 escort green"]
     fn line_of_sight_applies_the_callers_game_mask() {
         let face = |m: u8| [[2.0, 0.0, -1.0], [2.0, 2.0, 1.0], [2.0, 2.0, -1.0]];
         // A surface-0x40 card between the endpoints: BOTH caller masks see through it — guard
