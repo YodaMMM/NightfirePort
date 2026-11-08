@@ -14108,6 +14108,36 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
     }
 
+    /// `Player_WeaponInitBullet` 0x1a4bf0:154-163's aim trace: `Collide_RayIntersect(head,
+    /// aiming point, Bond's cel, Bond, 0, &list, 0, 0x20a)` (0x208 for `+0x6C & 0x800`); a hit
+    /// moves the aiming point onto it, and the round's direction is re-aimed at that point from
+    /// its own start [M :226-245]. The mask has no 0x10, so `Collide_Pick` 0x1eb320:313-330 runs
+    /// `Collide_PickObj` over the straddled cels' objects as well as the map nodes, and bit 0x8
+    /// drops the pass-flagged nodes (`segment_bullet`). The port's object candidates: the drones'
+    /// posed boxes (the flight pass's volume) and the script objects' glist triangles. Returns
+    /// the fraction along `from → to` of the first hit.
+    pub fn aim_trace(&self, d: &Data, from: V3, to: V3) -> Option<f32> {
+        let mut best = d.world.segment_bullet_scoped(d.world.find_cel(from), from, to);
+        let ray = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+        if self.npc_enabled || self.hold_active {
+            for dr in &self.list {
+                if !dr.present || !dr.enabled || dr.corpse { continue; }
+                if seg_point_dist2(from, to, dr.pos) > 1.05 * 1.05 * 4.0 { continue; }
+                if let Some((_, t)) = crate::damage::first_box_hit(from, ray, &dr.hit_boxes(d)) {
+                    if best.is_none_or(|b| t < b) { best = Some(t); }
+                }
+            }
+        }
+        for (_, c, r, mesh) in self.scripts.sp_bullet_targets(d) {
+            let Some((hash, m)) = mesh else { continue };
+            if !Self::segment_hits_sphere(from, to, c, r) { continue; }
+            if let Some(t) = d.world.shape(hash).and_then(|tris| Self::segment_posed_mesh_t(&m, tris, from, to)) {
+                if best.is_none_or(|b| t < b) { best = Some(t); }
+            }
+        }
+        best
+    }
+
     pub fn fire_player(&mut self, d: &Data, from: V3, dir: V3, weapon: u8, sound: nf_formats::sfx::SfxHearing) {
         let Some(w) = d.weapons.records.get(weapon as usize) else { return };
         // [M Bullet_init 0x12c5a0:285-291]: a weapon whose ammo type (+0x90 byte) is 0x0e — the

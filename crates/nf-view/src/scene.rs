@@ -5393,7 +5393,13 @@ impl Sim {
                             match (fp_model && !excluded && !zoomed_scope && flags68 & 0x10000 != 0).then(|| self.view_datum(0)).flatten() {
                                 Some(d0) => {
                                     let o = [(camera[0] + d0[0]) * 0.5, (camera[1] + d0[1]) * 0.5, (camera[2] + d0[2]) * 0.5];
-                                    let aim_pt = [camera[0] + dir[0] * 256.0, camera[1] + dir[1] * 256.0, camera[2] + dir[2] * 256.0];
+                                    let far = [camera[0] + dir[0] * 256.0, camera[1] + dir[1] * 256.0, camera[2] + dir[2] * 256.0];
+                                    // The aim trace [M 0x1a4bf0:154-163]: the head-to-aiming-point
+                                    // ray's first hit becomes the aim, so the round leaving the
+                                    // gun converges on what the crosshair covers (0700001b: it
+                                    // rises from below the eye over the panel row's rim).
+                                    let aim_pt = self.drones.aim_trace(&d, camera, far)
+                                        .map_or(far, |t| [camera[0] + (far[0] - camera[0]) * t, camera[1] + (far[1] - camera[1]) * t, camera[2] + (far[2] - camera[2]) * t]);
                                     let v = [aim_pt[0] - o[0], aim_pt[1] - o[1], aim_pt[2] - o[2]];
                                     let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
                                     (o, [v[0] / l, v[1] / l, v[2] / l])
