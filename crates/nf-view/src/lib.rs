@@ -5435,6 +5435,13 @@ impl App {
                                     // the key arms night sight on every on-foot level and then cycles
                                     // 1 → 2 → 0. The catch-all key arm lands V in `just`.
                                     goggles_action: self.just.remove(&KeyCode::KeyV),
+                                    // The keypad page's lanes on the keyboard, held levels (the
+                                    // sim runs the action machine). [S] the key choice: Enter and
+                                    // Backspace as the front end's; Escape pauses a mission.
+                                    keypad_confirm: self.keys.contains(&KeyCode::Enter),
+                                    keypad_back: self.keys.contains(&KeyCode::Backspace),
+                                    keypad_nav: [(KeyCode::ArrowUp, KeyCode::KeyW, 1u8), (KeyCode::ArrowDown, KeyCode::KeyS, 2), (KeyCode::ArrowLeft, KeyCode::KeyA, 4), (KeyCode::ArrowRight, KeyCode::KeyD, 8)]
+                                        .iter().fold(0, |m, &(a, b, bit)| if self.keys.contains(&a) || self.keys.contains(&b) { m | bit } else { m }),
                                 };
                                 (input, self.trigger, self.just.remove(&KeyCode::KeyR), self.just.remove(&KeyCode::KeyE))
                             };

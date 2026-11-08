@@ -81,8 +81,13 @@ impl TickInput {
             // (local view input; a replayed run holds the recorded zoom as it was recorded).
             zoom_cycle: 0,
             zoom_axis: 0.0,
-        
+
         goggles_action: false,
+        // keypad-entry: the page's lanes are live input (the replay format
+        // predates the keypad page; no recording carries them).
+        keypad_confirm: false,
+        keypad_back: false,
+        keypad_nav: 0,
     };
         (input, self.trigger, self.reload, self.use_key)
     }

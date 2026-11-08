@@ -419,8 +419,8 @@ pub struct Inventory {
     /// `Bullet_init` 0x12c5a0 reads the same pair for the spread and `HUD_UpdateAmmoPane` 0x19a7f0
     /// picks the label `weapon_data[w]+0x30 + mode·4` with it.
     pub fire_mode: Vec<u8>,
-    /// `+0x70C + id`: key flags (`Player_EquipKey` 0x1a97a0 writes 1; never read back in the code
-    /// studied — the switch channels carry the effect) [M]. Indexed by the pickup's key id.
+    /// `+0x70C + id`: key flags (`Player_EquipKey` 0x1a97a0 writes 1; `Lock_Activate` 0x1aed00:19
+    /// reads them) [M]. Indexed by the pickup's key id, or by a lock's record u16[1].
     pub keys: Vec<bool>,
 }
 

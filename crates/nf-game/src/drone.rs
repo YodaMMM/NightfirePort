@@ -12967,6 +12967,11 @@ pub struct Drones {
     /// the lock pass (the match fires `Lock_Unlock` 0x1b0650 → the hold loop's channel). `None`
     /// = no keypad open (the game's state 0/1/2/5 locks refuse the E).
     pub keypad: Option<(usize, crate::lock::Keypad)>,
+    /// The view draws the keypad page. While this is false the page takes no input and Bond
+    /// stays free, because a page nobody can see must not hold the player; the page's draw sets
+    /// it true (`Sim::step_bond` then gives the pad to the page, the game's `+0x94a = 0`
+    /// [M 0x1ae3d8 case 3, 0x193600:80-87]). Nothing sets it yet.
+    pub keypad_page_drawn: bool,
     /// hind-flight-pin: the game's `attackmode_159` global [M Copter_Update 0x17dbb8:184] —
     /// `Rand_Rand(10)` on every case-2 entry, the missile/gun pick reads `& 1`. One word shared
     /// by every copter, like the game's.
@@ -13294,6 +13299,7 @@ impl Drones {
             // override with the snapshot's own table [L].
             key_codes: crate::lock::KeyCodes::init(&mut Rng::new(0x1b0548), 0),
             keypad: None,
+            keypad_page_drawn: false,
             // subtitles-do-spoken: `Snd2Lbl` (0x2d25d8) rows (label | 0x80000000 always-show,
             // sound id) and `SFXOutputData[id]+0x10` seconds — `Sound_DoSubtitle` 0x1dde58's data,
             // attached by the host from ACTION.ELF (`attach_snd2lbl`); empty = no spoken subtitles.
@@ -13387,6 +13393,44 @@ impl Drones {
     /// The armed keypad's display (the menu's label control text) — for tests/renders.
     pub fn keypad_display(&self) -> Option<String> {
         self.keypad.as_ref().map(|(_, kp)| kp.display())
+    }
+
+    /// The digit the page cursor stands on.
+    pub fn keypad_focus_digit(&self) -> Option<u32> {
+        self.keypad.as_ref().map(|(_, kp)| kp.focus_digit())
+    }
+
+    /// One tick of the armed keypad page's input, in the frame's order. `MenuManager_Update`
+    /// reads the close first and returns [M 0x21c3d8:77-105]: `Menu_PlaySound(8)` (sample 0x1d9,
+    /// flag 8 is on for this page [M 0x1f3278 case 8; `Menu_EnableSounds` 0x1f31f0 default 9]),
+    /// then `MenuManager_Monitor` deletes the manager on the same action [M 0x21d508:29-37; the
+    /// order, `Game_Run` 0x1c9790:13-14] and the lock's case 4 reads it gone. Then the steps
+    /// (`step`: `Menu_FindControl` over the digit rects, which live in the view). Then
+    /// `Page_Update` sees the control change and plays `Menu_PlaySound(7)` = 0x1da once, however
+    /// many directions fired [M 0x21edc8:32-52]; a press that finds no control is silent. Last
+    /// the focused button reads the select, so a step and a press on one frame type the new
+    /// digit: `Menu_PlaySound(0)` = 0x1da, msg 0x4b [M 0x1ef948:74,105-107]. The □ and ○ arms
+    /// send 0x5d/0x5e, which the handler ignores, under sound flags 2 and 4, which this page
+    /// has off, so they do nothing and have no lane.
+    pub fn keypad_page_input(&mut self, input: &crate::player::Input, step: impl Fn(usize, u8) -> usize) {
+        let Some((_, kp)) = self.keypad.as_mut() else { return };
+        let e = kp.edges(input.keypad_nav, input.keypad_confirm, input.keypad_back);
+        if e.back {
+            self.audio.play(0x1d9);
+            kp.close();
+            return;
+        }
+        let from = kp.focus;
+        for bit in crate::lock::KEYPAD_NAV_ORDER {
+            if e.nav & bit != 0 { kp.focus = step(kp.focus, bit); }
+        }
+        if kp.focus != from { self.audio.play(0x1da); }
+        if e.confirm {
+            kp.select();
+            self.audio.play(0x1da);
+        } else if e.confirm_repeat {
+            self.audio.play(0x1da);
+        }
     }
 
     /// mayhew-end-transition: one tick of the exit hold — the fade counts down (the game advances
@@ -18345,8 +18389,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // lock [D]) —
         // the out channel lands ON the solve tick (the port's framelist fold — the game's write
         // is case 1's, one tick later [M :192-196]; see the solve branch below). The page closed
-        // without a match → state 0, re-armable (the Keypad::close arm — the view owns the
-        // close; the sim keeps the page until solved).
+        // without a match (the back edge — keypad_page_input) → the manager gone, state := 0,
+        // re-armable [M 0x1ae3d8:292-295].
         if let Some((li, kp)) = self.keypad.as_mut() {
             if kp.tick() {
                 // The unlock sound `Sound_Play3D(record u16[2])` [M 0x1ae3d8:282-283]: placement
@@ -18365,6 +18409,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 self.locks[*li].burned = true;
                 if self.locks[*li].out != 0 { self.channels.set(self.locks[*li].out as u32, 1, frame); }
                 self.locks[*li].equip_pending = true;
+                self.keypad = None;
+            } else if !kp.open {
+                // The page closed without a match (the back edge): the game's case-4 else-arm
+                // reads the manager gone → `+0x94a = 1`, state := 0 — re-armable [M
+                // 0x1ae3d8:292-295]. The port drops the page; the next use re-arms (the arm
+                // gate skips only the lock with a page standing).
                 self.keypad = None;
             }
         }
