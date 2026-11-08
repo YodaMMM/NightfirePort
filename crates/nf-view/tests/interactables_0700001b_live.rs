@@ -636,12 +636,12 @@ fn the_launch_order_and_the_disarm_speech_fire_the_pit_klaxons() {
         max_concurrent = max_concurrent.max(now_playing);
     }
     let unrisen = (0..5).filter(|k| rose_at[*k].is_none()).map(|k| chans[k]).collect::<Vec<_>>();
-    assert_eq!(unrisen, vec![0x4c, 0x4d, 0x4e],
-        "0x4f/0x50 rise off their condition-cold chains [D P2_WRITES + the decode]; 0x4c/0x4d/0x4e \
-         are the armed-missile warnings — every console ON silences them (the live sisters)");
-    let rose = rose_at.map(|r| r);
-    assert!(rose[3].unwrap() < rose[4].unwrap(),
-        "0x4f (SP#154's t1560) lands before 0x50 (SP#155's t3000) [D P2_WRITES], got {rose:?}");
+    // SP#155 (0x50's script) waits on the AND #150 [ch 0x56 & 0x58] = m6's and m8's disarm
+    // writes [D the p2 scripts' t1 events]; m8 stays armed here, so 0x50 never rises. (The
+    // tables once wrote ch 86/88 from m4/m6 at t930/t730; those writes are the Apocalypse
+    // latches 0x86/0x88 [D].)
+    assert_eq!(unrisen, vec![0x4c, 0x4d, 0x4e, 0x50],
+        "0x4f rises off its condition-cold chain [D P2_WRITES + the decode]; 0x4c/0x4d/0x4e are the armed-missile warnings, every console ON silences them (the live sisters)");
     // aim-route-4: the disc timeline moved the klaxon rises (0x4f at ~+5761, 0x50 at ~+9730)
     // and the fail (m8's ch 99 ~+7001) opens the menu at ~+7301 — between them. The port's
     // fail-menu pause gates the TRIGGER pass (the mux and the sound triggers stop evaluating —
@@ -665,7 +665,7 @@ fn the_launch_order_and_the_disarm_speech_fire_the_pit_klaxons() {
         for c in [0x4cu32, 0x4d, 0x4e] {
             assert!(!sim.drones.channels.on(c), "sister: ch {c:#x} never rose");
         }
-        for c in [0x4fu32, 0x50] {
+        for c in [0x4fu32] {
             assert!(sim.drones.channels.on(c),
                 "ch {c:#x} latches — no disc script writes it 0 [D the script decode]");
         }
