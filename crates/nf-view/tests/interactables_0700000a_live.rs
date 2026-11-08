@@ -316,6 +316,86 @@ fn laser_web_crossing_fires_the_alert_channel() {
         "crossing beam #607 fired its out channel ch 0x1F [D triggers dump]");
 }
 
+/// The Q-Worm fires only at a free PC under the crosshair, inside the gadget's 2.0 reach
+/// [M Player_WeaponFiring 0x1a5460:531-545]. The target is `Check_Target` 0x1a7810's ray: the
+/// first object of the hit list must be the PC, its own mesh crossed [M Collide_Intersect
+/// 0x1ebaa8's 0x201 arm → Intersect_RayGeom 0x10a8c8]; inside the PC's world sphere but off the
+/// mesh is no target. Four aims: along the band (nothing), inside the sphere off the mesh, on the
+/// mesh from 2.18 out (past the reach), on the mesh from the stand (fires).
+#[test]
+fn the_qworm_fires_only_at_the_pc_mesh_in_reach() {
+    let mut w = load();
+    let stand = [-16.8, 1.2, -34.0];
+    let far_stand = [-16.5, 1.2, -34.3];
+    teleport(&mut w, stand);
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.drones.inventory.owned[0x58] = true;
+        sim.gun.weapon = 0x58;
+        sim.gun.switch_request = 0x58;
+    }
+    w.wait(60);
+    let pci = w.scene.sim.as_ref().unwrap().drones.useobjs.pcs.iter().position(|p| p.ch == 0x48).expect("Q-WORM_PC_1 [D]");
+    // An aim (yaw, pitch) from the current stand whose ray meets the PC as `want`: Some(true) the
+    // mesh first, Some(false) the world sphere only (no mesh, no world hit before the centre).
+    let find = |w: &mut Walker, mesh: bool| -> (f32, f32) {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let (y0, p0) = (sim.bond.yaw, sim.bond.pitch);
+        let head = sim.bond.head();
+        let pc = &sim.drones.useobjs.pcs[pci];
+        let (c, r) = (pc.sph_centre, pc.radius);
+        let (dx, dz) = (c[0] - head[0], c[2] - head[2]);
+        let yaw0 = dx.atan2(dz);
+        let pitch0 = ((c[1] - head[1]) / (dx * dx + dz * dz).sqrt()).atan() / std::f32::consts::FRAC_PI_2;
+        let mut out = None;
+        'scan: for pj in -10i32..=10 {
+            for yj in -14i32..=14 {
+                let (yaw, pitch) = (yaw0 + yj as f32 * 0.02, pitch0 + pj as f32 * 0.02);
+                sim.bond.yaw = yaw;
+                sim.bond.pitch = pitch;
+                let look = sim.bond.look();
+                let far = [head[0] + look[0] * 50.0, head[1] + look[1] * 50.0, head[2] + look[2] * 50.0];
+                let wt = sim.world.segment_bullet(head, far).unwrap_or(1.0);
+                let pick = sim.drones.useobjs.aim_pick(head, look, &sim.world);
+                let t = (0..3).map(|k| (c[k] - head[k]) * look[k]).sum::<f32>();
+                let q = [head[0] + look[0] * t, head[1] + look[1] * t, head[2] + look[2] * t];
+                let in_sph = (0..3).map(|k| (q[k] - c[k]).powi(2)).sum::<f32>() < r * r * 0.8;
+                let ok = if mesh { pick.is_some_and(|(i, pt)| i == pci && pt < wt) && (yj.abs() + pj.abs()) <= 4 }
+                    else { pick.is_none() && in_sph && wt * 50.0 > t + r };
+                if ok { out = Some((yaw, pitch)); break 'scan; }
+            }
+        }
+        sim.bond.yaw = y0;
+        sim.bond.pitch = p0;
+        out.unwrap_or_else(|| panic!("no {} aim at the PC from {:?}", if mesh { "mesh" } else { "sphere-only" }, head))
+    };
+    let fired = |w: &mut Walker, (yaw, pitch): (f32, f32)| -> bool {
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.bond.yaw = yaw;
+            sim.bond.pitch = pitch;
+        }
+        w.wait(30);
+        let mut seen = false;
+        for _ in 0..6 {
+            w.tick_fire(nf_game::player::Input::default());
+            seen |= w.scene.sim.as_ref().unwrap().gun.fire_state;
+        }
+        w.wait(60);
+        seen
+    };
+    assert!(!fired(&mut w, (std::f32::consts::PI * 0.5, 0.0)), "aimed along the band: no PC, no shot");
+    let off_mesh = find(&mut w, false);
+    assert!(!fired(&mut w, off_mesh), "inside the PC's world sphere but off its mesh: no target, no shot");
+    teleport(&mut w, far_stand);
+    let far_aim = find(&mut w, true);
+    assert!(!fired(&mut w, far_aim), "on the PC from 2.18 out: past the 2.0 reach, no shot");
+    assert_eq!(w.scene.sim.as_ref().unwrap().aim_pc, Some(pci), "sister: the far aim did target the PC");
+    teleport(&mut w, stand);
+    let on = find(&mut w, true);
+    assert!(fired(&mut w, on), "on the PC mesh from the stand the gadget fires");
+}
+
 /// E on an alarm switch does nothing: `Switch_Activate` 0x1b02a8 refuses a class-3 (player)
 /// activator on a ch-0x61 switch (`cVar1 != 3 || ch != 0x61` [M]) — the 8 alarmswitchplayer
 /// placements (#617-631, p0 = 0x61 [D]) cannot be player-fired. The control arm proves the use
@@ -585,8 +665,9 @@ fn qworm_pc_install_needs_the_gadget_and_the_office_pc_reveals_its_code_on_the_e
     let mut w = load();
     // The walked south stand (the walkreal's bullet-clear band [D probe: segment_bullet CLEAR
     // from every stand x −16..−17.8, z −33.5..−34.4]) — the teleport is the stand-in transit;
-    // the equip, the trigger pull and the install are the real path.
-    teleport(&mut w, [-16.5, 1.2, -34.3]);
+    // the equip, the trigger pull and the install are the real path. The stand sits 1.85 from the
+    // PC, inside the gadget's 2.0 reach [M Player_WeaponFiring 0x1a5460:531-545].
+    teleport(&mut w, [-16.8, 1.2, -34.0]);
     let pc = w.scene.sim.as_ref().unwrap().drones.useobjs.pcs.iter().find(|p| p.ch == 0x48)
         .expect("Q-WORM_PC_1 (0x35, p1 = 0x48) [D]").pos;
     // Sister: the spawn K5 (0x43) round is not the Q-Worm — no install.
@@ -609,7 +690,9 @@ fn qworm_pc_install_needs_the_gadget_and_the_office_pc_reveals_its_code_on_the_e
         for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
         cycles += 1;
     }
-    let shots = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 3.0, 400, "the Q-Worm install",
+    // The aim sits on the PC's own mesh (y ±0.34 about the placement [D the glist's collision
+    // bounds]): the Q-Worm fires only with the PC first under the crosshair [M 0x1a5460:531-545].
+    let shots = shoot_at(&mut w, [pc[0], pc[1] + 0.2, pc[2]], 3.0, 400, "the Q-Worm install",
         &|sim| sim.drones.channels.on(0x48));
     w.wait(6);
     {
@@ -767,7 +850,7 @@ fn hatch_load_point_refuses_then_loads_through_the_real_chain() {
     assert!(mux49, "AND mux #741: ch 0x3A → ch 0x49 [D #741]");
     // The install from the walked south stand — the T4 shape (the K5 primer burst first, then the
     // real gadget-cycle equip; the same stand the T4 install lands from).
-    teleport(&mut w, [-16.5, 1.2, -34.3]);
+    teleport(&mut w, [-16.8, 1.2, -34.0]);
     let pc = w.scene.sim.as_ref().unwrap().drones.useobjs.pcs.iter().find(|p| p.ch == 0x48)
         .expect("Q-WORM_PC_1 [D]").pos;
     let _ = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 3.0, 120, "the K5 primer at the PC", &|_| false);
@@ -779,7 +862,9 @@ fn hatch_load_point_refuses_then_loads_through_the_real_chain() {
         for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
         cycles += 1;
     }
-    let shots = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 3.0, 400, "the Q-Worm install",
+    // The aim sits on the PC's own mesh (y ±0.34 about the placement [D the glist's collision
+    // bounds]): the Q-Worm fires only with the PC first under the crosshair [M 0x1a5460:531-545].
+    let shots = shoot_at(&mut w, [pc[0], pc[1] + 0.2, pc[2]], 3.0, 400, "the Q-Worm install",
         &|sim| sim.drones.channels.on(0x48));
     eprintln!("[0a] chain install: shots landed {} bond {:?} weapon {:#x} ch48 {}",
         shots, w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().gun.weapon,

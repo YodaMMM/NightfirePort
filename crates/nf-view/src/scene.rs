@@ -629,6 +629,12 @@ pub struct Sim {
     /// The crosshair state (BLData+0x133): 2 normal, 3 = the red "no" mark on a non-enemy target.
     /// Set by the `Check_Target` block in `run` every 6th frame, read by the HUD [M 0x1a7810, 0x19e6d0].
     pub cross_state: u8,
+    /// The PC part of the aim target (`BLData+0x880`): the Q-Worm PC (`useobjs.pcs` index) the
+    /// last `Check_Target` 0x1a7810 ray met first, or `None` when its first hit was anything else.
+    /// Written every 6th frame before the firing (`Player_Weapon` 0x1a24c8:278 → `Player_AutoAim`
+    /// → `Check_Target`, then `Player_WeaponFiring` [M Player_Update 0x193600:412-413]), read by
+    /// the Q-Worm's use gate [M 0x1a5460:531-545].
+    pub aim_pc: Option<usize>,
     pub auto_aim: bool,
     /// PC-port option "Rapid fire" (a documented port-only addition, off = the game): while the
     /// trigger is held every weapon fires one round per 60 Hz tick (the record's refire interval
@@ -4622,6 +4628,28 @@ impl Sim {
                 nf_game::gadget::pick_decryptor_lock(camera, vdir, self.bond.pos, &self.drones.locks, &self.world, range)
             } else { None };
             let (trigger, reload) = if decryptor_weapon && trigger && decryptor_pick.is_none() { (false, reload) } else { (trigger, reload) };
+            // The aim target's PC arm (`Check_Target` 0x1a7810, every 6th frame, ahead of the
+            // firing [M 0x1a24c8:278, 0x193600:412-413]): the ray's hit list is sorted by fraction
+            // and only its FIRST node's object becomes `BLData+0x880` [M 0x1ec690:114-160,
+            // 0x1a7810:125-127] — a wall, a desk or a guard in front leaves no PC target. The PC's
+            // own mesh is tested in object space (`UseObjects::aim_pick`); the world is the
+            // flags-0xc ray (bit 8: pass-flagged hits dropped — `segment_bullet`).
+            if self.drones.frame % 6 == 0 {
+                let far = [camera[0] + look[0] * 50.0, camera[1] + look[1] * 50.0, camera[2] + look[2] * 50.0];
+                let world_t = self.world.segment_bullet(camera, far).unwrap_or(f32::INFINITY);
+                let drone_t = self.check_target_drone(camera, look).map_or(f32::INFINITY, |(_, t)| t);
+                self.aim_pc = self.drones.useobjs.aim_pick(camera, look, &self.world)
+                    .filter(|&(_, t)| t < world_t && t < drone_t).map(|(i, _)| i);
+            }
+            // The Q-Worm's use gate, the decryptor's neighbour [M Player_WeaponFiring
+            // 0x1a5460:531-545]: with the trigger held, the cached target must be a PC (class
+            // 0x49) in state 0 within `weapon_data+0x1C` of the player root, or the firing
+            // returns before the pull: no shot, no spend, no fire script.
+            let qworm_refused = trigger && self.gun.weapon == 0x58 && {
+                let range = self.weapons.records.get(0x58).map_or(2.0, |r| f32::from_le_bytes(r[0x1c..0x20].try_into().unwrap()));
+                !self.drones.useobjs.qworm_gate(self.aim_pc, self.bond.pos, range)
+            };
+            let trigger = trigger && !qworm_refused;
             // weapon-handling [M Player_WeaponFiring 0x1a5460:503-506]: with the trigger held and Bond
             // under the surface (`surfaced == 0`, `Player_MonitorAir` 0x191a70:98-125 — the port's
             // `Bond::underwater`), a record without `+0x68 & 0x2` RETURNS before the pull: no shot, no
@@ -5614,12 +5642,7 @@ impl Sim {
         if self.drones.frame % 6 == 0 {
             let far = [camera[0] + look[0] * 50.0, camera[1] + look[1] * 50.0, camera[2] + look[2] * 50.0];
             let wall = self.world.segment(camera, far).unwrap_or(1.0);
-            let hit = self.drones.list.iter().enumerate()
-                .filter(|(_, dr)| dr.present && dr.enabled && dr.drawn && !dr.corpse)
-                .filter_map(|(i, dr)| {
-                    let vol = nf_game::bullet::PlayerVolume { feet: [dr.pos[0], dr.pos[1] - 1.0, dr.pos[2]], height: 1.8, radius: 0.4 };
-                    nf_game::bullet::segment_cylinder(camera, far, &vol).filter(|&t| t < wall).map(|t| (i, t))
-                }).min_by(|a, b| a.1.total_cmp(&b.1));
+            let hit = self.check_target_drone(camera, look);
             self.cross_state = match hit {
                 Some((i, _)) if self.drones.list[i].team != 1 => {
                     // civilian-no-shoot [M 0x1a7810:152-183]: the no-shoot mark is ALSO keyed on the
@@ -6498,6 +6521,20 @@ impl Sim {
     /// The crosshair state (`HUD_UpdateCrossHair` 0x19e6d0 reads BLData+0x133): 2 normal, 3 = the red
     /// "no" mark on a non-enemy target (`Check_Target` 0x1a7810:181-182). fix-player2.
     pub fn crosshair_state(&self) -> u8 { self.cross_state }
+
+    /// The drone arm of the `Check_Target` 0x1a7810 aim ray: the first drawn live drone the
+    /// 50-unit view ray meets before the world (body cylinder r 0.4, feet to 1.8 up — the port's
+    /// stand-in for the drone's own collision), as (index, fraction).
+    fn check_target_drone(&self, camera: [f32; 3], look: [f32; 3]) -> Option<(usize, f32)> {
+        let far = [camera[0] + look[0] * 50.0, camera[1] + look[1] * 50.0, camera[2] + look[2] * 50.0];
+        let wall = self.world.segment(camera, far).unwrap_or(1.0);
+        self.drones.list.iter().enumerate()
+            .filter(|(_, dr)| dr.present && dr.enabled && dr.drawn && !dr.corpse)
+            .filter_map(|(i, dr)| {
+                let vol = nf_game::bullet::PlayerVolume { feet: [dr.pos[0], dr.pos[1] - 1.0, dr.pos[2]], height: 1.8, radius: 0.4 };
+                nf_game::bullet::segment_cylinder(camera, far, &vol).filter(|&t| t < wall).map(|t| (i, t))
+            }).min_by(|a, b| a.1.total_cmp(&b.1))
+    }
 
     /// One tick of the decryptor screen (`Player_WeaponFiring` 0x1a5460:155-194 reading the display
     /// buffer `Lock_Update` 0x1ae3d8 fills [M :179-189, :346-369]): a scan start shows "****"; the
@@ -10530,7 +10567,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
-            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, zoom_saved: Vec::new(), zoom_aim_prev: false, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, step_foot: false, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), drone_draw_cache: (0..crate::pose_pool::MAX_SLOTS).map(|_| Default::default()).collect(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), bond_anim: nf_game::mp::body_anim::MpBodyAnim::new(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
+            Some(Sim { drones, tables: d.tables.clone(), props, scripts: d.scripts.clone(), weapons, world, level: d.level_id, char_drone, char_script, char_script_skin, seq_index, seqs, skins: level.skins.clone(), skeletons: skeletons.clone(), nav, covers, ai_points, tuning: d.tuning.clone(), hitboxes, sfx: d.sfx.clone(), volumes, glist_bounds, models, gun: nf_game::gun::Gun::new(2, 7, 41), bond, cursor: [0.0; 2], cross: [0.0; 2], view_script: 0, first_person: false, last_shot: None, shot_tick: false, view_time: 0.0, view_speed: 1.0, bob: [0.0; 2], aiming: false, free_aim: false, auto_aim: false, rapid_fire: false, zoom: 1.0, zoom_target: 1.0, zoom_saved: Vec::new(), zoom_aim_prev: false, disabled: false, surfaces: d.surfaces.clone(), voices: d.voices.clone(), step_dist: 0.0, step_foot: false, wires, creepwalls, creeping: false, wire_anims, wire_channel: 0, ladders, icons, view_model_ids: std::collections::HashSet::new(), cross_state: 2, aim_pc: None, cels: sim_cels, char_ambient, view_model_chars: Vec::new(), mp_body_chars: Vec::new(), bond_body_char: None, mp_last_held: [2; nf_net::MAX_AGENTS], mp_weapon_loaded: Vec::new(), ambient_lookups: std::cell::Cell::new(0), mp_draw_cache: Default::default(), drone_draw_cache: (0..crate::pose_pool::MAX_SLOTS).map(|_| Default::default()).collect(), mp_anim: (0..nf_net::MAX_AGENTS).map(|_| nf_game::mp::body_anim::MpBodyAnim::new()).collect(), bond_anim: nf_game::mp::body_anim::MpBodyAnim::new(), mp_anim_sets: d.mp_anims.as_ref().map(|a| nf_formats::mpanim::MpAnimSets { sets: a.sets }), sun_seen: false, lang: None, hud: Default::default(), smoke: Vec::new(), room_cell: cel_graph.room_to_cell.clone(), prev_trigger: false,
             mp_bonds: [const { None }; nf_net::MAX_AGENTS],
             mp_local_slot: 0,
             mp_body_speed: [0.0; nf_net::MAX_AGENTS],

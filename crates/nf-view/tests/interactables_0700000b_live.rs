@@ -424,7 +424,9 @@ fn qworm_console_installs_on_the_gadget_shot() {
     // The shot: walkreal's proven aim point (the screen band pc+0.55); if the desk's screen
     // collision truncates the dart high, the fallback band pc+0.1 (the box face at centre
     // height) is the second stance.
-    let mut installed = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 2.6, 900,
+    // The aim sits on the PC's own mesh (y ±0.34 about the placement [D the glist's collision
+    // bounds]): the Q-Worm fires only with the PC first under the crosshair [M 0x1a5460:531-545].
+    let mut installed = shoot_at(&mut w, [pc[0], pc[1] + 0.2, pc[2]], 2.6, 900,
         "the Q-Worm C shot", &|sim| sim.drones.channels.on(0x4c));
     if !installed {
         w.scene.sim.as_mut().unwrap().bond.pos = [pc[0] + 0.6, pc[1] - 0.5, pc[2] + 0.9];

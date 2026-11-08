@@ -462,7 +462,9 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
             sim.gun.weapon, sim.gun.switch_request, sim.drones.inventory.owned[0x58], sim.disabled,
             sim.drones.useobjs.pcs.iter().find(|p| p.ch == 0x4c).map(|p| p.state).unwrap_or(9));
     }
-    let installed = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 2.6, 1800, "the Q-Worm C shot", &|sim| sim.drones.channels.on(0x4c));
+    // The aim sits on the PC's own mesh (y ±0.34 about the placement [D the glist's collision
+    // bounds]): the Q-Worm fires only with the PC first under the crosshair [M 0x1a5460:531-545].
+    let installed = shoot_at(&mut w, [pc[0], pc[1] + 0.2, pc[2]], 2.6, 1800, "the Q-Worm C shot", &|sim| sim.drones.channels.on(0x4c));
     assert!(installed, "the Q-Worm C install never landed [M 0x1aee20]");
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4c), "ch 0x4C (objective 7) [M 0x1aee20]");
 
