@@ -134,3 +134,23 @@ fn the_top_tunnel_step_touches_674_and_not_524() {
     assert!(sim.drones.channels.on(0x38), "#674 raises ch 0x38 under the standing Bond");
     assert!(!sim.drones.channels.on(0x34), "#524 sits under the reach");
 }
+
+/// The arrival plates fire once per load [L live-1108 §3: with ch 0x50 cleared by hand, Bond set
+/// down again on start #511 (36.25, 50.243, -68.38) did not raise it again in 2 trials of 120
+/// frames]. Sister of `every_route_in_breaches_the_walls`'s first rise.
+#[test]
+fn the_upper_plates_do_not_re_raise_a_cleared_channel() {
+    let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set"); return };
+    let mut s = arrive(&iso, 0x1e, 120);
+    let sim = s.sim.as_mut().unwrap();
+    assert!(sim.drones.channels.on(0x50), "the first stand raises ch 0x50");
+    for _ in 0..2 {
+        let frame = sim.drones.frame;
+        sim.drones.channels.set(0x50, 0, frame);
+        sim.bond = nf_game::player::Bond::stand_at(&sim.world, [36.25, 50.243, -68.38], -std::f32::consts::FRAC_PI_2);
+        for _ in 0..120 {
+            sim.step_bond(nf_game::player::Input::default(), false, false, false);
+            assert!(!sim.drones.channels.on(0x50), "a re-stand on #495/#766 must not raise ch 0x50 again; Bond {:?}", sim.bond.pos);
+        }
+    }
+}
