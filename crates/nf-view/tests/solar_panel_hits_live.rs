@@ -38,21 +38,27 @@ fn firing_down_the_row_breaks_no_panel() {
     assert!(broken(sim).is_empty(), "{:?}", broken(sim));
 }
 
-/// Facing up the slope the panel under Bond's feet (#50) and the one ahead keep their place while
-/// the round flies 1.6 above them inside their spheres; the row's rising surface only meets the
-/// round at the far end of #49, x 7.4 [D glist 0x02000a42 at (10.14, -1.72, 4.62)], on the tick
-/// the flight reaches it.
+/// Facing up the slope the round converges on what the crosshair covers: `Player_WeaponInitBullet`
+/// 0x1a4bf0 traces head -> aiming point (mask 0x20a, objects included) and re-aims the round from
+/// its start (the head / view-datum-0 midpoint, below the eye) at that hit [M :154-163, :226-245].
+/// So the round rises over the panel row and #49's far rim, and its first stop is the far wall.
+/// The game's one tap from this pose (Beam 0x33, pitch 0): first hit (6.959, -1.136, 4.630) on
+/// the world glist, no panel broken [L live-1108 section 5]. Before the trace the round flew level
+/// from 0.1 below the eye and stopped on #49 at x 7.37.
 #[test]
-fn the_round_breaks_only_the_panel_it_crosses() {
+fn the_round_from_the_walkway_reaches_the_far_wall_and_breaks_no_panel() {
     let Ok(iso) = std::env::var("NF_ISO") else { return };
     let mut scene = at_the_walkway(&iso, false);
     let sim = scene.sim.as_mut().unwrap();
-    sim.step_bond(Input::default(), true, false, false);
-    assert!(broken(sim).is_empty(), "the first tick spans x 16.2 to 13.5 over #50: {:?}", broken(sim));
-    sim.step_bond(Input::default(), true, false, false);
-    assert!(broken(sim).is_empty(), "the second tick ends at x 9.2 over #49: {:?}", broken(sim));
-    for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
-    assert_eq!(broken(sim), vec![49], "the third tick crosses #49's surface and stops there");
+    let mut first = None;
+    for i in 0..32 {
+        sim.step_bond(Input::default(), i < 2, false, false);
+        if first.is_none() { first = sim.drones.player_impacts.first().copied(); }
+    }
+    let Some(nf_game::drone::PlayerImpact::World(p)) = first else { panic!("the round's first stop is the world: {first:?}") };
+    let live = [6.959f32, -1.136, 4.630];
+    assert!((0..3).all(|k| (p[k] - live[k]).abs() < 0.03), "first hit {p:?}, live {live:?}");
+    assert!(broken(sim).is_empty(), "no panel breaks from this pose: {:?}", broken(sim));
 }
 
 /// The astronauts' rounds go through the same Collide pass, so they chip the panels too: the
