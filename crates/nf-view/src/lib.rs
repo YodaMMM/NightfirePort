@@ -2260,6 +2260,7 @@ pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
     // 0x1dd4b0-0x1dd4fc]; a viewer with no cel sends nothing and the IOP keeps its previous targets.
     // The port's single viewer is Bond's eye (as below); the glb_viewer[4] script-camera override is
     // not modelled — the script-camera listener call is dropped by the EE batcher.
+    s.driver.log_frame = sim.drones.frame;
     let env_send = sim.cel_at(pos).map(|i| {
         let c = &sim.cels[i];
         (c.env as i32, (c.underwater || c.env >= 20) as i32)

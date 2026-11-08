@@ -157,11 +157,22 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
     // crane 61° → −11° over its 750 ticks [D keys: quat y 0.508 → −0.096, t 0..750] — and the
     // rider on the rotating deck is carried (ground_motion [M Player_FeetOnPoint 0x194188 →
     // Control_InheritVelocity 0x133e88]).
+    // THE PLATFORM-DROP PIN (level-0d-fall-damage), real input: the ~11.1 m walk-off deals
+    // NOTHING — the ledge slide keeps the ground contact alive (BL+0x940 stays set through the
+    // slide), so the handler's branch B zeroes BL+0x928 on every contact tick and the landing
+    // timer never passes 60 [M Player_CollisionHandler 0x1949a8:97-127 — the accumulate arm
+    // runs only while BL+0x940 == 0]; the game's own drop read no damage [L probe4]. The walk
+    // measured health 100.0 through tick 3000 (the drop at ~1750).
+    let pre_platform_health = w.scene.sim.as_ref().unwrap().drones.health.health;
     assert!(w.try_walk_to(Wp { at: [181.0, 7.5, -227.5], act: Act::None, arrive: 1.5 }, "the platform drop to the warehouse ground"),
         "the platform drop must reach the ground");
     {
+        let sim = w.scene.sim.as_ref().unwrap();
         let p = bond_pos(&w);
         assert!(p[1] < 6.0, "the drop lands on the warehouse ground (y ~1.04), got {p:?}");
+        assert!((sim.drones.health.health - pre_platform_health).abs() < 0.05,
+            "the ~11 m platform slide-off deals no fall damage [M 0x1949a8:97-127 + L probe4], was {pre_platform_health}, got {}",
+            sim.drones.health.health);
     }
     // THE STRIP-MOUTH KILLS — the climb's cover work, a player taking the shooters out from
     // cover before climbing into their crossfire (the driver's third lever). The perch #31 owns
@@ -606,6 +617,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
     turn_to(&mut w, std::f32::consts::FRAC_PI_2); // face east (the stick, not a yaw write)
     // Push off every ledge edge (the roof 18.58, an unscanned parapet at 19.44) until the
     // annex floor (9.42-9.45) catches him.
+    let mut annex_fall = 0u32;
     for _cycle in 0..4 {
         if w.scene.sim.as_ref().unwrap().bond.pos[1] < 12.0 && w.scene.sim.as_ref().unwrap().bond.grounded { break; }
         for _ in 0..40 {
@@ -618,9 +630,15 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
             let sim = w.scene.sim.as_mut().unwrap();
             sim.step_bond(nf_game::player::Input::default(), false, false, false);
             w.total_ticks += 1;
+            annex_fall = annex_fall.max(sim.bond.fall_timer);
             if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
         }
     }
+    // THE ANNEX-DROP PIN (level-0d-fall-damage), real input: the roof→annex push-off is the
+    // walk's one damage-dealing fall before the beam (the walk's real-damage ledger attributes
+    // its whole `other 11.2` to it). Landing timer 76 → raw 16 → ×0.7 at Agent = 11.2 — the
+    // game's own math [M 0x1949a8:117-126 + 0x1902c8:47-60].
+    assert_eq!(annex_fall, 76, "the annex push-off's landing timer — raw = timer − 60 = 16, ×0.7 Agent = 11.2 [M 0x1949a8]");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -782,6 +800,17 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
     // jump is a PLAIN jump: the icon context re-arms from proximity every tick [M 0x1949a8:22
     // clears BL+0x95F; scene.rs's per-tick icon arm] and the wire icon #297 is ~75 m away.
     turn_to(&mut w, -std::f32::consts::FRAC_PI_2); // face west, into the slot (the stick)
+    // THE FALL PIN (level-0d-fall-damage), real input: the slot fall's health delta is the
+    // game's own landing rule. BL+0x928 += FRAME_RATE_MUL per airborne tick while BL+0x54 < 0,
+    // reset on any vel.y >= 0 tick; on landing raw = (short)(int)(timer - 60), pain only when
+    // raw >= 10 [M Player_CollisionHandler 0x1949a8 disasm 0x194b64-0x194be0: the 60.0 literal
+    // @0x194b74, slti 0xa @0x194bb0, Player_HandlePain(raw, 6, -1) @0x194bd0]; the pain scales
+    // by the difficulty (0d: Easy 0.4 / Normal 0.7 [M ReadTuningVars 0x1d40f4; 0x1902c8:
+    // difficulty 1 -> Easy, 0/2 -> Normal]), skips armour for types 1..7 [M 0x1902c8:84-104]
+    // and kills when the remainder < 1 [M 0x1902c8:131-134].
+    let pre_drop_health = w.scene.sim.as_ref().unwrap().drones.health.health;
+    let hits_before_drop = w.scene.sim.as_ref().unwrap().drones.player_hits.len();
+    let mut max_fall = 0u32;
     let mut landed = false;
     // One hop can land back on the girder: hop again until the slot takes him.
     'hops: for _ in 0..5 {
@@ -796,17 +825,30 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             w.total_ticks += 1;
             let sim = w.scene.sim.as_ref().unwrap();
+            max_fall = max_fall.max(sim.bond.fall_timer);
             if sim.bond.grounded && sim.bond.pos[1] < 7.0 { landed = true; break 'hops; }
             if sim.bond.grounded && k > 20 { break; }
         }
     }
     assert!(landed, "the jump-drift must drop Bond through the slot into the yard, got {:?}", bond_pos(&w));
-    w.scene.sim.as_mut().unwrap().gun.switch_request = held_gun;
-    w.wait(40);
+    assert!(max_fall >= 70, "the ~10 m slot fall passes the pain gate (timer - 60 >= 10), got timer {max_fall}");
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.health.health > 40.0, "the ~10 m fall is survivable [M 0x1949a8], got {}", sim.drones.health.health);
+        // The raw-step window (the hops and the fall) also carries awake-guard trickle
+        // (the real-damage Operative run took one 1.2 hit here); the falls do NOT record into
+        // player_hits (they run through the scene's pain_generic, outside the drone.rs Bond-
+        // damage sites), so the window's hit delta is guard fire alone — subtract it.
+        let guard_dmg: f32 = sim.drones.player_hits[hits_before_drop..].iter().map(|&(_, _, d)| d).sum();
+        let raw = max_fall as f32 - 60.0;
+        let fall_dmg = if raw < 10.0 { 0.0 } else { raw * if difficulty == 1 { 0.4 } else { 0.7 } };
+        let raw_expected = pre_drop_health - fall_dmg - guard_dmg;
+        let expected = if raw_expected < 1.0 { 0.0 } else { raw_expected };
+        assert!((sim.drones.health.health - expected).abs() < 0.05,
+            "the ~10 m slot fall deals exactly the game's math (raw × the difficulty factor, armour untouched, < 1 kills) [M 0x1949a8 + 0x1902c8], expected {expected} (fall {fall_dmg} + window guard fire {guard_dmg}), got {}",
+            sim.drones.health.health);
     }
+    w.scene.sim.as_mut().unwrap().gun.switch_request = held_gun;
+    w.wait(40);
     eprintln!("[0d] the drop landed in the yard — at {:?}", bond_pos(&w));
     // THE YARD GARRISON SWEEP (level-0d-real-health-crossfire-5): the drop lands amid the
     // yard's standing grunts — the run-4 ledger: #6 (138.8, 5.0, −273.5) fired from d 7-21,

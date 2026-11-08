@@ -178,6 +178,21 @@ pub struct DamageLog {
     /// landing (a player switches to the next guard instead of emptying the clip into cover the
     /// world trace does not see). None keeps the 300-tick rule alone.
     pub dry_taps: Option<u32>,
+    /// OPT-IN for `stand_and_fire`: walk on past the 300-tick no-progress give-up. The deck
+    /// sentry's HIP stand fires the game's own 0.14 rad cone [M `Bullet_init` 0x12c5a0:139-170 —
+    /// `mul = 0` only with the aim bit; the 0x1e record's +0x24 = 100.0 [L ee_start_05.bin
+    /// @ 0x2c10b8]] — its legal misses never move the target's hp, so the default give-up (a
+    /// guard in cover the stand cannot reach) walks off after ~3 rounds and the clip math never
+    /// completes. False everywhere else — no other walk changes.
+    pub dry_walk_on: bool,
+    /// OPT-IN: record this stand's PLAYER round landings on drones (`PlayerImpact::Drone` —
+    /// the per-tick impact gather `player_impacts`, visible at the after-step note). The flight
+    /// Vec retires dead rounds and `BU.first` is consumed inside the tick, so the impact gather
+    /// is the only post-tick view of where the fired rounds went. For the deck-sentry hip test
+    /// only; False everywhere else.
+    pub record_round_dirs: bool,
+    /// The recorded landings (drone index, part) (see `record_round_dirs`).
+    pub round_dirs: Vec<(usize, i16)>,
     /// OPT-IN (`shoot_blockers`, set by the 07000011 real-health walk): when the gun line to the
     /// fight's target is blocked by a LIVE HOSTILE drone, retarget the blocker. A player whose
     /// line another guard walks into shoots that guard — the hold-fire rule alone stood Bond on
@@ -371,6 +386,13 @@ impl DamageLog {
 
     /// Read this tick's damage (before the walker's top-up, when on).
     pub fn note(&mut self, sim: &nf_view::scene::Sim, tick: u32) {
+        if self.record_round_dirs {
+            for imp in &sim.drones.player_impacts {
+                if let nf_game::drone::PlayerImpact::Drone { drone, part, .. } = imp {
+                    self.round_dirs.push((*drone, *part));
+                }
+            }
+        }
         let h = sim.drones.health.health;
         let hits = &sim.drones.player_hits;
         let mut recorded = 0.0;
@@ -1063,7 +1085,7 @@ impl Walker {
                 // entering the dart family), not a health drop.
                 if d.health < hp0 { hp0 = d.health; last_hit = t; dry = 0; }
                 if self.dmg.tranq_fights && nf_game::drone::Drone::dart_family_state(d.state) { last_hit = t; dry = 0; }
-                if t - last_hit > 300 { return false; }
+                if t - last_hit > 300 && !self.dmg.dry_walk_on { return false; }
                 if self.dmg.dry_taps.is_some_and(|n| dry >= n) && t - last_tap > 20 { return false; }
                 let at = aim.unwrap_or(torso);
                 let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);

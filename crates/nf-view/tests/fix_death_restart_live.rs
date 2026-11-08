@@ -282,6 +282,14 @@ fn lethal_fall_reaches_the_death_path_and_the_restart() {
     let yaw = sim.bond.yaw;
     sim.place_bond([spawn[0], spawn[1] + 8.0, spawn[2]], yaw);
     for i in 0..300 { sim.step_bond(Default::default(), false, false, false); if i > 30 && sim.bond.grounded { break; } }
+    // THE SHORT-DROP PIN (level-0d-fall-damage): the 8-unit placed drop deals NOTHING —
+    // measured deterministically on master. The rule's < 10 floor explains it: the landing
+    // timer stays under the pain gate (raw = (short)(int)(timer − 60) < 10 → no
+    // Player_HandlePain, BL+0x928 just zeroes) [M Player_CollisionHandler 0x1949a8 disasm
+    // 0x194bb0 slti 0xa + 0x194bb4]. The sister (below) pins the lethal end at 0.
+    assert_eq!(sim.drones.health.health, 100.0,
+        "the short 8-unit drop deals no fall damage — the rule's raw < 10 floor [M 0x1949a8:117-126], got {:.1}",
+        sim.drones.health.health);
     assert!(sim.drones.health.health > 50.0, "the survivable fall leaves Bond alive (health {:.1})", sim.drones.health.health);
     assert!(!sim.drones.death.active && !sim.drones.channels.on(0x62), "alive: no death sequence");
     assert!(sim.drones.level_exit.is_none(), "alive: no restart");
