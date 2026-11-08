@@ -120,6 +120,13 @@ impl WeaponData {
     /// `+0x6C & 0x40000`: whether this weapon's bullets emit a fly-by sound [M].
     pub fn flyby(&self, weapon: usize) -> bool { self.bullet_flags(weapon) & 0x40_000 != 0 }
 
+    /// `+0x6C & 0x800` CLEAR — the round's GLASS PASS: the flight's HITTEST+0x9a carries 0x20
+    /// every flying tick and the contact walk passes surface-byte-0x10 (glass) contacts
+    /// [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f058; Bullet_CollisionHandler 0x12ce80
+    /// disasm 0x12cf44-0x12cf64]. The bit-0x800 records stop on glass (the fists 0x01, the
+    /// melee 99-102 [L ee_start_05.bin weapon_data 0x2bf150 + rec·0x10c + 0x6c]).
+    pub fn glass_pass(&self, weapon: usize) -> bool { self.bullet_flags(weapon) & 0x800 == 0 }
+
     /// `+0x70`: hit-sound flags. Bits 0x180 suppress the body/head hit sounds: `NDrone2_DoHitEffects`
     /// 0x1458e0 plays 0x601/0x413 only when `+0x70 & 0x180 == 0`, `Player_DealWithObjHit` 0x194458
     /// 0x600/0x412 under the same gate [M].

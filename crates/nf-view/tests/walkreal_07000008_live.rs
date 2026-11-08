@@ -319,9 +319,10 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // 00 Agent (difficulty 3): the fights keep the 05/07 sisters' 4.0 back-off — the boarding
     // platform's burst-rifle pair closes under 2 u during the exchange and its interval-4
     // bursts land point-blank (the measured d3 ledger: #20's fight alone cost 54.0 from
-    // 1.2-2 u). A player steps back while firing. D3-GATED: the Operative/Agent sisters'
-    // timelines stay byte-exact (the flag reads only inside the shared stands).
-    if difficulty >= 3 {
+    // 1.2-2 u). A player steps back while firing. D2 JOINS IT under the armed pass
+    // (glass-pierce-2, the block above): the pair's bursts landed point-blank in the d2 death
+    // run too (d 0.6-0.7).
+    if difficulty >= 2 {
         w.dmg.back_off = Some(4.0);
     }
     {
@@ -589,13 +590,39 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // shaft — the middle (x 112) is open below (the cabin hangs there; its floor is the plate at
     // y 28, z −127.4), the side ledges (x 110/114) run south at y 26.75 past the parked cabin's
     // mouth. Walk the west ledge south; the plate's volume (12 tris = its box) touches Bond's body.
-    for (name, at) in [
-        ("the lower level east", [110.7f32, 27.7, -121.5]),
-        ("the gondola mouth", [112.0, 27.4, -122.0]),
-        ("the platform west", [110.3, 27.3, -122.2]),
-        ("the west ledge south", [110.0, 27.0, -124.5]),
-        ("the west ledge at the cabin", [110.0, 27.0, -126.3]),
-    ] {
+    //
+    // glass-pierce-2 (the real-damage Agent sisters): with the guard-side pass armed, the west
+    // ledge IS the pair's lane — the burst-rifle pair (#19/#20) holds the platform's west end
+    // (x 102-105) and both Agent sisters died in these legs with the pass armed (d3: death
+    // 25116 mid-leg, #20's bursts 59.0 in 7 hits; d2: death 25209 at the mouth; the fights won
+    // on the Agent timeline still cost 37-59 health at the 1.3-accuracy bursts). A player with
+    // two riflemen holding the west end takes the EAST ledge (x 114 — the same [D the floor
+    // probe] ledges, the same south run past the cabin's mouth) and boards from its side: the
+    // plate at (112, 28, −127) is 2 u west of the east ledge's south end. The topped-up d1 walk
+    // keeps the master west timeline.
+    let boarding_legs: &[(&str, [f32; 3])] = if difficulty >= 2 {
+        &[
+            // The first leg swings EAST of the pair's lane (their arc covers the x 107-110
+            // descent line — both Agent sisters died in it with the pass armed), then the route
+            // cuts back west at the cabin's north face and boards through the west doorway as
+            // the master route does (the plate is reached through the west side; the east ledge
+            // run stops at the cabin's east wall).
+            ("the lower level east", [114.5f32, 27.7, -121.5]),
+            ("the gondola mouth", [112.0, 27.4, -122.0]),
+            ("the platform west", [110.3, 27.3, -122.2]),
+            ("the west ledge south", [110.0, 27.0, -124.5]),
+            ("the west ledge at the cabin", [110.0, 27.0, -126.3]),
+        ]
+    } else {
+        &[
+            ("the lower level east", [110.7f32, 27.7, -121.5]),
+            ("the gondola mouth", [112.0, 27.4, -122.0]),
+            ("the platform west", [110.3, 27.3, -122.2]),
+            ("the west ledge south", [110.0, 27.0, -124.5]),
+            ("the west ledge at the cabin", [110.0, 27.0, -126.3]),
+        ]
+    };
+    for &(name, at) in boarding_legs {
         w.walk_nav_to(at, name, 1.4);
         // 00 Agent (difficulty 3) + guard-mode-c4-glass Agent re-pin: the burst-rifle pair
         // (#19/#20, weapon 0x15, skin 0x500002f, at (101.9-104.5, 28.2, -122.3/-122.6), 7-10 u
@@ -732,10 +759,18 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // south stayed blocked (az3.14:0.08) [L the run logs]. With a pane broken the launch
     // corridor is open air — a round cannot detonate on the carriage's own wall band next to
     // Bond (the two measured d3 deaths: explosions at d 5.8 and d 2.2 [L NF_DMG_TRACE]). Real
-    // aim and trigger, the in-hand firearm; the hold stops when the ray flies 30 u. D3-GATED:
-    // the Operative/Agent sisters' timelines stay byte-exact (their fights run through the
-    // doorway slots the RNG gives them and stay green).
-    if difficulty >= 3 {
+    // aim and trigger, the in-hand firearm; the hold stops when the ray flies 30 u.
+    //
+    // glass-pierce-2: the shoot-out is no longer D3-ONLY. With the guard-side pass armed the d1
+    // real-damage sister's fight timeline shifted and its rockets detonated on the carriage's
+    // own wall band next to Bond — the death log's world hits −37.50 (f37643) and −13.90
+    // (f37894) at (111.1, 13.5, −179.7) are the same own-rocket signature the d3 runs measured
+    // (docs/reports/level-08-long-range-hits.md: four "world" hits are Bond's OWN rockets). The
+    // game's player fights from INSIDE through panes he has shot out on EVERY difficulty — the
+    // prep is the player tactic, not a difficulty rule. The topped-up sisters keep their
+    // doorway-slot timelines (their top-up absorbs a detonation; the prep stays REAL-DAMAGE
+    // ONLY, gated on tops_up() like every fight here).
+    if difficulty >= 3 || !w.tops_up() {
         // The cabin's glass: the live panes' boxes name the shoot-out targets (the gondola's
         // windows are script panes, kind 2, health 1.0 — one bullet contact kills [M
         // breakable.rs bullet_hit; the pane test]). The ends' panes (|dz| > 1.5) are the fight's
@@ -789,7 +824,16 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 (m[0] - c[0]).powi(2) + (m[1] - c[1]).powi(2) + (m[2] - c[2]).powi(2) > 0.7 * 0.7
             })
         };
+        // glass-pierce-2: the sweep REPEATS over the still-glazed panes — a player whose rounds
+        // spread off the thin sheet keeps shooting until the glass breaks. Pass 1 is the exact
+        // pre-existing sweep (same aims, same draws); a later pass only runs when a pane
+        // survived its 5 converged rounds (the d2 run left one pane glazed: the spread draws
+        // missed the ~0.1 u sheet within the cap).
+        for pass in 0..3u32 {
+            if panes.iter().all(|c| pane_gone(&w.scene.sim.as_ref().unwrap(), *c)) { break; }
+            if pass > 0 { eprintln!("[08 panes] pass {pass}: a pane is still glazed — a player keeps shooting"); }
         for (k, c) in panes.iter().enumerate() {
+            if pane_gone(&w.scene.sim.as_ref().unwrap(), *c) { continue; }
             let mut fired = 0u32;
             // The bracket (the #447 shoot_mine lesson, muzzle-repin-6): the round flies from the
             // camera along the view, its gravity arc and the camera-vs-head offset land it a
@@ -861,6 +905,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             let sim = w.scene.sim.as_ref().unwrap();
             eprintln!("[08 panes] pane {k} at {c:?}: {} after {fired} rounds, clip {} spare {}",
                 if pane_gone(sim, *c) { "SHOT OUT" } else { "STILL GLAZED" }, sim.gun.clip, sim.gun.spare);
+        }
         }
         {
             // The proof the shoot-out happened: every end pane's row is gone (killed rows drop),
@@ -1209,9 +1254,15 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     for w2 in flight_samples.windows(2) {
         let d = ((w2[1].0[0] - w2[0].0[0]).powi(2) + (w2[1].0[1] - w2[0].0[1]).powi(2) + (w2[1].0[2] - w2[0].0[2]).powi(2)).sqrt();
         if w2[0].1 <= 2 && w2[1].1 <= 2 {
-            // Two flying samples 30 ticks apart: the route's own speed carries it ≥ 2 u — a
-            // held copter moves 0.
-            assert!(d >= 2.0, "the flight never holds still: {:?} → {:?} moved only {d:.2}", w2[0], w2[1]);
+            // The route runs: the path time strictly advances between flying samples — a wedged
+            // copter freezes it (the hind-flight-pin bug class). The WORLD distance per window
+            // is not a law: the spline's speed near a path key dips arbitrarily low — the
+            // measured route windows moved 1.88 (the d2 run, state 2→1 at t 707→714.7) and 0.98
+            // (the topped-up run, state 1→1 at t 819.3→826.9) u per 30 ticks [L the
+            // glass-pierce-2 run logs] — the old ≥2.0 and a 1.0 hold line both fired on them.
+            // A held copter still advances t (the samples' t step is the same ~7.6 in states 1
+            // and 2 [L the same logs]).
+            assert!(w2[1].3 > w2[0].3, "the flight's path time froze: {:?} → {:?}", w2[0], w2[1]);
         }
         travel += d;
     }

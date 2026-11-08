@@ -3257,14 +3257,14 @@ impl Drone {
             pos: self.pos, dir: [s, 0.0, c], speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c),
             damage: f32_at(0x0c), owner, state: 0, weapon: record as u16,
             flyby: d.weapons.flyby(record), bounces: 0,
-            // The flight's glass pass from the record [M Bullet_update 0x12e7b0 disasm
-            // 0x12f048-0x12f058 — HITTEST+0x9a = 0x20 unless weapon_data+0x6c & 0x800;
-            // Collide_Update 0x1ea398:216-229 passes the surface-byte-0x10 contacts] — the
-            // same per-round law update_player_bullets computes for Bond's rounds. The old
-            // hard-wired false was a documented shortcut whose real-health route cost is
-            // re-pinned with the 08 station walks (the game clears the stop for every
-            // record without the bit).
-            glass_pass: u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0,
+            // The glass pass reads the record's +0x6c bit 0x800 like every spawn [M Bullet_update
+            // 0x12e7b0 disasm 0x12f030-0x12f058; Bullet_CollisionHandler 0x12cf44-0x12cf64]. The
+            // close-combat records 99-102 carry the bit SET [L ee_start_05.bin weapon_data
+            // 0x2bf150 + rec·0x10c + 0x6c], so the melee impacts still stop on glass; a gun record
+            // (bit clear) passes. The 08 real-damage walks were repaired for the armed pass (the
+            // stands moved off the game-unsafe glass lines; the walk is what changes, never the
+            // damage or the health).
+            glass_pass: d.weapons.glass_pass(record),
             ..crate::bullet::Bullet::TAIL
         })
     }
@@ -11703,9 +11703,10 @@ impl Drone {
             let dir = crate::bullet::spread(aim, f32_at(0x24), flags68, rng);
             let mut b = crate::bullet::Bullet { pos: muzzle, dir, speed: f32_at(0x20), travelled: 0.0, range: f32_at(0x1c), damage, owner, state: 0,
                 weapon: self.weapon as u16, flyby: d.weapons.flyby(self.weapon as usize), bounces: 0,
-                // The flight's glass pass from the record [M Bullet_update 0x12e7b0 disasm
-                // 0x12f048-0x12f058; Collide_Update 0x1ea398:216-229] — the player-side law.
-                glass_pass: u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0,
+                // The glass pass from the record's +0x6c bit 0x800 [M Bullet_update 0x12f030-
+                // 0x12f058; Bullet_CollisionHandler 0x12cf44-0x12cf64]: the guard guns' records
+                // carry the bit clear, the melee 99-102 set [L ee_start_05.bin weapon_data].
+                glass_pass: d.weapons.glass_pass(self.weapon as usize),
                 ..crate::bullet::Bullet::TAIL };
             b.init_fuse(w);
             b
@@ -12660,6 +12661,9 @@ pub struct Drones {
     /// slot) replays the HITDATA walk from it; `end = start + ray` recomputes the flight segment
     /// bit-for-bit and the revive reuses the raw ray (the inline walk's `b.pos += ray`).
     pub pending_world_impacts: Vec<(usize, V3, V3)>,
+    /// A round's pass contacts on a glass sheet this tick, for the same flush: (bullet index,
+    /// pane index, segment start, segment end, the box contact's fraction).
+    pub pending_sheet_impacts: Vec<(usize, usize, V3, V3, f32)>,
     /// mp-site-damage-offline: the scenario site's contact sphere (centre, radius) this tick —
     /// the driver sets it from `MpMatch::site_sphere` before the tick, only on an offline load
     /// (online the shared combat owns the site; the local bullets are its visual shadow there).
@@ -13530,6 +13534,7 @@ impl Drones {
             // level-15-interactables: the mines.
             mines: Vec::new(),
             pending_world_impacts: Vec::new(),
+            pending_sheet_impacts: Vec::new(),
             effects: crate::effect::Effects::new(),
             casings: crate::casing::Casings::new(),
             // fix-progress: the tally/scoring layer and the runtime difficulty.
@@ -13658,10 +13663,10 @@ impl Drones {
                 pos, dir, speed, travelled: 0.0, range: f32_at(0x1c),
                 damage: f32_at(0x0c), owner: usize::MAX, state: 0, weapon,
                 flyby: d.weapons.flyby(weapon as usize), bounces: 0,
-                // The flight passes glass for every record without `+0x6C & 0x800` [M Bullet_update
-                // 0x12e7b0 disasm 0x12f048-0x12f058], and the pane takes the contact on the way:
-                // the guard-bullet pass's pane arm.
-                glass_pass: flags6c & 0x800 == 0,
+                // The glass pass from the record's +0x6c bit 0x800 [M Bullet_update 0x12f030-
+                // 0x12f058; Bullet_CollisionHandler 0x12cf44-0x12cf64] — same rule as the
+                // guard-side spawns now.
+                glass_pass: d.weapons.glass_pass(weapon as usize),
                 ..crate::bullet::Bullet::TAIL
             };
             b.init_fuse(w);
@@ -15424,7 +15429,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // before its bounds at 0.058) is gone with the ride.
                     else if BREAK_WORLD_STOP && !tstop.is_none_or(|ts| t <= ts) { contact = None; }
                 }
-                if let Some((_, i)) = contact {
+                if let Some((ct, i)) = contact {
                     // The round dies on the first solid object hit — the glass absorbs it
                     // [M 0x12cff0-4]; nothing behind it scores or stops it this tick.
                     // EXCEPT the glass panes: the game's walk (Collide_Update 0x1ea398:216-229,
@@ -15437,12 +15442,39 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // breakable stop. The pane still takes the damage: the collision pass
                     // appends the contact to the pane's obj+0xD0 chain whether or not the round
                     // stops [M the same pass the fusebox wires and SS Operate read] and
-                    // `Break_Update` 0x12bfd8:36-37 drains health from that chain. So a kind-2
-                    // (glass [D params; M 0x12c230:21]) pane's hit drains WITHOUT killing the
-                    // round; a non-glass breakable keeps the stop.
+                    // `Break_Update` 0x12bfd8:36-37 drains health from that chain. So a glass
+                    // pane's hit drains WITHOUT killing the round; a non-glass breakable keeps
+                    // the stop.
+                    //
+                    // THE GATE IS THE MATERIAL, NOT THE PLACEMENT KIND (glass-pierce-2): the
+                    // handler reads the contact's surface byte and passes on 0x10 only [M
+                    // 0x12cf54-0x12cf60 `lbu $v0,0x50($s2)` / `andi 0x3f` / `xori 0x10` /
+                    // `movz $s4,$s7,$v0` — the deterministic movz arm, no kind read]. The old
+                    // port gate (`kind == 2`) passed 01's breach panes 130/136/155, whose shape
+                    // materials are 0x02 [D breakable_census] — the game's round STOPS at them.
+                    // The pane's surface byte rides its shape's materials (the same shape table
+                    // the collision queries read [D breakable_census; M world.rs shape_materials
+                    // ← stat.mats]): glass = the shape carries a 0x10 material. A pane with no
+                    // shape has no measured byte [S unverified: the game's obj+0x50 source for a
+                    // shapeless breakable is open] — the stop is the conservative default.
+                    let glass_pass = {
+                        let br = &self.breaks.list[i];
+                        d.weapons.glass_pass(b.weapon as usize)
+                            && d.world.shape_materials(br.shape_key)
+                                .is_some_and(|ms| ms.iter().any(|m| m & 0x3f == 0x10))
+                    };
+                    if glass_pass {
+                        // The round carries on, and the sheet still takes the impact. The handler
+                        // stores state 2 on both arms: at 0x12cfc0 `bnel` runs its slot's
+                        // `sh $v0,0xf4($s3)` only when taken, which is the pass, and at 0x12cff0
+                        // plain `bne` always runs its slot. The pass then skips only the damage arm
+                        // (0x12cff8-0x12d01c), lands on the shared tail at 0x12d020 and runs
+                        // `Effect_Create`, and the loop's end writes state 1 back so the round walks
+                        // on [M Bullet_CollisionHandler 0x12ce80]. The effect waits for the collide
+                        // slot, with every other impact of this round.
+                        self.pending_sheet_impacts.push((bi, i, b.pos, end, ct));
+                    }
                     let br = &mut self.breaks.list[i];
-                    let glass_pass = br.kind == 2 && d.weapons.records.get(b.weapon as usize)
-                        .is_some_and(|w| u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0);
                     if !glass_pass { b.dead = true; }
                     br.health -= contact_dmg;
                     if br.health < 0.0 {
@@ -16234,9 +16266,43 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// game's collide pass sees the update pass's `Bullet_homing` steer (Bullet_homing 0x12f358
     /// runs from Bullet_update 0x12e7b0:483, the update pass), while the flight segment itself is
     /// the moved path (the pre-steer ray the bullet physically flew).
+    /// A round's pass contact on a glass sheet: what the world walk does for a hit, on the pane.
+    /// The impact sound and `Effect_Create` with its ricochet roll at mask 0 [M 0x12ce80:192,
+    /// 0x12d6f8], so the shared stream moves as for any other surface. The contact is the pane's
+    /// own collision triangle when the segment meets one; the panes are not in the collision
+    /// world, and a one-sided triangle has no back, so the fallback is the box contact, facing
+    /// the shot, on the shape's first surface byte [S]. The hole hangs on the pane
+    /// (`PANE_PART`): the game's goes with the object [M 0x1ce8a8:170-186].
+    fn sheet_impact(&mut self, d: &Data, (bi, pane, start, end, ct): (usize, usize, V3, V3, f32)) {
+        let Some((weapon, dir, bounces)) = self.player_bullets.get(bi).map(|b| (b.weapon, b.dir, b.bounces)) else { return };
+        let Some(br) = self.breaks.list.get(pane) else { return };
+        let matrix = br.matrix;
+        let shape = d.world.shape(br.shape_key).unwrap_or(&[]);
+        let mats = d.world.shape_materials(br.shape_key).unwrap_or(&[]);
+        // A segment that starts inside the box's margin has already crossed: the round's first
+        // tick took the impact, only the box still reads it.
+        let Some((t, n, m)) = crate::breakable::Breaks::sheet_contact(shape, mats, &matrix, start, end)
+            .or_else(|| (ct > 0.0).then(|| (ct, [-dir[0], -dir[1], -dir[2]], mats.iter().copied().find(|m| m & 0x3f == 0x10).or(mats.first().copied()).unwrap_or(0x10)))) else { return };
+        let hit = [start[0] + (end[0] - start[0]) * t, start[1] + (end[1] - start[1]) * t, start[2] + (end[2] - start[2]) * t];
+        self.player_impacts.push(PlayerImpact::World(hit));
+        let flags70 = d.weapons.records.get(weapon as usize)
+            .map_or(0u32, |r| u32::from_le_bytes(r[0x70..0x74].try_into().unwrap()));
+        if flags70 & 2 != 0 {
+            if let Some(id) = d.surfaces.and_then(|s| nf_formats::sfx::SurfaceSounds::get(&s.impact, m)) {
+                self.audio.play3d(id, hit, None);
+            }
+        }
+        let host = crate::world::HitHost::Object(crate::world::PANE_PART | pane as u64, matrix);
+        self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, hit, n, m, dir, flags70, bounces, true, 0, host);
+    }
+
     fn flush_world_impacts(&mut self, d: &Data) {
         let pending = std::mem::take(&mut self.pending_world_impacts);
+        // A sheet the round passed comes before that round's stop: the contact list is sorted by
+        // distance [M Collide_Update 0x1ea398:216-229].
+        let mut sheets = std::mem::take(&mut self.pending_sheet_impacts).into_iter().peekable();
         for (bi, start, ray) in pending {
+            while let Some(s) = sheets.next_if(|s| s.0 <= bi) { self.sheet_impact(d, s); }
             if bi >= self.player_bullets.len() { continue; }
             // The walk's per-hit state is local; the bullet is written back at the end (the
             // game's handler reads the BU fields and writes them at the same two points).
@@ -16392,6 +16458,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 }
             }
         }
+        // Rounds that passed a sheet and flew on with no stop this tick.
+        for s in sheets { self.sheet_impact(d, s); }
         // rocket-sound-leak [M Bullet_Delete 0x12e660:13-16 — every bullet death funnels through
         // the object's delete pass]: `if (BU+0xF0 != 0) { Sound_Stop(BU+0xF0); BU+0xF0 = 0; }`
         // (disasm 0x12e680: `lw a0, 0xf0(s2)`; 0x12e68c: `jal Sound_Stop`; 0x12e694: `sw zero,
@@ -18375,9 +18443,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 damage: f32_at(0x0c), owner: usize::MAX, state: 0,
                                 weapon: crate::gt::TURRET_WEAPON_RECORD as u16,
                                 flyby: d.weapons.flyby(crate::gt::TURRET_WEAPON_RECORD), bounces: 0,
-                                // The flight's glass pass from the record [M Bullet_update
-                                // 0x12e7b0 disasm 0x12f048-0x12f058] — the player-side law.
-                                glass_pass: u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0,
+                                // The glass pass from the record's +0x6c bit 0x800 [M Bullet_update
+                                // 0x12f030-0x12f058; Bullet_CollisionHandler 0x12cf44-0x12cf64];
+                                // record 96 carries the bit clear [L ee_start_05.bin weapon_data
+                                // 0x2bf150 + 96·0x10c + 0x6c = 0x1000].
+                                glass_pass: d.weapons.glass_pass(crate::gt::TURRET_WEAPON_RECORD),
                                 ..crate::bullet::Bullet::TAIL
                             };
                             b.init_fuse(w);
@@ -18701,9 +18771,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                     pos: from, dir, speed: f32_at(0x20), travelled: 0.0,
                                     range: f32_at(0x1c), damage: f32_at(0x0c), owner: usize::MAX,
                                     state: 0, weapon: 107, flyby: d.weapons.flyby(107), bounces: 0,
-                                    // The flight's glass pass from the record [M Bullet_update
-                                    // 0x12e7b0 disasm 0x12f048-0x12f058] — the player-side law.
-                                    glass_pass: u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0,
+                                    // The glass pass from the record's +0x6c bit 0x800 [M Bullet_update
+                                    // 0x12f030-0x12f058; Bullet_CollisionHandler 0x12cf44-0x12cf64];
+                                    // record 107 carries the bit clear [L ee_start_05.bin weapon_data
+                                    // 0x2bf150 + 107·0x10c + 0x6c = 0].
+                                    glass_pass: d.weapons.glass_pass(107),
                                     ..crate::bullet::Bullet::TAIL
                                 };
                                 b.init_fuse(w);
@@ -21556,7 +21628,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
           let _p = crate::prof::scope("drones: set_dynamic"); d.world.set_dynamic(&parts); }
         // The holes on moving objects take the objects' new matrices (the game composes
         // `node+0x20 · obj+0x90` at every draw [M View_DrawObjectGlist 0x1e6780:66-74]).
-        self.effects.follow_hosts(|id| d.world.dynamic_matrix(id));
+        let breaks = &self.breaks;
+        self.effects.follow_hosts(|id| d.world.dynamic_matrix(id).or_else(|| {
+            // A pane is not in the collision world; a dead one takes its holes with it.
+            (id & !0xffff_ffff == crate::world::PANE_PART).then(|| breaks.list.get((id & 0xffff_ffff) as usize))
+                .flatten().filter(|b| !b.dead).map(|b| b.matrix)
+        }));
         // The killer monitor's step-2 clear of the hostage's finished `+0x4D0` [M 0x144340:53]:
         // flagged during the walk (the borrow can't reach the hostage) and applied here, before
         // the speech pass — `speech()`'s non-forced gate refuses a line while any voice is

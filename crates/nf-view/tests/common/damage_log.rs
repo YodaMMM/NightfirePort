@@ -62,6 +62,19 @@ pub fn with_real_damage<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// `with_real_damage_head_hunting` plus the fights' glass sight (glass-pierce-2): the sight
+/// rays drop the intact mat-0x10 static glass — see the GLASS_SIGHT field doc. Opt-in per test:
+/// the walks whose fights must answer shooters behind intact station windows (the 08 real-damage
+/// Agent sisters); every other walk's fight timelines stay byte-exact.
+#[allow(dead_code)]
+pub fn with_glass_sight<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { GLASS_SIGHT.with(|c| c.set(false)); } }
+    GLASS_SIGHT.with(|c| c.set(true));
+    let _reset = Reset;
+    f()
+}
+
 /// `with_real_damage` plus the fights' head-hunting pick: the real-health runs whose fights
 /// burn Bond down by attrition (the return fire's torso-nearest taps take 3-5 rounds a
 /// 12-health guard while the guard's own volley lands) take the clear head box first — one
