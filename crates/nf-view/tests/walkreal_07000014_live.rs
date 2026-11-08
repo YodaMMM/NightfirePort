@@ -520,7 +520,9 @@ fn claw_aim_and_fire(w: &mut Walker, point: [f32; 3], ticks: u32) -> bool {
 /// strip and hangs over the east vent lane; the drift south (fire held) and the release land him
 /// on the lane (2.40).
 fn claw_up_from_the_mouths_arm(w: &mut Walker) {
-    let _ = w.try_walk_to(Wp::new(46.6, -0.6, 42.9).r(0.4), "west into the mouths' icon arm");
+    // The stance sits between the trench grating's slats (z 42.39 and 43.39 take the bolt 1.66 up
+    // [the walled-pick stance scan]).
+    let _ = w.try_walk_to(Wp::new(45.2, -0.6, 42.95).r(0.15), "west into the mouths' icon arm");
     w.scene.sim.as_mut().unwrap().bond.crouched = false;
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false); }
     {

@@ -120,7 +120,7 @@ fn the_qclaw_aimed_through_the_duct_wall_does_not_latch() {
     // vent store room), onto the icon's arm beside the point.
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [43.6, 0.45, 62.9];
+        sim.bond.pos = [44.37, 0.45, 62.84]; // between the grating's slats [the walled-pick stance scan]
         sim.bond.pre_collide = sim.bond.pos;
         sim.bond.vel = [0.0; 3];
         sim.bond.crouched = false;

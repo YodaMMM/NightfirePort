@@ -42,7 +42,7 @@ fn press_at(at: [f32; 3]) -> (u8, bool) {
 #[test]
 fn the_claw_fires_from_the_icon_arm() {
     // The trench floor beside the icon (1.7 u off its centre, inside reach 1.28·1.5 + 0.55).
-    let (ctx, latched) = press_at([43.6, 0.45, 62.9]);
+    let (ctx, latched) = press_at([44.37, 0.45, 62.84]); // between the grating's slats: the bolt clears them [the walled-pick stance scan]
     assert_eq!(ctx, 2, "the trench floor under the SkyBridge point is the type-2 icon's arm [D]");
     assert!(latched, "the claw latches the SkyBridge point from the icon's arm [M 0x1a5460:515-528]");
 }
