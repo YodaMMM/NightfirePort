@@ -94,12 +94,18 @@ pub struct Bullet {
     /// The flight's GLASS PASS: the round's weapon record `+0x6C` bit 0x800 CLEAR → the flight's
     /// HITTEST+0x9a carries 0x20 every flying tick and the contact walk passes surface-byte-0x10
     /// (glass) contacts [M Bullet_update 0x12e7b0 disasm 0x12f030-0x12f058; Collide_Update
-    /// 0x1ea398:216-229]. Set from the record at construction (the `drone.rs` spawn sites);
+    /// 0x1ea398:216-229]. Set from the record at construction ([`glass_pass_of`]);
     /// false = the bit-0x800 records (the fists 0x01, the laser 0x45) whose flight stops on glass.
     pub glass_pass: bool,
     /// The firing turret's `sp_key` for a turret round, else None: the own-round skip of the turret
     /// parts' pick (see `PlayerBullet::from_turret` in drone.rs).
     pub from_turret: Option<usize>,
+}
+
+/// The flight's glass pass from the weapon record: `+0x6C & 0x800` clear [M Bullet_update 0x12e7b0:390].
+/// `Bullet_update` reads the record alone, so it holds whoever fired the round.
+pub fn glass_pass_of(w: &[u8]) -> bool {
+    u32::from_le_bytes([w[0x6c], w[0x6d], w[0x6e], w[0x6f]]) & 0x800 == 0
 }
 
 impl Bullet {

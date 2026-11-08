@@ -3467,6 +3467,27 @@ impl Drone {
         self.probe_move(d, t).then_some(t)
     }
 
+    /// The combat-move choice's reach test: the `NDrone2_Can*` probes end in `NDrone2_MoveTest`
+    /// 0x155330 (3D distance ≤ 30, |dy| ≤ 4, the slope band, then `AINetwork_BoundsTest` with the
+    /// near-post test: every Can* call passes 1 for it [M 0x14f640:92-93, 0x14f808, 0x14f9e8,
+    /// 0x14fbe0, 0x14fdf8, 0x14ffc0, 0x150338, 0x150500]). Where the guard walks on the AI
+    /// network alone (`probe_move`'s free branch) the choice must ask the bounds, or a guard picks
+    /// a step that the bounds push undoes on every tick and strafes in place against the wall.
+    /// Elsewhere the choice keeps the mover's rays (the consistency rule at `probe_move`).
+    fn choice_clear(&self, d: &Data, step: [f32; 2]) -> bool {
+        if !self.probe_move(d, step) { return false; }
+        if !self.walks_on_network(d) { return true; }
+        let a = self.feet();
+        let b = [a[0] + step[0], a[1], a[2] + step[1]];
+        d.nav.bounds_test(a, b, true, false).0 == 1
+    }
+    /// The guard move with no world gate [M DroneAnim_PreTransCallback 0x13b490, NDrone2_Collision
+    /// 0x140e90:169-174]: the bounds push is its only horizontal limit, so it applies where that
+    /// push runs (the drone bounded, the level with bounds).
+    fn walks_on_network(&self, d: &Data) -> bool {
+        self.bounded && d.nav.bounds
+    }
+
     /// `move_by`'s rejection test as a dry run (stuck-guard-combat-sweep): the combat-move CHOICE
     /// (choose_combat_move's pair gates, the strafe UPDATE's blocked exit) must consult the SAME
     /// spatial test the mover applies, or a guard against an obstacle re-picks the blocked step
@@ -3480,9 +3501,9 @@ impl Drone {
     /// the port's own requirement.]
     fn probe_move(&self, d: &Data, step: [f32; 2]) -> bool {
         let to = [self.pos[0] + step[0], self.pos[1], self.pos[2] + step[1]];
-        // The game's guard move has no world gate at all, only the bounds push (above). Scoped to
-        // 07000012 for now: everywhere else the real-health routes are pinned on the rays.
-        let walled = !(d.level == 0x0700_0012 && self.bounded && d.nav.bounds);
+        // The game's guard move has no world gate at all, only the bounds push: where that push
+        // runs, only the moving set (doors, script objects) holds the guard.
+        let walled = !self.walks_on_network(d);
         let probe = |y: f32| {
             let from = [self.pos[0], y, self.pos[2]];
             let end = [to[0] + step[0].signum() * 0.4 * (step[0].abs() > 1e-6) as i32 as f32, y, to[2] + step[1].signum() * 0.4 * (step[1].abs() > 1e-6) as i32 as f32];
@@ -8795,7 +8816,7 @@ impl Drone {
                 // rule as the choice's pair gates (stuck-guard-combat-sweep).
                 let x = if left { 1.0 } else { -1.0 } * if dodge { 3.6 } else { 1.8 };
                 let (sn, cs) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
-                if self.anim.class == 2 && (!self.probe_move(d, [x * cs, -x * sn]) || self.unseen_ticks > 15) {
+                if self.anim.class == 2 && (!self.choice_clear(d, [x * cs, -x * sn]) || self.unseen_ticks > 15) {
                     self.set_state(AIM_STAND);
                 } else if !dodge && self.burst_done { self.fire(d, rng, frame, true) }
                 true
@@ -10995,7 +11016,7 @@ impl Drone {
                 // runs live since drone-nobunching-side-bits (NB_SCAN_LIVE). The world step of
                 // local (x, 0) is [x·c, −x·s].
                 let (s, c) = (crate::trig::sinf(me.yaw), crate::trig::cosf(me.yaw));
-                me.no_bunching & side_bit == 0 && me.can_do(d, anim) && me.probe_move(d, [x * c, -x * s])
+                me.no_bunching & side_bit == 0 && me.can_do(d, anim) && me.choice_clear(d, [x * c, -x * s])
             }).map(|(s, _)| *s).unwrap_or(0)
         };
         let result = loop {
@@ -11096,7 +11117,7 @@ impl Drone {
             let probe = |me: &Self, x: f32| {
                 let (side_bit, anim) = if x > 0.0 { (8, anim_state::DODGE_LEFT) } else { (0x10, anim_state::STRAFE_RIGHT_ALT) };
                 let (s, c) = (crate::trig::sinf(me.yaw), crate::trig::cosf(me.yaw));
-                me.no_bunching & side_bit == 0 && me.can_do(d, anim) && me.probe_move(d, [x * c, -x * s])
+                me.no_bunching & side_bit == 0 && me.can_do(d, anim) && me.choice_clear(d, [x * c, -x * s])
             };
             let m = if rng.rand(2) == 0 {
                 if probe(self, -3.6) { STRAFE_DODGE_RIGHT }

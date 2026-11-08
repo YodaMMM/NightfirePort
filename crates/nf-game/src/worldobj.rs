@@ -98,6 +98,7 @@ impl Shooter {
             weapon: self.weapon,
             flyby: flags68 & 0x40_0000 != 0,
             bounces: 0,
+            glass_pass: crate::bullet::glass_pass_of(w),
             ..crate::bullet::Bullet::TAIL
         };
         b.init_fuse(w);
