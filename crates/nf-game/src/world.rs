@@ -2701,7 +2701,7 @@ impl CollisionWorld {
     /// the wrapper's own `| 4` [M disasm 0x176fec/0x1770b0 — docs/systems/drone-armed-peer.md].
     /// Each caller passes the mask its game call site passes — see the `LOS_*` constants.
     pub fn line_of_sight(&self, a: V3, b: V3, mask: u32) -> bool {
-        if !LOS_MASKS_ON { return !self.segment_blocked(a, b, true, false, Some(mask)); }
+        if !LOS_MASKS_ON { return !self.segment_blocked(a, b, true, false, None); }
         self.line_of_sight_masked(a, b, mask)
     }
 
