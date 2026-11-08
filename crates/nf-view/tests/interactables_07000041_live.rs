@@ -239,15 +239,25 @@ fn the_grapple_point_latches_the_q_claw() {
     settle(sim);
     assert_eq!(sim.drones.grapple_points.len(), 1, "Grap1 parses [D PL#112]");
     let g = sim.drones.grapple_points[0].pos;
-    // Under the point, aiming straight up at it.
-    sim.bond = nf_game::player::Bond::stand_at(&sim.world, [g[0], g[1] - 6.0, g[2]], 0.0);
-    sim.bond.pitch = 1.4;
+    // The claw fires only inside a type-2 third icon's arm [M Player_WeaponFiring 0x1a5460:515-528]:
+    // #578 (8.59, 0.00, -29.47), armed by ch 1 [D params 0:2 1:1] — the drone plate's chain, stood
+    // in as in the_third_icons_arm_by_their_channels. Bond stands on it and aims at the point.
+    sim.drones.channels.set_script(1, 1, 0);
+    sim.bond = nf_game::player::Bond::stand_at(&sim.world, [8.59, 1.2, -29.47], 0.0);
+    for _ in 0..20 { sim.step_bond(Input::default(), false, false, false); }
+    {
+        let h = sim.bond.head();
+        let d = [g[0] - h[0], g[1] - h[1], g[2] - h[2]];
+        sim.bond.yaw = d[0].atan2(d[2]);
+        sim.bond.pitch = d[1].atan2((d[0] * d[0] + d[2] * d[2]).sqrt()) / std::f32::consts::FRAC_PI_2;
+    }
     let wd = sim.weapons.clone();
     let rounds = wd.clip_size(0x50).max(1);
     let _ = sim.drones.inventory.equip_weapon(&wd, 0x50, rounds, true);
     sim.gun.switch_request = 0x50;
     for _ in 0..60 { sim.step_bond(Input::default(), false, false, false); }
     assert_eq!(sim.gun.weapon, 0x50, "the claw draws");
+    assert_eq!(sim.bond.icon_ctx, 2, "Bond stands in #578's arm [D]");
     let y0 = sim.bond.pos[1];
     let mut latched = false;
     for _ in 0..90 { sim.step_bond(Input::default(), true, false, false); if sim.bond.grapple.is_some() { latched = true; break; } }

@@ -740,6 +740,13 @@ pub struct Sim {
     /// −1 per tick, reset to 4 while the player is in range; the type-6 "Press Action" hint posts
     /// only when the timer has ticked down to 0.
     pub icon_msg_timers: Vec<u8>,
+    /// The Q-Claw's fire gate for this tick: `BLData+0x95F == 2` (a type-2 third icon's arm) or MP
+    /// [M Player_WeaponFiring 0x1a5460:515-528 — on the fire-held arm a 0x50/0x51 record RETURNS
+    /// before `Player_RoundToFire` unless `*(char*)(BL+0x95F) == 2 || MPSettings+0x180 != 0`].
+    /// Taken in `step_bond` before this tick's icon refresh: `Player_CollisionHandler` 0x1949a8:22
+    /// clears the byte and `ThirdIcon_Update` 0x196e80 rewrites it in the collide pass, after the
+    /// player's weapon arm reads it.
+    pub claw_gate_open: bool,
     /// Each wire's owning cel — the game's own home-cel rule, not a stand-in: every dynamic
     /// object gets its cel at runtime, `build_LinkToRoom` 0x1c9680:40-49 calling
     /// `build_FindCel` 0x1c8cb0 over the object's world-sphere centre (bbox containment plus
@@ -2574,6 +2581,7 @@ impl Sim {
         // fix-aim-raise2: run gets the RAW button (the view chain's queue arm reads its edge from
         // it); the gated BIT is `self.aiming`, which the consumers read.
         self.free_aim = self.aim_gate(aiming) && aiming;
+        self.claw_gate_open = self.bond.icon_ctx == 2 || self.mp.is_some();
         // fix-aims20-modes-lights: the ride runs no player input arms (the game zeroes the input in the
         // substate-10 arm [M 0x193600 case 10]) — no analog deflection reaches the idle counter.
         self.run(ground, ground, camera, look, look, trigger, aiming, false, false, false);
@@ -3247,7 +3255,12 @@ impl Sim {
             // mp-world-sync: online the claw is the session's held weapon (`Input::held`) — the
             // value every machine's replica of this body latches on (`step_net_remotes`).
             let claw = net_row.as_ref().map_or(self.gun.weapon, |r| r[self.mp_local_slot].held);
+            // The claw fires only from a type-2 third icon's arm or in MP [M 0x1a5460:515-528]; the
+            // byte is last tick's collide pass (see `claw_gate_open`). A refused press neither latches
+            // nor runs the fire script (`run`'s `claw_block`).
+            self.claw_gate_open = self.bond.icon_ctx == 2 || self.mp.is_some();
             if trigger
+                && self.claw_gate_open
                 && self.bond.substate == nf_game::player::SS_WALK
                 && self.bond.grapple.is_none()
                 && nf_game::gadget::is_grapple(claw)
@@ -4695,6 +4708,9 @@ impl Sim {
             // refire countdown, no auto-reload. The 0x2 records [L weapon_data 0x2bf150]: the fists
             // 0x01, the Torpedo Launcher 0x30, the watch laser 0x4e/0x4f, the stunner twins 0x4b/0x4d.
             let under_block = trigger && self.bond.underwater && rd0(0x68) & 0x2 == 0;
+            // [M 0x1a5460:515-528]: the Q-Claw 0x50/0x51 outside a type-2 icon's arm (and not MP)
+            // RETURNS on the fire-held arm before the pull — no bolt, no fire script.
+            let claw_block = trigger && nf_game::gadget::is_grapple(self.gun.weapon) && !self.claw_gate_open;
             // weapon-handling [M Player_WeaponFiring 0x1a5460:631-636]: in view state 9 (a fire script
             // still playing) a `+0x68 & 0x8000` record takes no shot — the pump Frinesi 0x1c (fire
             // script 80 ticks vs +0x40 = 60) and the snipers (130 vs 120) refire only once the script
@@ -4706,9 +4722,8 @@ impl Sim {
             // The use gates on the trigger-held arm, ahead of `Player_RoundToFire` — a refused press
             // RETURNS: no fire script, no shot, no shutter [M 0x1a5460, `uVar6` = the record's +2]:
             // - the Micro-Camera 0x54 fires only from the aim bit;
-            // - the Q-Claw 0x50/0x51 not while reeling (`substate 2 ∧ +0x15C == 1`). The game also wants a
-            //   type-2 third icon's arm (`BL+0x95F == 2`) or MP; that half is not ported here — the port's
-            //   07000014 crossing latches from a stance outside every icon's arm.
+            // - the Q-Claw 0x50/0x51 not while reeling (`substate 2 ∧ +0x15C == 1`), and only from a
+            //   type-2 third icon's arm (`BL+0x95F == 2`) or MP (`claw_block` above).
             // The Q-Worm 0x58's gate (an idle class-'I' PC as the aim target within +0x1C) is not here: the
             // port has no PC collision for `Check_Target`'s ray, and a refused install would block an objective.
             let use_block = trigger && match u16::from_le_bytes([w[2], w[3]]) {
@@ -4719,8 +4734,8 @@ impl Sim {
                 }
                 _ => false,
             };
-            if under_block || use_block { self.gun.hold_trigger(trigger); }
-            let fired = if under_block || use_block { false } else { self.gun.update_with(trigger, reload, busy, params) };
+            if under_block || use_block || claw_block { self.gun.hold_trigger(trigger); }
+            let fired = if under_block || use_block || claw_block { false } else { self.gun.update_with(trigger, reload, busy, params) };
             // `Player_HandleHasNoAmmo` 0x1a2ba8 from the release arm [M 0x1a5460]: the disabled player and
             // the guided ride (`obj+0xF6 == 10` returns first) run none of it.
             if self.gun.dry && !self.disabled && self.missile_cam.is_none() && !self.drones.death.active {
@@ -10732,7 +10747,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 pda_display: [0; 4],
                 pda_hold: 0,
                 pda_lock: None,
-                hints, hint_cels, hint_fired, icon_msg_timers, trigger_link_cels,
+                hints, hint_cels, hint_fired, icon_msg_timers, claw_gate_open: false, trigger_link_cels,
                 view_alert: false,
                 prev_aiming: false, aim_forced_off: false, ride_trigger_prev: false,
                 view_aim_anim: None,

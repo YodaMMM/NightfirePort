@@ -27,7 +27,8 @@ fn holes(sim: &nf_view::scene::Sim) -> Vec<nf_game::effect::Decal> {
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
-/// The check spot, ~4.05 units from point #282 (13.7525, 32.2919, 57.3034 [L ee_start_05.bin obj+0x30]).
+/// The check spot: the ledge inside the type-2 icon's arm [D (-18.46, 37.49, -72.49) r 3.39], 15.4 units
+/// from point #281 — the claw fires only there [M 0x1a5460:515-528].
 const SPOT: [f32; 3] = [-18.28, 38.19, -71.83];
 const TARGET: [f32; 3] = [-3.3962271, 42.940285, -71.76922];
 

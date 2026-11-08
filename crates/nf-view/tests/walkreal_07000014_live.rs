@@ -156,6 +156,19 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
     }
     assert!(stood, "{label}: a stance inside the Laser's range exists [L weapon_data 0x4E +0x1C]");
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() }, false); }
+    // Aim first, then fire: rounds fired while the view still swings miss wide, and the miss
+    // feedback below can then saturate on the wrong side (the meter drains with no cut).
+    for _ in 0..120 {
+        let (dy, dp) = {
+            let b = &w.scene.sim.as_ref().unwrap().bond;
+            let head = b.head();
+            let dir = [wire[0] - head[0], wire[1] - head[1], wire[2] - head[2]];
+            let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
+            (wrap_pi(dir[0].atan2(dir[2]) - b.yaw), (dir[1] / l).atan() / std::f32::consts::FRAC_PI_2 - b.pitch)
+        };
+        if dy.abs() < 0.01 && dp.abs() < 0.01 { break; }
+        w.tick(nf_game::player::Input { turn: dy.clamp(-0.08, 0.08), look: dp.clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
     let start = w.total_ticks;
     let mut delta = [0.0f32; 3];
     loop {
@@ -175,7 +188,9 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
             (dir[0].atan2(dir[2]), ((dir[1] / l).atan() / std::f32::consts::FRAC_PI_2))
         };
         w.tick_fire(nf_game::player::Input {
-            turn: (yaw - w.scene.sim.as_ref().unwrap().bond.yaw).clamp(-0.08, 0.08),
+            // wrapped: Bond's yaw is unbounded (a fight can leave it a full turn off), and the
+            // raw difference spins him the long way round while the trigger is held.
+            turn: wrap_pi(yaw - w.scene.sim.as_ref().unwrap().bond.yaw).clamp(-0.08, 0.08),
             look: (pitch - w.scene.sim.as_ref().unwrap().bond.pitch).clamp(-0.08, 0.08),
             ..Default::default()
         });
@@ -344,8 +359,21 @@ fn the_east_duct_route_reaches_the_stairwell_slot() {
     let mut w = Walker::new(nf_view::load(&iso, "07000014.bin", false).unwrap());
     w.wait_enabled(3000, "the intro");
     w.wait(120);
-    // Leg A: the duct, then the crossing stand-in into the trench (see `the_crossing_stand_in`).
-    the_crossing_stand_in(&mut w);
+    // Leg A: the old crossing stance (40.8, floor 2.40, 65.5). The Q-Claw fires only from a
+    // type-2 third icon's arm (`BL+0x95F == 2`) or in MP [M Player_WeaponFiring 0x1a5460:515-528 —
+    // the fire-held arm RETURNS before `Player_RoundToFire`]; the stance is 5 units from the
+    // nearest type-2 icon (the trench-floor one under the SkyBridge point, (45.27, 0.41, 62.94)
+    // [D icon census]), so the press does nothing: no latch.
+    w.walk_to(Wp::new(40.8, 2.4, 65.5).r(0.5), "to the old crossing stance");
+    w.scene.sim.as_mut().unwrap().bond.crouched = false;
+    for _ in 0..20 { w.tick(nf_game::player::Input::default(), false); }
+    for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false); }
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.icon_ctx, 0xff, "no third icon arms in the vent store room [D]");
+    let point = [45.2888f32, 5.0961, 62.9362]; // [D placement; the port's resolution, probe14_aim]
+    assert!(!claw_aim_and_fire(&mut w, point, 30),
+        "the Q-Claw does not fire outside a type-2 icon's arm [M 0x1a5460:515-528]");
+    // The documented hop (see walk_infiltration_to_handback's Leg 1a) onto the trench floor.
+    hop_into_the_trench(&mut w);
     // Leg B: the trench east to the corridor — the nav lane node 5 -> 4 [D], floor -0.60.
     let _ = w.try_walk_to(Wp::new(48.8, -0.6, 62.8).r(0.7), "the trench east to the corridor");
     {
@@ -353,9 +381,25 @@ fn the_east_duct_route_reaches_the_stairwell_slot() {
         eprintln!("[014] corridor east leg: {p:?}");
         assert!(p[0] > 47.0, "the trench/corridor east made real progress [D nav nodes 5/4], got {p:?}");
     }
+    corridor_to_the_stairwell_foot_and_back(&mut w);
+    let _ = w.try_walk_to(Wp::new(48.8, -0.6, 52.0).r(0.7), "the corridor south past z 52");
+    let _ = w.try_walk_to(Wp::new(48.8, -0.6, 44.0).r(0.7), "the corridor south to the mouths' lane");
+    {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        eprintln!("[014] mouths' lane: {p:?} in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
+        assert!(p[2] < 45.0 && p[0] > 46.0, "the corridor south reached the mouths' lane [D nav node 3 -> (49.1, 0.4, 42.8)], got {p:?}");
+    }
+    // Leg E: the shaft entry from the mouths' icon arm — the claw fires there.
+    claw_up_from_the_mouths_arm(&mut w);
+}
+
+/// Legs C/D: the corridor south to the stairwell lane (z ~52), the jump WEST over the pit band
+/// onto the -0.91 landing (the east stairwell foot, pinned), and the edge-anchored jump back east
+/// onto the corridor. Shared by the east-route test and the infiltration walks.
+fn corridor_to_the_stairwell_foot_and_back(w: &mut Walker) {
     // Leg C: the corridor south to the stairwell lane (z ~52), then jump WEST over the pit band
     // (x 46.5..47.5 at -2.40 [D probe14_corridor]) onto the -0.91 landing.
-    agent_clear_blockers(&mut w, [51.0, 52.5], 6.0, "the corridor south to the stairwell lane");
+    agent_clear_blockers(&mut *w, [51.0, 52.5], 6.0, "the corridor south to the stairwell lane");
     w.walk_to(Wp::new(48.8, -0.6, 52.2).r(0.7), "the corridor south to the stairwell lane");
     let mut west = false;
     for i in 0..300 {
@@ -379,111 +423,6 @@ fn the_east_duct_route_reaches_the_stairwell_slot() {
     // -> 57.5 (2.30) -> 56-57 (1.05) -> 54.5-55.5 (0.60) -> 51.5-54 (-0.91) [D probe14_stairs]).
     // The full climb/descent of the 1.05 flight (the walkable west edge x 44.5..44.75, the
     // 45..45.75 middle is the stairwell's deep throat) is the next session's leg.
-    w.climb_stairs([45.5, -0.91, 53.9], "north on the -0.91 landing (the stairwell foot)", 0.8, 3000);
-    {
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        eprintln!("[014] stairwell foot: {p:?}");
-        // The y cap carries fight-pause slack: the real-health run's return-fire stand
-        // on the corridor leg (drone #0, 18 health) shifted the climb's tick phase, and the
-        // climb_stairs arrival (dxz 0.8) sampled Bond standing on the landing's first step —
-        // y 0.1234 against the old 0.0 cap (walkreal_07000014_real_damage, 2026-11-02); the
-        // The cap carries fight-phase slack from both sides of the merge: the real-health
-        // runs' return-fire stands and the game's FirstAttack flush [M 0x148010:100-131]
-        // (the trench-guard fight at the landing) sample the climb's arrival above the old
-        // 0.0, and the agent-difficulty run's own fight phases sampled y 0.405
-        // (real-health-agent-difficulty-12-13-14-15, 2026-11-03) — 1.1 covers both. The
-        // x/z bounds and the y > -1.6 pit floor are the pins and stay.
-        assert!(p[1] > -1.6 && p[1] < 1.1 && p[2] > 52.5 && p[2] < 54.6 && p[0] > 44.0 && p[0] < 46.4,
-            "the east stairwell foot (-0.91 landing, z 51.5..54.25 [D probe14_corridor/probe14_stairs]) is reached, got {p:?}");
-    }
-    for i in 0..300 {
-        {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let p = sim.bond.pos;
-            if p[0] > 47.6 && p[1] > -1.4 && sim.bond.grounded { break; }
-        }
-        let b = &w.scene.sim.as_ref().unwrap().bond;
-        let inp = nf_game::player::Input {
-            forward: 1.0, jump: i % 25 == 0,
-            turn: wrap_pi(std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
-            ..Default::default()
-        };
-        w.tick(inp, false);
-    }
-    let _ = w.try_walk_to(Wp::new(48.8, -0.6, 52.0).r(0.7), "the corridor south past z 52");
-    let _ = w.try_walk_to(Wp::new(48.8, -0.6, 44.0).r(0.7), "the corridor south to the mouths' lane");
-    {
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        eprintln!("[014] mouths' lane: {p:?} in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
-        assert!(p[2] < 45.0 && p[0] > 46.0, "the corridor south reached the mouths' lane [D nav node 3 -> (49.1, 0.4, 42.8)], got {p:?}");
-    }
-}
-// level-14-vent-drop-2: the vent-drop hand-back is PORTED and pinned (see
-// the_vent_drop_hands_bond_into_the_facility, green): nis.rs's event-6 fallback captures the
-// scripted Bond body's world root (s18, script 0x06000857; the pack 0x06000833 has NO marker
-// entity stream [D its full stream dump], so the strict previous-stream capture finds nothing and
-// the game still carries Bond in [D walk-4 walls/nav]) and Script_Free's Player_Enable lands him
-// inside the facility at the body's event-time root. [S] unverified game-side (the live check in
-// docs/reports/level-14-vent-drop.md).
-// NOT ignored — the "STILL #[ignore]" note below was STALE (fixed level-14-walk-to-the-level-end):
-// this helper is no test and carries no #[ignore]; both tests that share it
-// (the_vent_drop_hands_bond_into_the_facility, walk_the_infiltration_to_the_delta_exit) are
-// un-ignored and green. The old leg-2 wedge at the facility's west double door (−52.2, 1.2, 40.1;
-// two records, ch_lock 0x85) was the walk's own wrong premise, not a port gap: Door_Slide_11A/B
-// (plc 151/152, ch_lock 0x85 [D placements 151/152]) is SEALED until the sabotage cascade's death
-// channel 0x85 unlocks it (auto-open on the rising edge [M 0x1363c8:88-107]), and the game reaches
-// the west wing its own way — the SOUTH loop (the nav web's west corridor, which never crosses the
-// 0x85 plane [D nav path 0]) to the Kiko touch #381, whose cut-scene 0x0600062F carries Bond west
-// past the closed leaves; the 0x85 doorway is crossed only AFTER the cascade unlocks it
-// (the delta-exit walk's legs 2-4).
-/// Legs 1a..1f walked on real input (the spawn → the crossing → the trench/corridor/stairwell →
-/// the shaft Q-Claw reel → the vent lane → the mezzanine connector), then the #301 touch → the SP
-/// #276 vent cut-scene (0x06000833) → the ch 0x47 wait → the disabled tail → the hand-back assert.
-/// Shared by the pinned hand-back test and the full delta-exit walk.
-fn walk_infiltration_to_handback(w: &mut Walker) {
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        assert!(p[0] > 39.0 && p[0] < 42.0 && p[1] > 1.5 && p[1] < 6.0 && p[2] > 63.0 && p[2] < 67.0,
-            "the vent store room start #666 [D], got {p:?}");
-    }
-    w.wait_enabled(3000, "the intro");
-    w.wait(120);
-    assert_eq!(w.scene.sim.as_ref().unwrap().drones.mission.states[20][0], 3,
-        "'Infiltrate Drake's facility' announces at the start [L]");
-
-    // Leg 1a: the duct, then the crossing stand-in into the trench (see `the_crossing_stand_in`).
-    the_crossing_stand_in(w);
-    kill_the_trench_guard_270(w);
-    // Leg 1b: the trench east to the corridor — the nav lane node 5 -> 4 [D], floor -0.60.
-    let _ = w.try_walk_to(Wp::new(48.8, -0.6, 62.8).r(0.7), "the trench east to the corridor");
-    {
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        eprintln!("[014] corridor east leg: {p:?}");
-        assert!(p[0] > 47.0, "the trench/corridor east made real progress [D nav nodes 5/4], got {p:?}");
-    }
-    // Leg 1c: the corridor south to the stairwell lane (z ~52), then jump WEST over the pit band
-    // (x 46.5..47.5 at -2.40 [D probe14_corridor]) onto the -0.91 landing — the east stairwell
-    // foot, the pinned proof of the landing band.
-    agent_clear_blockers(&mut *w, [51.0, 52.5], 6.0, "the corridor south to the stairwell lane");
-    w.walk_to(Wp::new(48.8, -0.6, 52.2).r(0.7), "the corridor south to the stairwell lane");
-    let mut west = false;
-    for i in 0..300 {
-        {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let p = sim.bond.pos;
-            if p[0] < 46.2 && p[1] > -1.4 && sim.bond.grounded { west = true; break; }
-        }
-        let b = &w.scene.sim.as_ref().unwrap().bond;
-        let inp = nf_game::player::Input {
-            forward: 1.0, jump: i % 25 == 0,
-            turn: wrap_pi(-std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
-            ..Default::default()
-        };
-        w.tick(inp, false);
-    }
-    assert!(west, "the pit band (x 46.5..47.5, -2.40 [D probe14_corridor]) is jumpable west onto the -0.91 landing, got {:?}",
-        w.scene.sim.as_ref().unwrap().bond.pos);
     w.climb_stairs([45.5, -0.91, 53.9], "north on the -0.91 landing (the stairwell foot)", 0.8, 3000);
     {
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
@@ -526,40 +465,70 @@ fn walk_infiltration_to_handback(w: &mut Walker) {
     }
     assert!(east, "the pit band is jumpable east back onto the corridor, got {:?}",
         w.scene.sim.as_ref().unwrap().bond.pos);
-    let _ = w.try_walk_to(Wp::new(48.8, -0.6, 52.0).r(0.7), "the corridor south past z 52");
-    let _ = w.try_walk_to(Wp::new(48.8, -0.6, 51.0).r(0.6), "the corridor south to the segment lane");
-    // Leg 1d: the WEST pit jump at z 51 onto the 0.60 stairwell-corridor segment (x 44.4..46.4,
-    // z 50.5..51.25 [D probe14_shaft2 grids A/B]) — the +1.2 rise over the -2.40 pit band on the
-    // run-hop; the scratch run made it in ~40 ticks.
-    let mut seg = false;
-    for i in 0..300 {
-        {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let p = sim.bond.pos;
-            if p[0] < 46.3 && p[1] > 0.3 && sim.bond.grounded { seg = true; break; }
-        }
+}
+
+/// The one documented reach-a-spot hop of the infiltration: Bond onto the trench floor at the old
+/// SkyBridge crossing's landing (nav lane node 5 (43.05, 0.4, 62.86) [D]). The port has no
+/// walkable exit from the vent store room (docs/levels/07000014.md §1a), and the claw cannot
+/// fire there [M 0x1a5460:515-528; no type-2 icon in the room, D icon census].
+fn hop_into_the_trench(w: &mut Walker) {
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [43.05, 0.45, 62.86];
+        sim.bond.pre_collide = sim.bond.pos;
+        sim.bond.vel = [0.0; 3];
+        sim.bond.crouched = false;
+        sim.bond.yaw = std::f32::consts::FRAC_PI_2;
+        sim.bond.pitch = 0.0;
+    }
+    for _ in 0..30 { w.tick(nf_game::player::Input::default(), false); }
+    let b = &w.scene.sim.as_ref().unwrap().bond;
+    assert!(b.grounded && b.pos[1] < 1.0 && (b.pos[0] - 43.05).abs() < 1.0,
+        "the hop lands Bond on the trench floor (-0.60 [D probe14_room]), got {:?} grounded {}", b.pos, b.grounded);
+    eprintln!("[014] the trench hop landed {:?}", b.pos);
+}
+
+/// Aim the head ray at `point` (yaw and pitch steered on the stick) and hold fire for up to
+/// `ticks`; true once the claw latches.
+fn claw_aim_and_fire(w: &mut Walker, point: [f32; 3], ticks: u32) -> bool {
+    for i in 0..200 {
         let b = &w.scene.sim.as_ref().unwrap().bond;
+        let h = b.head();
+        let (dx, dy, dz) = (point[0] - h[0], point[1] - h[1], point[2] - h[2]);
+        let yaw = dx.atan2(dz);
+        let look = dy.atan2((dx * dx + dz * dz).sqrt()) / std::f32::consts::FRAC_PI_2;
         let inp = nf_game::player::Input {
-            forward: 1.0, jump: i % 25 == 0,
-            turn: wrap_pi(-std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
+            turn: wrap_pi(yaw - b.yaw).clamp(-0.08, 0.08),
+            look: (look - b.pitch).clamp(-0.08, 0.08),
             ..Default::default()
         };
         w.tick(inp, false);
+        if i > 150 { break; }
     }
-    {
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        eprintln!("[014] the segment: {p:?} seg {seg}");
-        assert!(seg, "the west pit jump at z 51 lands on the 0.60 stairwell-corridor segment [D probe14_shaft2 A], got {p:?}");
+    for _ in 0..ticks {
+        w.tick_fire(nf_game::player::Input::default());
+        if w.scene.sim.as_ref().unwrap().bond.grapple.is_some() { return true; }
     }
-    // Leg 1e: THE SHAFT ENTRY — the Q-Claw reel to the mouths' grapple #626 (45.30, 4.79, 42.86)
-    // [D placement] from the segment stance: the bolt ray skims the lip ramp (z 48.0..48.6,
-    // top 2.01..2.40 [D probe14_shaft4 fine]) with 0.03-0.09 clearance and the bolt's 1.0 sweep
-    // catches the point [M 0x12c5a0:92]; the reel [M Player_SSGrapple 0x192860:79-121] pulls Bond
-    // up over the lip and hangs over the east vent lane (2.40); the release drops him onto it.
+    false
+}
+
+/// THE SHAFT ENTRY from the mouths' icon arm: from the corridor's mouths' lane, west onto the
+/// trench floor beside the east duct, inside the type-2 icon's arm under the mouths' grapple #626
+/// (icon (45.30, 0.41, 42.89) r 1.28 [D icon census]; the arm is the pick test of
+/// `Collide_Pick` 0x1eb320 → `ThirdIcon_Update` 0x196e80). The claw fires there [M 0x1a5460:
+/// 515-528], the reel [M Player_SSGrapple 0x192860:79-121] lifts Bond through the duct's open
+/// strip and hangs over the east vent lane; the drift south (fire held) and the release land him
+/// on the lane (2.40).
+fn claw_up_from_the_mouths_arm(w: &mut Walker) {
+    let _ = w.try_walk_to(Wp::new(46.6, -0.6, 42.9).r(0.4), "west into the mouths' icon arm");
+    w.scene.sim.as_mut().unwrap().bond.crouched = false;
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false); }
+    {
+        let b = &w.scene.sim.as_ref().unwrap().bond;
+        assert_eq!(b.icon_ctx, 2, "Bond stands in the mouths' type-2 icon arm [D icon census], at {:?}", b.pos);
+    }
     let mp = [45.30f32, 4.79, 42.86]; // [D grapple #626; the level table]
-    let want_yaw = (mp[0] - 45.3).atan2(mp[2] - 51.0);
-    claw_fire_over_the_lip(w, want_yaw);
+    assert!(claw_aim_and_fire(w, mp, 40), "the Q-Claw latches the mouths' grapple #626 from the icon arm [M 0x1a5460:515-528; D placement]");
     let mut hung = false;
     for _ in 0..500 {
         w.tick_fire(nf_game::player::Input::default());
@@ -575,54 +544,21 @@ fn walk_infiltration_to_handback(w: &mut Walker) {
     }
     assert!(hung, "the reel hangs over the east vent lane [M 0x192860:91-94], got {:?}",
         w.scene.sim.as_ref().unwrap().bond.pos);
-    // The release: RECONCILED against [M Player_SSGrapple 0x192860 phase 2 — the first no-fire
-    // tick detaches]. The printed state walk (the scratch, level-14-full-walk-2) shows the detach
-    // firing on the release loop's tick 1 — the prior "still on the wire" read was wrong twice
-    // over: (1) the straight drop lands on the MOUTHS' HOOD — a solid cover over the lane at top
-    // 3.93 spanning z 43.8..48.5 (the open lane strip is z 42.3..43.5, tops 2.38-2.40 [D the
-    // down-ray grid: y-6.0 rays over x 44.8..46.0]); (2) the fall PAST the hood's south edge was
-    // frozen mid-air 1.1 above the lane by the walk's walkable contact on the hood's underside —
-    // a DOWN-facing face the game's dot1 gate never sets walkable [M Intersect_CylGeom 0x109da0
-    // disasm 0x10a650-0x10a674: dot(face normal, axis) > 0.7, up-facing only; the port's .abs()
-    // diverged — fixed in world.rs]. The game's hang swing [M Player_Move 0x191dd0:111-141 + the
-    // SSGrapple tail commit LAB_00192a24, the rope pin holding y] carries the stick's drift, so
-    // the route: hold fire, drift SOUTH over the open strip, release, drop onto the lane (2.38).
-    let mut lane = false;
-    for i in 0..160 {
-        {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let b = &sim.bond;
-            let p = b.pos;
-            if b.grapple.is_none() && b.grounded && p[1] > 1.8 && p[1] < 3.4
-                && p[2] < 48.4 && p[0] > 44.0 && p[0] < 47.0 {
-                lane = true;
-                break;
-            }
-        }
-        // The drift: fire HELD (the hang stays [M 0x192860:57-62]), the stick south — the
-        // grapple_drift lanes ease to the walk's 0.075/tick [M 0x191dd0:111-141].
+    let on_lane = |w: &Walker| {
         let b = &w.scene.sim.as_ref().unwrap().bond;
-        let inp = nf_game::player::Input {
-            forward: 1.0,
-            turn: wrap_pi(std::f32::consts::PI - b.yaw).clamp(-0.08, 0.08),
-            ..Default::default()
-        };
-        w.tick_fire(inp);
-        if w.scene.sim.as_ref().unwrap().bond.pos[2] < 42.45 { break; }
+        let p = b.pos;
+        b.grapple.is_none() && b.grounded && p[1] > 1.8 && p[1] < 3.6 && p[2] < 48.4 && p[0] > 44.0 && p[0] < 47.0
+    };
+    // The hang from this side already sits over the lane's open strip (z 42.3..43.5 [D the
+    // down-ray grid]) — no drift: the straight release drops onto the lane.
+    {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        assert!(p[2] > 42.3 && p[2] < 43.5, "the hang sits over the lane's open strip, got {p:?}");
     }
-    for i in 0..400 {
-        {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let b = &sim.bond;
-            let p = b.pos;
-            if b.grapple.is_none() && b.grounded && p[1] > 1.8 && p[1] < 3.4
-                && p[2] < 48.4 && p[0] > 44.0 && p[0] < 47.0 {
-                lane = true;
-                break;
-            }
-        }
-        // The release: the first no-fire tick detaches [M 0x192860:56-66]; the drop is the
-        // port's pinned no-momentum fall (the shipped flow's +0x10 is zero at the break).
+    // The release: the first no-fire tick detaches [M 0x192860:56-66].
+    let mut lane = false;
+    for _ in 0..400 {
+        if on_lane(w) { lane = true; break; }
         let b = &w.scene.sim.as_ref().unwrap().bond;
         let inp = nf_game::player::Input {
             turn: wrap_pi(std::f32::consts::PI - b.yaw).clamp(-0.08, 0.08),
@@ -630,11 +566,68 @@ fn walk_infiltration_to_handback(w: &mut Walker) {
         };
         w.tick(inp, false);
     }
+    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+    eprintln!("[014] the vent lane: {p:?} lane {lane}");
+    assert!(lane, "the release lands Bond on the east vent lane (2.40 [D probe14_tunnel A]), got {p:?}");
+}
+// level-14-vent-drop-2: the vent-drop hand-back is PORTED and pinned (see
+// the_vent_drop_hands_bond_into_the_facility, green): nis.rs's event-6 fallback captures the
+// scripted Bond body's world root (s18, script 0x06000857; the pack 0x06000833 has NO marker
+// entity stream [D its full stream dump], so the strict previous-stream capture finds nothing and
+// the game still carries Bond in [D walk-4 walls/nav]) and Script_Free's Player_Enable lands him
+// inside the facility at the body's event-time root. [S] unverified game-side (the live check in
+// docs/reports/level-14-vent-drop.md).
+// NOT ignored — the "STILL #[ignore]" note below was STALE (fixed level-14-walk-to-the-level-end):
+// this helper is no test and carries no #[ignore]; both tests that share it
+// (the_vent_drop_hands_bond_into_the_facility, walk_the_infiltration_to_the_delta_exit) are
+// un-ignored and green. The old leg-2 wedge at the facility's west double door (−52.2, 1.2, 40.1;
+// two records, ch_lock 0x85) was the walk's own wrong premise, not a port gap: Door_Slide_11A/B
+// (plc 151/152, ch_lock 0x85 [D placements 151/152]) is SEALED until the sabotage cascade's death
+// channel 0x85 unlocks it (auto-open on the rising edge [M 0x1363c8:88-107]), and the game reaches
+// the west wing its own way — the SOUTH loop (the nav web's west corridor, which never crosses the
+// 0x85 plane [D nav path 0]) to the Kiko touch #381, whose cut-scene 0x0600062F carries Bond west
+// past the closed leaves; the 0x85 doorway is crossed only AFTER the cascade unlocks it
+// (the delta-exit walk's legs 2-4).
+/// Legs 1a..1f walked on real input (the spawn → the crossing → the trench/corridor/stairwell →
+/// the shaft Q-Claw reel → the vent lane → the mezzanine connector), then the #301 touch → the SP
+/// #276 vent cut-scene (0x06000833) → the ch 0x47 wait → the disabled tail → the hand-back assert.
+/// Shared by the pinned hand-back test and the full delta-exit walk.
+fn walk_infiltration_to_handback(w: &mut Walker) {
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!(p[0] > 39.0 && p[0] < 42.0 && p[1] > 1.5 && p[1] < 6.0 && p[2] > 63.0 && p[2] < 67.0,
+            "the vent store room start #666 [D], got {p:?}");
+    }
+    w.wait_enabled(3000, "the intro");
+    w.wait(120);
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.mission.states[20][0], 3,
+        "'Infiltrate Drake's facility' announces at the start [L]");
+
+    // Leg 1a: into the trench. The Q-Claw fires only from a type-2 third icon's arm
+    // (`BL+0x95F == 2`) or in MP [M Player_WeaponFiring 0x1a5460:515-528]; the vent store room
+    // carries no such icon (the three type-2 icons sit on the trench floor under the three
+    // grapple points [D icon census]), so the old crossing — the claw fired from (40.8, 2.4,
+    // 65.5), 5 units from the nearest icon — is no move a player can make. The store room's
+    // walkable exit is not found in the port (docs/levels/07000014.md §1a: the grill closes the
+    // south duct; the east wall stands at x 41.53 the full duct height); this is the file's one
+    // documented reach-a-spot hop: onto the trench floor at the old crossing's landing.
+    hop_into_the_trench(w);
+    kill_the_trench_guard_270(w);
+    // Leg 1b: the trench east to the corridor — the nav lane node 5 -> 4 [D], floor -0.60.
+    let _ = w.try_walk_to(Wp::new(48.8, -0.6, 62.8).r(0.7), "the trench east to the corridor");
     {
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        eprintln!("[014] the vent lane: {p:?} lane {lane}");
-        assert!(lane, "the release lands Bond on the east vent lane (2.40 [D probe14_tunnel A]), got {p:?}");
+        eprintln!("[014] corridor east leg: {p:?}");
+        assert!(p[0] > 47.0, "the trench/corridor east made real progress [D nav nodes 5/4], got {p:?}");
     }
+    // Leg 1c: the corridor south, the stairwell foot and back, then on south to the mouths' lane
+    // [D nav node 3 -> (49.1, 0.4, 42.8)].
+    corridor_to_the_stairwell_foot_and_back(w);
+    let _ = w.try_walk_to(Wp::new(48.8, -0.6, 52.0).r(0.7), "the corridor south past z 52");
+    let _ = w.try_walk_to(Wp::new(48.8, -0.6, 44.0).r(0.7), "the corridor south to the mouths' lane");
+    // Leg 1e: THE SHAFT ENTRY from the mouths' icon arm.
+    claw_up_from_the_mouths_arm(w);
     // Leg 1f: the east vent lane south over its flush lid (z 42.16 [D #655/#600]) — the lid sits
     // flush in the lane floor [D probe14_mouthfin A: 2.38->2.40 at z 42.3..42.2] — to the
     // mezzanine, then WEST across the sloped connector (z 39.5..38.25, 2.15..2.40 [D
@@ -1467,122 +1460,11 @@ fn the_e_use_switch_fires_the_sabotage_cascade_and_opens_the_west_door() {
 fn walk_to_the_vent_grab(w: &mut Walker) -> (u32, [f32; 3], f32) {
     w.wait_enabled(3000, "the intro");
     w.wait(120);
-    the_crossing_stand_in(w);
+    hop_into_the_trench(w);
     let _ = w.try_walk_to(Wp::new(48.8, -0.6, 62.8).r(0.7), "the trench east to the corridor");
     w.walk_to(Wp::new(48.8, -0.6, 52.2).r(0.7), "the corridor south to the stairwell lane");
-    let mut west = false;
-    for i in 0..300 {
-        {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let p = sim.bond.pos;
-            if p[0] < 46.2 && p[1] > -1.4 && sim.bond.grounded { west = true; break; }
-        }
-        let b = &w.scene.sim.as_ref().unwrap().bond;
-        let inp = nf_game::player::Input {
-            forward: 1.0, jump: i % 25 == 0,
-            turn: wrap_pi(-std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
-            ..Default::default()
-        };
-        w.tick(inp, false);
-    }
-    assert!(west, "the pit band is jumpable west onto the -0.91 landing, got {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
-    w.climb_stairs([45.5, -0.91, 53.9], "north on the -0.91 landing (the stairwell foot)", 0.8, 3000);
-    let mut east = false;
-    for _attempt in 0..2 {
-        let _ = w.try_walk_to(Wp::new(46.1, -0.9, 53.4).r(0.35), "to the landing's east edge");
-        for i in 0..200 {
-            {
-                let sim = w.scene.sim.as_ref().unwrap();
-                let p = sim.bond.pos;
-                if p[0] > 47.6 && p[1] > -1.4 && sim.bond.grounded { east = true; break; }
-                if p[1] < -1.4 { break; }
-            }
-            let b = &w.scene.sim.as_ref().unwrap().bond;
-            let inp = nf_game::player::Input {
-                forward: 1.0, jump: i == 0 || (b.grounded && i % 25 == 0),
-                turn: wrap_pi(std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
-                ..Default::default()
-            };
-            w.tick(inp, false);
-        }
-        if east { break; }
-    }
-    assert!(east, "the pit band is jumpable east back onto the corridor, got {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
-    let _ = w.try_walk_to(Wp::new(48.8, -0.6, 52.0).r(0.7), "the corridor south past z 52");
-    let _ = w.try_walk_to(Wp::new(48.8, -0.6, 51.0).r(0.6), "the corridor south to the segment lane");
-    let mut seg = false;
-    for i in 0..300 {
-        {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let p = sim.bond.pos;
-            if p[0] < 46.3 && p[1] > 0.3 && sim.bond.grounded { seg = true; break; }
-        }
-        let b = &w.scene.sim.as_ref().unwrap().bond;
-        let inp = nf_game::player::Input {
-            forward: 1.0, jump: i % 25 == 0,
-            turn: wrap_pi(-std::f32::consts::FRAC_PI_2 - b.yaw).clamp(-0.08, 0.08),
-            ..Default::default()
-        };
-        w.tick(inp, false);
-    }
-    assert!(seg, "the west pit jump at z 51 lands on the 0.60 segment, got {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
-    for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false); }
-    let mp = [45.30f32, 4.79, 42.86];
-    let want_yaw = (mp[0] - 45.3).atan2(mp[2] - 51.0);
-    claw_fire_over_the_lip(w, want_yaw);
-    let mut hung = false;
-    for _ in 0..500 {
-        w.tick_fire(nf_game::player::Input::default());
-        if w.scene.sim.as_ref().unwrap().bond.grapple.is_none() { break; }
-        if let Some(g) = &w.scene.sim.as_ref().unwrap().bond.grapple {
-            if g.phase == 2 {
-                let p = w.scene.sim.as_ref().unwrap().bond.pos;
-                hung = p[1] > 3.0 && p[2] < 45.6;
-                break;
-            }
-        }
-    }
-    assert!(hung, "the reel hangs over the east vent lane [M 0x192860:91-94], got {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
-    let mut lane = false;
-    for i in 0..160 {
-        {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let b = &sim.bond;
-            let p = b.pos;
-            if b.grapple.is_none() && b.grounded && p[1] > 1.8 && p[1] < 3.4
-                && p[2] < 48.4 && p[0] > 44.0 && p[0] < 47.0 {
-                lane = true;
-                break;
-            }
-        }
-        let b = &w.scene.sim.as_ref().unwrap().bond;
-        let inp = nf_game::player::Input {
-            forward: 1.0,
-            turn: wrap_pi(std::f32::consts::PI - b.yaw).clamp(-0.08, 0.08),
-            ..Default::default()
-        };
-        w.tick_fire(inp);
-        if w.scene.sim.as_ref().unwrap().bond.pos[2] < 42.45 { break; }
-    }
-    for i in 0..400 {
-        {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let b = &sim.bond;
-            let p = b.pos;
-            if b.grapple.is_none() && b.grounded && p[1] > 1.8 && p[1] < 3.4
-                && p[2] < 48.4 && p[0] > 44.0 && p[0] < 47.0 {
-                lane = true;
-                break;
-            }
-        }
-        let b = &w.scene.sim.as_ref().unwrap().bond;
-        let inp = nf_game::player::Input {
-            turn: wrap_pi(std::f32::consts::PI - b.yaw).clamp(-0.08, 0.08),
-            ..Default::default()
-        };
-        w.tick(inp, false);
-    }
-    assert!(lane, "the release lands Bond on the east vent lane (2.40 [D probe14_tunnel A]), got {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    let _ = w.try_walk_to(Wp::new(48.8, -0.6, 44.0).r(0.7), "the corridor south to the mouths' lane");
+    claw_up_from_the_mouths_arm(w);
     w.walk_to(Wp::new(45.0, 2.4, 40.0).r(0.8), "the lane south past the mouth");
     let _ = w.try_walk_to(Wp::new(44.9, 2.4, 39.2).r(0.8), "the lane south to the connector");
     let mut grab = None;
@@ -1683,7 +1565,7 @@ fn clear_hostiles(w: &mut Walker, radius: f32, cap: u32) {
         let Some(di) = sim.drones.list.iter().position(|d| {
             d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
                 && walker::dxz(d.pos, sim.bond.pos) < radius
-        }) else { return };
+        }) else { break }; // a clear that ends here still walks home below
         // The dropped-gun cycle is now a bounded test-local loot pass (this tree's measured
         // runs: the fights held Bond at 74.0 across 9-12 fights — the armour takes the traded
         // rounds — while the shared resupply walked Bond onto the trench lip for a drop
