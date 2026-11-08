@@ -323,14 +323,16 @@ fn grapple_point_reels_bond_up() {
     let mut scene = nf_view::load_weapons(&iso, "07000011.bin", false, &[0x50]).expect("load with the claw");
     let gp = scene.sim.as_ref().unwrap().drones.grapple_points.iter().find(|p| (p.pos[1] - 55.55).abs() < 0.5)
         .expect("the SkyBridge grapple point [D #265]").pos;
-    // Bond on the office floor under the point (the atrium side), claw out.
+    // Bond on the office floor in the west type-2 icon's arm ((-5.81, 46.38, 24.39) r 3.01 [D icon
+    // census]) — the claw fires only there [M Player_WeaponFiring 0x1a5460:515-528] — claw out.
     {
         let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = [gp[0], 46.5, gp[2] - 4.0];
+        sim.bond.pos = [-5.8, 46.5, 24.4];
         sim.bond.vel = [0.0; 3];
         for _ in 0..20 { sim.step_bond(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false, false, false); }
     }
     assert!(scene.sim.as_ref().unwrap().bond.grapple.is_none(), "sister: no grapple before the fire");
+    assert_eq!(scene.sim.as_ref().unwrap().bond.icon_ctx, 2, "Bond stands in the type-2 icon's arm [D]");
     // Aim up at the point and fire through the Scene's step (the real input path with the latch).
     let y0 = scene.sim.as_ref().unwrap().bond.pos[1];
     let mut latched = false;

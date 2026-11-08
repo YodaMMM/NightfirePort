@@ -104,25 +104,33 @@ fn the_vent_touchonce_walkover_fires_chb8_from_the_spawn() {
 // [M Bullet_Delete 0x12e660:50-55 → Player_SetGrapplePoint 0x195da0]).
 // ---------------------------------------------------------------------------
 
-/// From the crossing stance (40.8, floor 2.40, z 65.5 — walked there from the spawn), the
-/// Q-Claw bolt (weapon 0x50) latches the point and reels to the hang [M Player_SSGrapple
-/// 0x192860]. Sister: no wire before the bolt.
+/// From the trench floor inside the point's type-2 icon arm ((45.27, 0.41, 62.94) r 1.28 [D icon
+/// census]) — the claw fires only there [M Player_WeaponFiring 0x1a5460:515-528] — the Q-Claw
+/// bolt (weapon 0x50) latches the point and reels to the hang [M Player_SSGrapple 0x192860].
+/// Sister: no wire before the bolt.
 #[test]
 fn the_qclaw_latches_the_skybridge_grapple_point() {
     let mut w = load_cold();
-    // The spawn crouch walks to the crossing stance, then stands (the bolt-legal arc needs the
-    // standing head [D probe14_aim]) — walkreal's leg A, verbatim.
-    w.walk_to(Wp::new(40.8, 2.4, 65.5).r(0.5), "to the crossing stance");
-    w.scene.sim.as_mut().unwrap().bond.crouched = false;
-    for _ in 0..20 { w.tick(nf_game::player::Input::default(), false); }
+    // The trench hop of walkreal_07000014's leg 1a (the port has no walkable exit from the
+    // vent store room), onto the icon's arm beside the point.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [43.6, 0.45, 62.9];
+        sim.bond.pre_collide = sim.bond.pos;
+        sim.bond.vel = [0.0; 3];
+        sim.bond.crouched = false;
+    }
+    for _ in 0..30 { w.tick(nf_game::player::Input::default(), false); }
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false); }
     assert!(w.scene.sim.as_ref().unwrap().bond.grapple.is_none(), "sister: no wire before the bolt");
-    // Aim at the point [D (45.30, 4.79, 62.93)] on the lower arc (pitch 0.20 rad [D probe14_aim]).
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.icon_ctx, 2, "Bond stands in the point's type-2 icon arm [D]");
+    // Aim the head ray at the point [D (45.30, 4.79, 62.93)].
     let point = [45.29f32, 5.10, 62.94];
-    let want_yaw = (point[0] - 40.8).atan2(point[2] - 65.5);
-    let want_look = 0.20f32 / std::f32::consts::FRAC_PI_2;
     for i in 0..200 {
-        let (byaw, bpitch) = { let s = w.scene.sim.as_ref().unwrap(); (s.bond.yaw, s.bond.pitch) };
+        let (byaw, bpitch, h) = { let s = w.scene.sim.as_ref().unwrap(); (s.bond.yaw, s.bond.pitch, s.bond.head()) };
+        let d = [point[0] - h[0], point[1] - h[1], point[2] - h[2]];
+        let want_yaw = d[0].atan2(d[2]);
+        let want_look = d[1].atan2((d[0] * d[0] + d[2] * d[2]).sqrt()) / std::f32::consts::FRAC_PI_2;
         let inp = nf_game::player::Input {
             turn: wrap_pi(want_yaw - byaw).clamp(-0.08, 0.08),
             look: (want_look - bpitch).clamp(-0.08, 0.08),

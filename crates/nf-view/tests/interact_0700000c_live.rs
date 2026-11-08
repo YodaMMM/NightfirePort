@@ -325,11 +325,15 @@ fn the_q_claw_grapple_latches_the_pulley_and_reels() {
     let iso = iso();
     // Grapple point #500 graple_pulley (−4.60, 13.16, −189.71) [D], class 0x51 [M 0x198298].
     // The Q-Claw (0x50) is in the 0c loadout [M 0x1a7ef8 case 0x700000c]; the fire latches the
-    // aimed point and Bond reels [M Player_SetGrapplePoint 0x195da0; scene.rs's fire gate].
+    // aimed point and Bond reels [M Player_SetGrapplePoint 0x195da0; scene.rs's fire gate]. The
+    // claw fires only inside a type-2 third icon's arm [M Player_WeaponFiring 0x1a5460:515-528]:
+    // Bond stands on the pulley's icon (-5.35, 2.93, -179.48) r 2.28 [D icon census].
     let mut w = ready(&iso);
+    drop_at(&mut w, [-5.35, 3.93, -179.48]);
     // The player-real switch: the Input weapon select [M the switch request writes obj+0x63].
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false); }
     assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x50, "the Q-Claw is held [M 0x1a7ef8 loadout; D the 0c archive has the 0x50 view model]");
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.icon_ctx, 2, "Bond stands in the pulley's type-2 icon arm [D]");
     let point = [-4.60, 13.16, -189.71];
     let mut latched = false;
     for t in 0..600u32 {
