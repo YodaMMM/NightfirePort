@@ -1125,8 +1125,20 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             w.scene.sim.as_ref().unwrap().bond.pos);
         let prev_keep = w.keep_off;
         let prev_back = w.dmg.back_off;
-        w.keep_off = Some(6.5);
-        w.dmg.back_off = Some(6.5);
+        // Agent: the fight radius 4.2 (the 6.5 stand-off backed Bond out of the opening and
+        // pinned the fight at 7.7, where nothing in the pocket can be answered) and no flank into
+        // the pocket west of x -27.
+        let band = if difficulty >= 2 { 4.2 } else { 6.5 };
+        let prev_hold = w.flank_hold_x;
+        if difficulty >= 2 { w.flank_hold_x = Some(-27.0); }
+        w.keep_off = Some(band);
+        w.dmg.back_off = Some(band);
+        // 00 Agent: the pop fight at x1.2 pain is long; a player tops up the gun before he trips it
+        // (the fight opened on clip 2 / spare 14 and ran dry against the 24-health captain).
+        if difficulty >= 3 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.gun.clip + sim.gun.spare < 30 { let _ = sim; w.resupply("pre-ambush ammo"); }
+        }
         w.walk_nav_to([-24.0, 6.4, 14.8], "the ambush stance (east of the ch-0xF slab)", 0.8);
         w.walk_nav_to([-25.7, 6.4, 14.8], "cross the ch-0xF slab (the ambush pops)", 0.25);
         for _ in 0..120 {
@@ -1148,7 +1160,15 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             };
             if near.is_empty() { break; }
             eprintln!("[01] ambush round {ambush_round}: fighting {near:?} from the mouth");
-            for g2 in route_order(&w, &near) {
+            // Agent: the exposed guards first (a walled one spends the mouth window while the
+            // others shoot free).
+            let order = if difficulty >= 2 {
+                let (mut seen, walled): (Vec<usize>, Vec<usize>) = route_order(&w, &near).into_iter()
+                    .partition(|&g| walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), g));
+                seen.extend(walled);
+                seen
+            } else { route_order(&w, &near) };
+            for g2 in order {
                 let (gpos, los) = {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let d = &sim.drones.list[g2];
@@ -1162,6 +1182,30 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 // corridor get the normal approach to 8 (outside the ×2 band).
                 if gpos[0] > -27.0 && walker::dxz(gpos, w.scene.sim.as_ref().unwrap().bond.pos) > 9.0 {
                     w.walk_nav_to(gpos, &format!("ambush approach guard {g2}"), 8.0);
+                }
+                // Agent (with health to spare): a walled pocket guard is answered from the corridor band's west end, where
+                // the pocket opens at 3.7-4.5 (outside the x2 band), for one bounded window.
+                if difficulty >= 2 && !los && gpos[0] < -27.0 && w.scene.sim.as_ref().unwrap().drones.health.health >= 40.0 {
+                    w.walk_nav_to([-26.5, 6.4, 14.6], &format!("the band edge for guard {g2}"), 0.8);
+                    // Whoever the band edge exposes Bond to comes first (a later popper the round's
+                    // list did not hold shot free while Bond waited on the walled guard).
+                    let seen: Vec<usize> = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let bp = sim.bond.pos;
+                        (0..sim.drones.list.len()).filter(|&i| {
+                            let d = &sim.drones.list[i];
+                            i != ci && i != g2 && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                                && walker::dxz(d.pos, bp) < 14.0 && walker::DamageLog::visible(sim, i)
+                        }).collect()
+                    };
+                    for g3 in seen {
+                        w.shoot_bounded(g3, &format!("band-edge exposed guard {g3}"), 2400);
+                        if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                    }
+                    if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                    w.shoot_bounded(g2, &format!("ambush guard {g2} from the band edge"), 2400);
+                    if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                    continue;
                 }
                 if !w.shoot(g2, &format!("ambush guard {g2}")) {
                     if w.resupply("ambush ammo") { w.shoot(g2, &format!("ambush guard {g2} retry")); }
@@ -1179,6 +1223,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         }
         w.keep_off = prev_keep;
         w.dmg.back_off = prev_back;
+        w.flank_hold_x = prev_hold;
     }
     {
         // The player clears his OWN radius before the stairwell descent: the route guards the
@@ -1412,6 +1457,47 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     }
     panic!("the exit must fire within 60 ticks of the AND-touch (level_exit posted)");
 }
+
+/// The 00 Agent door-lip lure (see the call site): every hall guard within 7 of the south door is
+/// drawn by a live-tracked burst from the hold line and fought as he crosses.
+fn door_lip_lure(w: &mut Walker) {
+        let lip: Vec<usize> = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (0..sim.drones.list.len()).filter(|&i| {
+            let d = &sim.drones.list[i];
+            d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                && walker::dxz(d.pos, [7.9, 6.3, 11.1]) < 7.0
+        }).collect()
+    };
+    for g5 in lip {
+        for t in 0..300u32 {
+            let (input, trigger, done) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[g5];
+                if d.corpse || d.health <= 0.0 { (Input::default(), false, true) }
+                else {
+                    let bp = sim.bond.pos;
+                    let at = [d.pos[0], d.pos[1] + 0.3, d.pos[2]];
+                    let desired = (at[0] - bp[0]).atan2(at[2] - bp[2]);
+                    let err = walker::wrap_pi(desired - sim.bond.yaw);
+                    let want_pitch = ((at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop)) / walker::dxz(bp, at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+                    let perr = want_pitch - sim.bond.pitch;
+                    (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() },
+                        err.abs() < 0.02 && perr.abs() < 0.028 && t % 16 == 0, d.pos[2] < 10.5)
+                }
+            };
+            if done { break; }
+            w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
+            w.total_ticks += 1;
+            w.after_step();
+            if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+        }
+        if !w.shoot(g5, &format!("door lip guard {g5}")) {
+            if w.resupply("door lip ammo") { w.shoot(g5, &format!("door lip guard {g5} retry")); }
+        }
+        if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+    }
+    }
 
 #[test]
 fn walk_from_the_spawn_to_the_exit_with_the_contact() { walk_from_the_spawn_to_the_exit_with_the_contact_at(1) }

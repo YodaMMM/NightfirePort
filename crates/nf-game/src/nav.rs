@@ -175,7 +175,7 @@ impl Network {
         // Deviation: portal connectivity → static collision line of sight at +1.
         // [S] the stand-in mask: the game's NDrone2_MoveTest 0x155330 runs AINetwork_BoundsTest only
         // (no collision LOS) — the port's probe takes the nearest evidenced ray mask (8 | 4).
-        if !world.line_of_sight([a[0], a[1] + 1.0, a[2]], [b[0], b[1] + 1.0, b[2]], crate::world::LOS_PROBE_8) { return (0, None); }
+        if !world.move_probe_clear([a[0], a[1] + 1.0, a[2]], [b[0], b[1] + 1.0, b[2]]) { return (0, None); }
         if !self.bounds { return (1, None); }
         self.bounds_test(a, b, near, want_hit)
     }

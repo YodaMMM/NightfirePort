@@ -451,6 +451,15 @@ impl Breaks {
         kills
     }
 
+    /// The pair the body query itself made on 07000001: pane `i` pushed a guard by `pressed`, and
+    /// that push is the step `Break_Update` 0x12bfd8:26-27 reads. Kind 2 only [M :25].
+    pub fn drone_pressed(&mut self, i: usize, pressed: f32, at: V3, rng: &mut Rng) -> Option<BreakEffect> {
+        let br = self.list.get_mut(i)?;
+        if br.dead || br.kind != 2 { return None; }
+        br.health -= pressed * pressed * 20.0;
+        if br.health < 0.0 { self.kill(i, at, at, rng) } else { None }
+    }
+
     /// `Break_Kill` 0x12b970 for one breakable: the dead bit, then — only when the object has
     /// collision records (the cel+8 collision block [M 0x12b970:59-63]; zero → the silent
     /// kill: no sound, no pieces) — the pieces. The contact triple comes from a ray-test of

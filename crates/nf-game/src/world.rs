@@ -27,9 +27,23 @@ struct Moving {
     /// The last call's shape-bearing parts `(id, hash, matrix)`, aligned with `geo.objects` — the
     /// per-part reuse key (a part whose triple is unchanged memcpy's its stored block).
     last_objects: Vec<(u64, u32, Mat4)>,
+    /// Each shape-bearing part's glist flags (`celglist+0x44`, the object's obj+0xF0 through
+    /// `Control_SetGList` 0x134960), aligned with `geo.objects` — what `pick_admits` reads.
+    flags: Vec<u32>,
 }
 
 type Mat4 = nf_formats::anim::Mat4;
+
+impl Moving {
+    /// The glist flags of `o` when it is a pane part of this set, `None` for anything else
+    /// (including an object of another set: `o` must lie inside `geo.objects` to match).
+    fn pane_flags(&self, o: &Object) -> Option<u32> {
+        let base = self.geo.objects.as_ptr() as usize;
+        let at = (o as *const Object as usize).checked_sub(base)? / std::mem::size_of::<Object>();
+        if at >= self.geo.objects.len() || !std::ptr::eq(&self.geo.objects[at], o) { return None; }
+        (self.movers.get(at)?.0 & PANE_PART != 0).then(|| self.flags.get(at).copied().unwrap_or(0))
+    }
+}
 
 /// How the ground under a point moved over the last tick (`Control_InheritVelocity` 0x133e88): the translation, the
 /// change of heading (atan2 of the matrix's +Z x / z) and the object's position (the pivot of that turn).
@@ -49,15 +63,42 @@ pub const LOS_TURRET_TRACK: u32 = 0x72f; // GT_Track 0x17f9c8:258 — the target
 /// several real-path walks broke; `line_of_sight` keeps the static-world segment test until then.
 pub const LOS_MASKS_ON: bool = false;
 
+/// The body queries' HITTEST+0x98: zero. Bond's walk writes it to 0 on every substate but the
+/// zipline [M Player_Collision 0x194df0:88, :382], a guard's to 0 every tick [M NDrone2_Collision
+/// 0x140e90:62], so neither ever filters a pane out.
+pub const QUERY_BODY: u32 = 0;
+
+/// The object half of a query's mask: `Collide_PickObj` 0x1eae80's flag test. Bit 0x20 of the
+/// object's glist flags is never picked; the query's 0x20 adds 0x1000, its 0x8 adds 0x40, its 0x4
+/// adds 0x10 [M 0x1eae80:70-85]. The type-byte arms (mask 0x100/0x200/0x400 against obj+0xFF 2/0x11,
+/// 5, 3/0x12) cannot reject a pane, whose type byte is 0x20 [M Break_Create 0x12c230:17].
+pub fn pick_admits(mask: u32, glist_flags: u32) -> bool {
+    let mut skip = 0x20;
+    if mask & 0x20 != 0 { skip |= 0x1000; }
+    if mask & 0x8 != 0 { skip |= 0x40; }
+    if mask & 0x4 != 0 { skip |= 0x10; }
+    glist_flags & skip == 0
+}
+
+/// The surface half of a query's mask: `Collide_Intersect` 0x1ebaa8:300-319, for one triangle of an
+/// object whose glist flags are `glist_flags` (bit 0x40 is the node's pass flag, :93-99).
+pub fn surface_kept(mask: u32, mat: u8, glist_flags: u32) -> bool {
+    let low = mat & 0x3f;
+    if mask & 0x800 != 0 && mat & 0x40 != 0 { return false; }
+    if mask & 0x1 != 0 && (low == 0xd || low == 0xe) { return false; }
+    if mask & 0x2 != 0 && low == 0x10 { return false; }
+    if mask & 0x8 != 0 && (glist_flags & 0x40 != 0 || mat & 0xc0 != 0) { return false; }
+    true
+}
+
 /// The `set_dynamic` part id bit of the breakable panes' collision parts (drone.rs's
-/// `0x400_0000_0000 | breaks index`). The RAY queries skip these parts (see
-/// `segment_in_sets_drop_pass_glass` / `segment_blocked`) — a port stand-in [S], not a game
-/// rule: `Collide_RayIntersect` 0x1ec690 runs `Collide_Pick` 0x1eb320, the same
-/// `Collide_StraddleCels` candidate-room walk the movement queries use [M 0x1eb320:125,
-/// 313-329], so a game ray can test a pane its candidate rooms hold. The port has no per-room
-/// object graph to scope that with. The CAPSULE queries (the movement pass) and the effect/impact walks read
-/// them, so an intact pane stops Bond while alive and a killed one (`Break_Kill` 0x12b970:60,
-/// obj+0xFE |= 1, the delete) drops out of the set.
+/// `0x400_0000_0000 | breaks index`). What a query does with a pane is its own HITTEST+0x98:
+/// the body queries carry 0 and stop on it, `line_of_sight` carries its caller's mask through
+/// `pick_admits` and `surface_kept`, so guard sight (0xa27) passes material-0x10 glass and stops on
+/// a material-0xF pane. The rays with no mask of their own yet (`segment`, `segment_bullet`, the
+/// actor and flight families) still skip every pane: a port stand-in [S], not a game rule, since
+/// `Collide_RayIntersect` 0x1ec690 runs the same `Collide_Pick` 0x1eb320 walk as the body queries.
+/// A killed pane (`Break_Kill` 0x12b970:60, obj+0xFE |= 1) drops out of the set.
 pub const PANE_PART: u64 = 0x400_0000_0000;
 
 /// Set in a dynamic part's id when the sight ray skips it: obj+0xF0 bit 0x10 against HITTEST+0x98
@@ -511,6 +552,8 @@ pub struct CollisionWorld {
     /// Player_Init 0x1910f8:152-172 `Vec_Zero(&WldGravity)`]. The disc's one such start is
     /// 0700001b's.
     gravity_y: f32,
+    /// Each shape's glist flags (`MapObject::flags`, `celglist+0x44`), keyed like `shapes`.
+    shape_flags: std::collections::HashMap<u32, u32>,
     /// The cel scope (`build_scoped`): when set, the actor queries (`capsule_push`, the floor ray,
     /// the take ray) test only the cels the game's straddle walk keeps — `Collide_StraddleCels`
     /// 0x1eac98 via `Intersect_Portal` 0x1ea7b8, cap 0x7e cels, the start cel always kept.
@@ -1131,9 +1174,11 @@ impl CollisionWorld {
         // lookup fails and bullets pass through). The synthetic key is 0x80000000 | (map << 16) | object [S].
         let mut shapes: HashMap<u32, Vec<[V3; 3]>> = HashMap::new();
         let mut shape_mats: HashMap<u32, Vec<u8>> = HashMap::new();
+        let mut shape_flags: HashMap<u32, u32> = HashMap::new();
         for (&h, &(m, o)) in &level.by_hash {
             if let Some(c) = level.maps[m].objects[o].collision.as_ref() {
                 shapes.insert(h, c.triangles());
+                shape_flags.insert(h, level.maps[m].objects[o].flags);
                 shape_mats.insert(h, c.triangles_with_material().into_iter().map(|t| t.1).collect());
             }
         }
@@ -1144,6 +1189,7 @@ impl CollisionWorld {
                     if let Some(c) = obj.collision.as_ref() {
                         let key = 0x8000_0000 | ((m as u32) << 16) | o as u32;
                         shapes.insert(key, c.triangles());
+                        shape_flags.insert(key, obj.flags);
                         shape_mats.insert(key, c.triangles_with_material().into_iter().map(|t| t.1).collect());
                     }
                 }
@@ -1166,7 +1212,7 @@ impl CollisionWorld {
         });
         let gravity_y = if level.main_map().is_some_and(|m| level.maps[m].placements.iter()
             .any(|p| p.flags & 0xff == 0x24 && p.params.iter().any(|&(k, v)| k == 3 && v == 2))) { 0.0 } else { -9.8 };
-        CollisionWorld { stat, missile, dynamic: Default::default(), shapes, shape_mats, gravity_y, scope }
+        CollisionWorld { stat, missile, dynamic: Default::default(), shapes, shape_mats, gravity_y, shape_flags, scope }
     }
 
     /// Re-keys the cel-scope buckets by an explicit per-instance attribution — the collision side
@@ -1304,7 +1350,7 @@ impl CollisionWorld {
     pub fn from_triangles(tris: Vec<[V3; 3]>) -> CollisionWorld {
         let mut stat = Geo::default();
         stat.push(tris.into_iter().map(|t| (t, 0)));
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, scope: None }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), scope: None }
     }
 
     /// One object holding these world-space triangles with surface bytes and per-triangle
@@ -1314,7 +1360,7 @@ impl CollisionWorld {
         let pass = tris.iter().map(|(_, _, p)| *p).collect::<Vec<_>>();
         stat.push_flags(tris.into_iter().map(|(t, m, _)| (t, m)), false);
         for (k, p) in pass.into_iter().enumerate() { stat.pass[k] = p; }
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, scope: None }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), scope: None }
     }
 
     /// `WldGravity.y`, see the field.
@@ -1354,7 +1400,7 @@ impl CollisionWorld {
             d.movers = parts.iter().filter(|(_, h, _)| self.shapes.contains_key(h)).map(|&(id, _, m)| (id, m, m)).collect();
             return;
         }
-        let (mut geo, mut movers, mut last) = (Geo::default(), Vec::new(), std::collections::HashMap::new());
+        let (mut geo, mut movers, mut last, mut flags) = (Geo::default(), Vec::new(), std::collections::HashMap::new(), Vec::new());
         geo.tris.reserve(d.geo.tris.len());
         geo.mats.reserve(d.geo.mats.len());
         let mut last_objects: Vec<(u64, u32, Mat4)> = Vec::with_capacity(parts.len());
@@ -1388,7 +1434,7 @@ impl CollisionWorld {
             } else {
                 geo.push_flags(t.iter().enumerate().map(|(k, t)| (t.map(|p| transform(&m, p)), mats.and_then(|v| v.get(k).copied()).unwrap_or(0))), pane_part);
             }
-            if geo.objects.len() > n { movers.push((id, d.last.get(&id).copied().unwrap_or(m), m)); last_objects.push((id, h, m)); }
+            if geo.objects.len() > n { movers.push((id, d.last.get(&id).copied().unwrap_or(m), m)); last_objects.push((id, h, m)); flags.push(self.shape_flags.get(&h).copied().unwrap_or(0)); }
         }
         *d = Moving {
             geo,
@@ -1396,6 +1442,7 @@ impl CollisionWorld {
             last,
             last_parts: parts.iter().map(|&(id, h, _)| (id, h)).collect(),
             last_objects,
+            flags,
         };
     }
 
@@ -1707,6 +1754,29 @@ impl CollisionWorld {
             }
         }
         (total, walkable)
+    }
+
+    /// A guard's body query against the panes: kind 0x800 with mask 0 [M NDrone2_Collision
+    /// 0x140e90:62, :79-85], the push `Drone_CollisionHandler` 0x140968 adds to obj+0x30 (+0x3E0, the
+    /// HITTEST+0x10 accumulator). The spine is `a -> b`, radius `r`. Panes only: the port's guards
+    /// take the rest of the world from `Drone::move_by`'s ray probe. Returns the push and the
+    /// `Breaks` index of the last pane that pushed: the pair `Collide_Update` 0x1ea398 mirrors onto
+    /// the pane's own contact list.
+    pub fn pane_push(&self, a: V3, b: V3, r: f32) -> (V3, Option<usize>) {
+        let dynamic = self.dynamic.read().unwrap();
+        let (mut a, mut b) = (a, b);
+        let (mut total, mut walkable, mut pick, mut pane) = ([0f32; 3], false, false, None);
+        let grow = r + 0.1;
+        for ((o, (id, _, _)), &fl) in dynamic.geo.objects.iter().zip(&dynamic.movers).zip(&dynamic.flags) {
+            if id & PANE_PART == 0 || !pick_admits(QUERY_BODY, fl) { continue; }
+            if (0..3).any(|k| o.hi[k] < a[k].min(b[k]) - grow || o.lo[k] > a[k].max(b[k]) + grow) { continue; }
+            for k in o.tris.clone() {
+                let before = total;
+                capsule_tri_contact(&dynamic.geo.tris[k], dynamic.geo.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, [0.0; 3]);
+                if total != before { pane = Some((id & !PANE_PART) as usize); }
+            }
+        }
+        (total, pane)
     }
 
     /// The static-only, single-cel cylinder push the rigid-body sweep drives:
@@ -2177,6 +2247,7 @@ impl CollisionWorld {
                     let i = (o as *const Object as usize - g.objects.as_ptr() as usize) / std::mem::size_of::<Object>();
                     if dynamic.movers.get(i).is_some_and(|m| m.0 & SIGHT_THROUGH_PART != 0) { continue; }
                 }
+                if dynamic.pane_flags(o).is_some_and(|fl| !pick_admits(LOS_GUARD_VISION, fl)) { continue; }
                 for k in o.tris.clone() {
                     let m = g.mats[k];
                     let low = m & 0x3f;
@@ -2300,16 +2371,16 @@ impl CollisionWorld {
     /// instead of searching on for the nearest. The boolean callers (`line_of_sight`, the bots'
     /// sight lines) only ask "is there a hit", so the answer is bit-identical and the work is the
     /// prefix up to the first hit [S port optimisation].
-    fn segment_blocked(&self, from: V3, to: V3, with_missile: bool, drop_pass: bool) -> bool {
-        self.segment_blocked_g(from, to, with_missile, drop_pass, false)
+    fn segment_blocked(&self, from: V3, to: V3, with_missile: bool, drop_pass: bool, pane_mask: Option<u32>) -> bool {
+        self.segment_blocked_g(from, to, with_missile, drop_pass, false, pane_mask)
     }
 
     /// `segment_bullet_clear` that also sees through glass (surface byte 0x10): the stand-in for
     /// the renderer's "drawn" verdict (`View_AddObjects` 0x1e62d8 sets `obj+0xFC` from the cel/view
     /// walk, which no glass pane hides), so a guard walking behind a window counts as drawn.
-    pub fn segment_sight_clear(&self, from: V3, to: V3) -> bool { !self.segment_blocked_g(from, to, true, true, true) }
+    pub fn segment_sight_clear(&self, from: V3, to: V3) -> bool { !self.segment_blocked_g(from, to, true, true, true, None) }
 
-    fn segment_blocked_g(&self, from: V3, to: V3, with_missile: bool, drop_pass: bool, glass: bool) -> bool {
+    fn segment_blocked_g(&self, from: V3, to: V3, with_missile: bool, drop_pass: bool, glass: bool, pane_mask: Option<u32>) -> bool {
         let d = sub(to, from);
         let dynamic = self.dynamic.read().unwrap();
         let sets: [Option<&Geo>; 2] = [Some(&self.stat), with_missile.then_some(&self.missile)];
@@ -2322,19 +2393,29 @@ impl CollisionWorld {
                 None => { for o in along(g, from, to) { if obj_blocks_g(g, o, from, d, drop_pass, glass) { return true; } } }
             }
         }
-        // The dynamic set, pane parts skipped (the room-scope note at
-        // `segment_in_sets_drop_pass_glass`): the objects ride in `movers` order, so the id
-        // rides the zip.
-        for (o, (id, _, _)) in dynamic.geo.objects.iter().zip(&dynamic.movers) {
-            if id & PANE_PART != 0 { continue; }
+        // The dynamic set: the objects ride in `movers` order, so the id rides the zip. A pane
+        // part answers to `pane_mask`, the query's own HITTEST+0x98; a query with none skips it
+        // (PANE_PART's note).
+        for ((o, (id, _, _)), &fl) in dynamic.geo.objects.iter().zip(&dynamic.movers).zip(&dynamic.flags) {
             if !seg_box(from, d, o.lo, o.hi) { continue; }
+            if id & PANE_PART != 0 {
+                let Some(mask) = pane_mask else { continue };
+                if !pick_admits(mask, fl) { continue; }
+                for k in o.tris.clone() {
+                    let t = &dynamic.geo.tris[k];
+                    if !surface_kept(mask, dynamic.geo.mats[k], fl) { continue; }
+                    if dot(cross(sub(t[1], t[0]), sub(t[2], t[0])), d) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
+                    if seg_tri_hit(from, to, t) { return true; }
+                }
+                continue;
+            }
             if obj_blocks_g(&dynamic.geo, o, from, d, drop_pass, glass) { return true; }
         }
         false
     }
 
     /// `segment(from, to).is_none()`, early-out (see `segment_blocked`).
-    pub fn segment_clear(&self, from: V3, to: V3) -> bool { !self.segment_blocked(from, to, true, false) }
+    pub fn segment_clear(&self, from: V3, to: V3) -> bool { !self.segment_blocked(from, to, true, false, None) }
 
     /// `segment_clear` over the moving set alone: doors and script objects, no static geometry.
     pub fn segment_clear_dynamic(&self, from: V3, to: V3) -> bool {
@@ -2350,7 +2431,7 @@ impl CollisionWorld {
 
     /// `segment_surface_bullet(from, to).is_none()` (= `segment_bullet(..).is_none()`: the same
     /// sets, pass drop and triangle test), early-out (see `segment_blocked`).
-    pub fn segment_bullet_clear(&self, from: V3, to: V3) -> bool { !self.segment_blocked(from, to, true, true) }
+    pub fn segment_bullet_clear(&self, from: V3, to: V3) -> bool { !self.segment_blocked(from, to, true, true, None) }
 
     /// `segment_surface_bullet(from, to).is_none()` with the ray's SUBJECT shapes excluded from
     /// the DYNAMIC set — `Collide_LineOfSight`'s subject-argument rule: the game passes the ray's
@@ -2811,8 +2892,16 @@ impl CollisionWorld {
     /// the wrapper's own `| 4` [M disasm 0x176fec/0x1770b0 — docs/systems/drone-armed-peer.md].
     /// Each caller passes the mask its game call site passes — see the `LOS_*` constants.
     pub fn line_of_sight(&self, a: V3, b: V3, mask: u32) -> bool {
-        if !LOS_MASKS_ON { let _ = mask; return self.segment_clear(a, b); }
+        if !LOS_MASKS_ON { return !self.segment_blocked(a, b, true, false, None); }
         self.line_of_sight_masked(a, b, mask)
+    }
+
+    /// The port's guard and route step probe, a stand-in with no game query behind it: the game's
+    /// guards are not ray-stopped, they walk and take the body query's push (`pane_push`). So a pane
+    /// is no obstacle to this probe, or a guard would stop short of the glass he should press.
+    pub fn move_probe_clear(&self, a: V3, b: V3) -> bool {
+        if !LOS_MASKS_ON { return self.segment_clear(a, b); }
+        self.line_of_sight_masked(a, b, LOS_PROBE_8)
     }
 
     /// The guard-sight ray scoped the way the game scopes it [M DroneVision_CanSeeObjectFrom
@@ -2908,10 +2997,13 @@ impl CollisionWorld {
         let sets: [Option<&Geo>; 3] = [Some(&self.stat), (!skip_cage).then_some(&self.missile), Some(&dynamic.geo)];
         for g in sets.into_iter().flatten() {
             for o in along(g, a, b) {
+                let pane = dynamic.pane_flags(o);
+                if pane.is_some_and(|fl| !pick_admits(mask, fl)) { continue; }
                 for k in o.tris.clone() {
                     let m = g.mats[k];
                     let low = m & 0x3f;
-                    if drop_node && (g.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                    // A pane's stored pass flag is the ray sets' stand-in, not its glist's.
+                    if drop_node && (pane.map_or(g.pass[k], |fl| fl & 0x40 != 0) || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
                     if drop_surface && m & 0x40 != 0 { continue; }
                     if drop_de && (low == 0xd || low == 0xe) { continue; }
                     if drop_10 && low == 0x10 { continue; }
@@ -2947,10 +3039,13 @@ impl CollisionWorld {
         let mut best = None::<f32>;
         for g in sets.into_iter().flatten() {
             for o in along(g, a, b) {
+                let pane = dynamic.pane_flags(o);
+                if pane.is_some_and(|fl| !pick_admits(mask, fl)) { continue; }
                 for k in o.tris.clone() {
                     let m = g.mats[k];
                     let low = m & 0x3f;
-                    if drop_node && (g.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                    // A pane's stored pass flag is the ray sets' stand-in, not its glist's.
+                    if drop_node && (pane.map_or(g.pass[k], |fl| fl & 0x40 != 0) || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
                     if drop_surface && m & 0x40 != 0 { continue; }
                     if drop_de && (low == 0xd || low == 0xe) { continue; }
                     if drop_10 && low == 0x10 { continue; }
@@ -3224,7 +3319,7 @@ mod tests {
         let n = tris.len();
         let stat = Geo { mats: vec![0; n], tris, objects: vec![Object { lo: [-10.0; 3], hi: [10.0; 3], tris: 0..n }], oneway: vec![false; n], groups: Vec::new(), owners: Vec::new(), grid: None,
             pass: vec![false; n] };
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, scope: None }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), scope: None }
     }
 
     /// fix-safe08b: the straddle walk. A wall assigned to an exterior cell with NO portal from the
@@ -3264,7 +3359,7 @@ mod tests {
         }
         let mk = |graph: ScopeGraph, cells: Vec<Vec<u32>>| CollisionWorld {
             stat: Geo { tris: stat.tris.clone(), mats: stat.mats.clone(), oneway: stat.oneway.clone(), objects: stat.objects.clone(), groups: Vec::new(), owners: Vec::new(), grid: None, pass: stat.pass.clone() },
-            missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8,
+            missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
             scope: Some(ScopeData { graph, cells, always: always.clone() }),
         };
         let w = mk(graph.clone(), scope_cells.clone());
@@ -3290,7 +3385,7 @@ mod tests {
         for t in tri { stat2.push(std::iter::once((t, 0xd))); }
         stat2.chunk(16);
         let w3 = CollisionWorld {
-            stat: stat2, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8,
+            stat: stat2, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
             scope: Some(ScopeData { graph: ScopeGraph { cells: vec![([-8.0; 3], [8.0; 3])], portals: Vec::new(), room: vec![true] }, cells: vec![vec![0]], always: Vec::new() }),
         };
         assert!(w3.segment_actor([0.0, 0.5, 0.0], [0.0, 0.5, 4.0]).is_some(), "flat: the mat-0xd tri blocks");
@@ -3330,7 +3425,7 @@ mod tests {
         }
         let mk = |graph: ScopeGraph, cells: Vec<Vec<u32>>| CollisionWorld {
             stat: Geo { tris: stat.tris.clone(), mats: stat.mats.clone(), oneway: stat.oneway.clone(), objects: stat.objects.clone(), groups: Vec::new(), owners: Vec::new(), grid: None, pass: stat.pass.clone() },
-            missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8,
+            missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
             scope: Some(ScopeData { graph, cells, always: always.clone() }),
         };
         let ray = ([1.5, 1.0, 0.0], [3.5, 1.0, 0.0]);
@@ -3353,7 +3448,7 @@ mod tests {
         for t in card { stat3.push(std::iter::once((t, 0x0au8))); }
         stat3.chunk(16);
         let w3 = CollisionWorld {
-            stat: stat3, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8,
+            stat: stat3, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
             scope: Some(ScopeData { graph: ScopeGraph { cells: vec![([-8.0; 3], [8.0; 3])], portals: Vec::new(), room: vec![true] }, cells: vec![vec![0, 1]], always: Vec::new() }),
         };
         assert_eq!(w3.segment_bullet_scoped(Some(0), [-1.0, 1.0, 0.0], [2.0, 1.0, 0.0]), w3.segment_bullet([-1.0, 1.0, 0.0], [2.0, 1.0, 0.0]),

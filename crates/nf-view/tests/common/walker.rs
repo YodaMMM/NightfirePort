@@ -180,6 +180,11 @@ pub struct Walker {
     pub no_grenade_throws: bool,
     /// The first `no_grenade_throws` downgrade was logged (one line per walk, not per tap).
     grenade_downgrade_logged: bool,
+    /// OPT-IN: in `shoot_bounded`, a walled target west of this x is never flanked: the flank's
+    /// perpendicular point lands inside a pocket beside the guard's pack, where a player would
+    /// not walk to reach a guard he cannot see. Bond holds instead and returns after three holds,
+    /// so the caller's round loop gets the window.
+    pub flank_hold_x: Option<f32>,
     /// The walked path: a coarse breadcrumb of ground Bond actually covered (pushed in
     /// tick_inner, ~2 u resolution, 512 points). The resupply rule draws its corridor from it —
     /// see `resupply` for why the harness must not take off-path ammo detours.
@@ -277,6 +282,7 @@ impl Walker {
             keep_off: None,
             no_grenade_throws: false,
             grenade_downgrade_logged: false,
+            flank_hold_x: None,
         }
     }
 
@@ -936,6 +942,15 @@ impl Walker {
             // graph to a flank point: perpendicular to the guard bearing, alternating the side,
             // growing the offset 3→5→7. This is the player's walk-around-the-cover; it ends when a
             // part's segment clears (the loop above picks it up).
+            if blocked_streak >= 540 && flanks < 6
+                && self.flank_hold_x.is_some_and(|wx| self.scene.sim.as_ref().unwrap().drones.list[di].pos[0] < wx) {
+                flanks += 1;
+                blocked_streak = 0;
+                last_progress = t;
+                eprintln!("[walk] {label}: no exposed part for 540 ticks: holding (no flank into the pocket, hold {flanks})");
+                if flanks >= 3 { return false; }
+                continue;
+            }
             if blocked_streak >= 540 && flanks < 6 {
                 flanks += 1;
                 let side = if flanks % 2 == 1 { 1.0 } else { -1.0 };
