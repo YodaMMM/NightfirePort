@@ -171,6 +171,9 @@ fn census(archive: &str) -> Tally {
     let home = sim.bond.pos;
     let mut t = Tally::default();
     let ch0 = sim.drones.channels.clone();
+    // Each press starts from the same mission: a press that fails it (07000007's door #243 stand
+    // is past the cover line) would leave the mission hold on and drop every later press.
+    let mission0 = (sim.drones.mission.internal, sim.drones.mission.state, sim.drones.mission.fail_label);
 
     // Generic per-target driver: `arm` restores the target's state, `hit` reads the effect,
     // `allowed` says whether the game's chain accepts this approach (the lock facing rule).
@@ -192,6 +195,7 @@ fn census(archive: &str) -> Tally {
             if near_load_trigger(sim, a.c, 2.5) { t.skipped += 1; continue; }
             arm(sim);
             sim.drones.channels = ch0.clone();
+            (sim.drones.mission.internal, sim.drones.mission.state, sim.drones.mission.fail_label) = mission0;
             if hit(sim) { t.fails.push(format!("{name}: effect already on before the press (sister)")); continue; }
             // The stand: the face's own distance first, then nearer and farther ones.
             let tries = if a.back > 1.0 { [1.5, 1.2, 1.8] } else { [0.5, 0.3, 0.7] };
