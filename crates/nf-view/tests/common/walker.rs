@@ -478,10 +478,14 @@ impl Walker {
         for (k, &c) in self.rise_watch.iter().enumerate() {
             if watch_before[k] || !sim.drones.channels.on(c as u32) { continue; }
             // The writer ran inside this step: test the capsule at both ends of the tick's move (the
-            // sim's own player toucher sits at pos − 0.6, drone.rs `Toucher::player`).
+            // sim's own player toucher sits at pos − 0.6, drone.rs `Toucher::player`), and Bond's
+            // collide segment for the raw plates (`Toucher::raw`).
+            let (sa, sb) = sim.bond.capsule_seg();
+            let (da, db) = (sa[1] - sim.bond.pos[1], sb[1] - sim.bond.pos[1]);
             let touching: Vec<usize> = sim.drones.triggers.iter()
                 .filter(|t| t.out == c && !t.tris.is_empty())
-                .filter(|t| [feet_before, sim.bond.pos].iter().any(|&f| t.touched_by(&nf_game::triggers::Toucher::player([f[0], f[1] - 0.6, f[2]]))))
+                .filter(|t| [feet_before, sim.bond.pos].iter().any(|&f| t.touched_by(&nf_game::triggers::Toucher::player([f[0], f[1] - 0.6, f[2]]))
+                    || t.touched_by(&nf_game::triggers::Toucher::raw([f[0], f[1] + da, f[2]], [f[0], f[1] + db, f[2]], 0.55))))
                 .map(|t| t.placement).collect();
             self.rises.push((c, self.total_ticks, sim.bond.pos, touching));
         }

@@ -147,6 +147,16 @@ pub struct Trigger {
     /// HITTEST segment touches. Its low reach is proven on these [L ch 0x24]; on floor plates it
     /// fires ahead of the measured box and moves scripted sequences. // [S] scope, not a game rule
     pub seg_beam: bool,
+    /// A flat plate whose glist object flags carry bit 0x40: `Collide_Intersect` 0x1ebaa8:93-99 sets
+    /// HITDATA+0x51 |= 2 for it, and `Intersect_CylGeom` 0x109da0:421 then skips the push-out arm and
+    /// takes any tri whose `Dist2Tri` distance is under the HITTEST radius (:419, :523-531) [M]. The
+    /// walk HITTEST's +0x98 is cleared every tick (`Player_Collision` 0x194df0:88), so none of the
+    /// 0x1ebaa8:301-319 drop masks apply [M]. `RAW_TOUCHER` reads it with Bond's own collide segment:
+    /// standing, A = pos+0.275 down to B = pos+0.55-cc, r 0.55, so a flat plate is touched while it is
+    /// within 0.55 under B over its footprint, about the floor. The measured box stops at pos-0.6;
+    /// 07000006's arrival pair #495/#766 and tunnel plate #524 sit between the two. Bit-0x40 glists
+    /// that are not flat (other than the 0x645 beams, `seg_beam`) keep the box. // [S] scope
+    pub raw_plate: bool,
     pub lo: V3,
     pub hi: V3,
     /// TouchOnce removed itself (its channel was on).
@@ -234,12 +244,18 @@ impl Motion {
 /// A body that can touch triggers: capsule axis from `a` to `b`, radius, drone (true) or Bond, drone skin hash.
 /// The `skin` marker of the riding deep-reach toucher: it touches script plates only.
 pub const RIDE_TOUCHER: u32 = u32::MAX;
+/// The `skin` marker of the raw-plate toucher: Bond's collide-pass HITTEST segment (`Player_Collision`
+/// 0x194df0's arms, the port's `Player::body`), read only by `Trigger::raw_plate` plates with the
+/// raw refine `seg_touches_tri_raw` (see there).
+pub const RAW_TOUCHER: u32 = u32::MAX - 1;
 
 #[derive(Clone, Copy, Debug)]
 /// `contain`: whether the volume-containment contact (see `Trigger::touched_by`) applies to this toucher.
 pub struct Toucher { pub a: V3, pub b: V3, pub r: f32, pub drone: bool, pub skin: u32, pub contain: bool, pub seg_only: bool }
 
 impl Toucher {
+    /// Bond's collide segment as the raw-plate toucher (`RAW_TOUCHER`).
+    pub fn raw(a: V3, b: V3, r: f32) -> Toucher { Toucher { a, b, r, drone: false, skin: RAW_TOUCHER, contain: false, seg_only: true } }
     /// Bond in the normal stance (`Player_Collision` 0x194DF0, hip height 1.035 read live).
     /// level-0c-display-hatch-2 measured two tighter models against the full battery and
     /// REVERTED both: the walk-capsule SPINE with r 0 (A = pos+0.275, B = pos−0.485 [M
@@ -519,7 +535,7 @@ impl Trigger {
         let mask = if mask == 0 { 2 } else { mask };
         if matches!(kind, kind::TOUCH | kind::TOUCH_ONCE) && out_ch == 0x7d { return None; }
         let filter_gate = if matches!(kind, kind::TOUCH | kind::TOUCH_ONCE) { list.get(4).copied().unwrap_or(0) as u8 } else { 0 };
-        let mut t = Trigger { placement, kind, out: out_ch as u8, mask, list, lock: lock as u8, hide, glist_0x10: true, filter_gate, tris: Vec::new(), seg_beam: false, planes: Vec::new(), lo: [0.0; 3], hi: [0.0; 3], gone: false, script: None, next_level, gate, key_gate, success, fallback, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None };
+        let mut t = Trigger { placement, kind, out: out_ch as u8, mask, list, lock: lock as u8, hide, glist_0x10: true, filter_gate, tris: Vec::new(), seg_beam: false, raw_plate: false, planes: Vec::new(), lo: [0.0; 3], hi: [0.0; 3], gone: false, script: None, next_level, gate, key_gate, success, fallback, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None };
         if kind == kind::MOVIE { t.movie_code = out_ch; }
         t.set_tris(tris);
         Some(t)
@@ -578,6 +594,9 @@ impl Trigger {
     /// 07000006's LoadPoint #746, an open room-shaped glist [D measured tris]).
     pub fn touched_by(&self, c: &Toucher) -> bool {
         if c.skin == RIDE_TOUCHER && self.script.is_none() { return false; }
+        if c.skin == RAW_TOUCHER {
+            return self.raw_plate && self.tris.iter().zip(&self.planes).any(|(t, (n, d))| seg_touches_tri_raw(c.a, c.b, c.r, t, n, *d));
+        }
         let grow = c.r + 0.1;
         let lo = [c.a[0].min(c.b[0]) - grow, c.a[1].min(c.b[1]) - grow, c.a[2].min(c.b[2]) - grow];
         let hi = [c.a[0].max(c.b[0]) + grow, c.a[1].max(c.b[1]) + grow, c.a[2].max(c.b[2]) + grow];
@@ -936,6 +955,7 @@ pub fn build(level: &Level) -> Vec<Trigger> {
                 if nw.iter().all(|x| x.is_finite()) && dw.is_finite() && i < t.planes.len() { t.planes[i] = (*nw, *dw); }
             }
             t.seg_beam = target.is_some_and(|(om, oi)| level.maps[om].objects[oi].flags == 0x645);
+            t.raw_plate = t.lo[1] == t.hi[1] && !t.tris.is_empty() && target.is_some_and(|(om, oi)| level.maps[om].objects[oi].flags & 0x40 != 0);
             t.motion = motion; t
         }) {
             Some(mut t) if raw_dc => {
@@ -1020,6 +1040,7 @@ mod tests {
         Trigger { placement: 0, kind, out, mask, list, lock: 0, hide: false, glist_0x10: true, filter_gate: 0, tris: vec![[a, c, b], [a, d, c]],
             // not a laser-beam glist (flags 0x645) — the test plates keep master's contact.
             seg_beam: false,
+            raw_plate: false,
             planes: Vec::new(), lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], gone: false, script: None, next_level: 0, gate: 0, key_gate: 0, success: 0, fallback: 0, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None }
     }
 
