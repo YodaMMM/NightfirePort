@@ -130,8 +130,9 @@ Grenade-mode-count records 0x60/0x61 [L count 2]: the only mode-BYTE cyclers.
   with `+0x8000` when the bit was not already set. A scope drops for its reload; with the button held the raise
   re-queues from idle [M :36-47, :117-152].
 - **Gadget use gates** [M 0x1a5460, on the trigger-held arm, before `Player_RoundToFire`]: the Micro-Camera needs the
-  aim bit; the Q-Claw needs `BL+0x95F == 2` (a type-2 third icon's arm) or MP, and refuses while reeling; the Q-Worm
-  needs an idle PC as the aim target within `+0x1C`. A refused press runs no script.
+  aim bit; the Q-Claw refuses while reeling. A refused press runs no script. Not ported: the Q-Claw also needs
+  `BL+0x95F == 2` (a type-2 third icon's arm) or MP — the port's 07000014 crossing latches from outside every arm. The Q-Worm's gate (an idle PC as the aim target within `+0x1C`) is not ported: the port has
+  no PC collision for the aim ray.
 - **Guided ride** [M 0x1a5460 → `Bullet_handle_object_destruction` 0x12cd98]: a fire press with `obj+0xF6 == 10` blows
   the rocket where it is. Port: `Drones::detonate_guided`.
 - **Reload time**: the key (branch A, disasm 0x1a5fb0-0x1a5fdc) plays +0xA4 at 1.35× from frame 0; the

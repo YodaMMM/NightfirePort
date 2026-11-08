@@ -402,7 +402,10 @@ impl Walker {
     pub fn tick_fire(&mut self, input: Input) {
         let (clip, spare) = { let sim = self.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare) };
         let reload = clip == 0 && spare > 0;
-        self.tick_inner(input, false, true, reload);
+        // The reload key needs the trigger up, and a press under a draw is spent on the view-state
+        // gate [M Player_WeaponFiring 0x1a5460]: the held fire waits for both.
+        let drawing = self.scene.sim.as_ref().unwrap().gun.switch_state != 0;
+        self.tick_inner(input, false, !reload && !drawing, reload);
     }
 
     fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool, reload: bool) {

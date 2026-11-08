@@ -62,8 +62,8 @@ fn the_q_claw_holds_while_held_and_releases_on_the_button_up() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
     let sim = scene.sim.as_mut().unwrap();
-    // 4.05 units from point #282 (13.7525, 32.2919, 57.3034 [L ee_start_05.bin obj+0x30]).
-    let spot = [16.5f32, 29.6, 58.6];
+    // The ledge inside the type-2 icon's arm, 15.4 units from point #281 [D the placement].
+    let spot = SPOT;
     sim.bond.pos = spot;
     let wd = sim.weapons.clone();
     let rounds = wd.clip_size(0x50).max(1);
@@ -76,7 +76,7 @@ fn the_q_claw_holds_while_held_and_releases_on_the_button_up() {
     }
     assert!(equipped, "the claw (0x50) must draw; weapon {:#x}", sim.gun.weapon);
     sim.bond.pos = spot;
-    let target = [13.752469f32, 32.291878, 57.303413];
+    let target = [-3.3962271f32, 42.940285, -71.76922];
     // Aim through the real look input.
     for _ in 0..200 {
         let (turn, look) = aim_inputs(&scene, target);

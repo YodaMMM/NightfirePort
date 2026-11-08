@@ -288,7 +288,8 @@ fn the_stun_stuns_the_guard_for_3600_and_drops_his_weapon() {
     assert!(exit_state == nf_game::drone::state::ATTACK || exit_state == nf_game::drone::state::DRAW_WEAPON,
         "the recovered guard wakes into Attack 0x56 (the get-up's follow-on; 0x66 = Attack's draw of the sidearm he holds fists after the drop) [M 0x163350 case 1], got {exit_state:#x}");
     assert!(held > 3600, "the Loop's fresh re-arm holds 3600 from the Loop's first tick — the chain cannot finish before it [M 0x1631c0 case 1], got {held}");
-    assert!(held <= 4300, "the hold is 3600 + the fall and get-up clips, not an endless stall, got {held}");
+    // The two falls differ by the `Rand_Rand(2)` pick [M 0x172bb0 case 1]; the long one is 322 ticks, the get-up 439.
+    assert!(held <= 4400, "the hold is 3600 + the fall and get-up clips, not an endless stall, got {held}");
 }
 
 /// ── The 0x69 smoke: a 5-tick fuse into a 3600-tick cloud ────────────────────────────────────────

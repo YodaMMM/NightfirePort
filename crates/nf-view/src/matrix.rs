@@ -636,9 +636,6 @@ fn run_cell(scene: &mut Scene, id: u8, snap: &Snap) -> Cell {
             if scene.sim.as_ref().unwrap().aiming { break; }
         }
     }
-    // The Q-Claw and the Q-Worm refuse the press away from their targets [M the same function's use
-    // gates: a type-2 third icon's arm, an idle PC in the aim ray] — no event is the game's answer here.
-    c.no_target |= matches!(id, 0x50 | 0x51 | 0x58);
     for _attempt in 0..3 {
         let hold = if id >= 0x48 { 45 } else { 60 };
         let (shots_before, gren_before) = (c.shots, c.grenades);

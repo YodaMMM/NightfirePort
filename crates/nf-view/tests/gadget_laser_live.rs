@@ -26,6 +26,7 @@ fn the_watch_laser_burns_the_safe_bolt() {
     sim.bond.yaw = 0.85;
     let draw = Input { switch_to: Some(0x4e), ..Default::default() };
     for _ in 0..40 { sim.step_bond(draw, false, false, false); }
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     assert_eq!(sim.gun.weapon, 0x4e, "the Laser must equip; weapon {:#x}", sim.gun.weapon);
     // Aim at the top bolt through the real look input and HOLD the fire: the beam burns it.
     // No aim gate on the Laser [M 0x1a5460:512-514's 0x54 check is the Micro-Camera's fire polarity].
@@ -74,6 +75,7 @@ fn the_partial_burn_heals_while_the_beam_is_off() {
     sim.bond.yaw = 0.85;
     let draw = Input { switch_to: Some(0x4e), ..Default::default() };
     for _ in 0..40 { sim.step_bond(draw, false, false, false); }
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     let target = [162.2365f32, 43.875843, -117.14455];
     for _ in 0..60 {
         let (turn, look) = {
@@ -114,6 +116,7 @@ fn the_watch_laser_burns_only_while_the_fire_is_held() {
     sim.bond.yaw = 0.85;
     let draw = Input { switch_to: Some(0x4e), ..Default::default() };
     for _ in 0..40 { sim.step_bond(draw, false, false, false); }
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     assert_eq!(sim.gun.weapon, 0x4e, "the Laser equips [D USATxt 0x05000043]");
     let target = [162.2365f32, 43.875843, -117.14455];
     // Aimed at the bolt WITHOUT the fire: nothing burns (the fail-first property — the pre-fix port
@@ -165,6 +168,7 @@ fn the_laser_away_from_the_bolts_burns_nothing() {
     sim.bond.yaw = 0.85;
     let draw = Input { switch_to: Some(0x4e), ..Default::default() };
     for _ in 0..40 { sim.step_bond(draw, false, false, false); }
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     assert_eq!(sim.gun.weapon, 0x4e, "the Laser equips [D USATxt 0x05000043]");
     // Aim at the ceiling (the bolt is below the eye line) with the fire HELD: the beam never touches it.
     for _ in 0..300 {
@@ -199,6 +203,7 @@ fn the_decryptor_burns_the_safe_bolt() {
         if sim.gun.weapon == 0x4e { equipped = true; break; }
     }
     assert!(equipped, "the decryptor must equip through the gadget cycle; weapon {:#x}", sim.gun.weapon);
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     let target = [162.2365f32, 43.875843, -117.14455];
     // The decryptor's fire has no aim gate [M 0x1a5460:512-514 reads only 0x54] — hold the fire and burn.
     for _ in 0..300 {
@@ -235,6 +240,7 @@ fn the_laser_hold_spawns_no_bullet_impacts_and_keeps_one_loop_voice() {
     sim.bond.yaw = 0.85;
     let draw = Input { switch_to: Some(0x4e), ..Default::default() };
     for _ in 0..40 { sim.step_bond(draw, false, false, false); }
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     assert_eq!(sim.gun.weapon, 0x4e, "the Laser equips");
     // Aim at the wall behind the safe, hold fire 60 ticks through the real input path.
     let target = [162.2365f32, 43.875843, -117.14455];
@@ -288,6 +294,7 @@ fn the_beam_end_equals_the_crosshair_rays_hit() {
     sim.bond.yaw = 0.85;
     let draw = Input { switch_to: Some(0x4e), ..Default::default() };
     for _ in 0..40 { sim.step_bond(draw, false, false, false); }
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     assert_eq!(sim.gun.weapon, 0x4e, "the Laser equips");
     let target = [162.2365f32, 43.875843, -117.14455];
     // fix-weapon-anims2: the hold now covers the Laser's correct-rate equip+draw+first-shot chain.
@@ -353,6 +360,7 @@ fn the_stunner_without_a_target_shoots_nothing() {
         sim.step_bond(draw, false, false, false);
         if sim.gun.weapon == 0x4a { ok = true; break; }
     }
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     if !ok {
         // The 07000008 start owns the Stunner (the 07 party loadout's 0x4a/999 [M 0x1a7ef8 case 7]);
         // the switch input must find it owned.

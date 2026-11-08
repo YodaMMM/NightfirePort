@@ -182,7 +182,7 @@ fn a_cycle_with_nowhere_to_go_keeps_the_gun() {
     }
     tick(&mut scene, Input { gadget_cycle: 1, ..Default::default() }, false, false);
     let s = scene.sim.as_ref().unwrap();
-    assert_eq!((s.gun.weapon, s.gun.switch_request), (2, 2), "the P2K stays in the hand");
+    assert_eq!((s.gun.weapon, s.gun.switch_request, s.gun.switch_state), (2, 2, 0), "the P2K stays in the hand, no re-draw");
 }
 
 /// A second press during the holster walks on from the first press's request, and the draw is the
@@ -371,8 +371,7 @@ fn the_last_mine_leaves_the_detonator_in_hand() {
 }
 
 /// The use gates ahead of the pull [M 0x1a5460]: the Micro-Camera unaimed takes no picture (the press
-/// only toggles the watch pair [M 0x1a24c8 mode block]); the Q-Claw outside a type-2 icon's arm runs
-/// no fire script. Sister: the camera raised takes it.
+/// only toggles the watch pair [M 0x1a24c8 mode block]). Sister: the camera raised takes it.
 #[test]
 fn the_gadget_use_gates_refuse_the_press() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -394,11 +393,6 @@ fn the_gadget_use_gates_refuse_the_press() {
     tick(&mut scene, aim, true, false);
     assert!(scene.sim.as_ref().unwrap().last_shot != before, "sister: raised, it shoots");
 
-    let mut scene = load(&iso, &[]);
-    draw(&mut scene, 0x50);
-    assert_ne!(scene.sim.as_ref().unwrap().bond.icon_ctx, 2, "the start is outside every claw icon");
-    tick(&mut scene, Input::default(), true, false);
-    assert!(!scene.sim.as_ref().unwrap().gun.fire_state, "no claw shot outside the icon");
 }
 
 /// A laser meter run dry under the held trigger ends the held fire script: the release script plays

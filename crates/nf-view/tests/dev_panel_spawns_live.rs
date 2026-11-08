@@ -218,6 +218,7 @@ fn the_frag_gives_the_frag_mesh_and_the_stun_the_stun_mesh() {
         let mut input = nf_game::player::Input { switch_to: switch, ..Default::default() };
         for _ in 0..90 { sim.step_bond(input, false, false, false); if sim.gun.weapon == id { break; } input = Default::default(); }
         assert_eq!(sim.gun.weapon, id, "{what}: drawn");
+        for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(nf_game::player::Input::default(), false, false, false); }
         let mut thrown = false;
         for _ in 0..180 {
             sim.step_bond(nf_game::player::Input::default(), true, false, false);

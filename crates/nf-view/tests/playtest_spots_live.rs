@@ -518,6 +518,8 @@ fn spots_0700000a_qworm_pc_installs() {
     sim.drones.inventory.owned[0x58] = true;
     sim.gun.weapon = 0x58;
     sim.gun.switch_request = 0x58;
+    // The level's own draw plays out first: a press under it is spent [M 0x1a5460:631-648].
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     let mut installed = false;
     for _ in 0..120u32 {
         sim.step_bond(Input::default(), true, false, false); // trigger taps

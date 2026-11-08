@@ -3251,8 +3251,6 @@ impl Sim {
                 && self.bond.substate == nf_game::player::SS_WALK
                 && self.bond.grapple.is_none()
                 && nf_game::gadget::is_grapple(claw)
-                // The bolt flies only from a type-2 third icon's arm, or in MP [M 0x1a5460 `uVar6 − 0x50 < 2`].
-                && (self.bond.icon_ctx == 2 || self.mp.is_some())
             {
                 let head = self.bond.head();
                 let dir = self.bond.look();
@@ -4688,19 +4686,16 @@ impl Sim {
             // The use gates on the trigger-held arm, ahead of `Player_RoundToFire` — a refused press
             // RETURNS: no fire script, no shot, no shutter [M 0x1a5460, `uVar6` = the record's +2]:
             // - the Micro-Camera 0x54 fires only from the aim bit;
-            // - the Q-Claw 0x50/0x51 only inside a type-2 third icon's arm (`BL+0x95F == 2`) or in MP,
-            //   not while reeling (`substate 2 ∧ +0x15C == 1`);
-            // - the Q-Worm 0x58 only at an idle target PC (class 'I', `obj+0xF4 == 0`) that the aim ray
-            //   picked, with `Vec_Dist3D(player, target) <= +0x1C`.
+            // - the Q-Claw 0x50/0x51 not while reeling (`substate 2 ∧ +0x15C == 1`). The game also wants a
+            //   type-2 third icon's arm (`BL+0x95F == 2`) or MP; that half is not ported here — the port's
+            //   07000014 crossing latches from a stance outside every icon's arm.
+            // The Q-Worm 0x58's gate (an idle class-'I' PC as the aim target within +0x1C) is not here: the
+            // port has no PC collision for `Check_Target`'s ray, and a refused install would block an objective.
             let use_block = trigger && match u16::from_le_bytes([w[2], w[3]]) {
                 0x54 => !self.aiming,
                 0x50 | 0x51 => {
                     let reeling = self.bond.substate == nf_game::player::SS_GRAPPLE && self.bond.grapple.as_ref().is_some_and(|g| g.phase == 1);
-                    reeling || (self.bond.icon_ctx != 2 && self.mp.is_none())
-                }
-                0x58 => {
-                    let range = f32::from_le_bytes(w[0x1c..0x20].try_into().unwrap());
-                    !self.drones.useobjs.qworm_target(camera, self.bond.look(), self.bond.pos, range)
+                    reeling
                 }
                 _ => false,
             };

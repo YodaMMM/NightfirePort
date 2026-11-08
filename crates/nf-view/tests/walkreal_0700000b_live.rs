@@ -398,6 +398,7 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
     {
         let input = nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() };
         for _ in 0..40 { w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false); }
+        for _ in 0..200 { if w.scene.sim.as_ref().unwrap().gun.switch_state == 0 { break; } w.scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     }
     let mut burned = false;
     for _ in 0..240 {
