@@ -206,10 +206,16 @@ pub struct LadderCtx<'a> {
     /// is ON within 2.0 of the player [M NDrone2_DoCollision 0x149ec8]); EMPTY = no bots (unit
     /// tests, MP remotes) — no actor push runs.
     pub bot_capsules: &'a [(V3, V3, f32)],
+    /// How many of `bot_capsules` (the leading ones) push a GROUNDED Bond too: the door guards
+    /// (state 0x31, `NDrone2_DSTATE_CivilianDoorGuard` 0x160648). Their collision is ON whenever
+    /// Bond is within 2.0 [M NDrone2_DoCollision 0x149ec8 -> DroneFunc_NearPlayerCollision 0x14b190],
+    /// and the SP Jointy push moves the player the full overlap [M Collide_Jointy 0x1ec180:229-233].
+    /// The airborne-only gate below stays for every other bot.
+    pub ground_bots: usize,
 }
 
 impl Default for LadderCtx<'_> {
-    fn default() -> Self { LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], straddle: &[], bot_capsules: &[] } }
+    fn default() -> Self { LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], straddle: &[], bot_capsules: &[], ground_bots: 0 } }
 }
 
 /// The current substate's pick arm — the HITTEST the game builds for `Player_Collision` 0x194df0's
@@ -2032,12 +2038,14 @@ self.local = [vs / k, vf / k];
         // walk, the 0a west doorway): the grounded-side push against allies is a live-check
         // item, not shipped here. The sleeper drop (grounded false through the whole contact)
         // keeps its [M] push either way.
-        if !ctx.bot_capsules.is_empty() && !self.grounded {
+        if !ctx.bot_capsules.is_empty() && (!self.grounded || ctx.ground_bots > 0) {
             let (ja, jb) = self.capsule();
             if std::env::var("NF_PUSH_DEBUG").is_ok() {
                 eprintln!("[pushdbg] n={} ja={:?} jb={:?} bots={:?}", ctx.bot_capsules.len(), ja, jb, ctx.bot_capsules);
             }
-            for &(ta, tb, tr) in ctx.bot_capsules {
+            let grounded = self.grounded;
+            for (bi, &(ta, tb, tr)) in ctx.bot_capsules.iter().enumerate() {
+                if grounded && bi >= ctx.ground_bots { continue; }
                 let mut p = closest_on_seg(ta, tb, ja);
                 let mut q = closest_on_seg(ja, jb, p);
                 p = closest_on_seg(ta, tb, q);
@@ -2048,7 +2056,8 @@ self.local = [vs / k, vf / k];
                 let dist = dist_sq.sqrt().max(1e-6);
                 let overlap = (rr - dist) / dist; // fVar12 = 1.0 in SP [M :229-233]
                 push[0] -= d[0] * overlap;
-                push[1] -= d[1] * overlap;
+                // [S] a grounded Bond keeps his floor: the door-guard push is lateral only.
+                if !grounded { push[1] -= d[1] * overlap; }
                 push[2] -= d[2] * overlap;
             }
         }
@@ -2787,7 +2796,7 @@ mod tests {
     fn the_ladder_grab_gate_excludes_only_climb_and_grapple() {
         let world = CollisionWorld::from_triangles(Vec::new());
         let lad = Ladder::simple([10.0, 3.0, 20.0], 2.0, 0.0);
-        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], straddle: &[], bot_capsules: &[] };
+        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], straddle: &[], bot_capsules: &[], ground_bots: 0 };
         // SWIM grabs: one tick in the water context attaches (pre-fix it stayed SS_SWIM).
         let mut b = Bond::new([10.0, 3.0, 20.5], lad.yaw + std::f32::consts::PI);
         b.substate = SS_SWIM;
@@ -2856,7 +2865,7 @@ mod tests {
         let grab = |straddle: &[usize]| {
             let mut b = Bond::new([10.0, 3.0, 20.5], lad.yaw + std::f32::consts::PI);
             b.substate = SS_SWIM;
-            b.tick_ctx(&world, &LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], straddle, bot_capsules: &[] }, &Input { forward: 1.0, ..Default::default() });
+            b.tick_ctx(&world, &LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], straddle, bot_capsules: &[], ground_bots: 0 }, &Input { forward: 1.0, ..Default::default() });
             b.substate
         };
         // The ladder's cel NOT in the straddle set: no grab (the pick never admitted it).
@@ -2869,7 +2878,7 @@ mod tests {
         unlinked.cell = None;
         let mut b2 = Bond::new([10.0, 3.0, 20.5], unlinked.yaw + std::f32::consts::PI);
         b2.substate = SS_SWIM;
-        b2.tick_ctx(&world, &LadderCtx { ladders: &[unlinked], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], straddle: &[3], bot_capsules: &[] }, &Input { forward: 1.0, ..Default::default() });
+        b2.tick_ctx(&world, &LadderCtx { ladders: &[unlinked], wires: &[], wire_anims: None, water: Some(2.0), sink: false, creepwalls: &[], straddle: &[3], bot_capsules: &[], ground_bots: 0 }, &Input { forward: 1.0, ..Default::default() });
         assert_eq!(b2.substate, SS_SWIM, "an unlinked ladder (cell None) must not grab while scoping is active");
         // The empty set scopes nothing (no cel graph): the grab goes through.
         assert_eq!(grab(&[]), SS_CLIMB, "the no-graph path must keep the unscoped pick");
@@ -2883,7 +2892,7 @@ mod tests {
     #[test]
     fn swim_moves_along_the_look_direction_and_the_surface_clamps() {
         let world = CollisionWorld::from_triangles(Vec::new());
-        let ctx = LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: Some(3.0), sink: false, creepwalls: &[], straddle: &[], bot_capsules: &[] };
+        let ctx = LadderCtx { ladders: &[], wires: &[], wire_anims: None, water: Some(3.0), sink: false, creepwalls: &[], straddle: &[], bot_capsules: &[], ground_bots: 0 };
         let mut b = Bond::new([0.0, 2.7, 0.0], 0.0); // below surface − 0.3? 2.7 < 2.7 is false — at the ceiling
         b.substate = SS_SWIM;
         // Look down-ish (pitch −0.5: dir = (0, −sin π/4, cos π/4)), swim forward: the position must
@@ -2943,7 +2952,7 @@ mod tests {
     fn climb_look_turns_within_the_ladder_window_and_pitch_is_free() {
         let world = CollisionWorld::from_triangles(Vec::new());
         let lad = Ladder::simple([10.0, 3.0, 20.0], 2.0, 0.0);
-        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], straddle: &[], bot_capsules: &[] };
+        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], straddle: &[], bot_capsules: &[], ground_bots: 0 };
         let mut b = Bond::new([10.0, 3.0, 20.0 + 0.5], lad.yaw + std::f32::consts::PI);
         b.substate = SS_CLIMB;
         b.ladder = Some(0);

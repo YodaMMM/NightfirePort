@@ -87,10 +87,13 @@ fn walk_to_the_story_point(w: &mut Walker) {
         ("the north row east", [76.5, 43.6, -44.9]),
         ("the hall west mouth", [76.6, 43.6, -50.7]),
         ("the hall floor", [83.1, 43.6, -50.5]),
-        ("the hall east", [93.3, 43.6, -50.4]),
     ] {
         w.walk_nav_to(at, name, 1.5);
     }
+    // The library door's guards (#404/#417) hold its doorway until Drake's reveal (ch 21): the
+    // reveal first, up the west stairs (the walkreal route).
+    walker::drakes_reveal_07(w);
+    w.walk_nav_to([93.3, 43.6, -50.4], "the hall east", 1.5);
     {
         // The story point has not fired yet: the party-corridor door still stands open.
         let sim = w.scene.sim.as_ref().unwrap();

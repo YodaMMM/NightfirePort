@@ -1664,3 +1664,65 @@ pub fn hall_ammo_ladder(w: &mut Walker, label: &str) {
     w.resupply(label);
     hall_restage(w, label);
 }
+
+/// Drake's reveal from the hall floor (83.1, −50.5): south along the hall's own nodes ([D path-0
+/// dump]: 26 (83.1,−56.2) → 41 (83.1,−61.1) the stair foot), up the west stairs (nodes 41→42→43:
+/// (83.1,43.4,−61.1)→(83.2,46.4,−70.2)→(95.6,49.4,−70.6)), north onto the balcony and into
+/// TouchOnce #356 (box 92.9–98.0, 49.0–53.8, −79.8–−78.9 [D]) → ch 0x15 → SP #419 (0x06000072, the
+/// party fly-through where Bond first sees Drake, 3000 ticks [M levels.md §5.1]), skipped with the
+/// game's own skip action; then back down the west stairs to the hall floor. Ch 21 is the door
+/// guards' second channel: #404/#417 (the library door) and #441/#442 (the east corridor) leave on
+/// it [D p6 = 21, p8 = 100 — the port's second-tag arm].
+#[allow(dead_code)]
+pub fn drakes_reveal_07(w: &mut Walker) {
+    for (name, at) in [
+        ("the hall south-west node", [83.1f32, 43.6, -56.2]),
+        ("to the west stair foot", [83.1, 43.6, -61.1]),
+    ] {
+        w.walk_nav_to(at, name, 1.4);
+    }
+    w.climb_stairs([83.2, 46.4, -70.2], "the west stairs", 1.6, 4200);
+    w.climb_stairs([95.6, 49.4, -70.6], "the stair head", 1.6, 4200);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[07] upstairs at tick {} bond {:?}", w.total_ticks, sim.bond.pos);
+        assert!(sim.bond.pos[1] > 48.0, "Bond must stand on the upper floor (y {:.2})", sim.bond.pos[1]);
+        assert!(!sim.drones.channels.on(21), "ch 21 is off before the reveal plate");
+    }
+    w.walk_nav_to([95.5, 49.4, -76.5], "the balcony north", 1.5);
+    {
+        let target = [95.4f32, 49.4, -79.4]; // inside #356's XZ (92.9–98.0, −79.8–−78.9 [D])
+        for t in 0..1500u32 {
+            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x15) { break; }
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            let desired = (target[0] - p[0]).atan2(target[2] - p[2]);
+            let err = wrap_pi(desired - sim.bond.yaw);
+            let input = Input { turn: err.clamp(-0.08, 0.08), forward: if err.abs() > 1.0 { 0.0 } else { 1.0 }, ..Default::default() };
+            w.tick(input, false);
+            if t % 300 == 0 { eprintln!("[07 reveal t{t}] bond {:?} 0x15 {}", w.scene.sim.as_ref().unwrap().bond.pos,
+                w.scene.sim.as_ref().unwrap().drones.channels.on(0x15) as u8); }
+        }
+    }
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x15), "Drake's reveal plate #356 fired ch 0x15 [D placements]");
+    // The fly-through holds Bond; the walker's tick carries the game's skip action until it ends.
+    w.wait_enabled(4200, "the Drake fly-through");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.scripts.players.iter()
+            .any(|p| p.scripts.contains(&0x0600_0072) && p.state >= 3),
+            "the Drake fly-through (0x06000072) ran through the real trigger [M levels.md §5.1]");
+        let guards: Vec<usize> = sim.drones.list.iter()
+            .filter(|g| matches!(g.placement, 404 | 417) && g.present).map(|g| g.placement).collect();
+        assert!(guards.is_empty(), "the library door guards leave on ch 21 [D p6 = 21], still there: {guards:?}");
+    }
+    w.walk_nav_to([95.6, 49.4, -70.6], "back on the west balcony", 1.4);
+    w.climb_stairs([83.2, 46.4, -70.2], "down the west stairs", 1.6, 4200);
+    for (name, at) in [
+        ("the west stair foot", [83.1f32, 43.4, -61.1]),
+        ("the hall south-west node", [83.1, 43.6, -56.2]),
+        ("the hall floor", [83.1, 43.6, -50.5]),
+    ] {
+        w.walk_nav_to(at, name, 1.4);
+    }
+}
