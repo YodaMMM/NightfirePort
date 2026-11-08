@@ -584,7 +584,12 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
         let sim = w.scene.sim.as_ref().unwrap();
         for plc in [448usize, 449] {
             let m = &sim.drones.mines[mine_idx(&w, plc)];
-            assert!(m.exploded && m.cause == nf_game::worldobj::MINE_BLAST, "#{plc} goes on #447's blast (cause {})", m.cause);
+            // 00 Agent reaches this shot with a guard's dropped automatic in hand (clip 30): its
+            // burst can take a neighbour beam by the round before the blast does [M Collide_Update
+            // 0x1ea398:160-233 — the round stops on the first mine it picks].
+            let ok = m.cause == nf_game::worldobj::MINE_BLAST
+                || (difficulty >= 3 && m.cause == nf_game::worldobj::MINE_BULLET);
+            assert!(m.exploded && ok, "#{plc} goes on #447's blast (cause {})", m.cause);
         }
     }
     w.walk_to(Wp::new(0.0, 41.4, 23.0).r(1.0), "door[42] through");
@@ -840,6 +845,21 @@ fn walk_spawn_to_the_omega_sector_exit_real_damage_00agent() {
 #[test]
 fn walk_spawn_to_the_omega_sector_exit() {
     walk_spawn_to_the_omega_sector_exit_at(1);
+}
+
+/// The objective chain at the other two menu picks: the same walked route and end with the
+/// walker's health allowance, at Agent (2) and 00 Agent (3) — the min-difficulty placements
+/// [M Drone_Create 0x136be0:49] and the keypad create-unlock tag (difficulty 1 only [M
+/// Lock_Create 0x1ae1f8 tail]) change the level at each pick, so each pick's real path to
+/// ch 0x8e is walked. The real-health sisters stay the damage pins.
+#[test]
+fn walk_spawn_to_the_omega_sector_exit_agent() {
+    walk_spawn_to_the_omega_sector_exit_at(2);
+}
+
+#[test]
+fn walk_spawn_to_the_omega_sector_exit_00agent() {
+    walk_spawn_to_the_omega_sector_exit_at(3);
 }
 
 /// The range shot the merges never pinned: a mine takes a BULLET from a distance, through the
