@@ -21,6 +21,21 @@ thread_local! {
     /// eye ray reaches (desk cover) — the hurting-first fallback pick plus the stand's creep,
     /// the `lane_fights` machinery without the lane windows.
     static UNSEEN_FIGHTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `with_glass_sight`: the fights' and stands' sight rays drop the INTACT mat-0x10 static
+    /// glass (opt-in, glass-pierce-2). The game's gun rounds pass a 0x10 surface whenever the
+    /// weapon record's +0x6c bit 0x800 is clear [M Bullet_update 0x12e7b0 disasm 0x12f048-
+    /// 0x12f058 arms the 0x20 HITTEST mask; Collide_Update 0x1ea398:216-229 walks the pass;
+    /// Bullet_CollisionHandler 0x12cf54-0x12cf60 passes the contact] — and with the guard-side
+    /// pass armed the game makes standing behind station glass UNSAFE: the guards' rounds reach
+    /// Bond through it while the walker's plain bullet ray still counts the pane's static tris
+    /// solid, so every fight stand read the shooter "out of sight" and stood in the open chewing
+    /// (the 08 d2 run: the burst pair closed to d 0.6 over eight "held (out of sight or cap)"
+    /// stands, death 25036). A player sees and answers a shooter through a window; the sight ray
+    /// here takes the flight's own glass drop (world.rs segment_flight_scoped's
+    /// `glass && mats[k] & 0x3f == 0x10` [M the same pass]). Default OFF so every other walk's
+    /// fight timelines stay exactly as pinned (rule 7: opt-in, set only by the tests that need
+    /// it — walkreal_07000008's real-damage Agent sisters).
+    static GLASS_SIGHT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The latest real-damage summary on this thread (refreshed every 60 ticks and at a death).
     static LAST_SUMMARY: std::cell::RefCell<Option<(u32, String)>> = const { std::cell::RefCell::new(None) };
 }
@@ -52,6 +67,19 @@ pub fn with_real_damage<R>(f: impl FnOnce() -> R) -> R {
     struct Reset;
     impl Drop for Reset { fn drop(&mut self) { REAL_DAMAGE.with(|c| c.set(false)); print_summary(); } }
     REAL_DAMAGE.with(|c| c.set(true));
+    let _reset = Reset;
+    f()
+}
+
+/// `with_real_damage_head_hunting` plus the fights' glass sight (glass-pierce-2): the sight
+/// rays drop the intact mat-0x10 static glass — see the GLASS_SIGHT field doc. Opt-in per test:
+/// the walks whose fights must answer shooters behind intact station windows (the 08 real-damage
+/// Agent sisters); every other walk's fight timelines stay byte-exact.
+#[allow(dead_code)]
+pub fn with_glass_sight<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { GLASS_SIGHT.with(|c| c.set(false)); } }
+    GLASS_SIGHT.with(|c| c.set(true));
     let _reset = Reset;
     f()
 }
@@ -414,12 +442,20 @@ impl DamageLog {
                 let mut clear = true;
                 for g in &gun_spots {
                     let gr = [c[0] - g[0], c[1] - g[1], c[2] - g[2]];
-                    let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(*g), *g, c);
+                    let tw = if GLASS_SIGHT.with(|c| c.get()) {
+                        sim.world.segment_flight_scoped(sim.world.find_cel(*g), *g, c, true)
+                    } else {
+                        sim.world.segment_bullet_scoped(sim.world.find_cel(*g), *g, c)
+                    };
                     if tw.is_some_and(|w| w < t_box) { clear = false; break; }
                 }
                 if !clear { continue; }
             } else {
-                let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, c);
+                let tw = if GLASS_SIGHT.with(|c| c.get()) {
+                    sim.world.segment_flight_scoped(sim.world.find_cel(eye), eye, c, true)
+                } else {
+                    sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, c)
+                };
                 if tw.is_some_and(|w| w < t_box) { continue; }
             }
             let dev = ((c[0] - torso[0]).powi(2) + (c[1] - torso[1]).powi(2) + (c[2] - torso[2]).powi(2)).sqrt();

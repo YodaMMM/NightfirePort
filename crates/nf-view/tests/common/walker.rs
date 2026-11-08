@@ -672,7 +672,14 @@ impl Walker {
             // [world.rs:1626-1628]. level-02-every-objective-4 2026-10-31.
             let ray = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
             let Some(t_box) = nf_game::damage::ray_box(eye, ray, &b) else { continue };
-            let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, c);
+            // GLASS_SIGHT (opt-in, damage_log.rs with_glass_sight, glass-pierce-2): the sight ray
+            // takes the flight's own mat-0x10 drop — the game's gun rounds pass intact glass and
+            // the walker's fights must answer the shooter behind it.
+            let tw = if GLASS_SIGHT.with(|c| c.get()) {
+                sim.world.segment_flight_scoped(sim.world.find_cel(eye), eye, c, true)
+            } else {
+                sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, c)
+            };
             if tw.is_some_and(|w| w < t_box) { continue; }
             // Close in only: the head box is ~0.2 u, and past ~6 u Bond's own spread covers more
             // than that (the 02 geisha-2 captor at 11.2 u took 23 head-aimed rounds unhurt).
