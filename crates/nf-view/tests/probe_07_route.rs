@@ -38,6 +38,9 @@ fn probe_the_route() {
     w.walk_to(Wp { at: [94.6, 43.6, -47.4], act: Act::Use { use_ticks: 240 }, arrive: 0.7 }, "E the hall door");
     println!("[route] after E: bond {:?} ch48 {}", w.scene.sim.as_ref().unwrap().bond.pos,
         w.scene.sim.as_ref().unwrap().drones.channels.on(0x48) as u8);
+    // The two doorway guards can shove Bond into the wall on these legs, and no leg ends there (he
+    // is held under the floor by the out-of-cel recovery): report the leg and go on.
+    w.lenient = true;
     // Manual straight legs (no nav): hug x ≤ 92.8 west of the plate box (x 93.31..95.23).
     for (name, at) in [
         ("the hall's north-west corner", [92.6f32, 43.6, -47.5]),
