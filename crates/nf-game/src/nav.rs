@@ -30,6 +30,10 @@ pub struct NavNode {
     pub pos: V3,
     /// MAPNODE +4: 1 wait, 2 door, 4 kick, 8 action anim, 0x20 ally wait, 0x40 fiddle, 0x10000.. Mayhew lines.
     pub flags: u32,
+    /// MAPNODE +0xC: the room cel `AIPath_Link2Cel` 0x1d2ec8 files the node under —
+    /// `build_FindCel(node+0x10)`, the node head-inserted into that cel's +0x24 node list [M]. `None`
+    /// when FindCel misses (the node is on no cel's list) or the world has no cel scope.
+    pub cel: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -86,7 +90,7 @@ impl Network {
                     walls.push(Wall { a: a.0, b: b.0, ha: a.1, hb: b.1, flags: 0 });
                 }
             } else {
-                let nodes: Vec<NavNode> = p.nodes.iter().map(|n| NavNode { pos: pos(n), flags: match n.raw[0] { 0x2468_abce => 0, f => f } }).collect();
+                let nodes: Vec<NavNode> = p.nodes.iter().map(|n| NavNode { pos: pos(n), flags: match n.raw[0] { 0x2468_abce => 0, f => f }, cel: world.find_cel(pos(n)) }).collect();
                 let links = p.links.iter().map(|l| NavLink { a: l.a, b: l.b, len: dist3(nodes[l.a as usize].pos, nodes[l.b as usize].pos) }).collect();
                 paths.push(NavPath { name: p.name.clone(), kind: p.kind, adj: p.adjacency(), nodes, links });
             }
@@ -274,8 +278,20 @@ impl Network {
     /// target node set; also the port form of `NDrone2_NearestNode` (0x1558d8) / `NearestNodeDCV`
     /// (0x155958)'s nearest-node ask.
     pub fn target_nodes(&self, world: &CollisionWorld, path: usize, pos: V3, r2: f32) -> TargetNodes {
+        self.target_nodes_in(world, path, pos, r2, None)
+    }
+
+    /// `target_nodes` restricted to the nodes filed under room cel `cel`. `AINetwork_NodesForPosition`
+    /// 0x1586a8 searches the CelPos's own cel: `AINetwork_NodeSearchCel` 0x156e18 walks
+    /// `cel+0x24` (the `AIPath_Link2Cel` list) and returns 0 at once for a null cel; the no-hit
+    /// retry over `cel+0x28` [M 0x1587dc-0x158858] hands NodeSearchCel the same search block, so it
+    /// re-walks the same cel. A position whose cel holds no node of the path gives neither a found
+    /// node nor a fallback, and `AINetwork_DoAStarPath` then returns 4 [M 0x1571b0:52-68].
+    /// `cel = None` keeps the one-cel search (the port's flat worlds and an unlinked player).
+    pub fn target_nodes_in(&self, world: &CollisionWorld, path: usize, pos: V3, r2: f32, cel: Option<usize>) -> TargetNodes {
         let mut t = TargetNodes::default();
         for i in self.candidates(path, pos, r2) {
+            if cel.is_some() && self.paths[path].nodes[i].cel != cel { continue; }
             if self.move_test(world, self.paths[path].nodes[i].pos, pos, false, false).0 == 1 { t.found = Some(i as u16); break; }
             if t.fallback.is_none() { t.fallback = Some(i as u16) }
         }
@@ -804,7 +820,7 @@ mod tests {
     use super::*;
 
     fn net(nodes: &[V3], links: &[(u16, u16)], kind: u32) -> Network {
-        let nodes: Vec<NavNode> = nodes.iter().map(|&p| NavNode { pos: p, flags: 0 }).collect();
+        let nodes: Vec<NavNode> = nodes.iter().map(|&p| NavNode { pos: p, flags: 0, cel: None }).collect();
         let links: Vec<NavLink> = links.iter().map(|&(a, b)| NavLink { a, b, len: dist3(nodes[a as usize].pos, nodes[b as usize].pos) }).collect();
         let mut adj = vec![Vec::new(); nodes.len()];
         for (k, l) in links.iter().enumerate() { adj[l.a as usize].push(k as u16); adj[l.b as usize].push(k as u16); }

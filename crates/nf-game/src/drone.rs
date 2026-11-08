@@ -1987,6 +1987,17 @@ impl Drone {
             3 => (40.0, 25.0, 6.0, 100.0), 4 => (1000.0, 75.0, 8.0, 1000.0), 5 => (0.0, 12.0, 4.0, 1.0), _ => (24.0, 12.0, 4.0, 1.0) };
         let f0 = f0_base + rng.frand(f0_rand);
         let fc = match param(14) { 3 => fc_add + rng.frand(6.0), 4 => 1000.0, _ => f0 + fc_add + rng.frand(f0_rand) };
+        // The two level overrides, by the anim set +0xDA, after the class draws [M 0x14b300:429-457,
+        // raw 0x14bb60-0x14bc1c]: the tower's offices and stairwell fight close, 07000014's guards
+        // engage at 10 (7 for set 9, set 5 keeps its class range).
+        let (f0, fc) = match (d.level, setup.anim_set) {
+            (0x0700_0011, 9) => (5.0, 8.0),
+            (0x0700_0011, _) => (6.0, 9.0),
+            (0x0700_0014, 5) => (f0, fc),
+            (0x0700_0014, 9) => (7.0, fc),
+            (0x0700_0014, _) => (10.0, fc),
+            _ => (f0, fc),
+        };
         let clip = match weapon { 0x16 | 0x18..=0x1b => 0x40, 0x1e | 0x1f | 0x24 | 0x25 => 5, _ => 0x40 };
         // `NDrone2_DefaultInit` (0x14b300 lines 348-376): `+0xBCC` and `+0xBCE` come from **param 11** —
         // `uVar4 = piVar19[0x18]`, and params start at `piVar19[13]` (`Drone_Create` 0x136be0 copies
@@ -5836,7 +5847,11 @@ impl Drone {
         // `AINetwork_InvalidateRoute(drone+0x860)` before SetupGoalPosition/MoveToGoalPosition —
         // every ask rebuilds the route even when a stale valid one exists [M 0x153168:41, 76].
         self.croute = None;
-        matches!(self.move_to_goal(d), 0..=3)
+        // The point's accuracy (+0x14) is the goal radius: SetupGoalPosition stores it at
+        // Drone+0x704 (0 → 2.0) and MoveToGoalPosition(+0x704) builds the route with it as the
+        // arrival threshold [M 0x153168:42-45, 0x15acf8:14-16,33, 0x158b10:104].
+        let acc = d.ai_points[pi].accuracy;
+        matches!(self.move_to_goal_r(d, if acc == 0.0 { 2.0 } else { acc }), 0..=3)
     }
 
     /// The escort lead's cover move, shared by AllyLead / LeadWait / LeadPlayerInWay / LeadBondCombat's
@@ -5945,7 +5960,13 @@ impl Drone {
     /// `NDrone2_MoveTarget_IsRouteNode` (0x1550c8), `NDrone2_CanReachGoalPosition` (0x155ad0) and
     /// `NDrone2_GetAnglesToMoveTarget` (0x155db8); `NDrone2_SetRunToPosition` (0x155b30) and
     /// `NDrone2_SetupAlertTarget` (0x155d48) are the goal-set forms.
-    fn move_to_goal(&mut self, d: &Data) -> u8 {
+    fn move_to_goal(&mut self, d: &Data) -> u8 { self.move_to_goal_r(d, 2.0) }
+
+    /// `move_to_goal` with the caller's radius: a fresh route keeps it as its arrival threshold
+    /// (`AINetwork_SetupRouteToPosition` 0x158b10 stores the radius at route+0x8C
+    /// [M 0x158b10:104], which `NDrone2_MoveToGoalPosition` compares the route distance against
+    /// [M 0x1517d8:52]); a kept route keeps the threshold it was built with.
+    fn move_to_goal_r(&mut self, d: &Data, radius: f32) -> u8 {
         let Some(goal) = self.goal else { return 8 };
         let feet = self.feet();
         let path = *self.nav_path.get_or_insert_with(|| d.nav.nav_path_for(feet));
@@ -5954,14 +5975,14 @@ impl Drone {
             let used: &[u16] = path.and_then(|p| self.links_used.get(p)).map_or(&[], |v| v.as_slice());
             let locked = |p: usize, n: u16| self.locked_door_nodes.contains(&(p, n));
             match crate::nav::Route::to_position(d.nav, d.world, path, feet, goal, &nodes, used, &locked) {
-                Ok((_, mut r)) => { r.stamp = u32::MAX; self.croute = Some(r) }
+                Ok((_, mut r)) => { r.stamp = u32::MAX; r.radius = radius; self.croute = Some(r) }
                 Err(code) => { self.croute = None; return code }
             }
         }
         let (code, reached) = {
             let route = self.croute.as_mut().unwrap();
             route.remaining = route.distance(d.nav, feet);
-            if route.remaining < 2.0 { return 3; }
+            if route.remaining < route.radius { return 3; }
             let ppos = self.player_pos;
             let r = route.follow(d.nav, feet, &|p| Drone::ppos_near(ppos, p));
             // `LinkCreep_Handler` (0x15a2c8) runs `ReachedDestNode` for EVERY followed route — the
@@ -5982,12 +6003,16 @@ impl Drone {
     }
 
     /// `NDrone2_SetGoalToCloserPosition` (0x155e10): where the straight line to the opponent first meets an AI-network
-    /// wall, if a route there exists and the drone is not already within 2.0 of it.
+    /// wall, if `build_FindCel` places that point in a cel and a route there exists with the drone
+    /// not already within 3.0 of its end — `MoveToGoalPosition(3.0, point, 0) < 3` [M 0x155e10
+    /// disasm 0x155e48-0x155e74: `jal 0x1c8cb0` → `beqz`, `lui 0x4040` → $f12, `sltiu v1, v0, 3`].
+    /// The 3.0 stays the route's arrival threshold, so the drone stops 3.0 short of the wall.
     fn set_goal_to_closer_position(&mut self, d: &Data) -> bool {
         let Some(p) = d.nav.first_wall_hit(self.pos, self.target.pos) else { return false };
+        if d.world.has_scope() && d.world.find_cel(p).is_none() { return false; }
         let (old_goal, old_route) = (self.goal, self.croute.take());
         self.goal = Some(p);
-        if self.move_to_goal(d) < 3 { return true; }
+        if self.move_to_goal_r(d, 3.0) < 3 { return true; }
         self.goal = old_goal;
         self.croute = old_route;
         false
@@ -18817,7 +18842,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `Drone::observe_target_motion` does the latching per guard.
         let quad = self.player_move_local.unwrap_or(player.move_local);
         // `NDrone2_NavNodeCache` / `BuildAITarget`: the player's goal nodes per navigation path, rebuilt when he has
-        // moved 2.0 or more (search radius 6 = min(engage range, 6) for these guards); `AINetwork_ClearLinkFlags`.
+        // moved 2.0 or more; `AINetwork_ClearLinkFlags`. The search radius is 0 (`mtc1 $zero, $f12` at
+        // 0x155d14, passed through BuildAITarget's `mov.s` pair 0x15ac9c/0x15acd0 [M disasm]): the
+        // ±15 box with no distance cap, over the nodes filed under the player's own cel (obj+0x20 →
+        // the target's CelPos [M 0x155cd8: DAT_00298ff0 = player+0x20]). A cel with no node of a
+        // path leaves that path with no goal, so a guard there cannot route to him (A* 4) and holds.
         // A `Drone_InitComms` shared pass after the vision pass [M 0x139520:202] — gated on `NPCGlobals`.
         let moved = self.npc_enabled && (self.target.stamp == 0 || {
             let q = self.target.pos;
@@ -18827,7 +18856,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             self.target.pos = player.pos;
             self.target.stamp = frame;
             self.target.nodes = d.nav.paths.iter().enumerate().map(|(pi, p)| {
-                if p.kind & 0xd == 0 { d.nav.target_nodes(d.world, pi, player.pos, 36.0) } else { Default::default() }
+                if p.kind & 0xd == 0 { d.nav.target_nodes_in(d.world, pi, player.pos, 0.0, player.cel) } else { Default::default() }
             }).collect();
         }
         self.used = d.nav.paths.iter().map(|p| vec![0; p.links.len()]).collect();
