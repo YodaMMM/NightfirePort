@@ -122,6 +122,80 @@ fn door_lip_fight(w: &mut Walker, g5: usize, tag: &str) {
     }
 }
 
+/// The d3 door-phase ammo detour (guard-pane-drain-4): the door phase is DRY — the pre-hall
+/// stock swept the walked-path corridor's boxes (3 passes) and the doorway fights burned the
+/// pistol pool to clip 1-4 spare 0 [L the d3fix run] — so the named loop's lure taps die after
+/// 1-4 rounds and no hunter crosses ("a dry gun draws no hunter across the aperture": the
+/// ARMED lure run that walked 5/6/7/11 into the door line carried clip 32 spare 16 [L the lure
+/// run note]). The drain-3 ignore names the lever: the off-path boxes at (-7.5,5.3,-6.8)/
+/// (-3.3,5.8,-9.1) that resupply()'s corridor rule refuses — a player between fights walks the
+/// detour leg he knows: onto the boxes, back to the hold line, REAL INPUT the whole way, and
+/// the walk itself puts the boxes on the trail — resupply()'s corridor rule is trail-based
+/// (a target must lie within 9.0 u of ground Bond covered), so the loop's own resupply calls
+/// can take them afterwards. The far-field pair (-7.9,6.3,-0.4) stands on that leg on a LATER
+/// start than the hall AND (the d3 ledger) — the sweep's SHOOT-ONLY rule (never walk toward
+/// them) covers the case where it has already started. Returns whether any ammo arrived.
+fn d3_ammo_detour(w: &mut Walker, tag: &str, hold: [f32; 3]) -> bool {
+    let ammo = |w: &Walker| {
+        let sim = w.scene.sim.as_ref().unwrap();
+        sim.gun.clip as i32 + sim.gun.spare as i32
+    };
+    let before = ammo(w);
+    // Only walk the detour when the boxes are actually there: a live, ground-level pickup
+    // within 6.0 u of one of the two off-path spots (resupply()'s own |dy| < 1.5 ground rule;
+    // Bond's y here is the hold line's 6.4 and the spots sit at 5.3/5.8).
+    let spots: Vec<[f32; 3]> = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let by = sim.bond.pos[1];
+        [[-3.3f32, 5.8f32, -9.1f32], [-7.5f32, 5.3f32, -6.8f32]].iter()
+            .filter(|s| sim.drones.pickups.iter().any(|p| !p.gone
+                && (p.m[3][1] - by).abs() < 1.5
+                && walker::dxz([p.m[3][0], p.m[3][1], p.m[3][2]], **s) < 6.0))
+            .map(|s| *s)
+            .collect()
+    };
+    if spots.is_empty() {
+        eprintln!("[01] {tag}: no live ground-level pickup at the off-path spots — the detour stays home");
+        // The [L] dump: every live pickup left in the level, with the distance from Bond and
+        // the height gap, so the ledger's next lever reads off the real list (kind/weapon/
+        // rounds say what each box feeds; from != None marks a guard's drop).
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        for (i, p) in sim.drones.pickups.iter().enumerate() {
+            if p.gone { continue; }
+            eprintln!("[01] {tag}: live pickup {i} kind {} weapon {:#x} rounds {} state {} at ({:.1},{:.1},{:.1}) dxz {:.1} dy {:+.1} from {:?}",
+                p.kind, p.weapon, p.rounds, p.state, p.m[3][0], p.m[3][1], p.m[3][2],
+                walker::dxz([p.m[3][0], p.m[3][1], p.m[3][2]], bp), p.m[3][1] - bp[1], p.from);
+        }
+        return false;
+    }
+    for s in spots {
+        // The pair's lane: fight from where Bond stands, never walk toward it (the sweep is
+        // shoot-only and self-gating).
+        far_field_sweep(w, tag);
+        if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+        eprintln!("[01] {tag}: the ammo detour leg to ({:.1},{:.1},{:.1})", s[0], s[1], s[2]);
+        w.walk_nav_to(s, &format!("{tag} the off-path ammo detour leg"), 0.9);
+        w.wait(30); // the pickup radius
+        if ammo(w) > before { break; }
+    }
+    // Back to the hold line the caller fights from: the stage below is the route proven FROM
+    // that line.
+    if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, hold) > 2.0 {
+        w.walk_nav_to(hold, &format!("{tag} back to the hold line"), 1.2);
+    }
+    // The boxes are on the trail now. The held gun may still be the pistol while the boxes
+    // feed the wheel — resupply() takes the nearest on-trail box and, if it is another
+    // weapon's, cycles the wheel until a firearm with ammo [M Player_GetBestWeapon's
+    // first-owned-with-ammo scan].
+    for pass in 0..3 {
+        if !w.resupply(&format!("{tag} on-trail stock {pass}")) { break; }
+    }
+    let got = ammo(w) > before;
+    eprintln!("[01] {tag}: the door-phase detour done ({got}) clip+spare {}", ammo(w));
+    got
+}
+
 fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker { walk_to_the_exit_at(iso, stop_at_fire, 1) }
 
 /// The walk at `difficulty` — the difficulty select's GameState+0x28 value (1 Operative, 2 Agent,
@@ -560,7 +634,17 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             if dry && difficulty >= 1 {
                 // The door phase: the ladder's stage leg crosses the funnel under fire (the
                 // first run died there). Resupply from the hold line and walk back.
-                w.resupply(&format!("hall guard {g} ammo"));
+                // guard-pane-drain-4 (d3): when the corridor is empty (the pre-hall stock took
+                // its boxes; "no pickup within the walked-path corridor (46 trail points)" [L
+                // the d3fix run]) the player walks the off-path detour leg the drain-3 ignore
+                // names — the boxes at (-7.5,5.3,-6.8)/(-3.3,5.8,-9.1), taken by real input,
+                // which also puts them on the trail for the loop's later resupply calls. The
+                // armed gun then feeds the loop's own bounded aperture lure — the armed
+                // sustained lure (900 ticks of t%16 taps ≈ 56 rounds — the run that drew
+                // 5/6/7/11 across carried clip 32 spare 16 [L the lure run note]).
+                if !w.resupply(&format!("hall guard {g} ammo")) && difficulty >= 3 {
+                    d3_ammo_detour(&mut w, &format!("hall guard {g} ammo detour"), [7.2, 6.4, 8.8]);
+                }
                 if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, [7.2, 6.4, 8.8]) > 2.0 {
                     w.walk_nav_to([7.2, 6.4, 8.8], &format!("hall guard {g} back to the hold line"), 1.2);
                 }
@@ -655,7 +739,9 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                     // clip 4 spare 0 and died dry mid-flank [L the 8604 run]. The walk's own
                     // resupply idiom (the dry mid-hall block) from the hold line.
                     if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare < 8 {
-                        w.resupply(&format!("hall guard {g} lure ammo"));
+                        if !w.resupply(&format!("hall guard {g} lure ammo")) && difficulty >= 3 {
+                            d3_ammo_detour(&mut w, &format!("hall guard {g} lure detour"), [7.2, 6.4, 8.8]);
+                        }
                         if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, [7.2, 6.4, 8.8]) > 2.0 {
                             w.walk_nav_to([7.2, 6.4, 8.8], &format!("hall guard {g} back to the hold line for the lure"), 1.0);
                         }
@@ -2335,13 +2421,28 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
 /// across and alive — the door-phase resupplies fail ("no pickup within the walked-path
 /// corridor", clip 1-4 spare 0), the lure's noise dies after 1-4 taps, and a dry gun draws no
 /// hunter across the aperture (the old lure run that walked 5/6/7/11 into the door line was
-/// ARMED: clip 32 spare 16 [L the lure run note]). NEXT LEVERS: ammo at the door phase — the
-/// corridor-rule resupply refuses the off-path pickups at (-7.5,5.3,-6.8)/(-3.3,5.8,-9.1)
-/// (the d3 pre-hall stock attempts), so either a walked detour leg a player would take between
-/// fights, or the named guards' own drops if the port drops them — then the armed sustained
-/// lure draws the crossing and the threshold fight answers at the plane.
+/// ARMED: clip 32 spare 16 [L the lure run note]). THE AMMO LEVER, TRIED (guard-pane-drain-4,
+/// 2026-11-08 [L the detour runs]): the walked detour to the off-path boxes is d3-gated in the
+/// named loop's two dry branches (d3_ammo_detour — real input, self-gating), and the runs
+/// CORRECT the ledger: (1) the corridor rule does NOT refuse the named boxes — the pre-hall
+/// stock's own attempts consumed them ("stock 1: resupply attempt 0 at (-7.5,5.3,-6.8) (d 7.0)"
+/// / "attempt 1 at (-3.3,5.8,-9.1) (d 5.1)" — the legs reached pickup radius, the boxes went
+/// gone, and the held-gun ammo measure missed the pool they fed); (2) at the door phase the
+/// whole level holds TWO live pickups [L the detour dump]: the east-wing box (17.4,6.2,-3.2)
+/// whose detour is forbidden by the walk's own ch-0x05 wake law, and the west-hall box
+/// (-14.4,6.5,16.1) across the aperture — both kind 3 weapon 0x47 rounds 50, a weapon the wheel
+/// does not own (12 cycle ticks all print the fists 0x1 — Bond holds the FISTS at the door
+/// phase); (3) no guard drop remains live either (from None on both). The level is
+/// ammo-exhausted at the door phase under this walk's spending. NEXT LEVER: the SPEND — the
+/// pre-clear loop and the stock passes burn the pistol's 54 and every reachable box before the
+/// AND; a player who knows the hall holds the AND crowd hoards: diet the d3 pre-clear (the
+/// lure draws the ch-0xE crowd across one at a time and the doorway fight kills them there —
+/// the same kills, later, for a third of the rounds) and keep the wheel armed through the
+/// named loop (switch_to_armed after every dry resupply), so the sustained lure still has a
+/// gun. The detour machinery stays: it fires at every dry branch and takes any drop that lands
+/// near the spots on a future stream.
 #[test]
-#[ignore = "00 Agent: the AND(0x11,0x12,0x13) hall gate can't complete — the aperture-lure round removed the flank death (Bond at the gate at 85.6 hp, tick 22260 [L the d3fix run]) but all three named guards stay across and alive: the door phase is DRY (resupply done false, clip 1-4 spare 0 — 'no pickup within the walked-path corridor'), the lure's noise dies after 1-4 taps and no guard crosses; next lever: ammo at the door phase (the off-path pickups at (-7.5,5.3,-6.8)/(-3.3,5.8,-9.1) the corridor rule refuses, or the guards' drops) then the armed sustained lure"]
+#[ignore = "00 Agent: the AND(0x11,0x12,0x13) hall gate can't complete — the aperture-lure round removed the flank death (Bond at the gate at 85.6 hp, tick 22260 [L the d3fix run]) but all three named guards stay across and alive: the door phase is AMMO-EXHAUSTED (the drain-4 detour runs: the pre-hall stock itself consumed the off-path boxes at (-7.5,5.3,-6.8)/(-3.3,5.8,-9.1) — stock 1 reached both at d 7.0/5.1 and the boxes are gone; the whole level then holds two live pickups, the east-wing box forbidden by the ch-0x05 wake law and the west-hall box across the aperture, both weapon 0x47 which the wheel does not own; the wheel cycles 12 ticks on the fists 0x1; no guard drop remains live [L the detour dump]) — the lure's noise dies and no guard crosses; next lever: the SPEND — diet the d3 pre-clear and the stock passes (a player hoards for the AND crowd; the lure draws them across one at a time and the doorway fight kills them there), keeping the wheel armed through the named loop so the sustained lure still has a gun"]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(3));
 }

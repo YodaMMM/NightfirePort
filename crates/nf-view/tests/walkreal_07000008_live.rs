@@ -666,7 +666,34 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             // byte-exact.
             if !firearm_armed(&w.scene.sim.as_ref().unwrap()) { w.resupply("the platform mouth"); }
             switch_to_firearm(&mut w, "the platform mouth");
-            fight_close_guards_visible(&mut w, "the platform mouth", 4200);
+            // level-08-rocket-self-blast (d3): the room's SECOND burst pair (#26/#27, skin
+            // 0x500002f) closes to point-blank BEHIND the half-open door leaves (state 0x2
+            // pos01 0.50 [L the 2026-11-08 run's STUCK dumps]) — no eye ray reaches them, the
+            // visible-only stand picked "no visible close guard" and walked on, and the lane
+            // crossing ate −12/−3 point blank at 15 health (death 29022, the run's ledger:
+            // both bursts the instant the door line opened). A player at the door lip with
+            // riflemen the other side pushes to the lip and shoots through the gap: when a
+            // live hostile stands within 5 u, take the PLAIN stand with the shared
+            // unseen-cover creep armed (dmg.unseen_fight — the flag the shared stand already
+            // checks) and the back-off suspended (its 4.0 ring reads the hidden pair as a
+            // crowd and backs away from the only winning spot, the lip). D3-GATED: the
+            // Operative/Agent sisters' timelines stay byte-exact.
+            let d3_close_hidden = difficulty >= 3 && {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                sim.drones.list.iter().any(|d| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && ((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)).sqrt() < 5.0)
+            };
+            if d3_close_hidden {
+                let (saved_back_off, saved_unseen) = (w.dmg.back_off, w.dmg.unseen_fight);
+                w.dmg.back_off = None;
+                w.dmg.unseen_fight = true;
+                fight_close_guards(&mut w, "the platform mouth lip", 4200);
+                w.dmg.back_off = saved_back_off;
+                w.dmg.unseen_fight = saved_unseen;
+            } else {
+                fight_close_guards_visible(&mut w, "the platform mouth", 4200);
+            }
         }
         // join-fix-g (Agent only): on the joined tree the west burst-rifle pair #26/#27 (weapon
         // 0x15) walks in along the platform from x 97-101, 12-16 u out and in view, while the
@@ -1040,6 +1067,10 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // machine's bearing) and WALKS out (real forward input, grounded only), then fights from
     // the open pad.
     let mut exit_ticks = 0u32;
+    // level-08-rocket-self-blast: the machine's per-tick position tracker (the forecast gate's
+    // velocity source — the loop runs one sim tick per iteration).
+    let mut prev_cp = [0.0f32; 3];
+    let mut have_cp = false;
     for t in 0..20000u32 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b) { ch4b = true; break; }
         let sim = w.scene.sim.as_ref().unwrap();
@@ -1265,11 +1296,47 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                     .segment_flight_scoped(sim.world.find_cel(from), from, cp, true)
                     .is_none_or(|t| t >= 0.8) })
         };
+        // level-08-rocket-self-blast (d3): the FORECAST gate — the aim-route-6 §3 next lever.
+        // The chase steers the round toward the machine's LIVE position every tick [M
+        // Bullet_update 0x12e7b0:177-244], so the round's lane is the machine's FLIGHT-TIME
+        // lane: the 27975 launch cleared every gate at the tick's own positions and the
+        // machine's flight-time position crossed the corridor the first 12 u left clear — the
+        // round's curve followed it into the wall band 0.8 u from Bond. Extrapolate the
+        // machine's position over the round's cruise flight time (T = l / 0.2525 [L the
+        // measured 0x2c cruise 0.2525 u/tick]) along its measured per-tick velocity and
+        // require the same three-source lane cast against BOTH positions. The game gives the
+        // round no lock-on (Bullet_init 0x12c5a0 spawns it along the crosshair aim point; the
+        // homing steer is the 0x20000 bit's [M 0x12f358] and 0x2C's +0x6C = 0x12204 [L
+        // ee_start_05.bin + 0x2C·0x10C] lacks it) and no arming grace (the cam probe excludes
+        // the shooter only for the first 1.0 u [M 0x12e7b0:218-234]; the BU+0x34 absorb is a
+        // SILENT death [M 0x12ce80:127,179]; Explode_Propagate 0x17c518 case 3 has no shooter
+        // exemption), so the player-model simply holds the rocket while the machine's
+        // flight-time lane runs the wall band. D3-GATED: the sisters' timelines stay byte-exact.
+        let machine_forecast = if difficulty >= 3 && have_cp {
+            let v = [cp[0] - prev_cp[0], cp[1] - prev_cp[1], cp[2] - prev_cp[2]];
+            let vm = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            if vm > 1e-4 && l > 1.0 {
+                let adv = (vm * (l / 0.2525)).min(l * 0.9);
+                [cp[0] + v[0] / vm * adv, cp[1] + v[1] / vm * adv, cp[2] + v[2] / vm * adv]
+            } else { cp }
+        } else { cp };
+        let machine_lane_fore_clear = difficulty < 3 || {
+            let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+            let right = [cy, 0.0, -fy];
+            [eye,
+             [eye[0] + right[0] * 0.25, eye[1] - 0.15, eye[2] + right[2] * 0.25],
+             [eye[0] - right[0] * 0.25, eye[1] - 0.15, eye[2] - right[2] * 0.25]]
+                .iter()
+                .all(|from| { let from = *from; sim.world
+                    .segment_flight_scoped(sim.world.find_cel(from), from, machine_forecast, true)
+                    .is_none_or(|t| t >= 0.8) })
+        };
         let ready = rocket.is_none() && sim.missile_cam.is_none()
             && yaw_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
             && pitch_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
             && l >= if difficulty >= 3 { 16.0 } else { 10.0 } && slit_clear && corridor_clear
-            && effective_corridor_clear && eye_sees && machine_lane_clear;
+            && effective_corridor_clear && eye_sees && machine_lane_clear
+            && machine_lane_fore_clear;
         if ready { w.tick_fire(input); } else { w.tick(input, false); }
         if t % 100 == 0 {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -1319,6 +1386,9 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 }
             }
         }
+        // The forecast gate's velocity source: the machine's position this tick.
+        prev_cp = cp;
+        have_cp = true;
     }
     let damage = w.scene.sim.as_ref().unwrap().drones.copters[ci].damage;
     eprintln!("[08] the shoot-down: {rockets} rockets; damage {damage} vs hp {hp}; best single rocket {best_rocket}");
@@ -1663,8 +1733,17 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
 /// plus the pin of the round's actual spawn direction (lock-on vs the effective aim) in
 /// PCSX2 (the report's live check).
 #[test]
-#[ignore = "00 Agent: the chase's own mid-flight curve self-blasts at tick 27975 (−62.5/−15.5, the effective-aim corridor CLEAR for the first 12 u [L the aim-route-6 §3 ledger, re-run on this branch]) — the forecast gate (the machine's flight-time position) is the next lever"]
+#[ignore = "00 Agent 2026-11-08 state: the descent is cleared (the door-lip unseen fight kills the #26/#27 pair) and the Hind fight is REACHED — rocket 1 launched at t688 (f32869, dist 35.1, every gate incl. the forecast gate clear) — but the machine's own rocket blasted −15.00 at 6 u at f32877 with Bond at 15 health (the falloff k=6 arm of 100·(1−k/8)·0.6; the round itself travels ≈0.33 u in its first 7 ticks, so the 6 u blast is NOT Bond's own rocket). The blocker is the upstream real-damage bleed (23 hits for 100.0: the walkway pair 36.0, the stairwell/descent fights), not the guided round — the steering/arming/speed/launch all match the game [M Bullet_update 0x12e7b0; Bullet_init 0x12c5a0; the 0x2C record bytes] and the forecast gate holds the self-blast"]
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
-    walker::with_real_damage_glass_fights(|| walk_the_whole_mission_on_real_input_at(3))
+    // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair
+    // (#26/#27, skin 0x500002f) sits behind the half-open door leaves (state 0x2 pos01 0.50 [L
+    // the 2026-11-08 run's STUCK dumps]) — no eye ray reaches them from inside the room, the
+    // platform-mouth stand picked "no visible close guard", and the walk crossed their lane at
+    // 15 health and died at tick 29022 (−12/−3 point blank, both bursts the moment the door
+    // line opened). The unseen-cover fights are the game's own push-to-the-door-lip-and-shoot:
+    // the hurting-first fallback pick opens the stand on the shooter actually hurting Bond and
+    // the stand creeps until the line opens. Opt-in per test: the sisters' timelines stay
+    // byte-exact (none of them sets it).
+    walker::with_real_damage_glass_fights(|| walker::with_real_damage_unseen_fights(|| walk_the_whole_mission_on_real_input_at(3)))
 }

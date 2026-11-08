@@ -1054,6 +1054,31 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     if difficulty >= 2 {
         stand_shooters_down_03(&mut w, "the exit lawn shooters", 40.0);
     }
+    // level-03-loadpoint-push: the plate-rest pin, walked on the real path (the lawn leg above,
+    // then the plate's own spot — no teleport). The disc's invisible "endleveldoor" blocker
+    // (placement #505, kind 0x3b, target obj map 50 #344: a 50-tri wall plane at x 17.979
+    // spanning the plate's z band, surface byte 0x04, plus the small doorframe mesh [D
+    // coll-obj]) rides the port's dynamic set under the game's own admission law [M
+    // Collide_PickObj 0x1eae80 — the object's obj+0xF0 = glist+0x44 = 0x80000 word carries no
+    // 0x20 skip bit; build_LinkToRoom 0x1c9680 links it through Control_BuildWorldSph's sphere
+    // centre (18.06, 6.71, 16.04) into the lawn cel; Collide_Pick 0x1eb320:314-329 walks the
+    // straddled cels' object chains]. The game's walk radius 0.55 [M 0x194df0's 0x3f0ccccd]
+    // holds Bond's spine 0.55 east of the wall plane — x 18.529, 0.42 off the plate marker's
+    // centre — which is exactly the port's rest. The pre-ride master had no DynObject collision
+    // and let him stand INSIDE the marker slab; the game's collision says the wall holds.
+    w.walk_to(Wp { at: [exit[0] + 0.422, exit[1] - 0.7, exit[2]], act: Act::None, arrive: 0.15 },
+        "onto the Load Point plate (the wall-held spot)");
+    w.wait(90);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let b = &sim.bond;
+        let dxz = walker::dxz(b.pos, exit);
+        assert!((b.pos[0] - (17.979f32 + 0.55)).abs() < 0.06,
+            "the endleveldoor wall holds the spine at 0.55 east of its plane [M 0x194df0 radius; D coll-obj 50/344], got x {:.3}", b.pos[0]);
+        assert!((b.pos[2] - exit[2]).abs() < 0.2, "Bond rests at the plate's z band, got z {:.3}", b.pos[2]);
+        assert!((dxz - 0.422).abs() < 0.08,
+            "the rest sits 0.42 off the plate centre — the game's own hold, not a port drift, got {dxz:.3}");
+    }
     w.walk_to(Wp { at: exit, act: Act::Use { use_ticks: 90 }, arrive: 1.6 }, "E the exit");
     let sim = w.scene.sim.as_ref().unwrap();
     assert_eq!(sim.drones.level_exit, Some(0x0700_0004), "the exit loads 07000004 [D param 0]");
