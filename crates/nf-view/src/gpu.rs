@@ -977,7 +977,7 @@ impl Renderer {
         // the port draws it as a textured quad through the HUD pipeline after everything else. The
         // texture + bind group are (re)built lazily in render() at the frame's size, so only the
         // static quad buffer and the shared layout/sampler are made here.
-        let movie_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 6 * std::mem::size_of::<HudVertex>() as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let movie_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 12 * std::mem::size_of::<HudVertex>() as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         queue.write_buffer(&movie_vbuf, 0, bytemuck::cast_slice(&[
             // Row 0 of the frame at the top of the screen (NDC y up, uv v down — the HUD quad
             // convention, hud.rs quad()).
@@ -1740,7 +1740,12 @@ impl Renderer {
                 if let Some(tex) = &self.movie_tex {
                     let sx = if self.screen_aspect > 0.0 { ((4.0 / 3.0) / self.screen_aspect).min(1.0) } else { 1.0 };
                     let v = |x: f32, y: f32, u: f32, w: f32| HudVertex { p: [x * sx, y], uv: [u, w], c: [1.0; 4] };
+                    // The picture outside the 4:3 movie is black, as on the console, where nothing
+                    // else is drawn while a movie plays: an opaque full-target quad first, so the
+                    // 3-D frame under it (the mission's last frame at an outro) never shows at the sides.
+                    let k = |x: f32, y: f32| HudVertex { p: [x, y], uv: [-1.0, -1.0], c: [0.0, 0.0, 0.0, 1.0] };
                     queue.write_buffer(&self.movie_vbuf, 0, bytemuck::cast_slice(&[
+                        k(-1.0, 1.0), k(1.0, 1.0), k(1.0, -1.0), k(-1.0, 1.0), k(1.0, -1.0), k(-1.0, -1.0),
                         v(-1.0, 1.0, 0.0, 0.0), v(1.0, 1.0, 1.0, 0.0), v(1.0, -1.0, 1.0, 1.0),
                         v(-1.0, 1.0, 0.0, 0.0), v(1.0, -1.0, 1.0, 1.0), v(-1.0, -1.0, 0.0, 1.0)]));
                     queue.write_texture(
@@ -1750,7 +1755,7 @@ impl Renderer {
                     pass.set_pipeline(&self.hud_pipeline);
                     pass.set_bind_group(0, self.movie_bg.as_ref().unwrap(), &[]);
                     pass.set_vertex_buffer(0, self.movie_vbuf.slice(..));
-                    pass.draw(0..6, 0..1);
+                    pass.draw(0..12, 0..1);
                 }
             }
             if n > 0 {

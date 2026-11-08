@@ -35,7 +35,7 @@ fn bridge(sim: &Sim) -> &nf_game::nis::Player {
 fn round(pos: [f32; 3], dir: [f32; 3], speed: f32, range: f32, damage: f32) -> nf_game::drone::PlayerBullet {
     nf_game::drone::PlayerBullet {
         pos, dir, speed, travelled: 0.0, range, damage, weapon: 2,
-        first: false, dead: false, bounces: 0, homing: false, target: None,
+        first: false, dead: false, bounces: 0, homing: false, target: None, target_copter: false,
         gravity: false, guided_cam: false, snd: 0, swoosh: None, born: 0,
     }
 }

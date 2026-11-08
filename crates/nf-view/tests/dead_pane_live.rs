@@ -89,7 +89,7 @@ fn load_08(iso: &str) -> nf_view::scene::Scene {
 /// second round through the same spot reaches the far side. [M Break_Kill 0x12b970:60; M
 /// Break_Update 0x12bfd8:44-48]
 #[test]
-#[ignore = "the pane collision ride is off until its shape/matrix pairing is proven (drone.rs, the 0x400_0000_0000 parts)"]
+#[ignore = "the ride is proven on 01-real-damage-d1 (finish_fights, pane-ride-on) but the 01 Agent/00-Agent sisters still die: the shifted hall timeline leaves the west-door SMG pack (#3/#12/#17) unfought and they shred Bond at 1.0-4.6 u — pane k=27 (plc 136, z -1.167) first shifts guard 13 at tick 683 [M Collide_Pick 0x1eb320:313-329 the movement query tests the start room's object chain, so the game's guards brush these sheets too]; the walk-side fix continues on the branch (pane-ride-on report)"]
 fn the_shot_out_pane_stops_blocking_a_round() {
     let Some(iso) = iso() else { return };
     unsafe { std::env::set_var("NF_SILENT", "1"); }
@@ -126,7 +126,7 @@ fn the_shot_out_pane_stops_blocking_a_round() {
 /// player's contact join is unproven, see the report's live checks); shot out, the same walk
 /// crosses the plane off the sill.
 #[test]
-#[ignore = "the pane collision ride is off until its shape/matrix pairing is proven (drone.rs, the 0x400_0000_0000 parts)"]
+#[ignore = "the ride is proven on 01-real-damage-d1 (finish_fights, pane-ride-on) but the 01 Agent/00-Agent sisters still die: the shifted hall timeline leaves the west-door SMG pack (#3/#12/#17) unfought and they shred Bond at 1.0-4.6 u — pane k=27 (plc 136, z -1.167) first shifts guard 13 at tick 683 [M Collide_Pick 0x1eb320:313-329 the movement query tests the start room's object chain, so the game's guards brush these sheets too]; the walk-side fix continues on the branch (pane-ride-on report)"]
 fn the_intact_pane_stops_bond_and_the_dead_one_lets_him_cross() {
     let Some(iso) = iso() else { return };
     unsafe { std::env::set_var("NF_SILENT", "1"); }

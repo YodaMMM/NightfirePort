@@ -148,7 +148,9 @@ fn param(p: &Placement, k: u32) -> u32 { p.params.iter().find(|(i, _)| *i == k).
 /// game scatters through the levels. `ThirdIcon_Create` builds a class-0x42 object whose instance is
 /// `inst+0x00` = param 0 (**the context type written to the player's `BLData+0x95F`**), `inst+0x04`
 /// = param 1 (the on-channel; 0 = always enabled — create sets `obj+0xF4 = 1`), `inst+0x06` = param 2
-/// (a second channel that only sets the `obj+0xFE` bit-0 flag) [M 0x197070:21–32]. `ThirdIcon_Update`
+/// (the kill channel: `ThirdIcon_Update` sets `obj+0xFE` bit 0, the delete flag) [M 0x197070:21–32,
+/// 0x196e80:21-26]. `obj+0xF4` latches 1 the first tick the on-channel reads set, and only the
+/// create clears it, so an icon stays enabled after its channel drops [M 0x196e80:18-20]. `ThirdIcon_Update`
 /// 0x196e80 walks the icon's room list for the PLAYER (`Player_Init` 0x1910f8:76 sets the player's
 /// class to 3) and writes the icon's type into the player's +0x95F on a 4-tick refresh; the type-6 icon
 /// additionally shows a text message [M 0x196e80:36–54]. The player's +0x95F is reset to 0xFF every
@@ -192,6 +194,24 @@ pub struct Icon {
     pub ctx: u8,
     /// Param 1: the on-channel (0 = always enabled).
     pub on_channel: u16,
+    /// Param 2: the kill channel (0 on every placement but one of 07000041's [D]).
+    pub kill_channel: u16,
+    /// `obj+0xF4`: 1 at create when param 1 is 0, else latched by the on-channel [M 0x197070:27-32].
+    pub enabled: bool,
+    /// `obj+0xFE` bit 0: the delete pass has removed the object.
+    pub dead: bool,
+}
+
+impl Icon {
+    /// The head of `ThirdIcon_Update` 0x196e80:18-29, once per tick: true when the icon may write
+    /// its context this tick. The kill channel lets the tick finish: the delete pass runs after
+    /// the collide slot [M 0x1ea398:59-63 slot, 0x1336f8:86-87 delete].
+    pub fn gate(&mut self, channels: &crate::triggers::Channels) -> bool {
+        if self.dead { return false; }
+        if self.on_channel != 0 && channels.on(u32::from(self.on_channel)) { self.enabled = true; }
+        if self.kill_channel != 0 && channels.on(u32::from(self.kill_channel)) { self.dead = true; }
+        self.enabled
+    }
 }
 
 /// Every third-icon placement of a level (flags & 0xff == 0xFA), in placement order, resolved
@@ -224,6 +244,9 @@ pub fn icons(level: &Level) -> Vec<Icon> {
                 radius: o.radius * s_max,
                 ctx: param(p, 0) as u8,
                 on_channel: param(p, 1) as u16,
+                kill_channel: param(p, 2) as u16,
+                enabled: param(p, 1) as u16 == 0,
+                dead: false,
             });
         }
     }

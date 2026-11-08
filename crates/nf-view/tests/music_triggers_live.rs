@@ -1,8 +1,8 @@
 //! music-triggers: the music trigger placements (0xfb → `MusicTrigger_Create`
 //! 0x1b30e0 + `MusicTrigger_Update` 0x1b31a0) through the real path — the trigger exists after
-//! the level load, raising switch channel p0 fires `Music_Event(p2, 2)` every tick
-//! (`UpdateMusicalEvents` pins `bonus = 600` / `under_attack`), and clearing the channel lets the
-//! 0x1e countdown expire so the event stops. Opt-in: `NF_ISO`.
+//! the level load, raising switch channel p0 fires `Music_Event(p2, 2)` once (`UpdateMusicalEvents`
+//! sets `bonus = 600` / `under_attack`), and p3 = 1 deletes the object that tick, so the bonus runs
+//! down with the channel still on. Opt-in: `NF_ISO`.
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
@@ -36,25 +36,21 @@ fn the_01_music_trigger_raises_and_expires_the_alarm_event() {
     // event-12 note] — the same board write the script system makes when a camera quits.
     scene.sim.as_mut().unwrap().drones.music.event(0xc, 1);
     scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
-    // Raise channel 13 through the real channel writer: the countdown re-arms and the event fires
-    // every tick; `UpdateMusicalEvents` sees e[2] == 2, sets bonus 600 and under_attack, then the
-    // same frame's decay decrements bonus once (the game's set-then-decay order [M 0x114e70]).
+    // Raise channel 13 through the real channel writer: the trigger posts once and deletes itself
+    // [M 0x1b31a0:26-27, 0x1336f8:86-87]; `UpdateMusicalEvents` sees e[2] == 2 that frame, sets bonus
+    // 600 and under_attack, and the same frame's decay decrements it (set-then-decay [M 0x114e70]).
     scene.sim.as_mut().unwrap().drones.set_channel(13);
     for _ in 0..3 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
-    {
+    let bonus = {
         let sim = scene.sim.as_ref().unwrap();
         assert!(sim.drones.music.alarm_state().0, "the trigger's Music_Event(2, 2) reached the music system");
-        assert_eq!(sim.drones.music.alarm_state().1, 599, "the event re-pins bonus each tick (600 set, then the frame's decay)");
-        assert!(sim.drones.worldobjs.music_triggers[0].countdown > 0);
-        assert!(sim.drones.worldobjs.music_triggers[0].playing);
-    }
-    // Leave: the channel clears, the 0x1e countdown drains [M 0x1b31a0:20-23] and the event stops —
-    // the hysteresis pin lifts and bonus decays below 600 (it would stay pinned at 600 while the
-    // event kept firing).
-    let frame = scene.sim.as_ref().unwrap().drones.frame;
-    scene.sim.as_mut().unwrap().drones.channels.set(13, 0, frame);
+        assert!(sim.drones.worldobjs.music_triggers.is_empty(), "the p3 = 1 object is gone");
+        sim.drones.music.alarm_state().1
+    };
+    assert!((596..600).contains(&bonus), "one post, then the decay: {bonus}");
+    // The channel stays on: nothing re-pins the bonus.
     for _ in 0..45 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     let sim = scene.sim.as_ref().unwrap();
-    assert_eq!(sim.drones.worldobjs.music_triggers[0].countdown, 0, "the countdown expired at the game's tick");
-    assert!(sim.drones.music.alarm_state().1 < 600, "the event stopped: bonus is decaying instead of re-pinning");
+    assert!(sim.drones.channels.on(13), "the channel is still held");
+    assert_eq!(sim.drones.music.alarm_state().1, bonus - 45, "the bonus runs down with the channel held");
 }

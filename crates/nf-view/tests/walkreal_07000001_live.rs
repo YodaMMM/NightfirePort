@@ -155,6 +155,16 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // ~18 — the Agent sister's 6.5 stand-off is the honest spacing at both difficulties).
         w.keep_off = Some(6.5);
         w.dmg.back_off = Some(6.5);
+        // The pane-solid guards (PANE_RIDE, the kind-2 sheets the hall patrols brush [M
+        // Collide_Pick 0x1eb320:313-329 — the movement query tests the start room's object
+        // chain, and the panes link into their room by build_FindCel 0x1c8cb0]) shift the
+        // guards' micro-paths, so a fight's stand-and-fire window can end with the guard
+        // alive where the ghost-pane timeline dropped him — and the failed fight's 240-tick
+        // cooldown is exactly the window a weapon-0x0 melee guard (the hall guard #5's
+        // 35-hit shred in the ride-on bisection) needs to finish Bond. A player who fails to
+        // drop the guard keeps shooting: the determined pass on a failed fight (the
+        // 07000016 opt-in), 01's real-damage walks only.
+        w.dmg.finish_fights = true;
     }
     // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
     // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.

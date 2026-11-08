@@ -217,17 +217,31 @@ impl Lock {
         Some(self.code)
     }
 
-    /// `Lock_Update` 0x1ae3d8 **case 2** (the burnt-open tick): the decryptor locks (kind 0)
-    /// re-arm the moment their burn-through channel drops [M 0x1ae3d8 case 2: `if
-    /// (instance u16[0] == 0 && u16[+8] != 0 && switch_channels[u16[+8]] == 0)
-    /// Lock_ReLock(glb_players, lock)`]. `channel_on` reads that switch. Returns the key id to
-    /// unequip when the re-lock fired. (Kind 1 = the laser-burn locks never re-arm here [M —
-    /// the guard is `== 0`].)
+    /// `Lock_Update` 0x1ae3d8 **case 2** (the burnt-open tick). `burned` IS the game's lock
+    /// state word +0xf4 == 2: the decompile writes that state in exactly one place — case 1's
+    /// end, when the open framelist completes (`Control_NextLOD(lock)` then `+0xf4 = 2` [M
+    /// 0x1ae3d8 case 1]) — so state 2 is "unlocked and the open
+    /// animation has finished", reached by EVERY unlocked lock (laser burn, decrypt scan,
+    /// keypad, the create-time Operative unlock all land in state 1 first [M Lock_Unlock
+    /// 0x1b0650:28-31]). The port has no framelist, so its event unlocks fold state 1 and
+    /// state 2 into the completion tick. Case 2's body, in the game's order [M :220-234]: the
+    /// burn bytes refill (+0x105 += 2 under the game's `v + 2 < 0x100` overflow guard, +0x104
+    /// += 1 while it is not 0xff), THEN the re-lock check: kind (record u16[+0]) == 0 AND
+    /// u16[+8] != 0 AND `switch_channels[u16[+8]] == 0` → `Lock_ReLock(glb_players, lock)`
+    /// [M :228-233]. `channel_on` reads that switch. Returns the key id to unequip when the
+    /// re-lock fired. (Kind 1 = the laser-burn locks refill but never re-arm here [M — the
+    /// guard is `== 0`].)
     pub fn update_burnt_open(&mut self, channel_on: bool) -> Option<u16> {
-        // Only the case-2 (burnt-open) tick runs this [M 0x1ae3d8:220-232]; the port's `burned`
-        // is that state [S mapping]. Any other state never re-locks.
         if !self.burned {
             return None;
+        }
+        // The refill [M 0x1ae3d8:221-227]: `uVar19 = +0x105 + 2; if (uVar19 < 0x100) store` —
+        // a byte at 0xfe or 0xff stays; `if (+0x104 != -1) +0x104 += 1`.
+        if self.burn_b <= 0xfd {
+            self.burn_b += 2;
+        }
+        if self.burn_a != 0xff {
+            self.burn_a += 1;
         }
         if self.kind == 0 && self.out != 0 && !channel_on {
             return self.re_lock();
@@ -287,6 +301,14 @@ impl Lock {
             self.pending_sounds.push(0x5db);
             if self.scan_solved >= 4 {
                 self.unlocked = true; // Lock_Unlock 0x1b0650:28-31 → state 1 (leaves the scan state 5)
+                // The completion's `memset(&GlobalVars, 0, 0x18)` clears the solved-digit count
+                // DAT_002a37e3 with the rest of the keypad block [M 0x1ae3d8 case 5 completion,
+                // :373] — a re-locked decryptor starts its next scan from zero digits.
+                self.scan_solved = 0;
+                // The open framelist ends → the game's state 2 (`burned`) [M 0x1ae3d8 case 1];
+                // the port folds it into the completion tick so the case-2 re-lock check is
+                // live from the next tick (update_burnt_open's header).
+                self.burned = true;
                 self.scanning = false;
                 // fix-decryptor-sounds: the unlock chime [M 0x1ae3d8:374].
                 self.pending_sounds.push(0x5da);
@@ -483,5 +505,59 @@ mod tests {
         // A kind-0 lock that is not burnt open (state != 2) never re-locks [M 0x1ae3d8 case 2 only].
         let mut idle = lock(0, 0x88, 0x1234);
         assert_eq!(idle.update_burnt_open(false), None);
+    }
+
+    // [M 0x1ae3d8:221-227] case 2's refill runs in the game's order BEFORE the re-lock check,
+    // for every kind: +0x105 += 2 under the `v + 2 < 0x100` guard, +0x104 += 1 while != 0xff.
+    #[test]
+    fn case2_refills_the_burn_bytes_before_the_relock_check() {
+        let mut l = lock(1, 0x86, 0x1);
+        l.burned = true;
+        l.burn_a = 0x10;
+        l.burn_b = 0x10;
+        assert_eq!(l.update_burnt_open(false), None, "kind 1 never re-locks [M the == 0 guard]");
+        assert_eq!((l.burn_a, l.burn_b), (0x11, 0x12), "both bytes climb (+1 / +2)");
+        // The overflow guards: 0xfe + 2 = 0x100 is NOT stored (stays 0xfe), 0xff + 1 is not stored.
+        let mut l2 = lock(1, 0x86, 0x1);
+        l2.burned = true;
+        l2.burn_a = 0xff;
+        l2.burn_b = 0xfe;
+        l2.update_burnt_open(true);
+        assert_eq!((l2.burn_a, l2.burn_b), (0xff, 0xfe), "0xff keeps, 0xfe + 2 overflows the guard");
+        // A non-burnt lock never refills (case 2 only runs in state 2 [M the switch at :34]).
+        let mut l3 = lock(1, 0x86, 0x1);
+        l3.burn_a = 0x10;
+        l3.burn_b = 0x10;
+        l3.update_burnt_open(true);
+        assert_eq!((l3.burn_a, l3.burn_b), (0x10, 0x10));
+    }
+
+    // [M 0x1ae3d8 case 5 completion + case 1's end + case 2; 0x1b0750] THE re-lock cycle: Bond
+    // decrypts the lock (state 5 → Lock_Unlock → state 1 → the framelist ends → state 2), the
+    // channel drops, `Lock_ReLock` re-arms it (state 0) — and it decrypts again from zero digits.
+    #[test]
+    fn a_decrypted_lock_relocks_when_its_channel_drops_and_decrypts_again() {
+        let mut ch = Channels::default();
+        let mut l = lock(0, 0x3e, 0x5);
+        // The decrypt drive: the 0x57 (upgraded, 3/tick) contact stream [M :305-315].
+        let mut ticks = 0;
+        while !l.unlocked && ticks < 100_000 { ticks += 1; l.decrypt_tick(1, true, &mut ch, ticks); }
+        assert!(l.unlocked && l.burned, "the unlock lands in the state-2 fold [M case 1's end]");
+        assert_eq!(l.scan_solved, 0, "the completion's memset clears the digit count [M :373]");
+        assert!(ch.on(0x3e), "the unlock wrote the out channel [M :193-196]");
+        // The channel drops (the census finds no disc writer that does — the unit pin is the
+        // game's arm itself): the next per-tick case-2 tick re-locks and names the key.
+        ch.set(0x3e, 0, 10_000);
+        assert_eq!(l.update_burnt_open(false), Some(0x5), "the returned key id is record u16[+2] [M 0x1b0750:8]");
+        assert!(!l.burned && !l.unlocked, "state 0 [M 0x1b0750:7]");
+        // ...and it decrypts again, all four digits, from scratch.
+        let mut ticks = 0;
+        while !l.unlocked && ticks < 100_000 { ticks += 1; l.decrypt_tick(1, true, &mut ch, ticks); }
+        assert!(l.unlocked && ch.on(0x3e), "the re-locked lock decrypts again");
+        // Sister: while the channel stands, the same tick does NOT re-lock.
+        let mut l2 = lock(0, 0x3e, 0x5);
+        l2.burned = true;
+        assert_eq!(l2.update_burnt_open(true), None);
+        assert!(l2.burned);
     }
 }

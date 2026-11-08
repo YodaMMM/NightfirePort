@@ -123,6 +123,15 @@ pub struct SwitchObj {
     /// no-op [M SP_GetState 0x1dc900:8-10]). Set by `Drones::attach_level` (crate::drone) after the
     /// players are mounted (laser-scripts).
     pub sp: Option<usize>,
+    /// Placement param 6 (`level_tag`+0x44): the SSys item index whose channel this switch feeds.
+    /// `Switch_Create` 0x1adcc0:29-31 — `if (*(int *)(param_3 + 0x44) != 0)
+    /// SSysItems[*(int *)(param_3 + 0x44) * 8 + 4] = *(u8 *)(ext + 0x12)` — stores the switch's
+    /// own channel id (param 0, ext+0x12) into `SSysItems[idx].channel` (the +4 byte of the 8-byte
+    /// record) at CREATE time, before the load beat's `switch_channels[param0] = param3` (:39-43).
+    /// 0 = no SSys arm (every switch but two on the disc [D the ssys_switch_census: 07000009 #71
+    /// item 1, 0700000a #643 item 2]). The store runs in `Drones::attach_level_id` (the SSysItems
+    /// array lives on the sim).
+    pub ssys_item: u32,
 }
 
 /// The level's use objects, in placement order.
@@ -180,6 +189,7 @@ impl UseObjects {
                     latch: 0,
                     placement: pi,
                     sp: None,
+                    ssys_item: par(6),
                 });
             }
         }
@@ -627,7 +637,7 @@ mod tests {
         let (sp, objs) = sp_with_entity(0, 0, 1, 0x11);
         let mut u = UseObjects::default();
         u.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 0, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0), ssys_item: 0 });
         let mut scripts = crate::nis::Scripts::default();
         scripts.players = vec![sp];
         scripts.objects = objs;
@@ -654,7 +664,7 @@ mod tests {
         let (sp4, objs4) = sp_with_entity(0, 0, 1, 0x11);
         let mut u4 = UseObjects::default();
         u4.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 0, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0), ssys_item: 0 });
         let mut scripts4 = crate::nis::Scripts::default();
         scripts4.players = vec![sp4];
         scripts4.objects = objs4;
@@ -668,7 +678,7 @@ mod tests {
         let (sp5, objs5) = sp_with_entity(0, 0, 1, 0x11);
         let mut u5 = UseObjects::default();
         u5.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 0, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0), ssys_item: 0 });
         let mut scripts5 = crate::nis::Scripts::default();
         scripts5.players = vec![sp5];
         scripts5.objects = objs5;
@@ -680,7 +690,7 @@ mod tests {
         let (sp2, objs2) = sp_with_entity(0, 0, 1, 0x11);
         let mut u2 = UseObjects::default();
         u2.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 7, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0), ssys_item: 0 });
         let mut scripts2 = crate::nis::Scripts::default();
         scripts2.players = vec![sp2];
         scripts2.objects = objs2;
@@ -693,7 +703,7 @@ mod tests {
         let (sp3, objs3) = sp_with_entity(0, 0, 1, 0x11);
         let mut u3 = UseObjects::default();
         u3.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x61, gate: 0, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0), ssys_item: 0 });
         let mut scripts3 = crate::nis::Scripts::default();
         scripts3.players = vec![sp3];
         scripts3.objects = objs3;
@@ -765,7 +775,7 @@ mod tests {
     fn switch_inhibit_gate_blocks_only_while_on() {
         let mut u = UseObjects::default();
         u.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 7, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None, ssys_item: 0 });
         // Gate channel OFF: the switch activates.
         let mut scripts = crate::nis::Scripts::default();
         let mut ch = Channels::default();
@@ -774,7 +784,7 @@ mod tests {
         // Sister: the same switch with its gate channel ON never activates.
         let mut u2 = UseObjects::default();
         u2.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 7, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None, ssys_item: 0 });
         let mut scripts2 = crate::nis::Scripts::default();
         let mut ch2 = chans(&[7]);
         let used2 = u2.player_activate(&mut scripts2, &mut ch2, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1, &TestWorld, [0.0, 0.0, -0.5]);
@@ -782,7 +792,7 @@ mod tests {
         // Sister 2: gate 0 always allows.
         let mut u3 = UseObjects::default();
         u3.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 0, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None, ssys_item: 0 });
         let mut scripts3 = crate::nis::Scripts::default();
         let mut ch3 = Channels::default();
         assert!(u3.player_activate(&mut scripts3, &mut ch3, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1, &TestWorld, [0.0, 0.0, -0.5]),
@@ -796,7 +806,7 @@ mod tests {
     fn switch_busy_is_one_shot_never_rearms() {
         let mut u = UseObjects::default();
         u.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 0, rest: 0, busy: true,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None, ssys_item: 0 });
         let mut scripts = crate::nis::Scripts::default();
         let mut ch = Channels::default();
         let head = [0.0, 0.5, -0.5]; let look = [0.0, 0.0, 1.0];

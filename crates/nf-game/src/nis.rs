@@ -266,34 +266,6 @@ pub struct Objects {
     /// 07000005's truck script 0x06000A22 stream 2 (glist 0x0200040C, params [0]) is the disc's
     /// only script-created volume [D the 289 census].
     pub pending_volumes: Vec<PendingVolume>,
-    /// `Script_CreateEntity` 0x1d8968's obj_type 0x20 arm: `Break_Create` (0x12c230) with the
-    /// shared level_tag 0x349948 whose param slots the op-7 write filled [M 0x1d8d78:80-87;
-    /// 0x1d8968:120-123] — kind/health/filter from the Entity params [0]/[1]/[2]. Created at the
-    /// scratch origin, POSED BY THE SCRIPT from the same tick on (obj+0x90 keyed per
-    /// `Script_Interp` 0x1d9a08:94-112 — the gondola's 16 windows ride the carriage [D decode]).
-    /// The game emits this only on the CREATE path (an existing same-class stream object is
-    /// re-pointed without a new breakable [M 0x1d8a68-0x1d8a80]). The sim drains it after the
-    /// scripts tick.
-    pub pending_breaks: Vec<PendingBreak>,
-}
-
-/// One queued `Break_Create` from a script's Entity command obj_type 0x20 — see
-/// `Objects::pending_breaks`.
-#[derive(Clone, Debug)]
-pub struct PendingBreak {
-    pub script: u32,
-    pub stream: u8,
-    /// The Entity command's glist hashcode (`hashtable_hashcode_to_celglist`, [M 0x1d8968:121]).
-    pub hash: u32,
-    /// The stream object's index in `Objects::list` — the created pane IS the stream's entity
-    /// (`Script_EntityStart` 0x1d8d78:96-100 stores it at stream+0x10), so `Script_Interp`
-    /// re-poses it every tick the stream runs; the breakable's bounds follow it.
-    pub obj: usize,
-    /// The Entity command's parameters: [0] the break kind, [1] the health bits, [2] the filter
-    /// word [M 0x1d8d78:80-87 → 0x12c230:21-35].
-    pub params: Vec<u32>,
-    /// The stream's posed matrix at the creation tick.
-    pub matrix: Mat4,
 }
 
 /// One queued `Drone_AIVolume_Create` (0x1376c0) from a script's Entity command obj_type 0xF5 —
@@ -897,18 +869,14 @@ impl Script {
         // `Script_CreateEntity` 0x1d8968's 0x20 arm: `Break_Create` with the op-7 param block —
         // the gondola's 16 cabin windows (07000008's ride script 0x0600004C streams 7-18/23-26,
         // params [2, 1, 0], parented to the carriage stream 2 [D decode]) and every other
-        // script-created pane. The pane is created at the origin and keyed by the stream from
-        // this tick on [M 0x1d8968:120-123 + Script_EntityStart's interp tail]; the sim drains
-        // into `Breaks` (breakable.rs, the per-tick bounds sync).
-        if obj_type == 0x20 && fresh {
-            let pos = match self.streams[i].obj { Some(p) => p, None => 0 };
-            if let Some(Some(Obj::Entity { matrix, .. })) = objs.list.get(pos) {
-                objs.pending_breaks.push(PendingBreak {
-                    script: self.nis.hashcode, stream: i as u8, hash, obj: pos,
-                    params: params.clone(), matrix: *matrix,
-                });
-            }
-        }
+        // script-created pane. NO queue here: the drain is the sim's per-tick sync over the live
+        // 0x20 entities (drone.rs, right after this walk — the same place the pickup queue
+        // drains), which upserts each pane row with `Break_Create`'s kind/health/filter from the
+        // params [M 0x1d8d78:80-87 → 0x12c230:21-35] and re-derives the bounds from the entity's
+        // LIVE matrix every tick (the game keys obj+0x90 per `Script_Interp` 0x1d9a08:94-112).
+        // The former `Objects::pending_breaks` queue was pushed by this arm and never read —
+        // dead code removed (script-break-drain); the upsert keyed on the object index already
+        // keeps the reuse path from adding a second breakable [M 0x1d8a68-0x1d8a80].
     }
 
     /// `Script_AnimStart` (0x1d8f40).
@@ -2446,6 +2414,32 @@ impl Scripts {
             if let Some(s) = p.info[p.cur].as_ref() {
                 for st in &s.streams {
                     if let Some(o) = st.obj { out.push(o); }
+                }
+            }
+        }
+        out
+    }
+
+    /// The glist hashcodes of the SP player running `placement`'s CURRENT script's stream
+    /// objects — the shapes its entities pose into the collide world (`script_parts` pushes
+    /// every colliding script Entity with its hash). The homing LOS's candidate exclusion
+    /// feeds on this: the game's `Collide_LineOfSight` carries the ray's SUBJECT objects
+    /// ([M Bullet_homing 0x12f358:92-93] — the bullet obj and the CANDIDATE obj; [M
+    /// Copter_Update 0x17dbb8:171-172] — the copter obj and Bond) and a subject's own
+    /// collision nodes never block its ray, so the candidate's own shapes must be excludable.
+    /// Same walk as `hidden_stream_objects`, keyed on the copter's placement instead of the
+    /// hidden flag.
+    pub fn stream_hashes_for_placement(&self, placement: usize) -> Vec<u32> {
+        let mut out = Vec::new();
+        for p in &self.players {
+            if p.placement != placement { continue; }
+            if let Some(s) = p.info[p.cur].as_ref() {
+                for st in &s.streams {
+                    if let Some(o) = st.obj {
+                        if let Some(crate::nis::Obj::Entity { hash, .. }) = self.objects.list.get(o).and_then(|x| x.as_ref()) {
+                            out.push(*hash);
+                        }
+                    }
                 }
             }
         }
