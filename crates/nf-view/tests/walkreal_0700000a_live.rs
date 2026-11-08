@@ -729,7 +729,9 @@ fn walk_to_security_keyboard_at(difficulty: u32) -> Walker {
         for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
         cycles += 1;
     }
-    let shots = shoot_at(&mut w, [pc[0], pc[1] + 0.55, pc[2]], 3.0, 400, "the Q-Worm install (real, from the walked south stand)", &|sim| sim.drones.channels.on(0x48));
+    // The aim sits on the PC's own mesh (y ±0.34 about the placement [D the glist's collision
+    // bounds]): the Q-Worm fires only with the PC first under the crosshair [M 0x1a5460:531-545].
+    let shots = shoot_at(&mut w, [pc[0], pc[1] + 0.2, pc[2]], 3.0, 400, "the Q-Worm install (real, from the walked south stand)", &|sim| sim.drones.channels.on(0x48));
     w.wait(6);
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x48),
         "ch 0x48 (objective 4) from the REAL install: {shots} shots from the walked south stand [M PCQWorm_Update 0x1aee20]");

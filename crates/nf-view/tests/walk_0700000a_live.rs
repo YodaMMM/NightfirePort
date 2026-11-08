@@ -66,19 +66,30 @@ fn qworm_install_by_firing_the_gadget() {
     let pc = scene.sim.as_ref().unwrap().drones.useobjs.pcs.iter().find(|p| p.ch == 0x48)
         .expect("Q-WORM_PC_1 (0x35, param 1 = ch 0x48) exists on this level").pos;
     eprintln!("[qworm] PC at {:?}", pc);
-    // Hand Bond the gadget and stand him with his EYE (pos + 0.7 [M player.rs EYE]) level with
-    // the PC, 0.71 away — inside the shot's 2-unit range (weapon_data[0x58]+0x1C = 2 [D probe]) —
-    // looking straight at it.
+    // Hand Bond the gadget and stand him on the walked south stand, 1.85 from the PC — inside
+    // the shot's 2-unit range (weapon_data[0x58]+0x1C = 2 [D probe]) — with the crosshair on the
+    // PC's own mesh (y ±0.34 about the placement [D the glist's collision bounds]): the gadget
+    // fires only with the PC first under the crosshair [M Player_WeaponFiring 0x1a5460:531-545].
+    // (The old stance 0.71 off the PC's north-east corner has a partition 0.14 in front of the
+    // eye — no PC target there.)
     {
         let sim = scene.sim.as_mut().unwrap();
         sim.drones.inventory.owned[0x58] = true;
         sim.gun.weapon = 0x58;
         sim.gun.switch_request = 0x58;
-        sim.bond.pos = [pc[0] + 0.5, pc[1] - 0.7, pc[2] + 0.5];
-        sim.bond.yaw = (-0.5f32).atan2(-0.5);
-        sim.bond.pitch = 0.0;
+        sim.bond.pos = [-16.8, 1.2, -34.0];
+        sim.bond.vel = [0.0; 3];
     }
     tick(&mut scene, 30);
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        let eye = sim.bond.head();
+        let t = [pc[0], pc[1] + 0.2, pc[2]];
+        sim.bond.yaw = (t[0] - eye[0]).atan2(t[2] - eye[2]);
+        sim.bond.pitch = ((t[1] - eye[1]) / (t[0] - eye[0]).hypot(t[2] - eye[2])).atan() / std::f32::consts::FRAC_PI_2;
+    }
+    // One full 6-frame `Check_Target` cycle on the aim before the pull [M 0x1a7810:98-100].
+    tick(&mut scene, 12);
     for _ in 0..3 { scene.sim.as_mut().unwrap().step_bond(Default::default(), true, false, false); }
     tick(&mut scene, 90);
     let sim = scene.sim.as_ref().unwrap();

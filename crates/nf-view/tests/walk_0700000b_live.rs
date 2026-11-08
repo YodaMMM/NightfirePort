@@ -119,6 +119,9 @@ fn fire_qworm_at(scene: &mut nf_view::scene::Scene, pc: [f32; 3]) {
                 sim.bond.yaw = (pc[0] - eye[0]).atan2(pc[2] - eye[2]);
                 sim.bond.pitch = ((pc[1] - eye[1]) / (pc[0] - eye[0]).hypot(pc[2] - eye[2])).atan() / std::f32::consts::FRAC_PI_2;
             }
+            // The aim target refreshes on the 6-frame `Check_Target` cadence [M 0x1a7810:98-100]:
+            // hold the aim one full cycle before the pull, or the pull reads the old target.
+            tick(scene, 12);
             for _ in 0..3 { scene.sim.as_mut().unwrap().step_bond(Default::default(), true, false, false); }
             tick(scene, 90);
             return;
