@@ -3466,9 +3466,20 @@ impl Sim {
             // word +0x464 goes 0x800 only within 2.0 of the player]; the 0.4 default stands for
             // every bot here [S unverified: the sleeper's own kind word (the 0xc → 0.55 arm) is
             // not read by the port — a live check item].
-            // The door guards (state 0x31) lead the list: they also push a GROUNDED Bond
-            // (`LadderCtx::ground_bots`) — 07000007's library pair holds the doorway until Drake's
-            // reveal (ch 21) takes them off [D #404/#417 p6 = 21, p8 = 100].
+            // The door guards (state 0x31) used to lead the list as the only GROUNDED-Bond pushers
+            // (07000007's library pair holds the doorway until Drake's reveal (ch 21) takes them off
+            // [D #404/#417 p6 = 21, p8 = 100]). The game's body is PER-BOT, not per-state:
+            // `NDrone2_DoCollision` 0x149ec8 turns it off only for the dead (0x4F8&0x200, except
+            // 0x700004a) or when the anim-info word +0x570 bit 2 marks the playing anim no-body
+            // [M 0x149ec8:18-27 — the word is the anim table's own, DroneAnim_SetDAnimInternal
+            // 0x13aee8:50; not modelled — a live check item], `DroneFunc_NearPlayerCollision`
+            // 0x14b190 turns it ON within 2.0 of a player otherwise (a firing guard's combat
+            // states set 0x4F8|0x20 first [M DroneFunc_SetAsAttacking 0x14aed8]), and
+            // `Collide_Jointy` 0x1ec180:229-281 resolves the player's kind-0x800 query against it
+            // on EVERY contact tick — grounded included (the port's airborne-only gate was an [S]
+            // choice that left the firing guards bodyless: guard_capsule_live's bump walked Bond
+            // to 0.19 of a 0x74/0x68 captor). ground_bots is therefore every near bot; the list
+            // order no longer matters and the door guards keep no special lead.
             let mut ground_bots = 0usize;
             let bot_capsules: Vec<([f32; 3], [f32; 3], f32)> = {
                 let bp = self.bond.pos;
@@ -3482,12 +3493,15 @@ impl Sim {
                 // (grounded never settles), every nav leg dies at the cap, and the escort waits for
                 // a Bond who can no longer reach the [M 0x15eda8] release band.
                 let near: Vec<&nf_game::drone::Drone> = self.drones.list.iter()
-                    .filter(|x| x.enabled && !x.corpse && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
+                    .filter(|x| x.enabled && x.present && !x.corpse && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
                     .collect();
-                let guard = |x: &nf_game::drone::Drone| x.present && x.state == nf_game::drone::state::CIVILIAN_DOOR_GUARD;
-                ground_bots = near.iter().filter(|x| guard(x)).count();
-                near.iter().filter(|x| guard(x)).chain(near.iter().filter(|x| !guard(x)))
-                    .map(|x| ([x.pos[0], x.pos[1] + 0.4, x.pos[2]], [x.pos[0], x.pos[1] - 0.6, x.pos[2]], 0.4f32))
+                // The standing capsule [M NDrone2_Collision 0x140e90:91-121]: top = pos + up·r,
+                // bottom = pos + up·(r − hip), r 0.4 (0.55 at the kind-0xc word — not modelled, a
+                // live check item), hip the ANIMATED +0xa0 [M NDrone2_DefaultInit 0x14b300:48
+                // default 1.0; the port's sit writes 0.2]. Upright bots (up = (0,1,0)).
+                ground_bots = near.len();
+                near.iter()
+                    .map(|x| ([x.pos[0], x.pos[1] + 0.4, x.pos[2]], [x.pos[0], x.pos[1] + 0.4 - x.hip_anim, x.pos[2]], 0.4f32))
                     .collect()
             };
             let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, straddle: &straddle_cells, bot_capsules: &bot_capsules, ground_bots };

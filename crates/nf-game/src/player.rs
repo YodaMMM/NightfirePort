@@ -2087,12 +2087,14 @@ impl Bond {
         // it walks (the delta tilts); beside its spine the push is lateral. The Jointy push does
         // NOT ride the DeltaP accumulator (Jointy writes +0x10 only [M :253-266]), so this sits
         // after the add-back and `pick_ref` keeps the static pass's value.
-        // [S] unverified — the PORT CHOICE gate: the push rides only while Bond is AIRBORNE
-        // (the drop-onto case the task pins). The game's own per-bot ON/OFF gates (+0x4f8 bit
-        // 0x20/0x200, +0x570 bit 2 — NDrone2_DoCollision 0x149ec8) are not modelled per bot
-        // yet, and master's green walks path Bond THROUGH ally tangent zones (the 01 armour
-        // walk, the 0a west doorway): the grounded-side push against allies is a live-check
-        // item, not shipped here. The sleeper drop (grounded false through the whole contact)
+        // The grounded gate is the GAME'S rule, not a port choice: `NDrone2_DoCollision` 0x149ec8
+        // keeps the bot's body on for every live near bot in every state (dead 0x4F8&0x200 off,
+        // the anim-info +0x570 bit-2 no-body anims off — not modelled, a live check item), and
+        // `Collide_Jointy` 0x1ec180:229-281 resolves the contact on every tick, grounded
+        // included. The old [S] airborne-only gate left the firing guards bodyless
+        // (guard_capsule_live: Bond walked to 0.19 of a 0x74/0x68 captor; the game's standing
+        // capsule [M NDrone2_Collision 0x140e90:91-121] holds ~0.95); the Sim now marks every
+        // near bot a ground bot. The sleeper drop (grounded false through the whole contact)
         // keeps its [M] push either way.
         if !ctx.bot_capsules.is_empty() && (!self.grounded || ctx.ground_bots > 0) {
             let (ja, jb) = self.capsule();
