@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-11-08T16:28Z
+
+---
+## Report (done, 2026-11-08T17:24Z)
+
+Closed by the driver: the report is on `s/level-07-raw-slide-sweep-2` (docs/reports/level-07-raw-slide-sweep-2.md); the worker didn't run finish.sh.
