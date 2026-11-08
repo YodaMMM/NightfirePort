@@ -4,6 +4,9 @@
 //!
 //! Opt-in via NF_ISO (the slim ISO is enough).
 
+#[path = "common/reveal07.rs"]
+mod reveal07;
+
 use nf_game::player::Input;
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
@@ -24,6 +27,7 @@ fn free(sim: &mut nf_view::scene::Sim) {
 /// Walk to the hall TouchOnce #412 through the lock gate (the walk test's input sequence) so the
 /// disguise lock releases and the P2K auto-draws [M 0x1a24c8:242-275].
 fn release_weapon_lock(sim: &mut nf_view::scene::Sim) {
+    reveal07::drakes_reveal(sim);
     let c = sim.drones.triggers.iter()
         .find(|t| t.kind == nf_game::triggers::kind::TOUCH_ONCE && u32::from(t.out) == 0x48)
         .map(|t| t.centre()).expect("TouchOnce #412 exists");

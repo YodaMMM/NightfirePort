@@ -9,6 +9,9 @@
 //! 5. objective banners show "NEW OBJECTIVE" without the objective text and run during cut-scenes;
 //! 6. the guards are not in their proper places after the Kimiko cut-scene.
 
+#[path = "common/reveal07.rs"]
+mod reveal07;
+
 use nf_game::drone::state;
 use nf_game::player::Input;
 
@@ -559,6 +562,13 @@ fn probe_drone23() {
 fn the_guards_reappear_at_their_places_after_the_kimiko_scene() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load(&iso, "07000007.bin");
+    // The real order: Drake's reveal first (the library door pair's zone-3 band covers trigger
+    // 412 until ch 21 takes them off).
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        for _ in 0..3000 { sim.step_bond(Input::default(), false, false, false); if !sim.disabled { break; } }
+        reveal07::drakes_reveal(sim);
+    }
     // Let the level settle (guards idle at their posts), snapshot, then walk into trigger 412.
     for _ in 0..300 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     // Pre-scene: an enabled, non-WaitSwitch drone whose animation is past its first frames.
