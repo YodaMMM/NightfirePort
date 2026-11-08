@@ -2404,6 +2404,27 @@ impl CollisionWorld {
         sc.cells.iter().position(|v| v.contains(&(run as u32))).map(|c| c as u32)
     }
 
+    /// A round's narrow phase on ONE dynamic part: `Collide_Intersect` 0x1ebaa8 moves the segment
+    /// into the object's space by the inverse of obj+0x90 and `Intersect_RayGeom` 0x10a8c8 walks
+    /// the glist's triangles, one-sided (n·dir ≥ 0 skipped, :168) with t in [0, 1] [M]. The part's
+    /// world-space triangles from the last `set_dynamic` are those triangles through obj+0x90, so
+    /// the same one-sided test the flight trace runs over them (`ray_tri_t`) gives the same
+    /// fraction. Returns the nearest fraction along `from → to`; None for a part with no
+    /// collision triangles (the pick never admits it [M Collide_PickObj 0x1eae80:88-90]).
+    pub fn segment_dynamic_part(&self, id: u64, from: V3, to: V3) -> Option<f32> {
+        let d = self.dynamic.read().unwrap();
+        let k = d.last_objects.iter().position(|o| o.0 == id)?;
+        let o = d.geo.objects.get(k)?;
+        let dir = sub(to, from);
+        let mut best = None::<f32>;
+        for t in &d.geo.tris[o.tris.clone()] {
+            if let Some(tt) = ray_tri_t(from, dir, t) {
+                if best.is_none_or(|b| tt < b) { best = Some(tt); }
+            }
+        }
+        best
+    }
+
     /// The live matrix of dynamic part `id` (the last `set_dynamic`), shape or not.
     pub fn dynamic_matrix(&self, id: u64) -> Option<Mat4> {
         self.dynamic.read().unwrap().last.get(&id).copied()

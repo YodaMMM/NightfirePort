@@ -20,7 +20,7 @@ fn load(level: &str) -> Option<nf_view::scene::Scene> {
 fn round(pos: [f32; 3], dir: [f32; 3], weapon: u16, frame: u32) -> PlayerBullet {
     PlayerBullet {
         pos, dir, speed: 2.0, travelled: 0.0, range: 200.0, damage: 10.0, weapon, first: true, dead: false, bounces: 0,
-        homing: false, target: None, target_copter: false, gravity: false, guided_cam: false, snd: 0, swoosh: None, born: frame,
+        homing: false, target: None, target_copter: false, gravity: false, guided_cam: false, snd: 0, swoosh: None, born: frame, from_turret: None,
     }
 }
 
@@ -60,14 +60,16 @@ fn a_wall_gun_can_be_shot_down_0a() {
     }
     assert_eq!(sim.drones.gt_turrets[ti].state, gt_state::COMBAT, "the gun deployed");
     let from = [gun[0] + fd[0] * 3.0, gun[1] + fd[1] * 3.0, gun[2] + fd[2] * 3.0];
-    // Sister: the turret's own record never counts against it.
+    // Sister: the gun's own rounds never count against it (the own-round skip, `from_turret`).
+    let own = sim.drones.gt_turrets[ti].sp_key;
     for _ in 0..30 {
         let frame = sim.drones.frame;
-        sim.drones.player_bullets.push(round(from, [-fd[0], -fd[1], -fd[2]], nf_game::gt::TURRET_WEAPON_RECORD as u16, frame));
+        sim.drones.player_bullets.push(PlayerBullet { from_turret: Some(own),
+            ..round(from, [-fd[0], -fd[1], -fd[2]], nf_game::gt::TURRET_WEAPON_RECORD as u16, frame) });
         sim.drones.health.health = 100.0;
         sim.step_bond(Input::default(), false, false, false);
     }
-    assert_eq!(sim.drones.gt_turrets[ti].health, 100.0, "record 96 rounds do not hurt the gun");
+    assert_eq!(sim.drones.gt_turrets[ti].health, 100.0, "the gun's own rounds do not hurt it");
     for _ in 0..1200 {
         let frame = sim.drones.frame;
         sim.drones.player_bullets.push(round(from, [-fd[0], -fd[1], -fd[2]], 2, frame));
