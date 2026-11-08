@@ -688,6 +688,12 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
     }
     let claw_pulley = w.scene.sim.as_ref().unwrap().drones.grapple_points.iter()
         .find(|p| (p.pos[0] - 178.77).abs() < 0.5).expect("the pulley #370 [D]").pos;
+    // The claw fires only inside a type-2 icon's arm [M Player_WeaponFiring 0x1a5460:515-528]:
+    // the control corner is in none, so Bond steps onto the deck in icon #4's arm ((188.11, 8.46,
+    // -299.78) r 5.0 [D icon census]), where the bolt still reaches the pulley [the walled-pick
+    // stance scan: (185.25, floor 10.31, -294.75)].
+    w.walk_to(Wp::new(185.3, 11.4, -294.8).r(1.2), "the deck in the pulley's icon arm");
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.icon_ctx, 2, "Bond stands in a type-2 icon's arm [D]");
     let held_gun = w.scene.sim.as_ref().unwrap().gun.weapon;
     for _ in 0..20 {
         w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false, false, false);
