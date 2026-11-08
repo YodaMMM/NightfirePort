@@ -364,7 +364,7 @@ mod tests {
         assert_eq!(deploy[0], 2, "MissileDeploy = 2 [M 0x1aa2cc-338]");
         assert!(!ch.on(21), "sister: the done channel does not fire while the p2 script runs [D END 1710]");
         for t in 1..=1709u32 { m.tick(&mut ch, &mut deploy, 3300 + t); }
-        assert!(ch.on(81) && ch.on(46) && ch.on(83), "the p2's own writes @t1/t1000/t1030 [D 0600091c]");
+        assert!(ch.on(81) && ch.on(46) && ch.on(0x83), "the p2's own writes @t1/t1000/t1030: ch 0x51, 0x2e and the 0x83 latch [D 0600091c]");
         assert!(!ch.on(21), "the p2 wait elapses 1709 ticks [D END 1710]");
         m.tick(&mut ch, &mut deploy, 5010);
         assert!(ch.on(21), "the done channel fires on state-3 tick 1710 [M 0x1aa354-398 + D END]");

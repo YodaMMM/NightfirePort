@@ -608,7 +608,7 @@ mod music_trigger_tests {
     /// (≤ 30 ticks) and then stops.
     #[test]
     fn countdown_rearms_fires_and_expires() {
-        let mut w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 1)])], &[], |_| (0, [0.0; 3], 0));
+        let mut w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 0)])], &[], |_| (0, [0.0; 3], 0));
         let mut ch = Channels::default();
         let mut music = crate::music::Music::default();
         let mut rng = crate::drone::Rng::new(1);
