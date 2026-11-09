@@ -1966,6 +1966,22 @@ pub struct Drone {
     /// with the contact point standing in for HITDATA+0x40 (the between-capsules closest-point
     /// midpoint — the Jointy projection [M Collide_Jointy 0x1ec180:234-252]).
     pub objhit_dir: V3,
+    /// `Drone+0x38` — the per-frame root-motion zero. `NDrone2_PreDroneControl` 0x148db0:23
+    /// clears it at the top of every drone frame (before the state machine's UPDATE); the
+    /// setters run inside that frame's control: AimStandFire UPDATE with the aiming class
+    /// (`+0x568 == 2`) [M 0x166328:120-122], `DroneWeap_AimTarget_IsOpponent`'s run-anim arm
+    /// (`+0x56a` 0x1e/0x1f and `CanMoveToRelativePos(0, 0, 0.4)`) [M 0x178ae0:47-53, disasm
+    /// 0x178c08-0x178c0c — the `sb` sits in the `b` delay slot] (`aim_run_arm`), OpenDoor
+    /// ENTER (closed door) / UPDATE [M 0x1681f8:25, :74] with its EXIT clear [:71],
+    /// StandFiddle UPDATE [M 0x1687c0:29], UnderCoverInit UPDATE [M 0x169cc0:37], JustStand
+    /// UPDATE [M 0x173fc0:16]; UnderCoverIdle ENTER clears it for the aiming class [M
+    /// 0x169e58:52]. Prone UPDATE [M 0x166940:26] and Tester1 [M 0x16db90:21] also set it but
+    /// have no SP producer (the state table notes above). Reader:
+    /// `DroneAnim_PreTransCallback` 0x13b490:85-118 (disasm 0x13b588-0x13b638) — with `+0x38` or `+0x23` (`air`) set the anim's root motion is zeroed
+    /// (`Vec_Zero`) unless the body-contact latch arm ran (0x13b624 `v1 = 0`). The anim tick
+    /// runs after control in `Drone_Control` 0x139268:48-91, so a flag set in UPDATE is read the
+    /// same frame and is gone the next.
+    pub root_zero: bool,
 }
 
 /// Normalise a vector (the grenade throw direction helper).
@@ -1973,6 +1989,12 @@ pub struct Drone {
 fn ailog() -> bool {
     static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *F.get_or_init(|| std::env::var_os("NF_AILOG").is_some())
+}
+
+/// `NF_RZLOG`, read once: logs each root step the `Drone+0x38`/`+0x23` zero drops (`root_zero`).
+fn rzlog() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var_os("NF_RZLOG").is_some())
 }
 
 fn norm(v: V3) -> V3 { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt(); if l > 0.0 { [v[0] / l, v[1] / l, v[2] / l] } else { v } }
@@ -1996,8 +2018,8 @@ fn norm(v: V3) -> V3 { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
 /// x and z are stored to the root (disasm 0x13b614-0x13b620 `swc1` +0/+8 — the root's own y
 /// is NEVER rewritten). Motion away from / tangential to the contact survives untouched
 /// (`out.z ≤ 0` skips the whole arm, 0x13b600 `bc1f`). The arm also clears the game's
-/// zero-root flag (disasm 0x13b624 `v1 = 0`, overriding the `+0x38`/`+0x23` zero pending) —
-/// the port's zero (`move_by`'s probe reject) is the port's own stand-in, nothing to override.
+/// zero-root flag (disasm 0x13b624 `v1 = 0`, overriding the `+0x38`/`+0x23` zero pending —
+/// `root_motion` drops its `root_zero`/`air` zero when the latch stands).
 /// The `step` arrives as the world x/z of the root motion (the game's `param_3` is world — the
 /// boundary clip right after inverts the OBJ's world matrix to read it); the game's root y at
 /// this point is the speed-ramp delta (`+0xa0 − +0xa4` written at 0x13b490:71 when `+0x1a==0`)
@@ -2157,6 +2179,8 @@ impl Drone {
             // the body-contact latch (Drone+0x26) starts clear — set only by the contact pass.
             objhit_latch: false,
             objhit_dir: [0.0; 3],
+            // Drone+0x38: cleared every frame at the PreDroneControl site (see the field).
+            root_zero: false,
             // drone-abseil-elevator: the +0x23 rope fields. `move_ok`
             // (+0x24) is set for every drone at DefaultInit 0x14b300:771; the rest start at the
             // game's fresh-allocation values.
@@ -3455,12 +3479,19 @@ impl Drone {
         if let (Some([lx, lz]), Some(_)) = (delta, root) {
             let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
             let mut step = [lx * c + lz * s, -lx * s + lz * c];
+            // The zero-root pending [M 0x13b490:85-103, disasm 0x13b588-0x13b5a4]: `+0x38`
+            // (`root_zero`, this frame's state setter) or `+0x23` (`air`).
+            let mut zero = self.root_zero || self.air;
             // The obj-hit latch's reader [M 0x13b490:104-116]: while the bump latch stands the
-            // root motion loses its into-the-contact component (objhit_turn_step's doc). The
-            // game's arm also clears the +0x38/+0x23 zero-root pending — the port's zero is the
-            // probe reject inside move_by, its own stand-in, so there is nothing to override.
+            // root motion loses its into-the-contact component (objhit_turn_step's doc), and the
+            // arm clears the zero pending (disasm 0x13b624 `v1 = 0`).
             if self.objhit_latch {
                 step = objhit_turn_step(step, self.objhit_dir);
+                zero = false;
+            }
+            if zero && rzlog() && (step[0] != 0.0 || step[1] != 0.0) {
+                eprintln!("[rz] guard {} state {:#x} anim {:#x} cls {} air {} step {:.4},{:.4} pos {:.2},{:.2},{:.2}",
+                    self.index, self.state, self.anim.state, self.anim.class, self.air, step[0], step[1], self.pos[0], self.pos[1], self.pos[2]);
             }
             // glass-breach-guards-4: the movement was carried by the anim root motion — the game's
             // movement pass copies +0x30 → +0x40 AFTER the anim/root-motion processing in the same
@@ -3474,9 +3505,11 @@ impl Drone {
                     (Some(r), Some(prev), false, _) => r[1] - prev[1],
                     _ => 0.0,
                 };
+                // The slide target takes the motion first [M 0x13b490:88-94]; the zero then
+                // drops it from the object only [M :117-118].
                 let m = [step[0], ly, step[1]];
-                for k in 0..3 { self.pos[k] += m[k]; self.special_spot[k] += m[k]; }
-            } else {
+                for k in 0..3 { self.special_spot[k] += m[k]; if !zero { self.pos[k] += m[k]; } }
+            } else if !zero {
                 self.move_by(d, step);
             }
         }
@@ -6801,13 +6834,16 @@ impl Drone {
                 if !self.cover_anim(d, rng, 6, UNDER_COVER_IDLE) { /* as built: the drone then waits here */ }
                 true
             }
-            (UNDER_COVER_INIT, msg::UPDATE) => { let p = self.cover_point; self.slide_to(d, p, 0.08); self.set_angle_to_cover(d); true }
+            // [M 0x169cc0:35-40]: case 3 also sets the root-motion zero `+0x38` (`root_zero`).
+            (UNDER_COVER_INIT, msg::UPDATE) => { self.root_zero = true; let p = self.cover_point; self.slide_to(d, p, 0.08); self.set_angle_to_cover(d); true }
             (UNDER_COVER_INIT, msg::EXIT) => { if self.exiting_to != UNDER_COVER_IDLE { self.disown_cover() } true }
             (UNDER_COVER_IDLE, msg::ENTER) => {
                 self.vision_on = true;
                 self.cover_anim(d, rng, 1, 0);
                 self.clip = self.clip_max;
                 if !self.prop(d, 0x10) { self.timer_c = Some(frame + rng.frand(150.0) as u32); }
+                // [M 0x169e58:51-54]: the aiming class (`+0x568 == 2`) clears the root zero `+0x38`.
+                if self.anim.class == 2 { self.root_zero = false; }
                 self.cover_tries = 0;
                 true
             }
@@ -8237,7 +8273,7 @@ impl Drone {
                 self.sight_range = 1000.0;
                 true
             }
-            (SNIPER_AIM, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp; if self.seen { self.set_state(SNIPER_FIRE) } true }
+            (SNIPER_AIM, msg::UPDATE) => { if !self.aim_run_arm(d, true) { self.desired_yaw = self.yaw_to_opp; } if self.seen { self.set_state(SNIPER_FIRE) } true }
             // SniperFire: aim and fire (`DroneWeap_Fire`; the first shot after a 60-tick timer); empty clip → reload;
             // out of sight 16 ticks → SniperAim. (Alternative attacks — `CanAltAttack` — are not modelled.)
             (SNIPER_FIRE, msg::ENTER) => {
@@ -8252,7 +8288,7 @@ impl Drone {
             (SNIPER_FIRE, msg::TIMER_C) => { self.firing = true; true }
             (SNIPER_FIRE, msg::UPDATE) => {
                 self.attack_talk(d.level, rng);
-                self.desired_yaw = self.yaw_to_opp;
+                if !self.aim_run_arm(d, true) { self.desired_yaw = self.yaw_to_opp; }
                 if self.clip < 1 { self.set_state(SNIPER_RELOAD); }
                 else if self.unseen_ticks >= 0x10 { self.set_state(SNIPER_AIM); }
                 true
@@ -8310,7 +8346,7 @@ impl Drone {
                 }
                 true
             }
-            (DRAW_WEAPON, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp; true }
+            (DRAW_WEAPON, msg::UPDATE) => { if !self.aim_run_arm(d, true) { self.desired_yaw = self.yaw_to_opp; } true }
             // The draw event (case 2, [M 0x166000:41-43] `cVar2 < 2 → ChangeWeapon(6)`) arms with
             // the sidearm only after the draw anim ran for a drone that entered with a swap id —
             // the ENTER bail (above) leaves by EXIT with `+0x45` < 2 and must not arm here.
@@ -8318,7 +8354,7 @@ impl Drone {
             (SNIPER_RELOAD, msg::ENTER) => { self.vision_on = true; self.stationary = true; self.firing = false; self.timer_c = Some(frame + 20); true }
             (SNIPER_RELOAD, msg::TIMER_C) => { self.call_anim(d, anim_state::RELOAD, SNIPER_FIRE, 0); true }
             (SNIPER_RELOAD, msg::EXIT) => { self.clip = self.clip_max; true }
-            (SNIPER_RELOAD, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp; true }
+            (SNIPER_RELOAD, msg::UPDATE) => { if !self.aim_run_arm(d, true) { self.desired_yaw = self.yaw_to_opp; } true }
             // The noise chain (`NDrone2_DSTATE_HeardNoise*`).
             (HEARD_NOISE, msg::ENTER) => { self.investigating = true; self.set_state(HEARD_NOISE_AWARE); true }
             (HEARD_NOISE_AWARE, msg::ENTER) => {
@@ -8778,7 +8814,7 @@ impl Drone {
                 self.call_anim_variant(d, 0x3d, v, AIM_STAND_FIRE, 0);
                 true
             }
-            (ALT_ATTACK, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp; true }
+            (ALT_ATTACK, msg::UPDATE) => { if !self.aim_run_arm(d, true) { self.desired_yaw = self.yaw_to_opp; } true }
             // Case 0x21 -> `DroneFunc_ConsiderExplosive(..., 0x68)` [M 0x167488 case 0x21; AimStand 0x166178 case 0x21].
             (ALT_ATTACK | AIM_STAND, msg::EXPLOSIVE) => { self.take_explosive_msg(d, frame, AIM_STAND_FIRE); true }
             // CombatWait case 0x21 -> `ConsiderExplosive(..., the current state)` [M 0x164960 case 0x21].
@@ -8835,6 +8871,9 @@ impl Drone {
                 self.turn_to_opponent(0.524);
                 if self.dist <= 4.0 && self.can_backoff(d) { self.set_state(AIM_BACKOFF); return true; }
                 if self.unseen_ticks >= 16 { self.set_state(COMBAT_NO_SIGHT); return true; }
+                // [M 0x166328:118-122]: with an opponent (`NDrone2_HasOpponent`) and the aiming
+                // class playing (`+0x568 == 2`) the root motion is zeroed this frame (`root_zero`).
+                if self.has_opponent(frame) && self.anim.class == 2 { self.root_zero = true; }
                 if self.firing && !self.burst_done {
                     if ailog() && self.grenade_count > 0 {
                         eprintln!("[ailog] guard {} AIM_STAND_FIRE UPDATE: firing={} burst_done={} -- combat_state skipped (mid-burst)",
@@ -8867,7 +8906,7 @@ impl Drone {
                 self.call_anim(d, anim_state::RELOAD, if s == AIM_STAND_RELOAD { AIM_STAND_FIRE } else { AIM_CROUCH_FIRE }, 0);
                 true
             }
-            (AIM_STAND_RELOAD | AIM_CROUCH_RELOAD, msg::UPDATE) => { self.turn_to_opponent(0.9); true }
+            (AIM_STAND_RELOAD | AIM_CROUCH_RELOAD, msg::UPDATE) => { if !self.aim_run_arm(d, true) { self.turn_to_opponent(0.9); } true }
             // Crouching: AimCrouch plays the crouch-aim anim and continues in AimCrouchFire.
             // `NDrone2_DSTATE_AimCrouch` 0x166f28 (state 0x6f) ENTER [M case 1]: vision on, alert
             // status 1, then by mode byte — `+0xc5 == 0x11` (the cover-croucher type) SetStates
@@ -8877,7 +8916,7 @@ impl Drone {
                 if self.mode == 0x11 { self.set_state(CROUCH_COVER); return true; }
                 self.call_anim(d, anim_state::CROUCH_AIM, AIM_CROUCH_FIRE, 0); true
             }
-            (AIM_CROUCH, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp; true }
+            (AIM_CROUCH, msg::UPDATE) => { if !self.aim_run_arm(d, true) { self.desired_yaw = self.yaw_to_opp; } true }
             // `NDrone2_DSTATE_CrouchCover` 0x166d90 (state 0x6e) — the cover-croucher's hold. ENTER
             // [M case 1]: vision on, alert status 0 (the table's 0 = 1.0 alert share), crouch anim 0x11,
             // timer C = now + 2 s + Rand(FRAME_RATE) frames. UPDATE [M case 3]: seen-and-attacking, and
@@ -8928,7 +8967,7 @@ impl Drone {
             }
             (STEP_AIM_LEFT | STEP_AIM_RIGHT, msg::UPDATE) => {
                 let a = if s == STEP_AIM_LEFT { anim_state::STEP_LEFT } else { anim_state::STEP_RIGHT };
-                if !self.can_do(d, a) { self.set_state(AIM_STAND_FIRE) } else { self.desired_yaw = self.yaw_to_opp }
+                if !self.can_do(d, a) { self.set_state(AIM_STAND_FIRE) } else if !self.aim_run_arm(d, false) { self.desired_yaw = self.yaw_to_opp }
                 true
             }
             // Strafes fire while moving; dodges do not. Both end on a 2–5 s / 2–3 s timer or when blocked.
@@ -8955,11 +8994,11 @@ impl Drone {
             // 0x178ae0:30-46 — the (1,1) callers are the aim states, not these), and its forward
             // CanMoveToRelativePos(0, 0, 0.4) probe (0x178ae0:50 → the +0x38 root-motion-suppress
             // latch, PreTransCallback 0x13b490:86-118) only runs while the playing anim +0x56a is
-            // 0x1e/0x1f (run) [M 0x178ae0:47-54] — never the strafe anims 0xc/0xd/0x29 [M
-            // 0x1677b0:20 etc.]. The call therefore reduces to `SetAngleToObj(0, opp, 0)`
-            // [M 0x178ae0:56 → 0x154d58:44-46] — the face-the-opponent yaw below. Nothing is skipped.
+            // 0x1e/0x1f (run) [M 0x178ae0:47-54] — the strafe anims 0xc/0xd/0x29 [M 0x1677b0:20
+            // etc.] take the `SetAngleToObj(0, opp, 0)` arm [M 0x178ae0:56 → 0x154d58:44-46] (the
+            // face-the-opponent yaw below); a run anim still playing takes `aim_run_arm`.
             (STRAFE_AIM_LEFT | STRAFE_AIM_RIGHT | STRAFE_DODGE_LEFT | STRAFE_DODGE_RIGHT, msg::UPDATE) => {
-                self.desired_yaw = self.yaw_to_opp;
+                if !self.aim_run_arm(d, false) { self.desired_yaw = self.yaw_to_opp; }
                 let left = matches!(s, STRAFE_AIM_LEFT | STRAFE_DODGE_LEFT);
                 let dodge = matches!(s, STRAFE_DODGE_LEFT | STRAFE_DODGE_RIGHT);
                 // The blocked exit consults the mover's test (probe_move) — the same consistency
@@ -8980,7 +9019,7 @@ impl Drone {
                 self.call_anim(d, if s == ROLL_LEFT_CROUCH { anim_state::ROLL_LEFT } else { anim_state::ROLL_RIGHT }, AIM_CROUCH_FIRE, 0);
                 true
             }
-            (ROLL_LEFT_CROUCH | ROLL_RIGHT_CROUCH, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp; true }
+            (ROLL_LEFT_CROUCH | ROLL_RIGHT_CROUCH, msg::UPDATE) => { if !self.aim_run_arm(d, false) { self.desired_yaw = self.yaw_to_opp; } true }
             (AIM_BACKOFF, msg::ENTER) => {
                 self.vision_on = true; // `+0x4F8 |= 0x10000` (decomp 0x166b98)
                 self.call_anim(d, anim_state::BACKOFF, 0, 0);
@@ -8990,7 +9029,7 @@ impl Drone {
             }
             (AIM_BACKOFF, msg::UPDATE) => {
                 if !(self.dist <= self.engage_range && self.unseen_ticks < 16 && self.can_backoff(d)) { self.set_state(AIM_STAND); return true; }
-                self.desired_yaw = self.yaw_to_opp;
+                if !self.aim_run_arm(d, false) { self.desired_yaw = self.yaw_to_opp; }
                 // `EvasiveMove` FIRST [M 0x166b98:37-40] — non-zero means the dodge state is already
                 // set inside (the old code asked ChooseCombatMove only: the stand-in).
                 if self.evasive_move(d, rng) != 0 { return true; }
@@ -10158,6 +10197,8 @@ impl Drone {
                 // game would have read.
                 if self.door_node.is_some() { return true; }
                 if self.hit_door_open { self.set_state(self.door_return); return true; }
+                // A closed door: the root-motion zero `+0x38` [M 0x1681f8:25] (`root_zero`).
+                self.root_zero = true;
                 if self.prop(d, 0x14) || self.prop(d, 0x15) || self.prop(d, 0x16) {
                     self.call_anim(d, 0x4e, 0, 0);
                 } else if self.alert < 1.0 {
@@ -10173,9 +10214,12 @@ impl Drone {
             // keeps walking regardless — `LinkCreep_Handler` 0x15a2c8 skips the blocked test while
             // +0xBA8 stands; the port's route resumes when the lead state returns).
             (state::OPEN_DOOR, msg::UPDATE) => {
+                self.root_zero = true; // `+0x38 = 1` before the door test [M 0x1681f8:74]
                 if self.hit_door_open { self.set_state(self.door_return); }
                 true
             }
+            // EXIT (case 2): `+0x38 = 0` [M 0x1681f8:70-72] — the leaving frame keeps its root motion.
+            (state::OPEN_DOOR, msg::EXIT) => { self.root_zero = false; true }
             // Timer C (case 0xC): re-activate the door and re-arm the 2-tick retry.
             (state::OPEN_DOOR, msg::TIMER_C) => {
                 self.door_attempt = true;
@@ -10246,8 +10290,9 @@ impl Drone {
             }
             // Timer C (case 0xc) and msg 0x20: back to the saved state `+0x5A6` [M cases 0xc/0x20].
             (state::STAND_FIDDLE, msg::TIMER_C | msg::DOOR) => { self.set_state(self.door_return); true }
-            // Case 3 sets the drone's +0x38 byte (no ported reader — not modelled); UPDATE falls
-            // through to the game's default (unhandled → the GLOBAL handler), like KickObject's.
+            // Case 3: `+0x38 = 1` and handled (v0 = 1, the `sb` in the `b` delay slot) [M 0x1687c0:27-30,
+            // disasm 0x168874-0x168880] — the fiddle anim plays in place (`root_zero`).
+            (state::STAND_FIDDLE, msg::UPDATE) => { self.root_zero = true; true }
             (ALLY_LEAD_DONE, msg::ENTER) => { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15f2e8 case 1: 0x21]
             // ---- fix-finale-blockers + ninja-melee (crates/nf-game/src/kiko.rs has the addresses
             // and the tags; the state-id ↔ function table is NDrone2_StateFuncs [L 0x29b300]) ----
@@ -10650,6 +10695,8 @@ impl Drone {
             // JustStand 0xb6 (`NDrone2_DSTATE_JustStand` 0x173fc0): the sway-in-place stand; the port
             // keeps the stand anim only (the sine sway's +0x38 write has no reader in the port).
             (crate::kiko::JUST_STAND, msg::ENTER) => { self.call_anim(d, anim_state::STAND_IDLE, 0, 0); true }
+            // UPDATE (case 3): `+0x38 = 1` [M 0x173fc0:16] — the stand never root-moves (`root_zero`).
+            (crate::kiko::JUST_STAND, msg::UPDATE) => { self.root_zero = true; true }
             // HostageGoToGoalPosition 0x64 (`NDrone2_DSTATE_HostageGoToGoalPosition` 0x165a68): UPDATE
             // runs the route — moving → run anim, arrived (3) → the return state `+0x5A2`, blocked
             // (9/0xC) → the stand anim [M case 3]; msg 0x1b → the return state (unmodelled message).
@@ -11570,6 +11617,25 @@ impl Drone {
         self.firing = fire;
         self.call_anim(d, anim, 0, 0);
         self.yaw_offset = offset;
+    }
+
+    /// `DroneWeap_AimTarget_IsOpponent(cone, 1)` 0x178ae0 — its run-anim arm only. With an
+    /// opponent (`+0x170`, [M :20]) and the playing anim state `+0x56a` 0x1e/0x1f (the runs)
+    /// [M :47, disasm 0x178ba8-0x178bb4], and for `cone` callers the opponent at least 0.9 rad off
+    /// the facing [M :34-36 — under 0.9 the call returns before the anim test], the drone turns
+    /// HALF way (`+0x694 = yaw − AngleDifference(atan, yaw)·0.5` [M :48-49]) and, when
+    /// `CanMoveToRelativePos(0, 0, 0.4)` passes, zeroes this frame's root motion (`+0x38 = 1`
+    /// [M :50-53, the `sb` in the `b` delay slot at 0x178c0c]). Returns whether the arm ran; the
+    /// callers keep their own face-the-opponent fold (`SetAngleToObj`, :56) otherwise.
+    /// (`+0x4F4 & 0x8000000` [M :20] has no setter in the decompile — only the zeroing stores at
+    /// 0x14a2f0:11 / 0x14b300:59 [S] — so it is not modelled.)
+    fn aim_run_arm(&mut self, d: &Data, cone: bool) -> bool {
+        if !self.opp_ptr() || !matches!(self.anim.state, 0x1e | 0x1f) { return false; }
+        let diff = angle_difference(self.yaw_to_opp, self.yaw);
+        if cone && diff.abs() < 0.9 { return false; }
+        self.desired_yaw = self.yaw - diff * 0.5;
+        if self.can_move(d, 0.0, 0.4) { self.root_zero = true; }
+        true
     }
 
     /// `DroneMove_TurnToObj(target, threshold)`: re-aim the desired yaw when off by more than the threshold.
@@ -21779,6 +21845,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let dr = &mut self.list[index];
             if !dr.present { continue; }
             if dr.spawn_frame == frame { continue; }   // spawned this tick: the game's walk already passed it
+            // `NDrone2_PreDroneControl` 0x148db0:23: the root-motion zero `+0x38` clears at the top of
+            // every drone frame, before this frame's UPDATE can set it again (`root_zero`'s doc).
+            dr.root_zero = false;
             if dr.target.stamp != self.target.stamp { dr.target = self.target.clone(); }
             dr.channel_on = self.channels.on(dr.switch_channel as u32);
             dr.wait_channel_on = dr.wait_channel != 0 && self.channels.on(dr.wait_channel as u32);
@@ -24722,6 +24791,8 @@ mod tests {
             spawn_stats_params: None,
             objhit_latch: false,
             objhit_dir: [0.0; 3],
+            // Drone+0x38: cleared every frame at the PreDroneControl site (see the field).
+            root_zero: false,
         };
         dr
     }

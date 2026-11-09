@@ -863,36 +863,10 @@ impl Walker {
                 // target's line count: the shield must stand beyond the target along the ray. The
                 // y band (feet − 1.2 .. feet + 2.2) covers the cowering hide boxes, which hang
                 // BELOW the feet origin (the kill's head part landed at feet − 0.58).
-                let mut shield_block = false;
-                if let Some(s) = self.shield {
-                    if let Some(sd) = sim.drones.list.get(s) {
-                        if !sd.corpse && sd.health > 0.0 {
-                            let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
-                            let ds = dxz(sd.pos, eye);
-                            let dtg = dxz(dp, eye).max(1e-3);
-                            if ds > 1.0 { // any depth past the muzzle: the contact between Bond and the target is hit too (the game's bullets hit ANY drone [M 0x140968:85-95]) — the 01 walk killed him standing between Bond and guard 5 (the chwatch 0x60 at frame 21225)
-                                let t = ds / dtg;
-                                let ex = eye[0] + (at[0] - eye[0]) * t;
-                                let ez = eye[2] + (at[2] - eye[2]) * t;
-                                let ey = eye[1] + (at[1] - eye[1]) * t;
-                                let miss2 = (ex - sd.pos[0]).powi(2) + (ez - sd.pos[2]).powi(2);
-                                let reach = 0.9 + 0.05 * ds;
-                                // audit-voice-triggers-2 (opt-in `shield_bloom`): the tap cone is the
-                                // aim line PLUS the game's own spread — and the spread caps at 176
-                                // units = 0.2464 rad [M bullet::player_spread's cap, pinned by
-                                // nf-game's player_spread_blooms_and_the_aim_gate] — a moving volley's
-                                // pellets land ~2 u off the aim line at 9.7 u (the 2026-11-05 kill:
-                                // the guard-14 volley's cone crossed the contact 1.96 u off the line
-                                // while the modelled reach was 1.39). Flag walks model the cap.
-                                let reach = if self.shield_bloom { reach.max(0.2464 * ds) } else { reach };
-                                if miss2 < reach * reach
-                                    && (sd.pos[1] - 1.2) < ey && ey < (sd.pos[1] + 2.2) {
-                                    shield_block = true;
-                                }
-                            }
-                        }
-                    }
-                }
+                let shield_block = {
+                    let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                    self.shield_blocks(sim, eye, at, dp)
+                };
                 let dx = dp[0] - bp[0];
                 let dz = dp[2] - bp[2];
                 let dy = at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
@@ -1077,6 +1051,42 @@ impl Walker {
 
     /// Walk to a target THROUGH the nav graph (the guard approaches and resupply runs cross rooms;
     /// the direct steer wedges on walls between them). `final_arrive`: the last leg's radius.
+    /// The friendly-fire shield's tap test (see `shield`): does a round from `eye` at `at` (on
+    /// a target standing at `dp`) cross the shielded drone's cylinder anywhere past the muzzle,
+    /// the aim line widened by the spread's reach (`shield_bloom` widens it to the 0.2464 cap)?
+    /// Shared by `shoot` and the return-fire stand (`stand_and_fire`).
+    pub fn shield_blocks(&self, sim: &nf_view::scene::Sim, eye: V3, at: V3, dp: V3) -> bool {
+        let Some(s) = self.shield else { return false };
+        let Some(sd) = sim.drones.list.get(s) else { return false };
+        if sd.corpse || sd.health <= 0.0 { return false; }
+        let ds = dxz(sd.pos, eye);
+        let dtg = dxz(dp, eye).max(1e-3);
+        // any depth past the muzzle: the contact between Bond and the target is hit too (the
+        // game's bullets hit ANY drone [M 0x140968:85-95]) — the 01 walk killed him standing
+        // between Bond and guard 5 (the chwatch 0x60 at frame 21225)
+        if ds <= 1.0 { return false; }
+        let t = ds / dtg;
+        let ex = eye[0] + (at[0] - eye[0]) * t;
+        let ez = eye[2] + (at[2] - eye[2]) * t;
+        let ey = eye[1] + (at[1] - eye[1]) * t;
+        let miss2 = (ex - sd.pos[0]).powi(2) + (ez - sd.pos[2]).powi(2);
+        let reach = 0.9 + 0.05 * ds;
+        // audit-voice-triggers-2 (opt-in `shield_bloom`): the tap cone is the aim line PLUS the
+        // game's own spread — and the spread caps at 176 units = 0.2464 rad [M
+        // bullet::player_spread's cap, pinned by nf-game's player_spread_blooms_and_the_aim_gate]
+        // — a moving volley's pellets land ~2 u off the aim line at 9.7 u (the 2026-11-05 kill:
+        // the guard-14 volley's cone crossed the contact 1.96 u off the line while the modelled
+        // reach was 1.39). Flag walks model the cap.
+        let reach = if self.shield_bloom { reach.max(0.2464 * ds) } else { reach };
+        miss2 < reach * reach && (sd.pos[1] - 1.2) < ey && ey < (sd.pos[1] + 2.2)
+    }
+
+    /// The return-fire stand's shield hook (damage_log.rs `stand_and_fire`): the shield's tap
+    /// test against target `di`, unless `di` is the shielded drone himself.
+    pub fn return_fire_shield_blocks(&self, sim: &nf_view::scene::Sim, eye: V3, at: V3, di: usize) -> bool {
+        self.shield != Some(di) && self.shield_blocks(sim, eye, at, sim.drones.list[di].pos)
+    }
+
     pub fn walk_nav_to(&mut self, target: V3, label: &str, final_arrive: f32) {
         self.lenient = true;
         let pts = {
@@ -1438,7 +1448,14 @@ impl Walker {
                             self.walk_nav_to(bpos, &format!("{label} blocker {bi} floor"), 2.5);
                         }
                         let fight_started = self.total_ticks;
+                        // The blocker stands in Bond's face: a player answers him there. The
+                        // keep-off retreat walked Bond out of the only line on the 02 geisha-1
+                        // doorway guard (#7, planted in his aim stand since the +0x38 root zero
+                        // [M 0x166328:122 + 0x13b490:117-118] stopped the stance drift), and six
+                        // flank cycles later the courtyard sniper had the walk.
+                        let prev_keep = self.keep_off.take();
                         let killed = self.shoot(bi, label);
+                        self.keep_off = prev_keep;
                         if !killed {
                             // Out of ammo: the fight's own loot (the drops land at the fight
                             // floor [L drops]) — the same response clear_pursuers uses.

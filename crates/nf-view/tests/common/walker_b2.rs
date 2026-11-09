@@ -145,6 +145,10 @@ fn fail_dump(scene: &Scene, target: V3, label: &str) -> String {
 }
 
 impl Walker {
+    /// The return-fire stand's shield hook (damage_log.rs `stand_and_fire`): this walker has no
+    /// friendly-fire shield, so nothing is ever held for one.
+    pub fn return_fire_shield_blocks(&self, _sim: &nf_view::scene::Sim, _eye: V3, _at: V3, _di: usize) -> bool { false }
+
     pub fn new(mut scene: Scene) -> Walker {
         // The walk's sound runs as in play: voices end by their length, so the 256-node pool frees.
         nf_view::attach_headless_sound(&mut scene);
