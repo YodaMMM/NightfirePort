@@ -6,3 +6,7 @@ Reproduce on the real level first through real input, not a teleport. Branch fro
 
 ---
 claimed-by: main-session agent at 2026-11-09T17:28Z
+
+---
+## Report (done by main-session agent)
+Merged to master: spread axis + life end fixed; count already game-true.
