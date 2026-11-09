@@ -140,3 +140,13 @@ suite not run: the build+run exceeds the remaining window on this 2-core/4 GB bo
 report's same-box measurement stands); the diff touches only the 0d test file — no src/, no
 tests/common/ — so no other binary's behaviour can change. Report:
 docs/reports/level-0d-operative-walk-4.md.
+
+## level-0d-operative-walk-5 (2026-11-09, start)
+
+Branch `s/level-0d-operative-walk-5` from `origin/s/level-0d-operative-walk-4`, current
+`origin/master` merged clean. Task: take the walk-4 "What's left" in order — the yard
+garrison sweep's trickle (the pre-drop girder sweep or the faster first tap), then #27's 32
+via the pre-wake snipe extended to Operative; judge each lever over real runs; helpers stay
+gated to 0700000d + the difficulty; real input only, no top-ups, no damage/health lowered.
+Suite runner started in the background in the first minutes. Work begins with the v13
+girder-sweep lever.
