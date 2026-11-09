@@ -6,3 +6,8 @@ Reproduce on the real level first through real input, not a teleport. Compare wi
 
 ---
 claimed-by: sandbox4 at 2026-11-09T13:12Z
+
+---
+## Report (done, 2026-11-09T14:16Z)
+
+Closed by the driver: the report is on `s/pain-generic-gate` (docs/reports/pain-generic-gate.md); the worker didn't run finish.sh.
