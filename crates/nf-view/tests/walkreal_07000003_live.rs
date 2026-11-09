@@ -1160,7 +1160,11 @@ fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
     // opt-in documents (the torso-nearest taps take 3-5 rounds a 12-health guard while his own
     // volley lands): one head hit drops him [M NDrone2_HitDamage 0x145558]. The 4.0 stand-off and
     // the plain walks' pinned timelines keep their pick.
-    walker::with_real_damage_head_hunting(|| walk_the_full_route_and_complete_every_objective_at(2))
+    // los-mask-join: the glass-fight rule (head-hunting + the glass sight + hurting-first). Under
+    // the game's sight masks the courtyard guards engage through the lane-door glass [M 0x176f18
+    // mask 0xa27 → 0x1ebaa8:314], and the plain sight rule held fire on them; the walk then ran
+    // dry before the servants and wedged at the door-8 mouth [L the masked run].
+    walker::with_real_damage_glass_fights(|| walk_the_full_route_and_complete_every_objective_at(2))
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage_agent` (real-health-00agent-02-03-04): the
