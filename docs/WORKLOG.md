@@ -80,3 +80,10 @@ One entry per task, newest at the bottom. Append only — never rewrite or reord
   +nf-audio 142 passed/3 failed (the allowed slim-ISO disc_golden trio); the full suite does
   not fit the window (1069 nf-view test targets, the build phase alone exceeds it). Report:
   docs/reports/level-0d-operative-walk-2.md.
+
+- 2026-11-09 08:25 UTC: started (level-0d-operative-walk-3). Continue 0700000d on Operative
+  from s/level-0d-operative-walk-2's ledger: the upstream health floor — the Operative band
+  sweep from the ladder top (#17/#10) and the in-bay #18 kill audit — so Bond boards at 20+
+  health, then the landed drop-then-sweep closes the yard, the plate, the photograph and the
+  door legs. Real input only, no top-ups; helpers stay gated to 0700000d and the difficulty;
+  never lower damage or health.
