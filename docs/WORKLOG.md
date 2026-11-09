@@ -71,3 +71,13 @@ Work log:
   13-min wall does not fit the 10-min foreground cap — not run on the final tree.
 - NOT RUN (the clock): 09, 0a, 0b, 0c (+barrelrow+eastroute), 0d, 11 (+route), 12, 13, 14, 15,
   16, 1b, 41 (+wall), 4a (+satchel) walkreals.
+
+## los-mask-01-walk-2 (2026-11-09, branch s/los-mask-01-walk-2)
+
+- (23:15 UTC) Setup: sandbox survived (repo/work/ISO/nf-queue/rust all present). Branch
+  s/los-mask-01-walk-2 created from origin/s/los-mask-01-walk d8c32a91d, merged origin/master
+  (the merge conflict in walkreal_07000002_live.rs resolved: kept the masked-tree d2 Mayhew
+  shield block + master's real-health-00agent-02-6 d3 hooks, dropped the superseded d3
+  scoop+arm_fullest at stair bottom/courtyard lane). Read los-mask-01-walk.md: taking What's
+  left in order — 08 captured rerun first, then the unrun walkreals one level per call, then
+  ai/turret/glass one -p nf-view --test at a time, suite runner started early.
