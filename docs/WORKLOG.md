@@ -44,3 +44,30 @@ Work log:
   conflicts. Starting: read los-mask-envelope.md, re-tune the 07000001 d2 contact walk (dies t8977,
   guard #4) against the masked vision with the walker's levers gated to 07000001, then one level per
   tool call over the other walkreals.
+
+- (11:35) 01 d2 contact walk GREEN on the masked tree (7 passed / 1 pre-existing ignored, whole
+  binary) with the committed levers (hurting-first return fire, bounded ambush rounds, the band
+  edge at any health for a draining pocket guard, no wait/resupply under live fire).
+- (11:33) 02 castle d2 escort GREEN (4 passed / 1 pre-existing ignored, whole binary, 135 s): the
+  death ledger showed Bond at 25.7 hp dying to captor #16 (8 hp left, weapon 0xe) while the wheel
+  held the 0x1c shotgun with 18 shells — the file's own d3 dropped-shotgun law extended to the
+  masked d2 (arm_weapon 0x1c before/into the geisha-2 room + drop scoops in the tail sweep), plus
+  death guards in take_room/clear_captors_real that end the post-fail zombie loops (33k dead
+  ticks → the binary 161 s → 22.7 s on the d2 filter). NF_EXIT_DBG env-gated traces in
+  drone.rs/nis.rs/scene.rs carried the death-channel/level-exit audits.
+- (11:44-12:20) the rest of the walkreal battery, one level per call: 04 GREEN (9/1 pre-ex),
+  06 GREEN (5/2 pre-ex), 07 GREEN (5/1 pre-ex). 03 d1 full-route WEDGES on the masked timeline
+  (moat leg 43 u short, then servant 0 nav 4 at segment 0.081, no doors/triggers/drones nearby)
+  — ledgered into an ignore with the re-time lever. 05 00agent exit-chain bleeds to a masked
+  long-range engage (#9: 44.0 in 16 hits at d 96.4, only 3 return-fire fights all session) then
+  dies point-blank at the door band — hurting_first gated on in the d3 body (did not move it),
+  ledgered into an ignore with the pre-engage lever. 08: 2 passed / 3 failed in 378 s — the
+  Agent whole-mission walk confirmed failed by name and ledgered; two failure names were outside
+  the captured tail and remain RED in the tree, unnamed (documented in the report).
+- (12:30) nf-game --lib 749 passed / 0 failed. The ai/turret/glass binaries did NOT run: the
+  batch invocation hit cargo's cross-package --test name collision (nf-game also defines
+  ai_live) and the session's stop-work fired before the -p-scoped retry. The fast suite does not
+  survive the background in this sandbox (two starts, both killed between tool calls) and its
+  13-min wall does not fit the 10-min foreground cap — not run on the final tree.
+- NOT RUN (the clock): 09, 0a, 0b, 0c (+barrelrow+eastroute), 0d, 11 (+route), 12, 13, 14, 15,
+  16, 1b, 41 (+wall), 4a (+satchel) walkreals.
