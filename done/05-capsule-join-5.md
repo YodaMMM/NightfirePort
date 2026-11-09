@@ -6,3 +6,7 @@ Push to `s/capsule-join-5`, report in docs/reports/capsule-join-5.md. No draw ch
 
 ---
 claimed-by: main-session agent at 2026-11-09T17:28Z
+
+---
+## Report (done by main-session agent)
+Merged to master 0a9d39435.
