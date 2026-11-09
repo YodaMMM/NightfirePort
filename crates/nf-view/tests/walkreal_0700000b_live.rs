@@ -503,6 +503,42 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
         ("ring n23", Wp::new(-18.41, 47.18, 15.84).r(1.0)),
         ("ring n24", Wp::new(-17.46, 47.18, 18.25).r(1.0)),
         ("ring n25 (the exec-office doorway)", Wp::new(-22.18, 47.18, 16.58).r(1.0)),
+    ] {
+        w.walk_to(wp, label);
+    }
+    // THE ROCKET LIFT (level-0b-roof-sprint-4, the Agent/00Agent sisters only): the office's
+    // west strip holds the disc's PICKUP_RocketLauncher #349 (p0 = 0 weapon, p1 = 46 = 0x2E,
+    // p2 = 8 rounds [D docs/levels/0700000b-audit.md:191]) at (−22.5, 47.96, 29.30). The
+    // straight drives all wedge on the office furniture (the direct jog stalled at
+    // (−20.70, 30.64) [L agent_v2]; the southern U climbed the furniture and wedged at
+    // (−20.42, 28.56) [L agent_v3]) — but the level's own nav web routes the strip: nodes
+    // 0.33 (−20.58, 25.46) / 0.32 (−24.09, 27.41) / 0.29 (−23.94, 29.90) / 0.28 (−23.10,
+    // 31.88) / 0.27 (−21.19, 32.89) / 0.26 (−19.64, 31.64) [L the probe_0b_execfloor_nav
+    // dump], and the take fires on the creep past the pickup (v4: owned 0x2e = true [L]).
+    // The sisters jog through the chain and rejoin the route AT n26; the d1/warm streams
+    // stay byte-identical (the jog is difficulty-gated). The deck's gap-mouth rocket drop
+    // then ends #4's 36.8 on-line pass [L agent_base2].
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 {
+        lane_sprint(w, [-20.58, 47.18, 25.46], 1.0, 300, "jog 0.33 (office centre-south)");
+        lane_sprint(w, [-24.09, 47.18, 27.41], 0.9, 300, "jog 0.32 (the west strip south)");
+        lane_sprint(w, [-22.5, 47.96, 29.30], 0.9, 240, "the rocket pickup #349 (the office jog)");
+        let mut took = false;
+        for _ in 0..60 {
+            if w.scene.sim.as_ref().unwrap().drones.inventory.owned.get(0x2e as usize).copied().unwrap_or(false) { took = true; break; }
+            w.tick(nf_game::player::Input { forward: 0.4, ..Default::default() }, false);
+        }
+        eprintln!("[0b] rocket #349 take: owned 0x2e = {}", took);
+        lane_sprint(w, [-23.94, 47.18, 29.90], 0.9, 240, "jog 0.29 (back out)");
+        lane_sprint(w, [-24.09, 47.18, 27.41], 0.9, 240, "jog 0.32 (back south)");
+        lane_sprint(w, [-20.58, 47.18, 25.46], 0.9, 240, "jog 0.33 (back centre)");
+        // The office exit re-walks the ENTRY: the baseline's own legs did the platform climb
+        // (the n26 leg, 496 ticks, arrival y 48.61 [L agent_base2]) — a raw sprint rejoin
+        // anywhere near n26/desk lands on the FLOOR (y 47.88-47.90 [L agent_v7/v8/v9]) and
+        // both the desk approach and the files walk-out wedge at the platform edge. So the
+        // jog returns through the doorway and the entry legs re-run unchanged.
+        w.walk_to(Wp::new(-22.18, 47.18, 16.58).r(1.0), "jog back through the doorway (n25)");
+    }
+    for (label, wp) in [
         ("ring n26", Wp::new(-19.64, 47.18, 31.64).r(1.0)),
         ("the Q-Worm C desk (walked)", Wp::new(pc[0] + 0.6, pc[1] - 0.5, pc[2] + 0.9).r(1.0)),
     ] {
@@ -517,27 +553,6 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
         assert!(dxz_w(p, [pc[0] + 0.6, pc[1], pc[2] + 0.9]) < 1.3,
             "the desk approach must be the walked route: the burned keypad's door #151 → n25 → n26 [M 0x1ae3d8; D #151/#178], got {p:?}");
         eprintln!("[0b] the desk approach arrived WALKED at ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
-    }
-    // THE ROCKET LIFT (level-0b-roof-sprint-4, the Agent/00Agent sisters only): this office
-    // HOLDS the disc's PICKUP_RocketLauncher #349 (p0 = 0 weapon, p1 = 46 = 0x2E, p2 = 8
-    // rounds [D docs/levels/0700000b-audit.md:191]) at (−22.5, 47.96, 29.30) — 3.8 u
-    // west-south-west of the desk approach arrival [L the arrival print above] — a walk-over
-    // take with NO new exposure: the first sprint-4 cut detoured to it from return n16 and
-    // the keypad-corner guards #2/#3 shredded that line (23 hits for 100 [L the agent_v1
-    // run]); the office sits behind the already-opened keypad door, away from their cones.
-    // The sisters jog in, take it, and return to the desk spot — the deck's gap-mouth rocket
-    // drop then ends #4's 36.8 on-line pass [L agent_base2]. The d1/warm streams stay
-    // byte-identical (the jog is difficulty-gated).
-    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 {
-        let a = w.scene.sim.as_ref().unwrap().bond.pos;
-        lane_sprint(w, [-22.5, 47.96, 29.30], 0.9, 300, "the rocket pickup #349 (the office jog)");
-        let mut took = false;
-        for _ in 0..60 {
-            if w.scene.sim.as_ref().unwrap().drones.inventory.owned.get(0x2e as usize).copied().unwrap_or(false) { took = true; break; }
-            w.tick(nf_game::player::Input { forward: 0.4, ..Default::default() }, false);
-        }
-        eprintln!("[0b] rocket #349 take: owned 0x2e = {}", took);
-        lane_sprint(w, [a[0], a[1], a[2]], 0.6, 300, "back to the desk approach spot");
     }
     {
         // The disc's island arm equips the Q-Worm at level load (`EquipWeapon(BL, 0x58, 0)` at
@@ -921,49 +936,12 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
             let aim = lane[phase];
             let desired = (aim[0] - p[0]).atan2(aim[1] - p[2]);
             let mut aim_err = walker::wrap_pi(desired - sim.bond.yaw);
-            // THE GAP-MOUTH ROCKET DROP (level-0b-roof-sprint-4, the sisters): #4 parks at
-            // (2.6, 58.0, 32.7) — 13 u north-east of the gap mouth P2 (−1.5, 20.3), the line
-            // crossing the z 22.28 wall at x −0.84, inside the gap x −2..1 [L sprint-3's ray
-            // probe] — and the disc's guided launcher #349 (0x2e, 8 rounds [D
-            // docs/levels/0700000b-audit.md:191]) ends the 36.4 on-line pass BEFORE P3 opens.
-            // A player stops in the funnel, turns, fires, runs. Bounded: two rockets or 360
-            // ticks, then the lane goes anyway (the sprint-3 shotgun drop below is the
-            // fallback once the switch back to 0x43 lands).
-            if agent_run && !rocket_done && phase >= 1 && p[2] > 19.5 {
-                let g = &sim.drones.list[4];
-                let dxg = g.pos[0] - p[0];
-                let dzg = g.pos[2] - p[2];
-                let dg = (dxg * dxg + dzg * dzg).sqrt();
-                let g4_live = g.present && !g.corpse && g.health > 0.0;
-                if g4_live && dg < 20.0 && sim.gun.clip > 0 {
-                    if rocket_start == 0 { rocket_start = w.total_ticks; }
-                    if w.total_ticks - rocket_start < 360 && rockets_fired < 2 {
-                        let desired_g = dxg.atan2(dzg);
-                        let err_g = walker::wrap_pi(desired_g - sim.bond.yaw);
-                        let at = [g.pos[0], g.pos[1] + 0.3, g.pos[2]];
-                        let want_pitch = ((at[1] - (p[1] + sim.bond.eye - sim.bond.crouch_drop))
-                            / dg.max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
-                        let aim = nf_game::player::Input {
-                            turn: err_g.clamp(-0.08, 0.08),
-                            look: (want_pitch - sim.bond.pitch).clamp(-0.08, 0.08),
-                            ..Default::default()
-                        };
-                        if rocket_cool > 0 {
-                            rocket_cool -= 1;
-                            w.tick(aim, false);
-                        } else if err_g.abs() < 0.05 {
-                            let before = sim.gun.clip;
-                            w.tick_fire(aim);
-                            let after = w.scene.sim.as_ref().unwrap().gun.clip;
-                            if after < before { rockets_fired += 1; rocket_cool = 90; }
-                            eprintln!("[0b-rocket] t{} fired #{} clip {} err {:.3} d {:.1}", w.total_ticks, rockets_fired, after, err_g, dg);
-                        } else {
-                            w.tick(aim, false);
-                        }
-                        continue;
-                    } else { rocket_done = true; }
-                } else if rocket_start > 0 { rocket_done = true; }
-            }
+            // (level-0b-roof-sprint-4: the gap-mouth drop attempts are RETIRED — the rocket's
+            // detonation hurt Bond ~48 at d 13.7 against the disc's own 8.0 blast radius [L
+            // ee_snapshot weapon_data+0x2e·0x10c+0x08], and the shotgun shells landed ZERO on
+            // #4 at d 13.7 while the stand bled 25 hp in 90 ticks [L agent_v11] — both levers
+            // recorded in the report; the sprint-3 funnel drop below stays the sisters'
+            // fallback once 0x43 is up.)
             // THE STAND-AND-DROP (level-0b-roof-sprint-3, "dropping #4 before the final dash"):
             // #4 parks at (2.6, 58.0, 32.7) 4-5 u east of the gap column — no lane heading ever
             // brings him near the crosshair (err 0.7-1.1 [L the runs]), and his 0x18 rounds
@@ -1038,8 +1016,13 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
             // rocket attempt is finished, then 0x43 for the P3/P4 fire-on-move. No stand
             // (Player_WeaponChange needs none [M the game's switch path]; sprint-3's stand
             // cost ~20 hp [L]).
+            // SPRINT-4 REVISED: the sisters arm the SHOTGUN on the run — the rocket plan is
+            // parked: the gap-mouth rocket detonation hurt Bond ~48 at d 13.7 while the disc's
+            // own blast radius is 8.0 [L ee_snapshot weapon_data+0x2e·0x10c+0x08 = 8.0, damage
+            // 100.0] — a port blast-law divergence recorded for its own task (the walk fires
+            // no rockets). The drop below fires the shotgun from the same converged stand.
             if agent_run {
-                let want = if rocket_done { 0x43 } else { 0x2e };
+                let want = 0x43;
                 let s2 = w.scene.sim.as_ref().unwrap();
                 if s2.gun.weapon != want {
                     let sw = s2.gun.switch_request;
