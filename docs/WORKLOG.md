@@ -54,3 +54,29 @@ One entry per task, newest at the bottom. Append only — never rewrite or reord
   clean), lever 2 the drop-then-sweep (land in the yard, sweep at once, the garrison still
   asleep). The standing-capsule change stays in its own task. Real input only, no top-ups;
   helpers gated to 0700000d and the difficulty.
+
+- 2026-11-09 05:30 UTC: done (level-0d-operative-walk-2; the Operative walk stays red at the
+  yard, the ledger + the next lever are in its ignore message). Both levers landed: (1) the
+  REAL-DAMAGE REEL BUG — the hang loop broke on max_ox > 177 alone and the real-damage twin's
+  E-plate wait + corner walk eat the beam's east crawl, so the loop started at/past the apex
+  and released Bond mid-reel (the claw latched, pos[1] 10.67 on the deck floor — the -1's
+  "tick 13800 best run" was this assert with its stored summary misread as alive); the break
+  now waits for the reel's phase 2 [M 0x192860:91-94], the plain replay byte-identical and
+  green. (2) The CROUCH-DODGE — PROVEN: crouch ON at the rim corner through the wait, the
+  latch, the hang and the ride (the Toggle press edge, a fresh press stands); the baseline's
+  12-tick-cadence 0.6 corner trickle (#3) went to ZERO hits for ~1300+ ticks — the opening
+  line clips the crouched chest (the aim target drops 0.45 [M 0x195aa0:39-51]) and the
+  visibility factor 0.75 [M 0x1390c0:40-42] drops under the 0.7 LOS gate. (3) The DROP-THEN-
+  SWEEP — LANDED: the boarding, the hang, the ride (offset 2.00, the apex 138.19) and the
+  slot hop all pass, the drop landed at (137.98, 5.02, −296.08), the sweep is the nearest-
+  clear-box-first dynamic loop (the fixed order swept the far corner while #3 had walked to
+  the drop point, d 55 → 7.9). DEATH MOVED 13800 → 15646 (+1846 ticks). The floor is upstream
+  health: the boarding arrives at ~15.0 (9 hits for 78.6 — #29's two ladder-top snipes,
+  #18's bay-enter 16, #17's ride-window 16, #10's deck 16), the slot fall ~10-12 skips
+  armour [M 0x1902c8:84-104], and 3.2 at the landing dies in 64 ticks — no aim converges
+  that fast. NEXT: the Operative ladder-top band sweep (#17/#10) + the in-bay #18 kill audit
+  (400 ticks never landed a 10-health guard at d 19.7 in-room, every run). Runs: walkreal
+  whole 1 passed/2 ignored, interactables 11 passed, nf-game 1179 passed/0 failed, nf-formats
+  +nf-audio 142 passed/3 failed (the allowed slim-ISO disc_golden trio); the full suite does
+  not fit the window (1069 nf-view test targets, the build phase alone exceeds it). Report:
+  docs/reports/level-0d-operative-walk-2.md.
