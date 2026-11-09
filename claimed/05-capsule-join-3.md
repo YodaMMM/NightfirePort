@@ -8,3 +8,6 @@ Branch `s/capsule-join-2` (on `s/batch-1109g`: master + the game's guard standin
 - upward_shot_0700000c (2): the deck sentries' spawner never re-creates them on the moved stream - check the spawner's respawn pick against the game (a port bug if the game always refills)
 - guest_faces_live, speech_facial_fallback_live: Bond placed in the party crowd is pushed off his mark by guests' bodies - check whether party guests (civilians) carry the standing body in the game at all
 For each: port bug vs lost margin with evidence; fix the port (test red on old code) or re-route as a player would. Never lower damage or health, no loosened pins, no new ignores. Branch from origin/s/capsule-join-2, push to `s/capsule-join-3`, report in docs/reports/capsule-join-3.md. Run every walkreal_* binary one per call at the end.
+
+---
+claimed-by: sandbox4 at 2026-11-09T14:16Z
