@@ -19,3 +19,21 @@ escort phase past the AND, never yet run on any tree. Helpers gated to 07000001 
 read (no report file exists on it; no work commits).
 
 Entry started — porting drain-5's d3 test-file work onto this branch, then the west-door lever.
+
+Result (same session): the four door-phase deaths reproduced and removed (the 5925 flank
+through the plane, the 6159 fight-creep into the mouth, the 6007 open-aperture stand drill,
+the 10017 loot-walk to an in-hall drop) — the port's guard rules compare clean at every point
+checked (the standoff law, the open-door fire lines, the side-step drift, the damage rates),
+so the fix is the player's movement discipline: opt-in `no_cross_z` + `flank_hold_z` + the
+fight-creep off + the return-fire lip hold + the resupply drop gate (all in the shared
+helpers, master bit-exact flag-off) + the peek rounds shut the leaf behind Bond (d3-gated
+after ungating shifted the d2 walk; the whole binary went 6/1, the gate restored it) + the
+d3 mouth strip with a halved wound cap. RESULT: #6/#11 die through the aperture at zero cost
+("peek 2 done, health 85.6, guard hp -2.0"), the door phase ends at the AND assert ALIVE;
+#7 (SMG captain, 24 hp) is UNEXPOSABLE from the south (10 rounds + the mouth strip found no
+part at any drift spot; the armed lure ran dry and never drew him) — the guards_shut_door law
+holds, the walk stays #[ignore]d with the ledger and the sole lever (the WEST door #2 peek,
+then the east perch) in the ignore message; the escort phase past the AND has still never
+run. walkreal_07000001_live whole: 7 passed / 0 failed / 1 ignored. The other walkreal
+binaries did NOT run (the clock ran out; every shared change is flag-off bit-exact by
+construction; the next session sweeps first). Report: docs/reports/level-01-d3-walk.md.
