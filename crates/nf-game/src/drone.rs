@@ -23536,7 +23536,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         self.sounds.push(Sound { id: 0x447, pos: p, inner: 96.0, outer: -1.0, weight: 0.0 });
                         break;
                     }
-                    crate::grenade::GrenadeEvent::Bounce(p) => {
+                    crate::grenade::GrenadeEvent::Bounce(p, m) => {
                         // fix-weapon-effects: the impact explode — `Bullet_CollisionHandler` 0x12d068-0x12d0bc
                         // [M, disassembled]: when the weapon's `+0x70` carries bit 2 (0x4) and the contact is
                         // not a ricochet re-entry, the bullet's object is destroyed with
@@ -23556,9 +23556,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 .map_or(0.0, |r| f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap()));
                             // fix-blast-scripts2: scale = the game's FPR 12 = +0x08 [M 0x12d0ac].
                             // explode-debris-spawn: the contact arm's 12th arg is HITDATA+0x50 & 0x3F
-                            // [M 0x12d09c] — the port's Bounce event carries no material yet, so the
-                            // stand-in is 0 (no debris) [S unverified — live check in the report].
-                            self.pending_blasts.push((p, radius, damage, g.owner, g.weapon_type, 0x0600_0052, radius, 0));
+                            // [M 0x12d084 `lbu v0,0x50(s2)`, 0x12d094 `andi 0x3f`, 0x12d09c `sw v0,0(sp)`
+                            // = Explode_Create's stack arg]; the grenade's world contact fills +0x50 with
+                            // the triangle's surface byte, which the port's segment_surface mat is, so
+                            // the Bounce event carries it. Material 0 still spawns no debris; metal and
+                            // stone contacts now spawn the game's debris (and its random draws).
+                            self.pending_blasts.push((p, radius, damage, g.owner, g.weapon_type, 0x0600_0052, radius, u16::from(m)));
                             g.state = 2; // the object is destroyed by the blast
                             break;
                         }

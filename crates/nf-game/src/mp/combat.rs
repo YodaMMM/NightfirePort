@@ -520,7 +520,7 @@ impl MpCombat {
             match ev {
                 // The contact-explode records (the MGL 'Grenade' 0x2A, the AIMS launcher 0x1B)
                 // blast at the world contact [M 0x12ce80:194-206]; the rest bounce.
-                Some(GrenadeEvent::Bounce(p)) if flags70 & 4 != 0 => {
+                Some(GrenadeEvent::Bounce(p, _)) if flags70 & 4 != 0 => {
                     blasts.push(Blast { pos: p, radius: g.radius, damage: g.damage, owner: g.owner, weapon: g.weapon_type });
                     g.state = 2;
                 }
