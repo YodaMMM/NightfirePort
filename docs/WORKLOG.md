@@ -57,3 +57,13 @@ Work log:
   law [M 0x1a5460:396-403, 0x1a5170:100-108]. Dome lanes measured (head-on 80.8 best); deck
   reroutes measured (west hug 87.2 through the band; the NW structure x −11..−14 z 24-28 slides
   shallow NE headings into its corner). Walk still red; plan in the report.
+
+## level-0b-roof-sprint-3
+Started 2026-11-09 20:55 UTC. Branch s/level-0b-roof-sprint-3 cut from origin/s/level-0b-roof-sprint-2
+(a4e3541ae). Task: 0700000b roof-deck sprint, third pass — the crossing exists and the take fires
+(sprint-2); the failure is margin. Bond arrives with 5.2 hp: the dome-floor turret pair #174/#175
+costs 19.2 and guard #4 parks on the sprint line at (2.6, 58.0, 32.7) costing 36.4 in the last 8 u.
+Finish sprint-2's "What's left": a lane past the turret pair that costs less, and dropping or
+avoiding #4 before the final dash (as a player would), then the Agent and 00 Agent real-damage walks,
+then the d1 walk and the whole walkreal_0700000b_live binary. No damage/health lowering, no loosened
+pins, no new ignores, no draw changes.
