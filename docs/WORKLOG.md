@@ -47,3 +47,10 @@ One entry per task, newest at the bottom. Append only — never rewrite or reord
   the leg is out, the story is in the body). The yard pit is unshootable from the ladder
   top, the roof lane and the bay enter (three scans broke on empty picks). Report:
   docs/reports/level-0d-operative-walk.md.
+
+- 2026-11-09 04:10 UTC: started (level-0d-operative-walk-2). Continue 0700000d on Operative
+  from s/level-0d-operative-walk's ledger: lever 1 the crouch-dodge test at the corner (the
+  bay/yard opening line vs a crouched chest — the corner wait goes quiet, the hop fires
+  clean), lever 2 the drop-then-sweep (land in the yard, sweep at once, the garrison still
+  asleep). The standing-capsule change stays in its own task. Real input only, no top-ups;
+  helpers gated to 0700000d and the difficulty.
