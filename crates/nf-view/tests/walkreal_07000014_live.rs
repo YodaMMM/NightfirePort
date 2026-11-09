@@ -1651,6 +1651,10 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage() {
 /// `shoot_loose`'s give-up keeps the walk moving when a sight line never opens.
 fn clear_hostiles(w: &mut Walker, radius: f32, cap: u32) {
     let home = w.scene.sim.as_ref().unwrap().bond.pos;
+    // pretrans-arms-2: a drop the loot walk could not close on (the fight's backpedal left Bond
+    // up on the sill at y 1.30 and the 6-cycle wedge repeated on the same drop every round) is
+    // left where it lies — a player who cannot reach a gun on the floor walks on.
+    let mut unreachable: Vec<[f32; 3]> = Vec::new();
     for _ in 0..10 {
         let sim = w.scene.sim.as_ref().unwrap();
         let Some(di) = sim.drones.list.iter().position(|d| {
@@ -1671,11 +1675,16 @@ fn clear_hostiles(w: &mut Walker, radius: f32, cap: u32) {
                 let t = sim.drones.pickups.iter().filter(|p| !p.gone)
                     .filter(|p| (p.m[3][1] - bp[1]).abs() < 0.3)
                     .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+                    .filter(|t| !unreachable.iter().any(|u| walker::dxz(*u, *t) < 0.5))
                     .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)))
                     .filter(|t| walker::dxz(*t, bp) < 6.0);
                 (bp, t)
             };
-            if let Some(t) = target { w.walk_nav_to(t, "the clear's loot pass", 1.2); }
+            if let Some(t) = target {
+                w.walk_nav_to(t, "the clear's loot pass", 1.2);
+                if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, t) > 1.5 { unreachable.push(t); }
+            }
+            let _ = bp;
         }
         w.shoot_loose(di, "the hostile clear", cap);
     }

@@ -1335,6 +1335,12 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.gun.clip + sim.gun.spare < 30 { let _ = sim; w.resupply("pre-ambush ammo"); }
         }
+        // pretrans-arms-2: a guard standing at the escort's shoulder cannot be shot without the
+        // round crossing the escort (the shield holds every tap), and since the aim stands stopped
+        // drifting [M 0x166328:122 + 0x13b490:117-118] he no longer wanders off him. The player's
+        // escort play: step back through the door out of his sight and let him come forward
+        // (the hunt leaves the escort), fighting him in the open; then cross.
+        lure_off_the_contact(&mut w, ci);
         w.walk_nav_to([-24.0, 6.4, 14.8], "the ambush stance (east of the ch-0xF slab)", 0.8);
         w.walk_nav_to([-25.7, 6.4, 14.8], "cross the ch-0xF slab (the ambush pops)", 0.25);
         for _ in 0..120 {
@@ -1757,6 +1763,35 @@ fn peek_fire(w: &mut Walker, g: usize) -> Option<bool> {
         }
         let d = &w.scene.sim.as_ref().unwrap().drones.list[g];
         if d.corpse || d.health <= 0.0 { Some(true) } else { None }
+}
+
+/// pretrans-arms-2: the armed, live, started team-1 guards standing within 3.0 of the escort
+/// `ci` — a round at any of them crosses the escort (the walker's shield holds the tap).
+fn at_the_contact(w: &Walker, ci: usize) -> Vec<usize> {
+    let sim = w.scene.sim.as_ref().unwrap();
+    let c = sim.drones.list[ci].pos;
+    (0..sim.drones.list.len()).filter(|&i| {
+        let d = &sim.drones.list[i];
+        i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+            && ((2..0x47).contains(&d.weapon) || (0x6a..=0x71).contains(&d.weapon))
+            && walker::dxz(d.pos, c) < 3.0
+    }).collect()
+}
+
+/// pretrans-arms-2: the escort lure. While an armed guard stands at the contact's shoulder,
+/// Bond waits east of the corridor door (out of the pocket's sight line) for up to 2400 ticks;
+/// the walker's return fire answers whoever comes through, the shield holding every tap that
+/// would cross the contact.
+fn lure_off_the_contact(w: &mut Walker, ci: usize) {
+    if at_the_contact(w, ci).is_empty() { return; }
+    eprintln!("[01] guards {:?} at the contact's shoulder: luring them off", at_the_contact(w, ci));
+    w.walk_nav_to([-12.8, 6.45, 15.1], "the lure hold (east of the corridor door)", 0.8);
+    for _ in 0..80 {
+        if at_the_contact(w, ci).is_empty() { break; }
+        if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { return; }
+        w.wait(30);
+    }
+    eprintln!("[01] lure done: at the contact {:?}", at_the_contact(w, ci));
 }
 
 /// Agent hall door, a guard across the aperture that the hold line cannot see (he side-steps

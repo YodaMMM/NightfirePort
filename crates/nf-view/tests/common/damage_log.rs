@@ -1186,6 +1186,12 @@ impl Walker {
                     miss2 < reach * reach && (sd.pos[1] - 1.2) < ey && ey < (sd.pos[1] + 2.2)
                 });
                 if shield_line && trace && t % 30 == 0 { eprintln!("[rf-trace] fight#{di} t{t}: the shielded drone is in the tap cone — holding"); }
+                // The friendly-fire shield (`Walker::shield`, the 01 escort): a round that would
+                // cross the shielded contact past the target is not taken here either — the
+                // return-fire stand shot the contact standing behind guard #3 at 12 u (by the
+                // player, "Killed Civilians") once the guards' aim stands stopped drifting
+                // (pretrans-arms-2: the +0x38 root zero). A player holds the tap.
+                let blocked = blocked || self.return_fire_shield_blocks(sim, eye, at, di);
                 let reload = sim.gun.clip == 0;
                 // aimed_fights (OPT-IN): the tap gate TIGHTENS with the aim held — the stand's
                 // plain tolerances (0.03 rad yaw / 0.04 norm pitch = ±1.05 u / ±2.2 u at the deck

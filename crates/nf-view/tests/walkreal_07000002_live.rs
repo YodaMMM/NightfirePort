@@ -1704,6 +1704,25 @@ fn courtyard_sniper_pin_stair_bottom_agent() {
         .map(|d| d.shots.len()).unwrap_or(0);
     leg_to(&mut w, [-36.7, 5.9, 1.0], "pin west wing stair", 1.6);
     leg_to(&mut w, [-36.9, 5.5, -1.5], "pin stair bottom", 1.6);
+    // pretrans-arms-2: a rifle guard other than the sniper holding the stair bottom in his line
+    // is answered before the stand (a player does not stand still under fire from behind): the
+    // east rifle #8 (0x12) fired at the stand from 24 u in his planted aim stance [M 0x166328:122
+    // + 0x13b490:117-118] and a miss past Bond killed the hiding civilian (team 3) behind him —
+    // the mission's "Killed Civilians" fail then dropped every guard's opponent [M 0x1424e0:104-108]
+    // and the sniper went quiet. The sniper himself stays unanswered (the scenario under test).
+    let others: Vec<usize> = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        (0..sim.drones.list.len()).filter(|&i| {
+            let d = &sim.drones.list[i];
+            d.team == 1 && d.present && d.enabled && !d.corpse && d.health > 0.0 && d.weapon != 0x1e
+                && dxz(d.pos, bp) < 30.0 && walker::DamageLog::visible(sim, i)
+        }).collect()
+    };
+    if !others.is_empty() {
+        for i in others { w.shoot_bounded(i, &format!("pin stand: rifle #{i} on the stand's line"), 1500); }
+        leg_to(&mut w, [-36.9, 5.5, -1.5], "pin stair bottom again", 1.6);
+    }
     status(&w, "pin stair bottom — the stand begins");
 
     let (sniper, dxz_at_stand) = {
