@@ -813,17 +813,44 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
         // [pp−0.3, −1.0], the take raising ch 0x3F on the pass, and the jump leg's east drive
         // (raw ticks, no return-fire gate) follows with no stop between. The tranq fights stay
         // on the legs where their target is reachable; the deck's end is pure movement.
-        // THE DECK LEG (level-0b-roof-sprint-2 final state): the reroute experiments measured
-        // better deck lanes (the west band hug held 87.2 hp through the #6/#7/#8 band) but the
-        // deck's NW structure (x −11..−14, z 24-28) slides every shallow NE heading west into
-        // its corner, and the re-steer crawls under fire [L the 0b-stall traces]. The straight
-        // WIP line to the slot is the best measured completion: it takes the parachute at
-        // ~t15844 [L NF_PICKUPLOG: dist 1.768 vs r 1.791, los true] — Bond arrives at the wall
-        // at 5.2 hp and the finisher lands 7 ticks after the take. The margin work (the dome
-        // lane and the #4 pass) is in the report's next steps.
+        // THE DECK LEG (level-0b-roof-sprint-3, the chained lane): the deck's NW quadrant is
+        // walled by a 45° diagonal face (normal (−0.71,−0.70), top 58.2 — above the standing
+        // capsule) running (−8.2, 23) → (−14, 28.8), plus a flat south wall at z 22.28 spanning
+        // x −7..−3 with a second piece at x 2 [L the ray probe on this tree]; the only north
+        // opening is the GAP x −2..1 (north rays clear, 57.0 floor at z 22-26). Sprint-2's west
+        // hug held 87.2 hp through the #6/#7/#8 band (they park at x ≥ 8.5 [D the diag]) but its
+        // P3 pressed the diagonal and slid Bond NW into the corner (hp 64.8 → 8.8 [L the
+        // 0b-stall trace]); the straight WIP line threaded the gap but crossed the whole open
+        // middle under the east band and #4 on-line (the on-line #4 pass alone 36.4 [L]). The
+        // chain keeps the hug's west-band margin, runs EAST south of the flat wall, goes north
+        // THROUGH the gap, then passes #4 (2.6, 58.0, 32.7) wide on the final dash — the wide
+        // pass sprint-2 measures at ~16.8. Phases advance only on arrival (dxz < 1.6) and never
+        // re-aim backward (the sprint-2 re-steer pathology: a backward re-aim walked Bond back
+        // into #4's cone, hp 34.0 → 14.4 [L]).
         let target = [pp[0] - 0.3, pp[1] - 1.4, pp[2] - 1.0];
+        // ARM FIRST (level-0b-roof-sprint-3): Bond reaches the deck holding the DRY 0x58
+        // (clip 0 spare 0 [L the stall trace]) while the wheel's 0x43 sits loaded (clip 5
+        // [L the inventory trace]) — every fire-on-the-move shot was a blank; 0x4a (clip 100) spawned no rounds — a non-bullet gadget [L the clip stayed 100 through the drop stand]. A player switches
+        // to the loaded weapon: the real switch path (Player_WeaponChange) until it lands.
+        for _ in 0..120 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.gun.weapon == 0x43 && sim.gun.clip > 0 { break; }
+            let sw = sim.gun.switch_request;
+            w.tick(nf_game::player::Input {
+                switch_to: if sw == 0x43 { None } else { Some(0x43) },
+                ..Default::default()
+            }, false);
+        }
+        let lane: [[f32; 2]; 4] = [
+            [-11.8f32, 18.0f32], // P1 the west band, south of the diagonal (the measured heights)
+            [-1.5, 20.3],        // P2 the east run south of the z 22.28 wall, to the gap mouth
+            [-1.5, 30.5],        // P3 north through the x −2..1 gap (clear at capsule height)
+            [target[0], target[2]], // P4 the final dash past #4 to the take slot
+        ];
+        let mut phase = 0usize;
         let start = w.total_ticks;
         let mut stall_diag = 0u32;
+        let mut drop_start = 0u32;
         while w.total_ticks - start < 2400 {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.drones.channels.on(0x3f) { break; } // the take fires ON THE PASS — never stand
@@ -834,19 +861,91 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
                 stall_diag = w.total_ticks;
                 let dx = pp[0] - p[0]; let dy = pp[1] - p[1]; let dz = pp[2] - p[2];
                 let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-                eprintln!("[0b-stall] t{} bond ({:.2},{:.2},{:.2}) vel ({:.2},{:.2},{:.2}) yaw {:.2} hp {:.1} take-dist {:.3}",
+                eprintln!("[0b-stall] t{} bond ({:.2},{:.2},{:.2}) vel ({:.2},{:.2},{:.2}) yaw {:.2} hp {:.1} take-dist {:.3} phase {} gun w{:#x} clip {} spare {} d4hp {:.1}",
                     w.total_ticks, p[0], p[1], p[2],
                     sim.bond.vel[0], sim.bond.vel[1], sim.bond.vel[2], sim.bond.yaw,
-                    sim.drones.health.health, dist);
+                    sim.drones.health.health, dist, phase,
+                    sim.gun.weapon, sim.gun.clip, sim.gun.spare,
+                    sim.drones.list[4].health);
+                let inv = &sim.drones.inventory;
+                let owned: Vec<String> = inv.owned.iter().enumerate()
+                    .filter(|(_, &o)| o)
+                    .map(|(w, _)| format!("{w:#x}:clip {}", inv.clip.get(w).copied().unwrap_or(0)))
+                    .collect();
+                eprintln!("[0b-stall]   carried {:?} owned [{}]", inv.carried, owned.join(" "));
             }
-            let desired = (target[0] - p[0]).atan2(target[2] - p[2]);
-            let err = walker::wrap_pi(desired - sim.bond.yaw);
+            while phase + 1 < lane.len()
+                && ((p[0] - lane[phase][0]).powi(2) + (p[2] - lane[phase][1]).powi(2)).sqrt() < 1.6 {
+                phase += 1;
+            }
+            if phase == 3 && drop_start == 0 { drop_start = w.total_ticks; }
+            let aim = lane[phase];
+            let desired = (aim[0] - p[0]).atan2(aim[1] - p[2]);
+            let mut aim_err = walker::wrap_pi(desired - sim.bond.yaw);
+            // THE STAND-AND-DROP (level-0b-roof-sprint-3, "dropping #4 before the final dash"):
+            // #4 parks at (2.6, 58.0, 32.7) 4-5 u east of the gap column — no lane heading ever
+            // brings him near the crosshair (err 0.7-1.1 [L the runs]), and his 0x18 rounds
+            // (5.6/hit) chew the P4 dash AND the jump leg behind it (the 15890-15902 backshots
+            // killed the previous run at 14.4 hp [L]). Past the gap (z > 29) a player stops in
+            // the funnel — the diagonal west, the flat wall south — turns and drops him, then
+            // dashes. Position-gated (the phase bookkeeping missed it when the run drifted);
+            // bounded: if he will not die in 240 ticks, the dash goes anyway.
+            if p[2] > 29.0 {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let g = &sim.drones.list[4];
+                let dxg = g.pos[0] - sim.bond.pos[0];
+                let dzg = g.pos[2] - sim.bond.pos[2];
+                let dg = (dxg * dxg + dzg * dzg).sqrt();
+                if g.present && !g.corpse && g.health > 0.0 && dg < 8.0 {
+                    if drop_start == 0 { drop_start = w.total_ticks; }
+                    if w.total_ticks - drop_start < 240 {
+                        let desired_g = dxg.atan2(dzg);
+                        let err_g = walker::wrap_pi(desired_g - sim.bond.yaw);
+                        let at = [g.pos[0], g.pos[1] + 0.3, g.pos[2]];
+                        let want_pitch = ((at[1] - (sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop))
+                            / dg.max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+                        let aim = nf_game::player::Input {
+                            turn: err_g.clamp(-0.08, 0.08),
+                            look: (want_pitch - sim.bond.pitch).clamp(-0.08, 0.08),
+                            ..Default::default()
+                        };
+                        if err_g.abs() < 0.05 { w.tick_fire(aim); } else { w.tick(aim, false); }
+                        continue;
+                    }
+                }
+            }
+            // FIRE ON THE MOVE (level-0b-roof-sprint-3): opportunistic ONLY — the trigger rides
+            // the real fire path when a live target is already near the crosshair (|err| < 0.18;
+            // #7 (10.0, 21.1) is nearly on-heading through the whole east run) but the TURN
+            // NEVER leaves the lane: tracking a target while running yanked Bond off the lane
+            // twice (the sprint-2 re-steer pathology — he drifted point-blank into #4 and died
+            // [L the runs]). The run continues regardless.
+            let mut trigger = false;
+            let mut look = 0.0f32;
+            for &gi in &[5usize, 4, 7] {
+                let g = &sim.drones.list[gi];
+                if !g.present || g.corpse || g.health <= 0.0 { continue; }
+                let dxg = g.pos[0] - p[0];
+                let dzg = g.pos[2] - p[2];
+                let dg = (dxg * dxg + dzg * dzg).sqrt();
+                if dg > 9.0 { continue; }
+                let err_g = walker::wrap_pi(dxg.atan2(dzg) - sim.bond.yaw);
+                if err_g.abs() < 0.18 {
+                    trigger = true;
+                    let at = [g.pos[0], g.pos[1] + 0.3, g.pos[2]];
+                    let want_pitch = ((at[1] - (p[1] + sim.bond.eye - sim.bond.crouch_drop))
+                        / dg.max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+                    look = (want_pitch - sim.bond.pitch).clamp(-0.08, 0.08);
+                    break;
+                }
+            }
             let input = nf_game::player::Input {
-                turn: err.clamp(-0.08, 0.08),
-                forward: if err.abs() > 0.6 { 0.0 } else { 1.0 },
+                turn: aim_err.clamp(-0.08, 0.08),
+                look,
+                forward: if aim_err.abs() > 0.6 { 0.0 } else { 1.0 },
                 ..Default::default()
             };
-            w.tick(input, false);
+            if trigger { w.tick_fire(input); } else { w.tick(input, false); }
         }
         assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f),
             "the deck sprint must take the parachute ON THE PASS (standing at the slot is the death: [L the death run — 95 ticks at the slot, 3 × 11.2 + 5.2 from #4, the take never fired]); bond at {:?}",

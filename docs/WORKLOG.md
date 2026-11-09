@@ -67,3 +67,21 @@ Finish sprint-2's "What's left": a lane past the turret pair that costs less, an
 avoiding #4 before the final dash (as a player would), then the Agent and 00 Agent real-damage walks,
 then the d1 walk and the whole walkreal_0700000b_live binary. No damage/health lowering, no loosened
 pins, no new ignores, no draw changes.
+
+Progress (22:28 UTC): the deck geometry pinned by ray probe [L]: a 45° diagonal face (normal
+(−0.71,−0.70), top 58.2 above the capsule) runs (−8.2, 23)→(−14, 28.8), a flat south wall at
+z 22.28 spans x −7..−3 plus a piece at x 2 — the only north opening is the GAP x −2..1 (rays
+clear, 57.0 floor at z 22-26). Built the chained lane P1 west band (−11.8, 18) → P2 east run
+(−1.5, 20.3) → P3 the gap north (−1.5, 30.5) → P4 the dash to the slot; the take FIRES on the
+pass in two runs. Root cause of the margin found: Bond holds the DRY 0x58 (clip 0 spare 0
+[L the stall trace]) the whole deck phase while the wheel owns 0x43 (shotgun, clip 5 spare 10),
+0x2 (clip 7), 0x4e (500) — and 0x4a (clip 100) spawned no rounds [L] (a non-bullet gadget).
+Added: the arm-first block (switch via the real path), the opportunistic fire-on-move (gated —
+the turn-tracking variant yanked Bond off the lane twice, the sprint-2 re-steer pathology), the
+bounded stand-and-drop of #4 at the funnel, the tick_fire routing (w.tick's 2nd arg is the USE
+key, not the trigger — the sprint's fire was going into use_key; now the trigger rides
+tick_fire). Still red: the arm-first stand costs ~20 at the re-place and P2's east run bleeds
+25-30; the drop never completes before the budget dies. Next: switch mid-P1 instead of standing,
+or take the rocket launcher (−22.5, 47.96, 29.30, 8 rounds [L the pickup probe]) and one-shot #4
+from the gap mouth (13 u, LOS through x 0.6 at z 22.28); then 00agent, d1, the whole binary, the
+full suite.
