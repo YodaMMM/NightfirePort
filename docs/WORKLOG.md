@@ -85,3 +85,8 @@ tick_fire). Still red: the arm-first stand costs ~20 at the re-place and P2's ea
 or take the rocket launcher (−22.5, 47.96, 29.30, 8 rounds [L the pickup probe]) and one-shot #4
 from the gap mouth (13 u, LOS through x 0.6 at z 22.28); then 00agent, d1, the whole binary, the
 full suite.
+
+## level-0b-roof-sprint-4 (sandbox5, 2026-11-09T22:08Z)
+
+- Claimed. Base: s/level-0b-roof-sprint-3; verified current origin/s/los-mask-join (5e36d06ba) is already an ancestor of sprint-3 (merge-base = its tip) — the rebase instruction is a no-op.
+- Plan (sprint-3 report): (1) arm-while-running — the real switch path to 0x43 during P1, no stand; (2) the rocket detour to #349 (-22.5, 47.96, 29.30), switch_to 0x2e, one rocket at #4 from the gap mouth (13 u, LOS), switch back; (3) armour #302 fallback; (4) Agent walk green -> 00 Agent -> d1 -> whole walkreal_0700000b_live -> full suite.
