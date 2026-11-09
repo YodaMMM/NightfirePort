@@ -29,3 +29,21 @@ One entry per task, newest at the bottom. Append only — never rewrite or reord
   route from s/level-0d-wire-jump-grab — the ride-phase sniper stands (88.8 drained by
   tick 12540) then the yard-slot hop under the guard state diverged by then; real input
   only, helpers gated to 0700000d and Operative, never lower damage or health.
+
+- 2026-11-09 01:20 UTC: done (the Operative walk stays red; the ledger + the next levers
+  are pushed in its ignore message). The route moved: the west-roof #27 dies FIRST from the
+  ladder top (the direct box act, down at +222 — her chest ray full CLEAR, the settled
+  shooter the shared sweep only caught ~1000 ticks in); the gantry park wait moved off the
+  rim corner to the measured-quiet E-plate stand (the corner: 1 hit per ~45 ticks of 0.6
+  0x12 fire; the E-plate region zero hits, ticks 10000-11487); a 40-tick settle rides out a
+  pain stagger between failed slot hops (the hop mechanism measured: the 0.6-trickle
+  staggers eat the jump input whole, vel [0,0,0] through five attempts); the post-drop sweep
+  gains the g8/#2 legs. All real-damage-gated: the plain master replay stays byte-identical
+  and green (1 passed), interactables_0700000d 11 passed, nf-game 40 passed, nf-formats +
+  nf-audio 142 passed / the 3 slim-ISO disc_golden failures. Best Operative run: tick 13800
+  alive at 15.0 (9 hits for 78.6 + other 6.4) — the floor is the bay guard #18 (3-5 × 16
+  every run, his bay walls eat every outside chest ray; the head-line counter was TESTED and
+  is net negative — it killed g10 at +330 but fed #18 two more shots, 94 vs the baseline 78;
+  the leg is out, the story is in the body). The yard pit is unshootable from the ladder
+  top, the roof lane and the bay enter (three scans broke on empty picks). Report:
+  docs/reports/level-0d-operative-walk.md.
