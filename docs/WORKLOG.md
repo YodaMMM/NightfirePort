@@ -36,3 +36,11 @@ Work log:
   0x1ebaa8:300-319]) engages guards the strict pre-mask ray did not. walkreal_07000002_live 3/1: the
   real-health agent walk misses the doorway-sensor ch 0x81 assert (timeline/path shift suspected,
   unrooted). Both repairs need a route/tactics re-tune against the game-faithful vision — next window.
+
+## los-mask-01-walk (2026-11-09)
+
+- (09:45) branch s/los-mask-01-walk created from origin/s/los-mask-envelope (f7ee52807), merged
+  origin/master (63b05cca6 — walk checks 03/08/0d/01, first_rounds_contact_probe). Clean merge, no
+  conflicts. Starting: read los-mask-envelope.md, re-tune the 07000001 d2 contact walk (dies t8977,
+  guard #4) against the masked vision with the walker's levers gated to 07000001, then one level per
+  tool call over the other walkreals.
