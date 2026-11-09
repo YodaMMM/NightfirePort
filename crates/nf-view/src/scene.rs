@@ -1154,6 +1154,23 @@ pub struct LocalDeathFx {
     pub camera_frozen: bool,
 }
 
+/// The body a live bot presents to the player's Jointy query (`NDrone2_Collision` 0x140e90, the
+/// bot's +0x3f0/+0x400 spine ends and +0x45c radius), upright (up = (0,1,0)):
+/// - standing: top = pos + up·r, bottom = pos + up·(r − hip), r 0.4, or 0.55 when the voice set
+///   +0xD8 is 0xc [M :91-94 `if (*(short *)(drone + 0xd8) == 0xc) fVar7 = 0.55`] (`Drone::kind`;
+///   on the disc only 07000008's skin 0x500003b carries it [D census over `dev::LEVELS`]), hip
+///   the ANIMATED +0xa0 (`hip_anim`) [M NDrone2_DefaultInit 0x14b300:48 default 1.0];
+/// - DOWN (+0x2f, the stun states' flag — `Drone::down`): the low sphere, r 0.3, both ends at
+///   pos + up·(0.3 − hip) [M :65-90: +0x45c = 0x3e99999a, +0x3f0 = +0x400].
+pub fn bot_player_body(x: &nf_game::drone::Drone) -> ([f32; 3], [f32; 3], f32) {
+    if x.down {
+        let c = [x.pos[0], x.pos[1] + 0.3 - x.hip_anim, x.pos[2]];
+        return (c, c, 0.3);
+    }
+    let r = if x.kind == 0xc { 0.55f32 } else { 0.4 };
+    ([x.pos[0], x.pos[1] + r, x.pos[2]], [x.pos[0], x.pos[1] + r - x.hip_anim, x.pos[2]], r)
+}
+
 impl Sim {
 
     /// fix-laser-beam: stop every LOOPED op-1 sound of `weapon`'s fire + release scripts (the
@@ -2729,6 +2746,24 @@ impl Sim {
         }
     }
 
+    /// The near corpses' dead-body capsules for the actor-actor push (`Drone::dead_capsule` —
+    /// `NDrone2_Collision` 0x140e90's dead branch, the ragdoll bone-axis capsule armed
+    /// unconditionally at +0x464 = 0x800 [M]). Empty when no corpse stands within 2.0 of `bp`
+    /// (the game's own near gate, `DroneFunc_NearPlayerCollision` 0x14b190 via
+    /// `NDrone2_DoCollision` 0x149ec8 — the arm shape reads it only for the LIVE branch; the dead
+    /// branch arms every tick, but a corpse beyond the pick reach never meets the player's
+    /// capsule, so the same 2.0 scope costs nothing).
+    pub fn corpse_capsules(&self, bp: [f32; 3]) -> Vec<([f32; 3], [f32; 3], f32)> {
+        let near: Vec<&nf_game::drone::Drone> = self.drones.list.iter()
+            .filter(|x| x.enabled && x.present && x.corpse
+                && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
+            .collect();
+        if near.is_empty() { return Vec::new(); }
+        let d = nf_game::drone::Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: self.level, sequences: &self.seqs, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models, surfaces: self.surfaces.as_ref(), voices: self.voices.as_deref(), difficulty: self.drones.difficulty,
+            ai_points: &self.ai_points };
+        near.iter().filter_map(|x| x.dead_capsule(&d)).collect()
+    }
+
     fn step_bond_sim(&mut self, mut input: nf_game::player::Input, trigger: bool, reload: bool, use_key: bool) {
         // The game's frame clock — `UpdateT0Count` 0x109468, called from `VBlankInt` 0x124088:76
         // (`PS2DrawFrameTime`), `psiPreDraw`/`psiPostDraw` (`PS2DrawCodeTime`), `psiPreGame_Run` /
@@ -3460,35 +3495,72 @@ impl Sim {
             // 0x1ec180:229-281 via `LadderCtx::bot_capsules`): the game's bot hittest arms
             // [M NDrone2_Collision 0x140e90:91-121 — top = pos + up·r, bottom = pos + up·(r − h),
             // r 0.4 default / 0.55 kind 0xc, h the anim height word +0xa0 with default 1.0
-            // [M NDrone2_DefaultInit 0x14b300:48]] — upright bots (up = (0,1,0)), so the arms are
-            // pos + (0, ±0.4, 0) at h 1.0. Only the NEAR bots carry an ON capsule [M
-            // DroneFunc_NearPlayerCollision 0x14b190 + NDrone2_DoCollision 0x149ec8 — the kind
-            // word +0x464 goes 0x800 only within 2.0 of the player]; the 0.4 default stands for
-            // every bot here [S unverified: the sleeper's own kind word (the 0xc → 0.55 arm) is
-            // not read by the port — a live check item].
-            // The door guards (state 0x31) lead the list: they also push a GROUNDED Bond
-            // (`LadderCtx::ground_bots`) — 07000007's library pair holds the doorway until Drake's
-            // reveal (ch 21) takes them off [D #404/#417 p6 = 21, p8 = 100].
+            // [M NDrone2_DefaultInit 0x14b300:48]] — upright bots (up = (0,1,0)). Only the NEAR
+            // bots carry an ON capsule [M DroneFunc_NearPlayerCollision 0x14b190 +
+            // NDrone2_DoCollision 0x149ec8 — the kind word +0x464 goes 0x800 only within 2.0 of
+            // the player]. The body is PER-BOT, not per-state: `NDrone2_DoCollision` 0x149ec8
+            // turns the standing body off only for the dead (0x4F8&0x200, except 0x700004a) or
+            // when the anim-info word +0x570 bit 2 marks the playing anim no-body [M
+            // 0x149ec8:18-27], `DroneFunc_NearPlayerCollision` 0x14b190 turns it ON within 2.0 of
+            // a player otherwise (a firing guard's combat states set 0x4F8|0x20 first [M
+            // DroneFunc_SetAsAttacking 0x14aed8]), and `Collide_Jointy` 0x1ec180:229-281 resolves
+            // the player's kind-0x800 query against it on EVERY contact tick — grounded included
+            // (the port's airborne-only gate was an [S] choice that left the firing guards
+            // bodyless). ground_bots is therefore every near bot; the door guards keep no special
+            // lead among the live bots.
+            // The DEAD bodies' capsule rides `Drone::dead_capsule` and leads the list: the dead
+            // branch arms it UNCONDITIONALLY — +0x464 = 0x800 with no DoCollision call [M
+            // 0x140e90:142] — the bone-axis lying-body shape, rebuilt every tick, radius
+            // min(hip, 0.4) [M 0x140e90:124,142]. `Collide_Jointy` has no grounded gate and the
+            // SP class gates pass (Bond class 3, the corpse class 2 [M 0x1ec180; Player_Init
+            // 0x1910f8:76]), so a WALKING Bond is pushed off a fresh corpse just like an airborne
+            // one. (The pre-join exclusion — "CORPSES NEVER COLLIDE" — read DoCollision's 0,
+            // which gates the HANDLER [M Drone_CollisionHandler 0x140968], not the arming; the
+            // wedge it dodged came from the WRONG SHAPE — an upright standing-height capsule on
+            // the corpse, whose top held a landed Bond airborne — not from the game's low
+            // bone-axis roller.)
             let mut ground_bots = 0usize;
+            // The capsule list's index → the drone behind it (None = a corpse's body capsule —
+            // no live drone to contact-report).
+            let mut bot_capsule_drones: Vec<Option<usize>> = Vec::new();
             let bot_capsules: Vec<([f32; 3], [f32; 3], f32)> = {
                 let bp = self.bond.pos;
-                // CORPSES NEVER COLLIDE: `SetAsDead` 0x14a2f0:9 sets +0x4F8&0x200 at death, and
-                // `NDrone2_DoCollision` 0x149ec8:11 returns 0 (collision OFF) whenever that bit is
-                // set — on every level but the special 0x700004a — and `NDrone2_Collision` 0x140e90:64
-                // gates the same bit (docs/fields/drone.md, the 0x4F8&0x200 row, census-verified).
-                // The game's dead bot presents no capsule for the player's Jointy query: Bond walks
-                // over bodies. Without this gate the walkreal_07000001 escort wedge reproduces —
-                // Bond lands on a fresh corpse's capsule top (pos+0.4), the push holds him airborne
-                // (grounded never settles), every nav leg dies at the cap, and the escort waits for
-                // a Bond who can no longer reach the [M 0x15eda8] release band.
-                let near: Vec<&nf_game::drone::Drone> = self.drones.list.iter()
-                    .filter(|x| x.enabled && !x.corpse && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
+                // The DEAD bodies' capsule rides `Drone::dead_capsule` (the dead branch arms it
+                // UNCONDITIONALLY — +0x464 = 0x800 with no DoCollision call [M 0x140e90:142]; the
+                // bone-axis lying-body shape, rebuilt every tick, radius min(hip, 0.4) [M
+                // 0x140e90:124,142]). They lead the list: the game's Jointy has no grounded gate
+                // and the SP class gates pass (Bond class 3, the corpse class 2 — only a class-3
+                // CANDIDATE is refused [M 0x1ec180; the player class 3 = Player_Init
+                // 0x1910f8:76]), so a WALKING Bond is pushed off a fresh corpse just like an
+                // airborne one. (The pre-join exclusion — "CORPSES NEVER COLLIDE" — read
+                // DoCollision's 0, which gates the HANDLER [M Drone_CollisionHandler 0x140968],
+                // not the arming; the wedge it dodged came from the WRONG SHAPE — an upright
+                // standing-height capsule on the corpse, whose top held a landed Bond airborne —
+                // not from the game's low bone-axis roller.)
+                // The LIVE near bots' upright capsule [M NDrone2_Collision 0x140e90:91-121 —
+                // top = pos + up·r, bottom = pos + up·(r − h), r 0.4 default / 0.55 kind 0xc, h
+                // the anim height word +0xa0 with default 1.0 [M NDrone2_DefaultInit 0x14b300:48]]
+                // — only the NEAR bots carry an ON capsule [M DroneFunc_NearPlayerCollision
+                // 0x14b190 + NDrone2_DoCollision 0x149ec8 — the kind word +0x464 goes 0x800 only
+                // within 2.0 of the player].
+                let near: Vec<(usize, &nf_game::drone::Drone)> = self.drones.list.iter().enumerate()
+                    .filter(|&(_, x)| x.enabled && x.present && !x.corpse && ((x.pos[0] - bp[0]).powi(2) + (x.pos[1] - bp[1]).powi(2) + (x.pos[2] - bp[2]).powi(2)) < 2.0 * 2.0)
                     .collect();
-                let guard = |x: &nf_game::drone::Drone| x.present && x.state == nf_game::drone::state::CIVILIAN_DOOR_GUARD;
-                ground_bots = near.iter().filter(|x| guard(x)).count();
-                near.iter().filter(|x| guard(x)).chain(near.iter().filter(|x| !guard(x)))
-                    .map(|x| ([x.pos[0], x.pos[1] + 0.4, x.pos[2]], [x.pos[0], x.pos[1] - 0.6, x.pos[2]], 0.4f32))
-                    .collect()
+                let dead = self.corpse_capsules(bp);
+                // The corpses lead, the live bots follow — every entry pushes a GROUNDED Bond
+                // (`Collide_Jointy` 0x1ec180 has no grounded gate; the per-bot standing body
+                // covers every near bot, the corpse's bone-axis roller every fresh body).
+                ground_bots = near.len() + dead.len();
+                let mut caps: Vec<([f32; 3], [f32; 3], f32)> = Vec::with_capacity(near.len() + dead.len());
+                caps.extend(dead.iter().copied());
+                bot_capsule_drones.extend(std::iter::repeat(None).take(dead.len()));
+                for (i, x) in &near {
+                    // The body each near bot presents: `bot_player_body` (the game's
+                    // NDrone2_Collision shapes). Upright bots (up = (0,1,0)).
+                    caps.push(bot_player_body(x));
+                    bot_capsule_drones.push(Some(*i));
+                }
+                caps
             };
             let ctx = nf_game::player::LadderCtx { ladders: &self.ladders, wires: &self.wires, wire_anims: Some(&self.wire_anims), water, sink, creepwalls: &self.creepwalls, straddle: &straddle_cells, bot_capsules: &bot_capsules, ground_bots };
             // The third-icon context [M ThirdIcon_Update 0x196e80 + Player_CollisionHandler 0x1949a8:22]:
@@ -3673,10 +3745,29 @@ impl Sim {
             // [M 0x132f00] takes the player out of the update and `GunImp_Update` moves the
             // object itself [M 0x1320d8:175-194, the carry above]; cam mode 0xe is the SAME
             // first-person case as mode 0 [M 0x18f5d8:96-97], so the carried pose IS the view.
+            self.drones.player_contacts.clear(); // no walk tick → no collide-pass contacts this tick
             if !self.drones.death.active && !net_dead && !self.local_gun_mounted() && !(net_row.is_some() && self.net_gun_busy[self.mp_local_slot]) {
                 self.bond.jump_locked = self.level == 0x0700_0007 && !self.drones.channels.on(0x48);
                 { let _pphase = nf_game::prof::scope("phase: player move");
                 self.bond.tick_ctx(&self.world, &ctx, &input); }
+                // The collide pass's contact list, by drone (see `Bond::bot_contacts`): the drones'
+                // class-3 contact pass reads it [M NDrone2_DealWithObjHit 0x13fff0 case 3].
+                self.drones.player_contacts = self.bond.bot_contacts.iter().filter_map(|&c| bot_capsule_drones.get(c).copied().flatten()).collect();
+            } else {
+                // The collide slot still runs when the walk tick does not:
+                // - dead (the SP death sequence or a net-dead slot): `Player_CollisionHandler`
+                //   0x1949a8 is the dead class's collide slot and runs every frame [M
+                //   obj-tag-player.md:18 + Collide_Update 0x1ea398:55-69] while `Player_Update`'s
+                //   dead branch runs no movement [M 0x193600:316-319] — the port's frozen body
+                //   keeps its bookkeeping (BL+0x95F clear, the feet ray, the grounded history,
+                //   the fall timer, the void latch, the ceiling arm [M :21-24,76-82,97-108,
+                //   168-175]).
+                // - mounted (Player_Disable froze BL+0x94A = 0 [M 0x195f70:16]): the handler
+                //   returns right after the BL+0x95F clear [M 0x1949a8:24-25].
+                self.bond.icon_ctx = 0xFF;
+                if self.drones.death.active || net_dead {
+                    self.bond.dead_contacts_tick(&self.world);
+                }
             }
             // Player_CollisionHandler 0x1949a8:97-108: while airborne (grounded history 0) below
             // y −10.0 on 07000012 the handler latches switch_channels[0x7C] = 1 every tick
@@ -5659,7 +5750,10 @@ impl Sim {
                             // [M 0x1a43f8 `li $v0, 0x80` → 0x1a442c `sw $v0, 0($sp)`] — the old value 8 was a guess —
                             // and the packed END rgba is 1 = bytes (0,0,0,1), so the alpha rate is
                             // (1−0x80)/128 [M 0x1a4440 delay slot `li $t3, 1`].
-                            self.drones.gas.init_ex(&mut self.drones.rng, nf_game::gas::SMOKE_QUAD, pos, 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0);
+                            // gas-cel-host: the kind-7 NULL-vel wind term — the game passes the PLAYER's cel (obj+0x20)
+                            // [M 0x1a4298's call a0], resolved here at the spawn pos.
+                            let ghost = self.drones.rbodies.host_at(pos);
+                            self.drones.gas.init_ex(&mut self.drones.rng, nf_game::gas::SMOKE_QUAD, pos, 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0, ghost);
                         }
                     }
                     if spawn_shot {
@@ -6288,6 +6382,9 @@ impl Sim {
     /// window and the env gate (`env::breath_env_gate`: false only under a snow `Env_Create`,
     /// so the snow levels breathe in every mode and the rest only in x-ray). The cel's
     /// underwater bit (cel+0x3c & 0x10000000, `Cel::underwater`) forces the x-ray variant.
+    /// The call's cel argument — the guard's `obj+0x20` [M 0x1490f0:196-198] — threads into
+    /// `Gas_Init` and the puff's ceiling clamp reads its +0x54 [M 0x1aacc8:84-87 + gases_smoke
+    /// :66-77]; the port resolves it by containment at the guard's position.
     ///
     /// Stand-ins [S]: the cel-visited byte reads as `drawn_grace != 0` (a guard object drawn
     /// last frame sat in a visited cel — `View_AddCels` 0x1e6ba0 submits only the VisCelList
@@ -6301,7 +6398,7 @@ impl Sim {
         let drop_type = self.drones.env.as_ref().map(|e| e.kind).or(self.drones.pending_env_drop_type());
         let gate = nf_game::env::breath_env_gate(drop_type);
         let frame = self.drones.frame;
-        let mut spawns: Vec<(u32, [f32; 3], [f32; 3], bool)> = Vec::new();
+        let mut spawns: Vec<(u32, [f32; 3], [f32; 3], bool, nf_game::gas::HostCel)> = Vec::new();
         {
             let d = self.data();
             for dr in self.drones.list.iter().filter(|x| x.present && x.enabled) {
@@ -6316,11 +6413,19 @@ impl Sim {
                 let m = nf_formats::placement::object_matrix([0.0, dr.yaw, 0.0], [dr.pos[0], dr.draw_y(hip), dr.pos[2]]);
                 let (pos, dir) = nf_game::env::guard_breath_origin(&anim::mul(w, &m));
                 let underwater = find_cel(&self.cels, dr.pos).and_then(|c| self.cels.get(c)).is_some_and(|c| c.underwater);
-                spawns.push((phase, pos, dir, underwater));
+                // The caller's cel rides the call: `Env_Breath`'s arg 3 is the guard's `obj+0x20`
+                // [M 0x1490f0:196-198 — the cel `control_link_object_to_cel` stores, 0x1346b8],
+                // and `Gas_Init` links the puff's room cel from its own containment with THAT cel
+                // as the failure fallback [M 0x1aacc8:84-87] — the cel whose +0x54 the kinds-0
+                // clamp reads every tick [M gases_smoke 0x1ab2d0 :66-77]. The port's drones carry
+                // no cel handle, so the guard's cel is contained at its position (the same
+                // stand-in every gas site documents).
+                let host = self.drones.rbodies.host_at(dr.pos);
+                spawns.push((phase, pos, dir, underwater, host));
             }
         }
-        for (phase, pos, dir, underwater) in spawns {
-            nf_game::env::env_breath(&mut self.drones.gas, &mut self.drones.rng, frame, phase, pos, dir, 1, underwater, mode, Some(gate));
+        for (phase, pos, dir, underwater, host) in spawns {
+            nf_game::env::env_breath(&mut self.drones.gas, &mut self.drones.rng, frame, phase, pos, dir, 1, underwater, mode, Some(gate), host);
         }
     }
 
@@ -7673,6 +7778,11 @@ pub struct Scene {
     /// 0x1e5fb8:79) skip them: the placed doors are invisible during a cut-scene. Keyed by
     /// placement index; the palette pass collapses their slots while the script camera renders.
     pub door_scene_hidden: std::collections::HashSet<usize>,
+    /// The script-created entities (by glist hash) whose glist flags carry 0x40000: `Control_SetGList`
+    /// 0x134960:14-15 clears their obj+0xF8 bit 0x10, so `View_AddObjects` 0x1e62d8:30 skips them while
+    /// the scene camera renders (object_display_mask 0x10). 0700000b's lift cab 0x02000367 (0x40080) and
+    /// lift_glass 0x02000421 (0x40081) [D scene_entity_glist_census_0b].
+    pub script_scene_hidden: std::collections::HashSet<u32>,
     /// Searchlight LOD slots: slot `parts.len() + k` draws the LOD (broken) mesh of part `sl_lod[k]`,
     /// shown iff that part's `lod_next` (Control_NextLOD) is set.
     pub sl_lod: Vec<u16>,
@@ -8320,6 +8430,24 @@ const SWOOSH_SLOT_BASE: u16 = 0x8000;
 /// class-0x40 object per particle, ≤ 6 per impact, ≤ ~54 ticks) — the port caps the draw slots.
 const DECAL_SLOTS: usize = 200;
 const DEBRIS_SLOTS: usize = nf_game::effect::DEBRIS_DRAW_SLOTS;
+
+/// debris-fade-draw: the piece debris draw slot `slot` holds — its mesh and its alpha byte obj+0x106.
+/// Every debris object (impact `Debris_Create` 0x1aaa00, a killed breakable's pieces, the blast's
+/// `Debris_CreateEx` 0x1ac808) starts at 0xff and `Debris_Update` 0x1aac00:18-26 steps it down one
+/// per tick; `View_SetupRenderModes_Tweak` 0x1e5888:46-49 passes it as the A of `psiSetTweakARGB`
+/// (0x124770, TAmbient.a = byte/255) — the draw's alpha factor, like the gas / swoosh / script
+/// entities' [M]. No quarter: the night-sight `>>2` needs obj+0xF0 & 0x20000 [M 0x1e5888:12-17],
+/// and the creators OR 0x20000020 [M 0x1ac808:45, 0x1aaa00:53] over glist flags that never carry
+/// 0x20000 [D every debris mesh, every level]. The pieces' batches all blend (PRIM ABE, ALPHA_1
+/// 0x44 / 0x7f00000048) [D], so the factor reaches the pixel.
+fn debris_slot_piece(s: &Sim, map: &[Option<nf_game::effect::DebrisRef>], slot: usize) -> Option<(u32, u8)> {
+    match map.get(slot).copied().flatten()? {
+        (0, i) => s.drones.effects.debris.get(i).map(|d| (d.mesh, d.alpha)),
+        (1, i) => s.drones.breaks.shatter.debris.get(i).map(|d| (d.model, d.fade)),
+        (_, i) => s.drones.blast_debris.get(i).map(|d| (d.model, d.fade)),
+    }
+}
+
 /// The falling-leaf mesh "Leaf" (`Leaf_Create` 0x1abc88's `hashtable_set_object_to_entity_gfx(obj,
 /// 0x20002ca)` [M]; every level archive carries it [D]).
 pub const LEAF_MESH: u32 = 0x0200_02ca;
@@ -9369,6 +9497,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // can make; each shows only while the simulation has the object.
         let mut script_objects = 0;
         let mut script_billboards: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut script_scene_hidden: std::collections::HashSet<u32> = std::collections::HashSet::new();
         let mut script_tweak_alpha: std::collections::HashSet<u32> = std::collections::HashSet::new();
         if let Some(m) = level.main_map() {
             let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
@@ -9577,6 +9706,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 if owned_only.contains(&h) && level.maps[map].objects[object].flags & 0x10 != 0 { continue; }
                                 // The billboard set: glist flags bit 0x8 (`View_DrawObjectGlist`'s test).
                                 if level.maps[map].objects[object].flags & 0x8 != 0 { script_billboards.insert(hash); }
+                                if level.maps[map].objects[object].flags & 0x40000 != 0 { script_scene_hidden.insert(hash); }
                                 // pc-screen: the key alpha reaches the draw only through blended batches (PRIM ABE).
                                 let mut bs = level.maps[map].objects[object].gfx.leaves.iter().flat_map(|l| l.batches.iter()).peekable();
                                 if bs.peek().is_some() && bs.all(|b| b.prim & 0x40 != 0) { script_tweak_alpha.insert(hash); }
@@ -10930,7 +11060,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // Hint_Create's stage gate 0x1b3248) — the game loads with GameState+0x28 already
             // holding the menu's pick [M C_SBNFDFCTY 0x216ca8:15].
             drones.set_difficulty(difficulty);
-            drones.attach_level_id(level, d.level_id);
+            // The scoped world goes in with the attach: `RB_Create`'s `build_LinkToRoom`
+            // 0x1c9680 → `build_FindCel` 0x1c8cb0 create pick needs the tie-break geometry
+            // (`Rbodies::create_scoped`).
+            drones.attach_level_world(level, d.level_id, Some(&world));
             // mp-lobby-settings: the MP creates' enviro-mod gates. `GunImp_Create` 0x131f20 returns
             // 0 in MP while Gun Emplacements (+0x1B8) is off and otherwise mounts
             // `TurretGuns[weapon set]` (Random: `Rand_Rand(10)`) [M :52-63]; `Destroy_Create`
@@ -11178,6 +11311,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         }
         Scene { shard_tex, particle_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, door_dims, sl_dims, dynobj_matrices, rotor_placements, rbody_placements, mine_placements, gunimp_placements, script_tweak_alpha,
             door_scene_hidden,
+            script_scene_hidden,
             sl_lod,
             corona_pos,
             corona_slot0,
@@ -12064,6 +12198,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
             let far = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
             if let Some((h, si, hash, k)) = a.script {
+                // 0x40000 script entities are invisible while the scene camera renders [M Control_SetGList
+                // 0x134960:14-15, View_AddObjects 0x1e62d8:30] - 0700000b's lift cab and glass.
+                if self.script_scene_hidden.contains(&hash) && self.sim.as_ref().is_some_and(|s| s.script_camera().is_some()) { return far; }
                 // dragon-safe-follow: a script's 0xF0 entity IS the pickup it created [M 0x1d8968 →
                 // `Pickup_Create`]; the game stops drawing it once taken (deleted, respawn 0) or while
                 // it waits to respawn (hidden) [M 0x18e650's tail]. This slot draws it at the stream's
@@ -12519,14 +12656,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             plan.any_script |= a.script.is_some();
             plan.col_char.push(a.character);
             // `colour_mults_dense`'s arms, in its order: 0 = always [1, 1, 1] (flash, tracer,
-            // swoosh, a projectile whose mesh has no 0x800 glist bit, the satchel digits, the rain
-            // streaks), 1 = the full chain (a 0x800 projectile's cel ambient, the rain haze, a
+            // swoosh, a projectile whose mesh has no 0x800 glist bit, the debris pieces, the satchel
+            // digits, the rain streaks), 1 = the full chain (a 0x800 projectile's cel ambient, the rain haze, a
             // leaf, a dropped gun, a script entity — state- or position-dependent), 3 = the owner
             // character's multiplier. `models_0x800` is fixed at the scene build like the fields.
             plan.col.push(if a.flash.is_some() || a.tracer.is_some() { 0 }
                 else if a.projectile.is_some_and(|(slot, _)| slot >= SWOOSH_SLOT_BASE) { 0 }
                 else if let Some((_, mesh)) = a.projectile { if self.models_0x800.get(&mesh).copied().unwrap_or(false) { 1 } else { 0 } }
-                else if matches!(a.effect, Some((4 | 5 | 7, _, _))) { 0 }
+                else if matches!(a.effect, Some((2 | 4 | 5 | 7, _, _))) { 0 }
                 else if matches!(a.effect, Some((8 | 9, _, _))) { 1 }
                 else if a.dropped || a.script.is_some() { 1 }
                 else { 3 });
@@ -13288,6 +13425,19 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 if let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) { c[3] = b as f32 / 255.0; }
             }
         }
+        // debris-fade-draw: each debris slot's piece alpha byte (`debris_slot_piece`) — the piece
+        // fades from 0xff by one per tick instead of drawing solid until it vanishes.
+        if let Some(s) = self.sim.as_ref() {
+            let map = nf_game::effect::debris_slot_map(&s.drones.effects.debris, &s.drones.breaks.shatter.debris, &s.drones.blast_debris);
+            for (kind, slot, members) in &plan.eff {
+                if *kind != 2 { continue; }
+                let Some((live, b)) = debris_slot_piece(s, &map, *slot) else { continue };
+                for &(k, mesh) in members {
+                    if mesh != live { continue; }
+                    if let Some(c) = cols.get_mut((l.col_att + k) as usize) { c[3] = b as f32 / 255.0; }
+                }
+            }
+        }
         // goggles: the body glow's alpha byte obj+0x106 = (1 − d·0.1)·count·128/256 on the main
         // object and every child [M BodyGlow_Update 0x1ac2c8:224-260] — the Tweak's alpha factor
         // (byte/255) [M View_SetupRenderModes_Tweak 0x1e5888:47-49], like the swoosh's.
@@ -13493,6 +13643,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         // green LEDs (texture 11, solid green). The character-0 ambient ramp drew them
                         // near-black on the red display.
                         if matches!(a.effect, Some((4 | 5, _, _))) { return one(); }
+                        // A debris piece (impact `Debris_Create` 0x1aaa00, a killed breakable's pieces,
+                        // the blast's `Debris_CreateEx` 0x1ac808): a `control_create_object` object, so
+                        // its tint bytes obj+0x103..0x105 stay at `control_init_object`'s 0xFF [M
+                        // 0x134630:18-21]; neither creator nor `Debris_Update` 0x1aac00 writes them. Its
+                        // obj+0xF0 is the mesh's glist flags | 0x20000020 [M 0x1ac808, 0x1aaa00] (| 0x10008000
+                        // from the forced room link [M 0x1c9680:63-64]) — no 0x800, and no debris mesh
+                        // carries 0x800 on any level [D: 0x0200012a..0220 flags 0x20/0x21/0x221/0x321,
+                        // 0x02000414..041b and 0x02000664..0666 flags 0], so `View_SetupRenderModes_Tweak`
+                        // passes the 0xFF bytes [M 0x1e5888:46-49]: the mesh's own vertex colour, then the
+                        // point lights. The old fall-through took character 0's ambient (0x2a,0x23,0x22 in
+                        // the 07000011 storeroom), drawing the light grey metal strips near black.
+                        if matches!(a.effect, Some((2, _, _))) { return one(); }
                         // The rain passes: `DrawDrops` 0x18cb90 draws through `psiDrawObjectMatrix` 0x124708
                         // directly (no `View_SetupRenderModes_Tweak`), right after Game_Draw's
                         // `psiSetTweakARGB(0xff, 0xff, 0xff, 0xff)` [M 0x1e6f50:148-151] — the streaks keep
@@ -13565,7 +13727,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
         }).collect();
         // pc-screen: the script entities' tweak alpha (obj+0x106 / 255, the GPU palette's same factor).
+        // debris-fade-draw: and the debris slots' piece alpha (`debris_slot_piece`, the palette's same factor).
+        let dmap = self.sim.as_ref().map(|s| nf_game::effect::debris_slot_map(&s.drones.effects.debris, &s.drones.breaks.shatter.debris, &s.drones.blast_debris));
         let attach_alpha: Vec<f32> = self.attachments.iter().map(|a| {
+            if let (Some((2, slot, mesh)), Some(s), Some(m)) = (a.effect, self.sim.as_ref(), dmap.as_ref()) {
+                return debris_slot_piece(s, m, slot).filter(|p| p.0 == mesh).map_or(1.0, |p| p.1 as f32 / 255.0);
+            }
             let Some((h, si, hash, k)) = a.script else { return 1.0 };
             if !self.script_tweak_alpha.contains(&hash) { return 1.0; }
             self.sim.as_ref().and_then(|s| s.script_entity_alpha_k((h, si), hash, k as usize)).map_or(1.0, |b| b as f32 / 255.0)

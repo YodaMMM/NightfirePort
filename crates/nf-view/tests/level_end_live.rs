@@ -387,6 +387,20 @@ fn route_a_gatehouse_walk_spawns_guard_and_ends_level() {
     // directly: this tests the ScriptPlayer → event 0x11 → ch 0x1D → LOAD_LEVEL chain, which is the part that
     // depends on ch 0x22 (the gatehouse walk) having fired the spawner. Sister: without ch 0x22, the spawner
     // never fires, so there's no guard at post, so ch 0x72 can never be on, so ch 0x65 can never fire.
+    //
+    // The EndLevel script's event 0x11 is [0x98, 0x98, 0x1D, 1] [D 0x06000A23, U-048]: `Script_EventHandler`
+    // 0x1d94c0 case 0x11 writes ch 0x1D only while `switch_channels[0x98]` is CLEAR [M] — 0x98 is
+    // `Drone_InitComms` 0x139520:201's chatter gate (an enabled guard at alertness >= 1 within 30 units of
+    // Bond, not team 2). Standing in the open courtyard leaves the courtyard guard aware of Bond ~9 units off,
+    // so the truck leaves Bond where no guard is on him (the level start, well past 30 units), as a ride
+    // hidden on the bed does. The aware-guard case is pinned on its own below.
+    sim.bond.pos = [104.954, 25.119492, 108.82527];
+    let mut quiet = false;
+    for _ in 0..300 {
+        sim.step_bond(Default::default(), false, false, false);
+        if sim.drones.channels.v[0x98] == 0 { quiet = true; break; }
+    }
+    assert!(quiet, "away from the courtyard guard the chatter gate ch 0x98 clears [M 0x139520:201]");
     sim.drones.set_channel(0x65);
     eprintln!("[route_a_full] set ch 0x65 — simulating the MuxIn firing (truck parked + Bond on bed + guard at post)");
     // Tick for the EndLevel script's 300-tick delay.
@@ -412,4 +426,36 @@ fn route_a_gatehouse_walk_spawns_guard_and_ends_level() {
     assert_eq!(scene2.sim.as_ref().unwrap().drones.level_exit, None,
         "without ch 0x72 (guard not spawned), the mux stays off and no level loads");
     eprintln!("[route_a_full] sister: no gatehouse walk → no ch 0x72 → no level load ✓");
+}
+
+/// The truck exit's guard check: the EndLevel script `0x06000A23` (ScriptPlayer #320, gate ch 0x65) ends the
+/// level through its event 0x11 [0x98, 0x98, 0x1D, 1] [D U-048] — `Script_EventHandler` 0x1d94c0 case 0x11
+/// writes the p2 channel 0x1D only while the test channel 0x98 is clear, else it writes p1 (0x98 itself) [M].
+/// 0x98 is `Drone_InitComms` 0x139520:198-201's chatter gate, written every frame: an enabled guard at
+/// alertness >= 1 within 30 units of Bond (not team 2) [M :171-179]. Bond standing in the open gatehouse
+/// courtyard has the courtyard guard aware of him ~9 units off, so the script's tick-300 event takes the 0x98
+/// arm and no level loads. Red before the 0x98 writer was ported (nothing set it, so 0x1D always fired).
+#[test]
+fn route_a_truck_exit_does_not_end_the_level_with_a_guard_on_bond() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = load(&iso, "07000005.bin");
+    let sim = scene.sim.as_mut().unwrap();
+    sim.bond.pos = [60.15, 30.0, 96.43];
+    sim.bond.yaw = 0.0;
+    sim.bond.pitch = 0.0;
+    let mut chatter = false;
+    for _ in 0..300 {
+        sim.step_bond(Default::default(), false, false, false);
+        if sim.drones.channels.v[0x98] != 0 { chatter = true; break; }
+    }
+    assert!(chatter, "the courtyard guard becomes aware of Bond within 30 units: ch 0x98 set [M 0x139520:171-179, :201]");
+    assert!(sim.drones.channels.on(0x22), "the courtyard walk set ch 0x22 on the way");
+    sim.drones.set_channel(0x65);
+    for _ in 0..600 {
+        sim.step_bond(Default::default(), false, false, false);
+        if sim.drones.level_exit.is_some() { break; }
+    }
+    assert_eq!(sim.drones.level_exit, None,
+        "with a guard aware of Bond (ch 0x98 on) the EndLevel event 0x11 takes its 0x98 arm: no level load [M 0x1d94c0 case 0x11]");
+    assert!(!sim.drones.channels.on(0x1d), "ch 0x1D stays off");
 }

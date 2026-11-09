@@ -70,7 +70,7 @@ pub struct Explosion {
     /// the same shape from the to-player vector].
     pub debris_dir: V3,
     /// `instance+0x10..0x1f`: the debris jitter — basisA + basisB of `Vec_MakeOrthonormalBasis`
-    /// over the normalised to-closest-player vector [M 0x17c930:118-131, 0x17cbd0].
+    /// over the normalised to-closest-player vector [M 0x17cbd0, 0x1e4b78] — `debris_jitter`.
     pub debris_jitter: V3,
 }
 
@@ -165,6 +165,37 @@ pub fn create_debris(
         out.push(DebrisSpawn { vel, spin, life, scale, gfx: g, class: 0x10 });
     }
     out
+}
+
+/// `Vec_MakeOrthonormalBasis` 0x1e4b78: the two unit vectors `(a, b)` perpendicular to the unit
+/// vector `n` [M 0x1e4b78]. `|n.x| <= |n.y|` builds `a` in the YZ plane, `a = (0, −n.z, n.y)/|(n.y, n.z)|`,
+/// `b = (n.y·a.z − n.z·a.y, −n.x·a.z, n.x·a.y)`; otherwise `a = (n.z, 0, −n.x)/|(n.x, n.z)|`,
+/// `b = (n.y·a.z, n.z·a.x − n.x·a.z, −n.y·a.x)`. `Explode_Create` 0x17cbd0 runs it over the normalised
+/// blast→closest-player vector and stores `a + b` at EXPLODEINFO+0x10 — the debris spread axis
+/// `Debris_CreateEx` scales per component [M 0x17cbd0 `Vec_MakeOrthonormalBasis(c0, b0, d0)`, vadd,
+/// sqc2 → +0x10]. A zero `n` (blast on the player's point) would divide by zero in the game; the
+/// port returns zero vectors there [S].
+pub fn orthonormal_basis(n: V3) -> (V3, V3) {
+    if n[0].abs() <= n[1].abs() {
+        let l = n[2] * n[2] + n[1] * n[1];
+        if l == 0.0 { return ([0.0; 3], [0.0; 3]); }
+        let r = 1.0 / l.sqrt();
+        let a = [0.0, -n[2] * r, n[1] * r];
+        (a, [n[1] * a[2] - n[2] * a[1], -n[0] * a[2], n[0] * a[1]])
+    } else {
+        let l = n[2] * n[2] + n[0] * n[0];
+        let r = 1.0 / l.sqrt();
+        let a = [n[2] * r, 0.0, -n[0] * r];
+        (a, [n[1] * a[2], n[2] * a[0] - n[0] * a[2], -n[1] * a[0]])
+    }
+}
+
+/// The debris spread axis `Explode_Create` stores at EXPLODEINFO+0x10: `a + b` of
+/// [`orthonormal_basis`] over the unit blast→player direction [M 0x17cbd0]. It is perpendicular
+/// to that direction: the pieces spread across the player's view, not toward it.
+pub fn debris_jitter(to_player_unit: V3) -> V3 {
+    let (a, b) = orthonormal_basis(to_player_unit);
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
 /// `MetalHash_132` @0x2A3718 — the metal debris mesh hashes `Explode_Update` hands to
@@ -442,6 +473,29 @@ mod tests {
         let mut rng = crate::drone::Rng::new(7);
         let e = create_debris(&mut rng, 8.0, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0], 60, 5, &gfx);
         assert_eq!(d, e);
+    }
+
+    #[test]
+    fn the_debris_spread_axis_is_the_orthonormal_pair_sum() {
+        // [M 0x1e4b78] `Vec_MakeOrthonormalBasis`, both branches, hand-worked.
+        // |n.x| > |n.y|: a = (n.z, 0, −n.x)/|(n.x, n.z)|, b = (n.y·a.z, n.z·a.x − n.x·a.z, −n.y·a.x).
+        let (a, b) = orthonormal_basis([0.6, 0.0, 0.8]);
+        assert_eq!(a, [0.8, 0.0, -0.6]);
+        assert!((b[0]).abs() < 1e-6 && (b[1] - 1.0).abs() < 1e-6 && b[2].abs() < 1e-6, "{b:?}");
+        // |n.x| ≤ |n.y|: a = (0, −n.z, n.y)/|(n.y, n.z)|, b = (n.y·a.z − n.z·a.y, −n.x·a.z, n.x·a.y).
+        let (a, b) = orthonormal_basis([0.0, 1.0, 0.0]);
+        assert_eq!(a, [0.0, 0.0, 1.0]);
+        assert_eq!(b, [1.0, 0.0, 0.0]);
+        // `Explode_Create` stores a + b [M 0x17cbd0]: perpendicular to n, length √2.
+        for n in [[0.6f32, 0.0, 0.8], [-0.3, 0.1, -0.95], [0.2, -0.9, 0.39]] {
+            let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            let n = [n[0] / l, n[1] / l, n[2] / l];
+            let j = debris_jitter(n);
+            let dot = j[0] * n[0] + j[1] * n[1] + j[2] * n[2];
+            let len = (j[0] * j[0] + j[1] * j[1] + j[2] * j[2]).sqrt();
+            assert!(dot.abs() < 1e-5, "a + b ⟂ n: {j:?} · {n:?} = {dot}");
+            assert!((len - 2f32.sqrt()).abs() < 1e-5, "|a + b| = √2, got {len}");
+        }
     }
 
     #[test]

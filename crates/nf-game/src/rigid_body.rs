@@ -988,10 +988,14 @@ pub struct RbObj {
     /// keeps the radius at obj+0x8C — the sphere `Collide_PickObj` 0x1eae80 tests [M].
     pub sph_centre: [f32; 3],
     pub sph_radius: f32,
-    /// obj+0x20: the room cel — `build_LinkToRoom` 0x1c9680 at create. The port resolves the
-    /// room cel whose glist bbox holds the placement translation once at load and keeps it
-    /// (the lamps' cel never changes: a Rot body never translates [M EulerEvolve's type-0
-    /// position arm]; a walking-body re-eval is the unported remainder) [S the static pick].
+    /// obj+0x20: the room cel — `build_LinkToRoom` 0x1c9680 at create: `Control_BuildWorldSph`
+    /// 0x133070 poses the glist centre (+0x10) by the object matrix into obj+0x80 and
+    /// `build_FindCel` 0x1c8cb0 picks the cel at that point — the containing room cels
+    /// (cel+0x40..0x58 inclusive bbox [M 0x1c8cb0:106-109]), and when MORE than one contains
+    /// the point the collision-ray tie-break ([M 0x1c8cb0:170-229], `World::find_cel`). The
+    /// port stores the picked scope-graph cell here once at load and keeps it (the lamps' cel
+    /// never changes: a Rot body never translates [M EulerEvolve's type-0 position arm]; a
+    /// walking-body re-eval is the unported remainder) [S the static pick].
     /// `wind`: the cel's `Env_Create` wind (Rbodies::winds index) — None = no wind struct.
     pub wind: Option<usize>,
     /// The cel's buoyancy fields: (cel+0x90 water surface, cel+0x54 glist bbox max y) — None =
@@ -1003,6 +1007,10 @@ pub struct RbObj {
     /// shipped-disc 0xD8 placement builds, so the game's failed-build path (object created, no
     /// body) is never reached on the disc.
     pub built: bool,
+    /// obj+0x20 as the scope-graph cell index — the create pick's own value (the
+    /// `build_FindCel` 0x1c8cb0 winner at the world-sphere centre; None when no room cel
+    /// contained it, the game's unlinked object, `build_LinkToRoom` 0x1c9680 returning 0).
+    pub cel: Option<u32>,
 }
 
 impl RbObj {
@@ -1088,14 +1096,73 @@ pub struct Rbodies {
     pub list: Vec<RbObj>,
     /// The cels' wind structs, in 0xDF placement order; `RbObj::wind` indexes here.
     pub winds: Vec<EnvWind>,
-    /// 0xD8 placements whose translation's room-cel containment scan matched MORE than one
-    /// cel — the case where the port's first-parse-order pick stands in for the game's
-    /// unported collision-ray tie-break [M build_FindCel 0x1c8cb0's bbox test]. The census
-    /// test proves this is 0 on every shipped level (each 0xD8 placement resolves uniquely).
+    /// gas-cel-host: the main map's room cels, in parse order — the `build_FindCel`
+    /// 0x1c8cb0 containment table (`cel+0x40..0x58` = the raw glist bbox) the gas sites
+    /// resolve the spawning object's cel against; `cels[ci].wind` indexes `winds`.
+    pub cels: Vec<Cel>,
+    /// 0xD8 placements whose create point (the world-sphere centre, `Control_BuildWorldSph`
+    /// 0x133070 through `build_LinkToRoom` 0x1c9680) containment-matched MORE than one room
+    /// cel — the case the game's `build_FindCel` 0x1c8cb0 collision-ray tie-break decides
+    /// ([M 0x1c8cb0:170-229]; the port runs the same rule via `CollisionWorld::find_cel` when
+    /// the scoped world is passed, and first-parse-order when not). The census test reports
+    /// the per-level count ([D] this scan).
     pub cel_ambiguous: u32,
 }
 
+/// One room cel of the main map — the `build_FindCel` 0x1c8cb0 containment record [M]:
+/// the object-list walk keeps every flagged object whose RAW glist bbox (cel+0x40..0x58,
+/// the port's `Object::min`/`max` from `parsemap_block_map_data_static` 0x1d1998) holds the
+/// point, then breaks multi-match ties with vertical collision rays (`create_scoped` runs
+/// that tie-break for the 0xD8 bodies through `CollisionWorld::find_cel`; the gas sites'
+/// `cel_at` keeps the first-parse-order pick). The gas sites read the same table: cel+0x2c = the wind (an index
+/// into `Rbodies::winds`), cel+0x54 = the bbox max y (the `gases_smoke` ceiling clamp).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cel {
+    pub min: [f32; 3],
+    /// max[1] = cel+0x54 — the kind-0/7/0xb puff clamp word [M gases_smoke 0x1ab2d0].
+    pub max: [f32; 3],
+    /// cel+0x90: the water surface (the bbox max y for 0xC023, −500.0 otherwise).
+    pub water: f32,
+    /// cel+0x2c: the cel's wind struct, `Env_Create` 0x17b968 — an index into `Rbodies::winds`.
+    pub wind: Option<usize>,
+    /// The parse-wide scope-graph cell index (`parse_cel_graph`'s counter replay:
+    /// every `creates_cel()` placement counts, sub-maps first, main last — the same
+    /// walk `Scene::build` replays) — the join to the `CollisionWorld` scope's cells
+    /// for the `build_FindCel` tie-break picks.
+    pub cell: Option<u32>,
+}
+
 impl Rbodies {
+    /// `build_FindCel` 0x1c8cb0's containment scan over the room cels [M :103-119]: the first
+    /// parse-order cel whose raw glist bbox holds `pos` — the port's documented stand-in for
+    /// the game's collision-ray tie-break (see `Cel`). The game runs this lookup at the
+    /// object's world-sphere centre (`build_LinkToRoom` 0x1c9680 → `Control_BuildWorldSph`),
+    /// the spawn-position scan the gas sites use stands in for it (the puff spawns at the
+    /// spawning object's position).
+    pub fn cel_at(&self, pos: [f32; 3]) -> Option<usize> {
+        self.cels.iter().position(|c| c.min[0] <= pos[0] && pos[0] <= c.max[0]
+            && c.min[1] <= pos[1] && pos[1] <= c.max[1]
+            && c.min[2] <= pos[2] && pos[2] <= c.max[2])
+    }
+
+    /// `Gas_Init`'s cel argument resolved at `pos` [M 0x1aacc8]: the kind-7 NULL-vel arm
+    /// reads `Env_GetWindVel(param_3, pos)` (the CEL's wind, cel+0x2c, animated by
+    /// `Env_Update`), and the puff's own room link (`build_LinkToRoom` 0x1c9680, fallback
+    /// `control_link_object_to_cel(obj, param_3)`) fixes the cel whose +0x54 the
+    /// `gases_smoke` 0x1ab2d0 kinds-0/7/0xb clamp reads. No cel → no wind and no clamp
+    /// (the game's LinkToRoom failure keeps the caller's cel; the port's sites have none).
+    pub fn host_at(&self, pos: [f32; 3]) -> crate::gas::HostCel {
+        match self.cel_at(pos) {
+            Some(ci) => crate::gas::HostCel {
+                wind: self.cels[ci].wind
+                    .map(|wi| env_get_wind_vel(&self.winds[wi], pos))
+                    .unwrap_or([0.0; 3]),
+                ceil_y: Some(self.cels[ci].max[1]),
+            },
+            None => crate::gas::HostCel::default(),
+        }
+    }
+
     /// `RB_Create` 0x1d6bf0 [M], per main-map 0xD8 placement:
     /// type = rec+0x34 u16 (`extra[4]` low half); mass = rec+0x2c (`extra[2]`) — 0 → 3.0,
     /// sign-bit set → the raw word as f32, else the i32 as f32 [M :60-64]; extents
@@ -1109,9 +1176,18 @@ impl Rbodies {
     /// the port models the evolved body only ([S] the degenerate census case: no 0xD8
     /// placement on the disc fails the check).
     pub fn create(level: &nf_formats::level::Level) -> Rbodies {
+        Self::create_scoped(level, None)
+    }
+
+    /// `create` with the scoped collision world — the scene build passes it (the game's
+    /// parsemap runs with the cel chains and collision already loaded, so `RB_Create`'s
+    /// `build_LinkToRoom` 0x1c9680 → `build_FindCel` 0x1c8cb0 sees the geometry). The
+    /// world-less form keeps the bbox-only stand-in (first parse order) for the census
+    /// tooling, which has no scope graph.
+    pub fn create_scoped(level: &nf_formats::level::Level, world: Option<&crate::world::CollisionWorld>) -> Rbodies {
         let mut list = Vec::new();
         let mut cel_ambiguous = 0u32;
-        let Some(m) = level.main_map() else { return Rbodies { list, winds: Vec::new(), cel_ambiguous: 0 } };
+        let Some(m) = level.main_map() else { return Rbodies { list, winds: Vec::new(), cels: Vec::new(), cel_ambiguous: 0 } };
         // The room cels + their wind: the main map's cel placements (the parse_cel_graph room
         // half — flags16 0xc023/0xc047, the object's raw glist bbox = the cel's +0x40..0x58 [M
         // parsemap_block_map_data_static 0x1d1998; build_FindCel 0x1c8cb0 tests this box]), the
@@ -1121,22 +1197,23 @@ impl Rbodies {
         // centre [M parseentity_transform_bounding_box 0x1d0fb0]). The 0xDF placements build the
         // wind structs in placement order; a cel already carrying one is skipped (Env_Create's
         // `cel+0x2c != 0` early-out [M 0x17b968]).
-        struct WindCel {
-            min: [f32; 3],
-            max: [f32; 3],
-            water: f32,
-            wind: Option<usize>,
-        }
-        let mut cels: Vec<WindCel> = Vec::new();
+        let mut cels: Vec<Cel> = Vec::new();
         let mut winds: Vec<EnvWind> = Vec::new();
-        for p in &level.maps[m].placements {
-            if !p.creates_cel() { continue; }
-            let flags16 = (p.flags & 0xffff) as u16;
-            if !matches!(flags16, 0xc023 | 0xc047) { continue; }
-            let resolved = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else { Some((m, p.index as usize)) };
-            let Some((map, object)) = resolved else { continue };
-            let Some(o) = level.maps[map].objects.get(object) else { continue };
-            cels.push(WindCel { min: o.min, max: o.max, water: if flags16 == 0xc023 { o.max[1] } else { -500.0 }, wind: None });
+        let mut cell_counter = 0usize;
+        for (mi, map) in level.maps.iter().enumerate() {
+            for p in &map.placements {
+                if !p.creates_cel() { continue; }
+                let flags16 = (p.flags & 0xffff) as u16;
+                if mi == m && matches!(flags16, 0xc023 | 0xc047) {
+                    let resolved = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else { Some((m, p.index as usize)) };
+                    if let Some((map, object)) = resolved {
+                        if let Some(o) = level.maps[map].objects.get(object) {
+                            cels.push(Cel { min: o.min, max: o.max, water: if flags16 == 0xc023 { o.max[1] } else { -500.0 }, wind: None, cell: Some(cell_counter as u32) });
+                        }
+                    }
+                }
+                cell_counter += 1;
+            }
         }
         for p in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0xdf) {
             let hit = cels.iter_mut().position(|c| c.min[0] <= p.translation[0] && p.translation[0] <= c.max[0]
@@ -1221,21 +1298,42 @@ impl Rbodies {
             // rb+0xAA + the +0x13c overrides [M 0x1d6bf0:80-96]
             let (s_aa, s13c) = rb_create_tail(ty, ext);
             if let Some(v) = s13c { st.s13c = v; }
-            // obj+0x20: the room cel holding the placement translation (build_LinkToRoom
-            // 0x1c9680's create-time pick; build_FindCel 0x1c8cb0's bbox test over the room
-            // cels' raw glist bbox [M 0x1c8cb0: the +0x40..0x58 test]). Multiple matches: the
-            // game's collision-ray tie-break is not ported — the first parse-order room cel
-            // wins [S unverified tie-break; 07000004/06/01 resolve uniquely (the wind probe)].
-            let matches = cels.iter().filter(|c| c.min[0] <= st.pos[0] && st.pos[0] <= c.max[0]
-                && c.min[1] <= st.pos[1] && st.pos[1] <= c.max[1]
-                && c.min[2] <= st.pos[2] && st.pos[2] <= c.max[2]).count();
-            if matches > 1 { cel_ambiguous += 1; }
-            let hit = if matches > 0 {
-                cels.iter().position(|c| c.min[0] <= st.pos[0] && st.pos[0] <= c.max[0]
-                    && c.min[1] <= st.pos[1] && st.pos[1] <= c.max[1]
-                    && c.min[2] <= st.pos[2] && st.pos[2] <= c.max[2])
-            } else { None };
+            // obj+0x20: the create-time cel — RB_Create 0x1d6bf0:81 calls build_LinkToRoom
+            // 0x1c9680, which builds the world sphere (Control_BuildWorldSph 0x133070: the
+            // glist centre +0x10 through the object matrix, obj+0x80) and calls build_FindCel
+            // 0x1c8cb0 at that point: the containing room cels (cel+0x40..0x58 inclusive bbox
+            // [M 0x1c8cb0:106-109]), and when MORE than one contains the point the game's
+            // collision-ray tie-break [M 0x1c8cb0:170-229, the disassembly]: per candidate (in
+            // gbl_room_cels order) an UP ray p→p+(0,len,0) then a DOWN ray p→p−(0,min(up,len),0),
+            // both Collide_RayIntersect (mask 0x90) scoped to the candidate's own geometry; the
+            // closer hit's distance (HITDATA+0xc) wins while it stays under the running best
+            // (256.0 first, strict <), the ray length stays the min hit so far; no candidate
+            // wins → the FIRST candidate stands (0x1c8cb0's tail returns CelList_153[0]).
+            // CollisionWorld::find_cel_report is that rule on the scope graph; the world-less
+            // census form keeps first-parse-order over the same bbox candidates [S the stand-in].
+            let point = nf_formats::placement::transform(&nf_formats::placement::object_matrix(p.rotation, p.translation), o.centre);
+            let (hit, ncand) = match world {
+                Some(w) => {
+                    let (cell, cands) = w.find_cel_report(point);
+                    (cell.and_then(|cell| cels.iter().position(|c| c.cell == Some(cell as u32))), cands.len())
+                }
+                None => {
+                    let mut first = None;
+                    let mut n = 0usize;
+                    for (ci, c) in cels.iter().enumerate() {
+                        if c.min[0] <= point[0] && point[0] <= c.max[0]
+                            && c.min[1] <= point[1] && point[1] <= c.max[1]
+                            && c.min[2] <= point[2] && point[2] <= c.max[2] {
+                            n += 1;
+                            if first.is_none() { first = Some(ci); }
+                        }
+                    }
+                    (first, n)
+                }
+            };
+            if ncand > 1 { cel_ambiguous += 1; }
             let (wind, buoy) = hit.map(|ci| (cels[ci].wind, Some((cels[ci].water, cels[ci].max[1])))).unwrap_or((None, None));
+            let cel = hit.and_then(|ci| cels[ci].cell);
             list.push(RbObj {
                 placement: pi as u16,
                 glist: o.hashcode,
@@ -1257,9 +1355,10 @@ impl Rbodies {
                 wind,
                 buoy,
                 built,
+                cel,
             });
         }
-        Rbodies { list, winds, cel_ambiguous }
+        Rbodies { list, winds, cels, cel_ambiguous }
     }
 
     /// `Env_Update` 0x17bc88's cel walk [M]: every wind cel steps once per frame from the ONE
@@ -1459,8 +1558,10 @@ mod evolve_tests {
                     placement: 0, glist: 0, shape_key: 0, flags: 0x44, s_aa: 0, s154, s158: 0xffff,
                     rb, st, hits: Vec::new(), sph_centre: [0.0; 3], sph_radius: 1.0, wind: None, buoy: None,
                     built: true,
+                    cel: None,
                 }],
                 winds: Vec::new(),
+                cels: Vec::new(),
                 cel_ambiguous: 0,
             }
         };
@@ -1796,6 +1897,7 @@ mod evolve_tests {
             placement: 0, glist: 0, shape_key: 0, flags: 0x44, s_aa: 0, s154: 0, s158: 0xffff,
             rb, st, hits: Vec::new(), sph_centre: [0.0, -1.0, 0.0], sph_radius: 4.0, wind: None, buoy: None,
             built: true,
+            cel: None,
         };
         // One unit quad's lower triangle in the z = 0 plane of object space, wound to face +z.
         let tris = [[[-0.5, -0.5, 0.0], [0.5, -0.5, 0.0], [0.5, 0.5, 0.0]]];

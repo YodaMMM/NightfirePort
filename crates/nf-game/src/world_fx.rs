@@ -729,7 +729,8 @@ impl WorldFx {
     /// `psiParticleUpdate` 0x111290 [M; world_fx.rs module doc].
     fn flicker_spark(gas: &mut crate::gas::GasPool, rng: &mut crate::drone::Rng, pos: V3, drift: V3) {
         let mesh = FIRE_MESHES[rng.rand(5) as usize % 5];
-        gas.init_ex(rng, mesh, pos, 0.0, drift, 1.2, 0.8, 4, [0xff, 0xff, 0xff, 0xff], 0x0a46_0003, 85.0);
+        // kind 4's case body has no cel read [M gases_smoke 0x1ab2d0 case 4] — no wind, no clamp.
+        gas.init_ex(rng, mesh, pos, 0.0, drift, 1.2, 0.8, 4, [0xff, 0xff, 0xff, 0xff], 0x0a46_0003, 85.0, crate::gas::HostCel::default());
     }
 
     /// One 60 Hz tick (`Emitter_Update`/`Ripples_Update`/`cloud_update`/`Apocalypse_Update` run in
@@ -779,7 +780,7 @@ impl WorldFx {
             // kind 6/end 0 misread the call's tail. Life = r.period [S] unverified: the decompile
             // drops the 11th arg. Gas_Init's spin/sign draws come out of the shared stream
             // [M 0x1aacc8:72-80] — the site's own 4 draws stay the counter-hash deviation above.
-            gas.init_ex(rng, crate::world_fx::RIPPLE_MESH, [r.pos[0] + jx, r.pos[1], r.pos[2] + jz], 0.0, [0.0; 3], s, s + s, 1, [0x7f, 0x7f, 0x7f, 0xff], 6, r.period as f32);
+            gas.init_ex(rng, crate::world_fx::RIPPLE_MESH, [r.pos[0] + jx, r.pos[1], r.pos[2] + jz], 0.0, [0.0; 3], s, s + s, 1, [0x7f, 0x7f, 0x7f, 0xff], 6, r.period as f32, crate::gas::HostCel::default());
         }
         // Leaves first [M Leaf_Update 0x1abee0]: a leaf created this tick must not update until
         // next tick (the newest-first object pass skips it — the emitter note below), so the

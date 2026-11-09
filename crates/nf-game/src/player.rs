@@ -358,6 +358,13 @@ pub struct Bond {
     /// `BL+0x50`: world velocity, units per second.
     pub vel: V3,
     /// AnimObj flag 8 and the floor's normal y (`BL+0x110`).
+    /// The bot capsules (indices into `LadderCtx::bot_capsules`) Bond's body overlapped this
+    /// tick BEFORE the Jointy push resolved them — the collide pass's contact list. The game's
+    /// `Collide_Jointy` 0x1ec180 resolves the same overlap its pair test found, and that pair
+    /// test's hit is what lands on the bot as the class-3 contact (`NDrone2_DealWithObjHit`
+    /// 0x13fff0 case 3 → msg 0x22 [M 0x1405c0-0x140634]); after the push Bond only touches the
+    /// body, so the drones' later contact pass cannot see the overlap by itself.
+    pub bot_contacts: Vec<usize>,
     pub grounded: bool,
     pub floor_ny: f32,
     /// `BL+0x940`: grounded in the last 4 ticks (shift register).
@@ -585,6 +592,7 @@ impl Bond {
             substate: SS_WALK, ladder: None, climb_top: 0.0, climb_bottom: 0.0, regrab: 0, mode: 0, saved_sub: 0, air: 100.0, drown_damage: None, underwater: false,
             water_fade: 0.0, air_tick: 0, push_fwd: 0.0, wire: None, auto_drop: 0.0, wire_anim: 0, wire_anim_time: 0.0, wire_anim_rate: 1.0, cam_mode: 0, grapple: None,
             icon_ctx: 0xff,
+            bot_contacts: Vec::new(),
             cel: None,
             move_local: [0.0; 2],
             prev_pos: pos,
@@ -783,6 +791,92 @@ impl Bond {
             self.fall_timer = 0;
         }
         self.monitor_air(ctx);
+    }
+
+    /// The dead player's collide-slot pass — the per-frame bookkeeping that keeps running after
+    /// death. The DEAD STATE itself is the update slot's dead branch: `Player_Update` 0x193600
+    /// runs ONLY `AnimObjectUpdate` + `Player_HandleDeath` for `obj+0xF4` 2/3 [M 0x193600:316-319]
+    /// — no substate arm, no movement, no `Player_Collision` rebuild. But the collide slot of the
+    /// dead player class 0x12 is still `Player_CollisionHandler` 0x1949a8 [M obj-tag-player.md:18;
+    /// `Collide_Update` 0x1ea398:55-69 dispatches the slot of every object unconditionally], and
+    /// its arms all run for the dead body:
+    /// - `BL+0x95F = 0xFF` happens BEFORE the freeze-gate return [M 0x1949a8:21-24 — the
+    ///   `sb a0,0x95f(s1)` at 0x1949e4 precedes the `lbu 0x94a`/`beq` return], so the third-icon
+    ///   context clears every dead tick and no icon re-arms into a dead prompt.
+    /// - `Player_FeetOnPoint(dead = (u16)(state−2) < 2)` [M :76-77] still grounds the flag-8 bit
+    ///   [M `Player_FeetOnPoint` 0x194188:176-185] and the grounded history follows [M :78-82].
+    ///   The `dead` argument has no consumer inside FeetOnPoint — `a3` is overwritten by
+    ///   `Mat_GetUp` in the prologue before any read [M disasm 0x194188], so the feet test is
+    ///   identical alive and dead.
+    /// - the fall timer [M :97-131] and the 0x7000012 void-fall latch [M :104-108] run for the
+    ///   dead body: the grounded-history-0 arm is not gated on the state. The dead landing pain
+    ///   (`Player_HandlePain` [M :120], the `jal` at 0x194bd4) is dropped by the pain pipeline's
+    ///   own dead gate: `Player_HandlePain` 0x1902c8 reads health BL+0x894 at 0x190318,
+    ///   `c.le.s` against 0.0 at 0x190324 and RETURNS at 0x19032c before its first write
+    ///   (BL+0x8bc = 1.0 at 0x190378) — no health change, no armour math, no +0x967 direction
+    ///   bits, no +0x968 flash, no `Rand_Rand(4)` grunt draw, no `Sound_Play3D`, no rumble
+    ///   (`Player_Hurt` 0x196060 adds no gate of its own — everything funnels through
+    ///   `HandlePain`). A dead body's health is exactly 0.0 (`Player_SetHealth` 0x1960b8 clamps
+    ///   <0 to 0), so the gate always fires. The port emits no `fall_damage` from the dead tick
+    ///   — observably equal, pinned by dead_landing_pain_live.
+    /// - the ceiling arm [M :168-175] — grounded (`FeetOnPoint`'s flag 8) AND `jump_state != 1`:
+    ///   `BL+0x14 = 0` [M 0x194d0c] and `Vec_Zero(BL+0x50)` [M 0x194d10 → 0x1e2d58]. The port's
+    ///   `vel` is the BL+0x50 map (`Bond::vel` [M player.rs field doc]); the BL+0x14 write has no
+    ///   separate port field (the walk lanes rebuild from input every alive tick and the dead run
+    ///   no walk) — documented residual.
+    /// - the per-hit list walk [M :136-165] never runs for the dead: `obj+0xD0` (the HITDATA
+    ///   list) is freed at death [M obj-tag-player.md:51], so `iVar6 == 0` routes past
+    ///   `DealWithObjHit` and the 0x10/0x20 contact flags — the port's `head_bump` goes false
+    ///   with them ([M] the flags are cleared at :27-28 and only re-set from that list walk).
+    /// Position is untouched: the dead branch has no `obj+0x30` writer [M 0x193600 dead branch —
+    /// the death-animation-sp probe pinned the freeze].
+    pub fn dead_contacts_tick(&mut self, world: &CollisionWorld) {
+        // [M 0x1949a8:21-24 / asm 0x1949e4] the context clear precedes every arm.
+        self.icon_ctx = 0xFF;
+        // [M 0x1949a8:27-29 + the freed list] no contact flags this pass.
+        self.head_bump = false;
+        // `Player_FeetOnPoint` [M 0x1949a8:76-77] — the game's ray starts at `obj+0x30` (the
+        // frozen position) and reaches B − up·(cc+0.6) [M 0x194188:89-100]; the band is the same
+        // f32 edge the walk tick pins ([M Intersect_RayGeom 0x10a8c8; the walk tick's comment]).
+        let (_, b) = self.capsule();
+        let ray = self.cc + 0.6;
+        let to = [b[0], b[1] + -ray, b[2]];
+        let floor = world.segment_hit_scoped(self.cel, self.pos, to);
+        let band = floor.as_ref().map_or(false, |(t, _)| {
+            let d_y = to[1] - self.pos[1];
+            let hit_y = self.pos[1] + t * d_y;
+            let dy = self.pos[1] - hit_y;
+            (dy * dy).sqrt() - 0.1 <= self.cc
+        });
+        // `walkable` measures the capsule's straddle contacts without applying any push: the
+        // game's dead pass adds no DeltaP (the `Player_Collision` rebuild is dead) and the freed
+        // hit list skips the `pos += BL+0x750` add [M 0x1949a8:131-134].
+        let (_, walkable) = world.capsule_push_scoped(self.cel, self.capsule().0, b, RADIUS, false, self.pick_ref);
+        self.grounded = walkable || band;
+        self.floor_ny = match floor.as_ref() {
+            Some((_, n)) if band => n[1],
+            _ => 1.0,
+        };
+        // [M 0x1949a8:78-82] the grounded history halves and takes flag 8.
+        self.grounded_history = (self.grounded_history >> 1) | if self.grounded { 8 } else { 0 };
+        // [M 0x1949a8:97-131] the fall timer — the airborne arm counts while the frozen body's
+        // y velocity reads negative, resets on any non-negative y; the grounded arm clears
+        // (the game first computes timer−60 and calls `Player_HandlePain(dmg, 6)` when ≥ 10
+        // [M :117-123, the jal at 0x194bd4], but the pain pipeline's dead gate [M 0x190318-0x19032c]
+        // returns before any write or draw, so the observable is the plain clear).
+        if self.grounded_history == 0 {
+            if self.vel[1] < 0.0 { self.fall_timer += 1; } else { self.fall_timer = 0; }
+        } else {
+            self.fall_timer = 0;
+        }
+        self.fall_damage = None;
+        // [M 0x1949a8:104-108] the void-fall latch reads the frozen position while airborne.
+        self.void_fall = self.grounded_history == 0 && self.pos[1] < -10.0;
+        // [M 0x1949a8:168-175] the ceiling arm: grounded and not rising kills the world
+        // velocity (BL+0x50) — no movement reads it while dead, the field stays clean.
+        if self.grounded && self.jump != 1 {
+            self.vel = [0.0; 3];
+        }
     }
 
     /// `Player_ZeroG` 0x192ab0 — the spacewalk substate (the dispatch runs cases 8 and 9 into the
@@ -2087,13 +2181,16 @@ impl Bond {
         // it walks (the delta tilts); beside its spine the push is lateral. The Jointy push does
         // NOT ride the DeltaP accumulator (Jointy writes +0x10 only [M :253-266]), so this sits
         // after the add-back and `pick_ref` keeps the static pass's value.
-        // [S] unverified — the PORT CHOICE gate: the push rides only while Bond is AIRBORNE
-        // (the drop-onto case the task pins). The game's own per-bot ON/OFF gates (+0x4f8 bit
-        // 0x20/0x200, +0x570 bit 2 — NDrone2_DoCollision 0x149ec8) are not modelled per bot
-        // yet, and master's green walks path Bond THROUGH ally tangent zones (the 01 armour
-        // walk, the 0a west doorway): the grounded-side push against allies is a live-check
-        // item, not shipped here. The sleeper drop (grounded false through the whole contact)
+        // The grounded gate is the GAME'S rule, not a port choice: `NDrone2_DoCollision` 0x149ec8
+        // keeps the bot's body on for every live near bot in every state (dead 0x4F8&0x200 off,
+        // the anim-info +0x570 bit-2 no-body anims off — not modelled, a live check item), and
+        // `Collide_Jointy` 0x1ec180:229-281 resolves the contact on every tick, grounded
+        // included. The old [S] airborne-only gate left the firing guards bodyless
+        // (guard_capsule_live: Bond walked to 0.19 of a 0x74/0x68 captor; the game's standing
+        // capsule [M NDrone2_Collision 0x140e90:91-121] holds ~0.95); the Sim now marks every
+        // near bot a ground bot. The sleeper drop (grounded false through the whole contact)
         // keeps its [M] push either way.
+        self.bot_contacts.clear();
         if !ctx.bot_capsules.is_empty() && (!self.grounded || ctx.ground_bots > 0) {
             let (ja, jb) = self.capsule();
             if std::env::var("NF_PUSH_DEBUG").is_ok() {
@@ -2110,6 +2207,7 @@ impl Bond {
                 let dist_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
                 let rr = RADIUS + tr;
                 if dist_sq >= rr * rr { continue; }
+                self.bot_contacts.push(bi);
                 let dist = dist_sq.sqrt().max(1e-6);
                 let overlap = (rr - dist) / dist; // fVar12 = 1.0 in SP [M :229-233]
                 jp[0] -= d[0] * overlap;

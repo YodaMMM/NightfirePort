@@ -74,7 +74,8 @@ fn owners(sim: &nf_view::scene::Sim, level: u32) -> std::collections::BTreeSet<u
     }
     if level == 0x0700_0005 { o.insert(0x6f); }
     if level == 0x0700_000b { o.insert(0x2d); }
-    o.insert(0x97); // Drone_InitComms 0x139520:198-201
+    o.insert(0x97); // Drone_InitComms 0x139520:198-199
+    o.insert(0x98); // Drone_InitComms 0x139520:201 — the chatter gate, written EVERY frame
     // Script-owned channels: the disc scripts' own event 0xD / 0x11 targets and the SP out writes
     // [M Script_EventHandler 0x1d94c0 — the game's script path writes switch_channels the same
     // way; D the level's script data]. Accumulated live by `Channels::script_channels`.

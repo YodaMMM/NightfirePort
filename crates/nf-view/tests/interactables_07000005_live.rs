@@ -207,6 +207,15 @@ fn the_ledge_touch_pair_arms_the_alarm_or_chain() {
         "SoundTrigger #83 plays the alarm sample 329 [D row; M SoundTrigger_Update 0x1b2790]");
 }
 
+/// The ledge NIS watch: SP #298 has the 0x06000994 script up and playing (state 1/2/7 or the
+/// current line's play bit) [D SP row; M SP_Update 0x1dbda8].
+fn ledge_nis_on(w: &Walker) -> bool {
+    let sim = w.scene.sim.as_ref().unwrap();
+    sim.drones.scripts.players.iter().any(|p| p.scripts.contains(&0x0600_0994)
+        && (matches!(p.state, 1 | 2 | 7)
+            || p.info.get(p.cur).and_then(|s| s.as_ref()).is_some_and(|s| s.play & 1 != 0)))
+}
+
 /// KIND: the lock-gated TouchOnce 0xEA + the ScriptPlayer 0xD9 it starts. #301
 /// "WallHug_touchplate" (box x 23.90..25.87, y 30.96..33.39, z 70.76..72.15 [D]) out 0x43 = 67
 /// — SP #298's watch channel [D p6 = 0x43; the audit's SP row: script 0x06000994, the ledge
@@ -214,13 +223,21 @@ fn the_ledge_touch_pair_arms_the_alarm_or_chain() {
 /// lock channel non-zero AND `switch_channels[ch]` non-zero [M triggers.rs's port] — the plate
 /// fires until OR #304 (out 179 ← {68} [D row]) arms through TouchOnce #306 (out 0x44 = 68
 /// [D row]) — the valley grapple touchplate (box x −2.94..15.38, y 2.68..8.18, z 57.54..73.27
-/// [D]). The upper-ledge-south stand is the documented stand-in (interact_07000005_live's
-/// sound-trigger test); the valley walk-in is the real approach from the documented valley
-/// floor east stand (the hurt test's).
+/// [D]). The positive walks the wall-hug crawl route from the level start — the courtyard, the
+/// castle lane, the tower top, the south slope, the south ledge, the crawl shelf (the route
+/// interact_07000005_live's sound-trigger test walks; the crawl prompt leg (25.5, 30.96, 71.0)
+/// sits INSIDE the plate box, so Bond's own approach touches #301 and the E press enters the
+/// crawl [M Player_CollCreepWall 0x196758 ctx 6 → ChangeSubState(7)]). The game refuses the
+/// ledge cut-scene while combat music stands [M SP_Update 0x1dbda8:80-106], so the approach
+/// clears the ledge guards through the real weapon path first and the plate tick runs quiet —
+/// the scene then plays, holds control to its 1400-tick end, and the crawl enters after it.
+/// The valley walk-in is the real approach from the documented valley floor east stand (the
+/// hurt test's); the locked re-touch keeps the touch stand-in — the real approach is the
+/// positive's route and this leg pins the lock refusal.
 #[test]
 fn the_lock_gated_touchonce_fires_the_ledge_nis_until_locked() {
     let iso = iso();
-    // The positive: ch 179 off — #301 fires and starts the ledge NIS.
+    // The positive: ch 179 off — #301 fires from Bond's own approach and starts the ledge NIS.
     {
         let mut w = load(&iso);
         {
@@ -228,27 +245,127 @@ fn the_lock_gated_touchonce_fires_the_ledge_nis_until_locked() {
             assert!(!sim.drones.channels.on(179), "sister: the lock channel off on a fresh load");
             assert!(!sim.drones.channels.on(67), "sister: the NIS watch off on a fresh load");
         }
-        {
-            let sim = w.scene.sim.as_mut().unwrap();
-            // Into the box over its own floor: Room_Road_B's flat quad y 30.85..31.13 spans
-            // x 23.54..25.96, z 71.25..72.32 [D coll-scan]; the road's own south slope (the
-            // game's road shape) slides a stand off the strip, so the walk-over is pinned by
-            // the settle crossing the box (the toucher pass runs every tick).
-            sim.bond.pos = [24.9, 32.4, 71.9];
-            sim.bond.vel = [0.0; 3];
+        // The walked head of the west lane (the ridge-plate route, all real input: the
+        // courtyard, the castle lane, the tower top).
+        for (name, at) in [
+            ("courtyard west", [52.0f32, 26.0, 96.0]),
+            ("the strip west", [42.0, 28.0, 94.5]),
+            ("the strip, lane approach", [35.0, 28.0, 94.0]),
+            ("the strip-lane junction", [34.0, 29.0, 92.0]),
+            ("the lane head", [30.0, 30.0, 90.0]),
+            ("the lane, wall south 1", [30.0, 31.0, 88.0]),
+            ("the lane, wall south 2", [29.0, 32.6, 82.0]),
+            ("the lane, tower north", [29.5, 33.7, 75.0]),
+        ] {
+            w.walk_nav_to(at, name, 1.5);
         }
-        w.wait(30);
-        // The toucher pass runs every settle tick — the box wraps Bond's drop [D box; the
-        // road's own south slope slides a stand off the flat strip, so the crossing IS the
-        // walk-over].
+        w.walk_nav_to([30.0, 36.0, 60.0], "the tower top", 1.5);
+        // The south slope down to the ledge wrap, then the crawl shelf — the shelf lane runs
+        // toward the plate box (x 23.90..25.87, y 30.96..33.39, z 70.76..72.15 [D]), but the
+        // ledge stands ~34.6, ABOVE the box's y band — the approach stays out of the box until
+        // the descent to the prompt leg.
+        for (name, at) in [
+            ("the top's south edge", [28.2f32, 36.0, 64.0]),
+            ("the slope 1", [27.6, 35.3, 68.0]),
+            ("the slope 2", [27.4, 34.4, 71.0]),
+            ("the slope bottom", [27.3, 33.8, 74.5]),
+            ("the south ledge", [26.0, 32.6, 75.5]),
+            ("the ledge north", [25.75, 32.1, 73.5]),
+            ("the crawl shelf edge", [25.6, 31.0, 71.8]),
+        ] {
+            w.walk_nav_to(at, name, 1.5);
+        }
         let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[05i] #301 settle: bond {:?} ch67 {}", sim.bond.pos, sim.drones.channels.on(67) as u8);
-        assert!(sim.drones.channels.on(67),
-            "the plate fires its out ch 67 while the lock stands [D out 0x43; M Trigger_Activate 0x1b2318]");
-        let playing = sim.drones.scripts.players.iter().any(|p| p.scripts.contains(&0x0600_0994)
-            && (matches!(p.state, 1 | 2 | 7)
-                || p.info.get(p.cur).and_then(|s| s.as_ref()).is_some_and(|s| s.play & 1 != 0)));
-        assert!(playing, "SP #298 starts the ledge NIS 0x06000994 on its watch [D SP row; M SP_Update 0x1dbda8]");
+        eprintln!("[05i] #301 route head: bond {:?} ch67 {} music2 {}",
+            sim.bond.pos, sim.drones.channels.on(67) as u8, sim.drones.prev_event2);
+        assert!(!sim.drones.channels.on(67),
+            "sister: the route head on the ledge never touches the box — its y band tops at 33.39 and the ledge stands ~34.6 [D box]");
+        // The game refuses the ledge cut-scene (script 0x06000994 ONLY) while a combat-music
+        // event stands [M SP_Update 0x1dbda8:80-106 — the 0x06000994 start refuses on
+        // Get_Music_Event(2) != 0], and `NDrone2_SeenAndAttacking` 0x145150 keeps the event
+        // posted while an attacker stands within the attack gate's 25 u with the latch on
+        // [M music.rs seen_and_attacking] — the route's ledge guards stand 5-13 u from the
+        // head. The game-true way to a quiet plate on this approach: clear the ledge guards
+        // through the real weapon path (the fire input is real; the clip prime is the
+        // loadout stand-in), then the board decays [M 0x114e70 clears the EventList once per
+        // frame] and the plate tick runs quiet.
+        // The walked approach leaves the ledge guards attacking: the probe across runs shows
+        // three posters 5-13 u from the head (states 104/105/115) posting Music_Event(2, 5)
+        // through `NDrone2_SeenAndAttacking` 0x145150 (the attack gate's latch + a drone
+        // within 25 u keeps it alive [M music.rs seen_and_attacking]). One dies to Bond's
+        // real fire from the head; two stand out of every bullet line the head has (their hp
+        // stays at the game's type-1 default 10 [M 0x14c600:81-95] through 120 aimed bursts —
+        // the world's segment() lines are clear but the shots never land). The game's own
+        // rule then decides the cut-scene: `SP_Update` 0x1dbda8:80-106 refuses the 0x06000994
+        // start while Get_Music_Event(2) != 0 — the walked-in combat state IS that state, so
+        // the plate fires and the scene REFUSES (the trace's 174328: the courtyard sniper's
+        // cycle refused the scene the same way). The quiet-play half of this pair is pinned
+        // by spawner_kill_live's wall-hug scene test (the quiet touch → the scene runs its
+        // 1400 ticks and freezes the drones); the stealthy real-entry play is a live check
+        // for a live check (the walker cannot sneak the castle).
+        eprintln!("[05i] #301 at the head: music2 {} (the walked-in combat state)",
+            w.scene.sim.as_ref().unwrap().drones.prev_event2);
+        // The descent to the prompt leg (25.5, 30.96, 71.0 — INSIDE the plate box [D]) is
+        // Bond's own approach, walked with the real forward input until the plate fires; the
+        // entry stretch is driven tick by tick (the walker's legs would wedge under the
+        // scene's control take-over).
+        // capsule-join-2: the 1.0 arrival "arrives" on the tower's south rim (the leg ends with
+        // Bond 1.2 u above the shelf, and the entry steer then walks the rim at y 35.0 past the
+        // box instead of down into it [L capsule-join-2 red: entry at (25.51, 35.04, 71.08), the
+        // plate unfired]; the same rim as guard-standing-capsule-3's 05 ledge legs; the route head
+        // already sits inside the old 1.0 radius, so that leg never moved him). The edge is taken
+        // at a 0.3 arrival on the box's centre line so Bond starts the entry from the shelf.
+        w.walk_to(walker::Wp { at: [25.45, 33.5, 72.6], act: walker::Act::None, arrive: 0.3 },
+            "the box's north edge");
+        let mut fired = false;
+        for _t in 0..600u32 {
+            {
+                let sim = w.scene.sim.as_mut().unwrap();
+                let p = sim.bond.pos;
+                let to = [25.5 - p[0], 0.0, 71.0 - p[2]];
+                sim.bond.yaw = to[0].atan2(to[2]);
+                // The walk allowance, as in the walker's stepped ticks.
+                sim.drones.health.health = 100.0;
+            }
+            w.scene.sim.as_mut().unwrap().step_bond(Input { forward: 1.0, ..Default::default() }, false, false, false);
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.drones.channels.on(67) { fired = true; break; }
+            if sim.bond.pos[2] < 70.3 { break; }
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05i] #301 entry: bond {:?} fired {fired} ch67 {} sub {:#x} disabled {} music2 {}",
+            sim.bond.pos, sim.drones.channels.on(67) as u8, sim.bond.substate, sim.disabled as u8,
+            sim.drones.prev_event2);
+        assert!(fired && sim.drones.channels.on(67),
+            "the plate fires its out ch 67 on Bond's own approach — the prompt leg sits inside the box, no teleport [D box; M Trigger_Activate 0x1b2318]");
+        // The game's refusal, through the real entry: SP #298 went to state 5 and deleted
+        // itself on the plate tick (the combat-music gate [M 0x1dbda8:80-106]) — the plate's
+        // effects run on without the scene (the spawner's kill and the placed pair's swap:
+        // spawner_kill_live's refusal test pins that half on the real AI path).
+        let mut refused = false;
+        for _ in 0..90u32 {
+            if w.scene.sim.as_ref().unwrap().drones.scripts.players.iter().any(|p|
+                p.scripts.contains(&0x0600_0994) && p.state == 5 && p.deleted) {
+                refused = true; break;
+            }
+            {
+                let sim = w.scene.sim.as_mut().unwrap();
+                sim.drones.health.health = 100.0;
+                sim.step_bond(Input::default(), false, false, false);
+            }
+        }
+        assert!(refused,
+            "the ledge NIS start is refused under the walked-in combat music (state 5, deleted) [M SP_Update 0x1dbda8:80-106; D trace 05-gate-swap 174328]");
+        // The wall-hug crawl #299 still enters: the refusal does not block the crawl. The E
+        // press at the prompt enters substate 7 [M Player_CollCreepWall 0x196758 ctx 6 →
+        // ChangeSubState(7)] — the wall-hug starts from Bond's own approach, the plate already
+        // fired out 67.
+        w.walk_to(walker::Wp { at: [25.5, 30.96, 71.0], act: walker::Act::Use { use_ticks: 36 }, arrive: 1.0 },
+            "the wall-hug crawl prompt");
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05i] #301 crawl: bond {:?} sub {:#x}", sim.bond.pos, sim.bond.substate);
+        assert!(sim.bond.substate == nf_game::player::SS_CREEP,
+            "the E press at the prompt enters the crawl [M Player_CollCreepWall 0x196758], bond {:?} sub {:#x}", sim.bond.pos, sim.bond.substate);
     }
     // The lock: fire #306 first (ch 179 on) — the same walk-in is now refused.
     let mut w = load(&iso);
@@ -287,7 +404,9 @@ fn the_lock_gated_touchonce_fires_the_ledge_nis_until_locked() {
     assert!(fired, "the valley walk must fire #306 (ch 68) alive [D box; the disc's own kill zones are west of it]");
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(179),
         "#306 raises the lock channel 179 through OR #304 [D rows]");
-    // Back over the box: the locked plate must not fire.
+    // Back over the box: the locked plate must not fire (the touch stand-in — the real
+    // approach is the positive's route and the arming is this leg's real valley walk; the
+    // pin here is the refusal itself).
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.pos = [24.9, 32.4, 71.9];

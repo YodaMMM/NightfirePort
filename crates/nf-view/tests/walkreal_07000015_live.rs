@@ -769,8 +769,23 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // fixes and door[42] shut on the shot line; the carried P2K still held 4 rounds (it came up
     // dry-swapped at t1800 of the same run). A player takes the precise shot with the pistol
     // (spread 0.0 [L ee_start_05.bin weapon_data 0x02 +0x24/+0x98]).
-    if difficulty >= 3 && w.scene.sim.as_ref().unwrap().gun.weapon == 0x1a {
+    // Agent (batch-1109c-fix): the same take. The guard door-contact and drone contact-turn
+    // rules shifted the shared stream, and the d2 walk now reaches this mark holding the 0x1a
+    // as well. Its rounds missed by 4.26/4.32/3.68/13.28 u, the bracket ran out of fixes, and
+    // door[42] shut on the line (master's stream landed the 5th round by luck after misses of
+    // 2.24/2.71/0.92/2.63 u). The pistol shot is the one the walk's own doc names.
+    // capsule-join (guard-standing-capsule-2): the pushed walks' shifted fights left the agent sisters at the
+    // fence shot holding whatever the dry-swaps parked — the d2 run: the 0x1a (arcing P2K,
+    // clip 30) whose rounds missed 3.67→2.54→2.23→1.71 u into the bracket's 4-fix cap; the d3
+    // run: the 0x1b (clip 4 spare 2) — both left door[42] shut on the line at ~t500 (s0x2 tmr 0
+    // [L the d2/d3 red traces]) and every later shot hit the leaf. A player takes the precise
+    // shot with the pistol (spread 0.0 [L ee_start_05.bin weapon_data 0x02 +0x24/+0x98]) and
+    // re-opens the auto-closed door for it.
+    if difficulty >= 2 && w.scene.sim.as_ref().unwrap().gun.weapon != 0x2 {
         draw_persist(&mut w, 0x02, "the fence shot's pistol");
+        w.reload_full();
+        w.use_door(42, "door[42] re-opened for the fence shot");
+        for _ in 0..40 { w.tick(nf_game::player::Input::default(), false); }
     }
     let d = shoot_mine(&mut w, 447, [0.0, 42.3, 17.29], "the south-corridor fence #447 from the threshold");
     assert!(d > 8.0, "#447 is shot from RANGE through the open doorway ({d:.2} u)");

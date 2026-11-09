@@ -36,6 +36,22 @@
 
 use crate::world::V3;
 
+/// `Gas_Init`'s cel argument, resolved at the spawn position — the cel-host record the gas
+/// sites pass down [M 0x1aacc8]: the kind-7 NULL-vel arm reads `Env_GetWindVel(param_3,
+/// param_4)` (0x17c048: the CEL's wind struct cel+0x2c, evaluated at the puff pos), and the
+/// puff's own room link (`build_LinkToRoom` 0x1c9680 at the puff's world-sphere centre,
+/// fallback `control_link_object_to_cel(obj, param_3)` :84-87) fixes the cel whose +0x54
+/// `gases_smoke` 0x1ab2d0 clamps kinds 0/7/0xb to. `Rbodies::host_at` builds it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct HostCel {
+    /// `Env_GetWindVel` 0x17c048 at the spawn pos — the kind-7 NULL-vel wind term (zero
+    /// when the cel carries no wind or its target is 0 [M 0x17c048's `Vec_Zero` gate]).
+    pub wind: V3,
+    /// The host cel's glist bbox max y (cel+0x54) — the clamp word. None = no cel resolved
+    /// (the game's LinkToRoom failure with a cel-less caller).
+    pub ceil_y: Option<f32>,
+}
+
 /// The one shared dust quad (`smoke_1_dust`), every `Gas_Init` caller's mesh [M 0x1aacc8:81 callers;
 /// D gfx-list 07000029 entry 64 obj 0].
 pub const SMOKE_QUAD: u32 = 0x0200_0039;
@@ -107,6 +123,11 @@ pub struct Gas {
     /// kind-9 emitter's warmup reads it (`GameState - obj[0xec] < 20` blocks the child spawns
     /// [M gases_smoke 0x1ab2d0 case 9]). Set from the pool's frame at init.
     pub born: u32,
+    /// gas-cel-host: the puff's own room cel's glist bbox max y (cel+0x54) — the word
+    /// `gases_smoke` 0x1ab2d0 clamps the puff's pos.y DOWN to every tick, kinds 0/7 (the
+    /// case-0→7 shared body, decompile :66-77) and 0xb (:200-203); kind 4's case body has
+    /// no cel read. Resolved at the spawn from `HostCel`; None = no cel, no clamp.
+    pub ceil_y: Option<f32>,
     /// The kind-9/10 emitter's child-spawn record — the game stores Gas_Init's OWN args at the
     /// object's data table (+0x40..+0x58: rgba, end rgba, glist, p1, p2, life [M 0x1aacc8:46-52,
     /// the `8 < kind < 0xb` block]) and the update cases re-pass them to every child's Gas_Init
@@ -197,8 +218,8 @@ impl GasPool {
     /// `yaw` = the quaternion z the callers pass (a drawn angle for the muzzle/breath A sites,
     /// unused by the port's billboard draw beyond the spin), `vel` = the given velocity vector.
     #[allow(clippy::too_many_arguments)]
-    pub fn init(&mut self, rng: &mut crate::drone::Rng, pos: V3, yaw: f32, vel: V3, p1: f32, p2: f32, kind: u8, rgba: [u8; 4], life: f32) {
-        self.init_ex(rng, crate::gas::SMOKE_QUAD, pos, yaw, vel, p1, p2, kind, rgba, 0, life);
+    pub fn init(&mut self, rng: &mut crate::drone::Rng, pos: V3, yaw: f32, vel: V3, p1: f32, p2: f32, kind: u8, rgba: [u8; 4], life: f32, host: HostCel) {
+        self.init_ex(rng, crate::gas::SMOKE_QUAD, pos, yaw, vel, p1, p2, kind, rgba, 0, life, host);
     }
 
     /// The port stand-ins that are NOT game `Gas_Init` calls (the swoosh ribbon puff
@@ -239,6 +260,7 @@ impl GasPool {
             xray_only: false,
             hidden: false,
             born: 0,
+            ceil_y: None, // the hash stand-ins' kinds (4/5) take no clamp [M case 4 / case 1|5 bodies]
             child: None,
             rot: [0.0; 3],
         });
@@ -267,13 +289,16 @@ impl GasPool {
     ///     end 1 (~0 float bits), life 128 ticks (the decomp-dropped 11th arg = 0x80 [M 0x1cbce0]).
     /// The draws are consumed BEFORE the pool-cap check — the game's RNG has no notion of the port's
     /// cap, and a skipped draw would shift the shared stream.
-    pub fn init_searchlight_smoke(&mut self, rng: &mut crate::drone::Rng, pos: V3) {
+    pub fn init_searchlight_smoke(&mut self, rng: &mut crate::drone::Rng, pos: V3, host: HostCel) {
         let yaw = rng.frand(std::f32::consts::PI);
         let spin_mag = rng.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
         let spin = if rng.rand(0x100) >= 0x80 { -spin_mag } else { spin_mag };
         let (rx, ry, rz) = (rng.frand(0.2), rng.frand(0.2), rng.frand(0.2));
         if self.puffs.len() >= Self::CAP { return; }
-        let vel = [rx - 0.1, ry, rz - 0.1].map(|j| mul_ee(j, REC_FRAME_RATE));
+        // gas-cel-host: the kind-7 NULL-vel wind term — `Env_GetWindVel(cel, pos)` + the
+        // spread, then ·REC [M 0x1aacc8:108-115 disasm `(*pfVar1 + (fVar11 - fVar10)) * REC`:
+        // the spread's −0.1 lands on the DRAW first, then the wind, then the REC multiply].
+        let vel = [host.wind[0] + (rx - 0.1), host.wind[1] + ry, host.wind[2] + (rz - 0.1)].map(|j| mul_ee(j, REC_FRAME_RATE));
         self.puffs.push(Gas {
             pos,
             vel,
@@ -289,6 +314,7 @@ impl GasPool {
             xray_only: false,
             hidden: false,
             born: 0,
+            ceil_y: host.ceil_y,
             child: None,
             rot: [0.0; 3],
         });
@@ -303,8 +329,8 @@ impl GasPool {
     /// draws), the same fixed args and the sibling kind-7 life 128 (the decompile-dropped 11th
     /// arg; both other kind-7 sites read 0x80 — searchlight [M 0x1cbce0], player muzzle
     /// [M 0x1a43f8/0x1a442c]).
-    pub fn init_gt_smoke(&mut self, rng: &mut crate::drone::Rng, pos: V3) {
-        self.init_searchlight_smoke(rng, pos);
+    pub fn init_gt_smoke(&mut self, rng: &mut crate::drone::Rng, pos: V3, host: HostCel) {
+        self.init_searchlight_smoke(rng, pos, host);
     }
 
     /// The GT turret's SHOT smoke — `GT_Update` 0x180498's two fire sites (case 4 @:356 = jal
@@ -323,13 +349,14 @@ impl GasPool {
     /// 4-6. the NULL-vel kind-7 wind spread `Rand_FRand(0.2)` ×3 over `Env_GetWindVel` (0 in the
     /// port's rooms) [M 0x1ab138-0x1ab1c8]. All consumed BEFORE the pool-cap check (the
     /// searchlight precedent).
-    pub fn init_gt_shot_smoke(&mut self, rng: &mut crate::drone::Rng, pos: V3) {
+    pub fn init_gt_shot_smoke(&mut self, rng: &mut crate::drone::Rng, pos: V3, host: HostCel) {
         let _rot_z = rng.frand(6.2831853); // 0x40c90fdb [M 0x180bc0]
         let spin_mag = rng.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
         let spin = if rng.rand(0x100) >= 0x80 { -spin_mag } else { spin_mag };
         let (rx, ry, rz) = (rng.frand(0.2), rng.frand(0.2), rng.frand(0.2));
         if self.puffs.len() >= Self::CAP { return; }
-        let vel = [rx - 0.1, ry, rz - 0.1].map(|j| mul_ee(j, REC_FRAME_RATE));
+        // The kind-7 NULL-vel wind term, the searchlight site's shape [M 0x1aacc8:108-115].
+        let vel = [host.wind[0] + (rx - 0.1), host.wind[1] + ry, host.wind[2] + (rz - 0.1)].map(|j| mul_ee(j, REC_FRAME_RATE));
         self.puffs.push(Gas {
             pos,
             vel,
@@ -345,6 +372,7 @@ impl GasPool {
             xray_only: false,
             hidden: false,
             born: 0,
+            ceil_y: host.ceil_y,
             child: None,
             rot: [0.0; 3],
         });
@@ -361,7 +389,7 @@ impl GasPool {
     /// [M :242-244]. VEL NULL → the kind-7 wind path (as `init_gt_shot_smoke`).
     /// Draws per emission, in order [M]: 1. `Rand_FRand(1.0)` (0x1324b4 — the offset fraction);
     /// 2. `Rand_FRand(2π)` (0x132504, 0x40c90fdb); 3. the spin; 4. the sign; 5-7. the wind ×3.
-    pub fn init_gunimp_smoke(&mut self, rng: &mut crate::drone::Rng, pos: V3, back: V3, radius: f32) {
+    pub fn init_gunimp_smoke(&mut self, rng: &mut crate::drone::Rng, pos: V3, back: V3, radius: f32, host: HostCel) {
         let k = rng.frand(1.0); // [M 0x1324b4] — the offset fraction along the barrel axis
         let _rot_z = rng.frand(6.2831853); // [M 0x132504]
         let spin_mag = rng.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
@@ -369,7 +397,8 @@ impl GasPool {
         let (rx, ry, rz) = (rng.frand(0.2), rng.frand(0.2), rng.frand(0.2));
         if self.puffs.len() >= Self::CAP { return; }
         let pos = [pos[0] + back[0] * radius * k, pos[1] + back[1] * radius * k, pos[2] + back[2] * radius * k];
-        let vel = [rx - 0.1, ry, rz - 0.1].map(|j| mul_ee(j, REC_FRAME_RATE));
+        // The kind-7 NULL-vel wind term, the searchlight site's shape [M 0x1aacc8:108-115].
+        let vel = [host.wind[0] + (rx - 0.1), host.wind[1] + ry, host.wind[2] + (rz - 0.1)].map(|j| mul_ee(j, REC_FRAME_RATE));
         self.puffs.push(Gas {
             pos,
             vel,
@@ -385,6 +414,7 @@ impl GasPool {
             xray_only: false,
             hidden: false,
             born: 0,
+            ceil_y: host.ceil_y,
             child: None,
             rot: [0.0; 3],
         });
@@ -407,7 +437,7 @@ impl GasPool {
     /// 0xb SCALES it ×0.25 [M 0x1aacc8:72-88 `mul.s f0, f1, 0.25` on the kind==0xb arm];
     /// 6. the sign `Rand_Rand(0x100)`. The kind-0xb update moves the puff by the stored vel plus
     /// the shared buoyancy and caps the spin rate [M 0x1ab2d0 case 0xb].
-    pub fn init_trail_big_puff(&mut self, rng: &mut crate::drone::Rng, pos: V3) {
+    pub fn init_trail_big_puff(&mut self, rng: &mut crate::drone::Rng, pos: V3, host: HostCel) {
         let vx = rng.frand(0.3) - 0.15 + 0.6; // MVar2(0.3, 0.15) + 0.6 [M 0x12ccc4+0x12cce0]
         let vz = rng.frand(0.3) - 0.15 + 0.3; // MVar2(0.3, 0.15) + 0.3 [M 0x12cce4, stored to sp+0x18 = z]
         let vy = rng.frand(0.1) - 0.05 + 0.5; // MVar2(0.1, 0.05) + 0.5 [M 0x12cd08, stored to sp+0x14 = y]
@@ -430,6 +460,7 @@ impl GasPool {
             xray_only: false,
             hidden: false,
             born: 0,
+            ceil_y: host.ceil_y, // the kind-0xb ceiling clamp [M gases_smoke 0x1ab2d0 :200-203]
             child: None,
             rot: [0.0; 3],
         });
@@ -450,7 +481,7 @@ impl GasPool {
     /// (the searchlight precedent). The kind-7 update is pure buoyancy — the puff hangs and fades.
     /// Records with bit 0x2 [L ee_start_05.bin @ 0x2bf150 sweep]: 0x1b (the AR's GL), 0x36 (the
     /// stun grenade), 0x69 — all gravity bullets (+0x6C & 8), so the port's Grenade path.
-    pub fn init_trail_smoke(&mut self, rng: &mut crate::drone::Rng, pos: V3) {
+    pub fn init_trail_smoke(&mut self, rng: &mut crate::drone::Rng, pos: V3, host: HostCel) {
         let yaw = rng.frand(6.25);
         let spin_mag = rng.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
         let spin = if rng.rand(0x100) >= 0x80 { -spin_mag } else { spin_mag };
@@ -470,6 +501,7 @@ impl GasPool {
             xray_only: false,
             hidden: false,
             born: 0,
+            ceil_y: host.ceil_y, // kind 7 takes the case-0→7 clamp [M :66-77]; vel is GIVEN (no wind draws)
             child: None,
             rot: [0.0; 3],
         });
@@ -485,7 +517,7 @@ impl GasPool {
     /// `swc1 $f0, 0x28($sp)`], so kind 0's `vel · REC_FRAME_RATE` gives a ≤0.104/tick drift.
     /// Draws: the caller's 1 + the 2 spin draws = 3 per puff. Records with bit 0x20 [L sweep]:
     /// 0x2a/0x2b (the Militek MGL twins).
-    pub fn init_exhaust_puff(&mut self, rng: &mut crate::drone::Rng, pos: V3) {
+    pub fn init_exhaust_puff(&mut self, rng: &mut crate::drone::Rng, pos: V3, host: HostCel) {
         let vz = rng.frand(6.25);
         let spin_mag = rng.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
         let spin = if rng.rand(0x100) >= 0x80 { -spin_mag } else { spin_mag };
@@ -510,6 +542,7 @@ impl GasPool {
             xray_only: false,
             hidden: false,
             born: 0,
+            ceil_y: host.ceil_y, // kind 0 falls into the case-7 clamp body [M :66-77]
             child: None,
             rot: [0.0; 3],
         });
@@ -551,6 +584,7 @@ impl GasPool {
             xray_only: false,
             hidden: false,
             born: 0,
+            ceil_y: None, // [S] residual: case 3/6's clamp + growth-skip (0x1ab2d0 :100-106) rides on a render check — the copter smoke's growth is already held for one
             child: None,
             rot: [0.0; 3],
         });
@@ -564,16 +598,16 @@ impl GasPool {
     /// velocity branch — kind 4 with a GIVEN velocity: `vel·REC + Rand_FRand(0.05)` on x and z, no
     /// y draw [M 0x1ab21c/0x1ab248; decompile :91-98 — the draw is ADDED raw, not centred]; kind 7
     /// with a NULL velocity (every kind-7 caller here passes NULL — the muzzle 0x1a4428, the
-    /// Effect_Bullet entries 0x1cea80): `Env_GetWindVel` — the port passes 0, a KEPT deviation
-    /// [S] with the game's answer stated (see `init_searchlight_smoke`: disc wind radiators
-    /// exist [D 07000004 #5 et al.]; the gas sites lack the cel-host plumbing) + the
+    /// Effect_Bullet entries 0x1cea80): `Env_GetWindVel(param_3, param_4)` — the port resolves
+    /// the cel argument into `host` (`Rbodies::host_at`) and passes its wind [M 0x1aacc8:108;
+    /// the old "port passes 0" deviation is CLOSED by gas-cel-host] + the
     /// `(rand−0.1, rand, rand−0.1)` spread over 0.2 [M 0x1ab160/0x1ab184/0x1ab1a4;
     /// decompile :108-116]; every other kind: the (0, REC, 0) default, no draws [M decompile
     /// :105-129]. The draws land BEFORE the pool-cap check — the game's RNG has no notion of the
     /// port's cap, and a skipped draw would shift the shared stream. The life gate stays first:
     /// the game draws nothing when the 11th arg (the life ushort) is 0 [M 0x1aacc8:31].
     #[allow(clippy::too_many_arguments)]
-    pub fn init_ex(&mut self, rng: &mut crate::drone::Rng, mesh: u32, pos: V3, yaw: f32, vel: V3, p1: f32, p2: f32, kind: u8, rgba: [u8; 4], rgba_end: u32, life: f32) {
+    pub fn init_ex(&mut self, rng: &mut crate::drone::Rng, mesh: u32, pos: V3, yaw: f32, vel: V3, p1: f32, p2: f32, kind: u8, rgba: [u8; 4], rgba_end: u32, life: f32, host: HostCel) {
         if life <= 0.0 { return; }
         // Draw 1: the spin [M 0x1ab060], quartered for kind 0xb [M 0x1aacc8:74-76].
         let mut spin_mag = rng.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
@@ -589,7 +623,9 @@ impl GasPool {
             ],
             7 => {
                 let (rx, ry, rz) = (rng.frand(0.2), rng.frand(0.2), rng.frand(0.2));
-                [mul_ee(rx - 0.1, REC_FRAME_RATE), mul_ee(ry, REC_FRAME_RATE), mul_ee(rz - 0.1, REC_FRAME_RATE)]
+                // The wind term [M 0x1aacc8:108-115]: Env_GetWindVel(cel, pos) first, then the
+                // spread's −0.1 on the DRAW, then the wind, then the REC multiply.
+                [host.wind[0] + (rx - 0.1), host.wind[1] + ry, host.wind[2] + (rz - 0.1)].map(|j| mul_ee(j, REC_FRAME_RATE))
             }
             // fx-gas-and-blasts row 5: kinds 9/10 are the HIDDEN cloud emitters — the game's
             // LAB_001ab1e4 vel store re-uses the caller's ROT vector as the velocity [M 0x1aacc8
@@ -627,6 +663,7 @@ impl GasPool {
             xray_only: false,
             hidden: matches!(kind, 9 | 10), // [M LAB_001ab1e4: `obj+0xf0 |= 0x10`]
             born: self.frame,
+            ceil_y: host.ceil_y, // the kinds-0/7/0xb clamp word [M gases_smoke 0x1ab2d0 :66-77/:200-203]
             child,
             rot: [0.0; 3],
         });
@@ -640,8 +677,8 @@ impl GasPool {
     /// `Vec_NormToRot(normal)` [M 0x1ce8a8:129], floor puffs with the negated-normal euler or zero
     /// by the entry's +0x1b byte [M :122-127]. Everything else is `init_ex` exactly.
     #[allow(clippy::too_many_arguments)]
-    pub fn init_ex_rot(&mut self, rng: &mut crate::drone::Rng, mesh: u32, pos: V3, yaw: f32, vel: V3, p1: f32, p2: f32, kind: u8, rgba: [u8; 4], rgba_end: u32, life: f32, rot: [f32; 3]) {
-        self.init_ex(rng, mesh, pos, yaw, vel, p1, p2, kind, rgba, rgba_end, life);
+    pub fn init_ex_rot(&mut self, rng: &mut crate::drone::Rng, mesh: u32, pos: V3, yaw: f32, vel: V3, p1: f32, p2: f32, kind: u8, rgba: [u8; 4], rgba_end: u32, life: f32, rot: [f32; 3], host: HostCel) {
+        self.init_ex(rng, mesh, pos, yaw, vel, p1, p2, kind, rgba, rgba_end, life, host);
         if let Some(g) = self.puffs.last_mut() { g.rot = rot; }
     }
 
@@ -654,10 +691,12 @@ impl GasPool {
         let mut children: Vec<(ChildSeed, V3, V3, u8, u8)> = Vec::new();
         self.puffs.retain_mut(|g| {
             match g.kind {
-                // Case 0 [M 0x1ab2d0 case 0]: vel damped ×0.95, gravity scaled −0.02, pos += vel.
+                // Case 0 [M 0x1ab2d0 case 0]: vel damped ×0.95, gravity scaled −0.02, pos += vel;
+                // then the case-7 body's ceiling clamp (the fallthrough shares it).
                 0 => {
                     for k in 0..3 { g.vel[k] *= 0.95; }
                     for k in 0..3 { g.pos[k] += g.vel[k] + WLD_GRAVITY[k] * -0.02 * REC_FRAME_RATE; }
+                    if let Some(cy) = g.ceil_y { if cy < g.pos[1] { g.pos[1] = cy; } }
                 }
                 // Case 4 [M 0x1ab2d0 case 4]: pos += vel + gravity·0.01, vel damped.
                 4 => {
@@ -668,10 +707,14 @@ impl GasPool {
                 // WldGravity·(REC_FRAME_RATE·−0.02·FRAME_RATE_MUL) — the puff KEEPS its own wind
                 // velocity and the negative gravity factor is an upward buoyancy (y +=
                 // 9.8·0.02/60 ≈ +0.0033/tick). rocket-trail-gas: the old arm sank the puff at
-                // gravity·0.05 and dropped vel entirely.
+                // gravity·0.05 and dropped vel entirely. gas-cel-host: the body's ceiling clamp
+                // [M :66-77 — `fVar4 = *(obj+0x20)+0x54; if (fVar4 < pos.y) pos.y = fVar4`, read
+                // EVERY tick after the motion; obj+0x20 = the puff's own room cel, linked by
+                // build_LinkToRoom 0x1c9680 at the spawn with the caller's cel as the fallback].
                 7 => {
                     for k in 0..3 { g.pos[k] += g.vel[k]; }
                     g.pos[1] += WLD_GRAVITY[1] * -0.02 * REC_FRAME_RATE;
+                    if let Some(cy) = g.ceil_y { if cy < g.pos[1] { g.pos[1] = cy; } }
                 }
                 // fx-gas-and-blasts row 5 [M 0x1ab2d0 case 9 = :146-162]: the hidden cloud emitter
                 // — no motion; after the 20-tick creation warmup (`GameState - obj[0xec] <
@@ -706,13 +749,15 @@ impl GasPool {
                 // rising puff (vel (0, REC, 0) + buoyancy up [M 0x1aacc8:105-129's default])
                 // reaches and holds. CORRECTED (markers-world-objects 2026-11-08): the old
                 // "the clamp is a no-op for it [S]" reasoning was wrong — the puff only rises,
-                // which is exactly why the clamp binds. The port's puffs still carry no cel
-                // host, so the clamp stays unported [S]: the port's smoke keeps rising past the
-                // room top where the game's holds at the ceiling (visual only; the 0xb site is
-                // the flashbang puff, drone.rs's Bullet_DoTrails arm).
+                // which is exactly why the clamp binds. PORTED (gas-cel-host 2026-11-09): the
+                // puff's own room cel resolves at the spawn through `HostCel`
+                // (`build_LinkToRoom` 0x1c9680's lookup at the puff's world-sphere centre,
+                // fallback the caller's cel [M 0x1aacc8:84-87]) and the clamp runs every tick
+                // after the motion, as the game's does.
                 0xb => {
                     for k in 0..3 { g.pos[k] += g.vel[k]; }
                     g.pos[1] += WLD_GRAVITY[1] * -0.02 * REC_FRAME_RATE;
+                    if let Some(cy) = g.ceil_y { if cy < g.pos[1] { g.pos[1] = cy; } }
                 }
                 _ => {}
             }
@@ -756,6 +801,7 @@ impl GasPool {
             xray_only: false,
             hidden: false,
             born: self.frame,
+            ceil_y: None, // the emitter children re-link through the parent's cel; no port caller reaches here (the audit census) — revisit with the first kind-9/10 creator
             child: None,
             rot: [0.0; 3],
         });
@@ -776,7 +822,7 @@ mod tests {
         assert_ne!(GAS_OBJ_FLAGS & NIGHT_QUARTER_ALPHA, 0);
         let mut rng = crate::drone::Rng::new(0x21d);
         let mut pool = GasPool::default();
-        pool.init(&mut rng, [0.0; 3], 0.0, [0.0; 3], 0.5, 0.5, 0, [0xff, 0xff, 0xff, 0xc8], 60.0);
+        pool.init(&mut rng, [0.0; 3], 0.0, [0.0; 3], 0.5, 0.5, 0, [0xff, 0xff, 0xff, 0xc8], 60.0, HostCel::default());
         let g = &mut pool.puffs[0];
         g.rgba[3] = 199.9;
         assert_eq!(g.alpha_byte(), 199);
@@ -796,7 +842,7 @@ mod tests {
         // the six draws replayed on a twin stream, bit for bit.
         let mut rng = crate::drone::Rng::new(0x5e4c04);
         let mut pool = GasPool::default();
-        pool.init_searchlight_smoke(&mut rng, [1.0, 2.0, 3.0]);
+        pool.init_searchlight_smoke(&mut rng, [1.0, 2.0, 3.0], HostCel::default());
         assert_eq!(pool.puffs.len(), 1);
         let g = &pool.puffs[0];
         assert_eq!(g.life, 128.0, "the decomp-dropped 11th arg = 0x80 [M 0x1cbce0]");
@@ -821,7 +867,7 @@ mod tests {
         // order, so a seventh replay continues both streams identically.
         let mut a = crate::drone::Rng::new(0x5e4c04);
         let mut pool2 = GasPool::default();
-        pool2.init_searchlight_smoke(&mut a, [0.0; 3]);
+        pool2.init_searchlight_smoke(&mut a, [0.0; 3], HostCel::default());
         let mut b = crate::drone::Rng::new(0x5e4c04);
         for _ in 0..6 { b.frand(1.0); }
         let a7 = a.frand(1.0).to_bits();
@@ -834,7 +880,7 @@ mod tests {
     fn a_puff_grows_fades_and_dies() {
         let mut rng = crate::drone::Rng::new(0x21d);
         let mut pool = GasPool::default();
-        pool.init(&mut rng, [1.0, 2.0, 3.0], 0.0, [0.0; 3], 0.05, 0.10, 7, [0x48, 0x40, 0x30, 0x80], 8.0);
+        pool.init(&mut rng, [1.0, 2.0, 3.0], 0.0, [0.0; 3], 0.05, 0.10, 7, [0x48, 0x40, 0x30, 0x80], 8.0, HostCel::default());
         assert_eq!(pool.puffs.len(), 1);
         let g0 = pool.puffs[0].clone();
         pool.update(0);
@@ -852,10 +898,10 @@ mod tests {
         let mut rb = crate::drone::Rng::new(0x21d);
         let mut a = GasPool::default();
         let mut b = GasPool::default();
-        for i in 0..64 { a.init(&mut ra, [i as f32, 0.0, 0.0], 0.0, [0.0; 3], 0.05, 0.1, 7, [72, 64, 48, 128], 4.0); }
-        for i in 0..64 { b.init(&mut rb, [i as f32, 0.0, 0.0], 0.0, [0.0; 3], 0.05, 0.1, 7, [72, 64, 48, 128], 4.0); }
+        for i in 0..64 { a.init(&mut ra, [i as f32, 0.0, 0.0], 0.0, [0.0; 3], 0.05, 0.1, 7, [72, 64, 48, 128], 4.0, HostCel::default()); }
+        for i in 0..64 { b.init(&mut rb, [i as f32, 0.0, 0.0], 0.0, [0.0; 3], 0.05, 0.1, 7, [72, 64, 48, 128], 4.0, HostCel::default()); }
         assert_eq!(a.puffs, b.puffs, "same calls, same draws, same puffs (no wall-clock)");
-        for _ in 0..200 { a.init(&mut ra, [0.0; 3], 0.0, [0.0; 3], 0.05, 0.1, 7, [72, 64, 48, 128], 4.0); }
+        for _ in 0..200 { a.init(&mut ra, [0.0; 3], 0.0, [0.0; 3], 0.05, 0.1, 7, [72, 64, 48, 128], 4.0, HostCel::default()); }
         assert_eq!(a.puffs.len(), GasPool::CAP, "the pool caps");
     }
 
@@ -868,7 +914,7 @@ mod tests {
         // kind 0: spin + sign only, default (0, REC, 0) velocity.
         let mut rng = crate::drone::Rng::new(0x5e4c04);
         let mut pool = GasPool::default();
-        pool.init_ex(&mut rng, SMOKE_QUAD, [0.0; 3], 0.0, [9.0, 9.0, 9.0], 0.05, 0.1, 0, [255, 255, 255, 200], 0, 40.0);
+        pool.init_ex(&mut rng, SMOKE_QUAD, [0.0; 3], 0.0, [9.0, 9.0, 9.0], 0.05, 0.1, 0, [255, 255, 255, 200], 0, 40.0, HostCel::default());
         let mut r = crate::drone::Rng::new(0x5e4c04);
         let spin = r.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
         let sign = r.rand(0x100);
@@ -880,7 +926,7 @@ mod tests {
         assert_eq!(rng.draws, r.draws, "the pool's stream matches the replay");
         // kind 7: spin + sign + the 3 wind draws; vel = (r−0.1, r, r−0.1)·REC [M 0x1aacc8:108-116].
         let mut pool7 = GasPool::default();
-        pool7.init_ex(&mut rng, SMOKE_QUAD, [1.0, 2.0, 3.0], 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0);
+        pool7.init_ex(&mut rng, SMOKE_QUAD, [1.0, 2.0, 3.0], 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0, HostCel::default());
         let spin7 = r.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
         let sign7 = r.rand(0x100);
         let (rx, ry, rz) = (r.frand(0.2), r.frand(0.2), r.frand(0.2));
@@ -893,7 +939,7 @@ mod tests {
         assert_eq!(r.draws, 7, "kind 7 consumed exactly the game's 5 more draws");
         // kind 4: spin + sign + 2 jitter draws; x/z = given·REC + the RAW draw [M 0x1aacc8:91-98].
         let mut pool4 = GasPool::default();
-        pool4.init_ex(&mut rng, SMOKE_QUAD, [0.0; 3], 0.0, [1.0, 2.0, 3.0], 0.3, 1.5, 4, [255, 255, 255, 255], 1, 20.0);
+        pool4.init_ex(&mut rng, SMOKE_QUAD, [0.0; 3], 0.0, [1.0, 2.0, 3.0], 0.3, 1.5, 4, [255, 255, 255, 255], 1, 20.0, HostCel::default());
         let spin4 = r.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
         let sign4 = r.rand(0x100);
         let (jx, jz) = (r.frand(0.05), r.frand(0.05));
@@ -906,7 +952,7 @@ mod tests {
         assert_eq!(r.draws, 11, "kind 4 consumed exactly the game's 4 more draws");
         // kind 0xb: the quarter spin [M 0x1aacc8:74-76], sign coin, default velocity.
         let mut poolb = GasPool::default();
-        poolb.init_ex(&mut rng, 0x0200_001f, [0.0; 3], 0.0, [0.0; 3], 0.5, 1.68, 0xb, [255, 255, 255, 127], 0x8080_8000, 127.0);
+        poolb.init_ex(&mut rng, 0x0200_001f, [0.0; 3], 0.0, [0.0; 3], 0.5, 1.68, 0xb, [255, 255, 255, 127], 0x8080_8000, 127.0, HostCel::default());
         let spinb = r.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE) * 0.25;
         let signb = r.rand(0x100);
         let gb = &poolb.puffs[0];
@@ -929,7 +975,7 @@ mod tests {
     fn gt_shot_smoke_draws_six_and_lands_the_values() {
         let mut pool = GasPool::default();
         let mut rng = crate::drone::Rng::new(11);
-        pool.init_gt_shot_smoke(&mut rng, [3.0, 4.0, 5.0]);
+        pool.init_gt_shot_smoke(&mut rng, [3.0, 4.0, 5.0], HostCel::default());
         assert_eq!(pool.puffs.len(), 1);
         let g = &pool.puffs[0];
         assert_eq!(g.pos, [3.0, 4.0, 5.0]);
@@ -950,7 +996,7 @@ mod tests {
         let mut r3 = crate::drone::Rng::new(11);
         let mut pool3 = GasPool::default();
         let _shift = r3.frand(1.0);
-        pool3.init_gt_shot_smoke(&mut r3, [3.0, 4.0, 5.0]);
+        pool3.init_gt_shot_smoke(&mut r3, [3.0, 4.0, 5.0], HostCel::default());
         assert_ne!(pool3.puffs[0].spin, pool.puffs[0].spin);
     }
 
@@ -963,7 +1009,7 @@ mod tests {
     fn trail_big_puff_draws_six_and_lands_the_values() {
         let mut pool = GasPool::default();
         let mut rng = crate::drone::Rng::new(5);
-        pool.init_trail_big_puff(&mut rng, [1.0, 1.0, 1.0]);
+        pool.init_trail_big_puff(&mut rng, [1.0, 1.0, 1.0], HostCel::default());
         assert_eq!(pool.puffs.len(), 1);
         let g = &pool.puffs[0];
         assert_eq!(g.mesh, 0x0200_001f);
@@ -1001,7 +1047,7 @@ mod emitter_tests {
         let mut pool = GasPool::default();
         let mut rng = crate::drone::Rng::new(0x5e4c04);
         pool.update(100); // the pool's frame stamp (GameState during tick 100)
-        pool.init_ex(&mut rng, SMOKE_QUAD, [1.0, 2.0, 3.0], 0.0, [0.0; 3], 0.5, 1.0, 9, [0x40, 0x40, 0x40, 0xff], 0x40404001, 600.0);
+        pool.init_ex(&mut rng, SMOKE_QUAD, [1.0, 2.0, 3.0], 0.0, [0.0; 3], 0.5, 1.0, 9, [0x40, 0x40, 0x40, 0xff], 0x40404001, 600.0, HostCel::default());
         let p = &pool.puffs[0];
         assert!(p.hidden, "the kind-9 parent takes the +0x10 hidden bit [M LAB_001ab1e4]");
         assert_eq!(p.child.as_ref().unwrap().life, 600.0, "kind 9 keeps its life");
@@ -1033,7 +1079,7 @@ mod emitter_tests {
         let mut pool = GasPool::default();
         let mut rng = crate::drone::Rng::new(0x5e4c04);
         pool.update(0);
-        pool.init_ex(&mut rng, SMOKE_QUAD, [0.0; 3], 0.0, [0.0; 3], 0.4, 2.0, 10, [0x80, 0x80, 0x80, 0xc8], 0x80808064, 100.0);
+        pool.init_ex(&mut rng, SMOKE_QUAD, [0.0; 3], 0.0, [0.0; 3], 0.4, 2.0, 10, [0x80, 0x80, 0x80, 0xc8], 0x80808064, 100.0, HostCel::default());
         let p = &pool.puffs[0];
         assert!(p.hidden);
         assert!((p.life - 50.0).abs() < 1e-4, "kind 10 halves the life at creation [M 0x1aacc8 `pfVar1[0xe] *= 0.5`]");
@@ -1050,5 +1096,57 @@ mod emitter_tests {
         assert!((c.life - 50.0).abs() < 1e-4, "the child's life comes from the record");
         pool.update(15); // & 7 == 7 again
         assert_eq!(pool.puffs.iter().filter(|g| g.kind == 7).count(), 2);
+    }
+
+    /// gas-cel-host: the kind-7 NULL-vel wind term — `Env_GetWindVel(cel, pos)` lands in the
+    /// vel slot BEFORE the spread draws, then one ·REC [M 0x1aacc8:108-115 disasm:
+    /// `*pfVar1 = (*pfVar1 + (fVar11 - fVar10)) * REC_FRAME_RATE` — the −0.1 rides the DRAW,
+    /// the wind rides the cel]. The puff's draw count is unchanged (the wind read consumes
+    /// no shared draws [M 0x17c048 has no Rand call]). Sisters: the clamp binds kinds 7/0xb
+    /// but not 4.
+    #[test]
+    fn kind7_wind_term_rides_the_host_cel_and_the_clamp_binds() {
+        // The wind term, bit for bit: a twin stream replays the six draws; the vel must equal
+        // (wind + (r−0.1), wind + r, wind + (r−0.1)) · REC.
+        let wind = [0.42f32, -0.17, 0.9];
+        let mut rng = crate::drone::Rng::new(0x5e4c04);
+        let mut pool = GasPool::default();
+        pool.init_searchlight_smoke(&mut rng, [1.0, 2.0, 3.0], HostCel { wind, ceil_y: Some(4.0) });
+        let mut r = crate::drone::Rng::new(0x5e4c04);
+        let _rot_z = r.frand(std::f32::consts::PI);
+        let spin = r.frand(std::f32::consts::FRAC_PI_2 * REC_FRAME_RATE);
+        let sign = r.rand(0x100);
+        let expect_spin = if sign >= 0x80 { -spin } else { spin };
+        let (rx, ry, rz) = (r.frand(0.2), r.frand(0.2), r.frand(0.2));
+        let g = &pool.puffs[0];
+        assert_eq!(g.spin.to_bits(), expect_spin.to_bits());
+        assert_eq!(g.vel[0].to_bits(), mul_ee(wind[0] + (rx - 0.1), REC_FRAME_RATE).to_bits(), "x: (wind + (r−0.1))·REC [M 0x1ab160]");
+        assert_eq!(g.vel[1].to_bits(), mul_ee(wind[1] + ry, REC_FRAME_RATE).to_bits(), "y: (wind + r)·REC — no −0.1 [M 0x1ab184]");
+        assert_eq!(g.vel[2].to_bits(), mul_ee(wind[2] + (rz - 0.1), REC_FRAME_RATE).to_bits(), "z: (wind + (r−0.1))·REC [M 0x1ab1a4]");
+        assert_eq!(g.ceil_y, Some(4.0), "the puff carries its host cel's +0x54");
+        // The draw count is the game's 6 — the wind read is not a draw [M 0x17c048].
+        assert_eq!(rng.draws, 6);
+        // The clamp: the kind-7 puff at y 5.0 with the ceiling 4.0 snaps DOWN on the first tick.
+        let mut pool7 = GasPool::default();
+        pool7.puffs.push(Gas { pos: [0.0, 5.0, 0.0], vel: [0.0; 3], mesh: SMOKE_QUAD, scale: 0.1, scale_rate: 0.0,
+            rgba: [64.0; 4], rgba_rate: [0.0; 4], spin: 0.0, life: 10.0, kind: 7, billboard: false,
+            xray_only: false, hidden: false, born: 0, ceil_y: Some(4.0), child: None, rot: [0.0; 3] });
+        pool7.update(0);
+        assert_eq!(pool7.puffs[0].pos[1], 4.0, "kind 7 clamps to the host cel's +0x54 [M :66-77]");
+        // The kind-0xb puff rises into the ceiling and HOLDS there (the game's rule).
+        let mut poolb = GasPool::default();
+        poolb.puffs.push(Gas { pos: [0.0, 3.99, 0.0], vel: [0.0, mul_ee(0.5, REC_FRAME_RATE), 0.0], mesh: 0x0200_001f, scale: 0.2, scale_rate: 0.0,
+            rgba: [64.0; 4], rgba_rate: [0.0; 4], spin: 0.0, life: 255.0, kind: 0xb, billboard: false,
+            xray_only: false, hidden: false, born: 0, ceil_y: Some(4.0), child: None, rot: [0.0; 3] });
+        for i in 0..250 { poolb.update(i); }
+        assert_eq!(poolb.puffs.len(), 1, "still alive inside its 255-tick life");
+        assert!((poolb.puffs[0].pos[1] - 4.0).abs() < 1e-5, "the puff stops under the ceiling, never past it (2.08 raw rise held at 4.0)");
+        // Sister: kind 4's case body has no cel read [M :107-129] — the clamp must not bind.
+        let mut pool4 = GasPool::default();
+        pool4.puffs.push(Gas { pos: [0.0, 5.0, 0.0], vel: [0.0; 3], mesh: SMOKE_QUAD, scale: 0.1, scale_rate: 0.0,
+            rgba: [64.0; 4], rgba_rate: [0.0; 4], spin: 0.0, life: 10.0, kind: 4, billboard: false,
+            xray_only: false, hidden: false, born: 0, ceil_y: Some(4.0), child: None, rot: [0.0; 3] });
+        pool4.update(0);
+        assert!(pool4.puffs[0].pos[1] > 4.0, "kind 4 takes no clamp [M case 4 body]");
     }
 }

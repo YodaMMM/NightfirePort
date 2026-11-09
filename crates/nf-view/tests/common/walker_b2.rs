@@ -77,6 +77,9 @@ pub struct Walker {
     pub top_up_health: bool,
     /// Real-damage bookkeeping (damage_log.rs): live whenever the top-up is off.
     pub dmg: DamageLog,
+    /// Called after every stepped tick with the scene and the tick count (an observer, as in
+    /// walker.rs). `None` by default: no walk changes.
+    pub on_step: Option<Box<dyn FnMut(&Scene, u32)>>,
     /// Stop the walk the moment `level_exit` is requested.
     pub stop_on_exit: bool,
     pub report: Report,
@@ -150,7 +153,7 @@ impl Walker {
         nf_view::attach_headless_sound(&mut scene);
         let pos = scene.sim.as_ref().unwrap().bond.pos;
         Walker {
-            scene, top_up_health: true, dmg: DamageLog::new(), stop_on_exit: true,
+            scene, top_up_health: true, dmg: DamageLog::new(), on_step: None, stop_on_exit: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0, float_ticks: 0,
             sidestep: 0, max_y: pos[1], lenient: false, stuck_answers: false,
@@ -176,6 +179,7 @@ impl Walker {
             if let Some(d) = &self.dmg.died { panic!("[real-damage] {d}"); }
         }
         if self.tops_up() { self.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+        if let Some(f) = self.on_step.as_mut() { f(&self.scene, tick); }
     }
 
     fn sim(&mut self) -> &mut nf_view::scene::Sim { self.scene.sim.as_mut().unwrap() }
@@ -606,6 +610,28 @@ impl Walker {
 
     /// `walk_to` that reports a wedge instead of panicking (resupply / guard approach skip the
     /// unreachable target and the caller carries on).
+    /// Turn Bond to face the world direction `(x, z)` with the turn channel only — the player's
+    /// stick turn (`Player_Update` integrates `bd+0x34` into `obj+0x50`'s yaw [M player.rs
+    /// `self.yaw += input.turn`], no teleport, no aim write). The game's yaw convention is the
+    /// look `(sin yaw, ·, cos yaw)` — the same atan2f(x, z) family as `Vec_DirToRot` 0x1e3218
+    /// [M]. Used before an E press whose ray needs Bond facing the object: a return-fire stand
+    /// inside the arrival leg leaves the fight's yaw, and the use pick (head + look) misses.
+    /// latch-walks-on-master: opt-in per call site — no walk changes unless it calls this.
+    pub fn face_toward(&mut self, x: f32, z: f32, label: &str) {
+        let target = x.atan2(z);
+        for _ in 0..240 {
+            let yaw = self.scene.sim.as_ref().unwrap().bond.yaw;
+            let mut diff = target - yaw;
+            while diff > std::f32::consts::PI { diff -= 2.0 * std::f32::consts::PI; }
+            while diff < -std::f32::consts::PI { diff += 2.0 * std::f32::consts::PI; }
+            if diff.abs() < 0.02 { return; }
+            let t = diff.clamp(-0.2, 0.2);
+            self.tick(nf_game::player::Input { turn: t, ..Default::default() }, false);
+        }
+        eprintln!("[walk] {label}: face_toward gave up (yaw {} vs target {})",
+            self.scene.sim.as_ref().unwrap().bond.yaw, target);
+    }
+
     pub fn try_walk_to(&mut self, wp: Wp, label: &str) -> bool {
         self.lenient = true;
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.walk_to(wp, label)));
