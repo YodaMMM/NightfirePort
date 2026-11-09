@@ -18,6 +18,53 @@ fn probe_0b_parachute_take_zone() {
         eprintln!("[take-probe] parachute at ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
         p
     };
+    // v2 sweep: Bond at STANDING height (the real walk's capsule centre y 58.07 on the 57.03
+    // deck [L the death run (2.26,58.11,40.99)]), plus a jump variant at the face — the v1
+    // embedded y (pp[1]-1.4 = 57.05) may eject and fake a crossing.
+    for (x, z0, y, jump) in [
+        (0.6f32, 40.0f32, 58.07f32, false),
+        (1.0, 40.0, 58.07, false),
+        (1.4, 40.0, 58.07, false),
+        (1.8, 40.0, 58.07, false),
+        (2.2, 40.0, 58.07, false),
+        (2.2, 40.0, 58.07, true),
+        (2.6, 40.0, 58.07, false),
+        (2.6, 40.0, 58.07, true),
+        (3.0, 40.0, 58.07, false),
+        (3.4, 40.0, 58.07, false),
+        (2.2, 38.0, 58.07, false),
+        (1.4, 38.0, 58.07, false),
+    ] {
+        {
+            let mut scene = nf_view::load_with_carry(&iso(), "0700000b.bin", false, None).expect("load");
+            scene.sim.as_mut().unwrap().drones.set_channel(0x2a);
+            {
+                let sim = scene.sim.as_mut().unwrap();
+                sim.bond.pos = [x, y, z0];
+                sim.bond.vel = [0.0; 3];
+                sim.bond.yaw = 0.0; // face north (+Z): the walk's yaw = atan2(dx, dz) convention
+            }
+            for i in 0..240 {
+                let inp = nf_game::player::Input {
+                    forward: 1.0,
+                    jump: jump && i % 30 == 12,
+                    ..Default::default()
+                };
+                scene.sim.as_mut().unwrap().step_bond(inp, false, false, false);
+                if scene.sim.as_ref().unwrap().drones.channels.on(0x3f) {
+                    let b = scene.sim.as_ref().unwrap().bond.pos;
+                    eprintln!("[take-probe] stand-push from ({:.1},{:.2},{:.1}) jump {}: TAKEN at tick {} at ({:.2},{:.2},{:.2})",
+                        x, y, z0, jump, i, b[0], b[1], b[2]);
+                    break;
+                }
+                if i == 239 {
+                    let b = scene.sim.as_ref().unwrap().bond.pos;
+                    eprintln!("[take-probe] stand-push from ({:.1},{:.2},{:.1}) jump {}: walled at ({:.2},{:.2},{:.2})",
+                        x, y, z0, jump, b[0], b[1], b[2]);
+                }
+            }
+        }
+    }
     for x in [0.6f32, 1.0, 1.4, 1.8, 2.2, 2.6, 3.0, 3.4, 3.8] {
         for z0 in [40.0f32] {
             let mut scene = nf_view::load_with_carry(&iso(), "0700000b.bin", false, None).expect("load");

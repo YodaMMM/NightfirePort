@@ -790,10 +790,22 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
         // on the legs where their target is reachable; the deck's end is pure movement.
         let target = [pp[0] - 0.3, pp[1] - 1.4, pp[2] - 1.0];
         let start = w.total_ticks;
+        let mut stall_diag = 0u32;
         while w.total_ticks - start < 2400 {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.drones.channels.on(0x3f) { break; } // the take fires ON THE PASS — never stand
             let p = sim.bond.pos;
+            // [0b-stall] every 30 ticks: where the body sits against the face, its speed, and the
+            // take-sphere distance (the NF_PICKUPLOG take-test only logs when the gate passes).
+            if w.total_ticks - stall_diag >= 30 {
+                stall_diag = w.total_ticks;
+                let dx = pp[0] - p[0]; let dy = pp[1] - p[1]; let dz = pp[2] - p[2];
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                eprintln!("[0b-stall] t{} bond ({:.2},{:.2},{:.2}) vel ({:.2},{:.2},{:.2}) yaw {:.2} hp {:.1} take-dist {:.3}",
+                    w.total_ticks, p[0], p[1], p[2],
+                    sim.bond.vel[0], sim.bond.vel[1], sim.bond.vel[2], sim.bond.yaw,
+                    sim.drones.health.health, dist);
+            }
             let desired = (target[0] - p[0]).atan2(target[2] - p[2]);
             let err = walker::wrap_pi(desired - sim.bond.yaw);
             let input = nf_game::player::Input {
