@@ -118,3 +118,16 @@ fast first tap) and the -4's yard ledger applies.
 
 not visible to me — this environment shows no token, credit or context-window figures for
 this session.
+
+## ntfy failed
+
+All three fallbacks failed, exact output:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-0d-operative-walk-5: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'...', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → first attempt raised `SyntaxError: bytes can only contain ASCII literal characters`
+   (the em-dash in the body — my bug); the ASCII-only retry raised
+   `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "level-0d-operative-walk-5: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output; killed at the 30 s tool timeout (connection hung)
