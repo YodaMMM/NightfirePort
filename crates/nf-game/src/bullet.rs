@@ -402,7 +402,7 @@ impl PlayerHealth {
     /// flash += min(d · 21.333, 128), capped at 255. [L] 07000005 at difficulty 1: SG5 hits cost 1.65 = 2.75 × 0.6.
     /// Returns true when the game's 1-in-4 pain-grunt roll hits (the caller plays 0x88).
     pub fn pain(&mut self, rng: &mut crate::drone::Rng, damage: f32, difficulty: u32, level: u32) -> bool {
-        self.apply(rng, damage, difficulty, level, 1.0)
+        self.apply(rng, damage, difficulty, level, 1.0, None)
     }
 
     /// The shared `Player_HandlePain` body. `armour_frac` is the pain type's armour fraction
@@ -422,7 +422,14 @@ impl PlayerHealth {
     /// after the armour/health math, before the `+0x967`/`+0x968` writes [M 0x1902c8:110-119]. The
     /// game skips the roll only for pain type 7 with `CheatInfo != 0` (never in SP) — the port is
     /// single-player, so every non-early-outed pain draws.
-    fn apply(&mut self, rng: &mut crate::drone::Rng, damage: f32, difficulty: u32, level: u32, armour_frac: f32) -> bool {
+    fn apply(&mut self, rng: &mut crate::drone::Rng, damage: f32, difficulty: u32, level: u32, armour_frac: f32, dir_bits: Option<u8>) -> bool {
+        // The game's gates, in the game's order [M Player_HandlePain 0x1902c8:14-26, disasm
+        // 0x1902f8-0x190364]: `switch_channels[0x5f]` set → return (the script pain lock — the
+        // port's channels are not wired into this struct, see the report), health BL+0x894 <= 0
+        // → return (0x190318-0x19032c, `c.ole.s`/`bc1t` to 0x190604), damage <= 0 → return,
+        // (MP) `MPSettings._388_4_ != 0 && GameFlow_GetState() != 2` → return (the MP sim runs
+        // its own arm). A gated pain writes NOTHING: the first body store is BL+0x8bc = 1.0 at
+        // 0x190378, and the 1-in-4 grunt draw sits at :110-119 inside the body.
         if self.health <= 0.0 || damage <= 0.0 { return false; }
         let d = damage * damage_factor(level, difficulty);
         let absorbed = (d * armour_frac).min(self.armour);
@@ -431,6 +438,11 @@ impl PlayerHealth {
         // `if (fVar6 < 1.0) fVar6 = 0.0` before `Player_SetHealth` [M 0x1902c8:131-134]: a hit that
         // leaves less than one point kills.
         if self.health < 1.0 { self.health = 0.0; }
+        // The generic +0x967 write [M :121-125] — AFTER the gates, like the game: `0xC`, or 2 for
+        // pain type 6. `None` for the `pain` tail of `pain_from`, whose +0x967 is the bullet
+        // arm's own directional write [M 0x194458:203-226] that must survive this call (the game
+        // runs HandlePain first, then overwrites with the direction bits).
+        if let Some(b) = dir_bits { self.dir_bits = b; }
         let grunt = rng.rand(4) == 0; // Rand_Rand(4) [M 0x1902c8:111]
         self.flash = Self::pain_glow(self.flash, d);
         grunt
@@ -445,8 +457,11 @@ impl PlayerHealth {
     /// `Player_CollisionHandler` 0x1949a8:120), drowning (7, `Player_MonitorAir` 0x191a70:142) and
     /// the hurt-volume types drain health alone. Returns the grunt roll (see `apply`).
     pub fn pain_generic(&mut self, rng: &mut crate::drone::Rng, damage: f32, difficulty: u32, level: u32, pain_type: u32) -> bool {
-        self.dir_bits = if pain_type == 6 { 2 } else { 0xC };
-        self.apply(rng, damage, difficulty, level, if (1..=7).contains(&pain_type) { 0.0 } else { 1.0 })
+        self.apply(rng, damage, difficulty, level, if (1..=7).contains(&pain_type) { 0.0 } else { 1.0 },
+            // The body's generic +0x967 store [M 0x1902c8:121-125] — the game writes it after
+            // the health/damage gates, so a dead or zero-health player's pain changes nothing
+            // (pain-generic-gate: the old port set it before the gate). pain type 6 → 2.
+            Some(if pain_type == 6 { 2 } else { 0xC }))
     }
 
     /// `Player_DealWithObjHit` 0x194458:201-226: the attacker position transformed into the viewer's frame,
@@ -456,6 +471,10 @@ impl PlayerHealth {
     /// attacker's height over the eye — the same x rule exactly; the y rule is [S] (the world-up
     /// projection of a pitch-rotated frame). Returns the grunt roll (see `apply`).
     pub fn pain_from(&mut self, rng: &mut crate::drone::Rng, damage: f32, difficulty: u32, level: u32, attacker: [f32; 3], eye: [f32; 3], yaw: f32) -> bool {
+        // The bullet arm's OWN +0x967 store, written OUTSIDE `Player_HandlePain` and
+        // unconditionally — a bullet on a dead body still writes the direction bits in the game
+        // [M 0x194458:203-226]. The pre-write composes with `pain`'s None: `apply` must not
+        // touch the bits (the game's HandlePain stores 0xC first, then this arm overwrites).
         self.dir_bits = Self::hit_dir_bits(attacker, eye, yaw);
         self.pain(rng, damage, difficulty, level)
     }

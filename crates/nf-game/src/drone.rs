@@ -15524,15 +15524,24 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // Bond: `Player_Hurt` (the difficulty factor is applied in `explode_propagate`).
         if let Some(ph) = hits.player.filter(|_| !self.net_no_self_hurt) {
             let before = self.health.health;
+            let armour_before = self.health.armour;
             // `Explode_Propagate` → `Player_Hurt` → `Player_HandlePain` (type 0): BL+0x967 = 0xC
             // (both sides) [M 0x1902c8:124-130]. The pain grunt rides the 1-in-4 roll [M 0x1902c8:110-119].
-            if self.health.pain_generic(&mut self.rng, ph, self.difficulty, d.level, 0) {
+            let grunt = self.health.pain_generic(&mut self.rng, ph, self.difficulty, d.level, 0);
+            // pain-generic-gate: the pain LANDED iff a store moved — a gated pain (health <= 0 or
+            // damage <= 0 [M 0x1902c8:18-23]) writes nothing, and a landed one always moves a
+            // store (absorbed > 0 or the health subtract; type 0's frac is 1.0, so one of the two
+            // MIN/MAX stores at 0x1904ec/0x190510 always moves).
+            let landed = self.health.health != before || self.health.armour != armour_before;
+            if grunt {
                 self.play_pain_grunt(player_pos);
             }
-            // options-census: damage resets the pane fade [M Player_HandlePain 0x1902c8:27 pins
-            // BLData+0x8bc to 1.0].
-            self.pain_alpha = 1.0;
-            self.player_hits.push((frame, owner, before - self.health.health));
+            if landed {
+                // options-census: damage resets the pane fade [M Player_HandlePain 0x1902c8:27 pins
+                // BLData+0x8bc to 1.0] — inside the body, after the gates.
+                self.pain_alpha = 1.0;
+                self.player_hits.push((frame, owner, before - self.health.health));
+            }
         }
         // Drones: `Drone_ExplosiveHit` 0x13aab8 — the attacker stamp (+0x2B4), then msg 9 with the
         // DroneImpact (guard-blast-smoke). The damage itself is the msg-9 handler's job
@@ -18077,11 +18086,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // factor applied inside `pain_generic`; the pain grunt rides the 1-in-4 roll).
             if let Some(ph) = hits.player.filter(|_| !self.net_no_self_hurt) {
                 let before = self.health.health;
-                if self.health.pain_generic(&mut self.rng, ph, self.difficulty, d.level, 0) {
+                let armour_before = self.health.armour;
+                let grunt = self.health.pain_generic(&mut self.rng, ph, self.difficulty, d.level, 0);
+                // pain-generic-gate: the ledger/pane writes ride the LANDED pain — a gated pain
+                // (health <= 0, damage <= 0 [M 0x1902c8:18-23]) writes nothing.
+                let landed = self.health.health != before || self.health.armour != armour_before;
+                if grunt {
                     self.play_pain_grunt(player_pos);
                 }
-                self.pain_alpha = 1.0;
-                self.player_hits.push((frame, owner, before - self.health.health));
+                if landed {
+                    self.pain_alpha = 1.0;
+                    self.player_hits.push((frame, owner, before - self.health.health));
+                }
             }
         }
     }
@@ -21118,13 +21134,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         // wire's; the port's hurt has no radius falloff, docs/fields/fusebox.md #6).
                         let at = Self::script_obj_pos(&self.scripts, d, obj).unwrap_or(self.fuseboxes[fi].pos);
                         let before = self.health.health;
-                        if self.health.pain_generic(&mut self.rng, crate::fusebox::LIVE_WIRE_HURT, self.difficulty, d.level, 0) {
+                        let armour_before = self.health.armour;
+                        let grunt = self.health.pain_generic(&mut self.rng, crate::fusebox::LIVE_WIRE_HURT, self.difficulty, d.level, 0);
+                        // pain-generic-gate: the hurt count, ledger and pane reset ride the LANDED
+                        // pain [M 0x1902c8:18-23 — a gated pain writes nothing].
+                        let landed = self.health.health != before || self.health.armour != armour_before;
+                        if grunt {
                             self.play_pain_grunt(player.pos);
                         }
-                        // options-census: damage resets the pane fade [M 0x1902c8:27].
-                        self.pain_alpha = 1.0;
-                        self.fusebox_hurts += 1;
-                        self.player_hits.push((frame, usize::MAX, before - self.health.health));
+                        if landed {
+                            // options-census: damage resets the pane fade [M 0x1902c8:27].
+                            self.pain_alpha = 1.0;
+                            self.fusebox_hurts += 1;
+                            self.player_hits.push((frame, usize::MAX, before - self.health.health));
+                        }
                         let _ = at;
                     }
                 }
@@ -23226,6 +23249,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             b.state = 1;
                         } else {
                         let before = self.health.health;
+                        let armour_before = self.health.armour;
                         // `Drone_ModPlayerHitDamage` 0x13a940 → `Drone_ModBulletDamage` 0x139f50 runs at
                         // HIT time on the raw `weapon_data+0x0C` (HITDATA+8, carried in the bullet):
                         // 1. `Drone+0xD8 == 0xC` (the voice set of skins 0x500003b/0x500003c,
@@ -23275,7 +23299,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 self.audio.play3d(0x171, player.pos, None);
                             }
                         }
-                        self.player_hits.push((frame, b.owner, before - self.health.health));
+                        // pain-generic-gate: the ledger rides the LANDED pain — HandlePain's
+                        // health/armour stores move only when the gates at 0x1902c8:18-23 pass;
+                        // the arm's OWN post-HandlePain writes above (the +0x967 direction bits
+                        // [M 0x194458:203-226], the 0x412/0x171 sounds, the melee hit-push) stay
+                        // unconditional, like the game's.
+                        if self.health.health != before || self.health.armour != armour_before {
+                            self.player_hits.push((frame, b.owner, before - self.health.health));
+                        }
                         }
                     }
                     // `NDrone2_DealWithObjHit` 0x13fff0 case 5 on the struck drone, the shooter a drone.
