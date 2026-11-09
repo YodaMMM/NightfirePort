@@ -87,3 +87,26 @@ One entry per task, newest at the bottom. Append only — never rewrite or reord
   health, then the landed drop-then-sweep closes the yard, the plate, the photograph and the
   door legs. Real input only, no top-ups; helpers stay gated to 0700000d and the difficulty;
   never lower damage or health.
+
+- 2026-11-09 09:45 UTC: done (level-0d-operative-walk-3; the walk stays red — the ledger +
+  the next levers are in the ignore message). Both levers taken. (1) THE IN-BAY #18 AUDIT —
+  SOLVED: the walked arrive drifts 1.4 north of the probed stand and the in-room ray DIES at
+  0.068 on the west-facing pad wall at x ~195.4 (the world gate never opened, the converge was
+  moot); the fix (the re-walk r 0.6 + the clear-box act over the bay pair) is in, untested past
+  the annex. (2) THE GROUND-BAND SWEEP extended to Operative (real_damage-gated, 1 × 400; the
+  Agent twin keeps 3 × 600): g17 patrols the WHOLE band and her east spot (163.28,−213.99)
+  blocks the ladder-top ray at 0.982; the single pass let the route reach the annex for the
+  first time (death 9880 AT the annex landing, 6.0 − 6.4 fall). TWO MEASURED DEAD ENDS (both
+  removed, both recorded in the code): the strip-mouth #10 widened box (acquired g10, ray
+  CLEAR, the cross CONVERGED, 3 on-target rounds missed at d 62; the leg's rounds re-rolled the
+  shared stream into a dead climb, 4472) and the west-roof clear-box act (the recoil kicks the
+  cursor −0.05→−0.30 per shot, the target walks behind the slab 0.973, ~1200 ticks + 13 rounds
+  for ONE kill, deaths 4385/4917). THE REMAINING GAME IS ONE GUARD: #18's INBOUND line from the
+  bay is open from the ladder top through the deck (4 hits for 62 in the v6 roll) while the
+  OUTBOUND box stays blocked; next: the wait-for-crossing clear-box act at the ladder top or
+  the deck-stand act (d 29, the 7479 line). Determinism: comment-only rebuilds do NOT re-roll
+  (v7 == v6); only real code-path changes do. Runs: walkreal whole 1 passed/2 ignored (the
+  plain master replay green, 21.73 s), interactables_0700000d_live 11 passed/0 failed (32.96 s,
+  --test-threads=1); the suite runner not started — the build phase holds the cargo lock and
+  exceeds the window (the -2's same-box measurement stands; the two required binaries ran
+  whole). Report: docs/reports/level-0d-operative-walk-3.md.
