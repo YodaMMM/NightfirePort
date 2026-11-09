@@ -300,6 +300,11 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // The player's play: never take a shot whose line runs through the escort. Every clearing
     // loop below inherits it through `shoot`.
     w.shield = Some(ci);
+    // capsule-join-5: the return-fire stands inherit it too (DamageLog::fire_shield). With the
+    // standing bodies the route pre-clear's return fire on guard #15 put Bond's volley through
+    // the contact standing past him (by_player, weapon 0x1c, t6620 [L the NF_HEALTH_TRACE run])
+    // and the mission failed. A player never fires through his escort, whichever fight it is.
+    w.dmg.fire_shield = Some((ci, true));
     let guards: Vec<usize> = {
         let sim = w.scene.sim.as_ref().unwrap();
         (0..sim.drones.list.len()).filter(|&i| {
@@ -1428,6 +1433,15 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // [M Drone_ModBulletDamage 0x139f50]); keep the walk's Agent stand-off (6.5) here too.
         let prev_back_off = w.dmg.back_off;
         w.dmg.back_off = Some(6.5);
+        // The game's body push (guard-standing-capsule: every near bot's standing capsule
+        // [M NDrone2_Collision 0x140e90:91-121] pushes a grounded Bond on every contact tick
+        // [M Collide_Jointy 0x1ec180:229-281]) moves Bond's fight positions here — and the
+        // pocket guards' flank offsets then drew Bond into the stairwell mouth, where a wedge
+        // sidestep carried him down onto the contact's plate (the exit fired mid-fight). The
+        // block's own pocket rule below (a guard west of x −27 is shot from where Bond stands)
+        // now bounds the flank too: no approach into the mouth, the exit stays for the plate legs.
+        let prev_flank_hold = w.flank_hold_x;
+        w.flank_hold_x = Some(-27.0);
         for sweep in 0..3 {
             let near: Vec<usize> = {
                 let sim = w.scene.sim.as_ref().unwrap();
@@ -1439,7 +1453,34 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 }).collect()
             };
             if near.is_empty() { break; }
-            for g2 in route_order(&w, &near) {
+            // The guards Bond can SEE first (a player answers the gun that is firing at him):
+            // with the game's standing bodies the fight positions shift, and the walled
+            // stairwell sniper #2 (state 0x2a, never steps out) held the loop for thousands of
+            // ticks while the exposed rifleman #17 fired through the contact at Bond and killed
+            // him [L capsule-join trace: contact 7.8 → 0 at t25197-25972, #17 state 0x68 at 0.9 u
+            // from him]. Before each walled guard, every guard now visible is answered first.
+            let (seen, walled): (Vec<usize>, Vec<usize>) = route_order(&w, &near).into_iter()
+                .partition(|&g| walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), g));
+            for g2 in seen.into_iter().chain(walled) {
+                if !walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), g2) {
+                    let now_seen: Vec<usize> = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let bp = sim.bond.pos;
+                        (0..sim.drones.list.len()).filter(|&i| {
+                            let d = &sim.drones.list[i];
+                            i != ci && i != g2 && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                                && walker::dxz(d.pos, bp) < 12.0 && walker::DamageLog::visible(sim, i)
+                        }).collect()
+                    };
+                    for g3 in now_seen {
+                        w.shoot_bounded(g3, &format!("pre-stairwell seen guard {g3}"), 2400);
+                        if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                    }
+                }
+                {
+                    let d = &w.scene.sim.as_ref().unwrap().drones.list[g2];
+                    if d.corpse || d.health <= 0.0 { continue; }
+                }
                 let gpos = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
                 let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
                 // The pocket rule (the ch-0xF ambush block above): a guard parked west of x -27
@@ -1456,6 +1497,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             let _ = sweep;
         }
         w.dmg.back_off = prev_back_off;
+        w.flank_hold_x = prev_flank_hold;
     }
     // The player route descends the stairwell from the west hall's corner (the AI's own path
     // climbs over the top floor — the sister proved the descent through this anchor).
@@ -1463,7 +1505,13 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     w.walk_nav_to(plate, "the plate", 1.2);
     let sim = w.scene.sim.as_ref().unwrap();
     let on_plate = sim.bond.pos[0] < -32.0 && sim.bond.pos[2] > 12.0;
-    assert!(on_plate, "Bond must walk onto the LoadPointActivator plate (at {:?})", sim.bond.pos);
+    if !on_plate {
+        let ci2 = sim.drones.list.iter().position(|d| d.skin == 0x0500_004f).unwrap();
+        let c = &sim.drones.list[ci2];
+        eprintln!("[01] off the plate: contact #{ci2} at {:?} state {:#x} health {:.1} corpse {} fail {:?}", c.pos, c.state, c.health, c.corpse, c.fail_reason);
+    }
+    assert!(on_plate, "Bond must walk onto the LoadPointActivator plate (at {:?}; level_exit {:x?} restart {} cold {} health {:.1} ch10 {} tick {})",
+        sim.bond.pos, sim.drones.level_exit, sim.drones.level_exit_restart, sim.drones.level_exit_cold, sim.drones.health.health, sim.drones.channels.on(0x10), w.total_ticks);
     {
         let d = &sim.drones.list[ci];
         eprintln!("[01] at the AND-touch: contact at ({:.2},{:.2},{:.2}) state {:#x} route_idx {:?} blocked {} seen {}",
@@ -1878,7 +1926,27 @@ fn the_plate_refuses_bond_alone() {
     let start = sim.bond.pos;
     let pts = walker::leg(sim, start, plate);
     drop(sim);
-    for k in 1..pts.len() { w.walk_to(Wp::new(pts[k][0], pts[k][1], pts[k][2]), &format!("sister {k}")); }
+    for k in 1..pts.len() {
+        // The guards the walk wakes stand in its doorways with the game's standing bodies
+        // (`NDrone2_Collision` 0x140e90 capsule, on within 2.0 of the player [M 0x149ec8 /
+        // 0x14b190]): the 0x5c/0x68 trio #5-#7 held the door at (-14.1, 13.1) [L capsule-join
+        // red: STUCK at sister 28]. A player shoots who stands in his way, so the sister answers
+        // every live guard within 5 u before each leg.
+        for _ in 0..6 {
+            let g = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).find(|&i| {
+                    let d = &sim.drones.list[i];
+                    d.skin != 0x0500_004f && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                        && walker::dxz(d.pos, bp) < 5.0
+                })
+            };
+            let Some(g) = g else { break };
+            if !w.shoot(g, &format!("sister blocker {g}")) { break; }
+        }
+        w.walk_to(Wp::new(pts[k][0], pts[k][1], pts[k][2]), &format!("sister {k}"));
+    }
     w.walk_to(Wp { at: plate, act: Act::None, arrive: 1.2 }, "the plate");
     // Keep Bond ON the plate while the contact (left at his spawn) is far away.
     for _ in 0..60 { w.tick(Default::default(), false); }
@@ -2080,6 +2148,46 @@ fn following_mayhew_down_completes_the_level() {
         w.tick(Default::default(), false);
     }
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x99), "the hall AND must fire ch 0x99");
+    // West-end pre-clear (guard-standing-capsule-2): the capsule push shifted Bond's escort
+    // spots, and the hall's west-end holders kept their burst lines down the north side onto
+    // the contact's wait spots — the lead rounds' stall at (3.6,14.6) left him 10+ s in #15's
+    // line while Bond fought #5 (dxz 7.6, in the 14 band), and #15 (dxz 14.8, OUT of the band)
+    // fired one burst whose spread crossed Bond's approach line — 1 u from the waiting
+    // contact — and took his head (45.0, kill at t15517, by_player false [L the red run:
+    // /tmp of the guard-standing-capsule-2 session]). A player escorting clears the shooters'
+    // end of the hall BEFORE the contact crosses it: fight them now, farthest (the burst
+    // line) first, while the contact still waits east of the crossfire; band 20 (the 14 band
+    // missed #15 at dxz 14.8). Fight order only — the contact's rules are untouched.
+    {
+        let guards: Vec<usize> = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let cp = sim.drones.list[ci].pos;
+            let mut g: Vec<usize> = (0..sim.drones.list.len()).filter(|&i| {
+                let d = &sim.drones.list[i];
+                i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                    && ((2..0x47).contains(&d.weapon) || (0x6a..=0x71).contains(&d.weapon))
+                    && walker::dxz(d.pos, cp) < 20.0 && !cleared.contains(&i)
+            }).collect();
+            g.sort_by(|&a, &b| {
+                let da = walker::dxz(sim.drones.list[a].pos, cp);
+                let db = walker::dxz(sim.drones.list[b].pos, cp);
+                db.partial_cmp(&da).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            g
+        };
+        for g in guards {
+            let gpos = w.scene.sim.as_ref().unwrap().drones.list[g].pos;
+            w.walk_nav_to(gpos, &format!("west-end pre-clear: approach guard {g}"), 3.0);
+            if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare < 8 { w.resupply("west-end ammo"); }
+            if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare == 0 { continue; }
+            let killed = w.shoot(g, &format!("west-end pre-clear: guard {g}"))
+                || { if w.resupply("west-end ammo retry") { w.shoot(g, &format!("west-end pre-clear: guard {g}")) } else { false } };
+            let sim = w.scene.sim.as_ref().unwrap();
+            let dead = sim.drones.list[g].corpse || sim.drones.list[g].health <= 0.0;
+            drop(sim);
+            if killed || dead { cleared.insert(g); }
+        }
+    }
     // Follow the contact out of the hall to the stairwell head (the main test's follow loop, but
     // stopping AT the head — the FOLLOW begins at the descent).
     let head: V3 = [-30.8, 6.4, 13.1];

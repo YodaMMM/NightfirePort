@@ -201,6 +201,16 @@ fn the_07000001_exit_works_end_to_end() {
         // The 01 walk's corner escape (walkreal_07000001 sets it too): a nav leg wedged on the
         // hall's east-door jamb at (5.45, 11.60) re-routes over clear nav nodes.
         w.bridge_wedged_nav = true;
+        // The hall's guards are solid: the game's standing body, on within 2.0 of the player
+        // [M NDrone2_Collision 0x140e90:91-121; NDrone2_DoCollision 0x149ec8 /
+        // DroneFunc_NearPlayerCollision 0x14b190], and in SP the guard is never pushed back by
+        // the player (Collide_Jointy 0x1ec180 refuses a class-3 candidate). The ambush sweep's
+        // legs past the woken hall guards then wedged on their bodies: two 0x5c guards inside
+        // the east door slid Bond into the courtyard shoji's pocket at (8.8, 11.71), and six
+        // guards held him on the hall's south wall at (-13.4, 11.6) — every leg died at the cap
+        // and the named guards were never reached. A player shoots who stands in his way: the
+        // walker's body-block response (the 02 walks' and interactables_07000001's lever).
+        w.body_block_response = true;
         // The intro tail's tail (event 6 re-places Bond) — the walkreal's post-intro settle. The
         // intro leaves the contact on the line from the start-room guard #0 to Bond, and a guard's
         // round lands on any drone of the other side it meets [M NDrone2_DealWithObjHit

@@ -84,7 +84,12 @@ fn moderate_track_still_aims_the_head_at_bond() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000007.bin", false).expect("load");
     let sim = scene.sim.as_mut().unwrap();
-    sim.bond = nf_game::player::Bond::new([41.71, 44.13, -72.05], -1.488);
+    // capsule-join-2: the old stand (41.71, 44.13, −72.05) sat 0.81 u from drone 4 and 0.84 u from
+    // drone 8 — inside both guards' standing bodies [M NDrone2_Collision 0x140e90:91-121, on
+    // within 2.0 of the player 0x149ec8/0x14b190], with only 1.65 u between them, so the game's
+    // push moves Bond off it (to (41.82, 44.13, −72.11) [L capsule-join-2 probe]). The stand is
+    // 0.75 u south-west, outside both bodies; drone 4 still tracks moderately from there.
+    sim.bond = nf_game::player::Bond::new([41.3, 44.13, -72.8], -1.488);
     sim.bond.pitch = -0.154;
     for _ in 0..1102 { sim.step_bond(Input::default(), false, false, false); }
     let bp = sim.bond.pos;

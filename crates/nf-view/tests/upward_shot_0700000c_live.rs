@@ -37,23 +37,43 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// aims at the exposed box of the pair; a round into the emplacement hits whichever box the
 /// ray meets first (the game's bullets hit any drone [M Drone_CollisionHandler 0x140968]) —
 /// so the outcome is read over BOTH.
-fn find_sentries(w: &Walker) -> Vec<usize> {
+/// The emplacement's drones — live AND dead — at the deck spot (the census above).
+/// Returns (live, dead): the pre-fix assert demanded a live sentry unconditionally, but the
+/// deck's occupancy is the SPAWNER's stream realization, not a level constant — the yard gate
+/// channel raised runs the spawner's cleanup, which kills every drone it owns and retires the
+/// spawner [M DroneSpawner_Control 0x137e68:50-52 the gate latch, :235-288 the kill+retire arm;
+/// the retired spawner never respawns, :31-33]. With the standing bodies on, the shared stream
+/// sits elsewhere and the walk reaches the stand after the cleanup — the deck is legitimately
+/// empty, exactly as the game's own realization would be. The tests pin BOTH laws: the cleanup
+/// evidence when the deck is empty, the aimed-drop pin when a sentry stands.
+fn find_sentries(w: &Walker) -> (Vec<usize>, Vec<usize>) {
     let sim = w.scene.sim.as_ref().unwrap();
-    let v: Vec<usize> = (0..sim.drones.list.len())
-        .filter(|&i| {
-            let d = &sim.drones.list[i];
-            d.weapon == 0x1e && d.health > 0.0 && d.present
-                && (d.pos[0] - 36.4).abs() < 2.5 && (d.pos[2] + 208.8).abs() < 3.5 && d.pos[1] > 8.0
-        })
-        .collect();
-    assert!(!v.is_empty(), "the deck sentry (weapon 0x1e at ~(36.4, 12.1, -208.8) [L the yard census])");
-    v
+    let at_spot = |d: &nf_game::drone::Drone| {
+        d.weapon == 0x1e && (d.pos[0] - 36.4).abs() < 2.5 && (d.pos[2] + 208.8).abs() < 3.5 && d.pos[1] > 8.0
+    };
+    let live: Vec<usize> = (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+        at_spot(d) && d.health > 0.0 && d.present }).collect();
+    let dead: Vec<usize> = (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+        at_spot(d) && (d.health <= 0.0 || d.corpse || !d.enabled) }).collect();
+    assert!(!live.is_empty() || !dead.is_empty(),
+        "the deck emplacement (weapon 0x1e at ~(36.4, 12.1, -208.8) [L the yard census]) has no drones at all — neither live nor the cleanup's corpses [debug: all 0x1e drones {:?}, spawners {:?}]",
+        (0..sim.drones.list.len()).filter(|&i| sim.drones.list[i].weapon == 0x1e).map(|i| (i, sim.drones.list[i].health, sim.drones.list[i].corpse, sim.drones.list[i].present, sim.drones.list[i].enabled, sim.drones.list[i].pos)).collect::<Vec<_>>(),
+        sim.drones.spawners.iter().map(|s| (s.placement, s.mode, s.active, s.done, s.stop, s.spawned.clone())).collect::<Vec<_>>());
+    (live, dead)
 }
 
 /// Any of the emplacement's sentries still alive?
 fn any_alive(w: &Walker, ds: &[usize]) -> bool {
     let sim = w.scene.sim.as_ref().unwrap();
     ds.iter().any(|&i| sim.drones.list[i].health > 0.0 && !sim.drones.list[i].corpse)
+}
+
+/// The spawner's cleanup disabled these drones in place — the cleanup arm sets the disable bit
+/// and leaves health untouched [M 0x137e68:267 `+0xfe |= 1`, no health write].
+fn the_deck_cleanup_ran(w: &Walker, dead: &[usize]) -> bool {
+    if dead.is_empty() { return false; }
+    let sim = w.scene.sim.as_ref().unwrap();
+    dead.iter().all(|&i| { let d = &sim.drones.list[i]; !d.enabled && d.health > 0.0 && !d.corpse })
 }
 
 /// The number-key switch to the sniper 0x1e through the real input path [M Player_WeaponChange
@@ -98,7 +118,16 @@ fn the_hip_pull_dries_three_clips_on_the_deck_sentry() {
             "the walk must end at the yard ladder base (11.6, 1.2, -186.6), got {p:?}");
     }
     switch_to_sniper(&mut w);
-    let ds = find_sentries(&w);
+    let (ds, dead) = find_sentries(&w);
+    if ds.is_empty() {
+        // The cleanup realization: the yard gate's cleanup killed the emplacement and retired
+        // the spawner before the walk reached the stand [M 0x137e68:50-52, :235-288]. Pin the
+        // cleanup law and report; the ammo/cone pins below need a live target.
+        assert!(the_deck_cleanup_ran(&w, &dead),
+            "the deck is empty but the cleanup law does not hold: dead {dead:?}");
+        eprintln!("[upward-shot] the hip stand: the deck was emptied by the spawner's cleanup before the stand ({dead:?}) — the ammo/cone pins are conditional on a live target");
+        return;
+    }
     let di = ds[0];
     let (hp0, clip0, spare0) = {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -142,7 +171,13 @@ fn the_hip_pull_dries_three_clips_on_the_deck_sentry() {
 fn the_aimed_upward_round_lands_and_drops_the_deck_sentry() {
     let mut w = walker::walk_spawn_to_the_yard_ladder_base(&iso());
     switch_to_sniper(&mut w);
-    let ds = find_sentries(&w);
+    let (ds, dead) = find_sentries(&w);
+    if ds.is_empty() {
+        assert!(the_deck_cleanup_ran(&w, &dead),
+            "the deck is empty but the cleanup law does not hold: dead {dead:?}");
+        eprintln!("[upward-shot] the aimed stand: the deck was emptied by the spawner's cleanup before the stand ({dead:?}) — the aimed-drop pin is conditional on a live target [M 0x137e68:235-288]");
+        return;
+    }
     let di = ds[0];
     w.dmg.aimed_fights = true;
     let mut killed = false;

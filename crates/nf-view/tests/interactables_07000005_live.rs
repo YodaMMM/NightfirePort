@@ -309,7 +309,13 @@ fn the_lock_gated_touchonce_fires_the_ledge_nis_until_locked() {
         // Bond's own approach, walked with the real forward input until the plate fires; the
         // entry stretch is driven tick by tick (the walker's legs would wedge under the
         // scene's control take-over).
-        w.walk_to(walker::Wp { at: [25.5, 33.5, 72.7], act: walker::Act::None, arrive: 1.0 },
+        // capsule-join-2: the 1.0 arrival "arrives" on the tower's south rim (the leg ends with
+        // Bond 1.2 u above the shelf, and the entry steer then walks the rim at y 35.0 past the
+        // box instead of down into it [L capsule-join-2 red: entry at (25.51, 35.04, 71.08), the
+        // plate unfired]; the same rim as guard-standing-capsule-3's 05 ledge legs; the route head
+        // already sits inside the old 1.0 radius, so that leg never moved him). The edge is taken
+        // at a 0.3 arrival on the box's centre line so Bond starts the entry from the shelf.
+        w.walk_to(walker::Wp { at: [25.45, 33.5, 72.6], act: walker::Act::None, arrive: 0.3 },
             "the box's north edge");
         let mut fired = false;
         for _t in 0..600u32 {

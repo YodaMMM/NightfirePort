@@ -298,3 +298,53 @@ fn a_punch_puts_a_sleeper_out_for_good() {
     // scan skips nothing here — the msg-8 arm of 0x172a30 routes ANY bullet to Death_Anim).
     let _ = anim_state::STUN_GET_UP; // (keep the import honest across cfgs)
 }
+
+/// The sleeper's body (capsule-join): a DOWN guard presents `NDrone2_Collision` 0x140e90's low
+/// sphere to the player — r 0.3, both ends at pos + up·(0.3 − hip) [M :65-90: the +0x2f arm
+/// stores +0x45c = 0.3 and +0x3f0 = +0x400], on within 2.0 of the player [M NDrone2_DoCollision
+/// 0x149ec8 → DroneFunc_NearPlayerCollision 0x14b190] — not the standing r-0.4 capsule. Bond
+/// walks into the sleeper on real input; the closest XZ approach is the sphere's.
+#[test]
+fn bond_walks_up_to_a_sleeper_against_the_low_sphere() {
+    let (mut scene, gi) = setup_k5_guard();
+    let mut down = false;
+    for _ in 0..400u32 {
+        steer(&mut scene, gi, true);
+        if matches!(scene.sim.as_ref().unwrap().drones.list[gi].state, state::STUN_DART_IMPACT | state::STUN_DART_LOOP) { break; }
+    }
+    for _ in 0..600u32 {
+        steer(&mut scene, gi, false);
+        if scene.sim.as_ref().unwrap().drones.list[gi].state == state::STUN_DART_LOOP { down = true; break; }
+    }
+    assert!(down && scene.sim.as_ref().unwrap().drones.list[gi].down, "the dart puts the guard down (StunDartLoop 0x51, +0x2F) [M 0x163570 case 1]");
+    {
+        let dr = &scene.sim.as_ref().unwrap().drones.list[gi];
+        let (a, b, r) = nf_view::scene::bot_player_body(dr);
+        assert_eq!(r, 0.3, "the down arm's radius 0x3e99999a [M 0x140e90:73]");
+        assert_eq!(a, b, "the down body is a sphere: +0x3f0 = +0x400 [M 0x140e90:86-88]");
+        assert!((a[1] - (dr.pos[1] + 0.3 - dr.hip_anim)).abs() < 1e-5,
+            "centre pos + up·(0.3 − hip) [M 0x140e90:76-85]: {a:?} pos {:?} hip {}", dr.pos, dr.hip_anim);
+    }
+    let mut min_d = f32::MAX;
+    for _ in 0..480u32 {
+        let (turn, d, fwd) = {
+            let sim = scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let g = sim.drones.list[gi].pos;
+            let mut e = (g[0] - bp[0]).atan2(g[2] - bp[2]) - sim.bond.yaw;
+            while e > std::f32::consts::PI { e -= 2.0 * std::f32::consts::PI; }
+            while e < -std::f32::consts::PI { e += 2.0 * std::f32::consts::PI; }
+            (e.clamp(-0.08, 0.08), dxz(bp, g), if e.abs() > 0.3 { 0.0 } else { 1.0 })
+        };
+        min_d = min_d.min(d);
+        scene.sim.as_mut().unwrap().step_bond(Input { turn, forward: fwd, ..Default::default() }, false, false, false);
+    }
+    let sim = scene.sim.as_ref().unwrap();
+    eprintln!("[tranq] sleeper {gi} at {:?} hip {} — Bond at {:?}, min XZ {min_d:.3}", sim.drones.list[gi].pos, sim.drones.list[gi].hip_anim, sim.bond.pos);
+    assert!(sim.drones.list[gi].down, "still asleep through the walk-in");
+    // The upright r-0.4 capsule (pos + 0.4 down to pos + 0.4 − hip) overlaps Bond's spine height
+    // and holds him at 0.55 + 0.4 = 0.95; the floor sphere sits under Bond's lower cap, so he
+    // closes to ~0.77 (the two caps' slant contact).
+    assert!(min_d < 0.88, "the sleeper's body is the low r-0.3 sphere, not the standing capsule (min XZ {min_d:.3}; the standing body holds 0.95)");
+    assert!(min_d > 0.5, "the sleeper still has a body (min XZ {min_d:.3})");
+}

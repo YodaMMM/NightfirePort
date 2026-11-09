@@ -774,6 +774,12 @@ fn the_platinum_finish_shows_platinum_on_records() {
     let mut w = load_ready_at(&iso, 3);
     // The platinum line is a score race (time, rounds fired, hits): a player aims for the head.
     w.prefer_head = true;
+    // With the game's standing bodies the target (skin 0x500001e, kind 0xb, 100 health) closes to
+    // 1.3-2.0 u in the fight and his capsule shoves Bond off his aim [L capsule-join trace: the
+    // first clip took him 100 → 50 only, the score 949767 short of the 1000000 line]. A player on
+    // a score run keeps the man at arm's length: the shoot loop backs Bond off inside 3.0 u (the
+    // range under which every drone round hits [M DroneWeap_DoBulletAccuracy 0x179740:113-115]).
+    w.keep_off = Some(3.0);
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.drones.progress.difficulty, 3, "the 007 difficulty rode the launch path");
