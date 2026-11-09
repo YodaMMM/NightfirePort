@@ -36,3 +36,16 @@ Work log:
   0x1ebaa8:300-319]) engages guards the strict pre-mask ray did not. walkreal_07000002_live 3/1: the
   real-health agent walk misses the doorway-sensor ch 0x81 assert (timeline/path shift suspected,
   unrooted). Both repairs need a route/tactics re-tune against the game-faithful vision — next window.
+
+## level-0b-roof-sprint-2
+Started 2026-11-09 16:47 UTC. Branch s/level-0b-roof-sprint-2 cut from origin/s/los-mask-join (5e36d06ba).
+Task: continue blocked/10-level-0b-roof-sprint.md — read its report and next-steps list and carry them out
+on the los-mask-join base. Find with the fixed probe the x where Bond's body can cross the parachute
+housing's south face line (z about 41.0); route the final deck leg through it; trim the turret pair's
+damage on the dome floor if needed; make the Agent and 00 Agent real-damage walks pass, then the d1 walk
+and the whole walkreal_0700000b_live binary. If no crossing exists anywhere in the port's collision, say
+so with the probe data. No damage/health lowering, no loosened pins, no new ignores, no draw changes.
+
+Work log:
+- (16:47) sandbox rebuilt (work-slim + onfoot ISO 369823203 ok); branch created, WORKLOG entry pushed.
+  Reading the blocked report next.
