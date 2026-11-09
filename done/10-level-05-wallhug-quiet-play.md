@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-11-09T12:17Z
+
+---
+## Report (done, 2026-11-09T13:12Z)
+
+Closed by the driver: the report is on `s/level-05-wallhug-quiet-play` (docs/reports/level-05-wallhug-quiet-play.md); the worker didn't run finish.sh.
