@@ -49,3 +49,11 @@ so with the probe data. No damage/health lowering, no loosened pins, no new igno
 Work log:
 - (16:47) sandbox rebuilt (work-slim + onfoot ISO 369823203 ok); branch created, WORKLOG entry pushed.
   Reading the blocked report next.
+- (17:00-19:20) probe v2 answered next-step 1: the standing-height sweep crosses the z≈41.0 face
+  and TAKES at every x 0.6-3.4 (the old wall was the wrong-yaw artifact); no live check needed.
+  NF_PICKUPLOG showed the take DOES fire in the real walk (~t15844, dist 1.768 vs 1.791, los
+  true → Some(Label)) — Bond arrives at the face at 5.2 hp (dome pair 19.2 + #4 point-blank
+  36.4) and dies 7 ticks after the take. Plate E-hold fixed to the game's press-edge + head-look
+  law [M 0x1a5460:396-403, 0x1a5170:100-108]. Dome lanes measured (head-on 80.8 best); deck
+  reroutes measured (west hug 87.2 through the band; the NW structure x −11..−14 z 24-28 slides
+  shallow NE headings into its corner). Walk still red; plan in the report.

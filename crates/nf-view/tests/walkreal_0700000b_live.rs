@@ -588,7 +588,18 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
             // the dome-floor transit south runs the lane sprint (see lane_sprint); the warm
             // walks keep the walked approach.
             let room = w.try_walk_to(Wp::new(-1.0, 47.5, -5.5).r(1.2), "files the terminal room (from n14)");
+            // The turret pair #174/#175 sits at (2.26/-4.60, 49.10, −21.60) [D] — flanking the
+            // plate lane 7.7 u south. The straight north-south lane hands them a head-on,
+            // barrel-eased target for the last 8 u (6 × 3.2 = 19.2 [L the real_damage_agent
+            // ledger, frames 12761-12804]). The pair eases its barrel along the 0.1 s cadence
+            // [M 0x180498 case 4], so a fast ~90° crossing of the lane makes the ease chase:
+            // run WEST to x −7.0 at the plate's z, then dash EAST into the plate. [L] the
+            // same-cadence pair lands 6/6 on the head-on lane — the crossing is the reroute.
             let walked = if real {
+                // [L the reroute measurements] head-on lane: 6 × 3.2 on the approach, re-place
+                // 80.8. West crossing (x −7.0): approach 6.4 — but the return then runs under
+                // barrels pre-trained east: re-place 49.2 (head-on return) / 36.4 (west return).
+                // The head-on pair is the best measured lane; the deck two-phase is the lever.
                 lane_sprint(w, [c[0], lo[1] - 0.4, c[2]], 1.4, 900, "the spawned files use-plate")
             } else {
                 w.try_walk_to(Wp::new(c[0], lo[1] - 0.4, c[2]).r(1.4), "the spawned files use-plate")
@@ -613,8 +624,19 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
                     sim.bond.pos = [c[0] + d[0], (lo[1] - 0.4 + d[1]).max(lo[1] - 0.6), c[2] + d[2]];
                     sim.bond.vel = [0.0; 3];
                 }
-                for _ in 0..40 {
-                    w.tick(Default::default(), true);
+                // The use pick is the head + view-dir sphere [M 0x1a5170:100-108] and the E fires
+                // on the PRESS EDGE only [M 0x1a5460:396-403] — face the plate from each stance
+                // and give every stance its own fresh press (the old loop held use across all
+                // six: one edge, stance 1 only, and the east-dash arrival yaw missed the pick).
+                for _ in 0..30 {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let p = sim.bond.pos;
+                    let err = walker::wrap_pi((c[0] - p[0]).atan2(c[2] - p[2]) - sim.bond.yaw);
+                    if err.abs() < 0.05 { break; }
+                    w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() }, false);
+                }
+                for k in 0..40 {
+                    w.tick(Default::default(), k == 0);
                     if w.scene.sim.as_ref().unwrap().drones.channels.on(6) { fired = true; break 'stances; }
                 }
             }
@@ -638,6 +660,9 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
         // REAL HEALTH: the pair is armed (the fence + the take both feed OR #290), so the
         // whole return lane runs the sprint — the plate → the room → n14 → n15 → n16.
         if real {
+            // [L the reroute measurements] the straight north return is the clean one once the
+            // barrels end north-trained (the head-on approach); the west detours trained them
+            // onto Bond and the return bled 44.4 / 56.4. Head-on both ways: re-place 80.8.
             lane_sprint(w, [-1.0, 47.5, -5.5], 1.2, 900, "return the terminal room (from the dome)");
             lane_sprint(w, [-1.45, 47.18, 3.74], 1.0, 600, "return n14");
             lane_sprint(w, [-1.33, 47.18, 6.82], 1.0, 600, "return n15");
@@ -788,6 +813,14 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
         // [pp−0.3, −1.0], the take raising ch 0x3F on the pass, and the jump leg's east drive
         // (raw ticks, no return-fire gate) follows with no stop between. The tranq fights stay
         // on the legs where their target is reachable; the deck's end is pure movement.
+        // THE DECK LEG (level-0b-roof-sprint-2 final state): the reroute experiments measured
+        // better deck lanes (the west band hug held 87.2 hp through the #6/#7/#8 band) but the
+        // deck's NW structure (x −11..−14, z 24-28) slides every shallow NE heading west into
+        // its corner, and the re-steer crawls under fire [L the 0b-stall traces]. The straight
+        // WIP line to the slot is the best measured completion: it takes the parachute at
+        // ~t15844 [L NF_PICKUPLOG: dist 1.768 vs r 1.791, los true] — Bond arrives at the wall
+        // at 5.2 hp and the finisher lands 7 ticks after the take. The margin work (the dome
+        // lane and the #4 pass) is in the report's next steps.
         let target = [pp[0] - 0.3, pp[1] - 1.4, pp[2] - 1.0];
         let start = w.total_ticks;
         let mut stall_diag = 0u32;
