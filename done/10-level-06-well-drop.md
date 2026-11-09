@@ -6,3 +6,8 @@ Reproduce on the real level first through real input, not a teleport. Compare wi
 
 ---
 claimed-by: sandbox5 at 2026-11-09T03:13Z
+
+---
+## Report (done, 2026-11-09T05:05Z)
+
+Closed by the driver: the report is on `s/level-06-well-drop` (docs/reports/level-06-well-drop.md); the worker didn't run finish.sh.
