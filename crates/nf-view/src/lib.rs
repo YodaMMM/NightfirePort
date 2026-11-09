@@ -7306,7 +7306,13 @@ pub fn run() -> Result<()> {
             if let Some(v) = args.iter().position(|a| a == "--debris-probe").and_then(|i| args.get(i + 1)) {
                 let c: Vec<f32> = v.split(',').filter_map(|t| t.parse().ok()).collect();
                 if c.len() == 3 {
-                    for (k, &h) in nf_game::explode::METAL_HASH_132.iter().enumerate() {
+                    // `NF_DEBRIS_PROBE_MODEL=0x0200012b` (or a comma list): those debris meshes instead
+                    // (the impact / break pieces, e.g. spark wood 0x0200012b, spark glass 0x0200012d).
+                    let models: Vec<u32> = std::env::var("NF_DEBRIS_PROBE_MODEL").ok()
+                        .map(|v| v.split(',').filter_map(|t| u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok()).collect())
+                        .filter(|m: &Vec<u32>| !m.is_empty())
+                        .unwrap_or_else(|| nf_game::explode::METAL_HASH_132.to_vec());
+                    for (k, &h) in models.iter().enumerate() {
                         sim.drones.blast_debris.push(nf_game::shatter::Debris { model: h, pos: [c[0] + 0.3 * k as f32 - 0.45, c[1], c[2]],
                             rot: [0.3 * k as f32, 0.5, 0.0], vel: [0.0, 0.0803, 0.0], spin: [0.0; 3], life: 100_000, fade: 0xff, e8: 1.0, draw: Default::default() });
                     }

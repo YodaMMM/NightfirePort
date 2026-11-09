@@ -12555,14 +12555,14 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             plan.any_script |= a.script.is_some();
             plan.col_char.push(a.character);
             // `colour_mults_dense`'s arms, in its order: 0 = always [1, 1, 1] (flash, tracer,
-            // swoosh, a projectile whose mesh has no 0x800 glist bit, the satchel digits, the rain
-            // streaks), 1 = the full chain (a 0x800 projectile's cel ambient, the rain haze, a
+            // swoosh, a projectile whose mesh has no 0x800 glist bit, the debris pieces, the satchel
+            // digits, the rain streaks), 1 = the full chain (a 0x800 projectile's cel ambient, the rain haze, a
             // leaf, a dropped gun, a script entity — state- or position-dependent), 3 = the owner
             // character's multiplier. `models_0x800` is fixed at the scene build like the fields.
             plan.col.push(if a.flash.is_some() || a.tracer.is_some() { 0 }
                 else if a.projectile.is_some_and(|(slot, _)| slot >= SWOOSH_SLOT_BASE) { 0 }
                 else if let Some((_, mesh)) = a.projectile { if self.models_0x800.get(&mesh).copied().unwrap_or(false) { 1 } else { 0 } }
-                else if matches!(a.effect, Some((4 | 5 | 7, _, _))) { 0 }
+                else if matches!(a.effect, Some((2 | 4 | 5 | 7, _, _))) { 0 }
                 else if matches!(a.effect, Some((8 | 9, _, _))) { 1 }
                 else if a.dropped || a.script.is_some() { 1 }
                 else { 3 });
@@ -13529,6 +13529,18 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         // green LEDs (texture 11, solid green). The character-0 ambient ramp drew them
                         // near-black on the red display.
                         if matches!(a.effect, Some((4 | 5, _, _))) { return one(); }
+                        // A debris piece (impact `Debris_Create` 0x1aaa00, a killed breakable's pieces,
+                        // the blast's `Debris_CreateEx` 0x1ac808): a `control_create_object` object, so
+                        // its tint bytes obj+0x103..0x105 stay at `control_init_object`'s 0xFF [M
+                        // 0x134630:18-21]; neither creator nor `Debris_Update` 0x1aac00 writes them. Its
+                        // obj+0xF0 is the mesh's glist flags | 0x20000020 [M 0x1ac808, 0x1aaa00] (| 0x10008000
+                        // from the forced room link [M 0x1c9680:63-64]) — no 0x800, and no debris mesh
+                        // carries 0x800 on any level [D: 0x0200012a..0220 flags 0x20/0x21/0x221/0x321,
+                        // 0x02000414..041b and 0x02000664..0666 flags 0], so `View_SetupRenderModes_Tweak`
+                        // passes the 0xFF bytes [M 0x1e5888:46-49]: the mesh's own vertex colour, then the
+                        // point lights. The old fall-through took character 0's ambient (0x2a,0x23,0x22 in
+                        // the 07000011 storeroom), drawing the light grey metal strips near black.
+                        if matches!(a.effect, Some((2, _, _))) { return one(); }
                         // The rain passes: `DrawDrops` 0x18cb90 draws through `psiDrawObjectMatrix` 0x124708
                         // directly (no `View_SetupRenderModes_Tweak`), right after Game_Draw's
                         // `psiSetTweakARGB(0xff, 0xff, 0xff, 0xff)` [M 0x1e6f50:148-151] — the streaks keep
