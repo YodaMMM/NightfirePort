@@ -24,3 +24,8 @@ One entry per task, newest at the bottom. Append only — never rewrite or reord
   act's RNG stream) — the ledger in the ignore message. walkreal_0d whole: the plain twin
   green. The full suite did not fit (the build phase died twice, 3 GB sandbox). Report:
   docs/reports/level-0d-wire-jump-grab.md.
+
+- 2026-11-09 00:00 UTC: started. 0700000d walkable to the end on Operative: continue the
+  route from s/level-0d-wire-jump-grab — the ride-phase sniper stands (88.8 drained by
+  tick 12540) then the yard-slot hop under the guard state diverged by then; real input
+  only, helpers gated to 0700000d and Operative, never lower damage or health.
