@@ -90,3 +90,4 @@ full suite.
 
 - Claimed. Base: s/level-0b-roof-sprint-3; verified current origin/s/los-mask-join (5e36d06ba) is already an ancestor of sprint-3 (merge-base = its tip) — the rebase instruction is a no-op.
 - Plan (sprint-3 report): (1) arm-while-running — the real switch path to 0x43 during P1, no stand; (2) the rocket detour to #349 (-22.5, 47.96, 29.30), switch_to 0x2e, one rocket at #4 from the gap mouth (13 u, LOS), switch back; (3) armour #302 fallback; (4) Agent walk green -> 00 Agent -> d1 -> whole walkreal_0700000b_live -> full suite.
+- Sprint-4 window closed (23:35Z): the office rocket take + the arm-on-run landed; the drop levers measured and retired (the blast-law divergence [L ee radius 8.0 vs the hurt at 13.7]); the sisters stay red (5/2 whole binary, the base state), d1/warm byte-identical. Report: docs/reports/level-0b-roof-sprint-4.md
