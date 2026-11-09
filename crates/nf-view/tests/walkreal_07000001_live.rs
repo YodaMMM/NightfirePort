@@ -1868,8 +1868,12 @@ fn door_peek_fight(w: &mut Walker, g: usize, tag: &str) -> bool {
             // mouth-crowd's fire line (the 6007 run: #7 closed to (6.2,14.4) and drilled the
             // stand 56.8 in 8 hits through the standing-open mouth), and a shut leaf blocks
             // their rounds [M door.rs CLOSED=2/OPEN=4 — is_closed gates the bullets at exactly
-            // CLOSED]. A player steps back and kicks the door shut behind him.
-            shut_hall_door(w, tag, round);
+            // CLOSED]. A player steps back and kicks the door shut behind him. D3-GATED: the
+            // whole-binary run with it ungated shifted the d2 real-damage walk (the shared
+            // door_peek_fight) — the d2 timeline keeps its standing-open door byte-exact.
+            if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 {
+                shut_hall_door(w, tag, round);
+            }
             w.wait(60);
             continue;
         };
@@ -1887,8 +1891,10 @@ fn door_peek_fight(w: &mut Walker, g: usize, tag: &str) -> bool {
         w.walk_to(Wp::new(hold[0], hold[1], hold[2]).r(0.5), &format!("{tag} peek back {round}"));
         w.lenient = false;
         // level-01-d3-walk: shut behind him (the same discipline — the window is bounded by
-        // the peek_fire caps, the wait is not).
-        shut_hall_door(w, tag, round);
+        // the peek_fire caps, the wait is not). D3-gated (see the no-stand branch).
+        if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 {
+            shut_hall_door(w, tag, round);
+        }
         eprintln!("[01] {tag}: peek {round} done, health {:.1}, guard hp {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health,
             w.scene.sim.as_ref().unwrap().drones.list[g].health);
     }
