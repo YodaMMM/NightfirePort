@@ -36,3 +36,14 @@ Work log:
   0x1ebaa8:300-319]) engages guards the strict pre-mask ray did not. walkreal_07000002_live 3/1: the
   real-health agent walk misses the doorway-sensor ch 0x81 assert (timeline/path shift suspected,
   unrooted). Both repairs need a route/tactics re-tune against the game-faithful vision — next window.
+
+## level-0b-roof-sprint
+Started 2026-11-09 15:23 UTC. Branch s/level-0b-roof-sprint cut from origin/s/los-mask-join (5e36d06ba).
+Task: with the masked sight rays from s/los-mask-join, Bond dies at the parachute on the Agent and
+00 Agent roof-deck walks of 0700000b. Find the player's real way across the roof under the game's
+rules (cover, timing, which guards to drop first) and make both walks pass. Reproduce on the real
+level through real input first, not a teleport; compare with the decompile; no draw changes.
+
+Work log:
+- (15:23) branch created, WORKLOG entry, checkpoint pushed. Reading docs/reports/los-mask-join.md,
+  walkreal_0700000b_live.rs and the walker helpers next.
