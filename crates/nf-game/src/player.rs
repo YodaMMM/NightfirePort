@@ -802,8 +802,15 @@ impl Bond {
     ///   identical alive and dead.
     /// - the fall timer [M :97-131] and the 0x7000012 void-fall latch [M :104-108] run for the
     ///   dead body: the grounded-history-0 arm is not gated on the state. The dead landing pain
-    ///   (`Player_HandlePain` [M :120]) is NOT ported — [S] unverified whether `Player_Damage`
-    ///   admits a dead player; the port emits no `fall_damage` from the dead tick.
+    ///   (`Player_HandlePain` [M :120], the `jal` at 0x194bd4) is dropped by the pain pipeline's
+    ///   own dead gate: `Player_HandlePain` 0x1902c8 reads health BL+0x894 at 0x190318,
+    ///   `c.le.s` against 0.0 at 0x190324 and RETURNS at 0x19032c before its first write
+    ///   (BL+0x8bc = 1.0 at 0x190378) — no health change, no armour math, no +0x967 direction
+    ///   bits, no +0x968 flash, no `Rand_Rand(4)` grunt draw, no `Sound_Play3D`, no rumble
+    ///   (`Player_Hurt` 0x196060 adds no gate of its own — everything funnels through
+    ///   `HandlePain`). A dead body's health is exactly 0.0 (`Player_SetHealth` 0x1960b8 clamps
+    ///   <0 to 0), so the gate always fires. The port emits no `fall_damage` from the dead tick
+    ///   — observably equal, pinned by dead_landing_pain_live.
     /// - the ceiling arm [M :168-175] — grounded (`FeetOnPoint`'s flag 8) AND `jump_state != 1`:
     ///   `BL+0x14 = 0` [M 0x194d0c] and `Vec_Zero(BL+0x50)` [M 0x194d10 → 0x1e2d58]. The port's
     ///   `vel` is the BL+0x50 map (`Bond::vel` [M player.rs field doc]); the BL+0x14 write has no
@@ -845,8 +852,10 @@ impl Bond {
         // [M 0x1949a8:78-82] the grounded history halves and takes flag 8.
         self.grounded_history = (self.grounded_history >> 1) | if self.grounded { 8 } else { 0 };
         // [M 0x1949a8:97-131] the fall timer — the airborne arm counts while the frozen body's
-        // y velocity reads negative, resets on any non-negative y; the grounded arm just clears
-        // (the dead pain is the [S] residual above).
+        // y velocity reads negative, resets on any non-negative y; the grounded arm clears
+        // (the game first computes timer−60 and calls `Player_HandlePain(dmg, 6)` when ≥ 10
+        // [M :117-123, the jal at 0x194bd4], but the pain pipeline's dead gate [M 0x190318-0x19032c]
+        // returns before any write or draw, so the observable is the plain clear).
         if self.grounded_history == 0 {
             if self.vel[1] < 0.0 { self.fall_timer += 1; } else { self.fall_timer = 0; }
         } else {

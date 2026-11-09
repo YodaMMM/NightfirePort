@@ -448,6 +448,29 @@ fn tail_read_in(s: &nf_view::scene::Sim) -> Option<u32> {
         .min()
 }
 
+/// Ticks until missile `k`'s state-2 read of console k's channel — the console's read deadline,
+/// the same clock `tail_read_in` reads for the tail: state 0 counts its seed down at
+/// `REC_FRAME_RATE` per gated tick, state 1 reads at its tick L−1 [M 0x1aa1c8-238,
+/// 0x1aa23c-258; D P0_LEN]. None once the console is latched or the missile is past the read.
+fn read_deadline_in(s: &nf_view::scene::Sim, k: u32) -> Option<u32> {
+    use nf_game::space_missile::P0_LEN;
+    if s.drones.channels.on(k) { return None; }
+    s.drones.space_missiles.iter()
+        .filter(|m| m.index as u32 == k)
+        .filter_map(|m| {
+            let len = P0_LEN[(k - 1) as usize];
+            match m.state {
+                0 => Some((m.countdown.max(0.0) * 60.0) as u32 + len - 1),
+                1 => {
+                    let clock = m.info.and_then(|h| s.drones.scripts.owned(h)).map_or(0.0, |sc| sc.clock);
+                    Some((len - 1).saturating_sub((clock as u32).saturating_sub(1)))
+                }
+                _ => None,
+            }
+        })
+        .min()
+}
+
 fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool, hard: bool) -> Vec<(u32, u32)> {
     // 00 Agent (hard): the level's own contact plates, once — the [L] ledger of where the
     // −20.0/−39.3 world hits came from (the death at (46.01,−8.08,0.00) sat INSIDE the x46
@@ -565,11 +588,28 @@ fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool,
         if hard {
             let lined = exposure(w.scene.sim.as_ref().unwrap(), w.scene.sim.as_ref().unwrap().bond.head()).0;
             let cooled = tt.saturating_sub(last_defense) >= 1200;
-            if lined >= 2 && cooled {
+            // 0700001b (the k5 late latch): the fight must also FIT the pending console's read
+            // deadline — the state-2 channel read at S_k + P0_LEN − 1 [M 0x1aa23c-258; D P0_LEN]
+            // is the game's own clock, difficulty-blind, and k5 (seed 0 [D placement params])
+            // has none to spend: its p0 writes the UI gate 35 at armed+359 [D P0_GATE] and the
+            // three holds ride the UI script's own times [D probe1b_scripts], so the measured
+            // fight at frames 2988..3305 (the red run's log) sat inside the hold chain (hold#1
+            // answered 2917, hold#2 only 3593 — the pause began ~3017 during the fight) and the
+            // latch landed 3667, +93 past 3574 — missile 5 launched, mission status 2. The
+            // 700-tick cap plus the re-acquisition and the rest of the hold chain (~500
+            // measured) only fits when >1200 ticks remain to the read; with less, Bond keeps
+            // shooting the screen (run1's no-defense ledger: ~1 hit per 250 ticks, the k5 latch
+            // lands ~3150, margin ~+420) and the defense resumes on the next console's window.
+            let slack_ok = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                CONSOLE_ORDER.iter().find(|&&c| !sim.drones.channels.on(c))
+                    .map_or(true, |&c| read_deadline_in(sim, c).map_or(true, |n| n > 1200))
+            };
+            if lined >= 2 && cooled && slack_ok {
                 last_defense = tt;
                 let f0 = w.scene.sim.as_ref().unwrap().drones.frame;
                 let here = w.scene.sim.as_ref().unwrap().bond.pos;
-                fight_opts(w, here, None, true, |s| stuck(s) || exposure(s, s.bond.head()).0 <= 1, 700);
+                fight_opts_y(w, here, None, true, |s| stuck(s) || exposure(s, s.bond.head()).0 <= 1, 700, 6.0);
                 eprintln!("[1b] mid-phase defense: frames {f0}..{} (lined was {lined})", w.scene.sim.as_ref().unwrap().drones.frame);
                 continue;
             }
@@ -868,6 +908,20 @@ fn fight(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, done: impl Fn(&nf_
 /// boss last; the fight's `done` gate is the prio target's death, so the waves dying never
 /// ends it early.
 fn fight_opts(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: bool, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
+    fight_opts_y(w, hold, prio, waves_first, done, cap, f32::MAX)
+}
+
+/// `fight_opts` with a float-height cap (0700001b 00 Agent, the k5-late-latch task): the view is
+/// level-only (the aim arm lifts the eye TO the target's height), and once the SpaceLaser beam
+/// arms (ch 19 [M 0x1aa3f8]; the 10 s fire → ch 18 [D the laser chain]) the BigLaserBeamHURT
+/// band #259 (0xe4, type 1, dmg 50, gate ch 18 [D], box (8.5,9.0,−0.4)..(81.4,9.9,0.4) [L the
+/// leg-start hurt dump]) is live across the whole level — the game's own contact law (the
+/// feet..+1.8 r 0.55 capsule [M Player_DealWithObjHit 0x194458]) overlaps it from feet 6.65 up,
+/// so a fight that lifts Bond to a ceiling-band astronaut (the measured death: the aim arm
+/// parked him at feet 7.53 → capsule top 9.33, two −50.0 deliveries, dead at 3457) dies in it.
+/// `max_y` clamps the body height (cover candidates and the aim lift both) and the aim pick
+/// skips targets the capped stance cannot reach; `f32::MAX` (every other caller) is a no-op.
+fn fight_opts_y(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: bool, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32, max_y: f32) {
     let mut last_tap = 0u32;
     let mut target: Option<(usize, [f32; 3])> = None;
     let mut recharging = false;
@@ -897,7 +951,7 @@ fn fight_opts(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: 
             let mut best = (sc(p), p);
             for r in [2.5f32, 5.0] {
                 for o in [[r, 0.0, 0.0], [-r, 0.0, 0.0], [0.0, r, 0.0], [0.0, -r, 0.0], [0.0, 0.0, r], [0.0, 0.0, -r]] {
-                    let c = [hold[0] + o[0], hold[1] + o[1], hold[2] + o[2]];
+                    let c = [hold[0] + o[0], (hold[1] + o[1]).min(max_y), hold[2] + o[2]];
                     if sim.world.segment(p, c).is_some() { continue; }
                     let s = sc(c) + 0.05 * r;
                     if s < best.0 { best = (s, c); }
@@ -916,6 +970,11 @@ fn fight_opts(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: 
                 let r = dist3(d.pos, e);
                 if r > 40.0 { continue; }
                 let Some(a) = w.exposed_aim(i) else { continue };
+                // The capped float (fight_opts_y): a target the capped stance cannot reach is not
+                // a target — the level-only view shoots at the eye's own height, so picking it
+                // only grinds the cap away (the measured death: the aim lift into the live beam
+                // band). `f32::MAX` callers never skip.
+                if a[1] - eye_off > max_y + 0.5 { continue; }
                 let threat = sim.world.segment_bullet([d.pos[0], d.pos[1] + 0.6, d.pos[2]], e).is_none();
                 // waves_first banding: a THREATENING wave outranks a far prio target, but the
                 // prio target CLOSING inside 8 u outranks the waves — Drake's own gun (weapon
@@ -941,7 +1000,7 @@ fn fight_opts(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: 
             // the sheltered hold keeps him shootable (the exposure scoring is the same
             // fewest-astronauts-see-me rule the recharge arm already used).
             let mut spot = if recharging || waves_first { cover } else { hold };
-            if let Some((_, a)) = target { if !recharging { spot[1] = a[1] - eye_off; } }
+            if let Some((_, a)) = target { if !recharging { spot[1] = (a[1] - eye_off).min(max_y); } }
             let mut inp = thrust_to(sim, spot);
             let mut fire = false;
             match target {
@@ -1735,7 +1794,7 @@ fn walk_arrival_to_drakes_defeat_on_real_health_agent() {
 /// astronauts' hit chance by Accuracy Hard [M DroneWeap_DoBulletAccuracy 0x179740:74-88].
 /// Real input only; no health/ammo/channel writes.
 #[test]
-#[ignore = "00 Agent, re-measured on batch-1109a-walks (the walk-time stuck guard + this route): console 5 latches at frame 3667, 93 ticks PAST its deadline 3574 (the latch log margin +93), so missile 5 launches (deploy 3, mission status 2) and the stuck guard ends the console leg at 4577 with k5/k4 latched, health 95.0 — the console phase is NOT green yet (the k5 latch must land before 3574). The branch ledger follows. level-1b-console-latch-00agent: the console phase is FIXED (the task's 'console 1 latched by the real shot' red) — the d3 lever (exposure-hedged station picks, the bounded mid-phase defense fights, the hurt-free stance guard, all inside this file, run3/run5 [L]): all 8 consoles latch in deadline order k5 3667 / k4 4322 / k3 5531 / k6 7085 / k8 7409 / k1 9264 / k2 9401 / k7 10079, health 39.3 at the k7 latch — the run1 death (tick 6251 mid-console-phase, the ch-19 launch order leaves five skin-0x5000078 survivors whose 0x6a rounds at pain 1.0 [M 0x1902c8; 0x1d3a80 case 0x700001b] ground the walk down with 0 return-fire fights) is gone. STILL RED downstream, at the same zone as the old d2/d3 ledger deaths: the disarm wait at the x46 nest dies at tick 10424 at (46.01,-8.08,0.00) — kind-107 debris blasts (damage 20.0 radius 20.0 owner -2 [L 1b-run4.log NF_DMG_TRACE]) detonate AT the screens Bond shoots: 8502 exactly on the x20 station (20.2,-1.9,-0.2), 10424 exactly on the x46 nest (46.1,-7.8,-0.2), two point-blank deliveries each, and the schedule is FIXED (4658->6580->8502->10424, exactly 1922 ticks apart, byte-identical across run3/run4/run5 — the latch-stop-at-channel lever changed nothing, so the blasts ride the screens' own 3-hold resume chains, not the extra taps). The level's only two hurt volumes are clean (the dump: kind 2 damage 50 at (-34.4,5.5,-0.9)..(-32.5,13.8,0.9) far west, kind 1 damage 50 gate 18 disabled at (8.5,9.0,-0.4)..(81.4,9.9,0.4) — neither touches the stations; the world hits are NOT hurt volumes). NEXT LEVER: the decompile-compare on the blast source — which script fires the kind-107 explosion at the panel resumes (the port's panel resume -> debris chain, GAPS G-047: 'the 0700001b solar panels (param 7 = 20) resume and their stream 1-10 debris plays'), and whether the game's blast schedule/damage matches (a live check: in PCSX2 at 00 Agent, shoot console 1's screen from the station and watch the health trace for a 20.0 blast at the screen — if the game's player takes it too, the route must dodge the 1922-tick fire ticks instead; if not, the port's blast delivery is the port gap)."]
+#[ignore = "00 Agent, re-measured on this branch (level-1b-console5-00agent): the k5 LATE LATCH is FIXED — the cause was the walk's own mid-phase defense fight running inside k5's hold chain (the red run: the fight 2988..3305 stole the window between hold#1 2917 and hold#2 3593, the latch landed 3667, +93 past the 3574 read deadline, missile 5 launched). The fix is the route, two levers: (1) the defense now also gates on the pending console's read deadline (read_deadline_in = the missile's state-2 read at S_k + P0_LEN - 1 [M 0x1aa23c-258; D P0_LEN]; the fight only runs when >1200 ticks remain — the 700-tick cap plus the re-acquisition and the rest of the hold chain), and (2) the defense floats through fight_opts_y, height-capped at 6.0 feet: the SpaceLaser chain (ch 19 arms it [M 0x1aa3f8], the 10 s fire writes ch 18 ~2375) turns BigLaserBeamHURT #259 (0xe4, dmg 50, the (8.5,9.0,-0.4)..(81.4,9.9,0.4) band [L the hurt dump]) live, and the level-only view's aim lift into a ceiling-band astronaut parked Bond at feet 7.53, capsule top 9.33 [M Player_DealWithObjHit 0x194458], two -50.0 deliveries, dead 3457 — a real game death the old uncapped lift walked into. Result [L this run]: the k5 holds answer 2917/3019/3103 uninterrupted, the channel writes ~3104 (470 ticks before the read), m5 DISARMS (deploy[4] = 2, no state-3 missile, mission status stays 1); k4 4317 (-457) and k3 5574 (-400) latch green the same way. STILL RED downstream, survivability not deadlines: the wave grows 3@f3000 -> 6@f4200 -> 8@f5100 (the missile-script spawn channels), the capped fight cannot reach the ceiling-band shooters (the level-only view needs the eye at the aim height; in-plane lifts above feet 6.65 enter the live beam band; the wave posts sit at z +/-2.7-4.3 behind the panel rows), and the grind kills Bond at 5619 (14 hits for 100.0) during k6's window with k5/k4/k3 latched and disarmed. NEXT LEVERS: the wave-clearing needs a band-safe kill shape (an off-plane lane at |z| >= 1.0 the panel rows do not block, or waiting the band shooters down to the <=8.3 aim heights), and the kind-107 blast source decompile-compare of the previous ledger still stands for the disarm wait. The prior ledger follows. level-1b-console-latch-00agent: the console phase is FIXED (the task's 'console 1 latched by the real shot' red) — the d3 lever (exposure-hedged station picks, the bounded mid-phase defense fights, the hurt-free stance guard, all inside this file, run3/run5 [L]): all 8 consoles latch in deadline order k5 3667 / k4 4322 / k3 5531 / k6 7085 / k8 7409 / k1 9264 / k2 9401 / k7 10079, health 39.3 at the k7 latch — the run1 death (tick 6251 mid-console-phase, the ch-19 launch order leaves five skin-0x5000078 survivors whose 0x6a rounds at pain 1.0 [M 0x1902c8; 0x1d3a80 case 0x700001b] ground the walk down with 0 return-fire fights) is gone. STILL RED downstream, at the same zone as the old d2/d3 ledger deaths: the disarm wait at the x46 nest dies at tick 10424 at (46.01,-8.08,0.00) — kind-107 debris blasts (damage 20.0 radius 20.0 owner -2 [L 1b-run4.log NF_DMG_TRACE]) detonate AT the screens Bond shoots: 8502 exactly on the x20 station (20.2,-1.9,-0.2), 10424 exactly on the x46 nest (46.1,-7.8,-0.2), two point-blank deliveries each, and the schedule is FIXED (4658->6580->8502->10424, exactly 1922 ticks apart, byte-identical across run3/run4/run5 — the latch-stop-at-channel lever changed nothing, so the blasts ride the screens' own 3-hold resume chains, not the extra taps). The level's only two hurt volumes are clean (the dump: kind 2 damage 50 at (-34.4,5.5,-0.9)..(-32.5,13.8,0.9) far west, kind 1 damage 50 gate 18 disabled at (8.5,9.0,-0.4)..(81.4,9.9,0.4) — neither touches the stations; the world hits are NOT hurt volumes). NEXT LEVER: the decompile-compare on the blast source — which script fires the kind-107 explosion at the panel resumes (the port's panel resume -> debris chain, GAPS G-047: 'the 0700001b solar panels (param 7 = 20) resume and their stream 1-10 debris plays'), and whether the game's blast schedule/damage matches (a live check: in PCSX2 at 00 Agent, shoot console 1's screen from the station and watch the health trace for a 20.0 blast at the screen — if the game's player takes it too, the route must dodge the 1922-tick fire ticks instead; if not, the port's blast delivery is the port gap)."]
 fn walk_arrival_to_drakes_defeat_on_real_health_00agent() {
     walk_arrival_to_drakes_defeat_on_real_health_at(3);
 }
