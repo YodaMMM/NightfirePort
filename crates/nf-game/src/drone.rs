@@ -15698,9 +15698,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // the standard blast script [L/M 0x17cd18], 15 when no script loaded [M 0x17cd38]; other
         // scripts' +0xAB0 stand in at 165 [S unverified — only affects when the record dies, and
         // their debris arm is dead anyway (the +0x98 gate)]. The debris direction/jitter come from
-        // the aligned basis: up row and basisA+basisB [M 0x17c930:118-131 (Mat_GetUp /
-        // Vec_MakeOrthonormalBasis) — the port's align2dir shape, S: the game aligns the SCRIPT's
-        // matrix].
+        // the aligned script matrix's up row (`Mat_GetUp` [M 0x17cbd0, 0x1e33b8] — the port's
+        // align2dir shape, S: the game aligns the SCRIPT's matrix) and basisA+basisB of
+        // `Vec_MakeOrthonormalBasis` over the unit to-player vector [M 0x17cbd0, 0x1e4b78].
         let lifetime = if script == crate::explode::BLAST_SCRIPT_0x0600052 {
             crate::explode::BLAST_SCRIPT_LIFETIME
         } else if script == 0 {
@@ -15718,7 +15718,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             weapon_type,
             script_hash: script,
             debris_dir: [bm[1][0], bm[1][1], bm[1][2]],
-            debris_jitter: [bm[0][0] + bm[2][0], bm[0][1] + bm[2][1], bm[0][2] + bm[2][2]],
+            // `a + b` of `Vec_MakeOrthonormalBasis` over the unit to-player vector — both
+            // perpendicular to it [M 0x17cbd0, 0x1e4b78]. bm[2] is that unit vector (align2dir's
+            // z row). The port added align2dir's x row and the to-player row itself, so the
+            // pieces flew toward/away from the player and too fast sideways, never up.
+            debris_jitter: crate::explode::debris_jitter([bm[2][0], bm[2][1], bm[2][2]]),
         });
     }
 

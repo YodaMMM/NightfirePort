@@ -3,7 +3,8 @@
 //! - `Debris_Create` 0x1aaa00:31 stores obj+0x106 = 0xff at spawn;
 //! - `Debris_Update` 0x1aac00:18-24 subtracts the record's step byte (INFO+0x32 = 1 [M
 //!   0x1aaa00:35]) per tick while the result stays > 0, and kills the piece the tick the
-//!   subtraction would reach ≤ 0; INFO+0x30 < 1 (the tick count) kills too [M 0x1aac00:14];
+//!   subtraction would reach ≤ 0; INFO+0x30 < 1 (the tick count) at entry kills too [M 0x1aac00:14]
+//!   — a piece of life L lives through L updates and dies on update L + 1;
 //! - the breakable pieces' life is `(EffectInfo+0x81 >> 1) + Rand_Rand(EffectInfo+0x81 >> 1)`
 //!   [M 0x1aaa00:34-37] — 27..54 ticks on table entry 0x10 [D ACTION.ELF 0x3037c0] — so death is
 //!   by life and the last stored alpha is 255 − life ≥ 201.
@@ -60,13 +61,15 @@ fn a_shot_vases_pieces_step_their_fade_byte_down_one_per_tick_and_die_by_life() 
 
     // The sim's own tick (`Shatter::update` → `Debris_Update` 0x1aac00): after tick k every
     // still-alive piece's fade is 0xff − k and its tick count ran down with it; the population
-    // is exactly the create rows whose life is still ≥ k+1 (the tick-count kill [M 0x1aac00:14]).
+    // is exactly the create rows whose life is still ≥ k: the update that stores life 0 keeps
+    // the piece, the next one kills it (the tick-count kill reads life < 1 at entry [M disasm
+    // 0x1aac0c-0x1aac10], the decrement runs after the fade store [M 0x1aac3c-0x1aac4c]).
     // `retain` is order-preserving, so the j-th live piece maps to the j-th surviving row.
     for k in 1..=60u32 {
         br.shatter.update();
-        let alive: Vec<usize> = (0..lives.len()).filter(|&r| lives[r] >= k as i32 + 1).collect();
+        let alive: Vec<usize> = (0..lives.len()).filter(|&r| lives[r] >= k as i32).collect();
         assert_eq!(br.shatter.debris.len(), alive.len(),
-            "after tick {k}: exactly the pieces with life > {k} remain [M 0x1aac00:14]");
+            "after tick {k}: exactly the pieces with life ≥ {k} remain [M 0x1aac0c-0x1aac4c]");
         for (j, d) in br.shatter.debris.iter().enumerate() {
             let row = alive[j];
             assert_eq!(d.fade as u32, 0xff - k,
@@ -100,10 +103,16 @@ fn the_fade_byte_kills_the_piece_when_its_step_would_reach_zero() {
     nf_game::shatter::Shatter::update_debris_list(&mut list);
     assert!(list.is_empty(), "tick 3: 1 − 1 = 0 is not > 0 → the piece dies [M 0x1aac00:18-24, 56-63]");
 
-    // The tick-count kill fires first when it is the smaller clock: life 1, fresh fade.
+    // The tick-count kill fires first when it is the smaller clock: life 1, fresh fade. The
+    // update that stores life 0 keeps the piece (it moves and draws that tick); the next update
+    // reads life < 1 and kills it [M disasm 0x1aac0c-0x1aac10 `lh v0,0x30; blezl` at entry, the
+    // decrement 0x1aac3c-0x1aac4c after the fade store].
     let mut list = vec![piece(1, 0xff)];
     nf_game::shatter::Shatter::update_debris_list(&mut list);
-    assert!(list.is_empty(), "life 1 → the tick-count kill after one tick [M 0x1aac00:14]");
+    assert_eq!(list.len(), 1, "life 1 → stores life 0 and lives through the tick [M 0x1aac3c-0x1aac4c]");
+    assert_eq!((list[0].life, list[0].fade), (0, 0xfe), "life 0 stored, one fade step [M 0x1aac18-0x1aac28]");
+    nf_game::shatter::Shatter::update_debris_list(&mut list);
+    assert!(list.is_empty(), "life 0 at entry → the tick-count kill [M 0x1aac0c-0x1aac10]");
     // A dead entry (life < 1 at entry) never stores a fade step.
     let mut list = vec![piece(0, 0xff)];
     nf_game::shatter::Shatter::update_debris_list(&mut list);
