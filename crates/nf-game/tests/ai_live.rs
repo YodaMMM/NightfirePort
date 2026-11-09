@@ -558,16 +558,12 @@ fn bond_kills_guards_with_two_torso_shots() {
     };
     // The sniper on the ledge.
     let (sim, i, hits) = run([65.0, 34.4, 88.5], 267, 400, 0.0);
-    assert_eq!(hits.len(), 2, "hits {hits:?}");
-    assert_eq!(hits[0], (100, 4, 4.75), "hits {hits:?}");
-    // The second contact's PART rides the guard's masked vision chain: the sight ray is the
-    // game's 0xa27 with the `Collide_PickObj` 0x1eae80:70-87 + `Collide_Intersect` 0x1ebaa8:300-319
-    // drops (los-mask-envelope 2026-11-08 turned LOS_MASKS_ON), so the SniperAim pose at the
-    // second shot differs from the pre-mask tree (the port-observed part 4 → 32); the damage
-    // chain is the decompile's and unchanged — 5.25 per torso hit, dead at the second contact.
-    // The exact part number is a port-chain consequence, deliberately not a hard pin.
-    assert_eq!(hits[1].0, 130, "hits {hits:?}");
-    assert_eq!(hits[1].2, -0.5, "hits {hits:?}");
+    // The second contact's PART is port-observed (the header: not yet checked live): with the
+    // game's sight masks on (LOS_MASKS_ON, `Collide_PickObj` 0x1eae80:70-87 + `Collide_Intersect`
+    // 0x1ebaa8:300-319) the second round lands on part 32 instead of 4 (los-mask-join; which
+    // sight call moves the sniper's pose is not traced). The damage chain is the decompile's:
+    // 5.25 per torso hit, dead at the second contact.
+    assert_eq!(hits, [(100, 4, 4.75), (130, 32, -0.5)], "hits {hits:?}");
     let log: Vec<u8> = sim.list[i].log.iter().map(|&(_, s)| s).collect();
     // A sniper (mode 2): SniperIdle; the first hit sends it to SniperAim (SniperIdle's `HandleImpact(0x2A, 0)`).
     assert_eq!(log[0], state::SNIPER_IDLE, "log {:x?}", sim.list[i].log);
