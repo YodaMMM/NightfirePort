@@ -10,3 +10,8 @@ claimed-by: sandbox5 at 2026-11-09T21:58Z
 ---
 ## Report (done, 2026-11-09T23:08Z)
 
+
+---
+## Report from the worker (done, 2026-11-09T23:09Z)
+
+Closed by the driver: the report is on `s/level-0b-roof-sprint-4` (docs/reports/level-0b-roof-sprint-4.md); the worker didn't run finish.sh.
