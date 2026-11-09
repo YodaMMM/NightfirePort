@@ -11,3 +11,8 @@ For each: port bug vs lost margin with evidence; fix the port (test red on old c
 
 ---
 claimed-by: sandbox4 at 2026-11-09T14:16Z
+
+---
+## Report (done, 2026-11-09T14:52Z)
+
+Closed by the driver: the report is on `s/capsule-join-3` (docs/reports/capsule-join-3.md); the worker didn't run finish.sh.
