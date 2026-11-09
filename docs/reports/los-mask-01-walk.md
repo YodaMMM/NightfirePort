@@ -105,3 +105,13 @@ added; the death guards only stop ticking after the fail (the asserts still gate
 not visible to me — this session's driver shows no token, cost or context-window figures to the
 worker (the IM gateway metadata carries only session/chat ids; no usage counters were exposed in
 any tool result).
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-09 ~12:45 UTC):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "los-mask-01-walk: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. python3 urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "los-mask-01-walk: done ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out after 30 s, killed
+
