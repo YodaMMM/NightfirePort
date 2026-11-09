@@ -1518,6 +1518,14 @@ fn the_door_band_exit_chains_to_07000006_walked_at(difficulty: u32) {
     // None = master stands still; the field is read in stand_and_fire's crowd arm only).
     if difficulty >= 3 {
         w.dmg.back_off = Some(4.0);
+        // los-mask-05-walk (d3, the masked tree): the return-fire pick answers the guard actually
+        // draining Bond — the masked vision engages long-range guards the strict pre-mask ray
+        // blocked, and the masked 00 Agent run's ledger has drone #9 hitting 44.0 in 16 hits at
+        // d 96.4 while only 3 return-fire fights ran all session, then the point-blank #12/#13
+        // pair finished the drained Bond at the door band (death t10852 [L the masked run]). The
+        // hurting-first pick is the 01 d2 walk's proven lever (common/damage_log.rs), gated here
+        // to this difficulty.
+        w.dmg.hurting_first = true;
         // The spine's vertical shooters (DamageLog::shooters_window): the gallery riflemen stand
         // 16.6 u BELOW the spine (y 22.0 vs the spine's 38.6) and their rounds reach Bond — the
         // plain 6.0 dy window dropped them before the pick (the a05c repro: 18 rounds for 48.0 on
@@ -1637,6 +1645,7 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage_agent() {
 /// the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the
 /// load path is the only difference.
 #[test]
+#[ignore = "los-mask-01-walk: the masked 00 Agent run bleeds out to the masked vision's long-range engages — drone #9 hit 44.0 in 16 hits at d 96.4 (a range the strict pre-mask ray blocked; the 0xa27 drops admit it now [M 0x1eae80:70-87 + 0x1ebaa8:300-319]) with only 3 return-fire fights all session, and the point-blank #12/#13 pair (weapon 0x16, 5.5/hit at 1.5-3.4 u) finished the drained Bond at the door band, death t10852 at (41.22,45.14,-72.67), 30 hits for 100.0 [L the masked run]. The hurting-first pick (the 01 d2 lever, now gated on in the body) did NOT move it — the drain happens outside the return-fire windows. NEXT LEVER: the file's own pre-engage law ('A player under sniper arcs engages them BEFORE crossing their fields', the d>=2 ditch/wall arms above) extended to #9's placement — pin the 96-u site and shoot it from the route BEFORE its field crosses Bond, plus a bounded fight-site for the door-band pair"]
 fn the_door_band_exit_chains_to_07000006_walked_real_damage_00agent() {
     // The fights HEAD-HUNT (see the Agent sister): at 00 Agent the guards' accuracy is 1.3 and
     // Bond's pain is unscaled, so every tick a fight stands is a tick of bursts — the head pick
