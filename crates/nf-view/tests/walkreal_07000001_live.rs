@@ -568,6 +568,19 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             // falls back to the hold line.
             w.walk_nav_to([7.9, 6.4, 10.6], "the hall door threshold (pre-open)", 0.5);
             w.walk_nav_to([7.2, 6.4, 7.6], "the door-hold line (d3, the radii live)", 1.0);
+            // level-01-d3-walk (the 5925 death): the flank walked Bond THROUGH the open door
+            // plane hunting #11's exposed part, and the return-fire trade with the standoff
+            // captain #7 (SMG 0x1c at (1.3,5.7,17.8)) ran at the aperture mouth (8.24,11.71) —
+            // 18 hits for 85.6, all at d 9.3 [L the 5925 run]; from every position south of the
+            // plane #7's own line is walled (the hold line's sight line crosses the wall plane
+            // at x 5.69, the aperture's x is ~7.5-8.3 [L the same run's geometry]) — the trade
+            // is only losable from inside the hall. So the whole door phase is plane-gated: the
+            // fight machinery may flank-target nothing north of z 11.1 (flank_hold_z — the
+            // flank_hold_x hold shape) and may not translate Bond past z 11.6 (no_cross_z —
+            // the mouth stands reach 11.4 and stay under it). Cleared once the AND fires: the
+            // escort legitimately crosses the hall.
+            w.no_cross_z = Some(11.6);
+            w.flank_hold_z = Some(11.1);
         }
     }
     // (the d1 stage walk is gone — gas-rng-draws: every difficulty holds the door line now; the
@@ -833,6 +846,10 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x99),
         "AND(0x11,0x12,0x13) must raise ch 153 once the three named guards are dead [D mux placement]");
     eprintln!("[01] the hall AND fired: ch 153 on at tick {}", w.total_ticks);
+    // The door phase is over — the gates come off (the escort legitimately crosses the hall;
+    // see the set site for the ledger).
+    w.no_cross_z = None;
+    w.flank_hold_z = None;
     // The door-lure fight leaves Bond on the hold line south of the door; the contact's route
     // to the LoadPointActivator plate runs back through the hall (his stall sat at (5.9,14.1),
     // route 18/37), so Bond steps just INSIDE the doorway — 2.6 u from the route, inside the
@@ -1718,6 +1735,12 @@ fn exposed_from(w: &Walker, di: usize, eye: V3) -> bool {
 /// `Some(false)` when Bond dies or runs dry, `None` after a 12-point wound or a lost line.
 fn peek_fire(w: &mut Walker, g: usize) -> Option<bool> {
         let hp0 = w.scene.sim.as_ref().unwrap().drones.health.health;
+        // level-01-d3-walk: a mouth round (Bond past the door plane) is the ONE spot the
+        // standoff shooters' lines clear — the wound cap halves there (6.0) so the round is
+        // step-in/tap/step-back, never a stand-up trade (the 6159 run's 49.6-in-8 is what an
+        // unbounded mouth stand costs).
+        let at_mouth = w.scene.sim.as_ref().unwrap().bond.pos[2] > 11.0;
+        let wound_cap = if at_mouth { 6.0 } else { 12.0 };
         let mut lost = 0u32;
         let mut aim = w.exposed_aim(g);
         for t in 0..900u32 {
@@ -1727,7 +1750,7 @@ fn peek_fire(w: &mut Walker, g: usize) -> Option<bool> {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let d = &sim.drones.list[g];
                 if d.corpse || d.health <= 0.0 { return Some(true); }
-                if sim.drones.health.health <= hp0 - 12.0 || lost > 40 { (Input::default(), false, false, true) }
+                if sim.drones.health.health <= hp0 - wound_cap || lost > 40 { (Input::default(), false, false, true) }
                 else {
                     let bp = sim.bond.pos;
                     let at = aim.unwrap_or([d.pos[0], d.pos[1] + 0.3, d.pos[2]]);
@@ -1779,17 +1802,33 @@ fn door_peek_fight(w: &mut Walker, g: usize, tag: &str) -> bool {
             let bp = sim.bond.pos;
             let eye_h = sim.bond.eye - sim.bond.crouch_drop;
             let mut best: Option<(f32, V3)> = None;
+            let mut scan = |c: [f32; 3], best: &mut Option<(f32, V3)>| {
+                if walker::dxz(c, d.pos) < 3.4 { return; }
+                if sim.drones.list.iter().any(|o| o.team == 1 && o.enabled && o.present && !o.corpse
+                    && o.health > 0.0 && walker::dxz(o.pos, c) < 3.4) { return; }
+                if sim.world.segment([bp[0], bp[1] + 0.9, bp[2]], [c[0], c[1] + 0.9, c[2]]).is_some() { return; }
+                let k = walker::dxz(c, bp);
+                if best.is_some_and(|(bk, _)| bk <= k) { return; }
+                if !exposed_from(w, g, [c[0], c[1] + eye_h, c[2]]) { return; }
+                *best = Some((k, c));
+            };
             for ix in 0..=19 {
                 for iz in 0..=8 {
-                    let c = [6.0 + ix as f32 * 0.2, bp[1], 8.4 + iz as f32 * 0.3];
-                    if walker::dxz(c, d.pos) < 3.4 { continue; }
-                    if sim.drones.list.iter().any(|o| o.team == 1 && o.enabled && o.present && !o.corpse
-                        && o.health > 0.0 && walker::dxz(o.pos, c) < 3.4) { continue; }
-                    if sim.world.segment([bp[0], bp[1] + 0.9, bp[2]], [c[0], c[1] + 0.9, c[2]]).is_some() { continue; }
-                    let k = walker::dxz(c, bp);
-                    if best.is_some_and(|(bk, _)| bk <= k) { continue; }
-                    if !exposed_from(w, g, [c[0], c[1] + eye_h, c[2]]) { continue; }
-                    best = Some((k, c));
+                    scan([6.0 + ix as f32 * 0.2, bp[1], 8.4 + iz as f32 * 0.3], &mut best);
+                }
+            }
+            // level-01-d3-walk (d3 only — d1/d2's scan grid stays byte-exact): the mouth strip.
+            // The 5925 run's geometry: the deep captain #7 (1.3,5.7,17.8) exposes NO part from
+            // any stand south of z 10.8 (round 0's scan), but his own fire only reaches Bond
+            // past the door plane — the aperture mouth is the ONE spot the sight lines both
+            // clear, and a player steps into the doorway, fires down the hall, and steps back.
+            // The strip rides the door plane (z 10.9-11.35, x 7.3-8.5 — inside the gate's
+            // no_cross_z 11.6), under the same expose/segment/3.4-u checks as the south grid.
+            if sim.drones.difficulty >= 3 {
+                for ix in 0..=6 {
+                    for iz in 0..=3 {
+                        scan([7.3 + ix as f32 * 0.2, bp[1], 10.9 + iz as f32 * 0.15], &mut best);
+                    }
                 }
             }
             best.map(|(_, c)| c)
@@ -1825,6 +1864,12 @@ fn door_peek_fight(w: &mut Walker, g: usize, tag: &str) -> bool {
                 w.walk_to(Wp::new(hold[0], hold[1], hold[2]).r(0.5), &format!("{tag} peek back {round}"));
                 w.lenient = false;
             }
+            // level-01-d3-walk: SHUT the leaf between rounds — the open aperture is the
+            // mouth-crowd's fire line (the 6007 run: #7 closed to (6.2,14.4) and drilled the
+            // stand 56.8 in 8 hits through the standing-open mouth), and a shut leaf blocks
+            // their rounds [M door.rs CLOSED=2/OPEN=4 — is_closed gates the bullets at exactly
+            // CLOSED]. A player steps back and kicks the door shut behind him.
+            shut_hall_door(w, tag, round);
             w.wait(60);
             continue;
         };
@@ -1841,11 +1886,26 @@ fn door_peek_fight(w: &mut Walker, g: usize, tag: &str) -> bool {
         w.lenient = true;
         w.walk_to(Wp::new(hold[0], hold[1], hold[2]).r(0.5), &format!("{tag} peek back {round}"));
         w.lenient = false;
+        // level-01-d3-walk: shut behind him (the same discipline — the window is bounded by
+        // the peek_fire caps, the wait is not).
+        shut_hall_door(w, tag, round);
         eprintln!("[01] {tag}: peek {round} done, health {:.1}, guard hp {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health,
             w.scene.sim.as_ref().unwrap().drones.list[g].health);
     }
     let d = &w.scene.sim.as_ref().unwrap().drones.list[g];
     d.corpse || d.health <= 0.0
+}
+
+/// level-01-d3-walk: press E on the hall's south door when it stands idle-OPEN (state 4
+/// [M door.rs OPEN=4]) so the leaf closes behind Bond — the mouth guards' rounds stop at the
+/// shut leaf. The press is the real E path (`use_door`); OPENING/CLOSING leaves are left alone.
+fn shut_hall_door(w: &mut Walker, tag: &str, round: u32) {
+    let di = walker::door_near(w.scene.sim.as_ref().unwrap(), [7.9, 6.4, 11.1]).map(|(_, i)| i);
+    if let Some(di) = di {
+        if w.scene.sim.as_ref().unwrap().drones.doors.list[di].state == 4 {
+            w.use_door(di, &format!("{tag} shut {round}"));
+        }
+    }
 }
 /// The 00 Agent door-lip lure (see the call site): every hall guard within 7 of the south door is
 /// drawn by a live-tracked burst from the hold line and fought as he crosses.

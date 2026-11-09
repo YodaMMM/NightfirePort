@@ -670,6 +670,13 @@ impl Walker {
         let di = {
             let sim = self.scene.sim.as_ref().unwrap();
             if sim.disabled || !sim.bond.grounded { return false; }
+            // The lip hold (OPT-IN `no_cross_z`, level-01-d3-walk): the stands never trade from
+            // past the plane — `stand_and_fire` does not move, so a fight picked at the aperture
+            // mouth runs its whole cap in the standoff shooters' clear line (the 6159 death: 49.6
+            // in 8 hits from #5 at d 5.7 while the mouth round's walk legs answered from the
+            // lip). The leg walks on instead; the peek fight's own bounded mouth rounds are the
+            // only deliberate exposures.
+            if self.no_cross_z.is_some_and(|zp| sim.bond.pos[2] > zp - 0.45) { return false; }
             let cands = self.dmg.shooters(sim);
             // OPT-IN `level_fights` (drone-block-swaps-g055-4, the field doc): the shooters a
             // level above Bond are not answers — the pick drops them and the leg walks on.

@@ -188,6 +188,19 @@ pub struct Walker {
     /// not walk to reach a guard he cannot see. Bond holds instead and returns after three holds,
     /// so the caller's round loop gets the window.
     pub flank_hold_x: Option<f32>,
+    /// OPT-IN (level-01-d3-walk): the z-plane twin of `flank_hold_x` — a target beyond this z is
+    /// never flanked (the flank's perpendicular arc walks Bond across the plane; the 01 hall's
+    /// south door: the trio holds the standoff bands north of z 11.1 and every crossing of the
+    /// aperture under fire is the documented death). Bond holds instead and returns after three
+    /// holds, so the caller's round loop gets the window. Also see `no_cross_z`.
+    pub flank_hold_z: Option<f32>,
+    /// OPT-IN (level-01-d3-walk): Bond never translates PAST this z plane. While he stands
+    /// within the plane's 0.2 margin, every movement tick's forward/strafe push that carries a
+    /// +z component is zeroed (turn/look/fire stay — the aim is not movement), so flanks,
+    /// sidestep creeps and stuck-ladder nudges cannot walk him through the 01 hall door under
+    /// the standoff trio's fire. Every other test leaves it None and runs master's behaviour
+    /// bit-exact.
+    pub no_cross_z: Option<f32>,
     /// The walked path: a coarse breadcrumb of ground Bond actually covered (pushed in
     /// tick_inner, ~2 u resolution, 512 points). The resupply rule draws its corridor from it —
     /// see `resupply` for why the harness must not take off-path ammo detours.
@@ -288,6 +301,8 @@ impl Walker {
             no_grenade_throws: false,
             grenade_downgrade_logged: false,
             flank_hold_x: None,
+            flank_hold_z: None,
+            no_cross_z: None,
         }
     }
 
@@ -462,7 +477,33 @@ impl Walker {
         f6c & 0x8 != 0 && f70 & (0x4 | 0x80 | 0x100) != 0
     }
 
+    /// The z-plane gate on one movement input (OPT-IN `no_cross_z`): when Bond stands within the
+    /// plane's 0.2 margin (or past it), any forward/strafe push whose +z share is positive is
+    /// zeroed — turn/look/fire stay, the aim is not movement. yaw 0 faces +z [M the walker's own
+    /// `dx.atan2(dz)` aim law], so forward pushes (sin, cos) and strafe pushes (cos, −sin); the
+    /// +z share is `cos·forward − sin·strafe`.
+    fn gate_z(&self, mut input: Input) -> Input {
+        let Some(zp) = self.no_cross_z else { return input };
+        let sim = self.scene.sim.as_ref().unwrap();
+        let (bp, yaw) = (sim.bond.pos, sim.bond.yaw);
+        if bp[2] <= zp - 0.2 { return input; }
+        let (sin, cos) = yaw.sin_cos();
+        if cos * input.forward - sin * input.strafe > 0.0 {
+            input.forward = 0.0;
+            input.strafe = 0.0;
+        }
+        input
+    }
+
+    /// `step_bond` through the z-plane gate (the direct callers inside the fight loops:
+    /// `shoot_bounded` and damage_log's stands route their movement ticks here).
+    pub fn step_gated(&mut self, input: Input, trigger: bool, reload: bool) {
+        let input = self.gate_z(input);
+        self.scene.sim.as_mut().unwrap().step_bond(input, trigger, reload, false);
+    }
+
     fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool, reload: bool) {
+        let input = self.gate_z(input);
         for k in 0..self.keep_alive.len() {
             let i = self.keep_alive[k];
             if let Some(dr) = self.scene.sim.as_mut().unwrap().drones.list.get_mut(i) {
@@ -631,6 +672,13 @@ impl Walker {
                 .filter(|p| (p.m[3][1] - bond_y).abs() < 1.5)
                 // The walked-path corridor (see the block comment above).
                 .filter(|p| self.trail.iter().any(|t| dxz(*t, [p.m[3][0], p.m[3][1], p.m[3][2]]) < 9.0))
+                // The plane gate (OPT-IN `no_cross_z`, level-01-d3-walk): a guard's drop that
+                // landed PAST the plane is a bait the corridor still admits once the fight
+                // walks put the mouth on the trail — the 10017 death: guard 11's dry branch
+                // resupplied to the drop at (6.0,5.3,13.7), 2.6 u inside the hall, where the
+                // standoff pair drilled 79.2 in 11 hits [L the same run]. A player does not
+                // step through a held door mouth to loot a dead guard's gun.
+                .filter(|p| self.no_cross_z.is_none_or(|zp| p.m[3][2] <= zp - 0.4))
                 .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
                 // A box the walker just wedged on is not the box a player keeps trying: exclude
                 // the already-tried spots so the next attempt takes the next-nearest.
@@ -920,17 +968,23 @@ impl Walker {
                 let trigger = !clip_empty && !blocked && on_target;
                 if trigger { last_tap = t; }
                 // The flank: while blocked, sidestep (alternating every 90 ticks) and push forward
-                // in the first half of each window when the guard is far.
+                // in the first half of each window when the guard is far. Movement goes through
+                // the z-plane gate (`no_cross_z`): an opt-in fight may not walk Bond past the
+                // plane while he holds its lip — and the blocked-forward creep itself is OFF
+                // under the flag (level-01-d3-walk: the creep was what carried Bond from the
+                // peek stand at z 10.5 into the aperture mouth the gate's own reach zone allows,
+                // where the standoff captain's line is clear; the deliberate mouth rounds are
+                // the peek fight's own walk legs, never the fight creep).
                 let far = dxz(bp, dp) > 8.0;
                 let window = (blocked_streak / 90) % 2 == 0;
                 let input = Input {
                     turn: err.clamp(-0.08, 0.08),
                     look: perr.clamp(-0.08, 0.08),
-                    forward: if backing { -1.0 } else if blocked && far && window { 1.0 } else { 0.0 },
+                    forward: if backing { -1.0 } else if blocked && far && window && self.no_cross_z.is_none() { 1.0 } else { 0.0 },
                     strafe: if backing { 0.0 } else if blocked { if window { 1.0 } else { -1.0 } } else if repositions % 2 != 0 && t - last_progress < 60 { -1.0 } else if repositions % 2 != 0 { 0.0 } else if t - last_progress < 60 { 1.0 } else { 0.0 },
                     ..Default::default()
                 };
-                self.scene.sim.as_mut().unwrap().step_bond(input, trigger, reload, false);
+                self.step_gated(input, trigger, reload);
             }
             self.total_ticks += 1;
             self.after_step();
@@ -953,7 +1007,8 @@ impl Walker {
             // growing the offset 3→5→7. This is the player's walk-around-the-cover; it ends when a
             // part's segment clears (the loop above picks it up).
             if blocked_streak >= 540 && flanks < 6
-                && self.flank_hold_x.is_some_and(|wx| self.scene.sim.as_ref().unwrap().drones.list[di].pos[0] < wx) {
+                && (self.flank_hold_x.is_some_and(|wx| self.scene.sim.as_ref().unwrap().drones.list[di].pos[0] < wx)
+                    || self.flank_hold_z.is_some_and(|wz| self.scene.sim.as_ref().unwrap().drones.list[di].pos[2] > wz)) {
                 flanks += 1;
                 blocked_streak = 0;
                 last_progress = t;
