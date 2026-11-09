@@ -6358,7 +6358,20 @@ impl Drone {
         let feet = self.feet();
         let path = *self.nav_path.get_or_insert_with(|| d.nav.nav_path_for(feet));
         if !self.croute.as_ref().is_some_and(|r| r.stamp == u32::MAX) {
-            let nodes = path.map(|p| d.nav.target_nodes(d.world, p, goal, 0.0)).unwrap_or_default();
+            // guard-door-park: the goal-node search is the game's CEL-SCOPED one —
+            // `AINetwork_NodesForPosition` 0x1586a8 walks the goal's own cel (NodeSearchCel over
+            // cel+0x24, the ±2.0 adjacent-cel expansion :103-131); a position whose cel holds no
+            // node of the path gives neither found nor fallback and `AINetwork_DoAStarPath`
+            // 0x1571b0:52-68 returns 4, which `NDrone2_MoveToGoalPosition` 0x1517d8 returns
+            // straight to `GoToGoalPosition` 0x165640's default arm (the +0x5A2 state change).
+            // The port's flat 15 u box (any cel) handed a wrong-cel fallback node to the A* and
+            // built a TRUNCATED route that ends at the far side of a wall: on 07000008 the
+            // guard-room pair (#7/#8) walked home in 0x63, pressed the locked guard-room leaf at
+            // x 153.97 and stood there ~14k ticks (`[park]` probe trace, state 0x63 throughout,
+            // `reached=None` every tick — no door bind, no arrival, no exit). Unscoped worlds
+            // (the unit tests) keep the flat search.
+            let goal_cel = if d.world.has_scope() { d.world.find_cel(goal) } else { None };
+            let nodes = path.map(|p| d.nav.target_nodes_in(d.world, p, goal, 0.0, goal_cel)).unwrap_or_default();
             let used: &[u16] = path.and_then(|p| self.links_used.get(p)).map_or(&[], |v| v.as_slice());
             let locked = |p: usize, n: u16| self.locked_door_nodes.contains(&(p, n));
             match crate::nav::Route::to_position(d.nav, d.world, path, feet, goal, &nodes, used, &locked) {
@@ -13772,6 +13785,37 @@ pub struct ExitHold {
     pub total: u32,
 }
 
+/// `Drone_InitComms` 0x139520's drone scan inputs ([M 0x139520:164-179]) — the one pass the game
+/// runs per frame after `DroneVision_ProcessDroneSight`. The port's field encode, the same fold
+/// `find_opponent_alive` documents: `+0x4F8 & 0x200` (`NDrone2_SetAsDead` 0x14a2f0:9) ↔ `corpse`,
+/// `& 0x400` (`NDrone2_PostDroneControl` 0x14aff8:9-12 under health ≤ 0) ↔ `health <= 0.0`,
+/// `& 0x100` ↔ `enabled`, `+0x44` ↔ `team`, `+0x50C` ↔ `alert`, `+0x1A0` ↔ `dist`.
+#[derive(Clone, Copy, Debug)]
+struct CommsDrone { corpse: bool, health: f32, enabled: bool, team: u8, alert: f32, dist: f32 }
+
+/// The scan [M 0x139520:161-201]: the all-clear (`bVar2`) starts SET, the chatter latch
+/// (`bVar3`) starts CLEAR, and the list walks in order —
+/// - the dead `& 0x600` drones are skipped entirely [M :166] (SetAsDead's 0x200, PostDroneControl's
+///   0x400): a dead guard can neither break the all-clear nor raise the chatter — the skip the
+///   rejected s/markers-drone-c round dropped;
+/// - a living DISABLED (`& 0x100` clear) team-1 guard (+0x44 == 1) breaks the all-clear, no stop
+///   [M :167-170];
+/// - a living ENABLED guard at alertness ≥ 1 within 30 units of its opponent, not team 2, raises
+///   the chatter and breaks the all-clear, and the walk stops [M :173-179].
+/// Returns `(all_clear, chatter)`. No Rand draws anywhere on the path [M :161-201].
+fn comms_scan(drones: impl Iterator<Item = CommsDrone>) -> (bool, bool) {
+    let mut all_clear = true;
+    for x in drones {
+        if x.corpse || x.health <= 0.0 { continue; }                       // `& 0x600` [M :166]
+        if !x.enabled {                                                    // `& 0x100` clear [M :167]
+            if x.team == 1 { all_clear = false; }                          // [M :168-170]
+        } else if x.alert >= 1.0 && x.dist < 30.0 && x.team != 2 {         // [M :173-175]
+            return (false, true);                                          // chatter, stop [M :176-178]
+        }
+    }
+    (all_clear, false)
+}
+
 impl Drones {
     pub fn new(mut list: Vec<Drone>, rng: Rng) -> Drones {
         // (`Drone_LevelReset` 0x13a5a8 — from `ResetMap_GameInit` 0x1d5080 [M caller grep] —
@@ -18923,6 +18967,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             _ => true,
         }
     }
+    /// `Drone_InitComms` 0x139520's one drone scan [M 0x139520:161-201], as a snapshot iterator —
+    /// the same pass the game runs once per frame after `DroneVision_ProcessDroneSight` (the
+    /// chatter/0x97 site below) and the all-clear music read re-runs at its master position.
+    fn comms_drones(&self) -> impl Iterator<Item = CommsDrone> + '_ {
+        self.list.iter().filter(|x| x.present).map(|x| CommsDrone {
+            corpse: x.corpse, health: x.health, enabled: x.enabled, team: x.team, alert: x.alert, dist: x.dist,
+        })
+    }
+
     pub fn tick(&mut self, d: &Data, player: &Player) {
         if self.hold_npcs && self.npc_enabled {
             self.npc_enabled = false;
@@ -19792,21 +19845,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // for the first 58 frames of channel 0xA4, then = 1 for the first 598 of channel 0x37 (both on 05 / 06 only) or 0x61; Bond dead →
         // event 6 (`Player_CheckForDeath`, a player-side call — runs during cut-scenes, not gated).
         self.attack_gate.new_frame();
-        // audit-music-events — `Drone_InitComms` 0x139520:163-196, the all-clear scan (game order:
-        // before CheckAlarmRaised :262): walk the drone list, skip the `+0x4F8 & 0x600 != 0` ones
-        // (the port's enabled/non-corpse encode) and clear the all-clear when a plain drone's
-        // alert status (+0x44) is exactly 1. The game's second arm — a `+0x4F8 & 0x100` flagged
-        // drone, aware (+0x50C >= 1.0) within 30 units of its opponent and not in state 2 — clears
-        // it too (and latches switch_channels 0x97/0x98): the port does not carry the 0x100 bit,
-        // so that arm is not modelled [S]. All clear → `Music_Event(0xe, 1)`. The board has NO
-        // reader for ch 14 anywhere in ACTION.ELF (grep DAT_002d3530 — write-only), so this is
-        // board-fidelity only.
+        // audit-music-events — `Drone_InitComms` 0x139520:161-196, the all-clear half of the ONE
+        // drone scan (`comms_scan` carries the law): a living DISABLED team-1 guard (+0x44 == 1
+        // [M :168-170] — +0x44 is the team byte, docs/fields/hitdata-spawner-ally.md §4) or an
+        // enabled guard aware (+0x50C >= 1.0) within 30 units of its opponent breaks it [M
+        // :173-179]; the `& 0x600` dead guards are skipped [M :166]. All clear →
+        // `Music_Event(0xe, 1)`. *Deviation* [S], board-fidelity only: the game runs the scan
+        // AFTER `ProcessDroneSight` [M :162-196]; this block sits before it so the 0xe event
+        // keeps its game order against CheckAlarmRaised's events below (all-clear first [M
+        // :194-196 vs :262]) — its read here is pre-vision. The board has NO reader for ch 14
+        // anywhere in ACTION.ELF (grep DAT_002d3530 — write-only).
         if self.npc_enabled {
-            let mut all_clear = true;
-            for dr in self.list.iter().filter(|dr| dr.present) {
-                if !dr.enabled || dr.corpse { continue; }
-                if dr.alert_status == 1 { all_clear = false; }
-            }
+            let (all_clear, _) = comms_scan(self.comms_drones());
             if all_clear { self.music.event(0xe, 1); }
         }
         // CheckAlarmRaised sits inside `Drone_InitComms`' `NPCGlobals != 0` block [M 0x139520:124-284]: a cut-scene
@@ -20355,14 +20405,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if sight_passes > 4 { break 'pairs; }                    // FindAlertedDrones stops after the 5th [M 0x1767d0:77-79]
             }
         }
-        // `Drone_InitComms` after the vision pass: an enabled (`+0x4F8 & 0x100`, set by DefaultInit / Enable), living
-        // (`& 0x600` clear) drone at alertness ≥ 1 within 30 units of Bond (not team 2) raises `switch_channels[0x97]`.
-        // Direct `.v` write: `Drone_InitComms` stamps NO timestamp on 0x97/0x98 [M 0x139520:198-201 — their snapshot
-        // time cells still hold the Init seed]; `Channels::set` stamps like the game's trigger/script writers.
-        if self.list.iter().any(|x| x.present && x.enabled && !x.corpse && x.alert >= 1.0 && x.dist < 30.0) {
-            self.channels.v[0x97] = 1;
-            // channel-persistence: the census probe records the direct writer too.
-            if let Some(w) = &mut self.channels.writes { w.push((0x97, 1, frame, 0)); }
+        // `Drone_InitComms` after the vision pass — the drone scan [M 0x139520:161-201, `comms_scan`]:
+        // the chatter latch (`bVar3` — an enabled, living, aware (+0x50C >= 1.0) guard within 30
+        // units of its opponent (+0x1A0), not team 2) raises `switch_channels[0x97]`, AND the
+        // chatter gate `switch_channels[0x98]` is written EVERY frame, set or clear [M :198-201].
+        // 0x98 is what `NDrone2_PowerstationTalk` 0x13e770:39 reads on 0x070000c/0d — the idle
+        // radio chatter's only gate; with no writer it could never fire. The dead `& 0x600`
+        // guards raise neither (SetAsDead 0x14a2f0:9 → 0x200, PostDroneControl 0x14aff8:9-12 →
+        // 0x400 — the skip the rejected s/markers-drone-c round dropped). Direct `.v` write:
+        // `Drone_InitComms` stamps NO timestamp on 0x97/0x98 [M :198-201 — their snapshot time
+        // cells still hold the Init seed]; `Channels::set` stamps like the game's trigger/script
+        // writers.
+        {
+            let (_, chatter) = comms_scan(self.comms_drones());
+            if chatter {
+                self.channels.v[0x97] = 1;
+                // channel-persistence: the census probe records the direct writer too.
+                if let Some(w) = &mut self.channels.writes { w.push((0x97, 1, frame, 0)); }
+            }
+            self.channels.v[0x98] = chatter as u8;
+            if let Some(w) = &mut self.channels.writes { w.push((0x98, chatter as u8, frame, 0)); }
         }
         // `DroneFunc_HandleSoundAlerts` (every drone, every frame) over the sounds made since the last frame, then
         // `Sound_ZeroAlertness`: each sound alerts once.
@@ -24062,6 +24124,38 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Drone_InitComms`'s scan law [M 0x139520:161-201] against hand-built states. The dead-guard
+    /// skip is the part the rejected s/markers-drone-c round dropped: a SetAsDead corpse (0x200
+    /// [M 0x14a2f0:9]) or a PostDroneControl health-dead guard (0x400 [M 0x14aff8:9-12]) — even
+    /// aware and close — raises neither the chatter nor an all-clear break.
+    #[test]
+    fn init_comms_scan_law() {
+        let d = |corpse: bool, health: f32, enabled: bool, team: u8, alert: f32, dist: f32| {
+            CommsDrone { corpse, health, enabled, team, alert, dist }
+        };
+        // The chatter arm: enabled, living, aware, within 30 of the opponent, not team 2.
+        assert_eq!(comms_scan([d(false, 1.0, true, 1, 1.5, 4.6)].into_iter()), (false, true), "[M :173-179]");
+        // Exactly at the boundaries: alert 1.0 counts (>=), dist 30.0 does not (<), team 2 excluded.
+        assert_eq!(comms_scan([d(false, 1.0, true, 1, 1.0, 4.6)].into_iter()), (false, true), "alert >= 1.0 [M :173]");
+        assert_eq!(comms_scan([d(false, 1.0, true, 1, 1.5, 30.0)].into_iter()), (true, false), "dist < 30.0 [M :174]");
+        assert_eq!(comms_scan([d(false, 1.0, true, 2, 1.5, 4.6)].into_iter()), (true, false), "team 2 never chatters [M :175]");
+        // The dead-guard skip: the rejected round's dropped arm.
+        assert_eq!(comms_scan([d(true, 0.0, true, 1, 1.5, 4.6)].into_iter()), (true, false),
+            "a SetAsDead corpse (0x200) is skipped [M :166, 0x14a2f0:9]");
+        assert_eq!(comms_scan([d(false, 0.0, true, 1, 1.5, 4.6)].into_iter()), (true, false),
+            "a PostDroneControl health-dead guard (0x400) is skipped [M :166, 0x14aff8:9-12]");
+        // The disabled arm: a living disabled team-1 guard breaks the all-clear, raises nothing.
+        assert_eq!(comms_scan([d(false, 1.0, false, 1, 0.0, 0.0)].into_iter()), (false, false), "[M :167-170]");
+        // A disabled protected-class (team 2) guard leaves the all-clear standing.
+        assert_eq!(comms_scan([d(false, 1.0, false, 2, 0.0, 0.0)].into_iter()), (true, false), "[M :168 == 1 only]");
+        // The all-clear arm does not stop the walk: a disabled team-1 guard behind an alert one
+        // still ends all-clear-cleared (but the chatter result is the same here).
+        assert_eq!(comms_scan([d(false, 1.0, false, 1, 0.0, 0.0), d(false, 1.0, true, 1, 0.2, 5.0)].into_iter()),
+            (false, false), "[M :167-170 — no break on the disabled arm]");
+        // An empty list: all-clear, no chatter (the game's scan sits behind DAT_00298e14 != 0).
+        assert_eq!(comms_scan(std::iter::empty()), (true, false));
+    }
 
     /// The aim refine keeps the object's NEAREST front-facing triangle and drops the whole hit on
     /// its byte [M Intersect_RayGeom 0x10a8c8; Collide_Intersect 0x1ebaa8 disasm 0x1ebf78-0x1ec000]:

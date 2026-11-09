@@ -320,6 +320,29 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     });
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
         "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
+    // guard-door-park: per-guard ticks spent in GoToGoalPosition 0x63 inside the guard-room
+    // door arc (154.3, 43.0, −119.0), sampled every tick until the flight record takes the hook
+    // over. The cel-blind goal-node search handed the guard-room pair a near-side fallback node
+    // and a route that ends at the locked leaf: on the d1 walk they stood at x 153.97 for ~14k
+    // ticks (frames 14451-21574+, measured with the old search). The game's
+    // `AINetwork_NodesForPosition` 0x1586a8 searches the goal's own cel, so a goal whose cel
+    // holds no node of the path gives `AINetwork_DoAStarPath` 0x1571b0 code 4 and the guard
+    // leaves 0x63 instead of pressing the door (`NDrone2_MoveToGoalPosition` 0x1517d8).
+    let park: std::rc::Rc<std::cell::RefCell<[u32; 24]>> = Default::default();
+    {
+        let park = park.clone();
+        w.on_step = Some(Box::new(move |scene: &nf_view::scene::Scene, _| {
+            let sim = scene.sim.as_ref().unwrap();
+            for (i, g) in sim.drones.list.iter().enumerate() {
+                if g.present && g.enabled && !g.corpse && g.team == 1 && g.state == 0x63
+                    && ((g.pos[0] - 154.3).powi(2) + (g.pos[2] + 119.0).powi(2)).sqrt() < 3.5
+                    && (g.pos[1] - 43.0).abs() < 4.0
+                {
+                    park.borrow_mut()[i.min(23)] += 1;
+                }
+            }
+        }));
+    }
     // 00 Agent (difficulty 3): the fights keep the 05/07 sisters' 4.0 back-off — the boarding
     // platform's burst-rifle pair closes under 2 u during the exchange and its interval-4
     // bursts land point-blank (the measured d3 ledger: #20's fight alone cost 54.0 from
@@ -952,6 +975,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // before the fight (the 00 Agent pane shoot-out, the rocket switch). The pin below reads the
     // whole observed flight; a fight that wins in three straight hits (466 ticks, 87.3 u from the
     // fight's start alone — measured on batch-1109a-fix) still has the gate-to-death flight.
+    {
+        let park = park.borrow();
+        let worst = park.iter().copied().enumerate().max_by_key(|(_, c)| *c).unwrap();
+        eprintln!("[08] guard-room door arc: worst 0x63 park guard #{} {} ticks", worst.0, worst.1);
+        assert!(worst.1 < 300,
+            "guard #{} held 0x63 in the guard-room door arc for {} ticks — the truncated-route park",
+            worst.0, worst.1);
+    }
     let pre_fight: std::rc::Rc<std::cell::RefCell<Vec<([f32; 3], u16, Option<usize>, f32)>>> = Default::default();
     let pre_fight_frame: std::rc::Rc<std::cell::Cell<u32>> = Default::default();
     {

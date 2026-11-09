@@ -171,10 +171,37 @@ fn plain_door_e_opens() {
         assert_eq!(sim.drones.doors.list[di4].ch_lock, 49, "#4 locks on ch 0x31 [D p3=49]");
         assert_eq!(sim.drones.doors.list[di5].ch_lock, 0, "#5 has no lock channel [D p3=0]");
     }
-    let _ = di4; // the locked sister is the ignored test below
+    // #5 is a one-way door at first: approach 1 refuses an activator on the corridor side (the
+    // door-minus-activator offset along its facing below 0 thuds [M Door_Activate 0x135be0:71-74]),
+    // so the player opens it from the library side, the stand south of the leaf
+    // (p5 − 0.8 z). The library is reached through the secret bedroom door #4: E the plate #504
+    // (ch 0x31), E #4, walk the passage. Before, this walk crossed the corridor and finished on the
+    // staircase over the door (y 10.05), and the door only opened because a guard routed through
+    // it on a wrong-cel goal node (the flat goal search the cel-scoped one replaced); Bond's own E
+    // there was refused.
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.doors.list[di5].approach, 1, "#5 opens from one side first");
+    walk_over(&mut w, [11.80, 6.04, -33.2], "to the secret-bedroom plate #504");
+    // The plate's E spot is the bedroom wedge spot the plate test below uses.
+    w.scene.sim.as_mut().unwrap().bond.pos = [10.36, 6.48, -34.12];
+    w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+    w.wait(10);
+    use_at(&mut w, [10.36, 6.9, -35.63], "E the secret-bedroom plate #504");
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x31), "the plate fires ch 0x31");
+    let p4 = w.scene.sim.as_ref().unwrap().drones.doors.list[di4].pos;
+    walk_over(&mut w, [p4[0] - 1.1, p4[1] - 0.1, p4[2] - 1.1], "to the unlocked bedroom door");
+    w.use_door(di4, "the unlocked bedroom door");
+    assert!(w.scene.sim.as_ref().unwrap().drones.doors.list[di4].state & 0xc != 0, "#4 opens");
     // The plain door opens on the E.
     let p5 = w.scene.sim.as_ref().unwrap().drones.doors.list[di5].pos;
-    walk_over(&mut w, [p5[0] - 0.8, p5[1], p5[2] - 0.8], "to door #5");
+    w.walk_to(Wp::new(p5[0], p5[1], p5[2] - 1.4).r(0.3), "through the passage to the library side of door #5");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!(p[2] < p5[2] - 0.8 && (p[1] - p5[1]).abs() < 1.0,
+            "Bond stands on the library floor south of #5, at ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
+        let st = sim.drones.doors.list[di5].state;
+        assert!(st & 0xc == 0, "#5 is still shut before Bond's E (no guard opened it), state {st:#x}");
+    }
     w.use_door(di5, "door_secret_library");
     let st = w.scene.sim.as_ref().unwrap().drones.doors.list[di5].state;
     assert!(st & 0xc != 0, "the unlocked door opens on the E [M Door_Activate], state {st:#x}");

@@ -749,7 +749,20 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
             }
         }
 
-        if difficulty >= 2 && si == 0 {
+        // A player already standing in the servant's own room does not walk back out to the
+        // saddle: when the door-8 fight and its resupply left Bond inside the cluster pocket
+        // (the resupply walk ended at (38.26, 0.55), 9.7 u from the servant, through the open
+        // door 8), the saddle route runs back across that room and climbs its furniture
+        // (measured: Bond lifted to y 7.29 at (27.48, −3.09), then wedged at (33.10, −0.85)
+        // with no door, trigger or guard within 3 u). The saddle detour exists for the east-wing
+        // approach from the west, so it is skipped once Bond is within 10 u of the servant.
+        // Self-gating: a run that reaches this point from the door-8 mouth stand (11.3 u) still
+        // walks the saddle unchanged.
+        let in_servant_room = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            walker::dxz(sim.bond.pos, at) < 10.0
+        };
+        if difficulty >= 2 && si == 0 && !in_servant_room {
             // door-walk-03b (the Agent ledger, tick 52087): the si-0 (0x50) servant at
             // (30.8, 6.2, −5.7) is only reachable around the east wing — the A* hops z −1.8 →
             // +1.0 → +8.5 through the door (22.3, 5.3, 10.9) / the 0x23 plate, and the east-lawn
