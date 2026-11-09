@@ -5,3 +5,6 @@ Branch `s/latch-walks-2` (on `s/latch-batch`: master + the drone contact-turn ru
 - walkreal_07000011_live 00 Agent real damage: guard #33 parks point-blank on the 23.0 strip. Measure the flight-A mouth stand's exposure and fight the #33/#34 pair from there as a player would.
 
 Never lower damage or health, no loosened pins, no new ignores. Branch from origin/s/latch-walks-2, push to `s/latch-walks-3`, report in docs/reports/latch-walks-3.md. Run each touched binary alone, then walkreal_07000001, 07, 08, 09, 11.
+
+---
+claimed-by: sandbox3 at 2026-11-09T00:57Z
