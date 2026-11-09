@@ -6,6 +6,3 @@ Merge s/capsule-join-3 (guard standing body within 2.0 of the player: 0x140e90:9
 Decide port bug vs lost margin for each; fix or re-route as a player would. Then run every walkreal_* binary one per call. Never lower damage or health, no loosened pins, no new ignores.
 
 Branch from origin/master, push to `s/capsule-join-4`, report in docs/reports/capsule-join-4.md.
-
----
-claimed-by: sandbox4 at 2026-11-09T16:06Z
