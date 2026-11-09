@@ -14,7 +14,7 @@ difference between the world-geometry path and the skinned/view-model path — t
 | +0x103 | u8 | tint R | 0xff | `Control_CreateObjEx` 0x1343c8 (param), `Script_SetColour` 0x1db770, `Player_InitWeapon` 0x1a7ef8 (0x7f), `Player_LaserPointer` 0x1a65d8 (0x40), `MP_UplinkUpdate` 0x186d98, `gases_smoke` 0x1ab2d0 | Tweak (below), `AnimObjectDraw` 0x1c4490, `MP_GetRadarObjects` 0x189840 | [M] |
 | +0x104 | u8 | tint G | 0xff | same (Player_InitWeapon sets 0) | same | [M] |
 | +0x105 | u8 | tint B | 0xff | same | same | [M] |
-| +0x106 | u8 | tint A | 0xff | init only | Tweak (halved `>>2` when `obj+0xF0 & 0x20000` and `viewer+0x236 == 1`), AnimObjectDraw | [M] |
+| +0x106 | u8 | tint A | 0xff | init; per class (debris fade: `Debris_Update` 0x1aac00 −= INFO+0x32/tick; corona, leaf, swoosh, gas, dynamic-object distance fade, drone goggles flash, MP pickups) | Tweak (a QUARTER `>>2` when `obj+0xF0 & 0x20000` and `viewer+0x236 == 1` — nightvision, not a halving), AnimObjectDraw | [M] |
 
 ## psiSetTweakARGB (0x124770) and the VU1 ambient term [M]
 

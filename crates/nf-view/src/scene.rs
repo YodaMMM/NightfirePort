@@ -8347,6 +8347,24 @@ const SWOOSH_SLOT_BASE: u16 = 0x8000;
 /// class-0x40 object per particle, ≤ 6 per impact, ≤ ~54 ticks) — the port caps the draw slots.
 const DECAL_SLOTS: usize = 200;
 const DEBRIS_SLOTS: usize = nf_game::effect::DEBRIS_DRAW_SLOTS;
+
+/// debris-fade-draw: the piece debris draw slot `slot` holds — its mesh and its alpha byte obj+0x106.
+/// Every debris object (impact `Debris_Create` 0x1aaa00, a killed breakable's pieces, the blast's
+/// `Debris_CreateEx` 0x1ac808) starts at 0xff and `Debris_Update` 0x1aac00:18-26 steps it down one
+/// per tick; `View_SetupRenderModes_Tweak` 0x1e5888:46-49 passes it as the A of `psiSetTweakARGB`
+/// (0x124770, TAmbient.a = byte/255) — the draw's alpha factor, like the gas / swoosh / script
+/// entities' [M]. No quarter: the night-sight `>>2` needs obj+0xF0 & 0x20000 [M 0x1e5888:12-17],
+/// and the creators OR 0x20000020 [M 0x1ac808:45, 0x1aaa00:53] over glist flags that never carry
+/// 0x20000 [D every debris mesh, every level]. The pieces' batches all blend (PRIM ABE, ALPHA_1
+/// 0x44 / 0x7f00000048) [D], so the factor reaches the pixel.
+fn debris_slot_piece(s: &Sim, map: &[Option<nf_game::effect::DebrisRef>], slot: usize) -> Option<(u32, u8)> {
+    match map.get(slot).copied().flatten()? {
+        (0, i) => s.drones.effects.debris.get(i).map(|d| (d.mesh, d.alpha)),
+        (1, i) => s.drones.breaks.shatter.debris.get(i).map(|d| (d.model, d.fade)),
+        (_, i) => s.drones.blast_debris.get(i).map(|d| (d.model, d.fade)),
+    }
+}
+
 /// The falling-leaf mesh "Leaf" (`Leaf_Create` 0x1abc88's `hashtable_set_object_to_entity_gfx(obj,
 /// 0x20002ca)` [M]; every level archive carries it [D]).
 pub const LEAF_MESH: u32 = 0x0200_02ca;
@@ -13324,6 +13342,19 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 if let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) { c[3] = b as f32 / 255.0; }
             }
         }
+        // debris-fade-draw: each debris slot's piece alpha byte (`debris_slot_piece`) — the piece
+        // fades from 0xff by one per tick instead of drawing solid until it vanishes.
+        if let Some(s) = self.sim.as_ref() {
+            let map = nf_game::effect::debris_slot_map(&s.drones.effects.debris, &s.drones.breaks.shatter.debris, &s.drones.blast_debris);
+            for (kind, slot, members) in &plan.eff {
+                if *kind != 2 { continue; }
+                let Some((live, b)) = debris_slot_piece(s, &map, *slot) else { continue };
+                for &(k, mesh) in members {
+                    if mesh != live { continue; }
+                    if let Some(c) = cols.get_mut((l.col_att + k) as usize) { c[3] = b as f32 / 255.0; }
+                }
+            }
+        }
         // goggles: the body glow's alpha byte obj+0x106 = (1 − d·0.1)·count·128/256 on the main
         // object and every child [M BodyGlow_Update 0x1ac2c8:224-260] — the Tweak's alpha factor
         // (byte/255) [M View_SetupRenderModes_Tweak 0x1e5888:47-49], like the swoosh's.
@@ -13613,7 +13644,12 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
         }).collect();
         // pc-screen: the script entities' tweak alpha (obj+0x106 / 255, the GPU palette's same factor).
+        // debris-fade-draw: and the debris slots' piece alpha (`debris_slot_piece`, the palette's same factor).
+        let dmap = self.sim.as_ref().map(|s| nf_game::effect::debris_slot_map(&s.drones.effects.debris, &s.drones.breaks.shatter.debris, &s.drones.blast_debris));
         let attach_alpha: Vec<f32> = self.attachments.iter().map(|a| {
+            if let (Some((2, slot, mesh)), Some(s), Some(m)) = (a.effect, self.sim.as_ref(), dmap.as_ref()) {
+                return debris_slot_piece(s, m, slot).filter(|p| p.0 == mesh).map_or(1.0, |p| p.1 as f32 / 255.0);
+            }
             let Some((h, si, hash, k)) = a.script else { return 1.0 };
             if !self.script_tweak_alpha.contains(&hash) { return 1.0; }
             self.sim.as_ref().and_then(|s| s.script_entity_alpha_k((h, si), hash, k as usize)).map_or(1.0, |b| b as f32 / 255.0)
