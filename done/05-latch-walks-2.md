@@ -9,3 +9,7 @@ For each: decide port bug vs lost walk margin with evidence, fix the port (test 
 
 ---
 claimed-by: sandbox1 at 2026-11-08T23:28Z
+
+---
+## Report (done, 2026-11-09T00:27Z)
+
