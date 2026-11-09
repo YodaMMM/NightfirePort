@@ -316,6 +316,28 @@ fn breakables_shatter_on_bullets() {
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     w.wait(10);
     assert!(!w.scene.sim.as_ref().unwrap().drones.breaks.list[bi].dead, "sister: the closet stands before the shot");
+    // capsule-join-2: the stand spot is 0.28 u from the bedroom guard (drone #17, his start
+    // placement at (−9.20, 6.25, −34.36)): inside his standing body [M NDrone2_Collision
+    // 0x140e90:91-121, on within 2.0 of the player 0x149ec8/0x14b190]. The game's push moves Bond
+    // off it, the guard turns on him (0x68 AimStandFire), and the jostled shots from the pushed
+    // spot shattered the neighbour #17 too [L capsule-join-2 probe; every clear stand tried
+    // with the guard alive did the same]. A player takes the guard first, then steps onto the
+    // spot and shoots the closet.
+    {
+        let g = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = sim.bond.pos;
+            sim.drones.list.iter().position(|d| d.team == 1 && d.present && !d.corpse && d.health > 0.0
+                && ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt() < 3.0)
+        };
+        if let Some(g) = g {
+            assert!(w.shoot(g, "the bedroom guard"), "the bedroom guard goes down first");
+            assert!(w.scene.sim.as_ref().unwrap().drones.break_kills.is_empty(), "the guard fight broke nothing");
+            w.scene.sim.as_mut().unwrap().bond.pos = [centre[0] + 1.6, centre[1] - 0.6, centre[2] + 0.4];
+            w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
+            w.wait(10);
+        }
+    }
     assert!(fire_at(&mut w.scene, centre, 400), "a shot was fired at the closet");
     w.wait(30);
     assert!(w.scene.sim.as_ref().unwrap().drones.breaks.list[bi].dead,

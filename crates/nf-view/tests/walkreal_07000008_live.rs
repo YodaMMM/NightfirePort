@@ -305,6 +305,13 @@ fn scoop_drops(w: &mut Walker, label: &str, n: usize) {
 /// The whole mission on one fresh load: the intro, the fusebox, the safe, the briefcase
 /// (objective 1 → 4), the descent back down, the boarding, the ride, the cinematic, the Hind
 /// shoot-down on real aim and trigger (objective 2 → 4), and the mission end into 0x0730008.
+/// The station walkway pair still standing on the walkway at the dip (148.4, 43.0, −121.4).
+fn walkway_pair_holds(w: &Walker) -> bool {
+    let sim = w.scene.sim.as_ref().unwrap();
+    sim.drones.list.iter().any(|d| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+        && ((d.pos[0] - 148.4f32).powi(2) + (d.pos[2] - -121.2f32).powi(2)).sqrt() < 3.0 && (d.pos[1] - 43.0).abs() < 1.5)
+}
+
 #[test]
 fn walk_the_whole_mission_on_real_input() { walk_the_whole_mission_on_real_input_at(1) }
 
@@ -358,6 +365,11 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     if fight_pkg {
         w.dmg.back_off = Some(4.0);
     }
+    // capsule-join-3: the solid guard bodies wedge the fusebox leg — the walk_to by the fusebox
+    // hit the 6000-tick cap against a guard standing in the nook (this tree's measured red). The
+    // player's response to a body blocker is to shoot him; the opt-in lever turns the wedge into
+    // the fight [M walker.rs body_block_response — the 02 real-health walk's same lever].
+    w.body_block_response = true;
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -418,7 +430,21 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         ("the walkway mid", [145.5, 45.0, -108.6]),
         ("the lower landing", [150.0, 43.5, -116.0]),
     ] {
+        if name == "the lower landing" && w.tops_up() && walkway_pair_holds(&w) { continue; }
         w.walk_nav_to(at, name, 1.5);
+    }
+    // With the game's standing bodies the live walkway pair (#7/#8, AimStandFire 0x68 / StepAim
+    // 0x74 at (148.4, 43.0, −121.4)) stand in the landing leg's lane: the nav leg runs down to the
+    // walkway and back east past them, their bodies held Bond 1.1-2 u off for 226 ticks and left
+    // him on the landing's pit lip, and the stair-head leg dropped him to y 37.0 (the laser then
+    // cannot reach the box: ch 137 never rises) [L capsule-join trace]. While the pair holds the
+    // walkway, Bond takes the nav web straight down to the stair foot (the landing leg's own
+    // first nodes) and walks the walkway east from there.
+    // Top-up walk only: the real-damage sisters' own fights (`fight_guards_within`, gated on
+    // `!tops_up()`) keep their measured route green, and their timelines stay byte-exact.
+    let walkway_first = w.tops_up() && walkway_pair_holds(&w);
+    if walkway_first {
+        w.walk_nav_to([146.15, 43.26, -119.85], "the stair foot from the walkway mid", 0.7);
     }
     // THE SCOPED-FLIGHT APPROACH FIX (level-4a-every-objective-4). The nav route into the fusebox
     // walkway steers at the dip node (147.30, 42.41, −120.40 [D nav]) from the lower-landing
@@ -449,6 +475,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         ("the walkway line", [149.5, 43.2, -120.3], 2.2),
         ("by the fusebox", [153.0, 43.4, -118.5], 1.5),
     ] {
+        if walkway_first && matches!(name, "the stair head" | "the walkway west") { continue; }
         w.walk_to(Wp::new(at[0], at[1], at[2]).r(r), name);
     }
     {
@@ -465,6 +492,23 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(137), "shooting the fusebox wires raises ch 137 [D #219 group-0; M FuseBox_Update 0x1adfe8]");
+    }
+    if walkway_first {
+        // The same pair then walks into the half-open walkway door (154.5, 42.0, −121.3)
+        // (GoToGoal 0x63 at (154.0, 43.0, −120.5..−120.8)): the secure-room and cabin legs wedged
+        // on their bodies for every cap [L capsule-join red]. A player answers the two guards
+        // standing in his doorway with his fullest gun before walking on.
+        arm_fullest(&mut w, "the walkway pair");
+        for _ in 0..4 {
+            let g = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let b = sim.bond.pos;
+                sim.drones.list.iter().position(|d| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && walker::dxz(d.pos, b) < 8.0 && (d.pos[1] - b[1]).abs() < 2.0)
+            };
+            let Some(g) = g else { break };
+            if !w.shoot(g, &format!("the walkway guard {g}")) { break; }
+        }
     }
 
     // ── the secure room: the laser burns the safe bolts → ch 136 ────────────────────────────────

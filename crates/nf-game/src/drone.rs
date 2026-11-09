@@ -5723,6 +5723,47 @@ impl Drone {
         crate::damage::boxes(d.hitboxes.for_skin(self.skin), &pal, skin)
     }
 
+    /// The DEAD body's collision capsule — `NDrone2_Collision` 0x140e90's dead branch
+    /// (`+0x4F8 & 0x200`) [M]. Death does NOT drop the capsule: the branch arms the HITTEST
+    /// unconditionally — `+0x464 = 0x800` with no `NDrone2_DoCollision` call (:142; DoCollision's
+    /// 0 only switches the HANDLER off, `Drone_CollisionHandler` 0x140968 → the dead drone never
+    /// bump-reacts) — and rebuilds it every tick from the ragdoll bone chain: radius
+    /// `min(+0xA0, 0.4)` (:124, the select the decompiler prints as an `(int)` cast), axis =
+    /// normalize(palette[5] − palette[0x37]) with extents `|p1−p2|·0.5` and `|p1−p3|·0.5`
+    /// (:125-141 — `AnimGetBoneWorldTrans` 0x1c3120:76-84 routes the negative ids onto the
+    /// palette table at `id·0x40` mod 2³², i.e. palette bones 5/0x37/0x33), the arms
+    /// `pos + axis·0.4` and `pos + axis·(0.4 − max)` (:148-166). The base is obj+0x30, whose Y
+    /// rides the animated hip down — the root's delta Y IS the hip change
+    /// (`DroneAnim_PreTransCallback` 0x13b490:73-75, `+0xA0 = clamp(anim − 0.02, 0.2)` :63-67) —
+    /// so the port's base is `draw_y(hip)`, the same object Y the palette's matrix uses. The same
+    /// formula is the player's own dead-body arm (`Player_Collision` 0x194df0 cases 0xc/0xd, bones
+    /// 5/0x37/0x33) — the lying-body capsule is the game's standard corpse shape. It runs for the
+    /// dead: `Drone_Control` 0x139268:61 → `NDrone2_ControlSTANDARD` 0x1490f0 →
+    /// `NDrone2_Collision`, no dead gate on the path. `None` for a live drone or a skeleton
+    /// without palette bones 0x37/0x33, and for a degenerate (zero-length) axis [S: the port
+    /// skips where the game would divide a zero length].
+    pub fn dead_capsule(&self, d: &Data) -> Option<([f32; 3], [f32; 3], f32)> {
+        if !self.corpse { return None; }
+        let (local, hip) = self.object_pose(d)?;
+        if local.len() <= 0x37 { return None; }
+        let obj = nf_formats::placement::object_matrix([0.0, self.yaw, 0.0], [self.pos[0], self.draw_y(hip), self.pos[2]]);
+        let at = |b: usize| { let m = nf_formats::anim::mul(&local[b], &obj); [m[3][0], m[3][1], m[3][2]] };
+        let (p1, p2, p3) = (at(5), at(0x37), at(0x33));
+        let d12 = [p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2]];
+        let len = (d12[0] * d12[0] + d12[1] * d12[1] + d12[2] * d12[2]).sqrt();
+        if len < 1e-4 { return None; }
+        let axis = [d12[0] / len, d12[1] / len, d12[2] / len];
+        let f7 = len * 0.5;
+        let d13 = [p1[0] - p3[0], p1[1] - p3[1], p1[2] - p3[2]];
+        let f8 = (d13[0] * d13[0] + d13[1] * d13[1] + d13[2] * d13[2]).sqrt() * 0.5;
+        let r = crate::damage::drone_height(hip).min(0.4);
+        let base = [self.pos[0], self.draw_y(hip), self.pos[2]];
+        let a = [base[0] + axis[0] * 0.4, base[1] + axis[1] * 0.4, base[2] + axis[2] * 0.4];
+        let ext = 0.4 - f7.max(f8);
+        let b = [base[0] + axis[0] * ext, base[1] + axis[1] * ext, base[2] + axis[2] * ext];
+        Some((a, b, r))
+    }
+
     // ---- hearing (docs/systems/drone-alerts.md) -------------------------------------------------------------------
 
     /// `DroneVision_EnemyAlerts(msg 0x14)` (0x177c18) → `DroneVision_AlertSound` (0x177800): saves the return state and
@@ -12913,6 +12954,9 @@ pub struct Drones {
     pub health: crate::bullet::PlayerHealth,
     /// Every hit on Bond: (tick, shooting drone, health lost).
     pub player_hits: Vec<(u32, usize, f32)>,
+    /// The drones Bond's body overlapped in this tick's collide pass before the Jointy push
+    /// resolved it (`Bond::bot_contacts`, mapped by the Sim) — the class-3 contacts.
+    pub player_contacts: Vec<usize>,
     /// Every drone round that landed on another drone (`NDrone2_DealWithObjHit` 0x13fff0 case 5):
     /// (tick, shooting drone, struck drone).
     pub drone_round_hits: Vec<(u32, usize, usize)>,
@@ -13830,7 +13874,7 @@ impl Drones {
             if let Some(g) = &mut dr.body_glow { g.owner = i; }
         }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, spawn_pristine: HashMap::new(), spawn_bodies: None, spawn_bound: Vec::new(), rng, lights: Default::default(), player_pos: [0.0; 3], player_sph: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, player_move_local: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), drone_round_hits: Vec::new(), impacts: Vec::new(), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), stats_table: Default::default(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, spawn_pristine: HashMap::new(), spawn_bodies: None, spawn_bound: Vec::new(), rng, lights: Default::default(), player_pos: [0.0; 3], player_sph: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, player_move_local: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), player_contacts: Vec::new(), drone_round_hits: Vec::new(), impacts: Vec::new(), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), stats_table: Default::default(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             // The game's `DAT_00299092` (the shared LOS-probe counter; see the field) — zeroed
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
@@ -22694,7 +22738,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let dx = p[0] - q[0]; let dy = p[1] - q[1]; let dz = p[2] - q[2];
                 let dist_sq = dx * dx + dy * dy + dz * dz;
                 let rr = pr + tr;
-                if dist_sq < rr * rr {
+                // The overlap the Jointy push already resolved this tick counts: the game's pair test
+                // finds it before the resolution (`Collide_Jointy` resolves the hit the same pass
+                // recorded [M 0x1ec180:229-281; Collide_Update 0x1ea398:160-215]).
+                let pushed = self.player_contacts.contains(&index);
+                if dist_sq < rr * rr || pushed {
                     dr.objhit_latch = true; // [M 0x1405c8]
                     // HITDATA+0x40 stand-in: the midpoint of the two closest points, the world delta
                     // into +0x90 [M 0x1405f0-0x140604].

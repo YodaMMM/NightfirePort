@@ -436,6 +436,12 @@ fn the_bond_bonus_walk_over_takes_it() {
             "both bonuses must wait at rest after the intro, got {rest:?}");
     }
 
+    // capsule-join-2: the hall's woken guards (CombatNoSight 0x5c / AimStandFire 0x68) crowd the
+    // west legs with the game's standing bodies [M NDrone2_Collision 0x140e90:91-121, on within
+    // 2.0 of the player 0x149ec8/0x14b190] — five of them held Bond under the west bonus's step
+    // for the 6000-tick cap [L capsule-join-2 red]. A player shoots who stands in his way: the
+    // walker's body-block response answers a blocker on the lane.
+    w.body_block_response = true;
     // Leg 1: the hall bonus — the real walk from the spawn side. The steer rides the south
     // rooms (floors 4.4-4.9 [D collision cels]) — the raw line to the bonus drifts west into
     // the z≈0 pit band, so the south-room anchor comes first — then steps north into the
@@ -595,7 +601,14 @@ fn the_security_camera_sweep_latches_the_player_in_range() {
     // Under the camera's watch: the gallery quad the cover nodes ring (x −25.8..−30.5, z
     // 6.8..9.5 on the 5.34 floor [D cover placements]), inside the 6 m range of the lens at
     // (−29.19, 7.87, 1.59). The nav decides the last steps; the poll watches the latch.
+    // capsule-join-2: the hall's woken guards stand in the walk's doorway with the game's
+    // standing bodies [M NDrone2_Collision 0x140e90:91-121, on within 2.0 of the player
+    // 0x149ec8/0x14b190] — five firing guards held Bond at (−13.4, 7.2, 12.5) for both nav caps
+    // [L capsule-join-2 red]. A player shoots who stands in his way: the walker's body-block
+    // response (the 02 walks' own) answers a blocker on the lane.
+    w.body_block_response = true;
     w.walk_nav_to([-28.4, 5.4, 6.9], "the gallery under the camera", 1.6);
+    w.body_block_response = false;
     let mut latched = false;
     for t in 0..2400u32 {
         w.tick(Default::default(), false);

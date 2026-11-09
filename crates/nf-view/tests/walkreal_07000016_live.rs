@@ -73,6 +73,46 @@ fn owned(sim: &nf_view::scene::Sim) -> Vec<usize> {
     (0..inv.owned.len()).filter(|&w| inv.owned[w]).collect()
 }
 
+/// The guard drops Bond's own feet took on the way: weapon pickups with a dropping drone
+/// (`Pickup::from`) that went from live to gone this tick within reach of Bond — the game's
+/// walk-over take [M Pickup_Update's take, 0x18e650]. capsule-join: with the game's standing
+/// bodies the route's fights shift and a guard's 0x1a lands on the chaser route; walking over a
+/// dropped gun takes it in the game too, so the load-rule pin below adds exactly the drops this
+/// tracker saw taken — nothing else may appear or vanish.
+fn track_drop_takes(w: &mut Walker) -> std::rc::Rc<std::cell::RefCell<Vec<usize>>> {
+    let taken = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let t2 = taken.clone();
+    let mut was_live: Vec<bool> = Vec::new();
+    w.on_step = Some(Box::new(move |sc: &nf_view::scene::Scene, _t: u32| {
+        let sim = sc.sim.as_ref().unwrap();
+        let b = sim.bond.pos;
+        let ps = &sim.drones.pickups;
+        if was_live.len() < ps.len() { was_live.resize(ps.len(), false); }
+        for (i, p) in ps.iter().enumerate() {
+            let live = !p.gone;
+            if was_live[i] && !live && p.from.is_some() && p.kind == nf_game::pickup::kind::WEAPON {
+                let at = p.m[3];
+                let d = ((at[0] - b[0]).powi(2) + (at[2] - b[2]).powi(2)).sqrt();
+                if d < 2.5 {
+                    eprintln!("[016] the walk took a guard's dropped weapon {:#x} at ({:.2},{:.2},{:.2})", p.weapon, at[0], at[1], at[2]);
+                    let mut t = t2.borrow_mut();
+                    if !t.contains(&(p.weapon as usize)) { t.push(p.weapon as usize); }
+                }
+            }
+            was_live[i] = live;
+        }
+    }));
+    taken
+}
+
+/// `want` plus the tracked drop takes, sorted.
+fn with_takes(want: &[usize], taken: &std::rc::Rc<std::cell::RefCell<Vec<usize>>>) -> Vec<usize> {
+    let mut v: Vec<usize> = want.to_vec();
+    for &t in taken.borrow().iter() { if !v.contains(&t) { v.push(t); } }
+    v.sort();
+    v
+}
+
 /// Bond's weapons where the chaser fight starts: what he owns and what is in his hand.
 fn assert_armed_for_the_chaser(sim: &nf_view::scene::Sim, want: &[usize], ctx: &str) {
     assert_eq!(owned(sim), want, "{ctx}: Bond's weapons at the chaser fight");
@@ -686,8 +726,9 @@ fn bond_is_armed_at_the_chaser_fight_after_the_15_handoff() {
     w.wait_enabled(3000, "the launch-centre arrival");
     w.wait(60);
     assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 arrival");
+    let taken = track_drop_takes(&mut w);
     walk_to_the_chaser_fight(&mut w, false, false);
-    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 chain");
+    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &with_takes(&CHAIN_OWNED, &taken), "the 15 → 16 chain");
 }
 
 /// The same pin on a direct (cold) load of 16: the fresh 14 kit [M 0x1a7ef8 case 0x7000016 →
@@ -701,8 +742,9 @@ fn bond_is_armed_at_the_chaser_fight_on_a_direct_load() {
     w.wait_enabled(3000, "the launch-centre arrival");
     w.wait(60);
     assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &COLD_OWNED, "the cold 16 arrival");
+    let taken = track_drop_takes(&mut w);
     walk_to_the_chaser_fight(&mut w, false, false);
-    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &COLD_OWNED, "the cold 16 load");
+    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &with_takes(&COLD_OWNED, &taken), "the cold 16 load");
     let diff: Vec<usize> = COLD_OWNED.iter().copied().filter(|w| !CHAIN_OWNED.contains(w)).collect();
     assert_eq!(diff, vec![0x50], "the two paths differ only by the Grapple, as in the game [M 0x1a97c8]");
 }
@@ -881,6 +923,28 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
         // guards emptied him (the 1988 death).
         for (label, wp) in APPROACH {
             if wp.at[1] > 5.5 { clear_hostiles_16(w, 40.0, 900); }
+            // capsule-join (the punch walk only: re-arm, no station armour): the south gallery's
+            // AR guard #2 (weapon 0x1a, hp 10) plinks the ring's north side from (9.5, 6.7,
+            // −110.6), 32 u off, at Bond's own level — 22 hits for 30.8 of the route's 70, and
+            // Bond reached the punch window at 24 (under its 30 survival line) [L capsule-join
+            // trace: t893-1891 on the outbound ring, t3699-4340 on the return]. Once the ring legs
+            // have cleared the close ring guards, a player answers the gallery rifleman across
+            // the hall from the ring before walking it — a bounded stand, only while he is
+            // exposed from where Bond stands.
+            if re_arm && !station_armour && *label == "the ring 1" {
+                let gi = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    sim.drones.list.iter().position(|d| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                        && d.pos[2] < -100.0 && d.pos[1] > 5.5 && d.weapon == 0x1a)
+                };
+                if let Some(gi) = gi {
+                    if walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), gi) {
+                        let _ = w.shoot_bounded(gi, "the gallery rifleman from the ring", 1800);
+                    } else {
+                        eprintln!("[016] the gallery rifleman #{gi} is not exposed from the ring east");
+                    }
+                }
+            }
             // guard-radii-16-chasers: the security-station armour #596 (−19.03, 6.67, −94.48)
             // [D the census/audit placement tables] — 3.8 u west of the station E's console, a
             // player straps the BodyArmourHeavy on while the door[0] press runs (the walk-over
@@ -913,6 +977,26 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
             // the station E's console Use (the chain's gate) — the nav route to it wandered
             // north and gave up at the 3000-tick cap without the press. Only the ramp->ring
             // transition legs ride the nav (the direct steer fell off the ring edge there).
+            // capsule-join: the shifted route fights (the game's standing bodies) had Bond reach
+            // door[1] while it was still opening (state 0x10), and the straight leg from
+            // door[0] carried him 0.4 u west of the lane onto the jamb/leaf: (1.58, 0.93,
+            // −123.60), the line blocked at 0.067, for the whole 6000-tick cap [L capsule-join
+            // red]. A player squares up on the doorway's centre line before stepping through,
+            // the way the route already does at door[0]'s threshold.
+            if *label == "door[1] through" {
+                w.walk_to(walker::Wp::new(2.0, -0.1, -122.6).r(0.5), "door[1]'s threshold");
+            }
+            // capsule-join (the punch walk): with the gallery rifleman answered, the route's
+            // fire no longer spends the security-station armour #596 (−19.03, 6.67, −94.48),
+            // which the station E leg's 1.2 arrival took in passing at (−17.46, 6.82, −93.97)
+            // (armour 0 → 50 at t3070 [L capsule-join trace]); the punch pin needs armour 0 at
+            // the window. A player who wants his health on the line steps up to the console
+            // from its east side and leaves the straps on the rack: the console E at a tight
+            // 0.5 arrival on the console's own spot.
+            if re_arm && !station_armour && *label == "the station E" {
+                w.walk_to(walker::Wp::at(-15.0, 5.9, -94.6, walker::Act::Use { use_ticks: 120 }).r(0.5), "the station E from the east");
+                continue;
+            }
             if wp.at[1] > 5.0 && (label.starts_with("the ring") || label.starts_with("the return")) {
                 w.walk_nav_to([wp.at[0], wp.at[1], wp.at[2]], label, wp.arrive);
             } else {

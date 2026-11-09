@@ -252,6 +252,18 @@ fn fail_dump(scene: &Scene, target: V3, label: &str) -> String {
         .map(|(i, d)| format!("drone #{i} team {} state {:#x} at ({:.1},{:.1},{:.1}) hp {:.0}", d.team, d.state, d.pos[0], d.pos[1], d.pos[2], d.health))
         .collect();
     s.push_str(&format!("drones within 3 u: {}\n", if drones.is_empty() { "none".into() } else { drones.join("; ") }));
+    // capsule-join-5: a corpse carries a body too (radius min(hip, 0.4) [M 0x140e90:124,142]);
+    // a wedge dump that hides the corpses hides the blocker.
+    let corpses: Vec<String> = sim.drones.list.iter().enumerate()
+        .filter(|(_, d)| d.present && d.corpse && dxz(d.pos, p) < 3.0)
+        .map(|(i, d)| format!("corpse #{i} state {:#x} at ({:.1},{:.1},{:.1})", d.state, d.pos[0], d.pos[1], d.pos[2]))
+        .collect();
+    s.push_str(&format!("corpses within 3 u: {}\n", if corpses.is_empty() { "none".into() } else { corpses.join("; ") }));
+    let ring: Vec<String> = sim.drones.list.iter().enumerate()
+        .filter(|(_, d)| d.present && !d.corpse && dxz(d.pos, p) >= 3.0 && dxz(d.pos, p) < 6.0)
+        .map(|(i, d)| format!("drone #{i} team {} state {:#x} at ({:.1},{:.1},{:.1}) hp {:.0}", d.team, d.state, d.pos[0], d.pos[1], d.pos[2], d.health))
+        .collect();
+    s.push_str(&format!("drones 3-6 u: {}\n", if ring.is_empty() { "none".into() } else { ring.join("; ") }));
     let ground = sim.world.floor_below(p, 6.0);
     s.push_str(&format!("floor_below: {:?}\n", ground));
     s

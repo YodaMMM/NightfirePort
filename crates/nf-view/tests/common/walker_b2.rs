@@ -77,6 +77,9 @@ pub struct Walker {
     pub top_up_health: bool,
     /// Real-damage bookkeeping (damage_log.rs): live whenever the top-up is off.
     pub dmg: DamageLog,
+    /// Called after every stepped tick with the scene and the tick count (an observer, as in
+    /// walker.rs). `None` by default: no walk changes.
+    pub on_step: Option<Box<dyn FnMut(&Scene, u32)>>,
     /// Stop the walk the moment `level_exit` is requested.
     pub stop_on_exit: bool,
     pub report: Report,
@@ -150,7 +153,7 @@ impl Walker {
         nf_view::attach_headless_sound(&mut scene);
         let pos = scene.sim.as_ref().unwrap().bond.pos;
         Walker {
-            scene, top_up_health: true, dmg: DamageLog::new(), stop_on_exit: true,
+            scene, top_up_health: true, dmg: DamageLog::new(), on_step: None, stop_on_exit: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0, float_ticks: 0,
             sidestep: 0, max_y: pos[1], lenient: false, stuck_answers: false,
@@ -176,6 +179,7 @@ impl Walker {
             if let Some(d) = &self.dmg.died { panic!("[real-damage] {d}"); }
         }
         if self.tops_up() { self.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+        if let Some(f) = self.on_step.as_mut() { f(&self.scene, tick); }
     }
 
     fn sim(&mut self) -> &mut nf_view::scene::Sim { self.scene.sim.as_mut().unwrap() }

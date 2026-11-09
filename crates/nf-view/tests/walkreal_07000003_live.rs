@@ -308,10 +308,37 @@ fn stand_shooters_down_03(w: &mut Walker, label: &str, radius: f32) {
     }
 }
 
+/// The guards the courtyard plates wake stand in the route with the game's standing bodies
+/// (`NDrone2_Collision` 0x140e90's capsule, on within 2.0 of the player [M 0x149ec8 / 0x14b190]):
+/// the AimStandFire 0x68 rifleman #9 at (11.0, 6.3, −18.0) held Bond 1.9 u off the mid-courtyard
+/// door line for the whole exit leg's 6000-tick cap [L capsule-join red]. A player shoots who
+/// stands in his way: every live guard within 5 u is answered before the next leg.
+fn clear_blockers_03(w: &mut Walker, label: &str) {
+    for _ in 0..6 {
+        let g = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            (0..sim.drones.list.len()).find(|&i| {
+                let d = &sim.drones.list[i];
+                d.team == 1 && d.present && d.enabled && !d.corpse && d.health > 0.0
+                    && walker::dxz(d.pos, bp) < 5.0 && (d.pos[1] - bp[1]).abs() < 2.5
+            })
+        };
+        let Some(g) = g else { break };
+        if !w.shoot(g, &format!("{label} blocker {g}")) { break; }
+    }
+}
+
 #[test]
 fn walk_the_alpine_route_to_the_exit() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000003.bin", false).expect("load 07000003"));
+    // capsule-join-5: the woken courtyard guards stand IN the route's doorways (the mid-courtyard
+    // door: AimStandFire 0x68 #9 at 1.0 u; the exit-lawn door (22.3, 5.3, 10.9): #3/#4/#5 at
+    // ~1 u [L this branch's wedge dumps]) and their standing bodies push Bond off the line
+    // [M NDrone2_Collision 0x140e90:91-121 via 0x149ec8/0x14b190]. The walker's opt-in answer to
+    // a body wedge is the fight (Walker::body_block_response — the 02/08 lever).
+    w.body_block_response = true;
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -337,8 +364,10 @@ fn walk_the_alpine_route_to_the_exit() {
         ("the east lawn", [22.0, 5.9, 5.0]),
         ("the exit lawn", [18.5, 5.9, 13.0]),
     ] {
+        clear_blockers_03(&mut w, name);
         w.walk_nav_to(at, name, 1.6);
     }
+    clear_blockers_03(&mut w, "the exit approach");
 
     // 6. The exit: E on the Load Point #451 without ch 0x52 refuses [M Trigger_Activate 0x1b2318:76-90].
     let sim = w.scene.sim.as_ref().unwrap();

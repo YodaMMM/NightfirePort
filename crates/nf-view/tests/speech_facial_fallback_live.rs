@@ -20,6 +20,35 @@ use nf_game::trig::angle_difference;
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
+/// capsule-join-5 staging: a stand 2.2 u from guest `i` that no OTHER live drone's standing body
+/// reaches. The game pushes a player standing within 2.0 of any live drone with the body bit
+/// [M NDrone2_DoCollision 0x149ec8:16-31 — the +0x4F8 & 0x20 bit every drone carries
+/// (NDrone2_DefaultInit 0x14b300:60); DroneFunc_NearPlayerCollision 0x14b190 short-circuits the
+/// rest of the gate inside 2.0], so a stand placed inside the crowd is pushed off its aim line
+/// before the crosshair pick. The stands sit on the guest's FRONT half (BondTalk talks only to a
+/// Bond inside 3.0 whom the drone faces, |+0x1D4| <= pi/2 [M 0x1446b0:12-14]): seven bearings
+/// 22.5 deg apart, his facing first; the clear ones (every other drone > 2.4 u) are cycled every
+/// 90 ticks to dodge crowd blockers on the ray; with none clear the old facing offsets stand.
+fn clear_stand(sim: &nf_view::scene::Sim, i: usize, t: u32) -> [f32; 3] {
+    let d = &sim.drones.list[i];
+    let (npos, nyaw) = (d.pos, d.yaw);
+    let at = |a: f32| [npos[0] + a.sin() * 2.2, npos[1], npos[2] + a.cos() * 2.2];
+    let clear: Vec<[f32; 3]> = (0..7).map(|k| {
+        let k = k as f32;
+        // facing first, then alternating either side
+        let off = if k == 0.0 { 0.0 } else { let s = ((k + 1.0) / 2.0).floor(); if (k as u32) % 2 == 1 { s } else { -s } };
+        at(nyaw + off * std::f32::consts::TAU / 16.0)
+    }).filter(|p| sim.drones.list.iter().enumerate().all(|(j, o)| {
+        j == i || !o.present || !o.enabled || o.corpse || o.health <= 0.0
+            || ((o.pos[0] - p[0]).powi(2) + (o.pos[2] - p[2]).powi(2)).sqrt() > 2.4
+    })).collect();
+    if clear.is_empty() {
+        let off = [0.0f32, 0.7, -0.7, 1.4, -1.4][(t / 90) as usize % 5];
+        return at(nyaw + off);
+    }
+    clear[(t / 90) as usize % clear.len()]
+}
+
 fn bare_sound(scene: &mut nf_view::scene::Scene) -> nf_audio::sfx::Sound {
     let mut snd = nf_audio::sfx::Sound {
         driver: Default::default(),
@@ -95,13 +124,10 @@ fn bond_talk_plays_the_absent_script_lines_direct_and_the_present_ones_through_t
                     .min_by_key(|(_, d)| ((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)) as u32)
                     .map(|(x, _)| x).expect("an awake type-13 civilian [D census]")
             });
-            let d = &sim.drones.list[i];
-            let (npos, nyaw) = (d.pos, d.yaw);
+            let npos = sim.drones.list[i].pos;
+            let stand = clear_stand(sim, i, t); // a stand clear of the crowd's bodies
             let sim = scene.sim.as_mut().unwrap();
-            let off = [0.0f32, 0.7, -0.7, 1.4, -1.4][(t / 90) as usize % 5]; // dodge crowd blockers
-            let a = nyaw + off;
-            let (s2, c2) = (a.sin(), a.cos());
-            sim.bond.pos = [npos[0] + s2 * 2.2, npos[1], npos[2] + c2 * 2.2];
+            sim.bond.pos = stand;
             sim.bond.yaw = (npos[0] - sim.bond.pos[0]).atan2(npos[2] - sim.bond.pos[2]);
             let dy = 0.4f32 - 1.6; // aim mid-body: the aimed-at cylinder spans feet-1.0..+1.8 [M 0x1a7810]
             sim.bond.pitch = (dy / 2.2f32.hypot(1.2)).asin();
@@ -139,8 +165,8 @@ fn bond_talk_plays_the_absent_script_lines_direct_and_the_present_ones_through_t
 /// draw takes the FACIAL arm: the line sounds through the facial script's own op-1, the
 /// bookkeeping ADVANCES once +0x53c stands [M 0x141b00:32-35; 0x1446b0 case 0xe → 0x144488:50-63],
 /// and `+0x4D0` stays clear — a facial line never stores a handle [M 0x141b00:35]. The reach:
-/// Bond seeds at the nearest type-13 (whose head-on ray a type-14 neighbour blocks — the census
-/// geometry), then locks onto the aimed type-14.
+/// Bond stands on a type-14 talker's front half clear of the crowd's bodies (clear_stand), the
+/// nearest talkers tried in turn, then locks onto the aimed type-14.
 #[test]
 fn a_present_script_talker_plays_through_the_facial_and_advances() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -164,22 +190,28 @@ fn a_present_script_talker_plays_through_the_facial_and_advances() {
     let mut target: Option<usize> = None;
     let mut any_facial = false;
     let mut done = 0u32;
+    // capsule-join-5: the seeds are the awake type-14 talkers themselves, nearest first, each
+    // tried for 630 ticks (the old type-13 seed's head-on stand sat inside the crowd, where the
+    // game's body push moves Bond off the line before the pick — see clear_stand).
+    let seeds: Vec<usize> = {
+        let sim = scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        let mut v: Vec<(u32, usize)> = sim.drones.list.iter().enumerate()
+            .filter(|(_, d)| d.present && d.enabled && !d.corpse && d.voice_type == 14 && d.health > 0.0)
+            .map(|(x, d)| ((((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)) * 100.0) as u32, x))
+            .collect();
+        v.sort();
+        v.into_iter().map(|(_, x)| x).collect()
+    };
+    assert!(!seeds.is_empty(), "an awake type-14 talker [D census]");
     for t in 0..2700u32 {
         {
             let sim = scene.sim.as_ref().unwrap();
-            let i = target.unwrap_or_else(|| {
-                let bp = sim.bond.pos;
-                sim.drones.list.iter().enumerate()
-                    .filter(|(_, d)| d.present && d.enabled && !d.corpse && d.voice_type == 13
-                        && d.health > 0.0 && d.skin & 0xffff != 0x22)
-                    .min_by_key(|(_, d)| ((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)) as u32)
-                    .map(|(x, _)| x).expect("an awake type-13 seed [D census]")
-            });
-            let d = &sim.drones.list[i];
-            let (npos, nyaw) = (d.pos, d.yaw);
+            let i = target.unwrap_or(seeds[(t / 630) as usize % seeds.len()]);
+            let npos = sim.drones.list[i].pos;
+            let stand = clear_stand(sim, i, t);
             let sim = scene.sim.as_mut().unwrap();
-            let (s2, c2) = (nyaw.sin(), nyaw.cos());
-            sim.bond.pos = [npos[0] + s2 * 2.2, npos[1], npos[2] + c2 * 2.2];
+            sim.bond.pos = stand;
             sim.bond.yaw = (npos[0] - sim.bond.pos[0]).atan2(npos[2] - sim.bond.pos[2]);
             let dy = 0.4f32 - 1.6; // mid-body aim [M 0x1a7810's cylinder]
             sim.bond.pitch = (dy / 2.2f32.hypot(1.2)).asin();
