@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox1 at 2026-11-09T10:27Z
+
+---
+## Report (done, 2026-11-09T11:28Z)
+
+Closed by the driver: the report is on `s/markers-mp-bots` (docs/reports/markers-mp-bots.md); the worker didn't run finish.sh.
