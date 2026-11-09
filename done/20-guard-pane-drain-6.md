@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox1 at 2026-11-09T08:57Z
+
+---
+## Report (done, 2026-11-09T09:48Z)
+
+Closed by the driver: the report is on `s/guard-pane-drain-6` (docs/reports/guard-pane-drain-6.md); the worker didn't run finish.sh.
