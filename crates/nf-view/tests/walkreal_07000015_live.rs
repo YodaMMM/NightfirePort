@@ -834,6 +834,17 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
 
     // The USE exit #445: face the plane, pulse E (the use sphere: head + look, radius 1 [M 0x1a5170]).
     let exit_at = [0.0f32, 41.3, -24.8];
+    // los-mask-join: the mine shots before the hall leave the view wherever the last aim put
+    // it — the door[29] ankle beam's walked aim ended at pitch -0.38, and the E sphere (head +
+    // look, radius 1 [M 0x1a5170]) then fell short of the plane on the floor for all 300 ticks
+    // [L the masked run; -0.11 on the unmasked run reached it]. A player looks up at the
+    // panel before he presses E.
+    for _ in 0..60 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pitch;
+        let err = -0.1 - p;
+        if err.abs() < 0.02 { break; }
+        w.tick(nf_game::player::Input { look: err.clamp(-0.05, 0.05), ..Default::default() }, false);
+    }
     w.walk_to(Wp::at(exit_at[0], exit_at[1], exit_at[2] + 1.2, Act::Use { use_ticks: 300 }).r(1.0), "the USE exit #445");
     {
         let sim = w.scene.sim.as_ref().unwrap();
