@@ -340,8 +340,8 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // tick 1666 at (3.57,−368.36,25.09), 86.0 consumed). A player shoots the posted guards from
     // the doorway before crossing their pocket.
     // los-mask-join: the Agent walk takes the same pre-clears (here and the lobby/doorway
-    // sweeps below). Under the game's sight masks the lobby guards engage through the glass
-    // bands, and the Agent walk, which left them to its legs' return fire, ran dry at the
+    // sweeps below). Under the game's sight masks the lobby guards engage more and earlier,
+    // and the Agent walk, which left them to its legs' return fire, ran dry at the
     // lobby north-west (clip 0 spare 0) and died at the front entrance [L the masked run].
     if real_damage && difficulty >= 2 {
         clear_the_visible(&mut w, "13: the spawn pocket", 24.0);

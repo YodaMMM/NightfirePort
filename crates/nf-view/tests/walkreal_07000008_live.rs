@@ -1430,7 +1430,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // the rocket until he can see the machine through a shot-out pane. D2/D3-GATED: the
         // Operative runs' timelines stay byte-exact.
         // los-mask-join: the Operative real-damage walk takes them too — on the masked tree its
-        // rocket 3 died 2 ticks out on the cabin band and the last one's blast finished Bond
+        // rocket 3 died 2 ticks after launch and the last one's blast finished Bond
         // [L the run]. The topped-up Operative walk keeps its timeline.
         let sight_gates = difficulty >= 2 || !w.tops_up();
         let eye_sees = !sight_gates || sim.world
@@ -1826,11 +1826,10 @@ fn the_ally_fights_only_the_guards_through_the_noise_path() {
 /// (−9.0); docs/reports/level-08-long-range-hits.md.
 #[test]
 fn walk_the_whole_mission_on_real_input_real_damage() {
-    // los-mask-join: under the game's sight masks the secure-room guard #4 sees and shoots Bond
-    // through the room's door glass [M 0x176f18 mask 0xa27 → Collide_Intersect 0x1ebaa8:314
-    // drops class 0x10], and the plain sight rule never answered him (28 hits, 68.2, Bond held
-    // at the door [L the masked run]). Bond's rounds fly the same glass pass, so the Operative
-    // walk takes the Agent sisters' glass-fight rule.
+    // los-mask-join: under the game's sight masks [M 0x176f18 mask 0xa27] the secure-room guard
+    // #4 hit Bond 28 times (68.2) while he held at the closed door, and the plain sight rule
+    // never answered him [L the masked run]. The Agent sisters' glass-fight rule (Bond's sight
+    // takes his own rounds' glass pass) answers him.
     walker::with_real_damage_glass_fights(walk_the_whole_mission_on_real_input);
 }
 

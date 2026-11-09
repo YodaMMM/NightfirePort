@@ -1161,9 +1161,9 @@ fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
     // volley lands): one head hit drops him [M NDrone2_HitDamage 0x145558]. The 4.0 stand-off and
     // the plain walks' pinned timelines keep their pick.
     // los-mask-join: the glass-fight rule (head-hunting + the glass sight + hurting-first). Under
-    // the game's sight masks the courtyard guards engage through the lane-door glass [M 0x176f18
-    // mask 0xa27 → 0x1ebaa8:314], and the plain sight rule held fire on them; the walk then ran
-    // dry before the servants and wedged at the door-8 mouth [L the masked run].
+    // the game's sight masks [M 0x176f18 mask 0xa27] the courtyard guards engage from the lane
+    // doors on (guard #10 at the lane-3 leg), the plain sight rule left the fights unanswered,
+    // and the walk ran dry before the servants and wedged at the door-8 mouth [L the masked run].
     walker::with_real_damage_glass_fights(|| walk_the_full_route_and_complete_every_objective_at(2))
 }
 
