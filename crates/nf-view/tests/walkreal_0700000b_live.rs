@@ -685,6 +685,46 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
     // key under the roof guards' fire with no control ([L the death run: 11 hits, 23.8 → 0.0,
     // ticks 16473-16652, at the re-place point, no fight ever started]).
     w.wait_enabled(3400, "the roof cut-scene tail (control returns)");
+    // [0b-roof-sprint DIAG] the deck facts at control return: the world-hurt ledger so far, the
+    // fuseboxes' wire state, the hurt volumes engaged, and the roof squad's positions/states.
+    if real {
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[0b-diag] frame {} world hits so far:", sim.drones.frame);
+            for (f, o, a) in &sim.drones.player_hits {
+                if *o == usize::MAX { eprintln!("[0b-diag]   frame {f}: -{a:.2}"); }
+            }
+            for (fi, fb) in sim.drones.fuseboxes.iter().enumerate() {
+                eprintln!("[0b-diag] fusebox{fi}: placement {} script {:#x} ch {:?} g0 alive {} g1 alive {}",
+                    fb.placement, fb.script, fb.ch,
+                    fb.groups[0].slots.iter().filter(|s| s.is_some()).count(),
+                    fb.groups[1].slots.iter().filter(|s| s.is_some()).count());
+            }
+            for h in sim.hurts.iter() {
+                if h.hits > 0 || (h.lo[1] > 44.0 && h.lo[1] < 60.0) {
+                    eprintln!("[0b-diag] hurt placement {} kind {} dmg {} gate {} who {:#x} one_shot {} hits {} box ({:.1},{:.1},{:.1})..({:.1},{:.1},{:.1})",
+                        h.placement, h.kind, h.damage, h.gate, h.who, h.one_shot, h.hits,
+                        h.lo[0], h.lo[1], h.lo[2], h.hi[0], h.hi[1], h.hi[2]);
+                }
+            }
+            let p = sim.bond.pos;
+            eprintln!("[0b-diag] bond at ({:.2},{:.2},{:.2}) hp {:.1} armour {:.1}", p[0], p[1], p[2], sim.drones.health.health, sim.drones.health.armour);
+            for (ti, t) in sim.drones.gt_turrets.iter().enumerate() {
+                eprintln!("[0b-diag] turret{ti}: placement {} pos ({:.2},{:.2},{:.2}) dead {}",
+                    t.placement, t.pos[0], t.pos[1], t.pos[2], t.hp);
+            }
+            for (pi, pk) in sim.drones.pickups.iter().enumerate() {
+                eprintln!("[0b-diag] pickup{pi}: kind {} weapon {:#x} ch {:#x} at ({:.2},{:.2},{:.2}) gone {}",
+                    pk.kind, pk.weapon, pk.switch_channel, pk.m[3][0], pk.m[3][1], pk.m[3][2], pk.gone);
+            }
+            for (i, d) in sim.drones.list.iter().enumerate() {
+                if d.present && d.team == 1 && !d.corpse && d.health > 0.0 {
+                    eprintln!("[0b-diag] guard #{i} ({:.2},{:.2},{:.2}) hp {:.1} state {:#x} weapon {:#x} dist {:.1} los {} seen {}",
+                        d.pos[0], d.pos[1], d.pos[2], d.health, d.state, d.weapon, d.dist, d.los, d.seen);
+                }
+            }
+        }
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x59), "060004FA stream 13 @0x991 → ch 0x59 (objective 10) [D]");
@@ -752,9 +792,8 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
         let start = w.total_ticks;
         while w.total_ticks - start < 2400 {
             let sim = w.scene.sim.as_ref().unwrap();
+            if sim.drones.channels.on(0x3f) { break; } // the take fires ON THE PASS — never stand
             let p = sim.bond.pos;
-            if walker::dxz(p, target) < 1.0 { break; }
-            if sim.drones.channels.on(0x3f) { break; } // the take fired on the pass
             let desired = (target[0] - p[0]).atan2(target[2] - p[2]);
             let err = walker::wrap_pi(desired - sim.bond.yaw);
             let input = nf_game::player::Input {
@@ -764,9 +803,9 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
             };
             w.tick(input, false);
         }
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        assert!(walker::dxz(p, target) < 1.0 || w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f),
-            "the deck sprint must reach the parachute's take slot on real input (or take it on the pass), got {p:?}");
+        assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f),
+            "the deck sprint must take the parachute ON THE PASS (standing at the slot is the death: [L the death run — 95 ticks at the slot, 3 × 11.2 + 5.2 from #4, the take never fired]); bond at {:?}",
+            w.scene.sim.as_ref().unwrap().bond.pos);
     } else {
         // The deck east from the re-place point IS the game's route and it WALKS: the walkthrough
         // arrives at the deck below the pickup in both walks (deterministic 60 Hz — once green,
