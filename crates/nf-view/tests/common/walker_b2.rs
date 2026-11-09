@@ -25,6 +25,48 @@ pub fn wrap_pi(a: f32) -> f32 {
 /// XZ distance.
 pub fn dxz(a: V3, b: V3) -> f32 { ((a[0] - b[0]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() }
 
+/// level-11-strip-fight: the per-tick guard observation sink, OPT-IN (a shared helper may change
+/// for one level's test only when that test sets the flag and the helper checks it). The
+/// walkreal_07000011 strip-pair test arms it with `pair_trace_on()`; `after_step` then pushes one
+/// sample per present drone within 14 u of Bond. Read-only over the sim — no RNG draws, no state
+/// writes — so an armed run replays the plain walk bit-exact, and an unset sink costs one
+/// thread-local check per tick.
+pub struct PairSample {
+    pub tick: u32, pub index: usize, pub placement: usize, pub phase: u32, pub dist: f32, pub dy: f32,
+    pub state: u8, pub anim_state: u16, pub anim_class: u8, pub enabled: bool,
+    pub seen: bool, pub routed: bool, pub remaining: f32,
+}
+
+thread_local! {
+    static PAIR_SINK: std::cell::RefCell<Option<Vec<PairSample>>> =
+        const { std::cell::RefCell::new(None) };
+    /// Mirrored `Drones::player_hits` rows while the sink is armed, each with the shooter's
+    /// distance to Bond at that tick (usize::MAX dist for the world/ownerless rows); the usize
+    /// is the row count already mirrored (the vec accumulates the whole walk).
+    static PAIR_HITS: std::cell::RefCell<Option<(Vec<PairHit>, usize)>> =
+        const { std::cell::RefCell::new(None) };
+    /// (the scene identity last seen, the phase count) — a level load swaps `scene`, so the
+    /// recorder tags each sample with the phase it was taken in (phase 1 = the first level).
+    static PAIR_PHASE: std::cell::Cell<(usize, u32)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+pub struct PairHit { pub tick: u32, pub frame: u32, pub owner: usize, pub dmg: f32, pub dist: f32, pub phase: u32 }
+
+/// Arm the per-tick guard recorder for the CURRENT test only.
+pub fn pair_trace_on() {
+    PAIR_SINK.with(|s| { *s.borrow_mut() = Some(Vec::with_capacity(4096)); });
+    PAIR_HITS.with(|h| { *h.borrow_mut() = Some((Vec::new(), 0)); });
+    PAIR_PHASE.with(|p| p.set((0, 0)));
+}
+
+/// Take the recorded samples (and disarm).
+pub fn pair_trace_take() -> Vec<PairSample> { PAIR_SINK.with(|s| s.borrow_mut().take().unwrap_or_default()) }
+
+/// Take the mirrored hit rows (and disarm).
+pub fn pair_hits_take() -> Vec<PairHit> {
+    PAIR_HITS.with(|h| h.borrow_mut().take().map(|(v, _)| v).unwrap_or_default())
+}
+
 /// What to do once the waypoint is reached (or while approaching it).
 #[derive(Clone, Copy, Debug)]
 pub enum Act {
@@ -176,6 +218,48 @@ impl Walker {
             if let Some(d) = &self.dmg.died { panic!("[real-damage] {d}"); }
         }
         if self.tops_up() { self.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+        // level-11-strip-fight: the opt-in pair recorder (see PairSample). Reads only.
+        if PAIR_SINK.with(|s| s.borrow().is_some()) {
+            let sim = self.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let phase = {
+                let key = &self.scene as *const Scene as usize;
+                PAIR_PHASE.with(|p| {
+                    let (k, n) = p.get();
+                    let n = if key != k { n + 1 } else { n };
+                    p.set((key, n));
+                    n
+                })
+            };
+            PAIR_HITS.with(|h| {
+                let mut b = h.borrow_mut();
+                if let Some((v, seen)) = b.as_mut() {
+                    if *seen > sim.drones.player_hits.len() { *seen = 0; } // the extension's fresh sim
+                    for &(f, o, dmg) in &sim.drones.player_hits[*seen..] {
+                        let dist = if o < sim.drones.list.len() && sim.drones.list[o].present {
+                            dxz(sim.drones.list[o].pos, bp)
+                        } else { f32::MAX };
+                        v.push(PairHit { tick, frame: f, owner: o, dmg, dist, phase });
+                    }
+                    *seen = sim.drones.player_hits.len();
+                }
+            });
+            PAIR_SINK.with(|s| {
+                let mut b = s.borrow_mut();
+                let v = b.as_mut().unwrap();
+                for (i, d) in sim.drones.list.iter().enumerate() {
+                    if !d.present || v.len() >= 400_000 { continue; }
+                    let dist = dxz(d.pos, bp);
+                    if dist > 14.0 { continue; }
+                    v.push(PairSample {
+                        tick, index: i, placement: d.placement, phase, dist, dy: d.pos[1] - bp[1],
+                        state: d.state, anim_state: d.anim.state, anim_class: d.anim.class, enabled: d.enabled,
+                        seen: d.seen, routed: d.croute.is_some(),
+                        remaining: d.croute.as_ref().map_or(-1.0, |r| r.remaining),
+                    });
+                }
+            });
+        }
     }
 
     fn sim(&mut self) -> &mut nf_view::scene::Sim { self.scene.sim.as_mut().unwrap() }

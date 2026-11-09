@@ -719,3 +719,112 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage_00agent() {
             walker::with_real_damage(||
                 walk_spawn_to_the_lower_floor_load_point_at(3))))
 }
+
+/// level-11-strip-fight: the 23.0-strip pair's engage/stand chain on 00 Agent, observed on the
+/// real walked route (the same body the `..._real_damage_00agent` test runs — the recorder is
+/// read-only, so this replays that walk bit-exact).
+///
+/// The game's chain under test [M]:
+/// - `DroneFunc_CombatState` 0x148338:47-49 moves the routed combat guard toward the player at
+///   min(engage, 6.0) — 6.0 on this level (the anim-set override [M NDrone2_DefaultInit
+///   0x14b300:429-441]); the 6.0 is the route's GOAL radius (`SetupRouteToObject` 0x158948 raw
+///   0x158a90 stores it to AITarget+0x14; the NodesForPosition search itself runs radius 0, raw
+///   0x158a44), NOT the stand-off: the 0x58/0x5a flips ride straight-line dist [M 0x148338:63-64,
+///   88-90] and both states keep following the route.
+/// - The route-follow STOP is `remaining < 2.0` [M NDrone2_MoveToObject 0x151618 raw
+///   0x151750-0x151768: `if (GetRouteDistance(route) < route+0x8C) return 3`; route+0x8C ≡
+///   drone+0x8EC = 2.0f, written only by DefaultInit 0x14b300:579]. `GetRouteDistance` 0x156320
+///   sums guard→next-node + links + target→last-node, so the stop lands within ~2.0 of the
+///   player target (≤ 2.0 stale [M BuildAITarget 0x15ac78: rebuild at ≥ 2.0 moved]).
+/// - The mv-3 arrival arm stands the guard and fires there [M 0x148338 case-2 arms 3/0xb:
+///   SetAngleToObj → the 0x21 aim anims]; a no-route guard holds and fires from its post [M
+///   case-2 default → 0x5f, the hold the engage-range test pins for the start corridor].
+///
+/// The walk's pair #33/#34 (indexes): #33 rides spawner #278's spawn [D audit #278 =
+/// AI_DroneSpawner, the ch-0xd office reinforcement], #34 is the second abseiler [D #280,
+/// p1=0x6000892, the ch-0x14 shaft-slide sister of #258 that passes the 32.37 hang gate and
+/// reaches y ≈ 22.3 — the 23.0 strip]. Both fight Bond on the strip in the walked run; this test
+/// pins their engage/stand chain against the game's, from the measured run.
+#[test]
+fn the_23_0_strip_pair_engages_per_the_game_chain() {
+    walker::pair_trace_on();
+    walk_spawn_to_the_lower_floor_load_point_at(3);
+    let samples = walker::pair_trace_take();
+    let hits = walker::pair_hits_take();
+    assert!(!samples.is_empty(), "the recorder armed and sampled");
+
+    // Phase 1 = the 07000011 walk proper (the extension's load swaps the scene and starts
+    // phase 2 with its own index-33/34 drones).
+    let here: Vec<&walker::PairSample> =
+        samples.iter().filter(|s| s.phase == 1).collect();
+    assert!(!here.is_empty(), "07000011 phase sampled");
+
+    // The engaged family: the combat router states + the fire states [M the 0x58-0x5f block,
+    // 0x68 AimStandFire, 0x70 AimCrouchFire; drone.rs state docs].
+    let engaged = |s: u8| matches!(s, 0x58..=0x5f | 0x68 | 0x70 | 0x72);
+
+    for (idx, placement_want) in [(33usize, 233usize), (34, 234)] {
+        let mine: Vec<&&walker::PairSample> = here.iter().filter(|s| s.index == idx).collect();
+        assert!(!mine.is_empty(), "index {idx} sampled on 07000011");
+        let placement = mine[0].placement;
+        assert_eq!(placement, placement_want,
+            "the walk's #{idx} is placement {placement_want} [D audit rows #233/#234, the ch-0x13 waiters on the 23.0 strip's east end]");
+        let wake = mine.iter().copied().find(|s| engaged(s.state));
+        assert!(wake.is_some(), "index {idx} (placement {placement}) wakes into the engaged family on the walk");
+        let wake_tick = wake.unwrap().tick;
+        let after: Vec<&&walker::PairSample> =
+            mine.iter().copied().filter(|s| s.tick >= wake_tick).collect();
+        // The chase is ROUTED on the strip (the port built a combat route for the wake) [M
+        // NDrone2_MoveToObject's follow arm 0x151618:64-71 — the routed path is what closes].
+        let routed_ticks = after.iter().filter(|s| s.routed).count();
+        assert!(routed_ticks > 0,
+            "index {idx}: the strip chase ran with a combat route (routed {routed_ticks} of {} ticks)", after.len());
+        let closest = after.iter().copied().min_by(|a, b| a.dist.total_cmp(&b.dist)).unwrap();
+        let fire_close = after.iter().copied()
+            .filter(|s| matches!(s.state, 0x68 | 0x70) || (s.anim_class == 2 && s.anim_state == 0x21))
+            .min_by(|a, b| a.dist.total_cmp(&b.dist));
+        let no_route_ticks = after.iter().filter(|s| !s.routed).count();
+        let my_hits: Vec<&walker::PairHit> =
+            hits.iter().filter(|h| h.owner == idx && h.dmg > 0.0 && h.phase == 1).collect();
+        let hit_dists: Vec<f32> = my_hits.iter().map(|h| h.dist).collect();
+        let hit_min = hit_dists.iter().cloned().fold(f32::NAN, f32::min);
+        let hit_max = hit_dists.iter().cloned().fold(f32::NAN, f32::max);
+        eprintln!(
+            "[pair] idx {idx} placement {placement}: {} post-wake samples (t{}..t{}), routed {routed_ticks} / no-route {no_route_ticks}",
+            after.len(), after.first().unwrap().tick, after.last().unwrap().tick);
+        eprintln!(
+            "[pair] idx {idx}: closest engaged {:.2} (t{} state {:#x} anim {:#x}/class {} dy {:+.2} remaining {:.2})",
+            closest.dist, closest.tick, closest.state, closest.anim_state, closest.anim_class,
+            closest.dy, closest.remaining);
+        eprintln!(
+            "[pair] idx {idx}: closest fire-state {:?}; hits on Bond {} (closest-shooter {hit_min:.2}, farthest {hit_max:.2})",
+            fire_close.map(|s| (s.dist, s.state, s.anim_state)), my_hits.len());
+        eprintln!(
+            "[pair] idx {idx}: last t{} state {:#x} ({})",
+            after.last().unwrap().tick, after.last().unwrap().state,
+            if matches!(after.last().unwrap().state, 0x44..=0x47) { "dead" } else { "alive" });
+
+        // THE PINS (the [M] chain in the test doc; the measured run 2026-11-09):
+        // - a routed chaser stops inside the remaining<2.0 + stale-target bound, NOT at the
+        //   9.0 combat sight and not at a 6.0 stand-off [M 0x151618 raw 0x151750-0x151768 +
+        //   BuildAITarget 0x15ac78]; measured 0.81 / 0.79.
+        assert!(closest.dist <= 4.5,
+            "index {idx}: engaged-phase closest {:.2} breaches the remaining<2.0 + <=2.0-stale bound [M 0x151618/0x15ac78]",
+            closest.dist);
+        // - the sub-engage flip stands the guard in a FIRE state (0x68 AimStandFire / 0x70
+        //   AimCrouchFire — the 0xa AIM_STAND anim; the danim class byte differs per skin, 2 on
+        //   #233's set and 7 on #234's, and the game gates only the grenade/move choice on
+        //   class 2 [M 0x148338:215], not the stand-fire) INSIDE that range [M 0x173280:ENTER ->
+        //   0x68 below 6; 0x148338 case-2 arms 3/0xb -> SetAngleToObj + the 0x21 aim anims];
+        //   measured at 0.81 / 0.79.
+        let fc = fire_close.expect("a fire-state sample inside the close range");
+        assert!(fc.dist <= 4.5 && matches!(fc.state, 0x68 | 0x70),
+            "index {idx}: closest fire state at {:.2} (state {:#x} anim {:#x} class {}) — expected 0x68/0x70 inside 4.5 [M 0x173280:ENTER; 0x148338 case-2]",
+            fc.dist, fc.state, fc.anim_state, fc.anim_class);
+        // - and the rounds land there: the game's stand-fire hits at contact range [M
+        //   DroneWeap fire from the 0x68 stand; measured closest-shooter 1.07 / 1.11].
+        assert!(my_hits.iter().any(|h| h.dist <= 4.5),
+            "index {idx}: no hit landed while inside 4.5 ({} hits, farthest {hit_max:.2}) [M 0x148338 case 0x10 stand-fire]",
+            my_hits.len());
+    }
+}
