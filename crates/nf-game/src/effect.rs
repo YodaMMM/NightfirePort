@@ -451,8 +451,8 @@ impl Effects {
     pub fn bullet_impact(&mut self, rng: &mut Rng, surfaces: Option<&SurfaceSounds>, gas: &mut crate::gas::GasPool,
                          fx: &mut crate::world_fx::WorldFx,
                          pos: V3, normal: V3, material: u8, dir: V3, flags70: u32, bounces: u8, owner_is_player: bool,
-                         ricochet_mask: u32) -> Option<V3> {
-        self.bullet_impact_on(rng, surfaces, gas, fx, pos, normal, material, dir, flags70, bounces, owner_is_player, ricochet_mask, crate::world::HitHost::Cel(None))
+                         ricochet_mask: u32, gas_host: crate::gas::HostCel) -> Option<V3> {
+        self.bullet_impact_on(rng, surfaces, gas, fx, pos, normal, material, dir, flags70, bounces, owner_is_player, ricochet_mask, crate::world::HitHost::Cel(None), gas_host)
     }
 
     /// `bullet_impact` with the hit's host (`CollisionWorld::segment_surface_host*`): the decal
@@ -461,7 +461,7 @@ impl Effects {
     pub fn bullet_impact_on(&mut self, rng: &mut Rng, surfaces: Option<&SurfaceSounds>, gas: &mut crate::gas::GasPool,
                          fx: &mut crate::world_fx::WorldFx,
                          pos: V3, normal: V3, material: u8, dir: V3, flags70: u32, bounces: u8, owner_is_player: bool,
-                         ricochet_mask: u32, host: crate::world::HitHost) -> Option<V3> {
+                         ricochet_mask: u32, host: crate::world::HitHost, gas_host: crate::gas::HostCel) -> Option<V3> {
         // `Bullet_CollisionHandler` 0x12ce80: the effect flags start 0; weapon_data+0x70 & 2 → 0x61
         // [M 0x12cf58 init, 0x12d198 `| 0x61`]. Without bit 2 the game passes flags 0: no decal, no
         // gas, no debris — only the +0x14 sound (which `Effect_Bullet`'s 0x40 arm plays; the port
@@ -530,7 +530,7 @@ impl Effects {
                         [0.0; 3]
                     };
                     let rgba = [((g.rgba[0] >> 24) & 0xff) as u8, ((g.rgba[0] >> 16) & 0xff) as u8, ((g.rgba[0] >> 8) & 0xff) as u8, (g.rgba[0] & 0xff) as u8];
-                    gas.init_ex_rot(rng, g.mesh, p, 0.0, [0.0; 3], g.scale[0], g.scale[1], g.kind as u8, rgba, g.rgba[1], g.life as f32, rot);
+                    gas.init_ex_rot(rng, g.mesh, p, 0.0, [0.0; 3], g.scale[0], g.scale[1], g.kind as u8, rgba, g.rgba[1], g.life as f32, rot, gas_host);
                 }
             }
             // The decal: `EffectInfo+4` != 0 → take a pool node, evicting the OLDEST when the 200 are
@@ -620,7 +620,7 @@ mod tests {
         let mut rng = Rng::new(3);
         // Normal [0.8, 0, 0.6]: |y| = 0 → the wall puff runs (and the floor puffs' slots are
         // empty, mesh 0 — the first entry is the only one).
-        e2.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [0.0, 0.0, 0.0], [0.8, 0.0, 0.6], 10, [0.0, 0.0, -1.0], 0x2, 0, true, 8);
+        e2.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [0.0, 0.0, 0.0], [0.8, 0.0, 0.6], 10, [0.0, 0.0, -1.0], 0x2, 0, true, 8, crate::gas::HostCel::default());
         assert_eq!(gas.puffs.len(), 1);
         let want = vec_norm_to_rot([0.8, 0.0, 0.6]);
         assert_eq!(gas.puffs[0].rot, want, "the wall puff carries the Vec_NormToRot euler");
@@ -631,7 +631,7 @@ mod tests {
         let surf = table(r);
         let mut gas2 = crate::gas::GasPool::default();
         let mut e3 = Effects::new();
-        e3.bullet_impact(&mut rng, Some(&surf), &mut gas2, &mut fx(), [1.0, 1.0, 1.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8);
+        e3.bullet_impact(&mut rng, Some(&surf), &mut gas2, &mut fx(), [1.0, 1.0, 1.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8, crate::gas::HostCel::default());
         assert_eq!(gas2.puffs[0].rot, negated_normal_euler([0.0, 1.0, 0.0]));
         // +0x1b clear → the zero vector.
         let mut r = rec(0, 0);
@@ -639,7 +639,7 @@ mod tests {
         let surf = table(r);
         let mut gas3 = crate::gas::GasPool::default();
         let mut e4 = Effects::new();
-        e4.bullet_impact(&mut rng, Some(&surf), &mut gas3, &mut fx(), [1.0, 1.0, 1.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8);
+        e4.bullet_impact(&mut rng, Some(&surf), &mut gas3, &mut fx(), [1.0, 1.0, 1.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8, crate::gas::HostCel::default());
         assert_eq!(gas3.puffs[0].rot, [0.0; 3]);
     }
 
@@ -661,7 +661,7 @@ mod tests {
         let r = rec(0x0200_0126, 0);
         let surf = table(r);
         let mut rng = Rng::new(1);
-        let out = e.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [10.0, 2.0, 3.0], [0.0, 0.0, 1.0], 10, [0.0, 0.0, -1.0], 0x2, 0, true, 8);
+        let out = e.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [10.0, 2.0, 3.0], [0.0, 0.0, 1.0], 10, [0.0, 0.0, -1.0], 0x2, 0, true, 8, crate::gas::HostCel::default());
         assert!(out.is_none());
         assert_eq!(e.decals.len(), 1);
         let d = &e.decals[0];
@@ -672,7 +672,7 @@ mod tests {
         // only draws would be the ricochet's, which is gated on the flag too).
         let before = (rng.x, rng.y);
         let mut e2 = Effects::new();
-        e2.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [1.0, 1.0, 1.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x0, 0, true, 8);
+        e2.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [1.0, 1.0, 1.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x0, 0, true, 8, crate::gas::HostCel::default());
         assert!(e2.decals.is_empty());
         assert_eq!((rng.x, rng.y), before, "flags 0: the game draws nothing at this impact");
     }
@@ -687,7 +687,7 @@ mod tests {
         let surf = table(r);
         let mut rng = Rng::new(7);
         for k in 0..201 {
-            e.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [k as f32, 0.0, 0.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8);
+            e.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [k as f32, 0.0, 0.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8, crate::gas::HostCel::default());
         }
         assert_eq!(e.decals.len(), 200, "the pool holds 200");
         assert_eq!(e.decals[0].pos[0], 1.0, "the first decal (k=0) was evicted");
@@ -706,7 +706,7 @@ mod tests {
         let surf = table(rec(0x0200_0126, 0));
         let mut rng = Rng::new(7);
         let shoot = |e: &mut Effects, rng: &mut Rng, gas: &mut crate::gas::GasPool, k: usize| {
-            e.bullet_impact(rng, Some(&surf), gas, &mut fx(), [k as f32, 0.0, 0.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8);
+            e.bullet_impact(rng, Some(&surf), gas, &mut fx(), [k as f32, 0.0, 0.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8, crate::gas::HostCel::default());
         };
         for k in 0..200 { shoot(&mut e, &mut rng, &mut gas, k); }
         let before: Vec<f32> = (0..DECAL_POOL).map(|n| e.decal_in_node(n).unwrap().pos[0]).collect();
@@ -812,7 +812,7 @@ mod tests {
         let r = rec(0, 0);
         let surf = table(r);
         let mut rng = Rng::new(3);
-        e.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [0.0; 3], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8);
+        e.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [0.0; 3], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8, crate::gas::HostCel::default());
         assert!(!e.debris.is_empty(), "stone debris spawns");
         assert!(e.debris.len() <= 6, "count = Rand_Rand(5)+1 ≤ 6");
         for d in &e.debris {
@@ -847,7 +847,7 @@ mod tests {
             let mut e = Effects::new();
             let mut rng = Rng::new(seed);
             let before = (rng.x, rng.y);
-            let out = e.bullet_impact(&mut rng, Some(&surf2), &mut gas, &mut fx(), [0.0; 3], n, 10, dir, 0x12, 0, true, 8);
+            let out = e.bullet_impact(&mut rng, Some(&surf2), &mut gas, &mut fx(), [0.0; 3], n, 10, dir, 0x12, 0, true, 8, crate::gas::HostCel::default());
             assert_ne!((rng.x, rng.y), before, "N != 0: exactly one Rand_Rand draw (seeds advanced)");
             if let Some(d) = out { found = Some((seed, d)); break; }
         }
@@ -870,7 +870,7 @@ mod tests {
         let mut twin = Rng::new(1);
         twin.frand(std::f32::consts::FRAC_PI_2 * crate::gas::REC_FRAME_RATE); // the spin [M 0x1ab060]
         twin.rand(0x100); // the sign coin [M 0x1ab08c]
-        assert!(e3.bullet_impact(&mut rng3, Some(&surf3), &mut gas, &mut fx(), [0.0; 3], n, 10, dir, 0x12, 0, true, 8).is_none());
+        assert!(e3.bullet_impact(&mut rng3, Some(&surf3), &mut gas, &mut fx(), [0.0; 3], n, 10, dir, 0x12, 0, true, 8, crate::gas::HostCel::default()).is_none(), "N = 0: no ricochet, no gas");
         assert_eq!((rng3.x, rng3.y), (twin.x, twin.y), "N = 0: exactly the puff's 2 Gas_Init draws, no ricochet draw");
         assert_eq!(rng3.draws, 2);
     }

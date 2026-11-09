@@ -5674,7 +5674,10 @@ impl Sim {
                             // [M 0x1a43f8 `li $v0, 0x80` → 0x1a442c `sw $v0, 0($sp)`] — the old value 8 was a guess —
                             // and the packed END rgba is 1 = bytes (0,0,0,1), so the alpha rate is
                             // (1−0x80)/128 [M 0x1a4440 delay slot `li $t3, 1`].
-                            self.drones.gas.init_ex(&mut self.drones.rng, nf_game::gas::SMOKE_QUAD, pos, 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0);
+                            // gas-cel-host: the kind-7 NULL-vel wind term — the game passes the PLAYER's cel (obj+0x20)
+                            // [M 0x1a4298's call a0], resolved here at the spawn pos.
+                            let ghost = self.drones.rbodies.host_at(pos);
+                            self.drones.gas.init_ex(&mut self.drones.rng, nf_game::gas::SMOKE_QUAD, pos, 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0, ghost);
                         }
                     }
                     if spawn_shot {
@@ -6303,6 +6306,9 @@ impl Sim {
     /// window and the env gate (`env::breath_env_gate`: false only under a snow `Env_Create`,
     /// so the snow levels breathe in every mode and the rest only in x-ray). The cel's
     /// underwater bit (cel+0x3c & 0x10000000, `Cel::underwater`) forces the x-ray variant.
+    /// The call's cel argument — the guard's `obj+0x20` [M 0x1490f0:196-198] — threads into
+    /// `Gas_Init` and the puff's ceiling clamp reads its +0x54 [M 0x1aacc8:84-87 + gases_smoke
+    /// :66-77]; the port resolves it by containment at the guard's position.
     ///
     /// Stand-ins [S]: the cel-visited byte reads as `drawn_grace != 0` (a guard object drawn
     /// last frame sat in a visited cel — `View_AddCels` 0x1e6ba0 submits only the VisCelList
@@ -6316,7 +6322,7 @@ impl Sim {
         let drop_type = self.drones.env.as_ref().map(|e| e.kind).or(self.drones.pending_env_drop_type());
         let gate = nf_game::env::breath_env_gate(drop_type);
         let frame = self.drones.frame;
-        let mut spawns: Vec<(u32, [f32; 3], [f32; 3], bool)> = Vec::new();
+        let mut spawns: Vec<(u32, [f32; 3], [f32; 3], bool, nf_game::gas::HostCel)> = Vec::new();
         {
             let d = self.data();
             for dr in self.drones.list.iter().filter(|x| x.present && x.enabled) {
@@ -6331,11 +6337,19 @@ impl Sim {
                 let m = nf_formats::placement::object_matrix([0.0, dr.yaw, 0.0], [dr.pos[0], dr.draw_y(hip), dr.pos[2]]);
                 let (pos, dir) = nf_game::env::guard_breath_origin(&anim::mul(w, &m));
                 let underwater = find_cel(&self.cels, dr.pos).and_then(|c| self.cels.get(c)).is_some_and(|c| c.underwater);
-                spawns.push((phase, pos, dir, underwater));
+                // The caller's cel rides the call: `Env_Breath`'s arg 3 is the guard's `obj+0x20`
+                // [M 0x1490f0:196-198 — the cel `control_link_object_to_cel` stores, 0x1346b8],
+                // and `Gas_Init` links the puff's room cel from its own containment with THAT cel
+                // as the failure fallback [M 0x1aacc8:84-87] — the cel whose +0x54 the kinds-0
+                // clamp reads every tick [M gases_smoke 0x1ab2d0 :66-77]. The port's drones carry
+                // no cel handle, so the guard's cel is contained at its position (the same
+                // stand-in every gas site documents).
+                let host = self.drones.rbodies.host_at(dr.pos);
+                spawns.push((phase, pos, dir, underwater, host));
             }
         }
-        for (phase, pos, dir, underwater) in spawns {
-            nf_game::env::env_breath(&mut self.drones.gas, &mut self.drones.rng, frame, phase, pos, dir, 1, underwater, mode, Some(gate));
+        for (phase, pos, dir, underwater, host) in spawns {
+            nf_game::env::env_breath(&mut self.drones.gas, &mut self.drones.rng, frame, phase, pos, dir, 1, underwater, mode, Some(gate), host);
         }
     }
 

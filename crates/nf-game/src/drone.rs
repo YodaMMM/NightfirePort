@@ -16867,7 +16867,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         _ => None,
                     };
                     if let Some((s0, s1, mesh)) = victim_puff {
-                        self.gas.init_ex(&mut self.rng, mesh, hit.point, 0.0, [0.0; 3], s0, s1, 5, [0xff, 0xff, 0xff, 0xff], 0, 60.0);
+                        // kind 5 = the scale-only update case — no wind term, no clamp [M gases_smoke case 1|5].
+                        self.gas.init_ex(&mut self.rng, mesh, hit.point, 0.0, [0.0; 3], s0, s1, 5, [0xff, 0xff, 0xff, 0xff], 0, 60.0, crate::gas::HostCel::default());
                         // +0xf0 |= 8 rides the blood mesh only (the bolt's 0x0200_026e case never
                         // sets it [M 0x13fff0:251-255]).
                         if mesh == 0x0200_08bc {
@@ -17089,7 +17090,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
         }
         let host = crate::world::HitHost::Object(crate::world::PANE_PART | pane as u64, matrix);
-        self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, hit, n, m, dir, flags70, bounces, true, 0, host);
+        self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, hit, n, m, dir, flags70, bounces, true, 0, host, self.rbodies.host_at(hit));
     }
 
     fn flush_world_impacts(&mut self, d: &Data) {
@@ -17193,7 +17194,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // 0x7f7f64ff, life 8) [M 0x1cef38:60-70].
                     let mesh = d.surfaces.as_ref().map_or(0, |s| s.gas_mesh(m));
                     if mesh != 0 {
-                        self.gas.init_ex(&mut self.rng, mesh, hit, 0.0, [0.0; 3], 2.0, 3.0, 5, [0x7f, 0x7f, 0x64, 0xff], 0, 8.0);
+                        // kind 5 = the scale-only update case — no wind term, no clamp [M gases_smoke case 1|5].
+                        self.gas.init_ex(&mut self.rng, mesh, hit, 0.0, [0.0; 3], 2.0, 3.0, 5, [0x7f, 0x7f, 0x64, 0xff], 0, 8.0, crate::gas::HostCel::default());
                     }
                     // fx-scrape-and-impacts row 11 [M Effect_Laser 0x1cef38:110-120]: the second puff,
                     // on `GameState & 1` — +0x52 is the LEVEL CODE word (`RB_Update`'s `& 0xf` gate maps
@@ -17214,9 +17216,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             hit[1] + jit[1] * basis[1],
                             hit[2] + jit[2] * basis[2],
                         ];
-                        self.gas.init_ex_rot(&mut self.rng, crate::gas::SMOKE_QUAD, p, 0.0, [0.0; 3], 0.05, 0.1, 0, [0xc8, 0xc8, 0xc8, 0x7f], 0x2020_2006, 21.0, [0.0; 3]);
+                        // kind 0: the default (0, REC, 0) velocity [M :105-129] and the case-0→7
+                        // ceiling clamp — the cel here is `Effect_Laser`'s own cel argument.
+                        let lhost = self.rbodies.host_at(p);
+                        self.gas.init_ex_rot(&mut self.rng, crate::gas::SMOKE_QUAD, p, 0.0, [0.0; 3], 0.05, 0.1, 0, [0xc8, 0xc8, 0xc8, 0x7f], 0x2020_2006, 21.0, [0.0; 3], lhost);
                     }
-                } else if let Some(nd) = self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, hit, n, m, dir, flags70, bounces, true, if pierce { 0 } else { 8 }, host) {
+                } else if let Some(nd) = self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, hit, n, m, dir, flags70, bounces, true, if pierce { 0 } else { 8 }, host, self.rbodies.host_at(hit)) {
                     ricochet = Some((hit, nd));
                 }
                 // fix-weapon-effects / fix-blast-scripts2: the impact explode arms run per
@@ -17829,7 +17834,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         if self.props.gunimps[gi].hot && self.frame % 6 == 0 {
             let g = &self.props.gunimps[gi];
             let (muzzle, dir, radius) = (g.muzzle(), g.barrel_dir(), g.radius);
-            self.gas.init_gunimp_smoke(&mut self.rng, muzzle, [-dir[0], -dir[1], -dir[2]], radius);
+            // gas-cel-host: the game passes the imp's own cel (obj+0x20) — resolved here at the
+            // muzzle base (the pre-offset vector the game's Gas_Init gets as the pos).
+            let host = self.rbodies.host_at(muzzle);
+            self.gas.init_gunimp_smoke(&mut self.rng, muzzle, [-dir[0], -dir[1], -dir[2]], radius, host);
         }
         // The fire/stop block [M GunImp_Update 0x1320d8:247-278]: released or hot → the stop
         // path — `Sound_Stop(ext+0x98)` + handle zero (the 0x61 arm adds its spin-down 0x5e6 at
@@ -19274,14 +19282,16 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if let Some(pos) =
                     out.iter().find_map(|e| match e { crate::gt::GTEvent::Smoke { pos } => Some(*pos), _ => None })
                 {
-                    self.gas.init_gt_smoke(&mut self.rng, pos);
+                    let host = self.rbodies.host_at(pos);
+                    self.gas.init_gt_smoke(&mut self.rng, pos, host);
                 }
                 // The SHOT smoke (audit-effect-calls row 6): the fire tails' alternate-shot
                 // `Gas_Init(0.05, 0.1, …, kind 7, 0x48403080, 1)` — emitted here (before the next
                 // turret's update) so the six shared draws land at the game's stream position.
                 for e in out.iter() {
                     if let crate::gt::GTEvent::ShotSmoke { muzzle } = e {
-                        self.gas.init_gt_shot_smoke(&mut self.rng, *muzzle);
+                        let host = self.rbodies.host_at(*muzzle);
+                        self.gas.init_gt_shot_smoke(&mut self.rng, *muzzle, host);
                     }
                 }
                 // The rewind writes land at once: zero both mounted players' delays so the
@@ -21414,7 +21424,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // gfx 0x2000129, kind 1, rgba 0x40008080 → 0x80808008, life 16)` — the same gate and
                 // the same single `Rand_FRand(0.15)` draw as the impulse (which `tick_one` consumed).
                 if let Some(puff) = self.rbodies.tick_one(index, self.level_current & 0xf, &mut self.rng) {
-                    self.gas.init_ex(&mut self.rng, 0x0200_0129, puff, 0.0, [0.0; 3], 0.5, 1.0, 1, [0x40, 0x00, 0x80, 0x80], 0x8080_8008, 16.0);
+                    // kind 1 = the scale-only case — no wind, no clamp [M gases_smoke case 1|5].
+                    self.gas.init_ex(&mut self.rng, 0x0200_0129, puff, 0.0, [0.0; 3], 0.5, 1.0, 1, [0x40, 0x00, 0x80, 0x80], 0x8080_8008, 16.0, crate::gas::HostCel::default());
                 }
                 continue;
             }
@@ -21439,7 +21450,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 let smoke: Vec<[f32; 3]> = self.searchlights.parts.iter()
                     .filter(|p| p.kind == 1 && p.state == 2 && p.drawn && (frame + p.created) % 7 == 0)
                     .map(|p| p.pos).collect();
-                for pos in smoke { self.gas.init_searchlight_smoke(&mut self.rng, pos); }
+                for pos in smoke {
+                    let host = self.rbodies.host_at(pos);
+                    self.gas.init_searchlight_smoke(&mut self.rng, pos, host);
+                }
                 // The kill path clears a kind-2 part's light (`Searchlight_Update`'s off-channel branch
                 // removes the `light_tag` record): mirror it onto the light list.
                 for (k, p) in self.searchlights.parts.iter().enumerate() {
@@ -23100,7 +23114,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                     if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, pm) { self.audio.play3d(id, pp, None); }
                                 }
                             }
-                            self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, pp, pn, pm, b.dir, flags70_p, b.bounces, false, 0, phost);
+                            self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, pp, pn, pm, b.dir, flags70_p, b.bounces, false, 0, phost, self.rbodies.host_at(pp));
                         }
                         // A guard's round lands on a turret part like Bond's does: the game's Collide
                         // pass is the same for every HITTEST owner, and `GT_Update` sums every node
@@ -23168,7 +23182,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             let mut hit_host = d.world.segment_surface_host(from, end, false).map_or(crate::world::HitHost::Cel(None), |h| h.4);
                             let mut ricochet_nd: Option<V3> = None;
                             loop {
-                                if let Some(nd) = self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, cur, hit_n, hit_m, b.dir, flags70, b.bounces, false, if pierce { 0 } else { 8 }, hit_host) {
+                                if let Some(nd) = self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, cur, hit_n, hit_m, b.dir, flags70, b.bounces, false, if pierce { 0 } else { 8 }, hit_host, self.rbodies.host_at(cur)) {
                                     ricochet_nd = Some(nd);
                                     break;
                                 }
@@ -23469,7 +23483,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if f6c & 0x2 != 0 {
                     if g.bounces == 0 {
                         if tick & 3 == 0 {
-                            self.gas.init_trail_smoke(rng, g.pos);
+                            let host = self.rbodies.host_at(g.pos);
+                            self.gas.init_trail_smoke(rng, g.pos, host);
                         }
                     } else if tick % 15 == 0 {
                         // The BIG puff (audit-effect-calls row 12): the post-first-hit arm —
@@ -23480,11 +23495,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         // through the bounced states [M 0x12e7b0:376/:475]. The smoke-bearing
                         // records 0x1b/0x36/0x69 [L ee_start_05.bin @ 0x2bf150 sweep] are
                         // bouncy 40mm/stun rounds, so `bounces > 0` IS the latch's arm.
-                        self.gas.init_trail_big_puff(rng, g.pos);
+                        let host = self.rbodies.host_at(g.pos);
+                        self.gas.init_trail_big_puff(rng, g.pos, host);
                     }
                 }
                 if f6c & 0x20 != 0 && self.frame % 3 == 0 {
-                    self.gas.init_exhaust_puff(rng, g.pos);
+                    let host = self.rbodies.host_at(g.pos);
+                    self.gas.init_exhaust_puff(rng, g.pos, host);
                 }
             }
             while let Some(ev) = g.update(d.world, &mut self.rng) {
@@ -23627,7 +23644,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             // 0/life 30 were misreadings; kind 0xb quarters the spin [M 0x1aacc8:74-76]
                             // and the NULL velocity takes the (0, REC, 0) default [M 0x1aacc8:105-129].
                             // The draws: spin + sign (init_ex), no velocity draws [M 0x1aacc8:89-141].
-                            self.gas.init_ex(&mut self.rng, 0x0200_001f, pos, 0.0, [0.0; 3], 0.5, 1.68, 0xb, [0xff, 0xff, 0xff, 0x7f], 0x8080_8000, 127.0);
+                            // gas-cel-host: the game passes the bullet's cel (obj+0x20) [M the call's
+                            // a0 `*(undefined4 *)(iVar18 + 0x20)` at 0x12dd6c] — resolved here at the
+                            // blast pos; the kind-0xb clamp [M gases_smoke :200-203] reads that cel.
+                            let host = self.rbodies.host_at(pos);
+                            self.gas.init_ex(&mut self.rng, 0x0200_001f, pos, 0.0, [0.0; 3], 0.5, 1.68, 0xb, [0xff, 0xff, 0xff, 0x7f], 0x8080_8000, 127.0, host);
                             self.shake = self.shake.max(2.0);
                             if owner == usize::MAX {
                                 // The broadcast [M 0x12d890 flash arm 0x12e0c0 → `Drone_MessageObjVicinity`
