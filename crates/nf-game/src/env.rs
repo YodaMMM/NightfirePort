@@ -231,8 +231,9 @@ pub fn env_water_ripple(gas: &mut crate::gas::GasPool, rng: &mut Rng, material: 
     if material.wrapping_sub(0x0d) & 0x3f >= 2 {
         return;
     }
+    // kind 1 = the scale-only case — no wind term, no clamp [M gases_smoke 0x1ab2d0 case 1|5].
     gas.init_ex(rng, crate::world_fx::RIPPLE_MESH, hit_point, 0.0, [0.0; 3], 0.5, 1.01, 1,
-        [0x7f, 0x7f, 0x7f, 0x7f], 2, 63.0);
+        [0x7f, 0x7f, 0x7f, 0x7f], 2, 63.0, crate::gas::HostCel::default());
 }
 
 /// `Env_Breath` 0x17be00 (584 B): the cold-breath vapor puffs. Args map to the game's
@@ -297,7 +298,7 @@ pub fn breath_env_gate(drop_type: Option<u8>) -> bool {
 
 pub fn env_breath(
     gas: &mut crate::gas::GasPool, rng: &mut Rng, frame: u32, phase: u32, pos: V3, dir: V3,
-    zone: i8, cel_env_bit: bool, cam_mode: i16, env_gate: Option<bool>,
+    zone: i8, cel_env_bit: bool, cam_mode: i16, env_gate: Option<bool>, host: crate::gas::HostCel,
 ) {
     if zone == 0 {
         return;
@@ -325,7 +326,14 @@ pub fn env_breath(
         // 0x17bfe4], kind 0, dir*REC velocity. The draw comes BEFORE Gas_Init's own spin/sign
         // (init_ex's), the game's order.
         let yaw = rng.frand(6.2831854820251465);
-        gas.init_ex(rng, BREATH_MESH, at, yaw, dir, 0.05, 0.2, 0, [255, 255, 255, 200], BREATH_RGBA_END, 40.0);
+        // kind 0: the case-0→7 ceiling clamp [M gases_smoke :66-77]. The game threads the BREATH
+        // CALLER's cel handle straight through: `Env_Breath`'s param_3 lands in `Gas_Init`'s cel
+        // argument in BOTH variants [M 0x17bfe4/0x17bf4c — the calls' third register arg], and
+        // `Gas_Init` links the puff's room cel as `build_LinkToRoom(puff)`'s containment result
+        // with `control_link_object_to_cel(puff, param_3)` as the failure fallback [M 0x1aacc8:
+        // 84-87] — the cel whose +0x54 the kinds-0/7/0xb clamp reads every tick. The caller
+        // resolves its own cel (the game's `obj+0x20` [M 0x1346b8 stores it there]) into `host`.
+        gas.init_ex(rng, BREATH_MESH, at, yaw, dir, 0.05, 0.2, 0, [255, 255, 255, 200], BREATH_RGBA_END, 40.0, host);
         if let Some(g) = gas.puffs.last_mut() {
             // Gas_Init's non-kind-4 velocity arm: arg * REC_FRAME_RATE [M 0x1aacc8 tail].
             let rec = 1.0 / 60.0;
@@ -336,7 +344,8 @@ pub fn env_breath(
     } else {
         // Variant B: null quaternion, NO yaw draw [M 0x17bf00-0x17bf68: a2 = 0 is the null
         // quaternion; no Rand call on this arm], 0.05 -> 0.1 [FPR 12 0x3d4ccccd, f13 0x3dcccccd].
-        gas.init_ex(rng, BREATH_MESH, at, 0.0, dir, 0.05, 0.1, 0, [255, 255, 255, 128], BREATH_RGBA_END, 40.0);
+        // The caller's cel rides this variant too [M the call's a2 at 0x17bf4c].
+        gas.init_ex(rng, BREATH_MESH, at, 0.0, dir, 0.05, 0.1, 0, [255, 255, 255, 128], BREATH_RGBA_END, 40.0, host);
         if let Some(g) = gas.puffs.last_mut() {
             let rec = 1.0 / 60.0;
             g.vel = [dir[0] * rec, dir[1] * rec, dir[2] * rec];
@@ -461,11 +470,11 @@ fn breath_gate_fires_on_the_6th_frame_window() {
     let mut gas = crate::gas::GasPool::default();
     let mut rng = Rng::new(0x5e4c04);
     // (frame - phase) % 6 == 0 and % 120 <= 40 fires: frame 42, phase 0 -> 42%6=0, 42<=40? NO.
-    env_breath(&mut gas, &mut rng, 42, 0, [0.0; 3], [0.0, 0.0, 1.0], 1, false, 2, None);
+    env_breath(&mut gas, &mut rng, 42, 0, [0.0; 3], [0.0, 0.0, 1.0], 1, false, 2, None, crate::gas::HostCel::default());
     assert!(gas.puffs.is_empty(), "42 is inside the 6-gate but outside the 40-window");
     assert_eq!(rng.draws, 0, "a gated-out breath consumes nothing [M 0x17be1c-0x17bec8]");
     // frame 36: 36%6=0, 36<=40 -> fires. Variant A (cam 2, no GlobalEnv): 0.05 -> 0.2, alpha 200.
-    env_breath(&mut gas, &mut rng, 36, 0, [1.0, 2.0, 3.0], [0.0, 0.0, 1.0], 1, false, 2, None);
+    env_breath(&mut gas, &mut rng, 36, 0, [1.0, 2.0, 3.0], [0.0, 0.0, 1.0], 1, false, 2, None, crate::gas::HostCel::default());
     assert_eq!(gas.puffs.len(), 1);
     let g = &gas.puffs[0];
     assert_eq!(g.mesh, BREATH_MESH);
@@ -494,13 +503,13 @@ fn breath_gate_sisters_zone_and_window_edges() {
     // Sister: the zone byte clears -> nothing, whatever the frame [M 0x17be24-0x17be28].
     let mut gas = crate::gas::GasPool::default();
     let mut rng = Rng::new(0x5e4c04);
-    env_breath(&mut gas, &mut rng, 36, 0, [0.0; 3], [0.0; 3], 0, false, 2, None);
+    env_breath(&mut gas, &mut rng, 36, 0, [0.0; 3], [0.0; 3], 0, false, 2, None, crate::gas::HostCel::default());
     assert!(gas.puffs.is_empty());
     // Sister: frame 41 (41%6 != 0) -> nothing [M 0x17be58].
-    env_breath(&mut gas, &mut rng, 41, 0, [0.0; 3], [0.0; 3], 1, false, 2, None);
+    env_breath(&mut gas, &mut rng, 41, 0, [0.0; 3], [0.0; 3], 1, false, 2, None, crate::gas::HostCel::default());
     assert!(gas.puffs.is_empty());
     // Sister: variant B (env gate Some(false)) fires WITHOUT the cam-2 gate, alpha 128, 0.05 -> 0.1.
-    env_breath(&mut gas, &mut rng, 36, 0, [0.0; 3], [0.0; 3], 1, false, 0, Some(false));
+    env_breath(&mut gas, &mut rng, 36, 0, [0.0; 3], [0.0; 3], 1, false, 0, Some(false), crate::gas::HostCel::default());
     assert_eq!(gas.puffs.len(), 1);
     assert_eq!(gas.puffs[0].rgba[3], 128.0); // 0xffffff80 [M 0x17bf60]
     assert!((gas.puffs[0].scale - 0.05).abs() < 1e-6); // FPR 12 0x3d4ccccd [M 0x17bf24-0x17bf2c]
@@ -524,21 +533,61 @@ fn breath_gate_sisters_zone_and_window_edges() {
 fn breath_xray_variant_carries_the_xray_only_bit() {
     let mut gas = crate::gas::GasPool::default();
     let mut rng = Rng::new(0x5e4c04);
-    env_breath(&mut gas, &mut rng, 36, 0, [0.0; 3], [0.0, 0.0, 1.0], 1, false, 2, Some(breath_env_gate(None)));
+    env_breath(&mut gas, &mut rng, 36, 0, [0.0; 3], [0.0, 0.0, 1.0], 1, false, 2, Some(breath_env_gate(None)), crate::gas::HostCel::default());
     assert_eq!(gas.puffs.len(), 1);
     assert!(gas.puffs[0].xray_only);
     assert_eq!(gas.puffs[0].rgba[3], 200.0); // 0xffffffc8 [M 0x17c018]
     // Sister: the same gate in mode 1 (night sight) spawns nothing.
-    env_breath(&mut gas, &mut rng, 42, 0, [0.0; 3], [0.0, 0.0, 1.0], 1, false, 1, Some(breath_env_gate(Some(1))));
+    env_breath(&mut gas, &mut rng, 42, 0, [0.0; 3], [0.0, 0.0, 1.0], 1, false, 1, Some(breath_env_gate(Some(1))), crate::gas::HostCel::default());
     assert_eq!(gas.puffs.len(), 1);
     // Sister: the snow env (drop type 0) takes the plain puff in mode 0 — no x-ray bit.
-    env_breath(&mut gas, &mut rng, 30, 0, [0.0; 3], [0.0, 0.0, 1.0], 1, false, 0, Some(breath_env_gate(Some(0))));
+    env_breath(&mut gas, &mut rng, 30, 0, [0.0; 3], [0.0, 0.0, 1.0], 1, false, 0, Some(breath_env_gate(Some(0))), crate::gas::HostCel::default());
     assert_eq!(gas.puffs.len(), 2);
     assert!(!gas.puffs[1].xray_only);
     // The underwater cel bit (cel+0x3c & 0x10000000) forces the mode-2 variant even under snow.
-    env_breath(&mut gas, &mut rng, 24, 0, [0.0; 3], [0.0, 0.0, 1.0], 1, true, 0, Some(breath_env_gate(Some(0))));
+    env_breath(&mut gas, &mut rng, 24, 0, [0.0; 3], [0.0, 0.0, 1.0], 1, true, 0, Some(breath_env_gate(Some(0))), crate::gas::HostCel::default());
     assert_eq!(gas.puffs.len(), 2);
     assert!(breath_env_gate(None) && breath_env_gate(Some(1)) && breath_env_gate(Some(0xff)) && !breath_env_gate(Some(0)));
+}
+
+/// The caller's cel threads into `env_breath` and the puff carries its clamp, with NO extra
+/// draws: the game passes `Env_Breath`'s param_3 straight into `Gas_Init`'s cel argument in
+/// both variants [M 0x17bfe4/0x17bf4c], the puff's room cel falls back to it [M 0x1aacc8:84-87],
+/// and the kinds-0/7/0xb clamp reads that cel's +0x54 every tick [M gases_smoke 0x1ab2d0 :66-77].
+/// Kind 0 never reads the wind arm (kind-7-only [M 0x1aacc8:105-116]), so the host's wind is
+/// inert here and the draw count is the game's own, bit for bit.
+#[test]
+fn breath_puff_rides_the_callers_cel_clamp_without_extra_draws() {
+    let host = crate::gas::HostCel { wind: [0.3, -0.2, 0.1], ceil_y: Some(7.25) };
+    // Twin streams: identical args (the puff spawns ABOVE the host ceil so the clamp binds),
+    // the host the only difference.
+    let mut a = crate::gas::GasPool::default();
+    let mut b = crate::gas::GasPool::default();
+    let mut ra = Rng::new(0x5e4c04);
+    let mut rb = Rng::new(0x5e4c04);
+    env_breath(&mut a, &mut ra, 36, 0, [1.0, 9.0, 3.0], [0.0, 0.0, 1.0], 1, false, 2, None, host);
+    env_breath(&mut b, &mut rb, 36, 0, [1.0, 9.0, 3.0], [0.0, 0.0, 1.0], 1, false, 2, None, crate::gas::HostCel::default());
+    assert_eq!(ra.draws, rb.draws, "the host adds no draws (kind 0: the wind arm is kind-7-only [M 0x1aacc8:105-116])");
+    assert_eq!(ra.draws, 3, "variant A: the yaw draw + Gas_Init's spin/sign [M 0x17bf8c-0x17bfa0, 0x1aacc8:72-80]");
+    let (ga, gb) = (&a.puffs[0], &b.puffs[0]);
+    assert_eq!(ga.ceil_y, Some(7.25), "the caller's cel clamp rides the puff [M gases_smoke :66-77]");
+    assert_eq!(gb.ceil_y, None);
+    assert_eq!(ga.pos, gb.pos);
+    for k in 0..3 {
+        assert_eq!(ga.vel[k].to_bits(), gb.vel[k].to_bits(),
+            "the host's wind is inert for kind 0 (vel = dir*REC [M 0x1aacc8 tail])");
+    }
+    // The clamp binds in the tick: the puff stops at the caller's cel max y; the cel-less
+    // twin keeps rising through it.
+    a.update(1);
+    b.update(1);
+    assert_eq!(a.puffs[0].pos[1], 7.25, "the puff holds at the host ceil [M gases_smoke :66-77]");
+    assert!(b.puffs[0].pos[1] > 7.25, "no cel -> no clamp (the old default-host behaviour)");
+    // Variant B (the plain puff — snow levels breathe indoors) carries the host too.
+    let mut c = crate::gas::GasPool::default();
+    let mut rc = Rng::new(0x5e4c04);
+    env_breath(&mut c, &mut rc, 36, 0, [1.0, 9.0, 3.0], [0.0; 3], 1, false, 0, Some(false), host);
+    assert_eq!(c.puffs[0].ceil_y, Some(7.25), "variant B carries the caller's cel [M 0x17bf4c]");
 }
 
 /// The guard's breath origin: head bone z row as the direction, origin + dir·0.12

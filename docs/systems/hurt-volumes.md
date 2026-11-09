@@ -44,18 +44,26 @@ A state machine on `obj+0xF4`:
   - no gate + param4 (+0x16) == 0 → `uVar5 = 1` → start;
   - no gate + param4 != 0 → walk the object's `obj+0xD0` HITDATA chain, OR-ing the contact objects'
     class bits (class 3 → 8, class 2 → 0x10, class 5 → 2; classes 1/4 collect nothing), then
-    `uVar5 = param4 & collected`.
+    `uVar5 = param4 & collected`;
+  `uVar5 != 0` → state = 1 (the anim starts).
 
 **THE #373 LAW [M 0x17e5d0 + D #373 params]**: the well's Hurt_A carries param4 = 1. The contact
 scan only ever collects bits {8, 0x10, 2}, so `1 & collected == 0` ALWAYS — the well volume can
-never start, on the disc as shipped. It is a configured-inert placement (the 1000-damage type-6
-row exists but the who-mask matches no class). The port must reproduce exactly this: create the
-record, never fire it. The well's player hazard is the plain fall path (`Player_HandlePain`
-type 6 [M]) — the port has that (`player.rs` `fall_damage`), and the measured shaft drop (~5 m to
-the shaft floor in the port's collision) is survivable (tests/interact_07000006_live.rs
-`the_well_shaft_is_open_and_the_hurt_volume_is_game_inert` pins the measured behaviour; the REAL
-shaft's depth needs the PCSX2 live check below).
-  `uVar5 != 0` → state = 1 (the anim starts).
+never start, on the disc as shipped. **Never starting is not inert** (refuted fold, 2026-11):
+the damage is not the start — `Collide_PickObj` admits the volume while its disabled bit is
+clear [M 0x1eae80:72-82; `Hurt_Create` sets obj+0xF0 bit 0x20 only for a gated-low create and
+#373 has no gate, M 0x17e870:56-57], the contact lands in the victim's obj+0xD0 chain
+[M Collide_Pick 0x1eb320:314-329] and the class-0x27 arm of `Player_DealWithObjHit` applies
+`Hurt_GetDamage` with no state or who check of its own [M 0x194458:94-101] — the 1000 lands on
+the touch. The port must reproduce exactly this (it does: the teleported drop dies,
+`interact_07000006_live::the_well_shaft_is_open_and_its_hurt_volume_kills_on_the_touch`). The
+wellhead then decides whether a player ever meets it: the disc's collision around the mouth is
+a ring topping 40.4-41.0 — 2.3-2.9 over the 38.04-38.3 courtyard — everywhere a courtyard
+approach exists, so the shaft is sealed away from ground play [D the down-ray height map;
+`walkreal_07000006_live::the_wellhead_seals_the_shaft_on_real_input` walks and jumps the mouth
+from its west and south sides on real input and never falls in, #373.hits stays 0]. The plain
+~6.2 m fall alone would be survivable [D the shaft floor at 33.59; the port's fall threshold] —
+#373's 1000 on the touch is the kill, for anything that ever gets in.
 - **state 1 (animating)**: at `t == 0` play the activation sound (id +0x1a) at `obj+0x30`;
   `Spline_Interp(framelist, 0, key_count, t, obj+0x90, 0, 2)` — the pose animates;
   `t += inc`; `t > key_count` → `t = 0`, and param5 == 1 → state = 2.
@@ -78,9 +86,11 @@ volumes).
    walk's test).
 3. Damage: `Player_Hurt(damage, …)`-shaped application through `health.pain_generic` with the
    type byte (the fusebox's live-wire hurt is the precedent: `player_hits` marker + `pain_generic`).
-4. Tests: #373's row pinned (type 6, 1000.0, who 1, one-shot 0 [D + M]) and the INERT law above
-   (a who-1 volume never starts); a generic hurt placement (who = 0x10) takes the real-path
-   damage test. The well itself is covered by interact_07000006_live's measured pair.
+4. Tests: #373's row pinned (type 6, 1000.0, who 1, one-shot 0 [D + M]) and the who-1 law
+   (a who-1 volume never starts — while the touch still deals its damage, the #373 LAW above);
+   a generic hurt placement (who = 0x10) takes the real-path
+   damage test. The well itself is covered by interact_07000006_live's teleported-drop kill and
+   walkreal_07000006_live's real-input seal (the wellhead holds a ground player out).
 5. Evidence gap: the who-mask contact bits and the collide-pass reader are [M]-read above but the
    volume GEOMETRY resolution (which map object's tris) needs the disc dump — the census probe's
    `classify` path can print #373's glist object; a live PCSX2 check of `Hurt_GetDamage`'s caller
@@ -88,10 +98,12 @@ volumes).
 
 ## Live checks (open)
 
-1. PCSX2, fresh boot of 07000006: walk Bond over the well mouth and let him drop. Measure the
-   drop and the health after landing (does the REAL game's well shaft reach a kill depth, or is
-   the landing survivable there too?). The port's shaft floor sits ~5 m below the lip and the
-   drop is survivable [M the port's fall threshold].
+1. PCSX2, fresh boot of 07000006: walk Bond against the wellhead ring around the mouth (west
+   face x≈29.1, south face r≈3.2-3.5). Does the REAL game hold him out the way the port's
+   collision does? Then, if any route in exists, let him drop: measure the drop and the health
+   after landing — in the port the ring seals the shaft from ground play
+   [D the height map; walkreal_07000006_live::the_wellhead_seals_the_shaft_on_real_input], and a
+   drop that does get in dies on #373's touch (the teleported drop pins it).
 2. Watch `Hurt_GetDamage` 0x17ea18's caller during any hurt-volume touch on any level (e.g. the
    0700000c fires/steam if they are Hurt placements) — settles the damage-application point the
    port plan's step 3 needs.
@@ -107,7 +119,7 @@ inert configuration)**.
 | 07000002 | #13 | 1 / 1 / gate 0x8d / 1 | GATED |
 | 07000005 | #328–330, #334–340 | 6 / 1000 / – / 1 | inert |
 | 07000005 | **#331–333** | 6 / 1000 / – / **0** | **LIVE (start at load)** |
-| 07000006 | #373 | 6 / 1000 / – / 1 | inert (this level's only one) |
+| 07000006 | **#373** | 6 / 1000 / – / 1 | never starts; kills on the touch — the wellhead seals it away from ground play |
 | 07000008 | **#42–44** | 6 / 1000 / – / **0x18** | **LIVE (classes 3+2: drones AND the player)** |
 | 0700000a | **#745–749** | 6 / 1000 / – / **0x18** | **LIVE** |
 | 07000011 | **#271–273** | 6 / 1000 / – / **0** | **LIVE** |
@@ -153,7 +165,8 @@ stay armed" pin reads it) — not game state.
 Tests: the row law + the who/gate laws in `hurt.rs`'s units (incl. the drone bit 8 / who 0x18
 takes both victims / who 1 inert for every class); the live pairs `hurt_07000008_live` (the
 platform stand + the real walk off the boarding platform: the fall, the plunge, the death-NIS
-hold, hits == 0), `hurt_02_live`, `interact_07000006_live` (#373 inert), `fix_finale_live` +
+hold, hits == 0), `hurt_02_live`, `interact_07000006_live` (#373's touch kill on the teleported
+drop), `fix_finale_live` +
 `spurious_complete_16_live` (#309 stays dead during the fight).
 
 ### Live checks (open) (the 16 ShuttleLaunch question)

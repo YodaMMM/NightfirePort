@@ -663,6 +663,13 @@ fn smg_rounds_damage_a_close_guard_and_the_pistol_sister() {
     // (a guard behind the hall's cover eats the whole clip in the wall).
     for (dist, round_cap) in [(1.0f32, 8u32), (2.0, 28)] {
         // The SMG must be the held gun every leg (a resupply can swap).
+        // batch-1109c-fix: the pistol legs' dry-gun cycles (resupply's switch_to_armed, the
+        // emergence lure's presses) can land on the SMG and spend it; the guard door-contact and
+        // drone contact-turn rules moved the stream so this run arrives with the SMG owned but
+        // clip 0 and no type-2 rounds carried (the measured run), and three switch presses
+        // leave the pistol in hand. A player picks up a dropped SMG (the west guards carry
+        // 0x12) before the SMG legs; the legs' own asserts are unchanged.
+        take_smg_rounds(&mut w, dist);
         for _ in 0..3 {
             if w.scene.sim.as_ref().unwrap().gun.weapon == 0x12 { break; }
             w.tick(Input { switch_to: Some(0x12), ..Default::default() }, false);
@@ -744,6 +751,42 @@ fn smg_rounds_damage_a_close_guard_and_the_pistol_sister() {
             tr.spawned, tr.hp0, tr.hp1);
         assert_eq!(tr.hp0, tr.hp1, "a switch-held guard takes no bullets — the game's own Enable(0) rule [M 0x15b960 enter]");
     }
+}
+
+/// SMG rounds held: the 0x12 clip plus the carried rounds of its ammo type.
+fn smg_rounds(w: &Walker) -> i32 {
+    let sim = w.scene.sim.as_ref().unwrap();
+    let t = sim.weapons.ammo_type(0x12);
+    sim.drones.inventory.clip[0x12] as i32 + sim.drones.inventory.carried[t] as i32
+}
+
+/// With the SMG dry, walk (real input) onto the nearest live floor pickup that carries the
+/// SMG's ammo type (a dropped 0x12 from the dead guards), up to three pickups.
+fn take_smg_rounds(w: &mut Walker, dist: f32) {
+    let mut tried: Vec<[f32; 3]> = Vec::new();
+    for k in 0..3 {
+        if smg_rounds(w) > 0 { break; }
+        let target = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let t = sim.weapons.ammo_type(0x12);
+            let bp = sim.bond.pos;
+            sim.drones.pickups.iter()
+                .filter(|p| !p.gone && !p.hidden && p.rounds > 0 && (p.weapon as usize) < 0x48
+                    && sim.weapons.ammo_type(p.weapon as usize) == t)
+                .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+                .filter(|p| (p[1] - bp[1]).abs() < 1.5 && !tried.iter().any(|q| walker::dxz(*q, *p) < 0.5))
+                .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)))
+        };
+        let Some(at) = target else { eprintln!("[smg] {dist} u leg: no SMG-round pickup on this floor"); break };
+        tried.push(at);
+        eprintln!("[smg] {dist} u leg: the SMG is dry — taking the SMG-round pickup at ({:.2},{:.2},{:.2})", at[0], at[1], at[2]);
+        walk_leg(w, at, &format!("the SMG-round pickup {k}"), 0.5);
+        if smg_rounds(w) == 0 {
+            w.lenient = true;
+            w.walk_to(Wp { at, act: Act::None, arrive: 0.3 }, &format!("the SMG-round pickup {k} close"));
+        }
+    }
+    eprintln!("[smg] {dist} u leg: SMG rounds {}", smg_rounds(w));
 }
 
 /// The wedged-lead unblock (file-local): a follower (the escort) or a body standing in

@@ -606,6 +606,28 @@ impl Walker {
 
     /// `walk_to` that reports a wedge instead of panicking (resupply / guard approach skip the
     /// unreachable target and the caller carries on).
+    /// Turn Bond to face the world direction `(x, z)` with the turn channel only — the player's
+    /// stick turn (`Player_Update` integrates `bd+0x34` into `obj+0x50`'s yaw [M player.rs
+    /// `self.yaw += input.turn`], no teleport, no aim write). The game's yaw convention is the
+    /// look `(sin yaw, ·, cos yaw)` — the same atan2f(x, z) family as `Vec_DirToRot` 0x1e3218
+    /// [M]. Used before an E press whose ray needs Bond facing the object: a return-fire stand
+    /// inside the arrival leg leaves the fight's yaw, and the use pick (head + look) misses.
+    /// latch-walks-on-master: opt-in per call site — no walk changes unless it calls this.
+    pub fn face_toward(&mut self, x: f32, z: f32, label: &str) {
+        let target = x.atan2(z);
+        for _ in 0..240 {
+            let yaw = self.scene.sim.as_ref().unwrap().bond.yaw;
+            let mut diff = target - yaw;
+            while diff > std::f32::consts::PI { diff -= 2.0 * std::f32::consts::PI; }
+            while diff < -std::f32::consts::PI { diff += 2.0 * std::f32::consts::PI; }
+            if diff.abs() < 0.02 { return; }
+            let t = diff.clamp(-0.2, 0.2);
+            self.tick(nf_game::player::Input { turn: t, ..Default::default() }, false);
+        }
+        eprintln!("[walk] {label}: face_toward gave up (yaw {} vs target {})",
+            self.scene.sim.as_ref().unwrap().bond.yaw, target);
+    }
+
     pub fn try_walk_to(&mut self, wp: Wp, label: &str) -> bool {
         self.lenient = true;
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.walk_to(wp, label)));

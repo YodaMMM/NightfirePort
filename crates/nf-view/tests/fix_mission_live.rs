@@ -249,7 +249,7 @@ fn the_07000001_exit_works_end_to_end() {
                 .collect()
         };
         assert_eq!(named.len(), 3, "three guards carry death channels 0x11/0x12/0x13 [D]");
-        for g in named {
+        for &g in named.iter() {
             let gpos = w.scene.sim.as_ref().unwrap().drones.list[g].pos;
             if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, gpos) > 9.0 {
                 walker::hall_restage(&mut w, &format!("guard {g} approach"));
@@ -266,6 +266,47 @@ fn the_07000001_exit_works_end_to_end() {
             for k in 0..2 {
                 if w.shoot(g, &format!("ambush guard {g}")) { break; }
                 walker::hall_ammo_ladder(&mut w, &format!("ambush guard {g} ammo {k}"));
+            }
+            // Latch-branch margin (NF_MISSIONPROBE=1 probe, this file): on master the ambush
+            // exchange killed EVERY hall guard; with the game's contact-turn rule the fight
+            // geometry moved and a fourth hall guard (#9, 12 hp, COMBAT_NO_SIGHT →
+            // AIM_STAND_FIRE at d≈5 of the ride) survived it, plus a courtyard-side starter
+            // (#16). The game's own rule then kills the escort — "a guard's round lands on any
+            // drone of the other side it meets" [M NDrone2_DealWithObjHit 0x13fff0] — Mayhew
+            // (already round-bled by the named fights) went DEATH_ANIM 0x44 → DEAD 0x47 within
+            // 200 ticks of the ch99 release, and a post-release sweep cannot save him (he rides
+            // INTO the sweep's crossfire). A player clears the room BEFORE the last named guard
+            // dies: sweep every living started team-1 drone near the held escort (the hold
+            // parks him at the wait node until ch99 [M NDrone2_ReachedDestNode 0x153358:85-94])
+            // with the same real fire path, while the named guards still keep the hold on.
+            if g != *named.last().unwrap() {
+                let roomies: Vec<usize> = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let mp = sim.drones.list[contact].pos;
+                    (0..sim.drones.list.len())
+                        .filter(|&i| i != g && !named.contains(&i)
+                            && sim.drones.list[i].team == 1 && sim.drones.list[i].started
+                            && !sim.drones.list[i].corpse && sim.drones.list[i].health > 0.0
+                            && walker::dxz(sim.drones.list[i].pos, mp) < 30.0)
+                        .collect()
+                };
+                for h in roomies {
+                    let hpos = w.scene.sim.as_ref().unwrap().drones.list[h].pos;
+                    if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, hpos) > 9.0 {
+                        walker::hall_restage(&mut w, &format!("leftover guard {h} approach"));
+                    }
+                    w.walk_nav_to(hpos, &format!("approach leftover guard {h}"), 3.0);
+                    {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let dry = sim.gun.clip + sim.gun.spare < 8;
+                        drop(sim);
+                        if dry { walker::hall_ammo_ladder(&mut w, &format!("leftover guard {h} ammo")); }
+                    }
+                    for k in 0..2 {
+                        if w.shoot(h, &format!("leftover guard {h}")) { break; }
+                        walker::hall_ammo_ladder(&mut w, &format!("leftover guard {h} ammo {k}"));
+                    }
+                }
             }
         }
         w.wait(30);

@@ -86,7 +86,13 @@ fn iso() -> Option<String> {
 // grunt) on top of the stream join, whose pin the merge kept; neither side's pin covers the joined
 // tree (mp-batch alone pinned 0xd90a_0986_f0c4_fcb1). Two runs on 3c94fa9ea agree, 41 kills.
 // 0x6555_3962_1008_763f → 0x823b_c904_7317_1ab5.
-const PINNED_DIGEST: u64 = 0x823b_c904_7317_1ab5;
+// markers-mp-bots re-pinned 2026-11-09: the evidence-backed bot behaviour changes
+// (hill goal pos = obj pos [M 0x126b88:295,508-509], arrival 2.0 [M 0x1517d8:50-54],
+// strafe drift removal [M 0x16f850:28-59], speed 1.3 [M 0x126568:8-21], the 0xD7
+// !stationary gate [M 0x1501a0:60], the case-2 0xD4 tail [M 0x1267a0:56-62], the
+// attacker explosive double-score [M 0x126b88:429-441]) deliberately changed the
+// simulated result; the pin still guards optimisation determinism.
+const PINNED_DIGEST: u64 = 0x98d7_b0e7_1a65_d31a;
 
 const TICKS: u32 = 3600;
 

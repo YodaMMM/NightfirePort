@@ -110,3 +110,13 @@ One entry per task, newest at the bottom. Append only — never rewrite or reord
   --test-threads=1); the suite runner not started — the build phase holds the cargo lock and
   exceeds the window (the -2's same-box measurement stands; the two required binaries ran
   whole). Report: docs/reports/level-0d-operative-walk-3.md.
+
+## level-0d-operative-walk-4 (2026-11-09, start)
+
+Branch s/level-0d-operative-walk-4 from origin/s/level-0d-operative-walk-3, origin/master
+merged (batch-1109a restructure kept: the Agent twin takes the agent-real-damage route at
+difficulty >= 2; the plain/Operative else branch keeps the walk-3 legs byte-identical; the
+in-bay audit act re-gated to real_damage && difficulty < 2 so the Agent twin (2, true) stays
+master-identical). Task: #18's inbound line — levers (a) the wait-for-crossing clear-box act
+at the ladder top, (b) the same act from the deck stand (d 29, the 7479 line), (c) the audit
+act at the probed bay-enter stand, judged over several real runs. Work in progress.

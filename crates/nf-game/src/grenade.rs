@@ -141,8 +141,11 @@ impl StuckGadget {
 /// What a grenade did this tick.
 #[derive(Clone, Debug, PartialEq)]
 pub enum GrenadeEvent {
-    /// Bounced off the world at `pos` (sound 0x51C).
-    Bounce(V3),
+    /// Bounced off the world at `pos` (sound 0x51C). The second field is the contact's surface
+    /// material byte — the game's `HITDATA+0x50 & 0x3F` [M 0x12d084-0x12d09c], which the
+    /// contact-blast arm passes as `Explode_Create`'s 12th arg (the debris selector); the
+    /// `segment_surface` mat IS that byte [M 0x1e92d8:321, docs/formats/collision.md:27-28].
+    Bounce(V3, u8),
     /// fix-oddjob-hat: the hat (0x45) STUCK to the world at `pos` — the +0x100 arm's state 3
     /// [M 0x12ce80:255]; the caller plays the 0x4a7 contact clang [:317]. The object keeps
     /// existing (no bounce sound, no explosive broadcast).
@@ -605,7 +608,7 @@ impl Grenade {
                     self.velocity = [0.0; 3];
                     self.resting = true;
                 }
-                return Some(GrenadeEvent::Bounce(hit));
+                return Some(GrenadeEvent::Bounce(hit, mat & 0x3f));
             }
         }
         self.pos = end;
@@ -691,7 +694,7 @@ mod tests {
         let mut bounced = false;
         for k in 0..2000 {
             if let Some(ev) = g.update(&w, &mut rng) {
-                if matches!(ev, GrenadeEvent::Bounce(_)) { bounced = true; break; }
+                if matches!(ev, GrenadeEvent::Bounce(..)) { bounced = true; break; }
                 if matches!(ev, GrenadeEvent::Explode { .. }) { eprintln!("exploded at tick {k} pos={:?}", g.pos); break; }
             }
         }
@@ -717,7 +720,7 @@ mod tests {
         let mut bounced = false;
         for _ in 0..5 {
             if let Some(ev) = g.update(&w, &mut rng) {
-                assert!(matches!(ev, GrenadeEvent::Bounce(_)), "at the bounce max: a bounce, got {ev:?}");
+                assert!(matches!(ev, GrenadeEvent::Bounce(..)), "at the bounce max: a bounce, got {ev:?}");
                 bounced = true; break;
             }
         }
@@ -740,7 +743,7 @@ mod tests {
             born: 0,
             loop_handle: 0,
         };
-        if let Some(ev) = g.update(&w, &mut rng) { assert!(matches!(ev, GrenadeEvent::Bounce(_)), "one short: a bounce, got {ev:?}"); }
+        if let Some(ev) = g.update(&w, &mut rng) { assert!(matches!(ev, GrenadeEvent::Bounce(..)), "one short: a bounce, got {ev:?}"); }
         else { assert!(g.bounces == BOUNCE_MAX, "the bounce counted"); }
     }
 
@@ -761,7 +764,7 @@ mod tests {
         let mut rng = Rng::new(0);
         let mut events = Vec::new();
         for _ in 0..100 { if let Some(ev) = g.update(&w, &mut rng) { events.push(ev); } }
-        assert!(events.iter().any(|e| matches!(e, GrenadeEvent::Bounce(_))), "it touches the floor");
+        assert!(events.iter().any(|e| matches!(e, GrenadeEvent::Bounce(..))), "it touches the floor");
         assert!(!events.iter().any(|e| matches!(e, GrenadeEvent::Explode { .. })),
             "a slow bounce must sit, not explode [M 0x12ce80]");
         assert_eq!(g.velocity, [0.0; 3], "the slow bounce zeroes the speed");

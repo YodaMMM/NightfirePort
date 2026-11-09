@@ -2193,7 +2193,13 @@ impl CollisionWorld {
     /// `if (CelListCount_154 != 1)` guards the tie-break]; none returns NULL.
     /// `NDrone2_FindCel` (0x149a80): the shared candidate search + tie-break this reimplements.
     pub fn find_cel(&self, p: V3) -> Option<usize> {
-        let sc = self.scope.as_ref()?;
+        self.find_cel_report(p).0
+    }
+
+    /// `find_cel` plus what the census and the tie-break tests read: the candidate count (the
+    /// game's `CelListCount_154`) and the candidate cells in `gbl_room_cels` order.
+    pub fn find_cel_report(&self, p: V3) -> (Option<usize>, Vec<usize>) {
+        let Some(sc) = self.scope.as_ref() else { return (None, Vec::new()) };
         let mut cands: Vec<usize> = Vec::new();
         for (i, (lo, hi)) in sc.graph.cells.iter().enumerate() {
             if !sc.graph.room.get(i).copied().unwrap_or(false) { continue; }
@@ -2202,7 +2208,7 @@ impl CollisionWorld {
                 if cands.len() >= 0x40 { break; }
             }
         }
-        if cands.len() <= 1 { return cands.first().copied(); }
+        if cands.len() <= 1 { return (cands.first().copied(), cands); }
         let mut best: Option<(usize, f32)> = None;
         for &i in &cands {
             let len = best.map_or(256.0, |(_, d)| d);
@@ -2217,7 +2223,7 @@ impl CollisionWorld {
                 }
             }
         }
-        Some(best.map_or(cands[0], |(i, _)| i))
+        (Some(best.map_or(cands[0], |(i, _)| i)), cands)
     }
 
     /// The player object's per-tick cel relink — `control_handle_cel_change` 0x133288 [M] as the

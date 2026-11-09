@@ -381,7 +381,9 @@ impl Sim {
                         let _angle = rng.frand(6.2831854820251465);
                         // The muzzle smoke's NULL velocity takes the wind branch [M 0x1a4428; 0x1aacc8:108-116]
                         // — init_ex consumes spin, sign and the 3 wind draws from the shared stream.
-                        self.drones.gas.init_ex(&mut rng, nf_game::gas::SMOKE_QUAD, muzzle, 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0);
+                        // gas-cel-host: the player muzzle's kind-7 wind term (the game's 0x1a4428 cel arg).
+                    let ghost = self.drones.rbodies.host_at(muzzle);
+                    self.drones.gas.init_ex(&mut rng, nf_game::gas::SMOKE_QUAD, muzzle, 0.0, [0.0; 3], 0.05, 0.1, 7, [0x48, 0x40, 0x30, 0x80], 1, 128.0, ghost);
                     }
                 }
             }
@@ -415,11 +417,11 @@ impl Sim {
                 if laser {
                     // The bot laser's impact puff: Effect_Laser 0x1cef38's shape (kind 5, life 8),
                     // the same real Gas_Init site the SP path rides — spin/sign from the stream.
-                    self.drones.gas.init_ex(&mut rng, nf_game::gas::SMOKE_QUAD, shot.end, 0.0, [0.0; 3], 2.0, 3.0, 5, [0x7f, 0x7f, 0x64, 0xff], 0, 8.0);
+                    self.drones.gas.init_ex(&mut rng, nf_game::gas::SMOKE_QUAD, shot.end, 0.0, [0.0; 3], 2.0, 3.0, 5, [0x7f, 0x7f, 0x64, 0xff], 0, 8.0, nf_game::gas::HostCel::default());
                 } else {
                     let decals = self.drones.effects.decals.len();
                     let _ = self.drones.effects.bullet_impact(&mut rng, self.surfaces.as_ref(), &mut self.drones.gas, &mut self.drones.fx,
-                        shot.end, normal, material, shot.dir, flags70, 0, !shot.bot, 8);
+                        shot.end, normal, material, shot.dir, flags70, 0, !shot.bot, 8, nf_game::gas::HostCel::default());
                     if log_on() {
                         eprintln!("[mpfx] f{frame} slot {} weapon {:#x} world impact at ({:.2}, {:.2}, {:.2}) material {:#x} decals {} -> {}",
                             shot.shooter, shot.weapon, shot.end[0], shot.end[1], shot.end[2], material, decals, self.drones.effects.decals.len());
@@ -440,7 +442,7 @@ impl Sim {
                 if let Some((s0, s1, mesh)) = puff {
                     // The bot flesh puff: NDrone2_DealWithObjHit 0x13fff0:245-253 — quat NULL, vel
                     // NULL, no caller draw; Gas_Init's spin/sign come from the shared stream.
-                    self.drones.gas.init_ex(&mut self.drones.rng, mesh, shot.end, 0.0, [0.0; 3], s0, s1, 5, [0xff, 0xff, 0xff, 0xff], 0, 60.0);
+                    self.drones.gas.init_ex(&mut self.drones.rng, mesh, shot.end, 0.0, [0.0; 3], s0, s1, 5, [0xff, 0xff, 0xff, 0xff], 0, 60.0, nf_game::gas::HostCel::default());
                     if log_on() { eprintln!("[mpfx] f{frame} slot {} hit bot at ({:.2}, {:.2}, {:.2}): flesh puff {mesh:#x}", shot.shooter, shot.end[0], shot.end[1], shot.end[2]); }
                 }
             }

@@ -133,6 +133,24 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         assert!(h > platform_pool - 48.0, "the platform shots must not eat the pool, {platform_pool} -> {h}");
     }
 
+    // THE PRE-WAKE ROOF SNIPE (level-0d-agent-real-damage re-route). The west-roof placements
+    // are PRESENT and ASLEEP through this phase — the wake is the platform drop itself
+    // [probe_0d_roof_rays part E] — and the probe's pre-wake ray table reads, from this very
+    // stand (eye 12.89): the SOUTH and MIDDLE placement head lines CLEAR (the g27-spawn head
+    // CLEAR at 0.949-chest, the g29-spawn chest AND head CLEAR) while the NORTH line dies 0.814
+    // on the warehouse roof lip. Since the class-4 sight table landed (sight 1000, engage
+    // 75+frand(8), the cone zeroed on first attack [M NDrone2_DefaultInit 0x14b300:380-424,
+    // DroneFunc_SetAsAttacking 0x14aed8:25-26]) these snipers own the whole climb and ladder
+    // top — the t3310 Agent ledger opens with the south placement's graze at 2395 and 6.0 at
+    // 3047 (d 64). A player takes them off the roof BEFORE walking into the drop that wakes
+    // them; the box act (a real posed head-box centre) keeps blocked lines silent. Log-only:
+    // the walk stays green whether or not a kill lands, and the log is the measured answer.
+    // Agent-gated in the batch-1109a-walks merge (measured on difficulty 2 only).
+    if difficulty >= 2 {
+        let _ = kill_guard_head_present(&mut w, [145.6, -256.7], [3.0, 3.0], "the west roof #461 south (pre-wake, the head line CLEAR [probe_0d_roof_rays])", 500);
+        let _ = kill_guard_head_present(&mut w, [145.7, -247.3], [3.0, 3.0], "the west roof #463 middle (pre-wake, the chest and head lines CLEAR [probe_0d_roof_rays])", 500);
+    }
+
     // Leg 1: south to the dock's south edge — walked. The dock's south edge drops to the
     // under-dock trench (the floors 3.0/0.0 [D probes]) whose far side walls 3.9 m up at the
     // yard's north edge (the trench floor 0.0 ends z −266; the yard begins 3.9 at z −272 [D
@@ -283,6 +301,77 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // and a live g28 rides the wire (the -5 run 3: 4 hits for 62 on the ride). The probe's wake
     // spot (146.4, −237.7) is the parked-at-drop timeline, NOT the walked one — the run-3 box
     // (146.5, −237.8) found nobody and she survived to the ride.
+    // MERGE (batch-1109a-walks): the Agent run takes the level-0d-agent-real-damage ladder-top
+    // re-route (measured on difficulty 2); the plain and Operative runs keep the
+    // level-0d-operative-walk legs they were measured with, byte-identical.
+    if difficulty >= 2 {
+        // THE D2 SOUTH-ROOF SNIPER #17 FIRST (dart-tase-stamps-check + the t4312 ledger): ANY
+        // ladder-area gunshot wakes him — his fire spot (192.3,19.6,−267.4) is d 39 from the
+        // ladder top, INSIDE the P2K shot's hearing radius 40 [L] — and in the t4312 run the
+        // west-roof sweep's own kill shot woke him mid-phase: he landed the killing 10.0 at 4312.
+        // Take him before the sweep's shots (the box also catches the d2 deck sniper #20 if #17
+        // has moved). Log-only.
+        if difficulty >= 2 {
+            let _ = kill_guard_at_present(&mut w, [192.3, -267.4], [8.0, 8.0], "the d2 south-roof sniper #17 (the ladder-top shot, before the band guns)", 500);
+        }
+        // THE BAY DUO FROM THE TOP (level-0d-agent-real-damage, the t4312 ledger's decisive drain):
+        // the bay captain #292 (0x5000093) and the annex sniper #363 (0x5000090) own the ladder top
+        // — their rays to it are CLEAR at d 54.5 and both fire on the 180-tick cadence: the t4312
+        // ledger took 2 × 28.0 (#22/#363) + 28.0 (#11/#292) in 380 ticks. They WANDER the bay north
+        // strip — observed (203.5..214.7, −288.5..−290.5) across runs — so the old fixed
+        // (214.2,−289.4)±(6,6) strip-mouth box missed them both (10 u off). A player scans the whole
+        // bay strip and takes whichever head is exposed: one wide box, the box act fires only on a
+        // real clear head-box centre (the annex sniper's ray to the strip MOUTH is blocked 0.521
+        // [-3 probe], but from the TOP the ledger proves his line lives).
+        for k in 0..3 {
+            let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| {
+                d.present && !d.corpse && d.health > 0.0
+                    && (d.pos[2] + 289.5).abs() < 4.0 && (195.0..=217.0).contains(&d.pos[0])
+            });
+            if !live { break; }
+            let _ = kill_guard_head_present(&mut w, [209.3, -289.5], [7.0, 3.0], "the bay duo (the whole north strip, the t4312 84-damage drain)", 400);
+        }
+        // THE WEST-ROOF #27 DIRECT, NO-DRAIN (level-0d-c5-door-fall): the Agent census at
+        // her walked spot reads the settled trio (g31 (151.37,-245.55) 0x5000090, g32
+        // (151.37,-248.53) / g33 (150.95,-249.42) 0x5000087); the drained act loses the race
+        // against their 28.0 return fire, so the Agent run opens on the nearest with the
+        // no-drain box act before the band-wide head sweep below.
+        if real_damage {
+            let _ = kill_guard_head_present_fast(&mut w, [151.35, -248.5], [3.0, 3.0], "the west roof #27 (the direct box act, no-drain race law)", 700);
+        }
+        // THE LADDER-TOP HEAD SWEEP (level-0d-agent-real-damage re-route). On THIS tree the wake's
+        // three west-roof snipers settle MID-BAND — measured d2 run (t3310 ledger):
+        // (151.37,22.70,−245.55)/(151.37,−248.53)/(150.95,−249.42) — where the CHEST rays die
+        // 0.80-0.974 on the rooftop obstruction (z −249..−252 band + the -4 slab edge) while the
+        // HEAD lines clear from the ladder top [probe_0d_roof_rays]. The old fixed boxes
+        // ((151.4,−241.3)/(151.1,−255.8) ±4) were the -5 tree's spots: all three settled 4.25-7.3
+        // outside them, every leg printed "no PRESENT guard near", and the snipers (class-4:
+        // sight 1000, engage 75+frand(8), and the mode-5 sniper states carry NO distance gate
+        // [M NDrone2_DefaultInit 0x14b300:380-424, NDrone2_DSTATE_SniperFire 0x15fd88:34-63]) plus
+        // the deck guard (28.0 at d 29.5) and the bay captain (42−armour = 10.0 at d 55.3) shot
+        // Bond dead at t3310 — 6 hits for 100.0, 0 return-fire fights, armour spent. A player scans
+        // HEADS over the whole band and takes whichever line is exposed: the wide box (x
+        // 145.3-157.3, z −236.5..−258.5) covers every measured settle (-5 spots included), and the
+        // box act fires only when clear_box_aim returns a real clear hit-box centre, so a blocked
+        // line holds fire instead of burning the cap.
+        for k in 0..4 {
+            let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| {
+                d.present && !d.corpse && d.health > 0.0 && d.pos[1] > 18.0
+                    && (d.pos[0] - 151.5).abs() < 12.0 && (d.pos[2] + 248.0).abs() < 14.0
+            });
+            if !live { break; }
+            let _ = kill_guard_head_present(&mut w, [151.3, -247.5], [6.0, 11.0], "the west roof heads (the settled mid-band trio — the -5 head law)", 400);
+        }
+        // THE DECK GUARD #16 (level-0d-real-health-crossfire-3/4 + wire-jump-grab's route fix):
+        // the -1/-2 routes landed this kill every run (+~200 ticks) from the ladder top, but his
+        // FIRE anims (state 0x70/0x71) pose the whole box set 0.65-1.0 BELOW his origin while the
+        // game's standing two-sphere capsule still covers the chest line [M NDrone2_Collision
+        // 0x140e90:91-121] — the port's boxes-only refine flew the t3310 run's chest shots clean
+        // past him (0.21 u from origin, no box) while he landed 28.0 at d 29.5. The box act aims
+        // at a REAL posed box centre (the part-5 head first) — the +209 landing wire-jump-grab
+        // measured.
+        let _ = kill_guard_head_present(&mut w, [198.9, -260.4], [6.0, 4.0], "the deck guard #16 (the box act — his fire anims pose the boxes low [M 0x140e90:91-121])", 600);
+    } else {
     let _ = kill_guard_at_present(&mut w, [151.4, -241.3], [4.0, 4.0], "the west roof g28 (chest, her walked spot — the ladder-top ray is CLEAR [probe_0d_roof_rays])", 600);
     let _ = kill_guard_at_present(&mut w, [151.1, -255.8], [4.0, 4.0], "the west roof g27 (chest, her south spawn — the ladder-top ray is CLEAR [probe_0d_roof_rays])", 600);
     // THE BOX ACT STANDBY for g28 if the chest leg missed (the part-5 head first): log-only.
@@ -340,6 +429,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // net is NEGATIVE: the leg stays out. The measured next levers are in the ignore message
     // (the crouch-dodge of the opening line; the port-side capsule work the -5 report
     // flagged).
+    }
     // The west-roof sweep, WALKER-CATCHING (level-0d-real-health-crossfire-3, measured): the
     // guards reposition off their placements (145.6-145.8 — CLEAR rays from the ladder top,
     // d 68-70.5 [probe_0d_ray_stands]) to stable combat spots x ~151.4 (the slab shadow, the
@@ -382,26 +472,22 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // east-facing wall at x ~160, top between y 1.5 and 4.4 — the [0d:ray] trace) and its one
     // CLEAR window closes in ~200 ticks while the aim settles (the measured miss). The
     // LADDER-TOP stand is the one the route already dwells on for thousands of ticks at d2
-    // with ZERO incoming (this run's ledger: no hit between 2051 and 7932 — the whole
-    // west-roof phase is free), its eye 18.1 looks DOWN the band line over the low x ~160
+    // with ZERO incoming on the pre-2998b6a76 tree (its ledger: no hit between 2051 and 7932 —
+    // "the whole west-roof phase is free" THERE; on THIS tree the class-4 sight table
+    // [M 0x14b300:380-424] makes the phase lethal — the t3310/t4312 ledgers), its eye 18.1
+    // looks DOWN the band line over the low x ~160
     // wall, and the band is settled (not marching) by this phase. Guards stand at 10 health
     // [probe census] — one aimed hit each; the sweep repeats while live band guards remain
     // (the -5 west-roof pattern). D2-GATED: the Operative twin's route stays byte-identical
     // (its #32 spawner leg stays late-route; the kill order shifts would re-roll the shared
     // RNG stream the green twin's 22.2-end budget rides).
     //
-    // THE D2 SOUTH-ROOF SNIPER #17 FIRST (dart-tase-stamps-check): the band sweep's own
-    // gunfire woke the d2 south-roof sniper #17 (0x5000087, 0x1e, fire spot (192.3,19.6,
-    // −267.4), d 39 from the ladder top — INSIDE the P2K shot's outer hearing radius 40 [L])
-    // mid-sweep — measured: 3 hits for 66, the death 8171 AT the ladder top (the baseline
-    // ledger never shows #17: the west-roof phase's thousands of shot-ticks are quiet, the
-    // band-sweep shots are what wake it). Take it BEFORE the first band shot — the ladder
-    // top is above the canopy line (the -2 note's own law for the south-roof work). The box
-    // also catches the d2 deck sniper #20 (198.4,14.0,−260.7) if #17 has moved off its spot.
-    // Log-only.
-    if difficulty >= 2 {
-        let _ = kill_guard_at_present(&mut w, [192.3, -267.4], [8.0, 8.0], "the d2 south-roof sniper #17 (the ladder-top shot, before the band guns)", 600);
-    }
+    // THE D2 SOUTH-ROOF SNIPER #17 leg MOVED ABOVE the west-roof sweep (level-0d-agent-real-
+    // damage, the batch-1109a-walks merge): the t4312 run proved ANY ladder-area shot wakes
+    // him (his fire spot is d 39, inside the 40 hearing radius [L]) — the sweep's kill shot
+    // woke him mid-phase and his 10.0 landed the t4312 kill. He is taken right after the
+    // climb now (the difficulty-2 branch above). The plain/Operative twins never shot #17
+    // here — the leg was difficulty-gated, so removing it re-rolls nothing for them.
     // level-0d-operative-walk-3: the sweep now runs on the Operative real-damage twin too
     // (`real_damage` OR difficulty 2 — the plain master replay and the Agent body both keep
     // their exact prior legs). The -2 Operative ledger's #17 — the ride-window 16 at 7437 from
@@ -729,7 +815,9 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // (194, 10.6, −282) Bond is in the ROOM with it: a horizontal in-room ray at d ~17-21,
     // no wall between. Its ride hit (16) and its bay-phase fire both come off the table.
     let _ = w.try_walk_to(Wp::new(194.0, 10.6, -282.0).r(1.4), "bay enter");
-    let bay18_killed = if real_damage {
+    let bay18_killed = if real_damage && difficulty < 2 {
+        // (difficulty < 2 keeps the Agent twin (2, true) byte-identical to its master measured
+        // state — the batch-1109a-walks ledger — this audit is an Operative-only lever.)
         // level-0d-operative-walk-3 AUDIT (the -2 ledger's never-landed leg — the driver asked
         // for the converge and the ray). MEASURED on the -2 baseline: the walked arrive drifts
         // 1.4 u north of the probed stand ((194.25, −280.63) vs (194, −282) — the r-1.4 walk
@@ -1263,9 +1351,9 @@ fn walk_arrival_to_the_c5_door_real_damage() {
 /// on the two d2 snipers from the strip (the 0c yard-stand law — the zero-spread aimed act
 /// [M Bullet_init 0x12c5a0:139-170] reaches d 55+ with the still-gate tap law).
 #[test]
-#[ignore = "Agent (dart-tase-stamps-check measured state): on the -5 route the death moved 4850 -> 8533 — the decisive drain is the d2 ground-band snipers, #36 (0x5000090, 0x1e) 3 × 28.0 from d 56.6 (7932/8112/8479) + #21 (0x5000087, 0x1e) the killing 10.0, both outside the fights' 48 u window. This session's d2-gated ladder-top set LANDED 3 kills (the south-roof sniper #17 first at +559 — its fire spot (192.3,19.6,-267.4) is d 39, inside the shot's hearing radius 40 [L], so it MUST die before the band guns; the band chest sweep g36 at +201, ray CLEAR d 55.9) and pushed the death to 10697; the last killer g21 settles at (162.8,1.0,-215.0) behind the ~1.7 jamb at (160,-217) — the chest ray dies 0.965-0.975 from every stand measured (the strip mouth 0.975, the ground drop 0.605-0.965, the ladder top 0.965), the HEAD line reads full CLEAR (the -5 height-asymmetry law confirmed) but the box/head act's aim does not CONVERGE to it (the cross sticks [-0.21,-0.28], the chest legs converge [-0.0,0.0] from the same stand). NEXT: fix the head act's pitch convergence, or the stand east of the jamb (the -4 obstacle law — the late annex-floor #32 leg's geometry, too late for the ride+deck)"]
+#[ignore = "Agent (level-0d-agent-real-damage measured state, THIS master — the class-4 sight table [M 0x14b300:380-424: sight 1000, engage 75+frand(8), the cone zeroed on first attack 0x14aed8] makes the ladder-top phase lethal where the -5 tree read it free): the death moved 3310 -> 4319/4275. The t3310 ledger: 6 hits for 100.0 at the ladder top, 0 return-fire fights — #31/#461 (0x5000090) the 0.00 graze + 6.0 at d 64.0, #20 deck 28.0 at d 29.5, #32/#462 2 x 28.0 at d 63.5, #11/#292 the captain 10.0 at d 55.3 (42 base − armour). This session's re-route LANDED: the deck #20 via the #17 box (+209), the bay captain #292 (+349) and the annex sniper #363 (+133) via the wide bay box, one west-roof head kill (+248, run 2); the aim fast-path (skip the 160-tick drain while the aim bit holds) makes every later pass ~250. The port-vs-game law check is CLEAN for the killers: hit chance 0x179740 (p = 100 − 5·stat 4, Agent x0.8 = 64%/shot, the 120-tick sight gate, moving x0.75), engage (class 4, and the mode-5 sniper states carry NO distance gate 0x15fd88:34-63 — d 55-64 fire IS the game), damage 0x1902c8 (40 x0.7, no variance; the 10/6 deltas are armour-remainder math). REMAINING BLOCKER (run 4): the deep-band roof guard #463 settles (151.4,22.7,−248.5) state 0x97 where the HEAD line from the ladder top dies 0.974 — the -5 head law holds only north of ~−245.5 (the t4319 run's own trace read the head line to (151.1,−250.8) blocked mid-sweep) — so the box act held fire every pass and she landed 4 x 28 + the killing 10.0. The pre-wake snipe is measured DEAD: the west roof SPAWNS at the platform-drop wake (no bodies before it). NEXT LEVERS: ride out and take her from the deck (her line to the rider/deck unmeasured), or longer sweep caps to catch her patrol crossing a clear-ray spot (the -5 g29 law), or the port-side standing capsule in drone_ray_part [M 0x140e90:91-121] so chest lines land on fire-anim guards the way the game's do. The earlier (dart-tase-stamps-check) ledger: the decisive drain is the d2 ground-band snipers, #36 (0x5000090, 0x1e) 3 × 28.0 from d 56.6 (7932/8112/8479) + #21 (0x5000087, 0x1e) the killing 10.0, both outside the fights' 48 u window. This session's d2-gated ladder-top set LANDED 3 kills (the south-roof sniper #17 first at +559 — its fire spot (192.3,19.6,-267.4) is d 39, inside the shot's hearing radius 40 [L], so it MUST die before the band guns; the band chest sweep g36 at +201, ray CLEAR d 55.9) and pushed the death to 10697; the last killer g21 settles at (162.8,1.0,-215.0) behind the ~1.7 jamb at (160,-217) — the chest ray dies 0.965-0.975 from every stand measured (the strip mouth 0.975, the ground drop 0.605-0.965, the ladder top 0.965), the HEAD line reads full CLEAR (the -5 height-asymmetry law confirmed) but the box/head act's aim does not CONVERGE to it (the cross sticks [-0.21,-0.28], the chest legs converge [-0.0,0.0] from the same stand). NEXT: fix the head act's pitch convergence, or the stand east of the jamb (the -4 obstacle law — the late annex-floor #32 leg's geometry, too late for the ride+deck)"]
 fn walk_arrival_to_the_c5_door_real_damage_agent() {
-    walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(2, false));
+    walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(2, true));
 }
 
 /// Shoot a live guard standing near (x, z) through the real fire path (the walker's aim +
@@ -1387,14 +1475,14 @@ fn kill_guard_at_cap(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label: &str, c
 /// nothing, while the aimed `shoot_at` path lands static kills at d 25 (the C5 door)). The
 /// real fire path end to end (the gun, the bullets, the hit boxes), reload pulses on empty.
 fn shoot_far(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
-    shoot_far_aim(w, di, label, cap, 0.3)
+    shoot_far_aim(w, di, label, cap, 0.3, false)
 }
 
 /// The HEAD aim variant (level-0d-real-health-crossfire-5): the same aimed act with the aim
 /// point and the world-ray gate raised to the head box (pos + `aim_dy`) — the height-asymmetric
 /// slab law makes head lines clear where chest lines die [probe_0d_roof_rays].
 fn shoot_far_head(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
-    shoot_far_aim(w, di, label, cap, 0.9)
+    shoot_far_aim(w, di, label, cap, 0.9, false)
 }
 
 /// The BOX aim variant (level-0d-real-health-crossfire-5): the aim point is a REAL clear hit-box
@@ -1402,10 +1490,40 @@ fn shoot_far_head(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
 /// +0.9 head guess fired clear-ray rounds that passed under the head box; a box point the
 /// port's own law returns is on a box the bullet reaches.
 fn shoot_far_box(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
-    shoot_far_aim(w, di, label, cap, -1.0)
+    shoot_far_aim(w, di, label, cap, -1.0, false)
 }
 
-fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32) -> bool {
+/// The NO-DRAIN box act (level-0d-c5-door-fall): the 160-tick aim-off drain exists to reset
+/// the raise queue after a fire script (state 9 [M 0x1a24c8:66-99]) — but the ladder-top phase
+/// opens ~2000 ticks after the last shot with no script playing, and the drain costs exactly
+/// the margin the west-roof trio's return fire needs to kill first (the Agent run's lethal
+/// 28.0s landed at ticks 3048-3236 while the drained act's kill sat at +222 — the race lost by
+/// ~36 ticks; the Operative stream's same act kills at +222 WITH the drain, so the drained
+/// path stays the default and the Agent's direct leg alone runs fast).
+fn shoot_far_box_fast(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
+    shoot_far_aim(w, di, label, cap, -1.0, true)
+}
+
+/// The head-pick + fast-act variant of `kill_guard_head_present` (same present-pick, the
+/// no-drain act) for the Agent run's direct ladder-top leg.
+fn kill_guard_head_present_fast(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label: &str, cap: u32) -> bool {
+    let di = w.scene.sim.as_ref().unwrap().drones.list.iter().enumerate()
+        .filter(|(_, d)| d.present && !d.corpse && d.health > 0.0
+            && (d.pos[0] - at[0]).abs() < tol[0] && (d.pos[2] - at[1]).abs() < tol[1])
+        .min_by_key(|(_, d)| ((d.pos[0] - at[0]).powi(2) + (d.pos[2] - at[1]).powi(2)) as u32)
+        .map(|(i, _)| i);
+    match di {
+        Some(i) => {
+            let d = &w.scene.sim.as_ref().unwrap().drones.list[i];
+            eprintln!("[0d:box] {label}: g{i} skin {:#x} pos ({:.2},{:.2},{:.2}) state {:#x}",
+                d.skin, d.pos[0], d.pos[1], d.pos[2], d.state);
+            shoot_far_box_fast(w, i, label, cap)
+        }
+        None => { eprintln!("[0d] {label}: no PRESENT guard near ({:.1},{:.1}) — already down", at[0], at[1]); false }
+    }
+}
+
+fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32, skip_drain: bool) -> bool {
     let mut hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
     let mut last_tap = 0u32;
     let start = w.total_ticks;
@@ -1414,9 +1532,18 @@ fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32) 
     // raise queue REFUSES while a fire script plays (state 9 [M 0x1a24c8:66-99] — the previous
     // fight's 130-tick script), so release long enough to drain it, then hold until the bit
     // actually sets (the raise completes ~20 ticks [M Player_SetWeaponAnimObj 0x1a2e38 case 0xf]).
-    for _ in 0..160 {
-        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
-        w.total_ticks += 1;
+    // The aim-on EDGE (see below) — but SKIPPED when the aim bit is already held (the sweep
+    // passes, back-to-back legs: the drain exists for the raise-queue fire-script busy case,
+    // which cannot be pending while `aiming` is on; each skipped drain saves 160 ticks of
+    // standing in a live crossfire — the ladder-top phase is under sniper fire since the
+    // class-4 sight 1000 landed [M 0x14b300:380-424]).
+    // Agent-gated in the batch-1109a-walks merge: the plain and Operative runs keep the drain.
+    let agent_fast = w.scene.sim.as_ref().unwrap().drones.difficulty >= 2;
+    if !(skip_drain || (agent_fast && w.scene.sim.as_ref().unwrap().aiming)) {
+        for _ in 0..160 {
+            w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+            w.total_ticks += 1;
+        }
     }
     for _ in 0..90 {
         let sim = w.scene.sim.as_mut().unwrap();

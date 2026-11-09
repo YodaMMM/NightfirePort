@@ -337,8 +337,25 @@ fn the_sc3_plate_starts_the_gated_copter() {
 
 /// KIND: SoundTrigger 0xF9 — #254 (trigger ch 139 → the sound 368 [D params (0,139),(2,368);
 /// M SoundTrigger_Update 0x1b2790: the param-0 channel rising plays the param-2 id]). TouchOnce
-/// #253 (out 139 [D]) sits on the upper ledge south (24.82, 31.88, 67.59) — the walk-in fires it.
-/// Sister: a fresh load — ch 139 off, nothing plays.
+/// #253 (out 139 [D]) sits on the upper ledge south — its box (x 23.76..25.89, y 31.39..32.37,
+/// z 67.08..68.10 [D #253]) hangs over the roof waist, and the waist is walled to every WALK
+/// approach: the ridge blocker #324 (kind 0x3b, obj flag word 0x10, solid while obj+0xF0 lacks
+/// 0x20 [M Collide_PickObj 0x1eae80:28-40; D the port's transform: x 25.04..25.75, y
+/// 31.17..34.22, z 61.60..69.60]) walls the shelf lane from the wide ledge down past the plate,
+/// and the floor west of the crawl band (x 25.25-25.75, z 67.5-70.5) dips 7.0-8.7 [D the 0.25
+/// map] — the old stand (25.0, 33.0, 69.0) sat against the blocker and its push drops Bond off
+/// the roof before he reaches the box. The approach the game allows IS the wall-hug crawl #299
+/// (the blocker pairs with the creepwall, param 1 = 113 both [D]): the crawl line x 25.51 [L
+/// the entry spot (25.51, 32.11, 71.02) on a fresh boot] runs INSIDE the plate box's x-range,
+/// and the game collide-sweeps the crawl every tick ([M Player_Update 0x193600:361
+/// Player_Collision unconditionally after the substate dispatch; the crawl pick arm r 0.275,
+/// A = pos+0.55, B = pos+0.275−cc — M 0x195070 case 6, the port's pick_arm]) — its segment
+/// spans the box's y band as Bond crosses z 68.10..67.08, so `Trigger_Hit` 0x1b1fc8's class
+/// contact fires the plate MID-CRAWL [M Collide_Update 0x1ea398:160-215 mirrors the contact
+/// into the trigger's +0xD0]. This test walks the real route from the level start — the
+/// courtyard, the castle lane, the tower top, the south slope, the south ledge, the shelf —
+/// presses E at the crawl prompt [M Player_CollCreepWall 0x196758 ctx 6 → ChangeSubState(7)]
+/// and holds forward. Sister: a fresh load — ch 139 off, nothing plays.
 #[test]
 fn the_ledge_plate_plays_the_sound_trigger() {
     let iso = iso();
@@ -349,26 +366,62 @@ fn the_ledge_plate_plays_the_sound_trigger() {
         assert!(!sim.drones.sound_triggers.playing(368), "sister: sound 368 not playing");
     }
     let mut w = load(&iso);
-    // The plate's box hangs over the roof ridge south (x 23.76..25.89, y 31.39..32.37, z 67.08..68.10
-    // [D #253]). The old stand east of it (25.0, 33.0, 69.0) is inside the DynamicObject blocker on
-    // the ridge (kind 0x3b slot 0, flag 0x10, x 25.04..25.75 — solid to the walk query
-    // [M Collide_PickObj 0x1eae80:28-40; Player_Collision 0x194df0 kind 0x800, +0x98 = 0]): its push
-    // drops Bond off the roof before he reaches the plate. A teleport into the plate's west half,
-    // clear of the blocker, lets the body cross the box on the way down — the touch is the operation.
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [24.45, 33.0, 67.6];
-        sim.bond.prev_pos = sim.bond.pos;
-        sim.bond.cel = sim.world.find_cel(sim.bond.pos);
+    // The walked head of the west lane (walkreal_07000005's route, all real input).
+    for (name, at) in [
+        ("courtyard west", [52.0f32, 26.0, 96.0]),
+        ("the strip west", [42.0, 28.0, 94.5]),
+        ("the strip, lane approach", [35.0, 28.0, 94.0]),
+        ("the strip-lane junction", [34.0, 29.0, 92.0]),
+        ("the lane head", [30.0, 30.0, 90.0]),
+        ("the lane, wall south 1", [30.0, 31.0, 88.0]),
+        ("the lane, wall south 2", [29.0, 32.6, 82.0]),
+        ("the lane, tower north", [29.5, 33.7, 75.0]),
+    ] {
+        w.walk_nav_to(at, name, 1.5);
     }
+    w.walk_nav_to([30.0, 36.0, 60.0], "the tower top", 1.5);
+    // The south slope down to the ledge wrap, then the crawl shelf.
+    for (name, at) in [
+        ("the top's south edge", [28.2f32, 36.0, 64.0]),
+        ("the slope 1", [27.6, 35.3, 68.0]),
+        ("the slope 2", [27.4, 34.4, 71.0]),
+        ("the slope bottom", [27.3, 33.8, 74.5]),
+        ("the south ledge", [26.0, 32.6, 75.5]),
+        ("the ledge north", [25.75, 32.1, 73.5]),
+        ("the crawl shelf edge", [25.6, 31.0, 71.8]),
+    ] {
+        w.walk_nav_to(at, name, 1.5);
+    }
+    // The wall-hug crawl #299: the E press at the prompt enters substate 7 [M 0x196758].
+    w.walk_to(walker::Wp { at: [25.5, 30.96, 71.0], act: walker::Act::Use { use_ticks: 36 }, arrive: 1.0 },
+        "the wall-hug crawl prompt");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.substate == nf_game::player::SS_CREEP,
+            "the E press at the prompt enters the crawl [M Player_CollCreepWall 0x196758], bond {:?} sub {:#x}", sim.bond.pos, sim.bond.substate);
+    }
+    // Crawl north across the waist: the plate's box hangs over the crawl line — the touch
+    // fires mid-crawl (no teleport, no walk-off: the blocker walls every walk approach [D/M
+    // above], the crawl is the game's route).
     let mut raised = None;
-    for t in 0..120u32 {
-        w.wait(1);
-        if w.scene.sim.as_ref().unwrap().drones.channels.on(139) { raised = Some(t); break; }
+    for t in 0..1200u32 {
+        w.tick(Input { forward: 1.0, ..Default::default() }, false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.drones.channels.on(139) { raised = Some(t); break; }
+        if sim.bond.substate != nf_game::player::SS_CREEP && t > 10 { break; }
     }
     let sim = w.scene.sim.as_ref().unwrap();
-    assert!(raised.is_some(), "the plate raises ch 139 [D out]");
-    assert!(sim.drones.sound_triggers.playing(368), "the ch-139 trigger plays sound 368 [M 0x1b2790]");
+    assert!(raised.is_some(),
+        "crawling the waist crosses plate #253 and raises ch 139 [D out 139; M Player_Update 0x193600:361's per-tick Player_Collision with the crawl pick arm 0x195070 case 6], bond {:?} sub {:#x}", sim.bond.pos, sim.bond.substate);
+    // The sound trigger #254 watches ch 139 in the object walk — it plays within a tick of
+    // the rise [M SoundTrigger_Update 0x1b2790].
+    let mut playing = false;
+    for _ in 0..30u32 {
+        if w.scene.sim.as_ref().unwrap().drones.sound_triggers.playing(368) { playing = true; break; }
+        w.wait(1);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(playing, "the ch-139 trigger plays sound 368 [M 0x1b2790]");
 }
 
 /// KIND: spawner 0xF1 — #268 (group 2, start ch 34 = 0x22 [D params (1,2),(4,34)]) brings the
