@@ -82,3 +82,13 @@ a PCSX2 walk from the terminal room to the west lower floor should show the rock
 
 not visible to me — this environment shows no token, credit or context-window figures for the
 session (no usage readout is exposed to the worker).
+
+## ntfy failed
+
+All three fallbacks failed (22:36 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-0b-roof-sprint-3: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. python3 urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → no output, timed out
+   after 25 s (killed)
