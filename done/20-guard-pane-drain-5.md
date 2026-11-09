@@ -131,3 +131,17 @@ file and docs), so the earlier sessions' green lib runs stand.
   are exposed anywhere in this environment.
 - Wall clock (from the session's `date -u`): the driver message arrived ~06:01 UTC; the four
   walk runs 06:20–07:25 UTC; this report written ~07:37 UTC, inside the ~08:00 UTC expiry.
+
+## ntfy failed
+
+All three fallbacks, in order, with their exact output:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "guard-pane-drain-5: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "… urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'guard-pane-drain-5: done …', headers={'Title':'NightfirePort'}), timeout=25)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "guard-pane-drain-5: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out (exit 124, no output)
+
+Outbound HTTPS to ntfy.sh is unreachable from this sandbox (the same block the armour-absorb-int
+session hit at ~07:00 UTC). The queue `done/` file and this report are the delivery.
