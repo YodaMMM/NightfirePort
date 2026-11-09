@@ -432,6 +432,24 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     ] {
         if name == "the lower landing" && w.tops_up() && walkway_pair_holds(&w) { continue; }
         w.walk_nav_to(at, name, 1.5);
+        // los-mask-01-walk-2 (the masked-tree 08 re-tune, the real-damage walks): the
+        // return-fire fights in this leg's lane herd Bond backward (the back-off fight's own
+        // forward −1.0 [M damage_log.rs crowd]), and the measured rerun parked him ON the
+        // walkway door (160.6,45.0,−100.1) west frame pocket — (159.6-160.3, 46.1-46.9, −99.0
+        // to −99.4), grounded false, 0.74 above the crossing deck, head_bump on the frame —
+        // where every southward target wedged at the threshold for seven 3000-tick caps [L the
+        // 08 captured rerun: the walkway head navs 4-10 and the walk_to legs all STUCK at
+        // (160.2,−99.3); the plain no-fight crossing walks the lane at y 46.08 the whole way
+        // through the open door]. A player pushed onto the door frame steps back out of the
+        // pocket along the lane he came in by — the same run's nav-3 arrival (159.75, 46.08,
+        // −95.86) [L] — and retakes the crossing with the fights done. Gated to the
+        // real-damage walks (the fights are theirs; the topped-up walk never leaves the line).
+        if name == "the walkway head" && !w.tops_up() {
+            let p = w.scene.sim.as_ref().unwrap().bond.pos;
+            if p[0] > 156.0 && p[2] > -101.0 {
+                w.walk_nav_to([159.75, 46.08, -95.86], "off the walkway-door frame, back up the lane", 1.2);
+            }
+        }
     }
     // With the game's standing bodies the live walkway pair (#7/#8, AimStandFire 0x68 / StepAim
     // 0x74 at (148.4, 43.0, −121.4)) stand in the landing leg's lane: the nav leg runs down to the
