@@ -4911,7 +4911,20 @@ impl Drone {
     fn set_death_channel(&mut self) {
         match self.death_channel {
             0 => {}
-            0x63 => self.fail_reason = Some(crate::ally::death_channel_fail(self.team, self.hit_by_player)),
+            // exit-hold debug (NF_EXIT_DBG=1): the mission-fail deaths — 0x63 is
+            // `SetMissionFailReason` [M 0x13e660:21-44]; 0x60/0x61 are the standing fail hooks
+            // [M Mission_MonitorObjectives 0x1827d8:98-117] raised here as plain channels.
+            0x63 | 0x60 | 0x61 => {
+                if std::env::var("NF_EXIT_DBG").as_deref() == Ok("1") {
+                    eprintln!("[exit-dbg] death ch {:#x}: skin {:#x} team {} hit_by_player {} at {:?} health {:.1} state {:#x}",
+                        self.death_channel, self.skin, self.team, self.hit_by_player, self.pos, self.health, self.state);
+                }
+                if self.death_channel == 0x63 {
+                    self.fail_reason = Some(crate::ally::death_channel_fail(self.team, self.hit_by_player));
+                } else {
+                    self.raise = Some(self.death_channel);
+                }
+            }
             c => self.raise = Some(c),
         }
     }
@@ -18182,6 +18195,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             if let Some(next) = next {
                 if self.level_exit.is_none() {
+                    // exit-hold debug (NF_EXIT_DBG=1): which placement the E-path level load rode
+                    // (the same aid the script 0x12 arm prints).
+                    if std::env::var("NF_EXIT_DBG").as_deref() == Ok("1") {
+                        eprintln!("[exit-dbg] activate path: trigger kind {} placement {} next {next:#x} at {:?}",
+                            self.triggers[i].kind, self.triggers[i].placement, self.triggers[i].centre());
+                    }
                     self.level_exit = Some(next);
                     self.music.event(3, 1);
                     self.triggers[i].gone = true;
@@ -21274,6 +21293,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // `level_exit` drain until it clears (docs/systems/exit-hold.md).
                 if self.triggers[index].kind == crate::triggers::kind::LOAD_LEVEL && self.triggers[index].gone && self.triggers[index].next_level != 0 {
                     if self.level_exit.is_none() {
+                        // exit-hold debug (NF_EXIT_DBG=1): the touch-path level load — which
+                        // placement and volume the crossing rode.
+                        if std::env::var("NF_EXIT_DBG").as_deref() == Ok("1") {
+                            let t = &self.triggers[index];
+                            eprintln!("[exit-dbg] touch path: trigger kind {} placement {} next {:#x} at {:?} lo {:?} hi {:?} bond {:?}",
+                                t.kind, t.placement, t.next_level, t.centre(), t.lo, t.hi, self.player_pos);
+                        }
                         self.level_exit = Some(self.triggers[index].next_level);
                         self.music.event(3, 1);
                         // [M 0x1b2318:90-92] GS_PauseGame(1) + PushState(300.0f, 7) — the hold.

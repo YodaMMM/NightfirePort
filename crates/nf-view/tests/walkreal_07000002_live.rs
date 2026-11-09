@@ -103,6 +103,8 @@ fn clear_captors_real(w: &mut Walker, around: [f32; 3], label: &str, d3: bool) {
                 .or_else(|| hostage_captor(w, around))
         };
         let Some(di) = target else { return };
+        // los-mask-02-walk: same death guard as take_room — no zombie rounds after the fail.
+        if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { return; }
         // From range first: a captor Bond can already see a part of is shot from where he
         // stands. Walking into the room put Bond 1.1-1.3 u from three shotgun captors (weapon
         // 0x1c [L probe]) and cost ~95 of his 150 health+armour there (run12 2026-10-31); the
@@ -153,6 +155,10 @@ fn take_room(w: &mut Walker, around: [f32; 3], label: &str, d3: bool) {
             (captors, pick)
         };
         if live.is_empty() { break; }
+        // los-mask-02-walk: a dead Bond cannot fight — stop the sweep at the death instead of
+        // zombie-ticking the remaining rounds (the masked run burned 33k dead ticks here); the
+        // save assert downstream is the gate that reports it.
+        if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
         match pick {
             Some(di) => {
                 let _ = w.switch_to_armed(&format!("{label} room {round}"));
@@ -592,6 +598,23 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     }
     w.skip_cutscenes = true;
 
+    // los-mask-02-walk (d2): the escort shield from the FIRST fight on. Mayhew (skin 0x0500_0034,
+    // team 3) walks his own route through the same castle the fights light up, the game's bullets
+    // hit ANY drone [M Drone_CollisionHandler 0x140968:85-95 — no team gate], and the d2 masked
+    // run's Mayhew died to a guard's round (death ch 0x60 → the standing fail hook [M
+    // 0x1827d8:98-117] → ch 99 → mission fail). The 01 escort law: never take a shot whose cone
+    // crosses him (the 01 shield, common/walker.rs) — set before the garden fights.
+    if difficulty == 2 {
+        if let Some(mi) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            sim.drones.list.iter().enumerate()
+                .position(|(_, d)| d.skin == 0x0500_0034 && d.team == 3 && !d.corpse && d.health > 0.0)
+        } {
+            w.shield = Some(mi);
+            eprintln!("[02] the Mayhew escort shield is on (drone {mi})");
+        }
+    }
+
     // 0b. What a player has and takes before the first fight. Auto Aim is the game's profile
     //     default (On [M Player_AutoAim 0x1a7c98:41 reads profile +0x01; the app mirrors the
     //     option into `sim.auto_aim`, default true]) — the bare headless load leaves it off. And
@@ -789,6 +812,34 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             // Into the bunker with the fullest gun (the ch-0x81 ambush is next [D #389]).
             arm_fullest(&mut w, "before the bunker");
         }
+        if name == "west wing stair" && difficulty == 2 {
+            // los-mask-02-walk (d2, the masked tree): the stair-top answer — the d3 sniper duel's
+            // shape against ANY armed guard below. The d2 masked run's Mayhew took the killing
+            // guard round at the stair MIDDLE (frame ~7850 [L the NF_EXIT_DBG run]) while Bond
+            // descended: a courtyard guard's line up the stairwell crossed him. A player at the
+            // stair top spots the courtyard shooters and answers before he (and the escort
+            // trailing him) walks into their lines.
+            for _ in 0..3 {
+                let di = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let bp = sim.bond.pos;
+                    sim.drones.list.iter().enumerate()
+                        .filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
+                            && d.started && dxz(d.pos, bp) < 30.0
+                            && ((2..0x47).contains(&d.weapon) || (0x6a..=0x71).contains(&d.weapon)))
+                        .map(|(i, _)| i).next()
+                };
+                let Some(di) = di else { break };
+                w.dmg.aimed_fights = true;
+                arm_fullest(&mut w, "the stair-top answer");
+                let _ = w.stand_and_fire(di, 1200);
+                w.dmg.aimed_fights = false;
+                status(&w, "the stair-top answer");
+                let alive = { let sim = w.scene.sim.as_ref().unwrap();
+                    sim.drones.list[di].health > 0.0 && !sim.drones.list[di].corpse };
+                if alive { break; }
+            }
+        }
         if name == "west wing stair" && difficulty >= 3 {
             // 00 Agent (real-health-00agent-02-03-2): the courtyard sniper (weapon 0x1e) covers
             // the stair descent and the lane crossing — his ONE hit from 25.7 u landed 48.0 and
@@ -867,6 +918,48 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         }
         leg_to(&mut w, at, name, 1.6);
         status(&w, name);
+        // los-mask-02-walk (d2, the masked tree): Mayhew (skin 0x5000034, team 3) walks his own
+        // route behind Bond, and the masked vision hands the route guards sight lines the strict
+        // pre-mask ray blocked: the d2 agent run's Mayhew took a guard's round at the west wing
+        // stair (frame ~7850, hit_by_player FALSE — a guard's bullet, not Bond's [L the
+        // NF_EXIT_DBG run]) — death channel 0x60 [D the 07000002 placement; M SetDeathChannel
+        // 0x13e660 raises it] → the standing fail hook [M Mission_MonitorObjectives 0x1827d8:98-117
+        // ch 0x60 → ch 99] → mission fail → auto-restart (the early level_exit the sensor assert
+        // tripped over). A player walks his escort's lane COVERED: clear every armed started guard
+        // within 14 of MAYHEW through the real fire path (the 01 escort's clear law), and shield
+        // Bond's own spread off him (the 01 shield cone) for the rest of the walk.
+        if difficulty == 2 {
+            let mi = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                sim.drones.list.iter().enumerate()
+                    .position(|(_, d)| d.skin == 0x0500_0034 && d.team == 3 && !d.corpse && d.health > 0.0)
+            };
+            if let Some(mi) = mi {
+                if w.shield != Some(mi) { w.shield = Some(mi); }
+                for _ in 0..6 {
+                    let stalker = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let mp = sim.drones.list[mi].pos;
+                        sim.drones.list.iter().enumerate()
+                            .filter(|(i, d)| d.team == 1 && d.health > 0.0 && !d.corpse && d.present
+                                && d.enabled && d.started && dxz(d.pos, mp) < 14.0
+                                && ((2..0x47).contains(&d.weapon) || (0x6a..=0x71).contains(&d.weapon))
+                                && *i != mi)
+                            .map(|(i, _)| i).next()
+                    };
+                    let Some(g) = stalker else { break };
+                    let gpos = w.scene.sim.as_ref().unwrap().drones.list[g].pos;
+                    if dxz(gpos, w.scene.sim.as_ref().unwrap().bond.pos) > 9.0 {
+                        w.walk_nav_to(gpos, &format!("{name}: approach Mayhew's stalker {g}"), 8.0);
+                    }
+                    if !w.shoot(g, &format!("{name}: Mayhew's stalker {g}")) {
+                        if w.resupply("Mayhew cover ammo") { w.shoot(g, &format!("{name}: Mayhew's stalker {g} retry")); }
+                    }
+                    if w.scene.sim.as_ref().unwrap().drones.list[mi].corpse
+                        || w.scene.sim.as_ref().unwrap().drones.list[mi].health <= 0.0 { break; }
+                }
+            }
+        }
         if difficulty >= 3 && (name == "stair bottom" || name == "courtyard lane") {
             // 00 Agent (real-health-00agent-02-03-2): the kills here (the sniper at the lane's
             // mouth) drop their guns on the route and the fights behind ran DRY on the lane —
@@ -937,6 +1030,15 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         // by here the captors' dropped shotguns ride the wheel.
         arm_weapon(&mut w, 0x1c, "the geisha-2 shotgun");
     }
+    if difficulty == 2 {
+        // los-mask-02-walk (d2, the masked tree): the same shotgun arm for the masked run — the
+        // wheel OWNS the 0x1c with 18 shells here (the geisha-1 loot + the ambush drops) and the
+        // 0x12's spread at 11-13 u spent 26 rounds on the approach's two 12-hp guards before the
+        // room, then ran dry on the 8-hp captor #16 whose four 7.0 hits killed the 25.7-hp Bond
+        // [L the masked-run death ledger t18869]. A player clears a known shotgun-captor room
+        // with the shotgun the guards dropped, not the patrol SMG.
+        arm_weapon(&mut w, 0x1c, "the geisha-2 shotgun (masked d2)");
+    }
     // The ch-0x19 plate tr[009] sits in the doorway (quad x −27.58..−26.19, z −22.08..−18.49 at
     // y 6.04 [L probe02quads tris]; the door at (−27.8, 6.6, −20.3) is its west edge [L base log]).
     // The real leg walks THROUGH the doorway into the quad — the old arrive-1.2 stop at x −28.09
@@ -964,7 +1066,11 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     }
     let g2 = geisha(&w, 0x4a).unwrap();
     let at = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
-    take_room(&mut w, at, "geisha 2", difficulty >= 3);
+    // los-mask-02-walk (d2): the masked run takes the room with the hard-room law too — the
+    // per-round shotgun arm keeps the 0x1c up after each stand's cycle, and the tail captor
+    // sweep scoops the drops (the d2 wheel held 18 shells through the whole room fight while
+    // the 0x12 ran dry [L the masked-run death ledger]).
+    take_room(&mut w, at, "geisha 2", difficulty >= 2);
     for _ in 0..240 {
         if ch_on(&w, 0x4a) { break; }
         w.tick(Default::default(), false);

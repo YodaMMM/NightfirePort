@@ -1151,7 +1151,15 @@ impl Script {
                 if let Some(o) = prev { self.pending_weapon.push((o, w)); }
             }
             0xc => self.flags |= 0x10,
-            0xd => if g(0) != 0 { ch.set_script(g(0), g(1) as u8, frame); ch.script_channels.insert(g(0) as u8); },
+            0xd => if g(0) != 0 {
+                // exit-hold debug (NF_EXIT_DBG=1): which script wrote a fail/alarm-range channel —
+                // the mission fail reads ch 99 [M Mission_Update 0x182c60:30-33] and the writers
+                // here are the level's scripts.
+                if g(0) >= 0x60 && std::env::var("NF_EXIT_DBG").as_deref() == Ok("1") {
+                    eprintln!("[exit-dbg] script event 0xD writes ch {:#x} = {} (script {:#x} stream {i})", g(0), g(1), self.nis.hashcode);
+                }
+                ch.set_script(g(0), g(1) as u8, frame); ch.script_channels.insert(g(0) as u8);
+            },
             0xe => self.streams[i].flags |= 1,
             0x10 => self.flags |= 0x20,
             0x11 => {

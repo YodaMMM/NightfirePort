@@ -6762,6 +6762,13 @@ impl Sim {
                     // The 0x40000042 fail/death menu [M 0x182c60:78]. Until 180-fix-menus draws
                     // it, the port's auto-restart answers Restart immediately (the flag keeps
                     // the view free to answer instead via `fail_choose_restart`/`_quit`).
+                    // exit-hold debug (NF_EXIT_DBG=1): what the channel board held when the fail
+                    // menu opened — the fail writers here are scripts/triggers writing 0x63.
+                    if std::env::var("NF_EXIT_DBG").as_deref() == Ok("1") {
+                        let ch = &self.drones.channels;
+                        eprintln!("[exit-dbg] fail menu: ch 0x60 {} 0x61 {} 0x62 {} 0x63(99) {} 100 {} frame {}",
+                            ch.on(0x60), ch.on(0x61), ch.on(0x62), ch.on(99), ch.on(100), self.drones.frame);
+                    }
                     if self.drones.auto_restart { self.drones.fail_choose_restart(); }
                 }
             }
