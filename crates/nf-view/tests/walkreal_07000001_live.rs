@@ -2554,3 +2554,20 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(3));
 }
+
+/// guard-fell-through-floor: with solid guard bodies (master 0a9d39435) the driver saw guard #4
+/// (d#4, skin 0x500003a, spawn (-27.23, 10.22, 2.28) — the upper west floor [L the d2 roster
+/// probe]) fall through the floor near (-28.7, 27.6) and read y about -1e6 in one 01 walk
+/// variant, with Bond's body pushing guards that crowd against the hall walls. The spot is VOID
+/// at every height on this map (the upper west floor y 9.22 ends at z ≈ 16.7; the AI boundary
+/// walls #94-101 close there [L the probe scan]), so a guard who crosses the boundary falls
+/// forever — `Drone_FeetOnPoint` 0x140660's ray misses, gravity accumulates unbounded. The walk
+/// below is the whole real route with the env-gated fall trace on; a pass pins that no live
+/// guard loses the floor anywhere on it.
+#[test]
+fn no_live_guard_falls_through_the_floor_on_the_walk() {
+    std::env::set_var("NF_GUARD_FALL_TRACE", "1");
+    walk_from_the_spawn_to_the_exit_with_the_contact();
+    assert!(!walker::guard_fell(),
+        "a live guard fell through the world floor during the real walk (see the [guard-fall] lines)");
+}

@@ -12,6 +12,12 @@ use nf_view::scene::Scene;
 
 include!("damage_log.rs");
 
+/// guard-fell-through-floor: set by the `NF_GUARD_FALL_TRACE` block when a live team-1 guard is
+/// seen through the world floor (y < −20 or a sub-zero fast drop). Opt-in consumers read
+/// `guard_fell()`; the trace itself stays env-gated and additive.
+static GUARD_FELL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub fn guard_fell() -> bool { GUARD_FELL.load(std::sync::atomic::Ordering::Relaxed) }
+
 pub const TICKS_PER_SEC: u32 = 60;
 
 /// faster-live-tests: the LENIENT leg's give-up cap (ticks). A lenient leg that burns this long is
@@ -198,6 +204,8 @@ pub struct Walker {
     /// it by default.
     pub drone_watch: Vec<usize>,
     watch_last: Vec<(u8, [f32; 3])>,
+    /// guard-fell-through-floor: per-drone last y for `NF_GUARD_FALL_TRACE` (additive, env-gated).
+    fall_last: Vec<f32>,
     /// level-06-rook-door-3 kill attribution (env-gated `NF_HEALTH_TRACE`, additive): every
     /// drone's health diffed each tick, so a death prints the last_damage/hit/blast evidence
     /// with the live bullet owners — the harness records no killer, this is the read.
@@ -288,6 +296,7 @@ impl Walker {
             trail: Vec::new(),
             alarm_last: Vec::new(),
             drone_watch, watch_last,
+            fall_last: Vec::new(),
             health_last: Vec::new(),
             shield: None, shield_bloom: false,
             fighting_blocker: false,
@@ -578,6 +587,24 @@ impl Walker {
                 eprintln!("[hp] t{} d#{i} skin {:#x} team {} {prev:.1}->{:.1} st {:#x} mode {} alt {:#x} dtype {} at ({:.2},{:.2},{:.2}) last_dmg {:.1} hit {:?} by_player {} blast {:?} opp {:?} bullets [{}]",
                     self.total_ticks, d.skin, d.team, d.health, d.state, d.mode, d.alt_state, d.dtype,
                     d.pos[0], d.pos[1], d.pos[2], d.last_damage, d.hit, d.hit_by_player, d.blast, d.opp_drone, live.join(" "));
+            }
+        }
+        if std::env::var_os("NF_GUARD_FALL_TRACE").is_some() {
+            // guard-fell-through-floor: additive env-gated trace — every live team-1 guard whose
+            // y is dropping fast or already through the world floor. Pure logging (the
+            // NF_WALK_TRACE/NF_ALARM_TRACE pattern); no behaviour change, so no walker flag.
+            if self.fall_last.len() < sim.drones.list.len() {
+                self.fall_last.resize(sim.drones.list.len(), 0.0f32);
+            }
+            for (i, d) in sim.drones.list.iter().enumerate() {
+                let prev = self.fall_last[i];
+                self.fall_last[i] = d.pos[1];
+                if !d.present || d.corpse || d.team != 1 { continue; }
+                if d.pos[1] < -20.0 || (prev - d.pos[1] > 0.5 && d.pos[1] < 0.0) {
+                    GUARD_FELL.store(true, std::sync::atomic::Ordering::Relaxed);
+                    eprintln!("[guard-fall] t{} d#{i} skin {:#x} st {:#x} y {:.1} (prev {prev:.1}) at ({:.2},{:.2},{:.2}) on_surface {} bounded {}",
+                        self.total_ticks, d.skin, d.state, d.pos[1], d.pos[0], d.pos[1], d.pos[2], d.on_surface, d.bounded);
+                }
             }
         }
         if sim.bond.pos[1] < y_before - 0.4 && !sim.bond.grounded {
