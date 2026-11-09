@@ -112,3 +112,43 @@ All release, NF_SILENT, one binary per cargo call, on the final tree:
   face) look see-through in the game. The rule is the decompile's; a live check of a 0b roof
   guard spotting Bond across the parapet would settle the player-visible part.
 - Which sight call moves the 05 sniper's pose so the second round lands on part 32.
+
+## Live check: the 0b roof parapet (added after the first push)
+
+Question: does the game's guard see Bond across the roof deck's surface-0x40 parapet band, as the
+port's 0xa27 mask now lets it?
+
+Method (PCSX2, difficulty 2, one process holding Bond's health): load 0700000b, place Bond at the
+deck key (-14.71, 58.0, -2.06), raise ch 0x57 (the roof squad's switch channel; before it the
+drone list is empty, it spawns the six deck guards), then log every guard's Drone+0x228 sight
+bits per frame.
+
+Result: the guard at (1.13, 58.04, 32.36) (the port's #4, placement 167), whose sight ray to the
+deck key the port blocks only on the parapet band (strict ray blocked, masked ray clear), sets
+bit 2 (line of sight) 10 frames after spawning and bit 4 (seen) at frame 19, then walks toward
+Bond. The game's guard sees across the parapet, so the port's mask on that surface is right.
+The port probe at the same spot and channel gives the same answer (#4 los/seen by tick 30).
+
+So 0b stays a re-route problem. Tried on the masked tree (Agent), none green:
+- sprint bends: via (-6,18)→(-6,38); (-14,38); (-2,10)→(6,36) (falls off the deck east of the
+  housing); (6,6)→(8,36); (-10,30)→(-4,40); (-2,10)→(3,30) (falls, 10.8 hp left);
+  (-2,10)→(-1,30) and three more west-side lines — these reach the take but Bond dies on the
+  jump drive east toward the guard cluster; jumping off at (6,33), (5,30) or west (-10,41.3)
+  did not save it;
+- darting the idle deck guards first: they are in Attack within 20 frames of the spawn, and the
+  cut-scene holds Bond until after that, so no dart lands;
+- the exec-floor body armour (kind 3 at (17.5, 47.7, 28.5)): taken, but the detour moved the
+  later timeline and the dome's live-wire hurts then took 74.8 (39 hits) before the roof.
+
+Still red: `walkreal_0700000b_live` `..._real_damage_agent` and `..._real_damage_00agent`.
+
+Lead, not investigated: 39 live-wire hurts in one walk is more than one fusebox's 10 group-1
+wire slots allow [M FuseBox_Update 0x1adfe8: a wire's slot is zeroed when it dies], so the
+port's dome hurt may repeat where the game's cannot. Worth its own check.
+
+## Rebased onto master ea11f1312, battery again
+
+Every walkreal binary once, one per cargo call: all 27 green except **0b 5/2** (the same two).
+nf-game --lib 756/0/4, ai_live 37/0, ai_missing_states_live 10/0, ai_points_live 4/0,
+cover_selection_live 2/0, dtype_sniper_alert_live 1/0, cameras_turrets_census_live 1/0,
+glass_pass_every_level_live 3/0/3, gun_turrets_live 3/0, turret_hits_live 3/0.
