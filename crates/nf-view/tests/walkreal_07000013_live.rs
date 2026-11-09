@@ -339,7 +339,11 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // pocket: #3 landed three −14 volleys at d 2.6-2.7 and the shotgun finished the run (death
     // tick 1666 at (3.57,−368.36,25.09), 86.0 consumed). A player shoots the posted guards from
     // the doorway before crossing their pocket.
-    if real_damage && difficulty == 3 {
+    // los-mask-join: the Agent walk takes the same pre-clears (here and the lobby/doorway
+    // sweeps below). Under the game's sight masks the lobby guards engage through the glass
+    // bands, and the Agent walk, which left them to its legs' return fire, ran dry at the
+    // lobby north-west (clip 0 spare 0) and died at the front entrance [L the masked run].
+    if real_damage && difficulty >= 2 {
         clear_the_visible(&mut w, "13: the spawn pocket", 24.0);
     }
 
@@ -392,7 +396,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // legs and Bond reached the security room at 21 hp to lose the point-blank #8 exchange).
     // Taking the shooters at the re-anchor end — where #11 (3.8, 33.9) is d ~4.5 and the
     // mezzanine/west boxes open — keeps the west legs' budget for the room.
-    if real_damage && difficulty == 3 {
+    if real_damage && difficulty >= 2 {
         clear_the_visible(&mut w, "13: the lobby mid re-anchor", 24.0);
     }
     w.walk_to(Wp::new(-6.0, -368.4, 40.0).r(1.5), "13: the lobby west mid");
@@ -401,7 +405,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // false, the creep dragging Bond backward into the pocket) become the sweep's targets from
     // the west-mid leg end when their boxes open — and a guard this sweep still cannot see is
     // left to the legs' own return fire exactly as before.
-    if real_damage && difficulty == 3 {
+    if real_damage && difficulty >= 2 {
         clear_the_visible(&mut w, "13: the lobby west mid", 24.0);
     }
     w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west");
@@ -417,7 +421,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // the room — the sweep takes him from the threshold before the crossing, exactly the
     // civ-unignore-2 law (the pre-clear stands at the leg ends and takes the posted guards
     // BEFORE the legs walk into them).
-    if real_damage && difficulty == 3 {
+    if real_damage && difficulty >= 2 {
         clear_the_visible(&mut w, "13: the security-room doorway", 12.0);
     }
     w.walk_to(Wp::new(-27.0, -368.4, 37.0).r(1.0), "13: through the doorway");
