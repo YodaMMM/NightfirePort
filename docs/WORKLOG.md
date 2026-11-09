@@ -120,3 +120,23 @@ in-bay audit act re-gated to real_damage && difficulty < 2 so the Agent twin (2,
 master-identical). Task: #18's inbound line — levers (a) the wait-for-crossing clear-box act
 at the ladder top, (b) the same act from the deck stand (d 29, the 7479 line), (c) the audit
 act at the probed bay-enter stand, judged over several real runs. Work in progress.
+
+## level-0d-operative-walk-4 (2026-11-09, result)
+
+The deck-stand wait-for-crossing act (the -3's lever (b)) KILLED #18 at +195 of one 300-cap
+act at d 29 (reload + the mouth opened at +100) — her bay fire, the bay-enter 16 and g10's
+deck 16 vanished; boarding pool 15.6; the walk passed the ride, deck, E, walk-off, descent,
+bay legs, boarding, hang, gantry and slot hop and died at 20693/21143 in the yard fight —
++5047/+5497 past the -2's best 15646. The ladder-top lever (a) ledgered over four variants
+(v9/v10/v10b/v10c: the pair clearable — v10b took BOTH — but #18's first ~3 hits land during
+the sweep and every roll re-deals the dice); lever (c)'s audit act found the bay already
+clear. The adaptive stagger wait (lever iv) landed the slot hop the v11b re-roll staggered
+(14.4 health at the ride — health is no longer the blocker). Runs: walkreal whole 1 passed/2
+ignored (22.17 s, the plain replay byte-identical), interactables_0700000d_live whole 11
+passed/0 failed (32.70 s, --test-threads=1); the Operative sister measured across v8 (the
+merged baseline == v6 byte-for-byte, 9880), v9 (4284), v10 (5587), v10b (6914), v10c (10850),
+v11 (20693), v11b (the slot-hop assert at 19440, 14.4 alive), v12 (21143). The full four-crate
+suite not run: the build+run exceeds the remaining window on this 2-core/4 GB box (the -3
+report's same-box measurement stands); the diff touches only the 0d test file — no src/, no
+tests/common/ — so no other binary's behaviour can change. Report:
+docs/reports/level-0d-operative-walk-4.md.
