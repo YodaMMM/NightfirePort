@@ -488,6 +488,20 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // woke him mid-phase and his 10.0 landed the t4312 kill. He is taken right after the
     // climb now (the difficulty-2 branch above). The plain/Operative twins never shot #17
     // here — the leg was difficulty-gated, so removing it re-rolls nothing for them.
+    if real_damage {
+        // v9 run-1 LESSON (the act sat BEFORE the sweep here and the trio's free fire killed
+        // the run at 4284): the wait-for-crossing leg runs AFTER the sweep + the g29 walk —
+        // the west-roof trio's states 0x94/0x99/0x97 were already firing during the 900-tick
+        // poll (5 hits for 86) and the sweep that kills them in +222..+754 never got its
+        // turn. All lethal-work legs first; the bay wait faces #18's line alone.
+        // v10b/v10c LEDGER (this session, the ladder-top home): v10b cleared the PAIR
+        // (#18 +268, g10 +277) but the re-roll dealt g17's ride window a fresh hand (death
+        // 6914 at 6.0); v10c (cap 300) killed g10 (+240), missed #18 twice, and re-enacted
+        // the baseline annex death at 10850. #18's first ~3 hits land during the sweep
+        // (3491/3851/4391) — no post-sweep act can prevent them — so the ladder-top act
+        // moves to the DECK stand (d 29, her 7479 line, twice the angular size), the -3
+        // ledger's lever (b).
+    }
     // level-0d-operative-walk-3: the sweep now runs on the Operative real-damage twin too
     // (`real_damage` OR difficulty 2 — the plain master replay and the Agent body both keep
     // their exact prior legs). The -2 Operative ledger's #17 — the ride-window 16 at 7437 from
@@ -616,6 +630,15 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         let Some(di) = near else { break };
         let _ = w.switch_to_armed("the deck guard");
         let _ = w.shoot(di, "the deck guard");
+    }
+    // THE BAY PAIR WAIT-FOR-CROSSING ACT FROM THE DECK (level-0d-operative-walk-4, the -3
+    // ledger's lever (b)): the deck stand is d ~29 from #18 — her 7479 hit landed HERE at
+    // d 29.4 [L the v6/v8 ledger] — so her line IN is open at twice the ladder top's
+    // angular size, and the west roof + #16 are already dead: the poll's only shooter is
+    // the pair itself. Same poll-and-hold law as the helper's doc; budget 700 (the deck
+    // phase is short and the swing's wait(900) follows).
+    if real_damage {
+        let _ = bay_wait_for_crossing(&mut w, 700, "the bay pair (the wait-for-crossing act, the deck)");
     }
     // The LAST roof guard from the deck: NO attempt (level-0d-real-health-crossfire-2 measured):
     // the deck eye (y ~15.5) is 7.5 BELOW the west-roof surface over ~50 u — the eye→chest ray
@@ -1520,6 +1543,77 @@ fn kill_guard_head_present_fast(w: &mut Walker, at: [f32; 2], tol: [f32; 2], lab
             shoot_far_box_fast(w, i, label, cap)
         }
         None => { eprintln!("[0d] {label}: no PRESENT guard near ({:.1},{:.1}) — already down", at[0], at[1]); false }
+    }
+}
+
+/// The WAIT-FOR-CROSSING act (level-0d-operative-walk-4, the -3 ledger's lever (a)): poll the
+/// bay pair every 10 neutral ticks and fire the box act on the FIRST open line. The walk-3
+/// dead ends all burned ONE fixed cap standing in #18's open INBOUND line (her hits at the
+/// ladder top measured 3491/3851/4391/7479) — and their single fixed-box pick polled only the
+/// guard it acquired (g10); #18's own box geometry was never polled across a patrol. Her
+/// inbound line CONNECTS (the hits are [L] measured), so some patrol phase must present her
+/// boxes through the strip mouth; this act gives every pair guard every 10th tick's chance and
+/// holds fire (no aim raise, no rounds) while the mouth is closed — a closed tick costs only
+/// its sim step. The budget bounds the whole wait (900 ≈ the -3's measured ladder-top cadence
+/// window: her intervals were ~360-540 ticks).
+fn bay_wait_for_crossing(w: &mut Walker, budget: u32, label: &str) -> bool {
+    let start = w.total_ticks;
+    // A player reloads before a deliberate long engagement: the sweep + the standby acts
+    // leave the clip dry (the v10 run-1 trace: the acts fired with clip 0-2 and ended
+    // mid-reload with spare rounds untouched), and each act's dice need its rounds. R held
+    // ~100 ticks refills the clip [M Player_WeaponFiring's reload branch — the walker.rs
+    // reload_full precedent; walker_b2 has no wrapper, so the pulse is inline here].
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.gun.clip < 8 && sim.gun.spare > 0 {
+            eprintln!("[0d] {label}: clip {} spare {} — reload first", sim.gun.clip, sim.gun.spare);
+            for _ in 0..100 {
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, true, false);
+                w.total_ticks += 1;
+            }
+            w.after_step();
+        }
+    }
+    loop {
+        // Poll: any placement-held bay-pair guard (present, not enabled — the [census] law)
+        // with a clear hit-box line right now. The SHOOTER-FIRST pick (v10 run-1): #18 (skin
+        // 0x5000090) is the guard hitting Bond (her 4 × 16 is the measured drain) — a player
+        // takes the shooter, not the nearest head; g10 (0x5000093) is the fallback.
+        let pick = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let mut best: Option<(u8, f32, usize)> = None;
+            for (i, d) in sim.drones.list.iter().enumerate() {
+                if !d.present || d.corpse || d.health <= 0.0 { continue; }
+                if d.pos[1] >= 14.0 { continue; }
+                if !(202.0..=216.0).contains(&d.pos[0]) { continue; }
+                if !(-293.0..=-285.0).contains(&d.pos[2]) { continue; }
+                if clear_box_aim(sim, i).is_none() { continue; }
+                let dist = walker::dxz(sim.bond.pos, d.pos);
+                let pri = (d.skin != 0x5000090) as u8;
+                if best.map_or(true, |(bp, bd, _)| (pri, dist) < (bp, bd)) { best = Some((pri, dist, i)); }
+            }
+            best.map(|(_, _, i)| i)
+        };
+        if let Some(di) = pick {
+            let d = &w.scene.sim.as_ref().unwrap().drones.list[di];
+            eprintln!("[0d:box] {label}: g{di} skin {:#x} pos ({:.2},{:.2},{:.2}) state {:#x} — the mouth OPENED at +{}",
+                d.skin, d.pos[0], d.pos[1], d.pos[2], d.state, w.total_ticks - start);
+            // The 300 cap: both measured kills landed at +268/+277 (v10b run-1); a 400 cap
+            // only pays the misses longer (the v10 run-1 acts burned 400 dry each).
+            shoot_far_box(w, di, label, 300);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        let pair_live = sim.drones.list.iter().any(|d| d.present && !d.corpse && d.health > 0.0
+            && d.pos[1] < 14.0 && (202.0..=216.0).contains(&d.pos[0]) && (-293.0..=-285.0).contains(&d.pos[2]));
+        if !pair_live {
+            eprintln!("[0d] {label}: the bay pair is down at +{} ticks", w.total_ticks - start);
+            return true;
+        }
+        if w.total_ticks - start >= budget {
+            eprintln!("[0d] {label}: the mouth never opened in {budget} ticks (pair still live)");
+            return false;
+        }
+        for _ in 0..10 { w.tick(nf_game::player::Input::default(), false); }
     }
 }
 
