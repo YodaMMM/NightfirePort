@@ -107,3 +107,15 @@ dice, and 4/5 rolls came up bad.
 
 not visible to me — this environment shows no token, credit or context-window figures for
 this session.
+
+## ntfy failed
+
+All three fallbacks failed, in order:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "…" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "…urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', …))"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "level-0d-operative-walk-3: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output within 40 s (killed by the tool timeout; the network to ntfy.sh is
+   unreachable from this sandbox)
