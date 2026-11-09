@@ -6,3 +6,7 @@ Reproduce on the real level first through real input, not a teleport. Branch fro
 
 ---
 claimed-by: sandbox1 at 2026-11-09T19:57Z
+
+---
+## Report (blocked, 2026-11-09T20:48Z)
+
