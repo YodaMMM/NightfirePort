@@ -106,3 +106,13 @@ difference; the route itself is proven to the end by the green master replay.
 
 not visible to me — this environment shows no token, credit or context-window figures for
 the session; nothing to copy.
+
+## ntfy failed
+
+All three fallbacks failed or stayed unconfirmed from this sandbox (the same pattern the
+wire-jump-grab report recorded): `curl -sS -m 20` → `curl: (28) Connection timed out after
+20001 milliseconds`; the python3 urllib fallback → `urllib.error.URLError: <urlopen error
+[Errno 101] Network is unreachable>`; the wget fallback → stalled past 45 s with no output
+(the command was killed at the tool timeout; the earlier non-verbose run showed the TLS
+connect to ntfy.sh not completing). The finish.sh step itself reported
+"OK done 10-level-0d-operative-walk".
