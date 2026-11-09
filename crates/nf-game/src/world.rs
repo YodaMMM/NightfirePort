@@ -3103,7 +3103,7 @@ impl CollisionWorld {
     /// is no obstacle to this probe, or a guard would stop short of the glass he should press.
     pub fn move_probe_clear(&self, a: V3, b: V3) -> bool {
         if !LOS_MASKS_ON { return self.segment_clear(a, b); }
-        self.line_of_sight_masked(a, b, LOS_PROBE_8)
+        self.los_walk_opts(a, b, LOS_PROBE_8, None, true)
     }
 
     /// The guard-sight ray scoped the way the game scopes it [M DroneVision_CanSeeObjectFrom
@@ -3173,7 +3173,7 @@ impl CollisionWorld {
                 for k in o.tris.clone() {
                     let m = g.mats[k];
                     let low = m & 0x3f;
-                    if drop_node && (glist_obj & 0x40 != 0 || g.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                    if drop_node && (glist_obj & 0x40 != 0 || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
                     if drop_surface && m & 0x40 != 0 { continue; }
                     if drop_de && (low == 0xd || low == 0xe) { continue; }
                     if drop_10 && low == 0x10 { continue; }
@@ -3219,6 +3219,13 @@ impl CollisionWorld {
     /// `last_objects` (index-aligned with `geo.objects` by `set_dynamic`; `along` yields objects
     /// in order but skips non-overlapping ones, so the range start is the stable key).
     fn los_walk(&self, a: V3, b: V3, mask: u32, exclude_hashes: Option<&[u32]>) -> bool {
+        self.los_walk_opts(a, b, mask, exclude_hashes, false)
+    }
+
+    /// `los_walk` with `skip_panes`: the port's step probe (`move_probe_clear`) leaves every
+    /// pane part out — the guard presses the glass and the body push holds him (no game query
+    /// behind the probe; `segment_clear_dynamic`'s same rule).
+    fn los_walk_opts(&self, a: V3, b: V3, mask: u32, exclude_hashes: Option<&[u32]>, skip_panes: bool) -> bool {
         let d = sub(b, a);
         let dynamic = self.dynamic.read().unwrap();
         let skip_cage = mask & 0x20 != 0;
@@ -3246,6 +3253,7 @@ impl CollisionWorld {
                     dynamic.obj_index(o).map(|n| dynamic.pick_pair(n)).unwrap_or((0, 0))
                 } else if missile_set { (0x1000, 0) } else { (0, 0) };
                 if dyn_set && exclude_starts.contains(&o.tris.start) { continue; }
+                if skip_panes && dyn_set && dynamic.pane_flags(o).is_some() { continue; }
                 if !pick_admits(mask, glist_obj) { continue; }
                 if mask & 0x400 != 0 && (class_obj == 3 || class_obj == 0x12) { continue; }
                 if mask & 0x100 != 0 && (class_obj == 2 || class_obj == 0x11) { continue; }
@@ -3256,8 +3264,12 @@ impl CollisionWorld {
                     // `Collide_Intersect` 0x1ebaa8:300-319: the 0x8 arm's object word — the
                     // glist's bit 0x40 (:93-99 flags the hit, :317 discards it) — rides
                     // `glist_obj` for the dynamic parts; the static node walk keeps its
-                    // per-triangle node-pass model.
-                    if drop_node && (glist_obj & 0x40 != 0 || g.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                    // per-triangle node-pass model. A pane part's baked `pass` bytes are the
+                    // bullet walks' stand-in (PANE_PART's note), not its glist word: a masked
+                    // ray reads the word, so a pane whose glist lacks 0x40 still blocks a
+                    // mask-0x8 query (the sensor beam, the headroom, auto-aim) as it does in
+                    // the game (0x1eae80:76-82 admits it, 0x1ebaa8:93-99 flags nothing).
+                    if drop_node && (glist_obj & 0x40 != 0 || (!dyn_set && g.pass[k]) || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
                     if drop_surface && m & 0x40 != 0 { continue; }
                     if drop_de && (low == 0xd || low == 0xe) { continue; }
                     if drop_10 && low == 0x10 { continue; }
@@ -3306,7 +3318,7 @@ impl CollisionWorld {
                 for k in o.tris.clone() {
                     let m = g.mats[k];
                     let low = m & 0x3f;
-                    if drop_node && (glist_obj & 0x40 != 0 || g.pass[k] || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                    if drop_node && (glist_obj & 0x40 != 0 || (!dyn_set && g.pass[k]) || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
                     if drop_surface && m & 0x40 != 0 { continue; }
                     if drop_de && (low == 0xd || low == 0xe) { continue; }
                     if drop_10 && low == 0x10 { continue; }
@@ -3768,6 +3780,40 @@ mod tests {
         assert_eq!(m2, 0x0a, "the hit surface is the class-10 wall behind the tree");
         // And the flat query still hits the leaf first there (the game's sight keeps the foliage).
         assert!((w2.segment(from, to).unwrap() - 1.0 / 8.0).abs() < 1e-6, "flat: the leaf still blocks sight");
+    }
+
+    /// los-mask-join: a breakable pane under the masked rays. The game picks a pane like any
+    /// object (`Collide_PickObj` 0x1eae80:72-82 admits it while its glist word misses the
+    /// mask's skip set) and a mask-0x8 query drops the hit only through the glist's 0x40 or the
+    /// surface's 0x40/0x80 [M `Collide_Intersect` 0x1ebaa8:93-99, :305-310, :317-319]. So a pane
+    /// with glist word 0 stops the 0xc beam reach whatever its material; the 0xe sensor/auto-aim
+    /// ray and guard vision 0xa27 both carry bit 0x2, so they drop class-0x10 glass [M :314-316]
+    /// and stop on a plain 0x0F pane. The port's step probe (`move_probe_clear`) never sees a
+    /// pane (no game query; the body push holds the guard at the glass).
+    #[test]
+    fn masked_rays_read_a_panes_glist_word_not_its_baked_pass() {
+        let face = vec![[[0.0, 0.0, -1.0], [0.0, -1.0, 1.0], [0.0, 1.0, 1.0]]];
+        let at = |x: f32| [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [x, 0.0, 0.0, 1.0]];
+        let (a, b) = ([0.0, 0.0, 0.3], [10.0, 0.0, 0.3]);
+        for (mat, glass) in [(0x0fu8, false), (0x10, true)] {
+            let mut w = world(Vec::new());
+            w.shapes.insert(7, face.clone());
+            w.shape_mats.insert(7, vec![mat]);
+            w.set_dynamic(&[(PANE_PART | 3, 7, at(5.0))]);
+            // Mask 0x8 (the beam reach 0xc): the pane's word carries no 0x40 — the hit stays.
+            assert!(w.line_of_sight_hit(a, b, LOS_PROBE_8).is_some_and(|t| (t - 0.5).abs() < 1e-5),
+                "mat {mat:#x}: the 0xc beam stops on the pane");
+            assert!(!w.line_of_sight_masked(a, b, LOS_PROBE_8), "mat {mat:#x}: 0xc blocked");
+            // 0xe (sensor cone, auto-aim) carries 0x2: glass drops, the plain pane blocks.
+            assert_eq!(w.line_of_sight_masked(a, b, LOS_SENSOR), glass, "mat {mat:#x}: 0xe");
+            // Guard vision 0xa27: the same 0x2 drop.
+            assert_eq!(w.line_of_sight_masked(a, b, LOS_GUARD_VISION), glass, "mat {mat:#x}: 0xa27");
+            // The step probe leaves the pane out.
+            assert!(w.move_probe_clear(a, b), "mat {mat:#x}: the guard step probe skips panes");
+            // Sister: the same part as a non-pane object blocks the step probe.
+            w.set_dynamic(&[(0x100_0000_0003, 7, at(5.0))]);
+            assert!(!w.move_probe_clear(a, b), "mat {mat:#x}: a door part blocks the step probe");
+        }
     }
 
     #[test]
