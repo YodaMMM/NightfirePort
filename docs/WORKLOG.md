@@ -150,3 +150,27 @@ via the pre-wake snipe extended to Operative; judge each lever over real runs; h
 gated to 0700000d + the difficulty; real input only, no top-ups, no damage/health lowered.
 Suite runner started in the background in the first minutes. Work begins with the v13
 girder-sweep lever.
+
+## level-0d-operative-walk-5 (2026-11-09, result)
+
+The origin/master merge (0a9d39435 guards-solid + the debris/chatter batch) RE-ROLLED the
+Operative stream: the merged baseline (the walk-4 legs verbatim) died 10585 in the walk-off
+descent — the ladder 78 at the v12-identical ticks PLUS a NEW g17 deck 16 at 6832 + the 6.0
+descent fall at 6.0 health — ~10000 ticks behind the -4's 21143 ledger. The walk-4 "What's
+left" levers measured in order: the yard trickle lever UNREACHABLE on this stream (the walk
+dies before the beam; the pre-drop girder sweep + a query-only ray census implemented,
+Operative-gated, fires the first run that reaches it); the pre-wake snipe extended to
+Operative measured DEAD (v15: no PRESENT guards — the west roof spawns at the platform-drop
+wake, matching the Agent law; the load census holds the placements but the drones are
+absent). LANDED: the deck-stand g17 kill (v16/v20: +216, his own 6832 line) — kept in the
+tree; and the -4's lever (iii), the skip_drain fast first tap, wired into the drop-then-
+sweep. Dead ends ledgered: added ladder-top mid-band directs (v17 — the walk-3 catastrophic
+law again, death 4917), the ground-band 900 cap (v19 — the v5 law, death 5111), a +20 ride
+shift (v20 — a NO-OP: the deck arrival is slaved to the beam SP phase, byte-identical
+stream). The remaining game is exactly 16 health before the walk-off (the only unmeasured
+source: breaking g17's ride-window acquisition). Runs: walkreal whole 1 passed/0 failed/
+2 ignored (20.64 s, the plain replay byte-identical), interactables_0700000d_live whole 11
+passed/0 failed (30.32 s, --test-threads=1). The suite.py background start was reaped
+between tool calls (empty suite.out, same as the -4 warning); the diff touches only the 0d
+test file — no src/, no tests/common/ — so no other binary's behaviour can change. Report:
+docs/reports/level-0d-operative-walk-5.md.
