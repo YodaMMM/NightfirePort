@@ -517,6 +517,13 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     // the head against the #193 face on every run (the door's +Z faces sit at z −4.00 [D tris];
     // try_walk_to skips the leg rather than wedge).
     w.try_walk_to(Wp::new(14.3, 17.0, -3.3).r(0.3), "the Load Point, pressed in");
+    // latch-walks-on-master: a return-fire stand inside the pressed-in leg (the shaft-falling
+    // guard #19 lands mid-descent and engages — measured at tick 52798 on the latch branch,
+    // never on master where the E fires ~60 ticks earlier) leaves the fight's yaw at the
+    // arrival, and the use pick (head + look, [M 0x1a5170:100-108]) then reads the room behind
+    // instead of the #193 face. A player turns back to the door and presses E: face −Z with the
+    // turn channel (walker_b2 face_toward), then press.
+    w.face_toward(0.0, -1.0, "face the Load Point door");
     let mut loaded = false;
     for _ in 0..60 {
         w.tick(nf_game::player::Input::default(), true);

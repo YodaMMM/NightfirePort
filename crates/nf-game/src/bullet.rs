@@ -408,6 +408,16 @@ impl PlayerHealth {
     /// The shared `Player_HandlePain` body. `armour_frac` is the pain type's armour fraction
     /// [M 0x1902c8:84-104]: the type switch sets 1.0 for the default/bullet arm and 0.0 for types
     /// 1..7 (the MP kill-feed writes in the 5/6/7 arms fall through to the same 0.0).
+    ///
+    /// The absorb is a FLOAT min and the health store a FLOAT max — the game truncates NEITHER to
+    /// int [M disasm 0x1904ec `MIN.s f1, f1 = d·frac, f0 = armour` straight into
+    /// `sub.s f0, f0, f1 / swc1 f0, 0x8b0($s1)`, and 0x190510 `MAX.s f22, f22 = health−remaining,
+    /// f0 = 0.0` with the zero loaded by the `mtc1` at 0x190508; no compare/branch exists for a
+    /// software select, and GCC emits `cvt.w.s` for its real casts — the bloom's pinned truncation
+    /// at 0x12c7a0, the glow byte store at 0x1905e0, the rumble arg at 0x190568]. The `(int)` casts
+    /// the decompile prints at 0x1902c8:103/108 are Ghidra's p-code rendering of those MIN/MAX ops;
+    /// the level-0d-agent-real-damage report's "(int)damage" absorb note was that artifact
+    /// (armour-absorb-int).
     /// Returns true when the pain grunt rolls. The grunt draw sits exactly where the game puts it:
     /// after the armour/health math, before the `+0x967`/`+0x968` writes [M 0x1902c8:110-119]. The
     /// game skips the roll only for pain type 7 with `CheatInfo != 0` (never in SP) — the port is
@@ -663,6 +673,38 @@ mod tests {
         h.pain(&mut rng, 30.0, 1, 0x0700_0005);
         assert!((h.armour - 0.0).abs() < 1e-4, "bullets drain the armour first");
         assert!((h.health - 92.0).abs() < 1e-4, "the remainder 18 - 10 reaches health");
+    }
+
+    /// armour-absorb-int: the absorb is a float min and the health store a float max — the game
+    /// does NOT truncate either to int. The decompile prints `(int)` casts at 0x1902c8:103/108,
+    /// but the disassembly shows the EE's three-operand MIN.s/MAX.s: 0x1904ec
+    /// `f1 = min(f1 = d·frac, f0 = armour)` directly before `sub.s f0, f0, f1 / swc1 f0, 0x8b0($s1)`,
+    /// and 0x190510 `f22 = max(f22 = health−remaining, f0 = 0.0)` with the zero loaded by the mtc1
+    /// at 0x190508 — no compare/branch exists for a software select, and GCC emits `cvt.w.s` for its
+    /// real casts (the bloom's pinned truncation at 0x12c7a0, the glow byte store at 0x1905e0, the
+    /// rumble arg at 0x190568). The `(int)` casts in the C at :103/108 are Ghidra's p-code rendering
+    /// of those MIN/MAX ops — the level-0d-agent-real-damage report's "(int)damage" absorb was that
+    /// artifact. Sister: a truncating absorb would leave armour 39.0 / health 99.0 in the first leg
+    /// and health 84.0 in the second; the game (and this port, unchanged) keep the fraction.
+    #[test]
+    fn armour_absorb_is_a_float_min_and_the_health_store_a_float_max() {
+        let mut rng = crate::drone::Rng::new(0);
+        // Level 0x0700_0021 keeps the statics at Normal: damage_factor 1.0 [M damage_factor's
+        // `_ =>` arm] — d reaches the body exactly.
+        let mut h = PlayerHealth { health: 100.0, armour: 50.0, flash: 0.0, dir_bits: 0, flashbang: 0.0, hit_push: 0.0, flash_total: 0.0, flash_alpha: 0.0 };
+        h.pain(&mut rng, 18.5, 2, 0x0700_0021);
+        assert!((h.armour - 31.5).abs() < 1e-3, "absorbed = min(18.5, 50) = 18.5, whole float [M 0x1904ec MIN.s], armour {}", h.armour);
+        assert!((h.health - 100.0).abs() < 1e-4, "the remaining 0.0 reaches health [M 0x190510 MAX.s], health {}", h.health);
+        // Partial armour: 3 < 18.5 empties it and the float remainder 15.5 reaches health
+        // UNTRUNCATED — a truncating store would read 84.0.
+        let mut h2 = PlayerHealth { health: 100.0, armour: 3.0, flash: 0.0, dir_bits: 0, flashbang: 0.0, hit_push: 0.0, flash_total: 0.0, flash_alpha: 0.0 };
+        h2.pain(&mut rng, 18.5, 2, 0x0700_0021);
+        assert!((h2.armour - 0.0).abs() < 1e-4, "the armour empties [M 0x1904f4 store]");
+        assert!((h2.health - 84.5).abs() < 1e-3, "health = max(100 - 15.5, 0) = 84.5 [M 0x190504 sub.s / 0x190510 MAX.s], got {}", h2.health);
+        // The 0-floor: a hit past death stores exactly 0 [M 0x190510 MAX.s with f0 = 0.0].
+        let mut h3 = PlayerHealth { health: 0.4, armour: 0.0, flash: 0.0, dir_bits: 0, flashbang: 0.0, hit_push: 0.0, flash_total: 0.0, flash_alpha: 0.0 };
+        h3.pain(&mut rng, 1.0, 2, 0x0700_0021);
+        assert_eq!(h3.health, 0.0);
     }
 
     #[test]

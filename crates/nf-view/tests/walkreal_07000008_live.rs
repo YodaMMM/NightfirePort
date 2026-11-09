@@ -513,7 +513,128 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             // later leg while two guards stood in GoToGoalPosition 0x63 just outside at (154.0,
             // 43.0, −120.1) (measured on the seven-bone sight build; the arrival spot depends on
             // the run's earlier fights).
+            //
+            let door_i = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
+                .position(|d| (d.pos[0] - 154.5).abs() < 1.5 && (d.pos[2] + 121.3).abs() < 1.5);
+            // THE SWING-ARC GUARDS (latch-walks-3, measured with the temporary NF_DOORPROBE):
+            // with the contact-turn rule's guards parked in the doorway, every E press opens the
+            // leaf for ~2 ticks before Door_ReactToHit's anti-crush ([M 0x135980]) reverses it
+            // shut on the guard capsule 0.55 u west — probe: press → 0x2→0x8 → contact
+            // (153.97, 43.00, −121.05) lz +0.55 f +0.55 > eps while OPENING → 0x8→0x10 → closed,
+            // 1065 cycles without one full swing. The door code is the game's ([M 0x135be0 /
+            // 0x135980]); what a player does first is kill the guard shooting from inside the
+            // room with him (measured #5 at (157.95, 43.00, −117.14) AIM_STAND_FIRE 1.9 u from
+            // the door stop — down in one stand, health 100.0 after). The gate is the arc itself
+            // on the difficulty-1 walk only: a living team-1 guard within 2.4 u of the door (the
+            // measured leaf-tip + capsule reach — the reverser MUST be inside it, a bystander
+            // at 2.4-3.0 does not hold the door), and the d1 difficulty keeps the d2/d3 sisters'
+            // timelines byte-exact (not one extra tick on their code path). The d1 real-damage
+            // sister shares _at(1) and is green — its arc is clear, so its path is unchanged
+            // too. The doorway pair (#7/#8, 0x73/0x74 strafes at d 2.33/2.68) held the arc
+            // through every player move tried this session: re-press, a 900-tick back-off
+            // settle (their no-sight combat does not decay), the fusebox-nook slide #25 (opens
+            // on E but its passage does not take Bond out), and shooting through the closed
+            // leaf (no sight — stand_and_fire held). batch-1109a-fix settled it: the game has no
+            // drone push out of a swinging leaf (the bounce is the game's too [L 2026-11-09]),
+            // and the root-point contact was the port's stand-in — the guards' collide capsule
+            // now meets the leaf itself [M 0x140e90 / 0x1ebaa8], so the leaf swings far enough
+            // to open a gap on the guard behind it, and the walk shoots him through it (below).
+            let arc_occupied = difficulty == 1 && door_i.is_some_and(|di| {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let dp = sim.drones.doors.list[di].pos;
+                sim.drones.list.iter().any(|g| {
+                    g.present && g.enabled && !g.corpse && g.health > 0.0 && g.team == 1
+                        && ((g.pos[0] - dp[0]).powi(2) + (g.pos[2] - dp[2]).powi(2)).sqrt() < 2.4
+                        && (g.pos[1] - dp[1]).abs() < 4.0
+                })
+            });
+            if arc_occupied {
+                let mut fought = 0;
+                loop {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let b = sim.bond.pos;
+                    let target = (0..sim.drones.list.len())
+                        .filter(|&i| {
+                            let g = &sim.drones.list[i];
+                            g.present && g.enabled && !g.corpse && g.health > 0.0 && g.team == 1
+                                && ((g.pos[0] - b[0]).powi(2) + (g.pos[2] - b[2]).powi(2)).sqrt() < 3.0
+                                && (g.pos[1] - b[1]).abs() < 4.0
+                        })
+                        .min_by(|x, y| {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            let b = sim.bond.pos;
+                            let (px, py) = (sim.drones.list[*x].pos, sim.drones.list[*y].pos);
+                            let dx = (px[0] - b[0]).powi(2) + (px[2] - b[2]).powi(2);
+                            let dy = (py[0] - b[0]).powi(2) + (py[2] - b[2]).powi(2);
+                            dx.total_cmp(&dy)
+                        });
+                    let Some(gi) = target else { break };
+                    eprintln!("[08] {name}: the arc guard #{gi} at tick {} — the door first", w.total_ticks);
+                    let killed = w.switch_to_gun(name) && w.stand_and_fire(gi, 900);
+                    for _ in 0..90 {
+                        let p = w.scene.sim.as_ref().unwrap().bond.pitch;
+                        if p.abs() < 0.01 { break; }
+                        w.tick(Input { look: (-p).clamp(-0.08, 0.08), ..Default::default() }, false);
+                    }
+                    eprintln!("[08] {name}: arc guard #{gi} {} (killed {killed}) at tick {}, health {:.1}",
+                        if killed { "down" } else { "held" }, w.total_ticks,
+                        w.scene.sim.as_ref().unwrap().drones.health.health);
+                    fought += 1;
+                    if fought >= 4 { break; }
+                }
+            }
             w.walk_to(Wp { at, act: Act::Use { use_ticks: 240 }, arrive: 0.5 }, name);
+            if arc_occupied {
+                if let Some(di) = door_i {
+                    for _ in 0..90 {
+                        let st = w.scene.sim.as_ref().unwrap().drones.doors.list[di].state;
+                        if st & 0x4 != 0 { break; }
+                        w.tick(Input::default(), false);
+                    }
+                    let st = w.scene.sim.as_ref().unwrap().drones.doors.list[di].state;
+                    eprintln!("[08] {name}: the door after the press: state {st:#x} at tick {}", w.total_ticks);
+                    // batch-1109a-fix: the leaf now swings until it meets a guard's collide
+                    // capsule [M 0x140e90 mask 0x800 → Collide_Intersect 0x1ebaa8's CylGeom
+                    // refine] and the game bounces it on a guard who stays there [L 2026-11-09:
+                    // opened to 0.4138, reversed, never OPEN]. The game does not push him out of
+                    // the sweep [M NDrone2_DealWithObjHit 0x13fff0: a door hit lands in the default
+                    // arm, inert for every drone type but 0x1d]. A player at a door that keeps
+                    // bouncing shoots the guard behind it through the gap the swing opens, then
+                    // presses again.
+                    for round in 0..4 {
+                        let (open, target) = {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            let dp = sim.drones.doors.list[di].pos;
+                            let open = sim.drones.doors.list[di].state & 0x4 != 0;
+                            let t = (0..sim.drones.list.len()).find(|&i| {
+                                let g = &sim.drones.list[i];
+                                g.present && g.enabled && !g.corpse && g.health > 0.0 && g.team == 1
+                                    && ((g.pos[0] - dp[0]).powi(2) + (g.pos[2] - dp[2]).powi(2)).sqrt() < 2.4
+                                    && (g.pos[1] - dp[1]).abs() < 4.0
+                            });
+                            (open, t)
+                        };
+                        if open { break; }
+                        let Some(gi) = target else { break };
+                        let killed = w.switch_to_gun(name) && w.stand_and_fire(gi, 900);
+                        for _ in 0..90 {
+                            let p = w.scene.sim.as_ref().unwrap().bond.pitch;
+                            if p.abs() < 0.01 { break; }
+                            w.tick(Input { look: (-p).clamp(-0.08, 0.08), ..Default::default() }, false);
+                        }
+                        eprintln!("[08] {name}: the guard behind the leaf #{gi} {} (round {round}) at tick {}, health {:.1}",
+                            if killed { "down" } else { "held" }, w.total_ticks,
+                            w.scene.sim.as_ref().unwrap().drones.health.health);
+                        w.walk_to(Wp { at, act: Act::Use { use_ticks: 240 }, arrive: 0.5 }, name);
+                        for _ in 0..90 {
+                            if w.scene.sim.as_ref().unwrap().drones.doors.list[di].state & 0x4 != 0 { break; }
+                            w.tick(Input::default(), false);
+                        }
+                        let st = w.scene.sim.as_ref().unwrap().drones.doors.list[di].state;
+                        eprintln!("[08] {name}: the door after the re-press: state {st:#x} at tick {}", w.total_ticks);
+                    }
+                }
+            }
             continue;
         }
         w.walk_nav_to(at, name, 1.5);
@@ -826,6 +947,26 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         }
     }
     assert!(flying, "the gate ch 5 opened the route flight (state 1/2) [M 0x17dbb8 head]");
+    // hind-flight-pin: the flight record starts HERE, at the gate opening — the same every-30-
+    // frames (pos, state, path, t) samples the fight loop takes, through whatever the walk does
+    // before the fight (the 00 Agent pane shoot-out, the rocket switch). The pin below reads the
+    // whole observed flight; a fight that wins in three straight hits (466 ticks, 87.3 u from the
+    // fight's start alone — measured on batch-1109a-fix) still has the gate-to-death flight.
+    let pre_fight: std::rc::Rc<std::cell::RefCell<Vec<([f32; 3], u16, Option<usize>, f32)>>> = Default::default();
+    let pre_fight_frame: std::rc::Rc<std::cell::Cell<u32>> = Default::default();
+    {
+        let rec = pre_fight.clone();
+        let last = pre_fight_frame.clone();
+        w.on_step = Some(Box::new(move |scene: &nf_view::scene::Scene, _| {
+            let sim = scene.sim.as_ref().unwrap();
+            if sim.drones.frame % 30 == 0 && sim.drones.frame != last.get() {
+                last.set(sim.drones.frame);
+                if let Some(c) = sim.drones.copters.iter().find(|c| c.out == 0x4b) {
+                    rec.borrow_mut().push((c.pos(), c.state, c.path, c.t));
+                }
+            }
+        }));
+    }
     // 00 Agent (difficulty 3): SHOOT OUT the carriage's north and south panes before the fight.
     // The cabin box stops the eye rays 0.4-3.6 u out in every direction [L the run sweeps] and
     // there is NO floor outside to walk to (the probe: floor_below is None at every candidate
@@ -1055,7 +1196,10 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     let mut cross_still = 0u32;
     // hind-flight-pin: the every-30-ticks flight record (pos, state, path, t) [M Copter_Move
     // 0x17d628 / Copter_Update 0x17dbb8].
-    let mut flight_samples: Vec<([f32; 3], u16, Option<usize>, f32)> = Vec::new();
+    w.on_step = None;
+    let mut flight_samples: Vec<([f32; 3], u16, Option<usize>, f32)> = pre_fight.borrow().clone();
+    // One sample per frame: the gate record's last frame is not sampled twice.
+    let mut last_sample_frame = if flight_samples.is_empty() { u32::MAX } else { pre_fight_frame.get() };
     // The reposition state: Bond arrives INSIDE the bottom terminal (the ride's end (112, 13.5,
     // −179.7) sits in a walled box — the eye ray stops at x ≈ 110.4/113.6 and z ≈ −176.6/−182.2
     // in every direction, eye height [D the measured stops]). The machine's circuit is outside,
@@ -1083,7 +1227,8 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         }
         // hind-flight-pin: the fight log — every 30 ticks to the death [M the death tail writes
         // ch 0x4B at 0x17e3bc-0x17e3c8].
-        if sim.drones.frame % 30 == 0 {
+        if sim.drones.frame % 30 == 0 && sim.drones.frame != last_sample_frame {
+            last_sample_frame = sim.drones.frame;
             let c = &sim.drones.copters[ci];
             flight_samples.push((c.pos(), c.state, c.path, c.t));
             eprintln!("[08 flight] f{} pos ({:.2},{:.2},{:.2}) state {} path {:?} t {:.2} dmg {:.1}/{:.0} bullets {}",

@@ -330,7 +330,7 @@ fn self_blocker_hostile(sim: &nf_view::scene::Sim, blocker: Option<usize>) -> bo
 /// within 48 u is actually hitting Bond (a hit in the last 600 frames — the snipers'
 /// observed beat is 170-360 frames [L the real-health run's fight traces]) and whose STRICT
 /// gun rays clear from here (`DamageLog::exposed_part_gun_rays`).
-fn yard_sniper_stands(w: &mut Walker, label: &str, max: usize) {
+pub fn yard_sniper_stands(w: &mut Walker, label: &str, max: usize) {
     if !YARD_AIMED_STANDS.with(|c| c.get()) { return; }
     // The east-ledge / pre-climb / ladder-top sweep: every alive weapon-0x1e hostile within
     // `range` u gets one capped still-gate stand (the strict gun-ray aim keeps a covered

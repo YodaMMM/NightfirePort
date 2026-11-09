@@ -373,7 +373,7 @@ pub struct DoorMover {
     /// The body capsule (A, B, radius) the refine's `Intersect_CylGeom` contact runs on: the game
     /// drives the movement push and the contact with one HITTEST in one pass [M `Collide_Update`
     /// 0x1ea398 → `Collide_Intersect` 0x1ebaa8] — the player's body HITTEST (the BLData+0x740
-    /// arms). A guard's entry (its swept root point at 0.4) is carried but not refined.
+    /// arms), or a guard's collide HITTEST (pos+0.4 .. pos−0.6, r 0.4 [M 0x140e90:91-121]).
     pub body: (V3, V3, f32),
     pub centre: V3,
     /// class 3 — the player: the contact selection takes it unconditionally [M 0x135980:65].
@@ -826,7 +826,7 @@ impl Doors {
     /// before it mirrors the survivors onto the door's own `+0xD0` list. So the door's
     /// `Door_ReactToHit` sees a mover only when its capsule touches the leaf, not when it merely
     /// stands inside the sphere reach (a player 1.7 behind a hinge reversed every swing). The
-    /// refine runs for the player's entry; the guards' entries keep the sphere stage (below).
+    /// refine runs for every entry: the guards' collide HITTEST is mask 0x800 too [M 0x140e90:91-121].
     /// `Collide_Intersect` returns before the refine when the object has no coll data
     /// (`obj+0xd8 == 0` [M 0x1ebaa8 head]), keeping the pick's distance: a door with no shape in
     /// `world` (or no `world`, the unit tests) keeps the sphere-only contact.
@@ -856,12 +856,15 @@ impl Doors {
                         world.and_then(|w| if d.glist != 0 { w.shape(d.glist) } else { None })
                             .map(|t| t.iter().map(|t| t.map(|p| transform(&d.matrix, p))).collect())
                     });
-                    // The player only: the guards' collide HITTEST (`NDrone2_Collision` 0x140e90's
-                    // capsule arms) is unported — their mover is a swept root point stand-in, and
-                    // refining a stand-in against the leaf would decide on geometry the game never
-                    // tests. The guards keep the sphere-stage contact [S].
-                    if let (true, Some(tris)) = (m.player, shape) {
-                        if !CollisionWorld::capsule_meets_tris(m.body.0, m.body.1, m.body.2 + CONTACT_SLACK, tris) { continue; }
+                    // The refine runs for every mover with mask 0x800: the player's body HITTEST and
+                    // the guards' collide HITTEST (`NDrone2_Collision` 0x140e90:91-121 writes +0x464 =
+                    // 0x800; `Collide_Intersect` 0x1ebaa8:234-296 picks the `Intersect_CylGeom` arm by
+                    // that mask alone).
+                    if let Some(tris) = shape {
+                        // The slack is the player's (his movement push resolves him to the radius
+                        // before this test); the guards' capsule is tested as it stands.
+                        let slack = if m.player { CONTACT_SLACK } else { 0.0 };
+                        if !CollisionWorld::capsule_meets_tris(m.body.0, m.body.1, m.body.2 + slack, tris) { continue; }
                     }
                     self.contacts[i].push(DoorContact { centre: m.centre, player: m.player, valid: m.valid });
                 }

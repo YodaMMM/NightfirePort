@@ -286,9 +286,23 @@ pub fn mp_damage(r: &PainRules, amount: f32, part: i16) -> f32 {
     d
 }
 
-/// The armour + health half of `Player_HandlePain` [M 0x1902c8:82-134] (pain type 0 — bullets and
-/// blasts both arrive as type 0, armourFraction 1.0): `absorbed = min(d, armour)`, `armour −=
-/// absorbed`, `health = max(health − (d − absorbed), 0)`, below 1 → 0. Returns (health, armour).
+/// The armour + health half of `Player_HandlePain` [M 0x1902c8:82-134] — the SP-human and MP-human
+/// pain funnel. Bullets arrive as type 0 (`Player_DealWithObjHit` 0x194458:194-196 passes `0` as
+/// the type and the HITDATA+0x52 part); blasts arrive through `Player_Hurt` 0x196060, which leaves
+/// the type register a2 carrying its caller's VECTOR* argument — never 1..7, so the type switch's
+/// default arm applies with armourFraction 1.0 [M 0x1902c8 prologue 0x1902d4-0x1902ec: a2 is the
+/// zero-extended type the s3 switch reads, a3 the sign-extended part; 0x19606c sets a3 = −1].
+/// Either way armourFraction is 1.0: `absorbed = min(d, armour)` — a FLOAT min, the EE's MIN.s at
+/// 0x1904ec, NOT an `(int)` truncation (the `(int)` casts the decompile prints at :103/108 are
+/// Ghidra's p-code rendering of the MIN.s/MAX.s ops; GCC emits `cvt.w.s` for its real casts, see
+/// the bloom's pinned truncation at 0x12c7a0) — then `armour −= absorbed`,
+/// `health = max(health − (d − absorbed), 0)` [M MAX.s 0x190510], below 1 → 0. Returns
+/// (health, armour).
+///
+/// The MP BOTS drain a different store: `BOT_handlePain` 0x125ed8 keeps armour as a byte
+/// (DroneTable+0x769) written through `(char)(int)` [M 0x125ed8:100-104], so a fractional absorb
+/// rounds the byte down while the health keeps the float remainder. The port does not sim bot pain
+/// (this fn is the human path); the byte law stays unported (armour-absorb-int).
 pub fn apply_pain(health: f32, armour: f32, d: f32) -> (f32, f32) {
     let absorbed = if d < armour { d } else { armour };
     let armour = armour - absorbed;
@@ -892,6 +906,18 @@ mod tests {
         assert_eq!(apply_pain(10.0, 0.0, 50.0), (0.0, 0.0));
         // Sister: no armour → the full amount reaches health.
         assert_ne!(apply_pain(100.0, 0.0, 40.0), apply_pain(100.0, 25.0, 40.0));
+    }
+
+    /// armour-absorb-int: the human MP path keeps the float fraction end to end — no `(int)`
+    /// truncation of the absorb or the health [M 0x1902c8 disasm 0x1904ec MIN.s / 0x190510 MAX.s;
+    /// the `(int)` casts in the decompile are Ghidra's p-code rendering of the EE MIN/MAX ops,
+    /// while real casts are `cvt.w.s` — the bloom's pinned truncation at 0x12c7a0]. Sister: the
+    /// truncating law would return (74.0, 0.0) in the second assert.
+    #[test]
+    fn mp_pain_keeps_the_float_fraction() {
+        assert_eq!(apply_pain(100.0, 50.0, 28.5), (100.0, 21.5));
+        assert_eq!(apply_pain(100.0, 3.0, 28.5), (74.5, 0.0));
+        assert_eq!(apply_pain(10.0, 0.0, 9.5), (0.0, 0.0), "below 1 → 0 [M 0x1902c8:131-134]");
     }
 
     #[test]

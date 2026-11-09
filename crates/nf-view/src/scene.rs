@@ -3677,6 +3677,21 @@ impl Sim {
                 self.bond.jump_locked = self.level == 0x0700_0007 && !self.drones.channels.on(0x48);
                 { let _pphase = nf_game::prof::scope("phase: player move");
                 self.bond.tick_ctx(&self.world, &ctx, &input); }
+            } else {
+                // The collide slot still runs when the walk tick does not:
+                // - dead (the SP death sequence or a net-dead slot): `Player_CollisionHandler`
+                //   0x1949a8 is the dead class's collide slot and runs every frame [M
+                //   obj-tag-player.md:18 + Collide_Update 0x1ea398:55-69] while `Player_Update`'s
+                //   dead branch runs no movement [M 0x193600:316-319] — the port's frozen body
+                //   keeps its bookkeeping (BL+0x95F clear, the feet ray, the grounded history,
+                //   the fall timer, the void latch, the ceiling arm [M :21-24,76-82,97-108,
+                //   168-175]).
+                // - mounted (Player_Disable froze BL+0x94A = 0 [M 0x195f70:16]): the handler
+                //   returns right after the BL+0x95F clear [M 0x1949a8:24-25].
+                self.bond.icon_ctx = 0xFF;
+                if self.drones.death.active || net_dead {
+                    self.bond.dead_contacts_tick(&self.world);
+                }
             }
             // Player_CollisionHandler 0x1949a8:97-108: while airborne (grounded history 0) below
             // y −10.0 on 07000012 the handler latches switch_channels[0x7C] = 1 every tick
@@ -7666,6 +7681,11 @@ pub struct Scene {
     /// 0x1e5fb8:79) skip them: the placed doors are invisible during a cut-scene. Keyed by
     /// placement index; the palette pass collapses their slots while the script camera renders.
     pub door_scene_hidden: std::collections::HashSet<usize>,
+    /// The script-created entities (by glist hash) whose glist flags carry 0x40000: `Control_SetGList`
+    /// 0x134960:14-15 clears their obj+0xF8 bit 0x10, so `View_AddObjects` 0x1e62d8:30 skips them while
+    /// the scene camera renders (object_display_mask 0x10). 0700000b's lift cab 0x02000367 (0x40080) and
+    /// lift_glass 0x02000421 (0x40081) [D scene_entity_glist_census_0b].
+    pub script_scene_hidden: std::collections::HashSet<u32>,
     /// Searchlight LOD slots: slot `parts.len() + k` draws the LOD (broken) mesh of part `sl_lod[k]`,
     /// shown iff that part's `lod_next` (Control_NextLOD) is set.
     pub sl_lod: Vec<u16>,
@@ -9362,6 +9382,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // can make; each shows only while the simulation has the object.
         let mut script_objects = 0;
         let mut script_billboards: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut script_scene_hidden: std::collections::HashSet<u32> = std::collections::HashSet::new();
         let mut script_tweak_alpha: std::collections::HashSet<u32> = std::collections::HashSet::new();
         if let Some(m) = level.main_map() {
             let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
@@ -9570,6 +9591,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 if owned_only.contains(&h) && level.maps[map].objects[object].flags & 0x10 != 0 { continue; }
                                 // The billboard set: glist flags bit 0x8 (`View_DrawObjectGlist`'s test).
                                 if level.maps[map].objects[object].flags & 0x8 != 0 { script_billboards.insert(hash); }
+                                if level.maps[map].objects[object].flags & 0x40000 != 0 { script_scene_hidden.insert(hash); }
                                 // pc-screen: the key alpha reaches the draw only through blended batches (PRIM ABE).
                                 let mut bs = level.maps[map].objects[object].gfx.leaves.iter().flat_map(|l| l.batches.iter()).peekable();
                                 if bs.peek().is_some() && bs.all(|b| b.prim & 0x40 != 0) { script_tweak_alpha.insert(hash); }
@@ -10923,7 +10945,10 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // Hint_Create's stage gate 0x1b3248) — the game loads with GameState+0x28 already
             // holding the menu's pick [M C_SBNFDFCTY 0x216ca8:15].
             drones.set_difficulty(difficulty);
-            drones.attach_level_id(level, d.level_id);
+            // The scoped world goes in with the attach: `RB_Create`'s `build_LinkToRoom`
+            // 0x1c9680 → `build_FindCel` 0x1c8cb0 create pick needs the tie-break geometry
+            // (`Rbodies::create_scoped`).
+            drones.attach_level_world(level, d.level_id, Some(&world));
             // mp-lobby-settings: the MP creates' enviro-mod gates. `GunImp_Create` 0x131f20 returns
             // 0 in MP while Gun Emplacements (+0x1B8) is off and otherwise mounts
             // `TurretGuns[weapon set]` (Random: `Rand_Rand(10)`) [M :52-63]; `Destroy_Create`
@@ -11171,6 +11196,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         }
         Scene { shard_tex, particle_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, door_dims, sl_dims, dynobj_matrices, rotor_placements, rbody_placements, mine_placements, gunimp_placements, script_tweak_alpha,
             door_scene_hidden,
+            script_scene_hidden,
             sl_lod,
             corona_pos,
             corona_slot0,
@@ -12057,6 +12083,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             }
             let far = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
             if let Some((h, si, hash, k)) = a.script {
+                // 0x40000 script entities are invisible while the scene camera renders [M Control_SetGList
+                // 0x134960:14-15, View_AddObjects 0x1e62d8:30] - 0700000b's lift cab and glass.
+                if self.script_scene_hidden.contains(&hash) && self.sim.as_ref().is_some_and(|s| s.script_camera().is_some()) { return far; }
                 // dragon-safe-follow: a script's 0xF0 entity IS the pickup it created [M 0x1d8968 →
                 // `Pickup_Create`]; the game stops drawing it once taken (deleted, respawn 0) or while
                 // it waits to respawn (hidden) [M 0x18e650's tail]. This slot draws it at the stream's

@@ -769,7 +769,12 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // fixes and door[42] shut on the shot line; the carried P2K still held 4 rounds (it came up
     // dry-swapped at t1800 of the same run). A player takes the precise shot with the pistol
     // (spread 0.0 [L ee_start_05.bin weapon_data 0x02 +0x24/+0x98]).
-    if difficulty >= 3 && w.scene.sim.as_ref().unwrap().gun.weapon == 0x1a {
+    // Agent (batch-1109c-fix): the same take. The guard door-contact and drone contact-turn
+    // rules shifted the shared stream, and the d2 walk now reaches this mark holding the 0x1a
+    // as well. Its rounds missed by 4.26/4.32/3.68/13.28 u, the bracket ran out of fixes, and
+    // door[42] shut on the line (master's stream landed the 5th round by luck after misses of
+    // 2.24/2.71/0.92/2.63 u). The pistol shot is the one the walk's own doc names.
+    if difficulty >= 2 && w.scene.sim.as_ref().unwrap().gun.weapon == 0x1a {
         draw_persist(&mut w, 0x02, "the fence shot's pistol");
     }
     let d = shoot_mine(&mut w, 447, [0.0, 42.3, 17.29], "the south-corridor fence #447 from the threshold");

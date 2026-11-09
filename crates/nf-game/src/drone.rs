@@ -1954,9 +1954,9 @@ pub struct Drone {
     /// [M jump table 0x2f4e40 entry 3 → 0x1405c0; control_funcs 0x26f890 entry 3 =
     /// `Player_Update`]); `Drone_CollisionHandler` 0x140968:73 clears it at the handler's top every
     /// tick (the NPC-system-off early return :59-61 skips the clear — the port's hold/freezes gate
-    /// the whole tick instead). Reader: `DroneAnim_PreTransCallback` 0x13b490:98-102 — the latch set
-    /// rotates the anim's root motion by the +0x90 hit direction (the bump's push-through; the port
-    /// does not model that arm yet — docs/port-map/guard-ai.md PreTransCallback partial). No other
+    /// the whole tick instead). Reader: `DroneAnim_PreTransCallback` 0x13b490:104-116 (disasm
+    /// 0x13b5a8-0x13b624) — the latch set rotates the anim's root motion by the +0x90 hit
+    /// direction, zeroing its into-the-contact component (`objhit_turn_step`, ported). No other
     /// reader found in the sweep [S]. Port: `objhit_latch` + `objhit_dir`.
     pub objhit_latch: bool,
     /// `Drone+0x90` — the contact direction snapshot [M 0x13fff0 case 3 disasm 0x1405f0-0x140604:
@@ -1976,6 +1976,50 @@ fn ailog() -> bool {
 }
 
 fn norm(v: V3) -> V3 { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt(); if l > 0.0 { [v[0] / l, v[1] / l, v[2] / l] } else { v } }
+
+/// The obj-hit latch's reader — `DroneAnim_PreTransCallback` 0x13b490:104-116 (disasm
+/// 0x13b5a8-0x13b624, checked because the decompile drops the y store): while `Drone+0x26`
+/// stands (this tick's body bump — set by the previous tick's contact pass, cleared at
+/// `Drone_CollisionHandler` 0x140968:73's top; the anim phase runs BEFORE the handler in both),
+/// the anim's world root motion loses its component along the `+0x90` hit direction:
+/// `rot = Vec_DirToRot(+0x90)` [M 0x1e3218:8-12 — `atan2f(x, z)` yaw, `-atan2f(y, √(x²+z²))`
+/// pitch, roll 0], `M = RotMatrix(rot)` [M 0x1e2368], `out = ApplyMatrixLV(Mat_Inverse(M),
+/// root)` [M 0x1e3578 — the pure transpose + negated translation]. The multiply is the game's
+/// ROW-vector form — `ApplyMatrixLV` 0x1e48c8 computes `out_j = Σ_i v_i·M[i][j]` (disasm: the
+/// three reads of each M column at +0x00/+0x10/+0x20, +0x04/+0x14/+0x24, +0x08/+0x18/+0x28) —
+/// so `out = root·Minv = root·Mᵀ` and **out.z = M's z-ROW·root** = (for a flat contact, pitch
+/// ≈ 0) `unit(+0x90)·root` — the component ALONG the hit direction, NOT a mirrored z-column
+/// (the transposed-column reading would be `(−sin yaw, ·, cos yaw)·root`; the v·M convention
+/// cancels that transpose). When `out.z > 0` (the root pushing INTO the contact — `+0x90`
+/// points guard→contact) `out.z = 0` and the vector rotates back by M through the same v·M
+/// form (`ApplyMatrixLVI` 0x1e4960); only
+/// x and z are stored to the root (disasm 0x13b614-0x13b620 `swc1` +0/+8 — the root's own y
+/// is NEVER rewritten). Motion away from / tangential to the contact survives untouched
+/// (`out.z ≤ 0` skips the whole arm, 0x13b600 `bc1f`). The arm also clears the game's
+/// zero-root flag (disasm 0x13b624 `v1 = 0`, overriding the `+0x38`/`+0x23` zero pending) —
+/// the port's zero (`move_by`'s probe reject) is the port's own stand-in, nothing to override.
+/// The `step` arrives as the world x/z of the root motion (the game's `param_3` is world — the
+/// boundary clip right after inverts the OBJ's world matrix to read it); the game's root y at
+/// this point is the speed-ramp delta (`+0xa0 − +0xa4` written at 0x13b490:71 when `+0x1a==0`)
+/// which the port does not model — with y 0 the clamp's x/z effect is exact.
+fn objhit_turn_step(step: [f32; 2], dir: V3) -> [f32; 2] {
+    let yaw = crate::trig::atan2f_libm(dir[0], dir[2]);
+    let r2 = nf_formats::ps2float::add(nf_formats::ps2float::mul(dir[0], dir[0]), nf_formats::ps2float::mul(dir[2], dir[2]));
+    let pitch = -crate::trig::atan2f_libm(dir[1], nf_formats::ps2float::sqrt(r2));
+    let m = crate::sky::rot_matrix([pitch, yaw, 0.0]); // rows: M[r][c] = m[r*4+c]
+    // Minv = Mat_Inverse(M) [M 0x1e3578]: the 3×3 transpose (the negated translation rows are
+    // zero — RotMatrix wrote a rotation-only matrix).
+    let mut minv = [0.0f32; 12];
+    for r in 0..3 { for c in 0..3 { minv[r * 4 + c] = m[c * 4 + r]; } }
+    let mut out = [step[0], 0.0, step[1]];
+    crate::sky::apply_matrix_lvi(&minv, &mut out); // out = Minv·root [M 0x1e48c8]
+    if out[2] > 0.0 {
+        out[2] = 0.0;
+        crate::sky::apply_matrix_lvi(&m, &mut out); // ApplyMatrixLVI back by M [M 0x1e4960]
+        return [out[0], out[2]]; // only x/z stored back — the root's y is never rewritten
+    }
+    step
+}
 
 /// Rodrigues' rotation about the unit `axis` by `ang` radians, as a 4×4 (the pose rotations of
 /// `AnimObjectHeadTrack` 0x1bf618 / `AnimObjectAimAt` 0x1bfe58). exact-sine-sites-2 (G-046): the
@@ -3410,7 +3454,14 @@ impl Drone {
         };
         if let (Some([lx, lz]), Some(_)) = (delta, root) {
             let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
-            let step = [lx * c + lz * s, -lx * s + lz * c];
+            let mut step = [lx * c + lz * s, -lx * s + lz * c];
+            // The obj-hit latch's reader [M 0x13b490:104-116]: while the bump latch stands the
+            // root motion loses its into-the-contact component (objhit_turn_step's doc). The
+            // game's arm also clears the +0x38/+0x23 zero-root pending — the port's zero is the
+            // probe reject inside move_by, its own stand-in, so there is nothing to override.
+            if self.objhit_latch {
+                step = objhit_turn_step(step, self.objhit_dir);
+            }
             // glass-breach-guards-4: the movement was carried by the anim root motion — the game's
             // movement pass copies +0x30 → +0x40 AFTER the anim/root-motion processing in the same
             // per-object walk [M 0x1336f8:212], so such a step reads SqDist(pos, prev) = 0 in the
@@ -14148,7 +14199,17 @@ impl Drones {
     /// carries it from the first tick on. Test/inspection accessor (`env_pending` is internal).
     pub fn pending_env_drop_type(&self) -> Option<u8> { self.env_pending.as_ref().map(|(k, _)| *k) }
 
+    /// `attach_level` without the scoped collision world — the headless callers' original form
+    /// (the 0xD8 create picks then run the world-less bbox stand-in; the census tooling).
     pub fn attach_level_id(&mut self, level: &nf_formats::level::Level, level_hash: u32) {
+        self.attach_level_world(level, level_hash, None)
+    }
+
+    /// The attach with the scoped collision world — the scene build passes it (the game's
+    /// parsemap runs with the cel chains and collision loaded, so `RB_Create` 0x1d6bf0's
+    /// `build_LinkToRoom` 0x1c9680 → `build_FindCel` 0x1c8cb0 create pick has the geometry
+    /// its collision-ray tie-break needs).
+    pub fn attach_level_world(&mut self, level: &nf_formats::level::Level, level_hash: u32, world: Option<&crate::world::CollisionWorld>) {
         self.triggers = crate::triggers::build(level);
         // The AI points (`Drone_AIPoint` 0x137550; `parsemap_create_dynamic_objects` case 0xE9): type =
         // placement parameter 0 (the same word `Switch_Create` reads as the channel), position = the
@@ -14193,8 +14254,9 @@ impl Drones {
         // The monitor consoles (0x30) [M Monitor_Create 0x1b08b0 — same pass].
         self.monitors = crate::monitor::Monitors::create(level);
         // The kind-0xD8 rigid bodies (RB_Create 0x1d6bf0 via parsemap_create_dynamic_objects
-        // 0x1d04f0 case 0xD8 — the main map's placements, the parsemap-epilogue rule).
-        self.rbodies = crate::rigid_body::Rbodies::create(level);
+        // 0x1d04f0 case 0xD8 — the main map's placements, the parsemap-epilogue rule). The
+        // scoped world (when passed) gives the create pick the game's build_FindCel tie-break.
+        self.rbodies = crate::rigid_body::Rbodies::create_scoped(level, world);
         // The Q-Worm PCs (0x35) and switches (0x29) of `Player_Activate` 0x1a5170 (map-tower;
         // `parsemap_create_dynamic_objects` 0x1d04f0 cases 0x35/0x29, crate::useobj).
         let mm = level.main_map().unwrap_or(0);
@@ -21258,7 +21320,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // mirrored into both sides' +0xD0 [M 0x1ea398:160-233]; the consumer dispatch (player bump
         // msg 0x22, bullets 6/7/0x19/0x17, walls/doors the default arm = velocity zero + deflect
         // [M 0x13fff0:127-147]; doors reverse closing leaves only [M 0x135980:44-111]).
-        let drone_pre: Vec<V3> = self.list.iter().map(|x| x.pos).collect();
         // subtitles-do-spoken: deferred `Sound_DoSubtitle` adds (the per-drone `dr` borrow holds
         // the list; the helper needs `&mut self` — drained after the loop).
         for &(_, what, index) in &order {
@@ -22779,7 +22840,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             for (i, x) in self.list.iter().enumerate() {
                 if !x.present { continue; }
-                let pre = drone_pre.get(i).copied().unwrap_or(x.pos);
                 // fix-door-react-path2: the class-2 contact gate [M Door_ReactToHit 0x135980:47-72,
                 // docs/fields/drone.md +0x4F8 census] needs the AI-active bit 0x100 SET
                 // (`(ext+0x4F8 & 0x600) == 0 && (ext+0x4F8 & 0x100) != 0 && +0xAC > 0 &&
@@ -22787,8 +22847,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // alive drone (its enable channel off, pre-spawn waiting) never qualifies and never
                 // reverses a closing leaf. The port's `enabled` is the Enable(1)/Enable(0) mirror;
                 // the corpse bits 0x200/0x400 map to `corpse` and the health floor to `+0xAC > 0`.
+                // The guard's collide HITTEST [M NDrone2_Collision 0x140e90:91-121]: mask 0x800
+                // (+0x464), A = +0x3F0 = pos + up·0.4, B = +0x400 = pos + up·(0.4 − hip) (pos − 0.6,
+                // the capsule the body-contact pass above uses), r = +0x45C = 0.4. Mask 0x800 makes
+                // `Collide_Intersect` 0x1ebaa8 run the SAME `Intersect_CylGeom` refine on this capsule
+                // as on the player's (the arm is keyed on the HITTEST mask +0x94, not on the class
+                // [M 0x1ebaa8:234-296]), so a guard reaches the door's `+0xD0` list only when his
+                // capsule touches the leaf. (Was: the swept root point, sphere stage only.)
+                let top = [x.pos[0], x.pos[1] + 0.4, x.pos[2]];
+                let bottom = [x.pos[0], x.pos[1] - 0.6, x.pos[2]];
                 movers.push(crate::door::DoorMover {
-                    a: pre, b: x.pos, radius: 0.4, body: (pre, x.pos, 0.4), centre: x.pos,
+                    a: top, b: bottom, radius: 0.4, body: (top, bottom, 0.4), centre: x.pos,
                     player: false,
                     valid: !x.corpse && x.health > 0.0 && x.enabled,
                 });
@@ -23988,6 +24057,34 @@ mod tests {
         assert_eq!(Drones::aim_posed_mesh_t(&id, &tris, Some(&[0x03, 0x03]), true, true, a, b), None, "the 0x40 word drops it");
     }
     use crate::world::CollisionWorld;
+
+    /// The obj-hit latch's root-motion clamp [M 0x13b490:104-116, disasm 0x13b5a8-0x13b624]
+    /// against hand-computed cases from the decompile's own matrix products (RotMatrix 0x1e2368,
+    /// Mat_Inverse 0x1e3578 = the transpose, ApplyMatrixLV 0x1e48c8 / LVI 0x1e4960):
+    /// - dir due +z (yaw 0, pitch 0 → M = I up to the sinf(π/2) quirk): a step into the contact
+    ///   loses its whole z; a step away and a purely lateral step are returned untouched (the
+    ///   clamp fires only on STRICTLY positive out.z, 0x13b600 `bc1f`);
+    /// - a mixed step keeps its lateral part and drops the into-contact part;
+    /// - dir up-north at 45° (pitch −π/4): M = R_x(−π/4) rows [[1,0,0],[0,cp,sp],[0,−sp,cp]] —
+    ///   a unit +z step's into-dir half is removed, 0.5 survives.
+    #[test]
+    fn objhit_turn_clamp_removes_the_into_contact_component() {
+        let dir_north: V3 = [0.0, 0.0, 1.0];
+        // Into the contact: killed (the out.z slot reads ≈ +1 through the identity).
+        assert_eq!(objhit_turn_step([0.0, 1.0], dir_north), [0.0, 0.0]);
+        // Away from the contact: out.z < 0 — the whole arm is skipped, the step returns as-is.
+        assert_eq!(objhit_turn_step([0.0, -1.0], dir_north), [0.0, -1.0]);
+        // Purely lateral: out.z = 0 exactly — not STRICTLY positive — untouched.
+        let side = objhit_turn_step([1.0, 0.0], dir_north);
+        assert!((side[0] - 1.0).abs() < 1.0e-6 && side[1].abs() < 1.0e-6, "lateral survives, got {side:?}");
+        // Mixed: the into-contact z part goes, the lateral x part stays (identity frame).
+        let mixed = objhit_turn_step([0.5, 0.8], dir_north);
+        assert!((mixed[0] - 0.5).abs() < 1.0e-4 && mixed[1].abs() < 1.0e-5, "mixed → lateral only, got {mixed:?}");
+        // The 45° up-north contact: pitch −π/4 rotates the frame; a unit +z step projects to 0.5.
+        let dir_up_north: V3 = [0.0, 1.0, 1.0];
+        let half = objhit_turn_step([0.0, 1.0], dir_up_north);
+        assert!(half[0].abs() < 1.0e-5 && (half[1] - 0.5).abs() < 1.0e-4, "45° projection, got {half:?}");
+    }
 
     /// `DroneVision_SeekOpponentLOS` 0x175cb8:49-72's cursor over the seven view bones [M]. Only
     /// the head (index 2) clear: from an unseen start the cursor steps 1, 2 — the ray lands on the
@@ -25377,6 +25474,97 @@ mod abseil_tests {
         dr3.send(&d, &mut rng, 100, msg::ALARM);
         assert!(dr3.log.iter().any(|&(f, n)| f == 100 && n == state::ATTACK),
             "the alarm path keeps its own gates [M 0x177c18 case 0x1e]; log {:?}", dr3.log);
+    }
+
+    /// level-07-guest-hostile: `NDrone2_DSTATE_CivilianMission` 0x15d860 case 3's voice-0x10
+    /// flip — the arm 07000007's two voice-0x10 party guests (drones 22/55, kind-8 paths 3/7
+    /// [L guest census probe]) run on their patrol. NearArmedPerson's gates are prop 0x3c +
+    /// the reaction-acked sight `+0x228 & 4` + the DRAWN weapon (`DroneWeap_OpponentHasWeapon`
+    /// 0x17a4b8 → `NDrone2_ObjectIsArmed` 0x178768: kinds 2..0x46, 0x47 excluded, fists 1
+    /// unarmed) [M 0x1787c8:30-42]; the flip itself: `+0x4F8 |= 0x8000000`, prop 0x33's
+    /// once-shout (`+0x4FC |= 1`, `DroneAlertToObject(20, 20, 0.7625, msg 0x11, Bond)`,
+    /// `+0x4F8 |= 0x200000`), then `+0x44 = 1` (the team byte) and SetState(0x56); every other
+    /// voice → SetState(0x12 CivilianScared) [M 0x15d860:69-90].
+    #[test]
+    fn civilian_mission_flips_voice_0x10_to_the_hostile_team_on_the_armed_sight() {
+        // prop 0x3c/0x33 need REAL table wiring — `empty_data!`'s empty descs return 0 for every
+        // prop. One desc (every id → word 0, shift 0, masks[0] = 1) is enough: both props read
+        // the same bit and both are set to 1 (the game's props are per-bit; the arm only asks
+        // non-zero [M 0x1c7d98]).
+        let keep = (
+            CollisionWorld::empty(),
+            nf_formats::drone::DroneAnimData { states: Vec::new(), info: Vec::new(), tables: Vec::new() },
+            nf_formats::drone::PropertyTables { descs: vec![[0u8, 0u8]; 0x40], masks: vec![1u32], types: Vec::new() },
+            std::collections::HashMap::<u32, nf_formats::anim::Script>::new(),
+            nf_formats::weapon::WeaponData { records: Vec::new(), ammo_cap: Vec::new(), ammo_raw: Vec::new() },
+            nf_formats::tuning::Tuning::default(),
+            std::collections::HashMap::<u32, nf_formats::anim::Sequence>::new(),
+            std::collections::HashMap::<u32, nf_formats::character::Skin>::new(),
+            std::collections::HashMap::<u8, nf_formats::character::Skeleton>::new(),
+            crate::nav::Network::default(),
+            Vec::<crate::cover::CoverNode>::new(),
+            nf_formats::hitbox::CollisionBones { human: Vec::new(), astronaut: Vec::new() },
+            Vec::<crate::aivolume::AiVolume>::new(),
+            std::collections::HashMap::<u32, crate::pickup::Model>::new(),
+            Vec::<crate::aipoint::AiPoint>::new(),
+        );
+        let d = Data { tables: &keep.1, props: &keep.2, scripts: &keep.3, weapons: &keep.4, world: &keep.0, level: 0x0700_0007,
+            sequences: &keep.6, skins: &keep.7, skeletons: &keep.8, nav: &keep.9, covers: &keep.10, tuning: &keep.5,
+            hitboxes: &keep.11, volumes: &keep.12, sfx: None, models: &keep.13, surfaces: None, voices: None,
+            difficulty: 2, ai_points: &keep.14 };
+        let mut rng = Rng::new(0x5eed);
+        // The voice-0x10 guest mid-patrol, the armed sight acked.
+        let mut dr = drone_at([10.0, 0.0, 10.0]);
+        dr.voice_type = 0x10;
+        dr.team = 3;
+        dr.state = state::CIVILIAN_MISSION;
+        dr.vision_on = true;
+        dr.seen = true;
+        dr.bond_armed = true;
+        d.props.set(0x3c, &mut dr.props, 1);
+        d.props.set(0x33, &mut dr.props, 1);
+        dr.send(&d, &mut rng, 100, msg::UPDATE);
+        assert_eq!(dr.team, 1, "the voice-0x10 guest joins the hostile team (+0x44 = 1) [M 0x15d860:85-87]");
+        assert!(dr.log.iter().any(|&(_, n)| n == state::ATTACK),
+            "the voice-0x10 guest SetStates to Attack 0x56 [M 0x15d860:87-88] (settled in {:#04x} through Attack's own enter, shared machinery)", dr.state);
+        assert!(dr.scare_shouted, "the prop-0x33 once-shout latched (+0x4F8 & 0x200000) [M 0x15d860:78-84]");
+        assert!(dr.alert_bits & 1 != 0, "+0x4FC |= 1 before the shout [M 0x15d860:73-74]");
+        assert!(dr.pending_shout.is_some(), "DroneAlertToObject(msg 0x11, Bond) queued with Bond as the source [M 0x15d860:75-77]");
+        assert!(dr.own_sight, "+0x4F8 |= 0x8000000 before the switch [M 0x15d860:69]");
+
+        // Sister 1: the voice-0x12 walker beside him (drone 50, path 6) — the decompile's ELSE
+        // arm: CivilianScared, never the team flip [M 0x15d860:89-90].
+        let mut dr2 = drone_at([10.0, 0.0, 10.0]);
+        dr2.voice_type = 0x12;
+        dr2.team = 3;
+        dr2.state = state::CIVILIAN_MISSION;
+        dr2.vision_on = true;
+        dr2.seen = true;
+        dr2.bond_armed = true;
+        d.props.set(0x3c, &mut dr2.props, 1);
+        d.props.set(0x33, &mut dr2.props, 1);
+        dr2.send(&d, &mut rng, 100, msg::UPDATE);
+        assert!(dr2.log.iter().any(|&(_, n)| n == state::CIVILIAN_SCARED),
+            "the voice-0x12 walker scares [M 0x15d860:89-90] (settled in {:#04x} through CivilianScared's own enter, shared machinery)", dr2.state);
+        assert_eq!(dr2.team, 3, "the voice-0x12 walker never joins the hostile team");
+        assert!(dr2.scare_shouted, "the once-shout is the prop-0x33 arm, shared by both voices [M 0x15d860:71-84]");
+
+        // Sister 2: the SAME voice-0x10 guest and the UNARMED sight (fists, the whole party
+        // before ch 0x48) — NearArmedPerson returns 0 on the weapon gate [M 0x1787c8:38-42 via
+        // 0x17a4b8 + 0x178768], so no flip, no shout: the guest keeps walking his patrol.
+        let mut dr3 = drone_at([10.0, 0.0, 10.0]);
+        dr3.voice_type = 0x10;
+        dr3.team = 3;
+        dr3.state = state::CIVILIAN_MISSION;
+        dr3.vision_on = true;
+        dr3.seen = true;
+        dr3.bond_armed = false;
+        d.props.set(0x3c, &mut dr3.props, 1);
+        d.props.set(0x33, &mut dr3.props, 1);
+        dr3.send(&d, &mut rng, 100, msg::UPDATE);
+        assert_eq!(dr3.team, 3, "the unarmed sight never flips the team (the drawn-weapon gate) [M 0x17a4b8]");
+        assert_ne!(dr3.state, state::ATTACK, "the unarmed sight never attacks");
+        assert!(!dr3.scare_shouted, "the unarmed sight never reaches the shout arm [M 0x15d860:69]");
     }
 }
 

@@ -1643,3 +1643,161 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage_00agent() {
     // halves the stand time.
     walker::with_real_damage_head_hunting(|| the_door_band_exit_chains_to_07000006_walked_at(3))
 }
+
+/// The hurt-volume census (level-05-hurt-skip): every placement-0xE4 volume the level loads,
+/// with its box and params, and every team-1 guard with its distance to each volume's centre —
+/// the reach map the skip pin needs. The game's rule under pin: the drone pass skips the
+/// class-0x27 contact damage when the level IS 07000005, and skips voice-0x13 drones on every
+/// other level [M NDrone2_DealWithObjHit 0x13fff0 case 0x27 — disasm 0x1401fc-0x140248:
+/// `lw $a0, 0x3774($v0)` with the 0x2a0000 base set in the 0x140174 delay slot (GameState+0xC =
+/// *(0x2a3774), the level code) compared against 0x07000005 (`lui $v1, 0x700` / `ori $v1, 5`),
+/// beq → 0x140638 the undamaged return; otherwise `lhu $v1, 0xd8($s1)` — the voice halfword —
+/// compared against 0x13 (the compare value rides the level-beq's delay slot:
+/// `addiu $v0, $zero, 0x13`), beq → 0x14063c the undamaged return; the fall-through applies
+/// `Hurt_GetDamage` 0x17ea18 and parks death state 0x44 at health ≤ 0. The halfword has a second
+/// voice reader in the same function (0x140298, == 0x10) and two more in
+/// NDrone2_GetDroneTypeAttackTypeFriend 0x14cbd8 (== 0xb) / NDrone2_DoModeSettingsNEW 0x14c600
+/// (== 0x10) — the voice-type semantics is the field's settled reading].
+#[test]
+fn the_hurt_volumes_census_and_their_guards() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
+    w.wait(30);
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[05-hurt] {} hurt volumes:", sim.hurts.len());
+    for (i, h) in sim.hurts.iter().enumerate() {
+        let c = [(h.lo[0] + h.hi[0]) / 2.0, (h.lo[1] + h.hi[1]) / 2.0, (h.lo[2] + h.hi[2]) / 2.0];
+        eprintln!("[05-hurt] hurt {i}: kind {} damage {:.0} gate {} who {:#x} one_shot {} disabled {} lo ({:.2},{:.2},{:.2}) hi ({:.2},{:.2},{:.2}) tris {}",
+            h.kind, h.damage, h.gate, h.who, h.one_shot as u8, h.disabled as u8,
+            h.lo[0], h.lo[1], h.lo[2], h.hi[0], h.hi[1], h.hi[2], h.tris.len());
+        let mut reach = String::new();
+        for (j, d) in sim.drones.list.iter().enumerate() {
+            if d.team != 1 || !d.present { continue; }
+            let dxz = ((d.pos[0] - c[0]).powi(2) + (d.pos[2] - c[2]).powi(2)).sqrt();
+            if dxz < 60.0 {
+                reach.push_str(&format!(" g{j}(skin {:#x} d {dxz:.1} y {:.1})", d.skin, d.pos[1] - c[1]));
+            }
+        }
+        if !reach.is_empty() { eprintln!("[05-hurt]   guards within 60:{reach}"); }
+    }
+    eprintln!("[05-hurt] the guards:");
+    for (j, d) in sim.drones.list.iter().enumerate() {
+        if d.team != 1 || !d.present { continue; }
+        eprintln!("[05-hurt] guard {j}: skin {:#x} pos ({:.2},{:.2},{:.2}) voice {} health {:.0}",
+            d.skin, d.pos[0], d.pos[1], d.pos[2], d.voice_type, d.health);
+    }
+}
+
+
+/// Bond's side of the hurt-volume pin (level-05-hurt-skip): the player pass has NO level skip
+/// [M Player_DealWithObjHit 0x194458 — the class-0x27 arm applies Hurt_GetDamage with no
+/// state/who/level gate], so Bond touching a 05 plane takes its 1000. The walked descent is
+/// the route; the plane is hurt #3 (lo (80.78,5.11,96.66) hi (168.38,5.11,144.68), who 0 [L
+/// the census run]) and the death record (−1000.0 from the world) is the pin.
+/// IGNORED with the measured route ledger (level-05-hurt-skip, 2026-11-09 [L the runs on the
+/// branch]): the gatehouse leg walks clean (98.6,26,106.5), the steering descent reaches the
+/// lower lane y 16.79 at (117.5,16.8,114.4) and stalls at (123.3,14.1,122.9) — the lip past
+/// y 14.1 refuses the steering walker every leg (6 legs identical); the raw run+jump drive
+/// from the gatehouse wedges earlier, at (105.6,25.1,114.6) (the courtyard wall eats the
+/// sidesteps the walk_to stuck handler has). NEXT LEVER: the level doc's own descent — the
+/// nav-lenient walk from the armour-pickup leg (59.65,33.57,86.11) that reached the valley
+/// floor (42.5,8.9,88.3) [D docs/levels/07000005.md line ~1555's probe note], then north into
+/// hurt #4 (z 96.66+) whose floor y 4.38 is the contact; or the jump drive FROM the lower
+/// lane with the stuck handler's sidesteps alive.
+#[test]
+#[ignore = "005 hurt pin: the walked descent to hurt #3's plane stalls at the y-14.1 lip (6 legs identical, (123.3,14.1,122.9) [L the runs]); the run+jump drive wedges at (105.6,25.1,114.6); next lever: the doc's nav-lenient descent from the armour-pickup leg (59.65,33.57,86.11 -> the valley floor (42.5,8.9,88.3)), then north into hurt #4 (floor y 4.38)"]
+fn the_valley_plane_hurts_bond_walked() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
+    w.top_up_health = false;
+    w.wait(30);
+    w.walk_nav_to([98.6, 26.0, 106.5], "to the gatehouse (the proven truck-route leg)", 1.6);
+    let here = w.scene.sim.as_ref().unwrap().bond.pos;
+    eprintln!("[05-hurt] Bond at the gatehouse {:?} health {:.1}", here, w.scene.sim.as_ref().unwrap().drones.health.health);
+    assert!(walker::dxz(here, [98.6, 26.0, 106.5]) < 3.0, "the gatehouse leg really walked there");
+    // The steering walk east off the walkway's edge — the fall carries Bond into hurt #3's
+    // plane (the stick walk at [120, 4, 115]: past the edge, no nav — the walk_to steering
+    // drives the real stick toward the point, fall included). The stuck handler is lenient so
+    // the mid-air steering gives up cleanly.
+    let died = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // The slope's lip stalls the steering walker at y 14.1 [L the runs] — the run+jump
+        // drive (run_jump's input shape, no floor assert: the descent is the point) carries
+        // Bond over the lip into hurt #3's plane.
+        for t in 0..1500u32 {
+            let p = w.scene.sim.as_ref().unwrap().bond.pos;
+            if p[1] < 8.0 { break; }
+            let desired = (150.0f32 - p[0]).atan2(140.0 - p[2]);
+            let err = walker::wrap_pi(desired - w.scene.sim.as_ref().unwrap().bond.yaw);
+            let input = Input { turn: err.clamp(-0.07, 0.07), forward: 1.0, jump: t % 6 == 0, ..Default::default() };
+            w.tick(input, false);
+            if t % 150 == 0 {
+                let p1 = w.scene.sim.as_ref().unwrap().bond.pos;
+                eprintln!("[05-hurt] descent t{t}: bond at ({:.1},{:.1},{:.1}) health {:.1}",
+                    p1[0], p1[1], p1[2], w.scene.sim.as_ref().unwrap().drones.health.health);
+            }
+        }
+        for _ in 0..600 { w.tick(Default::default(), false); }
+    }));
+    let err = died.err();
+    let msg = err.as_ref().map(|e| e.downcast_ref::<String>().cloned()
+        .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default()).unwrap_or_default();
+    let landed = w.scene.sim.as_ref().unwrap().bond.pos;
+    eprintln!("[05-hurt] after the east walk: bond at {:?} health {:.1} panic {}",
+        landed, w.scene.sim.as_ref().unwrap().drones.health.health, !msg.is_empty());
+    if !msg.is_empty() { eprintln!("[05-hurt] {}", msg.lines().take(6).collect::<Vec<_>>().join(" | ")); }
+    assert!(!msg.is_empty(), "Bond must die in the plane (the walk returned alive at {landed:?})");
+    assert!(msg.contains("-1000.0"), "the death record must carry the hurt's 1000 damage: {msg}");
+}
+
+/// The guards' side + the reach map (level-05-hurt-skip): the drone pass on 07000005 delivers
+/// NO hurt damage [M the 0x1401fc level skip]. The pin runs the game's own contact law over the
+/// REAL sim for 3000 ticks while Bond walks the lower lane and fires the lure (real input):
+/// every guard's standing capsule (pos−1.0 .. head, r 0.4 — the port's drone capsule law)
+/// against every armed volume's tris; a guard observed TOUCHING a volume must be alive with his
+/// placement health (10) — unhurt by the very contact Bond dies of. The same pass dumps the
+/// reach map (which guard's capsule ever comes within the volume boxes) — the task's "which
+/// guards can reach them" answer, measured instead of guessed.
+#[test]
+fn the_guards_never_take_the_hurt_walked() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
+    w.top_up_health = false;
+    w.wait(30);
+    w.walk_nav_to([98.6, 26.0, 106.5], "to the gatehouse (the proven truck-route leg)", 1.6);
+    let mut saw_contact = false;
+    for t in 0..3000u32 {
+        // The lure: from the lower lane Bond fires at the road guards (g5/g6 stand 31-32 u off
+        // hurt #3's plane, [L the census]) — the real fire path, the gunshot hearing draws the
+        // hunt [M DroneFunc_SetNoiseHeard].
+        if t % 90 == 30 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let g = sim.drones.list.iter().position(|d| d.team == 1 && d.present && d.enabled && !d.corpse
+                && d.health > 0.0 && walker::dxz(d.pos, bp) < 40.0);
+            drop(sim);
+            if let Some(g) = g { let _ = w.shoot(g, &format!("the lure t{t}")); }
+        } else {
+            w.tick(Default::default(), false);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        for h_i in 0..sim.hurts.len() {
+            let h = &sim.hurts[h_i];
+            if h.disabled || h.fired { continue; }
+            for (j, d) in sim.drones.list.iter().enumerate() {
+                if d.team != 1 || !d.present || d.corpse || d.health <= 0.0 { continue; }
+                let a = [d.pos[0], d.pos[1] - 1.0, d.pos[2]];
+                let b = d.head();
+                if nf_game::triggers::capsule_hits_tris(a, b, 0.4, &h.tris) {
+                    saw_contact = true;
+                    eprintln!("[05-hurt] CONTACT t{t}: guard {j} (skin {:#x} health {:.0}) touches hurt {h_i}",
+                        d.skin, d.health);
+                    assert!((d.health - 10.0).abs() < 0.01,
+                        "a guard touching a hurt volume must be unhurt (guard {j} health {:.2})", d.health);
+                }
+            }
+        }
+        drop(sim);
+        if saw_contact { break; }
+    }
+    eprintln!("[05-hurt] the lure pin: contact observed = {saw_contact} (the reach map: no guard walked into a plane this run)" );
+}
