@@ -6,3 +6,8 @@ Reproduce on the real level first through real input, not a teleport. Compare wi
 
 ---
 claimed-by: sandbox1 at 2026-11-09T02:15Z
+
+---
+## Report (done, 2026-11-09T03:14Z)
+
+Closed by the driver: the report is on `s/level-0d-c5-door-fall` (docs/reports/level-0d-c5-door-fall.md); the worker didn't run finish.sh.
