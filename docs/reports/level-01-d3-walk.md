@@ -116,3 +116,18 @@ by this branch (the diff is the two test helpers + the 01 test file + docs).
 - Wall clock (from `date -u`): the driver message arrived ~11:55 UTC; the branch cut 11:57;
   the four reproduced deaths ran 12:03-13:14 UTC; the whole-binary green run 13:26 UTC; this
   report written ~13:30 UTC, inside the ~13:55 UTC expiry.
+
+## ntfy failed
+
+All three fallbacks, in order, with their exact output:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-01-d3-walk: blocked …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds` (exit 28)
+2. `python3 … urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=msg, headers={'Title':'NightfirePort'}), timeout=20)`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "level-01-d3-walk: blocked …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out (exit 124, no output)
+
+Outbound HTTPS to ntfy.sh is unreachable from this sandbox (the same block the
+guard-pane-drain-5 session hit at ~07:37 UTC). The queue `blocked/` file and this report are
+the delivery.
