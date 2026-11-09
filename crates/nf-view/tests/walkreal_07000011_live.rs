@@ -247,6 +247,14 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
         ];
         for (label, x, z, r) in maze {
             w.walk_to(Wp::new(*x, 47.4, *z).r(*r), &format!("d3 pre-leg: {label}"));
+            if *label == "the east jog 2" {
+                // los-mask-join: the armour room's pair is next, and the corridor fights left
+                // the clip at 2-3 rounds (spare 7) — the hp-24 #2 then outlived the clip at the
+                // doorway and his 0x1d volleys at 1.9 u took all 80 [L the masked run; the
+                // unmasked run won the same stand by a few ticks]. A player reloads before he
+                // opens the door.
+                w.reload_full();
+            }
             if *label == "the east wall north" {
                 // The armour room's pair, held at its doorway: #1 (placement 122, unarmed) and #2
                 // (placement 123, weapon 0x1d). With the 5.0/6.0 engage ranges [M 0x14b300
@@ -475,7 +483,14 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     w.walk_to(Wp::new(23.0, 27.4, 3.8).r(1.0), "the east connector down (31.1→27.1)");
     band(&w, 26.4, 29.5, "connector 1's bottom");
     w.walk_to(Wp::new(15.0, 27.4, 4.8).r(1.0), "the south strip 27.1 west");
-    loot_the_drops(&mut w, "the 27.1 strip");
+    if difficulty == 3 {
+        // los-mask-join (00 Agent): the 27.1 take climbed back up connector 1 after a drop
+        // lying on its treads (Bond wedged at y 30.3 over the 29.0 floor, 6000 ticks [L the
+        // masked run]). A player descending scoops at his feet — the 18.9 strip's rule.
+        loot_the_drops_floor(&mut w, "the 27.1 strip");
+    } else {
+        loot_the_drops(&mut w, "the 27.1 strip");
+    }
     w.walk_to(Wp::new(14.8, 23.3, -2.6).r(1.0), "the west flight B down (27.1→23.0)");
     band(&w, 22.4, 25.0, "flight B's bottom");
     w.walk_to(Wp::new(22.4, 23.2, -3.0).r(1.0), "the north strip 23.0 east");

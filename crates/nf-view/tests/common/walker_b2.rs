@@ -188,7 +188,13 @@ impl Walker {
     /// One tick with the given input; keeps Bond alive when `top_up_health` (damage suppressed —
     /// the "enemies may be disabled for the walk" allowance; falls are tracked in the report).
     pub fn tick(&mut self, input: Input, use_key: bool) {
-        self.tick_inner(input, use_key, false);
+        self.tick_inner(input, use_key, false, false);
+    }
+
+    /// Reload to a full clip (the game's R held ~100 ticks; presses past the fill are no-ops
+    /// [M Player_WeaponFiring's reload branch]) — walker.rs's `reload_full`, additive.
+    pub fn reload_full(&mut self) {
+        for _ in 0..100 { self.tick_inner(Input::default(), false, false, true); }
     }
 
     /// One tick with the trigger HELD: the gadget burns (the Q-Decryptor keypad melt) come from the
@@ -200,12 +206,12 @@ impl Walker {
         // A press under a draw is spent on the view-state gate [M Player_WeaponFiring 0x1a5460]:
         // the held fire starts once the draw is done.
         let drawing = self.scene.sim.as_ref().unwrap().gun.switch_state != 0;
-        self.tick_inner(input, false, !drawing);
+        self.tick_inner(input, false, !drawing, false);
     }
 
-    fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool) {
+    fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool, reload: bool) {
         let y_before = self.scene.sim.as_ref().unwrap().bond.pos[1];
-        self.scene.sim.as_mut().unwrap().step_bond(input, fire, false, use_key);
+        self.scene.sim.as_mut().unwrap().step_bond(input, fire, reload, use_key);
         let sim = self.scene.sim.as_ref().unwrap();
         self.total_ticks += 1;
         // ai-sight-drawn-gate-4 (NF_ALARM_TRACE, additive): the alarm-chain trace. Every live
