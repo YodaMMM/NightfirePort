@@ -69,6 +69,15 @@ fn walk_spawn_to_the_shaft_exit_at(difficulty: u32) {
         assert_eq!(sim.drones.difficulty, difficulty,
             "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     }
+    if difficulty == 3 && !w.tops_up() {
+        // los-mask-join (00 Agent, real damage): the warm chain's 12 tactics (walkreal 13's
+        // 12 leg) — the back-off at 3.0 and the lane fights with the floor-drop resupply. On the
+        // masked tree the plain resupply stood four 6000-tick passes one step short of the
+        // spawn-lobby drops and then wedged on a drop behind the east desks, and Bond met the
+        // east wing dry [L the masked run].
+        w.dmg.back_off = Some(3.0);
+        w.dmg.lane_fights = true;
+    }
     tower2::walk_12(&mut w);
     tower2::walk_12_exit(&mut w);
 
