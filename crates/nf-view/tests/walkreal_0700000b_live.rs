@@ -518,6 +518,27 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
             "the desk approach must be the walked route: the burned keypad's door #151 → n25 → n26 [M 0x1ae3d8; D #151/#178], got {p:?}");
         eprintln!("[0b] the desk approach arrived WALKED at ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
     }
+    // THE ROCKET LIFT (level-0b-roof-sprint-4, the Agent/00Agent sisters only): this office
+    // HOLDS the disc's PICKUP_RocketLauncher #349 (p0 = 0 weapon, p1 = 46 = 0x2E, p2 = 8
+    // rounds [D docs/levels/0700000b-audit.md:191]) at (−22.5, 47.96, 29.30) — 3.8 u
+    // west-south-west of the desk approach arrival [L the arrival print above] — a walk-over
+    // take with NO new exposure: the first sprint-4 cut detoured to it from return n16 and
+    // the keypad-corner guards #2/#3 shredded that line (23 hits for 100 [L the agent_v1
+    // run]); the office sits behind the already-opened keypad door, away from their cones.
+    // The sisters jog in, take it, and return to the desk spot — the deck's gap-mouth rocket
+    // drop then ends #4's 36.8 on-line pass [L agent_base2]. The d1/warm streams stay
+    // byte-identical (the jog is difficulty-gated).
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 {
+        let a = w.scene.sim.as_ref().unwrap().bond.pos;
+        lane_sprint(w, [-22.5, 47.96, 29.30], 0.9, 300, "the rocket pickup #349 (the office jog)");
+        let mut took = false;
+        for _ in 0..60 {
+            if w.scene.sim.as_ref().unwrap().drones.inventory.owned.get(0x2e as usize).copied().unwrap_or(false) { took = true; break; }
+            w.tick(nf_game::player::Input { forward: 0.4, ..Default::default() }, false);
+        }
+        eprintln!("[0b] rocket #349 take: owned 0x2e = {}", took);
+        lane_sprint(w, [a[0], a[1], a[2]], 0.6, 300, "back to the desk approach spot");
+    }
     {
         // The disc's island arm equips the Q-Worm at level load (`EquipWeapon(BL, 0x58, 0)` at
         // 001a8494 — the 09 kit the 0a/0b arms fall into on a cold boot [M 0x1a7ef8 cases
@@ -667,6 +688,12 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
             lane_sprint(w, [-1.45, 47.18, 3.74], 1.0, 600, "return n14");
             lane_sprint(w, [-1.33, 47.18, 6.82], 1.0, 600, "return n15");
             lane_sprint(w, [-13.67, 47.18, 6.40], 1.0, 900, "return n16");
+            // (level-0b-roof-sprint-4: the rocket is taken in the exec office instead — the
+            // first cut of this detour (n16 → the pickup south-west) crossed the keypad-corner
+            // guards #2/#3 at d 8-12 and bled 23 hits for 100 in the z 15-16 corridor [L the
+            // agent_v1 run]; the baseline return lane itself is clean [L agent_base2 — zero
+            // corridor hits]. The office jog after the desk approach carries the rocket over
+            // the whole roof gate with no new exposure.)
         } else {
             let _ = w.try_walk_to(Wp::new(-1.0, 47.5, -5.5).r(1.2), "return the terminal room (from the dome)");
             for (label, wp) in [
@@ -832,14 +859,21 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
         // (clip 0 spare 0 [L the stall trace]) while the wheel's 0x43 sits loaded (clip 5
         // [L the inventory trace]) — every fire-on-the-move shot was a blank; 0x4a (clip 100) spawned no rounds — a non-bullet gadget [L the clip stayed 100 through the drop stand]. A player switches
         // to the loaded weapon: the real switch path (Player_WeaponChange) until it lands.
-        for _ in 0..120 {
-            let sim = w.scene.sim.as_ref().unwrap();
-            if sim.gun.weapon == 0x43 && sim.gun.clip > 0 { break; }
-            let sw = sim.gun.switch_request;
-            w.tick(nf_game::player::Input {
-                switch_to: if sw == 0x43 { None } else { Some(0x43) },
-                ..Default::default()
-            }, false);
+        // SPRINT-4 (the sisters only): that stand cost ~20 hp (87.2 → 67.6 [L sprint-3]) —
+        // Player_WeaponChange needs no stand, so the Agent/00Agent runs issue the switch INTO
+        // the P1 run below (arm-on-the-run, target the ROCKET 0x2e for the gap-mouth drop)
+        // and skip this block; the d1 walk keeps the stand-first arm byte-identical.
+        let agent_run = w.scene.sim.as_ref().unwrap().drones.difficulty >= 2;
+        if !agent_run {
+            for _ in 0..120 {
+                let sim = w.scene.sim.as_ref().unwrap();
+                if sim.gun.weapon == 0x43 && sim.gun.clip > 0 { break; }
+                let sw = sim.gun.switch_request;
+                w.tick(nf_game::player::Input {
+                    switch_to: if sw == 0x43 { None } else { Some(0x43) },
+                    ..Default::default()
+                }, false);
+            }
         }
         let lane: [[f32; 2]; 4] = [
             [-11.8f32, 18.0f32], // P1 the west band, south of the diagonal (the measured heights)
@@ -851,6 +885,11 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
         let start = w.total_ticks;
         let mut stall_diag = 0u32;
         let mut drop_start = 0u32;
+        // SPRINT-4 (the sisters): the gap-mouth rocket attempt's bookkeeping.
+        let mut rocket_done = false;
+        let mut rocket_start = 0u32;
+        let mut rocket_cool = 0u32;
+        let mut rockets_fired = 0u32;
         while w.total_ticks - start < 2400 {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.drones.channels.on(0x3f) { break; } // the take fires ON THE PASS — never stand
@@ -882,6 +921,49 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
             let aim = lane[phase];
             let desired = (aim[0] - p[0]).atan2(aim[1] - p[2]);
             let mut aim_err = walker::wrap_pi(desired - sim.bond.yaw);
+            // THE GAP-MOUTH ROCKET DROP (level-0b-roof-sprint-4, the sisters): #4 parks at
+            // (2.6, 58.0, 32.7) — 13 u north-east of the gap mouth P2 (−1.5, 20.3), the line
+            // crossing the z 22.28 wall at x −0.84, inside the gap x −2..1 [L sprint-3's ray
+            // probe] — and the disc's guided launcher #349 (0x2e, 8 rounds [D
+            // docs/levels/0700000b-audit.md:191]) ends the 36.4 on-line pass BEFORE P3 opens.
+            // A player stops in the funnel, turns, fires, runs. Bounded: two rockets or 360
+            // ticks, then the lane goes anyway (the sprint-3 shotgun drop below is the
+            // fallback once the switch back to 0x43 lands).
+            if agent_run && !rocket_done && phase >= 1 && p[2] > 19.5 {
+                let g = &sim.drones.list[4];
+                let dxg = g.pos[0] - p[0];
+                let dzg = g.pos[2] - p[2];
+                let dg = (dxg * dxg + dzg * dzg).sqrt();
+                let g4_live = g.present && !g.corpse && g.health > 0.0;
+                if g4_live && dg < 20.0 && sim.gun.clip > 0 {
+                    if rocket_start == 0 { rocket_start = w.total_ticks; }
+                    if w.total_ticks - rocket_start < 360 && rockets_fired < 2 {
+                        let desired_g = dxg.atan2(dzg);
+                        let err_g = walker::wrap_pi(desired_g - sim.bond.yaw);
+                        let at = [g.pos[0], g.pos[1] + 0.3, g.pos[2]];
+                        let want_pitch = ((at[1] - (p[1] + sim.bond.eye - sim.bond.crouch_drop))
+                            / dg.max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+                        let aim = nf_game::player::Input {
+                            turn: err_g.clamp(-0.08, 0.08),
+                            look: (want_pitch - sim.bond.pitch).clamp(-0.08, 0.08),
+                            ..Default::default()
+                        };
+                        if rocket_cool > 0 {
+                            rocket_cool -= 1;
+                            w.tick(aim, false);
+                        } else if err_g.abs() < 0.05 {
+                            let before = sim.gun.clip;
+                            w.tick_fire(aim);
+                            let after = w.scene.sim.as_ref().unwrap().gun.clip;
+                            if after < before { rockets_fired += 1; rocket_cool = 90; }
+                            eprintln!("[0b-rocket] t{} fired #{} clip {} err {:.3} d {:.1}", w.total_ticks, rockets_fired, after, err_g, dg);
+                        } else {
+                            w.tick(aim, false);
+                        }
+                        continue;
+                    } else { rocket_done = true; }
+                } else if rocket_start > 0 { rocket_done = true; }
+            }
             // THE STAND-AND-DROP (level-0b-roof-sprint-3, "dropping #4 before the final dash"):
             // #4 parks at (2.6, 58.0, 32.7) 4-5 u east of the gap column — no lane heading ever
             // brings him near the crosshair (err 0.7-1.1 [L the runs]), and his 0x18 rounds
@@ -922,8 +1004,15 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
             // [L the runs]). The run continues regardless.
             let mut trigger = false;
             let mut look = 0.0f32;
+            // SPRINT-4: the opportunistic fire rides the SHOTGUN only — the sisters hold the
+            // rocket 0x2e through P1/P2 and its rounds are reserved for the gap-mouth drop
+            // (a wasted rocket or a < 9 u blast is the risk the gate removes). On the d1 path
+            // the gun is always 0x43 (the stand-first arm above), so the gate changes nothing
+            // there — the stream stays byte-identical.
+            let gun_shotgun = sim.gun.weapon == 0x43;
             for &gi in &[5usize, 4, 7] {
                 let g = &sim.drones.list[gi];
+                if !gun_shotgun { continue; }
                 if !g.present || g.corpse || g.health <= 0.0 { continue; }
                 let dxg = g.pos[0] - p[0];
                 let dzg = g.pos[2] - p[2];
@@ -939,12 +1028,24 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
                     break;
                 }
             }
-            let input = nf_game::player::Input {
+            let mut input = nf_game::player::Input {
                 turn: aim_err.clamp(-0.08, 0.08),
                 look,
                 forward: if aim_err.abs() > 0.6 { 0.0 } else { 1.0 },
                 ..Default::default()
             };
+            // ARM ON THE RUN (the sisters): the switch rides inside the run — 0x2e until the
+            // rocket attempt is finished, then 0x43 for the P3/P4 fire-on-move. No stand
+            // (Player_WeaponChange needs none [M the game's switch path]; sprint-3's stand
+            // cost ~20 hp [L]).
+            if agent_run {
+                let want = if rocket_done { 0x43 } else { 0x2e };
+                let s2 = w.scene.sim.as_ref().unwrap();
+                if s2.gun.weapon != want {
+                    let sw = s2.gun.switch_request;
+                    input.switch_to = if sw == want { None } else { Some(want) };
+                }
+            }
             if trigger { w.tick_fire(input); } else { w.tick(input, false); }
         }
         assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f),
