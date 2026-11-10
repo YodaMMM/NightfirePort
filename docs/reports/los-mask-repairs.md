@@ -144,3 +144,63 @@ and rule 3 alone changed nothing there. 01 stays red with rule 1 reverted.
 - `Drone_FellOutMap` 0x13a878 on a relink miss is not ported (the cel is kept). On 07000001 a
   combat guard stepping down the courtyard cellar stair (-32.1, 3.0, 12.9) passes through the
   parapet's edge and falls out of the map; the game's guard would be deleted there.
+
+## Round 3
+
+Branch = round-2 tip `c4ef1ea84` + `origin/master` (`4bdaf3f50`) + three commits. Still moves
+the shared random stream (guard sight, and now the guards' boundary push).
+
+### Game code
+
+1. **Drone_FellOutMap.** `control_handle_cel_change` 0x133288 runs for every moved dynamic object
+   every tick (`control_movement_object_handler` 0x1336f8, outside the NPCGlobals block). On a
+   relink miss (no portal crossing out of the old cel, outside its box, no `build_LinkToRoom` hit)
+   a type-2 object calls `Drone_FellOutMap` 0x13a878 (:175-181; :63-72 for an unlinked one), whose
+   SP body is `NDrone2_Enable(0)` + `obj+0xFE |= 1`. The port now relinks every present guard
+   every tick (it ran on sight ticks only) and removes a guard on a miss. Test:
+   `drone_fell_out_map_07000001_live` (red with the call removed: present true, delete_me false).
+2. **The boundary push walks the guard's own cel.** `NDrone2_Collision` 0x140e90:169-174 passes
+   obj+0x30 and obj+0x20 (disasm 0x1410f8 `addiu a0,s3,0x30`, 0x1410fc `lw a1,0x20(s3)`) to
+   `AINetwork_GetBoundsPushVectorForSphere` 0x157bd0, which walks only that cel's +0x34 wall
+   list; `AIBounds_Prepare` 0x1d3008 files each wall under its two posts' cels. The port walked
+   every wall from the feet (obj+0x30 − 0.6). On 07000001, 9 points 0.2 u from a wall of another
+   cel are pushed by the flat walk and left by the cel walk. A world without cels (the unit-test
+   harness) keeps the flat walk.
+
+### Walk repairs (real input)
+
+- 14 (x3): drone 5 holds AimStandFire at the drop's foot (32.25, 1.80, 33.58) and Bond's capsule
+  rested on his at y 2.33 for the 2400-tick cap. The drop now steers past him on the north side
+  (z 34.9) when a live guard stands there; red without it.
+- 11 d1: the 18.9 strip fights turned Bond up flight B; he walks back down over the nav web.
+- 13 Agent: drone 10 stands in the security-room doorway's outside mouth and the leaf stops on
+  him; once the leaf is open and the crossing has stalled 300 ticks, Bond shoots him.
+- mp_perf_16: digest re-pinned (36 kills); the guard-vision equality is now checked against the
+  masked full search (`segment_masked`).
+
+### Ledgered (each `#[ignore]` names its task)
+
+01 following-Mayhew and Agent, 02 00 Agent, 03 Agent, 08 real damage + Agent, 0b Agent, 0c main
+x2 and eastroute, 11 00 Agent, 12 Operative, 15 Agent + real-damage Agent, 16 the chaser's punch.
+03 Agent, 08 x2, 15 Agent and 16 are green with the old flat feet-height push; 01 plain walk and
+exit fade are green only with the new push. The 0c case is a guard on the west-ledge strip that
+the walk cannot pass; 12 Operative is door plc 543 holding half-open after the E press.
+
+### Results (release)
+
+Green: walkreal 01 5/0/3, 02 4/0/1, 03 5/0/3, 04, 05, 06, 07, 08 3/0/3, 09, 0a, 0b 6/0/2, 0c 1/0/3,
+0c barrelrow, 0d, 11 3/0/1, 11 route, 12 3/0/1, 13 3/0/1, 14 7/0/3, 15 6/0/3, 16 14/0/4, 1b, 41,
+41 wall, 4a, 4a satchel; interactables_07000012 12/0, fix_mission 4/0, zoe_gondola_realpath 1/0,
+fix_ally_death 7/0, fix_npc_doors 1/0, escort_hide_findrun 3/0, dead_body_collision 1/0,
+guard_rounds_glass 1/0, sight_cels_07000001 1/0, drone_fell_out_map_07000001 2/0, ai_live 37/0,
+mp_perf_16 2/0, nf-game --lib 777/0/4.
+
+### Unproven
+
+- The 07000001 parapet crossing from round 2 did not reproduce on this tree: no relink miss and
+  no guard below y 0.3 on any 01 walk (measured with the flat push, before the own-cel change).
+  How that guard crossed the parapet is not settled.
+- 5 of 07000001's 219 boundary walls have a post `find_cel` misses; the port files them under
+  the other post's cel only.
+- Whether the game's guards stand where these walks now meet them (the 0c strip, the 14 drop
+  foot, the 13 doorway) needs the real game.
