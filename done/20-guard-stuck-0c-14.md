@@ -19,3 +19,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-11-10T14:55Z
+
+---
+## Report (done, 2026-11-10T15:42Z)
+
+Closed by the driver: the report is on `s/guard-stuck-0c-14` (docs/reports/guard-stuck-0c-14.md); the worker didn't run finish.sh.
