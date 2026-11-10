@@ -21,7 +21,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 claimed-by: sandbox3 at 2026-11-10T21:06Z
 
 ---
-## Report (blocked, 2026-11-10T21:15Z)
+## Report (blocked, 2026-11-10T21:15Z) — see docs/reports/los-mask-repins-02.md on s/los-mask-repins-02; ntfy failed (all 3 fallbacks, errors in the report)
 
 
 # los-mask-repins-02 — report
