@@ -1196,12 +1196,38 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
     // until the strict rays clear; one landing round kills the 10-hp sniper [L the
     // census]. yard_sniper_stands is a no-op when the flag is off.
     // The diagonal ledges south-east to icon #6 [D probe blk2 west map].
-    // pretrans-arms-4: the first push is split into short tight legs on the same line — the
-    // single 4.5-u push carried Bond off the strip mid-leg (the leg arrived at (-4.81,2.70,
-    // -220.50) with every later leg on the yard floor y 2.0, the wire #282 grab sphere
-    // (centre y 14.11, r 5.05) unreachable [L the run on this tree]).
-    w.walk_to(Wp::new(-7.4, 12.4, -217.2).r(1.2), "the west ledge diagonal a");
-    w.walk_to(Wp::new(-6.6, 12.4, -218.4).r(1.2), "the west ledge diagonal b");
+    // pretrans-arms-4: the solid west sniper #35 (skin 0x500087, hp 10.0, ALIVE at the
+    // crossing — the west-ledge stands' rounds die in flight [L the diag dump]) stands at
+    // (-7.07,12.24,-218.60), 0.2-0.3 u off the -3 tree's single push line (B-drop
+    // (-8.98,-217.44) → (-6.0,-219.6)); pre-0a9d39435 guards and corpses were non-solid and
+    // Bond walked through him — master made guards and corpses solid, and with the old r 1.5
+    // the capsule slide carried Bond PAST the target's arrive radius and off the lip's
+    // south-east edge (the leg arrived at (-4.81,2.70,-220.50) on the yard floor [L the run]).
+    // The player's way: go AROUND him west — the shelf's west edge carries floor south from
+    // the B-drop (the scoped map rows −218.0..−219.0 hold x −10..−8.5..−5.0 [L the diag
+    // dump]) while every direct south-east line passes under 0.7 u of his capsule and the
+    // slide either wedges the leg (the line stays blocked) or carries Bond off the lip's
+    // south-east edge [L the runs]. Three legs, ≥1.2 u clear of the capsule on the mapped
+    // floor, then rejoin the -3 leg at (-6.0,-219.6).
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        for (i, d) in sim.drones.list.iter().enumerate() {
+            if !d.present { continue; }
+            let dd = ((d.pos[0] - p[0]).powi(2) + (d.pos[2] - p[2]).powi(2)).sqrt();
+            if dd < 6.0 {
+                eprintln!("[0c-diag] drone {i}: pos=({:.2},{:.2},{:.2}) d={dd:.2} health={:.1} corpse={} team={} skin={:#x}",
+                    d.pos[0], d.pos[1], d.pos[2], d.health, d.corpse, d.team, d.skin);
+            }
+        }
+    }
+    w.walk_to(Wp::new(-8.4, 12.4, -218.8).r(1.0), "the west ledge diagonal (the shelf's west lane)");
+    // The brush-past: the leg's line passes 0.7 u from the sniper's capsule — the clip slides
+    // Bond around its EAST side onto the holding shelf (measured: the slide stands at
+    // (-6.70,12.37,-218.71) [L the run]) — which is INSIDE this leg's arrive radius (d 1.07),
+    // so the slide IS the arrival; the old r 0.9 kept steering into the now-blocked line and
+    // wedged at the 6000-tick cap [L the run].
+    w.walk_to(Wp::new(-7.3, 12.4, -219.6).r(1.2), "the west ledge diagonal (the sniper's brush-past slide)");
     w.walk_to(Wp::new(-6.0, 12.4, -219.6).r(1.5), "the west ledge diagonal");
     yard_sniper_stands(&mut w, "lip-1", 3);
     w.walk_to(Wp::new(-4.5, 12.4, -221.5).r(1.5), "the west ledge diagonal 2");

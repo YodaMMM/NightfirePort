@@ -28,23 +28,24 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 fn sim_grounded(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().bond.grounded }
 
-/// IGNORED with the measured reason (pretrans-arms-4, 2026-11-10 [L the runs on this tree]):
-/// the west ledge's south-east diagonal falls mid-leg — the split probe shows the fall spot
-/// exactly: the leg to (-7.4,12.4,-217.2) arrives ON the strip (-8.02,11.87,-216.19) and the
-/// next 1.2-u step to (-6.6,-218.4) lands Bond at (-7.20,6.42,-217.38) — the strip's
-/// walkable band ends between z -216.2 and -217.4 at x ≈ -7.6 ([D probe blk: the west ledge
-/// band x −12..−8, z −216..−218; the diagonal's own targets x −6..−1.4 lie east of it]).
-/// Every later leg walks the yard floor y 1.96-2.7 and the wire #282 grab sphere (centre
-/// (2.80,14.11,-223.15) r 5.05 [D probe blk]) is unreachable (y 9.06..19.16). The same reach
-/// miss the -3 report measured (single-leg fall to y 2.70 [L the 0c2 run]). The -2 tree's
-/// green run walked the same line — master 0a9d39435 made GUARDS AND CORPSES SOLID to Bond;
-/// the yard fights' drops lie on the strip's east run and the push slides off their capsules
-/// [S unverified: the corpse on the line is the working theory — nobody dumped the drones at
-/// the fall spot]. NEXT LEVER: a drone dump at (-7.6,-217) on the diagonal (NF_DRONE_WATCH or
-/// a fail-dump probe), then either route the diagonal around the body on the strip's west
-/// half or a per-walker opt-in that treats CORPSE capsules as non-blocking in walk_to's push
-/// (the -2 semantics) for this crossing only.
-#[ignore = "pretrans-arms-4 ledger: the west ledge's south-east diagonal falls mid-leg — the split probe pins the fall between (-8.02,11.87,-216.19) and (-7.20,6.42,-217.38): the strip's walkable band ends at x -8 / z -217-ish [D probe blk] and every later leg walks the yard floor, the wire #282 grab sphere (y 9.06..19.16) unreachable; the -2 tree walked the same line green — master 0a9d39435 made corpses solid and the yard fights' drops lie on the strip [S unverified]; next lever: a drone dump at (-7.6,-217), then route around the body or a per-walker corpse-capsule opt-in for this crossing"]
+/// pretrans-arms-4 round 2: the ledgered crossing is REPAIRED — the diagonal now crosses on
+/// real input. The dump settled the theory: NO corpse — the west sniper #35 (skin 0x500087,
+/// hp 10.0, ALIVE at the crossing [L the diag dump]) stands at (-7.07,12.24,-218.60), 0.2-0.3
+/// u off the -3 tree's single push line; pre-0a9d39435 guards and corpses were non-solid and
+/// the -2 tree walked through him. The repair (walkreal0c.rs): the shelf's west lane leg
+/// (arrived (-8.36,12.37,-217.82), ON lip), then the brush-past leg whose 0.7-u clip slides
+/// Bond around the capsule's east side onto the holding shelf — the slide stands at
+/// (-6.32,12.37,-218.94), INSIDE the arrive radius, so the slide IS the arrival — then the
+/// -3 leg, the diagonals 2/3, icon #6 and the wire #282 grab + ride east ALL GREEN on this
+/// tree [L the run: "wire #282 ridden east — landed (4.98,13.16,-223.29)"]. STILL RED past
+/// the crossing: the SW arc approach — "the ledge to the arc" fell off the east ledge to the
+/// yard floor (arrived (8.99,2.01,-222.09)) and "the arc west end" wedged 6000 ticks under
+/// guard #15 (state 0x5f at (10.55,12.24,-219.35), 2.44 u off; segment blocked t 0.90) [L
+/// the run] — the first spot past the crossing this tree has ever reached; the -3 tree walked
+/// the same legs green, so the working theory is again the solid bodies on the ledge/arc [S
+/// unverified]. NEXT LEVER: a drone+floor dump at the "ledge to the arc" leg (the same
+/// [0c-diag] probe this crossing used), then the arc lane around whatever stands on it.
+#[ignore = "pretrans-arms-4 round 2: the ledgered wire-#282 crossing is REPAIRED (the shelf west lane + the sniper brush-past slide + the -3 legs + the grab/ride all green [L the run on this tree]); the walk now fails PAST it — the SW arc approach: 'the ledge to the arc' fell to the yard floor (8.99,2.01,-222.09) and 'the arc west end' wedged 6000 ticks under guard #15 (10.55,12.24,-219.35) [L the run]; the -3 tree walked the same legs green — solid bodies on the ledge/arc are the theory [S]; next lever: the [0c-diag] dump at that leg, then the arc lane around it"]
 #[test]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(1);
