@@ -83,3 +83,12 @@ move and the shared-helper opt-in rule is not triggered.
 ## Usage
 
 not visible to me — this sandbox shows no token, credit or context-window figures.
+
+## ntfy
+
+1. `curl` → `curl: (28) Connection timed out after 20001 milliseconds`.
+2. `python3 urllib.request` → `URLError: <urlopen error [Errno 101] Network is unreachable>`.
+3. `wget -q -O- --post-data "los-mask-repins-08-agent: done" --timeout=20 https://ntfy.sh/nightfire-yoda-8k3x`
+   → exit 0 (no output; a successful POST), so the notification went out on the third
+   fallback. The queue entry (done/30-los-mask-repins-08-agent.md, pushed with the report
+   attached) is the notification of record regardless.
