@@ -126,3 +126,20 @@ guard_rounds_glass's 07000003 glass stop. Real input only, never lower damage/he
 
 Work log:
 - (06:40) branch created, merged master clean, WORKLOG entry, checkpoint push.
+- (06:40-07:33) Attribution first: the three reds (09/13/guard_rounds 03) run GREEN on current
+  master (9/0, 3/0/1, 1/0) and RED on the mask tree — the mask lineage's own delta, not
+  master's merge. Root cause found and pinned: move_probe_clear (the [S] guard/route probe with
+  no game query behind it) routed into the masked walk under the gate; the game's NDrone2_MoveTest
+  0x155330 runs AINetwork_BoundsTest only (no collision ray) [M the decompile read]. Pinned to
+  segment_clear on both gate sides; the envelope stays with the real Collide_LineOfSight callers.
+  09's route machinery proven correct again by a nav diagnostic (goal node 1.08 u from the switch).
+- (07:35-08:00) guard_rounds 03: the scene verdict with the game's own mask — the guard's 0xa27
+  sight ray stops at mat 0x05 t 0.719 (panes #338/#339) [M 0x1ebaa8:315-317 drops class 0x10
+  only] — the game's own guard cannot see Bond there; the test's census pinned the pre-mask
+  pane-skip. Test fixed with the address (scene = game-sight-clear; covered >= 2 with the story).
+  guard_rounds_glass GREEN. 03 walkreal GREEN 6/0/1, npc_doors GREEN 5/0/3, nf-game all green.
+- (08:00-09:05) 09 left red 8/1 (racer g4 pressed at frame 7517; the chase lost ~200 ticks to a
+  wrong-floor door pick — walker_b2 dxz-only), 13 left red 2/1 (guards posted at the doorway lane
+  stall the re-cross; kill beats measured not landing), 02 attributed red 3/2 (master green 5/0 —
+  the envelope's own 01/02 re-tune class). Battery greens: 0a/0c/0d/15/16/1b/41/4a all match the
+  sweep. Report written; levers listed per red.
