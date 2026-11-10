@@ -81,6 +81,76 @@ fn the_blast_doors_are_shut_through_both_pulses_and_open_at_the_hand_back() {
     assert!(gap(pose(17, 0.0), pose(18, 0.0)) >= 0.05);
 }
 
+/// The gated plane's SOLIDNESS law (level-05-basin-floor-3's port item 2). The game's gated hurt
+/// object is skipped by the collision pick while its gate channel reads low and picked the tick
+/// the channel rises: `Hurt_Create` 0x17e870's tail sets obj+0xF0 bit 0x20 at create when the
+/// gate reads low (the channels start zeroed, so every gated volume loads disabled), `Hurt_Update`
+/// 0x17e5d0:26-37 maintains that bit EVERY tick from the channel (low → set, high → cleared — the
+/// same read the round-2 report pinned), and the pick skips bit-0x20 objects [M `Collide_Pick`
+/// 0x1eb320:140's `& 0x20` arm; `Collide_PickObj` 0x1eae80:26-30 drops obj+0xF0 & 0x20]. So
+/// HurtPoly-ShuttleLaunch #309 (gate 0xf3 = 243, 1000 damage [D params]) is a WALL the tick ch 243
+/// rises and a ghost the tick it falls. The port holds the plane in the per-tick dynamic collision
+/// set exactly while the channel reads high (`script_parts`'s hurt band, id bit 43) — the doors'
+/// own per-tick set_dynamic precedent — and this test pins both directions on the world ray.
+/// Probe point (−9.0, −173.0): the sister above proves the pit floor there lies inside the
+/// volume's polygon (the pulse's contact kills a player standing on it), so a vertical ray
+/// through that spot crosses the volume's own bands (y −24.08 … −21.32 [D the placement's tris]).
+#[test]
+fn the_shuttle_launch_plane_is_solid_only_while_ch_243_reads_high() {
+    let mut scene = nf_view::load(&iso(), "07000016.bin", false).unwrap();
+    let (band_lo, band_hi) = {
+        let sim = scene.sim.as_ref().unwrap();
+        let h = sim.hurts.iter().find(|h| h.gate == 0xf3).expect("HurtPoly-ShuttleLaunch #309 [D params]");
+        assert!(h.disabled, "the volume loads with the 0x20 bit set — ch 243 starts low [M 0x17e870 tail]");
+        (h.lo[1], h.hi[1])
+    };
+    eprintln!("[shelter solid] the volume's y band {band_lo:.2}..{band_hi:.2}");
+    // The probe: a vertical world ray through the proven-inside spot. The pit floor there sits at
+    // y −23.08 [L the old-code low run's stop, INSIDE the volume's own band range] — so the
+    // distinguishing window runs from −20 (above the top band −21.32) down to −22.8, ABOVE the
+    // floor: the volume's top band is the only thing that can stop it.
+    let probe = |scene: &nf_view::scene::Scene| -> Option<f32> {
+        let sim = scene.sim.as_ref().unwrap();
+        sim.world.segment([-9.0, -20.0, -173.0], [-9.0, -22.8, -173.0]).map(|f| -20.0 - f * 2.8)
+    };
+    // LOW (the load state): the plane is a ghost — the ray flies through to the window's end.
+    let low_stop = probe(&scene);
+    eprintln!("[shelter solid] ch 243 low: ray stop at {low_stop:?}");
+    assert!(low_stop.is_none(),
+        "ch 243 low: the plane must not stop the ray above the pit floor (stop {low_stop:?}, band {band_lo:.2}..{band_hi:.2}) [M 0x17e870 tail + 0x1eb320:140]");
+    // HIGH: the same ray stops inside the volume's band — the plane is solid.
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.drones.channels.set(243, 1, sim.drones.frame);
+    }
+    // The hurt pass maintains `disabled` from the channel every tick [M 0x17e5d0:26-37]; run one
+    // step so the bit clears and the set_dynamic rebuild takes the plane (the doors' order: the
+    // hurt pass runs before the drones' per-tick set_dynamic).
+    scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+    let high_stop = probe(&scene);
+    eprintln!("[shelter solid] ch 243 high: ray stop at {high_stop:?}");
+    let high_y = high_stop.unwrap_or(f32::MIN);
+    assert!(high_y >= band_lo - 0.1 && high_y <= band_hi + 0.1,
+        "ch 243 high: the plane must stop the ray inside its band (stop {high_stop:?}, band {band_lo:.2}..{band_hi:.2}) [M Hurt_Update 0x17e5d0:26-37 clears the 0x20 bit; Collide_Pick 0x1eb320:140]");
+    // LOW again: the falling gate re-parks the bit the same way [M 0x17e5d0:26-37 — the every-tick
+    // level has no latch], the plane is a ghost again.
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.drones.channels.set(243, 0, sim.drones.frame);
+    }
+    scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        eprintln!("[shelter solid] after the low step: ch243 on={} disabled={} simdisabled={} hurts={}", sim.drones.channels.on(243), sim.hurts.iter().find(|h| h.gate == 0xf3).unwrap().disabled, sim.disabled, sim.hurts.len());
+        eprintln!("[shelter solid] all 0xf3 hurts: {:?}", sim.hurts.iter().enumerate().filter(|(_,h)| h.gate==0xf3).map(|(k,h)| (k,h.disabled,h.shape_key,h.lo,h.hi)).collect::<Vec<_>>());
+        eprintln!("[shelter solid] enabled drones {} total drones {} frame {}", sim.drones.list.iter().filter(|x| x.enabled).count(), sim.drones.list.len(), sim.drones.frame);
+    }
+    let low2_stop = probe(&scene);
+    eprintln!("[shelter solid] ch 243 low again: ray stop at {low2_stop:?}");
+    assert!(low2_stop.map_or(true, |y| y < band_lo - 0.1),
+        "ch 243 low again: the plane must stop being solid [M 0x17e5d0:26-37 the every-tick law], stop {low2_stop:?}");
+}
+
 /// Runs the chain from the bridge trigger (the placed setup the timing sister uses — Bond put on
 /// trigger #255, the touch fires ch 0x81), then from the hand-back steers Bond with Input only to
 /// `target` through `via`. Returns (hp at the end of pulse 1 or at death, the volume's contact

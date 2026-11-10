@@ -85,7 +85,13 @@ const BASELINE: &[(&str, &str)] = &[
     // goggles-all re-pin (11-01): the goggles chain on the merged master — the body-glow, x-ray,
     // breath (+64) and guard-ray (+8) slots, the same +201 attachments on every pinned level.
     ("07000002.bin", "07f406b0bfe70e12 4528718 9471414 5296 4395409 88 11287 205 28 25 5"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
-    ("07000005.bin", "7f4595e597d12dc1 4429821 9266439 3618 4345532 74 11185 106 19 16 4"), // re-pinned 11-01 (courtyard-lamps on the merged master): the courtyard corona's sort-list-2 copy on its own searchlight slot, pass 6 [M View_AddObjects 0x1e62d8:57-59; Game_Draw 0x1e6f50:157-176] (+28 verts, +42 indices, +1 material); the placed-corona billboard slots follow it; the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]; re-pinned 10-28: the searchlight heads' block-0x27 LOD meshes (OBJECT_SearchLightBroken) on their own slots [M Control_NextLOD 0x1349b0] (+1134 verts, +1 material)
+    // level-05-basin-floor-4 re-pin (07000005 colliders 106 → 119): the solid hurt-plane fold's
+    // 13 UNGATED 0xE4 instances join the collision set ONLY (the draw is bit-identical — the
+    // vertices/indices/materials counts returned to the pre-fold pins once the no-draw gate
+    // [M View_AddObjects 0x1e62d8's 0x8010] covered the non-cel fold instances; the planes are
+    // collision-only [D the basin planes' glist bit 0x10]). [S port engineering] like every pin.
+    // (history: re-pinned 11-01 (courtyard-lamps on the merged master): the courtyard corona's sort-list-2 copy on its own searchlight slot, pass 6 [M View_AddObjects 0x1e62d8:57-59; Game_Draw 0x1e6f50:157-176] (+28 verts, +42 indices, +1 material); the placed-corona billboard slots follow it; the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]; re-pinned 10-28: the searchlight heads' block-0x27 LOD meshes (OBJECT_SearchLightBroken) on their own slots [M Control_NextLOD 0x1349b0] (+1134 verts, +1 material))
+    ("07000005.bin", "02d0a6f75ade25dd 4429821 9266439 3618 4345532 74 11185 119 19 16 4"),
     // lift-indicators-09 re-pin: one draw slot per `Script_SubScriptStart` op per running SP
     // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
     // +1 attachment); 07000014's vent-lid SPs are placed SPs (unchanged), the rest have no

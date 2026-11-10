@@ -3393,6 +3393,25 @@ impl Sim {
             }
         }
         let before = self.bond.pos;
+        // The hurt volumes' every-tick law [M Hurt_Update 0x17e5d0 — the game's object control
+        // pass runs it for every hurt object EVERY tick with no player-state guard]: the gate
+        // maintenance (0x17e5d0:26-37), the flight clock (:104-132) and the solid-side posting.
+        // Inside the player-update gate below they froze whenever the level's own NIS parks the
+        // player — the 07000016 launch does exactly that at the pit pulse, and the game's plane
+        // still arms and drops with ch 243 through it (the shelter ledger, level-05-basin-floor-5).
+        // The DAMAGE loops stay in the player-update gate below: the game delivers them from
+        // Player_CollisionHandler 0x1949a8's per-contact walk in the player update.
+        for h in self.hurts.iter_mut() {
+            h.maintain_gate(self.drones.channels.on(h.gate as u32));
+            h.tick_flight();
+        }
+        {
+            let hurt_parts: Vec<(u64, u32, nf_formats::anim::Mat4)> = self.hurts.iter().enumerate()
+                .filter(|(_, h)| h.gate != 0 && !h.disabled && h.shape_key != 0)
+                .map(|(k, h)| (nf_game::world::HURT_PART | k as u64, h.shape_key, h.pose))
+                .collect();
+            self.world.set_hurt_parts(hurt_parts);
+        }
         // `Player_Update` 0x193600 with the ladder/water context (fix-ladder): the level's ladders
         // (BLData+0x884) and the water surface of the cel Bond is in (cel+0x90; −500 = none, and a cel
         // whose top is far below Bond is no water either). The sink control is unused in play (the
@@ -3857,12 +3876,8 @@ impl Sim {
                 // 0x191a70:135-143: every FRAME_RATE·0.5 ticks, Sound_Play(100, 0x60b) + HandlePain].
                 self.drones.audio.play(0x60b);
             }
-            // The flight clock [M Hurt_Update 0x17e5d0:104-132 — the control pass runs before the
-            // collide pass, so the pose lands before this step's contacts; a volume started THIS
-            // step (below) takes its first pose tick next step, the game's own order].
-            for h in self.hurts.iter_mut() {
-                h.tick_flight();
-            }
+            // The flight clock is the every-tick hurt law above (level-05-basin-floor-5) — the
+            // player-update gate below must not run it twice (the pace assert holds 90).
             // The class-5 starter [M Hurt_Update 0x17e5d0:57-95 — the who-mask AND over the hit
             // chain's contact classes: a player bullet (class 5) contributes bit 2; the seven
             // 07000046 Icicles carry who 0x2 [D params] — shot down, never touch-started]. The
@@ -3879,11 +3894,73 @@ impl Sim {
                     }
                 }
             }
+            // The object-hit delivery (level-05-basin-floor-4): the collide pass's hurt
+            // contacts this tick. The game applies the damage from the per-contact hit
+            // [M Player_DealWithObjHit 0x194458:94-103 — obj+0xFF == 0x27 applies
+            // Hurt_GetDamage via Player_HandlePain; Player_CollisionHandler 0x1949a8:139-145
+            // walks obj+0xD0 per contact], so a capsule STANDING on a solid hurt plane is hit
+            // — the old post-hoc capsule re-test missed the settled stand (the spine bottom
+            // rests ~r above the floor). The stat entries carry the fold's (damage, kind)
+            // pairs; the HURT_PART ids map into the hurts list (the gated planes).
+            let mut delivered: std::collections::HashSet<usize> = std::collections::HashSet::new();
+            // mp-world-sync (level-05-basin-floor-6): online the world damage is the shared
+            // world pass's (`step_net_world`: every body into its slot's health, one delivery
+            // per tick the same way on every machine). The local collide-pass deliveries ran
+            // on the OWNER's machine only — its slot is the local one there — and applied the
+            // SP-side pain: the frag-test desync's split (the owner's body froze in the SP
+            // death sequence at t744 — the arena's ungated damage-1000 planes — while the
+            // replicas fell; net_match_end_clients_live). The drown arm above carries the
+            // same gate. The drain stays: the log must clear every tick.
+            let hurt_hit_ids = self.world.take_hurt_hits();
+            for id in if net_row.is_none() { hurt_hit_ids } else { Vec::new() } {
+                if id & nf_game::world::HURT_PART != 0 {
+                    let k = (id & !nf_game::world::HURT_PART) as usize;
+                    delivered.insert(k);
+                    let Some((dmg, ty)) = self.hurts.get_mut(k).and_then(|h| h.deliver_contact()) else { continue };
+                    if self.drones.health.pain_generic(&mut self.drones.rng, dmg, self.drones.difficulty, self.level, ty as u32) {
+                        let p = self.bond.pos;
+                        self.drones.play_pain_grunt(p);
+                    }
+                } else if let Some((dmg, kind, plc)) = self.world.stat_hurts.get(&(id as u32)).copied() {
+                    // level-05-basin-floor-5: the folded plane's delivery runs the matching
+                    // Hurt's own state side (the witness the live tests pin, the one-shot
+                    // expiry, the disabled bit) — the game's per-contact hit fires the volume's
+                    // class-0x27 arm on the LIVE object [M Player_DealWithObjHit 0x194458:94-103].
+                    // The raw pair stays the fallback for a fold whose placement built no Hurt
+                    // (hurt.rs creates from the main map only).
+                    let ki = self.hurts.iter().position(|h| h.placement == plc);
+                    let applied = match ki.map(|i| (i, self.hurts[i].deliver_contact())) {
+                        Some((i, Some((dmg, ty)))) => {
+                            delivered.insert(i);
+                            self.drones.health.pain_generic(&mut self.drones.rng, dmg, self.drones.difficulty, self.level, ty as u32)
+                        }
+                        // No Hurt entry (a fold outside the main map) or a state-refused hit
+                        // (disabled/fired): the raw pair only delivers in the first case.
+                        Some((_, None)) => false,
+                        None => self.drones.health.pain_generic(&mut self.drones.rng, dmg, self.drones.difficulty, self.level, kind as u32),
+                    };
+                    if applied {
+                        let p = self.bond.pos;
+                        self.drones.play_pain_grunt(p);
+                    }
+                }
+            }
             // Hurt volumes (0xE4): the collide contact `Player_DealWithObjHit` 0x194458:94-101 — a
             // class-0x27 hit calls `Player_HandlePain(pain + Hurt_GetDamage, …, Hurt_GetType, −1)`,
             // the same full pipeline as the drown tick (difficulty factor, no armour for types 1..7
             // [M 0x1902c8:84-104]). The gate follows `Hurt_Update` 0x17e5d0's disabled bit.
-            for h in self.hurts.iter_mut().filter(|_| net_row.is_none()) {
+            // level-05-basin-floor-5: BOTH paths stay live, one delivery each per tick. The
+            // object hit above covers the contacts the collide pass pushes (the settled stand
+            // on a solid plane — round 4's law); this per-tick capsule contact covers the
+            // volumes the collide pass cannot deliver for — a capsule INSIDE a solid volume
+            // (the 0700000a lift-shaft HurtPolys: the settled push never moves the accumulator),
+            // a volume FLYING away from its folded static instance (the 07000046 Icicle's fall),
+            // and the no-collision pass-throughs (round 4's shape_key == 0 case). The dedup
+            // keeps the two paths from billing one contact twice: the game's single delivery is
+            // the obj+0xD0 chain per contact [M Player_CollisionHandler 0x1949a8:139-145] — the
+            // port's collide-pass log and this capsule re-test are its two halves.
+            for (k, h) in self.hurts.iter_mut().enumerate().filter(|_| net_row.is_none()) {
+                if delivered.contains(&k) { continue; }
                 if let Some((dmg, ty)) = h.update(self.drones.channels.on(h.gate as u32), self.bond.pos) {
                     if self.drones.health.pain_generic(&mut self.drones.rng, dmg, self.drones.difficulty, self.level, ty as u32) {
                         let p = self.bond.pos;
@@ -3920,6 +3997,9 @@ impl Sim {
                 x.last_damage = dmg;
                 x.health -= dmg * x.damage_taken;
             }
+            // The gated planes' solid side is posted by the every-tick hurt law above
+            // (level-05-basin-floor-5) — the player-update gate below must not hold it, the
+            // launch NIS parks the player exactly at the pulse.
             // `Player_MonitorAir` 0x191a70:101-124 [M]: the head crossing cel+0x90 starts the dive
             // loop (`Sound_Stop()` of the old handle, then `Sound_Play3D(100, −1, −1, 0x27, objPos)`
             // saved at BL+0x89C) and, on surfacing, stops it and plays the gasp `Sound_Play(100,
@@ -8983,6 +9063,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 invisible += 1;
             }
             if skipped { continue; }
+            // The game's no-draw gate on EVERY submitted object [M View_AddObjects 0x1e62d8:33
+            // (disasm 0x1e6344-4c) refuses obj+0xF0 & 0x8010; View_AddCels 0x1e6ba0 L29/L46
+            // refuses glist bit 0x10 straight off]: the walk's old gate covered the cel
+            // placements only (`skipped` above), so the static fold's hurt-plane instances
+            // (non-cel, glist bit 0x10 — the striped marker brushes) drew. The game never
+            // draws them (level-05-basin-floor-4; the census). The game's own exception:
+            // Trigger_Create 0x1b1720 clears the bit for exactly the type-10 LOAD_LEVEL meshes
+            // (0x1b18c8-d4 `obj+0xF0 &= 0xffffffef`) — the census's game_drawn_0x10_exceptions.
+            if obj.flags & 0x10 != 0 && inst.placement.flags & 0xff != 0xe8 { hidden += 1; continue; }
             // floating-rifle-02-2: NO bake skip. 786 read `parseentity_fixup_entity` 0x1d00c0's
             // 0x8019/0x8018 flag bit 0x8000000 as "baked, not drawn" and skipped every 0x8019/0x8018
             // placement whose matrix rows 1+2 looked identity — that broke decal_order_live (07000007's
