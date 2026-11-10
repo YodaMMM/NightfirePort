@@ -15,11 +15,6 @@ thread_local! {
     /// thread only (libtest runs each test on its own thread, so the top-up walk, the
     /// eastroute replay and the upward-shot proofs on master's plain behaviour are untouched).
     static YARD_AIMED_STANDS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// `with_arc_landing_stands`'s switch (pretrans-arms-4 round 2, the ignored 0c handoff walk
-    /// only): the arc-landing sweep in `yard_sniper_stands` runs — the #15-class patroller is
-    /// cleared off the SW arc ledge before "the ledge to the arc". Off = master no-op stands
-    /// for every other caller (the green real-damage sister included).
-    static ARC_LANDING_STANDS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// `with_far_sniper_stands`'s switch (the real-health walks only): the return-fire fights
     /// answer the level's FAR snipers (#39 0x5000093 and #20 0x5000087, both weapon 0x1e,
     /// hp 10, at d 61-90 [L the death ledgers]) — the shooters window opens to their stand-off
@@ -66,17 +61,33 @@ pub fn with_yard_aimed_stands<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// Run a walk with the arc-landing sweep enabled (OPT-IN, pretrans-arms-4 round 2 — see the
-/// thread-local's doc). The plain master replay and the probe tests keep master behaviour.
+thread_local! {
+    /// los-mask-repins-0c-2 (OPT-IN): switch the wheel to the P2K for the strip-guard shot at the
+    /// #284 landing. The walk reaches the landing with the MICRO-CAMERA 0x54 in hand (the photograph
+    /// leg's own weapon, never holstered) — no round spawns from it [M scene.rs:5002 'the
+    /// Micro-Camera 0x54 fires only from the aim bit'; docs/systems/sound-coverage.md:82 the
+    /// base-0x54 shutter], so every landing-shot attempt before this flag was a shutter tap and the
+    /// round-2 "dry gun" telemetry read the CAMERA's clip 1 spare 0 [L that run]. The P2K (weapon 2)
+    /// is owned and loaded at the landing (clip 7, carried 41, damage 3.5, spread 0.0, range 50
+    /// [L this branch's probe]); the wheel cycle (the game's own input) arms it, and the guard's
+    /// POSED AimStandFire boxes are exposed from the landing (head +5, torso +4/+53 with the world
+    /// clear [L the probe map]) — the shot lands through the real fire path. Off = master behaviour
+    /// (the camera stays in hand) for every other caller.
+    static STRIP_P2K_SHOT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 #[allow(dead_code)]
-pub fn with_arc_landing_stands<R>(f: impl FnOnce() -> R) -> R {
+pub fn with_strip_p2k_shot<R>(f: impl FnOnce() -> R) -> R {
     struct Reset;
-    impl Drop for Reset { fn drop(&mut self) { ARC_LANDING_STANDS.with(|c| c.set(false)); } }
-    ARC_LANDING_STANDS.with(|c| c.set(true));
+    impl Drop for Reset { fn drop(&mut self) { STRIP_P2K_SHOT.with(|c| c.set(false)); walker::STRIP_NO_FIGHTS.with(|c| c.set(false)); } }
+    STRIP_P2K_SHOT.with(|c| c.set(true));
+    // NOTE: STRIP_NO_FIGHTS is NOT set here — the early legs need the return-fire fights (the
+    // real-damage walk's fights are its health; the first suppression-scoped run died at tick
+    // 7215 at the ring north-west corner with 0 return-fire fights [L]). The flag branch sets
+    // it just before the west lane leg (see the shot block) and strip_fights_resume() clears
+    // it after the #282 grab.
     let _reset = Reset;
     f()
 }
-
 /// Trace helpers (scratch): the gun's state for the no-bullet-spawned line.
 fn s_gun_debug(w: &Walker) -> String { format!("{:?}", w.scene.sim.as_ref().unwrap().gun.weapon) }
 fn s_gun_fire_state(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().gun.fire_state }
@@ -347,7 +358,7 @@ fn self_blocker_hostile(sim: &nf_view::scene::Sim, blocker: Option<usize>) -> bo
 /// observed beat is 170-360 frames [L the real-health run's fight traces]) and whose STRICT
 /// gun rays clear from here (`DamageLog::exposed_part_gun_rays`).
 pub fn yard_sniper_stands(w: &mut Walker, label: &str, max: usize) {
-    if !YARD_AIMED_STANDS.with(|c| c.get()) && !ARC_LANDING_STANDS.with(|c| c.get()) { return; }
+    if !YARD_AIMED_STANDS.with(|c| c.get()) { return; }
     // The east-ledge / pre-climb / ladder-top sweep: every alive weapon-0x1e hostile within
     // `range` u gets one capped still-gate stand (the strict gun-ray aim keeps a covered
     // guard from eating the clip — the #15 measurement).
@@ -355,11 +366,6 @@ pub fn yard_sniper_stands(w: &mut Walker, label: &str, max: usize) {
         "at-the-door" => Some((64.0f32, 900u32, 3usize)),
         "pre-climb" | "ladder-top" | "ring-corner" | "west-edge" | "west-ledge" => Some((48.0, 700, 3)),
         "lip-1" | "lip-2" | "lip-3" | "lip-4" => Some((48.0, 300, 3)),
-        // pretrans-arms-4 round 2 (OPT-IN via with_arc_landing_stands, the ignored handoff walk
-        // only — the green real-damage sister keeps her no-op stands): the arc-landing sweep
-        // clears the #15-class patroller off the SW arc ledge before "the ledge to the arc" —
-        // the same player answer the lip stands are on the west ledge.
-        "arc-landing" if ARC_LANDING_STANDS.with(|c| c.get()) => Some((48.0, 700, 3)),
         _ => None,
     };
     if let Some((range, cap, count)) = sweep {
@@ -1203,54 +1209,406 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
     // measured). The still-gate stand aims with the strict gun rays; a no-op when the flag is
     // off.
     yard_sniper_stands(&mut w, "west-ledge", 3);
-    // level-0c-yard-climb-real-health-4 (OPT-IN): the diagonal stands. Measured this
-    // session: #13's cover reads NO gun-ray-exposed candidate from the landing (the
-    // west-ledge sweep above stood zero times) and from the west edge the converged still-
-    // gate rounds die in flight (clip 2→1 spent, hp 10.0 never moved [L this session's
-    // run]); the walk's own fight on the diagonal burns its clip the same way (fight#13
-    // t0-t240, blocked false, err 0.001-0.016, hp 10.0 never moved) and the -16 at frame
-    // 13725 + the fatal -1.6 graze kill the 17.6-hp Bond at tick 14308 mid-diagonal at
-    // (-7.69, 12.40, -217.32) [L the death log]. Custom stand spots OFF the walk's own
-    // lines fall off the strip (two probe walk_tos landed in the gap at y 9.88/1.96 [L
-    // this session]) — so the still-gate stands run AT the route's own diagonal arrivals
-    // (proven floor, the walk_to radii the master walk pins), stepping toward his post
-    // until the strict rays clear; one landing round kills the 10-hp sniper [L the
-    // census]. yard_sniper_stands is a no-op when the flag is off.
-    // The diagonal ledges south-east to icon #6 [D probe blk2 west map].
-    // pretrans-arms-4: the solid west sniper #35 (skin 0x500087, hp 10.0, ALIVE at the
-    // crossing — the west-ledge stands' rounds die in flight [L the diag dump]) stands at
-    // (-7.07,12.24,-218.60), 0.2-0.3 u off the -3 tree's single push line (B-drop
-    // (-8.98,-217.44) → (-6.0,-219.6)); pre-0a9d39435 guards and corpses were non-solid and
-    // Bond walked through him — master made guards and corpses solid, and with the old r 1.5
-    // the capsule slide carried Bond PAST the target's arrive radius and off the lip's
-    // south-east edge (the leg arrived at (-4.81,2.70,-220.50) on the yard floor [L the run]).
-    // The player's way: go AROUND him west — the shelf's west edge carries floor south from
-    // the B-drop (the scoped map rows −218.0..−219.0 hold x −10..−8.5..−5.0 [L the diag
-    // dump]) while every direct south-east line passes under 0.7 u of his capsule and the
-    // slide either wedges the leg (the line stays blocked) or carries Bond off the lip's
-    // south-east edge [L the runs]. Three legs, ≥1.2 u clear of the capsule on the mapped
-    // floor, then rejoin the -3 leg at (-6.0,-219.6).
+    // los-mask-repins-0c scoped map: who stands near the strip now (the sight era moves the
+    // guards — the ledgers' fixed (-7.07,12.24,-218.60) is a stale-tree measurement), and
+    // where the strip's floor actually is (the -4 scoped map rows −218.0..−219.0 held
+    // x −10..−8.5..−5.0 [L the diag dump]; re-prove it on this tree before walking it).
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
         for (i, d) in sim.drones.list.iter().enumerate() {
             if !d.present { continue; }
             let dd = ((d.pos[0] - p[0]).powi(2) + (d.pos[2] - p[2]).powi(2)).sqrt();
-            if dd < 6.0 {
-                eprintln!("[0c-diag] drone {i}: pos=({:.2},{:.2},{:.2}) d={dd:.2} health={:.1} corpse={} team={} skin={:#x}",
-                    d.pos[0], d.pos[1], d.pos[2], d.health, d.corpse, d.team, d.skin);
+            if dd < 10.0 && d.team == 1 && d.health > 0.0 {
+                eprintln!("[0c-diag] drone {0}: pos=({1:.2},{2:.2},{3:.2}) d={4:.2} health={5:.1} corpse={6} skin={7:#x} state={8:#x}",
+                    i, d.pos[0], d.pos[1], d.pos[2], dd, d.health, d.corpse as u8, d.skin, d.state);
             }
         }
+        // The round-3 note, measured in-sim: cast the port's world rays (the disc's collision
+        // [D]; the game's bullet pick walks the same world [M]) from Bond's landing eye to the
+        // STRIP guard (the live guard nearest (-7.07,-218.60)) — a clear ray means the miss is
+        // a port-side spread/lead artifact and the shot is the route; a blocked ray is the
+        // game-correct miss and the re-route must go around him.
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let strip: [f32; 2] = [-7.07, -218.60];
+            let mut best: Option<(usize, f32)> = None;
+            for (i, d) in sim.drones.list.iter().enumerate() {
+                if !d.present || d.team != 1 || d.corpse || d.health <= 0.0 { continue; }
+                let dd = ((d.pos[0] - strip[0]).powi(2) + (d.pos[2] - strip[1]).powi(2)).sqrt();
+                if dd < 3.0 && best.map_or(true, |(_, bd)| dd < bd) { best = Some((i, dd)); }
+            }
+            if let Some((gi, gd)) = best {
+                let gp = sim.drones.list[gi].pos;
+                let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                eprintln!("[0c-diag] strip guard {gi} at ({:.2},{:.2},{:.2}) state {:#x} (off-post {gd:.2}); bond eye ({:.2},{:.2},{:.2})",
+                    gp[0], gp[1], gp[2], sim.drones.list[gi].state, eye[0], eye[1], eye[2]);
+                for (label, dy) in [("feet", 0.3f32), ("torso", 0.9), ("head", 1.5)] {
+                    let to = [gp[0], gp[1] + dy, gp[2]];
+                    let hit = sim.world.segment_hit(eye, to).map(|(t, _)| {
+                        format!("at ({:.2},{:.2},{:.2})", eye[0] - (eye[0] - to[0]) * t, eye[1] - (eye[1] - to[1]) * t, eye[2] - (eye[2] - to[2]) * t)
+                    });
+                    eprintln!("[0c-diag] eye->{label}: {}", hit.map(|h| format!("BLOCKED {h}")).unwrap_or_else(|| "clear".into()));
+                }
+                // The muzzle line sits lower than the eye — the -4 session's rounds died on the
+                // lip while the eye ray read Some. Cast chest-height rays from forward steps
+                // toward the guard: the first clear offset is the shooting spot.
+                let dir = [(gp[0] - bp[0]), (gp[2] - bp[2])];
+                let dl = (dir[0] * dir[0] + dir[1] * dir[1]).sqrt().max(1e-3);
+                for off in [0.0f32, 0.4, 0.8, 1.2, 1.6] {
+                    let from = [bp[0] + dir[0] / dl * off, bp[1] + 0.7, bp[2] + dir[1] / dl * off];
+                    let to = [gp[0], gp[1] + 0.9, gp[2]];
+                    let hit = sim.world.segment_hit(from, to).map(|(t, _)| {
+                        format!("at ({:.2},{:.2},{:.2})", from[0] - (from[0] - to[0]) * t, from[1] - (from[1] - to[1]) * t, from[2] - (from[2] - to[2]) * t)
+                    });
+                    eprintln!("[0c-diag] chest+{off:.1}u->torso: {}", hit.map(|h| format!("BLOCKED {h}")).unwrap_or_else(|| "clear".into()));
+                }
+                // los-mask-repins-0c-2: THE LANDING-SHOT QUESTION — Bond's REAL fire ray, cast at
+                // the strip guard from the landing (read-only: aim_snap and the flight traces draw
+                // no RNG). The flat eye rays above are the global query; the round itself rides the
+                // game's own fire pipeline: the aim point SNAPS to whatever the crosshair ray hits
+                // first (the cel-scoped level query, then the script objects/doors, then the
+                // drones' hit boxes — [M Player_WeaponInitBullet 0x1a4bf0:154-164 + 226-245,
+                // Collide_Pick mask 0x20a]; the port's aim_snap mirrors it) — a lip between the eye
+                // and the guard STEALS the aim point onto itself — and the flight's contact list is
+                // the sorted nearest-first walk (world nodes + breakables + drones; first non-pass
+                // wins [M Collide_Update 0x1ea398:216-229; Bullet_CollisionHandler 0x12ce80;
+                // Collide_Intersect 0x1ebaa8]).
+                {
+                    let d = nf_game::drone::Data {
+                        tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+                        world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+                        skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+                        hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+                        surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(),
+                        difficulty: sim.drones.difficulty, ai_points: &sim.ai_points,
+                    };
+                    // The spawn origin [M 0x1a4bf0:212-240]: the head moved to the MIDPOINT of the
+                    // head and the view model's DATUM 0 — only for a record with a first-person
+                    // model, +0x68 & 0x10000, NOT an excluded base (1|0x52|0x54|0x58|0x59|0x5b),
+                    // not a zoomed scope. The walk's gun at the landing is the P2K 0x54 — an
+                    // excluded base — so the round spawns at the CAMERA (the eye). Both the gate
+                    // and the record's base are reported so the run stands on its own.
+                    let wrec = sim.weapons.records.get(sim.gun.weapon as usize);
+                    let (flags68, rbase, fp_model) = wrec.map(|r| (
+                        u32::from_le_bytes(r[0x68..0x6c].try_into().unwrap()),
+                        u16::from_le_bytes([r[0x02], r[0x03]]),
+                        u32::from_le_bytes(r[0xdc..0xe0].try_into().unwrap()) != 0,
+                    )).unwrap_or((0, 0, false));
+                    let excluded = matches!(rbase, 1 | 0x52 | 0x54 | 0x58 | 0x59 | 0x5b);
+                    let zoomed_scope = sim.aiming && flags68 & 0x40 != 0;
+                    let origin = if fp_model && !excluded && !zoomed_scope && flags68 & 0x10000 != 0 {
+                        let g = sim.gun_matrix();
+                        let d0 = sim.view_datum(0).unwrap_or([g[3][0], g[3][1], g[3][2]]);
+                        [(eye[0] + d0[0]) * 0.5, (eye[1] + d0[1]) * 0.5, (eye[2] + d0[2]) * 0.5]
+                    } else { eye };
+                    eprintln!("[0c-fire] weapon {:#x} rbase {rbase:#x} fp_model {fp_model} excluded {excluded} -> origin ({:.2},{:.2},{:.2})",
+                        sim.gun.weapon, origin[0], origin[1], origin[2]);
+                    // The view ray: the eye -> the guard's torso (what the shooter aims at), the
+                    // aim point 256 out, then the game's snap.
+                    let (mut vx, mut vy, mut vz) = (gp[0] - eye[0], (gp[1] + 0.9) - eye[1], gp[2] - eye[2]);
+                    let vl = (vx * vx + vy * vy + vz * vz).sqrt().max(1e-6);
+                    let (vx, vy, vz) = (vx / vl, vy / vl, vz / vl);
+                    let aim_raw = [eye[0] + vx * 256.0, eye[1] + vy * 256.0, eye[2] + vz * 256.0];
+                    let (aim_pt, stops) = sim.drones.aim_snap_traced(&d, eye, aim_raw, true);
+                    for s in &stops {
+                        eprintln!("[0c-fire] snap stop stage {} id {} pi {} t {:.3} at ({:.2},{:.2},{:.2})",
+                            s.stage, s.id, s.pi, s.t,
+                            eye[0] + (aim_raw[0] - eye[0]) * s.t, eye[1] + (aim_raw[1] - eye[1]) * s.t, eye[2] + (aim_raw[2] - eye[2]) * s.t);
+                    }
+                    eprintln!("[0c-fire] snapped aim point ({:.2},{:.2},{:.2}) (raw {})",
+                        aim_pt[0], aim_pt[1], aim_pt[2],
+                        if aim_pt == aim_raw { "unchanged" } else { "moved" });
+                    // THE EQUIPMENT TRUTH [M scene.rs:5002 'the Micro-Camera 0x54 fires only from
+                    // the aim bit'; docs/systems/sound-coverage.md:82]: weapon 0x54 is the CAMERA
+                    // — no round spawns from it, so every landing-shot attempt made with it was a
+                    // shutter tap. The P2K (weapon 2) is in the loadout; report its magazine
+                    // (the shared clip slot [M Player_ReloadAmmoType 0x1a1988:18-22]) and carried
+                    // rounds so the shot route knows whether the wheel switch alone arms the shot.
+                    {
+                        // The shared clip slot rule, inline (Sim::clip_slot is pub(crate))
+                        // [M Player_ReloadAmmoType 0x1a1988:18-22]: the BASE's slot for a twin
+                        // (+0x05 set) whose ammo type matches its base, else its own.
+                        let base2 = sim.weapons.base(2) as usize;
+                        let wi2 = if sim.weapons.shares_base_clip(2) && sim.weapons.ammo_type(2) == sim.weapons.ammo_type(base2) { base2 } else { 2 };
+                        let t2 = sim.weapons.ammo_type(2);
+                        let rec2 = sim.weapons.records.get(2);
+                        eprintln!("[0c-fire] the P2K (weapon 2): owned? see the wheel; clip slot {wi2} = {:?}, carried type {t2} = {:?}, record damage {:?} spread {:?} range {:?}",
+                            sim.drones.inventory.clip.get(wi2), sim.drones.inventory.carried.get(t2),
+                            rec2.map(|r| f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap())),
+                            rec2.map(|r| f32::from_le_bytes(r[0x24..0x28].try_into().unwrap())),
+                            rec2.map(|r| f32::from_le_bytes(r[0x1c..0x20].try_into().unwrap())));
+                    }
+                    // The guard's POSED hit boxes — the real aim targets. The torso-centre ray
+                    // above missed every box (the AimStandFire pose displaces the body), so a
+                    // player aims at the drawn body: per part, the box centre, whether the
+                    // eye->centre ray enters the box itself, and whether the world blocks first
+                    // (the snap's drone stage wins only while the box is on the line [M
+                    // 0x1a4bf0's Collide_RayIntersect block + the same boxes in the flight's
+                    // sorted list [M 0x1ea398:120-158]]).
+                    for (i, dr) in sim.drones.list.iter().enumerate() {
+                        if dr.corpse || !dr.enabled || !dr.present || dr.health <= 0.0 { continue; }
+                        let dxz = ((dr.pos[0] - origin[0]).powi(2) + (dr.pos[2] - origin[2]).powi(2)).sqrt();
+                        if dxz > vl + 4.0 { continue; }
+                        for b in &dr.hit_boxes(&d) {
+                            // The box centre in world space: m's translation column.
+                            let c = [b.m[3][0], b.m[3][1], b.m[3][2]];
+                            let ray = [c[0] - origin[0], c[1] - origin[1], c[2] - origin[2]];
+                            let box_t = nf_game::damage::ray_box(origin, ray, b);
+                            let cell_b = sim.world.find_cel(origin);
+                            let world_t = sim.world.segment_flight_scoped(cell_b, origin, c, true);
+                            eprintln!("[0c-fire] guard {i} part {:+} box centre ({:.2},{:.2},{:.2}) box_t {} world_t {}",
+                                b.part, c[0], c[1], c[2],
+                                box_t.map_or("miss".into(), |k| format!("{k:.3}")),
+                                world_t.map_or("clear".into(), |k| format!("{k:.3}")));
+                        }
+                    }
+                    // The flight: the snapped aim direction from the spawn origin, out past the
+                    // guard; the world stop (cel-scoped, glass pass on — the P2K has +0x6C bit
+                    // 0x800 clear [L weapon_data]) and the drone hit boxes along the same ray —
+                    // the nearest wins [M 0x1ea398:216-229].
+                    let (mut sx, mut sy, mut sz) = (aim_pt[0] - origin[0], aim_pt[1] - origin[1], aim_pt[2] - origin[2]);
+                    let sl = (sx * sx + sy * sy + sz * sz).sqrt().max(1e-6);
+                    let shot = [sx / sl, sy / sl, sz / sl];
+                    let far = vl + 4.0;
+                    let fend = [origin[0] + shot[0] * far, origin[1] + shot[1] * far, origin[2] + shot[2] * far];
+                    let cell = sim.world.find_cel(origin);
+                    let tw = sim.world.segment_flight_scoped(cell, origin, fend, true);
+                    let flight_ray = [fend[0] - origin[0], fend[1] - origin[1], fend[2] - origin[2]];
+                    let mut drone_hit: Option<(usize, i16, f32)> = None;
+                    for (i, dr) in sim.drones.list.iter().enumerate() {
+                        if dr.corpse || !dr.enabled || !dr.present || dr.health <= 0.0 { continue; }
+                        for b in &dr.hit_boxes(&d) {
+                            if let Some(k) = nf_game::damage::ray_box(origin, flight_ray, b) {
+                                if k > 1e-4 && k <= 1.0 && drone_hit.map_or(true, |(_, _, bt)| k < bt) {
+                                    drone_hit = Some((i, b.part, k));
+                                }
+                            }
+                        }
+                    }
+                    match tw {
+                        Some(tw) => {
+                            let hp = [origin[0] + flight_ray[0] * tw, origin[1] + flight_ray[1] * tw, origin[2] + flight_ray[2] * tw];
+                            eprintln!("[0c-fire] flight world stop t {:.3} at ({:.2},{:.2},{:.2})", tw, hp[0], hp[1], hp[2]);
+                            // Name the surface: the run bounds containing the stop point (the
+                            // same scoped run list the flight query walked).
+                            if let Some(cell) = cell {
+                                if let Some(runs) = sim.world.scoped_run_bounds(cell, origin, fend) {
+                                    let mut named = 0;
+                                    for (r, owner, lo, hi) in &runs {
+                                        if hp[0] >= lo[0] - 0.05 && hp[0] <= hi[0] + 0.05 && hp[1] >= lo[1] - 0.05 && hp[1] <= hi[1] + 0.05 && hp[2] >= lo[2] - 0.05 && hp[2] <= hi[2] + 0.05 {
+                                            eprintln!("[0c-fire]   surface: run {r} owner {owner} bounds ({:.2},{:.2},{:.2})..({:.2},{:.2},{:.2})", lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
+                                            named += 1;
+                                        }
+                                    }
+                                    if named == 0 { eprintln!("[0c-fire]   surface: {} runs in the straddle set, none bounds the stop point", runs.len()); }
+                                }
+                            }
+                        }
+                        None => eprintln!("[0c-fire] flight world trace: CLEAR for {far:.1} u along the snapped aim"),
+                    }
+                    match drone_hit {
+                        Some((i, part, t)) => eprintln!("[0c-fire] drone {i} part {part} t {:.3} along the flight ray", t),
+                        None => eprintln!("[0c-fire] no drone hit box along the flight ray"),
+                    }
+                    match (tw, drone_hit) {
+                        (Some(tw), Some((i, part, t))) if t < tw => eprintln!("[0c-fire] VERDICT: the round reaches drone {i} part {part} (t {t:.3} < world {tw:.3}) — the game's sorted list takes the guard [M 0x1ea398:216-229]"),
+                        (Some(tw), Some((i, part, t))) => eprintln!("[0c-fire] VERDICT: the WORLD stops the round first (t {tw:.3} <= drone {i} part {part} t {t:.3}) — the lip takes it"),
+                        (Some(_), None) => eprintln!("[0c-fire] VERDICT: the world stops the round; no drone box on the line"),
+                        (None, Some((i, part, t))) => eprintln!("[0c-fire] VERDICT: clear world, drone {i} part {part} at t {t:.3} — the round LANDS on the guard"),
+                        (None, None) => eprintln!("[0c-fire] VERDICT: nothing on the line at all"),
+                    }
+                }
+            } else {
+                eprintln!("[0c-diag] no live guard within 3.0 of the strip post at the landing");
+            }
+        }
+        eprintln!("[0c-diag] strip floor map (x -10..-5, z -215.5..-219.5 step 0.5):");
+        for z in [-215.5f32, -216.0, -216.5, -217.0, -217.5, -218.0, -218.5, -219.0, -219.5] {
+            let mut row = String::new();
+            for x in [-10.0f32, -9.5, -9.0, -8.5, -8.0, -7.5, -7.0, -6.5, -6.0, -5.5, -5.0] {
+                let f = sim.world.segment_hit([x, 13.4, z], [x, 8.4, z]).map(|(t, _)| 13.4f32 - 5.0f32 * t);
+                row.push_str(&match f { Some(y) => format!("{y:5.2}"), None => "  ...".to_string() });
+            }
+            eprintln!("[0c-diag] z {z:7.1}: {row}");
+        }
+        eprintln!("[0c-diag] deep map (8.4..13.4), x -10..2 step 1.0, cols x=-10,-9,-8,-7,-6,-5,-4,-3,-2,-1,0,1,2:");
+        for z in [-215.5f32, -216.5, -217.5, -218.0, -218.5, -219.0, -219.5, -220.0, -220.5, -221.0, -221.5, -222.0, -222.5, -223.0, -223.5, -224.0] {
+            let mut row = String::new();
+            for c in 0..13i32 {
+                let x = -10.0f32 + c as f32;
+                let f = sim.world.segment_hit([x, 13.4, z], [x, 8.4, z]).map(|(t, _)| 13.4f32 - 5.0f32 * t);
+                row.push_str(&match f { Some(y) => format!("{y:5.2}"), None => "  ...".to_string() });
+            }
+            eprintln!("[0c-diag] z {z:7.1}: {row}");
+        }
     }
-    w.walk_to(Wp::new(-8.4, 12.4, -218.8).r(1.0), "the west ledge diagonal (the shelf's west lane)");
-    // The brush-past: the leg's line passes 0.7 u from the sniper's capsule — the clip slides
-    // Bond around its EAST side onto the holding shelf (measured: the slide stands at
-    // (-6.70,12.37,-218.71) [L the run]) — which is INSIDE this leg's arrive radius (d 1.07),
-    // so the slide IS the arrival; the old r 0.9 kept steering into the now-blocked line and
-    // wedged at the 6000-tick cap [L the run].
-    w.walk_to(Wp::new(-7.3, 12.4, -219.6).r(1.2), "the west ledge diagonal (the sniper's brush-past slide)");
-    w.walk_to(Wp::new(-6.0, 12.4, -219.6).r(1.5), "the west ledge diagonal");
+    // los-mask-repins-0c: the shot route. The world gives a CLEAN shot from the landing to
+    // the strip guard — the eye rays to his feet/torso/head AND the chest-height rays from
+    // every forward offset 0..1.6 u are all clear [L the 0c-diag dump on this tree; the
+    // port's collision is the disc's, so the game's bullet reaches the same [M]] — the
+    // 600-tick miss was the shooter artifact, not the world. The player's play: kill the
+    // 10-hp guard from the landing, then walk the straight -3 diagonals unobstructed (the
+    // lip-route and floor-route repairs tried and reverted this round are recorded in the
+    // ignore messages: the -4 slide now falls to the yard, the 11.24 lattice is thin tops).
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let strip: [f32; 2] = [-7.07, -218.60];
+        let mut target: Option<usize> = None;
+        for (i, d) in sim.drones.list.iter().enumerate() {
+            if !d.present || d.team != 1 || d.corpse || d.health <= 0.0 { continue; }
+            let dd = ((d.pos[0] - strip[0]).powi(2) + (d.pos[2] - strip[1]).powi(2)).sqrt();
+            if dd < 3.0 && target.map_or(true, |t| dd < ((sim.drones.list[t].pos[0] - strip[0]).powi(2) + (sim.drones.list[t].pos[2] - strip[1]).powi(2)).sqrt()) {
+                target = Some(i);
+            }
+        }
+        drop(sim);
+        if STRIP_P2K_SHOT.with(|c| c.get()) {
+            // los-mask-repins-0c-2: the landing-shot lever, SETTLED. Three measured facts on
+            // this branch: (1) the held weapon at the landing is the MICRO-CAMERA 0x54 — no
+            // round spawns from it [M scene.rs:5002 'the Micro-Camera 0x54 fires only from
+            // the aim bit'; sound-coverage.md:82] — the old "dry gun" telemetry read the
+            // CAMERA's clip 1 spare 0 [L the round-2 run]; (2) the drop spot itself is a
+            // TRANSIENT over the void — the strip floor map has no floor at (x -8.2, z
+            // -215.5..-217) [D the probe map] and the switch's idle ticks slid Bond straight
+            // down to y 1.03 [L this branch's first run]; (3) the guard's POSED AimStandFire
+            // boxes are exposed and he holds still most of the cycle (still 61/181 ticks in
+            // the stand trace [L]) — the 0x1e (owned [D the loadout's 30]) is the stand's
+            // own zero-spread weapon [M Bullet_init 0x12c5a0:139-170, mul 0 with the aim
+            // bit]. The player's play: walk the WEST LANE off the drop (the ledger's proven
+            // lip-top leg — the -4-era arrival (-8.36,12.37,-217.82) [L the 0c round-2 run]),
+            // stand LEVEL with the guard on the 11.24 strip top, and take the aimed shot
+            // through his fire-cycle pause. The west lane runs UNCONDITIONALLY: the diagonals
+            // only hold when entered from the lane (from the drop spot they cross the void
+            // band z -215.5..-217 and fall — measured [L the real-damage run where the
+            // west-edge stands' gunfire drew #35 off his post, the target search came up
+            // empty and the straight diagonals fell to y 1.96]).
+            // Real input only; the stand never writes health, armour or ammo.
+            // The fight suppression arms HERE (the crossing only): a return-fire fight on the
+            // thin lip flanks Bond straight off it [L the measured west lane fall to y 1.96 at
+            // +187 ticks], so the crossing legs walk fight-free and the shooter is answered
+            // with the aimed stand from the stable lane instead. strip_fights_resume() lifts
+            // it after the #282 grab.
+            walker::STRIP_NO_FIGHTS.with(|c| c.set(true));
+            if let Some(g) = target {
+                // THE STAND PATH (the pushed-green choreography — do not re-shape it): the
+                // ledger's proven west-lane leg (the -4-era arrival (-8.36,12.37,-217.82)
+                // [L the 0c round-2 run]), then the aimed shot from the stable lane. Every
+                // leg added to THIS path re-times the #282 grab a tick, shifts the ride
+                // landing ~0.02 u and the thin arc ledge legs fall [L the runs].
+                w.walk_to(Wp::new(-8.4, 12.4, -218.8).r(1.0), "the west lane (the lip top west of the guard's capsule)");
+                let killed = yard_stand_aimed(&mut w, g, "the strip guard from the west lane", 3600);
+                eprintln!("[0c] the strip stand: killed {killed}");
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[g];
+                let (clip, spare) = (sim.gun.clip, sim.gun.spare);
+                eprintln!("[0c] after the landing shots: guard {g} hp {:.1} corpse {} (clip {clip} spare {spare})", d.health, d.corpse);
+            } else {
+                eprintln!("[0c] no live guard at the strip post at the landing (drawn off by the earlier gunfire [L the real-damage run]) — the lane holds, the diagonals walk on");
+                // THE NO-STAND PATH (the real-damage sister's own choreography — the fights
+                // drew #35 off his post, so no stand runs and the crossing rides its own
+                // legs): the drop spot slides Bond off after ~100 idle ticks (the wheel
+                // switch's 122 idle ticks fell him to y 1.03 [L this branch's run]) and the
+                // fights leave his yaw on the LAST fight target, so walk_to's turn-first
+                // phase stands still ~130 ticks and the lane leg fell to y 1.96 [L]. A
+                // player never stands still on the drop: he turns while walking.
+                {
+                    let target_lane = [-8.4f32, -218.8f32];
+                    let mut arrived = false;
+                    for _t in 0..600u32 {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let p = sim.bond.pos;
+                        if ((p[0] - target_lane[0]).powi(2) + (p[2] - target_lane[1]).powi(2)).sqrt() < 1.0 {
+                            arrived = true;
+                            break;
+                        }
+                        let desired = (target_lane[0] - p[0]).atan2(target_lane[1] - p[2]);
+                        let err = walker::wrap_pi(desired - sim.bond.yaw);
+                        w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), forward: 1.0, ..Default::default() }, false);
+                    }
+                    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+                    eprintln!("[0c] the west lane (moving): arrived {arrived} at ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
+                    assert!(arrived && p[1] > 11.0,
+                        "the west lane (moving) never held the lip top, got {p:?}");
+                    // Settle on the stable lane before the diagonals: the loop breaks at full
+                    // run speed and the momentum carried the first diagonal leg past its
+                    // arrival circle off the lip's east edge [L the fall to y 2.93 at
+                    // (-4.81,-220.51)]. The lane floor holds idle (the plain run's settles
+                    // stood here).
+                    w.wait(12);
+                }
+                // The mid-band stop: the shared diagonal-1 leg from the lane walks the -8.44
+                // thin wall wedge (invisible to the 0.5-step floor probe; the plain run's
+                // stuck sidesteps rescue it) and the real-damage run's rescue arc overshot
+                // east to the band edge and fell [L the fall to y 2.93 at (-4.81,-220.50)].
+                // The stop at (-7.0,-218.8) — mid-band floor [D the strip map rows
+                // -218.5/-219.0] — shortens the post-wedge arc so the arrival circle is met
+                // on its west side. It stays OUT of the stand path: the plain walk's stand
+                // leaves its own green choreography — adding legs there re-times the #282
+                // grab a tick, shifts the ride landing 0.02 u and the arc ledge leg falls
+                // [L the plain run's (8.99,2.01,-222.09) fall with the stop in the shared
+                // path].
+                w.walk_to(Wp::new(-7.0, 12.4, -218.8).r(0.8), "the mid-band stop");
+            }
+            // (The shared diagonal legs below now enter from the held lane with the same
+            // south-facing yaw the plain run's lane arrival left — the fall they showed on the
+            // real-damage tree came from the lane leg itself dropping Bond to the yard first
+            // [L the runs], not from the diagonal legs. A walk-speed variant of the diagonals
+            // WEDGED on the lip instead — 900 ticks advanced 0.4 u [L] — so the legs keep the
+            // plain run's proven shape.)
+        } else if let Some(g) = target {
+            // The ammo lever (the round-2 telemetry: the gun arrived DRY — clip 1 spare 0 [L
+            // the run]): fetch ammo through the walk's own pickup walk first, then re-anchor
+            // on the landing (the fetch displaces Bond), then shoot.
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let (clip, spare) = (sim.gun.clip as i32, sim.gun.spare as i32);
+                drop(sim);
+                if clip + spare < 4 {
+                    eprintln!("[0c] dry at the landing (clip {clip} spare {spare}) — the ammo fetch");
+                    if w.resupply("the strip ammo run") {
+                        // The take lands gun 0x0006 (50 rounds at (-21.53,11.33,-218.54)
+                        // [D the pickup dump]) in the INVENTORY — the current clip does not
+                        // move [M Pickup_Handler 0x18e650's equip path] — cycle the wheel to
+                        // the armed gun, then re-anchor on the landing (the fetch displaced
+                        // Bond 13 u west).
+                        if w.switch_to_armed("the strip gun switch") {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            eprintln!("[0c] armed: weapon {:#x} clip {} spare {}", sim.gun.weapon, sim.gun.clip, sim.gun.spare);
+                            drop(sim);
+                            w.walk_to(Wp::new(-8.21, 12.82, -215.66).r(0.5), "re-anchor on the #284 landing");
+                        }
+                    }
+                }
+            }
+            // The bounded landing-shot attempt (the repro of the ledger's 600-tick miss) plus
+            // the ammo telemetry: this round's shot-telemetry run measured the gun DRY at the
+            // landing — clip 1 fired off-target, then clip 0 spare 0 weapon 0x54, and every
+            // on-target trigger pull after that was a dry click [L the run] — while the world
+            // rays (eye and chest, every forward offset 0..1.6 u) are ALL clear [L the
+            // 0c-diag dump]. The miss was never the world; it was the ammo.
+            for attempt in 0..2 {
+                let (alive, hp) = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let d = &sim.drones.list[g];
+                    (!d.corpse && d.health > 0.0, d.health)
+                };
+                if !alive { break; }
+                let (clip, spare) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare) };
+                eprintln!("[0c] the strip guard {g} from the landing (attempt {attempt}, hp {hp:.1}, clip {clip} spare {spare})");
+                if w.shoot(g, "the strip guard from the landing") { break; }
+            }
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.list[g];
+            let (clip, spare) = (sim.gun.clip, sim.gun.spare);
+            eprintln!("[0c] after the landing shots: guard {g} hp {:.1} corpse {} (clip {clip} spare {spare} — the on-target pulls were dry [L the telemetry])", d.health, d.corpse);
+        }
+    }
+    // The diagonal ledges south-east to icon #6 [D probe blk2 west map].
     yard_sniper_stands(&mut w, "lip-1", 3);
+    w.walk_to(Wp::new(-6.0, 12.4, -219.6).r(1.5), "the west ledge diagonal");
+    yard_sniper_stands(&mut w, "lip-1b", 3);
     w.walk_to(Wp::new(-4.5, 12.4, -221.5).r(1.5), "the west ledge diagonal 2");
     yard_sniper_stands(&mut w, "lip-2", 3);
     w.walk_to(Wp::new(-2.5, 12.4, -222.8).r(1.4), "the west ledge diagonal 3");
@@ -1307,64 +1665,11 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
             "the #282 ride must drop onto the (4..8, −221..−226) ledge (11.24 [D probe blk2]), got {p:?} dropped {dropped}");
     }
     eprintln!("[0c] wire #282 ridden east — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    walker::strip_fights_resume();
+    // los-mask-repins-0c-2: the flag scope's return-fire suppression lifts here (the strip
+    // crossing is over; the SW arc and everything east fight normally).
     // The SW arc: the ledge to the arc's west end and east along it [D probes].
-    // pretrans-arms-4 round-2 probe: the ledge east of the #282 A-end drop fell under Bond
-    // ("the ledge to the arc" arrived (8.99,2.01,-222.09) on the yard floor [L the run]) —
-    // dump the ledge's residents + the player-law floor rows before the leg. FINDINGS [L the
-    // dump + the run]: NO drones within 10 u (no solid body up here) and the scoped rows show
-    // the walkable band as a diagonal spine — z −224: x 6-7, z −223: x 7-8, z −222: x 7-9, z
-    // −221: x 8-10, z −220: x 9-12, z −219: x 10-14, z −218: x 12-14 — while this timeline's
-    // ride lands Bond at (4.98,13.16,-223.29), WEST of the spine. The -3 tree walked this same
-    // leg green from the same ride code — its landing must have sat ON the spine (the repaired
-    // crossing changed the grab approach: icon #6 arrived (-0.80,-224.40) this run, the grab
-    // fired elsewhere, the drop landed elsewhere). MEASURED WORSE: a band-tip leg (7.2,-223.3)
-    // r 0.6 also fell (674 ticks struggling east off the landing patch, arrived (7.37,1.96,
-    // -222.73) [L the run]) — the landing patch is ISOLATED: standing holds, walking east does
-    // not. The -3 legs stay; the next round maps the landing patch fine (0.25 step) and routes
-    // from what actually holds.
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        eprintln!("[0c-arc] at the ledge-to-arc start bond=({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
-        for (i, d) in sim.drones.list.iter().enumerate() {
-            if !d.present { continue; }
-            let dd = ((d.pos[0] - p[0]).powi(2) + (d.pos[2] - p[2]).powi(2)).sqrt();
-            if dd < 10.0 {
-                eprintln!("[0c-arc] drone {i}: pos=({:.2},{:.2},{:.2}) d={dd:.2} health={:.1} corpse={} team={} skin={:#x}",
-                    d.pos[0], d.pos[1], d.pos[2], d.health, d.corpse, d.team, d.skin);
-            }
-        }
-        eprintln!("[0c-arc] ledge rows (bond cel, down-seg 15.0→1.0; x 4..14 step 1, z -224..-218 step 1):");
-        for zk in 0..7 {
-            let z = -224.0 + zk as f32;
-            let mut row = String::new();
-            for xk in 0..11 {
-                let x = 4.0 + xk as f32;
-                let hit = sim.world.segment_hit_scoped(sim.bond.cel, [x, 15.0, z], [x, 1.0, z]);
-                match hit {
-                    Some((t, _)) => row.push_str(&format!("{:5.1}", 15.0 - 14.0 * t)),
-                    None => row.push_str("    ."),
-                }
-            }
-            eprintln!("[0c-arc] z={z:6.1}: {row}");
-        }
-        eprintln!("[0c-arc]          x: {}", (0..11).map(|k| format!("{:>5.1}", 4.0 + k as f32)).collect::<String>());
-    }
-    yard_sniper_stands(&mut w, "arc-landing", 3);
     w.walk_to(Wp::new(8.0, 12.4, -222.0).r(1.0), "the ledge to the arc");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        eprintln!("[0c-arc] after the ledge-to-arc leg bond=({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
-        for (i, d) in sim.drones.list.iter().enumerate() {
-            if !d.present { continue; }
-            let dd = ((d.pos[0] - p[0]).powi(2) + (d.pos[2] - p[2]).powi(2)).sqrt();
-            if dd < 10.0 {
-                eprintln!("[0c-arc] drone {i}: pos=({:.2},{:.2},{:.2}) d={dd:.2} health={:.1} corpse={} team={} skin={:#x}",
-                    d.pos[0], d.pos[1], d.pos[2], d.health, d.corpse, d.team, d.skin);
-            }
-        }
-    }
     w.walk_to(Wp::new(13.0, 12.4, -218.5).r(1.2), "the arc west end");
     w.walk_to(Wp::new(24.0, 12.4, -218.0).r(1.5), "the ring south-west arc");
     // The grab line: the 1.5 arrival can stop anywhere on the arc's bend (a guard fight on the arc
@@ -1450,7 +1755,8 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
             "the #283 ride must drop onto the ring SE corner (11.09..11.17 [D probe door2]), got {p:?} dropped {dropped} health {} substate {}",
             sim.drones.health.health, sim.bond.substate);
     }
-    eprintln!("[0c] the south gap crossed on wire #283 — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    eprintln!("[0c] the south gap crossed on wire #283 — landed {:?}; the flag scope's return-fire suppression lifts past the thin floors", w.scene.sim.as_ref().unwrap().bond.pos);
+
 
     // Leg 9 (REAL from the SE corner through the door): the district's true geometry [D, probe
     // walkreal_probe0c_door2_live]: the corner (11.10..11.17, x ≤40.5, z −210..−208) is where

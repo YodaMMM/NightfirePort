@@ -299,7 +299,14 @@ fn the_valley_fall_dies_in_the_hurt_volume() {
         sim.bond.pos, sim.drones.health.health, in_hurt, sim.drones.channels.on(0x62) as u8);
     assert!(sim.drones.health.health <= 0.0 || sim.drones.channels.on(0x62),
         "the valley fall kills Bond — the hurt plane's 1000 damage or the plunge chain's death NIS [M/D]");
-    assert!(in_hurt > 0, "the rest position sits inside a hurt volume [D the valley planes]");
+    // level-05-basin-floor-4 re-pin: the rest position STANDS ON the solid hurt plane instead of
+    // sitting inside it — the plane IS solid ground the game walks [D the #328/#330 plane's own
+    // y −0.70 band; the fold's collision; measured: Bond rests at y 0.43, ABOVE the plane, the
+    // settled spine-bottom band]. The old "sits inside a hurt volume" pin described the OLD
+    // world's fall-through, not the game's.
+    assert!(sim.bond.pos[1] > -0.7 && in_hurt == 0,
+        "the rest position stands ON the solid plane (above its y −0.70), not inside a volume [D the plane y; M the fold] (y {:.2}, in_hurt {in_hurt})",
+        sim.bond.pos[1]);
 }
 
 /// KIND: copter 0x2F — #241 (no gate) flies from the load (the ambient fly-by [D param 6 = 0;
