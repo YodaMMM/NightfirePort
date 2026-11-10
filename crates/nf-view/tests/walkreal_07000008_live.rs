@@ -432,6 +432,18 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     ] {
         if name == "the lower landing" && w.tops_up() && walkway_pair_holds(&w) { continue; }
         w.walk_nav_to(at, name, 1.5);
+        // los-mask-repins-08-agent (d2): the east-hall guards (#11/#14/#2/#9/#10, placements
+        // (152.5-161.5, 46.0, −87.7..−101.5) [L the run ledgers]) wake on the ch-0x2a plate and
+        // hold the deck the walkway-head nav crosses — on the Agent accuracy (1.1
+        // [M DroneWeap_DoBulletAccuracy 0x179740:74-88]) their bursts cost 44.8 across the
+        // walkway legs (the d2 ledger: #11 19.6 at tick 987, #2 14.0, #9 8.4 [L the
+        // NF_DMG_TRACE run on this branch]). A player stops at the station hall's mouth (the
+        // plate at (139.1, 50.2, −93.6) [D]) and fights the men he can see ACROSS the hall
+        // before walking their placements: the same visible-only stand the walkway legs use,
+        // out to 25 u. D2-GATED: the Operative sisters' timelines stay byte-exact.
+        if difficulty >= 2 && fight_pkg && name == "the station hall" {
+            fight_guards_within(&mut w, "the station hall mouth", 4200, true, 25.0);
+        }
     }
     // With the game's standing bodies the live walkway pair (#7/#8, AimStandFire 0x68 / StepAim
     // 0x74 at (148.4, 43.0, −121.4)) stand in the landing leg's lane: the nav leg runs down to the
@@ -804,9 +816,17 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         fight_close_guards_visible(&mut w, "the stairwell top", 4200);
     }
     w.climb_stairs([107.25, 27.7, -119.5], "the stairwell down", 1.6, 4200);
-    // 00 Agent (difficulty 3): the descent's return-fire stands drained the clip — the 05
-    // sisters' rule: the fights must not open on a drained clip (a mid-fight reload is free
-    // burst time for the platform pair). D3-GATED.
+    // Agent/00 Agent: the descent's return-fire stands drained the clip — the 05 sisters'
+    // rule: the fights must not open on a drained clip (a mid-fight reload is free burst time
+    // for the platform pair). los-mask-repins-08-agent: a D2 reload here was TRIED and RETIRED
+    // on the measured run — the fights got cheaper (76.9 total hits vs 100.0, the boarding
+    // chunk 74.8 → 32.1 [L the run on this branch]) but the reload's R presses re-roll the
+    // shared RNG downstream (the walk's own wobble note: every hit's grunt roll draws the
+    // shared stream [M Player_HandlePain 0x1902c8:111]) and the re-rolled boarding drove the
+    // stuck mitigation into a flank that walked Bond off the platform's east edge (the fall:
+    // 23.1 "other", death at (118.71, 22.70, −138.15) tick 30399 [L the run]). The fights keep
+    // their measured timelines; the Agent chunk is answered at the fight itself (the doorway
+    // slit, the fight block below).
     if difficulty >= 3 {
         w.reload_full();
     }
@@ -825,6 +845,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     if fight_pkg {
         fight_close_guards_visible(&mut w, "the stairwell mouth", 4200);
     }
+    // los-mask-repins-08-agent: a pre-leg unseen lip stand at the descent's end was TRIED and
+    // RETIRED on the measured run — the half-open leaves give Bond no shot line from the
+    // stairwell mouth (every 61-tick episode printed "held (out of sight or cap)", no round
+    // fired in 430 ticks [L the run on this branch]) while the pair circled into flanking
+    // spots north of the mouth and burst the legs from the open. The pair is answered the way
+    // the d3 ledger answers it: from each boarding leg's arrival spot (the per-leg lip stand
+    // below, opened to d2), where "the platform west" stands of the d3 runs killed #19 [L the
+    // run logs].
     // The boarding ([D the floor probe]): the platform (y 27.25, z −121..−122.5) ends at the car
     // shaft — the middle (x 112) is open below (the cabin hangs there; its floor is the plate at
     // y 28, z −127.4), the side ledges (x 110/114) run south at y 26.75 past the parked cabin's
@@ -902,14 +930,19 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             // during the shoot-out and board legs (frames 26851-27072 [L the NF_DMG_TRACE run
             // on this branch]) while every gate here read "no hostile under 5 u". A player
             // pushes to the lip for a rifleman he is taking fire from at ANY stand-off inside
-            // the fight's 12 u ring, visible or not.
-            let d3_close_hidden = difficulty >= 3 && {
+            // the fight's 12 u ring, visible or not. los-mask-repins-08-agent: D2 takes it too
+            // — the Agent pair bursts the legs from behind the leaves the same way (the d2
+            // ledger's 33.6 from #19 landed during the leg-1 nav stall [L the NF_DMG_TRACE run
+            // on this branch]), and the ring reads 15 u: at leg 1's end the surviving rifleman
+            // stands 12-14 u west behind the leaves (the retreat the RF fights drive), inside
+            // the fight's own approach but outside the 12 u scan.
+            let close_hidden = difficulty >= 2 && {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let bp = sim.bond.pos;
                 sim.drones.list.iter().any(|d| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
-                    && ((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)).sqrt() < 12.0)
+                    && ((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)).sqrt() < 15.0)
             };
-            if d3_close_hidden {
+            if close_hidden {
                 let (saved_back_off, saved_unseen) = (w.dmg.back_off, w.dmg.unseen_fight);
                 w.dmg.back_off = None;
                 w.dmg.unseen_fight = true;
@@ -928,22 +961,25 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         if difficulty == 2 && fight_pkg && name == "the lower level east" {
             fight_guards_within(&mut w, "the platform mouth west", 4200, true, 18.0);
         }
-        // real-health-00agent-08-bleed (d3): the second pair (#26/#27) wakes MID-BOARDING on the
+        // real-health-00agent-08-bleed: the second pair (#26/#27) wakes MID-BOARDING on the
         // solid-body tree — the measured run's first pair bursts landed 33 ticks into "the west
         // ledge south nav 2" (frames 26851/26856 at 4.5 u) while the legs' return fire needed its
         // own pick cadence to answer, and the pair cost 24.0 before both stands killed it (the
         // death run's ledger [L NF_DMG_TRACE on this branch]). A player crossing a platform with
         // a fresh ambush pair at 4-8 u clears it from each leg's arrival spot instead of walking
         // into the next burst: the same unseen lip stand after EVERY boarding leg, not just the
-        // first. D3-GATED: the Operative/Agent sisters' timelines stay byte-exact.
-        if difficulty >= 3 && fight_pkg && name != "the lower level east" {
-            let d3_pair_awake = {
+        // first. los-mask-repins-08-agent: D2 takes it too — the Agent run's burst pair bursts
+        // the legs the same way and the leg-arrival stands are where the sight lines open (the
+        // d2 ledger's 33.6 from #19 landed across the legs' walk [L the NF_DMG_TRACE run on
+        // this branch]).
+        if difficulty >= 2 && fight_pkg && name != "the lower level east" {
+            let pair_awake = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let bp = sim.bond.pos;
                 sim.drones.list.iter().any(|d| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
                     && ((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)).sqrt() < 12.0 && (d.pos[1] - bp[1]).abs() < 4.0)
             };
-            if d3_pair_awake {
+            if pair_awake {
                 let (saved_back_off, saved_unseen) = (w.dmg.back_off, w.dmg.unseen_fight);
                 w.dmg.back_off = None;
                 w.dmg.unseen_fight = true;
@@ -1283,6 +1319,35 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         }
     }
     assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b), "no arrival while the route flies");
+    // los-mask-repins-08-agent (d2): the fight from the WEST DOORWAY SLIT. The end panes are all
+    // shot out (the prep above) and the machine's rounds fly the same glass-pass holes the
+    // rockets fly — the standing spot between the holes eats every strafing burst's falloff
+    // (the d2 ledger: 14.9 in 34 world hits then the −3.57 killing blast, tick 37022 [L the
+    // NF_DMG_TRACE run on this branch]). The cabin's wall band is the only cover: its west
+    // doorway (the opening Bond boarded through at the top; the band's z gap −178.25..−180.6,
+    // lintel y ≈ 14.31 [D the tri dump]) is the firing slit the walk's doorway-fight comment
+    // names — a player steps into the slit and fights from the band's edge, the band shielding
+    // the machine's bursts while the low passes still give fire windows. Real walk input only
+    // (the pane block's own sidestep pattern, bounded); the fight loop's aim and launch gates
+    // read the live spot, so the rockets now start through the slit. The Operative sister's
+    // green timeline stays byte-exact (d2-gated).
+    if difficulty >= 2 {
+        let slit = [110.5f32, -179.4f32];
+        let sim = w.scene.sim.as_ref().unwrap();
+        let start = sim.bond.pos;
+        for _ in 0..300 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = sim.bond.pos;
+            let dx = slit[0] - b[0];
+            let dz = slit[1] - b[2];
+            if dx * dx + dz * dz < 0.35 * 0.35 { break; }
+            let want_yaw = dx.atan2(dz);
+            let yaw_err = walker::wrap_pi(want_yaw - sim.bond.yaw);
+            w.tick(Input { turn: yaw_err.clamp(-0.08, 0.08), forward: if yaw_err.abs() < 0.3 { 1.0 } else { 0.0 }, ..Default::default() }, false);
+        }
+        let arrived = w.scene.sim.as_ref().unwrap().bond.pos;
+        eprintln!("[08 slit] bond {:?} -> {:?} (target x {:.2} z {:.2})", start, arrived, slit[0], slit[1]);
+    }
     let ci = w.scene.sim.as_ref().unwrap().drones.copters.iter().position(|c| c.out == 0x4b).unwrap();
     let hp = w.scene.sim.as_ref().unwrap().drones.copters[ci].hp;
     // The game's way down: the AT-420 Sentinel. The level hands it out twice — the safe's launcher
@@ -2032,7 +2097,21 @@ fn walk_the_whole_mission_on_real_input_real_damage() {
 /// 0x1d3a80]; the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input
 /// only — the load path is the only difference.
 #[test]
-#[ignore = "los-mask-repins-08 2026-11-10 state: the missile dodge is OPEN to this walk now (the dodge block's los-mask-repins-08 note) and the fight the ledger named is answered — Bond reaches the Hind fight and the dodge moves him off the rocket lines, but the Agent run still bleeds out at tick 37022 at (112.97, 13.57, −177.48): the −1.40 × 34 machine blasts through the shot-out panes (14.9 of the ledger) then the −3.57 killing blast, on top of the pre-fight ledger 33.6 in 9 hits from burst-pair #19 at the lower level east (Agent accuracy 1.1 [M DroneFiring_Accuracy_Normal]) — 69 hits for 100.0 total [L the NF_DMG_TRACE runs on this branch]. NEXT LEVERS: (1) the pre-fight bleed — the lower-level-east stands out of #19's lane the way the d3 ledger's station-hall lever reads, or the unseen-cover fights opened to d2 (they are the d3-only hurting-first pick today); (2) the fight from the WEST DOORWAY slit (the wall band's z gap −178.25..−180.6, lintel y ≈ 14.31 [D the tri dump]) instead of between the shot-out end panes — the band shields the machine's rocket detonations while the low passes still give fire windows; (3) the blast-disc dodge — widen the dodge from the round's line (miss < 2 u) to the round's detonation band so the side step clears the wall band the way the d3 ledger's lever-2 reads. No damage or health writes; the Operative sister is GREEN on this tree."]
+// los-mask-repins-08-agent (2026-11-10): green again on the exact-sight tree. The ledgered
+// Hind-fight bleed (tick 37022, 69 hits for 100.0: the −1.40 × 34 machine drips through the
+// shot-out panes over the pre-fight 33.6 from #19 [L the NF_DMG_TRACE runs]) is answered with
+// the WEST DOORWAY SLIT (the fight block's los-mask-repins-08-agent note): after the pane
+// shoot-out the fight walks Bond into the cabin's west doorway (the band's z gap
+// −178.25..−180.6, lintel y ≈ 14.31 [D the tri dump]) — real walk input, the pane block's own
+// sidestep pattern — and the fight's aim and launch gates read the live spot, so the band
+// shields the machine's strafing drips while the rockets still start through the slit (the
+// measured fight: five rockets landed 98.8 → 500.5, the machine down at t1619 [L the run on
+// this branch]). End health 14.9 armour 3.8, 61 hits for 85.1, the whole mission walked in
+// 37505 ticks. No damage or health writes, no top-ups; every helper here is gated to
+// difficulty ≥ 2 (the Operative sister's green timeline stays byte-exact — its run re-checked
+// on this tree). The boarding ledger's #19 33.6 and the walkway 36.4 stand as measured; the
+// levers tried and retired this window (the pre-leg lip stand, the d2 reload, the hall-mouth
+// stand) are documented in their blocks and docs/reports/los-mask-repins-08-agent.md.
 fn walk_the_whole_mission_on_real_input_real_damage_agent() {
     // HEAD-HUNT (the 05/07 00 Agent sisters' tactic on this level group): at Agent the guards'
     // hit chance is DroneFiring_Accuracy_Normal 1.1 (Operative 0.8) and Bond's pain is
