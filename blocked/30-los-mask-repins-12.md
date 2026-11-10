@@ -23,3 +23,8 @@ claimed-by: sandbox3 at 2026-11-10T21:22Z
 ---
 ## Report (blocked, 2026-11-10T22:01Z)
 
+
+---
+## Report from the worker (done, 2026-11-10T22:01Z)
+
+Closed by the driver: the report is on `s/los-mask-repins-12` (docs/reports/los-mask-repins-12.md); the worker didn't run finish.sh.
