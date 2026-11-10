@@ -15,6 +15,11 @@ thread_local! {
     /// thread only (libtest runs each test on its own thread, so the top-up walk, the
     /// eastroute replay and the upward-shot proofs on master's plain behaviour are untouched).
     static YARD_AIMED_STANDS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `with_arc_landing_stands`'s switch (pretrans-arms-4 round 2, the ignored 0c handoff walk
+    /// only): the arc-landing sweep in `yard_sniper_stands` runs — the #15-class patroller is
+    /// cleared off the SW arc ledge before "the ledge to the arc". Off = master no-op stands
+    /// for every other caller (the green real-damage sister included).
+    static ARC_LANDING_STANDS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// `with_far_sniper_stands`'s switch (the real-health walks only): the return-fire fights
     /// answer the level's FAR snipers (#39 0x5000093 and #20 0x5000087, both weapon 0x1e,
     /// hp 10, at d 61-90 [L the death ledgers]) — the shooters window opens to their stand-off
@@ -57,6 +62,17 @@ pub fn with_yard_aimed_stands<R>(f: impl FnOnce() -> R) -> R {
     struct Reset;
     impl Drop for Reset { fn drop(&mut self) { YARD_AIMED_STANDS.with(|c| c.set(false)); } }
     YARD_AIMED_STANDS.with(|c| c.set(true));
+    let _reset = Reset;
+    f()
+}
+
+/// Run a walk with the arc-landing sweep enabled (OPT-IN, pretrans-arms-4 round 2 — see the
+/// thread-local's doc). The plain master replay and the probe tests keep master behaviour.
+#[allow(dead_code)]
+pub fn with_arc_landing_stands<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { ARC_LANDING_STANDS.with(|c| c.set(false)); } }
+    ARC_LANDING_STANDS.with(|c| c.set(true));
     let _reset = Reset;
     f()
 }
@@ -331,7 +347,7 @@ fn self_blocker_hostile(sim: &nf_view::scene::Sim, blocker: Option<usize>) -> bo
 /// observed beat is 170-360 frames [L the real-health run's fight traces]) and whose STRICT
 /// gun rays clear from here (`DamageLog::exposed_part_gun_rays`).
 pub fn yard_sniper_stands(w: &mut Walker, label: &str, max: usize) {
-    if !YARD_AIMED_STANDS.with(|c| c.get()) { return; }
+    if !YARD_AIMED_STANDS.with(|c| c.get()) && !ARC_LANDING_STANDS.with(|c| c.get()) { return; }
     // The east-ledge / pre-climb / ladder-top sweep: every alive weapon-0x1e hostile within
     // `range` u gets one capped still-gate stand (the strict gun-ray aim keeps a covered
     // guard from eating the clip — the #15 measurement).
@@ -339,6 +355,11 @@ pub fn yard_sniper_stands(w: &mut Walker, label: &str, max: usize) {
         "at-the-door" => Some((64.0f32, 900u32, 3usize)),
         "pre-climb" | "ladder-top" | "ring-corner" | "west-edge" | "west-ledge" => Some((48.0, 700, 3)),
         "lip-1" | "lip-2" | "lip-3" | "lip-4" => Some((48.0, 300, 3)),
+        // pretrans-arms-4 round 2 (OPT-IN via with_arc_landing_stands, the ignored handoff walk
+        // only — the green real-damage sister keeps her no-op stands): the arc-landing sweep
+        // clears the #15-class patroller off the SW arc ledge before "the ledge to the arc" —
+        // the same player answer the lip stands are on the west ledge.
+        "arc-landing" if ARC_LANDING_STANDS.with(|c| c.get()) => Some((48.0, 700, 3)),
         _ => None,
     };
     if let Some((range, cap, count)) = sweep {
@@ -1329,7 +1350,21 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
         }
         eprintln!("[0c-arc]          x: {}", (0..11).map(|k| format!("{:>5.1}", 4.0 + k as f32)).collect::<String>());
     }
+    yard_sniper_stands(&mut w, "arc-landing", 3);
     w.walk_to(Wp::new(8.0, 12.4, -222.0).r(1.0), "the ledge to the arc");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        eprintln!("[0c-arc] after the ledge-to-arc leg bond=({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
+        for (i, d) in sim.drones.list.iter().enumerate() {
+            if !d.present { continue; }
+            let dd = ((d.pos[0] - p[0]).powi(2) + (d.pos[2] - p[2]).powi(2)).sqrt();
+            if dd < 10.0 {
+                eprintln!("[0c-arc] drone {i}: pos=({:.2},{:.2},{:.2}) d={dd:.2} health={:.1} corpse={} team={} skin={:#x}",
+                    d.pos[0], d.pos[1], d.pos[2], d.health, d.corpse, d.team, d.skin);
+            }
+        }
+    }
     w.walk_to(Wp::new(13.0, 12.4, -218.5).r(1.2), "the arc west end");
     w.walk_to(Wp::new(24.0, 12.4, -218.0).r(1.5), "the ring south-west arc");
     // The grab line: the 1.5 arrival can stop anywhere on the arc's bend (a guard fight on the arc

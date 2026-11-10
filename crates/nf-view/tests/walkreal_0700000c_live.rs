@@ -47,10 +47,10 @@ fn sim_grounded(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().bond.grounde
 /// landing (the repaired crossing moved the grab approach and with it the drop point).
 /// NEXT LEVER: map the landing patch fine (0.25 step, the scoped test), route from what
 /// actually holds.
-#[ignore = "pretrans-arms-4 round 2: the ledgered wire-#282 crossing is REPAIRED (the shelf west lane + the sniper brush-past slide + the -3 legs + the grab/ride all green [L the run on this tree]); the walk now fails PAST it — the SW arc approach: from this timeline's ride landing (4.98,13.16,-223.29, west of the walkable spine the [0c-arc] dump mapped: z −223 floor x 7-8 … z −218 x 12-14) 'the ledge to the arc' fell to the yard floor (8.99,2.01,-222.09) and 'the arc west end' wedged under guard #15; a band-tip leg (7.2,-223.3) measured worse — the landing patch is ISOLATED, walking east off it falls [L the runs]; no drones within 10 u at the leg — pure ledge geometry, and the -3 tree walked the same legs green from its own landing; next lever: map the landing patch fine (0.25 step), route from what holds"]
+#[ignore = "pretrans-arms-4 round 2: the ledgered wire-#282 crossing is REPAIRED (the shelf west lane + the sniper brush-past slide + the -3 legs + the grab/ride all green [L the run on this tree]); the walk now fails PAST it — the SW arc approach: this timeline's ride lands Bond on a 13.16-high tier at (4.98,-223.29) whose east side overhangs the yard (the spine the [0c-arc] dump mapped sits 2 u below at 11.2); 'the ledge to the arc' falls to the yard floor (8.99,2.01,-222.09) and 'the arc west end' wedges — the post-leg dump shows NO drones within 10 u (pure geometry, not a solid body) and the arc-landing stands sweep was a no-op [L the runs; the opt-in with_arc_landing_stands stays for the next round]; the -3 tree walked the same legs green from its own ride phase; next lever: shift the ride's release point (the jump disc's d<0.9 phase) or map the landing tier fine and route from what holds"]
 #[test]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
-    walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(1);
+    walker::with_arc_landing_stands(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(1));
 }
 
 /// The difficulty-parameterized body (real-health-agent-0c-0d): 1 is the byte-identical
