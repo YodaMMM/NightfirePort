@@ -1196,6 +1196,12 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
     // until the strict rays clear; one landing round kills the 10-hp sniper [L the
     // census]. yard_sniper_stands is a no-op when the flag is off.
     // The diagonal ledges south-east to icon #6 [D probe blk2 west map].
+    // pretrans-arms-4: the first push is split into short tight legs on the same line — the
+    // single 4.5-u push carried Bond off the strip mid-leg (the leg arrived at (-4.81,2.70,
+    // -220.50) with every later leg on the yard floor y 2.0, the wire #282 grab sphere
+    // (centre y 14.11, r 5.05) unreachable [L the run on this tree]).
+    w.walk_to(Wp::new(-7.4, 12.4, -217.2).r(1.2), "the west ledge diagonal a");
+    w.walk_to(Wp::new(-6.6, 12.4, -218.4).r(1.2), "the west ledge diagonal b");
     w.walk_to(Wp::new(-6.0, 12.4, -219.6).r(1.5), "the west ledge diagonal");
     yard_sniper_stands(&mut w, "lip-1", 3);
     w.walk_to(Wp::new(-4.5, 12.4, -221.5).r(1.5), "the west ledge diagonal 2");
