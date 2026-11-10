@@ -749,6 +749,9 @@ pub struct OtherPlayer {
     pub health: f32,
     /// The player's score (`MPGame+slot*0x30+0x18`) for the trait-4 pick [M 0x128b50:132-150].
     pub score: f32,
+    /// The player's obj+0x54 yaw (0 faces +Z) — `Drone_GetOpponentInfo` 0x138f68:28-32 copies
+    /// it to the drone's +0x194 for the `BondIsFacingMe` gate [M 0x154f60].
+    pub yaw: f32,
 }
 
 
@@ -1191,7 +1194,7 @@ impl Default for BotVars {
             unseen_ticks: u32::MAX,
             seen_ticks: 0,
             sight_stamp: f32::NEG_INFINITY,
-            combat_range: [2.0, 20.0, 40.0],
+            combat_range: [0.0, 0.0, 0.0],
             fire_latch: 0,
             burst_empty: 0,
             clip_rounds: 0,
@@ -1210,7 +1213,7 @@ impl Default for BotVars {
             prev_opponent: None,
             prev_visible: false,
             distraction: 0.0,
-            combat_range_default: [2.0, 20.0, 40.0],
+            combat_range_default: [0.0, 0.0, 0.0],
             opp_history: [0; 16],
             opp_history_head: 0,
             recovery_b: 0,
@@ -1282,8 +1285,9 @@ pub struct BotBrain {
     /// push-out, the floor ray, gravity, steps) stands in for the drone mover
     /// (`NDrone2_MoveToGoalPosition`'s anim-driven root motion + `Collide`); the speed table is
     /// lifted — `move_to_goal_position` computes `BOT_getMovementSpeedMul` 0x126568's
-    /// 0.7/1.0/1.3 [M 0x126568:8-21] — but the walk still passes it through `.min(1.0)`, so the
-    /// level-2 1.3 is not applied (a port gap). `pos` is this body's root + `player::EYE`. Unused (the plane walk) when the world has no triangles —
+    /// 0.7/1.0/1.3 [M 0x126568:8-21]; the game's chain stores it as the goal route's arrival
+    /// radius (route+0x8C [M 0x158b10 @0x158cbc]); the walk pace stays capped at 1.0 (no
+    /// ground-speed reader of the mul is traced). `pos` is this body's root + `player::EYE`. Unused (the plane walk) when the world has no triangles —
     /// the unit rigs' empty worlds.
     pub body: crate::player::Bond,
     /// The route the body follows (`AINetwork_CalcRouteToPosition` / `FollowRoute`'s port
@@ -1426,11 +1430,85 @@ mod st {
 
 
 impl BotBrain {
+    /// `NDrone2_DefaultInit` 0x14b300's combat-range block, the lift every MP bot runs at
+    /// match start: `ResetMap_Load` 0x1d6360:155-157 calls `MP_Start` (whose per-bot
+    /// `BOT_init` skips `NDrone2_PostLoad_Init` — the gate reads `MPSettings[0x188]`, 0 until
+    /// MP_Start's tail [M 0x183a50:69,207; 0x1249e8:182-185]) and THEN
+    /// `Drone_PostLoad_Init` 0x136938:106-108 iterates every drone on the list — the fresh
+    /// bots included — through `NDrone2_PostLoad_Init` 0x14d890:12 → `NDrone2_DefaultInit`.
+    /// There: +0xEC = 4.0 and +0xF8 = 2.0 [M 0x14b300:377-378]; the class switch on
+    /// `*(u32*)(drone+0xc6c)` [M :380] — the `level_tag+0x64` word `Drone_Create` 0x136be0:86
+    /// copied into the DIVars (drone+0xc34+0x38) — which for a bot is the spawn entry
+    /// `(idx+2)`'s facing.y bit pattern (the level_tag is `SpawnPoints+0x10+idx·0x30`
+    /// [M 0x183a50 disasm 0x183d40-0x183d58: `a2 = spawn_idx·0x30 + 0x2a7360`;
+    /// `SpawnPoints` 0x2a7350 [M-sym]; the register writes facing to entry+0x10..+0x1c
+    /// [M 0x184f20:82-89]); a facing.y of −1/0/1 has bit patterns 0xbf800000/0/0x3f800000 —
+    /// never 1..5 — so the `default` arm runs [M :381-387]. Then +0xFC = (+0xF0+1)+d2
+    /// [M :426], and +0xF4 = +0xEC + FRand(0) for every class [M :441-443] — the draw is the
+    /// point (the port does not model +0xE8/+0xF4; +0xE8 is the vision law's scale
+    /// [M DroneVision_OpponentVisibility 0x175af0:25-40]). The SP level overrides
+    /// (+0xF0 for 0x7000011/0x7000014 [M :398-421]) do not fire on the mp level ids. The
+    /// draws ride the shared stream in the game's order: d1, d2, then FRand(0).
+    /// `BOT_postLoadInit` 0x1262b8:10-14 (DefaultInit's MP arm, :822-824) saves the three as
+    /// the +0x71C/0x720/0x724 defaults `BOTSTATE_defaultCombatRange` 0x129b98 restores.
+    /// The match-start pass: DefaultInit's range draws + `BOT_postLoadInit`'s +0x71C save
+    /// [M 0x1262b8:10-14], run by `MpMatch::create_bots_inner` after every bot is spawned.
+    pub fn post_load_combat_ranges(&mut self, rng: &mut Rng, class_word: u32) {
+        self.vars.combat_range = Self::default_init_combat_ranges(rng, class_word);
+        self.vars.combat_range_default = self.vars.combat_range;
+    }
+
+    fn default_init_combat_ranges(rng: &mut Rng, class_word: u32) -> [f32; 3] {
+        // The class switch [M 0x14b300:380-425]. f0/f1 are the +0xFC recompute's operands
+        // (fVar20/fVar21); the goto arms (classes 3/4) write +0xFC inside the case instead.
+        let (engage, too_far) = match class_word {
+            1 => {
+                let d1 = rng.frand(3.0);
+                let engage = d1 + 12.0;
+                let d2 = rng.frand(3.0);
+                (engage, engage + 1.0 + d2)
+            }
+            2 => {
+                let d1 = rng.frand(3.0);
+                let engage = d1 + 12.0;
+                let d2 = rng.frand(3.0);
+                (engage, engage + 1.0 + d2)
+            }
+            3 => {
+                let d1 = rng.frand(6.0);
+                let engage = d1 + 25.0;
+                let d2 = rng.frand(6.0);
+                (engage, d2 + 100.0)
+            }
+            4 => {
+                let d1 = rng.frand(8.0);
+                (d1 + 75.0, 1000.0)
+            }
+            5 => {
+                let d1 = rng.frand(4.0);
+                let engage = d1 + 12.0;
+                let d2 = rng.frand(4.0);
+                (engage, engage + 1.0 + d2)
+            }
+            _ => {
+                // the default arm (class 0 and every word outside 1..=5) [M :381-387]
+                let d1 = rng.frand(4.0);
+                let engage = d1 + 12.0;
+                let d2 = rng.frand(4.0);
+                (engage, engage + 1.0 + d2)
+            }
+        };
+        let _f4 = rng.frand(0.0); // +0xF4 = +0xEC + FRand(0) — the stream draw, every class [M :441-443]
+        [4.0, engage, too_far]
+    }
+
     /// `BOT_init` 0x1249e8 (the port's lift of the BOT_vars-relevant half) + the 0xC3 ENTER
     /// chain [M 0x1748c8:16-18: setNearestNavNode, +0x766 = 0, SetState(0xF9)]:
     /// the stats copy, the goal-slot active flags (slot 1 = 1, slot 0 = 0), the grudge 0xFF,
-    /// the links, then state 0xF9 via the commit.
-    pub fn bot_init(record: &BotRecord, slot: u8, pos: [f32; 3], yaw: f32) -> BotBrain {
+    /// the links, then state 0xF9 via the commit. `class_word` is the DefaultInit class
+    /// switch's `*(u32*)(drone+0xc6c)` (see [`Self::default_init_combat_ranges`]); `rng` is
+    /// the match's shared stream — the range draws ride it exactly where the game makes them.
+    pub fn bot_init(record: &BotRecord, slot: u8, pos: [f32; 3], yaw: f32, class_word: u32, rng: &mut Rng) -> BotBrain {
         let stats = record.stats();
         let mut vars = BotVars::default();
         vars.aggression = stats[0x00];
@@ -1455,11 +1533,14 @@ impl BotBrain {
         // `BOT_postLoadInit` 0x1262b8 [M :7-12]: the stats copy above is `BOT_setDroneStats`
         // 0x126318's (aggression→+0xB4, aim→+0xB5, speed→+0xB6, recovery_a→+0xB8,
         // recovery_b→+0xB9, weapon byte→+0xBA [M]); the port's `BotVars` carries the stats
-        // directly. The combat ranges save: +0x71C/0x720/0x724 := +0xEC/0xF0/0xFC —
+        // directly. The combat ranges: DefaultInit's block runs for every MP bot at match
+        // start (see [`Self::default_init_combat_ranges`]) and the MP arm's
+        // `BOT_postLoadInit` 0x1262b8:10-14 saves them into +0x71C/0x720/0x724 —
         // `BOTSTATE_defaultCombatRange` 0x129b98 restores from it. (Drone+0x4F8 |= 0x80000000
         // marks the bot object — a write-only bit: no reader anywhere in the decompile
         // [M 0x1262b8:10; grep `0x4f8`/`0x80000000` finds setters only]; the port's brain is
         // always a bot, so the flag is moot here.)
+        vars.combat_range = Self::default_init_combat_ranges(rng, class_word);
         vars.combat_range_default = vars.combat_range;
         let mut brain = BotBrain {
             regen_heal: None,
@@ -1569,6 +1650,7 @@ impl BotBrain {
             | st::BOT_ATTACK_STEP_AIM_LEFT | st::BOT_ATTACK_STEP_AIM_RIGHT => self.bot_attack_move_enter(next, rng),
             state::BOT_ATTACK_RELOAD => self.bot_attack_reload_enter(ctx),
             state::BOT_ATTACK_CHANGE_WEAPON => self.bot_attack_change_weapon_enter(ctx),
+            state::BOT_ATTACK_BACKOFF => self.bot_attack_backoff_enter(ctx, rng),
             _ => {} // 0xF2/0xF6/0xD3… not ported (known gap)
         }
     }
@@ -1677,7 +1759,7 @@ impl BotBrain {
             state::BOT_ATTACK => self.bot_attack_msg3(ctx, rng),
             state::BOT_ATTACK_FIRE => self.bot_attack_fire_msg3(ctx, rng),
             state::BOT_ATTACK_RUN => self.bot_attack_run_msg3(ctx),
-            state::BOT_ATTACK_BACKOFF => self.bot_attack_backoff_msg3(ctx),
+            state::BOT_ATTACK_BACKOFF => self.bot_attack_backoff_msg3(ctx, rng),
             state::BOT_ATTACK_NO_OPPONENT => self.set_state(state::BOT_IDLE),
             state::BOT_ATTACK_RELOAD => self.bot_attack_reload_msg3(),
             st::BOT_ATTACK_STRAFE_AIM_LEFT | st::BOT_ATTACK_STRAFE_AIM_RIGHT => self.bot_attack_strafe_msg3(ctx, rng),
@@ -2905,30 +2987,133 @@ impl BotBrain {
         suggested
     }
 
-    /// `BOTSTATE_chooseCombatMove` 0x129218 via `checkAttackMove` 0x126a40: `Rand_Rand(4)` →
-    /// 0xD5 (1) / 0xD4 (0) / 0xDB (2) / 0xDC (3) [M 0x129218], each gated by its `NDrone2_Can*`
-    /// test [M 0x126a40: 0xD4 CanStrafeLeft, 0xD5 CanStrafeRight, 0xDB CanStepLeft, 0xDC
-    /// CanStepRight — the port's `can_side_move`]. Audited (2026-11-09): the game runs
-    /// `BOTSTATE_EvasiveMove` first — only while `NDrone2_OpponentIsAimingAtMe(8.0)` [M
-    /// 0x129218:9, 0x1506d8:39-40] — and gates the Rand(4) block behind
-    /// `BOT_getMovePossibility(drone, 2)` [M 0x129218:11-14], a stat roll `Rand(2 + (+0xB4 + 2)
-    /// − +0xB6) == n−1` [M 0x1265d0:8-10]; both stand unmodelled here [S unverified — porting
-    /// them shifts the shared Rand stream; listed in the report]. checkAttackMove's
-    /// flag-carrier-on-hill refusal (scenarios 0x40000800/0x60001000 [M 0x126a40:33-42]) is also
-    /// unmodelled.
+    /// `BOTSTATE_chooseCombatMove` 0x129218, the game's order and draw count:
+    /// 1. `BOTSTATE_EvasiveMove` 0x129368 runs first [M 0x129218:9]; on this disc it can only
+    ///    return 0 — `NDrone2_EvasiveMove` 0x1506d8 returns {0, 0x77, 0x78} and the mapping
+    ///    arms (0x75/0x76/0x79/0x7a) never fire [M-dis 0x150a84 + 0x129368:11-34] — but its
+    ///    Rand draws are live whenever the aim gate passes (a bot never SetStates the dodge:
+    ///    the bot-mode 0x1e tail skip [M-dis 0x150a94]).
+    /// 2. `BOT_getMovePossibility(drone, 2)` gates the Rand(4) block [M 0x129218:11-14] and
+    ///    ALWAYS draws its `Rand(n)` first [M 0x1265d0:8-10].
+    /// 3. `Rand_Rand(4)` → 0xD4/0xD5/0xDB/0xDC [M 0x129218:14-29], each through
+    ///    `BOTSTATE_checkAttackMove` 0x126a40 (the port's `can_side_move` stand-in for the
+    ///    `NDrone2_Can*` probes [S — the game's sweep tests], 0xD4 CanStrafeLeft, 0xD5
+    ///    CanStrafeRight, 0xDB CanStepLeft, 0xDC CanStepRight). The flag-carrier-on-hill
+    ///    refusal (settings word +0x420 = 0x40000800/0x60001000 [M 0x126a40:33-42]) stays
+    ///    unmodelled [S — listed in the report].
     fn choose_combat_move(&mut self, ctx: &BotCtx, rng: &mut Rng) -> Option<u8> {
-        let roll = rng.rand(4);
-        let mv = match roll {
+        let ev = self.botstate_evasive_move(ctx, rng);
+        if ev != 0 {
+            return self.check_attack_move(ctx, ev); // [M 0x129218:33]
+        }
+        if !self.get_move_possibility(rng, 2) {
+            return None; // the gate failed AFTER its draw [M 0x129218:11-14]
+        }
+        let mv = match rng.rand(4) {
+            // [M 0x129218:15-29: 0 → 0xD4, 1 → 0xD5, 2 → 0xDB, 3 → 0xDC]
             0 => st::BOT_ATTACK_STRAFE_AIM_LEFT,
             1 => st::BOT_ATTACK_STRAFE_AIM_RIGHT,
             2 => st::BOT_ATTACK_STEP_AIM_LEFT,
             _ => st::BOT_ATTACK_STEP_AIM_RIGHT,
         };
+        self.check_attack_move(ctx, mv)
+    }
+
+    /// `BOTSTATE_checkAttackMove` 0x126a40's Can* half — the move ships only when its `NDrone2_Can*`
+    /// probe passes (the port's `can_side_move` [S — the sweep-test stand-in]); the KOTH hill
+    /// refusal (settings +0x420 = 0x40000800/0x60001000 [M 0x126a40:33-42]) is unmodelled here.
+    fn check_attack_move(&self, ctx: &BotCtx, mv: u8) -> Option<u8> {
         if ctx.stationary {
             return None; // the stand preset never moves
         }
         let reach = if matches!(mv, st::BOT_ATTACK_STRAFE_AIM_LEFT | st::BOT_ATTACK_STRAFE_AIM_RIGHT) { 1.5 } else { 1.0 };
         self.can_side_move(ctx, Self::move_side(mv), reach).then_some(mv)
+    }
+
+    /// `BOT_getMovePossibility` 0x1265d0 [M :8-10]: n = arg + (u8)drone+0xB4 + 2 − (u8)drone+0xB6
+    /// (the stats copy: +0xB4 = the record's aggression byte, +0xB6 its speed byte [M
+    /// BOT_setDroneStats 0x126318:10-15]); draws `Rand_Rand(n)` — the seeds advance even for
+    /// n = 0 [M Rand_Rand 0x1e3738] — and passes iff the draw equals n−1 (the xor + sltiu
+    /// unsigned equality [M-dis 0x126600-0x126608]).
+    fn get_move_possibility(&self, rng: &mut Rng, arg: u32) -> bool {
+        let n = arg as i32 + self.vars.aggression as i32 + 2 - self.vars.speed as i32;
+        rng.rand(n as u32) == (n - 1) as u32
+    }
+
+    /// `DroneWeap_OpponentIsAimingAtMe(dvars, 7.5)` 0x17a500 [M :11-31]: the opponent obj is a
+    /// player or drone (type byte +0xff in 2..=3 — never the Demolition/Protection site) and
+    /// `NDrone2_ObjectIsArmed` passes, then the +0x2A player-crosshair latch [M Check_Target
+    /// 0x1a7810:98,149-150] OR — under the MP master enable (settings +0x184, Ghidra decimal 388)
+    /// — `NDrone2_BondIsFacingMe` 0x154f60: `ABS(drone+0x1d0) < 7.5°`, where
+    /// `Drone_GetOpponentInfo` 0x138f68 writes +0x1d0 = `Vec_AngleDifference(+0x194, atan2(opp −
+    /// me) + π)` [M :76]: +0x194 is the OPPONENT's obj+0x54 yaw (copied from the opponent obj, :28-32),
+    /// so the gate is the opponent facing me within 7.5° (the SP port's `opp_facing`, drone.rs
+    /// `opponent_info`). Port stand-ins [S]: the armed test reads `alive` (the rows carry no
+    /// weapon state); the +0x2A latch reads false (no crosshair model in the MP step).
+    fn opponent_aiming_at_me(&self, ctx: &BotCtx) -> bool {
+        let Some(o) = self.vars.opponent.and_then(|i| ctx.others.get(i)) else { return false }; // [M 0x17a500:11]
+        if o.index == OBJ_ROW || !o.alive {
+            return false; // the type-byte gate / [S the ObjectIsArmed stand-in]
+        }
+        let dx = o.pos[0] - self.pos[0];
+        let dz = o.pos[2] - self.pos[2];
+        let opp_to_me = crate::trig::atan2_approx(-dx, -dz);
+        crate::trig::angle_difference(o.yaw, opp_to_me).abs() < 7.5f32.to_radians() // [M 0x154f60]
+    }
+
+    /// `NDrone2_EvasiveMove` 0x1506d8 for a bot — the draws only:
+    /// gate [M :39-42] — the movement lock +0x4f8 & 0x10 (the port's `ctx.stationary`) or
+    /// `OpponentIsAimingAtMe(7.5)` failing returns 0 with NO draws;
+    /// candidate list [M :43-98] — prop 0x2e (roll) / 0x41 (strafe) / 0x13 (dodge) / 0x42 (step),
+    /// each `getProperty` + `CanDoAnimState`; `BOT_init` 0x1249e8:116-134 sets 0x41/0x13/0x42 and
+    /// never 0x2e, so a bot's list is [strafe, dodge, step] (`CanDoAnimState` reads true [S]);
+    /// `Rand_Rand(3)` [M :99]; strafe → the strafe recheck's `Rand(2)` (Can* verdicts discarded
+    /// [M :101-128]) then the dodge recheck; dodge → the dodge recheck; step → the tail, no draw
+    /// [M :173 `sVar1 != 3 → LAB_00150a90`]. The dodge recheck's `Rand(2)` sides the pair
+    /// [M :178-200]. The tail SetStates the winner ONLY when drone+0xc5 != 0x1e [M-dis
+    /// 0x150a90-0x150aa8 `lbu v1,0xc5(v0)`; `beq v1,0x1e`], and 0x1e is the bot mode (the
+    /// mode `Drone_SM_RouteMsgDCV` 0x171df8:78 routes to BotGlobal 0xC5 and `Drone_SM_SetState`
+    /// 0x1758c0:47 validates with `BOT_validateStateChange`) — so a bot never dodges here; the
+    /// 0x77/0x78 return maps to 0 in `BOTSTATE_EvasiveMove` [M 0x129368:10-34]. The port returns
+    /// 0 after the draws (the probes have no draws and no effect for a bot).
+    fn ndrone2_evasive_move(&mut self, ctx: &BotCtx, rng: &mut Rng) -> u8 {
+        if ctx.stationary || !self.opponent_aiming_at_me(ctx) {
+            return 0; // [M 0x1506d8:39-42 — the no-draw exits]
+        }
+        const LIST: [u8; 3] = [2, 3, 4]; // strafe, dodge, step — the bot's props [M 0x1249e8:119-121]
+        let picked = LIST[rng.rand(3) as usize]; // [M 0x1506d8:99]
+        if picked == 4 {
+            return 0; // the step pick: straight to the tail [M :173]
+        }
+        if picked == 2 {
+            rng.rand(2); // the strafe recheck (prop 0x41 set) — verdicts discarded [M :101-128]
+        }
+        rng.rand(2); // the dodge recheck's side draw (prop 0x13 set) [M :178]
+        0 // the bot mode skips the SetState [M-dis 0x150a94]; 0x77/0x78 map to 0 [M 0x129368]
+    }
+
+    /// `BOTSTATE_EvasiveMove` 0x129368 [M :9-36]: maps `NDrone2_EvasiveMove`'s result —
+    /// 0x75 → 0xD4, 0x76 → 0xD5, 0x79 → `getMovePossibility(.., 3)` ? 0xD9 : 0, 0x7a → the
+    /// same gate ? 0xDA : 0, everything else → 0. On this disc only {0, 0x77, 0x78} escape
+    /// `NDrone2_EvasiveMove` [M-dis 0x150a84 — the roll/strafe rechecks discard their verdicts
+    /// and only the dodge recheck assigns], so the mapping arms are dead and this returns 0;
+    /// the ROLLS (0xD9/0xDA) stay unported — their drone anims 0x53/0x5a roll states exist
+    /// (BOT_ATTACK_ROLL_LEFT/RIGHT_CROUCH 0xD9/0xDA) but no path reaches them here.
+    fn botstate_evasive_move(&mut self, ctx: &BotCtx, rng: &mut Rng) -> u8 {
+        let r = self.ndrone2_evasive_move(ctx, rng);
+        match r {
+            0x75 => st::BOT_ATTACK_STRAFE_AIM_LEFT,  // [M 0x129368:11-13]
+            0x76 => st::BOT_ATTACK_STRAFE_AIM_RIGHT, // [M :14]
+            0x79 => {
+                let ok = self.get_move_possibility(rng, 3); // [M :21-24]
+                if ok { st::BOT_ATTACK_ROLL_LEFT_CROUCH } else { 0 }
+            }
+            0x7a => {
+                let ok = self.get_move_possibility(rng, 3); // [M :26-31]
+                if ok { st::BOT_ATTACK_ROLL_RIGHT_CROUCH } else { 0 }
+            }
+            _ => 0, // the live arm on this disc (0/0x77/0x78) [M-dis 0x150a84]
+        }
     }
 
     // ------------------------------------------------------------------
@@ -3204,11 +3389,53 @@ impl BotBrain {
             let c = self.vars.goals[slot].celpos;
             [c[0], c[1], c[2]]
         };
-        // The arrival: within 1.0 on the floor plan and on the same storey (the body walks the
-        // floors, so the eye never meets an item's height) [S the `dist < Drone+0x8EC` stand-in].
+        // The arrival: the game's `AINetwork_GetRouteDistance` < route+0x8C [M 0x1517d8:52-54].
+        // On the goal chain route+0x8C is the float the walk itself passes: 0xEB re-feeds
+        // obj+0x704 (AIPoint+0x14, which `SetupGoalPosition` 0x15acf8 filled with
+        // `BOT_getMovementSpeedMul` 0x126568's 0.7/1.0/1.3 [M 0x1278a8:64,76]) into
+        // `MoveToGoalPosition` [M 0x171240:55-57]; that function keeps it in f20 (0x151804) and
+        // hands it to `CalcRouteToPosition` (0x15183c `mov.s FPR 12,f20`), which hands it on to
+        // `SetupRouteToPosition` (0x15b028/0x15b090), whose 0x158cbc `swc1 f21,0x8c(s0)` stores
+        // it RAW as the route's arrival radius (f21 = the entry FPR 12, 0x158b44). DefaultInit's
+        // 2.0 [M 0x14b300:579] only stands until the first route is set up. So the arrival
+        // radius is the speed mul (a default speed-2 bot arrives inside 1.3). The distance is
+        // the route's remaining PATH (`GetRouteDistance` 0x156320: the walked links from the
+        // feet; its exhausted tail returns plain `Vec_Dist2D(feet, target)`) — the port sums its
+        // own route's remaining links when one is live and falls back to the straight line (the
+        // game's own exhausted shape) otherwise. Same storey [S the storey guard; the body walks
+        // the floors, so the eye never meets an item's height].
+        let mul = [0.7f32, 1.0, 1.3][(self.vars.speed as usize).min(2)]; // the speed mult [M atlas §4]
+        // ^ `BOT_getMovementSpeedMul` 0x126568 [M :6-19]: Drone+0xB6 (the stats' speed byte,
+        // `BOT_setDroneStats` 0x126318:18) 0 → 0.7 (0x3f333333), 1 → 1.0, 2 → 1.3
+        // (0x3fa66666), anything else → 1.0.
         let dy = target[1] - self.pos[1];
-        if dist2d(self.pos, target) < 1.0 && dy.abs() < 2.0 {
-            return 3; // arrived
+        let straight = dist2d(self.pos, target);
+        // The route's remaining path: the creep remainder on the current link + the links after
+        // it + the last-node→dest tail (the port's shape of `GetRouteDistance` 0x156320's sum).
+        // The creep steps are 0.4 long, so the remainder overcounts by under one step — the
+        // completion may fire one step late, i.e. CLOSER to the goal (the take-friendly side).
+        let remaining = match ctx.nav.filter(|_| self.route.valid && dist2d(self.route.dest, target) < 3.0) {
+            Some(net) => {
+                let feet = self.root();
+                let mut d = dist2d(feet, self.route.target)
+                    + (self.route.creep_steps - self.route.creep_i).max(0) as f32 * 0.4;
+                let p = &net.paths[self.route.path];
+                let n = self.route.nodes.len();
+                for k in (self.route.idx + 1)..n {
+                    let a = node_root(p.nodes[self.route.nodes[k - 1] as usize].pos);
+                    let b = node_root(p.nodes[self.route.nodes[k] as usize].pos);
+                    d += dist2d(a, b);
+                }
+                if self.route.idx < n {
+                    let last = node_root(p.nodes[self.route.nodes[n - 1] as usize].pos);
+                    d += dist2d(last, self.route.dest);
+                }
+                d.max(straight) // the path is never shorter than the straight line
+            }
+            None => straight,
+        };
+        if remaining < mul && dy.abs() < 2.0 {
+            return 3; // arrived inside route+0x8C = the mul [M 0x158b10 @0x158cbc]
         }
         if ctx.stationary {
             return 1; // the stationary gate holds the bot in place [M 0x16f198:42-45 pattern; 0xEB arm [S]]
@@ -3220,10 +3447,10 @@ impl BotBrain {
         } else {
             self.item_root(ctx, target)
         };
-        let mul = [0.7f32, 1.0, 1.3][(self.vars.speed as usize).min(2)]; // the speed mult [M atlas §4]
-        // ^ `BOT_getMovementSpeedMul` 0x126568 [M :6-19]: Drone+0xB6 (the stats' speed byte,
-        // `BOT_setDroneStats` 0x126318:18) 0 → 0.7 (0x3f333333), 1 → 1.0, 2 → 1.3
-        // (0x3fa66666), anything else → 1.0.
+        // The walk pace: the mul's traced consumers are the arrival radius above and the probe
+        // offsets (`CanStepLeft` 0x14f640, `CanBackoff` 0x1501a0) — no ground-speed reader is
+        // found (the drone's step is the anim's `Drone_AnimInfo` speed [M 0x139268:72-90]), so
+        // the walk stays at the stick's 1.0 bound [S the port's pace table].
         if !self.steer_to(ctx, dest, mul.min(1.0), true) {
             return 0xC; // no route and stuck: the route failed (validateRoute → the goal ends)
         }
@@ -3620,6 +3847,29 @@ impl BotBrain {
         walk_clear(ctx.world, r, to) && ctx.world.floor_below([to[0], to[1] - 1.1, to[2]], 0.9).is_some()
     }
 
+    /// `NDrone2_CanBackoff` 0x1501a0 for a bot [M :47-88]: behaviour prop 6 (set for every bot
+    /// [M 0x1249e8:134]) and `CanDoAnimState(4)` [S reads true — no anim pipeline], the
+    /// movement lock +0x4f8 & 0x10 clear (the port's `ctx.stationary`), then `NDrone2_MoveTest`
+    /// from the feet to the feet + R·(0, 0, −1.8) — for a bot (+0xc5 == 0x1e) the local probe is
+    /// scaled by `BOT_getMovementSpeedMul` on x and z first [M :55-58 `Vec_MulR32(mul, 1, mul)`],
+    /// so 1.8 × mul straight behind. The port's `walk_clear` + floor probe stands in for
+    /// `MoveTest` [S, the same stand-in `can_side_move` uses].
+    fn can_backoff(&self, ctx: &BotCtx) -> bool {
+        if ctx.stationary {
+            return false;
+        }
+        let mul = [0.7f32, 1.0, 1.3][(self.vars.speed as usize).min(2)];
+        let reach = 1.8 * mul;
+        let r = self.root();
+        // behind = −(cos, sin) of the brain's facing
+        let to = [
+            r[0] - crate::trig::cosf(self.yaw) * reach,
+            r[1],
+            r[2] - crate::trig::sinf(self.yaw) * reach,
+        ];
+        walk_clear(ctx.world, r, to) && ctx.world.floor_below([to[0], to[1] - 1.1, to[2]], 0.9).is_some()
+    }
+
     /// The side a combat move walks: +1 left, −1 right.
     fn move_side(state: u8) -> f32 {
         match state {
@@ -3838,9 +4088,8 @@ impl BotBrain {
         };
         let dist = o.dist2.sqrt();
         let target = o.pos;
-        if dist <= self.vars.combat_range[0] && !ctx.stationary {
-            // CanBackoff's !stationary half [M 0x1501a0:60]; the prop-6/anim-4/behind-test
-            // halves have no port counterparts
+        if dist <= self.vars.combat_range[0] && self.can_backoff(ctx) {
+            // `NDrone2_CanBackoff` 0x1501a0 (the lock + the behind probe; see `can_backoff`)
             self.set_state(state::BOT_ATTACK_BACKOFF); // [M :72-76]
             return;
         }
@@ -3870,22 +4119,71 @@ impl BotBrain {
     /// past the close range, then back to BotAttack. The game's flow: msg 1 = the walk-back anim
     /// + a `(Rand(1)+2)·FRAME_RATE` timer + the trigger pull; msg 3 stays while dist ≤ +0xF0 and
     /// CanBackoff (EvasiveMove / a per-tick Rand(4) inside), exits to 0xCF past it, and has a
-    /// 0xDF stuck arm [M 0x16fc30:18-104]. The port keeps the exit shape (dist past the
-    /// too-close band, the stationary/stuck guards) and omits the timer/rand/firing arms —
-    /// the game's exact exit bound (+0xF0) needs a live read of the bots' combat ranges
-    /// (DefaultInit computes it per skin [M 0x14b300:383-400]; the port's defaults are its own).
-    fn bot_attack_backoff_msg3(&mut self, ctx: &BotCtx) {
+    /// 0xDF stuck arm [M 0x16fc30:18-104]. The port keeps the exit shape (the stationary/stuck
+    /// guards) and omits the timer/firing arms.
+    /// `DSTATE_BotAttackBackoff` 0xD7 msg 3 [M 0x16fc30:56-96]: inside the ENGAGE band
+    /// (`+0x1a0 <= +0xF0`) the backoff evades — `CanBackoff` → `EvasiveMove` (the port's
+    /// side-walk stand-in; the arm's aim-gate halves and the `Rand_Rand(4)` stay-odd draw
+    /// have no port counterparts), `!CanBackoff` falls to 0xCF — and PAST the engage band
+    /// (`dist > +0xF0`) the state exits to 0xCF. The exit bound is the engage band, the
+    /// value this task settled: DefaultInit's per-class draw
+    /// ([`Self::default_init_combat_ranges`]), not the old port guess.
+    fn bot_attack_backoff_msg3(&mut self, ctx: &BotCtx, rng: &mut Rng) {
         let Some(o) = self.vars.opponent.and_then(|i| ctx.others.get(i)).filter(|o| o.alive) else {
             self.set_state(state::BOT_IDLE);
             return;
         };
-        if o.dist2.sqrt() > self.vars.combat_range[0] + 1.0 || ctx.stationary || self.stuck_hits > 0 {
-            // No latch write [M 0x16fc30 — the backoff reads +0x3b (the enter's skip-Fire, the
-            // msg3's aim gate) and never writes it]: see the 0xD0 arm above.
+        if ctx.stationary || self.stuck_hits > 0 {
+            // the port's stationary/stuck guards (the game's 0xDF stuck arm is unported)
             self.set_state(state::BOT_ATTACK);
             return;
         }
-        self.side_walk(0.0, -1.0, 0.8);
+        // the msg-0xC timer (+0xCC4, armed by the ENTER) → `chooseCombatMove`, none → 0xCF
+        // [M 0x16fc30:96-104]
+        if self.tick >= self.combat_move_until {
+            let mv = self.choose_combat_move(ctx, rng).unwrap_or(state::BOT_ATTACK);
+            self.set_state(mv);
+            return;
+        }
+        // msg 3 [M :64-92]: inside the engage band and `CanBackoff` → `BOTSTATE_EvasiveMove`
+        // (draws only for a bot — see `ndrone2_evasive_move`); its 0 → the aim gate (a live
+        // burst, +0x3c clear with +0x3b set, stays), else `Rand(4)` — even stays, odd →
+        // `chooseCombatMove` (its 0 SetStates nothing in the port [S]). Past the band or
+        // `!CanBackoff` → 0xCF. No latch write [M 0x16fc30 — the backoff reads +0x3b only].
+        if o.dist2.sqrt() <= self.vars.combat_range[1] && self.can_backoff(ctx) {
+            let ev = self.botstate_evasive_move(ctx, rng);
+            if ev != 0 {
+                self.set_state(ev);
+                return;
+            }
+            if !(self.vars.burst_empty == 0 && self.vars.fire_latch != 0) && rng.rand(4) & 1 != 0 {
+                if let Some(mv) = self.choose_combat_move(ctx, rng) {
+                    self.set_state(mv);
+                    return;
+                }
+            }
+            // the walk-back anim 4's root motion stand-in [S]
+            self.side_walk(0.0, -1.0, 0.8);
+            return;
+        }
+        self.set_state(state::BOT_ATTACK);
+    }
+
+    /// 0xD7 msg 1 [M 0x16fc30:13-24]: `CanBackoff` → the walk-back anim 4, `Rand_Rand(1)` (a
+    /// draw that always reads 0 but advances the stream), +0xCC4 = now + (rand + 2)·FRAME_RATE_INT
+    /// (the port's `combat_move_until`, the same Drone+0xCC4 field), then the trigger pull when
+    /// the latch +0x3b is clear (`DroneWeap_Fire`). The `!CanBackoff` ENTER arm (:25-45 — the
+    /// facing test, the 0xDF/`Rand(8,3)` hop, `reallyWantACombatMove(3)`) is unported: every port
+    /// entry is CanBackoff-gated the same tick [S].
+    fn bot_attack_backoff_enter(&mut self, ctx: &BotCtx, rng: &mut Rng) {
+        if !self.can_backoff(ctx) {
+            return;
+        }
+        let r = rng.rand(1); // [M :16]
+        self.combat_move_until = self.tick + (r + 2) * FRAME_RATE_INT; // [M :17]
+        if self.vars.fire_latch == 0 {
+            self.bot_attack_fire_enter(rng); // DroneWeap_Fire [M :21-23]
+        }
     }
 
     /// BotAttackFire's route/vision block [M 0x16f5e8:56-93].
@@ -3893,10 +4191,11 @@ impl BotBrain {
         if ctx.stationary {
             return; // [M :56-60]
         }
-        if dist <= self.vars.combat_range[0] {
+        if dist <= self.vars.combat_range[0] && self.can_backoff(ctx) {
             self.set_state(state::BOT_ATTACK_BACKOFF); // CanBackoff → 0xD7 [M :61-67]
             return;
         }
+        // !CanBackoff falls on to the too-far / out-of-sight tests [M 0x16f5e8:61-72]
         if self.vars.unseen_ticks >= 0x10 {
             if let Some(mv) = self.choose_combat_move(ctx, rng) {
                 self.set_state(mv); // [M :77]
@@ -4481,7 +4780,7 @@ mod tests {
     #[test]
     fn next_bullet_time_interval_floor() {
         let record = INITIAL_BOT_RECORDS[0].clone();
-        let mut brain = BotBrain::bot_init(&record, 4, [0.0, 1.6, 0.0], 0.0);
+        let mut brain = BotBrain::bot_init(&record, 4, [0.0, 1.6, 0.0], 0.0, 0, &mut Rng::new(1));
         let mut rng = Rng::new(0x5eed_0001);
         // weapon 6 with a record interval of 8 ticks: the deadline lands 60 ticks after the shot.
         brain.vars.weapon_id = 6;
@@ -4911,11 +5210,14 @@ impl BotBrain {
     /// 1.0 step reach); then the `NDrone2_EvasiveMove` fall-through [M :86-107]: code 0x79 →
     /// mask bit0 tries 0xD9, 0x7a → mask bit1 tries 0xDA (each through `getMovePossibility(..,3)`
     /// [M 0x129368:11-34]), any other value (the port's none) → mask bit2 tries the 0xD7
-    /// backoff. The roll arms need `BOTSTATE_EvasiveMove`'s roll anims — not lifted, so the port
-    /// always takes the none-arm [S unverified — listed in the report]. Returns the move state or 0.
+    /// backoff. The roll arms are unreachable on this disc — see the fall-through note below.
+    /// Returns the move state or 0.
     pub fn really_want_a_combat_move(&mut self, ctx: &BotCtx, rng: &mut Rng, mask: u32) -> u8 {
         use state::*;
         let check = |brain: &Self, mv: u8| -> bool {
+            if mv == BOT_ATTACK_BACKOFF {
+                return brain.can_backoff(ctx); // checkAttackMove case 3 → CanBackoff [M 0x126a40:18-19]
+            }
             let reach = if matches!(mv, BOT_ATTACK_STRAFE_AIM_LEFT | BOT_ATTACK_STRAFE_AIM_RIGHT) {
                 1.5
             } else {
@@ -4990,10 +5292,13 @@ impl BotBrain {
             }
             _ => {}
         }
-        // the EvasiveMove fall-through [M :86-107]: the roll arms (0x79 → mask&1 0xD9, 0x7a →
-        // mask&2 0xDA, each gated by `getMovePossibility(..,3)` [M 0x129368:11-34]) need
-        // `BOTSTATE_EvasiveMove`'s roll anims, not lifted — the none-arm's mask-bit-2 0xD7
-        // backoff stands (the game's exact none-arm [M :104-107]).
+        // the EvasiveMove fall-through [M :86-88 — `jal 0x1506d8`]: the draws (no dodge
+        // SetState for a bot [M-dis 0x150a94]) run whenever the aim gate passes; the return feeds only the
+        // 0x79/0x7a roll arms [M :89-99], which are UNREACHABLE on this disc —
+        // `NDrone2_EvasiveMove` returns only {0, 0x77, 0x78} [M-dis 0x150a84] — and the roll
+        // candidate can't even list for bots (prop 0x2e never set [M 0x1249e8:116-127]). The
+        // none-arm's mask-bit-2 0xD7 backoff is the live outcome [M :100-107].
+        let _ = self.botstate_evasive_move(ctx, rng);
         if mask & 4 != 0 && check(self, BOT_ATTACK_BACKOFF) {
             return BOT_ATTACK_BACKOFF;
         }
@@ -5194,7 +5499,7 @@ mod brain_tests {
             // the test enables the boot record (the menu's enable byte +0x0E [M Menu_PrepareBots])
             let mut rec = record;
             rec.0[0x0E] = 1;
-            let mut brain = BotBrain::bot_init(&rec, 4, [0.0, 1.6, 0.0], 0.0);
+            let mut brain = BotBrain::bot_init(&rec, 4, [0.0, 1.6, 0.0], 0.0, 0, &mut Rng::new(1));
             brain.weapon = BotWeapon { interval: 6, burst: 3, aggression_mul: 1.0 };
             brain.vars.weapon_id = 0x02;
             brain.vars.clip_rounds = 50;
@@ -5209,8 +5514,8 @@ mod brain_tests {
                     available: true,
                 }],
                 others: vec![
-                    OtherPlayer { index: 0, pos: [10.0, 1.6, 0.0], alive: true, team: 0, flags: 0, dist2: 0.0, health: 100.0, score: 0.0 },
-                    OtherPlayer { index: 4, pos: [0.0, 1.6, 0.0], alive: true, team: 0, flags: 0, dist2: 0.0, health: 100.0, score: 0.0 },
+                    OtherPlayer { index: 0, pos: [10.0, 1.6, 0.0], alive: true, team: 0, flags: 0, dist2: 0.0, health: 100.0, score: 0.0, yaw: 0.0 },
+                    OtherPlayer { index: 4, pos: [0.0, 1.6, 0.0], alive: true, team: 0, flags: 0, dist2: 0.0, health: 100.0, score: 0.0, yaw: 0.0 },
                 ],
                 brain,
                 rng: Rng::new(0x1234),
@@ -5325,6 +5630,58 @@ mod brain_tests {
         assert_eq!(r.brain.vars.combat_range, saved, "restored from +0x71C/720/724 [M 0x129b98:5-9]");
         // sister: the restore must differ from the close band (else the pair is vacuous)
         assert_ne!(saved, [0.5, 1.5, 1.6]);
+    }
+
+    /// The 0xD7 msg-3 exit bound is the ENGAGE band (+0xF0) [M 0x16fc30:64-92]: the backoff
+    /// stays while `+0x1a0 <= +0xF0` and `CanBackoff` (the evade arm) and exits to 0xCF past it.
+    /// The old port code exited at `too_close + 1.0`.
+    #[test]
+    fn backoff_exit_bound_is_the_engage_band() {
+        let run = |opp_x: f32, wall: bool, bot_x: f32, yaw: f32| -> Option<u8> {
+            let mut r = floor_rig(wall);
+            r.brain.state = state::BOT_ATTACK_BACKOFF;
+            r.brain.vars.opponent = Some(0);
+            r.brain.vars.combat_range = [4.0, 12.0, 20.0]; // [M 0x14b300:377, :381-387, :426]
+            r.brain.combat_move_until = u32::MAX; // the ENTER's +0xCC4 timer not yet due
+            r.brain.pos[0] = bot_x;
+            r.brain.yaw = yaw;
+            r.brain.pending = None;
+            let eye = r.brain.pos[1];
+            let d = opp_x - bot_x;
+            let others = vec![OtherPlayer {
+                index: 0, pos: [opp_x, eye, 0.0], alive: true, team: 0, flags: 0, dist2: d * d,
+                health: 100.0, score: 0.0, yaw: 0.0,
+            }];
+            let ctx = Rig::build_ctx(r.now, &r.pickups, &others, &r.world, false, None);
+            let mut rng = Rng::new(3);
+            r.brain.bot_attack_backoff_msg3(&ctx, &mut rng);
+            r.brain.pending
+        };
+        // 6 u < 12, open floor behind: stays (or a combat move from the Rand(4) arm)
+        let p = run(6.0, false, 0.0, 0.0);
+        assert!(p.is_none() || matches!(p, Some(0xD4 | 0xD5 | 0xDB | 0xDC)), "inside +0xF0 the backoff stays, pending {p:?}");
+        // past the engage band: 0xCF [M 0x16fc30:89-92]
+        assert_eq!(run(20.5, false, 0.0, 0.0), Some(state::BOT_ATTACK), "past +0xF0 → 0xCF");
+        // inside the band but a wall 1.5 behind (facing −x, the wall at x = 3, 1.8·1.3 reach):
+        // `!CanBackoff` → 0xCF [M 0x16fc30:64-66, 0x1501a0:76-86]
+        assert_eq!(run(-2.0, true, 1.5, std::f32::consts::PI), Some(state::BOT_ATTACK), "no room behind → 0xCF");
+    }
+
+    /// `NDrone2_CanBackoff` 0x1501a0's behind probe is 1.8 × the speed mul for a bot [M :55-58]:
+    /// a wall 2.0 behind blocks a speed-2 bot (2.34 reach) and not a speed-1 bot (1.8).
+    #[test]
+    fn can_backoff_probe_is_scaled_by_the_mul() {
+        let mut r = floor_rig(true);
+        r.brain.pos[0] = 1.0; // the wall at x = 3 is 2.0 behind when facing −x
+        r.brain.yaw = std::f32::consts::PI;
+        let others = r.others.clone();
+        let ctx = Rig::build_ctx(r.now, &r.pickups, &others, &r.world, false, None);
+        r.brain.vars.speed = 2;
+        assert!(!r.brain.can_backoff(&ctx), "1.8 × 1.3 = 2.34 reaches the wall");
+        r.brain.vars.speed = 1;
+        assert!(r.brain.can_backoff(&ctx), "1.8 × 1.0 stops short of it");
+        let ctx_s = Rig::build_ctx(r.now, &r.pickups, &others, &r.world, true, None);
+        assert!(!r.brain.can_backoff(&ctx_s), "the movement lock refuses [M :60]");
     }
 
     /// `BOTSTATE_chooseUnarmedAttackAnim` 0x1292f0 via `NDrone2_CanAltAttack` 0x1549e0: the
@@ -5734,7 +6091,7 @@ mod brain_tests {
         let eye = 1.1 + crate::player::EYE;
         let mut rec = INITIAL_BOT_RECORDS[0].clone();
         rec.0[0x0E] = 1;
-        r.brain = BotBrain::bot_init(&rec, 4, [0.0, eye, 0.0], 0.0);
+        r.brain = BotBrain::bot_init(&rec, 4, [0.0, eye, 0.0], 0.0, 0, &mut Rng::new(1));
         r.brain.weapon = BotWeapon { interval: 6, burst: 3, aggression_mul: 1.0 };
         r.brain.vars.weapon_id = 0x02;
         r.brain.vars.clip_rounds = 50;
@@ -5783,6 +6140,33 @@ mod brain_tests {
         assert!(walked > 2.0, "the bot walked up to the wall, walked {walked}");
     }
 
+    /// The goal walk's arrival radius is the speed mul: `NDrone2_MoveToGoalPosition` 0x1517d8:52-54
+    /// returns 3 at `GetRouteDistance < route+0x8C`, and route+0x8C is stored RAW from the walk's
+    /// own float by `SetupRouteToPosition` (0x158cbc `swc1 f21,0x8c(s0)`), which 0xEB feeds with
+    /// obj+0x704 = `BOT_getMovementSpeedMul` 0x126568 [M 0x171240:55-57, 0x1278a8:64,76; the
+    /// FPR 12 chain 0x151804/0x15183c → 0x15b028/0x15b090 → 0x158b44]. Fails on the old 1.0
+    /// arrival (1.2 out walked) and on a flat 2.0 (1.5 out arrived).
+    #[test]
+    fn goal_arrival_is_the_speed_mul() {
+        let run = |speed: u8, x: f32, up: f32| -> u8 {
+            let mut r = Rig::new();
+            r.brain.vars.speed = speed;
+            r.brain.init_goal(1, 0, [x, r.brain.pos[1] + up, 0.0, 0.0], 0, 0);
+            r.brain.vars.active_goal = 1;
+            let others = r.others.clone();
+            let ctx = Rig::build_ctx(r.now, &r.pickups, &others, &r.world, false, None);
+            r.brain.move_to_goal_position(&ctx)
+        };
+        // speed byte 2 (the disc's default record) → 1.3
+        assert_eq!(run(2, 1.2, 0.0), 3, "1.2 out inside the 1.3 radius: arrived");
+        assert_eq!(run(2, 1.5, 0.0), 1, "1.5 out: still walking");
+        // speed byte 0 → 0.7
+        assert_eq!(run(0, 0.8, 0.0), 1, "0.8 out past the 0.7 radius: still walking");
+        assert_eq!(run(0, 0.6, 0.0), 3, "0.6 out: arrived");
+        // the port's storey guard holds a goal 3.0 up [S]
+        assert_eq!(run(2, 1.2, 3.0), 1, "3.0 up: the storey guard");
+    }
+
     /// mp-bot-body-sounds: a bot that JUMPS plays neither body sound. The game's MP bots never
     /// reach `Player_HandleJump` 0x1916b0 (the only 0xA3 launch / 0x5FB·0xA3 bump producer in
     /// ACTION.ELF — see the citation on `walk_body`'s `sfx_out.clear()`): their objects are
@@ -5806,7 +6190,7 @@ mod brain_tests {
         let eye = 1.1 + crate::player::EYE;
         let mut rec = INITIAL_BOT_RECORDS[0].clone();
         rec.0[0x0E] = 1;
-        r.brain = BotBrain::bot_init(&rec, 4, [0.0, eye, 0.0], 0.0);
+        r.brain = BotBrain::bot_init(&rec, 4, [0.0, eye, 0.0], 0.0, 0, &mut Rng::new(1));
         r.brain.weapon = BotWeapon { interval: 6, burst: 3, aggression_mul: 1.0 };
         r.brain.vars.weapon_id = 0x02;
         r.brain.vars.clip_rounds = 50;
@@ -5998,7 +6382,7 @@ impl TraitRig {
         let mut rec = INITIAL_BOT_RECORDS[0].clone();
         rec.0[0x0C] = flags; // the stats flags byte → BOT_vars+0xac [M 0x1249e8:141 amemcpy]
         rec.0[0x0E] = 1; // enabled [M Menu_PrepareBots]
-        let brain = BotBrain::bot_init(&rec, 4, [0.0, 1.6, 0.0], 0.0);
+        let brain = BotBrain::bot_init(&rec, 4, [0.0, 1.6, 0.0], 0.0, 0, &mut Rng::new(1));
         TraitRig {
             brain,
             others: vec![OtherPlayer {
@@ -6009,7 +6393,7 @@ impl TraitRig {
                 flags: 0x2, // candidate only — the seen bit is never set [M 0x125390:99]
                 dist2: 0.0,
                 health: 100.0,
-                score: 0.0,
+                score: 0.0, yaw: 0.0,
             }],
             world: CollisionWorld::from_triangles(Vec::new()),
             rng: Rng::new(0xB077),
@@ -6178,7 +6562,7 @@ mod object_deleted_tests {
     fn fresh_brain() -> BotBrain {
         let mut rec = INITIAL_BOT_RECORDS[0].clone();
         rec.0[0x0E] = 1;
-        BotBrain::bot_init(&rec, 4, [0.0, 1.6, 0.0], 0.0)
+        BotBrain::bot_init(&rec, 4, [0.0, 1.6, 0.0], 0.0, 0, &mut Rng::new(1))
     }
 
     /// `MP_objectBeingDeleted` 0x18ac90's scenario match [M :27-253]: a CTC delete clears the
@@ -6311,5 +6695,130 @@ mod object_deleted_tests {
         m.restart_scenario(&mut Rng::new(3));
         assert!(m.objects_rt.flags[0].is_none() && m.objects_rt.bases[1].is_none());
         assert_eq!(m.pending_goal_cancels, vec![obj_id::FLAG, obj_id::BASE | 1]);
+    }
+}
+
+// ============================================================================
+// mp-bot-combat-moves: the combat-move Rand draws + the evasive pass
+// ============================================================================
+
+#[cfg(test)]
+mod evasive_move_tests {
+    use super::*;
+
+    fn floor_world() -> CollisionWorld {
+        CollisionWorld::from_triangles(vec![
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [50.0, 0.0, -50.0]],
+            [[-50.0, 0.0, -50.0], [-50.0, 0.0, 50.0], [50.0, 0.0, 50.0]],
+        ])
+    }
+
+    /// A bot at the origin, one live opponent 3 units out on +x FACING the bot (its yaw points
+    /// at the origin — the `BondIsFacingMe` gate reads the opponent's obj+0x54 [M 0x138f68:28-32,
+    /// :76; 0x154f60]) — the rig's "under fire" shape.
+    fn under_fire_brain() -> (BotBrain, Vec<OtherPlayer>) {
+        let settings = crate::mp::MpSettings::deathmatch(0x07000023);
+        let record = crate::mp::MpMatch::bot_record(&settings, 0);
+        let mut brain = BotBrain::bot_init(&record, 4, [0.0, 1.6, 0.0], crate::trig::HALF_PI, 0, &mut Rng::new(1));
+        brain.vars.opponent = Some(0);
+        brain.state = state::BOT_ATTACK;
+        brain.pending = None;
+        let opp = OtherPlayer {
+            pos: [3.0, 1.6, 0.0],
+            alive: true,
+            index: 0,
+            team: 1,
+            flags: 0x2,
+            dist2: 9.0,
+            health: 100.0,
+            score: 0.0,
+            yaw: -crate::trig::HALF_PI, // facing −x, at the bot
+        };
+        (brain, vec![opp])
+    }
+
+    fn ctx<'a>(others: &'a [OtherPlayer], world: &'a CollisionWorld, empty: &'a [BotPickup]) -> BotCtx<'a> {
+        BotCtx {
+            now: 0.0, scenario: 0x1, my_index: 4, my_team: 0, pickups: empty, others, world,
+            nav: None, health: 100.0, max_health: 100.0, stationary: false, lazy_sight: false,
+            objectives: None, weapons: None, start_weapon: 0,
+        }
+    }
+
+    /// The game's draw sequence for one `choose_combat_move` [M 0x129218] of an aimed-at bot,
+    /// replayed on a mirror stream: `NDrone2_EvasiveMove`'s `Rand(3)` over the bot's
+    /// [strafe, dodge, step] list [M 0x1506d8:99; props 0x1249e8:119-121, never 0x2e]; strafe →
+    /// `Rand(2)` [M :110] then the dodge `Rand(2)` [M :178]; dodge → the dodge `Rand(2)`; step →
+    /// none [M :173]; then `BOT_getMovePossibility(2)`'s `Rand(aggr + 4 − speed)` [M 0x1265d0:8-10]
+    /// and, when it passes, `Rand(4)` [M 0x129218:14]. 64 seeds cover every branch. Fails on
+    /// the worker's form (a 4-slot list, the dodge pair skipped on the strafe pick).
+    #[test]
+    fn choose_combat_move_consumes_the_games_draw_sequence() {
+        let world = floor_world();
+        let empty: Vec<BotPickup> = Vec::new();
+        let mut seen = [false; 3];
+        for seed in 0..64u32 {
+            let (mut brain, others) = under_fire_brain();
+            let c = ctx(&others, &world, &empty);
+            let mut rng = Rng::new(0xc0ba_0000 + seed);
+            let mut mirror = Rng::new(0xc0ba_0000 + seed);
+            let _ = brain.choose_combat_move(&c, &mut rng);
+            let p = mirror.rand(3);
+            seen[p as usize] = true;
+            if p == 0 {
+                mirror.rand(2);
+                mirror.rand(2);
+            } else if p == 1 {
+                mirror.rand(2);
+            }
+            let n = brain.vars.aggression as i32 + 4 - brain.vars.speed as i32;
+            if mirror.rand(n as u32) == (n - 1) as u32 {
+                mirror.rand(4);
+            }
+            assert_eq!(rng.draws, mirror.draws, "seed {seed}: the draw count");
+            assert_eq!((rng.x, rng.y), (mirror.x, mirror.y), "seed {seed}: the stream lands where the game's order leaves it");
+        }
+        assert!(seen.iter().all(|&b| b), "every list pick was exercised: {seen:?}");
+    }
+
+    /// A bot never dodges from `NDrone2_EvasiveMove`: the tail skips the SetState for the bot
+    /// mode 0x1e [M-dis 0x150a90-0x150a94] and `BOTSTATE_EvasiveMove` maps 0x77/0x78 to 0
+    /// [M 0x129368:10-34]. Fails on the worker's form, which SetState'd 0x77/0x78.
+    #[test]
+    fn aimed_at_bot_never_sets_a_dodge() {
+        let world = floor_world();
+        let empty: Vec<BotPickup> = Vec::new();
+        for seed in 0..64u32 {
+            let (mut brain, others) = under_fire_brain();
+            let c = ctx(&others, &world, &empty);
+            let mut rng = Rng::new(0x0d0d_0000 + seed);
+            let mv = brain.choose_combat_move(&c, &mut rng);
+            assert_eq!(brain.pending, None, "seed {seed}: no SetState from the evasive pass");
+            assert!(mv.map_or(true, |m| matches!(m, 0xD4 | 0xD5 | 0xDB | 0xDC)), "seed {seed}: {mv:?}");
+        }
+    }
+
+    /// The aim gate reads the OPPONENT's facing [M 0x138f68:28-32,76 + 0x154f60], not the bot's:
+    /// an opponent facing away draws no evasive numbers even while the bot faces it; one facing
+    /// the bot draws them even while the bot faces away. Fails on the worker's form (the bot's
+    /// own yaw).
+    #[test]
+    fn evasive_gate_is_the_opponent_facing_me() {
+        let world = floor_world();
+        let empty: Vec<BotPickup> = Vec::new();
+        // opponent faces away (+x), the bot faces it (+x)
+        let (mut brain, mut others) = under_fire_brain();
+        others[0].yaw = crate::trig::HALF_PI;
+        let c = ctx(&others, &world, &empty);
+        let mut rng = Rng::new(7);
+        assert_eq!(brain.ndrone2_evasive_move(&c, &mut rng), 0);
+        assert_eq!(rng.draws, 0, "facing away: the no-draw exit [M 0x1506d8:39-42]");
+        // opponent faces the bot, the bot faces away (−x)
+        let (mut brain, others) = under_fire_brain();
+        brain.yaw = -crate::trig::HALF_PI;
+        let c = ctx(&others, &world, &empty);
+        let mut rng = Rng::new(7);
+        brain.ndrone2_evasive_move(&c, &mut rng);
+        assert!(rng.draws >= 1, "facing the bot: the list draw runs");
     }
 }
