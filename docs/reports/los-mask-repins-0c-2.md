@@ -133,3 +133,10 @@ All three fallbacks attempted at ~22:51–22:52 UTC (2026-11-10):
 - wget: timed out at 25 s (exit 124, no output)
 (git push to github.com worked throughout, so the block is ntfy.sh-specific — the same wall the
 los-mask-repins-0c round recorded.)
+
+FINAL SUITE OUTCOME (23:02 UTC): the third relaunch's build also died on the disk — the
+workspace-wide test build grew target/ past the freed 1.3 GB and `No space left on device`
+killed four more nf-view test targets (fix_input_kbd_trace, guard_stuck_sweep_live,
+mine_bob_live, probe0c_parapet_live among the printed errors). The suite cannot complete in
+this 9.9 GB sandbox; the foreground chunks in "What ran" (every touched 0700000c binary, each
+with its pass count) are the coverage, as in the predecessor round.
