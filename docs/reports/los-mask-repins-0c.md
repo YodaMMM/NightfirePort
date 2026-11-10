@@ -82,3 +82,11 @@ check the round-3 note (the landing shots on the strip guard), remove each ignor
 
 not visible to me — this environment shows no token, credit or context-window figures for the
 session (no usage panel is exposed to the agent).
+
+## ntfy failed
+
+All three fallbacks attempted at ~20:58 UTC (2026-11-10):
+- curl (twice, 15 s and 25 s timeouts): `curl: (28) Connection timed out after ... milliseconds`
+- python3: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+- wget: exit 0 with no output and no confirmation body — success could not be verified
+  (git push to github.com worked throughout, so the block is ntfy.sh-specific).
