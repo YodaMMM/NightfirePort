@@ -94,3 +94,5 @@ All three fallbacks attempted at ~20:58 UTC (2026-11-10):
 - python3: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
 - wget: exit 0 with no output and no confirmation body — success could not be verified
   (git push to github.com worked throughout, so the block is ntfy.sh-specific).
+- A second round at ~21:05 UTC (after the report update): curl timed out again (20 s),
+  python3 `Errno 101 Network is unreachable` again, wget failed. The record stands.
