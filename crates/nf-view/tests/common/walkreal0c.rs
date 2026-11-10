@@ -1460,28 +1460,39 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
             }
         }
         drop(sim);
-        if let Some(g) = target {
-            if STRIP_P2K_SHOT.with(|c| c.get()) {
-                // los-mask-repins-0c-2: the landing-shot lever, SETTLED. Three measured facts on
-                // this branch: (1) the held weapon at the landing is the MICRO-CAMERA 0x54 — no
-                // round spawns from it [M scene.rs:5002 'the Micro-Camera 0x54 fires only from
-                // the aim bit'; sound-coverage.md:82] — the old "dry gun" telemetry read the
-                // CAMERA's clip 1 spare 0 [L the round-2 run]; (2) the drop spot itself is a
-                // TRANSIENT over the void — the strip floor map has no floor at (x -8.2, z
-                // -215.5..-217) [D the probe map] and the switch's idle ticks slid Bond straight
-                // down to y 1.03 [L this branch's first run]; (3) the guard's POSED AimStandFire
-                // boxes are exposed and he holds still most of the cycle (still 61/181 ticks in
-                // the stand trace [L]) — the 0x1e (owned [D the loadout's 30]) is the stand's
-                // own zero-spread weapon [M Bullet_init 0x12c5a0:139-170, mul 0 with the aim
-                // bit]. The player's play: walk the WEST LANE off the drop (the ledger's proven
-                // lip-top leg — the -4-era arrival (-8.36,12.37,-217.82) [L the 0c round-2 run]),
-                // stand LEVEL with the guard on the 11.24 strip top, and take the aimed shot
-                // through his fire-cycle pause. Real input only; the stand never writes health,
-                // armour or ammo.
-                w.walk_to(Wp::new(-8.4, 12.4, -218.8).r(1.0), "the west lane (the lip top west of the guard's capsule)");
+        if STRIP_P2K_SHOT.with(|c| c.get()) {
+            // los-mask-repins-0c-2: the landing-shot lever, SETTLED. Three measured facts on
+            // this branch: (1) the held weapon at the landing is the MICRO-CAMERA 0x54 — no
+            // round spawns from it [M scene.rs:5002 'the Micro-Camera 0x54 fires only from
+            // the aim bit'; sound-coverage.md:82] — the old "dry gun" telemetry read the
+            // CAMERA's clip 1 spare 0 [L the round-2 run]; (2) the drop spot itself is a
+            // TRANSIENT over the void — the strip floor map has no floor at (x -8.2, z
+            // -215.5..-217) [D the probe map] and the switch's idle ticks slid Bond straight
+            // down to y 1.03 [L this branch's first run]; (3) the guard's POSED AimStandFire
+            // boxes are exposed and he holds still most of the cycle (still 61/181 ticks in
+            // the stand trace [L]) — the 0x1e (owned [D the loadout's 30]) is the stand's
+            // own zero-spread weapon [M Bullet_init 0x12c5a0:139-170, mul 0 with the aim
+            // bit]. The player's play: walk the WEST LANE off the drop (the ledger's proven
+            // lip-top leg — the -4-era arrival (-8.36,12.37,-217.82) [L the 0c round-2 run]),
+            // stand LEVEL with the guard on the 11.24 strip top, and take the aimed shot
+            // through his fire-cycle pause. The west lane runs UNCONDITIONALLY: the diagonals
+            // only hold when entered from the lane (from the drop spot they cross the void
+            // band z -215.5..-217 and fall — measured [L the real-damage run where the
+            // west-edge stands' gunfire drew #35 off his post, the target search came up
+            // empty and the straight diagonals fell to y 1.96]).
+            // Real input only; the stand never writes health, armour or ammo.
+            w.walk_to(Wp::new(-8.4, 12.4, -218.8).r(1.0), "the west lane (the lip top west of the guard's capsule)");
+            if let Some(g) = target {
                 let killed = yard_stand_aimed(&mut w, g, "the strip guard from the west lane", 3600);
                 eprintln!("[0c] the strip stand: killed {killed}");
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[g];
+                let (clip, spare) = (sim.gun.clip, sim.gun.spare);
+                eprintln!("[0c] after the landing shots: guard {g} hp {:.1} corpse {} (clip {clip} spare {spare})", d.health, d.corpse);
             } else {
+                eprintln!("[0c] no live guard at the strip post at the landing (drawn off by the earlier gunfire [L the real-damage run]) — the lane holds, the diagonals walk on");
+            }
+        } else if let Some(g) = target {
             // The ammo lever (the round-2 telemetry: the gun arrived DRY — clip 1 spare 0 [L
             // the run]): fetch ammo through the walk's own pickup walk first, then re-anchor
             // on the landing (the fetch displaces Bond), then shoot.
@@ -1522,7 +1533,6 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
                 let (clip, spare) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare) };
                 eprintln!("[0c] the strip guard {g} from the landing (attempt {attempt}, hp {hp:.1}, clip {clip} spare {spare})");
                 if w.shoot(g, "the strip guard from the landing") { break; }
-            }
             }
             let sim = w.scene.sim.as_ref().unwrap();
             let d = &sim.drones.list[g];
