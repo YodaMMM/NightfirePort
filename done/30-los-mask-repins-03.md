@@ -144,3 +144,8 @@ or `common/` edits, so the other binaries' timelines are master's own.
 ## Usage
 
 not visible to me
+
+---
+## ntfy failed (2026-11-10T19:59Z)
+
+All three fallbacks unreachable from the sandbox: curl (28) connection timed out after 20001 ms; urllib [Errno 101] Network is unreachable; wget killed at the 60 s tool timeout with no output. The report section carries the exact errors.
