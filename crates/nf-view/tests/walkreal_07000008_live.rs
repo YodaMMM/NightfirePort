@@ -432,6 +432,16 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     ] {
         if name == "the lower landing" && w.tops_up() && walkway_pair_holds(&w) { continue; }
         w.walk_nav_to(at, name, 1.5);
+        // los-mask-08 (the walk-2 ledger's lever 2, the 05 pre-engage): the station deck's
+        // rifleman #14 (153.2, 46.0, −97.2, ~14 u east of this stop) drained the real-damage
+        // walks from 98.2 u down the station lane — 9.6 in 2 hits on the captured rerun, at
+        // ranges the strict pre-mask ray blocked [M 0x1eae80:70-87 + 0x1ebaa8:300-319]. A
+        // player clears the deck rifleman he can see BEFORE walking his lane east: the same
+        // visible within-radius stand the descent legs use. fight_pkg-gated: the topped-up
+        // Operative timeline stays byte-exact.
+        if fight_pkg && name == "the station hall" {
+            fight_guards_within(&mut w, "the station deck", 4200, true, 24.0);
+        }
         // los-mask-01-walk-2 (the masked-tree 08 re-tune, the real-damage walks): the
         // return-fire fights in this leg's lane herd Bond backward (the back-off fight's own
         // forward −1.0 [M damage_log.rs crowd]), and the measured rerun parked him ON the
@@ -449,6 +459,15 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             if p[0] > 156.0 && p[2] > -101.0 {
                 w.walk_nav_to([159.75, 46.08, -95.86], "off the walkway-door frame, back up the lane", 1.2);
             }
+        }
+        // los-mask-08 (the Agent rerun's ledger — the deck pair AFTER the crossing): #3
+        // (157.1,46.0,−96.9) and #11 (154.5,46.0,−86.9) drained the Agent walk 5.6+5.6 from
+        // the upper deck at ~100 u while it fought the Hind — the masked vision's engages
+        // [M 0x1eae80:70-87 + 0x1ebaa8:300-319] — and the deck pair stands 5-10 u off the
+        // walkway-head crossing this leg just walked. A player clears the men on the deck he
+        // just crossed before he descends: the same visible within-radius stand.
+        if fight_pkg && name == "the walkway head" {
+            fight_guards_within(&mut w, "the deck pair", 4200, true, 24.0);
         }
     }
     // With the game's standing bodies the live walkway pair (#7/#8, AimStandFire 0x68 / StepAim
@@ -534,6 +553,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // position, then step through into the room (the safe wall's face is east).
     w.walk_to(Wp { at: [154.6, 42.5, -121.0], act: Act::Use { use_ticks: 240 }, arrive: 1.1 }, "E the secure room door");
     w.walk_nav_to([158.0, 43.0, -119.0], "into the secure room", 1.4);
+    // los-mask-08 (the walk-2 ledger's lever 2, the 05 pre-engage): the secure room's
+    // rifleman #5 (158.0, 43.0, −121.2 — 2 u from this arrival) drained the real-damage walks
+    // from 80.6 u down the whole level during the Hind fight (10.8 in 6 hits on the captured
+    // rerun; ranges the strict pre-mask ray blocked [M 0x1eae80:70-87 + 0x1ebaa8:300-319]). A
+    // player clears the room's guard before he works the safe. fight_pkg-gated.
+    if fight_pkg {
+        fight_guards_within(&mut w, "the secure room", 4200, true, 14.0);
+    }
     // The bolts sit at (162.24, 43.88/42.70, −117.14) [D #207/#208] — inside, on the safe face.
     w.walk_nav_to([160.0, 43.4, -117.0], "before the safe", 1.2);
     let bolts = [[162.24f32, 43.88, -117.14], [162.24, 42.70, -117.14]];
@@ -901,12 +928,15 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 fight_close_guards_visible(&mut w, "the platform mouth", 4200);
             }
         }
-        // join-fix-g (Agent only): on the joined tree the west burst-rifle pair #26/#27 (weapon
-        // 0x15) walks in along the platform from x 97-101, 12-16 u out and in view, while the
-        // walk boards; #26 took the last 34.9 in 9 hits at 10.5 u with no stand on him. A player
-        // on the platform mouth answers the riflemen he can see before he walks into their lane:
-        // the same visible-only stand, out to 18 u.
-        if difficulty == 2 && fight_pkg && name == "the lower level east" {
+        // join-fix-g (the real-damage walks — was Agent-only): on the joined tree the west
+        // burst-rifle pair #26/#27 (weapon 0x15) walks in along the platform from x 97-101,
+        // 12-16 u out and in view, while the walk boards; #26 took the last 34.9 in 9 hits at
+        // 10.5 u with no stand on him — and on the masked-tree Operative rerun the pair was
+        // STILL at the platform during the Hind fight, draining 7.2+7.2 from ~60 u up the
+        // level [L the captured rerun's ledger]. A player on the platform mouth answers the
+        // riflemen he can see before he walks into their lane: the same visible-only stand,
+        // out to 18 u. fight_pkg-gated: the topped-up Operative timeline stays byte-exact.
+        if fight_pkg && name == "the lower level east" {
             fight_guards_within(&mut w, "the platform mouth west", 4200, true, 18.0);
         }
     }
@@ -1299,10 +1329,9 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // and the game's player walks out of the terminal to fight it — the death run's rocket 2
     // reached the machine only because the GUIDED round's per-tick steering threaded the
     // opening [M Bullet_update 0x12e7b0:177-244] while rockets 1/3/4 exploded on the walls
-    // 0.65–5.5 u from Bond. So when the corridor to the machine is blocked, Bond LOOKS for the
-    // opening (a 16-ray azimuth sweep at eye height — the farthest clear ray, preferring the
-    // machine's bearing) and WALKS out (real forward input, grounded only), then fights from
-    // the open pad.
+    // 0.65–5.5 u from Bond. The walk-out arm was TRIED and retired by the geometry (see the
+    // dodge block below): the ride's end box has no floor outside and no doorway clear at eye
+    // height — the player fights from the carriage and DODGES the machine's rounds instead.
     let mut exit_ticks = 0u32;
     // level-08-rocket-self-blast: the machine's per-tick position tracker (the forecast gate's
     // velocity source — the loop runs one sim tick per iteration).
@@ -1489,7 +1518,50 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             aiming: rocket.is_none(),
             ..Default::default()
         };
-        let _ = exit_ticks;
+        // level-08-terminal-dodge (the real-damage walks — the walk-2 ledger's lever 3; the
+        // walk-out lever is retired by the geometry): the ride's end box has NO floor outside
+        // (the probe: floor_below is None at every candidate 2-8 u out — the terminal hangs
+        // over the valley, the kill floor y −24 [D #42/#43/#44]), and the walk-out run proved
+        // it: the arm's 46 forward ticks left Bond at the unchanged (111.08, 13.52, −179.72)
+        // and its "clear 30 u" rays (az0.00/0.39/2.36/2.75/3.14/5.89 all t1.00) are the
+        // SHOT-OUT PANE holes over the valley, not a doorway [L the walk-out run]. What kills
+        // the walk at the terminal is the machine's own rocket: the captured death's world
+        // hits are its detonations (the −30.99 landed on the death tick f53951, 11 ticks
+        // after rocket 1's impact — the re-aim gap), and the five −1.2 zaps tick on the
+        // standing spot. A player DODGES: while a hostile round is closing on him he
+        // sidesteps out of its lane with real strafe input (Input.strafe — the panes'
+        // sidestep mechanic), the side picked by the eye-height ray with more open air. The
+        // sidestep also un-pins him from the ride-end spot the zaps tick on.
+        let mut dodge_side = 0.0f32;
+        if fight_pkg && rocket.is_none() {
+            let bp = sim.bond.pos;
+            let eye2 = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+            let (sy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+            let right = [cy, 0.0, -sy];
+            for b in &sim.drones.bullets {
+                if b.state == 2 { continue; }
+                let rel = [bp[0] - b.pos[0], bp[1] - b.pos[1], bp[2] - b.pos[2]];
+                // The machine's rockets cross a 14-u window in ~4 ticks (the −24.15 killer at
+                // f53950 detonated 5.3 u out 11 ticks after its launch was logged) — a dodge
+                // that waits for the window is a dodge that never moves: strafe while ANY
+                // live round is still in the air and closing from inside 60 u (the machine's
+                // engage range on this fight), for as long as it flies.
+                if rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2] > 60.0 * 60.0 { continue; }
+                let closing = rel[0] * b.dir[0] + rel[1] * b.dir[1] + rel[2] * b.dir[2];
+                if closing <= 0.0 { continue; }
+                let open = |s: f32| sim.world.segment_bullet(eye2,
+                    [eye2[0] + right[0] * 4.0 * s, eye2[1], eye2[2] + right[2] * 4.0 * s]).unwrap_or(1.0);
+                dodge_side = if open(1.0) >= open(-1.0) { 1.0 } else { -1.0 };
+                break;
+            }
+        }
+        if dodge_side != 0.0 {
+            input.strafe = dodge_side;
+            exit_ticks += 1;
+            if t % 100 == 0 {
+                eprintln!("[08 dodge t{t}] bond {:?} side {dodge_side} ticks {exit_ticks}", sim.bond.pos);
+            }
+        }
         if rocket.is_some() != riding {
             riding = rocket.is_some();
             let now = sim.drones.copters[ci].damage;
@@ -1911,8 +1983,18 @@ fn the_ally_fights_only_the_guards_through_the_noise_path() {
 /// 26696 was Bond's own rockets exploding on the bottom-station geometry 0.65–5.5 u from him
 /// (−52.5/−7.5/−22.5/−3.7, frames 26477/26580/26639/26696) plus the pair's interval-4 bursts
 /// (−9.0); docs/reports/level-08-long-range-hits.md.
+/// los-mask-08-walks: the walk-2 ledger's three levers applied and GREEN (2026-11-10, 24.6
+/// health left, 38 hits for 75.4): (1) the walk-out lever was tried and RETIRED BY THE
+/// GEOMETRY — the ride's end box has no floor outside (the probe's floor_below None, [D
+/// #42/#43/#44]) and its "clear 30 u" sweep rays are the shot-out pane holes over the valley
+/// [L the walk-out run: 46 forward ticks at an unchanged (111.08,13.52,−179.72)]; (2) the 05
+/// pre-engage stands at the station deck and the secure room (the #5/#14 drains); (3) the
+/// terminal strafe dodge — while any live hostile round is in the air and closing, Bond
+/// sidesteps out of its lane with real strafe input, the side picked by the eye-height ray
+/// with more open air: the machine's killing rocket (−24.15/−30.99 wall-band detonations 11
+/// ticks after rocket 1's impact) no longer lands the blast on him (the world's share fell
+/// 39.4 → 14.8, the death tick's −24.15 dodged entirely).
 #[test]
-#[ignore = "los-mask-01-walk-2: the masked-tree Operative walk now reaches the Hind fight (the walkway-head herding wedge fixed by the gated settle — the machine took rocket 1's 199.5 of its 299, one rocket left in the clip) and dies at the bottom terminal t53951: 46 hits for 100.0, 20 return-fire fights. THE DEATH LEDGER [L the captured rerun]: the world 39.4 in 22 hits — five −1.2 zaps every 20-25 ticks (frames 53881/53906/53929/53935/53948, the live-wire/hurt-volume class) while Bond stood at the ride's end (111.08,13.52,−179.72), then −20.09 at f53951 (a 5.3-u detonation, 11 ticks after rocket 1's impact) — plus the masked long-range engages #5 10.8 in 6 hits at d 80.6, #14 9.6 at d 98.2 (ranges the strict pre-mask ray blocked [M 0x1eae80:70-87 + 0x1ebaa8:300-319]), #19/#27 7.2 each on the descent. The pre-mask Operative walk carried the same terminal zaps on a fuller health pool. NEXT LEVERS (in order): (1) the walk-out of the terminal the fight loop already models — the 16-ray azimuth sweep walks Bond out to the open pad before the fight (the retired exit_ticks arm), which leaves the wire/hurt volume AND the wall-band blast tails; (2) the 05 pre-engage lever for the masked long-range drains (#5/#14's placements); (3) a strafe dodge of the machine's incoming rockets (Input.strafe exists; the fight loop holds the stand)"]
 fn walk_the_whole_mission_on_real_input_real_damage() {
     walker::with_real_damage(walk_the_whole_mission_on_real_input);
 }
@@ -1927,7 +2009,7 @@ fn walk_the_whole_mission_on_real_input_real_damage() {
 /// 0x1d3a80]; the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input
 /// only — the load path is the only difference.
 #[test]
-#[ignore = "los-mask-01-walk-2: the captured whole-binary rerun ran (the Operative sister's ledger below names the end state: the walkway-head herding settle, then the bottom terminal's world zaps + the masked long-range drains while the machine sits at 99.5/299). The Agent walk carries the same class on top of the level's own 00agent ledger (the upstream real-damage bleed: 23 hits for 100.0 on the pre-mask tree) — the masked vision's extra engages deepen it. NEXT LEVERS (the Operative ledger's three, then the descent re-tune): the terminal walk-out (the retired 16-ray exit arm), the 05 pre-engage lever for the long-range drain placements, the strafe dodge; then the gated descent stands"]
+#[ignore = "los-mask-08-walks 2026-11-10: the Operative ledger's three levers are in (the walk-out retired by the geometry — no floor outside the ride's end box, [D #42/#43/#44]; the station-deck/secure-room pre-engages; the terminal strafe dodge — 80 dodge ticks by t500) and the Operative sister is GREEN at 24.6 health. The Agent walk still dies at the bottom terminal (tick 29625, 29 hits for 100.0, 17 return-fire fights): the world 49.8 in 10 hits (the zaps + the machine's wall-band rockets — the dodge moves him but d2's DiffMod·299 = 448.5-hp machine needs ~5 rocket hits (4 launched by t491, 199.5 done) so the fight is 2-3× the Operative's length under continuous fire), plus the masked station-deck snipers #14 11.2, #3 5.6, #11 5.6 — alive through the whole walk, draining from ~100 u during the Hind fight [L the run; the ranges the strict pre-mask ray blocked, M 0x1eae80:70-87 + 0x1ebaa8:300-319]. The deck-pair stand at the walkway head found NO visible guard at t1771 (health 60.8) — the pair's enable/placement needs pinning before the stand can meet them. NEXT LEVERS: (a) pin the deck pair's enable plate and place the pre-engage where they are visible (the walkway-mid/lower-landing legs, or the guard-glass sight rule through the deck windows); (b) the descent re-tune (the walkway pair + stairwell stands) to bank health before the ride; (c) the Operative dodge's evidence transfers — the terminal itself is survivable"]
 fn walk_the_whole_mission_on_real_input_real_damage_agent() {
     // HEAD-HUNT (the 05/07 00 Agent sisters' tactic on this level group): at Agent the guards'
     // hit chance is DroneFiring_Accuracy_Normal 1.1 (Operative 0.8) and Bond's pain is

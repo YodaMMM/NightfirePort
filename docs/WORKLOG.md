@@ -120,3 +120,10 @@ Branch s/los-mask-08-walks = s/los-mask-01-walk-2 73a33ac5a + merge origin/maste
 (auto-merged drone.rs, no conflicts). Task: the 08 Operative ledger's three levers (terminal
 walk-out first), then the Agent and 00 Agent sisters' descent re-tune, then the 11/12/14
 re-time levers in their ignore messages; one level per tool call, repairs gated to level+difficulty.
+- 16:20-17:05 the 08 Operative walk GREEN: the walk-2 ledger's walk-out lever tried and retired
+  by the geometry (no floor outside the ride's end box — 46 forward ticks at an unchanged
+  position, the "clear 30 u" rays are the shot-out pane holes over the valley); the 05
+  pre-engage stands (station deck, secure room, deck pair, platform mouth west widened to
+  fight_pkg); the terminal strafe dodge (any live hostile round in the air and closing →
+  sidestep out of its lane, side by eye-height clearance): Operative green 24.6 health, world
+  share 39.4 → 14.8. Agent re-ledgered (448.5-hp machine + the deck snipers #14/#3/#11).
