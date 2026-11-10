@@ -41,3 +41,10 @@
   reached but the wheel stayed 0x54/1/0 after the cycle [L the run]; the re-anchor walk
   landed a lower perch. The ledgers carry the equip-path question. All 0c binaries green
   (1/0/3, 1 ign, 1/0, 7/0, 2/0, 1/0, 2/0), nf-game lib 782/0/4 on the final tree.
+
+- los-mask-repins-0c-2 started: branch cut from s/los-mask-repins-0c (974048c8a) and merged
+  origin/master (0e1371451). This round: settle the landing-shot question at the landing with
+  strip guard #35 (0x5000087) in AimStandFire (Bond's real fire ray vs the game's bullet test),
+  then take the ledgers' next lever (lip-top west of the guard capsule, held slide east past the
+  AimStandFire cycle) and un-ignore the 0d-handoff walk, its real_damage sister and the
+  eastroute ground crossing. Work in progress.
