@@ -116,3 +116,14 @@ this session. The full suite did not fit: see "Environment limits".
 
 not visible to me — this environment shows no token, credit or context-window figures for the
 session.
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-10 ~21:20 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "los-mask-repins-02: blocked …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'los-mask-repins-02: blocked …', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "los-mask-repins-02: blocked …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out after 60 s, killed (no output).
