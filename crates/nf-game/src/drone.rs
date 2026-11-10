@@ -859,6 +859,14 @@ pub struct Animator {
     pub early_end: bool,
     /// `OnStartAnim`: a class-6 danim's script cut to 15 frames (`+0xB0`) unless the hit was big (`+0x1C`).
     pub len_cap: Option<u32>,
+    /// `Drone+0x570`: the current anim's info word, stored whole at every anim set —
+    /// `DroneAnim_SetDAnimInternal` 0x13aee8:50 writes `Drone_AnimInfo[danim]`'s first u32
+    /// (the port's `tables.info[danim][0..4]`, the same table its state/class/flags read);
+    /// `DroneAnim_SetScript` 0x13e088:26 writes the call's flags argument instead. Consumers:
+    /// the NoBunching quad yaw offsets (bits 8/0x10/0x20 [M 0x150ad0:27-35]), the skip arm
+    /// (bit 2 [M 0x13aee8:82]), and the no-physics bit 1 (`NDrone2_DoCollision` 0x149ec8:30-32
+    /// + `NDrone2_DoGravity` 0x141e58:36-38 — see `no_physics_now`).
+    pub info_word: u32,
 }
 
 /// `DroneWeap_GetWeaponInfo` 0x17a5a0's outputs: the held weapon's model datum byte
@@ -1914,6 +1922,11 @@ pub struct Drone {
     /// (Dead 0x163fe8 case 3, Fade 0x172cd8, FadeFast 0x172dd8) read it: a corpse is removed on
     /// the 3rd control pass after its last drawn frame.
     pub drawn_grace: u8,
+    /// `obj+0xFC` as the no-physics arm reads it (`no_physics_now`): the same counter as
+    /// `drawn_grace` (2 at spawn [M 0x134630:16], 2 when drawn, one down per control pass) fed by
+    /// the draw test's frustum leg alone (`Vision_InView` [M 0x1e62d8:34-35]) — the game's draw
+    /// set is inside it, the bullet-ray room stand-in is not.
+    pub frustum_grace: u8,
     /// `+0x4CE` (u16) — `NDrone2_MonitorTalkToMissionObj` 0x144340's hostage/captor dialogue step
     /// counter, zeroed by DefaultInit 0x14b300:80: 0 the captor's opener pending, 1 the hostage's
     /// reply pending, 2 back to the captor — the pair alternate msg-0x1A lines, each gated on the
@@ -1982,6 +1995,17 @@ pub struct Drone {
     /// runs after control in `Drone_Control` 0x139268:48-91, so a flag set in UPDATE is read the
     /// same frame and is gone the next.
     pub root_zero: bool,
+    /// The guard's own world hurt sphere obj+0x8C, what a blast's pick and gap both measure
+    /// [M Collide_PickObj 0x1eae80:221-228 `SqDist < (blast_r + obj+0x8C)²`; Explode_Propagate
+    /// 0x17c5d8-0x17c614 `gap = max(d − obj+0x8C, 0)`]. 0.0 until the guard's sphere is built:
+    /// fresh-boot guards that never moved carry obj+0x8C = 0.0 with centre == pos exactly
+    /// [L ee_start_05.bin: 9 of 13 guards], and `Control_BuildWorldSph` 0x133070 only fills the
+    /// field from the movement handler 0x1336f8's per-move call. Built value: `guard_sphere_r`.
+    pub sph_r: f32,
+    /// The position the guard was created at (`sph_r` builds when the guard's XZ leaves it — the
+    /// game's BuildWorldSph runs on the first movement [M 0x1336f8 → 0x133070]; height settles
+    /// alone don't count [L ee_start_05.bin: the dormant guards' centre == pos in all axes]).
+    pub sph_home: V3,
 }
 
 /// Normalise a vector (the grenade throw direction helper).
@@ -2165,7 +2189,8 @@ impl Drone {
             goal_arrival: 2.0, // the DefaultInit seed [M 0x14b300:579]
             ai_points: Vec::new(), alarm_switches: Vec::new(),
             explosive_pos: pos, explosive_run_dist: 0.0,
-            anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), blend_out: false, started: false, early_end: false, len_cap: None },
+            anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), blend_out: false, started: false, early_end: false, len_cap: None,
+                info_word: 0 },
             firing: false, burst_done: false, burst: 0, next_shot: 0, last_shot: 0, clip, clip_max: clip,
             grenade_weapon, grenade_count, pending_grenade: false,
             shots: Vec::new(), log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, armed_drone_near: false, wobble: rng.rand(10000), lost_sight: true, damage_mul: 1.0, alert_bits: 0, light: 1.0, attack_frame: 0, alerted_by_drone: false, watching: false,
@@ -2178,6 +2203,10 @@ impl Drone {
             spawn_stats_params: None,
             // the body-contact latch (Drone+0x26) starts clear — set only by the contact pass.
             objhit_latch: false,
+            // the guard's own hurt sphere: 0.0 until the guard first moves off `sph_home` [L
+            // ee_start_05.bin: the never-moved guards carry obj+0x8C = 0.0, centre == pos].
+            sph_r: 0.0,
+            sph_home: pos,
             objhit_dir: [0.0; 3],
             // Drone+0x38: cleared every frame at the PreDroneControl site (see the field).
             root_zero: false,
@@ -2231,6 +2260,7 @@ impl Drone {
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
             drawn_grace: 2, // `control_init_object` 0x134630:16
+            frustum_grace: 2, // the same store [M 0x134630:16]
             abseil_land_latch: false,
             mission_path_dist: 0.0,
             stun_until: 0, player_pos: [0.0; 3],
@@ -3023,6 +3053,13 @@ impl Drone {
         for _ in 0..8 {
             let info = d.tables.info.get(danim as usize).copied().unwrap_or([0; 24]);
             self.anim.danim = danim;
+            // `+0x570 = Drone_AnimInfo[danim]`'s first u32, written whole on EVERY set — even a
+            // set whose script ends up skipped keeps the word [M 0x13aee8:50 writes before the
+            // skip check; the word is the no-physics bit's source, not the playing script's].
+            self.anim.info_word = u32::from_le_bytes([info[0], info[1], info[2], info[3]]);
+            if std::env::var_os("NF_PHYS_TRACE").is_some() && self.anim.info_word & 2 != 0 {
+                eprintln!("[phys] danim {danim:#x} carries the no-physics bit (voice {:#x} state {:#x})", self.voice_type, info[8]);
+            }
             self.anim.state = u16::from_le_bytes([info[8], info[9]]);
             self.anim.class = info[0xc];
             self.anim.blend_wait = 0;
@@ -3077,6 +3114,10 @@ impl Drone {
         let old_turn = self.anim.danim != 0 && old_info[1] & 1 != 0 && self.anim.script.is_some() && !self.anim.held;
         self.begin_blend(d, 8, old_turn); // `SetScript` → `SetHTAnim(…, blend 8)`
         self.anim.danim = 0;
+        // `DroneAnim_SetScript` 0x13e088:26 writes +0x570 = the call's flags argument — not a
+        // table word. The ported call sites pass flags without bit 1 [S unverified: the port
+        // models the flags as 0], so the script path carries no no-physics bit.
+        self.anim.info_word = 0;
         self.anim.state = state;
         self.anim.class = 1;
         self.anim.script = Some(hash);
@@ -6585,6 +6626,39 @@ impl Drone {
     /// collision bit 0x20) skips it too — except the `keeps_gravity` (bit 4) corpse's collision-free gravity arm. [M] constants: WldGravity (0,−9.8,0), REC_FRAME_RATE 1/60,
     /// hip+0.6 ray, 0.2 on-surface, probe 0.4 (0x140e90; 0.55 when +0xd8 == 0xc and 0.3 when +0x2f — unmodelled,
     /// the gate's band only shifts, the sit/stand split does not change), 0.125 settle rate.
+    /// `NDrone2_DoCollision` 0x149ec8's anim arm (decompile :30-32) — and `NDrone2_DoGravity`
+    /// 0x141e58:36-38's shared shape: with the collide bit 0x20 set, the anim-info no-physics
+    /// bit +0x570 & 2 returns 0 UNLESS a force arm holds first, in the game's order:
+    /// voice 0xC (the whole inner test skipped — always collide), voice 0x13 (return 1), the
+    /// +0x538 replaced script (return 1), a player within 2.0 (`DroneFunc_NearPlayerCollision`
+    /// 0x14b190 — the +0x154+4·i per-player distances `NDrone2_PreDroneControl` 0x148db0:35-48
+    /// fills; the port's `dist_to_player`), obj+0xfc (the drawn counter — see below
+    /// [M 0x13805c; the port's `drawn` IS that flag]). Consequences [M the disasm sites]:
+    /// `NDrone2_Collision` 0x140e90 stores HITTEST mode +0x464 = 0 instead of 0x800 (the
+    /// capsule's geometry still builds — 0x140ff4-0x141008 / 0x141074-0x141088) so the player's
+    /// pick passes the body, and `Drone_CollisionHandler` 0x140968 skips its contact pass (the
+    /// jal site 0x140b88); gravity is off with it. Only reachable for an UNDRAWN guard beyond
+    /// 2.0 of the player — a drawn or near guard is always force-collided.
+    ///
+    /// The drawn arm reads obj+0xFC itself — the COUNTER (2 when the draw pass adds the object,
+    /// one down per control pass [M View_AddObjects 0x1e62d8:70-71, View_AddForcedObjects
+    /// 0x1e5fb8:114-115, control_movement_object_handler 0x1336f8:242-246]) — so a guard drawn
+    /// on either of the last two frames keeps physics. Both draw-list writers set it only after
+    /// `Vision_InView` passes the object's world sphere [M 0x1e62d8:34-35, 0x1e5fb8:89-92]; the
+    /// cel gate on top of that (portal-visible rooms) has no sim-side graph, and the bullet-ray
+    /// stand-in `drawn` is stricter than it (a guard behind a pillar in a visible room reads
+    /// undrawn). This arm therefore reads `frustum_grace` — the same counter fed by the frustum
+    /// leg alone, a superset of the game's draw set — so it never freezes a guard the game
+    /// keeps moving; only a guard outside the view frustum (or one the game also skips) and
+    /// beyond 2.0 of the player loses physics.
+    fn no_physics_now(&self) -> bool {
+        self.anim.info_word & 2 != 0
+            && !matches!(self.voice_type, 0xC | 0x13)
+            && !self.anim.blend_out
+            && !self.near_player_collision()
+            && self.frustum_grace == 0
+    }
+
     pub fn collision_handler(&mut self, world: &CollisionWorld) {
         // The +0x26 obj-hit latch's per-tick clear [M Drone_CollisionHandler 0x140968:73 — at the
         // handler's top, before the flying branch; the NPC-system-off early return :59-61 skips it,
@@ -6639,14 +6713,31 @@ impl Drone {
             }
             return;
         }
+        // The anim-info no-physics arm, in the game's order after the 0x20 fold: `NDrone2_DoCollision`
+        // 0x149ec8:30-32 returns 0 for the flagged anim (no force arm — see `no_physics_now`), which
+        // skips the handler's contact pass (the jal site 0x140b88) and drops the capsule's HITTEST
+        // mode to 0 (0x140ff4-0x141008); `NDrone2_DoGravity` 0x141e58:36-38 returns 0 with it, so the
+        // flagged undrawn far guard runs NO physics this tick (the anim carries the body).
+        if self.no_physics_now() {
+            self.in_air = false;
+            self.on_surface = false;
+            // DoGravity 0 → the handler zeroes the fall speed +0x484 [M 0x140968:154-156].
+            self.velocity[1] = 0.0;
+            return;
+        }
         // `+0x4F8 & 0x4000` cleared at the top.
         self.in_air = false;
         // The body query's push out of a live pane [M Drone_CollisionHandler 0x140968]: the spine
-        // runs obj + up*r to obj + up*(r - hip), radius r = 0.4, 0.55 for type 0xC [M
-        // NDrone2_Collision 0x140e90:81-117]. `bounded` stands for `NDrone2_DoCollision`
-        // 0x149ec8's +0x4F8 bit 0x20; its +0x570 bit 2 is unmodelled.
-        let r = if self.dtype == 0x0c { 0.55 } else { 0.4 };
-        let (push, pane) = world.pane_push([self.pos[0], self.pos[1] + r, self.pos[2]], [self.pos[0], self.pos[1] + r - self.hip(), self.pos[2]], r);
+        // runs obj + up·top to obj + up·bottom, radius r — `NDrone2_Collision` 0x140e90's capsule
+        // (`capsule`: 0.4, 0.55 on the +0xD8 voice set 0xC, 0.3 stacked when +0x2f down).
+        // `bounded` stands for `NDrone2_DoCollision` 0x149ec8's +0x4F8 bit 0x20 (the per-guard
+        // collide switch: bit CLEAR returns 0 — no collision — before any other test [M disasm
+        // 0x149f08-18]; DefaultInit 0x14b300:60 sets the bit for every drone in the 0x801e2
+        // bundle, SetAsDead 0x14a2f0:16 clears it off 0700004a); its +0x570 bit 1 (the anim-info
+        // no-physics bit) is the `no_physics_now` gate above [M 0x149ec8:30-32]; its +0x570 bit 2
+        // (the anim-info no-collide bit, DroneAnim_SetDAnimInternal 0x13aee8:50) is unmodelled.
+        let (r, top, bottom) = self.capsule(self.hip());
+        let (push, pane) = world.pane_push([self.pos[0], self.pos[1] + top, self.pos[2]], [self.pos[0], self.pos[1] + bottom, self.pos[2]], r);
         self.pos[0] += push[0];
         self.pos[2] += push[2];
         self.pane_contact = pane;
@@ -6720,6 +6811,34 @@ impl Drone {
     /// length (+0xA0 + 0.6) and the feet (`pos.y − +0xA0`), and the sitting driver's is the 0.2 clamp
     /// [L 05-truck.trace]. DefaultInit 0x14b300:48 starts it at 1.0.
     fn hip(&self) -> f32 { self.hip_anim }
+
+    /// `NDrone2_Collision` 0x140e90's collision-body capsule: (radius, top up-offset, bottom
+    /// up-offset) from the origin for a body whose hip is `hip` — the shape the HITTEST at
+    /// Drone+0x3D0 carries (+0x3F0 top, +0x400 bottom, +0x45C radius) and the body-contact scan
+    /// sweeps. Three arms, in the game's own order:
+    /// • the DOWN guard (+0x2f — DSTATE_Stunned 0x162eb0 ENTER/EXIT, StunGrenadeLoop 0x1631c0,
+    ///   StunDartLoop 0x163570): radius 0.3 (0x3e99999a) and BOTH sphere centres stacked at
+    ///   up·(0.3 − hip) — the collapsed body's single low ball [M disasm 0x140fd4-88: `lb +0x2f`
+    ///   ≠ 0 → 0.3f; case-A stores 0x140f88-0x141008 write the same point to +0x3F0 and +0x400].
+    /// • else voice set 0xC (+0xD8 — Kiko's voice set, the port's `voice_type`; the +0xD8 read is
+    ///   `lhu 0xd8` at 0x140fdc, the compare 0x141048-68 picks 0.55 = 0x3f0ccccd over 0.4 =
+    ///   0x3ecccccd): spheres at up·0.55 / up·(0.55 − hip). The old port read `dtype == 0x0c` —
+    ///   placement param +0xC7, a DIFFERENT field from the +0xD8 voice set (drone-port-check.md
+    ///   #3): 07000016's #634 (skin 0x050005e → voice 0x13, dtype 0xc) is 0.4 in the game and
+    ///   stood 0.55 here; 07000008's Zoe (skin 0x500003b, dtype 0xc, voice 0xc) agrees on both.
+    /// • else radius 0.4 [M 0x14104c-58].
+    /// (The dead +0x4F8 & 0x200 arm's bone-based volume [M :123-155] is unmodelled — the port's
+    /// corpse keeps the last capsule and the door passes skip corpses outright.)
+    pub fn capsule(&self, hip: f32) -> (f32, f32, f32) {
+        if self.down {
+            let y = 0.3 - hip;
+            (0.3, y, y)
+        } else if self.voice_type == 0xc {
+            (0.55, 0.55, 0.55 - hip)
+        } else {
+            (0.4, 0.4, 0.4 - hip)
+        }
+    }
 
     /// `NDrone2_Move` (0x14eff8) +0x23 branch, interpreter-verified against the real code (this
     /// task): `velocity += normalise(rope − pos) · (REC_FRAME_RATE · +0x50)` per control tick, the
@@ -12554,6 +12673,22 @@ pub fn hazard_link_flag(weapon_type: u16, stuck: bool) -> Option<(f32, u16)> {
 /// animated guards].
 const DRONE_SPHERE_R: f32 = 1.05;
 
+/// The built guard hurt sphere per model. The game's guards take `Control_BuildWorldSph`'s
+/// flags2&8 PARENT path (every 05 guard reads obj+0xFA = 0x0008 [L ee_start_05.bin]), which
+/// inherits the character system's per-model sphere — NOT the raw glist radius (the glists read
+/// 1.152-1.188 [D 07000005.BIN main meshes 0x020002da/0x02000a01/0x0200040d], ~0.88-0.92× the
+/// live values). Measured live values (fresh boot, the awake guards):
+/// skin 0x0500002e → 1.0640, 0x0500002f → 1.0190, 0x05000030 → 1.0640 (one instance 1.0508,
+/// the pose-dependent spread). Models without a measurement keep the 1.05 fold [S unverified].
+fn guard_sphere_r(skin: u32) -> f32 {
+    match skin {
+        0x0500_002e => 1.064,
+        0x0500_002f => 1.019,
+        0x0500_0030 => 1.064,
+        _ => DRONE_SPHERE_R,
+    }
+}
+
 /// `NDrone2_DefaultInit`'s per-level close-in after the sight class [M 0x14b300:423-460]: the
 /// engage range (and on 07000011 the combat sight) by the anim set +0xDA, the draws already spent.
 fn level_sight(level: u32, anim_set: u16, f0: f32, fc: f32) -> (f32, f32) {
@@ -12718,6 +12853,14 @@ pub fn in_view(eye: V3, pos: V3, slack: f32, sides: &[V3; 4]) -> bool {
 /// renderer draws straight through: 0700000a's patroller behind the lounge window (z −4.71 pane,
 /// mat 0x10) walked his whole loop undrawn, sliding with no gait in full view. The rays now skip
 /// glass too (`segment_sight_clear`).
+/// The drawn gate's frustum leg alone: `Vision_InView` over the object's world sphere [M
+/// View_AddObjects 0x1e62d8:34-35 / View_AddForcedObjects 0x1e5fb8:89-92] — the first half of
+/// `visible_to`, without the room stand-in rays.
+pub fn in_view_of(player: &Player, pos: V3) -> bool {
+    let a2 = player.aim[0] * player.aim[0] + player.aim[1] * player.aim[1] + player.aim[2] * player.aim[2];
+    a2 > 1e-12 && in_view(player.eye, pos, DRONE_DRAWN_SLACK, &frustum_sides(player.aim))
+}
+
 pub fn visible_to(player: &Player, world: &CollisionWorld, pos: V3, head: V3) -> bool {
     let a2 = player.aim[0] * player.aim[0] + player.aim[1] * player.aim[1] + player.aim[2] * player.aim[2];
     if !(a2 > 1e-12) { return false; }
@@ -15555,7 +15698,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // game's own Collide_SphereIntersect list skips obj+0xF0 & 0x20 for DISABLED guards is an
         // open live check).
         let drones: Vec<(usize, V3, f32)> = self.list.iter().enumerate()
-            .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, DRONE_SPHERE_R)).collect();
+            .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, x.sph_r)).collect();
         // copter-hitdata-damage: the parts' world spheres for the case-0 sweep (the SP part
         // targets, the same volumes the bullet pass tests).
         let copter_parts: Vec<(usize, Vec<(V3, f32)>)> = self.copters.iter().enumerate()
@@ -18169,7 +18312,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // …, 0xc0)` hits [M 0x17c518:67-68]; the port passes its live lists, the falloff
             // gate inside `propagate` picks the reached ones.
             let drones_t: Vec<(usize, V3, f32)> = self.list.iter().enumerate()
-                .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, DRONE_SPHERE_R)).collect();
+                .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, x.sph_r)).collect();
             let hits = crate::explode::propagate(pos, radius, damage, owner,
                 &crate::explode::Targets { drones: &drones_t, player: self.player_sph, breaks: &breaks_t,
                     destroys: &destroys, copters: &[] });
@@ -19245,6 +19388,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // glass-breach-guards-4: the root-motion flag is this tick's movement-source mark — clear
         // it before anything moves (root_motion sets it when it applies a delta).
         for dr in self.list.iter_mut() { dr.scripted_move = false; }
+        // explode-guard-spheres: the per-guard hurt sphere builds on the guard's first movement
+        // (the game's `Control_BuildWorldSph` runs from the movement handler 0x1336f8 per move;
+        // a fresh-boot guard that never moved carries obj+0x8C = 0.0 with centre == pos [L
+        // ee_start_05.bin]). XZ-only: height settles alone don't move the game's sphere [L same
+        // snapshot — the dormant guards' centre == pos in all axes].
+        for dr in self.list.iter_mut() {
+            if dr.present && !dr.corpse && dr.sph_r == 0.0
+                && (dr.pos[0] != dr.sph_home[0] || dr.pos[2] != dr.sph_home[2]) {
+                dr.sph_r = guard_sphere_r(dr.skin);
+            }
+        }
         let _prof_all = crate::prof::scope("drones.tick (total)");
         let prof_pre = crate::prof::scope("drones: shared passes");
         self.frame += 1;
@@ -21900,6 +22054,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             dr.channel_on = self.channels.on(dr.switch_channel as u32);
             dr.wait_channel_on = dr.wait_channel != 0 && self.channels.on(dr.wait_channel as u32);
             { let _p = crate::prof::scope("drone: visible_to (drawn ray)"); dr.drawn = dr.enabled && visible_to(player, d.world, dr.pos, dr.head()); }
+            // The frustum leg alone (`Vision_InView` [M View_AddObjects 0x1e62d8:34-35]) for the
+            // no-physics arm's obj+0xFC read — see `frustum_grace`.
+            let in_frustum = dr.enabled && in_view_of(player, dr.pos);
             dr.links_used = std::mem::take(&mut self.used);
             dr.link_flags = std::mem::take(&mut self.link_flags);
             dr.locked_door_nodes = std::mem::take(&mut self.locked_door_nodes);
@@ -22440,7 +22597,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // pitch [-1.0, +0.6]; speed 0.14 alerted (`DCVars+0x50c > 0.66`) else 0.07 (0x1472c8). Both angles positive up.
             if dr.talk_track && frame > dr.talk_track_until { dr.talk_track = false; } // the window expired — the game's resume re-targets fresh [M 0x1472c8:69-70]
             let aiming = dr.anim.class == 2 && dr.aims_torso();
-            if dr.talk_track {
+            // corpse-fire: the aiming half of the same law. `NDrone2_ControlSTANDARD`
+            // 0x1490f0:136-140 returns at the AI bit off (DoTracking(0), no control tail), and
+            // 0x1490f0:164-175 sends an ENABLED guard at `health (+0xac) <= 0` to
+            // `NDrone2_DoTracking(0)` too — a dying guard stops aiming (the head angles ease
+            // back, the same mode-0 fold the port's final arm models [M 0x1472c8]) while
+            // `DroneWeap_HandleFiring` still runs for him (the burst's own anim gates stop the
+            // shots). The port's tracking stop draws once (`Rand(10)`, 0x1472c8's stop), so the
+            // arm keeps the game's draw count.
+            if !dr.enabled || dr.health <= 0.0 {
+                if dr.tracking { let _ = rng.rand(10); dr.tracking = false; } // the stop draw (0x1472c8)
+                dr.head_yaw = rotate_to_bearing(dr.head_yaw, 0.0, 0.07, crate::trig::PI);
+                dr.head_pitch = rotate_to_bearing(dr.head_pitch, 0.0, 0.07, crate::trig::PI);
+            } else if dr.talk_track {
                 // The HeadTrackObj window: `DoHeadTrackingBehaviour` returns while `now <= +0x358`
                 // [M 0x147578:37-39] — the talk target (Bond, the `glb_players` stand-in) owns the
                 // head. The ease speed is model+0xe0 = 0.07 [M 0x14ada0:19-21] within
@@ -22499,7 +22668,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 dr.head_yaw = rotate_to_bearing(dr.head_yaw, 0.0, 0.07, crate::trig::PI);
                 dr.head_pitch = rotate_to_bearing(dr.head_pitch, 0.0, 0.07, crate::trig::PI);
             }
-            if !dr.corpse { let _pf = crate::prof::scope("drone: handle_firing"); let bs = { let lights = &mut self.lights; dr.handle_firing(d, rng, frame, player, quad, index, lights) }; if let Some(b) = bs.first().cloned() {
+            // corpse-fire: the game's AI-active gate. `NDrone2_ControlSTANDARD` 0x1490f0:136-140
+            // returns at `(+0x4F8 & 0x100) == 0` — DoTracking(0) and no control tail — so a
+            // guard whose AI bit is off never reaches `DroneWeap_HandleFiring` (0x1490f0:227)
+            // and never fires. The port's `enabled` is that bit [M drone.rs:2601]; the removal
+            // paths clear it with `present` (the corpse fade 0x13a5a8's port fold at :5124/:5145,
+            // the spawner cleanup 0x137fbc-0x1380b4's port fold at :14833). Without the gate a
+            // spawner-removed (present=false, enabled=false, corpse=false) guard kept firing —
+            // the 11 stairwell ghosts shot Bond from removed slots for ~270 ticks (hp −72/−75
+            // shooters [L the sprint-5 tree's runs, reproduced on 0a9d39435+its world.rs]).
+            // The game's disabled guard draws nothing in this pass, so the gate keeps the Rand
+            // count at the game's own.
+            if dr.enabled && !dr.corpse { let _pf = crate::prof::scope("drone: handle_firing"); let bs = { let lights = &mut self.lights; dr.handle_firing(d, rng, frame, player, quad, index, lights) }; if let Some(b) = bs.first().cloned() {
                 // `DroneWeap_FireWeapon` 0x178f68:264 → `Bullet_init_casing`: the guard's shell eject.
                 // The basis is the game's guard arm of `Bullet_init_casing_ex` 0x12f678:102-114: the
                 // weapon datum's bone world matrix (datum base+2 when the skin carries the eject port,
@@ -22799,8 +22979,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if player.body.2 > 0.0 && dr.present && dr.enabled && !dr.corpse {
                 let (ja, jb) = (player.body.0, player.body.1);
                 let pr = player.body.2;
-                let (ta, tb) = ([dr.pos[0], dr.pos[1] + 0.4, dr.pos[2]], [dr.pos[0], dr.pos[1] - 0.6, dr.pos[2]]);
-                let tr = 0.4f32; // [M 0x140e90:91-121; the 0x0c-kind 0.55 arm rides the Jointy list's own stand-in [S]]
+                // The guard's own capsule (`capsule`): the standing site used pos+0.4/pos−0.6
+                // with r 0.4 — the hip-1.0 stand-in; the down arm stacks both ends at
+                // pos + (0.3 − hip) with r 0.3 [M NDrone2_Collision 0x140e90 case A].
+                let (tr, top_off, bottom_off) = dr.capsule(1.0);
+                let (ta, tb) = ([dr.pos[0], dr.pos[1] + top_off, dr.pos[2]], [dr.pos[0], dr.pos[1] + bottom_off, dr.pos[2]]);
                 let mut p = Self::closest_on_segment(ta, tb, ja);
                 let mut q = Self::closest_on_segment(ja, jb, p);
                 p = Self::closest_on_segment(ta, tb, q);
@@ -22833,6 +23016,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // AFTER this drone's message walk so the dead states read last tick's value — the game's
             // X_{K+1} = drawn_K ? 2 : max(X_K − 1, 0).
             dr.drawn_grace = if dr.drawn { 2 } else { dr.drawn_grace.saturating_sub(1) };
+            dr.frustum_grace = if in_frustum { 2 } else { dr.frustum_grace.saturating_sub(1) };
         }
         // subtitles-do-spoken: `Sound_UpdateSounds` 0x1dda70 fires `Sound_DoSubtitle` on every
         // node's start with +0x52 set [M :95-98]. `Sound_ReqestPlaySfx` 0x1dcc68 sets it: always for
@@ -23045,16 +23229,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // reverses a closing leaf. The port's `enabled` is the Enable(1)/Enable(0) mirror;
                 // the corpse bits 0x200/0x400 map to `corpse` and the health floor to `+0xAC > 0`.
                 // The guard's collide HITTEST [M NDrone2_Collision 0x140e90:91-121]: mask 0x800
-                // (+0x464), A = +0x3F0 = pos + up·0.4, B = +0x400 = pos + up·(0.4 − hip) (pos − 0.6,
-                // the capsule the body-contact pass above uses), r = +0x45C = 0.4. Mask 0x800 makes
+                // (+0x464), A = +0x3F0 = pos + up·r, B = +0x400 = pos + up·(r − hip) (pos − 0.6,
+                // the capsule the body-contact pass above uses), r = +0x45C — `capsule`'s 0.4 /
+                // 0.55-voice-0xC / 0.3-down arms (this site keeps the standing hip 1.0 the
+                // −0.6 bottom end stood for). Mask 0x800 makes
                 // `Collide_Intersect` 0x1ebaa8 run the SAME `Intersect_CylGeom` refine on this capsule
                 // as on the player's (the arm is keyed on the HITTEST mask +0x94, not on the class
                 // [M 0x1ebaa8:234-296]), so a guard reaches the door's `+0xD0` list only when his
                 // capsule touches the leaf. (Was: the swept root point, sphere stage only.)
-                let top = [x.pos[0], x.pos[1] + 0.4, x.pos[2]];
-                let bottom = [x.pos[0], x.pos[1] - 0.6, x.pos[2]];
+                let (r, top_off, bottom_off) = x.capsule(1.0);
+                let top = [x.pos[0], x.pos[1] + top_off, x.pos[2]];
+                let bottom = [x.pos[0], x.pos[1] + bottom_off, x.pos[2]];
                 movers.push(crate::door::DoorMover {
-                    a: top, b: bottom, radius: 0.4, body: (top, bottom, 0.4), centre: x.pos,
+                    a: top, b: bottom, radius: r, body: (top, bottom, r), centre: x.pos,
                     player: false,
                     valid: !x.corpse && x.health > 0.0 && x.enabled,
                 });
@@ -24732,7 +24919,8 @@ mod tests {
             goal_arrival: 2.0, // the DefaultInit seed [M 0x14b300:579]
             ai_points: Vec::new(), alarm_switches: Vec::new(),
             explosive_pos: pos, explosive_run_dist: 0.0,
-            anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), blend_out: false, started: false, early_end: false, len_cap: None },
+            anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), blend_out: false, started: false, early_end: false, len_cap: None,
+                info_word: 0 },
             firing: false, burst_done: false, burst: 0, next_shot: 0, last_shot: 0, clip: 0, clip_max: 0,
             grenade_weapon: 0x35, grenade_count: 0, pending_grenade: false, shots: Vec::new(),
             // 952: the raw accuracy roll per shot, parallel to `shots`.
@@ -24768,6 +24956,7 @@ mod tests {
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
             drawn_grace: 2, // `control_init_object` 0x134630:16
+            frustum_grace: 2, // the same store [M 0x134630:16]
             mission_wait_channel: 0,
             abseil_land_latch: false,
             mission_path_dist: 0.0,
@@ -24845,6 +25034,10 @@ mod tests {
             objhit_dir: [0.0; 3],
             // Drone+0x38: cleared every frame at the PreDroneControl site (see the field).
             root_zero: false,
+            // the test drone starts placed and never moves: sphere 0.0 (the game's never-moved
+            // guard law [L ee_start_05.bin]).
+            sph_r: 0.0,
+            sph_home: pos,
         };
         dr
     }
@@ -24856,6 +25049,32 @@ mod tests {
             [[-5.0, 0.0, -5.0], [5.0, 0.0, 5.0], [5.0, 0.0, -5.0]],
             [[-5.0, 0.0, -5.0], [-5.0, 0.0, 5.0], [5.0, 0.0, 5.0]],
         ])
+    }
+
+    #[test]
+    fn capsule_radii_follow_the_voice_set_and_the_down_flag() {
+        // `NDrone2_Collision` 0x140e90's three arms, as `capsule()` returns them. The DOWN flag
+        // (+0x2f) wins first [M disasm 0x140fd4-88 `lb +0x2f` ≠ 0 → 0.3f, both +0x3F0/+0x400 the
+        // same point], then the +0xD8 voice set 0xC picks 0.55 [M disasm 0x141048-68 `lhu 0xd8`],
+        // else 0.4. The old port keyed the 0.55 arm on `dtype == 0x0c` (placement param +0xC7) —
+        // 07000016's #634 (skin 0x050005e → voice 0x13, dtype 0xc) is 0.4 in the game.
+        let mut dr = drone_at([0.0, 1.0, 0.0]);
+        dr.voice_type = 0x13;
+        dr.dtype = 0xc;
+        assert_eq!(dr.capsule(1.0), (0.4, 0.4, -0.6), "voice 0x13 + dtype 0xc is the 0.4 arm (the game reads +0xD8, not +0xC7)");
+        dr.dtype = 0;
+        assert_eq!(dr.capsule(1.0), (0.4, 0.4, -0.6), "the default arm");
+        dr.voice_type = 0xc;
+        assert_eq!(dr.capsule(1.0), (0.55, 0.55, -0.45), "voice set 0xC (Kiko's) is the 0.55 arm");
+        // The down arm: radius 0.3, the spine degenerate — both ends at up·(0.3 − hip) [M case A].
+        // hip 1.0: the ball's centre at floor + 0.3 (pos + (0.3 − 1.0) with pos at floor + hip).
+        dr.down = true;
+        assert_eq!(dr.capsule(1.0), (0.3, -0.7, -0.7), "the down guard is the stacked 0.3 ball");
+        // The animated hip rides the same offsets (the game's `0.3 − fVar9` / `r − fVar9` reads of +0xA0).
+        dr.down = false;
+        dr.voice_type = 0;
+        let (r, top, bottom) = dr.capsule(0.2);
+        assert_eq!((r, top, bottom), (0.4, 0.4, 0.2), "the sitting hip 0.2 rides the offsets [M 0x140e90 fVar9]");
     }
 
     #[test]
@@ -24952,6 +25171,65 @@ mod tests {
         dr2.collision_handler(&w2);
         assert!(dr2.in_air && !dr2.on_surface, "in the air");
     }
+
+    #[test]
+    fn the_anim_no_physics_bit_arms_in_the_games_order() {
+        // `NDrone2_DoCollision` 0x149ec8:30-32 + `NDrone2_DoGravity` 0x141e58:36-38: the +0x570
+        // bit 1 returns "no physics" only with EVERY force arm clear, in the game's order —
+        // voice 0xC skips the whole inner test (always collide), voice 0x13 returns 1, the
+        // +0x538 replaced script returns 1, a player within 2.0 returns 1
+        // (`DroneFunc_NearPlayerCollision` 0x14b190), obj+0xfc drawn returns 1.
+        let mut dr = drone_at([0.0, 5.0, 0.0]);
+        dr.anim.info_word = 2; // bit 1 set, nothing else
+        dr.anim.blend_out = false;
+        dr.drawn = false;
+        dr.frustum_grace = 0;
+        dr.dist_to_player = [100000.0; 4];
+        assert!(dr.no_physics_now(), "flagged, undrawn, far, voice 0 → no physics");
+        // The voice 0xC arm: the game skips the inner test entirely (collide regardless) [M 0x149ec8:16-33].
+        dr.voice_type = 0xC;
+        assert!(!dr.no_physics_now(), "voice 0xC force-collides before the bit is read");
+        // The voice 0x13 arm: return 1 [M 0x149ec8:17-19].
+        dr.voice_type = 0x13;
+        assert!(!dr.no_physics_now(), "voice 0x13 force-collides");
+        dr.voice_type = 0;
+        // The +0x538 replaced-script arm [M 0x149ec8:20-22].
+        dr.anim.blend_out = true;
+        assert!(!dr.no_physics_now(), "a replaced script force-collides");
+        dr.anim.blend_out = false;
+        // The near-player arm [M 0x14b190: the < 2.0 slot read].
+        dr.dist_to_player = [1.5, 100000.0, 100000.0, 100000.0];
+        assert!(!dr.no_physics_now(), "a player within 2.0 force-collides");
+        dr.dist_to_player = [100000.0; 4];
+        // The drawn arm (obj+0xfc != 0) [M 0x149ec8:27-29]: the COUNTER — 2 when drawn, 1 on the
+        // next control pass [M 0x1336f8:242-246] — both force-collide; `frustum_grace` is the
+        // frustum-leg reading of it, not the ray-based `drawn`.
+        dr.frustum_grace = 2;
+        assert!(!dr.no_physics_now(), "a drawn guard force-collides");
+        dr.frustum_grace = 1;
+        assert!(!dr.no_physics_now(), "drawn last frame (counter 1) still force-collides");
+        dr.frustum_grace = 0;
+        dr.drawn = true;
+        assert!(dr.no_physics_now(), "the ray stand-in is not the arm's input");
+        dr.drawn = false;
+        // Bit 1 clear: no physics-off even undrawn and far.
+        dr.anim.info_word = 0;
+        assert!(!dr.no_physics_now(), "the bit clear → the default fall-through collides");
+        // The handler honours the gate: a flagged undrawn far drone skips the whole live pass
+        // (no on-surface probe — `in_air`/`on_surface` forced false, position untouched).
+        dr.anim.info_word = 2;
+        let w = CollisionWorld::from_triangles(vec![
+            [[-5.0, 4.0, -5.0], [5.0, 4.0, 5.0], [5.0, 4.0, -5.0]],
+            [[-5.0, 4.0, -5.0], [-5.0, 4.0, 5.0], [5.0, 4.0, 5.0]],
+        ]);
+        let y0 = dr.pos[1];
+        dr.velocity[1] = -5.0;
+        dr.collision_handler(&w);
+        assert!((dr.pos[1] - y0).abs() < 1e-9, "no gravity while flagged");
+        assert!(!dr.on_surface, "the probe never ran");
+        // DoGravity 0 → the handler zeroes the fall speed +0x484 [M 0x140968:154-156].
+        assert_eq!(dr.velocity[1], 0.0, "the flagged guard's fall speed is zeroed");
+    }
 }
 
 #[cfg(test)]
@@ -25047,7 +25325,7 @@ mod foley_tests {
     #[test]
     fn bot_pain_pools_agree_with_bot_sound_effect() {
         let rec = crate::mp::bots::INITIAL_BOT_RECORDS[0].clone();
-        let brain = crate::mp::bots::BotBrain::bot_init(&rec, 4, [0.0, 1.6, 0.0], 0.0);
+        let brain = crate::mp::bots::BotBrain::bot_init(&rec, 4, [0.0, 1.6, 0.0], 0.0, 0, &mut crate::drone::Rng::new(1));
         for alt in [false, true] {
             let (b, n) = Drones::pain_pool(alt, false);
             assert_eq!(brain.bot_sound_effect(0x1f, alt), Some((b as u16, n)),

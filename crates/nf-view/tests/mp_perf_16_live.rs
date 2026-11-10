@@ -92,7 +92,18 @@ fn iso() -> Option<String> {
 // !stationary gate [M 0x1501a0:60], the case-2 0xD4 tail [M 0x1267a0:56-62], the
 // attacker explosive double-score [M 0x126b88:429-441]) deliberately changed the
 // simulated result; the pin still guards optimisation determinism.
-const PINNED_DIGEST: u64 = 0x98d7_b0e7_1a65_d31a;
+// mp-match-end re-pin: the setup records carry the game's boot defaults (frag 10 [M 0x1c7e78:29],
+// time 600 s [M 0x1c7e78:40 + 0x20ec00:145-146]) and they ride the hash.
+// mp-bot-combat-ranges re-pinned 2026-11-10: the bots carry DefaultInit's combat bands now
+// (+0xEC = 4.0, +0xF0 = 12+FRand(4), +0xFC = 13+FRand(4)+FRand(4) [M 0x14b300:377-426] —
+// ResetMap_Load 0x1d6360:155-157 runs Drone_PostLoad_Init over MP_Start's bots), which adds
+// the game's three shared-stream draws per bot at bot_init and moves every combat distance
+// decision (the 0xD7 exit bound is the engage band [M 0x16fc30:64-92]); the run stays
+// fixed-input deterministic and the sister asserts hold. 0x98d7_b0e7_1a65_d31a →
+// 0xe3fb_90fd_011b_bbef (34 kills).
+// join-1110-mp: the four mp branches joined (setup defaults + DefaultInit bands + arrival 2.0 /
+// raw walk mul + the combat-move draw order) — re-pinned on the joined tree.
+const PINNED_DIGEST: u64 = 0x73c2_4bf4_c662_feb2; // 35 kills
 
 const TICKS: u32 = 3600;
 

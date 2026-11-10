@@ -1826,48 +1826,140 @@ fn the_hurt_volumes_census_and_their_guards() {
 /// hurt #4 (z 96.66+) whose floor y 4.38 is the contact; or the jump drive FROM the lower
 /// lane with the stuck handler's sidesteps alive.
 #[test]
-#[ignore = "005 hurt pin: the walked descent to hurt #3's plane stalls at the y-14.1 lip (6 legs identical, (123.3,14.1,122.9) [L the runs]); the run+jump drive wedges at (105.6,25.1,114.6); next lever: the doc's nav-lenient descent from the armour-pickup leg (59.65,33.57,86.11 -> the valley floor (42.5,8.9,88.3)), then north into hurt #4 (floor y 4.38)"]
+#[ignore = "005 hurt pin LEDGER (level-05-valley-hurt, 2026-11-10): the walked route now REACHES the lane and the lip — the gatehouse leg walks clean, the east steering descent lands the lower lane (118.71,16.79,114.44) [L the runs], and the raw run+jump drive descends the truck slope to the lip (132.0,14.17,125.37) where the descent HARD-BLOCKS: no wall segment exists (every direction ray at dy −4..+2 and d 2-6 reads clear [L hurt13]) and NO GROUND lies ahead — the ground rays 0.5-8 u past the lip read none BOTH scoped to Bond's own cel (Some(14)) and unscoped, from start heights 13/20/30 [L hurt13] — the basin floor east of the lip is ABSENT from the port's world, while the WEST basin floor exists and stands (the descent landed (47.20,8.37,84.06) [L hurt6] and the deep pocket (56-59.5, 2.0-3.3, 65-68) is walkable [L hurt6/7]). THAT is the port collision bug the task named, now LOCATED: the missing region is exactly hurt #3's own band (x 80.78..168.38, z 96.66..144.68, y 5.11 [L the census]) east of x ~130. THE DECOMPILE-BACKED VALUES ARE PINNED in the test body: every valley-floor plane carries damage 1000.0 = placement param 1 [M Hurt_Create 0x17e870 — damage = param 1, gate = param 2, sound id = param 3, class mask = param 4], applied to the player with no level/who gate [M Player_DealWithObjHit 0x194458:95-103 — obj+0xFF == 0x27 applies Hurt_GetDamage 0x17ea18], and the census pins all 13 volumes at damage 1000. THE ROOM SPLIT IS MEASURED: the lip stand and every point past it resolve to cel Some(14) (Bond's own room) while the WEST basin floor is cel Some(15) — room 14's collision build COVERS the east basin (find_cel Some(14) at y 14/8/5) but carries NO floor quads there (the scoped ground rays none) — the missing-floor locus is the room-14 quad build. NEXT LEVERS: (1) why room 14's build lacks the basin floor — compare the level bin's collision data for the east basin region [D] with the port's parse (the map-block 0x2E objects + the instances the scoping links into cel 14), and the game's own FindCel relink law [M build_FindCel 0x1c8cb0 — relinks obj+0x20 by tie-break rays against each candidate's own chain geometry] against the port's ScopeGraph; a live check with the truck's own path keys through the lip settles what the game walks; (2) once the floor exists, the walk descends onto hurt #3's plane and the -1000.0 record fires — then this test un-ignores."]
 fn the_valley_plane_hurts_bond_walked() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
     w.top_up_health = false;
     w.wait(30);
+    // THE HURT VALUE PIN, from the decompile: the valley planes are class-0x27 placements
+    // whose damage is placement param 1 (float 1000) [M Hurt_Create 0x17e870 — damage =
+    // param 1, gate = param 2, sound id = param 3, class mask = param 4], applied to the
+    // player with NO level/who gate [M Player_DealWithObjHit 0x194458:95-103 — obj+0xFF ==
+    // 0x27 applies Hurt_GetDamage 0x17ea18]. Every valley-floor plane must carry 1000.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[05-hurt] {} hurt volumes at load", sim.hurts.len());
+        for (i, h) in sim.hurts.iter().enumerate() {
+            eprintln!("[05-hurt] hurt {i}: kind {} damage {:.0} gate {} who {:#x} lo ({:.2},{:.2},{:.2}) hi ({:.2},{:.2},{:.2}) tris {}",
+                h.kind, h.damage, h.gate, h.who, h.lo[0], h.lo[1], h.lo[2], h.hi[0], h.hi[1], h.hi[2], h.tris.len());
+            // The valley planes (floor y 4-6) are the disc's Hurt_C set: damage 1000 [M
+            // Hurt_Create 0x17e870 = param 1].
+            if h.kind == 0x27 && h.lo[1] > 3.0 && h.lo[1] < 7.0 && h.lo[1] == h.hi[1] {
+                assert_eq!(h.damage, 1000.0, "hurt {i} (a valley-floor plane) carries placement param 1 [M Hurt_Create 0x17e870]");
+            }
+        }
+    }
     w.walk_nav_to([98.6, 26.0, 106.5], "to the gatehouse (the proven truck-route leg)", 1.6);
     let here = w.scene.sim.as_ref().unwrap().bond.pos;
     eprintln!("[05-hurt] Bond at the gatehouse {:?} health {:.1}", here, w.scene.sim.as_ref().unwrap().drones.health.health);
     assert!(walker::dxz(here, [98.6, 26.0, 106.5]) < 3.0, "the gatehouse leg really walked there");
-    // The steering walk east off the walkway's edge — the fall carries Bond into hurt #3's
-    // plane (the stick walk at [120, 4, 115]: past the edge, no nav — the walk_to steering
-    // drives the real stick toward the point, fall included). The stuck handler is lenient so
-    // the mid-air steering gives up cleanly.
+    // THE EAST LANE + THE LIP JUMP (level-05-valley-hurt): the walk-2
+    // ledger proved the steering descent reaches the lower lane y 16.79 at (117.5, 16.8,
+    // 114.4) and stalls at the lip (123.3, 14.1, 122.9) — 6 legs identical, the stuck
+    // handler's own cap — and the lip point sits DIRECTLY above hurt #3's plane (y 5.11,
+    // x 80.78..168.38, z 96.66..144.68 [L the census]). The raw run+jump drive wedged
+    // earlier from the gatehouse (the courtyard wall at (105.6,25.1,114.6) ate the
+    // sidesteps), but FROM THE LANE the jump has one job: leave the lip and fall ~9 u into
+    // the plane.
+    let arrived = w.try_walk_to(walker::Wp::at(120.0, 4.0, 115.0, walker::Act::None).r(1.5), "the east steering descent (the lane, the lip stalls it)");
+    eprintln!("[05-hurt] the steering descent arrived {arrived}");
+    {
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        eprintln!("[05-hurt] the lane stall: bond at ({:.2},{:.2},{:.2}) health {:.1}", p[0], p[1], p[2],
+            w.scene.sim.as_ref().unwrap().drones.health.health);
+    }
     let died = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // The slope's lip stalls the steering walker at y 14.1 [L the runs] — the run+jump
-        // drive (run_jump's input shape, no floor assert: the descent is the point) carries
-        // Bond over the lip into hurt #3's plane.
-        for t in 0..1500u32 {
+        for t in 0..1200u32 {
             let p = w.scene.sim.as_ref().unwrap().bond.pos;
-            if p[1] < 8.0 { break; }
-            let desired = (150.0f32 - p[0]).atan2(140.0 - p[2]);
+            if p[1] < 0.5 { return; }
+            // Down-slope, into hurt #3's interior.
+            let desired = (140.0f32 - p[0]).atan2(132.0 - p[2]);
             let err = walker::wrap_pi(desired - w.scene.sim.as_ref().unwrap().bond.yaw);
+            // The jump drive: leave the lip (the walker's edge refusal is the walker's own,
+            // not the game's [S] — the raw jump input has no such gate) and fall into the
+            // plane.
             let input = Input { turn: err.clamp(-0.07, 0.07), forward: 1.0, jump: t % 6 == 0, ..Default::default() };
             w.tick(input, false);
-            if t % 150 == 0 {
+            if t % 200 == 0 {
                 let p1 = w.scene.sim.as_ref().unwrap().bond.pos;
-                eprintln!("[05-hurt] descent t{t}: bond at ({:.1},{:.1},{:.1}) health {:.1}",
+                eprintln!("[05-hurt] lip jump t{t}: bond at ({:.1},{:.1},{:.1}) health {:.1}",
                     p1[0], p1[1], p1[2], w.scene.sim.as_ref().unwrap().drones.health.health);
             }
         }
         for _ in 0..600 { w.tick(Default::default(), false); }
     }));
+    // THE BLOCKER SHAPE PROBE (level-05-valley-hurt, the collision audit): at the stall, map
+    // the face that refuses the descent — from Bond's own eye (his room's resolution), rays
+    // along the drive direction at several pitch offsets, plus the ground rays resolved in
+    // his room. The raw run+jump drive stalls at (132.0, 14.2, 125.4) with y held 14.17-14.2
+    // — the collision BLOCKS the raw physics drive (no walker edge logic involved), so the
+    // face is real port collision [L hurt10/hurt11]. The truck road is the lane [S — the
+    // truck's path keys are the live check]; a hard face across a road slope is the port
+    // collision question the task names.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        eprintln!("[05-hurt] the lip probe from ({:.2},{:.2},{:.2}) yaw {:.3} cel {:?}",
+            p[0], p[1], p[2], sim.bond.yaw, sim.world.find_cel(p));
+        let dx = 140.0f32 - p[0]; let dz = 132.0f32 - p[2];
+        let l = (dx * dx + dz * dz).sqrt();
+        let (ux, uz) = (dx / l, dz / l);
+        for (dy, d) in [(2.0f32, 2.0f32), (1.0, 2.0), (0.0, 2.0), (-1.0, 2.0), (-2.0, 2.0), (-4.0, 3.0), (0.0, 4.0), (0.0, 6.0), (-6.0, 6.0)] {
+            let eye = [p[0], p[1] + dy, p[2]];
+            let to = [p[0] + ux * d, p[1] + dy, p[2] + uz * d];
+            let hit = sim.world.segment_hit(eye, to);
+            eprintln!("[05-hurt]   dy {dy:+.0} d {d:.0}: {}", hit.map(|(f, pt)| format!("HIT {f:.3}@({:.1},{:.1},{:.1})", pt[0], pt[1], pt[2])).unwrap_or_else(|| "clear".into()));
+        }
+        // The ground under the ahead points, resolved IN BOND'S ROOM (segment_hit_scoped on
+        // his cel — the unscoped pass resolves the room from the START point, and a start in
+        // the void above the valley reads none even where the room has floor).
+        let cel = sim.world.find_cel(p);
+        // THE ROOM-COVERAGE PROBE: which cel covers the points past the lip? None at every
+        // height = the basin east is in NO room (the coverage/stream gap); Some(cel) with a
+        // floorless query = the room exists and its floor is missing. The WEST floor (which
+        // Bond stood on, (47.20,8.37,84.06) [L hurt6]) is the reference.
+        for (dd, y) in [(0.5f32, 14.0f32), (2.0, 14.0), (2.0, 8.0), (2.0, 5.0), (5.0, 8.0), (10.0, 8.0)] {
+            let x = p[0] + ux * dd; let z = p[2] + uz * dd;
+            eprintln!("[05-hurt]   find_cel ({x:.1},{y},{z:.1}): {:?}", sim.world.find_cel([x, y, z]));
+        }
+        eprintln!("[05-hurt]   find_cel the west floor (47.2,8.4,84.1): {:?}  the lip stand: {:?}",
+            sim.world.find_cel([47.2, 8.4, 84.1]), cel);
+        for (dd, y0) in [(0.5f32, 13.0f32), (2.0, 13.0), (2.0, 30.0), (4.0, 30.0), (6.0, 20.0), (8.0, 20.0)] {
+            let x = p[0] + ux * dd; let z = p[2] + uz * dd;
+            let scoped = sim.world.segment_hit_scoped(cel, [x, y0, z], [x, 0.0, z]);
+            let unscoped = sim.world.segment_hit([x, y0, z], [x, 0.0, z]);
+            eprintln!("[05-hurt]   ground {dd:.1}u ahead at ({x:.1},{z:.1}) from y{y0}: scoped {} unscoped {}",
+                scoped.map(|(f, pt)| format!("HIT {f:.3}@y{:.2}", pt[1])).unwrap_or_else(|| "none".into()),
+                unscoped.map(|(f, pt)| format!("HIT {f:.3}@y{:.2}", pt[1])).unwrap_or_else(|| "none".into()));
+        }
+    }
     let err = died.err();
     let msg = err.as_ref().map(|e| e.downcast_ref::<String>().cloned()
         .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default()).unwrap_or_default();
     let landed = w.scene.sim.as_ref().unwrap().bond.pos;
-    eprintln!("[05-hurt] after the east walk: bond at {:?} health {:.1} panic {}",
+    eprintln!("[05-hurt] after the north walk: bond at {:?} health {:.1} panic {}",
         landed, w.scene.sim.as_ref().unwrap().drones.health.health, !msg.is_empty());
     if !msg.is_empty() { eprintln!("[05-hurt] {}", msg.lines().take(6).collect::<Vec<_>>().join(" | ")); }
     assert!(!msg.is_empty(), "Bond must die in the plane (the walk returned alive at {landed:?})");
     assert!(msg.contains("-1000.0"), "the death record must carry the hurt's 1000 damage: {msg}");
+    // The killer plane's own value, matched by the death position inside its box: the damage
+    // is placement param 1 [M Hurt_Create 0x17e870] and the player pass has no level gate
+    // [M Player_DealWithObjHit 0x194458:95-103].
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let killer = sim.hurts.iter().enumerate().find(|(_, h)| {
+            landed[0] >= h.lo[0] - 1.5 && landed[0] <= h.hi[0] + 1.5
+                && landed[2] >= h.lo[2] - 1.5 && landed[2] <= h.hi[2] + 1.5
+                && landed[1] >= h.lo[1] - 2.0 && landed[1] <= h.hi[1] + 3.0
+        });
+        if let Some((i, h)) = killer {
+            eprintln!("[05-hurt] the death position sits in hurt {i} (kind {} damage {:.0})", h.kind, h.damage);
+            assert_eq!(h.damage, 1000.0, "the killer plane hurt {i} carries placement param 1 [M Hurt_Create 0x17e870]");
+        } else {
+            eprintln!("[05-hurt] the death position {:?} matches no hurt box (the contact plane's own index stays the log's)", landed);
+        }
+    }
 }
 
 /// The guards' side + the reach map (level-05-hurt-skip): the drone pass on 07000005 delivers

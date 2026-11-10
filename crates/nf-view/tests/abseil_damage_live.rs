@@ -91,8 +91,16 @@ fn real_rounds_kill_the_roping_guard_through_the_repro() {
     assert!(died, "the killing shot routes to AbseilDeath 0x92 [M 0x1461c8:44-52], state {}", sim.drones.list[i].state);
     assert!(!sim.drones.list[i].air, "the rope released at the ENTER [M 0x169b28:28]");
     // The corpse lands: the feet probe → danim 10 (+0xcdc = 1) → DEAD 0x47 [M 0x169b28 case 3].
+    // Bond's view stays on the falling body, as the player who fired keeps it: the death fall's
+    // follow-on 0xbf carries the anim-info no-physics bit (+0x570 & 2 [D Drone_AnimInfo]), and
+    // DoGravity/DoCollision drop the physics of a flagged drone that is neither drawn (obj+0xFC —
+    // the draw pass's frustum test [M View_AddObjects 0x1e62d8:34-35, 70-71]) nor within 2.0 of a
+    // player [M 0x141e58:26-38, 0x149ec8:20-32]; off 0700004a AbseilDeath sets no always-gravity
+    // bit 4 [M 0x169b28:18-24].
     let mut landed = false;
     for _ in 0..600 {
+        let p = sim.drones.list[i].pos;
+        aim_at(sim, [p[0], p[1] + 0.5, p[2]]);
         sim.step_bond(Input::default(), false, false, false);
         if sim.drones.list[i].state == state::DEAD { landed = true; break; }
     }

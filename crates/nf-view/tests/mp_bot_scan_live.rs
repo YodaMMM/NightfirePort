@@ -68,6 +68,10 @@ fn scan_pinned_through_a_real_match() {
     // last_clear[bot][slot] — the last tick the head-to-head segment was world-clear, measured
     // on the pre-step bodies (the scan reads exactly those inside `step_bond`).
     let mut last_clear = [[None::<u32>; 8]; 8];
+    // The last tick a target had no body (dead / not yet respawned): an absent row keeps its
+    // latched seen bit — `0x125390` LAB_00125544 clears bits 1 and 3 only (`& 0xfffffff5`) —
+    // so a target that respawns may be picked off that stale bit until the cursor revisits it.
+    let mut last_absent = [None::<u32>; 8];
     let mut prev_opp = [None::<usize>; 8];
     let mut open_picks = 0u32;
     let mut picks = 0u32;
@@ -79,7 +83,10 @@ fn scan_pinned_through_a_real_match() {
             let Some(me) = eye_of(scene.sim.as_ref().unwrap(), my_slot) else { continue };
             for s in 0..8usize {
                 if s == my_slot { continue; }
-                let Some(them) = eye_of(scene.sim.as_ref().unwrap(), s) else { continue };
+                let Some(them) = eye_of(scene.sim.as_ref().unwrap(), s) else {
+                    last_absent[s] = Some(t);
+                    continue;
+                };
                 if scene.sim.as_ref().unwrap().world.segment_clear(me, them) {
                     last_clear[i][s] = Some(t);
                 }
@@ -107,7 +114,8 @@ fn scan_pinned_through_a_real_match() {
             // The walled-target pin: a pick requires a clear line within latch+hold.
             let lc = last_clear[i][opp];
             assert!(lc.is_some(), "tick {t}: bot {i} picked slot {opp} — a target whose line was NEVER clear");
-            let age = t - lc.unwrap();
+            // the window restarts when the target comes back (the stale-bit case above)
+            let age = t - lc.unwrap().max(last_absent[opp].unwrap_or(0));
             assert!(
                 age <= HOLD_WINDOW,
                 "tick {t}: bot {i} holds walled slot {opp} for {age} ticks (bound {HOLD_WINDOW})"
