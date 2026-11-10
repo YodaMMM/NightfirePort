@@ -59,3 +59,16 @@
   spot, then the yard stand's aimed shot (0x1e, still-gate) — guard #35 dies (hp -50 [L]) and
   walk_the_whole_mission_from_the_start_to_the_0d_handoff is GREEN under the game's sight
   (14499 ticks, stuck 0, falls 0, objective 3 complete on the 0d arrival).
+
+- los-mask-repins-0c-2 DONE: the landing-shot question settled — the held weapon at the #284
+  landing is the MICRO-CAMERA 0x54 (no round spawns [M scene.rs:5002]; the old dry-gun telemetry
+  read the camera's clip), the P2K/0x1e were loaded all along, and the fire-ray probe (the real
+  aim-snap + flight pipeline) shows the torso-anchor ray enters no posed box while the drawn
+  body's boxes are exposed. The opt-in with_strip_p2k_shot scope walks the ledger's west lane and
+  takes the aimed 0x1e shot (#35 hp -50 corpse [L]): walk_the_whole_mission_from_the_start_to_
+  the_0d_handoff GREEN (14499 ticks, stuck 0, falls 0, objective 3 on the 0d arrival) and the
+  eastroute ground crossing GREEN. The real_damage sister's crossing walks to the #282 ride
+  (the moving lane + the mid-band stop; health 64.2 held) — the arc-legs tick sensitivity
+  ledgered; the agent sister's cadence ledger stands. All 0c consumers green (barrelrow 1,
+  interact 10, interactables 7, guard1 2, comms 1, upward 2). Report: docs/reports/
+  los-mask-repins-0c-2.md.
