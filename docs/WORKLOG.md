@@ -51,3 +51,27 @@ Windows 2-3 (00:35-02:00 UTC). The six reds, one level per call:
   eastroute 0/1 ignored, ai_live 37, ai_missing_states 10, ai_points 4, nf-game lib 756/0/5.
   The fast suite did not fit (background jobs die between tool calls here; the per-binary runs
   filled the window). Report: docs/reports/pretrans-arms-4.md.
+
+Round 2 (2026-11-10 03:15-04:25 UTC, this sandbox): the driver re-sent the task with "no new
+ignores" — this round attacked the three ledgered reds.
+- 11 real-damage GREEN (un-ignored): the leg-level dry resupply gated to the leg's own line —
+  `with_resupply_in_place` (damage_log thread-local, opt-in) + walker_b2::resupply's
+  `on_leg_line` filter (the pickup within 1.6 u of the bond→wp segment, or at Bond's feet) +
+  walk_to brackets each leg with walk_leg_replace/restore (nesting-safe). The (24.85,22.21) box
+  fetch can no longer walk Bond off the doorway leg. All three real-damage sisters pass (42.3 s);
+  the whole binary 4 passed / 0 failed (53.9 s serial).
+- 0c crossing REPAIRED (the ledgered red's own mechanism): the [0c-diag] dump settles it — NO
+  corpse; the ALIVE west sniper #35 (0x500087, hp 10) stands at (-7.07,12.24,-218.60), 0.2-0.3 u
+  off the -3 push line; pre-0a9d39435 Bond walked THROUGH him. Repair: the shelf west lane leg +
+  the brush-past slide leg (r 1.2 — the measured slide lands INSIDE it) + the -3 legs: the
+  diagonals, icon #6, the wire #282 grab and the ride east all green [L the run]. The walk now
+  fails PAST the crossing at the SW arc: the ride lands on a 13.16-high tier at (4.98,-223.29)
+  whose east side overhangs the yard (the 11.2 spine 2 u below; NO drones within 10 u before or
+  after the fall — pure geometry; the arc-landing stands sweep a no-op; a band-tip leg measured
+  worse). The ride-release lever ledgered in both 0c ignores (still #[ignore]d — the tests still
+  fail at the arc; no new ignores added).
+- 01 mayhew: not reached this round (the 0c cycles filled the window); the ledger stands.
+- Ran (this tree, release, --test-threads=1): walkreal_07000011_live 4/0/0, walkreal_07000001_live
+  6/0/2, walkreal_07000005_live 16/0/1, walkreal_07000009_live 9/0/0, walkreal_07000014_live
+  7/0/3, barrelrow 1/0/0, the handoff real-damage sister 1 passed, guard1_rounds 2/0/0,
+  comms_chatter 1/0/0, upward_shot 2/0/0. Report: docs/reports/pretrans-arms-4.md.
