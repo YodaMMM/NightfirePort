@@ -700,8 +700,14 @@ impl Walker {
                 continue;
             }
             // Real damage: answer whoever is shooting Bond before walking on (the fight's
-            // ticks are the response's cost, not the leg's).
-            if !riding && !ladder && self.total_ticks % 10 == 0 {
+            // ticks are the response's cost, not the leg's). los-mask-repins-0c-2 OPT-OUT
+            // (super::STRIP_NO_FIGHTS, set only by with_strip_p2k_shot): the west-ledge strip
+            // crossing — a return-fire fight on the thin lip flanks Bond straight off it [L the
+            // measured west lane fall to y 1.96]; the flag scope handles the shooter with the
+            // aimed stand from the stable lane instead, and strip_fights_resume() lifts this
+            // after the #282 grab.
+            if !riding && !ladder && self.total_ticks % 10 == 0
+                && !super::STRIP_NO_FIGHTS.with(|c| c.get()) {
                 let t0 = self.total_ticks;
                 if self.return_fire(label) { start_ticks += self.total_ticks - t0; continue; }
             }

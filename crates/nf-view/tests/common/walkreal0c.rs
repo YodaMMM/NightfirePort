@@ -74,15 +74,34 @@ thread_local! {
     /// clear [L the probe map]) — the shot lands through the real fire path. Off = master behaviour
     /// (the camera stays in hand) for every other caller.
     static STRIP_P2K_SHOT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// los-mask-repins-0c-2 (OPT-IN, set by the same `with_strip_p2k_shot` scope): suppress the
+    /// walker's mid-leg return-fire while Bond crosses the west-ledge strip (the west lane + the
+    /// diagonals + the #282 ride). On real damage the shooter there is a HUNTING guard (the
+    /// west-edge stands' gunfire drew the strip guard #35 off his post [L the real-damage run]),
+    /// and a return-fire fight on the thin lip flanks Bond straight off it — the measured west
+    /// lane leg fell to y 1.96 at +187 ticks [L this branch's run]. The flag branch handles the
+    /// shooter with the aimed stand FROM the stable lane instead (a player does not sidestep on a
+    /// one-unit wall top; he kills the shooter from where he stands). `strip_fights_resume()`
+    /// clears it after the #282 grab; the SW arc and everything east fights normally. Off = the
+    /// master fights for every other walker.
+    static STRIP_NO_FIGHTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 #[allow(dead_code)]
 pub fn with_strip_p2k_shot<R>(f: impl FnOnce() -> R) -> R {
     struct Reset;
-    impl Drop for Reset { fn drop(&mut self) { STRIP_P2K_SHOT.with(|c| c.set(false)); } }
+    impl Drop for Reset { fn drop(&mut self) { STRIP_P2K_SHOT.with(|c| c.set(false)); STRIP_NO_FIGHTS.with(|c| c.set(false)); } }
     STRIP_P2K_SHOT.with(|c| c.set(true));
+    // NOTE: STRIP_NO_FIGHTS is NOT set here — the early legs need the return-fire fights (the
+    // real-damage walk's fights are its health; the first suppression-scoped run died at tick
+    // 7215 at the ring north-west corner with 0 return-fire fights [L]). The flag branch sets
+    // it just before the west lane leg (see the shot block) and strip_fights_resume() clears
+    // it after the #282 grab.
     let _reset = Reset;
     f()
 }
+/// Resume the walker's mid-leg return-fire (the flag scope's own exit — see STRIP_NO_FIGHTS).
+#[allow(dead_code)]
+pub fn strip_fights_resume() { STRIP_NO_FIGHTS.with(|c| c.set(false)); }
 
 /// Trace helpers (scratch): the gun's state for the no-bullet-spawned line.
 fn s_gun_debug(w: &Walker) -> String { format!("{:?}", w.scene.sim.as_ref().unwrap().gun.weapon) }
@@ -1481,8 +1500,19 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
             // west-edge stands' gunfire drew #35 off his post, the target search came up
             // empty and the straight diagonals fell to y 1.96]).
             // Real input only; the stand never writes health, armour or ammo.
-            w.walk_to(Wp::new(-8.4, 12.4, -218.8).r(1.0), "the west lane (the lip top west of the guard's capsule)");
+            // The fight suppression arms HERE (the crossing only): a return-fire fight on the
+            // thin lip flanks Bond straight off it [L the measured west lane fall to y 1.96 at
+            // +187 ticks], so the crossing legs walk fight-free and the shooter is answered
+            // with the aimed stand from the stable lane instead. strip_fights_resume() lifts
+            // it after the #282 grab.
+            STRIP_NO_FIGHTS.with(|c| c.set(true));
             if let Some(g) = target {
+                // THE STAND PATH (the pushed-green choreography — do not re-shape it): the
+                // ledger's proven west-lane leg (the -4-era arrival (-8.36,12.37,-217.82)
+                // [L the 0c round-2 run]), then the aimed shot from the stable lane. Every
+                // leg added to THIS path re-times the #282 grab a tick, shifts the ride
+                // landing ~0.02 u and the thin arc ledge legs fall [L the runs].
+                w.walk_to(Wp::new(-8.4, 12.4, -218.8).r(1.0), "the west lane (the lip top west of the guard's capsule)");
                 let killed = yard_stand_aimed(&mut w, g, "the strip guard from the west lane", 3600);
                 eprintln!("[0c] the strip stand: killed {killed}");
                 let sim = w.scene.sim.as_ref().unwrap();
@@ -1491,7 +1521,57 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
                 eprintln!("[0c] after the landing shots: guard {g} hp {:.1} corpse {} (clip {clip} spare {spare})", d.health, d.corpse);
             } else {
                 eprintln!("[0c] no live guard at the strip post at the landing (drawn off by the earlier gunfire [L the real-damage run]) — the lane holds, the diagonals walk on");
+                // THE NO-STAND PATH (the real-damage sister's own choreography — the fights
+                // drew #35 off his post, so no stand runs and the crossing rides its own
+                // legs): the drop spot slides Bond off after ~100 idle ticks (the wheel
+                // switch's 122 idle ticks fell him to y 1.03 [L this branch's run]) and the
+                // fights leave his yaw on the LAST fight target, so walk_to's turn-first
+                // phase stands still ~130 ticks and the lane leg fell to y 1.96 [L]. A
+                // player never stands still on the drop: he turns while walking.
+                {
+                    let target_lane = [-8.4f32, -218.8f32];
+                    let mut arrived = false;
+                    for _t in 0..600u32 {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let p = sim.bond.pos;
+                        if ((p[0] - target_lane[0]).powi(2) + (p[2] - target_lane[1]).powi(2)).sqrt() < 1.0 {
+                            arrived = true;
+                            break;
+                        }
+                        let desired = (target_lane[0] - p[0]).atan2(target_lane[1] - p[2]);
+                        let err = walker::wrap_pi(desired - sim.bond.yaw);
+                        w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), forward: 1.0, ..Default::default() }, false);
+                    }
+                    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+                    eprintln!("[0c] the west lane (moving): arrived {arrived} at ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
+                    assert!(arrived && p[1] > 11.0,
+                        "the west lane (moving) never held the lip top, got {p:?}");
+                    // Settle on the stable lane before the diagonals: the loop breaks at full
+                    // run speed and the momentum carried the first diagonal leg past its
+                    // arrival circle off the lip's east edge [L the fall to y 2.93 at
+                    // (-4.81,-220.51)]. The lane floor holds idle (the plain run's settles
+                    // stood here).
+                    w.wait(12);
+                }
+                // The mid-band stop: the shared diagonal-1 leg from the lane walks the -8.44
+                // thin wall wedge (invisible to the 0.5-step floor probe; the plain run's
+                // stuck sidesteps rescue it) and the real-damage run's rescue arc overshot
+                // east to the band edge and fell [L the fall to y 2.93 at (-4.81,-220.50)].
+                // The stop at (-7.0,-218.8) — mid-band floor [D the strip map rows
+                // -218.5/-219.0] — shortens the post-wedge arc so the arrival circle is met
+                // on its west side. It stays OUT of the stand path: the plain walk's stand
+                // leaves its own green choreography — adding legs there re-times the #282
+                // grab a tick, shifts the ride landing 0.02 u and the arc ledge leg falls
+                // [L the plain run's (8.99,2.01,-222.09) fall with the stop in the shared
+                // path].
+                w.walk_to(Wp::new(-7.0, 12.4, -218.8).r(0.8), "the mid-band stop");
             }
+            // (The shared diagonal legs below now enter from the held lane with the same
+            // south-facing yaw the plain run's lane arrival left — the fall they showed on the
+            // real-damage tree came from the lane leg itself dropping Bond to the yard first
+            // [L the runs], not from the diagonal legs. A walk-speed variant of the diagonals
+            // WEDGED on the lip instead — 900 ticks advanced 0.4 u [L] — so the legs keep the
+            // plain run's proven shape.)
         } else if let Some(g) = target {
             // The ammo lever (the round-2 telemetry: the gun arrived DRY — clip 1 spare 0 [L
             // the run]): fetch ammo through the walk's own pickup walk first, then re-anchor
@@ -1600,6 +1680,9 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
             "the #282 ride must drop onto the (4..8, −221..−226) ledge (11.24 [D probe blk2]), got {p:?} dropped {dropped}");
     }
     eprintln!("[0c] wire #282 ridden east — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    strip_fights_resume();
+    // los-mask-repins-0c-2: the flag scope's return-fire suppression lifts here (the strip
+    // crossing is over; the SW arc and everything east fight normally).
     // The SW arc: the ledge to the arc's west end and east along it [D probes].
     w.walk_to(Wp::new(8.0, 12.4, -222.0).r(1.0), "the ledge to the arc");
     w.walk_to(Wp::new(13.0, 12.4, -218.5).r(1.2), "the arc west end");
@@ -1687,7 +1770,8 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
             "the #283 ride must drop onto the ring SE corner (11.09..11.17 [D probe door2]), got {p:?} dropped {dropped} health {} substate {}",
             sim.drones.health.health, sim.bond.substate);
     }
-    eprintln!("[0c] the south gap crossed on wire #283 — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    eprintln!("[0c] the south gap crossed on wire #283 — landed {:?}; the flag scope's return-fire suppression lifts past the thin floors", w.scene.sim.as_ref().unwrap().bond.pos);
+
 
     // Leg 9 (REAL from the SE corner through the door): the district's true geometry [D, probe
     // walkreal_probe0c_door2_live]: the corner (11.10..11.17, x ≤40.5, z −210..−208) is where
