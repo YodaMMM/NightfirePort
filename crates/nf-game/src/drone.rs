@@ -12172,7 +12172,10 @@ impl Drone {
     /// character's glist without collision data goes to `Collide_Jointy` [M Collide_Intersect
     /// 0x1ebaa8:28-31]. So a guard does not see Bond through a guest or another guard. The port's
     /// body test is the posed bone boxes Bond's rounds use [S for the game's joint test].
-    pub fn seek_opponent_los(&mut self, d: &Data, player: &Player, bones: Option<&[V3; 7]>, body: &dyn Fn(V3, V3) -> bool) -> bool {
+    /// Returns (seen, cast): `cast` is whether any probe got past the cel walk to its collision
+    /// ray — the game's `DAT_00299092` bump [M 0x176f18:68/:94 sit inside the TestRayCels arm],
+    /// which is what ends `ProcessDroneSight`'s round robin [M 0x176a28:175].
+    pub fn seek_opponent_los(&mut self, d: &Data, player: &Player, bones: Option<&[V3; 7]>, body: &dyn Fn(V3, V3) -> bool) -> (bool, bool) {
         // The ray rides the game's cel scope [M DroneVision_CanSeeObjectFrom 0x176f18:60-77 —
         // Collide_LineOfSight's cel arg is the TARGET's obj+0x20, so Collide_Pick's BFS admits
         // only the target-cel chain's geometry]: the port's unscoped grid walk over-blocked on
@@ -12194,19 +12197,22 @@ impl Drone {
             (Some(t), Some(s)) if t != s => d.world.ray_reaches_cel(t, from, eye, s).unwrap_or(true),
             _ => true,
         };
+        let cast = std::cell::Cell::new(false);
         let Some(b) = bones else {
             let eye = self.head();
-            return cels_ok(player.target, eye)
-                && d.world.line_of_sight_scoped(player.cel, eye, player.target, crate::world::LOS_GUARD_VISION)
-                && !body(eye, player.target);
+            if !cels_ok(player.target, eye) { return (false, false); }
+            return (d.world.line_of_sight_scoped(player.cel, eye, player.target, crate::world::LOS_GUARD_VISION)
+                && !body(eye, player.target), true);
         };
         let eye = self.head();
         let ray = |i: usize| {
             let from = clamp_to_cylinder(player.pos, b[i]);
-            cels_ok(from, eye)
-                && d.world.line_of_sight_scoped(player.cel, from, eye, crate::world::LOS_GUARD_VISION) && !body(from, eye)
+            if !cels_ok(from, eye) { return false; }
+            cast.set(true);
+            d.world.line_of_sight_scoped(player.cel, from, eye, crate::world::LOS_GUARD_VISION) && !body(from, eye)
         };
-        view_bone_pick(self.los, self.team, &mut self.view_bone, ray)
+        let seen = view_bone_pick(self.los, self.team, &mut self.view_bone, ray);
+        (seen, cast.get())
     }
 }
 
@@ -20219,14 +20225,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // crossed AI cels, walls first [M 0x15ab78]); the port swaps that for the static
                 // collision world's line of sight — the same deviation the nav `move_test`
                 // documents [S].
-                dr.los = dr.seek_opponent_los(d, player, view_bones.as_ref(), &body);
+                let (seen, cast) = dr.seek_opponent_los(d, player, view_bones.as_ref(), &body);
+                dr.los = seen;
                 // `SeekOpponentLOS` 0x175cb8:68-82 — on a successful sight tick the through-wall
                 // flag refreshes: aiming (`+0x22`, the port's `aims_torso()` = the DoTracking
                 // 0x1479d8:49 fold) → the `GunThroughWall` 0x178520 ray, else cleared. Ticks without
                 // sight keep the last value (the game's early-outs leave +0x1e alone).
                 dr.gun_through_wall = dr.los && dr.aims_torso() && dr.gun_through_wall(d);
                 self.los_cursor = slot;
-                break;
+                // The walk ends once a probe cast its ray (`DAT_00299092` moved past the walk's
+                // start value [M 0x176a28:175]); a probe the cel walk refused casts nothing and
+                // the walk goes on to the next drone [M 0x176f18:65-67 — the bump sits inside
+                // the TestRayCels arm].
+                if cast { break; }
             }
         }
         for dr in &mut self.list {
