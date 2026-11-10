@@ -3592,7 +3592,21 @@ impl Drone {
     /// (a `set_dynamic` part in the door id band 0x100_0000_0000..0x200_0000_0000): the step minus
     /// its component into the leaf's horizontal face normal, if that remainder probes clear.
     fn door_leaf_slide(&self, d: &Data, step: [f32; 2]) -> Option<[f32; 2]> {
-        if d.level != 0x0700_0007 { return None; }
+        // The level set holds the levels whose walks are proven green with the slide running:
+        // 07000007 (where the class landed) and 07000014 (guard-stuck-0c-14: its Countdown
+        // drone#0 — skin 0x05000090, GO_TO_GOAL 0x63 — pressed the leaf of door object
+        // 0x100_0000_001A at (50.82, 1.19, 52.92) 1.5 u short of its route's special (door)
+        // node (51.54, 52.34): the mover's 0.04 step rejected every tick (blocked_reach 0.040,
+        // [L the probe ledger]) and the guard froze 13.24 u from its goal with route_blocked
+        // false. The game's drone is pushed OUT of the leaf and keeps the along-leaf part of
+        // its step [M Drone_CollisionHandler 0x140968:204-208 — the contact pass's DeltaP adds
+        // to obj+0x30 whenever the 0x800 capsule's contact list is non-empty, and the swing
+        // door is a cel-linked collider at its live pose]. The law is the game's on every
+        // level; the set grows one level at a time with its walks re-run — on 07000008 the
+        // combat guards frozen at leaves slide out too and the 00 Agent walk there runs dry
+        // before the cabin panes (the stuck-guard-combat-sweep measurement), so 08 waits on
+        // its walk re-tune.
+        if !matches!(d.level, 0x0700_0007 | 0x0700_0014) { return None; }
         let len = (step[0] * step[0] + step[1] * step[1]).sqrt();
         if len < 1e-6 { return None; }
         let over = |c: f32| c.signum() * 0.4 * (c.abs() > 1e-6) as i32 as f32;
