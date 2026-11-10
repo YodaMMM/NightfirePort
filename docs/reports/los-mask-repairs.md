@@ -131,8 +131,9 @@ wires #282/#283), 11 3/1 (00 Agent), 12 3/1 (Operative), 14 4/3 (stuck at the la
 at full health). 0c eastroute and 14 pass on master and stay red with `LOS_MASKS_ON = false` on
 this branch, so the sight changes move them, not the masks. mp_perf_16 not re-pinned.
 
-Attribution on 01 and 06 (env toggles, not committed): reverting rule 1 alone or rule 2 alone
-turns them green, so these walks were tuned on the old walk order.
+Attribution on 06 (env toggles, not committed): reverting rule 1 alone or rule 2 alone turns
+its real-damage walk green, so that walk was tuned on the old walk order. The guard's own cel
+and rule 3 alone changed nothing there. 01 stays red with rule 1 reverted.
 
 ### Open [S]
 
