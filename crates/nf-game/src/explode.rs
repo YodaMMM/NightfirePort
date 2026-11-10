@@ -421,6 +421,40 @@ mod tests {
     }
 
     #[test]
+    fn rocket_row_0x2e_hurts_inside_the_disc_radius_only() {
+        // The task's pin: hurt at the sphere-EDGE 7.9 u, none at the edge 8.1 u, on the 0x2e row.
+        // [L ee_snapshot.bin @0x2c2178 = 0x2bf150 (the weapon_data base [M action-symtab.tsv]) +
+        // 0x2e·0x10c + 0x08/0x0C] the 0x2e row carries radius 8.0, damage 100.0 (+0x70 = 0x4, the
+        // plain explode arm — no gas 0x2000 / smoke 0x20000 bits). The game's gate reads the
+        // sphere EDGE: the pick is sphere-vs-sphere (SqDist < (blast_r + obj+0x8C)² [M
+        // 0x1eae80:221-228]) and the falloff subtracts the victim's obj+0x8C
+        // (`amount = damage·(1 − max(dist−0x8C, 0)/radius)` [M 0x17c5e8-0x17c620 — max.s at
+        // 0x17c608, the 0.0002 cutoff 0x17c618-20], class 3 → Player_Hurt [M 0x17c650-58]).
+        let (radius, damage) = (8.0f32, 100.0f32);
+        // Edge 7.9 (centre 7.9 + Bond's obj+0x8C [L ee_start_05.bin M_CONTROL+0x8C = 1.0575536]):
+        // hurt, the straight-line amount 100·(1 − 7.9/8) = 1.25.
+        let t = Targets { drones: &[], player: [7.9 + PLAYER_SPHERE_R, 0.0, 0.0], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], radius, damage, usize::MAX, &t);
+        let want = falloff(damage, radius, 7.9);
+        assert!(h.player.is_some(), "edge 7.9 inside the 8.0 radius must hurt");
+        assert!((h.player.unwrap() - want).abs() < 1e-3, "want {want}, got {:?}", h.player);
+        // Edge 8.1 (centre 9.1576): nothing — the pinned boundary.
+        let t = Targets { drones: &[], player: [8.1 + PLAYER_SPHERE_R, 0.0, 0.0], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], radius, damage, usize::MAX, &t);
+        assert!(h.player.is_none(), "edge 8.1 past the 8.0 radius must not hurt, got {:?}", h.player);
+        // Edge 8.0 exactly: amount 0 → below the cutoff → nothing [M 0x17c618].
+        let t = Targets { drones: &[], player: [8.0 + PLAYER_SPHERE_R, 0.0, 0.0], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], radius, damage, usize::MAX, &t);
+        assert!(h.player.is_none(), "at the radius edge the falloff is 0");
+        // Centre 13.7 u (the level-0b-roof-sprint-4 fire distance): edge 12.64, 1.58 radii out —
+        // the port's law cannot hurt there (the sprint-4 ~48-at-13.7 observation needs a nearer
+        // impact point than the aim's convergence distance).
+        let t = Targets { drones: &[], player: [13.7, 0.0, 0.0], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], radius, damage, usize::MAX, &t);
+        assert!(h.player.is_none(), "13.7 u centre must not hurt, got {:?}", h.player);
+    }
+
+    #[test]
     fn destroy_case_needs_damage_at_least_one() {
         // Case 0x21's gate [M 0x17c6a8]: the smash fires only when the falloff reaches 1.0: damage 5,
         // radius 10 → a target at 9.5 takes 0.25 → no smash; at 4.5 it takes 2.75 → smash.
