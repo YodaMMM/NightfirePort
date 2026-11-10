@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox3 at 2026-11-10T04:24Z
+
+---
+## Report (done, 2026-11-10T06:26Z)
+
+Closed by the driver: the report is on `s/corpse-fire` (docs/reports/corpse-fire.md); the worker didn't run finish.sh.
