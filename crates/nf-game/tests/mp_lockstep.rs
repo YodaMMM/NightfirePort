@@ -189,7 +189,7 @@ fn build_sim(scen: u32, seed: u32, humans_only: bool) -> Sim {
         .iter()
         .map(|&slot| {
             let pos = m.game.slots[slot].pos.unwrap();
-            let mut b = BotBrain::bot_init(&rec, slot as u8, pos, 0.0);
+            let mut b = BotBrain::bot_init(&rec, slot as u8, pos, 0.0, 0, &mut rng);
             b.weapon = BotWeapon { interval: 6, burst: 3, aggression_mul: 1.0 };
             b.vars.weapon_id = 0x02;
             b.vars.clip_rounds = 50;
@@ -224,6 +224,7 @@ fn drive(sim: &mut Sim, _t: u32, input: &MpTickInput) -> (u64, u64) {
                 dist2: 0.0,
                 health: 100.0,
                 score: sim.m.game.slots[i].score,
+                yaw: 0.0,
             }
         })
         .collect();

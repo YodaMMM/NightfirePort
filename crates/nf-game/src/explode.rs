@@ -398,6 +398,43 @@ mod tests {
         let t = Targets { drones: &[(0, [-1.5, 0.0, 0.0], 3.0)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &t);
         assert!((h.drones[0].1 - 100.0).abs() < 1e-4, "got {}", h.drones[0].1);
+    }
+
+    #[test]
+    fn the_blast_reaches_each_guard_by_its_own_sphere() {
+        // The game's pick reads the victim's own obj+0x8C [M Collide_PickObj 0x1eae80:221-228,
+        // hit iff SqDist(centre) < (blast_r + obj+0x8C)²] and the gap subtracts the same sphere
+        // [M Explode_Propagate 0x17c5d8-0x17c614]. Radius 8 (the 0x2e row [L ee_snapshot
+        // 0x2c2178: radius 8.0, damage 100.0]), damage 100.
+        // A guard at 8.5 u with the skin-0x0500002e sphere 1.0640 [L ee_start_05.bin] is INSIDE
+        // the pick (8.5 < 8 + 1.064) and the gap gives 100·(1−(8.5−1.064)/8) = 7.05.
+        let t = Targets { drones: &[(0, [8.5, 0.0, 0.0], 1.064)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], 8.0, 100.0, usize::MAX, &t);
+        assert_eq!(h.drones.len(), 1, "the guard's own 1.0640 sphere reaches the 8.5 u blast");
+        assert!((h.drones[0].1 - 100.0 * (1.0 - (8.5 - 1.064) / 8.0)).abs() < 1e-3, "got {}", h.drones[0].1);
+        // The same spot with a 1.0190 model (skin 0x0500002f [L same snapshot]) hurts LESS:
+        // 100·(1−(8.5−1.019)/8) = 6.5125 — the model delta the fold erased.
+        let t = Targets { drones: &[(0, [8.5, 0.0, 0.0], 1.019)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], 8.0, 100.0, usize::MAX, &t);
+        assert!((h.drones[0].1 - 100.0 * (1.0 - (8.5 - 1.019) / 8.0)).abs() < 1e-3, "got {}", h.drones[0].1);
+        // Outside its own sphere: no pick, no hurt — the guard at 9.1 u with sphere 1.0640 sits
+        // past 8 + 1.064.
+        let t = Targets { drones: &[(0, [9.1, 0.0, 0.0], 1.064)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], 8.0, 100.0, usize::MAX, &t);
+        assert!(h.drones.is_empty(), "9.1 u is past the 1.0640-sphere guard's own reach");
+        // A never-moved guard's sphere is 0.0 [L ee_start_05.bin: 9 of 13 guards carry
+        // obj+0x8C = 0.0, centre == pos] — the pick is a point test: hurt only inside 8.0.
+        let t = Targets { drones: &[(0, [8.1, 0.0, 0.0], 0.0)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], 8.0, 100.0, usize::MAX, &t);
+        assert!(h.drones.is_empty(), "the never-moved guard's 0.0 sphere does not reach 8.1 u");
+        let t = Targets { drones: &[(0, [7.9, 0.0, 0.0], 0.0)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], 8.0, 100.0, usize::MAX, &t);
+        assert_eq!(h.drones.len(), 1, "7.9 u is inside the never-moved guard's point test");
+        assert!((h.drones[0].1 - 100.0 * (1.0 - 7.9 / 8.0)).abs() < 1e-3, "got {}", h.drones[0].1);
+    }
+
+    #[test]
+    fn the_falloff_continues_inside_the_sphere_and_cuts_at_the_floor() {
         // Inside the object's own sphere (dist − radius < 0): full damage, not negative.
         let t = Targets { drones: &[(0, [0.5, 0.0, 0.0], 1.0)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &t);

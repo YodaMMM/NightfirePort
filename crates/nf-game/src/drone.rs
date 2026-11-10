@@ -1973,6 +1973,17 @@ pub struct Drone {
     /// with the contact point standing in for HITDATA+0x40 (the between-capsules closest-point
     /// midpoint — the Jointy projection [M Collide_Jointy 0x1ec180:234-252]).
     pub objhit_dir: V3,
+    /// The guard's own world hurt sphere obj+0x8C, what a blast's pick and gap both measure
+    /// [M Collide_PickObj 0x1eae80:221-228 `SqDist < (blast_r + obj+0x8C)²`; Explode_Propagate
+    /// 0x17c5d8-0x17c614 `gap = max(d − obj+0x8C, 0)`]. 0.0 until the guard's sphere is built:
+    /// fresh-boot guards that never moved carry obj+0x8C = 0.0 with centre == pos exactly
+    /// [L ee_start_05.bin: 9 of 13 guards], and `Control_BuildWorldSph` 0x133070 only fills the
+    /// field from the movement handler 0x1336f8's per-move call. Built value: `guard_sphere_r`.
+    pub sph_r: f32,
+    /// The position the guard was created at (`sph_r` builds when the guard's XZ leaves it — the
+    /// game's BuildWorldSph runs on the first movement [M 0x1336f8 → 0x133070]; height settles
+    /// alone don't count [L ee_start_05.bin: the dormant guards' centre == pos in all axes]).
+    pub sph_home: V3,
 }
 
 /// Normalise a vector (the grenade throw direction helper).
@@ -2163,6 +2174,10 @@ impl Drone {
             spawn_stats_params: None,
             // the body-contact latch (Drone+0x26) starts clear — set only by the contact pass.
             objhit_latch: false,
+            // the guard's own hurt sphere: 0.0 until the guard first moves off `sph_home` [L
+            // ee_start_05.bin: the never-moved guards carry obj+0x8C = 0.0, centre == pos].
+            sph_r: 0.0,
+            sph_home: pos,
             objhit_dir: [0.0; 3],
             // drone-abseil-elevator: the +0x23 rope fields. `move_ok`
             // (+0x24) is set for every drone at DefaultInit 0x14b300:771; the rest start at the
@@ -12547,6 +12562,22 @@ pub fn hazard_link_flag(weapon_type: u16, stuck: bool) -> Option<(f32, u16)> {
 /// animated guards].
 const DRONE_SPHERE_R: f32 = 1.05;
 
+/// The built guard hurt sphere per model. The game's guards take `Control_BuildWorldSph`'s
+/// flags2&8 PARENT path (every 05 guard reads obj+0xFA = 0x0008 [L ee_start_05.bin]), which
+/// inherits the character system's per-model sphere — NOT the raw glist radius (the glists read
+/// 1.152-1.188 [D 07000005.BIN main meshes 0x020002da/0x02000a01/0x0200040d], ~0.88-0.92× the
+/// live values). Measured live values (fresh boot, the awake guards):
+/// skin 0x0500002e → 1.0640, 0x0500002f → 1.0190, 0x05000030 → 1.0640 (one instance 1.0508,
+/// the pose-dependent spread). Models without a measurement keep the 1.05 fold [S unverified].
+fn guard_sphere_r(skin: u32) -> f32 {
+    match skin {
+        0x0500_002e => 1.064,
+        0x0500_002f => 1.019,
+        0x0500_0030 => 1.064,
+        _ => DRONE_SPHERE_R,
+    }
+}
+
 /// `NDrone2_DefaultInit`'s per-level close-in after the sight class [M 0x14b300:423-460]: the
 /// engage range (and on 07000011 the combat sight) by the anim set +0xDA, the draws already spent.
 fn level_sight(level: u32, anim_set: u16, f0: f32, fc: f32) -> (f32, f32) {
@@ -15548,7 +15579,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // game's own Collide_SphereIntersect list skips obj+0xF0 & 0x20 for DISABLED guards is an
         // open live check).
         let drones: Vec<(usize, V3, f32)> = self.list.iter().enumerate()
-            .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, DRONE_SPHERE_R)).collect();
+            .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, x.sph_r)).collect();
         // copter-hitdata-damage: the parts' world spheres for the case-0 sweep (the SP part
         // targets, the same volumes the bullet pass tests).
         let copter_parts: Vec<(usize, Vec<(V3, f32)>)> = self.copters.iter().enumerate()
@@ -18162,7 +18193,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // …, 0xc0)` hits [M 0x17c518:67-68]; the port passes its live lists, the falloff
             // gate inside `propagate` picks the reached ones.
             let drones_t: Vec<(usize, V3, f32)> = self.list.iter().enumerate()
-                .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, DRONE_SPHERE_R)).collect();
+                .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, x.sph_r)).collect();
             let hits = crate::explode::propagate(pos, radius, damage, owner,
                 &crate::explode::Targets { drones: &drones_t, player: self.player_sph, breaks: &breaks_t,
                     destroys: &destroys, copters: &[] });
@@ -19238,6 +19269,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // glass-breach-guards-4: the root-motion flag is this tick's movement-source mark — clear
         // it before anything moves (root_motion sets it when it applies a delta).
         for dr in self.list.iter_mut() { dr.scripted_move = false; }
+        // explode-guard-spheres: the per-guard hurt sphere builds on the guard's first movement
+        // (the game's `Control_BuildWorldSph` runs from the movement handler 0x1336f8 per move;
+        // a fresh-boot guard that never moved carries obj+0x8C = 0.0 with centre == pos [L
+        // ee_start_05.bin]). XZ-only: height settles alone don't move the game's sphere [L same
+        // snapshot — the dormant guards' centre == pos in all axes].
+        for dr in self.list.iter_mut() {
+            if dr.present && !dr.corpse && dr.sph_r == 0.0
+                && (dr.pos[0] != dr.sph_home[0] || dr.pos[2] != dr.sph_home[2]) {
+                dr.sph_r = guard_sphere_r(dr.skin);
+            }
+        }
         let _prof_all = crate::prof::scope("drones.tick (total)");
         let prof_pre = crate::prof::scope("drones: shared passes");
         self.frame += 1;
@@ -22435,7 +22477,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // pitch [-1.0, +0.6]; speed 0.14 alerted (`DCVars+0x50c > 0.66`) else 0.07 (0x1472c8). Both angles positive up.
             if dr.talk_track && frame > dr.talk_track_until { dr.talk_track = false; } // the window expired — the game's resume re-targets fresh [M 0x1472c8:69-70]
             let aiming = dr.anim.class == 2 && dr.aims_torso();
-            if dr.talk_track {
+            // corpse-fire: the aiming half of the same law. `NDrone2_ControlSTANDARD`
+            // 0x1490f0:136-140 returns at the AI bit off (DoTracking(0), no control tail), and
+            // 0x1490f0:164-175 sends an ENABLED guard at `health (+0xac) <= 0` to
+            // `NDrone2_DoTracking(0)` too — a dying guard stops aiming (the head angles ease
+            // back, the same mode-0 fold the port's final arm models [M 0x1472c8]) while
+            // `DroneWeap_HandleFiring` still runs for him (the burst's own anim gates stop the
+            // shots). The port's tracking stop draws once (`Rand(10)`, 0x1472c8's stop), so the
+            // arm keeps the game's draw count.
+            if !dr.enabled || dr.health <= 0.0 {
+                if dr.tracking { let _ = rng.rand(10); dr.tracking = false; } // the stop draw (0x1472c8)
+                dr.head_yaw = rotate_to_bearing(dr.head_yaw, 0.0, 0.07, crate::trig::PI);
+                dr.head_pitch = rotate_to_bearing(dr.head_pitch, 0.0, 0.07, crate::trig::PI);
+            } else if dr.talk_track {
                 // The HeadTrackObj window: `DoHeadTrackingBehaviour` returns while `now <= +0x358`
                 // [M 0x147578:37-39] — the talk target (Bond, the `glb_players` stand-in) owns the
                 // head. The ease speed is model+0xe0 = 0.07 [M 0x14ada0:19-21] within
@@ -22494,7 +22548,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 dr.head_yaw = rotate_to_bearing(dr.head_yaw, 0.0, 0.07, crate::trig::PI);
                 dr.head_pitch = rotate_to_bearing(dr.head_pitch, 0.0, 0.07, crate::trig::PI);
             }
-            if !dr.corpse { let _pf = crate::prof::scope("drone: handle_firing"); let bs = { let lights = &mut self.lights; dr.handle_firing(d, rng, frame, player, quad, index, lights) }; if let Some(b) = bs.first().cloned() {
+            // corpse-fire: the game's AI-active gate. `NDrone2_ControlSTANDARD` 0x1490f0:136-140
+            // returns at `(+0x4F8 & 0x100) == 0` — DoTracking(0) and no control tail — so a
+            // guard whose AI bit is off never reaches `DroneWeap_HandleFiring` (0x1490f0:227)
+            // and never fires. The port's `enabled` is that bit [M drone.rs:2601]; the removal
+            // paths clear it with `present` (the corpse fade 0x13a5a8's port fold at :5124/:5145,
+            // the spawner cleanup 0x137fbc-0x1380b4's port fold at :14833). Without the gate a
+            // spawner-removed (present=false, enabled=false, corpse=false) guard kept firing —
+            // the 11 stairwell ghosts shot Bond from removed slots for ~270 ticks (hp −72/−75
+            // shooters [L the sprint-5 tree's runs, reproduced on 0a9d39435+its world.rs]).
+            // The game's disabled guard draws nothing in this pass, so the gate keeps the Rand
+            // count at the game's own.
+            if dr.enabled && !dr.corpse { let _pf = crate::prof::scope("drone: handle_firing"); let bs = { let lights = &mut self.lights; dr.handle_firing(d, rng, frame, player, quad, index, lights) }; if let Some(b) = bs.first().cloned() {
                 // `DroneWeap_FireWeapon` 0x178f68:264 → `Bullet_init_casing`: the guard's shell eject.
                 // The basis is the game's guard arm of `Bullet_init_casing_ex` 0x12f678:102-114: the
                 // weapon datum's bone world matrix (datum base+2 when the skin carries the eject port,
@@ -24844,6 +24909,10 @@ mod tests {
             spawn_stats_params: None,
             objhit_latch: false,
             objhit_dir: [0.0; 3],
+            // the test drone starts placed and never moves: sphere 0.0 (the game's never-moved
+            // guard law [L ee_start_05.bin]).
+            sph_r: 0.0,
+            sph_home: pos,
         };
         dr
     }
@@ -25072,7 +25141,7 @@ mod foley_tests {
     #[test]
     fn bot_pain_pools_agree_with_bot_sound_effect() {
         let rec = crate::mp::bots::INITIAL_BOT_RECORDS[0].clone();
-        let brain = crate::mp::bots::BotBrain::bot_init(&rec, 4, [0.0, 1.6, 0.0], 0.0);
+        let brain = crate::mp::bots::BotBrain::bot_init(&rec, 4, [0.0, 1.6, 0.0], 0.0, 0, &mut crate::drone::Rng::new(1));
         for alt in [false, true] {
             let (b, n) = Drones::pain_pool(alt, false);
             assert_eq!(brain.bot_sound_effect(0x1f, alt), Some((b as u16, n)),

@@ -13937,7 +13937,7 @@ impl Sim {
                 others[slot] = nf_game::mp::bots::OtherPlayer {
                     pos: [b.pos[0], b.pos[1] + BOT_EYE, b.pos[2]], alive, index: slot,
                     team: m.settings.players[slot].team, flags: 0, dist2: 0.0,
-                    health, score: m.game.slots[slot].score,
+                    health, score: m.game.slots[slot].score, yaw: b.yaw,
                 };
             }
             // The bots (positions snapshotted this tick — the brain's own row is skipped by
@@ -13957,6 +13957,7 @@ impl Sim {
                     dist2: 0.0,
                     health: if b.dead { 0.0 } else { b.health },
                     score: m.game.slots[slot].score,
+                    yaw: b.brain.body.yaw, // obj+0x54 (the brain's own yaw is the math-convention twin)
                 };
             }
         }
@@ -14298,7 +14299,15 @@ impl Sim {
                     let yaw = m.spawns.points[sp].facing[1];
                     let feet = nf_game::player::Bond::stand_at(world, [p4[0], p4[1], p4[2]], yaw).pos;
                     let pos = [feet[0], feet[1] + BOT_EYE, feet[2]];
-                    let mut brain = nf_game::mp::bots::BotBrain::bot_init(&rec, slot as u8, pos, yaw);
+                    // The respawn's DefaultInit class word: the game's `BOT_respawn`
+                    // 0x124e38:66-72 builds its `BOT_init` level_tag from the dead obj's
+                    // transform locals (the disasm 0x124ef0 `a2 = $sp+0x10`), a source the
+                    // decomp shows spilling past a 16-byte local — not modelled; every value
+                    // outside 1..=5 takes DefaultInit's default arm [M 0x14b300:381-387], and
+                    // the live read is in the report. The draw count follows the default arm
+                    // (2 + FRand(0)); both machines run this identical code, so the shared
+                    // stream stays equal.
+                    let mut brain = nf_game::mp::bots::BotBrain::bot_init(&rec, slot as u8, pos, yaw, 0, &mut self.drones.rng);
                     m.arm_bot(&mut brain);
                     m.bots[i].brain = brain;
                     // mp-16-slots: the bot's index is its list position (the game's slot − 4 wraps
@@ -14356,6 +14365,7 @@ impl Sim {
                     pos: c, alive: true, index: nf_game::mp::bots::OBJ_ROW,
                     team: objectives.site_defenders, flags: 0x2 | if clear { 0x4 } else { 0 },
                     dist2: d[0] * d[0] + d[1] * d[1] + d[2] * d[2], health: site.state as f32, score: 0.0,
+                    yaw: 0.0,
                 });
             }
             let ctx = nf_game::mp::bots::BotCtx {

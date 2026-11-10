@@ -252,12 +252,12 @@ fn four_human_session_digest_is_pinned() {
     // record 0x37 link 2 [M 0x1910f8:108-113], so a match's fists load and `MP_EquipPlayer` owns
     // them from tick 0. With only that arm switched off, the merged tree gives back the previous
     // 0xce70_fc98_9d36_0d1f / 0xbd72_3c3b_1d6a_7ae2 exactly.
-    const PINNED_TICK0: u64 = 0x7338_3456_8495_ef39;
+    const PINNED_TICK0: u64 = 0x25f7_edeb_ca9a_12e0; // re-pinned by mp-match-end: the setup records now carry the game's boot defaults (frag 10 [M 0x1c7e78:29], time 600 s [M 0x1c7e78:40 + 0x20ec00:145-146]) and they ride the hash
     // agent-crouch-2 re-measured the final: the crouch smoothers ease from the 0.75-scaled lane
     // [M Player_Update 0x193600:296-299 copies the scaled +0x10 quad to +0x20; Player_Move
     // 0x191dd0:166-170], so the scripted crouch ticks (t % 47) move slower. Restoring the old
     // unscaled read-back alone on the batch head gives back the old 0xca2f_e7f4_f872_763f.
-    const PINNED_FINAL: u64 = 0xe587_dad9_0fc6_bf40;
+    const PINNED_FINAL: u64 = 0xaebc_4cc2_1a19_ca59; // re-pinned by mp-match-end (see PINNED_TICK0)
     const HUMANS: usize = 4;
     let (_s, mut peers, mut simmed) = bring_up(&path, PORT_4, HUMANS, &[0, 2]);
     let mut ms: u64 = 0;

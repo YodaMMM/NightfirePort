@@ -145,3 +145,56 @@ fn time_limit_end_hands_over_with_the_draw_line() {
         other => panic!("an Arena match ends in a draw or a win, got {other:?}"),
     }
 }
+
+/// Assassin on the real arena: the score limit ends the match before the time limit — the
+/// assassin's target kill is +5 [M MP_PlayerKilled 0x188f70:228-233] and the frag latch reads
+/// the high score for every non-0x10 scenario [M MP_CheckForEndCondition 0x184268:170-184].
+/// A kill that is not the target scores nothing for the assassin [M :190-195 — 0x400 is
+/// outside the general award's list]. The two-instance checks' symptom (Assassin ending
+/// before its time limit at the score limit) is the game's own rule; this pins it.
+#[test]
+fn assassin_score_limit_ends_before_the_time_limit_on_the_arena() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut s = arena_settings(5, 600); // the score limit 5, a 10-minute clock it must beat
+    s.scenario = nf_game::mp::scenario::ASSASSIN;
+    let mut scene = nf_view::load_mp_carry(&iso, "07000023.bin", false, None, s)
+        .expect("the arena loads with the match core");
+    let (a, t, non_target) = {
+        let sim = scene.sim.as_ref().unwrap();
+        let m = sim.mp.as_ref().expect("the match core");
+        assert_eq!(m.settings.scenario, nf_game::mp::scenario::ASSASSIN);
+        let a = m.assassin.expect("the assassin is assigned at the load [M 0x183a50:166-167]");
+        let t = m.assassin_target.expect("the target is assigned at the load");
+        let other = if a == 0 { 1 } else { 0 };
+        (a, t, if other == t || other == a { None } else { Some(other) })
+    };
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        let m = sim.mp.as_mut().unwrap();
+        let mut rng = sim.drones.rng.clone();
+        // a non-target kill scores nothing [M 0x188f70:190-195]
+        if let Some(o) = non_target {
+            m.player_killed(o, Some(a), false, false, &mut rng);
+            assert_eq!(m.game.slots[a].score, 0.0, "a non-target kill is worth nothing to the assassin");
+        }
+        // the target kill: +5 = the limit of 5
+        m.player_killed(t, Some(a), false, false, &mut rng);
+        assert_eq!(m.game.slots[a].score, 5.0, "the target kill is +5 [M 0x188f70:229-233]");
+        sim.drones.rng = rng;
+    }
+    let deadline = 900;
+    let (board, _settings) = (1..=deadline).find_map(|_| {
+        let sim = scene.sim.as_mut().unwrap();
+        let r = sim.take_mp_debrief_request();
+        if r.is_some() { return r; }
+        sim.step_bond(Input::default(), false, false, false);
+        None
+    }).unwrap_or_else(|| panic!("no debriefing handover within {deadline} ticks of the target kill"));
+    let m = scene.sim.as_ref().unwrap().mp.as_ref().unwrap();
+    assert!(m.game.frag_latched, "0xfd latched [M 0x184268:170-172]");
+    assert!(!m.game.time_up, "the score limit ended it before the 10-minute clock");
+    assert_eq!(m.game.state, 5);
+    assert_eq!(usize::from(board.rows[0].slot), a, "the assassin ranks 1st");
+    assert_eq!(board.rows[0].points, 5, "the +5 rode the board [M 0x212198:178-185]");
+    assert!(matches!(board.result, MpDebriefResult::Wins(_)), "a non-team game names the winner [M 0x1848d0:55-85]");
+}
