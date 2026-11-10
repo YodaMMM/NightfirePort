@@ -33,3 +33,21 @@ the six interaction reds one level per tool call, the -2 round's way (per-level 
 the trace, no sim changes): 01 (volley-carrier-first retarget lever), 05, 09, 0c + 0c_eastroute,
 11; then re-run 01 and 14; run the ai binaries and nf-game; remove ignores when green. Started the
 baseline suite in the background.
+Windows 2-3 (00:35-02:00 UTC). The six reds, one level per call:
+- 01 escort real-damage pair GREEN: DamageLog::volley_carrier_first (opt-in; the captain's 48.0
+  volley is a single-frame 8-pellet blast at d 2.3 [L the NF_DMG_TRACE run]) + Walker::legs_keep_off
+  (opt-in; the legs keep keep_off 6.5 to armed hostiles ahead) — released at the stairwell descent
+  so the walled sniper #2 never blocks the plate legs (he then dies to the determined pass for 0).
+  d1 lowest 46.0 (was death), d2 lowest 37.7.
+- 05 d2 GREEN: the fight-broken-leg re-walk un-gated from d3 + the shelf band 28<y<35 (the old
+  check accepted the tower base and fired the crawl from the face). 38.4 hp, other 0.0.
+- 09 GREEN: press-reach checked before the approach beat + the final node's post-beat skipped in
+  reach (the 35-u re-dart detour dragged Bond 13 u off the switch and the alarm fired). 3.4 s.
+- Ledgered ignores with mechanisms + next levers: 01 mayhew (the escort is KILLED by guard
+  crossfire — state 0x47 — not a plate miss), 0c handoff + eastroute (the west-ledge diagonal
+  falls at (-7.2,6.4,-217.4); corpse-solid theory [S]), 11 (the leg's dry resupply displaces Bond
+  15 u and the resumed line clips the desk corner; two repairs tried and reverted).
+- Ran: 01 binary 6/0/2, 14 binary 7/0/3, 05 d2 1 passed, 09 binary 8→9 green, barrelrow 1 passed,
+  eastroute 0/1 ignored, ai_live 37, ai_missing_states 10, ai_points 4, nf-game lib 756/0/5.
+  The fast suite did not fit (background jobs die between tool calls here; the per-binary runs
+  filled the window). Report: docs/reports/pretrans-arms-4.md.
