@@ -204,3 +204,30 @@ mp_perf_16 2/0, nf-game --lib 777/0/4.
   the other post's cel only.
 - Whether the game's guards stand where these walks now meet them (the 0c strip, the 14 drop
   foot, the 13 doorway) needs the real game.
+
+## Round 4
+
+Four binaries a full suite found red against master; no game code changed.
+
+- `stealth_ai_live` (3 vision tests): `ProcessDroneSight` 0x176a28 stores 0 at +0x230 when the
+  visibility is under 0.7 (disasm 0x176bc4 `c.olt.s f0,f21` against 0.7, `bc1fl`, 0x176bd4
+  `swc1 f20,0x230(s0)` with f20 = 0). Round 2 ported that store, and the test compared the
+  stored field with the raw 0x175af0 law. The law is now checked on `visibility_formula`
+  (unchanged tolerances and pins), and the field against the store rule (red on master's raw
+  store).
+- `weapon_matrix_live` gadget cells: the matrix counted `Drones::impacts`, which holds the
+  guards' rounds, as a cell's fire; a guard firing at the 07000005 stance gave the Q-Claw cell 3
+  events. It now counts `Drones::player_impacts`. The icon-gate pin is unchanged.
+- `skybridge_panes_live`: office guards 6/7 fire at the stand (line of sight, 213 rounds each)
+  and a miss broke the target pane before Bond pressed. Bond shoots them first.
+- `flank_fall_repro` lip probe: guard #9 in AimStandFire in the east doorway ended the nav leg
+  with Bond 0.7 over the floor; the 11 ungrounded ticks were that drop. The probe now runs with
+  the guards out of the live set (the stealth probes' setup). The ground-rule pin is unchanged.
+
+Results (release): stealth_ai_live 10/0, weapon_matrix_live 6/0/24, skybridge_panes_live 1/0,
+flank_fall_repro 2/0, and every walkreal binary as in round 3 (01 5/0/3 … 4a satchel 2/0).
+
+Unproven: `ProcessDroneSight` also clears +0x228 & 4 on every eligible visit (disasm
+0x176b88-0x176b98); whether the port's acked-sight flag follows that is not checked. Whether
+Bond can come to rest on a guard's capsule in the game (14's drop foot, 03's east doorway) is
+not compared.
