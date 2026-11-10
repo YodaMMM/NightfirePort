@@ -2554,3 +2554,20 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(3));
 }
+
+/// guard-floor-keep (blocked/10-guard-fell-through-floor.md): the whole real route — no teleport
+/// after the load — asserting no live team-1 guard ever loses the floor. With solid guard bodies
+/// (master 0a9d39435) one walk variant saw the ch-0xF stairwell-ambush guard d#4 pushed off the
+/// upper west floor (y ≈ 9.2-10.2) and fall to y ≈ −1e6: the spot near (−28.7, 27.6) is VOID at
+/// every height — the floor spans z 0..17, its north boundary walls (#94-101) close at z ≈ 16.7,
+/// and past them Drone_FeetOnPoint 0x140660's down-ray misses, so Drone_CollisionHandler
+/// 0x140968 accumulates WldGravity unbounded [M drone.rs collision_handler]. The fall flag is
+/// collected by the shared walker every tick (y < −20; nothing on 01 stands below y 0).
+#[test]
+fn no_live_guard_falls_through_the_floor_on_the_walk() {
+    let mut w = walk_to_the_exit(&iso(), false);
+    if let Some((tick, i, pos, drop)) = w.guard_fell_first() {
+        panic!("guard d#{i} lost the floor: walker tick {tick}, y {:.2} (drop {:.2}/tick) at ({:.2},{:.2},{:.2}) — past the upper west floor's north boundary",
+            pos[1], drop, pos[0], pos[1], pos[2]);
+    }
+}

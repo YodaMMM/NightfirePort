@@ -22789,8 +22789,24 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // out of the AI-network boundaries — `AINetwork_GetBoundsPushVectorForSphere` 0x157bd0
             // walking the cel's BLINK chain with `AINetwork_HitBoundry` 0x157780 per wall [M], gated
             // on drone+0x4f8 < 0 [M :169] (the port's `bounded` flag stands in for that gate).
+            // guard-floor-keep: the sphere the game passes is **obj+0x30 — the body position**, not a
+            // feet point: disasm 0x1410f0-0x141108 `AINetwork_GetBoundsPushVectorForSphere(0x3ecccccd,
+            // iVar6 + 0x30, *(iVar6 + 0x20), &fStack_100, *(iVar1 + 0xba4))` then `obj+0x30 += result`
+            // (0x141118-0x141134; the y lane of the push is zeroed inside 0x157bd0). The band test
+            // inside 0x157780:96-104 is [Q.y − 0.4, Q.y + lerp(post heights)] on THAT y — with
+            // obj+0x30.y = floor + hip_anim, a standing guard carries ~1.0 of headroom above the band
+            // bottom, so a hip drop (crouch/dodge-crouch) cannot leave the band. The old port input
+            // `feet()` = pos − 0.6 rides the same hip drop down: on 07000001's upper west floor the
+            // boundary nodes sit y 9.65 over a 9.22 floor (walls #94-99, probe), so the standing
+            // margin was 0.37 and ANY crouch dropped the guard below Q.y − 0.4 — the wall stopped
+            // bounding him and his own root motion walked him out past z ≈ 16.7 into the void north
+            // of the floor (Drone_FeetOnPoint's ray misses, Drone_CollisionHandler 0x140968
+            // accumulates WldGravity unbounded, y → −1e6 — the driver's pushed-guard fall). The
+            // corridor's north wall #171 (nodes y 5.74 over a 5.3 floor) carried the same 0.40-margin
+            // hole. Passing obj+0x30 is the game's exact call; the push is XZ-only so the added y is
+            // nil either way.
             if dr.enabled && dr.bounded && d.nav.bounds {
-                let p = d.nav.push_out(dr.feet(), 0.4);
+                let p = d.nav.push_out(dr.pos, 0.4);
                 dr.pos[0] = p[0];
                 dr.pos[2] = p[2];
             }

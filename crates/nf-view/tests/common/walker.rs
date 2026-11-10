@@ -219,6 +219,15 @@ pub struct Walker {
     /// which plate a walked route actually crossed first.
     pub rise_watch: Vec<u8>,
     pub rises: Vec<(u8, u32, V3, Vec<usize>)>,
+    /// guard-floor-keep (blocked/10-guard-fell-through-floor.md; always collected — observation
+    /// only, no behaviour change): each drone's last y, so a live team-1 guard losing the floor
+    /// is caught the tick he drops. The 01 upper west floor's void starts past its north
+    /// boundary (z ≈ 16.7) and the fall runs to y ≈ −1e6 (Drone_FeetOnPoint's ray misses once
+    /// the guard is past the cel edge; Drone_CollisionHandler accumulates WldGravity unbounded).
+    guard_fall_y: Vec<f32>,
+    /// The first observed floor fall: (walker tick, drone index, position, per-tick drop).
+    /// `None` = no live guard has lost the floor. Read via `guard_fell_first`.
+    guard_fell: Option<(u32, usize, V3, f32)>,
 }
 
 /// The stuck dump, public for the walkreal tests' own aim loops (walkreal-b2).
@@ -273,6 +282,11 @@ impl Walker {
     /// The walked breadcrumb (public for the escort's plate-box probe — break-debris-shatter-2).
     pub fn trail_points(&self) -> &[V3] { &self.trail }
 
+    /// guard-floor-keep: the first live team-1 guard seen through the floor (y < −20 — nothing
+    /// on 01 stands below y 0; the void fall runs to −1e6), as (tick, drone index, position,
+    /// per-tick drop). `None` = no guard lost the floor on this walk.
+    pub fn guard_fell_first(&self) -> Option<(u32, usize, V3, f32)> { self.guard_fell }
+
     pub fn new(mut scene: Scene) -> Walker {
         // The walk's sound runs as in play: voices end by their length, so the 256-node pool frees.
         nf_view::attach_headless_sound(&mut scene);
@@ -300,6 +314,8 @@ impl Walker {
             no_grenade_throws: false,
             grenade_downgrade_logged: false,
             flank_hold_x: None,
+            guard_fall_y: Vec::new(),
+            guard_fell: None,
         }
     }
 
@@ -578,6 +594,33 @@ impl Walker {
                 eprintln!("[hp] t{} d#{i} skin {:#x} team {} {prev:.1}->{:.1} st {:#x} mode {} alt {:#x} dtype {} at ({:.2},{:.2},{:.2}) last_dmg {:.1} hit {:?} by_player {} blast {:?} opp {:?} bullets [{}]",
                     self.total_ticks, d.skin, d.team, d.health, d.state, d.mode, d.alt_state, d.dtype,
                     d.pos[0], d.pos[1], d.pos[2], d.last_damage, d.hit, d.hit_by_player, d.blast, d.opp_drone, live.join(" "));
+            }
+        }
+        // guard-floor-keep (blocked/10-guard-fell-through-floor.md): a live team-1 guard losing
+        // the floor. Collected every tick (cheap loop, observation only — `guard_fell_first` is
+        // the red test's assert); printed under NF_GUARD_FALL_TRACE (the NF_HEALTH_TRACE
+        // pattern): y < −20 is the void fall itself, a sub-zero per-tick drop > 0.8 is the
+        // mid-fall early print (a stair descent drops ≤ 0.1/tick).
+        if self.guard_fall_y.len() < sim.drones.list.len() {
+            self.guard_fall_y.resize(sim.drones.list.len(), f32::MAX);
+        }
+        let guard_fall_trace = std::env::var_os("NF_GUARD_FALL_TRACE").is_some();
+        for (i, d) in sim.drones.list.iter().enumerate() {
+            let prev_y = self.guard_fall_y[i];
+            self.guard_fall_y[i] = d.pos[1];
+            if !d.present || d.team != 1 || d.corpse { continue; }
+            let drop = if prev_y == f32::MAX { 0.0 } else { prev_y - d.pos[1] };
+            let fell = d.pos[1] < -20.0;
+            let diving = d.pos[1] < 0.0 && drop > 0.8;
+            if fell || diving {
+                if self.guard_fell.is_none() {
+                    self.guard_fell = Some((self.total_ticks, i, d.pos, drop));
+                }
+                if guard_fall_trace {
+                    eprintln!("[guard-fall] t{} d#{} skin {:#x} st {:#x} y {:.2} (drop {:.2}/tick) at ({:.2},{:.2},{:.2}){}",
+                        self.total_ticks, i, d.skin, d.state, d.pos[1], drop, d.pos[0], d.pos[1], d.pos[2],
+                        if fell { " BELOW-VOID" } else { "" });
+                }
             }
         }
         if sim.bond.pos[1] < y_before - 0.4 && !sim.bond.grounded {
