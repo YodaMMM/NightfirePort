@@ -19,3 +19,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox4 at 2026-11-10T09:06Z
+
+---
+## Report (done, 2026-11-10T10:07Z)
+
+Closed by the driver: the report is on `s/level-05-basin-floor` (docs/reports/level-05-basin-floor.md); the worker didn't run finish.sh.
