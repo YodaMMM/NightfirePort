@@ -870,6 +870,17 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         }
         w.lenient = false;
         status(&w, "back from the west-wing armour");
+        // los-mask-repins-02 probe (temporary): can the west-wing lower guards (#10 #452,
+        // #11 #453) be fought from the upper hall before the descent?
+        if difficulty >= 3 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[02 probe] bond at {:?}", sim.bond.pos);
+            for i in 9..=12.min(sim.drones.list.len() - 1) {
+                let d = &sim.drones.list[i];
+                eprintln!("[02 probe] guard #{i} placement {} weapon {:x} hp {:.1} pos ({:.2},{:.2},{:.2}) enabled {} exposed {:?}",
+                    d.placement, d.weapon, d.health, d.pos[0], d.pos[1], d.pos[2], d.enabled, w.exposed_aim(i));
+            }
+        }
     }
 
     // 5. The bunker: the doorway sensor #389 raises 0x81 (the ambush: the plates lock) [D], then
@@ -895,28 +906,22 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             // spots the muzzle from the stair top and answers before descending: the stand taps
             // from cover (Bond does not move), the 12-hp class dies to three body rounds [L the
             // run ledger "hp 12"]. Nothing exposed from here = the stand gives up on its own.
-            let di = {
-                let sim = w.scene.sim.as_ref().unwrap();
-                let bp = sim.bond.pos;
-                sim.drones.list.iter().enumerate()
-                    .filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
-                        && d.weapon == 0x1e && dxz(d.pos, bp) < 30.0)
-                    .map(|(i, _)| i).next()
-            };
-            if let Some(di) = di {
-                // The fullest gun, not whatever the rooms left in hand (the shotgun's last 3
-                // pellets burned at 25 u were 3 close-range kills gone [L the 00agent-02-03-2
-                // run: the dry hook fight then let the hp-5 rifle chaser finish Bond]). And the
-                // aim held: the hip cone at 25 u missed all 16 rifle rounds [L the same run];
-                // the aim raise is the game's own zero-spread for a 0x400000 record [M
-                // Bullet_init 0x12c5a0:139-170]. Scoped to this stand only — the walk's other
-                // fights keep the plain gates.
-                w.dmg.aimed_fights = true;
-                arm_fullest(&mut w, "the stair-top sniper duel");
-                let _ = w.stand_and_fire(di, 1200);
-                w.dmg.aimed_fights = false;
-                status(&w, "the courtyard sniper from the stair top");
-            }
+            //
+            // los-mask-repins-02: the stand is GONE on the sight-corrected tree. The stair top
+            // never exposes the sniper (exposed None on this tree [L the probe + the run: clip
+            // 32 unchanged across the stand]), so the 1200-tick stand only PARKED Bond on the
+            // upper east stretch — and guard #10 (placement 452, rifle, lower west
+            // (-54.6, 5.35, -0.95)) got his sight turn at t12330 mid-park, fired at Bond across
+            // the courtyard and his miss round hit the scared civilian #464 (drone #22) at her
+            // hide spot (-40.6, 6.3, 1.9): ch 0x60 → FAIL_CIVILIANS, the mission ends at t12902
+            // [L the round trace: #10→#22 t12330/t12586/t12598, her hit (weapon 0x12, part 5);
+            // ch 0x60 on + level_exit restart at the stair-bottom leg]. #10's line to an upper-east
+            // Bond passes ~0.5 u from her (inside the ±1.5 miss wobble [M DroneWeap_DoBulletAccuracy
+            // 0x179740:136-148]); from the stair mouth DOWN or the west hall it passes 3+ u south
+            // — the descent must not loiter up there. The sniper himself answers only from inside
+            // the lane band on this tree ("the sniper answered from the band, not the lip" [L]),
+            // so the stair-bottom wait + the band stand at the bunker door stay the plan.
+            arm_fullest(&mut w, "the stair-top arm");
         }
         if name == "courtyard lane" && difficulty >= 3 {
             // 00 Agent (real-health-00agent-02-03-2): the sniper (0x1e, one hit 48.0) is exposed
@@ -981,6 +986,47 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         leg_to(&mut w, at, name, 1.6);
         status(&w, name);
         if difficulty >= 3 && name == "stair bottom" {
+            // los-mask-repins-02 diagnostic (temporary): the ignore died on a level_exit on this
+            // leg; print who ended the mission and the gate channels before the wait loop.
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                eprintln!("[02 diag] level_exit {:?} restart {} cold {} ch 0x48 {} 0x4B {} 0x4C {} 0x60 {} pos {:?} menu_open {}",
+                    sim.drones.level_exit, sim.drones.level_exit_restart, sim.drones.level_exit_cold,
+                    sim.drones.channels.on(0x48), sim.drones.channels.on(0x4b), sim.drones.channels.on(0x4c),
+                    sim.drones.channels.on(0x60), sim.bond.pos, sim.drones.mission.menu_open);
+                for t in sim.drones.triggers.iter().filter(|t| t.kind == nf_game::triggers::kind::LOAD_LEVEL) {
+                    eprintln!("[02 diag] LOAD_LEVEL #{} gone {} next {:08x} gate 0x{:02x} key 0x{:02x}",
+                        t.placement, t.gone, t.next_level, t.gate, t.key_gate);
+                }
+                // Who is the team-3 civilian, is she dead, and who shot rounds that hit anyone
+                // in the kill window (drone_round_hits: (frame, owner_idx, victim_idx)).
+                for (i, d) in sim.drones.list.iter().enumerate() {
+                    if d.team == 3 {
+                        eprintln!("[02 diag] team3 drone #{i} placement {} skin {:x} dead {} corpse {} pos ({:.1},{:.1},{:.1}) hit_by_player {} hit {:?}",
+                            d.placement, d.skin, d.health <= 0.0, d.corpse, d.pos[0], d.pos[1], d.pos[2],
+                            d.hit_by_player, d.hit.as_ref().map(|h| (h.weapon, h.part, h.damage)));
+                    }
+                }
+                // The live team-1 guards around the stair bottom at the fail tick.
+                for (i, d) in sim.drones.list.iter().enumerate() {
+                    if d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled {
+                        let dx = d.pos[0] - sim.bond.pos[0];
+                        let dz = d.pos[2] - sim.bond.pos[2];
+                        let dist = (dx * dx + dz * dz).sqrt();
+                        if dist < 40.0 {
+                            eprintln!("[02 diag] guard #{i} placement {} weapon {:x} hp {:.1} pos ({:.2},{:.2},{:.2}) dist {:.1}",
+                                d.placement, d.weapon, d.health, d.pos[0], d.pos[1], d.pos[2], dist);
+                        }
+                    }
+                }
+                for &(f, o, v) in sim.drones.drone_round_hits.iter() {
+                    if f <= 12910 {
+                        let (od, vd) = (&sim.drones.list[o], &sim.drones.list[v]);
+                        eprintln!("[02 diag] round hit t{f}: #{o} (placement {} team {} skin {:x}) -> #{v} (placement {} team {} skin {:x} health {:.1})",
+                            od.placement, od.team, od.skin, vd.placement, vd.team, vd.skin, vd.health);
+                    }
+                }
+            }
             // THE PROTECTED-CIVILIAN WAIT (level-02-castle-00agent), BEFORE the scoop: the scared
             // civilian (placement #464, skin 0x5000034, team 3, death channel 0x60 [D census])
             // hides at (−40.3, 6.3, 2.1) — 3.8 u north of the lane mouth, INSIDE the sniper's
