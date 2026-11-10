@@ -34,46 +34,30 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 fn dxz(a: [f32; 3], b: [f32; 3]) -> f32 { ((a[0] - b[0]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() }
 
-/// BLOCKED (2026-11-09, the first pass — the next message continues from here): the walk legs
-/// work (the load → the real-input approach legs land Bond 1.93 u from the guard), but the held
-/// Stunner beam never fires on the WALKED Bond — `gun.clip` never burns and `last_shot` never
-/// sets, even for a raw `step_bond(Input::default(), true, …)` press edge after the draw ended
-/// (`switch_state == 0`, `weapon 0x4a`, substate 0). The SAME tase from the drop harness's
-/// TELEPORTED Bond (`drone_weapon_drop_live::stun_to_taser`) works on master, so the block is an
-/// interaction between the walked view state and the gadget's fire gate (`busy` at the
-/// `update_with` call — scene.rs's `switching || view_aim_anim || missile_cam || idle-script`
-/// arm), not the capsule change. Remaining probes for whoever picks this up: print
-/// `view_script`/`view_time`/`view_aim_anim` at the press, compare with the teleported Bond's,
-/// or deliver the tase from the drop harness's teleport and keep only the FINAL approach
-/// (creep + latch read) teleport-free — the creep starts 2.2 u out, inside the AnyoneNear band
-/// that holds the guard down [M 0x162eb0 case 0xc].
-/// BLOCKED (2026-11-09, the first pass — the next message continues from here). Everything
-/// mechanical works: the load → the real-input gatehouse leg (+164 ticks) → the closing legs
-/// descend the slope after the target. The blockers, all diagnosed:
-/// 1. The courtyard guards sit BELOW the plateau and flee downhill (the closing legs chased #6
-///    from y 26.2 to 18.7 without closing the dy) — the finder's `|dy| < 1.5` never passes at
-///    the start; a same-floor subject needs either a cornered guard or a different level
-///    (07000006's start guards are the drop harness's tase subjects).
-/// 2. The Stunner beam refuses a target across a ledge drop: the ray's world hit (the wall
-///    gate at scene.rs's stunner block) lands before the guard, so the clip never burns — the
-///    first pass's pitch converged to −0.875 aiming ~9 u down. The game-faithful gate, not a
-///    port bug; the drop harness never sees it because it TELEPORTS to the guard's own floor
-///    (the walk cannot).
-/// 3. The pre-walk fire probe at 8.96 u failed for the same reason the range is 5.0.
-/// The creep + the latch read (the actual measurement) are written below and untested; the
-/// unit test `capsule_radii_follow_the_voice_set_and_the_down_flag` (nf-game) pins the arms.
+/// BLOCKED (2026-11-09, the first pass — the gatehouse route, answered this session): the walk
+/// legs worked but (1) the gatehouse chase never closed the dy (the closing legs chased #6 from
+/// y 26.2 to 18.7 — the courtyard guards flee downhill toward the gatehouse approach) and (2)
+/// the Stunner beam's wall gate refuses a target across a ledge drop. THE CENSUS ANSWER (this
+/// session): the Level::parse census of 07000005's 16 kind-0x0F placements [D] puts two guards
+/// ON the courtyard west band — #5 skin 0x500002e at (61.34, 27.13, 99.50) and #6 skin
+/// 0x5000030 at (50.85, 28.27, 93.63) — the same floor as the established courtyard-west nav
+/// route's end (60.1, 28.4, 96.4) [D; the interact_07000005 ladder/pickup walks run that route
+/// clean], and the walkreal_07000005_live fights engage these same guards at Bond's floor (the
+/// nav 19/20 return-fire kills at (73.6, 25.0, 98.4) / (63.8, 26.7, 98.1) [L the walkreal run])
+/// — they hold their post and fight; no downhill flee on the west approach. The harness walks
+/// THAT route on real input, picks a same-floor guard with the |dy| < 1.5 finder, and runs the
+/// 07000006 sister's proven tase + creep + latch sequence unchanged.
 #[test]
-#[ignore = "no same-floor tase subject reachable by walk alone on 07000005 (the guards flee downhill; the beam's wall gate refuses across ledges) — see the doc above; try 07000006's start guards next"]
 fn a_down_guard_bumps_at_the_games_03_ball() {
     let mut w = Walker::new(nf_view::load(&iso(), "07000005.bin", false).expect("load 07000005"));
     w.dmg.return_fire = false; // the walk scripts its own fight: the Stunner only
     w.wait_enabled(3000, "the Mayhew A start");
     w.wait(30);
 
-    // The courtyard start's guards sit BELOW the plateau (the first pass's #6 read ~9 u down and
-    // the beam's wall gate refused him), so walk the established gatehouse leg first — the
-    // aggroed guards chase up to Bond's floor — then pick a same-floor guard.
-    w.walk_nav_to([98.6, 26.0, 106.5], "to the gatehouse", 1.6);
+    // The courtyard west route (the interact_07000005 walks' proven legs — the spawn floor is
+    // the courtyard [D start #26 y 25.1]) — NOT the first pass's gatehouse leg: the two
+    // same-floor subjects defend the west band, and the gatehouse chase ran them downhill.
+    w.walk_nav_to([60.1, 28.4, 96.4], "courtyard west", 1.2);
     let gi = {
         let mut found = None;
         for _ in 0..8 {
@@ -103,25 +87,10 @@ fn a_down_guard_bumps_at_the_games_03_ball() {
             drop(sim);
             w.walk_to(Wp::new(gp[0], gp[1], gp[2]).r(2.5), &format!("the closing leg toward #{near}"));
         }
-        found.expect("a same-floor guard reached on 07000005")
+        found.expect("a same-floor guard reached on 07000005's courtyard west band")
     };
     w.keep_alive.push(gi);
     eprintln!("[capsule] guard #{gi} at spawn dxz {:.2}", dxz(w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().drones.list[gi].pos));
-    // BISECT: equip + raw fire probe BEFORE any walking — does the fresh Bond fire?
-    {
-        let equipped0 = (0..60).find(|_| {
-            w.tick(Input { switch_to: Some(0x4a), ..Default::default() }, false);
-            w.scene.sim.as_ref().unwrap().gun.weapon == 0x4a
-        }).is_some();
-        for _ in 0..300 { if w.scene.sim.as_ref().unwrap().gun.switch_state == 0 { break; } w.tick(Input::default(), false); }
-        let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[capsule] pre-walk equip {equipped0} weapon {:#x} switch {} view_script {:?} view_time {:.1} aim_anim {} fire_state {} clip {}",
-            sim.gun.weapon, sim.gun.switch_state, sim.view_script, sim.view_time, sim.view_aim_anim.is_some(), sim.gun.fire_state, sim.gun.clip);
-        drop(sim);
-        // (the fresh load's fire probe is out of the Stunner's 5.0 range here — the guard sits
-        // 8.96 u away — so this probe says nothing; the in-range tase below is the real one)
-        let _ = 0;
-    }
 
     // Walk to him — short legs re-aimed at his live position (he may patrol or close in), then
     // creep into the beam's band (the drop harness's 2.5 u setup) with the partial stick.
@@ -153,7 +122,8 @@ fn a_down_guard_bumps_at_the_games_03_ball() {
     }
     assert_eq!(w.scene.sim.as_ref().unwrap().gun.switch_state, 0, "the draw ended");
 
-    // === the tase delivery: BLOCKED, see the doc above (the held beam on the walked Bond) ===
+    // === the tase delivery (the 06 sister's proven shape — the held beam fires on the walked
+    // Bond at this range; the first pass's blocker was the ledge-crossing aim, not the walk) ===
     // Hold the beam until the guard falls into TASER, then the 30-tick fall wait into STUNNED
     // [M 0x162b98 case 0xc — the drop harness's stun_to_taser, on the raw scene step].
     w.keep_alive.clear();
