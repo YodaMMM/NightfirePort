@@ -632,6 +632,36 @@ impl Level {
                 let matrix = placement::object_matrix_for_class(0xd5, false, p.rotation, p.translation, p.quaternion());
                 out.push(Instance { map, object, matrix, placement: p.clone() });
             }
+            // The hurt volumes (kind 0xE4, `Hurt_Create` 0x17e870): class-0x1C objects whose
+            // glist (`Control_SetGList` 0x17e870:44) carries the hurt plane's OWN collision
+            // block, linked to a room at load (`build_LinkToRoom` 0x17e870:46) — the player's
+            // movement capsule meets the plane as an object hit and `Player_DealWithObjHit`
+            // 0x194458 applies the damage [M]. The planes are therefore solid ground the game
+            // walks: 07000005's valley basin floor east of the lip IS hurt placement 331's own
+            // 2-tri plane at y 5.107 [D the 07000005.bin block walk — the outdoor room's block
+            // 262 ends at z 125.98 while the hurt plane spans x 80.78..168.38, z 96.66..144.68,
+            // the whole basin band; the port's world had no floor past the lip, the
+            // walkreal_07000005_live valley ledger]. Fold the UNGATED volumes (gate = param 2
+            // [M Hurt_Create 0x17e870 reads placement+0x34 into ext+0x18; 0 = ungated]) as
+            // static instances — the 0x19/0xd5 precedent (their runs ride the `always` bucket,
+            // the port's stand-in for linked non-cel objects; the game links each hurt object
+            // to the ONE room `build_FindCel` 0x1c8cb0 picks at its position, and on 07000005
+            // the basin planes resolve to cel 14 — the bucket the port's always runs test
+            // everywhere covers it). A GATED volume loads with obj+0xF0 bit 0x20 set [M
+            // 0x17e870 tail — the channel starts low] and `Collide_Pick` 0x1eb320:140 skips
+            // that bit, so the game's plane is not solid while the gate is low: those stay out
+            // of the static fold (the port's per-tick volume contact keeps their damage side).
+            for (mi, m) in self.maps.iter().enumerate() {
+                for p in &m.placements {
+                    if p.flags & 0xff != 0xe4 || p.creates_cel() { continue; }
+                    if p.params.iter().find(|(i, _)| *i == 2).map(|&(_, v)| v as u16).unwrap_or(0) != 0 { continue; }
+                    let target = if p.by_hash() { self.by_hash.get(&p.hashcode).copied() } else if (p.index as usize) < m.objects.len() { Some((mi, p.index as usize)) } else { None };
+                    let Some((map, object)) = target else { missing += 1; continue };
+                    if self.maps[map].objects[object].collision.is_none() { continue; }
+                    let matrix = placement::object_matrix_for_class(0xe4, false, p.rotation, p.translation, p.quaternion());
+                    out.push(Instance { map, object, matrix, placement: p.clone() });
+                }
+            }
         }
         (out, missing)
     }}

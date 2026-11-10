@@ -1800,6 +1800,41 @@ fn the_hurt_volumes_census_and_their_guards() {
 }
 
 
+/// The basin floor east of the lip (level-05-basin-floor). The port's world must carry the
+/// floor the game walks: hurt placement 331's own 2-tri plane at y 5.107 — [D the 07000005.bin
+/// block walk: the outdoor room's collision block ends at z 125.98 while the hurt plane spans
+/// x 80.78..168.38, z 96.66..144.68 (the whole basin band); the only floor-level geometry in
+/// the band is the hurt plane] — and the game's hurt objects ARE ground: `Hurt_Create` 0x17e870
+/// links the glist (`Control_SetGList` :44, collision block attached) to a room
+/// (`build_LinkToRoom` :46), so the player's movement capsule meets the plane as an object hit
+/// [M]. Before the fold the scoped AND flat down rays past the lip read none from 12 u up
+/// [L the ignored the_valley_plane_hurts_bond_walked ledger: "the ground rays 0.5-8 u past the
+/// lip read none BOTH scoped to Bond's own cel (Some(14)) and unscoped"]. The ray starts ABOVE
+/// the walk's lip stand (132.0,14.17,125.37) [L the ledger] and at four basin interiors; every
+/// hit must be hurt #3's plane (5.107, normal up), reached through Bond's own room cel (Some(14)
+/// — the measured room split, the ledger's THE ROOM SPLIT IS MEASURED).
+#[test]
+fn the_basin_floor_exists_past_the_lip() {
+    let iso = iso();
+    let scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
+    let sim = scene.sim.as_ref().unwrap();
+    for (tag, p) in [
+        ("past the lip", [132.0f32, 14.17, 125.37]),
+        ("basin north", [120.0, 10.0, 115.0]),
+        ("basin east", [150.0, 10.0, 130.0]),
+        ("basin south-east", [140.0, 10.0, 142.0]),
+        ("basin far east", [165.0, 10.0, 138.0]),
+    ] {
+        assert_eq!(sim.world.find_cel(p), Some(14), "{tag}: find_cel must be the outdoor room cel 14 [L the valley ledger]");
+        let down = [p[0], p[1] - 12.0, p[2]];
+        let (t, n) = sim.world.segment_hit_scoped(sim.world.find_cel(p), p, down)
+            .unwrap_or_else(|| panic!("{tag}: no scoped down-ray hit — the basin floor is absent from the port's world"));
+        let y = p[1] - t * 12.0;
+        assert!((y - 5.107).abs() < 0.01, "{tag}: the scoped down ray hit y {y}, not hurt #3's plane at 5.107 [D the 07000005.bin hurt plane]");
+        assert!(n[1] > 0.99, "{tag}: the hit normal must face up, got {:?}", n);
+    }
+}
+
 /// Bond's side of the hurt-volume pin (level-05-hurt-skip): the player pass has NO level skip
 /// [M Player_DealWithObjHit 0x194458 — the class-0x27 arm applies Hurt_GetDamage with no
 /// state/who/level gate], so Bond touching a 05 plane takes its 1000. The walked descent is
