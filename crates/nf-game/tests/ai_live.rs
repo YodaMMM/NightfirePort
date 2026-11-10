@@ -1250,23 +1250,58 @@ fn guard_gravity_and_collision_spheres() {
     let start_y = sim.list[gi].pos[1];
     for _ in 0..60 { sim.tick(&d, &away); }
     // The gate guard is on the courtyard floor: his y stays within 0.5 of the start, velocity zero, on the surface.
+    // The gate guard's idle danim carries the anim-info no-physics bit (+0x570 & 2), and with Bond 500
+    // units away he is undrawn and beyond 2.0: `NDrone2_DoCollision` 0x149ec8:30-32 returns 0 and
+    // `NDrone2_DoGravity` 0x141e58:36-38 with it, so `Drone_CollisionHandler` 0x140968 runs no contact
+    // pass and no gravity — his feet flag (anim+0x60 & 8, cleared at the handler's top :71 and set only
+    // by the contact pass) stays clear and his y holds [M].
     let g = &sim.list[gi];
+    assert!(g.anim.info_word & 2 != 0 && !g.drawn, "the gate guard's idle anim carries the no-physics bit (word {:#x}) and he is undrawn", g.anim.info_word);
     assert!((g.pos[1] - start_y).abs() < 0.5, "gate guard y drifted: {} (start {})", g.pos[1], start_y);
+    assert!(!g.on_surface && !g.in_air, "no-physics guard: no feet probe, not in the air");
+    assert!(g.velocity[1].abs() < 1e-6, "gate guard velocity zero (no gravity)");
+    // With Bond within 2.0 (`DroneFunc_NearPlayerCollision` 0x14b190) the same guard is force-collided:
+    // the contact pass runs and his feet are on the courtyard floor, velocity zero.
+    let (drones3, gi3, rng3) = l.drones(None, 61.342);
+    let mut sim3 = l.sim(drones3, rng3);
+    let gp = sim3.list[gi3].pos;
+    let near = bond_at([gp[0] + 1.5, gp[1], gp[2]]);
+    let start_y3 = gp[1];
+    for _ in 0..60 { sim3.tick(&d, &near); }
+    let g = &sim3.list[gi3];
+    assert!(g.dist_to_player[0] < 2.0, "Bond within 2.0 of the gate guard: {}", g.dist_to_player[0]);
+    assert!((g.pos[1] - start_y3).abs() < 0.5, "near gate guard y drifted: {} (start {})", g.pos[1], start_y3);
     assert!(g.on_surface, "gate guard on the floor");
     assert!(!g.in_air, "gate guard not in the air");
     assert!(g.velocity[1].abs() < 1e-6, "gate guard velocity zero on the ground");
 
-    // Sister: a guard lifted 50 units straight up (off every roof) falls — his y drops below the lifted start.
+    // Sister: a guard lifted 50 units straight up (off every roof) falls while Bond keeps within 2.0 of
+    // him (the near-player force arm) — his y drops below the lifted start.
     let (drones2, gi2, rng2) = l.drones(None, 61.342);
     let mut sim2 = l.sim(drones2, rng2);
     let lifted = sim2.list[gi2].pos[1] + 50.0;
     sim2.list[gi2].pos[1] = lifted; // lift off every surface
-    for _ in 0..60 { sim2.tick(&d, &away); }
+    for _ in 0..60 { let p = sim2.list[gi2].pos; sim2.tick(&d, &bond_at([p[0] + 1.5, p[1], p[2]])); }
     let g2 = &sim2.list[gi2];
     assert!(g2.in_air, "lifted guard in the air");
     assert!(!g2.on_surface, "lifted guard not on a surface");
     assert!(g2.velocity[1] < -9.0, "lifted guard falling: v={}", g2.velocity[1]);
     assert!(g2.pos[1] < lifted, "lifted guard fell: {}", g2.pos[1]);
+    // The same lift with Bond far: the undrawn no-physics guard hangs — no gravity, fall speed zero
+    // (`Drone_CollisionHandler` 0x140968:154-156 zeroes +0x484 when DoGravity returns 0). The drawn
+    // arm reads the obj+0xFC COUNTER, which `control_init_object` 0x134630:16 seeds with 2 and the
+    // control pass decrements AFTER the per-object control funcs [M 0x1336f8:62-63 before :242-246]:
+    // the first two passes still force physics (he starts to fall), from the third the bit holds.
+    let (drones4, gi4, rng4) = l.drones(None, 61.342);
+    let mut sim4 = l.sim(drones4, rng4);
+    let lifted4 = sim4.list[gi4].pos[1] + 50.0;
+    sim4.list[gi4].pos[1] = lifted4;
+    for _ in 0..2 { sim4.tick(&d, &away); }
+    let y2 = sim4.list[gi4].pos[1];
+    assert!(y2 < lifted4, "the two seeded counter passes keep gravity: y {y2} (lifted {lifted4})");
+    for _ in 2..60 { sim4.tick(&d, &away); }
+    let g4 = &sim4.list[gi4];
+    assert!((g4.pos[1] - y2).abs() < 1e-3 && g4.velocity[1] == 0.0, "far lifted no-physics guard hangs from the third pass: y {} (after 2: {y2}) v {}", g4.pos[1], g4.velocity[1]);
 }
 
 /// G-028 sniper cover (WORKLOG 0079): a drone whose anim set is 0x13 (sniper), put in `UnderCoverFire` (0x96) on a
