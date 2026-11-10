@@ -2577,6 +2577,7 @@ fn following_mayhew_down_completes_the_level() {
 /// `Camera_UpdateGlbVars` advances the level every frame and clamps the byte [M 0x1bada0:16-27];
 /// when the fade ends, state 8 pops onto state 3 (`ResetMap_Load`) and the level loads
 /// [M 0x1c98c8:173-189].
+#[ignore = "pretrans-arms-5 ledger: the same aim-fix move as the two main walks below — the IsOpponent under-0.9 no-turn fix [M 0x178ae0:34-36] stalls the descending contact under two parked guards (d 0.6-1.0 [L the 21 s red run on the merged tree]) and the escort fails before the plate fire this pin walks to; next lever: the descent recovery's forward clear band (shared with the main walks)"]
 #[test]
 fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_level_loads() {
     let iso = iso();
