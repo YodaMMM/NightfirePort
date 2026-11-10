@@ -172,3 +172,15 @@ walk_the_whole_mission_on_real_input_real_damage_agent passes with a real margin
 un-ignore it; real input only, never lower damage or health, no top-ups, helpers gated to
 07000008 + difficulty 2.
 - Work log: (in progress)
+- (20:25-20:45) the Agent levers, each on a measured run: the pre-leg unseen lip stand RETIRED
+  (the leaves give no shot line — 430 ticks of "held (out of sight or cap)", the pair flanked
+  north and burst the legs); the d2 reload_full RETIRED (the fights got cheaper, 74.8 → 32.1,
+  but the R-press re-roll drove the boarding into a flank that walked Bond off the east edge,
+  the 23.1 fall); the station-hall-mouth proactive stand a no-op (no sight from the plate);
+  the per-leg lip stand + the 15 u ring no-ops on the measured timelines (kept, d2-gated).
+  LANDED: the WEST DOORWAY SLIT — after the pane shoot-out the fight walks Bond into the
+  cabin's west doorway (the band's z gap −178.25..−180.6 [D the tri dump]) with real input;
+  the band shields the machine's strafing drips and the rockets start through the slit (five
+  rockets 98.8 → 500.5, the machine down t1619). Agent walk GREEN: end health 14.9 armour 3.8,
+  61 hits for 85.1, 37505 ticks, un-ignored. walkreal_07000008_live 5/0/1, interactables
+  15/0.
