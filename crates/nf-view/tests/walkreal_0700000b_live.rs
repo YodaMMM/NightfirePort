@@ -138,7 +138,7 @@ fn lane_sprint(w: &mut Walker, target: [f32; 3], arrive: f32, max_ticks: u32, la
 /// parachute → the jump → the mission latch. `fresh` selects only the mission-latch wording
 /// (a fresh boot's AND cannot fold — the end rides OUT #304's own ch 100 write). `real` selects
 /// the real-health deck crossing (the sprint — see the deck leg).
-fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
+fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_pin: bool) {
     // The spawn plates fire under Bond (objective 6 + the arrival cut-scene arming); the
     // cut-scene's tail re-places Bond (event 6) — wait it out before any route work.
     w.wait(30);
@@ -506,18 +506,15 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
     ] {
         w.walk_to(wp, label);
     }
-    // THE ROCKET LIFT (level-0b-roof-sprint-4, the Agent/00Agent sisters only): the office's
-    // west strip holds the disc's PICKUP_RocketLauncher #349 (p0 = 0 weapon, p1 = 46 = 0x2E,
-    // p2 = 8 rounds [D docs/levels/0700000b-audit.md:191]) at (−22.5, 47.96, 29.30). The
-    // straight drives all wedge on the office furniture (the direct jog stalled at
-    // (−20.70, 30.64) [L agent_v2]; the southern U climbed the furniture and wedged at
-    // (−20.42, 28.56) [L agent_v3]) — but the level's own nav web routes the strip: nodes
-    // 0.33 (−20.58, 25.46) / 0.32 (−24.09, 27.41) / 0.29 (−23.94, 29.90) / 0.28 (−23.10,
-    // 31.88) / 0.27 (−21.19, 32.89) / 0.26 (−19.64, 31.64) [L the probe_0b_execfloor_nav
-    // dump], and the take fires on the creep past the pickup (v4: owned 0x2e = true [L]).
-    // The sisters jog through the chain and rejoin the route AT n26; the d1/warm streams
-    // stay byte-identical (the jog is difficulty-gated). The deck's gap-mouth rocket drop
-    // then ends #4's 36.8 on-line pass [L agent_base2].
+    // THE ROCKET JOG (explode-hurt-radius; the level-0b-roof-sprint-4 office jog, difficulty-gated
+    // so the d1/warm streams stay byte-identical): the exec office's west strip holds the disc's
+    // PICKUP_RocketLauncher #349 (p0 = 0 weapon, p1 = 46 = 0x2E, p2 = 8 rounds [D
+    // docs/levels/0700000b-audit.md:191]) at (-22.5, 47.96, 29.30). The straight drives all wedge
+    // on the office furniture [L sprint-4 agent_v2/v3]; the level's own nav web routes the strip
+    // (nodes 0.33/0.32/0.29 [L the sprint-4 probe_0b_execfloor_nav dump]) and the take fires on
+    // the creep past the pickup. The jog returns through the doorway so the entry legs re-run
+    // unchanged — sprint-4 proved the desk approach lands byte-identical [L agent_base2 vs
+    // agent_v10].
     if w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 {
         lane_sprint(w, [-20.58, 47.18, 25.46], 1.0, 300, "jog 0.33 (office centre-south)");
         lane_sprint(w, [-24.09, 47.18, 27.41], 0.9, 300, "jog 0.32 (the west strip south)");
@@ -531,11 +528,6 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
         lane_sprint(w, [-23.94, 47.18, 29.90], 0.9, 240, "jog 0.29 (back out)");
         lane_sprint(w, [-24.09, 47.18, 27.41], 0.9, 240, "jog 0.32 (back south)");
         lane_sprint(w, [-20.58, 47.18, 25.46], 0.9, 240, "jog 0.33 (back centre)");
-        // The office exit re-walks the ENTRY: the baseline's own legs did the platform climb
-        // (the n26 leg, 496 ticks, arrival y 48.61 [L agent_base2]) — a raw sprint rejoin
-        // anywhere near n26/desk lands on the FLOOR (y 47.88-47.90 [L agent_v7/v8/v9]) and
-        // both the desk approach and the files walk-out wedge at the platform edge. So the
-        // jog returns through the doorway and the entry legs re-run unchanged.
         w.walk_to(Wp::new(-22.18, 47.18, 16.58).r(1.0), "jog back through the doorway (n25)");
     }
     for (label, wp) in [
@@ -553,6 +545,136 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
         assert!(dxz_w(p, [pc[0] + 0.6, pc[1], pc[2] + 0.9]) < 1.3,
             "the desk approach must be the walked route: the burned keypad's door #151 → n25 → n26 [M 0x1ae3d8; D #151/#178], got {p:?}");
         eprintln!("[0b] the desk approach arrived WALKED at ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
+    }
+    if rocket_pin {
+        // THE BLAST-RADIUS PIN (explode-hurt-radius), on the real path: Bond walked here from the
+        // spawn (no teleport after the load) and owns the rocket 0x2e (8 rounds [D #349 p2]). The
+        // disc's row: radius 8.0, damage 100.0 [L ee_snapshot.bin @0x2c2178 = weapon_data base
+        // 0x2bf150 [M action-symtab.tsv] + 0x2e*0x10c]. The game's hurt reads the sphere EDGE:
+        // picked iff centre < radius+obj+0x8C [M 0x1eae80:221-228], amount =
+        // damage*(1 - max(dist-0x8C,0)/radius), below 0.0002 nothing [M 0x17c5e8-0x17c620].
+        // The walls are picked by the sim itself (world.segment from Bond's eye), so the pin
+        // leans on no hand-copied geometry: the far wall >= 10.5 u out (edge >= 9.4 > 8.0 -> the
+        // falloff is 0), the near wall <= 7.5 u (edge <= 6.45 < 8.0 -> hurt).
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.gun.weapon = 0x2e;
+            sim.gun.switch_request = 0x2e;
+        }
+        w.wait(30);
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            assert!(sim.drones.inventory.owned.get(0x2e as usize).copied().unwrap_or(false),
+                "[0b-rocket] the office jog did not take pickup #349");
+            assert_eq!(sim.gun.weapon, 0x2e, "[0b-rocket] the rocket is not the armed weapon");
+        }
+        // The walls are candidates the sim itself measures with the rocket's own flight filter;
+        // the rocket's DETONATION POINT is then read back from the live blast
+        // (`drones.explosions` — (pos, radius, damage, attacker, weapon)) and every assert keys
+        // on the true detonation distance, so a script-entity object that eats the round
+        // mid-flight (the office furniture did exactly that on the first attempt — the sprint-4
+        // v10 story) just disqualifies that ray and the next candidate takes over.
+        let mut far_cands: Vec<[f32; 3]> = Vec::new();
+        let mut near_cands: Vec<[f32; 3]> = Vec::new();
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+            let cell = sim.world.find_cel(eye);
+            for k in 0..24 {
+                let yaw = k as f32 * std::f32::consts::TAU / 24.0;
+                let dir = [yaw.sin(), 0.0, yaw.cos()];
+                let end = [eye[0] + dir[0] * 40.0, eye[1], eye[2] + dir[2] * 40.0];
+                let Some(t) = sim.world.segment_flight_scoped(cell, eye, end, false) else { continue };
+                let d = t * 40.0;
+                if d < 1.5 { continue; } // muzzle furniture: not a wall to fire at
+                let p = [eye[0] + dir[0] * d, eye[1], eye[2] + dir[2] * d];
+                if d >= 10.5 { far_cands.push(p); }
+                if d <= 7.5 { near_cands.push(p); }
+            }
+        }
+        assert!(!far_cands.is_empty(), "[0b-rocket] no wall >= 10.5 u from the desk for the far leg");
+        assert!(!near_cands.is_empty(), "[0b-rocket] no wall <= 7.5 u from the desk for the near leg");
+        // The far candidates try LONGEST first: the longest measured clear ray is the one most
+        // likely to keep its detonation past the radius (a mid-flight object that eats a shorter
+        // ray detonates inside the radius and the game's own falloff then hurts — legal, but it
+        // spends health this walk cannot spare for the near leg).
+        let bp0 = w.scene.sim.as_ref().unwrap().bond.pos;
+        far_cands.sort_by(|a, b| {
+            let da = (a[0] - bp0[0]).powi(2) + (a[2] - bp0[2]).powi(2);
+            let db = (b[0] - bp0[0]).powi(2) + (b[2] - bp0[2]).powi(2);
+            db.partial_cmp(&da).unwrap()
+        });
+        eprintln!("[0b-rocket] far candidates {}, near candidates {}", far_cands.len(), near_cands.len());
+        let sph = w.scene.sim.as_ref().unwrap().drones.player_sph;
+        // One fire + wait cycle; returns (blast pos, world-owned hurt this window).
+        let fire_and_wait = |w: &mut Walker, target: [f32; 3]| -> (Option<[f32; 3]>, Vec<f32>) {
+            let ph = w.scene.sim.as_ref().unwrap().drones.player_hits.len();
+            let clip0 = w.scene.sim.as_ref().unwrap().gun.clip;
+            let fired = shoot_at(w, target, 60.0, 600, "the radius pin rocket", &|sim| sim.gun.clip < clip0);
+            assert!(fired, "[0b-rocket] the rocket never left (clip {clip0})");
+            let mut blast = None;
+            for _ in 0..150 {
+                w.tick(nf_game::player::Input::default(), false);
+                let sim = w.scene.sim.as_ref().unwrap();
+                if let Some(&(p, _, _, _, wt)) = sim.drones.explosions.iter().find(|(_, _, _, _, wt)| *wt == 0x2e) {
+                    blast = Some(p);
+                }
+                if blast.is_some() { break; }
+            }
+            let hits: Vec<f32> = w.scene.sim.as_ref().unwrap().drones.player_hits[ph..].to_vec()
+                .into_iter().filter(|(_, o, _)| *o == usize::MAX).map(|(_, _, d)| d).collect();
+            (blast, hits)
+        };
+        // The near leg runs FIRST (Bond at full walked health — a near blast costs at most the
+        // full 80 the Agent pain factor gives, so he survives it); the far leg's law then holds
+        // for EVERY candidate, and die_panics is off so a lawful mid-flight detonation (the
+        // office furniture eats rockets on the shorter rays) cannot panic the walker before the
+        // asserts read their ledger. No assert reads Bond's health after this point.
+        w.dmg.die_panics = false;
+        // THE NEAR LEG: a wall inside the radius: Bond MUST take the blast, the amount the
+        // straight-line falloff gives (x the level's pain factor: Agent 0.8 [M Player_HandlePain
+        // 0x1902c8; tuning.rs 09-0b group]).
+        let target = near_cands[0];
+        let (blast, hits) = fire_and_wait(&mut w, target);
+        let bp = blast.expect("[0b-rocket] the near rocket never detonated");
+        let d3 = ((sph[0] - bp[0]).powi(2) + (sph[1] - bp[1]).powi(2) + (sph[2] - bp[2]).powi(2)).sqrt();
+        assert!(!hits.is_empty(),
+            "[0b-rocket] the near blast (d3 {d3:.2}) did not reach Bond — the port's reach falls short of the disc radius");
+        {
+            let total: f32 = hits.iter().sum();
+            let want = 100.0 * (1.0 - (d3 - 1.0576).max(0.0) / 8.0) * 0.8;
+            assert!((total - want).abs() < 3.0,
+                "[0b-rocket] the near blast took {total}, the straight-line law wants {want} (sphere {sph:?}, blast {bp:?}, d3 {d3})");
+            eprintln!("[0b-rocket] near leg green: took {total} (law {want}) at d3 {d3:.2}");
+        }
+        // THE FAR LEG (the sprint-4 v10 shape: fire with the target over 10 u out): for EVERY
+        // candidate the law must hold — a detonation past the sphere-edge 8.0 (the disc's
+        // radius) hurts NOBODY; one inside hurts exactly the falloff. The level-0b-roof-sprint-4
+        // report's ~48 "at 13.7 u" is the refuted reading: that fire's rocket detonated on the
+        // office furniture ~4.7 u out (the falloff there IS ~44), not at the d-13.7 aim point.
+        let mut far_ledger = String::new();
+        let mut far_ok = false;
+        for (i, &target) in far_cands.iter().enumerate().take(4) {
+            let (blast, hits) = fire_and_wait(&mut w, target);
+            let Some(bp) = blast else { far_ledger += " no-detonation"; continue; };
+            let d3 = ((sph[0] - bp[0]).powi(2) + (sph[1] - bp[1]).powi(2) + (sph[2] - bp[2]).powi(2)).sqrt();
+            let edge = d3 - 1.0576;
+            let total: f32 = hits.iter().sum();
+            far_ledger += &format!(" cand{i} d3 {d3:.2} edge {edge:.2} hurt {total:.2}");
+            if edge > 8.05 {
+                assert!(hits.is_empty(),
+                    "[0b-rocket] the far blast hurt Bond from edge {edge:.2} u past the 8.0 radius ({hits:?}) — the port's reach passes the disc radius");
+                far_ok = true;
+                eprintln!("[0b-rocket] far leg green: detonation edge {edge:.2} u > 8.0, no hurt");
+                break;
+            }
+            // Detonated inside the radius (a mid-flight object ate the round): the game's own
+            // falloff may hurt — the law assert above already covers the amount window through
+            // the near leg; this ray just cannot serve as the past-the-radius proof.
+        }
+        assert!(far_ok, "[0b-rocket] no far ray detonated past the radius:{far_ledger}");
+        return;
     }
     {
         // The disc's island arm equips the Q-Worm at level load (`EquipWeapon(BL, 0x58, 0)` at
@@ -1311,7 +1433,7 @@ fn walk_balcony_to_the_roof_jump() {
         // walks owned records only] — printed, and the shot leg re-checks before it fires.
         eprintln!("[0b] boot owned[0x58] = {}", sim.drones.inventory.owned[0x58]);
     }
-    walk_to_the_mission_end(&mut w, false, false);
+    walk_to_the_mission_end(&mut w, false, false, false);
 }
 
 /// THE FRESH-SPAWN WALK: a FRESH load of 0b (the level's own boot, no channel pokes) walked to
@@ -1327,7 +1449,7 @@ fn walk_balcony_to_the_roof_jump() {
 fn walk_fresh_spawn_to_the_mission_end() {
     let mut w = load_fresh();
     fresh_boot_asserts(&w);
-    walk_to_the_mission_end(&mut w, true, false);
+    walk_to_the_mission_end(&mut w, true, false, false);
 }
 
 /// THE FRESH-SPAWN WALK ON REAL HEALTH (`damage_log.rs::with_real_damage`): the same walked
@@ -1392,7 +1514,7 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage() {
         // The fights answer only dartable guards and the win is the sleep, not a wound.
         w.dmg.tranq_fights = true;
         fresh_boot_asserts(&w);
-        walk_to_the_mission_end(&mut w, true, true);
+        walk_to_the_mission_end(&mut w, true, true, false);
     });
 }
 
@@ -1415,7 +1537,7 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage_agent() {
         w.dmg.back_off = Some(3.0);
         w.dmg.tranq_fights = true;
         fresh_boot_asserts(&w);
-        walk_to_the_mission_end(&mut w, true, true);
+        walk_to_the_mission_end(&mut w, true, true, false);
     });
 }
 
@@ -1457,7 +1579,7 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage_00agent() {
         w.dmg.back_off = Some(3.0);
         w.dmg.tranq_fights = true;
         fresh_boot_asserts(&w);
-        walk_to_the_mission_end(&mut w, true, true);
+        walk_to_the_mission_end(&mut w, true, true, false);
     });
 }
 
@@ -1556,6 +1678,26 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, label:
 
 /// XZ distance for the return-chain checks.
 fn dxz_w(a: [f32; 3], b: [f32; 3]) -> f32 { ((a[0] - b[0]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() }
+/// THE ROCKET'S BLAST HOLDS THE DISC'S RADIUS ON THE REAL PATH (explode-hurt-radius). Bond walks
+/// from the fresh Agent spawn to the exec office (no teleport after the load), takes the disc's
+/// PICKUP_RocketLauncher #349 (weapon 0x2E, 8 rounds [D docs/levels/0700000b-audit.md:191]) on the
+/// office jog, then fires two rockets from the walked desk spot at walls the sim itself measures:
+/// the far wall >= 10.5 u away (the victim's sphere edge 9.4+ u, past the row's 8.0 radius [L
+/// ee_snapshot.bin @0x2c2178]) must hurt NOBODY; the near wall <= 7.5 u (edge < 8.0) must hurt
+/// Bond by the straight-line falloff [M Explode_Propagate 0x17c5e8-0x17c620; the pick
+/// 0x1eae80:221-228; the class-3 arm 0x17c650-58]. The level-0b-roof-sprint-4 observation (a ~48
+/// hurt at the d-13.7 fire) is impossible under this law — this walk is the real-path refutation.
+#[test]
+fn walk_rocket_blast_holds_the_disc_radius() {
+    walker::with_real_damage(|| {
+        let mut w = load_fresh_at(2);
+        w.dmg.lane_fights = true;
+        w.dmg.back_off = Some(3.0);
+        w.dmg.tranq_fights = true;
+        fresh_boot_asserts(&w);
+        walk_to_the_mission_end(&mut w, true, true, true);
+    });
+}
 
 
 /// THE PATERNOSTER CAB IS A SEALED CAGE — the level-0b-lift-exit session's evidence, pinned so a
