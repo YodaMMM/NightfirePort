@@ -507,6 +507,20 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             (d.state & 0xc == 0, d.state & 0x8 != 0, sim.bond.pos)
         };
         if bp[2] > 38.4 && (-28.0..=-25.5).contains(&bp[0]) { out = true; break; }
+        // A live guard can stand in the doorway's outside mouth: with the game's sight round
+        // robin [M DroneVision_ProcessDroneSight 0x176a28] and the own-cel boundary push
+        // [M NDrone2_Collision 0x140e90:169-174] drone 10 holds CombatNoSight 0x5c at
+        // (-26.78, -368.43, 38.12), the leaf stops on him at 0.76-0.88 and Bond never gets by
+        // [L this branch's agent trace]. Once the leaf is open and the crossing has stalled for
+        // 300 ticks, the player shoots him.
+        if !door_closed && k > 300 {
+            let g = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                sim.drones.list.iter().position(|d| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && walker::dxz(d.pos, [-26.9, bp[1], 38.4]) < 1.6)
+            };
+            if let Some(g) = g { w.shoot_loose(g, "13: the doorway guard", 300); continue; }
+        }
         // Line up in front of the doorway first: east of x −26.7 the room's north wall (z 37.23,
         // x −26.46..−24.74) stands between Bond and the exit, and the straight line to (−27.05, 38.7)
         // pins him on its face.

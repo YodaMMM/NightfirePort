@@ -10874,7 +10874,7 @@ impl Drone {
                 // `NDrone2_Enable(0)` + `obj+0xFE |= 1`; the MP arm is `BOT_fellOutMap`]: the game
                 // reaches it from `control_handle_cel_change` 0x133288 when the object's cel says
                 // out-of-map; the port's DeleteMe arm is the same Enable(0)+flag fold, and the
-                // port's guards never leave the map mesh (no out-of-map cel reader on drones).
+                // relink miss runs it through `Drone::fell_out_map` (`Drones::tick_inner`).
                 self.present = false; self.enabled = false; self.delete_me = true; true
             }
             // ---- drone-abseil-elevator: states 0x8d–0x92 (`NDrone2_StateFuncs` slots 0x8d–0x92) ----
@@ -12333,15 +12333,30 @@ impl Drone {
 
     /// The drone's `obj+0x20` relink (see `obj_cel`): the first call links by `build_FindCel`
     /// (`NDrone2_DefaultInit` 0x14b300:38); later calls run the moved-pass relink only when the
-    /// object moved [M 0x133288:42-46 `Vec_IsEqual` early-out], keeping the old cel on a miss
-    /// [M 0x133288:166-231 — the type-2 arm falls through to the default arm's relink].
-    pub fn relink_cel(&mut self, w: &crate::world::CollisionWorld) {
-        match self.obj_cel_pos {
-            None => self.obj_cel = w.find_cel(self.pos),
-            Some(prev) if prev == self.pos => return,
-            Some(prev) => self.obj_cel = w.player_cel_relink(self.obj_cel, prev, self.pos, self.pos).or(self.obj_cel),
-        }
+    /// object moved [M 0x133288:42-46 `Vec_IsEqual` early-out]. Returns true on a relink MISS
+    /// (no portal crossing, outside the old cel's box, no `build_LinkToRoom` hit): the type-2 arm
+    /// calls `Drone_FellOutMap` 0x13a878 [M 0x133288:179-181, and :63-72 for an unlinked object],
+    /// whose SP body is `NDrone2_Enable(0)` + `obj+0xFE |= 1` (the control walk's delete) — the
+    /// caller removes the drone. The old cel is kept as the default arm's relink does [M :185-250].
+    pub fn relink_cel(&mut self, w: &crate::world::CollisionWorld) -> bool {
+        let r = match self.obj_cel_pos {
+            None => { self.obj_cel = w.find_cel(self.pos); self.obj_cel_pos = Some(self.pos); return false }
+            Some(prev) if prev == self.pos => return false,
+            Some(prev) => w.player_cel_relink(self.obj_cel, prev, self.pos, self.pos),
+        };
         self.obj_cel_pos = Some(self.pos);
+        match r {
+            Some(c) => { self.obj_cel = Some(c); false }
+            None => true,
+        }
+    }
+
+    /// `Drone_FellOutMap` 0x13a878's SP body (MPSettings+388 == 0): `NDrone2_Enable(0)` and
+    /// `obj+0xFE |= 1` [M 0x13a878:8-15] — the same fold as the DeleteMe 0xb4 arm.
+    pub fn fell_out_map(&mut self) {
+        self.present = false;
+        self.enabled = false;
+        self.delete_me = true;
     }
 }
 
@@ -20379,6 +20394,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `Drone_InitComms`' shared passes — `ProcessDroneSight`, `FindAlertedDrones`, the 0x97 check,
         // `HandleSoundAlerts`/`Sound_ZeroAlertness` and the ch 0x96 alarm rebroadcast — sit inside the
         // `NPCGlobals != 0` block [M 0x139520:124-284]: a cut-scene that fired event 5 freezes all of these.
+        // The drones' own cels: `control_movement_object_handler` 0x1336f8 runs
+        // `control_handle_cel_change` 0x133288 for every moved dynamic object every tick (outside
+        // the NPCGlobals block); a relink miss is `Drone_FellOutMap` (the drone is removed). A world
+        // without cels (the unit-test harness) links nothing and removes nobody.
+        if d.world.has_scope() {
+            for dr in &mut self.list {
+                if dr.present && !dr.corpse && dr.relink_cel(d.world) { dr.fell_out_map(); }
+            }
+        }
         if self.npc_enabled {
         // Visibility every tick for drones with vision on; line of sight for one drone per tick (round robin).
         // [M 0x176a28 first loop] the visibility value is computed ONLY while the 0x10000 vision bit
@@ -20388,11 +20412,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // Inside the 15-frame wait the whole pass is skipped: the sight flags and the +0x270/+0x274
         // counters keep their values [M 0x176a28:56-57].
         let view_bones = self.bond_view_bones;
-        // The drones' own linked cels (obj+0x20) for the sight probes' cel walk — last tick's
-        // moved-pass relink [M 0x1336f8: `Drone_InitComms` (this pass) runs before the move loop
-        // that calls `control_handle_cel_change`].
+        // The sight probes' cel walk reads the drones' own linked cels (obj+0x20, relinked above).
         if vision_open {
-            for dr in &mut self.list { if dr.present && !dr.corpse { dr.relink_cel(d.world); } }
         }
         // The probe counter snapshot sits BEFORE the visibility loop [M 0x176a28:71 `uVar3 =
         // DAT_00299092` right after FindAlertedDrones]: a close-range visibility ray that cast
@@ -23051,9 +23072,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // `NDrone2_Collision` 0x140e90:170-172: the feet sphere (r 0.4, mask drone+0xba4) is pushed
             // out of the AI-network boundaries — `AINetwork_GetBoundsPushVectorForSphere` 0x157bd0
             // walking the cel's BLINK chain with `AINetwork_HitBoundry` 0x157780 per wall [M], gated
-            // on drone+0x4f8 < 0 [M :169] (the port's `bounded` flag stands in for that gate).
+            // on drone+0x4f8 < 0 [M :169] (the port's `bounded` flag stands in for that gate). The
+            // chain is the drone's OWN linked cel's (obj+0x20, disasm 0x1410fc `lw a1,0x20(s3)`) and
+            // the sphere centre is obj+0x30 itself (0x1410f8 `addiu a0,s3,0x30`), not the feet.
             if dr.enabled && dr.bounded && d.nav.bounds {
-                let p = d.nav.push_out(dr.feet(), 0.4);
+                // A world without cels (the test harness's one-cel model) files every wall
+                // under its single cel.
+                let p = if d.world.has_scope() {
+                    let cel = if dr.obj_cel_pos.is_some() { dr.obj_cel } else { d.world.find_cel(dr.pos) };
+                    d.nav.push_out_in_cel(dr.pos, 0.4, cel)
+                } else {
+                    d.nav.push_out(dr.pos, 0.4)
+                };
                 dr.pos[0] = p[0];
                 dr.pos[2] = p[2];
             }
