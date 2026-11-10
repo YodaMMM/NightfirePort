@@ -3099,19 +3099,19 @@ impl CollisionWorld {
     }
 
     /// The port's guard and route step probe, a stand-in with no game query behind it: the game's
-    /// guards are not ray-stopped, they walk and take the body query's push (`pane_push`). So a pane
-    /// is no obstacle to this probe, or a guard would stop short of the glass he should press
-    /// [M Drone_CollisionHandler 0x140968 + Break_Update 0x12bfd8:23-34 — the body press IS the
-    /// pane contact]. The masked walk keeps its evidenced 8|4 drops for the walled walk but the
-    /// panes stay transparent (the `los_walk` `panes_transparent` arm): los-mask-attrib 2026-11-10
-    /// measured the pane-solid probe breaking three real-input greens — 03's guard never reached
-    /// his firing line through the window pane (guard_rounds_glass red), 09's nav route to the
-    /// ch-124 switch lost its node qualification and ping-ponged west into the level-exit volume,
-    /// 13's security-room door leg — all green on the gate-off tree, all red with the envelope,
-    /// so the stand-in's pane rule is what the envelope accidentally deleted.
+    /// guards are not ray-stopped, they walk and take the body query's push (`pane_push`); the
+    /// game's `NDrone2_MoveTest` 0x155330 itself runs `AINetwork_BoundsTest` only — no collision
+    /// ray at all [M]. The ray here is a long-standing port choice [S], and it keeps its own
+    /// proven semantics (`segment_clear`: panes transparent, no material drops) on BOTH sides of
+    /// the `LOS_MASKS_ON` gate: los-mask-attrib 2026-11-10 measured the gate-on masked probe
+    /// (8|4 drops) breaking three real-input greens — 09's nav route to the ch-124 switch
+    /// re-picked its start node across a node-pass surface and wandered west into the
+    /// level-exit volume (the route's own goal node still lands at the switch), 03's guard
+    /// never reached his firing line, 13's door leg — all green with the plain probe, so the
+    /// stand-in is pinned to the semantics every green walk was measured with. The mask
+    /// envelope stays with the real `Collide_LineOfSight` callers (`line_of_sight*`).
     pub fn move_probe_clear(&self, a: V3, b: V3) -> bool {
-        if !LOS_MASKS_ON { return self.segment_clear(a, b); }
-        self.los_walk(a, b, LOS_PROBE_8, None, true)
+        self.segment_clear(a, b)
     }
 
     /// The guard-sight ray scoped the way the game scopes it [M DroneVision_CanSeeObjectFrom
@@ -3205,7 +3205,7 @@ impl CollisionWorld {
     /// (`line_of_sight` keeps the global `LOS_MASKS_ON` gate — the masked semantics stay
     /// opt-in until the parked per-caller flip is safe.)
     pub fn line_of_sight_masked(&self, a: V3, b: V3, mask: u32) -> bool {
-        self.los_walk(a, b, mask, None, false)
+        self.los_walk(a, b, mask, None)
     }
 
     /// The masked `Collide_LineOfSight` walk with the ray's SUBJECT shapes excluded from the
@@ -3219,19 +3219,14 @@ impl CollisionWorld {
     /// exclude: a wall between the copter and Bond still blocks the spot [M the subjects are
     /// objects, not the world].
     pub fn line_of_sight_excluding(&self, a: V3, b: V3, mask: u32, exclude_hashes: &[u32]) -> bool {
-        self.los_walk(a, b, mask, Some(exclude_hashes), false)
+        self.los_walk(a, b, mask, Some(exclude_hashes))
     }
 
     /// The masked walk's body (the drop rules in the doc above). The dynamic set's per-object
     /// skip keys the object's `tris.start` against a `tris.start → hash` map built from
     /// `last_objects` (index-aligned with `geo.objects` by `set_dynamic`; `along` yields objects
     /// in order but skips non-overlapping ones, so the range start is the stable key).
-    /// `panes_transparent` (the `move_probe_clear` stand-in only): the pane-class objects never
-    /// block — the game's walkers are not ray-stopped at glass, the body press is the pane contact
-    /// [M Drone_CollisionHandler 0x140968, Break_Update 0x12bfd8:23-34]; the real
-    /// `Collide_LineOfSight` callers keep the envelope's pane admission (`Collide_PickObj`
-    /// 0x1eae80 picks a pane like any object).
-    fn los_walk(&self, a: V3, b: V3, mask: u32, exclude_hashes: Option<&[u32]>, panes_transparent: bool) -> bool {
+    fn los_walk(&self, a: V3, b: V3, mask: u32, exclude_hashes: Option<&[u32]>) -> bool {
         let d = sub(b, a);
         let dynamic = self.dynamic.read().unwrap();
         let skip_cage = mask & 0x20 != 0;
@@ -3259,7 +3254,6 @@ impl CollisionWorld {
                     dynamic.obj_index(o).map(|n| dynamic.pick_pair(n)).unwrap_or((0, 0))
                 } else if missile_set { (0x1000, 0) } else { (0, 0) };
                 if dyn_set && exclude_starts.contains(&o.tris.start) { continue; }
-                if panes_transparent && class_obj == 0x20 { continue; }
                 if !pick_admits(mask, glist_obj) { continue; }
                 if mask & 0x400 != 0 && (class_obj == 3 || class_obj == 0x12) { continue; }
                 if mask & 0x100 != 0 && (class_obj == 2 || class_obj == 0x11) { continue; }

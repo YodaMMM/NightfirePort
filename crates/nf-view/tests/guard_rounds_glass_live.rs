@@ -74,6 +74,24 @@ fn try_pane(iso: &str, lv: &str, pane: usize) -> Option<Outcome> {
         surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty,
         ai_points: &sim.ai_points,
     };
+    // los-mask-attrib: the scene premise is the GAME's sight rule, not the port's old pane skip.
+    // The guard must see Bond through the pane for the round to fly at all; the game's vision mask
+    // 0xa27 drops surface class 0x10 only [M 0x1ebaa8:315-317], so a pane (or its frame) whose
+    // collision material survives the drops STOPS the guard's sight — the game's own guard there
+    // never fires, and a scene built on him proves nothing about rounds vs glass. Scenes whose
+    // 0xa27 sight ray is blocked are not scenes (None), with the blocker printed.
+    {
+        let eye = [guard_at[0], guard_at[1] + 1.6, guard_at[2]];
+        let chest = [bond_at[0], bond_at[1] + 1.2, bond_at[2]];
+        match sim.world.los_debug_hit(eye, chest, 0xa27) {
+            Some((t, tri, mat)) => {
+                eprintln!("[glass-scene] {lv} pane #{placement}: NOT a scene — the game's 0xa27 sight ray is blocked at t {t:.3} by mat {mat:#04x} (0x1ebaa8:315-317 drops class 0x10 only); tri {:?}..{:?}..{:?}",
+                    tri[0], tri[1], tri[2]);
+                return None;
+            }
+            None => {}
+        }
+    }
     let frame = sim.drones.frame;
     sim.drones.list[gi].send(&data, &mut sim.drones.rng, frame, msg::ALARM);
     let mut hurt = false;
@@ -104,7 +122,7 @@ fn guard_rounds_pass_and_drain_glass_on_every_level() {
         let mut tried = 0;
         let mut ok = false;
         for pane in 0..3 {
-            let Some(o) = try_pane(&iso, lv, pane) else { break };
+            let Some(o) = try_pane(&iso, lv, pane) else { continue };
             tried += 1;
             if o.hurt && o.drained != o.filtered { ok = true; break; }
         }
@@ -112,8 +130,13 @@ fn guard_rounds_pass_and_drain_glass_on_every_level() {
         if tried > 0 && !ok { failed.push(lv); }
         if tried > 0 { covered += 1; }
     }
-    // 07000001, 07000003 (panes that break) and 07000012 (the sky bridge's 0xffdf-filtered panes,
-    // passed but not drained) carry a scene; the rest have no armed guard and floor pair at a pane.
-    assert!(covered >= 3, "only {covered} level(s) had a pane scene");
+    // The scene census under the game's own sight rule: 07000001 (pane #76, mat-0x10 glass —
+    // sight clear, drained+passed) and 07000012 (pane #120, the sky bridge's 0xffdf-filtered
+    // panes — passed but not drained) carry a scene. 07000003 does NOT: its kind-2 panes
+    // #338/#339 stop the game's own 0xa27 sight ray at mat 0x05 (t 0.719 [L this test's scene
+    // verdict print]), so the game's guard there never fires — the pre-mask port's pane-skipping
+    // `segment_clear` let him see through, which is what the old census pinned; the mask rule is
+    // the decompile's [M 0x1ebaa8:315-317]. The rest have no armed guard and floor pair at a pane.
+    assert!(covered >= 2, "only {covered} level(s) had a pane scene");
     assert!(failed.is_empty(), "guard rounds stopped at the glass on {failed:?}");
 }

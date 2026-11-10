@@ -518,6 +518,16 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         let forward = if door_swinging { -0.6 } else { 1.0 };
         let input = nf_game::player::Input { turn: err.clamp(-0.05, 0.05), look: (-pitch).clamp(-0.05, 0.05), forward, ..Default::default() };
         w.tick(input, door_closed && k % 6 == 0);
+        if k % 150 == 0 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.doors.list[di];
+            eprintln!("[13diag] k {k} door state {:#x} swing {:.2} bond ({:.2},{:.2},{:.2})", d.state, d.swing, bp[0], bp[1], bp[2]);
+            for (i, g) in sim.drones.list.iter().enumerate() {
+                if g.present && !g.corpse && walker::dxz(g.pos, [-26.65, -368.36, 37.44]) < 3.5 && (g.pos[1] - -368.4).abs() < 3.0 {
+                    eprintln!("[13diag]   guard {i} state {:#x} at ({:.2},{:.2},{:.2}) hp {:.1}", g.state, g.pos[0], g.pos[1], g.pos[2], g.health);
+                }
+            }
+        }
     }
     assert!(out, "13: out through the doorway while the door's open window holds [probe]");
     w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: out of the room");
