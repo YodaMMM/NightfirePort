@@ -26,3 +26,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: local-agent (lane nf-agent2) at 2026-11-10T09:06Z
+
+---
+## Report (done, 2026-11-10T14:01Z)
+Merged to master in 823ff190b (local agent, 4 rounds; suite 4877/0). 15 walks -> 30-los-mask-repins-*.
