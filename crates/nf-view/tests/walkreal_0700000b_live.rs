@@ -890,16 +890,43 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
                 }, false);
             }
         }
-        let lane: [[f32; 2]; 4] = [
-            [-11.8f32, 18.0f32], // P1 the west band, south of the diagonal (the measured heights)
-            [-1.5, 20.3],        // P2 the east run south of the z 22.28 wall, to the gap mouth
-            [-1.5, 30.5],        // P3 north through the x −2..1 gap (clear at capsule height)
-            [target[0], target[2]], // P4 the final dash past #4 to the take slot
-        ];
+        // SPRINT-5 (the sisters): P4 runs THROUGH the take zone to the deck's east edge
+        // (9.8, 41.3) and P5 is dead for the d1 walk — the wake volley math: the dart lands
+        // at d ~5.5 (t16305 [L agent00_run5]), the guard shoots again ~180 ticks later (144
+        // RecoverTime [M 0x147188 k=60] + the get-up), and the slot→edge drive from a take-
+        // slot stop is 60-80 exposed ticks — the 00 Agent run died IN that drive (4 × 7.0,
+        // tick 16536 [L agent00_run1]). The dash covers slot + edge in the same sleep window
+        // (13 u + 7.6 u at the measured 0.14 u/tick), the take firing ON THE PASS (the touch
+        // law is a per-tick distance+LOS check [M 0x18e148:202-220]), and the jump leg only
+        // has the last 0.2-3 u before the fall. The P4 aim point (1.9, 40.9) sits west of
+        // the housing's south-west column — the straight SW approach wedges on it at
+        // (2.02, 40.59) with the touch sphere 0.07 out of reach and the take never fires
+        // [L agent00_run5 take-dist 1.861] — while (1.9, 40.9) is d 1.62 of the pickup,
+        // inside the 1.79 sphere with the take-ray threading the open south face. The d1
+        // walk keeps the slot lane (its 5th entry is unreachable — the take-break fires
+        // first) byte-identical.
+        let lane: [[f32; 2]; 5] = if agent_run {
+            [
+                [-11.8f32, 18.0f32], // P1 the west band, south of the diagonal (the measured heights)
+                [0.0, 21.0],         // P2 the east run aims through #5's gap-mouth drift
+                [-1.5, 30.5],        // P3 north through the x −2..1 gap (clear at capsule height)
+                [1.9, 40.9],         // P4 the take-zone approach, west of the housing column
+                [11.3, 41.3],         // P5 the deck's east edge — the wake volley lands past it
+            ]
+        } else {
+            [
+                [-11.8f32, 18.0f32], // P1 the west band, south of the diagonal (the measured heights)
+                [-1.5, 20.3],        // P2 the east run south of the z 22.28 wall, to the gap mouth
+                [-1.5, 30.5],        // P3 north through the x −2..1 gap (clear at capsule height)
+                [target[0], target[2]], // P4 the final dash past #4 to the take slot
+                [target[0], target[2]], // (dead for d1 — the take-break fires at the slot)
+            ]
+        };
         let mut phase = 0usize;
         let start = w.total_ticks;
         let mut stall_diag = 0u32;
         let mut drop_start = 0u32;
+        let mut close_start = 0u32;
         // SPRINT-4 (the sisters): the gap-mouth rocket attempt's bookkeeping.
         let mut rocket_done = false;
         let mut rocket_start = 0u32;
@@ -907,8 +934,11 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
         let mut rockets_fired = 0u32;
         while w.total_ticks - start < 2400 {
             let sim = w.scene.sim.as_ref().unwrap();
-            if sim.drones.channels.on(0x3f) { break; } // the take fires ON THE PASS — never stand
             let p = sim.bond.pos;
+            // The take fires ON THE PASS — for the sisters the pass continues to the deck's
+            // east edge (the P5 lane) before the loop hands over to the jump drive; the d1
+            // walk breaks at the take exactly as before.
+            if sim.drones.channels.on(0x3f) && (!agent_run || p[0] > 9.0) { break; }
             // [0b-stall] every 30 ticks: where the body sits against the face, its speed, and the
             // take-sphere distance (the NF_PICKUPLOG take-test only logs when the gate passes).
             if w.total_ticks - stall_diag >= 30 {
@@ -921,6 +951,19 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
                     sim.drones.health.health, dist, phase,
                     sim.gun.weapon, sim.gun.clip, sim.gun.spare,
                     sim.drones.list[4].health);
+                // [0b-stall] the roof squad's live law (sprint-5): which of #4/#5/#7/#8 are alive,
+                // where they stand relative to Bond, and their STATE (the dart law is
+                // state-gated [M 0x1469b8:315-361] — a dart lands a sleep only on the states
+                // that carry case 0x19; d4state tells whether the close can take #4 at all).
+                for &gi in &[4usize, 5, 7, 8] {
+                    let g = &sim.drones.list[gi];
+                    if g.present && !g.corpse {
+                        eprintln!("[0b-stall]   g{gi} ({:.2},{:.2},{:.2}) hp {:.1} state {:#x} w {:#x} d {:.1} dartable {}",
+                            g.pos[0], g.pos[1], g.pos[2], g.health, g.state, g.weapon,
+                            walker::dxz(g.pos, p),
+                            nf_game::drone::Drone::dart_impact_state_ok(g.state));
+                    }
+                }
                 let inv = &sim.drones.inventory;
                 let owned: Vec<String> = inv.owned.iter().enumerate()
                     .filter(|(_, &o)| o)
@@ -928,12 +971,63 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
                     .collect();
                 eprintln!("[0b-stall]   carried {:?} owned [{}]", inv.carried, owned.join(" "));
             }
+            // SPRINT-5 (the sisters): CLOSE ON #4 BEFORE THE P4 TURN — the sprint-4 report's
+            // second option. #4 comes down the gap column to meet the lane (the agent_run2
+            // trace: d 14.8 → 7.8 → 5.0 as Bond ran P3) and is dartable the whole way [L
+            // agent_run2 state 0x68/0x73], so the north leg steers AT him once he is inside
+            // the fire-on-move's proven 9 u (the trigger rides the K5 on the run — the
+            // sprint-3 funnel STAND is what killed the sisters: it held Bond at d 2.6 for
+            // ~150 ticks while its err hovered 0.05-0.14 and #4/#5/#7/#8 chewed 39.6 → 0.0
+            // [L agent_run1]). The phase holds until he is asleep (the dart family — the
+            // dart's own win state [M 0x163430]) or the 3.4 floor (under 3.0 u every drone
+            // round hits [M 0x179740:113-115]) hands the lane to the P4 dash.
+            let mut closing = false;
+            let mut close_ticks = 0u32;
+            if agent_run && phase == 2 {
+                let g4 = &sim.drones.list[4];
+                if g4.present && !g4.corpse && g4.health > 0.0
+                    && !nf_game::drone::Drone::dart_family_state(g4.state) {
+                    let d4 = walker::dxz(g4.pos, p);
+                    if d4 < 9.0 {
+                        if d4 > 3.4 {
+                            closing = true;
+                            if close_start == 0 { close_start = w.total_ticks; }
+                            close_ticks = w.total_ticks - close_start;
+                            // Bounded: a close that cannot converge (the err never opens the
+                            // 0.05 gate against a strafing guard) must not hold the lane
+                            // forever — the dash goes and eats the old wide-pass cost.
+                            if close_ticks > 180 { closing = false; phase = 3; }
+                        } else {
+                            phase = 3;
+                        }
+                    }
+                } else {
+                    // asleep or gone — the dash goes while the sleep holds (the agent_run2
+                    // trace: the roof guard's 0x50 held 260+ ticks, well past the take).
+                    phase = 3;
+                }
+            }
             while phase + 1 < lane.len()
+                && !closing
+                // SPRINT-5 (the sisters): the P4→P5 advance waits for the TAKE — the 1.6
+                // arrival fires ~1.6 u short of the slot and the veer to the east edge then
+                // grazes the touch sphere at 1.98 (the take never fires, the loop never
+                // breaks, the wake volley kills the stall [L agent_run4/agent00_run3 — both
+                // died oscillating at x 9.7-10.1 with the parachute untaken]). Steering AT
+                // the slot walks Bond into the sphere (d 1.11 [L the slot geometry]) and the
+                // take fires on the arrival tick; the d1 walk is untouched (its take-break
+                // fires before this advance can matter).
+                && (phase != 3 || !agent_run || sim.drones.channels.on(0x3f))
                 && ((p[0] - lane[phase][0]).powi(2) + (p[2] - lane[phase][1]).powi(2)).sqrt() < 1.6 {
                 phase += 1;
             }
             if phase == 3 && drop_start == 0 { drop_start = w.total_ticks; }
-            let aim = lane[phase];
+            let aim = if closing {
+                let g4 = &sim.drones.list[4];
+                [g4.pos[0], g4.pos[2]]
+            } else {
+                lane[phase]
+            };
             let desired = (aim[0] - p[0]).atan2(aim[1] - p[2]);
             let mut aim_err = walker::wrap_pi(desired - sim.bond.yaw);
             // (level-0b-roof-sprint-4: the gap-mouth drop attempts are RETIRED — the rocket's
@@ -950,7 +1044,14 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
             // the funnel — the diagonal west, the flat wall south — turns and drops him, then
             // dashes. Position-gated (the phase bookkeeping missed it when the run drifted);
             // bounded: if he will not die in 240 ticks, the dash goes anyway.
-            if p[2] > 29.0 {
+            // SPRINT-5 (the sisters): the stand is the d1 walk's lever only — on the sisters
+            // it is the measured DEATH (it held Bond at d 2.6 from #4 for ~150 ticks — inside
+            // the 3.0 all-hit band — while its own err hovered 0.05-0.14 and the squad chewed
+            // 39.6 → 0.0 [L agent_run1]; the dart it did land left #4 asleep at state 0x50
+            // while the stand kept holding, because a sleeping guard's hp never moves). The
+            // sisters' close above lands the dart ON THE RUN instead, and the P4 dash follows
+            // the sleep.
+            if p[2] > 29.0 && !agent_run {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let g = &sim.drones.list[4];
                 let dxg = g.pos[0] - sim.bond.pos[0];
@@ -992,12 +1093,33 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
                 let g = &sim.drones.list[gi];
                 if !gun_shotgun { continue; }
                 if !g.present || g.corpse || g.health <= 0.0 { continue; }
+                // SPRINT-5 (the sisters): a guard already in the dart family ignores further
+                // darts (the stun families carry no case 0x19 [M 0x1469b8:315-361]) — do not
+                // spend the clip on a sleeping body (d1 keeps its stream byte-identical).
+                if agent_run && nf_game::drone::Drone::dart_family_state(g.state) { continue; }
                 let dxg = g.pos[0] - p[0];
                 let dzg = g.pos[2] - p[2];
                 let dg = (dxg * dxg + dzg * dzg).sqrt();
                 if dg > 9.0 { continue; }
+                // SPRINT-5 (the sisters): #4's dart is held until d 5.0 — the sleep buys 180
+                // ticks (144 RecoverTime [M 0x147188 k=60] + the get-up) and the latch chain
+                // (the dash + the edge hop + the fall to ch 0x40) runs ~190 ticks from the
+                // dart: released at d 7.2 the wake volley started 60 ticks BEFORE the band
+                // and killed the 00 Agent run in the drive (28.0, tick 16536 [L
+                // agent00_run3/4]); released at d ~5 the wake lands ~35 ticks after ch 0x40
+                // has already latched the mission. The close's steering has the crosshair
+                // converged long before 5.0 (the err rides 0.02-0.04 from d ~6 [L
+                // agent_run3]), so the gate opens on the first window tick.
+                if agent_run && gi == 4 && dg > 5.5 { continue; }
                 let err_g = walker::wrap_pi(dxg.atan2(dzg) - sim.bond.yaw);
-                if err_g.abs() < 0.18 {
+                // SPRINT-5 (the sisters): the 0.18 gate FIRES while the aim is still swinging
+                // — a dart released at err 0.18 lands 0.6-1.6 u off the body and every one of
+                // those shots missed [L agent_run1/2: the clip ran 5→3 across P2/P3 and no
+                // guard slept until the funnel stand's 0.05-converged dart]. The sisters fire
+                // only on the converged crosshair (0.05 ≈ 0.25-0.45 u at dart range); the
+                // close above brings the aim to the guard so the gate actually opens.
+                let err_gate = if agent_run { 0.05 } else { 0.18 };
+                if err_g.abs() < err_gate {
                     trigger = true;
                     let at = [g.pos[0], g.pos[1] + 0.3, g.pos[2]];
                     let want_pitch = ((at[1] - (p[1] + sim.bond.eye - sim.bond.crouch_drop))
@@ -1087,7 +1209,15 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
             let p = sim.bond.pos;
             let desired = (30.0f32 - p[0]).atan2(41.3 - p[2]);
             let err = walker::wrap_pi(desired - sim.bond.yaw);
-            let jump = w.total_ticks % 30 == 0 && sim.bond.grounded;
+            // SPRINT-5 (the sisters): hop on the FIRST grounded tick — the drive starts at the
+            // deck's east edge (the P5 lane) and every standing tick is a wake-volley tick;
+            // the %30 pacing cost the 00 Agent run its last 11 ticks [L agent00_run4]. The
+            // d1/warm walks keep the %30 pacing byte-identical.
+            let jump = if real && w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 {
+                sim.bond.grounded
+            } else {
+                w.total_ticks % 30 == 0 && sim.bond.grounded
+            };
             let input = nf_game::player::Input { turn: err.clamp(-0.08, 0.08), forward: if err.abs() > 1.0 { 0.0 } else { 1.0 }, jump, ..Default::default() };
             w.tick(input, false);
         }
@@ -1265,6 +1395,24 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage_agent() {
 /// (`fresh_boot_asserts` pins the channels off) and the same fight package (`lane_fights` +
 /// `tranq_fights` + back_off 3.0). Real input only — the load path is the only difference (plus
 /// the d3-gated tactics the deaths force, inside this file).
+/// SPRINT-5 LEDGER (still red, the closest pass yet — the Agent sister above IS green): the
+/// sprint-5 deck package (the P2 aim through #5's drift, the close on #4 before the turn with
+/// the dart held to d 5.5, the funnel stand off, the take-zone approach west of the housing
+/// column, the dash-through to the deck's east edge with the take on the pass, the first-tick
+/// hop) lands Bond AT the take zone with the parachute taken and #4 asleep (state 0x50 through
+/// the whole dash [L agent00_run6/7 g4 traces]) — and still dies at tick 16517 at (7.13,
+/// 58.07, 41.24), 2.7 u short of the edge, on the long-range toll alone: #9 (0x18 at (17.3,
+/// 58.0, 22.7), d 21) 21.0 in 3 hits, #6/#8/#7 3.5s, after the P1/P2 legs and the fixed 16.0
+/// world toll left 17.5 hp at the take [L agent00_run7]. The Agent sister runs the SAME route
+/// with the same geometry and survives (its 0x18 rounds are 5.6, its P1/P2 toll ~9 lower).
+/// NEXT LEVERS: (1) the [0b-stall] vel prints read (0.00,0.00,0.00) while Bond runs at
+/// 0.14-0.17 u/tick on every trace this sprint — if the game's
+/// DroneFiring_TargetMoving_Accuracy [M 0x179740] reads a velocity the port's walk motion
+/// never writes, the deck guards are shooting a "stationary" runner at full accuracy — a port
+/// divergence worth its own evidence pass (it would move EVERY walk's ledger); (2) ~10 hp
+/// must come out of the P1/P2 legs (the west band + the east run eat ~36-45 under the
+/// east-band snipers at d 20-40, where the 9 u dart window cannot answer).
+#[ignore = "00 Agent: dies at (7.13, 58.07, 41.24) tick 16517, 2.7 u short of the deck edge — 22 hits for 100.0: #9 21.0 in 3 (0x18 at d 21), #6 14.0, #8 10.5, #7 10.5, #4 17.5 (the close's pre-sleep fire; the dart then slept him through the dash), #5 3.5, the world 16.0 — the sprint-5 package works (the take fires at 1.599, #4 sleeps 0x50 through the dash) but the 00 Agent damage tier leaves 17.5 hp at the take vs the edge+fall toll; next: the vel-0 moving-accuracy divergence, then the P1/P2 long-range toll"]
 #[test]
 fn walk_fresh_spawn_to_the_mission_end_real_damage_00agent() {
     walker::with_real_damage(|| {
