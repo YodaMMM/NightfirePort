@@ -4507,6 +4507,7 @@ impl Sim {
             // standins-drone-922: the facing yaw the flash factor reads [M 0x12d890:328-330].
             yaw: self.bond.yaw,
             cel: self.cel_at(self.bond.pos).and_then(|room| self.room_cell.get(room).copied().flatten()),
+            obj_cel: self.bond.cel,
             // The crouch substate drives the trigger toucher's pick-arm switch
             // (level-0a-ceiling-gun-route).
             crouched: self.bond.crouched,

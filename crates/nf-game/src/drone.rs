@@ -735,6 +735,13 @@ pub struct Player {
     /// The runtime cel the queries start from (obj+0x20 — fix-safe08b): the `pCelList` cell index in
     /// the world's `ScopeGraph`; `None` = the flat (unscoped) world.
     pub cel: Option<usize>,
+    /// The player object's own linked cel, `obj+0x20` as the movement pass relinks it
+    /// (`Bond::cel`, `control_handle_cel_change` 0x133288 → `build_LinkToRoom` 0x1c9680) — what
+    /// `DroneVision_CanSeeObjectFrom` 0x176f18 reads as the target's cel (`iStack_60 = target+0x20`
+    /// [M :21]) for the cel walk. `cel` above is the scene's smallest-box lookup (a different cell
+    /// where boxes nest: the 02 courtyard stair bottom reads 230 there, 13 here, the sniper's own
+    /// cel). `None` = unlinked or no body model (the walk is skipped).
+    pub obj_cel: Option<usize>,
     /// The crouch substate is live (`bond.crouched` at the build site): the trigger toucher
     /// switches to the game's crouch pick arm with it (level-0a-ceiling-gun-route).
     pub crouched: bool,
@@ -12192,8 +12199,8 @@ impl Drone {
         // sight through a wall into a room no portal along the ray reaches. An unresolved cel on
         // either side keeps the ray alone [S — the game answers 0 for a null cel, 0x15ab78:66-67; the
         // port's coarser find_cel can miss where the game's linked cel is valid].
-        let seer_cel = if player.cel.is_some() { d.world.find_cel(self.pos) } else { None };
-        let cels_ok = |from: V3, eye: V3| match (player.cel, seer_cel) {
+        let seer_cel = if player.obj_cel.is_some() { d.world.find_cel(self.pos) } else { None };
+        let cels_ok = |from: V3, eye: V3| match (player.obj_cel, seer_cel) {
             (Some(t), Some(s)) if t != s => d.world.ray_reaches_cel(t, from, eye, s).unwrap_or(true),
             _ => true,
         };
