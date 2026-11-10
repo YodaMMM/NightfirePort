@@ -531,7 +531,10 @@ impl WorldObjects {
                 }
                 0x3b => {
                     // DynamicObject_Create 0x18dbf8: p0/p1 (u16), p2 (u16), p3 (u8); obj+0xF0 = the
-                    // glist's +0x44 word (0x18dbf8:15-16), |0x30 when p0 != 0 (0x18dbf8:27-29).
+                    // glist's +0x44 word (0x18dbf8:15-16), |0x30 when the p0 SHORT != 0 (0x18dbf8:24,30-32 —
+                    // the level_tag slot is written u32 but read `*(short *)(param_3 + 0x2c)`, so only the
+                    // low 16 bits gate the OR; the census found no disc placement where the two differ [D
+                    // dynobj_p0_census], the unit test pins the short with p0 = 0x10000).
                     let (base, centre, shape) = glist(p);
                     // obj+0x90: CCO(0) → View_RotTransMatrix [M 0x18dbf8:13, 0x1344e0:26-29].
                     let m = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
@@ -546,7 +549,8 @@ impl WorldObjects {
                         dist: param(2) as u16,
                         mode: param(3) as u8,
                         base_flags: base,
-                        flags: if param(0) != 0 { base | 0x30 } else { base },
+                        // p0 as a SHORT [M 0x18dbf8:24] — the OR fires on the low 16 bits only.
+                        flags: if param(0) as u16 != 0 { base | 0x30 } else { base },
                         alpha: 0xff,
                         dead: false,
                         shape,
@@ -814,5 +818,100 @@ mod mine_tests {
         // Inside the sphere: full reach; a zero radius reaches nothing.
         assert!(m.blast_reaches([2.0, 0.0, 0.0], 10.0, 80.0));
         assert!(!m.blast_reaches([2.0, 0.0, 0.0], 0.0, 80.0));
+    }
+}
+
+/// The hidden-dynobj carry (dynobj-hidden-skip): `DynamicObject_Create` 0x18dbf8 ORs 0x30 into
+/// obj+0xF0 when the p0 SHORT is non-zero, and `DynamicObject_Update` 0x18d3b8 restores the raw
+/// glist word / re-ORs 0x30 with the mode-1 channel. The 0x20 bit of that word is in every
+/// `Collide_PickObj` skip set [M 0x1eae80:72-82], so a 0x30 object is never picked for any ray.
+#[cfg(test)]
+mod dynobj_hidden_tests {
+    use super::*;
+    use crate::triggers::Channels;
+
+    fn place(params: &[(u32, u32)]) -> nf_formats::placement::Placement {
+        nf_formats::placement::Placement { index: 0, hashcode: u32::MAX, flags: 0x3b, translation: [0.0; 3], rotation: [0.0; 3], params: params.to_vec(), extra: [0; 9] }
+    }
+
+    /// The real 07000007 rope barrier's word is 0x0 and the Dynamic Blocker's is 0x10 [D
+    /// dynobj_p0_census]; 0x81 is the probe's solar-panel word. None carries 0x10/0x20 bits the
+    /// OR would fold, so the expected words are exact.
+    fn create(params: &[(u32, u32)]) -> DynObject {
+        WorldObjects::create(&[place(params)], &[], |_| (0x81, [0.0; 3], 7)).dynobjs.remove(0)
+    }
+
+    /// `DynamicObject_Create` 0x18dbf8:15-16 copies the glist's +0x44 word; :24,30-32 OR 0x30 when
+    /// the p0 SHORT differs from zero — a p0 whose low 16 bits are 0 (0x10000) must NOT set them.
+    /// (The old port tested the full u32: red there, green since the short read.)
+    #[test]
+    fn create_or_the_hide_word_only_for_a_nonzero_p0_short() {
+        let base = 0x81u32;
+        assert_eq!(create(&[]).flags, base, "p0 absent: the raw glist word [M 0x18dbf8:15-16]");
+        assert_eq!(create(&[(0, 0)]).flags, base, "p0 == 0: the raw glist word");
+        assert_eq!(create(&[(0, 21)]).flags, base | 0x30, "p0 = 21 (07000007 pl 495 [D]): +0x30");
+        assert_eq!(create(&[(0, 1)]).flags, base | 0x30, "p0 = 1 (07000041 DynoRod [D]): +0x30");
+        assert_eq!(create(&[(0, 0x10000)]).flags, base, "p0 = 0x10000: the SHORT read is 0 [M 0x18dbf8:24]");
+    }
+
+    /// The create-time OR never adds bits beyond 0x30: a p0 = 9 'Dynamic Blocker' whose glist word
+    /// already carries 0x10 (07000007 pl 496 [D]) ends at word | 0x30 (0x10 folds into it).
+    #[test]
+    fn the_or_folds_into_a_sight_through_base_word() {
+        let w = WorldObjects::create(&[place(&[(0, 9)])], &[], |_| (0x10, [0.0; 3], 7)).dynobjs.remove(0);
+        assert_eq!(w.base_flags, 0x10);
+        assert_eq!(w.flags, 0x10 | 0x30);
+        assert_eq!(w.ch_a, 9, "the gate channel is the same p0 [M 0x18d3b8:9]");
+    }
+
+    /// `DynamicObject_Update` 0x18d3b8:9-15: a gated object frozen while its channel reads off, and
+    /// restored to the RAW word (the create-time OR gone) once it reads on — the record's word was
+    /// stored before the OR [M 0x18dbf8:21-23]. So a channel-on swap console becomes ray-pickable.
+    #[test]
+    fn gate_on_restores_the_raw_word_and_gate_off_freezes_the_create_word() {
+        // ch_a = 120, base 0 (the real 07000014 CONSOLE_Camera_Inactive record [D pl 801-813]).
+        let mut w = WorldObjects::create(&[place(&[(0, 120)])], &[], |_| (0, [0.0; 3], 7)).dynobjs.remove(0);
+        assert_eq!(w.flags, 0x30, "hidden at create");
+        let mut ch = Channels::default();
+        w.tick([0.0; 3], &ch);
+        assert_eq!(w.flags, 0x30, "channel off: the update returns, the create word stays [M 0x18d3b8:11-13]");
+        ch.set(120, 1, 2);
+        w.tick([0.0; 3], &ch);
+        assert_eq!(w.flags, 0, "channel on: obj+0xF0 = the record's raw word [M 0x18d3b8:14-15]");
+    }
+
+    /// Mode 1 (0x18d3b8:36-43): armed B ORs 0x30 back onto the live word; B off restores the raw
+    /// record word — so the channel toggles the object between ray-hidden and ray-pickable.
+    #[test]
+    fn mode_one_toggles_the_hide_word_with_channel_b() {
+        // 07000005's WallHug blockers are mode-1 records (p3 = 1) but ungated (p0 = 0) [D pl 324/325].
+        let mut w = WorldObjects::create(&[place(&[(1, 5), (3, 1)])], &[], |_| (0x10, [0.0; 3], 7)).dynobjs.remove(0);
+        let mut ch = Channels::default();
+        w.tick([0.0; 3], &ch);
+        assert_eq!(w.flags, 0x10, "B off: the raw word [M 0x18d3b8:40-43]");
+        ch.set(5, 1, 2);
+        w.tick([0.0; 3], &ch);
+        assert_eq!(w.flags, 0x10 | 0x30, "B armed: +0x30 [M 0x18d3b8:36-38]");
+        ch.set(5, 0, 4);
+        w.tick([0.0; 3], &ch);
+        assert_eq!(w.flags, 0x10, "B disarmed: the raw word again");
+    }
+
+    /// The word 0x30 the create ORs is what `Collide_PickObj` 0x1eae80:72-82 never picks: bit 0x20
+    /// sits in EVERY skip set. The game-side consequence (no part in the collision set) is pinned
+    /// end-to-end by dynobj_hidden_live; here the skip-word math itself.
+    #[test]
+    fn the_hidden_word_is_admitted_by_no_mask() {
+        for mask in [0u32, 0x1, 0x2, 0x4, 0x8, 0xc, 0xe, 0x20, 0xa27, 0x72f] {
+            assert!(!crate::world::pick_admits(mask, 0x30), "mask {mask:#x} must skip a 0x30 word");
+            assert!(!crate::world::pick_admits(mask, 0x20), "mask {mask:#x} must skip a bare 0x20 word");
+        }
+        // Sister: a plain word (0x81, the probe's solar panel) is picked by every mask; the bare
+        // sight-through 0x10 only by masks without bit 4 (the game's own hidden-flag [M :79-81]).
+        for mask in [0u32, 0xa27, 0xc, 0xe, 0x72f] {
+            assert!(crate::world::pick_admits(mask, 0x81), "mask {mask:#x} admits a plain word");
+        }
+        assert!(!crate::world::pick_admits(0xa27, 0x10), "mask bit 4 skips the 0x10 word");
+        assert!(crate::world::pick_admits(0x2, 0x10), "a mask without bit 4 admits the 0x10 word");
     }
 }
