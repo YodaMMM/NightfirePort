@@ -438,11 +438,30 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(difficulty: u32) {
 /// pass on real input, and the mission completes with Bond ALIVE at 26.2 hp ([L] the green
 /// run: 'objective 3 complete on the 0d arrival — the whole mission walked (0c legs 19287
 /// ticks + 0d 838 ticks)').
+/// los-mask-repins-0c-3 (GREEN — un-ignored): the 0c-2 ledger's post-ride lever closes it. The
+/// real-damage tree's fights shift every guard/round RNG draw downstream, so the #282 ride
+/// lands at its own spot ((4.9831,−223.2948) [L this branch's run] vs the plain run's
+/// (4.9688,−223.3107)) and the plain tree's single long "the ledge to the arc" leg overshot
+/// its arrival circle off the ledge's east edge — the measured fall to y 2.01 at
+/// (8.99,−222.09) at +114 ticks, the dxz-only arrival check reading "arrived" MID-FALL and
+/// the next leg wedging on the yard floor [L the run this round]. The fix is the ledger's
+/// lever, as the OPT-IN scope `with_strip_rd_post_ride` (set ONLY here; off = master
+/// behaviour for every other caller): mid-ledge stops placed POST-ride — they cannot re-time
+/// the #282 grab — at the plain run's own hold spot (7.10,−222.42) and at the arc west end's
+/// midpoint (10.5,−220.25), so every thin-floor arrival circle is met at walking speed. The
+/// crossing itself runs exactly the 0c-2 no-stand choreography: the moving west-lane leg, the
+/// 12-tick settle, the mid-band stop, the diagonals, the #282 ride — health 64.2 preserved
+/// through the crossing [L both rounds' runs]. Real input only; no health, armour or ammo
+/// writes anywhere; the top-up walk and the eastroute replay (flag off) keep master's pinned
+/// choreography.
 #[test]
-#[ignore = "los-mask-repins-0c-2 (2026-11-10): the west-ledge strip crossing is SOLVED on the real-damage tree up to the #282 ride — the flag scope's own choreography walks it: the fights draw the strip guard #35 off his post (the west-edge stands' gunfire [L the run]), so the no-stand path runs: the MOVING west-lane leg (the drop spot slides Bond off after ~100 idle ticks [L the switch run's y 1.03 fall] and the fights leave his yaw on the last fight target — walk_to's turn-first phase stood still ~130 ticks and fell to y 1.96 [L]), the 12-tick settle, the mid-band stop (-7.0,-218.8; the -8.44 thin wall wedge's rescue arc overshot the band edge and fell to y 2.93 [L]), the diagonals, the #282 ride — ALL held (health 64.2 preserved [L this branch's run]). THE REMAINING BLOCKER: the thin-floor legs AFTER the ride are tick-sensitive — the ride landing shifts ~0.02 u when any leg before the grab re-times it, and the arc ledge leg then overshoots its arrival circle off the east edge (the fall to y 2.01 at (8.99,-222.09) [L the plain run's re-roll] — the pushed-green landing (4.9688,-223.3107) holds at +55 ticks, the shifted (4.9831,-223.2948) falls at +114). The fights' RNG draws shift every guard/round draw downstream, so the real-damage tree's ride lands at its own spot and the arc leg needs the real-damage tree's own arrival fix — the next round's lever: a real-damage-scoped mid-ledge stop NORTH of (8.0,-222.0) (the plain run's hold was at (7.10,12.71,-222.42) — the NORTH side), placed post-ride so it cannot re-shift the ride, plus the same treatment for the arc west end; the return-fire suppression scope (STRIP_NO_FIGHTS) already arms at the crossing and lifts past the thin floors. The landing-shot question is ANSWERED and pinned in walkreal0c.rs's flag branch: the held weapon at the landing is the MICRO-CAMERA 0x54 (no round spawns [M scene.rs:5002]) — the old dry-gun readings were the camera's clip — and the aimed 0x1e shot from the west lane lands (killed true [L the plain runs])."]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
     walker::with_yard_aimed_stands(|| {
-        walker::with_far_sniper_stands(|| walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff))
+        walker::with_far_sniper_stands(|| {
+            walker::with_strip_rd_post_ride(|| {
+                walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff)
+            })
+        })
     });
 }
 
