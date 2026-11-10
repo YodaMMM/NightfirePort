@@ -80,3 +80,14 @@ four binaries listed.
 not visible to me (no token/credit/context-window figures are exposed in this environment; the
 session wall-clock: 12:59 UTC start, ~14:58 UTC sandbox expiry — the work finished inside the
 first half hour).
+
+## ntfy failed
+
+All three fallbacks, in order, with their exact output:
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "…" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'guard-capsule-05-down-bump-harness: done', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "guard-capsule-05-down-bump-harness: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → exit 124 (the 25 s / 40 s tool timeouts killed it; three attempts, no connection
+   established — unlike the previous session, where this fallback returned exit 0).
