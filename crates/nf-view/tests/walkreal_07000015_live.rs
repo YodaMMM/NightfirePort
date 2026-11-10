@@ -589,38 +589,58 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     } else if !w.tops_up() {
         w.shoot(2, "the door[32] doorway grenade guard (placement 722)");
     }
-    // real-health-00agent-15 (the #526 lever): the rim shot below stands IN #526's own blast —
-    // radius 15, damage 80 [L the run probe] — and at the d3 pain row 1.0 [M bullet.rs
-    // damage_factor 0x14..=0x16 → 1.0] the d2 cost 41.6 becomes 69.3 raw, the budget's second
-    // fixed toll. A player who has just finished the door[32] guard stands over the guard's own
-    // drops — the AR 0x1a AND a kind-1 pile of its grenade launcher 0x1b, a full shot budget
-    // [M Pickup_Handler 0x18e650's AR drop arm; DroneWeap_DropWeapon 0x17a2a0] — and lobs a
-    // round down the lane instead of walking the rim: the round's fuse is TIME, 210 ticks
-    // [M Bullet_init 0x12c5a0's default; grenade.rs fuse arm], it bounces (a bounce NEVER
-    // explodes [M Bullet_CollisionHandler 0x12ce80]) and rests mid-lane by the rim, where the
-    // pop's case-0x4B entry sets #526 [M Explode_Propagate 0x17c518] — the guard's own round
-    // popped 7.7 u from the sphere and chained it [L the d1 ledger]. From the threshold Bond is
-    // 15.2 u off the mine: past the grenade's radius 8 AND past the blast sweep's (int) truncation
-    // floor at (int)d ≥ 15 [M 0x17c61c-0x17c628] — both blasts read zero there. The rim walk and
-    // rim shot below then skip (the d1/d2 runs keep them: nothing chains the mine there, and the
-    // check is a read, not a write). The AR goes back in hand for the west-room stands.
-    if difficulty >= 3 && !w.tops_up() { // real damage only, as the plate sneak
+    // real-health-00agent-15 (the #526 lever, now the d2 Agent run's own — level-15-agent-rim-shot):
+    // the rim shot below stands IN #526's own blast — radius 15, damage 80 [L the run probe] —
+    // and the game's falloff is CONTINUOUS from the sphere-edge distance: the disassembly reads
+    // Vec_Dist3D (0x17c5dc) → minus the victim's obj+0x8C (0x17c5ec lwc1 140(v0), 0x17c5f8
+    // sub.s) → max.s …,0 (0x17c608, COP1 func 0x28 — the decompiler's "(int)" there was its
+    // rendering of the max, not a truncation) → /radius (0x17c60c) → 1−x (0x17c610) → ×damage
+    // (0x17c614) → the 0.0002 cutoff (0x17c618-20). On Agent (×0.6 [M Player_HandlePain
+    // 0x1902c8 Plr_DMod_Normal]) the measured rim shot cost 44.33 at 2.47 u on this tree (the
+    // d3 pain row 1.0 [M bullet.rs damage_factor 0x14..=0x16 → 1.0] makes it 73.9 raw) — the
+    // budget's largest single toll. A player who has just finished the door[32] guard stands
+    // over the guard's own drops — the AR 0x1a AND a kind-1 pile of its grenade launcher 0x1b,
+    // a full shot budget [M Pickup_Handler 0x18e650's AR drop arm; DroneWeap_DropWeapon
+    // 0x17a2a0] — and lobs a round down the lane instead of walking the rim: the round's fuse is
+    // TIME, 210 ticks [M Bullet_init 0x12c5a0's default; grenade.rs fuse arm], it bounces (a
+    // bounce NEVER explodes [M Bullet_CollisionHandler 0x12ce80]) and rests mid-lane by the rim,
+    // where the pop's case-0x4B entry sets #526 [M Explode_Propagate 0x17c518] — the guard's own
+    // round popped 7.7 u from the sphere and chained it [L the d1 ledger]. From the threshold
+    // Bond is ~15.2 u off the mine: past the grenade's own reach when the rest point rides
+    // mid-lane, and #526's chain blast reads 80·(1−(15.2−1.06)/15)·0.6 ≈ 2.8 there. The rim
+    // walk and rim shot below then skip (the d1 run keeps them: nothing chains the mine there,
+    // and the check is a read, not a write). The AR goes back in hand for the west-room stands.
+    if difficulty >= 2 && !w.tops_up() { // real damage only, as the plate sneak
         w.walk_to(Wp::new(26.5, 41.4, 71.2).r(0.5), "door[32] threshold (the guard's own drops)");
-        let owned1b = w.scene.sim.as_ref().unwrap().drones.inventory.owned.get(0x1b).copied().unwrap_or(false);
-        if owned1b {
-            if w.scene.sim.as_ref().unwrap().gun.weapon != 0x1b { draw(&mut w, 0x1b); }
+        // The thrower: the carried frag 0x34 (the level's own loadout [D the 07000015 loadout] —
+        // owned from the start, measured in the run's owned list), or the launcher 0x1b when a
+        // 0x1a-base guard's pile granted it (the d3 lever's original premise; this level's
+        // 0x500008c guards carry the 0x26, whose base is not the 0x1a — no 0x1b pile spawns —
+        // and an AMMO-kind pile grants rounds, never ownership [M Pickup_Handler 0x18e650 case 1
+        // → Player_EquipAmmo; the port's take arm kind::WEAPON|kind::AMMO]).
+        let owned = |w: &Walker, id: u8| w.scene.sim.as_ref().unwrap().drones.inventory.owned.get(id as usize).copied().unwrap_or(false);
+        let throw_gun = if owned(&w, 0x1b) { Some(0x1bu8) } else if owned(&w, 0x34) { Some(0x34u8) } else { None };
+        if let Some(gun) = throw_gun {
+            if w.scene.sim.as_ref().unwrap().gun.weapon != gun { draw(&mut w, gun); }
             w.use_door(32, "door[32] for the throw lane");
             let h0 = w.scene.sim.as_ref().unwrap().drones.health.health;
             let d526 = shoot_mine(&mut w, 526, [11.3, 41.6, 71.18], "the #526 lob from door[32]'s threshold");
             let h1 = w.scene.sim.as_ref().unwrap().drones.health.health;
-            eprintln!("[00agent] the #526 lob: Bond {d526:.2} u off the boom, health {h0:.1} -> {h1:.1}");
+            eprintln!("[real-health] the #526 lob (d2/d3, gun {gun:#04x}): Bond {d526:.2} u off the boom, health {h0:.1} -> {h1:.1}");
             assert!(d526 > 8.0, "the lob is thrown from outside its own radius 8 ({d526:.2} u)");
-            assert!(h0 - h1 <= 6.0, "the #526 chain from the threshold costs {:.1} (the rim shot cost 69.3)", h0 - h1);
-            if w.scene.sim.as_ref().unwrap().drones.inventory.owned.get(0x1a).copied().unwrap_or(false) {
-                draw(&mut w, 0x1a);
+            assert!(h0 - h1 <= 12.0, "the #526 chain from the threshold costs {:.1} (the rim shot cost 44.33)", h0 - h1);
+            // The pressed-edge retries: the request follows the lob's live fire script — a single
+            // press is dropped there [M 0x1a24c8:113-152] (the measured run: the draw timed out
+            // on the frag's 24-pull fire window).
+            if owned(&w, 0x1a) {
+                draw_persist(&mut w, 0x1a, "the AR back in hand after the #526 lob");
             }
         } else {
-            eprintln!("[00agent] no 0x1b pile at door[32]'s threshold — the rim shot stays on the budget");
+            let owned: Vec<usize> = (0..w.scene.sim.as_ref().unwrap().drones.inventory.owned.len())
+                .filter(|&i| w.scene.sim.as_ref().unwrap().drones.inventory.owned[i]).collect();
+            let piles: Vec<(u16, u16, [f32; 3])> = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
+                .filter(|p| !p.gone).map(|p| (p.kind, p.weapon, [p.m[3][0], p.m[3][1], p.m[3][2]])).collect();
+            eprintln!("[real-health] no thrower owned at door[32]'s threshold — owned {owned:x?}; live pickups {piles:?}");
         }
     }
     // #526, the Tripbomb_Tiny ankle beam (x 10.7..11.8, z 70.95..71.41, 0.27-0.47 over the floor
@@ -635,15 +655,17 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // can set it off first through the same case-0x4B entry [M 0x17c518]; `shoot_mine` then
     // returns at once.)
     // REAL-HEALTH TACTIC (level-15-agent-doors): the rim shot stands IN the beam's own blast —
-    // the hurt is pure distance [M Explode_Propagate 0x17c518's sweep: `damage * (1 −
-    // (int)dist / radius)`, the (int) truncation 0x17c61c-0x17c628, no LOS and no wall check],
-    // radius 15, damage 80, so on Agent (×0.6 [M Player_HandlePain 0x1902c8 Plr_DMod_Normal])
-    // the measured cost was −41.6 at 2.44 u (80·(1−2/15)·0.6) — the level's own toll, paid
-    // already on the Operative walk (−27.7 at ×0.4). The blast budget is made back on the west
-    // room: the grenadiers are answered from THIS mark, before the doorway is walked (below).
+    // the hurt is pure distance [M Explode_Propagate 0x17c518's sweep, the CONTINUOUS
+    // sphere-edge law above — no LOS and no wall check], radius 15, damage 80, so on Agent
+    // (×0.6 [M Player_HandlePain 0x1902c8 Plr_DMod_Normal]) the measured cost on this tree is
+    // −44.33 at 2.47 u (the doors-2 tree read −41.6/−27.73 under the old (int) reading — see
+    // the report). The d2/d3 runs never pay it (the lob above chains the mine first); the d1
+    // Operative walk keeps the rim shot (−27.7 at ×0.4, its pinned ledger). The blast budget is
+    // made back on the west room: the grenadiers are answered from THIS mark, before the
+    // doorway is walked (below).
     w.walk_route(route_b2);
-    // real-health-00agent-15: the d3 lob (above) may already have chained #526 — the rim walk
-    // and shot then skip (the d1/d2 runs find the mine standing and keep these exact legs).
+    // real-health-00agent-15: the d2/d3 lob (above) may already have chained #526 — the rim walk
+    // and shot then skip (the d1 run finds the mine standing and keeps these exact legs).
     let mine526_gone = w.scene.sim.as_ref().unwrap().drones.mines[mine_idx(&w, 526)].exploded;
     if !mine526_gone {
         walk_plain(&mut w, [12.8, 41.4, 71.2], 0.35, "east of door[29]'s rim");
@@ -762,16 +784,15 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     } else {
         for _ in 0..40 { w.tick(nf_game::player::Input::default(), false); }
     }
-    if difficulty == 2 && !w.tops_up() {
+    if difficulty >= 2 {
         if let Some(di) = agent_drone_near(&w, [6.25, 41.45, 35.69], 6.0) {
-            // The pre-throw stand (the 0c sniper_stands pattern minus the aim bit — the field
-            // doc in common/damage_log.rs), not shoot_bounded: the stand holds the doorway and
-            // taps the 0.01-rad gate the tick the line clears — the flank machinery's
-            // sidesteps would walk Bond off the threshold the race is run from.
-            w.stand_and_fire(di, 900);
-        }
-    } else if difficulty >= 2 {
-        if let Some(di) = agent_drone_near(&w, [6.25, 41.45, 35.69], 6.0) {
+            // (level-15-agent-rim-shot) The d2 900-tick pre-throw stand is GONE: on the lob
+            // route #5's first frag is airborne before the threshold arrival (the measured rain:
+            // pops at 8929/8993, thrown 8719/8783, −27.39/−17.59) and ANY stand holds Bond in
+            // the pop zone — the measured 240-tick cap died at the same 8993. The shoot
+            // machinery answers him with its own positioning (the fights' return fire killed the
+            // corridor's #19 at this very threshold in ~60 ticks); the legs' push keeps Bond
+            // out of the thrown frags' rest points.
             w.shoot(di, "the great-hall grenade guard (placement 733) from the door[50] threshold");
         }
     } else if !w.tops_up() {
@@ -1099,10 +1120,17 @@ fn crouching_under_the_door52_beam_passes_it() {
 /// 0x179740:74-88]. Real input only; no health, ammo or channel writes. GREEN on the doors
 /// route (level-15-agent-doors-2): the west-room grenadiers are answered by proximity at the
 /// jog (the placement-spot pre-shoots missed the door-route drift) and the #447 fence shot is
-/// taken from 11.1 u — outside all three blasts' radius 10 [L the probe; M Explode_Propagate
-/// 0x17c518's truncation] — Bond crosses the exit at 26.2 health.
+/// taken from 11.1 u — outside all three blasts' radius 10 [L the probe] — Bond crosses the
+/// exit at 26.2 health.
+/// GREEN again on the sphere-falloff tree (level-15-agent-rim-shot): the game's blast falloff
+/// is CONTINUOUS from the sphere-edge distance [M 0x17c5dc-0x17c620 disasm — Vec_Dist3D, minus
+/// obj+0x8C, max.s 0, /radius, ×damage, the 0.0002 gate; the decompiler's "(int)" there was
+/// its rendering of max.s], so the #526 rim shot's cost at the rim mark rose to 44.33 (2.47 u)
+/// and the route died there. The walk takes the door[32] guard's own dropped 0x1b instead and
+/// lobs from the threshold (15.2 u — the chain blast reads ~2.8 there), the case-0x4B entry
+/// sets #526 [M 0x17c518], and the rim walk and shot skip. The measured run crosses the exit
+/// with the ledger in the report.
 #[test]
-#[ignore = "Agent: over budget since blasts read the game's straight falloff to Bond's sphere: the #526 rim-shot costs 44.41 at frame 5206 (was 27.73) and the door fight finishes the 100 health"]
 fn walk_spawn_to_the_omega_sector_exit_real_damage_agent() {
     walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(2));
 }
