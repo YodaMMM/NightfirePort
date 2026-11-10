@@ -114,3 +114,15 @@ Work log:
 - The fast suite (tools/test/suite.py): background starts are killed between tool calls in this
   sandbox (verified again this session) — not run; the per-binary totals above are the tree's
   state. 03/05's prior-session ignores stand untouched.
+
+## los-mask-attrib
+Started 2026-11-10 06:40 UTC. Branch s/los-mask-attrib cut from origin/s/los-mask-01-walk-2
+(73a33ac5a), merged origin/master (6a4fcf4ef).
+Task: los-mask-01-walk-2's "What's left" items 3+4 — attribute each failure (mask change vs
+master's own merge) by running on both, then fix in the game's order (red on old code) or
+repair the walk gated to its level: 09's alarm-switch nav route (NodesForPosition cel search
+vs game [M 0x1586a8]), 13's plain-walk doorway probe (door swing vs merged solid bodies),
+guard_rounds_glass's 07000003 glass stop. Real input only, never lower damage/health.
+
+Work log:
+- (06:40) branch created, merged master clean, WORKLOG entry, checkpoint push.
