@@ -18,3 +18,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
   is on your branch: merge `origin/master` first). Read `tail -1 suite.out` and its FAILED/TIMEOUT lines before you push, and
   run it once more on your final tree (merged with `origin/master`). Report the total line.
 
+
+---
+## Closed (2026-11-10T09:07Z)
+Superseded: mp-bot-combat-moves merged in 4c2203cc6 via join-1110-mp with every mp_* binary, mp_world_sync_live and the nf-game lib run green (the join fixed the 3-option dodge draw, the opponent-facing gate and removed the dodge state for bot mode 0x1e).
