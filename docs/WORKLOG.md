@@ -85,3 +85,13 @@ ignores" — this round attacked the three ledgered reds.
   clear, NDrone2_DealWithObjHit 0x13fff0:181-232), the 0c handoff + the 0c east-route ground route
   (wire #282 B-end reach miss), the 11 south-band doorway wedge. Per-level walks, no sim changes,
   helpers gated to their level. Worklog started, checkpoint 1 pushed.
+
+## pretrans-arms-5 (2026-11-10, round 2)
+
+- Merged current master twice (c5b093674 took master's run_slab_ambush helper). 01 mayhew
+  UN-IGNORED GREEN on the merged tree (the master sight/door commits moved the gallery
+  crossfire; 417 s run). The aim-fix collateral ledgered: three 01 descent reds (the contact
+  stalls under two parked guards, escort fails before the plate) with the measured mechanism
+  and the next lever. 0c/11 ledgers stand. Full suite did not fit (9.9 GB disk, background
+  jobs killed); per-binary chunks green: nf_game 782, others 1246, the four walk binaries
+  green with their ledgers. Report: docs/reports/pretrans-arms-5.md.
