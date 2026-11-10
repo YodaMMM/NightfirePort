@@ -2115,23 +2115,18 @@ fn behind_the_in_way_contact(w: &Walker, ci: usize, head: V3) -> Option<V3> {
     Some([cp[0] + hx / hl * 4.0, cp[1], cp[2] + hz / hl * 4.0])
 }
 
-/// IGNORED with the measured reason (pretrans-arms-4, 2026-11-10 [L the 01f run on this
-/// tree]): the -3 report's "the AND-touch plate never fires" is the ESCORT'S DEATH, not a
-/// plate miss — the follow ends with the contact at (-32.78,6.34,7.34) in state 0x47
-/// (DSTATE_Dead [M drone.rs:7704 — NDrone2_SetAsDead runs from DSTATE_Dead 0x47]) with
-/// level_exit already Some (the mission-fail restart), ch 0x10 None; the touched_by=false
-/// readings in the -3 run were on a dead contact. He is killed by GUARD fire during the
-/// stairwell-head clear (the top-up walk keeps only BOND alive; the game's bullets land on
-/// any drone of the other side [M NDrone2_DealWithObjHit 0x13fff0:181-232 — a team-1 shooter
-/// lands on teams 2/3]; the walk's `shield` models only BOND's own rounds). The walk is a
-/// top-up walk: none of this round's real-damage levers (volley_carrier_first, legs_keep_off)
-/// apply to it, and the run on this tree is identical to the -3 tree's. NEXT LEVER: clear the
-/// stairwell-head guards BEFORE the contact crosses under the gallery (the clear_around band
-/// is Bond-radius 14 around the contact — a forward band on the contact's route ahead), or
-/// extend the fire_shield cone model to hold Bond's taps wider while the contact is in the
-/// guard lines (the audit-voice-triggers-2 cone is already there; the crossfire is the
-/// guards').
-#[ignore = "pretrans-arms-4 ledger: the contact is KILLED by guard crossfire during the stairwell-head clear (state 0x47 DSTATE_Dead, level_exit = the mission-fail restart, ch 0x10 None [L the 01f run]) — the -3 report's 'plate never fires' was the death, not a plate miss; the walk is top-up so this round's real-damage levers don't apply; next lever: clear the gallery guards before the contact crosses under them (a forward band on the contact's route ahead)"]
+/// GREEN un-ignored (pretrans-arms-5, 2026-11-10 [L the 01f run on the merged tree]):
+/// pretrans-arms-4's ledger (the contact killed by guard crossfire during the stairwell-head
+/// clear, state 0x47) no longer reproduces after the merge with current master — the guard
+/// sight/door-leaf commits (823ff190b "Guards see the way the game's do", c120d7b49
+/// "Countdown guards slide along a door leaf instead of freezing at it") moved the gallery
+/// holders' burst lines off the contact's wait spots: the same walk, unchanged, now ends with
+/// the contact parked in AllyLeadDone ON the plate (-33.11,2.94,14.31), ch 0x10 fired at the
+/// first plate-wait tick, level_exit Some(0x07000002) [L the 417 s run]. The history stays
+/// for the record: he was killed by GUARD fire (the top-up walk keeps only BOND alive; the
+/// game's bullets land on any drone of the other side [M NDrone2_DealWithObjHit
+/// 0x13fff0:181-232 — a team-1 shooter lands on teams 2/3]; the walk's `shield` models only
+/// BOND's own rounds).
 #[test]
 fn following_mayhew_down_completes_the_level() {
     let iso = iso();
