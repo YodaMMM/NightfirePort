@@ -19,3 +19,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox4 at 2026-11-10T18:45Z
+
+---
+## Report (done, 2026-11-10T19:46Z)
+
+Closed by the driver: the report is on `s/los-mask-repins-03` (docs/reports/los-mask-repins-03.md); the worker didn't run finish.sh.
