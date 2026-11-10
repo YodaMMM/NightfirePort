@@ -724,6 +724,22 @@ fn open_the_pad_lid(w: &mut Walker) {
     panic!("the pad's vent lid never opened to E from {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
 }
 
+/// The landing's drop-foot guard.
+fn shoot_the_drop_foot_guard(w: &mut Walker) {
+    // The low-floor room guard (drone 5) can already stand at the drop's foot when Bond reaches the
+    // landing: with the game's sight round robin [M DroneVision_ProcessDroneSight 0x176a28]
+    // he reaches AimStandFire 0x68 at (32.25, 1.80, 33.58) before the drop, and Bond's
+    // capsule rests on his (grounded false at y 2.33, health 100 [L this branch's stuck
+    // dump]) for the whole 2400-tick cap. The player shoots down at him from the landing
+    // first (a no-op when no hostile is within 4 u), the hand gun 0x2 up in place of the
+    // duct's Q-Claw as below.
+    if w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| d.present && d.enabled && !d.corpse
+        && d.health > 0.0 && d.team == 1 && walker::dxz(d.pos, w.scene.sim.as_ref().unwrap().bond.pos) < 4.0) {
+        for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x2), ..Default::default() }, false); }
+        clear_hostiles(w, 4.0, 900);
+    }
+}
+
 /// From the low machine floor to the leg-2 spot on the facility corridor. The old legs stepped
 /// west over the sill through the window between the machine room and the corridor; that window
 /// is a live glass pane (the breakable's collision x 30.62..31.27, y 1.34..2.97, z 30.82..35.68),
@@ -789,6 +805,7 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
         w.walk_to(Wp::new(34.57, 2.80, 37.18).r(0.9), "the pad's south-west step head");
         open_the_pad_lid(&mut w);
         w.walk_to(Wp::new(33.09, 2.37, 35.38).r(0.8), "the 1.72 landing");
+        shoot_the_drop_foot_guard(&mut w);
         // The drop west: the low floor's east margin sits under the landing slab's overhang (the
         // slab top is the 1.72 landing; the walk's grounded wedge at (33.68, 1.15, 35.20) with a
         // clear segment to the target is the overhang catch), so the westing is the player's own
@@ -1843,6 +1860,7 @@ fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
         w.walk_to(Wp::new(34.57, 2.80, 37.18).r(0.9), "the pad's south-west step head");
         open_the_pad_lid(&mut w);
         w.walk_to(Wp::new(33.09, 2.37, 35.38).r(0.8), "the 1.72 landing");
+        shoot_the_drop_foot_guard(&mut w);
         {
             let start = w.total_ticks;
             loop {
