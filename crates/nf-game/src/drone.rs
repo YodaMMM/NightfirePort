@@ -10852,11 +10852,24 @@ impl Drone {
                 }
                 true
             }
-            // JustStand 0xb6 (`NDrone2_DSTATE_JustStand` 0x173fc0): the sway-in-place stand; the port
-            // keeps the stand anim only (the sine sway's +0x38 write has no reader in the port).
+            // JustStand 0xb6 (`NDrone2_DSTATE_JustStand` 0x173fc0): the sway-in-place stand.
             (crate::kiko::JUST_STAND, msg::ENTER) => { self.call_anim(d, anim_state::STAND_IDLE, 0, 0); true }
-            // UPDATE (case 3): `+0x38 = 1` [M 0x173fc0:16] — the stand never root-moves (`root_zero`).
-            (crate::kiko::JUST_STAND, msg::UPDATE) => { self.root_zero = true; true }
+            // UPDATE (case 3) [M 0x173fc0:15-23]: `+0x38 = 1` — the stand never root-moves
+            // (`root_zero`). The sway the pretrans-arms-5 review found missing: the desired yaw
+            // drifts `+0x694 += 0.01` a frame [M :17], and the position traces a small sine
+            // circle — `obj+0x30 += sin(GameState frame · 0.005) · 0.01` [M :18-19],
+            // `obj+0x38 += sin(frame · 0.005 + 1.5707964) · 0.01` [M :20-22]. `GameState._52_4_`
+            // is the game's global frame counter (the timers read it as "now"); the port's
+            // `drones.frame` is the same tick clock. The writes go straight to the obj position,
+            // no collision pass.
+            (crate::kiko::JUST_STAND, msg::UPDATE) => {
+                self.root_zero = true; // [M 0x173fc0:16]
+                self.desired_yaw += 0.01; // [M 0x173fc0:17]
+                let t = frame as f32 * 0.005;
+                self.pos[0] += t.sin() * 0.01; // [M 0x173fc0:18-19]
+                self.pos[2] += (t + 1.5707964).sin() * 0.01; // [M 0x173fc0:20-22]
+                true
+            }
             // HostageGoToGoalPosition 0x64 (`NDrone2_DSTATE_HostageGoToGoalPosition` 0x165a68): UPDATE
             // runs the route — moving → run anim, arrived (3) → the return state `+0x5A2`, blocked
             // (9/0xC) → the stand anim [M case 3]; msg 0x1b → the return state (unmodelled message).
@@ -11789,12 +11802,23 @@ impl Drone {
     /// callers keep their own face-the-opponent fold (`SetAngleToObj`, :56) otherwise.
     /// (`+0x4F4 & 0x8000000` [M :20] has no setter in the decompile — only the zeroing stores at
     /// 0x14a2f0:11 / 0x14b300:59 [S] — so it is not modelled.)
+    ///
+    /// pretrans-arms-5 review fix (a): the under-0.9 cone branch is `[M 0x178ae0:34-36]
+    /// if (ABS(diff) < 0.9) return 1;` — the game returns HANDLED and turns NOTHING (the return
+    /// sits before the anim test, so the run anim and the +0x38 store are both skipped), and every
+    /// caller either ignores the return (AltAttack 0x167488:24-27 case 3 calls `(1,1)` and drops
+    /// it) or re-checks the angle itself. The old port returned `false` there, which fired the
+    /// callers' face-the-opponent folds and snapped an already-facing aiming guard to Bond.
     fn aim_run_arm(&mut self, d: &Data, cone: bool) -> bool {
-        if !self.opp_ptr() || !matches!(self.anim.state, 0x1e | 0x1f) { return false; }
+        if !self.opp_ptr() { return false; }
         let diff = angle_difference(self.yaw_to_opp, self.yaw);
-        if cone && diff.abs() < 0.9 { return false; }
-        self.desired_yaw = self.yaw - diff * 0.5;
-        if self.can_move(d, 0.0, 0.4) { self.root_zero = true; }
+        // [M 0x178ae0:34-36] handled, NO turn — the folds must not run.
+        if cone && diff.abs() < 0.9 { return true; }
+        // The non-run anim's SetAngleToObj(0, ·, opp, 0) [M :55-56] — the port folds it in the
+        // callers (`desired_yaw = yaw_to_opp`), so `false` here keeps that.
+        if !matches!(self.anim.state, 0x1e | 0x1f) { return false; }
+        self.desired_yaw = self.yaw - diff * 0.5; // [M :48-49]
+        if self.can_move(d, 0.0, 0.4) { self.root_zero = true; } // [M :50-53]
         true
     }
 
