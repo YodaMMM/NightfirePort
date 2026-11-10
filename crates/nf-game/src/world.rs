@@ -1356,6 +1356,16 @@ impl CollisionWorld {
         self.straddle(start, &mut Self::ray_portal_hit(from, to))
     }
 
+    /// `AINetwork_TestRayCels` 0x15ab78: `Collide_StraddleCels` 0x1eac98 from `start` along the
+    /// ray `from → to` (the HITTEST the caller built: each portal's two triangles against the
+    /// segment, `Intersect_Portal` 0x1ea7b8 — the same walk `scoped_runs` takes), then 1 when
+    /// `need` is among the reached cels [M 0x15ab78:70-86]; a null cel on either side answers 0
+    /// [M :66-67]. `None` here when the world has no scope graph (the flat world: no cel walk).
+    pub fn ray_reaches_cel(&self, start: usize, from: V3, to: V3, need: usize) -> Option<bool> {
+        self.scope.as_ref()?;
+        Some(self.straddle(start, &mut Self::ray_portal_hit(from, to)).contains(&need))
+    }
+
     /// Debug introspection (level-15-ladder-3): the scope graph's cell boxes and room flags, so a
     /// test can ask which cel boxes contain a point without reaching into the private `ScopeData`.
     pub fn debug_scope_cells(&self) -> Vec<([f32; 3], [f32; 3], bool)> {

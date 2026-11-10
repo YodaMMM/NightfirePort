@@ -62,11 +62,16 @@ fn wake(sim: &mut Sim, i: usize) {
     assert!(d.enabled, "placement {} wakes, ch {ch:#x}, state {:#x}", d.placement, d.state);
 }
 
-/// A blast at the actor's feet, owned by `owner`.
+/// A blast at the actor's feet, owned by `owner`. The fuse is `range − travelled` ticks
+/// (grenade.rs): 2, so the blast lands before the actor can answer it. An escort with the fear
+/// props 0x3a/0x3b that has the grenade in view takes the explosive message and runs
+/// [M DroneFunc_HandleExplosives 0x1435f0:30-52] — 07000001 #161 does on a 60-tick fuse once he
+/// sees Bond 2.3 u away at the start and leads (AllyLeadInit → AllyLeadWait at < 3.0
+/// [M 0x15e4f0 case 3]), and the run carries him out of the 1.0 radius.
 fn blast_at(sim: &mut Sim, pos: [f32; 3], owner: usize, damage: f32) {
     sim.drones.grenades.push(nf_game::grenade::Grenade {
         pos, velocity: [0.0, 0.0, 0.0], speed: 0.0,
-        travelled: 0.0, range: 60.0, damage, radius: 1.0, weapon_type: 0x34, mesh: 0x0200_0726, owner, state: 0, bounces: 0, smoke_popped: false, resting: false,
+        travelled: 0.0, range: 2.0, damage, radius: 1.0, weapon_type: 0x34, mesh: 0x0200_0726, owner, state: 0, bounces: 0, smoke_popped: false, resting: false,
         stuck: false, seek_target: None,
         phase: None,
         burn: 0,

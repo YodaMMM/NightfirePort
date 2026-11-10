@@ -12157,13 +12157,10 @@ impl Drone {
     /// 0.4 from the centre, y kept), TO the drone's eye (`NDrone2_CanSeeObject` 0x1785e0:36-46:
     /// `NDrone2_GetHeadPos`, clamped the same way — the port's `head()`), through
     /// `Collide_LineOfSight` 0x1edf50 (`!Collide_RayIntersect`) with mask `0xa27`. The
-    /// `AINetwork_TestRayCels` pre-pass (:65-67) is the port's world ray, as before [S] — the
-    /// game's pre-pass is an AI-cel REACHABILITY check, not a geometry ray: it builds the ray
-    /// hit-test and `Collide_StraddleCels`, then requires the TARGET's cel to be among the
-    /// straddled cels (same-cel passes outright) [M 0x176f18:65-67 + 0x15ab78:44-66]; a ray the
-    /// port's world clears but whose cel path never straddles the target cel is BLOCKED in the
-    /// game (ledge/hole edges). Port sketch: straddle-walk the port's nav cels along the ray and
-    /// require the target cel in the set.
+    /// `AINetwork_TestRayCels` 0x15ab78 pre-pass (:65-67) is an AI-cel REACHABILITY check, not a
+    /// geometry ray: when the target's cel differs from the seer's, `Collide_StraddleCels` from the
+    /// TARGET's cel along bone → eye must reach the SEER's cel, else "not seen" with no collision
+    /// ray [M 0x176f18:65-67, 0x15ab78:66-86] — `cels_ok` below (`CollisionWorld::ray_reaches_cel`).
     /// (`+0x3a0 & 0x30000000` adds a second `CanSeeObjectFrom` from `+0x3b0` whose result is
     /// dropped, :95-98 — no effect.)
     /// Without posed bones (`bones == None`) the port's single chest point stands in.
@@ -12182,15 +12179,32 @@ impl Drone {
         // 07000011 (the d2 idle-Bond stall — a 0.33×0.18 mat-0x06 patch at y 48.232 grazing the
         // ray between the corridor guards and the spawn; world.rs::line_of_sight_scoped). A
         // snapshot without a cel (None) and a portal-BFS miss keep the unscoped walk.
+        // The cel walk before the ray [M 0x176f18:65-67, disasm 0x176fa8-0x176fbc: `a3 = seer
+        // cel; beq target cel, a3` skips it; else `AINetwork_TestRayCels(bone, target cel, eye,
+        // seer cel)`, and a 0 answer is "not seen" with no collision ray at all]. The seer's
+        // obj+0x20 is the port's `find_cel` at his position (the drone keeps no stored cel; the
+        // game relinks obj+0x20 through the same `build_FindCel` 0x1c8cb0 search). Without the
+        // walk, a ray the 0xa27 mask passes (the class-0x10 paper and glass, the node-pass cels)
+        // and the target-cel scope leaves untested (a wall outside the straddled cels) grants
+        // sight through a wall into a room no portal along the ray reaches. An unresolved cel on
+        // either side keeps the ray alone [S — the game answers 0 for a null cel, 0x15ab78:66-67; the
+        // port's coarser find_cel can miss where the game's linked cel is valid].
+        let seer_cel = if player.cel.is_some() { d.world.find_cel(self.pos) } else { None };
+        let cels_ok = |from: V3, eye: V3| match (player.cel, seer_cel) {
+            (Some(t), Some(s)) if t != s => d.world.ray_reaches_cel(t, from, eye, s).unwrap_or(true),
+            _ => true,
+        };
         let Some(b) = bones else {
             let eye = self.head();
-            return d.world.line_of_sight_scoped(player.cel, eye, player.target, crate::world::LOS_GUARD_VISION)
+            return cels_ok(player.target, eye)
+                && d.world.line_of_sight_scoped(player.cel, eye, player.target, crate::world::LOS_GUARD_VISION)
                 && !body(eye, player.target);
         };
         let eye = self.head();
         let ray = |i: usize| {
             let from = clamp_to_cylinder(player.pos, b[i]);
-            d.world.line_of_sight_scoped(player.cel, from, eye, crate::world::LOS_GUARD_VISION) && !body(from, eye)
+            cels_ok(from, eye)
+                && d.world.line_of_sight_scoped(player.cel, from, eye, crate::world::LOS_GUARD_VISION) && !body(from, eye)
         };
         view_bone_pick(self.los, self.team, &mut self.view_bone, ray)
     }
