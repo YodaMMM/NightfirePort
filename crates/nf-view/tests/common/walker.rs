@@ -172,6 +172,20 @@ pub struct Walker {
     /// length. `DroneWeap_DoBulletAccuracy` 0x179740 forces every round to hit under 3.0 u
     /// (`if (dist < 3.0) bVar2 = true` [M :113-115]), so a fight at 1-2 u takes the whole volley.
     pub keep_off: Option<f32>,
+    /// OPT-IN (`legs_keep_off`, set by the 07000001 real-damage escort walks, pretrans-arms-4):
+    /// the NAV-LEG walk keeps the walker's own `keep_off` personal space to live ARMED hostiles:
+    /// while any armed guard (team 1, enabled, alive, weapon in the firearms band — the unarmed
+    /// escort contact never trips it) stands inside `keep_off` of Bond AND ahead toward the
+    /// waypoint, the leg's push becomes a step BACK — the player does not walk into a shotgun's
+    /// muzzle. Measured (the NF_DMG_TRACE run on this tree): the hall flank's nav leg walked
+    /// Bond to 2.5 / 2.3 u of two planted hall guards and each fired a single-frame 8-pellet
+    /// shotgun volley (24.0 + 48.0, weapon 0x1c [L the dmg trace]) — under 3.0 u every drone
+    /// round hits [M DroneWeap_DoBulletAccuracy 0x179740:113-115] and the TooClose band doubles
+    /// the damage [M Drone_ModBulletDamage 0x139f50]. The fights still answer during the step-
+    /// back (the leg's own return-fire gate), now from outside the forced-hit band. Off = master
+    /// behaviour (the legs walk the straight line) everywhere else — 02's `keep_off` legs are
+    /// unchanged (the flag is per-walker and the 02 walk does not set it).
+    pub legs_keep_off: bool,
     /// OPT-IN (guard-radii-16-chasers): a fire tap with a grenade-family weapon in hand is a
     /// THROW, not a shot — the frag's 210-tick fuse then detonates beside Bond's own follow-up
     /// path (the measured 10959 self-blast death at (−5.83, −21.99, −163.14): the kill loop's
@@ -297,6 +311,7 @@ impl Walker {
             rises: Vec::new(),
             prefer_head: false,
             keep_off: None,
+            legs_keep_off: false,
             no_grenade_throws: false,
             grenade_downgrade_logged: false,
             flank_hold_x: None,
@@ -1367,6 +1382,25 @@ impl Walker {
                 ..Default::default()
             };
             if err.abs() > 1.2 { input.forward = 0.0; }
+            // OPT-IN (`legs_keep_off`, the field doc): an armed hostile inside `keep_off` and
+            // ahead toward the waypoint turns the push into a step back — never walk into a
+            // shotgun's muzzle. The sidestep ladder owns the input while it runs.
+            if self.legs_keep_off && self.sidestep == 0 {
+                if let Some(r) = self.keep_off {
+                    let armed_ahead = sim.drones.list.iter().any(|o| {
+                        o.team == 1 && o.enabled && o.present && !o.corpse && o.health > 0.0
+                            && ((2..0x47).contains(&o.weapon) || (0x6a..=0x71).contains(&o.weapon))
+                            && dxz(o.pos, p) < r && {
+                                let (gx, gz) = (o.pos[0] - p[0], o.pos[2] - p[2]);
+                                let gl = (gx * gx + gz * gz).sqrt().max(1e-3);
+                                let (wx, wz) = (wp.at[0] - p[0], wp.at[2] - p[2]);
+                                let wl = (wx * wx + wz * wz).sqrt().max(1e-3);
+                                (gx / gl) * (wx / wl) + (gz / gl) * (wz / wl) > 0.25
+                            }
+                    });
+                    if armed_ahead { input.forward = -1.0; }
+                }
+            }
             if self.sidestep != 0 {
                 // Pure lateral (no forward): the diagonal walk grinds into the same wall corner.
                 input.strafe = if self.sidestep > 0 { 1.0 } else { -1.0 };

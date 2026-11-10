@@ -229,6 +229,10 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // ~18 — the Agent sister's 6.5 stand-off is the honest spacing at both difficulties).
         w.keep_off = Some(6.5);
         w.dmg.back_off = Some(6.5);
+        // pretrans-arms-4: the legs keep the same 6.5 to armed hostiles (the legs_keep_off field
+        // doc) — the measured deaths were the LEGS walking Bond to 2.3-2.5 u of the planted hall
+        // guards for two single-frame 8-pellet volleys (24.0 + 48.0 [L the NF_DMG_TRACE run]).
+        w.legs_keep_off = true;
         // The pane-solid guards (PANE_RIDE, the kind-2 sheets the hall patrols brush [M
         // Collide_Pick 0x1eb320:313-329 — the movement query tests the start room's object
         // chain, and the panes link into their room by build_FindCel 0x1c8cb0]) shift the
@@ -239,6 +243,12 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // drop the guard keeps shooting: the determined pass on a failed fight (the
         // 07000016 opt-in), 01's real-damage walks only.
         w.dmg.finish_fights = true;
+        // pretrans-arms-4 (the -3 report's spelled-out lever): the hall flank wedges one step
+        // early on the solid bodies, the 24-hp shotgun captain #7's planted volley (weapon 0x0,
+        // script side [L the death ledger]) lands 48.0 while the stand is on another shooter,
+        // and Bond arrives at the stairwell drained. The volley-carrier-first retarget (see the
+        // DamageLog field) answers the shotgun mid-volley — the pellets stop with him.
+        w.dmg.volley_carrier_first = true;
         // Agent: the return fire stands its ground (no back-away). Measured with the guards'
         // lines ending by their length (the headless sound driver): the start-room guard #0
         // no longer freezes in AIM_STAND_FIRE mid-line but side-steps (0x73/0x74), and the
@@ -1507,6 +1517,12 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     }
     // The player route descends the stairwell from the west hall's corner (the AI's own path
     // climbs over the top floor — the sister proved the descent through this anchor).
+    // pretrans-arms-4: the legs' 6.5 keep-off releases here — the remaining guards are the
+    // walled pocket pair (the stairwell sniper #2 sits at y 10.2 over the mouth, never fired
+    // [L the -3 death ledger and the runs on this tree: no #2 hits in any ledger]) and the
+    // final legs must pass under him at 3.2 u — every green tree walked that stretch (the
+    // keep-off leg backed off it forever: the 3000-tick plate cap in the first run).
+    w.legs_keep_off = false;
     w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
     w.walk_nav_to(plate, "the plate", 1.2);
     let sim = w.scene.sim.as_ref().unwrap();

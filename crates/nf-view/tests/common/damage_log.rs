@@ -284,6 +284,24 @@ pub struct DamageLog {
     /// stand's cooldown silenced the response outright. Off = master behaviour (nearest visible
     /// first, cooldown bails) everywhere else.
     pub hurting_first: bool,
+    /// OPT-IN (`volley_carrier_first`, set by the 07000001 real-damage escort walks only):
+    /// the same two laws as `hurting_first` (the damage-weighted pick and the stand's 30-tick
+    /// retarget) WITHOUT the cooldown drop, scoped to this walk. Measured mechanism
+    /// (pretrans-arms-3/4, [L the NF_RF_TRACE run on s/pretrans-arms-4]): the hall flank's
+    /// deeper nav leg wedges one step early on master's solid guard bodies ("flank 1 nav 2"
+    /// vs the -2 tree's "flank 1 nav 3"), the 24-hp shotgun captain #7 is answered LAST from
+    /// the wedged node, and his planted 8-pellet volley — the weapon datum reads 0x0 at the
+    /// fight, the volley rides the script side [L the death ledger], so neither `agent_order`'s
+    /// weapon key nor a loop-order class can see him — lands 48.0 (8 × 6.0) in one window on
+    /// Bond at 76.0 while the stand is on #11 (health 76.0 → 28.0 between fight#11 t0 and
+    /// fight#7 t0 [L the same run]); death at tick 10682 (46 hits for 100.0). On the -2 tree
+    /// the captain engaged FIRST at full hp and cost 7.5 [L the -2 report's walk list]. The
+    /// volley carrier's fingerprint IS the damage window: while his pellets land, his 240-frame
+    /// damage leads every other shooter's, so the damage-weighted pick answers him first and
+    /// the stand's retarget switches to him mid-volley (the pellets stop with him). A player
+    /// under a planted volley answers the shotgun, not the further pistol. Off = master
+    /// behaviour (nearest visible) everywhere else — no other walk sets it.
+    pub volley_carrier_first: bool,
     /// OPT-IN (`shooters_window`, the 07000005 00 Agent walk): the shooters list's (horizontal,
     /// vertical) reach in u, replacing the plain (20.0, 6.0) / lane (48.0, 7.5) windows. The 05
     /// castle-approach spine is fired on from 16.6 u BELOW (the gallery riflemen #8/#9 stand at y
@@ -777,7 +795,7 @@ impl Walker {
                     self.total_ticks, newborn.unwrap(), d.weapon, d.health,
                     d.pos[0], d.pos[1], d.pos[2], sim.gun.weapon, sim.gun.clip, sim.gun.spare);
             }
-            let pick = newborn.or_else(|| if self.dmg.hurting_first {
+            let pick = newborn.or_else(|| if self.dmg.hurting_first || self.dmg.volley_carrier_first {
                 cands.iter().copied()
                     .filter(|&i| DamageLog::visible(sim, i))
                     .min_by(|&a, &b| {
@@ -836,7 +854,7 @@ impl Walker {
                     for &i in &cands { DamageLog::geom_dump(sim, i); }
                 }
             }
-            if std::env::var_os("NF_RF_TRACE").is_some() && self.dmg.hurting_first {
+            if std::env::var_os("NF_RF_TRACE").is_some() && (self.dmg.hurting_first || self.dmg.volley_carrier_first) {
                 let dmgs: Vec<(usize, f32, f32)> = cands.iter().copied()
                     .map(|i| (i, dmg_of(i), dist_of(i))).collect();
                 eprintln!("[hf] {label} tick {}: cands (i,dmg,dist) {dmgs:?} pick {pick:?} cooling {:?}", self.total_ticks,
@@ -1017,7 +1035,7 @@ impl Walker {
                 // health 68 → 0 (death tick 25116). A player under new, closer fire switches
                 // targets; the shared fight never did. The switch resets the fight's own progress
                 // trackers (hp0/last_hit/aim/unseen) for the new target.
-                if self.dmg.hurting_first && t > 0 && t % 30 == 0 {
+                if (self.dmg.hurting_first || self.dmg.volley_carrier_first) && t > 0 && t % 30 == 0 {
                     let now = sim.drones.frame;
                     let dmg_of = |i: usize| -> f32 {
                         sim.drones.player_hits.iter().rev()
