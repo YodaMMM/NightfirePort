@@ -34,6 +34,17 @@ Branch s/los-mask-08-walks = s/los-mask-01-walk-2 (73a33ac5a) + merge origin/mas
 2. On 07000008, the Hind fight as the game plays it: does the real player fight from INSIDE the carriage (the panes shot out) — gdbwatch on the machine's rockets' Explode_Propagate contact points during a playthrough would confirm the wall-band detonation distances (this branch measured 2.2-5.8 u) and whether the real blast falloff at those distances matches the port's.
 3. On 07000012/14, the ledgered wedge spots ((16.66-17.15, 1.39, 3.19) target (17.48, 0.90, 1.51); the tilted sill at (−38.06, 0.71, 33.98)) — whether the game's own walk/step-up crosses them (the walker's step-up gate on the scoped floor's slope band is the 14 lever).
 
+## ntfy failed
+
+All three fallbacks failed at the network level (2026-11-10 ~17:33 UTC):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "...urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'los-mask-08-walks: done', headers={'Title':'NightfirePort'}), timeout=20)"` →
+   the 20 s urlopen timeout elapsed (the combo call was killed at its 60 s cap; no HTTP response)
+3. `wget -T 10 -O- --post-data "los-mask-08-walks: done" https://ntfy.sh/nightfire-yoda-8k3x` →
+   `Connecting to ntfy.sh (ntfy.sh)|159.203.148.75|:443... failed: Connection timed out.` /
+   `Connecting to ntfy.sh (ntfy.sh)|2604:a880:800:14:0:1:73c0:2000|:443... failed: Network is unreachable.` → wget exit 4
+
 ## Usage
 
 not visible to me — this session's driver shows no token, cost or context-window figures to the worker (the IM gateway metadata carries only session/chat ids; no usage counters appeared in any tool result).
