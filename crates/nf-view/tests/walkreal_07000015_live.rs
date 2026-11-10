@@ -577,6 +577,33 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
                 w.shoot(di, label);
             }
         }
+        // REAL-HEALTH TACTIC (level-15-agent-rim-shot-2, the measured ledger): the d2 roster's
+        // plank rifle guard (skin 0x5000087, the burst rifle) is a CHASER — at this stand the
+        // measured run finds him at (35.73, 41.28, 44.65) hp 10 (the fights' own work), and he
+        // creeps down onto the west plank while Bond crosses it: 6 hits for 21.6 at d 2.0-2.2
+        // (ticks 3924-3959) before the fights finished him at 4016. A player answers the chaser
+        // from the stand he is already in sight of — one 0x5000087 within 20 u, finished from
+        // here (hp 10, the fights co-fight) — and the plank crossing never meets him.
+        let rifle = { let sim = w.scene.sim.as_ref().unwrap(); let b = sim.bond.pos;
+            (0..sim.drones.list.len())
+                .filter(|&i| { let d = &sim.drones.list[i];
+                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                        && d.skin == 0x5000087 })
+                .filter(|&i| { let d = &sim.drones.list[i];
+                    (d.pos[0] - b[0]).powi(2) + (d.pos[1] - b[1]).powi(2) + (d.pos[2] - b[2]).powi(2) < 20.0 * 20.0 })
+                .min_by_key(|&i| { let d = &sim.drones.list[i]; let b = sim.bond.pos;
+                    ((d.pos[0] - b[0]).powi(2) + (d.pos[1] - b[1]).powi(2) + (d.pos[2] - b[2]).powi(2)) as u32 })
+        };
+        match rifle {
+            Some(g) => {
+                if !w.shoot_bounded(g, "the plank rifle guard (skin 0x5000087) from the door[39] north stand", 2400) {
+                    if w.resupply("the plank rifle guard's rounds") {
+                        w.shoot_bounded(g, "the plank rifle guard (skin 0x5000087) retry", 2400);
+                    }
+                }
+            }
+            None => eprintln!("[15] the plank rifle guard is already down at the plank stand"),
+        }
     }
     let (route_b1, route_b2) = route_b.split_at(route_b.iter().position(|(l, _)| *l == "door[32] threshold").unwrap());
     w.walk_route(route_b1);
@@ -859,6 +886,21 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // the beam is dead ahead), backpedal to the mark holding the view, and the trigger is
     // on-target from the first gate tick, ~300 ticks inside the door's open window. Real-health
     // runs only: the master (top-up) walk's pinned timeline stays byte-identical.
+    // REAL-HEALTH TACTIC (level-15-agent-rim-shot-2, the measured ledger): the d2/d3 run draws
+    // the pistol HERE, at the SHUT door — the old order drew after the backpedal and re-opened
+    // the auto-closed leaf for it, and the re-open's own approach walked Bond back into the
+    // threshold (measured: Bond (−0.7, 25.8) at the shot), where the fence's own chain popped on
+    // him — [ines] "#447 went at tick +14, Bond 9.01 u off, cause 2" → −10.73 −14.59 −15.53 =
+    // 40.85, the run's largest bill, and the roster dump at the press prints ZERO live hostiles
+    // (the old "corridor crossfire" reading was the shot's own chain). The pistol drawn first,
+    // the door opened once, the shot comes from the mark at 11.21 u centre-to-centre — the hurt
+    // distance 11.21 − 1.06 = 10.15 > 10, the sweep's zero [M Explode_Propagate 0x17c518] — and
+    // the diagonals sit farther still. Real-health runs only: the master (top-up) walk's pinned
+    // timeline stays byte-identical.
+    if difficulty >= 2 && !w.tops_up() && w.scene.sim.as_ref().unwrap().gun.weapon != 0x2 {
+        draw_persist(&mut w, 0x02, "the fence shot's pistol, drawn at the shut door[42]");
+        w.reload_full();
+    }
     if !w.tops_up() {
         backpedal_face(&mut w, [0.0, 41.4, 28.5], [0.0, 42.3, 17.29], 0.5,
             "the fence mark north (backpedal, view on the beam)");
@@ -882,6 +924,10 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // [L the d2/d3 red traces]) and every later shot hit the leaf. A player takes the precise
     // shot with the pistol (spread 0.0 [L ee_start_05.bin weapon_data 0x02 +0x24/+0x98]) and
     // re-opens the auto-closed door for it.
+    // (level-15-agent-rim-shot-2) The re-open below now serves only the paths that did not
+    // pre-draw above (the d1 real-damage run never enters it: difficulty 1; the d2/d3 runs
+    // arrive at the mark holding the already-drawn pistol, so the condition is false and Bond
+    // stays at the mark, outside the pops).
     if difficulty >= 2 && w.scene.sim.as_ref().unwrap().gun.weapon != 0x2 {
         draw_persist(&mut w, 0x02, "the fence shot's pistol");
         w.reload_full();
@@ -950,6 +996,14 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.drones.level_exit, Some(0x0700_0016),
             "E at the #445 plane loads 07000016 [D placement #445 param 0]");
+        // The pinned margin (level-15-agent-rim-shot-2): the Agent crossing is not green by a
+        // sliver — the plank rifle guard is banked at the door[39] north stand and the fence
+        // shot is taken from outside every blast's radius 10, so Bond crosses with 25 or more
+        // health (the rim-shot tree crossed at 2.0 with the ledger's 98.0).
+        if difficulty == 2 && !w.tops_up() {
+            let hp = sim.drones.health.health;
+            assert!(hp >= 25.0, "the Agent crossing keeps the real margin at the exit, got {hp:.1} (the rim-shot tree crossed at 2.0)");
+        }
         assert!(!sim.drones.channels.on(0x42), "nothing writes ch 0x42 on this level [D scans] — the gated gate #343's channel stays cold");
         assert_eq!(sim.drones.mission.states[21][0], 3,
             "the objective stays announced on 07000015 (its completing channel 0x8e is 07000016's spawn plate [D])");
@@ -1130,6 +1184,17 @@ fn crouching_under_the_door52_beam_passes_it() {
 /// lobs from the threshold (15.2 u — the chain blast reads ~2.8 there), the case-0x4B entry
 /// sets #526 [M 0x17c518], and the rim walk and shot skip. The measured run crosses the exit
 /// with the ledger in the report.
+/// GREEN at a real margin (level-15-agent-rim-shot-2): the rim-shot tree crossed at 2.0 with
+/// 98.0 taken. The measured ledger's two largest bills were not guards holding the line but
+/// the walk's own shape: the 40.85 "corridor pops" at door[42] are the FENCE SHOT'S OWN CHAIN —
+/// the post-backpedal pistol draw re-opened the auto-closed leaf and its approach walked Bond
+/// back into the threshold ([ines] "#447 went at tick +14, Bond 9.01 u off, cause 2"; the
+/// roster dump at the press prints ZERO live hostiles), so the pistol is now drawn at the SHUT
+/// door and the shot comes from the mark (11.21 u centre-to-centre, the sweep's zero [M
+/// 0x17c518]); and the plank rifle guard (skin 0x5000087) is a chaser who met the west plank
+/// crossing at d 2.0 for 21.6 — he is answered from the door[39] north stand (measured spot
+/// (35.73, 41.28, 44.65) hp 10, 17.7 u off the stand) before the plank. The crossing takes
+/// 58.5 and Bond reaches the exit with 41.5 health; the assert pins 25 or more.
 #[test]
 fn walk_spawn_to_the_omega_sector_exit_real_damage_agent() {
     walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(2));
