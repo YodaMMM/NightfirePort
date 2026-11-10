@@ -19,3 +19,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-11-10T10:09Z
+
+---
+## Report (done, 2026-11-10T11:09Z)
+
+Closed by the driver: the report is on `s/level-15-agent-rim-shot` (docs/reports/level-15-agent-rim-shot.md); the worker didn't run finish.sh.
