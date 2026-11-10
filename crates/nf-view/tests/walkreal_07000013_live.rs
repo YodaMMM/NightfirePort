@@ -69,7 +69,11 @@ fn clear_the_visible(w: &mut Walker, label: &str, radius: f32) {
             })
         };
         let Some(di) = target else { return };
-        let killed = aimed_stand(w, di, label, 2400);
+        // warm-chain-margin: the sweep's stands cap at 700 (they land in ~50-350 ticks — every
+        // measured kill in this file's ledgers); a stand that cannot open keeps Bond statue-still
+        // in the wave's return fire for the 1500-tick no-hit give-up — the tick-1995/2242 deaths
+        // both bled out inside a failing stand. A player who cannot see the shooter repositions.
+        let killed = aimed_stand(w, di, label, 700);
         // aimed_stand's early gives-ups (dry, disabled) return before its own restore: force the
         // walk's default back — 13's fights must keep the plain tap gate (the precise_fights
         // lesson: the tight gate holds fire on the lobby chargers).
@@ -237,8 +241,14 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             // [L repro11d]). Shorter, armed fights shrink the window a thrower has [S unverified:
             // the throw window itself is the report's live check]. The d2 sister passes with the
             // plain kit and stays byte-identical.
+            // warm-chain-margin: `precise_fights` stays OFF for this walk. The 0.01-rad tap gate
+            // was the 07000011 lever for a 7-round P99 budget (the loose gate sprayed it); 13's
+            // d3 fights resupply freely (lane_floor_drops, the east-lane fetch proved it) and the
+            // gate-only fights kept leaving pursuers alive — two `killed false` stands in the east
+            // pocket and the west-mid bleed-out (22 hits for 82.5, the pursuers #10/#4 unloading
+            // at d 13-22 while the aimed stands hunted exposure). The looser gate kills faster;
+            // the ammo it sprays comes back from the drops.
             w.dmg.lane_floor_drops = true;
-            w.dmg.precise_fights = true;
             // civ-unignore (the measured pre-engagement burst): #10's first fire on the bend→
             // corridor walk is ONE tick of 8 × −3.0 shotgun pellets at d 3.5 (t2723, Bond at
             // (16.8,−12.0)) — the −24 chunk that sends 13 the 62 instead of 86, the exact leak the
@@ -248,6 +258,10 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             // kills him through the ordinary fight machinery before his sight opens. OFF for every
             // other caller (the 07000012 and campaign walks set nothing).
             tower2::PRE_CLEAR_SOUTH_CORRIDOR.store(true, std::sync::atomic::Ordering::Relaxed);
+            // warm-chain-margin: the 12 north lobby's fight resumed into the pursuit after the
+            // fight's cap (guard-repin-master's law, the tick-5914 ledger) — take the pursuers
+            // from the north-lobby-2 leg end before the north lobby 3 leg.
+            tower2::PRE_CLEAR_NORTH_LOBBY.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         tower2::walk_12(&mut w);
         tower2::walk_12_exit(&mut w);
@@ -373,6 +387,16 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // cel crosses 21→28 through the stateful relink's portal arm (Cel_ObjectLeftCel 0x1e0d58)
     // and the room's own floor (cel 28's bucket) holds him.
     w.walk_to(Wp::new(5.0, -368.4, 26.5).r(1.5), "13: the lobby east lane");
+    // warm-chain-margin: the desk-block kills raise the spawner waves (start ch 0x29 = the
+    // guards' own death channels [D §4]) and the wave lands ON the east lane — the ledger's
+    // tick-1647 volley (7 shotgun pellets, −36.5 in one tick [M player_hit_damage: the
+    // pellet damage × Agent pain × DroneFiring_TooClose_Damage]) caught Bond standing in the
+    // pocket while the fights' own caps had twice left the wave guard alive (killed false at
+    // ticks 781/1015). A player who has just traded in the pocket re-sweeps it before moving
+    // north: the sweep stands at the leg end and takes what opens, the civ-unignore-2 law.
+    if real_damage && difficulty == 3 {
+        clear_the_visible(&mut w, "13: the lobby east lane", 24.0);
+    }
     // guard-repin-master re-anchor: the west-mid leg's return-fire fights (the north-lobby
     // shooters) displaced Bond SOUTH of the lane line into the lobby pocket at (0.60, −368.30,
     // 25.66) — the guards' per-goal arrival radii [M 0x152548:174-181] close the pursuit to
@@ -401,10 +425,15 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // false, the creep dragging Bond backward into the pocket) become the sweep's targets from
     // the west-mid leg end when their boxes open — and a guard this sweep still cannot see is
     // left to the legs' own return fire exactly as before.
-    if real_damage && difficulty == 3 {
-        clear_the_visible(&mut w, "13: the lobby west mid", 24.0);
-    }
+    // warm-chain-margin: the west-mid STAND itself is the exposure window on this tree — the
+    // spawner wave lands mid-walk (the tick-1995 death: #10's 0x19 at d 13.2 and mezzanine
+    // #4's 0x18 at d 22.2 bled 31.5 during the four stands while their own boxes never opened
+    // to the walker's gun rays) — so the sweep waits one leg, behind the north-west glass
+    // band, where the same guards open.
     w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west");
+    if real_damage && difficulty == 3 {
+        clear_the_visible(&mut w, "13: the lobby north-west", 24.0);
+    }
     w.walk_to(Wp::new(-22.0, -368.4, 39.5).r(1.5), "13: past the glass band");
     w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: at the security-room door");
     w.walk_to(Wp::at(-26.65, -368.36, 37.44, walker::Act::Use { use_ticks: 90 }).r(1.4), "13: E the security-room door");
