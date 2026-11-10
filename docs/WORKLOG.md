@@ -1,0 +1,4 @@
+
+## los-mask-repins-16 (2026-11-10T23:12Z, branch s/los-mask-repins-16)
+
+- Claimed. Base: origin/master 0ee8478fd (the guard-sight turn-on + the 0c Chain Reaction walks green). Task: the 07000016 walks green again under the game's guard sight — read each ignore message in walkreal_07000016_live (named: the_chasers_punch_lands_the_record_damage), re-route each walk with real input so it passes, remove its ignore. No damage/health lowering, no top-ups; helpers gated to 07000016 + difficulty. Plan: read origin/s/los-mask-repairs docs/reports/los-mask-repairs.md; build walkreal_07000016_live + interactables_07000016_live; reproduce; re-route; run both binaries + every walkreal_*_live binary that shares a touched helper; suite via tools/test/suite.py if the sandbox allows (the 12-2 entry says it dies between tool calls here — per-binary coverage is the substitute); report; finish.
