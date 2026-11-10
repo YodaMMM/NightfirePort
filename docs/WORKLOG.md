@@ -75,3 +75,13 @@ ignores" — this round attacked the three ledgered reds.
   6/0/2, walkreal_07000005_live 16/0/1, walkreal_07000009_live 9/0/0, walkreal_07000014_live
   7/0/3, barrelrow 1/0/0, the handoff real-damage sister 1 passed, guard1_rounds 2/0/0,
   comms_chatter 1/0/0, upward_shot 2/0/0. Report: docs/reports/pretrans-arms-4.md.
+
+## pretrans-arms-5 (2026-11-10)
+
+- Branch from origin/s/pretrans-arms-4 (d64a3b604). Scope: the two pretrans-arms-4 review
+  mismatches (aiming guard in a run animation with bearing < 0.9 rad does NO turn in the game
+  [M addr TBD], the missing JustStand sway 0x173fc0 [M]), then the ledgered ignores: 01
+  following_mayhew_down_completes_the_level (escort dies to guard crossfire at the stairwell-head
+  clear, NDrone2_DealWithObjHit 0x13fff0:181-232), the 0c handoff + the 0c east-route ground route
+  (wire #282 B-end reach miss), the 11 south-band doorway wedge. Per-level walks, no sim changes,
+  helpers gated to their level. Worklog started, checkpoint 1 pushed.
