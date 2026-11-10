@@ -9,6 +9,9 @@
 //!   cone), × Bond's factor `+0x22C` unless the drone has alert bits AND alertness ≥ 1; under 2
 //!   units with line of sight 1.0. The factor is `Drone_ProcessOpponents` 0x1390c0: the product
 //!   of the AI visibility boxes holding Bond, ×0.75 in the crouch substate (obj+0xF6 == 4).
+//! - the stored value `+0x230`: `ProcessDroneSight` 0x176a28 zeroes it when v < 0.7 (disasm
+//!   0x176bc4 `c.olt.s f0,f21` (0.7), `bc1fl` past 0x176bd4 `swc1 f20(0),0x230(s0)`), so the law is
+//!   checked on the formula (`Drone::visibility_formula`) and the field against that store rule.
 //! - sight `DroneVision_ProcessDroneSight` 0x176a28: a guard with v ≥ 0.7 gets the LOS ray; every
 //!   LOS tick counts `+0x270`; `HaveOpponentSight` 0x175ef0 acks the sighting once the count
 //!   reaches `DroneFunc_ReactionTime` 0x14ac60 — on 07000002/03/05/09/0A
@@ -107,7 +110,7 @@ fn predict(g: &nf_game::drone::Drone, bond: [f32; 3], factor: f32) -> f32 {
 }
 
 #[derive(Debug, Default)]
-struct Trace { first_los: Option<u32>, first_seen: Option<u32>, states: Vec<(u32, u8)>, max_vis: f32, max_err: f32, los_dist: Option<f32> }
+struct Trace { first_los: Option<u32>, first_seen: Option<u32>, states: Vec<(u32, u8)>, max_vis: f32, max_err: f32, store_err: f32, los_dist: Option<f32> }
 
 /// Run `ticks` with a fixed input, recording the guard's sight timeline and the worst
 /// |port visibility − predicted| (`factor` = Bond's expected `+0x22C`).
@@ -124,10 +127,14 @@ fn run(w: &mut Walker, gi: usize, ticks: u32, input: Input, factor: f32) -> Trac
             t.los_dist = Some(((p[0] - g.pos[0]).powi(2) + (p[1] - g.pos[1]).powi(2) + (p[2] - g.pos[2]).powi(2)).sqrt());
         }
         if g.seen && t.first_seen.is_none() { t.first_seen = Some(k); }
-        if t.first_seen.is_none() { t.max_vis = t.max_vis.max(g.visibility); }
-        if t.first_seen.is_none() { t.max_err = t.max_err.max((g.visibility - predict(g, p, factor)).abs()); }
+        // The 0x175af0 value, and the field ProcessDroneSight leaves (0 under 0.7 [M 0x176bc4-0x176bd4]).
+        let raw = g.visibility_formula();
+        if t.first_seen.is_none() { t.max_vis = t.max_vis.max(raw); }
+        if t.first_seen.is_none() { t.max_err = t.max_err.max((raw - predict(g, p, factor)).abs()); }
+        if t.first_seen.is_none() && g.vision_on && g.dist >= 2.0 { t.store_err = t.store_err.max((g.visibility - if raw >= 0.7 { raw } else { 0.0 }).abs()); }
         if g.state != last { t.states.push((k, g.state)); last = g.state; }
     }
+    assert!(t.store_err < 3e-3, "+0x230 holds v when v >= 0.7, else 0 [M 0x176a28 disasm 0x176bc4-0x176bd4] (worst {})", t.store_err);
     t
 }
 

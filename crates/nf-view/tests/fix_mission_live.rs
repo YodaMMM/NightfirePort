@@ -194,9 +194,23 @@ fn the_07000001_exit_works_end_to_end() {
     // cannot clear it for him). Bond walks the meet plate — ch 0x32 → the 0x33 mirror
     // [M Trigger_Update 0x1b1a78 case 5] → SP #276 → ch 0x0e [D placements] — and clears the
     // three guards through the real fire path; only then does the escort ride.
+    let early_open = std::rc::Rc::new(std::cell::Cell::new(false));
     {
         let contact = mi;
         let mut w = walker::Walker::new(scene);
+        // The courtyard shoji's OPEN latch from the first walker tick: the escort follows Bond
+        // through the ambush and can cross the shoji there (he stood at the plate side at the
+        // hold release on one run, so the ride below never reached the door).
+        {
+            let latch = early_open.clone();
+            w.on_step = Some(Box::new(move |scene: &nf_view::scene::Scene, _t: u32| {
+                let sim = scene.sim.as_ref().unwrap();
+                if let Some(d) = sim.drones.doors.list.iter().min_by(|a, b| ((a.pos[0] - 7.0).abs() + (a.pos[2] - 11.0).abs())
+                    .total_cmp(&((b.pos[0] - 7.0).abs() + (b.pos[2] - 11.0).abs()))) {
+                    if d.state == nf_game::door::OPEN { latch.set(true); }
+                }
+            }));
+        }
         w.shield = Some(contact);
         // The 01 walk's corner escape (walkreal_07000001 sets it too): a nav leg wedged on the
         // hall's east-door jamb at (5.45, 11.60) re-routes over clear nav nodes.
@@ -348,7 +362,7 @@ fn the_07000001_exit_works_end_to_end() {
     let mut walked = 0.0f32;
     // Sister latch: the courtyard door must REACH state 4 (OPEN) at least once — the game's
     // `NDrone2_DoorIsOpen` 0x14aaa0 only releases `DSTATE_OpenDoor` on exactly that state.
-    let mut door_opened = false;
+    let mut door_opened = early_open.get();
     // fix-lighting2 merge re-baseline, kept for the nav-gap stall class: while the escort works the
     // door (or paces at any junction) he lingers within 3.0 of it — the same stall class the nudge
     // below already covers — so count the loiter and fire the same guard-relocation + route nudge

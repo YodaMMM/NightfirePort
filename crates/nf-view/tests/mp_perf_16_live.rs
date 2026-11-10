@@ -103,7 +103,7 @@ fn iso() -> Option<String> {
 // 0xe3fb_90fd_011b_bbef (34 kills).
 // join-1110-mp: the four mp branches joined (setup defaults + DefaultInit bands + arrival 2.0 /
 // raw walk mul + the combat-move draw order) — re-pinned on the joined tree.
-const PINNED_DIGEST: u64 = 0x73c2_4bf4_c662_feb2; // 35 kills
+const PINNED_DIGEST: u64 = 0x5193_ea0e_9852_b444; // 36 kills (re-pinned with the guard-sight round robin and the own-cel boundary push)
 
 const TICKS: u32 = 3600;
 
@@ -216,7 +216,10 @@ fn early_out_segments_match_the_full_search() {
         let to = [q[0] + j(rnd()), q[1] + j(rnd()) - 0.4, q[2] + j(rnd())];
         let full = w.segment(from, to).is_none();
         assert_eq!(w.segment_clear(from, to), full, "segment {from:?} -> {to:?}");
-        assert_eq!(w.line_of_sight(from, to, nf_game::world::LOS_GUARD_VISION), full);
+        // The guard-vision ray is the masked walk (the 0xa27 class drops class-0x10 paper and
+        // glass [M Collide_Intersect 0x1ebaa8:314-316]): its full search is `segment_masked`.
+        assert_eq!(w.line_of_sight(from, to, nf_game::world::LOS_GUARD_VISION), w.segment_masked(from, to).is_none(),
+            "guard-vision segment {from:?} -> {to:?}");
         let full_b = w.segment_surface_bullet(from, to).is_none();
         assert_eq!(w.segment_bullet_clear(from, to), full_b, "bullet segment {from:?} -> {to:?}");
         blocked += (!full) as u32;

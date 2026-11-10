@@ -724,6 +724,18 @@ fn open_the_pad_lid(w: &mut Walker) {
     panic!("the pad's vent lid never opened to E from {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
 }
 
+/// The drop loop's aim z: (31.8, 34.0) unless a live guard stands at the drop's foot. With the
+/// game's sight round robin [M DroneVision_ProcessDroneSight 0x176a28] the low-floor room guard
+/// (drone 5) can hold AimStandFire 0x68 at (32.25, 1.80, 33.58), on the steer line, and Bond's
+/// capsule came to rest on his (grounded false at y 2.33, health 100 [L this branch's stuck
+/// dump]) for the whole 2400-tick cap. The player drops past him on the north side, z 34.9.
+fn drop_aim_z(w: &Walker) -> f32 {
+    let sim = w.scene.sim.as_ref().unwrap();
+    let blocked = sim.drones.list.iter().any(|d| d.present && !d.corpse && d.health > 0.0 && d.pos[1] < 2.3
+        && (31.0..33.2).contains(&d.pos[0]) && (33.0..34.6).contains(&d.pos[2]));
+    if blocked { 34.9 } else { 34.0 }
+}
+
 /// From the low machine floor to the leg-2 spot on the facility corridor. The old legs stepped
 /// west over the sill through the window between the machine room and the corridor; that window
 /// is a live glass pane (the breakable's collision x 30.62..31.27, y 1.34..2.97, z 30.82..35.68),
@@ -805,12 +817,13 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
                     let p = sim.bond.pos;
                     if p[0] < 32.6 && p[1] < 1.4 && sim.bond.grounded { break; }
                 }
+                let tz = drop_aim_z(&w);
                 let sim = w.scene.sim.as_ref().unwrap();
                 let b = &sim.bond;
                 let inp = nf_game::player::Input {
                     forward: 1.0,
                     jump: b.grounded && (w.total_ticks - start) % 30 == 0,
-                    turn: wrap_pi((31.8f32 - b.pos[0]).atan2(34.0 - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
+                    turn: wrap_pi((31.8f32 - b.pos[0]).atan2(tz - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
                     ..Default::default()
                 };
                 w.tick(inp, false);
@@ -1854,12 +1867,13 @@ fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
                     let p = sim.bond.pos;
                     if p[0] < 32.6 && p[1] < 1.4 && sim.bond.grounded { break; }
                 }
+                let tz = drop_aim_z(&w);
                 let sim = w.scene.sim.as_ref().unwrap();
                 let b = &sim.bond;
                 let inp = nf_game::player::Input {
                     forward: 1.0,
                     jump: b.grounded && (w.total_ticks - start) % 30 == 0,
-                    turn: wrap_pi((31.8f32 - b.pos[0]).atan2(34.0 - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
+                    turn: wrap_pi((31.8f32 - b.pos[0]).atan2(tz - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
                     ..Default::default()
                 };
                 w.tick(inp, false);

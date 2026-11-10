@@ -339,7 +339,11 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // pocket: #3 landed three −14 volleys at d 2.6-2.7 and the shotgun finished the run (death
     // tick 1666 at (3.57,−368.36,25.09), 86.0 consumed). A player shoots the posted guards from
     // the doorway before crossing their pocket.
-    if real_damage && difficulty == 3 {
+    // los-mask-join: the Agent walk takes the same pre-clears (here and the lobby/doorway
+    // sweeps below). Under the game's sight masks the lobby guards engage more and earlier,
+    // and the Agent walk, which left them to its legs' return fire, ran dry at the
+    // lobby north-west (clip 0 spare 0) and died at the front entrance [L the masked run].
+    if real_damage && difficulty >= 2 {
         clear_the_visible(&mut w, "13: the spawn pocket", 24.0);
     }
 
@@ -392,7 +396,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // legs and Bond reached the security room at 21 hp to lose the point-blank #8 exchange).
     // Taking the shooters at the re-anchor end — where #11 (3.8, 33.9) is d ~4.5 and the
     // mezzanine/west boxes open — keeps the west legs' budget for the room.
-    if real_damage && difficulty == 3 {
+    if real_damage && difficulty >= 2 {
         clear_the_visible(&mut w, "13: the lobby mid re-anchor", 24.0);
     }
     w.walk_to(Wp::new(-6.0, -368.4, 40.0).r(1.5), "13: the lobby west mid");
@@ -401,7 +405,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // false, the creep dragging Bond backward into the pocket) become the sweep's targets from
     // the west-mid leg end when their boxes open — and a guard this sweep still cannot see is
     // left to the legs' own return fire exactly as before.
-    if real_damage && difficulty == 3 {
+    if real_damage && difficulty >= 2 {
         clear_the_visible(&mut w, "13: the lobby west mid", 24.0);
     }
     w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west");
@@ -417,7 +421,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // the room — the sweep takes him from the threshold before the crossing, exactly the
     // civ-unignore-2 law (the pre-clear stands at the leg ends and takes the posted guards
     // BEFORE the legs walk into them).
-    if real_damage && difficulty == 3 {
+    if real_damage && difficulty >= 2 {
         clear_the_visible(&mut w, "13: the security-room doorway", 12.0);
     }
     w.walk_to(Wp::new(-27.0, -368.4, 37.0).r(1.0), "13: through the doorway");
@@ -503,6 +507,20 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             (d.state & 0xc == 0, d.state & 0x8 != 0, sim.bond.pos)
         };
         if bp[2] > 38.4 && (-28.0..=-25.5).contains(&bp[0]) { out = true; break; }
+        // A live guard can stand in the doorway's outside mouth: with the game's sight round
+        // robin [M DroneVision_ProcessDroneSight 0x176a28] and the own-cel boundary push
+        // [M NDrone2_Collision 0x140e90:169-174] drone 10 holds CombatNoSight 0x5c at
+        // (-26.78, -368.43, 38.12), the leaf stops on him at 0.76-0.88 and Bond never gets by
+        // [L this branch's agent trace]. Once the leaf is open and the crossing has stalled for
+        // 300 ticks, the player shoots him.
+        if !door_closed && k > 300 {
+            let g = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                sim.drones.list.iter().position(|d| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && walker::dxz(d.pos, [-26.9, bp[1], 38.4]) < 1.6)
+            };
+            if let Some(g) = g { w.shoot_loose(g, "13: the doorway guard", 300); continue; }
+        }
         // Line up in front of the doorway first: east of x −26.7 the room's north wall (z 37.23,
         // x −26.46..−24.74) stands between Bond and the exit, and the straight line to (−27.05, 38.7)
         // pins him on its face.

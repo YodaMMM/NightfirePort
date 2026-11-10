@@ -32,7 +32,14 @@ fn try_pane(iso: &str, lv: &str, pane: usize) -> Option<Outcome> {
     w.wait(60);
     let sim = w.scene.sim.as_mut().unwrap();
     // The `nth` wall pane with a floor on both sides at the pane's chest height.
-    let scene = sim.drones.breaks.list.iter().filter(|b| b.kind == 2 && !b.dead).filter_map(|br| {
+    // A see-through pane: every collision triangle of class 0x10 — the class the guard's 0xa27
+    // vision drops [M Collide_Intersect 0x1ebaa8:314-316, mask bit 0x2]. A kind-2 pane of another
+    // surface class (07000003's mat-0x05 #338/#339 [D the pane's collision materials]) stops the
+    // guard's sight ray like any wall [M 0x1eae80:70-87 admits it, 0x1ebaa8 drops nothing], so the
+    // guard never sees Bond behind it and is no scene for this rule.
+    let see_through = |br: &nf_game::breakable::Break| sim.world.shape_materials(br.shape_key)
+        .is_some_and(|m| !m.is_empty() && m.iter().all(|&x| x & 0x3f == 0x10));
+    let scene = sim.drones.breaks.list.iter().filter(|b| b.kind == 2 && !b.dead && see_through(b)).filter_map(|br| {
         let (lo, hi) = (br.lo, br.hi);
         let size = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
         // A wall pane: thin on one horizontal axis, at least a metre wide and tall.
@@ -112,8 +119,10 @@ fn guard_rounds_pass_and_drain_glass_on_every_level() {
         if tried > 0 && !ok { failed.push(lv); }
         if tried > 0 { covered += 1; }
     }
-    // 07000001, 07000003 (panes that break) and 07000012 (the sky bridge's 0xffdf-filtered panes,
-    // passed but not drained) carry a scene; the rest have no armed guard and floor pair at a pane.
-    assert!(covered >= 3, "only {covered} level(s) had a pane scene");
+    // 07000001 (a pane that breaks) and 07000012 (the sky bridge's 0xffdf-filtered panes, passed
+    // but not drained) carry a class-0x10 scene. 07000003's two scenes (#338/#339) were mat-0x05
+    // panes the guard's sight cannot cross (see `see_through`), and its class-0x10 panes have no
+    // armed guard and floor pair; the rest have no armed guard and floor pair at a pane.
+    assert!(covered >= 2, "only {covered} level(s) had a pane scene");
     assert!(failed.is_empty(), "guard rounds stopped at the glass on {failed:?}");
 }
