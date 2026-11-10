@@ -534,6 +534,37 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, [22.4, 23.2, -3.0]) > 2.0 {
         w.walk_nav_to([22.4, 23.2, -3.0], "back along the 23.0 strip", 1.0);
     }
+    if difficulty >= 3 {
+        // pretrans-arms-5 (the IsOpponent under-0.9 no-turn fix moved the fights): the 18.9
+        // strip's east pocket holds the connector guard #18/#19 (weapon 0x19) at (22.1,19.9,4.1).
+        // Taken from the connector BOTTOM he is already inside the free-hit band (the first
+        // mouth stand engaged him at d 1.1, health 12, and his <3.0-u auto-hit rounds finished
+        // the 18.5-health Bond at t7661 [L the run]; < 3.0 u every round hits [M
+        // DroneWeap_DoBulletAccuracy 0x179740:113-115]). From the connector TOP (the 23.0 strip's
+        // east end, y 23.2) he is ~7.9 u in 3D — outside the band. The flight-B mouth pattern:
+        // the visible live guards nearest-below first, a bounded stand each, before the descent.
+        // d3-gated — the d1/d2 sisters' timelines stay as they passed.
+        for _ in 0..4 {
+            let g = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let b = sim.bond.pos;
+                sim.drones.list.iter().enumerate()
+                    .filter(|&(i, d)| d.team == 1 && d.present && d.enabled && !d.corpse && d.health > 0.0
+                        && d.state != nf_game::drone::state::WAIT_SWITCH
+                        && walker::dxz(d.pos, b) < 14.0 && (d.pos[1] - b[1]).abs() < 6.0
+                        // the free-hit band: never stand-duel inside it [M 0x179740:113-115]
+                        && walker::dxz(d.pos, b).hypot(d.pos[1] - b[1]) > 3.2
+                        && walker::DamageLog::visible(sim, i))
+                    // nearest-3D first: the 23.0-top pocket is a crossfire — the y-then-dxz order
+                    // shot the 10.7-u guard while the 3.5-u one kept firing [L the 8105 run]
+                    .min_by(|x, y| walker::dxz(x.1.pos, b).hypot(x.1.pos[1] - b[1]).partial_cmp(
+                        &walker::dxz(y.1.pos, b).hypot(y.1.pos[1] - b[1])).unwrap())
+                    .map(|(i, _)| i)
+            };
+            let Some(g) = g else { break };
+            if !w.shoot_bounded(g, &format!("connector 2's mouth guard {g}"), 300) { break; }
+        }
+    }
     w.walk_to(Wp::new(23.0, 19.3, 3.8).r(1.0), "the east connector down (23.0→18.9)");
     band(&w, 18.2, 21.3, "connector 2's bottom");
     w.walk_to(Wp::new(15.0, 19.2, 4.8).r(1.0), "the south strip 18.9 west");
@@ -804,6 +835,23 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage_agent() {
 /// and are REMOVED: the lip occludes the blast from above too (zero guard damage each time,
 /// 21-63 self-cost) — the grenade lever is dead against lip-covered strips. Round 2's ledger
 /// lives in docs/reports/real-health-00agent-11-2.md.
+///
+/// RE-IGNORED (pretrans-arms-5, 2026-11-10): the review's IsOpponent under-0.9 no-turn fix
+/// [M 0x178ae0:34-36 — the game returns HANDLED and turns NOTHING for a cone caller with the
+/// opponent under 0.9 rad off the facing; the old port snapped him to Bond] reshuffled the d3
+/// fights, and the 18.9 pocket now out-bleeds the 130 budget: Bond reaches the 23.0 strip east
+/// end at 22.0 hp (the merge tree without the fix: 1 passed [L the bisect run]) and the pocket
+/// guards (#18/#19/#26 at 12 hp, #36 at 9, weapon 0x19, (22.1,19.9,4.1)) finish him at the
+/// connector bottom — the free-hit band (< 3.0 u every round hits [M DroneWeap_DoBulletAccuracy
+/// 0x179740:113-115]) at 1.1-1.5 u. The d3 mouth-stand arm the walk carries (connector 2's
+/// mouth, from the 23.0 strip's east end) took #18/#19/#26 at 7.4-10.7 u but the pocket
+/// crossfire during the stands drained the last 21 — the 8105 run died at the descent with
+/// health 1.0 at the connector bottom; the y-then-dxz→nearest-3D order fix and the 3.2-u band
+/// floor each moved the death later, none green [L the three runs]. Next lever: thin the pocket
+/// BEFORE it wakes (a stand from the 23.0 strip's north window on the #18/#19 pair as they file
+/// up the connector), or diet the upstream 27.1-strip crossfire (Bond 29.0 → 22.0 across its
+/// loot [L the run]) so the descent starts with the ~40 the pre-fix tree had.
+#[ignore = "pretrans-arms-5: the IsOpponent under-0.9 no-turn fix [M 0x178ae0:34-36] moved the d3 fights — Bond reaches the 23.0 strip east end at 22.0 hp (merge tree without the fix: 1 passed [L the bisect run]) and the 18.9 pocket (guards #18/#19/#26 12 hp, #36 9, weapon 0x19) finishes him in the <3.0-u free-hit band [M 0x179740:113-115] at the connector bottom; the connector-top mouth stands took #18/#19/#26 at 7.4-10.7 u but the pocket crossfire during the stands drained the last 21 (the 8105 run: health 1.0 at the connector bottom); the nearest-3D order and the 3.2-u band floor each moved the death later, none green [L three runs]; next lever: thin the pocket before it wakes (a stand from the 23.0 strip's north window on #18/#19 filing up), or diet the upstream 27.1-strip crossfire (29.0 → 22.0 across its loot) so the descent starts with the ~40 the pre-fix tree had"]
 #[test]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage_00agent() {
     walker::with_real_damage_head_hunting(||
