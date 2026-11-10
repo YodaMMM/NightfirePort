@@ -48,3 +48,14 @@
   then take the ledgers' next lever (lip-top west of the guard capsule, held slide east past the
   AimStandFire cycle) and un-ignore the 0d-handoff walk, its real_damage sister and the
   eastroute ground crossing. Work in progress.
+
+- los-mask-repins-0c-2 MILESTONE: the landing-shot question SETTLED. The held weapon at the
+  #284 landing is the MICRO-CAMERA 0x54 (no round spawns from it [M scene.rs:5002]) — the old
+  "dry gun" telemetry read the camera's clip; the P2K (clip 7/41) and the 0x1e were loaded all
+  along. The probe (aim_snap_traced + the flight trace) shows the torso-centre ray enters NO
+  posed box (the AimStandFire pose displaces the body) and the snap steals onto the wall behind;
+  the posed head/torso boxes are exposed instead. The fix (opt-in with_strip_p2k_shot, gated to
+  the three tests being un-ignored): walk the ledger's proven west lane off the transient drop
+  spot, then the yard stand's aimed shot (0x1e, still-gate) — guard #35 dies (hp -50 [L]) and
+  walk_the_whole_mission_from_the_start_to_the_0d_handoff is GREEN under the game's sight
+  (14499 ticks, stuck 0, falls 0, objective 3 complete on the 0d arrival).

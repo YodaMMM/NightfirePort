@@ -41,18 +41,19 @@ fn floor_at(w: &Walker, x: f32, y: f32, z: f32) -> Option<f32> {
 }
 
 #[test]
-#[ignore = "los-mask-repins-0c round 2 (2026-11-10): the west-ledge strip crossing is still the blocker, now with this tree's own measurements — guard #35 (0x5000087, 10 hp) stands ON the strip at (-7.07,12.24,-218.60) in AimStandFire 0x68 [L the 0c-diag dump]; the straight diagonal passes 0.5 u from his capsule and the slide throws Bond off the thin lip (the walk falls to the gap y 2.0 before wire #282 [L the runs]); the -4 branch's lip route no longer holds (the brush-past slide ended (-6.30,1.96,-218.95) in the yard — the guard's firing footwork differs under the sight era [L the run]) and the 11.24 lattice south of him is thin wall tops, not floor (the walk fell to y 1.96 at (-8.78,-218.26) [L the run]). THE ROUND-3-NOTE ANSWER: the landing shots were never blocked by the world — the eye rays to his feet/torso/head AND the chest rays from every forward offset 0..1.6 u are ALL clear [L the 0c-diag run; the port's collision is the disc's, so the game's bullet reaches the same [M]] — the gun simply arrived DRY (clip 1, fired off-target, then clip 0 spare 0 weapon 0x54; every on-target pull after that was a dry click [L the shot-telemetry run]). NEXT LEVER: bring ammo (a resupply pass before the #284 ride — the walk's own pickup points), kill the 10-hp guard from the landing with the on-target shot, and the straight -3 diagonals walk clean to the grab; then the #282 ride release lever (the -4 tree landed the ride on an isolated 13.16 tier at (4.98,-223.29): ride to the natural stop past A and jump there, the #283 ride's own technique) The round-2 fetch attempt is measured too: the resupply walk reached the west pickup (kind 0x0003, weapon 0x0006, 50 rounds at (-21.53,11.33,-218.54) [D the pickup dump]) but the wheel still read weapon 0x54 clip 1 spare 0 after the switch cycle (the 0x54 hand gun is outside the wheel's 2..=0x47 armed band, and gun 0x0006 never armed [L the run]) and the re-anchor walk landed at (-7.79,10.40,-215.92) — a lower perch, not the landing. NEXT LEVER for the fetch: read Pickup_Handler 0x18e650's equip path for why the 0x0006 take did not arm the wheel (owned-already? kind-0x0003 ammo semantics?), or route Bond to keep his START ammo (the loadout [1,2,30,74,78,80,84] — fight the ring leaner) so the landing shot has rounds."
-]
-
 fn the_ground_route_crosses_to_the_east_side() {
     let iso = iso();
+    // los-mask-repins-0c-2 (OPT-IN `with_strip_p2k_shot`): the shared prologue's strip-guard
+    // shot rides the same wheel switch as the handoff walk (the landing gun is the MICRO-CAMERA
+    // 0x54 — no round spawns from it [M scene.rs:5002]; the P2K is loaded there [L the probe]) —
+    // with #35 dead the west strip holds and the prologue's own #284-ride legs land clean.
+    let mut w = walker::with_strip_p2k_shot(|| walk_spawn_to_the_band(&iso));
     // Start: the band west end (the whole walk's leg-10 spot, floor 10.34 [D probe door4]) -
     // REACHED by the game's own route on real input: the shared prologue replays the main
     // walk's legs 1-9c verbatim (spawn -> the laser hinge burn -> the vent drop -> the
     // staircase descent -> the photograph -> the secret door -> the yard ladder -> the wires
     // -> the slot jump's band landing), then this leg walks the band east to the spot. No
     // pose writes.
-    let mut w = walk_spawn_to_the_band(&iso);
     w.walk_to(Wp::new(52.0, 11.4, -207.6).r(0.8), "the band west end (the whole walk's leg-10 spot)");
     {
         let sim = w.scene.sim.as_ref().unwrap();
