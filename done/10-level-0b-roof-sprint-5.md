@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox3 at 2026-11-10T00:08Z
+
+---
+## Report (done, 2026-11-10T01:39Z)
+
+Closed by the driver: the report is on `s/level-0b-roof-sprint-5` (docs/reports/level-0b-roof-sprint-5.md); the worker didn't run finish.sh.
