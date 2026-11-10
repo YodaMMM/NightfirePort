@@ -66,3 +66,10 @@ shared-file change is this task's own.
 
 not visible to me — this environment shows no token, credit or context-window figures for the
 session (no usage panel is exposed to the agent).
+
+## ntfy failed
+
+All three fallbacks failed at ~20:33 UTC:
+- curl: `curl: (28) Connection timed out after 20002 milliseconds`
+- python3: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+- wget: hung past 60 s, killed with no output
