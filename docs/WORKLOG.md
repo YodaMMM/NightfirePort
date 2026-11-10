@@ -81,3 +81,36 @@ Work log:
   scoop+arm_fullest at stair bottom/courtyard lane). Read los-mask-01-walk.md: taking What's
   left in order — 08 captured rerun first, then the unrun walkreals one level per call, then
   ai/turret/glass one -p nf-view --test at a time, suite runner started early.
+
+## los-mask-01-walk-2 (continued)
+
+- (23:20-00:10 UTC) 08 first per the report's What's left: the captured whole-binary rerun on the
+  merged tree names ONE failure (the two unledgered ones pass now): real_damage wedged at the
+  stair head — the walkway-head return-fire fights (the back-off crowd's forward −1.0) herded
+  Bond onto the walkway door (160.6,45.0,−100.1) west frame pocket (y 46.82, NOT grounded,
+  head_bump), seven 3000-tick caps. The gated settle (real-damage walks only: back out of the
+  pocket along the incoming lane to the plain crossing's nav-3 arrival (159.75,46.08,−95.86))
+  frees the lane; the walk then reaches the Hind fight (rocket 1 lands 199.5 of the machine's
+  299) and dies at the bottom terminal to the world zaps (five −1.2 every ~20-25 ticks then
+  −20.09 at f53951) + the masked long-range drains (#5 d 80.6, #14 d 98.2). Ledgered into its
+  ignore with three next levers (the terminal walk-out, the 05 pre-engage, the strafe dodge);
+  the Agent ignore's captured-rerun lever marked done. 08 binary GREEN 3/0/3.
+- (00:10-00:45 UTC) The walkreal sweep one level per call: 0a GREEN 13/0/2, 0c GREEN 3/0/1, 0d
+  GREEN 1/0/2, 15 GREEN 7/0/2, 16 GREEN 15/0/3, 1b GREEN 16/0/3, 41 GREEN 15/0, 4a GREEN 4/0.
+  11: Operative+00agent wedge on the top-floor stairwell-door oscillation (health 100) —
+  ledgered, binary green 2/0/2. 12: Operative wedge at the floor south 2 / south corridor east
+  (health 100) — ledgered, binary green 3/0/1. 14: tripbomb route freezes on the tilted sill
+  row (segment None) — ledgered, binary green 6/0/4. 0b: the d2/d3 sisters die 21 hits for 100
+  with 0 return-fire fights — the roof-sprint lineage's own red (s/level-0b-roof-sprint-4 left
+  them red), left red with the lineage noted. 09: the alarm-switch nav ping-pongs WEST 18
+  segments into the level-exit volume (switch at +18.7), then every hop is +0 — left red,
+  suspected nav-route/NodesForPosition class, not mask-attributed. 13: the PLAIN warm chain
+  fails the out-doorway probe while both real-damage sisters PASS — left red, ambiguous.
+  ai/turret/glass one -p nf-view --test at a time: ai_traces 4/0, turret_hits 3/0, gun_turrets
+  3/0, glass_breach 1/0, glass_pass_every_level 3/0/3, glass_dive 1/0, dynobj_glass 2/0,
+  rocket_glass08 2/0/1 — GREEN. guard_rounds_glass RED (guard rounds stopped at the glass on
+  07000003) — left red for attribution. glass_guards_14 cannot run here (wgpu adapter expect —
+  the sandbox has no GPU).
+- The fast suite (tools/test/suite.py): background starts are killed between tool calls in this
+  sandbox (verified again this session) — not run; the per-binary totals above are the tree's
+  state. 03/05's prior-session ignores stand untouched.
