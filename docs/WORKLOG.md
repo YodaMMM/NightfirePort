@@ -149,3 +149,18 @@ its ignore, never lower damage or health, no top-ups, helpers gated to 07000008 
 - Work log: (in progress)
 - (18:53-20:04) sandbox reset: clone, branch cut, work-slim + ISO down, Rust/ALSA env; disk
   forced a cargo clean + single rebuild (RUSTFLAGS -L alsausr for the linker).
+- (20:05-20:40) reproduced the ledgered deaths on the exact-sight tree (d1 tick 29332,
+  (111.1, 13.5, −179.7); ledger via NF_DMG_TRACE: −1.20 × 15 world hits then −23.00 — the
+  Hind's strafing rockets detonating on the carriage's own wall band next to the standing
+  spot). Re-route: the Hind fight's missile dodge (the d3-only laser-hinges-2 side step,
+  real strafe input) opened to the real-damage walks — same gate shape as the sight gates
+  (`difficulty >= 2 || !tops_up()`), 07000008 file only, no damage/health writes. The
+  Operative real-damage walk GREEN (1.2 health, 116 hits for 98.8, the Hind down f31140);
+  walkreal_07000008_live 4/0/2, interactables_07000008_live 15/0. The Agent sister still
+  bleeds out (tick 37022: the −1.40 × 34 machine blasts through the shot-out panes over the
+  pre-fight #19 ledger 33.6; 69 hits for 100.0) — its ignore message now carries the traced
+  ledger and three levers (the west-doorway slit fight, the unseen-cover fights at d2, the
+  blast-band dodge). The 00 Agent sister keeps its earlier ledger. The full suite did not
+  fit the sandbox (9.9 GB disk: a single-set release build of the four crates + the two
+  required binaries; background jobs die between tool calls so the fast runner could not
+  stay up).
