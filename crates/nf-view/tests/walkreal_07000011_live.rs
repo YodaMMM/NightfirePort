@@ -745,31 +745,25 @@ fn walk_spawn_to_the_lower_floor_load_point() {
 /// rounds for 30→10 and MELEED 14 later) and Bond crossed the south corridor with 1 round —
 /// not enough for the shotgun #10 (hp 12 needs 2 torso rounds, 1 head hit [M
 /// NDrone2_HitDamage 0x145558 × DroneDamage_Head]). One head hit drops a 12-health guard.
-/// IGNORED with the measured reason (pretrans-arms-4, 2026-11-10 [L the runs on this tree]):
-/// the south-band doorway leg wedges 6000 ticks at bond (21.51,48.04,15.89) — 1.26 over the
-/// floor 46.78, grounded=false, the door (20.0,46.8,16.6) OPEN, no drones within 3 u, the
-/// segment to (16,47.4,6.4) blocked at t 0.05 — the (21.5,15.9) desk corner the d3 pre-leg
-/// return chain already notes below (a 0.8 arrive climbed the desk and wedged
-/// grounded=false). Mechanism [L the 11a run]: the leg went dry mid-leg (the top-floor fight
-/// on drone #0, killed at tick 49412), the walker's own dry resupply carried Bond 15 u east
-/// to the box at (24.85,22.21), and the resumed straight line to (16,6.4) clips the desk
-/// corner. TRIED AND REVERTED: (1) desk-lane waypoints before the leg — wrong side (Bond is
-/// at the stairwell door (12.7,6.4) when the leg starts; the lane walk re-crossed the map and
-/// wedged on the stairwell door (13.8,7.1)); (2) a pre-leg ammo top-up — the resupply's own
-/// nav wedged 6000 ticks on the same stairwell door ("pre-doorway ammo resupply 0 nav 1:
-/// opening door (13.8,46.8,7.1) state 0x2" → cap, [L the 11c run]). NEXT LEVER: the walker_b2
-/// dry-resupply arm inside walk_to displaces Bond mid-leg and the resumed leg's straight line
-/// re-routes from the displaced spot — gate the leg-level resupply to spots that don't move
-/// Bond across the leg's own line (a per-walker opt-in flag, e.g. `resupply_in_place`), or
-/// walk the doorway leg from the east side after the resupply (a walk-file detour whose first
-/// waypoint is the box itself).
-#[ignore = "pretrans-arms-4 ledger: the south-band doorway leg wedges 6000 ticks at the (21.5,15.9) desk corner after the leg's mid-leg dry resupply displaced Bond 15 u east to the box (24.85,22.21) — the resumed line to (16,6.4) clips the desk (grounded=false, 1.26 over the floor, door open, no drones within 3 u [L the 11a run]); the desk-lane waypoints and the pre-leg top-up both wedged on the stairwell door (13.8,7.1) [L the 11b/11c runs]; next lever: gate the walker_b2 leg-level dry resupply to in-place spots (per-walker opt-in) or walk the doorway leg from the resupply box's side"]
+/// UN-IGNORED (pretrans-arms-4, 2026-11-10): GREEN — the wedge's own arm is gated. The
+/// leg-level dry resupply (walker_b2's walk_to arms) displaced Bond mid-leg and the resumed
+/// straight line re-routed from the displaced spot — the fetch carried Bond 15 u east to the
+/// (24.85,22.21) box and the resumed line to the (16,6.4) doorway clipped the (21.5,15.9) desk
+/// corner [L the 11a run]. The player's way is a grab that does not abandon the leg: the
+/// opt-in `with_resupply_in_place` (this test only — the plain, Agent and 00 Agent sisters and
+/// every other walk keep master's resupply) filters the leg-level resupply's picks to pickups
+/// ON the leg's own line (within 1.6 u of the bond→wp segment, or at Bond's feet;
+/// damage_log::RESUPPLY_IN_PLACE + walker_b2::resupply's `on_leg_line`), so the fetch walk
+/// advances the leg and the resume stays on it. The walk file's own `loot_the_drops` stops
+/// (the doorway, the NE/SE landings, the strips) run outside walk_to and stay master's —
+/// the descent re-arms at them exactly as before.
 #[test]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage() {
-    walker::with_real_damage_head_hunting(||
-        walker::with_real_damage_unseen_fights(||
-            walker::with_real_damage(||
-                walk_spawn_to_the_lower_floor_load_point_at(1))))
+    walker::with_resupply_in_place(||
+        walker::with_real_damage_head_hunting(||
+            walker::with_real_damage_unseen_fights(||
+                walker::with_real_damage(||
+                    walk_spawn_to_the_lower_floor_load_point_at(1)))))
 }
 
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-00agent-11): the same walked

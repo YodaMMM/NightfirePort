@@ -25,6 +25,15 @@ pub fn wrap_pi(a: f32) -> f32 {
 /// XZ distance.
 pub fn dxz(a: V3, b: V3) -> f32 { ((a[0] - b[0]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() }
 
+/// XZ distance from point `p` to the segment a→b (the resupply leg-line gate).
+pub fn dist_point_seg_xz(p: &[f32; 3], a: &[f32; 3], b: &[f32; 3]) -> f32 {
+    let (abx, abz) = (b[0] - a[0], b[2] - a[2]);
+    let (apx, apz) = (p[0] - a[0], p[2] - a[2]);
+    let len2 = abx * abx + abz * abz;
+    let t = if len2 <= 1e-6 { 0.0 } else { ((apx * abx + apz * abz) / len2).clamp(0.0, 1.0) };
+    ((apx - t * abx).powi(2) + (apz - t * abz).powi(2)).sqrt()
+}
+
 /// What to do once the waypoint is reached (or while approaching it).
 #[derive(Clone, Copy, Debug)]
 pub enum Act {
@@ -346,6 +355,17 @@ impl Walker {
         // of arming, then re-walked the SAME target every pass) — and a target the nav wedge
         // refused twice is not a third walk.
         let mut tried: Vec<[f32; 3]> = Vec::new();
+        // The leg-level gate (pretrans-arms-4): with the opt-in set and walk_to driving a leg,
+        // the pickup must sit ON the leg's own line (within 1.6 u of the bond→wp segment, or at
+        // Bond's feet) — the fetch walk advances the leg and the resumed straight line is the
+        // leg's own line, not a cross-room re-route into furniture [L the 11a run: the
+        // (24.85,22.21) box fetch re-routed the (16,6.4) doorway leg across the (21.5,15.9) desk
+        // corner, 6000 ticks]. Without the opt-in this is a no-op (master behaviour).
+        let gate_wp = resupply_gate_active();
+        let here = self.pos; // a copy: the closure must not hold the &self borrow
+        let on_leg_line = |p: &[f32; 3]| gate_wp.map_or(true, |t| {
+            dxz(*p, here) < 2.5 || dist_point_seg_xz(p, &here, &t) < 1.6
+        });
         for attempt in 0..4 {
             let Some(target) = self.scene.sim.as_ref().unwrap().drones.pickups.iter()
                 .filter(|p| !p.gone)
@@ -357,6 +377,7 @@ impl Walker {
                 .filter(|p| (p.m[3][1] - self.pos[1]).abs() < if lane { floor_band } else { 1.5 })
                 .filter(|p| !lane || tried.iter().all(|t| dxz(*t, [p.m[3][0], p.m[3][1], p.m[3][2]]) > 2.0))
                 .filter(|p| self.no_fetch.iter().all(|t| dxz(*t, [p.m[3][0], p.m[3][1], p.m[3][2]]) > 1.0))
+                .filter(|p| on_leg_line(&[p.m[3][0], p.m[3][1], p.m[3][2]]))
                 .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
                 .min_by(|a, b| dxz(*a, self.pos).total_cmp(&dxz(*b, self.pos)))
             else { break };
@@ -662,6 +683,17 @@ impl Walker {
     /// Steer Bond to one waypoint; returns the ticks it took. Panics with a dump when genuinely
     /// wedged (3 stuck-mitigation cycles without progress).
     pub fn walk_to(&mut self, wp: Wp, label: &str) -> u32 {
+        // The leg-level resupply gate (pretrans-arms-4, opt-in via with_resupply_in_place) reads
+        // the leg's own line while this drives it; the bracket covers every exit path below and
+        // restores the outer leg's line around the nested nav legs (walk_nav_to → walk_to).
+        // Harmless when the gate is off (resupply_gate_active() is None without the opt-in).
+        let prev_leg = walk_leg_replace(wp.at);
+        let r = self.walk_to_leg(wp, label);
+        walk_leg_restore(prev_leg);
+        r
+    }
+
+    fn walk_to_leg(&mut self, wp: Wp, label: &str) -> u32 {
         let mut start_ticks = self.total_ticks;
         // `stuck_answers`: each blocker is fought once per leg (an unkillable one falls through
         // to the plain ladder, whose cycles still bound the leg).

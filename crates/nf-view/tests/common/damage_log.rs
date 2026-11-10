@@ -27,6 +27,16 @@ thread_local! {
     /// `with_real_damage_glass_fights`: the return-fire pick fights the shooter who is actually
     /// hurting Bond first and skips cooled-down candidates (see `return_fire`).
     static HURTING_FIRST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `with_resupply_in_place` (pretrans-arms-4, the 07000011 doorway-leg ledger): while set,
+    /// the LEG-level dry resupply (walker_b2's arms while `walk_to` drives a leg) only takes
+    /// pickups on the leg's own line — a mid-leg displacement across the room re-routes the
+    /// resumed straight leg into furniture [L the 11a run: the resupply carried Bond 15 u east
+    /// to the (24.85,22.21) box and the resumed line to the (16,6.4) doorway clipped the
+    /// (21.5,15.9) desk corner, 6000 ticks]. walker.rs's master resupply never reads this.
+    static RESUPPLY_IN_PLACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The leg walker_b2::walk_to is currently driving (its straight-line target), read by the
+    /// gate above; `None` outside walk_to (a walk file's own resupply stops stay master's).
+    static IN_LEG_WP: std::cell::Cell<Option<[f32; 3]>> = const { std::cell::Cell::new(None) };
     /// The latest real-damage summary on this thread (refreshed every 60 ticks and at a death).
     static LAST_SUMMARY: std::cell::RefCell<Option<(u32, String)>> = const { std::cell::RefCell::new(None) };
 }
@@ -58,6 +68,34 @@ pub fn with_real_damage<R>(f: impl FnOnce() -> R) -> R {
     struct Reset;
     impl Drop for Reset { fn drop(&mut self) { REAL_DAMAGE.with(|c| c.set(false)); print_summary(); } }
     REAL_DAMAGE.with(|c| c.set(true));
+    let _reset = Reset;
+    f()
+}
+
+/// The leg-level resupply gate's reader (walker_b2's `resupply`): the opt-in is set and the
+/// walker is inside a `walk_to` leg — the pick must stay on that leg's own line.
+pub fn resupply_gate_active() -> Option<[f32; 3]> {
+    if RESUPPLY_IN_PLACE.with(|c| c.get()) { IN_LEG_WP.with(|c| c.get()) } else { None }
+}
+
+/// walker_b2::walk_to brackets each leg with these (the gate reads the leg's own target).
+/// Replace (not set/clear): the resupply fetch's own nav legs nest walk_to inside a leg, and
+/// the outer leg's line must survive them.
+pub fn walk_leg_replace(wp: [f32; 3]) -> Option<[f32; 3]> {
+    let prev = IN_LEG_WP.with(|c| c.get());
+    IN_LEG_WP.with(|c| c.set(Some(wp)));
+    prev
+}
+pub fn walk_leg_restore(prev: Option<[f32; 3]>) { IN_LEG_WP.with(|c| c.set(prev)); }
+
+/// OPT-IN (pretrans-arms-4, the 07000011 doorway-leg ledger): while set, the leg-level dry
+/// resupply only takes pickups on the leg's own line (see RESUPPLY_IN_PLACE). The 07000011
+/// real-damage walk sets it; every other walk keeps master's resupply behaviour.
+#[allow(dead_code)]
+pub fn with_resupply_in_place<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { RESUPPLY_IN_PLACE.with(|c| c.set(false)); walk_leg_restore(None); } }
+    RESUPPLY_IN_PLACE.with(|c| c.set(true));
     let _reset = Reset;
     f()
 }
