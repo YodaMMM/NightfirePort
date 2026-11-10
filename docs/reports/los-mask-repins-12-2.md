@@ -114,4 +114,12 @@ for the session, and I will not estimate them.
 
 ## ntfy failed
 
-(filled in after the finish steps — see the section below if the fallbacks fail again)
+All three fallbacks failed; the sandbox has no outbound route to ntfy.sh this session (the same
+outcome los-mask-repins-12 and los-mask-repins-0c recorded):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "los-mask-repins-12-2: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds` (exit 28)
+2. `python3 -c "… urlopen(Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'los-mask-repins-12-2: done', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `timeout 25 wget -q -O- --post-data "los-mask-repins-12-2: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → exit 124 (timed out, no output)
