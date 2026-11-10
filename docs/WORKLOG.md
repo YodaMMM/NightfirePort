@@ -1,0 +1,4 @@
+
+## los-mask-repins-0c-3 (2026-11-10T23:06Z, branch s/los-mask-repins-0c-3)
+
+- Claimed. Base: origin/master 0ee8478fd (the 0c-2 merge: the plain handoff walk and the east ground route green — the walk switches to the P2K for the strip-guard shot; the earlier landing shots were Micro-Camera taps). Task: the real-damage sister of the 0700000c handoff walk green with a real margin — read walkreal_0700000c_live::walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage's ignore message + origin/s/los-mask-repins-0c-2's report; un-ignore. Real input only, no damage/health lowering, no top-ups. Plan: build walkreal_0700000c_live + walkreal_0700000c_eastroute_live + interact_0700000c_live; reproduce; fix on the level's own fight law; run every binary that shares a touched helper; suite if the sandbox allows; report; finish.
