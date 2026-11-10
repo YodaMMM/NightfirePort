@@ -101,6 +101,13 @@ pub struct Walker {
     /// answers the E, and the press reset the ladder forever), and a live hostile standing on
     /// the lane within a body's reach on Bond's floor is shot before the walk goes on.
     pub stuck_answers: bool,
+    /// The left nudge (`sidestep < 0`) counts back up to 0, OPT-IN (walker.rs's
+    /// `sidestep_decays` mirrored; default off keeps every walk tuned on the old ladder —
+    /// a left nudge there grows forever and strafes Bond left through every later leg).
+    /// los-mask-repins-12-2: the 07000012 d1 walk is the only setter so far — its west-stand
+    /// leg's stuck ladder fired the nudge left and the crossing leg measured sidestep -753
+    /// with Bond pinned at the door recess ([L the NF_WALKTRACE run]).
+    pub sidestep_decays: bool,
     /// ai-sight-drawn-gate-4 (NF_ALARM_TRACE, additive): each drone's last logged state, so the
     /// trace prints only transitions + a 50-tick digest — the fail reads as the presser's walk.
     pub alarm_last: Vec<u8>,
@@ -157,6 +164,13 @@ impl Walker {
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0, float_ticks: 0,
             sidestep: 0, max_y: pos[1], lenient: false, stuck_answers: false,
+            // The left nudge (`sidestep < 0`) counts back up to 0, OPT-IN — walker.rs's
+            // `sidestep_decays` mirrored (the 07000012 d1 walk is the only setter so far): the
+            // stuck ladder's `sidestep -= 1` only ends a right nudge, a left one (-40) grows
+            // forever, and the west-stand route's d1 walk measured the carry directly — the
+            // crossing leg started at sidestep -753 with Bond strafe-left pinned at the door
+            // recess for the rest of the walk (los-mask-repins-12-2, [L the NF_WALKTRACE run]).
+            sidestep_decays: false,
             alarm_last: Vec::new(),
             alarm_props_dumped: None,
             no_fetch: Vec::new(),
@@ -851,7 +865,20 @@ impl Walker {
             if self.sidestep != 0 {
                 input.strafe = if self.sidestep > 0 { 1.0 } else { -1.0 };
                 input.forward = 0.4;
-                self.sidestep -= 1;
+                // OPT-IN `sidestep_decays` (walker.rs's flag, mirrored): a left nudge counts
+                // back up to 0 instead of growing forever. Default OFF — the walks tuned with
+                // the old behaviour keep it.
+                self.sidestep -= if self.sidestep_decays { self.sidestep.signum() } else { 1 };
+            }
+            // NF_WALKTRACE=1 per-tick diagnostic (los-mask-repins-12-2): the first 240 ticks of
+            // each leg print the raw steering inputs and the pose, so a slow-start wedge reads
+            // directly off the run. Diagnostic only (no behaviour change).
+            if std::env::var_os("NF_WALKTRACE").is_some()
+                && self.total_ticks - start_ticks < 240 {
+                let sim = self.scene.sim.as_ref().unwrap();
+                eprintln!("[walktrace] {label} +{} pos ({:.3},{:.3},{:.3}) yaw {:.3} err {err:.3} fwd {:.2} strafe {:.2} sidestep {} stuck {}",
+                    self.total_ticks - start_ticks, p[0], p[1], p[2], sim.bond.yaw,
+                    input.forward, input.strafe, self.sidestep, self.stuck);
             }
             self.tick(input, false);
 

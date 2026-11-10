@@ -310,6 +310,15 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
     // wedged 6000 ticks [L the d1 run]. Opt-in: DOOR_543_WEST_STAND (the d1 route only — the d3/d2
     // diagonal is the proven route there; this one shifts their fight timelines).
     if DOOR_543_WEST_STAND.with(|c| c.get()) {
+        // los-mask-repins-12-2: the approach walks the geometry the wall plane admits — the
+        // corridor's west wall is SOLID north of the hole (z −13.86..−15.15 [D the static
+        // collision]), so a west steer at z −12.85 pins Bond against it (the d1 run: 6000-tick
+        // cap at (10.62,−12.85) [L]; the stuck ladder's door answer no-ops on the open leaf and
+        // never escalates), and the old run only passed the approach because the walker's
+        // never-decaying nudge left slid him south into the band by accident. The band is the
+        // crossing: south along the corridor to z −14.40 first, then through to the west stand.
+        w.walk_to(Wp::new(10.55, 1.10, -12.85).r(0.5), "door plc 543, the corridor wall");
+        w.walk_to(Wp::new(10.55, 1.10, -14.40).r(0.5), "door plc 543, the hole band south");
         w.walk_to(Wp::new(9.30, 1.10, -12.85).r(0.4), "door plc 543, the west stand");
         {
             let di = w.scene.sim.as_ref().unwrap().drones.doors.list.iter().position(|d| d.placement == 543)
