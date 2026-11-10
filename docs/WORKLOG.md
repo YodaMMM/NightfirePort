@@ -192,3 +192,23 @@ un-ignore it; real input only, never lower damage or health, no top-ups, helpers
 ## los-mask-repins-12 (2026-11-10T21:28Z, branch s/los-mask-repins-12)
 
 - Claimed. Base: origin/master 0e1371451 (the guard-sight turn-on: per-object masks, the cel walk, the sight rotation, the guard's own cel, the own-cel boundary push, FellOutMap). Task: the 07000012 walks green again under the game's guard sight — read the ignore messages, re-route each walk with real input, remove the ignores, no damage/health lowering, no top-ups, helpers gated to 07000012 + difficulty. FIRST the door plc 543 behaviour check (state 0x2 at 0.50 for ~200 ticks after E — game anti-crush vs port bug, [M Door_Activate 0x135be0 + the door mover]; live fact: the game lets Bond through on that approach). Plan: repairs report + ignore messages; build walkreal_07000012_live + interactables_07000012_live; reproduce; door check; re-route; suite; report; finish.
+- (21:28-23:15) The door plc 543 behaviour check FIRST: the old ignore's "holds state 0x2 at 0.50
+  for ~200 ticks" does NOT reproduce on master tip 0e1371451 — the port's leaf opens fully there
+  (NF_DOORTRACE: #15 pos01 0.5 → 1.0, 30 ticks, no react_to_hit reversal). The port REPLICATES the
+  task's live fact: Bond placed (9.9,1.1,-13.0) facing south, E, stick forward 240 frames →
+  (6.25,1.13,-25.39) vs the game's (6.21,1.13,-25.40) [L] — the port door is NOT buggy. Door law
+  written down: kind-0 swing pos01 0.5 = the SHUT pose, closing snaps to 0.5 + SetState(2)
+  [M Door_Interp 0x135738]; swing_from_side's side = sign(activator · inv_closed column 2 = +x) —
+  EAST/WEST of the hinge, not north/south [M Door_Activate 0x135be0:71-74; the shut matrix]. The
+  real blocker: the route's (11,-12)→(8.5,-13.5) diagonal gets stuck against the corridor's west
+  wall north of the hole and its stuck-E lands EAST of the hinge → the leaf swings into the
+  corridor's west mouth and the leg wedges 6000 ticks [L the d1 run]. Re-route (gated
+  DOOR_543_WEST_STAND, difficulty==1 only — the d3/d2 diagonal is proven there and the ungated
+  re-route turned all three red): west stand (9.3,-12.85) → E (state OPEN assert) → the crossing
+  straight south the live fact's line to (9.0,-17.5). The d1 walk now CROSSES 543 and dies later:
+  t7167, drone #2 (skin 0x5000008, weapon 0x19) at (-9.1,-4.1,-21.0) d 20.8, 57 hits for 100.0,
+  south hall before 545 — the ignore message updated to that ledger; un-ignoring waits for the
+  fight re-tune (real input, no damage/health writes, next window). Ran: walkreal_07000012_live
+  3/0/1 twice (before + after the gate; the gate restored the 3), interactables_07000012_live
+  12/0. The full suite did not run: past the 23:03 UTC stop line when the tree settled, and
+  background jobs die between tool calls in this sandbox (the fast runner could not stay up).

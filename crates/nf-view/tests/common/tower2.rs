@@ -48,6 +48,9 @@ thread_local! { pub static EAST_WING_WEST_SIDE: std::cell::Cell<bool> = const { 
 /// he walks past instead of turning his back on him: the stand runs only while that guard lives
 /// within 6 u of the corner.
 thread_local! { pub static CLEAR_EAST_WING_GUARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+/// The 543 west-stand crossing (los-mask-repins-12): opt-in per caller — the d3/d2 route keeps
+/// its proven diagonal; only the Operative walk's legs are re-routed so far.
+thread_local! { pub static DOOR_543_WEST_STAND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 /// The walkreal-12 route: spawn → the keypad burn → the console E. Used again by the 07000013
 /// test's warm chain.
@@ -247,8 +250,6 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
         (21.00, 3.50, "the east lobby east"), (24.25, 2.75, "the east wing corner"), (24.00, -1.00, "the east wing"),
         (23.50, -4.50, "the east wing south"), (22.25, -7.25, "the south-east bend"), (20.75, -9.75, "the south-east bend 2"),
         (19.00, -12.00, "the south corridor east"), (15.00, -12.00, "the south corridor"), (11.00, -12.00, "the south corridor west"),
-        (8.50, -13.50, "through door plc 543"), (6.50, -15.50, "the south passage"), (6.50, -19.50, "the south passage 2"),
-        (5.75, -22.75, "the south hall"), (-9.75, -22.25, "the south hall west"),
     ];
     for &(x, z, label) in legs {
         let x = if label == "the east wing" && EAST_WING_WEST_SIDE.with(|c| c.get()) { 23.2 } else { x };
@@ -297,6 +298,40 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
                 }
             }
         }
+    }
+    // Door plc 543 (kind 0 swing, hinge (9.95, 1.10, -14.46) [M the shut matrix], in the corridor's
+    // west wall, hole z -13.86..-15.15 [D the static collision]). The game lets Bond through on the
+    // north approach: [L PCSX2 2026-11-10, fresh load, guards asleep] Bond at (9.9, 1.1, -13.0)
+    // facing south, Use pressed, stick forward 240 frames → (6.21, 1.13, -25.40), 11 u past the
+    // door; the port reproduces the same walk to (6.25, 1.13, -25.39). The stand point sits in the
+    // wall's north recess: walked from the corridor Bond rests at (9.28, -12.84) [L the d1 run] —
+    // still west of the hinge line 9.95, the same swing side. The old (8.5, -13.5) diagonal's
+    // stuck-E landed EAST of the hinge and swung the leaf into the corridor's west mouth; the leg
+    // wedged 6000 ticks [L the d1 run]. Opt-in: DOOR_543_WEST_STAND (the d1 route only — the d3/d2
+    // diagonal is the proven route there; this one shifts their fight timelines).
+    if DOOR_543_WEST_STAND.with(|c| c.get()) {
+        w.walk_to(Wp::new(9.30, 1.10, -12.85).r(0.4), "door plc 543, the west stand");
+        {
+            let di = w.scene.sim.as_ref().unwrap().drones.doors.list.iter().position(|d| d.placement == 543)
+                .expect("door plc 543 [D]");
+            w.use_door(di, "door plc 543");
+            for _ in 0..40 { w.tick(nf_game::player::Input::default(), false); }
+            assert_eq!(w.scene.sim.as_ref().unwrap().drones.doors.list[di].state, nf_game::door::OPEN,
+                "E from west of the hinge opens door plc 543 [M Door_Activate 0x135be0; L the live fact]");
+        }
+        // The crossing follows the live fact's line — STRAIGHT SOUTH from the stand [L the game's
+        // Bond held the stick south and drifted to (6.21, -25.40); a SW-steered waypoint digs the
+        // stuck-mitigation sidestep into the wall's east dead-end (10.62, -15.73) [L the d1 run]].
+        w.walk_to(Wp::new(9.00, 1.10, -17.50).r(1.3), "through door plc 543");
+    } else {
+        w.walk_to(Wp::new(8.50, 1.1, -13.50).r(1.0), "through door plc 543");
+    }
+    let legs: &[(f32, f32, &str)] = &[
+        (6.50, -15.50, "the south passage"), (6.50, -19.50, "the south passage 2"),
+        (5.75, -22.75, "the south hall"), (-9.75, -22.25, "the south hall west"),
+    ];
+    for &(x, z, label) in legs {
+        w.walk_to(Wp::new(x, 1.1, z).r(1.0), label);
     }
     // Door plc 545 (−10.58, −19.29) opens on E only (the game's too: it stays shut on approach and
     // opens on Square [L PCSX2 2026-10-31]); Bond then crosses on the game's own line, z −18.70..−18.81

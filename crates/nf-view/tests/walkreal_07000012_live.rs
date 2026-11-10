@@ -78,6 +78,11 @@ fn walk_spawn_to_the_shaft_exit_at(difficulty: u32) {
         w.dmg.back_off = Some(3.0);
         w.dmg.lane_fights = true;
     }
+    if difficulty == 1 {
+        // los-mask-repins-12: the Operative route takes the 543 west-stand crossing — the d3/d2
+        // diagonal's stuck-E lands east of the hinge and the leg wedges at d1 [L the runs].
+        tower2::DOOR_543_WEST_STAND.with(|c| c.set(true));
+    }
     tower2::walk_12(&mut w);
     tower2::walk_12_exit(&mut w);
 
@@ -135,7 +140,7 @@ fn walk_spawn_to_the_shaft_exit_real_damage_agent() {
 /// at create [M Lock_Create 0x1ae1f8 tail: param 6 = 1 on difficulty 1] (the route's unlock
 /// check accepts both paths, common/tower2.rs). Real input only.
 #[test]
-#[ignore = "los-mask-repins-12: door plc 543 at (9.9, 1.1, -14.5) holds state 0x2 at 0.50 for ~200 ticks after the E press; Bond slides south along the leaf to (10.62, 1.03, -15.73) and the leg hits its 6000-tick cap"]
+#[ignore = "los-mask-repins-12: the 543 wedge is fixed (the d1 route takes the west-stand crossing; the door check cleared — the port matches the game's live fact (6.25,1.13,-25.39) vs (6.21,1.13,-25.40)); the walk now dies at t7167 to drone #2 (skin 0x5000008, weapon 0x19) at (-9.1,-4.1,-21.0) d 20.8 — 57 hits for 100.0 in the south hall before door plc 545; the next window re-tunes that fight (real input, no damage/health writes)"]
 fn walk_spawn_to_the_shaft_exit_real_damage_operative() {
     walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(|| walk_spawn_to_the_shaft_exit_at(1)))
