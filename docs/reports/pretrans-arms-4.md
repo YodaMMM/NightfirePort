@@ -96,3 +96,11 @@ cites its run.
 
 not visible to me — this environment shows no token, credit or context-window figures for the
 session (no usage panel is exposed to the agent).
+
+## ntfy failed
+
+All three fallbacks failed — ntfy.sh is unreachable from this sandbox (the branch push in the same
+minute succeeded):
+1. `curl -sS -m 20 ...` → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 urllib` → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data ...` → no output, killed by the 45 s tool timeout
