@@ -1001,6 +1001,10 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
         // the P1 run below (arm-on-the-run, target the ROCKET 0x2e for the gap-mouth drop)
         // and skip this block; the d1 walk keeps the stand-first arm byte-identical.
         let agent_run = w.scene.sim.as_ref().unwrap().drones.difficulty >= 2;
+        // level-0b-roof-sprint-10: the d3 gate (sprint-9's port) — the 00 Agent sister's
+        // 6-round band window and the take-slot hold ride it; the Agent (d2) sister gets the
+        // ONE early round its dash-lane kill needs.
+        let difficulty3 = w.scene.sim.as_ref().unwrap().drones.difficulty >= 3;
         if !agent_run {
             for _ in 0..120 {
                 let sim = w.scene.sim.as_ref().unwrap();
@@ -1011,6 +1015,24 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                     ..Default::default()
                 }, false);
             }
+        }
+        // level-0b-roof-sprint-10 (port of sprint-9's pre-arm, extended to both sisters): the
+        // early r1 needs the heatseeker IN HAND before the lane run — the real switch eats its
+        // ~100-tick latency here, at the deck entry, not under fire mid-approach [D #349 p1 =
+        // 0x2e; Player_WeaponChange]. The r1 chain-kills #7+#4 (+#5 on the aim) BEFORE the
+        // P3→P4 dash — on this sight tree #4 parks ON the dash line (2.1, 58.0, 31.7) and his
+        // 28.0 point-blank was the d2 death [L d2run1]. The d1 stream stays byte-exact.
+        if agent_run {
+            for _ in 0..240 {
+                let s2 = w.scene.sim.as_ref().unwrap();
+                if s2.gun.weapon == 0x2e && s2.gun.switch_state == 0 { break; }
+                let sw = s2.gun.switch_request;
+                w.tick(nf_game::player::Input {
+                    switch_to: if sw == 0x2e { None } else { Some(0x2e) },
+                    ..Default::default()
+                }, false);
+            }
+            assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x2e, "the heatseeker armed [D #349]");
         }
         // SPRINT-5 (the sisters): P4 runs THROUGH the take zone to the deck's east edge
         // (9.8, 41.3) and P5 is dead for the d1 walk — the wake volley math: the dart lands
@@ -1057,7 +1079,23 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
         let mut rocket_start = 0u32;
         let mut rocket_cool = 0u32;
         let mut rockets_fired = 0u32;
-        while w.total_ticks - start < 2400 {
+        // SPRINT-9 (ported by hand): the band-round state — band_shot counts the 0x2e rounds
+        // (0 = the early r1 pending), band_refire is the next press's earliest tick (the spend
+        // + 60 [D +0x40]), band_clip is the clip watermark for the spend detect, and the
+        // fresh-edge duty cycle gates the press. The cap: d3 runs the sprint-9 six-round
+        // window; d2 fires the ONE early round its dash-lane kill needs.
+        let mut band_shot = 0u32;
+        let mut band_refire = 0u32;
+        let mut band_clip = 0u32;
+        let mut shot_press_gate = true;
+        let mut stretch_shots = 0u32; // sprint-10: the z > 20 window fires ONE cleanup round
+        let band_cap: u32 = if difficulty3 { 6 } else { 1 };
+        let mut flight_alive: Vec<bool> = Vec::new();
+        band_clip = w.scene.sim.as_ref().unwrap().gun.clip;
+        // sprint-8: the cap rides 3000 on the sisters — the crosshair-aimed rounds turn the
+        // view in-lane (~8-20 ticks each); the d1 runs break at the take well inside 2400 and
+        // keep the old cap byte-exact.
+        while w.total_ticks - start < if agent_run { 3000 } else { 2400 } {
             let sim = w.scene.sim.as_ref().unwrap();
             let p = sim.bond.pos;
             // The take fires ON THE PASS — for the sisters the pass continues to the deck's
@@ -1104,6 +1142,23 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                     .map(|(w, _)| format!("{w:#x}:clip {}", inv.clip.get(w).copied().unwrap_or(0)))
                     .collect();
                 eprintln!("[0b-stall]   carried {:?} owned [{}]", inv.carried, owned.join(" "));
+                // sprint-10 diag: the direct-ray map to the band — where does a round's
+                // bearing stop, from THIS spot (the clear-ray window hunt for the cleanup
+                // blast). Diag only, no assertion.
+                if sim.drones.difficulty >= 3 {
+                    let eye = [p[0], p[1] + sim.bond.eye - sim.bond.crouch_drop, p[2]];
+                    for &gi in &[6usize, 8, 9] {
+                        let g = &sim.drones.list[gi];
+                        if !g.present || g.corpse || g.health <= 0.0 { continue; }
+                        let ge = [g.pos[0], g.pos[1] + 1.2, g.pos[2]];
+                        let t = sim.world.segment_bullet(eye, ge);
+                        let stop = t.map(|t| {
+                            let s = [eye[0] + (ge[0] - eye[0]) * t, eye[1] + (ge[1] - eye[1]) * t, eye[2] + (ge[2] - eye[2]) * t];
+                            format!("stop {t:.2} at ({:.1},{:.1},{:.1})", s[0], s[1], s[2])
+                        }).unwrap_or_else(|| "CLEAR".into());
+                        eprintln!("[0b-ray] t{} bond ({:.1},{:.1},{:.1}) → g{gi} d {:.1}: {}", w.total_ticks, eye[0], eye[1], eye[2], walker::dxz(g.pos, p), stop);
+                    }
+                }
             }
             // SPRINT-6: THE ROCKET WINDOW — measured, NOT shipped. The P1/P2 long-range
             // toll's intended answer was one carried 0x2e round into the east band's
@@ -1142,11 +1197,19 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
             // round hits [M 0x179740:113-115]) hands the lane to the P4 dash.
             let mut closing = false;
             let mut close_ticks = 0u32;
-            if agent_run && phase == 2 {
+            // SPRINT-9 (port): the dart close is gated by DISTANCE, not phase — run 14's
+            // ledger had #4 paying 34.3 (0x18) through the WHOLE P1→P2 leg because the
+            // phase-2 gate sat idle while he closed to d 6.3 for 80 ticks [L run 14]. The
+            // close now engages the first tick d4 < 9.0 (the fire-on-move window) at any
+            // phase — D3 ONLY: the d2 sister keeps the phase-2 window (its #4 dies to the
+            // early r1 before any close matters, and the d2 lane was re-pinned around the
+            // phase-2 window's geometry).
+            let close_window = if difficulty3 { true } else { phase == 2 };
+            if agent_run && close_window {
                 let g4 = &sim.drones.list[4];
+                let d4 = walker::dxz(g4.pos, p);
                 if g4.present && !g4.corpse && g4.health > 0.0
                     && !nf_game::drone::Drone::dart_family_state(g4.state) {
-                    let d4 = walker::dxz(g4.pos, p);
                     if d4 < 9.0 {
                         if d4 > 3.4 {
                             closing = true;
@@ -1155,14 +1218,25 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                             // Bounded: a close that cannot converge (the err never opens the
                             // 0.05 gate against a strafing guard) must not hold the lane
                             // forever — the dash goes and eats the old wide-pass cost.
-                            if close_ticks > 180 { closing = false; phase = 3; }
-                        } else {
+                            // (SPRINT-9: the close_start reset is REVERTED — a9_run10 showed
+                            // it re-arming the close every 180 ticks against a sight-tree
+                            // #4 that never darts; the sprint-5 one-window bound stands, and
+                            // both sisters' #4 dies to the early r1 before any close.)
+                            if close_ticks > 180 { closing = false; if phase == 2 { phase = 3; } }
+                        } else if phase == 2 {
                             phase = 3;
                         }
                     }
-                } else {
+                } else if phase >= 2 && (g4.corpse || g4.health <= 0.0
+                    || nf_game::drone::Drone::dart_family_state(g4.state)) {
                     // asleep or gone — the dash goes while the sleep holds (the agent_run2
                     // trace: the roof guard's 0x50 held 260+ ticks, well past the take).
+                    // SPRINT-9: the >= 2 jump is MEASURED-CORRECT — the a9_run5 P3 lane
+                    // (phase-2-only fix) passes 3.5 u of #5's strafe spot and the r2's #5-
+                    // chase blast paid Bond 35 (world 58.0, death t16556); the run-3 P2→P4
+                    // straight stays ≥ 11 u east of that blast (world 30.0, alive at the
+                    // take). The post-take compose is sound: the slam (→3) then the advance
+                    // (ch 0x3F on → 4) nets phase 4 for the aim — the P5 drive runs.
                     phase = 3;
                 }
             }
@@ -1181,9 +1255,78 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                 phase += 1;
             }
             if phase == 3 && drop_start == 0 { drop_start = w.total_ticks; }
-            let aim = if closing {
+            // SPRINT-9 (ported by hand — gated to 0700000b and the sisters): THE CROSSHAIR-
+            // AIMED LANE ROUNDS — fire-and-run. The round spawns along the CROSSHAIR ray
+            // [M Player_WeaponInitBullet 0x1a4bf0:226-245], so the view is TURNED on the
+            // victim while the lane holds (the turn rides the same 0.08 clamp; the forward
+            // gate stops Bond for the ~8-20 turn ticks) and the round is LEFT to its homing
+            // while Bond resumes the run. THE EARLY r1 IS THE BIG LEVER [L a9_run2, eight
+            // deterministic runs on the sight tree]: fired mid-approach (phase 0, z > 6 —
+            // past the SW structure band that ate the a00_run3 deck-key shot), the aim #5's
+            // spawn ray grazes his strafe path (a direct 100-dmg hit on hp 10 — dead [L
+            // a9_run2]) while the nearest-SEEKABLE lock skips him (WAIT_SWITCH exits the scan
+            // [M Bullet_heatseekable 0x12f248]) and takes #7 → the re-scan #4 — the blast at
+            // #4's own column spot killed #4 AND #7 point-blank with Bond ~19 u away: THREE
+            // guards one round, no self-hurt. On THIS tree that chain clears the d2 dash lane
+            // (the sight tree parks #4 ON it — the d2run1 death) and opens the d3 band.
+            // #4 is NEVER a rocket target — alive or asleep he is seekable [M
+            // Bullet_heatseekable 0x12f248] and the nearest-in-cone rule hands him every lock
+            // whose ray passes near his column [L the sprint-8 r2 chase into the gap column,
+            // the blast −82 on the running Bond]. The follow-up rounds (d3's six-round window)
+            // ride the band anchor and wait for the P2 crossing + the SOUTH strip z < 18.5 —
+            // the only measured clear-ray corridor [L a9_run3/6: every round fired north of
+            // z 20 died on the gap-mouth pieces at 8-12 u]. The presses wait for the previous
+            // round to detonate and ride the RE-PRESS law (the pull's pending re-arms on the
+            // fresh edge only, the +0x40 = 60 [D] interval; [M 0x1a5460:601-629, :688-690]).
+            let mut shot_victim: Option<usize> = None;
+            if agent_run && band_shot < band_cap {
+                let flying = sim.drones.player_bullets.iter().any(|b| b.weapon == 0x2e && !b.dead);
+                let alive = |i: usize| { let g = &sim.drones.list[i]; g.present && !g.corpse && g.health > 0.0 };
+                let band_pick = || [6usize, 7, 8, 9].iter().copied().find(|&i| alive(i));
+                if band_shot == 0 && (phase >= 1 || (phase == 0 && p[2] > 6.0)) {
+                    shot_victim = if alive(5) { Some(5usize) } else { band_pick() };
+                } else if band_shot >= 1 && !flying && w.total_ticks >= band_refire
+                    && difficulty3
+                    && phase >= 1 && (p[2] < 18.5 || (p[2] > 20.0 && stretch_shots == 0)) {
+                    // sprint-10: the cleanup rounds — (a) the STRIP round (z < 18.5) locks the
+                    // r1-woken #5 (WAIT_SWITCH exits the scan only while he waits [M
+                    // 0x12f248]) and its chase-blast KILLS him in the gap-mouth piece (the
+                    // d3run4/5 ledger: hp −30 at the (2.41, 57.95, 21.24) death spot) —
+                    // LOAD-BEARING: without it the woken #5 drifts onto the lane and the next
+                    // round's nearest-in-cone lock takes him POINT-BLANK (d3run7: #5 at
+                    // (0.6, 20.7), 2.2 u from Bond — the blast paid −37 = the death);
+                    // (b) ONE stretch round (z > 20): the direct rays to the band are CLEAR
+                    // there (d 15-16 [L the [0b-ray] map]), the dead #4 exits the seekable
+                    // scan (health ≤ 0), the dead #5 no longer steals, and the lock takes the
+                    // aimed live guard — measured (d3run4/5): from (−1.4, 20.3) the round
+                    // flew LOCKED over the low piece and the blast KILLED #6 AND #7. The
+                    // SECOND stretch round is the muzzle-zone kill (d3run4: from (0.4, 25.5)
+                    // the round lost its lock at 0.9 u and the ballistic detonation 5.7 u out
+                    // paid −17.55 = the death — the class sprint-9's a9_run6 measured).
+                    shot_victim = band_pick();
+                }
+                if shot_victim.is_none() && [6usize, 7, 8, 9].iter().all(|&i| !alive(i)) {
+                    band_shot = band_cap; // the band is gone — the rounds are done (the dart close owns #4)
+                }
+            }
+            // SPRINT-9 (port, d3): THE TAKE SLOT — the sprint-5 orbit death (Bond pressed
+            // north past P4, slid east of the open face, died in the sphere LOS-blocked) and
+            // the a9_run3 hold answered with the take firing only after the phase-slam thrash
+            // dragged him there — the walk now aims the d1-proven SLOT (pp−0.3, pp−1.0 — the
+            // walked take's own target, LOS and dist both green there [L the d1 take every
+            // run]) and stands once inside 0.5 u: the per-tick touch law fires, the P5 drive
+            // resumes on ch 0x3F.
+            let take_pending = agent_run && difficulty3 && phase == 3 && !sim.drones.channels.on(0x3f);
+            let slot_aim = [pp[0] - 0.3, pp[2] - 1.0];
+            let hold_for_take = take_pending && walker::dxz(p, [slot_aim[0], p[1], slot_aim[1]]) < 0.5;
+            let aim = if let Some(vi) = shot_victim {
+                let g = &sim.drones.list[vi];
+                [g.pos[0], g.pos[2]]
+            } else if closing {
                 let g4 = &sim.drones.list[4];
                 [g4.pos[0], g4.pos[2]]
+            } else if take_pending {
+                slot_aim
             } else {
                 lane[phase]
             };
@@ -1242,6 +1385,18 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
             // [L the runs]). The run continues regardless.
             let mut trigger = false;
             let mut look = 0.0f32;
+            // SPRINT-9 (port): the shot aim's pitch (the victim's body) — the crosshair
+            // carries it to the spawn ray's snap [M 0x1a4bf0:226-245].
+            let mut shot_look_err = 0.0f32;
+            if let Some(vi) = shot_victim {
+                let g = &sim.drones.list[vi];
+                let at = [g.pos[0], g.pos[1] + 0.8, g.pos[2]];
+                let dg = walker::dxz(p, at).max(0.5);
+                let want_pitch = ((at[1] - (p[1] + sim.bond.eye - sim.bond.crouch_drop)) / dg)
+                    .atan() / std::f32::consts::FRAC_PI_2;
+                shot_look_err = want_pitch - sim.bond.pitch;
+                look = shot_look_err.clamp(-0.08, 0.08);
+            }
             // SPRINT-4: the opportunistic fire rides the SHOTGUN only — the sisters hold the
             // rocket 0x2e through P1/P2 and its rounds are reserved for the gap-mouth drop
             // (a wasted rocket or a < 9 u blast is the risk the gate removes). On the d1 path
@@ -1287,22 +1442,35 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                     break;
                 }
             }
+            // SPRINT-9 (port): THE SHOT PRESS — the fresh-edge trigger on the converged
+            // crosshair, every other tick so a refused press regains its edge (the re-press
+            // law above).
+            let shot_converged = shot_victim.is_some()
+                && aim_err.abs() < 0.015 && shot_look_err.abs() < 0.03;
+            if shot_converged {
+                trigger = shot_press_gate;
+                shot_press_gate = !shot_press_gate;
+            }
             let mut input = nf_game::player::Input {
-                turn: aim_err.clamp(-0.08, 0.08),
+                turn: if hold_for_take { 0.0 } else { aim_err.clamp(-0.08, 0.08) },
                 look,
-                forward: if aim_err.abs() > 0.6 { 0.0 } else { 1.0 },
+                // sprint-10: the CLEANUP convergence HOLDS THE LANE — sprint-9's run-at-the-
+                // victim pulled Bond off the P2→P4 straight toward the band's bearing (the
+                // d3run5 wedge at (3.3, 40.8), hp 7.0, #8's chew finishing him). Stand and
+                // turn only — but the EARLY r1 keeps the run-at-victim (its convergence rides
+                // the approach; the d3run6 hold stood Bond in the open at (−6.4, 19.0) and
+                // the squad killed him there — and the green d2 timeline IS a run-at-victim).
+                forward: if aim_err.abs() > 0.6 || hold_for_take
+                    || (shot_victim.is_some() && band_shot >= 1) { 0.0 } else { 1.0 },
                 ..Default::default()
             };
             // ARM ON THE RUN (the sisters): the switch rides inside the run — 0x2e until the
-            // rocket attempt is finished, then 0x43 for the P3/P4 fire-on-move. No stand
-            // (Player_WeaponChange needs none [M the game's switch path]; sprint-3's stand
-            // cost ~20 hp [L]).
-            // SPRINT-4 REVISED: the sisters arm the SHOTGUN on the run — the rocket plan is
-            // parked: the gap-mouth rocket detonation hurt Bond ~48 at d 13.7 while the disc's
-            // own blast radius is 8.0 [L ee_snapshot weapon_data+0x2e·0x10c+0x08 = 8.0, damage
-            // 100.0] — a port blast-law divergence recorded for its own task (the walk fires
-            // no rockets). The drop below fires the shotgun from the same converged stand.
-            if agent_run {
+            // band rounds are spent (band_shot reaches the cap), then 0x43 for the P3/P4
+            // fire-on-move. No stand (Player_WeaponChange needs none [M the game's switch
+            // path]; sprint-3's stand cost ~20 hp [L]). The switch-back rides the fire tick
+            // when a shot fires this tick — the gun comes home while the round flies [L
+            // a00_run6: the early shot + the fire-tick request got the gun home].
+            if agent_run && !(band_shot < band_cap) {
                 let want = 0x43;
                 let s2 = w.scene.sim.as_ref().unwrap();
                 if s2.gun.weapon != want {
@@ -1311,6 +1479,40 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                 }
             }
             if trigger { w.tick_fire(input); } else { w.tick(input, false); }
+            // SPRINT-9 (port): the round-away bookkeeping — the clip drop with a pending
+            // victim is the spend; the next gate opens at the spend + 60 [D +0x40]. Plus the
+            // flight-death probe (diag only): where each 0x2e round actually dies.
+            if agent_run {
+                for (bi, b) in w.scene.sim.as_ref().unwrap().drones.player_bullets.iter().enumerate() {
+                    if b.weapon != 0x2e { continue; }
+                    if bi < flight_alive.len() && flight_alive[bi] && b.dead {
+                        eprintln!("[0b-flight] r{} bullet {bi} DIED at ({:.2},{:.2},{:.2}) travelled {:.1} target {:?} bounces {}",
+                            band_shot, b.pos[0], b.pos[1], b.pos[2], b.travelled, b.target, b.bounces);
+                    }
+                    if bi >= flight_alive.len() { flight_alive.push(b.dead); } else { flight_alive[bi] = b.dead; }
+                }
+                if w.total_ticks % 5 == 0 {
+                    for (bi, b) in w.scene.sim.as_ref().unwrap().drones.player_bullets.iter().enumerate() {
+                        if b.weapon == 0x2e && !b.dead {
+                            eprintln!("[0b-flight] r{} bullet {bi} at ({:.2},{:.2},{:.2}) travelled {:.1} target {:?}",
+                                band_shot, b.pos[0], b.pos[1], b.pos[2], b.travelled, b.target);
+                        }
+                    }
+                }
+                let c1 = w.scene.sim.as_ref().unwrap().gun.clip;
+                if c1 < band_clip {
+                    band_clip = c1;
+                    if shot_victim.is_some() && band_shot < band_cap {
+                        band_shot += 1;
+                        band_refire = w.total_ticks + 60;
+                        if p[2] > 20.0 { stretch_shots += 1; }
+                        eprintln!("[0b-band] round {} away at t{} (clip {}) victim {:?} hp {:.1}",
+                            band_shot, w.total_ticks, c1, shot_victim, w.scene.sim.as_ref().unwrap().drones.health.health);
+                    }
+                } else if c1 > band_clip {
+                    band_clip = c1; // the auto-reload fed the clip
+                }
+            }
         }
         assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f),
             "the deck sprint must take the parachute ON THE PASS (standing at the slot is the death: [L the death run — 95 ticks at the slot, 3 × 11.2 + 5.2 from #4, the take never fired]); bond at {:?}",
@@ -1529,8 +1731,15 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage() {
 /// fresh boot with NO channel pokes (`fresh_boot_asserts` pins the channels off) and the same
 /// fight package (`lane_fights` + `tranq_fights` + back_off 3.0). Real input only — the load
 /// path is the only difference.
+/// level-0b-roof-sprint-10 (2026-11-10, master 823ff190b sight tree): UN-IGNORED — sprint-9's
+/// levers PORTED BY HAND (no merge): the early r1 (phase 0, z > 6, aim #5-if-alive else the
+/// band) chain-kills the dash-lane blocker, the shot press rides the converged crosshair with
+/// the fresh-edge duty cycle, the switch-back to 0x43 rides the spend, and the d3-only
+/// six-round band window + take-slot hold + distance-gated close port with it (d2 keeps the
+/// phase-2 close window and a ONE-round cap). The d2 sister is GREEN (d2run2/3,
+/// deterministic twice): r1 away t16254 victim #6 (the deck fights had #5 already dead) at
+/// 66.4 hp, mission complete t16926, stuck 0, falls 1.
 #[test]
-#[ignore = "los-mask-repins-0b: Bond dies at tick 16525 at (0.87, 58.10, 31.68); a fight moved by the guard sight round robin, not re-tuned"]
 fn walk_fresh_spawn_to_the_mission_end_real_damage_agent() {
     walker::with_real_damage(|| {
         let mut w = load_fresh_at(2);
@@ -1571,7 +1780,7 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage_agent() {
 /// guard's latch reads moving true through the whole run [L a00_run1 t15947+], so master's
 /// 566f1d298 law already covers this walk. The sprint-6 attempts on the P1/P2 toll are
 /// ledgered in the ignore message below (the rocket arc measurements; the live-wire 16.0).
-#[ignore = "00 Agent (sprint-6 ledger, tree 2026-11-10): dies at (7.13, 58.07, 41.22) tick 16517, 2.7 u short of the deck edge — 22 hits for 100.0: #9 21.0 in 3 (0x18 at d 21-35), #6 14.0, #8 10.5, #7 10.5, #4 28.0 in 4 (14.0 at d 20-25 during P1 + 14.0 at the close; the dart then slept him through the dash), #5 10.5, the world 16.0 = FOUR 4.0 live-wire hurts in the ring corridor (frames 13380-13423 at (−1.4, 47.8, z 2.9-6.2) — the fusebox law [M 0x1adfe8:99-101: a group-1 wire death hurts while +0x56 == 0, unconditional on distance; the deaths ride guard rounds/script, the walk cannot dodge them]). RESOLVED LEVERS: the vel-0 moving-accuracy divergence is DISPROVEN — the sprint-5 [0b-stall] vel print read BL+0x50 (the collision vel, zeroed while grounded), NOT the accuracy's move quad; the quad (Player::move_local, [M 0x191dd0:166-170]) is non-zero while running and every guard's latch reads moving true through the whole run [L a00_run1 t15947+: g4/g6/g7/g8/g9 moving true]; master 566f1d298 already carries the law and applies TargetMoving_Accuracy 0.75 [M 0x179740:71-73; drone.rs apply]. The port's blast radius obeys the disc exactly [L a00_run3: detonation d 5.2, radius 8.0, damage 100.0 → 47.37 = 100·(1−4.21/8)] — the sprint-4 'hurt at 13.7' was a mis-attributed detonation distance (the explode-hurt-radius task should re-measure the blast POS, not the radius). THE MEASURED DEAD LEVER: one carried 0x2e round into the band anchor #6 (all four within 6.1 u [D drone-props]) — three real-input attempts missed: a flat shot hit a SW deck structure at (−6.5, 58.6, 7.9) 5.2 u from Bond (−47.37) [L a00_run3]; the round ARCS (1.33 u below the line at d 14 [L a00_run4]); drop-compensated shots flew past the cluster [L a00_run5/6] — the 0x2e flight law (speed + gravity) must be probed first (Bullet_init 0x12c5a0's fields for the record). NEXT LEVERS: (1) pin the 0x2e flight law, re-arm the band shot at control return with the fire-tick 0x43 switch-back [L a00_run5: the 100-tick cold-gun close death at d 1.0 of #4 under ×2 TooClose rounds, M 0x139fac]; (2) a bounded close+dart on #5 at the gap mouth (his 10.5 + the a00_run6 point-blank 21.0 at d 2.4 say the P2→P3 pass needs the same treatment #4 got); (3) the live-wire 16.0 is the fusebox task's to avoid (cut the group before the ring-corridor walk)"]
+#[ignore = "level-0b-roof-sprint-10 ledger (2026-11-10, master 823ff190b sight tree): sprint-9's levers ported by hand PLUS two new measured levers — the walk now reaches THE TAKE ZONE (phase 3, take-dist 1.866) with #4/#5/#6/#7 dead and dies wedged east of the housing column at (3.82, 58.07, 41.04) t17006 under #8's 3.5s (hp 4.6 at the wedge; #9 20 and #8 10 alive). THE MEASURED SEQUENCE (d3run1..8, deterministic): (1) the early r1 (t16254, aim #6 from the phase-0 approach z > 6) chain-kills #4 at his column spot (2.05, 58.07, 30.65) — the dash-lane blocker gone; (2) the STRIP round (z < 18.5) is LOAD-BEARING: it locks the r1-woken #5 (WAIT_SWITCH exits the scan only while he waits [M 0x12f248]) and the chase-blast kills him in the gap-mouth piece — skipping it (d3run7) leaves #5 drifting onto the lane and the next round's nearest-in-cone lock takes him POINT-BLANK (2.2 u, the blast −37 = the death); (3) ONE stretch round (z > 20, from (−1.4, 20.3), the [0b-ray] map shows every direct eye→band ray CLEAR from z 20.6-29.1) flies LOCKED over the low piece and the blast KILLS #6 AND #7; (4) the SECOND stretch round is the muzzle-zone kill (d3run4: lost the lock at 0.9 u, the ballistic detonation 5.7 u out paid −17.55) — capped at one; (5) the cleanup convergence HOLDS THE LANE (band_shot >= 1; the d3run6 run-at-victim hold on the r1 itself stood Bond in the open at (−6.4, 19.0) — the r1 keeps run-at-victim, and the GREEN d2 timeline is a run-at-victim). THE WEDGE (next lever): Bond slides EAST around the housing's south-west column (2.02, 40.59) while pushing at the take slot (2.23, 41.34) and parks at (3.82, 41.04) — east of the closed south face (x > 2.8), take-dist 1.866 vs the 1.79 touch sphere, vel 0.00 — the take never fires and #8's ~60-tick 3.5 cycle finishes him. Lever options: approach the slot from the WEST of the column (the d2's own P4 aim (1.9, 40.9) — d 1.62 of the pickup, the take fired there on every d2 run), or a sidestep out of the column wedge, or the dart-sleep on #8/#9 (both dartable, d 17.7/21.4 — out of the 9-u dart gate; a mapped dart approach is the sprint-9 next-lever class). The ring-turret 16.0 world toll stays the fusebox task's. Everything else (r1 chain-kill, strip load-bearing, one stretch round, the lane hold) is MEASURED and ships in the file"]
 #[test]
 fn walk_fresh_spawn_to_the_mission_end_real_damage_00agent() {
     walker::with_real_damage(|| {
