@@ -358,6 +358,13 @@ pub struct Bond {
     /// `BL+0x50`: world velocity, units per second.
     pub vel: V3,
     /// AnimObj flag 8 and the floor's normal y (`BL+0x110`).
+    /// The bot capsules (indices into `LadderCtx::bot_capsules`) Bond's body overlapped this
+    /// tick BEFORE the Jointy push resolved them — the collide pass's contact list. The game's
+    /// `Collide_Jointy` 0x1ec180 resolves the same overlap its pair test found, and that pair
+    /// test's hit is what lands on the bot as the class-3 contact (`NDrone2_DealWithObjHit`
+    /// 0x13fff0 case 3 → msg 0x22 [M 0x1405c0-0x140634]); after the push Bond only touches the
+    /// body, so the drones' later contact pass cannot see the overlap by itself.
+    pub bot_contacts: Vec<usize>,
     pub grounded: bool,
     pub floor_ny: f32,
     /// `BL+0x940`: grounded in the last 4 ticks (shift register).
@@ -585,6 +592,7 @@ impl Bond {
             substate: SS_WALK, ladder: None, climb_top: 0.0, climb_bottom: 0.0, regrab: 0, mode: 0, saved_sub: 0, air: 100.0, drown_damage: None, underwater: false,
             water_fade: 0.0, air_tick: 0, push_fwd: 0.0, wire: None, auto_drop: 0.0, wire_anim: 0, wire_anim_time: 0.0, wire_anim_rate: 1.0, cam_mode: 0, grapple: None,
             icon_ctx: 0xff,
+            bot_contacts: Vec::new(),
             cel: None,
             move_local: [0.0; 2],
             prev_pos: pos,
@@ -2173,13 +2181,16 @@ impl Bond {
         // it walks (the delta tilts); beside its spine the push is lateral. The Jointy push does
         // NOT ride the DeltaP accumulator (Jointy writes +0x10 only [M :253-266]), so this sits
         // after the add-back and `pick_ref` keeps the static pass's value.
-        // [S] unverified — the PORT CHOICE gate: the push rides only while Bond is AIRBORNE
-        // (the drop-onto case the task pins). The game's own per-bot ON/OFF gates (+0x4f8 bit
-        // 0x20/0x200, +0x570 bit 2 — NDrone2_DoCollision 0x149ec8) are not modelled per bot
-        // yet, and master's green walks path Bond THROUGH ally tangent zones (the 01 armour
-        // walk, the 0a west doorway): the grounded-side push against allies is a live-check
-        // item, not shipped here. The sleeper drop (grounded false through the whole contact)
+        // The grounded gate is the GAME'S rule, not a port choice: `NDrone2_DoCollision` 0x149ec8
+        // keeps the bot's body on for every live near bot in every state (dead 0x4F8&0x200 off,
+        // the anim-info +0x570 bit-2 no-body anims off — not modelled, a live check item), and
+        // `Collide_Jointy` 0x1ec180:229-281 resolves the contact on every tick, grounded
+        // included. The old [S] airborne-only gate left the firing guards bodyless
+        // (guard_capsule_live: Bond walked to 0.19 of a 0x74/0x68 captor; the game's standing
+        // capsule [M NDrone2_Collision 0x140e90:91-121] holds ~0.95); the Sim now marks every
+        // near bot a ground bot. The sleeper drop (grounded false through the whole contact)
         // keeps its [M] push either way.
+        self.bot_contacts.clear();
         if !ctx.bot_capsules.is_empty() && (!self.grounded || ctx.ground_bots > 0) {
             let (ja, jb) = self.capsule();
             if std::env::var("NF_PUSH_DEBUG").is_ok() {
@@ -2196,6 +2207,7 @@ impl Bond {
                 let dist_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
                 let rr = RADIUS + tr;
                 if dist_sq >= rr * rr { continue; }
+                self.bot_contacts.push(bi);
                 let dist = dist_sq.sqrt().max(1e-6);
                 let overlap = (rr - dist) / dist; // fVar12 = 1.0 in SP [M :229-233]
                 jp[0] -= d[0] * overlap;

@@ -78,7 +78,13 @@ per frame from the sim and collapses free slots far below the world:
   eject); only state 0 draws.
 - debris: euler = spin·age at pos, rows scaled by `obj+0xe8` (0.4 + FRand(0.1)); age = 255 − alpha
   (the alpha byte starts 0xff and steps 1/tick [M 0x1aabf8, 0x1aac00] — an exact tick count, no new
-  sim field). The game applies no per-particle alpha at draw (the byte is bookkeeping only here).
+  sim field). The byte IS the draw alpha: `View_DrawObjList` calls `View_SetupRenderModes_Tweak`
+  per object (0x1e69a0:77) and it passes `psiSetTweakARGB(A = obj+0x106, 0xff, 0xff, 0xff)`
+  (0x1e5888:46-49 — debris tint is white, `control_init_object` 0x134630, no later writer);
+  `psiSetTweakARGB` 0x124770 loads TAmbient = (R, G, B, A)/255 @0x2650d0..dc and
+  `FillMatrixChainRot` 0x122310:241 feeds it to the VU1 lighting matrix's ambient
+  (`sceVu0LightColorMatrix`). [debris-alpha-fade 2026-11-09: the old "bookkeeping only" note here
+  was wrong — the A byte reaches the draw every frame.]
 
 The old flat-colour `effect_quads` (fix-impacts' placeholder, drawn in the snow pass) is removed —
 the snow pass is back to snow + emitter particles only, matching the game's pass order.

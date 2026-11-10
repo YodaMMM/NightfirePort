@@ -128,8 +128,19 @@ Per-tick `Debris_Update` 0x1aac00: `INFO+0x30 < 1` → dead (`obj+0xFE |= 1`); e
 `obj+0x106 −= INFO+0x32` (the fade byte, 0xff at create [M 0x1aaa00:31], exhausted at 255
 ticks), `INFO+0x30 −= 1`, `pos += vel`, `vel += WldGravity · REC_FRAME_RATE²` (the `obj+0xF4`
 gate is clear at create), `rot += spin` [M 0x1aac00:12-56]. The drawn rotation accumulates
-`spin` per tick on `obj+0x50`; the fade byte is exposed as-is (no draw-side alpha read found
-for class-0x10 objects — the look needs a render check).
+`spin` per tick on `obj+0x50`; the byte dies the piece when its step would store ≤ 0 (the byte
+keeps its last value ≥ 1 until then [M 0x1aac00:18-24, 56-63]). The byte IS the draw alpha
+[debris-alpha-fade 2026-11-09 — the old "no draw-side alpha read found" note was wrong]:
+`View_DrawObjList` pass 0 calls `View_SetupRenderModes_Tweak(viewer, obj)` per object
+(0x1e69a0:77), which passes `psiSetTweakARGB(A = obj+0x106, 0xff, 0xff, 0xff)` (0x1e5888:46-49 —
+debris RGB tint is white, `control_init_object` 0x134630:18-21, no later writer); the A lands in
+TAmbient = (R, G, B, A)/255 @0x2650d0..dc (`psiSetTweakARGB` 0x124770) and feeds the VU1
+lighting matrix's ambient (`FillMatrixChainRot` 0x122310:241, `sceVu0LightColorMatrix`). The
+per-tick fade is pinned on the real paths by `crates/nf-game/tests/debris_alpha_fade_live.rs`
+(the 07000001 vase kill) and `crates/nf-view/tests/debris_alpha_fade_live.rs` (the 07000011 MGL
+contact blast through the real fire input); the port's draw does not read the byte yet — the
+hook is the view's debris arm (scene.rs `2 => match debris_map …`, the pool instances' baked
+vertex rgba, `return one()` on the debris colour path).
 
 ## Port shape
 

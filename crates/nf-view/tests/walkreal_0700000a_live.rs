@@ -1675,15 +1675,26 @@ fn the_corner_crosses_like_the_game() {
 
 /// The task's repro (collision-0a-west-doorway-floor): walk the ring's west legs one by one and
 /// watch where Bond actually loses the floor — the real-path answer to the static probes.
+///
+/// guard-standing-capsule-2: the capsule push rode the fresh-load crossing onto civilian g8 —
+/// his lane wanders further west than the roster note (the trace caught him at (−20.3..−21.2,
+/// 5.2..7.1)), his desks blind Bond's leg-3 end ONLY from east of the corner (t803 d 2.3 seen
+/// false los false from (−18.6,5.4); t890 d 1.4 seen true los true from (−20.3,5.3) [L the
+/// NF_ALARM_TRACE runs]) and no static window outwaits a 90° cone that faces every approach.
+/// The repair is the sister's own phase: `walk_qworm_and_back`'s prologue delays the lane
+/// crossing to where g8's patrol keeps him out of sight the whole way [L bond_stands_at_the_
+/// mouth_bridge_edge passes on this tree], and the lane legs below then match the sister's ring
+/// verbatim (spots, arrive radii, the mouth window, the watch) so the shared RNG — and g8's
+/// phase at the crossing — is the proven one. The leg SET (and the floor readings) is unchanged.
 #[test]
 fn west_doorway_repro() {
-    let mut w = load_carry(None);
+    let mut w = walk_qworm_and_back();
     let legs: [([f32; 3], &str); 15] = [
         ([-7.5, 1.3, 14.5], "ring: the security centre's west door"),
         ([-7.5, 1.3, 16.5], "ring: the west hall north"),
         ([-20.5, 1.3, 16.5], "ring: the west offices' north corridor"),
         ([-20.5, 1.3, 5.5], "ring: down the west office block"),
-        ([-17.5, 1.3, 5.5], "ring: east of the west door"),
+        ([-17.6, 1.3, 5.5], "ring: the ai node 17 east of the door"),
         ([-16.2, 1.3, 5.8], "ring: the ai node 27 east"),
         ([-15.0, 1.3, 5.7], "ring: the ai node 26 east"),
         ([-14.8, 1.3, 4.0], "ring: the ai node 32 south"),
@@ -1696,7 +1707,10 @@ fn west_doorway_repro() {
         ([-21.5, 1.3, -1.5], "ring: down 2"),
     ];
     for (wp, label) in legs {
-        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(1.2), label);
+        // The sister ring's own mechanics at the same points (the phase is the proof).
+        watch_and_clear(&mut w, 16.0);
+        if label == "ring: down the west office block" { wait_mouth_window(&mut w); }
+        w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(0.8), label);
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
         let fl = sim.world.floor_below(p, 3.0);
@@ -1811,6 +1825,27 @@ fn west_doorway_wedge_dump() {
         ([-20.5, 1.3, 5.5], "d: down the west office block"),
         ([-17.5, 1.3, 5.5], "e: east of the west door"),
     ] {
+        if label.starts_with("e:") {
+            // The game's standing bodies (`NDrone2_Collision` 0x140e90, on within 2.0 of the
+            // player [M 0x149ec8 / 0x14b190]): guard #8 walking his GoToGoal 0x63 route west
+            // through this door met Bond in it and both stood there, 0.95 u apart, for the leg's
+            // whole 6000-tick cap [L capsule-join red: #8 at (−16.7, 5.8) heading for the door
+            // as the leg began, then (−19.2, 4.9) wedged]. A player lets the man through the
+            // doorway first, from out of his way back up the office block.
+            let near_door = |w: &Walker, r: f32| {
+                let sim = w.scene.sim.as_ref().unwrap();
+                sim.drones.list.iter().any(|d| d.present && d.enabled && !d.corpse && d.health > 0.0
+                    && ((d.pos[0] - -19.5f32).powi(2) + (d.pos[2] - 4.6f32).powi(2)).sqrt() < r && (d.pos[1] - 1.1).abs() < 1.5)
+            };
+            if near_door(&w, 4.0) {
+                w.walk_to(Wp::new(-20.5, 1.3, 9.5).r(0.8), "d2: back up the office block");
+                for _ in 0..1500 {
+                    if !near_door(&w, 3.0) { break; }
+                    w.tick(Default::default(), false);
+                }
+                w.walk_to(Wp::new(-20.5, 1.3, 5.5).r(1.2), "d3: down the office block again");
+            }
+        }
         w.walk_to(Wp::new(wp[0], wp[1], wp[2]).r(1.2), label);
     }
     // Leg-6 manually: tick with forward input toward (−17.5, 2.5), dumping every 10 ticks while

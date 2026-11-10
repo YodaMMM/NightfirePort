@@ -31,6 +31,24 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 struct Sample { tick: u32, clip: i32, shots: usize, state: u8 }
 
+/// A walked leg sampled EVERY tick (the walker's own steps): capsule-join-2 — the legs used to
+/// be sampled only at their ends, so a shot or a reload inside a leg was read only as a count;
+/// the per-shot clip read below needs every tick.
+fn walk_sampled(w: &mut Walker, di: usize, wp: Wp, label: &str, out: &mut Vec<Sample>) {
+    let buf = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    {
+        let b = buf.clone();
+        w.on_step = Some(Box::new(move |sc: &nf_view::scene::Scene, t: u32| {
+            let d = &sc.sim.as_ref().unwrap().drones.list[di];
+            b.borrow_mut().push(Sample { tick: t, clip: d.clip, shots: d.shots.len(), state: d.state });
+        }));
+    }
+    w.walk_to(wp, label);
+    w.on_step = None;
+    out.extend(buf.borrow_mut().drain(..));
+    sample(w, di, out);
+}
+
 fn sample(w: &Walker, di: usize, out: &mut Vec<Sample>) {
     let sim = w.scene.sim.as_ref().unwrap();
     let d = &sim.drones.list[di];
@@ -59,7 +77,7 @@ fn guard1_rounds_at_the_ring_pinned_over_a_real_fight() {
     sample(&w, di, &mut samples);
 
     // Leg 7 (REAL, verbatim from walk_spawn_to_the_band): the ladder walk-in grab + climb.
-    w.walk_to(Wp::new(10.3, 1.05, -186.8).r(0.7), "the ladder approach");
+    walk_sampled(&mut w, di, Wp::new(10.3, 1.05, -186.8).r(0.7), "the ladder approach", &mut samples);
     let mut climbed = false;
     for _ in 0..900 {
         let sim = w.scene.sim.as_mut().unwrap();
@@ -94,14 +112,10 @@ fn guard1_rounds_at_the_ring_pinned_over_a_real_fight() {
     }
 
     // Leg 8 (REAL): the patrol-ring legs (the shared prologue's coordinates), sampled.
-    w.walk_to(Wp::new(10.5, 11.1, -190.5).r(1.2), "the ring diagonal");
-    sample(&w, di, &mut samples);
-    w.walk_to(Wp::new(12.0, 11.1, -196.0).r(1.2), "the ring diagonal 2");
-    sample(&w, di, &mut samples);
-    w.walk_to(Wp::new(12.0, 11.1, -203.0).r(1.2), "the ring north-west corner");
-    sample(&w, di, &mut samples);
-    w.walk_to(Wp::new(4.0, 11.1, -207.5).r(1.2), "the ring west edge");
-    sample(&w, di, &mut samples);
+    walk_sampled(&mut w, di, Wp::new(10.5, 11.1, -190.5).r(1.2), "the ring diagonal", &mut samples);
+    walk_sampled(&mut w, di, Wp::new(12.0, 11.1, -196.0).r(1.2), "the ring diagonal 2", &mut samples);
+    walk_sampled(&mut w, di, Wp::new(12.0, 11.1, -203.0).r(1.2), "the ring north-west corner", &mut samples);
+    walk_sampled(&mut w, di, Wp::new(4.0, 11.1, -207.5).r(1.2), "the ring west edge", &mut samples);
 
     // The fight window: hold Bond still at the west edge (tiny forward stick each tick so the
     // walk substate holds) and sample guard #1 every tick for 2400 ticks (~40 s of game time).
@@ -140,9 +154,24 @@ fn guard1_rounds_at_the_ring_pinned_over_a_real_fight() {
     for (i, (tick, clip, shots)) in reloads.iter().enumerate() {
         let prev_shots = if i == 0 { samples.first().map(|s| s.shots).unwrap_or(0) } else { reloads[i - 1].2 };
         let per_clip = shots - prev_shots;
-        assert_eq!(per_clip, 5,
-            "reload #{} at tick {}: {} shots since the previous reload, the game's clip is 5 [M 0x14b300:345-348 + 0x178f68:270]",
-            i, tick, per_clip);
+        // capsule-join-2 re-pin: the reload trigger is ONLY `DroneFunc_CombatState` 0x148338's
+        // case-0x10 arm (`+0xBBC < 1 → 0x69` [M :194-197]); the other fire paths do not test the
+        // clip — `AimStandFire` 0x166328 fires on ENTER [M :59-61] and on the update arm whose
+        // CombatState returned 0 [M :139-148], and `DroneWeap_Fire` 0x178f68 decrements +0xBBC
+        // unconditionally for a mode-0 guard [M :270; the AmmoInGun gate :94-99 is mode-0x1e
+        // only]. So a guard who reaches 0x68 at clip 0 fires a 6th round to clip −1 before his
+        // reload — the bodied stream does exactly that (shot 6 at t8946, clip 0 → −1, 0x69 at
+        // t8947 [L capsule-join-2 trace]). The pin is the game's: at least the clip's 5 between
+        // reloads, every round past the 5th fired at clip ≤ 0, and the reload entered below 1.
+        let past_empty = samples.windows(2)
+            .filter(|w| w[1].tick > if i == 0 { 0 } else { reloads[i - 1].0 } && w[1].tick <= *tick && w[1].shots > w[0].shots)
+            .filter(|w| w[0].clip <= 0)
+            .count();
+        assert_eq!(per_clip, 5 + past_empty,
+            "reload #{} at tick {}: {} shots since the previous reload ({} of them past the empty clip), the game's clip is 5 [M 0x14b300:345-348 + 0x178f68:270]",
+            i, tick, per_clip, past_empty);
+        let before = samples.iter().filter(|sm| sm.tick < *tick).last().map(|sm| sm.clip);
+        assert!(before.map_or(true, |c| c < 1), "reload #{} at tick {}: entered with clip {:?}, the game's trigger is clip < 1 [M 0x148338:196]", i, tick, before);
         assert_eq!(*clip, 5, "reload #{} at tick {}: the ENTER refill must already show clip 5 [M 0x1666d8 case 1]", i, tick);
     }
 
@@ -218,7 +247,7 @@ fn real_health_body() {
         w.scene.sim.as_ref().unwrap().drones.list[di].health);
 
     // The climb + ring legs (verbatim from the shared prologue).
-    w.walk_to(Wp::new(10.3, 1.05, -186.8).r(0.7), "the ladder approach");
+    walk_sampled(&mut w, di, Wp::new(10.3, 1.05, -186.8).r(0.7), "the ladder approach", &mut samples);
     let mut climbed = false;
     for _ in 0..900 {
         let sim = w.scene.sim.as_mut().unwrap();
@@ -254,17 +283,13 @@ fn real_health_body() {
     // The master choreography's ladder-top stands (the deck snipers that chew Bond on the
     // walkway — the real-damage walk runs them right after the mantle [L walkreal0c.rs]).
     walker::yard_sniper_stands(&mut w, "ladder-top", 3);
-    w.walk_to(Wp::new(10.5, 11.1, -190.5).r(1.2), "the ring diagonal");
-    sample(&w, di, &mut samples);
-    w.walk_to(Wp::new(12.0, 11.1, -196.0).r(1.2), "the ring diagonal 2");
-    sample(&w, di, &mut samples);
-    w.walk_to(Wp::new(12.0, 11.1, -203.0).r(1.2), "the ring north-west corner");
-    sample(&w, di, &mut samples);
+    walk_sampled(&mut w, di, Wp::new(10.5, 11.1, -190.5).r(1.2), "the ring diagonal", &mut samples);
+    walk_sampled(&mut w, di, Wp::new(12.0, 11.1, -196.0).r(1.2), "the ring diagonal 2", &mut samples);
+    walk_sampled(&mut w, di, Wp::new(12.0, 11.1, -203.0).r(1.2), "the ring north-west corner", &mut samples);
     // The ring-corner stands: the master's "A player shoots the guard standing in front of
     // him before walking on" — the fight that kills guard #1 [L walkreal0c.rs].
     walker::yard_sniper_stands(&mut w, "ring-corner", 3);
-    w.walk_to(Wp::new(4.0, 11.1, -207.5).r(1.2), "the ring west edge");
-    sample(&w, di, &mut samples);
+    walk_sampled(&mut w, di, Wp::new(4.0, 11.1, -207.5).r(1.2), "the ring west edge", &mut samples);
     walker::yard_sniper_stands(&mut w, "west-edge", 3);
     // The hold window (the fight continues while Bond stands at the west edge).
     for _ in 0..1800 {

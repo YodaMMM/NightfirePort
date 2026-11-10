@@ -146,6 +146,14 @@ pub fn with_real_damage_no_return_fire<R>(f: impl FnOnce() -> R) -> R {
 pub struct DamageLog {
     /// Entries of `player_hits` already read.
     pub hits_seen: usize,
+    /// capsule-join-5 (OPT-IN, the 01 escort): the friendly-fire shield for the RETURN-FIRE
+    /// stands — `Some((drone, bloom))` holds a stand's tap whose cone would cross that drone,
+    /// the same cone `Walker::shoot` applies for `Walker::shield` (+ `shield_bloom`). The game's
+    /// bullets hit ANY drone [M Drone_CollisionHandler 0x140968:85-95, no team gate]; the 01
+    /// real-damage run's return fire on guard #15 killed the escort contact standing past him
+    /// (by_player, weapon 0x1c, head part 5, t6620 [L the NF_HEALTH_TRACE run on this branch])
+    /// and the mission failed (exit 0x07000001 restart). `None` = every other walk unchanged.
+    pub fire_shield: Option<(usize, bool)>,
     /// Lowest health seen.
     pub min_health: f32,
     /// Health lost to recorded hits, by owner (drone index, or usize::MAX for the world).
@@ -1161,6 +1169,23 @@ impl Walker {
                         }
                     }
                 }
+                // fire_shield (OPT-IN, see the field): the shielded drone inside the tap's cone —
+                // the aim line extended to his depth, widened by 0.9 + 0.05·ds (and the spread
+                // cap 0.2464·ds with bloom, [M bullet::player_spread]) — holds the tap.
+                let shield_line = self.dmg.fire_shield.is_some_and(|(s, bloom)| {
+                    let Some(sd) = sim.drones.list.get(s) else { return false };
+                    if s == di || sd.corpse || sd.health <= 0.0 { return false; }
+                    let ds = ((sd.pos[0] - eye[0]).powi(2) + (sd.pos[2] - eye[2]).powi(2)).sqrt();
+                    let dtg = (dx * dx + dz * dz).sqrt().max(1e-3);
+                    if ds <= 1.0 || (sd.pos[0] - eye[0]) * dx + (sd.pos[2] - eye[2]) * dz <= 0.0 { return false; }
+                    let k = ds / dtg;
+                    let (ex, ey, ez) = (eye[0] + dx * k, eye[1] + dy * k, eye[2] + dz * k);
+                    let miss2 = (ex - sd.pos[0]).powi(2) + (ez - sd.pos[2]).powi(2);
+                    let reach = 0.9 + 0.05 * ds;
+                    let reach = if bloom { reach.max(0.2464 * ds) } else { reach };
+                    miss2 < reach * reach && (sd.pos[1] - 1.2) < ey && ey < (sd.pos[1] + 2.2)
+                });
+                if shield_line && trace && t % 30 == 0 { eprintln!("[rf-trace] fight#{di} t{t}: the shielded drone is in the tap cone — holding"); }
                 let reload = sim.gun.clip == 0;
                 // aimed_fights (OPT-IN): the tap gate TIGHTENS with the aim held — the stand's
                 // plain tolerances (0.03 rad yaw / 0.04 norm pitch = ±1.05 u / ±2.2 u at the deck
@@ -1174,7 +1199,7 @@ impl Walker {
                 // records, and the aim-bit hold would hand the drive to the cursor law
                 // [M scene.rs free-aim, the precise_fights measurement]).
                 let (err_gate, perr_gate) = if self.dmg.aimed_fights || self.dmg.precise_fights || self.dmg.sniper_stands || self.dmg.pre_throw_stands { (0.01, 0.01) } else { (0.03, 0.04) };
-                let fire = !reload && unseen == 0 && !blocked && gate_err.abs() < err_gate && gate_perr.abs() < perr_gate
+                let fire = !reload && unseen == 0 && !blocked && !shield_line && gate_err.abs() < err_gate && gate_perr.abs() < perr_gate
                     && t.saturating_sub(last_tap) >= 8
                     // sniper_stands: the aim BIT (the raise finished — a tap before it rides the
                     // hip cone [M Player_SetWeaponAnimObj case 0xf, the level-0c-yard-climb-

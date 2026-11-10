@@ -502,6 +502,12 @@ fn clear_pursuers(w: &mut Walker, radius: f32, label: &str) {
                 w.walk_nav_to(stand, &format!("{label} pursuer {round} again"), 1.0);
                 let _ = w.shoot(di, &format!("{label} pursuer {round} retry"));
             }
+            // A guard who outlived the fight AND its retry has gone behind cover for good: a
+            // player leaves him rather than standing at the same wall for the next rounds (with
+            // the game's standing bodies the pin's sweep spent 16 × 10800-tick loops on the
+            // geisha-1 room's #6, unexposed 5 u off [L capsule-join red]).
+            let d = &w.scene.sim.as_ref().unwrap().drones.list[di];
+            if d.health > 0.0 && !d.corpse { passed.push(di); }
         }
         // Top up BETWEEN fights, not only on a dry click: the kills' drops are lying at the
         // fight floor and the route's later fights need the rounds (the first full walk died at
@@ -829,9 +835,26 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
             .find(|q| (q[0] - -55.2).abs() < 2.5 && (q[2] - 4.7).abs() < 2.5);
         if let Some(at) = target {
+            let came_from = w.scene.sim.as_ref().unwrap().bond.pos;
             eprintln!("[02] the west-wing armour detour: walking to the pickup ({:.1},{:.1},{:.1})", at[0], at[1], at[2]);
             w.walk_nav_to(at, "the west-wing armour", 0.4);
             w.wait(10);
+            // capsule-join-5: back out the way he came. The stair leg's own route from the
+            // pickup heads through the wing's south wall (its first hop (−44.49, 4.85, −1.81)
+            // lies across the z ≈ 3.2 wall; the only gap, x −41..−39.5, has a 6.0 sill beside
+            // the 9.0 pillar [D the port's collision floor map]) — Bond rode the pillar's edge
+            // at (−40.91, 7.0-7.8, 3.59) for six 3000-tick caps and the shotgunner #11 found him
+            // [L this branch's run; the nav web hands the same hop back for a walk to the
+            // detour's start too]. A player who stepped into the wing for the armour walks back
+            // out the way he came in — the in-walk's own hops, reversed [L the in-walk's legs:
+            // (−48.80, 4.62) ← (−46.89, 5.13) ← (−46.13, 6.19) ← (−46.23, 7.86)] — to where he
+            // left the route.
+            w.lenient = true;
+            for (k, p) in [[-48.8f32, 5.85, 4.62], [-46.89, 5.85, 5.13], [-46.13, 5.85, 6.19], [-46.23, 5.85, 7.86]].iter().enumerate() {
+                w.walk_to(Wp::new(p[0], p[1], p[2]).r(0.8), &format!("back out of the west wing {k}"));
+            }
+            w.lenient = false;
+            w.walk_nav_to(came_from, "back to the detour's start", 1.0);
         }
         let (hp, ar) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.drones.health.health, sim.drones.health.armour) };
         assert!(ar >= 50.0, "the west-wing armour is taken (armour {ar}, health {hp}) [M Pickup_Handler 0x18e650:220-225]");
@@ -1101,6 +1124,17 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     // steer, and from a fight's end spot north of the door it wedged on the doorframe (3000 ticks
     // at (−28.7, 7.19, −18.3), run11 2026-10-31).
     leg_to(&mut w, [-30.0, 5.9, -21.5], "the east courtyard again", 1.6);
+    // With the game's standing bodies the courtyard fight can end north of the doorway (its
+    // pursuer approach runs through the open door and back), and the courtyard steer from there
+    // met the open leaf: Bond wedged at (−28.7, 6.42, −18.3), the line hit at 0.17, door state
+    // 0x4, for both 3000-tick caps [L capsule-join red]. A player steps west off the leaf first.
+    {
+        let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+        if dxz(bp, [-30.0, 5.9, -21.5]) > 1.6 && bp[2] > -19.5 && bp[0] > -31.0 && bp[0] < -26.0 {
+            leg_to(&mut w, [-31.0, 5.9, bp[2]], "west off the doorway leaf", 1.0);
+            leg_to(&mut w, [-30.0, 5.9, -21.5], "the east courtyard from the west", 1.6);
+        }
+    }
     arm_fullest(&mut w, "before the geisha-2 room");
     if difficulty >= 3 {
         // The same 00 Agent arm for the second room (its captain carries 24 [L ee_02b.bin]) —
@@ -1223,6 +1257,12 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
 fn walk_the_castle_all_objectives_to_the_exit() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000002.bin", false).expect("load 07000002"));
+    // The game's standing body (`NDrone2_Collision` 0x140e90, on within 2.0 of the player
+    // [M 0x149ec8 / 0x14b190]) makes the south-hall-west g3 wedge a real body-block on this walk
+    // too: the firing g3 (state 0x68) held Bond 2.1 u off the lane for both 3000-tick caps, and
+    // the geisha-1 captors' clock ran out under it [L capsule-join red]. The player's answer is
+    // the real-health walks' own: shoot the blocker, then walk on.
+    w.body_block_response = true;
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -1583,6 +1623,17 @@ fn courtyard_sniper_pin_stair_bottom_agent() {
     w.keep_off = Some(4.0);
     w.dmg.back_off = Some(4.0);
     w.scene.sim.as_mut().unwrap().auto_aim = true;
+    // The stand's subject is never answered on the way there either (the stand below turns
+    // return fire off for the same reason): with the game's standing bodies the geisha-1 captor
+    // fight flanks to (−37.4, 6.3, 3.2), where the courtyard sniper's line reaches Bond, and the
+    // flank's return fire killed him at t5932 [L capsule-join red: "returned fire on drone #10
+    // (killed true)", the stand then found no sniper]. Only the 0x1e rifleman is held off.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if let Some(si) = sim.drones.list.iter().position(|d| d.weapon == 0x1e && d.health > 0.0 && !d.corpse) {
+            w.dmg.cooldown.push((si, u32::MAX));
+        }
+    }
 
     // The spawn-room body armour (the stand then shows the game's armour split [M 0x1902c8:84-104]).
     w.lenient = true;
@@ -1638,6 +1689,19 @@ fn courtyard_sniper_pin_stair_bottom_agent() {
             w.tick(Default::default(), false);
         }
         assert!(ch_on(&w, 0x49), "geisha 1 saved: ch 0x49 [M 0x1441c0]");
+    }
+    // The saved geisha's guard: with the game's standing bodies the captor fight ends later and
+    // drier (the flank, clip 1 spare 0 on the 0x1c), and the room's late guard #6 arrives on the
+    // hiding geisha (CivilianHiding 0x13 at (−40.3, 2.1)) still firing at Bond's last-seen spot
+    // beside her: one 15-point volley killed her and the level failed under the next sweep
+    // (fail label 0x4000034) [L capsule-join trace: #6 0x73 step-aim, PlayerTarget stale at
+    // (−38.5, 2.4)]. A player protects the hostage he just freed: the fullest gun up, every
+    // guard within 8 u of where SHE now hides answered before he moves on.
+    arm_fullest(&mut w, "pin the saved geisha");
+    {
+        let g1 = geisha(&w, 0x49).expect("geisha 1 [D]");
+        let at = w.scene.sim.as_ref().unwrap().drones.list[g1].pos;
+        clear_captors_real(&mut w, at, "pin the saved geisha", false);
     }
     clear_pursuers(&mut w, 16.0, "pin after the geisha-1 room");
 

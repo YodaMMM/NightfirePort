@@ -445,6 +445,48 @@ fn corridor_to_the_stairwell_foot_and_back(w: &mut Walker) {
 /// walkable exit from the vent store room (docs/levels/07000014.md §1a), and the claw cannot
 /// fire there [M 0x1a5460:515-528; no type-2 icon in the room, D icon census].
 fn hop_into_the_trench(w: &mut Walker) {
+    // guard-standing-capsule-2: the trench's own guard (drone 0, 0x5000090) patrols the landing
+    // itself — the dump caught him at (42.49, 0.40, 62.82), 0.56 from the pad, standing capsule
+    // top 0.80 over it [L this session's dump]. The pre-push walk landed THROUGH his body; the
+    // game's Jointy push [M 0x1ec180] now shoves the landing 1.13 east onto the crate lip (the
+    // red run: (44.18, 0.03, 62.91) grounded). A player waits him off the pad: hold until no
+    // live drone stands within 1.4 of it (his patrol walks him clear), then hop.
+    {
+        let start = w.total_ticks;
+        loop {
+            let occupied: Vec<usize> = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.present && !d.corpse && d.enabled
+                        && walker::dxz(d.pos, [43.05, 0.0, 62.86]) < 1.4)
+                    .map(|(i, _)| i).collect()
+            };
+            if occupied.is_empty() {
+                eprintln!("[014] the trench landing cleared after {} ticks", w.total_ticks - start);
+                break;
+            }
+            assert!(w.total_ticks - start < 9000, "the trench landing never cleared (drones {occupied:?})");
+            w.wait(1);
+        }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        for (i, d) in sim.drones.list.iter().enumerate() {
+            if d.present && !d.corpse && walker::dxz(d.pos, [43.05, 0.0, 62.86]) < 4.0 {
+                eprintln!("[014] near-landing drone {i} skin {:#x} team {} at {:?} y {:.2} state {:#x} enabled {}",
+                    d.skin, d.team, d.pos, d.pos[1], d.state, d.enabled);
+            }
+        }
+        let mut solid: Vec<String> = Vec::new();
+        for z in [62.0f32, 62.9, 63.5] {
+            for x in [43.0f32, 44.0] {
+                if let Some(h) = sim.world.floor_below([x, 2.0, z], 2.5) {
+                    solid.push(format!("floor({x},{z})={h:.2}"));
+                }
+            }
+        }
+        eprintln!("[014] landing neighbourhood floors: {}", solid.join(", "));
+    }
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.pos = [43.05, 0.45, 62.86];
@@ -709,9 +751,18 @@ fn the_machine_room_to_the_corridor(w: &mut Walker) {
     // the start].
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x2), ..Default::default() }, false); }
     clear_hostiles(w, 6.0, 900);
+    // capsule-join-5: the guards the fights wake come in through the south gap's door
+    // (34.0, 0.0, 29.9) and stand IN the gap — #10 AimStandFire 0x68 at (33.92, 30.85), #1/#2
+    // 0x5c at 1.4-1.9 u [L this branch's wedge dump] — and their standing bodies push Bond
+    // off the gap [M NDrone2_Collision 0x140e90:91-121 via 0x149ec8/0x14b190]; the plain ladder
+    // re-opened the door for the whole 6000-tick cap. The player's answer to a guard in his way
+    // is the shot (Walker::stuck_answers, the 11 route walk's opt-in), scoped to this lane.
+    let prev_answers = w.stuck_answers;
+    w.stuck_answers = true;
     for (label, x, y, z, r) in lane {
         w.walk_to(Wp::new(*x, *y, *z).r(*r), label);
     }
+    w.stuck_answers = prev_answers;
 }
 
 /// The walked west route from the SP #276 hand-back to the west switch band (level-14-hall-walk-in):

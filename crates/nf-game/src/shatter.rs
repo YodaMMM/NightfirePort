@@ -295,8 +295,12 @@ impl Shatter {
     /// explosion's `Debris_CreateEx` 0x1ac808 spawns; explode-debris-spawn).
     pub fn update_debris_list(debris: &mut Vec<Debris>) {
         for d in debris.iter_mut() {
+            // `life < 1` at entry or a fade step that would store ≤ 0 → dead (`obj+0xFE |= 1`,
+            // deleted by the same walk's sweep) [M 0x1aac00-0x1aac38]. A piece whose decrement
+            // stores 0 is still alive that tick (drawn) and dies on the next update [M 0x1aac3c-
+            // 0x1aac4c then 0x1aac10]: −1 marks the dead so a stored 0 survives the retain.
             if d.life < 1 || d.fade <= 1 {
-                d.life = 0;
+                d.life = -1;
                 continue;
             }
             d.fade -= 1;
@@ -306,7 +310,7 @@ impl Shatter {
             d.vel = [d.vel[0] + WLD_GRAVITY[0] * g, d.vel[1] + WLD_GRAVITY[1] * g, d.vel[2] + WLD_GRAVITY[2] * g];
             d.rot = [d.rot[0] + d.spin[0], d.rot[1] + d.spin[1], d.rot[2] + d.spin[2]];
         }
-        debris.retain(|d| d.life >= 1);
+        debris.retain(|d| d.life >= 0);
     }
 
     /// `DrawAllShards` 0x12bef8:50-56 — the shard alpha the draw layer renders:

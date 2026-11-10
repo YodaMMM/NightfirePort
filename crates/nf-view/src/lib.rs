@@ -7312,9 +7312,12 @@ pub fn run() -> Result<()> {
                         .map(|v| v.split(',').filter_map(|t| u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok()).collect())
                         .filter(|m: &Vec<u32>| !m.is_empty())
                         .unwrap_or_else(|| nf_game::explode::METAL_HASH_132.to_vec());
+                    // `NF_DEBRIS_PROBE_FADE=N` (debris-fade-draw): the pieces' starting alpha byte
+                    // (default 0xff); the sim steps it down one per tick, so tick 60 shows N − 60.
+                    let fade: u8 = std::env::var("NF_DEBRIS_PROBE_FADE").ok().and_then(|v| v.parse().ok()).unwrap_or(0xff);
                     for (k, &h) in models.iter().enumerate() {
                         sim.drones.blast_debris.push(nf_game::shatter::Debris { model: h, pos: [c[0] + 0.3 * k as f32 - 0.45, c[1], c[2]],
-                            rot: [0.3 * k as f32, 0.5, 0.0], vel: [0.0, 0.0803, 0.0], spin: [0.0; 3], life: 100_000, fade: 0xff, e8: 1.0, draw: Default::default() });
+                            rot: [0.3 * k as f32, 0.5, 0.0], vel: [0.0, 0.0803, 0.0], spin: [0.0; 3], life: 100_000, fade, e8: 1.0, draw: Default::default() });
                     }
                 }
             }

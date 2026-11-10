@@ -309,9 +309,9 @@ fn the_alarm_switch_fails_objective_1() {
         leg(sim, sim.bond.pos, spot)
     };
     for (k, p) in pts.iter().enumerate().skip(1) {
-        clear_live_guards(&mut w, &format!("the alarm switch pre {k}"));
-        let _ = w.try_walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("the alarm switch nav {k}"));
-        clear_live_guards(&mut w, &format!("the alarm switch nav {k}"));
+        clear_live_guards_within(&mut w, &format!("the alarm switch pre {k}"), 25.0);
+        to_node(&mut w, *p, &format!("the alarm switch nav {k}"));
+        clear_live_guards_within(&mut w, &format!("the alarm switch nav {k}"), 25.0);
     }
     // The final approach, BEAT-SPLIT (spawn-pick-and-dart-stamps re-pin, by route): a
     // dart-stamped sleeper wakes 7200 ticks after his dart [L docs/systems/tranq-dart.md — the
@@ -325,7 +325,10 @@ fn the_alarm_switch_fails_objective_1() {
     // clearing beat.
     let mut reached = false;
     loop {
-        clear_live_guards(&mut w, "the alarm switch approach beat");
+        // The level has already ended (the walk's own asserts below read why): the hop loop
+        // stops instead of spinning on the exit latch.
+        if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { break; }
+        clear_live_guards_within(&mut w, "the alarm switch approach beat", 25.0);
         {
             let p = w.scene.sim.as_ref().unwrap().bond.pos;
             if dxz(p, spot) < 1.4 && (p[1] - spot[1]).abs() < 2.0 { reached = true; break; }
@@ -512,11 +515,23 @@ fn steer_to(w: &mut Walker, target: [f32; 3], arrive: f32, cap: u32, label: &str
 fn chase_to(w: &mut Walker, di: usize, close: f32, cap: u32, label: &str) -> bool {
     let start = w.total_ticks;
     let mut last_goal = [f32::MAX; 3];
+    let mut last_tick = u32::MAX;
     loop {
         if w.total_ticks - start > cap {
             eprintln!("[09] {label}: chase cap g{di}");
             return false;
         }
+        // capsule-join: a pass that moved nobody cannot progress. When the nav web has no plan to
+        // his spot (`leg` returns Bond's own point), the node loop below runs zero times, no
+        // tick passes, the cap above never comes due, and the chase spun forever on one tick —
+        // the_alarm_switch_fails_objective_1 never finished (the racer g3 39.5 u off, the last
+        // progress line "nav 24 chase g3 node", then nothing until the 1500 s cap [L capsule-join
+        // runs]). A player with no way to him gives him up for the beat.
+        if w.total_ticks == last_tick {
+            eprintln!("[09] {label}: chase g{di} has no route from here");
+            return false;
+        }
+        last_tick = w.total_ticks;
         if w.stop_on_exit && w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { return false; }
         let (st, dp, hp, corpse) = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -704,7 +719,62 @@ fn takedown(w: &mut Walker, di: usize, label: &str) -> bool {
 /// drought with no floor resupply falls back to the loud point-blank P2K (the asserts judge the
 /// noise it pulls). A guard that survived the takedown window (a wedged line) is skipped — the
 /// walk's own asserts judge the outcome.
-fn clear_live_guards(w: &mut Walker, label: &str) {
+/// The next route node: the straight hop while Bond is still on the route; after a beat's
+/// re-dart carried him off it (more than 4 u away), back through the nav web.
+fn to_node(w: &mut Walker, p: [f32; 3], label: &str) {
+    let off = dxz(w.scene.sim.as_ref().unwrap().bond.pos, p);
+    if off > 4.0 {
+        w.walk_nav_to(p, label, 1.3);
+    } else {
+        let _ = w.try_walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), label);
+    }
+}
+
+/// Re-dart a sleeper who SAW Bond before his dart, before he wakes. The game never clears the
+/// ever-seen sight bit (+0x228 & 8): its only +0x228 clears are bits 0x10 (Interogate 0x161a40:
+/// 60/120, InterogateWalk 0x162338:43), 4 (BotGlobal 0x16e060:159, ProcessDroneSight 0x176a28:
+/// 106/200) and 2 (SeekOpponentLOS 0x175cb8:26) [M], and the dart states (StunDartImpact
+/// 0x163430, StunDartLoop 0x163570, StunDartRecover 0x163700) touch neither +0x228 nor the alarm
+/// flag +0x16 [M] — so such a guard wakes a racer, game-true. capsule-join: the bodied walk runs
+/// longer than the sleeps (g4, latching when darted at the stair base, woke and ran for his
+/// alarm point 29 u off before the press [L capsule-join run]). A player re-darts the sleepers
+/// who saw him before they wake: within 2400 ticks of the wake, on his floor, inside 35 u. A
+/// second dart extends the sleep (tranq_dart_live::a_second_dart_extends_the_sleep).
+fn redart_wakers(w: &mut Walker, label: &str) {
+    for _ in 0..4 {
+        let pick = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let now = sim.drones.frame;
+            sim.drones.list.iter().enumerate()
+                .filter(|(_, d)| d.present && !d.corpse && d.health > 0.0 && d.ever_seen
+                    && d.state == nf_game::drone::state::STUN_DART_LOOP
+                    && d.timer_c.map_or(false, |t| t.saturating_sub(now) < 2400)
+                    && dxz(d.pos, bp) < 35.0 && (d.pos[1] - bp[1]).abs() < 3.0)
+                .min_by(|a, b| dxz(a.1.pos, bp).total_cmp(&dxz(b.1.pos, bp)))
+                .map(|(i, d)| (i, d.pos, d.timer_c))
+        };
+        let Some((di, at, t0)) = pick else { return };
+        eprintln!("[09] {label}: re-darting the sleeper g{di} before his wake (timer {t0:?})");
+        w.walk_nav_to(at, &format!("{label} to the sleeper g{di}"), 2.5);
+        if !cycle_to_darts(w) { return; }
+        w.shoot_loose(di, &format!("{label} re-dart {di}"), 120);
+        if w.scene.sim.as_ref().unwrap().drones.list[di].timer_c == t0 {
+            eprintln!("[09] {label}: the re-dart on g{di} did not extend the sleep");
+            return;
+        }
+    }
+}
+
+fn clear_live_guards(w: &mut Walker, label: &str) { clear_live_guards_within(w, label, f32::MAX) }
+
+/// `clear_live_guards` with a reach: guards farther than `reach` are left to their own run.
+/// capsule-join: on the switch's own final leg the beats chased the woken racer g0 44 u back
+/// across the lobby (8 chase nodes) and the level's alarm went off behind the walk [L
+/// capsule-join run]. A player 10 u from the switch he came to press does not run 40 u away
+/// from it: the final leg's beats answer only the guards inside 25 u.
+fn clear_live_guards_within(w: &mut Walker, label: &str, reach: f32) {
+    redart_wakers(w, label);
     let mut skipped: Vec<usize> = Vec::new();
     for round in 0..12 {
         let bp = w.scene.sim.as_ref().unwrap().bond.pos;
@@ -714,6 +784,7 @@ fn clear_live_guards(w: &mut Walker, label: &str) {
             .filter(|(i, d)| d.present && !d.corpse && d.health > 0.0 && d.enabled
                 && !asleep(d.state) // a sleeper runs no chain — the beat is already cleared
                 && !skipped.contains(i)
+                && dxz(d.pos, bp) < reach
                 && (racer(d)
                     || d.seen_ticks > 0
                     || matches!(d.state, nf_game::drone::state::HEARD_NOISE_AWARE | nf_game::drone::state::HEARD_NOISE_SUSPECT | nf_game::drone::state::HEARD_NOISE_ALERT)
@@ -765,7 +836,7 @@ fn walk_nav_clearing(w: &mut Walker, target: [f32; 3], label: &str, final_arrive
     };
     for (k, p) in pts.iter().enumerate().skip(1) {
         clear_live_guards(w, &format!("{label} pre {k}"));
-        let _ = w.try_walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("{label} nav {k}"));
+        to_node(w, *p, &format!("{label} nav {k}"));
         clear_live_guards(w, &format!("{label} nav {k}"));
     }
     let _ = w.try_walk_to(Wp { at: target, act: Act::None, arrive: final_arrive }, label);
