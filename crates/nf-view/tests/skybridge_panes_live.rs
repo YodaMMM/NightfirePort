@@ -85,6 +85,21 @@ fn the_sky_bridge_intros_panes_register_at_level_start_and_break_under_fire() {
     // pane ride]. The player steps back east to the approach's own nav point (12.3, 26.65), where
     // the line to the bridge's glass is clear, and shoots a pane he can see.
     w.walk_to(Wp::new(12.3, 1.1, 26.65).r(0.5), "the clear stand by the bridge");
+    // The office guards can already be firing at the stand: with the game's sight round robin
+    // [M DroneVision_ProcessDroneSight 0x176a28] guards 6/7 (AimStandFire 0x68 / 0x73 at
+    // (12.0, 1.0, 17.4) and (10.6, 1.0, 17.4), 213 rounds each, line of sight on [L this branch's
+    // run]) send their misses past Bond into the bridge glass, and the target pane broke 16 ticks
+    // into the aim with no press of Bond's. The player answers the guards shooting at him first.
+    for _ in 0..4 {
+        let g = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            sim.drones.list.iter().position(|d| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                && d.los && walker::dxz(d.pos, sim.bond.pos) < 16.0)
+        };
+        let Some(g) = g else { break };
+        if !w.shoot(g, &format!("the office guard {g} firing at the stand")) { break; }
+    }
+    w.walk_to(Wp::new(12.3, 1.1, 26.65).r(0.5), "back to the clear stand");
     // A pane is in view when the flight line from the head to its centre meets its box before
     // any solid stop.
     let seen = |sim: &nf_view::scene::Sim, b: &nf_game::breakable::Break| {

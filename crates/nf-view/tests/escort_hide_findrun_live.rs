@@ -160,7 +160,31 @@ fn the_hides_exit_reanchors_the_mission_route_before_the_lead_resumes() {
     let mut cleared = std::collections::HashSet::new();
     let mut exited_at = None;
     let mut pre: Option<(nf_game::world::V3, Option<nf_game::nav::Route>)> = None;
+    // Every tick (the shoot legs included): the last LeadHide tick's spot + route, and the first
+    // tick that leaves LeadHide into the lead machine — the exit under test — with the live
+    // routes right after it. The exit can fire inside a shoot leg (the guards drop at the game's
+    // sight, not on this loop's schedule); reading it from the loop alone missed it.
+    type Exit = (nf_game::world::V3, Option<nf_game::nav::Route>, Option<nf_game::nav::Route>, Option<nf_game::nav::Route>, u8, u32);
+    let exit_rec: std::sync::Arc<std::sync::Mutex<Option<Exit>>> = Default::default();
+    {
+        let rec = exit_rec.clone();
+        let mut hide: Option<(nf_game::world::V3, Option<nf_game::nav::Route>)> = None;
+        w.on_step = Some(Box::new(move |scene: &nf_view::scene::Scene, tick: u32| {
+            if rec.lock().unwrap().is_some() { return; }
+            let sim = scene.sim.as_ref().unwrap();
+            let d = &sim.drones.list[ci];
+            if d.state == state::LEAD_HIDE { hide = Some((d.pos, d.route.clone())); return; }
+            let Some((hp, hr)) = hide.take() else { return };
+            // The timer exit lands in the lead machine (AllyLeadWait 0x20 through ReFindMissionPath,
+            // or AllyLead 0x1d) [M 0x15ec08 case 0xc]; any other next state (a cover re-run) is not
+            // the exit under test. The hide's own band test is NotNearArmedDrone's latch-aware scan
+            // [M 0x177640:94-115], so no plain 14-band filter here.
+            if !matches!(d.state, state::ALLY_LEAD | state::ALLY_LEAD_WAIT) { return; }
+            *rec.lock().unwrap() = Some((hp, hr, d.route.clone(), d.croute.clone(), d.state, tick));
+        }));
+    }
     'outer: for _round in 0..12 {
+        if exit_rec.lock().unwrap().is_some() { break 'outer; }
         let cp = w.scene.sim.as_ref().unwrap().drones.list[ci].pos;
         let guards: Vec<usize> = { let sim = w.scene.sim.as_ref().unwrap();
             (0..sim.drones.list.len()).filter(|&i| {
@@ -197,12 +221,16 @@ fn the_hides_exit_reanchors_the_mission_route_before_the_lead_resumes() {
                 continue;
             }
             if armed_near { continue; } // re-hidden mid-wait — keep waiting for the real exit
+            if exit_rec.lock().unwrap().is_some() { break 'outer; }
             eprintln!("[hide-exit] left LeadHide at tick {} into {:#x} (armed_near {armed_near})", w.total_ticks, d.state);
             exited_at = Some(w.total_ticks);
             break 'outer;
         }
     }
-    exited_at.expect("the hide must exit once the 14-band clears [M 0x15ec08 case 3]");
+    w.on_step = None;
+    let rec = exit_rec.lock().unwrap().clone();
+    if let Some((_, _, _, _, st, t)) = &rec { eprintln!("[hide-exit] the per-tick record: left LeadHide at tick {t} into {st:#x}"); }
+    assert!(exited_at.is_some() || rec.is_some(), "the hide must exit once the 14-band clears [M 0x15ec08 case 3]");
     // The exit can land inside a shoot leg (the test's wait loop above is the only place that
     // snapshots the cower): the hide's own exit test is NotNearArmedDrone's latch-aware scan
     // [M 0x177640:94-115], not this loop's plain 14-band, so the contact can leave LeadHide while a
@@ -224,7 +252,12 @@ fn the_hides_exit_reanchors_the_mission_route_before_the_lead_resumes() {
     // bound, later ones only when closer), and after the exit the mission route's index IS that
     // node with the +0x860 route freshly built to it. The old arm left the index where the follow
     // had stopped and the +0x860 route pointing at the cover run's AI point — both asserts fail.
-    let (hide_pos, hide_route) = pre.expect("the contact hid with a mission route");
+    // The per-tick record wins: it holds the exit tick's own routes (the snapshot loop's reads
+    // below are the fallback for an exit the wait loop saw).
+    let (hide_pos, hide_route) = match &rec {
+        Some((hp, hr, ..)) => (*hp, hr.clone()),
+        None => pre.expect("the contact hid with a mission route"),
+    };
     let mut route = hide_route.expect("the lead carries the mission route (+0x970)");
     let sim = w.scene.sim.as_ref().unwrap();
     let (nav, world) = (&sim.nav, &sim.world);
@@ -240,14 +273,17 @@ fn the_hides_exit_reanchors_the_mission_route_before_the_lead_resumes() {
     let anchor_pos = nav.paths[route.path].nodes[route.nodes[anchor] as usize].pos;
     // The LIVE route after the exit (the snapshot above is the last LEAD_HIDE tick's, taken before the
     // exit tick's ReFindMissionPath [M 0x15ec08 case 0xc] re-anchors it).
-    let live_index = sim.drones.list[ci].route.as_ref().expect("the lead keeps its mission route").index;
+    let (live_route, live_croute, live_state) = match &rec {
+        Some((_, _, lr, lc, st, _)) => (lr.clone(), lc.clone(), *st),
+        None => (sim.drones.list[ci].route.clone(), sim.drones.list[ci].croute.clone(), sim.drones.list[ci].state),
+    };
+    let live_index = live_route.as_ref().expect("the lead keeps its mission route").index;
     assert_eq!(live_index, anchor as i32,
         "the hide's exit re-anchors the mission route's index to the reachable node nearest the hide spot [M 0x153a30:105] — got index {live_index} want {anchor}");
-    let cr = sim.drones.list[ci].croute.as_ref().expect("the +0x860 route is rebuilt to the anchor [M 0x153a30:141-144]");
+    let cr = live_croute.as_ref().expect("the +0x860 route is rebuilt to the anchor [M 0x153a30:141-144]");
     assert!(walker::dxz(cr.dest, anchor_pos) < 0.5,
         "the rebuilt route ends at the anchor node ({anchor_pos:?}), not {:?} (the cover run's AI point)", cr.dest);
     // The re-anchored route still walks: the lead machine makes progress again.
-    let d = &sim.drones.list[ci];
-    assert!(matches!(d.state, state::ALLY_LEAD | state::ALLY_LEAD_WAIT | state::PLAYER_IN_WAY | state::GO_TO_GOAL_ALLY | state::GO_TO_GOAL),
-        "the lead machine resumes after the re-anchor (state {:#x})", d.state);
+    assert!(matches!(live_state, state::ALLY_LEAD | state::ALLY_LEAD_WAIT | state::PLAYER_IN_WAY | state::GO_TO_GOAL_ALLY | state::GO_TO_GOAL),
+        "the lead machine resumes after the re-anchor (state {live_state:#x})");
 }

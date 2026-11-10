@@ -140,7 +140,7 @@ fn the_spot_ray_passes_bond_and_the_light_stays_unarmed() {
         let player = nf_game::drone::Player { yaw: 0.0,
             pos: bond_pos, target: bond_pos, eye: bond_pos, aim: [0.0, 0.0, 1.0], sph: centre, hanging: false,
             capsule: ([bond_pos[0], bond_pos[1] + 0.55, bond_pos[2]], [bond_pos[0], bond_pos[1] - 0.76, bond_pos[2]]),
-            body: Default::default(), cel: None, move_local: [0.0; 2], crouched: false, riding: false };
+            body: Default::default(), cel: None, obj_cel: None, move_local: [0.0; 2], crouched: false, riding: false };
         let mut rng = nf_game::drone::Rng::new(0x5eed);
         let mut channels = sim.drones.channels.clone();
         eprintln!("[ray] head {head_pos:?} pitch {pitch:.3} bond {bond_pos:?} sph {centre:?}");

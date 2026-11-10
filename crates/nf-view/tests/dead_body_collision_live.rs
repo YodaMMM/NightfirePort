@@ -97,6 +97,22 @@ fn walking_bond_is_pushed_off_a_fresh_corpse() {
     }
     corpse_at.expect("the kill must leave a corpse");
     w.wait(90);
+    // The death anim may still be carrying the body (the capsule rides the posed bones every
+    // tick [M NDrone2_Collision 0x140e90 dead branch]): a long fall moved the hips 1.3 u after
+    // the 90-tick beat on one kill. Wait for the capsule to come to rest (unchanged for 30
+    // ticks, cap 900) so the walk aims at the body where it lies.
+    let mut still = 0;
+    let mut prev = w.scene.sim.as_ref().unwrap().corpse_capsules(w.scene.sim.as_ref().unwrap().drones.list[gi].pos);
+    for _ in 0..900 {
+        if still >= 30 { break; }
+        w.tick(Default::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        let now = sim.corpse_capsules(sim.drones.list[gi].pos);
+        let same = now.len() == prev.len() && now.iter().zip(&prev).all(|(x, y)| (0..3).all(|k| (x.0[k] - y.0[k]).abs() < 1e-3 && (x.1[k] - y.1[k]).abs() < 1e-3));
+        still = if same { still + 1 } else { 0 };
+        prev = now;
+    }
+    assert!(still >= 30, "the corpse's capsule comes to rest");
 
     let cpos = w.scene.sim.as_ref().unwrap().drones.list[gi].pos;
     // The corpse's own capsule (the helper scopes to a point: scope it to the corpse itself).

@@ -56,7 +56,7 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// exposed_part_gun_rays` (the lane ray set the 13 walk fights with) gates each pick, so a
 /// guard behind the lobby furniture is skipped, not crept toward. No position writes, no RNG
 /// draws, no health/ammo writes; the only inputs are the view drives and the trigger taps.
-fn clear_the_visible(w: &mut Walker, label: &str, radius: f32) {
+fn clear_the_visible(w: &mut Walker, label: &str, radius: f32, d3: bool, stop_on_fail: bool) {
     w.switch_to_armed(label);
     for _ in 0..12 {
         let target = {
@@ -69,13 +69,78 @@ fn clear_the_visible(w: &mut Walker, label: &str, radius: f32) {
             })
         };
         let Some(di) = target else { return };
-        let killed = aimed_stand(w, di, label, 2400);
+        // warm-chain-margin: the sweep's stands cap at 700 for the d3 walk (they land in ~50-350
+        // ticks — every measured kill in this file's ledgers); a stand that cannot open keeps
+        // Bond statue-still in the wave's return fire for the 1500-tick no-hit give-up — the
+        // tick-1995/2242 deaths both bled out inside a failing stand. A player who cannot see
+        // the shooter repositions. The d2 sister keeps the master cap so her legs stay
+        // byte-identical to the sight batch's green run.
+        let killed = aimed_stand(w, di, label, if d3 { 700 } else { 2400 });
         // aimed_stand's early gives-ups (dry, disabled) return before its own restore: force the
         // walk's default back — 13's fights must keep the plain tap gate (the precise_fights
         // lesson: the tight gate holds fire on the lobby chargers).
         w.dmg.aimed_fights = false;
         eprintln!("[013] {label}: the pre-clear stand on drone #{di} killed {killed}");
-        if !killed { w.resupply(label); }
+        if !killed {
+            // warm-chain-margin-2: the round-1 ledger's death INSIDE the post-failure stands —
+            // #9's stand returned killed false and the sweep stood again while the unseen
+            // desk-block guard #11 (weapon 0x19, d 12.2) landed −3.5 every ~6 ticks (the death
+            // tick-2242 frames 1769-1891, five of his last-hit lines). A player who cannot open
+            // a guard's box from a spot does not statue there — he moves; the legs' own
+            // return-fire fights (killed true at t1487 vs #5, cost 10.5) are the answer while
+            // walking. Sites that measured green keep the old retry (stop_on_fail false).
+            if d3 && stop_on_fail { return; }
+            w.resupply(label);
+        }
+    }
+}
+
+/// The spawner-wave drain (level-13-warm-chain-margin-2, ported to master's sight batch):
+/// the desk-block kills raise the lobby's spawner waves (start ch 0x29 = the guards' death
+/// channels [D §4]) and the wave arrives in a CADENCE, not one drop — the round-1 ledger took
+/// wave guard #0 at t724 (cost 0) and then met the LATE guard #3 (skin 0x5000006, spawned at
+/// (6.8,-368.4,38.3)) mid-leg at the re-anchor, where the return-fire fight traded 34.0 in 10
+/// hits for the kill [L the round-1 repro run]. A player who has just cleared a pocket holds
+/// the spot and lets the wave come to him: this stand waits out the spawn cadence (the round-1
+/// guards land ~300 ticks apart) and takes each guard the moment the gun-ray set exposes him —
+/// from the already-taken spot, at the wave's own range, instead of meeting him at the leg's
+/// close band. One failed stand ends the drain (the unopenable box is the exposure itself; the
+/// stop_on_fail law above). No position writes, no RNG draws, no health/ammo writes; the only
+/// inputs are the wait ticks and the trigger taps through the ordinary `aimed_stand` machinery.
+fn drain_the_wave(w: &mut Walker, label: &str, radius: f32, max_rounds: u32, quiet_rounds: u32, wait: u32) {
+    w.switch_to_armed(label);
+    let mut quiet = 0u32;
+    let mut taken = 0u32;
+    while taken + quiet < max_rounds {
+        let target = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (0..sim.drones.list.len()).find(|&i| {
+                let d = &sim.drones.list[i];
+                d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && walker::dxz(d.pos, sim.bond.pos) < radius
+                    && walker::DamageLog::exposed_part_gun_rays(&sim, i).is_some()
+            })
+        };
+        let Some(di) = target else {
+            quiet += 1;
+            // warm-chain-margin-2 iter-4: the quiet wait is a STAND — the iter-3 ledger bled
+            // inside it (the unseen respawners #6new/#10new landed frames 4995-5121 while the
+            // drain waited for boxes that never opened — the tick-1995/2242 law again). A
+            // player being shot from an unopenable angle does not keep waiting: the first hit
+            // during the wait ends the drain and the legs' return fire answers on the move.
+            let h0 = w.scene.sim.as_ref().unwrap().drones.health.health;
+            for _ in 0..wait {
+                w.tick(nf_game::player::Input::default(), false);
+                if h0 - w.scene.sim.as_ref().unwrap().drones.health.health >= 1.0 { return; }
+            }
+            continue;
+        };
+        quiet = 0;
+        taken += 1;
+        let killed = aimed_stand(w, di, label, 700);
+        w.dmg.aimed_fights = false;
+        eprintln!("[013] {label}: the wave-drain stand on drone #{di} killed {killed}");
+        if !killed { return; }
     }
 }
 
@@ -238,7 +303,29 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             // the throw window itself is the report's live check]. The d2 sister passes with the
             // plain kit and stays byte-identical.
             w.dmg.lane_floor_drops = true;
+            // warm-chain-margin-3: `precise_fights` stays ON here — master's sight-batch shape.
+            // The margin-2 port tried it OFF (the old-sight lever: the loose gate kills faster);
+            // under the new sight the north-lobby fights run longer and earlier, the loose gate
+            // sprayed the P99 dry, and the leg's resupply nav (15 waypoints through the open
+            // north lobby) gave the respawner stream the window — #18/#32 bled 76.0 across the
+            // nav and Bond died at tick 7819 with 100.0 consumed, the leg never arriving [L
+            // this tree's run]. The tight gate is the 07000011 ammo lever for exactly this.
             w.dmg.precise_fights = true;
+            // warm-chain-margin-3: the north-lobby-2 leg's fights run the P99 dry under the new
+            // sight and the drop-fetch nav (15 waypoints through the open lobby, the respawner
+            // stream's window — the tick-7402 death [L this tree's run]) is the exposure. The
+            // 13-leg kit's other two levers are exactly this shape: `switch_dry` — a player
+            // whose mag ran dry swaps guns mid-fight, not after it (the game's own weapon
+            // cycle, the 02/03 00-Agent lever); `escalating_cooldowns` — a player who could not
+            // answer a shooter from a spot does not re-take the same spot 240 ticks later (the
+            // 0c Agent lever; the wait doubles per further failure on the same drone).
+            w.dmg.switch_dry = true;
+            w.dmg.escalating_cooldowns = true;
+            // warm-chain-margin-3: `lenient` is NOT set here — the resupply-nav machinery
+            // restores it to false after its own sub-walks, so a leg-level setting does not
+            // survive the first dry-nav (the tick-13980 run still panicked non-lenient at the
+            // "the north lobby 2" cap [L this tree's run]). The budget/wedge re-pin is the
+            // next session's first item (see the report).
             // civ-unignore (the measured pre-engagement burst): #10's first fire on the bend→
             // corridor walk is ONE tick of 8 × −3.0 shotgun pellets at d 3.5 (t2723, Bond at
             // (16.8,−12.0)) — the −24 chunk that sends 13 the 62 instead of 86, the exact leak the
@@ -248,6 +335,11 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             // kills him through the ordinary fight machinery before his sight opens. OFF for every
             // other caller (the 07000012 and campaign walks set nothing).
             tower2::PRE_CLEAR_SOUTH_CORRIDOR.store(true, std::sync::atomic::Ordering::Relaxed);
+            // warm-chain-margin-3: the margin-1 north-lobby pre-clear (the flag-gated tower2
+            // lever) is NOT ported — master's own evidence is that the d3 chain crosses 12 with
+            // this exact kit (its recorded death is on 13, tick 2448 [L the sight batch's
+            // ledger]); this tree's one run with the loose gate died inside 12's resupply nav,
+            // not in the pursuit the lever answers.
         }
         tower2::walk_12(&mut w);
         tower2::walk_12_exit(&mut w);
@@ -339,8 +431,14 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // pocket: #3 landed three −14 volleys at d 2.6-2.7 and the shotgun finished the run (death
     // tick 1666 at (3.57,−368.36,25.09), 86.0 consumed). A player shoots the posted guards from
     // the doorway before crossing their pocket.
-    if real_damage && difficulty == 3 {
-        clear_the_visible(&mut w, "13: the spawn pocket", 24.0);
+    // los-mask-join: the Agent walk takes the same pre-clears (here and the lobby/doorway
+    // sweeps below). Under the game's sight masks the lobby guards engage more and earlier,
+    // and the Agent walk, which left them to its legs' return fire, ran dry at the
+    // lobby north-west (clip 0 spare 0) and died at the front entrance [L the masked run].
+    if real_damage && difficulty >= 2 {
+        // warm-chain-margin-3: the d3 walk caps its stands at 700 and keeps the retry (measured
+        // green); the d2 sister runs the sight batch's byte-identical 2400-cap sweep.
+        clear_the_visible(&mut w, "13: the spawn pocket", 24.0, difficulty == 3, false);
     }
 
     // THE SECURITY GATE: the "Shutters2" SimpleScript #149 (out ch 0x23 [D param 3]) is the
@@ -373,6 +471,20 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // cel crosses 21→28 through the stateful relink's portal arm (Cel_ObjectLeftCel 0x1e0d58)
     // and the room's own floor (cel 28's bucket) holds him.
     w.walk_to(Wp::new(5.0, -368.4, 26.5).r(1.5), "13: the lobby east lane");
+    if real_damage && difficulty == 3 {
+        // warm-chain-margin-2 (ported to master): the desk-block kills raise the spawner waves
+        // (start ch 0x29 = the guards' own death channels [D §4]) and the wave lands ON the east
+        // lane — the ledger's tick-1647 volley (7 shotgun pellets, −36.5 in one tick [M
+        // player_hit_damage: the pellet damage × Agent pain × DroneFiring_TooClose_Damage])
+        // caught Bond standing in the pocket while the fights' own caps had twice left the wave
+        // guard alive (killed false at ticks 781/1015). The round-1 sweep ended with nothing
+        // exposed (no stands logged) because the wave's LATE guards (#3 at (6.8,-368.4,38.3),
+        // ~300 ticks behind #0) had not spawned yet — the leg then walked INTO them and the
+        // re-anchor fight cost 34.0. Drain the wave from here: up to 12 rounds, done after 6
+        // quiet rounds (~180-tick waits + the stand times), each guard taken from the taken
+        // spot at d ~12.
+        drain_the_wave(&mut w, "13: the lobby east lane", 24.0, 12, 6, 180);
+    }
     // guard-repin-master re-anchor: the west-mid leg's return-fire fights (the north-lobby
     // shooters) displaced Bond SOUTH of the lane line into the lobby pocket at (0.60, −368.30,
     // 25.66) — the guards' per-goal arrival radii [M 0x152548:174-181] close the pursuit to
@@ -392,8 +504,11 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // legs and Bond reached the security room at 21 hp to lose the point-blank #8 exchange).
     // Taking the shooters at the re-anchor end — where #11 (3.8, 33.9) is d ~4.5 and the
     // mezzanine/west boxes open — keeps the west legs' budget for the room.
-    if real_damage && difficulty == 3 {
-        clear_the_visible(&mut w, "13: the lobby mid re-anchor", 24.0);
+    if real_damage && difficulty >= 2 {
+        // warm-chain-margin-2 (ported to master): a stand that cannot open the guard's box ENDS
+        // the sweep here — the tick-2242 death bled out inside the post-failure stands (the
+        // stop_on_fail law); the d2 sister keeps the master retry.
+        clear_the_visible(&mut w, "13: the lobby mid re-anchor", 24.0, difficulty == 3, difficulty == 3);
     }
     w.walk_to(Wp::new(-6.0, -368.4, 40.0).r(1.5), "13: the lobby west mid");
     // civ-unignore-2 (the d3 pre-clear, second leg): the north-lobby shooters the east lane's
@@ -401,12 +516,36 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // false, the creep dragging Bond backward into the pocket) become the sweep's targets from
     // the west-mid leg end when their boxes open — and a guard this sweep still cannot see is
     // left to the legs' own return fire exactly as before.
-    if real_damage && difficulty == 3 {
-        clear_the_visible(&mut w, "13: the lobby west mid", 24.0);
+    if real_damage && difficulty >= 2 {
+        if difficulty == 3 {
+            // warm-chain-margin-2 (ported to master): the west-mid STAND itself is the exposure
+            // window — the spawner wave lands mid-walk (the tick-1995 death: #10's 0x19 at d 13.2
+            // and mezzanine #4's 0x18 at d 22.2 bled 31.5 during the four stands while their own
+            // boxes never opened to the walker's gun rays) — so the d3 walk takes NO stand here.
+            // The audit's spawner census [D 07000013-audit.md §GAP]: group 2 (start ch 0x29) is
+            // finite (3 waves × max 2 alive) but group 1 (start ch 0x2A) respawns max-4-alive
+            // for 32000 waves — every drain kill RE-FEEDS a post (iter-2: #4 taken, #12 raised on
+            // the same mezzanine post, 79.0 in 12 hits; iter-3: the quiet waits themselves bled
+            // to #6new/#10new [L both ledgers]). Lingering in the lobby is the exposure; a moving
+            // Bond is a smaller target than a statue and the legs' return fire answers (iter-1:
+            // the wave was answered from the glass band, killed true both).
+        } else {
+            clear_the_visible(&mut w, "13: the lobby west mid", 24.0, false, false);
+        }
     }
     w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west");
     w.walk_to(Wp::new(-22.0, -368.4, 39.5).r(1.5), "13: past the glass band");
     w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: at the security-room door");
+    if real_damage && difficulty == 3 {
+        // warm-chain-margin-2 iter-6 (ported to master): the door E + the crossing loop are
+        // ~400 ticks of static at the mouth — the iter-4/5 grind (7 return-fire fights, the
+        // resupply nav, death at 6.5 hp) ran because the respawn stream had closed during the
+        // glass-band drain's stands. The boxes open from here exactly as from the glass band
+        // (the same sight lines, 5 units west [L the iter-1 fights' kills from this area]); the
+        // drain takes each closer as his box opens and the health-watch breaks any stall the
+        // stream shoots at, so the E/crossing runs against a dead or far wave.
+        drain_the_wave(&mut w, "13: at the security-room door", 24.0, 8, 3, 150);
+    }
     w.walk_to(Wp::at(-26.65, -368.36, 37.44, walker::Act::Use { use_ticks: 90 }).r(1.4), "13: E the security-room door");
     w.wait(120); // the sliding door finishes [probe: state 0x8 → 0x4 within the wait]
     // guard-repin-master doorway pre-clear (d3): with the lobby budget spent on the west legs
@@ -417,20 +556,60 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // the room — the sweep takes him from the threshold before the crossing, exactly the
     // civ-unignore-2 law (the pre-clear stands at the leg ends and takes the posted guards
     // BEFORE the legs walk into them).
-    if real_damage && difficulty == 3 {
-        clear_the_visible(&mut w, "13: the security-room doorway", 12.0);
+    if real_damage && difficulty >= 2 {
+        // warm-chain-margin-3: the d3 walk keeps the retry here (measured green on the ported
+        // tree); the d2 sister runs the sight batch's byte-identical sweep.
+        clear_the_visible(&mut w, "13: the security-room doorway", 12.0, difficulty == 3, false);
     }
     w.walk_to(Wp::new(-27.0, -368.4, 37.0).r(1.0), "13: through the doorway");
     w.walk_to(Wp::new(-27.0, -368.4, 35.0).r(1.2), "13: inside the security room");
+    if real_damage && difficulty == 3 {
+        // warm-chain-margin-2 (ported to master): the room guard #8 (skin 0x5000004, weapon
+        // 0x10, posted at (−26.9, −368.4, 29.5)) never exposed from the doorway threshold (no
+        // stand logged in the iter-1 run) and met the west-lane leg point-blank — one −16.5
+        // blast at d 2.9 ended the walk at tick 4386 with 16.5 hp [L the iter-1 ledger]. The
+        // sight line from INSIDE the room runs straight down the room's west side (the doorway
+        // pre-clear's own law, one wall earlier); the drain waits out his firing window and
+        // takes him before the west-lane leg walks Bond through his TooClose band [M
+        // DroneFiring_TooClose_Damage].
+        drain_the_wave(&mut w, "13: inside the security room", 12.0, 8, 3, 150);
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.bond.cel, Some(28), "the portal-1 cross relinks Bond into the security room's cel [M 0x1e0d58]");
     }
-    if real_damage {
-        // The armour the route passes: the real-damage walk arrives here at single-digit health
-        // (the spawn-lobby trades on 12 + the lobby fights), and the room's south shelf holds the
-        // BodyArmourLight #414 (−27.66, −368.51, 25.57 [D]) — a player takes it. The take is the
-        // game's own walk-over, the armour float to 50 [M Pickup_Handler 0x18e650:220-225].
+    if real_damage && difficulty == 3 {
+        // warm-chain-margin-2 iter-5 (ported to master, d3-only — the d2/d1 sisters keep the
+        // sight batch's byte-identical legs below): the room legs follow the pickups test's
+        // PROVEN take route (interactables_07000013_live::the_pickups_take_on_the_walk, green
+        // on master): the room's EAST lane down to the Spas12 shelf first (−20.48, −368.86,
+        // 25.38 [D #429]), whose walk-over take lands the owned bit [M Pickup_Handler 0x18e650;
+        // the green assert], then the BodyArmourLight from the east approach (−27.66, 25.57
+        // r1.2 — the walk-over sphere reaches [M 0x18e148:203-214]; the old r0.6 east-face
+        // stand's take ray ended inside the unit's own mesh, armour 0 [L the 9840-tick run]).
+        // A player at single-digit health takes both: the armour float to 50 [M
+        // 0x18e650:220-225] carries the exit gauntlet, and the Spas12 (weapon 0x1c) answers the
+        // lobby respawners' 12-14 hp templates in one blast through the ordinary fights
+        // (switch_dry cycles to it when the P99 dries).
+        w.walk_to(Wp::new(-25.5, -368.4, 32.5).r(1.2), "13: the room south-east");
+        w.walk_to(Wp::new(-22.0, -368.4, 29.0).r(1.2), "13: the room south");
+        w.walk_to(Wp::new(-20.48, -368.4, 25.38).r(1.2), "13: the Spas12 shelf");
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let owned = sim.drones.inventory.owned[0x1c] || sim.gun.weapon == 0x1c;
+            assert!(owned, "the Spas12 pickup (#429) takes on the walk-over [M Pickup_Handler 0x18e650]");
+        }
+        w.walk_to(Wp::new(-27.66, -368.4, 25.57).r(1.2), "13: the BodyArmour shelf");
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.health.armour >= 50.0,
+            "the BodyArmourLight pickup (#414) takes on the walk-over — the armour float to 50 [M 0x18e650:220-225; got {:.1}]",
+            sim.drones.health.armour);
+    } else if real_damage {
+        // The sight batch's own armour detour (kept byte-identical for the d2/d1 sisters): the
+        // real-damage walk arrives here at single-digit health (the spawn-lobby trades on 12 +
+        // the lobby fights), and the room's south shelf holds the BodyArmourLight #414 (−27.66,
+        // −368.51, 25.57 [D]) — a player takes it. The take is the game's own walk-over, the
+        // armour float to 50 [M Pickup_Handler 0x18e650:220-225].
         w.walk_to(Wp::new(-27.5, -368.4, 30.0).r(1.2), "13: the room's west lane");
         // The shelf stand is BESIDE the unit on the room floor: pushing at the placement wedges
         // on the unit's north face (the 15720-tick run's 6000-tick cap at (−26.55, 26.41), clear
@@ -451,9 +630,12 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             eprintln!("[013] the BodyArmourLight #414 did NOT take at the shelf (armour {} at ({:.2},{:.2},{:.2})) — the take-ray item, see the report",
                 sim.drones.health.armour, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2]);
         }
+        w.walk_to(Wp::new(-25.5, -368.4, 32.5).r(1.2), "13: the room south-east");
+        w.walk_to(Wp::new(-22.0, -368.4, 29.0).r(1.2), "13: the room south");
+    } else {
+        w.walk_to(Wp::new(-25.5, -368.4, 32.5).r(1.2), "13: the room south-east");
+        w.walk_to(Wp::new(-22.0, -368.4, 29.0).r(1.2), "13: the room south");
     }
-    w.walk_to(Wp::new(-25.5, -368.4, 32.5).r(1.2), "13: the room south-east");
-    w.walk_to(Wp::new(-22.0, -368.4, 29.0).r(1.2), "13: the room south");
     w.walk_to(Wp::new(-18.5, -368.4, 26.2).r(1.1), "13: at the shutter panel");
     // The press is the real use key at the walked spot.
     {
@@ -503,6 +685,20 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             (d.state & 0xc == 0, d.state & 0x8 != 0, sim.bond.pos)
         };
         if bp[2] > 38.4 && (-28.0..=-25.5).contains(&bp[0]) { out = true; break; }
+        // A live guard can stand in the doorway's outside mouth: with the game's sight round
+        // robin [M DroneVision_ProcessDroneSight 0x176a28] and the own-cel boundary push
+        // [M NDrone2_Collision 0x140e90:169-174] drone 10 holds CombatNoSight 0x5c at
+        // (-26.78, -368.43, 38.12), the leaf stops on him at 0.76-0.88 and Bond never gets by
+        // [L this branch's agent trace]. Once the leaf is open and the crossing has stalled for
+        // 300 ticks, the player shoots him.
+        if !door_closed && k > 300 {
+            let g = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                sim.drones.list.iter().position(|d| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && walker::dxz(d.pos, [-26.9, bp[1], 38.4]) < 1.6)
+            };
+            if let Some(g) = g { w.shoot_loose(g, "13: the doorway guard", 300); continue; }
+        }
         // Line up in front of the doorway first: east of x −26.7 the room's north wall (z 37.23,
         // x −26.46..−24.74) stands between Bond and the exit, and the straight line to (−27.05, 38.7)
         // pins him on its face.
@@ -651,8 +847,18 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
 /// health 8.5 + armour 50, 14 hits for 77.5, 13 return-fire fights, 0 stuck, 0 falls [L this
 /// tree's run]. The carries question from civ-unignore (62/72/86 all consumed) is moot — the
 /// sniper who ate 69 of the 86 dies at the west-mid leg end, before the security-room legs.
+/// RE-IGNORED (warm-chain-margin-3): the margin-2 levers are PORTED (this tree: the east-lane /
+/// door-mouth / room drains, the pickup re-route, the d3 stop_on_fail re-anchor sweep), and the
+/// 12 north-lobby 100.0-death is FIXED by `switch_dry` + `escalating_cooldowns` on the 12 leg
+/// (the d3 chain now crosses 12 at 89.5 hp + 25.5 armour, 10 hits for 10.5 [L this tree's run]).
+/// What remains is 12's "the north lobby 2" leg BUDGET under the new sight: the leg's fights
+/// answer the respawner stream for zero damage but ~5250 ticks, the dry-gun drop navs (3 per
+/// leg) displace Bond off the leg line, and the last 4.49 u wedge → the 6000-tick cap (bond
+/// (-8.99,12.62) target (-8,17) [L the run dump]). The walker's lenient mode is clobbered by
+/// the nav machinery (it restores false), so the bail-and-continue shape needs either a
+/// nav-aware lenient restore or a flag-gated tower2 hook — the next session's first item.
 #[test]
-#[ignore = "real-damage margin: on 11-08 batch 8b3a33ee2 Bond dies at tick 2448 at (4.03,-368.39,33.35) with 3 hp after a 3.50 hit from drone #5 (weapon 0x19); passed on d09f8b2b3 with the same route. Re-pinned in the stream batch."]
+#[ignore = "real-damage margin: the margin-2 levers are ported and 12's 100.0-death is fixed (the d3 chain crosses 12 at 89.5 hp + 25.5 armour); what remains is 12's north lobby 2 leg budget/wedge under the sight batch (the leg's free fights + 3 dry-navs exceed 6000 ticks, the last 4.49 u wedge) — see docs/reports/level-13-warm-chain-margin-3.md for the re-pin plan."]
 fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage() {
     let iso = iso();
     walker::with_real_damage_head_hunting(|| walk_the_warm_chain(&iso, true, 3));

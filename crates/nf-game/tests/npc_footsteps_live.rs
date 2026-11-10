@@ -93,7 +93,7 @@ impl Fixture {
     }
 }
 
-fn bond_away() -> Player { Player { yaw: 0.0, pos: [0.0, -500.0, 0.0], target: [0.0, -499.5, 0.0], eye: [0.0, -499.0, 0.0], aim: [-1.0, 0.0, 0.0], sph: [0.0, -500.0, 0.0], capsule: ([0.0, -498.9, 0.0], [0.0, -500.0, 0.0]), hanging: false, body: Default::default(), cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
+fn bond_away() -> Player { Player { yaw: 0.0, pos: [0.0, -500.0, 0.0], target: [0.0, -499.5, 0.0], eye: [0.0, -499.0, 0.0], aim: [-1.0, 0.0, 0.0], sph: [0.0, -500.0, 0.0], capsule: ([0.0, -498.9, 0.0], [0.0, -500.0, 0.0]), hanging: false, body: Default::default(), cel: None, obj_cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
 
 /// Points the drone's playing script at `hash` so the next tick's command window covers `frame`
 /// (the anim_events_live.rs harness).

@@ -735,6 +735,13 @@ pub struct Player {
     /// The runtime cel the queries start from (obj+0x20 — fix-safe08b): the `pCelList` cell index in
     /// the world's `ScopeGraph`; `None` = the flat (unscoped) world.
     pub cel: Option<usize>,
+    /// The player object's own linked cel, `obj+0x20` as the movement pass relinks it
+    /// (`Bond::cel`, `control_handle_cel_change` 0x133288 → `build_LinkToRoom` 0x1c9680) — what
+    /// `DroneVision_CanSeeObjectFrom` 0x176f18 reads as the target's cel (`iStack_60 = target+0x20`
+    /// [M :21]) for the cel walk. `cel` above is the scene's smallest-box lookup (a different cell
+    /// where boxes nest: the 02 courtyard stair bottom reads 230 there, 13 here, the sniper's own
+    /// cel). `None` = unlinked or no body model (the walk is skipped).
+    pub obj_cel: Option<usize>,
     /// The crouch substate is live (`bond.crouched` at the build site): the trigger toucher
     /// switches to the game's crouch pick arm with it (level-0a-ceiling-gun-route).
     pub crouched: bool,
@@ -1916,6 +1923,15 @@ pub struct Drone {
     /// (`DroneVision_SeekOpponentLOS` 0x175cb8:50-66: stepped 0..6 on every unseen call, kept while
     /// the ray holds, reset to 0 when the bone-0 retry lands).
     pub view_bone: u16,
+    /// The drone object's own linked cel (`obj+0x20`) and the position it was last relinked at
+    /// (`obj+0x40`, the move segment's from). `NDrone2_DefaultInit` 0x14b300:38 links it with
+    /// `build_LinkToRoom`; every moved tick `control_movement_object_handler` 0x1336f8 runs
+    /// `control_handle_cel_change` 0x133288 on it (portal crossing → the other cel, still in the
+    /// box → kept, else `build_LinkToRoom`; a type-2 miss falls through to the default arm and
+    /// relinks the OLD cel [M 0x133288:166-231]). `NDrone2_CanSeeObject` 0x1785e0 passes it as the
+    /// seer's cel to `DroneVision_CanSeeObjectFrom` 0x176f18. `None` = never linked.
+    pub obj_cel: Option<usize>,
+    pub obj_cel_pos: Option<V3>,
     /// `obj+0xFC` — the drawn-grace counter (docs/systems/corpse-persistence.md): 2 at spawn
     /// [`M 0x134630:16`], set to 2 by the draw pass when drawn [`M 0x1e62d8:71`], decremented once
     /// per control pass otherwise [`M 0x1336f8:242-246`]. The dead states' `obj+0xFC == 0` tests
@@ -2343,6 +2359,7 @@ impl Drone {
             gun_through_wall: false,
             // Drone+0x1da — the view-bone cursor (SeekOpponentLOS 0x175cb8:50-66).
             view_bone: 0,
+            obj_cel: None, obj_cel_pos: None,
             // The per-drone motion stamps (DroneWeap_DoOpponentTargetting 0x179a48:47-73) — see the fields.
             moved_since: None,
             stopped_since: None,
@@ -3608,7 +3625,21 @@ impl Drone {
     /// (a `set_dynamic` part in the door id band 0x100_0000_0000..0x200_0000_0000): the step minus
     /// its component into the leaf's horizontal face normal, if that remainder probes clear.
     fn door_leaf_slide(&self, d: &Data, step: [f32; 2]) -> Option<[f32; 2]> {
-        if d.level != 0x0700_0007 { return None; }
+        // The level set holds the levels whose walks are proven green with the slide running:
+        // 07000007 (where the class landed) and 07000014 (guard-stuck-0c-14: its Countdown
+        // drone#0 — skin 0x05000090, GO_TO_GOAL 0x63 — pressed the leaf of door object
+        // 0x100_0000_001A at (50.82, 1.19, 52.92) 1.5 u short of its route's special (door)
+        // node (51.54, 52.34): the mover's 0.04 step rejected every tick (blocked_reach 0.040,
+        // [L the probe ledger]) and the guard froze 13.24 u from its goal with route_blocked
+        // false. The game's drone is pushed OUT of the leaf and keeps the along-leaf part of
+        // its step [M Drone_CollisionHandler 0x140968:204-208 — the contact pass's DeltaP adds
+        // to obj+0x30 whenever the 0x800 capsule's contact list is non-empty, and the swing
+        // door is a cel-linked collider at its live pose]. The law is the game's on every
+        // level; the set grows one level at a time with its walks re-run — on 07000008 the
+        // combat guards frozen at leaves slide out too and the 00 Agent walk there runs dry
+        // before the cabin panes (the stuck-guard-combat-sweep measurement), so 08 waits on
+        // its walk re-tune.
+        if !matches!(d.level, 0x0700_0007 | 0x0700_0014) { return None; }
         let len = (step[0] * step[0] + step[1] * step[1]).sqrt();
         if len < 1e-6 { return None; }
         let over = |c: f32| c.signum() * 0.4 * (c.abs() > 1e-6) as i32 as f32;
@@ -10917,7 +10948,7 @@ impl Drone {
                 // `NDrone2_Enable(0)` + `obj+0xFE |= 1`; the MP arm is `BOT_fellOutMap`]: the game
                 // reaches it from `control_handle_cel_change` 0x133288 when the object's cel says
                 // out-of-map; the port's DeleteMe arm is the same Enable(0)+flag fold, and the
-                // port's guards never leave the map mesh (no out-of-map cel reader on drones).
+                // relink miss runs it through `Drone::fell_out_map` (`Drones::tick_inner`).
                 self.present = false; self.enabled = false; self.delete_me = true; true
             }
             // ---- drone-abseil-elevator: states 0x8d–0x92 (`NDrone2_StateFuncs` slots 0x8d–0x92) ----
@@ -12263,6 +12294,12 @@ impl Drone {
     /// back to obj+0x30); the port's bone-free `head()` stands in for it.
     pub fn visibility(&self) -> f32 {
         if self.dist < 2.0 && self.sight_range > 0.0 { return 1.0; }
+        self.visibility_formula()
+    }
+
+    /// `DroneVision_OpponentVisibility` 0x175af0 past its close-range probe (:34-60): the range
+    /// scaled by alertness, the cone, the volume factor.
+    pub fn visibility_formula(&self) -> f32 {
         let r = self.sight_range * (2.0 * self.alert + 1.0);
         if r <= 0.0 { return 0.0; }
         let mut vis = 0.7 - (self.dist - r) / r;
@@ -12334,13 +12371,10 @@ impl Drone {
     /// 0.4 from the centre, y kept), TO the drone's eye (`NDrone2_CanSeeObject` 0x1785e0:36-46:
     /// `NDrone2_GetHeadPos`, clamped the same way — the port's `head()`), through
     /// `Collide_LineOfSight` 0x1edf50 (`!Collide_RayIntersect`) with mask `0xa27`. The
-    /// `AINetwork_TestRayCels` pre-pass (:65-67) is the port's world ray, as before [S] — the
-    /// game's pre-pass is an AI-cel REACHABILITY check, not a geometry ray: it builds the ray
-    /// hit-test and `Collide_StraddleCels`, then requires the TARGET's cel to be among the
-    /// straddled cels (same-cel passes outright) [M 0x176f18:65-67 + 0x15ab78:44-66]; a ray the
-    /// port's world clears but whose cel path never straddles the target cel is BLOCKED in the
-    /// game (ledge/hole edges). Port sketch: straddle-walk the port's nav cels along the ray and
-    /// require the target cel in the set.
+    /// `AINetwork_TestRayCels` 0x15ab78 pre-pass (:65-67) is an AI-cel REACHABILITY check, not a
+    /// geometry ray: when the target's cel differs from the seer's, `Collide_StraddleCels` from the
+    /// TARGET's cel along bone → eye must reach the SEER's cel, else "not seen" with no collision
+    /// ray [M 0x176f18:65-67, 0x15ab78:66-86] — `cels_ok` below (`CollisionWorld::ray_reaches_cel`).
     /// (`+0x3a0 & 0x30000000` adds a second `CanSeeObjectFrom` from `+0x3b0` whose result is
     /// dropped, :95-98 — no effect.)
     /// Without posed bones (`bones == None`) the port's single chest point stands in.
@@ -12352,25 +12386,100 @@ impl Drone {
     /// character's glist without collision data goes to `Collide_Jointy` [M Collide_Intersect
     /// 0x1ebaa8:28-31]. So a guard does not see Bond through a guest or another guard. The port's
     /// body test is the posed bone boxes Bond's rounds use [S for the game's joint test].
-    pub fn seek_opponent_los(&mut self, d: &Data, player: &Player, bones: Option<&[V3; 7]>, body: &dyn Fn(V3, V3) -> bool) -> bool {
+    /// Returns (seen, casts): how many probes got past the cel walk to their collision ray —
+    /// each one is a `DAT_00299092` bump [M 0x176f18:68/:94 sit inside the TestRayCels arm], the
+    /// counter `ProcessDroneSight`'s round robin stops on [M 0x176a28:175].
+    pub fn seek_opponent_los(&mut self, d: &Data, player: &Player, bones: Option<&[V3; 7]>, body: &dyn Fn(V3, V3) -> bool) -> (bool, u16) {
         // The ray rides the game's cel scope [M DroneVision_CanSeeObjectFrom 0x176f18:60-77 —
         // Collide_LineOfSight's cel arg is the TARGET's obj+0x20, so Collide_Pick's BFS admits
         // only the target-cel chain's geometry]: the port's unscoped grid walk over-blocked on
         // 07000011 (the d2 idle-Bond stall — a 0.33×0.18 mat-0x06 patch at y 48.232 grazing the
         // ray between the corridor guards and the spawn; world.rs::line_of_sight_scoped). A
         // snapshot without a cel (None) and a portal-BFS miss keep the unscoped walk.
-        let Some(b) = bones else {
-            let eye = self.head();
-            return d.world.line_of_sight_scoped(player.cel, eye, player.target, crate::world::LOS_GUARD_VISION)
-                && !body(eye, player.target);
-        };
-        let eye = self.head();
+        // The cel walk before the ray [M 0x176f18:65-67, disasm 0x176fa8-0x176fbc: `a3 = seer
+        // cel; beq target cel, a3` skips it; else `AINetwork_TestRayCels(bone, target cel, eye,
+        // seer cel)`, and a 0 answer is "not seen" with no collision ray at all]. The seer's cel
+        // is the drone's own relinked obj+0x20 (`Drone::obj_cel`, `relink_cel`); see `sight_probe`.
+        let cast = std::cell::Cell::new(0u16);
         let ray = |i: usize| {
-            let from = clamp_to_cylinder(player.pos, b[i]);
-            d.world.line_of_sight_scoped(player.cel, from, eye, crate::world::LOS_GUARD_VISION) && !body(from, eye)
+            let (seen, c) = self.sight_probe(d, player, bones, body, i);
+            if c { cast.set(cast.get() + 1); }
+            seen
         };
-        view_bone_pick(self.los, self.team, &mut self.view_bone, ray)
+        let mut cursor = self.view_bone;
+        let seen = view_bone_pick(self.los, self.team, &mut cursor, ray);
+        self.view_bone = cursor;
+        (seen, cast.get())
     }
+
+    /// One `NDrone2_CanSeeObject` 0x1785e0 → `DroneVision_CanSeeObjectFrom` 0x176f18 probe of
+    /// Bond's view bone `DRONE_VIEW_BONES[i]` (the bone-free chest point without posed bones):
+    /// (seen, cast). The seer's cel is the drone's own linked `obj+0x20` (`obj_cel`, passed by
+    /// 0x1785e0 as `*(obj+0x20)`), the target's is `Player::obj_cel` (0x176f18:21). Equal cels
+    /// (both unlinked included) skip the walk and cast [M :65 `iStack_60 == iStack_80`]; else
+    /// `AINetwork_TestRayCels` answers 0 for a null cel on either side [M 0x15ab78:66-67] and
+    /// otherwise walks from the target's cel [M :70-86]; a 0 is "not seen" with no ray and no
+    /// `DAT_00299092` bump [M 0x176f18:65-72]. A player snapshot without `obj_cel` (no body model:
+    /// the harness players) keeps the ray alone [S].
+    pub fn sight_probe(&self, d: &Data, player: &Player, bones: Option<&[V3; 7]>, body: &dyn Fn(V3, V3) -> bool, i: usize) -> (bool, bool) {
+        let eye = self.head();
+        let from = match bones { Some(b) => clamp_to_cylinder(player.pos, b[i]), None => player.target };
+        let cels_ok = match (player.obj_cel, self.obj_cel) {
+            (None, _) => true,
+            (Some(t), Some(s)) if t == s => true,
+            (Some(_), None) => false,
+            (Some(t), Some(s)) => d.world.ray_reaches_cel(t, from, eye, s).unwrap_or(true),
+        };
+        if !cels_ok { return (false, false); }
+        let (a, b) = if bones.is_some() { (from, eye) } else { (eye, from) };
+        (d.world.line_of_sight_scoped(player.cel, a, b, crate::world::LOS_GUARD_VISION) && !body(a, b), true)
+    }
+
+    /// The drone's `obj+0x20` relink (see `obj_cel`): the first call links by `build_FindCel`
+    /// (`NDrone2_DefaultInit` 0x14b300:38); later calls run the moved-pass relink only when the
+    /// object moved [M 0x133288:42-46 `Vec_IsEqual` early-out]. Returns true on a relink MISS
+    /// (no portal crossing, outside the old cel's box, no `build_LinkToRoom` hit): the type-2 arm
+    /// calls `Drone_FellOutMap` 0x13a878 [M 0x133288:179-181, and :63-72 for an unlinked object],
+    /// whose SP body is `NDrone2_Enable(0)` + `obj+0xFE |= 1` (the control walk's delete) — the
+    /// caller removes the drone. The old cel is kept as the default arm's relink does [M :185-250].
+    pub fn relink_cel(&mut self, w: &crate::world::CollisionWorld) -> bool {
+        let r = match self.obj_cel_pos {
+            None => { self.obj_cel = w.find_cel(self.pos); self.obj_cel_pos = Some(self.pos); return false }
+            Some(prev) if prev == self.pos => return false,
+            Some(prev) => w.player_cel_relink(self.obj_cel, prev, self.pos, self.pos),
+        };
+        self.obj_cel_pos = Some(self.pos);
+        match r {
+            Some(c) => { self.obj_cel = Some(c); false }
+            None => true,
+        }
+    }
+
+    /// `Drone_FellOutMap` 0x13a878's SP body (MPSettings+388 == 0): `NDrone2_Enable(0)` and
+    /// `obj+0xFE |= 1` [M 0x13a878:8-15] — the same fold as the DeleteMe 0xb4 arm.
+    pub fn fell_out_map(&mut self) {
+        self.present = false;
+        self.enabled = false;
+        self.delete_me = true;
+    }
+}
+
+/// `DroneVision_ProcessDroneSight` 0x176a28:146-178's round robin over `n` list slots: from the
+/// slot after `cursor` (`DAT_00299094`, the last drone visited [M :151-162]), at most `n` visits
+/// (`DAT_00298e1c`, the list count [M :48/:149]); EVERY visited slot becomes the cursor [M :153];
+/// `visit(slot)` runs the drone's sight (0 when it is not eligible or casts no ray) and returns
+/// its probe casts, which bump `counter` (`DAT_00299092`); after a visit the walk stops when the
+/// counter has passed `snapshot` (the ushort taken before the visibility loop, [M :71/:175]).
+/// Returns the new cursor.
+pub fn sight_round_robin(cursor: usize, n: usize, snapshot: u16, counter: &mut u16, mut visit: impl FnMut(usize) -> u16) -> usize {
+    let mut cur = cursor;
+    for k in 0..n {
+        if k > 0 && snapshot < *counter { break; }
+        let slot = (cursor + 1 + k) % n;
+        cur = slot;
+        *counter = counter.wrapping_add(visit(slot));
+    }
+    cur
 }
 
 /// The cursor walk of `DroneVision_SeekOpponentLOS` 0x175cb8:49-72 (SP) over `ray(index into
@@ -13874,7 +13983,8 @@ pub struct Drones {
     /// 0x143144-0x14314c bail; `DroneVision_ProcessDroneSight` 0x176a28:71/:177; the
     /// snapshot-compare caches `Drone_IsCoverNodeUsable` 0x1386d8:175/:190 and
     /// `DroneSpawner_Control` 0x137e68:216/:224). The port increments it at the team-2 pick's
-    /// probes; the other consumers are not instrumented yet (open in the report).
+    /// probes and at the guard-sight probes (the round robin's and the close-range visibility
+    /// probe); the other consumers are not instrumented yet.
     pub los_probes: u16,
     /// `Locks_Init` 0x1b0548's keypad-code table — the game generates it during boot with the
     /// SHARED stream (`Rand_Random` per digit, warmup `GameState+0x34·10 & 0x1ff` [M 0x1b0548]),
@@ -20388,6 +20498,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `Drone_InitComms`' shared passes — `ProcessDroneSight`, `FindAlertedDrones`, the 0x97 check,
         // `HandleSoundAlerts`/`Sound_ZeroAlertness` and the ch 0x96 alarm rebroadcast — sit inside the
         // `NPCGlobals != 0` block [M 0x139520:124-284]: a cut-scene that fired event 5 freezes all of these.
+        // The drones' own cels: `control_movement_object_handler` 0x1336f8 runs
+        // `control_handle_cel_change` 0x133288 for every moved dynamic object every tick (outside
+        // the NPCGlobals block); a relink miss is `Drone_FellOutMap` (the drone is removed). A world
+        // without cels (the unit-test harness) links nothing and removes nobody.
+        if d.world.has_scope() {
+            for dr in &mut self.list {
+                if dr.present && !dr.corpse && dr.relink_cel(d.world) { dr.fell_out_map(); }
+            }
+        }
         if self.npc_enabled {
         // Visibility every tick for drones with vision on; line of sight for one drone per tick (round robin).
         // [M 0x176a28 first loop] the visibility value is computed ONLY while the 0x10000 vision bit
@@ -20396,37 +20515,68 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // vision-off guard has no sight pipeline at all, whatever its +0x50c alertness.
         // Inside the 15-frame wait the whole pass is skipped: the sight flags and the +0x270/+0x274
         // counters keep their values [M 0x176a28:56-57].
-        if vision_open {
-            for dr in &mut self.list { dr.visibility = if dr.present && !dr.corpse && dr.vision_on { dr.visibility() } else { 0.0 }; if dr.visibility < 0.7 { dr.los = false; } }
-        }
-        let ln = if vision_open { self.llist.len() } else { 0 };
         let view_bones = self.bond_view_bones;
-        for k in 0..ln {
-            let slot = (self.los_cursor + 1 + k) % ln.max(1);
-            let idx = self.llist[slot];
-            let (before, rest) = self.list.split_at_mut(idx);
-            let (dr, after) = rest.split_first_mut().unwrap();
-            if dr.visibility >= 0.7 {
-                // The other drones' bodies on the sight ray (`seek_opponent_los`): a disabled
-                // object (+0xF0 & 0x20) is not picked [M 0x1eae80:72-82].
-                let body = |a: V3, b: V3| before.iter().chain(after.iter())
-                    .any(|o| o.present && o.enabled && !o.corpse && drone_ray_part(o, d, a, b).is_some());
-                // The drone-vision LOS: the game's `DroneVision_LineOfSightToObject` 0x178390 /
-                // `CanSeeObjectFrom` 0x176f18 / `CanSeePosition` 0x178438 all ray-test through
-                // `AINetwork_TestRayCels` 0x15ab78 (the segment against every boundary of the
-                // crossed AI cels, walls first [M 0x15ab78]); the port swaps that for the static
-                // collision world's line of sight — the same deviation the nav `move_test`
-                // documents [S].
-                dr.los = dr.seek_opponent_los(d, player, view_bones.as_ref(), &body);
-                // `SeekOpponentLOS` 0x175cb8:68-82 — on a successful sight tick the through-wall
-                // flag refreshes: aiming (`+0x22`, the port's `aims_torso()` = the DoTracking
-                // 0x1479d8:49 fold) → the `GunThroughWall` 0x178520 ray, else cleared. Ticks without
-                // sight keep the last value (the game's early-outs leave +0x1e alone).
-                dr.gun_through_wall = dr.los && dr.aims_torso() && dr.gun_through_wall(d);
-                self.los_cursor = slot;
-                break;
+        // The sight probes' cel walk reads the drones' own linked cels (obj+0x20, relinked above).
+        if vision_open {
+        }
+        // The probe counter snapshot sits BEFORE the visibility loop [M 0x176a28:71 `uVar3 =
+        // DAT_00299092` right after FindAlertedDrones]: a close-range visibility ray that cast
+        // ends the round robin after its first drone.
+        let snapshot = self.los_probes;
+        // `ProcessDroneSight`'s eligibility [M 0x176a28:76-84/:155-166 + :167-168]: the drone alive
+        // (0x600 clear, 0x100 set, health > 0, not class 0x11, not dying), the vision bit 0x10000
+        // and the opponent pointer +0x170.
+        let eligible = |x: &Drone| x.present && !x.corpse && x.vision_on && x.opp_ptr();
+        if vision_open {
+            for i in 0..self.list.len() {
+                let (before, rest) = self.list.split_at_mut(i);
+                let (dr, after) = rest.split_first_mut().unwrap();
+                // A dead or vision-off drone keeps no sight: the third loop's lost arm takes it [M
+                // 0x176a28:191-200]; the port drops its stale sight bit here (the game's bit 2 waits
+                // for the next SeekOpponentLOS) [S].
+                if !eligible(dr) { if !(dr.present && !dr.corpse && dr.vision_on) { dr.visibility = 0.0; dr.los = false; } continue; }
+                // `DroneVision_OpponentVisibility` 0x175af0:24-33: under 2 u with a sight range the
+                // head-bone probe runs first; seen = 1.0, else the range/cone formula.
+                // Team 2's opponent is a drone (`opp_drone`), and the port's sight probe is Bond's:
+                // its close probe (against that drone) is not modelled [S].
+                let close = dr.team != 2 && dr.dist < 2.0 && dr.sight_range > 0.0 && {
+                    let body = |a: V3, b: V3| before.iter().chain(after.iter())
+                        .any(|o| o.present && o.enabled && !o.corpse && drone_ray_part(o, d, a, b).is_some());
+                    let (seen, c) = dr.sight_probe(d, player, view_bones.as_ref(), &body, VIEW_BONE_HEAD);
+                    if c { self.los_probes = self.los_probes.wrapping_add(1); } // [M 0x176f18:94]
+                    seen
+                };
+                let v = if close { 1.0 } else { dr.visibility_formula() };
+                // A value under 0.7 is stored as 0 [M 0x176a28:107-117].
+                dr.visibility = if v >= 0.7 { v } else { 0.0 };
             }
         }
+        let ln = if vision_open { self.llist.len() } else { 0 };
+        // The round robin [M 0x176a28:146-178]: from the drone after the last one visited
+        // (`DAT_00299094`), at most the list's count of visits; EVERY visited drone becomes the
+        // cursor; an eligible one runs `SeekOpponentLOS`, which clears the sight bit and returns
+        // under 0.7 visibility without a ray [M 0x175cb8:20-28]; the walk stops once the probe
+        // counter moved [M :175].
+        let (list, llist) = (&mut self.list, &self.llist);
+        self.los_cursor = sight_round_robin(self.los_cursor, ln, snapshot, &mut self.los_probes, |slot| {
+            let idx = llist[slot];
+            let (before, rest) = list.split_at_mut(idx);
+            let (dr, after) = rest.split_first_mut().unwrap();
+            if !eligible(dr) { return 0; }
+            if dr.visibility < 0.7 { dr.los = false; return 0; }
+            // The other drones' bodies on the sight ray (`seek_opponent_los`): a disabled
+            // object (+0xF0 & 0x20) is not picked [M 0x1eae80:72-82].
+            let body = |a: V3, b: V3| before.iter().chain(after.iter())
+                .any(|o| o.present && o.enabled && !o.corpse && drone_ray_part(o, d, a, b).is_some());
+            let (seen, casts) = dr.seek_opponent_los(d, player, view_bones.as_ref(), &body);
+            dr.los = seen;
+            // `SeekOpponentLOS` 0x175cb8:68-82 — on a successful sight tick the through-wall
+            // flag refreshes: aiming (`+0x22`, the port's `aims_torso()` = the DoTracking
+            // 0x1479d8:49 fold) → the `GunThroughWall` 0x178520 ray, else cleared. Ticks without
+            // sight keep the last value (the game's early-outs leave +0x1e alone).
+            dr.gun_through_wall = dr.los && dr.aims_torso() && dr.gun_through_wall(d);
+            casts
+        });
         for dr in &mut self.list {
             // standins-drone-922: the opponent pointer [M 0x1424e0:100-120] — Bond alive = the
             // pointer set; stamped for every drone every tick, before the LOS gate.
@@ -23029,9 +23179,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // `NDrone2_Collision` 0x140e90:170-172: the feet sphere (r 0.4, mask drone+0xba4) is pushed
             // out of the AI-network boundaries — `AINetwork_GetBoundsPushVectorForSphere` 0x157bd0
             // walking the cel's BLINK chain with `AINetwork_HitBoundry` 0x157780 per wall [M], gated
-            // on drone+0x4f8 < 0 [M :169] (the port's `bounded` flag stands in for that gate).
+            // on drone+0x4f8 < 0 [M :169] (the port's `bounded` flag stands in for that gate). The
+            // chain is the drone's OWN linked cel's (obj+0x20, disasm 0x1410fc `lw a1,0x20(s3)`) and
+            // the sphere centre is obj+0x30 itself (0x1410f8 `addiu a0,s3,0x30`), not the feet.
             if dr.enabled && dr.bounded && d.nav.bounds {
-                let p = d.nav.push_out(dr.feet(), 0.4);
+                // A world without cels (the test harness's one-cel model) files every wall
+                // under its single cel.
+                let p = if d.world.has_scope() {
+                    let cel = if dr.obj_cel_pos.is_some() { dr.obj_cel } else { d.world.find_cel(dr.pos) };
+                    d.nav.push_out_in_cel(dr.pos, 0.4, cel)
+                } else {
+                    d.nav.push_out(dr.pos, 0.4)
+                };
                 dr.pos[0] = p[0];
                 dr.pos[2] = p[2];
             }
@@ -24457,6 +24616,32 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
 mod tests {
     use super::*;
 
+    /// `ProcessDroneSight` 0x176a28:146-178's round robin: every visited slot moves the cursor
+    /// (a full lap without a cast ends where it began), the walk ends after the first visit that
+    /// cast, a cast before the walk (the close-range visibility probe after the :71 snapshot)
+    /// leaves exactly one visit, and the ushort compare does not stop on a wrapped counter.
+    #[test]
+    fn sight_round_robin_law() {
+        let mut seen = Vec::new();
+        let mut c = 5u16;
+        // No casts: a full lap from slot 2, the cursor back on 1 [M :153 every visit writes it].
+        let cur = sight_round_robin(1, 4, 5, &mut c, |s| { seen.push(s); 0 });
+        assert_eq!((cur, seen.clone(), c), (1, vec![2, 3, 0, 1], 5));
+        // Slot 3 casts: the walk stops there and it is the cursor.
+        seen.clear();
+        let cur = sight_round_robin(1, 4, 5, &mut c, |s| { seen.push(s); (s == 3) as u16 });
+        assert_eq!((cur, seen.clone(), c), (3, vec![2, 3], 6));
+        // A probe already cast after the snapshot: one visit only [M :175 tested after the visit].
+        seen.clear();
+        let cur = sight_round_robin(3, 4, 5, &mut c, |s| { seen.push(s); 0 });
+        assert_eq!((cur, seen.clone()), (0, vec![0]));
+        // The wrap: 0xffff + 1 = 0 is not above the snapshot, the walk goes on [M ushort compare].
+        let mut w = 0xffffu16;
+        seen.clear();
+        let cur = sight_round_robin(0, 3, 0xffff, &mut w, |s| { seen.push(s); (s == 1) as u16 });
+        assert_eq!((cur, seen.clone(), w), (0, vec![1, 2, 0], 0));
+    }
+
     /// `Drone_InitComms`'s scan law [M 0x139520:161-201] against hand-built states. The dead-guard
     /// skip is the part the rejected s/markers-drone-c round dropped: a SetAsDead corpse (0x200
     /// [M 0x14a2f0:9]) or a PostDroneControl health-dead guard (0x400 [M 0x14aff8:9-12]) — even
@@ -24934,6 +25119,7 @@ mod tests {
             body_glow: None,
             gun_through_wall: false,
             view_bone: 0,
+            obj_cel: None, obj_cel_pos: None,
             dist_to_player: [100000.0; 4],
             props: [0; 3], alert_props: None, sight_range: 0.0, half_fov: 0.0, engage_range: 0.0, combat_range: 0.0,
             accuracy: 0, aggression: 0, reaction: 0, recover: 0, los: false, seen: false, ever_seen: false, ever_seen_3c: false, bond_alive: true, visibility: 0.0,

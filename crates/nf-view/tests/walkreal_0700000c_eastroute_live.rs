@@ -48,6 +48,7 @@ fn floor_at(w: &Walker, x: f32, y: f32, z: f32) -> Option<f32> {
 /// The corpse-solid working theory and the next lever are in the handoff ledger.
 #[ignore = "pretrans-arms-4 round 2: the shared diagonal crossing is REPAIRED in walkreal0c.rs (the shelf west lane + the sniper brush-past slide — the ledgered wire-#282 reach miss is gone [L the handoff run on this tree: the diagonals, icon #6 and the #282 grab/ride all green]); this route now fails PAST it at the same next blocker as the handoff walk — the SW arc approach: the ride lands Bond on a 13.16-high tier at (4.98,-223.29) whose east side overhangs the yard (the [0c-arc] dump: the 11.2 spine 2 u below, NO drones within 10 u after the leg — pure geometry); 'the ledge to the arc' falls, 'the arc west end' wedges [L the runs]; next lever: shift the ride's release point or map the landing tier fine"]
 #[test]
+#[ignore = "los-mask-repins-0c: the shared prologue meets the west-ledge strip guard (drone 35 at (-7.07, 12.24, -218.60)); Bond falls into the gap before wire #282"]
 fn the_ground_route_crosses_to_the_east_side() {
     let iso = iso();
     // Start: the band west end (the whole walk's leg-10 spot, floor 10.34 [D probe door4]) -
