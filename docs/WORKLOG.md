@@ -147,3 +147,5 @@ guard sight (823ff190b: per-object masks, cel walk, sight rotation, guard's own 
 own-cel boundary push, FellOutMap); re-route each ignored walk with real input, remove
 its ignore, never lower damage or health, no top-ups, helpers gated to 07000008 + difficulty.
 - Work log: (in progress)
+- (18:53-20:04) sandbox reset: clone, branch cut, work-slim + ISO down, Rust/ALSA env; disk
+  forced a cargo clean + single rebuild (RUSTFLAGS -L alsausr for the linker).
