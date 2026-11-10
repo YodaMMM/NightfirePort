@@ -104,3 +104,14 @@ wants it: watch the pickup's gone flag while Bond stands at the spot.)
 The environment did not expose any token, credit or context-window figures for this session —
 not visible to me. (No usage numbers were shown by the sandbox, the CLI, or the git host; the
 bash `time` figures for the test runs are in the transcript, not usage figures.)
+
+## ntfy failed
+
+All three fallbacks failed (the sandbox's outbound egress cannot reach ntfy.sh — the
+level-05-basin-floor-6 report recorded the same wall):
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds`
+2. python3 urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. wget: DNS resolved (159.203.148.75) then the TCP connect hung — `wget exit=124` at the
+   30 s timeout, no response bytes.
+
