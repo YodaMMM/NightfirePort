@@ -57,10 +57,14 @@ check the round-3 note (the landing shots on the strip guard), remove each ignor
 
 ## What's left (the next round's work)
 
-- The shot route first: a resupply pass before the #284 ride (the walk's own pickup points —
-  find one reachable without the strip), then the on-target landing shot kills the 10-hp
-  guard, and the straight -3 diagonals walk clean to the grab (they are the pre-solid era's
-  proven path).
+- The shot route first, with the fetch's own measurement in hand: the round-2 fetch walk
+  reached the west area's ONLY pickup (kind 0x0003, weapon 0x0006, 50 rounds at
+  (-21.53,11.33,-218.54) [D the pickup dump; the whole west filter matched one]) and the
+  wheel still read weapon 0x54 clip 1 spare 0 after the switch cycle [L the run] — read
+  Pickup_Handler 0x18e650's equip path for why (owned-already? kind semantics?), or keep the
+  START ammo (the loadout [1,2,30,74,78,80,84]) by fighting the ring leaner, so the landing
+  shot has rounds; then the on-target shot kills the 10-hp guard and the straight -3
+  diagonals walk clean to the grab (the pre-solid era's proven path).
 - Fallback if the ammo detour stalls: the lip-top path west of the guard's capsule (the west
   lane leg (-8.4,12.4,-218.8) r 1.0 is proven on this tree; the missing piece is the east
   continuation past his capsule — hold-and-wait for his AimStandFire cycle).

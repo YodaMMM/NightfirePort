@@ -1282,6 +1282,30 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
         }
         drop(sim);
         if let Some(g) = target {
+            // The ammo lever (the round-2 telemetry: the gun arrived DRY — clip 1 spare 0 [L
+            // the run]): fetch ammo through the walk's own pickup walk first, then re-anchor
+            // on the landing (the fetch displaces Bond), then shoot.
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let (clip, spare) = (sim.gun.clip as i32, sim.gun.spare as i32);
+                drop(sim);
+                if clip + spare < 4 {
+                    eprintln!("[0c] dry at the landing (clip {clip} spare {spare}) — the ammo fetch");
+                    if w.resupply("the strip ammo run") {
+                        // The take lands gun 0x0006 (50 rounds at (-21.53,11.33,-218.54)
+                        // [D the pickup dump]) in the INVENTORY — the current clip does not
+                        // move [M Pickup_Handler 0x18e650's equip path] — cycle the wheel to
+                        // the armed gun, then re-anchor on the landing (the fetch displaced
+                        // Bond 13 u west).
+                        if w.switch_to_armed("the strip gun switch") {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            eprintln!("[0c] armed: weapon {:#x} clip {} spare {}", sim.gun.weapon, sim.gun.clip, sim.gun.spare);
+                            drop(sim);
+                            w.walk_to(Wp::new(-8.21, 12.82, -215.66).r(0.5), "re-anchor on the #284 landing");
+                        }
+                    }
+                }
+            }
             // The bounded landing-shot attempt (the repro of the ledger's 600-tick miss) plus
             // the ammo telemetry: this round's shot-telemetry run measured the gun DRY at the
             // landing — clip 1 fired off-target, then clip 0 spare 0 weapon 0x54, and every

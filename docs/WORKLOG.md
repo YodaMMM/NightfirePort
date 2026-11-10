@@ -36,3 +36,8 @@
   #284 ride, the on-target shot kills the 10-hp guard, the straight diagonals walk clean.
   Ledgers + report updated; all 0c binaries green (handoff 1/0/3, eastroute 1 ignored,
   barrelrow 1/0, interactables 7/0, guard1 2/0, comms 1/0, upward 2/0), nf-game lib 782/0/4.
+
+- The fetch attempt measured: the west pickup (0x0003/0x0006/50 rds at (-21.53,-218.54)) was
+  reached but the wheel stayed 0x54/1/0 after the cycle [L the run]; the re-anchor walk
+  landed a lower perch. The ledgers carry the equip-path question. All 0c binaries green
+  (1/0/3, 1 ign, 1/0, 7/0, 2/0, 1/0, 2/0), nf-game lib 782/0/4 on the final tree.
