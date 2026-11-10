@@ -212,3 +212,7 @@ un-ignore it; real input only, never lower damage or health, no top-ups, helpers
   3/0/1 twice (before + after the gate; the gate restored the 3), interactables_07000012_live
   12/0. The full suite did not run: past the 23:03 UTC stop line when the tree settled, and
   background jobs die between tool calls in this sandbox (the fast runner could not stay up).
+
+## los-mask-repins-12-2 (2026-11-10T22:12Z, branch s/los-mask-repins-12-2)
+
+- Claimed. Base: origin/s/los-mask-repins-12 0e33a261a (== origin/master 0e1371451 already merged there: the guard-sight turn-on). Task: the 07000012 Operative real-damage walk green under the game's guard sight — the 543 door question is settled (the kind-0 shut pose is pos01 0.5; the leaf opens fully on master), the walk wedges on its ROUTE past the door. Fix the route with real input so walkreal_07000012_live::walk_spawn_to_the_shaft_exit_real_damage_operative passes and un-ignore it. No damage/health lowering, no top-ups; helpers gated to 07000012 + difficulty. Plan: read docs/reports/los-mask-repins-12.md + the ignore message; build walkreal_07000012_live + interactables_07000012_live; reproduce; re-route; run both binaries + every binary that shares tests/common if touched; suite via tools/test/suite.py if the disk allows; report; finish.
