@@ -109,3 +109,27 @@ real-damage sister and the eastroute ground crossing.
 
 not visible to me — this environment shows no token, credit or context-window figures for the
 session (no usage panel is exposed to the agent).
+
+## Addendum (the final tree 29541423d + the report/worklog commits through e8b5f6e5a)
+
+- The fast suite on the final tree: the first two launches died on build errors that were races
+  with this session's own mid-refactor edits, and the third on `No space left on device` (the
+  session's repeated builds filled the 9.9 GB disk; 1.3 GB was freed from the stale
+  target/release artifacts). The final relaunch (22:41 UTC) is building as this report is filed —
+  it cannot finish its full run inside the sandbox window, so the chunks in "What ran" above are
+  the coverage: every 0700000c test binary that the change touches ran green in the foreground,
+  each listed with its pass count.
+- The WORKLOG entry and this report are the last commits on `s/los-mask-repins-0c-2` (e8b5f6e5a
+  + this addendum).
+- The finish step ran twice: the first call appended only the header (the script resolves the
+  report path relative to the queue dir), the second call with the absolute path attached the
+  full report to the already-closed `done/30-los-mask-repins-0c-2.md`.
+
+## ntfy failed
+
+All three fallbacks attempted at ~22:51–22:52 UTC (2026-11-10):
+- curl: `curl: (28) Connection timed out after 20002 milliseconds`
+- python3: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+- wget: timed out at 25 s (exit 124, no output)
+(git push to github.com worked throughout, so the block is ntfy.sh-specific — the same wall the
+los-mask-repins-0c round recorded.)
