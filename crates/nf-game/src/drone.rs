@@ -6609,11 +6609,15 @@ impl Drone {
         // `+0x4F8 & 0x4000` cleared at the top.
         self.in_air = false;
         // The body query's push out of a live pane [M Drone_CollisionHandler 0x140968]: the spine
-        // runs obj + up*r to obj + up*(r - hip), radius r = 0.4, 0.55 for type 0xC [M
-        // NDrone2_Collision 0x140e90:81-117]. `bounded` stands for `NDrone2_DoCollision`
-        // 0x149ec8's +0x4F8 bit 0x20; its +0x570 bit 2 is unmodelled.
-        let r = if self.dtype == 0x0c { 0.55 } else { 0.4 };
-        let (push, pane) = world.pane_push([self.pos[0], self.pos[1] + r, self.pos[2]], [self.pos[0], self.pos[1] + r - self.hip(), self.pos[2]], r);
+        // runs obj + up·top to obj + up·bottom, radius r — `NDrone2_Collision` 0x140e90's capsule
+        // (`capsule`: 0.4, 0.55 on the +0xD8 voice set 0xC, 0.3 stacked when +0x2f down).
+        // `bounded` stands for `NDrone2_DoCollision` 0x149ec8's +0x4F8 bit 0x20 (the per-guard
+        // collide switch: bit CLEAR returns 0 — no collision — before any other test [M disasm
+        // 0x149f08-18]; DefaultInit 0x14b300:60 sets the bit for every drone in the 0x801e2
+        // bundle, SetAsDead 0x14a2f0:16 clears it off 0700004a); its +0x570 bit 2 (the anim-info
+        // no-collide bit, DroneAnim_SetDAnimInternal 0x13aee8:50) is unmodelled.
+        let (r, top, bottom) = self.capsule(self.hip());
+        let (push, pane) = world.pane_push([self.pos[0], self.pos[1] + top, self.pos[2]], [self.pos[0], self.pos[1] + bottom, self.pos[2]], r);
         self.pos[0] += push[0];
         self.pos[2] += push[2];
         self.pane_contact = pane;
@@ -6687,6 +6691,34 @@ impl Drone {
     /// length (+0xA0 + 0.6) and the feet (`pos.y − +0xA0`), and the sitting driver's is the 0.2 clamp
     /// [L 05-truck.trace]. DefaultInit 0x14b300:48 starts it at 1.0.
     fn hip(&self) -> f32 { self.hip_anim }
+
+    /// `NDrone2_Collision` 0x140e90's collision-body capsule: (radius, top up-offset, bottom
+    /// up-offset) from the origin for a body whose hip is `hip` — the shape the HITTEST at
+    /// Drone+0x3D0 carries (+0x3F0 top, +0x400 bottom, +0x45C radius) and the body-contact scan
+    /// sweeps. Three arms, in the game's own order:
+    /// • the DOWN guard (+0x2f — DSTATE_Stunned 0x162eb0 ENTER/EXIT, StunGrenadeLoop 0x1631c0,
+    ///   StunDartLoop 0x163570): radius 0.3 (0x3e99999a) and BOTH sphere centres stacked at
+    ///   up·(0.3 − hip) — the collapsed body's single low ball [M disasm 0x140fd4-88: `lb +0x2f`
+    ///   ≠ 0 → 0.3f; case-A stores 0x140f88-0x141008 write the same point to +0x3F0 and +0x400].
+    /// • else voice set 0xC (+0xD8 — Kiko's voice set, the port's `voice_type`; the +0xD8 read is
+    ///   `lhu 0xd8` at 0x140fdc, the compare 0x141048-68 picks 0.55 = 0x3f0ccccd over 0.4 =
+    ///   0x3ecccccd): spheres at up·0.55 / up·(0.55 − hip). The old port read `dtype == 0x0c` —
+    ///   placement param +0xC7, a DIFFERENT field from the +0xD8 voice set (drone-port-check.md
+    ///   #3): 07000016's #634 (skin 0x050005e → voice 0x13, dtype 0xc) is 0.4 in the game and
+    ///   stood 0.55 here; 07000008's Zoe (skin 0x500003b, dtype 0xc, voice 0xc) agrees on both.
+    /// • else radius 0.4 [M 0x14104c-58].
+    /// (The dead +0x4F8 & 0x200 arm's bone-based volume [M :123-155] is unmodelled — the port's
+    /// corpse keeps the last capsule and the door passes skip corpses outright.)
+    pub fn capsule(&self, hip: f32) -> (f32, f32, f32) {
+        if self.down {
+            let y = 0.3 - hip;
+            (0.3, y, y)
+        } else if self.voice_type == 0xc {
+            (0.55, 0.55, 0.55 - hip)
+        } else {
+            (0.4, 0.4, 0.4 - hip)
+        }
+    }
 
     /// `NDrone2_Move` (0x14eff8) +0x23 branch, interpreter-verified against the real code (this
     /// task): `velocity += normalise(rope − pos) · (REC_FRAME_RATE · +0x50)` per control tick, the
@@ -22730,8 +22762,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if player.body.2 > 0.0 && dr.present && dr.enabled && !dr.corpse {
                 let (ja, jb) = (player.body.0, player.body.1);
                 let pr = player.body.2;
-                let (ta, tb) = ([dr.pos[0], dr.pos[1] + 0.4, dr.pos[2]], [dr.pos[0], dr.pos[1] - 0.6, dr.pos[2]]);
-                let tr = 0.4f32; // [M 0x140e90:91-121; the 0x0c-kind 0.55 arm rides the Jointy list's own stand-in [S]]
+                // The guard's own capsule (`capsule`): the standing site used pos+0.4/pos−0.6
+                // with r 0.4 — the hip-1.0 stand-in; the down arm stacks both ends at
+                // pos + (0.3 − hip) with r 0.3 [M NDrone2_Collision 0x140e90 case A].
+                let (tr, top_off, bottom_off) = dr.capsule(1.0);
+                let (ta, tb) = ([dr.pos[0], dr.pos[1] + top_off, dr.pos[2]], [dr.pos[0], dr.pos[1] + bottom_off, dr.pos[2]]);
                 let mut p = Self::closest_on_segment(ta, tb, ja);
                 let mut q = Self::closest_on_segment(ja, jb, p);
                 p = Self::closest_on_segment(ta, tb, q);
@@ -22976,16 +23011,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // reverses a closing leaf. The port's `enabled` is the Enable(1)/Enable(0) mirror;
                 // the corpse bits 0x200/0x400 map to `corpse` and the health floor to `+0xAC > 0`.
                 // The guard's collide HITTEST [M NDrone2_Collision 0x140e90:91-121]: mask 0x800
-                // (+0x464), A = +0x3F0 = pos + up·0.4, B = +0x400 = pos + up·(0.4 − hip) (pos − 0.6,
-                // the capsule the body-contact pass above uses), r = +0x45C = 0.4. Mask 0x800 makes
+                // (+0x464), A = +0x3F0 = pos + up·r, B = +0x400 = pos + up·(r − hip) (pos − 0.6,
+                // the capsule the body-contact pass above uses), r = +0x45C — `capsule`'s 0.4 /
+                // 0.55-voice-0xC / 0.3-down arms (this site keeps the standing hip 1.0 the
+                // −0.6 bottom end stood for). Mask 0x800 makes
                 // `Collide_Intersect` 0x1ebaa8 run the SAME `Intersect_CylGeom` refine on this capsule
                 // as on the player's (the arm is keyed on the HITTEST mask +0x94, not on the class
                 // [M 0x1ebaa8:234-296]), so a guard reaches the door's `+0xD0` list only when his
                 // capsule touches the leaf. (Was: the swept root point, sphere stage only.)
-                let top = [x.pos[0], x.pos[1] + 0.4, x.pos[2]];
-                let bottom = [x.pos[0], x.pos[1] - 0.6, x.pos[2]];
+                let (r, top_off, bottom_off) = x.capsule(1.0);
+                let top = [x.pos[0], x.pos[1] + top_off, x.pos[2]];
+                let bottom = [x.pos[0], x.pos[1] + bottom_off, x.pos[2]];
                 movers.push(crate::door::DoorMover {
-                    a: top, b: bottom, radius: 0.4, body: (top, bottom, 0.4), centre: x.pos,
+                    a: top, b: bottom, radius: r, body: (top, bottom, r), centre: x.pos,
                     player: false,
                     valid: !x.corpse && x.health > 0.0 && x.enabled,
                 });
@@ -24785,6 +24823,32 @@ mod tests {
             [[-5.0, 0.0, -5.0], [5.0, 0.0, 5.0], [5.0, 0.0, -5.0]],
             [[-5.0, 0.0, -5.0], [-5.0, 0.0, 5.0], [5.0, 0.0, 5.0]],
         ])
+    }
+
+    #[test]
+    fn capsule_radii_follow_the_voice_set_and_the_down_flag() {
+        // `NDrone2_Collision` 0x140e90's three arms, as `capsule()` returns them. The DOWN flag
+        // (+0x2f) wins first [M disasm 0x140fd4-88 `lb +0x2f` ≠ 0 → 0.3f, both +0x3F0/+0x400 the
+        // same point], then the +0xD8 voice set 0xC picks 0.55 [M disasm 0x141048-68 `lhu 0xd8`],
+        // else 0.4. The old port keyed the 0.55 arm on `dtype == 0x0c` (placement param +0xC7) —
+        // 07000016's #634 (skin 0x050005e → voice 0x13, dtype 0xc) is 0.4 in the game.
+        let mut dr = drone_at([0.0, 1.0, 0.0]);
+        dr.voice_type = 0x13;
+        dr.dtype = 0xc;
+        assert_eq!(dr.capsule(1.0), (0.4, 0.4, -0.6), "voice 0x13 + dtype 0xc is the 0.4 arm (the game reads +0xD8, not +0xC7)");
+        dr.dtype = 0;
+        assert_eq!(dr.capsule(1.0), (0.4, 0.4, -0.6), "the default arm");
+        dr.voice_type = 0xc;
+        assert_eq!(dr.capsule(1.0), (0.55, 0.55, -0.45), "voice set 0xC (Kiko's) is the 0.55 arm");
+        // The down arm: radius 0.3, the spine degenerate — both ends at up·(0.3 − hip) [M case A].
+        // hip 1.0: the ball's centre at floor + 0.3 (pos + (0.3 − 1.0) with pos at floor + hip).
+        dr.down = true;
+        assert_eq!(dr.capsule(1.0), (0.3, -0.7, -0.7), "the down guard is the stacked 0.3 ball");
+        // The animated hip rides the same offsets (the game's `0.3 − fVar9` / `r − fVar9` reads of +0xA0).
+        dr.down = false;
+        dr.voice_type = 0;
+        let (r, top, bottom) = dr.capsule(0.2);
+        assert_eq!((r, top, bottom), (0.4, 0.4, 0.2), "the sitting hip 0.2 rides the offsets [M 0x140e90 fVar9]");
     }
 
     #[test]
