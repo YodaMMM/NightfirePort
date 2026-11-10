@@ -1547,9 +1547,15 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // rounds he can see coming and steps off their line: any live drone round 2-30 u out
         // whose flight line passes within 2 u of Bond's chest is dodged — strafe perpendicular
         // to the view for the episode, hold the side step ~24 ticks past the last threat, and
-        // hold fire while moving (the launch gates re-read on the settled spot). D3-GATED: the
-        // sisters' timelines stay byte-exact.
-        let dodge_now = if difficulty >= 3 && rocket.is_none() {
+        // hold fire while moving (the launch gates re-read on the settled spot). los-mask-repins-08:
+        // the real-damage sisters take it too — under the game's guard sight the Hind's strafing
+        // rockets detonate on the carriage's own wall band next to the standing spot and the
+        // standing walk bleeds out (the d1 death ledger: −1.20 × 15 world hits then the −23.00
+        // blast at frames 29154-29332, (111.1, 13.5, −179.7) [L the NF_DMG_TRACE run on this
+        // branch]; the same own-rocket signature the d3 runs measured). Same gate shape as the
+        // sight gates above: difficulty ≥ 2 or the real-damage walk (`!tops_up()`), so the
+        // topped-up Operative walk keeps its byte-exact timeline.
+        let dodge_now = if (difficulty >= 2 || !w.tops_up()) && rocket.is_none() {
             let b = sim.bond.pos;
             let chest = [b[0], b[1] + 0.6, b[2]];
             sim.drones.bullets.iter().any(|bu| {
@@ -2001,7 +2007,13 @@ fn the_ally_fights_only_the_guards_through_the_noise_path() {
 /// (−52.5/−7.5/−22.5/−3.7, frames 26477/26580/26639/26696) plus the pair's interval-4 bursts
 /// (−9.0); docs/reports/level-08-long-range-hits.md.
 #[test]
-#[ignore = "los-mask-repins-08: Bond dies in the Hind fight at (111.1, 13.5, -179.7), tick 29332; green with the flat feet-height boundary push"]
+// los-mask-repins-08 (2026-11-10): green again on the exact-sight tree. The ledgered death
+// (tick 29332 at (111.1, 13.5, −179.7), the Hind's strafing rockets detonating on the
+// carriage's own wall band next to the standing spot: −1.20 × 15 world hits then the −23.00
+// blast, frames 29154-29332 [L the NF_DMG_TRACE run]) is answered with the missile dodge
+// opened to the real-damage walk (the dodge block's los-mask-repins-08 note) — real strafe
+// input only, no damage/health writes. The Operative walk ends at 1.2 health, 116 hits for
+// 98.8, the Hind down (f31140); the whole mission walked in 31146 ticks.
 fn walk_the_whole_mission_on_real_input_real_damage() {
     // los-mask-join: under the game's sight masks [M 0x176f18 mask 0xa27] the secure-room guard
     // #4 hit Bond 28 times (68.2) while he held at the closed door, and the plain sight rule
@@ -2020,7 +2032,7 @@ fn walk_the_whole_mission_on_real_input_real_damage() {
 /// 0x1d3a80]; the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input
 /// only — the load path is the only difference.
 #[test]
-#[ignore = "los-mask-repins-08: Bond dies in the Hind fight at (111.1, 13.5, -179.7), tick 35898; green with the flat feet-height boundary push"]
+#[ignore = "los-mask-repins-08 2026-11-10 state: the missile dodge is OPEN to this walk now (the dodge block's los-mask-repins-08 note) and the fight the ledger named is answered — Bond reaches the Hind fight and the dodge moves him off the rocket lines, but the Agent run still bleeds out at tick 37022 at (112.97, 13.57, −177.48): the −1.40 × 34 machine blasts through the shot-out panes (14.9 of the ledger) then the −3.57 killing blast, on top of the pre-fight ledger 33.6 in 9 hits from burst-pair #19 at the lower level east (Agent accuracy 1.1 [M DroneFiring_Accuracy_Normal]) — 69 hits for 100.0 total [L the NF_DMG_TRACE runs on this branch]. NEXT LEVERS: (1) the pre-fight bleed — the lower-level-east stands out of #19's lane the way the d3 ledger's station-hall lever reads, or the unseen-cover fights opened to d2 (they are the d3-only hurting-first pick today); (2) the fight from the WEST DOORWAY slit (the wall band's z gap −178.25..−180.6, lintel y ≈ 14.31 [D the tri dump]) instead of between the shot-out end panes — the band shields the machine's rocket detonations while the low passes still give fire windows; (3) the blast-disc dodge — widen the dodge from the round's line (miss < 2 u) to the round's detonation band so the side step clears the wall band the way the d3 ledger's lever-2 reads. No damage or health writes; the Operative sister is GREEN on this tree."]
 fn walk_the_whole_mission_on_real_input_real_damage_agent() {
     // HEAD-HUNT (the 05/07 00 Agent sisters' tactic on this level group): at Agent the guards'
     // hit chance is DroneFiring_Accuracy_Normal 1.1 (Operative 0.8) and Bond's pain is
