@@ -1287,6 +1287,48 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
     }
     eprintln!("[0c] wire #282 ridden east — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
     // The SW arc: the ledge to the arc's west end and east along it [D probes].
+    // pretrans-arms-4 round-2 probe: the ledge east of the #282 A-end drop fell under Bond
+    // ("the ledge to the arc" arrived (8.99,2.01,-222.09) on the yard floor [L the run]) —
+    // dump the ledge's residents + the player-law floor rows before the leg. FINDINGS [L the
+    // dump + the run]: NO drones within 10 u (no solid body up here) and the scoped rows show
+    // the walkable band as a diagonal spine — z −224: x 6-7, z −223: x 7-8, z −222: x 7-9, z
+    // −221: x 8-10, z −220: x 9-12, z −219: x 10-14, z −218: x 12-14 — while this timeline's
+    // ride lands Bond at (4.98,13.16,-223.29), WEST of the spine. The -3 tree walked this same
+    // leg green from the same ride code — its landing must have sat ON the spine (the repaired
+    // crossing changed the grab approach: icon #6 arrived (-0.80,-224.40) this run, the grab
+    // fired elsewhere, the drop landed elsewhere). MEASURED WORSE: a band-tip leg (7.2,-223.3)
+    // r 0.6 also fell (674 ticks struggling east off the landing patch, arrived (7.37,1.96,
+    // -222.73) [L the run]) — the landing patch is ISOLATED: standing holds, walking east does
+    // not. The -3 legs stay; the next round maps the landing patch fine (0.25 step) and routes
+    // from what actually holds.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        eprintln!("[0c-arc] at the ledge-to-arc start bond=({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
+        for (i, d) in sim.drones.list.iter().enumerate() {
+            if !d.present { continue; }
+            let dd = ((d.pos[0] - p[0]).powi(2) + (d.pos[2] - p[2]).powi(2)).sqrt();
+            if dd < 10.0 {
+                eprintln!("[0c-arc] drone {i}: pos=({:.2},{:.2},{:.2}) d={dd:.2} health={:.1} corpse={} team={} skin={:#x}",
+                    d.pos[0], d.pos[1], d.pos[2], d.health, d.corpse, d.team, d.skin);
+            }
+        }
+        eprintln!("[0c-arc] ledge rows (bond cel, down-seg 15.0→1.0; x 4..14 step 1, z -224..-218 step 1):");
+        for zk in 0..7 {
+            let z = -224.0 + zk as f32;
+            let mut row = String::new();
+            for xk in 0..11 {
+                let x = 4.0 + xk as f32;
+                let hit = sim.world.segment_hit_scoped(sim.bond.cel, [x, 15.0, z], [x, 1.0, z]);
+                match hit {
+                    Some((t, _)) => row.push_str(&format!("{:5.1}", 15.0 - 14.0 * t)),
+                    None => row.push_str("    ."),
+                }
+            }
+            eprintln!("[0c-arc] z={z:6.1}: {row}");
+        }
+        eprintln!("[0c-arc]          x: {}", (0..11).map(|k| format!("{:>5.1}", 4.0 + k as f32)).collect::<String>());
+    }
     w.walk_to(Wp::new(8.0, 12.4, -222.0).r(1.0), "the ledge to the arc");
     w.walk_to(Wp::new(13.0, 12.4, -218.5).r(1.2), "the arc west end");
     w.walk_to(Wp::new(24.0, 12.4, -218.0).r(1.5), "the ring south-west arc");

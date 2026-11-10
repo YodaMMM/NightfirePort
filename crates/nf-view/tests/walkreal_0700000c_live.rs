@@ -38,14 +38,16 @@ fn sim_grounded(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().bond.grounde
 /// (-6.32,12.37,-218.94), INSIDE the arrive radius, so the slide IS the arrival — then the
 /// -3 leg, the diagonals 2/3, icon #6 and the wire #282 grab + ride east ALL GREEN on this
 /// tree [L the run: "wire #282 ridden east — landed (4.98,13.16,-223.29)"]. STILL RED past
-/// the crossing: the SW arc approach — "the ledge to the arc" fell off the east ledge to the
-/// yard floor (arrived (8.99,2.01,-222.09)) and "the arc west end" wedged 6000 ticks under
-/// guard #15 (state 0x5f at (10.55,12.24,-219.35), 2.44 u off; segment blocked t 0.90) [L
-/// the run] — the first spot past the crossing this tree has ever reached; the -3 tree walked
-/// the same legs green, so the working theory is again the solid bodies on the ledge/arc [S
-/// unverified]. NEXT LEVER: a drone+floor dump at the "ledge to the arc" leg (the same
-/// [0c-diag] probe this crossing used), then the arc lane around whatever stands on it.
-#[ignore = "pretrans-arms-4 round 2: the ledgered wire-#282 crossing is REPAIRED (the shelf west lane + the sniper brush-past slide + the -3 legs + the grab/ride all green [L the run on this tree]); the walk now fails PAST it — the SW arc approach: 'the ledge to the arc' fell to the yard floor (8.99,2.01,-222.09) and 'the arc west end' wedged 6000 ticks under guard #15 (10.55,12.24,-219.35) [L the run]; the -3 tree walked the same legs green — solid bodies on the ledge/arc are the theory [S]; next lever: the [0c-diag] dump at that leg, then the arc lane around it"]
+/// the crossing: the SW arc approach — from this timeline's ride landing (4.98,13.16,
+/// -223.29) "the ledge to the arc" fell to the yard floor (arrived (8.99,2.01,-222.09)) and
+/// "the arc west end" wedged 6000 ticks; the [0c-arc] dump shows NO drones within 10 u and
+/// maps the walkable spine — z −223 floor x 7-8 … z −218 x 12-14 — WEST of the landing; a
+/// band-tip leg (7.2,-223.3) measured worse (the landing patch is ISOLATED: standing holds,
+/// walking east falls [L the runs]); the -3 tree walked the same legs green from its own
+/// landing (the repaired crossing moved the grab approach and with it the drop point).
+/// NEXT LEVER: map the landing patch fine (0.25 step, the scoped test), route from what
+/// actually holds.
+#[ignore = "pretrans-arms-4 round 2: the ledgered wire-#282 crossing is REPAIRED (the shelf west lane + the sniper brush-past slide + the -3 legs + the grab/ride all green [L the run on this tree]); the walk now fails PAST it — the SW arc approach: from this timeline's ride landing (4.98,13.16,-223.29, west of the walkable spine the [0c-arc] dump mapped: z −223 floor x 7-8 … z −218 x 12-14) 'the ledge to the arc' fell to the yard floor (8.99,2.01,-222.09) and 'the arc west end' wedged under guard #15; a band-tip leg (7.2,-223.3) measured worse — the landing patch is ISOLATED, walking east off it falls [L the runs]; no drones within 10 u at the leg — pure ledge geometry, and the -3 tree walked the same legs green from its own landing; next lever: map the landing patch fine (0.25 step), route from what holds"]
 #[test]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(1);

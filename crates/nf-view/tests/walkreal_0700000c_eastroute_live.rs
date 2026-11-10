@@ -46,7 +46,7 @@ fn floor_at(w: &Walker, x: f32, y: f32, z: f32) -> Option<f32> {
 /// (2.80,14.11,-223.15) r 5.05 [D probe blk]) is unreachable; the split probe pins the fall
 /// between (-8.02,11.87,-216.19) and (-7.20,6.42,-217.38) [L the 0c2/0c3 runs on this tree].
 /// The corpse-solid working theory and the next lever are in the handoff ledger.
-#[ignore = "pretrans-arms-4 round 2: the shared diagonal crossing is REPAIRED in walkreal0c.rs (the shelf west lane + the sniper brush-past slide — the ledgered wire-#282 reach miss is gone [L the handoff run on this tree: the diagonals, icon #6 and the #282 grab/ride all green]); this route now fails PAST it at the same next blocker as the handoff walk — the SW arc approach ('the ledge to the arc' fell to the yard floor (8.99,2.01,-222.09), 'the arc west end' wedged under guard #15 [L the run]); next lever: the [0c-diag] dump at that leg, then the arc lane around it"]
+#[ignore = "pretrans-arms-4 round 2: the shared diagonal crossing is REPAIRED in walkreal0c.rs (the shelf west lane + the sniper brush-past slide — the ledgered wire-#282 reach miss is gone [L the handoff run on this tree: the diagonals, icon #6 and the #282 grab/ride all green]); this route now fails PAST it at the same next blocker as the handoff walk — the SW arc approach from the ride landing (4.98,13.16,-223.29), west of the walkable spine the [0c-arc] dump mapped; the landing patch is ISOLATED (a band-tip leg measured worse [L the run]); no drones within 10 u — pure ledge geometry, the -3 tree walked the same legs green from its own landing; next lever: map the landing patch fine, route from what holds"]
 #[test]
 fn the_ground_route_crosses_to_the_east_side() {
     let iso = iso();
