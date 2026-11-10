@@ -23,3 +23,13 @@ Window 2 (21:31-22:20 UTC). The named reds are fixed by the rebase; a sweep maps
   0c_eastroute (wire #282 B-end grab never fires), 11 (south-band doorway wedge). Two 01 fix
   attempts made and reverted (unproven). Levers in the report.
 - Report: docs/reports/pretrans-arms-3.md.
+
+## pretrans-arms-4
+
+Window 1 (00:28-00:35 UTC, sandbox kept from the previous round; setup skipped — repo, work/,
+ISO, nf-queue all present). Branch s/pretrans-arms-4 = origin/s/pretrans-arms-3 525153962, merge
+origin/master 0a9d39435 was already up to date. Read docs/reports/pretrans-arms-3.md. Plan: repair
+the six interaction reds one level per tool call, the -2 round's way (per-level walk repairs with
+the trace, no sim changes): 01 (volley-carrier-first retarget lever), 05, 09, 0c + 0c_eastroute,
+11; then re-run 01 and 14; run the ai binaries and nf-game; remove ignores when green. Started the
+baseline suite in the background.
