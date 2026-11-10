@@ -1182,22 +1182,55 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
     // measured). The still-gate stand aims with the strict gun rays; a no-op when the flag is
     // off.
     yard_sniper_stands(&mut w, "west-ledge", 3);
-    // level-0c-yard-climb-real-health-4 (OPT-IN): the diagonal stands. Measured this
-    // session: #13's cover reads NO gun-ray-exposed candidate from the landing (the
-    // west-ledge sweep above stood zero times) and from the west edge the converged still-
-    // gate rounds die in flight (clip 2→1 spent, hp 10.0 never moved [L this session's
-    // run]); the walk's own fight on the diagonal burns its clip the same way (fight#13
-    // t0-t240, blocked false, err 0.001-0.016, hp 10.0 never moved) and the -16 at frame
-    // 13725 + the fatal -1.6 graze kill the 17.6-hp Bond at tick 14308 mid-diagonal at
-    // (-7.69, 12.40, -217.32) [L the death log]. Custom stand spots OFF the walk's own
-    // lines fall off the strip (two probe walk_tos landed in the gap at y 9.88/1.96 [L
-    // this session]) — so the still-gate stands run AT the route's own diagonal arrivals
-    // (proven floor, the walk_to radii the master walk pins), stepping toward his post
-    // until the strict rays clear; one landing round kills the 10-hp sniper [L the
-    // census]. yard_sniper_stands is a no-op when the flag is off.
+    // los-mask-repins-0c scoped map: who stands near the strip now (the sight era moves the
+    // guards — the ledgers' fixed (-7.07,12.24,-218.60) is a stale-tree measurement), and
+    // where the strip's floor actually is (the -4 scoped map rows −218.0..−219.0 held
+    // x −10..−8.5..−5.0 [L the diag dump]; re-prove it on this tree before walking it).
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        for (i, d) in sim.drones.list.iter().enumerate() {
+            if !d.present { continue; }
+            let dd = ((d.pos[0] - p[0]).powi(2) + (d.pos[2] - p[2]).powi(2)).sqrt();
+            if dd < 10.0 && d.team == 1 && d.health > 0.0 {
+                eprintln!("[0c-diag] drone {0}: pos=({1:.2},{2:.2},{3:.2}) d={4:.2} health={5:.1} corpse={6} skin={7:#x} state={8:#x}",
+                    i, d.pos[0], d.pos[1], d.pos[2], dd, d.health, d.corpse as u8, d.skin, d.state);
+            }
+        }
+        eprintln!("[0c-diag] strip floor map (x -10..-5, z -215.5..-219.5 step 0.5):");
+        for z in [-215.5f32, -216.0, -216.5, -217.0, -217.5, -218.0, -218.5, -219.0, -219.5] {
+            let mut row = String::new();
+            for x in [-10.0f32, -9.5, -9.0, -8.5, -8.0, -7.5, -7.0, -6.5, -6.0, -5.5, -5.0] {
+                let f = sim.world.segment_hit([x, 13.4, z], [x, 8.4, z]).map(|(t, _)| 13.4f32 - 5.0f32 * t);
+                row.push_str(&match f { Some(y) => format!("{y:5.2}"), None => "  ...".to_string() });
+            }
+            eprintln!("[0c-diag] z {z:7.1}: {row}");
+        }
+        eprintln!("[0c-diag] deep map (8.4..13.4), x -10..2 step 1.0, cols x=-10,-9,-8,-7,-6,-5,-4,-3,-2,-1,0,1,2:");
+        for z in [-215.5f32, -216.5, -217.5, -218.0, -218.5, -219.0, -219.5, -220.0, -220.5, -221.0, -221.5, -222.0, -222.5, -223.0, -223.5, -224.0] {
+            let mut row = String::new();
+            for c in 0..13i32 {
+                let x = -10.0f32 + c as f32;
+                let f = sim.world.segment_hit([x, 13.4, z], [x, 8.4, z]).map(|(t, _)| 13.4f32 - 5.0f32 * t);
+                row.push_str(&match f { Some(y) => format!("{y:5.2}"), None => "  ...".to_string() });
+            }
+            eprintln!("[0c-diag] z {z:7.1}: {row}");
+        }
+    }
+    // los-mask-repins-0c round 2: the strip crossing repairs tried and reverted this round
+    // (the ignore messages carry the measurements): the -4 branch's lip route (the west lane
+    // (-8.4,12.4,-218.8) then the brush-past slide to (-7.3,12.4,-219.6) r 1.2) HELD through
+    // the west lane (arrived (-8.36,12.37,-217.82) [L the run]) but the slide now carries
+    // Bond off the lip's south-east edge to the yard (740 ticks, ended (-6.30,1.96,-218.95)
+    // [L the run]) — the guard's AimStandFire footwork differs under the sight era; the
+    // floor route (step off the lip to the 11.24 lattice south of him) wedged — the "floor"
+    // is itself thin wall tops, not continuous floor (the walk fell to the yard y 1.96 at
+    // (-8.78,-218.26) [L the run]). The straight -3 diagonals stay (they are what the next
+    // round's lip-top map must replace); the 0c-diag dump above is the round's evidence.
     // The diagonal ledges south-east to icon #6 [D probe blk2 west map].
-    w.walk_to(Wp::new(-6.0, 12.4, -219.6).r(1.5), "the west ledge diagonal");
     yard_sniper_stands(&mut w, "lip-1", 3);
+    w.walk_to(Wp::new(-6.0, 12.4, -219.6).r(1.5), "the west ledge diagonal");
+    yard_sniper_stands(&mut w, "lip-1b", 3);
     w.walk_to(Wp::new(-4.5, 12.4, -221.5).r(1.5), "the west ledge diagonal 2");
     yard_sniper_stands(&mut w, "lip-2", 3);
     w.walk_to(Wp::new(-2.5, 12.4, -222.8).r(1.4), "the west ledge diagonal 3");

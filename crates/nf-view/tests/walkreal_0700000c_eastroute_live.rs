@@ -41,7 +41,7 @@ fn floor_at(w: &Walker, x: f32, y: f32, z: f32) -> Option<f32> {
 }
 
 #[test]
-#[ignore = "los-mask-repins-0c: the shared prologue meets the west-ledge strip guard (drone 35 at (-7.07, 12.24, -218.60)); Bond falls into the gap before wire #282"]
+#[ignore = "los-mask-repins-0c round 2 (2026-11-10): the west-ledge strip crossing is still the blocker, now with this tree's own measurements — guard #35 (0x5000087, 10 hp) stands ON the strip at (-7.07,12.24,-218.60) in AimStandFire 0x68 [L the 0c-diag dump]; the straight diagonal passes 0.5 u from his capsule and the slide throws Bond off the thin lip (the walk falls to the gap y 2.0 before wire #282 [L the repro + the runs]); the -4 branch's lip route no longer holds (the brush-past slide ended (-6.30,1.96,-218.95) in the yard — the guard's firing footwork differs under the sight era [L the run]) and the 11.24 lattice south of him is thin wall tops, not floor (the walk fell to y 1.96 at (-8.78,-218.26) [L the run]); the deep map is in the run log (the 0c-diag dump). NEXT LEVER: map the lip-top path west of the guard's capsule (the tops read 12.04-12.37 at (-7,-217.5)..(-8.36,-217.82)..(-6.7,-218.7) [L the runs]) — the -4 west lane leg held here too — then a guarded slide east, or settle the landing-shot question in-sim (the port fights read aim-Some/rounds-die-on-the-lip [L the -4 session]) and kill him from the landing if the game allows it"]
 fn the_ground_route_crosses_to_the_east_side() {
     let iso = iso();
     // Start: the band west end (the whole walk's leg-10 spot, floor 10.34 [D probe door4]) -
