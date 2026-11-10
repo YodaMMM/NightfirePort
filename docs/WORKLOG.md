@@ -95,3 +95,14 @@ ignores" — this round attacked the three ledgered reds.
   and the next lever. 0c/11 ledgers stand. Full suite did not fit (9.9 GB disk, background
   jobs killed); per-binary chunks green: nf_game 782, others 1246, the four walk binaries
   green with their ledgers. Report: docs/reports/pretrans-arms-5.md.
+
+## pretrans-arms-6 (2026-11-10)
+
+- Branch from origin/s/pretrans-arms-5 (19f30d481), merged current origin/master (f926de993;
+  took master's walkreal0c helper + 0c live test whole — the 0c walk is green there via
+  with_strip_p2k_shot). Scope: the three ledgered 01 descent reds from pretrans-arms-5 —
+  walk_from_the_spawn_to_the_exit_with_the_contact, its _real_damage sister, and
+  the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_level_loads. The
+  contact stalls at route 29/37 with two armed guards parked on him. Lever from the ledger:
+  the descent recovery's forward clear band. Helpers stay gated to 07000001 + difficulty.
+  Worklog started, checkpoint 1 pushed.
