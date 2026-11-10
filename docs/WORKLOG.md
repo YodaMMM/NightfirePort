@@ -114,3 +114,9 @@ Work log:
 - The fast suite (tools/test/suite.py): background starts are killed between tool calls in this
   sandbox (verified again this session) — not run; the per-binary totals above are the tree's
   state. 03/05's prior-session ignores stand untouched.
+
+## los-mask-08-walks
+Branch s/los-mask-08-walks = s/los-mask-01-walk-2 73a33ac5a + merge origin/master 6a4fcf4ef
+(auto-merged drone.rs, no conflicts). Task: the 08 Operative ledger's three levers (terminal
+walk-out first), then the Agent and 00 Agent sisters' descent re-tune, then the 11/12/14
+re-time levers in their ignore messages; one level per tool call, repairs gated to level+difficulty.
