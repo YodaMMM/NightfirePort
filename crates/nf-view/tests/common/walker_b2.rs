@@ -12,6 +12,20 @@ use nf_view::scene::Scene;
 
 include!("damage_log.rs");
 
+thread_local! {
+    /// los-mask-repins-0c-2 (OPT-IN, set only by walkreal0c's `with_strip_p2k_shot` scope):
+    /// suppress this walker's mid-leg return-fire while Bond crosses the west-ledge strip and
+    /// the SW arc on the real-damage tree — a return-fire fight on the thin floors flanks Bond
+    /// straight off them [L the measured west lane fall to y 1.96]. The flag scope arms it at
+    /// the #284 landing and `strip_fights_resume` lifts it after the #282 grab; off = the
+    /// master fights for every other walker.
+    pub static STRIP_NO_FIGHTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// los-mask-repins-0c-2: lift the strip crossing's return-fire suppression (walkreal0c's flag
+/// scope calls this after the #282 grab).
+#[allow(dead_code)]
+pub fn strip_fights_resume() { STRIP_NO_FIGHTS.with(|c| c.set(false)); }
+
 pub const TICKS_PER_SEC: u32 = 60;
 
 /// Wrap an angle into −π..π.
@@ -700,8 +714,14 @@ impl Walker {
                 continue;
             }
             // Real damage: answer whoever is shooting Bond before walking on (the fight's
-            // ticks are the response's cost, not the leg's).
-            if !riding && !ladder && self.total_ticks % 10 == 0 {
+            // ticks are the response's cost, not the leg's). los-mask-repins-0c-2 OPT-OUT
+            // (super::STRIP_NO_FIGHTS, set only by with_strip_p2k_shot): the west-ledge strip
+            // crossing — a return-fire fight on the thin lip flanks Bond straight off it [L the
+            // measured west lane fall to y 1.96]; the flag scope handles the shooter with the
+            // aimed stand from the stable lane instead, and strip_fights_resume() lifts this
+            // after the #282 grab.
+            if !riding && !ladder && self.total_ticks % 10 == 0
+                && !STRIP_NO_FIGHTS.with(|c| c.get()) {
                 let t0 = self.total_ticks;
                 if self.return_fire(label) { start_ticks += self.total_ticks - t0; continue; }
             }

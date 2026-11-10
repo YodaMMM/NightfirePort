@@ -29,9 +29,18 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 fn sim_grounded(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().bond.grounded }
 
 #[test]
-#[ignore = "los-mask-repins-0c: drone 35 holds AimStandFire 0x68 on the west-ledge strip at (-7.07, 12.24, -218.60) after the wire #284 drop; the diagonal walk steers round him and falls into the gap (y 2.0) before wire #282; the hand gun from the landing does not hit him (health 10 kept over 600 ticks) and the landing spot has no floor to wait on"]
+#[test]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
-    walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(1);
+    // los-mask-repins-0c-2 (OPT-IN `with_strip_p2k_shot`): the wheel switch to the P2K for the
+    // strip-guard shot at the #284 landing. The walk reaches the landing with the MICRO-CAMERA
+    // 0x54 in hand (the photograph leg's own weapon) — no round spawns from it [M scene.rs:5002;
+    // sound-coverage.md:82] — which is what every earlier "dry gun" landing-shot attempt actually
+    // tapped [L the round-2 telemetry's clip 1 spare 0]. The P2K (weapon 2) is owned and loaded
+    // there (clip 7, carried 41, damage 3.5 [L this branch's probe]); the guard's POSED
+    // AimStandFire boxes are exposed from the landing (head +5, torso +4/+53, world clear [L the
+    // probe map]) and the real fire path lands — the 10-hp guard dies to the shot, and the
+    // straight -3 diagonals walk clean to the #282 grab.
+    walker::with_strip_p2k_shot(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(1));
 }
 
 /// The difficulty-parameterized body (real-health-agent-0c-0d): 1 is the byte-identical
@@ -430,7 +439,7 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(difficulty: u32) {
 /// run: 'objective 3 complete on the 0d arrival — the whole mission walked (0c legs 19287
 /// ticks + 0d 838 ticks)').
 #[test]
-#[ignore = "los-mask-repins-0c: the same west-ledge strip guard (drone 35) as the plain walk; Bond falls into the gap before wire #282"]
+#[ignore = "los-mask-repins-0c-2 (2026-11-10): the west-ledge strip crossing is SOLVED on the real-damage tree up to the #282 ride — the flag scope's own choreography walks it: the fights draw the strip guard #35 off his post (the west-edge stands' gunfire [L the run]), so the no-stand path runs: the MOVING west-lane leg (the drop spot slides Bond off after ~100 idle ticks [L the switch run's y 1.03 fall] and the fights leave his yaw on the last fight target — walk_to's turn-first phase stood still ~130 ticks and fell to y 1.96 [L]), the 12-tick settle, the mid-band stop (-7.0,-218.8; the -8.44 thin wall wedge's rescue arc overshot the band edge and fell to y 2.93 [L]), the diagonals, the #282 ride — ALL held (health 64.2 preserved [L this branch's run]). THE REMAINING BLOCKER: the thin-floor legs AFTER the ride are tick-sensitive — the ride landing shifts ~0.02 u when any leg before the grab re-times it, and the arc ledge leg then overshoots its arrival circle off the east edge (the fall to y 2.01 at (8.99,-222.09) [L the plain run's re-roll] — the pushed-green landing (4.9688,-223.3107) holds at +55 ticks, the shifted (4.9831,-223.2948) falls at +114). The fights' RNG draws shift every guard/round draw downstream, so the real-damage tree's ride lands at its own spot and the arc leg needs the real-damage tree's own arrival fix — the next round's lever: a real-damage-scoped mid-ledge stop NORTH of (8.0,-222.0) (the plain run's hold was at (7.10,12.71,-222.42) — the NORTH side), placed post-ride so it cannot re-shift the ride, plus the same treatment for the arc west end; the return-fire suppression scope (STRIP_NO_FIGHTS) already arms at the crossing and lifts past the thin floors. The landing-shot question is ANSWERED and pinned in walkreal0c.rs's flag branch: the held weapon at the landing is the MICRO-CAMERA 0x54 (no round spawns [M scene.rs:5002]) — the old dry-gun readings were the camera's clip — and the aimed 0x1e shot from the west lane lands (killed true [L the plain runs])."]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
     walker::with_yard_aimed_stands(|| {
         walker::with_far_sniper_stands(|| walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff))
