@@ -130,3 +130,8 @@ printed a build line — the per-binary table above is the tree's state.
 ## Usage
 
 not visible to me
+
+---
+## ntfy failed (2026-11-10T21:11Z)
+
+All three fallbacks unreachable from the sandbox: curl (28) connection timed out after 20002 ms; urllib [Errno 101] Network is unreachable; wget killed at the 40 s tool timeout with no output. The report section carries the exact errors.
