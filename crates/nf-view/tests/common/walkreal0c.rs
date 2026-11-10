@@ -1197,6 +1197,50 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
                     i, d.pos[0], d.pos[1], d.pos[2], dd, d.health, d.corpse as u8, d.skin, d.state);
             }
         }
+        // The round-3 note, measured in-sim: cast the port's world rays (the disc's collision
+        // [D]; the game's bullet pick walks the same world [M]) from Bond's landing eye to the
+        // STRIP guard (the live guard nearest (-7.07,-218.60)) — a clear ray means the miss is
+        // a port-side spread/lead artifact and the shot is the route; a blocked ray is the
+        // game-correct miss and the re-route must go around him.
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let strip: [f32; 2] = [-7.07, -218.60];
+            let mut best: Option<(usize, f32)> = None;
+            for (i, d) in sim.drones.list.iter().enumerate() {
+                if !d.present || d.team != 1 || d.corpse || d.health <= 0.0 { continue; }
+                let dd = ((d.pos[0] - strip[0]).powi(2) + (d.pos[2] - strip[1]).powi(2)).sqrt();
+                if dd < 3.0 && best.map_or(true, |(_, bd)| dd < bd) { best = Some((i, dd)); }
+            }
+            if let Some((gi, gd)) = best {
+                let gp = sim.drones.list[gi].pos;
+                let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                eprintln!("[0c-diag] strip guard {gi} at ({:.2},{:.2},{:.2}) state {:#x} (off-post {gd:.2}); bond eye ({:.2},{:.2},{:.2})",
+                    gp[0], gp[1], gp[2], sim.drones.list[gi].state, eye[0], eye[1], eye[2]);
+                for (label, dy) in [("feet", 0.3f32), ("torso", 0.9), ("head", 1.5)] {
+                    let to = [gp[0], gp[1] + dy, gp[2]];
+                    let hit = sim.world.segment_hit(eye, to).map(|(t, _)| {
+                        format!("at ({:.2},{:.2},{:.2})", eye[0] - (eye[0] - to[0]) * t, eye[1] - (eye[1] - to[1]) * t, eye[2] - (eye[2] - to[2]) * t)
+                    });
+                    eprintln!("[0c-diag] eye->{label}: {}", hit.map(|h| format!("BLOCKED {h}")).unwrap_or_else(|| "clear".into()));
+                }
+                // The muzzle line sits lower than the eye — the -4 session's rounds died on the
+                // lip while the eye ray read Some. Cast chest-height rays from forward steps
+                // toward the guard: the first clear offset is the shooting spot.
+                let dir = [(gp[0] - bp[0]), (gp[2] - bp[2])];
+                let dl = (dir[0] * dir[0] + dir[1] * dir[1]).sqrt().max(1e-3);
+                for off in [0.0f32, 0.4, 0.8, 1.2, 1.6] {
+                    let from = [bp[0] + dir[0] / dl * off, bp[1] + 0.7, bp[2] + dir[1] / dl * off];
+                    let to = [gp[0], gp[1] + 0.9, gp[2]];
+                    let hit = sim.world.segment_hit(from, to).map(|(t, _)| {
+                        format!("at ({:.2},{:.2},{:.2})", from[0] - (from[0] - to[0]) * t, from[1] - (from[1] - to[1]) * t, from[2] - (from[2] - to[2]) * t)
+                    });
+                    eprintln!("[0c-diag] chest+{off:.1}u->torso: {}", hit.map(|h| format!("BLOCKED {h}")).unwrap_or_else(|| "clear".into()));
+                }
+            } else {
+                eprintln!("[0c-diag] no live guard within 3.0 of the strip post at the landing");
+            }
+        }
         eprintln!("[0c-diag] strip floor map (x -10..-5, z -215.5..-219.5 step 0.5):");
         for z in [-215.5f32, -216.0, -216.5, -217.0, -217.5, -218.0, -218.5, -219.0, -219.5] {
             let mut row = String::new();
@@ -1217,16 +1261,50 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
             eprintln!("[0c-diag] z {z:7.1}: {row}");
         }
     }
-    // los-mask-repins-0c round 2: the strip crossing repairs tried and reverted this round
-    // (the ignore messages carry the measurements): the -4 branch's lip route (the west lane
-    // (-8.4,12.4,-218.8) then the brush-past slide to (-7.3,12.4,-219.6) r 1.2) HELD through
-    // the west lane (arrived (-8.36,12.37,-217.82) [L the run]) but the slide now carries
-    // Bond off the lip's south-east edge to the yard (740 ticks, ended (-6.30,1.96,-218.95)
-    // [L the run]) — the guard's AimStandFire footwork differs under the sight era; the
-    // floor route (step off the lip to the 11.24 lattice south of him) wedged — the "floor"
-    // is itself thin wall tops, not continuous floor (the walk fell to the yard y 1.96 at
-    // (-8.78,-218.26) [L the run]). The straight -3 diagonals stay (they are what the next
-    // round's lip-top map must replace); the 0c-diag dump above is the round's evidence.
+    // los-mask-repins-0c: the shot route. The world gives a CLEAN shot from the landing to
+    // the strip guard — the eye rays to his feet/torso/head AND the chest-height rays from
+    // every forward offset 0..1.6 u are all clear [L the 0c-diag dump on this tree; the
+    // port's collision is the disc's, so the game's bullet reaches the same [M]] — the
+    // 600-tick miss was the shooter artifact, not the world. The player's play: kill the
+    // 10-hp guard from the landing, then walk the straight -3 diagonals unobstructed (the
+    // lip-route and floor-route repairs tried and reverted this round are recorded in the
+    // ignore messages: the -4 slide now falls to the yard, the 11.24 lattice is thin tops).
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let strip: [f32; 2] = [-7.07, -218.60];
+        let mut target: Option<usize> = None;
+        for (i, d) in sim.drones.list.iter().enumerate() {
+            if !d.present || d.team != 1 || d.corpse || d.health <= 0.0 { continue; }
+            let dd = ((d.pos[0] - strip[0]).powi(2) + (d.pos[2] - strip[1]).powi(2)).sqrt();
+            if dd < 3.0 && target.map_or(true, |t| dd < ((sim.drones.list[t].pos[0] - strip[0]).powi(2) + (sim.drones.list[t].pos[2] - strip[1]).powi(2)).sqrt()) {
+                target = Some(i);
+            }
+        }
+        drop(sim);
+        if let Some(g) = target {
+            // The bounded landing-shot attempt (the repro of the ledger's 600-tick miss) plus
+            // the ammo telemetry: this round's shot-telemetry run measured the gun DRY at the
+            // landing — clip 1 fired off-target, then clip 0 spare 0 weapon 0x54, and every
+            // on-target trigger pull after that was a dry click [L the run] — while the world
+            // rays (eye and chest, every forward offset 0..1.6 u) are ALL clear [L the
+            // 0c-diag dump]. The miss was never the world; it was the ammo.
+            for attempt in 0..2 {
+                let (alive, hp) = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let d = &sim.drones.list[g];
+                    (!d.corpse && d.health > 0.0, d.health)
+                };
+                if !alive { break; }
+                let (clip, spare) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare) };
+                eprintln!("[0c] the strip guard {g} from the landing (attempt {attempt}, hp {hp:.1}, clip {clip} spare {spare})");
+                if w.shoot(g, "the strip guard from the landing") { break; }
+            }
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.list[g];
+            let (clip, spare) = (sim.gun.clip, sim.gun.spare);
+            eprintln!("[0c] after the landing shots: guard {g} hp {:.1} corpse {} (clip {clip} spare {spare} — the on-target pulls were dry [L the telemetry])", d.health, d.corpse);
+        }
+    }
     // The diagonal ledges south-east to icon #6 [D probe blk2 west map].
     yard_sniper_stands(&mut w, "lip-1", 3);
     w.walk_to(Wp::new(-6.0, 12.4, -219.6).r(1.5), "the west ledge diagonal");

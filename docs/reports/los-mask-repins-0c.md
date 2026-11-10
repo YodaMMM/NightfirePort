@@ -26,16 +26,22 @@ check the round-3 note (the landing shots on the strip guard), remove each ignor
      lattice): the step-off legs held the lip (the walker will not descend a thin wall side —
      the STUCK dump: segment_to_target blocked at 0.45 of 1.94, standing at 12.38) and the
      next leg fell to the yard y 1.96 at (-8.78,-218.26) [L].
-4. **The round-3 note (the landing shots)**: not settled. The run-time guard position is only
-   reachable in-sim (he walks to the strip from his (-19.70,12.24,-217.33) spawn); the spawn-
-   list probe (crates/nf-view/examples/probe0cshot.rs, scratch, not committed) cast the port's
-   rays at the SPAWN spots, which is not the walked geometry. The -4 session's measurement
-   stands: the walk's own fights read aim-Some while the rounds die on the ledge lip [L that
-   session] — [S] the miss is the lip, pending an in-sim ray cast at the run-time stand.
-5. **The ledgers updated** (all three walks): the ignore messages now carry this round's
-   mechanism + the next lever (map the lip-top path west of the guard's capsule — the west
-   lane leg held here — then a guarded slide east; or settle the landing-shot question in-sim
-   and kill him from the landing if the game allows it).
+4. **The round-3 note (the landing shots) — ANSWERED: the miss was the ammo, not the world.**
+   The in-sim ray casts (the 0c-diag block, run at the #284 landing against the ACTUAL strip
+   guard): the eye rays to his feet/torso/head AND the chest-height rays from every forward
+   offset 0..1.6 u are ALL CLEAR [L the 0c-diag run; the port's collision is the disc's, so
+   the game's bullet reaches the same [M]]. The shots still never landed — and the shot
+   telemetry found why: the gun arrived at the landing with **clip 1, spare 0** (weapon 0x54);
+   the single round fired OFF-TARGET (the aim was still converging), and every on-target
+   trigger pull after that was a dry click [L the telemetry run]. The -4-era "600 ticks, hp
+   10.0 never moved" was the same dry gun (the walk's earlier fights had burned the ammo).
+   A bounded landing-shot attempt stands in the walk (2 attempts, the repro) with the
+   telemetry eprintln.
+5. **The ledgers updated** (all three walks): the ignore messages carry the crossing
+   mechanism AND the round-3-note answer, with the next lever: **bring ammo** (a resupply pass
+   before the #284 ride — the walk's own pickup points), kill the 10-hp guard from the landing
+   with the on-target shot (the world allows it), and the straight -3 diagonals walk clean to
+   the grab; then the #282 ride release lever.
 
 ## What ran (release, --test-threads=1, final tree 423f19a9f)
 
@@ -51,20 +57,23 @@ check the round-3 note (the landing shots on the strip guard), remove each ignor
 
 ## What's left (the next round's work)
 
-- The strip crossing itself: the lip-top path west of the guard's capsule, mapped from the
-  0c-diag dump (the west lane leg (-8.4,12.4,-218.8) r 1.0 is proven on this tree; the missing
-  piece is the east continuation past his capsule — a slower slide with a hold-and-wait for
-  his AimStandFire cycle, or an in-sim shot check first).
+- The shot route first: a resupply pass before the #284 ride (the walk's own pickup points —
+  find one reachable without the strip), then the on-target landing shot kills the 10-hp
+  guard, and the straight -3 diagonals walk clean to the grab (they are the pre-solid era's
+  proven path).
+- Fallback if the ammo detour stalls: the lip-top path west of the guard's capsule (the west
+  lane leg (-8.4,12.4,-218.8) r 1.0 is proven on this tree; the missing piece is the east
+  continuation past his capsule — hold-and-wait for his AimStandFire cycle).
 - Then the #282 ride release (the -4 tree landed the ride on an isolated 13.16 tier at
   (4.98,-223.29) — the release-point lever: ride to the natural stop past A and jump there,
   the #283 ride's own technique) and the SW arc legs.
 
 ## Live checks for the main agent
 
-1. [S] In the real game at 0700000c, stand on the #284 landing (-8.2, 12.8, -215.7) and fire
-   the hand gun at the strip guard when he holds the strip: does a round land? (The port's
-   fights read aim-Some/rounds-die-on-the-lip; the game's answer settles whether the re-route
-   must go around him or can shoot him.)
+1. [S] In the real game at 0700000c, stand on the #284 landing (-8.2, 12.8, -215.7) WITH AMMO
+   and fire the hand gun at the strip guard (-7.07,12.24,-218.60): does a round land? (The
+   port's world rays are clear at every height; the port's own shots were fired DRY. The
+   game's answer confirms the shot route before the next round builds the resupply detour.)
 2. [S] Watch the strip guard (0x500087) from the landing: does he hold (-7.07,12.24,-218.60)
    in AimStandFire, and does his footwork shift while firing (the port's slide outcome changed
    between trees with his firing)?
