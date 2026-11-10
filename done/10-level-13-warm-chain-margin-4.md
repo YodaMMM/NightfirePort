@@ -19,3 +19,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-11-10T15:43Z
+
+---
+## Report (done, 2026-11-10T16:58Z)
+
+Closed by the driver: the report is on `s/level-13-warm-chain-margin-4` (docs/reports/level-13-warm-chain-margin-4.md); the worker didn't run finish.sh.
