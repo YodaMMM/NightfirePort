@@ -6,3 +6,7 @@ Branch from origin/master, push to `s/pretrans-arms-2`, report in docs/reports/p
 
 ---
 claimed-by: main-session agent at 2026-11-09T17:28Z
+
+---
+## Closed (2026-11-10T09:06Z)
+Superseded by pretrans-arms-3/-4 (done) and 20-pretrans-arms-5 (pending).
