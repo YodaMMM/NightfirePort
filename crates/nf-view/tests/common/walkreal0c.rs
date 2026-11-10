@@ -74,22 +74,11 @@ thread_local! {
     /// clear [L the probe map]) — the shot lands through the real fire path. Off = master behaviour
     /// (the camera stays in hand) for every other caller.
     static STRIP_P2K_SHOT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// los-mask-repins-0c-2 (OPT-IN, set by the same `with_strip_p2k_shot` scope): suppress the
-    /// walker's mid-leg return-fire while Bond crosses the west-ledge strip (the west lane + the
-    /// diagonals + the #282 ride). On real damage the shooter there is a HUNTING guard (the
-    /// west-edge stands' gunfire drew the strip guard #35 off his post [L the real-damage run]),
-    /// and a return-fire fight on the thin lip flanks Bond straight off it — the measured west
-    /// lane leg fell to y 1.96 at +187 ticks [L this branch's run]. The flag branch handles the
-    /// shooter with the aimed stand FROM the stable lane instead (a player does not sidestep on a
-    /// one-unit wall top; he kills the shooter from where he stands). `strip_fights_resume()`
-    /// clears it after the #282 grab; the SW arc and everything east fights normally. Off = the
-    /// master fights for every other walker.
-    static STRIP_NO_FIGHTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 #[allow(dead_code)]
 pub fn with_strip_p2k_shot<R>(f: impl FnOnce() -> R) -> R {
     struct Reset;
-    impl Drop for Reset { fn drop(&mut self) { STRIP_P2K_SHOT.with(|c| c.set(false)); STRIP_NO_FIGHTS.with(|c| c.set(false)); } }
+    impl Drop for Reset { fn drop(&mut self) { STRIP_P2K_SHOT.with(|c| c.set(false)); walker::STRIP_NO_FIGHTS.with(|c| c.set(false)); } }
     STRIP_P2K_SHOT.with(|c| c.set(true));
     // NOTE: STRIP_NO_FIGHTS is NOT set here — the early legs need the return-fire fights (the
     // real-damage walk's fights are its health; the first suppression-scoped run died at tick
@@ -99,10 +88,6 @@ pub fn with_strip_p2k_shot<R>(f: impl FnOnce() -> R) -> R {
     let _reset = Reset;
     f()
 }
-/// Resume the walker's mid-leg return-fire (the flag scope's own exit — see STRIP_NO_FIGHTS).
-#[allow(dead_code)]
-pub fn strip_fights_resume() { STRIP_NO_FIGHTS.with(|c| c.set(false)); }
-
 /// Trace helpers (scratch): the gun's state for the no-bullet-spawned line.
 fn s_gun_debug(w: &Walker) -> String { format!("{:?}", w.scene.sim.as_ref().unwrap().gun.weapon) }
 fn s_gun_fire_state(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().gun.fire_state }
@@ -1505,7 +1490,7 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
             // +187 ticks], so the crossing legs walk fight-free and the shooter is answered
             // with the aimed stand from the stable lane instead. strip_fights_resume() lifts
             // it after the #282 grab.
-            STRIP_NO_FIGHTS.with(|c| c.set(true));
+            walker::STRIP_NO_FIGHTS.with(|c| c.set(true));
             if let Some(g) = target {
                 // THE STAND PATH (the pushed-green choreography — do not re-shape it): the
                 // ledger's proven west-lane leg (the -4-era arrival (-8.36,12.37,-217.82)
@@ -1680,7 +1665,7 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
             "the #282 ride must drop onto the (4..8, −221..−226) ledge (11.24 [D probe blk2]), got {p:?} dropped {dropped}");
     }
     eprintln!("[0c] wire #282 ridden east — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
-    strip_fights_resume();
+    walker::strip_fights_resume();
     // los-mask-repins-0c-2: the flag scope's return-fire suppression lifts here (the strip
     // crossing is over; the SW arc and everything east fight normally).
     // The SW arc: the ledge to the arc's west end and east along it [D probes].
