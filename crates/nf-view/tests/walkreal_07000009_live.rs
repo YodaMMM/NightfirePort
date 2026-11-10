@@ -311,7 +311,19 @@ fn the_alarm_switch_fails_objective_1() {
     for (k, p) in pts.iter().enumerate().skip(1) {
         clear_live_guards_within(&mut w, &format!("the alarm switch pre {k}"), 25.0);
         to_node(&mut w, *p, &format!("the alarm switch nav {k}"));
-        clear_live_guards_within(&mut w, &format!("the alarm switch nav {k}"), 25.0);
+        // pretrans-arms-4: the POST-arrival beat is skipped at the switch's press reach — a
+        // player standing at the switch presses it, he does not answer a 13-u re-dart detour
+        // from the door. Measured [L the run on this tree]: the final nav node (17.60,42.76)
+        // is already dxz 1.21 in reach, and its post-beat walked Bond to the sleeper g3
+        // (4.50,48.67); the follow-up beats lost the race and the level's alarm fired behind
+        // the walk. The pre-beats and every intermediate beat still run.
+        let in_reach = {
+            let b = w.scene.sim.as_ref().unwrap().bond.pos;
+            dxz(b, spot) < 1.4 && (b[1] - spot[1]).abs() < 2.0
+        };
+        if !in_reach {
+            clear_live_guards_within(&mut w, &format!("the alarm switch nav {k}"), 25.0);
+        }
     }
     // The final approach, BEAT-SPLIT (spawn-pick-and-dart-stamps re-pin, by route): a
     // dart-stamped sleeper wakes 7200 ticks after his dart [L docs/systems/tranq-dart.md — the
@@ -328,11 +340,16 @@ fn the_alarm_switch_fails_objective_1() {
         // The level has already ended (the walk's own asserts below read why): the hop loop
         // stops instead of spinning on the exit latch.
         if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { break; }
-        clear_live_guards_within(&mut w, "the alarm switch approach beat", 25.0);
+        // The press reach FIRST (pretrans-arms-4): a player standing at the switch presses it —
+        // he does not first run the beat's 35-u re-dart detour. Measured [L the run on this
+        // tree]: nav 18 left Bond at dxz 1.2 (in reach), the beat's re-dart carried him 13 u
+        // to the sleeper g4, the chase lost the race and the level's alarm fired behind the
+        // walk (level_exit mid-hop). The beat still guards every hop below.
         {
             let p = w.scene.sim.as_ref().unwrap().bond.pos;
             if dxz(p, spot) < 1.4 && (p[1] - spot[1]).abs() < 2.0 { reached = true; break; }
         }
+        clear_live_guards_within(&mut w, "the alarm switch approach beat", 25.0);
         let p = w.scene.sim.as_ref().unwrap().bond.pos;
         let (dx, dz) = (spot[0] - p[0], spot[2] - p[2]);
         let l = (dx * dx + dz * dz).sqrt();

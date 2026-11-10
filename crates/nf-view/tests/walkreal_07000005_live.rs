@@ -370,7 +370,12 @@ pub fn walk_to_the_slab_east_end(w: &mut Walker) {
         for attempt in 0..4u32 {
             let fights = w.dmg.fights;
             w.walk_nav_to(at, name, 1.5);
-            if w.scene.sim.as_ref().unwrap().drones.difficulty < 3 || w.dmg.fights == fights || attempt == 3 { break; }
+            // pretrans-arms-4: the re-walk runs at EVERY difficulty — master's solid bodies
+            // moved the d2 fights into the descent legs too (the -3 report's 05 red: a d2
+            // fight displaced Bond off the lower contour and the fall cost 56.7 [L the run on
+            // this tree: 4 hits for 7.7, other 56.7]); on the -2 tree no d2 fight broke a leg,
+            // so a clean leg still breaks the loop on the fights check alone.
+            if w.dmg.fights == fights || attempt == 3 { break; }
             eprintln!("[05c] {name}: a fight broke the leg (fights {fights} -> {}), bond {:?}; back to the leg start {start:?}",
                 w.dmg.fights, w.scene.sim.as_ref().unwrap().bond.pos);
             w.walk_to(walker::Wp { at: start, act: walker::Act::None, arrive: 0.3 }, &format!("{name} (back to the leg start)"));
@@ -412,7 +417,12 @@ pub fn walk_to_the_slab_east_end(w: &mut Walker) {
     // the shelf-edge approach until Bond stands over the drop line before the Use press.
     for attempt in 0..4u32 {
         let (p, grounded) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.pos, sim.bond.grounded) };
-        if p[0] < 25.9 && p[1] < 35.0 && grounded { break; }
+        // pretrans-arms-4: the band is the SHELF contour, not just "below the tower top" — a
+        // fallen Bond reads y 6.9 at the tower's base, inside the old p[1] < 35.0 check, and
+        // the crawl prompt fired from the base against the face (the 6000-tick wedge [L the
+        // run on this tree]). 28.0 keeps every measured shelf arrival (the d2 sister's 31.9,
+        // the shelf 31.0-31.4 [D the shelf's extent]) and rejects the ground floor.
+        if p[0] < 25.9 && p[1] > 28.0 && p[1] < 35.0 && grounded { break; }
         eprintln!("[05c] the shelf drop line re-approach {}: bond {:?}", attempt, p);
         // Re-walk the ORIGINAL descent chain from the south ledge — the d2 line: the ledge
         // north leg crosses the x 26.25 hole at z ≥ 74.5 ON THE LOWER CONTOUR (y ~34.5);
