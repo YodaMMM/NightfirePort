@@ -127,3 +127,7 @@ re-time levers in their ignore messages; one level per tool call, repairs gated 
   fight_pkg); the terminal strafe dodge (any live hostile round in the air and closing →
   sidestep out of its lane, side by eye-height clearance): Operative green 24.6 health, world
   share 39.4 → 14.8. Agent re-ledgered (448.5-hp machine + the deck snipers #14/#3/#11).
+- 17:05-17:25 the 08 binary whole 4/0/2 (the Operative real-damage walk un-ignored green, the
+  topped-up walk byte-exact), nf-game --lib 760/0; the Agent/00agent sisters re-ledgered with
+  this session's runs; 11/12/14 not reached (the walk-out lever had to be tried and retired
+  first); the report written.
