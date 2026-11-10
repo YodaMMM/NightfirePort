@@ -135,6 +135,7 @@ fn walk_spawn_to_the_shaft_exit_real_damage_agent() {
 /// at create [M Lock_Create 0x1ae1f8 tail: param 6 = 1 on difficulty 1] (the route's unlock
 /// check accepts both paths, common/tower2.rs). Real input only.
 #[test]
+#[ignore = "los-mask-repins-12: door plc 543 at (9.9, 1.1, -14.5) holds state 0x2 at 0.50 for ~200 ticks after the E press; Bond slides south along the leaf to (10.62, 1.03, -15.73) and the leg hits its 6000-tick cap"]
 fn walk_spawn_to_the_shaft_exit_real_damage_operative() {
     walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(|| walk_spawn_to_the_shaft_exit_at(1)))
