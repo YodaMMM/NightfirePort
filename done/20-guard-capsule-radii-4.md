@@ -19,3 +19,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: local-agent (lane nf-agent1) at 2026-11-10T09:07Z
+
+---
+## Report (done, 2026-11-10T12:24Z)
+Merged to master in ef7822e8b (local agent; suite 4884/0).
