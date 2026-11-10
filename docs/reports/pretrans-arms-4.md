@@ -3,104 +3,113 @@
 Branch s/pretrans-arms-4 = origin/s/pretrans-arms-3 525153962 (merge origin/master 0a9d39435 was
 already up to date). Task: repair the six walkreal reds the PreTransCallback root zero left on the
 rebased tree (the -3 report's list), the -2 round's way — per-level walk repairs with the trace, no
-sim changes. Result: **4 of the 7 red tests fixed and green; 3 ledgered ignores with measured
-mechanisms and next levers.** Real input only; no damage, health, pin or top-up touched; every fix
-cites its run.
+sim changes. Real input only; no damage, health, pin or top-up touched.
 
-## Fixed (green, verified on this tree)
+## Round 1 (2026-11-09): 4 of 7 red tests fixed and green; 3 ledgered ignores
 
-1. **01 escort real-damage pair** (`walk_from_the_spawn_to_the_exit_with_the_contact_real_damage`
-   + `_agent`) — the -3 report's spelled-out lever plus one measured addition:
-   - `DamageLog::volley_carrier_first` (OPT-IN, set by the 01 real-damage walks only): the
-     damage-weighted pick + the stand's 30-tick retarget, without the cooldown drop. The NF_DMG_TRACE
-     run pinned the mechanism: the 24-hp shotgun captain #7's 8-pellet volley is a SINGLE-FRAME
-     blast (8 × 6.0 at d 2.3, weapon 0x1c at fight time — the ledger's 0x0 is the post-death read),
-     and Bond was walked to 2.3-2.5 u of the planted guards by the legs.
-   - `Walker::legs_keep_off` (OPT-IN, the 01 real-damage walks only): the nav-leg walk keeps the
-     walker's own `keep_off` (6.5) to live ARMED hostiles ahead toward the waypoint — the legs
-     stepped back instead of walking into the shotguns. Released before the stairwell descent: the
-     walled pocket sniper #2 (y 10.2 over the mouth, never fired in any ledger [L]) sits 3.2 u over
-     the final legs and every green tree walked that stretch; with the release, #2 opens fire on the
-     plate leg, the determined pass drops him for 0, the coast clears and the contact finishes the
-     AND. d1: passed, lowest health 46.0 (was death at tick 10682, 46 hits for 100.0). d2: passed,
-     lowest 37.7.
-2. **05** (`the_door_band_exit_chains_to_07000006_walked_real_damage_agent`): two walk-file fixes —
-   the fight-broken-leg re-walk un-gated from d3 (master's solid bodies moved the d2 fights into the
-   descent legs: the fall cost 56.7 "other" [L the run]); the shelf drop-line re-approach band is
-   now 28.0 < y < 35.0 (the old p[1] < 35.0 accepted the tower base y 6.9 and fired the crawl prompt
-   against the face — the 6000-tick wedge). Passed, health 38.4, other 0.0.
-3. **09** (`the_alarm_switch_fails_objective_1`): the press-reach check runs BEFORE the approach
-   beat in the hop loop, and the final nav node's post-arrival beat is skipped when Bond is already
-   in the switch's press reach — the beat's 35-u re-dart detour was dragging him 13 u off the switch
-   (nav 18 left him at dxz 1.21 IN reach) and the alarm fired behind the walk [L the run]. Passed in
-   3.4 s.
+1. **01 escort real-damage pair** — `DamageLog::volley_carrier_first` + `Walker::legs_keep_off`
+   (both opt-in, the 01 real-damage walks only). d1 lowest health 46.0 (was death), d2 lowest 37.7.
+2. **05 d2 door-band exit** — the fight-broken-leg re-walk un-gated from d3 + the shelf y band
+   28.0 < y < 35.0. Passed, health 38.4, other 0.0.
+3. **09 alarm switch** — the press-reach check before the approach beat + the final node's
+   post-arrival beat skipped in reach. Passed in 3.4 s.
+4. Ledgered: 01 mayhew (the contact is KILLED by guard crossfire, state 0x47), 0c handoff +
+   eastroute (the west-ledge diagonal fall, corpse-solid theory [S]), 11 (the dry-resupply
+   displacement wedge; two repairs tried and reverted).
 
-## Ledgered ignores (the driver's still-red rule; each carries the mechanism + next lever)
+## Round 2 (2026-11-10, this sandbox): the ledgered reds attacked — 11 GREEN, the 0c crossing REPAIRED
 
-4. **01 `following_mayhew_down_completes_the_level`**: the -3 report's "the AND-touch plate never
-   fires" is the ESCORT'S DEATH — the follow ends with the contact in state 0x47 (DSTATE_Dead
-   [M drone.rs:7704]), level_exit already Some (the mission-fail restart), ch 0x10 None; killed by
-   GUARD crossfire during the stairwell-head clear ([M NDrone2_DealWithObjHit 0x13fff0:181-232] —
-   the walk's shield models only Bond's own rounds). The walk is top-up, so this round's real-damage
-   levers do not apply and the run is identical to the -3 tree's. Next lever: clear the gallery
-   guards before the contact crosses under them (a forward band on the contact's route ahead).
-5. **0c handoff + 0c_eastroute ground route** (both wire #282 B-end reach miss): the split-leg probe
-   pins the fall EXACTLY — the diagonal leg to (-7.4,-217.2) arrives ON the strip (-8.02,11.87,-216.19)
-   and the next 1.2-u step lands Bond at (-7.20,6.42,-217.38); the strip's band ends there ([D probe
-   blk: x −12..−8, z −216..−218]) and the grab sphere (y 9.06..19.16) is unreachable from the yard
-   floor. The -2 tree walked the same line green; master 0a9d39435 made corpses solid — the yard
-   fights' drops on the strip's east run are the working theory [S unverified]. Next lever: a drone
-   dump at (-7.6,-217), then route around the body or a per-walker corpse-capsule opt-in for this
-   crossing. (The walkreal0c.rs diagonal split stays — it is the probe that names the fall spot and
-   is behaviour-preserving: barrelrow stays green with it.)
-6. **11 `walk_spawn_to_the_lower_floor_load_point_real_damage`**: the south-band doorway leg wedges
-   6000 ticks at the (21.5,15.9) desk corner AFTER the leg's mid-leg dry resupply displaced Bond
-   15 u east to the box (24.85,22.21) — the resumed straight line clips the desk. TRIED AND
-   REVERTED: desk-lane waypoints (wrong side — wedged on the stairwell door) and a pre-leg top-up
-   (the resupply's own nav wedged on the same door) [L the 11a/11b/11c runs]. Next lever: gate the
-   walker_b2 leg-level dry resupply to in-place spots (per-walker opt-in), or walk the doorway leg
-   from the box's side.
+### 11 real damage — FIXED, UN-IGNORED, GREEN
+
+The wedge's own arm is gated. The leg-level dry resupply (walker_b2's walk_to arms) displaced Bond
+mid-leg — the fetch carried him 15 u east to the (24.85,22.21) box and the resumed straight line to
+the (16,6.4) doorway clipped the (21.5,15.9) desk corner [L the 11a run]. The player's way is a grab
+that does not abandon the leg:
+
+- `with_resupply_in_place` (damage_log.rs thread-local, OPT-IN — this test only) +
+  walker_b2::resupply's `on_leg_line` filter: the leg-level pick must sit ON the leg's own line
+  (within 1.6 u of the bond→wp segment, or within 2.5 u of Bond's feet), so the fetch walk advances
+  the leg and the resume stays on it.
+- `walk_to` brackets each leg with `walk_leg_replace`/`walk_leg_restore` (nesting-safe: the
+  resupply fetch's own nav legs are walk_to calls inside the outer leg).
+- walker.rs's master resupply never reads the flag; every other walk is untouched (lesson 7).
+
+Result: `walk_spawn_to_the_lower_floor_load_point_real_damage` GREEN; the whole binary
+walkreal_07000011_live **4 passed, 0 failed, 0 ignored** (53.9 s serial) — the plain, Agent and
+00 Agent sisters stay green.
+
+### 0c handoff + 0c_eastroute — the ledgered crossing REPAIRED and verified; still ignored at the NEXT blocker
+
+The [0c-diag] dump (drones + the scoped lip heightmap at the leg-b start) settled the round-1
+theory: **no corpse** — the ALIVE west sniper #35 (skin 0x500087, hp 10.0, team 1) stands at
+(-7.07,12.24,-218.60), 0.2-0.3 u off the -3 tree's single push line (B-drop (-8.98,-217.44) →
+(-6.0,-219.6)). Pre-0a9d39435 guards and corpses were non-solid and the -2 tree walked THROUGH him
+[M master 0a9d39435]. On this tree the solid capsule either slides Bond off the lip's south-east
+edge (r 1.5) or wedges the leg (a west-lane pair: the second leg's line passes 0.7 u and the slide
+puts Bond east of it with the target line still blocked) [L the runs].
+
+The repair (walkreal0c.rs, the shared walk fn — only the handoff and eastroute walks reach it):
+the shelf's west lane leg (arrived (-8.36,12.37,-217.82), ON lip), then the brush-past leg to
+(-7.3,-219.6) with r 1.2 — its 0.7-u clip slides Bond around the capsule's east side onto the
+holding shelf, the slide stands at (-6.32,12.37,-218.94), INSIDE the arrive radius, so the slide IS
+the arrival — then the -3 leg, the diagonals 2/3, icon #6, the wire #282 grab and the ride east:
+**ALL GREEN on real input** [L the run: "wire #282 ridden east — landed (4.98,13.16,-223.29)"].
+The real-damage handoff sister (green, shares the fn) stays green with the new legs (13.2 s).
+
+STILL RED past the crossing (the walks stay #[ignore]d — the existing ignores, updated with the
+measured mechanism; no new ignores): the SW arc approach. This timeline's ride lands Bond on a
+13.16-high tier at (4.98,-223.29) whose east side overhangs the yard — the walkable spine the
+[0c-arc] dump mapped (z −223 floor x 7-8 … z −218 x 12-14) sits 2 u below at 11.2. "The ledge to
+the arc" falls to the yard floor (8.99,2.01,-222.09) and "the arc west end" wedges. Evidence: NO
+drones within 10 u before AND after the fall (pure geometry, not a solid body); the arc-landing
+stands sweep (opt-in `with_arc_landing_stands`, the handoff test only) was a no-op; a band-tip leg
+(7.2,-223.3) measured worse — the landing patch is isolated: standing holds, walking east falls
+[L the runs]. The -3 tree walked the same legs green from its own ride phase (the repaired crossing
+moved the grab approach and with it the drop point). NEXT LEVER: shift the ride's release point
+(the jump disc's d<0.9 phase — the ride loop is in walkreal0c.rs, gate it per-test before touching
+the green sister) or map the landing tier fine and route from what holds.
+
+### 01 mayhew — not reached this round
+
+The 0c cycles filled the window. The round-1 ledger stands (the contact dies to guard crossfire
+during the stairwell-head clear; next lever: clear the gallery guards before the contact crosses
+under them).
 
 ## What ran (this tree, release, --test-threads=1)
 
-- walkreal_07000001_live: **6 passed, 0 failed, 2 ignored** (85.6 s) — the two real-damage escorts
-  green inside the full binary; the mayhew + pre-existing 00agent ledgers are the ignores.
-- walkreal_07000014_live: **7 passed, 0 failed, 3 ignored** (100.7 s) — the -2 round's other repair
-  level, re-run green.
-- walkreal_07000005_live: the d2 red **1 passed** (6.3 s) after the fix; walkreal_07000009_live:
-  the red **1 passed**, binary **8 passed, 1 → 0 failed** across the runs (the other 8 were already
-  green and stayed green in the 09a full run).
-- walkreal_0700000c_barrelrow_live: **1 passed** (7.1 s) with the walkreal0c.rs split.
-- walkreal_0700000c_eastroute_live: **0 passed, 1 ignored** (the ledger registers).
-- ai_live **37 passed**, ai_missing_states_live **10 passed**, ai_points_live **4 passed**.
-- nf-game lib: **756 passed, 0 failed, 5 ignored**.
-- The fast suite (tools/test/suite.py) did NOT run on the final tree: background jobs are killed
-  between tool calls in this sandbox (measured: the baseline suite died with an empty suite.out), and
-  the foreground per-binary runs above filled the window. The full four-crate suite is the first
-  thing the next round should start.
+- walkreal_07000011_live: **4 passed, 0 failed, 0 ignored** (53.9 s) — the round-2 fix's binary.
+- walkreal_07000001_live: **6 passed, 0 failed, 2 ignored** (86.3 s).
+- walkreal_07000005_live: **16 passed, 0 failed, 1 ignored** (74.9 s).
+- walkreal_07000009_live: **9 passed, 0 failed, 0 ignored** (17.1 s).
+- walkreal_07000014_live: **7 passed, 0 failed, 3 ignored** (105.0 s).
+- walkreal_0700000c_live: the handoff still fails at the arc (the ledger above); the real-damage
+  sister **1 passed** (13.2 s); the agent sister stays ignored (pre-existing, round-1 ledger).
+- walkreal_0700000c_barrelrow_live: **1 passed** (7.2 s).
+- guard1_rounds_0700000c_live **2 passed**, comms_chatter_0c_live **1 passed**,
+  upward_shot_0700000c_live **2 passed** — the three other walkreal0c.rs consumers (they stop at
+  the ladder base / ring diagonal, before the changed legs; run as the recompile insurance).
+- The walkreal_0700000c_eastroute binary compile-checks clean; its walk shares the handoff's
+  changed legs and fails at the same arc blocker (the ledger above).
+- The full four-crate suite did not run this round either: the sandbox kills background jobs
+  between tool calls, and the foreground per-binary runs filled the window. The round-1 report's
+  caveat stands: the suite is the first thing the next round should start.
 
 ## Live checks for the main agent
 
-1. [S] gdbwatch on the escort contact (skin 0x4F) during the 01 stairwell-head clear in the real
-   game: which guard's round kills him (the kill attribution +0x470 last hit), and whether the
-   game's own AllyLeadHide run keeps him alive through the same crossfire — settles whether the
-   walk's clear order (Bond-radius band) is the right lever or the contact's route timing is.
-2. [S] A drone dump at (-7.6, 12.4, -217.0) on the 0c west ledge after the yard fights: the corpse
-   positions vs the strip's east run — confirms/refutes the corpse-solid theory behind the diagonal
-   fall (the -2 tree walked the same line with non-solid corpses).
-3. [S] In the real game at 07000009, watch the ch-124 switch's press reach: the walk now presses the
-   moment Bond is in reach (dxz < 1.4) — confirm the game's own switch press fires ch 0x7C from the
-   same spot (the fail objective then follows [M 0x1827d8:128-131]).
+1. [S] In the real game at 0700000c, after the wire #282 ride east (the drop inside 0.9 of A at
+   (5.85,14.11,-223.15)): where does Bond land, and can a player walk EAST off that landing tier
+   onto the SW arc ledge (the spine z −223 floor x 7-8 … z −218 x 12-14 at y 11.2)? gdbwatch on
+   Bond's y while a player walks east from the landing settles whether the port's landing tier
+   (y 13.16 at (4.98,-223.29)) matches the game's.
+2. [S] gdbwatch on the escort contact (skin 0x4F) during the 01 stairwell-head clear (carried over
+   from round 1): which guard's round kills him, and does the game's own AllyLeadHide run keep him
+   alive through the same crossfire.
+3. [S] In the real game at 0700000c's west ledge, watch the west sniper (0x500087) at
+   (-7.07,12.24,-218.60): confirm a player brushes his capsule walking the diagonal (the port's
+   brush-past slide is built on the assumption the game's collision pushes Bond around him the
+   same way).
 
 ## Usage
 
 not visible to me — this environment shows no token, credit or context-window figures for the
 session (no usage panel is exposed to the agent).
-
-## ntfy failed
-
-All three fallbacks failed — ntfy.sh is unreachable from this sandbox (the branch push in the same
-minute succeeded):
-1. `curl -sS -m 20 ...` → `curl: (28) Connection timed out after 20002 milliseconds`
-2. `python3 urllib` → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
-3. `wget -q -O- --post-data ...` → no output, killed by the 45 s tool timeout
