@@ -76,6 +76,20 @@ below). Every number below is from this branch's tree:
 | walkreal_07000009_live | 9 / 0 |
 | corridor_guards_07000012_live | 1 / 0 |
 | enemies_07000012_live | 3 / 0 |
+| qclaw_ride_07000012_live | 1 / 0 |
+| decryptor_07000012_live | 1 / 0 |
+| homing_copter_07000012_live | 3 / 0 |
+| scripts_07000012_live | 2 / 0 |
+| copter_hits_12_live | 3 / 0 |
+| copter_sound_12_live | 3 / 0 |
+| pistol_sound_12_live | 3 / 0 |
+| level12_bridge_live | 6 / 0 |
+| level12_civilian_wakes_guards_live | 1 / 0 |
+| campaign_flow_live (the biggest tower2 chain) | 5 / 0 (377 s) |
+| guards13_wake_live | 1 / 0 |
+| guards13_warm_probe | 1 / 0 |
+| level12_wing_civ_probe | 2 / 0 |
+| walkreal_probe12 / walkreal_probe13 / fall13_probe | 0/0/1i, 1/0, 0/0/1i (assertion-free probes) |
 | nf-game --lib | 782 / 0 / 4 ignored |
 | nf-formats + nf-audio | 27+1+4+1 and 92+1, all 0 failed |
 
