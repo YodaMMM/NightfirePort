@@ -6,3 +6,7 @@ Push to `s/pretrans-arms-4`, report in docs/reports/pretrans-arms-4.md. No draw 
 
 ---
 claimed-by: sandbox3 at 2026-11-10T03:09Z
+
+---
+## Report (done, 2026-11-10T04:22Z)
+
