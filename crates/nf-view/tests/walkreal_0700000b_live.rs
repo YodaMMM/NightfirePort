@@ -927,7 +927,10 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
         let mut stall_diag = 0u32;
         let mut drop_start = 0u32;
         let mut close_start = 0u32;
-        // SPRINT-4 (the sisters): the gap-mouth rocket attempt's bookkeeping.
+        // SPRINT-4 (the sisters): the gap-mouth rocket attempt's bookkeeping — retired there,
+        // REVIVED by sprint-6 as the ROCKET WINDOW's state (below): rocket_done closes the
+        // window, rocket_start bounds it, rocket_cool stamps the last shot, rockets_fired
+        // counts the shots (0 = the band shot pending, 1 = the #4 shot pending, 2 = spent).
         let mut rocket_done = false;
         let mut rocket_start = 0u32;
         let mut rocket_cool = 0u32;
@@ -945,9 +948,14 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
                 stall_diag = w.total_ticks;
                 let dx = pp[0] - p[0]; let dy = pp[1] - p[1]; let dz = pp[2] - p[2];
                 let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-                eprintln!("[0b-stall] t{} bond ({:.2},{:.2},{:.2}) vel ({:.2},{:.2},{:.2}) yaw {:.2} hp {:.1} take-dist {:.3} phase {} gun w{:#x} clip {} spare {} d4hp {:.1}",
+                // SPRINT-6: `mv` is the accuracy read itself — the move quad the guards latch
+                // [M 0x179a48:34-41 → 0x179740:71-73, Player_Move 0x191dd0:166-170 stores]. The
+                // sprint-5 ledger's "vel (0,0,0) while running" read BL+0x50 (the collision vel,
+                // zeroed while grounded), NOT this quad — the print now shows both.
+                eprintln!("[0b-stall] t{} bond ({:.2},{:.2},{:.2}) vel ({:.2},{:.2},{:.2}) mv ({:.2},{:.2}) yaw {:.2} hp {:.1} take-dist {:.3} phase {} gun w{:#x} clip {} spare {} d4hp {:.1}",
                     w.total_ticks, p[0], p[1], p[2],
-                    sim.bond.vel[0], sim.bond.vel[1], sim.bond.vel[2], sim.bond.yaw,
+                    sim.bond.vel[0], sim.bond.vel[1], sim.bond.vel[2],
+                    sim.bond.move_local[0], sim.bond.move_local[1], sim.bond.yaw,
                     sim.drones.health.health, dist, phase,
                     sim.gun.weapon, sim.gun.clip, sim.gun.spare,
                     sim.drones.list[4].health);
@@ -955,13 +963,17 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
                 // where they stand relative to Bond, and their STATE (the dart law is
                 // state-gated [M 0x1469b8:315-361] — a dart lands a sleep only on the states
                 // that carry case 0x19; d4state tells whether the close can take #4 at all).
-                for &gi in &[4usize, 5, 7, 8] {
+                // SPRINT-6: #6/#9 ride along (the 00 Agent ledger's long-range tollers) and
+                // each guard prints its OWN moving latch (Drone+0x1DC [M 0x179a48:34-41]) —
+                // the run-proof that a running Bond reads MOVING to every firing guard.
+                for &gi in &[4usize, 5, 6, 7, 8, 9] {
                     let g = &sim.drones.list[gi];
                     if g.present && !g.corpse {
-                        eprintln!("[0b-stall]   g{gi} ({:.2},{:.2},{:.2}) hp {:.1} state {:#x} w {:#x} d {:.1} dartable {}",
+                        eprintln!("[0b-stall]   g{gi} ({:.2},{:.2},{:.2}) hp {:.1} state {:#x} w {:#x} d {:.1} dartable {} moving {}",
                             g.pos[0], g.pos[1], g.pos[2], g.health, g.state, g.weapon,
                             walker::dxz(g.pos, p),
-                            nf_game::drone::Drone::dart_impact_state_ok(g.state));
+                            nf_game::drone::Drone::dart_impact_state_ok(g.state),
+                            g.target_motion.moving);
                     }
                 }
                 let inv = &sim.drones.inventory;
@@ -971,6 +983,31 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool) {
                     .collect();
                 eprintln!("[0b-stall]   carried {:?} owned [{}]", inv.carried, owned.join(" "));
             }
+            // SPRINT-6: THE ROCKET WINDOW — measured, NOT shipped. The P1/P2 long-range
+            // toll's intended answer was one carried 0x2e round into the east band's
+            // anchor #6 (the disc placements hold #6/#7/#8/#9 within 6.1 u of him [D
+            // drone-props; L a00_run1 stalls]; the disc falloff 100·(1−gap/8) pays 31-100
+            // at those gaps vs hp 10-20 [L ee_snapshot weapon_data+0x2e·0x10c+0x08/0x0C;
+            // M Explode_Propagate 0x17c518]) — three real-input attempts, three misses:
+            // (1) a flat shot from control return struck a SW deck structure at
+            // (−6.5, 58.6, 7.9), 5.2 u from Bond (−47.37) [L a00_run3]; (2) the flat shot
+            // from the P1 point hit the lower floor band at d ~14 — the round ARCS, 1.33 u
+            // below the straight line at 14 u [L a00_run4: impact y 57.6 at (5.0, 22.3)];
+            // (3) drop-compensated shots (quadratic then linear fits) flew past the
+            // cluster — the linear fit over-aimed at d 35 [L a00_run5: only #8's −4.2;
+            // a00_run6: no hit at all]. The round's own flight law (speed + gravity) is
+            // not pinned: the next window probes Bullet_init 0x12c5a0's speed/fuse fields
+            // for 0x2e [M the record walk] before re-arming the window. Also measured:
+            // the port's blast obeys the disc law exactly — detonation d 5.2, radius 8.0,
+            // damage 100.0 → 47.37 = 100·(1−4.21/8) [L a00_run3] — the sprint-4
+            // "hurt at 13.7" was a mis-attributed detonation distance, NOT a radius
+            // divergence (the explode-hurt-radius task should re-measure the blast POS).
+            // The a00_run5 post-shot switch back to 0x43 took ~100 ticks (w0x2e t16157 →
+            // t16277) and left the sprint-5 close cold — Bond died at d 1.0 of #4 under
+            // ×2 TooClose rounds [L a00_run5: 45.5 in 5 at d 1.0; M 0x139fac-0x139fc8];
+            // any re-armed window must fire at control return AND ride the switch-back on
+            // the fire tick [L a00_run6: the early shot + the fire-tick request got the
+            // gun home, the arc still missed].
             // SPRINT-5 (the sisters): CLOSE ON #4 BEFORE THE P4 TURN — the sprint-4 report's
             // second option. #4 comes down the gap column to meet the lane (the agent_run2
             // trace: d 14.8 → 7.8 → 5.0 as Bond ran P3) and is dartable the whole way [L
@@ -1405,14 +1442,13 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage_agent() {
 /// 58.0, 22.7), d 21) 21.0 in 3 hits, #6/#8/#7 3.5s, after the P1/P2 legs and the fixed 16.0
 /// world toll left 17.5 hp at the take [L agent00_run7]. The Agent sister runs the SAME route
 /// with the same geometry and survives (its 0x18 rounds are 5.6, its P1/P2 toll ~9 lower).
-/// NEXT LEVERS: (1) the [0b-stall] vel prints read (0.00,0.00,0.00) while Bond runs at
-/// 0.14-0.17 u/tick on every trace this sprint — if the game's
-/// DroneFiring_TargetMoving_Accuracy [M 0x179740] reads a velocity the port's walk motion
-/// never writes, the deck guards are shooting a "stationary" runner at full accuracy — a port
-/// divergence worth its own evidence pass (it would move EVERY walk's ledger); (2) ~10 hp
-/// must come out of the P1/P2 legs (the west band + the east run eat ~36-45 under the
-/// east-band snipers at d 20-40, where the 9 u dart window cannot answer).
-#[ignore = "00 Agent: dies at (7.13, 58.07, 41.24) tick 16517, 2.7 u short of the deck edge — 22 hits for 100.0: #9 21.0 in 3 (0x18 at d 21), #6 14.0, #8 10.5, #7 10.5, #4 17.5 (the close's pre-sleep fire; the dart then slept him through the dash), #5 3.5, the world 16.0 — the sprint-5 package works (the take fires at 1.599, #4 sleeps 0x50 through the dash) but the 00 Agent damage tier leaves 17.5 hp at the take vs the edge+fall toll; next: the vel-0 moving-accuracy divergence, then the P1/P2 long-range toll"]
+/// SPRINT-6 (2026-11-10): lever (1) is RESOLVED — the [0b-stall] "vel" print read BL+0x50
+/// (the collision velocity, zeroed while grounded), NOT the accuracy's move quad; the quad
+/// (Player::move_local [M 0x191dd0:166-170]) is non-zero on every running tick and every
+/// guard's latch reads moving true through the whole run [L a00_run1 t15947+], so master's
+/// 566f1d298 law already covers this walk. The sprint-6 attempts on the P1/P2 toll are
+/// ledgered in the ignore message below (the rocket arc measurements; the live-wire 16.0).
+#[ignore = "00 Agent (sprint-6 ledger, tree 2026-11-10): dies at (7.13, 58.07, 41.22) tick 16517, 2.7 u short of the deck edge — 22 hits for 100.0: #9 21.0 in 3 (0x18 at d 21-35), #6 14.0, #8 10.5, #7 10.5, #4 28.0 in 4 (14.0 at d 20-25 during P1 + 14.0 at the close; the dart then slept him through the dash), #5 10.5, the world 16.0 = FOUR 4.0 live-wire hurts in the ring corridor (frames 13380-13423 at (−1.4, 47.8, z 2.9-6.2) — the fusebox law [M 0x1adfe8:99-101: a group-1 wire death hurts while +0x56 == 0, unconditional on distance; the deaths ride guard rounds/script, the walk cannot dodge them]). RESOLVED LEVERS: the vel-0 moving-accuracy divergence is DISPROVEN — the sprint-5 [0b-stall] vel print read BL+0x50 (the collision vel, zeroed while grounded), NOT the accuracy's move quad; the quad (Player::move_local, [M 0x191dd0:166-170]) is non-zero while running and every guard's latch reads moving true through the whole run [L a00_run1 t15947+: g4/g6/g7/g8/g9 moving true]; master 566f1d298 already carries the law and applies TargetMoving_Accuracy 0.75 [M 0x179740:71-73; drone.rs apply]. The port's blast radius obeys the disc exactly [L a00_run3: detonation d 5.2, radius 8.0, damage 100.0 → 47.37 = 100·(1−4.21/8)] — the sprint-4 'hurt at 13.7' was a mis-attributed detonation distance (the explode-hurt-radius task should re-measure the blast POS, not the radius). THE MEASURED DEAD LEVER: one carried 0x2e round into the band anchor #6 (all four within 6.1 u [D drone-props]) — three real-input attempts missed: a flat shot hit a SW deck structure at (−6.5, 58.6, 7.9) 5.2 u from Bond (−47.37) [L a00_run3]; the round ARCS (1.33 u below the line at d 14 [L a00_run4]); drop-compensated shots flew past the cluster [L a00_run5/6] — the 0x2e flight law (speed + gravity) must be probed first (Bullet_init 0x12c5a0's fields for the record). NEXT LEVERS: (1) pin the 0x2e flight law, re-arm the band shot at control return with the fire-tick 0x43 switch-back [L a00_run5: the 100-tick cold-gun close death at d 1.0 of #4 under ×2 TooClose rounds, M 0x139fac]; (2) a bounded close+dart on #5 at the gap mouth (his 10.5 + the a00_run6 point-blank 21.0 at d 2.4 say the P2→P3 pass needs the same treatment #4 got); (3) the live-wire 16.0 is the fusebox task's to avoid (cut the group before the ring-corridor walk)"]
 #[test]
 fn walk_fresh_spawn_to_the_mission_end_real_damage_00agent() {
     walker::with_real_damage(|| {
