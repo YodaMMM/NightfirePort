@@ -12282,10 +12282,10 @@ impl Drone {
     /// character's glist without collision data goes to `Collide_Jointy` [M Collide_Intersect
     /// 0x1ebaa8:28-31]. So a guard does not see Bond through a guest or another guard. The port's
     /// body test is the posed bone boxes Bond's rounds use [S for the game's joint test].
-    /// Returns (seen, cast): `cast` is whether any probe got past the cel walk to its collision
-    /// ray — the game's `DAT_00299092` bump [M 0x176f18:68/:94 sit inside the TestRayCels arm],
-    /// which is what ends `ProcessDroneSight`'s round robin [M 0x176a28:175].
-    pub fn seek_opponent_los(&mut self, d: &Data, player: &Player, bones: Option<&[V3; 7]>, body: &dyn Fn(V3, V3) -> bool) -> (bool, bool) {
+    /// Returns (seen, casts): how many probes got past the cel walk to their collision ray —
+    /// each one is a `DAT_00299092` bump [M 0x176f18:68/:94 sit inside the TestRayCels arm], the
+    /// counter `ProcessDroneSight`'s round robin stops on [M 0x176a28:175].
+    pub fn seek_opponent_los(&mut self, d: &Data, player: &Player, bones: Option<&[V3; 7]>, body: &dyn Fn(V3, V3) -> bool) -> (bool, u16) {
         // The ray rides the game's cel scope [M DroneVision_CanSeeObjectFrom 0x176f18:60-77 —
         // Collide_LineOfSight's cel arg is the TARGET's obj+0x20, so Collide_Pick's BFS admits
         // only the target-cel chain's geometry]: the port's unscoped grid walk over-blocked on
@@ -12296,10 +12296,10 @@ impl Drone {
         // cel; beq target cel, a3` skips it; else `AINetwork_TestRayCels(bone, target cel, eye,
         // seer cel)`, and a 0 answer is "not seen" with no collision ray at all]. The seer's cel
         // is the drone's own relinked obj+0x20 (`Drone::obj_cel`, `relink_cel`); see `sight_probe`.
-        let cast = std::cell::Cell::new(false);
+        let cast = std::cell::Cell::new(0u16);
         let ray = |i: usize| {
             let (seen, c) = self.sight_probe(d, player, bones, body, i);
-            if c { cast.set(true); }
+            if c { cast.set(cast.get() + 1); }
             seen
         };
         let mut cursor = self.view_bone;
@@ -12343,6 +12343,24 @@ impl Drone {
         }
         self.obj_cel_pos = Some(self.pos);
     }
+}
+
+/// `DroneVision_ProcessDroneSight` 0x176a28:146-178's round robin over `n` list slots: from the
+/// slot after `cursor` (`DAT_00299094`, the last drone visited [M :151-162]), at most `n` visits
+/// (`DAT_00298e1c`, the list count [M :48/:149]); EVERY visited slot becomes the cursor [M :153];
+/// `visit(slot)` runs the drone's sight (0 when it is not eligible or casts no ray) and returns
+/// its probe casts, which bump `counter` (`DAT_00299092`); after a visit the walk stops when the
+/// counter has passed `snapshot` (the ushort taken before the visibility loop, [M :71/:175]).
+/// Returns the new cursor.
+pub fn sight_round_robin(cursor: usize, n: usize, snapshot: u16, counter: &mut u16, mut visit: impl FnMut(usize) -> u16) -> usize {
+    let mut cur = cursor;
+    for k in 0..n {
+        if k > 0 && snapshot < *counter { break; }
+        let slot = (cursor + 1 + k) % n;
+        cur = slot;
+        *counter = counter.wrapping_add(visit(slot));
+    }
+    cur
 }
 
 /// The cursor walk of `DroneVision_SeekOpponentLOS` 0x175cb8:49-72 (SP) over `ray(index into
@@ -13846,7 +13864,8 @@ pub struct Drones {
     /// 0x143144-0x14314c bail; `DroneVision_ProcessDroneSight` 0x176a28:71/:177; the
     /// snapshot-compare caches `Drone_IsCoverNodeUsable` 0x1386d8:175/:190 and
     /// `DroneSpawner_Control` 0x137e68:216/:224). The port increments it at the team-2 pick's
-    /// probes; the other consumers are not instrumented yet (open in the report).
+    /// probes and at the guard-sight probes (the round robin's and the close-range visibility
+    /// probe); the other consumers are not instrumented yet.
     pub los_probes: u16,
     /// `Locks_Init` 0x1b0548's keypad-code table — the game generates it during boot with the
     /// SHARED stream (`Rand_Random` per digit, warmup `GameState+0x34·10 & 0x1ff` [M 0x1b0548]),
@@ -20378,7 +20397,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // The probe counter snapshot sits BEFORE the visibility loop [M 0x176a28:71 `uVar3 =
         // DAT_00299092` right after FindAlertedDrones]: a close-range visibility ray that cast
         // ends the round robin after its first drone.
-        let mut cast_any = false;
+        let snapshot = self.los_probes;
         // `ProcessDroneSight`'s eligibility [M 0x176a28:76-84/:155-166 + :167-168]: the drone alive
         // (0x600 clear, 0x100 set, health > 0, not class 0x11, not dying), the vision bit 0x10000
         // and the opponent pointer +0x170.
@@ -20399,7 +20418,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     let body = |a: V3, b: V3| before.iter().chain(after.iter())
                         .any(|o| o.present && o.enabled && !o.corpse && drone_ray_part(o, d, a, b).is_some());
                     let (seen, c) = dr.sight_probe(d, player, view_bones.as_ref(), &body, VIEW_BONE_HEAD);
-                    cast_any |= c;
+                    if c { self.los_probes = self.los_probes.wrapping_add(1); } // [M 0x176f18:94]
                     seen
                 };
                 let v = if close { 1.0 } else { dr.visibility_formula() };
@@ -20413,30 +20432,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // cursor; an eligible one runs `SeekOpponentLOS`, which clears the sight bit and returns
         // under 0.7 visibility without a ray [M 0x175cb8:20-28]; the walk stops once the probe
         // counter moved [M :175].
-        for k in 0..ln {
-            if k > 0 && cast_any { break; }
-            let slot = (self.los_cursor + 1 + k) % ln.max(1);
-            let idx = self.llist[slot];
-            self.los_cursor = slot;
-            let (before, rest) = self.list.split_at_mut(idx);
+        let (list, llist) = (&mut self.list, &self.llist);
+        self.los_cursor = sight_round_robin(self.los_cursor, ln, snapshot, &mut self.los_probes, |slot| {
+            let idx = llist[slot];
+            let (before, rest) = list.split_at_mut(idx);
             let (dr, after) = rest.split_first_mut().unwrap();
-            if !eligible(dr) { continue; }
-            if dr.visibility < 0.7 { dr.los = false; continue; }
-            {
-                // The other drones' bodies on the sight ray (`seek_opponent_los`): a disabled
-                // object (+0xF0 & 0x20) is not picked [M 0x1eae80:72-82].
-                let body = |a: V3, b: V3| before.iter().chain(after.iter())
-                    .any(|o| o.present && o.enabled && !o.corpse && drone_ray_part(o, d, a, b).is_some());
-                let (seen, cast) = dr.seek_opponent_los(d, player, view_bones.as_ref(), &body);
-                dr.los = seen;
-                // `SeekOpponentLOS` 0x175cb8:68-82 — on a successful sight tick the through-wall
-                // flag refreshes: aiming (`+0x22`, the port's `aims_torso()` = the DoTracking
-                // 0x1479d8:49 fold) → the `GunThroughWall` 0x178520 ray, else cleared. Ticks without
-                // sight keep the last value (the game's early-outs leave +0x1e alone).
-                dr.gun_through_wall = dr.los && dr.aims_torso() && dr.gun_through_wall(d);
-                cast_any |= cast;
-            }
-        }
+            if !eligible(dr) { return 0; }
+            if dr.visibility < 0.7 { dr.los = false; return 0; }
+            // The other drones' bodies on the sight ray (`seek_opponent_los`): a disabled
+            // object (+0xF0 & 0x20) is not picked [M 0x1eae80:72-82].
+            let body = |a: V3, b: V3| before.iter().chain(after.iter())
+                .any(|o| o.present && o.enabled && !o.corpse && drone_ray_part(o, d, a, b).is_some());
+            let (seen, casts) = dr.seek_opponent_los(d, player, view_bones.as_ref(), &body);
+            dr.los = seen;
+            // `SeekOpponentLOS` 0x175cb8:68-82 — on a successful sight tick the through-wall
+            // flag refreshes: aiming (`+0x22`, the port's `aims_torso()` = the DoTracking
+            // 0x1479d8:49 fold) → the `GunThroughWall` 0x178520 ray, else cleared. Ticks without
+            // sight keep the last value (the game's early-outs leave +0x1e alone).
+            dr.gun_through_wall = dr.los && dr.aims_torso() && dr.gun_through_wall(d);
+            casts
+        });
         for dr in &mut self.list {
             // standins-drone-922: the opponent pointer [M 0x1424e0:100-120] — Bond alive = the
             // pointer set; stamped for every drone every tick, before the LOS gate.
@@ -24463,6 +24478,32 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `ProcessDroneSight` 0x176a28:146-178's round robin: every visited slot moves the cursor
+    /// (a full lap without a cast ends where it began), the walk ends after the first visit that
+    /// cast, a cast before the walk (the close-range visibility probe after the :71 snapshot)
+    /// leaves exactly one visit, and the ushort compare does not stop on a wrapped counter.
+    #[test]
+    fn sight_round_robin_law() {
+        let mut seen = Vec::new();
+        let mut c = 5u16;
+        // No casts: a full lap from slot 2, the cursor back on 1 [M :153 every visit writes it].
+        let cur = sight_round_robin(1, 4, 5, &mut c, |s| { seen.push(s); 0 });
+        assert_eq!((cur, seen.clone(), c), (1, vec![2, 3, 0, 1], 5));
+        // Slot 3 casts: the walk stops there and it is the cursor.
+        seen.clear();
+        let cur = sight_round_robin(1, 4, 5, &mut c, |s| { seen.push(s); (s == 3) as u16 });
+        assert_eq!((cur, seen.clone(), c), (3, vec![2, 3], 6));
+        // A probe already cast after the snapshot: one visit only [M :175 tested after the visit].
+        seen.clear();
+        let cur = sight_round_robin(3, 4, 5, &mut c, |s| { seen.push(s); 0 });
+        assert_eq!((cur, seen.clone()), (0, vec![0]));
+        // The wrap: 0xffff + 1 = 0 is not above the snapshot, the walk goes on [M ushort compare].
+        let mut w = 0xffffu16;
+        seen.clear();
+        let cur = sight_round_robin(0, 3, 0xffff, &mut w, |s| { seen.push(s); (s == 1) as u16 });
+        assert_eq!((cur, seen.clone(), w), (0, vec![1, 2, 0], 0));
+    }
 
     /// `Drone_InitComms`'s scan law [M 0x139520:161-201] against hand-built states. The dead-guard
     /// skip is the part the rejected s/markers-drone-c round dropped: a SetAsDead corpse (0x200
