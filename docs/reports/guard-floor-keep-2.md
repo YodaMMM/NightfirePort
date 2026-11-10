@@ -98,3 +98,14 @@ place. Commit `402226e46`.
 
 not visible to me — this environment shows no token, context-window or cost figures for the
 session (no usage readout is exposed to the worker).
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox (the same minute a GitHub push succeeded):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds` (exit 28)
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'...', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "..." -T 20 https://ntfy.sh/nightfire-yoda-8k3x`
+   → exit 4 (network failure), no output
