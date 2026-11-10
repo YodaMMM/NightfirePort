@@ -84,3 +84,16 @@ final tree is the first thing the next window should run.
 ## Usage
 
 not visible to me — this sandbox shows no token, credit or context-window figures.
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox (egress to ntfy.sh blocked):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "los-mask-repins-08: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 urllib.request` → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "los-mask-repins-08: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output, timed out after 30 s (killed).
+
+The queue entry (done/30-los-mask-repins-08.md, pushed with the report attached) is the
+notification of record.
