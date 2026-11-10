@@ -90,3 +90,19 @@ and creep in until the body-contact latch fires inside 0.85 (the 07000006 sister
 proven shape, contact at dxz 0.771), or prove no 05 guard is same-floor reachable
 without a teleport and delete the 05 harness. Run guard_capsule_radii_live and
 walkreal_07000005_live.
+
+## guard-capsule-05-down-bump-harness — the 05 harness runs; the 0.3 down ball confirmed on 05
+
+13:26 UTC 2026-11-10. The Level::parse census of 07000005's 16 kind-0x0F placements
+[D probe05guards] answered the first pass's two blockers: guards #5 (61.34, 27.13,
+99.50) and #6 (50.85, 28.27, 93.63) stand ON the courtyard west band — the same
+floor as the proven courtyard-west nav route's end (60.1, 28.4, 96.4) — so the
+harness walks THAT route on real input instead of the gatehouse chase that ran the
+guards downhill. The held Stunner fires on the walked Bond there (accum 1 clip 99
+at t0 — the first pass's "beam never fires on the walked Bond" blocker was the
+ledge-crossing aim, not the walk), the guard falls TASER at hold tick 20 →
+STUNNED+down, and the creep's latch (the guard's own +0x26, DealWithObjHit case 3
+0x1405c8) first fires at dxz 0.772 — the game's 0.55+0.3 = 0.85 ball, the 06
+sister's 0.771 reproduced on 05 [L two runs, deterministic]. Deletion not needed.
+guard_capsule_radii_live 2/0; walkreal_07000005_live 16/0 +1 ignored (master's
+parked notch test); guard_capsule_live 2/0; interact_07000005_live 11/0.
