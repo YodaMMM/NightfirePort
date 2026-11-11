@@ -100,6 +100,34 @@ fn clear_near(w: &mut Walker, r: f32, label: &str) {
     }
 }
 
+/// The wedged lane ladder's roof-proof sidestep (real-health-00agent-03-captors, 00 Agent
+/// only): the old ladder's `walk_nav_to` sidestep snapped its A* onto the building's upper row
+/// (Bond lifted to y 10.12 at (11.19,-29.66)) and the east-wing sniper #6 (26.2,9.9,0.7) saw
+/// him along the upper row's windows — one 40.0 round at d 22.8 ended the walk at tick 53672
+/// [L the los-mask-repins-03 ledger]. A player in a ditch side-steps ALONG it, on the ground:
+/// short DIRECT legs (no A* to ride), each y-guarded — a step that lifts Bond more than 0.9
+/// above the sidestep's start y means he is climbing something, so the side is given up and
+/// the anchor is skipped (the next anchor re-derives its own path — the route's own doctrine).
+/// Returns true when Bond stands >= 1.0 clear of the wedge origin, still on the ground.
+fn direct_sidestep_03(w: &mut Walker, side: f32, label: &str) -> bool {
+    let start = w.scene.sim.as_ref().unwrap().bond.pos;
+    let y0 = start[1];
+    let mut cur = start;
+    for k in 0..3 {
+        let to = [cur[0] + side * 0.9, y0, cur[2]];
+        let got = w.walk_to(Wp { at: to, act: Act::None, arrive: 0.5 }, &format!("{label} step {k}"));
+        let now = w.scene.sim.as_ref().unwrap().bond.pos;
+        if now[1] > y0 + 0.9 {
+            eprintln!("[03] {label}: step {k} climbed to y {:.2} — bailing (the roof-proof guard)", now[1]);
+            return false;
+        }
+        cur = now;
+        if got == u32::MAX { return false; }
+        if walker::dxz(cur, start) >= 1.0 { return true; }
+    }
+    walker::dxz(cur, start) >= 1.0
+}
+
 fn mission_row() -> (usize, usize, usize, usize) {
     let li = nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0003).expect("the 07000003 mission record");
     (li, 0, 1, 2)
@@ -658,8 +686,17 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         if got == u32::MAX {
             let bp = w.scene.sim.as_ref().unwrap().bond.pos;
             for (side, sname) in [(1.0f32, "east"), (-1.0f32, "west")] {
-                let to = [bp[0] + side * 2.5, bp[1], bp[2] + side * 1.5];
-                w.walk_nav_to(to, &format!("{name}: the moat sidestep {sname} (the wedged nav's ladder)"), 1.2);
+                if difficulty >= 3 {
+                    // 00 Agent (real-health-00agent-03-captors): the nav sidestep rode the A*
+                    // onto the building's upper row and the east-wing sniper ended the walk
+                    // there [L the los-mask-repins-03 ledger, tick 53672]. The roof-proof
+                    // direct sidestep (short ground legs, y-guarded) replaces it; the re-take
+                    // below stays the same direct anchor walk.
+                    if !direct_sidestep_03(&mut w, side, &format!("{name}: the moat sidestep {sname}")) { continue; }
+                } else {
+                    let to = [bp[0] + side * 2.5, bp[1], bp[2] + side * 1.5];
+                    w.walk_nav_to(to, &format!("{name}: the moat sidestep {sname} (the wedged nav's ladder)"), 1.2);
+                }
                 w.lenient = true;
                 got = w.walk_to(Wp { at, act: Act::None, arrive: 1.0 }, &format!("{name} (after the {sname} sidestep)"));
                 if got != u32::MAX { break; }
@@ -727,6 +764,23 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         // drops (the kill-loot cycle) — the fights shorten with every kill.
         clear_near(&mut w, 9.0, "the servants' ground");
         loot_the_drops_03(&mut w, "the servants' ground");
+        // real-health-00agent-03-captors (00 Agent): the mouth nav crosses the east-lawn door
+        // (22.3,5.3,10.9) and the east-lawn trio's shotgun #5 stands ON that doorway — the
+        // measured run died there at d 2.4 with his hp 12 still on him. The saddle clear is the
+        // player's answer in shape, but the measured run shows the trio is DISABLED until the
+        // 0x23 plate fires — and the plate sits past this leg, under the mouth nav's door
+        // crossing — so this clear passes the sleeping #5 by (clear_near's d.enabled filter)
+        // and the wake ambush happens on the mouth nav (the ledger below). Kept for the loot
+        // and the lawn posture; the wake ambush itself is the ledger's open item.
+        if difficulty >= 3 && si == 0 {
+            w.walk_nav_to([23.5, 6.3, 8.4], "the east lawn saddle (00agent, before the mouth)", 1.5);
+            w.lenient = true;
+            clear_near(&mut w, 9.0, "the east lawn (00agent, before the mouth)");
+            w.lenient = true;
+            loot_the_drops_03(&mut w, "the east lawn (00agent)");
+            w.lenient = false;
+        }
+
         // gas-rng-draws: the door-8 cluster (#18/#19/#2 behind the leaves at (38.7, 0.2)) can
         // outlive the ground clear — clear_near's far+unexposed skip passes them by while the
         // leaves hide their boxes, and the servant nav then walks THROUGH the opening door
@@ -849,7 +903,22 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
                 // fire before the duel. si==0 only — the west (0x4f) leg's reactive sequence is
                 // green as-is and is not touched.
                 if difficulty >= 3 && si == 0 {
-                    w.walk_nav_to([36.5, 5.9, 5.7], "the captor room rally", 1.5);
+                    // 00 Agent (real-health-00agent-03-captors): the rally's own nav crossed
+                    // the door-8 doorway with the cluster's survivors (#18/#19/#2) live on its
+                    // south side and their gun line cost 25.2 health across the crossing
+                    // (40.8 -> 15.6-19.2 [L the los-mask-repins-03 ledger]) — the exit lawn's
+                    // ~29 never fits after it. The player's approach stays NORTH of door 8:
+                    // back out to the east lawn the saddle's own way (the A* hops z -1.8 ->
+                    // +1.0 -> +8.5 through the (22.3,10.9) door), then east along the lawn on
+                    // direct legs (z 5.7-6.8 — north of the door's z 2.71 band the whole way —
+                    // no A* to ride onto the doorway line), and fight the survivors THROUGH
+                    // the open doorway from (36.2, 5.7) — the green runs' own fight spot.
+                    w.walk_nav_to([23.5, 6.3, 8.4], "the east lawn (back out north of door 8)", 1.5);
+                    for (k, at) in [[28.5f32, 5.9, 6.8], [33.0, 5.9, 6.2], [36.2, 5.9, 5.7]]
+                        .into_iter().enumerate() {
+                        w.walk_to(Wp { at, act: Act::None, arrive: 1.2 },
+                            &format!("north of door 8, leg {k}"));
+                    }
                     let escorts: Vec<usize> = {
                         let sim = w.scene.sim.as_ref().unwrap();
                         let mut es: Vec<(f32, usize)> = sim.drones.list.iter().enumerate()
@@ -915,6 +984,26 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
             // run's ledger]. The player walks the chase's last leg: restore the green
             // continuation point (the flank's own nav link, walked there in the green run).
             w.walk_nav_to([38.4, 5.9, 0.8], "the east flank end", 1.6);
+            // real-health-00agent-03-captors: the west-lawn legs' first nav (the courtyard mid)
+            // detours through the (35.6,8.7) door and its E stalls the leg 29x3000 ticks
+            // [L the los-mask-repins-03 ledger]. The player opens the door he is about to need
+            // before the legs: find it, walk to its threshold, E it once. No-op when no door
+            // sits there (the band is 2.0) or when it already stands open.
+            let stall_door = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                sim.drones.doors.list.iter().enumerate()
+                    .find(|(_, d)| walker::dxz(d.pos, [35.6f32, 6.5f32, 8.7f32]) < 2.0)
+                    .map(|(i, d)| (i, d.state, d.pos))
+            };
+            if let Some((di, state, dpos)) = stall_door {
+                if state == nf_game::door::CLOSED {
+                    eprintln!("[03] the (35.6,8.7) door #{di} sits closed — opening it before the west-lawn legs");
+                    w.walk_to(Wp { at: [dpos[0], 5.9, dpos[2] - 1.1], act: Act::None, arrive: 1.0 },
+                        "to the (35.6,8.7) door");
+                    w.use_door(di, "the (35.6,8.7) door (the west-lawn leg's stall)");
+                    w.wait(30);
+                }
+            }
         }
         // guard-repin-master-2 item 1 (the 06 stand_shooters_down law, d-gated): at the servant
         // leg end answer whoever hit Bond across the leg — the far shooters outside the fights'
@@ -1272,7 +1361,7 @@ fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
 /// placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the load path is the
 /// only difference.
 #[test]
-#[ignore = "00 Agent (los-mask-repins-03 ledger): the east-lane wedge's sidestep ladder walks Bond onto the building's upper row (y 10.12 at (11.19,-29.66)) and the east-wing sniper #6 (26.2,9.9,0.7) sees him along the upper row's windows — one 40.0 round at d 22.8 ends the walk at tick 53672 (clip 2 spare 0, the (11.9,9.1,-16.3) box 1 u under the upper floor is not takeable); the older levers stand: an approach that stays north of door 8 (the green run fought from (36.2,5.7) THROUGH the open doorway), the 87000-tick (35.6,8.7) door stall on the post-rescue west-lawn leg, and the exit-lawn #16 post-kill volley; follow-up real-health-00agent-02-03-3"]
+#[ignore = "00 Agent (real-health-00agent-03-captors ledger): the roof-proof sidestep fixed the old 53672 upper-row death (the walk now runs to tick 333299 — the lane legs, both servants' plates, the 0x50 rescue approach and the mouth nav all reached) and the end is now the east-lawn trio's shotgun #5 (skin 0x500003a weapon 0x1c, hp 12 untouched, 40.0 across 8 hits): the mouth nav's (22.3,5.3,10.9) door crossing wakes the trio on the 0x23 plate and #5 stands ON the doorway — the first volley lands d 2.4 for 27.6 in one frame while the fights' plain return fire rides the hip cone with the autoaim bit closed at 00 Agent [M Autoaim_HardMul 0; DroneWeap_DoBulletAccuracy 0x179740:74-88], and the aimed stand's still-gate never taps a charging guard. The pre-saddle clear cannot reach him: the trio is disabled until the plate fires, and the plate sits under the mouth nav's crossing (clear_near's d.enabled filter passes the sleeper by [L the run: no fight line at the saddle]). Wired this round and measured: the roof-proof direct sidestep (direct_sidestep_03), the north-of-door-8 rally approach (the east lawn then direct legs z 5.7-6.8 to (36.2,5.7) — the green runs' own doorway fight spot), the post-rescue (35.6,8.7) door open, the pre-mouth saddle clear. The older levers stand: an approach that stays north of door 8 (the green run fought from (36.2,5.7) THROUGH the open doorway), the 87000-tick (35.6,8.7) door stall on the post-rescue west-lawn leg, and the exit-lawn #16 post-kill volley; next lever: wake the trio from a stand-off south of the door (or cross the plate deliberately) and answer the wake with aimed stands from outside the first volley's arc, or route the mouth approach around the lawn's east edge after answering the trio; follow-up real-health-00agent-02-03-3"]
 fn walk_the_full_route_and_complete_every_objective_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(3));
 }
