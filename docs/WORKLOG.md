@@ -123,5 +123,6 @@ ignores" — this round attacked the three ledgered reds.
   holds the same rule (the dbg-run death rode its mid-nav #17 flank into the pocket corner).
   Plate-side clear loop NOT repeated (the -5 measured dead end). d2/d3 byte-identical (every
   lever d1-gated); the d3 sister keeps its own ammo-exhaustion ledger, its death byte-equal to
-  the pre-task red. Whole walkreal_07000001_live binary: 6 passed 0 failed 2 ignored. Report:
-  docs/reports/pretrans-arms-6.md.
+  the pre-task red. Whole-binary window run: mayhew/fade/hall/plate/main/real-damage all ok, the d3 sister
+  ignored (its ledger), the d2 agent cut mid-run (byte-identical timeline, the -5 single green
+  stands). Report: docs/reports/pretrans-arms-6.md.
