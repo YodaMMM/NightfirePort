@@ -143,12 +143,44 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
             .expect("the script registered wires (groups 0 and 1 [L])");
         (sim.drones.fuseboxes[fb].pos, wire_aim_point(sim, obj), obj)
     };
-    let cands = [[0.6f32, -1.2, 0.0], [-0.6, -1.2, 0.0], [0.0, -1.2, 0.6], [0.0, -1.2, -0.6]];
+    // level-14-skybridge-retune-2 (!tops_up-gated): the ±0.6/−1.2 stances stand INSIDE the
+    // live wire's hurt volume — the measured 21087 death stood the aim+fire loop out at the
+    // fusebox #383 stance (−88.35, −1.10, 31.38) and the wire's pulse took 24.0 with Bond at
+    // ~24 [L the same trace]. A player cuts from the Laser's range EDGE (the beam reaches
+    // 4.0 [L weapon_data 0x4E +0x1C]; the stance gate is 3.4 to the aim point), outside the
+    // wire, and the standing capsule is probed the 016 loot filter's way before committing.
+    // The plain walk keeps its measured candidates byte-identical.
+    let cands: [[f32; 3]; 12] = if w.tops_up() {
+        [[0.6, -1.2, 0.0], [-0.6, -1.2, 0.0], [0.0, -1.2, 0.6], [0.0, -1.2, -0.6],
+         [0.6, -1.2, 0.0], [-0.6, -1.2, 0.0], [0.0, -1.2, 0.6], [0.0, -1.2, -0.6],
+         [0.6, -1.2, 0.0], [-0.6, -1.2, 0.0], [0.0, -1.2, 0.6], [0.0, -1.2, -0.6]]
+    } else {
+        // The zap is LETHAL from full health (the measured r11 run: Bond arrived the stance
+        // at ~100 — lane_fights alone held the route fights to 1.0 total across 18 fights —
+        // and one pulse took 99.0 at (−86.46, −1.10, 31.34), ~80 ticks after the stance
+        // arrival; the earlier −24 prints were the same blast clipped to the remaining
+        // health [L]). The 2.2-3.2 ring passed the sim.hurts probe and still died, so the
+        // zap's volume is NOT in the always-on list ([S] — the live check below owns it).
+        // The 3.6-u ring measured WORSE: the spots sit 0.32 under the hall plane and the
+        // stance walk_to wedges closing them [L r12/r13] — the 3.2 ring is the deepest shape.
+        [[3.2, -1.2, 0.0], [-3.2, -1.2, 0.0], [0.0, -1.2, 3.2], [0.0, -1.2, -3.2],
+         [2.2, -1.2, 2.2], [-2.2, -1.2, 2.2], [2.2, -1.2, -2.2], [-2.2, -1.2, -2.2],
+         [2.2, -1.2, 0.0], [-2.2, -1.2, 0.0], [0.0, -1.2, 2.2], [0.0, -1.2, -2.2]]
+    };
     let mut stood = false;
     for c in &cands {
         let spot = [bp[0] + c[0], bp[1] + c[1], bp[2] + c[2]];
         let floor = w.scene.sim.as_ref().unwrap().world.segment(spot, [spot[0], spot[1] - 30.0, spot[2]]).map(|t| spot[1] - 30.0 * t);
         if !matches!(floor, Some(f) if (f - (bp[1] - 2.4)).abs() < 3.0) { continue; }
+        if !w.tops_up() {
+            // The wire's hurt volume claims the near floor (the hall carries the always-on
+            // class): the standing capsule (feet → feet+1.5, r 0.4 — Hurt::contains' own
+            // shape [M hurt.rs]) must be clean at the stance, or the cut loop stands in the
+            // pulse and dies mid-cut.
+            let sim = w.scene.sim.as_ref().unwrap();
+            let head = [spot[0], spot[1] + 1.5, spot[2]];
+            if sim.hurts.iter().any(|h| h.contains(spot, head, 0.4)) { continue; }
+        }
         w.walk_to(Wp::new(spot[0], spot[1], spot[2]).r(0.6), &format!("{label} stance"));
         let head = w.scene.sim.as_ref().unwrap().bond.head();
         let d = [wire[0] - head[0], wire[1] - head[1], wire[2] - head[2]];
@@ -832,8 +864,19 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
         // recovery), until clear of the overhang zone on the low floor.
         {
             let start = w.total_ticks;
+            // level-14-skybridge-retune-2 (the ledger's lever 1, !tops_up-gated): the loop's
+            // raw-input ticks BYPASS the walker's leg machinery, so the return-fire fights
+            // never ran on the whole descent — the measured 5130 death: 48 hits for 100.0,
+            // ALL from the pocket camper, 0 return-fire fights, his box still full (hp 28)
+            // at d 1.4 on the machine top [L the same trace]. A player in the drop answers
+            // the muzzle the tick the pocket opens (the exposure opens only west of the slab
+            // — the catch phase and the machine-top west edge): every 20 ticks the fights'
+            // pick runs from where Bond stands, and the fights' own displacement frees the
+            // wedge grinds (the plain walk's grind was freed by its fights the same way).
+            // The plain walk keeps the raw loop byte-identical.
+            let cap = if w.tops_up() { 2400 } else { 3600 };
             loop {
-                assert!(w.total_ticks - start < 2400,
+                assert!(w.total_ticks - start < cap,
                     "the landing's west drop never cleared the overhang\n{}",
                     walker::fail_dump_pub(&w.scene, [31.8, 1.0, 34.0], "the landing west drop"));
                 {
@@ -873,9 +916,19 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
                     ..Default::default()
                 };
                 w.tick(inp, false);
+                if !w.tops_up() && (w.total_ticks - start) % 20 == 0 {
+                    let _ = w.return_fire("the landing's west drop");
+                }
             }
             eprintln!("[014] the low floor west reached {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
         }
+        // level-14-skybridge-retune-2 (!tops_up-gated): clear the machine-room/corridor
+        // cluster from the low lip BEFORE walking the corridor legs — the measured wedge run
+        // fought the cluster INSIDE the legs instead: the fights' flank + the dry re-arm's
+        // resupply walks displaced Bond off the laid line and the leg wedged at the 6000-tick
+        // cap (health 3.0 at (32.47, 0.55, 29.10), one fight #9 costing 51) [L the same
+        // trace]. The 016 clear idiom: the guards die to bounded stands with the drops
+        // cycled between, then the legs walk quiet.
         the_machine_room_to_the_corridor(&mut w);
         w.walk_to(Wp::new(30.09, 0.65, 38.73).r(1.2), "the corridor north to the leg-2 spot");
         {
@@ -1066,8 +1119,15 @@ fn walk_the_infiltration_to_the_delta_exit() {
 /// [M Drone_Create 0x136be0:49], scales Bond's pain by Plr_DMod_Normal [M Player_HandlePain
 /// 0x1902c8] and the guards' hit chance by Accuracy row 2 [M DroneWeap_DoBulletAccuracy
 /// 0x179740:74-88]. Real input only; no health, ammo or channel writes.
+/// GREEN (level-14-skybridge-retune-2, the re-measure this task asked for): the base ledger's
+/// d2 death (tick 4297, the same slab-pocket camper #6) does not reproduce on this tree — the
+/// d1 round's fights-in-the-loop fix (!tops_up-gated, shared through the same body) answers
+/// the camper the tick the pocket opens and the walk completes: `walked out in 22633 ticks;
+/// stuck 0; falls 0`, the exit hold drained at (26.997, 1.134, −24.847) and 07000015 loaded
+/// warm, arrival (94.50, 41.37, 0.002) on the silo gantry [L two consecutive runs,
+/// byte-identical]. The d2 set is unchanged from the base branch (back_off 4.0 + lane_fights +
+/// the with_agent_path_clear stands); no re-route was needed — the inherited lever was the fix.
 #[test]
-#[ignore = "re-tune after the claw wall fix (level-14-skybridge-retune's ledger, the d1 real_damage sister's ignore carries the full round): the same slab-pocket camper (skin 0x5000093) opens the d2 ledger — the measured d2 run died at tick 4297 to #6 (same skin, 28 health, d 1.4, 95.5 in 32 hits, the plain fights gave up 2 fights no round landed [L]) and the shifted clock left Bond short on the pit band's east jump (46.34, -1.78, 53.19). The d1 round's levers (all !tops_up-gated, inherited here at d2 through the same body): the switch_to_gun pre-drop answer, the machine-top west-edge escape, the overhang-catch south phase. The d2/d3 fights (back_off 4.0 + lane_fights + the with_agent_path_clear stands) displace Bond differently — re-measure on this tree before re-routing; the crossing lever (the trench-floor claw-up, see the d1 ignore) stands for this walk too"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
     // The lane-fight + path-clear laws (opt-in, this level's sister only — set inside the body
     // behind the difficulty gate; see the body comment for the measured deaths).
@@ -1132,6 +1192,19 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     });
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
         "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
+    if difficulty == 1 && !w.tops_up() {
+        // level-14-skybridge-retune-2: the d2 sister's fight laws on the real-damage d1 walk
+        // (the plain walk keeps master behaviour) — under 3.0 u every drone round hits [M
+        // DroneWeap_DoBulletAccuracy 0x179740:113-115]; the strict gun-ray aim +
+        // damage-weighted pick is the 07000013 chain's own passing law. The path-clear
+        // stands above handle the lane blockers; the laws handle the trades.
+        // NO back_off on this walk: the laws' backpedal displaced Bond AIRBORNE off the
+        // south loop's lane (the measured wedge: (−29.11, 0.65, 30.95) grounded=false,
+        // health 100.0 — the attrition is gone, the displacement wedged the leg at the
+        // 6000-tick cap [L the same trace]; the hover class the 00agent sister's ledger
+        // scopes the sim-side fix for). lane_fights alone carries the trade law.
+        w.dmg.lane_fights = true;
+    }
     if difficulty >= 2 {
         // The Agent grind: the first sister run died at tick 4297 with drone #6 (skin
         // 0x5000093, 28 health, d 1.4) dealing 95.5 in 32 hits while the plain fights gave
@@ -1698,9 +1771,15 @@ fn the_skipped_vent_cutscene_hands_bond_back_at_his_grab_spot() {
 /// write no health/armour/ammo; the exit load into 07000015 is the game's own Trigger_Activate
 /// path [M 0x1b2318 → warm_exit_save → Player_RamLoad 0x1957a8].
 #[test]
-#[ignore = "re-tune after the claw wall fix (real-health-14-00agent-9's ledger carries the crossing; this round's measured state): the landing's machine-room guard (skin 0x5000093, hp 28, weapon 0x14) is a slab-pocket camper — from every east stance (the 1.72 landing (33.87,2.28,35.36), the pad) his box is unexposed (0 return-fire fights across 48-50 hits; the pre-drop switch_to_gun answer's 900 loose-gate ticks landed 0 rounds [L the runs]) while his own bursts reach Bond through the whole descent (2.0 per ~4 ticks — the whole 100 budget from the landing legs to tick 5130 at (31.67,1.82,34.96)). Wired this round, all !tops_up-gated so the plain walk and the tripbomb duplicate stay byte-identical: the switch_to_gun pre-drop answer (the first clear misfired the Q-Claw's dry c0/s0 in hand; the probe line: P2K 0x2 c7 s41, 0x14 c21 [L]), the machine-top west-edge escape (the (31.42,2.35,33.43) strand — the machine's south part rests under the landing slab, no headroom south), and the overhang-catch south phase (the wedge (33.70,1.19,35.21), the ledgered (33.68,1.15,35.20) — step south of the slab tip to z 33.6, then west; the plain walk's grind was freed by its fights' displacement, the real-damage run has none once the guard is answered-or-absent). The escape now reaches the low floor's west lip but the accumulated fire ends the walk at 5130. NEXT LEVERS: (1) the exposure opens only west of the slab — the fights must engage at that instant with budget left, i.e. the pre-descent legs must shed the guard's early fire (a fight-quiet approach, the 00agent ledger's lever 2 shape) or the guard's pocket must be answered from the slab's south tip on the way past; (2) the SkyBridge crossing itself is still the task's open lever — the claw cannot fire in the store room [M Player_WeaponFiring 0x1a5460:515-528; the east-duct test's icon_ctx 0xff pin] and the SkyBridge type-2 icon sits on the TRENCH floor at (45.27, 0.41, 62.94) [D icon census], so the game's own crossing is the trench-floor claw-up to #658 (45.29,5.10,62.94) — latch, reel 0.05->1.5/tick, hang < 2.0 [M Player_SSGrapple 0x192860:79-121], release [M 0x192860:56-66] — which first needs the store-room->trench leg walked (the crawl's lintel stop at x 40.98 is the doc's live check; the duct's east end at x 41.53 opens over the gap [D §1a])"]
+#[ignore = "level-14-skybridge-retune-2, re-measured: the camper lever LANDED — the drop loop's raw ticks bypassed the walker's leg machinery so the return-fire fights never ran on the descent (the 5130 death: 48 hits for 100.0, 0 fights, the camper hp 28 full at d 1.4 [L]); with w.return_fire wired into the loop every 20 ticks (!tops_up-gated; the cap 2400->3600 for the fights' windows) the fights KILLED the camper at tick 4742 (health 94.0->88.0) and the descent completes [L the r2/r8 traces]. The d2 green set on d1 (the path-clear stands + lane_fights, NO back_off — its backpedal displaced Bond AIRBORNE off the south loop's lane, the hover class (−29.11, 0.65, 30.95) grounded=false at health 100.0 [L the r9 trace]) held the route fights to 1.0 total across 18 fights — Bond reaches leg 3 at ~100 [L the r11 trace]. REMAINING BLOCKER: the fusebox #383 stance zap — one pulse took 99.0 from full health at (−86.46, −1.10, 31.34), ~80 ticks after the stance arrival (the earlier −24 prints were the same blast clipped to the remaining health [L r2/r8/r11]); NOT the fusebox's own cut damage (param 2 non-zero → the cut never hurts [M 0x1adfe8:99-101; D the placements census]) and NOT in sim.hurts (the standing-capsule probe passed at the 2.2-3.2 u ring and the pulse still landed). TRIED: the stance ring at 2.2/3.2 u (probed, inside the Laser's 3.4 gate) — the pulse still landed; the 3.6 u ring — the spots sit 0.32 under the hall plane and the stance walk_to wedges closing them [L r12/r13]; the clear_hostiles pre-pass — byte-identical failures (the hp-5 survivor #9 finished Bond at 9111) and a regression vs the fights-in-the-loop shape, reverted. NEXT LEVERS: (1) a LIVE CHECK — what fires ~80 ticks after Bond stands at (−86.5, −1.1, 31.3): gdbwatch the hall's hurt volumes / the fusebox wire's own zap radius (is it the port's over-deal? the game's cut stands closer than 4.0 [L weapon_data 0x4E +0x1C]); (2) a stance spot walked from the ramp head (not the ±offset ring) that keeps ≥4 u from the wire aim point; (3) the SkyBridge crossing re-route (the trench-floor claw-up, the base ledger's lever 2) stands as pinned"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage() {
-    walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
+    // level-14-skybridge-retune-2: the d2 sister's green set on the same body — the fight
+    // laws (the flag block in the body, !tops_up-gated) plus the path-clear stands (the
+    // corridor AIM guards' bodies block the 1.5-u lanes; the measured r4 wedge ran the laws
+    // WITHOUT the stands and the fights' displacement parked Bond at (32.47, 0.55, 29.10)
+    // for the 6000-tick cap [L the same trace]). The thread-local isolates the stands to
+    // this test; the plain walk's thread never sets it.
+    walker::with_real_damage(|| with_agent_path_clear(walk_the_infiltration_to_the_delta_exit));
 }
 
 /// The game's FirstAttack flush [M 0x148010:100-131] puts every p5=100 [D census] guard on his
