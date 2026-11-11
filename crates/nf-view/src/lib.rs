@@ -3129,6 +3129,9 @@ struct App {
     game_aspect: f32,
     /// The 60 Hz ticks no driver update has answered yet (`sound_pumps`).
     sound_owed: u32,
+    /// sim-audio-determinism: `sound_tick` ran since the last pump (the sim is live and owns the
+    /// driver's frames); noclip, the dev menu and a lockstep wait leave it false.
+    sound_ticked: bool,
     /// The sim reported the mission's own end this frame (see `Drones::mission_end`).
     pending_mission_end: bool,
     /// mission-results-page: the finished mission's progress layer, snapshotted at
@@ -4472,7 +4475,7 @@ impl App {
             self.sound_owed = 0;
         } else {
             let menus = self.fe.is_some() || self.async_load.is_some();
-            let n = sound_pumps(&mut self.sound_owed, polls, menus);
+            let n = sound_pumps(&mut self.sound_owed, polls, menus, std::mem::take(&mut self.sound_ticked));
             if let Some(s) = self.sound.as_mut() { for _ in 0..n { s.batch(|_, _| {}); } }
         }
     }
@@ -5912,7 +5915,7 @@ impl App {
                                 sim.gun.switch_request = 2;
                             }
                             self.prev_lock_ch = on;
-                            if let Some(s) = self.sound.as_mut() { sound_tick(s, sim); }
+                            if let Some(s) = self.sound.as_mut() { sound_tick(s, sim); self.sound_ticked = true; }
                             self.sound_owed = self.sound_owed.saturating_sub(1);
                             // mp-host-match-logic: the match-end handover — `MP_Update` 0x184bd0's
                             // case 4 sets `GameState+0x1C = 0x40000033` (the port's
@@ -6828,6 +6831,7 @@ impl App {
             sound_poll_clock: 0.0,
             game_aspect: if std::env::var_os("NF_WIDESCREEN").is_some() { 16.0 / 9.0 } else { 4.0 / 3.0 },
             sound_owed: 0,
+            sound_ticked: false,
             pending_mission_end: false,
             results_progress: None,
             pending_mp_debrief: None,
@@ -8131,7 +8135,18 @@ const SOUND_SLACK: u32 = 2;
 /// answered; `sound_tick` pays one each. Under the menus or a load every tick is the pump's.
 /// Elsewhere this frame's own ticks are still to run, so only older debt counts: that is what
 /// a noclip flight, the dev menu or a lockstep wait leaves, and the music queue runs dry on it.
-fn sound_pumps(owed: &mut u32, polls: u32, menus: bool) -> u32 {
+///
+/// sim-audio-determinism: while the sim is LIVE (`sound_tick` ran since the last pump) the pump runs nothing and
+/// the debt past the slack is dropped. The sim catches a hitch up by at most four ticks a frame and
+/// drops the rest; a pump batch for a dropped tick advanced the voice clock (and every voice-busy
+/// gate the guards' talk reads) without a game frame, so the app drew different random numbers
+/// than any test [L the 07000005 door-band replay: app vs headless split at ticks 1187 / 10262].
+/// The game updates its sound once per game frame, and a slow frame slows both together.
+fn sound_pumps(owed: &mut u32, polls: u32, menus: bool, sim_live: bool) -> u32 {
+    if sim_live && !menus {
+        *owed = (*owed + polls).min(polls + SOUND_SLACK);
+        return 0;
+    }
     let due = if menus { *owed + polls } else { owed.saturating_sub(SOUND_SLACK) };
     *owed = (*owed + polls).saturating_sub(due);
     due.min(8)
@@ -9351,18 +9366,27 @@ mod headless_app_harness {
     #[test]
     fn the_pump_only_covers_ticks_the_sim_left() {
         let mut owed = 0;
-        assert_eq!(sound_pumps(&mut owed, 6, false), 0, "this frame's ticks come first");
+        assert_eq!(sound_pumps(&mut owed, 6, false, false), 0, "this frame's ticks come first");
         assert_eq!(owed, 6);
         owed -= 4; // the four-tick cap ran
-        assert_eq!(sound_pumps(&mut owed, 1, false), 0, "two behind is ordinary phase");
+        assert_eq!(sound_pumps(&mut owed, 1, false, false), 0, "two behind is ordinary phase");
         owed = 3;
-        assert_eq!(sound_pumps(&mut owed, 1, false), 1);
+        assert_eq!(sound_pumps(&mut owed, 1, false, false), 1);
         assert_eq!(owed, 3);
         owed = 0;
-        assert_eq!(sound_pumps(&mut owed, 1, true), 1);
+        assert_eq!(sound_pumps(&mut owed, 1, true, false), 1);
         assert_eq!(owed, 0);
-        assert_eq!(sound_pumps(&mut owed, 60, true), 8, "a long frame does not burst");
+        assert_eq!(sound_pumps(&mut owed, 60, true, false), 8, "a long frame does not burst");
         assert_eq!(owed, 0);
+        // A live sim: no pump at all, and a hitch's dropped ticks do not pile up as debt (the
+        // menus that follow would otherwise burst them out).
+        owed = 0;
+        assert_eq!(sound_pumps(&mut owed, 30, false, true), 0, "a hitch in play pumps nothing");
+        assert_eq!(owed, 30, "this frame's own ticks stay owed for the sim to pay");
+        owed = 9;
+        assert_eq!(sound_pumps(&mut owed, 1, false, true), 0);
+        assert_eq!(owed, 1 + SOUND_SLACK);
+        assert_eq!(sound_pumps(&mut owed, 1, true, true), 1 + SOUND_SLACK + 1, "the menus still pump");
     }
 
     /// regression-read-player-move: the grapple's own quad memset through the REAL App path —

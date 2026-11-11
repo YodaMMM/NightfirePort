@@ -911,7 +911,12 @@ impl Sound {
         let mut out = Vec::new();
         f(&mut self.driver, &mut out);
         // No device: the clock stands in for the SPU's end flags, so one-shots end by their length.
-        let ended = match &self.output { Some(o) => o.take_ended(), None => self.driver.clock.advance() };
+        // The end flags come from the frame clock, device or not: the SPU runs in lockstep with the
+        // game's frames (800 samples per 60 Hz frame), so `Sound_IsFinnished` and every voice-busy
+        // gate read the same frame on every machine. The device's own end list (its wall clock)
+        // is drained and dropped — it drifts with the render rate and the audio thread.
+        if let Some(o) = &self.output { let _ = o.take_ended(); }
+        let ended = self.driver.clock.advance();
         let reverb_depth = self.driver.update(&mut out, &ended);
         // `PS2_SetupReverb`'s EVOL depth (the reverb send level), written to the output [M sound.md §5.5].
         out.push(Cmd::Reverb { depth: reverb_depth });
@@ -929,7 +934,8 @@ impl Sound {
             out.push(Cmd::MusicGain(p.gain(self.driver.music_master, self.driver.ducker_current, self.driver.fade_music_volume)));
         }
         if let Some(c) = &self.captured { c.lock().unwrap().extend(out.iter().cloned()); }
-        match &self.output { Some(o) => o.send(out), None => self.driver.clock.apply(&out) }
+        self.driver.clock.apply(&out);
+        if let Some(o) = &self.output { o.send(out); }
     }
 
     /// The pause page's sound hold: `MenuManager_Create` with `pause_sound` runs `SFXPause` (op 9) +
@@ -953,7 +959,8 @@ impl Sound {
     pub fn set_paused(&mut self, paused: bool) {
         let mut out = Vec::new();
         self.driver.set_paused(paused, &mut out);
-        match &self.output { Some(o) => { o.set_paused(paused); o.send(out); } None => self.driver.clock.apply(&out) }
+        self.driver.clock.apply(&out);
+        if let Some(o) = &self.output { o.set_paused(paused); o.send(out); }
     }
 }
 
@@ -1160,6 +1167,35 @@ mod tests {
         d.remove(0, Some(7));
         d.update(&mut Vec::new(), &[]);
         assert!(d.ids().is_empty(), "SFXRemove(0, id) removes every matching item [M 0x1f88]");
+    }
+
+    /// sim-audio-determinism: the voices end on the frame clock with or without an output device.
+    /// A device's own end flags arrive on the audio thread's wall clock; the game's arrive once per
+    /// frame from the SPU running in lockstep. Two Sounds fed the same batches — one with no device,
+    /// one with a real-time null mixer whose batches are spaced irregularly — must report the same
+    /// live items on every batch (the guards' voice-busy gates read exactly this).
+    #[test]
+    fn voices_end_on_the_frame_clock_with_or_without_a_device() {
+        let mk = |output: Option<crate::Output>| {
+            let (b, sbf) = one_sound_bank();
+            let mut driver = Driver::new();
+            driver.load_bank(4, b, sbf);
+            Sound { driver, output, captured: None, music_files: None, music: None, music_pending: Vec::new() }
+        };
+        let mut headless = mk(None);
+        let mut device = mk(Some(crate::Output::open_null(48_000, 64)));
+        let mut seen_live = false;
+        for frame in 0..90u32 {
+            let start = frame == 0 || frame == 40;
+            headless.batch(|d, out| if start { d.start(out, 7, None, 0, None); });
+            device.batch(|d, out| if start { d.start(out, 7, None, 0, None); });
+            // The device's thread runs on: some frames take 0 ms, some 25 ms of wall time.
+            std::thread::sleep(std::time::Duration::from_millis(if frame % 3 == 0 { 25 } else { 0 }));
+            assert_eq!(headless.driver.ids(), device.driver.ids(), "frame {frame}: the live items match");
+            seen_live |= !headless.driver.ids().is_empty();
+        }
+        assert!(seen_live, "the effect played");
+        assert!(headless.driver.ids().is_empty(), "and ended on the clock");
     }
 
     /// A killed voice's release ends in the mixer a few ms later, and the driver hears of it at the
