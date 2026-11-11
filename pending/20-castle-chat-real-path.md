@@ -1,0 +1,18 @@
+## Your task: `castle-chat-real-path`, The Exchange castle's chatting guards, pinned on the real path
+
+Branch from origin/master (guard-castle-chat-states landed: the 07000006 chat pair by the dock plays CastleChatGuard1 [M 0x1612e0]). Its real-path test walkreal_07000006_live::the_castle_chat_pair_stands_chatting_and_breaks_off_when_alerted is ignored; read its ignore message. Reach the pair with real input from the load, show they stand and play the chat script on ch 0x11, then alert them and show they break off, and un-ignore the test. Run walkreal_07000006_live and interactables_07000006_live.
+
+**Tests pin only proven behaviour.** Every assertion about what the game does cites its evidence: [M] a decompile
+address that actually says it, [D] disc bytes, or [L] a live PCSX2 measurement from a FRESH boot (a save-state resume
+skips the boot path). A guess, a port choice or an [S] item is never a hard assertion: mark it `// [S] unverified` and
+keep it out of pass/fail. If an existing test contradicts the decompile, the TEST is wrong: fix it, with the address, and
+say so in the report. Never weaken a decompile-backed test to make code pass.
+
+**Run the crates your tests touch before pushing**, and report what you ran.
+
+**Branch:** `s/20-castle-chat-real-path`.
+
+- **Run the full suite with the fast runner, started in the background in your first minutes** (it fits the 2-hour window):
+  `NF_ISO=<abs path> nohup python3 tools/test/suite.py > suite.out 2>&1 &` (docs/tools/test-suite.md; once `tools/test/suite.py`
+  is on your branch: merge `origin/master` first). Read `tail -1 suite.out` and its FAILED/TIMEOUT lines before you push, and
+  run it once more on your final tree (merged with `origin/master`). Report the total line.
