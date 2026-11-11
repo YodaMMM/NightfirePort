@@ -15,3 +15,11 @@
   (50.38, 52.34) — that case is the leaf-push order (move, then the DeltaP push), not the
   tier-2; measured raw step (0.040, 0.000), slide tangent zero. Left for the next round with
   the live checks (see the report).
+
+## guard-leaf-pushout (2026-11-11)
+
+- Continuing guard-stuck-14-corner's "What is left" item 1: the 07000014 drone#0 GO_TO_GOAL
+  freeze at (50.38, 1.00, 52.34) against the closed 0x1A leaf's west face. The port's
+  probe_move rejects the step every tick; the game moves first and then pushes out in the
+  contact pass [M 0x140968:204-208, Collide_Intersect 0x1ebaa8:353-373]. Porting the game's
+  order (move, then the DeltaP push-out), keeping the Rand count.
