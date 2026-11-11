@@ -229,3 +229,69 @@ fn the_sweep_logs_every_frozen_moving_drone() {
         if r.is_err() { eprintln!("SWEEP {lv}: SKIP (panic — see the report's skip list)"); }
     }
 }
+
+/// guard-stuck-0c-14: the 07000014 door-leaf walker slides along the leaf. The sweep's HIT row
+/// (07000014 drone#0, skin 0x05000090, GO_TO_GOAL 0x63, pos (50.34,1.00,53.29), goal
+/// (56.06,0.01,42.91) 11.9 u away, route_blocked false) is a guard whose route creeps toward a
+/// SPECIAL (door) node at (51.54, 52.34) across the leaf of door object 0x100_0000_001A
+/// (hinge (50.82, 1.19, 52.92), width along world z [L the probe's HitHost + matrix dump]): the
+/// mover's 0.04 step is rejected every tick (`blocked_reach` 0.040 [L the probe ledger]) and the
+/// guard stands 1.5 u short of the node forever. The game keeps the along-leaf part of a
+/// leaf-blocked step [M Drone_CollisionHandler 0x140968:204-208] — `door_leaf_slide` (the port's
+/// stand-in) now runs on this level, so the guard rounds the hinge southward: z 53.29 → 52.34
+/// [L the post-fix sweep row]. RED on the old code: the gate held the slide to 07000007 and the
+/// guard never left (50.34, 53.29). The REMAINING corner (pure-east steps have no tangent and
+/// the leaf's z-band still covers the creep line) is the next round's item — the game's
+/// LinkCreep_AtSpecialNode tier-2 (0x159dd0 → NDrone2_DroneNearPos 0x143e68 walks the DRONE
+/// list; the port asks the player) is the divergence candidate.
+#[test]
+fn the_countdown_leaf_walker_slides_along_the_leaf() {
+    let Ok(mut w) = nf_view::load(&iso(), "07000014.bin", false).map(walker::Walker::new)
+        else { eprintln!("07000014: LOAD FAILED"); return; };
+    assert!(w.wait_enabled(6000, "level start"), "07000014: never enabled");
+    w.wait(120);
+    // The game's own alarm path on every live watching guard: msg 0x1e [M 0x177c18:113-114].
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let difficulty = sim.drones.difficulty;
+        let data = nf_game::drone::Data {
+            tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+            world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+            skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+            hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+            surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty,
+            ai_points: &sim.ai_points,
+        };
+        let frame = sim.drones.frame;
+        for i in 0..sim.drones.list.len() {
+            let d = &sim.drones.list[i];
+            if d.present && d.enabled && !d.corpse && d.watching && d.team != 2 && d.health > 0.0
+                && matches!(d.state, state::IDLE | state::ALERT | state::PATROL) {
+                sim.drones.list[i].send(&data, &mut sim.drones.rng, frame, msg::ALARM);
+            }
+        }
+    }
+    // The leaf walker: the GO_TO_GOAL guard whose goal is the disc's (56.06, 0.01, 42.91)
+    // [L the sweep row; the goal comes from the level's own script/placement data].
+    let mut found = false;
+    let mut reached_leaf = false;
+    let mut slid = false;
+    for t in 0..1800u32 {
+        w.tick(Input::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        for d in sim.drones.list.iter() {
+            if !d.present || !d.enabled || d.corpse { continue; }
+            if d.state != state::GO_TO_GOAL { continue; }
+            let Some(g) = d.goal else { continue };
+            if ((g[0] - 56.06).abs() > 0.5) || ((g[2] - 42.91).abs() > 0.5) { continue; }
+            found = true;
+            // The leaf plane is x ≈ 50.82: the walker's approach brings it within 0.5 of the plane.
+            if (d.pos[0] - 50.82).abs() < 0.5 { reached_leaf = true; }
+            // The along-leaf slide carries it south past the hinge's z (52.92 [L the matrix]).
+            if d.pos[2] < 52.90 && d.pos[2] > 51.5 { slid = true; }
+        }
+    }
+    assert!(found, "the 07000014 leaf walker (goal (56.06, 0.01, 42.91) [L the sweep row]) never took the alarm in GO_TO_GOAL");
+    assert!(reached_leaf, "the walker never reached the leaf's plane (x 50.82 [L the probe's HitHost]): the leaf-slide law [M 0x140968:204-208] is not applied on this level");
+    assert!(slid, "the walker reached the leaf but never slid along it (z stayed at 53.29): the leaf-slide law [M 0x140968:204-208] is not applied on this level");
+}

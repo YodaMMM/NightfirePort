@@ -735,6 +735,13 @@ pub struct Player {
     /// The runtime cel the queries start from (obj+0x20 — fix-safe08b): the `pCelList` cell index in
     /// the world's `ScopeGraph`; `None` = the flat (unscoped) world.
     pub cel: Option<usize>,
+    /// The player object's own linked cel, `obj+0x20` as the movement pass relinks it
+    /// (`Bond::cel`, `control_handle_cel_change` 0x133288 → `build_LinkToRoom` 0x1c9680) — what
+    /// `DroneVision_CanSeeObjectFrom` 0x176f18 reads as the target's cel (`iStack_60 = target+0x20`
+    /// [M :21]) for the cel walk. `cel` above is the scene's smallest-box lookup (a different cell
+    /// where boxes nest: the 02 courtyard stair bottom reads 230 there, 13 here, the sniper's own
+    /// cel). `None` = unlinked or no body model (the walk is skipped).
+    pub obj_cel: Option<usize>,
     /// The crouch substate is live (`bond.crouched` at the build site): the trigger toucher
     /// switches to the game's crouch pick arm with it (level-0a-ceiling-gun-route).
     pub crouched: bool,
@@ -859,6 +866,14 @@ pub struct Animator {
     pub early_end: bool,
     /// `OnStartAnim`: a class-6 danim's script cut to 15 frames (`+0xB0`) unless the hit was big (`+0x1C`).
     pub len_cap: Option<u32>,
+    /// `Drone+0x570`: the current anim's info word, stored whole at every anim set —
+    /// `DroneAnim_SetDAnimInternal` 0x13aee8:50 writes `Drone_AnimInfo[danim]`'s first u32
+    /// (the port's `tables.info[danim][0..4]`, the same table its state/class/flags read);
+    /// `DroneAnim_SetScript` 0x13e088:26 writes the call's flags argument instead. Consumers:
+    /// the NoBunching quad yaw offsets (bits 8/0x10/0x20 [M 0x150ad0:27-35]), the skip arm
+    /// (bit 2 [M 0x13aee8:82]), and the no-physics bit 1 (`NDrone2_DoCollision` 0x149ec8:30-32
+    /// + `NDrone2_DoGravity` 0x141e58:36-38 — see `no_physics_now`).
+    pub info_word: u32,
 }
 
 /// `DroneWeap_GetWeaponInfo` 0x17a5a0's outputs: the held weapon's model datum byte
@@ -1908,12 +1923,26 @@ pub struct Drone {
     /// (`DroneVision_SeekOpponentLOS` 0x175cb8:50-66: stepped 0..6 on every unseen call, kept while
     /// the ray holds, reset to 0 when the bone-0 retry lands).
     pub view_bone: u16,
+    /// The drone object's own linked cel (`obj+0x20`) and the position it was last relinked at
+    /// (`obj+0x40`, the move segment's from). `NDrone2_DefaultInit` 0x14b300:38 links it with
+    /// `build_LinkToRoom`; every moved tick `control_movement_object_handler` 0x1336f8 runs
+    /// `control_handle_cel_change` 0x133288 on it (portal crossing → the other cel, still in the
+    /// box → kept, else `build_LinkToRoom`; a type-2 miss falls through to the default arm and
+    /// relinks the OLD cel [M 0x133288:166-231]). `NDrone2_CanSeeObject` 0x1785e0 passes it as the
+    /// seer's cel to `DroneVision_CanSeeObjectFrom` 0x176f18. `None` = never linked.
+    pub obj_cel: Option<usize>,
+    pub obj_cel_pos: Option<V3>,
     /// `obj+0xFC` — the drawn-grace counter (docs/systems/corpse-persistence.md): 2 at spawn
     /// [`M 0x134630:16`], set to 2 by the draw pass when drawn [`M 0x1e62d8:71`], decremented once
     /// per control pass otherwise [`M 0x1336f8:242-246`]. The dead states' `obj+0xFC == 0` tests
     /// (Dead 0x163fe8 case 3, Fade 0x172cd8, FadeFast 0x172dd8) read it: a corpse is removed on
     /// the 3rd control pass after its last drawn frame.
     pub drawn_grace: u8,
+    /// `obj+0xFC` as the no-physics arm reads it (`no_physics_now`): the same counter as
+    /// `drawn_grace` (2 at spawn [M 0x134630:16], 2 when drawn, one down per control pass) fed by
+    /// the draw test's frustum leg alone (`Vision_InView` [M 0x1e62d8:34-35]) — the game's draw
+    /// set is inside it, the bullet-ray room stand-in is not.
+    pub frustum_grace: u8,
     /// `+0x4CE` (u16) — `NDrone2_MonitorTalkToMissionObj` 0x144340's hostage/captor dialogue step
     /// counter, zeroed by DefaultInit 0x14b300:80: 0 the captor's opener pending, 1 the hostage's
     /// reply pending, 2 back to the captor — the pair alternate msg-0x1A lines, each gated on the
@@ -1966,6 +1995,17 @@ pub struct Drone {
     /// with the contact point standing in for HITDATA+0x40 (the between-capsules closest-point
     /// midpoint — the Jointy projection [M Collide_Jointy 0x1ec180:234-252]).
     pub objhit_dir: V3,
+    /// The guard's own world hurt sphere obj+0x8C, what a blast's pick and gap both measure
+    /// [M Collide_PickObj 0x1eae80:221-228 `SqDist < (blast_r + obj+0x8C)²`; Explode_Propagate
+    /// 0x17c5d8-0x17c614 `gap = max(d − obj+0x8C, 0)`]. 0.0 until the guard's sphere is built:
+    /// fresh-boot guards that never moved carry obj+0x8C = 0.0 with centre == pos exactly
+    /// [L ee_start_05.bin: 9 of 13 guards], and `Control_BuildWorldSph` 0x133070 only fills the
+    /// field from the movement handler 0x1336f8's per-move call. Built value: `guard_sphere_r`.
+    pub sph_r: f32,
+    /// The position the guard was created at (`sph_r` builds when the guard's XZ leaves it — the
+    /// game's BuildWorldSph runs on the first movement [M 0x1336f8 → 0x133070]; height settles
+    /// alone don't count [L ee_start_05.bin: the dormant guards' centre == pos in all axes]).
+    pub sph_home: V3,
 }
 
 /// Normalise a vector (the grenade throw direction helper).
@@ -2143,7 +2183,8 @@ impl Drone {
             goal_arrival: 2.0, // the DefaultInit seed [M 0x14b300:579]
             ai_points: Vec::new(), alarm_switches: Vec::new(),
             explosive_pos: pos, explosive_run_dist: 0.0,
-            anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), blend_out: false, started: false, early_end: false, len_cap: None },
+            anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), blend_out: false, started: false, early_end: false, len_cap: None,
+                info_word: 0 },
             firing: false, burst_done: false, burst: 0, next_shot: 0, last_shot: 0, clip, clip_max: clip,
             grenade_weapon, grenade_count, pending_grenade: false,
             shots: Vec::new(), log: Vec::new(), knocked_out: false, disabled_logged: false, dispatched_logged: false, start_script, root_prev: None, aimed_at: false, aimed_until: 0, bunched: false, armed_drone_near: false, wobble: rng.rand(10000), lost_sight: true, damage_mul: 1.0, alert_bits: 0, light: 1.0, attack_frame: 0, alerted_by_drone: false, watching: false,
@@ -2156,6 +2197,10 @@ impl Drone {
             spawn_stats_params: None,
             // the body-contact latch (Drone+0x26) starts clear — set only by the contact pass.
             objhit_latch: false,
+            // the guard's own hurt sphere: 0.0 until the guard first moves off `sph_home` [L
+            // ee_start_05.bin: the never-moved guards carry obj+0x8C = 0.0, centre == pos].
+            sph_r: 0.0,
+            sph_home: pos,
             objhit_dir: [0.0; 3],
             // drone-abseil-elevator: the +0x23 rope fields. `move_ok`
             // (+0x24) is set for every drone at DefaultInit 0x14b300:771; the rest start at the
@@ -2207,6 +2252,7 @@ impl Drone {
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
             drawn_grace: 2, // `control_init_object` 0x134630:16
+            frustum_grace: 2, // the same store [M 0x134630:16]
             abseil_land_latch: false,
             mission_path_dist: 0.0,
             stun_until: 0, player_pos: [0.0; 3],
@@ -2289,6 +2335,7 @@ impl Drone {
             gun_through_wall: false,
             // Drone+0x1da — the view-bone cursor (SeekOpponentLOS 0x175cb8:50-66).
             view_bone: 0,
+            obj_cel: None, obj_cel_pos: None,
             // The per-drone motion stamps (DroneWeap_DoOpponentTargetting 0x179a48:47-73) — see the fields.
             moved_since: None,
             stopped_since: None,
@@ -2999,6 +3046,13 @@ impl Drone {
         for _ in 0..8 {
             let info = d.tables.info.get(danim as usize).copied().unwrap_or([0; 24]);
             self.anim.danim = danim;
+            // `+0x570 = Drone_AnimInfo[danim]`'s first u32, written whole on EVERY set — even a
+            // set whose script ends up skipped keeps the word [M 0x13aee8:50 writes before the
+            // skip check; the word is the no-physics bit's source, not the playing script's].
+            self.anim.info_word = u32::from_le_bytes([info[0], info[1], info[2], info[3]]);
+            if std::env::var_os("NF_PHYS_TRACE").is_some() && self.anim.info_word & 2 != 0 {
+                eprintln!("[phys] danim {danim:#x} carries the no-physics bit (voice {:#x} state {:#x})", self.voice_type, info[8]);
+            }
             self.anim.state = u16::from_le_bytes([info[8], info[9]]);
             self.anim.class = info[0xc];
             self.anim.blend_wait = 0;
@@ -3053,6 +3107,10 @@ impl Drone {
         let old_turn = self.anim.danim != 0 && old_info[1] & 1 != 0 && self.anim.script.is_some() && !self.anim.held;
         self.begin_blend(d, 8, old_turn); // `SetScript` → `SetHTAnim(…, blend 8)`
         self.anim.danim = 0;
+        // `DroneAnim_SetScript` 0x13e088:26 writes +0x570 = the call's flags argument — not a
+        // table word. The ported call sites pass flags without bit 1 [S unverified: the port
+        // models the flags as 0], so the script path carries no no-physics bit.
+        self.anim.info_word = 0;
         self.anim.state = state;
         self.anim.class = 1;
         self.anim.script = Some(hash);
@@ -3534,7 +3592,21 @@ impl Drone {
     /// (a `set_dynamic` part in the door id band 0x100_0000_0000..0x200_0000_0000): the step minus
     /// its component into the leaf's horizontal face normal, if that remainder probes clear.
     fn door_leaf_slide(&self, d: &Data, step: [f32; 2]) -> Option<[f32; 2]> {
-        if d.level != 0x0700_0007 { return None; }
+        // The level set holds the levels whose walks are proven green with the slide running:
+        // 07000007 (where the class landed) and 07000014 (guard-stuck-0c-14: its Countdown
+        // drone#0 — skin 0x05000090, GO_TO_GOAL 0x63 — pressed the leaf of door object
+        // 0x100_0000_001A at (50.82, 1.19, 52.92) 1.5 u short of its route's special (door)
+        // node (51.54, 52.34): the mover's 0.04 step rejected every tick (blocked_reach 0.040,
+        // [L the probe ledger]) and the guard froze 13.24 u from its goal with route_blocked
+        // false. The game's drone is pushed OUT of the leaf and keeps the along-leaf part of
+        // its step [M Drone_CollisionHandler 0x140968:204-208 — the contact pass's DeltaP adds
+        // to obj+0x30 whenever the 0x800 capsule's contact list is non-empty, and the swing
+        // door is a cel-linked collider at its live pose]. The law is the game's on every
+        // level; the set grows one level at a time with its walks re-run — on 07000008 the
+        // combat guards frozen at leaves slide out too and the 00 Agent walk there runs dry
+        // before the cabin panes (the stuck-guard-combat-sweep measurement), so 08 waits on
+        // its walk re-tune.
+        if !matches!(d.level, 0x0700_0007 | 0x0700_0014) { return None; }
         let len = (step[0] * step[0] + step[1] * step[1]).sqrt();
         if len < 1e-6 { return None; }
         let over = |c: f32| c.signum() * 0.4 * (c.abs() > 1e-6) as i32 as f32;
@@ -6565,6 +6637,39 @@ impl Drone {
     /// collision bit 0x20) skips it too — except the `keeps_gravity` (bit 4) corpse's collision-free gravity arm. [M] constants: WldGravity (0,−9.8,0), REC_FRAME_RATE 1/60,
     /// hip+0.6 ray, 0.2 on-surface, probe 0.4 (0x140e90; 0.55 when +0xd8 == 0xc and 0.3 when +0x2f — unmodelled,
     /// the gate's band only shifts, the sit/stand split does not change), 0.125 settle rate.
+    /// `NDrone2_DoCollision` 0x149ec8's anim arm (decompile :30-32) — and `NDrone2_DoGravity`
+    /// 0x141e58:36-38's shared shape: with the collide bit 0x20 set, the anim-info no-physics
+    /// bit +0x570 & 2 returns 0 UNLESS a force arm holds first, in the game's order:
+    /// voice 0xC (the whole inner test skipped — always collide), voice 0x13 (return 1), the
+    /// +0x538 replaced script (return 1), a player within 2.0 (`DroneFunc_NearPlayerCollision`
+    /// 0x14b190 — the +0x154+4·i per-player distances `NDrone2_PreDroneControl` 0x148db0:35-48
+    /// fills; the port's `dist_to_player`), obj+0xfc (the drawn counter — see below
+    /// [M 0x13805c; the port's `drawn` IS that flag]). Consequences [M the disasm sites]:
+    /// `NDrone2_Collision` 0x140e90 stores HITTEST mode +0x464 = 0 instead of 0x800 (the
+    /// capsule's geometry still builds — 0x140ff4-0x141008 / 0x141074-0x141088) so the player's
+    /// pick passes the body, and `Drone_CollisionHandler` 0x140968 skips its contact pass (the
+    /// jal site 0x140b88); gravity is off with it. Only reachable for an UNDRAWN guard beyond
+    /// 2.0 of the player — a drawn or near guard is always force-collided.
+    ///
+    /// The drawn arm reads obj+0xFC itself — the COUNTER (2 when the draw pass adds the object,
+    /// one down per control pass [M View_AddObjects 0x1e62d8:70-71, View_AddForcedObjects
+    /// 0x1e5fb8:114-115, control_movement_object_handler 0x1336f8:242-246]) — so a guard drawn
+    /// on either of the last two frames keeps physics. Both draw-list writers set it only after
+    /// `Vision_InView` passes the object's world sphere [M 0x1e62d8:34-35, 0x1e5fb8:89-92]; the
+    /// cel gate on top of that (portal-visible rooms) has no sim-side graph, and the bullet-ray
+    /// stand-in `drawn` is stricter than it (a guard behind a pillar in a visible room reads
+    /// undrawn). This arm therefore reads `frustum_grace` — the same counter fed by the frustum
+    /// leg alone, a superset of the game's draw set — so it never freezes a guard the game
+    /// keeps moving; only a guard outside the view frustum (or one the game also skips) and
+    /// beyond 2.0 of the player loses physics.
+    fn no_physics_now(&self) -> bool {
+        self.anim.info_word & 2 != 0
+            && !matches!(self.voice_type, 0xC | 0x13)
+            && !self.anim.blend_out
+            && !self.near_player_collision()
+            && self.frustum_grace == 0
+    }
+
     pub fn collision_handler(&mut self, world: &CollisionWorld) {
         // The +0x26 obj-hit latch's per-tick clear [M Drone_CollisionHandler 0x140968:73 — at the
         // handler's top, before the flying branch; the NPC-system-off early return :59-61 skips it,
@@ -6619,6 +6724,18 @@ impl Drone {
             }
             return;
         }
+        // The anim-info no-physics arm, in the game's order after the 0x20 fold: `NDrone2_DoCollision`
+        // 0x149ec8:30-32 returns 0 for the flagged anim (no force arm — see `no_physics_now`), which
+        // skips the handler's contact pass (the jal site 0x140b88) and drops the capsule's HITTEST
+        // mode to 0 (0x140ff4-0x141008); `NDrone2_DoGravity` 0x141e58:36-38 returns 0 with it, so the
+        // flagged undrawn far guard runs NO physics this tick (the anim carries the body).
+        if self.no_physics_now() {
+            self.in_air = false;
+            self.on_surface = false;
+            // DoGravity 0 → the handler zeroes the fall speed +0x484 [M 0x140968:154-156].
+            self.velocity[1] = 0.0;
+            return;
+        }
         // `+0x4F8 & 0x4000` cleared at the top.
         self.in_air = false;
         // The body query's push out of a live pane [M Drone_CollisionHandler 0x140968]: the spine
@@ -6627,8 +6744,9 @@ impl Drone {
         // `bounded` stands for `NDrone2_DoCollision` 0x149ec8's +0x4F8 bit 0x20 (the per-guard
         // collide switch: bit CLEAR returns 0 — no collision — before any other test [M disasm
         // 0x149f08-18]; DefaultInit 0x14b300:60 sets the bit for every drone in the 0x801e2
-        // bundle, SetAsDead 0x14a2f0:16 clears it off 0700004a); its +0x570 bit 2 (the anim-info
-        // no-collide bit, DroneAnim_SetDAnimInternal 0x13aee8:50) is unmodelled.
+        // bundle, SetAsDead 0x14a2f0:16 clears it off 0700004a); its +0x570 bit 1 (the anim-info
+        // no-physics bit) is the `no_physics_now` gate above [M 0x149ec8:30-32]; its +0x570 bit 2
+        // (the anim-info no-collide bit, DroneAnim_SetDAnimInternal 0x13aee8:50) is unmodelled.
         let (r, top, bottom) = self.capsule(self.hip());
         let (push, pane) = world.pane_push([self.pos[0], self.pos[1] + top, self.pos[2]], [self.pos[0], self.pos[1] + bottom, self.pos[2]], r);
         self.pos[0] += push[0];
@@ -10783,7 +10901,7 @@ impl Drone {
                 // `NDrone2_Enable(0)` + `obj+0xFE |= 1`; the MP arm is `BOT_fellOutMap`]: the game
                 // reaches it from `control_handle_cel_change` 0x133288 when the object's cel says
                 // out-of-map; the port's DeleteMe arm is the same Enable(0)+flag fold, and the
-                // port's guards never leave the map mesh (no out-of-map cel reader on drones).
+                // relink miss runs it through `Drone::fell_out_map` (`Drones::tick_inner`).
                 self.present = false; self.enabled = false; self.delete_me = true; true
             }
             // ---- drone-abseil-elevator: states 0x8d–0x92 (`NDrone2_StateFuncs` slots 0x8d–0x92) ----
@@ -12099,6 +12217,12 @@ impl Drone {
     /// back to obj+0x30); the port's bone-free `head()` stands in for it.
     pub fn visibility(&self) -> f32 {
         if self.dist < 2.0 && self.sight_range > 0.0 { return 1.0; }
+        self.visibility_formula()
+    }
+
+    /// `DroneVision_OpponentVisibility` 0x175af0 past its close-range probe (:34-60): the range
+    /// scaled by alertness, the cone, the volume factor.
+    pub fn visibility_formula(&self) -> f32 {
         let r = self.sight_range * (2.0 * self.alert + 1.0);
         if r <= 0.0 { return 0.0; }
         let mut vis = 0.7 - (self.dist - r) / r;
@@ -12170,13 +12294,10 @@ impl Drone {
     /// 0.4 from the centre, y kept), TO the drone's eye (`NDrone2_CanSeeObject` 0x1785e0:36-46:
     /// `NDrone2_GetHeadPos`, clamped the same way — the port's `head()`), through
     /// `Collide_LineOfSight` 0x1edf50 (`!Collide_RayIntersect`) with mask `0xa27`. The
-    /// `AINetwork_TestRayCels` pre-pass (:65-67) is the port's world ray, as before [S] — the
-    /// game's pre-pass is an AI-cel REACHABILITY check, not a geometry ray: it builds the ray
-    /// hit-test and `Collide_StraddleCels`, then requires the TARGET's cel to be among the
-    /// straddled cels (same-cel passes outright) [M 0x176f18:65-67 + 0x15ab78:44-66]; a ray the
-    /// port's world clears but whose cel path never straddles the target cel is BLOCKED in the
-    /// game (ledge/hole edges). Port sketch: straddle-walk the port's nav cels along the ray and
-    /// require the target cel in the set.
+    /// `AINetwork_TestRayCels` 0x15ab78 pre-pass (:65-67) is an AI-cel REACHABILITY check, not a
+    /// geometry ray: when the target's cel differs from the seer's, `Collide_StraddleCels` from the
+    /// TARGET's cel along bone → eye must reach the SEER's cel, else "not seen" with no collision
+    /// ray [M 0x176f18:65-67, 0x15ab78:66-86] — `cels_ok` below (`CollisionWorld::ray_reaches_cel`).
     /// (`+0x3a0 & 0x30000000` adds a second `CanSeeObjectFrom` from `+0x3b0` whose result is
     /// dropped, :95-98 — no effect.)
     /// Without posed bones (`bones == None`) the port's single chest point stands in.
@@ -12188,25 +12309,100 @@ impl Drone {
     /// character's glist without collision data goes to `Collide_Jointy` [M Collide_Intersect
     /// 0x1ebaa8:28-31]. So a guard does not see Bond through a guest or another guard. The port's
     /// body test is the posed bone boxes Bond's rounds use [S for the game's joint test].
-    pub fn seek_opponent_los(&mut self, d: &Data, player: &Player, bones: Option<&[V3; 7]>, body: &dyn Fn(V3, V3) -> bool) -> bool {
+    /// Returns (seen, casts): how many probes got past the cel walk to their collision ray —
+    /// each one is a `DAT_00299092` bump [M 0x176f18:68/:94 sit inside the TestRayCels arm], the
+    /// counter `ProcessDroneSight`'s round robin stops on [M 0x176a28:175].
+    pub fn seek_opponent_los(&mut self, d: &Data, player: &Player, bones: Option<&[V3; 7]>, body: &dyn Fn(V3, V3) -> bool) -> (bool, u16) {
         // The ray rides the game's cel scope [M DroneVision_CanSeeObjectFrom 0x176f18:60-77 —
         // Collide_LineOfSight's cel arg is the TARGET's obj+0x20, so Collide_Pick's BFS admits
         // only the target-cel chain's geometry]: the port's unscoped grid walk over-blocked on
         // 07000011 (the d2 idle-Bond stall — a 0.33×0.18 mat-0x06 patch at y 48.232 grazing the
         // ray between the corridor guards and the spawn; world.rs::line_of_sight_scoped). A
         // snapshot without a cel (None) and a portal-BFS miss keep the unscoped walk.
-        let Some(b) = bones else {
-            let eye = self.head();
-            return d.world.line_of_sight_scoped(player.cel, eye, player.target, crate::world::LOS_GUARD_VISION)
-                && !body(eye, player.target);
-        };
-        let eye = self.head();
+        // The cel walk before the ray [M 0x176f18:65-67, disasm 0x176fa8-0x176fbc: `a3 = seer
+        // cel; beq target cel, a3` skips it; else `AINetwork_TestRayCels(bone, target cel, eye,
+        // seer cel)`, and a 0 answer is "not seen" with no collision ray at all]. The seer's cel
+        // is the drone's own relinked obj+0x20 (`Drone::obj_cel`, `relink_cel`); see `sight_probe`.
+        let cast = std::cell::Cell::new(0u16);
         let ray = |i: usize| {
-            let from = clamp_to_cylinder(player.pos, b[i]);
-            d.world.line_of_sight_scoped(player.cel, from, eye, crate::world::LOS_GUARD_VISION) && !body(from, eye)
+            let (seen, c) = self.sight_probe(d, player, bones, body, i);
+            if c { cast.set(cast.get() + 1); }
+            seen
         };
-        view_bone_pick(self.los, self.team, &mut self.view_bone, ray)
+        let mut cursor = self.view_bone;
+        let seen = view_bone_pick(self.los, self.team, &mut cursor, ray);
+        self.view_bone = cursor;
+        (seen, cast.get())
     }
+
+    /// One `NDrone2_CanSeeObject` 0x1785e0 → `DroneVision_CanSeeObjectFrom` 0x176f18 probe of
+    /// Bond's view bone `DRONE_VIEW_BONES[i]` (the bone-free chest point without posed bones):
+    /// (seen, cast). The seer's cel is the drone's own linked `obj+0x20` (`obj_cel`, passed by
+    /// 0x1785e0 as `*(obj+0x20)`), the target's is `Player::obj_cel` (0x176f18:21). Equal cels
+    /// (both unlinked included) skip the walk and cast [M :65 `iStack_60 == iStack_80`]; else
+    /// `AINetwork_TestRayCels` answers 0 for a null cel on either side [M 0x15ab78:66-67] and
+    /// otherwise walks from the target's cel [M :70-86]; a 0 is "not seen" with no ray and no
+    /// `DAT_00299092` bump [M 0x176f18:65-72]. A player snapshot without `obj_cel` (no body model:
+    /// the harness players) keeps the ray alone [S].
+    pub fn sight_probe(&self, d: &Data, player: &Player, bones: Option<&[V3; 7]>, body: &dyn Fn(V3, V3) -> bool, i: usize) -> (bool, bool) {
+        let eye = self.head();
+        let from = match bones { Some(b) => clamp_to_cylinder(player.pos, b[i]), None => player.target };
+        let cels_ok = match (player.obj_cel, self.obj_cel) {
+            (None, _) => true,
+            (Some(t), Some(s)) if t == s => true,
+            (Some(_), None) => false,
+            (Some(t), Some(s)) => d.world.ray_reaches_cel(t, from, eye, s).unwrap_or(true),
+        };
+        if !cels_ok { return (false, false); }
+        let (a, b) = if bones.is_some() { (from, eye) } else { (eye, from) };
+        (d.world.line_of_sight_scoped(player.cel, a, b, crate::world::LOS_GUARD_VISION) && !body(a, b), true)
+    }
+
+    /// The drone's `obj+0x20` relink (see `obj_cel`): the first call links by `build_FindCel`
+    /// (`NDrone2_DefaultInit` 0x14b300:38); later calls run the moved-pass relink only when the
+    /// object moved [M 0x133288:42-46 `Vec_IsEqual` early-out]. Returns true on a relink MISS
+    /// (no portal crossing, outside the old cel's box, no `build_LinkToRoom` hit): the type-2 arm
+    /// calls `Drone_FellOutMap` 0x13a878 [M 0x133288:179-181, and :63-72 for an unlinked object],
+    /// whose SP body is `NDrone2_Enable(0)` + `obj+0xFE |= 1` (the control walk's delete) — the
+    /// caller removes the drone. The old cel is kept as the default arm's relink does [M :185-250].
+    pub fn relink_cel(&mut self, w: &crate::world::CollisionWorld) -> bool {
+        let r = match self.obj_cel_pos {
+            None => { self.obj_cel = w.find_cel(self.pos); self.obj_cel_pos = Some(self.pos); return false }
+            Some(prev) if prev == self.pos => return false,
+            Some(prev) => w.player_cel_relink(self.obj_cel, prev, self.pos, self.pos),
+        };
+        self.obj_cel_pos = Some(self.pos);
+        match r {
+            Some(c) => { self.obj_cel = Some(c); false }
+            None => true,
+        }
+    }
+
+    /// `Drone_FellOutMap` 0x13a878's SP body (MPSettings+388 == 0): `NDrone2_Enable(0)` and
+    /// `obj+0xFE |= 1` [M 0x13a878:8-15] — the same fold as the DeleteMe 0xb4 arm.
+    pub fn fell_out_map(&mut self) {
+        self.present = false;
+        self.enabled = false;
+        self.delete_me = true;
+    }
+}
+
+/// `DroneVision_ProcessDroneSight` 0x176a28:146-178's round robin over `n` list slots: from the
+/// slot after `cursor` (`DAT_00299094`, the last drone visited [M :151-162]), at most `n` visits
+/// (`DAT_00298e1c`, the list count [M :48/:149]); EVERY visited slot becomes the cursor [M :153];
+/// `visit(slot)` runs the drone's sight (0 when it is not eligible or casts no ray) and returns
+/// its probe casts, which bump `counter` (`DAT_00299092`); after a visit the walk stops when the
+/// counter has passed `snapshot` (the ushort taken before the visibility loop, [M :71/:175]).
+/// Returns the new cursor.
+pub fn sight_round_robin(cursor: usize, n: usize, snapshot: u16, counter: &mut u16, mut visit: impl FnMut(usize) -> u16) -> usize {
+    let mut cur = cursor;
+    for k in 0..n {
+        if k > 0 && snapshot < *counter { break; }
+        let slot = (cursor + 1 + k) % n;
+        cur = slot;
+        *counter = counter.wrapping_add(visit(slot));
+    }
+    cur
 }
 
 /// The cursor walk of `DroneVision_SeekOpponentLOS` 0x175cb8:49-72 (SP) over `ray(index into
@@ -12533,6 +12729,22 @@ pub fn hazard_link_flag(weapon_type: u16, stuck: bool) -> Option<(f32, u16)> {
 /// animated guards].
 const DRONE_SPHERE_R: f32 = 1.05;
 
+/// The built guard hurt sphere per model. The game's guards take `Control_BuildWorldSph`'s
+/// flags2&8 PARENT path (every 05 guard reads obj+0xFA = 0x0008 [L ee_start_05.bin]), which
+/// inherits the character system's per-model sphere — NOT the raw glist radius (the glists read
+/// 1.152-1.188 [D 07000005.BIN main meshes 0x020002da/0x02000a01/0x0200040d], ~0.88-0.92× the
+/// live values). Measured live values (fresh boot, the awake guards):
+/// skin 0x0500002e → 1.0640, 0x0500002f → 1.0190, 0x05000030 → 1.0640 (one instance 1.0508,
+/// the pose-dependent spread). Models without a measurement keep the 1.05 fold [S unverified].
+fn guard_sphere_r(skin: u32) -> f32 {
+    match skin {
+        0x0500_002e => 1.064,
+        0x0500_002f => 1.019,
+        0x0500_0030 => 1.064,
+        _ => DRONE_SPHERE_R,
+    }
+}
+
 /// `NDrone2_DefaultInit`'s per-level close-in after the sight class [M 0x14b300:423-460]: the
 /// engage range (and on 07000011 the combat sight) by the anim set +0xDA, the draws already spent.
 fn level_sight(level: u32, anim_set: u16, f0: f32, fc: f32) -> (f32, f32) {
@@ -12697,6 +12909,14 @@ pub fn in_view(eye: V3, pos: V3, slack: f32, sides: &[V3; 4]) -> bool {
 /// renderer draws straight through: 0700000a's patroller behind the lounge window (z −4.71 pane,
 /// mat 0x10) walked his whole loop undrawn, sliding with no gait in full view. The rays now skip
 /// glass too (`segment_sight_clear`).
+/// The drawn gate's frustum leg alone: `Vision_InView` over the object's world sphere [M
+/// View_AddObjects 0x1e62d8:34-35 / View_AddForcedObjects 0x1e5fb8:89-92] — the first half of
+/// `visible_to`, without the room stand-in rays.
+pub fn in_view_of(player: &Player, pos: V3) -> bool {
+    let a2 = player.aim[0] * player.aim[0] + player.aim[1] * player.aim[1] + player.aim[2] * player.aim[2];
+    a2 > 1e-12 && in_view(player.eye, pos, DRONE_DRAWN_SLACK, &frustum_sides(player.aim))
+}
+
 pub fn visible_to(player: &Player, world: &CollisionWorld, pos: V3, head: V3) -> bool {
     let a2 = player.aim[0] * player.aim[0] + player.aim[1] * player.aim[1] + player.aim[2] * player.aim[2];
     if !(a2 > 1e-12) { return false; }
@@ -13686,7 +13906,8 @@ pub struct Drones {
     /// 0x143144-0x14314c bail; `DroneVision_ProcessDroneSight` 0x176a28:71/:177; the
     /// snapshot-compare caches `Drone_IsCoverNodeUsable` 0x1386d8:175/:190 and
     /// `DroneSpawner_Control` 0x137e68:216/:224). The port increments it at the team-2 pick's
-    /// probes; the other consumers are not instrumented yet (open in the report).
+    /// probes and at the guard-sight probes (the round robin's and the close-range visibility
+    /// probe); the other consumers are not instrumented yet.
     pub los_probes: u16,
     /// `Locks_Init` 0x1b0548's keypad-code table — the game generates it during boot with the
     /// SHARED stream (`Rand_Random` per digit, warmup `GameState+0x34·10 & 0x1ff` [M 0x1b0548]),
@@ -15534,7 +15755,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // game's own Collide_SphereIntersect list skips obj+0xF0 & 0x20 for DISABLED guards is an
         // open live check).
         let drones: Vec<(usize, V3, f32)> = self.list.iter().enumerate()
-            .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, DRONE_SPHERE_R)).collect();
+            .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, x.sph_r)).collect();
         // copter-hitdata-damage: the parts' world spheres for the case-0 sweep (the SP part
         // targets, the same volumes the bullet pass tests).
         let copter_parts: Vec<(usize, Vec<(V3, f32)>)> = self.copters.iter().enumerate()
@@ -18148,7 +18369,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // …, 0xc0)` hits [M 0x17c518:67-68]; the port passes its live lists, the falloff
             // gate inside `propagate` picks the reached ones.
             let drones_t: Vec<(usize, V3, f32)> = self.list.iter().enumerate()
-                .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, DRONE_SPHERE_R)).collect();
+                .filter(|(_, x)| x.present && !x.corpse).map(|(i, x)| (i, x.pos, x.sph_r)).collect();
             let hits = crate::explode::propagate(pos, radius, damage, owner,
                 &crate::explode::Targets { drones: &drones_t, player: self.player_sph, breaks: &breaks_t,
                     destroys: &destroys, copters: &[] });
@@ -19230,6 +19451,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // glass-breach-guards-4: the root-motion flag is this tick's movement-source mark — clear
         // it before anything moves (root_motion sets it when it applies a delta).
         for dr in self.list.iter_mut() { dr.scripted_move = false; }
+        // explode-guard-spheres: the per-guard hurt sphere builds on the guard's first movement
+        // (the game's `Control_BuildWorldSph` runs from the movement handler 0x1336f8 per move;
+        // a fresh-boot guard that never moved carries obj+0x8C = 0.0 with centre == pos [L
+        // ee_start_05.bin]). XZ-only: height settles alone don't move the game's sphere [L same
+        // snapshot — the dormant guards' centre == pos in all axes].
+        for dr in self.list.iter_mut() {
+            if dr.present && !dr.corpse && dr.sph_r == 0.0
+                && (dr.pos[0] != dr.sph_home[0] || dr.pos[2] != dr.sph_home[2]) {
+                dr.sph_r = guard_sphere_r(dr.skin);
+            }
+        }
         let _prof_all = crate::prof::scope("drones.tick (total)");
         let prof_pre = crate::prof::scope("drones: shared passes");
         self.frame += 1;
@@ -20195,6 +20427,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `Drone_InitComms`' shared passes — `ProcessDroneSight`, `FindAlertedDrones`, the 0x97 check,
         // `HandleSoundAlerts`/`Sound_ZeroAlertness` and the ch 0x96 alarm rebroadcast — sit inside the
         // `NPCGlobals != 0` block [M 0x139520:124-284]: a cut-scene that fired event 5 freezes all of these.
+        // The drones' own cels: `control_movement_object_handler` 0x1336f8 runs
+        // `control_handle_cel_change` 0x133288 for every moved dynamic object every tick (outside
+        // the NPCGlobals block); a relink miss is `Drone_FellOutMap` (the drone is removed). A world
+        // without cels (the unit-test harness) links nothing and removes nobody.
+        if d.world.has_scope() {
+            for dr in &mut self.list {
+                if dr.present && !dr.corpse && dr.relink_cel(d.world) { dr.fell_out_map(); }
+            }
+        }
         if self.npc_enabled {
         // Visibility every tick for drones with vision on; line of sight for one drone per tick (round robin).
         // [M 0x176a28 first loop] the visibility value is computed ONLY while the 0x10000 vision bit
@@ -20203,37 +20444,68 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // vision-off guard has no sight pipeline at all, whatever its +0x50c alertness.
         // Inside the 15-frame wait the whole pass is skipped: the sight flags and the +0x270/+0x274
         // counters keep their values [M 0x176a28:56-57].
-        if vision_open {
-            for dr in &mut self.list { dr.visibility = if dr.present && !dr.corpse && dr.vision_on { dr.visibility() } else { 0.0 }; if dr.visibility < 0.7 { dr.los = false; } }
-        }
-        let ln = if vision_open { self.llist.len() } else { 0 };
         let view_bones = self.bond_view_bones;
-        for k in 0..ln {
-            let slot = (self.los_cursor + 1 + k) % ln.max(1);
-            let idx = self.llist[slot];
-            let (before, rest) = self.list.split_at_mut(idx);
-            let (dr, after) = rest.split_first_mut().unwrap();
-            if dr.visibility >= 0.7 {
-                // The other drones' bodies on the sight ray (`seek_opponent_los`): a disabled
-                // object (+0xF0 & 0x20) is not picked [M 0x1eae80:72-82].
-                let body = |a: V3, b: V3| before.iter().chain(after.iter())
-                    .any(|o| o.present && o.enabled && !o.corpse && drone_ray_part(o, d, a, b).is_some());
-                // The drone-vision LOS: the game's `DroneVision_LineOfSightToObject` 0x178390 /
-                // `CanSeeObjectFrom` 0x176f18 / `CanSeePosition` 0x178438 all ray-test through
-                // `AINetwork_TestRayCels` 0x15ab78 (the segment against every boundary of the
-                // crossed AI cels, walls first [M 0x15ab78]); the port swaps that for the static
-                // collision world's line of sight — the same deviation the nav `move_test`
-                // documents [S].
-                dr.los = dr.seek_opponent_los(d, player, view_bones.as_ref(), &body);
-                // `SeekOpponentLOS` 0x175cb8:68-82 — on a successful sight tick the through-wall
-                // flag refreshes: aiming (`+0x22`, the port's `aims_torso()` = the DoTracking
-                // 0x1479d8:49 fold) → the `GunThroughWall` 0x178520 ray, else cleared. Ticks without
-                // sight keep the last value (the game's early-outs leave +0x1e alone).
-                dr.gun_through_wall = dr.los && dr.aims_torso() && dr.gun_through_wall(d);
-                self.los_cursor = slot;
-                break;
+        // The sight probes' cel walk reads the drones' own linked cels (obj+0x20, relinked above).
+        if vision_open {
+        }
+        // The probe counter snapshot sits BEFORE the visibility loop [M 0x176a28:71 `uVar3 =
+        // DAT_00299092` right after FindAlertedDrones]: a close-range visibility ray that cast
+        // ends the round robin after its first drone.
+        let snapshot = self.los_probes;
+        // `ProcessDroneSight`'s eligibility [M 0x176a28:76-84/:155-166 + :167-168]: the drone alive
+        // (0x600 clear, 0x100 set, health > 0, not class 0x11, not dying), the vision bit 0x10000
+        // and the opponent pointer +0x170.
+        let eligible = |x: &Drone| x.present && !x.corpse && x.vision_on && x.opp_ptr();
+        if vision_open {
+            for i in 0..self.list.len() {
+                let (before, rest) = self.list.split_at_mut(i);
+                let (dr, after) = rest.split_first_mut().unwrap();
+                // A dead or vision-off drone keeps no sight: the third loop's lost arm takes it [M
+                // 0x176a28:191-200]; the port drops its stale sight bit here (the game's bit 2 waits
+                // for the next SeekOpponentLOS) [S].
+                if !eligible(dr) { if !(dr.present && !dr.corpse && dr.vision_on) { dr.visibility = 0.0; dr.los = false; } continue; }
+                // `DroneVision_OpponentVisibility` 0x175af0:24-33: under 2 u with a sight range the
+                // head-bone probe runs first; seen = 1.0, else the range/cone formula.
+                // Team 2's opponent is a drone (`opp_drone`), and the port's sight probe is Bond's:
+                // its close probe (against that drone) is not modelled [S].
+                let close = dr.team != 2 && dr.dist < 2.0 && dr.sight_range > 0.0 && {
+                    let body = |a: V3, b: V3| before.iter().chain(after.iter())
+                        .any(|o| o.present && o.enabled && !o.corpse && drone_ray_part(o, d, a, b).is_some());
+                    let (seen, c) = dr.sight_probe(d, player, view_bones.as_ref(), &body, VIEW_BONE_HEAD);
+                    if c { self.los_probes = self.los_probes.wrapping_add(1); } // [M 0x176f18:94]
+                    seen
+                };
+                let v = if close { 1.0 } else { dr.visibility_formula() };
+                // A value under 0.7 is stored as 0 [M 0x176a28:107-117].
+                dr.visibility = if v >= 0.7 { v } else { 0.0 };
             }
         }
+        let ln = if vision_open { self.llist.len() } else { 0 };
+        // The round robin [M 0x176a28:146-178]: from the drone after the last one visited
+        // (`DAT_00299094`), at most the list's count of visits; EVERY visited drone becomes the
+        // cursor; an eligible one runs `SeekOpponentLOS`, which clears the sight bit and returns
+        // under 0.7 visibility without a ray [M 0x175cb8:20-28]; the walk stops once the probe
+        // counter moved [M :175].
+        let (list, llist) = (&mut self.list, &self.llist);
+        self.los_cursor = sight_round_robin(self.los_cursor, ln, snapshot, &mut self.los_probes, |slot| {
+            let idx = llist[slot];
+            let (before, rest) = list.split_at_mut(idx);
+            let (dr, after) = rest.split_first_mut().unwrap();
+            if !eligible(dr) { return 0; }
+            if dr.visibility < 0.7 { dr.los = false; return 0; }
+            // The other drones' bodies on the sight ray (`seek_opponent_los`): a disabled
+            // object (+0xF0 & 0x20) is not picked [M 0x1eae80:72-82].
+            let body = |a: V3, b: V3| before.iter().chain(after.iter())
+                .any(|o| o.present && o.enabled && !o.corpse && drone_ray_part(o, d, a, b).is_some());
+            let (seen, casts) = dr.seek_opponent_los(d, player, view_bones.as_ref(), &body);
+            dr.los = seen;
+            // `SeekOpponentLOS` 0x175cb8:68-82 — on a successful sight tick the through-wall
+            // flag refreshes: aiming (`+0x22`, the port's `aims_torso()` = the DoTracking
+            // 0x1479d8:49 fold) → the `GunThroughWall` 0x178520 ray, else cleared. Ticks without
+            // sight keep the last value (the game's early-outs leave +0x1e alone).
+            dr.gun_through_wall = dr.los && dr.aims_torso() && dr.gun_through_wall(d);
+            casts
+        });
         for dr in &mut self.list {
             // standins-drone-922: the opponent pointer [M 0x1424e0:100-120] — Bond alive = the
             // pointer set; stamped for every drone every tick, before the LOS gate.
@@ -21233,6 +21505,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             parts.extend(drones.worldobjs.dynobjs.iter()
                 .filter(|o| o.flags & 0x20 == 0 && o.shape != 0 && !inside(o))
                 .map(|o| (0x1000_0000_0000 | o.slot as u64 | if o.flags & 0x10 != 0 { crate::world::SIGHT_THROUGH_PART } else { 0 }, o.shape, o.matrix)));
+            // The gated hurt planes whose gate channel reads HIGH (level-05-basin-floor-3, the
+            // round-2 open item): `Hurt_Create` 0x17e870's tail sets obj+0xF0 bit 0x20 when the
+            // gate reads low at create (the channels start zeroed — every gated volume loads
+            // disabled), `Hurt_Update` 0x17e5d0:26-37 maintains that bit EVERY tick from the gate
+            // channel (low → set, high → cleared — the same read the round-2 report pinned), and
+            // the pick skips bit-0x20 objects [M `Collide_Pick` 0x1eb320:140's `& 0x20` arm;
+            // `Collide_PickObj` 0x1eae80:26-30 drops obj+0xF0 & 0x20]. So a gated plane is SOLID
+            // exactly while its channel reads high: the tick the channel rises the plane enters
+            // the pick, the tick it falls the plane leaves it. The port holds those planes in the
+            // SAME per-tick set_dynamic set (the doors' precedent): the scene posts the enabled
+            // planes' `(id, shape key, obj+0x90 pose)` from the hurt pass (whose gate maintenance
+            // runs first — scene.rs's hurt loop), and this extend carries them into the rebuild;
+            // a channel flip changes the parts list, the rebuild takes or drops the plane that
+            // tick. The static fold (level.rs) keeps the gated volumes out, so there is no
+            // double-solidity. Id: bit 46 + the hurt list index (stable — the list never
+            // reorders); the shape is the hurt's own glist under the world's shape key.
+            parts.extend(d.world.hurt_parts());
             parts
         };
         // Script triggers (`Trigger_TouchOnce` / `Trigger_Touch` made by `Script_CreateEntity`): one per live entity,
@@ -21889,6 +22178,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             dr.channel_on = self.channels.on(dr.switch_channel as u32);
             dr.wait_channel_on = dr.wait_channel != 0 && self.channels.on(dr.wait_channel as u32);
             { let _p = crate::prof::scope("drone: visible_to (drawn ray)"); dr.drawn = dr.enabled && visible_to(player, d.world, dr.pos, dr.head()); }
+            // The frustum leg alone (`Vision_InView` [M View_AddObjects 0x1e62d8:34-35]) for the
+            // no-physics arm's obj+0xFC read — see `frustum_grace`.
+            let in_frustum = dr.enabled && in_view_of(player, dr.pos);
             dr.links_used = std::mem::take(&mut self.used);
             dr.link_flags = std::mem::take(&mut self.link_flags);
             dr.locked_door_nodes = std::mem::take(&mut self.locked_door_nodes);
@@ -22429,7 +22721,19 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // pitch [-1.0, +0.6]; speed 0.14 alerted (`DCVars+0x50c > 0.66`) else 0.07 (0x1472c8). Both angles positive up.
             if dr.talk_track && frame > dr.talk_track_until { dr.talk_track = false; } // the window expired — the game's resume re-targets fresh [M 0x1472c8:69-70]
             let aiming = dr.anim.class == 2 && dr.aims_torso();
-            if dr.talk_track {
+            // corpse-fire: the aiming half of the same law. `NDrone2_ControlSTANDARD`
+            // 0x1490f0:136-140 returns at the AI bit off (DoTracking(0), no control tail), and
+            // 0x1490f0:164-175 sends an ENABLED guard at `health (+0xac) <= 0` to
+            // `NDrone2_DoTracking(0)` too — a dying guard stops aiming (the head angles ease
+            // back, the same mode-0 fold the port's final arm models [M 0x1472c8]) while
+            // `DroneWeap_HandleFiring` still runs for him (the burst's own anim gates stop the
+            // shots). The port's tracking stop draws once (`Rand(10)`, 0x1472c8's stop), so the
+            // arm keeps the game's draw count.
+            if !dr.enabled || dr.health <= 0.0 {
+                if dr.tracking { let _ = rng.rand(10); dr.tracking = false; } // the stop draw (0x1472c8)
+                dr.head_yaw = rotate_to_bearing(dr.head_yaw, 0.0, 0.07, crate::trig::PI);
+                dr.head_pitch = rotate_to_bearing(dr.head_pitch, 0.0, 0.07, crate::trig::PI);
+            } else if dr.talk_track {
                 // The HeadTrackObj window: `DoHeadTrackingBehaviour` returns while `now <= +0x358`
                 // [M 0x147578:37-39] — the talk target (Bond, the `glb_players` stand-in) owns the
                 // head. The ease speed is model+0xe0 = 0.07 [M 0x14ada0:19-21] within
@@ -22488,7 +22792,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 dr.head_yaw = rotate_to_bearing(dr.head_yaw, 0.0, 0.07, crate::trig::PI);
                 dr.head_pitch = rotate_to_bearing(dr.head_pitch, 0.0, 0.07, crate::trig::PI);
             }
-            if !dr.corpse { let _pf = crate::prof::scope("drone: handle_firing"); let bs = { let lights = &mut self.lights; dr.handle_firing(d, rng, frame, player, quad, index, lights) }; if let Some(b) = bs.first().cloned() {
+            // corpse-fire: the game's AI-active gate. `NDrone2_ControlSTANDARD` 0x1490f0:136-140
+            // returns at `(+0x4F8 & 0x100) == 0` — DoTracking(0) and no control tail — so a
+            // guard whose AI bit is off never reaches `DroneWeap_HandleFiring` (0x1490f0:227)
+            // and never fires. The port's `enabled` is that bit [M drone.rs:2601]; the removal
+            // paths clear it with `present` (the corpse fade 0x13a5a8's port fold at :5124/:5145,
+            // the spawner cleanup 0x137fbc-0x1380b4's port fold at :14833). Without the gate a
+            // spawner-removed (present=false, enabled=false, corpse=false) guard kept firing —
+            // the 11 stairwell ghosts shot Bond from removed slots for ~270 ticks (hp −72/−75
+            // shooters [L the sprint-5 tree's runs, reproduced on 0a9d39435+its world.rs]).
+            // The game's disabled guard draws nothing in this pass, so the gate keeps the Rand
+            // count at the game's own.
+            if dr.enabled && !dr.corpse { let _pf = crate::prof::scope("drone: handle_firing"); let bs = { let lights = &mut self.lights; dr.handle_firing(d, rng, frame, player, quad, index, lights) }; if let Some(b) = bs.first().cloned() {
                 // `DroneWeap_FireWeapon` 0x178f68:264 → `Bullet_init_casing`: the guard's shell eject.
                 // The basis is the game's guard arm of `Bullet_init_casing_ex` 0x12f678:102-114: the
                 // weapon datum's bone world matrix (datum base+2 when the skin carries the eject port,
@@ -22814,9 +23129,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // `NDrone2_Collision` 0x140e90:170-172: the feet sphere (r 0.4, mask drone+0xba4) is pushed
             // out of the AI-network boundaries — `AINetwork_GetBoundsPushVectorForSphere` 0x157bd0
             // walking the cel's BLINK chain with `AINetwork_HitBoundry` 0x157780 per wall [M], gated
-            // on drone+0x4f8 < 0 [M :169] (the port's `bounded` flag stands in for that gate).
+            // on drone+0x4f8 < 0 [M :169] (the port's `bounded` flag stands in for that gate). The
+            // chain is the drone's OWN linked cel's (obj+0x20, disasm 0x1410fc `lw a1,0x20(s3)`) and
+            // the sphere centre is obj+0x30 itself (0x1410f8 `addiu a0,s3,0x30`), not the feet.
             if dr.enabled && dr.bounded && d.nav.bounds {
-                let p = d.nav.push_out(dr.feet(), 0.4);
+                // A world without cels (the test harness's one-cel model) files every wall
+                // under its single cel.
+                let p = if d.world.has_scope() {
+                    let cel = if dr.obj_cel_pos.is_some() { dr.obj_cel } else { d.world.find_cel(dr.pos) };
+                    d.nav.push_out_in_cel(dr.pos, 0.4, cel)
+                } else {
+                    d.nav.push_out(dr.pos, 0.4)
+                };
                 dr.pos[0] = p[0];
                 dr.pos[2] = p[2];
             }
@@ -22825,6 +23149,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // AFTER this drone's message walk so the dead states read last tick's value — the game's
             // X_{K+1} = drawn_K ? 2 : max(X_K − 1, 0).
             dr.drawn_grace = if dr.drawn { 2 } else { dr.drawn_grace.saturating_sub(1) };
+            dr.frustum_grace = if in_frustum { 2 } else { dr.frustum_grace.saturating_sub(1) };
         }
         // subtitles-do-spoken: `Sound_UpdateSounds` 0x1dda70 fires `Sound_DoSubtitle` on every
         // node's start with +0x52 set [M :95-98]. `Sound_ReqestPlaySfx` 0x1dcc68 sets it: always for
@@ -24241,6 +24566,32 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
 mod tests {
     use super::*;
 
+    /// `ProcessDroneSight` 0x176a28:146-178's round robin: every visited slot moves the cursor
+    /// (a full lap without a cast ends where it began), the walk ends after the first visit that
+    /// cast, a cast before the walk (the close-range visibility probe after the :71 snapshot)
+    /// leaves exactly one visit, and the ushort compare does not stop on a wrapped counter.
+    #[test]
+    fn sight_round_robin_law() {
+        let mut seen = Vec::new();
+        let mut c = 5u16;
+        // No casts: a full lap from slot 2, the cursor back on 1 [M :153 every visit writes it].
+        let cur = sight_round_robin(1, 4, 5, &mut c, |s| { seen.push(s); 0 });
+        assert_eq!((cur, seen.clone(), c), (1, vec![2, 3, 0, 1], 5));
+        // Slot 3 casts: the walk stops there and it is the cursor.
+        seen.clear();
+        let cur = sight_round_robin(1, 4, 5, &mut c, |s| { seen.push(s); (s == 3) as u16 });
+        assert_eq!((cur, seen.clone(), c), (3, vec![2, 3], 6));
+        // A probe already cast after the snapshot: one visit only [M :175 tested after the visit].
+        seen.clear();
+        let cur = sight_round_robin(3, 4, 5, &mut c, |s| { seen.push(s); 0 });
+        assert_eq!((cur, seen.clone()), (0, vec![0]));
+        // The wrap: 0xffff + 1 = 0 is not above the snapshot, the walk goes on [M ushort compare].
+        let mut w = 0xffffu16;
+        seen.clear();
+        let cur = sight_round_robin(0, 3, 0xffff, &mut w, |s| { seen.push(s); (s == 1) as u16 });
+        assert_eq!((cur, seen.clone(), w), (0, vec![1, 2, 0], 0));
+    }
+
     /// `Drone_InitComms`'s scan law [M 0x139520:161-201] against hand-built states. The dead-guard
     /// skip is the part the rejected s/markers-drone-c round dropped: a SetAsDead corpse (0x200
     /// [M 0x14a2f0:9]) or a PostDroneControl health-dead guard (0x400 [M 0x14aff8:9-12]) — even
@@ -24718,6 +25069,7 @@ mod tests {
             body_glow: None,
             gun_through_wall: false,
             view_bone: 0,
+            obj_cel: None, obj_cel_pos: None,
             dist_to_player: [100000.0; 4],
             props: [0; 3], alert_props: None, sight_range: 0.0, half_fov: 0.0, engage_range: 0.0, combat_range: 0.0,
             accuracy: 0, aggression: 0, reaction: 0, recover: 0, los: false, seen: false, ever_seen: false, ever_seen_3c: false, bond_alive: true, visibility: 0.0,
@@ -24727,7 +25079,8 @@ mod tests {
             goal_arrival: 2.0, // the DefaultInit seed [M 0x14b300:579]
             ai_points: Vec::new(), alarm_switches: Vec::new(),
             explosive_pos: pos, explosive_run_dist: 0.0,
-            anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), blend_out: false, started: false, early_end: false, len_cap: None },
+            anim: Animator { danim: 0, script: None, time: 0, state: 0, class: 0, call: None, reached: false, call_from: 0, blend_wait: 0, ftime: 0.0, speed: 1.0, variant: 0, once: false, held: false, follow_on: 0, outgoing: Vec::new(), blend_out: false, started: false, early_end: false, len_cap: None,
+                info_word: 0 },
             firing: false, burst_done: false, burst: 0, next_shot: 0, last_shot: 0, clip: 0, clip_max: 0,
             grenade_weapon: 0x35, grenade_count: 0, pending_grenade: false, shots: Vec::new(),
             // 952: the raw accuracy roll per shot, parallel to `shots`.
@@ -24763,6 +25116,7 @@ mod tests {
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
             drawn_grace: 2, // `control_init_object` 0x134630:16
+            frustum_grace: 2, // the same store [M 0x134630:16]
             mission_wait_channel: 0,
             abseil_land_latch: false,
             mission_path_dist: 0.0,
@@ -24838,6 +25192,10 @@ mod tests {
             spawn_stats_params: None,
             objhit_latch: false,
             objhit_dir: [0.0; 3],
+            // the test drone starts placed and never moves: sphere 0.0 (the game's never-moved
+            // guard law [L ee_start_05.bin]).
+            sph_r: 0.0,
+            sph_home: pos,
         };
         dr
     }
@@ -24971,6 +25329,65 @@ mod tests {
         dr2.collision_handler(&w2);
         assert!(dr2.in_air && !dr2.on_surface, "in the air");
     }
+
+    #[test]
+    fn the_anim_no_physics_bit_arms_in_the_games_order() {
+        // `NDrone2_DoCollision` 0x149ec8:30-32 + `NDrone2_DoGravity` 0x141e58:36-38: the +0x570
+        // bit 1 returns "no physics" only with EVERY force arm clear, in the game's order —
+        // voice 0xC skips the whole inner test (always collide), voice 0x13 returns 1, the
+        // +0x538 replaced script returns 1, a player within 2.0 returns 1
+        // (`DroneFunc_NearPlayerCollision` 0x14b190), obj+0xfc drawn returns 1.
+        let mut dr = drone_at([0.0, 5.0, 0.0]);
+        dr.anim.info_word = 2; // bit 1 set, nothing else
+        dr.anim.blend_out = false;
+        dr.drawn = false;
+        dr.frustum_grace = 0;
+        dr.dist_to_player = [100000.0; 4];
+        assert!(dr.no_physics_now(), "flagged, undrawn, far, voice 0 → no physics");
+        // The voice 0xC arm: the game skips the inner test entirely (collide regardless) [M 0x149ec8:16-33].
+        dr.voice_type = 0xC;
+        assert!(!dr.no_physics_now(), "voice 0xC force-collides before the bit is read");
+        // The voice 0x13 arm: return 1 [M 0x149ec8:17-19].
+        dr.voice_type = 0x13;
+        assert!(!dr.no_physics_now(), "voice 0x13 force-collides");
+        dr.voice_type = 0;
+        // The +0x538 replaced-script arm [M 0x149ec8:20-22].
+        dr.anim.blend_out = true;
+        assert!(!dr.no_physics_now(), "a replaced script force-collides");
+        dr.anim.blend_out = false;
+        // The near-player arm [M 0x14b190: the < 2.0 slot read].
+        dr.dist_to_player = [1.5, 100000.0, 100000.0, 100000.0];
+        assert!(!dr.no_physics_now(), "a player within 2.0 force-collides");
+        dr.dist_to_player = [100000.0; 4];
+        // The drawn arm (obj+0xfc != 0) [M 0x149ec8:27-29]: the COUNTER — 2 when drawn, 1 on the
+        // next control pass [M 0x1336f8:242-246] — both force-collide; `frustum_grace` is the
+        // frustum-leg reading of it, not the ray-based `drawn`.
+        dr.frustum_grace = 2;
+        assert!(!dr.no_physics_now(), "a drawn guard force-collides");
+        dr.frustum_grace = 1;
+        assert!(!dr.no_physics_now(), "drawn last frame (counter 1) still force-collides");
+        dr.frustum_grace = 0;
+        dr.drawn = true;
+        assert!(dr.no_physics_now(), "the ray stand-in is not the arm's input");
+        dr.drawn = false;
+        // Bit 1 clear: no physics-off even undrawn and far.
+        dr.anim.info_word = 0;
+        assert!(!dr.no_physics_now(), "the bit clear → the default fall-through collides");
+        // The handler honours the gate: a flagged undrawn far drone skips the whole live pass
+        // (no on-surface probe — `in_air`/`on_surface` forced false, position untouched).
+        dr.anim.info_word = 2;
+        let w = CollisionWorld::from_triangles(vec![
+            [[-5.0, 4.0, -5.0], [5.0, 4.0, 5.0], [5.0, 4.0, -5.0]],
+            [[-5.0, 4.0, -5.0], [-5.0, 4.0, 5.0], [5.0, 4.0, 5.0]],
+        ]);
+        let y0 = dr.pos[1];
+        dr.velocity[1] = -5.0;
+        dr.collision_handler(&w);
+        assert!((dr.pos[1] - y0).abs() < 1e-9, "no gravity while flagged");
+        assert!(!dr.on_surface, "the probe never ran");
+        // DoGravity 0 → the handler zeroes the fall speed +0x484 [M 0x140968:154-156].
+        assert_eq!(dr.velocity[1], 0.0, "the flagged guard's fall speed is zeroed");
+    }
 }
 
 #[cfg(test)]
@@ -25066,7 +25483,7 @@ mod foley_tests {
     #[test]
     fn bot_pain_pools_agree_with_bot_sound_effect() {
         let rec = crate::mp::bots::INITIAL_BOT_RECORDS[0].clone();
-        let brain = crate::mp::bots::BotBrain::bot_init(&rec, 4, [0.0, 1.6, 0.0], 0.0);
+        let brain = crate::mp::bots::BotBrain::bot_init(&rec, 4, [0.0, 1.6, 0.0], 0.0, 0, &mut crate::drone::Rng::new(1));
         for alt in [false, true] {
             let (b, n) = Drones::pain_pool(alt, false);
             assert_eq!(brain.bot_sound_effect(0x1f, alt), Some((b as u16, n)),

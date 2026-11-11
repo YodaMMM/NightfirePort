@@ -16,6 +16,17 @@ use crate::walker::Wp;
 /// from the leg end (d 2.0), and a kill there means the burst never exists.
 pub static PRE_CLEAR_SOUTH_CORRIDOR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// OPT-IN (set only by the 07000013 chain's d3 real-damage walk, checked at the one labeled leg
+/// below — no other caller sets it, so every other walk is byte-identical): at "the north lobby 2"
+/// leg end, stand and take the alive team-1 guards within 12 u that have an exposed part, nearest
+/// first (up to three). The guards pursue to 1.0-2.0 [M 0x152548:174-181] and the leg resumed into
+/// the pursuit after the fight's own cap left them alive — #6 (rifle 0x18, hp 30) walked Bond down
+/// and unloaded 4 × −14.0 at d 2.5-2.9, the TooClose bonus [M DroneFiring_TooClose_Damage], for
+/// the tick-5914 death (level-13-warm-chain-margin ledger [L]). The pre-clear takes them from the
+/// leg end at d 4.6-8.2 before the north lobby 3 leg, the civ-unignore-2 law (the pre-clears
+/// stand at the leg ends and take the posted guards BEFORE the legs walk into them).
+pub static PRE_CLEAR_NORTH_LOBBY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// OPT-IN (set only by the 07000011 chain's Agent and 00 Agent walks; the 07000012 and 07000013
 /// walks never set it, so their legs are unchanged): "the east wing" leg aims at the corridor's
 /// west side (x 23.2; the wall stops Bond near x 24.0). The office civilian #24 stands at
@@ -308,7 +319,32 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
         (-18.75, 15.75, "the north lobby west end"), (-10.75, 15.75, "the north lobby"), (-8.00, 17.00, "the north lobby 2"),
         (-4.00, 17.00, "the north lobby 3"), (-1.00, 16.00, "the north lobby east"),
     ];
-    for &(x, z, label) in legs { w.walk_to(Wp::new(x, 1.1, z).r(1.0), label); }
+    for &(x, z, label) in legs {
+        w.walk_to(Wp::new(x, 1.1, z).r(1.0), label);
+        // warm-chain-margin-3 (the level-13-warm-chain-margin-2 lever, ported to master): the
+        // flag-gated north-lobby pre-clear — only the 07000013 chain's d3 real-damage walk sets
+        // PRE_CLEAR_NORTH_LOBBY, so every other caller walks the legs byte-identical.
+        if label == "the north lobby 2" && PRE_CLEAR_NORTH_LOBBY.load(std::sync::atomic::Ordering::Relaxed) {
+            for _ in 0..3 {
+                let (di, d) = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let stand = sim.bond.pos;
+                    let Some(di) = sim.drones.list.iter().enumerate().filter(|(_, d)| {
+                        d.present && !d.corpse && d.health > 0.0 && d.team == 1
+                            && crate::walker::dxz(d.pos, stand) < 12.0
+                    })
+                    .min_by(|a, b| crate::walker::dxz(a.1.pos, stand).total_cmp(&crate::walker::dxz(b.1.pos, stand)))
+                    .map(|(i, _)| i)
+                    else { break };
+                    if crate::walker::DamageLog::exposed_part(sim, di).is_none() { break }
+                    (di, crate::walker::dxz(sim.drones.list[di].pos, stand))
+                };
+                let killed = w.stand_and_fire(di, 600);
+                eprintln!("[012] the north lobby pre-clear: guard #{di} at d {d:.1} killed {killed}");
+                if !killed { break }
+            }
+        }
+    }
     w.walk_to(Wp::new(2.25, 1.1, 15.25).r(0.6), "the lift doors");
     w.walk_to(Wp::new(2.2, 0.7, 12.55).r(0.4), "into the shaft entrance");
     {

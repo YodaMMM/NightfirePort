@@ -50,6 +50,138 @@ fn route_order(w: &Walker, guards: &[usize]) -> Vec<usize> {
     g
 }
 
+/// los-mask-repins-01: the ch-0xF slab ambush + the mouth fight, extracted so the walk can run
+/// it EARLY (before the follow rounds: the contact crosses the slab on his lead — the pop is
+/// Bond-touch only [L the d2 run: his ~t9500 crossing popped nothing, Bond's t10284 crossing
+/// popped g4/12/17 onto him at 5.4 u] — and again late, where it becomes a no-op once ch 0xF
+/// is on. Self-contained: saves/restores the fight bands it sets.
+fn run_slab_ambush(w: &mut Walker, ci: usize, difficulty: u32) {
+// The ch-0xF ambush is a PLACED pocket pair, not a door route — [L the trio dump on this
+// tree] #12 (0x5000036 SMG) stands DISABLED at (-31.31, 6.34, 11.51) (the stairwell-head
+// pocket) and #17 (0x5000039 SMG) at (-29.08, 6.34, -0.01) (the south lower hall) from the
+// hall AND on (state 0x1, enabled false — disabled objects are dropped from bullet
+// collision [M Collide_PickObj 0x1eae80:82 +0xF0 & 0x20], so they cannot be thinned
+// early), and the corridor's walkable band at the slab's x is z >= 13.4 only [L the
+// scratch sight probe: the z 11.8-13.0 hip rays all hit] — the TOUCH slab out 0xF mask 0x8
+// (player) x -26.13..-24.73, z 13.25..16.84 [D placement dump] covers the full width, so
+// BOND's crossing pops them on any line. The old sweep crossed it MID-NAV (the approach to
+// guard 3), ate the pop volley at 2.6 u while still under nav (3×2.1 at t7094-7106 [L the
+// run's dmg trace]) and the next leg walked the 0.4-u corner death. The player crosses a
+// known ambush line READY: step in, and the tick ch 0xF rises step back out — the poppers'
+// 10-tick reaction [M DroneFunc_ReactionTime 0x14ac60:15-24, the 07000001 arm] leaves that
+// window — then fight from the mouth at 6.5+ u, outside the TooClose doubling [M
+// Drone_ModBulletDamage 0x139f50]. From the mouth #17's post is EXPOSED [L the sight
+// probe: every eye ray from (-23..-24.5, 13.5..16.5) to his torso clears] while #12's
+// pocket is walled [L the same probe: no clear ray from any of those stands] — his own
+// step-out under the mouth fire (he advanced (-31.3,11.5) -> (-30.6,13.4) during the run's
+// mouth fight [L the dmg trace]) is the kill window, so a guard parked west of x -27 is
+// fought SHOOT-ONLY: no approach walk ever takes Bond back into the pocket corner.
+if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) { return; }
+    eprintln!("[01] the ch-0xF ambush: crossing the slab deliberately from ({:?})",
+        w.scene.sim.as_ref().unwrap().bond.pos);
+    let prev_keep = w.keep_off;
+    let prev_back = w.dmg.back_off;
+    // Agent: the fight radius 4.2 (the 6.5 stand-off backed Bond out of the opening and
+    // pinned the fight at 7.7, where nothing in the pocket can be answered) and no flank into
+    // the pocket west of x -27.
+    let band = if difficulty >= 2 { 4.2 } else { 6.5 };
+    let prev_hold = w.flank_hold_x;
+    if difficulty >= 2 { w.flank_hold_x = Some(-27.0); }
+    w.keep_off = Some(band);
+    w.dmg.back_off = Some(band);
+    // 00 Agent: the pop fight at x1.2 pain is long; a player tops up the gun before he trips it
+    // (the fight opened on clip 2 / spare 14 and ran dry against the 24-health captain).
+    if difficulty >= 3 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.gun.clip + sim.gun.spare < 30 { let _ = sim; w.resupply("pre-ambush ammo"); }
+    }
+    w.walk_nav_to([-24.0, 6.4, 14.8], "the ambush stance (east of the ch-0xF slab)", 0.8);
+    w.walk_nav_to([-25.7, 6.4, 14.8], "cross the ch-0xF slab (the ambush pops)", 0.25);
+    for _ in 0..120 {
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) { break; }
+        w.wait(1);
+    }
+    // Out FIRST (the pop volley's reaction window), then the mouth fight.
+    w.walk_nav_to([-22.3, 6.4, 14.8], "back off the popped ambush", 1.0);
+    for ambush_round in 0..5 {
+        let near: Vec<usize> = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            (0..sim.drones.list.len()).filter(|&i| {
+                let d = &sim.drones.list[i];
+                i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                    && ((2..0x47).contains(&d.weapon) || (0x6a..=0x71).contains(&d.weapon))
+                    && walker::dxz(d.pos, bp) < 14.0
+            }).collect()
+        };
+        if near.is_empty() { break; }
+        eprintln!("[01] ambush round {ambush_round}: fighting {near:?} from the mouth");
+        // Agent: the exposed guards first (a walled one spends the mouth window while the
+        // others shoot free).
+        let order = if difficulty >= 2 {
+            let (mut seen, walled): (Vec<usize>, Vec<usize>) = route_order(&w, &near).into_iter()
+                .partition(|&g| walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), g));
+            seen.extend(walled);
+            seen
+        } else { route_order(&w, &near) };
+        for g2 in order {
+            let (gpos, los) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[g2];
+                if d.corpse || d.health <= 0.0 { continue; }
+                let bp = sim.bond.pos;
+                let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                (d.pos, sim.world.segment(eye, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none())
+            };
+            // The pocket rule: a guard parked west of x -27 (the stairwell-head pocket) is
+            // NEVER approached — the shoot loop alone, from the mouth. Hunters in the open
+            // corridor get the normal approach to 8 (outside the ×2 band).
+            if gpos[0] > -27.0 && walker::dxz(gpos, w.scene.sim.as_ref().unwrap().bond.pos) > 9.0 {
+                w.walk_nav_to(gpos, &format!("ambush approach guard {g2}"), 8.0);
+            }
+            // Agent (with health to spare): a walled pocket guard is answered from the corridor band's west end, where
+            // the pocket opens at 3.7-4.5 (outside the x2 band), for one bounded window.
+            if difficulty >= 2 && !los && gpos[0] < -27.0 && w.scene.sim.as_ref().unwrap().drones.health.health >= 40.0 {
+                w.walk_nav_to([-26.5, 6.4, 14.6], &format!("the band edge for guard {g2}"), 0.8);
+                // Whoever the band edge exposes Bond to comes first (a later popper the round's
+                // list did not hold shot free while Bond waited on the walled guard).
+                let seen: Vec<usize> = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let bp = sim.bond.pos;
+                    (0..sim.drones.list.len()).filter(|&i| {
+                        let d = &sim.drones.list[i];
+                        i != ci && i != g2 && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                            && walker::dxz(d.pos, bp) < 14.0 && walker::DamageLog::visible(sim, i)
+                    }).collect()
+                };
+                for g3 in seen {
+                    w.shoot_bounded(g3, &format!("band-edge exposed guard {g3}"), 2400);
+                    if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                }
+                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                w.shoot_bounded(g2, &format!("ambush guard {g2} from the band edge"), 2400);
+                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                continue;
+            }
+            if !w.shoot(g2, &format!("ambush guard {g2}")) {
+                if w.resupply("ambush ammo") { w.shoot(g2, &format!("ambush guard {g2} retry")); }
+            }
+            if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+        }
+        if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+        // A pocket guard that will not step out yet: hold the mouth (the gunshot hearing
+        // keeps drawing him) and give the fight machinery the next window.
+        let still = w.scene.sim.as_ref().unwrap().drones.list.iter().enumerate().any(|(i, d)| {
+            i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                && d.pos[0] < -27.0 && walker::dxz(d.pos, w.scene.sim.as_ref().unwrap().bond.pos) < 14.0
+        });
+        if still { w.wait(300); }
+    }
+    w.keep_off = prev_keep;
+    w.dmg.back_off = prev_back;
+    w.flank_hold_x = prev_hold;
+}
+
 /// The south-lower-hall far field (≈(-7.9, 6.3, -0.4)) covering the hall door mouth from
 /// ~19.7-19.8 u: the d3 ledger has TWO of them — #9 (skin 0x500003a) AND #19 (skin
 /// 0x5000039) — so the filter is the POSITION box, not one skin (the west-end 0x5000039
@@ -247,14 +379,6 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // 6041/1163). Holding the line keeps the target in the gun ray; the walk's own legs
         // keep their 6.5 personal space (`keep_off`).
         if difficulty == 2 { w.dmg.back_off = None; }
-        // los-mask-01-walk (d2, the masked tree): the return-fire pick answers the guard who is
-        // actually draining Bond, not just the nearest visible one — the masked vision engages
-        // guards the strict pre-mask ray blocked (the 0xa27 drops [M 0x1eae80:70-87 +
-        // 0x1ebaa8:300-319]), so the hall crossfire is real now: the d2 masked run's ledger has
-        // 50.4 in 12 hits from the post-holding #7 while the walk fought nearer guards [L the
-        // 8977 death run]. The hurting-first pick is the 07000008 Agent sisters' proven lever
-        // (common/damage_log.rs), gated here to this walk.
-        if difficulty == 2 { w.dmg.hurting_first = true; }
     }
     // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
     // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
@@ -1028,6 +1152,16 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
         }
     }
+    // los-mask-repins-01 (d2-gated, the d1 timeline stays byte-exact): the game's sight moved
+    // the west-end fights onto the contact. On the d2 tree the lead crossed the ch-0xF slab
+    // ~t9500 while Bond was still closing (the pop is Bond-touch only — his crossing popped
+    // nothing [L the run's alarm trace]), g3 (ch-0x26 waiter, west room) walked to the
+    // stairwell head and chipped him from t9710, and Bond's own t10284 slab crossing popped
+    // g4/12/17 onto him at 5.4 u — dead at t10814, ch 0x60, the escort fail restarts the
+    // level. A player clears the ambush line BEFORE escorting through it: the slab crossing +
+    // mouth fight + the ch-0x26 waiters as they show, all while the contact still waits east
+    // (the hall's live holders keep his hide on).
+    run_slab_ambush(&mut w, ci, difficulty);
     let mut settled = cpos;
     // The contact's park from the previous round: two rounds inside ~1 unit with no guard to
     // clear means the lead machine wedged on geometry — Bond walks PAST him toward the plate
@@ -1070,6 +1204,36 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 }
                 if !w.shoot(g2, &format!("the contact r{round} own-radius guard {g2}")) {
                     if w.resupply("own-radius ammo") { w.shoot(g2, &format!("the contact r{round} own-radius guard {g2} retry")); }
+                }
+                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+            }
+        }
+        // los-mask-repins-01 (d2-gated): the lead walks INTO the west end ahead of Bond, and a
+        // guard he woke on the way (the ch-0x26 pair; g3's walk to the stairwell head) is
+        // answered from the contact's side too, not only within 14 of Bond — on the d2 tree g3
+        // reached the head and opened fire on the contact (2.2 + the 22.5 head hit at t9710-
+        // t11007 shapes) while Bond's 900-tick leg was still running [L the run's health trace].
+        if difficulty >= 2 {
+            let near_c: Vec<usize> = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let cp = sim.drones.list[ci].pos;
+                (0..sim.drones.list.len()).filter(|&i| {
+                    let d = &sim.drones.list[i];
+                    i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                        && ((2..0x47).contains(&d.weapon) || (0x6a..=0x71).contains(&d.weapon))
+                        && walker::dxz(d.pos, cp) < 14.0
+                }).collect()
+            };
+            for g2 in route_order(&w, &near_c) {
+                let gpos = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
+                let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
+                // The pocket rule (the ambush block): a guard parked west of x -27 is shot
+                // from where Bond stands — the approach never walks into the pocket corner.
+                if walker::dxz(gpos, bpos) > 9.0 && gpos[0] > -27.0 {
+                    w.walk_nav_to(gpos, &format!("the contact r{round} contact-radius approach guard {g2}"), 8.0);
+                }
+                if !w.shoot(g2, &format!("the contact r{round} contact-radius guard {g2}")) {
+                    if w.resupply("contact-radius ammo") { w.shoot(g2, &format!("the contact r{round} contact-radius guard {g2} retry")); }
                 }
                 if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
             }
@@ -1304,194 +1468,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // Bond walks the last leg onto the plate (the contact stalled at the stairwell head;
     // the AND cannot fire with him outside the volume).
     drop(sim);
-    // The ch-0xF ambush is a PLACED pocket pair, not a door route — [L the trio dump on this
-    // tree] #12 (0x5000036 SMG) stands DISABLED at (-31.31, 6.34, 11.51) (the stairwell-head
-    // pocket) and #17 (0x5000039 SMG) at (-29.08, 6.34, -0.01) (the south lower hall) from the
-    // hall AND on (state 0x1, enabled false — disabled objects are dropped from bullet
-    // collision [M Collide_PickObj 0x1eae80:82 +0xF0 & 0x20], so they cannot be thinned
-    // early), and the corridor's walkable band at the slab's x is z >= 13.4 only [L the
-    // scratch sight probe: the z 11.8-13.0 hip rays all hit] — the TOUCH slab out 0xF mask 0x8
-    // (player) x -26.13..-24.73, z 13.25..16.84 [D placement dump] covers the full width, so
-    // BOND's crossing pops them on any line. The old sweep crossed it MID-NAV (the approach to
-    // guard 3), ate the pop volley at 2.6 u while still under nav (3×2.1 at t7094-7106 [L the
-    // run's dmg trace]) and the next leg walked the 0.4-u corner death. The player crosses a
-    // known ambush line READY: step in, and the tick ch 0xF rises step back out — the poppers'
-    // 10-tick reaction [M DroneFunc_ReactionTime 0x14ac60:15-24, the 07000001 arm] leaves that
-    // window — then fight from the mouth at 6.5+ u, outside the TooClose doubling [M
-    // Drone_ModBulletDamage 0x139f50]. From the mouth #17's post is EXPOSED [L the sight
-    // probe: every eye ray from (-23..-24.5, 13.5..16.5) to his torso clears] while #12's
-    // pocket is walled [L the same probe: no clear ray from any of those stands] — his own
-    // step-out under the mouth fire (he advanced (-31.3,11.5) -> (-30.6,13.4) during the run's
-    // mouth fight [L the dmg trace]) is the kill window, so a guard parked west of x -27 is
-    // fought SHOOT-ONLY: no approach walk ever takes Bond back into the pocket corner.
-    if difficulty >= 2 && !w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
-        eprintln!("[01] the ch-0xF ambush: crossing the slab deliberately from ({:?})",
-            w.scene.sim.as_ref().unwrap().bond.pos);
-        let prev_keep = w.keep_off;
-        let prev_back = w.dmg.back_off;
-        // Agent: the fight radius 4.2 (the 6.5 stand-off backed Bond out of the opening and
-        // pinned the fight at 7.7, where nothing in the pocket can be answered) and no flank into
-        // the pocket west of x -27.
-        let band = if difficulty >= 2 { 4.2 } else { 6.5 };
-        let prev_hold = w.flank_hold_x;
-        if difficulty >= 2 { w.flank_hold_x = Some(-27.0); }
-        w.keep_off = Some(band);
-        w.dmg.back_off = Some(band);
-        // 00 Agent: the pop fight at x1.2 pain is long; a player tops up the gun before he trips it
-        // (the fight opened on clip 2 / spare 14 and ran dry against the 24-health captain).
-        if difficulty >= 3 {
-            let sim = w.scene.sim.as_ref().unwrap();
-            if sim.gun.clip + sim.gun.spare < 30 { let _ = sim; w.resupply("pre-ambush ammo"); }
-        }
-        w.walk_nav_to([-24.0, 6.4, 14.8], "the ambush stance (east of the ch-0xF slab)", 0.8);
-        w.walk_nav_to([-25.7, 6.4, 14.8], "cross the ch-0xF slab (the ambush pops)", 0.25);
-        for _ in 0..120 {
-            if w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) { break; }
-            w.wait(1);
-        }
-        // Out FIRST (the pop volley's reaction window), then the mouth fight.
-        w.walk_nav_to([-22.3, 6.4, 14.8], "back off the popped ambush", 1.0);
-        for ambush_round in 0..5 {
-            let near: Vec<usize> = {
-                let sim = w.scene.sim.as_ref().unwrap();
-                let bp = sim.bond.pos;
-                (0..sim.drones.list.len()).filter(|&i| {
-                    let d = &sim.drones.list[i];
-                    i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
-                        && ((2..0x47).contains(&d.weapon) || (0x6a..=0x71).contains(&d.weapon))
-                        && walker::dxz(d.pos, bp) < 14.0
-                }).collect()
-            };
-            if near.is_empty() { break; }
-            eprintln!("[01] ambush round {ambush_round}: fighting {near:?} from the mouth");
-            // los-mask-01-walk (d2, the masked tree): a guard actually draining Bond jumps the
-            // queue — the return-fire pick's own hurting-first window (the 240-frame damage
-            // law, common/damage_log.rs). Measured [L the 8977 death run]: the pocket #4 walked
-            // into the stairwell head during round 0's unexposed #2 hold and bled the last 11.1
-            // (6 hits frames 8770-9006) while the round never re-picked him.
-            let hurt_of = |w: &Walker, i: usize| -> f32 {
-                let sim = w.scene.sim.as_ref().unwrap();
-                let now = sim.drones.frame;
-                sim.drones.player_hits.iter().rev()
-                    .take_while(|h| now.saturating_sub(h.0) <= 240)
-                    .filter(|h| h.1 == i)
-                    .map(|h| h.2).sum::<f32>()
-            };
-            let mut order = if difficulty >= 2 {
-                let (mut seen, walled): (Vec<usize>, Vec<usize>) = route_order(&w, &near).into_iter()
-                    .partition(|&g| walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), g));
-                seen.extend(walled);
-                seen
-            } else { route_order(&w, &near) };
-            if difficulty >= 2 {
-                order.sort_by(|&a, &b| hurt_of(&w, b).total_cmp(&hurt_of(&w, a)));
-            }
-            for g2 in order {
-                let (gpos, los) = {
-                    let sim = w.scene.sim.as_ref().unwrap();
-                    let d = &sim.drones.list[g2];
-                    if d.corpse || d.health <= 0.0 { continue; }
-                    let bp = sim.bond.pos;
-                    let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
-                    (d.pos, sim.world.segment(eye, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none())
-                };
-                // The pocket rule: a guard parked west of x -27 (the stairwell-head pocket) is
-                // NEVER approached — the shoot loop alone, from the mouth. Hunters in the open
-                // corridor get the normal approach to 8 (outside the ×2 band).
-                if gpos[0] > -27.0 && walker::dxz(gpos, w.scene.sim.as_ref().unwrap().bond.pos) > 9.0 {
-                    w.walk_nav_to(gpos, &format!("ambush approach guard {g2}"), 8.0);
-                }
-                // Agent (with health to spare): a walled pocket guard is answered from the corridor band's west end, where
-                // the pocket opens at 3.7-4.5 (outside the x2 band), for one bounded window.
-                // los-mask-01-walk: the window also opens at ANY health when the walled guard is
-                // the one draining Bond — standing put under his fire is the measured death (the
-                // 8977 run: health 11.1, #4 hurting from the head, the band-edge branch skipped
-                // on the 40 gate and Bond bled out at the mouth) [L]. The window is bounded
-                // (2400) and its seen-first sweep answers whoever the edge exposes.
-                if difficulty >= 2 && !los && gpos[0] < -27.0
-                    && (w.scene.sim.as_ref().unwrap().drones.health.health >= 40.0 || hurt_of(&w, g2) > 0.0) {
-                    w.walk_nav_to([-26.5, 6.4, 14.6], &format!("the band edge for guard {g2}"), 0.8);
-                    // Whoever the band edge exposes Bond to comes first (a later popper the round's
-                    // list did not hold shot free while Bond waited on the walled guard).
-                    let seen: Vec<usize> = {
-                        let sim = w.scene.sim.as_ref().unwrap();
-                        let bp = sim.bond.pos;
-                        (0..sim.drones.list.len()).filter(|&i| {
-                            let d = &sim.drones.list[i];
-                            i != ci && i != g2 && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
-                                && walker::dxz(d.pos, bp) < 14.0 && walker::DamageLog::visible(sim, i)
-                        }).collect()
-                    };
-                    for g3 in seen {
-                        w.shoot_bounded(g3, &format!("band-edge exposed guard {g3}"), 2400);
-                        if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
-                    }
-                    if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
-                    w.shoot_bounded(g2, &format!("ambush guard {g2} from the band edge"), 2400);
-                    if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
-                    continue;
-                }
-                // los-mask-01-walk (d2): each round fight is BOUNDED so the round loop regains
-                // control and re-collects `near` — the masked tree's guards walk into firing
-                // positions mid-fight (#4 walked the corridor onto the stairwell head DURING
-                // round 0's unexposed #2 hold and opened up at frame 8770 [L the 8977 run]),
-                // and an open-ended hold on an unexposed pocket guard spends the window while
-                // they shoot free. The cap 600: an exposed 12-hp guard dies in 1-3 head shots
-                // (the head box drops a 12-health guard in ONE hit [M NDrone2_HitDamage
-                // 0x145558 head ×100]; prefer_head on), so a live cap means the target is not
-                // answerable from here — give the loop back and re-pick.
-                let killed2 = if difficulty >= 2 {
-                    w.shoot_bounded(g2, &format!("ambush guard {g2}"), 600)
-                } else {
-                    w.shoot(g2, &format!("ambush guard {g2}"))
-                };
-                if !killed2 {
-                    // The resupply leg is a NAV walk: under a live crossfire it is the walk off
-                    // a cliff (the 8977 run died on it — cap expired at ~8950, health 5.85, the
-                    // resupply leg ate the last hit at frame 9006 [L]). A player does not walk
-                    // to a box while a guard is shooting him: skip the detour while anyone is
-                    // draining Bond (the next round re-picks at once instead) — the head-shot
-                    // economics need 1-3 rounds, and clip 5 spare 0 held that at the 8977 run.
-                    let draining = difficulty >= 2 && {
-                        let sim = w.scene.sim.as_ref().unwrap();
-                        let now = sim.drones.frame;
-                        sim.drones.player_hits.iter().rev()
-                            .take_while(|h| now.saturating_sub(h.0) <= 240)
-                            .any(|h| sim.drones.list.get(h.1).map_or(false, |d| d.team == 1 && !d.corpse && d.health > 0.0))
-                    };
-                    if !draining {
-                        if w.resupply("ambush ammo") {
-                            if difficulty >= 2 { w.shoot_bounded(g2, &format!("ambush guard {g2} retry"), 600); }
-                            else { w.shoot(g2, &format!("ambush guard {g2} retry")); }
-                        }
-                    }
-                }
-                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
-            }
-            if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
-            // A pocket guard that will not step out yet: hold the mouth (the gunshot hearing
-            // keeps drawing him) and give the fight machinery the next window.
-            // los-mask-01-walk (d2): NOT while someone is draining Bond — the wait's 300 ticks
-            // under the masked pocket fire were the death's last 300 (the 8977 run: the hold
-            // sat 300 ticks at health 5.85 while #4 hit every ~40-90 [L]); when anyone is
-            // draining, the next round re-collects `near` at once and answers him.
-            let draining = difficulty >= 2 && {
-                let sim = w.scene.sim.as_ref().unwrap();
-                let now = sim.drones.frame;
-                sim.drones.player_hits.iter().rev()
-                    .take_while(|h| now.saturating_sub(h.0) <= 240)
-                    .any(|h| sim.drones.list.get(h.1).map_or(false, |d| d.team == 1 && !d.corpse && d.health > 0.0))
-            };
-            let still = w.scene.sim.as_ref().unwrap().drones.list.iter().enumerate().any(|(i, d)| {
-                i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
-                    && d.pos[0] < -27.0 && walker::dxz(d.pos, w.scene.sim.as_ref().unwrap().bond.pos) < 14.0
-            });
-            if still && !draining { w.wait(300); }
-        }
-        w.keep_off = prev_keep;
-        w.dmg.back_off = prev_back;
-        w.flank_hold_x = prev_hold;
-    }
+    run_slab_ambush(&mut w, ci, difficulty);
     {
         // The player clears his OWN radius before the stairwell descent: the route guards the
         // contact woke (the west-corridor SMG pair 12/17 among them) sit 2-6 u off the final
@@ -1559,19 +1536,8 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 if walker::dxz(gpos, bpos) > 9.0 && gpos[0] > -27.0 {
                     w.walk_nav_to(gpos, &format!("pre-stairwell approach guard {g2}"), 8.0);
                 }
-                // los-mask-01-walk (d2): bounded like the ambush rounds — the sweep's re-runs
-                // only mean anything if a stalled fight gives the loop back (the masked tree's
-                // guards keep walking into positions mid-hold [L the 8977 run]).
-                let killed3 = if difficulty >= 2 {
-                    w.shoot_bounded(g2, &format!("pre-stairwell guard {g2}"), 900)
-                } else {
-                    w.shoot(g2, &format!("pre-stairwell guard {g2}"))
-                };
-                if !killed3 {
-                    if w.resupply("pre-stairwell ammo") {
-                        if difficulty >= 2 { w.shoot_bounded(g2, &format!("pre-stairwell guard {g2} retry"), 900); }
-                        else { w.shoot(g2, &format!("pre-stairwell guard {g2} retry")); }
-                    }
+                if !w.shoot(g2, &format!("pre-stairwell guard {g2}")) {
+                    if w.resupply("pre-stairwell ammo") { w.shoot(g2, &format!("pre-stairwell guard {g2} retry")); }
                 }
                 if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
             }
@@ -2269,6 +2235,87 @@ fn following_mayhew_down_completes_the_level() {
             drop(sim);
             if killed || dead { cleared.insert(g); }
         }
+    }
+    // los-mask-repins-01: the game's sight moved the west-end fights onto the waiting contact.
+    // On the merged tree the ch-0x26 waiters g2 (the balcony over the west stairwell) and g3
+    // (the west room, 24 hp SMG) start when west door #2 (-14.1, 5.3, 13.1) opens — the
+    // pre-clear's own resupply close-leg opened it [L the run: "opening door" then both wake
+    // on the same tick, t10452] — and g3 walked to the stairwell head, aimed down the hall and
+    // killed the waiting contact from 31 u (2.2 at t11007, the 22.5 head hit at t11085 →
+    // ch 0x60, the escort fail) while the 20 u pre-clear band never listed him (28 u away and
+    // still WAIT_SWITCH — enabled false — when it ran; the port's bullets cannot pick a
+    // not-enabled drone [M drone.rs the bullet pick's dr.enabled gate]). g15 (sw_ch 0x12 — a
+    // trio death channel) hunts east to (-10.5, 19.2), 13 u off the hidden contact. A player
+    // escorting answers the corridor BEFORE leading Mayhew through it:
+    //   1. the own-radius answer (g15 at Bond's feet when the pre-clear ends),
+    //   2. the slab ambush + mouth fight (the pop is Bond-touch only [L the d2 run: the
+    //      contact's crossing popped nothing]) — the ch-0x26 pair and the pocket as they show,
+    //   3. the head sweep (the balcony's #2 over the stairwell head),
+    // all before the follow begins — the trail then walks a clean corridor.
+    {
+        let prev_back_off = w.dmg.back_off;
+        w.dmg.back_off = Some(6.5);
+        let prev_flank_hold = w.flank_hold_x;
+        w.flank_hold_x = Some(-27.0);
+        for sweep in 0..3 {
+            let near: Vec<usize> = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| {
+                    let d = &sim.drones.list[i];
+                    i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                        && ((2..0x47).contains(&d.weapon) || (0x6a..=0x71).contains(&d.weapon))
+                        && walker::dxz(d.pos, bp) < 12.0
+                }).collect()
+            };
+            if near.is_empty() { break; }
+            let (seen, walled): (Vec<usize>, Vec<usize>) = route_order(&w, &near).into_iter()
+                .partition(|&g| walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), g));
+            for g2 in seen.into_iter().chain(walled) {
+                if !w.shoot(g2, &format!("west-end answer guard {g2}")) {
+                    if w.resupply("west-end answer ammo") { w.shoot(g2, &format!("west-end answer guard {g2} retry")); }
+                }
+                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+            }
+            if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+        }
+        w.dmg.back_off = prev_back_off;
+        w.flank_hold_x = prev_flank_hold;
+    }
+    run_slab_ambush(&mut w, ci, 2);
+    {
+        // The head sweep: the balcony skin-0x36 (g2) parks over the stairwell head and the
+        // ch-0x26 wake leaves him there; the trail would walk the contact under his sight.
+        // Same answer shape as the pre-stairwell block (shoot-only for the x < -27 pocket).
+        let prev_back_off = w.dmg.back_off;
+        w.dmg.back_off = Some(6.5);
+        let prev_flank_hold = w.flank_hold_x;
+        w.flank_hold_x = Some(-27.0);
+        w.walk_nav_to([-30.8, 6.4, 13.1], "the head sweep (before the follow)", 1.2);
+        for sweep in 0..3 {
+            let near: Vec<usize> = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| {
+                    let d = &sim.drones.list[i];
+                    i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                        && ((2..0x47).contains(&d.weapon) || (0x6a..=0x71).contains(&d.weapon))
+                        && walker::dxz(d.pos, bp) < 12.0
+                }).collect()
+            };
+            if near.is_empty() { break; }
+            let (seen, walled): (Vec<usize>, Vec<usize>) = route_order(&w, &near).into_iter()
+                .partition(|&g| walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), g));
+            for g2 in seen.into_iter().chain(walled) {
+                if !w.shoot(g2, &format!("head sweep guard {g2}")) {
+                    if w.resupply("head sweep ammo") { w.shoot(g2, &format!("head sweep guard {g2} retry")); }
+                }
+                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+            }
+            if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+        }
+        w.dmg.back_off = prev_back_off;
+        w.flank_hold_x = prev_flank_hold;
     }
     // Follow the contact out of the hall to the stairwell head (the main test's follow loop, but
     // stopping AT the head — the FOLLOW begins at the descent).

@@ -1340,6 +1340,65 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker, difficulty: u32) {
                 eprintln!("[05r] {name}: +{ticks_on_leg} ticks bond {:?}", p);
                 leg += 1;
                 ticks_on_leg = 0;
+                // THE STAIR-TOP PAIR'S PRE-EMPTIVE ANSWER (the round-2 report's lever, run from
+                // the report's "stair base" — the covered staircase's own climb). The solid hurt
+                // planes shifted this walk's return-fire rolls from the pre-fold tree (the world's
+                // bullet surface changed; the route itself is tick-identical to 9557 and Bond
+                // takes no hurt damage on it [L the round-2 fold-on/off diff]) and the shift lands
+                // at the stair top: the two 0x16 riflemen at (34.5-35.2, 43.8-44.0, −73.3..−73.4)
+                // — drones #12/#13, skin 0x500002f — shoot the scripted legs point-blank, 35 hits
+                // for 100.0 kills the stand at tick 9575 where the pre-fold rolls survived at 15.3
+                // (31 hits) [L the red run's death print]. Both tactic levers are mute in scripted
+                // legs (back_off reads in stand_and_fire's crowd arm; body_block_response's arms
+                // never run there), so the player's answer comes BEFORE the legs: from "the stairs
+                // 28" stand (28, 41.4, −71.6) the pair is 7.7 u up-stairs — OUTSIDE the guards'
+                // 3.0 auto-hit band [M DroneWeap_DoBulletAccuracy 0x179740:113-115 `fVar9 < 3.0`
+                // zeroes the aim] — with the sight line up the covered staircase's south edge, and
+                // each carries hp 10 [L the death print]: the stand kills each before the walk
+                // enters their reach. (A stand from the route's own end measured DEAD: the pair
+                // races the 60+-tick weapon draw at d 2.2 — Bond died mid-cycle at 9572 [L the
+                // first lever run].) The in-hand weapon is the moat grapple's Q-CLAW (0x50, clip 0
+                // spare 0 [L the same run's kill-trace]) — cycle to a firearm first; the clip is
+                // reloaded after so the later fights never open on a drained one (the a05g rule).
+                // The capped stand bounds any wedge (the a05n lesson). The flag: the plain
+                // real-damage variant's opt-in only — the plain walked test and the sisters keep
+                // the proven master legs (each variant stores its own gate value first, so a
+                // death panic above cannot leak the lever into the next test).
+                if name == "the stairs 28" && REAL_DAMAGE_BACKOFF.load(std::sync::atomic::Ordering::Relaxed) {
+                    let armed = w.switch_to_armed("the stair-top pre-emptive");
+                    eprintln!("[05d] the pre-emptive's gun: armed {armed} weapon {:#x} clip {} spare {} bond {:?}",
+                        w.scene.sim.as_ref().unwrap().gun.weapon, w.scene.sim.as_ref().unwrap().gun.clip,
+                        w.scene.sim.as_ref().unwrap().gun.spare, w.scene.sim.as_ref().unwrap().bond.pos);
+                    for (at, label) in [
+                        ([35.2f32, 44.0, -73.4], "the stair-top sentry #13"),
+                        ([34.5, 43.8, -73.3], "the stair-top sentry #12"),
+                    ] {
+                        let guard = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
+                            d.team == 1 && d.present && !d.corpse && d.health > 0.0
+                                && ((d.pos[0] - at[0]).powi(2) + (d.pos[1] - at[1]).powi(2) + (d.pos[2] - at[2]).powi(2)).sqrt() < 3.0
+                        });
+                        if let Some(di) = guard {
+                            // shoot_point, NOT shoot_bounded: the sentries are STATIONARY at their
+                            // post (their pos is fixed across every run [L the death print + both
+                            // lever runs]) and shoot_bounded's blocked-aim flanks walked Bond OFF
+                            // the covered staircase (the second lever run: bond ended at
+                            // (29.5, 38.6, −76.9), off the deck, and the resumed legs hung on a
+                            // never-lifting script disable [L the same run]). The aim is the
+                            // bullet-true exposed box first, the chest (+0.6) fallback — the
+                            // gallery-rifleman stand's proven shape.
+                            let g = w.scene.sim.as_ref().unwrap().drones.list[di].pos;
+                            let chest = [g[0], g[1] + 0.6, g[2]];
+                            let aim = w.exposed_aim(di).unwrap_or(chest);
+                            let killed = w.shoot_point(aim, label, move |sim: &nf_view::scene::Sim| {
+                                sim.drones.list.get(di).is_none_or(|d| d.corpse || d.health <= 0.0)
+                            });
+                            eprintln!("[05d] {label} pre-emptive: killed {killed} at tick {} bond {:?} health {:.1}",
+                                w.total_ticks, w.scene.sim.as_ref().unwrap().bond.pos,
+                                w.scene.sim.as_ref().unwrap().drones.health.health);
+                        }
+                    }
+                    w.reload_full();
+                }
                 continue;
             }
             let desired = (at[0] - p[0]).atan2(at[2] - p[2]);
@@ -1725,9 +1784,28 @@ fn the_door_band_exit_chains_to_07000006_walked_at(difficulty: u32) {
 /// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
 /// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
 /// walk completes on the port's own damage.
+///
+/// The variant opts into the file's own pre-emptive lever (REAL_DAMAGE_BACKOFF below):
+/// level-05-basin-floor-2 measured the solid hurt planes changing the world's bullet-impact
+/// surface, which shifts this walk's return-fire rolls from the pre-fold tree — the route is
+/// tick-identical to 9557 (every leg position and tick count equal [L the fold-on/off diff]),
+/// Bond never touches a hurt plane on it (`other 0.0` in both runs), and the shift lands at
+/// the stair-top pair #12/#13 (d 1.8-2.2): 35 hits for 100.0 kills the stand-in-place
+/// tactic at 9575 where the pre-fold rolls survived at 15.3 (31 hits) [L both runs]. The
+/// game's answer to a point-blank pair is the player's own gun BEFORE the legs — the
+/// pre-emptive stands at the cable route's end (the d >= 3 sniper arms' shape), inside the
+/// 3.0 auto-hit band [M DroneWeap_DoBulletAccuracy 0x179740:113-115]. The plain (top-up)
+/// walked test keeps the master tactic.
+static REAL_DAMAGE_BACKOFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[test]
 fn the_door_band_exit_chains_to_07000006_walked_real_damage() {
+    // The explicit store at entry (not only the plain variant's set): a death PANIC above skips
+    // this static's restore and would leak the lever into the sisters that run later in the same
+    // binary — each variant pins its own gate value first.
+    REAL_DAMAGE_BACKOFF.store(true, std::sync::atomic::Ordering::Relaxed);
     walker::with_real_damage(the_door_band_exit_chains_to_07000006_walked);
+    REAL_DAMAGE_BACKOFF.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty): the same walked
@@ -1742,7 +1820,10 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage() {
 fn the_door_band_exit_chains_to_07000006_walked_real_damage_agent() {
     // PLAIN with_real_damage — the exact shape the difficulty branch's run shipped and passed
     // (57.6 health [L docs/reports/real-health-agent-difficulty-01-07]); the 00 Agent tactics are
-    // gated d >= 3 in the body so this sister's RNG stays the proven one.
+    // gated d >= 3 in the body so this sister's RNG stays the proven one. The explicit store:
+    // the plain variant's death panic skips its restore — without this the leaked lever would
+    // run the pre-emptive stands here too.
+    REAL_DAMAGE_BACKOFF.store(false, std::sync::atomic::Ordering::Relaxed);
     walker::with_real_damage(|| the_door_band_exit_chains_to_07000006_walked_at(2))
 }
 
@@ -1760,7 +1841,9 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage_agent() {
 fn the_door_band_exit_chains_to_07000006_walked_real_damage_00agent() {
     // The fights HEAD-HUNT (see the Agent sister): at 00 Agent the guards' accuracy is 1.3 and
     // Bond's pain is unscaled, so every tick a fight stands is a tick of bursts — the head pick
-    // halves the stand time.
+    // halves the stand time. The explicit store: the plain variant's death panic skips its
+    // restore — without this the leaked lever would run the pre-emptive stands here too.
+    REAL_DAMAGE_BACKOFF.store(false, std::sync::atomic::Ordering::Relaxed);
     walker::with_real_damage_head_hunting(|| the_door_band_exit_chains_to_07000006_walked_at(3))
 }
 
@@ -1809,65 +1892,52 @@ fn the_hurt_volumes_census_and_their_guards() {
 }
 
 
-/// Bond's side of the hurt-volume pin (level-05-hurt-skip): the player pass has NO level skip
-/// [M Player_DealWithObjHit 0x194458 — the class-0x27 arm applies Hurt_GetDamage with no
-/// state/who/level gate], so Bond touching a 05 plane takes its 1000. The walked descent is
-/// the route; the plane is hurt #3 (lo (80.78,5.11,96.66) hi (168.38,5.11,144.68), who 0 [L
-/// the census run]) and the death record (−1000.0 from the world) is the pin.
-/// IGNORED with the measured route ledger (level-05-hurt-skip, 2026-11-09 [L the runs on the
-/// branch]): the gatehouse leg walks clean (98.6,26,106.5), the steering descent reaches the
-/// lower lane y 16.79 at (117.5,16.8,114.4) and stalls at (123.3,14.1,122.9) — the lip past
-/// y 14.1 refuses the steering walker every leg (6 legs identical); the raw run+jump drive
-/// from the gatehouse wedges earlier, at (105.6,25.1,114.6) (the courtyard wall eats the
-/// sidesteps the walk_to stuck handler has). NEXT LEVER: the level doc's own descent — the
-/// nav-lenient walk from the armour-pickup leg (59.65,33.57,86.11) that reached the valley
-/// floor (42.5,8.9,88.3) [D docs/levels/07000005.md line ~1555's probe note], then north into
-/// hurt #4 (z 96.66+) whose floor y 4.38 is the contact; or the jump drive FROM the lower
-/// lane with the stuck handler's sidesteps alive.
+/// The basin floor east of the lip (level-05-basin-floor). The port's world must carry the
+/// floor the game walks: hurt placement 331's own 2-tri plane at y 5.107 — [D the 07000005.bin
+/// block walk: the outdoor room's collision block ends at z 125.98 while the hurt plane spans
+/// x 80.78..168.38, z 96.66..144.68 (the whole basin band); the only floor-level geometry in
+/// the band is the hurt plane] — and the game's hurt objects ARE ground: `Hurt_Create` 0x17e870
+/// links the glist (`Control_SetGList` :44, collision block attached) to a room
+/// (`build_LinkToRoom` :46), so the player's movement capsule meets the plane as an object hit
+/// [M]. Before the fold the scoped AND flat down rays past the lip read none from 12 u up
+/// [L the ignored the_valley_plane_hurts_bond_walked ledger: "the ground rays 0.5-8 u past the
+/// lip read none BOTH scoped to Bond's own cel (Some(14)) and unscoped"]. The ray starts ABOVE
+/// the walk's lip stand (132.0,14.17,125.37) [L the ledger] and at four basin interiors; every
+/// hit must be hurt #3's plane (5.107, normal up), reached through Bond's own room cel (Some(14)
+/// — the measured room split, the ledger's THE ROOM SPLIT IS MEASURED).
 #[test]
-#[ignore = "005 hurt pin: the walked descent to hurt #3's plane stalls at the y-14.1 lip (6 legs identical, (123.3,14.1,122.9) [L the runs]); the run+jump drive wedges at (105.6,25.1,114.6); next lever: the doc's nav-lenient descent from the armour-pickup leg (59.65,33.57,86.11 -> the valley floor (42.5,8.9,88.3)), then north into hurt #4 (floor y 4.38)"]
-fn the_valley_plane_hurts_bond_walked() {
+fn the_basin_floor_exists_past_the_lip() {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
-    w.top_up_health = false;
-    w.wait(30);
-    w.walk_nav_to([98.6, 26.0, 106.5], "to the gatehouse (the proven truck-route leg)", 1.6);
-    let here = w.scene.sim.as_ref().unwrap().bond.pos;
-    eprintln!("[05-hurt] Bond at the gatehouse {:?} health {:.1}", here, w.scene.sim.as_ref().unwrap().drones.health.health);
-    assert!(walker::dxz(here, [98.6, 26.0, 106.5]) < 3.0, "the gatehouse leg really walked there");
-    // The steering walk east off the walkway's edge — the fall carries Bond into hurt #3's
-    // plane (the stick walk at [120, 4, 115]: past the edge, no nav — the walk_to steering
-    // drives the real stick toward the point, fall included). The stuck handler is lenient so
-    // the mid-air steering gives up cleanly.
-    let died = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // The slope's lip stalls the steering walker at y 14.1 [L the runs] — the run+jump
-        // drive (run_jump's input shape, no floor assert: the descent is the point) carries
-        // Bond over the lip into hurt #3's plane.
-        for t in 0..1500u32 {
-            let p = w.scene.sim.as_ref().unwrap().bond.pos;
-            if p[1] < 8.0 { break; }
-            let desired = (150.0f32 - p[0]).atan2(140.0 - p[2]);
-            let err = walker::wrap_pi(desired - w.scene.sim.as_ref().unwrap().bond.yaw);
-            let input = Input { turn: err.clamp(-0.07, 0.07), forward: 1.0, jump: t % 6 == 0, ..Default::default() };
-            w.tick(input, false);
-            if t % 150 == 0 {
-                let p1 = w.scene.sim.as_ref().unwrap().bond.pos;
-                eprintln!("[05-hurt] descent t{t}: bond at ({:.1},{:.1},{:.1}) health {:.1}",
-                    p1[0], p1[1], p1[2], w.scene.sim.as_ref().unwrap().drones.health.health);
-            }
-        }
-        for _ in 0..600 { w.tick(Default::default(), false); }
-    }));
-    let err = died.err();
-    let msg = err.as_ref().map(|e| e.downcast_ref::<String>().cloned()
-        .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default()).unwrap_or_default();
-    let landed = w.scene.sim.as_ref().unwrap().bond.pos;
-    eprintln!("[05-hurt] after the east walk: bond at {:?} health {:.1} panic {}",
-        landed, w.scene.sim.as_ref().unwrap().drones.health.health, !msg.is_empty());
-    if !msg.is_empty() { eprintln!("[05-hurt] {}", msg.lines().take(6).collect::<Vec<_>>().join(" | ")); }
-    assert!(!msg.is_empty(), "Bond must die in the plane (the walk returned alive at {landed:?})");
-    assert!(msg.contains("-1000.0"), "the death record must carry the hurt's 1000 damage: {msg}");
+    let scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
+    let sim = scene.sim.as_ref().unwrap();
+    for (tag, p) in [
+        ("past the lip", [132.0f32, 14.17, 125.37]),
+        ("basin north", [120.0, 10.0, 115.0]),
+        ("basin east", [150.0, 10.0, 130.0]),
+        ("basin south-east", [140.0, 10.0, 142.0]),
+        ("basin far east", [165.0, 10.0, 138.0]),
+    ] {
+        assert_eq!(sim.world.find_cel(p), Some(14), "{tag}: find_cel must be the outdoor room cel 14 [L the valley ledger]");
+        let down = [p[0], p[1] - 12.0, p[2]];
+        let (t, n) = sim.world.segment_hit_scoped(sim.world.find_cel(p), p, down)
+            .unwrap_or_else(|| panic!("{tag}: no scoped down-ray hit — the basin floor is absent from the port's world"));
+        let y = p[1] - t * 12.0;
+        assert!((y - 5.107).abs() < 0.01, "{tag}: the scoped down ray hit y {y}, not hurt #3's plane at 5.107 [D the 07000005.bin hurt plane]");
+        assert!(n[1] > 0.99, "{tag}: the hit normal must face up, got {:?}", n);
+    }
 }
+
+// `the_valley_plane_hurts_bond_walked` is DELETED (level-05-basin-floor-2). The live PCSX2
+// measurement (2026-11-10, a fresh boot): Bond placed just past the east lip at
+// (132.0, 14.4, 126.6) settles at y 14.15 — the PlungeTrigger plane is y 13.17 (#285 [D the
+// out-190 probe rows]) — and the game plays the plunge death and shows Mission Failed. The
+// game does NOT let Bond walk down from the lip into the basin, so this test's route (the
+// walk onto hurt #3's plane from the lip) is impossible in the game: the lip is the plunge
+// death's trigger, and the walk-off chain is pinned by
+// interactables_07000005_live::the_valley_walkoff_runs_the_plunge_death_nis_chain from the
+// walk-proven lip stand. The basin floor itself stays pinned by
+// the_basin_floor_exists_past_the_lip (the solid hurt planes are game-correct [M Hurt_Create
+// 0x17e870:51-57, Collide_Pick 0x1eb320:140]).
 
 /// The guards' side + the reach map (level-05-hurt-skip): the drone pass on 07000005 delivers
 /// NO hurt damage [M the 0x1401fc level skip]. The pin runs the game's own contact law over the

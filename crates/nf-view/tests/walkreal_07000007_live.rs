@@ -430,26 +430,30 @@ fn walk_the_party_start_to_finish_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_party_start_to_finish_at(3));
 }
 
-/// THE FIRST-ATTACK FAIL (first-attack-fail-reason): `DroneFunc_FirstAttack` 0x148010:95-98 — the
-/// first-attack tail reads `behaviour_util_getProperty(0x52, Drone+0x4d8)` and, when set, calls
-/// `DroneFunc_SetMissionFailReason(drone, 8)` = `Mission_SetFailLabel(0x4000033 "Cover Lost")` +
-/// `switch_channels[99] = 1` [M 0x13e560:19-31 — reason 8 rides the 2/4/5/7/8/10/0xb/0xc arm]
-/// → mission fail → end to 0x7000048 [M 0x182c60:45-57; docs/levels/07000007.md §6]. The disc's
-/// 0x52 carriers are ALL on this level, map47: exactly 38 drone placements (the [D] census,
-/// probe_prop52_census; props 0x1a/0x1b/0x18/0x19 all clear on every carrier — FirstSightState
-/// picks no state [M 0x147c48], so FirstAttack reaches its tail [M 0x148010:59-98]). The party
-/// guards react only to an ARMED+seen Bond [M CivilianGuard 0x1603a8 case 3; NearArmedPerson
-/// 0x1787c8:30-42], so the real path to the symptom is the player's own: walk to the hall
-/// walk-in plate #412 (ch 0x48 lifts the weapon lock [M 0x1a24c8:243-246]), CYCLE to the P2K
-/// (the player's own weapon cycle), then walk THROUGH the hall's south crowd — the carriers'
-/// own first attack (the FirstSightState tail or the scared-guest ENTER [M 0x15d3a0 case 1])
-/// must fail the mission with "Cover Lost" + ch 99 the tick FirstAttack's tail runs.
+/// THE REAL-PATH FIRST-ATTACK FAIL (level-07-library-guards-attack): the party fails when a guard
+/// is attacked first, reached with real input from the load — no teleport after the spawn. The
+/// disc's 0x52 carriers are ALL on this level, map47: exactly 38 drone placements (the [D] census,
+/// probe_prop52_census), and the reveal chain can never take all of them off: the second-channel
+/// census (params 6/8 [D], the fresh dump) gives #349/#350/#399/#402/#424/#425 p6 = 0 and
+/// #414/#429/#488/#489/#501 p6 = 72 — no writer for ch 72 exists on this level [D the
+/// interactables census §7] — so #402, a stationary guest (p3 = 0) standing at (42.96, 44.08,
+/// −59.39) between the walk's west-aisle north node and the west wall run, is attackable BEFORE
+/// Drake's reveal (ch 21) — the old setup's dead end (the hall walk-in plate #412 that lifts the
+/// weapon lock sits behind the ch-21-gated library door, and ch 21/22 walk the hall crowd off).
+///
+/// The way the game fails it [M]: the player's punch dispatch (`NDrone2_DealWithObjHit` case 5 →
+/// msg 6 → `NDrone2_PunchImpact` 0x145f28) — on 07000007 a punch on an UNARMED victim
+/// (`ObjectIsArmed` 0x178768 on the class byte; DoModeSettingsOLD 0x14cfa0:159-163 zeroes it for
+/// the party modes) calls `SetMissionFailReason(5)` [M 0x145f28:45-56] = `Mission_SetFailLabel`
+/// (0x4000033 "Cover Lost") + `switch_channels[99] = 1` [M 0x13e560]; the guest is team 3 [M
+/// 0x145bd0:21-43], so PunchImpact's team≠1 arm then ALSO fires for the same swing — reason 6 =
+/// the civilians' label 0x4000034 + ch 0x60 [M 0x145f28:69-73 → 0x13e560 case 6] — the last
+/// call's label stands, ch 99 stays latched → mission fail → end to 0x7000048 [M 0x182c60:45-57].
+/// The punch arms are the ported `punch_impact` [M drone.rs]; the fail is pinned here through the
+/// real walk + the real swing, the thing the ignored round could not reach (it armed past ch 21
+/// and hunted a carrier's own first attack in a crowd that had already walked off).
 #[test]
-#[ignore = "no real-path setup left: the library door guards #404/#417 hold the doorway to the ch-0x48 plate until Drake's reveal (ch 21), and ch 21 takes the hall's 0x52 carriers off (p6 = 21 [D]) and ropes the west doorway (#495); measured: armed at the rope after both scenes, #424/#425 (the nearest carriers, 15.7/19.5 away) never get a line of sight in 1800 ticks"]
 fn the_prop52_guard_first_attack_fails_the_mission() {
-    const CARRIERS: [u32; 38] = [349, 350, 355, 399, 402, 403, 406, 407, 408, 409, 410, 414, 424,
-        425, 426, 429, 431, 432, 433, 434, 446, 477, 478, 479, 480, 481, 482, 483, 484, 487, 488,
-        489, 490, 491, 494, 501, 506, 508]; // the [D] census, probe_prop52_census
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000007.bin", false).expect("load 07000007"));
     w.wait_enabled(3000, "the party start");
@@ -458,119 +462,87 @@ fn the_prop52_guard_first_attack_fails_the_mission() {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.drones.mission.fail_label, 0, "no fail label at the load [M 0x182270]");
         assert!(!sim.drones.channels.on(99), "ch 99 clear at the load");
+        assert_eq!(sim.gun.weapon, 1, "the loadout is the fists [M Player_InitWeapon 0x1a7ef8 case 0x7000007]");
     }
-    // The main walk's own legs to the hall (the proven real-input line through the furniture).
+    // The main walk's own proven legs through the west aisle — unarmed, so the crowd stays calm
+    // [M CivilianGuard 0x1603a8 case 3; the armed-Bond scare 0x160140:44-76 never trips].
     for (name, at) in [
         ("west aisle south", [35.7f32, 43.6, -70.6]),
         ("west aisle north", [42.6, 43.6, -70.5]),
-        ("the west wall run", [42.6, 43.6, -45.0]),
-        ("the north door", [49.4, 43.6, -44.7]),
-        ("the north row west", [62.7, 43.6, -44.3]),
-        ("the north row east", [76.5, 43.6, -44.9]),
-        ("the hall west mouth", [76.6, 43.6, -50.7]),
-        ("the hall floor", [83.1, 43.6, -50.5]),
     ] {
         w.walk_nav_to(at, name, 1.5);
-    }
-    // The library door guards leave on Drake's reveal (ch 21) — the reveal first, as the main walk.
-    walker::drakes_reveal_07(&mut w);
-    w.walk_nav_to([93.3, 43.6, -50.4], "the hall east", 1.5);
-    // The hall's E-door, then the plate: the main walk's own pulse-E crossing.
-    w.walk_to(Wp { at: [94.6, 43.6, -47.4], act: Act::Use { use_ticks: 240 }, arrive: 0.7 }, "E the hall door");
-    {
-        let target = [94.3f32, 43.6, -45.9];
-        let mut still = 0u32;
-        let mut last = [0.0f32, 0.0];
-        for t in 0..1200u32 {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let p = sim.bond.pos;
-            if sim.drones.channels.on(0x48) { break; }
-            let door_closed = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
-                .filter(|d| walker::dxz(d.pos, p) < 3.0)
-                .any(|d| d.state & 0xc == 0);
-            let use_key = if (p[0] - last[0]).abs() < 0.01 && (p[2] - last[1]).abs() < 0.01 {
-                still += 1; door_closed && still % 30 == 0
-            } else { still = 0; last = [p[0], p[2]]; false };
-            let desired = (target[0] - p[0]).atan2(target[2] - p[2]);
-            let err = walker::wrap_pi(desired - sim.bond.yaw);
-            let input = Input { turn: err.clamp(-0.08, 0.08), forward: if err.abs() > 1.0 { 0.0 } else { 1.0 }, ..Default::default() };
-            w.tick(input, use_key);
-        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(!sim.drones.channels.on(99), "the walk to {name} fails nothing — Bond is unarmed [M 0x1603a8 case 3]");
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x48), "the hall walk-in plate #412 fired ch 0x48 [D placements]");
+        let attacked: Vec<u32> = sim.drones.list.iter()
+            .filter(|d| d.first_attack_done && d.present)
+            .map(|d| d.placement as u32).collect();
+        assert!(attacked.is_empty(), "no carrier first-attacks an unarmed Bond on the walk [M 0x1603a8 case 3], attacked {attacked:?}");
     }
-    // The control-taking scene holds Bond; wait it out (the game's own skip through the tick).
-    w.wait_enabled(1200, "the control-taking scene");
-    // THE PLAYER'S OWN WEAPON CYCLE: the lock is off, the cycle request survives [M 0x1a24c8:243-246]
-    // — the P2K comes off safe. This is the arm the party guards react to [M 0x1603a8 case 3].
-    w.tick(Input { weapon_cycle: 1, ..Default::default() }, false);
-    w.wait(30);
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[07 prop52] after the cycle: weapon {}", sim.gun.weapon);
-        assert!(sim.gun.weapon != 1, "the cycle must leave the fists [M 0x1a24c8 Player_WeaponChange]");
-    }
-    // Walk back THROUGH the party on the main walk's own proven nodes. Drake's reveal (ch 21) has
-    // taken the hall's south crowd off (their second channel is 21 [D p6]), so the line runs west
-    // along the north row — the carriers #424 (61.6,−48.2) and #425 (66.6,−43.5) stand there after
-    // both scenes. The label and the channel LATCH, so the inter-leg poll reads a mid-leg fail.
+    // Step to the punch stand just south of carrier #402 and take the swing: face the guest,
+    // close inside the fists' reach, hold the fire button (weapon 1 = the punch [M the
+    // DealWithObjHit case-5 dispatch]), and poll the fail the way the game latches it.
+    w.walk_nav_to([42.8, 43.6, -61.0], "the #402 stand", 0.6);
     let mut label = 0u32;
     let mut ch99 = false;
-    let mut attacked = false;
-    let mut attacker = 0u32;
-    for (name, at) in [
-        ("the hall south node", [95.2f32, 43.6, -44.6]),
-        ("the hall centre node", [93.3, 43.6, -50.4]),
-        ("the hall west node", [83.1, 43.6, -50.5]),
-        ("the west doorway (roped off since ch 21)", [81.1, 43.6, -49.6]),
-    ] {
-        w.walk_nav_to(at, name, 1.4);
+    let mut swings = 0u32;
+    for t in 0..420u32 {
         {
             let sim = w.scene.sim.as_ref().unwrap();
             label = sim.drones.mission.fail_label;
             ch99 = sim.drones.channels.on(99);
-            for d in sim.drones.list.iter() {
-                if d.first_attack_done && d.enabled && d.present
-                    && CARRIERS.contains(&(d.placement as u32)) {
-                    attacked = true;
-                    attacker = d.placement as u32;
-                }
-            }
         }
-        eprintln!("[07 prop52] after {name}: label {label:#x} ch99 {ch99} attacked {attacked}({attacker})");
-        if label == 0x0400_0033 && ch99 { break; }
-    }
-    // At the rope, armed, looking west down the north row at the carriers: stand until one of
-    // them sees the gun (the party's sight pass, no range arg [M NearArmedPerson 0x1787c8:30-42]).
-    for t in 0..1800u32 {
-        if label == 0x0400_0033 && ch99 { break; }
-        let input = {
+        if ch99 { break; }
+        let (bp, gp, gy) = {
             let sim = w.scene.sim.as_ref().unwrap();
-            let p = sim.bond.pos;
-            let err = walker::wrap_pi((64.0 - p[0]).atan2(-46.0 - p[2]) - sim.bond.yaw);
-            Input { turn: err.clamp(-0.08, 0.08), forward: if p[0] > 81.0 && err.abs() < 0.5 { 0.5 } else { 0.0 }, ..Default::default() }
+            let g = sim.drones.list.iter().find(|d| d.placement as u32 == 402 && d.present && !d.corpse)
+                .expect("the #402 guest is still up");
+            (sim.bond.pos, g.pos, sim.bond.yaw)
         };
-        w.tick(input, false);
-        let sim = w.scene.sim.as_ref().unwrap();
-        label = sim.drones.mission.fail_label;
-        ch99 = sim.drones.channels.on(99);
-        for d in sim.drones.list.iter() {
-            if d.first_attack_done && d.enabled && d.present && CARRIERS.contains(&(d.placement as u32)) {
-                attacked = true;
-                attacker = d.placement as u32;
-            }
+        let dist = walker::dxz(bp, gp);
+        let err = walker::wrap_pi((gp[0] - bp[0]).atan2(gp[2] - bp[2]) - gy);
+        // The punch round flies from the EYE along the view ray [M Player_WeaponInitBullet
+        // 0x1a4bf0 — the excluded-base records (the fists, base 1) spawn at the camera], so the
+        // swing must LOOK at the chest. bond.pitch is in half-π units (positive = up — the
+        // walkreal-0d idiom), so the error is the chest ray's angle minus the current pitch.
+        let (look, pitch, on_line) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let eye_y = sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop;
+            let want = -((eye_y - (gp[1] + 0.45)).atan2(dist.max(0.5))) * 2.0 / std::f32::consts::PI;
+            let perr = want - sim.bond.pitch;
+            (perr.clamp(-0.08, 0.08), sim.bond.pitch, perr.abs() < 0.06)
+        };
+        if err.abs() > 0.05 {
+            w.tick(Input { turn: err.clamp(-0.08, 0.08), look, ..Default::default() }, false);
+        } else if dist > 1.15 {
+            w.tick(Input { forward: 1.0, look, ..Default::default() }, false);
+        } else if on_line {
+            swings += 1;
+            w.tick_fire(Input { look, ..Default::default() });
+        } else {
+            w.tick(Input { look, ..Default::default() }, false);
         }
-        if t % 300 == 0 { eprintln!("[07 prop52] at the rope t{t}: label {label:#x} ch99 {ch99} attacked {attacked}({attacker}) bond {:?}", sim.bond.pos); }
+        if t % 120 == 0 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[07 prop52] t{t}: vic ({:.2},{:.2},{:.2}) dist {dist:.2} err {err:.3} pitch {pitch:.3} swings {swings} label {label:#x} ch99 {ch99} gun w{} st{} clip{} sp{}",
+                gp[0], gp[1], gp[2], sim.gun.weapon, sim.gun.switch_state, sim.gun.clip, sim.gun.spare);
+        }
     }
-    let sim = w.scene.sim.as_ref().unwrap();
-    eprintln!("[07 prop52] FINAL attacked {attacked}({attacker}) label {label:#x} ch99 {ch99} bond {:?}", sim.bond.pos);
-    let states: Vec<(u32, u8, bool, f32, f32)> = sim.drones.list.iter()
-        .filter(|d| d.present && !d.corpse && CARRIERS.contains(&(d.placement as u32)) && (d.pos[0] - 70.0).abs() < 14.0)
-        .map(|d| (d.placement as u32, d.state, d.first_attack_done, d.pos[0], d.pos[2])).collect();
-    eprintln!("[07 prop52] the near carriers: {states:?}");
-    assert!(attacked, "walking armed through the crowd must stamp a first attack on a 0x52 carrier [M 0x148010:63]");
-    assert_eq!(label, 0x0400_0033, "the first-attack tail must fail the mission with the Cover Lost label [M 0x148010:95-98 + 0x13e560 case 8]");
-    assert!(ch99, "the fail reason must raise switch_channels[99] [M 0x13e560 default arm]");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let ch60 = sim.drones.channels.on(0x60);
+        eprintln!("[07 prop52] after {swings} swings: label {label:#x} ch99 {ch99} ch60 {ch60} bond {:?}", sim.bond.pos);
+        assert!(swings > 0, "the loop must have swung the fists at #402");
+        assert!(ch99, "the punch on the unarmed 0x52 carrier #402 raises ch 99 [M 0x145f28:45-56 → 0x13e560]");
+        assert!(label == 0x0400_0033 || label == 0x0400_0034,
+            "the fail label is the punch arms' — Cover Lost 0x4000033 (reason 5 [M 0x145f28:45-56]) or the team≠1 arm's civilians' label 0x4000034 (reason 6 [M 0x145f28:69-73]), got {label:#x}");
+    }
+    let mut failed = false;
+    for _ in 0..120 {
+        w.tick(Input::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.mission.state == 2 { failed = true; break; }
+    }
+    assert!(failed, "attacking the guard first fails the mission → end to 0x7000048 [M 0x182c60:45-57]");
 }

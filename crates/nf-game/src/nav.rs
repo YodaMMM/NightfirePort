@@ -50,8 +50,11 @@ pub struct NavPath {
 }
 
 /// A boundary wall (BLINK) between two posts; heights from a ray up (`AIBounds_Link2Cel`).
+/// `cels` = the two posts' cels (BNODE+0xC, `build_FindCel` of the post [M AIBounds_Link2Cel
+/// 0x1d2f18:12-16]): `AIBounds_Prepare` 0x1d3008:17-29 head-inserts the wall into post A's cel
+/// +0x34 list (link +0xC) and, when post B's cel differs, into B's (link +0x10).
 #[derive(Clone, Debug)]
-pub struct Wall { pub a: V3, pub b: V3, pub ha: f32, pub hb: f32, pub flags: u32 }
+pub struct Wall { pub a: V3, pub b: V3, pub ha: f32, pub hb: f32, pub flags: u32, pub cels: [Option<usize>; 2] }
 
 #[derive(Clone, Debug, Default)]
 pub struct Network {
@@ -79,15 +82,15 @@ impl Network {
             let pos = |n: &nf_formats::aipath::PathNode| n.game_pos();
             if p.is_boundary() {
                 bounds = true;
-                let posts: Vec<(V3, f32)> = p.nodes.iter().map(|n| {
+                let posts: Vec<(V3, f32, Option<usize>)> = p.nodes.iter().map(|n| {
                     let q = pos(n);
                     let up = [q[0], q[1] + 256.0, q[2]];
                     let h = world.segment(q, up).map(|t| (t * 256.0).max(2.0)).unwrap_or(256.0);
-                    (q, h)
+                    (q, h, world.find_cel(q))
                 }).collect();
                 for l in &p.links {
                     let (Some(a), Some(b)) = (posts.get(l.a as usize), posts.get(l.b as usize)) else { continue };
-                    walls.push(Wall { a: a.0, b: b.0, ha: a.1, hb: b.1, flags: 0 });
+                    walls.push(Wall { a: a.0, b: b.0, ha: a.1, hb: b.1, flags: 0, cels: [a.2, b.2] });
                 }
             } else {
                 let nodes: Vec<NavNode> = p.nodes.iter().map(|n| NavNode { pos: pos(n), flags: match n.raw[0] { 0x2468_abce => 0, f => f }, cel: world.find_cel(pos(n)) }).collect();
@@ -144,8 +147,24 @@ impl Network {
     /// 0x800/0x1000/0x400-flagged walls are skipped and the 0x800 double-radius rule
     /// (0x157bd0:94-97) can never select (the mask always carries 0x800) [M].
     pub fn push_out(&self, feet: V3, r: f32) -> V3 {
+        self.push_walls(feet, r, self.walls.iter())
+    }
+
+    /// `push_out` as `NDrone2_Collision` 0x140e90:169-174 calls it: the walk covers ONLY the
+    /// walls on the object's own cel's +0x34 list (a1 = `lw obj+0x20`, disasm 0x1410fc) —
+    /// `AINetwork_GetBoundsPushVectorForSphere` 0x157bd0:83-133 starts at `cel+0x34` and follows
+    /// link +0xC while post A's cel is that cel, else +0x10 while post B's is, else stops. The
+    /// list is head-inserted in wall order (`AIBounds_Prepare` 0x1d3008), so the walk visits the
+    /// cel's walls newest first. A wall of another cel never pushes. `None` (no linked cel) has
+    /// no list: no push.
+    pub fn push_out_in_cel(&self, pos: V3, r: f32, cel: Option<usize>) -> V3 {
+        let Some(c) = cel else { return pos };
+        self.push_walls(pos, r, self.walls.iter().rev().filter(|w| w.cels[0] == Some(c) || w.cels[1] == Some(c)))
+    }
+
+    fn push_walls<'a>(&self, feet: V3, r: f32, walls: impl Iterator<Item = &'a Wall>) -> V3 {
         let mut p = feet;
-        for w in self.walls.iter().filter(|w| w.flags & 0x1c00 == 0) {
+        for w in walls.filter(|w| w.flags & 0x1c00 == 0) {
             let q = closest_on_segment(w.a, w.b, p);
             // [M 0x157780:94] the game's hit distance is 2D X/Z (`Vec_SqDist2D` 0x1e2ef8 = x/z;
             // disasm 0x1578e8-0x1578f4 calls it with P and Q and compares against r² at 0x1578f4).
@@ -912,7 +931,7 @@ mod tests {
         // A corridor along +x; a boundary post line whose near post sits 0.1 off the creep line.
         let mut n = net(&[[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]], &[(0, 1)], 4);
         n.bounds = true;
-        n.walls.push(Wall { a: [1.65, 0.0, 0.1], b: [1.65, 0.0, 2.0], ha: 2.0, hb: 2.0, flags: 0 });
+        n.walls.push(Wall { a: [1.65, 0.0, 0.1], b: [1.65, 0.0, 2.0], ha: 2.0, hb: 2.0, flags: 0, cels: [None; 2] });
         let mut r = Route::for_path(&n, 0, 0);
         r.creep.step = 3; // target (1.2, 0, 0), next point q ≈ (1.6, 0, 0)
         r.target = r.creep.point(3);
@@ -941,7 +960,7 @@ mod tests {
         n.bounds = true;
         // A post 0.03 off the line right at the previous step point (0.8): the 0.1 post test on
         // feet(0.1)→prev(0.8) fails, and the same post blocks the feet→target read at 0.2.
-        n.walls.push(Wall { a: [0.83, 0.0, 0.03], b: [0.83, 0.0, 2.0], ha: 2.0, hb: 2.0, flags: 0 });
+        n.walls.push(Wall { a: [0.83, 0.0, 0.03], b: [0.83, 0.0, 2.0], ha: 2.0, hb: 2.0, flags: 0, cels: [None; 2] });
         let mut r = Route::for_path(&n, 0, 0);
         r.creep.step = 3; // target (1.2, 0, 0), prev (0.8, 0, 0)
         r.target = r.creep.point(3);
@@ -960,7 +979,7 @@ mod tests {
     fn a_door_bound_drone_skips_the_blocked_test() {
         let mut n = net(&[[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]], &[(0, 1)], 4);
         n.bounds = true;
-        n.walls.push(Wall { a: [0.83, 0.0, 0.03], b: [0.83, 0.0, 2.0], ha: 2.0, hb: 2.0, flags: 0 });
+        n.walls.push(Wall { a: [0.83, 0.0, 0.03], b: [0.83, 0.0, 2.0], ha: 2.0, hb: 2.0, flags: 0, cels: [None; 2] });
         let feet = [0.1, 0.0, 0.0];
         let mut r = Route::for_path(&n, 0, 0);
         r.creep.step = 3;
@@ -983,7 +1002,7 @@ mod tests {
         assert_eq!(n.move_test(&w, [0.0; 3], [2.0, 0.0, 0.0], false, false).0, 1);
         assert_eq!(n.move_test(&w, [0.0; 3], [2.0, 5.0, 0.0], false, false).0, 0, "|dy| > 4");
         n.bounds = true;
-        n.walls.push(Wall { a: [1.0, 0.0, -1.0], b: [1.0, 0.0, 1.0], ha: 2.0, hb: 2.0, flags: 0 });
+        n.walls.push(Wall { a: [1.0, 0.0, -1.0], b: [1.0, 0.0, 1.0], ha: 2.0, hb: 2.0, flags: 0, cels: [None; 2] });
         assert_eq!(n.move_test(&w, [0.0; 3], [2.0, 0.0, 0.0], false, false).0, 0, "through the wall");
         assert_eq!(n.move_test(&w, [0.0; 3], [2.0, 0.0, 0.0], false, true).0, -1);
         n.walls.clear();
@@ -1010,7 +1029,7 @@ mod tests {
     fn boundary_push_distance_is_xz_only() {
         let n = Network {
             paths: vec![],
-            walls: vec![Wall { a: [2.0, 0.0, 0.0], b: [2.0, 0.0, 10.0], ha: 2.0, hb: 2.0, flags: 0 }],
+            walls: vec![Wall { a: [2.0, 0.0, 0.0], b: [2.0, 0.0, 10.0], ha: 2.0, hb: 2.0, flags: 0, cels: [None; 2] }],
             bounds: true, slope_dy: 2.0, max_slope: 0.8727,
         };
         // Feet 0.3 east of the wall at y=1 (inside the band [−0.4, +2]): 3D d² = 1.09 > r²
@@ -1022,6 +1041,31 @@ mod tests {
         assert_eq!(p, [2.5, 1.0, 5.0], "beyond r: no push");
     }
 
+    /// `push_out_in_cel`: only the walls filed under the object's own cel push it
+    /// [M AINetwork_GetBoundsPushVectorForSphere 0x157bd0:83-133 walks cel+0x34; AIBounds_Prepare
+    /// 0x1d3008:17-29 files a wall under both posts' cels]; no linked cel, no push. Sister: the
+    /// flat every-wall `push_out` moves the same point (the port's old drone call).
+    #[test]
+    fn boundary_push_walks_only_the_own_cels_walls() {
+        let n = Network {
+            paths: vec![],
+            walls: vec![
+                Wall { a: [2.0, 0.0, 0.0], b: [2.0, 0.0, 10.0], ha: 2.0, hb: 2.0, flags: 0, cels: [Some(1), Some(1)] },
+                Wall { a: [0.0, 0.0, 5.2], b: [10.0, 0.0, 5.2], ha: 2.0, hb: 2.0, flags: 0, cels: [Some(2), Some(3)] },
+            ],
+            bounds: true, slope_dy: 2.0, max_slope: 0.8727,
+        };
+        let p = [2.3, 1.0, 5.0];
+        let own1 = n.push_out_in_cel(p, 0.4, Some(1));
+        assert!((own1[0] - 2.4).abs() < 1e-4 && (own1[2] - 5.0).abs() < 1e-4, "cel 1: the x wall only: {own1:?}");
+        let own3 = n.push_out_in_cel(p, 0.4, Some(3));
+        assert!((own3[0] - 2.3).abs() < 1e-4 && (own3[2] - 4.8).abs() < 1e-4, "cel 3 (post B's): the z wall only: {own3:?}");
+        assert_eq!(n.push_out_in_cel(p, 0.4, Some(7)), p, "a cel with no walls: no push");
+        assert_eq!(n.push_out_in_cel(p, 0.4, None), p, "no linked cel: no push");
+        let flat = n.push_out(p, 0.4);
+        assert!(flat != own1 && flat != own3, "the flat walk takes both walls: {flat:?}");
+    }
+
     /// The y-band top is `Q.y + (hB − hA)·t + hA` — the post heights LERPed by the same clamped
     /// t as Q [M 0x157780:96-104 — `*(iVar2+8) − *(iVar1+8)) * t + *(iVar1+8)`, disasm
     /// 0x157904-0x157920]. Sister: above the lerped post top there is no push.
@@ -1029,7 +1073,7 @@ mod tests {
     fn boundary_band_top_is_the_post_height_lerp() {
         let n = Network {
             paths: vec![],
-            walls: vec![Wall { a: [0.0, 0.0, 0.0], b: [10.0, 0.0, 0.0], ha: 1.0, hb: 3.0, flags: 0 }],
+            walls: vec![Wall { a: [0.0, 0.0, 0.0], b: [10.0, 0.0, 0.0], ha: 1.0, hb: 3.0, flags: 0, cels: [None; 2] }],
             bounds: true, slope_dy: 2.0, max_slope: 0.8727,
         };
         // Mid-segment: top = 0 + 1.0 + 0.5·(3.0 − 1.0) = 2.0 — feet at 0.9 are inside → pushed

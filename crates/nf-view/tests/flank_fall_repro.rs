@@ -92,6 +92,15 @@ fn pressed_against_the_west_lip_bond_stays_grounded() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000003.bin", false).expect("load 07000003"));
     w.wait(60);
+    // The probe pins the ground rule at the lip, not a fight: the guards leave the live set (the
+    // stealth probes' setup). With the game's sight round robin [M DroneVision_ProcessDroneSight
+    // 0x176a28] guard #9 holds AimStandFire 0x68 at (11.6, 6.3, -19.0) in the east doorway, and
+    // the leg ended beside him with Bond 0.7 over the floor (y 7.18); the 11 ungrounded ticks
+    // were his drop from there, before the lip [L this branch's run].
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        for g in sim.drones.list.iter_mut() { g.present = false; g.enabled = false; }
+    }
     w.walk_nav_to([13.0f32, 5.9, -18.0], "mid courtyard", 1.6);
     // Press west into the lip: real input, forward held, sampling grounded every tick.
     let start = w.total_ticks;

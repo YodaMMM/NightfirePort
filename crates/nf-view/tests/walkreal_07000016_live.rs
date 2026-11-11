@@ -923,6 +923,39 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
         // guards emptied him (the 1988 death).
         for (label, wp) in APPROACH {
             if wp.at[1] > 5.5 { clear_hostiles_16(w, 40.0, 900); }
+            // los-mask-repins-16 (the real-damage walks' east-lane re-route): under the game's
+            // guard sight the east guards (#1 skin 0x50000b1 from (24.1, 0.8, −96.6), #3 skin
+            // 0x500008c from (22.1, 0.8, −104.2) [L the 10864 death ledger]) hunt Bond on the
+            // lane, and the fights' own flank answer (the shoot loop's 540-tick flank) navigated
+            // Bond 9 u east into the east strip pocket — the determined pass killed #1 there, and
+            // the resumed straight steer could not cross back west over the trench's east edge:
+            // Bond pinned at (19.03, 0.92, −103.36) for ~5000 ticks (the measured bounce −100.2 ↔
+            // −103.36), dead at 10864 under the ramp-foot rifleman #16's (weapon 0x1a, hp 10,
+            // (14.5, 0.8, −92.4)) unseen fire — 28.6 in 20 hits, the run's biggest dealer. Two
+            // player answers, both keyed to the re-arm (real-damage) walks only — the tops-up
+            // walks keep the plain route:
+            // 1. the ramp-foot rifleman stands hp 10 dead ahead of the lane head — a player kills
+            //    him before walking the lane (a bounded stand from where Bond stands);
+            // 2. the lane leg rides the NAV web (the flank nav demonstrably crossed it: the 4
+            //    nodes (17.15, −92.35) → (21.04, −94.43) [L the same trace]) so the leg RE-ROUTES
+            //    from wherever the corridor fights leave Bond instead of straight-steering into
+            //    the pocket pin; the ring legs already ride the web for the same reason.
+            if re_arm && *label == "the east lane south" {
+                let gi = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    sim.drones.list.iter().position(|d| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                        && d.pos[1] < 2.0 && d.pos[0] > 12.0 && d.pos[2] > -97.0 && d.pos[2] < -88.0)
+                };
+                if let Some(gi) = gi {
+                    if walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), gi) {
+                        let _ = w.shoot_bounded(gi, "the ramp-foot rifleman from the lane head", 1800);
+                    } else {
+                        eprintln!("[016] the ramp-foot rifleman #{gi} is not exposed from the lane head");
+                    }
+                }
+                w.walk_nav_to([9.5, 0.0, -100.0], label, 1.6);
+                continue;
+            }
             // capsule-join (the punch walk only: re-arm, no station armour): the south gallery's
             // AR guard #2 (weapon 0x1a, hp 10) plinks the ring's north side from (9.5, 6.7,
             // −110.6), 32 u off, at Bond's own level — 22 hits for 30.8 of the route's 70, and
@@ -1146,6 +1179,10 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
 /// old clone-only hold faced away. A player surrounded turns to the nearest muzzle.
 fn hold_the_band(w: &mut Walker, cap: u32) {
     let mut held = 0u32;
+    // los-mask-repins-16 (additive diagnostic, NF_BAND_TRACE): what the hold sees — the closest
+    // hostile's distance/state and whether an exposed aim exists — to explain a hold that never
+    // fires.
+    let band_trace = std::env::var_os("NF_BAND_TRACE").is_some();
     while held < cap {
         let close = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -1164,6 +1201,11 @@ fn hold_the_band(w: &mut Walker, cap: u32) {
             let dp = sim.drones.list[mi].pos;
             let dist = walker::dxz(dp, b.pos);
             let aim = w.exposed_aim(mi);
+            if band_trace && held % 60 == 1 {
+                let st = sim.drones.list[mi].state;
+                eprintln!("[band] +{held} #{mi} skin {:#x} state {st:#x} hp {:.1} d {dist:.2} aim {} gun {:#x} clip {} spare {}",
+                    sim.drones.list[mi].skin, sim.drones.list[mi].health, aim.is_some(), sim.gun.weapon, sim.gun.clip, sim.gun.spare);
+            }
             let at = aim.unwrap_or([dp[0], dp[1] + 0.3, dp[2]]);
             let eye = [b.pos[0], b.pos[1] + b.eye - b.crouch_drop, b.pos[2]];
             let err = walker::wrap_pi((at[0] - b.pos[0]).atan2(at[2] - b.pos[2]) - b.yaw);
@@ -1253,12 +1295,43 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
         // while the pit guards walked to point blank over ~7300 ticks. A player answers the
         // muzzle that closes on him the tick it arrives, then returns to the squad member.
         let mut killed = false;
-        for _ in 0..12 {
+        // los-mask-repins-16: the slices are 300 ticks (36 of them, the same budget the 900 x12
+        // ladder had) so the band hold re-checks the closing muzzle every ~5 s — the measured
+        // death sat INSIDE a 900-tick slice while #15 walked to d 1.7 and poured. Between the
+        // slices the OTHER muzzle is answered too: a pit-room guard that hurt Bond in the last
+        // 240 frames, exposed, within 20 u, gets a bounded stand of its own before the member —
+        // the measured 14785 death poured through the whole ladder from #15 (the hold's
+        // backpedal exits his 3.0 band and the slice resumed on the far clone; the hold only
+        // faces the nearest INSIDE-3.0 hostile, and #15 sat just outside it at 2.5-2.9).
+        for _ in 0..36 {
             hold_the_band(w, 240);
-            if w.shoot_bounded(i, "the pit squad", 900) { killed = true; break; }
+            let threat = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let now = sim.drones.frame;
+                let bp = sim.bond.pos;
+                sim.drones.player_hits.iter().rev()
+                    .take_while(|h| now.saturating_sub(h.0) <= 240)
+                    .filter(|h| h.1 != i && (h.1 as usize) < sim.drones.list.len())
+                    .filter_map(|h| {
+                        let d = &sim.drones.list[h.1 as usize];
+                        (d.team == 1 && d.present && d.enabled && !d.corpse && d.health > 0.0
+                            && walker::dxz(d.pos, bp) < 20.0
+                            && walker::DamageLog::visible(sim, h.1 as usize)).then(|| (h.1 as usize, h.2))
+                    })
+                    .max_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(gi, _)| gi)
+            };
+            if let Some(g) = threat {
+                if w.shoot_bounded(g, "the squad phase's dealer", 300) { continue; }
+            }
+            if w.shoot_bounded(i, "the pit squad", 300) { killed = true; break; }
         }
         let killed = killed
-            || ((w.switch_to_armed("the pit squad ammo") || w.resupply("the pit squad ammo")) && w.shoot(i, "the pit squad"));
+            || ((w.switch_to_armed("the pit squad ammo") || w.resupply("the pit squad ammo"))
+                // los-mask-repins-16: the fallback is BOUNDED (1800) — the bare `shoot` runs
+                // 10800 ticks with no threat reaction, and the measured death happened inside
+                // exactly that loop (the pit guards closed and poured while the stand held).
+                && w.shoot_bounded(i, "the pit squad ammo", 1800));
         assert!(killed, "the pit squad member #{i} dies to Bond's fire");
     }
     tick_until(w, 600, "the pit squad's deaths raise ch 0xbf [D mux #611]", |s| s.drones.channels.on(0xbf));
@@ -1941,6 +2014,10 @@ fn the_chasers_punch_lands_the_record_damage() {
         // The head tap (×5 [M NDrone2_HitDamage's part-5]) keeps the pit shooters' clears inside
         // their hp-10 budgets and the window's stands short.
         w.prefer_head = true;
+        // los-mask-repins-16: the corridor fights leave Bond wherever they end (the flank nav's
+        // east pocket) — a wedged nav leg re-routes over the clear nav lines instead of wedging
+        // (the 01 walk's opt-in).
+        w.bridge_wedged_nav = true;
         // gas-draws-8: the merged stream's plain route bleeds out before the window (the
         // measured 1843 run: 86.8 of 100 through the corridor from the gallery/ring pair alone —
         // hits at 66-90 u the reactive fights never answer — Bond at the window with ~9, the
@@ -2217,6 +2294,15 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(difficulty: u
         // the chasers' rounds ride the outside-of-band accuracy instead of the guaranteed
         // hits, and the punches (only inside 2.0 [M 0x1789c0:26-40]) never reach.
         w.dmg.back_off = Some(3.5);
+        // los-mask-repins-16 (the squad-phase dealer answer, the measured 14818 death): the
+        // pit-room AR guard #15 (skin 0x50000b2, weapon 0x14, hp 20) closed to d 1.7-1.9 while
+        // the squad kill loop stood on the far clone #12 and poured 45.8 in 26 hits — the
+        // return-fire pick had him on a FAILED-fight cooldown and the plain pick skipped him
+        // BECAUSE he was cooled. A player answers the muzzle that is actually hurting him:
+        // the opt-in hurting_first (the 07000008 Agent sisters' law) — cooled candidates are
+        // dropped only while they are NOT the real dealer, and the damage-weighted order
+        // fights him first.
+        w.dmg.hurting_first = true;
         // drone-block-swaps-g055-4: the reactive pick skips the ring guards a level above
         // (the shared flag's doc) — the ground legs keep moving under the overhead fire and
         // the ring legs clear at level.
