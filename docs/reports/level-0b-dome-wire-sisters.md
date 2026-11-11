@@ -90,3 +90,24 @@ Token/credit/context figures: `not visible to me` — this environment exposes n
 or context-window readout to the worker. What was visible: the task message's clock (sandbox
 expiry ~09:27 UTC, stop-new-work 09:07), `git` hashes, test outputs, process exit codes. No
 input/output token counters, no credit balance, no dollar cost.
+
+## ntfy failed
+
+The sandbox has no reliable outbound route to ntfy.sh this session (the same outcome the
+walker-sidestep-decay, los-mask-repins and guard-noise sessions recorded). The three
+fallbacks, in order, with their exact outcomes:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-0b-dome-wire-sisters: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 urllib.request` →
+   `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "…" https://ntfy.sh/nightfire-yoda-8k3x` → **exit 0, no output** —
+   but a verification rerun without `-q` hangs at `Connecting to ntfy.sh|159.203.148.75:443...`
+   until its timeout (the same artifact the predecessor sessions measured), so the exit-0 is
+   a connection artifact, not a delivery. Treat the notification as NOT sent.
+
+Everything else was delivered: the branch (the report commit + the WORKLOG checkpoints), and
+the queue's done item `done/10-level-0b-dome-wire-sisters.md` with the report body attached
+(the claim was filed through `claim.sh` — the task sat unclaimed in `pending/`; `finish.sh`
+first ran with a relative report path and marked done without the body, then the body was
+attached with the absolute path and pushed).
