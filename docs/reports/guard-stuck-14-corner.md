@@ -134,6 +134,17 @@ killed it twice — reported verbatim, since this is an environment limit, not a
 - nf-game's lib tests (run before the suite attempts): 777 passed / 6 failed / 4 ignored, the 6
   verified pre-existing on pristine master (see "What ran").
 
+## ntfy failed
+
+All three fallbacks in order, with their exact output:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "guard-stuck-14-corner: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'guard-stuck-14-corner: done …', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "guard-stuck-14-corner: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output, the call was killed at the 30 s tool timeout (no connection established).
+
 ## Usage
 
 not visible to me
