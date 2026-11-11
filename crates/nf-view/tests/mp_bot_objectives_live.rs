@@ -402,6 +402,44 @@ fn espionage_bots_fight_while_the_blueprint_moves() {
     assert!(near_base, "a carrier reached its base's floor plan (dist-xz < 3.0)");
 }
 
+/// mp-bot-site-scan: a site-holding bot turns to an opponent who comes into view. The game's
+/// `NDrone2_FindOpponent` MP arm has no early return between the hold block and the scan
+/// (`0x1426dc bne $v1, 2, 0x142744` skips the validity for the site's class 0x3b; the hold
+/// reaches `0x142770 beqz $v0, 0x1427c4` within hold and `0x1427b0 beqz $v0, 0x1427c0` beyond
+/// it — the clear arm skips the site in the site modes), so the 8-slot scan at 0x1427c4 runs
+/// for the site holder too and its pick (LAB_00143034 → `BOT_handleOpponentHistory`
+/// 0x1257c0:92-96's SetOpponent) turns the bot to a live opponent. The old port returned right
+/// away for `opponent >= OBJ_ROW` — a bot shooting the site never re-scanned.
+/// Pin: an attacking bot holds the site (`opponent == OBJ_ROW`) and then holds a live
+/// defender's slot instead. Two idle humans keep the machines equal; the bots do the rest.
+#[test]
+fn demolition_site_holder_turns_to_an_opponent() {
+    let s = settings(scenario::DEMOLITION, [0, 0], &[1, 0]);
+    let site_row = nf_game::mp::bots::OBJ_ROW;
+    let held_site: std::cell::RefCell<std::collections::HashMap<usize, bool>> = Default::default();
+    let r = run(s, LIMIT, |m, _t| {
+        let mut hs = held_site.borrow_mut();
+        for b in &m.bots {
+            if b.team == 1 {
+                let e = hs.entry(b.slot).or_insert(false);
+                *e = *e || b.brain.vars.opponent == Some(site_row);
+            }
+        }
+    }, |m| {
+        let hs = held_site.borrow();
+        m.bots.iter().any(|b| b.team == 1
+            && hs.get(&b.slot).copied().unwrap_or(false)
+            && b.brain.vars.opponent.is_some_and(|o| o < nf_game::mp::MP_MAX_SLOTS
+                && m.settings.players[o].team != 1
+                && !m.game.slots[o].dead))
+    });
+    let Some((t, a, _)) = r else {
+        if iso().is_none() { eprintln!("skip: NF_ISO not set"); return; }
+        panic!("no site-holding attacker ever turned to a live defender in 10 minutes (held site per bot: {:?})", held_site.borrow());
+    };
+    eprintln!("site-scan: a site-holding attacker turned to a live opponent after {t} ticks (held site per bot: {:?})", held_site.borrow());
+}
+
 /// Assassination: the assassin bot's opponent pick is always the target (`MP_IsAssasin` →
 /// `MP_getAssassinTarget` [M 0x128b50:80-86]) — the grudge hunt walks to it; the others only
 /// fight the assassin (every non-assassin shares team word 0 [M 0x18aa70:38-41] in the team
