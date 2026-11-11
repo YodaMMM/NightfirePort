@@ -1560,7 +1560,7 @@ fn the_spawn_height_matches_the_game_snapshot() {
 /// BL+0x790 per frame through the doorway brush — pins the dead tail on 0a; (2) trace the
 /// walk-anim root motion → AnimObject+0xcc during the walked glide — the +0.0256 candidate.
 #[test]
-#[ignore = "the through-line crosses the doorway on every measured tree, but the settled y never reaches the game's 1.1285 [L 2026-10-26]: 1.1201 on the settle-5 radial-tail tree, 1.0905 on master (the press-y is 0.0000 there — every doorway contact pushes horizontally, NF_CAPS_LOG trace this round). The walked-dy growth is NOT any statically-pinned writer: the walk move is yaw-only (Player_Move 0x191dd0 writes +0x10/+0x18, the walk matrix RotMatrix(BL+0x30) reads the pitch lane ZEROED at Player_Update 0x193600:134 — the look writes +0x40/+0x8a8 [M]); the SP body anim set is the static 2-frame stub (set 0x2b91b0 = all 0x06000a00 → seq 0x84f, 2 frames [D ACTION.ELF @0x2b91b0 + the script dump]) so no anim bob rides the walk; gravity is band-gated off [M 0x194df0:104]. Decompile side (2026-10-31): no step-up and no wall-stop exist — the push tail is dead on 0a fresh boot (ref HITTEST+0x50 boots (0,0,0) [L ee_start_0700000a 0x1b78ee0 = 00×16], every walked contact |closest| ≈ 10-25 ≫ r 0.55, _DeltaP zeroed per call [M 0x109da0:136], add-back only [M 0x1ebaa8:353-373]), so the press-y cannot come from CylGeom on a fresh boot; the remaining y writers are the FeetOnPoint band [M 0x194188:106] and the walk-anim root ride (cc fresh per tick [M 0x194df0:86]). Named live checks: (1) dump BL+0x790 per frame through the doorway brush; (2) trace the walk-anim root motion → AnimObject+0xcc during the walked glide — the +0.0256 candidate"]
+#[ignore = "the through-line crosses the doorway on every measured tree, but the settled y never reaches the game's 1.1285 [L 2026-10-26]: 1.1201 on the settle-5 radial-tail tree, 1.0905 on master (the press-y is 0.0000 there — every doorway contact pushes horizontally, NF_CAPS_LOG trace this round). The walked-dy growth is NOT any statically-pinned writer: the walk move is yaw-only (Player_Move 0x191dd0 writes +0x10/+0x18, the walk matrix RotMatrix(BL+0x30) reads the pitch lane ZEROED at Player_Update 0x193600:134 — the look writes +0x40/+0x8a8 [M]); the SP body anim set is the static 2-frame stub (set 0x2b91b0 = all 0x06000a00 → seq 0x84f, 2 frames [D ACTION.ELF @0x2b91b0 + the script dump]) so no anim bob rides the walk; gravity is band-gated off [M 0x194df0:104]. Decompile side (2026-10-31): no step-up and no wall-stop exist — the push tail is dead on 0a fresh boot (ref HITTEST+0x50 boots (0,0,0) [L ee_start_0700000a 0x1b78ee0 = 00×16], every walked contact |closest| ≈ 10-25 ≫ r 0.55, _DeltaP zeroed per call [M 0x109da0:136], add-back only [M 0x1ebaa8:353-373]), so the press-y cannot come from CylGeom on a fresh boot; the remaining y writers are the FeetOnPoint band [M 0x194188:106] and the walk-anim root ride (cc fresh per tick [M 0x194df0:86]). Named live checks: (1) dump BL+0x790 per frame through the doorway brush; (2) trace the walk-anim root motion → AnimObject+0xcc during the walked glide — the +0.0256 candidate. 2026-11-11 (level-0a-doorway-glide): REPRODUCED on master 784ba2d99 — settled 1.0905 at (−9.935, 17.020) after 230 ticks [L glide.out]. The game-side mechanism read [M]: the walked wall response is the BL+0x750 push applied to obj+0x30 INSIDE Player_CollisionHandler 0x1949a8:136-140 — fed by Collide_Update zeroing HITTEST+0x10 [M 0x1ea398:50], Intersect_CylGeom's per-tri push ((r−dist)·v̂ from the copy's REF, the segment shifted per tri, _DeltaP accumulated [M 0x109da0:447-470]) and Collide_Intersect's add-back into +0x10/+0x20/+0x30/+0x50/+0x60 [M 0x1ebaa8:353-373] — the port already models this shape (world.rs capsule_push_scoped's per-face shift + the pos += push at player.rs 0x1949a8 mirror), so the missing +0.038 is NOT the horizontal pipeline; it is the walk's VERTICAL: the band (floor within 0.1 of the feet grounds, d ≤ cc+0.1 with cc the ROOT HEIGHT 1.0347 [M 0x194188:106, L port ROOT_HEIGHT]) and the root/look ride. The floor sweep probe (probe_glide_floor_and_push) along the pre-slide z-16.29 line reads an overhead surface (1.875) — the walked line slides to z ~17.02; a floor sweep on the POST-slide line is the next probe. LIVE CHECKS for the main agent: (1) the glide's look trace (settle-7 check 1): per-frame obj+0x50 (pitch) + obj+0x30.y through the walked glide — decides the look-dy share of the +0.038; (2) AnimObject+0xcc per frame during the glide (the root-ride share — the 2-frame walk stub seq 0x84f's root channel); (3) the hall floor's live y under the post-slide stand (−9.9, 17.0): disc floor 1.09 or 1.1285?"]
 fn the_west_hall_glide_height_matches_the_game() {
     let mut w = load_carry(None);
     // Wait out the SS door sweep (the same guard the main walk runs).
@@ -1638,7 +1638,7 @@ fn the_west_hall_glide_height_matches_the_game() {
 /// (xz bends) and settles 1.1159 [L 2026-10-26]; what produces the game's walked wall response is
 /// the open live check (BL+0x790 watch through the corner + doorway brush).
 #[test]
-#[ignore = "the crossing mechanism is NOT the port's move-clip: the 2026-10-30 'crosses at +76 ticks with NF_WALK_CLIP=1' ran on a DEAD flag path (pre_move_pos captured after the walk add → move_v = (0, gravity, 0) → the clip never engaged — the crossing was wall-response-less ghosting); re-measured 2026-10-31 with the capture fixed and the flag WEDGES the west-hall through-line at the doorway (STUCK (−8.28, 1.03, 15.83), y decaying). Decompile side the walk path has no clip and no wall-stop: the move integrates unclipped [M 0x193600:284-295], the cyl push tail is dead on 0a (ref = HITTEST+0x50, the lifetime DeltaP accumulator [M 0x1ebaa8:353-373], boots (0,0,0) [L ee_start_0700000a 0x1b78ee0 = 00×16], every walked contact |closest| ≈ 10-25 ≫ r 0.55), the head-on cull is inert on the raw walk spine denom (0.7597 < 0.999 [M 0x109da0:321-322]) and the only vertical mechanism is the FeetOnPoint band [M 0x194188:106]. The game slides the corner and settles 1.1159 [L 2026-10-26]; the port wedges on master. The open live check is the game's walked wall response: watch BL+0x790 through the corner + doorway brush (pins the dead tail) and find the mechanism; the climb settle is the glide sister's live check"]
+#[ignore = "the crossing mechanism is NOT the port's move-clip: the 2026-10-30 'crosses at +76 ticks with NF_WALK_CLIP=1' ran on a DEAD flag path (pre_move_pos captured after the walk add → move_v = (0, gravity, 0) → the clip never engaged — the crossing was wall-response-less ghosting); re-measured 2026-10-31 with the capture fixed and the flag WEDGES the west-hall through-line at the doorway (STUCK (−8.28, 1.03, 15.83), y decaying). Decompile side the walk path has no clip and no wall-stop: the move integrates unclipped [M 0x193600:284-295], the cyl push tail is dead on 0a (ref = HITTEST+0x50, the lifetime DeltaP accumulator [M 0x1ebaa8:353-373], boots (0,0,0) [L ee_start_0700000a 0x1b78ee0 = 00×16], every walked contact |closest| ≈ 10-25 ≫ r 0.55), the head-on cull is inert on the raw walk spine denom (0.7597 < 0.999 [M 0x109da0:321-322]) and the only vertical mechanism is the FeetOnPoint band [M 0x194188:106]. The game slides the corner and settles 1.1159 [L 2026-10-26]; the port wedges on master. The open live check is the game's walked wall response: watch BL+0x790 through the corner + doorway brush (pins the dead tail) and find the mechanism; the climb settle is the glide sister's live check. 2026-11-11 (level-0a-doorway-glide): REPRODUCED on master 784ba2d99 — the crossing now ARRIVES but takes 6000 ticks (the walker's stuck mitigation), assert ≤300 red at the 6000-tick cap with Bond parked at the wedge corner (−17.87, 1.17, 4.87) grounded FALSE (the band-edge dither, floor_ny 1.00) [L corner.out]. The mechanism read [M] (see the glide sister's dated note): the game's slide is the BL+0x750 push pipeline (0x1949a8:136-140) — port-shape-faithful — so the corner's wedge is the walk's VERTICAL again: at the wedge corner the port's y dithers across the band edge (grounded false in the STUCK dump), the game enters settled (y 1.127 then 1.120 [L 2026-10-26]) and its band holds. LIVE CHECKS for the main agent: (1) fresh boot, place Bond at (−17.87, 1.12, 4.87), hold forward toward (−17.5, 2.5): per-frame obj+0x30.y + the anim grounded bits (AnimObj+0x60 & 8) + BLData+0x940 — does the game's band stay hooked through the corner and what tick lifts y 1.120→1.127; (2) BL+0x750 (BLData+0x750) per frame through the corner — the game's own push accumulator's y lane at the doorway (the horizontal slide is pinned; the y lane is the open question)."]
 fn the_corner_crosses_like_the_game() {
     let mut w = load_carry(None);
     for _ in 0..150 {
@@ -2201,4 +2201,40 @@ fn walk_office_floor_qworm_keyboard_hatch_real_damage_agent() {
 #[test]
 fn walk_office_floor_qworm_keyboard_hatch_real_damage_00agent() {
     walker::with_real_damage(|| walk_office_floor_qworm_keyboard_hatch_at(3))
+}
+
+/// The glide's floor-and-push probe (level-0a-doorway-glide; run with `--ignored --nocapture`):
+/// (1) the world's own floor under the glide line — a scoped floor query every 0.5 u from the
+/// lobby (x −4) through the doorway (x −8.3..−8.6) into the hall (x −11), at the walked y —
+/// does the disc's geometry carry the hall floor at the game's settled 1.1285, or does the
+/// world read 1.09 and the game's settle come from elsewhere (the live check)?
+/// (2) the walked trace: the same legs as the glide test with the per-tick y / floor / push-y
+/// logged at the doorway (z 15.8..17.0), so the tick the y refuses to ride is named.
+#[test]
+#[ignore = "probe: the glide's floor heights + the walked y/push trace"]
+fn probe_glide_floor_and_push() {
+    let mut w = load_carry(None);
+    for _ in 0..150 {
+        let done = w.scene.sim.as_ref().unwrap().drones.sss.list.iter()
+            .filter(|s| s.placement == 524 || s.placement == 525)
+            .all(|s| s.state == 0 || s.state == 0x40);
+        if done { break; }
+        w.wait(5);
+    }
+    w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
+    w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0a-glide] floor sweep along z 16.29 (the walked line):");
+        for xi in 8..24 {
+            let x = -(xi as f32) * 0.5;
+            let from = [x, 2.5, 16.29];
+            let f = sim.world.segment_surface_flags_scoped(sim.world.find_cel(from), from, [x, -1.5, 16.29]);
+            eprintln!("[0a-glide]   x {x:.1}: floor {:?}", f.map(|(d, _, _, _)| 2.5 - d));
+        }
+    }
+    let t0 = w.total_ticks;
+    w.walk_to(Wp::new(-10.0, 0.4, 16.29).r(0.8), "the west hall (the through-line)");
+    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+    eprintln!("[0a-glide] settled at ({:.4},{:.4},{:.4}) after {} ticks", p[0], p[1], p[2], w.total_ticks - t0);
 }
