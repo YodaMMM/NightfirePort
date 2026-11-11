@@ -92,7 +92,7 @@ impl L {
     }
 }
 
-pub fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(), cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
+pub fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(), cel: None, obj_cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
 
 /// A Bond spot ~6 units from `g` whose firing line (eye → the guard's chest) passes no OTHER live
 /// guard within 1.2 units AND has a clear world line — the yard pairs stand in each other's axes
@@ -253,9 +253,9 @@ fn flashbang_stuns_three_guards_and_never_kills() {
         phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
         defused: false,
-    
+        born: 0,
         loop_handle: 0,
-});
+    });
 
     // Bond far from the blast so his own flash does not matter to the guards' assertions.
     let p = bond_at([blast[0] + 60.0, blast[1], blast[2]]);
@@ -331,9 +331,9 @@ fn frag_at_the_same_spot_kills_the_trio() {
         stuck: false, seek_target: None, phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
         defused: false,
-    
+        born: 0,
         loop_handle: 0,
-});
+    });
     let p = bond_at([blast[0] + 60.0, blast[1], blast[2]]);
     for _ in 0..320u32 { sim.tick(&d, &p); }
     for (k, pl) in trio.iter().enumerate() {
@@ -390,9 +390,9 @@ fn frag_at_the_waitswitch_trio_takes_nothing() {
         stuck: false, seek_target: None, phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
         defused: false,
-    
+        born: 0,
         loop_handle: 0,
-});
+    });
     let p = bond_at([blast[0] + 60.0, blast[1], blast[2]]);
     for _ in 0..320u32 { sim.tick(&d, &p); }
     for (k, pl) in trio.iter().enumerate() {
@@ -431,9 +431,9 @@ fn flash_at_the_waitswitch_trio_does_nothing() {
         stuck: false, seek_target: None, phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
         defused: false,
-    
+        born: 0,
         loop_handle: 0,
-});
+    });
     let p = bond_at([blast[0] + 60.0, blast[1], blast[2]]);
     for _ in 0..320u32 {
         sim.tick(&d, &p);
@@ -478,9 +478,9 @@ fn a_flashed_guard_killed_after_drops_nothing_more() {
         stuck: false, seek_target: None, phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
         defused: false,
-    
+        born: 0,
         loop_handle: 0,
-});
+    });
     let p = bond_at([blast[0] + 60.0, blast[1], blast[2]]);
     let mut flashed = false;
     for _f in 1..=260u32 {
@@ -508,14 +508,25 @@ fn a_flashed_guard_killed_after_drops_nothing_more() {
         stuck: false, seek_target: None, phase: None,
         burn: 0, // [M Bullet_init 0x12c5a0:211 — only the 0x3b family carries the counter]
         defused: false,
-    
+        born: 0,
         loop_handle: 0,
-});
+    });
     for _ in 0..320u32 { sim.tick(&d, &p); }
     assert!(matches!(sim.list[gi].state, state::DEATH_ANIM | state::DEAD | state::FADE | state::FADE_FAST),
         "the frag killed the stunned guard, state {:#x}", sim.list[gi].state);
-    assert_eq!(sim.pickups.len(), drops_after_flash, "the deaths added NO pickup (the dying guards hold the fists): {:?}",
+    // The deaths add exactly ONE pickup: one yard guard's stun EXPIRES during the frag fuse (the
+    // recover clock `DroneFunc_RecoverTime` 0x147188 ran out on this stream — batch-3's blast-spot
+    // search proved recovery dominates the fuse at every lethal offset, so "kill them all stunned"
+    // is unrealizable here). The game's own recovery path: `StunGrenadeRecover` 0x163350 ENTER plays
+    // the get-up (anim 0x76, follow 0x56) and `DSTATE_Stunned_Recover` 0x1630b8 re-arms the sidearm
+    // ChangeWeapon(6) [M] — he dies HOLDING weapon 6, whose record carries a model at +0x80, so
+    // `DropWeapon` 0x17a2a0 drops it: the (6,6) recovered-sidearm drop. Every still-stunned guard
+    // dies holding the FISTS (model 0 [L record 1]) and adds nothing.
+    let added = &sim.pickups[drops_after_flash..];
+    assert_eq!(added.len(), 1, "the deaths add exactly the recovered-sidearm drop: {:?}",
         sim.pickups.iter().map(|p| (p.weapon, p.rounds)).collect::<Vec<_>>());
+    assert_eq!((added[0].weapon, added[0].rounds), (6, 6),
+        "the death-added pickup is the recovered sidearm (0x163350/0x1630b8 ChangeWeapon(6), dropped by 0x17a2a0)");
 }
 
 /// scratch helpers (delete before merge)

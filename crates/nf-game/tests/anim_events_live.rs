@@ -88,7 +88,7 @@ impl Fixture {
     }
 }
 
-fn bond_away() -> Player { Player { yaw: 0.0, pos: [0.0, -500.0, 0.0], target: [0.0, -499.5, 0.0], eye: [0.0, -499.0, 0.0], aim: [-1.0, 0.0, 0.0], sph: [0.0, -500.0, 0.0], capsule: ([0.0, -498.9, 0.0], [0.0, -500.0, 0.0]), hanging: false, body: Default::default(), cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
+fn bond_away() -> Player { Player { yaw: 0.0, pos: [0.0, -500.0, 0.0], target: [0.0, -499.5, 0.0], eye: [0.0, -499.0, 0.0], aim: [-1.0, 0.0, 0.0], sph: [0.0, -500.0, 0.0], capsule: ([0.0, -498.9, 0.0], [0.0, -500.0, 0.0]), hanging: false, body: Default::default(), cel: None, obj_cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
 
 /// The frame of the first op-4 kind-2 command with the given event arg in `hash`.
 fn event_frame(d: &Data, hash: u32, arg: u16) -> Option<(u32, u32)> {
@@ -155,12 +155,20 @@ fn melee_event_creates_the_close_combat_bullet() {
         player.sph = player.pos;
         player.capsule = ([player.pos[0], player.pos[1] + 1.086, player.pos[2]], player.pos);
         sim.tick(&d, &player);
-        // The punch bullet flies and connects inside the same tick, so the outcome is the hit on
-        // Bond (the record's id rides the Hit): in range → one hit by weapon 0x65; out → none.
+        // The punch bullet flies and connects within its flight window: the record's speed is
+        // 1.5/tick over the ≤1.75 gap, so the hit lands on the swing tick or the next one — under
+        // the post-f1f37ba47 stream the first flight tick clamps at the capsule contact
+        // (travelled 0.9467 of the 1.5) and the hit lands the tick after (the old same-tick pin
+        // held one stream position of the contact path). The damage/owner/range pins stay exact.
         if dist < 1.75 {
+            for _ in 0..2 {
+                if sim.player_hits.len() == 1 { break; }
+                sim.tick(&d, &player);
+            }
             assert_eq!(sim.player_hits.len(), 1, "the punch connects in range (dist {dist})");
             assert_eq!(sim.player_hits[0].1, gi, "the hit is the melee guard's bullet");
         } else {
+            sim.tick(&d, &player);
             assert!(sim.player_hits.is_empty(), "out of the 1.75 punch range (dist {dist}): {:?}", sim.player_hits);
         }
     }

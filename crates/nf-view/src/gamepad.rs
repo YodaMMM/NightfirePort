@@ -113,6 +113,11 @@ impl Backend {
         // The goggles press (action 13's edge): ORed like the other buttons, so a pad press
         // reaches the sim beside the keyboard's V.
         input.goggles_action |= p.goggles_action;
+        // The keypad page's lanes, so a pad can work the page and leave it.
+        let (nav, confirm, back) = crate::menu::pad_keypad_lanes(pad.buttons, pad.lx, pad.ly);
+        input.keypad_nav |= nav;
+        input.keypad_confirm |= confirm;
+        input.keypad_back |= back;
         if input.weapon_cycle == 0 { input.weapon_cycle = p.weapon_cycle; }
         if input.gadget_cycle == 0 { input.gadget_cycle = p.gadget_cycle; }
         if input.switch_to.is_none() { input.switch_to = p.switch_to; }

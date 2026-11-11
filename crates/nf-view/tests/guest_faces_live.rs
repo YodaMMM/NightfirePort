@@ -25,6 +25,35 @@ fn step(scene: &mut nf_view::scene::Scene) {
 /// [M 0x1be648], with margin against the lerp's float noise).
 const LIVE: f32 = 0.05;
 
+/// capsule-join-5 staging: a stand 2.2 u from guest `i` that no OTHER live drone's standing body
+/// reaches. The game pushes a player standing within 2.0 of any live drone with the body bit
+/// [M NDrone2_DoCollision 0x149ec8:16-31 — the +0x4F8 & 0x20 bit every drone carries
+/// (NDrone2_DefaultInit 0x14b300:60); DroneFunc_NearPlayerCollision 0x14b190 short-circuits the
+/// rest of the gate inside 2.0], so a stand placed inside the crowd is pushed off its aim line
+/// before the crosshair pick. The stands sit on the guest's FRONT half (BondTalk talks only to a
+/// Bond inside 3.0 whom the drone faces, |+0x1D4| <= pi/2 [M 0x1446b0:12-14]): seven bearings
+/// 22.5 deg apart, his facing first; the clear ones (every other drone > 2.4 u) are cycled every
+/// 90 ticks to dodge crowd blockers on the ray; with none clear the old facing offsets stand.
+fn clear_stand(sim: &nf_view::scene::Sim, i: usize, t: u32) -> [f32; 3] {
+    let d = &sim.drones.list[i];
+    let (npos, nyaw) = (d.pos, d.yaw);
+    let at = |a: f32| [npos[0] + a.sin() * 2.2, npos[1], npos[2] + a.cos() * 2.2];
+    let clear: Vec<[f32; 3]> = (0..7).map(|k| {
+        let k = k as f32;
+        // facing first, then alternating either side
+        let off = if k == 0.0 { 0.0 } else { let s = ((k + 1.0) / 2.0).floor(); if (k as u32) % 2 == 1 { s } else { -s } };
+        at(nyaw + off * std::f32::consts::TAU / 16.0)
+    }).filter(|p| sim.drones.list.iter().enumerate().all(|(j, o)| {
+        j == i || !o.present || !o.enabled || o.corpse || o.health <= 0.0
+            || ((o.pos[0] - p[0]).powi(2) + (o.pos[2] - p[2]).powi(2)).sqrt() > 2.4
+    })).collect();
+    if clear.is_empty() {
+        let off = [0.0f32, 0.7, -0.7, 1.4, -1.4][(t / 90) as usize % 5];
+        return at(nyaw + off);
+    }
+    clear[(t / 90) as usize % clear.len()]
+}
+
 #[test]
 fn a_talking_guests_face_weights_follow_the_line() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -52,13 +81,10 @@ fn a_talking_guests_face_weights_follow_the_line() {
                     .min_by_key(|(_, d)| ((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)) as u32)
                     .map(|(x, _)| x).expect("an awake type-13 guest [D census]")
             });
-            let d = &sim.drones.list[i];
-            let (npos, nyaw) = (d.pos, d.yaw);
+            let npos = sim.drones.list[i].pos;
+            let stand = clear_stand(sim, i, t); // a stand clear of the crowd's bodies
             let sim = scene.sim.as_mut().unwrap();
-            let off = [0.0f32, 0.7, -0.7, 1.4, -1.4][(t / 90) as usize % 5]; // dodge crowd blockers
-            let a = nyaw + off;
-            let (s2, c2) = (a.sin(), a.cos());
-            sim.bond.pos = [npos[0] + s2 * 2.2, npos[1], npos[2] + c2 * 2.2];
+            sim.bond.pos = stand;
             sim.bond.yaw = (npos[0] - sim.bond.pos[0]).atan2(npos[2] - sim.bond.pos[2]);
             let dy = 0.4f32 - 1.6; // aim mid-body [M 0x1a7810]
             sim.bond.pitch = (dy / 2.2f32.hypot(1.2)).asin();

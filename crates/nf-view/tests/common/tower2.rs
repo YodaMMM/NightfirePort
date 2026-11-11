@@ -16,6 +16,39 @@ use crate::walker::Wp;
 /// from the leg end (d 2.0), and a kill there means the burst never exists.
 pub static PRE_CLEAR_SOUTH_CORRIDOR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// OPT-IN (set only by the 07000013 chain's d3 real-damage walk, checked at the one labeled leg
+/// below — no other caller sets it, so every other walk is byte-identical): at "the north lobby 2"
+/// leg end, stand and take the alive team-1 guards within 12 u that have an exposed part, nearest
+/// first (up to three). The guards pursue to 1.0-2.0 [M 0x152548:174-181] and the leg resumed into
+/// the pursuit after the fight's own cap left them alive — #6 (rifle 0x18, hp 30) walked Bond down
+/// and unloaded 4 × −14.0 at d 2.5-2.9, the TooClose bonus [M DroneFiring_TooClose_Damage], for
+/// the tick-5914 death (level-13-warm-chain-margin ledger [L]). The pre-clear takes them from the
+/// leg end at d 4.6-8.2 before the north lobby 3 leg, the civ-unignore-2 law (the pre-clears
+/// stand at the leg ends and take the posted guards BEFORE the legs walk into them).
+pub static PRE_CLEAR_NORTH_LOBBY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// OPT-IN (set only by the 07000011 chain's Agent and 00 Agent walks; the 07000012 and 07000013
+/// walks never set it, so their legs are unchanged): "the east wing" leg aims at the corridor's
+/// west side (x 23.2; the wall stops Bond near x 24.0). The office civilian #24 stands at
+/// (25.35, 1.0, -0.04), 1.3 east of the old leg end, and a guard's round ends on the first body
+/// on its line [M Bullet_CollisionHandler 0x12ce80 state 2; NDrone2_DealWithObjHit 0x13fff0:
+/// 181-232 — a team-1 shooter lands on team 3]. The chain's Agent run had guard #3 open fire up
+/// the wing as Bond stood at that leg end; his rounds killed her 19 ticks later ("Killed
+/// Civilians", the restart). With this aim the run measured guard #3 dead at the next leg with
+/// her alive. It changes where and when the fight starts; it does not keep her out of every line.
+/// Per thread: the 07000011 binary runs its difficulties side by side.
+thread_local! { pub static EAST_WING_WEST_SIDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
+/// OPT-IN (set only by the campaign_flow 12 leg; the 07000011/12/13 walks never set it, so their
+/// legs are unchanged): at "the east wing corner" leg end, the wing guard placement #9 (weapon
+/// 0x19) stands 2.7 u east of Bond, and on the joined tree he opened fire down the wing at Bond's
+/// back as the route walked south; office civilian #24 had stepped into the wing (24.2-24.8, -1.9
+/// to -2.6) and his round ended on her first ("Killed Civilians", the restart) — a team-1 round
+/// lands on team 3 [M NDrone2_DealWithObjHit 0x13fff0:181-232]. A player deals with the gunman
+/// he walks past instead of turning his back on him: the stand runs only while that guard lives
+/// within 6 u of the corner.
+thread_local! { pub static CLEAR_EAST_WING_GUARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
 /// The walkreal-12 route: spawn → the keypad burn → the console E. Used again by the 07000013
 /// test's warm chain.
 pub fn walk_12(w: &mut crate::walker::Walker) {
@@ -51,12 +84,21 @@ pub fn walk_12(w: &mut crate::walker::Walker) {
         }
         assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x4e, "the Q-Decryptor is held [M runs_beam]");
     }
+    // A keypad opens by its typed code or the decryptor; the laser arm is kind 1 only [M 0x1ae3d8:47, :162].
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        if let Some(li) = sim.drones.locks.iter().position(|l| l.out == 0xa && !l.unlocked) {
+            let code = sim.drones.key_codes.code(sim.drones.locks[li].code);
+            sim.drones.keypad = Some((li, nf_game::lock::Keypad::arm(code, false)));
+            for c in code { sim.drones.keypad_digit((c - b'0') as u32); }
+        }
+    }
     let lock_at = [7.0f32, 1.6, 0.2];
     let start = w.total_ticks;
     loop {
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.drones.channels.on(0xa) { break; }
-        assert!(w.total_ticks - start < 600, "the beam never burned the keypad lock (ch 0xa) [M 0x1ae3d8]");
+        assert!(w.total_ticks - start < 600, "the typed code never raised the keypad channel (ch 0xa) [M 0x1ae3d8 case 4]");
         let p = sim.bond.pos;
         let eye = p[1] + sim.bond.eye - sim.bond.crouch_drop;
         let dx = lock_at[0] - p[0];
@@ -209,7 +251,32 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
         (5.75, -22.75, "the south hall"), (-9.75, -22.25, "the south hall west"),
     ];
     for &(x, z, label) in legs {
+        let x = if label == "the east wing" && EAST_WING_WEST_SIDE.with(|c| c.get()) { 23.2 } else { x };
         w.walk_to(Wp::new(x, 1.1, z).r(1.0), label);
+        if label == "the east wing corner" && CLEAR_EAST_WING_GUARD.with(|c| c.get()) {
+            let di = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
+                d.placement == 9 && d.present && !d.corpse && d.health > 0.0 && d.team == 1
+                    && crate::walker::dxz(d.pos, w.scene.sim.as_ref().unwrap().bond.pos) < 6.0
+            });
+            if let Some(di) = di {
+                // The loadout's pistol (0x10, clip 7 on this chain) — the keypad burn left the
+                // Q-Decryptor in hand. A real wheel request, then the draw.
+                for _ in 0..4 {
+                    if w.scene.sim.as_ref().unwrap().gun.weapon == 0x10 { break; }
+                    w.tick(nf_game::player::Input { switch_to: Some(0x10), ..Default::default() }, false);
+                    for _ in 0..60 {
+                        let g = &w.scene.sim.as_ref().unwrap().gun;
+                        if g.weapon == 0x10 && g.switch_state == 0 { break; }
+                        w.tick(nf_game::player::Input::default(), false);
+                    }
+                }
+                let armed = w.scene.sim.as_ref().unwrap().gun.weapon == 0x10;
+                let t0 = w.total_ticks;
+                let killed = armed && w.stand_and_fire(di, 600);
+                eprintln!("[012] the east wing guard #{di} (placement 9) from the corner: armed {armed} (gun {:#x}) killed {killed} in {} ticks",
+                    w.scene.sim.as_ref().unwrap().gun.weapon, w.total_ticks - t0);
+            }
+        }
         if label == "the south-east bend 2" && PRE_CLEAR_SOUTH_CORRIDOR.load(std::sync::atomic::Ordering::Relaxed) {
             let di = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
                 d.present && !d.corpse && d.health > 0.0 && d.team == 1
@@ -252,7 +319,32 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
         (-18.75, 15.75, "the north lobby west end"), (-10.75, 15.75, "the north lobby"), (-8.00, 17.00, "the north lobby 2"),
         (-4.00, 17.00, "the north lobby 3"), (-1.00, 16.00, "the north lobby east"),
     ];
-    for &(x, z, label) in legs { w.walk_to(Wp::new(x, 1.1, z).r(1.0), label); }
+    for &(x, z, label) in legs {
+        w.walk_to(Wp::new(x, 1.1, z).r(1.0), label);
+        // warm-chain-margin-3 (the level-13-warm-chain-margin-2 lever, ported to master): the
+        // flag-gated north-lobby pre-clear — only the 07000013 chain's d3 real-damage walk sets
+        // PRE_CLEAR_NORTH_LOBBY, so every other caller walks the legs byte-identical.
+        if label == "the north lobby 2" && PRE_CLEAR_NORTH_LOBBY.load(std::sync::atomic::Ordering::Relaxed) {
+            for _ in 0..3 {
+                let (di, d) = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let stand = sim.bond.pos;
+                    let Some(di) = sim.drones.list.iter().enumerate().filter(|(_, d)| {
+                        d.present && !d.corpse && d.health > 0.0 && d.team == 1
+                            && crate::walker::dxz(d.pos, stand) < 12.0
+                    })
+                    .min_by(|a, b| crate::walker::dxz(a.1.pos, stand).total_cmp(&crate::walker::dxz(b.1.pos, stand)))
+                    .map(|(i, _)| i)
+                    else { break };
+                    if crate::walker::DamageLog::exposed_part(sim, di).is_none() { break }
+                    (di, crate::walker::dxz(sim.drones.list[di].pos, stand))
+                };
+                let killed = w.stand_and_fire(di, 600);
+                eprintln!("[012] the north lobby pre-clear: guard #{di} at d {d:.1} killed {killed}");
+                if !killed { break }
+            }
+        }
+    }
     w.walk_to(Wp::new(2.25, 1.1, 15.25).r(0.6), "the lift doors");
     w.walk_to(Wp::new(2.2, 0.7, 12.55).r(0.4), "into the shaft entrance");
     {

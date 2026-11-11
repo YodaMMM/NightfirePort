@@ -158,6 +158,15 @@ fn the_charge_burn_keeps_the_ps2_spark_count() {
     for _ in 0..4000 { sim.step_bond(Default::default(), false, false, false); if charge(sim).is_some() { break; } }
     sim.step_bond(nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() }, false, false, false);
     for _ in 0..60 { sim.step_bond(Default::default(), false, false, false); }
+    // The pull comes once the watch is drawn, as a player's would: `Player_WeaponFiring` runs every
+    // frame [M Player_Update 0x193600:413] and a press made while the draw holds the view state
+    // spends its edge there (the timer arms, the state gate refuses the shot, and a held trigger
+    // never re-arms [M 0x1a5460:601-648]), so a trigger held from inside the draw never fires.
+    for _ in 0..240 {
+        if sim.gun.weapon == 0x4e && !sim.gun.refire_blocked { break; }
+        sim.step_bond(Default::default(), false, false, false);
+    }
+    assert!(sim.gun.weapon == 0x4e && !sim.gun.refire_blocked, "the watch laser is drawn and ready");
     let yaw = 0.405f32;
     let mut counts = Vec::new();
     for t in 0..60 {

@@ -61,6 +61,11 @@ Callers: CombatNoRoute's timer (both setters, `+0x5A2` unchanged), SearchArea gi
 - **Port** (WORKLOG 0029): `nf-formats::sfx` reads `SFXOutputData`; `Drones::play_sound` queues a sound for the next
   tick's `HandleSoundAlerts`; the chain above, AlertToPosition and SearchArea are ported. Not yet checked live (U-033);
   Bond's gunfire does not make sounds yet (G-026).
+- `AlertSound`'s rows, in order [M 0x177800]: on 0C/0D voice sets 5/6 any sound is an attack and the 50-unit
+  gate is skipped; state 0x1B on 07000014 is deaf; then the 50-unit gate and the sighted gate; modes 9/0x12/0x13/0x16
+  attack above alertness 0.7 and otherwise do nothing (they never investigate); every other mode takes HeardNoise.
+  The alarm (EnemyAlerts case 0x1E) has none of these gates: modes 9 and 0x12 drop it, the rest attack. All of this is
+  `enemy_alerts` in drone.rs.
 - Drone-to-drone shouts (msgs 0x11, 0x12, 0x13, 0x15, 0x16) are dead code in this build (`ShoutFromOtherDrone`
   returns 0). The alarm (msg 0x1E, every 30 frames while `switch_channels[0x96]`) → Attack.
 

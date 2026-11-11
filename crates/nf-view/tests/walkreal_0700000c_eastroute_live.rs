@@ -43,13 +43,17 @@ fn floor_at(w: &Walker, x: f32, y: f32, z: f32) -> Option<f32> {
 #[test]
 fn the_ground_route_crosses_to_the_east_side() {
     let iso = iso();
+    // los-mask-repins-0c-2 (OPT-IN `with_strip_p2k_shot`): the shared prologue's strip-guard
+    // shot rides the same wheel switch as the handoff walk (the landing gun is the MICRO-CAMERA
+    // 0x54 — no round spawns from it [M scene.rs:5002]; the P2K is loaded there [L the probe]) —
+    // with #35 dead the west strip holds and the prologue's own #284-ride legs land clean.
+    let mut w = walker::with_strip_p2k_shot(|| walk_spawn_to_the_band(&iso));
     // Start: the band west end (the whole walk's leg-10 spot, floor 10.34 [D probe door4]) -
     // REACHED by the game's own route on real input: the shared prologue replays the main
     // walk's legs 1-9c verbatim (spawn -> the laser hinge burn -> the vent drop -> the
     // staircase descent -> the photograph -> the secret door -> the yard ladder -> the wires
     // -> the slot jump's band landing), then this leg walks the band east to the spot. No
     // pose writes.
-    let mut w = walk_spawn_to_the_band(&iso);
     w.walk_to(Wp::new(52.0, 11.4, -207.6).r(0.8), "the band west end (the whole walk's leg-10 spot)");
     {
         let sim = w.scene.sim.as_ref().unwrap();

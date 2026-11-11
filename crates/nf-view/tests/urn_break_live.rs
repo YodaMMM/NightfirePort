@@ -62,6 +62,34 @@ fn sphere(sim: &nf_view::scene::Sim, glist: u32, m: &[[f32; 4]; 4]) -> ([f32; 3]
     }
 }
 
+/// A clear shot at one of `script`'s live entities: `(from, at)`, 1.2 units off a triangle's front
+/// face to its middle. The sphere only queues an object; the round has to meet its glist's
+/// triangles [M Collide_PickObj 0x1eae80, Collide_Intersect 0x1ebaa8].
+fn mesh_shot(sim: &nf_view::scene::Sim, script: u32) -> ([f32; 3], [f32; 3]) { mesh_shot_off(sim, script, 1.2) }
+
+/// `mesh_shot` with the stand-off `off` units out along the face normal.
+fn mesh_shot_off(sim: &nf_view::scene::Sim, script: u32, off: f32) -> ([f32; 3], [f32; 3]) {
+    let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    for o in sim.drones.scripts.objects.list.iter().flatten() {
+        let nf_game::nis::Obj::Entity { hash, matrix: m, src, .. } = o else { continue };
+        if src.0 != script { continue; }
+        let Some(tris) = sim.world.shape(*hash) else { continue };
+        let pose = |v: [f32; 3]| [0, 1, 2].map(|k| m[0][k] * v[0] + m[1][k] * v[1] + m[2][k] * v[2] + m[3][k]);
+        for t in tris {
+            let w = t.map(pose);
+            let (e1, e2) = (sub(w[1], w[0]), sub(w[2], w[0]));
+            let n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+            let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            if l < 0.01 { continue; }
+            let at = [0, 1, 2].map(|k| (w[0][k] + w[1][k] + w[2][k]) / 3.0);
+            let from = [0, 1, 2].map(|k| at[k] + n[k] / l * off);
+            let mid = [0, 1, 2].map(|k| at[k] + n[k] / l * 0.01);
+            if sim.world.segment(from, mid).is_none() { return (from, at); }
+        }
+    }
+    panic!("no clear face on script {script:#x}");
+}
+
 /// Stand Bond beside `target`, take the level's own drawn weapon and hold the trigger 3
 /// ticks (the release-frame spawn family). Waits out the intro cut-scene and the holster
 /// cycle first.
@@ -70,8 +98,11 @@ fn fire_at(sim: &mut nf_view::scene::Sim, from: [f32; 3], target: [f32; 3]) {
         if !sim.disabled && sim.gun.switch_state == 0 { break; }
         sim.step_bond(Default::default(), false, false, false);
     }
-    sim.bond.pos = from;
-    let eye = [from[0], from[1] + 0.70, from[2]];
+    // A placement, not a poke: a raw write to a spot no room cel holds is sent back by the
+    // out-of-cel recovery [M 0x133288:186-221]. The aim reads where the floor snap stood him.
+    let yaw = sim.bond.yaw;
+    sim.place_bond(from, yaw);
+    let eye = [sim.bond.pos[0], sim.bond.pos[1] + 0.70, sim.bond.pos[2]];
     let d = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
     let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
     let dir = [d[0] / l, d[1] / l, d[2] / l];
@@ -93,8 +124,8 @@ fn p2k_round(from: [f32; 3], at: [f32; 3]) -> nf_game::drone::PlayerBullet {
     nf_game::drone::PlayerBullet {
         pos: from, dir: [d[0] / l, d[1] / l, d[2] / l],
         speed: 13.2, travelled: 0.0, range: 50.0, damage: 2.75, weapon: 2,
-        first: true, dead: false, bounces: 0, homing: false, target: None,
-        gravity: false, guided_cam: false, snd: 0, swoosh: None, born: 0,
+        first: true, dead: false, bounces: 0, homing: false, target: None, target_copter: false,
+        gravity: false, guided_cam: false, snd: 0, swoosh: None, born: 0, from_turret: None,
     }
 }
 
@@ -118,9 +149,18 @@ fn shooting_the_urn_starts_its_break_script() {
     };
     eprintln!("[urn] intact entity at {centre:?} r {radius}");
 
-    // The fired round: from 1.5 units south, through the intact urn's BuildWorldSph sphere.
+    // Sister: a round through the BuildWorldSph sphere that misses the triangles leaves no contact.
     let from = [centre[0], centre[1] - 0.35, centre[2] + 1.5];
     scene.sim.as_mut().unwrap().drones.player_bullets.push(p2k_round(from, centre));
+    for _ in 0..6 {
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+        let p = &scene.sim.as_ref().unwrap().drones.scripts.players[pi];
+        assert!(p.tick_bullet_hits.is_empty(), "the sphere alone is no contact");
+    }
+
+    // The fired round: onto a triangle of the urn's own stream objects.
+    let (from, at) = mesh_shot(scene.sim.as_ref().unwrap(), URN_SCRIPT);
+    scene.sim.as_mut().unwrap().drones.player_bullets.push(p2k_round(from, at));
 
     // The one-frame order: the pass RECORDS the contact this tick (the SP still primed), the
     // next walk CONSUMES it (state 2).
@@ -200,7 +240,7 @@ fn shooting_the_radio_swaps_it_to_its_b_script() {
     for _ in 0..5 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     const RADIO_SCRIPT: u32 = 0x0600_0055;
     const RADIO: u32 = 0x0200_0408;
-    let (pi, centre, radius) = {
+    let (pi, _centre, _radius) = {
         let sim = scene.sim.as_ref().unwrap();
         let pi = sim.drones.scripts.players.iter().position(|p| p.placement == 807).expect("the radio SP #807 [D census]");
         let p = &sim.drones.scripts.players[pi];
@@ -210,10 +250,14 @@ fn shooting_the_radio_swaps_it_to_its_b_script() {
         let (c, r) = sphere(sim, RADIO, &m);
         (pi, c, r)
     };
-    eprintln!("[radio] art at {centre:?} r {radius}");
     {
         let sim = scene.sim.as_mut().unwrap();
-        fire_at(sim, [centre[0], centre[1] - 0.2, centre[2] + 1.2], centre);
+        // 3 units off the face, not 1.2: the radio's spot has no floor within the placement's reach,
+        // so Bond stands 1.2 above it [M 0x190d88:104-116] and the shot dips onto the face; the P2K
+        // round leaves from the muzzle ~1.7 along the aim, which from 1.2 out is already past the
+        // face (the round never meets it). A player shoots the radio from across the table.
+        let (from, at) = mesh_shot_off(sim, RADIO_SCRIPT, 3.0);
+        fire_at(sim, [from[0], from[1] - 0.7, from[2]], at);
     }
     let mut hit = false;
     for _ in 0..10u32 {
@@ -229,31 +273,31 @@ fn shooting_the_radio_swaps_it_to_its_b_script() {
 }
 
 /// The sky bridge (07000012 #660, hp 120): its primed stream-0 object is a class-0 entity
-/// with NO glist record (script 0x06000530 stream 0 carries glist 0 [D dump]) — the game's
-/// `Control_BuildWorldSph` no-record sphere is the matrix translation with radius 0.1 [M
-/// 0x133070:19-27, :61-66], and that is the object the Collide pass hangs the class-5 record
-/// on. Bond's real trigger held 3 ticks starts the break script (state 1 → 2 [M case 1]).
+/// with NO glist record (script 0x06000530 stream 0 carries glist 0 [D dump]), and an object
+/// with no collision block never passes a round's pick [M Collide_PickObj 0x1eae80: glist+8 for
+/// a non-0x100 test]. The bridge meshes the script holds are what the round meets: Bond's real
+/// trigger held 3 ticks at one of them starts the break script (state 1 → 2 [M case 1]).
 #[test]
 fn shooting_the_sky_bridge_starts_its_break_script() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000012.bin", false).expect("load 07000012");
     for _ in 0..5 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     const BRIDGE_SCRIPT: u32 = 0x0600_0530;
-    let (pi, centre) = {
+    let pi = {
         let sim = scene.sim.as_ref().unwrap();
         let pi = sim.drones.scripts.players.iter().position(|p| p.placement == 660).expect("the bridge SP #660 [D census]");
         let p = &sim.drones.scripts.players[pi];
         assert_eq!(p.state, 1, "the mode-64 prime leaves the bridge primed [M 0x1dbc08]");
         assert_eq!(p.hit_points, 120.0, "the bridge carries 120 hit points [D census]");
         let (_, m) = find_entity(sim, BRIDGE_SCRIPT, 0, 0).expect("the bridge's primed stream-0 entity");
-        let (c, r) = sphere(sim, 0, &m);
+        let (_, r) = sphere(sim, 0, &m);
         assert!(r <= 0.1001, "the no-glist sphere is the game's 0.1, got {r}");
-        (pi, c)
+        pi
     };
-    eprintln!("[bridge] primed root at {centre:?}");
     {
         let sim = scene.sim.as_mut().unwrap();
-        fire_at(sim, [centre[0], centre[1], centre[2] + 1.2], centre);
+        let (from, at) = mesh_shot(sim, BRIDGE_SCRIPT);
+        fire_at(sim, [from[0], from[1] - 0.7, from[2]], at);
     }
     let mut hit = false;
     for _ in 0..10u32 {

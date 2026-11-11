@@ -203,10 +203,11 @@ HostageKiller(7), sniper last node in 0x29), then shoot a guard.
 - `AllyLeadMissionWait`'s wait channel: the port read `second_channel` (+0x135); the game latches `Drone+0x12C`
   (0 → 0x99) [M 0x15efc8:17-20]. Fixed: new `mission_wait_channel` field models +0x12C; test
   `fields_actors_live::a_state_change_clears_both_message_timers`.
-- `DroneFunc_OnInitDeath`'s mission-fail corners (`ally.rs::on_init_death`): the prop-0x54 + non-drone-kill arm
-  re-checks prop 0x53 (unset → no fail) [M 0x145bd0 LAB_00145cc8 / LAB_00145c3c], prop 0x53 + a drone killer gives
-  reason 2 (team 1) / 1 (team 2/3) [M the bVar7 gotos], and the KO check opens the team-1 arm only [M 0x145bd0:20-22]
-  (the caller now passes it). Test: `ally::tests::oninitdeath_corners_match_the_decompile`.
+- `DroneFunc_OnInitDeath`'s mission-fail corners (`ally.rs::on_init_death`): bVar7 is "the killer is class 3", the
+  player [M `Player_Init` 0x1910f8:76]. The prop-0x54 + non-player-kill arm re-checks prop 0x53 (unset → no fail) [M
+  0x145bd0 LAB_00145cc8 / LAB_00145c3c], prop 0x53 + the player's kill gives reason 2 (team 1) / 1 (team 2/3) [M the
+  bVar7 gotos], and the KO check opens the team-1 arm only [M 0x145bd0:20-22] (the caller passes it). Tests:
+  `ally::tests::oninitdeath_corners_match_the_decompile`, `fix_ally_death_live`.
 - Every state change now clears **both** message timers and resets the hit-effect multiplier `+0x14C` to 1.0
   [M-dis 0x17207c-88] — the port cleared only timer C and never reset `damage_taken`. Test:
   `fields_actors_live::a_state_change_clears_both_message_timers` (fails before the fix).

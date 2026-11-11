@@ -1,6 +1,7 @@
 //! The gameplay placement types the port drew as static geometry: the channel inverter (0x41), the
-//! turret shooter (0xd2), the gated dynamic object (0x3b) and the third-person camera spline (0xe7).
-//! All four are created by `parsemap_create_dynamic_objects` 0x1d04f0 from the placements' params
+//! turret shooter (0xd2), the gated dynamic object (0x3b), the third-person camera spline (0xe7),
+//! the one-sided wall (0xd5) and the music trigger (0xfb).
+//! All are created by `parsemap_create_dynamic_objects` 0x1d04f0 from the placements' params
 //! (the level_tag record, docs/fields/level-tag.md) and updated per tick by `control_funcs[class]`
 //! through `control_movement_object_handler` 0x1336f8's update pass. None of the four creators
 //! draws from the shared RNG (checked on each create's decompile), so creating them here does not
@@ -98,6 +99,7 @@ impl Shooter {
             weapon: self.weapon,
             flyby: flags68 & 0x40_0000 != 0,
             bounces: 0,
+            glass_pass: crate::bullet::glass_pass_of(w),
             ..crate::bullet::Bullet::TAIL
         };
         b.init_fuse(w);
@@ -136,6 +138,10 @@ pub struct DynObject {
     /// The create order among the level's 0x3b placements (the draw's posed slot; the delete pass
     /// removes dead objects from the list, so the list index is not stable).
     pub slot: u16,
+    /// The collision world's key for the glist; 0 when it has no shape.
+    pub shape: u32,
+    /// obj+0x90.
+    pub matrix: [[f32; 4]; 4],
 }
 
 impl DynObject {
@@ -204,22 +210,23 @@ impl ThirdCam {
 /// MusicTrigger (placement 0xfb → `MusicTrigger_Create` 0x1b30e0, class 0xc): while switch
 /// channel `ch_on` (p0) is on it re-arms a 30-tick countdown; every tick the countdown runs fires
 /// `Music_Event(event_id, 2)` [M 0x1b31a0:19-27] — so the event keeps firing for up to 30 ticks
-/// after the channel clears. `ch_flag` (p1) is an optional second channel and `flag_byte` (p3) a
-/// byte that also set the game's obj+0xfe bit 0 (`playing` here — no port-side reader found;
-/// [M 0x1b31a0:15,26-27] for the writers).
+/// after the channel clears. `ch_flag` (p1) is a kill channel and `flag_byte` (p3) a one-shot byte:
+/// both set obj+0xfe bit 0, the delete flag [M 0x1b31a0:15,26-27], and the movement handler's delete
+/// pass removes the object that tick [M 0x1336f8:86-87]. So a p3 = 1 trigger posts its event for ONE
+/// tick, however long the channel stays on (07000001's event 2, the alarm slot, then decays).
 pub struct MusicTrigger {
     /// p2 — the `Music_Event` board slot ([D] 07000001: 2, 07000002: 31/32, 07000007: 13 …).
     pub event_id: u32,
     /// p0 — the switch channel that re-arms the countdown (create skips the object when 0).
     pub ch_on: u16,
-    /// p1 — optional second channel driving `playing`.
+    /// p1 — optional kill channel (deletes the object, after this tick's update has run).
     pub ch_flag: u16,
     /// p3.
     pub flag_byte: u8,
     /// The game's countdown short at inst+8 (`0x1e` armed, drained per tick).
     pub countdown: i16,
-    /// The game's obj+0xfe bit 0.
-    pub playing: bool,
+    /// The game's obj+0xfe bit 0: deleted by the delete pass the same tick.
+    pub dead: bool,
 }
 
 /// Rotor (placement 0x71 → `rotor_init` 0x18f4b8, `rotor_update` 0x18f568, class 7): a spinning
@@ -417,9 +424,8 @@ impl Mine {
         best
     }
 
-    /// `Explode_Propagate` 0x17c518's reach for one mine: the falloff `damage · (1 − (int)(dist −
-    /// obj+0x8C) / radius)` (dist from the blast to the world sphere centre, the truncation toward
-    /// zero, clamped at ≥ 0) must reach 0.0002 [M 0x17c518, the gate before the class switch]; the
+    /// `Explode_Propagate` 0x17c518's reach for one mine: `explode::falloff` over the distance from
+    /// the blast to the world sphere's edge must reach 0.0002 [M 0x17c518, the gate before the class switch]; the
     /// case-0x4B arm then hangs a
     /// HITDATA on the mine whose +0x58 is the blast's attacker (`Coll_AddHitToList(…, obj+0xD0, 0,
     /// param_5)` [M 0x17c518 case 0x4b]). A mine's own blast passes `EXPLODEINFO+0x24` = the mine
@@ -429,8 +435,39 @@ impl Mine {
         if self.exploded || !(damage >= 0.0002) || !(radius >= 0.0002) { return false; }
         let d = [self.centre[0] - pos[0], self.centre[1] - pos[1], self.centre[2] - pos[2]];
         let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() - self.sph_r;
-        let truncated = if dist > 0.0 { (dist as i32) as f32 } else { 0.0 };
-        damage * (1.0 - truncated / radius) >= 0.0002
+        crate::explode::falloff(damage, radius, dist) >= 0.0002
+    }
+}
+
+/// OneSided wall (placement 0xd5 → `OneSided_Create` 0x1e7ce8, class 0x4C). The creator makes a
+/// plain control object (`control_create_object(0, pos, rot, 0)` 0x1e7ce8:9), stores the
+/// placement's celglist at obj+0xD8 (0x1e7ce8:14) and the class byte 0x4C at obj+0xff
+/// (0x1e7ce8:15), then links it into the room (0x1e7ce8:16). Its params are all unused.
+/// `OneSided_Update` 0x1e7d58 (control_funcs[0x4c·0xC] @0x26fc20, run by the update pass
+/// 0x1336f8:54-69): dot the object matrix's dir (`Mat_GetDir` 0x1e3398 reads obj+0x90's third
+/// column) with (obj pos − viewer) — `glb_viewer+0xC0`, the active camera's world position —
+/// and set obj+0xF0 bit 0x10 (hide) when the dot < 0, clear it otherwise (0x1e7d58 C decomp:
+/// the `_vsub`/`_vmul` pair + the 3-float sum; the disassembly confirms the same three floats
+/// feed the `< 0.0` branch). One whole-object plane flip per tick; no RNG, no channels.
+#[derive(Clone, Debug)]
+pub struct OneSided {
+    /// The object position (obj+0x30 = the placement translation).
+    pub pos: V3,
+    /// The matrix dir (`Mat_GetDir(obj+0x90)`, the placement's RotZYX forward, column 2).
+    pub dir: V3,
+    /// The placement index (the join key the draw side needs when it honours the hidden flag).
+    pub placement: usize,
+    /// obj+0xF0 bit 0x10, refreshed every tick by [`OneSided::tick`] (hidden when facing away).
+    pub hidden: bool,
+}
+
+impl OneSided {
+    /// `OneSided_Update` 0x1e7d58: `dot(dir, pos − viewer) < 0` → obj+0xF0 |= 0x10, else clear.
+    /// The viewer is the active camera's world position (`glb_viewer+0xC0`) — the same stand-in
+    /// [`DynObject::tick`]'s fade uses (on-foot first-person = the eye).
+    pub fn tick(&mut self, viewer: V3) {
+        let d = [self.pos[0] - viewer[0], self.pos[1] - viewer[1], self.pos[2] - viewer[2]];
+        self.hidden = self.dir[0] * d[0] + self.dir[1] * d[1] + self.dir[2] * d[2] < 0.0;
     }
 }
 
@@ -442,19 +479,20 @@ pub struct WorldObjects {
     pub dynobjs: Vec<DynObject>,
     pub thirdcams: Vec<ThirdCam>,
     pub music_triggers: Vec<MusicTrigger>,
+    pub onesided: Vec<OneSided>,
 }
 
 impl WorldObjects {
-    /// The placement scan (`p.flags & 0xff` kinds 0x41 / 0xd2 / 0x3b / 0xe7). `path_blocks` is the
+    /// The placement scan (`p.flags & 0xff` kinds 0x41 / 0xd2 / 0x3b / 0xe7 / 0x71 / 0xfb / 0xd5). `path_blocks` is the
     /// main map's 0x19 key-list payloads (`m_paths`), indexed by the placement's +0x44 word.
     /// `glist` resolves the placement's object to its glist's +0x44 draw-flags word (the word
-    /// `DynamicObject_Create` copies to obj+0xF0) and its sphere centre (`celglist+0x20..+0x2C`,
-    /// docs/fields/glist.md) — the world sphere obj+0x80 the fade reads starts at the matrix
+    /// `DynamicObject_Create` copies to obj+0xF0), its sphere centre (`celglist+0x20..+0x2C`,
+    /// docs/fields/glist.md) and its collision shape key — the world sphere obj+0x80 the fade reads starts at the matrix
     /// translation + the glist centre (0x1336f8 pass 6 rebuilds it from the same two).
     pub fn create(
         placements: &[nf_formats::placement::Placement],
         path_blocks: &[&[u8]],
-        glist: impl Fn(&nf_formats::placement::Placement) -> (u32, V3),
+        glist: impl Fn(&nf_formats::placement::Placement) -> (u32, V3, u32),
     ) -> WorldObjects {
         let mut w = WorldObjects::default();
         for p in placements {
@@ -477,10 +515,27 @@ impl WorldObjects {
                         fired: false,
                     });
                 }
+                0xd5 => {
+                    // OneSided_Create 0x1e7ce8: a plain control object (CCO(0) → the placement
+                    // pos/rot [M 0x1e7ce8:9, 0x1344e0:26-29]), the glist at obj+0xD8, class 0x4C.
+                    // The placement's object still draws (the static misc path scene.rs keeps —
+                    // the hidden flag's consumer is the draw side, a hand-off stub).
+                    let m = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
+                    w.onesided.push(OneSided {
+                        pos: p.translation,
+                        // Mat_GetDir(obj+0x90): the matrix's dir column (identity → +z).
+                        dir: [m[0][2], m[1][2], m[2][2]],
+                        placement: p.index as usize,
+                        hidden: false,
+                    });
+                }
                 0x3b => {
                     // DynamicObject_Create 0x18dbf8: p0/p1 (u16), p2 (u16), p3 (u8); obj+0xF0 = the
-                    // glist's +0x44 word (0x18dbf8:15-16), |0x30 when p0 != 0 (0x18dbf8:27-29).
-                    let (base, centre) = glist(p);
+                    // glist's +0x44 word (0x18dbf8:15-16), |0x30 when the p0 SHORT != 0 (0x18dbf8:24,30-32 —
+                    // the level_tag slot is written u32 but read `*(short *)(param_3 + 0x2c)`, so only the
+                    // low 16 bits gate the OR; the census found no disc placement where the two differ [D
+                    // dynobj_p0_census], the unit test pins the short with p0 = 0x10000).
+                    let (base, centre, shape) = glist(p);
                     // obj+0x90: CCO(0) → View_RotTransMatrix [M 0x18dbf8:13, 0x1344e0:26-29].
                     let m = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
                     let slot = w.dynobjs.len() as u16;
@@ -494,9 +549,12 @@ impl WorldObjects {
                         dist: param(2) as u16,
                         mode: param(3) as u8,
                         base_flags: base,
-                        flags: if param(0) != 0 { base | 0x30 } else { base },
+                        // p0 as a SHORT [M 0x18dbf8:24] — the OR fires on the low 16 bits only.
+                        flags: if param(0) as u16 != 0 { base | 0x30 } else { base },
                         alpha: 0xff,
                         dead: false,
+                        shape,
+                        matrix: m,
                     });
                 }
                 0xe7 => {
@@ -523,7 +581,7 @@ impl WorldObjects {
                             ch_flag: param(1) as u16,
                             flag_byte: param(3) as u8,
                             countdown: 0,
-                            playing: false,
+                            dead: false,
                         });
                     }
                 }
@@ -559,19 +617,25 @@ impl WorldObjects {
             ob.tick(viewer, channels);
         }
         self.dynobjs.retain(|ob| !ob.dead);
+        // OneSided_Update 0x1e7d58, per object (the same update pass): the facing flip only —
+        // no channels, no RNG, so its walk order against the other classes is unobservable.
+        for os in &mut self.onesided {
+            os.tick(viewer);
+        }
         // MusicTrigger_Update 0x1b31a0, in its order: the p1 flag arm, the p0 re-arm
         // (`countdown = 0x1e`), then the drain (`countdown != 0` → decrement, `Music_Event(id, 2)`,
         // the p3 flag) — the event board slot reads 2 while the countdown runs and stops 30 ticks
         // after the channel clears.
         for t in &mut self.music_triggers {
-            if t.ch_flag != 0 && channels.on(t.ch_flag as u32) { t.playing = true; }
+            if t.ch_flag != 0 && channels.on(t.ch_flag as u32) { t.dead = true; }
             if t.ch_on != 0 && channels.on(t.ch_on as u32) { t.countdown = 30; }
             if t.countdown != 0 {
                 t.countdown -= 1;
                 music.event(t.event_id as usize, 2);
-                if t.flag_byte != 0 { t.playing = true; }
+                if t.flag_byte != 0 { t.dead = true; }
             }
         }
+        self.music_triggers.retain(|t| !t.dead);
     }
 }
 
@@ -588,13 +652,13 @@ mod music_trigger_tests {
     /// record is params (13, 0, 2, 1) and 07000011's is (18, 0, 255, 0) [D placement bytes].
     #[test]
     fn create_gates_and_param_map() {
-        let w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 1)])], &[], |_| (0, [0.0; 3]));
+        let w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 1)])], &[], |_| (0, [0.0; 3], 0));
         assert_eq!(w.music_triggers.len(), 1);
         let t = &w.music_triggers[0];
         assert_eq!((t.event_id, t.ch_on, t.ch_flag, t.flag_byte), (2, 13, 0, 1));
         assert_eq!(t.countdown, 0);
-        assert!(WorldObjects::create(&[place(0xfb, &[(0, 18), (1, 0), (2, 255), (3, 0)])], &[], |_| (0, [0.0; 3])).music_triggers.is_empty(), "p2 == 0xff → no object");
-        assert!(WorldObjects::create(&[place(0xfb, &[(0, 0), (1, 0), (2, 5), (3, 0)])], &[], |_| (0, [0.0; 3])).music_triggers.is_empty(), "p0 == 0 → no object");
+        assert!(WorldObjects::create(&[place(0xfb, &[(0, 18), (1, 0), (2, 255), (3, 0)])], &[], |_| (0, [0.0; 3], 0)).music_triggers.is_empty(), "p2 == 0xff → no object");
+        assert!(WorldObjects::create(&[place(0xfb, &[(0, 0), (1, 0), (2, 5), (3, 0)])], &[], |_| (0, [0.0; 3], 0)).music_triggers.is_empty(), "p0 == 0 → no object");
     }
 
     /// `MusicTrigger_Update` 0x1b31a0: the channel re-arms 0x1e; each tick the countdown runs fires
@@ -602,7 +666,7 @@ mod music_trigger_tests {
     /// (≤ 30 ticks) and then stops.
     #[test]
     fn countdown_rearms_fires_and_expires() {
-        let mut w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 1)])], &[], |_| (0, [0.0; 3]));
+        let mut w = WorldObjects::create(&[place(0xfb, &[(0, 13), (1, 0), (2, 2), (3, 0)])], &[], |_| (0, [0.0; 3], 0));
         let mut ch = Channels::default();
         let mut music = crate::music::Music::default();
         let mut rng = crate::drone::Rng::new(1);
@@ -625,7 +689,7 @@ mod music_trigger_tests {
             consume(&mut music);
         }
         assert!(w.music_triggers[0].countdown > 0 && w.music_triggers[0].countdown < 30);
-        assert!(w.music_triggers[0].playing, "p3 = 1 sets the game's obj+0xfe bit 0");
+        assert!(!w.music_triggers[0].dead, "p3 = 0 keeps the object");
         // Channel off: the countdown drains and the event fires until it hits 0 (the armed 0x1e
         // [M 0x1b31a0:20] — the last fire is the tick the countdown reaches 0).
         ch.set(13, 0, 6);
@@ -637,6 +701,53 @@ mod music_trigger_tests {
         }
         assert_eq!(w.music_triggers[0].countdown, 0, "the countdown expired at the game's tick");
         assert_eq!(last_fire, 6 + 28, "the event stops 0x1e ticks after the re-arm stops");
+    }
+}
+
+#[cfg(test)]
+mod music_trigger_delete_tests {
+    use super::*;
+    use crate::triggers::Channels;
+
+    fn run(params: &[(u32, u32)], ch: &mut Channels, ticks: u32) -> (WorldObjects, u32) {
+        let p = nf_formats::placement::Placement { index: 0, hashcode: u32::MAX, flags: 0xfb, translation: [0.0; 3], rotation: [0.0; 3], params: params.to_vec(), extra: [0; 9] };
+        let mut w = WorldObjects::create(&[p], &[], |_| (0, [0.0; 3], 0));
+        let (mut music, mut rng) = (crate::music::Music::default(), crate::drone::Rng::new(1));
+        let (weapons, mut bullets) = (nf_formats::weapon::WeaponData::default(), Vec::new());
+        let mut fires = 0;
+        for f in 0..ticks {
+            w.tick(ch, [0.0; 3], &weapons, &mut rng, &mut bullets, f, &mut music);
+            if music.events[2] == 2 { fires += 1; }
+            music.update(0);
+        }
+        (w, fires)
+    }
+
+    /// p3 = 1 [M 0x1b31a0:26-27]: the object posts once and is deleted [M 0x1336f8:86-87].
+    #[test]
+    fn a_one_shot_trigger_posts_for_one_tick_and_goes() {
+        let mut ch = Channels::default();
+        ch.set(13, 1, 0);
+        let (w, fires) = run(&[(0, 13), (1, 0), (2, 2), (3, 1)], &mut ch, 100);
+        assert_eq!(fires, 1, "07000001's record posts once with the channel held 100 ticks");
+        assert!(w.music_triggers.is_empty());
+    }
+
+    /// p1 [M 0x1b31a0:15]: the kill channel deletes the object, but the update still finishes:
+    /// a re-arm on the same tick posts once. Sister: no kill, no delete.
+    #[test]
+    fn the_kill_channel_lets_the_tick_finish() {
+        let mut ch = Channels::default();
+        ch.set(13, 1, 0);
+        ch.set(0x96, 1, 0);
+        let (w, fires) = run(&[(0, 13), (1, 0x96), (2, 2), (3, 0)], &mut ch, 10);
+        assert_eq!(fires, 1);
+        assert!(w.music_triggers.is_empty());
+        let mut ch = Channels::default();
+        ch.set(13, 1, 0);
+        let (w, fires) = run(&[(0, 13), (1, 0x96), (2, 2), (3, 0)], &mut ch, 10);
+        assert_eq!(fires, 10, "the channel holds, the kill channel is off");
+        assert_eq!(w.music_triggers.len(), 1);
     }
 }
 
@@ -698,14 +809,109 @@ mod mine_tests {
     }
 
     #[test]
-    fn the_blast_reach_truncates_the_distance_like_explode_propagate() {
+    fn the_blast_reach_is_explode_propagates_falloff() {
         let m = beam_mine();
-        // dist − sph_r: 16.02 − 2.02 = 14.0 → int 14 → 80·(1 − 14/15) > 0: reached [M 0x17c518].
+        // dist − sph_r: 16.02 − 2.02 = 14.0 → 80·(1 − 14/15) > 0: reached [M 0x17c518].
         assert!(m.blast_reaches([2.0, 16.02, 0.0], 15.0, 80.0));
-        // 17.03 − 2.02 = 15.01 → int 15 → 80·(1 − 15/15) = 0 < 0.0002: not reached (sister).
+        // 17.03 − 2.02 = 15.01 → below 0: not reached (sister).
         assert!(!m.blast_reaches([2.0, 17.03, 0.0], 15.0, 80.0));
         // Inside the sphere: full reach; a zero radius reaches nothing.
         assert!(m.blast_reaches([2.0, 0.0, 0.0], 10.0, 80.0));
         assert!(!m.blast_reaches([2.0, 0.0, 0.0], 0.0, 80.0));
+    }
+}
+
+/// The hidden-dynobj carry (dynobj-hidden-skip): `DynamicObject_Create` 0x18dbf8 ORs 0x30 into
+/// obj+0xF0 when the p0 SHORT is non-zero, and `DynamicObject_Update` 0x18d3b8 restores the raw
+/// glist word / re-ORs 0x30 with the mode-1 channel. The 0x20 bit of that word is in every
+/// `Collide_PickObj` skip set [M 0x1eae80:72-82], so a 0x30 object is never picked for any ray.
+#[cfg(test)]
+mod dynobj_hidden_tests {
+    use super::*;
+    use crate::triggers::Channels;
+
+    fn place(params: &[(u32, u32)]) -> nf_formats::placement::Placement {
+        nf_formats::placement::Placement { index: 0, hashcode: u32::MAX, flags: 0x3b, translation: [0.0; 3], rotation: [0.0; 3], params: params.to_vec(), extra: [0; 9] }
+    }
+
+    /// The real 07000007 rope barrier's word is 0x0 and the Dynamic Blocker's is 0x10 [D
+    /// dynobj_p0_census]; 0x81 is the probe's solar-panel word. None carries 0x10/0x20 bits the
+    /// OR would fold, so the expected words are exact.
+    fn create(params: &[(u32, u32)]) -> DynObject {
+        WorldObjects::create(&[place(params)], &[], |_| (0x81, [0.0; 3], 7)).dynobjs.remove(0)
+    }
+
+    /// `DynamicObject_Create` 0x18dbf8:15-16 copies the glist's +0x44 word; :24,30-32 OR 0x30 when
+    /// the p0 SHORT differs from zero — a p0 whose low 16 bits are 0 (0x10000) must NOT set them.
+    /// (The old port tested the full u32: red there, green since the short read.)
+    #[test]
+    fn create_or_the_hide_word_only_for_a_nonzero_p0_short() {
+        let base = 0x81u32;
+        assert_eq!(create(&[]).flags, base, "p0 absent: the raw glist word [M 0x18dbf8:15-16]");
+        assert_eq!(create(&[(0, 0)]).flags, base, "p0 == 0: the raw glist word");
+        assert_eq!(create(&[(0, 21)]).flags, base | 0x30, "p0 = 21 (07000007 pl 495 [D]): +0x30");
+        assert_eq!(create(&[(0, 1)]).flags, base | 0x30, "p0 = 1 (07000041 DynoRod [D]): +0x30");
+        assert_eq!(create(&[(0, 0x10000)]).flags, base, "p0 = 0x10000: the SHORT read is 0 [M 0x18dbf8:24]");
+    }
+
+    /// The create-time OR never adds bits beyond 0x30: a p0 = 9 'Dynamic Blocker' whose glist word
+    /// already carries 0x10 (07000007 pl 496 [D]) ends at word | 0x30 (0x10 folds into it).
+    #[test]
+    fn the_or_folds_into_a_sight_through_base_word() {
+        let w = WorldObjects::create(&[place(&[(0, 9)])], &[], |_| (0x10, [0.0; 3], 7)).dynobjs.remove(0);
+        assert_eq!(w.base_flags, 0x10);
+        assert_eq!(w.flags, 0x10 | 0x30);
+        assert_eq!(w.ch_a, 9, "the gate channel is the same p0 [M 0x18d3b8:9]");
+    }
+
+    /// `DynamicObject_Update` 0x18d3b8:9-15: a gated object frozen while its channel reads off, and
+    /// restored to the RAW word (the create-time OR gone) once it reads on — the record's word was
+    /// stored before the OR [M 0x18dbf8:21-23]. So a channel-on swap console becomes ray-pickable.
+    #[test]
+    fn gate_on_restores_the_raw_word_and_gate_off_freezes_the_create_word() {
+        // ch_a = 120, base 0 (the real 07000014 CONSOLE_Camera_Inactive record [D pl 801-813]).
+        let mut w = WorldObjects::create(&[place(&[(0, 120)])], &[], |_| (0, [0.0; 3], 7)).dynobjs.remove(0);
+        assert_eq!(w.flags, 0x30, "hidden at create");
+        let mut ch = Channels::default();
+        w.tick([0.0; 3], &ch);
+        assert_eq!(w.flags, 0x30, "channel off: the update returns, the create word stays [M 0x18d3b8:11-13]");
+        ch.set(120, 1, 2);
+        w.tick([0.0; 3], &ch);
+        assert_eq!(w.flags, 0, "channel on: obj+0xF0 = the record's raw word [M 0x18d3b8:14-15]");
+    }
+
+    /// Mode 1 (0x18d3b8:36-43): armed B ORs 0x30 back onto the live word; B off restores the raw
+    /// record word — so the channel toggles the object between ray-hidden and ray-pickable.
+    #[test]
+    fn mode_one_toggles_the_hide_word_with_channel_b() {
+        // 07000005's WallHug blockers are mode-1 records (p3 = 1) but ungated (p0 = 0) [D pl 324/325].
+        let mut w = WorldObjects::create(&[place(&[(1, 5), (3, 1)])], &[], |_| (0x10, [0.0; 3], 7)).dynobjs.remove(0);
+        let mut ch = Channels::default();
+        w.tick([0.0; 3], &ch);
+        assert_eq!(w.flags, 0x10, "B off: the raw word [M 0x18d3b8:40-43]");
+        ch.set(5, 1, 2);
+        w.tick([0.0; 3], &ch);
+        assert_eq!(w.flags, 0x10 | 0x30, "B armed: +0x30 [M 0x18d3b8:36-38]");
+        ch.set(5, 0, 4);
+        w.tick([0.0; 3], &ch);
+        assert_eq!(w.flags, 0x10, "B disarmed: the raw word again");
+    }
+
+    /// The word 0x30 the create ORs is what `Collide_PickObj` 0x1eae80:72-82 never picks: bit 0x20
+    /// sits in EVERY skip set. The game-side consequence (no part in the collision set) is pinned
+    /// end-to-end by dynobj_hidden_live; here the skip-word math itself.
+    #[test]
+    fn the_hidden_word_is_admitted_by_no_mask() {
+        for mask in [0u32, 0x1, 0x2, 0x4, 0x8, 0xc, 0xe, 0x20, 0xa27, 0x72f] {
+            assert!(!crate::world::pick_admits(mask, 0x30), "mask {mask:#x} must skip a 0x30 word");
+            assert!(!crate::world::pick_admits(mask, 0x20), "mask {mask:#x} must skip a bare 0x20 word");
+        }
+        // Sister: a plain word (0x81, the probe's solar panel) is picked by every mask; the bare
+        // sight-through 0x10 only by masks without bit 4 (the game's own hidden-flag [M :79-81]).
+        for mask in [0u32, 0xa27, 0xc, 0xe, 0x72f] {
+            assert!(crate::world::pick_admits(mask, 0x81), "mask {mask:#x} admits a plain word");
+        }
+        assert!(!crate::world::pick_admits(0xa27, 0x10), "mask bit 4 skips the 0x10 word");
+        assert!(crate::world::pick_admits(0x2, 0x10), "a mask without bit 4 admits the 0x10 word");
     }
 }

@@ -108,6 +108,21 @@ pub const TURRET_ARTS: [u32; 7] = [0x0200_0b05, 0x0200_0a3b, 0x0200_0b06, 0x0200
 /// an int cell the update reads back as a float); the decode keeps the bit pattern as f32.
 pub const SP_TURRET: usize = 0xb;
 
+/// The MP Enviro-Mods arm's turret assignment — `GunImp_Create` 0x131f20:59-63 [M]: the turret
+/// entry is `MPSettings+0x1B4` (the weapon set) for 0..9, or a `Rand_Rand(10)` pick when the set
+/// is 10 (Random). The game draws from the shared `Rand_Rand` stream (0x1e3738) at create time;
+/// the port substitutes a private stream keyed by the match seed (`seed ^ 0x4755_4e49`) so the
+/// pick is identical on every online machine without adding a draw to the shared stream [S —
+/// the documented determinism substitution, mp-enviro-mods-apply]. Idempotent: the same
+/// settings and seed produce the same assignment, so callers may apply at build and again at
+/// match start.
+pub fn apply_mp_turrets(gunimps: &mut [GunImp], weapon_set: u32, seed: u32) {
+    let mut trng = crate::drone::Rng::new(seed ^ 0x4755_4e49);
+    for g in gunimps.iter_mut() {
+        g.turret = if weapon_set >= 10 { trng.rand(10) as u8 } else { weapon_set as u8 };
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct GunImp {
     pub placement: usize,
@@ -153,6 +168,11 @@ pub struct GunImp {
     /// on release or overheat [M GunImp_Update 0x1320d8:261-269, :281-298], and on dismount
     /// [M GunImp_Deactivate 0x132c18:62-63]. 0 = not playing.
     pub fire_handle: u32,
+    /// The mounted player's slot — `GunImp_Activate` 0x132f00 links the player object at
+    /// `ext+4` and stores its slot byte (`BL+0x94e`) at `obj+0xf6`, the slot whose input the
+    /// update reads [M 0x132f00:17-21]; `GunImp_PlayerHasDied` 0x133008 finds the mount by that
+    /// link [M :13]. Single player: always 0. Meaningful only while `active`.
+    pub owner: u8,
 }
 
 impl GunImp {

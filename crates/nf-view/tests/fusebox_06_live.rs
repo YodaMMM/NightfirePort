@@ -130,6 +130,11 @@ fn draw_laser(scene: &mut nf_view::scene::Scene) {
     let draw = Input { switch_to: Some(0x4e), ..Default::default() };
     for _ in 0..40 { scene.sim.as_mut().unwrap().step_bond(draw, false, false, false); }
     assert_eq!(scene.sim.as_ref().unwrap().gun.weapon, 0x4e, "the Laser equips [D USATxt label 0x05000043]");
+    // The press comes once the draw has ended, as a player's would: a press under the holster/draw
+    // is spent there (the edge's +0x92C countdown runs out on the view-state gate, the held trigger
+    // reads no new edge) [M Player_WeaponFiring 0x1a5460:601-636].
+    for _ in 0..120 { if scene.sim.as_ref().unwrap().gun.switch_state == 0 { break; } scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+    assert_eq!(scene.sim.as_ref().unwrap().gun.switch_state, 0, "the laser's draw ends before the press");
 }
 
 fn aim_tick(scene: &mut nf_view::scene::Scene, wire: [f32; 3], fire: bool) -> bool {

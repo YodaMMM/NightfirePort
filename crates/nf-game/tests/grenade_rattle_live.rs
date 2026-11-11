@@ -86,7 +86,7 @@ impl Level05 {
     }
 }
 
-fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(), cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
+fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(), cel: None, obj_cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
 
 /// The level-start spot [L ai_live.rs: the snapshot's start position] — open ground.
 const SPOT: [f32; 3] = [104.954, 25.663, 108.825];
@@ -99,7 +99,7 @@ fn frag_drop(x: f32, y: f32, z: f32) -> nf_game::grenade::Grenade {
         pos: [x, y, z], velocity: [0.0, 0.0, 0.0], speed: 0.1667,
         travelled: 0.0, range: 210.0, damage: 100.0, radius: 8.0,
         weapon_type: 0x34, mesh: 0, owner: 0, state: 0, bounces: 0,
-        smoke_popped: false, resting: false, stuck: false, seek_target: None, phase: None, burn: 0, defused: false,
+        smoke_popped: false, resting: false, stuck: false, seek_target: None, phase: None, burn: 0, defused: false, born: 0,
         loop_handle: 0,
     }
 }

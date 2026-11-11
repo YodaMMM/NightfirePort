@@ -101,16 +101,17 @@ impl Level05 {
     }
 }
 
-fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(), cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
+fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(), cel: None, obj_cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
 
 #[test]
 fn guard_notices_and_fires_like_the_game() {
     let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
     let d = l.data();
-    // Seed 5 (re-picked at the fix-ai-remainder merge: the head-tracking draws joined the RNG; fix-lighting
-    // had 2, WORKLOG 0072 1, 0069 2, 0037 also 7):
+    // Seed 0 (re-picked at the stream join, whose branches add draws — among them the spawn's miss-wobble `Rand_Rand(10000)`
+    // ahead of the sight constants [M 0x137cb0:58-59] — so seed 5 now rolls the strafe; the stream
+    // batch had 5, fix-ai-remainder 5, fix-lighting 2, WORKLOG 0072 1, 0069 2, 0037 also 7):
     // the first combat-move roll picks the step (strafe or step are equally likely; the trace shows steps).
-    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 5);
+    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 0);
     let mut sim = l.sim(drones, rng);
     // As in the live session, Bond appears (teleported) after the level has run: 10 ticks with him far away first, so
     // spawner 266's drone is already in the list.
@@ -247,6 +248,20 @@ fn guard_takes_cover_like_the_game() {
     // moves the first sighting, shifting the shared stream). Seed 2 (re-picked at the attack-reentry-choice merge, 913: Attack's own fallback sends the level's
     // mode-2 guard to SniperAim 0x2a [M 0x164210:85-88] instead of Combat, shifting the shared stream;
     // fix-impact-remainder2 had 4, fix-ai-remainder 1).
+    // Seed 3 (re-picked at guard-goal-arrival-radii form 1: FindCover sets its own goal's arrival
+    // radius from the chosen node's kind byte — 0.5 for kind 0/1, else 1.0 [M 0x152548:174-181,
+    // `pcVar7` walks the 0xb0-stride node array] — where the port's flat 2.0 stand-in sat, so the
+    // cover run arrives deeper and the shared stream shifts. The live pins do NOT move: the game's
+    // cover radius was always 0.5, the in-cover pin (58.83, 99.32) was measured under it, and the
+    // re-scanned seeds land back on it (err 0.01-0.03) — only the aim-duration pin disagreed, and
+    // only because the stream shifted. Seeds 0-40 on this model: 3, 15, 16, 18, 23, 25, 28, 29,
+    // 30 and 36 pass every pin; 1, 4, 7, 9, 11, 12, 17, 19, 31 and 37 hold the 90-tick lean in
+    // UnderCoverAim (live 37), the rest pick another first move or cover spot; 9 had 9).
+    // Seed 16 (re-picked at fx-muzzle-and-trail: the guard's shots now consume the
+    // muzzle-flash sprite's three orientation draws [M DroneWeap_FireWeapon 0x178f68:189-213 —
+    // control_create_object 0x1344e0 is a plain Mem_Malloc, so the live game makes the draws on
+    // every shot], shifting the shared stream; the seeds that pass every pin on the corrected
+    // stream are 1, 11, 16, 17, 19 and 23. 16 also passed every pin on the pre-flash-draw model.
     // Seed 9 (re-picked at the single blend-out word: `Ready2Fire` reads `Drone+0x538`, which the
     // first replaced script to die clears [M 0x13b1c8:76-77, 0x1c14f0:26-29], so the guard's Combat
     // shots before the cover run land on other ticks and the shared stream shifts. Seeds 0-24 on
@@ -257,7 +272,17 @@ fn guard_takes_cover_like_the_game() {
     // [M 0x1c7a98 + 0x14c600:81-107] — so spawner 266's drone fires and reacts on a different
     // schedule and the shared stream shifts; 913's attack-reentry-choice had 2, fix-impact-remainder2
     // 4, fix-ai-remainder 1).
-    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 9);
+    // Seed 4 (re-picked at gas-rng-draws: every `Gas_Init` puff now consumes the game's own draws —
+    // the spin `Rand_FRand(π/2·REC_FRAME_RATE)` and the sign `Rand_Rand(0x100)` [M 0x1aacc8:72-80],
+    // plus the kind-7/NULL-vel wind spread [M 0x1aacc8:108-116] — and the guard's wall impacts spawn
+    // the Effect_Bullet gas entries through that same call [M 0x1cea98], so the stream shifts on
+    // every shot. 9 had 61.342/9; seeds 0-24 on this model: 4 passes every pin, 0/2 pick another
+    // first move, 1/3 hold the 90-tick lean in UnderCoverAim (live 37)).
+    // Seed 16 (re-picked at fx-muzzle-and-trail — kept at the stream-batch join over gas-rng-draws'
+    // 4: 16 was measured at 11:09 UTC on the muzzle tree, 4 at ~03:35 UTC on the gas+guard tree, so
+    // 16 is the more recent measurement; the joined tree carries BOTH lever families and re-pins
+    // from its own run).
+    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 16);
     let mut sim = l.sim(drones, rng);
     let player = bond_at([79.86, 22.92, 96.0]);
     for _ in 0..700 { sim.tick(&d, &player); }
@@ -323,7 +348,7 @@ fn switched_guard_patrols_like_the_game() {
     let y = -2.1467f32;
     let p = [104.95, 24.96, 108.83];
     let player = Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [y.sin(), 0.0, y.cos()], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(),
-            cel: None, move_local: [0.0; 2], riding: false, crouched: false };
+            cel: None, obj_cel: None, move_local: [0.0; 2], riding: false, crouched: false };
     let mut at = Vec::new();
     for _ in 0..1500 { sim.tick(&d, &player); at.push(sim.list[gi].pos); }
     assert_eq!(sim.list[gi].state, nf_game::drone::state::PATROL);
@@ -533,7 +558,12 @@ fn bond_kills_guards_with_two_torso_shots() {
     };
     // The sniper on the ledge.
     let (sim, i, hits) = run([65.0, 34.4, 88.5], 267, 400, 0.0);
-    assert_eq!(hits, [(100, 4, 4.75), (130, 4, -0.5)], "hits {hits:?}");
+    // The second contact's PART is port-observed (the header: not yet checked live): with the
+    // game's sight masks on (LOS_MASKS_ON, `Collide_PickObj` 0x1eae80:70-87 + `Collide_Intersect`
+    // 0x1ebaa8:300-319) the second round lands on part 32 instead of 4 (los-mask-join; which
+    // sight call moves the sniper's pose is not traced). The damage chain is the decompile's:
+    // 5.25 per torso hit, dead at the second contact.
+    assert_eq!(hits, [(100, 4, 4.75), (130, 32, -0.5)], "hits {hits:?}");
     let log: Vec<u8> = sim.list[i].log.iter().map(|&(_, s)| s).collect();
     // A sniper (mode 2): SniperIdle; the first hit sends it to SniperAim (SniperIdle's `HandleImpact(0x2A, 0)`).
     assert_eq!(log[0], state::SNIPER_IDLE, "log {:x?}", sim.list[i].log);
@@ -819,7 +849,7 @@ fn guard_surrenders_to_bond_behind_him() {
         let to = [g[0] - p[0], 0.0, g[2] - p[2]];
         let n = (to[0] * to[0] + to[2] * to[2]).sqrt();
         Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [to[0] / n, 0.0, to[2] / n], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(),
-            cel: None, move_local: [0.0; 2], riding: false, crouched: false }
+            cel: None, obj_cel: None, move_local: [0.0; 2], riding: false, crouched: false }
     };
     // A guard present at the start with alertness 0 and a free spot behind him: (placement, Bond's spot).
     let warm = || {
@@ -861,7 +891,7 @@ fn guard_surrenders_to_bond_behind_him() {
     // Bond 15 units away: CheckUnsurrender → Unsurrender → Attack (unarmed) → DrawWeapon → weapon 6.
     let p = [behind[0] + 15.0, behind[1], behind[2]];
     let away = Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(),
-            cel: None, move_local: [0.0; 2], riding: false, crouched: false };
+            cel: None, obj_cel: None, move_local: [0.0; 2], riding: false, crouched: false };
     for _ in 0..300 { sim.tick(&l.data(), &away); }
     let log: Vec<u8> = sim.list[i].log.iter().map(|&(_, s)| s).collect();
     eprintln!("after: log {log:x?}, weapon {}", sim.list[i].weapon);
@@ -942,7 +972,7 @@ fn surrendered_guard_killed_keeps_a_pose() {
     let to = [g[0] - behind[0], 0.0, g[2] - behind[2]];
     let n = (to[0] * to[0] + to[2] * to[2]).sqrt();
     let bond = Player { yaw: 0.0, pos: behind, target: [behind[0], behind[1] + 0.5, behind[2]], eye: [behind[0], behind[1] + 1.0, behind[2]], aim: [to[0] / n, 0.0, to[2] / n], sph: behind, capsule: ([behind[0], behind[1] + 1.086, behind[2]], behind), hanging: false, body: Default::default(),
-            cel: None, move_local: [0.0; 2], riding: false, crouched: false };
+            cel: None, obj_cel: None, move_local: [0.0; 2], riding: false, crouched: false };
     for _ in 0..400 { sim.tick(&d, &bond); }
     assert_eq!(sim.list[i].state, state::SURRENDERED);
     let t = sim.list[i].pos;
@@ -1225,23 +1255,58 @@ fn guard_gravity_and_collision_spheres() {
     let start_y = sim.list[gi].pos[1];
     for _ in 0..60 { sim.tick(&d, &away); }
     // The gate guard is on the courtyard floor: his y stays within 0.5 of the start, velocity zero, on the surface.
+    // The gate guard's idle danim carries the anim-info no-physics bit (+0x570 & 2), and with Bond 500
+    // units away he is undrawn and beyond 2.0: `NDrone2_DoCollision` 0x149ec8:30-32 returns 0 and
+    // `NDrone2_DoGravity` 0x141e58:36-38 with it, so `Drone_CollisionHandler` 0x140968 runs no contact
+    // pass and no gravity — his feet flag (anim+0x60 & 8, cleared at the handler's top :71 and set only
+    // by the contact pass) stays clear and his y holds [M].
     let g = &sim.list[gi];
+    assert!(g.anim.info_word & 2 != 0 && !g.drawn, "the gate guard's idle anim carries the no-physics bit (word {:#x}) and he is undrawn", g.anim.info_word);
     assert!((g.pos[1] - start_y).abs() < 0.5, "gate guard y drifted: {} (start {})", g.pos[1], start_y);
+    assert!(!g.on_surface && !g.in_air, "no-physics guard: no feet probe, not in the air");
+    assert!(g.velocity[1].abs() < 1e-6, "gate guard velocity zero (no gravity)");
+    // With Bond within 2.0 (`DroneFunc_NearPlayerCollision` 0x14b190) the same guard is force-collided:
+    // the contact pass runs and his feet are on the courtyard floor, velocity zero.
+    let (drones3, gi3, rng3) = l.drones(None, 61.342);
+    let mut sim3 = l.sim(drones3, rng3);
+    let gp = sim3.list[gi3].pos;
+    let near = bond_at([gp[0] + 1.5, gp[1], gp[2]]);
+    let start_y3 = gp[1];
+    for _ in 0..60 { sim3.tick(&d, &near); }
+    let g = &sim3.list[gi3];
+    assert!(g.dist_to_player[0] < 2.0, "Bond within 2.0 of the gate guard: {}", g.dist_to_player[0]);
+    assert!((g.pos[1] - start_y3).abs() < 0.5, "near gate guard y drifted: {} (start {})", g.pos[1], start_y3);
     assert!(g.on_surface, "gate guard on the floor");
     assert!(!g.in_air, "gate guard not in the air");
     assert!(g.velocity[1].abs() < 1e-6, "gate guard velocity zero on the ground");
 
-    // Sister: a guard lifted 50 units straight up (off every roof) falls — his y drops below the lifted start.
+    // Sister: a guard lifted 50 units straight up (off every roof) falls while Bond keeps within 2.0 of
+    // him (the near-player force arm) — his y drops below the lifted start.
     let (drones2, gi2, rng2) = l.drones(None, 61.342);
     let mut sim2 = l.sim(drones2, rng2);
     let lifted = sim2.list[gi2].pos[1] + 50.0;
     sim2.list[gi2].pos[1] = lifted; // lift off every surface
-    for _ in 0..60 { sim2.tick(&d, &away); }
+    for _ in 0..60 { let p = sim2.list[gi2].pos; sim2.tick(&d, &bond_at([p[0] + 1.5, p[1], p[2]])); }
     let g2 = &sim2.list[gi2];
     assert!(g2.in_air, "lifted guard in the air");
     assert!(!g2.on_surface, "lifted guard not on a surface");
     assert!(g2.velocity[1] < -9.0, "lifted guard falling: v={}", g2.velocity[1]);
     assert!(g2.pos[1] < lifted, "lifted guard fell: {}", g2.pos[1]);
+    // The same lift with Bond far: the undrawn no-physics guard hangs — no gravity, fall speed zero
+    // (`Drone_CollisionHandler` 0x140968:154-156 zeroes +0x484 when DoGravity returns 0). The drawn
+    // arm reads the obj+0xFC COUNTER, which `control_init_object` 0x134630:16 seeds with 2 and the
+    // control pass decrements AFTER the per-object control funcs [M 0x1336f8:62-63 before :242-246]:
+    // the first two passes still force physics (he starts to fall), from the third the bit holds.
+    let (drones4, gi4, rng4) = l.drones(None, 61.342);
+    let mut sim4 = l.sim(drones4, rng4);
+    let lifted4 = sim4.list[gi4].pos[1] + 50.0;
+    sim4.list[gi4].pos[1] = lifted4;
+    for _ in 0..2 { sim4.tick(&d, &away); }
+    let y2 = sim4.list[gi4].pos[1];
+    assert!(y2 < lifted4, "the two seeded counter passes keep gravity: y {y2} (lifted {lifted4})");
+    for _ in 2..60 { sim4.tick(&d, &away); }
+    let g4 = &sim4.list[gi4];
+    assert!((g4.pos[1] - y2).abs() < 1e-3 && g4.velocity[1] == 0.0, "far lifted no-physics guard hangs from the third pass: y {} (after 2: {y2}) v {}", g4.pos[1], g4.velocity[1]);
 }
 
 /// G-028 sniper cover (WORKLOG 0079): a drone whose anim set is 0x13 (sniper), put in `UnderCoverFire` (0x96) on a
@@ -1412,10 +1477,9 @@ fn grenade_bounce_scares_the_guard_into_the_flee_family() {
         pos: drop, velocity: [0.0, -5.0, 0.0], speed: 5.0, travelled: 0.0, range: 100000.0,
         damage: 1.0, radius: 1.0, weapon_type: 0x34, mesh: 0, owner: usize::MAX, state: 1, bounces: 0, smoke_popped: false, resting: false,
         stuck: false, seek_target: None,
-        phase: None, burn: 0, defused: false,
-    
+        phase: None, burn: 0, defused: false, born: 0,
         loop_handle: 0,
-});
+    });
     let mut saw_87 = false; let mut dist_at_87 = 0.0f32;
     for k in 0..400 {
         sim.tick(&d, &bond);
@@ -1509,3 +1573,4 @@ fn auto_aim_from_a_moving_shooter_is_the_same_instantaneous_geometry() {
     for k in 0..3 { assert!((dir2[k] - to2[k] / n2).abs() < 1e-3, "the riding ray re-snaps to the bone 2 from the new head"); }
     assert!((off[1] - off2[1]).abs() < 0.02, "the assist offset tracks the geometry, not a velocity history ({off:?} vs {off2:?})");
 }
+

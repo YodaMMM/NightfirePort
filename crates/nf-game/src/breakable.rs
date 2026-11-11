@@ -75,6 +75,10 @@ pub struct BreakEffect {
 #[derive(Clone, Debug)]
 pub struct Break {
     pub placement: usize,
+    /// The glist flags carry 0x400 (drawn only under the x-ray goggles) or 0x10 (never drawn):
+    /// `View_AddObjects` 0x1e62d8:38-47 skips such an object in the normal view. The x-ray pass
+    /// draws the 0x400 ones itself; the breakable slot stays empty.
+    pub draw_hidden: bool,
     pub lo: V3,
     pub hi: V3,
     /// tag+0x00 — placement param 0's low byte [M 0x12c230:21 `*puVar1 = *(param_4 + 0x2c)`].
@@ -231,8 +235,10 @@ impl Breaks {
                 }
                 None => 0,
             };
+            let draw_hidden = target.is_some_and(|(om, oo)| level.maps[om].objects[oo].flags & 0x410 != 0);
             list.push(Break {
                 placement: i,
+                draw_hidden,
                 lo,
                 hi,
                 kind,
@@ -305,6 +311,23 @@ impl Breaks {
             }
         }
         Some(t0)
+    }
+
+    /// The pane's collision triangle a segment meets first, one-sided as every game ray test
+    /// [M 0x10a8c8:168]: (fraction, face normal, surface byte).
+    pub fn sheet_contact(shape: &[[V3; 3]], mats: &[u8], matrix: &[[f32; 4]; 4], a: V3, b: V3) -> Option<(f32, V3, u8)> {
+        let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let mut best: Option<(f32, V3, u8)> = None;
+        for (i, tri) in shape.iter().enumerate() {
+            let w = [transform(matrix, tri[0]), transform(matrix, tri[1]), transform(matrix, tri[2])];
+            let Some(t) = crate::world::ray_tri_t(a, d, &w) else { continue };
+            if best.is_some_and(|(bt, _, _)| bt <= t) { continue; }
+            let (e1, e2) = ([w[1][0] - w[0][0], w[1][1] - w[0][1], w[1][2] - w[0][2]], [w[2][0] - w[0][0], w[2][1] - w[0][1], w[2][2] - w[0][2]]);
+            let n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+            let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            if l > 0.0 { best = Some((t, [n[0] / l, n[1] / l, n[2] / l], mats.get(i).copied().unwrap_or(0x10))); }
+        }
+        best
     }
 
     fn seg_box_grow(a: V3, b: V3, lo: V3, hi: V3, g: f32) -> bool {
@@ -432,6 +455,15 @@ impl Breaks {
         }
         kills = hits.into_iter().filter_map(|(i, a, b)| self.kill(i, a, b, rng)).collect();
         kills
+    }
+
+    /// The pair the body query itself made on 07000001: pane `i` pushed a guard by `pressed`, and
+    /// that push is the step `Break_Update` 0x12bfd8:26-27 reads. Kind 2 only [M :25].
+    pub fn drone_pressed(&mut self, i: usize, pressed: f32, at: V3, rng: &mut Rng) -> Option<BreakEffect> {
+        let br = self.list.get_mut(i)?;
+        if br.dead || br.kind != 2 { return None; }
+        br.health -= pressed * pressed * 20.0;
+        if br.health < 0.0 { self.kill(i, at, at, rng) } else { None }
     }
 
     /// `Break_Kill` 0x12b970 for one breakable: the dead bit, then — only when the object has
@@ -613,7 +645,7 @@ impl Breaks {
         }
         let p = |k: usize| params.get(k).copied().unwrap_or(0);
         let p2 = p(2);
-        self.list.push(Break {
+        self.list.push(Break { draw_hidden: false,
             placement: obj,
             lo,
             hi,
@@ -668,7 +700,7 @@ mod tests {
     /// debris piece (EffectInfo[0x10] — model 0x0200012d [D 0x3037c0+0x10·0x88]).
     fn one(kind: u8, health: f32) -> Breaks {
         Breaks {
-            list: vec![Break {
+            list: vec![Break { draw_hidden: false,
                 placement: 0,
                 lo: [4.0, 7.0, -3.0],
                 hi: [6.0, 9.0, -1.0],

@@ -47,7 +47,7 @@ the collision system: the player's capsule against the triangles. Player capsule
 
 ## Spawners (`DroneSpawner_Control` 0x137E68) [M]
 
-Parameters: p0 mode (2: spawn while alive < max; 3: only when none alive), p1 group (drone parameter 4), p2 max alive
+Parameters: p0 mode (2: spawn while alive < max; 3: a whole wave, opened when none is alive), p1 group (drone parameter 4), p2 max alive
 (0 or more than the templates → all), p3 waves (0 → 32000), p4 start channel, p5 stop channel, p6 done channel, p7 **kill
 channel** (measured live, docs/fields/hitdata-spawner-ally.md "Live result" — fix-actors' "arm" reading was refuted),
 p8 minimum player distance (0 → 10). Init: the group's drones become templates and are removed; with p4 = 0 (or on) and
@@ -66,8 +66,15 @@ the same pass; on 0x07000011..13, 0x07000016 and 0x0700004A only drones whose `o
 draw counter the renderer sets to 2 per drawn frame [M 0x1e62d8:71, 0x1e5fb8:174] and the per-frame pass decrements
 [M 0x1336f8:239-247] — and the spawner lingers while any drawn drone remains (the kept count `s6`, [M 0x138098]), then
 deletes itself. Past the last wave wait for none alive, set `ch[p6]`, delete (the wait applies when p6 OR p7 is set
-[M :126-143]). At most one spawn per frame: `Rand_Rand(templates)` picks the k-th unused template; unless immediate its
-spot must be ≥ p8 from the player and not visible to him (`Drone_PositionVisible`).
+[M :126-143]). A drone holds its slot while `+0x4F8 & 0x600` is clear and its health is above zero: a corpse leaves the wave as it
+falls [M :95-124]. The +0x1C latch gates spawning: mode 2 re-decides it every tick (alive < max); mode 3 sets it for the
+initial fill and when none is alive and otherwise leaves it, so the wave fills to max one drone a tick; only the wave
+rollover clears it [M :145-172, :176-210]. At most one spawn per frame, but every empty slot gets an attempt until one
+succeeds [M :212-232]: each attempt draws `Rand_Rand(+0x2E)`, the group's template count, and walks that many usable
+templates (unused this wave; unless immediate, spot ≥ p8 from the player). A draw past the last usable template fails.
+Unless immediate a spot visible to him (`Drone_PositionVisible`) fails too. Each spawn is a new object built from the
+saved template [M 0x137cb0], so later waves reuse a template while its earlier guard or his corpse is still there; the
+port adds a guard for that case while it has a body to draw.
 
 ## Drones and channels [M]
 

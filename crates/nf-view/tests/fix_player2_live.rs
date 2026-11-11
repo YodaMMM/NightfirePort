@@ -103,6 +103,10 @@ fn grenade_throw_spawns_at_the_release_frame_and_the_gun_recovers() {
     assert_eq!(sim.gun.weapon, 0x35, "the grenade is equipped after the holster/draw cycle");
     assert!(sim.gun.timer <= 0.0, "sister: the refire timer is run out before the throw ({})", sim.gun.timer);
 
+    // A spare in the pool: the last grenade would hand over to the best weapon instead of drawing
+    // the next one [M 0x1a2e38 case 0xc :524-543].
+    let t35 = sim.weapons.ammo_type(0x35);
+    sim.drones.inventory.carried[t35] = 2;
     // Press fire, release. The port must NOT spawn a hitscan bullet on the press tick — the throw is
     // a 26-frame animation whose release frame spawns the grenade.
     sim.step_bond(Default::default(), true, false, false);

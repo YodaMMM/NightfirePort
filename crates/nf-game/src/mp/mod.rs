@@ -163,9 +163,13 @@ pub struct MpSettings {
     /// 0 [M 0x183a50:72-74, 0x184bd0:14, 0x1d04f0 case 0x25], and `Mission_Update` returns when it
     /// is NOT 0 [M 0x182c60:16-18].
     pub master: u32,
-    /// +0x388: `MP_Start` copies the master enable here [M 0x183a50:70].
+    /// +0x184 (Ghidra `MPSettings._388_4_` — the 388 is DECIMAL; this said +0x388 before, but the
+    /// symbol is 476 bytes and hex 0x388 does not exist): `MP_Start` copies the master enable
+    /// here [M 0x183a50:70]. Check_Target 0x1a7810:103,129,138 gates the MP aim arms on it.
     pub master_copy: u32,
-    /// +0x396: the team game — derived by `MP_Init` as `(scenario >> 29) & 1` [M 0x183438:41].
+    /// +0x18C (Ghidra `_396_4_` — DECIMAL; this said +0x396 before): the team game — derived by
+    /// `MP_Init` as `(scenario >> 29) & 1` [M 0x183438:41]. `MP_isObjectOnTeam` 0x18b720 and
+    /// `MP_getObjectTeam` 0x18b6c0 gate on it.
     pub team_game: u32,
     /// +0x400: the bit30 flag — `(scenario >> 30) & 1` [M 0x183438:42]; gates kill-scoring.
     pub bit30: u32,
@@ -243,8 +247,10 @@ pub struct MpSettings {
 
 impl MpSettings {
     /// The phase-1 default for `--mp <arena>`: an Arena-1-style deathmatch. The menu's own defaults
-    /// are not read here (no menu path in phase 1) — the values are the port's [S], the structure
-    /// and the derivations are the game's.
+    /// are not read here (no menu path in phase 1) — the values are the game's fresh-boot
+    /// setup records: the score limit 10 and the time limit 10 menu-minutes [M bootup
+    /// 0x1c7e78:29,40], the confirm multiplying the time limit by 60 into match-seconds
+    /// [M P_MPCONFIRM 0x20ec00:145-146], so the field carries 600.
     pub fn deathmatch(level_code: u32) -> MpSettings {
         MpSettings {
             players: std::array::from_fn(|_| MpPlayer { team: 0, skin: 0, armor_bonus: 0, radar_on: 1, codename: String::new() }),
@@ -256,8 +262,8 @@ impl MpSettings {
             team_game: 0,
             bit30: 0,
             total_players: 0,
-            frag_limit: 20,
-            time_limit: 10,
+            frag_limit: 10,
+            time_limit: 600,
             scenario: scenario::DEATHMATCH,
             level_code,
             human_count: 1,
@@ -569,6 +575,20 @@ pub struct MpMatch {
     /// [`MpMatch::update_objects`] (the fixed 60 Hz) — only differences inside the 4-frame window
     /// read it [S alignment]. Zero on the struct literal path.
     pub tick: u32,
+    /// mp-object-deleted: the msg-0x3D routes `MP_objectBeingDeleted` raised since the bots last
+    /// drained them — one entry per deleted mode object, oldest first, as the port's obj_id
+    /// ([`crate::mp::bots::obj_id`]; the game's arg is the deleted obj pointer [M 0x18ac90:268-276]).
+    /// The game delivers through `Drone_SM_RouteMsg` (dispatch now, delay 0 [M 0x172128]); the
+    /// port's driver drains the queue per bot in slot order before the bot's own tick
+    /// ([`crate::mp::bots::BotBrain::msg_goal_cancel`], the BotGlobal 0x3D arm) — the same tick,
+    /// the game's order.
+    pub pending_goal_cancels: Vec<usize>,
+    /// The 0xDA remote vehicles (`Tanks[0..NumTanks]` — `Car_Create` 0x1305b0 via
+    /// `parsemap_create_dynamic_objects` 0x1d04f0 case 0xda), created by
+    /// [`crate::car::CarSystem::create_walk`] on the match's load. The drive/activate wiring
+    /// (Car_Update 0x1307d8, the Player_Activate class-0x28 arm) is car.rs's documented
+    /// next-session work; the census's create arm is this walk.
+    pub cars: Vec<crate::car::Car>,
 }
 
 /// One MP bot: the ported brain (`BOT_vars` stand-in) plus the per-slot bookkeeping the match
@@ -638,6 +658,8 @@ impl MpMatch {
             bots: Vec::new(),
             bot_start: None,
             tick: 0,
+            pending_goal_cancels: Vec::new(),
+            cars: Vec::new(),
         }
     }
 
@@ -696,6 +718,7 @@ impl MpMatch {
             .map(|i| self.settings.bot_records.get(i).copied()
                 .unwrap_or_else(|| INITIAL_BOT_RECORDS[i % INITIAL_BOT_RECORDS.len()]))
             .collect();
+        let mut class_words: Vec<u32> = Vec::with_capacity(count);
         for (i, rec) in records.iter().enumerate() {
             let slot = humans + i;
             // +0x0F, the team byte [M 0x183a50:143-145]. mp-bot-objectives: the port's records
@@ -721,7 +744,25 @@ impl MpMatch {
             // A record reading 0 hit points (the second INITIAL record) would make an unkillable
             // bot at 0/0 — the port gives it 100 [S, the record's field attribution is open].
             let max_hp = if rec.max_hp() == 0 { 100.0 } else { rec.max_hp() as f32 };
-            let mut brain = crate::mp::bots::BotBrain::bot_init(rec, slot as u8, pos, yaw);
+            // The DefaultInit class word [M 0x14b300:380]: `*(u32*)(drone+0xc6c)` — the
+            // `level_tag+0x64` word, whose level_tag for a bot is `SpawnPoints+0x10+idx·0x30`
+            // [M 0x183a50 disasm 0x183d58] — i.e. the spawn entry `idx+2`'s facing.y bit
+            // pattern (the entry's +0x14 [M 0x184f20:85-88]; entries past the table or the
+            // registered count read the MP_Init memset's zeros [M 0x183438:12]). The draws
+            // are NOT made here: `BOT_init`'s own PostLoad call is gated off during MP_Start
+            // (`MPSettings[0x188]` = 0 until its tail [M 0x183a50:69,207; 0x1249e8:182-185]);
+            // the global `Drone_PostLoad_Init` 0x136938:106-108 pass makes them after MP_Start
+            // returns [M 0x1d6360:155-157] — i.e. after every spawn pick (`MP_GetSpawnPoint`
+            // 0x185098:178 draws). bot_init draws on a scratch stream; the real draws follow
+            // the loop below.
+            let class_word = self
+                .spawns
+                .points
+                .get(sp as usize + 2)
+                .map(|p| p.facing[1].to_bits())
+                .unwrap_or(0);
+            let mut brain = crate::mp::bots::BotBrain::bot_init(rec, slot as u8, pos, yaw, class_word, &mut Rng::new(0));
+            class_words.push(class_word);
             self.arm_bot(&mut brain);
             // mp-16-slots: the bot's index is its list position (the game's slot − 4 wraps once
             // bots follow the humans — the visit stamps were indexed at 254).
@@ -742,6 +783,12 @@ impl MpMatch {
                 respawn_at: 0,
                 shots_by_weapon: vec![0; crate::mp::botweap::BOT_WEAPONS],
             });
+        }
+        // `Drone_PostLoad_Init` 0x136938:106-108 → `NDrone2_DefaultInit`'s range draws, one
+        // bot after another, once every spawn is placed [M 0x1d6360:155-157] (the drone list's
+        // walk order is taken as the creation order [S — the list insert is not located]).
+        for (b, cw) in self.bots.iter_mut().zip(class_words) {
+            b.brain.post_load_combat_ranges(rng, cw);
         }
     }
 
@@ -1272,19 +1319,284 @@ pub fn get_obj_ext_obj(current: usize, script_obj: usize) -> (usize, bool) {
     }
 }
 
-/// `MP_objectBeingDeleted` 0x18ac90's shape [M :66-278]: clear every mode-object row (and its
-/// AI emitter) that holds the deleted obj — the flag/bases (0x20000100), GoldenEye (0x20000200),
-/// Hill (0x40000800/0x60001000), Uplinks (0x60000008), Demolition (0x20000040),
-/// Protection (0x20000080), Flags/Bases (0x20000004) — plus the 64 `MPObjects` slots, then
-/// route msg 0x3D to BotGlobal when anything matched [M :259-272]. The port's rows are the
-/// per-store obj ids; the 0x3D route is `BotGlobalOutcome::GoalCancel` (bots.rs) [S].
-pub fn object_being_deleted(objs: &mut [usize], obj: usize) -> bool {
+impl MpMatch {
+/// `MP_objectBeingDeleted` 0x18ac90 [M :8-278] — the port of the delete sweep
+/// `control_delete_object` 0x133178:20-22 runs under the MP gate (`MPSettings+0x388 != 0`
+/// [M 0x133178:20-21]; the game returns early when MP is off or the obj is NULL [M 0x18ac90:12-15]).
+/// The game compares the deleted OBJ POINTER against every mode row's obj word; the port's
+/// `id` is the same address space the bots' goal slots use ([`crate::mp::bots::obj_id`]), so a
+/// deletion and a goal target name the same object.
+///
+/// What the game clears, arm by arm [M 0x18ac90]:
+/// - the 8 player-slot obj words `MPGame+slot·0x30+0x1c` [M :18-25] — the port keeps no player
+///   world objects (the slots are [`MpSlot`] fields, bots are [`MpBot`]s), so the sweep folds
+///   away; the slot's +0x26 status bits are NOT touched by the game either [M :18-25];
+/// - the current scenario's mode rows, the match on `MPSettings+0x420` [M :27-253]:
+///   CTC 0x20000004 → `Flags[2]`/`Bases[2]`; Demolition 0x20000040 / Protection 0x20000080 →
+///   the one site row; Blueprint 0x20000100 → `BluePrint` + `EsponageBase[2]`; GoldenEye
+///   0x20000200 → the two item rows; KOTH 0x40000800/0x60001000 → `Hill`; Uplink 0x60000008 →
+///   `Uplinks[0..UplinkCount]`. The port's rows are [`MpObjectsRt`]'s (a base row is its
+///   position + bounds; the game also frees the row's AI emitter first [M :33-36, :48-52] —
+///   nothing in the port owns those emitters, see the module doc);
+/// - the 64 `MPObjects` slots [M :256-266] — the port's created records
+///   ([`MpObjects::created`]) carry no per-object ids, the RT row drop is the fold.
+/// A hit in the mode rows or the MPObjects slots routes msg 0x3D to BotGlobal (0xc5, the
+/// deleted obj as the arg) through `Drone_SM_RouteMsg` [M :268-276] — the port queues the id
+/// in [`MpMatch::pending_goal_cancels`]; the driver delivers it to every bot in slot order
+/// ([`crate::mp::bots::BotBrain::msg_goal_cancel`], the BotGlobal 0x3D arm).
+/// Returns whether anything matched (the game's `bVar4`) [M :16, :277].
+pub fn object_being_deleted(&mut self, id: usize) -> bool {
+    use crate::mp::bots::obj_id;
+    use crate::mp::scenario;
     let mut hit = false;
-    for r in objs.iter_mut() {
-        if *r == obj {
-            *r = 0; // the game's `*piVar2 = 0` [M :250]
-            hit = true;
+    let kind = id & obj_id::KIND;
+    let idx = id & !obj_id::KIND;
+    // the scenario-gated mode-row sweep [M 0x18ac90:27-253]
+    match self.settings.scenario {
+        scenario::CAPTURE_THE_FLAG => {
+            if kind == obj_id::FLAG && idx < 2 && self.objects_rt.flags[idx].is_some() {
+                self.objects_rt.flags[idx] = None;
+                hit = true;
+            }
+            if kind == obj_id::BASE && idx < 2 && self.objects_rt.bases[idx].is_some() {
+                self.objects_rt.bases[idx] = None;
+                self.objects_rt.bases_bounds[idx] = None;
+                hit = true;
+            }
         }
+        scenario::DEMOLITION | scenario::PROTECTION => {
+            if kind == obj_id::SITE && self.objects_rt.site.is_some() {
+                self.objects_rt.site = None;
+                hit = true;
+            }
+        }
+        scenario::BLUEPRINT => {
+            if kind == obj_id::BLUEPRINT && self.objects_rt.blueprint.is_some() {
+                self.objects_rt.blueprint = None;
+                hit = true;
+            }
+            if kind == obj_id::ESP_BASE && idx < 2 && self.objects_rt.esp_bases[idx].is_some() {
+                self.objects_rt.esp_bases[idx] = None;
+                self.objects_rt.esp_bases_bounds[idx] = None;
+                hit = true;
+            }
+        }
+        scenario::GOLDENEYE => {
+            if kind == obj_id::GOLDENEYE && idx < 2 && self.objects_rt.ge[idx].is_some() {
+                self.objects_rt.ge[idx] = None;
+                hit = true;
+            }
+        }
+        scenario::KOTH_FFA | scenario::KOTH_TEAM => {
+            if kind == obj_id::HILL && self.objects_rt.hill.is_some() {
+                self.objects_rt.hill = None;
+                hit = true;
+            }
+        }
+        scenario::UPLINK => {
+            if kind == obj_id::UPLINK && idx < self.objects_rt.uplinks.len() {
+                self.objects_rt.uplinks[idx].state = 0;
+                self.objects_rt.uplinks[idx].sub = 0;
+                hit = true;
+            }
+        }
+        _ => {}
     }
-    hit // the caller routes msg 0x3D to BotGlobal [M :259-272]
+    if hit {
+        // the msg 0x3D route to BotGlobal [M 0x18ac90:268-276]; the game sends one message
+        // per deleted object, arg = the obj — the queue keeps that per-object order.
+        self.pending_goal_cancels.push(id);
+    }
+    hit
+}
+}
+
+// ============================================================================
+// mp-match-end: the per-mode end rules, pinned through scripted matches
+// ============================================================================
+
+#[cfg(test)]
+mod match_end_pins {
+    use super::*;
+
+    /// The game's fresh-boot setup records [M bootup 0x1c7e78:29,40 — +0x412 = 10,
+    /// +0x416 = 10] with the confirm's ×60 (minutes → match-seconds [M 0x20ec00:145-146]).
+    #[test]
+    fn defaults_match_the_games_boot_records() {
+        let s = MpSettings::deathmatch(0x0700_0023);
+        assert_eq!(s.frag_limit, 10, "the boot record's score limit [M 0x1c7e78:29]");
+        assert_eq!(s.time_limit, 600, "10 menu-minutes ×60 = 600 match-seconds [M 0x1c7e78:40 + 0x20ec00:145-146]");
+    }
+
+    fn two_player_match(s: MpSettings) -> MpMatch {
+        let mut m = MpMatch::init(s);
+        let world = crate::world::CollisionWorld::from_triangles(Vec::new());
+        m.register_spawn_point([10.0, 1.0, 0.0], [0.0, 0.0, 0.0], 0, &world);
+        m.register_spawn_point([100.0, 1.0, 0.0], [0.0, 1.0, 0.0], 0, &world);
+        let mut rng = Rng::new(0xfeed_0002);
+        m.start(&mut rng);
+        m.set_slot(0, [30.0, 1.6, 0.0]);
+        m.create_bots(&mut rng);
+        m
+    }
+
+    fn assassin_match(frag_limit: i32) -> MpMatch {
+        let mut s = MpSettings::deathmatch(0x0700_0023);
+        s.scenario = scenario::ASSASSIN;
+        s.frag_limit = frag_limit;
+        s.time_limit = 10; // 10 s — the score limit must win the race [M 0x184268:170-184]
+        s.human_count = 1;
+        s.player_count = 1;
+        s.bot_count = 1;
+        s.total_players = 2;
+        let mut m = two_player_match(s);
+        let mut rng = Rng::new(0xbeef_0001);
+        m.start_assassin(&mut rng); // MP_Start's 0x400 arm [M 0x183a50:166-167]
+        assert!(m.assassin.is_some() && m.assassin_target.is_some(), "the assassin and the target are assigned");
+        m
+    }
+
+    /// Assassin: the score limit ends the match before the time limit — the assassin's
+    /// target kill is +5 [M MP_PlayerKilled 0x188f70:228-233], the frag latch reads the high
+    /// score for every non-0x10 scenario [M 0x184268:170-184], and the machine walks
+    /// 1 → 3 → 4 → 5 into the debriefing request. A non-target kill scores nothing
+    /// [M :190-195 — the general award's scenario list excludes 0x400].
+    #[test]
+    fn assassin_ends_at_the_score_limit_before_the_time_limit() {
+        let mut m = assassin_match(5);
+        let (a, t) = (m.assassin.unwrap(), m.assassin_target.unwrap());
+        let mut rng = Rng::new(0x1234);
+        // a non-target kill: no score [M 0x188f70:190-195]
+        let other = if a == 0 { 1 } else { 0 };
+        let non_target = if t == 0 { 1 } else { 0 };
+        if other != t && other != a {
+            m.player_killed(other, Some(a), false, false, &mut rng);
+            assert_eq!(m.game.slots[a].score, 0.0, "killing a non-target scores nothing for the assassin");
+        }
+        // the target kill: +5 ≥ the limit of 5
+        m.player_killed(t, Some(a), false, false, &mut rng);
+        assert_eq!(m.game.slots[a].score, 5.0, "the target kill is the assassin's +5 [M 0x188f70:229-233]");
+        // tick the real machine: the score limit wins the race against the 10 s clock
+        let mut rng = Rng::new(0x5678);
+        for _ in 0..1200 {
+            m.update(1.0 / 60.0, false, &mut rng);
+            if m.game.request_debriefing {
+                break;
+            }
+        }
+        assert!(m.game.frag_latched, "0xfd latched [M 0x184268:170-172]");
+        assert!(!m.game.time_up, "the score limit ended it before the 10 s time limit");
+        assert!(m.game.request_debriefing, "the match walked into the debriefing handover [M 0x184bd0]");
+    }
+
+    /// KOTH: kills score nothing [M 0x188f70:190-195 — bit30 excludes 0x40000800/0x60001000];
+    /// the hill drip is 0.2/s [M MP_KOHUpdate 0x186ae0:118-121] and the score limit ends the
+    /// match [M 0x184268:170-184].
+    #[test]
+    fn koth_ends_by_hill_time_and_kills_score_nothing() {
+        let mut s = MpSettings::deathmatch(0x0700_0023);
+        s.scenario = scenario::KOTH_FFA;
+        s.frag_limit = 2; // 10 s of hill drip at 0.2/s
+        s.time_limit = 60;
+        s.human_count = 1;
+        s.player_count = 1;
+        s.bot_count = 1;
+        s.total_players = 2;
+        let mut m = two_player_match(s);
+        let mut rng = Rng::new(0x9999);
+        // the hill: a real registered hill object with its box [M MP_KOHUpdate 0x186ae0:88-93]
+        m.register_mp_object_bounds(
+            [100.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+            9,
+            [0; 7],
+            0,
+            Some(crate::mp::MpObjBounds {
+                centre: [0.0; 3],
+                sphere_off: [0.0; 3],
+                radius: 1.0,
+                min: [-2.0, -2.0, -2.0],
+                max: [2.0, 2.0, 2.0],
+            }),
+        );
+        let mut on_hill = [false; MP_MAX_SLOTS];
+        on_hill[1] = true; // the bot stands on the hill (the live host's mask, [`hill_mask`])
+        for _ in 0..900 {
+            m.update_objects(1.0 / 60.0, &on_hill, &mut rng); // 15 s of drip
+            m.update(1.0 / 60.0, false, &mut rng);
+            if m.game.request_debriefing {
+                break;
+            }
+        }
+        assert!(m.game.slots[1].score >= 2.0, "the hill drip reached the limit: {} (pos {:?}, dead {})", m.game.slots[1].score, m.game.slots[1].pos, m.game.slots[1].dead);
+        assert!(m.game.frag_latched, "0xfd latched on the hill score [M 0x184268:170-172]");
+        assert!(m.game.request_debriefing, "the match ended into the debriefing handover");
+    }
+
+    /// KOTH: kills score nothing [M 0x188f70:190-195 — bit30 excludes 0x40000800/0x60001000].
+    #[test]
+    fn koth_kills_score_nothing() {
+        let mut s = MpSettings::deathmatch(0x0700_0023);
+        s.scenario = scenario::KOTH_FFA;
+        s.frag_limit = 2;
+        s.time_limit = 60;
+        s.human_count = 1;
+        s.player_count = 1;
+        s.bot_count = 1;
+        s.total_players = 2;
+        let mut m = two_player_match(s);
+        let mut rng = Rng::new(0x9999);
+        // a kill: the killer's score does not move [M 0x188f70:190-195]
+        m.player_killed(1, Some(0), false, false, &mut rng);
+        assert_eq!(m.game.slots[0].score, 0.0, "kills score nothing in KOTH");
+        assert_eq!(m.game.slots[1].score, 0.0, "the victim's score does not move either");
+    }
+
+    /// Demolition: the round clock (the 60.0 default when the setup's time limit is unlimited
+    /// [M MP_Init 0x183438:51-54]) ends the ROUND — state 6 [M 0x184268:57-60] — and the
+    /// machine restarts it after 5 s [M 0x184bd0:79-92]; the frag latch still applies to the
+    /// match [M 0x184268:170-184 — demo/prot fall through to :170].
+    #[test]
+    fn demolition_round_ends_by_the_clock_and_the_score_limit_ends_the_match() {
+        let mut s = MpSettings::deathmatch(0x0700_0023);
+        s.scenario = scenario::DEMOLITION;
+        s.frag_limit = -1; // isolate the round clock
+        s.time_limit = -1;
+        s.human_count = 1;
+        s.player_count = 1;
+        s.bot_count = 0;
+        s.total_players = 1;
+        let mut m = two_player_match(s);
+        assert_eq!(m.game.limit, 60.0, "the unlimited setup's 60.0 round default [M 0x183438:53]");
+        let mut rng = Rng::new(0xabcd);
+        for _ in 0..200 {
+            m.update(1.0, false, &mut rng);
+            if m.game.state == 6 {
+                break;
+            }
+        }
+        assert_eq!(m.game.state, 6, "the round clock entered the restart state [M 0x184268:57-60] (clock {}, started {})", m.game.clock, m.settings.started);
+        assert!(!m.game.time_up, "0xfe is NOT latched by the demo/prot arm [M 0x184268:57-60]");
+        for _ in 0..6 {
+            m.update(1.0, false, &mut rng);
+        }
+        assert!(m.game.restart_pending, "the round restarted after the 5 s timer [M 0x184bd0:79-92]");
+        // the score limit ends the MATCH in Demolition too
+        let mut s2 = MpSettings::deathmatch(0x0700_0023);
+        s2.scenario = scenario::DEMOLITION;
+        s2.frag_limit = 5;
+        s2.time_limit = -1;
+        s2.human_count = 1;
+        s2.player_count = 1;
+        s2.bot_count = 0;
+        s2.total_players = 1;
+        let mut m2 = two_player_match(s2);
+        m2.game.slots[0].score = 5.0;
+        for _ in 0..5 {
+            m2.update(1.0, false, &mut rng);
+        }
+        assert!(m2.game.frag_latched, "0xfd latched in Demolition [M 0x184268:170-172]");
+        assert!(!m2.game.time_up, "0xfe is not latched by the demo/prot arm [M 0x184268:57-60]");
+        assert!(m2.game.request_debriefing, "the score limit ended the MATCH over the round clock [M 0x184268:173-184 — the dispatch overwrites the state-6 arm], state {}", m2.game.state);
+    }
 }

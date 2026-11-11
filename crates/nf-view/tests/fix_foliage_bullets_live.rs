@@ -139,7 +139,7 @@ fn guard_style_bullets_stop_on_the_core_and_sight_on_the_shell() {
     let mut died_at: Option<[f32; 3]> = None;
     for _ in 0..60 {
         match b.update(&sim.world, &vol, [1e4, 0.0, 1e4], &mut rng) {
-            Some(nf_game::bullet::BulletEvent::World(p)) => { died_at = Some(p); break; }
+            Some(nf_game::bullet::BulletEvent::World { at: p, .. }) => { died_at = Some(p); break; }
             _ => {}
         }
         if b.state >= 2 { break; }

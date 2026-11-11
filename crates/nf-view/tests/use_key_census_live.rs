@@ -20,6 +20,9 @@ use nf_view::scene::{Scene, Sim};
 
 type V3 = [f32; 3];
 
+#[path = "common/usepick.rs"]
+mod usepick;
+
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 fn at_origin(p: V3) -> bool { p[0].abs() < 1e-3 && p[1].abs() < 1e-3 && p[2].abs() < 1e-3 }
@@ -40,7 +43,13 @@ fn place_near(sim: &mut Sim, pos: V3) -> V3 {
     let mut best = sim.bond.pos;
     let mut best_score = f32::MAX;
     for o in offs {
-        sim.bond.pos = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+        // recovery-loop-07: the placement goes through `place_bond` (the game's
+        // `Player_StandAtNewPosition` shape — vel cleared, the floor snap of 0x190d88:104-116),
+        // not a raw obj+0x30 poke: a raw write keeps the previous tick's velocity and skips the
+        // snap, so a spot half a unit under the corridor floor (door pos sits ON the floor on
+        // 07000007) buried Bond and his fall out of the cel box ran the recovery loop.
+        let yaw = sim.bond.yaw;
+        sim.place_bond([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]], yaw);
         for _ in 0..100 { sim.step_bond(Default::default(), false, false, false); }
         let score = ((sim.bond.pos[0] - pos[0]).powi(2) + (sim.bond.pos[2] - pos[2]).powi(2)).sqrt()
             + (sim.bond.pos[1] - pos[1]).abs();
@@ -52,7 +61,8 @@ fn place_near(sim: &mut Sim, pos: V3) -> V3 {
             + (sim.bond.pos[2] - pos[2]).powi(2)).sqrt();
         if o == offs[0] && dxz <= 3.0 && hd <= 2.0 && sim.drones.level_exit.is_none() { return sim.bond.pos; }
     }
-    sim.bond.pos = best;
+    let yaw = sim.bond.yaw;
+    sim.place_bond(best, yaw);
     for _ in 0..60 { sim.step_bond(Default::default(), false, false, false); }
     sim.bond.pos
 }
@@ -72,6 +82,23 @@ fn aim_use(sim: &mut Sim, target: V3, done: &dyn Fn(&Sim) -> bool) -> bool {
             ..Default::default()
         };
         sim.step_bond(input, false, false, k % 6 == 0);
+        if done(sim) { return true; }
+    }
+    false
+}
+
+/// Stand Bond in front of monitor `mi`'s collision faces, looking at one (the use pick keeps it
+/// only with the use point inside its world sphere and within 1.0 in front of a face [M
+/// Collide_PickObj 0x1eae80; Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8;
+/// nf_game::usepick]), then pulse E with that look held until `done`.
+fn use_monitor(sim: &mut Sim, mi: usize, done: &dyn Fn(&Sim) -> bool) -> bool {
+    let t = sim.drones.use_picks.monitors[mi];
+    let tris = usepick::posed(sim, t.hash, &t.matrix);
+    if !usepick::stand_in_front(sim, &tris, t.sphere) { return false; }
+    let (y, p) = (sim.bond.yaw, sim.bond.pitch);
+    for k in 0..36 {
+        sim.bond.yaw = y; sim.bond.pitch = p;
+        sim.step_bond(Default::default(), false, false, k % 6 == 0);
         if done(sim) { return true; }
     }
     false
@@ -101,7 +128,10 @@ fn use_any_door(sim: &mut Sim, cands: &[usize]) -> Option<usize> {
         let dpos = sim.drones.doors.list[di].pos;
         if near_load_trigger(sim, dpos, 0.0) { continue; }
         for o in offs {
-            sim.bond.pos = [dpos[0] + o[0], dpos[1] + o[1], dpos[2] + o[2]];
+            // recovery-loop-07: through `place_bond` — see place_near above (the 07000007 door
+            // pos sits ON the floor; the raw poke buried Bond half a unit under it).
+            let yaw = sim.bond.yaw;
+            sim.place_bond([dpos[0] + o[0], dpos[1] + o[1], dpos[2] + o[2]], yaw);
             for _ in 0..100 { sim.step_bond(Default::default(), false, false, false); }
             if sim.drones.level_exit.is_some() { return None; }
             let dxz = ((sim.bond.pos[0] - dpos[0]).powi(2) + (sim.bond.pos[2] - dpos[2]).powi(2)).sqrt();
@@ -146,8 +176,8 @@ fn use_census_07000001() {
         .expect("07000001 carries a usable monitor [D 01.md]");
     let mpos = sim.drones.monitors.list[mi].pos;
     assert!(sim.drones.monitors.list[mi].state == 0, "sister: monitor starts idle");
-    place_near(sim, mpos);
-    assert!(aim_use(sim, mpos, &|s| s.drones.monitors.list[mi].state == 2),
+    let _ = mpos;
+    assert!(use_monitor(sim, mi, &|s| s.drones.monitors.list[mi].state == 2),
         "E on the monitor must enter the camera view [M Monitor_Activate 0x1b0058]");
     assert!(sim.drones.monitors.list[mi].watched.is_some(), "the monitor must watch a camera");
 
@@ -166,8 +196,8 @@ fn use_census_07000002() {
         .expect("07000002 carries a usable monitor [D 02.md]");
     let mpos = sim.drones.monitors.list[mi].pos;
     assert!(sim.drones.monitors.list[mi].state == 0, "sister: monitor starts idle");
-    place_near(sim, mpos);
-    assert!(aim_use(sim, mpos, &|s| s.drones.monitors.list[mi].state == 2),
+    let _ = mpos;
+    assert!(use_monitor(sim, mi, &|s| s.drones.monitors.list[mi].state == 2),
         "E on the monitor must enter the camera view [M Monitor_Activate 0x1b0058]");
 }
 
@@ -419,7 +449,9 @@ fn use_census_07000012() {
         let mpos = sim.drones.monitors.list[mi].pos;
         // place_near's first offset hangs over the elevator shaft: the fall sets the plunge
         // channel and the death script takes the level [M 0x1949a8:104-107]. Stand on the floor.
-        sim.bond.pos = [mpos[0], mpos[1] - 0.5, mpos[2] + 1.0];
+        // recovery-loop-07: through `place_bond` — see place_near above.
+        let myaw = sim.bond.yaw;
+        sim.place_bond([mpos[0], mpos[1] - 0.5, mpos[2] + 1.0], myaw);
         for _ in 0..60 { sim.step_bond(Default::default(), false, false, false); }
         assert!(aim_use(sim, mpos, &|s| s.drones.monitors.list[mi].state == 2),
             "E on the monitor must enter the camera view [M 0x1b0058]");

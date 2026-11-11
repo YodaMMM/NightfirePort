@@ -12,6 +12,20 @@ use nf_view::scene::Scene;
 
 include!("damage_log.rs");
 
+thread_local! {
+    /// los-mask-repins-0c-2 (OPT-IN, set only by walkreal0c's `with_strip_p2k_shot` scope):
+    /// suppress this walker's mid-leg return-fire while Bond crosses the west-ledge strip and
+    /// the SW arc on the real-damage tree — a return-fire fight on the thin floors flanks Bond
+    /// straight off them [L the measured west lane fall to y 1.96]. The flag scope arms it at
+    /// the #284 landing and `strip_fights_resume` lifts it after the #282 grab; off = the
+    /// master fights for every other walker.
+    pub static STRIP_NO_FIGHTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// los-mask-repins-0c-2: lift the strip crossing's return-fire suppression (walkreal0c's flag
+/// scope calls this after the #282 grab).
+#[allow(dead_code)]
+pub fn strip_fights_resume() { STRIP_NO_FIGHTS.with(|c| c.set(false)); }
+
 pub const TICKS_PER_SEC: u32 = 60;
 
 /// Wrap an angle into −π..π.
@@ -77,6 +91,9 @@ pub struct Walker {
     pub top_up_health: bool,
     /// Real-damage bookkeeping (damage_log.rs): live whenever the top-up is off.
     pub dmg: DamageLog,
+    /// Called after every stepped tick with the scene and the tick count (an observer, as in
+    /// walker.rs). `None` by default: no walk changes.
+    pub on_step: Option<Box<dyn FnMut(&Scene, u32)>>,
     /// Stop the walk the moment `level_exit` is requested.
     pub stop_on_exit: bool,
     pub report: Report,
@@ -103,6 +120,9 @@ pub struct Walker {
     pub alarm_last: Vec<u8>,
     /// ai-sight-drawn-gate-5: the one-shot roster dump latch.
     alarm_props_dumped: Option<bool>,
+    /// Pickups `resupply` must not walk to: a placed pickup behind a locked door is near on the map
+    /// and no route away.
+    pub no_fetch: Vec<[f32; 3]>,
 }
 
 /// The stuck dump, public for the walkreal tests' own aim loops.
@@ -142,15 +162,18 @@ fn fail_dump(scene: &Scene, target: V3, label: &str) -> String {
 }
 
 impl Walker {
-    pub fn new(scene: Scene) -> Walker {
+    pub fn new(mut scene: Scene) -> Walker {
+        // The walk's sound runs as in play: voices end by their length, so the 256-node pool frees.
+        nf_view::attach_headless_sound(&mut scene);
         let pos = scene.sim.as_ref().unwrap().bond.pos;
         Walker {
-            scene, top_up_health: true, dmg: DamageLog::new(), stop_on_exit: true,
+            scene, top_up_health: true, dmg: DamageLog::new(), on_step: None, stop_on_exit: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0, float_ticks: 0,
             sidestep: 0, max_y: pos[1], lenient: false, stuck_answers: false,
             alarm_last: Vec::new(),
             alarm_props_dumped: None,
+            no_fetch: Vec::new(),
         }
     }
 
@@ -170,6 +193,7 @@ impl Walker {
             if let Some(d) = &self.dmg.died { panic!("[real-damage] {d}"); }
         }
         if self.tops_up() { self.scene.sim.as_mut().unwrap().drones.health.health = 100.0; }
+        if let Some(f) = self.on_step.as_mut() { f(&self.scene, tick); }
     }
 
     fn sim(&mut self) -> &mut nf_view::scene::Sim { self.scene.sim.as_mut().unwrap() }
@@ -182,7 +206,13 @@ impl Walker {
     /// One tick with the given input; keeps Bond alive when `top_up_health` (damage suppressed —
     /// the "enemies may be disabled for the walk" allowance; falls are tracked in the report).
     pub fn tick(&mut self, input: Input, use_key: bool) {
-        self.tick_inner(input, use_key, false);
+        self.tick_inner(input, use_key, false, false);
+    }
+
+    /// Reload to a full clip (the game's R held ~100 ticks; presses past the fill are no-ops
+    /// [M Player_WeaponFiring's reload branch]) — walker.rs's `reload_full`, additive.
+    pub fn reload_full(&mut self) {
+        for _ in 0..100 { self.tick_inner(Input::default(), false, false, true); }
     }
 
     /// One tick with the trigger HELD: the gadget burns (the Q-Decryptor keypad melt) come from the
@@ -191,12 +221,15 @@ impl Walker {
     /// 0x1a5460:601-694], and `Lock_Update` 0x1ae3d8:194 burns the lock the beam touches. The
     /// port's burn runs in `step_bond`'s trigger arm (fix-gadgets2's held-fire model).
     pub fn tick_fire(&mut self, input: Input) {
-        self.tick_inner(input, false, true);
+        // A press under a draw is spent on the view-state gate [M Player_WeaponFiring 0x1a5460]:
+        // the held fire starts once the draw is done.
+        let drawing = self.scene.sim.as_ref().unwrap().gun.switch_state != 0;
+        self.tick_inner(input, false, !drawing, false);
     }
 
-    fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool) {
+    fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool, reload: bool) {
         let y_before = self.scene.sim.as_ref().unwrap().bond.pos[1];
-        self.scene.sim.as_mut().unwrap().step_bond(input, fire, false, use_key);
+        self.scene.sim.as_mut().unwrap().step_bond(input, fire, reload, use_key);
         let sim = self.scene.sim.as_ref().unwrap();
         self.total_ticks += 1;
         // ai-sight-drawn-gate-4 (NF_ALARM_TRACE, additive): the alarm-chain trace. Every live
@@ -339,6 +372,7 @@ impl Walker {
                 // real guard drops waited farther out). The shared filter keeps the master 1.5.
                 .filter(|p| (p.m[3][1] - self.pos[1]).abs() < if lane { floor_band } else { 1.5 })
                 .filter(|p| !lane || tried.iter().all(|t| dxz(*t, [p.m[3][0], p.m[3][1], p.m[3][2]]) > 2.0))
+                .filter(|p| self.no_fetch.iter().all(|t| dxz(*t, [p.m[3][0], p.m[3][1], p.m[3][2]]) > 1.0))
                 .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
                 .min_by(|a, b| dxz(*a, self.pos).total_cmp(&dxz(*b, self.pos)))
             else { break };
@@ -596,6 +630,28 @@ impl Walker {
 
     /// `walk_to` that reports a wedge instead of panicking (resupply / guard approach skip the
     /// unreachable target and the caller carries on).
+    /// Turn Bond to face the world direction `(x, z)` with the turn channel only — the player's
+    /// stick turn (`Player_Update` integrates `bd+0x34` into `obj+0x50`'s yaw [M player.rs
+    /// `self.yaw += input.turn`], no teleport, no aim write). The game's yaw convention is the
+    /// look `(sin yaw, ·, cos yaw)` — the same atan2f(x, z) family as `Vec_DirToRot` 0x1e3218
+    /// [M]. Used before an E press whose ray needs Bond facing the object: a return-fire stand
+    /// inside the arrival leg leaves the fight's yaw, and the use pick (head + look) misses.
+    /// latch-walks-on-master: opt-in per call site — no walk changes unless it calls this.
+    pub fn face_toward(&mut self, x: f32, z: f32, label: &str) {
+        let target = x.atan2(z);
+        for _ in 0..240 {
+            let yaw = self.scene.sim.as_ref().unwrap().bond.yaw;
+            let mut diff = target - yaw;
+            while diff > std::f32::consts::PI { diff -= 2.0 * std::f32::consts::PI; }
+            while diff < -std::f32::consts::PI { diff += 2.0 * std::f32::consts::PI; }
+            if diff.abs() < 0.02 { return; }
+            let t = diff.clamp(-0.2, 0.2);
+            self.tick(nf_game::player::Input { turn: t, ..Default::default() }, false);
+        }
+        eprintln!("[walk] {label}: face_toward gave up (yaw {} vs target {})",
+            self.scene.sim.as_ref().unwrap().bond.yaw, target);
+    }
+
     pub fn try_walk_to(&mut self, wp: Wp, label: &str) -> bool {
         self.lenient = true;
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.walk_to(wp, label)));
@@ -643,7 +699,14 @@ impl Walker {
             let sim = self.scene.sim.as_ref().unwrap();
             if self.stop_on_exit && sim.drones.level_exit.is_some() {
                 self.report.legs.push((label.to_string(), self.total_ticks - start_ticks, self.pos));
-                eprintln!("[walk] {label}: level_exit reached at +{} ticks", self.total_ticks - start_ticks);
+                if std::env::var_os("NF_RF_TRACE").is_some() {
+                    eprintln!("[walk] {label}: level_exit reached at +{} ticks (exit {:?} cold {} restart {} mission state {} internal {} fail_label {:#x} menu_open {} health {:.1})",
+                        self.total_ticks - start_ticks, sim.drones.level_exit, sim.drones.level_exit_cold,
+                        sim.drones.level_exit_restart, sim.drones.mission.state, sim.drones.mission.internal,
+                        sim.drones.mission.fail_label, sim.drones.mission.menu_open, sim.drones.health.health);
+                } else {
+                    eprintln!("[walk] {label}: level_exit reached at +{} ticks", self.total_ticks - start_ticks);
+                }
                 return self.total_ticks - start_ticks;
             }
             if self.scene.sim.as_ref().unwrap().disabled {
@@ -651,8 +714,14 @@ impl Walker {
                 continue;
             }
             // Real damage: answer whoever is shooting Bond before walking on (the fight's
-            // ticks are the response's cost, not the leg's).
-            if !riding && !ladder && self.total_ticks % 10 == 0 {
+            // ticks are the response's cost, not the leg's). los-mask-repins-0c-2 OPT-OUT
+            // (super::STRIP_NO_FIGHTS, set only by with_strip_p2k_shot): the west-ledge strip
+            // crossing — a return-fire fight on the thin lip flanks Bond straight off it [L the
+            // measured west lane fall to y 1.96]; the flag scope handles the shooter with the
+            // aimed stand from the stable lane instead, and strip_fights_resume() lifts this
+            // after the #282 grab.
+            if !riding && !ladder && self.total_ticks % 10 == 0
+                && !STRIP_NO_FIGHTS.with(|c| c.get()) {
                 let t0 = self.total_ticks;
                 if self.return_fire(label) { start_ticks += self.total_ticks - t0; continue; }
             }

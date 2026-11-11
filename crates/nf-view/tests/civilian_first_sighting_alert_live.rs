@@ -275,6 +275,13 @@ fn the_voice_0xd_guests_never_raise_the_alert() {
         let pos = sim.drones.list[walker].pos;
         let yaw = sim.drones.list[walker].yaw;
         sim.bond.pos = [pos[0] + yaw.sin() * 1.5, pos[1], pos[2] + yaw.cos() * 1.5];
+        // The hold is the guest's own state machine: the party's other drones are switched off
+        // (`NDrone2_Enable(0)` — no AI, out of the round pick [M Collide_PickObj 0x1eae80:72-82]).
+        // Since the stream join a guard's round reaches the other drones on its line [M
+        // Bullet_update 0x12e7b0:389-421]: guard #3 (11 units behind her) fires at armed Bond and
+        // its round lands on the guest standing between them at tick 170, so she leaves the wait
+        // for the hit reaction — a bullet, not the alert this test guards.
+        for (i, dr) in sim.drones.list.iter_mut().enumerate() { if i != walker { dr.enabled = false; } }
     }
     for _ in 0..240 {
         sim.step_bond(Default::default(), false, false, false);

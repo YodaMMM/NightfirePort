@@ -1,9 +1,7 @@
 //! `Player_UnEquipKey` 0x1a97b8 (16 B): `BL[0x70C + (u16)id] = 0` — the key-ring slot clear
 //! [M 0x1a97b8:6]. Sole caller `Lock_ReLock` 0x1b0750:8 (guarded player-class-3), reached from
 //! `Lock_Update` 0x1ae3d8 case 2 when the take channel drops: the single-use key re-locks the
-//! door and removes Bond's key. The port's lock side does not consult or clear the key ring yet
-//! (bldata.md:95's recorded gap — `Inventory::keys` pickup.rs:376 is the pickup side); the clear
-//! itself is one line when `Lock_ReLock` lands.
+//! door and removes Bond's key. `Lock::key_tick` runs that and the case-0 ring read.
 //!
 //! The game gates the keypad mini-game on the pause-menu manager's existence —
 //! `MenuManager_Exists` 0x21de90 (`manager[(id&0xff)·0x1d8 + 0x1D1]`, the in-use byte of the
@@ -122,6 +120,13 @@ pub struct Lock {
     /// use-pick facing gate's direction: `Player_Activate` 0x1a5170's class-0x3A arm refuses the
     /// activation when `dir · (user+0xC0 − lock+0xC0) < 0` (behind the panel) [M 0x1a5170:158-166].
     pub facing: V3,
+    /// The lock sits in `Lock_Update` state 1 this tick: case 1 writes the out channel, then an
+    /// empty framelist ends the state at once [M 0x1ae3d8 case 1]. Set by every unlock and by the
+    /// Operative create-unlock.
+    pub open_pending: bool,
+    /// `Lock_Unlock` 0x1b0650:19 owes `Player_EquipKey(code)`: every unlock by the player, not the
+    /// create-unlock (the param_3 = 1 arm equips nothing [M :28-31]).
+    pub equip_pending: bool,
 }
 
 impl Lock {
@@ -157,6 +162,8 @@ impl Lock {
                 scanning: false,
                 lod_next: false,
                 facing: [m[2][0], m[2][1], m[2][2]],
+                open_pending: param(6) != 0 && difficulty == 1,
+                equip_pending: false,
             });
         }
         out
@@ -170,12 +177,16 @@ impl Lock {
     /// `Lock_Unlock`, which writes `switch_channels[record+8]` [M :194-195, 0x1b0650]. Returns
     /// whether it completed THIS tick.
     pub fn burn(&mut self, amount: u8, ch: &mut Channels, frame: u32) -> bool {
-        if self.burned || self.unlocked { return false; }
+        // The laser arm is kind 1 only: kinds 0/2 read ids 0x56/0x57 and nothing else, so a laser on
+        // a keypad does nothing [M 0x1ae3d8:47 `uVar6 == 1`, :162].
+        if self.kind != 1 || self.burned || self.unlocked { return false; }
         self.grace = 2; // *(lock+0xf6) = 2 on the contact tick [M 0x1ae3d8:79]
         self.burn_a = self.burn_a.saturating_sub(amount);
         self.burn_b = self.burn_b.saturating_sub(amount);
         if self.burn_b >= 4 { return false; }
         self.burned = true;
+        self.open_pending = true;
+        self.equip_pending = true;
         if self.out != 0 { ch.set(self.out as u32, 1, frame); }
         true
     }
@@ -217,22 +228,64 @@ impl Lock {
         Some(self.code)
     }
 
-    /// `Lock_Update` 0x1ae3d8 **case 2** (the burnt-open tick): the decryptor locks (kind 0)
-    /// re-arm the moment their burn-through channel drops [M 0x1ae3d8 case 2: `if
-    /// (instance u16[0] == 0 && u16[+8] != 0 && switch_channels[u16[+8]] == 0)
-    /// Lock_ReLock(glb_players, lock)`]. `channel_on` reads that switch. Returns the key id to
-    /// unequip when the re-lock fired. (Kind 1 = the laser-burn locks never re-arm here [M —
-    /// the guard is `== 0`].)
+    /// `Lock_Update` 0x1ae3d8 **case 2** (the burnt-open tick). `burned` IS the game's lock
+    /// state word +0xf4 == 2: the decompile writes that state in exactly one place — case 1's
+    /// end, when the open framelist completes (`Control_NextLOD(lock)` then `+0xf4 = 2` [M
+    /// 0x1ae3d8 case 1]) — so state 2 is "unlocked and the open
+    /// animation has finished", reached by EVERY unlocked lock (laser burn, decrypt scan,
+    /// keypad, the create-time Operative unlock all land in state 1 first [M Lock_Unlock
+    /// 0x1b0650:28-31]). The port has no framelist, so its event unlocks fold state 1 and
+    /// state 2 into the completion tick. Case 2's body, in the game's order [M :220-234]: the
+    /// burn bytes refill (+0x105 += 2 under the game's `v + 2 < 0x100` overflow guard, +0x104
+    /// += 1 while it is not 0xff), THEN the re-lock check: kind (record u16[+0]) == 0 AND
+    /// u16[+8] != 0 AND `switch_channels[u16[+8]] == 0` → `Lock_ReLock(glb_players, lock)`
+    /// [M :228-233]. `channel_on` reads that switch. Returns the key id to unequip when the
+    /// re-lock fired. (Kind 1 = the laser-burn locks refill but never re-arm here [M — the
+    /// guard is `== 0`].)
     pub fn update_burnt_open(&mut self, channel_on: bool) -> Option<u16> {
-        // Only the case-2 (burnt-open) tick runs this [M 0x1ae3d8:220-232]; the port's `burned`
-        // is that state [S mapping]. Any other state never re-locks.
         if !self.burned {
             return None;
+        }
+        // The refill [M 0x1ae3d8:221-227]: `uVar19 = +0x105 + 2; if (uVar19 < 0x100) store` —
+        // a byte at 0xfe or 0xff stays; `if (+0x104 != -1) +0x104 += 1`.
+        if self.burn_b <= 0xfd {
+            self.burn_b += 2;
+        }
+        if self.burn_a != 0xff {
+            self.burn_a += 1;
         }
         if self.kind == 0 && self.out != 0 && !channel_on {
             return self.re_lock();
         }
         None
+    }
+
+    /// The key-ring half of `Lock_Update` 0x1ae3d8, once per tick. State 1 writes the out channel
+    /// [M case 1] and moves the lock to state 2 (`burned`; the re-lock there is `update_burnt_open`,
+    /// run by the control pass); a closed kind-0/2 lock with a code opens when the ring holds
+    /// its key [M case 0, :139-147 `Lock_Unlock(glb_players, lock, 0)`, state 1]. The ring is what
+    /// links the paired keypads on the two faces of a door: solving one equips the key
+    /// [M 0x1b0650:19] and the other opens on its next tick. `busy` = this lock is in state 3/4.
+    pub fn key_tick(&mut self, keys: &mut [bool], ch: &mut Channels, frame: u32, busy: bool) {
+        if self.equip_pending {
+            self.equip_pending = false;
+            if let Some(k) = keys.get_mut(self.code as usize) { *k = true; }
+        }
+        if self.open_pending {
+            // State 1 writes the channel; the empty framelist ends it at once, so the next tick is
+            // state 2 (`burned`), where the control pass's `update_burnt_open` reads the re-lock.
+            self.open_pending = false;
+            if self.out != 0 { ch.set(self.out as u32, 1, frame); }
+            self.burned = true;
+            return;
+        }
+        if self.burned || self.unlocked { return; }
+        if (self.kind == 0 || self.kind == 2) && self.code != 0 && !self.scanning && !busy
+            && keys.get(self.code as usize).copied().unwrap_or(false)
+        {
+            self.unlocked = true;
+            self.open_pending = true;
+        }
     }
 
     /// The lock of a placement index (the render's per-instance lookup, when the meshes land).
@@ -287,6 +340,15 @@ impl Lock {
             self.pending_sounds.push(0x5db);
             if self.scan_solved >= 4 {
                 self.unlocked = true; // Lock_Unlock 0x1b0650:28-31 → state 1 (leaves the scan state 5)
+                // The completion's `memset(&GlobalVars, 0, 0x18)` clears the solved-digit count
+                // DAT_002a37e3 with the rest of the keypad block [M 0x1ae3d8 case 5 completion,
+                // :373] — a re-locked decryptor starts its next scan from zero digits.
+                self.scan_solved = 0;
+                // The open framelist ends → the game's state 2 (`burned`) [M 0x1ae3d8 case 1];
+                // the port folds it into the completion tick so the case-2 re-lock check is
+                // live from the next tick (update_burnt_open's header).
+                self.burned = true;
+                self.equip_pending = true;
                 self.scanning = false;
                 // fix-decryptor-sounds: the unlock chime [M 0x1ae3d8:374].
                 self.pending_sounds.push(0x5da);
@@ -340,6 +402,51 @@ impl KeyCodes {
     }
 }
 
+/// The keypad page's ten digit controls, def order — page 0x40000021's id-0x100000ba controls
+/// [D 07000003.bin / 07000005.bin (identical); the census test (`keypad_census.rs`) pins every
+/// census level's page to this table]. (x, y, w, h) in the page's 640×480 menu space; the
+/// authored digit value rides the control's post-header dword — `C_KEYPAD_Handler` types
+/// `'0' + *(control+0x20)` [M 0x216810:13], and the disc's ten controls carry exactly 1..9,0
+/// in the layout 1 2 3 / 4 5 6 / 7 8 9 / _ 0 _.
+pub const KEYPAD_DIGIT_RECTS: [(i16, i16, i16, i16); 10] = [
+    (268, 188, 34, 34), (304, 188, 34, 34), (339, 188, 34, 34),
+    (268, 223, 34, 34), (304, 223, 34, 34), (339, 223, 34, 34),
+    (268, 258, 34, 34), (304, 258, 34, 34), (339, 258, 34, 34),
+    (304, 293, 34, 34),
+];
+
+/// The digits behind `KEYPAD_DIGIT_RECTS`, same order [D the census dump].
+pub const KEYPAD_DIGIT_VALUES: [u32; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
+
+/// `Menu_FindControl` 0x1f16d8's direction byte: 1 up, 2 down, 4 left, 8 right [M], also the bits
+/// of `Input::keypad_nav`. The page's mode is `Page_Init`'s default 1 [M 0x21f1c0; the page def
+/// carries no msg 0x56 [D]], so all four directions run, in `MenuManager_Update`'s order: left,
+/// right, up, down [M 0x21c3d8:163-182].
+pub const KEYPAD_NAV_ORDER: [u8; 4] = [4, 8, 1, 2];
+
+/// `Input_Update` 0x17ee88's auto-repeat, on the count of frames an action has been held: the
+/// fresh bit (mask 4) on the first frame; the repeat bit (mask 8) from frame 46 on when the count
+/// is a multiple of 8 [M raw words 0x17f0d0-0x17f0f0: `sltiu 0x2e`, `andi 7`, `ori 8`].
+fn action_repeats(frames: u16) -> bool {
+    frames >= 0x2e && frames & 7 == 0
+}
+
+/// One tick of the page's input, after the action machine: what fired this tick.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KeypadEdges {
+    /// Directions that fire: the 0x1a-0x1d reads take mask 0xc, fresh or repeat
+    /// [M 0x21c3d8:163-182].
+    pub nav: u8,
+    /// Action 0x1f mask 4: types the focused digit [M `Button_Update` 0x1ef948:74,105-107].
+    pub confirm: bool,
+    /// Action 0x1f mask 8: the button's msg 0x61, which `C_KEYPAD_Handler` ignores, so only its
+    /// `Menu_PlaySound(0)` is heard [M 0x1ef948:75-77,110-113].
+    pub confirm_repeat: bool,
+    /// Action 0x22 mask 4: the close [M `MenuManager_Update` 0x21c3d8:77-105, `MenuManager_Monitor`
+    /// 0x21d508:29-37].
+    pub back: bool,
+}
+
 /// The in-game keypad mini-game — page 0x40000021 of the per-level menu def (kind-8 entry
 /// 08000001, page file-hash 0x80000003 [D census: present with control 0x100000ba in
 /// 07000003/05/08/09/0b/0c/0d/11/12/13/14/15/16/1b/23/25/26/27/28.bin]), created by
@@ -380,12 +487,30 @@ pub struct Keypad {
     pub open: bool,
     /// The match fired (`Lock_Unlock` ran) — the caller writes the lock's out channel + state 1.
     pub solved: bool,
+    /// The digit control the page cursor stands on, an index into `KEYPAD_DIGIT_RECTS`. The game
+    /// has no free cursor: every writer of the manager cursor's +0x24/+0x26 (`Menu_FindControl`,
+    /// `Manager_SendMessage`, `Page_Update`) places it on a control [M]. Only the ten digit
+    /// buttons can hold it: the page's other 13 controls carry msg 0x2b value 6, whose bit 2
+    /// survives the update's `& 0xfb`, so their +0x7a stays non-zero and the walks skip them
+    /// [D the page's control msgs; M 0x1ef948, 0x218cb8:84]. Home is digit 1, index 0: the page
+    /// opens with no usable control (the digits' +0x7a is still 4), so `Page_Update` parks the
+    /// cursor on the backup control at (-100, -100); the next frame's `Menu_GetControl` finds no
+    /// rect there and `Menu_GetFirstControl` returns the first usable control in list order
+    /// [M 0x21edc8:32-38,139-141; 0x1f14f8:90-91; 0x1f2708; `LinkedList_Add` appends].
+    pub focus: usize,
+    /// Frames each direction has been held, in `KEYPAD_NAV_ORDER`.
+    nav_frames: [u16; 4],
+    confirm_frames: u16,
+    back_frames: u16,
+    /// The lanes have been read once. A button already down when the page opens is held, not
+    /// fresh: `Input_Update` keeps counting it across the open.
+    primed: bool,
 }
 
 impl Keypad {
     /// `Lock_Update` case 3's arming [M 0x1ae3d8:176-190].
     pub fn arm(code: [u8; 4], code_shown: bool) -> Keypad {
-        Keypad { code, code_shown, typed: [b'*'; 4], cap: 4, count: 0, open: true, solved: false }
+        Keypad { code, code_shown, typed: [b'*'; 4], cap: 4, count: 0, open: true, solved: false, focus: 0, nav_frames: [0; 4], confirm_frames: 0, back_frames: 0, primed: false }
     }
 
     /// `C_KEYPAD_Handler` 0x216810 msg 0x4b — a digit button press. `d` is the button's
@@ -402,8 +527,12 @@ impl Keypad {
     /// The display string for the label control 0x10000075 (msg 0x18 set-text target
     /// [M 0x216810:13-22]): the game copies typed[0..=count_before] INCLUSIVE — the just-typed
     /// digit included, i.e. `typed[..count]` with the post-increment count — then NULs the tail.
+    /// At the count-0 open the game's msg-0x51 refresh sprintf's the literal `"****"` into the
+    /// same buffer [M 0x216810:24-29 — the format at 0x30d330 is the four masks], so the page's
+    /// resting display is the four masks.
     pub fn display(&self) -> String {
         let n = (self.count as usize).min(4);
+        if n == 0 { return "****".to_string(); }
         String::from_utf8_lossy(&self.typed[..n]).into_owned()
     }
 
@@ -435,6 +564,46 @@ impl Keypad {
     pub fn close(&mut self) {
         self.open = false;
     }
+
+    /// The digit the page cursor stands on (the page's draw highlights this control).
+    pub fn focus_digit(&self) -> u32 {
+        KEYPAD_DIGIT_VALUES[self.focus]
+    }
+
+    /// ✕ is down on the page this tick (`Menu_InputAction(0x1f, 1)`, the held read the focused
+    /// button's 0x40 mask takes [M `Button_Update` 0x1ef948:84-86]).
+    pub fn confirm_held(&self) -> bool {
+        self.confirm_frames > 0
+    }
+
+    /// One tick of the page's held lanes through the game's action machine. The 0x1f and 0x22
+    /// reads refuse each other while the other is held [M `Menu_InputAction` 0x1f1f40: 0x1e/0x1f
+    /// return 0 under a held 0x22, and 0x22 returns 0 under a held 0x1f or 0x1e].
+    pub fn edges(&mut self, nav: u8, confirm: bool, back: bool) -> KeypadEdges {
+        let primed = self.primed;
+        self.primed = true;
+        let count = |frames: &mut u16, held: bool| {
+            *frames = if !held { 0 } else if !primed { 2 } else { frames.saturating_add(1).min(0x7fff) };
+            *frames
+        };
+        let mut out = KeypadEdges::default();
+        for (i, &bit) in KEYPAD_NAV_ORDER.iter().enumerate() {
+            let c = count(&mut self.nav_frames[i], nav & bit != 0);
+            if c == 1 || action_repeats(c) { out.nav |= bit; }
+        }
+        let c = count(&mut self.confirm_frames, confirm);
+        let b = count(&mut self.back_frames, back);
+        out.confirm = c == 1 && !back;
+        out.confirm_repeat = action_repeats(c) && !back;
+        out.back = b == 1 && !confirm;
+        out
+    }
+
+    /// The select edge on the page: the focused digit types (`C_KEYPAD_Handler`'s msg 0x4b arm
+    /// [M 0x216810:8-22: the wrap at the cap, `typed[count]`, the display update, count++]).
+    pub fn select(&mut self) {
+        if self.open { self.digit(KEYPAD_DIGIT_VALUES[self.focus]); }
+    }
 }
 
 #[cfg(test)]
@@ -458,6 +627,7 @@ mod tests {
             kind, code, scan_progress: 0, scan_solved: 0, pending_sounds: Vec::new(), scanning: false, lod_next: false,
             burn_a: 0xff, burn_b: 0xff, grace: 0,
             facing: [0.0, 0.0, 1.0],
+            open_pending: false, equip_pending: false,
         }
     }
 
@@ -483,5 +653,59 @@ mod tests {
         // A kind-0 lock that is not burnt open (state != 2) never re-locks [M 0x1ae3d8 case 2 only].
         let mut idle = lock(0, 0x88, 0x1234);
         assert_eq!(idle.update_burnt_open(false), None);
+    }
+
+    // [M 0x1ae3d8:221-227] case 2's refill runs in the game's order BEFORE the re-lock check,
+    // for every kind: +0x105 += 2 under the `v + 2 < 0x100` guard, +0x104 += 1 while != 0xff.
+    #[test]
+    fn case2_refills_the_burn_bytes_before_the_relock_check() {
+        let mut l = lock(1, 0x86, 0x1);
+        l.burned = true;
+        l.burn_a = 0x10;
+        l.burn_b = 0x10;
+        assert_eq!(l.update_burnt_open(false), None, "kind 1 never re-locks [M the == 0 guard]");
+        assert_eq!((l.burn_a, l.burn_b), (0x11, 0x12), "both bytes climb (+1 / +2)");
+        // The overflow guards: 0xfe + 2 = 0x100 is NOT stored (stays 0xfe), 0xff + 1 is not stored.
+        let mut l2 = lock(1, 0x86, 0x1);
+        l2.burned = true;
+        l2.burn_a = 0xff;
+        l2.burn_b = 0xfe;
+        l2.update_burnt_open(true);
+        assert_eq!((l2.burn_a, l2.burn_b), (0xff, 0xfe), "0xff keeps, 0xfe + 2 overflows the guard");
+        // A non-burnt lock never refills (case 2 only runs in state 2 [M the switch at :34]).
+        let mut l3 = lock(1, 0x86, 0x1);
+        l3.burn_a = 0x10;
+        l3.burn_b = 0x10;
+        l3.update_burnt_open(true);
+        assert_eq!((l3.burn_a, l3.burn_b), (0x10, 0x10));
+    }
+
+    // [M 0x1ae3d8 case 5 completion + case 1's end + case 2; 0x1b0750] THE re-lock cycle: Bond
+    // decrypts the lock (state 5 → Lock_Unlock → state 1 → the framelist ends → state 2), the
+    // channel drops, `Lock_ReLock` re-arms it (state 0) — and it decrypts again from zero digits.
+    #[test]
+    fn a_decrypted_lock_relocks_when_its_channel_drops_and_decrypts_again() {
+        let mut ch = Channels::default();
+        let mut l = lock(0, 0x3e, 0x5);
+        // The decrypt drive: the 0x57 (upgraded, 3/tick) contact stream [M :305-315].
+        let mut ticks = 0;
+        while !l.unlocked && ticks < 100_000 { ticks += 1; l.decrypt_tick(1, true, &mut ch, ticks); }
+        assert!(l.unlocked && l.burned, "the unlock lands in the state-2 fold [M case 1's end]");
+        assert_eq!(l.scan_solved, 0, "the completion's memset clears the digit count [M :373]");
+        assert!(ch.on(0x3e), "the unlock wrote the out channel [M :193-196]");
+        // The channel drops (the census finds no disc writer that does — the unit pin is the
+        // game's arm itself): the next per-tick case-2 tick re-locks and names the key.
+        ch.set(0x3e, 0, 10_000);
+        assert_eq!(l.update_burnt_open(false), Some(0x5), "the returned key id is record u16[+2] [M 0x1b0750:8]");
+        assert!(!l.burned && !l.unlocked, "state 0 [M 0x1b0750:7]");
+        // ...and it decrypts again, all four digits, from scratch.
+        let mut ticks = 0;
+        while !l.unlocked && ticks < 100_000 { ticks += 1; l.decrypt_tick(1, true, &mut ch, ticks); }
+        assert!(l.unlocked && ch.on(0x3e), "the re-locked lock decrypts again");
+        // Sister: while the channel stands, the same tick does NOT re-lock.
+        let mut l2 = lock(0, 0x3e, 0x5);
+        l2.burned = true;
+        assert_eq!(l2.update_burnt_open(true), None);
+        assert!(l2.burned);
     }
 }

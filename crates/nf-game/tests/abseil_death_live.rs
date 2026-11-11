@@ -15,7 +15,12 @@
 //! AbseilDeath 0x92 [M 0x169b28]: ENTER sets the corpse flag obj+0xF0 & 0x20 (SP), clears the
 //! rope flag +0x23, danim 0x40, DropWeapon; UPDATE waits for the feet probe (anim+0x60 & 8) →
 //! danim 10 + DEAD 0x47. The corpse keeps gravity and collision — DoCollision/DoGravity gate on
-//! the drone flags +0x4F8, never on the corpse flag [M 0x149ec8 / 0x141e58].
+//! the drone flags +0x4F8, never on the corpse flag [M 0x149ec8 / 0x141e58] — while a force arm
+//! holds: the death fall's follow-on 0xbf carries the anim-info no-physics bit (+0x570 & 2 [D
+//! Drone_AnimInfo]), and off 0700004a (whose AbseilDeath sets the always-gravity bit 4 [M
+//! 0x169b28:19-20]) DoGravity/DoCollision return 0 for it unless the drone is drawn (obj+0xFC) or
+//! within 2.0 of a player [M 0x141e58:26-38, 0x149ec8:20-32]. The kill tests therefore keep Bond's
+//! view on the guard after the shot, as the player who fired does (`bond_watching`).
 
 use nf_formats::anim::Script;
 use nf_formats::iso9660::IsoImage;
@@ -101,7 +106,18 @@ impl Fixture {
     }
 }
 
-fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(), cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
+fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(), cel: None, obj_cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
+
+/// Bond at `p` with his view on `at` (the guard he just shot): the draw pass's frustum test
+/// [M View_AddObjects 0x1e62d8:34-35] then marks the falling corpse drawn, the game's obj+0xFC
+/// force arm for DoGravity/DoCollision [M 0x141e58:34-35, 0x149ec8:27-29].
+fn bond_watching(p: [f32; 3], at: [f32; 3]) -> Player {
+    let mut b = bond_at(p);
+    let v = [at[0] - b.eye[0], at[1] + 0.9 - b.eye[1], at[2] - b.eye[2]];
+    let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
+    b.aim = [v[0] / n, v[1] / n, v[2] / n];
+    b
+}
 
 const LEVEL: &str = "07000011.bin";
 /// Where a player shoots the rope guards from: the stairwell's west landing. The guard's opponent is
@@ -144,7 +160,8 @@ fn a_guard_killed_on_the_rope_leaves_it_and_lands_below() {
     // 0x140968's gravity arm] puts a ~10-unit drop inside ~2 s.
     let mut landed = None;
     for t in 1..=240u32 {
-        sim.tick(&d, &bond_at(WEST_LANDING));
+        let at = sim.list[ai].pos;
+        sim.tick(&d, &bond_watching(WEST_LANDING, at));
         if sim.list[ai].abseil_land_latch { landed = Some(t); break; }
     }
     let t = landed.expect("the corpse lands (the feet probe → danim 10, +0xcdc = 1)");
@@ -158,7 +175,8 @@ fn a_guard_killed_on_the_rope_leaves_it_and_lands_below() {
     // 0xbf class 9 [D Drone_AnimInfo 0x273200] — so Dead starts with 0xbf playing.
     let mut dead = false;
     for _ in 0..600u32 {
-        sim.tick(&d, &bond_at(WEST_LANDING));
+        let at = sim.list[ai].pos;
+        sim.tick(&d, &bond_watching(WEST_LANDING, at));
         if sim.list[ai].state == state::DEAD { dead = true; break; }
     }
     assert!(dead, "Dead 0x47 follows the landing anim");
@@ -206,7 +224,8 @@ fn an_explosive_kill_releases_the_rope_guard_the_same_way() {
     assert!(!sim.list[ai].air, "released [M 0x169b28:28]");
     let mut landed = None;
     for t in 1..=240u32 {
-        sim.tick(&d, &bond_at(WEST_LANDING));
+        let at = sim.list[ai].pos;
+        sim.tick(&d, &bond_watching(WEST_LANDING, at));
         if sim.list[ai].state == state::DEAD { landed = Some(t); break; }
     }
     assert!(landed.is_some(), "the blasted corpse lands too");

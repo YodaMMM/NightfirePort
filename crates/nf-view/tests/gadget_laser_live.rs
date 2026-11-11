@@ -26,10 +26,12 @@ fn the_watch_laser_burns_the_safe_bolt() {
     sim.bond.yaw = 0.85;
     let draw = Input { switch_to: Some(0x4e), ..Default::default() };
     for _ in 0..40 { sim.step_bond(draw, false, false, false); }
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     assert_eq!(sim.gun.weapon, 0x4e, "the Laser must equip; weapon {:#x}", sim.gun.weapon);
     // Aim at the top bolt through the real look input and HOLD the fire: the beam burns it.
     // No aim gate on the Laser [M 0x1a5460:512-514's 0x54 check is the Micro-Camera's fire polarity].
     let target = [162.2365f32, 43.875843, -117.14455];
+    let mut sparks_mid = 0usize;
     for tick in 1..=300u32 {
         let (turn, look) = {
             let sim = scene.sim.as_ref().unwrap();
@@ -43,6 +45,11 @@ fn the_watch_laser_burns_the_safe_bolt() {
             (err.clamp(-0.08, 0.08), (want_pitch - sim.bond.pitch).clamp(-0.08, 0.08))
         };
         scene.sim.as_mut().unwrap().step_bond(Input { turn, look, ..Default::default() }, true, false, false);
+        // The sparks live ~0.2 s (the def's life 0.167+0.033 s + the 3-tick all-dead retain
+        // [M 0x17b080:300-320]), so the count reads mid-hold — after the burn-through the lock's
+        // `burned` stops the contacts and the emitters expire.
+        let c = scene.sim.as_ref().unwrap().drones.fx.emitters.iter().filter(|e| e.def == 0x0c00_000a).count();
+        sparks_mid = sparks_mid.max(c);
         // The fail-first pin [M 0x1ae3d8:82-101]: the real burn takes 84 contact ticks (−3/tick off
         // the 0xff bytes until +0x105 < 4); the OLD stand-in burned on the FIRST contact tick (the
         // aim-line + BEAM_RADIUS 0.25 test in laser_tick) and its bullets died at the record's
@@ -54,11 +61,26 @@ fn the_watch_laser_burns_the_safe_bolt() {
             assert!(!bolt.burned, "60 contact ticks (< 84) must NOT complete the bolt [M 0x1ae3d8:82-101] — the old stand-in burned on tick 1");
             assert!(bolt.burn_b < 0xff, "the partial burn has descended the byte (got {:#x}) [M :82-95]", bolt.burn_b);
         }
+        if scene.sim.as_ref().unwrap().drones.channels.on(134) { break; }
     }
     let sim = scene.sim.as_ref().unwrap();
     assert!(sim.drones.channels.on(134), "the top bolt's burn completes: the out channel 134 rises [M 0x1ae3d8:194-195]");
     assert!(sim.drones.locks.iter().find(|l| l.out == 134).map(|l| l.burned).unwrap_or(false), "the lock record is burned");
     assert!(sim.laser_beam.is_some(), "the beam endpoints are parked for the renderer while the laser is out");
+    // laser-hinges [M Lock_Update 0x1ae3d8:69-70]: every accepted contact spawns the burn sparks —
+    // `Emitter_Create(0, 0, 0xc00000a, entry+0x40, entry+0x10, 0, 0, 0)` (the same call the satchel
+    // walk makes [M 0x12d890:467-468]). The aim converges by ~hold-tick 20 and the burn needs 84
+    // contact ticks [M :82-101] — ~60 contact ticks' worth of sparks over the hold. The pool keeps
+    // only the last ~15 ticks' emitters (the def's life 0.167+0.033 s + the 3-tick all-dead retain
+    // [M 0x17b080:300-320]), so the mid-hold plateau is ≥ 8. The OLD port spawned none: the beam's
+    // world-hit puff (Effect_Laser's metal gas [M 0x1cef38:60-70]) looks identical on a hinge aim
+    // (no contact) and on a bolt aim, so nothing showed that the burn was running; the real
+    // targets are the two bolt housings [D #207/#208], top/bottom of the door face.
+    assert!(sparks_mid >= 8, "the burn sparks spawn per contact tick (peak {sparks_mid}; the game's per-contact Emitter_Create [M 0x1ae3d8:69-70])");
+    let bolt = sim.drones.locks.iter().find(|l| l.out == 134).unwrap().pos;
+    let near = sim.drones.fx.emitters.iter().filter(|e| e.def == 0x0c00_000a)
+        .any(|e| (e.pos[0] - bolt[0]).abs() < 0.6 && (e.pos[1] - bolt[1]).abs() < 0.6 && (e.pos[2] - bolt[2]).abs() < 0.6);
+    assert!(near, "a spark emitter sits at the bolt's contact point");
 }
 
 /// Sister: a PARTIAL burn heals — the game's idle arm refills the burn bytes +1/tick once the
@@ -74,6 +96,7 @@ fn the_partial_burn_heals_while_the_beam_is_off() {
     sim.bond.yaw = 0.85;
     let draw = Input { switch_to: Some(0x4e), ..Default::default() };
     for _ in 0..40 { sim.step_bond(draw, false, false, false); }
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     let target = [162.2365f32, 43.875843, -117.14455];
     for _ in 0..60 {
         let (turn, look) = {
@@ -114,6 +137,7 @@ fn the_watch_laser_burns_only_while_the_fire_is_held() {
     sim.bond.yaw = 0.85;
     let draw = Input { switch_to: Some(0x4e), ..Default::default() };
     for _ in 0..40 { sim.step_bond(draw, false, false, false); }
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     assert_eq!(sim.gun.weapon, 0x4e, "the Laser equips [D USATxt 0x05000043]");
     let target = [162.2365f32, 43.875843, -117.14455];
     // Aimed at the bolt WITHOUT the fire: nothing burns (the fail-first property — the pre-fix port
@@ -165,6 +189,7 @@ fn the_laser_away_from_the_bolts_burns_nothing() {
     sim.bond.yaw = 0.85;
     let draw = Input { switch_to: Some(0x4e), ..Default::default() };
     for _ in 0..40 { sim.step_bond(draw, false, false, false); }
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     assert_eq!(sim.gun.weapon, 0x4e, "the Laser equips [D USATxt 0x05000043]");
     // Aim at the ceiling (the bolt is below the eye line) with the fire HELD: the beam never touches it.
     for _ in 0..300 {
@@ -199,6 +224,7 @@ fn the_decryptor_burns_the_safe_bolt() {
         if sim.gun.weapon == 0x4e { equipped = true; break; }
     }
     assert!(equipped, "the decryptor must equip through the gadget cycle; weapon {:#x}", sim.gun.weapon);
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     let target = [162.2365f32, 43.875843, -117.14455];
     // The decryptor's fire has no aim gate [M 0x1a5460:512-514 reads only 0x54] — hold the fire and burn.
     for _ in 0..300 {
@@ -235,6 +261,7 @@ fn the_laser_hold_spawns_no_bullet_impacts_and_keeps_one_loop_voice() {
     sim.bond.yaw = 0.85;
     let draw = Input { switch_to: Some(0x4e), ..Default::default() };
     for _ in 0..40 { sim.step_bond(draw, false, false, false); }
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     assert_eq!(sim.gun.weapon, 0x4e, "the Laser equips");
     // Aim at the wall behind the safe, hold fire 60 ticks through the real input path.
     let target = [162.2365f32, 43.875843, -117.14455];
@@ -288,6 +315,7 @@ fn the_beam_end_equals_the_crosshair_rays_hit() {
     sim.bond.yaw = 0.85;
     let draw = Input { switch_to: Some(0x4e), ..Default::default() };
     for _ in 0..40 { sim.step_bond(draw, false, false, false); }
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     assert_eq!(sim.gun.weapon, 0x4e, "the Laser equips");
     let target = [162.2365f32, 43.875843, -117.14455];
     // fix-weapon-anims2: the hold now covers the Laser's correct-rate equip+draw+first-shot chain.
@@ -353,6 +381,7 @@ fn the_stunner_without_a_target_shoots_nothing() {
         sim.step_bond(draw, false, false, false);
         if sim.gun.weapon == 0x4a { ok = true; break; }
     }
+    for _ in 0..200 { if sim.gun.switch_state == 0 { break; } sim.step_bond(Input::default(), false, false, false); }
     if !ok {
         // The 07000008 start owns the Stunner (the 07 party loadout's 0x4a/999 [M 0x1a7ef8 case 7]);
         // the switch input must find it owned.

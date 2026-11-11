@@ -44,6 +44,15 @@ fn give_and_switch(scene: &mut nf_view::scene::Scene, id: u8, label: &str) -> us
 /// (the release frame = the fire script's `fire_anim_len` [M Player_SetWeaponAnimObj case 9]),
 /// then release. Returns the tick the projectile appeared.
 fn throw_held(scene: &mut nf_view::scene::Scene, expect_grenade: bool) -> Option<usize> {
+    // Let the draw finish first, as a player presses once the grenade is up: a press made during
+    // the draw arms the refire timer, and the view-state gate (draw state 3, outside {0, 9, 0xB})
+    // spends it, so a trigger held through the draw never throws [M Player_WeaponFiring
+    // 0x1a5460:601-646, called every tick from Player_Update 0x193600:413] — the stream join's
+    // weapon change ported that order.
+    for _ in 0..120 {
+        if scene.sim.as_ref().unwrap().gun.switch_state == 0 { break; }
+        scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+    }
     for t in 0..200 {
         let had = scene.sim.as_ref().unwrap().drones.grenades.len();
         scene.sim.as_mut().unwrap().step_bond(Input::default(), true, false, false);

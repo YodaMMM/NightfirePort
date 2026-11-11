@@ -1286,6 +1286,24 @@ pub fn cnname_move(cur: usize, dir: crate::menu_engine::FindDir) -> usize {
     menu_find_control(&ctrls, Some(0), cur.min(ctrls.len() - 1), dir).unwrap_or(cur)
 }
 
+/// `Menu_FindControl` 0x1f16d8 over the keypad page's ten digit buttons, the only controls on that
+/// page with +0x7a clear (see `Keypad::focus`). `dir` is the game's direction byte. The rects go
+/// through `FixupResolution` first, as `MenuManager_Create` puts them [M 0x21b908]. Returns `cur`
+/// when no control lies that way, in either sense: the 0 key has nothing left or right of it.
+pub fn keypad_step(cur: usize, dir: u8) -> usize {
+    use crate::menu_engine::{menu_find_control, FindDir, MenuControl};
+    let d = match dir { 1 => FindDir::Up, 2 => FindDir::Down, 4 => FindDir::Left, 8 => FindDir::Right, _ => return cur };
+    let rects = nf_game::lock::KEYPAD_DIGIT_RECTS;
+    let ctrls: Vec<MenuControl> = rects.iter().enumerate().map(|(i, &(x, y, w, h))| {
+        let [x, y, w, h] = crate::fe_pages::fixup_resolution(x as i32, y as i32, w as i32, h as i32, false);
+        MenuControl {
+            next: if i + 1 < rects.len() { Some(i + 1) } else { None },
+            x: x as i16, y: y as i16, w: w as i16, h: h as i16, ctype: 1, ..Default::default()
+        }
+    }).collect();
+    menu_find_control(&ctrls, Some(0), cur.min(ctrls.len() - 1), d).unwrap_or(cur)
+}
+
 /// The grid's cells, digits then letters then the three control cells (0-9, A-Z, ← → ✓ [D the
 /// page's cell set, in the page data's label order — `CNNAME_CELLS` holds their rects]).
 pub static SECRET_GRID: [SecretKey; 39] = {
@@ -2923,6 +2941,26 @@ pub struct FrontEnd {
     /// end (the same clone `results_progress` takes) and `record_row`/`record_medal` read the
     /// active profile's progress first (the save), falling back to this session layer.
     pub session_progress: Option<nf_game::progress::Progress>,
+}
+
+/// The Enviro-Mods rows' value label for a settings word set — P_MPENVIROMODS 0x210030's
+/// msg-0x10 node binds [M; the list behind `FrontEnd::mp_enviro_value_label`]. Shared by every
+/// page that echoes the rows (mp-enviro-mods-proof: the couch Enviro-Mods page and the online
+/// one-screen lobby draw the one decompile-derived list): row 0 view distance
+/// 0x1b0/0x1b1/0x1b2 at 0/1/2, row 1 (+0x1B8) and row 3 (+0x1D0) On(0x1b7)/Off(0x1b6), row 2
+/// (+0x1D4) the locked branch's single 0x1000076 "Locked" node vs unlocked On/Off [M
+/// 0x210030:35-44 — the lock binds by the unlock flag, not the stored value], row 4 (+0x1CC)
+/// vehicles 0x1b6/0x10002d8/0x10002d9/0x1b2.
+pub fn mp_enviro_row_label(envmods: &[u32; 5], explosive_unlocked: bool, row: usize) -> u32 {
+    let v = |i: usize| envmods[i.min(4)];
+    match row.min(4) {
+        0 => [0x1b0, 0x1b1, 0x1b2][v(0).min(2) as usize],
+        1 => if v(1) != 0 { 0x1b7 } else { 0x1b6 },
+        2 => if !explosive_unlocked { 0x0100_0076 }
+             else if v(2) == 0 { 0x1b6 } else { 0x1b7 },
+        3 => if v(3) != 0 { 0x1b7 } else { 0x1b6 },
+        _ => [0x1b6, 0x0100_02d8, 0x0100_02d9, 0x1b2][v(4).min(3) as usize],
+    }
 }
 
 impl FrontEnd {
@@ -7528,15 +7566,7 @@ impl FrontEnd {
     /// "Locked" node (value 0x10) vs unlocked On/Off, vehicles (+0x1CC)
     /// 0x1b6/0x10002d8/0x10002d9/0x1b2.
     pub fn mp_enviro_value_label(&self, row: usize) -> u32 {
-        let v = |i: usize| self.mp_envmods[i.min(4)];
-        match row.min(4) {
-            0 => [0x1b0, 0x1b1, 0x1b2][v(0).min(2) as usize],
-            1 => if v(1) != 0 { 0x1b7 } else { 0x1b6 },
-            2 => if !self.mp_explosive_unlocked() { 0x0100_0076 }
-                 else if v(2) == 0 { 0x1b6 } else { 0x1b7 },
-            3 => if v(3) != 0 { 0x1b7 } else { 0x1b6 },
-            _ => [0x1b6, 0x0100_02d8, 0x0100_02d9, 0x1b2][v(4).min(3) as usize],
-        }
+        mp_enviro_row_label(&self.mp_envmods, self.mp_explosive_unlocked(), row)
     }
 
     /// The setup prompt's label id — the msg-0x18 binds to 0x100001a2 [M P_MPSETUP 0x20d7a8 binds
@@ -9023,11 +9053,19 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                 }
                 Page::MpEnviroMods => {
                     let e = fe.mp_envmods;
-                    vec![(0x1af, bind([0x1b0, 0x1b1, 0x1b2][(e[0] as usize).min(2)]), 143.0, 0x1000_00a2, e[0] as i32),
-                         (0x1ab, onoff(e[1] != 0), 177.0, 0x1000_009f, e[1] as i32),
-                         (0x1aa, if e[2] == 0x10 { bind(0x100_0076) } else { onoff(e[2] != 0) }, 209.0, 0x1000_019b, e[2] as i32),
-                         (0x328, onoff(e[3] != 0), 241.0, 0x1000_0227, e[3] as i32),
-                         (0x5b9, bind([0x1b6, 0x100_02d8, 0x100_02d9, 0x1b2][(e[4] as usize).min(3)]), 273.0, 0x1000_0228, e[4] as i32)]
+                    // mp-enviro-mods-apply: the rows' value text is the one decompile-derived
+                    // node list — `mp_enviro_value_label` (P_MPENVIROMODS 0x210030's msg-0x10
+                    // binds [M]) — not a second copy here. Row 2 (the locked Explosive-Scenery
+                    // row) binds by the unlock flag [M 0x210030:35-44]: a locked row shows the
+                    // single Locked item (0x1000076 at node 0x10) whatever the stored value,
+                    // and an unlocked row with the stale 0x10 shows the first-bound On node
+                    // (the spin control's value 0x10 matches neither 0 nor 1) [S — the same
+                    // display mp_defaults_setup pins on the label fn].
+                    vec![(0x1af, bind(fe.mp_enviro_value_label(0)), 143.0, 0x1000_00a2, e[0] as i32),
+                         (0x1ab, bind(fe.mp_enviro_value_label(1)), 177.0, 0x1000_009f, e[1] as i32),
+                         (0x1aa, bind(fe.mp_enviro_value_label(2)), 209.0, 0x1000_019b, e[2] as i32),
+                         (0x328, bind(fe.mp_enviro_value_label(3)), 241.0, 0x1000_0227, e[3] as i32),
+                         (0x5b9, bind(fe.mp_enviro_value_label(4)), 273.0, 0x1000_0228, e[4] as i32)]
                 }
                 _ => {
                     let b = &fe.mp_bots[fe.mp_bot_slot.min(3)];
@@ -11559,6 +11597,19 @@ pub fn pad_menu_action(buttons: u16, prev: &mut u16) -> Option<Action> {
     })
 }
 
+/// The keypad page's pad lanes as held levels, (directions, ✕, △). The directions are actions
+/// 0x1a-0x1d: the d-pad bits, or the left stick past half on either axis, the game's own test
+/// `(byte − 127) · 0.0078125` [M psiInput_MapInputs 0x10cd80:380-410].
+pub fn pad_keypad_lanes(buttons: u16, lx: u8, ly: u8) -> (u8, bool, bool) {
+    let axis = |b: u8| (b as f32 - 127.0) * 0.0078125;
+    let mut nav = 0;
+    if buttons & 0x1000 != 0 || axis(ly) < -0.5 { nav |= 1; }
+    if buttons & 0x4000 != 0 || axis(ly) > 0.5 { nav |= 2; }
+    if buttons & 0x8000 != 0 || axis(lx) < -0.5 { nav |= 4; }
+    if buttons & 0x2000 != 0 || axis(lx) > 0.5 { nav |= 8; }
+    (nav, buttons & 0x40 != 0, buttons & 0x10 != 0)
+}
+
 /// menu-mouse-parity: the host's right-button mapping for the menu — a right PRESS is the pad's
 /// △ = Back [M lib.rs's `MouseButton::Right` arm feeds `menu_input`; the game's △ rides
 /// MenuManager_Update 0x21c3d8:78-105]. The LEFT button is the row hit-test (`mouse_click`), not
@@ -11916,5 +11967,37 @@ mod unported_menus5_tests {
         let fe = FrontEnd::new();
         fe.menu_string_init();
         fe.menu_string_kill();
+    }
+}
+
+/// The in-game keypad page 0x40000021 over the view (`crate::fe_pages::keypad_elems`): the
+/// frame, the display plate and text, the focused key's highlight and the ten digit glyphs. The
+/// page's layer words map onto HUD layers below every pane (layer − 0x30), so it sits over the
+/// HUD; the text uses `font`, face 2 FONTSerpLight (the display label's `ff 02` tag [D]).
+/// Component sprites take the sprite pass's halved alpha (`sprite_colour`, as the hint box);
+/// labels clamp their alpha at 0x80 (`word_colour` [M Label_Update 0x218cb8:116-121]).
+pub(crate) fn draw_keypad_page(h: &mut Hud, kp: &nf_game::lock::Keypad, font: &nf_formats::hud::Font) {
+    use crate::fe_pages::ElemWhat;
+    if !kp.open { return; }
+    for (layer, sprite, e) in crate::fe_pages::keypad_elems(&kp.display(), kp.focus, kp.confirm_held()) {
+        let layer = layer as i32 - 0x30;
+        let [x, y, w, hh] = e.rect.map(|v| v as f32);
+        match &e.what {
+            ElemWhat::Tex { tex, uv } => {
+                let c = if sprite { sprite_colour(e.colour) } else { word_colour(e.colour) };
+                if c[3] <= 0.0 { continue; }
+                h.quad(Anchor::Centre, layer, *tex, 0, x, y, w, hh, *uv, (false, false), c);
+            }
+            ElemWhat::Text { s, .. } => {
+                let c = word_colour(e.colour);
+                if s.trim().is_empty() || c[3] <= 0.0 { continue; }
+                let lh = font.line_height();
+                let pen_y = (y + (e.rect[3] >> 1) as f32 + lh * 0.5 - 1.0).trunc();
+                for line in clip_lines(s, font, w).iter().filter(|l| !l.is_empty()) {
+                    centred_tex(h, font, 0x0300_0003, layer, line, x + w / 2.0, pen_y, c, false, 1.0);
+                }
+            }
+            _ => {}
+        }
     }
 }

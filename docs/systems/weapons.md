@@ -119,10 +119,27 @@ Grenade-mode-count records 0x60/0x61 [L count 2]: the only mode-BYTE cyclers.
   zoom (sqrt(+0x88) at level start [M 0x1a17f8:51]; PlayerSetting+6 = 1 [M 0x17edd8:22]), the fall
   sets 1.0 [M `Player_Weapon` 0x1a24c8:156-187]. No scope-flag gate in the game (the mouse reaches the
   aim bit on +0x68 & 0x40 records only — the port's design). Port: `nf_game::gun::zoom_tick`.
+- **View-state gate** [M 0x1a5460:631-648]: after the countdown a state outside {0, 9, 0xB} refuses the shot: the
+  holster/draw, the reload, the aim raise/lower. The press edge is spent there, so a trigger held through a draw does
+  not fire when it ends, and the refire timer keeps falling through a reload. Port: `Gun::refire_blocked`.
+- **Reload key** [M 0x1a5460]: read only with the trigger's level at 0, and refused with the aim bit set on a
+  `+0x68 & 0x40` record. The auto-reload is the release arm; with nothing carried the same arm is
+  `Player_HandleHasNoAmmo` 0x1a2ba8: fists, 0x32/0x33 and 0x4A..0x51 stay in hand, `+0x68 & 0x10` offers the twin,
+  the rest take `Player_GetBestWeapon`. The grenade family's case 0xc runs the same request at the +0xB4 stop.
+- **Aim bit clears** [M 0x1a24c8:66-99]: every record in states 1-4; `+0x68 & 0x40` records also in 6, 7, 8, and in 9
+  with `+0x8000` when the bit was not already set. A scope drops for its reload; with the button held the raise
+  re-queues from idle [M :36-47, :117-152].
+- **Gadget use gates** [M 0x1a5460, on the trigger-held arm, before `Player_RoundToFire`]: the Micro-Camera needs the
+  aim bit; the Q-Claw refuses while reeling. A refused press runs no script. Not ported: the Q-Claw also needs
+  `BL+0x95F == 2` (a type-2 third icon's arm) or MP — the port's 07000014 crossing latches from outside every arm. The Q-Worm's gate (an idle PC as the aim target within `+0x1C`) is not ported: the port has
+  no PC collision for the aim ray.
+- **Guided ride** [M 0x1a5460 → `Bullet_handle_object_destruction` 0x12cd98]: a fire press with `obj+0xF6 == 10` blows
+  the rocket where it is. Port: `Drones::detonate_guided`.
 - **Reload time**: the key (branch A, disasm 0x1a5fb0-0x1a5fdc) plays +0xA4 at 1.35× from frame 0; the
   auto-reload (branch B, 0x1a62e4-0x1a631c) starts flag-0x1000 records at frame 6.
 - **Under water** [M 0x1a5460:503-506]: `surfaced == 0` refuses the held trigger unless `+0x68 & 2`
   (fists, Torpedo Launcher, laser, stunner twins).
 - **Q-Claw aim assist** [M `Player_AutoAim` 0x1a7c98:63-78]: scans class 'Q' grapple points only.
-- Tests: `crates/nf-view/tests/weapon_handling_live.rs` (every weapon's cadence/clip/reload/zoom from
+- Tests: `crates/nf-view/tests/weapon_rules_live.rs` (the rules above through the real input path),
+  `crates/nf-view/tests/weapon_handling_live.rs` (every weapon's cadence/clip/reload/zoom from
   the disc, the 0x8000 gate through the Sim), unit tests in `gun.rs` / `bullet.rs`.

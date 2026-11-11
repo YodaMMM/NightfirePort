@@ -194,15 +194,48 @@ fn the_07000001_exit_works_end_to_end() {
     // cannot clear it for him). Bond walks the meet plate — ch 0x32 → the 0x33 mirror
     // [M Trigger_Update 0x1b1a78 case 5] → SP #276 → ch 0x0e [D placements] — and clears the
     // three guards through the real fire path; only then does the escort ride.
+    let early_open = std::rc::Rc::new(std::cell::Cell::new(false));
     {
         let contact = mi;
         let mut w = walker::Walker::new(scene);
+        // The courtyard shoji's OPEN latch from the first walker tick: the escort follows Bond
+        // through the ambush and can cross the shoji there (he stood at the plate side at the
+        // hold release on one run, so the ride below never reached the door).
+        {
+            let latch = early_open.clone();
+            w.on_step = Some(Box::new(move |scene: &nf_view::scene::Scene, _t: u32| {
+                let sim = scene.sim.as_ref().unwrap();
+                if let Some(d) = sim.drones.doors.list.iter().min_by(|a, b| ((a.pos[0] - 7.0).abs() + (a.pos[2] - 11.0).abs())
+                    .total_cmp(&((b.pos[0] - 7.0).abs() + (b.pos[2] - 11.0).abs()))) {
+                    if d.state == nf_game::door::OPEN { latch.set(true); }
+                }
+            }));
+        }
         w.shield = Some(contact);
         // The 01 walk's corner escape (walkreal_07000001 sets it too): a nav leg wedged on the
         // hall's east-door jamb at (5.45, 11.60) re-routes over clear nav nodes.
         w.bridge_wedged_nav = true;
-        // The intro tail's tail (event 6 re-places Bond) — the walkreal's post-intro settle.
-        w.wait(300);
+        // The hall's guards are solid: the game's standing body, on within 2.0 of the player
+        // [M NDrone2_Collision 0x140e90:91-121; NDrone2_DoCollision 0x149ec8 /
+        // DroneFunc_NearPlayerCollision 0x14b190], and in SP the guard is never pushed back by
+        // the player (Collide_Jointy 0x1ec180 refuses a class-3 candidate). The ambush sweep's
+        // legs past the woken hall guards then wedged on their bodies: two 0x5c guards inside
+        // the east door slid Bond into the courtyard shoji's pocket at (8.8, 11.71), and six
+        // guards held him on the hall's south wall at (-13.4, 11.6) — every leg died at the cap
+        // and the named guards were never reached. A player shoots who stands in his way: the
+        // walker's body-block response (the 02 walks' and interactables_07000001's lever).
+        w.body_block_response = true;
+        // The intro tail's tail (event 6 re-places Bond) — the walkreal's post-intro settle. The
+        // intro leaves the contact on the line from the start-room guard #0 to Bond, and a guard's
+        // round lands on any drone of the other side it meets [M NDrone2_DealWithObjHit
+        // 0x13fff0:181-232]: idling 300 ticks there, the rounds aimed at Bond killed the contact
+        // (measured: health -1.25 at the end of the wait). A player steps out of the line first,
+        // as walkreal_07000001 does: 1.6 east puts the contact 1.1 off it.
+        {
+            let p = w.scene.sim.as_ref().unwrap().bond.pos;
+            w.walk_to(walker::Wp { at: [p[0] + 1.6, p[1], p[2] - 0.4], act: walker::Act::None, arrive: 0.3 }, "out of the contact's line");
+        }
+        w.wait(240);
         w.walk_nav_to([6.8, 6.0, 8.9], "the meet plate (walk ahead into the ambush)", 1.0);
         // The plate is a TOUCH_ONCE on Bond's capsule: walk the centre tightly, then sweep the
         // quad (the walkreal's crossing — a nav stop a hair short never crosses).
@@ -240,7 +273,7 @@ fn the_07000001_exit_works_end_to_end() {
                 .collect()
         };
         assert_eq!(named.len(), 3, "three guards carry death channels 0x11/0x12/0x13 [D]");
-        for g in named {
+        for &g in named.iter() {
             let gpos = w.scene.sim.as_ref().unwrap().drones.list[g].pos;
             if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, gpos) > 9.0 {
                 walker::hall_restage(&mut w, &format!("guard {g} approach"));
@@ -257,6 +290,47 @@ fn the_07000001_exit_works_end_to_end() {
             for k in 0..2 {
                 if w.shoot(g, &format!("ambush guard {g}")) { break; }
                 walker::hall_ammo_ladder(&mut w, &format!("ambush guard {g} ammo {k}"));
+            }
+            // Latch-branch margin (NF_MISSIONPROBE=1 probe, this file): on master the ambush
+            // exchange killed EVERY hall guard; with the game's contact-turn rule the fight
+            // geometry moved and a fourth hall guard (#9, 12 hp, COMBAT_NO_SIGHT →
+            // AIM_STAND_FIRE at d≈5 of the ride) survived it, plus a courtyard-side starter
+            // (#16). The game's own rule then kills the escort — "a guard's round lands on any
+            // drone of the other side it meets" [M NDrone2_DealWithObjHit 0x13fff0] — Mayhew
+            // (already round-bled by the named fights) went DEATH_ANIM 0x44 → DEAD 0x47 within
+            // 200 ticks of the ch99 release, and a post-release sweep cannot save him (he rides
+            // INTO the sweep's crossfire). A player clears the room BEFORE the last named guard
+            // dies: sweep every living started team-1 drone near the held escort (the hold
+            // parks him at the wait node until ch99 [M NDrone2_ReachedDestNode 0x153358:85-94])
+            // with the same real fire path, while the named guards still keep the hold on.
+            if g != *named.last().unwrap() {
+                let roomies: Vec<usize> = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let mp = sim.drones.list[contact].pos;
+                    (0..sim.drones.list.len())
+                        .filter(|&i| i != g && !named.contains(&i)
+                            && sim.drones.list[i].team == 1 && sim.drones.list[i].started
+                            && !sim.drones.list[i].corpse && sim.drones.list[i].health > 0.0
+                            && walker::dxz(sim.drones.list[i].pos, mp) < 30.0)
+                        .collect()
+                };
+                for h in roomies {
+                    let hpos = w.scene.sim.as_ref().unwrap().drones.list[h].pos;
+                    if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, hpos) > 9.0 {
+                        walker::hall_restage(&mut w, &format!("leftover guard {h} approach"));
+                    }
+                    w.walk_nav_to(hpos, &format!("approach leftover guard {h}"), 3.0);
+                    {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let dry = sim.gun.clip + sim.gun.spare < 8;
+                        drop(sim);
+                        if dry { walker::hall_ammo_ladder(&mut w, &format!("leftover guard {h} ammo")); }
+                    }
+                    for k in 0..2 {
+                        if w.shoot(h, &format!("leftover guard {h}")) { break; }
+                        walker::hall_ammo_ladder(&mut w, &format!("leftover guard {h} ammo {k}"));
+                    }
+                }
             }
         }
         w.wait(30);
@@ -288,7 +362,7 @@ fn the_07000001_exit_works_end_to_end() {
     let mut walked = 0.0f32;
     // Sister latch: the courtyard door must REACH state 4 (OPEN) at least once — the game's
     // `NDrone2_DoorIsOpen` 0x14aaa0 only releases `DSTATE_OpenDoor` on exactly that state.
-    let mut door_opened = false;
+    let mut door_opened = early_open.get();
     // fix-lighting2 merge re-baseline, kept for the nav-gap stall class: while the escort works the
     // door (or paces at any junction) he lingers within 3.0 of it — the same stall class the nudge
     // below already covers — so count the loiter and fire the same guard-relocation + route nudge

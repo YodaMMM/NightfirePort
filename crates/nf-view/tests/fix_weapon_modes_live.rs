@@ -67,6 +67,7 @@ fn a_weapon_without_twin_or_modes_ignores_the_button() {
     let sim = scene.sim.as_mut().unwrap();
     sim.gun.weapon = 0x0c;
     sim.gun.switch_request = 0x0c;
+    sim.drones.inventory.clip[0x0c] = 18; // a loaded gun: a dry one hands over [M 0x1a2ba8]
     sim.gun.reload_state = 0;
     sim.gun.fire_state = false;
     let mut input = Input::default();

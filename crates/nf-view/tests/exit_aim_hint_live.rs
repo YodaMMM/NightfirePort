@@ -109,7 +109,7 @@ fn trigger_locked_arms_match_the_decompile() {
         placement: 0, kind, out: 0, mask: 2, list: Vec::new(), lock, hide: false, glist_0x10: true,
         filter_gate: 0, tris: Vec::new(),
         // not a laser-beam glist (flags 0x645) — the hand-built volume keeps master's contact.
-        seg_beam: false,
+        seg_beam: false, raw_plate: false,
         planes: Vec::new(), lo: [0.0; 3], hi: [0.0; 3], gone: false, script: None,
         next_level: 0x0700_0006, gate: 0, key_gate, success: 0, fallback: 0, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None,
     };

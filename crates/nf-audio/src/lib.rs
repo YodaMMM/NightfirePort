@@ -136,22 +136,56 @@ struct Shared {
     paused: bool,
 }
 
+impl Shared {
+    /// The batch's commands, queued for the next mix. A key-on drops the voice's pending end flags:
+    /// the SPU's KON clears the voice's ENDX bit [M sound.md §7 `PS2_SendKeyONKeyOff`], so an end
+    /// the last occupant's key-off release raised after the driver re-used the voice is not read as
+    /// the new sound's end. The mixer drains the key-on before it mixes again, so no later end of
+    /// the old occupant can follow.
+    fn queue(&mut self, cmds: impl IntoIterator<Item = Cmd>) {
+        for c in cmds {
+            if let Cmd::Play { voice, .. } = &c {
+                let v = *voice;
+                if sound_log() && self.ended.contains(&v) { eprintln!("[mix] key-on voice {v} drops a pending end flag"); }
+                self.ended.retain(|&e| e != v);
+            }
+            self.cmds.push(c);
+        }
+    }
+}
+
 /// The mix state the cpal callback owns — the SPU voices, the music queue and the reverb — extracted
 /// verbatim from `Output::open`'s closure (fix-pause-audio) so the pause hold is testable headless.
-struct Mixer { voices: Vec<Voice>, music: MusicVoice, reverb: Reverb, rate: u32, channels: usize, music_step: f64, step_scale: f64 }
+struct Mixer { voices: Vec<Voice>, music: MusicVoice, reverb: Reverb, rate: u32, channels: usize, music_step: f64, step_scale: f64,
+    /// Device frames mixed so far (the sound log's output clock, `NF_SOUND_LOG`).
+    frames: u64 }
 
 impl Mixer {
+    fn new(rate: u32, channels: usize) -> Mixer {
+        Mixer { voices: Vec::new(), music: MusicVoice::default(), reverb: Reverb::new(rate), rate, channels,
+            music_step: MUSIC_RATE / rate as f64, step_scale: SPU_RATE / rate as f64 / 4096.0, frames: 0 }
+    }
+
     fn mix(&mut self, s: &mut Shared, out: &mut [f32]) {
         for c in s.cmds.drain(..) {
             match c {
                 Cmd::Play { voice, pcm, pitch, left, right, delay, reverb } => {
+                    if sound_log() {
+                        if let Some(v) = self.voices.iter().find(|v| v.id == voice) {
+                            eprintln!("[mix] t{} voice {voice} replaced at {:.0}/{} releasing {}", self.frames, v.pos, v.pcm.data.len(), v.releasing);
+                        }
+                        eprintln!("[mix] t{} key-on voice {voice} len {} pitch {pitch:#x}", self.frames, pcm.data.len());
+                    }
                     self.voices.retain(|v| v.id != voice);
                     self.voices.push(Voice { id: voice, pcm, pos: 0.0, pitch, left, right, wait: (delay * self.rate as f32).round() as usize,
                         env: 1.0, releasing: false, rel_pos: 0.0, reverb });
                 }
                 Cmd::Set { voice, pitch, left, right } => if let Some(v) = self.voices.iter_mut().find(|v| v.id == voice) { (v.pitch, v.left, v.right) = (pitch, left, right); },
                 // Key-off: begin the ADSR release (the voice stays until `env` reaches 0) [M ADSR2 RR].
-                Cmd::Stop { voice } => if let Some(v) = self.voices.iter_mut().find(|v| v.id == voice) { v.releasing = true; },
+                Cmd::Stop { voice } => if let Some(v) = self.voices.iter_mut().find(|v| v.id == voice) {
+                    if sound_log() && !v.releasing { eprintln!("[mix] t{} key-off voice {voice} at {:.0}/{}", self.frames, v.pos, v.pcm.data.len()); }
+                    v.releasing = true;
+                },
                 Cmd::StopAll => { for v in &mut self.voices { v.releasing = true; } }
                 Cmd::MusicAppend(pcm) => self.music.queue.extend(pcm),
                 Cmd::MusicTruncate(at) => { let keep = at.saturating_sub(self.music.front) as usize; self.music.queue.truncate(keep); }
@@ -190,6 +224,12 @@ impl Mixer {
                 fi += 1;
             }
         }
+        if sound_log() {
+            for v in self.voices.iter().filter(|v| ended.contains(&v.id)) {
+                eprintln!("[mix] t{} voice {} ended at {:.0}/{} ({})", self.frames, v.id, v.pos, v.pcm.data.len(), if v.releasing { "released" } else { "sample end" });
+            }
+        }
+        self.frames += frames as u64;
         self.voices.retain(|v| !ended.contains(&v.id));
         // The SPU reverb: each reverb-routed voice's dry signal feeds the effect area at full send;
         // the wet output returns scaled by EVOL (reverb.rs has the register-exact preset) [M §5.5].
@@ -228,13 +268,84 @@ struct MusicVoice { queue: std::collections::VecDeque<[i16; 2]>, front: u64, fra
 
 /// The SPU stand-in: a cpal output stream and its voices.
 pub struct Output {
-    _stream: cpal::Stream,
+    /// The device stream; `None` for the null mixer (`NF_NULL_MIXER`), whose thread stops on drop.
+    _stream: Option<cpal::Stream>,
+    _null: Option<NullMixer>,
     shared: Arc<Mutex<Shared>>,
     pub rate: u32,
 }
 
 /// The SPU's output rate: pitch 0x1000 advances one sample per tick at this rate.
 pub const SPU_RATE: f64 = 48_000.0;
+
+/// The SPU's end flags with no output device: the mixer's voice timing (`Mixer::mix`) without the mix.
+///
+/// With a device, a voice ends when the mixer runs it past its last sample (a looping sample wraps
+/// instead) or when its key-off release reaches silence, and the next batch reads those end flags
+/// (`Output::take_ended`). With no device the flags never came, so no one-shot ever ended: the
+/// driver's items, the EE's sound nodes and their handles lived for the whole run. This clock runs
+/// each voice through the same steps as the mixer, at the SPU's own 48 kHz, one game frame
+/// (`SPU_RATE / 60` samples) per batch: the key-on delay, `pitch / 0x1000` samples a tick, the
+/// loop wrap and the `RELEASE_SAMPLES` release.
+#[derive(Default)]
+pub struct VoiceClock { voices: Vec<ClockVoice> }
+
+struct ClockVoice { id: u32, len: usize, looped: bool, pos: f64, pitch: u32, wait: usize, releasing: bool, rel: f64 }
+
+/// SPU samples per game frame (the port's fixed 60 Hz logic step, docs/PLAN.md "Timing").
+pub const CLOCK_FRAME: usize = 800;
+
+impl VoiceClock {
+    /// The batch's voice commands, as the mixer takes them at the start of its next mix.
+    pub fn apply(&mut self, cmds: &[Cmd]) {
+        for c in cmds {
+            match c {
+                Cmd::Play { voice, pcm, pitch, delay, .. } => {
+                    self.voices.retain(|v| v.id != *voice);
+                    let looped = pcm.loop_start.is_some_and(|l| l < pcm.data.len());
+                    self.voices.push(ClockVoice { id: *voice, len: pcm.data.len(), looped, pos: 0.0, pitch: *pitch,
+                        wait: (delay * SPU_RATE as f32).round() as usize, releasing: false, rel: 0.0 });
+                }
+                Cmd::Set { voice, pitch, .. } => if let Some(v) = self.voices.iter_mut().find(|v| v.id == *voice) { v.pitch = *pitch; },
+                Cmd::Stop { voice } => if let Some(v) = self.voices.iter_mut().find(|v| v.id == *voice) { v.releasing = true; },
+                Cmd::StopAll => for v in &mut self.voices { v.releasing = true; },
+                _ => {}
+            }
+        }
+    }
+
+    /// One game frame of playback: the voices that reached their end in it (the mixer's `ended`).
+    pub fn advance(&mut self) -> Vec<u32> {
+        let mut ended = Vec::new();
+        for v in &mut self.voices {
+            let mut left = CLOCK_FRAME;
+            let w = v.wait.min(left);
+            v.wait -= w;
+            left -= w;
+            if left == 0 { continue; }
+            let step = v.pitch as f64 / 4096.0;
+            if v.releasing {
+                // The mixer ends a releasing voice at the first frame its envelope reads 0: after
+                // `RELEASE_SAMPLES` frames of release (a past-the-end voice keeps releasing).
+                let need = (RELEASE_SAMPLES - v.rel).max(0.0).ceil() as usize;
+                if need < left { ended.push(v.id); } else { v.rel += left as f64; v.pos += step * left as f64; }
+                continue;
+            }
+            if v.looped { v.pos += step * left as f64; continue; }
+            // The frame that reads at or past the end ends the voice; pitch 0 (a paused voice) never gets there.
+            let rest = v.len as f64 - v.pos;
+            if rest <= 0.0 { ended.push(v.id); continue; }
+            if step <= 0.0 { continue; }
+            let need = (rest / step).ceil() as usize;
+            if need < left { ended.push(v.id); } else { v.pos += step * left as f64; }
+        }
+        self.voices.retain(|v| !ended.contains(&v.id));
+        ended
+    }
+
+    /// Voices the clock still runs (tests).
+    pub fn live(&self) -> usize { self.voices.len() }
+}
 
 /// The SPU's 4-point Gaussian interpolation coefficients (G-032d): 512 16-bit entries from the nocash PSX-SPX
 /// documentation, "SPU ADPCM Sample Decoding" → "4-Point Gaussian Interpolation" (problemkaputt.de/psx-spx.htm;
@@ -338,12 +449,29 @@ pub const OUTPUT_GAIN: f32 = 0.25;
 /// `NF_SILENT` is set (any value): open no audio device. The test runner (tools/test/suite.py) sets it.
 pub fn silent() -> bool { std::env::var_os("NF_SILENT").is_some() }
 
+/// `NF_SOUND_LOG` is set: the driver and the mixer print each key-on, key-off, end flag and item
+/// kill with its reason, the sim frame (`f`) and the mixer's output frame (`t`) — a port aid.
+pub fn sound_log() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var_os("NF_SOUND_LOG").is_some())
+}
+
+/// The null mixer's thread (`NF_NULL_MIXER` with `NF_SILENT`): stops when the output drops.
+struct NullMixer { stop: Arc<std::sync::atomic::AtomicBool>, thread: Option<std::thread::JoinHandle<()>> }
+
+impl Drop for NullMixer {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(t) = self.thread.take() { let _ = t.join(); }
+    }
+}
+
 impl Output {
     /// Opens the default output device. `None` when there is none (the game runs silent), or when
     /// `NF_SILENT` is set: the test runner sets it so no test ever plays through the speakers
     /// (the weapon-sound tests once fired bursts of shots at full volume through them).
     pub fn open() -> Option<Output> {
-        if silent() { return None; }
+        if silent() { return if std::env::var_os("NF_NULL_MIXER").is_some() { Some(Output::open_null(48_000, 480)) } else { None }; }
         let host = cpal::default_host();
         let device = host.default_output_device()?;
         let config = device.default_output_config().ok()?;
@@ -352,8 +480,7 @@ impl Output {
         let (rate, channels) = (cfg.sample_rate, cfg.channels as usize);
         let shared = Arc::new(Mutex::new(Shared::default()));
         let sh = shared.clone();
-        let mut mixer = Mixer { voices: Vec::new(), music: MusicVoice::default(), reverb: Reverb::new(rate), rate, channels,
-            music_step: MUSIC_RATE / rate as f64, step_scale: SPU_RATE / rate as f64 / 4096.0 };
+        let mut mixer = Mixer::new(rate, channels);
         let mut mix = move |out: &mut [f32]| {
             let mut s = sh.lock().unwrap();
             mixer.mix(&mut s, out);
@@ -372,10 +499,34 @@ impl Output {
             f => { eprintln!("audio: unsupported device sample format {f}"); return None; }
         }.map_err(|e| eprintln!("audio: {e}")).ok()?;
         stream.play().map_err(|e| eprintln!("audio: {e}")).ok()?;
-        Some(Output { _stream: stream, shared, rate })
+        Some(Output { _stream: Some(stream), _null: None, shared, rate })
     }
 
-    pub fn send(&self, cmds: impl IntoIterator<Item = Cmd>) { self.shared.lock().unwrap().cmds.extend(cmds); }
+    /// The null mixer: the device path's mixer, voice timing and end flags, run on a thread at
+    /// the wall-clock rate of a `rate` Hz stereo device with `block`-frame callbacks, its output
+    /// thrown away — no device opens and nothing is heard. `NF_SILENT=1 NF_NULL_MIXER=1` runs the
+    /// app's real sound timing silently (the plain silent path ends voices by the batch clock).
+    pub fn open_null(rate: u32, block: usize) -> Output {
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let (sh, stop) = (shared.clone(), Arc::new(std::sync::atomic::AtomicBool::new(false)));
+        let st = stop.clone();
+        let thread = std::thread::spawn(move || {
+            let mut mixer = Mixer::new(rate, 2);
+            let mut buf = vec![0.0f32; block * 2];
+            let period = std::time::Duration::from_secs_f64(block as f64 / rate as f64);
+            let mut next = std::time::Instant::now();
+            while !st.load(std::sync::atomic::Ordering::Relaxed) {
+                { let mut s = sh.lock().unwrap(); mixer.mix(&mut s, &mut buf); }
+                next += period;
+                let now = std::time::Instant::now();
+                if next > now { std::thread::sleep(next - now); } else { next = now; }
+            }
+        });
+        Output { _stream: None, _null: Some(NullMixer { stop, thread: Some(thread) }), shared, rate }
+    }
+
+    /// Queues the batch for the next mix (`Shared::queue`: a key-on clears the voice's pending end).
+    pub fn send(&self, cmds: impl IntoIterator<Item = Cmd>) { self.shared.lock().unwrap().queue(cmds); }
 
     /// Voices that reached their end since the last call (the SPU's end flags).
     pub fn take_ended(&self) -> Vec<u32> { std::mem::take(&mut self.shared.lock().unwrap().ended) }
@@ -434,6 +585,69 @@ mod tests {
         assert_ne!(resample_gauss(&x, 1.5), (x[1] + x[2]) / 2, "not linear midpoint");
     }
 
+    /// The no-device clock ends each voice on the same game frame as the mixer at 48 kHz: one-shots
+    /// at several pitches and a key-on delay end by their length, a key-off ends inside its frame,
+    /// a loop and a pitch-0 voice never end. Before the clock, a deviceless run never ended any.
+    #[test]
+    fn the_no_device_clock_ends_voices_on_the_mixers_frame() {
+        let mut s = Shared::default();
+        let mut m = Mixer::new(48_000, 2);
+        let mut c = VoiceClock::default();
+        let pcm = |n: usize, l: Option<usize>| Arc::new(Pcm { data: vec![100; n], loop_start: l });
+        let play = |voice, n, l, pitch, delay| Cmd::Play { voice, pcm: pcm(n, l), pitch, left: 1.0, right: 1.0, delay, reverb: false };
+        let first = vec![play(1, 1600, None, 0x1000, 0.0), play(2, 5000, None, 0x759, 0.0), play(3, 3000, None, 0x2000, 0.0005),
+            play(4, 700, Some(0), 0x1000, 0.0), play(5, 900, None, 0, 0.0), play(6, 40_000, None, 0x1000, 0.0)];
+        let (mut mix_end, mut clk_end) = (Vec::new(), Vec::new());
+        let mut buf = vec![0.0f32; CLOCK_FRAME * 2];
+        for frame in 0..30 {
+            // Frame 3: key-off voice 6 mid-sample (the driver's kill pass).
+            let cmds = match frame { 0 => first.clone(), 3 => vec![Cmd::Stop { voice: 6 }], _ => Vec::new() };
+            let e = std::mem::take(&mut s.ended);
+            mix_end.extend(e.into_iter().map(|v| (v, frame)));
+            clk_end.extend(c.advance().into_iter().map(|v| (v, frame)));
+            s.cmds.extend(cmds.iter().cloned());
+            c.apply(&cmds);
+            m.mix(&mut s, &mut buf);
+        }
+        mix_end.sort();
+        clk_end.sort();
+        assert_eq!(clk_end, mix_end);
+        let ids: Vec<u32> = clk_end.iter().map(|e| e.0).collect();
+        assert_eq!(ids, [1, 2, 3, 6], "the one-shots and the key-off end; the loop and the pitch-0 voice hold");
+        assert_eq!(c.live(), 2);
+    }
+
+    /// A voice the driver frees with a key-off releases in the mixer and raises its end flag at the
+    /// callback that finishes the release, which can land after the driver's next batch has already
+    /// re-used the voice: the flag then waits in `ended` for the batch after. The new key-on must
+    /// clear it (KON clears ENDX [M sound.md §7]); before, the next `take_ended` handed the old
+    /// sound's end to the new one, the driver freed the new voice without a key-off, and the next
+    /// start on that voice replaced it mid-sample (07000002's opening line, logged with
+    /// NF_SOUND_LOG). Sister: an end raised after the key-on reached the mixer is the new sound's
+    /// own and is kept.
+    #[test]
+    fn a_key_on_clears_the_voices_pending_end_flag() {
+        let mut s = Shared::default();
+        let mut m = Mixer::new(48_000, 2);
+        let pcm = |n: usize| Arc::new(Pcm { data: vec![100; n], loop_start: None });
+        let play = |n| Cmd::Play { voice: 3, pcm: pcm(n), pitch: 0x1000, left: 1.0, right: 1.0, delay: 0.0, reverb: false };
+        let mut buf = vec![0.0f32; 480 * 2];
+        // The old occupant plays, then the driver's kill pass keys it off and frees voice 3.
+        s.queue([play(48_000)]);
+        m.mix(&mut s, &mut buf);
+        s.queue([Cmd::Stop { voice: 3 }]);
+        // The driver's next batch re-uses voice 3 for a held start before the mixer runs; then the
+        // callback finishes the release and raises the end.
+        m.mix(&mut s, &mut buf);
+        assert_eq!(s.ended, [3], "the release raised the old occupant's end");
+        // The new sound's key-on (the takeover) reaches the output with the flag still pending.
+        s.queue([play(4_800)]);
+        assert!(s.ended.is_empty(), "the key-on cleared the old occupant's end: {:?}", s.ended);
+        // Sister: the new sound's own end (4 800 samples = 10 callbacks) still lands.
+        for _ in 0..11 { m.mix(&mut s, &mut buf); }
+        assert_eq!(s.ended, [3], "the new sound's own end is kept");
+    }
+
     /// The pause at the output (`SFXPauseAllStreams` op 0x16 / `SFXUnPauseAllStreams` op 0x17 —
     /// `MenuManager_Create`/`Delete` with `pause_sound` [M 0x21b908:121-124, 0x21c2b0:11-22]): the
     /// music queue's playhead (`front`) freezes and resumes exactly; a voice pitched to 0 by the
@@ -443,7 +657,7 @@ mod tests {
     #[test]
     fn the_pause_holds_the_music_playhead_and_the_pitch0_voice_resumes() {
         let mut s = Shared::default();
-        let mut m = Mixer { voices: Vec::new(), music: MusicVoice::default(), reverb: Reverb::new(48_000), rate: 48_000, channels: 2, music_step: MUSIC_RATE / 48_000.0, step_scale: SPU_RATE / 48_000.0 / 4096.0 };
+        let mut m = Mixer::new(48_000, 2);
         // A looping voice at pitch 0x1000 (one source sample per output) — the ambient loop.
         s.cmds.push(Cmd::Play { voice: 1, pcm: std::sync::Arc::new(Pcm { data: (0..1000).map(|i| (i * 7) as i16).collect(), loop_start: Some(0) }), pitch: 0x1000, left: 1.0, right: 1.0, delay: 0.0, reverb: false });
         // Music: half a second queued (the port's buffered stream).

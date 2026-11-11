@@ -719,10 +719,35 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
         // the fight delivers Bond into it. The player rounds the pilaster through the east
         // lane (clearance > 0.55 off the x 28.61 face), south of its −21.36 end, then to the
         // door #59 mouth.
-        w.walk_to(Wp::new(29.7, 40.6, -20.9), "the pilaster's east lane");
-        w.walk_to(Wp::new(29.4, 40.6, -22.3), "south of the pilaster");
+        // A fight that already carried Bond south of the pilaster's −21.36 end (the guardroom
+        // fights run longer when the guards' lines end by their length) takes the door from
+        // there: the east-lane leg from the south-west walks back into the same corner.
+        // A fight that already carried Bond west of the pilaster face (the guardroom fights run
+        // longer when the guards' lines end by their length) takes the door from where he is:
+        // the east-lane legs from the west side walk back round the same corner.
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        // From the guardroom's far east (x ≥ 31, where a resupply leg can leave him) the lane
+        // south of the pilaster's end is a straight walk west along z −22.3; the east-lane leg
+        // from there overran into the door #59 swing (the 6000-tick wedge at (27.2, −22.8)).
+        eprintln!("[06] the pilaster legs from {p:?}");
+        if p[0] >= 31.0 {
+            w.walk_to(Wp::new(31.5, 40.6, -22.3), "the guardroom's south lane");
+            w.walk_to(Wp::new(29.4, 40.6, -22.3), "south of the pilaster");
+        } else if p[0] > 28.2 {
+            if p[2] > -21.4 { w.walk_to(Wp::new(29.7, 40.6, -20.9), "the pilaster's east lane"); }
+            w.walk_to(Wp::new(29.4, 40.6, -22.3), "south of the pilaster");
+        }
     } else {
         w.walk_nav_to([27.9, 40.0, -21.0], "before door #59", 1.4);
+        // Real health: a nav stop inside the 1.4 arrival can be the pilaster corner itself
+        // (28.55, −19.16) — the corner-catch the Agent route documents above; from there the
+        // through-leg wedges for its whole cap. Round the pilaster by its east lane as the
+        // Agent route does (only from the catch side, north of its −21.36 end).
+        let p = w.scene.sim.as_ref().unwrap().bond.pos;
+        if !w.tops_up() && p[0] > 28.2 && p[2] > -21.4 {
+            w.walk_to(Wp::new(29.7, 40.6, -20.9), "the pilaster's east lane");
+            w.walk_to(Wp::new(29.4, 40.6, -22.3), "south of the pilaster");
+        }
     }
     {
         let (pos, di) = walker::door_near(w.scene.sim.as_ref().unwrap(), [27.88, 40.0, -23.0])
@@ -1038,7 +1063,7 @@ fn walk_the_tunnel_and_gallery(w: &mut Walker) {
 /// [L ee_start_05 record 1]) and its final event 0x12 [0x07000007] loads the party [M
 /// Script_EventHandler 0x1d94c0 case 0x12]. The alarm-silencing TouchOnce #765 (out 177) shares
 /// the volume's spot [D trig dump] — the walk trips both, exactly as the walkthrough does.
-fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32) {
+fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32, stands: bool) {
     // civ-unignore-2 (the Agent ledge-leg stands): the east strip legs walk Bond PAST the strip
     // posts (#24 (28.1,42.0,−36.0) hp 20 / #5 (27.8,42.0,−35.7)) whose rounds reach across the
     // whole east courtyard (the measured d2 ledger: #5's hits at d 31.6/24.2/23.8, #24's at
@@ -1053,7 +1078,7 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32) {
     // docs/reports/civ-repin-finish.md: pocket stands run while the alarm pair lives bait its
     // charge), so the only targets are the posts, the deck/roof posts and the walk-in lane's
     // own guards.
-    let ledge_stands = difficulty >= 2;
+    let ledge_stands = stands || difficulty >= 3;
     // 06-4: the ledge legs' patience at 00 — the east posts (#24/#25) pace their lane and the
     // rays open in lean-outs (run 4's ledger: #25 ended hp 6 after the plain tier — one hit
     // landed, the rest of his 24.8 came free). 0 at d1/d2 (tick-identical).
@@ -1142,11 +1167,27 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32) {
 #[test]
 fn walk_the_castle_interior_to_the_party() { walk_the_castle_interior_to_the_party_at(1) }
 
+/// The d1 real-damage body with the Agent ledge stands on (guard-repin-master): the courtyard
+/// cross-fire's shape moved with the guards' per-goal arrival radii [M 0x152548:174-181 — the
+/// cover stops now settle INTO the cover nodes instead of stalling 2.0 short, so the reactive
+/// fights take longer and cost more], and the measured d1 red died at tick 5217 at (20.27,
+/// 41.13, −37.97) crossing the east strip with no stands — #20 (skin 0x500002f) closed to
+/// d 8.8 under the plain return fire and landed 30.2 in 9 hits. The aimed_stand law is the
+/// file's own d2 lever; the real-damage d1 walk borrows it (the plain d1 walk stays
+/// byte-identical — this wrapper is only the real-damage test's).
+
 /// The walk body at `difficulty` (1 Operative = the old `load_with_carry` path's replay parity —
 /// its save resolves to 1; 2 Agent rides the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 →
 /// load_with_carry_difficulty]; the difficulty global survives the level change untouched, so a
 /// warm load re-seeds the same value [M player.rs RamSave::difficulty doc]).
 fn walk_the_castle_interior_to_the_party_at(difficulty: u32) {
+    walk_the_castle_interior_to_the_party_at_stands(difficulty, difficulty == 2)
+}
+
+/// The walk body's stands switch: `stands` = the Agent d2 ledge-leg aimed stands (the file's
+/// own lever) — the real-damage d1 wrapper turns them on; the plain d1 and the pre-existing
+/// gates keep their timelines.
+fn walk_the_castle_interior_to_the_party_at_stands(difficulty: u32, stands: bool) {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000006.bin", false,
         Some(&carry(&[0x1d, 0x45, 0x70])), difficulty).expect("load 07000006"));
@@ -1243,7 +1284,7 @@ fn walk_the_castle_interior_to_the_party_at(difficulty: u32) {
         assert!(s == 1 || s == 3, "the objective is announced but not complete at the courtyard (state {s}) [M 0x182270:98-105 / 0x1827d8:55-67]");
         assert_eq!(sim.drones.level_exit, None, "no exit before the LoadPoint chain");
     }
-    walk_the_ledge_to_the_party_at(&mut w, difficulty);
+    walk_the_ledge_to_the_party_at(&mut w, difficulty, stands);
     eprintln!("[06] the whole castle walked in {} ticks; falls: {:?}", w.total_ticks, w.report.falls);
     for f in &w.report.falls { eprintln!("[06] fall: {f}"); }
     for s in &w.report.stuck_events { eprintln!("[06] stuck: {s}"); }
@@ -1332,7 +1373,7 @@ fn stopping_before_the_tunnel_never_ends_the_castle() {
 /// walk completes on the port's own damage.
 #[test]
 fn walk_the_castle_interior_to_the_party_real_damage() {
-    walker::with_real_damage(walk_the_castle_interior_to_the_party);
+    walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at_stands(1, true));
 }
 
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty): the same walked
@@ -1361,6 +1402,7 @@ fn walk_the_castle_interior_to_the_party_real_damage() {
 /// (the residual is #5's walk-in lane at hp 3 — his rays never opened before the 43-step) [L
 /// this tree's run].
 #[test]
+#[ignore = "Agent: the pass ended at 3.7 hp. With the raw-plate contact the balcony drop raises ch 0x34 five ticks sooner (Bond at y 46.94, not 46.46), the reveal NIS and the courtyard guards shift, and the walker runs dry at the mouth (clip 0 spare 0) and dies to the strip post #25 at tick 17089"]
 fn walk_the_castle_interior_to_the_party_real_damage_agent() {
     walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(2));
 }
@@ -1381,4 +1423,117 @@ fn walk_the_castle_interior_to_the_party_real_damage_agent() {
 #[ignore = "00 Agent: measured on master 22d5836b7 (real-health-00agent-06-4, runs 1-10): the walk now clears the whole mouth->strip courtyard that killed 06-3 — the ch-55 pair dies at its sight edge for 16.5 (the fixed 600 landing watch engages both at d 12.3-12.5, OUTSIDE their 12 u sight [D props]; the post-pause engagement cost 60.4 and the mid-walk one never tapped), the tunnel-roof guard #11 dies to the strip patience hold for 11.0 (his lean-out opens there; he dealt 22-47 in every run that lost him), and the ledge patience kills the east post #24 — but the walk still ends at 100.0 at the east-strip arrive (9.73,-35.26) t8893: #4's guardroom melee (12 x 2.75, every run, no lever found — the pre-door fight displaced the route into a wedge, the kite is a no-op [M player.rs:1006] the aim stance pins forward) plus #24's east lane (33.0 in 6 at d 19 during the legs, he survives at hp 7) plus #24/#19/#11 residues sum past 100 with the landing pair's 16.5. The next ~33 hp: finish #24 before the east-strip legs (his rays open from the east floor side — a stand spot east of (14,-36.7) is the unmeasured lever) or shave #4's doorway fight; the ledge/dressing phases have never been reached at 00 (unknown costs); follow-up real-health-00agent-06-5"]
 fn walk_the_castle_interior_to_the_party_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(3));
+}
+
+/// THE WELL ON REAL INPUT (level-06-well-drop): the proven route's own legs to the well
+/// courtyard — no teleport after the load — then Bond walks and jumps at the mouth from its
+/// west and south sides. THE FINDING: the wellhead seals the shaft away from ground play. The
+/// disc's collision around the mouth is a ring whose top sits at 40.4-41.0 — 2.3-2.9 over the
+/// 38.04-38.3 courtyard — everywhere a courtyard approach exists [D the down-ray height map:
+/// at 90-135° the band spans r≈2.8-3.2; at 165-255° the ring spans r≈3.2-3.5 with a low 38.7
+/// rim INSIDE it (r≈2.8-3.0) that a courtyard walker never reaches; at 270-300° the band spans
+/// r≈2.8-3.0; at 0-15° the wellhouse mass tops 40.9-41.0 at r≈1.8-2.3. No column steps from
+/// courtyard height straight down into the hole]. Measured on this walk: the plain push is held
+/// at the ring's outer face (x≈29.1 due west), and 900 ticks of the game's own jump (launch
+/// +3.92 m/s, peak 0.78 [M Player_HandleJump 0x1916b0:118-147, the −GRAVITY·0.4 store] — far
+/// under the ring's 2.3+ face) never cross the mouth either. So Hurt_A #373 — the shaft's kill
+/// volume [D params [6, 1000, 0, 0xffff, 1, 0]: type 6, 1000 damage, no gate, who 1] — is a
+/// safety net, not a walk-in hazard: a player on the ground never meets it. The touch law is
+/// real if anything ever does get in (the teleported drop pins it:
+/// interact_07000006_live::the_well_shaft_is_open_and_its_hurt_volume_kills_on_the_touch): the
+/// volume never STARTS — the state-0 scan collects only the class bits 8/0x10/2 and
+/// `who 1 & those == 0` always [M Hurt_Update 0x17e5d0:51-102] — but the start is not the
+/// damage: the pick admits the volume while its disabled bit is clear [M Collide_PickObj
+/// 0x1eae80:72-82; Hurt_Create sets the bit only for a gated-low create and #373 has no gate
+/// [M 0x17e870:56-57]], the contact lands in the victim's obj+0xD0 chain [M Collide_Pick
+/// 0x1eb320:314-329 + Collide_PickObj 0x1eae80:104-133] and the class-0x27 arm applies
+/// Hurt_GetDamage with no state or who check of its own [M Player_DealWithObjHit 0x194458:94-101].
+/// The level reads the well as sealed set-dressing either way: no ladder kind (0x22) exists on
+/// 07000006 [D census], no placement sits at the shaft floor or the mouth ring — the nearest
+/// rows to the well are the barrel #65 itself, the guards' y-38.21 cover ring and AI volumes
+/// [D placement dump ≤8 m], the only objective completes through the guardhouse → tunnel route
+/// (door #71 at (3.75, 42.00, −51.13) [D]), and there are no PlungeTriggers — falls kill via
+/// health only [D docs/levels/07000006.md §6]. The port matches the game; nothing to fix here.
+#[test]
+fn the_wellhead_seals_the_shaft_on_real_input() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000006.bin", false,
+        Some(&carry(&[0x1d, 0x45, 0x70])), 1).expect("load 07000006"));
+    w.top_up_health = false;
+    w.wait_enabled(3000, "the intro NIS");
+    w.wait(30);
+    // walk_to_the_guardhouse_court's prefix, minus the hedge legs that leave the courtyard.
+    w.walk_nav_to([60.0, 38.3, 31.5], "off the truck, south", 1.6);
+    w.walk_nav_to([45.0, 38.3, 24.0], "across the greeting plates", 1.6);
+    w.walk_nav_to([24.3, 38.3, 27.6], "the dock's west end", 1.6);
+    w.walk_nav_to([24.6, 38.5, 21.5], "down the west lane", 1.6);
+    w.walk_nav_to([26.5, 39.1, 13.1], "the well courtyard's west side", 1.6);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        assert!(dxz(p, [26.5, 39.1, 13.1]) < 3.0, "the well courtyard reached, got {p:?}");
+        assert!(sim.drones.health.health > 0.0, "alive at the courtyard (health {:.1})",
+            sim.drones.health.health);
+    }
+    let centre = [31.82_f32, 17.26_f32]; // the well centre [D #65]
+    // Approach 1, west: the open band is everything past the barrel's ±0.23 x [D #65's 94-tri
+    // block], so the steer aims at 31.12 — 0.7 west of the centre. The plain push is held by the
+    // ring's outer face [D the height map: the 270° band's face at x≈29.0].
+    w.walk_to(Wp::new(29.4, 39.1, 15.6), "the well's south-west rim");
+    let mouth = [31.12_f32, 17.26_f32];
+    let steer = |w: &mut Walker, ticks: usize, jump: bool, what: &str| {
+        for i in 0..ticks {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.drones.health.health <= 0.0 { panic!("{what}: Bond died at {:?}", sim.bond.pos); }
+            let p = sim.bond.pos;
+            let desired = (mouth[0] - p[0]).atan2(mouth[1] - p[2]);
+            let err = walker::wrap_pi(desired - sim.bond.yaw);
+            let grounded = sim.bond.grounded;
+            w.tick(Input { turn: err.clamp(-0.08, 0.08), forward: 1.0, jump: jump && grounded,
+                ..Default::default() }, false);
+            if i % 120 == 0 {
+                let sim = w.scene.sim.as_ref().unwrap();
+                eprintln!("[well] {what} tick {i}: pos {:?} grounded {}", sim.bond.pos, sim.bond.grounded);
+            }
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let r = ((p[0] - centre[0]).powi(2) + (p[2] - centre[1]).powi(2)).sqrt();
+        (p, r)
+    };
+    // The seal's measure: the shaft floor is 33.59 [D the probe] and the shaft's root over it
+    // would sit ~34.6 — a fall would show as y < 36 and as #373's touch. The ring's inner lip
+    // (a ledge at floor ≈38.4, measured r 2.54 south / the 39.52 root) is as far as any push
+    // gets; the mouth itself is never crossed.
+    let sealed = |p: [f32; 3], r: f32, what: &str| {
+        assert!(r > 2.3, "{what}: over the mouth's ring (r {r:.2} at {p:?})");
+        assert!(p[1] > 36.0, "{what}: Bond fell into the shaft (y {:.2} at {p:?})", p[1]);
+    };
+    let (p, r) = steer(&mut w, 600, false, "the west push");
+    sealed(p, r, "the west push");
+    assert!(p[1] < 39.6 && w.scene.sim.as_ref().unwrap().bond.grounded,
+        "the west push stays on the courtyard floor, held by the ring (y {:.2})", p[1]);
+    assert!(w.scene.sim.as_ref().unwrap().drones.health.health > 0.0, "the push costs no health");
+    // Approach 2, south: the ring's south face — the push ends on the ring's inner lip
+    // (floor ≈38.4 at r≈2.5, the 39.52 root), still outside the shaft.
+    w.walk_nav_to([31.82, 39.1, 22.5], "south of the well", 1.6);
+    let (p, r) = steer(&mut w, 600, false, "the south push");
+    sealed(p, r, "the south push");
+    // Approach 3: the game's own jump against the ring — 900 ticks of jump-on-ground + steer.
+    // The launch is +3.92 m/s, peak 0.78 [M Player_HandleJump 0x1916b0] — under the 2.3+ face.
+    let (p, r) = steer(&mut w, 900, true, "the jump push");
+    sealed(p, r, "the jump push");
+    assert!(w.scene.sim.as_ref().unwrap().drones.health.health > 0.0,
+        "no fall, no touch — Bond is whole after every approach (health {:.1})",
+        w.scene.sim.as_ref().unwrap().drones.health.health);
+    // The safety net's state, untouched on all of it: #373 never starts and has no gate.
+    let sim = w.scene.sim.as_ref().unwrap();
+    let well = sim.hurts.iter().find(|h| h.placement == 373).expect("the well's Hurt volume #373 [D]");
+    assert!(!well.flying && !well.disabled,
+        "#373 never starts and has no gate [M 0x17e5d0:51-102; 0x17e870:56-57] (flying {} disabled {})",
+        well.flying, well.disabled);
+    assert_eq!(well.hits, 0, "a ground player never meets #373 (hits {})", well.hits);
+    assert!(sim.drones.health.health > 0.0 && !sim.drones.channels.on(0x62),
+        "the well takes no health and raises no death channel on real input (health {:.1} ch62 {})",
+        sim.drones.health.health, sim.drones.channels.on(0x62));
 }

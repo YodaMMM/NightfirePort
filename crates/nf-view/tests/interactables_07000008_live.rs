@@ -133,6 +133,8 @@ fn laser_cut_fusebox_unlocks_the_guardroom_chain() {
     let box_before = w.scene.sim.as_ref().unwrap().drones.props.destroy.iter()
         .find(|d| d.placement == 234).map(|d| d.dead).expect("the SmallExplosionBox #234 [D]");
     assert!(!box_before, "sister: the box stands before the cut");
+    assert!(w.scene.sim.as_ref().unwrap().drones.worldobjs.music_triggers.iter().any(|t| t.ch_on == 137 && t.event_id == 13),
+        "sister: the GuardRoom music trigger exists before the cut [D #277]");
     aim_and_fire_until(&mut w, [154.35, 43.41, -119.67], 0x4e, 420, |s| s.drones.channels.on(137));
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -145,13 +147,10 @@ fn laser_cut_fusebox_unlocks_the_guardroom_chain() {
     w.wait(20);
     assert!(w.scene.sim.as_ref().unwrap().drones.props.destroy.iter().find(|d| d.placement == 234).unwrap().dead,
         "the box #234 smashes on the ch-137 rising edge [M 0x12c4f8:30-35; D #234 param 1 = 137]");
-    // The music trigger exists with the disc params (the audible beat is the audio layer's —
-    // the 0b model's music pin; the countdown law is the WorldObjects unit pin).
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.worldobjs.music_triggers.iter().any(|t| t.ch_on == 137 && t.event_id == 13),
-            "the GuardRoom music trigger (ch 137 → event 13) exists [D #277]");
-    }
+    // The music trigger (ch 137 → event 13, p3 = 1 [D #277]) posted and deleted itself [M
+    // 0x1b31a0:26-27]; the sister before the cut sits above.
+    assert!(w.scene.sim.as_ref().unwrap().drones.worldobjs.music_triggers.iter().all(|t| t.ch_on != 137),
+        "the one-shot GuardRoom music trigger is gone after its channel fired");
     // The unlock: the same E that refused before now opens #122 (walkreal's proven door spot).
     w.walk_to(Wp { at: [154.6, 42.5, -121.0], act: Act::Use { use_ticks: 240 }, arrive: 1.1 }, "E the unlocked GuardRoom door");
     let (_, gi) = walker::door_near(&w.scene.sim.as_ref().unwrap(), [154.51, 42.0, -121.33]).expect("door #122");

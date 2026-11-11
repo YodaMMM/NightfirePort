@@ -13,6 +13,9 @@
 
 use nf_view::dev;
 
+#[path = "common/usepick.rs"]
+mod usepick;
+
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
 /// Load a level and return the scene. Panics on failure (test-only).
@@ -171,8 +174,19 @@ fn door_e_opens_then_e_closes_on_07000001() {
             d2(a.0).total_cmp(&d2(b.0))
         }).unwrap();
     eprintln!("[door] close-E spot {:?} (leaf at {:?})", spot, leaf_centre);
-    step_at(&mut scene, spot, close_yaw, true);
-    tick(&mut scene, 5);
+    // The close-E: the use point must sit within 1.0 in front of a face of the OPEN leaf
+    // (the pick's refine [M Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8;
+    // nf_game::usepick]) — from a stand in front of the leaf, then Bond steps out to the spot.
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        let d = sim.drones.doors.list[door_idx].clone();
+        let tris = usepick::posed(sim, d.glist, &d.matrix);
+        assert!(usepick::stand_in_front(sim, &tris, d.live_sph()), "a stand in front of the open leaf");
+        sim.step_bond(Default::default(), false, false, true);
+    }
+    let _ = close_yaw;
+    step_at(&mut scene, spot, close_yaw, false);
+    tick(&mut scene, 4);
     let state_after_close = scene.sim.as_ref().unwrap().drones.doors.list[door_idx].state;
     eprintln!("[door] after second E: state = 0x{:x} (expect CLOSING=0x10)", state_after_close);
     // E on an open door starts the close [M Door_Activate 0x135be0 — the toggle], and within
@@ -240,24 +254,18 @@ fn the_walkin_leaves_a_closing_straddle_door_alone_on_07000016() {
     // the leaf. Aim through the look input (the walker's converged-aim pattern: per-tick clamped
     // look until the view is on the sphere centre), then one fresh press and release
     // [M 0x1a5ea8-0x1a5ee8: a held use key activates ONCE — the press edge is the event].
-    for _ in 0..40 {
-        let (turn, look, on) = {
-            let sim = scene.sim.as_ref().unwrap();
-            let (c, _r) = sim.drones.doors.list[door_idx].live_sph();
-            let head = sim.bond.head();
-            let to = [c[0] - head[0], c[1] - head[1], c[2] - head[2]];
-            let want_yaw = to[0].atan2(to[2]);
-            let want_pitch = (to[1] / to[0].hypot(to[2])).atan() / std::f32::consts::FRAC_PI_2;
-            let yerr = want_yaw - sim.bond.yaw;
-            let perr = want_pitch - sim.bond.pitch;
-            (yerr.clamp(-0.08, 0.08), perr.clamp(-0.08, 0.08),
-             yerr.abs() < 0.05 && perr.abs() < 0.028)
-        };
-        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { turn, look, ..Default::default() }, false, false, false);
-        if on { break; }
+    // The use point must also sit within 1.0 in front of one of the raised leaf's faces (the
+    // pick's refine [M Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8;
+    // nf_game::usepick]): E from a stand in front of the leaf, one fresh press, then Bond steps
+    // back out to the 2.4 spot for the closing phase.
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        let d = sim.drones.doors.list[door_idx].clone();
+        let tris = usepick::posed(sim, d.glist, &d.matrix);
+        assert!(usepick::stand_in_front(sim, &tris, d.live_sph()), "a stand in front of the raised leaf");
+        sim.step_bond(Default::default(), false, false, true);
     }
-    scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, true);
-    scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+    step_at(&mut scene, [door_pos[0], door_pos[1], door_pos[2] - 2.4], 0.0, false);
     let mut saw_closing = false;
     let mut saw_closed = false;
     for _ in 0..40 {
@@ -379,6 +387,20 @@ fn route_a_gatehouse_walk_spawns_guard_and_ends_level() {
     // directly: this tests the ScriptPlayer → event 0x11 → ch 0x1D → LOAD_LEVEL chain, which is the part that
     // depends on ch 0x22 (the gatehouse walk) having fired the spawner. Sister: without ch 0x22, the spawner
     // never fires, so there's no guard at post, so ch 0x72 can never be on, so ch 0x65 can never fire.
+    //
+    // The EndLevel script's event 0x11 is [0x98, 0x98, 0x1D, 1] [D 0x06000A23, U-048]: `Script_EventHandler`
+    // 0x1d94c0 case 0x11 writes ch 0x1D only while `switch_channels[0x98]` is CLEAR [M] — 0x98 is
+    // `Drone_InitComms` 0x139520:201's chatter gate (an enabled guard at alertness >= 1 within 30 units of
+    // Bond, not team 2). Standing in the open courtyard leaves the courtyard guard aware of Bond ~9 units off,
+    // so the truck leaves Bond where no guard is on him (the level start, well past 30 units), as a ride
+    // hidden on the bed does. The aware-guard case is pinned on its own below.
+    sim.bond.pos = [104.954, 25.119492, 108.82527];
+    let mut quiet = false;
+    for _ in 0..300 {
+        sim.step_bond(Default::default(), false, false, false);
+        if sim.drones.channels.v[0x98] == 0 { quiet = true; break; }
+    }
+    assert!(quiet, "away from the courtyard guard the chatter gate ch 0x98 clears [M 0x139520:201]");
     sim.drones.set_channel(0x65);
     eprintln!("[route_a_full] set ch 0x65 — simulating the MuxIn firing (truck parked + Bond on bed + guard at post)");
     // Tick for the EndLevel script's 300-tick delay.
@@ -404,4 +426,36 @@ fn route_a_gatehouse_walk_spawns_guard_and_ends_level() {
     assert_eq!(scene2.sim.as_ref().unwrap().drones.level_exit, None,
         "without ch 0x72 (guard not spawned), the mux stays off and no level loads");
     eprintln!("[route_a_full] sister: no gatehouse walk → no ch 0x72 → no level load ✓");
+}
+
+/// The truck exit's guard check: the EndLevel script `0x06000A23` (ScriptPlayer #320, gate ch 0x65) ends the
+/// level through its event 0x11 [0x98, 0x98, 0x1D, 1] [D U-048] — `Script_EventHandler` 0x1d94c0 case 0x11
+/// writes the p2 channel 0x1D only while the test channel 0x98 is clear, else it writes p1 (0x98 itself) [M].
+/// 0x98 is `Drone_InitComms` 0x139520:198-201's chatter gate, written every frame: an enabled guard at
+/// alertness >= 1 within 30 units of Bond (not team 2) [M :171-179]. Bond standing in the open gatehouse
+/// courtyard has the courtyard guard aware of him ~9 units off, so the script's tick-300 event takes the 0x98
+/// arm and no level loads. Red before the 0x98 writer was ported (nothing set it, so 0x1D always fired).
+#[test]
+fn route_a_truck_exit_does_not_end_the_level_with_a_guard_on_bond() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = load(&iso, "07000005.bin");
+    let sim = scene.sim.as_mut().unwrap();
+    sim.bond.pos = [60.15, 30.0, 96.43];
+    sim.bond.yaw = 0.0;
+    sim.bond.pitch = 0.0;
+    let mut chatter = false;
+    for _ in 0..300 {
+        sim.step_bond(Default::default(), false, false, false);
+        if sim.drones.channels.v[0x98] != 0 { chatter = true; break; }
+    }
+    assert!(chatter, "the courtyard guard becomes aware of Bond within 30 units: ch 0x98 set [M 0x139520:171-179, :201]");
+    assert!(sim.drones.channels.on(0x22), "the courtyard walk set ch 0x22 on the way");
+    sim.drones.set_channel(0x65);
+    for _ in 0..600 {
+        sim.step_bond(Default::default(), false, false, false);
+        if sim.drones.level_exit.is_some() { break; }
+    }
+    assert_eq!(sim.drones.level_exit, None,
+        "with a guard aware of Bond (ch 0x98 on) the EndLevel event 0x11 takes its 0x98 arm: no level load [M 0x1d94c0 case 0x11]");
+    assert!(!sim.drones.channels.on(0x1d), "ch 0x1D stays off");
 }

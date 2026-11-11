@@ -89,6 +89,17 @@ pub struct PcQworm {
     /// (the model-less arm puts obj+0x80 = obj+0xC0, the matrix translation) until
     /// `set_pc_spheres` poses it.
     pub sph_centre: V3,
+    /// obj+0x90 and the glist hash — the use pick's refine inputs (crate::usepick).
+    pub pick_matrix: [[f32; 4]; 4],
+    pub pick_hash: u32,
+    /// The collision world's shape key of the PC's glist (`obj+0xD8`, `CollisionWorld::shape`):
+    /// the object's own triangles the aim ray tests [M Collide_Intersect 0x1ebaa8's 0x201 arm].
+    /// `None` until `set_pc_spheres` resolves it, or when the glist has no collision.
+    pub shape: Option<u32>,
+    /// `obj+0x90`: the live object matrix (`PCQWorm_Create` 0x1b07a8 → `View_RotTransMatrix`).
+    pub matrix: [[f32; 4]; 4],
+    /// `obj+0xF0`: the glist flags word (`celglist+0x44`, `Control_CreateObjEx` 0x1343c8:31-36).
+    pub obj_flags: u32,
 }
 
 /// One switch (`Switch_Create` 0x1adcc0's ext: +0x12 = param0 channel, +0x10 = param2 auto-delay,
@@ -123,6 +134,15 @@ pub struct SwitchObj {
     /// no-op [M SP_GetState 0x1dc900:8-10]). Set by `Drones::attach_level` (crate::drone) after the
     /// players are mounted (laser-scripts).
     pub sp: Option<usize>,
+    /// Placement param 6 (`level_tag`+0x44): the SSys item index whose channel this switch feeds.
+    /// `Switch_Create` 0x1adcc0:29-31 — `if (*(int *)(param_3 + 0x44) != 0)
+    /// SSysItems[*(int *)(param_3 + 0x44) * 8 + 4] = *(u8 *)(ext + 0x12)` — stores the switch's
+    /// own channel id (param 0, ext+0x12) into `SSysItems[idx].channel` (the +4 byte of the 8-byte
+    /// record) at CREATE time, before the load beat's `switch_channels[param0] = param3` (:39-43).
+    /// 0 = no SSys arm (every switch but two on the disc [D the ssys_switch_census: 07000009 #71
+    /// item 1, 0700000a #643 item 2]). The store runs in `Drones::attach_level_id` (the SSysItems
+    /// array lives on the sim).
+    pub ssys_item: u32,
 }
 
 /// The level's use objects, in placement order.
@@ -170,7 +190,7 @@ impl UseObjects {
             if p.flags & 0xff == 0x35 {
                 // PCQWorm_Create 0x1b07a8: ext[1] = param 1 (the channel), ext[2] byte = param 2.
                 u.pcs.push(PcQworm { keys: par(0) as u16, pos, ch: par(1) as u8, e_usable: par(2) as u8, armed: par(3) != 0, state: 0, radius: 0.0,
-                    sph_centre: pos });
+                    sph_centre: pos, shape: None, matrix: nf_formats::placement::view_rot_trans_matrix(p.rotation, pos), obj_flags: 0, pick_matrix: nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation), pick_hash: 0 });
             } else {
                 // Switch_Create 0x1adcc0: +0x12 = param 0, +0x10 = param 2, +0x16 = param 3,
                 // +0x19 = param 4, +0x14 = param 5; obj+0xF4 starts at param 3.
@@ -180,6 +200,7 @@ impl UseObjects {
                     latch: 0,
                     placement: pi,
                     sp: None,
+                    ssys_item: par(6),
                 });
             }
         }
@@ -207,10 +228,19 @@ impl UseObjects {
         for p in &level.maps[m].placements {
             if p.flags & 0xff != 0x35 { continue; }
             let Some(pc) = pcs.get_mut(k) else { break };
-            let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
-                else { level.maps[m].objects.get(p.index as usize) };
+            let at = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                else { ((p.index as usize) < level.maps[m].objects.len()).then_some((m, p.index as usize)) };
+            let obj = at.map(|(map, object)| &level.maps[map].objects[object]);
+            pc.matrix = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
             match obj {
                 Some(o) => {
+                    // The glist the object carries (`obj+0xD8`) and its flags (`obj+0xF0`): the
+                    // shape key is the collision world's own (the hashcode, or the synthetic
+                    // (map, object) key for an anonymous object — `CollisionWorld::build_scoped`).
+                    let (map, object) = at.unwrap();
+                    pc.obj_flags = o.flags;
+                    pc.shape = o.collision.as_ref().map(|_| if o.hashcode != u32::MAX { o.hashcode }
+                        else { 0x8000_0000 | ((map as u32) << 16) | object as u32 });
                     // 0x133070:34-48 — the local sphere centre through the object matrix, the
                     // local radius × |obj+0xE8| (the placement's scale triple product here; the
                     // Tower PCs carry scale 1 [D placements extra]). The matrix is the created
@@ -219,6 +249,9 @@ impl UseObjects {
                     let s: f32 = p.scale().iter().map(|v| v.abs()).product();
                     pc.sph_centre = nf_formats::placement::transform(&mx, o.centre);
                     pc.radius = o.radius * s;
+                    let t = crate::usepick::placed(level, m, p);
+                    pc.pick_matrix = t.matrix;
+                    pc.pick_hash = t.hash;
                 }
                 None => {
                     // 0x133070:23-31 — no model: obj+0x80 = obj+0xC0 (the matrix translation,
@@ -305,6 +338,75 @@ impl UseObjects {
         }
     }
 
+    /// The PC arm of the aim ray (`Check_Target` 0x1a7810:114-125's `Collide_RayIntersect(head,
+    /// head + 50·dir, …, flags 0xc)`): the nearest PC whose own collision mesh the ray crosses,
+    /// as (index, fraction of the ray). The game's chain [M]:
+    /// - `Collide_PickObj` 0x1eae80 admits an object to the ray's candidates only with
+    ///   `obj+0xF0 & mask == 0`, the mask 0x20 | 0x40 (flags bit 8) | 0x10 (flags bit 4) = 0x70
+    ///   [M :20-34], a glist with collision (`obj+0xD8`, glist+8 [M :41-42]) and the ray passing
+    ///   inside the world sphere (`obj+0x80`, radius `obj+0x8C`) [M :46-55, the 0x201 arm].
+    /// - `Collide_Intersect` 0x1ebaa8's 0x201 arm takes the ray into object space through the
+    ///   inverse of `obj+0x90` and runs `Intersect_RayGeom` over the glist's triangles [M :157-229]:
+    ///   one-sided (`n·dir >= 0` skips [M 0x10a8c8:168]), fraction in [0, 1].
+    /// - flags bit 8 drops a hit carrying the pass byte (surface 0x40/0x80) [M 0x1ebaa8:265-280].
+    ///
+    /// `eye`/`dir`: the head and the unit view direction. The caller compares the fraction with
+    /// the world's and the drones' first hits: only the nearest hit object becomes `BLData+0x880`.
+    pub fn aim_pick(&self, eye: V3, dir: V3, world: &crate::world::CollisionWorld) -> Option<(usize, f32)> {
+        const RAY_LEN: f32 = 50.0; // [M 0x1a7810:114-116]
+        let far = [eye[0] + dir[0] * RAY_LEN, eye[1] + dir[1] * RAY_LEN, eye[2] + dir[2] * RAY_LEN];
+        let sub = |a: V3, b: V3| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+        let dot = |a: V3, b: V3| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let cross = |a: V3, b: V3| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+        let mut best: Option<(f32, usize)> = None;
+        for (i, pc) in self.pcs.iter().enumerate() {
+            if pc.obj_flags & 0x70 != 0 { continue; } // [M 0x1eae80:20-34]
+            let Some(key) = pc.shape else { continue };
+            let Some(tris) = world.shape(key) else { continue };
+            // The world-sphere prefilter: the closest point of the segment to obj+0x80 must lie
+            // strictly inside obj+0x8C [M 0x1eae80:46-55].
+            if !seg_sphere(eye, far, pc.sph_centre, pc.radius) { continue; }
+            let mats = world.shape_materials(key);
+            // Object space: v·M⁻¹ for the rigid `obj+0x90` (RotPreTransVec with the inverse).
+            let m = &pc.matrix;
+            let inv = |v: V3| {
+                let d = [v[0] - m[3][0], v[1] - m[3][1], v[2] - m[3][2]];
+                [dot(d, [m[0][0], m[0][1], m[0][2]]), dot(d, [m[1][0], m[1][1], m[1][2]]), dot(d, [m[2][0], m[2][1], m[2][2]])]
+            };
+            let a = inv(eye);
+            let seg = sub(inv(far), a);
+            for (k, t) in tris.iter().enumerate() {
+                if mats.and_then(|ms| ms.get(k)).is_some_and(|&b| b & 0xc0 != 0) { continue; } // the pass byte, flags bit 8
+                let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+                if dot(cross(e1, e2), seg) >= 0.0 { continue; } // back face [M 0x10a8c8:168]
+                let p = cross(seg, e2);
+                let det = dot(e1, p);
+                if det.abs() < 1e-12 { continue; }
+                let id = 1.0 / det;
+                let s = sub(a, t[0]);
+                let u = dot(s, p) * id;
+                if !(0.0..=1.0).contains(&u) { continue; }
+                let q = cross(s, e1);
+                let v = dot(seg, q) * id;
+                if v < 0.0 || u + v > 1.0 { continue; }
+                let tt = dot(e2, q) * id;
+                if (0.0..=1.0).contains(&tt) && best.is_none_or(|(bt, _)| tt < bt) { best = Some((tt, i)); }
+            }
+        }
+        best.map(|(t, i)| (i, t))
+    }
+
+    /// The Q-Worm's use gate on the cached aim target [M Player_WeaponFiring 0x1a5460:531-545]:
+    /// `BLData+0x880` must be set, of class 0x49 (a PC) in state 0 (`obj+0xF4`), and the player
+    /// root (`obj+0x30`) within `range` (`weapon_data+0x1C`) of the PC's `obj+0x30` (the matrix
+    /// translation, the placement position).
+    pub fn qworm_gate(&self, target: Option<usize>, root: V3, range: f32) -> bool {
+        target.and_then(|i| self.pcs.get(i)).is_some_and(|pc| {
+            let d = ((pc.pos[0] - root[0]).powi(2) + (pc.pos[1] - root[1]).powi(2) + (pc.pos[2] - root[2]).powi(2)).sqrt();
+            pc.state == 0 && d <= range
+        })
+    }
+
     /// The E-use dispatch (`Player_Activate` 0x1a5170's class walk): SPs (mask & 4, via
     /// `SP_Activate` 0x1dc338) and switches (class 0x39, `Switch_Activate` 0x1b02a8) within the
     /// use sphere (radius 1.0 at head + look [M 0x1a5170's `Collide_SphereIntersect(1.0, …)`]).
@@ -329,10 +431,6 @@ impl UseObjects {
     ) -> bool {
         let p = [head[0] + look[0], head[1] + look[1], head[2] + look[2]];
         let near = |q: V3| (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) + (q[2] - p[2]).powi(2) <= 1.0;
-        let in_sphere = |c: [f32; 3], r: f32| {
-            let d = (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2);
-            d <= (1.0 + r) * (1.0 + r)
-        };
         let mut used = false;
         // SP_Activate 0x1dc338: mask & 4, the gate channel, and the out-channel gate when
         // mask & 1; then `ext+0x2C = 1` — the SP's own update plays it and holds its out.
@@ -344,9 +442,10 @@ impl UseObjects {
                 if sp.mask & 1 != 0 && !ch.on(sp.out as u32) { continue; }
                 // The entity targets — the ONLY pick targets [M 0x1a5170:121-122 +
                 // 0x1d8d78:108-110 + 0x133070's posed spheres]. No model/placement fallback.
-                let hit = sp.entity_use_targets(&scripts.objects, w)
+                // use-pick: candidate + glist refine (crate::usepick).
+                let hit = sp.entity_use_picks(&scripts.objects, w)
                     .into_iter()
-                    .any(|(c, r)| in_sphere(c, r));
+                    .any(|(c, r, _, _, h, m)| crate::usepick::picks(p, (c, r), &m, w.use_shape(h)));
                 if hit {
                     sp.activated = true;
                     // SP_Activate 0x1dc338:84-86's second write: the current SCRIPTINFO's
@@ -378,9 +477,10 @@ impl UseObjects {
             // (behind the panel) refuses, before any sphere read. The dot positions are the
             // OBJECT translation rows (the player's `body`, the entity's matrix translation),
             // not the posed sphere centres and not the head.
-            let hit = sp.entity_use_targets_dir(&scripts.objects, w).into_iter().any(|(c, r, dir, epos)| {
+            let hit = sp.entity_use_picks(&scripts.objects, w).into_iter().any(|(c, r, dir, epos, h, m)| {
                 let to_p = [body[0] - epos[0], body[1] - epos[1], body[2] - epos[2]];
-                dir[0] * to_p[0] + dir[1] * to_p[1] + dir[2] * to_p[2] >= 0.0 && in_sphere(c, r)
+                dir[0] * to_p[0] + dir[1] * to_p[1] + dir[2] * to_p[2] >= 0.0
+                    && crate::usepick::picks(p, (c, r), &m, w.use_shape(h))
             });
             if !hit { continue; }
             // `Switch_Activate` 0x1b02a8's gate chain — identical to the direct walk below
@@ -462,7 +562,9 @@ impl UseObjects {
         // object reads as a point at the placement translation, the create-time state).
         for pc in self.pcs.iter_mut() {
             if pc.e_usable == 0 || pc.state != 0 { continue; }
-            if in_sphere(pc.sph_centre, pc.radius) {
+            // use-pick: candidate + glist refine (crate::usepick); `pick_hash` 0 (no model, or
+            // before `set_pc_spheres`) leaves the candidate alone.
+            if crate::usepick::picks(p, (pc.sph_centre, pc.radius), &pc.pick_matrix, if pc.pick_hash != 0 { w.use_shape(pc.pick_hash) } else { None }) {
                 pc.state = 1;
                 used = true;
             }
@@ -627,7 +729,7 @@ mod tests {
         let (sp, objs) = sp_with_entity(0, 0, 1, 0x11);
         let mut u = UseObjects::default();
         u.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 0, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0), ssys_item: 0 });
         let mut scripts = crate::nis::Scripts::default();
         scripts.players = vec![sp];
         scripts.objects = objs;
@@ -654,7 +756,7 @@ mod tests {
         let (sp4, objs4) = sp_with_entity(0, 0, 1, 0x11);
         let mut u4 = UseObjects::default();
         u4.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 0, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0), ssys_item: 0 });
         let mut scripts4 = crate::nis::Scripts::default();
         scripts4.players = vec![sp4];
         scripts4.objects = objs4;
@@ -668,7 +770,7 @@ mod tests {
         let (sp5, objs5) = sp_with_entity(0, 0, 1, 0x11);
         let mut u5 = UseObjects::default();
         u5.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 0, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0), ssys_item: 0 });
         let mut scripts5 = crate::nis::Scripts::default();
         scripts5.players = vec![sp5];
         scripts5.objects = objs5;
@@ -680,7 +782,7 @@ mod tests {
         let (sp2, objs2) = sp_with_entity(0, 0, 1, 0x11);
         let mut u2 = UseObjects::default();
         u2.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x37, gate: 7, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0), ssys_item: 0 });
         let mut scripts2 = crate::nis::Scripts::default();
         scripts2.players = vec![sp2];
         scripts2.objects = objs2;
@@ -693,7 +795,7 @@ mod tests {
         let (sp3, objs3) = sp_with_entity(0, 0, 1, 0x11);
         let mut u3 = UseObjects::default();
         u3.switches.push(SwitchObj { pos: [0.0, 0.0, 0.0], ch: 0x61, gate: 0, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0) });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: Some(0), ssys_item: 0 });
         let mut scripts3 = crate::nis::Scripts::default();
         scripts3.players = vec![sp3];
         scripts3.objects = objs3;
@@ -765,7 +867,7 @@ mod tests {
     fn switch_inhibit_gate_blocks_only_while_on() {
         let mut u = UseObjects::default();
         u.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 7, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None, ssys_item: 0 });
         // Gate channel OFF: the switch activates.
         let mut scripts = crate::nis::Scripts::default();
         let mut ch = Channels::default();
@@ -774,7 +876,7 @@ mod tests {
         // Sister: the same switch with its gate channel ON never activates.
         let mut u2 = UseObjects::default();
         u2.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 7, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None, ssys_item: 0 });
         let mut scripts2 = crate::nis::Scripts::default();
         let mut ch2 = chans(&[7]);
         let used2 = u2.player_activate(&mut scripts2, &mut ch2, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1, &TestWorld, [0.0, 0.0, -0.5]);
@@ -782,7 +884,7 @@ mod tests {
         // Sister 2: gate 0 always allows.
         let mut u3 = UseObjects::default();
         u3.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 0, rest: 0, busy: false,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None, ssys_item: 0 });
         let mut scripts3 = crate::nis::Scripts::default();
         let mut ch3 = Channels::default();
         assert!(u3.player_activate(&mut scripts3, &mut ch3, [0.0, 0.5, -0.5], [0.0, 0.0, 1.0], 1, &TestWorld, [0.0, 0.0, -0.5]),
@@ -796,7 +898,7 @@ mod tests {
     fn switch_busy_is_one_shot_never_rearms() {
         let mut u = UseObjects::default();
         u.switches.push(SwitchObj { pos: [0.0, 0.5, -0.5], ch: 9, gate: 0, rest: 0, busy: true,
-            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None });
+            auto_delay: 0, value: 0, latch: 0, auto_ct: 0, placement: 0, sp: None, ssys_item: 0 });
         let mut scripts = crate::nis::Scripts::default();
         let mut ch = Channels::default();
         let head = [0.0, 0.5, -0.5]; let look = [0.0, 0.0, 1.0];

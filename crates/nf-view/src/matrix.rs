@@ -99,7 +99,9 @@ pub struct Cell {
     pub started: BTreeSet<u32>,
     /// Player bullets spawned (`Drones::player_bullets` growth while firing).
     pub bullets: u32,
-    /// Bullet impact events (`Drones::impacts`, cleared per tick; accumulated).
+    /// Bond's own round impacts (`Drones::player_impacts`, cleared per tick; accumulated). Not
+    /// `Drones::impacts`: those are the GUARDS' rounds (`Drones::tick`'s guard-bullet walk), which
+    /// a guard firing at the stance would count as the cell's fire.
     pub impacts: u32,
     /// Explosion events (`Drones::explosions`, cleared per tick; accumulated).
     pub explosions: u32,
@@ -627,15 +629,31 @@ fn run_cell(scene: &mut Scene, id: u8, snap: &Snap) -> Cell {
     let mut tick: u32 = 0;
     let mut spawn_tick: Option<u32> = None;
     let mut expl_tick: Option<u32> = None;
+    // gadgets: the Micro-Camera pair (base 0x54) photographs only with the aim bit up [M
+    // Player_WeaponFiring 0x1a5460:512-514] — its cell holds the aim through the fire phase (the
+    // raise completes inside the first press), the way a player takes the photo.
+    let aim_cell = scene.sim.as_ref().unwrap().weapons.base(id as usize) == 0x54;
+    let fire_in = nf_game::player::Input { aiming: aim_cell, ..Default::default() };
+    // The raise plays first, with the trigger up: the aim raise (view state 0xF) is outside the
+    // {0, 9, 0xB} set, so a press made during it is spent on the refused tick and the held trigger
+    // never re-arms [M Player_WeaponFiring 0x1a5460:601-648]. A player raises the camera, then presses.
+    if aim_cell {
+        for _ in 0..120 {
+            step(scene, fire_in, false, false, false);
+            sample(&mut c, scene);
+            let sim = scene.sim.as_ref().unwrap();
+            if sim.aiming && sim.view_aim_anim.is_none() { break; }
+        }
+    }
     for _attempt in 0..3 {
         let hold = if id >= 0x48 { 45 } else { 60 };
         let (shots_before, gren_before) = (c.shots, c.grenades);
         for _ in 0..hold {
-            let (imp0, exp0) = { let sim = scene.sim.as_ref().unwrap(); (sim.drones.impacts.len(), sim.drones.explosions.len()) };
-            step(scene, Default::default(), true, false, false);
+            let (imp0, exp0) = { let sim = scene.sim.as_ref().unwrap(); (sim.drones.player_impacts.len(), sim.drones.explosions.len()) };
+            step(scene, fire_in, true, false, false);
             tick += 1;
             let (st, beam, imp, exp, g, b) = { let sim = scene.sim.as_ref().unwrap();
-                (sim.shot_tick, sim.laser_beam.is_some(), sim.drones.impacts.len(), sim.drones.explosions.len(),
+                (sim.shot_tick, sim.laser_beam.is_some(), sim.drones.player_impacts.len(), sim.drones.explosions.len(),
                  sim.drones.grenades.len(), sim.drones.player_bullets.len()) };
             if st { c.shots += 1; }
             c.beam |= beam;
@@ -647,11 +665,11 @@ fn run_cell(scene: &mut Scene, id: u8, snap: &Snap) -> Cell {
             if c.shots > shots_before || c.grenades > gren_before { break; } // this press fired — release
         }
         for _ in 0..6 {
-            let (imp0, exp0) = { let sim = scene.sim.as_ref().unwrap(); (sim.drones.impacts.len(), sim.drones.explosions.len()) };
-            step(scene, Default::default(), false, false, false);
+            let (imp0, exp0) = { let sim = scene.sim.as_ref().unwrap(); (sim.drones.player_impacts.len(), sim.drones.explosions.len()) };
+            step(scene, fire_in, false, false, false);
             tick += 1;
             let (imp, exp, g, b) = { let sim = scene.sim.as_ref().unwrap();
-                (sim.drones.impacts.len(), sim.drones.explosions.len(), sim.drones.grenades.len(), sim.drones.player_bullets.len()) };
+                (sim.drones.player_impacts.len(), sim.drones.explosions.len(), sim.drones.grenades.len(), sim.drones.player_bullets.len()) };
             impacts += imp.saturating_sub(imp0) as u32;
             if exp > exp0 { explosions += (exp - exp0) as u32; if expl_tick.is_none() { expl_tick = Some(tick); } }
             if g > grenades { if spawn_tick.is_none() { spawn_tick = Some(tick); } c.grenades += (g - grenades) as u32; grenades = g; }

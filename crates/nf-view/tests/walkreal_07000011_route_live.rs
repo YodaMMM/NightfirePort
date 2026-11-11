@@ -122,7 +122,9 @@ fn the_office_floor_route_reaches_the_07000012_exit() {
     w.walk_to(Wp::new(14.8, 35.4, 5.0).r(0.9), "the south-west landing 35.2");
     band(&w, 34.6, 36.6, "the SW landing");
     w.walk_to(Wp::new(14.8, 31.4, -2.6).r(1.0), "the west flight C down (35.2→31.1)");
-    band(&w, 30.4, 32.5, "flight C's bottom");
+    // 32.8: the 1.0 arrival can stop on the flight's last step (32.51 on a walk whose guards
+    // talk on; the landing floor is 31.1) — still on the flights, which is what the band pins.
+    band(&w, 30.4, 32.8, "flight C's bottom");
     w.walk_to(Wp::new(22.4, 31.3, -3.0).r(1.0), "the north strip 31.1 east");
     w.walk_to(Wp::new(23.0, 27.4, 3.8).r(1.0), "the east connector down (31.1→27.1)");
     band(&w, 26.4, 29.3, "connector 1's bottom");

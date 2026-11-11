@@ -8,6 +8,9 @@
 //! reach a spot is used only where the walk there is separately documented; the operation itself
 //! always runs through the real input.
 
+#[path = "common/usepick.rs"]
+mod usepick;
+
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 /// A cold load — the level's own boot path [M Player_Start 0x190fd0's gate-0 start].
@@ -52,12 +55,16 @@ fn keypad_operative_unlock_holds_ch12_and_opens_the_stairwell_door() {
             let d = &sim.drones.doors.list[di];
             (di, d.pos[0], d.pos[1], d.pos[2])
         };
-        sim.bond.pos = [dx + 0.4, dy - 0.2, dz + 1.6];
-        sim.bond.vel = [0.0; 3];
-        for _ in 0..10 { sim.step_bond(Default::default(), false, false, false); }
-        for _ in 0..8 { sim.step_bond(Default::default(), false, false, true); }
+        // The E from a stand in front of a leaf face, looking at it: the use pick keeps the door
+        // only with the use point within 1.0 in front of one of its faces [M Collide_Intersect
+        // 0x1ebaa8 → Intersect_PointGeom 0x1e92d8; nf_game::usepick]. The old fixed stand
+        // (+0.4, -0.2, +1.6 at the spawn yaw) looked past the leaf once the pick refines.
+        let _ = (dx, dy, dz);
+        let d = sim.drones.doors.list[di].clone();
+        let tris = usepick::posed(sim, d.glist, &d.matrix);
+        let opened = usepick::press_on(sim, &tris, d.live_sph(), 120, &|s| s.drones.doors.list[di].state & 0xc != 0);
         let st = scene.sim.as_ref().unwrap().drones.doors.list[di].state;
-        assert!(st & 0xc != 0, "the door locked on ch 0x12 opens once the unlock holds, state {st:#x}");
+        assert!(opened, "the door locked on ch 0x12 opens once the unlock holds, state {st:#x}");
     }
     // Sister: the same data on 00 Agent — no create-unlock, ch 0x12 off, the E refused.
     let iso = iso();
@@ -66,14 +73,12 @@ fn keypad_operative_unlock_holds_ch12_and_opens_the_stairwell_door() {
     assert!(!sim.drones.locks[0].unlocked, "sister: no Operative unlock on difficulty 3 [M 0x1ae1f8:67-69]");
     assert!(!sim.drones.channels.on(0x12), "sister: ch 0x12 off — nothing writes it here [D]");
     let di3 = sim.drones.doors.list.iter().position(|d| d.ch_lock == 0x12).unwrap();
-    let (dx, dy, dz) = { let d = &sim.drones.doors.list[di3]; (d.pos[0], d.pos[1], d.pos[2]) };
-    sim.bond.pos = [dx + 0.4, dy - 0.2, dz + 1.6];
-    sim.bond.vel = [0.0; 3];
-    for _ in 0..10 { sim.step_bond(Default::default(), false, false, false); }
+    let d3 = sim.drones.doors.list[di3].clone();
+    let tris3 = usepick::posed(sim, d3.glist, &d3.matrix);
+    assert!(usepick::stand_in_front(sim, &tris3, d3.live_sph()), "sister: a stand the use pick keeps the door from");
     let before = sim.drones.doors.list[di3].state;
-    for _ in 0..8 { sim.step_bond(Default::default(), false, false, true); }
-    assert_eq!(sim.drones.doors.list[di3].state, before,
-        "sister: the locked stairwell door refuses the same E (difficulty 3)");
+    let moved = usepick::pulse(sim, 120, &|s| s.drones.doors.list[di3].state != before);
+    assert!(!moved, "sister: the locked stairwell door refuses the same E (difficulty 3)");
 }
 
 /// The Q-Worm computer (0x35 #216 "Computer to hack", param 1 = out ch 0x38, param 2 = 1 = the
@@ -95,8 +100,8 @@ fn qworm_computer_e_installs_and_writes_ch0x38() {
     // Stand at the computer and hold E (the use sphere is head + look [M 0x1a5170]).
     {
         let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = [u[0] + 0.2, u[1] - 1.3, u[2] + 0.9];
-        sim.bond.vel = [0.0; 3];
+        let yaw = sim.bond.yaw;
+        sim.place_bond([u[0] + 0.2, u[1] - 1.3, u[2] + 0.9], yaw);
     }
     for _ in 0..40 {
         let sim = scene.sim.as_mut().unwrap();
@@ -126,12 +131,24 @@ fn vent_grill_e_sweeps_open() {
     };
     {
         let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = [8.57, 49.6, 21.0];
-        sim.bond.vel = [0.0; 3];
+        let yaw = sim.bond.yaw;
+        sim.place_bond([8.57, 49.6, 21.0], yaw);
         for _ in 0..10 { sim.step_bond(Default::default(), false, false, false); }
     }
     assert!((scene.sim.as_ref().unwrap().drones.sss.list[gi].matrix[3][2] - start).abs() < 0.05,
         "sister: the grill rests at its key-0 pose before the E");
+    // Face the grill: the use pick is one 1.0 sphere at the head plus the view direction, refined
+    // against the object's triangles — no pick without looking at it [M Player_Activate
+    // 0x1a5170:100-108 → Collide_SphereIntersect 0x1ec940].
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        let g = sim.drones.sss.list[gi].matrix[3];
+        let head = sim.bond.head();
+        let dir = [g[0] - head[0], g[1] - head[1], g[2] - head[2]];
+        let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
+        sim.bond.yaw = dir[0].atan2(dir[2]);
+        sim.bond.pitch = (dir[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+    }
     let mut mid_moved = 0.0f32;
     for _ in 0..40 {
         let sim = scene.sim.as_mut().unwrap();
@@ -176,8 +193,8 @@ fn plain_door_opens_and_locked_stairwell_door_refuses() {
     {
         let sim = scene.sim.as_mut().unwrap();
         // The locked one first (it stands mid-stairwell; the E is from its front tile).
-        sim.bond.pos = [lx, ly - 0.2, lz + 1.6];
-        sim.bond.vel = [0.0; 3];
+        let yaw = sim.bond.yaw;
+        sim.place_bond([lx, ly - 0.2, lz + 1.6], yaw);
         for _ in 0..10 { sim.step_bond(Default::default(), false, false, false); }
         let before = sim.drones.doors.list[li].state;
         for _ in 0..8 { sim.step_bond(Default::default(), false, false, true); }
@@ -186,9 +203,9 @@ fn plain_door_opens_and_locked_stairwell_door_refuses() {
     }
     {
         let sim = scene.sim.as_mut().unwrap();
-        // The plain one now.
-        sim.bond.pos = [dx, dy - 0.2, dz + 1.6];
-        sim.bond.vel = [0.0; 3];
+        // The plain one now, from the corridor floor west of the leaf: the floor runs along x here
+        // and (dx, dz + 1.6) is solid, so he stands off the hinge line and faces east.
+        sim.place_bond([dx - 1.4, dy - 0.2, dz + 0.8], std::f32::consts::FRAC_PI_2);
         for _ in 0..10 { sim.step_bond(Default::default(), false, false, false); }
         for _ in 0..8 { sim.step_bond(Default::default(), false, false, true); }
         let st = sim.drones.doors.list[di].state;
@@ -212,8 +229,8 @@ fn storeroom_door_unlocks_from_its_touch_plate() {
     };
     {
         let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = [dx, dy - 0.2, dz + 1.6];
-        sim.bond.vel = [0.0; 3];
+        let yaw = sim.bond.yaw;
+        sim.place_bond([dx, dy - 0.2, dz + 1.6], yaw);
         for _ in 0..10 { sim.step_bond(Default::default(), false, false, false); }
         assert!(!sim.drones.channels.on(0x5a), "sister: ch 0x5A off before the plate");
         let before = sim.drones.doors.list[di].state;
@@ -224,8 +241,8 @@ fn storeroom_door_unlocks_from_its_touch_plate() {
     // Walk onto the plate #283 at (12.72, 47.55, 19.63) [D] — the corridor in front of the door.
     {
         let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = [12.72, 47.0, 19.63];
-        sim.bond.vel = [0.0; 3];
+        let yaw = sim.bond.yaw;
+        sim.place_bond([12.72, 47.0, 19.63], yaw);
     }
     let mut fired = false;
     for _ in 0..30 {
@@ -242,11 +259,6 @@ fn storeroom_door_unlocks_from_its_touch_plate() {
     // every-tick re-toggle accident instead. The game-backed proof that the unlock works:
     // wait out the auto-open sweep, then one fresh E press acts on the unlocked leaf — where
     // the locked leaf in the sister block refused the same press outright.
-    {
-        let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = [dx, dy - 0.2, dz + 1.6];
-        sim.bond.vel = [0.0; 3];
-    }
     let mut open = false;
     for _ in 0..180 {
         let sim = scene.sim.as_mut().unwrap();
@@ -256,8 +268,19 @@ fn storeroom_door_unlocks_from_its_touch_plate() {
     assert!(open, "the plate's unlock rising edge must auto-open the storeroom door [M 0x1363c8]");
     {
         let sim = scene.sim.as_mut().unwrap();
-        // One fresh press (the wait loop's ticks released the key): the open unlocked leaf closes.
-        sim.step_bond(Default::default(), false, false, true);
+        // One fresh press from in front of the OPEN leaf (the use pick keeps the door only with the
+        // use point within 1.0 in front of one of its faces [M Collide_Intersect 0x1ebaa8 →
+        // Intersect_PointGeom 0x1e92d8; nf_game::usepick]): the open unlocked leaf closes.
+        // A stand inside the leaf's swing is the busy-marker arm (no close) [M 0x135be0's
+        // in-doorway test]: the first stand out of it closes the door.
+        let d = sim.drones.doors.list[di].clone();
+        let tris = usepick::posed(sim, d.glist, &d.matrix);
+        let closed = usepick::for_each_stand(sim, &tris, d.live_sph(), &mut |sim| {
+            sim.drones.doors.list[di] = d.clone();
+            sim.step_bond(Default::default(), false, false, true);
+            sim.drones.doors.list[di].state == nf_game::door::CLOSING
+        });
+        assert!(closed, "a stand in front of the open leaf, out of its swing");
         let st = sim.drones.doors.list[di].state;
         assert_eq!(st, nf_game::door::CLOSING,
             "E on the open unlocked door closes it [M 0x135be0's state-4/8 arm], got {st:#x}");
@@ -314,6 +337,72 @@ fn pickups_taken_by_walking_over() {
         "no gold medal → the kind-6 bonus is not created [M 0x18dda0:93-95]");
 }
 
+/// A stand on the atrium ledge with a clear line to the SkyBridge pulley #265 [D the floor scan].
+const LEDGE_11: [f32; 3] = [-5.8, 47.9, 24.4];
+
+/// The vent route into the storeroom, on the player's inputs from the ledge: the claw to the
+/// SkyBridge pulley, the drop on the bridge roof, E on the exterior grill #312 [D mask 4], the duct
+/// (x -0.5 south, then x 0.5..9 east at z 19.5 [D the floor scan]), E on the interior grill #84, the
+/// fall through plate #235 (ch 0x66, the level's Bond moment [M Trigger_Calc 0x1b1900:12-17]) and
+/// the walk onto plate #283 (ch 0x5A), which unlocks the storeroom door from inside [D #213].
+#[test]
+fn the_vent_route_reaches_the_storeroom() {
+    let mut scene = nf_view::load_weapons(&iso(), "07000011.bin", false, &[0x50]).expect("load with the claw");
+    fn tick(scene: &mut nf_view::scene::Scene, n: u32, i: nf_game::player::Input, fire: bool, usek: bool) {
+        for _ in 0..n { scene.sim.as_mut().unwrap().step_bond(i.clone(), fire, false, usek); }
+    }
+    fn press_e(scene: &mut nf_view::scene::Scene) {
+        for _ in 0..20 { tick(scene, 1, Default::default(), false, true); tick(scene, 1, Default::default(), false, false); }
+    }
+    fn walk(scene: &mut nf_view::scene::Scene, to: [f32; 2]) {
+        for _ in 0..400 {
+            let p = scene.sim.as_ref().unwrap().bond.pos;
+            let (dx, dz) = (to[0] - p[0], to[1] - p[2]);
+            if (dx * dx + dz * dz).sqrt() < 0.3 { return; }
+            scene.sim.as_mut().unwrap().bond.yaw = dx.atan2(dz);
+            tick(scene, 1, nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false);
+        }
+    }
+    tick(&mut scene, 600, Default::default(), false, false);
+    let gp = scene.sim.as_ref().unwrap().drones.grapple_points[0].pos;
+    { let sim = scene.sim.as_mut().unwrap(); sim.bond.pos = LEDGE_11; sim.bond.vel = [0.0; 3]; }
+    tick(&mut scene, 20, nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false, false);
+    for _ in 0..60 {
+        let sim = scene.sim.as_mut().unwrap();
+        let h = sim.bond.head();
+        let d = [gp[0] - h[0], gp[1] - h[1], gp[2] - h[2]];
+        let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-4);
+        sim.bond.yaw = d[0].atan2(d[2]);
+        sim.bond.pitch = (d[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+        sim.step_bond(Default::default(), true, false, false);
+        if sim.bond.grapple.is_some() { break; }
+    }
+    assert!(scene.sim.as_ref().unwrap().bond.grapple.is_some(), "the claw latches from the ledge [M 0x195da0]");
+    tick(&mut scene, 200, Default::default(), true, false);
+    { let sim = scene.sim.as_mut().unwrap(); sim.bond.yaw = std::f32::consts::PI; sim.bond.pitch = 0.0; }
+    tick(&mut scene, 30, nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false);
+    tick(&mut scene, 40, Default::default(), false, false);
+    assert!(scene.sim.as_ref().unwrap().bond.pos[1] > 53.0, "Bond stands on the bridge roof");
+    let grill = |s: &nf_view::scene::Scene, k: usize| s.sim.as_ref().unwrap().drones.sss.list[k].pos();
+    let closed = grill(&scene, 1);
+    press_e(&mut scene);
+    tick(&mut scene, 180, Default::default(), false, false);
+    assert!(grill(&scene, 1) != closed, "E opens the exterior grill #312 [M SS_Activate 0x1a9ea8]");
+    for to in [[-0.5, 23.3], [-0.5, 19.5], [8.0, 19.5], [9.3, 19.6]] { walk(&mut scene, to); }
+    assert!(!scene.sim.as_ref().unwrap().drones.channels.on(0x5a), "sister: the storeroom plate is still unfired");
+    scene.sim.as_mut().unwrap().bond.pitch = -0.95;
+    press_e(&mut scene);
+    tick(&mut scene, 200, Default::default(), false, false);
+    {
+        let sim = scene.sim.as_ref().unwrap();
+        assert!(sim.bond.pos[1] < 48.5, "Bond drops into the storeroom, got {:?}", sim.bond.pos);
+        assert!(sim.drones.channels.on(0x66), "the fall crosses the Bond-moment plate #235 [D]");
+    }
+    scene.sim.as_mut().unwrap().bond.pitch = 0.0;
+    for to in [[10.5, 19.6], [12.7, 19.6]] { walk(&mut scene, to); }
+    assert!(scene.sim.as_ref().unwrap().drones.channels.on(0x5a), "plate #283 unlocks the door from inside [D]");
+}
+
 /// The Q-Claw grapple (0x3A #265 "GRAPPLEPOINT_SkyBridge" [D]; the level kit grants the claw 0x50
 /// [M 0x1a7ef8 case 0x7000011]): the fire latches the aim ray's point [M Player_SetGrapplePoint
 /// 0x195da0] and the reel lifts Bond [M Player_SSGrapple 0x192860]. Sister: no grapple before the fire.
@@ -323,14 +412,16 @@ fn grapple_point_reels_bond_up() {
     let mut scene = nf_view::load_weapons(&iso, "07000011.bin", false, &[0x50]).expect("load with the claw");
     let gp = scene.sim.as_ref().unwrap().drones.grapple_points.iter().find(|p| (p.pos[1] - 55.55).abs() < 0.5)
         .expect("the SkyBridge grapple point [D #265]").pos;
-    // Bond on the office floor under the point (the atrium side), claw out.
+    // Bond on the office floor in the west type-2 icon's arm ((-5.81, 46.38, 24.39) r 3.01 [D icon
+    // census]) — the claw fires only there [M Player_WeaponFiring 0x1a5460:515-528] — claw out.
     {
         let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = [gp[0], 46.5, gp[2] - 4.0];
+        sim.bond.pos = [-5.8, 46.5, 24.4];
         sim.bond.vel = [0.0; 3];
         for _ in 0..20 { sim.step_bond(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false, false, false); }
     }
     assert!(scene.sim.as_ref().unwrap().bond.grapple.is_none(), "sister: no grapple before the fire");
+    assert_eq!(scene.sim.as_ref().unwrap().bond.icon_ctx, 2, "Bond stands in the type-2 icon's arm [D]");
     // Aim up at the point and fire through the Scene's step (the real input path with the latch).
     let y0 = scene.sim.as_ref().unwrap().bond.pos[1];
     let mut latched = false;
@@ -443,8 +534,8 @@ fn multiplexor_seq_and_raises_its_out_on_both_inputs() {
     // The first input in list order: the Q-Worm E on the computer (the 0x38 writer).
     {
         let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = [u[0] + 0.2, u[1] - 1.3, u[2] + 0.9];
-        sim.bond.vel = [0.0; 3];
+        let yaw = sim.bond.yaw;
+        sim.place_bond([u[0] + 0.2, u[1] - 1.3, u[2] + 0.9], yaw);
     }
     for _ in 0..40 {
         let sim = scene.sim.as_mut().unwrap();
@@ -463,8 +554,8 @@ fn multiplexor_seq_and_raises_its_out_on_both_inputs() {
     // The second input in order: walk the touch #257 at (−22.06, 47.45, 16.61) [D].
     {
         let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = [-22.06, 47.0, 16.61];
-        sim.bond.vel = [0.0; 3];
+        let yaw = sim.bond.yaw;
+        sim.place_bond([-22.06, 47.0, 16.61], yaw);
     }
     let mut rose = false;
     for _ in 0..40 {
@@ -582,8 +673,8 @@ fn scriptplayer_0263_plays_its_nis_from_load_and_holds_ch38_after_the_worm() {
     };
     {
         let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = [u[0] + 0.2, u[1] - 1.3, u[2] + 0.9];
-        sim.bond.vel = [0.0; 3];
+        let yaw = sim.bond.yaw;
+        sim.place_bond([u[0] + 0.2, u[1] - 1.3, u[2] + 0.9], yaw);
     }
     for _ in 0..40 {
         let sim = scene.sim.as_mut().unwrap();
@@ -639,8 +730,8 @@ fn spawners_220_and_240_ignite_through_the_worm_and_the_touch_plate() {
     };
     {
         let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = [u[0] + 0.2, u[1] - 1.3, u[2] + 0.9];
-        sim.bond.vel = [0.0; 3];
+        let yaw = sim.bond.yaw;
+        sim.place_bond([u[0] + 0.2, u[1] - 1.3, u[2] + 0.9], yaw);
     }
     for _ in 0..40 {
         let sim = scene.sim.as_mut().unwrap();
@@ -663,8 +754,8 @@ fn spawners_220_and_240_ignite_through_the_worm_and_the_touch_plate() {
     // Step 2: walk the touch #257 [D] — with 0x38 held the mux raises 0x35 and group 2 starts.
     {
         let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = [-22.06, 47.0, 16.61];
-        sim.bond.vel = [0.0; 3];
+        let yaw = sim.bond.yaw;
+        sim.place_bond([-22.06, 47.0, 16.61], yaw);
     }
     let mut muxed = false;
     for _ in 0..40 {
@@ -682,8 +773,8 @@ fn spawners_220_and_240_ignite_through_the_worm_and_the_touch_plate() {
     // started spawner stays latched.
     {
         let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = [-30.0, 48.0, 40.0];
-        sim.bond.vel = [0.0; 3];
+        let yaw = sim.bond.yaw;
+        sim.place_bond([-30.0, 48.0, 40.0], yaw);
     }
     for _ in 0..20 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     {

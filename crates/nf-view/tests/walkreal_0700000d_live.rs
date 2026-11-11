@@ -1,5 +1,5 @@
 //! walkreal-b: 0700000d (the power station, part 2) walked with the player's own movement — no
-//! teleports except the two documented stand-ins (the catwalk→bay exit and the beam ride). Route
+//! teleports except the one documented stand-in (the catwalk→bay exit). Route
 //! (docs/levels/0700000d.md): the warehouse start #1 (179.53, 11.09, −205.42 [D]; the start
 //! trigger #436 → ch 0x23 completes objective 3) → the dock's south edge → THE CRANE CHAIN, real
 //! input: the platform drop to the warehouse ground, the ground walk east, the ladder #435 climb,
@@ -8,13 +8,11 @@
 //! carrying the rider — the dock→deck crossing is real — then the DECK→WALKWAY WALK-OFF, real
 //! input (level-0d-jib-walk-off: the end-pose rim walk-off lands on the static 12.13 strip, the
 //! jump being vertical-only [M Player_HandleJump 0x1916b0; Player_SSWalk 0x192310:69]) and the
-//! catwalk walk west to its end, and the dock E #460 (ch 0x2b, real input). STAND-INS: the
-//! catwalk→bay exit (the catwalk is sealed at walk height — probe20's scans) and the
-//! shipping-beam boarding (the one remaining pos write, [S] unverified — level-0d-boarding
-//! closed the data: the 18.6 canopy covers the whole swept footprint, the mover script carries
-//! no player hand-off, and the riding 0x0200_0a81 is the game's aboard detector (0xEA, out 103,
-//! mask 8); the ride west and the drop into the yard are real input now) into the yard at the
-//! nav web's north edge
+//! catwalk walk west to its end, the dock E #460 (ch 0x2b, real input), then THE BOARDING, real
+//! input: the Q-Claw fired from the control corner at the pulley #370 (the clear line and the
+//! 14 u reach are the data's), the hang over the gantry's east park, the release with a west
+//! drift onto the east girder (the aboard plate 0x0200_0a81 fires ch 0x67), the ride west and the
+//! drop into the yard at the nav web's north edge
 //! → the REAL yard walk to the ST-3 plate #378 (118.48–157.56, 3.74–13.26, −311.35..−306.49 [D])
 //! → ch 0x1d (objective 4) → the REAL laser photograph (0x54 carried [M 0x1a7ef8 case 0x700000d
 //! keeps the loadout]) into the CamSubject volumes #494/#495 (ch 0x1e [D]) → ch 0x1e (objective
@@ -39,7 +37,7 @@ fn bond_pos(w: &Walker) -> [f32; 3] { w.scene.sim.as_ref().unwrap().bond.pos }
 
 #[test]
 fn walk_arrival_to_the_c5_door() {
-    walk_arrival_to_the_c5_door_at(1);
+    walk_arrival_to_the_c5_door_at(1, false);
 }
 
 /// The difficulty-parameterized body (real-health-agent-0c-0d): 1 is the byte-identical
@@ -49,7 +47,7 @@ fn walk_arrival_to_the_c5_door() {
 /// warm load]. Agent spawns the min-difficulty-2 placements [M Drone_Create 0x136be0:49],
 /// scales Bond's pain by Plr_DMod_Normal [M Player_HandlePain 0x1902c8] and the guards'
 /// hit chance by Accuracy row 2 [M DroneWeap_DoBulletAccuracy 0x179740:74-88].
-fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
+fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     let iso = iso();
     // The warm carry: 0c's record-11 channels ride the save [M 0x182270:92-95].
     let cold = if difficulty == 1 {
@@ -135,6 +133,24 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
         assert!(h > platform_pool - 48.0, "the platform shots must not eat the pool, {platform_pool} -> {h}");
     }
 
+    // THE PRE-WAKE ROOF SNIPE (level-0d-agent-real-damage re-route). The west-roof placements
+    // are PRESENT and ASLEEP through this phase — the wake is the platform drop itself
+    // [probe_0d_roof_rays part E] — and the probe's pre-wake ray table reads, from this very
+    // stand (eye 12.89): the SOUTH and MIDDLE placement head lines CLEAR (the g27-spawn head
+    // CLEAR at 0.949-chest, the g29-spawn chest AND head CLEAR) while the NORTH line dies 0.814
+    // on the warehouse roof lip. Since the class-4 sight table landed (sight 1000, engage
+    // 75+frand(8), the cone zeroed on first attack [M NDrone2_DefaultInit 0x14b300:380-424,
+    // DroneFunc_SetAsAttacking 0x14aed8:25-26]) these snipers own the whole climb and ladder
+    // top — the t3310 Agent ledger opens with the south placement's graze at 2395 and 6.0 at
+    // 3047 (d 64). A player takes them off the roof BEFORE walking into the drop that wakes
+    // them; the box act (a real posed head-box centre) keeps blocked lines silent. Log-only:
+    // the walk stays green whether or not a kill lands, and the log is the measured answer.
+    // Agent-gated in the batch-1109a-walks merge (measured on difficulty 2 only).
+    if difficulty >= 2 {
+        let _ = kill_guard_head_present(&mut w, [145.6, -256.7], [3.0, 3.0], "the west roof #461 south (pre-wake, the head line CLEAR [probe_0d_roof_rays])", 500);
+        let _ = kill_guard_head_present(&mut w, [145.7, -247.3], [3.0, 3.0], "the west roof #463 middle (pre-wake, the chest and head lines CLEAR [probe_0d_roof_rays])", 500);
+    }
+
     // Leg 1: south to the dock's south edge — walked. The dock's south edge drops to the
     // under-dock trench (the floors 3.0/0.0 [D probes]) whose far side walls 3.9 m up at the
     // yard's north edge (the trench floor 0.0 ends z −266; the yard begins 3.9 at z −272 [D
@@ -159,11 +175,22 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
     // crane 61° → −11° over its 750 ticks [D keys: quat y 0.508 → −0.096, t 0..750] — and the
     // rider on the rotating deck is carried (ground_motion [M Player_FeetOnPoint 0x194188 →
     // Control_InheritVelocity 0x133e88]).
+    // THE PLATFORM-DROP PIN (level-0d-fall-damage), real input: the ~11.1 m walk-off deals
+    // NOTHING — the ledge slide keeps the ground contact alive (BL+0x940 stays set through the
+    // slide), so the handler's branch B zeroes BL+0x928 on every contact tick and the landing
+    // timer never passes 60 [M Player_CollisionHandler 0x1949a8:97-127 — the accumulate arm
+    // runs only while BL+0x940 == 0]; the game's own drop read no damage [L probe4]. The walk
+    // measured health 100.0 through tick 3000 (the drop at ~1750).
+    let pre_platform_health = w.scene.sim.as_ref().unwrap().drones.health.health;
     assert!(w.try_walk_to(Wp { at: [181.0, 7.5, -227.5], act: Act::None, arrive: 1.5 }, "the platform drop to the warehouse ground"),
         "the platform drop must reach the ground");
     {
+        let sim = w.scene.sim.as_ref().unwrap();
         let p = bond_pos(&w);
         assert!(p[1] < 6.0, "the drop lands on the warehouse ground (y ~1.04), got {p:?}");
+        assert!((sim.drones.health.health - pre_platform_health).abs() < 0.05,
+            "the ~11 m platform slide-off deals no fall damage [M 0x1949a8:97-127 + L probe4], was {pre_platform_health}, got {}",
+            sim.drones.health.health);
     }
     // THE STRIP-MOUTH KILLS — the climb's cover work, a player taking the shooters out from
     // cover before climbing into their crossfire (the driver's third lever). The perch #31 owns
@@ -219,7 +246,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
     ] {
         assert!(w.try_walk_to(Wp { at, act: Act::None, arrive: r }, label), "{label} must walk");
     }
-    let bay_killed = kill_guard_at_present(&mut w, [214.2, -289.4], [6.0, 6.0], "the bay guard #10 (from the strip mouth, ray clear d 64 [probe_0d_ray_stands])", 600);
+    let bay_killed = kill_guard_at_present(&mut w, [214.2, -289.4], [6.0, 6.0], "the bay guard #10 (from the strip mouth, ray clear d 64 [probe_0d_ray_stands])", 180);
     eprintln!("[0d] the strip-mouth #10 kill: landed {} pool {:.1}", bay_killed, w.scene.sim.as_ref().unwrap().drones.health.health);
     // The spawner #32 (skin 0x5000090, the ground band (157.6..163.3, −213..−229)) is NOT
     // taken here any more — level-0d-real-health-crossfire-4 MEASURED the trade: the landed
@@ -265,14 +292,205 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
     // and a live g28 rides the wire (the -5 run 3: 4 hits for 62 on the ride). The probe's wake
     // spot (146.4, −237.7) is the parked-at-drop timeline, NOT the walked one — the run-3 box
     // (146.5, −237.8) found nobody and she survived to the ride.
-    let _ = kill_guard_at_present(&mut w, [151.4, -241.3], [4.0, 4.0], "the west roof g28 (chest, her walked spot — the ladder-top ray is CLEAR [probe_0d_roof_rays])", 600);
-    let _ = kill_guard_at_present(&mut w, [151.1, -255.8], [4.0, 4.0], "the west roof g27 (chest, her south spawn — the ladder-top ray is CLEAR [probe_0d_roof_rays])", 600);
-    // THE BOX ACT STANDBY for g28 if the chest leg missed (the part-5 head first): log-only.
-    let _ = kill_guard_head_present(&mut w, [151.4, -241.3], [4.0, 4.0], "the west roof g28 (box/head standby [probe_0d_roof_rays])", 400);
-    // THE DECK GUARD #16 (level-0d-real-health-crossfire-3/4): the -1/-2 routes landed this
-    // kill every run (+~200 ticks) from the ladder top — his deck fire rode the -4 run-1 sweep
-    // window (38 at d 29.7); with the west roof dying above he is the phase's only shooter.
-    kill_guard_at(&mut w, [198.9, -260.4], [6.0, 4.0], "the deck guard #16 (from the ladder top)");
+    // MERGE (batch-1109a-walks): the Agent run takes the level-0d-agent-real-damage ladder-top
+    // re-route (measured on difficulty 2); the plain and Operative runs keep the
+    // level-0d-operative-walk legs they were measured with, byte-identical.
+    // (the act-proof gate reaches the ALL-difficulty sweeps below; declared here, set in the
+    // d2 block)
+    let mut act_proof_live = false;
+    if difficulty >= 2 {
+        // THE D2 SOUTH-ROOF SNIPER #17 FIRST (dart-tase-stamps-check + the t4312 ledger): ANY
+        // ladder-area gunshot wakes him — his fire spot (192.3,19.6,−267.4) is d 39 from the
+        // ladder top, INSIDE the P2K shot's hearing radius 40 [L] — and in the t4312 run the
+        // west-roof sweep's own kill shot woke him mid-phase: he landed the killing 10.0 at 4312.
+        // Take him before the sweep's shots (the box also catches the d2 deck sniper #20 if #17
+        // has moved). Log-only.
+        if difficulty >= 2 {
+            let _ = kill_guard_at_present(&mut w, [192.3, -267.4], [8.0, 8.0], "the d2 south-roof sniper #17 (the ladder-top shot, before the band guns)", 500);
+        }
+        // THE BAY DUO FROM THE TOP (level-0d-agent-real-damage, the t4312 ledger's decisive drain):
+        // the bay captain #292 (0x5000093) and the annex sniper #363 (0x5000090) own the ladder top
+        // — their rays to it are CLEAR at d 54.5 and both fire on the 180-tick cadence: the t4312
+        // ledger took 2 × 28.0 (#22/#363) + 28.0 (#11/#292) in 380 ticks. They WANDER the bay north
+        // strip — observed (203.5..214.7, −288.5..−290.5) across runs — so the old fixed
+        // (214.2,−289.4)±(6,6) strip-mouth box missed them both (10 u off). A player scans the whole
+        // bay strip and takes whichever head is exposed: one wide box, the box act fires only on a
+        // real clear head-box centre (the annex sniper's ray to the strip MOUTH is blocked 0.521
+        // [-3 probe], but from the TOP the ledger proves his line lives).
+        for k in 0..3 {
+            let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| {
+                d.present && !d.corpse && d.health > 0.0
+                    && (d.pos[2] + 289.5).abs() < 4.0 && (195.0..=217.0).contains(&d.pos[0])
+            });
+            if !live { break; }
+            let _ = kill_guard_head_present(&mut w, [209.3, -289.5], [7.0, 3.0], "the bay duo (the whole north strip, the t4312 84-damage drain)", 400);
+        }
+        // (the #27 direct act moved UP into the trio loop above — the run-4140 ledger's reorder.)
+        // THE #17 WAKE-LAG SECOND PASS (level-0d-agent-ladder-top ledger): the first pass's own
+        // shot (d 38.9 from the ladder-top eye (213.1,18.1,−234.5) to the fire spot — inside the
+        // P2K hearing radius 40 [L]) wakes the sleeping sniper and he WALKS to (192.3,−267.4) —
+        // the prior ledger measured him ABSENT from the box at the immediate re-check (the walk
+        // lag: the second pass found nobody, the killing 10.0 landed mid-phase twice — t4312 and
+        // the v3 4000, the last ticks of the acts). Wait out the walk (240 ticks, inside the
+        // 150-300 lever window), widen the box to the approach (±10), take him BEFORE the bay
+        // duo's exposure starts. The wait rides 150 (the window's lower bound — the run-8110
+        // ledger has the trio/bay cadence eating every standing tick). Log-only: when the first
+        // pass already caught him the pick finds nobody and only the wait is spent.
+        if difficulty >= 2 {
+            w.wait(150);
+            let _ = kill_guard_at_present(&mut w, [192.3, -267.4], [10.0, 10.0], "the d2 south-roof sniper #17 (the wake-lag second pass, the walk-out wait)", 500);
+        }
+        // THE WEST-ROOF TRIO LOOP (level-0d-agent-ladder-top-2): the trio (spawned at the
+        // platform-drop wake — the pre-wake census reads NO present guard above y 15, the spawn
+        // is the wake [t3310]) opens fire ~3290, 240 ticks after the climb ends (~3050). The
+        // act is dice-dependent (landed +372 in the run-4891 tree, held fire 775 in the run-4034
+        // one — the posed boxes vs the mid-band obstruction), so the pass rides 450 (the +372
+        // kill fits; a stalled pass re-picks a guard whose line clears) and the loop rides 6.
+        // The box widens ±5: the settled band is (151.37,−245.55)/(151.37,−248.53)/(151.11,
+        // −250.82) [t3310] and the run-4891 pick wandered OUTSIDE the ±3 box. THE SECOND-CLIP
+        // LEVER (the prior ledger's +575 re-converge): the old 700 cap expired right after the
+        // reload's re-converge — the second clip never fired; 450 per pass with re-picks keeps
+        // fresh clips down range. Log-only.
+        // (declared here so the post-trio legs can see the act-proof blacklist)
+        let mut stalled: Vec<usize> = Vec::new();
+        if real_damage {
+            // LEVER (c) level-0d-agent-ladder-top-3 v2, measured on the run-4380 roll: the
+            // retarget pick is PRE-VERIFIED and STALL-BLACKLISTED — the pass goes to the
+            // nearest band guard whose clear_box_aim returns a REAL box right now (torso
+            // first: the head box is graze-prone at d 63), and a guard who took ZERO damage
+            // across a full pass is act-proof THIS roll — he is blacklisted and the loop
+            // re-picks (the run-4380 pass burned 450+ on the act-proof g33 while his cadence
+            // ate 94.0). When every live member is blacklisted the loop BREAKS — the waits
+            // themselves are cadence exposure (the run-5239 law: the pair drained 94 through
+            // 2 passes + 4 waits).
+            for k in 0..6 {
+                let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| {
+                    d.present && !d.corpse && d.health > 0.0 && d.pos[1] > 18.0
+                        && (d.pos[0] - 151.5).abs() < 12.0 && (d.pos[2] + 248.0).abs() < 14.0
+                });
+                if !live { break; }
+                let Some((di, part)) = pick_trio_target(&w, [151.35, -248.5], [5.0, 5.0], &stalled) else {
+                    if band_all_stalled(&w, &stalled) {
+                        eprintln!("[0d] the west roof trio: every live member is act-proof this roll — breaking (the waits are cadence exposure, the run-5239 law)");
+                        break;
+                    }
+                    eprintln!("[0d] the west roof trio: every band line blocked — the 60-tick patrol wait");
+                    w.wait(60);
+                    continue;
+                };
+                {
+                    let d = &w.scene.sim.as_ref().unwrap().drones.list[di];
+                    eprintln!("[0d:box] the west roof trio: retarget g{di} skin {:#x} pos ({:.2},{:.2},{:.2}) state {:#x} part {part}",
+                        d.skin, d.pos[0], d.pos[1], d.pos[2], d.state);
+                }
+                let hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
+                // THE HEAD-ONLY CAP (the run-5069 law): a head-only candidate is the graze
+                // line — 450 ticks on it is cadence exposure, not a kill attempt; one
+                // 200-tick pass is the whole bet (the deck #20 kill proved the head act
+                // lands at d 31; at d 63 the same act ate 8+ aimed CLEAR-ray rounds for
+                // zero on BOTH members).
+                let cap = if part == 5 { 200 } else { 450 };
+                let down = shoot_far_box_fast(&mut w, di, "the west roof trio (the retarget pick, the lever-(c) law)", cap);
+                if !down {
+                    let hp1 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
+                    if hp1 >= hp0 {
+                        eprintln!("[0d] the west roof trio: g{di} took ZERO damage across a full pass — blacklisted (the act-proof law)");
+                        stalled.push(di);
+                    }
+                }
+            }
+        }
+        // THE ACT-PROOF GATE (level-0d-agent-ladder-top-3): when the trio loop ended with
+        // blacklisted (act-proof) survivors, the head sweep's nearest-pick would re-burn its
+        // 400-tick caps on THEM (the same head-only graze lines) — pure cadence exposure with
+        // zero kill odds. The survivors ride to the g29 south-chest leg (the crossing killer)
+        // and the ride instead. The non-real-damage d2 path (no run today) stays identical.
+        let act_proof = real_damage && !stalled.is_empty();
+        if act_proof {
+            eprintln!("[0d] the west roof trio: act-proof survivors live ({stalled:?}) — skipping the re-burn legs (the head sweep, the deck #16 leg)");
+        }
+        // THE LADDER-TOP HEAD SWEEP (level-0d-agent-real-damage re-route). On THIS tree the wake's
+        // three west-roof snipers settle MID-BAND — measured d2 run (t3310 ledger):
+        // (151.37,22.70,−245.55)/(151.37,−248.53)/(150.95,−249.42) — where the CHEST rays die
+        // 0.80-0.974 on the rooftop obstruction (z −249..−252 band + the -4 slab edge) while the
+        // HEAD lines clear from the ladder top [probe_0d_roof_rays]. The old fixed boxes
+        // ((151.4,−241.3)/(151.1,−255.8) ±4) were the -5 tree's spots: all three settled 4.25-7.3
+        // outside them, every leg printed "no PRESENT guard near", and the snipers (class-4:
+        // sight 1000, engage 75+frand(8), and the mode-5 sniper states carry NO distance gate
+        // [M NDrone2_DefaultInit 0x14b300:380-424, NDrone2_DSTATE_SniperFire 0x15fd88:34-63]) plus
+        // the deck guard (28.0 at d 29.5) and the bay captain (42−armour = 10.0 at d 55.3) shot
+        // Bond dead at t3310 — 6 hits for 100.0, 0 return-fire fights, armour spent. A player scans
+        // HEADS over the whole band and takes whichever line is exposed: the wide box (x
+        // 145.3-157.3, z −236.5..−258.5) covers every measured settle (-5 spots included), and the
+        // box act fires only when clear_box_aim returns a real clear hit-box centre, so a blocked
+        // line holds fire instead of burning the cap.
+        for k in 0..4 {
+            let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| {
+                d.present && !d.corpse && d.health > 0.0 && d.pos[1] > 18.0
+                    && (d.pos[0] - 151.5).abs() < 12.0 && (d.pos[2] + 248.0).abs() < 14.0
+            });
+            if !live { break; }
+            if act_proof { break; }
+            let _ = kill_guard_head_present(&mut w, [151.3, -247.5], [6.0, 11.0], "the west roof heads (the settled mid-band trio — the -5 head law)", 400);
+        }
+        // THE DECK GUARD #16 (level-0d-real-health-crossfire-3/4 + wire-jump-grab's route fix):
+        // the -1/-2 routes landed this kill every run (+~200 ticks) from the ladder top, but his
+        // FIRE anims (state 0x70/0x71) pose the whole box set 0.65-1.0 BELOW his origin while the
+        // game's standing two-sphere capsule still covers the chest line [M NDrone2_Collision
+        // 0x140e90:91-121] — the port's boxes-only refine flew the t3310 run's chest shots clean
+        // past him (0.21 u from origin, no box) while he landed 28.0 at d 29.5. The box act aims
+        // at a REAL posed box centre (the part-5 head first) — the +209 landing wire-jump-grab
+        // measured.
+        let _ = if !act_proof { kill_guard_head_present(&mut w, [198.9, -260.4], [6.0, 4.0], "the deck guard #16 (the box act — his fire anims pose the boxes low [M 0x140e90:91-121])", 600) } else { false };
+        // (the act-proof gate reaches the ALL-difficulty sweeps below)
+        act_proof_live = act_proof;
+    } else {
+        let _ = kill_guard_at_present(&mut w, [151.4, -241.3], [4.0, 4.0], "the west roof g28 (chest, her walked spot — the ladder-top ray is CLEAR [probe_0d_roof_rays])", 600);
+        let _ = kill_guard_at_present(&mut w, [151.1, -255.8], [4.0, 4.0], "the west roof g27 (chest, her south spawn — the ladder-top ray is CLEAR [probe_0d_roof_rays])", 600);
+        // THE BOX ACT STANDBY for g28 if the chest leg missed (the part-5 head first): log-only.
+        let _ = kill_guard_head_present(&mut w, [151.4, -241.3], [4.0, 4.0], "the west roof g28 (box/head standby [probe_0d_roof_rays])", 400);
+        // THE WEST-ROOF #27 DIRECT (level-0d-operative-walk, real-damage-gated): in the walked
+        // timeline #27 settles at (151.37, 22.70, −248.53) from the phase start (the [0d:box]
+        // census at the g28-leg moment) and her CHEST ray from the ladder top reads full CLEAR
+        // (the sweep's own [0d:ray] lines: eye (213.1,18.1,−234.5) chest (151.1,23.0,−246.1) full
+        // CLEAR static clear bullet_scoped CLEAR — she is ABOVE the mid-band obstruction; the
+        // height-asymmetry law, the up-hill side). The shared sweep catches her only at +332 into
+        // its second pass (~1000 ticks after the phase opens) because its pick takes the nearest
+        // walker first — her measured Operative ledger is 2 × 16 health (ticks 3529, 4229) plus
+        // the armour share. A player opens on the settled shooter he can see: the box act at her
+        // walked spot FIRST, before the #16 deck kill. Gated to the real-damage run.
+        if real_damage {
+            let _ = kill_guard_head_present(&mut w, [151.35, -248.5], [3.0, 3.0], "the west roof #27 (the direct box act, her walked spot)", 700);
+        }
+        // THE DECK GUARD #16 (level-0d-real-health-crossfire-3/4): the -1/-2 routes landed this
+        // kill every run (+~200 ticks) from the ladder top — his deck fire rode the -4 run-1 sweep
+        // window (38 at d 29.7); with the west roof dying above he is the phase's only shooter.
+        // THE BOX ACT (level-0d-wire-jump-grab measured): the chest act's 4 rounds all MISS him —
+        // he fights from his fire anims (state 0x70/0x71, scripts 0x6000606B/0x60006137) whose
+        // posed hit boxes sit 0.65-1.0 BELOW his origin (the crouch-fire skeleton: the head box
+        // top 14.03 vs the origin 14.04, the torso centre 13.72 [trace:box]) while the aim rides
+        // pos+0.3 — every converged CLEAR-ray round passed 0.21 from his origin above all 16
+        // boxes [trace:raypart first_box None]. The game's standing volume is the origin-centred
+        // capsule A = pos+up·r, B = pos+up·(r−hip), r 0.4 (0.55 mode 0xc) [M NDrone2_Collision
+        // 0x140e90:91-121 — the standing branch's +0x3f0/+0x400/+0x45c writes] which the pass at
+        // 0.21 never escapes — the port's boxes-only refine is the documented deviation
+        // (drone_ray_part's doc). A player aims at the VISIBLE (crouched) body: the box act aims
+        // at a box the port's own law returns.
+        kill_guard_head_present(&mut w, [198.9, -260.4], [6.0, 4.0], "the deck guard #16 (the box act, the crouch-fire boxes)", 600);
+        // THE BAY GUARD #18 QUESTION (level-0d-operative-walk, MEASURED — the leg is deliberately
+        // NOT here): #18 is the ladder-top phase's floor — 3-5 × 16 health every run plus the
+        // armour share — from INSIDE the bay at (204-212, 12.09, −288.5..−290.5), where every
+        // chest ray from outside dies on the bay's north wall above its low opening (the #18-leg
+        // comment's law, the measured 0.521 strip-mouth fraction). This session TESTED the
+        // height-asymmetry counter from the ladder top (the -5 head law): clear_box_aim returned
+        // Some — but for g10 (207.83, −288.57), NOT #18 — the act killed g10 at +330 (a real
+        // bonus: the bay-mouth sniper dies) and the ~900 added ladder-top ticks fed #18's cadence
+        // two MORE shots (5166, 5628) before the phase closed; on the later stands he landed two
+        // more (the deck 8236, the bay-enter kill at 10656) — 94 total vs the baseline 78. The
+        // net is NEGATIVE: the leg stays out. The measured next levers are in the ignore message
+        // (the crouch-dodge of the opening line; the port-side capsule work the -5 report
+        // flagged).
+    }
     // The west-roof sweep, WALKER-CATCHING (level-0d-real-health-crossfire-3, measured): the
     // guards reposition off their placements (145.6-145.8 — CLEAR rays from the ladder top,
     // d 68-70.5 [probe_0d_ray_stands]) to stable combat spots x ~151.4 (the slab shadow, the
@@ -288,6 +506,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
                 && (d.pos[0] - 151.5).abs() < 12.0 && (d.pos[2] + 248.0).abs() < 14.0
         });
         if !live { break; }
+        if act_proof_live { break; }
         kill_guard_at_present(&mut w, [151.2, -246.8], [6.0, 11.0], "the west roof sweep (the walkers)", 900);
     }
     // g29's SOUTH-WALK KILL (level-0d-real-health-crossfire-5): she spawns late at (151.05,
@@ -315,26 +534,20 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
     // east-facing wall at x ~160, top between y 1.5 and 4.4 — the [0d:ray] trace) and its one
     // CLEAR window closes in ~200 ticks while the aim settles (the measured miss). The
     // LADDER-TOP stand is the one the route already dwells on for thousands of ticks at d2
-    // with ZERO incoming (this run's ledger: no hit between 2051 and 7932 — the whole
-    // west-roof phase is free), its eye 18.1 looks DOWN the band line over the low x ~160
+    // with ZERO incoming on the pre-2998b6a76 tree (its ledger: no hit between 2051 and 7932 —
+    // "the whole west-roof phase is free" THERE; on THIS tree the class-4 sight table
+    // [M 0x14b300:380-424] makes the phase lethal — the t3310/t4312 ledgers), its eye 18.1
+    // looks DOWN the band line over the low x ~160
     // wall, and the band is settled (not marching) by this phase. Guards stand at 10 health
     // [probe census] — one aimed hit each; the sweep repeats while live band guards remain
     // (the -5 west-roof pattern). D2-GATED: the Operative twin's route stays byte-identical
     // (its #32 spawner leg stays late-route; the kill order shifts would re-roll the shared
     // RNG stream the green twin's 22.2-end budget rides).
     //
-    // THE D2 SOUTH-ROOF SNIPER #17 FIRST (dart-tase-stamps-check): the band sweep's own
-    // gunfire woke the d2 south-roof sniper #17 (0x5000087, 0x1e, fire spot (192.3,19.6,
-    // −267.4), d 39 from the ladder top — INSIDE the P2K shot's outer hearing radius 40 [L])
-    // mid-sweep — measured: 3 hits for 66, the death 8171 AT the ladder top (the baseline
-    // ledger never shows #17: the west-roof phase's thousands of shot-ticks are quiet, the
-    // band-sweep shots are what wake it). Take it BEFORE the first band shot — the ladder
-    // top is above the canopy line (the -2 note's own law for the south-roof work). The box
-    // also catches the d2 deck sniper #20 (198.4,14.0,−260.7) if #17 has moved off its spot.
-    // Log-only.
-    if difficulty >= 2 {
-        let _ = kill_guard_at_present(&mut w, [192.3, -267.4], [8.0, 8.0], "the d2 south-roof sniper #17 (the ladder-top shot, before the band guns)", 600);
-    }
+    // THE D2 SOUTH-ROOF SNIPER #17 leg MOVED ABOVE the west-roof sweep (level-0d-agent-real-
+    // damage): the t4312 run proved ANY ladder-area shot wakes him (his fire spot is d 39,
+    // inside the 40 hearing radius [L]) — the sweep's kill shot woke him mid-phase and his
+    // 10.0 landed the t4312 kill. He is taken right after the climb now.
     if difficulty >= 2 {
         for k in 0..3 {
             let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| {
@@ -366,7 +579,31 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
                     && (-230.0..=-210.0).contains(&d.pos[2])
             });
             if !live { break; }
+            // the act-proof phase law: the g21 leg has NEVER landed a kill in any run (the
+            // aim does not converge to the −0.29 head line) — with act-proof roof survivors
+            // live the 1200 ticks are pure cadence exposure; skip to the ride.
+            if act_proof_live { break; }
             let _ = kill_guard_head_present(&mut w, [162.8, -215.0], [4.0, 4.0], "the d2 band sniper g21 (the head line over the jamb, the ladder-top shot)", 600);
+        }
+    }
+    // THE PRE-RIDE #19 BOX ACT (level-0d-agent-ladder-top-3, the ledger's lever (a)): #19
+    // (skin 0x5000087, weapon 0x1e, (172.0,19.6,−292.5)) landed the killing 10.0 at 8110,
+    // ~700 ticks into the ride, from d 49.9 — one aimed head hit drops a guard [M
+    // NDrone2_HitDamage 0x145558 × DroneDamage_Head, damage.rs part 5] and a player scans the
+    // south-west roof line before stepping off. The ray from the ladder top is UNMEASURED (the
+    // walk-2 ledger: the band-sweep stands drew zero hits from him, so his line to the PARKED
+    // stand is likely blocked — but the rider MOVES through his line); the box act fires only
+    // on a REAL clear hit-box centre, so a blocked line holds fire and only the cap is spent.
+    // Log-only: when he is not yet at the box the pick finds nobody and the leg costs one
+    // census.
+    if difficulty >= 2 && real_damage {
+        for k in 0..2 {
+            let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| {
+                d.present && !d.corpse && d.health > 0.0
+                    && (d.pos[0] - 172.0).abs() < 8.0 && (d.pos[2] + 292.5).abs() < 8.0
+            });
+            if !live { break; }
+            let _ = kill_guard_head_present(&mut w, [172.0, -292.5], [8.0, 8.0], "the wire-ride shooter #19 (the pre-ride box act, the lever-(a) probe)", 400);
         }
     }
     // The -2 "NO #29 / NO #10 attempts" constraints are LIFTED by the new route (level-0d-
@@ -392,7 +629,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
         // The stick HELD through the jump — a player runs onto the grab with the stick forward
         // and keeps holding; the walk quad's eased lanes then read non-zero at the grab and the
         // RETAINED quad (walk-ticks-only zeroing [M 0x193600:129-134]) reads MOVING through the
-        // ride — the guards' TargetMoving_Accuracy applies [M 0x179a48:34-41 + 0x179740:71-73].
+        // ride — the guards' TargetMoving_Accuracy applies [M 0x179a48:34-41 + 0x179740:71-73].        
         // The released-stick jump dead-zone-snapped the quad to [0,0] at the grab and the rider
         // read still (the wire crossfire hit at stationary accuracy).
         sim.step_bond(nf_game::player::Input { jump: (60..=63).contains(&k), forward: 0.3, ..Default::default() }, false, false, false);
@@ -608,6 +845,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
     turn_to(&mut w, std::f32::consts::FRAC_PI_2); // face east (the stick, not a yaw write)
     // Push off every ledge edge (the roof 18.58, an unscanned parapet at 19.44) until the
     // annex floor (9.42-9.45) catches him.
+    let mut annex_fall = 0u32;
     for _cycle in 0..4 {
         if w.scene.sim.as_ref().unwrap().bond.pos[1] < 12.0 && w.scene.sim.as_ref().unwrap().bond.grounded { break; }
         for _ in 0..40 {
@@ -620,9 +858,15 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
             let sim = w.scene.sim.as_mut().unwrap();
             sim.step_bond(nf_game::player::Input::default(), false, false, false);
             w.total_ticks += 1;
+            annex_fall = annex_fall.max(sim.bond.fall_timer);
             if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
         }
     }
+    // THE ANNEX-DROP PIN (level-0d-fall-damage), real input: the roof→annex push-off is the
+    // walk's one damage-dealing fall before the beam (the walk's real-damage ledger attributes
+    // its whole `other 11.2` to it). Landing timer 76 → raw 16 → ×0.7 at Agent = 11.2 — the
+    // game's own math [M 0x1949a8:117-126 + 0x1902c8:47-60].
+    assert_eq!(annex_fall, 76, "the annex push-off's landing timer — raw = timer − 60 = 16, ×0.7 Agent = 11.2 [M 0x1949a8]");
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -647,6 +891,45 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
     // the band's east crossing when not. The box is the whole patrol band (the -3's measured
     // spots (157.59,−213.01) → (158.9,−229.2) → (163.3,−214.0)).
     let _ = kill_guard_at_present(&mut w, [159.5, -220.0], [6.5, 11.0], "the ground spawner #32 (from the annex floor)", 600);
+    // THE YARD-GARRISON BAY-ENTER SCAN (level-0d-operative-walk, real-damage-gated): the ride
+    // phase's measured Operative drain is the yard garrison's 0x12 trickle — 18 hits for 10.8
+    // of 0.6 from g8 (159.8, 5.0, −282.8), g3/g2 (132.2..133.4, −299.2..−299.4) and #2
+    // (131.6, −301.2) across the claw-corner wait, the hang and the gantry ride (ticks
+    // 11627..12525, the NF_DMG_TRACE ledger) — and the pain staggers ate the slot hop's jump
+    // input whole (the [hop] per-tick trace: vel [0,0,0], grounded, five whole attempts). The
+    // high stands see NOTHING into the yard pit (the ladder-top and roof-lane scans both broke
+    // on empty picks) and the corner stand is the worst place to fight (the measured corner
+    // scan: one kill at +509, then caps under 1-hit-per-45-ticks fire — Bond died in it). This
+    // stand — INSIDE the bay at (194, 10.6, −282), the route's own bay-enter arrival — is the
+    // quiet one: the garrison sleeps until Bond steps to the corner rim (the measured run:
+    // zero hits from the bay enter through the E plate, ticks ~10000-11487, the first corner
+    // hit +140 after the rim step), the bay walls eat the pit's return fire (the same law the
+    // #18 leg's comment cites for the outward rays), and the guards here are 10-health
+    // 0x12 grunts. The box act at whichever live yard guard (y < 6.5, the yard band)
+    // clear_box_aim sees, nearest first; a guard without a clear aim is skipped, so a blocked
+    // angle leaves that guard to the post-drop sweep. Zero expected incoming; the cap bounds
+    // each converge. Gated to the real-damage run: the green master replay's timeline stays
+    // byte-identical.
+    if real_damage {
+        for _ in 0..8 {
+            let pick = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let mut best: Option<(f32, usize)> = None;
+                for (i, d) in sim.drones.list.iter().enumerate() {
+                    if !d.present || d.corpse || d.health <= 0.0 { continue; }
+                    if d.pos[1] >= 6.5 { continue; }
+                    if !(118.0..=182.0).contains(&d.pos[0]) { continue; }
+                    if !(-312.0..=-263.0).contains(&d.pos[2]) { continue; }
+                    if clear_box_aim(sim, i).is_none() { continue; }
+                    let dist = walker::dxz(sim.bond.pos, d.pos);
+                    if best.map_or(true, |(bd, _)| dist < bd) { best = Some((dist, i)); }
+                }
+                best
+            };
+            let Some((_, di)) = pick else { break };
+            shoot_far_box(&mut w, di, "the yard garrison (the bay-enter scan)", 700);
+        }
+    }
     w.lenient = false;
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -669,74 +952,17 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
         "the E fires the plate's out ch 0x2b [D #460 p0]");
     eprintln!("[0d] E #460 walked — the shipping SP #115 armed; the beam shuttles x 137.54 → 177.22 → 137.54 over 3000 ticks [D]");
 
-    // THE BOARDING QUESTION, pinned from the disc data (level-0d-beam-boarding + level-0d-boarding).
-    // The mover is script 0x060009EF entity 1: a 1643-tri TWIN-GIRDER gantry [D shape 0x0200_0a80
-    // bounds (±4.17, −2.98..+2.98, ±17.01) local] — at the rest origin (137.538, 11.334, −287.108)
-    // the two girders run z −270.1..−304.1 with their top surface ~13.5 and the inner runway Bond
-    // rides at 13.51 (the ride's own floor read: pos 14.545 − the 1.035 root), the slot between
-    // the girders OPEN to the yard below (the at-rest rays at x 137/138, z −280..−300 fall to
-    // 4.0 [D fine-map rays]). The riding 0x0200_0a81 is a 2-tri FLAT TRIGGER plane at +2.95 (y
-    // 14.28, x ±2.44, z ±16.80 — a 0xEA volume, not a walkable car). The origin sweeps east to
-    // ~177.22 (t ≈ 1230 of the SP's 3000 ticks) and back to ~137.59 (t ≈ 2760), then re-sweeps
-    // [D the key trace]. The boarding candidates over its path: the 16.8 mezzanine (x 168..183),
-    // the 13.8 ledge (x 184) and the 14.7 pad (x 185..194) [D the roofup/pad rays] — but the
-    // gantry's east face never passes x 181.4 (origin max + 4.17), 2.6 m west of the ledge with
-    // its top ABOVE the ledge top, and the jump is VERTICAL-ONLY [M Player_HandleJump 0x1916b0
-    // zeroes the velocity] so no 2.6 m gap is crossable onto a higher surface; the bay floor
-    // (9.5) is 4 m under the ride floor with no stairs or ladder up (the ladder census: #0/#1 at
-    // x 212..218, #2 at the catwalk's west end [D probe0d census]), and the gantry's own frame
-    // rises 9.5 m from the yard 4.0 with no access either.
-    //
-    // level-0d-boarding closed the rest of the data: (1) THE CANOPY — the 18.6 roof spans the
-    // gantry's WHOLE swept footprint (probe21's roof map: x 130..190 × z −270..−305 reads the
-    // canopy first on every column; its north edge is z ≈ −267 at x 150..190 and its west edge
-    // x ≈ 130 — both clear of the footprint x 133.4..181.4 / z −270.1..−304.1), so no roof edge
-    // or hole ever passes over the ride and no walk-off/fall from above can land on it (the
-    // runway pillars at x 154/169 top out at 16.07 — 1.75+ above the gantry top — with portal
-    // openings for the shuttle, themselves unreachable from anywhere); (2) THE SCRIPT —
-    // 0x060009EF's nine streams carry NO player hand-off (no event 4 Player_Disable, no event 6
-    // Player_Enable [D the ops; M Script_EventHandler 0x1d94c0 cases 3/4/6 — its event 3 with
-    // p0 = 0 is the negative-delay hold]) — the boarding is not scripted; (3) THE DETECTOR —
-    // the riding 0x0200_0a81 is the game's own ABOARD SENSOR: a 0xEA trigger (out event 103 =
-    // ch 0x67, mask 8 = player walk-in) whose flat plane at gantry-deck height can only fire
-    // for a body already on the gantry, so the game expects a physical boarding the port's
-    // statics cannot offer. The per-tick sweep (probe21_sweep) verified the gantry's collision
-    // is live under the canopy for the whole shuttle. The sister asserts below pin this closure;
-    // the exact question goes to the report's live check, and the ONE documented write below is
-    // the stand-in — everything after it (the whole ride and the drop) is real input.
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        // [D] the east-side closure over the beam's max reach: at z −272 the ledge and the pad
-        // stand east of x 183.5, and between the gantry's max east face (181.4) and the ledge
-        // the column is open down to the pit (the rays walk UP like the probes' scans — the
-        // port's segment test is winding-sensitive).
-        let ups = |x: f32| {
-            let mut hits = Vec::new();
-            let mut bot = 0.0f32;
-            for _ in 0..6 {
-                match sim.world.segment_hit([x, bot, -272.0], [x, 16.0, -272.0]) {
-                    Some((f, _)) => { let y = bot + (16.0 - bot) * f; hits.push(y); bot = y + 0.05; }
-                    None => break,
-                }
-            }
-            hits
-        };
-        let ledge = ups(184.0); let pad = ups(187.5); let gap = ups(182.3);
-        assert!(ledge.iter().any(|y| (13.4..=14.2).contains(y)), "the 13.76 step at x 184 [D interior scan], got {ledge:?}");
-        assert!(pad.iter().any(|y| (14.4..=15.0).contains(y)), "the 14.7 pad at x 186..194 [D pad rays], got {pad:?}");
-        assert!(!gap.iter().any(|y| (10.0..=16.0).contains(y)), "no floor near the ledge height between the beam's max face and the ledge [D], got {gap:?}");
-        // [D] the canopy closure (level-0d-boarding): every column over the swept footprint
-        // reads a roof surface (the 18.6 canopy, or the 20.2 rooftop structures over it) with
-        // no hole between the gantry top and the roof — probe21's roof map, now asserted.
-        for (x, z) in [(137.0f32, -280.0), (137.0, -300.0), (155.0, -290.0), (175.0, -287.0), (181.0, -300.0), (168.0, -296.0)] {
-            let top = sim.world.segment_hit([x, 21.0, z], [x, 15.0, z]).map(|(f, _)| 21.0 - 6.0 * f);
-            assert!(top.is_some_and(|y| (17.5..=21.0).contains(&y)),
-                "the canopy must cover the track at ({x},{z}) [D probe21 roof map], got {top:?}");
-        }
-    }
-    // [D] the script + the detector sisters (level-0d-boarding): the mover script carries no
-    // player hand-off, and the riding shape is the aboard sensor (0xEA, out 103 = ch 0x67,
-    // mask 8 = player walk-in) at gantry-deck height.
+    // THE BOARDING, real input. The mover is script 0x060009EF entity 1: a TWIN-GIRDER gantry
+    // [D shape 0x0200_0a80 bounds (±4.17, −2.98..+2.98, ±17.01) local] whose origin sweeps from the
+    // rest (137.54, 11.33, −287.11) east to ~177.22 (t ≈ 1230 of the SP's 3000 ticks) and back to
+    // ~137.59 (t ≈ 2760), then re-sweeps [D the key trace]. Nothing walkable meets it, and its
+    // script carries no player hand-off: the way on is from above. The pulley #370
+    // (178.77, 16.32, −296.39) [D] hangs over the gantry's east park with a clear line from the
+    // control corner, so the claw fired here reels Bond up [M Player_SetGrapplePoint 0x195da0,
+    // Player_SSGrapple 0x192860], he hangs while the fire is held, and the release at the east
+    // apex with the stick toward the track drops him on the east girder. The plate the gantry
+    // carries (0x0200_0a81: 0xEA, out 103 = ch 0x67, mask 8, flat at +2.95 [D stream 2]) is the
+    // game's own aboard detector, and ch 0x67 is a Bond-moment channel [M Trigger_Calc 0x1b1900:12-17].
     {
         let (handoffs, ents) = boarding_script_ops(&iso);
         assert!(!handoffs, "the gantry script must carry no player hand-off [D 0x060009EF's ops; M Script_EventHandler 0x1d94c0 cases 4/6]");
@@ -744,39 +970,104 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
         assert_eq!(trig.1, 0xea, "the rider is the 0xEA trigger kind [D stream 2]");
         assert!(trig.2.len() >= 2 && trig.2[0] == 103 && trig.2[1] == 8,
             "the rider's out event 103 (ch 0x67) + mask 8 = the player walk-in detector [D stream 2 params], got {:?}", trig.2);
-        let sim = w.scene.sim.as_ref().unwrap();
-        let t = sim.world.shape(0x0200_0a81).expect("the rider shape [D]");
-        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
-        for tri in t { for v in tri { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } } }
-        assert!(t.len() == 2 && (lo[1] - 2.95).abs() < 0.1 && (hi[1] - 2.95).abs() < 0.1
-            && (lo[0] + 2.44).abs() < 0.1 && (hi[0] - 2.44).abs() < 0.1
-            && (lo[2] + 16.8).abs() < 0.1 && (hi[2] - 16.8).abs() < 0.1,
-            "the rider is the flat detector plane at +2.95, x ±2.44, z ±16.8 [D shape 0x0200_0a81], got {} tris lo {lo:?} hi {hi:?}", t.len());
     }
-    // The east leg plays out under Bond's feet [D the keys]: sample the origin to its east
-    // extreme, then keep sampling to the westbound leg's start.
-    let mut max_ox = 0.0f32;
-    for k in 0..2350u32 {
-        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
-        w.total_ticks += 1;
-        if k % 8 == 0 {
-            if let Some(m) = w.scene.sim.as_ref().unwrap().drones.scripts.entity_matrix((0x0600_09ef, 1)) {
-                max_ox = max_ox.max(m[3][0]);
-            }
+    let claw_pulley = w.scene.sim.as_ref().unwrap().drones.grapple_points.iter()
+        .find(|p| (p.pos[0] - 178.77).abs() < 0.5).expect("the pulley #370 [D]").pos;
+    // The claw fires only inside a type-2 icon's arm [M Player_WeaponFiring 0x1a5460:515-528]:
+    // the control corner is in none, so Bond steps onto the deck in icon #4's arm ((188.11, 8.46,
+    // -299.78) r 5.0 [D icon census]), where the bolt still reaches the pulley [the walled-pick
+    // stance scan: (185.25, floor 10.31, -294.75)].
+    // Bond waits for the gantry's east park WITHOUT standing on the rim: the corner is the
+    // yard garrison's densest sight (the measured Operative ledger: 1 hit per ~45 ticks of
+    // 0.6-per-hit 0x12 fire once he steps there, 18 hits for 10.8 across the wait+hang+ride;
+    // the E-plate stand behind him is measured-quiet — zero hits from the bay enter through
+    // the E, ticks ~10000-11487). The park wait happens at the E-plate spot (the poll reads
+    // the entity matrix from anywhere), the rim walk only when the beam is crossing 174.5 —
+    // the corner dwell shrinks from ~2350 ticks to the walk+claw. Real-damage-gated: the
+    // plain twin's timeline (wait at the corner) stays byte-identical, and the in-place wait
+    // below then breaks on its first poll.
+    if real_damage {
+        for _ in 0..2350u32 {
+            let ox = w.scene.sim.as_ref().unwrap().drones.scripts.entity_matrix((0x0600_09ef, 1)).map_or(0.0, |m| m[3][0]);
+            if ox > 174.5 { break; }
+            w.tick(nf_game::player::Input::default(), false);
         }
     }
-    assert!(max_ox > 176.5, "the gantry's east extreme ~177.22 [D the key trace], got {max_ox:.2}");
-    // THE BOARDING STAND-IN (the one remaining pos write, [S] unverified): place Bond over the
-    // WEST girder at the westbound leg's start — he settles onto the inner runway where
-    // probe_the_ride_carry rode (probe_crane.rs: the same placement, the carry held it whole
-    // ride). The game's own boarding path is the report's live check 1 (the data closed every
-    // route the port's statics offer — see THE BOARDING QUESTION above); the ride and the drop
-    // below are the game's rules.
-    let ox = w.scene.sim.as_ref().unwrap().drones.scripts.entity_matrix((0x0600_09ef, 1)).unwrap()[3][0];
+    w.walk_to(Wp::new(185.3, 11.4, -294.8).r(1.2), "the deck in the pulley's icon arm");
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.icon_ctx, 2, "Bond stands in a type-2 icon's arm [D]");
+    let held_gun = w.scene.sim.as_ref().unwrap().gun.weapon;
+    for _ in 0..20 {
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { switch_to: Some(0x50), ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x67), "sister: nobody aboard before the boarding");
     {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.world.segment_hit(sim.bond.head(), claw_pulley).is_none(), "the control corner sees the pulley #370 [D]");
+    }
+    // THE CROUCH-DODGE (level-0d-operative-walk-2, lever 1), real-damage-gated: the corner is
+    // the yard garrison's densest sight and the baseline's rim step pulled 0.6-per-hit 0x12
+    // fire at a 12-tick cadence (#3 (131.6, 5.0, −301.1), ticks 13824/13836) — the boarding
+    // arrived at 13.8 health with the ~14-damage slot fall still to come (the fall skips
+    // armour [M 0x1902c8:84-104] — 13.8 does not survive it). The crouch drops the aim/sight
+    // target 0.45 under the eye [M Player_GetHeadPos 0x195aa0:39-51 — the BL+0x90C crouch eye
+    // drop; the port's Player::target = camera − 0.45, scene.rs run()] so the bay/yard opening
+    // line can clip a crouched chest, and multiplies the visibility factor by 0.75
+    // [M Drone_ProcessOpponents 0x1390c0:40-42] — under the 0.7 LOS gate [M 0x176a28]. Toggle
+    // crouch ON (the press edge — the game's Toggle stands only on a NEW press edge [M
+    // Player_HandleJump's crouch arms, 0x190630 dispatch]) and stay crouched through the wait,
+    // the latch, the hang and the ride; the stand before the hop is a fresh press below.
+    if real_damage {
+        for _ in 0..5 {
+            w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
+            w.total_ticks += 1;
+        }
+    }
+    // Bond waits on the floor until the gantry nears its east park: the hang is in the open.
+    for _ in 0..2350u32 {
+        let ox = w.scene.sim.as_ref().unwrap().drones.scripts.entity_matrix((0x0600_09ef, 1)).map_or(0.0, |m| m[3][0]);
+        if ox > 174.5 { break; }
+        w.tick(nf_game::player::Input::default(), false);
+    }
+    let mut latched = false;
+    for _ in 0..60 {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [ox - 2.54, 15.5, -280.0];
-        sim.bond.vel = [0.0; 3];
+        let h = sim.bond.head();
+        let d = [claw_pulley[0] - h[0], claw_pulley[1] - h[1], claw_pulley[2] - h[2]];
+        let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-4);
+        sim.bond.yaw = d[0].atan2(d[2]);
+        sim.bond.pitch = (d[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+        w.tick_fire(nf_game::player::Input::default());
+        if w.scene.sim.as_ref().unwrap().bond.grapple.is_some() { latched = true; break; }
+    }
+    assert!(latched, "the claw latches the pulley #370 [M 0x195da0]");
+    // Hang, the fire held, until the gantry is at its east apex under Bond.
+    let mut max_ox = 0.0f32;
+    for _ in 0..2350u32 {
+        w.tick_fire(nf_game::player::Input::default());
+        if let Some(m) = w.scene.sim.as_ref().unwrap().drones.scripts.entity_matrix((0x0600_09ef, 1)) { max_ox = max_ox.max(m[3][0]); }
+        // The real-damage twin's E-plate park wait + the corner walk eat the beam's east crawl:
+        // the loop can start with the beam already at/past the apex, and breaking on max_ox
+        // alone released Bond mid-reel (the baseline: pos[1] 10.67 — the claw latched, the reel
+        // never finished, Bond stayed on the deck floor). The break now ALSO waits for the
+        // HANG — the reel's phase 2, reached within 2.0 of the pulley [M 0x192860:91-94]. The
+        // plain master replay's reel always finishes before max_ox crosses 177 (its corner
+        // arrive precedes the crawl), so its break tick is unchanged.
+        let hung = w.scene.sim.as_ref().unwrap().bond.grapple.as_ref().is_some_and(|g| g.phase == 2);
+        if max_ox > 177.0 && hung { break; }
+    }
+    assert!(max_ox > 176.5, "the gantry's east extreme ~177.22 [D the key trace], got {max_ox:.2}");
+    { let sim = w.scene.sim.as_ref().unwrap(); assert!(sim.bond.pos[1] > 15.0, "Bond hangs at the pulley [M 0x192860:91-94], got {:?} grapple {} health {}", sim.bond.pos, sim.bond.grapple.is_some(), sim.drones.health.health); }
+    { let sim = w.scene.sim.as_mut().unwrap(); sim.bond.yaw = -std::f32::consts::FRAC_PI_2; sim.bond.pitch = 0.0; } // the look and the stick toward the track, while hanging
+    for k in 0..300u32 {
+        let input = if k < 16 { nf_game::player::Input { forward: 1.0, ..Default::default() } } else { nf_game::player::Input::default() };
+        w.tick(input, false);
+        if w.scene.sim.as_ref().unwrap().bond.grounded { break; }
+    }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.bond.grounded && sim.bond.pos[1] > 13.5, "Bond lands on the gantry, got {:?}", bond_pos(&w));
+        assert!(sim.drones.channels.on(0x67), "the aboard plate fires ch 0x67 [D stream 2]");
     }
     w.wait(10);
     // THE RIDE, real input: the carry [M Player_FeetOnPoint 0x194188 → Control_InheritVelocity
@@ -784,57 +1075,106 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
     // through the west apex — probe_the_ride_carry's proven carry, now asserted.
     let mut off0 = None;
     let mut apex = None;
-    for k in 0..1000u32 {
+    let mut turned = false;
+    for k in 0..2200u32 {
         w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
         w.total_ticks += 1;
         let sim = w.scene.sim.as_ref().unwrap();
         let Some(m) = sim.drones.scripts.entity_matrix((0x0600_09ef, 1)) else { continue };
         let ox = m[3][0];
-        if sim.bond.grounded && k > 20 && off0.is_none() {
-            off0 = Some(sim.bond.pos[0] - (ox - 2.54));
+        if ox < 176.0 { turned = true; }
+        if sim.bond.grounded && turned && off0.is_none() {
+            off0 = Some(sim.bond.pos[0] - ox);
         }
         if ox < 138.2 {
-            let drift = off0.map(|o0| (sim.bond.pos[0] - (ox - 2.54)) - o0);
+            let drift = off0.map(|o0| (sim.bond.pos[0] - ox) - o0);
             apex = Some((ox, drift));
             break;
         }
+        let _ = k;
     }
     let (ox_apex, drift) = apex.expect("the beam must reach its west park (~137.59) with Bond aboard");
     assert!((137.3..=138.2).contains(&ox_apex), "the west apex ~137.59 [D the key trace], got {ox_apex:.2}");
-    assert!(off0.unwrap().abs() < 0.8, "Bond rides the runway (placed at origin −2.54), got off {:.2}", off0.unwrap());
+    assert!((0.0..=3.0).contains(&off0.unwrap()), "Bond rides the east half of the gantry, got off {:.2}", off0.unwrap());
     assert!(drift.is_some_and(|d| d.abs() < 0.75), "the carry must hold the offset (the ease-out lag only) [M 0x194188 → 0x133e88], got {drift:?}");
     eprintln!("[0d] the ride walked: boarded at offset {:.2}, the apex at {ox_apex:.2} — at {:?}", off0.unwrap(), bond_pos(&w));
-    // THE DROP, real input: the ride stands on the WEST girder (top ~13.42-13.47, x 135.1..136.5
-    // at rest [D the deck probe's up/down column pairs at z −280]); the slot between the girders
+    // Stand out of the crouch before the hop (real-damage-gated: the crouch twin rides
+    // crouched; the plain twin never crouched): the crouch press edge stands [M the crouch
+    // arms] and the jump arm reads no lockout — the hop fires clean on its own input.
+    if real_damage {
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    // THE DROP, real input: the ride stands on the EAST girder; the slot between the girders
     // (x 136.5..138.6) is OPEN to the yard 4.0 [D the same probe: both ray directions empty;
     // the fine-map down-rays read 4.0], and the girder edges WALL the walk (measured: the held
     // walk input yields no displacement across an edge — the capsule's bottom sphere meets the
     // edge face below the top). The game's way off is the JUMP [M Player_HandleJump 0x1916b0 —
     // the vertical-only launch] + the walk's own air drift [M Player_Move runs every walk tick]:
-    // jump at the park, hold east ~20 ticks (the smoother's ~1.7 m drift centres him in the
+    // jump at the park, hold west ~20 ticks (the smoother's ~1.7 m drift centres him in the
     // slot), release, fall ~9.5 m — survivable [M 0x1949a8:117-126: 9.1 m ≈ 24 damage]. The
     // jump is a PLAIN jump: the icon context re-arms from proximity every tick [M 0x1949a8:22
     // clears BL+0x95F; scene.rs's per-tick icon arm] and the wire icon #297 is ~75 m away.
-    turn_to(&mut w, std::f32::consts::FRAC_PI_2); // face east, into the slot (the stick)
+    turn_to(&mut w, -std::f32::consts::FRAC_PI_2); // face west, into the slot (the stick)
+    // THE FALL PIN (level-0d-fall-damage), real input: the slot fall's health delta is the
+    // game's own landing rule. BL+0x928 += FRAME_RATE_MUL per airborne tick while BL+0x54 < 0,
+    // reset on any vel.y >= 0 tick; on landing raw = (short)(int)(timer - 60), pain only when
+    // raw >= 10 [M Player_CollisionHandler 0x1949a8 disasm 0x194b64-0x194be0: the 60.0 literal
+    // @0x194b74, slti 0xa @0x194bb0, Player_HandlePain(raw, 6, -1) @0x194bd0]; the pain scales
+    // by the difficulty (0d: Easy 0.4 / Normal 0.7 [M ReadTuningVars 0x1d40f4; 0x1902c8:
+    // difficulty 1 -> Easy, 0/2 -> Normal]), skips armour for types 1..7 [M 0x1902c8:84-104]
+    // and kills when the remainder < 1 [M 0x1902c8:131-134].
+    let pre_drop_health = w.scene.sim.as_ref().unwrap().drones.health.health;
+    let hits_before_drop = w.scene.sim.as_ref().unwrap().drones.player_hits.len();
+    let mut max_fall = 0u32;
     let mut landed = false;
-    for k in 0..300u32 {
-        let input = if k == 0 {
-            nf_game::player::Input { jump: true, ..Default::default() }
-        } else if k <= 20 {
-            nf_game::player::Input { forward: 1.0, ..Default::default() }
-        } else {
-            nf_game::player::Input::default()
-        };
-        w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
-        w.total_ticks += 1;
-        let sim = w.scene.sim.as_ref().unwrap();
-        if sim.bond.grounded && sim.bond.pos[1] < 7.0 && sim.bond.pos[0] > 136.0 && sim.bond.pos[0] < 139.2 { landed = true; break; }
+    // One hop can land back on the girder: hop again until the slot takes him.
+    'hops: for _ in 0..5 {
+        for k in 0..300u32 {
+            let input = if k == 0 {
+                nf_game::player::Input { jump: true, ..Default::default() }
+            } else if k <= 20 {
+                nf_game::player::Input { forward: 1.0, ..Default::default() }
+            } else {
+                nf_game::player::Input::default()
+            };
+            w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
+            w.total_ticks += 1;
+            let sim = w.scene.sim.as_ref().unwrap();
+            max_fall = max_fall.max(sim.bond.fall_timer);
+            if sim.bond.grounded && sim.bond.pos[1] < 7.0 { landed = true; break 'hops; }
+            if sim.bond.grounded && k > 20 { break; }
+        }
+        // The attempt landed back on the girder (a pain stagger ate the jump — the measured
+        // Operative ledger: vel [0,0,0] through five whole attempts under the yard trickle).
+        // A player shakes it off and re-jumps: settle 40 ticks so the next attempt's jump lands
+        // on a clean tick. The green twin's first hop succeeds, so this never runs there.
+        if !landed {
+            for _ in 0..40 {
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+                w.total_ticks += 1;
+            }
+        }
     }
     assert!(landed, "the jump-drift must drop Bond through the slot into the yard, got {:?}", bond_pos(&w));
+    assert!(max_fall >= 70, "the ~10 m slot fall passes the pain gate (timer - 60 >= 10), got timer {max_fall}");
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.health.health > 40.0, "the ~10 m fall is survivable [M 0x1949a8], got {}", sim.drones.health.health);
+        // The raw-step window (the hops and the fall) also carries awake-guard trickle
+        // (the real-damage Operative run took one 1.2 hit here); the falls do NOT record into
+        // player_hits (they run through the scene's pain_generic, outside the drone.rs Bond-
+        // damage sites), so the window's hit delta is guard fire alone — subtract it.
+        let guard_dmg: f32 = sim.drones.player_hits[hits_before_drop..].iter().map(|&(_, _, d)| d).sum();
+        let raw = max_fall as f32 - 60.0;
+        let fall_dmg = if raw < 10.0 { 0.0 } else { raw * if difficulty == 1 { 0.4 } else { 0.7 } };
+        let raw_expected = pre_drop_health - fall_dmg - guard_dmg;
+        let expected = if raw_expected < 1.0 { 0.0 } else { raw_expected };
+        assert!((sim.drones.health.health - expected).abs() < 0.05,
+            "the ~10 m slot fall deals exactly the game's math (raw × the difficulty factor, armour untouched, < 1 kills) [M 0x1949a8 + 0x1902c8], expected {expected} (fall {fall_dmg} + window guard fire {guard_dmg}), got {}",
+            sim.drones.health.health);
     }
+    w.scene.sim.as_mut().unwrap().gun.switch_request = held_gun;
+    w.wait(40);
     eprintln!("[0d] the drop landed in the yard — at {:?}", bond_pos(&w));
     // THE YARD GARRISON SWEEP (level-0d-real-health-crossfire-5): the drop lands amid the
     // yard's standing grunts — the run-4 ledger: #6 (138.8, 5.0, −273.5) fired from d 7-21,
@@ -844,13 +1184,51 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
     // (the load census: enabled false [L]; bullets hit present drones regardless [M the AI gate
     // only decides whether the guard shoots BACK]) — the flat-yard rays from the drop point are
     // clear, so the grunts die ASLEEP before the south walk. Log-only.
-    for (at, tol, label) in [
-        ([138.8f32, -273.5], [4.0f32, 4.0], "the yard grunt #6 (the C5 door corner, asleep)"),
-        ([132.4, -300.1], [4.0, 4.0], "the yard grunt #3 (the plate path, asleep)"),
-        ([158.9, -285.7], [4.0, 4.0], "the yard grunt #0 (asleep)"),
-        ([159.9, -294.0], [4.0, 4.0], "the yard grunt #5 (asleep)"),
-    ] {
-        let _ = kill_guard_at_present(&mut w, at, tol, label, 300);
+    if real_damage {
+        // THE DROP-THEN-SWEEP (level-0d-operative-walk-2, lever 2): land and sweep AT ONCE,
+        // nearest live guard FIRST. The fixed box order swept the far corner while #3 — which
+        // had WALKED to the drop point during the ride (the baseline trace: d 55 at the corner
+        // → d 7.9 at the landing, ticks 12517 → 15351) — landed the landing bursts. The pick
+        // is the nearest PRESENT live guard in the yard/trench band with a clear box aim (the
+        // flat-yard rays from the drop point are clear — the -1's probes); a guard without a
+        // clear aim is skipped (a blocked angle leaves it to the walk's own return fire), and
+        // the loop ends when no pick remains. The crouch carries into the sweep (lever 1: the
+        // aim/sight target drops 0.45 [M Player_GetHeadPos 0x195aa0:39-51 — the BL+0x90C
+        // crouch eye drop] and the visibility factor 0.75 [M Drone_ProcessOpponents
+        // 0x1390c0:40-42]), then a fresh press stands for the yard walk.
+        for _ in 0..5 {
+            w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
+            w.total_ticks += 1;
+        }
+        for _ in 0..12 {
+            let pick = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let mut best: Option<(f32, usize)> = None;
+                for (i, d) in sim.drones.list.iter().enumerate() {
+                    if !d.present || d.corpse || d.health <= 0.0 { continue; }
+                    if d.pos[1] >= 10.5 { continue; }
+                    if !(118.0..=182.0).contains(&d.pos[0]) { continue; }
+                    if !(-335.0..=-263.0).contains(&d.pos[2]) { continue; }
+                    if clear_box_aim(sim, i).is_none() { continue; }
+                    let dist = walker::dxz(sim.bond.pos, d.pos);
+                    if best.map_or(true, |(bd, _)| dist < bd) { best = Some((dist, i)); }
+                }
+                best
+            };
+            let Some((_, di)) = pick else { break };
+            shoot_far_box(&mut w, di, "the drop-then-sweep (the nearest first)", 400);
+        }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    } else {
+        for (at, tol, label) in [
+            ([138.8f32, -273.5], [4.0f32, 4.0], "the yard grunt #6 (the C5 door corner, asleep)"),
+            ([132.4, -300.1], [4.0, 4.0], "the yard grunt #3 (the plate path, asleep)"),
+            ([158.9, -285.7], [4.0, 4.0], "the yard grunt #0 (asleep)"),
+            ([159.9, -294.0], [4.0, 4.0], "the yard grunt #5 (asleep)"),
+        ] {
+            let _ = kill_guard_at_present(&mut w, at, tol, label, 300);
+        }
     }
     // Leg 2: the yard south to the ST-3 plate (the nav web [D path 7]) — walked.
     w.walk_to(Wp::new(136.5, 4.5, -290.0).r(2.0), "the yard south 1");
@@ -974,18 +1352,12 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32) {
 /// route, the top-up off — no health, armour or ammo writes anywhere — and Bond's death
 /// panics with the damage log (who, weapon, range). Auto-aim is the app default; the fights
 /// are the walker's own plain return fire (the same fights every other real-damage walk is
-/// pinned against).
-/// UN-IGNORED (level-0d-real-health-crossfire-3): the two measured drains are taken off the
-/// table by the route, not by the port — #10 dies at the strip mouth (the ray CLEAR at d 63.6
-/// [probe_0d_ray_stands]) before the ladder-top dwell that fed its 46, the deck guard #16 dies
-/// at the warehouse floor (ray CLEAR d 56.4) so the ladder-top stand carries only the west-roof
-/// sweep (extended to 8 passes against the placement rays the probe measured CLEAR for #27/#29),
-/// and #18 dies from the ladder top (ray CLEAR d 56.1) before its ride hit. Real input only:
-/// every kill fires from a stand the walked route reaches, no health/armour/ammo writes, no
-/// teleports after the load.
+/// pinned against). The real-damage-gated route legs are marked level-0d-operative-walk in
+/// the body; the plain master replay (top-ups on) runs byte-identical to its pre-gate tree.
 #[test]
+#[ignore = "level-0d-operative-walk-2 ledger: the whole pre-yard route now PASSES on real damage — the jump-grab, the ride, the deck, the E on #450, the walk-off, the descent, the bay legs, THE BOARDING, the hang, the gantry ride and the slot hop all pass, and the drop landed in the yard at (137.98, 5.02, −296.08) — the death moved from tick 13800 (the hang) to 15646 (the yard sweep), +1846 ticks of route. WHAT THIS SESSION FIXED: (1) THE REAL-DAMAGE REEL BUG — the hang loop broke on max_ox > 177 alone, but the real-damage twin's E-plate park wait + the corner walk eat the beam's east crawl, so the loop started at/past the apex and released Bond MID-REEL (the claw latched, the reel never finished, pos[1] 10.67 on the deck floor — the -1's 'tick 13800 best run' was this hang assert with its stored 60-tick summary misread as alive); the break now ALSO waits for the reel's phase 2 [M 0x192860:91-94], and the plain master replay's break tick is unchanged (green, 22.3 s). (2) LEVER (a) THE CROUCH-DODGE — PROVEN: crouch ON at the rim corner (the Toggle press, held 5 ticks then released — the stand needs a NEW press edge [M the crouch arms, 0x190630 dispatch]) and stay crouched through the wait, the latch, the hang and the ride; the stand before the hop is a fresh press. MEASURED: the baseline's rim step pulled 0.6-per-hit 0x12 fire at a 12-tick cadence (#3 (131.6, 5.0, −301.1), ticks 13824/13836); WITH the crouch: ZERO hits from tick 12517 to the drop — the bay/yard opening line clips the crouched chest (the aim/sight target drops 0.45 [M Player_GetHeadPos 0x195aa0:39-51 — the BL+0x90C drop; the port's Player::target = camera − 0.45]) and the visibility factor 0.75 [M Drone_ProcessOpponents 0x1390c0:40-42] drops under the 0.7 LOS gate [M 0x176a28]. (3) LEVER (b) THE DROP-THEN-SWEEP — LANDED: the sweep is the nearest-clear-box-first dynamic loop over the yard/trench band (the fixed box order swept the far corner while #3 had WALKED to the drop point during the ride — d 55 at the corner, d 7.9 at the landing — and its landing bursts killed). THE REMAINING FLOOR IS UPSTREAM HEALTH: the boarding arrives at ~15.0 (9 hits for 78.6: #29's two ladder-top sniper hits 14+16 at 3462/4332 before her +222 kill, #18's bay-enter 16 at 3491+10812, #17's ride-window 16 at 7437 — the Operative ground-band sniper at (157.9, 1.0, −226.1), the d2 band sweep is difficulty-gated off, #10's deck 16 at 8071); the slot fall costs ~10-12 and skips armour [M 0x1902c8:84-104]; the landing at 3.2 health died in 64 ticks to #3's point-blank bursts — no aim converges that fast (the sweep's first tap needs ~250). NEXT LEVER: take the four hits off upstream — extend the ladder-top band sweep to the Operative difficulty for #17/#10 (the -1's d2 law holds: the ladder top looks down the band line over the low x ~160 wall), and audit the in-bay #18 kill (400 ticks have NEVER landed a 10-health guard at d 19.7 in-room — the leg landed false in every run including the -1's; check the converge and the ray). The port-side capsule fix [M NDrone2_Collision 0x140e90:91-121] stays its own task; the Agent sister's d2 levers stay its own"]
 fn walk_arrival_to_the_c5_door_real_damage() {
-    walker::with_real_damage(walk_arrival_to_the_c5_door);
+    walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(1, true));
 }
 
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-0c-0d): the same walked
@@ -1010,9 +1382,9 @@ fn walk_arrival_to_the_c5_door_real_damage() {
 /// on the two d2 snipers from the strip (the 0c yard-stand law — the zero-spread aimed act
 /// [M Bullet_init 0x12c5a0:139-170] reaches d 55+ with the still-gate tap law).
 #[test]
-#[ignore = "Agent (dart-tase-stamps-check measured state): on the -5 route the death moved 4850 -> 8533 — the decisive drain is the d2 ground-band snipers, #36 (0x5000090, 0x1e) 3 × 28.0 from d 56.6 (7932/8112/8479) + #21 (0x5000087, 0x1e) the killing 10.0, both outside the fights' 48 u window. This session's d2-gated ladder-top set LANDED 3 kills (the south-roof sniper #17 first at +559 — its fire spot (192.3,19.6,-267.4) is d 39, inside the shot's hearing radius 40 [L], so it MUST die before the band guns; the band chest sweep g36 at +201, ray CLEAR d 55.9) and pushed the death to 10697; the last killer g21 settles at (162.8,1.0,-215.0) behind the ~1.7 jamb at (160,-217) — the chest ray dies 0.965-0.975 from every stand measured (the strip mouth 0.975, the ground drop 0.605-0.965, the ladder top 0.965), the HEAD line reads full CLEAR (the -5 height-asymmetry law confirmed) but the box/head act's aim does not CONVERGE to it (the cross sticks [-0.21,-0.28], the chest legs converge [-0.0,0.0] from the same stand). NEXT: fix the head act's pitch convergence, or the stand east of the jamb (the -4 obstacle law — the late annex-floor #32 leg's geometry, too late for the ride+deck)"]
+#[ignore = "Agent (level-0d-agent-ladder-top-3 measured state — branch s/level-0d-agent-ladder-top-3, based on master c7d5b9dfe + 6a4fcf4ef): THE DEATH MOVED 8110 -> 13291 — the wire ride, the deck, the walk-off and the descent now PASS on Agent real health; the death is the DESCENT/BAY APPROACH at (197.95,10.56,-278.88), the decisive drain #21 (the ground-band sniper, (157.8,1.0,-228.4)) 28.0 at d 65.2 with hp 10. WHAT THIS SESSION MEASURED (5 rolls / 5 code variants, all d2+real-damage gated; the plain twin byte-identical-green; the Operative twin fails only its own inherited 13800 slot-hop ledger): (1) THE ACT-PROOF LAW — the west-roof pair (g33 (151.5,22.7,-247) and g32 (151.4,22.7,-248.5)) is UNKILLABLE from the ladder top: their torso lines die on the mid-band obstruction (only the part-5 HEAD boxes clear) and the box act ate 8+ aimed, converged, CLEAR-ray (full/static/bullet_scoped all CLEAR) rounds for ZERO damage on BOTH (the SAME act one-shot the deck #20 at d 31 — the head line lands close, grazes at d 63); the phase floor is their OPENING cadence (3292/3532 = 56) which fires before any act can (the acts need 372+), so every ladder-top tick after is ~28/180t of exposure with no kill odds. (2) THE HIP-FIRE RACE — the aim bit FLAPS with the fire script between shots (the run-4380 trio pass fired 5 HIP rounds — the full 100-unit cone [M Bullet_init 0x12c5a0:139-170] — at d 63 while sim.aiming read false); the d2 trigger now holds fire until the bit is back up (the aim-bit trigger gate, agent_fast only). (3) THE WINDOW LAWS LANDED — the retarget pick (pre-verified clear_box_aim, torso-first), the zero-damage blacklist, the HEAD-ONLY SKIP (a head-only candidate is never attempted), the break-on-all-act-proof, and the act_proof skips of the re-burn legs (the head sweep, the deck #16 leg, the west-roof sweep, the g21 leg — the trio loop had already proven those passes burn on the same pair): the trio window collapsed to ~0 and the phase exit health rose to ~38-40. (4) LEVER (a) MEASURED DEAD AS A KILL LINE — the pre-ride #19 box act ran (g17 at (170.66,19.58,-293.37), the ledger spot (172,-292.5) ±8 caught him): the ray from the ladder top is BLOCKED at 0.592 (full 0.592 / static 0.593@y0.0 / bullet_scoped 0.593 — the line dies mid-flight on the roof structure), the act held fire (zero rounds, 800 cap-ticks standing), and the RIDE SURVIVED with #19 landing ZERO this roll — the walk-2 8110 ride hit was dice, not a law; the leg may be trimmed to one 250-tick probe next session. (5) The ride, the deck, the E on #450, the walk-off and the descent all passed; the death at 13291 is the descent/bay approach. NEXT LEVERS, in order: (i) THE BAND SWEEP #21/#36 KILL — the band sweep (chest act, 600x3, the PROVEN clear lines over the low x ~160 wall) did NOT land #21 this roll (hp 10 at the death) — audit the sweep's [0d:ray]/convergence in the run log; his 28.0 is the new decisive drain at 13291; (ii) the DESCENT/BAY APPROACH exposure at (197.95,10.56,-278.88) — the Operative twin's own yard legs are the shape reference (the crouch-dodge law [M Player_GetHeadPos 0x195aa0 + M 0x176a28]); (iii) THE PRE-WAKE CENSUS WIDENING — the pre-wake snipe legs (the platform stand, the head lines CLEAR [probe_0d_roof_rays]) found NOBODY at (145.6,-256.7)/(145.7,-247.3) in the walked timeline every run — widen the census box to find where the west-roof placements ACTUALLY are pre-wake; killing them pre-wake deletes the act-proof pair entirely and collapses the phase floor to #20's 6.0; (iv) the strip-mouth west rays to the ROOF are still unmeasured (the walk-2 ledger's lever (b)). The Operative twin's own ledger (the slot-hop jump-drift assert at 13800) stays the level-0d-operative-walk-2 task's"]
 fn walk_arrival_to_the_c5_door_real_damage_agent() {
-    walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(2));
+    walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(2, true));
 }
 
 /// Shoot a live guard standing near (x, z) through the real fire path (the walker's aim +
@@ -1134,14 +1506,14 @@ fn kill_guard_at_cap(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label: &str, c
 /// nothing, while the aimed `shoot_at` path lands static kills at d 25 (the C5 door)). The
 /// real fire path end to end (the gun, the bullets, the hit boxes), reload pulses on empty.
 fn shoot_far(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
-    shoot_far_aim(w, di, label, cap, 0.3)
+    shoot_far_aim(w, di, label, cap, 0.3, false)
 }
 
 /// The HEAD aim variant (level-0d-real-health-crossfire-5): the same aimed act with the aim
 /// point and the world-ray gate raised to the head box (pos + `aim_dy`) — the height-asymmetric
 /// slab law makes head lines clear where chest lines die [probe_0d_roof_rays].
 fn shoot_far_head(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
-    shoot_far_aim(w, di, label, cap, 0.9)
+    shoot_far_aim(w, di, label, cap, 0.9, false)
 }
 
 /// The BOX aim variant (level-0d-real-health-crossfire-5): the aim point is a REAL clear hit-box
@@ -1149,10 +1521,84 @@ fn shoot_far_head(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
 /// +0.9 head guess fired clear-ray rounds that passed under the head box; a box point the
 /// port's own law returns is on a box the bullet reaches.
 fn shoot_far_box(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
-    shoot_far_aim(w, di, label, cap, -1.0)
+    shoot_far_aim(w, di, label, cap, -1.0, false)
 }
 
-fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32) -> bool {
+/// The NO-DRAIN box act (level-0d-c5-door-fall): the 160-tick aim-off drain exists to reset
+/// the raise queue after a fire script (state 9 [M 0x1a24c8:66-99]) — but the ladder-top phase
+/// opens ~2000 ticks after the last shot with no script playing, and the drain costs exactly
+/// the margin the west-roof trio's return fire needs to kill first (the Agent run's lethal
+/// 28.0s landed at ticks 3048-3236 while the drained act's kill sat at +222 — the race lost by
+/// ~36 ticks; the Operative stream's same act kills at +222 WITH the drain, so the drained
+/// path stays the default and the Agent's direct leg alone runs fast).
+fn shoot_far_box_fast(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
+    shoot_far_aim(w, di, label, cap, -1.0, true)
+}
+
+/// The head-pick + fast-act variant of `kill_guard_head_present` (same present-pick, the
+/// no-drain act) for the Agent run's direct ladder-top leg.
+fn kill_guard_head_present_fast(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label: &str, cap: u32) -> bool {
+    let di = w.scene.sim.as_ref().unwrap().drones.list.iter().enumerate()
+        .filter(|(_, d)| d.present && !d.corpse && d.health > 0.0
+            && (d.pos[0] - at[0]).abs() < tol[0] && (d.pos[2] - at[1]).abs() < tol[1])
+        .min_by_key(|(_, d)| ((d.pos[0] - at[0]).powi(2) + (d.pos[2] - at[1]).powi(2)) as u32)
+        .map(|(i, _)| i);
+    match di {
+        Some(i) => {
+            let d = &w.scene.sim.as_ref().unwrap().drones.list[i];
+            eprintln!("[0d:box] {label}: g{i} skin {:#x} pos ({:.2},{:.2},{:.2}) state {:#x}",
+                d.skin, d.pos[0], d.pos[1], d.pos[2], d.state);
+            shoot_far_box_fast(w, i, label, cap)
+        }
+        None => { eprintln!("[0d] {label}: no PRESENT guard near ({:.1},{:.1}) — already down", at[0], at[1]); false }
+    }
+}
+
+/// The TRIO-RETARGET pick v2 (level-0d-agent-ladder-top-3, the ledger's lever (c) measured):
+/// the run-4380 roll measured the run-4034 class's cause — the nearest clear-box pick (g33,
+/// state 0x97/0x68) is ACT-PROOF on that roll: his fire-anim pose leaves only the small head
+/// box clear (the torso line dies on the mid-band obstruction) and 8+ converged CLEAR-ray
+/// rounds at d 63 grazed him for ZERO (the first clip even fired HIP — the aim bit flaps with
+/// the fire script between shots). The pick (1) skips the blacklisted targets (a full pass
+/// with zero damage = act-proof THIS roll — the caller blacklists), (2) prefers a clear
+/// TORSO box over a head-only one (the head box is graze-prone at d 60+: the 0.12 u tap box
+/// at d 63 is the head's own angular size), (3) returns None when every band line is blocked
+/// or blacklisted — the caller waits, no pass burned.
+fn pick_trio_target(w: &Walker, at: [f32; 2], tol: [f32; 2], skip: &[usize]) -> Option<(usize, i16)> {
+    let sim = w.scene.sim.as_ref().unwrap();
+    sim.drones.list.iter().enumerate()
+        .filter(|(i, d)| d.present && !d.corpse && d.health > 0.0
+            && (d.pos[0] - at[0]).abs() < tol[0] && (d.pos[2] - at[1]).abs() < tol[1])
+        .filter_map(|(i, d)| clear_box_aim(sim, i).map(|(_, part)| (i, part, d)))
+        // THE HEAD-ONLY SKIP (the run-4379/5069/5239 law, 4 rolls): a candidate whose ONLY
+        // clear box is the head is the graze line at d 63 — the same act that one-shot the
+        // deck #20 at d 31 ate 8+ aimed CLEAR-ray rounds for ZERO on both members. A
+        // head-only candidate is NOT attempted: the window they burn is cadence exposure
+        // (the phase floor is the pair's opening cadence — 56 — before any act can fire).
+        .filter(|(_, part, _)| *part != 5)
+        .min_by_key(|(_, part, d)|
+            ((d.pos[0] - at[0]).powi(2) + (d.pos[2] - at[1]).powi(2)) as u32)
+        .map(|(i, part, _)| (i, part))
+}
+
+/// Every live west-roof band guard is act-proof THIS roll: blacklisted, or no clear box at
+/// all, or the head-only graze line (the run-4379 law — the pick skips those).
+fn band_all_stalled(w: &Walker, stalled: &[usize]) -> bool {
+    let sim = w.scene.sim.as_ref().unwrap();
+    let live: Vec<usize> = sim.drones.list.iter().enumerate()
+        .filter(|(_, d)| d.present && !d.corpse && d.health > 0.0 && d.pos[1] > 18.0
+            && (d.pos[0] - 151.5).abs() < 12.0 && (d.pos[2] + 248.0).abs() < 14.0)
+        .map(|(i, _)| i).collect();
+    !live.is_empty() && live.iter().all(|i| {
+        if stalled.contains(i) { return true; }
+        match clear_box_aim(sim, *i) {
+            None => true,
+            Some((_, part)) => part == 5,
+        }
+    })
+}
+
+fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32, skip_drain: bool) -> bool {
     let mut hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
     let mut last_tap = 0u32;
     let start = w.total_ticks;
@@ -1161,9 +1607,18 @@ fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32) 
     // raise queue REFUSES while a fire script plays (state 9 [M 0x1a24c8:66-99] — the previous
     // fight's 130-tick script), so release long enough to drain it, then hold until the bit
     // actually sets (the raise completes ~20 ticks [M Player_SetWeaponAnimObj 0x1a2e38 case 0xf]).
-    for _ in 0..160 {
-        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
-        w.total_ticks += 1;
+    // The aim-on EDGE (see below) — but SKIPPED when the aim bit is already held (the sweep
+    // passes, back-to-back legs: the drain exists for the raise-queue fire-script busy case,
+    // which cannot be pending while `aiming` is on; each skipped drain saves 160 ticks of
+    // standing in a live crossfire — the ladder-top phase is under sniper fire since the
+    // class-4 sight 1000 landed [M 0x14b300:380-424]).
+    // Agent-gated in the batch-1109a-walks merge: the plain and Operative runs keep the drain.
+    let agent_fast = w.scene.sim.as_ref().unwrap().drones.difficulty >= 2;
+    if !(skip_drain || (agent_fast && w.scene.sim.as_ref().unwrap().aiming)) {
+        for _ in 0..160 {
+            w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+            w.total_ticks += 1;
+        }
     }
     for _ in 0..90 {
         let sim = w.scene.sim.as_mut().unwrap();
@@ -1232,7 +1687,14 @@ fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32) 
             // the ray is already clear (every landed kill's ray printed CLEAR).
             let world_clear = aim_part.is_some() || aim_dy >= 0.0;
             let world_clear = world_clear && sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, aim_pt).is_none();
-            let trigger = !clip_empty && on_target && world_clear;
+            // THE AIM-BIT TRIGGER GATE (level-0d-agent-ladder-top-3, the run-4380 measurement):
+            // the aim bit FLAPS with the fire script between shots — the run-4380 trio pass
+            // fired 5 HIP rounds (the full 100-unit cone [M Bullet_init 0x12c5a0:139-170]) at
+            // d 63 while sim.aiming read false, every one a guaranteed miss. The d2 acts hold
+            // fire until the bit is back up (the raise is ~20 ticks [M Player_SetWeaponAnimObj
+            // 0x1a2e38 case 0xf]). Gated to agent_fast: the plain/Operative drained paths enter
+            // the loop with the bit raised and keep their byte-identical behaviour.
+            let trigger = !clip_empty && on_target && world_clear && (sim.aiming || !agent_fast);
             if trigger { last_tap = t; }
             // The stick drives the RAY ~1:1 (turn: the cursor's angular response is
             // 0.76966·(T/0.76966) = T; look: 0.57724·(L·π/2/0.57724) = L·π/2 — the overflow

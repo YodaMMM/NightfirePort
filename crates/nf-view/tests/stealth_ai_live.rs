@@ -9,6 +9,9 @@
 //!   cone), × Bond's factor `+0x22C` unless the drone has alert bits AND alertness ≥ 1; under 2
 //!   units with line of sight 1.0. The factor is `Drone_ProcessOpponents` 0x1390c0: the product
 //!   of the AI visibility boxes holding Bond, ×0.75 in the crouch substate (obj+0xF6 == 4).
+//! - the stored value `+0x230`: `ProcessDroneSight` 0x176a28 zeroes it when v < 0.7 (disasm
+//!   0x176bc4 `c.olt.s f0,f21` (0.7), `bc1fl` past 0x176bd4 `swc1 f20(0),0x230(s0)`), so the law is
+//!   checked on the formula (`Drone::visibility_formula`) and the field against that store rule.
 //! - sight `DroneVision_ProcessDroneSight` 0x176a28: a guard with v ≥ 0.7 gets the LOS ray; every
 //!   LOS tick counts `+0x270`; `HaveOpponentSight` 0x175ef0 acks the sighting once the count
 //!   reaches `DroneFunc_ReactionTime` 0x14ac60 — on 07000002/03/05/09/0A
@@ -107,7 +110,7 @@ fn predict(g: &nf_game::drone::Drone, bond: [f32; 3], factor: f32) -> f32 {
 }
 
 #[derive(Debug, Default)]
-struct Trace { first_los: Option<u32>, first_seen: Option<u32>, states: Vec<(u32, u8)>, max_vis: f32, max_err: f32, los_dist: Option<f32> }
+struct Trace { first_los: Option<u32>, first_seen: Option<u32>, states: Vec<(u32, u8)>, max_vis: f32, max_err: f32, store_err: f32, los_dist: Option<f32> }
 
 /// Run `ticks` with a fixed input, recording the guard's sight timeline and the worst
 /// |port visibility − predicted| (`factor` = Bond's expected `+0x22C`).
@@ -124,10 +127,14 @@ fn run(w: &mut Walker, gi: usize, ticks: u32, input: Input, factor: f32) -> Trac
             t.los_dist = Some(((p[0] - g.pos[0]).powi(2) + (p[1] - g.pos[1]).powi(2) + (p[2] - g.pos[2]).powi(2)).sqrt());
         }
         if g.seen && t.first_seen.is_none() { t.first_seen = Some(k); }
-        if t.first_seen.is_none() { t.max_vis = t.max_vis.max(g.visibility); }
-        if t.first_seen.is_none() { t.max_err = t.max_err.max((g.visibility - predict(g, p, factor)).abs()); }
+        // The 0x175af0 value, and the field ProcessDroneSight leaves (0 under 0.7 [M 0x176bc4-0x176bd4]).
+        let raw = g.visibility_formula();
+        if t.first_seen.is_none() { t.max_vis = t.max_vis.max(raw); }
+        if t.first_seen.is_none() { t.max_err = t.max_err.max((raw - predict(g, p, factor)).abs()); }
+        if t.first_seen.is_none() && g.vision_on && g.dist >= 2.0 { t.store_err = t.store_err.max((g.visibility - if raw >= 0.7 { raw } else { 0.0 }).abs()); }
         if g.state != last { t.states.push((k, g.state)); last = g.state; }
     }
+    assert!(t.store_err < 3e-3, "+0x230 holds v when v >= 0.7, else 0 [M 0x176a28 disasm 0x176bc4-0x176bd4] (worst {})", t.store_err);
     t
 }
 
@@ -220,9 +227,10 @@ fn cycle_to(w: &mut Walker, want: &dyn Fn(u8) -> bool) -> bool {
 
 /// One trigger pull 10 units behind the 09 guard (out of the cone, facing away). The P2K's fire
 /// script plays 0x403 at frame 1 [D 0x06000823 op 1]; its table row (inner/outer/weight [D
-/// ACTION.ELF sound table]) sets the loudness exactly, alertness gains 0.01 of it and the drone
-/// takes msg 0x14 → HeardNoise 0xa2 → HeardNoiseAware 0xa3 the same tick [M 0x177800 →
-/// 0x173be8]. Sister: the K5 dart's 0x5ce (0x06000948 op 1 [D]) carries weight 0 — no loudness,
+/// ACTION.ELF sound table]) sets the loudness exactly and alertness gains 0.01 of it. The guard is
+/// mode 9, which never investigates: `AlertSound` zeroes its HeardNoise flag for that mode [M-dis
+/// 0x177928-0x177980, then `beq s3,zero` 0x1779b4] and attacks only above alertness 0.7, so a shot
+/// this far off changes nothing. Sister: the K5 dart's 0x5ce (0x06000948 op 1 [D]) carries weight 0 — no loudness,
 /// no alertness, no state change: the dart is silent to guards.
 #[test]
 fn hearing_09_gunshot_vs_dart() {
@@ -255,8 +263,9 @@ fn hearing_09_gunshot_vs_dart() {
             eprintln!("heard at k{k}: loud {loud} alert {alert} log {log:?}");
             assert!((loud - want).abs() < 0.05, "loudness {loud} = the 0x403 row at {d:.2}u ({want})");
             assert!((alert - 0.01 * loud).abs() < 1e-3, "alertness gains 0.01 × loudness (decay ≤ 1/3000 a tick)");
-            let tail: Vec<u8> = log.iter().rev().take(2).map(|e| e.1).collect();
-            assert_eq!(tail, vec![nf_game::drone::state::HEARD_NOISE_AWARE, nf_game::drone::state::HEARD_NOISE], "msg 0x14 → 0xa2 → 0xa3");
+            assert!(alert <= 0.7, "the shot alone stays under the attack row, {alert}");
+            assert!(!log.iter().any(|e| e.1 == nf_game::drone::state::HEARD_NOISE), "mode 9 has no HeardNoise row: {log:?}");
+            assert_eq!(g.state, nf_game::drone::state::CIVILIAN, "and no reaction at this alertness");
         } else {
             assert_eq!(h.weight, 0.0, "the dart's sound row carries no alert weight [D]");
             assert!(heard.is_none(), "the dart shot is silent to the guard");

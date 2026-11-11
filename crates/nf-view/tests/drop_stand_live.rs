@@ -104,7 +104,11 @@ fn bond_on_a_resting_drop_stands_at_floor_plus_1_1_and_takes_it() {
             .filter(|(_, p)| p.kind == nf_game::pickup::kind::WEAPON && !p.gone)
             .map(|(i, _)| i).next_back().expect("the guard's weapon drop rests");
         let c = sim.drones.pickups[di].centre();
-        (c, sim.world.floor_below([c[0], c[1] + 3.0, c[2]], 10.0).expect("the drop rests on floor")) };
+        // The floor ray starts 1.0 over the drop: since the stream join moved the guard's walk, the
+        // Raptor dies at (-4.6, 6.3, 0.4) and its drop rests at (-5.15, 5.43, -1.06) under a
+        // surface at 8.05 [D the floor ray from 3.0 above], which a ray from 3.0 above read as the
+        // drop's floor.
+        (c, sim.world.floor_below([c[0], c[1] + 1.0, c[2]], 10.0).expect("the drop rests on floor")) };
 
     // Stand exactly on the drop (the take_drop convention: 0.4 above its centre).
     {

@@ -508,6 +508,11 @@ impl Level {
     pub fn scene_instances(&self, cels_only: bool) -> (Vec<Instance>, usize) {
         let (mut out, missing) = self.instances(cels_only);
         if cels_only {
+            // The main map's 0xd5 records draw through the scene's placement walk (its
+            // per-triangle backface cull is `OneSided_Update` 0x1e7d58's same job), so the
+            // collision-only instance `instances` appends for them stays out of the cel-graph walk.
+            let main = self.main_map();
+            out.retain(|i| !(Some(i.map) == main && i.placement.flags & 0xff == 0xd5 && !i.placement.creates_cel()));
             // 0xE2 = `SS_Create` 0x1a9c58 ("SimpleScript"): a placed object (class 0x25) with its own glist, drawn
             // (`obj+0xFA |= 0x44`) and room-linked at load; it sits at its placement until a channel activates it
             // (`SS_Activate` 0x1a9ea8) and `SS_Update` 0x1a9948 plays its keys [M]. 07000006's barrel trap
@@ -604,6 +609,73 @@ impl Level {
                     out.push(Instance { map, object, matrix: placement::object_matrix(p.rotation, p.translation), placement: p.clone() });
                 }
             }
+            // The main map's class-0xd5 records (`parsemap_create_dynamic_objects` 0x1d04f0 case
+            // 0xd5 → `OneSided_Create` 0x1e7ce8: `control_create_object` + obj+0xD8 = the celglist,
+            // obj+0xff = 0x4c, `build_LinkToRoom`; reached only through the flag-1 pass
+            // `ResetMap_Load` 0x1d6850 over the last block-0x1a = the main map, and only for a
+            // placement the 0xa000 gate admits [M 0x1d1b68:93]). Its glist collision rides the
+            // game's dynamic pick (`Collide_PickObj` 0x1eae80 admits it: obj+0xF0 = 0, no class
+            // mask bit, glist collision non-zero — the mine's admission path), so Bond meets the
+            // wall from BOTH sides — the one-sidedness is draw-only (`OneSided_Update` 0x1e7d58
+            // toggles obj+0xF0 bit 0x10 by viewer side). The placement carries no 0x8000, so the
+            // static-cel pass never builds it and the port's world had a hole there (07000041's
+            // "1-Sided Thing", plc 86: 4/4 probe rays through its plane returned None before this
+            // fold). The object never moves, so the port folds the record's collision into the
+            // static set (the 0x19 precedent); the draw stays with the scene's placement walk
+            // (its per-triangle backface cull is OneSided_Update's same job — scene.rs).
+            let m = &self.maps[main];
+            for p in &m.placements {
+                if p.flags & 0xff != 0xd5 || p.flags & 0xa000 != 0 { continue; }
+                let target = if p.by_hash() { self.by_hash.get(&p.hashcode).copied() } else if (p.index as usize) < m.objects.len() { Some((main, p.index as usize)) } else { None };
+                let Some((map, object)) = target else { missing += 1; continue };
+                if self.maps[map].objects[object].collision.is_none() { continue; }
+                let matrix = placement::object_matrix_for_class(0xd5, false, p.rotation, p.translation, p.quaternion());
+                out.push(Instance { map, object, matrix, placement: p.clone() });
+            }
+            // The hurt volumes (kind 0xE4, `Hurt_Create` 0x17e870): class-0x1C objects whose
+            // glist (`Control_SetGList` 0x17e870:44) carries the hurt plane's OWN collision
+            // block, linked to a room at load (`build_LinkToRoom` 0x17e870:46) — the player's
+            // movement capsule meets the plane as an object hit and `Player_DealWithObjHit`
+            // 0x194458 applies the damage [M]. The planes are therefore solid ground the game
+            // walks: 07000005's valley basin floor east of the lip IS hurt placement 331's own
+            // 2-tri plane at y 5.107 [D the 07000005.bin block walk — the outdoor room's block
+            // 262 ends at z 125.98 while the hurt plane spans x 80.78..168.38, z 96.66..144.68,
+            // the whole basin band; the port's world had no floor past the lip, the
+            // walkreal_07000005_live valley ledger]. Fold the UNGATED volumes (gate = param 2
+            // [M Hurt_Create 0x17e870 reads placement+0x34 into ext+0x18; 0 = ungated]) as
+            // static instances — the 0x19/0xd5 precedent (their runs ride the `always` bucket,
+            // the port's stand-in for linked non-cel objects; the game links each hurt object
+            // to the ONE room `build_FindCel` 0x1c8cb0 picks at its position, and on 07000005
+            // the basin planes resolve to cel 14 — the bucket the port's always runs test
+            // everywhere covers it). A GATED volume loads with obj+0xF0 bit 0x20 set [M
+            // 0x17e870 tail — the channel starts low] and `Collide_Pick` 0x1eb320:140 skips
+            // that bit, so the game's plane is not solid while the gate is low: those stay out
+            // of the static fold (the port's per-tick volume contact keeps their damage side).
+            for (mi, m) in self.maps.iter().enumerate() {
+                for p in &m.placements {
+                    if Self::folded_hurt(p).is_none() { continue; }
+                    let target = if p.by_hash() { self.by_hash.get(&p.hashcode).copied() } else if (p.index as usize) < m.objects.len() { Some((mi, p.index as usize)) } else { None };
+                    let Some((map, object)) = target else { missing += 1; continue };
+                    if self.maps[map].objects[object].collision.is_none() { continue; }
+                    let matrix = placement::object_matrix_for_class(0xe4, false, p.rotation, p.translation, p.quaternion());
+                    out.push(Instance { map, object, matrix, placement: p.clone() });
+                }
+            }
         }
         (out, missing)
+    }
+
+    /// The static fold's hurt filter, shared with the collision build (level-05-basin-floor-4):
+    /// a non-cel kind-0xE4 placement with NO gate (param 2 == 0 [M `Hurt_Create` 0x17e870 reads
+    /// placement+0x34 into ext+0x18; 0 = ungated]) — the exact predicate the `instances(cels_only)`
+    /// fold above admits — paired with its object-hit numbers (param 0 byte = the pain type,
+    /// param 1 int→float = the damage [M `Hurt_Create` 0x17e870:24-31, `Hurt_GetDamage` 0x17ea18]).
+    /// `CollisionWorld::build_scoped` re-runs this over every pushed instance so the folded
+    /// planes' damage rides the object-hit path (`Player_DealWithObjHit` 0x194458:94-103) without
+    /// a second copy of the filter.
+    pub fn folded_hurt(p: &Placement) -> Option<(f32, u8)> {
+        if p.flags & 0xff != 0xe4 || p.creates_cel() { return None; }
+        if p.params.iter().find(|(i, _)| *i == 2).map(|&(_, v)| v as u16).unwrap_or(0) != 0 { return None; }
+        let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map_or(0, |&(_, v)| v);
+        Some((param(1) as i32 as f32, param(0) as u8))
     }}

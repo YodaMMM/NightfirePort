@@ -157,9 +157,13 @@ fn shooting_the_lobby_roof_glass_breaks_it() {
           .map_or(0u16, |r| u16::from_le_bytes([r[0x10], r[0x11]]));
       eprintln!("[glass] armed weapon {:#x} word {wd:#06x}", sim.gun.weapon);
       assert!(wd & 0x106 == 0, "the armed gun's word passes the game's base mask [M 0x1ece94]"); }
-    // Aim at the pillar's body 1.9 north of the stance (inside the slab's z span, standing
-    // height): the round's line crosses the slab [D the break bounds].
-    let target = [8.02f32, -366.0, 36.4];
+    // Aim at the slab 2.1 north of the stance, in the clear part of its z span (36.10..37.38),
+    // standing height: the round's line crosses the slab [D the break bounds] before any world
+    // surface. The first solid node ends the round's walk [M Collide_Update 0x1ea398:216-229]
+    // (the world stop rides with the pane ride, drone.rs BREAK_WORLD_STOP): the old aim at
+    // z 36.4 met the frame's -z face (z 36.1..36.6) ahead of the grown pane box, so it could
+    // only break the pane while the world stop was off.
+    let target = [8.02f32, -366.0, 36.95];
     let mut killed = false;
     for t in 0..2400u32 {
         {

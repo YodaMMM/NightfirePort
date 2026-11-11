@@ -149,11 +149,12 @@ fn a_player_round_detonates_the_oil_barrel_and_the_blast_takes_the_twin() {
         let b = &sim.drones.props.destroy[i321];
         // The disc row [D 07000006 #321: p0 0x29, p1 0, p2 0xa, p3 0x14, p4 0xf8, p5 0x12c; M
         // Destroy_Create 0x12c318:31-48's param map — p0 the OUT channel, p2 the smash type, p3
-        // the health pool, p4 the ~bullet mask, p5·0.01 the blast damage].
+        // the health pool, p4 the ~bullet mask, p5·0.01 the blast radius].
         assert_eq!((b.channel, b.kind), (0x29, 0xa), "the barrel's out channel and smash type [D p0/p2]");
         assert_eq!(b.mask, 0xff07, "~p4 = 0xFF07 [D p4 0xf8; M 0x12c318:41-47]");
         assert!((b.health - 20.0).abs() < 0.01, "the health pool p3 0x14 [D]");
-        assert!((b.blast_damage - 3.0).abs() < 0.01, "the blast damage p5 0x12c·0.01 [D; M 0x12c318:48]");
+        assert!((b.blast_radius - 3.0).abs() < 0.01, "the blast radius p5 0x12c·0.01 [D; M 0x12c318:48, 0x12bd04]");
+        assert_eq!(b.blast_damage(), 100.0, "the blast damage = the type byte 0xa ×10 [M 0x12bcd8-0x12bd0c]");
         assert!(!b.dead, "sister: the barrel stands before the shot");
         assert!(!sim.drones.props.destroy[i322].dead, "sister: the twin #322 stands before the shot");
         assert!(!sim.drones.channels.on(0x29), "sister: ch 0x29 silent before the shot");
@@ -386,12 +387,23 @@ fn the_securityroom_window_breaks_on_the_gunshot() {
     // A stance with a clean line: probe the four side offsets for an unblocked eye→centre
     // segment (the world's own collision is the judge), then drop (the documented stand-in
     // transit — the security room is off walkreal's legs) and shoot through the real trigger
-    // path.
+    // path. The pane is flat in z (lo z = hi z), so the stances square to its face go first:
+    // join-reds-a — with the panes riding the collision set the round's world stop counts
+    // (drone.rs PANE_RIDE / BREAK_WORLD_STOP), and the old first pick (+2.6 along x, which the
+    // drop pushed out to z −15.35) shot along the wall: the round met the jamb at x 31.02, z −16.0
+    // (static, surface 0x0a) before the pane's edge (x hi 30.90).
     let mut stood = false;
-    for c in [[2.6f32, 0.0, 0.0], [-2.6, 0.0, 0.0], [0.0, 0.0, 2.6], [0.0, 0.0, -2.6]] {
+    for c in [[0.0f32, 0.0, 2.6], [0.0, 0.0, -2.6], [2.6, 0.0, 0.0], [-2.6, 0.0, 0.0]] {
         let spot = [centre[0] + c[0], centre[1], centre[2] + c[2]];
         let eye = [spot[0], spot[1] + 1.5, spot[2]];
-        if w.scene.sim.as_ref().unwrap().world.segment(eye, centre).is_some() { continue; }
+        // The judge is the round's own flight trace (the pass-flagged 0x40 sheet at the opening,
+        // z −15.98 / −16.52, is walked past [M Collide_Update 0x1ea398:216-229]), up to 0.15 short
+        // of the centre: the live pane's own mesh rides the collision set.
+        let to = [eye[0] - centre[0], eye[1] - centre[1], eye[2] - centre[2]];
+        let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(1e-6);
+        let near = [centre[0] + to[0] / l * 0.15, centre[1] + to[1] / l * 0.15, centre[2] + to[2] / l * 0.15];
+        let world = &w.scene.sim.as_ref().unwrap().world;
+        if world.segment_flight_scoped(world.find_cel(eye), eye, near, true).is_some() { continue; }
         drop_at(&mut w, spot[0], spot[1] + 1.2, spot[2]);
         stood = true;
         break;

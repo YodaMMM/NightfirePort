@@ -139,6 +139,25 @@ fn scripted_input(t: u32, slot: u8) -> nf_net::Input {
     i
 }
 
+/// level-05-basin-floor-6: the applied row's fold — the lockstep race's footprint (the first
+/// tick whose row folds disagree between the machines is the race's tick).
+fn row_fold(rows: &[nf_net::Input; nf_net::MAX_AGENTS]) -> u64 {
+    let mut h = nf_net::hash::Hasher::new();
+    for r in rows.iter().take(3) {
+        h.f32(r.forward);
+        h.f32(r.strafe);
+        h.f32(r.turn);
+        h.f32(r.look);
+        h.bool(r.jump);
+        h.bool(r.crouch);
+        h.bool(r.fire);
+        h.bool(r.use_key);
+        h.bool(r.trigger);
+        h.bool(r.reload);
+    }
+    h.finish()
+}
+
 /// One machine of the running match: its scene, its session, its own sim tick, and every core
 /// event it has seen (the no-leave pins read these).
 struct Mach {
@@ -150,6 +169,11 @@ struct Mach {
     events: Vec<String>,
     /// The debriefing front end the handover built (the boards' comparison reads it).
     fe_board: Option<FrontEnd>,
+    /// level-05-basin-floor-6: the applied row's fold per tick (the lockstep-race evidence).
+    row_hashes: std::collections::HashMap<u32, u64>,
+    /// level-05-basin-floor-6: the per-slot body positions this machine simulated, per tick —
+    /// the first-split-tick evidence (body i's position at its owner vs the replicas).
+    body_track: std::collections::HashMap<u32, [(u32, u32, u32); 3]>,
 }
 
 impl Mach {
@@ -178,7 +202,19 @@ impl Mach {
         let Some(rows) = rows else { return };
         {
             let sim = self.scene.sim.as_mut().expect("the match sim");
+            self.row_hashes.insert(self.tick, row_fold(&rows));
             nf_view::net_tick(sim, &rows, self.slot);
+        }
+        {
+            // After the tick: the three bodies' positions, packed (the x/z mm and the pitch
+            // centi-units fit u32s; enough to spot the first split tick per body).
+            let sim = self.scene.sim.as_ref().unwrap();
+            let mut packed = [(0u32, 0u32, 0u32); 3];
+            for s in 0..3 {
+                let b = if s == self.slot { sim.bond.pos } else { sim.mp_bonds.get(s).and_then(|b| b.as_ref().map(|b| b.pos)).unwrap_or([0.0; 3]) };
+                packed[s] = ((b[0] * 1000.0) as i32 as u32, (b[2] * 1000.0) as i32 as u32, (b[1] * 1000.0) as i32 as u32);
+            }
+            self.body_track.insert(self.tick, packed);
         }
         self.tick += 1;
         let sim = self.scene.sim.as_mut().expect("the match sim");
@@ -324,9 +360,9 @@ fn start_three_machine_match(path: &str, port: u16, limit_left: usize, duration_
         let s2 = j2.join().unwrap();
         (hscene, s1, s2)
     });
-    let mut mh = Mach { scene: hscene, sess: hp, slot: 0, tick: 0, done: false, events: Vec::new(), fe_board: None };
-    let mut m1 = Mach { scene: s1, sess: c1p, slot: 1, tick: 0, done: false, events: Vec::new(), fe_board: None };
-    let mut m2 = Mach { scene: s2, sess: c2p, slot: 2, tick: 0, done: false, events: Vec::new(), fe_board: None };
+    let mut mh = Mach { scene: hscene, sess: hp, slot: 0, tick: 0, done: false, events: Vec::new(), fe_board: None, row_hashes: Default::default(), body_track: Default::default() };
+    let mut m1 = Mach { scene: s1, sess: c1p, slot: 1, tick: 0, done: false, events: Vec::new(), fe_board: None, row_hashes: Default::default(), body_track: Default::default() };
+    let mut m2 = Mach { scene: s2, sess: c2p, slot: 2, tick: 0, done: false, events: Vec::new(), fe_board: None, row_hashes: Default::default(), body_track: Default::default() };
     mh.scene.sim.as_mut().expect("host sim").swap_local_slot(0);
     m1.scene.sim.as_mut().expect("client 1 sim").swap_local_slot(1);
     m2.scene.sim.as_mut().expect("client 2 sim").swap_local_slot(2);
@@ -370,6 +406,54 @@ fn run_to_debriefing(machines: (&mut Mach, &mut Mach, &mut Mach), kills: &[u32],
                 m1.scene.sim.as_ref().unwrap().net_state_hash(1),
                 m2.scene.sim.as_ref().unwrap().net_state_hash(2),
             ];
+            // TEMP DIAGNOSTIC (level-05-basin-floor-6): the component breakdown at the exchange.
+            let comps = [
+                mh.scene.sim.as_ref().unwrap().net_component_hashes(0),
+                m1.scene.sim.as_ref().unwrap().net_component_hashes(1),
+                m2.scene.sim.as_ref().unwrap().net_component_hashes(2),
+            ];
+            for c in 0..nf_view::scene::NET_HASH_COMPONENTS {
+                if !(comps[0][c] == comps[1][c] && comps[0][c] == comps[2][c]) {
+                    eprintln!("[frag-diag] tick {}: component {} ({}) diverges: host {:016x} c1 {:016x} c2 {:016x}",
+                        mh.tick, c, nf_view::scene::NET_HASH_COMPONENT_NAMES[c], comps[0][c], comps[1][c], comps[2][c]);
+                    // The applied rows around the divergence: the first tick whose row folds
+                    // disagree is the lockstep race's footprint.
+                    for t in mh.tick.saturating_sub(6)..=mh.tick {
+                        let (rh, r1, r2) = (mh.row_hashes.get(&t), m1.row_hashes.get(&t), m2.row_hashes.get(&t));
+                        if !(rh.is_some() && rh == r1 && r1 == r2) {
+                            eprintln!("[frag-diag]   row t{t}: host {:?} c1 {:?} c2 {:?}", rh, r1, r2);
+                        }
+                    }
+                    // The bodies' first split tick (per slot): the tick where the three machines'
+                    // packed positions for that slot first disagree.
+                    for s in 0..3 {
+                        let mut first = None;
+                        for t in 0..mh.tick {
+                            let (a, b, c) = (mh.body_track.get(&t), m1.body_track.get(&t), m2.body_track.get(&t));
+                            if let (Some(a), Some(b), Some(c)) = (a, b, c) {
+                                if !(a[s] == b[s] && b[s] == c[s]) { first = Some(t); break; }
+                            }
+                        }
+                        if let Some(t) = first {
+                            eprintln!("[frag-diag]   slot {s} first split at t{t}: host {:?} c1 {:?} c2 {:?} (prev host {:?} c1 {:?} c2 {:?})",
+                                mh.body_track.get(&t), m1.body_track.get(&t), m2.body_track.get(&t),
+                                mh.body_track.get(&(t - 1)), m1.body_track.get(&(t - 1)), m2.body_track.get(&(t - 1)));
+                        }
+                    }
+                    let items = [
+                        mh.scene.sim.as_ref().unwrap().net_component_items(0)[c].clone(),
+                        m1.scene.sim.as_ref().unwrap().net_component_items(1)[c].clone(),
+                        m2.scene.sim.as_ref().unwrap().net_component_items(2)[c].clone(),
+                    ];
+                    let n = items[0].len().max(items[1].len()).max(items[2].len());
+                    for i in 0..n {
+                        let (a, b, cc) = (items[0].get(i), items[1].get(i), items[2].get(i));
+                        if !(a == b && a == cc) {
+                            eprintln!("[frag-diag]   item {i}: host {:?} c1 {:?} c2 {:?}", a, b, cc);
+                        }
+                    }
+                }
+            }
             assert_eq!(hashes[0], hashes[1], "tick {}: the host and client 1 agree", mh.tick);
             assert_eq!(hashes[0], hashes[2], "tick {}: the host and client 2 agree", mh.tick);
             mh.sess.0.borrow_mut().submit_hash(mh.tick, hashes[0]);

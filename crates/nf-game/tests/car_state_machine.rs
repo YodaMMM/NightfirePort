@@ -11,9 +11,14 @@ use nf_game::drone::Rng;
 #[test]
 fn create_gates_match_car_create_0x1305b0() {
     let mut rng = Rng::new(1);
-    // MP off or the option Off → no object [M 0x1305b0:13-17].
-    assert!(Car::create(false, 1, 0x0700_0024, &mut rng).is_none());
+    // The off gate fires only when an MP match is up AND the option is Off
+    // [M disasm 0x1305dc `beqz v1` skips the vehicles check when MPSettings+0x384 is 0;
+    // 0x1305e8 `beql v0, zero → return 0` — placement-kind-census 2026-11-08: the old
+    // `!mp_enabled ||` arm pinned the decompile's `&&` as an OR].
     assert!(Car::create(true, 0, 0x0700_0024, &mut rng).is_none());
+    // A non-MP load PROCEEDS (MPSettings+0x384 == 0 skips the off gate): the option word
+    // stands — Tanks gives a tank [M 0x1305b0:13-22].
+    assert!(Car::create(false, 1, 0x0700_0024, &mut rng).is_some());
     // Ravine 0x0700004b is blocked [M 0x1305b0:19-22] — even with the option on.
     assert!(Car::create(true, 1, 0x0700_004b, &mut rng).is_none());
     // Option 1 = Tanks → the tank variant, no RNG draw [M 0x1305b0:29-43].

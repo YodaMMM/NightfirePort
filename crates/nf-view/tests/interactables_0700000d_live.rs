@@ -507,14 +507,17 @@ fn crane_ladder_grab_and_climb() {
 #[test]
 fn qclaw_reels_to_the_crane_pulley() {
     let mut w = load_warm();
-    // Stand on the dock under the pulley, ~4 m away.
+    // Stand on the pulley's type-2 icon ((219.43, 3.39, -228.88) r 2.28 [D icon census]): the
+    // claw fires only inside its arm [M Player_WeaponFiring 0x1a5460:515-528].
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [212.4, 11.0, -236.6];
+        sim.bond.pos = [219.43, 4.4, -228.88];
         sim.bond.vel = [0.0; 3];
         sim.gun.switch_request = 0x50;
     }
     w.wait(60);
+    assert_eq!(w.scene.sim.as_ref().unwrap().bond.icon_ctx, 2, "Bond stands in the pulley icon's arm [D], at {:?}",
+        w.scene.sim.as_ref().unwrap().bond.pos);
     let target = [213.62f32, 15.77, -234.77];
     for _ in 0..200 {
         let (turn, look) = aim_at(&w, target);

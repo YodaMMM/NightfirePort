@@ -221,6 +221,11 @@ pub struct GTurret {
     /// ext+0xcc (f32): health, 100.0 at create [M 0017ffa0:84]; `GT_ApplyDamage` 0x1816d8
     /// subtracts; `GT_Update`'s death gate fires at < 0.0 [M 00180498:236-244].
     pub health: f32,
+    /// The damage on the scripts' objects' `obj+0xD0` chains, [script A, script B]: the bullet pass
+    /// sums this tick's contacts (`Collide_GetDamageNObjects` 0x1ee220 with no output list) and
+    /// the next `GT_Update` reads them [M 00180498:128-148 script A every tick, :152-176 script B
+    /// only while the state is 4]; the game's Collide runs after the walk [M 0x1336f8:238].
+    pub contact: [f32; 2],
     /// obj+0xf6 (s16): the previous state — `GT_Disable` 0x1816a8 stores 4 there and state 5
     /// (`GT_Update` case 5) returns to it after 3.0 s [M both].
     pub prev_state: u16,
@@ -242,6 +247,10 @@ pub struct GTurret {
     /// registered[0]'s obj+0xF4 (u16): the muzzle-flash countdown — every shot writes 2, the
     /// update head counts it down [M 00180498:110-122, case 4 / case 7 fire].
     pub flash: u16,
+    /// registered[0]'s obj+0xF6 (u8 as bool): the barrel alternator — every shot toggles it and
+    /// the shot smoke fires when the toggled value is 1 [M disasm 0x180bd8-0x180bf8]. Fresh
+    /// objects read 0, so the FIRST shot smokes.
+    pub barrel_alt: bool,
     /// registered[0]'s obj+0xF0 bit 0x10 (hidden): set by the update head when the countdown is
     /// (or reaches) 0, cleared by every shot [M 00180498:117-120, case 4 / case 7 fire]. Live
     /// [L 0700000c deployed Ronin under remote control, no fire: reg[0] (0x2000361) obj+0xF0 =
@@ -318,6 +327,7 @@ pub fn from_placement(placement: usize, params: &[(u32, u32)]) -> Option<GTurret
         hp: if facing == 0 { 200 } else { 0xffff },
         state: 0,
         health: 100.0,
+        contact: [0.0; 2],
         prev_state: 0,
         timer: 0.0,
         fire_timer: 0.0,
@@ -325,6 +335,7 @@ pub fn from_placement(placement: usize, params: &[(u32, u32)]) -> Option<GTurret
         owner: 0,
         registered: [0; 3],
         flash: 0,
+        barrel_alt: false,
         flash_hidden: false,
         controlled: 0,
         delete_flag: false,
@@ -426,6 +437,12 @@ pub enum GTEvent {
     /// One shot: `Bullet_init(…, weapon 0x2c55d0, muzzle, dir, 0xffff)` +
     /// `Sound_Play3D(100.0, -1.0, -1.0, 0x4e7|0x10a, muzzle)` [M 00180498 case 4 / case 7].
     Fire { muzzle: [f32; 3], dir: [f32; 3], sound: u32 },
+    /// The shot smoke: the fire tail's barrel byte toggle (`+0xf6 ^= 1` on the flash object,
+    /// re-arming `+0xf4 = 2` / unhiding `+0xf0 &= ~0x10` at the same point) calls
+    /// `Gas_Init(0.05, 0.1, cel, muzzle, rot, NULL-vel, 0x2000039, 7, 0x48403080, 1)` on every
+    /// OTHER shot — when the toggled byte is 1 [M disasm 0x180bc8-0x180c3c / 0x181304-0x181350].
+    /// The muzzle is the same vector the round spawned from.
+    ShotSmoke { muzzle: [f32; 3] },
     /// The wreck smoke: `Gas_Init(0.05, 0.25, …, 0x2000039, 7, 0x48403080, 1)` on the %10
     /// gate [M 00180498 case 6].
     Smoke { pos: [f32; 3] },
@@ -721,6 +738,13 @@ impl GTurret {
                 out.push(GTEvent::Registered0Hidden);
             }
         }
+        // The contact sums [M 00180498:128-176]: script A always, script B in COMBAT only. The
+        // decompile's stun test (id 0x4A/0x4C → `GT_Disable`) reads the class byte of the SCRIPT
+        // OBJECT, not of the contact's hitter (`iVar10 = lVar7` then `iVar10 + 0xff`), and a
+        // script object is never class 5, so that arm does not fire on a bullet.
+        let contact = std::mem::take(&mut self.contact);
+        self.health -= contact[0];
+        if self.state == gt_state::COMBAT { self.health -= contact[1]; }
         // The death gate [M 00180498:236-258]: health < 0 or the shot counter at 0 → 6.
         if (self.health < 0.0 || self.hp == 0) && self.state != gt_state::DESTROYED {
             if self.state == gt_state::MOUNTED {
@@ -836,6 +860,11 @@ impl GTurret {
                             ];
                             let sound = if self.facing == 1 { SOUND_FIRE_WALL } else { SOUND_FIRE };
                             out.push(GTEvent::Fire { muzzle, dir, sound });
+                            // The fire tail's barrel toggle + the alternate-shot smoke [M disasm
+                            // 0x180bd0-0x180c3c]: `+0xf6 ^= 1` (with `+0xf4 = 2`, `+0xf0 &= ~0x10`
+                            // — show_flash re-arms those), smoke when the toggled byte is 1.
+                            self.barrel_alt = !self.barrel_alt;
+                            if self.barrel_alt { out.push(GTEvent::ShotSmoke { muzzle }); }
                             self.show_flash();
                         }
                     }
@@ -918,6 +947,12 @@ impl GTurret {
                             dir,
                             sound: SOUND_FIRE,
                         });
+                        // The same barrel toggle + alternate-shot smoke as case 4 [M disasm
+                        // 0x181304-0x181350 — the case-7 fire tail's own copy].
+                        self.barrel_alt = !self.barrel_alt;
+                        if self.barrel_alt {
+                            out.push(GTEvent::ShotSmoke { muzzle: [self.pos[0] + dir[0] * self.muzzle_offset, self.pos[1] + dir[1] * self.muzzle_offset, self.pos[2] + dir[2] * self.muzzle_offset] });
+                        }
                         self.show_flash();
                     }
                     // A held trigger re-arms the spin every tick, shot or not [M 00180498:536];
@@ -953,6 +988,7 @@ impl Default for GTurret {
             hp: 200,
             state: 0,
             health: 100.0,
+            contact: [0.0; 2],
             prev_state: 0,
             timer: 0.0,
             fire_timer: 0.0,
@@ -960,6 +996,7 @@ impl Default for GTurret {
             owner: 0,
             registered: [0; 3],
             flash: 0,
+            barrel_alt: false,
             flash_hidden: false,
             controlled: 0,
             delete_flag: false,
@@ -1568,6 +1605,40 @@ mod tests {
         tris.push([[0.45, 3.0, -2.0], [0.45, 3.0, 2.0], [0.45, -1.0, 2.0]]);
         let ok = crate::world::CollisionWorld::from_triangles(tris);
         assert!(place_object(&ok, [0.0, 0.4, 0.0], [0.0, 0.0, 1.0]).is_some(), "a wall 0.45 away still seats");
+    }
+
+    /// fx-muzzle-and-trail row 6: the fire tail's barrel byte (`obj+0xf6 ^= 1`, the port's
+    /// `barrel_alt`) toggles on EVERY shot and the shot smoke fires only when the toggled value
+    /// is 1 — smoke on the odd shots [M disasm 0x180bd0-0x180bf8, the case-4 fire tail; the
+    /// case-7 copy 0x181304-0x181350]. Fresh objects read 0, so the FIRST shot smokes. The smoke's
+    /// muzzle is the same vector the round spawned from [M 0x180c3c].
+    #[test]
+    fn shot_smoke_fires_on_every_other_shot() {
+        let ch = crate::triggers::Channels { v: vec![0; 256], time: vec![0; 256], writes: None, script_channels: std::collections::BTreeSet::new() };
+        let mut rng = crate::drone::Rng::new(3);
+        let mut t = GTurret::default();
+        t.state = 4;
+        t.pos = [0.0, 0.0, 0.0];
+        t.fire_dir = [1.0, 0.0, 0.0];
+        let cand = TrackCand { obj: 7, pos: [10.0, 0.0, 0.0], copter: false, los_ok: true };
+        let mut seq = Vec::new();
+        let mut muzzles = Vec::new();
+        for _ in 0..60 {
+            let ev = step(&mut t, &ch, &[cand], &mut rng);
+            for e in ev {
+                match e {
+                    GTEvent::Fire { muzzle, .. } => { seq.push(b'F'); muzzles.push(muzzle); }
+                    GTEvent::ShotSmoke { muzzle } => { seq.push(b'S'); assert_eq!(Some(&muzzle), muzzles.last(), "the smoke's muzzle is the round's"); }
+                    _ => {}
+                }
+            }
+            if seq.len() >= 8 { break; }
+        }
+        assert!(seq.len() >= 8, "the cadence fires (got {seq:?})");
+        let pat: String = String::from_utf8(seq.clone()).unwrap();
+        assert!(pat.starts_with("FSFFS"), "smoke on the odd shots (barrel_alt starts clear), got {pat}");
+        // Sister: a both-shots or no-shots toggle breaks the count.
+        assert_eq!(pat.matches('S').count(), pat.matches('F').count().div_ceil(2));
     }
 }
     /// fx-gas-and-blasts row 10 [M GT_Create 0x17ffa0:150-166]: the same-owner chain — placing a

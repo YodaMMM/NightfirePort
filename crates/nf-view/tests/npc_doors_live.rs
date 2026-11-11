@@ -441,6 +441,34 @@ fn the_01_escort_driven_through_the_shoji_opens_it_and_crosses() {
         let l = (dir[0] * dir[0] + dir[2] * dir[2]).sqrt().max(1e-4);
         [nb[0] + dir[0] / l * 2.5, nb[1], nb[2] + dir[2] / l * 2.5]
     };
+    // The game's goal-node search is cel-scoped (`AINetwork_NodesForPosition` 0x1586a8 walks the
+    // goal's own cel; a cel with no node of the route's path gives `DoAStarPath` 0x1571b0 code 4
+    // and the drone leaves 0x63 at once). Mayhew's region path has no node past the shoji, so the
+    // 2.5-u point beyond it routes nowhere (the old flat-box search handed the A* a near-side
+    // fallback node and built a route that ends at the door). The drive therefore targets the
+    // region-path node nearest the shoji on Mayhew's side: the follow must walk up to it without
+    // wedging, and must not cross the closed door (the `beyond` point stays the crossing test).
+    let goal = {
+        let sim = scene.sim.as_ref().unwrap();
+        let rp = sim.nav.nav_path_for(sim.drones.list[mi].feet()).expect("Mayhew's region path");
+        let (pi, _) = pair[0];
+        let pn = &sim.nav.paths[pi].nodes;
+        let mut ns: Vec<usize> = (0..pn.len()).filter(|&n| pn[n].flags & 2 != 0
+            && (pn[n].pos[0] - door_pos[0]).powi(2) + (pn[n].pos[2] - door_pos[2]).powi(2) < 16.0).collect();
+        ns.sort_by_key(|&n| n);
+        let (na, nb) = (pn[ns[0]].pos, pn[ns[1]].pos);
+        let (ax, az) = (nb[0] - na[0], nb[2] - na[2]);
+        let l = (ax * ax + az * az).sqrt().max(1e-4);
+        let past = |q: [f32; 3]| ((q[0] - door_pos[0]) * ax + (q[2] - door_pos[2]) * az) / l;
+        let nodes = &sim.nav.paths[rp].nodes;
+        let dd = |q: [f32; 3]| (q[0] - door_pos[0]).powi(2) + (q[2] - door_pos[2]).powi(2);
+        let best = (0..nodes.len()).filter(|&n| past(nodes[n].pos) < 0.0)
+            .min_by(|&a, &b| dd(nodes[a].pos).total_cmp(&dd(nodes[b].pos)))
+            .expect("a region-path node on Mayhew's side of the shoji");
+        eprintln!("[01d] region path {rp}: goal node {best} at {:?} ({:.2} u from the shoji, cel {:?})",
+            nodes[best].pos, dd(nodes[best].pos).sqrt(), nodes[best].cel);
+        nodes[best].pos
+    };
     eprintln!("[01d] driving Mayhew to beyond {beyond:?}");
     {
         let sim = scene.sim.as_mut().unwrap();
@@ -455,7 +483,7 @@ fn the_01_escort_driven_through_the_shoji_opens_it_and_crosses() {
         };
         let drones = &mut sim.drones;
         let dr = &mut drones.list[mi];
-        dr.goal = Some(beyond);
+        dr.goal = Some(goal);
         dr.next_state = Some(nf_game::drone::state::GO_TO_GOAL);
         dr.send(&d, &mut drones.rng, drones.frame, 0);
         assert_eq!(drones.list[mi].state, nf_game::drone::state::GO_TO_GOAL, "the 0x63 entry did not happen");
@@ -476,7 +504,13 @@ fn the_01_escort_driven_through_the_shoji_opens_it_and_crosses() {
     let sim = scene.sim.as_ref().unwrap();
     eprintln!("[01d] result: closest approach to the shoji {closest:.2}, crossed {crossed}, door state {:#x}",
         sim.drones.doors.list[door_idx].state);
-    assert!(closest < 2.0, "the driven Mayhew never reached the shoji (closest {closest:.2}) — the follow still wedges short of it");
+    // Arrival is the route rule `remaining < +0x8EC` (2.0, the goal radius [M 0x1517d8:49-52;
+    // DefaultInit 0x14b300:579]): the straight distance to the goal node is below the route's.
+    let mp = sim.drones.list[mi].pos;
+    let to_goal = ((mp[0] - goal[0]).powi(2) + (mp[2] - goal[2]).powi(2)).sqrt();
+    eprintln!("[01d] Mayhew ends {to_goal:.2} u from the goal node, state {:#x}", sim.drones.list[mi].state);
+    assert!(to_goal < 2.0 && sim.drones.list[mi].state != nf_game::drone::state::GO_TO_GOAL,
+        "the driven Mayhew never arrived at the shoji-side node ({to_goal:.2} u, closest to the shoji {closest:.2}) — the follow still wedges short of it");
     assert!(!crossed, "the driven Mayhew crossed the CLOSED, never-activated shoji — a closed door did not block");
     assert_eq!(sim.drones.doors.list[door_idx].state, nf_game::door::CLOSED, "the shoji moved with nobody opening it");
 }
@@ -626,7 +660,11 @@ fn the_06_guard_chasing_bond_opens_the_closed_door() {
             opened = true;
             eprintln!("[06c] +{t}: door #{di} OPENED by the chasing guard");
         }
-        if gp[2] < dpos[2] - 1.0 { crossed = true; }
+        // Through the leaf plane into the doorway. Since the AI target search keeps to the nodes
+        // filed under Bond's own cel (the engage-range join), the guard holds in the doorway once he
+        // has Bond in his range and fires from there (z −16.7, 0.45 past the plane, AimStandFire
+        // 0x68); the earlier pin (1.0 past) measured the old chase that ran on to Bond.
+        if gp[2] < dpos[2] - 0.3 { crossed = true; }
         if crossed && opened { break; }
         if t % 900 == 0 {
             eprintln!("[06c] +{t}: guard #{gi} state {st:#x} at ({:.1},{:.1},{:.1}); door {} {:#x} pos01 {:.2}; bond {:?} shots {shots}",

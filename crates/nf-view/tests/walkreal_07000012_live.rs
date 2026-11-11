@@ -69,6 +69,15 @@ fn walk_spawn_to_the_shaft_exit_at(difficulty: u32) {
         assert_eq!(sim.drones.difficulty, difficulty,
             "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
     }
+    if difficulty == 3 && !w.tops_up() {
+        // los-mask-join (00 Agent, real damage): the warm chain's 12 tactics (walkreal 13's
+        // 12 leg) — the back-off at 3.0 and the lane fights with the floor-drop resupply. On the
+        // masked tree the plain resupply stood four 6000-tick passes one step short of the
+        // spawn-lobby drops and then wedged on a drop behind the east desks, and Bond met the
+        // east wing dry [L the masked run].
+        w.dmg.back_off = Some(3.0);
+        w.dmg.lane_fights = true;
+    }
     tower2::walk_12(&mut w);
     tower2::walk_12_exit(&mut w);
 
@@ -119,6 +128,17 @@ fn walk_spawn_to_the_shaft_exit_at(difficulty: u32) {
 fn walk_spawn_to_the_shaft_exit_real_damage_agent() {
     walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(|| walk_spawn_to_the_shaft_exit_at(2)))
+}
+
+/// Operative sister of `..._real_damage_agent`: the same route at difficulty 1. Operative
+/// creates only the p2 = 1 placements [M Drone_Create 0x136be0:49] and the keypad locks unlock
+/// at create [M Lock_Create 0x1ae1f8 tail: param 6 = 1 on difficulty 1] (the route's unlock
+/// check accepts both paths, common/tower2.rs). Real input only.
+#[test]
+#[ignore = "los-mask-repins-12: door plc 543 at (9.9, 1.1, -14.5) holds state 0x2 at 0.50 for ~200 ticks after the E press; Bond slides south along the leaf to (10.62, 1.03, -15.73) and the leg hits its 6000-tick cap"]
+fn walk_spawn_to_the_shaft_exit_real_damage_operative() {
+    walker::with_real_damage_head_hunting(||
+        walker::with_real_damage_unseen_fights(|| walk_spawn_to_the_shaft_exit_at(1)))
 }
 
 #[test]

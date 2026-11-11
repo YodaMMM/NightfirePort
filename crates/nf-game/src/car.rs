@@ -120,7 +120,12 @@ impl Car {
     /// (`Rand_Rand(100) < 0x33` → helicopter, 51 %) [M 0x1305b0:36-43]. Returns None where the
     /// game returns 0 (no object created).
     pub fn create(mp_enabled: bool, vehicles_option: u32, level: u32, rng: &mut Rng) -> Option<(Car, bool)> {
-        if !mp_enabled || vehicles_option == VEHICLES_OFF {
+        // Car_Create 0x1305b0:13-16 [M disasm 0x1305dc lw v1, MP+0x384; beqz v1 skips the
+        // vehicles check; 0x1305e8 beql v0(=MP+0x460), zero → return 0]: the off gate fires
+        // only when an MP match is up AND the Enviro-Mods option is Off — a non-MP load
+        // (MPSettings+0x384 == 0) PROCEEDS with the option word as it stands (option 0 falls
+        // through the variant pick to the helicopter byte — the decomp's goto, below).
+        if mp_enabled && vehicles_option == VEHICLES_OFF {
             return None;
         }
         if level == 0x0700_004b {
@@ -436,6 +441,48 @@ impl CarSystem {
             car.deactivate()
         } else {
             None
+        }
+    }
+
+    /// The 0xDA placement walk — `parsemap_create_dynamic_objects` 0x1d04f0 case 0xda
+    /// (`Car_Create__FP7_VECTORT0P12celglist_tagP9level_tag(&uStack_c0,&uStack_b0,param_4,param_2)`
+    /// [M 001d04f0:323-328]): the MAIN map's kind-0xDA placements in placement order, one
+    /// `Car_Create` each (the same parsemap-epilogue rule every creator runs — the last
+    /// block-0x1a, i.e. the type-1 main map's placements [M 0x1d1b68:88-96]).
+    ///
+    /// Per create, the game's order is: the MP/option/Ravine gates (0x1305b0:13-22 — a gated-out
+    /// placement draws NOTHING, not even the Random roll), the `7 < NumTanks` cap check, then
+    /// `Control_CreateObjEx` builds the object AT the placement pose, the variant byte, and
+    /// `TankSpawns[NumTanks] ← obj+0x90` (the Mat_Copy argument order is the const/non-const
+    /// pattern `Mat_Copy__FPC6MATRIXP6MATRIX(src, dst)`, the same pair Car_Reset 0x132da8 walks
+    /// — the create BACKS the fresh pose up), `CAR_INFO+0x10e = NumTanks`, `NumTanks++`
+    /// [M 0x1305b0:24-78]. The port: the pose is `View_RotTransMatrix` of the placement
+    /// (the convention every placement-pose creator here uses), `matrix == spawn_matrix` at
+    /// create (they only diverge once the car is driven), slot = the created index.
+    ///
+    /// `mp_enabled` = `MPSettings+0x384 != 0`, `vehicles_option` = `MPSettings+0x460`,
+    /// `level_code` = `GameState+0x12` — the same words [`Car::create` gates on. The RNG draws
+    /// only on the Random option and only for a placement that passed the gates, in placement
+    /// order (the shared stream, like every creator).
+    pub fn create_walk(
+        &mut self,
+        level: &nf_formats::level::Level,
+        mp_enabled: bool,
+        vehicles_option: u32,
+        level_code: u32,
+        rng: &mut Rng,
+    ) {
+        let Some(m) = level.main_map() else { return };
+        for p in level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0xda) {
+            if self.num_tanks >= MAX_TANKS {
+                return; // the `7 < NumTanks` cap [M 0x1305b0:24]
+            }
+            let Some((mut car, _heli)) = Car::create(mp_enabled, vehicles_option, level_code, rng) else { continue };
+            car.slot = self.num_tanks as u16;
+            car.matrix = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
+            car.spawn_matrix = car.matrix;
+            self.tanks[self.num_tanks] = Some(car);
+            self.num_tanks += 1;
         }
     }
 }

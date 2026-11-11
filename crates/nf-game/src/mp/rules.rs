@@ -690,24 +690,55 @@ impl MpMatch {
         // mp-site-destruction-blast: the restart's class-5 sweep deletes the round's explosion
         // objects with everything else [M 0x183fc0:14-17] — an undrained death blast goes too.
         self.objects_rt.pending_blasts.clear();
+        // mp-object-deleted: the restart deletes every created mode object —
+        // `Control_DeleteAllObjectsOfType(5/0x35/0x10/0xe)` [M 0x183fc0:14-17] plus the
+        // MPObjects SP-obj sweep (`+0xfe |= 1` [M :29-39]); the control pump deletes each on
+        // its next pass [M 0x1336f8:70-77] and every delete runs `MP_objectBeingDeleted`
+        // 0x18ac90 — the scenario's mode rows clear and msg 0x3D queues for the bots
+        // ([`MpMatch::pending_goal_cancels`], drained per bot in slot order by `step_mp_bots`).
+        // The port sweeps its rows in a fixed order standing in for the game's MPObjects array
+        // (creation) order [S]: flags, bases, uplinks, hill, the site, the GoldenEye items,
+        // the blueprint, the espionage bases. The game re-creates ONLY the Demolition/
+        // Protection site after the sweep [M 0x183fc0:41-56] — the other scenarios' rows stay
+        // gone, as in the game.
+        {
+            use crate::mp::bots::obj_id;
+            for i in 0..2usize { self.object_being_deleted(obj_id::FLAG | i); }
+            for i in 0..2usize { self.object_being_deleted(obj_id::BASE | i); }
+            for i in 0..self.objects_rt.uplinks.len() { self.object_being_deleted(obj_id::UPLINK | i); }
+            self.object_being_deleted(obj_id::HILL);
+            self.object_being_deleted(obj_id::SITE);
+            for i in 0..2usize { self.object_being_deleted(obj_id::GOLDENEYE | i); }
+            self.object_being_deleted(obj_id::BLUEPRINT);
+            for i in 0..2usize { self.object_being_deleted(obj_id::ESP_BASE | i); }
+        }
         let s = self.settings.scenario;
         if s == scenario::DEMOLITION || s == scenario::PROTECTION {
             let pool: Vec<usize> = match s {
                 scenario::DEMOLITION => (0..self.objects.demolition.len()).collect(),
                 _ => (0..self.objects.protection.len()).collect(),
             };
-            if let Some(site) = &mut self.objects_rt.site {
-                site.sub = 0;
-                site.state = 2000; // the HP re-inits [M 0x185de8:174]
-                site.counter = 0;
-                site.last_hitter = -1; // the re-create's 0xffff [M 0x185de8:130-131]
-                if !pool.is_empty() {
-                    let pick = pool[rng.rand(pool.len() as u32) as usize] as usize; // [M 0x183fc0:40-53]
-                    let recs = if s == scenario::DEMOLITION { &self.objects.demolition } else { &self.objects.protection };
-                    site.pos = MpObjectsRt::obj_at(recs, pick);
-                    site.home = site.pos;
-                    site.bounds = MpObjectsRt::bounds_at(recs, pick);
-                }
+            // The re-create [M 0x183fc0:41-56]: the sweep deleted the site row — a fresh one
+            // picks a random registered place (`Rand_Rand`) with the HP/last-hitter inits
+            // [M 0x185de8:130-131,174] and the round clock re-inits (`MPGame._400_4_`, DECIMAL 400 =
+            // +0x190, [M 0x183fc0:45,52] — the `game.clock = 0` above; the limit is +0x194).
+            let pick = if pool.is_empty() { None } else {
+                Some(pool[rng.rand(pool.len() as u32) as usize] as usize) // [M 0x183fc0:42-53]
+            };
+            let recs_demolition = s == scenario::DEMOLITION;
+            if let Some(i) = pick {
+                let recs = if recs_demolition { &self.objects.demolition } else { &self.objects.protection };
+                let (pos, bounds) = (MpObjectsRt::obj_at(recs, i), MpObjectsRt::bounds_at(recs, i));
+                self.objects_rt.site = Some(MpObjState {
+                    state: 2000, // the HP re-init [M 0x185de8:174]
+                    sub: 0,
+                    counter: 0,
+                    last_hitter: -1, // the re-create's 0xffff [M 0x185de8:130-131]
+                    controller: -1,
+                    team: if recs_demolition { 0 } else { 1 },
+                    pos, home: pos, bounds,
+                    ..Default::default()
+                });
             }
         }
         for slot in &mut self.game.slots {
@@ -1601,13 +1632,15 @@ impl MpMatch {
         mine.team == theirs.team
     }
 
-    /// `MP_isObjectOnTeam` 0x18b720 (128 bytes): only in a team game (`MPSettings+0x18c`) or
-    /// Assassin (`MPSettings+0x1a4 == 0x400`) — then `obj`'s team word == `team`, with the word
-    /// 2 sentinel (unassigned) answering false [M]. `Check_Target` 0x1a7810:129-144 asks it for
-    /// the aim-ray's hit (class 3 = the objective models directly, class 2 = a body through
-    /// `ext+0xc`) to gate the friendly markers [M]; `Player_AutoAim` 0x1a7c98 calls Check_Target
-    /// from `Player_Weapon` 0x1a24c8 — every on-foot match while aiming. The port keys the
-    /// lookup on the slot (`Control_Plr2Ind`'s result).
+    /// `MP_isObjectOnTeam` 0x18b720 (128 bytes): only in a team game (`MPSettings+0x18C`, Ghidra
+    /// `_396_4_` DECIMAL) or Assassin (`MPSettings+0x1A4 == 0x400`, Ghidra `_420_4_`) — then
+    /// `obj`'s team word == `team`, with the word 2 sentinel (unassigned) answering false [M].
+    /// `Check_Target` 0x1a7810:128-150 asks it for the aim-ray's nearest hit — class 3 (a live
+    /// human) to gate the teammate marker bytes BLData+0x132/+0x133 (with `_388_4_` = 0x184
+    /// `master_copy` and `_408_4_` = 0x198 `friendly_fire` [M 0x1a7810:129], no aim latch on this
+    /// arm), class 2 (a drone: an SP NPC or a match bot) about the body behind `ext+0xc` [M :136-148]. The port keys the lookup on the slot
+    /// (`Control_Plr2Ind`'s result). The caller lives in `Sim::run`'s Check_Target block
+    /// (crates/nf-view/src/scene.rs).
     pub fn mp_is_object_on_team(&self, slot: usize, team: u32) -> bool {
         if self.settings.team_game == 0 && self.settings.scenario != scenario::ASSASSIN {
             return false;

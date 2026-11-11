@@ -168,6 +168,11 @@ pub fn to_player_input(i: &nf_net::Input) -> player::Input {
         // microcam-wheel-zoom: the wheel's zoom steps are local view input, never on the wire.
         zoom_cycle: 0,
         zoom_axis: 0.0,
+        // keypad-entry: the page's lanes are live input (the wire has no lane;
+        // the keypad is a single-player page).
+        keypad_confirm: false,
+        keypad_back: false,
+        keypad_nav: 0,
     }
 }
 

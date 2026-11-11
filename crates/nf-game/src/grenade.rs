@@ -82,6 +82,10 @@ pub struct Grenade {
     /// < 0, so the charge never explodes (satchel-laser-scramble; the port's Bullet path keeps
     /// the same state in `Bullet::defused`).
     pub defused: bool,
+    /// obj+0xec — the creation tick, written by `control_init_object` 0x134630:15 as the full
+    /// GameState and read back as a BYTE by the trail gates (`(GameState + (u8)obj[0xec]) & 3`
+    /// fast / `% 15` big [M Bullet_trail_effect_smoke 0x12cba8]).
+    pub born: u8,
     /// sound-sweep-leftovers: `Bullet_init` 0x12c5a0:286-290 — the +2 == 0x45 record (Oddjob's
     /// hat) plays the LOOPED 0x5ef at the spawn and stores the handle at BU+0xF0;
     /// `Bullet_Delete` 0x12e660:13-16 stops it when the bullet dies (the hat's silent post-stick
@@ -137,8 +141,11 @@ impl StuckGadget {
 /// What a grenade did this tick.
 #[derive(Clone, Debug, PartialEq)]
 pub enum GrenadeEvent {
-    /// Bounced off the world at `pos` (sound 0x51C).
-    Bounce(V3),
+    /// Bounced off the world at `pos` (sound 0x51C). The second field is the contact's surface
+    /// material byte — the game's `HITDATA+0x50 & 0x3F` [M 0x12d084-0x12d09c], which the
+    /// contact-blast arm passes as `Explode_Create`'s 12th arg (the debris selector); the
+    /// `segment_surface` mat IS that byte [M 0x1e92d8:321, docs/formats/collision.md:27-28].
+    Bounce(V3, u8),
     /// fix-oddjob-hat: the hat (0x45) STUCK to the world at `pos` — the +0x100 arm's state 3
     /// [M 0x12ce80:255]; the caller plays the 0x4a7 contact clang [:317]. The object keeps
     /// existing (no bounce sound, no explosive broadcast).
@@ -601,7 +608,7 @@ impl Grenade {
                     self.velocity = [0.0; 3];
                     self.resting = true;
                 }
-                return Some(GrenadeEvent::Bounce(hit));
+                return Some(GrenadeEvent::Bounce(hit, mat & 0x3f));
             }
         }
         self.pos = end;
@@ -680,14 +687,14 @@ mod tests {
             stuck: false, seek_target: None,
             phase: None,
             burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
-        
+            born: 0,
             loop_handle: 0,
-};
+        };
         let mut rng = Rng::new(0);
         let mut bounced = false;
         for k in 0..2000 {
             if let Some(ev) = g.update(&w, &mut rng) {
-                if matches!(ev, GrenadeEvent::Bounce(_)) { bounced = true; break; }
+                if matches!(ev, GrenadeEvent::Bounce(..)) { bounced = true; break; }
                 if matches!(ev, GrenadeEvent::Explode { .. }) { eprintln!("exploded at tick {k} pos={:?}", g.pos); break; }
             }
         }
@@ -706,14 +713,14 @@ mod tests {
             stuck: false, seek_target: None,
             phase: None,
             burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
-        
+            born: 0,
             loop_handle: 0,
-};
+        };
         let mut rng = Rng::new(0);
         let mut bounced = false;
         for _ in 0..5 {
             if let Some(ev) = g.update(&w, &mut rng) {
-                assert!(matches!(ev, GrenadeEvent::Bounce(_)), "at the bounce max: a bounce, got {ev:?}");
+                assert!(matches!(ev, GrenadeEvent::Bounce(..)), "at the bounce max: a bounce, got {ev:?}");
                 bounced = true; break;
             }
         }
@@ -733,10 +740,10 @@ mod tests {
             stuck: false, seek_target: None,
             phase: None,
             burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
-        
+            born: 0,
             loop_handle: 0,
-};
-        if let Some(ev) = g.update(&w, &mut rng) { assert!(matches!(ev, GrenadeEvent::Bounce(_)), "one short: a bounce, got {ev:?}"); }
+        };
+        if let Some(ev) = g.update(&w, &mut rng) { assert!(matches!(ev, GrenadeEvent::Bounce(..)), "one short: a bounce, got {ev:?}"); }
         else { assert!(g.bounces == BOUNCE_MAX, "the bounce counted"); }
     }
 
@@ -751,13 +758,13 @@ mod tests {
             stuck: false, seek_target: None,
             phase: None,
             burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
-        
+            born: 0,
             loop_handle: 0,
-};
+        };
         let mut rng = Rng::new(0);
         let mut events = Vec::new();
         for _ in 0..100 { if let Some(ev) = g.update(&w, &mut rng) { events.push(ev); } }
-        assert!(events.iter().any(|e| matches!(e, GrenadeEvent::Bounce(_))), "it touches the floor");
+        assert!(events.iter().any(|e| matches!(e, GrenadeEvent::Bounce(..))), "it touches the floor");
         assert!(!events.iter().any(|e| matches!(e, GrenadeEvent::Explode { .. })),
             "a slow bounce must sit, not explode [M 0x12ce80]");
         assert_eq!(g.velocity, [0.0; 3], "the slow bounce zeroes the speed");
@@ -796,6 +803,7 @@ mod tests {
             bounces: 0, smoke_popped: false, resting: false, stuck: false, seek_target: None, phase: None,
             burn: 100, // [M Bullet_init 0x12c5a0:211 — the 0x3b family's counter]
             defused: false,
+            born: 0,
             loop_handle: 0,
         }
     }
@@ -925,9 +933,9 @@ mod tests {
             damage: 100.0, radius: 8.0, weapon_type: 0x3a, mesh: 0x0200_074f, owner: usize::MAX, state: 0,
             bounces: 0, smoke_popped: false, resting: false, stuck: false, seek_target: None, phase: None,
             burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
-        
+            born: 0,
             loop_handle: 0,
-};
+        };
         let mut rng = Rng::new(0);
         let mut stuck_tick = None;
         for t in 0..40 {
@@ -967,9 +975,9 @@ mod tests {
             damage: 100.0, radius: 8.0, weapon_type: 0x3a, mesh: 0x0200_074f, owner: usize::MAX, state: 1,
             bounces: 0, smoke_popped: false, resting: true, stuck: true, seek_target: None, phase: Some(Box::new(ph)),
             burn: 0, defused: false, // non-0x3b tests: the counter stays clear [M 0x12c5a0:211]
-        
+            born: 0,
             loop_handle: 0,
-};
+        };
         let (lo, hi) = ([-0.2278f32, -0.1042, -0.2064], [0.2278f32, 0.1042, 0.0064]);
         let c = |i: usize| [if i & 1 != 0 { hi[0] } else { lo[0] }, if i & 2 != 0 { hi[1] } else { lo[1] }, if i & 4 != 0 { hi[2] } else { lo[2] }];
         // The six faces as outward-wound quads (corner bits: x=1, y=2, z=4).

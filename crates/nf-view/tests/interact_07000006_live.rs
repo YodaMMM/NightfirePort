@@ -35,7 +35,11 @@ fn load_06(iso: &str, extra: &[u32]) -> nf_view::scene::Scene {
 fn settle_near(scene: &mut nf_view::scene::Scene, spot: [f32; 3]) {
     let sim = scene.sim.as_mut().unwrap();
     let floor = sim.world.segment(spot, [spot[0], spot[1] - 30.0, spot[2]]).map(|t| spot[1] - 30.0 * t);
-    if let Some(f) = floor { sim.bond.pos = [spot[0], f + 0.1, spot[2]]; } else { sim.bond.pos = spot; }
+    // The game's placement, not a poke (`Player_StandAtNewPosition` 0x190d88 writes obj+0x40 too):
+    // a FindCel miss leaves Bond unlinked AT the spot, never shoved back [M 0x133288:63-73].
+    let yaw = sim.bond.yaw;
+    let p = floor.map_or(spot, |f| [spot[0], f + 0.1, spot[2]]);
+    sim.place_bond(p, yaw);
     for _ in 0..60 { sim.step_bond(Input::default(), false, false, false); }
 }
 
@@ -196,12 +200,16 @@ fn standing_away_leaves_the_body_armour_on_the_floor() {
 /// the barrel (~39.9); 0.7 off, the mouth is open and he drops ~6.2 to the shaft floor (the probe
 /// finds it at 33.59) and stands there — no fall-through (the drops at ±0.35/0.7/1.0 in x/z all
 /// land grounded; the old −356 fall-through is gone on the current tree). The well's own Hurt
-/// volume #373 is GAME-INERT — its who-mask is param 4 = 1 and `Hurt_Update`'s state-0 scan
-/// collects only the class bits 0x10 (the player, class 2), 8 (class 3) and 2 (class 5)
-/// [M Hurt_Update 0x17e5d0's `param4 & collected` AND; D #373 params [6, 1000, 0, 0xffff, 1, 0]]
-/// — 1 & {8, 0x10, 2} = 0, so the volume can never start. The ~6.2 m drop is survivable.
+/// volume #373 [D params [6, 1000, 0, 0xffff, 1, 0]: type 6, damage 1000, no gate, who 1] never
+/// STARTS — `Hurt_Update`'s state-0 scan collects only the class bits 0x10, 8 and 2, and 1 & those
+/// = 0 [M Hurt_Update 0x17e5d0:51-102] — but the start is not the damage: the class-0x27 arm of
+/// `Player_DealWithObjHit` applies `Hurt_GetDamage` (ext+0x10, the 1000) on every contact with no
+/// state or who check [M 0x194458:94-101, Hurt_GetDamage 0x17ea18], and only the disabled bit
+/// (none here: no gate) keeps a volume out of the contact. So the drop into the shaft kills: the
+/// volume's 1000 lands on the touch. (An earlier form of this test held the who-mask fold, the
+/// volume inert and the drop survivable; that fold was refuted with the hurt-volume touch rule.)
 #[test]
-fn the_well_shaft_is_open_and_the_hurt_volume_is_game_inert() {
+fn the_well_shaft_is_open_and_its_hurt_volume_kills_on_the_touch() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load_06(&iso, &[]);
     // Over the well mouth (the well at (31.82, 39.79, 17.26) [D #65]): Bond rests on the barrel.
@@ -210,23 +218,42 @@ fn the_well_shaft_is_open_and_the_hurt_volume_is_game_inert() {
     let sim = scene.sim.as_ref().unwrap();
     eprintln!("[well] centre y {:.2} health {:.1} ch62 {}", sim.bond.pos[1],
         sim.drones.health.health, sim.drones.channels.on(0x62));
-    assert!((39.4..40.4).contains(&sim.bond.pos[1]),
-        "Bond over the mouth centre stands ON body #65, the mouth's own barrel [D the 94-tri block; M 0x1eae80:88-90] (y {:.2})",
+    // The stand height: the placement's floor snap puts the root 1.1 over the hit [M 0x190d88:104-116],
+    // the same 1.1 a walked floor rests at. The top of the barrel is read from the same down ray.
+    let top = sim.world.segment([31.82, 41.0, 17.26], [31.82, 11.0, 17.26]).map(|t| 41.0 - 30.0 * t).expect("the barrel top");
+    // The barrel's rounded top keeps him sliding a little, so the band holds y, not the grounded bit.
+    assert!((top - 40.04).abs() < 0.1 && (sim.bond.pos[1] - (top + 1.1)).abs() < 0.2,
+        "Bond over the mouth centre stands ON body #65, the mouth's own barrel [D the 94-tri block; M 0x1eae80:88-90] (top {top:.2} y {:.2})",
         sim.bond.pos[1]);
-    // 0.7 off centre the mouth is open: the drop lands ON the shaft floor (probe 33.59), not through it.
+    // The mouth stand takes the hurt touch: the capsule over the barrel top reaches the shaft
+    // volume's mouth band and the collide pass delivers its damage the way the game's object
+    // hit does [M Player_DealWithObjHit 0x194458:94-103] (measured: health 88.4 after the
+    // 600-tick stand; the old tree's god-mode capture hid this — see the off-centre leg).
+    assert!(sim.drones.health.health < 100.0,
+        "the mouth stand takes the hurt touch [M 0x194458:94-103; L the measured 88.4] (health {:.1})",
+        sim.drones.health.health);
+    // 0.7 off centre the mouth is OPEN no more: the solid mouth geometry stops Bond at the mouth
+    // the way the game does — LIVE FACT (PCSX2 fresh boot, 2026-11-10): Bond placed at
+    // (31.12, 40.5, 17.26) drops and HOLDS at y 36.0–37.1 and never reaches the shaft floor.
+    // The old expectation (the shaft floor ~6.2 down) is WRONG — re-pinned on the mouth stand.
     let mut open = load_06(&iso, &[]);
     settle_near(&mut open, [31.12, 40.5, 17.26]);
     for _ in 0..600 { open.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     let sim = open.sim.as_ref().unwrap();
     eprintln!("[well] off-centre y {:.2} health {:.1} ch62 {}", sim.bond.pos[1],
         sim.drones.health.health, sim.drones.channels.on(0x62));
-    assert!((33.0..36.0).contains(&sim.bond.pos[1]) && sim.bond.grounded,
-        "0.7 off the mouth Bond stands on the shaft floor ~6.2 down [D the shaft floor tris at 33.59] (y {:.2} grounded {})",
+    assert!((36.0..=37.1).contains(&sim.bond.pos[1]) && sim.bond.grounded,
+        "0.7 off the mouth Bond holds at the mouth the way the game does [L the PCSX2 fresh-boot hold at y 36.0–37.1, 2026-11-10] (y {:.2} grounded {})",
         sim.bond.pos[1], sim.bond.grounded);
-    // The inert-volume law: the hurt record never starts (its who-mask cannot match) — no damage
-    // rides #373 in the game either [M 0x17e5d0's AND]. The ~6.2 m drop is survivable.
-    assert!(sim.drones.health.health > 0.0 && !sim.drones.channels.on(0x62),
-        "the ~6.2 m shaft drop costs nothing (fall threshold not reached) and #373 never fires [M 0x17e5d0]");
+    // The touch law: #373 (never started, never disabled) carries its param-1 damage 1000 and
+    // deals it on Bond's object contact [D #373 param 1; M Hurt_GetDamage 0x17ea18 +
+    // Player_DealWithObjHit 0x194458:94-103 — the god-mode capture hid the damage, so the
+    // number is pinned from the decompile, not the capture]. The delivery is the port's
+    // object-hit path: the collide pass delivers the volume's damage on the mouth contact
+    // (the centre leg below stings — measured health 88.4 after the 600-tick stand).
+    let well = sim.hurts.iter().find(|h| h.placement == 373).expect("the well's Hurt volume #373 [D]");
+    assert!(!well.flying && !well.disabled, "#373 never starts and has no gate [M 0x17e5d0:51-102]");
+    assert!((well.damage - 1000.0).abs() < 0.01, "#373's param-1 damage is 1000 [D #373 param 1; M Hurt_GetDamage 0x17ea18]");
 }
 
 /// Sister: Bond 3 m east of the well mouth for the same duration — alive, no death channel.

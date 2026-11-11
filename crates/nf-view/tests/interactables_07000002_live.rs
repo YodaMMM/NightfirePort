@@ -26,6 +26,8 @@ use nf_game::player::{Input, SS_CLIMB, SS_WALK, SS_WIRE};
 
 #[path = "common/walker.rs"]
 mod walker;
+#[path = "common/usepick.rs"]
+mod usepick;
 
 use walker::{Act, Walker, Wp};
 
@@ -63,14 +65,13 @@ fn load_gold() -> Walker {
     w
 }
 
-/// Teleport Bond to a spot and settle him (the stand-in transit — see the header).
+/// Teleport Bond to a spot and settle him (the stand-in transit — see the header). The game's
+/// placement (`Player_StandAtNewPosition` 0x190d88: obj+0x30 = obj+0x40 = the spot, unlink,
+/// relink) — a FindCel miss leaves him unlinked AT the spot, never shoved back [M 0x133288:63-73].
 fn place(w: &mut Walker, x: f32, y: f32, z: f32) {
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [x, y, z];
-        sim.bond.vel = [0.0; 3];
-        sim.bond.prev_pos = sim.bond.pos;
-    }
+    let sim = w.scene.sim.as_mut().unwrap();
+    let yaw = sim.bond.yaw;
+    sim.place_bond([x, y, z], yaw);
     w.wait(20);
 }
 
@@ -305,10 +306,16 @@ fn the_pavillion_grill_sweeps_open_on_the_use_key() {
     let p = w.scene.sim.as_ref().unwrap().drones.sss.list[si].pos();
     // The stand-in transit; the E is the real input (fix_ss_grate_live's stand at 1.2 west,
     // facing the grill — the same reachable spot its test pins).
-    place(&mut w, p[0] - 1.2, p[1], p[2]);
-    w.scene.sim.as_mut().unwrap().bond.yaw = (1.0f32).atan2(0.0);
-    w.walk_to(Wp::at(p[0] - 0.9, p[1], p[2], Act::Use { use_ticks: 200 }), "E the pavillion grill");
-    w.wait(120);
+    let _ = p;
+    {
+        // The press from in front of one of the grill's collision faces (the use pick's
+        // world-sphere + refine stages [M 0x1eae80, 0x1ebaa8 → 0x1e92d8; nf_game::usepick]).
+        let sim = w.scene.sim.as_mut().unwrap();
+        let (tris, sph) = { let s = &sim.drones.sss.list[si]; (usepick::posed(sim, s.hash, &s.matrix), s.world_sphere()) };
+        let st = sim.drones.sss.list[si].state;
+        assert!(usepick::press_on(sim, &tris, sph, 60, &|s| s.drones.sss.list[si].state != st), "E at the pavillion grill");
+    }
+    w.wait(300);
     let s = &w.scene.sim.as_ref().unwrap().drones.sss.list[si];
     let moved = (0..3).map(|k| (s.matrix[3][k] - start[k]).abs()).sum::<f32>();
     assert!(moved > 0.02 && s.state == 0,
@@ -351,18 +358,26 @@ fn pickups_are_taken_by_the_walk_over() {
     };
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.pickups[pi].kind, nf_game::pickup::kind::AMMO,
         "#369 is an ammo pickup [D p0 = 1]");
-    // The boot pool sits at the P2K's 41 rounds [L Inventory::empty's carried[1] = 41] — at the
-    // cap the game REFUSES the take [M Inventory::equip_ammo's cap refusal; Pickup_Handler's
-    // case-1 add path]: the walk-over leaves the pool and the pickup as they were. That refusal
-    // IS the sister; the take-with-room arm is the ammo_pane/gun tests' pin.
-    let ammo0: i32 = w.scene.sim.as_ref().unwrap().drones.inventory.carried.iter().map(|&v| v as i32).sum();
-    let gone0 = w.scene.sim.as_ref().unwrap().drones.pickups[pi].gone;
+    // The take through the placement's stand height [M 0x190d88:104-116]. At the type's cap the game
+    // REFUSES it [M Inventory::equip_ammo's cap refusal; Pickup_Handler's case-1 add path]: the pool
+    // and the pickup stay. Below the cap the same stand takes it (the boot's 41 rounds have room).
+    let t = 1usize; // the P2K/P99 pool [L Inventory::empty's carried[1] = 41]
+    let (boot, cap) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (sim.drones.inventory.carried[t], sim.weapons.ammo_cap[t])
+    };
+    assert!(boot < cap, "the boot pool {boot} sits below the cap {cap}");
+    w.scene.sim.as_mut().unwrap().drones.inventory.carried[t] = cap;
     place(&mut w, ppos[0], ppos[1] - 0.6, ppos[2]);
     w.wait(30);
     let sim = w.scene.sim.as_ref().unwrap();
-    let ammo1: i32 = sim.drones.inventory.carried.iter().map(|&v| v as i32).sum();
-    assert_eq!(ammo1, ammo0, "the full pool refuses the take [M equip_ammo's cap refusal], {ammo0} → {ammo1}");
-    assert_eq!(sim.drones.pickups[pi].gone, gone0, "the refused pickup stays [M Pickup_Handler case 1]");
+    assert_eq!(sim.drones.inventory.carried[t], cap, "the full pool refuses the take [M equip_ammo's cap refusal]");
+    assert!(!sim.drones.pickups[pi].gone, "the refused pickup stays [M Pickup_Handler case 1]");
+    w.scene.sim.as_mut().unwrap().drones.inventory.carried[t] = boot;
+    w.wait(30);
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(sim.drones.inventory.carried[t] > boot && sim.drones.pickups[pi].gone,
+        "with room the walk-over takes #369, pool {boot} -> {}, gone {}", sim.drones.inventory.carried[t], sim.drones.pickups[pi].gone);
 
     // The BOND_BONUS #473 at (−29.08, 5.63, −18.19) [D] (the stand-in transit): consumed by the
     // take path on the walk-over [M 0x18e650:234-236].
@@ -511,7 +526,12 @@ fn a_kitchen_bottle_shatters_under_gunfire() {
     assert!(!w.scene.sim.as_ref().unwrap().drones.breaks.list[bi].dead, "sister: the bottle is intact before");
     // The stand-in transit to the kitchen's firing line (the bottle sits at its object-vert
     // spot; the walkreal route passes the kitchen). The shot is the real input.
-    place(&mut w, centre[0], centre[1] - 2.2, centre[2] + 2.4);
+    // Bond stands on the kitchen floor (5.34 [D the floor ray under the firing spot], the bottle
+    // 0.9 above it). The old spot (centre - 2.2) dropped him onto the floor BELOW the kitchen (3.36)
+    // and the shot reached the bottle through the kitchen floor; the stream join turned the world
+    // stop on (`BREAK_WORLD_STOP` with `PANE_RIDE`), so the scenery nearer than the breakable ends
+    // the round first [M Collide_Update 0x1ea398:216-229, the first solid node ends the walk].
+    place(&mut w, centre[0], centre[1] - 1.0, centre[2] + 2.4);
     let hit = shoot_at(&mut w, centre, 600, &|sim| sim.drones.breaks.list[bi].dead);
     assert!(hit, "the gunfire shatters the bottle [M Break_ApplyDamage 0x12c128; Break_Kill 0x12b970]");
     assert!(w.scene.sim.as_ref().unwrap().drones.breaks.list[bi].dead, "the bottle stays gone");
@@ -578,7 +598,6 @@ fn the_electrocute_volume_hurts_only_once_the_arc_chain_runs() {
             sim.bond.pos = [cx, mid_y, cz];
             sim.bond.prev_pos = sim.bond.pos;
             sim.bond.vel = [0.0; 3];
-            sim.bond.fall_speed = 0.0;
             sim.bond.grounded = false;
         }
         w.wait_enabled(600, "the bunker chat hold");
@@ -721,7 +740,7 @@ fn the_music_triggers_carry_the_disc_params_and_fire_on_their_channel() {
             .map(|t| (t.ch_on, t.event_id)).collect();
         assert!(ts.contains(&(0x17, 31)), "the garden's music trigger (ch 0x17 → event 31) exists [D #378]");
         assert!(ts.contains(&(0x19, 32)), "the west wing's music trigger (ch 0x19 → event 32) exists [D #379]");
-        assert!(sim.drones.worldobjs.music_triggers.iter().all(|t| t.countdown == 0 && !t.playing),
+        assert!(sim.drones.worldobjs.music_triggers.iter().all(|t| t.countdown == 0 && !t.dead),
             "sister: disarmed while the channels are off");
     }
     // The real walk onto plate #342 (out 0x17 [D]) — the stand-in transit to its floor, then the
@@ -745,7 +764,7 @@ fn the_music_triggers_carry_the_disc_params_and_fire_on_their_channel() {
         w.tick(Input::default(), false);
         let sim = w.scene.sim.as_ref().unwrap();
         let mt = sim.drones.worldobjs.music_triggers.iter().find(|t| t.ch_on == 0x17).unwrap();
-        if mt.countdown != 0 || mt.playing { beat = true; break; }
+        if mt.countdown != 0 || mt.dead { beat = true; break; }
     }
     assert!(beat, "the trigger arms its 30-tick countdown on the channel [M 0x1b31a0:19-27]");
 }

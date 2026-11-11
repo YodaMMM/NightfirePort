@@ -99,7 +99,7 @@ Globals: `DAT_00298e20+4·group` = the group's template-drone list head, `DAT_00
 | +0x10 | u16 | **p5 stop channel** — on: un-triggers (`+0x1E = 0`); pauses an armed spawner (returns); deletes an un-armed one (`obj+0xFE \|= 1`) | [M 0x1378d0:29, 0x137e68:72-85] [L-read: both 0 here] |
 | +0x12 | u16 | **p6 done channel** — raised (+ `switch_channels_time` stamp) when all waves spawned and (when `+0x14` is set) no spawned drone is alive; then the spawner disables (`obj+0xFE \|= 1`, `+0x1D = 0`) | [M 0x1378d0:30, 0x137e68:126-143] |
 | +0x14 | u16 | **p7** — `Control` latches `ch[p7]` → the byte at +0x20 = the **KILL** channel **[L-verified, see "Live result" below]** | [M 0x1378d0:31, 0x137e68:50-52] [L-read: group 2 = 0x43 (the 07000005 wall-hug plate #301)] |
-| +0x18 | f32 | **p8 min spot distance** (0 → 10.0) — `SpawnDrone` accepts a template spot only when the player is at least this far (unless +0x1F) | [M 0x1378d0:32-36, 0x137cb0:30-34] [L-read: 10.0 and 4.0] |
+| +0x18 | f32 | **p8 min spot distance**, the integer parameter converted (`cvt.s.w` at 0x1379d4; 0 → 10.0) — `SpawnDrone` accepts a template spot only when the player is at least this far (unless +0x1F) | [M 0x1378d0:32-36, 0x137cb0:30-34] [L-read: 10.0 and 4.0] |
 | +0x1C | u8 | the per-frame "spawn now" decision (`Control` internal; cleared at wave rollover) | [M 0x137e68:151/177/185/203] |
 | +0x1D | u8 | initialised (Init sets 1; `Control` clears it when done; 0 → `Control` returns) | [M 0x137aa0:69, 0x137e68:47/142/287] [L-read: 1] |
 | +0x1E | u8 | triggered (Init: 1 when p4 = 0; `Control` sets it consuming p4; the stop channel clears it) | [M 0x137aa0:72-74, 0x137e68:62/78/141/287] [L-read: group 1 = 1 (no trigger), group 2 = 0] |
@@ -210,10 +210,8 @@ together on the protected classes, the observable rule stays "team 1 → 2/4, te
 
 ## 5. Port cross-check (report only — nothing fixed)
 
-- `crates/nf-game/src/ally.rs:52-69` `on_init_death`: team 1 maps prop54 → 2 **regardless of killer** and prop53 → 4;
-  the decompile's prop54+player-kill arm re-checks prop53 (no fail when unset) and prop53+drone-killer → 2. Team 2/3:
-  the port's prop54 → drone?1:3 and prop53 → 3; the decompile's prop53+drone-killer → 1 and prop54+player-kill →
-  (prop53 ? 3 : nothing). Corner-case-only mismatches while the props co-occur; ally.rs:56-57/63-66.
+- `ally.rs::on_init_death`: this section once read bVar7 as a drone killer. Class 3 is the player [M `Player_Init`
+  0x1910f8:76], so a non-player kill is the arm that re-checks prop 0x53. Fixed; see `docs/systems/actors.md` §3.
 - `crates/nf-game/src/ally.rs:104` says AllyGoToGoalPosition returns to "+0x5A6"; the decompile reads `Drone+0x5A2`
   (0x15f938:28/58). ally.rs:85 says the MissionWait channel is "obj+0x12C"; the decompile reads `Drone+0x12C`
   (0x15efc8:17).

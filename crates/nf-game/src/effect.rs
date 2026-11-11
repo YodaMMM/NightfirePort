@@ -451,8 +451,8 @@ impl Effects {
     pub fn bullet_impact(&mut self, rng: &mut Rng, surfaces: Option<&SurfaceSounds>, gas: &mut crate::gas::GasPool,
                          fx: &mut crate::world_fx::WorldFx,
                          pos: V3, normal: V3, material: u8, dir: V3, flags70: u32, bounces: u8, owner_is_player: bool,
-                         ricochet_mask: u32) -> Option<V3> {
-        self.bullet_impact_on(rng, surfaces, gas, fx, pos, normal, material, dir, flags70, bounces, owner_is_player, ricochet_mask, crate::world::HitHost::Cel(None))
+                         ricochet_mask: u32, gas_host: crate::gas::HostCel) -> Option<V3> {
+        self.bullet_impact_on(rng, surfaces, gas, fx, pos, normal, material, dir, flags70, bounces, owner_is_player, ricochet_mask, crate::world::HitHost::Cel(None), gas_host)
     }
 
     /// `bullet_impact` with the hit's host (`CollisionWorld::segment_surface_host*`): the decal
@@ -461,7 +461,7 @@ impl Effects {
     pub fn bullet_impact_on(&mut self, rng: &mut Rng, surfaces: Option<&SurfaceSounds>, gas: &mut crate::gas::GasPool,
                          fx: &mut crate::world_fx::WorldFx,
                          pos: V3, normal: V3, material: u8, dir: V3, flags70: u32, bounces: u8, owner_is_player: bool,
-                         ricochet_mask: u32, host: crate::world::HitHost) -> Option<V3> {
+                         ricochet_mask: u32, host: crate::world::HitHost, gas_host: crate::gas::HostCel) -> Option<V3> {
         // `Bullet_CollisionHandler` 0x12ce80: the effect flags start 0; weapon_data+0x70 & 2 → 0x61
         // [M 0x12cf58 init, 0x12d198 `| 0x61`]. Without bit 2 the game passes flags 0: no decal, no
         // gas, no debris — only the +0x14 sound (which `Effect_Bullet`'s 0x40 arm plays; the port
@@ -530,7 +530,7 @@ impl Effects {
                         [0.0; 3]
                     };
                     let rgba = [((g.rgba[0] >> 24) & 0xff) as u8, ((g.rgba[0] >> 16) & 0xff) as u8, ((g.rgba[0] >> 8) & 0xff) as u8, (g.rgba[0] & 0xff) as u8];
-                    gas.init_ex_rot(g.mesh, p, 0.0, [0.0; 3], g.scale[0], g.scale[1], g.kind as u8, rgba, g.rgba[1], g.life as f32, rot);
+                    gas.init_ex_rot(rng, g.mesh, p, 0.0, [0.0; 3], g.scale[0], g.scale[1], g.kind as u8, rgba, g.rgba[1], g.life as f32, rot, gas_host);
                 }
             }
             // The decal: `EffectInfo+4` != 0 → take a pool node, evicting the OLDEST when the 200 are
@@ -545,9 +545,11 @@ impl Effects {
         // draws only when `EffectInfo+0x1a != 0` [M 0x1cf290].
         if flags70 & 0x10 != 0 && bounces < 3 && rec.ricochet_n != 0 {
             // The mask: 8 for a world hit, 9 when the hit object carries +0x3c & 0x400000, and 0
-            // on a PIERCE contact — the roll still draws, but can never reflect [M 0x12d6f8:
-            // `uVar16 = 8; … if (bVar7 != 0) uVar16 = 0;`].
-            if rng.rand(rec.ricochet_n as u32) as u8 & ricochet_mask as u8 != 0 {
+            // on a PASS/PIERCE contact — and `Effect_RicochetProb` 0x1cf290 returns 0 for mask 0
+            // BEFORE its `Rand_Rand` (the `else if (param_2 == 0)` arm), so a pass contact draws
+            // NOTHING here; the old port drew anyway — an RNG draw the game never makes
+            // (bullet-pass-water).
+            if ricochet_mask != 0 && rng.rand(rec.ricochet_n as u32) as u8 & ricochet_mask as u8 != 0 {
                 if std::env::var_os("NF_RNGLOG").is_some() {
                     eprintln!("[rnglog] ricochet_roll +1 (draw #{})", rng.draws);
                 }
@@ -577,6 +579,139 @@ impl Effects {
         }
         self.debris.retain(|d| d.life > 0);
     }
+}
+
+/// Which pool an `EffectLightPick` slot belongs to — the view's `Attachment::effect` kinds
+/// (0 decal / 1 casing / 2 debris / 3 smoke cloud) plus 4 for the gas puffs, which ride the
+/// attachment's own `gas` field and so have no effect kind of their own.
+pub const EFFECT_PICK_DECAL: u8 = 0;
+pub const EFFECT_PICK_CASING: u8 = 1;
+pub const EFFECT_PICK_DEBRIS: u8 = 2;
+pub const EFFECT_PICK_SMOKE_CLOUD: u8 = 3;
+pub const EFFECT_PICK_GAS_PUFF: u8 = 4;
+
+/// One effect draw slot's per-object light pick. The game picks the lights of EVERY drawn object
+/// at the object's own world sphere, per frame, in the draw-list walk: `View_DrawObjList`
+/// 0x1e69a0:73-81 runs `Lights_CalcClosestLights(obj+0x80, *(u16*)(obj+0xF0), &count)` then
+/// `psiLight_SetLights(list, count, 1, 1, 1)` for every non-cel, non-animobject entry, BEFORE the
+/// per-class draw dispatch — debris, casings, gas puffs and smoke clouds all ride it [M]. The
+/// port's effect draws lit whole mesh groups from ONE pick at the load-time (identity) mesh
+/// centre — the world origin — so pieces near different lights drew each other's light.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EffectLightPick {
+    /// The pool (`EFFECT_PICK_*`).
+    pub kind: u8,
+    /// The slot within that pool (the casing/debris draw slot, the puff/cloud list index).
+    pub slot: u16,
+    /// The mesh the slot draws — the hash whose glist the game linked at create ([M Debris_Create
+    /// 0x1aaa00:51, Bullet_init_casing 0x12fe2c, Gas_Init 0x1aacc8, Occlude_Create 0x17ea80]).
+    pub mesh: u32,
+    /// The game's obj+0x80 world sphere (centre xyz, w = radius): `Control_BuildWorldSph`
+    /// 0x133070 transforms the glist's local sphere by the object matrix and scales the radius by
+    /// |obj+0xE8| — for a debris piece the piece position and the mesh radius × 0.4..0.5. The
+    /// effect meshes' glist local centres measure ≤ 0.03 units ([D] archive census, 07000005:
+    /// debris 0x0200012c (−0.007, 0.000, −0.001), gas 0x0200001f/0x02000039 exactly 0), so the
+    /// port feeds the piece position for them; the smoke cloud mesh's 1.1-unit centre offset is
+    /// carried ([D] 0x02000273 centre (−0.005, 1.097, 0.117)).
+    pub sphere: [f32; 4],
+    /// obj+0xF0's low 16 bits — the mask `Lights_CalcClosestLights` gates kinds with: kinds 0/2
+    /// need bit 0x80, kind 1 is skipped under bit 0x100 [M 0x1cb2e0:19-31]. The class creators OR
+    /// their bits in after `Control_SetGList` copies the glist word [M Debris_Create 0x1aaa00:53
+    /// `|= 0x20000020`; Gas_Init 0x1aacc8:83 `|= 0x20020120`], so a puff's mask is the mesh word
+    /// | 0x120 — which excludes kind 1 on every gas mesh (0x229/0x329 → 0x329 [D census]).
+    pub flags: u16,
+    /// The chosen lights, nearest first: up to two indices into the resolved list the pick ran
+    /// against (the game sorts by the falloff `d/(radius·0.5)` and uploads the first two [M
+    /// 0x1cb2e0:52-77 + `psiLight_SetLights` 0x10e588:11-14]). `None` = nothing accepted — the
+    /// 0x0321/0x329/0x150 meshes accept no kind at any centre ([D] archive census).
+    pub lights: [Option<u32>; 2],
+}
+
+/// The per-object light pick of every live effect draw slot, against `resolved` — the sim-side
+/// data the draw consumes instead of one origin-centred pick per mesh group. `mesh_sphere` maps
+/// a mesh hash to its glist bounds (local centre, radius, the +0x44 flags word) — the same
+/// records the level parse's `MapObject` carries. Deterministic: the walk and its sort draw no
+/// RNG [M Lights_CalcClosestLights 0x1cb2e0].
+///
+/// Decals are deliberately absent: the game never picks with the decal node's own glist word.
+/// The node draws inside its host's list entry, so the pick runs at the HOST's sphere with the
+/// HOST's word — cel+0x80 / cel+0x94 for a cel host [M View_DrawCelGlist 0x1e6538:58-60],
+/// obj+0x80 / obj+0xF0 for an object host [M View_DrawObjectGlist 0x1e6780] — which the port's
+/// world draws already reproduce; the decal meshes' own 0x0321 word never enters any pick.
+pub fn effect_light_picks(
+    drones: &crate::drone::Drones,
+    resolved: &crate::light::ResolvedLights,
+    mesh_sphere: &dyn Fn(u32) -> Option<([f32; 3], f32, u16)>,
+) -> Vec<EffectLightPick> {
+    let mut out = Vec::new();
+    let mut buf = [(0usize, 0.0f32); 30];
+    let mut push = |kind: u8, slot: u16, mesh: u32, centre: [f32; 3], radius: f32, flags: u16| {
+        let mut p = EffectLightPick {
+            kind,
+            slot,
+            mesh,
+            sphere: [centre[0], centre[1], centre[2], radius],
+            flags,
+            lights: [None, None],
+        };
+        // The game's walk + falloff sort, capped at 30 [M 0x1cb2e0], then the first two upload [M 0x10e588].
+        let n = resolved.closest_into(p.sphere, flags as u32, &mut buf);
+        for (s, &(i, _)) in buf[..n].iter().take(2).enumerate() {
+            p.lights[s] = Some(i as u32);
+        }
+        out.push(p);
+    };
+    // Casings (class 0x40, list 0): the flying ones draw, so the flying ones pick [M
+    // Bullet_InitCasingLists 0x12fd48 parks the armed slots View_SetDrawInNoViews;
+    // Bullet_init_casing_ex 0x12f678 re-shows them]. Mask: the casing mesh's own glist word (no
+    // obj+0xF0 OR in the casing creators [M grep of every obj+0xF0 store]).
+    for (slot, c) in drones.casings.list.iter().enumerate() {
+        if c.state != 0 { continue; }
+        let Some((_, radius, flags)) = mesh_sphere(c.mesh) else { continue };
+        push(EFFECT_PICK_CASING, slot as u16, c.mesh, c.pos, radius, flags);
+    }
+    // Debris (class 0x10): every slotted piece — the effect debris, the breakable pieces and the
+    // blast debris share the 128 draw slots (`debris_slot_map`). Mask: mesh word | 0x20 [M
+    // 0x1aaa00:53]; radius = mesh radius × obj+0xE8 (0.4 + FRand(0.1) [M 0x1aaa00:30-33]).
+    let map = debris_slot_map(&drones.effects.debris, &drones.breaks.shatter.debris, &drones.blast_debris);
+    for (slot, r) in map.iter().enumerate() {
+        let Some((src, i)) = r else { continue };
+        let i = *i;
+        let (mesh, pos, scale) = match src {
+            0 => match drones.effects.debris.get(i) {
+                Some(d) => (d.mesh, d.pos, d.scale),
+                None => continue,
+            },
+            1 => match drones.breaks.shatter.debris.get(i) {
+                Some(d) => (d.model, d.pos, d.e8),
+                None => continue,
+            },
+            2 => match drones.blast_debris.get(i) {
+                Some(d) => (d.model, d.pos, d.e8),
+                None => continue,
+            },
+            _ => continue,
+        };
+        let Some((_, radius, flags)) = mesh_sphere(mesh) else { continue };
+        push(EFFECT_PICK_DEBRIS, slot as u16, mesh, pos, radius * scale, flags | 0x20);
+    }
+    // Smoke clouds (class 0x2A, `Occlude_Create` 0x17ea80): a static object at obj+0x30; the
+    // mesh's glist centre offset rides the sphere ([D] 0x02000273 local centre y 1.097). Mask:
+    // the mesh word (no OR in Occlude_Create [M grep]).
+    for (slot, c) in drones.smoke_clouds.iter().enumerate() {
+        let Some((centre, radius, flags)) = mesh_sphere(c.mesh) else { continue };
+        push(EFFECT_PICK_SMOKE_CLOUD, slot as u16, c.mesh,
+            [c.pos[0] + centre[0], c.pos[1] + centre[1], c.pos[2] + centre[2]], radius, flags);
+    }
+    // Gas puffs: the live ones (a hidden puff sits parked out of the draw lists [M
+    // View_SetDrawInNoViews]). Mask: mesh word | 0x120 [M 0x1aacc8:83]; radius = mesh radius ×
+    // the puff's own scale.
+    for (slot, g) in drones.gas.puffs.iter().enumerate() {
+        if g.hidden { continue; }
+        let Some((_, radius, flags)) = mesh_sphere(g.mesh) else { continue };
+        push(EFFECT_PICK_GAS_PUFF, slot as u16, g.mesh, g.pos, radius * g.scale, flags | 0x120);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -618,7 +753,7 @@ mod tests {
         let mut rng = Rng::new(3);
         // Normal [0.8, 0, 0.6]: |y| = 0 → the wall puff runs (and the floor puffs' slots are
         // empty, mesh 0 — the first entry is the only one).
-        e2.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [0.0, 0.0, 0.0], [0.8, 0.0, 0.6], 10, [0.0, 0.0, -1.0], 0x2, 0, true, 8);
+        e2.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [0.0, 0.0, 0.0], [0.8, 0.0, 0.6], 10, [0.0, 0.0, -1.0], 0x2, 0, true, 8, crate::gas::HostCel::default());
         assert_eq!(gas.puffs.len(), 1);
         let want = vec_norm_to_rot([0.8, 0.0, 0.6]);
         assert_eq!(gas.puffs[0].rot, want, "the wall puff carries the Vec_NormToRot euler");
@@ -629,7 +764,7 @@ mod tests {
         let surf = table(r);
         let mut gas2 = crate::gas::GasPool::default();
         let mut e3 = Effects::new();
-        e3.bullet_impact(&mut rng, Some(&surf), &mut gas2, &mut fx(), [1.0, 1.0, 1.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8);
+        e3.bullet_impact(&mut rng, Some(&surf), &mut gas2, &mut fx(), [1.0, 1.0, 1.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8, crate::gas::HostCel::default());
         assert_eq!(gas2.puffs[0].rot, negated_normal_euler([0.0, 1.0, 0.0]));
         // +0x1b clear → the zero vector.
         let mut r = rec(0, 0);
@@ -637,7 +772,7 @@ mod tests {
         let surf = table(r);
         let mut gas3 = crate::gas::GasPool::default();
         let mut e4 = Effects::new();
-        e4.bullet_impact(&mut rng, Some(&surf), &mut gas3, &mut fx(), [1.0, 1.0, 1.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8);
+        e4.bullet_impact(&mut rng, Some(&surf), &mut gas3, &mut fx(), [1.0, 1.0, 1.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8, crate::gas::HostCel::default());
         assert_eq!(gas3.puffs[0].rot, [0.0; 3]);
     }
 
@@ -659,7 +794,7 @@ mod tests {
         let r = rec(0x0200_0126, 0);
         let surf = table(r);
         let mut rng = Rng::new(1);
-        let out = e.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [10.0, 2.0, 3.0], [0.0, 0.0, 1.0], 10, [0.0, 0.0, -1.0], 0x2, 0, true, 8);
+        let out = e.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [10.0, 2.0, 3.0], [0.0, 0.0, 1.0], 10, [0.0, 0.0, -1.0], 0x2, 0, true, 8, crate::gas::HostCel::default());
         assert!(out.is_none());
         assert_eq!(e.decals.len(), 1);
         let d = &e.decals[0];
@@ -670,7 +805,7 @@ mod tests {
         // only draws would be the ricochet's, which is gated on the flag too).
         let before = (rng.x, rng.y);
         let mut e2 = Effects::new();
-        e2.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [1.0, 1.0, 1.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x0, 0, true, 8);
+        e2.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [1.0, 1.0, 1.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x0, 0, true, 8, crate::gas::HostCel::default());
         assert!(e2.decals.is_empty());
         assert_eq!((rng.x, rng.y), before, "flags 0: the game draws nothing at this impact");
     }
@@ -685,7 +820,7 @@ mod tests {
         let surf = table(r);
         let mut rng = Rng::new(7);
         for k in 0..201 {
-            e.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [k as f32, 0.0, 0.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8);
+            e.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [k as f32, 0.0, 0.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8, crate::gas::HostCel::default());
         }
         assert_eq!(e.decals.len(), 200, "the pool holds 200");
         assert_eq!(e.decals[0].pos[0], 1.0, "the first decal (k=0) was evicted");
@@ -704,7 +839,7 @@ mod tests {
         let surf = table(rec(0x0200_0126, 0));
         let mut rng = Rng::new(7);
         let shoot = |e: &mut Effects, rng: &mut Rng, gas: &mut crate::gas::GasPool, k: usize| {
-            e.bullet_impact(rng, Some(&surf), gas, &mut fx(), [k as f32, 0.0, 0.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8);
+            e.bullet_impact(rng, Some(&surf), gas, &mut fx(), [k as f32, 0.0, 0.0], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8, crate::gas::HostCel::default());
         };
         for k in 0..200 { shoot(&mut e, &mut rng, &mut gas, k); }
         let before: Vec<f32> = (0..DECAL_POOL).map(|n| e.decal_in_node(n).unwrap().pos[0]).collect();
@@ -810,7 +945,7 @@ mod tests {
         let r = rec(0, 0);
         let surf = table(r);
         let mut rng = Rng::new(3);
-        e.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [0.0; 3], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8);
+        e.bullet_impact(&mut rng, Some(&surf), &mut gas, &mut fx(), [0.0; 3], [0.0, 1.0, 0.0], 10, [0.0, -1.0, 0.0], 0x2, 0, true, 8, crate::gas::HostCel::default());
         assert!(!e.debris.is_empty(), "stone debris spawns");
         assert!(e.debris.len() <= 6, "count = Rand_Rand(5)+1 ≤ 6");
         for d in &e.debris {
@@ -845,7 +980,7 @@ mod tests {
             let mut e = Effects::new();
             let mut rng = Rng::new(seed);
             let before = (rng.x, rng.y);
-            let out = e.bullet_impact(&mut rng, Some(&surf2), &mut gas, &mut fx(), [0.0; 3], n, 10, dir, 0x12, 0, true, 8);
+            let out = e.bullet_impact(&mut rng, Some(&surf2), &mut gas, &mut fx(), [0.0; 3], n, 10, dir, 0x12, 0, true, 8, crate::gas::HostCel::default());
             assert_ne!((rng.x, rng.y), before, "N != 0: exactly one Rand_Rand draw (seeds advanced)");
             if let Some(d) = out { found = Some((seed, d)); break; }
         }
@@ -855,14 +990,22 @@ mod tests {
         assert!((d[0] - 0.995).abs() < 0.01, "the tangential component survives");
         assert!(d[2].abs() < 0.01, "the normal component is removed (e ≈ 0)");
         assert!((d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - 1.0).abs() < 1e-4, "normalised");
-        // Sister: N = 0 → no draw, no reflection.
+        // Sister: N = 0 → no ricochet draw, no reflection. The stream still moves: the record's
+        // kind-9 gas puff spawns through `Gas_Init`, whose spin and sign are shared-stream draws
+        // [M 0x1aacc8:72-80 — unconditional for every puff; kind 9 takes the no-draw position arm
+        // :105-141]. gas-rng-draws: the old pin read 0 total draws — that was only true while the
+        // port's Gas_Init consumed nothing; Effect_RicochetProb itself still draws nothing, so the
+        // twin replay of the puff's 2 draws must land on the exact state the call leaves.
         let r3 = EffectRecord { debris_enable: 0, ..rec(0, 0) };
         let surf3 = table(r3);
         let mut e3 = Effects::new();
         let mut rng3 = Rng::new(1);
-        let before3 = (rng3.x, rng3.y);
-        assert!(e3.bullet_impact(&mut rng3, Some(&surf3), &mut gas, &mut fx(), [0.0; 3], n, 10, dir, 0x12, 0, true, 8).is_none());
-        assert_eq!((rng3.x, rng3.y), before3, "N = 0: Effect_RicochetProb draws nothing");
+        let mut twin = Rng::new(1);
+        twin.frand(std::f32::consts::FRAC_PI_2 * crate::gas::REC_FRAME_RATE); // the spin [M 0x1ab060]
+        twin.rand(0x100); // the sign coin [M 0x1ab08c]
+        assert!(e3.bullet_impact(&mut rng3, Some(&surf3), &mut gas, &mut fx(), [0.0; 3], n, 10, dir, 0x12, 0, true, 8, crate::gas::HostCel::default()).is_none(), "N = 0: no ricochet, no gas");
+        assert_eq!((rng3.x, rng3.y), (twin.x, twin.y), "N = 0: exactly the puff's 2 Gas_Init draws, no ricochet draw");
+        assert_eq!(rng3.draws, 2);
     }
 
     /// `Vec_MakeOrthonormalBasis` 0x1e4b78: the basis sum is orthogonal to the normal.
@@ -873,5 +1016,74 @@ mod tests {
             let dot = s[0] * n[0] + s[1] * n[1] + s[2] * n[2];
             assert!(dot.abs() < 1e-5, "u+v lies in the surface plane");
         }
+    }
+
+    /// The per-object light pick (`effect_light_picks`): a piece between two kind-1 lights picks
+    /// THOSE two at its own position, in falloff order — not whatever is nearest the world origin,
+    /// which is what the old per-group draw pick ran at. The empty-mask meshes accept none even
+    /// with lights in range, and the gas puff's `| 0x120` mask excludes kind 1 [M 0x1aacc8:83].
+    #[test]
+    fn effect_light_pick_selects_at_the_piece_not_the_origin() {
+        let mut drones = crate::drone::Drones::new(Vec::new(), Rng::new(1));
+        // Two pieces: one of the kind-1-admitting debris mesh 0x0200012c (flags 0x020 [D census]),
+        // one of the empty-mask mesh 0x02000200 (flags 0x321 [D census]).
+        drones.effects.debris.push(Debris {
+            pos: [10.5, 0.0, 0.0], vel: [0.0; 3], spin: [0.0; 3], life: 100, scale: 0.45,
+            mesh: 0x0200_012c, alpha: 255, draw: DrawSlot::default(),
+        });
+        drones.effects.debris.push(Debris {
+            pos: [10.5, 0.0, 0.0], vel: [0.0; 3], spin: [0.0; 3], life: 100, scale: 0.45,
+            mesh: 0x0200_0200, alpha: 255, draw: DrawSlot::default(),
+        });
+        drones.effects.assign_debris_slots(&mut [], &mut []);
+        // Three kind-1 lights: near the piece, farther from it, and at the world origin.
+        let rl = |pos: [f32; 4]| crate::light::ResolvedLight {
+            pos, track_pos: pos, rgb: [255.0, 200.0, 120.0], intensity: 2.0,
+            inv_r2: 1.0 / 36.0, kind: 1, active: true, track: None,
+        };
+        let resolved = crate::light::ResolvedLights { lights: vec![
+            rl([10.0, 0.0, 0.0, 1.0]),   // 0.5 from the piece
+            rl([12.5, 0.0, 0.0, 1.0]),   // 2.0 from the piece
+            rl([0.0, 0.0, 0.0, 1.0]),    // AT the origin — the old per-group pick centre
+        ] };
+        let sphere = |h: u32| match h {
+            0x0200_012c => Some(([0.0; 3], 0.1, 0x020u16)),
+            0x0200_0200 => Some(([0.0; 3], 0.1, 0x321u16)),
+            0x0200_0273 => Some(([0.0, 1.097, 0.117], 1.742, 0x150u16)),
+            0x0200_0039 => Some(([0.0; 3], 4.139, 0x329u16)),
+            _ => None,
+        };
+        let picks = effect_light_picks(&drones, &resolved, &sphere);
+        // Debris slot 0 (0x0200012c, mask 0x020): the two piece-nearest lights, nearest first.
+        let d = picks.iter().find(|p| p.kind == EFFECT_PICK_DEBRIS && p.mesh == 0x0200_012c).expect("the 0x020 debris piece is picked");
+        assert_eq!(d.slot, 0);
+        assert_eq!(d.flags, 0x020, "the mesh word | Debris_Create's 0x20 [M 0x1aaa00:53]");
+        assert!((d.sphere[0] - 10.5).abs() < 1e-4 && (d.sphere[3] - 0.045).abs() < 1e-4,
+            "the pick runs at the piece's own sphere: centre = pos, radius = mesh radius x scale");
+        assert_eq!(d.lights, [Some(0), Some(1)], "the two lights nearest the PIECE, in falloff order");
+        // The pre-fix witness: at the world origin (the old group-pick centre) the SAME list picks
+        // the origin light first — a different piece answer is the whole bug.
+        let (lp, _) = resolved.pick2([0.0, 0.0, 0.0, 0.1], 0x20);
+        assert_eq!(lp[0], [0.0, 0.0, 0.0, 1.0], "the origin-centred pick lands on the origin light");
+        // The empty-mask piece accepts nothing at any centre.
+        let e = picks.iter().find(|p| p.kind == EFFECT_PICK_DEBRIS && p.mesh == 0x0200_0200).expect("the 0x321 debris piece is picked");
+        assert_eq!(e.lights, [None, None], "0x321 admits no kind: kind 0/2 lack 0x80, kind 1 is under 0x100 [M 0x1cb2e0:19-31]");
+        // A smoke cloud carries the mesh's 1.1-unit local centre in the sphere [D census].
+        drones.smoke_clouds.push(crate::grenade::SmokeCloud { pos: [5.0, 1.0, 5.0], mesh: 0x0200_0273, ticks: 100 });
+        let picks = effect_light_picks(&drones, &resolved, &sphere);
+        let c = picks.iter().find(|p| p.kind == EFFECT_PICK_SMOKE_CLOUD).expect("the cloud is picked");
+        assert!((c.sphere[1] - 2.097).abs() < 1e-3, "cloud sphere centre = pos + the mesh's local centre, got {}", c.sphere[1]);
+        assert_eq!(c.lights, [None, None], "the 0x150 cloud mask accepts nothing [D census]");
+        // A gas puff's mask is the mesh word | 0x120: kind 1 is excluded even in range [M 0x1aacc8:83].
+        drones.gas.puffs.push(crate::gas::Gas {
+            pos: [10.5, 0.0, 0.0], vel: [0.0; 3], mesh: 0x0200_0039, scale: 1.0, scale_rate: 0.0,
+            rgba: [128.0; 4], rgba_rate: [0.0; 4], spin: 0.0, life: 40.0, kind: 0,
+            billboard: false, xray_only: false, hidden: false, born: 0, ceil_y: None, child: None,
+            rot: [0.0; 3],
+        });
+        let picks = effect_light_picks(&drones, &resolved, &sphere);
+        let g = picks.iter().find(|p| p.kind == EFFECT_PICK_GAS_PUFF).expect("the puff is picked");
+        assert_eq!(g.flags, 0x329, "0x329 | 0x120 = 0x329: the Gas_Init OR carries 0x100");
+        assert_eq!(g.lights, [None, None], "the puff mask excludes kind 1, so no light even in range");
     }
 }

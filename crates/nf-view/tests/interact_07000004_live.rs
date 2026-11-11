@@ -97,10 +97,28 @@ fn the_armour_pickup_raises_the_armour() {
         .expect("the BodyArmourHeavy pickup");
     drop(sim);
     eprintln!("[04] armour before {before}, walking to the armour at {at:?}");
+    // The armour as the take leaves it: the tick the case goes from live to gone. With the
+    // game's standing bodies the walk's stream shifts and the target's fire now lands a 0.75
+    // plink AFTER the take (armour 49.25 at the walk's end, health topped up [L capsule-join-2
+    // red]); the pin is the take's hard set [M :220-225], read on the take tick itself.
+    let at_take = std::rc::Rc::new(std::cell::Cell::new(None::<f32>));
+    {
+        let at_take = at_take.clone();
+        let mut was_live = true;
+        w.on_step = Some(Box::new(move |sc: &nf_view::scene::Scene, _t: u32| {
+            let sim = sc.sim.as_ref().unwrap();
+            let live = sim.drones.pickups.iter().any(|p| p.kind == 3 && !p.gone);
+            if was_live && !live && at_take.get().is_none() { at_take.set(Some(sim.drones.health.armour)); }
+            was_live = live;
+        }));
+    }
     w.walk_nav_to(at, "the armour pickup", 0.4);
+    w.on_step = None;
     let sim = w.scene.sim.as_ref().unwrap();
-    assert!(sim.drones.health.armour >= 50.0,
-        "walking over the armour case must set armour 50 [M Pickup_Handler 0x18e650:220-225]");
+    let took = at_take.get();
+    eprintln!("[04] armour on the take tick {took:?}, at the walk's end {}", sim.drones.health.armour);
+    assert!(took.map_or(false, |a| a >= 50.0),
+        "walking over the armour case must set armour 50 [M Pickup_Handler 0x18e650:220-225] (on the take tick: {took:?})");
     let taken = sim.drones.pickups.iter().find(|p| p.kind == 3).map_or(true, |p| p.gone);
     assert!(taken, "the armour pickup is taken");
 }

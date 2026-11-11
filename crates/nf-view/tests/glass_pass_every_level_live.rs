@@ -113,6 +113,22 @@ fn shoot_guard_through_panes(
     max_ticks: u32,
     fire_ok: impl Fn(&nf_view::scene::Sim) -> bool + Copy,
 ) -> Option<ThroughShot> {
+    shoot_guard_through_panes_settled(w, panes, stands, axis, max_ticks, fire_ok, false)
+}
+
+/// The same shot with the SETTLED-target gate (the 08 pin): fire only when the aimed guard's
+/// position has held still for 30 straight ticks — the measured failure had the tapped guard
+/// (9) reposition mid-flight (state 115, he ran to z −121.5 [L the run log]) so no guard lost
+/// health in the same shot; a player waits for a stationary silhouette.
+fn shoot_guard_through_panes_settled(
+    w: &mut Walker,
+    panes: &[usize],
+    stands: &[[f32; 3]],
+    axis: usize,
+    max_ticks: u32,
+    fire_ok: impl Fn(&nf_view::scene::Sim) -> bool + Copy,
+    need_settled: bool,
+) -> Option<ThroughShot> {
     let geom: Vec<(usize, [f32; 3], [f32; 3])> = {
         let sim = w.scene.sim.as_ref().unwrap();
         panes.iter().filter_map(|p| {
@@ -130,10 +146,26 @@ fn shoot_guard_through_panes(
         };
         if side == 0.0 { continue; }
         let mut prev_hp: Vec<f32> = w.scene.sim.as_ref().unwrap().drones.list.iter().map(|d| d.health).collect();
+        let mut still: Vec<u32> = vec![0; w.scene.sim.as_ref().unwrap().drones.list.len()];
+        let mut prev_pos: Vec<[f32; 3]> = w.scene.sim.as_ref().unwrap().drones.list.iter().map(|d| d.pos).collect();
+        // The cross-tick pin ledger: (tick, guard, pane, hp at the tap) — the round passes the
+        // pane on the tap tick and reaches the guard the tick after (the walk applies the
+        // nearest contact per tick; the pane drains first, the guard takes the round next
+        // tick), so the pin reads the ledger instead of demanding both in one tick.
+        let mut taps: Vec<(u32, usize, usize, f32)> = vec![];
+        let mut dead_at: Vec<Option<u32>> = geom.iter().map(|_| None).collect();
         let mut prev_alive: Vec<bool> = geom.iter().map(|(p, _, _)|
             w.scene.sim.as_ref().unwrap().drones.breaks.list.iter().find(|b| b.placement == *p).map_or(false, |b| !b.dead)).collect();
-        let mut taps: Vec<(u32, usize)> = vec![];
         for t in 0..max_ticks {
+            // The settled gate's ledger: each guard's still-count (reset on a >0.01 move).
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                for (i, d) in sim.drones.list.iter().enumerate() {
+                    let moved = dxz(d.pos, prev_pos[i]) > 0.01;
+                    still[i] = if moved { 0 } else { still[i].saturating_add(1) };
+                    prev_pos[i] = d.pos;
+                }
+            }
             let (plan, alive_now) = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let bp = sim.bond.pos;
@@ -173,6 +205,17 @@ fn shoot_guard_through_panes(
                             if at < span[k].0 - 0.05 || at > span[k].1 + 0.05 { inside = false; break; }
                         }
                         if !inside { continue; }
+                        // The settled mode's line check: the eye→chest segment's ONLY blocker
+                        // is the sheet itself (the stop at the sheet-plane fraction, ±0.06) —
+                        // the measured failure's line crossed the real glass but the station
+                        // structure behind ate the round (guard 8's hp never moved while the
+                        // pane drained). A player fires through a window at someone he can
+                        // actually see beyond it.
+                        if need_settled {
+                            let pane_only = sim.world.segment(eye, chest).map_or(false, |tb| (tb - s).abs() < 0.06);
+                            if !pane_only { continue; }
+                        }
+                        if need_settled && still.get(i).copied().unwrap_or(0) < 30 { continue; }
                         let dist = dxz(d.pos, bp);
                         if best.map_or(true, |(bd, _, _, _)| dist < bd) { best = Some((dist, i, chest, *p)); }
                     }
@@ -196,39 +239,11 @@ fn shoot_guard_through_panes(
                     // a HELD trigger refires never, so a converged hold spent exactly one
                     // round per stand (the measured failed run's clip 7→6 then flat).
                     if t % 2 == 0 {
-                        // The tap ray, measured: where does the round actually cross the
-                        // sheet plane, and does the window FRAME (the wall around the glass)
-                        // eat the line before the pane?
-                        {
-                            let sim = w.scene.sim.as_ref().unwrap();
-                            let bp = sim.bond.pos;
-                            let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
-                            let (ya, pa) = (sim.bond.yaw, sim.bond.pitch);
-                            let dir = [ya.sin() * pa.cos(), pa.sin(), ya.cos() * pa.cos()];
-                            if dir[0].abs() > 1e-4 {
-                                let tt = (109.25 - eye[0]) / dir[0];
-                                eprintln!("[glass-08] tap ray: eye ({:.2},{:.2},{:.2}) yaw {:.3} pitch {:.3} -> x=109.25 at z {:.3} y {:.3} (the sheet: z -121.998..-120.117, y 34.25..36.375)",
-                                    eye[0], eye[1], eye[2], ya, pa, eye[2] + tt * dir[2], eye[1] + tt * dir[1]);
-                            }
-                            let blocked = sim.world.segment(eye, [144.94, 46.9, -109.77]);
-                            eprintln!("[glass-08] eye->guard9 world segment blocked: {}", blocked.is_some());
-                            // Is it the FRAME? Walk the ray west of the sheet plane: if the
-                            // world blocks before x ≈ 109.24 the wall opening eats the round
-                            // (the pane box hangs inside the wall), if clear to the plane the
-                            // glass itself was the blocker and the bullet path skipped it.
-                            for xs in [108.6f32, 108.9, 109.1, 109.2, 109.24] {
-                                let tt = (xs - eye[0]) / dir[0];
-                                let pt = [xs, eye[1] + tt * dir[1], eye[2] + tt * dir[2]];
-                                let hit = sim.world.segment(eye, pt);
-                                eprintln!("[glass-08] ray to x{xs:.2} (z {:.2} y {:.2}): {}", pt[2], pt[1], if hit.is_some() { "BLOCKED" } else { "clear" });
-                            }
-                            for b in sim.drones.breaks.list.iter().filter(|b| b.placement == 177) {
-                                eprintln!("[glass-08] pane 177 after: hp {:.2} dead {}", b.health, b.dead);
-                            }
-                        }
-                        eprintln!("[glass-tap] t{t} pane {pane} guard {gi} err {err:.3} clip {}", w.scene.sim.as_ref().unwrap().gun.clip);
+                        let hp_snap = w.scene.sim.as_ref().unwrap().drones.list[gi].health;
+                        let gp = w.scene.sim.as_ref().unwrap().drones.list[gi].pos;
+                        eprintln!("[glass-tap] t{t} pane {pane} guard {gi} hp {hp_snap:.2} at {gp:?} clip {}", w.scene.sim.as_ref().unwrap().gun.clip);
                         w.tick_fire(input);
-                        taps.push((t, gi));
+                        taps.push((t, gi, pane, hp_snap));
                     } else {
                         w.tick(input, false);
                     }
@@ -239,19 +254,20 @@ fn shoot_guard_through_panes(
                 }
                 None => w.tick(Input::default(), false),
             }
-            // The pin: a pane that was alive last tick died this tick while the guard a recent
-            // tap aimed at lost health — the round crossed the sheet and reached him.
+            // The pin: a live pane died (record when) and a tap LEDGER row whose pane it is
+            // shows the aimed guard below his at-tap health within 40 ticks — the round
+            // crossed the sheet and reached him.
             let sim = w.scene.sim.as_ref().unwrap();
             let hp_now: Vec<f32> = sim.drones.list.iter().map(|d| d.health).collect();
             for (pi, (p, _, _)) in geom.iter().enumerate() {
-                if prev_alive[pi] && !alive_now[pi] {
-                    for (tt, gi) in taps.iter().rev().take(4) {
-                        if t - tt > 24 { continue; }
-                        let before = prev_hp[*gi];
-                        let after = hp_now[*gi];
-                        if after < before {
-                            let beyond = sim.drones.list[*gi].pos[axis] != 0.0;
-                            return Some(ThroughShot { guard: *gi, pane: *p, tap_t: *tt, died_t: t, hp_before: before, hp_after: after, guard_beyond: if beyond { 1.0 } else { 0.0 } });
+                if prev_alive[pi] && !alive_now[pi] && dead_at[pi].is_none() { dead_at[pi] = Some(t); }
+                if let Some(td) = dead_at[pi] {
+                    if t - td > 60 { continue; }
+                    for &(tt, gi, tp, hp0) in taps.iter().rev() {
+                        if tp != *p || tt < td.saturating_sub(2) || t - tt > 40 { continue; }
+                        if hp_now[gi] < hp0 {
+                            let beyond = sim.drones.list[gi].pos[axis] != 0.0;
+                            return Some(ThroughShot { guard: gi, pane: *p, tap_t: tt, died_t: td, hp_before: hp0, hp_after: hp_now[gi], guard_beyond: if beyond { 1.0 } else { 0.0 } });
                         }
                     }
                 }
@@ -304,9 +320,21 @@ fn the_01_breach_shot_breaks_the_entry_glass() {
     sim.step_bond(Input::default(), false, false, false); // the loadout draw
     assert_eq!(sim.gun.weapon, 0x2, "the pistol is in hand [L the probe]");
     assert!(sim.gun.clip > 0, "the pistol has rounds");
+    // THE STOP PIN'S MATERIAL GROUND (glass-pierce-2): the game's pass gate is the contact's
+    // surface byte == 0x10, NOT the placement kind [M Bullet_CollisionHandler 0x12ce80 disasm
+    // 0x12cf54-0x12cf60 `lbu $v0,0x50($s2)` / `andi 0x3f` / `xori 0x10` / `movz`]. The entry
+    // panes' shape materials are 0x02 [D breakable_census] — so the game's round STOPS at the
+    // live sheet (the old port passed it by the kind-2 gate; the flip landed with this pin).
+    // The shape materials are the same shape table the collision queries read [M world.rs
+    // shape_materials ← stat.mats].
     for (p, lo, hi) in &panes {
         let b = sim.drones.breaks.list.iter().find(|b| b.placement == *p).unwrap();
         assert!(!b.dead, "pane {p} starts alive");
+        let mats: Vec<u8> = sim.world.shape_materials(b.shape_key).unwrap_or(&[]).to_vec();
+        assert!(!mats.is_empty(), "entry pane {p} has no shape materials — the stop pin needs the measured byte [D breakable_census]");
+        assert!(!mats.iter().any(|m| m & 0x3f == 0x10),
+            "entry pane {p} carries a glass (0x10) material — the game's round would PASS it [M 0x12cf54-0x12cf60], the stop pin below would be wrong; got {mats:?}");
+        eprintln!("[glass-01] pane {p} shape materials {mats:?} — no 0x10: the game's round STOPS at the live sheet [M 0x12cf54-0x12cf60]");
         let _ = (lo, hi);
     }
     let mut prev_hp: Vec<f32> = sim.drones.list.iter().map(|d| d.health).collect();
@@ -424,12 +452,43 @@ fn the_01_breach_shot_breaks_the_entry_glass() {
         }).collect();
         prev_impact_len = vlen;
         if !new_impacts.is_empty() {
+            // THE STOP PIN (glass-pierce-2): the entry panes are material 0x02 [D census, asserted
+            // at setup] and the game's pass is material-0x10-ONLY [M Bullet_CollisionHandler
+            // 0x12cf54-0x12cf60] — while an aimed pane is LIVE its sheet takes every round: NO
+            // drone impact may register on a line that crosses the live pane (the eye→guard
+            // segment through the sheet's span — the same geometry the crossing aim used). A hit
+            // here would mean the round crossed an intact 0x02 sheet — the old kind-gate
+            // deviation the flip removed. (The post-smash impacts ride DEAD panes — the killed
+            // sheet stops blocking [M 0x12b970:60] — a separate, already-pinned fact.)
+            {
+                let bp = sim.bond.pos;
+                let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                for (di, _) in &new_impacts {
+                    let gp = sim.drones.list[*di].pos;
+                    for (pi, (p, lo, hi)) in panes.iter().enumerate() {
+                        if !alive_now[pi] { continue; }
+                        let sheet = (lo[axis] + hi[axis]) / 2.0;
+                        let den = gp[axis] - eye[axis];
+                        if den * (sheet - eye[axis]) <= 0.0 { continue; }
+                        let s = (sheet - eye[axis]) / den;
+                        if !(0.0..=1.0).contains(&s) { continue; }
+                        let mut inside = true;
+                        for &k in &(0..3).filter(|&k| k != axis).collect::<Vec<_>>() {
+                            let at = eye[k] + s * (gp[k] - eye[k]);
+                            let (slo, shi) = if k == 0 { (lo[0], hi[0]) } else { (lo[1], hi[1]) };
+                            if at < slo - 0.25 || at > shi + 0.25 { inside = false; break; }
+                        }
+                        assert!(!inside,
+                            "the round crossed the LIVE entry pane {p} (material 0x02 [D census]) to guard {di} — the game's handler STOPS a non-0x10 sheet [M Bullet_CollisionHandler 0x12cf54-0x12cf60]; the port must not pass it");
+                    }
+                }
+            }
             if !impact_seen {
                 eprintln!("[glass-01] t{t} the FIRST drone impact registers: {new_impacts:?}");
             }
             impact_seen = true;
             if drained {
-                eprintln!("[glass-01] PIN: a pane broke AND the round reached a guard (drain t{t}, impacts {new_impacts:?}, taps {:?})", taps.iter().rev().take(4).collect::<Vec<_>>());
+                eprintln!("[glass-01] PIN: a pane broke AND a round reached a guard (drain t{t}, impacts {new_impacts:?}, taps {:?}) — the impact rides the post-smash plain taps (no live pane between); the crossing taps themselves STOPPED at the 0x02 sheets [M 0x12cf54-0x12cf60]", taps.iter().rev().take(4).collect::<Vec<_>>());
                 return; // both halves green
             }
         }
@@ -441,15 +500,17 @@ fn the_01_breach_shot_breaks_the_entry_glass() {
                     eprintln!("[glass-01] PIN: pane {p} died t{t} WITH the round's drone impact (guard {d} part {part})");
                     return; // green
                 }
-                // The round's drain: the pane died within the flight window of a tap — the round
-                // crossed the sheet and the mirrored contact killed it [M Break_Update
-                // 0x12bfd8:36-37]. The measured leftover (2026-11-04): at wake+7..11 three such
-                // converged rounds drained the pane and NO Drone impact registered — the
-                // freshly-woken waiter is not yet bullet-pickable [M Collide_PickObj 0x1eae80:
-                // 26-30's obj+0xF0 0x20 drop]; the smash lands wake+16. The impact half of the
-                // pin is the next session's first item.
+                // The round's drain: the pane died within the flight window of a tap — the sheet
+                // TOOK the round (material 0x02 [D census]: the game's pass is 0x10-only [M
+                // 0x12cf54-0x12cf60]) and the mirrored contact killed it [M Break_Update
+                // 0x12bfd8:36-37 — the chain append + drain run on BOTH arms]. The measured
+                // leftover (2026-11-04): at wake+7..11 three such converged rounds drained the
+                // pane and NO Drone impact registered — the freshly-woken waiter is not yet
+                // bullet-pickable [M Collide_PickObj 0x1eae80:26-30's obj+0xF0 0x20 drop]; the
+                // smash lands wake+16. The impact half of the pin rides the post-smash plain
+                // taps below (no live pane between).
                 if taps.iter().rev().any(|(tt, _)| t >= *tt && t - *tt <= 3) {
-                    eprintln!("[glass-01] the round DRAINED pane {p} (died t{t}, within the flight window of tap {:?}) — the crossing half of the pin; no drone impact yet (impacts {new_impacts:?})", taps.last().map(|(tt, _)| tt).unwrap_or(&0));
+                    eprintln!("[glass-01] the pane {p} DIED off the tap's drain (t{t}, within the flight window of tap {:?}) — the STOP half of the pin: the 0x02 sheet took the round [M 0x12cf54-0x12cf60], the mirrored contact killed the pane [M 0x12bfd8:36-37]; no drone impact yet (impacts {new_impacts:?})", taps.last().map(|(tt, _)| tt).unwrap_or(&0));
                     drained = true;
                 }
             }
@@ -560,7 +621,7 @@ fn the_06_boardroom_shot_crosses_to_the_behind_guard() {
 /// north face without clipping glass [L the probe's nav]. Bond walks the walkreal-08 route's
 /// hall legs from the spawn (the descent the route walks on every difficulty), then the
 /// booth, then the pin: a pane dies on the tick the aimed guard loses health.
-#[ignore = "the route half is CLOSED and measured (the walkreal-08 hall legs + the doorway span x 106.6..107.6 with the leaf OPEN [L the passage scan in the run log] put Bond inside the booth — the in_booth assert held); the glass half is MEASURED: the deep-south stand's tap broke sheet 177 on real input (post-phase hp -3.50 dead true — the 0-hp param-1 pane takes its first hit [M the drain at drone.rs:14749-14756]); the OPEN half is the round's reach: the tapped guard (9) repositions mid-flight (state 115 — he ran to z -121.5 by the phase's end [L the post-phase print]) so no guard lost health in the same shot. Next session: tap a SETTLED guard (the per-tick crossing check already only fires on real-span lines — wait for a stationary state) or the near pair 15/16 from the x 106.2 / z -121.5 corner once their wander crosses the span; the tap-ray + post-phase diagnostics stay in the test body"]
+#[ignore = "the route + the glass half are CLOSED (the booth crossing, the settled gate, the pane-only line gate, the cross-tick ledger — this round's machinery): the deep-south stand's tap breaks sheet 177 on real input every run (hp -3.50 dead true) and the pane-only gate holds the fire until the eye→chest line's ONLY blocker is the sheet (t818, guard 0 at 48 u). The OPEN half still starves: the booth sheets are health-0 [D param 1] — ONE round per sheet — and the pane-only guards are the 42-48 u upper-deck posts whose occupants reposition on the shot's noise (state 115), so the single spread roll never landed in 3 runs (the 01 pin carries the guard-hit half green; the 08 pierce half is pinned by dead_pane_live's round-1 on this level). Next session: a 30-hp pane (the sheet survives the first round and a settled second tap lands) or the ambush guard 9's approach crossing the sheet plane in the mouth"]
 #[test]
 fn the_08_station_shot_crosses_to_the_ambush_guard() {
     unsafe { std::env::set_var("NF_SILENT", "1"); }
@@ -672,7 +733,7 @@ fn the_08_station_shot_crosses_to_the_ambush_guard() {
     // OUTSIDE the glass, so the rounds fly through fresh air and the pane never drains (the
     // measured failed run). From z −121.4 the far deck guard 8's chest line crosses x 109.25
     // at z ≈ −121.25, y ≈ 36.2 — inside the real sheet.
-    let s = shoot_guard_through_panes(&mut w, &[177, 170], &[[107.25, 34.5, -121.4], [106.5, 34.5, -121.4]], 0, 1500, |_| true);
+    let s = shoot_guard_through_panes_settled(&mut w, &[177, 170], &[[107.25, 34.5, -121.4], [106.5, 34.5, -121.4], [106.2, 34.5, -121.5], [107.25, 34.5, -120.6], [106.6, 34.5, -120.3]], 0, 4200, |_| true, true);
     // The post-phase truth: did any pane die at all, and what did the tapped guards' hp do?
     {
         let sim = w.scene.sim.as_ref().unwrap();

@@ -4,6 +4,16 @@
 //! channel 2: the use key must snap the state to 1 and latch ch 2 — the playhead then runs the
 //! hatch open (`SS_Update`'s channel drive).
 
+#[path = "common/usepick.rs"]
+mod usepick;
+
+/// Stand Bond in front of one of the SS's collision faces, looking at it (the use pick's
+/// world-sphere + refine stages [M 0x1eae80, 0x1ebaa8 → 0x1e92d8]).
+fn stand_at_ss(sim: &mut nf_view::scene::Sim, ss_i: usize) {
+    let (tris, sph) = { let s = &sim.drones.sss.list[ss_i]; (usepick::posed(sim, s.hash, &s.matrix), s.world_sphere()) };
+    assert!(usepick::stand_in_front(sim, &tris, sph), "a stand in front of SS #{ss_i}'s faces");
+}
+
 #[test]
 fn the_use_key_activates_an_ss_grate() {
     let iso = std::env::var("NF_ISO").expect("NF_ISO");
@@ -13,13 +23,14 @@ fn the_use_key_activates_an_ss_grate() {
         let s = &sim.drones.sss.list[9];
         assert_eq!(s.placement, 308);
         assert!(s.mask & 4 != 0 && s.state != 0, "ss #9 is the E-armed hatch");
-        // Stand Bond 1.2 units east of it, facing −x (the SS's bearing).
-        sim.bond.pos = [s.pos()[0] + 1.2, s.pos()[1], s.pos()[2]];
-        sim.bond.yaw = (-1.2f32).atan2(0.0);
         assert!(!sim.drones.channels.on(2), "ch 2 starts off");
+        stand_at_ss(sim, 9);
     }
     for t in 0..60 {
-        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, t % 2 == 0);
+        let sim = scene.sim.as_mut().unwrap();
+        let (y, p) = (sim.bond.yaw, sim.bond.pitch);
+        sim.step_bond(Default::default(), false, false, t % 2 == 0);
+        sim.bond.yaw = y; sim.bond.pitch = p;
     }
     let sim = scene.sim.as_ref().unwrap();
     let s = &sim.drones.sss.list[9];
@@ -47,10 +58,9 @@ fn open_by_use(sim_has: &mut nf_view::scene::Scene, ss_i: usize) {
         let s = &mut sim.drones.sss.list[ss_i];
         assert!(s.mask & 4 != 0 && s.state != 0, "ss (placement {yaw0}) is E-armed");
         assert_eq!(s.channel, 0, "placement {yaw0} is a ch-0 grate [D]");
-        // Stand Bond 1.2 west of it at its height, facing +x (the SS's bearing).
-        sim.bond.pos = [p[0] - 1.2, p[1], p[2]];
-        sim.bond.yaw = (1.0f32).atan2(0.0);
+        let _ = p;
     }
+    stand_at_ss(sim_has.sim.as_mut().unwrap(), ss_i);
     // The use key through the real input path (the E edge every other tick), then the sweep.
     for t in 0..200 {
         sim_has.sim.as_mut().unwrap().step_bond(Default::default(), false, false, t % 2 == 0);

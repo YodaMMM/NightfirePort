@@ -333,6 +333,20 @@ pub fn walk_to_the_slab_east_end(w: &mut Walker) {
         assert!(p[0] > 26.0 && p[0] < 35.0 && p[1] > 34.5 && p[2] > 40.0 && p[2] < 66.0,
             "Bond walks the lane onto the tower top (floor 36.0 [D census]), got {p:?}");
     }
+    // capsule-join-4: clear the tower top before the descent at d3. The top carries four d3-only
+    // guards (the dump: #0/#1/#14/#15 at y 37.0, z 45-50, hp 10.0 [L this session's run]) whose
+    // fire covers the whole south slope — their unresolved return-fire stands (killed false at
+    // the top's south edge AND the ledge north) repositioned Bond during the descent and the
+    // ledge→shelf legs inherited a 1.3-east offset (the d2 sister descends clean and enters the
+    // crawl at ctx 0x6; the d3 run stalls 5 u above the entry spot, ctx 0xff). A player descends
+    // into a covered slope only after clearing the top: the 05a gallery pattern (shoot_point,
+    // chest aim; shoot()'s flanks would walk him off the top's edge).
+    // capsule-join-4: clear-the-top sweep TRIED AND DROPPED — the four d3 top guards are
+    // hp-10 patrollers that swarm the stand (kill #0 true, then 83.5 in 16 hits at d 2.3 —
+    // death; the nearest-first re-scan died in the first stand: 19 hits for 100.0 [L two runs
+    // this session]). The fights themselves are survivable — the no-sweep run reached the E
+    // press at 89.0 health — what kills the leg is the POSITION: see the re-approach before
+    // the wall-hug press below.
     // The south slope [D the 0.25-unit map]: down the top's bare south edge, west along the south
     // ledge (the z-74 floor hole at x 26.25 is passed on its west at z ≥ 74.5), north up the ledge.
     for (name, at) in [
@@ -344,12 +358,86 @@ pub fn walk_to_the_slab_east_end(w: &mut Walker) {
         ("the ledge north", [25.75, 32.1, 73.5]),
         ("the crawl shelf edge", [25.6, 31.0, 71.8]),
     ] {
-        w.walk_nav_to(at, name, 1.5);
+        // capsule-join-5: the fight-aware re-walk (the working theory capsule-join-4 left). A
+        // return-fire fight that opens mid-leg moves Bond — the d3 "ledge north" leg's fight on
+        // #0 (killed false, no hit taken) ended the leg at (27.05, 34.82, 73.60) where the d2
+        // sister, no fight, ends at (25.96, 34.40, 74.76) [L both runs on this branch] — and the
+        // dxz arrival accepts the fight-moved spot, so the next leg starts off the lower contour.
+        // A player whose walk was broken off by a fight steps back to where the leg began and
+        // walks it again: at d >= 3 a leg whose fight count rose is re-walked from its recorded
+        // start (tight arrival), up to three times.
+        let start = w.scene.sim.as_ref().unwrap().bond.pos;
+        for attempt in 0..4u32 {
+            let fights = w.dmg.fights;
+            w.walk_nav_to(at, name, 1.5);
+            if w.scene.sim.as_ref().unwrap().drones.difficulty < 3 || w.dmg.fights == fights || attempt == 3 { break; }
+            eprintln!("[05c] {name}: a fight broke the leg (fights {fights} -> {}), bond {:?}; back to the leg start {start:?}",
+                w.dmg.fights, w.scene.sim.as_ref().unwrap().bond.pos);
+            w.walk_to(walker::Wp { at: start, act: walker::Act::None, arrive: 0.3 }, &format!("{name} (back to the leg start)"));
+        }
         let sim = w.scene.sim.as_ref().unwrap();
         eprintln!("[05c] {name}: tick {} bond {:?}", w.total_ticks, sim.bond.pos);
     }
+    // capsule-join-4: the d3 ledge→shelf descent is blocked — "ledge north" leaves Bond 2.7 u
+    // high and "crawl shelf edge" climbs back to the tower top (y 36.3 vs the shelf 31.0), so
+    // the E press fires 5 u above the entry spot with ctx 0xff [L this session's run; the d1/d2
+    // descents pass]. The narrow ledge is body-blocked at d3 (the standing-body work): the
+    // player clears the ledge before descending — the 05a gallery pattern (shoot_point, NOT
+    // shoot(): the flanks would walk Bond off the ledge; the aim is the chest, +0.6 over the
+    // root).
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 {
+        for (at, label) in [([25.75f32, 32.6, 73.5], "the ledge north blocker"), ([25.6, 31.5, 71.8], "the shelf-edge blocker")] {
+            let blocker = w.scene.sim.as_ref().unwrap().drones.list.iter().enumerate().find(|(_, d)| {
+                d.team == 1 && d.present && !d.corpse && d.health > 0.0
+                    && ((d.pos[0] - at[0]).powi(2) + (d.pos[1] - at[1]).powi(2) + (d.pos[2] - at[2]).powi(2)).sqrt() < 6.0
+            });
+            if let Some((di, d)) = blocker {
+                eprintln!("[05c] {label}: guard #{di} at ({:.1},{:.1},{:.1}) hp {:.1} state {:#x}",
+                    d.pos[0], d.pos[1], d.pos[2], d.health, d.state);
+                let aim = [d.pos[0], d.pos[1] + 0.6, d.pos[2]];
+                let killed = w.shoot_point(aim, label, move |sim: &nf_view::scene::Sim| {
+                    sim.drones.list.get(di).is_none_or(|d| d.corpse || d.health <= 0.0)
+                });
+                eprintln!("[05c] {label}: killed {killed} at tick {}", w.total_ticks);
+            } else {
+                eprintln!("[05c] {label}: no live guard within 6 u");
+            }
+        }
+        w.reload_full();
+    }
+    // capsule-join-4: the d3 fights re-open the descent legs' dxz-arrivals 1.3 u east of the
+    // shelf band (x ≤ 25.75 [D the shelf's extent]), and the wall-hug walk_to then stalls east
+    // of the drop line (d3 after-E (26.28, 35.94, 71.43) ctx 0xff vs the d2 sister (25.51,
+    // 31.94, 71.41) sub 0x7 ctx 0x6 [L both runs]). A player under fire re-approaches: re-walk
+    // the shelf-edge approach until Bond stands over the drop line before the Use press.
+    for attempt in 0..4u32 {
+        let (p, grounded) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.pos, sim.bond.grounded) };
+        if p[0] < 25.9 && p[1] < 35.0 && grounded { break; }
+        eprintln!("[05c] the shelf drop line re-approach {}: bond {:?}", attempt, p);
+        // Re-walk the ORIGINAL descent chain from the south ledge — the d2 line: the ledge
+        // north leg crosses the x 26.25 hole at z ≥ 74.5 ON THE LOWER CONTOUR (y ~34.5);
+        // custom single targets either stalled on the upper contour (y 35.9, the hole's east
+        // lip) or steered into the hole [L three runs this session].
+        w.walk_nav_to([26.0, 32.6, 75.5], "the south ledge (re-approach)", 1.2);
+        w.walk_nav_to([25.75, 32.1, 73.5], "the ledge north (re-approach)", 1.0);
+        w.walk_nav_to([25.6, 31.0, 71.8], "the crawl shelf edge (re-approach)", 1.0);
+    }
     // The wall-hug crawl #299: the Use press at the shelf — the live entry spot (25.51, 32.11,
     // 71.02) [L fresh boot: one action press enters the wall-hug view of #299].
+    // capsule-join-4 diag: who is fighting Bond over the ledge at d3? (the return-fire stands
+    // on the descent legs came back killed-false twice and the descent inherited the offset.)
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 {
+        let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+        for (i, d) in w.scene.sim.as_ref().unwrap().drones.list.iter().enumerate() {
+            if d.team == 1 && d.present && !d.corpse && d.health > 0.0 {
+                let dist = ((d.pos[0] - bp[0]).powi(2) + (d.pos[1] - bp[1]).powi(2) + (d.pos[2] - bp[2]).powi(2)).sqrt();
+                if dist < 45.0 {
+                    eprintln!("[05c] ledge-area guard #{i} at ({:.1},{:.1},{:.1}) hp {:.1} state {:#x} weapon {:#x} dist {:.1}",
+                        d.pos[0], d.pos[1], d.pos[2], d.health, d.state, d.weapon, dist);
+                }
+            }
+        }
+    }
     w.walk_to(walker::Wp { at: [25.5, 30.96, 71.0], act: walker::Act::Use { use_ticks: 36 }, arrive: 1.0 },
         "the wall-hug crawl prompt");
     {
@@ -384,8 +472,7 @@ pub fn walk_to_the_slab_east_end(w: &mut Walker) {
     // the slab's east end. THE STOP: the slab crossing west is the parked round-4 leg (see
     // `the_cable_legs_the_crawl_notch_and_ride`'s reason).
     for (name, at) in [
-        ("the ledge north 1", [25.5f32, 31.1, 63.0]),
-        ("the ledge north 2", [25.4, 31.2, 59.0]),
+        ("the ledge north", [25.4f32, 31.2, 59.0]),
         ("the ledge steps", [25.6, 31.9, 54.0]),
         ("the slab east end", [25.4, 33.0, 50.5]),
     ] {
@@ -1026,6 +1113,13 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker, difficulty: u32) {
     // (−37.6, 36.0, −41.7), floor_below None, within the first sidestep). The aim point is the
     // chest (+0.6 over the root); the 2400-tick cap is shoot_point's own. The Operative master
     // (d1) skips.
+    // capsule-join-5: the aim is the bullet-true exposed box first (Walker::exposed_aim — the
+    // box the round enters before the world's first contact [M 0x1ea398:216-229]), the chest
+    // only when no box is clear. With the standing bodies' moved stream the riflemen stand
+    // ~1 u off the a05q spots ((-47.87, 22.0, -60.57) / (-50.57, 22.0, -58.53) [L this branch's
+    // run]); the fixed chest point then cost 33.0 on the west stand (195 ticks) and the east
+    // stand never landed in 431 ticks (Bond died, 25 hits from #9). The exposed pick kills
+    // both in 35 + 98 ticks for 8.3 [L the same run].
     if difficulty >= 3 {
         for (at, label) in [([-46.9f32, 22.0, -60.7], "the gallery rifleman west"), ([-49.6, 22.0, -58.5], "the gallery rifleman east")] {
             let rifleman = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
@@ -1034,11 +1128,21 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker, difficulty: u32) {
             });
             if let Some(di) = rifleman {
                 let g = w.scene.sim.as_ref().unwrap().drones.list[di].pos;
-                let aim = [g[0], g[1] + 0.6, g[2]];
+                {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let d = &sim.drones.list[di];
+                    eprintln!("[05a] {label}: #{di} at {:?} hp {:.1} state {:#x}; bond {:?} health {:.1} tick {}",
+                        d.pos, d.health, d.state, sim.bond.pos, sim.drones.health.health, w.total_ticks);
+                }
+                let chest = [g[0], g[1] + 0.6, g[2]];
+                let exposed = w.exposed_aim(di);
+                eprintln!("[05a] {label}: exposed {exposed:?} chest {chest:?}");
+                let aim = exposed.unwrap_or(chest);
                 let killed = w.shoot_point(aim, label, move |sim: &nf_view::scene::Sim| {
                     sim.drones.list.get(di).is_none_or(|d| d.corpse || d.health <= 0.0)
                 });
-                eprintln!("[05a] {label} stand: killed {killed} at tick {}", w.total_ticks);
+                eprintln!("[05a] {label} stand: killed {killed} at tick {} health {:.1}", w.total_ticks,
+                    w.scene.sim.as_ref().unwrap().drones.health.health);
             }
         }
         w.reload_full();
@@ -1080,7 +1184,10 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker, difficulty: u32) {
     // (−22.76, 37.15, −72.36) out 0x42] ----
     // The z −77 band runs east (x −33..−29.5: 37-38), rises through the z −76/−75 spine
     // (x −30.5..−27: 37) onto the battlement lane (z −73.5..−72.5: x −28.5..−16 at 37). The
-    // plate sits on the lane at x −22.76 — the walk fires it.
+    // plate sits on the lane at x −22.76 — the walk fires it. The lane's south side has a
+    // crenel notch at x −24.5..−21.0 (no floor south of z −73.0 [D the floor grid: z −73.2 open
+    // at x −24..−22.5, z −73.4 at x −24..−21.5]); the switch leg keeps to the lane's middle
+    // (z −72.7) instead of the notch's lip, where the capsule only held by its rim.
     walk_legs(w, &[
         ([-32.8, 37.4, -77.4], "the band east 1"),
         ([-31.0, 37.2, -76.8], "the band east 2"),
@@ -1088,7 +1195,8 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker, difficulty: u32) {
         ([-29.0, 37.0, -75.4], "the spine north 2"),
         ([-28.0, 37.0, -74.4], "the spine north 3"),
         ([-26.5, 37.0, -73.6], "the battlement west"),
-        ([-23.0, 37.0, -73.2], "the battlement at the switch"),
+        ([-25.0, 37.0, -72.8], "the battlement short of the notch"),
+        ([-23.0, 37.0, -72.7], "the battlement at the switch"),
         ([-20.0, 37.0, -72.6], "the battlement east 1"),
         ([-17.0, 37.0, -72.4], "the battlement east 2"),
         ([-15.8, 37.0, -72.4], "the battlement's east end"),
@@ -1232,6 +1340,65 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker, difficulty: u32) {
                 eprintln!("[05r] {name}: +{ticks_on_leg} ticks bond {:?}", p);
                 leg += 1;
                 ticks_on_leg = 0;
+                // THE STAIR-TOP PAIR'S PRE-EMPTIVE ANSWER (the round-2 report's lever, run from
+                // the report's "stair base" — the covered staircase's own climb). The solid hurt
+                // planes shifted this walk's return-fire rolls from the pre-fold tree (the world's
+                // bullet surface changed; the route itself is tick-identical to 9557 and Bond
+                // takes no hurt damage on it [L the round-2 fold-on/off diff]) and the shift lands
+                // at the stair top: the two 0x16 riflemen at (34.5-35.2, 43.8-44.0, −73.3..−73.4)
+                // — drones #12/#13, skin 0x500002f — shoot the scripted legs point-blank, 35 hits
+                // for 100.0 kills the stand at tick 9575 where the pre-fold rolls survived at 15.3
+                // (31 hits) [L the red run's death print]. Both tactic levers are mute in scripted
+                // legs (back_off reads in stand_and_fire's crowd arm; body_block_response's arms
+                // never run there), so the player's answer comes BEFORE the legs: from "the stairs
+                // 28" stand (28, 41.4, −71.6) the pair is 7.7 u up-stairs — OUTSIDE the guards'
+                // 3.0 auto-hit band [M DroneWeap_DoBulletAccuracy 0x179740:113-115 `fVar9 < 3.0`
+                // zeroes the aim] — with the sight line up the covered staircase's south edge, and
+                // each carries hp 10 [L the death print]: the stand kills each before the walk
+                // enters their reach. (A stand from the route's own end measured DEAD: the pair
+                // races the 60+-tick weapon draw at d 2.2 — Bond died mid-cycle at 9572 [L the
+                // first lever run].) The in-hand weapon is the moat grapple's Q-CLAW (0x50, clip 0
+                // spare 0 [L the same run's kill-trace]) — cycle to a firearm first; the clip is
+                // reloaded after so the later fights never open on a drained one (the a05g rule).
+                // The capped stand bounds any wedge (the a05n lesson). The flag: the plain
+                // real-damage variant's opt-in only — the plain walked test and the sisters keep
+                // the proven master legs (each variant stores its own gate value first, so a
+                // death panic above cannot leak the lever into the next test).
+                if name == "the stairs 28" && REAL_DAMAGE_BACKOFF.load(std::sync::atomic::Ordering::Relaxed) {
+                    let armed = w.switch_to_armed("the stair-top pre-emptive");
+                    eprintln!("[05d] the pre-emptive's gun: armed {armed} weapon {:#x} clip {} spare {} bond {:?}",
+                        w.scene.sim.as_ref().unwrap().gun.weapon, w.scene.sim.as_ref().unwrap().gun.clip,
+                        w.scene.sim.as_ref().unwrap().gun.spare, w.scene.sim.as_ref().unwrap().bond.pos);
+                    for (at, label) in [
+                        ([35.2f32, 44.0, -73.4], "the stair-top sentry #13"),
+                        ([34.5, 43.8, -73.3], "the stair-top sentry #12"),
+                    ] {
+                        let guard = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
+                            d.team == 1 && d.present && !d.corpse && d.health > 0.0
+                                && ((d.pos[0] - at[0]).powi(2) + (d.pos[1] - at[1]).powi(2) + (d.pos[2] - at[2]).powi(2)).sqrt() < 3.0
+                        });
+                        if let Some(di) = guard {
+                            // shoot_point, NOT shoot_bounded: the sentries are STATIONARY at their
+                            // post (their pos is fixed across every run [L the death print + both
+                            // lever runs]) and shoot_bounded's blocked-aim flanks walked Bond OFF
+                            // the covered staircase (the second lever run: bond ended at
+                            // (29.5, 38.6, −76.9), off the deck, and the resumed legs hung on a
+                            // never-lifting script disable [L the same run]). The aim is the
+                            // bullet-true exposed box first, the chest (+0.6) fallback — the
+                            // gallery-rifleman stand's proven shape.
+                            let g = w.scene.sim.as_ref().unwrap().drones.list[di].pos;
+                            let chest = [g[0], g[1] + 0.6, g[2]];
+                            let aim = w.exposed_aim(di).unwrap_or(chest);
+                            let killed = w.shoot_point(aim, label, move |sim: &nf_view::scene::Sim| {
+                                sim.drones.list.get(di).is_none_or(|d| d.corpse || d.health <= 0.0)
+                            });
+                            eprintln!("[05d] {label} pre-emptive: killed {killed} at tick {} bond {:?} health {:.1}",
+                                w.total_ticks, w.scene.sim.as_ref().unwrap().bond.pos,
+                                w.scene.sim.as_ref().unwrap().drones.health.health);
+                        }
+                    }
+                    w.reload_full();
+                }
                 continue;
             }
             let desired = (at[0] - p[0]).atan2(at[2] - p[2]);
@@ -1521,6 +1688,12 @@ fn the_door_band_exit_chains_to_07000006_walked_at(difficulty: u32) {
         // the spine, no fight). The 48/18 window is the player's down-shot sight line; whether the
         // down-ray clears is the exposed_aim pick's to answer (the NF_VIS_PROBE per-leg map).
         w.dmg.shooters_window = Some((48.0, 18.0));
+        // capsule-join-3: the solid guard bodies wedge the vent approach — the E press at the
+        // prompt found Bond pushed off it (this tree's measured red: sub 0x0 at (26.3, 35.9,
+        // 71.5)). The player's response to a body blocker is to shoot him; the opt-in lever
+        // turns the wedge into the fight [M walker.rs body_block_response — the 02 walk's
+        // lever, and 08's fusebox fix on this branch].
+        w.body_block_response = true;
     }
     w.wait(30);
     probe_vis(&w, "the spawn");
@@ -1535,6 +1708,13 @@ fn the_door_band_exit_chains_to_07000006_walked_at(difficulty: u32) {
     // push opens the blocked down-ray as Bond closes). The Operative master (d1) skips — the
     // placements don't pass Drone_Create's min-difficulty gate [M 0x136be0:49].
     if difficulty >= 3 {
+        // [M DroneWeap_DoBulletAccuracy 0x179740:113-115] inside 3.0 u the shot is an AUTO-HIT
+        // (`if (fVar9 < 3.0) bVar2 = true` — the aim vector becomes the zero vector, dead on),
+        // and the ditch stand's flanks previously walked Bond onto the ditch lip: the a05-shift
+        // ledger's 60.0 rolled at d 1.1 with the sniper already at hp 2.3 (t1574, kill t1579).
+        // keep_off holds Bond off the lip while the aim opens from the rim (the field's own
+        // shape: "a fight at 1-2 u takes the whole volley").
+        w.keep_off = Some(3.5);
         for (at, label) in [([99.7f32, 16.8, 101.6], "the ditch sniper"), ([62.1, 34.5, 104.2], "the courtyard wall sniper")] {
             let sniper = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
                 d.team == 1 && d.present && !d.corpse && d.health > 0.0
@@ -1545,11 +1725,16 @@ fn the_door_band_exit_chains_to_07000006_walked_at(difficulty: u32) {
                 eprintln!("[05a] {label} stand: killed {killed} at tick {}", w.total_ticks);
             }
         }
+        w.keep_off = None;
         // The stands drain the clip (the ditch stand's 1500 ticks of aim + taps): reload BEFORE
         // the walk so the return-fire fights never open on a drained clip — the a05g repro's
         // fight#3 opened at 0.9 u with clip 1 and reloaded mid-fight, standing in the guard's
         // TooClose field (Walker::reload_full, the additive API).
         w.reload_full();
+        // (The disc's own Body Armour Heavy #278 ((59.65, 33.57, 86.11) [D placements]) was
+        // tried here as a detour — the nav-lenient walk descended to the valley floor
+        // (42.5, 8.9, 88.3), fell for 53.0, and the pickup is not nav-reachable from the road;
+        // the keep_off bound alone carries the ledger.)
     }
     walk_the_cable_route_to_the_stairs_top(&mut w, difficulty);
     probe_vis(&w, "the stairs top");
@@ -1591,9 +1776,28 @@ fn the_door_band_exit_chains_to_07000006_walked_at(difficulty: u32) {
 /// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
 /// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
 /// walk completes on the port's own damage.
+///
+/// The variant opts into the file's own pre-emptive lever (REAL_DAMAGE_BACKOFF below):
+/// level-05-basin-floor-2 measured the solid hurt planes changing the world's bullet-impact
+/// surface, which shifts this walk's return-fire rolls from the pre-fold tree — the route is
+/// tick-identical to 9557 (every leg position and tick count equal [L the fold-on/off diff]),
+/// Bond never touches a hurt plane on it (`other 0.0` in both runs), and the shift lands at
+/// the stair-top pair #12/#13 (d 1.8-2.2): 35 hits for 100.0 kills the stand-in-place
+/// tactic at 9575 where the pre-fold rolls survived at 15.3 (31 hits) [L both runs]. The
+/// game's answer to a point-blank pair is the player's own gun BEFORE the legs — the
+/// pre-emptive stands at the cable route's end (the d >= 3 sniper arms' shape), inside the
+/// 3.0 auto-hit band [M DroneWeap_DoBulletAccuracy 0x179740:113-115]. The plain (top-up)
+/// walked test keeps the master tactic.
+static REAL_DAMAGE_BACKOFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[test]
 fn the_door_band_exit_chains_to_07000006_walked_real_damage() {
+    // The explicit store at entry (not only the plain variant's set): a death PANIC above skips
+    // this static's restore and would leak the lever into the sisters that run later in the same
+    // binary — each variant pins its own gate value first.
+    REAL_DAMAGE_BACKOFF.store(true, std::sync::atomic::Ordering::Relaxed);
     walker::with_real_damage(the_door_band_exit_chains_to_07000006_walked);
+    REAL_DAMAGE_BACKOFF.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty): the same walked
@@ -1608,7 +1812,10 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage() {
 fn the_door_band_exit_chains_to_07000006_walked_real_damage_agent() {
     // PLAIN with_real_damage — the exact shape the difficulty branch's run shipped and passed
     // (57.6 health [L docs/reports/real-health-agent-difficulty-01-07]); the 00 Agent tactics are
-    // gated d >= 3 in the body so this sister's RNG stays the proven one.
+    // gated d >= 3 in the body so this sister's RNG stays the proven one. The explicit store:
+    // the plain variant's death panic skips its restore — without this the leaked lever would
+    // run the pre-emptive stands here too.
+    REAL_DAMAGE_BACKOFF.store(false, std::sync::atomic::Ordering::Relaxed);
     walker::with_real_damage(|| the_door_band_exit_chains_to_07000006_walked_at(2))
 }
 
@@ -1625,6 +1832,153 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage_agent() {
 fn the_door_band_exit_chains_to_07000006_walked_real_damage_00agent() {
     // The fights HEAD-HUNT (see the Agent sister): at 00 Agent the guards' accuracy is 1.3 and
     // Bond's pain is unscaled, so every tick a fight stands is a tick of bursts — the head pick
-    // halves the stand time.
+    // halves the stand time. The explicit store: the plain variant's death panic skips its
+    // restore — without this the leaked lever would run the pre-emptive stands here too.
+    REAL_DAMAGE_BACKOFF.store(false, std::sync::atomic::Ordering::Relaxed);
     walker::with_real_damage_head_hunting(|| the_door_band_exit_chains_to_07000006_walked_at(3))
+}
+
+/// The hurt-volume census (level-05-hurt-skip): every placement-0xE4 volume the level loads,
+/// with its box and params, and every team-1 guard with its distance to each volume's centre —
+/// the reach map the skip pin needs. The game's rule under pin: the drone pass skips the
+/// class-0x27 contact damage when the level IS 07000005, and skips voice-0x13 drones on every
+/// other level [M NDrone2_DealWithObjHit 0x13fff0 case 0x27 — disasm 0x1401fc-0x140248:
+/// `lw $a0, 0x3774($v0)` with the 0x2a0000 base set in the 0x140174 delay slot (GameState+0xC =
+/// *(0x2a3774), the level code) compared against 0x07000005 (`lui $v1, 0x700` / `ori $v1, 5`),
+/// beq → 0x140638 the undamaged return; otherwise `lhu $v1, 0xd8($s1)` — the voice halfword —
+/// compared against 0x13 (the compare value rides the level-beq's delay slot:
+/// `addiu $v0, $zero, 0x13`), beq → 0x14063c the undamaged return; the fall-through applies
+/// `Hurt_GetDamage` 0x17ea18 and parks death state 0x44 at health ≤ 0. The halfword has a second
+/// voice reader in the same function (0x140298, == 0x10) and two more in
+/// NDrone2_GetDroneTypeAttackTypeFriend 0x14cbd8 (== 0xb) / NDrone2_DoModeSettingsNEW 0x14c600
+/// (== 0x10) — the voice-type semantics is the field's settled reading].
+#[test]
+fn the_hurt_volumes_census_and_their_guards() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
+    w.wait(30);
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[05-hurt] {} hurt volumes:", sim.hurts.len());
+    for (i, h) in sim.hurts.iter().enumerate() {
+        let c = [(h.lo[0] + h.hi[0]) / 2.0, (h.lo[1] + h.hi[1]) / 2.0, (h.lo[2] + h.hi[2]) / 2.0];
+        eprintln!("[05-hurt] hurt {i}: kind {} damage {:.0} gate {} who {:#x} one_shot {} disabled {} lo ({:.2},{:.2},{:.2}) hi ({:.2},{:.2},{:.2}) tris {}",
+            h.kind, h.damage, h.gate, h.who, h.one_shot as u8, h.disabled as u8,
+            h.lo[0], h.lo[1], h.lo[2], h.hi[0], h.hi[1], h.hi[2], h.tris.len());
+        let mut reach = String::new();
+        for (j, d) in sim.drones.list.iter().enumerate() {
+            if d.team != 1 || !d.present { continue; }
+            let dxz = ((d.pos[0] - c[0]).powi(2) + (d.pos[2] - c[2]).powi(2)).sqrt();
+            if dxz < 60.0 {
+                reach.push_str(&format!(" g{j}(skin {:#x} d {dxz:.1} y {:.1})", d.skin, d.pos[1] - c[1]));
+            }
+        }
+        if !reach.is_empty() { eprintln!("[05-hurt]   guards within 60:{reach}"); }
+    }
+    eprintln!("[05-hurt] the guards:");
+    for (j, d) in sim.drones.list.iter().enumerate() {
+        if d.team != 1 || !d.present { continue; }
+        eprintln!("[05-hurt] guard {j}: skin {:#x} pos ({:.2},{:.2},{:.2}) voice {} health {:.0}",
+            d.skin, d.pos[0], d.pos[1], d.pos[2], d.voice_type, d.health);
+    }
+}
+
+
+/// The basin floor east of the lip (level-05-basin-floor). The port's world must carry the
+/// floor the game walks: hurt placement 331's own 2-tri plane at y 5.107 — [D the 07000005.bin
+/// block walk: the outdoor room's collision block ends at z 125.98 while the hurt plane spans
+/// x 80.78..168.38, z 96.66..144.68 (the whole basin band); the only floor-level geometry in
+/// the band is the hurt plane] — and the game's hurt objects ARE ground: `Hurt_Create` 0x17e870
+/// links the glist (`Control_SetGList` :44, collision block attached) to a room
+/// (`build_LinkToRoom` :46), so the player's movement capsule meets the plane as an object hit
+/// [M]. Before the fold the scoped AND flat down rays past the lip read none from 12 u up
+/// [L the ignored the_valley_plane_hurts_bond_walked ledger: "the ground rays 0.5-8 u past the
+/// lip read none BOTH scoped to Bond's own cel (Some(14)) and unscoped"]. The ray starts ABOVE
+/// the walk's lip stand (132.0,14.17,125.37) [L the ledger] and at four basin interiors; every
+/// hit must be hurt #3's plane (5.107, normal up), reached through Bond's own room cel (Some(14)
+/// — the measured room split, the ledger's THE ROOM SPLIT IS MEASURED).
+#[test]
+fn the_basin_floor_exists_past_the_lip() {
+    let iso = iso();
+    let scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
+    let sim = scene.sim.as_ref().unwrap();
+    for (tag, p) in [
+        ("past the lip", [132.0f32, 14.17, 125.37]),
+        ("basin north", [120.0, 10.0, 115.0]),
+        ("basin east", [150.0, 10.0, 130.0]),
+        ("basin south-east", [140.0, 10.0, 142.0]),
+        ("basin far east", [165.0, 10.0, 138.0]),
+    ] {
+        assert_eq!(sim.world.find_cel(p), Some(14), "{tag}: find_cel must be the outdoor room cel 14 [L the valley ledger]");
+        let down = [p[0], p[1] - 12.0, p[2]];
+        let (t, n) = sim.world.segment_hit_scoped(sim.world.find_cel(p), p, down)
+            .unwrap_or_else(|| panic!("{tag}: no scoped down-ray hit — the basin floor is absent from the port's world"));
+        let y = p[1] - t * 12.0;
+        assert!((y - 5.107).abs() < 0.01, "{tag}: the scoped down ray hit y {y}, not hurt #3's plane at 5.107 [D the 07000005.bin hurt plane]");
+        assert!(n[1] > 0.99, "{tag}: the hit normal must face up, got {:?}", n);
+    }
+}
+
+// `the_valley_plane_hurts_bond_walked` is DELETED (level-05-basin-floor-2). The live PCSX2
+// measurement (2026-11-10, a fresh boot): Bond placed just past the east lip at
+// (132.0, 14.4, 126.6) settles at y 14.15 — the PlungeTrigger plane is y 13.17 (#285 [D the
+// out-190 probe rows]) — and the game plays the plunge death and shows Mission Failed. The
+// game does NOT let Bond walk down from the lip into the basin, so this test's route (the
+// walk onto hurt #3's plane from the lip) is impossible in the game: the lip is the plunge
+// death's trigger, and the walk-off chain is pinned by
+// interactables_07000005_live::the_valley_walkoff_runs_the_plunge_death_nis_chain from the
+// walk-proven lip stand. The basin floor itself stays pinned by
+// the_basin_floor_exists_past_the_lip (the solid hurt planes are game-correct [M Hurt_Create
+// 0x17e870:51-57, Collide_Pick 0x1eb320:140]).
+
+/// The guards' side + the reach map (level-05-hurt-skip): the drone pass on 07000005 delivers
+/// NO hurt damage [M the 0x1401fc level skip]. The pin runs the game's own contact law over the
+/// REAL sim for 3000 ticks while Bond walks the lower lane and fires the lure (real input):
+/// every guard's standing capsule (pos−1.0 .. head, r 0.4 — the port's drone capsule law)
+/// against every armed volume's tris; a guard observed TOUCHING a volume must be alive with his
+/// placement health (10) — unhurt by the very contact Bond dies of. The same pass dumps the
+/// reach map (which guard's capsule ever comes within the volume boxes) — the task's "which
+/// guards can reach them" answer, measured instead of guessed.
+#[test]
+fn the_guards_never_take_the_hurt_walked() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000005.bin", false).expect("load 07000005"));
+    w.top_up_health = false;
+    w.wait(30);
+    w.walk_nav_to([98.6, 26.0, 106.5], "to the gatehouse (the proven truck-route leg)", 1.6);
+    let mut saw_contact = false;
+    for t in 0..3000u32 {
+        // The lure: from the lower lane Bond fires at the road guards (g5/g6 stand 31-32 u off
+        // hurt #3's plane, [L the census]) — the real fire path, the gunshot hearing draws the
+        // hunt [M DroneFunc_SetNoiseHeard].
+        if t % 90 == 30 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let g = sim.drones.list.iter().position(|d| d.team == 1 && d.present && d.enabled && !d.corpse
+                && d.health > 0.0 && walker::dxz(d.pos, bp) < 40.0);
+            drop(sim);
+            if let Some(g) = g { let _ = w.shoot(g, &format!("the lure t{t}")); }
+        } else {
+            w.tick(Default::default(), false);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        for h_i in 0..sim.hurts.len() {
+            let h = &sim.hurts[h_i];
+            if h.disabled || h.fired { continue; }
+            for (j, d) in sim.drones.list.iter().enumerate() {
+                if d.team != 1 || !d.present || d.corpse || d.health <= 0.0 { continue; }
+                let a = [d.pos[0], d.pos[1] - 1.0, d.pos[2]];
+                let b = d.head();
+                if nf_game::triggers::capsule_hits_tris(a, b, 0.4, &h.tris) {
+                    saw_contact = true;
+                    eprintln!("[05-hurt] CONTACT t{t}: guard {j} (skin {:#x} health {:.0}) touches hurt {h_i}",
+                        d.skin, d.health);
+                    assert!((d.health - 10.0).abs() < 0.01,
+                        "a guard touching a hurt volume must be unhurt (guard {j} health {:.2})", d.health);
+                }
+            }
+        }
+        drop(sim);
+        if saw_contact { break; }
+    }
+    eprintln!("[05-hurt] the lure pin: contact observed = {saw_contact} (the reach map: no guard walked into a plane this run)" );
 }

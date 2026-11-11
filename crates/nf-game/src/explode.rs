@@ -47,9 +47,10 @@ pub struct Explosion {
     pub lifetime: u16,
     /// `EXPLODEINFO+0x34 != 0`: a script was loaded (the port's script player carries the visual).
     pub script: bool,
-    /// `EXPLODEINFO+0x38`: the debris kind (`Explode_Update`'s switch; the port has no debris system —
-    /// the game's own debris only spawns for kinds 5/6 (metal) and 8/10/0xB (stone, 0x7000008 only)
-    /// after a random gate [M 0x17c350:31-67]).
+    /// `EXPLODEINFO+0x38`: the debris kind (`Explode_Update`'s switch; the port's `debris_arm`
+    /// spawns the particles — `Debris_CreateEx` 0x1ac808 — but only for kinds 5/6 (metal) and
+    /// 8/10/0xB (stone, 0x7000008 + channel 0x53 only) after a random gate [M 0x17c350:31-67;
+    /// `debris_arm` below]).
     pub debris: u16,
     /// `EXPLODEINFO+0x3A`: the propagate latch (`Explode_CollisionHandler`).
     pub propagated: bool,
@@ -69,7 +70,7 @@ pub struct Explosion {
     /// the same shape from the to-player vector].
     pub debris_dir: V3,
     /// `instance+0x10..0x1f`: the debris jitter — basisA + basisB of `Vec_MakeOrthonormalBasis`
-    /// over the normalised to-closest-player vector [M 0x17c930:118-131, 0x17cbd0].
+    /// over the normalised to-closest-player vector [M 0x17cbd0, 0x1e4b78] — `debris_jitter`.
     pub debris_jitter: V3,
 }
 
@@ -95,8 +96,8 @@ impl Explosion {
 
     /// `Explode_Update` (0x17c350): the script player runs first (`Script_Update`); when it stops the
     /// object dies (`obj+0xFE |= 1` [M 0x17c394-0x17c3a0]). Without a script the lifetime ticks out.
-    /// The debris spawns (kinds 5/6/8/10/0xB) are not ported — the port has no debris system; the
-    /// gate was `lifetime>>2 < age` then `age % (Rand(5)+10) == 0` [M 0x17c3d8-0x17c460].
+    /// The debris spawns (kinds 5/6/8/10/0xB) land in `debris_arm` below (the `Debris_CreateEx`
+    /// port); the gate was `lifetime>>2 < age` then `age % (Rand(5)+10) == 0` [M 0x17c3d8-0x17c460].
     /// Returns false when the explosion is done.
     pub fn update(&mut self) -> bool {
         self.age += 1;
@@ -164,6 +165,37 @@ pub fn create_debris(
         out.push(DebrisSpawn { vel, spin, life, scale, gfx: g, class: 0x10 });
     }
     out
+}
+
+/// `Vec_MakeOrthonormalBasis` 0x1e4b78: the two unit vectors `(a, b)` perpendicular to the unit
+/// vector `n` [M 0x1e4b78]. `|n.x| <= |n.y|` builds `a` in the YZ plane, `a = (0, −n.z, n.y)/|(n.y, n.z)|`,
+/// `b = (n.y·a.z − n.z·a.y, −n.x·a.z, n.x·a.y)`; otherwise `a = (n.z, 0, −n.x)/|(n.x, n.z)|`,
+/// `b = (n.y·a.z, n.z·a.x − n.x·a.z, −n.y·a.x)`. `Explode_Create` 0x17cbd0 runs it over the normalised
+/// blast→closest-player vector and stores `a + b` at EXPLODEINFO+0x10 — the debris spread axis
+/// `Debris_CreateEx` scales per component [M 0x17cbd0 `Vec_MakeOrthonormalBasis(c0, b0, d0)`, vadd,
+/// sqc2 → +0x10]. A zero `n` (blast on the player's point) would divide by zero in the game; the
+/// port returns zero vectors there [S].
+pub fn orthonormal_basis(n: V3) -> (V3, V3) {
+    if n[0].abs() <= n[1].abs() {
+        let l = n[2] * n[2] + n[1] * n[1];
+        if l == 0.0 { return ([0.0; 3], [0.0; 3]); }
+        let r = 1.0 / l.sqrt();
+        let a = [0.0, -n[2] * r, n[1] * r];
+        (a, [n[1] * a[2] - n[2] * a[1], -n[0] * a[2], n[0] * a[1]])
+    } else {
+        let l = n[2] * n[2] + n[0] * n[0];
+        let r = 1.0 / l.sqrt();
+        let a = [n[2] * r, 0.0, -n[0] * r];
+        (a, [n[1] * a[2], n[2] * a[0] - n[0] * a[2], -n[1] * a[0]])
+    }
+}
+
+/// The debris spread axis `Explode_Create` stores at EXPLODEINFO+0x10: `a + b` of
+/// [`orthonormal_basis`] over the unit blast→player direction [M 0x17cbd0]. It is perpendicular
+/// to that direction: the pieces spread across the player's view, not toward it.
+pub fn debris_jitter(to_player_unit: V3) -> V3 {
+    let (a, b) = orthonormal_basis(to_player_unit);
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
 /// `MetalHash_132` @0x2A3718 — the metal debris mesh hashes `Explode_Update` hands to
@@ -265,10 +297,20 @@ pub struct Targets<'a> {
     pub destroys: &'a [(usize, V3, f32, bool, u16)],
 }
 
+/// The player's obj+0x8C [L ee_start_05.bin, ee_start_07000001.bin: 1.0575536 on both].
+const PLAYER_SPHERE_R: f32 = 1.0576;
+
+/// The falloff at `gap` = distance to the object's sphere edge: `damage · (1 − max(gap, 0) / radius)`,
+/// a straight line [M 0x17c5e8 `mtc1 zero,f3`, 0x17c5f8 `sub.s`, 0x17c608 `max.s f0,f0,f3`,
+/// 0x17c60c `div.s`, 0x17c610 `sub.s`, 0x17c614 `mul.s`]. The decompile's `(int)x * (0 < x)` is how
+/// it prints `max.s`; no integer conversion exists in the function.
+pub fn falloff(damage: f32, radius: f32, gap: f32) -> f32 {
+    damage * (1.0 - gap.max(0.0) / radius)
+}
+
 /// `Explode_Propagate` (0x17c518): a sphere of `radius` from `pos`; for every hit object
-/// `amount = damage · (1 − (int)(dist − obj_radius) / radius)` — the game truncates the
-/// distance-minus-sphere term to an INTEGER [M 0x17c620 `cvt.w.s` / `mtc1` pair], clamped at ≥ 0,
-/// and anything below 0.0002 takes nothing [M 0x17c62c]. Case dispatch on `obj+0xFF`:
+/// `amount = falloff(dist − obj_radius)`, and anything below 0.0002 takes nothing [M 0x17c618].
+/// Case dispatch on `obj+0xFF`:
 /// 0 copter (accumulate), 2 drone, 3 player, 5 destructible models {0x2B, 0x34–0x37, 0x3A},
 /// 0x20 break, 0x21 destroy, 0x28 vehicle, 0x35 MP, 0x36 GT (+ disable), 0x37 sensor, 0x38 monitor,
 /// 0x3D sub (class 'J'), 0x4B hit-list entry — 12 damaging cases plus the default skip.
@@ -280,11 +322,7 @@ pub fn propagate(pos: V3, radius: f32, damage: f32, attacker: usize, t: &Targets
         let dx = px[0] - pos[0];
         let dy = px[1] - pos[1];
         let dz = px[2] - pos[2];
-        let dist = (dx * dx + dy * dy + dz * dz).sqrt() - obj_radius;
-        // `fVar10 = param_2 * (1 - (int)fVar10 / param_1)` — the (int) cast truncates toward zero
-        // [M 0x17c61c-0x17c628]; negative distances (inside the object's sphere) give full damage.
-        let truncated = if dist > 0.0 { (dist as i32) as f32 } else if dist < 0.0 { -((-dist) as i32) as f32 } else { 0.0 };
-        let amount = damage * (1.0 - truncated / radius);
+        let amount = falloff(damage, radius, (dx * dx + dy * dy + dz * dz).sqrt() - obj_radius);
         if amount >= 0.0002 { hit(amount); }
     };
     for &(i, p, r) in t.drones {
@@ -294,7 +332,7 @@ pub fn propagate(pos: V3, radius: f32, damage: f32, attacker: usize, t: &Targets
     }
     {
         let mut p = 0.0f32;
-        sweep(t.player, 0.0, &mut |a| p = a);
+        sweep(t.player, PLAYER_SPHERE_R, &mut |a| p = a);
         if p > 0.0 { out.player = Some(p); }
     }
     for &(i, p, r) in t.breaks {
@@ -345,13 +383,58 @@ mod tests {
     }
 
     #[test]
-    fn propagate_falloff_truncates_the_distance() {
-        // Radius 10, damage 100: a drone at distance 5.7 − radius 1 = 4.7 → (int) 4 → 100·(1−4/10) = 60.
-        // A smooth falloff would give 57; the game's integer truncation gives 60 [M 0x17c61c-0x17c628].
+    fn propagate_falloff_is_a_straight_line_to_the_sphere_edge() {
+        // Radius 10, damage 100: a drone at distance 5.7 − radius 1 = 4.7 → 100·(1−4.7/10) = 53
+        // [M 0x17c5f8-0x17c614, `max.s` and no conversion].
         let t = Targets { drones: &[(0, [5.7, 0.0, 0.0], 1.0)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &t);
         assert_eq!(h.drones.len(), 1);
-        assert!((h.drones[0].1 - 60.0).abs() < 1e-4, "truncated falloff, got {}", h.drones[0].1);
+        assert!((h.drones[0].1 - 53.0).abs() < 1e-3, "straight falloff, got {}", h.drones[0].1);
+        // Bond's sphere counts: 5.7 away is 4.6424 from its edge [L obj+0x8C].
+        let t = Targets { drones: &[], player: [5.7, 0.0, 0.0], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &t);
+        assert!((h.player.unwrap() - 53.576).abs() < 1e-3, "got {:?}", h.player);
+        // Deep inside the object's own sphere: full damage, never more [M 0x17c608's clamp].
+        let t = Targets { drones: &[(0, [-1.5, 0.0, 0.0], 3.0)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &t);
+        assert!((h.drones[0].1 - 100.0).abs() < 1e-4, "got {}", h.drones[0].1);
+    }
+
+    #[test]
+    fn the_blast_reaches_each_guard_by_its_own_sphere() {
+        // The game's pick reads the victim's own obj+0x8C [M Collide_PickObj 0x1eae80:221-228,
+        // hit iff SqDist(centre) < (blast_r + obj+0x8C)²] and the gap subtracts the same sphere
+        // [M Explode_Propagate 0x17c5d8-0x17c614]. Radius 8 (the 0x2e row [L ee_snapshot
+        // 0x2c2178: radius 8.0, damage 100.0]), damage 100.
+        // A guard at 8.5 u with the skin-0x0500002e sphere 1.0640 [L ee_start_05.bin] is INSIDE
+        // the pick (8.5 < 8 + 1.064) and the gap gives 100·(1−(8.5−1.064)/8) = 7.05.
+        let t = Targets { drones: &[(0, [8.5, 0.0, 0.0], 1.064)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], 8.0, 100.0, usize::MAX, &t);
+        assert_eq!(h.drones.len(), 1, "the guard's own 1.0640 sphere reaches the 8.5 u blast");
+        assert!((h.drones[0].1 - 100.0 * (1.0 - (8.5 - 1.064) / 8.0)).abs() < 1e-3, "got {}", h.drones[0].1);
+        // The same spot with a 1.0190 model (skin 0x0500002f [L same snapshot]) hurts LESS:
+        // 100·(1−(8.5−1.019)/8) = 6.5125 — the model delta the fold erased.
+        let t = Targets { drones: &[(0, [8.5, 0.0, 0.0], 1.019)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], 8.0, 100.0, usize::MAX, &t);
+        assert!((h.drones[0].1 - 100.0 * (1.0 - (8.5 - 1.019) / 8.0)).abs() < 1e-3, "got {}", h.drones[0].1);
+        // Outside its own sphere: no pick, no hurt — the guard at 9.1 u with sphere 1.0640 sits
+        // past 8 + 1.064.
+        let t = Targets { drones: &[(0, [9.1, 0.0, 0.0], 1.064)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], 8.0, 100.0, usize::MAX, &t);
+        assert!(h.drones.is_empty(), "9.1 u is past the 1.0640-sphere guard's own reach");
+        // A never-moved guard's sphere is 0.0 [L ee_start_05.bin: 9 of 13 guards carry
+        // obj+0x8C = 0.0, centre == pos] — the pick is a point test: hurt only inside 8.0.
+        let t = Targets { drones: &[(0, [8.1, 0.0, 0.0], 0.0)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], 8.0, 100.0, usize::MAX, &t);
+        assert!(h.drones.is_empty(), "the never-moved guard's 0.0 sphere does not reach 8.1 u");
+        let t = Targets { drones: &[(0, [7.9, 0.0, 0.0], 0.0)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], 8.0, 100.0, usize::MAX, &t);
+        assert_eq!(h.drones.len(), 1, "7.9 u is inside the never-moved guard's point test");
+        assert!((h.drones[0].1 - 100.0 * (1.0 - 7.9 / 8.0)).abs() < 1e-3, "got {}", h.drones[0].1);
+    }
+
+    #[test]
+    fn the_falloff_continues_inside_the_sphere_and_cuts_at_the_floor() {
         // Inside the object's own sphere (dist − radius < 0): full damage, not negative.
         let t = Targets { drones: &[(0, [0.5, 0.0, 0.0], 1.0)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &t);
@@ -375,18 +458,51 @@ mod tests {
     }
 
     #[test]
+    fn rocket_row_0x2e_hurts_inside_the_disc_radius_only() {
+        // The task's pin: hurt at the sphere-EDGE 7.9 u, none at the edge 8.1 u, on the 0x2e row.
+        // [L ee_snapshot.bin @0x2c2178 = 0x2bf150 (the weapon_data base [M action-symtab.tsv]) +
+        // 0x2e·0x10c + 0x08/0x0C] the 0x2e row carries radius 8.0, damage 100.0 (+0x70 = 0x4, the
+        // plain explode arm — no gas 0x2000 / smoke 0x20000 bits). The game's gate reads the
+        // sphere EDGE: the pick is sphere-vs-sphere (SqDist < (blast_r + obj+0x8C)² [M
+        // 0x1eae80:221-228]) and the falloff subtracts the victim's obj+0x8C
+        // (`amount = damage·(1 − max(dist−0x8C, 0)/radius)` [M 0x17c5e8-0x17c620 — max.s at
+        // 0x17c608, the 0.0002 cutoff 0x17c618-20], class 3 → Player_Hurt [M 0x17c650-58]).
+        let (radius, damage) = (8.0f32, 100.0f32);
+        // Edge 7.9 (centre 7.9 + Bond's obj+0x8C [L ee_start_05.bin M_CONTROL+0x8C = 1.0575536]):
+        // hurt, the straight-line amount 100·(1 − 7.9/8) = 1.25.
+        let t = Targets { drones: &[], player: [7.9 + PLAYER_SPHERE_R, 0.0, 0.0], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], radius, damage, usize::MAX, &t);
+        let want = falloff(damage, radius, 7.9);
+        assert!(h.player.is_some(), "edge 7.9 inside the 8.0 radius must hurt");
+        assert!((h.player.unwrap() - want).abs() < 1e-3, "want {want}, got {:?}", h.player);
+        // Edge 8.1 (centre 9.1576): nothing — the pinned boundary.
+        let t = Targets { drones: &[], player: [8.1 + PLAYER_SPHERE_R, 0.0, 0.0], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], radius, damage, usize::MAX, &t);
+        assert!(h.player.is_none(), "edge 8.1 past the 8.0 radius must not hurt, got {:?}", h.player);
+        // Edge 8.0 exactly: amount 0 → below the cutoff → nothing [M 0x17c618].
+        let t = Targets { drones: &[], player: [8.0 + PLAYER_SPHERE_R, 0.0, 0.0], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], radius, damage, usize::MAX, &t);
+        assert!(h.player.is_none(), "at the radius edge the falloff is 0");
+        // Centre 13.7 u (the level-0b-roof-sprint-4 fire distance): edge 12.64, 1.58 radii out —
+        // the port's law cannot hurt there (the sprint-4 ~48-at-13.7 observation needs a nearer
+        // impact point than the aim's convergence distance).
+        let t = Targets { drones: &[], player: [13.7, 0.0, 0.0], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], radius, damage, usize::MAX, &t);
+        assert!(h.player.is_none(), "13.7 u centre must not hurt, got {:?}", h.player);
+    }
+
+    #[test]
     fn destroy_case_needs_damage_at_least_one() {
-        // Case 0x21's gate [M 0x17c6a8]: the smash fires only when the falloff reaches 1.0. With the
-        // integer truncation the amounts jump in damage/radius steps: damage 5, radius 10 → a target at
-        // 9.5 (truncated 9) takes 5·(1−9/10) = 0.5 → no smash; at 4.5 (truncated 4) it takes 3 → smash.
+        // Case 0x21's gate [M 0x17c6a8]: the smash fires only when the falloff reaches 1.0: damage 5,
+        // radius 10 → a target at 9.5 takes 0.25 → no smash; at 4.5 it takes 2.75 → smash.
         let far = Targets { drones: &[], player: [1000.0; 3], breaks: &[],
             destroys: &[(0, [9.5, 0.0, 0.0], 0.0, false, 0)], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 5.0, usize::MAX, &far);
-        assert!(h.destroys.is_empty(), "0.5 damage must not smash");
+        assert!(h.destroys.is_empty(), "0.25 damage must not smash");
         let near = Targets { drones: &[], player: [1000.0; 3], breaks: &[],
             destroys: &[(0, [4.5, 0.0, 0.0], 0.0, false, 0), (1, [4.5, 0.0, 0.0], 0.0, true, 0)], copters: &[] };
         let h = propagate([0.0; 3], 10.0, 5.0, usize::MAX, &near);
-        assert_eq!(h.destroys, vec![0], "3 damage smashes the unsmashed one only");
+        assert_eq!(h.destroys, vec![0], "2.75 damage smashes the unsmashed one only");
     }
 
     #[test]
@@ -428,6 +544,29 @@ mod tests {
         let mut rng = crate::drone::Rng::new(7);
         let e = create_debris(&mut rng, 8.0, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0], 60, 5, &gfx);
         assert_eq!(d, e);
+    }
+
+    #[test]
+    fn the_debris_spread_axis_is_the_orthonormal_pair_sum() {
+        // [M 0x1e4b78] `Vec_MakeOrthonormalBasis`, both branches, hand-worked.
+        // |n.x| > |n.y|: a = (n.z, 0, −n.x)/|(n.x, n.z)|, b = (n.y·a.z, n.z·a.x − n.x·a.z, −n.y·a.x).
+        let (a, b) = orthonormal_basis([0.6, 0.0, 0.8]);
+        assert_eq!(a, [0.8, 0.0, -0.6]);
+        assert!((b[0]).abs() < 1e-6 && (b[1] - 1.0).abs() < 1e-6 && b[2].abs() < 1e-6, "{b:?}");
+        // |n.x| ≤ |n.y|: a = (0, −n.z, n.y)/|(n.y, n.z)|, b = (n.y·a.z − n.z·a.y, −n.x·a.z, n.x·a.y).
+        let (a, b) = orthonormal_basis([0.0, 1.0, 0.0]);
+        assert_eq!(a, [0.0, 0.0, 1.0]);
+        assert_eq!(b, [1.0, 0.0, 0.0]);
+        // `Explode_Create` stores a + b [M 0x17cbd0]: perpendicular to n, length √2.
+        for n in [[0.6f32, 0.0, 0.8], [-0.3, 0.1, -0.95], [0.2, -0.9, 0.39]] {
+            let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            let n = [n[0] / l, n[1] / l, n[2] / l];
+            let j = debris_jitter(n);
+            let dot = j[0] * n[0] + j[1] * n[1] + j[2] * n[2];
+            let len = (j[0] * j[0] + j[1] * j[1] + j[2] * j[2]).sqrt();
+            assert!(dot.abs() < 1e-5, "a + b ⟂ n: {j:?} · {n:?} = {dot}");
+            assert!((len - 2f32.sqrt()).abs() < 1e-5, "|a + b| = √2, got {len}");
+        }
     }
 
     #[test]

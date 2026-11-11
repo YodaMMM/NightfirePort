@@ -51,6 +51,8 @@ fn step(sim: &mut Sim, input: nf_game::player::Input) {
 }
 
 /// The pond's bank [D probe, the fix_swim repro spot], yaw 1.57 walks +X into the pond.
+/// Level-swim ticks out from the bank before the dive (over the pond's deeper floor).
+const SWIM_OUT: usize = 60;
 const BANK: [f32; 3] = [-82.3, 5.3, 32.05];
 
 /// Walk Bond from the bank into the pond on the real path (the fix_swim recipe).
@@ -75,6 +77,11 @@ fn diving_eases_the_camera_eye_down_to_the_body_root() {
     swim_in(&mut sim);
     // At the surface the head (pos + 0.7) sits above the water line: surfaced, eye 0.7 [M 0x191a70:110].
     assert!((sim.bond.eye - 0.7).abs() < 1e-4, "the surfaced eye is the standing 0.7 (got {})", sim.bond.eye);
+    // Swim out over deeper water first: with the pitched stroke easing from cos(pitch)·lane [M
+    // Player_Move 0x191dd0:149-165] a dive straight off the bank reaches the shallow floor and
+    // bobs the standing head back over the water line (surfaced again, the eye rightly rises).
+    let level = nf_game::player::Input { forward: 1.0, ..Default::default() };
+    for _ in 0..SWIM_OUT { step(&mut sim, level); }
     // Dive: pitch down over two seconds while holding forward — the swim stroke rides the look
     // direction [M Player_Move 0x191dd0:149-165], so Bond sinks past the head-under line.
     let dive = nf_game::player::Input { forward: 1.0, look: -0.03, ..Default::default() };

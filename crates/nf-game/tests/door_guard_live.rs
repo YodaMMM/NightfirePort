@@ -106,7 +106,7 @@ impl L {
     }
 }
 
-pub fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(), cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
+pub fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(), cel: None, obj_cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
 
 pub fn idx(sim: &Drones, placement: usize) -> usize {
     sim.list.iter().position(|dr| dr.placement == placement).unwrap_or_else(|| panic!("placement {placement} on the roster"))
@@ -130,42 +130,31 @@ fn door_guards_pair_into_mutual_nearest_pairs() {
         assert_eq!(sim.list[i].state, state::CIVILIAN_DOOR_GUARD,
             "pl {} reached CivilianDoorGuard, state {:#x}", sim.list[i].placement, sim.list[i].state);
     }
-    // The exact partner graph the game's sequential ENTERs leave [M 0x160694 — the 0x31 ENTER
-    // calls SetDronePartner unconditionally; 0x141360:96 — the claim `me->0x2BC = cand` is
-    // written INSIDE the scan; :113 — the mutual write `cand->0x2BC = me` lands after the scan
-    // and overwrites any earlier claim on the candidate]: the list-order scans chain. 404
-    // claims 417; 417's own ENTER still scans (nothing gates the caller) and claims the nearer
-    // partnerless guard 442 (7.6 u vs 8.9 u); 441 finds every candidate already claimed; 442's
-    // own ENTER claims 441. Only 441↔442 ends mutual; 404→417 and 417→442 are the stale claims
-    // the later scans left behind. (The pre-audit test asserted two clean mutual pairs — that
-    // outcome depended on the old wrong yaw gate filtering the cross-pair candidates [M
-    // 0x141360:90 is a HEIGHT gate].)
-    assert_eq!(sim.list[g404].door_partner, Some(g417), "404's ENTER claim");
-    assert_eq!(sim.list[g417].door_partner, Some(g442), "417's own re-scan claim");
-    assert_eq!(sim.list[g441].door_partner, Some(g442), "441's scan finds everything claimed");
-    assert_eq!(sim.list[g442].door_partner, Some(g441), "442's own re-scan claim — the one mutual pair");
+    // The exact partner graph the game's boot ENTERs leave. `Drone_PostLoad_Init` 0x136938 runs
+    // `DefaultInit` + `SM_InitObject` drone by drone in list (creation = placement) order
+    // [M 0x136938 loop, 0x14d890:13-21], and a drone not yet reached is the zeroed create block
+    // (mode +0xC5 = 0, no `+0x4F8 & 0x100` [M 0x1344e0:17, 0x14b300:60, 501]), so each boot scan
+    // [M 0x141360:70-87] sees only the guards ahead of it: 404 finds no one; 417 pairs 404
+    // (mutual [M 0x141360:96, 113]); 441 finds 404 and 417 claimed; 442 pairs 441.
+    // (The old port let every guard be a candidate at boot and chained 404→417→442↔441.)
+    assert_eq!(sim.list[g404].door_partner, Some(g417), "404 is claimed by 417's ENTER");
+    assert_eq!(sim.list[g417].door_partner, Some(g404), "417's ENTER pairs 404, the one guard ahead of him");
+    assert_eq!(sim.list[g441].door_partner, Some(g442), "441 is claimed by 442's ENTER");
+    assert_eq!(sim.list[g442].door_partner, Some(g441), "442's ENTER pairs 441");
     // The HEIGHT gate [M 0x141360:90]: each claim's two objects' +0x34 (position Y) differ by
     // less than 2.0. (All six guards stand at Y 44.0 on this level [D the roster dump], so the
-    // gate never separates them here — pin it anyway.) The old test asserted a yaw difference
-    // here — the daily audit 2026-10-17 correction: +0x30 is the position vector, +0x54 the yaw.
-    for (a, b) in [(g404, g417), (g417, g442), (g441, g442)] {
+    // gate never separates them here — pin it anyway.)
+    for (a, b) in [(g404, g417), (g441, g442)] {
         assert!((sim.list[a].pos[1] - sim.list[b].pos[1]).abs() < 2.0,
             "pl {} and pl {} claim only within the 2.0 height gate", sim.list[a].placement, sim.list[b].placement);
     }
-    // The planes [M 0x141360:115-174 + 0x1e4498 + disasm]: each final build is anchored at its
-    // OWNER with v0 = owner→partner of the claim that built it. audit-fix-door-guard-3: the
-    // pairing runs at the deferred watch UPDATE with the [S] watch-across rule (drone.rs
-    // `door_guard_pass`), so every build takes the IF outcome — planes on the CANDIDATE, v0 =
-    // −dir = candidate→caller. The three builds: 404's (flipped) lands on 417 with v0 = 417→404;
-    // 417's own (natural diff < 0 [M 0x141360:121]) lands on 442 with v0 = 442→417; 442's own
-    // (flipped) lands on 441 with v0 = 441→442. 441 owns the last build and evaluates; 404/417/442
-    // hold 0xff (404 and 442 marked by their own flipped builds, 417 by his own natural-IF build).
-    // plane0.n = cross(v0, (0,1,0)) = (−v0.z, 0, v0.x) — the game's second vector is (0,1,0)
-    // [M disasm 0x14150c-0x141554 / 0x1415f4-0x141614], NOT (0,0,1), so the normal is HORIZONTAL
-    // and the sign is fixed; a pair along z gives n = (∓1, 0, 0) — the old test's "the game's
-    // own degenerate zero normal" never happens. plane1 = −v0 through that build's MIRROR,
-    // plane2 = +v0 through the OWNER [M 0x141360:134-149 / 158-173].
-    for (owner, mirror) in [(g417, g404), (g442, g417), (g441, g442)] {
+    // The planes [M 0x141360:115-174 + 0x1e4498 + disasm]: both callers' facings give
+    // diff = atan2(dir) − yaw < 0 [M 0x141360:121 + Vec_AngleDifference 0x1e2b78 = b − a]
+    // (417: 1.59 − 3.11; 442: 3.12 − 4.71), so the IF branch: the caller holds 0xff and the
+    // planes go on the CANDIDATE with v0 = candidate→caller. 404 owns 417's build, 441 owns 442's.
+    // plane0.n = cross(v0, (0,1,0)) = (−v0.z, 0, v0.x) — horizontal; plane1 = −v0 through the
+    // MIRROR, plane2 = +v0 through the OWNER [M 0x141360:134-149 / 158-173].
+    for (owner, mirror) in [(g404, g417), (g441, g442)] {
         let got = sim.list[owner].door_planes;
         let (ox, oy, oz) = (sim.list[owner].pos[0], sim.list[owner].pos[1], sim.list[owner].pos[2]);
         let (mx, my, mz) = (sim.list[mirror].pos[0], sim.list[mirror].pos[1], sim.list[mirror].pos[2]);
@@ -203,17 +192,17 @@ fn door_guards_pair_into_mutual_nearest_pairs() {
         assert!(side(got[1], sim.list[mirror].pos).abs() < 1e-2, "plane1 passes through the build's mirror");
         assert!(side(got[2], sim.list[owner].pos).abs() < 1e-2, "plane2 passes through the owner");
     }
-    // The 0xff markers after the chain [M the branches at 0x141360:123/151 set exactly one side
-    // per build; audit-fix-door-guard-3's [S] watch-across rule routes the diff ≥ 0 builds through
-    // the IF branch]: 404's flipped build marked HIMSELF; 417's own natural-IF build marked
-    // himself; 442's flipped build marked herself — 441 (the last build's candidate) never marked.
-    assert_eq!(sim.list[g404].door_side, 0xff, "404 marked by his own flipped build");
-    assert_eq!(sim.list[g417].door_side, 0xff, "417 marked by his own natural-IF build");
+    // The 0xff markers [M the branches at 0x141360:123/151 set exactly one side per build]: the
+    // callers 417 and 442 marked themselves; 404 and 441 evaluate.
+    assert_eq!(sim.list[g404].door_side, 0, "404 owns 417's build");
+    assert_eq!(sim.list[g417].door_side, 0xff, "417 marked by his own IF build");
     assert_eq!(sim.list[g441].door_side, 0, "441 owns 442's build");
-    assert_eq!(sim.list[g442].door_side, 0xff, "442 marked by her own flipped build");
-    // 404 holds no planes [M the three builds above all landed on 417/442/441].
-    assert!(sim.list[g404].door_planes.iter().all(|p| p.iter().all(|&v| v == 0.0)),
-        "404 never had planes built on him");
+    assert_eq!(sim.list[g442].door_side, 0xff, "442 marked by her own IF build");
+    // The two evaluators' normals point the way their pair faces: 404/417 face the hall (south,
+    // −z), 441/442 face west (−x).
+    assert!(sim.list[g404].door_planes[0][2] < -0.99, "404's plane0 normal points south: {:?}", sim.list[g404].door_planes[0]);
+    assert!(sim.list[g441].door_planes[0][0] < -0.99, "441's plane0 normal points west: {:?}", sim.list[g441].door_planes[0]);
+    assert!(sim.list[g417].door_planes.iter().all(|p| p.iter().all(|&v| v == 0.0)), "417 never had planes built on him");
 }
 
 /// The zone bands drive the UPDATE arms [M 0x1416d8:55-73 + 0x160648:59-103]. With the game's

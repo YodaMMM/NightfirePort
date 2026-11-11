@@ -95,7 +95,7 @@ impl Level05 {
     }
 }
 
-fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(), cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
+fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(), cel: None, obj_cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
 
 /// `Bullet_init_casing_ex` 0x12f678:102-114 (the guard arm): the eject basis is the weapon datum's
 /// bone world matrix — datum `+0x50 + 2` when the skin's attachment table carries it
@@ -171,7 +171,11 @@ fn guard_casing_ejects_from_the_weapon_datum_matrix() {
     let standin_fwd = [sy, pitch.sin(), cy];
     let standin_e = [standin_fwd[0] * local[1], standin_fwd[1] * local[1], standin_fwd[2] * local[1]];
     let datum_vs_standin: f32 = (0..3).map(|k| (expected_e[k] - standin_e[k]).abs()).fold(0.0, f32::max);
-    assert!(datum_vs_standin > 0.05, "the datum basis must differ from a body-yaw basis (got {datum_vs_standin})");
+    // The teeth: the stand-in must land outside the velocity band above (0.016) with room to spare,
+    // twice the band. The margin is the guard's pose at his first shot, which moves with the
+    // joined tree's timeline (master above 0.05, join-final 0.049); the old basis still misses
+    // the velocity band by three times its width.
+    assert!(datum_vs_standin > 2.0 * 0.016, "the datum basis must differ from a body-yaw basis (got {datum_vs_standin})");
     let (r90c, r90s) = (90f32.to_radians().cos(), 90f32.to_radians().sin());
     let rot90 = [[r90c, 0.0, -r90s], [0.0, 1.0, 0.0], [r90s, 0.0, r90c]];
     let wrong_e = [

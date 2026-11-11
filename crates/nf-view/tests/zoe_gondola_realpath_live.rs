@@ -157,6 +157,7 @@ fn zoe_rides_the_carriage_and_never_targets_bond() {
     let mut ch83 = false;
     let mut guard_hits = 0usize; // the positive control: team-1 rounds that hit Bond
     let mut ally_hits = 0usize;  // the failure: ally rounds that hit Bond
+    let mut zoe_took_bond: Option<u32> = None; // the failure: her opponent is the player
 
     'ride: for t in 0..3600u32 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x53) { ch83 = true; break 'ride; }
@@ -181,6 +182,9 @@ fn zoe_rides_the_carriage_and_never_targets_bond() {
             // re-sighting the same round repeats the same record.
             for b in &sim.drones.bullets {
                 if b.owner != ai { continue; }
+                // A ricochet (`bounces` > 0) flies off the surface it met, not off her aim: the
+                // aim is the fire-time line only.
+                if b.bounces > 0 { continue; }
                 let d = [bond_head[0] - b.pos[0], bond_head[1] - b.pos[1], bond_head[2] - b.pos[2]];
                 let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
                 let cross = [
@@ -189,9 +193,16 @@ fn zoe_rides_the_carriage_and_never_targets_bond() {
                     b.dir[0] * d[1] - b.dir[1] * d[0],
                 ];
                 let perp = if l > 1e-6 { (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt() / l } else { 0.0 };
+                // A round flying AWAY from Bond (his head behind it on the line) is not aimed at
+                // him: she fires out of the cabin at a guard with Bond behind her, and the line's
+                // distance alone read those rounds as aimed at him. Only the ray ahead counts.
+                let ahead = d[0] * b.dir[0] + d[1] * b.dir[1] + d[2] * b.dir[2] > 0.0;
+                let perp = if ahead { perp } else { f32::INFINITY };
                 eprintln!("[zoe shot t{t}] muzzle {:?} dir {:?} perp_to_bond {perp:.2}", b.pos, b.dir);
                 rounds.push(Round { tick: t, from: b.pos, to_bond: perp, hit: false });
             }
+            // The opponent model itself [M 0x1424e0:101]: team 2 never takes the player.
+            if sim.drones.list[ai].opp_bond { zoe_took_bond = Some(t); }
             let zoe_now = sim.drones.list[ai].shots.len();
             if zoe_now > zoe_shots0 { eprintln!("[zoe fired t{t}] +{} round(s)", zoe_now - zoe_shots0); }
         }
@@ -244,6 +255,7 @@ fn zoe_rides_the_carriage_and_never_targets_bond() {
     //     half only; see the stream evidence that
     //     keeps the model out of this batch.
     assert!(ally_hits == 0, "the ally's round hit Bond {ally_hits} times — team 2 never takes the player [M 0x1424e0:101; the fix is the team-2 opponent model]");
+    assert!(zoe_took_bond.is_none(), "the ally took Bond as her opponent at ride t{zoe_took_bond:?} [M 0x1424e0:101]");
     for r in &rounds {
         assert!(r.to_bond > 2.0, "an ally-fired round at t{} was aimed at Bond (perp {:.2} from his head) [M 0x1424e0:101]",
             r.tick, r.to_bond);

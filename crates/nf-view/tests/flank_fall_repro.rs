@@ -22,21 +22,16 @@ use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
-/// OPEN (GAPS): on master this walk still falls, and NOT at the courtyard lip. Measured per tick
-/// (NF_WALK_TRACE): heading for flank nav 1 Bond rides the gatehouse wall's south end-edge (the
-/// edge contact lifts him ~0.04 u/tick, t27140-27142) until the feet band misses; on that first
-/// airborne tick the bot-capsule push [M Collide_Jointy 0x1ec180:229-281] discharges the whole
-/// overlap he walked into while grounded (two guards, ~0.74 u in one tick, t27142→27143) and
-/// carries the spine across the wall plane x 10.915 (z −33.3..−30.3). From the back side the
-/// port's contact pushes him further out (x 11.46 = plane + r) into a box with no static floor
-/// (x 10.91..12.8: no tri), where he hangs on the floor strip's edge until he drops (t30895).
-/// The game pushes off bots every tick [M Collide_Jointy — no ground gate; per-bot gate
-/// NDrone2_DoCollision 0x149ec8], so the overlap never builds; the port's airborne-only gate is
-/// a port choice, and lifting it alone breaks the 03/01 walks and exit_aim_01 (measured), so the
-/// fix needs the per-bot +0x4f8 0x20/0x200 gates modelled first. The pick-bit grounding the
-/// first attempt landed does not fix this walk either (it falls earlier, at the west lane).
+/// Measured per tick (NF_WALK_TRACE): heading for flank nav 1 Bond rides the gatehouse wall's
+/// south end-edge (the edge contact lifts him ~0.04 u/tick) until the feet band misses; on that
+/// first airborne tick the bot-capsule push [M Collide_Jointy 0x1ec180:229-281] discharged the
+/// whole overlap he walked into while grounded (two guards, ~0.74 u in one tick) and carried the
+/// spine across the wall plane x 10.915 (z -33.3..-30.3), into a box with no static floor, and he
+/// dropped. The game pushes off bots every tick [M Collide_Jointy - no ground gate], so the
+/// overlap never builds; the port keeps its airborne-only gate and now sweeps the push against the
+/// world (`clip_push_to_world`), so the discharge stops a radius short of the wall. Red on the
+/// unswept push, green with it; the same class as capsule_push_07_doorway_live.
 #[test]
-#[ignore = "open: airborne bot-push discharge carries Bond through the gatehouse wall (see doc)"]
 fn the_old_courtyard_flank_stays_on_the_floor() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000003.bin", false).expect("load 07000003"));
@@ -97,6 +92,15 @@ fn pressed_against_the_west_lip_bond_stays_grounded() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000003.bin", false).expect("load 07000003"));
     w.wait(60);
+    // The probe pins the ground rule at the lip, not a fight: the guards leave the live set (the
+    // stealth probes' setup). With the game's sight round robin [M DroneVision_ProcessDroneSight
+    // 0x176a28] guard #9 holds AimStandFire 0x68 at (11.6, 6.3, -19.0) in the east doorway, and
+    // the leg ended beside him with Bond 0.7 over the floor (y 7.18); the 11 ungrounded ticks
+    // were his drop from there, before the lip [L this branch's run].
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        for g in sim.drones.list.iter_mut() { g.present = false; g.enabled = false; }
+    }
     w.walk_nav_to([13.0f32, 5.9, -18.0], "mid courtyard", 1.6);
     // Press west into the lip: real input, forward held, sampling grounded every tick.
     let start = w.total_ticks;

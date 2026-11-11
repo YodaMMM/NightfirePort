@@ -36,8 +36,8 @@ fn p2k_round(from: [f32; 3], at: [f32; 3]) -> nf_game::drone::PlayerBullet {
     nf_game::drone::PlayerBullet {
         pos: from, dir: [d[0] / l, d[1] / l, d[2] / l],
         speed: 13.2, travelled: 0.0, range: 50.0, damage: 3.5, weapon: 2,
-        first: true, dead: false, bounces: 0, homing: false, target: None,
-        gravity: false, guided_cam: false, snd: 0, swoosh: None, born: 0,
+        first: true, dead: false, bounces: 0, homing: false, target: None, target_copter: false,
+        gravity: false, guided_cam: false, snd: 0, swoosh: None, born: 0, from_turret: None,
     }
 }
 
@@ -66,6 +66,7 @@ fn driver_for(level: u32) -> Option<fn(&mut Walker) -> String> {
 /// (drive_4a asserts that fold). The two documented walkreal stand-ins ride along (the door[19]
 /// pincer, the 0.88 funnel) — everything else is the real input path.
 fn drive_12(w: &mut Walker) -> String {
+    tower2::CLEAR_EAST_WING_GUARD.with(|c| c.set(true));
     tower2::walk_12(w);
     tower2::walk_12_exit(w);
     {
@@ -243,6 +244,15 @@ fn drive_0a(w: &mut Walker) -> String {
     for _ in 0..200 { w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, true);
                       w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
     w.total_ticks += 400;
+    // A press at the office door's keypad lock opens its page, and the drawn page holds the pad
+    // until △ closes it [M Lock_Update 0x1ae3d8 case 3, Player_Update 0x193600:80-87]: every
+    // later E (the hatch's among them) went to the page. Leave the page as a player would.
+    if w.scene.sim.as_ref().unwrap().drones.keypad.is_some() {
+        w.scene.sim.as_mut().unwrap().step_bond(Input { keypad_back: true, ..Default::default() }, false, false, false);
+        w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+        w.total_ticks += 2;
+        assert!(w.scene.sim.as_ref().unwrap().drones.keypad.is_none(), "△ closes the office door's keypad page");
+    }
     w.scene.sim.as_mut().unwrap().bond = nf_game::player::Bond::new([-9.7, 0.4, -19.3], 0.0);
     w.scene.sim.as_mut().unwrap().bond = nf_game::player::Bond::new([21.72, 1.12, 19.4], 0.0);
     // door-react-path5: press-release pairs at the hatch too — each pair is a fresh E press

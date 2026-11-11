@@ -95,6 +95,7 @@ pub mod trig;
 pub mod triggers;
 pub mod tuning;
 pub mod useobj;
+pub mod usepick;
 pub mod view;
 pub mod wire;
 pub mod world;

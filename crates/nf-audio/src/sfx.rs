@@ -98,6 +98,8 @@ struct Item {
     /// FNV-1a over the started voice's decoded PCM bytes (the port's test probe, fix-weapon-sounds):
     /// the sample the voice plays, checkable against the owning bank's decode (numbers only).
     sample_hash: u64,
+    /// The port's sound log (`NF_SOUND_LOG`): why the item was marked `DeleteMe` (numbers only).
+    why: &'static str,
 }
 
 /// Bank slot data: the parsed bank, its decoded samples (lazily) and the raw ADPCM.
@@ -171,6 +173,11 @@ pub struct Driver {
     /// pause are held [M sound.md §8]. The EE keeps the batch flowing while paused; the port's host
     /// stops ticking under a menu, so the pause reaches the output through `set_paused` at once.
     paused: bool,
+    /// The SPU's end flags when no output device runs the voices (`crate::VoiceClock`): `Sound::batch`
+    /// reads it in place of `Output::take_ended`. Kept beside the driver so every `Sound` has one.
+    pub clock: crate::VoiceClock,
+    /// The sound log's frame tag (`NF_SOUND_LOG`): the host writes the sim frame before each batch.
+    pub log_frame: u32,
 }
 
 /// `Streams[1..2]`: at most two streamed effects at once (slot 0 is the music) [M `SFXInitialiseStream`].
@@ -199,7 +206,7 @@ impl Driver {
             music_master: 70, mute_sfx: 1, indoors: 100, indoors_target: 100, reverb: 0, reverb_target: 0, underwater: false,
             fade: 10000, fade_music_volume: 10000, fade_status: 0, fade_rate: 30, fade_music: 1, fade_start: 0,
             ducker_current: 100, ducker_volume: 100, ducker_duration: 1, ducker_start: 0, timer_ms: 0, nis_quitten: false, nis_playing: false,
-            key_on_frame_delay: 0, paused: false,
+            key_on_frame_delay: 0, paused: false, clock: Default::default(), log_frame: 0,
             listener_pos: [0; 3], listener_dir: [0, 1000, 0], listener_norm: [-1000, 0, 0], active: Vec::new(), streams: None, stream_pcm: HashMap::new() }
     }
 
@@ -279,7 +286,25 @@ impl Driver {
             // (`SampleKeyOn(VoiceHandle[0], …)` [M §3.2 step 3]).
             self.items[k].key_on_delay = 0;
             self.items[k].started_when_nis = self.nis_playing;
-            out.extend(std::mem::take(&mut self.items[k].held));
+            let held = std::mem::take(&mut self.items[k].held);
+            // The key-on clears the voice's end state: the SPU's KON resets ENDX, and a stream's
+            // end test (`ES_HasStreamEnded`, HasSampleEnded@6ac's stream arm) starts over with the
+            // stream [M sound.md §3.2 step 3, §6]. The voice was set up frames + 5 batches ago, so
+            // an end flag the last occupant's key-off release raised after that set-up (the
+            // output reports it whenever its callback runs) sits on this voice now; left in
+            // place, the next update read the line as ended the batch after its key-on, freed its
+            // voice without a key-off, and the next start on that voice cut the line short.
+            for c in &held {
+                if let Cmd::Play { voice, .. } = c {
+                    if let Some(Some(v)) = self.voices.get_mut(*voice as usize) {
+                        if crate::sound_log() && !v.playing { eprintln!("[snd] f{} takeover {id:#x}: voice {voice} carried a stale end (cleared by the key-on)", self.log_frame); }
+                        v.playing = true;
+                        v.fresh = true;
+                    }
+                }
+            }
+            if crate::sound_log() { eprintln!("[snd] f{} takeover {id:#x} handle {} keys on {} voice(s)", self.log_frame, self.items[k].handle, held.len()); }
+            out.extend(held);
             return 0;
         }
         if kd != 0 && !(fx.count == 1 && fx.subs[0].file < 0) { return 1; }
@@ -293,6 +318,7 @@ impl Driver {
             paused: false, key_on_delay: kd, held: Vec::new(),
             gpaused: false,
             sample_hash: 0,
+            why: "",
             started_when_nis: self.nis_playing,
             streamed: false,
         };
@@ -336,7 +362,7 @@ impl Driver {
                 let v = (100 - ((d - it.inner) * 100) / r).clamp(0, 100);
                 reject = v * fx.priority < (n * budget * 2000) / (budget * budget);
             }
-            if reject { self.items[i].delete = true; return false; }
+            if reject { self.items[i].delete = true; self.items[i].why = "distance-reject"; return false; }
         }
         if n > budget {
             let n2 = self.count_voices(i);
@@ -346,19 +372,19 @@ impl Driver {
                     if it.delete || it.streamed || it.fx.tracking == 3 { continue; }
                     if best.is_none_or(|b| it.fx.priority < b.0) { best = Some((it.fx.priority, k)); }
                 }
-                if let Some((_, k)) = best { self.items[k].delete = true; }
+                if let Some((_, k)) = best { self.items[k].delete = true; self.items[k].why = "budget-steal"; }
             }
-            if fx.max_reject != 0 { self.items[i].delete = true; return false; }
+            if fx.max_reject != 0 { self.items[i].delete = true; self.items[i].why = "max-reject"; return false; }
             if self.items[i].delete { return false; }
         }
         if fx.max_voices != 0 {
             let id = self.items[i].id;
             let same: Vec<usize> = (0..self.items.len()).filter(|&k| k != i && self.items[k].id == id).collect();
             if same.len() as i32 >= fx.max_voices {
-                if fx.max_reject != 0 { self.items[i].delete = true; return false; }
+                if fx.max_reject != 0 { self.items[i].delete = true; self.items[i].why = "max-reject"; return false; }
                 let mut oldest: Option<(i32, usize)> = None;
                 for &k in &same { if oldest.is_none_or(|o| self.items[k].counter > o.0) { oldest = Some((self.items[k].counter, k)); } }
-                if let Some((_, k)) = oldest { self.items[k].delete = true; }
+                if let Some((_, k)) = oldest { self.items[k].delete = true; self.items[k].why = "max-voices-oldest"; }
             }
         }
         self.started += 100;
@@ -366,7 +392,7 @@ impl Driver {
         if fx.ducker != 0 && (fx.tracking == 0 || fx.tracking == 3) { self.start_ducker(100 - fx.ducker as i32, fx.ducker_length); }
         if fx.multi_sample == 0 {
             let k = self.rnd.rnd(fx.count as i32) as usize;
-            if !self.start_sample(out, i, fx.subs[k], 0) { self.items[i].delete = true; return false; }
+            if !self.start_sample(out, i, fx.subs[k], 0) { self.items[i].delete = true; self.items[i].why = "no-voice"; return false; }
             self.items[i].csw[0] = self.cue_timer(&fx);
         } else if fx.polyphonic == 0 {
             let n = fx.count;
@@ -442,6 +468,11 @@ impl Driver {
         // A precached item (`KeyOnFrameDelay != 0`) is set up but not keyed on [M §3.2]: its key-ons
         // wait on the item for the real start.
         let hold = self.items[i].key_on_delay > 0;
+        if crate::sound_log() {
+            let it = &self.items[i];
+            eprintln!("[snd] f{} start {:#x} handle {} voice {front} rear {:?} len {} pitch {:#x} stream {streamed} held {hold} nis {}",
+                self.log_frame, it.id, it.handle, rear, pcm.data.len(), pitch.max(0), it.started_when_nis);
+        }
         let front_cmd = Cmd::Play { voice: front, pcm: pcm.clone(), pitch: pitch.max(0) as u32, left: l, right: r, delay: 0.0, reverb };
         if hold { self.items[i].held.push(front_cmd) } else { out.push(front_cmd) }
         if let Some(rv) = rear {
@@ -533,7 +564,7 @@ impl Driver {
 
     /// `SFXRemove(handle, id)`: marked, killed in the next update's kill pass.
     pub fn remove(&mut self, handle: u32, id: Option<u32>) {
-        for it in &mut self.items { if (handle == 0 || it.handle == handle) && id.is_none_or(|i| it.id == i) { it.delete = true; } }
+        for it in &mut self.items { if (handle == 0 || it.handle == handle) && id.is_none_or(|i| it.id == i) { it.delete = true; it.why = "remove"; } }
     }
 
     fn ended(&self, v: Option<usize>) -> bool {
@@ -652,7 +683,16 @@ impl Driver {
     /// `SFXUpdate` (0x4ee4): once per game frame. `ended`: hardware voices that reached their end flag.
     /// Returns the reverb depth 0..1 (`EVOL`) the output should apply this frame [M §6 step 2].
     pub fn update(&mut self, out: &mut Vec<Cmd>, ended: &[u32]) -> f32 {
-        for &e in ended { if let Some(Some(v)) = self.voices.get_mut(e as usize) { v.playing = v.fresh && v.playing; } }
+        for &e in ended {
+            if let Some(Some(v)) = self.voices.get_mut(e as usize) {
+                if crate::sound_log() {
+                    let owner = self.items.iter().find(|it| it.vh.iter().flatten().any(|&h| h == e as usize));
+                    eprintln!("[snd] f{} end flag voice {e} fresh {} -> {}", self.log_frame, v.fresh,
+                        owner.map_or("no item".to_string(), |it| format!("item {:#x} handle {} after {} updates held {}", it.id, it.handle, it.counter, it.key_on_delay > 0)));
+                }
+                v.playing = v.fresh && v.playing;
+            }
+        }
         for v in self.voices.iter_mut().flatten() { v.fresh = false; }
         if self.started > 0 { self.started = self.started * 9 / 10; }
         // §6 step 2: `SFXUpdateEnvironment; ES_UpdateDucker; SFXFadeUpdate; if NisQuitten: ES_StopDucker` [M].
@@ -690,10 +730,10 @@ impl Driver {
                 // that reaches 0 without a real start is deleted [M §3.2].
                 if it.key_on_delay > 0 {
                     it.key_on_delay -= 1;
-                    if it.key_on_delay == 0 && !it.held.is_empty() { it.held.clear(); it.delete = true; }
+                    if it.key_on_delay == 0 && !it.held.is_empty() { it.held.clear(); it.delete = true; it.why = "precache-expired"; }
                 }
                 if it.paused { i += 1; continue; }
-                if it.fade_kill { it.fade_kill_vol -= 5; if it.fade_kill_vol < 0 { it.fade_kill_vol = 0; it.delete = true; } }
+                if it.fade_kill { it.fade_kill_vol -= 5; if it.fade_kill_vol < 0 { it.fade_kill_vol = 0; it.delete = true; it.why = "nis-quit-fade"; } }
                 it.updated += 1;
                 it.counter += 1;
             }
@@ -739,6 +779,10 @@ impl Driver {
         let mut k = 0;
         while k < self.items.len() {
             if self.items[k].delete {
+                if crate::sound_log() {
+                    let it = &self.items[k];
+                    eprintln!("[snd] f{} kill {:#x} handle {} why {} after {} updates", self.log_frame, it.id, it.handle, if it.why.is_empty() { "?" } else { it.why }, it.counter);
+                }
                 for ch in 0..10 {
                     if let Some(v) = self.items[k].vh[ch].take() {
                         if let Some(x) = self.voices[v].take() {
@@ -757,7 +801,7 @@ impl Driver {
     /// `SFXUpdateEnding` (0x4e20): delete, or for `Loop` re-trigger after the cue delay. True = process again now.
     fn ending(&mut self, out: &mut Vec<Cmd>, i: usize) -> bool {
         let fx = self.items[i].fx.clone();
-        if fx.looped == 0 { self.items[i].delete = true; return false; }
+        if fx.looped == 0 { self.items[i].delete = true; self.items[i].why = "sample-ended"; return false; }
         let c = self.items[i].csw[0];
         self.items[i].csw[0] -= 1;
         c < 1 && self.setup(out, i) && self.items[i].updated < 2
@@ -866,7 +910,8 @@ impl Sound {
     pub fn batch(&mut self, f: impl FnOnce(&mut Driver, &mut Vec<Cmd>)) {
         let mut out = Vec::new();
         f(&mut self.driver, &mut out);
-        let ended = self.output.as_ref().map(|o| o.take_ended()).unwrap_or_default();
+        // No device: the clock stands in for the SPU's end flags, so one-shots end by their length.
+        let ended = match &self.output { Some(o) => o.take_ended(), None => self.driver.clock.advance() };
         let reverb_depth = self.driver.update(&mut out, &ended);
         // `PS2_SetupReverb`'s EVOL depth (the reverb send level), written to the output [M sound.md §5.5].
         out.push(Cmd::Reverb { depth: reverb_depth });
@@ -884,7 +929,7 @@ impl Sound {
             out.push(Cmd::MusicGain(p.gain(self.driver.music_master, self.driver.ducker_current, self.driver.fade_music_volume)));
         }
         if let Some(c) = &self.captured { c.lock().unwrap().extend(out.iter().cloned()); }
-        if let Some(o) = &self.output { o.send(out); }
+        match &self.output { Some(o) => o.send(out), None => self.driver.clock.apply(&out) }
     }
 
     /// The pause page's sound hold: `MenuManager_Create` with `pause_sound` runs `SFXPause` (op 9) +
@@ -908,7 +953,7 @@ impl Sound {
     pub fn set_paused(&mut self, paused: bool) {
         let mut out = Vec::new();
         self.driver.set_paused(paused, &mut out);
-        if let Some(o) = &self.output { o.set_paused(paused); o.send(out); }
+        match &self.output { Some(o) => { o.set_paused(paused); o.send(out); } None => self.driver.clock.apply(&out) }
     }
 }
 
@@ -1139,6 +1184,80 @@ mod tests {
         assert!(d.is_playing(2), "the new sound lives past the old one's end");
         d.update(&mut Vec::new(), &[voice]);
         assert!(!d.is_playing(2), "its own end reaps it");
+    }
+
+    /// A bank with the sample effect 7 (one_sound_bank's) and a streamed effect 8: 2-D, one sub-track
+    /// with FileRef -1 (STREAMS.LUT entry 0), so the cut-scene precache accepts it [M §3.2 step 3].
+    /// The stream holds 256 zero ADPCM frames (7 168 samples) behind an end marker (kind 9).
+    fn sample_and_stream() -> (Bank, Vec<u8>, Vec<[u32; 4]>, Vec<u8>) {
+        let mut shf = 1u32.to_le_bytes().to_vec();
+        for w in [0u32, 0, 32, 0x1000, 0, 1, 4, 0, 0] { shf.extend(w.to_le_bytes()); }
+        let mut sbf = vec![0u8; 32];
+        sbf[2..16].fill(0x77);
+        sbf[17] = 1;
+        let blk_len = 0x44 + 28 * 2;
+        let mut sfx = 2u32.to_le_bytes().to_vec();
+        for (id, off) in [(7u32, 20u32), (8, 20 + blk_len as u32)] { sfx.extend(id.to_le_bytes()); sfx.extend(off.to_le_bytes()); }
+        let mut a = vec![0u8; blk_len];
+        for (o, v) in [(4usize, 2i32), (8, 2), (0xc, 30), (0x14, 50), (0x28, 100), (0x40, 1), (0x44 + 12, 100)] { a[o..o + 4].copy_from_slice(&v.to_le_bytes()); }
+        let mut b = vec![0u8; blk_len];
+        for (o, v) in [(4usize, 0i32), (8, 2), (0xc, 30), (0x14, 50), (0x28, 100), (0x40, 1), (0x44, -1), (0x44 + 12, 100)] { b[o..o + 4].copy_from_slice(&v.to_le_bytes()); }
+        sfx.extend(a);
+        sfx.extend(b);
+        // STREAMS.BIN: a 0x30-byte header (1 marker at 0x10: end 0x1000, kind 9), the data at 0x100.
+        let mut bin = vec![0u8; 0x100 + 0x1000];
+        bin[4..8].copy_from_slice(&1u32.to_le_bytes());
+        bin[0xc..0x10].copy_from_slice(&0x10u32.to_le_bytes());
+        bin[0x14..0x18].copy_from_slice(&0x1000u32.to_le_bytes());
+        bin[0x18..0x1c].copy_from_slice(&9i32.to_le_bytes());
+        (Bank::parse(&shf, &sfx).unwrap(), sbf, vec![[0, 0x30, 0x100, 0x1000]], bin)
+    }
+
+    /// The cut-scene line's precache (`SFXPreCache`: `KeyOnFrameDelay = frames + 5`) sets the line
+    /// up on a voice the batch before had keyed off. The old occupant's release end reaches the
+    /// driver during the hold (the output reports it whenever its callback runs; logged on
+    /// 07000002's opening line: voice 1 keyed off at f1, the line set up on it at f2, the end read at
+    /// f5). The takeover's key-on clears it (`SampleKeyOn`; a stream's end test starts over with the
+    /// stream [M sound.md §3.2 step 3, §6 HasSampleEnded@6ac]). Before, the update after the
+    /// takeover read the line as ended, freed its voice without a key-off and the next start on the
+    /// voice cut the line off. Sister: the line's own end still reaps it.
+    #[test]
+    fn a_precached_line_survives_an_end_flag_raised_during_its_hold() {
+        let (b, sbf, lut, bin) = sample_and_stream();
+        let mut d = Driver::new();
+        d.load_bank(4, b, sbf);
+        d.load_streams(lut, Arc::new(bin));
+        d.set_listener([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+        // A 3-D sound on voices 0 (front) and 1 (rear); the EE removes it: the kill pass keys off.
+        let mut out = Vec::new();
+        assert_eq!(d.start(&mut out, 7, Some([5.0, 0.0, 0.0]), 1, None), 0);
+        d.update(&mut Vec::new(), &[]);
+        d.remove(1, None);
+        let mut out = Vec::new();
+        d.update(&mut out, &[]);
+        assert!(out.iter().any(|c| matches!(c, Cmd::Stop { voice: 0 })), "the kill pass keyed voice 0 off: {out:?}");
+        // The next batch precaches the line: it is set up on the freed voice 0, not keyed on.
+        let mut out = Vec::new();
+        d.pre_cache(&mut out, 8, 20);
+        assert!(out.is_empty(), "a precache keys nothing on: {out:?}");
+        assert!(d.ids().contains(&8), "the precache item is live");
+        d.update(&mut Vec::new(), &[]);
+        // Two batches later the output reports the key-off release's end on voice 0.
+        d.update(&mut Vec::new(), &[]);
+        d.update(&mut Vec::new(), &[0]);
+        for _ in 0..10 { d.update(&mut Vec::new(), &[]); }
+        assert!(d.ids().contains(&8), "the held line waits for its takeover");
+        // The authored frame: the real start takes the precached item over and keys the line on.
+        let mut out = Vec::new();
+        assert_eq!(d.start(&mut out, 8, None, 3, None), 0);
+        assert!(matches!(out.first(), Some(Cmd::Play { voice: 0, .. })), "the takeover keys voice 0 on: {out:?}");
+        for k in 0..5 {
+            d.update(&mut Vec::new(), &[]);
+            assert!(d.ids().contains(&8), "update {k} after the key-on: the line still plays");
+        }
+        // Sister: the line's own end (the output's flag after its key-on) ends it.
+        d.update(&mut Vec::new(), &[0]);
+        assert!(!d.ids().contains(&8), "its own end reaps it");
     }
 
     /// A start whose id no loaded bank holds returns 1 and starts nothing — the game's lookup

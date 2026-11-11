@@ -149,7 +149,7 @@ fn find_scenario(l: &Level05) -> (u32, f32) {
     panic!("no (seed, distance) keeps the guard in the aim-fire state across a burst boundary");
 }
 
-fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(), cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
+fn bond_at(p: [f32; 3]) -> Player { Player { yaw: 0.0, pos: p, target: [p[0], p[1] + 0.5, p[2]], eye: [p[0], p[1] + 1.0, p[2]], aim: [-1.0, 0.0, 0.0], sph: p, capsule: ([p[0], p[1] + 1.086, p[2]], p), hanging: false, body: Default::default(), cel: None, obj_cel: None, move_local: [0.0; 2], riding: false, crouched: false } }
 
 /// A flat floor at `y` (feet height, both windings so every ray family hits) spanning the yard.
 fn floor_tris(y: f32) -> Vec<[[f32; 3]; 3]> {
@@ -186,7 +186,11 @@ fn trace_aim_phase(l: &Level05, drones: Vec<Drone>, rng: Rng, floor_y: f32, dx: 
     for _ in 0..WARM { sim.tick(&d, &bond_at(FAR)); }
     let mut out = Vec::new();
     let mut head_y = 0.0;
-    for _ in 0..60 {
+    // The window `find_scenario` searched (120 ticks): since `DroneFunc_FirstAttack` takes the
+    // FirstSightState combat-move pick only on an own-sight attack [M 0x148010:21-29, the +0x4F8 &
+    // 0x8000000 test], this alert-woken guard goes Attack → Combat 0x58 and reaches the aim phase
+    // later than the old instant AimCrouch pick (t71 at seed 8, past the old 60-tick trace).
+    for _ in 0..120 {
         sim.tick(&d, &bond);
         let dr = &sim.list[0];
         if matches!(dr.state, state::AIM_STAND_FIRE | state::AIM_CROUCH_FIRE) {

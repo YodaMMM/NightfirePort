@@ -16,6 +16,9 @@ use walker::Walker;
 use nf_game::world::V3;
 use walker::{dxz as dxz_pub, wrap_pi as wrap_pi_pub};
 
+#[path = "common/usepick.rs"]
+mod usepick;
+
 fn iso() -> String {
     std::env::var("NF_ISO").unwrap_or_else(|_| {
         eprintln!("NF_ISO not set — skipping");
@@ -433,6 +436,12 @@ fn the_bond_bonus_walk_over_takes_it() {
             "both bonuses must wait at rest after the intro, got {rest:?}");
     }
 
+    // capsule-join-2: the hall's woken guards (CombatNoSight 0x5c / AimStandFire 0x68) crowd the
+    // west legs with the game's standing bodies [M NDrone2_Collision 0x140e90:91-121, on within
+    // 2.0 of the player 0x149ec8/0x14b190] — five of them held Bond under the west bonus's step
+    // for the 6000-tick cap [L capsule-join-2 red]. A player shoots who stands in his way: the
+    // walker's body-block response answers a blocker on the lane.
+    w.body_block_response = true;
     // Leg 1: the hall bonus — the real walk from the spawn side. The steer rides the south
     // rooms (floors 4.4-4.9 [D collision cels]) — the raw line to the bonus drifts west into
     // the z≈0 pit band, so the south-room anchor comes first — then steps north into the
@@ -447,9 +456,16 @@ fn the_bond_bonus_walk_over_takes_it() {
         w.scene.sim.as_ref().unwrap().bond.pos);
     eprintln!("[bonus] the hall bonus taken at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
 
-    // Leg 2: back out the way the walk came in (the sealed pocket's only opening is the south
-    // step [D the wall stubs north/west of the alcove]), then the nav graph carries the walk
-    // to the hall stage (the same graph the monitor test rides from the spawn side).
+    // Leg 2: back out of the pocket along its north strip (floor 5.34, z 9.5..10.5 [a down-ray scan
+    // under the gallery slab]) onto the south room's north curb (top 6.19 along z 9, x > -11.5), and
+    // off its east part into the south room at (-6.4, 7.3), the line master's walk took out; then
+    // the nav graph carries the walk to the hall stage (the same graph the monitor test rides from
+    // the spawn side). On the joined tree the straight steer from the alcove dropped Bond on the
+    // curb at x -9.5 facing due south and he never stepped off it (y 7.10, the 6000-tick cap), and
+    // the south-step exit wedged against the pocket's east curb face at x -12.6.
+    w.walk_to(walker::Wp::new(-10.3, 5.4, 9.8).r(0.6), "east along the pocket's north strip");
+    w.walk_to(walker::Wp::new(-8.0, 6.2, 9.4).r(0.6), "onto the south room's north curb");
+    w.walk_to(walker::Wp::new(-6.4, 5.0, 7.3).r(0.8), "off the curb into the south room");
     w.walk_to(walker::Wp::new(-9.5, 5.8, 8.0).r(1.4), "back to the south room");
     w.walk_nav_to([2.9, 6.3, 16.3], "stage into the hall (east door)", 3.0);
     // Leg 3: the lane west, the hall's north-west floor, then through door #2 — the real E
@@ -585,7 +601,14 @@ fn the_security_camera_sweep_latches_the_player_in_range() {
     // Under the camera's watch: the gallery quad the cover nodes ring (x −25.8..−30.5, z
     // 6.8..9.5 on the 5.34 floor [D cover placements]), inside the 6 m range of the lens at
     // (−29.19, 7.87, 1.59). The nav decides the last steps; the poll watches the latch.
+    // capsule-join-2: the hall's woken guards stand in the walk's doorway with the game's
+    // standing bodies [M NDrone2_Collision 0x140e90:91-121, on within 2.0 of the player
+    // 0x149ec8/0x14b190] — five firing guards held Bond at (−13.4, 7.2, 12.5) for both nav caps
+    // [L capsule-join-2 red]. A player shoots who stands in his way: the walker's body-block
+    // response (the 02 walks' own) answers a blocker on the lane.
+    w.body_block_response = true;
     w.walk_nav_to([-28.4, 5.4, 6.9], "the gallery under the camera", 1.6);
+    w.body_block_response = false;
     let mut latched = false;
     for t in 0..2400u32 {
         w.tick(Default::default(), false);
@@ -636,18 +659,14 @@ fn e_use_on_the_radio_fax_prints_its_pages() {
         [M 0x1dbc08:41-55; D 0x06000016 stream 6]");
     // The fax desk: walk to the machine's front (the placement's +z face) and pulse E.
     w.walk_nav_to([17.56, 6.21, 0.4], "at the fax desk", 1.2);
-    let (fx, fz) = (17.56062f32, -0.9633102f32);
-    let mut printed = false;
-    for t in 0..240u32 {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let bp = sim.bond.pos;
-        let err = wrap_pi_pub((fx - bp[0]).atan2(fz - bp[2]) - sim.bond.yaw);
-        let input = nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() };
-        let use_key = t % 6 == 0;
-        w.scene.sim.as_mut().unwrap().step_bond(input, false, false, use_key);
-        w.total_ticks += 1;
-        if has(&w, 0x0200_01bd) { printed = true; break; }
-    }
+    // The press from in front of one of the machine body's collision faces, looking at it (the
+    // use pick keeps the entity only with the use point within 1.0 in front of a face
+    // [M Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8; nf_game::usepick]).
+    let printed = {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let (tris, sph) = usepick::entity(sim, 0x0200_01ba).expect("the machine body entity");
+        usepick::press_on(sim, &tris, sph, 240, &|s| s.drones.scripts.entities().iter().any(|e| e.2 == 0x0200_01bd))
+    };
     assert!(printed, "the E restarts the script and the page cycle re-runs to its bd op [M SP_Activate \
         0x1dc338 → 0x1dbda8 case 1's Script_Play; D 0x06000016 stream 6's bd at +0xa], entities {:?}",
         w.scene.sim.as_ref().unwrap().drones.scripts.entities().iter().map(|e| e.2).collect::<Vec<_>>());

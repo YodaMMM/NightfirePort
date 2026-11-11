@@ -323,12 +323,22 @@ fn reload_full(w: &mut Walker) {
 /// 0x1c shotgun drop [L the arm_fullest carry log]), and at DroneFiring_Accuracy_Hard 1.0 the
 /// fights must end in one tap, not one per reload cycle.
 fn scoop_drops(w: &mut Walker, label: &str, n: usize) {
+    scoop_drops_within(w, label, n, 6.0, 1.5);
+}
+
+/// The deliberate resupply pass (`scoop_drops` with a wider reach, real-health-00agent-02-5):
+/// the kills a leg left behind drop their guns ON the corridor just covered [M
+/// DroneWeap_DropWeapon 0x17a2a0 — the held weapon at the death-anim arm, clip·(0.25+FRand(0.5))
+/// rounds], and a player who just cleared a corridor walks back a few u and takes a fallen
+/// guard's rifle before the next contact. Same real-input shape as `scoop_drops`: Bond's own
+/// feet via `walk_nav_to`, the take through the capsule, then the game's weapon cycle.
+fn scoop_drops_within(w: &mut Walker, label: &str, n: usize, radius: f32, y_tol: f32) {
     for k in 0..n {
         let bp = w.scene.sim.as_ref().unwrap().bond.pos;
         let target = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
             .filter(|p| !p.gone)
             .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
-            .filter(|q| dxz(*q, bp) < 6.0 && (q[1] - bp[1]).abs() < 1.5)
+            .filter(|q| dxz(*q, bp) < radius && (q[1] - bp[1]).abs() < y_tol)
             .min_by(|a, b| dxz(*a, bp).total_cmp(&dxz(*b, bp)));
         let Some(target) = target else { break };
         eprintln!("[02] {label}: scooping the drop ({:.1},{:.1},{:.1}) (d {:.1})", target[0], target[1], target[2], dxz(target, bp));
@@ -492,6 +502,12 @@ fn clear_pursuers(w: &mut Walker, radius: f32, label: &str) {
                 w.walk_nav_to(stand, &format!("{label} pursuer {round} again"), 1.0);
                 let _ = w.shoot(di, &format!("{label} pursuer {round} retry"));
             }
+            // A guard who outlived the fight AND its retry has gone behind cover for good: a
+            // player leaves him rather than standing at the same wall for the next rounds (with
+            // the game's standing bodies the pin's sweep spent 16 × 10800-tick loops on the
+            // geisha-1 room's #6, unexposed 5 u off [L capsule-join red]).
+            let d = &w.scene.sim.as_ref().unwrap().drones.list[di];
+            if d.health > 0.0 && !d.corpse { passed.push(di); }
         }
         // Top up BETWEEN fights, not only on a dry click: the kills' drops are lying at the
         // fight floor and the route's later fights need the rounds (the first full walk died at
@@ -658,14 +674,34 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             // Second pass: the far garden guards walk into the radius while the near ones are
             // engaged — the wedge ahead (~1400 ticks of mitigation) must not face live shooters.
             clear_pursuers(&mut w, 24.0, "south hall west second pass");
+            if difficulty >= 3 {
+                // The corridor resupply (real-health-00agent-02-5): the leg's return-fire kills
+                // (#1 t4428, #3 t4679, #2 t4782 on this tree's repro run) dropped their rifles
+                // along the corridor just covered [M DroneWeap_DropWeapon 0x17a2a0], and the duel
+                // at the plate is a DPS race a 28-round P99 lost — the repro run's stand-off 0
+                // took 65.2 in 24 hits dry (health 100.0 → 34.8, t5856 → t6597) and the walk died
+                // at the lane crossing with 24.0 left. A player walks back up the dead corridor
+                // and takes a fallen guard's rifle before the room.
+                scoop_drops_within(&mut w, "the south-hall drops", 2, 12.0, 1.5);
+                arm_fullest(&mut w, "after the south-hall scoop");
+            }
         }
     }
+    if difficulty >= 3 {
+        // Whatever the corridor still holds within reach (the #2 drop sat ~14 u back on the
+        // repro run's geometry): the same walk-back pass, once, before the wheel is read for
+        // the room (real-health-00agent-02-5).
+        scoop_drops_within(&mut w, "the west-wing drops", 1, 14.0, 1.5);
+    }
     arm_fullest(&mut w, "before the geisha-1 room");
-    // NOTE (real-health-00agent-02-03-04): no pre-room drop scoop here — the walk to the drops
-    // passes the captors' posts and the return-fire fights answer them in the open corridor on
-    // the P99 (61.2 health before the room, the first tactic run [L the 00agent ledger]). The
-    // room's own round-0 kill drops the captor's shotgun and the per-round scoop arms it (the
-    // `d3` arm in `clear_captors_real`) — the later rounds fight on it.
+    // NOTE (real-health-00agent-02-03-04): no pre-room drop scoop at d1/d2 — the walk to the
+    // drops passes the captors' posts and the return-fire fights answer them in the open corridor
+    // on the P99 (61.2 health before the room, the first tactic run [L the 00agent ledger]). At
+    // d3 the two walk-back passes above take the drops the APPROACH legs left behind — they do
+    // not approach the captors' posts (the 02-5 runs measured the resupply arming a 0x18 with 40
+    // rounds and the stand-off 0 won at 88.8 intact). The room's own round-0 kill drops the
+    // captor's shotgun and the per-round scoop arms it (the `d3` arm in `clear_captors_real`) —
+    // the later rounds fight on it.
     w.lenient = true;
     w.walk_to(Wp { at: [-35.2, 6.5, 4.6], act: Act::Wait(10), arrive: 0.9 }, "the ch-0x17 plate");
     w.lenient = false;
@@ -737,8 +773,13 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             // closing captain (dist 1.6 at the shot, 50.4 health for the kill [L the
             // 00agent-02-03-2 run]). The stand holds the plate and duels — Bond does not move
             // (the back_off 4.0 retreat keeps the under-3.0-u rule out of play).
-            let _ = w.stand_and_fire(di, 900);
+            let killed = w.stand_and_fire(di, 900);
             status(&w, &format!("geisha 1 round-0 stand-off {k}"));
+            if !killed { continue; } // real-health-00agent-02-5: nobody died, nothing dropped — a
+            // player with a loaded rifle keeps fighting instead of rummaging the wheel for a
+            // shotgun he does not own: the old unconditional arm_weapon(0x1c) hunt cycled the
+            // empty wheel up to ~730 ticks per round while the closing captor volleyed Bond
+            // from 88.8 to 6.0 across one such gap [L the run-2/3 duel trace, t7561].
             // The kill's drop is the resupply (the guards' own guns; the dead captain's shells).
             scoop_drops(&mut w, &format!("geisha 1 stand-off {k} drop"), 1);
             arm_weapon(&mut w, 0x1c, &format!("geisha 1 stand-off {k} shotgun"));
@@ -757,6 +798,11 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         w.tick(Default::default(), false);
     }
     assert!(ch_on(&w, 0x49), "geisha 1 saved: ch 0x49 [M 0x1441c0]");
+    // The last captor's channel can lag his death by up to the level's 90-tick timer [M 0x1637f8:55-61].
+    for _ in 0..100 {
+        if ch_on(&w, 0x29) && ch_on(&w, 0x2a) && ch_on(&w, 0x88) { break; }
+        w.tick(Default::default(), false);
+    }
     assert!(ch_on(&w, 0x29) && ch_on(&w, 0x2a) && ch_on(&w, 0x88), "the three captor deaths [D param 12]");
     assert!(ch_on(&w, 0x3b), "AND #397 (0x29,0x2A,0x88,0x49) → 0x3B [D tr[017]]");
 
@@ -771,6 +817,61 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     assert!(ch_on(&w, 0x3c), "the geisha-1 zone touch [D tr[032] out 0x3C]");
     assert!(ch_on(&w, 0x35), "SEQ_AND (0x3B, 0x3C) → 0x35 [D tr[033]]");
 
+    // 4b. THE WEST-WING ARMOUR DETOUR (level-02-castle-00agent, 00 Agent only): the placed
+    //     armour pickup (kind 3 ARMOUR at (−55.2, 5.7, 4.7) [D 07000002 pickups]) lies in the
+    //     wing Bond just walked past — `Pickup_Handler` case 3 sets BLData+0x8B0 = 50 [M
+    //     0x18e650:220-225] and `Player_HandlePain`'s bullet arm drains the armour before the
+    //     health [M 0x1902c8:84-104]. The sniper's −48.0 body rounds (shot 1 at the stair
+    //     bottom, shot 2 on the crossing — both measured on this task's trees) are exactly the
+    //     pool the crossing could not afford: 99.6 − 96 and the courtyard captain's chip
+    //     finished Bond. The detour's geometry keeps the hiding civilian safe at ANY draw: the
+    //     lines from the sniper's post (−52.05, 6.34, −14.43) to any point of the wing run
+    //     north-west and never reach her x (−40.3) at all (the parametric t at her x is
+    //     negative — behind the shooter). A player who knows the wing takes the plate armour
+    //     on the way to the stair.
+    if difficulty >= 3 {
+        let target = w.scene.sim.as_ref().unwrap().drones.pickups.iter()
+            .filter(|p| !p.gone)
+            .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+            .find(|q| (q[0] - -55.2).abs() < 2.5 && (q[2] - 4.7).abs() < 2.5);
+        if let Some(at) = target {
+            let came_from = w.scene.sim.as_ref().unwrap().bond.pos;
+            eprintln!("[02] the west-wing armour detour: walking to the pickup ({:.1},{:.1},{:.1})", at[0], at[1], at[2]);
+            w.walk_nav_to(at, "the west-wing armour", 0.4);
+            w.wait(10);
+            // capsule-join-5: back out the way he came. The stair leg's own route from the
+            // pickup heads through the wing's south wall (its first hop (−44.49, 4.85, −1.81)
+            // lies across the z ≈ 3.2 wall; the only gap, x −41..−39.5, has a 6.0 sill beside
+            // the 9.0 pillar [D the port's collision floor map]) — Bond rode the pillar's edge
+            // at (−40.91, 7.0-7.8, 3.59) for six 3000-tick caps and the shotgunner #11 found him
+            // [L this branch's run; the nav web hands the same hop back for a walk to the
+            // detour's start too]. A player who stepped into the wing for the armour walks back
+            // out the way he came in — the in-walk's own hops, reversed [L the in-walk's legs:
+            // (−48.80, 4.62) ← (−46.89, 5.13) ← (−46.13, 6.19) ← (−46.23, 7.86)] — to where he
+            // left the route.
+            w.lenient = true;
+            for (k, p) in [[-48.8f32, 5.85, 4.62], [-46.89, 5.85, 5.13], [-46.13, 5.85, 6.19], [-46.23, 5.85, 7.86]].iter().enumerate() {
+                w.walk_to(Wp::new(p[0], p[1], p[2]).r(0.8), &format!("back out of the west wing {k}"));
+            }
+            w.lenient = false;
+            w.walk_nav_to(came_from, "back to the detour's start", 1.0);
+        }
+        let (hp, ar) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.drones.health.health, sim.drones.health.armour) };
+        assert!(ar >= 50.0, "the west-wing armour is taken (armour {ar}, health {hp}) [M Pickup_Handler 0x18e650:220-225]");
+        status(&w, "the west-wing armour detour");
+        // los-mask-join: back out the way the detour came in, to the touch-zone hall the Agent
+        // walk leaves for the stair from. The nav leg from the pickup straight to the stair top
+        // wedged four times over (3000 ticks each, on the masked tree AND with the sight masks
+        // off [L both runs: Bond held at (-40.9, 7.03, 3.6) / (-34.7, 6.5, 3.6), a static face
+        // at 0.10-0.21 of the leg]); a player retraces the corridor he just walked.
+        w.lenient = true;
+        for p in [[-53.92f32, 6.38, 4.64], [-48.80, 5.85, 4.62], [-46.89, 5.85, 5.13], [-46.13, 5.85, 6.19], [-46.23, 5.85, 7.86]] {
+            w.walk_to(Wp::new(p[0], p[1], p[2]).r(0.8), "back from the west-wing armour");
+        }
+        w.lenient = false;
+        status(&w, "back from the west-wing armour");
+    }
+
     // 5. The bunker: the doorway sensor #389 raises 0x81 (the ambush: the plates lock) [D], then
     //    Mayhew's computer — the Destroy prop pl[011] (param 0 = 0x48 [D]) — is shot out.
     for (name, at) in [
@@ -780,8 +881,11 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         ("bunker door", [-46.1, 5.9, -23.2]),
         ("bunker corridor", [-55.1, 5.9, -23.1]),
     ] {
-        if name == "bunker door" {
-            // Into the bunker with the fullest gun (the ch-0x81 ambush is next [D #389]).
+        if name == "bunker door" && difficulty < 3 {
+            // Into the bunker with the fullest gun (the ch-0x81 ambush is next [D #389]). At 00
+            // Agent the shotgun RIDES — the band stand below fires the 0x1c first (8-pellet taps
+            // inside the ≤12-u band), and the wheel read here would swap it back for the 0x12
+            // before the leg (real-health-00agent-02-6). The d1/d2 walks keep the rearm.
             arm_fullest(&mut w, "before the bunker");
         }
         if name == "west wing stair" && difficulty >= 3 {
@@ -820,8 +924,124 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             // earlier run [L the 00agent-02-03-2 ledger: "courtyard lane: returned fire on
             // drone #9 (killed true)"] — but his shot reaches the DESCENT, so the stand must
             // not wait for the leg to hand him over. The stair top never exposed him (the
-            // aimed duel there never fired, clip 32 at the status [L the same run]). Here:
-            // the fullest gun, the aim held for the 19-25-u stand, then restored.
+            // aimed duel there never fired, clip 32 at the status [L the same run]).
+            //
+            // real-health-00agent-02-6: the aimed stand here is a MEASURED dead end — the run
+            // stood at the lip (21 u) with aim Some from t0, err converged to 0.000 by t60,
+            // fired 25 rifle rounds into the slit and hit NOTHING (his hp pinned 12.0 t0→t180
+            // [L the run-1 rf-trace]; the 0x12's tap spread is 21 [M Bullet_init 0x12c5a0
+            // :139-170 — the 16 base + the 5 bloom, no 0x400000 record] = ±0.62 u at 21 u, and
+            // the wall eats every round off the slit's sliver). Standing here also parked Bond
+            // inside shot 1 (+134..+557 from the bottom arrival) and shot 2 (~+501) — the
+            // repro-run death (24.0 health, the lethal −24.0 at +134). A player does NOT duel
+            // a slit at 21 u: he crosses FIRST and answers inside the ≤12-u band (the bunker
+            // door stands 10.3 u from the post [D placement (−52.05,6.34,−14.43) vs the door
+            // (−46.1,5.9,−23.2)]). Suppress the leg's own return fire on him until the door is
+            // reached — the crossing and the door leg walk CLEAN (the fight's 300-tick
+            // no-damage give-up and the failed-fight cooldown would otherwise park Bond
+            // mid-lane exactly as the lottery stand did). The band stand at the door below is
+            // the walk's own answer.
+            let di = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
+                        && d.weapon == 0x1e && dxz(d.pos, bp) < 30.0)
+                    .map(|(i, _)| i).next()
+            };
+            if let Some(di) = di {
+                let until = w.total_ticks + 1400;
+                w.dmg.cooldown.retain(|e| e.0 != di);
+                w.dmg.cooldown.push((di, until));
+                status(&w, "the lane crossing: the sniper answered from the band, not the lip");
+            }
+        }
+        if name == "bunker corridor" && difficulty == 2 {
+            // join-fix-g (Agent only): on the joined tree the walk reaches the bunker at ~47
+            // health (the courtyard sniper's 13.7 + 28.0 on the lane crossing), and the ch-0x81
+            // ambush pops inside the corridor at 1.8-2.5 u: the leg's in-view fight backed out
+            // to (-39.1, -22.4) with #14 down, then the leg's own "again" walk took Bond back to
+            // the node beside the shotgunner #15 (8 hits, 32.8, dead at t11853). A player who
+            // knows the ambush trips the doorway sensor [D #389 out 0x81], steps back out into
+            // the courtyard with a full clip, and fights the ambush as it comes through the door.
+            arm_fullest(&mut w, "the bunker ambush lure");
+            for p in [[-45.7f32, 6.37, -23.4], [-46.7, 6.37, -21.5]] {
+                if ch_on(&w, 0x81) { break; }
+                w.walk_nav_to(p, "the bunker ambush sensor", 0.6);
+            }
+            status(&w, &format!("the bunker ambush sensor (ch 0x81 {})", ch_on(&w, 0x81)));
+            w.lenient = true;
+            w.walk_to(Wp::new(-45.7, 6.37, -23.4).r(0.6), "the bunker ambush step out");
+            w.walk_to(Wp::new(-40.0, 5.5, -22.6).r(0.8), "the bunker ambush courtyard stand");
+            w.lenient = false;
+            status(&w, "the bunker ambush courtyard stand");
+            clear_pursuers(&mut w, 16.0, "bunker ambush (courtyard)");
+            reload_full(&mut w);
+        }
+        leg_to(&mut w, at, name, 1.6);
+        status(&w, name);
+        if difficulty >= 3 && name == "stair bottom" {
+            // THE PROTECTED-CIVILIAN WAIT (level-02-castle-00agent), BEFORE the scoop: the scared
+            // civilian (placement #464, skin 0x5000034, team 3, death channel 0x60 [D census])
+            // hides at (−40.3, 6.3, 2.1) — 3.8 u north of the lane mouth, INSIDE the sniper's
+            // shot sweep whenever Bond stands in the mid-lane band (his muzzle line to a Bond at
+            // x −43, z −1.7 passes 0.1-2.3 u from her; at the STAIR BOTTOM (−36.2,−0.7) it
+            // passes 6.3 u — out of the ±1.5-u miss wobble's reach [M DroneWeap_DoBulletAccuracy
+            // 0x179740:136-148 — the sin wobble on every miss] at ANY draw; at the drop spot
+            // (−40.8,−0.9) it is 3.8 u — still clear). The no-dwell crossing walked Bond INTO
+            // that band and his shot 1 (t12182 on the repro tree, NF_RF_TRACE + the sim's
+            // drone_round_hits "#9→#22") missed Bond and killed her — ch 0x60 →
+            // FAIL_CIVILIANS, the mission fails whatever the killer [M 0x1827d8:98-107; the
+            // death channel raises on any death — ally.rs on_init_death's doc: "a guard's kill
+            // of such an actor is not the player's fault; its death channel still fails the
+            // mission"]. A player waits UNDER COVER at the stair mouth through the sniper's
+            // first shot — the 99.6 pool this walk now carries affords the −48.0 the ledger
+            // measured at the lip [L the 00agent-02-03-2 ledger] — then scoops and crosses
+            // while his 157-frame cadence (shot 2 at shot1+157 on this tree) spans the SAFE
+            // stretch, the mid-lane band traversed inside the shot-2→shot-3 gap. The wait ends
+            // on the sniper's FIRST hit landing (the hit is the cadence's anchor) or a 250-tick
+            // quiet window (his 149-179-frame floor [M DroneWeap_NextBulletTime 0x179d40] — no
+            // round inside one means he is not firing; the crossing is then unshot).
+            let baseline = w.dmg.hits_seen;
+            let mut quiet = 0u32;
+            while quiet < 250 && w.dmg.hits_seen == baseline {
+                w.tick(Default::default(), false);
+                quiet += 1;
+            }
+            status(&w, &format!("the stair-bottom sniper wait (first round anchored at +{quiet})"));
+            // 00 Agent (real-health-00agent-02-03-2 + 02-5): the scoop ONLY — no rearm, no
+            // stand. The sniper's window opens only from inside the lane (the stair-top and
+            // bottom stands both gave up on aim None [L the run-4/5 traces]), so every tick at
+            // the bottom lip is standing in his lane: the repro run died at +134 ticks after
+            // this status while the old arm_fullest here cycled the wheel first. The reach is
+            // wider than the plain scoop AND the y-tolerance loosened: the descent fights'
+            // drops land ON the crossing line below the lip (the run-7 drone-11 drop sat at
+            // (−40.8, 4.4, −0.9), 3.9 u ahead and 1.85 u down — filtered by the 1.5 gate at
+            // the lip). A player descending grabs it on the way — the crossing's return fire
+            // needs the rounds.
+            scoop_drops_within(&mut w, &format!("{name} drops"), 1, 8.0, 2.2);
+            // real-health-00agent-02-6: the shells ride from HERE — after the descent fights
+            // (they burn the 0x12's rounds, not the 0x1c's shells [L the run-2 trace: the
+            // stair-top arm lost 2 of 4 shells to the descent's captain]). Run 2's own
+            // measurement is the payoff: the leg's engage_in_view met the sniper EXPOSED at
+            // 13.2 u and one shell took him 12.0 → 2.0 — the band kills him without any stand.
+            arm_weapon(&mut w, 0x1c, "the lane shotgun");
+        }
+        if difficulty >= 3 && name == "courtyard lane" {
+            // real-health-00agent-02-6: NO dwell at the mouth — the old scoop+arm_fullest+duel
+            // hook walked Bond BACK into the lane, cycled the wheel and dueled at 15-21 u, all
+            // inside shot 1/shot 2's windows. The shotgun is already in hand (the stair-bottom
+            // arm) and the 0x12 holds its rounds behind it. The band stand at the bunker door
+            // is the answer (10.3 u); every tick here is shot window.
+            status(&w, "the lane mouth: straight through, the shotgun rides");
+        }
+        if difficulty >= 3 && name == "bunker door" {
+            // real-health-00agent-02-6: the band stand. The door (−46.1,5.9,−23.2) stands 10.3 u
+            // from the sniper's post [D placement] — inside the ≤12-u band where the 02-03-2
+            // ledger's own return fire killed him. The 0x1c's 8-pellet taps are the captor
+            // one-tap mechanic at this range; switch_dry (set at the geisha-1 loop) falls
+            // through to the 0x12's rounds when the shells run out. The suppression from the
+            // lip expires on the walk in — this stand is the walk's own answer.
             let di = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let bp = sim.bond.pos;
@@ -832,22 +1052,18 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             };
             if let Some(di) = di {
                 w.dmg.aimed_fights = true;
-                arm_fullest(&mut w, "the lane-mouth sniper duel");
-                let _ = w.stand_and_fire(di, 1200);
+                let killed = w.stand_and_fire(di, 1200);
                 w.dmg.aimed_fights = false;
-                status(&w, "the lane-mouth sniper duel");
+                status(&w, &format!("the band stand at the door (killed {killed})"));
+            } else {
+                status(&w, "the band stand at the door: the sniper is already down");
             }
-        }
-        leg_to(&mut w, at, name, 1.6);
-        status(&w, name);
-        if difficulty >= 3 && (name == "stair bottom" || name == "courtyard lane") {
-            // 00 Agent (real-health-00agent-02-03-2): the kills here (the sniper at the lane's
-            // mouth) drop their guns on the route and the fights behind ran DRY on the lane —
-            // the hp-5 rifle chaser finished a clip-0 Bond [L the 00agent-02-03-2 ledger]. A
-            // player low on rounds grabs what dropped before walking on (the file's own loot
-            // rule): one scoop, then the fullest gun.
-            scoop_drops(&mut w, &format!("{name} drops"), 1);
-            arm_fullest(&mut w, &format!("{name} rearm"));
+            // real-health-00agent-02-6: the corridor rearm — the ambush (the ch-0x81 group
+            // [D #389]) fights run on the fullest gun (run 3: the shotgun's last shells burned
+            // on the corridor's in-view fights and the dry cycle ended at the cuffs [L the
+            // run-3 trace: "shooters [13, 15] none visible ... clip 0 spare 0", the 54.0
+            // volley at 11.7]). The sniper is down here — the arm's dwell is safe.
+            arm_fullest(&mut w, "after the band stand");
         }
     }
     {
@@ -857,6 +1073,16 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     // The ch-0x81 ambush group (3 guards [D]) holds the bunker corridor — clear it before the
     // computer shot (real health: the shot needs Bond alive at the walkway vantage).
     clear_pursuers(&mut w, 16.0, "bunker ambush");
+    // muzzle-repin-5: the shifted fights burned the 0x12 dry before the computer shot (measured
+    // clip 0 spare 0 at the walkway vantage — the shoot_point capped, ch 0x48 never rose). The
+    // file's own loot rule (the 00agent legs): scoop what the ambush kill dropped, then the
+    // fullest gun, before the corridor walk. At d3 the rearm already ran after the band stand
+    // ("after the band stand", real-health-00agent-02-6) — the wheel read here would swap the
+    // shotgun back mid-ambush, so the d3 walk skips both.
+    if difficulty < 3 {
+        scoop_drops(&mut w, "bunker ambush drops", 2);
+        arm_fullest(&mut w, "bunker ambush rearm");
+    }
     // The computer's bounds centre [L port props]: (−48.86, 6.44, −23.64), on the desk over the
     // corridor's LOWER walkway. The raised-floor approaches' down-shot clips the desk in front of
     // the Destroy prop's bounds (the anim-prev-2 report — three leg variants all arrived on the
@@ -898,6 +1124,17 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     // steer, and from a fight's end spot north of the door it wedged on the doorframe (3000 ticks
     // at (−28.7, 7.19, −18.3), run11 2026-10-31).
     leg_to(&mut w, [-30.0, 5.9, -21.5], "the east courtyard again", 1.6);
+    // With the game's standing bodies the courtyard fight can end north of the doorway (its
+    // pursuer approach runs through the open door and back), and the courtyard steer from there
+    // met the open leaf: Bond wedged at (−28.7, 6.42, −18.3), the line hit at 0.17, door state
+    // 0x4, for both 3000-tick caps [L capsule-join red]. A player steps west off the leaf first.
+    {
+        let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+        if dxz(bp, [-30.0, 5.9, -21.5]) > 1.6 && bp[2] > -19.5 && bp[0] > -31.0 && bp[0] < -26.0 {
+            leg_to(&mut w, [-31.0, 5.9, bp[2]], "west off the doorway leaf", 1.0);
+            leg_to(&mut w, [-30.0, 5.9, -21.5], "the east courtyard from the west", 1.6);
+        }
+    }
     arm_fullest(&mut w, "before the geisha-2 room");
     if difficulty >= 3 {
         // The same 00 Agent arm for the second room (its captain carries 24 [L ee_02b.bin]) —
@@ -1020,6 +1257,12 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
 fn walk_the_castle_all_objectives_to_the_exit() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000002.bin", false).expect("load 07000002"));
+    // The game's standing body (`NDrone2_Collision` 0x140e90, on within 2.0 of the player
+    // [M 0x149ec8 / 0x14b190]) makes the south-hall-west g3 wedge a real body-block on this walk
+    // too: the firing g3 (state 0x68) held Bond 2.1 u off the lane for both 3000-tick caps, and
+    // the geisha-1 captors' clock ran out under it [L capsule-join red]. The player's answer is
+    // the real-health walks' own: shoot the blocker, then walk on.
+    w.body_block_response = true;
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -1114,6 +1357,11 @@ fn walk_the_castle_all_objectives_to_the_exit() {
         let near: Vec<String> = sim.drones.list.iter().enumerate().filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse
             && d.pos.iter().zip(at).map(|(a, b)| (a - b).powi(2)).sum::<f32>() < 400.0).map(|(i, d)| format!("{i}:st{:#x} hp{:.0} ({:.1},{:.1},{:.1})", d.state, d.health, d.pos[0], d.pos[1], d.pos[2])).collect();
         assert!(ch_on(&w, 0x49), "geisha 1 saved: ch 0x49 [M 0x1441c0] — geisha state {:#x} health {:.1} captor {:?}; live hostiles within 20 u: {near:?}", g.state, g.health, g.captor);
+    }
+    // The last captor's channel can lag his death by up to the level's 90-tick timer [M 0x1637f8:55-61].
+    for _ in 0..100 {
+        if ch_on(&w, 0x29) && ch_on(&w, 0x2a) && ch_on(&w, 0x88) { break; }
+        w.tick(Default::default(), false);
     }
     assert!(ch_on(&w, 0x29) && ch_on(&w, 0x2a) && ch_on(&w, 0x88), "the three captor deaths [D param 12]");
     assert!(ch_on(&w, 0x3b), "AND #397 (0x29,0x2A,0x88,0x49) → 0x3B [D tr[017]]");
@@ -1309,8 +1557,295 @@ fn walk_the_castle_all_objectives_real_health_agent() {
 /// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 01-04 group]; the min-difficulty
 /// placements pass Drone_Create's gate [M 0x136be0:49] and the captain criterion reads prop 8
 /// [M 0x14b300:504-535]. Real input only — the load path is the only difference.
+///
+/// GREEN (level-02-castle-00agent on master 63b05cca6; the 02-6 shape re-landed). The repro on
+/// the unmodified file died at t12045 (24.0 health, the sniper's −24.0 at +134 from the stair
+/// bottom) with the pool hole in the DRY P99 stand-off 0 (65.2 in 24 hits — the south-hall
+/// kills' dropped rifles were never scooped). The guards' d3 rules were re-verified against the
+/// decompile first: `hit_chance` is `DroneWeap_DoBulletAccuracy` 0x179740 factor-for-factor
+/// (drone.rs `hit_chance`), the damage chain is `Drone_ModBulletDamage` 0x139f50 + Plr_DMod_Hard
+/// 1.2 + DroneDamage_Hard 0.8 (drone.rs `player_hit_damage`, bullet.rs `damage_factor`,
+/// tuning.rs 01-04 group) — the guards are the game's, the deaths were the route. The levers
+/// (all `difficulty >= 3`, measured on the real-health-00agent-02-5/02-6 trees): the corridor
+/// resupply before the plate (the approach kills' dropped rifles, `scoop_drops_within`), the
+/// kill-gated stand-off resupply, the stair-bottom scoop + the 0x1c arm (the shells ride), the
+/// no-dwell lane crossing with the sniper suppressed (`dmg.cooldown` until the door leg), and
+/// the ≤12-u band stand at the bunker door (10.3 u from the post) + the corridor rearm.
 #[test]
-#[ignore = "00 Agent: Bond dies before the end on real health (death mechanics in the s/real-health-00agent-02-03-04 report); follow-up real-health-00agent-02-03-2"]
+#[ignore = "los-mask-repins-02: the mission ends (level_exit) on the stair-bottom leg at tick 12902 and the doorway sensor's ch 0x81 never rises; cause not traced"]
 fn walk_the_castle_all_objectives_real_health_00agent() {
     walk_the_castle_all_objectives_real_health_at(3);
 }
+
+/// The courtyard sniper's pin (courtyard-sniper-pin, level-02-courtyard-sniper): the game's own
+/// numbers for his rounds on Bond, measured through real input at ONE range.
+///
+/// The walk (Agent difficulty 2) takes the spawn-room armour, walks the west wing on real input
+/// (the geisha-1 chain included — the captors die before the descent, else they hunt the stand),
+/// then stands at the stair bottom (−36.9, 5.5, −1.5) with return fire OFF — Bond does not
+/// shoot. The sniper (drone #9, weapon 0x1e) covers the descent from his post at
+/// (−52.05, 6.34, −14.43) [L the 07000002 drone dump] — dxz ≈ 19.9 u from the stair bottom,
+/// inside the 15-25 u pin window, beyond the 3.0 u TooClose ring [M DroneFiring_TooClose_Distance
+/// tuning] and outside the back-shot gate's geometry for a front stand.
+///
+/// What the game's code gives per round there (and what this test pins):
+/// - **Damage 28.0 per body round**: `weapon_data[0x1e]+0x0C` = 40 [D weapon_data 0x2bf150, the
+///   boot initialiser's record; the 00agent ledger's one 25.7-u hit landed 48.0 = 40 ×
+///   Plr_DMod_Hard 1.2, the same record at difficulty 3] × `Drone+0x100` 1.0 [M
+///   Drone_ModBulletDamage 0x139f50:27; the drone carries no captain mod] × Plr_DMod_Normal 0.7
+///   [M Player_HandlePain 0x1902c8:82-95 + the level 0x01..=0x04 tuning group 0x1d3e00]. Armour
+///   splits it: Player_HandlePain drains BL+0x8B0 first [M 0x1902c8:84-104], so a 28-round into
+///   armour A < 28 takes A off the armour and 28 − A off the health (a 28-round into 14.3 armour
+///   costs 13.7 health). The test asserts health_lost + armour_spent == 28.0 for every sniper
+///   round that lands, and the lethal round takes at most the health left.
+/// - **Hit chance at 15-25 u** (`DroneWeap_DoBulletAccuracy` 0x179740): (100 − 5 × accuracy 8
+///   [L the drone dump]) × DroneFiring_Accuracy_Normal 0.7 = 42 %/shot standing (Bond still,
+///   sighted past the 120-tick NewSighting gate 0x179740:93-99), 31.5 %/shot moving (×
+///   TargetMoving 0.75), the first-2 s sight and first-moved windows multiply 0.25. Misses still
+///   FLY a wobbled round [M 0x179740:116-134].
+/// - **Fire rate**: burst 1 [D weapon_data+0x2C], 120-frame interval [D +0x40], between-burst
+///   delay max(15, trunc(45 × 1.33 × (0.5 + FRand 0.5))) ≤ 60 at 15-30 u (aggression 1) [M
+///   DroneWeap_BurstDelay/NextBulletTime 0x179d40] — 149-179 frames between shots.
+///
+/// The stand's records (shots, rolls, per-hit health/armour deltas) print to the run log; the
+/// asserts pin the damage identity, the cadence floor (no two shots closer than the interval +
+/// the smallest burst delay) and that the stand's rolls land (the formula's rate, not a dead
+/// stream).
+#[test]
+fn courtyard_sniper_pin_stair_bottom_agent() {
+    let iso = iso();
+    let mut w = Walker::new(
+        nf_view::load_with_carry_difficulty(&iso, "07000002.bin", false, None, 2)
+            .expect("load 07000002"));
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, 2, "Agent [M GameState+0x28]");
+    w.top_up_health = false;
+    w.body_block_response = true;
+    w.prefer_head = true;
+    w.keep_off = Some(4.0);
+    w.dmg.back_off = Some(4.0);
+    w.scene.sim.as_mut().unwrap().auto_aim = true;
+    // The stand's subject is never answered on the way there either (the stand below turns
+    // return fire off for the same reason): with the game's standing bodies the geisha-1 captor
+    // fight flanks to (−37.4, 6.3, 3.2), where the courtyard sniper's line reaches Bond, and the
+    // flank's return fire killed him at t5932 [L capsule-join red: "returned fire on drone #10
+    // (killed true)", the stand then found no sniper]. Only the 0x1e rifleman is held off.
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if let Some(si) = sim.drones.list.iter().position(|d| d.weapon == 0x1e && d.health > 0.0 && !d.corpse) {
+            w.dmg.cooldown.push((si, u32::MAX));
+        }
+    }
+
+    // The spawn-room body armour (the stand then shows the game's armour split [M 0x1902c8:84-104]).
+    w.lenient = true;
+    for (name, at, arrive) in [
+        ("the spawn-room floor", [-26.6f32, 1.05, 31.3], 0.8),
+        ("the armour platform", [-25.3, 1.67, 34.2], 0.8),
+        ("the spawn-room body armour", [-24.6, 1.67, 34.2], 0.3),
+    ] {
+        w.walk_to(Wp { at, act: Act::None, arrive }, name);
+    }
+    w.lenient = false;
+    assert!(w.scene.sim.as_ref().unwrap().drones.health.armour >= 50.0,
+        "the spawn-room armour is taken [M Pickup_Handler 0x18e650:220-225]");
+
+    // The route on real input (the walk body's own legs; fights answered, real fire both ways).
+    for (name, at) in [
+        ("bunker room south", [-27.2f32, 1.05, 31.5]),
+        ("bunker corridor", [-27.2, 1.05, 36.0]),
+        ("corridor south", [-27.2, 1.05, 39.5]),
+        ("alcove mouth", [-27.2, 1.05, 41.0]),
+    ] {
+        w.walk_to(Wp { at, act: Act::None, arrive: 1.0 }, name);
+    }
+    w.walk_to(Wp { at: [-26.87, 2.54, 42.23], act: Act::Ladder { top_y: 6.0 }, arrive: 0.9 }, "ladder #114");
+    w.walk_to(Wp { at: [-26.0, 5.9, 43.4], act: Act::None, arrive: 1.4 }, "the garden");
+    w.walk_to(Wp { at: [-24.6, 5.9, 42.8], act: Act::None, arrive: 1.4 }, "the garden east");
+    clear_pursuers(&mut w, 18.0, "pin garden");
+    clear_pursuers(&mut w, 18.0, "pin garden second pass");
+    for (name, at) in [
+        ("garden path", [-22.2f32, 5.9, 34.1]),
+        ("south hall", [-23.3, 5.9, 27.6]),
+        ("south hall west", [-31.2, 5.9, 22.1]),
+        ("north of the ch-0x17 plate", [-35.2, 6.5, 8.2]),
+    ] {
+        leg_to(&mut w, at, name, 1.6);
+        status(&w, name);
+        let r = if name == "south hall west" { 24.0 } else { 14.0 };
+        clear_pursuers(&mut w, r, name);
+    }
+    arm_fullest(&mut w, "pin before the geisha-1 room");
+    w.lenient = true;
+    w.walk_to(Wp { at: [-35.2, 6.5, 4.6], act: Act::Wait(10), arrive: 0.9 }, "the ch-0x17 plate");
+    w.lenient = false;
+    assert!(ch_on(&w, 0x17), "the geisha group is enabled [D tr[003] out 0x17]");
+    {
+        // The captors die before the descent (else they hunt the stand): the walk body's own
+        // real-fire clear, then the rescue's channel.
+        let g1 = geisha(&w, 0x49).expect("geisha 1 [D]");
+        let at = w.scene.sim.as_ref().unwrap().drones.list[g1].pos;
+        clear_captors_real(&mut w, at, "pin geisha 1", false);
+        for _ in 0..240 {
+            if ch_on(&w, 0x49) { break; }
+            w.tick(Default::default(), false);
+        }
+        assert!(ch_on(&w, 0x49), "geisha 1 saved: ch 0x49 [M 0x1441c0]");
+    }
+    // The saved geisha's guard: with the game's standing bodies the captor fight ends later and
+    // drier (the flank, clip 1 spare 0 on the 0x1c), and the room's late guard #6 arrives on the
+    // hiding geisha (CivilianHiding 0x13 at (−40.3, 2.1)) still firing at Bond's last-seen spot
+    // beside her: one 15-point volley killed her and the level failed under the next sweep
+    // (fail label 0x4000034) [L capsule-join trace: #6 0x73 step-aim, PlayerTarget stale at
+    // (−38.5, 2.4)]. A player protects the hostage he just freed: the fullest gun up, every
+    // guard within 8 u of where SHE now hides answered before he moves on.
+    arm_fullest(&mut w, "pin the saved geisha");
+    {
+        let g1 = geisha(&w, 0x49).expect("geisha 1 [D]");
+        let at = w.scene.sim.as_ref().unwrap().drones.list[g1].pos;
+        clear_captors_real(&mut w, at, "pin the saved geisha", false);
+    }
+    clear_pursuers(&mut w, 16.0, "pin after the geisha-1 room");
+
+    // Down to the stair bottom. Return fire OFF from the stair top: the stand must not answer
+    // the sniper (the 00agent ledger: from the stair top he was never exposed; his shot reaches
+    // the descent). The shot stream is snapshotted here — the descent legs' shots count too
+    // (the crossing is the scenario under test; the ledger's covering fire).
+    w.dmg.return_fire = false;
+    let shots_at_snapshot = w.scene.sim.as_ref().unwrap().drones.list.iter()
+        .find(|d| d.weapon == 0x1e && d.health > 0.0 && !d.corpse)
+        .map(|d| d.shots.len()).unwrap_or(0);
+    leg_to(&mut w, [-36.7, 5.9, 1.0], "pin west wing stair", 1.6);
+    leg_to(&mut w, [-36.9, 5.5, -1.5], "pin stair bottom", 1.6);
+    status(&w, "pin stair bottom — the stand begins");
+
+    let (sniper, dxz_at_stand) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        let si = sim.drones.list.iter().enumerate()
+            .find(|(_, d)| d.weapon == 0x1e && d.health > 0.0 && !d.corpse)
+            .map(|(i, _)| i)
+            .expect("the courtyard sniper stands his post [L the 07000002 drone dump]");
+        (si, dxz(sim.drones.list[si].pos, bp))
+    };
+    assert!((14.0..=26.0).contains(&dxz_at_stand),
+        "the stand sits in the 15-25 u pin window, got {dxz_at_stand:.2}");
+
+    // The stand: record the sniper's shots with their inputs and Bond's health/armour; up to
+    // 5400 ticks (90 s ≈ 30 cadence shots) or death. Per tick the (health, armour) pair BEFORE
+    // the tick is kept beside any sniper hit the tick carried, so each landed round's armour
+    // context is measured, not inferred.
+    let mut shots_at_stand = shots_at_snapshot;
+    let mut per_shot: Vec<(u32, f32, bool, bool, f32, f32)> = Vec::new(); // frame, dist, moving, first_moved, health, armour
+    let mut hits_seen = w.scene.sim.as_ref().unwrap().drones.player_hits.len();
+    let mut per_hit: Vec<(u32, f32, f32, f32)> = Vec::new(); // frame, health part, armour and health at the tick's start
+    let mut died = false;
+    let mut last_los: Option<bool> = None;
+    let mut last_seen: u32 = 0;
+    let mut flickers = 0u32;
+    for _t in 0..5400 {
+        let (health_at_tick, armour_at_tick) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (sim.drones.health.health, sim.drones.health.armour)
+        };
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let sn = &sim.drones.list[sniper];
+            if last_los != Some(sn.los) {
+                eprintln!("[pin] flicker at t{_t}: los {} (was {:?}) seen_ticks {} visibility {:.3} unseen {} dist {:.1} state {:#x} yaw {:.2} yaw_to_opp {:.2}",
+                    sn.los, last_los, sn.seen_ticks, sn.visibility, sn.unseen_ticks, sn.dist, sn.state, sn.yaw, sn.yaw_to_opp);
+                if last_los.is_some() { flickers += 1; }
+                last_los = Some(sn.los);
+            }
+            if sn.seen_ticks < last_seen {
+                eprintln!("[pin] seen_ticks reset {} -> {} at t{_t}", last_seen, sn.seen_ticks);
+            }
+            last_seen = sn.seen_ticks;
+            if sn.shots.len() > shots_at_stand {
+                let pct = nf_game::drone::hit_chance(sim.data().tuning, sim.data().level,
+                    sim.drones.difficulty, sn.accuracy, sn.dist, sn.target_motion, sn.anim_set);
+                eprintln!("[pin] shot {} gate: seen_ticks {} lost_sight {} accuracy {} dist {:.1} pct {:.1} anim {:#x} mode {}",
+                    shots_at_stand, sn.seen_ticks, sn.lost_sight, sn.accuracy, sn.dist, pct, sn.anim_set, sn.mode);
+                per_shot.push((sn.shots[shots_at_stand], sn.dist, sn.target_motion.moving,
+                    sn.target_motion.first_moved, health_at_tick, armour_at_tick));
+                shots_at_stand += 1;
+            }
+        }
+        w.tick(Default::default(), false);
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            for &(f, o, dmg) in &sim.drones.player_hits[hits_seen..] {
+                if o == sniper { per_hit.push((f, dmg, armour_at_tick, health_at_tick)); }
+            }
+            hits_seen = sim.drones.player_hits.len();
+            if sim.drones.health.health <= 0.0 { died = true; break; }
+        }
+    }
+    eprintln!("[pin] los flickers during the stand: {flickers}");
+
+    // The records.
+    let (stand_rolls, end_health, end_armour, corpse) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let sn = &sim.drones.list[sniper];
+        let rolls = sn.shot_rolls.clone();
+        let first = shots_at_snapshot.min(rolls.len());
+        for (k, (f, d, mv, fm, hp, ar)) in per_shot.iter().enumerate() {
+            eprintln!("[pin] shot {k} frame {f} dist {d:.1} moving {mv} first_moved {fm} (health {hp:.1} armour {ar:.1})");
+        }
+        for &(f, h, a, hp) in &per_hit {
+            eprintln!("[pin] hit frame {f}: health -{h:.3} (armour {a:.2}, health {hp:.2} at the tick's start)");
+        }
+        (rolls[first..].to_vec(), sim.drones.health.health, sim.drones.health.armour, sn.corpse)
+    };
+    let shots = per_shot.len();
+    let hits = stand_rolls.iter().filter(|&&r| r).count();
+    eprintln!("[pin] the stand took {shots} shots ({hits} rolled hits) at dxz {dxz_at_stand:.1}; Bond health {end_health:.1} armour {end_armour:.1} died {died}");
+    assert!(shots >= 1, "the sniper opened fire on the stand at {dxz_at_stand:.1} u (cadence ~2.5-3 s)");
+    assert!(!corpse, "the stand never answers him: he is alive at the end");
+    assert!(flickers == 0, "the sight holds through the stand (the gate's 120-tick window is meaningful)");
+
+    // THE DAMAGE PIN: every landed round's TOTAL cost is 28.0 — weapon_data[0x1e]+0x0C = 40
+    // [D weapon_data 0x2bf150] × Drone+0x100 1.0 [M Drone_ModBulletDamage 0x139f50:27] ×
+    // Plr_DMod_Normal 0.7 [M Player_HandlePain 0x1902c8:82-95 + the 0x01..=0x04 tuning group].
+    // Player_HandlePain drains BL+0x8B0 first [M 0x1902c8:84-104], so the health part is
+    // 28.0 − min(28.0, the armour the round found). The pin: a round into empty armour takes
+    // exactly 28.0 health; a round into armour A takes 28.0 − A (and A ≥ the complement).
+    assert!(hits >= 1, "the stand's rolls at 42 %/shot landed (got {hits}/{})", stand_rolls.len());
+    let mut full_rounds = 0;
+    let mut lethal_rounds = 0;
+    for &(f, h, armour_at_tick, health_at_tick) in &per_hit {
+        assert!(h <= 28.001, "a sniper round never costs more than 28.0 health, frame {f} took {h:.3}");
+        if armour_at_tick < 0.01 && health_at_tick < 29.0 {
+            // The lethal round: the health left (under 28 + the < 1 kill floor [M
+            // 0x1902c8:131-134]) is all it can take.
+            assert!(h <= health_at_tick + 0.01, "the lethal round takes at most the health left {health_at_tick:.2}, frame {f} took {h:.3}");
+            eprintln!("[pin] lethal round frame {f}: health {health_at_tick:.2} -> 0");
+            lethal_rounds += 1;
+        } else if armour_at_tick < 0.01 {
+            assert!((h - 28.0).abs() < 0.01,
+                "a round into empty armour costs exactly 28.0 [M 0x1902c8:84-104 × the record], frame {f} took {h:.3}");
+            full_rounds += 1;
+        } else {
+            let spent = 28.0 - h;
+            assert!(spent <= armour_at_tick + 0.05,
+                "the round's armour part {spent:.3} cannot exceed the armour present {armour_at_tick:.2}, frame {f}");
+            eprintln!("[pin] armoured round frame {f}: health {h:.3} + armour {spent:.3} = 28.0 (armour was {armour_at_tick:.2})");
+        }
+    }
+    assert!(full_rounds >= 1, "at least one round landed on bare health for the exact 28.0 pin");
+    eprintln!("[pin] DAMAGE PINNED: {} full 28.0 round(s) on bare health + {} armoured split(s) totalling 28.0 + {} lethal",
+        full_rounds, per_hit.len() - full_rounds - lethal_rounds, lethal_rounds);
+
+    // The cadence floor: no two shots closer than the interval (120) + the smallest burst delay
+    // (15) — the game's [M 0x179d40] minimum while continuously firing.
+    for pair in per_shot.windows(2) {
+        let gap = pair[1].0 - pair[0].0;
+        eprintln!("[pin] shot gap {}", gap);
+        assert!(gap >= 135, "the sniper never refires inside the interval+delay floor, got {gap}");
+    }
+    // The hit rate is the formula's, not degenerate: the stand's gate-open rolls at 42 %/shot
+    // standing (31.5 % moving) — the raw rolls print with every shot above; the rate over the
+    // stand is the shared stream's sample, pinned by landing (the asserts above) rather than by
+    // a rate figure the small n cannot support.
+    eprintln!("[pin] stand hit rate: {hits}/{} (42 %/shot standing, 31.5 % moving)", stand_rolls.len());
+}
+

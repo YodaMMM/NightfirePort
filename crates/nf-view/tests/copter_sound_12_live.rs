@@ -32,6 +32,10 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 fn the_copter_engine_starts_3d_and_follows_the_copter() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000012.bin", false).unwrap());
+    // This test drives the EE sound layer itself (below). The walker's headless driver
+    // (`attach_headless_sound`, run after every step) would drain the same command queue first,
+    // so it is detached here: one consumer, as in the app.
+    w.scene.sim.as_mut().unwrap().headless_sound = None;
     w.wait_enabled(3000, "the level start");
     // Drive the EE sound layer from the first tick (the App's sound_tick flow), draining the
     // commands so a load-time start cannot be missed.

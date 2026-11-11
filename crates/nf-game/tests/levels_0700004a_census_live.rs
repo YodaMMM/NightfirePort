@@ -38,7 +38,7 @@ fn the_shaft_shooters_fire_once_on_their_arm_channel() {
     let (level, weapons) = load_4a(&iso);
     let m = level.main_map().unwrap();
     let paths = level.path_blocks();
-    let world = nf_game::worldobj::WorldObjects::create(&level.maps[m].placements, &paths, |_| (0, [0.0; 3]));
+    let world = nf_game::worldobj::WorldObjects::create(&level.maps[m].placements, &paths, |_| (0, [0.0; 3], 0));
     assert_eq!(world.shooters.len(), 2, "the [D] census: two 0xd2 placements");
     // #286 (3.0446, -48.3993, -1.6714) arms on ch 0x22 = 34 (the lift SP's out [D placement]);
     // #287 (2.0935, -117.7803, -1.9136) arms on ch 0x4f = 79 (plate #281 [D placement]).

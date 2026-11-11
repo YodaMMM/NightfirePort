@@ -112,10 +112,10 @@ fn sister_infinite_ammo_off_still_runs_out() {
     let Some(mut scene) = loaded() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut dev = dev::Dev::default(); // infinite_ammo: false
     viewer_tick(&mut scene, &mut dev, false);
-    let t;
+    let (t, w);
     {
         let sim = scene.sim.as_mut().unwrap();
-        let w = sim.gun.weapon as usize;
+        w = sim.gun.weapon as usize;
         t = sim.weapons.ammo_type(w);
         sim.drones.inventory.clip[w] = 2;
         sim.drones.inventory.carried[t] = 2;
@@ -124,9 +124,10 @@ fn sister_infinite_ammo_off_still_runs_out() {
     }
     for i in 0..240 { viewer_tick(&mut scene, &mut dev, i % 2 == 0); }
     let sim = scene.sim.as_ref().unwrap();
-    let w = sim.gun.weapon as usize;
+    // The drained weapon's own slot: once it runs dry `Player_HandleHasNoAmmo` requests the best weapon
+    // with ammo [M 0x1a2ba8 → 0x1a9680], so the weapon in hand at the end is another one.
     let clip = sim.drones.inventory.clip[w];
-    eprintln!("[ammo] sister (OFF): clip {clip}, carried {} after 240 ticks", sim.drones.inventory.carried[t]);
+    eprintln!("[ammo] sister (OFF): weapon {w:#x} clip {clip}, carried {} after 240 ticks (in hand {:#x})", sim.drones.inventory.carried[t], sim.gun.weapon);
     assert_eq!(clip, 0, "sister: without infinite ammo the clip must run dry (got {clip}) — the main test must be able to fail");
 }
 
