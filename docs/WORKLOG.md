@@ -53,3 +53,23 @@ the pair enable-delta census — 06-7's report is lost). Branch `s/real-health-0
 06-4 number needs re-measuring on the merged tree). Conflict resolved in the 06 test file:
 master's `ledge_stands = stands` (civ-unignore-2) combined with 06-4's 00 stands as
 `stands || difficulty >= 3`.
+
+- [02:00-02:36 UTC] The merged tree (master 784ba2d99 with the guards' own sight 823ff190b) moved
+  the 00 wall: the walk died at t2989 at the door-#47 APPROACH — the court return-fire answers
+  burn the clip on angles whose rounds never land (the run00b/c traces: taps at err 0.0000 on
+  the exposed part from d 8.1, #4's hp unmoved, death at clip 0 spare 0) and the plain
+  index-order pre-clear fights the room's #3 (his rays the doorway plane blocks, hp never
+  scratched) while the threshold guard #4 chews Bond point-blank (run00d: 97.2 in 19 hits,
+  death t2801, #4 at full hp 10). The recess ray probe (assertion-free, in the 06 file) pinned
+  the geometry: the flight rays see the closed leaf (0.828 at the z −16 wall from the door
+  plane), the court chest rays to the room pass the window glass, the room's own 0x18 90-round
+  box sits at (34.72,40.0,−24.45). Two d3-gated levers fixed it: the door-#47 approach leg's
+  return fire OFF (the player closes to the door under fire and fights from the door plane —
+  the run00c trace's #4 hp 10→8 from d 4.0), and clear_the_spot's recent-hitter-first pick over
+  the fights' own 240-frame window [M the return-fire pick, damage_log.rs], ties keeping the
+  plain index order. GREEN: the 00 walk un-ignored, the whole 06 binary 7 passed / 0 failed /
+  2 ignored (the probe + the master-ledger d2 sister), interactables_07000006_live 5/5; the
+  walk 14106 ticks, end health 6.2, 21 hits for 93.8, deterministic on the re-run. The d1/d2
+  gates untouched (hitter_first = difficulty >= 3; the approach lever d3-only), so the d1
+  ledgers hold. The full suite did not fit the window (a fresh target + the 01:20 sandbox):
+  the diff is one test file, so the lesson-10 set is the 06 binary + interactables — green.
