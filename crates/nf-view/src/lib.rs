@@ -504,7 +504,10 @@ pub fn attach_headless_sound(scene: &mut scene::Scene) {
     driver.load_bank(slot, bank, sbf);
     for (slot, bank, sbf) in std::mem::take(&mut scene.sound_spares) { driver.load_spare_bank(slot, bank, sbf); }
     if let Some((lut, bin)) = scene.streams.take() { driver.load_streams(lut, std::sync::Arc::new(bin)); }
-    let s = nf_audio::sfx::Sound { driver, output: None, captured: None, music_files: None, music: None, music_pending: Vec::new() };
+    // music-section-parity: the level's music plays headless too (the frame clock is its playhead),
+    // so the sim's music sections advance as in the windowed game.
+    let music_files = scene.music_files.take().map(|(t, smf, ssd)| (t, smf, std::sync::Arc::new(ssd)));
+    let s = nf_audio::sfx::Sound { driver, output: None, captured: None, music_files, music: None, music_pending: Vec::new() };
     if let Some(sim) = scene.sim.as_mut() { sim.headless_sound = Some(Box::new((s, 0))); }
 }
 

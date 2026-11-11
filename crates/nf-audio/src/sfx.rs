@@ -928,7 +928,9 @@ impl Sound {
             }
         }
         if let Some(p) = self.music.as_mut() {
-            let played = self.output.as_ref().map_or(0, |o| o.music_played());
+            // A device's playhead runs on the audio thread (the IOP streams in real time on the PS2);
+            // with no device the frame clock stands in (music-section-parity).
+            let played = match &self.output { Some(o) => o.music_played(), None => self.driver.clock.music_played() };
             p.update(played, &mut out);
             // `ES_MusicSetVolume`: music ducks to `DuckerCurrentVolume` and fades with `FadeMusicVolume` [M §5.5].
             out.push(Cmd::MusicGain(p.gain(self.driver.music_master, self.driver.ducker_current, self.driver.fade_music_volume)));
