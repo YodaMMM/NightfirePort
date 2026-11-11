@@ -103,7 +103,7 @@ fn iso() -> Option<String> {
 // 0xe3fb_90fd_011b_bbef (34 kills).
 // join-1110-mp: the four mp branches joined (setup defaults + DefaultInit bands + arrival 2.0 /
 // raw walk mul + the combat-move draw order) — re-pinned on the joined tree.
-const PINNED_DIGEST: u64 = 0x5193_ea0e_9852_b444; // 36 kills (re-pinned with the guard-sight round robin and the own-cel boundary push)
+const PINNED_DIGEST: u64 = 0x0241_2276_09ef_6722; // 39 kills (re-pinned for mp-bot-backoff: the game's CanBackoff (the anim gate + the 0.75 MoveTest probe), the visibility bearing in the port's own yaw convention, and the surface-aware site sight — all decompile-backed behaviour changes, not optimisations)
 
 const TICKS: u32 = 3600;
 
