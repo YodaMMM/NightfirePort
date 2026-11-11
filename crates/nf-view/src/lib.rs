@@ -4478,7 +4478,17 @@ impl App {
             self.sound_owed = 0;
         } else {
             let menus = self.fe.is_some() || self.async_load.is_some();
-            let n = sound_pumps(&mut self.sound_owed, polls, menus, std::mem::take(&mut self.sound_ticked));
+            // stream-slot-parity: a loaded mission whose sim has not ticked yet owns its sound's
+            // frames from its first tick — no pump batch before it (the game's first SFXUpdate is
+            // in its first frame). A load-screen batch here started the level's looping effects one
+            // update early, by a count that depended on the load time, and their cue re-triggers
+            // then took voices a frame apart from every headless run [L 07000005 replay, tick 10215].
+            // Only a sim about to run: the menus, the dev menu and a lockstep wait hold it at
+            // frame 0 with the sound still updating (their own pump arm).
+            let held = menus || self.paused || self.net_await_load || self.dev.as_ref().is_some_and(|d| d.menu);
+            let pre_first = !held && self.scene.sim.as_ref().is_some_and(|s| s.drones.frame == 0);
+            if pre_first { self.sound_owed = 0; }
+            let n = if pre_first { 0 } else { sound_pumps(&mut self.sound_owed, polls, menus, std::mem::take(&mut self.sound_ticked)) };
             if let Some(s) = self.sound.as_mut() { for _ in 0..n { s.batch(|_, _| {}); } }
         }
     }
