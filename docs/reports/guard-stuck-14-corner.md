@@ -114,10 +114,25 @@ the walker's own record is skipped [M 0x143f48], and Bond within 0.55 reaches it
 
 ## Suite
 
-`tools/test/suite.py` was started in the background on the final tree. State at report time:
-see the numbers below (read from `tail -1 suite.out` plus its FAILED/TIMEOUT lines). If the
-grind had not reached the walkreal batteries by the window's end, the partial line stands and
-the next session resumes from the pushed branch.
+`tools/test/suite.py` was started in the background on the final tree, and the sandbox's disk
+killed it twice — reported verbatim, since this is an environment limit, not a code one:
+
+- First run: `BUILD FAILED:` / `error: linking with 'cc' failed: exit status: 1` /
+  `collect2: fatal error: ld terminated with signal 7 [Bus error]` (`interactables_07000007_live`,
+  the `NightfirePort` bin) — the rootfs was at 100% (3 MB free of 9.9 G; `target/` alone 6.1 G).
+  Pruned ~1.9 G (`~/.cache/ms-playwright`, `~/.cache/puppeteer`, `target/debug`) and retried.
+- Retry: the build ground through most of the set (fingerprints valid) and exhausted the disk
+  again on nf-view's tail: `could not compile nf-view (test "probe_safe08")`,
+  `(test "upward_shot_0700000c_live")`, `(test "g049_blast_light_live")` — same linker bus
+  error at 100%. A third attempt needs a bigger sandbox, not a code change.
+- The binaries that DID link with the new code were run directly (`--test-threads=1`):
+  **walkreal_07000014_live 7 passed / 0 failed / 3 ignored** (92.75 s), **fix_npc_doors_live
+  1/0** (12.8 s), **fix_guard_first_shot_live 1/0** (1.3 s), **fix_guard_weapons_live 3/0**
+  (100.4 s). The drone.rs-touched guards/doors coverage that the rule names
+  (`npc_doors_live`, `fix_guard_misc_live`) never reached the link stage before the disk died —
+  listed here as not run, with every binary that did run green.
+- nf-game's lib tests (run before the suite attempts): 777 passed / 6 failed / 4 ignored, the 6
+  verified pre-existing on pristine master (see "What ran").
 
 ## Usage
 
