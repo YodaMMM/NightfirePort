@@ -58,3 +58,11 @@ Reproduced first: the walk died at tick 4104 at the landing's west drop to the m
 ## Usage
 
 not visible to me — this environment exposes no token, cost or context-window figures for the session (no /usage, no billing panel).
+## ntfy failed
+
+All three fallbacks, in order, with their exact outputs (2026-11-11T05:37-05:41Z):
+1. `curl -sS -m 15 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` → `curl: (28) Connection timed out after 15002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'...', headers={'Title':'NightfirePort'}), timeout=15)"` → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `timeout 20 wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → killed at the 20 s timeout (RC=124, no output; a confirming retry with `-O /tmp/ntfy_out.txt` also returned RC=124 with an empty file).
+
+The branch (tip with the report), the WORKLOG and the queue entry (done/10-level-14-skybridge-retune.md with the report body attached — verified `What's done` present) are all pushed; only the push notification did not get out.
