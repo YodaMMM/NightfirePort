@@ -801,6 +801,32 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
         w.walk_to(Wp::new(34.57, 2.80, 37.18).r(0.9), "the pad's south-west step head");
         open_the_pad_lid(&mut w);
         w.walk_to(Wp::new(33.09, 2.37, 35.38).r(0.8), "the 1.72 landing");
+        // (real-damage) The low-floor room guard (placement #284, drone 5) wakes under the game's
+        // sight while the drop loop perches on the landing's west edge — his rounds land all
+        // through the loop (this tree's measured death: 50 hits for 100.0, ALL his, Bond still at
+        // y 2.35 on the edge at tick 4104) — and Bond's capsule comes to rest ON his standing
+        // body (grounded false at y 2.33 [L the drop_aim_z wedge dump]). The player's move: gun
+        // up (the switch's 40 ticks drop Bond off the transient 2.28 perch onto the machine-room
+        // floor 0.62 [L this run]), walk SOUTH to the lane start (node 132) — EAST of the
+        // landing slab, whose west face (top 2.37) swallows every floor-level ray fired from the
+        // landing's north margin (the guard's torso 2.1 sits under it [L this run's converged-aim
+        // no-damage loop]) — and kill him from the lane start, the very spot the machine-room
+        // lane's own clear uses below (master-proven). NOT clear_hostiles from the landing: its
+        // loot pass walks Bond into the south gap's ambush (#10 holds (33.92, 30.85) [L the
+        // capsule-join-5 wedge dump]; the measured loot-pass death tick 5926 at (33.92, 0.65,
+        // 31.13) is 0.3 from that stand). Gated: the top-up walk keeps master's timing.
+        if !w.tops_up() {
+            let di = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
+                d.placement == 284 && d.present && !d.corpse && d.health > 0.0
+            });
+            if let Some(di) = di {
+                assert!(w.switch_to_armed("the room guard's kill"),
+                    "a carried gun has rounds");
+                w.walk_to(Wp::new(34.01, 0.65, 33.21).r(0.8), "the machine-room lane start (the kill spot)");
+                assert!(w.shoot_loose(di, "the room guard's kill", 1200),
+                    "the low-floor room guard #284 must fall to the lane-start shot (he holds the drop's foot)");
+            }
+        }
         // The drop west: the low floor's east margin sits under the landing slab's overhang (the
         // slab top is the 1.72 landing; the walk's grounded wedge at (33.68, 1.15, 35.20) with a
         // clear segment to the target is the overhang catch), so the westing is the player's own
@@ -932,6 +958,18 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
     w.walk_to(Wp::new(-72.4, -1.78, 32.7).r(1.2), "the hall south lane (node 663)");
     w.walk_to(Wp::new(-82.9, -1.78, 33.4).r(1.2), "the hall south lane west (node 654)");
     w.walk_to(Wp::new(-87.5, -1.78, 33.4).r(1.2), "the hall west end (node 653)");
+    // (real-damage) The hall guards must fall BEFORE the box A cut: with the enemies alive the
+    // cut window is not quiet — a guard round fired AT Bond at the stance detonated the
+    // generator overhead (the measured blast at (-88.7, 0.9, 32.6), radius 10.0, 500 base,
+    // d 2.4 → the 44-health death at tick 33324 [L NF_DMG_TRACE]) — master never sees it (its
+    // enemies are disabled). TWO passes: the first pass's fights wake the FirstAttack hunt
+    // blocks, whose runners arrive during the cut window (the measured second death tick 33336,
+    // again the stance blast) — the second pass catches them. Gated: the top-up walk keeps
+    // master's timing (its post-cut clear is skipped there anyway).
+    if !w.tops_up() {
+        clear_hostiles(w, 24.0, 900);
+        clear_hostiles(w, 24.0, 900);
+    }
 
     // Leg 3b: the two fuseboxes cut through the REAL laser path [M FuseBox_Update 0x1adfe8] —
     // box A in its south alcove (floor −2.2 [D probe]), then the hall's west lane north (nodes
@@ -1021,7 +1059,10 @@ fn walk_the_infiltration_to_the_delta_exit() {
 /// 0x1902c8] and the guards' hit chance by Accuracy row 2 [M DroneWeap_DoBulletAccuracy
 /// 0x179740:74-88]. Real input only; no health, ammo or channel writes.
 #[test]
-#[ignore = "re-tune after the claw wall fix: the route's SkyBridge crossing is a stand-in now (the claw bolt dies on the duct wall) and the shifted clock leaves Bond short on the pit band's east jump (46.34, -1.78, 53.19); the plain walk passes the same legs"]
+// UN-IGNORED (level-14-claw-route-retune): the pit band's east jump lands on this master tree
+// (the d2 run walks out in 22633 ticks, green), and the real-damage descent's two real-input
+// laws are in — the room guard #284 kill from the machine-room lane start and the pre-cut hall
+// clears (both gated !tops_up(), so the d1/master walks keep their timing).
 fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
     // The lane-fight + path-clear laws (opt-in, this level's sister only — set inside the body
     // behind the difficulty gate; see the body comment for the measured deaths).
@@ -1652,7 +1693,19 @@ fn the_skipped_vent_cutscene_hands_bond_back_at_his_grab_spot() {
 /// write no health/armour/ammo; the exit load into 07000015 is the game's own Trigger_Activate
 /// path [M 0x1b2318 → warm_exit_save → Player_RamLoad 0x1957a8].
 #[test]
-#[ignore = "re-tune after the claw wall fix: the route's SkyBridge crossing is a stand-in now (the claw bolt dies on the duct wall) and the shifted clock lands the descent at (29.63, 0.65, 29.25) instead of the leg-2 start (29.99, 0.61, 38.00); the plain walk passes the same legs"]
+// STILL #[ignore] (level-14-claw-route-retune, the re-tune state): the OLD blockers are GONE on
+// this master tree — the descent lands in the pin box (29.51, 0.65, 37.77 [L this run]) and the
+// machine-room room guard #284 falls to the new lane-start kill (gated !tops_up()). The
+// remaining death is the GENERATOR BLAST in the box A cut window: with the enemies alive the
+// cut at (-88.38, -1.07, 31.34) ends in a world blast at (-88.7, 0.9, 32.6), radius 10.0, 500
+// base, d 2.4 — death at ticks 33324/33336/33348 across three runs, identical 40 hits for
+// 100.0 and 13 return-fire fights (the pre-cut clears find nothing within 24 — the igniting
+// round is not a cleared guard's). Master never sees it (its enemies are disabled; its cut is
+// 44 quiet ticks). LEVERS: identify the igniting round (NF_DMG_TRACE shows the blast, not the
+// bullet — candidates: the Laser spray blocked by a fight corpse at the stance, or a beyond-24
+// sniper's over-flight), a corpse-free stance candidate in cut_fusebox, or a wider pre-cut
+// clear. The _agent sister is un-ignored and green on the same gated blocks.
+#[ignore = "the box A cut window takes the generator blast (see the note above): the last real-damage blocker on the d1 walk"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage() {
     walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
 }
