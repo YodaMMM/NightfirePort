@@ -152,3 +152,16 @@ diff (drone.rs + one test file) and were not run.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks in order, with their exact output:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "guard-leaf-pushout: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds` (exit 28)
+2. `python3 -c "… urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'guard-leaf-pushout: done …', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+   (the first attempt died with `SyntaxError: bytes can only contain ASCII literal characters`
+   on the em-dashes in the payload; the ASCII-only retry reached the URLError above)
+3. `wget -q -O- --post-data "guard-leaf-pushout: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → the call was killed at the 40 s tool timeout; no connection established, no output.
