@@ -19,3 +19,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: main agent at 2026-11-11 15:35 MST
+
+---
+## Done (main agent, 2026-11-11 16:20 MST)
+Pushed 08a276ce0: the load-frame pump batch ran the level looping effects one update ahead in the app; no pump batch before a loaded mission sim first tick now. Real app vs headless replay of the 07000005 walk: identical per-tick random state for all 10440 ticks.
