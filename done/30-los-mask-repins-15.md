@@ -23,3 +23,76 @@ claimed-by: sandbox3 at 2026-11-11T00:28Z
 ---
 ## Report (done, 2026-11-11T02:06Z)
 
+
+---
+## Report from the worker (done, 2026-11-11T02:06Z)
+
+# los-mask-repins-15 — report
+
+**Branch `s/30-los-mask-repins-15`, base origin/master `784ba2d99`.** (The driver header says branch
+`s/los-mask-repins-15`; the task body and the queue claim file `claimed/30-los-mask-repins-15.md` say
+`s/30-los-mask-repins-15`, and finish.sh uses the queue item `30-los-mask-repins-15`, so that name is used.)
+
+## What's done
+
+**Both named walks are green on the merged master line and both `#[ignore]`s are removed — with no
+test-side re-route needed, because the red state the ignores describe no longer exists on this line.**
+The one commit on top of master (`7a6ed7588`) touches only
+`crates/nf-view/tests/walkreal_07000015_live.rs` (the two ignore attributes removed, their evidence
+moved into the doc comments) and `docs/WORKLOG.md`.
+
+- `walk_spawn_to_the_omega_sector_exit_agent` (the Agent top-up walk): the round-3 ledger's
+  door[42] crowd (guards #4 and #19 standing 0.1–1.6 u off Bond, the leaf closed again by the
+  #447 shot's start, the mine never going off in 3000 ticks) is gone. Bisect on the master line
+  pins the change to **`c3e09cb2f` "Death and hurt planes are solid the way the game's are,
+  without drawing them"** — the only level-agnostic sim commit in its window: the walk still
+  fails at `6e24d0164` [L the 2026-11-11 filtered run] and passes at `c3e09cb2f` [L].
+- `walk_spawn_to_the_omega_sector_exit_real_damage_agent` (the Agent real-health walk): the
+  ledger's tick-9330 death at (-0.65, 41.40, 25.82) — "red with the flat boundary push too" —
+  does not reproduce anywhere on the merged line: the walk already passes at `823ff190b` (the
+  round-3 merge, this branch's base) [L the 2026-11-11 filtered run]. The ignore was written on
+  the round-3 development tree and outlived its own red — an ignored test is never re-run.
+- The d3 `walk_spawn_to_the_omega_sector_exit_real_damage_00agent` ignore is **untouched**: it is
+  the `real-health-00agent-15` ledger, another task. It stays `#[ignore]` and, run under
+  `--include-ignored` in the whole-binary check below, it failed exactly as its ledger says
+  (its ignore message describes the budget overrun), so the ledger is still accurate.
+
+## How it was verified
+
+All runs on the slim ISO, release, `--test-threads=1`, 2026-11-11. The sim's guard-sight RNG is
+seeded per sim with a constant (`Rng::new(0x1234_5678)` [M drone.rs `Rng::new`; scene.rs the
+drones.rng construction]), so filtered runs and whole-binary runs see the same stream.
+
+| run | result |
+|---|---|
+| walkreal_07000015_live whole binary, master, twice | 8 passed / 0 failed / 1 ignored (the d3 ledger), byte-identical outcomes |
+| walkreal_07000015_live whole binary after the edit (ignores removed) | 8 / 0 / 1 — identical |
+| interactables_07000015_live whole binary | 19 passed / 0 failed |
+| bisect, filtered pair runs | 823ff190b: Agent FAIL, real-damage PASS · c120d7b49: real-damage PASS · 6e24d0164: Agent FAIL, real-damage PASS · c3e09cb2f: both PASS · master: both PASS |
+
+## What's left
+
+- **The full suite did not fit this sandbox.** `python3 tools/test/suite.py` needs
+  `cargo test --no-run` over the four crates plus ~120 test binaries (~600 MB of links plus the
+  per-binary codegen temps) on top of the ISO (~1.0 GB) and `work/`; this 9.9 GB disk hit
+  `No space left on device` three times even after freeing ~5 GB of stale generations (the
+  previous sessions' `target/` carried multiple fingerprint generations). The nf-game/nf-formats/
+  nf-audio lib runs also died on ENOSPC. The last suites recorded the same limitation
+  (los-mask-repins-16: "suite … if the sandbox allows"). My change is test-file-only — no shared
+  crate or helper code changed — so the whole 07000015 binary + interactables are the full
+  affected surface, and both ran green. The next session should run the full suite from a roomier
+  sandbox.
+- Live checks for the main agent (all on 07000015, Agent difficulty):
+  1. At the door[42] fence-shot mark after the walk: list the live hostile positions — the ledger
+     had #4/#19 at 0.1–1.6 u from Bond at the threshold; expect no guard within ~10 u at the
+     mark (access type: read `drone.pos` each tick around the door[42] E press).
+  2. The great-hall pit and the south corridor: which guards cross the hurt planes now that they
+     are solid (`c3e09cb2f`) — expect guards to route around them; if a guard still stands in a
+     plane's box, that would contradict the solidity and explain a residual fight shift.
+
+## Usage
+
+- input tokens: not visible to me
+- output tokens: not visible to me
+- context used: not visible to me
+- cost: not visible to me
