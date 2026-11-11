@@ -728,12 +728,16 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
         // (−20.7,48.0,30.6) — with the sidestep decay the walker's default the stuck
         // ladder's alternating nudges no longer carry Bond around it (the old eternal
         // strafe-left slid him past by accident [L the A/B: 9/0 on the pre-change walker,
-        // 3/6 with the decay]), so the warm walks flank the desk corner explicitly. The
-        // real-damage walks keep the direct line — they round the corner on their own fight
-        // timing and their downstream dome-wire crossing is frame-windowed (an added flank
-        // re-times it into a live wire [L the real_damage run: 39 × −2.40 world zaps, dead at
-        // tick 16013]).
-        if !real { w.walk_to(Wp::new(-22.6, 47.6, 30.2).r(1.2), "files n26 flank west"); }
+        // 3/6 with the decay]), so the walks flank the desk corner explicitly.
+        // level-0b-dome-wire-sisters: the real-damage walks keep the flank too — on this
+        // tree they do NOT round the corner on their own timing any more (the four sisters
+        // wedge at the doorway's 6000-tick cap at (−20.70,48.06,30.64), health 100, zero
+        // hits [L this session's whole-binary run: 5/4, every sister the same wedge]) — the
+        // ledger's "own fight timing" carry relied on guard contact that this session's
+        // timeline never produces. The flank re-times the downstream dome-wire crossing
+        // (the ledger's own words) — the crossing's re-timing against the fusebox windows
+        // is this task's lever and is repaired separately below.
+        w.walk_to(Wp::new(-22.6, 47.6, 30.2).r(1.2), "files n26 flank west");
         for (label, wp) in [
             ("files n26→n25 (the doorway)", Wp::new(-22.18, 47.18, 16.58).r(1.1)),
             ("files n25→n22 (the keypad corner)", Wp::new(-21.14, 47.18, 15.75).r(1.0)),
@@ -765,11 +769,16 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
             // run WEST to x −7.0 at the plate's z, then dash EAST into the plate. [L] the
             // same-cadence pair lands 6/6 on the head-on lane — the crossing is the reroute.
             let walked = if real {
-                // [L the reroute measurements] head-on lane: 6 × 3.2 on the approach, re-place
-                // 80.8. West crossing (x −7.0): approach 6.4 — but the return then runs under
-                // barrels pre-trained east: re-place 49.2 (head-on return) / 36.4 (west return).
-                // The head-on pair is the best measured lane; the deck two-phase is the lever.
-                lane_sprint(w, [c[0], lo[1] - 0.4, c[2]], 1.4, 900, "the spawned files use-plate")
+                // level-0b-dome-wire-sisters: the WEST-DIAGONAL approach. The head-on lane
+                // re-measured this session: the approach alone took 14 × 2.4 [L the d1 run —
+                // the corridor gun #291 (−1.14,49.06,−0.19) fires from BEHIND once Bond passes
+                // it, and the north pair's trained line covers the last 8 u], the head-on
+                // return 25 × 2.4 — 93.6 of 100, dead at the deck key (tick 16013). The
+                // northwest diagonal (−7.0, the plate's z) threads the dome floor's west side
+                // — the measured 5-round approach (12.0) [L this session's runs]; the direct
+                // west L-shape (west at z 3.74 first) pins on the x −6.3 wall row at z 1.5.
+                lane_sprint(w, [-7.0, lo[1] - 0.4, c[2]], 1.2, 900, "the files approach northwest (x -7.0)");
+                lane_sprint(w, [c[0], lo[1] - 0.4, c[2]], 1.4, 600, "the spawned files use-plate")
             } else {
                 w.try_walk_to(Wp::new(c[0], lo[1] - 0.4, c[2]).r(1.4), "the spawned files use-plate")
             };
@@ -829,12 +838,16 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
         // REAL HEALTH: the pair is armed (the fence + the take both feed OR #290), so the
         // whole return lane runs the sprint — the plate → the room → n14 → n15 → n16.
         if real {
-            // [L the reroute measurements] the straight north return is the clean one once the
-            // barrels end north-trained (the head-on approach); the west detours trained them
-            // onto Bond and the return bled 44.4 / 56.4. Head-on both ways: re-place 80.8.
-            lane_sprint(w, [-1.0, 47.5, -5.5], 1.2, 900, "return the terminal room (from the dome)");
-            lane_sprint(w, [-1.45, 47.18, 3.74], 1.0, 600, "return n14");
-            lane_sprint(w, [-1.33, 47.18, 6.82], 1.0, 600, "return n15");
+            // level-0b-dome-wire-sisters: the west-exit return. The head-on return re-walks
+            // the whole corridor under the ceiling gun #291 — 25 × 2.4 this session [L the d1
+            // run]. The west room (x −7.0, north of the x −6.3 wall row's z −6.6..1.5 span)
+            // exits the plate line, then Bond rejoins the corridor at z −5 and sprints the
+            // mouth — the tracked-gun return re-measured at ~16-17 rounds (the gun follows
+            // across the lane, east x −0.3 included) vs 25 head-on [L this session's runs].
+            // The direct west-south leg (x −7.0 all the way) pins on the wall row at z −6.6.
+            lane_sprint(w, [-7.0, 47.5, -13.9], 1.2, 600, "return west (x -7.0)");
+            lane_sprint(w, [-0.3, 47.5, -5.0], 1.2, 900, "return southeast (the corridor east lane)");
+            lane_sprint(w, [-0.3, 47.18, 6.82], 1.0, 900, "return n15 (the mouth)");
             lane_sprint(w, [-13.67, 47.18, 6.40], 1.0, 900, "return n16");
             // (level-0b-roof-sprint-4: the rocket is taken in the exec office instead — the
             // first cut of this detour (n16 → the pickup south-west) crossed the keypad-corner

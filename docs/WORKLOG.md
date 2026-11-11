@@ -273,3 +273,16 @@ un-ignore it; real input only, never lower damage or health, no top-ups, helpers
   (one tool call per walk), re-time the crossing level-gated, remove the temp diagnostics
   before the final commit, run the whole 0b binary + interactables_0700000b_live, nf-game,
   suite if disk permits.
+- level-0b-dome-wire-sisters (08:52) Progress checkpoint. The four 0b real-damage sisters'
+  failure re-measured on this tree: first the doorway wedge (the desk corner, the direct line,
+  all four, 6000-tick cap, zero hits) — fixed by extending walker-sidestep-decay's west flank
+  to the real walks. Then the real blocker: the "dome-wire" toll is the terminal lane's
+  ceiling gun #291 (−1.14,49.06,−0.19) plus the north pair firing 2.40/round (the wall guns'
+  4.0 damage x Easy 0.6; owner usize::MAX = "the world" in the log) — the head-on approach +
+  return cost 39 rounds = 93.6, dead at the deck key t16013. Lever landed (level-gated, real
+  walks only): the northwest diagonal approach to the plate (x −7.0, 5 rounds) and the
+  west-exit return (x −7.0 out, rejoin the corridor at z −5, the mouth, n16; ~16-17 rounds).
+  Whole binary 5/4 — the sisters now die LATE on the roof (d1 t16479, 00agent ×2 t16835,
+  agent t16872 — the ledger's t16013 wire death is gone; the roof fights take the rest).
+  Next lever: the deck sprint's #4 close / the roof package, or shaving the return's
+  remaining 16 rounds. Temp diagnostics removed before this commit.
