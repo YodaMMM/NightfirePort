@@ -141,3 +141,18 @@ re-time levers in their ignore messages; one level per tool call, repairs gated 
   Agent-test green state taken, 11's newer ledger). Plan: Agent walk first (deck pair
   enable plate, pre-engage placement, descent re-tune, ignore order), then 00agent
   upstream bleed.
+
+## los-mask-08-sisters (2026-11-11)
+
+- 04:48-05:05 branch from origin/s/los-mask-08-walks + merge origin/master; conflicts resolved
+  (world.rs master side whole, ai_live walks side, 01 master helper, 08 union + master dodge,
+  11 master ledger); WORKLOG first entry pushed.
+- 05:06-05:40 disk_full fight (three linker bus errors; cleared stale pre-merge binaries,
+  browser caches, rust-docs); the 08 test binaries rebuilt.
+- 05:41-06:15 the 00agent d3 walk: two runs + two lever placements (lower-landing stand — no
+  visible guard, dropped; fusebox stand — kept as the fight site). The ledger sharpened: tick
+  9592 walkway death, the east-hall guards 92 by tick 2475, no-visible at four spots, the
+  |dy|<4.0 filter + the wake-race named as the next levers.
+- 06:16-06:22 the 08 whole binary 5/0/1 (Agent d2 green on the merged tree, topped-up
+  byte-exact, ally pair green), interactables_08 15/0; the 00agent ignore re-ledgered; the
+  report written.
