@@ -82,3 +82,17 @@ tests — each with its pass count quoted above. No shared test helper changed
 ## Usage
 
 not visible to me (no token, context-window or cost figures are exposed in this session).
+
+## ntfy failed
+
+All three fallbacks failed; the exact output, in order:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "guard-leaf-press-07: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'guard-leaf-press-07: done', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --timeout=20 --post-data "guard-leaf-press-07: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → exit code 4 (network failure), no body returned (a direct run, not piped — the piped
+   reading would be `head`'s exit code, the earlier window's lesson).
+
+git push to github.com worked throughout; only ntfy.sh is unreachable from this sandbox.
