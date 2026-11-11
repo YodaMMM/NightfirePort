@@ -23,3 +23,9 @@ claimed-by: sandbox5 at 2026-11-11T01:48Z
 ---
 ## Report (done, 2026-11-11T02:37Z)
 
+
+Branch: `s/real-health-00agent-06-8` (the continuation chain -06-4 -> -06-8; -06-5/6/7's branches
+are gone from origin). GREEN: the 00 Agent walk is un-ignored and passing — whole
+`walkreal_07000006_live` 7 passed / 0 failed / 2 ignored (twice, deterministic), `interactables_07000006_live`
+5/5. The report is at `docs/reports/real-health-00agent-06-8.md` on the branch (also copied to
+`docs/reports/real-health-00agent-06.md`).
