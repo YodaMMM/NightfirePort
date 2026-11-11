@@ -23,3 +23,16 @@
   probe_move rejects the step every tick; the game moves first and then pushes out in the
   contact pass [M 0x140968:204-208, Collide_Intersect 0x1ebaa8:353-373]. Porting the game's
   order (move, then the DeltaP push-out), keeping the Rand count.
+- The leaf press ported: `Drone::leaf_press_rest` — the game's order (move first, then the
+  contact pass's DeltaP push-out [M 0x140968:204-208 + Collide_Intersect 0x1ebaa8:353-373]) for
+  the pure-face leaf press: the body rests IN CONTACT (the collide radius 0.4 [M 0x140e90:91-93]
+  touching the face) instead of the old 0.435-out reject standstill. Gated to 07000014 (the
+  door_leaf_slide set-growth precedent). Facts pinned on the way: the doorway is a double SLIDE
+  door (kind 2, both leaves hinged (50.82, 1.19, 52.92); 0x1A covers z 51.66..53.00, 0x19
+  52.84..54.18, [L the posed-tri AABB dump]); `Door_ReactToHit` 0x135980's kind-2 arm only
+  reverses a CLOSING leaf (a closed leaf ignores presses — same as the port); the door opens
+  only via a route door-node reach (the special band: dist < 0.4, or 0.4-1.0 with a peer on the
+  node [M LinkCreep_AtSpecialNode 0x159dd0]) or the player's Door_Activate — the pressed guard
+  (dd 1.13 > 1.0 [L]) cannot reach the band, so the no-input freeze is the GAME's own behavior
+  too; with the door opened the guard flows through and presses his alarm (state 0x8a
+  PressAlarm [M 0x168ea8]) — the goal (56.06, 0.01, 42.91) is the alarm node [L the flow run].

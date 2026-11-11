@@ -3608,6 +3608,32 @@ impl Drone {
             // cabin panes — the law is the game's on every level; the walks need re-tuning first.
             self.pos = [self.pos[0] + slide[0], self.pos[1], self.pos[2] + slide[1]];
             self.blocked_reach = 0.0;
+        } else if d.level == 0x0700_0014 {
+            // guard-leaf-pushout [M Drone_CollisionHandler 0x140968:204-208 + Collide_Intersect
+            // 0x1ebaa8:353-373]: the game's order — the move applies FIRST (obj+0x30 += the delta
+            // before the contact pass), then the pass's DeltaP resolves the capsule against what
+            // it crossed: the into-face part of the step is removed, the along-face part survives
+            // (door_leaf_slide above, when there is one), and the body rests IN CONTACT — the
+            // collide sphere radius 0.4 [M NDrone2_Collision 0x140e90:91-93, `+0x45c` = 0.4 for the
+            // standard guard] touching the face. The old reject left the body 0.435 west of the
+            // 0x1A leaf's west face (50.378 vs the face 50.813, [L the probe ledger]) — out of
+            // contact, so the press the door's own `Door_ReactToHit` (0x135980) reads from
+            // obj+0xD0 never registered. The law is the game's on every level; the set grows one
+            // level at a time with its walks re-run (the door_leaf_slide precedent) — this round:
+            // 07000014 only.
+            match self.leaf_press_rest(d, step) {
+                Some(rest) => {
+                    self.pos = rest;
+                    self.blocked_reach = (step[0] * step[0] + step[1] * step[1]).sqrt();
+                }
+                None => {
+                    // The probe rejected the step: the body's collision engaged whatever the ray crossed
+                    // this tick. The game's movement pass corrects +0x30 up to the shape; the port's
+                    // reject leaves the body put — the attempted step's length is the pane drain's
+                    // measure of the absorbed movement [S breakable.rs drone_step].
+                    self.blocked_reach = (step[0] * step[0] + step[1] * step[1]).sqrt();
+                }
+            }
         } else {
             // The probe rejected the step: the body's collision engaged whatever the ray crossed
             // this tick. The game's movement pass corrects +0x30 up to the shape; the port's
@@ -3615,6 +3641,47 @@ impl Drone {
             // measure of the absorbed movement [S breakable.rs drone_step].
             self.blocked_reach = (step[0] * step[0] + step[1] * step[1]).sqrt();
         }
+    }
+
+    /// The move-then-pushout rest for a step `probe_move` rejected against a door leaf (the
+    /// `door_leaf_slide` scan finding no tangent — the pure face press): the body moves to the
+    /// contact — the face point backed off by the collide radius 0.4 along the face normal
+    /// [M NDrone2_Collision 0x140e90:91-93; Drone_CollisionHandler 0x140968:204-208 applies the
+    /// delta then the contact pass's DeltaP (Collide_Intersect 0x1ebaa8:353-373) resolves it].
+    /// The scan is door_leaf_slide's (the same segment pair, the same door id band); the rest is
+    /// taken on the normal's side of the face and within a step's reach.
+    fn leaf_press_rest(&self, d: &Data, step: [f32; 2]) -> Option<[f32; 3]> {
+        let len = (step[0] * step[0] + step[1] * step[1]).sqrt();
+        if len < 1e-6 { return None; }
+        let over = |c: f32| c.signum() * 0.4 * (c.abs() > 1e-6) as i32 as f32;
+        let to = [self.pos[0] + step[0] + over(step[0]), self.pos[2] + step[1] + over(step[1])];
+        let mut hit = None;
+        for y in [self.pos[1], self.pos[1] + 0.5] {
+            match d.world.segment_surface_host([self.pos[0], y, self.pos[2]], [to[0], y, to[1]], false) {
+                None => {}
+                Some((t, n, _, _, crate::world::HitHost::Object(id, _))) if (0x100_0000_0000..0x200_0000_0000).contains(&id) => {
+                    if hit.is_none() { hit = Some((t, n)); }
+                }
+                Some(_) => return None,
+            }
+        }
+        let (t, n) = hit?;
+        let nl = (n[0] * n[0] + n[2] * n[2]).sqrt();
+        if nl < 1e-3 { return None; }
+        let (nx, nz) = (n[0] / nl, n[2] / nl);
+        // The face point on the probe segment, then the contact rest: the center a collide
+        // radius (0.4 [M 0x140e90:91-93]) back along the normal — the capsule touches the face.
+        let seg = [to[0] - self.pos[0], to[1] - self.pos[2]];
+        let fx = self.pos[0] + seg[0] * t;
+        let fz = self.pos[2] + seg[1] * t;
+        const R: f32 = 0.4;
+        let rest = [fx + R * nx, self.pos[1], fz + R * nz];
+        let mv = [rest[0] - self.pos[0], rest[2] - self.pos[2]];
+        // The rest sits on the normal's side (outside the leaf) and within a step's reach.
+        if mv[0] * nx + mv[1] * nz > 1e-4 { return None; }
+        if (mv[0] * mv[0] + mv[1] * mv[1]).sqrt() > len + 0.5 { return None; }
+        if (mv[0] * mv[0] + mv[1] * mv[1]).sqrt() < 1e-4 { return None; }
+        Some(rest)
     }
 
     /// The along-the-leaf part of a step `probe_move` rejected, when what stops it is a door leaf
