@@ -82,3 +82,16 @@
 
 not visible to me — this environment exposes no token, credit or context-window figures for
 the session.
+
+## ntfy failed
+
+All three notification paths failed from this sandbox (ntfy.sh is unreachable from here; the
+same as the previous sessions):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-14-claw-route-retune: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`, exit code 28.
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'level-14-claw-route-retune: done', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`.
+3. `wget -q -O- --post-data "level-14-claw-route-retune: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output, killed by a 25 s timeout cap (exit 124; the connect hangs past the driver's
+   own 20 s window).
