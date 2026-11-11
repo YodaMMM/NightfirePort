@@ -100,3 +100,12 @@ ledger messages.
 ## Usage
 
 not visible to me (no token, context-window or cost figures are exposed in this session).
+
+## ntfy
+
+1. curl: `curl: (28) Connection timed out after 15002 milliseconds` (twice this window — the
+   same timeout the base windows saw).
+2. python3 urllib: `urlopen error [Errno 101] Network is unreachable`.
+3. wget: exit 0 with an empty body (no output). The same pattern as the previous window's
+   notification (wget exit 0, empty body); treated as possibly delivered — the exact outputs
+   are recorded here either way.
