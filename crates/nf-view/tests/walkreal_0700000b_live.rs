@@ -724,6 +724,14 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
     // objective-bearing reads [D the census]; the beams are triggers, not collision.
     {
         for (label, wp) in [
+            // walker-sidestep-decay repair (gated to this file = the level's own route): the
+            // doorway leg's direct n26→n25 line clips the desk row's west corner at
+            // (−20.7,48.0,30.6) — with the sidestep decay the walker's default the stuck
+            // ladder's alternating nudges no longer carry Bond around it (the old eternal
+            // strafe-left slid him past by accident [L the A/B: 9/0 on the pre-change walker,
+            // 3/6 with the decay]), so the route now walks the flank explicitly: one step west
+            // of the desk corner, then the doorway.
+            ("files n26 flank west", Wp::new(-22.6, 47.6, 30.2).r(1.2)),
             ("files n26→n25 (the doorway)", Wp::new(-22.18, 47.18, 16.58).r(1.1)),
             ("files n25→n22 (the keypad corner)", Wp::new(-21.14, 47.18, 15.75).r(1.0)),
             ("files n22→n21 (the corridor)", Wp::new(-15.83, 47.18, 15.75).r(1.0)),
