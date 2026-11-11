@@ -1388,3 +1388,52 @@ fn the_wellhead_seals_the_shaft_on_real_input() {
         "the well takes no health and raises no death channel on real input (health {:.1} ch62 {})",
         sim.drones.health.health, sim.drones.channels.on(0x62));
 }
+
+/// THE CASTLE CHAT PAIR ON REAL INPUT (guard-castle-chat-states): the two placements that carry
+/// the chat start-script specials on the whole disc [D census of the kind-0x0f placements —
+/// #? skin 0x05000030 param 1 = 0x06000124 at (31.369, 39.502, 22.053) and skin 0x0500002e
+/// param 1 = 0x06000126 at (30.457, 39.329, 23.081)] stand in CastleChatGuard1 0x36 from their
+/// first tick: the specials give mode 0x18 [M 0x14c600:147-158] and PlayScript's ENTER redirects
+/// [M 0x15ba68:26-30] — the old code left them in the plain guard's start states (the script
+/// played straight out of PlayScript). Bond walks to them from the truck spawn (no teleport),
+/// waits in their area, and a sustained pistol burst breaks the chat off — the alert group's
+/// EnemyAlerts fold [M 0x1612e0:83-98]. Real input only; no health or channel writes.
+#[test]
+fn the_castle_chat_pair_stands_chatting_and_breaks_off_when_alerted() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000006.bin", false,
+        Some(&carry(&[0x1d, 0x45, 0x70])), 1).expect("load 07000006"));
+    w.top_up_health = false;
+    w.wait_enabled(3000, "the intro NIS");
+    w.wait(30);
+    // The proven route's first legs to the greeting plates, then the short hop west to the pair
+    // (31.37, 39.50, 22.05) / (30.46, 39.33, 23.08) [D census].
+    w.walk_nav_to([60.0, 38.3, 31.5], "off the truck, south", 1.6);
+    w.walk_nav_to([45.0, 38.3, 24.0], "across the greeting plates", 1.6);
+    w.walk_nav_to([36.0, 39.4, 22.8], "the dock's west reach", 1.6);
+    w.walk_nav_to([33.2, 39.4, 22.7], "the chat pair's east side", 1.4);
+    let pair = |w: &Walker, what: &str| -> Vec<(usize, u8, f32)> {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let found: Vec<(usize, u8, f32)> = sim.drones.list.iter().enumerate()
+            .filter(|(_, dr)| dr.present && dxz(dr.pos, [31.0, 39.4, 22.6]) < 4.5)
+            .map(|(i, dr)| (i, dr.state, dr.pos[0]))
+            .collect();
+        for (i, st, x) in &found { eprintln!("[chat] {what}: drone {i} state {st:#04x} x {x:.2}"); }
+        found
+    };
+    w.wait(60);
+    let found = pair(&w, "on arrival");
+    assert!(found.len() == 2, "both chat guards found near the disc placements, got {found:?}");
+    for (i, st, _) in &found {
+        assert_eq!(*st, 0x36, "chat guard (drone {i}) stands in CastleChatGuard1 0x36 [M 0x15ba68:26-30 + 0x14c600:147-158]");
+    }
+    // The chat break: a sustained burst from inside their hearing. The alert group runs
+    // EnemyAlerts [M 0x1612e0:83-93]; a produced state leaves the chat for good.
+    let (idx, _, _) = found[0];
+    w.shoot_bounded(idx, "break the chat", 40);
+    w.wait(120);
+    let after = pair(&w, "after the burst");
+    for (i, st, _) in &after {
+        assert_ne!(*st, 0x36, "chat guard (drone {i}) broke the chat off when alerted [M 0x1612e0:83-98]");
+    }
+}

@@ -282,6 +282,17 @@ pub mod state {
     pub const ENEMY_RUN_TO_POINT: u8 = 0x85;
     /// `NDrone2_DSTATE_EnemyMission` 0x15e1e8 (`StateFuncs[0x1b]` [L 0x29b300 + symtab]).
     pub const ENEMY_MISSION: u8 = 0x1b;
+    /// `NDrone2_DSTATE_CastleChatGuard1` 0x1612e0 (`NDrone2_StateFuncs[0x36]` [L 0x29b300]): the
+    /// Mayhew-castle chat pair's stand-and-talk state. Entry: the placement's start-script special
+    /// 0x06000124/0x06000126 gives mode 0x18 [M 0x14c600:147-158], `DSTATE_PlayScript`'s ENTER
+    /// redirects on `+0xC5 == 0x18` [M 0x15ba68:26-30], or the by-mode start arm [M 0x14cbd8:98-100].
+    /// Both 07000006 chat guards run it (param 1 = 0x06000124 / 0x06000126 [D census of the kind-0x0f
+    /// placements]). No DSTATE_CastleChatGuard2 exists — both DMODE rows share this handler.
+    pub const CASTLE_CHAT_GUARD1: u8 = 0x36;
+    /// `NDrone2_DSTATE_InterogateWalk` 0x162338 (`NDrone2_StateFuncs[0x3d]` [L 0x29b300]): the
+    /// interrogation approach walk — no in-code entry and no disc placement reaches it
+    /// (docs/port-map/unreached.md); ported for table fidelity, zero Rand draws [M 0x162338].
+    pub const INTEROGATE_WALK: u8 = 0x3d;
     /// The 31 "unaware" states whose ENTER arm sets `+0x4F8 & 0x2000` (may-notice) [M each DSTATE's
     /// case 1: PlayScript 0x15ba68:25, Idle 0x15bf18:31, Alert 0x15c248:20, Patrol 0x15c498:20,
     /// HostageKiller 0x15c728:20, Civilian 0x15d118:27, CivilianPatrol 0x15d610:27, CivilianMission
@@ -2006,6 +2017,15 @@ pub struct Drone {
     /// game's BuildWorldSph runs on the first movement [M 0x1336f8 → 0x133070]; height settles
     /// alone don't count [L ee_start_05.bin: the dormant guards' centre == pos in all axes]).
     pub sph_home: V3,
+    /// `Drone+0x13D`: the castle chat pair's listen channel byte — `init_DMODE_CastleChatGuard1`
+    /// 0x14e370 sets 0x19, `CastleChatGuard2` 0x14e3a0 sets 0x11 [M]; `DoModeSettingsNEW`'s
+    /// start-script specials set it beside the mode byte [M 0x14c600:143-158].
+    /// `DSTATE_CastleChatGuard1`'s UPDATE plays the start script while `switch_channels[+0x13D]`
+    /// is up [M 0x1612e0:39-43]. The 07000006 pair carries 0x11 [D census + 0x14c600:147-158].
+    pub chat_channel: u8,
+    /// The per-tick cached `switch_channels[chat_channel]` — the Drones::tick read, the same shape
+    /// as `wait_channel_on` (the game reads the array directly in the UPDATE [M 0x1612e0:40]).
+    pub chat_channel_on: bool,
 }
 
 /// Normalise a vector (the grenade throw direction helper).
@@ -2246,7 +2266,7 @@ impl Drone {
             // copy: a fresh team != 2 drone holds the player, team 2 holds none — `type_setup`
             // refines it the moment the team byte resolves.
             opp_bond: true,
-            corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, alert_status: 0, alert_status_prev: 0, alert_status_frame: 0, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false,
+            corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, alert_status: 0, alert_status_prev: 0, alert_status_frame: 0, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, chat_channel: 0, chat_channel_on: false,
             alert_pending: 0,
             mission_wait_channel: 0,
             armed_peer_exit_dist: f32::MAX,
@@ -2353,6 +2373,24 @@ impl Drone {
         // translation (authored on the floor [D census]); the flagged 0x13/0x17 spawns enter
         // mid-air by design, so the drop is a no-op for the port's on-floor placements.
         dr.type_setup(d);
+        // `NDrone2_DoModeSettingsNEW`'s start-script-keyed tail [M 0x14c600:130-158]: the DIVars+0x38
+        // special keys (the placement's param-1 script id) override the mode byte and set the chat
+        // channel +0x13D AFTER the type-settings work — the game's block is the tail of
+        // DoModeSettingsNEW (DefaultInit 0x14b300:501 calls it before the :676 lookup). [D census:
+        // only 07000006 carries two, 0x06000124 + 0x06000126 — the castle chat pair; no placement
+        // uses 0x0600011d/0x0600011f/0x0600021f.]
+        match p1 {
+            // 0x0600011d: prop 0x1d = 1, mode 0x17 [M 0x14c600:136-139].
+            0x0600_011d => { let mut w = dr.props; d.props.set(0x1d, &mut w, 1); dr.props = w; dr.mode = 0x17; }
+            // 0x0600011f: mode 0x18, channel 0x19 [M 0x14c600:141-145].
+            0x0600_011f => { dr.mode = 0x18; dr.chat_channel = 0x19; }
+            // 0x06000124/0x06000126: mode 0x18, channel 0x11 [M 0x14c600:146-158] — the 07000006
+            // chat pair [D census].
+            0x0600_0124 | 0x0600_0126 => { dr.mode = 0x18; dr.chat_channel = 0x11; }
+            // 0x0600021f: prop 0x38 = 0 and `+0x4F8 |= 0x10` (stationary) [M 0x14c600:147-152].
+            0x0600_021f => { let mut w = dr.props; d.props.set(0x38, &mut w, 0); dr.props = w; dr.stationary = true; }
+            _ => {}
+        }
         // The dtypenew specials [M 0x14b300:615-627]: placement msg 0x6000892 → mode 0x1c, 0x600089c
         // → 0x1b; the skin's anim set (+0xda) is saved to +0xdc and set 0xf (the rope set) takes
         // over; the start script is consumed (start_script above). The type-settings lookup runs
@@ -3760,6 +3798,10 @@ impl Drone {
             // Interogate 0x161a40 cases 6/8 → HandleImpact(0x56, 0), 7/9/0x17-0x19 → (0x56, 1);
             // InterogateAssistWait 0x161860 cases 6-9/0x17-0x19 → (0x56, 1) [M].
             INTEROGATE => (ATTACK, false),
+            // CastleChatGuard1 0x1612e0 and InterogateWalk 0x162338 share Interogate's map: punch 6
+            // and bullet 8 → HandleImpact(0x56, 0), taser 7 / explosion 9 / smoke-flash-dart
+            // 0x17-0x19 → (0x56, 1) [M 0x1612e0:67-82, 0x162338:69-84].
+            CASTLE_CHAT_GUARD1 | INTEROGATE_WALK => (ATTACK, false),
             INTEROGATE_ASSIST_WAIT => (ATTACK, true),
             // EnemyMission 0x15e1e8: the same pair — cases 6/8 → HandleImpact(0x56, 0), the
             // 7/9/0x17/0x18/0x19 group (0x56, 1) [M 0x15e1e8:84-96,120]; the group's allow is
@@ -8121,6 +8163,11 @@ impl Drone {
                 // centrally below; 0x10000 is per-arm). The 01 starting guard's sight ack lands DURING
                 // his scripted walk because of this bit (guard_first_shot_01_live).
                 self.vision_on = true;
+                // [M 0x15ba68:26-30] the mode-0x18 chat-guard redirect: a chat pair placement (mode
+                // 0x18 from the DoModeSettingsNEW start-script specials) never plays its script here —
+                // the ENTER folds into CastleChatGuard1, which plays it on the chat channel (0x36's
+                // UPDATE). The flags above are already set, the redirect fires first.
+                if self.mode == 0x18 { self.set_state(state::CASTLE_CHAT_GUARD1); return true; }
                 let (st, follow) = match self.start_script {
                     0x6000_168 => (10, 0x32),
                     0x6000_169 => (5, 0x32),
@@ -9354,6 +9401,97 @@ impl Drone {
                 self.desired_yaw = self.yaw_to_opp;
                 true
             }
+            // ---- `NDrone2_DSTATE_CastleChatGuard1` 0x1612e0 (state 0x36) --------------------------------
+            // ENTER [M case 1]: `+0x4F8 |= 0x10000 | 0x2000` (the 0x2000 half is the shared UNAWARE
+            // gate's `watching`), then the alert fold — 0.66 ≤ alert → anim 0x21, else the stand-idle
+            // [M 0x1612e0:20-30].
+            (CASTLE_CHAT_GUARD1, msg::ENTER) => {
+                self.vision_on = true;
+                if self.alert >= 0.66 { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); }
+                else { self.set_stand_idle(d, rng, frame, false); }
+                true
+            }
+            // EXIT [M case 2]: a chat guard whose start script never played (+0x554 still set — the
+            // UPDATE clears it after the first play) stamps `switch_channels_time[0x1A]` and raises
+            // `switch_channels[0x1A]` [M 0x1612e0:33-36; _DAT_002701f8 = switch_channels_time[0x1A]
+            // [M symtab 0x270190 + 0x68]] — the raise outbox writes the array + the nonzero stamp
+            // like the game's pair of stores.
+            (CASTLE_CHAT_GUARD1, msg::EXIT) => {
+                if self.start_script != 0 { self.raise = Some(0x1a); }
+                true
+            }
+            // UPDATE [M case 3]: the guard's chat channel (+0x13D; 0x11 on the 07000006 pair [M
+            // 0x14c600:147-158 + D census]) up and the start script still attached → SetScript(+0x554,
+            // 0, 0x11a, 0, 0, 5, 0) once and clear +0x554 [M 0x1612e0:39-43] — the port's play_script
+            // maps SetScript(hash, state, follow_on, next_ai, done_msg) as the PLAY_SCRIPT arms do
+            // [M 0x15ba68:70-76]. Then EnemyLookForOpponent breaks the chat for a sighted opponent
+            // [M 0x1612e0:44-52]. Zero Rand draws [M 0x1612e0].
+            (CASTLE_CHAT_GUARD1, msg::UPDATE) => {
+                if self.start_script != 0 && self.chat_channel_on {
+                    self.play_script(d, self.start_script, 0, 0x11a, 0, msg::ANIM_DONE);
+                    self.start_script = 0;
+                }
+                if let Some(n) = self.look_for_opponent(d) { self.set_state(n); }
+                true
+            }
+            // ANIM_DONE [M case 5]: the ENTER alert fold again; the 0x21 replay queues AI state 4
+            // (CallAnim(0, 0x21, 0, 4, 0, 0) — the 4 lands in +0x596, the next-AI slot [M
+            // 0x1612e0:57-65 + 0x13ab58:99]) [M].
+            (CASTLE_CHAT_GUARD1, msg::ANIM_DONE) => {
+                if self.alert >= 0.66 { self.call_anim(d, anim_state::ALERT_IDLE, 4, 0); }
+                else { self.set_stand_idle(d, rng, frame, false); }
+                true
+            }
+            // The alert group [M cases 0x11/0x12/0x14/0x15/0x16/0x1e → DroneVision_EnemyAlerts]: a
+            // produced state breaks the chat off; otherwise a guard not already investigating stamps
+            // the hearing return state 4 (Idle) — the chat does not resume [M 0x1612e0:83-98]. (0x15
+            // and 0x16 are the game's prop-0x29-gated / plain drone shouts [M 0x177c18:72-88]; the
+            // port's shared enemy_alerts folds them into the AlertSound path — nothing ported sends
+            // them yet, so no disc path reaches the fold difference.)
+            (CASTLE_CHAT_GUARD1, msg::SHOUT | msg::SCREAM | msg::SOUND | 0x15 | 0x16 | msg::ALARM) => {
+                match self.enemy_alerts(d, s, m) {
+                    Some(n) => self.set_state(n),
+                    None => if !self.investigating { self.resume_state = state::IDLE; },
+                }
+                true
+            }
+            // Msg 0x1f → DoForcedAttack (Attack), msg 0x21 → ConsiderExplosive(…, 0x56) [M
+            // 0x1612e0:99-106]. Case 0 is the bare `return 1` the port's dispatch default covers.
+            (CASTLE_CHAT_GUARD1, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
+            (CASTLE_CHAT_GUARD1, msg::EXPLOSIVE) => { self.take_explosive_msg(d, frame, ATTACK); true }
+            // ---- `NDrone2_DSTATE_InterogateWalk` 0x162338 (state 0x3d) ----------------------------------
+            // ENTER [M case 1]: `+0x4F8 |= 0x10000 | 0x2000`, the 0x35 (ALERT_WALK) anim [M
+            // 0x162338:19-23].
+            (INTEROGATE_WALK, msg::ENTER) => {
+                self.vision_on = true;
+                self.call_anim(d, anim_state::ALERT_WALK, 0, 0);
+                true
+            }
+            // UPDATE [M case 3]: face the opponent (SetAngleToObj of +0x170); the +0x228 & 0x10 armed
+            // flag — a fresh armed opponent breaks straight to Attack 0x56 (no speech, unlike
+            // Interogate 0x3c's UPDATE), an armed-at-start one keeps the walk and drops the flag when
+            // he holsters [M 0x162338:28-51]; then the distance fold: 0x27C tracks the closest
+            // approach, within 4.0 → Interogate 0x3c, drifted 4.0 past the closest approach → Attack
+            // 0x56, else keep walking [M 0x162338:53-68]. Zero Rand draws [M 0x162338].
+            (INTEROGATE_WALK, msg::UPDATE) => {
+                self.desired_yaw = self.yaw_to_opp;
+                if !self.interro_armed && self.bond_armed { self.set_state(ATTACK); return true; }
+                if self.interro_armed && !self.bond_armed { self.interro_armed = false; }
+                if self.dist < self.interro_min_dist { self.interro_min_dist = self.dist; }
+                if self.dist < 4.0 { self.set_state(INTEROGATE); return true; }
+                if self.interro_min_dist - self.dist < -4.0 { self.set_state(ATTACK); }
+                true
+            }
+            // The alert group [M cases 0x11/0x12/0x14/0x15/0x16/0x1e → EnemyAlerts; a produced state
+            // breaks the walk, and UNLIKE CastleChatGuard1 there is no +0x5A0 stamp on the None arm
+            // [M 0x162338:85-100]].
+            (INTEROGATE_WALK, msg::SHOUT | msg::SCREAM | msg::SOUND | 0x15 | 0x16 | msg::ALARM) => {
+                if let Some(n) = self.enemy_alerts(d, s, m) { self.set_state(n); }
+                true
+            }
+            // Msg 0x1f → DoForcedAttack, msg 0x21 → ConsiderExplosive(…, 0x56) [M 0x162338:101-107].
+            (INTEROGATE_WALK, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
+            (INTEROGATE_WALK, msg::EXPLOSIVE) => { self.take_explosive_msg(d, frame, ATTACK); true }
             (NO_OPPONENT, msg::ENTER) => {
                 self.alert_status_set(0, frame); // [M 0x1650a0:13] — the status byte; NoOpponent writes no +0x50C
                 self.call_anim(d, anim_state::ALERT_IDLE, 0, 0);
@@ -22151,6 +22289,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if dr.target.stamp != self.target.stamp { dr.target = self.target.clone(); }
             dr.channel_on = self.channels.on(dr.switch_channel as u32);
             dr.wait_channel_on = dr.wait_channel != 0 && self.channels.on(dr.wait_channel as u32);
+            // The chat pair's listen channel (+0x13D), cached for the 0x36 UPDATE the same way [M
+            // 0x1612e0:40 reads switch_channels[+0x13D] every tick].
+            dr.chat_channel_on = dr.chat_channel != 0 && self.channels.on(dr.chat_channel as u32);
             { let _p = crate::prof::scope("drone: visible_to (drawn ray)"); dr.drawn = dr.enabled && visible_to(player, d.world, dr.pos, dr.head()); }
             // The frustum leg alone (`Vision_InView` [M View_AddObjects 0x1e62d8:34-35]) for the
             // no-physics arm's obj+0xFC read — see `frustum_grace`.
@@ -25085,7 +25226,7 @@ mod tests {
             // copy: a fresh team != 2 drone holds the player, team 2 holds none — `type_setup`
             // refines it the moment the team byte resolves.
             opp_bond: true,
-            corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, alert_status: 0, alert_status_prev: 0, alert_status_frame: 0, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, death_channel: 0, special_death: 0, special_spot: pos, special_yaw: 0.0,
+            corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, alert_status: 0, alert_status_prev: 0, alert_status_frame: 0, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, chat_channel: 0, chat_channel_on: false, death_channel: 0, special_death: 0, special_spot: pos, special_yaw: 0.0,
             alert_pending: 0,
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
@@ -26216,6 +26357,122 @@ mod abseil_tests {
         assert_eq!(dr3.team, 3, "the unarmed sight never flips the team (the drawn-weapon gate) [M 0x17a4b8]");
         assert_ne!(dr3.state, state::ATTACK, "the unarmed sight never attacks");
         assert!(!dr3.scare_shouted, "the unarmed sight never reaches the shout arm [M 0x15d860:69]");
+    }
+}
+
+/// The castle chat pair + the interrogation walk (guard-castle-chat-states): the 07000006
+/// placements' start-script specials give mode 0x18 [M 0x14c600:147-158], PlayScript's ENTER
+/// redirects into CastleChatGuard1 [M 0x15ba68:26-30], the chat channel plays the start script
+/// once [M 0x1612e0:39-43], the alert group breaks the chat off [M 0x1612e0:83-98], and
+/// InterogateWalk folds distances and the armed flag [M 0x162338:28-68].
+#[cfg(test)]
+mod castle_chat_tests {
+    use super::tests::drone_at;
+    use super::*;
+
+    macro_rules! empty_data {
+        ($level:expr, $keep:ident, $dname:ident) => {
+            let $keep = (
+                CollisionWorld::empty(),
+                nf_formats::drone::DroneAnimData { states: Vec::new(), info: Vec::new(), tables: Vec::new() },
+                nf_formats::drone::PropertyTables { descs: Vec::new(), masks: Vec::new(), types: Vec::new() },
+                std::collections::HashMap::<u32, nf_formats::anim::Script>::new(),
+                nf_formats::weapon::WeaponData { records: Vec::new(), ammo_cap: Vec::new(), ammo_raw: Vec::new() },
+                nf_formats::tuning::Tuning::default(),
+                std::collections::HashMap::<u32, nf_formats::anim::Sequence>::new(),
+                std::collections::HashMap::<u32, nf_formats::character::Skin>::new(),
+                std::collections::HashMap::<u8, nf_formats::character::Skeleton>::new(),
+                crate::nav::Network::default(),
+                Vec::<crate::cover::CoverNode>::new(),
+                nf_formats::hitbox::CollisionBones { human: Vec::new(), astronaut: Vec::new() },
+                Vec::<crate::aivolume::AiVolume>::new(),
+                std::collections::HashMap::<u32, crate::pickup::Model>::new(),
+                Vec::<crate::aipoint::AiPoint>::new(),
+            );
+            let $dname = Data { tables: &$keep.1, props: &$keep.2, scripts: &$keep.3, weapons: &$keep.4, world: &$keep.0, level: $level,
+                sequences: &$keep.6, skins: &$keep.7, skeletons: &$keep.8, nav: &$keep.9, covers: &$keep.10, tuning: &$keep.5,
+                hitboxes: &$keep.11, volumes: &$keep.12, sfx: None, models: &$keep.13, surfaces: None, voices: None,
+                difficulty: 2, ai_points: &$keep.14 };
+        };
+    }
+
+    /// The entry: PlayScript's ENTER with mode 0x18 folds into CastleChatGuard1 0x36 instead of
+    /// playing the script [M 0x15ba68:26-30]. On the old code the script played here and the state
+    /// stayed PlayScript — this assertion failed (the red test).
+    #[test]
+    fn play_script_enter_redirects_the_chat_pair_into_castle_chat_guard1() {
+        empty_data!(0x0700_0006, d_keep, d);
+        let mut dr = drone_at([31.369, 39.502, 22.053]);
+        dr.state = state::PLAY_SCRIPT; // Global's enter started the script [M 0x15b830]
+        dr.mode = 0x18; // the 0x06000124/0x06000126 special's mode byte [M 0x14c600:147-158]
+        dr.start_script = 0x0600_0124;
+        let mut rng = Rng::new(0x5eed);
+        dr.send(&d, &mut rng, 1, msg::ENTER);
+        assert_eq!(dr.state, 0x36, "the mode-0x18 redirect folds PlayScript's ENTER into CastleChatGuard1 [M 0x15ba68:26-30]");
+    }
+
+    /// The creation path: the 07000006 chat pair's param-1 special (0x06000124 — a real script in
+    /// the level bin [D census, script_found]) gives mode 0x18 and chat channel 0x11 [M
+    /// 0x14c600:147-158], and +0x554 keeps the script id for the chat's SetScript.
+    #[test]
+    fn the_07000006_specials_give_mode_0x18_channel_0x11_and_keep_the_script() {
+        empty_data!(0x0700_0006, d_keep, d);
+        let mut rng = Rng::new(0x5eed);
+        let param = |i: u32| match i { 1 => 0x0600_0124, 5 => 100, 15 => 1, _ => 0 };
+        let dr = Drone::new(&d, [31.369, 39.502, 22.053], 0.0, param, &mut rng);
+        assert_eq!(dr.mode, 0x18, "the special overrides the mode byte [M 0x14c600:147-158]");
+        assert_eq!(dr.chat_channel, 0x11, "+0x13D = 0x11 for the 0x06000124/0x06000126 pair [M 0x14c600:147-158]");
+        assert_eq!(dr.start_script, 0x0600_0124, "+0x554 keeps the script id — it is a real script, not a consumed special [M atlas +0x554]");
+    }
+
+    /// The chat: the channel up plays the start script once via SetScript and clears +0x554 [M
+    /// 0x1612e0:39-43]; a sound that produces no alert state leaves the guard chatting but stamps
+    /// the hearing return state 4 (Idle) [M 0x1612e0:94-98]; the forced attack breaks to 0x56 [M
+    /// 0x1612e0:99-100].
+    #[test]
+    fn the_chat_script_plays_once_on_the_channel_and_alerts_break_off() {
+        empty_data!(0x0700_0006, d_keep, d);
+        let mut dr = drone_at([31.369, 39.502, 22.053]);
+        dr.state = 0x36;
+        dr.start_script = 0x0600_0124;
+        dr.chat_channel = 0x11;
+        dr.chat_channel_on = true;
+        let mut rng = Rng::new(0x5eed);
+        dr.send(&d, &mut rng, 2, msg::UPDATE);
+        assert_eq!(dr.anim.script, Some(0x0600_0124), "the chat script plays via SetScript [M 0x1612e0:41]");
+        assert_eq!(dr.start_script, 0, "+0x554 clears after the play [M 0x1612e0:42]");
+        dr.send(&d, &mut rng, 3, msg::SOUND);
+        assert_eq!(dr.state, 0x36, "no alert state produced — the guard stays [M 0x1612e0:94-96]");
+        assert_eq!(dr.resume_state, state::IDLE, "the +0x5A0 = 4 hearing return state [M 0x1612e0:97]");
+        dr.send(&d, &mut rng, 4, msg::FORCED_ATTACK);
+        assert_ne!(dr.state, 0x36, "DoForcedAttack → SetState(0x56) breaks the chat — Attack's ENTER runs after it, game-true [M 0x1612e0:99-100]");
+    }
+
+    /// InterogateWalk's UPDATE fold [M 0x162338:28-68]: within 4.0 of the opponent → Interogate
+    /// 0x3c; drifted 4.0 past the closest approach → Attack 0x56; an armed opponent with the
+    /// +0x228 & 0x10 flag clear → straight to Attack (no speech). On the old code state 0x3d had
+    /// no arms — every assertion here failed (the red test).
+    #[test]
+    fn interogate_walk_folds_distances_and_the_armed_flag() {
+        empty_data!(0x0700_0007, d_keep, d);
+        let mut rng = Rng::new(0x5eed);
+        let mut arrive = drone_at([10.0, 0.0, 10.0]);
+        arrive.state = 0x3d;
+        arrive.weapon = 0x10; // armed: Interogate's ENTER holds for an armed guard [M 0x161a40 case 1]
+        arrive.dist = 3.9;
+        arrive.send(&d, &mut rng, 2, msg::UPDATE);
+        assert_ne!(arrive.state, 0x3d, "within 4.0 → SetState(0x3c) — Interogate's ENTER and the shared fold then run, game-true (a live guard holds 0x3c); the pinned fact is the walk ending [M 0x162338:56-60]");
+        let mut drift = drone_at([10.0, 0.0, 10.0]);
+        drift.state = 0x3d;
+        drift.dist = 20.0;
+        drift.interro_min_dist = 10.0;
+        drift.send(&d, &mut rng, 2, msg::UPDATE);
+        assert_ne!(drift.state, 0x3d, "drifted 4.0 past the closest approach → SetState(0x56) — Attack's own ENTER runs after it, game-true [M 0x162338:62-66]");
+        let mut armed = drone_at([10.0, 0.0, 10.0]);
+        armed.state = 0x3d;
+        armed.bond_armed = true;
+        armed.send(&d, &mut rng, 2, msg::UPDATE);
+        assert_ne!(armed.state, 0x3d, "a fresh armed opponent breaks the walk — SetState(0x56), Attack's ENTER after [M 0x162338:31-37]");
     }
 }
 
