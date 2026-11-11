@@ -107,3 +107,14 @@ drop-west pocket crossing.
 
 not visible to me — no token, credit, context-window or cost figures are shown anywhere in
 this environment's interfaces for this session.
+
+## ntfy failed
+
+All three fallbacks failed (git push to github.com works from this sandbox; ntfy.sh does not):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'...', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output within 30 s, killed by the tool timeout (no response from ntfy.sh).
