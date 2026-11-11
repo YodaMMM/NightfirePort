@@ -108,3 +108,7 @@ Branch `s/guard1-rounds-0c-repin` = origin/s/pretrans-arms-0c-11 7a89b686b (orig
 ## guard1-rounds-0c-repin (2)
 
 The real-health fight is GREEN (guard1_rounds_0700000c_live whole: 2 passed, 0 failed). The re-pin: the ring choreography splits the north-west-corner leg at z -200 (the corner approach) where guard #1's gun rays open at d 3.7 [L the probes] and runs the ring-corner sweep there — the round kills #1 one beat before his doubled-band 27.6 shot (the old order walked the corner leg past him and the stand lost the race at d 1.6). No sim changes; the test file only.
+
+## level-0c-real-damage-sisters
+
+Branch `s/level-0c-real-damage-sisters` = origin/s/guard1-rounds-0c-repin 3d78a7a54 (origin/master 784ba2d99 already an ancestor; no origin/s/real-health-agent-0c-0d-3 exists — the base one, origin/s/real-health-agent-0c-0d 51811c809, holds the wired+ignored Agent sisters and their lever rounds). Task: the two ignored walkreal_0700000c_live sisters — the real-damage walk and the Agent walk — taken green with the game's guard sight, each ignore message's levers in order, helpers gated to 0700000c and the difficulty, real input only, no top-ups, never lower damage or health. Work started.
