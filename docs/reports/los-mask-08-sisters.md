@@ -26,6 +26,7 @@ One descent stand shipped in code: the d3-gated `fight_guards_within(&mut w, "th
 
 - Whole binary `walkreal_07000008_live` (`--test-threads=1`, NF_ISO on the slim on-foot ISO): **5 passed / 0 failed / 1 ignored** in 116.8 s — the topped-up whole-mission walk (byte-exact, passed unchanged), the Operative real-damage walk, the Agent real-damage walk, both ally tests; the 00 Agent sister is the ignore.
 - Whole binary `interactables_07000008_live`: **15 passed / 0 failed / 0 ignored** in 15.4 s.
+- The merge's other two resolved test files ran whole: `walkreal_07000001_live` **7 passed / 0 failed / 1 ignored** in 99.3 s (master's `run_slab_ambush` helper carries the real-damage walks green) and `walkreal_07000011_live` **3 passed / 0 failed / 1 ignored** in 56.5 s (the ignore is master's own ledger, carried verbatim).
 - Runs used real input from the level start, no teleports, no damage/health/ammo writes, no top-ups; every tactic cites its run evidence ([L]) or addresses already pinned in the file.
 - Not run this window (the sandbox's 9.9 G disk filled three times — the linker died with bus errors until stale pre-merge binaries, browser caches and rust-docs were cleared; the remaining window went to the named binaries): the other walkreal binaries, `nf-game --lib`, the full fast suite. The merge's test-file resolutions outside 08 (01's helper refactor, 11's ledger text) are master's own proven code carried verbatim. The fast suite should be re-run on this branch by the next session before merge.
 
