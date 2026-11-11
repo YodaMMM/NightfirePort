@@ -100,4 +100,8 @@ the session (no usage panel is exposed to the agent).
 
 ## ntfy failed
 
-(pending — filled at finish)
+All three fallbacks failed (the same outbound-egress wall every prior round recorded):
+
+1. curl: `curl: (28) Connection timed out after 20001 milliseconds`
+2. python3 urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. wget: no output, killed at the 25 s timeout (0 bytes written).
