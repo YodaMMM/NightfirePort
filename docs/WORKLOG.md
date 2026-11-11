@@ -41,3 +41,15 @@ decides it (the deck posts leaving their posts), say what needs measured.
   0 failed / 1 ignored (the ignore is the measured 00 sister). Test-only diff: the 06 test
   file + WORKLOG; the lesson-10 set (the 06 binary) is green; the full suite did not fit the
   window (same as 06-3).
+
+## real-health-00agent-06-8
+
+Continuing 06-4 (the latest branch that survives on origin — 06-5/06-6/06-7 were closed by the
+driver but their branches are gone from origin, only the queue stubs remain; their named levers
+live in the stubs: engage #24 east of (14,−36.7) before the (10.5,−34.3) nav, the #4 aimed_fights
+tight gate, the shift-free loot found DEAD at the premise in 06-6, then 06-7's unseen-bail cap +
+the pair enable-delta census — 06-7's report is lost). Branch `s/real-health-00agent-06-8` from
+06-4, merged origin/master 784ba2d99 (the guard-sight rewrite landed since 06-4's base — every
+06-4 number needs re-measuring on the merged tree). Conflict resolved in the 06 test file:
+master's `ledge_stands = stands` (civ-unignore-2) combined with 06-4's 00 stands as
+`stands || difficulty >= 3`.
