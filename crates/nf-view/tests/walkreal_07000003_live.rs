@@ -329,6 +329,46 @@ fn clear_blockers_03(w: &mut Walker, label: &str) {
     }
 }
 
+/// The courtyard obstacle's lane-exit re-take (guard-slide-03-01-repairs, d1-gated). The
+/// servant loop's A* legs ride the courtyard's west furniture band (6.35, −15.7..−17.7; the
+/// climb tops at y 7.0-7.2 under the upper-row nodes path3 12/14 (10.8/11.28, 9.64) [L the
+/// wedge probe: Bond parked 90000 ticks at (6.355, 7.02..7.21, −15.72) grounded false, and
+/// the probe's drone dump shows NO drone within 5 u of the spot — the parked capsule is the
+/// level's own furniture, not a slid guard; the same band the green runs' east-lane anchors
+/// avoid]) and every later nav gives up from the parked spot (the ledgered 12+ give-ups, 29
+/// on the plate leg [L the guard-slide-sweep run]). A player whose stand is on a climb block
+/// steps OFF it and re-takes the leg from the lane the east-lane legs already walked: direct
+/// walk_to episodes off the block (alternating the side — the 08 re-take pattern), then the
+/// lane anchor. Self-gating on the parked state: a stream that never parks is byte-identical.
+/// Gated to difficulty 1 (the ledgered test): the d2/d3 sisters' timelines stay untouched.
+fn off_the_courtyard_obstacle_03(w: &mut Walker, label: &str) {
+    let (parked, b) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let b = sim.bond.pos;
+        (!sim.bond.grounded && b[1] > 6.6 && b[1] < 8.2
+            && b[0] > 3.5 && b[0] < 9.5 && b[2] > -19.0 && b[2] < -14.0, b)
+    };
+    if !parked { return; }
+    eprintln!("[03] {label}: parked on the courtyard obstacle at ({:.2},{:.2},{:.2}) — the lane-exit re-take", b[0], b[1], b[2]);
+    w.lenient = true;
+    let mut off = false;
+    for episode in 0..6 {
+        let (side, sname) = if episode % 2 == 0 { (1.0f32, "east") } else { (-1.0f32, "west") };
+        let step = [b[0] + side * 2.5, 5.9, b[2] + side * 1.5];
+        w.walk_to(Wp { at: step, act: Act::None, arrive: 1.2 },
+            &format!("{label}: off the obstacle ({sname} episode {episode})"));
+        let (grounded, p) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.grounded, sim.bond.pos) };
+        if grounded && p[1] < 6.8 { off = true; break; }
+    }
+    if off {
+        w.walk_to(Wp { at: [10.59, 5.9, -22.91], act: Act::None, arrive: 1.4 },
+            &format!("{label}: the lane anchor (the re-taken spot)"));
+    } else {
+        eprintln!("[03] {label}: the obstacle re-take did not ground Bond — the next leg re-derives");
+    }
+    w.lenient = false;
+}
+
 #[test]
 fn walk_the_alpine_route_to_the_exit() {
     let iso = iso();
@@ -714,6 +754,7 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
                 w.walk_nav_to(plate, &format!("onto the {want_ch:#x}-servant's enable plate (again)"), 1.8);
             }
         }
+        if difficulty == 1 { off_the_courtyard_obstacle_03(&mut w, "after the 0x50 plate walk"); }
         w.wait(10);
         if difficulty >= 2 {
             // 00 Agent: rounds before the servant walk (the same running-fight rule) [L the
@@ -728,6 +769,7 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         // drops (the kill-loot cycle) — the fights shorten with every kill.
         clear_near(&mut w, 9.0, "the servants' ground");
         loot_the_drops_03(&mut w, "the servants' ground");
+        if difficulty == 1 { off_the_courtyard_obstacle_03(&mut w, "after the servants'-ground loot"); }
         // gas-rng-draws: the door-8 cluster (#18/#19/#2 behind the leaves at (38.7, 0.2)) can
         // outlive the ground clear — clear_near's far+unexposed skip passes them by while the
         // leaves hide their boxes, and the servant nav then walks THROUGH the opening door
@@ -796,6 +838,7 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         // approach from the west, so it is skipped once Bond is within 10 u of the servant.
         // Self-gating: a run that reaches this point from the door-8 mouth stand (11.3 u) still
         // walks the saddle unchanged.
+        if difficulty == 1 { off_the_courtyard_obstacle_03(&mut w, "after the door-8 mouth stand"); }
         let in_servant_room = {
             let sim = w.scene.sim.as_ref().unwrap();
             walker::dxz(sim.bond.pos, at) < 10.0
@@ -819,6 +862,7 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
             w.lenient = false;
         }
         w.walk_nav_to([at[0], at[1] - 0.3, at[2]], &format!("servant {si}"), 1.7);
+        if difficulty == 1 { off_the_courtyard_obstacle_03(&mut w, &format!("after the servant {si} walk")); }
         let sim = w.scene.sim.as_ref().unwrap();
         let d = &sim.drones.list[si];
         assert!(!d.corpse, "servant {si} alive when Bond arrives");
@@ -1415,7 +1459,7 @@ fn probe_plate_wedge_spot() {
         let sim = w.scene.sim.as_ref().unwrap();
         let b = sim.bond.pos;
         eprintln!("[03-wedge {tag}] t{} bond at ({:.3},{:.3},{:.3}) grounded {} substate {:#x} health {:.1}",
-            w.total_ticks, b[0], b[1], b[2], sim.bond.grounded, sim.bond.substate, sim.bond.health);
+            w.total_ticks, b[0], b[1], b[2], sim.bond.grounded, sim.bond.substate, sim.drones.health.health);
         for (i, d) in sim.drones.list.iter().enumerate() {
             if walker::dxz(d.pos, spot) < 10.0 && d.present {
                 eprintln!("[03-wedge {tag}] drone #{i} skin {:#x} team {} at ({:.2},{:.2},{:.2}) present {} corpse {} enabled {} state {:#x} hp {:.1} weapon {:#x} on {} switch {:?} second {:#x}",
