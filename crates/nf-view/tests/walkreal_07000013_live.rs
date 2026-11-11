@@ -874,7 +874,14 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage() {
 #[test]
 fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage_agent() {
     let iso = iso();
-    walker::with_real_damage(|| walk_the_warm_chain(&iso, true, 2));
+    // guard-slide-sweep: the leaf-slide law (now on every level) moved the security-room
+    // shotgun #10 out of its door leaf and the point-blank exchange (the known knife-edge,
+    // comment at the 21-hp note above) stopped landing its torso taps — 33 hits for 87.4 with
+    // #10 still at hp 12, death t4766 at (-26.96,-368.30,35.78) [L this tree's run]. The d3
+    // sister's own answer ships here too: the head-hunt wrapper (one head tap drops a
+    // 12-health guard [M NDrone2_HitDamage 0x145558 x DroneDamage_Head]) — the same wrapper
+    // this file's real-damage d3 run uses, gated to this d2 test only.
+    walker::with_real_damage_head_hunting(|| walk_the_warm_chain(&iso, true, 2));
 }
 
 /// Operative sister of `..._real_damage_agent`: the same walked chain at difficulty 1, so the

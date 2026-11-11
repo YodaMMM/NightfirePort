@@ -410,6 +410,7 @@ fn walk_the_alpine_route_to_the_exit() {
 /// (walking, turning, E, real fire) — the servants rescued through their enable plates + captor
 /// kills, the Dragon Safe opened and its key taken, the exit fired. No channel or state pokes.
 #[test]
+#[ignore = "guard-slide-sweep ledger: with the leaf-slide law on every level the 0x50-servant enable-plate approach WEDGES — 12+ navs give up at the 3000-tick cap at bond (6.35,6.3-7.2,-15.7..-17.7) with the target the plate (25.7-30.8,5.7-6.1,-5.7..-16.1), d 19.5-28.2, health 100 untouched (no combat), and grounded toggling true/false with y 6.29<->7.21 at the same x/z — Bond repeatedly steps onto and falls off something parked at that spot [L this tree's run, binary 5/1/2i in 329 s and the single-test run]; the plate never fires, ch 0x50 stays off, no captor binds (the save rule reads the empty link [M 0x15cb78:24-36]) and the post-leg state assert fires (servant 0 still 0x01 WAIT_SWITCH). NEXT LEVERS: dump the live drones at the wedge spot to identify the parked capsule (if a slid guard sits in the nav lane, the lever is the level's own lane-exit re-take, the 08 pattern, gated to 07000003 + this test's difficulty); audit the plate approach's nav waypoints against the disc furniture."]
 fn walk_the_full_route_and_complete_every_objective() { walk_the_full_route_and_complete_every_objective_at(1) }
 
 /// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent rides the

@@ -131,3 +131,32 @@ ignores" — this round attacked the three ledgered reds.
 - REVERTED: following_mayhew_down_completes_the_level (line ~2346) calls run_slab_ambush at d2 too, and the levers re-timed it into a STUCK at the meet plate — a hard regression against a green test (stash A/B: clean tree 1 passed, levered tree STUCK [L]). The measured ledger now lives in the agent test's ignore message (next levers: re-time the mayhew sister per-leg, the 900-tick step-out holds, NF_RF_TRACE the 13556 leg).
 - The whole walkreal_07000001_live binary re-run GREEN after the revert: 6 passed / 0 failed / 2 ignored (the agent ledger + the pre-existing d3 ledger) — byte-exact with the base window's claim.
 - LEFT for the next message: the sweep (walkreal_07000002/03/04/09/0a/0b/0d/13/14/15/16/1b/41_live, the 0c eastroute + barrelrow sisters, the 07000011 route sister), the drone.rs-obligated binaries (nf-game lib, ai_live, guards_0c_live, npc_doors_live, fix_guard_misc_live, the ally/guard stuck sweeps), the full suite on the final tree.
+
+## guard-slide-gate-sweep (2026-11-11T12:15Z, branch s/guard-slide-gate-sweep) — the sweep complete, two shifts handled
+
+- The sweep ran one binary per tool call, the law everywhere, on the direct per-binary path (the
+  background suite.py survived this window's start for the first time and built for 25 min at -j4,
+  but pushed the 9.9 GB disk to 92% mid-nf-view; it was killed and its partial build left 740+
+  fresh test executables that the rest of the window ran directly at zero build cost). Results:
+  02 4/0/1i, 04 9/0/1i, 09 9/0/0i, 0a 13/0/2i, 0b 9/0/0i, 0d 1/0/2i, 14 7/0/3i, 15 6/0/3i,
+  16 15/0/3i, 1b 16/0/3i, 41 15/0/0i, the 0c eastroute 1/0/0 + barrelrow 1/0/0, the 11 route
+  1/0/0 — all green with only pre-existing ledgers.
+- TWO SHIFTS found and handled: (1) 07000003 walk_the_full_route_and_complete_every_objective —
+  the 0x50-servant enable-plate approach WEDGES (12+ navs at the 3000-tick cap from
+  (6.35,6.3<->7.2,-15.7..-17.7), plate targets 19.5-28.2 u away, health 100 untouched, grounded
+  toggling — Bond repeatedly steps onto and falls off something parked at that spot; ch 0x50
+  never fires, no captor binds [M 0x15cb78:24-36 reads the empty link], the post-leg state assert
+  fires with servant 0 still 0x01) — LEDGERED as the test's ignore with the measured run + next
+  levers (the live-drone dump at the wedge spot, then the lane-exit re-take, the 08 pattern);
+  binary now 5/0/3i in 200 s. (2) 07000013 walk_the_warm_chain..._real_damage_agent — the
+  security-room point-blank knife-edge under the slid guard (shotgun #10 at d 0.9 dealt 87.4 in
+  33 hits and stayed alive at hp 12; death t4766 at (-26.96,-368.30,35.78), armour 0) — REPAIRED
+  by giving the d2 test the file's own d3-sister head-hunt wrapper (one head tap drops a
+  12-health guard [M NDrone2_HitDamage 0x145558 x DroneDamage_Head]), gated to this test only;
+  the single test green in 11.9 s, binary 3/0/1i.
+- The drone.rs-obligated binaries (the change is the base branch's, already merged): nf-game lib
+  782/0/4i, ai_traces_live 4/0/0, stealth_ai_live 10/0/0, guards_0c_live 1/0/0, npc_doors_live
+  6/0/1i, fix_npc_doors_live 1/0/0, fix_guard_misc_live 6/0/0, ally_stuck_sweep_live 1/0/0,
+  guard_stuck_sweep_live 2/0/0 (the leaf-slide law test itself green). ALL GREEN.
+- The full suite did not fit (the fast runner is disk-hostile in this 9.9 GB sandbox); the
+  per-binary chunks above are its substitute. Report: docs/reports/guard-slide-gate-sweep.md.
