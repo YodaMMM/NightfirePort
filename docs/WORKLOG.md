@@ -1,4 +1,17 @@
 
+## mp-bot-site-scan
+Started 2026-11-11 07:05 UTC. Branch s/mp-bot-site-scan cut from origin/s/mp-bot-backoff
+9bf508137, merged origin/master. Task: the mp-bot-backoff report's last "What's left" item —
+the site-ack chain. The port's find_opponent returns early for a bot holding a site, but the
+game's scan runs unconditionally [M-dis 0x142770/0x1427b8 -> 0x1427c4]. Read the scan and the
+site-ack chain in full, with addresses, and port them in the game's order. Test red on the old
+code, pin through a real bot match (a site-holding bot turns to an opponent who comes into
+view); MP state equal on every machine, no shared Rand draws; run every mp_*_live binary and
+mp_world_sync_live, one per tool call.
+
+Work log:
+- (07:05) branch created, WORKLOG entry, checkpoint pushed.
+
 ## mp-bot-backoff
 Started 2026-11-10 23:21 UTC. Branch s/mp-bot-backoff cut from origin/master 0ee8478fd.
 Task: check the landed CanBackoff port (4c2203cc6, crates/nf-game/src/mp/bots.rs) against the
