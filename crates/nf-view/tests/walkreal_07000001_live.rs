@@ -76,7 +76,27 @@ fn run_slab_ambush(w: &mut Walker, ci: usize, difficulty: u32) {
 // step-out under the mouth fire (he advanced (-31.3,11.5) -> (-30.6,13.4) during the run's
 // mouth fight [L the dmg trace]) is the kill window, so a guard parked west of x -27 is
 // fought SHOOT-ONLY: no approach walk ever takes Bond back into the pocket corner.
-if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) { return; }
+// pretrans-arms-6 (EVERY difficulty): the d1 gate was a byte-exact choice from when the d1
+// walks were green. The aiming-guard cone fix [M 0x178ae0:34-36] moved the fights and the d1
+// descent went red with the SAME pop: on the d1 merged tree the slab crossing happened
+// MID-NAV (the stairwell-head walk) — the poppers enabled behind Bond, parked on the hidden
+// contact at the stairwell head (d 0.6-1.0, states 0x68/0x5c/0x73/0x74) and bled him 10 → 1
+// before Bond reached the plate; the recovery-loop fight from the plate could not answer
+// them in time (no exposed part for 540 ticks from below, the flank's +2077 ticks rode out
+// the escort fail) [L the pretrans-arms-6 red run: contact hp 6 at the first plate STUCK,
+// level_exit mid-flank]. The forward clear band: the pop is taken DELIBERATELY (Bond READY
+// at the ambush stance, the 10-tick reaction window [M DroneFunc_ReactionTime 0x14ac60]) and
+// the poppers are fought from the mouth BEFORE the descent — cleared ahead of the contact,
+// who still waits east of the pocket. The plate-side clear loop is the pretrans-arms-5
+// measured dead end (the escort died EARLIER, during the descent follow) — not repeated.
+// The d2/d3 gate stays EXACTLY as it was (ch 0xF on → the deliberate pop already ran):
+// on d1 the slab can be crossed UNCONTROLLED mid-nav earlier in the walk (this tree's
+// pre-clear flank nav crossed it [L the pretrans-arms-6 run: nav 1→2 (-26.62,13.63) →
+// (-29.96,14.39)]), so on d1 the ch-on state does NOT mean the poppers were fought —
+// they only ENABLED at their posts (armed_peer INFINITY at the r0 print [L the same run])
+// and engage when Bond later comes into view. On d1 the mouth fight runs whenever the
+// poppers can still be a threat, channel on or off.
+if difficulty >= 2 && w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) { return; }
     eprintln!("[01] the ch-0xF ambush: crossing the slab deliberately from ({:?})",
         w.scene.sim.as_ref().unwrap().bond.pos);
     let prev_keep = w.keep_off;
@@ -86,7 +106,12 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
     // the pocket west of x -27.
     let band = if difficulty >= 2 { 4.2 } else { 6.5 };
     let prev_hold = w.flank_hold_x;
-    if difficulty >= 2 { w.flank_hold_x = Some(-27.0); }
+    // The pocket rule bounds the flank on EVERY difficulty now (pretrans-arms-6): a walled
+    // pocket guard is never flanked into the corner (the pretrans-arms-4 measured death rode
+    // the approach INTO the pocket corner; the pre-stairwell block below sets the same hold
+    // on every difficulty). d2/d3 see the same value they always did — their branch is
+    // unchanged.
+    w.flank_hold_x = Some(-27.0);
     w.keep_off = Some(band);
     w.dmg.back_off = Some(band);
     // 00 Agent: the pop fight at x1.2 pain is long; a player tops up the gun before he trips it
@@ -393,7 +418,14 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
     // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
     w.prefer_head = true;
-    // A left nudge ends like a right one (`Walker::sidestep_decays`).
+    // pretrans-arms-6 (d1-gated, the ledger's forward-clear lever): the descent fights keep the
+    // pocket rule y-aware — no fight flank into the pocket FLOOR west of x -27 (the stairwell
+    // head's walled poppers sit at y 6.3; the real-damage red run's mid-nav #17 flank walked
+    // Bond into the corner (-31.0,10.7) and died there [L the pretrans-arms-6 dbg run]), while
+    // the upper-floor perch guard (y 10.2) keeps his proven around-the-upper-floor kill path
+    // [L the fix2 green run]. d2/d3 leave the field None — every hold/flank they run is
+    // byte-identical to the pre-task tree.
+    if difficulty == 1 { w.flank_hold_min_y = Some(7.0); }
     w.sidestep_decays = true;
     // hud-start: a load holds nothing (0x47 [M Player_InitWeapon 0x1a7ef8:137]) - settle the start draw first.
     nf_view::settle_start_draw(w.scene.sim.as_mut().unwrap());
@@ -1096,6 +1128,16 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // BEFORE following (the corridor's own resupply boxes sit on the way; the walk's dry
         // ladder tops up mid-sweep).
         for wp in [[-14.1f32, 13.1f32], [-19.4f32, 15.25f32], [-23.3f32, 14.4f32], [-29.1f32, 11.5f32]] {
+            // pretrans-arms-6 (d1-gated): the pocket rule bounds the FLANKS here too — the d1
+            // real-damage red run's guard-2 flank nav engaged the advanced popper #17 (4.1 u,
+            // exposed) mid-leg and the shoot's 540-tick flank walked Bond INTO the pocket corner
+            // ((-31.0,10.7), west of the hold) where #17 (d 3.2) and #4 (d 4.6) killed him at
+            // tick 16146 [L the pretrans-arms-6 dbg run]. No fight flank crosses x -27 on the
+            // descent approach; a walled pocket guard is answered by the ambush's mouth fight
+            // below (the run_slab_ambush block), never by walking round him into the corner.
+            // d2/d3 keep their exact timelines (the hold stays unset on their branch).
+            let prev_route_hold = w.flank_hold_x;
+            if difficulty == 1 { w.flank_hold_x = Some(-27.0); }
             let near: Vec<usize> = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 (0..sim.drones.list.len()).filter(|&i| {
@@ -1118,6 +1160,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
             }
             if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+            w.flank_hold_x = prev_route_hold;
         }
         // level-01-agent-hall-fight-2: fetch the pickups on the way before the stairwell — the
         // west-hall placed pair (−14.4, 6.5, 16.1) / (−13.2, 5.6, 10.4) sits 3-5 u off the route
@@ -1595,6 +1638,12 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // the same way: clear every started, armed guard within 14 of the CONTACT (the hide exit
     // needs the visible armed peer beyond 14.0 [M `NDrone2_NotNearArmedDrone` 0x177640]), let the
     // lead finish the route's descent, then take Bond back onto the plate for the AND.
+    // pretrans-arms-6 (d1-gated): the recovery fights keep the same pocket rule — the d1 red
+    // run's guard-4 fight flanked to (-26.8,13.8) and rode out the escort fail at +2077 ticks
+    // [L the pretrans-arms-6 red run]; with the poppers cleared at the mouth the loop should
+    // find an empty pocket, and if it fights, the flank never crosses x -27. d2/d3 untouched.
+    let prev_rec_hold = w.flank_hold_x;
+    if difficulty == 1 { w.flank_hold_x = Some(-27.0); }
     'recovery: for round in 0..12 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) { break; }
         let guards: Vec<usize> = {
@@ -1624,6 +1673,16 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             if gpos[0] > -27.0 && (walker::dxz(gpos, bpos) > 9.0 || !los_clear) {
                 w.walk_nav_to(gpos, &format!("approach stairwell guard {g}"), 3.0);
             }
+            // pretrans-arms-6 (d1-gated): a walled pocket guard is NOT exposed from the plate
+            // below (the d1 fix3 red run: guard 2 at 3.3-4.2 u exposed false — the hold blocks
+            // the flank, three holds give up, twelve rounds deadlock, the contact never
+            // un-hides [L the run]). The d2/d3 ambush's band-edge stand is the answer: from
+            // (-26.5,6.4,14.6) the pocket opens at 3.7-4.5, outside the ×2 band [L the d2/d3
+            // runs] — walk the stand and fight from there. The flank hold (set above) keeps
+            // every fight flank out of the corner.
+            if difficulty == 1 && gpos[0] < -27.0 && gpos[1] < 7.0 && !los_clear {
+                w.walk_nav_to([-26.5, 6.4, 14.6], &format!("the band edge for stairwell guard {g}"), 0.8);
+            }
             // The contact reached the plate while Bond stood on it: the AND fired on this leg
             // (the walk stops on the exit tick) — the fight below would walk Bond off the plate
             // and drop ch 0x10 before the check reads it.
@@ -1645,6 +1704,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         }
         w.follow(ci, &format!("the contact descent r{round}"), 6000, plate);
     }
+    w.flank_hold_x = prev_rec_hold;
     // Bond LEADS the descent: he takes the plate first — the AND needs BOTH, so the exit holds
     // until the contact arrives — while the hand (below) lands on the live world. Bond ahead is
     // fine for the lead: the wait bands stall only for a Bond BEHIND on the route [M 0x15e698
@@ -1987,8 +2047,13 @@ fn door_lip_lure(w: &mut Walker) {
     }
     }
 
-#[ignore = "pretrans-arms-5 ledger: the IsOpponent under-0.9 no-turn fix [M 0x178ae0:34-36] moved the stairwell-head fights — on the merged tree the descending contact stalls at route 29/37 with two armed guards parked ON him (skins 0x500003a/0x5000036, d 0.6-1.0, states 0x73/0x74 [L the red run]) and the escort monitor fails the level before Bond lands the plate (the walk legs read level_exit Some at the lead-descent); a plate-side clear loop (40 bounded rounds, the x<-27 pocket shot-from-where-you-stand rule) never fired — the escort dies EARLIER, during the descent follow itself [L the 21 s red run with the loop armed]; next lever: extend the descent recovery loop's clear band (a forward band on the contact's route ahead, mayhew-walk style) or re-check armed_near DURING the lead-descent legs"]
 #[test]
+/// GREEN, UN-IGNORED (pretrans-arms-6, 2026-11-11 [L the fix5 run on this tree]): the
+/// ledger's forward clear band — run_slab_ambush un-gated to d1 (the poppers 4/12 fought from
+/// the mouth BEFORE the descent; the uncontrolled mid-nav slab crossing only enables them),
+/// the d1 y-aware pocket flank hold (walker's flank_hold_min_y, opt-in; the upper-floor perch
+/// guard's proven kill path stays), and the recovery loop's d1 band-edge stand. Exit at tick
+/// 12990, the contact parked AllyLeadDone ON the plate. The d3 sister keeps its own ledger.
 fn walk_from_the_spawn_to_the_exit_with_the_contact() { walk_from_the_spawn_to_the_exit_with_the_contact_at(1) }
 
 fn walk_from_the_spawn_to_the_exit_with_the_contact_at(difficulty: u32) {
@@ -2577,8 +2642,13 @@ fn following_mayhew_down_completes_the_level() {
 /// `Camera_UpdateGlbVars` advances the level every frame and clamps the byte [M 0x1bada0:16-27];
 /// when the fade ends, state 8 pops onto state 3 (`ResetMap_Load`) and the level loads
 /// [M 0x1c98c8:173-189].
-#[ignore = "pretrans-arms-5 ledger: the same aim-fix move as the two main walks below — the IsOpponent under-0.9 no-turn fix [M 0x178ae0:34-36] stalls the descending contact under two parked guards (d 0.6-1.0 [L the 21 s red run on the merged tree]) and the escort fails before the plate fire this pin walks to; next lever: the descent recovery's forward clear band (shared with the main walks)"]
 #[test]
+/// GREEN, UN-IGNORED (pretrans-arms-6, 2026-11-11 [L the fix5 run on this tree]): the
+/// ledger's forward clear band — run_slab_ambush un-gated to d1 (the poppers 4/12 fought from
+/// the mouth BEFORE the descent; the uncontrolled mid-nav slab crossing only enables them),
+/// the d1 y-aware pocket flank hold (walker's flank_hold_min_y, opt-in; the upper-floor perch
+/// guard's proven kill path stays), and the recovery loop's d1 band-edge stand. Exit at tick
+/// 12990, the contact parked AllyLeadDone ON the plate. The d3 sister keeps its own ledger.
 fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_level_loads() {
     let iso = iso();
     let mut w = walk_to_the_exit(&iso, true);
@@ -2658,8 +2728,13 @@ fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_leve
 /// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
 /// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
 /// walk completes on the port's own damage.
-#[ignore = "pretrans-arms-5 ledger: the IsOpponent under-0.9 no-turn fix [M 0x178ae0:34-36] moved the stairwell-head fights — on the merged tree the descending contact stalls at route 29/37 with two armed guards parked ON him (skins 0x500003a/0x5000036, d 0.6-1.0, states 0x73/0x74 [L the red run]) and the escort monitor fails the level before Bond lands the plate (the walk legs read level_exit Some at the lead-descent); a plate-side clear loop (40 bounded rounds, the x<-27 pocket shot-from-where-you-stand rule) never fired — the escort dies EARLIER, during the descent follow itself [L the 21 s red run with the loop armed]; next lever: extend the descent recovery loop's clear band (a forward band on the contact's route ahead, mayhew-walk style) or re-check armed_near DURING the lead-descent legs"]
 #[test]
+/// GREEN, UN-IGNORED (pretrans-arms-6, 2026-11-11 [L the fix5 run on this tree]): the
+/// ledger's forward clear band — run_slab_ambush un-gated to d1 (the poppers 4/12 fought from
+/// the mouth BEFORE the descent; the uncontrolled mid-nav slab crossing only enables them),
+/// the d1 y-aware pocket flank hold (walker's flank_hold_min_y, opt-in; the upper-floor perch
+/// guard's proven kill path stays), and the recovery loop's d1 band-edge stand. Exit at tick
+/// 12990, the contact parked AllyLeadDone ON the plate. The d3 sister keeps its own ledger.
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage() {
     walker::with_real_damage(walk_from_the_spawn_to_the_exit_with_the_contact);
 }

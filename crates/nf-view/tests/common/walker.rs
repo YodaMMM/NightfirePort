@@ -202,6 +202,14 @@ pub struct Walker {
     /// not walk to reach a guard he cannot see. Bond holds instead and returns after three holds,
     /// so the caller's round loop gets the window.
     pub flank_hold_x: Option<f32>,
+    /// OPT-IN (pretrans-arms-6, gated to the 07000001 d1 walks): with `flank_hold_x`, the hold
+    /// applies only when the target stands BELOW this y. The stairwell-head pocket's walled
+    /// guards sit at the pocket floor (y 6.3), while the upper-floor perch guard's proven kill
+    /// path IS the around-the-upper-floor flank [L the fix2 green run: nav 1→15 round the
+    /// upper floor killed him] — an x-only hold deadlocks on the perch guard (three holds give
+    /// up, twelve recovery rounds, the contact never un-hides [L the fix4 red run]). None =
+    /// the hold applies at every height (every other walk's behavior, byte-identical).
+    pub flank_hold_min_y: Option<f32>,
     /// The walked path: a coarse breadcrumb of ground Bond actually covered (pushed in
     /// tick_inner, ~2 u resolution, 512 points). The resupply rule draws its corridor from it —
     /// see `resupply` for why the harness must not take off-path ammo detours.
@@ -315,6 +323,7 @@ impl Walker {
             no_grenade_throws: false,
             grenade_downgrade_logged: false,
             flank_hold_x: None,
+            flank_hold_min_y: None,
         }
     }
 
@@ -954,7 +963,8 @@ impl Walker {
             // growing the offset 3→5→7. This is the player's walk-around-the-cover; it ends when a
             // part's segment clears (the loop above picks it up).
             if blocked_streak >= 540 && flanks < 6
-                && self.flank_hold_x.is_some_and(|wx| self.scene.sim.as_ref().unwrap().drones.list[di].pos[0] < wx) {
+                && self.flank_hold_x.is_some_and(|wx| self.scene.sim.as_ref().unwrap().drones.list[di].pos[0] < wx)
+                && self.flank_hold_min_y.is_none_or(|my| self.scene.sim.as_ref().unwrap().drones.list[di].pos[1] < my) {
                 flanks += 1;
                 blocked_streak = 0;
                 last_progress = t;
