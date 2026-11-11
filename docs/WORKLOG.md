@@ -48,3 +48,26 @@
   only, never lower damage or health. Plan: checkpoint push → setup (fresh sandbox: downloads,
   env) → read guard-leaf-pushout items 1-2 → the 07 press + walks → the door-side pin → further
   levels → obligated binaries → report.
+
+## guard-leaf-press-07 (2026-11-11T14:26Z, branch s/guard-leaf-press-07) — DONE
+
+- Base: origin/s/guard-leaf-pushout 3a660d01c (origin/master already an ancestor — merge no-op).
+  Fresh sandbox: rustup + the ALSA 1.2.8 user prefix rebuilt, work/ + the ISO re-downloaded
+  (369823203 → 1061754880).
+- Item 1 (the press gate grows): the leaf-press arm (`move_by`'s `leaf_press_rest` branch) now
+  covers 07000002/04/07/09/0a/0b/0d/13/14/15/16/1b/41 — every level added one at a time with its
+  whole walkreal binary re-run on the added tree, all green: 07 6/0/0, 04 9/0/1i, 09 9/0/0,
+  41 15/0/0, 0d 1/0/2i, 15 6/0/3i, 0a 13/0/2i, 0b 9/0/0, 13 3/0/1i, 1b 16/0/3i, 16 15/0/3i,
+  02 4/0/1i (the pre-existing ledgers only; no shift anywhere). 07000014's walks re-run on the
+  final tree: 7/0/3i.
+- Item 2 (the door-side pin): `Doors::contact_centres(i)` accessor added (the obj+0xD0 list as
+  `Door_ReactToHit` 0x135980 reads it), and the 07000014 press test now asserts, during the
+  press ticks, that door 0x1A's (list index 26) contacts carry the pressing guard (centre = his
+  root pos [M the DoorMover build], non-player). Green in
+  guard_stuck_sweep_live: 3/0/0.
+- The obligated binaries on the final tree: nf-game lib 783/0/4i, npc_doors_live 6/0/1i,
+  fix_npc_doors_live 1/0/0, fix_guard_misc_live 6/0/0, ai_traces_live 4/0/0,
+  stealth_ai_live 10/0/0. Real input only; no damage/health changes; no shared-helper changes.
+- The full suite did not fit (the background fast runner is disk-hostile in this 9.9 GB sandbox
+  — it filled the disk in the previous window; per-binary foreground chunks are what ran).
+- Report: docs/reports/guard-leaf-press-07.md.
