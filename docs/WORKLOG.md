@@ -36,3 +36,15 @@
   (dd 1.13 > 1.0 [L]) cannot reach the band, so the no-input freeze is the GAME's own behavior
   too; with the door opened the guard flows through and presses his alarm (state 0x8a
   PressAlarm [M 0x168ea8]) — the goal (56.06, 0.01, 42.91) is the alarm node [L the flow run].
+
+## guard-leaf-press-07 (2026-11-11T13:05Z, branch s/guard-leaf-press-07)
+
+- Claimed. Base: origin/s/guard-leaf-pushout 3a660d01c (origin/master already an ancestor —
+  merge no-op). Task: extend the leaf-press law's gate from 07000014 to 07000007 (the slide arm
+  already runs there; the press arm extends the same scan), re-run 07000007's walks and repair
+  any shift gated to its level; pin the door side (during the press, doors.collide_step sees the
+  pressing guard in its contacts, as Door_ReactToHit reads them [M 0x135980]); if both hold, add
+  each further on-foot level the same way, one level per tool call, walks re-run. Real input
+  only, never lower damage or health. Plan: checkpoint push → setup (fresh sandbox: downloads,
+  env) → read guard-leaf-pushout items 1-2 → the 07 press + walks → the door-side pin → further
+  levels → obligated binaries → report.
