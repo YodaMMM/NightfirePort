@@ -87,3 +87,16 @@ leaf re-closing six times against the displaced Bond; the disc's door kind 2 at 
 
 Not visible to me: this environment exposes no token, credit or context-window figures for the
 session.
+
+## ntfy failed
+
+All three fallbacks failed (the sandbox's egress could not reach ntfy.sh — the same limitation
+the 2026-11-11 real-health-00agent-06-8 session hit from this sandbox family, while github.com
+was reachable throughout):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "real-health-00agent-15-5: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds` (exit 28).
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'real-health-00agent-15-5: done', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`.
+3. `wget -q -O- --timeout=15 --post-data "real-health-00agent-15-5: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → exit code 4 (network failure; no output).
