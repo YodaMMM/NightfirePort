@@ -951,6 +951,19 @@ impl Walker {
         }
     }
 
+    /// Clear the stuck ladder's sidestep counter, OPT-IN (los-mask-repins-0c-3: the 0700000c
+    /// real-damage walk's post-#282-ride scope is the only caller). The counter would otherwise
+    /// carry ACROSS the route's direct `step_bond` stretches (the wire grab + the rides never
+    /// decrement it) into the next walk_to leg, whose steering then strafes for |sidestep| ticks
+    /// — a stale LEFT nudge (facing east, strafe −1 = north) swung the post-ride walk 0.84 u
+    /// north of the clean steering path at the same x and Bond walked off the thin band's north
+    /// edge (the measured fall to (6.26,1.13,−221.83) [L the run]; the clean hand-steered path
+    /// from the same landing reaches the same target at (7.117,12.718,−222.412) [L the rd-diag]).
+    /// Default behaviour is unchanged: nothing calls this but the opt-in scope.
+    pub fn reset_sidestep(&mut self) {
+        self.sidestep = 0;
+    }
+
     /// Press E at a nearby door until it opens, then keep walking (no wait — the auto-close is 360
     /// ticks [M Door_Update]; the doorway is straight ahead). E is EDGE-triggerED in the game
     /// (Input_Action mask 4, docs/systems/input.md §+0x12c) and a TOGGLE on doors [M Door_Activate:
