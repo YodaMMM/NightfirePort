@@ -295,3 +295,110 @@ fn the_countdown_leaf_walker_slides_along_the_leaf() {
     assert!(reached_leaf, "the walker never reached the leaf's plane (x 50.82 [L the probe's HitHost]): the leaf-slide law [M 0x140968:204-208] is not applied on this level");
     assert!(slid, "the walker reached the leaf but never slid along it (z stayed at 53.29): the leaf-slide law [M 0x140968:204-208] is not applied on this level");
 }
+
+/// guard-leaf-pushout: the 07000014 leaf press rests IN CONTACT (the game's move-then-pushout
+/// order), and the pressed walker completes his mission once the player opens the door.
+///
+/// The freeze facts [L this round's probe runs]: the Countdown leaf walker (GO_TO_GOAL 0x63,
+/// goal (56.06, 0.01, 42.91) — the ALARM node [M 0x168ea8: the route's reached node enters
+/// PressAlarm 0x8a, the flow run parks him there]) presses the closed 0x1A leaf's west face.
+/// The leaf geometry [L the posed-tri AABB dump]: a double SLIDE door (kind 2), both leaves
+/// hinged at (50.82, 1.19, 52.92); 0x1A covers z 51.66..53.00, its west face x 50.803-50.813;
+/// the twin 0x19 covers z 52.84..54.18 — the doorway seals shut. The game's order [M
+/// Drone_CollisionHandler 0x140968:204-208 — obj+0x30 += the delta BEFORE the contact pass;
+/// Collide_Intersect 0x1ebaa8:353-373 — the pass's DeltaP resolves the capsule]: the body rests
+/// IN CONTACT, the collide sphere radius 0.4 [M NDrone2_Collision 0x140e90:91-93, `+0x45c`]—
+/// i.e. the center at the face minus 0.4 = 50.403. The old reject left it at 50.378 (the probe's
+/// 0.4 overshoot + the step), out of contact — the press the door's own `Door_ReactToHit`
+/// (0x135980) reads from obj+0xD0 never registered. RED on the old code: the walker's pressed
+/// rest x stays <= 50.39; GREEN: it crosses 50.39 (the contact).
+///
+/// The door cannot open by itself [M]: `Door_ReactToHit`'s kind-2 arm reverses a CLOSING leaf
+/// only (a closed one returns); ch_open/ch_lock are 0 [L the door dump]; the route's door node
+/// reach needs dist < 0.4, or 0.4-1.0 with a peer/player on the node [M LinkCreep_AtSpecialNode
+/// 0x159dd0] — the pressed walker stands 1.13 from the node (50.403 vs 51.537, [L]), outside
+/// the band, and no other drone ever comes within 0.4 ([L] the 60 s two-drone log: drone#1
+/// strafes 1.05-3.5 off). So the no-input press is the GAME's own behavior — the pin for the
+/// game-law fix is the press position itself, plus the REAL-PLAY reach: the player's
+/// `Door_Activate` (0x135be0 — the same call the use path makes, both leaves, group 1) opens
+/// the door, and the walker flows through the opening leaves and walks the rest of his route to
+/// the alarm ([L the flow run: x 50.55 → 51.14 → 52.06 …, the route advances idx 5→6→7→8, the
+/// PressAlarm entry at (55.18, 1.00, 44.48), 1.80 from the goal]).
+#[test]
+fn the_countdown_leaf_walker_presses_in_contact_and_reaches_his_goal_once_the_door_opens() {
+    let Ok(mut w) = nf_view::load(&iso(), "07000014.bin", false).map(walker::Walker::new)
+        else { eprintln!("07000014: LOAD FAILED"); return; };
+    assert!(w.wait_enabled(6000, "level start"), "07000014: never enabled");
+    w.wait(120);
+    // The game's own alarm path on every live watching guard: msg 0x1e [M 0x177c18:113-114].
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let difficulty = sim.drones.difficulty;
+        let data = nf_game::drone::Data {
+            tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+            world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+            skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+            hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+            surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty,
+            ai_points: &sim.ai_points,
+        };
+        let frame = sim.drones.frame;
+        for i in 0..sim.drones.list.len() {
+            let d = &sim.drones.list[i];
+            if d.present && d.enabled && !d.corpse && d.watching && d.team != 2 && d.health > 0.0
+                && matches!(d.state, state::IDLE | state::ALERT | state::PATROL) {
+                sim.drones.list[i].send(&data, &mut sim.drones.rng, frame, msg::ALARM);
+            }
+        }
+    }
+    // Phase 1 (t 0..600): the walk to the leaf and the press. Track the pressed rest.
+    let mut found = false;
+    let mut pressed_rest_x = 0.0f32;
+    for t in 0..600u32 {
+        w.tick(Input::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        for d in sim.drones.list.iter() {
+            if !d.present || !d.enabled || d.corpse { continue; }
+            if d.state != state::GO_TO_GOAL { continue; }
+            let Some(g) = d.goal else { continue };
+            if ((g[0] - 56.06).abs() > 0.5) || ((g[2] - 42.91).abs() > 0.5) { continue; }
+            found = true;
+            // The leaf zone [L the sweep row]: once within 0.5 of the leaf plane x 50.82,
+            // the walker's rest x IS the press position.
+            if (d.pos[0] - 50.82).abs() < 0.5 { pressed_rest_x = pressed_rest_x.max(d.pos[0]); }
+        }
+    }
+    assert!(found, "the 07000014 leaf walker (goal (56.06, 0.01, 42.91) [L the sweep row]) never took the alarm in GO_TO_GOAL");
+    // THE PRESS [M 0x140968:204-208 + 0x1ebaa8:353-373, radius 0.4 0x140e90:91-93]: the rest is
+    // IN CONTACT — the center within 0.42 of the face x 50.803-50.813 [L the probe's HitHost],
+    // i.e. x > 50.39. The old reject rested 50.378 (0.435 out) [L the pre-fix probe ledger].
+    assert!(pressed_rest_x > 50.39, "the leaf walker's pressed rest x {:.3} never entered contact (the face 50.803 [L] minus the collide radius 0.4 [M 0x140e90:91-93] = 50.403; the old reject held 50.378) — the move-then-pushout order [M 0x140968:204-208] is not applied", pressed_rest_x);
+    // Phase 2: the player's act — Door_Activate (0x135be0) on both leaves (group 1), then the
+    // walker flows through and walks his route to the alarm [L the flow run].
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        let actors = vec![(sim.bond.pos, 0.4, true)];
+        let mut evs = Vec::new();
+        for di in [25usize, 26] {
+            sim.drones.doors.activate(di, &actors, true, &mut sim.drones.channels, sim.drones.frame, &mut evs);
+        }
+    }
+    let mut crossed = false;
+    let mut at_alarm = false;
+    for _ in 0..1800u32 {
+        w.tick(Input::default(), false);
+        let sim = w.scene.sim.as_ref().unwrap();
+        for d in sim.drones.list.iter() {
+            if !d.present || !d.enabled || d.corpse { continue; }
+            let Some(g) = d.goal else { continue };
+            if ((g[0] - 56.06).abs() > 0.5) || ((g[2] - 42.91).abs() > 0.5) { continue; }
+            if d.pos[0] > 51.3 && (51.0..54.0).contains(&d.pos[2]) { crossed = true; }
+            // The PressAlarm entry park [L the flow run: (55.18, 1.00, 44.48)] — the route's
+            // last node, 1.80 from the alarm spot.
+            if d.state == 0x8a && d.pos[0] > 54.5 && d.pos[2] < 45.5 { at_alarm = true; }
+        }
+        if crossed && at_alarm { break; }
+    }
+    assert!(crossed, "the leaf walker never crossed the opened doorway (x > 51.3) — the opened double door did not free him");
+    assert!(at_alarm, "the leaf walker crossed but never reached his route's end (the PressAlarm park at (55.18, 1.00, 44.48) [L the flow run]) — the goal (56.06, 0.01, 42.91) [L the sweep row] is the alarm node");
+}
