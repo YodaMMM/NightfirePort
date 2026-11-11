@@ -87,3 +87,12 @@ drops Bond, and whether a player walks east off that landing onto the arc.)
 
 not visible to me — this environment shows no token, credit or context-window figures for the
 session (no usage panel is exposed to the agent).
+
+## ntfy failed
+
+All three fallbacks failed (the same outbound-egress wall every prior round recorded):
+
+1. curl: `curl: (28) Connection timed out after 15002 milliseconds`
+2. python3 urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. wget: no response bytes within the timeout (DNS resolved; the TCP connect hung), silent
+   under `-O-` — the same hang the -5 report's wget recorded.
