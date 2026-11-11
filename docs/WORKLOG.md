@@ -95,3 +95,7 @@ ignores" — this round attacked the three ledgered reds.
   and the next lever. 0c/11 ledgers stand. Full suite did not fit (9.9 GB disk, background
   jobs killed); per-binary chunks green: nf_game 782, others 1246, the four walk binaries
   green with their ledgers. Report: docs/reports/pretrans-arms-5.md.
+
+## pretrans-arms-0c-11 (2026-11-11T00:02Z, branch s/pretrans-arms-0c-11)
+
+- Claimed. Base: origin/s/pretrans-arms-5 19f30d481 merged with origin/master 784ba2d99 (the guard-sight walks + the punch walk green; merge conflict resolved: both helper opt-ins kept, the west-sniper brush-past legs kept, master's strip-P2K wrapper for the handoff test). Task: the 0c handoff + east-route ground route green (the wire #282 B-end reach miss, by the ride-release lever in its ignore message) and the 07000011 d3 pocket (the connector-2 mouth stands + the re-ledger from ffe3ed6a5). One level per tool call, per-level walk repairs, no sim changes, helpers gated, real input only, no top-ups. Plan: read pretrans-arms-5 item 4 + pretrans-arms-4 items 5-6; build walkreal_0700000c_live (+ eastroute + barrelrow) and walkreal_07000011_live; reproduce; repair per level; run all touched binaries + nf-game; report; finish.
