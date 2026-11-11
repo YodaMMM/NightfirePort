@@ -2879,46 +2879,57 @@ impl BotBrain {
     /// listed in the report].
     /// Team reads are `MP_getObjectTeam` (0x18b6c0).
     pub fn find_opponent(&mut self, ctx: &BotCtx) {
-        // The hold [M 0x1424e0:355-365]: the current opponent survives only while it is valid
-        // (alive, not a team-mate in the Assassination role shuffle) and the unseen counter is
-        // within FRAME_RATE × aggression_mul × 20 — `BOT_getAggressionMul` 0x126468 (0.3..1.0
-        // by the aggression byte, × up to 3 inside 2.5u) — then it clears and the scan re-picks.
-        // Holding until death kept a carrier chasing an enemy that had broken line of sight
-        // instead of resuming the objective (bot-weapons-finish-2).
+        // The hold [M-dis 0x1426bc-0x1427c0]: the game's MP arm reads the held opponent's CLASS
+        // and every arm then reaches the scan at 0x1427c4 — there is no early return:
+        // - no opponent (0x1426c4 `beqz $a0, 0x1427c0`) or a class-1 opponent (0x1426d4
+        //   `beq $v1, 1, 0x142778`): straight to the scan, the opponent untouched;
+        // - class 2, a drone: the validity check (0x1426e4-0x142738) — invalid joins the clear
+        //   arm; valid runs the hold `+0x274 <= FRAME_RATE×aggression×20` (0x142744-0x142768,
+        //   `0x142770 beqz $v0, 0x1427c4` — within hold: the scan with the opponent kept);
+        // - any other class — the site: class 0x3b (`NDrone2_SetOpponent` 0x1422d0's 0x3b arm)
+        //   — skips the validity check (0x1426dc `bne $v1, 2, 0x142744`) and runs the same
+        //   hold; and the clear arm (0x14277c-0x1427b8) skips IT in the site modes: the class
+        //   test `+0xff − 2 < 2` (0x1427a8 `addiu`/0x1427ac `sltiu`) is false for 0x3b →
+        //   `0x1427b0 beqz $v0, 0x1427c0` — the site is NEVER cleared by the hold.
+        // The port's site opponent is index >= OBJ_ROW — the game's "other class".
         if let Some(i) = self.vars.opponent {
-            // The validity arm is class-gated [M 0x1424e0:357-365]: class 1 clears outright,
-            // class 2 (a drone) runs the alive/enabled check, any OTHER class (the demolition/
-            // protection site pseudo-opponent) skips it. The port's site opponent (index
-            // OBJ_ROW and above, not a ctx.others row) is that other class, and the perception
-            // pass never ticks +0x274 for it — the port keeps it for the goal's lifetime (the
-            // attackers shoot the standing site; bot-weapons-finish-2's hold regressed
-            // demolition/protection and the site-ack chain needs its own task).
-            if i >= OBJ_ROW {
-                return;
-            }
-            let (valid, dist) = if i < OBJ_ROW {
-                let o = ctx.others.get(i);
-                (o.is_some_and(|o| o.alive && o.flags & 8 == 0), o.map(|o| o.dist2.sqrt()))
-            } else {
-                (true, None)
-            };
-            let mut mul = match self.vars.aggression {
-                0 => 0.3,
-                1 => 0.5,
-                2 => 0.7,
-                3 => 0.85,
-                _ => 1.0,
-            };
-            if let Some(d) = dist {
-                if d < 2.5 {
-                    mul = (mul * ((2.5 - d) + 1.0)).min(3.0); // [M 0x126468:22-30]
+            if i < OBJ_ROW {
+                // class 2: the landed validity + hold — the current opponent survives only
+                // while it is valid (alive, not a team-mate in the Assassination role shuffle)
+                // and the unseen counter is within FRAME_RATE × aggression_mul × 20 —
+                // `BOT_getAggressionMul` 0x126468 (0.3..1.0 by the aggression byte, × up to 3
+                // inside 2.5u) — then it clears and the scan re-picks. Holding until death kept
+                // a carrier chasing an enemy that had broken line of sight instead of resuming
+                // the objective (bot-weapons-finish-2).
+                let (valid, dist) = {
+                    let o = ctx.others.get(i);
+                    (o.is_some_and(|o| o.alive && o.flags & 8 == 0), o.map(|o| o.dist2.sqrt()))
+                };
+                let mut mul = match self.vars.aggression {
+                    0 => 0.3,
+                    1 => 0.5,
+                    2 => 0.7,
+                    3 => 0.85,
+                    _ => 1.0,
+                };
+                if let Some(d) = dist {
+                    if d < 2.5 {
+                        mul = (mul * ((2.5 - d) + 1.0)).min(3.0); // [M 0x126468:22-30]
+                    }
+                }
+                let hold = (mul * 20.0) as u32; // FRAME_RATE is 1 at the fixed 60 Hz
+                if !valid || self.vars.unseen_ticks > hold {
+                    self.vars.opponent = None; // NDrone2_SetOpponent(0) [M-dis 0x1427b8]
                 }
             }
-            let hold = (mul * 20.0) as u32; // FRAME_RATE is 1 at the fixed 60 Hz
-            if !valid || self.vars.unseen_ticks > hold {
-                self.vars.opponent = None; // NDrone2_SetOpponent(0) [M 0x1424e0 LAB_0014277c]
-            }
+            // else (the site): within hold → the scan with the site kept [M-dis 0x142770];
+            // beyond hold → the clear arm skips it (site mode, 0x3b − 2 ≥ 2 [M-dis 0x1427b0])
+            // → the scan with the site kept. Either way the scan below runs.
         }
+        // The scan [M-dis 0x1427c4] — unconditional: no path out of the hold block skips it.
+        // (The port's old `if i >= OBJ_ROW { return }` skipped it for site holders: a bot
+        // shooting the site never re-scanned, while the game's does and turns to an opponent
+        // who comes into view — this task's pin.)
         let mut best: Option<(usize, f32)> = None;
         // mp-bot-traits: the 360° bit's reach [M 0x1424e0:364-366 — the score gate is
         // `(row & 4) != 0 || vision_bit` (the seen bit is NOT required with the flag) and the
@@ -2988,8 +2999,14 @@ impl BotBrain {
         // the tail's site arm — its own gate is `site != +0x170`, not "no opponent" [M
         // 0x1424e0:541].
         if let Some((i, _)) = best {
-            if self.vars.opponent != Some(i) && i >= OBJ_ROW {
-                self.vars.unseen_ticks = 0; // the site pick starts its hold fresh
+            if self.vars.opponent != Some(i) {
+                // A changed pick runs `BOT_handleOpponentHistory` → `NDrone2_SetOpponent`
+                // (0x1424e0's LAB_00143034 / the cone-recheck tail; 0x1257c0:92-96): +0x274 :=
+                // 0, +0x270 := 1 — the new opponent's hold starts fresh [M]. (The port's
+                // overwrite-every-scan pick itself stays [*S landed]; the ring-argmax gap is
+                // documented in this fn's doc comment.)
+                self.vars.unseen_ticks = 0;
+                self.vars.seen_ticks = 1;
             }
             self.vars.opponent = Some(i);
         } else {
@@ -3027,6 +3044,11 @@ impl BotBrain {
         if row.flags & 4 == 0 {
             return; // [M :550]
         }
+        // the site pick is a changed pick → the game runs `BOT_handleOpponentHistory(site)`
+        // (0x1424e0:558) whose SetOpponent arm resets +0x274 := 0 and +0x270 := 1
+        // [M 0x1257c0:92-96]
+        self.vars.unseen_ticks = 0;
+        self.vars.seen_ticks = 1;
         self.vars.opponent = Some(OBJ_ROW);
         self.set_goal_complete(1); // the 0x3b self-message [M :551]
     }
@@ -5920,6 +5942,87 @@ mod brain_tests {
         let first = r.brain.vars.opp_history.iter().position(|&e| e == 1).expect("player 0 is in the ring");
         assert_eq!(r.brain.vars.opp_history.iter().filter(|&&e| e == 1).count(), 1, "the later duplicates were pruned");
         assert_eq!(r.brain.vars.opp_history[first], 1, "the first entry of the dead player stays in the ring");
+    }
+
+    /// mp-bot-site-scan: the game's scan runs unconditionally for a bot holding the site —
+    /// `NDrone2_FindOpponent` 0x1424e0's MP arm has no early return between the hold block and
+    /// the scan at 0x1427c4. A held "other class" opponent (the site: class 0x3b per
+    /// `NDrone2_SetOpponent` 0x1422d0's 0x3b arm) skips the validity check
+    /// (`0x1426dc bne $v1, 2, 0x142744`), runs the hold, and reaches the scan within hold
+    /// (`0x142770 beqz $v0, 0x1427c4`) and beyond it (the clear arm skips the site in the site
+    /// modes: `0x1427a8 addiu $v0, $v0, -2` / `0x1427ac sltiu $v0, $v0, 2` false for 0x3b →
+    /// `0x1427b0 beqz $v0, 0x1427c0`). The scan then picks a live opponent row like any bot's
+    /// — the pick lands through `BOT_handleOpponentHistory` 0x1257c0:92-96's SetOpponent arm
+    /// (+0x274 := 0, +0x270 := 1).
+    #[test]
+    fn brain_site_holder_scans_for_opponents() {
+        let mut r = Rig::new();
+        // Demolition: the rig bot (slot 4) is an attacker — teams[4] = 1 against the site's
+        // defenders 0 (the attackers' arm reads `MPSettings+0x420 == 0x20000040 && team == 1`
+        // [M 0x1424e0:520-525]).
+        let site = ObjView {
+            pos: [1.0, 1.6, 0.0],
+            centre: [1.0, 1.6, 0.0],
+            radius: 2.0,
+            min: [0.0, 0.0, 0.0],
+            max: [2.0, 3.0, 2.0],
+            state: 1000,
+            sub: 0,
+            carrier: None,
+        };
+        let mut ob = BotObjectives {
+            scenario: crate::mp::scenario::DEMOLITION,
+            site: Some(site),
+            site_defenders: 0,
+            ..Default::default()
+        };
+        ob.teams[4] = 1; // the rig bot is an attacker
+        // The opponent rows: slot 0 — a live enemy in front of the bot (yaw 0, x +10), the
+        // candidate bit + the seen bit set (the driver's scan pass fills them); slot OBJ_ROW —
+        // the site row the driver pushes (scene.rs: alive, index OBJ_ROW, candidate + seen).
+        let mut others = vec![
+            OtherPlayer { index: 0, pos: [10.0, 1.6, 0.0], alive: true, team: 0, flags: 0x6, dist2: 100.0, health: 100.0, score: 0.0, yaw: 0.0 },
+        ];
+        for i in 1..OBJ_ROW {
+            others.push(OtherPlayer { index: i, pos: [0.0; 3], alive: false, team: 0, flags: 0, dist2: 0.0, health: 0.0, score: 0.0, yaw: 0.0 });
+        }
+        others.push(OtherPlayer { index: OBJ_ROW, pos: site.pos, alive: true, team: 0, flags: 0x6, dist2: 1.0, health: 1000.0, score: 0.0, yaw: 0.0 });
+        let mut ctx = Rig::build_ctx(0.0, &r.pickups, &others, &r.world, false, None);
+        ctx.objectives = Some(&ob);
+
+        // (1) The pin: a site-holding bot with an opponent who comes into view turns to it.
+        r.brain.vars.opponent = Some(OBJ_ROW); // the site is the held opponent
+        r.brain.vars.unseen_ticks = 0; // within the hold
+        r.brain.find_opponent(&ctx);
+        assert_eq!(r.brain.vars.opponent, Some(0),
+            "the site holder's scan picked the live opponent [M-dis 0x142770/0x1427b0 -> 0x1427c4]");
+        assert_eq!(r.brain.vars.unseen_ticks, 0, "+0x274 := 0 on the changed pick [M 0x1257c0:95]");
+        assert_eq!(r.brain.vars.seen_ticks, 1, "+0x270 := 1 on the changed pick [M 0x1257c0:96]");
+
+        // (2) Sister: beyond the hold the clear arm still skips the site (site mode, class
+        // 0x3b − 2 ≥ 2 [M-dis 0x1427b0]) — with no live candidate the held site survives the
+        // whole call (the scan runs, finds nothing, and the site tail's `site != +0x170` gate
+        // [M 0x1424e0:538] keeps it).
+        r.brain.vars.opponent = Some(OBJ_ROW);
+        r.brain.vars.unseen_ticks = 5_000; // beyond any hold
+        others[0].flags = 0x2; // the candidate without the seen bit — and no lazy sight here
+        let ctx2 = Rig::build_ctx(0.0, &r.pickups, &others, &r.world, false, None);
+        let mut ctx2 = ctx2;
+        ctx2.objectives = Some(&ob);
+        r.brain.find_opponent(&ctx2);
+        assert_eq!(r.brain.vars.opponent, Some(OBJ_ROW),
+            "the hold never clears the site [M-dis 0x1427b0]; no pick → the site tail's gate keeps it [M 0x1424e0:538]");
+
+        // (3) Sister: the site pick from an empty opponent — the tail's resets ride
+        // handleOpponentHistory(site) [M 0x1424e0:558, 0x1257c0:92-96].
+        r.brain.vars.opponent = None;
+        r.brain.vars.unseen_ticks = 40;
+        r.brain.vars.seen_ticks = 0;
+        r.brain.find_opponent(&ctx2);
+        assert_eq!(r.brain.vars.opponent, Some(OBJ_ROW), "the site tail picked the site [M 0x1424e0:519-560]");
+        assert_eq!(r.brain.vars.unseen_ticks, 0, "+0x274 := 0 on the site pick [M 0x1257c0:95]");
+        assert_eq!(r.brain.vars.seen_ticks, 1, "+0x270 := 1 on the site pick [M 0x1257c0:96]");
+        assert_eq!(r.brain.vars.goals[1].complete & 1, 1, "the 0x3b self-message landed [M 0x1424e0:557]");
     }
 
     /// `BOT_validateStateChange` 0x124fb0: the impact states and 0xEE are refused (0xEE also
