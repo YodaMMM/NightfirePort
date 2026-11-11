@@ -166,3 +166,32 @@ Branch s/guard-slide-03-01-repairs, from origin/s/guard-slide-gate-sweep + origi
 Goal: 07000003 wedge repair (lane-exit re-take, gated) then 07000001 Agent repair (Mayhew sister
 re-timing per leg, 900-tick step-out, NF_RF_TRACE on the 13556 leg). One level per tool call,
 real input only, no top-ups, never lower damage or health.
+
+## guard-slide-03-01-repairs (2026-11-11)
+Branch s/guard-slide-03-01-repairs (from origin/s/guard-slide-gate-sweep + origin/master merge,
+fast-forward). Setup: repo + work/ + slim ISO (369823203 B) + queue worktree; the ALSA user
+prefix rebuilt (bookworm libasound2 1.2.8-1+b1; the deb's alsa.pc hardcodes libdir=/usr so the
+.pc was patched to the prefix — alsa-sys's build-script output force-refreshed) — nf-audio links
+again.
+- The 07000003 wedge (item 1 of "What is left") DIAGNOSED with the ledger's own first lever
+  (probe_plate_wedge_spot, an #[ignore] probe in walkreal_07000003_live.rs): the parked capsule
+  is NOT a slid guard — no drone within 5 u of (6.35,6.3-7.2,-15.7..-17.7); it is the level's
+  own courtyard POCKET (the 16-ray bullet sweep from inside stops 0.05-0.21 on every side but
+  south; Bond parks grounded-false y 7.02-7.21 AND grounded-true y 6.41-6.61; the A* rides
+  path3's upper-row nodes (10.8/11.28, 9.64) through the band; the mouth walk's A* from the
+  west loot end (3.69,-28.84) parks him, 21 give-ups, then 29 on the plate leg).
+- The lane-exit re-take (off_the_courtyard_obstacle_03, d1-gated, test-local, self-gating on
+  the parked state) landed at the four servant-loop points. TWO attempts measured: v1
+  (east/west episodes) left Bond grounded at (4.34,6.42) but the lane-anchor walk re-funnelled
+  him into the pocket; v2 (south-extract then lane anchor) fired at all four points but Bond
+  was back in the pocket for the next leg each time. The d1 test stays IGNORED with the full
+  ledger + the next three levers (the ground-level exit map, the extraction-anchor shape, the
+  east-lane start gate on the mouth/servant walks).
+- walkreal_07000003_live on the final tree: 5 passed / 0 failed / 4 ignored in 198 s (the d2
+  real_damage + d3 agent sisters green with the helper in the tree [L bin03.out]).
+- The 07000001 Agent repair (item 2: the mayhew per-leg re-time, the 900-tick step-out,
+  NF_RF_TRACE the 13556 leg) NOT STARTED — the window went to the 03 diagnosis/fix rounds; the
+  four-lever ledger on the Agent test's ignore stands as the base branch left it.
+- The full suite (suite.py) did not fit: the fast runner built ~25 min then the sandbox's
+  cargo-lock/disk juggling with the probe rounds killed it twice (nf-audio needed the ALSA fix
+  first); the per-binary chunks (bin03.out; bin01.out if it lands) are the substitute.
