@@ -101,6 +101,10 @@ reload — the top-up sister still pins the 5-round clip law on the same tree). 
 not visible to me — this environment shows no token, credit or context-window figures for the
 session (no usage panel is exposed to the agent).
 
-## ntfy
+## ntfy failed
 
-(pending — filled below after the finish steps run)
+All three fallbacks failed (the same outbound-egress wall every prior round recorded):
+
+1. curl: `curl: (28) Connection timed out after 20001 milliseconds`
+2. python3 urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. wget: rc=124 (killed at the 25 s timeout), 0 bytes written.
