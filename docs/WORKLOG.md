@@ -104,3 +104,7 @@ ignores" — this round attacked the three ledgered reds.
 ## guard1-rounds-0c-repin
 
 Branch `s/guard1-rounds-0c-repin` = origin/s/pretrans-arms-0c-11 7a89b686b (origin/master 784ba2d99 already an ancestor). Task: the guard1_rounds_0700000c_live real-health pin re-pinned. The before/after-sight-merge runs are done ([L]: 823ff190b^ GREEN 11.2 hp, 823ff190b GREEN, master tip GREEN 75.0 hp, the branch RED — the sight merge is innocent); the mover is this branch's own root-motion-zero landing (drone.rs root_zero/aim_run_arm [M]). Now re-pinning the real-health choreography.
+
+## guard1-rounds-0c-repin (2)
+
+The real-health fight is GREEN (guard1_rounds_0700000c_live whole: 2 passed, 0 failed). The re-pin: the ring choreography splits the north-west-corner leg at z -200 (the corner approach) where guard #1's gun rays open at d 3.7 [L the probes] and runs the ring-corner sweep there — the round kills #1 one beat before his doubled-band 27.6 shot (the old order walked the corner leg past him and the stand lost the race at d 1.6). No sim changes; the test file only.
