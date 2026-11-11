@@ -3608,7 +3608,7 @@ impl Drone {
             // cabin panes — the law is the game's on every level; the walks need re-tuning first.
             self.pos = [self.pos[0] + slide[0], self.pos[1], self.pos[2] + slide[1]];
             self.blocked_reach = 0.0;
-        } else if matches!(d.level, 0x0700_0004 | 0x0700_0007 | 0x0700_0009 | 0x0700_000a | 0x0700_000b | 0x0700_000d | 0x0700_0013 | 0x0700_0015 | 0x0700_001b | 0x0700_0041 | 0x0700_0016 | 0x0700_0014) {
+        } else if matches!(d.level, 0x0700_0004 | 0x0700_0007 | 0x0700_0009 | 0x0700_000a | 0x0700_000b | 0x0700_000d | 0x0700_0013 | 0x0700_0015 | 0x0700_001b | 0x0700_0041 | 0x0700_0016 | 0x0700_0002 | 0x0700_0014) {
             // guard-leaf-pushout [M Drone_CollisionHandler 0x140968:204-208 + Collide_Intersect
             // 0x1ebaa8:353-373]: the game's order — the move applies FIRST (obj+0x30 += the delta
             // before the contact pass), then the pass's DeltaP resolves the capsule against what
