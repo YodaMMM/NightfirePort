@@ -354,6 +354,12 @@ fn the_countdown_leaf_walker_presses_in_contact_and_reaches_his_goal_once_the_do
     // Phase 1 (t 0..600): the walk to the leaf and the press. Track the pressed rest.
     let mut found = false;
     let mut pressed_rest_x = 0.0f32;
+    // guard-leaf-press-07 (the door-side pin): during the press, doors.collide_step must see the
+    // pressing guard in door 0x1A's contacts — the obj+0xD0 list Door_ReactToHit (0x135980)
+    // reads — because his capsule rests IN CONTACT under the move-then-pushout order. The
+    // contact's centre is the mover's root pos [M Drones::tick's DoorMover build: centre = x.pos;
+    // Doors::collide_step pushes DoorContact { centre: m.centre } on the capsule-meets-tris hit].
+    let mut press_contact_seen = false;
     for t in 0..600u32 {
         w.tick(Input::default(), false);
         let sim = w.scene.sim.as_ref().unwrap();
@@ -365,7 +371,19 @@ fn the_countdown_leaf_walker_presses_in_contact_and_reaches_his_goal_once_the_do
             found = true;
             // The leaf zone [L the sweep row]: once within 0.5 of the leaf plane x 50.82,
             // the walker's rest x IS the press position.
-            if (d.pos[0] - 50.82).abs() < 0.5 { pressed_rest_x = pressed_rest_x.max(d.pos[0]); }
+            if (d.pos[0] - 50.82).abs() < 0.5 {
+                pressed_rest_x = pressed_rest_x.max(d.pos[0]);
+                if !press_contact_seen
+                    && sim
+                        .drones
+                        .doors
+                        .contact_centres(26)
+                        .iter()
+                        .any(|(c, pl)| !*pl && (c[0] - d.pos[0]).abs() < 0.05 && (c[2] - d.pos[2]).abs() < 0.05)
+                {
+                    press_contact_seen = true;
+                }
+            }
         }
     }
     assert!(found, "the 07000014 leaf walker (goal (56.06, 0.01, 42.91) [L the sweep row]) never took the alarm in GO_TO_GOAL");
@@ -373,6 +391,10 @@ fn the_countdown_leaf_walker_presses_in_contact_and_reaches_his_goal_once_the_do
     // IN CONTACT — the center within 0.42 of the face x 50.803-50.813 [L the probe's HitHost],
     // i.e. x > 50.39. The old reject rested 50.378 (0.435 out) [L the pre-fix probe ledger].
     assert!(pressed_rest_x > 50.39, "the leaf walker's pressed rest x {:.3} never entered contact (the face 50.803 [L] minus the collide radius 0.4 [M 0x140e90:91-93] = 50.403; the old reject held 50.378) — the move-then-pushout order [M 0x140968:204-208] is not applied", pressed_rest_x);
+    // THE DOOR SIDE [M Door_ReactToHit 0x135980 reads obj+0xD0; the collide step's contact push
+    // on the capsule-meets-tris hit]: during the press the pressing guard sits in door 0x1A's
+    // (list index 26) contact list — the door's own react path sees him every press tick.
+    assert!(press_contact_seen, "during the press, door 0x1A's obj+0xD0 contacts never carried the pressing guard (centre = his root pos [M the DoorMover build]) — Door_ReactToHit's read [M 0x135980] would see an empty list");
     // Phase 2: the player's act — Door_Activate (0x135be0) on both leaves (group 1), then the
     // walker flows through and walks his route to the alarm [L the flow run].
     {

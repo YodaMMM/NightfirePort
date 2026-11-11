@@ -401,6 +401,17 @@ impl Doors {
         self.list.iter().map(|d| d.is_closed(&self.group_states)).collect()
     }
 
+    /// This tick's `obj+0xD0` contacts for door `i` — the list `Door_ReactToHit` (0x135980) reads
+    /// at the head of its dispatch: `(centre, is_player)` per contact, exactly as the collide step
+    /// recorded it (the guard's `centre` is his root pos, [M Drones::tick's DoorMover build]).
+    pub fn contact_centres(&self, i: usize) -> Vec<(V3, bool)> {
+        self.contacts
+            .get(i)
+            .map(|cs| cs.iter().map(|c| (c.centre, c.player)).collect())
+            .unwrap_or_default()
+    }
+
+
     /// `Door_Create` over the main map's placements. `path_blocks` is the level's 0x19 payloads (its
     /// `path_blocks()`); `object` resolves a placement to `(glist hashcode, gfx sphere centre, radius)`.
     pub fn create(

@@ -3608,7 +3608,7 @@ impl Drone {
             // cabin panes — the law is the game's on every level; the walks need re-tuning first.
             self.pos = [self.pos[0] + slide[0], self.pos[1], self.pos[2] + slide[1]];
             self.blocked_reach = 0.0;
-        } else if d.level == 0x0700_0014 {
+        } else if matches!(d.level, 0x0700_0007 | 0x0700_0014) {
             // guard-leaf-pushout [M Drone_CollisionHandler 0x140968:204-208 + Collide_Intersect
             // 0x1ebaa8:353-373]: the game's order — the move applies FIRST (obj+0x30 += the delta
             // before the contact pass), then the pass's DeltaP resolves the capsule against what
@@ -3619,8 +3619,10 @@ impl Drone {
             // 0x1A leaf's west face (50.378 vs the face 50.813, [L the probe ledger]) — out of
             // contact, so the press the door's own `Door_ReactToHit` (0x135980) reads from
             // obj+0xD0 never registered. The law is the game's on every level; the set grows one
-            // level at a time with its walks re-run (the door_leaf_slide precedent) — this round:
-            // 07000014 only.
+            // level at a time with its walks re-run (the door_leaf_slide precedent) — 07000014
+            // first (guard-leaf-pushout), 07000007 this round (guard-leaf-press-07: its slide
+            // arm already runs there, and this press arm extends the same scan — the pure-face
+            // case the tangent scan leaves; walkreal_07000007_live re-run whole on this tree).
             match self.leaf_press_rest(d, step) {
                 Some(rest) => {
                     self.pos = rest;
