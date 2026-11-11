@@ -107,3 +107,14 @@ visual/rendering change was made (walk-file fight-order and loot-order logic onl
 
 not visible to me — this environment shows no token, credit or context-window figures for the
 session (no usage panel is exposed to the agent).
+
+## ntfy failed
+
+All three fallbacks failed (the same outbound-egress wall every prior round recorded):
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds`
+2. python3 urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+   (first attempt: `SyntaxError: bytes can only contain ASCII literal characters` on the
+   em-dash in the body — retried with an ASCII body, then the network error above)
+3. wget: no response bytes within the timeout, silent under `-O-` (DNS resolved; the TCP
+   connect hung) — the same hang the 0c-11 report's wget recorded.
