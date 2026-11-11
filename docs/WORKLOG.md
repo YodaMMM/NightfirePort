@@ -264,3 +264,12 @@ un-ignore it; real input only, never lower damage or health, no top-ups, helpers
   master's). The fast suite died twice on disk (0 bytes free at the linker, Bus error) — next
   window runs it first after freeing the 1.2 GB browser caches. Report:
   docs/reports/walker-sidestep-decay.md.
+- level-0b-dome-wire-sisters (07:28) Branch cut from origin/s/walker-sidestep-decay cb992a3bd
+  (master already merged in upstream — "Already up to date"). Report read: the four 0b
+  real-damage sisters are RED at the dome-wire crossing (dead t16013 at (-12.55,57.89,12.62),
+  39 x -2.40 zaps = 93.6/100); lever = re-time the crossing against the fusebox windows on the
+  decayed ladder (the 0b-diag block prints the world-hit ledger + fusebox wire states). Plan:
+  setup (work-slim + ISO downloads), build the 0b binary, read the diag output walk by walk
+  (one tool call per walk), re-time the crossing level-gated, remove the temp diagnostics
+  before the final commit, run the whole 0b binary + interactables_0700000b_live, nf-game,
+  suite if disk permits.
