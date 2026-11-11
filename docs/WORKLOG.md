@@ -245,3 +245,11 @@ un-ignore it; real input only, never lower damage or health, no top-ups, helpers
   resets when a ride or grab scope begins or ends. Walker-only, no sim changes. Plan: read both
   reports; reproduce; land the walker change; run every walkreal_*_live one level per tool
   call, repair shifts gated to level; nf-game; suite; report; finish.
+- (06:08) Setup: repo/work/ISO/nf-queue present; branch cut from master 784ba2d99 + both
+  los-mask merges done (WORKLOG conflict resolved keeping both sides). Both reports read: the
+  stale carry is walker_b2's stuck-ladder nudge surviving the ride/grab step_bond stretches
+  (0c: the post-#282 leg strafed 0.84 u north off the band; 12: sidestep -753 pinned the
+  crossing leg). Plan: decay default-on (signum) + resets at the ride/grab scope boundaries
+  (walker_b2's Act::WireRide/Act::Ladder AND walkreal0c's three direct wire loops), delete
+  both level patches, red-proof the patches first (neutralize → the two walks fail), then
+  battery + nf-game + suite on the final tree.
