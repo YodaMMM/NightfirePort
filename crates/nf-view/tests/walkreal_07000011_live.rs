@@ -92,6 +92,25 @@ fn loot_the_drops_up_to(w: &mut Walker, label: &str, up: f32) {
     w.switch_to_armed(label); // anything armed beats the fists
 }
 
+/// The d3 pocket census (this task's measuring instrument): Bond's pool + every live drone in
+/// 16 u, awake or not — the ledger's indices moved on this tree (its #36 is here a top-floor
+/// drone at (19.74, 46.58) [L the base run's stuck dump]), so the pocket is re-measured by
+/// position, not by the old numbers. eprintln only — no assertion rests on it.
+fn d3_census(w: &Walker, label: &str) {
+    let sim = w.scene.sim.as_ref().unwrap();
+    let b = sim.bond.pos;
+    eprintln!("[011] d3 {label}: bond ({:.2},{:.2},{:.2}) health {:.1} armour {:.1} clip {} spare {}",
+        b[0], b[1], b[2], sim.drones.health.health, sim.drones.health.armour,
+        sim.gun.clip, sim.gun.spare);
+    for (i, d) in sim.drones.list.iter().enumerate() {
+        if d.present && !d.corpse && d.health > 0.0 && walker::dxz(d.pos, b) < 16.0 {
+            eprintln!("[011]   #{i} pl{} ({:.2},{:.2},{:.2}) hp {:.0} w {:#x} en {} st {:#x} d {:.1}",
+                d.placement, d.pos[0], d.pos[1], d.pos[2], d.health, d.weapon,
+                d.enabled as u8, d.state, walker::dxz(d.pos, b));
+        }
+    }
+}
+
 /// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent / 3 00
 /// Agent ride the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
 fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
@@ -492,14 +511,6 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     w.walk_to(Wp::new(23.0, 27.4, 3.8).r(1.0), "the east connector down (31.1→27.1)");
     band(&w, 26.4, 29.5, "connector 1's bottom");
     w.walk_to(Wp::new(15.0, 27.4, 4.8).r(1.0), "the south strip 27.1 west");
-    if difficulty == 3 {
-        // los-mask-join (00 Agent): the 27.1 take climbed back up connector 1 after a drop
-        // lying on its treads (Bond wedged at y 30.3 over the 29.0 floor, 6000 ticks [L the
-        // masked run]). A player descending scoops at his feet — the 18.9 strip's rule.
-        loot_the_drops_floor(&mut w, "the 27.1 strip");
-    } else {
-        loot_the_drops(&mut w, "the 27.1 strip");
-    }
     if difficulty >= 3 {
         // capsule-join (00 Agent): measured from the 27.1 strip's west end before the descent
         // (Bond at (15.9, 28.2, 4.7)): the 23.0 strip's #33/#34 (CombatNoSight 0x5c at
@@ -510,6 +521,12 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
         // the flight's mouth, where they are exposed and he is above them, then any pursuer he
         // can see, before he goes down. Live guards only (the WaitForSwitch 0x1 placements at the
         // foot are not yet enabled), nearest-below first, a bounded stand each.
+        // (level-11-d3-pocket: the stands moved BEFORE the 27.1 loot — the base run's
+        // loot-first order toured east under the crossfire (Bond 80/50 → 80/8 across the strip
+        // [L the base run]) and its last hop left him on the connector-1 mouth lip
+        // (22.57, 28.69, 3.18), from which the flight-B leg climbed the connector and wedged at
+        // (22.40, 31.99, −1.01) grounded=false on cel 128, 6000 ticks [L the base run]. A player
+        // answers the guns he can see before he scoops.)
         for _ in 0..6 {
             let g = {
                 let sim = w.scene.sim.as_ref().unwrap();
@@ -525,6 +542,22 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
             let Some(g) = g else { break };
             if !w.shoot_bounded(g, &format!("flight B's mouth guard {g}"), 600) { break; }
         }
+        if difficulty == 3 {
+            // los-mask-join (00 Agent): the 27.1 take climbed back up connector 1 after a drop
+            // lying on its treads (Bond wedged at y 30.3 over the 29.0 floor, 6000 ticks [L the
+            // masked run]). A player descending scoops at his feet — the 18.9 strip's rule.
+            loot_the_drops_floor(&mut w, "the 27.1 strip");
+            // The tour's last hop can leave Bond ON the connector mouth's lip (+0.5 over the
+            // strip floor, measured (22.57, 28.69, 3.18) [L the base run]) — from there the
+            // flight-B steer climbed connector 1 and wedged. A player steps back down onto the
+            // strip and walks its floor west to the flight head.
+            if w.scene.sim.as_ref().unwrap().bond.pos[1] > 28.5 {
+                w.walk_nav_to([19.0, 28.2, 4.6], "back onto the 27.1 strip off the connector mouth", 1.0);
+                d3_census(&w, "back on the 27.1 strip");
+            }
+        }
+    } else {
+        loot_the_drops(&mut w, "the 27.1 strip");
     }
     // The mouth stands' own repositioning can carry Bond down the flight and east along the
     // 23.0 strip (measured: (22.40, 23.23, −0.26) — the strip's east end, where the straight
@@ -537,6 +570,36 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
         w.walk_nav_to([22.4, 23.2, -3.0], "back onto the 23.0 strip after the mouth fights", 1.0);
     }
     band(&w, 22.4, 25.0, "flight B's bottom");
+    if difficulty >= 3 {
+        // level-11-d3-pocket: answer the chasers BEFORE crossing the strip. The connector-1
+        // pair (#26/#27, pl222/223) sleeps at the 27.1 strip's east end while the flight-B
+        // mouth stands run ([L the run3 census: both en 0 st 0x1 at (22.85-23.15, 28.05)]) and
+        // wakes mid-descent — run3's stands then fought a five-way crossfire (the pair chased
+        // down flight B and along the strip; #26 shot from (18.7, 24.0, −2.7) through all five
+        // mouth stands, 23.5 of the 100.0 death) [L the run3 death]. A player who just took a
+        // flight under fire turns and clears it before he crosses the open strip: the visible
+        // live guards ABOVE him (up the flight he just descended), nearest-3D first, a bounded
+        // stand each — the same law as the flight-B mouth stands, pointed up-flight.
+        for _ in 0..6 {
+            let g = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let b = sim.bond.pos;
+                sim.drones.list.iter().enumerate()
+                    .filter(|&(i, d)| d.team == 1 && d.present && d.enabled && !d.corpse && d.health > 0.0
+                        && d.state != nf_game::drone::state::WAIT_SWITCH
+                        && walker::dxz(d.pos, b) < 14.0 && d.pos[1] - b[1] > 0.5 && d.pos[1] - b[1] < 8.0
+                        // the free-hit band: never stand-duel inside it [M 0x179740:113-115]
+                        && walker::dxz(d.pos, b).hypot(d.pos[1] - b[1]) > 3.2
+                        && walker::DamageLog::visible(sim, i))
+                    .min_by(|x, y| walker::dxz(x.1.pos, b).hypot(x.1.pos[1] - b[1]).partial_cmp(
+                        &walker::dxz(y.1.pos, b).hypot(y.1.pos[1] - b[1])).unwrap())
+                    .map(|(i, _)| i)
+            };
+            let Some(g) = g else { break };
+            w.shoot_bounded(g, &format!("flight B's bottom chaser {g}"), 900);
+        }
+        w.reload_full();
+    }
     w.walk_to(Wp::new(22.4, 23.2, -3.0).r(1.0), "the north strip 23.0 east");
     // capsule-join-5: the 23.0 strip takes the drops at Bond's FEET (loot_the_drops_floor, the
     // 18.9 strip's rule): the |dy| < 1.5 band ratcheted him back up flight B one take at a time
@@ -550,6 +613,7 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
         w.walk_nav_to([22.4, 23.2, -3.0], "back along the 23.0 strip", 1.0);
     }
     if difficulty >= 3 {
+        d3_census(&w, "the 23.0 strip east end, before the connector-2 mouth stands");
         // pretrans-arms-5 (the IsOpponent under-0.9 no-turn fix moved the fights): the 18.9
         // strip's east pocket holds the connector guard #18/#19 (weapon 0x19) at (22.1,19.9,4.1).
         // Taken from the connector BOTTOM he is already inside the free-hit band (the first
@@ -559,7 +623,14 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
         // east end, y 23.2) he is ~7.9 u in 3D — outside the band. The flight-B mouth pattern:
         // the visible live guards nearest-below first, a bounded stand each, before the descent.
         // d3-gated — the d1/d2 sisters' timelines stay as they passed.
-        for _ in 0..4 {
+        // (level-11-d3-pocket: the base run's stands broke EARLY — a 300-tick cap expiry
+        // returns false and the loop broke with clip 0 spare 90, leaving #19/#26/#36 live on a
+        // dry descent [L the run2 census: #36 the abseiler hung at (19.74, 24.65) d 3.7, #19
+        // climbed to d 2.8, #26 chased from d 8.4; death t8643]. A player reloads — the spare
+        // was 90 — and keeps shooting until the threat drops: the cap is a wedge-guard, not a
+        // give-up law, so each attempt gets 900 ticks and the loop moves to the next visible
+        // guard even when one attempt caps.)
+        for _ in 0..6 {
             let g = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let b = sim.bond.pos;
@@ -577,11 +648,16 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
                     .map(|(i, _)| i)
             };
             let Some(g) = g else { break };
-            if !w.shoot_bounded(g, &format!("connector 2's mouth guard {g}"), 300) { break; }
+            w.shoot_bounded(g, &format!("connector 2's mouth guard {g}"), 900);
         }
+        // A player reloads before he drops into the next flight (the run2 descent fired DRY —
+        // clip 0 spare 90 — while #26/#19/#36 shot from three sides [L the run2 death]).
+        w.reload_full();
+        d3_census(&w, "after the connector-2 mouth stands");
     }
     w.walk_to(Wp::new(23.0, 19.3, 3.8).r(1.0), "the east connector down (23.0→18.9)");
     band(&w, 18.2, 21.3, "connector 2's bottom");
+    d3_census(&w, "connector 2's bottom");
     w.walk_to(Wp::new(15.0, 19.2, 4.8).r(1.0), "the south strip 18.9 west");
     // The strip's return-fire fights (#13/#14 on the d1 walk with the game's sight round robin
     // and the own-cel boundary push) can turn Bond onto the flight-B foot; the straight leg
@@ -591,6 +667,7 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
         w.walk_nav_to([15.0, 19.2, 4.8], "back down onto the 18.9 strip", 1.0);
     }
     loot_the_drops_floor(&mut w, "the 18.9 strip");
+    if difficulty >= 3 { d3_census(&w, "the 18.9 strip after the loot"); }
     // A drop can lie at the strip's east end: back to the flight head before the descent.
     w.walk_to(Wp::new(15.0, 19.2, 4.8).r(1.0), "back along the 18.9 strip");
     w.walk_to(Wp::new(14.8, 15.4, -2.6).r(1.0), "the west flight A down (18.9→15.0)");
@@ -869,13 +946,36 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage_agent() {
 /// mouth, from the 23.0 strip's east end) took #18/#19/#26 at 7.4-10.7 u but the pocket
 /// crossfire during the stands drained the last 21 — the 8105 run died at the descent with
 /// health 1.0 at the connector bottom; the y-then-dxz→nearest-3D order fix and the 3.2-u band
-/// floor each moved the death later, none green [L the three runs]. Next lever: thin the pocket
-/// BEFORE it wakes (a stand from the 23.0 strip's north window on the #18/#19 pair as they file
-/// up the connector), or diet the upstream 27.1-strip crossfire (Bond 29.0 → 22.0 across its
-/// loot [L the run]) so the descent starts with the ~40 the pre-fix tree had.
-#[ignore = "pretrans-arms-5: the IsOpponent under-0.9 no-turn fix [M 0x178ae0:34-36] moved the d3 fights — Bond reaches the 23.0 strip east end at 22.0 hp (merge tree without the fix: 1 passed [L the bisect run]) and the 18.9 pocket (guards #18/#19/#26 12 hp, #36 9, weapon 0x19) finishes him in the <3.0-u free-hit band [M 0x179740:113-115] at the connector bottom; the connector-top mouth stands took #18/#19/#26 at 7.4-10.7 u but the pocket crossfire during the stands drained the last 21 (the 8105 run: health 1.0 at the connector bottom); the nearest-3D order and the 3.2-u band floor each moved the death later, none green [L three runs]; next lever: thin the pocket before it wakes (a stand from the 23.0 strip's north window on #18/#19 filing up), or diet the upstream 27.1-strip crossfire (29.0 → 22.0 across its loot) so the descent starts with the ~40 the pre-fix tree had"]
+/// floor each moved the death later, none green [L the three runs].
+///
+/// UN-IGNORED (level-11-d3-pocket, 2026-11-11): GREEN — both ledger levers landed, all
+/// walk-file code d3-gated (the d1/d2 sisters and every other walk keep master's paths
+/// byte-for-byte). The pocket re-measured on this tree [L the run2/run3 censuses]: the
+/// ledger's indices moved (its #36 is here the pl280 ABSEILER, roped down the well to
+/// (19.74, 24.65) mid-stands), the #18/#19 pair is pl171/172 (the flight-A-top pair filing
+/// EAST along the 18.9 strip to climb connector 2 — the "north window" pair), and the
+/// upstream threat is the pl222/223 connector-1 pair, which SLEEPS at the 27.1 strip's east
+/// end while the flight-B mouth stands run and wakes mid-descent to chase down flight B and
+/// along the strip. The levers, in the task's order:
+///   1. the 27.1-strip crossfire cut (the descent's diet): the capsule-join mouth stands moved
+///      BEFORE the 27.1 loot (the base run's loot-first order toured east under the crossfire
+///      and its last hop left Bond on the connector-1 mouth lip (22.57, 28.69, 3.18), from
+///      which the flight-B leg climbed the connector and wedged at (22.40, 31.99, −1.01)
+///      grounded=false, 6000 ticks [L the base run]), plus the off-strip back-along leg — the
+///      strip crossed at health 80.0 → 80.0 (the ledger's 29.0 → 22.0: gone; the fights'
+///      bleed lands on the armour, 50 → 8 [L the run3 census]).
+///   2. the pocket thinned BEFORE the descent: (a) the flight-B bottom answer — the visible
+///      live chasers ABOVE Bond (the freshly woken pl222/223 pair on the flight he just took)
+///      answered nearest-3D-first from the flight's foot before the strip is crossed [L the
+///      run4: #27 at d 8.0 and #26 at 7.7, both dead there]; (b) the connector-2 mouth stands
+///      fixed — the 300-tick cap expiry returned false and the loop broke DRY (clip 0 spare
+///      90 [L the run2 death at t8643]); each attempt now gets 900 ticks, the loop moves to
+///      the next visible guard when one caps, and a player reloads before he drops in (the
+///      stands fought all five converging guards — #18/#27/#19/#36/#26 — with reloads, killed
+///      four [L the run3 stand log]); the descent then ran clean (21.5 hp at connector 2's
+///      bottom, 21.5 at the 18.9 strip, clip 30 spare 90 [L the run4 censuses]) and the whole
+///      chain (the Load Point exit → the real 07000012 load → 4A) passed.
 #[test]
-#[ignore = "los-mask-repins-11: Bond reaches the 18.9 strip at 46 health and dies at tick 19894 to #19 and #36 (weapon 0x19) at 2.6-5.6 u"]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage_00agent() {
     walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||
