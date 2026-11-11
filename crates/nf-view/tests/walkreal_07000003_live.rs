@@ -1309,3 +1309,233 @@ fn probe_door8_cluster_load_state() {
         }
     }
 }
+
+/// The 0x50-servant enable-plate approach's WEDGE probe (guard-slide-03-01-repairs; run with
+/// `--ignored --nocapture`): the guard-slide-sweep ledger's first lever. The ledgered wedge:
+/// 12+ navs give up at the 3000-tick cap at bond (6.35, 6.3-7.2, −15.7..−17.7) with the 0x25
+/// plate the target, grounded toggling y 6.29<->7.21 — "Bond repeatedly steps onto and falls
+/// off something parked at that spot". This probe runs the d1 route's legs verbatim and dumps
+/// around the wedge spot:
+///   A — after the east lane legs (is the parked capsule there BEFORE the servant loop?);
+///   B — after the 0x25 plate approach gives up (the wedged state);
+///   C — the nav nodes within 8 of the spot (the waypoints audit) + the world triangles within
+///       the spot's box + a 16-ray bullet sweep at knee height (what the rays hit names the
+///       blocker's shape).
+#[test]
+#[ignore = "probe: dump the wedge spot's state around the 0x25 plate approach"]
+fn probe_plate_wedge_spot() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000003.bin", false).expect("load 07000003"));
+    w.prefer_head = true;
+    w.keep_off = Some(4.0);
+    w.dmg.back_off = Some(4.0);
+    let (li, _o0, _o1, _o2) = mission_row();
+    let _ = li;
+    w.wait(60);
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4d), "the spawn reveal [D]");
+    let servants: Vec<(usize, [f32; 3], u8)> = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        sim.drones.list.iter().enumerate()
+            .filter(|(_, d)| d.skin & 0xffff == 0x2b && d.team == 3)
+            .map(|(i, d)| (i, d.pos, d.second_channel)).collect()
+    };
+    assert_eq!(servants.len(), 3, "three protected servants [D the dump]");
+    w.keep_alive = servants.iter().map(|(i, _, _)| *i).collect();
+
+    w.walk_nav_to([0.0f32, 5.9, -20.0], "courtyard east", 1.6);
+    lane_doors_south(&mut w, "the lane doors south");
+    cross_lane_doors(&mut w, true, "mid courtyard");
+    w.walk_nav_to([13.0, 5.9, -18.0], "mid courtyard", 1.6);
+    let plate0x25 = w.scene.sim.as_ref().unwrap().drones.triggers.iter()
+        .find(|t| t.kind == walker::trigger_kind::TOUCH_ONCE && t.out == 0x25).map(|t| t.centre())
+        .expect("servant #388's enable plate");
+    let lane_door = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
+        .position(|d| walker::dxz(d.pos, [11.83, 6.45, -20.23]) < 0.5)
+        .expect("the lane door at (11.83,6.45,-20.23)");
+    let mut on_lane = false;
+    for attempt in 0..3 {
+        w.use_door(lane_door, "the lane doors");
+        if attempt > 0 {
+            let blockers: Vec<usize> = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.present && !d.corpse && d.health > 0.0 && d.team != 3
+                        && walker::dxz(d.pos, [10.9, 6.4, -20.2]) < 3.0)
+                    .map(|(i, _)| i).collect()
+            };
+            for gi in blockers { w.shoot(gi, "the guard in the lane doorway"); }
+        }
+        cross_lane_doors(&mut w, false, "the lane");
+        w.lenient = true;
+        let got = w.walk_to(Wp { at: [10.65, 5.81, -21.62], act: Act::None, arrive: 1.2 }, "the lane north");
+        w.lenient = false;
+        if got != u32::MAX { on_lane = true; break; }
+    }
+    assert!(on_lane, "the lane north never reached (the doorway held)");
+    for (name, at) in [
+        ("the lane south", [10.41f32, 6.08, -28.74]),
+        ("the moat east", [9.95, 5.84, -34.41]),
+        ("along the moat west", [6.87, 5.84, -33.47]),
+        ("the moat west end", [2.08, 5.30, -33.39]),
+        ("west lawn", [0.0, 5.9, -30.0]),
+        ("the west lane", [1.0, 5.9, -33.0]),
+        ("gate plate lawn", [11.0, 5.9, -35.0]),
+    ] {
+        w.walk_nav_to(at, name, 1.6);
+    }
+    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x21),
+        "the west-lane approach stands inside the west 0x21 plate's footprint [D lo/hi]");
+    w.lenient = true;
+    for (name, at) in [
+        ("the east lane south", [10.05f32, 6.56, -31.87]),
+        ("the east lane", [10.27, 6.65, -30.01]),
+        ("the east lane north", [10.59, 6.47, -22.91]),
+    ] {
+        clear_near(&mut w, 8.0, name);
+        w.lenient = true;
+        let mut got = w.walk_to(Wp { at, act: Act::None, arrive: 1.0 }, name);
+        if got == u32::MAX {
+            let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+            for (side, sname) in [(1.0f32, "east"), (-1.0f32, "west")] {
+                let to = [bp[0] + side * 2.5, bp[1], bp[2] + side * 1.5];
+                w.walk_nav_to(to, &format!("{name}: the moat sidestep {sname} (the wedged nav's ladder)"), 1.2);
+                w.lenient = true;
+                got = w.walk_to(Wp { at, act: Act::None, arrive: 1.0 }, &format!("{name} (after the {sname} sidestep)"));
+                if got != u32::MAX { break; }
+            }
+            if got == u32::MAX {
+                eprintln!("[03] {name}: both sidesteps wedged — skipping the anchor, the next leg re-derives the path");
+            }
+        }
+    }
+    w.lenient = false;
+
+    let spot = [6.35f32, 6.5f32, -16.7f32];
+    let dump_drones = |w: &Walker, tag: &str| {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let b = sim.bond.pos;
+        eprintln!("[03-wedge {tag}] t{} bond at ({:.3},{:.3},{:.3}) grounded {} substate {:#x} health {:.1}",
+            w.total_ticks, b[0], b[1], b[2], sim.bond.grounded, sim.bond.substate, sim.bond.health);
+        for (i, d) in sim.drones.list.iter().enumerate() {
+            if walker::dxz(d.pos, spot) < 10.0 && d.present {
+                eprintln!("[03-wedge {tag}] drone #{i} skin {:#x} team {} at ({:.2},{:.2},{:.2}) present {} corpse {} enabled {} state {:#x} hp {:.1} weapon {:#x} on {} switch {:?} second {:#x}",
+                    d.skin, d.team, d.pos[0], d.pos[1], d.pos[2], d.present, d.corpse, d.enabled,
+                    d.state, d.health, d.weapon, d.channel_on, d.switch_channel, d.second_channel);
+            }
+        }
+    };
+    dump_drones(&w, "A after the east lane legs");
+
+    // The servant loop, verbatim from the d1 walk (the d>=2 arms off at difficulty 1).
+    for (plate, want_ch) in [(None, 0x4fu8), (Some(plate0x25), 0x50u8)] {
+        let (si, at, rescue_ch) = *servants.iter().find(|(_, _, ch)| *ch == want_ch)
+            .unwrap_or_else(|| panic!("the servant carrying {want_ch:#x} [D p6]"));
+        if let Some(plate) = plate {
+            eprintln!("[03-wedge] === the {want_ch:#x} plate approach starts from bond {:?} ===",
+                w.scene.sim.as_ref().unwrap().bond.pos);
+            dump_drones(&w, "B0 before the plate walk");
+            w.walk_nav_to(plate, &format!("onto the {want_ch:#x}-servant's enable plate"), 1.8);
+            dump_drones(&w, "B1 after the plate walk");
+            if !w.scene.sim.as_ref().unwrap().drones.channels.on(0x25) {
+                let blockers: Vec<usize> = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    sim.drones.list.iter().enumerate()
+                        .filter(|(_, d)| d.present && !d.corpse && d.health > 0.0 && d.team != 3
+                            && ((d.pos[0] - 20.9).powi(2) + (d.pos[2] + 20.25).powi(2)).sqrt() < 3.0)
+                        .map(|(i, _)| i).collect()
+                };
+                for gi in blockers {
+                    w.shoot(gi, "the guard in the 0x25 doorway");
+                }
+                w.walk_nav_to(plate, &format!("onto the {want_ch:#x}-servant's enable plate (again)"), 1.8);
+                dump_drones(&w, "B2 after the plate re-walk");
+            }
+        }
+        w.wait(10);
+        clear_near(&mut w, 9.0, "the servants' ground");
+        loot_the_drops_03(&mut w, "the servants' ground");
+        {
+            let cluster_alive = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                sim.drones.list.iter().any(|d| {
+                    d.team == 1 && !d.corpse && d.health > 0.0
+                        && walker::dxz(d.pos, [31.9f32, 6.25f32, -9.4f32]) < 8.0
+                })
+            };
+            if cluster_alive {
+                w.walk_nav_to([35.6f32, 6.4f32, 3.4f32], "the door-8 mouth (the cluster holds)", 1.0);
+                for round in 0..5 {
+                    w.wait(90);
+                    let at_pocket = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        sim.drones.list.iter().filter(|d| d.team == 1 && !d.corpse && d.health > 0.0
+                            && walker::dxz(d.pos, [38.7f32, 6.2f32, 0.2f32]) < 7.0).count()
+                    };
+                    clear_near(&mut w, 9.0, "the door-8 mouth");
+                    if at_pocket == 0 && round >= 1 { break; }
+                }
+            }
+        }
+        let in_servant_room = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            walker::dxz(sim.bond.pos, at) < 10.0
+        };
+        let _ = in_servant_room;
+        w.walk_nav_to([at[0], at[1] - 0.3, at[2]], &format!("servant {si}"), 1.7);
+        // The rescue: the servant's own captor link (the real save path), killed with real fire.
+        let (captor, ch_on) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (sim.drones.list[si].captor, sim.drones.channels.on(rescue_ch as u32))
+        };
+        if !ch_on {
+            if let Some(ci) = captor {
+                eprintln!("[03-wedge] servant {si}'s captor #{ci} pre-clear");
+                w.shoot(ci, &format!("servant {si}'s captor"));
+                for round in 0..4 {
+                    let gone = w.scene.sim.as_ref().unwrap().drones.list[ci].corpse
+                        || w.scene.sim.as_ref().unwrap().drones.list[ci].health <= 0.0;
+                    if gone { break; }
+                    let cpos = w.scene.sim.as_ref().unwrap().drones.list[ci].pos;
+                    w.walk_nav_to(cpos, &format!("onto servant {si}'s captor (chase {round})"), 3.5);
+                    w.shoot(ci, &format!("servant {si}'s captor (chase {round})"));
+                }
+            } else {
+                eprintln!("[03-wedge] servant {si}: no captor bound (ch {rescue_ch:#x} off)");
+            }
+        } else {
+            eprintln!("[03-wedge] servant {si}: ch {rescue_ch:#x} already on (saved earlier)");
+        }
+        w.wait(30);
+    }
+
+    // C: the waypoints audit + the world's own answer at the wedge spot.
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[03-wedge C] nav nodes within 8 of the wedge spot:");
+    for (pi, path) in sim.nav.paths.iter().enumerate() {
+        for (ni, n) in path.nodes.iter().enumerate() {
+            if walker::dxz(n.pos, spot) < 8.0 {
+                eprintln!("[03-wedge C] nav path{pi} node{ni} at ({:.2},{:.2},{:.2})", n.pos[0], n.pos[1], n.pos[2]);
+            }
+        }
+    }
+    let lo = [spot[0] - 3.0, spot[1] - 2.5, spot[2] - 3.5];
+    let hi = [spot[0] + 3.0, spot[1] + 2.5, spot[2] + 3.5];
+    let all = sim.world.tris_near(lo, hi);
+    let dyn_t = sim.world.dynamic_tris_near(lo, hi);
+    eprintln!("[03-wedge C] {} tris ({} dynamic) in the spot box", all.len(), dyn_t.len());
+    for (k, t) in dyn_t.iter().enumerate().take(30) {
+        let c = [(t[0][0] + t[1][0] + t[2][0]) / 3.0, (t[0][1] + t[1][1] + t[2][1]) / 3.0, (t[0][2] + t[1][2] + t[2][2]) / 3.0];
+        eprintln!("[03-wedge C] dyn t{k} c ({:.2},{:.2},{:.2})", c[0], c[1], c[2]);
+    }
+    let b = sim.bond.pos;
+    let eye = [b[0], b[1] + 1.0, b[2]];
+    let mut sweep = String::new();
+    for k in 0..16 {
+        let az = k as f32 * std::f32::consts::TAU / 16.0;
+        let far = [eye[0] + az.sin() * 12.0, eye[1], eye[2] + az.cos() * 12.0];
+        let t = sim.world.segment_bullet(eye, far).unwrap_or(1.0);
+        sweep.push_str(&format!("az{:.2}:t{:.2} ", az, t));
+    }
+    let tup = sim.world.segment_bullet(eye, [eye[0], eye[1] + 8.0, eye[2]]).unwrap_or(1.0);
+    eprintln!("[03-wedge C] bond eye ({:.1},{:.1},{:.1}) UP t{tup:.2} sweep {sweep}", eye[0], eye[1], eye[2]);
+}
