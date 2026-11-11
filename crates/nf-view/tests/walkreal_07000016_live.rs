@@ -870,13 +870,42 @@ fn clear_hostiles_16(w: &mut Walker, radius: f32, cap: u32) {
 fn answer_the_gallery_from_the_ring(w: &mut Walker) {
     for _ in 0..4 {
         // A dry stand is pure loss (the measured ring-1 stands stood 237 ticks "shooting"
-        // clip 0 spare 0 while #5 poured 4.2 a hit [L the d2 2548 trace]): restock before
-        // every stand — the fights' drops lie on the walked ring (the walk-over take
-        // [M Pickup_Handler 0x18e650] files them), then cycle to the deepest gun.
+        // clip 0 spare 0 while #5 poured 4.2 a hit [L the d2 2548 trace]): cycle to the
+        // deepest gun FIRST — the check is free when the held gun already qualifies — and
+        // only then walk the drops (the measured d3 1148 death stood the resupply WALK
+        // under #2's 7.0-a-hit plink: the 20-threshold resupply strolled 5 u to a drop
+        // while the fights' own kills lay on the walked ring, dead on its return).
+        // The ring fights run 7-40 u: the clear's own law — a player takes them with the
+        // P2K, not the Delta Repeater the chain hands over (the Delta's bolts fly a gravity
+        // arc: a bolt aimed level at 19.7 u fell 0.75 u under the guard's feet, twelve of
+        // them — the whole carry — missed while the gallery pair poured [L the clear's
+        // measured stream]).
+        switch_off_the_delta(w);
+        switch_to_a_deep_firearm(w, "the gallery pair from the ring (the defeat walks)");
         {
+            // The drop slides after it is read (the measured d3 run walked to the read spot
+            // and arrived 0.66 xz / ~1.3 3D off the moved drop — clip 1 spare 9 after, the
+            // take's radius is under a unit [M Pickup_Handler 0x18e650]): re-read and walk
+            // again while the drop still lies close, until the take fires (the rounds grow).
+            // Gated under 8 rounds: the measured d3 1292 death walked the drop at ring 1's
+            // START (11 rounds in hand) and stood ~200 ticks under #2's plink 0.8 u short of
+            // the ring 1 stand spot — the stands fire with what is in hand first.
+            for _ in 0..2 {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let (rounds, bp) = (sim.gun.clip + sim.gun.spare, sim.bond.pos);
+                if rounds >= 8 { break; }
+                let drop = sim.drones.pickups.iter().filter(|p| !p.gone)
+                    .filter(|p| (p.m[3][1] - bp[1]).abs() < 2.0)
+                    .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+                    .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)))
+                    .filter(|t| walker::dxz(*t, bp) < 12.0);
+                let Some(t) = drop else { break };
+                w.walk_nav_to(t, "the gallery stand's drop", 0.3);
+            }
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.gun.clip + sim.gun.spare < 8 { w.resupply("the gallery stand low"); }
         }
+        switch_off_the_delta(w);
         switch_to_a_deep_firearm(w, "the gallery pair from the ring (the defeat walks)");
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.gun.clip + sim.gun.spare == 0 { return; }
@@ -884,7 +913,7 @@ fn answer_the_gallery_from_the_ring(w: &mut Walker) {
         let gi = sim.drones.list.iter().enumerate()
             .filter(|(_, d)| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
                 && d.pos[1] > bp[1] - 2.0 && d.pos[1] < bp[1] + 2.0
-                && walker::dxz(d.pos, bp) < 25.0)
+                && walker::dxz(d.pos, bp) < 40.0)
             .filter(|(i, _)| walker::DamageLog::visible(sim, *i))
             .min_by_key(|(i, d)| (walker::dxz(d.pos, bp).to_bits(), *i))
             .map(|(i, _)| i);
@@ -956,6 +985,21 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
         // guards emptied him (the 1988 death).
         for (label, wp) in APPROACH {
             if wp.at[1] > 5.5 {
+                // los-mask-repins-16-2 (the defeat walks' ramp-top sprint — the measured d3
+                // 916 death): the ring east leg's clear ran at the leg's START with Bond still
+                // on the ramp top (y 4.77) — the clear's level band (±2.0) picked the ring
+                // guard #0 at 5.4 u above him and the stand held Bond at (14.51, 4.77, −82.64)
+                // for ~136 ticks under the y 6.7 gallery pair's 7.0-a-hit plink (Hard), dead 3 u
+                // short of the ring floor [L the same trace]. A player sprints the last ramp
+                // units and fights AT LEVEL: when Bond arrives below the ring floor, the leg's
+                // own nav walk runs FIRST and the clear + gallery answer follow on the floor.
+                // The tops-up walks and the punch walk keep the clear-at-leg-start order.
+                if station_armour && w.scene.sim.as_ref().unwrap().bond.pos[1] < 5.5 {
+                    w.walk_nav_to([wp.at[0], wp.at[1], wp.at[2]], label, wp.arrive);
+                    clear_hostiles_16(w, 40.0, 900);
+                    answer_the_gallery_from_the_ring(w);
+                    continue;
+                }
                 clear_hostiles_16(w, 40.0, 900);
                 // los-mask-repins-16-2 (the defeat walks only — `station_armour`; the punch walk
                 // and the tops-up routes never take this arm): the d2/d3 ledgers' y 6.7 gallery
@@ -2419,6 +2463,16 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(difficulty: u
     if difficulty >= 2 {
         w.dmg.level_fights = true;
         w.dmg.hurting_first = true;
+        // the d1 walk's third law (the route fights' economy — the measured d3 1068 death ran
+        // the ring east leg's fights' flank dance while #2 poured 7.0 a hit from 34 u and
+        // Bond died 3 u short of the ring 1 leg's stand): a player finishes the guard he is
+        // fighting (hp 10-20 — the rounds are cheaper than the bleed and the dance).
+        w.dmg.finish_fights = true;
+        // the punch walk's own opt-in (los-mask-repins-16): the fights' flank navs displaced
+        // Bond 3.5 u north of the ring east target onto the rim (the measured d3 1292 death
+        // at (6.84, 6.81, −75.07), the ring's north edge) — a wedged nav leg re-routes over
+        // the clear nav lines instead of standing wedged under the plink.
+        w.bridge_wedged_nav = true;
     }
     // guard-radii-16-chasers: a tap with the frag in hand THROWS it — the measured 10959 death
     // was Bond's OWN frag (the kill loop's dry re-arm cycled onto the 0x34, the next taps threw
@@ -2585,7 +2639,7 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
 /// DroneWeap_DoBulletAccuracy 0x179740:74-88]. The d2 gates (the pit-door guard pre-shoot) fire
 /// at 3 too. Real input only; no health/ammo/channel writes.
 #[test]
-#[ignore = "00 Agent: Bond dies in the corridor approach cluster on real health — tick 1141, 20 hits for 100.0 (the d2 ledger's ~86 attrition at Hard: #2 skin 0x50000b2 AR 47.5 in 7, #0 17.5/5, #5 14.0/2, #3 10.5/3, #4 7.0/2), pain Plr_DMod_Hard 1.0 [M 0x1d3a80 case 0x7000014-16] and Accuracy Hard [M 0x179740:74-88] on the game's own pipeline; next lever: the approach-fight work (real-health-agent-16-1b-2) then the 05-07 d3 stands (spawn pre-shoots, head-hunting)"]
+#[ignore = "00 Agent (los-mask-repins-16-2, re-measured): the d2 laws carried it 1020 -> 1292 (the ramp-top sprint, the defeat gallery stands killed #4, the d2 pick laws) but the Hard quartet still kills on the ring: tick 1292 at (6.84,6.81,-75.07), 20 hits for 100.0 — #2 skin 0x50000b2 weapon 0x1a hp 20 at (9.5,6.7,-110.6) poured 47.5 in 7 hits (7.0 a hit, Accuracy Hard [M 0x179740:74-88]) from 30-36 u and was NEVER visible from the spots Bond's fights displaced him to (the reactive pick skipped him every tick); #4 21.0/6 (the stands killed him), #3 17.5/5, #5 14.0/2; the fights' drops slide below the walk-over take radius and the ring stands ran dry twice (clip 1-2 spare 9, the measured 1148/1292 traces). TRIED: the d2 laws (level_fights/hurting_first/finish_fights/bridge_wedged_nav), the defeat gallery stands to 40 u, the ramp-top sprint, the drop re-read walks (arrive 0.3), switch_off_the_delta. NEXT LEVERS: cross the ring east -> ring 1 stretch faster (skip the ring east leg's own walk after the sprint — the stands handled the visible set — so the ring 1 hook fires from the punch-proven sight line (6.0,5.9,-78.5) where #2 IS visible [L the capsule-join trace t893-1891]); or a pre-ring stand from the ramp top's east edge; or the unseen-fights creep (needs hurting_first OFF — the pick chain skips the unseen fallback while hurting_first is on)"]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3));
 }
