@@ -106,3 +106,22 @@ ignores" — this round attacked the three ledgered reds.
   contact stalls at route 29/37 with two armed guards parked on him. Lever from the ledger:
   the descent recovery's forward clear band. Helpers stay gated to 07000001 + difficulty.
   Worklog started, checkpoint 1 pushed.
+
+## pretrans-arms-6 (2026-11-11)
+
+- Branch from origin/s/pretrans-arms-5 (19f30d481), merged current origin/master (f926de993;
+  the 0c helper + live-test conflict took master's whole). The three ledgered d1 descent reds
+  (walk_from_the_spawn_to_the_exit_with_the_contact, its _real_damage sister, the exit-fade
+  pin) are GREEN, UN-IGNORED [L the fix5 runs: main exits to 07000002 at tick 12990; the
+  sister at tick 308314; the fade pin 9.9 s]. The lever (the ledger's forward clear band):
+  run_slab_ambush un-gated to d1 (the uncontrolled mid-nav slab crossing only ENABLES the
+  poppers; the mouth fight kills 4/12 before the descent, the d2-proven mechanism with the
+  already-parameterized 6.5 band); the new OPT-IN walker field flank_hold_min_y (set only by
+  walk_to_the_exit_at at d1) makes the pocket flank hold y-aware — the pocket-floor walled
+  guards (y 6.3) hold, the upper-floor perch guard (y 10.2) keeps his proven kill path; the
+  recovery loop gains the d1 band-edge stand for pocket-floor guards; the route pre-clear
+  holds the same rule (the dbg-run death rode its mid-nav #17 flank into the pocket corner).
+  Plate-side clear loop NOT repeated (the -5 measured dead end). d2/d3 byte-identical (every
+  lever d1-gated); the d3 sister keeps its own ammo-exhaustion ledger, its death byte-equal to
+  the pre-task red. Whole walkreal_07000001_live binary: 6 passed 0 failed 2 ignored. Report:
+  docs/reports/pretrans-arms-6.md.
