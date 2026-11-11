@@ -1272,6 +1272,26 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     });
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
         "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
+    if difficulty == 1 {
+        // level-14-kiko-corridor: the Kiko-corridor door #111/#112 ("Door_Slide_14A/14B",
+        // (−42.71, 1.20, 29.90) [D the placements census]) is UNLOCKED at boot on Operative,
+        // in the game's own chain: keypad lock #776 ("Lock - KeypadLocked" kind 0x2e at
+        // (−41.44, 1.30, 29.75) [D]) carries out channel = param 5 = 60 and the Operative
+        // create-unlock tag param 6 = 1 [D]; Lock_Create 0x1ae1f8:67-69 unlocks it at create
+        // on difficulty 1 [M], Lock_Update case 1 0x1ae3d8 holds switch_channels[60] = 1 every
+        // tick [M], and the door's lock channel = param 3 = 60 [D #111/#112] unlocks it on the
+        // rising edge — one-shot, the field cleared, the door auto-opened [M Door_Update
+        // 0x1363c8:88-107]. [L the run: "[levellog] frame 0 channel 0x3c = 1", both leaves
+        // state 0x4 pos01 1.00.] On Agent/00 Agent the lock starts locked (the param-6 gate is
+        // Operative-only [M]) and the A* must route around this leaf — never through it.
+        let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(60),
+            "lock #776's Operative create-unlock holds ch 60 from the first tick [M 0x1ae3d8 case 1; D #776 params 5/6]");
+        let di = sim.drones.doors.list.iter().position(|d| d.placement == 111)
+            .expect("Door_Slide_14A exists [D the placements census #111]");
+        assert!(!sim.drones.doors.is_locked(di, &sim.drones.channels),
+            "the Kiko-corridor door is unlocked by ch 60's rising edge [M 0x1363c8:88-107; D #111 param 3 = 60]");
+    }
     if difficulty == 1 && !w.tops_up() {
         // level-14-skybridge-retune-2: the d2 sister's fight laws on the real-damage d1 walk
         // (the plain walk keeps master behaviour) — under 3.0 u every drone round hits [M
@@ -1364,7 +1384,53 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     w.walk_to(Wp::new(-60.5, 0.05, 39.57).r(1.0), "the west corridor at the door's west face");
     w.walk_to(Wp::new(-56.6, 0.4, 39.56).r(1.0), "the corridor east to the door");
     w.walk_to(Wp::new(-51.4, 0.4, 39.56).r(1.0), "through the opened doorway");
-    w.walk_to(Wp::new(-49.2, 0.9, 38.4).r(1.0), "the Kiko corridor east");
+    // level-14-kiko-corridor: the real-damage walk's fights displace Bond east-south into the
+    // machine room mid-leg (the run's trace: drones #19/#18/#23 killed, Bond parked at
+    // (−44.35,1.01,30.95) [L the kiko_run1 NF_LEVELLOG run]) and the straight steer back to the
+    // Kiko-corridor waypoint then wedges 0.128 u into the line — a machinery corner (cel 44);
+    // the nearby door leaves (−42.7,1.2,29.9) are OPEN and BEHIND Bond at the wedge, so they
+    // are not the blocker [L the same run's wedge message]. A player routes through the nav
+    // web; so does the walk — walk_nav_to (the sim's own A*) instead of the straight steer.
+    // !tops_up-gated: the plain walk keeps master behaviour byte-identical.
+    if w.tops_up() {
+        w.walk_to(Wp::new(-49.2, 0.9, 38.4).r(1.0), "the Kiko corridor east");
+    } else {
+        // A player clears the machine room from the pocket's open floor BEFORE crossing: the
+        // fights' own law kills the corridor waves from standing ground (run1: #19/#18/#23
+        // killed true with Bond holding 79.6-85) while the backpedal still has pocket floor
+        // to retreat into — the accumulated mouth guard #20 was what killed the quiet-route
+        // arrivals at the corridor (run6/7: died at (−47.98,38.02) to #20's free point-blank
+        // bursts, d 1.0, hp 10). clear_hostiles also walks home over the nav web afterwards.
+        clear_hostiles(&mut w, 14.0, 3600);
+        // The machine-room floor pocket is sealed WEST by the machine row at x ≈ −44.4 — every
+        // floor steer out wedges 0.11-0.13 u in [L runs 2/3/4: the NW corner at (−44.42,31.06),
+        // the west face at (−44.47,35.75)]. The through-route is the CATWALK OVER the machines:
+        // the Kiko leg's own resupply A* walked it [L run1] — (−49.51,1.04,36.22) floor →
+        // (−47.96,2.23,33.20) catwalk → (−41.29,1.53,36.48) floor. So the walk takes that
+        // proven route REVERSED: east across the fights' push territory to the resupply floor
+        // [L run4: leg 1's (−43.5,35.8) r2 arrived], up the catwalk, down at the corridor-mouth
+        // floor, then the 2.2-u hop north to the waypoint. Legs 1-3 lenient: a fought wedge
+        // skips to the next leg instead of dying (the mid-leg resupply resets the walker's
+        // lenient flag — the run2/3 panic path); the last leg strict so a real failure surfaces.
+        w.lenient = true;
+        // Fight-quiet the pocket legs: the fights' backpedal is what re-parks Bond in the
+        // pocket mid-route (run5) — a player back-tracks out of the corner while the drones
+        // reposition, and the pocket's drones die at range from the catwalk. Real damage
+        // stays: the drones still shoot (no health write anywhere).
+        let rf_saved = w.dmg.return_fire;
+        w.dmg.return_fire = false;
+        let _ = w.walk_to(Wp::new(-43.5, 1.0, 35.8).r(2.0), "north-east up the machine-room floor");
+        let _ = w.walk_to(Wp::new(-41.3, 1.5, 36.5).r(1.5), "east to the resupply floor");
+        let _ = w.walk_to(Wp::new(-47.96, 2.23, 33.2).r(1.5), "up the catwalk over the machines");
+        // Fire returns ON THE CATWALK — the high ground at (−47.96,2.23) shoots down into the
+        // machine room while the pocket drones chase below [L run6: the quiet route carried
+        // Bond through the pocket to (−47.98,1.14,38.02) but he arrived drained and died at
+        // the corridor mouth to drone #20's free point-blank bursts (2.0 per hit, hp 10)].
+        w.dmg.return_fire = rf_saved;
+        let _ = w.walk_to(Wp::new(-49.5, 1.0, 36.2).r(1.3), "down at the corridor-mouth floor");
+        w.lenient = false;
+        w.walk_to(Wp::new(-49.2, 0.9, 38.4).r(1.0), "the Kiko corridor east");
+    }
     w.follow_nav_route([-33.1, 0.9, 26.8], "east to the escape touch #456");
     let mut ch4a = false;
     for _ in 0..2000 {
@@ -1851,7 +1917,7 @@ fn the_skipped_vent_cutscene_hands_bond_back_at_his_grab_spot() {
 /// write no health/armour/ammo; the exit load into 07000015 is the game's own Trigger_Activate
 /// path [M 0x1b2318 → warm_exit_save → Player_RamLoad 0x1957a8].
 #[test]
-#[ignore = "level-14-fusebox-zap, re-measured: the FUSEBOX ZAP IS SOLVED — the walk now survives the hall and wedges later. The zap's source chain, decompile- and census-backed: cutting fusebox #383's GROUP-1 wires writes its channels param 2/param 4 = 113 = 0x71 [M 0x1adfe8:110-123 — group 1's words are tag+0x56/+0x5E; D placements #383 params 2/4 = 113]; DESTROY_BoxSatellite #388's kill channel IS 113 [D placements #388 param 1], Destroy_Update 0x12c4f8's +0x10 arm smashes it and Destroy_Smash 0x12bb60 detonates its 500-damage / radius-10.0 blast (param 2 = 50 × 10.0 [M 0x12bd04], param 5 = 1000 × 0.01 [M 0x12bc50-0x12bd20]) — the measured 99.0 pulse at the 3.24-u stance [L the NF_DMG_TRACE run]. The port matches the game end to end; the TRIGGER was the walk's own aim line: from the east stance (−86.46,−1.10,31.39) the aim segment to the group-0 cable centre clips the GROUP-1 wire's AABB (x −89.34..−89.15 [L the wire-geo probe]) and the game's own first-contact law [M 0x1ea398:212-229 — the nearest wire stops the round] cut group 1 with the cut's FIRST bolt (the fire-tick backtrace: bolt born 38955 from Bond's muzzle, weapon 0x4e [L]). FIXED in this file, all !tops_up-gated (the plain walk byte-identical, its 8 tests green on this tree): (1) stance candidates whose fire line to the group-0 aim point clips another alive wire's slab (probed from the head AND the drawn muzzle's ~0.9-u-under-head origin [L the same trace]) are skipped; (2) the cut fires ONE bolt at a time with a one-tick hold after a bolt resolves — the loop's channel read lags the wire death by one tick (the contact registers in tick L's bullet pass, FuseBox_Update reads at L+1's head [M 0x1adfe8:88-123]), so the old cadence's overrun bolt landed on the neighbouring group; (3) the stance approach runs with return_fire off (a player walks to the cut spot without shooting). Result [L the run on this tree]: both cuts land on GROUP 0 (ch 0x87 at +45 ticks, ch 0x88 at +1), Bond survives the hall at 79.6 and fights into the machine room (the Kiko corridor: drone #19 killed true at 49158). NEW BLOCKER: 'the Kiko corridor east' wedges at the 6000-tick cap — Bond (−44.35,1.01,30.95) vs target (−49.20,0.90,38.40) d 8.89, grounded, health 79.6, segment_to_target Some(0.128) (something 0.13 u into the straight line), the nearby door (−42.7,1.2,29.9) state 0x4 pos01 1.00 lock_flag=1 ch_lock=0 [L the same run]. NEXT LEVERS: (1) the leg through the nav web (walk_nav_to) instead of the straight steer — the wedge is the straight line, not a death; (2) the door's lock_flag=1 with ch_lock=0: read the door's params [D] for whether the leaf is openable (an E press the walker's use_door law already answers) or a locked leaf to route around; (3) the cascade note: the cuts' own channel writes smash the generator-hall cascade (placements 400/1010/787/827/403/1009/669/740-742 channel-kills and blast-sweeps through f40-42k [L the same run]) — the route legs east must account for the scripted blasts' damage the way the game's player eats them (Bond held 79.6 through them [L])"]
+#[ignore = "level-14-fusebox-zap, re-measured: the FUSEBOX ZAP IS SOLVED — the walk now survives the hall and wedges later. The zap's source chain, decompile- and census-backed: cutting fusebox #383's GROUP-1 wires writes its channels param 2/param 4 = 113 = 0x71 [M 0x1adfe8:110-123 — group 1's words are tag+0x56/+0x5E; D placements #383 params 2/4 = 113]; DESTROY_BoxSatellite #388's kill channel IS 113 [D placements #388 param 1], Destroy_Update 0x12c4f8's +0x10 arm smashes it and Destroy_Smash 0x12bb60 detonates its 500-damage / radius-10.0 blast (param 2 = 50 × 10.0 [M 0x12bd04], param 5 = 1000 × 0.01 [M 0x12bc50-0x12bd20]) — the measured 99.0 pulse at the 3.24-u stance [L the NF_DMG_TRACE run]. The port matches the game end to end; the TRIGGER was the walk's own aim line: from the east stance (−86.46,−1.10,31.39) the aim segment to the group-0 cable centre clips the GROUP-1 wire's AABB (x −89.34..−89.15 [L the wire-geo probe]) and the game's own first-contact law [M 0x1ea398:212-229 — the nearest wire stops the round] cut group 1 with the cut's FIRST bolt (the fire-tick backtrace: bolt born 38955 from Bond's muzzle, weapon 0x4e [L]). FIXED in this file, all !tops_up-gated (the plain walk byte-identical, its 8 tests green on this tree): (1) stance candidates whose fire line to the group-0 aim point clips another alive wire's slab (probed from the head AND the drawn muzzle's ~0.9-u-under-head origin [L the same trace]) are skipped; (2) the cut fires ONE bolt at a time with a one-tick hold after a bolt resolves — the loop's channel read lags the wire death by one tick (the contact registers in tick L's bullet pass, FuseBox_Update reads at L+1's head [M 0x1adfe8:88-123]), so the old cadence's overrun bolt landed on the neighbouring group; (3) the stance approach runs with return_fire off (a player walks to the cut spot without shooting). Result [L the run on this tree]: both cuts land on GROUP 0 (ch 0x87 at +45 ticks, ch 0x88 at +1), Bond survives the hall at 79.6 and fights into the machine room (the Kiko corridor: drone #19 killed true at 49158). RE-MEASURED (level-14-kiko-corridor): the Kiko-corridor DOOR question is CLOSED — the port matches the game. Door_Slide_14A/14B #111/#112 ('Door_Slide_14A/14B', (−42.71,1.20,29.90) [D the placements census]) is UNLOCKED at boot on Operative, in the game's own chain: keypad lock #776 ('Lock - KeypadLocked' kind 0x2e at (−41.44,1.30,29.75) [D]) carries out channel = param 5 = 60 and the Operative create-unlock tag param 6 = 1 [D]; Lock_Create 0x1ae1f8:67-69 unlocks it at create on difficulty 1 [M]; Lock_Update case 1 0x1ae3d8 holds switch_channels[60] = 1 EVERY tick while unlocked [M] (the port holds it once at attach — Drones::attach_level_world's lock hold; [L the NF_LEVELLOG run: '[levellog] frame 0 channel 0x3c = 1']); the door's lock channel = param 3 = 60 [D #111/#112] unlocks it on the rising edge — one-shot, the field cleared, the door auto-opened [M Door_Update 0x1363c8:88-107]; no-E-use param 11 = 1 [D] only bars the player's E (the port's player_use, door.rs) — irrelevant with no writer needed. Pinned in the body (difficulty==1, both walks): ch 60 on at load and door #111 not locked. On Agent/00 Agent the lock starts locked (the param-6 gate is Operative-only [M]) and the A* must route around the leaf. RE-ROUTED (level-14-kiko-corridor, runs 2-9): THE KIKO-CORRIDOR LEG IS ROUTED — the walk gets through. The fights' backpedal parks Bond in the machine-room floor pocket (nav cell 44) and every straight steer out clips the machinery 0.11-0.17 u in (the NW corner (−44.42,31.06), the west machine face (−44.47,35.75) [L runs 2-5, the STUCK dumps]) — the nav web is blind to the machinery INSIDE cell 44. The fix, all !tops_up-gated (the plain walk byte-identical, its 8 tests green): (1) clear_hostiles(14 u) FIRST — a player clears the room from the pocket's open floor (run1: #19/#18/#23 killed with Bond holding 79.6-85) while the backpedal still has room to retreat, and the quiet-route arrivals died at the corridor mouth to the accumulated guard #20's free point-blank bursts (run6/7: (−47.98,38.02), d 1.0, hp 10); (2) fight-quiet (dmg.return_fire off) across the pocket legs so no backpedal re-parks Bond mid-route; (3) the CATWALK OVER the machines — the leg's own resupply A* walked it [L run1] — (−49.51,1.04,36.22) floor → (−47.96,2.23,33.20) catwalk → (−41.29,1.53,36.48) floor, taken reversed (east floor → up the catwalk → down at the corridor mouth), fire restored on the catwalk; legs lenient (the mid-leg resupply resets the walker's lenient flag — the run2/3 panic path), the waypoint leg strict. RESULT [L run9]: the corridor waypoint and the mouth are PASSED (the old wedge tick 43264 is behind), Bond crosses west and DIES FURTHER ON — tick 43690 at (−58.92,0.73,37.67) to the west-hunting guards #19/#23/#24 (skin 0x5000087, weapon 0x14, d 1.7-2.3, the FirstAttack hunt blocks [M 0x148010:100-131]) with the health budget drained by the fight trades. NEXT LEVERS: (1) a second clear_hostiles pass after the corridor waypoint (the mouth guards' hunt blocks chase across the whole west corridor); (2) the fight-quiet window extended over the follow_nav_route's first legs, re-engaging at the escape-touch branch; (3) the walker's resupply/loot pass on the corridor floor before re-engaging."]
 fn walk_the_infiltration_to_the_delta_exit_real_damage() {
     // level-14-skybridge-retune-2: the d2 sister's green set on the same body — the fight
     // laws (the flag block in the body, !tops_up-gated) plus the path-clear stands (the
