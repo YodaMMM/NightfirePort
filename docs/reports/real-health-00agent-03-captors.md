@@ -30,3 +30,12 @@ The ignored walk `walkreal_07000003_live::walk_the_full_route_and_complete_every
 ## Usage
 
 not visible to me — this environment exposes no token, cost or context-window figures for the session (no /usage, no billing panel; the driver's own numbers are the only ones available).
+
+## ntfy failed
+
+All three fallbacks, in order, with their exact outputs (2026-11-11T03:16-03:20Z):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'...', headers={'Title':'NightfirePort'}), timeout=20)"` → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → killed at the 60 s tool timeout with no output (no data returned; the connection never completed).
+
+The report, the branch and the queue entry (done/50-real-health-00agent-03-captors.md with the report attached) are all pushed; only the push notification did not get out.
