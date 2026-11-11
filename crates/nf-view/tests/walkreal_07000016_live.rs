@@ -1373,11 +1373,31 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
                 // exposed FALSE at 5.5 u — the clone stood behind the pit's launch structure
                 // and only 43 hp of 100 fell while the pit AR guards closed [L the same
                 // trace]. A player closes the last units until he can SEE the member, then
-                // head-taps (the aim opens at close range in the open floor).
+                // head-taps (the aim opens at close range in the open floor). The advance is
+                // BOUNDED to 8 u a bite: the walk legs carry the walker's own return fire and
+                // the measured run's first nav leg killed the whole squad mid-walk (#12 the
+                // 100-hp clone, #14/#15/#13 with it) — a player does not stroll PAST a dead
+                // target out of the pit room; the next slice re-picks on the live state (the
+                // stroll cost the lift-out hand-back its pit-floor position, the 1481 assert).
                 if w.exposed_aim(i).is_none() && walker::dxz(md.pos, bp) > 3.0 {
-                    let target = [md.pos[0], -22.0, md.pos[2]];
+                    let far = walker::dxz(md.pos, bp) > 11.0;
+                    let target = if far {
+                        let (vx, vz) = (md.pos[0] - bp[0], md.pos[2] - bp[2]);
+                        let len = (vx * vx + vz * vz).sqrt().max(0.001);
+                        [bp[0] + vx / len * 8.0, -22.0, bp[2] + vz / len * 8.0]
+                    } else {
+                        [md.pos[0], -22.0, md.pos[2]]
+                    };
                     let head = [target[0], target[1] + 1.5, target[2]];
-                    if !sim.hurts.iter().any(|h| h.contains(target, head, 0.4)) {
+                    // The pulse poly (gate 0xf3) is EVENT-gated and both pulses are sat out
+                    // before the squad phase — its polygon still claims the whole launch
+                    // floor geometrically between events, so a probe that counts it refused
+                    // EVERY walk-in (the measured run: the diagnostic fired, zero walk legs,
+                    // the clone's 100 hp ground two ladders at 27/5.5 u [L the d2 trace]).
+                    // The always-on wires (the loot ledger's (−5.76, −166.00) class) stay
+                    // probed — those burned real health on the loot walks.
+                    if !sim.hurts.iter().filter(|h| h.gate != 0xf3)
+                        .any(|h| h.contains(target, head, 0.4)) {
                         w.walk_nav_to(target, "into the pit room toward the squad member", 3.0);
                     }
                 }
@@ -2536,26 +2556,24 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
 /// DroneWeap_DoBulletAccuracy 0x179740:74-88]; Drone_Create 0x136be0:49's min-difficulty gate
 /// spawns the param-2 placements. Real input only; no health/ammo/channel writes.
 ///
-/// IGNORED with the measured round (real-health-agent-16-1b-2, NF_DMG_TRACE on this tree):
-/// the 71.4 of the 100 the d2 ledger loses is the SOUTH GALLERY — four AR guards
-/// (0x500008c/0x50000b2/0x50000b1, 10-25 hp) patrolling z −102..−112 at y 6.7 (#1 at y 0.8) —
-/// whose first landed round is tick 455 at the ramp foot (their fields never reach the spawn
-/// legs), above the plain shooters window's dy 6.0 so the ramp-foot fights trade with the
-/// close ground pair while the gallery plinks free. TRIED this round: (a) a load-time (48, 18)
-/// shooters window — the fights engaged the gallery across the pit from the lane east (one
-/// fight, dead at 1271; the wide pool breaks the early geometry); (b) the window gated from
-/// the ring's east end (y 5.9, dy 0.8) — the fights DID take the gallery 1v1 and killed
-/// #5/#1/#3/#1 on the ring, but the ring trades cost 44 and Bond entered the chaser fight at
-/// 7.6 (dead 8435); (c) zero-movement shoot_point stands on the gallery from the spawn — every
-/// guard fails the eye-ray visible() gate from there (the ring structure blocks; the stands
-/// all skipped, the timeline byte-identical); (d) static-spot stands at the ring east — Bond
-/// died AT the stands (2189) under the crossfire. NEXT LEVERS: a cover-shaped approach (the
-/// fights' own flank machinery on the gallery from the ring, one guard at a time, with the
-/// ring's south rim as the break), or an armour pickup before the ramp foot (none found on
-/// the chain set), or a live PCSX2 scout of whether the gallery is reachable on foot
-/// (the station's west side?) — the player answer this route is missing.
+/// GREEN (los-mask-repins-16-2, NF_WALK_TRACE on this tree): end health 6.9, armour 0.0 (the
+/// #648 straps spent in the pit), 89 hits for 93.1, 11 return-fire fights, the lift-out
+/// hand-back on the cinema key (5.385, 0.90, −158.309). The three levers that carried it:
+/// the d1 walk's own pick laws at d2 (`level_fights` — the measured 2548 death's ramp fights
+/// held Bond at (12.2, −89.0) under the y 6.7 pair's crossfire for 240+ ticks while the plain
+/// pick ground on them mid-ramp: health 74.8 → 26.5 in one fight; with the law the ramp legs
+/// keep moving and the pair is answered at level on the ring; `hurting_first` — the pair
+/// dealt 42.0 + 32.8 of the run's 100 and the plain nearest-visible pick fought the closer
+/// ring guards instead), the defeat-only gallery stands on the ring legs (bounded, visible-
+/// gated — they killed #5/#2/#0 in the 2548 run; the green timeline's fights reach them
+/// first), and the pit walk-in (the squad kill loop stood at the shelter and ground two full
+/// 10800-tick ladders on the 100-hp melee clone #12 — 28 hp a ladder, exposed FALSE at 5.5 u
+/// behind the launch structure — while the pit AR guards closed; the walk-in advances in
+/// bounded 8 u bites until the aim opens and the walk legs' own return fire killed the whole
+/// squad mid-advance). The walk-in's wire probe excludes the event-gated pulse poly (gate
+/// 0xf3 — both pulses sat out before the squad phase; its polygon still claims the whole
+/// launch floor geometrically between events and refused every walk-in until filtered).
 #[test]
-#[ignore = "Agent: Bond dies on real health — the south gallery (four AR guards above z -102..-112) plinks 71.4 of the 100 free from tick 455; the ring-gated (48,18) window makes the fights take them but the ring trades still cost 44 (entered the chaser at 7.6); levers: a cover-shaped gallery approach from the ring, an armour pickup, a live scout of the gallery's foot access"]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
     walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2));
 }
