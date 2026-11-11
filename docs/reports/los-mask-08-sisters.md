@@ -35,6 +35,17 @@ One descent stand shipped in code: the d3-gated `fight_guards_within(&mut w, "th
 2. The fast suite (`tools/test/suite.py`) on this final tree, plus `nf-game --lib` and the other walkreal binaries.
 3. The report's live checks for the main agent: whether the east-hall guards are visible from the station hall's mouth in the real game (the masked sight query answers blocked at the fusebox while their bullets reach it — gdbwatch on one #11 sight ray from (139.1, 49.5, −93.0) would settle whether the port's query over-blocks).
 
+## ntfy failed
+
+All three fallbacks failed at the network level (2026-11-11 ~06:03 UTC):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "...urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'los-mask-08-sisters: done — ...', headers={'Title':'NightfirePort'}), timeout=20)"` →
+   `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -O- --post-data "..." -T 15 https://ntfy.sh/nightfire-yoda-8k3x` →
+   `Connecting to ntfy.sh (ntfy.sh)|159.203.148.75|:443... failed: Connection timed out.` /
+   `Connecting to ntfy.sh (ntfy.sh)|2604:a880:800:14:0:1:73c0:2000|:443... failed: Network is unreachable.`
+
 ## Usage
 
 not visible to me — this session's driver shows no token, cost or context-window figures to the worker (the IM gateway metadata carries only session/chat ids; no usage counters appeared in any tool result).
