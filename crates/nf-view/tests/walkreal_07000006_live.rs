@@ -190,12 +190,36 @@ fn clear_the_spot(w: &mut Walker, radius: f32, exposed_only: bool) {
     for _ in 0..12 {
         let target = {
             let sim = w.scene.sim.as_ref().unwrap();
-            (0..sim.drones.list.len()).find(|&i| {
-                let d = &sim.drones.list[i];
-                !d.corpse && d.health > 0.0 && d.pos[1] < 46.0
-                    && dxz(d.pos, sim.bond.pos) < radius && !skipped.contains(&i)
-                    && (!exposed_only || w.exposed_aim(i).is_some())
-            })
+            // 00-agent-06-8 (measured on the merged tree): the plain index order picks the room's
+            // #3 first — his rays the doorway plane blocks — and burns the whole budget on him
+            // while the threshold guard #4 (untargeted, full hp 10) chews Bond point-blank
+            // (the run00d ledger: 97.2 in 19 hits, death t2801, #3's budget gone, #4 unmoved).
+            // The player answers the guard who is actually shooting him: the recent hitter
+            // first over the fights' own 240-frame window [M the return-fire pick,
+            // damage_log.rs], ties and no-hitter phases keep the plain index order. d3-gated
+            // (the d1/d2 clear timelines stay byte-identical).
+            let hitter_first = sim.drones.difficulty >= 3;
+            let now = sim.drones.frame;
+            let recent_dmg = |i: usize| -> f32 {
+                sim.drones.player_hits.iter().rev()
+                    .take_while(|h| now.saturating_sub(h.0) <= 240)
+                    .filter(|h| h.1 == i)
+                    .map(|h| h.2).sum::<f32>()
+            };
+            let mut cands: Vec<usize> = (0..sim.drones.list.len())
+                .filter(|&i| {
+                    let d = &sim.drones.list[i];
+                    !d.corpse && d.health > 0.0 && d.pos[1] < 46.0
+                        && dxz(d.pos, sim.bond.pos) < radius && !skipped.contains(&i)
+                        && (!exposed_only || w.exposed_aim(i).is_some())
+                })
+                .collect();
+            if hitter_first {
+                // descending damage; the stable sort keeps the plain index order on ties
+                cands.sort_by(|&a, &b| recent_dmg(b).partial_cmp(&recent_dmg(a))
+                    .unwrap_or(std::cmp::Ordering::Equal));
+            }
+            cands.first().copied()
         };
         let Some(di) = target else { return };
         eprintln!("[06] clearing guard {di} at {:?}", w.scene.sim.as_ref().unwrap().drones.list[di].pos);
@@ -1433,7 +1457,22 @@ fn walk_the_castle_interior_to_the_party_real_damage_agent() {
 /// [M 0x1ae1f8:67-69]. Real input only — the
 /// load path is the only difference; no health, ammo or channel writes, no teleports.
 #[test]
-#[ignore = "00 Agent: measured on master 22d5836b7 (real-health-00agent-06-4, runs 1-10): the walk now clears the whole mouth->strip courtyard that killed 06-3 — the ch-55 pair dies at its sight edge for 16.5 (the fixed 600 landing watch engages both at d 12.3-12.5, OUTSIDE their 12 u sight [D props]; the post-pause engagement cost 60.4 and the mid-walk one never tapped), the tunnel-roof guard #11 dies to the strip patience hold for 11.0 (his lean-out opens there; he dealt 22-47 in every run that lost him), and the ledge patience kills the east post #24 — but the walk still ends at 100.0 at the east-strip arrive (9.73,-35.26) t8893: #4's guardroom melee (12 x 2.75, every run, no lever found — the pre-door fight displaced the route into a wedge, the kite is a no-op [M player.rs:1006] the aim stance pins forward) plus #24's east lane (33.0 in 6 at d 19 during the legs, he survives at hp 7) plus #24/#19/#11 residues sum past 100 with the landing pair's 16.5. The next ~33 hp: finish #24 before the east-strip legs (his rays open from the east floor side — a stand spot east of (14,-36.7) is the unmeasured lever) or shave #4's doorway fight; the ledge/dressing phases have never been reached at 00 (unknown costs); follow-up real-health-00agent-06-5"]
+/// GREEN (real-health-00agent-06-8, on the merged tree with the guards' own sight
+/// [823ff190b "Guards see the way the game's do"]): the merged tree moved the old wall — on
+/// it the court return-fire answers against the door-#47 pair burn the whole clip on angles
+/// whose rounds never land (the run00b/c traces: taps at err 0.0000 on the exposed part from
+/// d 8.1, #4's hp unmoved, death t2989 at clip 0 spare 0) and the plain index-order pre-clear
+/// fights the room's #3 (his rays the doorway plane blocks) while the threshold guard #4
+/// chews Bond point-blank (the run00d ledger: 97.2 in 19 hits, death t2801, #4 at full hp 10).
+/// Two d3-gated levers, both in this file: (1) the door-#47 approach leg keeps return fire
+/// OFF — the player closes to the door under fire and fights from the door plane, where the
+/// rounds land (the run00c trace: #4 hp 10 -> 8 from d 4.0); (2) `clear_the_spot` picks the
+/// recent hitter first over the fights' own 240-frame window [M the return-fire pick,
+/// damage_log.rs], ties keeping the plain index order. The assertion-free
+/// `probe_the_guardhouse_door_rays` (this file) pins the geometry: the flight rays see the
+/// closed leaf, the court chest rays to the room pass the window glass, and the room's own
+/// 0x18 90-round box sits at (34.72,40.0,-24.45). Measured: the whole castle walked in
+/// 14106 ticks, end health 6.2, 21 hits for 93.8 [L this tree's run].
 fn walk_the_castle_interior_to_the_party_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(3));
 }
