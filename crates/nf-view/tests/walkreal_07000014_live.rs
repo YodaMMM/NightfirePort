@@ -801,6 +801,30 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
         w.walk_to(Wp::new(34.57, 2.80, 37.18).r(0.9), "the pad's south-west step head");
         open_the_pad_lid(&mut w);
         w.walk_to(Wp::new(33.09, 2.37, 35.38).r(0.8), "the 1.72 landing");
+        // The landing's west drop answers its guard first, real-damage only (the plain walk's
+        // top-ups keep the same legs byte-identical): the machine-room guard (skin 0x5000093,
+        // hp 28) stands at (32.2, 1.8, 33.2) [L the run's death log] under the drop's flight
+        // path and the measured d1 real-damage run took his 50 bursts standing in the drop
+        // loop — 0 return-fire fights (his box never exposed from the drop's own footing, the
+        // fights' aim gate skipped him while his rounds hit Bond). A player on the landing
+        // clears the room he is about to drop into before dropping.
+        if !w.tops_up() {
+            // The real-damage runs arrive with the Q-Claw still in hand from the shaft legs —
+            // its c0/s0 is what the first clear's shots read dry. The carried guns are loaded
+            // (the probe line: P2K 0x2 clip 7 + 41 spare, 0x14 clip 21 [L this run]) — the
+            // fights' own gun-only switch (`switch_to_gun`, the 2..=0x47 in-hand gate [M the
+            // gadget beam excluded]) draws one and the guard is answered before the drop.
+            assert!(w.switch_to_gun("the landing clear"),
+                "a carried gun has rounds for the landing clear [L the probe]");
+            let di = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
+                d.team == 1 && d.enabled && !d.corpse && d.health > 0.0
+                    && d.skin & 0xffff == 0x93
+                    && walker::dxz(d.pos, [32.2f32, 1.8f32, 33.2f32]) < 4.0
+            });
+            if let Some(di) = di {
+                let _ = w.shoot_loose(di, "the machine-room guard's answer", 900);
+            }
+        }
         // The drop west: the low floor's east margin sits under the landing slab's overhang (the
         // slab top is the 1.72 landing; the walk's grounded wedge at (33.68, 1.15, 35.20) with a
         // clear segment to the target is the overhang catch), so the westing is the player's own
@@ -817,13 +841,35 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
                     let p = sim.bond.pos;
                     if p[0] < 32.6 && p[1] < 1.4 && sim.bond.grounded { break; }
                 }
-                let tz = drop_aim_z(&w);
+                let (tx, tz) = {
+                    // Real-damage only (the plain walk's loop stays byte-identical): the drop
+                    // can strand Bond ON the machine top (the measured death: (31.42, 2.35,
+                    // 33.43) grounded, hopping in place under the guard's fire) — the machine's
+                    // south part rests under the landing slab, no headroom to walk south. A
+                    // player walks off the machine's WEST edge down to the low floor.
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let p = sim.bond.pos;
+                    if !w.tops_up() && sim.bond.grounded && p[1] > 1.6 && p[0] < 33.0 {
+                        (31.2f32, p[2])
+                    } else if !w.tops_up() && sim.bond.grounded && p[0] > 32.9 && p[2] > 33.6 {
+                        // The overhang catch (this run's wedge (33.70, 1.19, 35.21), the
+                        // ledgered (33.68, 1.15, 35.20)): the direct west line's capsule catches
+                        // the landing slab's south-east corner. A player first steps SOUTH of
+                        // the slab edge, then wests — the plain walk's grind was freed by its
+                        // fights' displacement; the real-damage run has none (the guard
+                        // answered above). The phase holds until z 33.6 — the first catch at
+                        // z 34.40 was still under the slab's south tip.
+                        (p[0] - 0.2, 33.4f32)
+                    } else {
+                        (31.8f32, drop_aim_z(&w))
+                    }
+                };
                 let sim = w.scene.sim.as_ref().unwrap();
                 let b = &sim.bond;
                 let inp = nf_game::player::Input {
                     forward: 1.0,
                     jump: b.grounded && (w.total_ticks - start) % 30 == 0,
-                    turn: wrap_pi((31.8f32 - b.pos[0]).atan2(tz - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
+                    turn: wrap_pi((tx - b.pos[0]).atan2(tz - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
                     ..Default::default()
                 };
                 w.tick(inp, false);
@@ -1021,7 +1067,7 @@ fn walk_the_infiltration_to_the_delta_exit() {
 /// 0x1902c8] and the guards' hit chance by Accuracy row 2 [M DroneWeap_DoBulletAccuracy
 /// 0x179740:74-88]. Real input only; no health, ammo or channel writes.
 #[test]
-#[ignore = "re-tune after the claw wall fix: the route's SkyBridge crossing is a stand-in now (the claw bolt dies on the duct wall) and the shifted clock leaves Bond short on the pit band's east jump (46.34, -1.78, 53.19); the plain walk passes the same legs"]
+#[ignore = "re-tune after the claw wall fix (level-14-skybridge-retune's ledger, the d1 real_damage sister's ignore carries the full round): the same slab-pocket camper (skin 0x5000093) opens the d2 ledger — the measured d2 run died at tick 4297 to #6 (same skin, 28 health, d 1.4, 95.5 in 32 hits, the plain fights gave up 2 fights no round landed [L]) and the shifted clock left Bond short on the pit band's east jump (46.34, -1.78, 53.19). The d1 round's levers (all !tops_up-gated, inherited here at d2 through the same body): the switch_to_gun pre-drop answer, the machine-top west-edge escape, the overhang-catch south phase. The d2/d3 fights (back_off 4.0 + lane_fights + the with_agent_path_clear stands) displace Bond differently — re-measure on this tree before re-routing; the crossing lever (the trench-floor claw-up, see the d1 ignore) stands for this walk too"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
     // The lane-fight + path-clear laws (opt-in, this level's sister only — set inside the body
     // behind the difficulty gate; see the body comment for the measured deaths).
@@ -1652,7 +1698,7 @@ fn the_skipped_vent_cutscene_hands_bond_back_at_his_grab_spot() {
 /// write no health/armour/ammo; the exit load into 07000015 is the game's own Trigger_Activate
 /// path [M 0x1b2318 → warm_exit_save → Player_RamLoad 0x1957a8].
 #[test]
-#[ignore = "re-tune after the claw wall fix: the route's SkyBridge crossing is a stand-in now (the claw bolt dies on the duct wall) and the shifted clock lands the descent at (29.63, 0.65, 29.25) instead of the leg-2 start (29.99, 0.61, 38.00); the plain walk passes the same legs"]
+#[ignore = "re-tune after the claw wall fix (real-health-14-00agent-9's ledger carries the crossing; this round's measured state): the landing's machine-room guard (skin 0x5000093, hp 28, weapon 0x14) is a slab-pocket camper — from every east stance (the 1.72 landing (33.87,2.28,35.36), the pad) his box is unexposed (0 return-fire fights across 48-50 hits; the pre-drop switch_to_gun answer's 900 loose-gate ticks landed 0 rounds [L the runs]) while his own bursts reach Bond through the whole descent (2.0 per ~4 ticks — the whole 100 budget from the landing legs to tick 5130 at (31.67,1.82,34.96)). Wired this round, all !tops_up-gated so the plain walk and the tripbomb duplicate stay byte-identical: the switch_to_gun pre-drop answer (the first clear misfired the Q-Claw's dry c0/s0 in hand; the probe line: P2K 0x2 c7 s41, 0x14 c21 [L]), the machine-top west-edge escape (the (31.42,2.35,33.43) strand — the machine's south part rests under the landing slab, no headroom south), and the overhang-catch south phase (the wedge (33.70,1.19,35.21), the ledgered (33.68,1.15,35.20) — step south of the slab tip to z 33.6, then west; the plain walk's grind was freed by its fights' displacement, the real-damage run has none once the guard is answered-or-absent). The escape now reaches the low floor's west lip but the accumulated fire ends the walk at 5130. NEXT LEVERS: (1) the exposure opens only west of the slab — the fights must engage at that instant with budget left, i.e. the pre-descent legs must shed the guard's early fire (a fight-quiet approach, the 00agent ledger's lever 2 shape) or the guard's pocket must be answered from the slab's south tip on the way past; (2) the SkyBridge crossing itself is still the task's open lever — the claw cannot fire in the store room [M Player_WeaponFiring 0x1a5460:515-528; the east-duct test's icon_ctx 0xff pin] and the SkyBridge type-2 icon sits on the TRENCH floor at (45.27, 0.41, 62.94) [D icon census], so the game's own crossing is the trench-floor claw-up to #658 (45.29,5.10,62.94) — latch, reel 0.05->1.5/tick, hang < 2.0 [M Player_SSGrapple 0x192860:79-121], release [M 0x192860:56-66] — which first needs the store-room->trench leg walked (the crawl's lintel stop at x 40.98 is the doc's live check; the duct's east end at x 41.53 opens over the gap [D §1a])"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage() {
     walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
 }
