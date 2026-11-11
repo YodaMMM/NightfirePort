@@ -416,6 +416,13 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // (clip 1-3, spare 0-9 [L the 2026-11-07 run-1 trace, fight#18/fight#10 t0]) — the fights'
     // master give-up on a dry mag left #10 at full hp; a player whose mag runs dry mid-fight
     // cycles to the next loaded firearm (the field doc: the 02/03 00agent idiom).
+    // real-health-00agent-15-5: the d3 widening MEASURED WORSE — the run15q ledger: the
+    // aperture fight went from 14.0 in 2 hits to 79.0 in 4 (the grenadier's own blasts at 00)
+    // and the walk died at t1048 at the aperture (81.53,41.41,-0.49): with switch_dry the mag
+    // cycles mid-fight and the fight runs past the grenadier's first two throws; the flags
+    // stay d2-only (the doc's own gate). The #8-first-throw lever needs a different answer
+    // (a d3 stand at the plank's own cover edges, or the fights' pick reaching him before the
+    // arc lands — the next session's work, with the meet's pool chain).
     if difficulty == 2 && !w.tops_up() {
         w.dmg.pre_throw_stands = true;
         w.dmg.switch_dry = true;

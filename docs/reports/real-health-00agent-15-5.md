@@ -100,3 +100,13 @@ was reachable throughout):
    → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`.
 3. `wget -q -O- --timeout=15 --post-data "real-health-00agent-15-5: done …" https://ntfy.sh/nightfire-yoda-8k3x`
    → exit code 4 (network failure; no output).
+
+## The session's last lever (measured WORSE, reverted)
+
+Widening `pre_throw_stands`/`switch_dry` to d3 (the #8-first-throw direction): the run15q ledger
+— the aperture fight went from 14.0 in 2 hits to **79.0 in 4** (the grenadier's own blasts at 00)
+and the walk died at t1048 at the aperture: with `switch_dry` the mag cycles mid-fight and the
+fight runs past the grenadier's first two throws. Reverted; the t5527 ledger restored
+byte-identically on the re-run. The flags stay d2-only (the doc's own gate); the #8 lever needs a
+different answer (a d3 stand at the plank's own cover edges, or the fights' pick reaching him
+before the arc lands), together with the meet's pool chain — the next session's work.
