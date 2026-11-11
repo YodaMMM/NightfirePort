@@ -82,12 +82,12 @@ fn walk_spawn_to_the_shaft_exit_at(difficulty: u32) {
         // los-mask-repins-12: the Operative route takes the 543 west-stand crossing — the d3/d2
         // diagonal's stuck-E lands east of the hinge and the leg wedges at d1 [L the runs].
         tower2::DOOR_543_WEST_STAND.with(|c| c.set(true));
-        // los-mask-repins-12-2: the west-stand leg's stuck ladder fires the nudge left and its
-        // `sidestep -= 1` grows a left nudge forever — the crossing leg measured sidestep -753,
-        // Bond strafe-left pinned at the door recess for the rest of the walk [L the
-        // NF_WALKTRACE run]. walker.rs's `sidestep_decays` mirrored; the d1 walk is the only
-        // setter (the d3/d2 walks keep the tuned old ladder).
-        w.sidestep_decays = true;
+        // walker-sidestep-decay: the 12-2 patch's `w.sidestep_decays = true` setter is GONE —
+        // the decay is the walker's default now (the old `sidestep -= 1` grew a LEFT nudge
+        // forever; the crossing leg measured sidestep -753 with Bond strafe-left pinned at the
+        // door recess [L the NF_WALKTRACE run]). The red proof: this walk without the setter
+        // (before the walker change) wedged at the west stand (10.62,1.03,−15.73), the
+        // 6000-tick cap.
     }
     tower2::walk_12(&mut w);
     tower2::walk_12_exit(&mut w);
@@ -150,7 +150,8 @@ fn walk_spawn_to_the_shaft_exit_real_damage_agent() {
 /// first — the corridor's west wall is solid north of the hole, and the old single west steer
 /// pinned Bond there while the stuck ladder's door answer no-oped on the open leaf), the
 /// west-stand E + the straight crossing run as los-mask-repins-12 proved them, and the
-/// walker's `sidestep_decays` (opt-in, this walk only) ends the stuck ladder's left nudge so
+/// walker's sidestep decay (walker-sidestep-decay: the walker default that replaced the 12-2
+/// opt-in `sidestep_decays` setter) ends the stuck ladder's left nudge so
 /// the crossing leg is not strafe-crippled (sidestep −753 at its first tick [L the
 /// NF_WALKTRACE run]). Drone #2 (skin 0x5000008, weapon 0x19, the south hall's lower floor)
 /// is answered by the level's own return-fire machinery once the crossing puts Bond inside

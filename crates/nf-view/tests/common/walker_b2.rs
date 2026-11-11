@@ -115,13 +115,6 @@ pub struct Walker {
     /// answers the E, and the press reset the ladder forever), and a live hostile standing on
     /// the lane within a body's reach on Bond's floor is shot before the walk goes on.
     pub stuck_answers: bool,
-    /// The left nudge (`sidestep < 0`) counts back up to 0, OPT-IN (walker.rs's
-    /// `sidestep_decays` mirrored; default off keeps every walk tuned on the old ladder —
-    /// a left nudge there grows forever and strafes Bond left through every later leg).
-    /// los-mask-repins-12-2: the 07000012 d1 walk is the only setter so far — its west-stand
-    /// leg's stuck ladder fired the nudge left and the crossing leg measured sidestep -753
-    /// with Bond pinned at the door recess ([L the NF_WALKTRACE run]).
-    pub sidestep_decays: bool,
     /// ai-sight-drawn-gate-4 (NF_ALARM_TRACE, additive): each drone's last logged state, so the
     /// trace prints only transitions + a 50-tick digest — the fail reads as the presser's walk.
     pub alarm_last: Vec<u8>,
@@ -178,13 +171,13 @@ impl Walker {
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0, float_ticks: 0,
             sidestep: 0, max_y: pos[1], lenient: false, stuck_answers: false,
-            // The left nudge (`sidestep < 0`) counts back up to 0, OPT-IN — walker.rs's
-            // `sidestep_decays` mirrored (the 07000012 d1 walk is the only setter so far): the
-            // stuck ladder's `sidestep -= 1` only ends a right nudge, a left one (-40) grows
-            // forever, and the west-stand route's d1 walk measured the carry directly — the
-            // crossing leg started at sidestep -753 with Bond strafe-left pinned at the door
-            // recess for the rest of the walk (los-mask-repins-12-2, [L the NF_WALKTRACE run]).
-            sidestep_decays: false,
+            // The stuck ladder's nudge counter decays toward 0 every steered tick and RESETS at
+            // every ride/grab scope boundary (walker-sidestep-decay: the two level patches —
+            // los-mask-repins-0c-3's post-ride `reset_sidestep` and -12-2's opt-in
+            // `sidestep_decays` — replaced by this walker default; the old `sidestep -= 1`
+            // only ended a RIGHT nudge, a left one (−40) grew forever and the 07000012
+            // crossing leg measured sidestep −753 with Bond strafe-left pinned [L the
+            // NF_WALKTRACE run]).
             alarm_last: Vec::new(),
             alarm_props_dumped: None,
             no_fetch: Vec::new(),
@@ -748,6 +741,9 @@ impl Walker {
                 let on = self.scene.sim.as_ref().unwrap().bond.substate;
                 if on != nf_game::player::SS_WIRE && on != nf_game::player::SS_ZIPLINE {
                     riding = false;
+                    // Ride scope END (walker-sidestep-decay): the counter cannot carry out of
+                    // the ride's direct `step_bond` stretches into the next steered leg.
+                    self.sidestep = 0;
                     self.report.legs.push((format!("{label} (wire ride)"), self.total_ticks - start_ticks, self.pos));
                     eprintln!("[walk] {label}: wire ride ended at +{} ticks, pos {:?}", self.total_ticks - start_ticks, self.pos);
                     return self.total_ticks - start_ticks;
@@ -761,6 +757,9 @@ impl Walker {
                 let y = sim.bond.pos[1];
                 if sim.bond.substate != nf_game::player::SS_CLIMB && y > wp.at[1] - 1.2 && sim.bond.grounded {
                     ladder = false;
+                    // Grab scope END (walker-sidestep-decay): the climb never decremented the
+                    // counter — clear it so the next steered leg starts straight.
+                    self.sidestep = 0;
                     self.report.legs.push((format!("{label} (climb)"), self.total_ticks - start_ticks, self.pos));
                     eprintln!("[walk] {label}: ladder climbed to y {y:.2} at +{} ticks", self.total_ticks - start_ticks);
                     return self.total_ticks - start_ticks;
@@ -839,6 +838,9 @@ impl Walker {
                         self.tick(input, false);
                         if self.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_CLIMB {
                             ladder = true;
+                            // Grab scope BEGIN (walker-sidestep-decay): the climb is a direct
+                            // `step_bond` stretch — clear the pre-grab carry here.
+                            self.sidestep = 0;
                             eprintln!("[walk] {label}: ladder grabbed at +{} ticks", self.total_ticks - start_ticks);
                         }
                         if self.total_ticks - start_ticks > 1200 {
@@ -851,6 +853,9 @@ impl Walker {
                         if self.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_WIRE
                             || self.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_ZIPLINE {
                             riding = true;
+                            // Ride scope BEGIN (walker-sidestep-decay): the grab ends a steered
+                            // stretch mid-nudge — clear the carry before the direct ride loop.
+                            self.sidestep = 0;
                             eprintln!("[walk] {label}: wire grabbed at +{} ticks", self.total_ticks - start_ticks);
                             continue;
                         }
@@ -885,10 +890,11 @@ impl Walker {
             if self.sidestep != 0 {
                 input.strafe = if self.sidestep > 0 { 1.0 } else { -1.0 };
                 input.forward = 0.4;
-                // OPT-IN `sidestep_decays` (walker.rs's flag, mirrored): a left nudge counts
-                // back up to 0 instead of growing forever. Default OFF — the walks tuned with
-                // the old behaviour keep it.
-                self.sidestep -= if self.sidestep_decays { self.sidestep.signum() } else { 1 };
+                // The nudge decays toward 0 on BOTH sides (walker-sidestep-decay: the decay is
+                // the walker's default — the old `sidestep -= 1` grew a LEFT nudge forever;
+                // los-mask-repins-12-2 measured sidestep −753 with Bond strafe-left pinned at
+                // the 07000012 door recess [L the NF_WALKTRACE run]).
+                self.sidestep -= self.sidestep.signum();
             }
             // NF_WALKTRACE=1 per-tick diagnostic (los-mask-repins-12-2): the first 240 ticks of
             // each leg print the raw steering inputs and the pose, so a slow-start wedge reads
@@ -978,15 +984,18 @@ impl Walker {
         }
     }
 
-    /// Clear the stuck ladder's sidestep counter, OPT-IN (los-mask-repins-0c-3: the 0700000c
-    /// real-damage walk's post-#282-ride scope is the only caller). The counter would otherwise
-    /// carry ACROSS the route's direct `step_bond` stretches (the wire grab + the rides never
-    /// decrement it) into the next walk_to leg, whose steering then strafes for |sidestep| ticks
-    /// — a stale LEFT nudge (facing east, strafe −1 = north) swung the post-ride walk 0.84 u
-    /// north of the clean steering path at the same x and Bond walked off the thin band's north
-    /// edge (the measured fall to (6.26,1.13,−221.83) [L the run]; the clean hand-steered path
-    /// from the same landing reaches the same target at (7.117,12.718,−222.412) [L the rd-diag]).
-    /// Default behaviour is unchanged: nothing calls this but the opt-in scope.
+    /// Clear the stuck ladder's sidestep counter at a ride/grab scope boundary — the walker
+    /// contract the walk_to scopes follow themselves (walker-sidestep-decay: the counter is
+    /// reset when a ride or grab scope BEGINS or ENDS). The direct `step_bond` loops that own
+    /// their own wire rides (walkreal0c's three) call this at the grab and at the drop, and
+    /// the climb/ride stretches inside walk_to reset automatically. The counter would
+    /// otherwise carry ACROSS the route's direct `step_bond` stretches (the wire grabs + the
+    /// rides never decrement it) into the next walk_to leg, whose steering then strafes for
+    /// |sidestep| ticks — a stale LEFT nudge (facing east, strafe −1 = north) swung the
+    /// post-ride walk 0.84 u north of the clean steering path at the same x and Bond walked
+    /// off the thin band's north edge (the measured fall to (6.26,1.13,−221.83) [L the run;
+    /// the clean hand-steered path from the same landing reaches the same target at
+    /// (7.117,12.718,−222.412) [L the rd-diag]]).
     pub fn reset_sidestep(&mut self) {
         self.sidestep = 0;
     }
