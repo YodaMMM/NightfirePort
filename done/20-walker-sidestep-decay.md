@@ -26,3 +26,7 @@ claimed-by: sandbox3 at 2026-11-11T05:57Z
 ## Report (done, 2026-11-11T06:51Z)
 
 Closed by the driver: the report is on `s/walker-sidestep-decay` (docs/reports/walker-sidestep-decay.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-11-11T07:04Z)
+
