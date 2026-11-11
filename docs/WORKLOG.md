@@ -36,3 +36,35 @@ pre-clear before the meet walk. Helpers stay gated to 07000001 + difficulty; rea
 no top-ups, never lower damage or health. Remove the ignore when green; else push ledger+lever.
 - (07:12) setup: clone, branch, WORKLOG entry, checkpoint pushed. Next: read the prior report
   and the 00 Agent ignore message; downloads (work-slim, ISO) next.
+
+## real-health-00agent-01-hall-2
+Started 2026-11-11 07:12 UTC. Branch s/real-health-00agent-01-hall-2 cut from origin/s/real-health-00agent-01-hall (4f76e3fb90) and merged with origin/master (already up to date).
+Task: continue the 00 Agent hall walk from the prior ledger's next lever — the west-corridor
+pre-clear before the meet walk. Helpers stay gated to 07000001 + difficulty; real input only,
+no top-ups, never lower damage or health. Remove the ignore when green; else push ledger+lever.
+- (07:12) setup: clone, branch, WORKLOG entry, checkpoint pushed. Next: read the prior report
+  and the 00 Agent ignore message; downloads (work-slim, ISO) next.
+- (08:28-08:40) sandbox kept the repo; fixed the ALSA dev-symlink for the linker (the extracted
+  libasound.so pointed at a missing .2.0.0 — relinked to the system libasound.so.2, RUSTFLAGS
+  -L the prefix). Probe dump [L]: the d3 roster's live guards after the intro are exactly the
+  ledger's 13/0/8 (#0 0x5000036 at (-7.8,-5.9), #8/#13 0x5000039 SMG at (-10.1,-0.3)/(-1.0,-0.2)).
+- (08:40-08:50) repro on the branch base: the base d3 walk died at tick 13546 at the door phase,
+  49 hp left — the ledger's numbers exactly (#13 25.2 in 14 + #0 24.0 in 2 + #8 1.8 [L the
+  repro trace]).
+- (08:50-09:35) the pre-clear through 4 measured iterations: run 1 (return-fire holds in the
+  open, 65.4), run 2 (nav stopped 1 u short of the stance, 34.2 to #13), run 3 (bullet-lane
+  grid lie — sight rays don't stop bullets; the #8 fight took 50.4 from the open stance), run 4
+  (per-guard stances: #0/#13 from the west band, #8 from the spawn-area south where the base
+  repro's whole walk took ONE #8 round) — 45.0 total, #8 free, and ZERO damage from the
+  corridor to the door phase (55.0 hp at the door vs the base's 49.0).
+- (09:35-10:05) the hall phase: run 5 died to the return-fire flank INTO the hall — added the
+  opt-in Walker::flank_hold_z (a guard across the aperture never takes a flank nav; None by
+  default, the d3 hall phase sets 11.2, cleared after the AND). Runs 6-8: the AND crowd won't
+  die — the sustained lures ran with full pools and drew NO crossings (alive-across ×3 every
+  run) while the crouch fights burned the pool on body taps; d3 now goes lures-first (the
+  crouch fight stays d1/d2). The walk survives to the door phase at 55.0 and the named loop
+  runs dry — the ledger + the next lever (the door-phase kill path) pushed into the ignore.
+- (10:10-10:20) whole walkreal_07000001_live: 7 passed 1 failed (the d3 ledger only; d1/d2
+  byte-identical); interactables_07000001_live 10/10. Report written; the fast suite did not
+  fit (the sandbox OOM-kills the 4-crate build; 4 GB) — the explicit batteries are the
+  coverage, re-run the suite before merging.
