@@ -360,6 +360,65 @@ fn d3_switch_to_deepest_gun(w: &mut Walker, label: &str) {
     for _ in 0..60 { w.tick(Default::default(), false); } // the holster/draw cycle
 }
 
+/// real-health-00agent-01-hall-2 (d3): one CHOSEN corridor fight — walk the stance the
+/// bullet-lane grid measured, then the bounded tap loop (the hall hold-line fight's shape,
+/// CROUCHED: the grid's clear return rays are at the crouched eye) with the empty-clip reload
+/// (the same `[M Player_WeaponFiring 0x1a5460's reload branch]` arg), and the walk's own shoot
+/// as the fallback. Returns whether the guard is dead. The taps fire only on an exposed part
+/// (one head hit drops a 12-hp guard [M NDrone2_HitDamage 0x145558 head ×100]) so the pool
+/// spends on kills, not on wall noise.
+fn d3_corridor_fight(w: &mut Walker, g: usize, stance: [f32; 2], label: &str) -> bool {
+    if w.scene.sim.as_ref().unwrap().drones.list[g].health <= 0.0 { return true; }
+    // The arrive is TIGHT: run 2's 1.0 radius stopped the nav 1 u short (x -9.5, the lane
+    // boundary) and the fights ran outside the measured band [L the run-2 trace: #13's
+    // return-fire fight took 34.2 at (-9.5,-9.1)].
+    w.walk_nav_to([stance[0], 6.4, stance[1]], &format!("{label} guard {g} stance"), 0.4);
+    for t in 0..2400u32 {
+        let aim = w.exposed_aim(g);
+        let (input, trigger, done, need_reload) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.list[g];
+            if d.corpse || d.health <= 0.0 { (Input::default(), false, true, false) }
+            else {
+                let bp = sim.bond.pos;
+                let at = aim.unwrap_or([d.pos[0], d.pos[1] + 0.3, d.pos[2]]);
+                let desired = (at[0] - bp[0]).atan2(at[2] - bp[2]);
+                let err = walker::wrap_pi(desired - sim.bond.yaw);
+                let want_pitch = ((at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop)) / walker::dxz(bp, at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+                let perr = want_pitch - sim.bond.pitch;
+                // The lane trigger: the scoped SIGHT ray can be blocked where the game's own
+                // flying-round trace is clear (the guard-side cover blocks the eye, not the
+                // bullet — the grid's `--r` cells) [L the bullet-lane grid; M drone.rs:16465
+                // the round's world trace]. A part in the open fires on the sight; a covered
+                // guard with a clear flight lane fires on the lane.
+                let ce = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                let lane = sim.world.segment_flight_scoped(sim.world.find_cel(ce), ce, [d.pos[0], d.pos[1] + 0.3, d.pos[2]], false).is_none();
+                (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), crouch: true, ..Default::default() },
+                    (aim.is_some() || lane) && err.abs() < 0.02 && perr.abs() < 0.028, false, sim.gun.clip == 0 && sim.gun.spare > 0)
+            }
+        };
+        if done { break; }
+        if need_reload {
+            w.scene.sim.as_mut().unwrap().step_bond(input, false, true, false);
+        } else {
+            w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
+        }
+        w.total_ticks += 1;
+        w.after_step();
+        if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+    }
+    let mut dead = w.scene.sim.as_ref().unwrap().drones.list[g].health <= 0.0;
+    if !dead {
+        if !w.shoot(g, &format!("{label} guard {g}")) {
+            if w.resupply(&format!("{label} guard {g} ammo")) { w.shoot(g, &format!("{label} guard {g} retry")); }
+        }
+        dead = w.scene.sim.as_ref().unwrap().drones.list[g].health <= 0.0;
+    }
+    eprintln!("[01] {label} guard {g}: dead {dead} at tick {} (bond health {:.1})", w.total_ticks,
+        w.scene.sim.as_ref().unwrap().drones.health.health);
+    dead
+}
+
 fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker { walk_to_the_exit_at(iso, stop_at_fire, 1) }
 
 /// The walk at `difficulty` — the difficulty select's GameState+0x28 value (1 Operative, 2 Agent,
@@ -480,6 +539,39 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // Agent kill order: the pellet-stream carriers first (the level's SMG guard 0x12 ground
     // 21 × 1.05-2.10 into the close-order run — a player silences the sprayer before the pistols).
     let mut guards = if difficulty >= 2 { agent_order(&w, &guards) } else { guards };
+    // real-health-00agent-01-hall-2 (d3, the ledger's ROUTE lever): the west-corridor pre-clear —
+    // the fights Bond CHOOSES from measured cover, not the return-fire answers he eats while the
+    // approach legs thread the open lanes. The BULLET-lane grid [L the probe on this tree: the
+    // game's own flying-round world trace `segment_flight_scoped` [M drone.rs:16465] from each
+    // guard's fire bone (pos+0.4) to Bond's body at standing (+0.5) and crouched (+0.05) height,
+    // rows z -13..-2 × cols x -12..-1] gives the safe band: at x -11..-10 BOTH SMG lanes (#8/#13)
+    // are blocked at BOTH body heights while the return rays stay clear — and #0's lane reaches
+    // EVERY south stance (he is the open room's guard; the repro took his 2×12.0 at (-7.3,-10.3)
+    // and (-8.6,-12.6) [L the base repro trace]), so he dies first, 1 head hit, from the same
+    // band. Run 1's 65.4-hp tax rode the return-fire holds at x -8.6..-8.7 — the grid's `SC.`
+    // cells, #8's lane zone — because the fights answered the first round WHERE IT LANDED. So
+    // the stance is reached FIRST (return fire off for the 2-u approach leg — the fights must
+    // happen from the band), then all three fights run crouched from it. The indices are the
+    // load roster's [L the d3 probe dump: #0 skin 0x5000036, #8/#13 skins 0x5000039 SMG, all
+    // three enabled by the intro's ch 0xB] — deterministic like route_order's [L the d2 logs];
+    // a guard the stream moved out of the within-14 set just drops out of the chain.
+    if difficulty >= 3 {
+        w.dmg.return_fire = false;
+        w.walk_nav_to([-10.5, 6.4, -9.0], "the west pre-clear stance (the bullet-lane band)", 0.4);
+        w.dmg.return_fire = true;
+        // The determined pass is OFF for the pre-clear: run 1 ground 10800 ticks on a walled
+        // 1-hp guard for 12.6 hp [L the run-1 trace] — a failed chosen fight here leaves the
+        // guard to the loop below (the walk's own machinery), it does not flank east into the
+        // lanes (the run-2 death at (-1.6,-5.2) rode that ladder).
+        let finish0 = w.dmg.finish_fights;
+        w.dmg.finish_fights = false;
+        for g in [0usize, 13, 8] {
+            if !guards.contains(&g) { continue; }
+            d3_corridor_fight(&mut w, g, [-10.5, -9.0], "west pre-clear");
+            if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+        }
+        w.dmg.finish_fights = finish0;
+    }
     for g in guards {
         // Walk within 9 of the guard first (line of sight), then shoot. Agent: stop at 8 — the
         // fight happens outside the TooClose band (the close-order run walked to 3.5 and fought
