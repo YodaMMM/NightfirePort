@@ -1222,6 +1222,13 @@ pub struct Drone {
     pub cover_rt: Vec<crate::cover::CoverRt>,
     pub others: Vec<Option<V3>>,
     pub peers: Vec<(usize, V3, bool)>,
+    /// `NDrone2_DroneNearPos` 0x143e68's list-tier snapshot, lent by `Drones::tick` like `peers`:
+    /// the (index, pos) of every drone passing the class-2 gate [M 0x143f58-0x143fa8 —
+    /// `(ext+0x4F8 & 0x600) == 0 && (& 0x100) != 0`, `+0xAC > 0.0`, class `+0xFF != 0x11`
+    /// (BOT_respawn 0x124e38:90's MP respawned bot — unmodelled, SP never writes it), and
+    /// obj+0xFE bit 0 clear (deleted); the port's fold is the door.rs class-2 mapping:
+    /// present ∧ enabled ∧ non-corpse ∧ health > 0].
+    pub near_peers: Vec<(usize, V3)>,
     /// The state `GoToGoalPosition` returns to (`+0x5A2`); the second switch (`+0x135`, parameter 6) and its tag
     /// (`+0x13A`, parameter 8).
     pub return_state: u8,
@@ -2225,7 +2232,7 @@ impl Drone {
             link_flags: Vec::new(), locked_door_nodes: Default::default(),
             switch_channel: param(3) as u8, channel_on: false, placement: 0, spawn_seq: 0, spawn_frame: 0, group: param(4), present: true, started: false, drawn: true, enabled: true, index: 0, exiting_to: 0, self_msg: None,
             cover: None, cover_side: 0, cover_type: 0, cover_leave: 0, cover_point: pos, goal: None, cover_claimed: false, has_cover: false, cover_tries: 0,
-            cover_rt: Vec::new(), others: Vec::new(), peers: Vec::new(), return_state: 0, second_channel: param(6) as u8, second_tag: param(8),
+            cover_rt: Vec::new(), others: Vec::new(), peers: Vec::new(), near_peers: Vec::new(), return_state: 0, second_channel: param(6) as u8, second_tag: param(8),
             captor: None, hostage_searched: false,
             hostage_target: None, killer_searched: false, msg_out: Vec::new(), msg_now: Vec::new(),
             loudness: 0.0, sound_share: 0.0, heard_frame: 0, heard_peak: 0.0, sound_pos: pos, noise_level: 0, investigating: false, turned: false, resume_state: 0, home: pos,
@@ -2743,7 +2750,9 @@ impl Drone {
         let feet = self.feet();
         let Some(route) = self.route.as_mut() else { self.request_anim(d, anim_state::STAND_IDLE); return };
         let ppos = self.player_pos;
-        let (code, reached) = route.follow(d.nav, feet, &|p| Drone::ppos_near(ppos, p), self.hit_door.is_some());
+        let my_index = self.index;
+        let near_peers: &[(usize, V3)] = &self.near_peers;
+        let (code, reached) = route.follow(d.nav, feet, &Drone::near_pos_fn(ppos, my_index, near_peers), self.hit_door.is_some());
         let target = route.target;
         if let Some(node) = reached {
             let flags = d.nav.paths[route.path].nodes[node as usize].flags;
@@ -2845,21 +2854,41 @@ impl Drone {
     /// The game's LIST tier [M :20-58] also counts an eligible drone: the class-2 gate
     /// (`+0x4F8 & 0x600 == 0 && & 0x100 != 0`, health `+0xAC > 0`, class `+0xFF != 0x11`, not
     /// deleted `+0xFE & 1 == 0` — the same gate `Door_ReactToHit`'s selection uses) within the
-    /// CALLER's radius 2D and 2.0 in y; the radius is the caller's float param
-    /// (`LinkCreep_AtSpecialNode` 0x159dd0:58 passes the route record's +0x7C;
-    /// `DroneFunc_AnyoneNear` 0x14a718:26 passes its own radius argument). The port's route-follow
-    /// closure cannot reach the drone list (the borrow split — the same constraint the
-    /// door-guard pairing documents), so the list tier stays unwired here; the PLAYER tier is
-    /// the arm the route walks actually hit in the shipped levels.
+    /// CALLER's radius 2D and 2.0 in y; the radius is the caller's float param (in $f12 —
+    /// `LinkCreep_AtSpecialNode` 0x159dd0:58 pins 0.4 [M 0x159eb8-0x159ec0 live at the jal
+    /// 0x159ef8, squared at 0x143eac]; `DroneFunc_AnyoneNear` 0x14a718:26 passes its own radius
+    /// argument). The port's route-follow closure cannot reach the drone list in place (the
+    /// borrow split — the same constraint the door-guard pairing documents), so the list tier
+    /// rides the `near_peers` snapshot `Drones::tick` lends each drone (see `near_pos_fn`).
     fn ppos_near(pp: V3, p: V3) -> bool {
         let dx = pp[0] - p[0]; let dz = pp[2] - p[2];
         dx * dx + dz * dz < 0.3025 && (pp[1] - p[1]).abs() < 2.0
+    }
+
+    /// The `near_pos` closure `Route::follow` consults in a special node's 0.4-1.0 band —
+    /// `NDrone2_DroneNearPos` 0x143e68 in full. The PLAYER tier first [M 0x143ec4-0x143f20:
+    /// the player within 0.55 2D / 2.0 y returns 1 without the list walk], then the LIST tier
+    /// [M 0x143f40-0x144000]: any drone passing the class-2 gate within the CALLER's radius and
+    /// 2.0 in y — the caller itself skipped [M 0x143f48]. The route caller is
+    /// `LinkCreep_AtSpecialNode` 0x159dd0:58, whose radius is 0.4: 0x3ecccccd is loaded into $f12
+    /// at 0x159eb8-0x159ec0 for the 0.4 compare and stays live at the jal 0x143e68 (0x159ef8);
+    /// the callee squares it at 0x143eac (`mul.s $f20, $f12, $f12`) and tests
+    /// `Vec_SqDist2D < r²` at 0x143fb8-0x143fc0, |dy| < 2.0 at 0x143fd0-0x143fe8. The class-2
+    /// gate's port fold is the door.rs mapping (present ∧ enabled ∧ non-corpse ∧ health > 0,
+    /// the +0xFF 0x11 arm being BOT_respawn's MP-only write).
+    pub(crate) fn near_pos_fn<'a>(ppos: V3, my_index: usize, near_peers: &'a [(usize, V3)]) -> impl Fn(V3) -> bool + 'a {
+        move |p| Drone::ppos_near(ppos, p)
+            || near_peers.iter().any(|&(i, q)| i != my_index
+                && (q[0] - p[0]).powi(2) + (q[2] - p[2]).powi(2) < 0.16
+                && (q[1] - p[1]).abs() < 2.0)
     }
     fn update_mission_route(&mut self, d: &Data, _rng: &mut Rng, _frame: u32, moving_anim: u16) -> bool {
         let feet = self.feet();
         let Some(route) = self.route.as_mut() else { self.request_anim(d, anim_state::STAND_IDLE); return false };
         let ppos = self.player_pos;
-        let (code, reached) = route.follow(d.nav, feet, &|p| Drone::ppos_near(ppos, p), self.hit_door.is_some());
+        let my_index = self.index;
+        let near_peers: &[(usize, V3)] = &self.near_peers;
+        let (code, reached) = route.follow(d.nav, feet, &Drone::near_pos_fn(ppos, my_index, near_peers), self.hit_door.is_some());
         let target = route.target;
         // `NDrone2_ReachedDestNode` (0x153358, via `LinkCreep_Handler` 0x15a2c8): a reached door node
         // parks the drone in `DSTATE_OpenDoor` (fix-npc-doors-escort); the kick/action/fiddle nodes
@@ -6499,7 +6528,9 @@ impl Drone {
             // goal's own radius (form 1), not a global 2.0.
             if route.remaining < self.goal_arrival { return 3; }
             let ppos = self.player_pos;
-            let r = route.follow(d.nav, feet, &|p| Drone::ppos_near(ppos, p), self.hit_door.is_some());
+            let my_index = self.index;
+            let near_peers: &[(usize, V3)] = &self.near_peers;
+            let r = route.follow(d.nav, feet, &Drone::near_pos_fn(ppos, my_index, near_peers), self.hit_door.is_some());
             // `LinkCreep_Handler` (0x15a2c8) runs `ReachedDestNode` for EVERY followed route — the
             // repositioning drives through door/kick/action nodes like any other (fix-nav-remainder).
             // The successor node is the one AFTER the reached node in the route's node list (the
@@ -9750,7 +9781,9 @@ impl Drone {
                 let mut code = crate::nav::follow::NO_PATH;
                 if self.route.is_some() {
                     let ppos = self.player_pos;
-                    let (c, reached) = { let r = self.route.as_mut().unwrap(); r.follow(d.nav, feet, &|p| Drone::ppos_near(ppos, p), self.hit_door.is_some()) };
+                    let my_index = self.index;
+                    let near_peers: &[(usize, V3)] = &self.near_peers;
+                    let (c, reached) = { let r = self.route.as_mut().unwrap(); r.follow(d.nav, feet, &Drone::near_pos_fn(ppos, my_index, near_peers), self.hit_door.is_some()) };
                     {
                         let r = self.route.as_ref().unwrap();
                         let next = reached.and_then(|n| r.nodes.iter().position(|&x| x == n)).and_then(|i| r.nodes.get(i + 1)).copied();
@@ -11663,7 +11696,9 @@ impl Drone {
         if route.remaining < 2.0 { return 3; }
         if !follow { return 0; }
         let ppos = self.player_pos;
-        let (mut code, reached) = route.follow(d.nav, feet, &|p| Drone::ppos_near(ppos, p), self.hit_door.is_some());
+        let my_index = self.index;
+        let near_peers: &[(usize, V3)] = &self.near_peers;
+        let (mut code, reached) = route.follow(d.nav, feet, &Drone::near_pos_fn(ppos, my_index, near_peers), self.hit_door.is_some());
         // `LinkCreep_Handler` (0x15a2c8) dispatches `NDrone2_ReachedDestNode` for the combat route
         // too: `NDrone2_MoveToObject` 0x151618:65 → `NDrone2_FollowRoute` 0x155be0:43 →
         // `AINetwork_FollowRoute` 0x15b110:21 → `LinkCreep_Handler` — a chasing guard reaching a
@@ -20973,6 +21008,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             dr.armed_peer_exit_dist = sighted[i].0.min(latched[i]);
         }
         let peers: Vec<(usize, V3, bool)> = self.llist.iter().map(|&i| (i, self.list[i].pos, self.list[i].seen)).filter(|&(i, _, _)| self.list[i].enabled).collect();
+        // `NDrone2_DroneNearPos` 0x143e68's list tier walks the game's drone list under the class-2
+        // gate [M 0x143f58-0x143fa8: (ext+0x4F8 & 0x600) == 0 && (& 0x100) != 0, +0xAC > 0.0, class
+        // +0xFF != 0x11 — BOT_respawn 0x124e38:90's MP respawned bot, unmodelled (SP never writes
+        // it) — and obj+0xFE bit 0 clear (deleted)]; the port's fold is the door.rs class-2 mapping
+        // (present ∧ enabled ∧ non-corpse ∧ health > 0). Snapped pre-walk like `peers`.
+        let near_peers: Vec<(usize, V3)> = self.list.iter().enumerate()
+            .filter(|(_, x)| x.present && x.enabled && !x.corpse && x.health > 0.0)
+            .map(|(i, x)| (i, x.pos)).collect();
         // NoBunching's candidate snapshot (present, enabled, non-corpse — the game's chain rides
         // +0x4F8 bits the port does not model), indexed by drone index.
         let bunching_ok: Vec<bool> = self.list.iter().map(|x| x.present && x.enabled && !x.corpse).collect();
@@ -22162,6 +22205,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let _pc = crate::prof::scope("drone: clones + misc");
             dr.others = positions.clone();
             dr.peers = peers.clone();
+            dr.near_peers = near_peers.clone();
             // `DroneMove_NoBunching` (0x150ad0) over `NDrone2_Steer`'s (0x14eba8) obstacle scan —
             // DRONE-ONLY: the game's +0x314 obstacle is written by `NDrone2_EvaluateObstacle`
             // (0x14e6f0:58-65) only for a drone candidate (`param_2 != 0`; the write IS the
@@ -25069,7 +25113,7 @@ mod tests {
             link_flags: Vec::new(), locked_door_nodes: Default::default(),
             switch_channel: 0, channel_on: false, placement: 0, spawn_seq: 0, spawn_frame: 0, group: 0, present: true, started: false, drawn: true, enabled: true, index: 0, exiting_to: 0, self_msg: None,
             cover: None, cover_side: 0, cover_type: 0, cover_leave: 0, cover_point: pos, goal: None, cover_claimed: false, has_cover: false, cover_tries: 0,
-            cover_rt: Vec::new(), others: Vec::new(), peers: Vec::new(), return_state: 0, second_channel: 0, second_tag: 0,
+            cover_rt: Vec::new(), others: Vec::new(), peers: Vec::new(), near_peers: Vec::new(), return_state: 0, second_channel: 0, second_tag: 0,
             captor: None, hostage_searched: false,
             hostage_target: None, killer_searched: false, msg_out: Vec::new(), msg_now: Vec::new(),
             loudness: 0.0, sound_share: 0.0, heard_frame: 0, heard_peak: 0.0, sound_pos: pos, noise_level: 0, investigating: false, turned: false, resume_state: 0, home: pos,
