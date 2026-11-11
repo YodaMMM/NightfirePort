@@ -109,3 +109,18 @@ cleanup untouched (optional, green), `hop_into_the_trench` and the route's shape
 
 not visible to me — this environment exposes no token, cost or context-window figures for the
 session (no /usage, no billing panel).
+
+## ntfy failed
+
+All three fallbacks, in order, with their exact outputs (2026-11-11T08:33-08:34Z):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'level-14-skybridge-retune-2: done', headers={'Title':'NightfirePort'}), timeout=20)"` →
+   `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `timeout 25 wget -q -O /tmp/ntfy14.txt --post-data "level-14-skybridge-retune-2: done" https://ntfy.sh/nightfire-yoda-8k3x` →
+   killed at the timeout, `wget rc=124`, `/tmp/ntfy14.txt` empty (0 bytes). (A first masked
+   run through a pipe printed rc=0 — the pipe's `head` exit code, not wget's; the clean retry
+   above is the true result.)
+
+The branch (tip with the report), the WORKLOG and the queue entry (done/10-level-14-skybridge-retune-2.md,
+`OK done` printed) are all pushed; only the push notification did not get out.
