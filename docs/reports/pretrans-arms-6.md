@@ -83,7 +83,9 @@ top-ups added; the helper change is opt-in and gated to the 07000001 d1 walks.
 not visible to me — this environment shows no token, credit or context-window figures for the
 session (no usage panel is exposed to the agent).
 
-## ntfy
+## ntfy failed
 
-(see the WORKLOG entry / the finish step for the send result; if it failed, the exact error is
-recorded here.)
+All three fallbacks failed at ~01:39 UTC 2026-11-11:
+- curl: `curl: (28) Connection timed out after 20002 milliseconds`
+- python3: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+- wget: hung past 45 s, killed with no output (the -5 round hit the same wall at ~20:33 UTC).
