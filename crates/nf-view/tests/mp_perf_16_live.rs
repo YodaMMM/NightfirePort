@@ -103,7 +103,7 @@ fn iso() -> Option<String> {
 // 0xe3fb_90fd_011b_bbef (34 kills).
 // join-1110-mp: the four mp branches joined (setup defaults + DefaultInit bands + arrival 2.0 /
 // raw walk mul + the combat-move draw order) — re-pinned on the joined tree.
-const PINNED_DIGEST: u64 = 0x0241_2276_09ef_6722; // 39 kills (re-pinned for mp-bot-backoff: the game's CanBackoff (the anim gate + the 0.75 MoveTest probe), the visibility bearing in the port's own yaw convention, and the surface-aware site sight — all decompile-backed behaviour changes, not optimisations)
+const PINNED_DIGEST: u64 = 0x48dc_7a24_7dc4_0c04; // 43 kills (re-pinned for mp-bot-site-scan: FindOpponent's MP arm has no early return — the scan 0x1427c4 runs for a site holder too [M-dis 0x142770/0x1427b0 → 0x1427c4], so bots shooting the site now turn to opponents who come into view, and a changed pick resets the hold +0x274/+0x270 [M 0x1257c0:92-96]; decompile-backed behaviour changes, not optimisations)
 
 const TICKS: u32 = 3600;
 
