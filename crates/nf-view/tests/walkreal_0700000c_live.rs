@@ -464,7 +464,21 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(difficulty: u32) {
 /// run: 'objective 3 complete on the 0d arrival — the whole mission walked (0c legs 19287
 /// ticks + 0d 838 ticks)').
 #[test]
-#[ignore = "los-mask-repins-0c-2 (2026-11-10): the west-ledge strip crossing is SOLVED on the real-damage tree up to the #282 ride — the flag scope's own choreography walks it: the fights draw the strip guard #35 off his post (the west-edge stands' gunfire [L the run]), so the no-stand path runs: the MOVING west-lane leg (the drop spot slides Bond off after ~100 idle ticks [L the switch run's y 1.03 fall] and the fights leave his yaw on the last fight target — walk_to's turn-first phase stood still ~130 ticks and fell to y 1.96 [L]), the 12-tick settle, the mid-band stop (-7.0,-218.8; the -8.44 thin wall wedge's rescue arc overshot the band edge and fell to y 2.93 [L]), the diagonals, the #282 ride — ALL held (health 64.2 preserved [L this branch's run]). THE REMAINING BLOCKER: the thin-floor legs AFTER the ride are tick-sensitive — the ride landing shifts ~0.02 u when any leg before the grab re-times it, and the arc ledge leg then overshoots its arrival circle off the east edge (the fall to y 2.01 at (8.99,-222.09) [L the plain run's re-roll] — the pushed-green landing (4.9688,-223.3107) holds at +55 ticks, the shifted (4.9831,-223.2948) falls at +114). The fights' RNG draws shift every guard/round draw downstream, so the real-damage tree's ride lands at its own spot and the arc leg needs the real-damage tree's own arrival fix — the next round's lever: a real-damage-scoped mid-ledge stop NORTH of (8.0,-222.0) (the plain run's hold was at (7.10,12.71,-222.42) — the NORTH side), placed post-ride so it cannot re-shift the ride, plus the same treatment for the arc west end; the return-fire suppression scope (STRIP_NO_FIGHTS) already arms at the crossing and lifts past the thin floors. The landing-shot question is ANSWERED and pinned in walkreal0c.rs's flag branch: the held weapon at the landing is the MICRO-CAMERA 0x54 (no round spawns [M scene.rs:5002]) — the old dry-gun readings were the camera's clip — and the aimed 0x1e shot from the west lane lands (killed true [L the plain runs])."]
+/// level-0c-real-damage-sisters (GREEN — un-ignored): the mid-arc stop lever landed. The
+/// measured run on this tree: the whole chain held to the band's south step-off (9.49,12.87,
+/// -220.21) [L the run] but "the arc west end" overran its arrival circle off the arc's east
+/// edge and fell to the yard (arrived (14.18,2.01,-218.45) [L the run]; the plain run's green
+/// arrival rides the west side at (11.81,-218.53) [L the green run]) and "the ring south-west
+/// arc" wedged 6000 ticks on the yard floor. The fix (walkreal0c.rs, gated `!tops_up()` — the
+/// real-damage tree only, every top-up walk byte-exact): the mid-arc stop (11.0,12.4,-219.3)
+/// r 0.7 — mid-band floor on the run's own [0c-arc] rows (z −219: x 10-14 hold 11.2-11.4) —
+/// shortens the final run-up so the circle is met on its west side, the same treatment the
+/// mid-band stop gave the strip diagonals. Result [L the run]: the stop held (11.46,12.82,
+/// -218.78) at +87 ticks, the arc west end arrived on the west side (11.82,12.86,-218.52) at
+/// +20, the ring south-west arc, the #283 ride, the slot jump and the 0d hand-off all walked —
+/// objective 3 complete on the 0d arrival, the whole mission (0c legs 18714 ticks + 0d 838),
+/// real damage the whole way (the ring fight 43.6 hp; the route's own band-area pickup carried
+/// the run the rest of the way; the 0d warm carry took 96 hp into TR-2).
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
     walker::with_yard_aimed_stands(|| {
         walker::with_far_sniper_stands(|| walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff))
@@ -479,33 +493,41 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
 /// 0x1902c8] and the guards' hit chance by Accuracy row 2 [M DroneWeap_DoBulletAccuracy
 /// 0x179740:74-88]. Real input only; no health, ammo or channel writes.
 ///
-/// IGNORED with the measured run (real-health-agent-0c-0d): the Operative real-damage walk is
-/// byte-identical through tick 4054 (the same fights, the same landed hits — the shared RNG
-/// draws pass both accuracy rows [M DroneWeap_DoBulletAccuracy 0x179740:74-88]) and finishes
-/// the mission at 26.2 hp; the Agent rows (pain Plr_DMod_Normal, hit chance Accuracy row 2)
-/// land the draws d1 dodges and Bond dies. Three lever rounds measured on this branch, each
-/// deterministic:
-/// - run 1 (master fights): DIED tick 4054 (12.96,12.35,-124.38) — 65 hits for 100.0; the
-///   plain nearest-visible pick stood 900-tick fights on the display-ground guards whose own
-///   boxes the hall slab eats (#27 twice, ticks 2707/3637, 26.6 + 29.6 health) while the
-///   d 19.8 machine pistol #30 chewed 26.3 in 25 hits.
-/// - run 2 (+lane fights, the 07000013 law): the fights WIN — #33/#27/#24/#30 all killed —
-///   but each stand still pays the crossfire: DIED tick 6716 (7.18,7.40,-113.15, the display
-///   ground) at 12.5 hp, the below-floor shooter #31 (y 3.2, d 26.3) unkillable from every
-///   stand the route reaches (the down-rays die on the floor edge) chewing the last 12.5.
-/// - run 3 (+escalating failed-fight cooldowns 240→1920): DIED tick 8579 (53.98,6.94,-163.03,
-///   the warehouse plates) — the fights kept winning (#37 killed) but the one tick-5903 fight
-///   on #30 paid 19.0 to the machine pistol's own cadence and the walk arrived at the plates
-///   with 3.0. A 4th round (+dry_taps 3, faster abandonment) RESHUFFLED WORSE: DIED tick 4234
-///   (the fight cycle re-engages sooner) — reverted.
-/// NEXT LEVERS: a d2-gated staircase-head down-shot stand on the display-ground pair (the
-/// 0c yard-stand law — the zero-spread aimed act from the stair head, where the game's own
-/// hall-floor opening x 9..12.4 gives the line); an aimed stand on #31 from the display
-/// pocket (the photograph leg's own spot); the shooter-side read (NF_RF_TRACE + NF_RF_GEOM on
-/// the tick-5903 fight) to see whether the blocker hold or the slab eats the taps. The
-/// Operative baseline this sister must match: 100.0 → 26.2 hp over 19287+838 ticks.
+/// level-0c-real-damage-sisters (GREEN — un-ignored): the ignore message's levers landed in
+/// order, each judged on its own measured run [L the runs on this tree]:
+/// - The d2-gated STAIR-HEAD DOWN-SHOT stand (walkreal0c.rs, `difficulty >= 2`): from the
+///   stair head (13.2,12.4,-124) the hall floor's own opening (x 9..12.4 for z −115.5..−131.5
+///   [D probe rays]) gives the down line at the display-ground residents — the first stand
+///   killed #24 (the impact DRONE #24 part 35 [L the traced run]) and the persistent sweep
+///   (6 bounded scan rounds — a patroller steps into the line) cleared the rest before the
+///   stair-approach fights could pay their blocked-up-ray cost.
+/// - The d2-gated DISPLAY-POCKET stand (the photograph leg's own spot, the display eye): the
+///   first stand killed #25 (impact part 4 [L the traced run]); the persistent sweep found
+///   "nobody left below" once the stair-head sweep had cleared the ground.
+/// - The NF_RF_TRACE read of the blocked fights (the ledger's third lever) named the two
+///   remaining killers: the deck snipers #19/#20 (28.0 + 12.1 at the deck step-down, the
+///   fights on them killed false from the deck legs) — answered with the d2-gated DECK-STEP
+///   sweep (the at-the-door sweep's own 64-u range law, taken before "the deck south"); and
+///   the lane pick's UNSEEN-FALLBACK CREEP on the west sniper #13 at the patrol ring's corner
+///   — the fight's creep walked Bond 7.7 u off the choreography (10.5,-204.6 → (3.1,-208.2)
+///   [L the traced run]) and the aftermath fell off the walkway — answered with the
+///   west-half return-fire suppression (the strip crossing's own STRIP_NO_FIGHTS law, armed
+///   early; the west-edge and ring-corner sweeps answer the west snipers from the stable
+///   deck instead) plus the corner bend routed EAST of the #1 corpse along the [0c-ring]
+///   mapped shelf (the deck bends east at the corner — z −197..−200 holds x 13-14 [L the
+///   run's own map]; the corpse lay mid-band at (12.61,12.09,-196.03) and the straight
+///   corner line's slide direction decided the run: the Operative's west slide recovered,
+///   the Agent's east slide fell to the yard (15.06,1.03,-202.45) [L the run]).
+/// - The Agent test now carries the Operative sister's own crossing opt-ins
+///   (with_ride_release_past_a + with_strip_p2k_shot) — the same walked route and the same
+///   end. All the d2 helpers are gated to 0700000c's `difficulty >= 2` loads; every d1 walk
+///   and every top-up walk keeps its byte-exact chain (the Operative sister re-ran green
+///   unchanged through every lever round).
+/// Result [L the run]: objective 3 complete on the 0d arrival — the whole mission walked on
+/// real damage at Agent (0c legs 20462 ticks + 0d 838; the 0d warm carry took 81 hp into
+/// TR-2), 13 return-fire fights, the display-ground pair + the deck snipers + the west
+/// sniper all answered by the stands the route itself reaches.
 #[test]
-#[ignore = "Agent: the fights win but the crossfire cadence out-bleeds the route — run 3 (lane fights + escalating cooldowns) died tick 8579 at the warehouse plates (3.0 hp left; the tick-5903 fight paid 19.0 to the d 18-20 machine pistols); run 1 (master fights) died tick 4054, run 2 tick 6716, run 4 (dry_taps) reshuffled worse, tick 4234; levers: a d2-gated stair-head down-shot stand on the display-ground pair, an aimed stand on #31 from the display pocket, the NF_RF_TRACE read of the blocked fights"]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_agent() {
     walker::with_yard_aimed_stands(|| {
         // The Operative sister's own crossing opt-ins (los-mask-repins-0c-2 / pretrans-arms-
