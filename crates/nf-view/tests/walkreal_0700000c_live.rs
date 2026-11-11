@@ -45,12 +45,27 @@ fn sim_grounded(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().bond.grounde
 /// band-tip leg (7.2,-223.3) measured worse (the landing patch is ISOLATED: standing holds,
 /// walking east falls [L the runs]); the -3 tree walked the same legs green from its own
 /// landing (the repaired crossing moved the grab approach and with it the drop point).
-/// NEXT LEVER: map the landing patch fine (0.25 step, the scoped test), route from what
-/// actually holds.
-#[ignore = "pretrans-arms-4 round 2: the ledgered wire-#282 crossing is REPAIRED (the shelf west lane + the sniper brush-past slide + the -3 legs + the grab/ride all green [L the run on this tree]); the walk now fails PAST it — the SW arc approach: this timeline's ride lands Bond on a 13.16-high tier at (4.98,-223.29) whose east side overhangs the yard (the spine the [0c-arc] dump mapped sits 2 u below at 11.2); 'the ledge to the arc' falls to the yard floor (8.99,2.01,-222.09) and 'the arc west end' wedges — the post-leg dump shows NO drones within 10 u (pure geometry, not a solid body) and the arc-landing stands sweep was a no-op [L the runs; the opt-in with_arc_landing_stands stays for the next round]; the -3 tree walked the same legs green from its own ride phase; next lever: shift the ride's release point (the jump disc's d<0.9 phase) or map the landing tier fine and route from what holds"]
-#[test]
+/// GREEN AGAIN (pretrans-arms-0c-11): the ride-release lever — the opt-in RIDE_RELEASE_PAST_A
+/// releases past A (x > 6.8, on the way to the wire family's ~1.05-past-the-end natural stop
+/// [L the #284 note]) instead of inside 0.9, and the landing walks the ~13.2 band east (the
+/// ledge-to-arc leg held 13.05 at (8.29,-221.05)); at the band's east hold the SOUTH step-off
+/// (9.3,-220.4, r 0.3) drops Bond 0.8 u onto the arc's 12.36 floor — the arc's own 12.1
+/// piece at (9,-220) [L the fine 0.5-step probe_0c_arcfin_live scan: the 11.2 spine and the
+/// 12.1 arc pieces mapped x 10-16, z -220..-216.5] — and the arc legs walk green from there
+/// (arc west end (11.81,12.35,-218.53), the ring south-west arc (22.65,12.37,-217.36), the
+/// grab line, the #283 ride east, the mission to the 0d hand-off [L the green run]).
 #[test]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
+    // los-mask-repins-0c-2 (OPT-IN `with_strip_p2k_shot`): the wheel switch to the P2K for the
+    // strip-guard shot at the #284 landing. The walk reaches the landing with the MICRO-CAMERA
+    // 0x54 in hand (the photograph leg's own weapon) — no round spawns from it [M scene.rs:5002;
+    // sound-coverage.md:82] — which is what every earlier "dry gun" landing-shot attempt actually
+    // tapped [L the round-2 telemetry's clip 1 spare 0]. The P2K (weapon 2) is owned and loaded
+    // there (clip 7, carried 41, damage 3.5 [L this branch's probe]); the guard's POSED
+    // AimStandFire boxes are exposed from the landing (head +5, torso +4/+53, world clear [L the
+    // probe map]) and the real fire path lands — the 10-hp guard dies to the shot, and the
+    // straight -3 diagonals walk clean to the #282 grab.
+    walker::with_ride_release_past_a(|| walker::with_strip_p2k_shot(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(1)));
 }
 
 /// The difficulty-parameterized body (real-health-agent-0c-0d): 1 is the byte-identical

@@ -46,7 +46,12 @@ fn floor_at(w: &Walker, x: f32, y: f32, z: f32) -> Option<f32> {
 /// (2.80,14.11,-223.15) r 5.05 [D probe blk]) is unreachable; the split probe pins the fall
 /// between (-8.02,11.87,-216.19) and (-7.20,6.42,-217.38) [L the 0c2/0c3 runs on this tree].
 /// The corpse-solid working theory and the next lever are in the handoff ledger.
-#[ignore = "pretrans-arms-4 round 2: the shared diagonal crossing is REPAIRED in walkreal0c.rs (the shelf west lane + the sniper brush-past slide — the ledgered wire-#282 reach miss is gone [L the handoff run on this tree: the diagonals, icon #6 and the #282 grab/ride all green]); this route now fails PAST it at the same next blocker as the handoff walk — the SW arc approach: the ride lands Bond on a 13.16-high tier at (4.98,-223.29) whose east side overhangs the yard (the [0c-arc] dump: the 11.2 spine 2 u below, NO drones within 10 u after the leg — pure geometry); 'the ledge to the arc' falls, 'the arc west end' wedges [L the runs]; next lever: shift the ride's release point or map the landing tier fine"]
+/// GREEN AGAIN (pretrans-arms-0c-11): the ride-release lever (the opt-in RIDE_RELEASE_PAST_A,
+/// shared with the handoff walk) — the past-A release (x > 6.8) lands the ride on the ~13.2
+/// band and the SOUTH step-off (9.3,-220.4, r 0.3) drops Bond onto the arc's 12.36 floor;
+/// the arc legs walk green from there to the #283 grab and the east side [L the green run:
+/// the step-off (9.50,12.36,-220.20), the arc west end (11.81,12.35,-218.53), the ring
+/// south-west arc (22.65,12.37,-217.36)].
 #[test]
 fn the_ground_route_crosses_to_the_east_side() {
     let iso = iso();
@@ -54,7 +59,7 @@ fn the_ground_route_crosses_to_the_east_side() {
     // shot rides the same wheel switch as the handoff walk (the landing gun is the MICRO-CAMERA
     // 0x54 — no round spawns from it [M scene.rs:5002]; the P2K is loaded there [L the probe]) —
     // with #35 dead the west strip holds and the prologue's own #284-ride legs land clean.
-    let mut w = walker::with_strip_p2k_shot(|| walk_spawn_to_the_band(&iso));
+    let mut w = walker::with_ride_release_past_a(|| walker::with_strip_p2k_shot(|| walk_spawn_to_the_band(&iso)));
     // Start: the band west end (the whole walk's leg-10 spot, floor 10.34 [D probe door4]) -
     // REACHED by the game's own route on real input: the shared prologue replays the main
     // walk's legs 1-9c verbatim (spawn -> the laser hinge burn -> the vent drop -> the

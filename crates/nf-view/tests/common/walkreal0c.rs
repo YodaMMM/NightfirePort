@@ -78,6 +78,30 @@ pub fn with_arc_landing_stands<R>(f: impl FnOnce() -> R) -> R {
 }
 
 thread_local! {
+    /// pretrans-arms-0c-11 (OPT-IN): the #282 ride releases PAST A — the jump press fires when
+    /// Bond's x passes 6.4 (A is 5.85 [D probe blk]; the wire family's natural stop is ~1.05
+    /// past the end [L the #284 note's d_B ≈ 1.05]) — instead of inside 0.9 of A. The d < 0.9
+    /// release lands Bond on the isolated 13.16-high tier at (4.98, −223.29) WEST of the
+    /// walkable spine (the 0c-arc rows: z −223 holds x 7-8 at 11.2), whose east side overhangs
+    /// the yard — every east leg falls ("the ledge to the arc" → (8.99,2.01,−222.09) at +114
+    /// [L the pretrans-arms-4 runs]); a release past A lands ON the spine (the -3 tree walked
+    /// the same legs green from its own ride phase — its grab approach put the drop there
+    /// [L that tree's runs]). The real-damage sister and every other caller keep the d < 0.9
+    /// release (this thread-local defaults off).
+    static RIDE_RELEASE_PAST_A: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// Run a walk with the #282 ride's past-A release (OPT-IN, pretrans-arms-0c-11 — see the
+/// thread-local's doc).
+#[allow(dead_code)]
+pub fn with_ride_release_past_a<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { RIDE_RELEASE_PAST_A.with(|c| c.set(false)); } }
+    RIDE_RELEASE_PAST_A.with(|c| c.set(true));
+    let _reset = Reset;
+    f()
+}
+
+thread_local! {
     /// los-mask-repins-0c-2 (OPT-IN): switch the wheel to the P2K for the strip-guard shot at the
     /// #284 landing. The walk reaches the landing with the MICRO-CAMERA 0x54 in hand (the photograph
     /// leg's own weapon, never holstered) — no round spawns from it [M scene.rs:5002 'the
@@ -1692,15 +1716,20 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
     };
     assert!(grabbed, "walking east at wire #282's B end never grabbed it (sphere r 5.05 [D probe blk])");
     // Ride EAST to A (5.85, −223.15): strafe −1 (mode 8 faces wire.yaw + π/2 = +X toward A) [M
-    // Player_Wire's mode-8 facing]; drop inside 0.9 of A.
+    // Player_Wire's mode-8 facing]; drop inside 0.9 of A — or, OPT-IN (RIDE_RELEASE_PAST_A,
+    // pretrans-arms-0c-11), past A once x passes 6.4, landing ON the walkable spine.
     let dropped = {
+        let past_a = RIDE_RELEASE_PAST_A.with(|c| c.get());
         let mut dropped = false;
         for _ in 0..2400u32 {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.bond.substate != nf_game::player::SS_WIRE { dropped = true; break; }
             let d = ((sim.bond.pos[0] - 5.85).powi(2) + (sim.bond.pos[2] + 223.15).powi(2)).sqrt();
-            // The drop is the jump press inside 0.9 of B (see the #284 note).
-            let input = nf_game::player::Input { strafe: -1.0, jump: d < 0.9, ..Default::default() };
+            // The drop is the jump press inside 0.9 of B (see the #284 note). The past-A gate
+            // fires on the way to the wire family's natural stop (~1.05 past the end [L the
+            // #284 note]) — the spine landing the arc legs walk from.
+            let release = if past_a { sim.bond.pos[0] > 6.8 } else { d < 0.9 };
+            let input = nf_game::player::Input { strafe: -1.0, jump: release, ..Default::default() };
             w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
             w.total_ticks += 1;
         }
@@ -1714,8 +1743,19 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
-        assert!(dropped && sim.bond.grounded && p[0] > 3.0 && p[0] < 9.0 && p[2] < -220.0 && p[2] > -227.0
-            && (p[1] - 12.4).abs() < 0.8,
+        let past_a = RIDE_RELEASE_PAST_A.with(|c| c.get());
+        // The d < 0.9 release pins the west (4..8, −221..−226) ledge at 12.4±0.8 [D probe blk2];
+        // the past-A release pins the walkable spine instead (z −223 x 7-8, floor 11.2 [L the
+        // 0c-arc rows]) — the two releases answer two different floors, so the band rides the
+        // flag (harness drop-spot parameters, not game pins).
+        let ok = if past_a {
+            dropped && sim.bond.grounded && p[0] > 5.5 && p[0] < 9.0 && p[2] < -220.0 && p[2] > -227.0
+                && p[1] > 10.6 && p[1] < 13.3
+        } else {
+            dropped && sim.bond.grounded && p[0] > 3.0 && p[0] < 9.0 && p[2] < -220.0 && p[2] > -227.0
+                && (p[1] - 12.4).abs() < 0.8
+        };
+        assert!(ok,
             "the #282 ride must drop onto the (4..8, −221..−226) ledge (11.24 [D probe blk2]), got {p:?} dropped {dropped}");
     }
     eprintln!("[0c] wire #282 ridden east — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
@@ -1779,6 +1819,23 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
                     d.pos[0], d.pos[1], d.pos[2], d.health, d.corpse, d.team, d.skin);
             }
         }
+    }
+    // pretrans-arms-0c-11 (the RIDE_RELEASE_PAST_A choreography): the past-A landing walks the
+    // ~13.2 band east ("the ledge to the arc" held 13.05 at (8.29,−221.05) [L the run]) — the
+    // band is thin slivers invisible to the 1.0-step probe rows and ends around x 9.5-10 at
+    // z −220.5..−221, and every leg that walks PAST the edge falls 11 u with an eastward drift
+    // that lands on the yard (the measured (14.17,1.96,−218.45) and (13.44,2.01,−218.82)
+    // arrivals [L the runs]) — even though the arc floor (11.2) exists the whole way under the
+    // drift path (the fine 0.5-step map: z −220.0 x 10-12, z −219.5 x 10-13, z −219.0 x 10-14
+    // all hold 11.2-11.4 [L the probe_0c_arcfin_live scan]). A player STEPS OFF the band's east
+    // edge with minimal drift: a short leg to the arc just past the edge, then the arc legs
+    // walk the 11.2 floor east.
+    if RIDE_RELEASE_PAST_A.with(|c| c.get()) {
+        w.walk_to(Wp::new(10.5, 11.6, -220.2).r(1.2), "the band's east hold");
+        // The step-off is SOUTH: the arc's 12.1 floor sits 1 u below the band's south edge at
+        // (9,−220) [L the fine map] — the east walks past the band's end fall 11 u to the yard
+        // (the measured (14.17,2.01) arrival [L the run]).
+        w.walk_to(Wp::new(9.3, 12.0, -220.4).r(0.3), "the band's south step-off onto the arc");
     }
     w.walk_to(Wp::new(13.0, 12.4, -218.5).r(1.2), "the arc west end");
     w.walk_to(Wp::new(24.0, 12.4, -218.0).r(1.5), "the ring south-west arc");
