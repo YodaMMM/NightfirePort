@@ -860,6 +860,39 @@ fn clear_hostiles_16(w: &mut Walker, radius: f32, cap: u32) {
 }
 
 
+/// los-mask-repins-16-2 (the defeat walks' gallery answer — `station_armour` callers only):
+/// bounded stands on the y-6.7 gallery pair the clear's 15.0 gate leaves standing (#5 measured
+/// 15.2 u out on the ring west legs [L the d2 2176 death ledger]). A player on the ring answers
+/// the visible muzzles above the trench from where he stands: nearest first, one guard at a
+/// time, the same `shoot_bounded` stand the punch walk's ring-1 gallery stand runs — no walk,
+/// no flank (the far-exposed FIGHT arm measured worse: the 2152 death). Returns after one full
+/// pass with nothing visible: the leg walk resumes from where the stands left Bond.
+fn answer_the_gallery_from_the_ring(w: &mut Walker) {
+    for _ in 0..4 {
+        // A dry stand is pure loss (the measured ring-1 stands stood 237 ticks "shooting"
+        // clip 0 spare 0 while #5 poured 4.2 a hit [L the d2 2548 trace]): restock before
+        // every stand — the fights' drops lie on the walked ring (the walk-over take
+        // [M Pickup_Handler 0x18e650] files them), then cycle to the deepest gun.
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.gun.clip + sim.gun.spare < 8 { w.resupply("the gallery stand low"); }
+        }
+        switch_to_a_deep_firearm(w, "the gallery pair from the ring (the defeat walks)");
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.gun.clip + sim.gun.spare == 0 { return; }
+        let bp = sim.bond.pos;
+        let gi = sim.drones.list.iter().enumerate()
+            .filter(|(_, d)| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                && d.pos[1] > bp[1] - 2.0 && d.pos[1] < bp[1] + 2.0
+                && walker::dxz(d.pos, bp) < 25.0)
+            .filter(|(i, _)| walker::DamageLog::visible(sim, *i))
+            .min_by_key(|(i, d)| (walker::dxz(d.pos, bp).to_bits(), *i))
+            .map(|(i, _)| i);
+        let Some(gi) = gi else { return };
+        let _ = w.shoot_bounded(gi, "the gallery pair from the ring (the defeat walks)", 1800);
+    }
+}
+
 /// Swap the held Delta Repeater 0x11 for the P2K 0x02 when the P2K has rounds (see the clear).
 fn switch_off_the_delta(w: &mut Walker) {
     {
@@ -922,7 +955,21 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
         // ticks on a hunting guard 17-27 u out (12 rounds, zero damage) while the ring
         // guards emptied him (the 1988 death).
         for (label, wp) in APPROACH {
-            if wp.at[1] > 5.5 { clear_hostiles_16(w, 40.0, 900); }
+            if wp.at[1] > 5.5 {
+                clear_hostiles_16(w, 40.0, 900);
+                // los-mask-repins-16-2 (the defeat walks only — `station_armour`; the punch walk
+                // and the tops-up routes never take this arm): the d2/d3 ledgers' y 6.7 gallery
+                // pair (#5 skin 0x50000b2 weapon 0x1a hp 20 z −91.4, 43.3 in 11 hits; #3 skin
+                // 0x500008c z −110.5, 31.5 in 15 [L the d2 2176 death]) sat past the clear's
+                // 15.0 gate (#5 measured 15.2 u out on the west legs) and plinked Bond free
+                // while he fought the close ring guards. A player on the ring answers the
+                // gallery muzzles he can SEE from where he stands — bounded stands, one guard
+                // at a time, nearest first, no walk (the far-exposed FIGHT arm measured worse:
+                // the 2152 death — the fights' flank machinery drags Bond into the crossfire).
+                // The guard-radii-16-chasers armour detour below straps the #596 on these walks
+                // so what the stands cannot kill still absorbs.
+                if station_armour { answer_the_gallery_from_the_ring(w); }
+            }
             // los-mask-repins-16 (the real-damage walks' east-lane re-route): under the game's
             // guard sight the east guards (#1 skin 0x50000b1 from (24.1, 0.8, −96.6), #3 skin
             // 0x500008c from (22.1, 0.8, −104.2) [L the 10864 death ledger]) hunt Bond on the
@@ -1305,6 +1352,36 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
         // faces the nearest INSIDE-3.0 hostile, and #15 sat just outside it at 2.5-2.9).
         for _ in 0..36 {
             hold_the_band(w, 240);
+            // los-mask-repins-16-2 (the defeat walks' pit walk-in — the measured d2 17138
+            // death): the kill loop stood at the shelter and ground two full 10800-tick
+            // ladders on the 100-hp melee clone #12 (28 hp a ladder, exposed false on the
+            // third) while the clone CLOSED to d 1.0 and punched [L the same trace]. The
+            // clones come anyway (the d1 ledger: 26.9 → 5.5 u during the futile stands) — a
+            // player walks INTO the pit room toward the member he is killing, head-taps at
+            // arrival (prefer_head is on), and keeps the dealer stands between (the walk legs
+            // carry the walker's own return fire; the threat stand below stays). Gated to the
+            // real-damage walks only — the tops-up walk's measured stream must not move (its
+            // re-arm comment above). A member's spot claimed by the pit's always-on hurt
+            // volumes (the loot filter's wire class) is not walked into — the stand taps from
+            // where the hold left Bond and the clone closes the rest.
+            if !w.tops_up() {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let md = &sim.drones.list[i];
+                let bp = sim.bond.pos;
+                // Walk while the member has NO exposed aim: the measured d2 run stopped the
+                // walk-in at the 7 u gate and ladder 2 then burned 10800 ticks "shooting"
+                // exposed FALSE at 5.5 u — the clone stood behind the pit's launch structure
+                // and only 43 hp of 100 fell while the pit AR guards closed [L the same
+                // trace]. A player closes the last units until he can SEE the member, then
+                // head-taps (the aim opens at close range in the open floor).
+                if w.exposed_aim(i).is_none() && walker::dxz(md.pos, bp) > 3.0 {
+                    let target = [md.pos[0], -22.0, md.pos[2]];
+                    let head = [target[0], target[1] + 1.5, target[2]];
+                    if !sim.hurts.iter().any(|h| h.contains(target, head, 0.4)) {
+                        w.walk_nav_to(target, "into the pit room toward the squad member", 3.0);
+                    }
+                }
+            }
             let threat = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let now = sim.drones.frame;
@@ -2308,6 +2385,21 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(difficulty: u
         // the ring legs clear at level.
         w.dmg.level_fights = true;
     }
+    // los-mask-repins-16-2 (the defeat walks' d2/d3 pick laws — the measured 2548 death): the
+    // ramp fights engaged the y 6.7 gallery pair from MID-RAMP (fight#1 vs #2 at 19-30 u held
+    // Bond at (12.2, −89.0) for 240+ ticks under the pair's crossfire: health 74.8 → 26.5 in
+    // one fight; Bond reached ring 1 at 5.5 with clip 3 spare 0 [L the same trace]) and the
+    // dry stands then stood 237 ticks "shooting" clip 0 spare 0 while #5/#3 poured free. The
+    // d1 walk's own laws, keyed to the defeat difficulties: `level_fights` drops the
+    // overhead shooters while Bond climbs (the ramp legs keep MOVING — the fights' stands are
+    // the cost) and answers them at level on the ring; `hurting_first` (the 07000008 Agent
+    // sisters' law) fights the muzzle that is actually hurting Bond first — the gallery pair
+    // dealt 42.0 + 32.8 of the run's 100 while the plain nearest-visible pick ground on the
+    // closer ring guards.
+    if difficulty >= 2 {
+        w.dmg.level_fights = true;
+        w.dmg.hurting_first = true;
+    }
     // guard-radii-16-chasers: a tap with the frag in hand THROWS it — the measured 10959 death
     // was Bond's OWN frag (the kill loop's dry re-arm cycled onto the 0x34, the next taps threw
     // it, and the loot walks strolled into the fuse's blast; the ledger's two "world" hits were
@@ -2370,7 +2462,11 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(difficulty: u
             // this pickup; the walk-over take [M Pickup_Handler 0x18e650], arrive 0.6 — the
             // take's radius is under a unit [M]). The floor target y (the walk's plane), the
             // placement's −22.97 is the box's own rest.
-            w.walk_nav_to([-14.41, -22.0, -172.75], "the pit-room armour #648 [D]", 0.6);
+            // los-mask-repins-16-2: the 0.6 arrival measured 0.6 OFF and the take never fired
+            // (the run ended armour 0.0 [L the d1 ledger]; the take's radius is under a unit
+            // [M Pickup_Handler 0x18e650]) — a player steps ONTO the box, not near it. The
+            // walk plane's −22.0 target stays; the arrival tightens to 0.25.
+            w.walk_nav_to([-14.41, -22.0, -172.75], "the pit-room armour #648 [D]", 0.25);
             let spots: Vec<[f32; 3]> = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let bp = sim.bond.pos;
