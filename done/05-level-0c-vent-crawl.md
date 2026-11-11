@@ -139,3 +139,16 @@ hole → off the lip into the shaft), Bond rests on the shaft floor 11.84. Then:
 ## Usage
 
 not visible to me (no token/credit/context-window figures are exposed in this environment).
+
+---
+## Live answers (main agent, 2026-11-11)
+# 0c vent shaft, live answers (PCSX2-gdb fresh goto_level 0700000c, god held, 2026-11-11)
+Placed on the shaft floor (5.6, 12.95, -111.2); stick held 600 frames per direction (log.txt).
+1. North: standing stops z -110.84..-110.94; crouched (Cross toggle, root y 12.45) stops z -110.939. Wall in the game.
+2. East/west: standing and crouched stop at x 6.187 / 5.332 (walls 6.74 / 4.78 minus r 0.55).
+   South standing stops z -111.395. SOUTH CROUCHED CRAWLS OUT: (5.6, 11.882, -113.54), cel 0x1813dc0 -> 0x1817480, behind the storage crates (c-south.png).
+4. Neutral 1800 frames: no movement, no eject.
+Port headless, same placement/inputs: crouched south -> (5.6, 11.924, -113.540); standing south -> z -111.396; crouched north -> -110.939. Matches the game.
+So the shaft is not sealed in the port: the exit is the crouched crawl south under the sill, as in the game. Facing north (the report's spot) is a wall in both.
+Check 3 (grille placement) not needed for the movement answer. The PS2 north view is the 0c white haze (c-north.png); the port draws a plain wall.
+Follow-up: 05-level-0c-vent-crawl-2.
