@@ -121,6 +121,25 @@ fn wire_aim_point(sim: &nf_view::scene::Sim, obj: usize) -> [f32; 3] {
     nf_game::drone::Drones::script_obj_pos(&sim.drones.scripts, &sim.data(), obj).unwrap_or([0.0; 3])
 }
 
+/// The segment a→b against an AABB (the port's wire-contact slab test's own shape — the drone.rs
+/// wire pass's slab entry law). Used by the stance gate below.
+fn seg_hits_box(a: [f32; 3], b: [f32; 3], lo: [f32; 3], hi: [f32; 3]) -> bool {
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for k in 0..3 {
+        let (p, dd) = (a[k], b[k] - a[k]);
+        if dd.abs() < 1e-9 {
+            if p < lo[k] || p > hi[k] { return false; }
+            continue;
+        }
+        let (mut ta, mut tb) = ((lo[k] - p) / dd, (hi[k] - p) / dd);
+        if ta > tb { std::mem::swap(&mut ta, &mut tb); }
+        t0 = t0.max(ta);
+        t1 = t1.min(tb);
+        if t0 > t1 { return false; }
+    }
+    t0 <= t1
+}
+
 /// Walk to a stance inside the Laser's range of a fusebox wire and burn it through the REAL fire
 /// path. E does nothing on fuseboxes — `Player_Activate` 0x1a5170 has no class-0x3C arm [M
 /// 0x1a5170:95-160] — the game's cut is the Laser beam (weapon 0x4E, range 4.0 [L weapon_data
@@ -168,6 +187,21 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
          [2.2, -1.2, 0.0], [-2.2, -1.2, 0.0], [0.0, -1.2, 2.2], [0.0, -1.2, -2.2]]
     };
     let mut stood = false;
+    // level-14-fusebox-zap (!tops_up-gated): the stance approach runs with the fights' return
+    // fire OFF. The measured killer [L the d1 NF_DMG_TRACE + the zz traces]: Bond reaches the
+    // #383 stance with the Kiko scene's scripted Laser (0x4e) in hand, the stance walk_to's
+    // fight law fires ONE 0x4e bolt at 38955 (born at Bond's muzzle (−86.72,−0.48,31.35),
+    // no fight print — the death interrupts it), the bolt lands on the GROUP-1 wire (its
+    // filter passes 0x0002 [M 0x1adfe8:88 + Collide_FilterBullets 0x1ece30]) and kills it;
+    // the group's all-dead write is ch 113 [M 0x1adfe8:110-123; D #383 params 2/4 = 113],
+    // DESTROY_BoxSatellite #388's kill channel is 113 [D placements #388 param 1] and
+    // Destroy_Update 0x12c4f8's arm smashes it the same tick — the 500-damage / radius-10.0
+    // Destroy_Smash blast (param 2 = 50 ×10.0, param 5 = 1000 ×0.01 [M 0x12bd04]) kills Bond
+    // 3.24 u away at 99.0 hp. A player walks to the cut spot without shooting; the walk does
+    // too. The plain (tops_up) walk keeps master's fights byte-identical.
+    let rf_gate = !w.tops_up();
+    let rf_saved = w.dmg.return_fire;
+    if rf_gate { w.dmg.return_fire = false; }
     for c in &cands {
         let spot = [bp[0] + c[0], bp[1] + c[1], bp[2] + c[2]];
         let floor = w.scene.sim.as_ref().unwrap().world.segment(spot, [spot[0], spot[1] - 30.0, spot[2]]).map(|t| spot[1] - 30.0 * t);
@@ -181,11 +215,40 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
             let head = [spot[0], spot[1] + 1.5, spot[2]];
             if sim.hurts.iter().any(|h| h.contains(spot, head, 0.4)) { continue; }
         }
+        // level-14-fusebox-zap (!tops_up-gated): the candidate's FIRE LINE must reach the
+        // group-0 wire's aim point without clipping any OTHER alive wire's slab. The measured
+        // killer [L the d1 zz traces + the fire-tick backtrace]: from the east stance
+        // (−86.46,−1.10,31.39) the aim segment to the group-0 cable centre clips the
+        // GROUP-1 wire's AABB (x −89.34..−89.15, the box's own first-contact law —
+        // `Collide_PickObj` 0x1eae80 → the nearest wire stops the round, "a wire behind it
+        // never sees the hit" [M 0x1ea398:212-229]) — the bolt cut group 1 at f38956, the
+        // group's all-dead write ch 113 [M 0x1adfe8:110-123] smashed satellite box #388
+        // (kill ch 113 [D #388]) and the 500/10 Destroy_Smash blast killed Bond 3.24 u away.
+        // A player sees the near cable in front and steps aside; the gate is the walk's own
+        // stand-in for that look (the drawn muzzle rides ~0.9 u under the head [L the same
+        // trace: muzzle y −0.48 vs head 0.4], so both origins are probed).
+        if !w.tops_up() {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let clean = |from: [f32; 3]| -> bool {
+                for (g, _, o) in sim.drones.fuseboxes[fb].alive_wires() {
+                    let _ = g;
+                    if o == wire_obj { continue; }
+                    let Some((wlo, whi)) = wire_world_box(sim, o) else { continue };
+                    let (wlo, whi) = ([wlo[0] - 0.01, wlo[1] - 0.01, wlo[2] - 0.01], [whi[0] + 0.01, whi[1] + 0.01, whi[2] + 0.01]);
+                    if seg_hits_box(from, wire, wlo, whi) { return false; }
+                }
+                true
+            };
+            let spot_head = [spot[0], spot[1] + 1.5, spot[2]];
+            let spot_muzzle = [spot[0] - 0.26, spot[1] + 0.62, spot[2] - 0.04];
+            if !clean(spot_head) || !clean(spot_muzzle) { continue; }
+        }
         w.walk_to(Wp::new(spot[0], spot[1], spot[2]).r(0.6), &format!("{label} stance"));
         let head = w.scene.sim.as_ref().unwrap().bond.head();
         let d = [wire[0] - head[0], wire[1] - head[1], wire[2] - head[2]];
         if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() <= 3.4 { stood = true; break; }
     }
+    if rf_gate { w.dmg.return_fire = rf_saved; }
     assert!(stood, "{label}: a stance inside the Laser's range exists [L weapon_data 0x4E +0x1C]");
     for _ in 0..40 { w.tick(nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() }, false); }
     // Aim first, then fire: rounds fired while the view still swings miss wide, and the miss
@@ -203,6 +266,20 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
     }
     let start = w.total_ticks;
     let mut delta = [0.0f32; 3];
+    // level-14-fusebox-zap (!tops_up-gated): fire ONE bolt at a time and hold fire for the tick
+    // after a bolt resolves before the next. The loop's channel read lags the wire death by one
+    // tick — the bolt registers its contact in tick L's bullet pass and `FuseBox_Update`
+    // 0x1adfe8:88-123 reads the lists at L+1's head — so a bolt fired in that gap overruns the
+    // just-cut wire and lands on the neighbouring group's wire. Cutting #383's group 1 writes
+    // its channels param 2/param 4 = 113 = 0x71 [M 0x1adfe8:110-123 — group 1's words are
+    // tag+0x56/+0x5E; D placements #383 params 2/4 = 113], and DESTROY_BoxSatellite #388's kill
+    // channel IS 113 [D placements #388 param 1] — Destroy_Update 0x12c4f8's +0x10 arm smashes
+    // the box and Destroy_Smash 0x12bb60 detonates its 500-damage / radius-10.0 blast (param 2
+    // = 50 → ×10.0 [M 0x12bd04]; param 5 = 1000 → ×0.01 [M 0x12bc50-0x12bd20]) — the measured
+    // 99.0 pulse at the stance (Bond at 99.0 hp, the linear falloff ≥ the remaining health;
+    // the box centre 3.24 u away) [L the d1 NF_DMG_TRACE run]. A player releases the trigger at
+    // the cut; the walk must too. The plain (tops_up) walk keeps master's cadence byte-identical.
+    let mut idle = 1u32; // no bolt in flight before the first shot
     loop {
         let (n0, want_on) = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -210,6 +287,8 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
         };
         if want_on { break; }
         assert!(w.total_ticks - start < 600, "{label}: the laser cut never wrote ch {want:#x} [M 0x1adfe8]");
+        let may_fire = w.tops_up() || (n0 == 0 && idle >= 1);
+        idle = if n0 == 0 { idle.saturating_add(1) } else { 0 };
         // Steer the crosshair at the (feedback-shifted) visible-cable point and hold fire.
         let (yaw, pitch) = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -219,13 +298,14 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
             let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
             (dir[0].atan2(dir[2]), ((dir[1] / l).atan() / std::f32::consts::FRAC_PI_2))
         };
-        w.tick_fire(nf_game::player::Input {
+        let inp = nf_game::player::Input {
             // wrapped: Bond's yaw is unbounded (a fight can leave it a full turn off), and the
             // raw difference spins him the long way round while the trigger is held.
             turn: wrap_pi(yaw - w.scene.sim.as_ref().unwrap().bond.yaw).clamp(-0.08, 0.08),
             look: (pitch - w.scene.sim.as_ref().unwrap().bond.pitch).clamp(-0.08, 0.08),
             ..Default::default()
-        });
+        };
+        if may_fire { w.tick_fire(inp); } else { w.tick(inp, false); }
         // The round's miss against the wire's world slab shifts the aim (burn_wire's rule).
         let round = w.scene.sim.as_ref().unwrap().drones.player_bullets.get(n0)
             .filter(|b| b.weapon == 0x4e).map(|b| (b.pos, b.dir, b.speed));
@@ -1771,7 +1851,7 @@ fn the_skipped_vent_cutscene_hands_bond_back_at_his_grab_spot() {
 /// write no health/armour/ammo; the exit load into 07000015 is the game's own Trigger_Activate
 /// path [M 0x1b2318 → warm_exit_save → Player_RamLoad 0x1957a8].
 #[test]
-#[ignore = "level-14-skybridge-retune-2, re-measured: the camper lever LANDED — the drop loop's raw ticks bypassed the walker's leg machinery so the return-fire fights never ran on the descent (the 5130 death: 48 hits for 100.0, 0 fights, the camper hp 28 full at d 1.4 [L]); with w.return_fire wired into the loop every 20 ticks (!tops_up-gated; the cap 2400->3600 for the fights' windows) the fights KILLED the camper at tick 4742 (health 94.0->88.0) and the descent completes [L the r2/r8 traces]. The d2 green set on d1 (the path-clear stands + lane_fights, NO back_off — its backpedal displaced Bond AIRBORNE off the south loop's lane, the hover class (−29.11, 0.65, 30.95) grounded=false at health 100.0 [L the r9 trace]) held the route fights to 1.0 total across 18 fights — Bond reaches leg 3 at ~100 [L the r11 trace]. REMAINING BLOCKER: the fusebox #383 stance zap — one pulse took 99.0 from full health at (−86.46, −1.10, 31.34), ~80 ticks after the stance arrival (the earlier −24 prints were the same blast clipped to the remaining health [L r2/r8/r11]); NOT the fusebox's own cut damage (param 2 non-zero → the cut never hurts [M 0x1adfe8:99-101; D the placements census]) and NOT in sim.hurts (the standing-capsule probe passed at the 2.2-3.2 u ring and the pulse still landed). TRIED: the stance ring at 2.2/3.2 u (probed, inside the Laser's 3.4 gate) — the pulse still landed; the 3.6 u ring — the spots sit 0.32 under the hall plane and the stance walk_to wedges closing them [L r12/r13]; the clear_hostiles pre-pass — byte-identical failures (the hp-5 survivor #9 finished Bond at 9111) and a regression vs the fights-in-the-loop shape, reverted. NEXT LEVERS: (1) a LIVE CHECK — what fires ~80 ticks after Bond stands at (−86.5, −1.1, 31.3): gdbwatch the hall's hurt volumes / the fusebox wire's own zap radius (is it the port's over-deal? the game's cut stands closer than 4.0 [L weapon_data 0x4E +0x1C]); (2) a stance spot walked from the ramp head (not the ±offset ring) that keeps ≥4 u from the wire aim point; (3) the SkyBridge crossing re-route (the trench-floor claw-up, the base ledger's lever 2) stands as pinned"]
+#[ignore = "level-14-fusebox-zap, re-measured: the FUSEBOX ZAP IS SOLVED — the walk now survives the hall and wedges later. The zap's source chain, decompile- and census-backed: cutting fusebox #383's GROUP-1 wires writes its channels param 2/param 4 = 113 = 0x71 [M 0x1adfe8:110-123 — group 1's words are tag+0x56/+0x5E; D placements #383 params 2/4 = 113]; DESTROY_BoxSatellite #388's kill channel IS 113 [D placements #388 param 1], Destroy_Update 0x12c4f8's +0x10 arm smashes it and Destroy_Smash 0x12bb60 detonates its 500-damage / radius-10.0 blast (param 2 = 50 × 10.0 [M 0x12bd04], param 5 = 1000 × 0.01 [M 0x12bc50-0x12bd20]) — the measured 99.0 pulse at the 3.24-u stance [L the NF_DMG_TRACE run]. The port matches the game end to end; the TRIGGER was the walk's own aim line: from the east stance (−86.46,−1.10,31.39) the aim segment to the group-0 cable centre clips the GROUP-1 wire's AABB (x −89.34..−89.15 [L the wire-geo probe]) and the game's own first-contact law [M 0x1ea398:212-229 — the nearest wire stops the round] cut group 1 with the cut's FIRST bolt (the fire-tick backtrace: bolt born 38955 from Bond's muzzle, weapon 0x4e [L]). FIXED in this file, all !tops_up-gated (the plain walk byte-identical, its 8 tests green on this tree): (1) stance candidates whose fire line to the group-0 aim point clips another alive wire's slab (probed from the head AND the drawn muzzle's ~0.9-u-under-head origin [L the same trace]) are skipped; (2) the cut fires ONE bolt at a time with a one-tick hold after a bolt resolves — the loop's channel read lags the wire death by one tick (the contact registers in tick L's bullet pass, FuseBox_Update reads at L+1's head [M 0x1adfe8:88-123]), so the old cadence's overrun bolt landed on the neighbouring group; (3) the stance approach runs with return_fire off (a player walks to the cut spot without shooting). Result [L the run on this tree]: both cuts land on GROUP 0 (ch 0x87 at +45 ticks, ch 0x88 at +1), Bond survives the hall at 79.6 and fights into the machine room (the Kiko corridor: drone #19 killed true at 49158). NEW BLOCKER: 'the Kiko corridor east' wedges at the 6000-tick cap — Bond (−44.35,1.01,30.95) vs target (−49.20,0.90,38.40) d 8.89, grounded, health 79.6, segment_to_target Some(0.128) (something 0.13 u into the straight line), the nearby door (−42.7,1.2,29.9) state 0x4 pos01 1.00 lock_flag=1 ch_lock=0 [L the same run]. NEXT LEVERS: (1) the leg through the nav web (walk_nav_to) instead of the straight steer — the wedge is the straight line, not a death; (2) the door's lock_flag=1 with ch_lock=0: read the door's params [D] for whether the leaf is openable (an E press the walker's use_door law already answers) or a locked leaf to route around; (3) the cascade note: the cuts' own channel writes smash the generator-hall cascade (placements 400/1010/787/827/403/1009/669/740-742 channel-kills and blast-sweeps through f40-42k [L the same run]) — the route legs east must account for the scripted blasts' damage the way the game's player eats them (Bond held 79.6 through them [L])"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage() {
     // level-14-skybridge-retune-2: the d2 sister's green set on the same body — the fight
     // laws (the flag block in the body, !tops_up-gated) plus the path-clear stands (the
