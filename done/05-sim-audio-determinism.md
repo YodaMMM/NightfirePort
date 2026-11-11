@@ -24,3 +24,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: main agent at 2026-11-11 13:02 MST (has the clock patch + repro)
+
+---
+## Done (main agent, 2026-11-11 14:23 MST)
+Pushed b6ef127f9. Voice ends from the frame clock with or without a device (nf-audio test red on the old code); no catch-up sound batches while the sim runs sound_tick (the pump test extended; noclip/dev menu/lockstep keep the pump). Real app vs headless replay of the 07000005 walk: identical per-tick random state to tick 10261 of 10440 (master split at 1187). The rest is the music: 05-music-section-parity.
