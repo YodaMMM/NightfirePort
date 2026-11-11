@@ -62,10 +62,7 @@ top-ups added; the helper change is opt-in and gated to the 07000001 d1 walks.
   ledger only)** [L the fix5 log].
 - nf-game lib tests: **782 passed, 0 failed, 4 ignored** (0.97 s) [L the run on this tree] —
   the -5 count, unchanged.
-- interactables_07000001_live: did not fit the window (the whole-binary walk occupied the
-  cargo lock until the cut); its coverage note: this branch touches no crates/*/src/ code and
-  no shared helper behavior outside the opt-in flank_hold_min_y field (None on every other
-  walk), so its binary-identical expectation stands from master's green run.
+- interactables_07000001_live: **10 passed, 0 failed** (28.25 s) [L the run on this tree].
 - The full four-crate `tools/test/suite.py`: the background start died within seconds (this
   sandbox kills every background job between tool calls — plain nohup, the -5 finding), and the
   foreground 4-crate release build does not fit the window (the walk binary alone took ~20 min
