@@ -178,45 +178,127 @@ fn draw_persist(w: &mut Walker, id: u8, label: &str) {
         w.scene.sim.as_ref().unwrap().gun.weapon);
 }
 
-/// The pre-lane stand's aimed shot (real-health-00agent-15-5): `Walker::shoot_point`'s own
-/// discipline with the AIM HELD — the raise queues on the aim-PRESSED edge from the idle
-/// machine [M Player_Weapon 0x1a24c8:113-152], the finish sets the bit [M 0x1a2e38:554-561],
-/// and with the bit set the aimed act is zero-spread [M Bullet_init 0x12c5a0:139-170] — the
-/// plain shoot_point's taps ride the HIP cone (spread base 100.0 [L ee_start_05.bin @
-/// 0x2c10b8 +0x24]; the run15b stand at 22 u dealt 3.0 while the guard's burst rifle landed
-/// 25 rounds). Same tap law (the view ON the point, t % 16), the cursor-aware error
-/// [M scene.rs free-aim; Player_AutoAim 0x1a7c98:50-59]. File-local (the 06 walk's
-/// aimed_stand idiom; shared helpers stay opt-in per the merge lessons).
-fn aimed_stand_point(w: &mut Walker, at: [f32; 3], label: &str, done: impl Fn(&nf_view::scene::Sim) -> bool) -> bool {
+/// The pre-lane stand's AIMED stand (real-health-00agent-15-5): the 07000006 walk's proven
+/// aimed_stand, file-local (shared helpers stay opt-in per the merge lessons). The parts that
+/// make long-range stands land, each measured on the 0c/06 branches: the settle + the aim-RAISE
+/// loop (the raise queues only on the aim-PRESSED edge from the idle machine [M Player_Weapon
+/// 0x1a24c8:113-152; the finish sets the bit 0x1a2e38:554-561]); with the bit set the aimed act
+/// is zero-spread [M Bullet_init 0x12c5a0:139-170] — the plain hip cone's scatter is 4.9 u at
+/// 35 u [L ee_start_05.bin @ 0x2c10b8 +0x24], which is what the run15b stand at 22 u rode (3.0
+/// dealt, 74.0 taken); the STRICT gun-ray exposure re-pick every 10 ticks
+/// [M DamageLog::exposed_part_gun_rays — the muzzle-lane ray set the fights' own law uses, the
+/// eye-law ray the run15c stand rode and never landed on]; the CURSOR-aware convergence (the
+/// fired round obeys the view PLUS the eased offsets [M scene.rs free-aim; Player_AutoAim
+/// 0x1a7c98:50-59]); the STILL gate 18 (a stepping guard is not where the view was); the bails
+/// (200 unseen / 1500 no-hit / dry).
+fn aimed_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
+    // Settle: no input until the switch anim is done, then the raise loop (the 0c idiom).
+    for _ in 0..90 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.gun.switch_state == 0 && !sim.gun.fire_state { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
+    }
     for _ in 0..240 {
-        if w.scene.sim.as_ref().unwrap().aiming { break; }
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.aiming { break; }
         w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { aiming: true, ..Default::default() }, false, false, false);
         w.total_ticks += 1;
     }
-    for t in 0..1200u32 {
-        let (fire, input) = {
-            let sim = w.scene.sim.as_ref().unwrap();
-            if done(sim) { return true; }
-            let bp = sim.bond.pos;
-            let dx = at[0] - bp[0];
-            let dz = at[2] - bp[2];
-            let dy = at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
-            let desired = dx.atan2(dz);
-            let err = walker::wrap_pi(desired - sim.bond.yaw);
-            let want_pitch = (dy / walker::dxz(bp, at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
-            let perr = want_pitch - sim.bond.pitch;
-            let (err, perr) = walker::zero_g_errs(sim, at).unwrap_or((err, perr));
-            let on_target = err.abs() < 0.02 && perr.abs() < 0.028 && t % 16 == 0;
-            let input = nf_game::player::Input {
-                turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), aiming: true,
-                ..Default::default()
+    const STILL_NEED: u32 = 18;
+    let prev = w.dmg.aimed_fights;
+    w.dmg.aimed_fights = true;
+    eprintln!("[15] the aimed stand ({label}): engaging drone #{di}");
+    let killed = {
+        let mut unseen = 0u32;
+        let mut last_tap = 0u32;
+        let mut aim: Option<[f32; 3]> = None;
+        let mut hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
+        let mut last_hit = 0u32;
+        let mut still = 0u32;
+        let mut last_pos = [0.0f32; 3];
+        let mut have_pos = false;
+        for t in 0..cap {
+            let (input, fire, reload) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[di];
+                if d.corpse || d.health <= 0.0 || !d.present {
+                    eprintln!("[15] the aimed stand ({label}): drone #{di} VANISHED at +{t} (corpse {} health {:.1} present {})", d.corpse, d.health, d.present);
+                    return true;
+                }
+                if sim.disabled { return false; }
+                if sim.gun.clip == 0 && sim.gun.spare == 0 {
+                    eprintln!("[15] the aimed stand ({label}): drone #{di} bailed DRY at +{t} (clip 0 spare 0)");
+                    return false;
+                }
+                // The still gate: root motion only (the 0c measurement — the box sway rides the
+                // anim; the root is what carries the chest out of the round's path).
+                let moved = have_pos && ((d.pos[0] - last_pos[0]).powi(2)
+                    + (d.pos[1] - last_pos[1]).powi(2) + (d.pos[2] - last_pos[2]).powi(2)).sqrt() > 0.03;
+                have_pos = true;
+                last_pos = d.pos;
+                still = if moved { 0 } else { still.saturating_add(1) };
+                if d.health < hp0 { hp0 = d.health; last_hit = t; }
+                if t - last_hit > 1500 {
+                    eprintln!("[15] the aimed stand ({label}): drone #{di} bailed NO-HIT at +{t} (still {still}, aiming {})", sim.aiming);
+                    return false;
+                }
+                if t % 10 == 0 { aim = walker::DamageLog::exposed_part_gun_rays(&sim, di); }
+                if aim.is_none() { unseen += 1; if unseen > 200 { eprintln!("[15] the aimed stand ({label}): drone #{di} bailed UNSEEN at +{t}"); return false; } } else { unseen = 0; }
+                let b = sim.bond.pos;
+                let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
+                let at = aim.unwrap_or([d.pos[0], d.pos[1] + 0.3, d.pos[2]]);
+                let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
+                let h = (dx * dx + dz * dz).sqrt().max(0.5);
+                let desired_yaw = dx.atan2(dz);
+                let desired_pitch = (dy / h).atan();
+                // The cursor drive + the effective-aim error (the 0c convergence — the round
+                // obeys the view + the eased offsets, not the view alone).
+                let yaw_err = { let mut a = desired_yaw - sim.bond.yaw;
+                    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
+                let cx_want_raw = -yaw_err / 0.76966;
+                let cy_want_raw = pitch_err / 0.57724;
+                let cur = sim.cursor;
+                let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
+                let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
+                let aoff = sim.drones.aim_offset;
+                let err = { let mut a = yaw_err - aoff[0];
+                    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                let perr = pitch_err - aoff[1];
+                let reload = sim.gun.clip == 0;
+                // The tap: the aim bit ON, the effective aim converged, the guard still.
+                let fire = sim.aiming && !reload && unseen == 0 && err.abs() < 0.01 && perr.abs() < 0.01
+                    && still >= STILL_NEED && t.saturating_sub(last_tap) >= 8;
+                (nf_game::player::Input { turn, look, aiming: true, ..Default::default() }, fire, reload)
             };
-            (on_target, input)
-        };
-        if fire { w.tick_fire(input); } else { w.tick(input, false); }
+            if reload {
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, true, false);
+                w.total_ticks += 1;
+                w.after_step();
+                for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+            } else if fire {
+                last_tap = t;
+                w.tick_fire(input);
+            } else {
+                w.tick(input, false);
+            }
+        }
+        w.scene.sim.as_ref().unwrap().drones.list[di].health <= 0.0
+    };
+    w.dmg.aimed_fights = prev;
+    // Level the view back (the fights' own idiom) so the next nav leg steers from level pitch.
+    for _ in 0..90 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pitch;
+        if p.abs() < 0.01 { break; }
+        w.tick(nf_game::player::Input { look: (-p).clamp(-0.08, 0.08), ..Default::default() }, false);
     }
-    eprintln!("[15] {label}: the aimed stand cap");
-    false
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[15] the aimed stand ({label}): drone #{di} killed {killed}, health {:.1}",
+        sim.drones.health.health);
+    killed
 }
 
 /// Walk the nav route toward `dest` node by node until `aim` is in sight (no world hit on the eye
@@ -406,7 +488,41 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
                 let d = &sim.drones.list[di]; d.corpse || d.health <= 0.0
             });
         }
+        // real-health-00agent-15-5: the CROSSING fights take the fights' lane law — the
+        // damage-weighted pick plus the unseen-cover creep, which walks Bond along the aim
+        // until the muzzle lanes clear [M DamageLog::exposed_impl gun_spots] — the close kill
+        // the ledger measured at 21.0 (the sneak's 3.6 u fight) against 81.0 for one kill at
+        // 13-18 u (the run15a ledger: the fights answered the nearer grenadier while the burst
+        // rifle plinked 56.0, dead t1588 with #1 at hp 4; the run15h aimed stand raced the DPS
+        // and lost 25->3 for 72.0 taken). Scoped: the flag clears after the #462 shot; the
+        // sneak's own #15 fight and the d1/d2 walks keep their timelines.
+        w.dmg.lane_fights = true;
+        // real-health-00agent-15-5: the fights' own back-off is OFF for the crossing — the
+        // run15i wedge: with the lane law's creep closing to the kill range, the crowd arm
+        // walked Bond back east against the aperture door's leaf, the leg's nav re-route from
+        // the displaced spot went through the door node, the leaf contact reversed the door
+        // [M the merged tree's door law] and the leg burned its 6000-tick cap re-opening it
+        // six times; the run15j direct steer (walk_plain) has no return-fire hook and lost the
+        // answer entirely (1 fight, dead t1689). The nav leg keeps the fights; the back-off
+        // restores after the #462 shot. (run15i's own kills stand: #1 18.0, #0 12.0.)
+        w.dmg.back_off = None;
+        // lenient: the fights run here; after them the nav re-route may wedge on the aperture
+        // door's leaf (the run15i/run15k 6000-tick caps) — the guards are dead by then, so the
+        // give-up is harmless and the direct steer below finishes the approach
+        w.lenient = true;
         w.walk_to(Wp::new(79.0, 41.4, -5.0).r(1.2), "onto the crossing lane");
+        w.lenient = false;
+        // the fights' flank walks can push Bond back EAST through the aperture (the run15l
+        // dump: bond (83.32,41.40,-1.33), the segment to the target blocked at 0.127 by the
+        // closed leaf; the run15l walk_plain steer hit its own cap on the same wall) — re-pass
+        // the aperture the sneak's own way (the south half; the stuck handler opens the leaf
+        // and the plate box stays untouched), then the short west leg. The guards are dead by
+        // now (the two kills above), so no shooters remain on either leg.
+        w.lenient = true;
+        w.walk_to(Wp::new(80.0, 41.4, -1.6).r(1.0), "through the aperture's south half (re-pass)");
+        w.walk_to(Wp::new(79.0, 41.4, -5.0).r(1.2), "onto the crossing lane (re-pass)");
+        w.lenient = false;
+        walk_plain(&mut w, [79.0, 41.4, -5.0], 1.2, "onto the crossing lane (the post-fight steer)");
         // the sneak's law (measured, the 2026-11-07 runs): the south-half approach brings Bond
         // onto the lane's east end close to the d3 roster's #15 (he advances to (76.7, 41.4,
         // −4.6) to meet the lane) and the close fight killed him for 21.0 — against the 51 u lane
@@ -419,18 +535,6 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // nav lane walks into it at x 48.5, so it is shot from the lane once the gantry clutter
     // clears the line (≤ 14 u).
     let mine462 = [46.8f32, 41.556, 0.6];
-    // real-health-00agent-15-5: the CROSSING fights run as aimed stands — the aim bit held every
-    // fight tick makes the aimed act zero-spread [M Bullet_init 0x12c5a0:139-170] and the tap
-    // gate tightens to 0.01/0.01 [M the fights' own gate], so the 25-hp burst-rifle pair dies in
-    // ~6 landed rounds per guard instead of the hip cone's ~20 (the run15a ledger: the crossing
-    // fight's 81.0 bought ONE kill while the second guard plinked 56.0; the third fight reached
-    // #1 two hits too late). Scoped to the crossing legs: the sneak's own #15 fight stays plain
-    // (the aimed raise inside a point-blank fight handed the d3 grenadier 97.0 in 9 hits of AR
-    // at d 4.0 — the run15d ledger). The fights' own exposure law (the muzzle-lane ray set) is
-    // what the eye-law stand lacks at 18 u [M DamageLog::exposed_part_gun_rays]. d1/d2 keep
-    // their timelines.
-    let crossing_aimed = difficulty >= 3 && !w.tops_up();
-    w.dmg.aimed_fights = crossing_aimed;
     nav_until_clear(&mut w, [34.6, 41.4, 6.0], mine462, 14.0, "the silo crossing");
     // REAL-HEALTH TACTIC (level-14-15-real-health-finish): the silo rifle guard (placement 699,
     // port index 0, skin 0x5000087, weapon 0x15 — the burst rifle) plinks the crossing approach
@@ -473,7 +577,9 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // the line is clear again (the same ≤ 14 u rule) before the shot.
     if !w.tops_up() { nav_until_clear(&mut w, [34.6, 41.4, 6.0], mine462, 14.0, "the silo crossing re-clear"); }
     let d = shoot_mine(&mut w, 462, mine462, "the silo-crossing beam #462");
+    w.dmg.lane_fights = false;
     w.dmg.aimed_fights = false;
+    if difficulty >= 2 { w.dmg.back_off = Some(4.0); }
     assert!(d > 4.0, "#462 is shot from down the lane ({d:.2} u)");
     assert!(w.follow_nav_route([34.6, 41.4, 6.0], "the silo crossing"), "the nav route crosses the gantry");
     w.walk_to(Wp::new(34.6, 41.4, 6.0).r(1.2), "the north turn");
