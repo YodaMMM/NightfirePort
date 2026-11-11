@@ -84,3 +84,18 @@ sweep line above is the whole binary with `--test-threads=1`.
 ## Usage
 
 not visible to me (no token, context-window or cost figures are exposed in this session).
+
+## ntfy failed
+
+All three fallbacks failed; the exact output, in order:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "guard-slide-gate-all-levels: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20000 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', …), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --timeout=20 --post-data "guard-slide-gate-all-levels: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → exit code 4 (network failure), no body returned.
+
+The earlier `wget exit 0` reading was the pipeline's `head` exit code; the direct re-run
+showed the true exit 4. git push to github.com worked throughout, so only ntfy.sh is
+unreachable from this sandbox.
