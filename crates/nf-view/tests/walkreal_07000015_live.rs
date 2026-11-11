@@ -178,6 +178,47 @@ fn draw_persist(w: &mut Walker, id: u8, label: &str) {
         w.scene.sim.as_ref().unwrap().gun.weapon);
 }
 
+/// The pre-lane stand's aimed shot (real-health-00agent-15-5): `Walker::shoot_point`'s own
+/// discipline with the AIM HELD — the raise queues on the aim-PRESSED edge from the idle
+/// machine [M Player_Weapon 0x1a24c8:113-152], the finish sets the bit [M 0x1a2e38:554-561],
+/// and with the bit set the aimed act is zero-spread [M Bullet_init 0x12c5a0:139-170] — the
+/// plain shoot_point's taps ride the HIP cone (spread base 100.0 [L ee_start_05.bin @
+/// 0x2c10b8 +0x24]; the run15b stand at 22 u dealt 3.0 while the guard's burst rifle landed
+/// 25 rounds). Same tap law (the view ON the point, t % 16), the cursor-aware error
+/// [M scene.rs free-aim; Player_AutoAim 0x1a7c98:50-59]. File-local (the 06 walk's
+/// aimed_stand idiom; shared helpers stay opt-in per the merge lessons).
+fn aimed_stand_point(w: &mut Walker, at: [f32; 3], label: &str, done: impl Fn(&nf_view::scene::Sim) -> bool) -> bool {
+    for _ in 0..240 {
+        if w.scene.sim.as_ref().unwrap().aiming { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { aiming: true, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    for t in 0..1200u32 {
+        let (fire, input) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if done(sim) { return true; }
+            let bp = sim.bond.pos;
+            let dx = at[0] - bp[0];
+            let dz = at[2] - bp[2];
+            let dy = at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
+            let desired = dx.atan2(dz);
+            let err = walker::wrap_pi(desired - sim.bond.yaw);
+            let want_pitch = (dy / walker::dxz(bp, at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+            let perr = want_pitch - sim.bond.pitch;
+            let (err, perr) = walker::zero_g_errs(sim, at).unwrap_or((err, perr));
+            let on_target = err.abs() < 0.02 && perr.abs() < 0.028 && t % 16 == 0;
+            let input = nf_game::player::Input {
+                turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), aiming: true,
+                ..Default::default()
+            };
+            (on_target, input)
+        };
+        if fire { w.tick_fire(input); } else { w.tick(input, false); }
+    }
+    eprintln!("[15] {label}: the aimed stand cap");
+    false
+}
+
 /// Walk the nav route toward `dest` node by node until `aim` is in sight (no world hit on the eye
 /// line) within `max_d`.
 fn nav_until_clear(w: &mut Walker, dest: [f32; 3], aim: [f32; 3], max_d: f32, label: &str) {
@@ -378,6 +419,18 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // nav lane walks into it at x 48.5, so it is shot from the lane once the gantry clutter
     // clears the line (≤ 14 u).
     let mine462 = [46.8f32, 41.556, 0.6];
+    // real-health-00agent-15-5: the CROSSING fights run as aimed stands — the aim bit held every
+    // fight tick makes the aimed act zero-spread [M Bullet_init 0x12c5a0:139-170] and the tap
+    // gate tightens to 0.01/0.01 [M the fights' own gate], so the 25-hp burst-rifle pair dies in
+    // ~6 landed rounds per guard instead of the hip cone's ~20 (the run15a ledger: the crossing
+    // fight's 81.0 bought ONE kill while the second guard plinked 56.0; the third fight reached
+    // #1 two hits too late). Scoped to the crossing legs: the sneak's own #15 fight stays plain
+    // (the aimed raise inside a point-blank fight handed the d3 grenadier 97.0 in 9 hits of AR
+    // at d 4.0 — the run15d ledger). The fights' own exposure law (the muzzle-lane ray set) is
+    // what the eye-law stand lacks at 18 u [M DamageLog::exposed_part_gun_rays]. d1/d2 keep
+    // their timelines.
+    let crossing_aimed = difficulty >= 3 && !w.tops_up();
+    w.dmg.aimed_fights = crossing_aimed;
     nav_until_clear(&mut w, [34.6, 41.4, 6.0], mine462, 14.0, "the silo crossing");
     // REAL-HEALTH TACTIC (level-14-15-real-health-finish): the silo rifle guard (placement 699,
     // port index 0, skin 0x5000087, weapon 0x15 — the burst rifle) plinks the crossing approach
@@ -420,6 +473,7 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // the line is clear again (the same ≤ 14 u rule) before the shot.
     if !w.tops_up() { nav_until_clear(&mut w, [34.6, 41.4, 6.0], mine462, 14.0, "the silo crossing re-clear"); }
     let d = shoot_mine(&mut w, 462, mine462, "the silo-crossing beam #462");
+    w.dmg.aimed_fights = false;
     assert!(d > 4.0, "#462 is shot from down the lane ({d:.2} u)");
     assert!(w.follow_nav_route([34.6, 41.4, 6.0], "the silo crossing"), "the nav route crosses the gantry");
     w.walk_to(Wp::new(34.6, 41.4, 6.0).r(1.2), "the north turn");
