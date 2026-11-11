@@ -3104,6 +3104,10 @@ struct App {
     /// `replay_idx == replay_ticks.len()` ⇒ the recording ended (the sim pauses).
     replay: Option<replay::Replay>,
     replay_idx: usize,
+    /// shot-live-capture: a spot shot waiting for the next drawn frame (its PNG path). The frame
+    /// renders once more into an offscreen target with the live device + renderer and the PNG is
+    /// encoded on a thread, so the screenshot key no longer builds a GPU device and re-uploads the level per shot.
+    capture_req: Option<std::path::PathBuf>,
     /// The party weapon lock's rising-edge memory (`switch_channels_prev[0x48]`, `Player_Weapon`
     /// 0x1a24c8:247): the previous tick's channel state. Reset on every level load — the game's `_prev`
     /// is restored from the RamSave, whose value for the lock channel is 0 in every pre-party level.
@@ -4720,6 +4724,10 @@ impl App {
         // it) the overlay skips its dark plate, the movie plane draws nothing and a front-end
         // page shots the raw black void of the front-end level — an all-dark
         // capture (F12 on a menu page).
+        if self.gfx.is_some() && std::env::var_os("NF_SHOT_RERENDER").is_none() {
+            self.capture_req = Some(png.clone());
+            return format!("saved {} ({line})", png.display());
+        }
         match self.capture_png(&png) {
             Ok(()) => format!("saved {} ({line})", png.display()),
             Err(e) => format!("screenshot failed: {e} ({line})"),
@@ -6405,6 +6413,41 @@ impl App {
                 g.renderer.set_shards(&g.queue, &self.scene.shard_draws());
                 g.renderer.set_particles(&g.queue, &particles_for(&self.scene, &draw_cam));
                 let enc = g.renderer.render(&g.device, &g.queue, &view, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
+                if let Some(path) = self.capture_req.take() {
+                    let (w, h) = (g.config.width.max(1), g.config.height.max(1));
+                    let target = g.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("spot shot"), size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2, format: g.config.format,
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC, view_formats: &[],
+                    });
+                    let tview = target.create_view(&Default::default());
+                    let mut senc = g.renderer.render(&g.device, &g.queue, &tview, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
+                    let row = (4 * w).next_multiple_of(256);
+                    let buf = g.device.create_buffer(&wgpu::BufferDescriptor { label: Some("spot shot"), size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+                    senc.copy_texture_to_buffer(
+                        wgpu::TexelCopyTextureInfo { texture: &target, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                        wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
+                        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 });
+                    g.queue.submit([senc.finish()]);
+                    let bgra = matches!(g.config.format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb);
+                    let out = path.clone();
+                    buf.clone().map_async(wgpu::MapMode::Read, .., move |r| {
+                        if r.is_err() { eprintln!("screenshot: map failed for {}", out.display()); return; }
+                        let data = buf.get_mapped_range(..).map(|d| d.to_vec());
+                        buf.unmap();
+                        let Ok(data) = data else { return };
+                        std::thread::spawn(move || {
+                            let mut rgba = Vec::with_capacity((4 * w * h) as usize);
+                            for y in 0..h as usize { rgba.extend_from_slice(&data[y * row as usize..][..4 * w as usize]); }
+                            if bgra { for px in rgba.chunks_exact_mut(4) { px.swap(0, 2); } }
+                            for px in rgba.chunks_exact_mut(4) { px[3] = 255; }
+                            match std::fs::write(&out, nf_formats::png::encode_rgba(w, h, &rgba)) {
+                                Ok(()) => eprintln!("wrote {}", out.display()),
+                                Err(e) => eprintln!("screenshot: {e}"),
+                            }
+                        });
+                    });
+                }
                 let fp_sub = std::time::Instant::now();
                 frame_part(5, fp_sub - fp_enc);
                 frame_part(1, fp_sub - self.frame_start);
@@ -6775,6 +6818,7 @@ impl App {
             recorder: None,
             replay: None,
             replay_idx: 0,
+            capture_req: None,
             prev_lock_ch: false,
             ticked: false,
             frame_ticks: 0,
