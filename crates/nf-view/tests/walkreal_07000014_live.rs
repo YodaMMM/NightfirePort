@@ -69,7 +69,25 @@ fn agent_clear_blockers(w: &mut Walker, near: [f32; 2], r: f32, label: &str) {
         };
         let Some(di) = di else { break };
         if !w.switch_to_gun(label) { break; }
-        let killed = w.stand_and_fire(di, 900);
+        // real-health-14-00agent-9: the stands fire STRICT on the real-health runs — the shared
+        // stand's aim aligns on sight-line the rounds die in (this branch's ledger: the #1 stand
+        // spent the WHOLE conserved clip — 11 rounds after the trench head round — through the
+        // corridor corners, "killed false", and the dry gun then cost the descent's fights: the
+        // melee closer charged the restock fetch for 50.0, and #7/#8 burst 45.0 at the corridor
+        // foot [L the d3 ledger]). The strict head gate fires ONLY through a head window whose
+        // entry ray reaches the box before the world's first contact — the same law the fights'
+        // STRICT gun-ray aim uses — so a corner-blocked stand costs zero rounds and the caller's
+        // !killed break moves on. The tops_up walks keep the shared stand (lesson 10).
+        let killed = if !w.tops_up() {
+            // 150, not 700: the head window either opens at once (the trench kill landed at
+            // +20 [L this branch's ledger]) or the corner blocks it for good — the 700-tick
+            // aim phase slowed the walk enough to re-roll the descent's closer into the drop
+            // path (the tick-3825 death [L run8/run9]); the shared stand's own give-up is
+            // faster and its clock kept the guard AIM-standing south of the drop line.
+            shoot_head_loose(w, di, &format!("the path-clear stand ({label})"), 150, true)
+        } else {
+            w.stand_and_fire(di, 900)
+        };
         for _ in 0..90 {
             let p = w.scene.sim.as_ref().unwrap().bond.pitch;
             if p.abs() < 0.01 { break; }
@@ -806,6 +824,30 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
         // clear segment to the target is the overhang catch), so the westing is the player's own
         // push: steer south-west around the slab's corner, hop when grounded (the walker's wedge
         // recovery), until clear of the overhang zone on the low floor.
+        //
+        // The guard-sight tree's drop blocker (real-health-14-00agent-9): on the real-health
+        // runs the low-floor room guard engages before the drop and holds AimStandFire INSIDE
+        // the drop's steer box — drone #6 at (32.24, 1.80, 33.21) [L this branch's wedge dump,
+        // tick 5940: grounded, health 100.0, 0 fights] — so `drop_aim_z` steers the north side
+        // (z 34.9) and the westing pushes straight into the slab's corner: the overhang wedge
+        // held the whole 2400-tick cap, the hop law unanswered [L]. The route's own answer to a
+        // guard in the way is the shot (the room guard's law above: "the player shoots him
+        // first") — from the landing he is d 2.3, so the clear runs BEFORE the westing and the
+        // drop returns to the proven south-west steer (z 34.0). Opt-in on the real-health runs
+        // only: the difficulty-1 walk keeps master behaviour (the guard alive, the plain walk
+        // green on this tree). The clear only has a shot to give when the gun carries rounds —
+        // the dry-gun form is the measured death's own opening (clip 0 spare 0, out of ammo at
+        // +61 [L the d3 ledger]); when the clear cannot run, the drop rides the alive-guard
+        // north steer and the ledger says so.
+        if !w.tops_up() {
+            let armed = { let sim = w.scene.sim.as_ref().unwrap(); sim.gun.clip + sim.gun.spare > 0 };
+            // The dry-gun form is the measured death's own opening (clip 0 spare 0, out of ammo
+            // at +61, and the clear's loot pass then walked Bond off the landing into the
+            // closer's melee pocket — 70.0 for #6, the tick-4960 death [L the d3 ledger]): when
+            // the gun is dry the clear is skipped whole and the drop rides the alive-guard
+            // north steer; the trench head round below is what keeps the gun armed here.
+            if armed { clear_hostiles(w, 6.0, 900); }
+        }
         {
             let start = w.total_ticks;
             loop {
@@ -829,6 +871,18 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
                 w.tick(inp, false);
             }
             eprintln!("[014] the low floor west reached {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+        }
+        // The descent restock (real-health-14-00agent-9, the task's restock lever): the walk
+        // lands on the low floor with the fights' rounds spent, and the machine room carries
+        // ammo BEFORE the room's clear engages — the placed pickup at (32.3, 0.9, 31.1) [L the
+        // d3 ledger's "resupply attempt 0 at (32.3,0.9,31.1)"] plus whatever the pre-drop
+        // clear's kills dropped. The walker's own fetch machinery (the lane rules this walk
+        // already set: the 12 u fetch, the 0.5 floor band, the inventory count) runs the walk
+        // and the take; the point is the ORDER — rounds before the room's fights, not a fetch
+        // inside them (the measured death fetched mid-fight at d 1.7 under the closer's
+        // bursts). Opt-in on the real-health runs only.
+        if !w.tops_up() {
+            w.resupply("the descent restock");
         }
         the_machine_room_to_the_corridor(&mut w);
         w.walk_to(Wp::new(30.09, 0.65, 38.73).r(1.2), "the corridor north to the leg-2 spot");
@@ -1070,7 +1124,7 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// wrap + this un-ignore are one-liners; (2) a d2/d3-gated fight-quiet approach so the
 /// displacement never reaches the pocket; (3) the stairwell AIM-pair stands.
 #[test]
-#[ignore = "00 Agent: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
+#[ignore = "00 Agent (real-health-14-00agent-9 fresh ledger): the walk is PAST the old 1.72-landing wedge on real input — the descent lands and the fights answer — but the guard-sight tree's drop pocket re-rolls with the clock and still kills: (a) the trench head round lands at +20 (1 round, was 12) [L run3]; (b) the strict stands spend ZERO rounds on corner-blocked guards [L run10: 'fell back after 150', health 100.0]; (c) the whole binary is 7 passed / 0 failed / 3 ignored and interactables 10 passed [L this branch]. THE POCKET: the melee-range closer (drone #6, skin 0x5000093) sits below the landing slab lip inside drop_aim_z's steer box; every timing shift (the stand's 150 vs 700-tick aim phase) re-rolls him between AIM-standing SOUTH of the drop line (run3: the drop passed, the walk reached the corridor foot at tick 4624 with 50.0, the #56 fight answered at ZERO cost) and CHARGING into the drop path (run8/9/10: death at d 0.9, 100.0 in 30 hits, 0 return-fire fights — no eye ray reaches a shooter under the lip so no fight ever answers him). THE IN-HAND AMMO LAW: at the landing sim.gun (the in-hand gun) reads clip 0 spare 0 while the P2K's ~11 rounds sit in the INVENTORY [L run9's pre-drop dump] — the armed check must arm through the real switch (switch_to_armed's cycle) before any clear. NEXT LEVERS (in order): (1) arm through switch_to_armed at the landing, then the head round at the closer from the pad west (the pad's eye ~4.3 over the slab top 2.4 — the sight line the lip blocks from the landing); (2) the pad standoff dance on bare input (backpedal out of the under-3.0 band [M DroneWeap_DoBulletAccuracy 0x179740:113-115], head gate when the window opens) — a nav leg back to the pad DIES to the fights' unseen creep (the tick-3825 death at (31.72, 1.76, 35.01) [L run7]); (3) the fights' unseen-cover opt-in (with_real_damage_unseen_fights) answers the under-the-lip shooter during LEGS but crept Bond INTO the burst band when the fight ran mid-retreat [L run7] — scope it to the descent's legs only; (4) the clock-independence question: pin #6's charge state by pinning the walk's tick count to the descent (the pocket re-rolls with every upstream timing change). The d2 wrap stays parked on the same crossing (the drop-west pocket, this ledger)."]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(3)));
 }
@@ -1663,6 +1717,16 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage() {
 /// team-1 hostiles inside `radius` with the walker's loose-gate shots — real input only;
 /// `shoot_loose`'s give-up keeps the walk moving when a sight line never opens.
 fn clear_hostiles(w: &mut Walker, radius: f32, cap: u32) {
+    // real-health-14-00agent-9: the real-health runs (the d2/d3 sisters, !tops_up) fire HEAD-first
+    // and do NOT run the loot pass. This window's measured death: the pre-drop clear opened on
+    // clip 0 spare 0 (the trench guard's torso loose gate burned the whole 12 — clip 3 spare 9 →
+    // 0/0 [L this branch's ledger]), the loot pass then walked Bond off the landing straight into
+    // the closer's (drone #6, skin 0x5000093, weapon 0x0) melee pocket at d 1.7 and the run died
+    // at tick 4960 with #6 at 70.0 in 14 hits [L the d3 ledger]. The sisters restock explicitly
+    // before their clears instead (`the descent restock` below); their clears spend one head
+    // round a guard where the torso gate spent eight. The tops_up walks (d1) keep the master
+    // order byte-for-byte: the loot pass, then the torso loose gate.
+    let loot = w.tops_up();
     let home = w.scene.sim.as_ref().unwrap().bond.pos;
     for _ in 0..10 {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -1670,6 +1734,17 @@ fn clear_hostiles(w: &mut Walker, radius: f32, cap: u32) {
             d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
                 && walker::dxz(d.pos, sim.bond.pos) < radius
         }) else { break }; // a clear that ends here still walks home below
+        if !loot {
+            // The sisters' head round (the -6 chain's law, scoped to the real-health runs): one
+            // P2K head round is 35 [M NDrone2_HitDamage 0x145558 × DroneDamage_Head; the P2K's
+            // 3.5 → 35] — a 12-health guard dies in one, the 28-health closer in one, where the
+            // torso loose gate's 3.5 taps needed eight [M the same table]. The torso gate stays
+            // the fallback for a guard whose head window sits behind geometry the torso taps
+            // still reach (the head gate gives up after 300 quiet ticks).
+            if shoot_head_loose(w, di, "the hostile clear's head round", cap.min(700), false) { continue; }
+            w.shoot_loose(di, "the hostile clear", cap);
+            continue;
+        }
         // The dropped-gun cycle is now a bounded test-local loot pass (this tree's measured
         // runs: the fights held Bond at 74.0 across 9-12 fights — the armour takes the traded
         // rounds — while the shared resupply walked Bond onto the trench lip for a drop
@@ -1711,11 +1786,117 @@ fn kill_the_trench_guard_270(w: &mut Walker) {
     let di = w.scene.sim.as_ref().unwrap().drones.list.iter()
         .position(|d| d.placement == 270).expect("the trench guard placement #270 exists");
     assert!(w.switch_to_armed("the trench guard's kill"), "a carried gun has rounds");
+    // The real-health head round (the -6 chain's law, scoped to the real-health runs): the torso
+    // loose gate at the raised gun's moment trades — this branch's ledger spent the WHOLE 12
+    // (clip 3 spare 9 → 0/0) on the 25-hp hunter, and the dry gun then cost the descent's fight
+    // (the tick-4960 death, #6 at 70.0). One P2K head round is 35
+    // [M NDrone2_HitDamage 0x145558 × DroneDamage_Head; the P2K's 3.5 → 35] — one kills him
+    // outright, before the under-3.0 band collects the shootout's price, and the clip stays
+    // alive for the descent's fights. The tops_up walks (d1) keep master behaviour (lesson 10).
+    if !w.tops_up() && shoot_head_loose(w, di, "the trench guard's head", 700, false) {
+        return;
+    }
     // The hunter closes — the LOOSE aim gate (the patrolling-target pattern) keeps the taps
     // landing while he sweeps between ticks; the band under 3.0 is his, so the kill must land
     // before he arrives (hp 25 [L the death log]).
     assert!(w.shoot_loose(di, "the trench guard's kill", 2400),
         "the trench guard must fall (the game's hunt block chases the walker down)");
+}
+
+/// The game's R held to a full clip (this file-local — walker_b2's tick_inner cannot pulse the
+/// reload key; the contract is walker.rs's `reload_full`): 60 blind reload pulses — the game's
+/// reload with a full clip is a no-op, with spare it fills. (The -6 chain's `reload_full_b2`,
+/// carried unchanged for the sisters' pre-engagement reloads.)
+#[allow(dead_code)]
+fn reload_full_b2(w: &mut Walker) {
+    for _ in 0..60 {
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, true, false);
+        w.total_ticks += 1;
+        w.after_step();
+    }
+}
+
+/// The head-box loose gate (the -6 chain's law, carried to this branch; this file-local — the
+/// shared helpers are untouched): the aim rides the part-5 box centre [M the hit_boxes list;
+/// walker.rs's `exposed_aim` head law] with the loose gate's tolerances and cadence, tapping
+/// through the REAL fire path. The torso +0.3 anchor is the fallback whenever the head box's
+/// own entry ray dies before the world's first solid contact (the game's `t_box < world_t`
+/// comparison [M 0x1ea398:216-229; walker.rs exposed_aim]). No flank/reposition machinery —
+/// the caller falls back to `shoot_loose` (the master law) when this returns false.
+///
+/// `strict` (real-health-14-00agent-9): fire ONLY through a real head window — the torso
+/// +0.3 anchor tracks but never triggers, so a sight-line the rounds would die in costs zero
+/// rounds (the path-clear stands' law above). Non-strict keeps the -6 law: the torso anchor
+/// fires when aligned, the rounds' own collision decides.
+fn shoot_head_loose(w: &mut Walker, di: usize, label: &str, cap: u32, strict: bool) -> bool {
+    let mut last_tap = 0u32;
+    let mut hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
+    for t in 0..cap {
+        let (input, trigger) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.drones.list[di].corpse || sim.drones.list[di].health <= 0.0 {
+                eprintln!("[014] {label}: killed at +{t} ticks");
+                return true;
+            }
+            let (bp, dp) = (sim.bond.pos, sim.drones.list[di].pos);
+            let data = nf_game::drone::Data {
+                tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+                world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+                skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+                hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+                surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+                ai_points: &sim.ai_points,
+            };
+            let boxes = sim.drones.list[di].hit_boxes(&data);
+            let head = boxes.iter().find(|b| b.part == 5).map(|b| [b.m[3][0], b.m[3][1], b.m[3][2]]);
+            let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+            let head_clear = head.is_some_and(|c| {
+                let ray = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
+                nf_game::damage::ray_box(eye, ray, boxes.iter().find(|b| b.part == 5).unwrap())
+                    .is_some_and(|t_box| sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, c)
+                        .is_none_or(|tw| tw >= t_box))
+            });
+            let aim = if head_clear { head.unwrap() } else { [dp[0], dp[1] + 0.3, dp[2]] };
+            let dy = aim[1] - eye[1];
+            let desired = (aim[0] - bp[0]).atan2(aim[2] - bp[2]);
+            let err = wrap_pi(desired - sim.bond.yaw);
+            let want_pitch = (dy / dxz(bp, aim).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+            let perr = want_pitch - sim.bond.pitch;
+            let clip_empty = sim.gun.clip == 0 && sim.gun.spare > 0;
+            let on_target = err.abs() < 0.07 && perr.abs() < 0.10 && t.saturating_sub(last_tap) > 15;
+            let trigger = !clip_empty && on_target && (head_clear || !strict);
+            if trigger { last_tap = t; }
+            let reload = clip_empty && t % 20 == 0;
+            (nf_game::player::Input {
+                turn: err.clamp(-0.08, 0.08),
+                look: perr.clamp(-0.08, 0.08),
+                ..Default::default()
+            }, if reload { None } else if trigger { Some(true) } else { Some(false) })
+        };
+        // The reload pulse rides step_bond's own reload key (the game's R), the same contract
+        // shoot_gated uses; tick/tick_fire cannot pulse it.
+        match trigger {
+            None => {
+                w.scene.sim.as_mut().unwrap().step_bond(input, false, true, false);
+                w.total_ticks += 1;
+                w.after_step();
+            }
+            Some(true) => w.tick_fire(input),
+            Some(false) => w.tick(input, false),
+        }
+        let hp = w.scene.sim.as_ref().unwrap().drones.list[di].health;
+        if hp < hp0 { hp0 = hp; }
+        if t > 0 && t % 600 == 0 && hp0 >= w.scene.sim.as_ref().unwrap().drones.list[di].health.max(hp0) {
+            eprintln!("[014] {label}: no head-round progress at +{t} (health {:.0})", hp);
+        }
+        if t - last_tap > 300 { break; } // the head gate never opened — the caller's fallback
+    }
+    let alive = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        !sim.drones.list[di].corpse && sim.drones.list[di].health > 0.0
+    };
+    if alive { eprintln!("[014] {label}: fell back to the torso gate after {cap} ticks"); }
+    !alive
 }
 
 // ---------------------------------------------------------------------------
