@@ -23,3 +23,10 @@ claimed-by: sandbox5 at 2026-11-11T02:39Z
 ---
 ## Report (done, 2026-11-11T03:29Z)
 
+
+Branch: `s/real-health-00agent-15-5` (from origin/master 784ba2d99; -15-2/3/4's branches are gone
+from origin). The walk is still ignored with the refreshed ledger: the opening is FIXED (the sneak
+14.0, the crossing pair 9.0 under the scoped lane law — was dead at t992 with 100.0 taken) and the
+walk reaches t5527 in the plank/meet phases (the grenadier #8's 39.5 in blasts is the next lever).
+Whole walkreal_07000015_live 6/0/3, interactables_07000015_live 19/0 — identical to master's
+shape. The report is at `docs/reports/real-health-00agent-15-5.md` on the branch.
