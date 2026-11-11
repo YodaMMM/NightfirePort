@@ -101,8 +101,9 @@ fn aim_and_fire_until(w: &mut Walker, target: [f32; 3], weapon: u8, fire_ticks: 
 /// muzzle opens [M Bullet_update 0x12e7b0's per-tick world segment + Collide_Pick 0x1eb320],
 /// so a launch whose line the bottom-station's own geometry blocks explodes at the contact —
 /// and at 0.65–5.5 u from Bond that blast (radius 8, ≈100 [L ee_start_05.bin @0x2bf150 +
-/// 0x2C·0x10C], the (int)-truncated linear falloff × the level's 0.6 pain factor [M
-/// Explode_Propagate 0x17c518:69-71; Player_HandlePain's table]) takes Bond with it: the
+/// 0x2C·0x10C], the linear falloff with the gap clamped at zero — 0x17c608 is `max.s f0,f0,f3`,
+/// EE funct 0x28, not an int cast [M Explode_Propagate 0x17c518:69-71; the explode-falloff-int
+/// report] — × the level's 0.6 pain factor [M Player_HandlePain's table]) takes Bond with it: the
 /// measured death run's four "world" hits −52.5/−7.5/−22.5/−3.7 at frames 26477/26580/26639/
 /// 26696 are Bond's OWN rockets 1/3/4 (docs/reports/level-08-long-range-hits.md). A player
 /// pulls the trigger only on a clear line — the eye ray AND both gun stand-ins (the view
@@ -150,12 +151,22 @@ fn fight_close_guards_opts(w: &mut Walker, label: &str, max_ticks: u32, visible_
 }
 
 fn fight_guards_within(w: &mut Walker, label: &str, max_ticks: u32, visible_only: bool, radius: f32) {
+    fight_guards_within_dy(w, label, max_ticks, visible_only, radius, 4.0)
+}
+
+/// los-mask-08-sisters-2 (the 00 Agent ledger's lever 1, d3-only): the same pick with the
+/// vertical band widened to 5.0 — the east-deck guards (#11/#3/#2/#14, placements y 46.0
+/// [L the run ledgers]) sit dy 3.5-4.2 below the station-hall mouth's stance (Bond y 49.5-50.2),
+/// just past the plain 4.0, so the mouth's visible-only stand walked on and the walkway legs ate
+/// their bursts (the ledger's 84.0 across the four, then the walkway shotgun's finish). Only the
+/// d3 gate calls this — every plain call site keeps the 4.0 band and its pinned timeline.
+fn fight_guards_within_dy(w: &mut Walker, label: &str, max_ticks: u32, visible_only: bool, radius: f32, dy_band: f32) {
     if w.tops_up() { return; }
     let close = |sim: &nf_view::scene::Sim| -> Option<usize> {
         let b = sim.bond.pos;
         sim.drones.list.iter().enumerate()
             .filter(|(_, d)| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1)
-            .filter(|(_, d)| ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt() < radius && (d.pos[1] - b[1]).abs() < 4.0)
+            .filter(|(_, d)| ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt() < radius && (d.pos[1] - b[1]).abs() < dy_band)
             .filter(|(i, _)| !visible_only || walker::DamageLog::visible(sim, *i))
             .min_by(|x, y| {
                 let dx = (x.1.pos[0] - b[0]).powi(2) + (x.1.pos[2] - b[2]).powi(2);
@@ -430,7 +441,16 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         ("the walkway mid", [145.5, 45.0, -108.6]),
         ("the lower landing", [150.0, 43.5, -116.0]),
     ] {
-        if name == "the lower landing" && w.tops_up() && walkway_pair_holds(&w) { continue; }
+        // los-mask-08-sisters-2 (the d3 run's measured wedge): on the merged tree the lower
+        // landing leg WEDGES 3.65 u short of its target for ~3900 ticks (STUCK at nav 1 twice,
+        // segment_to_target None — a nav-web hole at the landing's edge) while the station-pit
+        // pair plinks from below: the run's drips −4.0 × 5 across ticks 8607-11239 with Bond
+        // standing in the arc [L the NF_DMG_TRACE run on this branch]. A player wedged at the
+        // landing edge does not stand there under fire — he walks the stair down (the approach
+        // legs below do exactly that, from "the stair head" on). The topped-up walk's own skip
+        // (walkway_pair_holds) is the precedent. D3-GATED: the Operative/Agent sisters walk the
+        // landing and stay byte-exact.
+        if name == "the lower landing" && (difficulty >= 3 || (w.tops_up() && walkway_pair_holds(&w))) { continue; }
         w.walk_nav_to(at, name, 1.5);
         // los-mask-repins-08-agent (d2): the east-hall guards (#11/#14/#2/#9/#10, placements
         // (152.5-161.5, 46.0, −87.7..−101.5) [L the run ledgers]) wake on the ch-0x2a plate and
@@ -443,6 +463,21 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // out to 25 u. D2-GATED: the Operative sisters' timelines stay byte-exact.
         if difficulty >= 2 && fight_pkg && name == "the station hall" {
             fight_guards_within(&mut w, "the station hall mouth", 4200, true, 25.0);
+        }
+        // los-mask-08-sisters-2 (the 00 Agent ledger's levers 2 then 1, d3-only): the mouth stand
+        // above ran PRE-wake — the ch-0x2a plate (139.1, 50.2, −93.6) [D] fires on the arrival
+        // tick, the placed guards (sw_ch 42) wake on it, and the tick-373 stand found no visible
+        // guard and walked on; the walkway-head leg then ate the bursts (4 hits at frames
+        // 1330-1683 [L the NF_DMG_TRACE run on the sister branch]). A player who just tripped the
+        // station's alarm holds the mouth a beat for the men to show themselves, then fights them
+        // ACROSS the hall before walking their placements: the re-stand waits a bounded 240 ticks
+        // post-arrival (lever 2 — the wake lands the arrival tick, the guards then step into the
+        // hall's open) and takes the widened dy 5.0 band (lever 1 — the placements' y 46.0 sits
+        // dy 3.5-4.2 under the mouth's y 49.5-50.2, past the plain 4.0). D3-GATED: every other
+        // timeline stays byte-exact.
+        if difficulty >= 3 && fight_pkg && name == "the station hall" {
+            w.wait(240);
+            fight_guards_within_dy(&mut w, "the station hall mouth post-wake", 4200, true, 25.0, 5.0);
         }
         // los-mask-08 (the walk-2 ledger's lever 2, the 05 pre-engage): the station deck's
         // rifleman #14 (153.2, 46.0, −97.2, ~14 u east of this stop) drained the real-damage
@@ -571,6 +606,28 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // the walkway's own band blocks the reverse ray from that spot [L the run].) D3-GATED:
         // the Operative and Agent sisters' timelines stay byte-exact.
         fight_guards_within(&mut w, "the east deck from the fusebox", 4200, true, 34.0);
+        // los-mask-08-sisters-2 (the run's decisive leak — the station-pit pair's ramp perch):
+        // #15/#16 (skins 0x500002e/0x5000030, weapon 0xa) are ambush spawners off the walkway's
+        // zone plates; they climb from the pit (y 37) to the RAMP MID perch (151.7, 40.0, −111.5)
+        // within ~1300 ticks of the spawn and overlook the fusebox from 10 u — the runs' drips:
+        // −4.0 at a 60-tick cadence through the whole wire work (health 84 → 0 at ticks
+        // 7976-8396 on the early-arrival run; −4.0 × 12 on the wedged run) — and the perch is
+        // UNPUNISHABLE from every west stance: the sight rays from the landing, the fusebox, the
+        // secure-room door and even the ramp-turn spot all answer blocked while their bullets
+        // fly (the sister report's live check 3 asks exactly this over-block question) [L the
+        // NF_DMG_TRACE runs on this branch]. The ramp's own mid waypoint is the flank: the pair's
+        // perch (151.7, 40.0, −111.5) is 0.7 u off the nav spot (153.2, 39.7, −111.7) — a player
+        // plinked from the ramp walks UP THE RAMP to the perch's own level and clears the two men
+        // at arm's reach, then does the wires in peace. VISIBLE-ONLY (the measured run: from the
+        // ramp SOUTH the parapet still eats every ray and the plain pick spun 64-tick unseen
+        // stands while #16's bursts landed −4 each; from the ramp MID both men died in one aim
+        // cycle each — #16 at 7399, #15 at 7521 [L the run]), and the blocked door man #5 (the
+        // half-open leaf's cover, the d3_door_man fight's own target) must not open stands here —
+        // the visible pick breaks on him instead of spinning. D3-GATED: every other timeline
+        // stays byte-exact.
+        w.walk_nav_to([153.2, 39.7, -111.7], "up the ramp mid to the pair's perch", 1.5);
+        fight_guards_within_dy(&mut w, "the ramp pair at arm's reach", 4200, true, 14.0, 5.0);
+        w.walk_nav_to([153.0, 43.4, -118.5], "back to the fusebox", 1.5);
     }
 
     // ── cut the fusebox wires with the LASER → ch 137 (the Secure Room door's lock channel) ─────
@@ -604,6 +661,35 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // Door #10/122 (the GuardRoomDoor, lock ch 137 [D]) sits at (154.5, 42, −121.3) — E it ON its
     // position, then step through into the room (the safe wall's face is east).
     w.walk_to(Wp { at: [154.6, 42.5, -121.0], act: Act::Use { use_ticks: 240 }, arrive: 1.1 }, "E the secure room door");
+    // los-mask-08-sisters-2 (the d3 run's door-pair leak): on the early timeline the walkway
+    // door's burst pair (#5/#6, weapon 0x15) stands clear of the 6-u d3_door_man gate at the
+    // fusebox arrival, the E-approach's return fire only wounds them (#6 "killed false"), and
+    // walking into the room then met #6 at 2.0 u inside — six interval-4 −6.0 bursts ate health
+    // 36 → 0 in 35 ticks before any response could open (death at 8298, (158.98, 43.13, −119.55)
+    // [L the NF_DMG_TRACE run on this branch]). The topped-up walk's own answer is the walkway
+    // pair's shoot loop ("A player answers the two guards standing in his doorway with his
+    // fullest gun before walking on") — the same loop here, d3-gated, before stepping through.
+    // D3-GATED: the Operative/Agent sisters stay byte-exact.
+    if difficulty >= 3 {
+        arm_fullest(&mut w, "the secure-room door pair");
+        for _ in 0..4 {
+            let g = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let b = sim.bond.pos;
+                sim.drones.list.iter().position(|d| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && walker::dxz(d.pos, b) < 8.0 && (d.pos[1] - b[1]).abs() < 2.0)
+            };
+            let Some(g) = g else { break };
+            if !w.shoot(g, &format!("the secure-room door guard {g}")) { break; }
+        }
+    }
+    // los-mask-08-sisters-2: a deliberate fight against the pit pair was TRIED at this stance and
+    // RETIRED on the measured run — the plain fight cleared the wounded door man #6 (killed true
+    // at 13451) but #15's ramp-mid perch (151.7, 40.0, −111.5, d 9.7) has no eye/gun ray from the
+    // door, the unseen creep's 64-tick stand cap spun four times without opening the line, and
+    // the ~860 ticks stood in his arc let his 60-tick bursts drain health 20 → 4 → death at 14084
+    // [L the run on this branch]. The pair is answered where the player actually reaches them:
+    // the ramp-mid flank fight above (the walk passes the perch at 0.7 u on the open ramp).
     w.walk_nav_to([158.0, 43.0, -119.0], "into the secure room", 1.4);
     // los-mask-08 (the walk-2 ledger's lever 2, the 05 pre-engage): the secure room's
     // rifleman #5 (158.0, 43.0, −121.2 — 2 u from this arrival) drained the real-damage walks
@@ -829,6 +915,17 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         ("the stairwell top", [108.2, 31.5, -106.3]),
     ] {
         w.walk_nav_to(at, name, 1.5);
+        // los-mask-08-sisters-2 (the d3 run's backstop for the pit pair): the ramp legs pass the
+        // pit pair's climb-out perches at arm's reach — #15 sat AT the ramp-turn nav-2 spot
+        // (151.7, 40.0, −111.5 vs the walk's (152.36, 40.13, −111.79), 0.7 u) and #16 just west
+        // (149.6, 39.2, −111.8) — and no stand exists on the ramp, so whichever man the
+        // secure-room-door fight could not reach (dy 5.5 from the door's y 42.5 for the y-37.0
+        // climber) is point-blank HERE, dy < 2, VISIBLE on the open ramp. A player descending the
+        // ramp answers the man at arm's reach before the mid level. D3-GATED: every other
+        // timeline stays byte-exact.
+        if difficulty >= 3 && name == "the ramp turn" {
+            fight_guards_within_dy(&mut w, "the ramp turn", 4200, true, 14.0, 5.0);
+        }
         // 00 Agent (difficulty 3): the rifle pair (#15/#16, weapon 0x0, at (122.2/122.6,
         // 34.6/35.3, -112.8/-114.7), ~10 u east of the mid west stop [L the d3 ledger]) owns the
         // open long link from its east end — on the d3 run both answered fights ("the long link
@@ -2227,7 +2324,7 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
 /// plus the pin of the round's actual spawn direction (lock-on vs the effective aim) in
 /// PCSX2 (the report's live check).
 #[test]
-#[ignore = "00 Agent 2026-11-11 state (the merged tree s/los-mask-08-sisters = los-mask-08-walks + master 784ba2d99): the whole-mission walk dies EARLIER than the old solid-body ledger — tick 9592 at (153.72, 43.10, −120.47) at the walkway/fusebox, 25 hits for 100.0, 10 return-fire fights. The upstream bleed: the east-hall guards #11 28.0 in 7 hits, #3 24.0 in 7, #2 20.0 in 6, #14 12.0 in 3 (placements (152.5-161.5, 46.0, −87.7..−101.5)), then the secure-room guard #4 (weapon 0xa) 8.0 in 2 at d 5.2 finishes at the walkway door — ~16 health entering the fusebox [L the NF_DMG_TRACE runs on this branch]. Health is already 8.0 by tick 2475 (the bleed completes during the walkway legs) and 8.0 at ticks 9152/9345. The stands found NO visible guard at every tried spot: the station hall mouth (tick 373 — pre-wake: the ch-0x2a plate (139.1, 50.2, −93.6) [D] IS the hall arrival, the wake lands the same tick and the stand walked on), the deck pair (tick 2475), the lower landing (tick 9152 — the walkway's own band blocks the reverse ray from that spot), the fusebox (tick 9345 — though the guards' own rays reached that spot at d 23-34, the masked sight query answers blocked). NEXT LEVERS: (1) the stands' |dy| < 4.0 filter inside fight_guards_within's close() excludes the east-deck guards from the mouth — Bond y 49.5-50.2 vs the placements' y 46.0 = dy 3.5-4.2 — so a d3-only variant with dy 5.0 (or a mouth stand spot at y 47-48) lets the mouth fight them the tick they wake; (2) the wake-tick race: re-run the mouth stand after a bounded wait so it fires post-wake (the first run fired pre-wake and the walkway-head leg then ate the bursts — 4 hits at frames 1330-1683 [L the trace]); (3) the Hind's dodge-window widening (30→60 u, the wall-band step) stays open — never reached, the walk dies upstream. The steering/arming/speed/launch all match the game [M Bullet_update 0x12e7b0; Bullet_init 0x12c5a0; the 0x2C record bytes]"]
+#[ignore = "00 Agent 2026-11-11 state (s/los-mask-08-sisters-2 = the sister branch + master 784ba2d99): the walk's first half is FIXED and the death moved to the secure-room door — tick 8298 at (158.98, 43.13, −119.55), 23 hits for 100.0. THE WINS (all measured [L] on this branch's NF_DMG_TRACE runs): the ledger's levers 1+2 (the d3-only dy-5.0 mouth re-stand after a bounded 240-tick post-wake wait) kill ALL FOUR east-hall guards at the station hall mouth (#11/#2/#14/#3 at ticks 613-1309) with health 100.0 untouched — the old 84.0 upstream bleed is gone; the lower-landing wedge (3900 ticks stuck, −20 in the pit pair's arc) is skipped d3-gated; the station-pit pair (#15/#16, ambush spawners off the walkway plates) is killed at the RAMP MID flank (0.7 u off their perch (151.7, 40.0, −111.5), #16 at 7003, #15 at 7253) with health 84.0 intact — their 60-tick-cadence drips (−4.0 × 12 through the wire work on the earlier runs) are gone; health 78.0 at the secure-room door (was 8.0-12.0 in every prior ledger). THE REMAINING LEAK: the walkway-door burst man #6 (skin 0x5000012, weapon 0x15) — the E-approach's return fire only wounds him (killed false at 8041), the d3-gated door-pair shoot loop's 8.0-u/2.0-dy pick found nothing at the post-resupply stance (the E walk_to's own resupply detour moved Bond to (160.9, 42.4, −118.7)), and walking into the room met him at 2.0 u INSIDE — six interval-4 −6.0 bursts ate health 36 → 0 in 35 ticks before any response could open. TRIED AND RETIRED this window: a plain pit-pair fight at the secure-room door (the unseen creep's 64-tick cap cannot open the ramp-mid line from there and the stood ticks eat −4 × 6, death at 14084); a ramp-south stand (the parapet eats every ray from below — the plain pick spun on #16 while his bursts landed). NEXT LEVERS: (1) make the door-pair shoot loop fire — run it at the E walk_to's own arrival before the resupply detour, or widen the pick past the resupply's moved stance; (2) widen the d3_door_man gate (6.0 u/2.0 dy at the fusebox arrival) so the burst pair is cleared at the fusebox itself; (3) the Hind fight's dodge-window widening (30→60 u) stays open behind this. The steering/arming/speed/launch all match the game [M Bullet_update 0x12e7b0; Bullet_init 0x12c5a0; the 0x2C record bytes]"]
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair

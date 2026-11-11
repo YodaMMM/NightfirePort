@@ -169,3 +169,19 @@ re-time levers in their ignore messages; one level per tool call, repairs gated 
   walkreal_07000008_live + interactables_07000008_live. Plan: checkpoint push → suite.py →
   read report + ignore → lever 1 → lever 2 → Hind window → runs → ignore decision → report +
   finish.
+
+- The levers taken (all d3-gated, all measured on this branch's NF_DMG_TRACE runs): (1+2) the
+  dy-5.0 mouth re-stand after a bounded 240-tick post-wake wait kills ALL FOUR east-hall guards
+  at the station hall mouth (#11/#2/#14/#3, ticks 613-1309) at health 100.0 untouched — the old
+  84.0 bleed is gone; (3) the lower-landing wedge (3900 ticks stuck, segment_to_target None,
+  −20 in the pit pair's arc) skipped d3-gated (the tops_up walkway_pair_holds skip is the
+  precedent); (4) the station-pit ambush pair (#15/#16) killed at the RAMP MID flank (0.7 u off
+  their perch, #16 at 7003, #15 at 7253) at health 84.0 — their 60-tick-cadence drips through
+  the wire work (−4.0 × 12) gone; (5) a d3 door-pair shoot loop at the secure-room door (the
+  walkway_first pattern). TRIED AND RETIRED: a plain pit-pair fight at the secure-room door
+  (the unseen creep's 64-tick cap cannot open the ramp-mid line, death at 14084); a ramp-south
+  stand (the parapet eats the rays from below). State: the death moved from tick 9592 (the
+  east-hall bleed) to 8298 — the walkway-door burst man #6 at 2.0 u inside the room, six
+  interval-4 −6.0 bursts in 35 ticks; health 78.0 at the secure-room door (was 8.0-12.0). The
+  ignore stays with the sharpened ledger and three next levers. Whole walkreal_07000008_live
+  5/0/1i, interactables_07000008_live 15/0.
