@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-11-11T13:43Z
+
+---
+## Report (done, 2026-11-11T14:57Z)
+
+Closed by the driver: the report is on `s/level-14-kiko-corridor` (docs/reports/level-14-kiko-corridor.md); the worker didn't run finish.sh.
