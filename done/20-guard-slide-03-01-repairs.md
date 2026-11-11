@@ -25,3 +25,30 @@ claimed-by: sandbox3 at 2026-11-11T14:09Z
 ---
 ## Report (done, 2026-11-11T15:21Z)
 
+The full report lives on the branch: docs/reports/guard-slide-03-01-repairs.md
+(s/guard-slide-03-01-repairs, pushed). Summary:
+
+**Done:** the 07000003 wedge DIAGNOSED with the ledger's first lever (probe_plate_wedge_spot):
+no slid guard — the parked capsule is the level's own courtyard POCKET at (6.35, −15.7..−17.7)
+(the 16-ray sweep from inside stops 0.05–0.21 u on every side but south; Bond parks grounded
+false y 7.02–7.21 AND grounded true y 6.41–6.61; the A* rides path3's upper-row nodes
+(10.8/11.28, 9.64) through the band; the door-8 mouth walk's A* from the west loot end
+(3.69, −28.84) parks him, 21 give-ups, then 29 on the plate leg). The lane-exit re-take
+(off_the_courtyard_obstacle_03, d1-gated, test-local, self-gating) landed at the four
+servant-loop points; two attempts measured (v1 east/west episodes — the lane anchor
+re-funnelled Bond in; v2 south-extract — he was back in the pocket each next leg). The d1 test
+stays IGNORED with the full ledger + three next levers (the ground-level exit map, the
+extraction-anchor shape, the east-lane start gate on the mouth/servant walks).
+
+**Verified:** walkreal_07000003_live whole on the final tree: 5 passed / 0 failed / 4 ignored
+in 197.7 s — the d2/d3 sisters green with the helper in the tree. Real input only, no
+top-ups, no health/damage writes, no test weakened.
+
+**Left:** the d1 extraction (the three levers), the whole walkreal_07000001_live +
+interactables binaries and the 07000001 Agent repair (the mayhew per-leg re-time, the
+900-tick step-out, NF_RF_TRACE the 13556 leg — the four-lever ledger on the Agent test's
+ignore stands), the full suite with the fast runner on the final tree.
+
+## Usage
+
+not visible to me (no token, context-window or cost figures are exposed in this session).
