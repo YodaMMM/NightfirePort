@@ -156,3 +156,16 @@ re-time levers in their ignore messages; one level per tool call, repairs gated 
 - 06:16-06:22 the 08 whole binary 5/0/1 (Agent d2 green on the merged tree, topped-up
   byte-exact, ally pair green), interactables_08 15/0; the 00agent ignore re-ledgered; the
   report written.
+
+## los-mask-08-sisters-2 (2026-11-11T14:52Z, branch s/los-mask-08-sisters-2)
+
+- Claimed. Base: origin/s/los-mask-08-sisters 041c73180 (origin/master already an ancestor).
+  Task: 07000008 walkable on 00 Agent with the game's line-of-sight masks. Read the sister
+  report's "What is left" item 1 and the 00 Agent ignore message; take its two new levers in
+  order (the d3-only dy-5.0 mouth variant, then the post-wake re-stand), then widen the Hind
+  fight's dodge window 30 → 60 u if the fight still leaks. Helpers stay gated to 07000008 +
+  difficulty 3; real input only, no top-ups, never lower damage or health. Remove the ignore
+  when green; otherwise push the ledger and the next lever in the ignore message. Whole
+  walkreal_07000008_live + interactables_07000008_live. Plan: checkpoint push → suite.py →
+  read report + ignore → lever 1 → lever 2 → Hind window → runs → ignore decision → report +
+  finish.
