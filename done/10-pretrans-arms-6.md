@@ -26,3 +26,7 @@ claimed-by: sandbox4 at 2026-11-10T23:50Z
 ## Report (done, 2026-11-11T01:33Z)
 
 Closed by the driver: the report is on `s/pretrans-arms-6` (docs/reports/pretrans-arms-6.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-11-11T01:38Z)
+
