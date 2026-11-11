@@ -3059,6 +3059,33 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
 /// ROUTE — pre-clear the west-corridor guards (13/0/8 at 14-21 u) BEFORE the meet walk (the
 /// fights Bond chooses, not the return-fire answers) so ~30 more hp reaches the door phase;
 /// the captain's trade then fits with a head-hit window to spare.
+/// LEDGER (real-health-00agent-01-hall-2, 2026-11-11 [L the runs on this branch]): the ROUTE
+/// lever LANDED and the corridor is beaten — the west-corridor pre-clear (d3-gated, the fights
+/// Bond chooses from measured stances) killed all three corridor guards (#0/#13/#8) inside
+/// ~1000 ticks for 45.0 total (#0 36.0 in 3 — his lane reaches every south stance, the floor
+/// of his opening 24.0 is the out-of-line step's exposure; #13 9.0 in 5 during #0's fight;
+/// #8 0.0 — his lane is walled from the spawn-area south, the fight ran free from (-7.5,-11.5)
+/// [L the run-4 trace]). From there the route to the door phase took ZERO damage: the walk
+/// reached the door phase at 55.0 hp (the base repro died at 49) and the flank z-hold (the
+/// opt-in Walker::flank_hold_z — a guard across the aperture never takes a flank nav, the
+/// run-5 death rode the return-fire ladder into the hall) kept the hall phase clean. THE NEW
+/// WALL (runs 6/7/8): the AND crowd cannot be KILLED from the hold line on this stream — the
+/// sustained aperture lures ran with full pools (89 rounds at the arm) and drew NO crossings
+/// ("alive true across true" ×3 in every run [L the run-6/7/8 traces]) while the hold-line
+/// crouch fights burned the pool on 1.0-per-round body taps (the crouched windows expose the
+/// lower parts only — the head box stays lamp-blocked), so the lures ended dry and the AND
+/// never fired. The armed-lure run that walked 5/6/7/11 across carried clip 32 spare 16 [L
+/// the lure run note] — the noise that draws the hearing chain [M DroneFunc_SetNoiseHeard
+/// 0x149920 / HandleSoundAlerts 0x148a30] does not draw on this stream's weapon/timing mix.
+/// NEXT LEVER: the DOOR-PHASE KILL PATH — either (a) the hearing chain's weapon dependence
+/// (which weapon's noise draws a crossing on this stream — a live check: fire the SMG and the
+/// pistol at the hall door line from the hold line and record DroneFunc_SetNoiseHeard's
+/// 0x149920 calls and the guards' state transitions), or (b) kill the crowd THROUGH the
+/// aperture without the lure: the crouched flight-lane taps (the corridor pre-clear's lane
+/// trigger — the game's own flying-round trace is clear where the scoped sight is blocked
+/// [M drone.rs:16465]) aimed at the guards' post positions from the deep line, one bounded
+/// window per guard, the pool metered (the fights are 12/24/12 hp — 48 head-hit rounds if the
+/// head box ever exposes, else the body-tap budget the pool affords).
 #[test]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(3));
