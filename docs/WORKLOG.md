@@ -17,3 +17,7 @@
 ## level-14-fusebox-zap
 
 Branch `s/level-14-fusebox-zap` = origin/s/level-14-skybridge-retune-2 bc25f82c8 (origin/master already an ancestor). Task: the d1 Operative real-damage walk survives the fusebox zap — find the zap's source in the game ([M]/[D]), check the port matches it, fix in the game's way if not, then route the walk around it with the ledger's 4 u stance law if the radius allows.
+
+## level-14-fusebox-zap (2)
+
+The d1 fusebox zap is SOLVED. Source chain [M]+[D]: cutting #383's group-1 wires writes ch 113 (0x71) [M 0x1adfe8:110-123; D #383 params 2/4 = 113] → satellite box #388 (kill ch 113 [D #388]) smashes via Destroy_Update 0x12c4f8 → Destroy_Smash 0x12bb60's 500/10.0 blast (param 2 = 50 ×10.0, param 5 = 1000 ×0.01). The port matches the game; the trigger was the walk's own aim line clipping the group-1 wire's AABB (the first-contact law [M 0x1ea398:212-229]). Fixes in walkreal_07000014_live.rs, all !tops_up-gated: the stance fire-line gate, the one-bolt cut cadence, the fight-free approach. Both cuts land on group 0; the walk reaches the Kiko corridor east at 79.6 hp and wedges there (the new ledger). walkreal whole 8 passed + 2 ignored; interactables whole 10 passed.
