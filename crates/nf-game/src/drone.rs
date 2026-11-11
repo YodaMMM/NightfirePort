@@ -3602,11 +3602,12 @@ impl Drone {
         // its step [M Drone_CollisionHandler 0x140968:204-208 — the contact pass's DeltaP adds
         // to obj+0x30 whenever the 0x800 capsule's contact list is non-empty, and the swing
         // door is a cel-linked collider at its live pose]. The law is the game's on every
-        // level; the set grows one level at a time with its walks re-run — on 07000008 the
-        // combat guards frozen at leaves slide out too and the 00 Agent walk there runs dry
-        // before the cabin panes (the stuck-guard-combat-sweep measurement), so 08 waits on
-        // its walk re-tune.
-        if !matches!(d.level, 0x0700_0007 | 0x0700_0014) { return None; }
+        // level; the set grows one level at a time with its walks re-run — 07000008 joined
+        // (guard-slide-gate-all-levels: its walks re-tuned with the slide running; the combat
+        // guards that stood frozen at leaves — states 0x68/0x73 at (105.9, 28.2, −121.2) and
+        // (161.5, 46.0, −101.6), the stuck-guard-combat-sweep measurement — slide out and the
+        // walks answered them).
+        if !matches!(d.level, 0x0700_0007 | 0x0700_0008 | 0x0700_0014) { return None; }
         let len = (step[0] * step[0] + step[1] * step[1]).sqrt();
         if len < 1e-6 { return None; }
         let over = |c: f32| c.signum() * 0.4 * (c.abs() > 1e-6) as i32 as f32;

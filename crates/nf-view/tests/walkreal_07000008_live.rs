@@ -1421,6 +1421,12 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // episode steps to.
     let mut dodge_sign = 1.0f32;
     let mut dodge_hold = 0u32;
+    // The lane re-take episodes' state (the block inside the loop): the wait counter, the episode
+    // sidestep's hold, its side, and the episode count (capped).
+    let mut lane_wait = 0u32;
+    let mut lane_sidestep_hold = 0u32;
+    let mut lane_sign = 1.0f32;
+    let mut lane_episodes = 0u32;
     for t in 0..20000u32 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b) { ch4b = true; break; }
         let sim = w.scene.sim.as_ref().unwrap();
@@ -1729,12 +1735,40 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                     .segment_flight_scoped(sim.world.find_cel(from), from, machine_forecast, true)
                     .is_none_or(|t| t >= 0.8) })
         };
+        // guard-slide-gate-all-levels (the real-damage walks): the machine's route phase shifts
+        // with any upstream walk change — the law's guards slide out of the leaves, an upstream
+        // burst breaks a carriage pane early, the pane shoot-out re-rolls, and the fight starts
+        // ±hundreds of ticks apart (the measured slide-on run: fight f28727 vs the green tree's
+        // f28989) — and a standing spot that cleared the machine lane on one phase holds the lane
+        // BLOCKED for the rest of the fight on the next: sees true, slit true, lane false from
+        // t2100 to the death with clip 2 unfired and the cursor settled 439 ticks [L the NF_diag
+        // run on this branch]. A player whose lane stays blocked while he can SEE the machine
+        // steps to re-take the lane: a sidestep episode off the pinned spot (the pane block's own
+        // re-take pattern), alternating the side, capped at 6 episodes — the gates re-read on the
+        // settled spot, so the launch fires from where the lane reads clear. D1-REAL-DAMAGE/D2+
+        // GATED (the dodge block's own gate shape): the topped-up Operative walk keeps its
+        // byte-exact timeline.
+        let lane_stuck = (difficulty >= 2 || !w.tops_up()) && rocket.is_none() && dodge_hold == 0
+            && eye_sees && slit_clear && corridor_clear && !machine_lane_clear;
+        if lane_stuck { lane_wait += 1; } else if lane_sidestep_hold == 0 { lane_wait = 0; }
+        if lane_stuck && lane_wait > 240 && lane_sidestep_hold == 0 && lane_episodes < 6 {
+            lane_sign = -lane_sign;
+            lane_episodes += 1;
+            lane_sidestep_hold = 60;
+            eprintln!("[08 lane] t{t}: the lane held blocked {lane_wait} ticks while seen — sidestep episode {lane_episodes} ({})", if lane_sign > 0.0 { "right" } else { "left" });
+        }
+        if lane_sidestep_hold > 0 { lane_sidestep_hold -= 1; }
         let ready = rocket.is_none() && sim.missile_cam.is_none() && dodge_hold == 0
             && yaw_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
             && pitch_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
             && l >= if difficulty >= 3 { 16.0 } else { 10.0 } && slit_clear && corridor_clear
             && effective_corridor_clear && eye_sees && machine_lane_clear
-            && machine_lane_fore_clear;
+            && machine_lane_fore_clear
+            && lane_sidestep_hold == 0;
+        if lane_sidestep_hold > 0 && dodge_hold == 0 {
+            input.strafe = lane_sign;
+            input.forward = 0.0;
+        }
         if ready { w.tick_fire(input); } else { w.tick(input, false); }
         if t % 100 == 0 {
             let sim = w.scene.sim.as_ref().unwrap();
