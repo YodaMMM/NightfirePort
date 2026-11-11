@@ -336,35 +336,47 @@ fn clear_blockers_03(w: &mut Walker, label: &str) {
 /// the probe's drone dump shows NO drone within 5 u of the spot — the parked capsule is the
 /// level's own furniture, not a slid guard; the same band the green runs' east-lane anchors
 /// avoid]) and every later nav gives up from the parked spot (the ledgered 12+ give-ups, 29
-/// on the plate leg [L the guard-slide-sweep run]). A player whose stand is on a climb block
-/// steps OFF it and re-takes the leg from the lane the east-lane legs already walked: direct
-/// walk_to episodes off the block (alternating the side — the 08 re-take pattern), then the
-/// lane anchor. Self-gating on the parked state: a stream that never parks is byte-identical.
-/// Gated to difficulty 1 (the ledgered test): the d2/d3 sisters' timelines stay untouched.
+/// on the plate leg [L the guard-slide-sweep run]). The spot is a POCKET: the bullet sweep
+/// from inside it stops at 0.05-0.21 u on every side but south (−z, t1.00) [L the probe's
+/// 16-ray sweep], so the extraction walks SOUTH out of the pocket's mouth first, then the
+/// lane anchor the east-lane legs already walked (the 08 re-take pattern: episodes,
+/// alternating the side, capped). The predicate catches the airborne climb-fall phase
+/// (grounded false, y 6.6-8.2) AND the grounded-in-pocket stand (y 6.3-6.6) — the d1 run's
+/// STUCK dumps show both at the same x/z [L the d1ignored.out run]. Self-gating on the
+/// parked state: a stream that never parks is byte-identical. Gated to difficulty 1 (the
+/// ledgered test): the d2/d3 sisters' timelines stay untouched.
 fn off_the_courtyard_obstacle_03(w: &mut Walker, label: &str) {
     let (parked, b) = {
         let sim = w.scene.sim.as_ref().unwrap();
         let b = sim.bond.pos;
-        (!sim.bond.grounded && b[1] > 6.6 && b[1] < 8.2
+        (b[1] > 6.2 && b[1] < 8.2
             && b[0] > 3.5 && b[0] < 9.5 && b[2] > -19.0 && b[2] < -14.0, b)
     };
     if !parked { return; }
-    eprintln!("[03] {label}: parked on the courtyard obstacle at ({:.2},{:.2},{:.2}) — the lane-exit re-take", b[0], b[1], b[2]);
+    eprintln!("[03] {label}: parked in the courtyard pocket at ({:.2},{:.2},{:.2}) — the lane-exit re-take", b[0], b[1], b[2]);
     w.lenient = true;
-    let mut off = false;
-    for episode in 0..6 {
+    // South out of the pocket's mouth (the sweep's only clear side), then the lane anchor.
+    w.walk_to(Wp { at: [b[0], 5.9, b[2] - 4.0], act: Act::None, arrive: 1.2 },
+        &format!("{label}: south out of the pocket"));
+    let mut off = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        p[2] < b[2] - 2.5 || (p[2] < -19.0 && sim.bond.grounded)
+    };
+    for episode in 0..4 {
+        if off { break; }
         let (side, sname) = if episode % 2 == 0 { (1.0f32, "east") } else { (-1.0f32, "west") };
-        let step = [b[0] + side * 2.5, 5.9, b[2] + side * 1.5];
+        let step = [b[0] + side * 2.5, 5.9, b[2] - 4.0];
         w.walk_to(Wp { at: step, act: Act::None, arrive: 1.2 },
             &format!("{label}: off the obstacle ({sname} episode {episode})"));
-        let (grounded, p) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.grounded, sim.bond.pos) };
-        if grounded && p[1] < 6.8 { off = true; break; }
+        let p = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.pos, sim.bond.grounded) };
+        off = p.1 && p.0[2] < -19.0;
     }
     if off {
         w.walk_to(Wp { at: [10.59, 5.9, -22.91], act: Act::None, arrive: 1.4 },
             &format!("{label}: the lane anchor (the re-taken spot)"));
     } else {
-        eprintln!("[03] {label}: the obstacle re-take did not ground Bond — the next leg re-derives");
+        eprintln!("[03] {label}: the obstacle re-take did not clear the pocket — the next leg re-derives");
     }
     w.lenient = false;
 }
@@ -450,7 +462,7 @@ fn walk_the_alpine_route_to_the_exit() {
 /// (walking, turning, E, real fire) — the servants rescued through their enable plates + captor
 /// kills, the Dragon Safe opened and its key taken, the exit fired. No channel or state pokes.
 #[test]
-#[ignore = "guard-slide-sweep ledger: with the leaf-slide law on every level the 0x50-servant enable-plate approach WEDGES — 12+ navs give up at the 3000-tick cap at bond (6.35,6.3-7.2,-15.7..-17.7) with the target the plate (25.7-30.8,5.7-6.1,-5.7..-16.1), d 19.5-28.2, health 100 untouched (no combat), and grounded toggling true/false with y 6.29<->7.21 at the same x/z — Bond repeatedly steps onto and falls off something parked at that spot [L this tree's run, binary 5/1/2i in 329 s and the single-test run]; the plate never fires, ch 0x50 stays off, no captor binds (the save rule reads the empty link [M 0x15cb78:24-36]) and the post-leg state assert fires (servant 0 still 0x01 WAIT_SWITCH). NEXT LEVERS: dump the live drones at the wedge spot to identify the parked capsule (if a slid guard sits in the nav lane, the lever is the level's own lane-exit re-take, the 08 pattern, gated to 07000003 + this test's difficulty); audit the plate approach's nav waypoints against the disc furniture."]
+#[ignore = "guard-slide-03-01-repairs ledger: the wedge is DIAGNOSED and the lane-exit re-take is IN but not yet holding — the parked capsule is the LEVEL'S OWN COURTYARD POCKET, not a slid guard: the probe (probe_plate_wedge_spot, this file) dumped NO drone within 5 u of (6.35,6.3-7.2,-15.7..-17.7) and the 16-ray bullet sweep from inside the spot stops at 0.05-0.21 u on every side but south (az3.14-4.71 clear, -z) [L the probe run]; Bond parks there grounded false y 7.02-7.21 AND grounded true y 6.41-6.61 (both phases measured [L the d1ignored/d1v2 runs]), and the A* legs ride path3's upper-row nodes (10.8/11.28, 9.64) through the band. The mouth walk's A* from the west loot end (3.69,-28.84) is what parks him (21 give-ups in the probe), then every later nav gives up from the pocket (29 on the plate leg [L the sweep run]). TWO d1-gated re-take attempts (off_the_courtyard_obstacle_03): v1 east/west sidestep episodes off the block — Bond left to (4.34,6.42) grounded but the lane anchor walk re-funnelled him into the pocket (STUCK at (6.35,6.43) with segment_to_target 0.13 [L d1ignored.out]); v2 south-extract first (the sweep's clear side) then the lane anchor — the re-take FIRED at all four servant-loop points (mouth stand, servant 1 walk, plate walk, loot) but Bond was back in the pocket for the next leg each time [L d1v2.out: parked lines at (6.35,6.41..6.61,-15.72), test FAILED at the servant-0 state assert, 0x50 still off]. The d2/d3 sisters stay green with the helper in the tree (binary 5/0/4i in 198 s [L bin03.out]). NEXT LEVERS: (1) the pocket's south mouth may be walled at GROUND level (the sweep ran from y 8.5) — map the ground-level exits with a segment sweep at y 6.0 and extract through the real gap; (2) after extraction, the lane-anchor walk re-enters the pocket — anchor the extraction spot (6.35,-19.7) with walk_nav_to's own nodes instead of a direct walk_to, or extract WEST to the west-lawn anchors (1.0,-33.0) the moat legs proved; (3) prevent the entry: gate the mouth walk and the servant walks to an east-lane start — after the loot walk, if Bond is west of x 9.5, walk the first visit's moat-band ladder (the gate-plate-lawn anchors) before the mouth walk, so the A* re-derives from the lane the way the green runs did."]
 fn walk_the_full_route_and_complete_every_objective() { walk_the_full_route_and_complete_every_objective_at(1) }
 
 /// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent rides the
