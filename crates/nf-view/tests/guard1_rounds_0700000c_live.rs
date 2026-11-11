@@ -285,9 +285,27 @@ fn real_health_body() {
     walker::yard_sniper_stands(&mut w, "ladder-top", 3);
     walk_sampled(&mut w, di, Wp::new(10.5, 11.1, -190.5).r(1.2), "the ring diagonal", &mut samples);
     walk_sampled(&mut w, di, Wp::new(12.0, 11.1, -196.0).r(1.2), "the ring diagonal 2", &mut samples);
+    // guard1-rounds-0c-repin: the ring-corner sweep runs EARLY — at the ring diagonal 2, before
+    // the north-west-corner leg. Measured [L the NF_RF_TRACE run on this tree]: guard #1 stands
+    // at (13.0, 12.1, -196.0), 1.2 u off the diagonal-2 end (12.43, 12.13, -194.88) — the old
+    // order walked the corner leg PAST him (the leg ends 2.4 u from his muzzle at (11.1, 12.1,
+    // -204.1)) and the ring-corner stand's aim-raise was still running when his beat fired —
+    // the single 27.6 hit at frame 9710 (d 2.4 < 3.0: every round hits [M DroneWeap_DoBullet-
+    // Accuracy 0x179740:113-115] inside the TooClose doubled band [M Drone_ModBulletDamage
+    // 0x139f50]) killed Bond at 99.9→0 while the stand never got a shot off (its t0 print is
+    // the last trace line). A player shoots the guard standing in front of him BEFORE walking
+    // into his muzzle. The landed shape: the corner leg splits at z -200 — the gun rays are
+    // STILL BLOCKED at the diagonal-2 end (#1 patrols (10.85,12.09,-204.21), 9.3 u, exposed
+    // false [L the same probe]) and OPEN by (12.75,12.14,-199.40) (d 3.7, exposed true [L]) —
+    // the sweep stands there and its round kills #1 at d 3.7 (impacts DRONE #1 part 4 [L the
+    // green run]), outside the doubled band and ~2 ticks ahead of the beat that used to land
+    // at frame 9710.
+    walk_sampled(&mut w, di, Wp::new(12.0, 11.1, -200.0).r(1.0), "the ring corner approach", &mut samples);
+    walker::yard_sniper_stands(&mut w, "ring-corner", 3);
     walk_sampled(&mut w, di, Wp::new(12.0, 11.1, -203.0).r(1.2), "the ring north-west corner", &mut samples);
     // The ring-corner stands: the master's "A player shoots the guard standing in front of
-    // him before walking on" — the fight that kills guard #1 [L walkreal0c.rs].
+    // him before walking on" — the fight that kills guard #1 [L walkreal0c.rs]. (Kept for the
+    // late acquirers: the early sweep above owns #1.)
     walker::yard_sniper_stands(&mut w, "ring-corner", 3);
     walk_sampled(&mut w, di, Wp::new(4.0, 11.1, -207.5).r(1.2), "the ring west edge", &mut samples);
     walker::yard_sniper_stands(&mut w, "west-edge", 3);
