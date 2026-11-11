@@ -586,7 +586,20 @@ fn walk_to_the_guardhouse_court(w: &mut Walker, difficulty: u32) {
 fn walk_from_the_guardhouse_court(w: &mut Walker, cut: bool) { walk_from_the_guardhouse_court_at(w, cut, 1) }
 
 fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32) {
-    w.walk_to(Wp::new(36.0, 39.1, -13.4), "before door #47");
+    // 00-agent-06-8 (measured on the merged tree 2978c056a): from the court the return-fire
+    // answers against the door-#47 pair burn the clip on angles whose rounds never land — the
+    // run00b/c traces: taps at err 0.0000 on the exposed part from d 8.1 (clip 20 -> 13, then
+    // dry, the t2989 death at clip 0 spare 0) while #4 lands 24 hits for 64.2 walking down the
+    // recess (his y 40.6 -> 39.8); the first damage Bond lands on #4 comes from the door plane
+    // (d 4.0, hp 10 -> 8). The player closes to the door under fire and fights from there.
+    // d1/d2 keep their court return fire (the byte-identical ledgers).
+    if difficulty < 3 { w.walk_to(Wp::new(36.0, 39.1, -13.4), "before door #47"); }
+    else {
+        let rf = w.dmg.return_fire;
+        w.dmg.return_fire = false;
+        w.walk_to(Wp::new(36.0, 39.1, -13.4), "before door #47");
+        w.dmg.return_fire = rf;
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -1536,4 +1549,85 @@ fn the_wellhead_seals_the_shaft_on_real_input() {
     assert!(sim.drones.health.health > 0.0 && !sim.drones.channels.on(0x62),
         "the well takes no health and raises no death channel on real input (health {:.1} ch62 {})",
         sim.drones.health.health, sim.drones.channels.on(0x62));
+}
+
+/// probe (assertion-free, `--ignored`): the door-#47 recess rays. The 00 walk's court approach
+/// burns the clip on angles whose rounds never land (the 00-agent-06-8 run ledgers: taps at
+/// err 0.0000 from the court, #4's hp unmoved, death t2801 with #4 at full hp 10) — this probe
+/// teleports Bond to the court's stands, the door plane and the room floor and prints the
+/// eye->chest/head rays to the door pair through the world's own flight queries (the flight
+/// twin is what the flying round obeys), plus the level's pickup offers and the pair census.
+/// Probes are measurement tools; the walk itself stays teleport-free.
+/// Run: NF_ISO=... cargo test -p nf-view --test walkreal_07000006_live probe_the_guardhouse_door_rays -- --ignored --nocapture
+#[test]
+#[ignore = "assertion-free probe; run with --ignored --nocapture"]
+fn probe_the_guardhouse_door_rays() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000006.bin", false,
+        Some(&carry(&[0x1d, 0x45, 0x70])), 3).expect("load 07000006"));
+    w.wait_enabled(3000, "the intro NIS");
+    w.wait(60);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("== the guardhouse census (x 25..42, z -26..-8) ==");
+        for (i, d) in sim.drones.list.iter().enumerate() {
+            if d.corpse || d.health <= 0.0 { continue; }
+            if !(25.0..=42.0).contains(&d.pos[0]) || !(-26.0..=-8.0).contains(&d.pos[2]) { continue; }
+            eprintln!("[census] drone #{i} skin {:#x} weapon {:#x} pos ({:.2},{:.2},{:.2}) enabled {} present {} state {:#x} sight {:.0} hp {:.0}",
+                d.skin, d.weapon, d.pos[0], d.pos[1], d.pos[2], d.enabled, d.present, d.state, d.sight_range, d.health);
+        }
+        eprintln!("== the level's pickups ==");
+        for (i, p) in sim.drones.pickups.iter().enumerate() {
+            let pos = [p.m[3][0], p.m[3][1], p.m[3][2]];
+            eprintln!("[pickup] #{i} kind {} weapon {:#x} rounds {} pos ({:.2},{:.2},{:.2}) state {}",
+                p.kind, p.weapon, p.rounds, pos[0], pos[1], pos[2], p.state);
+        }
+    }
+    let pair: Vec<(usize, [f32; 3], u32)> = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (0..sim.drones.list.len())
+            .filter(|&i| {
+                let d = &sim.drones.list[i];
+                !d.corpse && d.health > 0.0 && (30.0..=37.0).contains(&d.pos[0]) && (-19.0..=-13.0).contains(&d.pos[2])
+            })
+            .map(|i| (i, sim.drones.list[i].pos, sim.drones.list[i].skin))
+            .collect()
+    };
+    let stands: [(&str, [f32; 3]); 8] = [
+        ("court z-6.9", [32.6, 39.1, -6.9]),
+        ("court z-9", [33.5, 39.1, -9.0]),
+        ("court z-11", [34.5, 39.1, -11.0]),
+        ("door plane z-12", [35.3, 39.1, -12.0]),
+        ("approach z-13.4", [36.0, 39.1, -13.4]),
+        ("recess foot", [34.2, 39.1, -14.5]),
+        ("door sill", [35.8, 39.1, -15.5]),
+        ("room floor", [35.5, 41.0, -17.0]),
+    ];
+    for (label, sp) in stands {
+        {
+            let sim = w.scene.sim.as_mut().unwrap();
+            sim.bond.pos = sp;
+            sim.bond.vel = [0.0; 3];
+            sim.bond.substate = 0;
+        }
+        for _ in 0..8 { w.scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+        eprintln!("== stand {label} settled ({:.2},{:.2},{:.2}) eye {:.2}", bp[0], bp[1], bp[2], eye[1]);
+        for (gi, gp, gskin) in &pair {
+            for (part, dy) in [("chest", 0.3f32), ("head", 1.5)] {
+                let tgt = [gp[0], gp[1] + dy, gp[2]];
+                let dist = ((eye[0] - tgt[0]).powi(2) + (eye[2] - tgt[2]).powi(2)).sqrt();
+                let cell = sim.world.find_cel(eye);
+                let flight = sim.world.segment_flight_scoped(cell, eye, tgt, true);
+                let bullet = sim.world.segment_bullet_scoped(cell, eye, tgt);
+                let aim = sim.world.segment_aim_scoped(cell, eye, tgt, true);
+                let fmt = |r: Option<f32>| match r { Some(f) => format!("{f:.3}"), None => "CLEAR".into() };
+                eprintln!("[ray] {label} -> g{gi} s{gskin:#x} {part} d {dist:.1} flight {} bullet {} aim {}",
+                    fmt(flight), fmt(bullet), fmt(aim));
+            }
+        }
+    }
+    eprintln!("== done ==");
 }
