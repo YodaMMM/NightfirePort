@@ -584,8 +584,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             let sim = w.scene.sim.as_ref().unwrap();
             let bp = sim.bond.pos;
             sim.drones.list.iter().any(|d| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
-                && ((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)).sqrt() < 6.0 && (d.pos[1] - bp[1]).abs() < 2.0)
+                && ((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)).sqrt() < 10.0 && (d.pos[1] - bp[1]).abs() < 2.0)
         };
+        // los-mask-08-sisters-2: the gate widened 6.0 → 10.0 — on this branch's early timeline
+        // the burst PAIR (#5/#6, weapon 0x15) stands 5.8-9.6 u out at the fusebox arrival (#5 at
+        // (159.9, 43.0, −120.9) d 7.2, #6 further), the 6.0 gate saw nobody, and the unengaged
+        // pair's interval-4 −6.0 bursts later ate health 36 → 0 in 35 ticks at the room door
+        // (death 8298 [L the NF_DMG_TRACE run]). A player who can see the doorway men 7-9 u out
+        // across the hall clears them BEFORE standing a 4-u laser on the box.
         if d3_door_man {
             let (saved_back_off, saved_unseen) = (w.dmg.back_off, w.dmg.unseen_fight);
             w.dmg.back_off = None;
@@ -1115,7 +1121,25 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // level [L the captured rerun's ledger]. A player on the platform mouth answers the
         // riflemen he can see before he walks into their lane: the same visible-only stand,
         // out to 18 u. fight_pkg-gated: the topped-up Operative timeline stays byte-exact.
-        if fight_pkg && name == "the lower level east" {
+        // los-mask-08-sisters-2 (the d3 run's last leak): on this leg the lip stands above are
+        // SKIPPED (name == "the lower level east") and the visible-only stand picked the
+        // nearly-dead #19 (12.5 u, VISIBLE) while the ACTIVE killer #26 (skin 0x500002f, 11.5 u,
+        // hp 8) sat behind the half-open leaf unseen — his interval-4 −6.0 bursts ate health
+        // 48 → 12 during the stand and Bond died at 26491 mid-stand [L the NF_DMG_TRACE run on
+        // this branch]. The lip pattern is the answer here too: the plain pick opens the stand on
+        // the hurting unseen shooter and the creep opens the leaf line (the proven
+        // fusebox-doorway pattern). D3-GATED: the Operative/Agent sisters' timelines stay
+        // byte-exact.
+        if difficulty >= 3 && fight_pkg && name == "the lower level east" {
+            let (saved_back_off, saved_unseen) = (w.dmg.back_off, w.dmg.unseen_fight);
+            w.dmg.back_off = None;
+            w.dmg.unseen_fight = true;
+            fight_guards_within_dy(&mut w, "the lower level east lip", 4200, false, 14.0, 4.0);
+            w.dmg.back_off = saved_back_off;
+            w.dmg.unseen_fight = saved_unseen;
+        }
+
+if fight_pkg && name == "the lower level east" {
             fight_guards_within(&mut w, "the platform mouth west", 4200, true, 18.0);
         }
         // real-health-00agent-08-bleed: the second pair (#26/#27) wakes MID-BOARDING on the
@@ -2324,7 +2348,7 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
 /// plus the pin of the round's actual spawn direction (lock-on vs the effective aim) in
 /// PCSX2 (the report's live check).
 #[test]
-#[ignore = "00 Agent 2026-11-11 state (s/los-mask-08-sisters-2 = the sister branch + master 784ba2d99): the walk's first half is FIXED and the death moved to the secure-room door — tick 8298 at (158.98, 43.13, −119.55), 23 hits for 100.0. THE WINS (all measured [L] on this branch's NF_DMG_TRACE runs): the ledger's levers 1+2 (the d3-only dy-5.0 mouth re-stand after a bounded 240-tick post-wake wait) kill ALL FOUR east-hall guards at the station hall mouth (#11/#2/#14/#3 at ticks 613-1309) with health 100.0 untouched — the old 84.0 upstream bleed is gone; the lower-landing wedge (3900 ticks stuck, −20 in the pit pair's arc) is skipped d3-gated; the station-pit pair (#15/#16, ambush spawners off the walkway plates) is killed at the RAMP MID flank (0.7 u off their perch (151.7, 40.0, −111.5), #16 at 7003, #15 at 7253) with health 84.0 intact — their 60-tick-cadence drips (−4.0 × 12 through the wire work on the earlier runs) are gone; health 78.0 at the secure-room door (was 8.0-12.0 in every prior ledger). THE REMAINING LEAK: the walkway-door burst man #6 (skin 0x5000012, weapon 0x15) — the E-approach's return fire only wounds him (killed false at 8041), the d3-gated door-pair shoot loop's 8.0-u/2.0-dy pick found nothing at the post-resupply stance (the E walk_to's own resupply detour moved Bond to (160.9, 42.4, −118.7)), and walking into the room met him at 2.0 u INSIDE — six interval-4 −6.0 bursts ate health 36 → 0 in 35 ticks before any response could open. TRIED AND RETIRED this window: a plain pit-pair fight at the secure-room door (the unseen creep's 64-tick cap cannot open the ramp-mid line from there and the stood ticks eat −4 × 6, death at 14084); a ramp-south stand (the parapet eats every ray from below — the plain pick spun on #16 while his bursts landed). NEXT LEVERS: (1) make the door-pair shoot loop fire — run it at the E walk_to's own arrival before the resupply detour, or widen the pick past the resupply's moved stance; (2) widen the d3_door_man gate (6.0 u/2.0 dy at the fusebox arrival) so the burst pair is cleared at the fusebox itself; (3) the Hind fight's dodge-window widening (30→60 u) stays open behind this. The steering/arming/speed/launch all match the game [M Bullet_update 0x12e7b0; Bullet_init 0x12c5a0; the 0x2C record bytes]"]
+#[ignore = "00 Agent 2026-11-11 final state (s/los-mask-08-sisters-2 = the sister branch + master 784ba2d99): the walk's first two thirds are FIXED and the death moved to the BOARDING PLATFORM's last exchange — tick 26491 at (113.27, 28.37, −121.48), 17 hits for 100.0 (was 25 hits by tick 9592). THE WINS (all measured [L] on this branch's NF_DMG_TRACE runs): levers 1+2 (the d3-only dy-5.0 mouth re-stand after a bounded 240-tick post-wake wait) kill ALL FOUR east-hall guards at the station hall mouth (#11/#2/#14/#3, ticks 613-1309) at health 100.0 untouched — the old 84.0 upstream bleed is gone; the lower-landing wedge (3900 ticks stuck, −20 in the pit pair's arc) is skipped d3-gated; the station-pit ambush pair is answered at the ramp mid flank (#16/#15 killed at ticks 7003/7253 on the clean run) — their 60-tick-cadence wire-work drips (−4.0 × 12) gone; the d3_door_man gate widened 6.0→10.0 engages the doorway pair at the fusebox itself; the secure-room door shoot loop fires (drone 6 shot at 5.1 u); the lower-level-east lip fight runs BEFORE the visible platform stand (the order matters — with it after, Bond died mid-stand at 26491, the lip never reached). Health 72.0 entering the boarding (was 8.0-12.0 in every prior ledger). THE REMAINING LEAK: the boarding exchange's economy — the unseen leaf pairs (#20 −6.0/−12.0/−6.0 at 2.6-7.4 u, the dead-by-then #26's −6.0 × 5, the hp-2 #19's −3.0 × 4 at 12.5 u) ate health 72 → 0 across ticks 25710-26491 while the lip/visible stands ground on guards the aim gates could not land on (their own bursts need no stand gate); the legs' return fire killed #23/#24/#26/#27 and wounded #19/#20 to hp 2-16 — the exchange is winnable on paper but the stand-grind at 12 u against leaf cover burns the 12-health margin. NEXT LEVERS: (1) the Hind fight's dodge-window widening (30→60 u) — the driver's lever 3, reachable once the boarding exchange is tightened; (2) the boarding economy: a pre-boarding stand spot with an OPEN line to the leaf pair (the leaves at (100.8-106, 28.2, −121.1..−122.2) face east — a stance east of x 107 through the open leaf gap), or the close answer at their own leaf; (3) the −12.0 #20 point-blank double-burst at 25894 (d 2.6) — the back-off's 4.0 ring and the platform edge bound the retreat. TRIED AND RETIRED this window: a plain pit-pair fight at the secure-room door (the unseen creep's 64-tick cap cannot open the ramp-mid line, death 14084); a ramp-south stand (the parapet eats the rays from below). The steering/arming/speed/launch all match the game [M Bullet_update 0x12e7b0; Bullet_init 0x12c5a0; the 0x2C record bytes]"]
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair
