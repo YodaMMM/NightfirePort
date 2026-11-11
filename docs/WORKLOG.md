@@ -185,3 +185,8 @@ re-time levers in their ignore messages; one level per tool call, repairs gated 
   interval-4 −6.0 bursts in 35 ticks; health 78.0 at the secure-room door (was 8.0-12.0). The
   ignore stays with the sharpened ledger and three next levers. Whole walkreal_07000008_live
   5/0/1i, interactables_07000008_live 15/0.
+- Final state: the d3_door_man gate 10.0, the door shoot loop firing, the lower-level-east lip
+  fight BEFORE the visible platform stand — the walk reaches the boarding platform's last
+  exchange at tick 26491 (health 72 entering the boarding, 17 hits for the run vs 25 by 9592
+  before this branch). The ignore carries the boarding-economy levers (the leaf-gap stand spot,
+  the Hind dodge window 30→60 next). Report: docs/reports/los-mask-08-sisters-2.md.
