@@ -123,6 +123,18 @@ pub struct Walker {
     /// Pickups `resupply` must not walk to: a placed pickup behind a locked door is near on the map
     /// and no route away.
     pub no_fetch: Vec<[f32; 3]>,
+    /// OPT-IN (`resupply_home`, set only by the 07000013 chain's d3 real-damage walk — no other
+    /// caller sets it, so every other walk is byte-identical): a successful resupply fetch is a
+    /// THERE-AND-BACK errand — after the fetch loop, walk the nav route back to where the
+    /// resupply started. The 07000012 north lobby's fetches left Bond on the lower floor south
+    /// of the lobby (the drops rest ~1.1 under the lane floor, where the stream guards stand),
+    /// and the leg resumed its steering from there — the direct line to the leg target crosses
+    /// the lobby's south wall (cel 374 blocks every line from that floor to the lane; the nav
+    /// graph has no cross-path route) and the 6000-tick cap killed the walk
+    /// (level-13-warm-chain-margin-3's wedge, repro'd on this tree: bond (-8.99,1.03,12.62),
+    /// target (-8.00,1.10,17.00), segment Some(0.127) at tick 13980 [L]). A player who steps off
+    /// the lane to grab ammo walks back to where he was heading and continues.
+    pub resupply_home: bool,
 }
 
 /// The stuck dump, public for the walkreal tests' own aim loops.
@@ -174,6 +186,7 @@ impl Walker {
             alarm_last: Vec::new(),
             alarm_props_dumped: None,
             no_fetch: Vec::new(),
+            resupply_home: false,
         }
     }
 
@@ -356,6 +369,9 @@ impl Walker {
             total
         };
         let before = ammo(self);
+        // The there-and-back errand (opt-in `resupply_home`, the d3 chain only): where the fetch
+        // started — the leg resumes from HERE, not from the drop.
+        let home = self.pos;
         // Targets a previous attempt already walked to without arming Bond (lane): the take radius
         // is `bounds.radius + 1.1` [M 0x18e148:203-214] and a small-model drop the 1.8 arrive
         // radius never touched (the 07000012 spawn-lobby runs stood 4 × 6000 ticks one drop short
@@ -393,6 +409,13 @@ impl Walker {
             // arrive stays the master 1.8.
             self.walk_nav_to(target, &format!("{label} resupply {attempt}"), if lane { 0.6 } else { 1.8 });
             if ammo(self) > before { break; }
+        }
+        // The errand's return leg (opt-in `resupply_home`): the fetch's own nav walk proved the
+        // route there, so the way back is the same graph; lenient per-node inside walk_nav_to (a
+        // wedged hop bails, the next hop re-aims), and a failed return leaves Bond where the old
+        // behaviour left him — the caller's own leg steering takes over from there.
+        if self.resupply_home && dxz(self.pos, home) > 1.5 {
+            self.walk_nav_to(home, &format!("{label} resupply home"), 1.0);
         }
         let got = ammo(self) > before;
         eprintln!("[walk] {label}: resupply done ({got}) clip {} spare {}", self.scene.sim.as_ref().unwrap().gun.clip, self.scene.sim.as_ref().unwrap().gun.spare);
