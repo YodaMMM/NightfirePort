@@ -86,3 +86,18 @@ at his post (36.15, 41.0, −19.36) until he spots Bond).
 
 Not visible to me: this environment exposes no token, credit or context-window figures for the
 session.
+
+## ntfy failed
+
+All three fallbacks failed (the sandbox's egress could not reach ntfy.sh):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "real-health-00agent-06: GREEN on s/real-health-00agent-06-8 …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds` (exit 28).
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'real-health-00agent-06: GREEN …', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>` (the connect to
+   ntfy.sh's address raised `OSError: [Errno 101] Network is unreachable`).
+3. `wget -q -O- --post-data "real-health-00agent-06: GREEN …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out (killed after 30 s with no output; the connection never established).
+
+The same sandbox reached github.com throughout (every push in this session succeeded), so the
+failure is specific to reaching ntfy.sh from here.
