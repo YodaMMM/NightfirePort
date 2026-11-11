@@ -64,6 +64,9 @@ before the walker change, real input, whole walk):
 | walkreal_07000013_live | 3 / 0 / 1 ignored |
 | walkreal_07000014_live | 7 / 0 / 3 ignored |
 | the 32 probe walkreals (probe0c2/3, probe0c_band5/6/8, probe0c_barrelrow, probe0c_blk/2/3, probe0c_bridge, probe0c_catwalk, probe0c_door/2/3/4/5/6, probe0c_eastclimb/3/4/7, probe0c_grapple, probe0c_lip, probe0c, probe0c_northend, probe0c_secretreach, probe0c_stripjump, probe0c_upperlane, probe0c_ventroute, probe0c_voidspan, probe0c_wires, probe11_48) | all ok (1 passed each; probe0c_northend 0/0/1i, probe11_48 2/0) |
+| interactables_0700000c_live (walker_b2) | 7 / 0 |
+| interactables_07000012_live (tower2 + walker_b2) | 12 / 0 |
+| interactables_07000013_live (walker_b2) | 10 / 0 |
 | nf-game --lib (whole) | **782 / 0 / 4 ignored** |
 
 **The one shift, and its repair** — `walkreal_0700000b_live`:
@@ -87,16 +90,22 @@ before the walker change, real input, whole walk):
 
 **Not run** (documented): the 36 walkreal binaries that include only `common/walker.rs` —
 walker.rs is untouched by this task, those binaries are byte-identical to master's, and the fast
-suite covers them next window. The fast suite was started twice this session (once on the merged
-baseline, once on the final tree); with the red-proof, the A/B, the 0b repair cycles and the
-44-binary battery, its build+run does not fit the window — `suite.out`'s partial state is quoted
-in the Usage section. **The next window must run the suite on this final tree first.**
+suite covers them next window. **The fast suite did not fit — twice**: the first start was
+killed before the red proof (the tree would have changed under its build), and the final-tree
+start died in its build phase with the linker's `signal 7 [Bus error]` at **0 bytes free** — the
+9.9 GB sandbox cannot hold the full four-crate build (the target dir, the ISO and the
+toolchains leave no headroom; the same constraint the los-mask-repins-12, -12-2, -0c-3 and
+-08 sessions recorded). The battery above is the substitute: every binary that compiles the
+changed helper ran whole, plus the three exposed interactables and nf-game. **The next window
+must run the suite on this final tree first** (free `~/.cache/ms-playwright` +
+`~/.cache/puppeteer` — 1.2 GB of unrelated browser caches — before starting it).
 
 ## What's left
 
 - The 0700000b four real-damage sisters: the dome-wire crossing re-timing (the lever above), then
   un-red. Everything else in the battery is green.
-- The fast suite on this final tree (its per-binary pass counts), next window.
+- The fast suite on this final tree (its per-binary pass counts), next window — the disk needs
+  the browser-cache cleanup first.
 - The pure-walker.rs walkreals (01–08, 15, 16, 1b, 41, 4a, …) ride the same suite run.
 
 ## Live checks for the main agent
