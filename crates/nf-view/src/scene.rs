@@ -14360,7 +14360,20 @@ impl Sim {
             if let Some(site) = objectives.site.filter(|s| s.radius > 0.0) {
                 let c = site.centre;
                 let d = [c[0] - me[0], c[1] - me[1], c[2] - me[2]];
-                let clear = world.segment_surface_bullet(me, c).is_none();
+                // The seen bit is the game's surface-aware `CanSeeObject(obj, 5, 0)` [M
+                // 0x1424e0:551]: the ray to the contact-sphere centre whose first hit sits at or
+                // behind the sphere surface is the site's own skin — a bot 2 u away looking at
+                // the site SEES it (the point-centre `.is_none()` read blocked exactly that ray
+                // and lapsed the sight). [S the surface-aware stand-in — see the report.]
+                let d3 = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                let clear = if d3 <= site.radius {
+                    true
+                } else {
+                    match world.segment_surface_bullet(me, c) {
+                        None => true,
+                        Some((t, _, _)) => t + 1e-3 >= (d3 - site.radius) / d3,
+                    }
+                };
                 seen.push(nf_game::mp::bots::OtherPlayer {
                     pos: c, alive: true, index: nf_game::mp::bots::OBJ_ROW,
                     team: objectives.site_defenders, flags: 0x2 | if clear { 0x4 } else { 0 },
