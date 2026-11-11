@@ -20,3 +20,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: main agent at 2026-11-11 14:42 MST
+
+---
+## Done (main agent, 2026-11-11 15:35 MST)
+Pushed 4ea2e3338: headless runs play the level music on the frame clock; iop_section follows the windowed game within one tick on the 07000005 replay; suite 4914/0. The app keeps real-time music. Not fixed: the per-tick split at 10262 (no section change near it) -> 05-stream-slot-parity.
