@@ -565,9 +565,16 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // lanes (the run-2 death at (-1.6,-5.2) rode that ladder).
         let finish0 = w.dmg.finish_fights;
         w.dmg.finish_fights = false;
-        for g in [0usize, 13, 8] {
+        // The stances are per guard, from the measured lanes: #0/#13 fight from the west band
+        // (run 3: both died inside ~100 ticks, #0 with one 12.0 during the fight, #13 for ~0
+        // [L the run-3 trace]) — but #8's lane REACHES that stance (28 hits for 50.4 across his
+        // 856-tick fight there [L the same trace]), while from the spawn-area south the base
+        // repro's whole walk took ONE #8 round (1.8 at (-7.7,-11.9) [L the base repro trace]) —
+        // his lane is walled from the south-east, open from the west. #13 is dead by then, so
+        // the spawn-area fight is 1-v-1 behind the wall.
+        for (g, stance) in [(0usize, [-10.5f32, -9.0f32]), (13usize, [-10.5f32, -9.0f32]), (8usize, [-7.5f32, -11.5f32])] {
             if !guards.contains(&g) { continue; }
-            d3_corridor_fight(&mut w, g, [-10.5, -9.0], "west pre-clear");
+            d3_corridor_fight(&mut w, g, stance, "west pre-clear");
             if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
         }
         w.dmg.finish_fights = finish0;
@@ -787,7 +794,13 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // the hold line sits just outside the 3.0 band and the guards cross one at a time — easier
     // tuning than Agent (pain 0.5, accuracy 0.5), not a different game.
     if difficulty >= 1 {
-        // The hall's south door (7.9, 11.1) is the only nav entry from the meet room, and the
+        // real-health-00agent-01-hall-2 (d3): the flank z-hold for the whole hall phase — a
+        // guard across the aperture (z > 11.2, the named loop's own across rule) never takes a
+        // flank nav from ANY fight caller (run 5: the hold-line leg's return-fire fight flanked
+        // #7 to (3.9,18.0) — INSIDE the hall — and Bond died at (6.6,13.3) to #6's 2.1-u
+        // shotgun [L the run-5 trace]). Cleared after the AND (the escort's corridor fights
+        // flank legitimately). OPT-IN: the field defaults None — every other walk unchanged.
+        if difficulty >= 3 { w.flank_hold_z = Some(11.2); }
         // alerted crowd hunts it in full cover: from the south their parts never expose — plain
         // AND scoped probes, with the door open or shut — while their rounds come THROUGH the
         // plane, and every crossing of the aperture under fire cost the probe runs 30-70 health
@@ -825,8 +838,17 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             d3_switch_to_deepest_gun(&mut w, "the hall loop arm");
         }
         w.walk_nav_to([7.5, 6.4, 10.1], "the hall door approach (pre-opens it)", 0.8);
-        w.walk_nav_to([7.2, 6.4, 8.8], "the door-hold line", 1.0);
-        w.wait(60);
+        // real-health-00agent-01-hall-2 (d3): the (7.2,8.8) stop + the 60-wait held Bond IN the
+        // deep captain's open-aperture lane for ~200 extra ticks — run 4 died to two #7 volleys
+        // at (7.0,9.1) during the transition (ticks 3421/3536 [L the run-4 trace]), before the
+        // named loop's fight machinery ever engaged. The d3 walk goes STRAIGHT to the
+        // west-shifted deep line; d1/d2 keep the tuned two-stop timeline.
+        if difficulty >= 3 {
+            w.walk_nav_to([6.5, 6.4, 7.6], "the door-hold line (d3, straight to the deep line)", 1.0);
+        } else {
+            w.walk_nav_to([7.2, 6.4, 8.8], "the door-hold line", 1.0);
+            w.wait(60);
+        }
         // guard-goal-arrival-radii: the goal machinery's own radii (cover 0.5/1.0, the AI points'
         // 1.0 accuracies [D the aipoint_accuracy_census]) bring the hall guards ~1 unit deeper
         // than the flat 2.0 stand-in did — the 00agent run's captain reached 2.9 u (INSIDE the
@@ -1024,7 +1046,16 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             // [L the 7771 run: 37.0 from #6 while the threshold traded]. The trigger fires ONLY
             // on an exposed part — one head hit kills a 12-hp guard [M 0x145558 head ×100] —
             // so the pool spends on kills, not on wall noise.
-            {
+            // real-health-00agent-01-hall-2 (d3): the crouch fight is the pool's THIEF — runs
+            // 6/7: 2400 ticks of 1.0-per-round body taps (the crouched windows expose the
+            // lower parts, the head box stays lamp-blocked) burned the 89-round pool before
+            // any sustained lure ran, and all three aperture lures ended DRY ("alive true
+            // across true" ×3, the gun at the fists [L the run-6/7 traces]) — nobody crossed
+            // and the AND never fired. The lure is the kill mechanism (the crossing guards
+            // die to head shots in the doorway — the armed lure run that drew 5/6/7/11 across
+            // carried 48 rounds [L the lure run note]); the d3 path goes STRAIGHT to the
+            // sustained lure below with the pool intact. d1/d2 keep the crouch fight.
+            if difficulty < 3 {
                 w.walk_nav_to([6.5, 6.4, 7.6], &format!("hall guard {g} the crouch line"), 1.0);
                 let hp0 = w.scene.sim.as_ref().unwrap().drones.health.health;
                 for t in 0..2400u32 {
@@ -1242,6 +1273,9 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x99),
         "AND(0x11,0x12,0x13) must raise ch 153 once the three named guards are dead [D mux placement]");
     eprintln!("[01] the hall AND fired: ch 153 on at tick {}", w.total_ticks);
+    // real-health-00agent-01-hall-2: the hall phase is over — the escort's corridor fights
+    // flank legitimately again (the hold is the door phase's own rule).
+    w.flank_hold_z = None;
     // The door-lure fight leaves Bond on the hold line south of the door; the contact's route
     // to the LoadPointActivator plate runs back through the hall (his stall sat at (5.9,14.1),
     // route 18/37), so Bond steps just INSIDE the doorway — 2.6 u from the route, inside the

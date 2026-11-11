@@ -188,6 +188,14 @@ pub struct Walker {
     /// not walk to reach a guard he cannot see. Bond holds instead and returns after three holds,
     /// so the caller's round loop gets the window.
     pub flank_hold_x: Option<f32>,
+    /// OPT-IN (real-health-00agent-01-hall-2, the 07000001 d3 walk): the z twin — a target whose
+    /// pos[2] is NORTH of this z never takes a flank nav. The hall's aperture: the across guards
+    /// never expose from the hold line, and the ladder's perpendicular flank point landed INSIDE
+    /// the hall (run 5: the flank to (3.9,18.0) walked Bond across the aperture to his death at
+    /// (6.6,13.3), #6's shotgun at 2.1 u [L the run-5 trace]) — the named loop already refuses
+    /// the flank for across guards; this holds the same line inside `shoot`/`shoot_bounded` for
+    /// every caller (the return-fire stands included). Bond holds instead.
+    pub flank_hold_z: Option<f32>,
     /// The walked path: a coarse breadcrumb of ground Bond actually covered (pushed in
     /// tick_inner, ~2 u resolution, 512 points). The resupply rule draws its corridor from it —
     /// see `resupply` for why the harness must not take off-path ammo detours.
@@ -300,6 +308,7 @@ impl Walker {
             no_grenade_throws: false,
             grenade_downgrade_logged: false,
             flank_hold_x: None,
+            flank_hold_z: None,
         }
     }
 
@@ -970,6 +979,18 @@ impl Walker {
                 blocked_streak = 0;
                 last_progress = t;
                 eprintln!("[walk] {label}: no exposed part for 540 ticks: holding (no flank into the pocket, hold {flanks})");
+                if flanks >= 3 { return false; }
+                continue;
+            }
+            // flank_hold_z (OPT-IN, real-health-00agent-01-hall-2): the z twin — an ACROSS
+            // target is never flanked (the ladder's perpendicular point lands inside the hall;
+            // see the field doc). The hold counts like the pocket hold.
+            if blocked_streak >= 540 && flanks < 6
+                && self.flank_hold_z.is_some_and(|wz| self.scene.sim.as_ref().unwrap().drones.list[di].pos[2] > wz) {
+                flanks += 1;
+                blocked_streak = 0;
+                last_progress = t;
+                eprintln!("[walk] {label}: no exposed part for 540 ticks: holding (no flank across the aperture, hold {flanks})");
                 if flanks >= 3 { return false; }
                 continue;
             }
