@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox7 at 2026-11-11T14:47Z
+
+---
+## Report (done, 2026-11-11T15:35Z)
+
+Closed by the driver: the report is on `s/los-mask-08-sisters-2` (docs/reports/los-mask-08-sisters-2.md); the worker didn't run finish.sh.
