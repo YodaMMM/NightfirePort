@@ -559,6 +559,18 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             w.dmg.back_off = saved_back_off;
             w.dmg.unseen_fight = saved_unseen;
         }
+        // los-mask-08-sisters (the ledger's upstream bleed — the descent re-tune's fight site):
+        // the east-hall guards (#11/#3/#2/#14, placements (152.5-161.5, 46.0, −87.7..−101.5))
+        // survive the hall-mouth stand on d3 and snipe the whole descent from above the walkway
+        // — the merged-tree run: 84.0 across the four (#11 28.0, #3 24.0, #2 20.0, #14 12.0),
+        // the last at d 33.9, death tick 9592 at (153.7, 43.1, −120.5) to the walkway shotgun
+        // man's 5.2-u burst with ~16 health left [L the NF_DMG_TRACE run on this branch]. Their
+        // own rays reach THIS spot (the hits landed on Bond standing here, d 23-34, y 46 → 43),
+        // so the player at the fusebox sees them back along the same lines: the same
+        // visible-only stand, out to 34 u. (The lower-landing variant found NO visible guard —
+        // the walkway's own band blocks the reverse ray from that spot [L the run].) D3-GATED:
+        // the Operative and Agent sisters' timelines stay byte-exact.
+        fight_guards_within(&mut w, "the east deck from the fusebox", 4200, true, 34.0);
     }
 
     // ── cut the fusebox wires with the LASER → ch 137 (the Secure Room door's lock channel) ─────
@@ -2215,7 +2227,7 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
 /// plus the pin of the round's actual spawn direction (lock-on vs the effective aim) in
 /// PCSX2 (the report's live check).
 #[test]
-#[ignore = "00 Agent 2026-11-10 state (on the solid-body master 0a9d39435): the descent is cleared and the Hind fight is REACHED with the bleed re-tuned — the fusebox doorway fight clears the walkway-door burst man before the laser burn (the old tick-8995 death at his 2.9-u bursts is gone) and the per-leg boarding lip fights kill the #26/#27 pair on each leg's arrival spot (24.0 → 9.0+3.0); the Hind fight gained the missile dodge (the laser-hinges-2 side step off each inbound round's line, d3-gated) and rocket 1 LANDED for 100.9 at t2554. Bond still dies at tick 32622 to the machine's own −15.00 k=6 blast at 6 u with ~15 health (the ledger: 23 hits for 100.0 — the station hall's six d3 pistol guards 52.0 [#14 16.0 at 2.1-2.6 u, #11 12.0 at 9.6 u, #2/#9 8.0+8.0, #10/#3 4.0+4.0], the pair 15.0, the fight's blasts). NEXT LEVERS: (1) the station-hall stands OUT OF THE PAIR'S LINE — the guards hold their east placements (152.5-161.5, 46.0, −87.7..−101.5) under the solid-body commit and the legs' fights run inside their bursts; fight them from the intro-plate cover before crossing (they wake on the ch-0x2a plate at (139.1, 50.2, −93.6) [D]), or widen the shooters window so the legs' return fire engages at 20-30 u; (2) the dodge window widened from 30 to 60 u with the side step held until the round dies — the killing blast is a WALL detonation 6 u out (the k=6 falloff signature [M Explode_Propagate 0x17c518:69-71]), so the step must clear the wall band, not just the direct line; (3) the machine's own rounds through the launch-time forecast law the self-blast gate already uses. The steering/arming/speed/launch all match the game [M Bullet_update 0x12e7b0; Bullet_init 0x12c5a0; the 0x2C record bytes]"]
+#[ignore = "00 Agent 2026-11-11 state (the merged tree s/los-mask-08-sisters = los-mask-08-walks + master 784ba2d99): the whole-mission walk dies EARLIER than the old solid-body ledger — tick 9592 at (153.72, 43.10, −120.47) at the walkway/fusebox, 25 hits for 100.0, 10 return-fire fights. The upstream bleed: the east-hall guards #11 28.0 in 7 hits, #3 24.0 in 7, #2 20.0 in 6, #14 12.0 in 3 (placements (152.5-161.5, 46.0, −87.7..−101.5)), then the secure-room guard #4 (weapon 0xa) 8.0 in 2 at d 5.2 finishes at the walkway door — ~16 health entering the fusebox [L the NF_DMG_TRACE runs on this branch]. Health is already 8.0 by tick 2475 (the bleed completes during the walkway legs) and 8.0 at ticks 9152/9345. The stands found NO visible guard at every tried spot: the station hall mouth (tick 373 — pre-wake: the ch-0x2a plate (139.1, 50.2, −93.6) [D] IS the hall arrival, the wake lands the same tick and the stand walked on), the deck pair (tick 2475), the lower landing (tick 9152 — the walkway's own band blocks the reverse ray from that spot), the fusebox (tick 9345 — though the guards' own rays reached that spot at d 23-34, the masked sight query answers blocked). NEXT LEVERS: (1) the stands' |dy| < 4.0 filter inside fight_guards_within's close() excludes the east-deck guards from the mouth — Bond y 49.5-50.2 vs the placements' y 46.0 = dy 3.5-4.2 — so a d3-only variant with dy 5.0 (or a mouth stand spot at y 47-48) lets the mouth fight them the tick they wake; (2) the wake-tick race: re-run the mouth stand after a bounded wait so it fires post-wake (the first run fired pre-wake and the walkway-head leg then ate the bursts — 4 hits at frames 1330-1683 [L the trace]); (3) the Hind's dodge-window widening (30→60 u, the wall-band step) stays open — never reached, the walk dies upstream. The steering/arming/speed/launch all match the game [M Bullet_update 0x12e7b0; Bullet_init 0x12c5a0; the 0x2C record bytes]"]
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair
