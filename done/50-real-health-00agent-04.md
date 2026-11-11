@@ -19,3 +19,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox4 at 2026-11-11T01:35Z
+
+---
+## Report (done, 2026-11-11T03:08Z)
+
