@@ -131,3 +131,13 @@ re-time levers in their ignore messages; one level per tool call, repairs gated 
   topped-up walk byte-exact), nf-game --lib 760/0; the Agent/00agent sisters re-ledgered with
   this session's runs; 11/12/14 not reached (the walk-out lever had to be tried and retired
   first); the report written.
+
+## los-mask-08-sisters (2026-11-11)
+
+- 04:48-05:05 UTC branch s/los-mask-08-sisters from origin/s/los-mask-08-walks, merged
+  origin/master (world.rs hurt/pane refinements, ai_live part-pin walk-side kept,
+  01 slab-ambush master helper, 08 conflicts resolved: master's hall-mouth pre-engage +
+  walks' station-deck/walkway-unstuck/deck-pair blocks kept, master's missile dodge and
+  Agent-test green state taken, 11's newer ledger). Plan: Agent walk first (deck pair
+  enable plate, pre-engage placement, descent re-tune, ignore order), then 00agent
+  upstream bleed.
