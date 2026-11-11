@@ -253,3 +253,14 @@ un-ignore it; real input only, never lower damage or health, no top-ups, helpers
   (walker_b2's Act::WireRide/Act::Ladder AND walkreal0c's three direct wire loops), delete
   both level patches, red-proof the patches first (neutralize → the two walks fail), then
   battery + nf-game + suite on the final tree.
+- (06:0x-07:08) Done: the walker change landed (decay default + ride/grab scope resets; both
+  level patches deleted). Red proof: 0c wedges at (6.26,1.13,-221.83) and 12 at (10.62,1.03,-15.73)
+  with the patches neutralized; green whole: 0c 4/0/1i, 12 4/0. Battery: every walker_b2 walkreal
+  (44 binaries) + the three exposed interactables (7/0, 12/0, 10/0) + nf-game lib 782/0/4i. One
+  shift: 0b — the plain walks' desk-corner wedge repaired with a level-gated west flank; the four
+  real-damage sisters stay RED ledgered (the decay re-times their legs; the dome-wire crossing
+  lands in a live window — 39 × -2.40 zaps, dead t16013; lever: re-time the crossing against the
+  fusebox windows). The pure-walker.rs walkreals not run (helper untouched, binaries identical to
+  master's). The fast suite died twice on disk (0 bytes free at the linker, Bus error) — next
+  window runs it first after freeing the 1.2 GB browser caches. Report:
+  docs/reports/walker-sidestep-decay.md.
