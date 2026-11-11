@@ -404,6 +404,12 @@ pub fn yard_sniper_stands(w: &mut Walker, label: &str, max: usize) {
     // guard from eating the clip — the #15 measurement).
     let sweep = match label {
         "at-the-door" => Some((64.0f32, 900u32, 3usize)),
+        // The mezzanine deck's own east-ledge sweep (the Agent walk's d2 gate calls it before
+        // "the deck south"): the deck snipers #19/#20 (weapon 0x1e, y 9.7 — the measured
+        // killers at the deck step-down, 28.0 + 12.1 [L the run]) sit d 7-11 from the deck
+        // placement, INSIDE the at-the-door sweep's own range law — the same player answer
+        // the secret door's sweep is, taken before their crossfire pays.
+        "deck-step" => Some((64.0f32, 900u32, 3usize)),
         "pre-climb" | "ladder-top" | "ring-corner" | "west-edge" | "west-ledge" => Some((48.0, 700, 3)),
         "lip-1" | "lip-2" | "lip-3" | "lip-4" => Some((48.0, 300, 3)),
         // pretrans-arms-4 round 2 (OPT-IN via with_arc_landing_stands, the ignored handoff walk
@@ -480,6 +486,101 @@ pub fn yard_sniper_stands(w: &mut Walker, label: &str, max: usize) {
     }
 }
 
+/// The Agent walk's stair-head down-shot stand (OPT-IN, `difficulty >= 2` inside
+/// `walk_spawn_to_the_yard_ladder_base_at` — real-health-agent-0c-0d's ledger lever 1). The
+/// display-ground guards (#24/#27 class: y ~7.3 on the 6.27 floor [L the ledger]) shoot UP
+/// through the hall floor's own opening (the floor is MISSING at x 9..12.4 for
+/// z −115.5..−131.5 [D probe rays]) while the route's return down-rays died on its edge — the
+/// measured d2 fights paid 23.4 (#31) + 17.5 (#24) at the stair approach [L the run]. The
+/// stair head (13.2, 12.4, −124) sits level with the opening's south edge — the game's own
+/// down-ramp line the descent walks [D probe rays] — so the still-gate aimed act
+/// [M Bullet_init 0x12c5a0:139-170] takes the pair from there; the strict gun-ray gate
+/// (`exposed_part_gun_rays`) keeps a blocked line cheap (the stand aborts ~60 ticks in).
+/// Real input only; no health, armour or ammo writes.
+fn stair_head_down_shot_stands(w: &mut Walker) {
+    // The sweep is PERSISTENT within a bounded budget: the residents patrol, so exposure
+    // through the opening's line comes and goes — a player waits for the step, he does not
+    // leave a live shooter below because one scan found the line blocked (the measured cost
+    // of leaving #25 alive: the fights paid 8.8 + 12.6 before the display-pocket stand got
+    // him [L the run]). The budget: 6 scan rounds with 100-tick waits, reset by every stand
+    // (a winning sweep keeps scanning), so a never-exposed resident costs ~0.6 s and a
+    // winning one is hunted until the box is clear.
+    let mut waits = 0u32;
+    while waits < 6 {
+        let (di_opt, live) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let mut di_opt = None;
+            let mut live = false;
+            for (i, d) in sim.drones.list.iter().enumerate() {
+                if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { continue; }
+                // The display ground's own residents: the 6.27-floor band (y < 9.5), west of
+                // the ledge's west shaft, between the display eye and the ledge north end.
+                if !(d.pos[1] < 9.5 && d.pos[0] > 3.5 && d.pos[0] < 11.5
+                    && d.pos[2] > -117.5 && d.pos[2] < -112.0) { continue; }
+                live = true;
+                if di_opt.is_none() && walker::DamageLog::exposed_part_gun_rays(&sim, i).is_some() { di_opt = Some(i); }
+            }
+            (di_opt, live)
+        };
+        match di_opt {
+            Some(di) => {
+                eprintln!("[0c] the stair-head down-shot stand: standing on #{di}");
+                yard_stand_aimed(w, di, "stair-head down-shot", 1500);
+                waits = 0;
+            }
+            None => {
+                if !live { eprintln!("[0c] the stair-head down-shot sweep: the display ground is clear"); break; }
+                for _ in 0..100 { w.tick(nf_game::player::Input::default(), false); }
+                waits += 1;
+                eprintln!("[0c] the stair-head down-shot sweep: resident(s) live, none exposed — waiting ({waits}/6)");
+            }
+        }
+    }
+}
+
+/// The Agent walk's display-pocket stand (OPT-IN, `difficulty >= 2` — the ledger's lever 2):
+/// the photograph leg's own spot (the display eye, (5.4, 7.35, −113.0) [L the route]) is the
+/// pocket the below-ground shooter #31 (y 3.2; unkillable from every stand the route reaches
+/// — the down-rays died on the floor edge; the fights paid 23.4 trying [L the run]) can be
+/// answered from. The pick is positional (any live hostile below the upper hall within 30 u)
+/// and the strict gun-ray gate keeps a blocked line cheap. Real input only.
+fn display_pocket_stands(w: &mut Walker) {
+    // The same persistent shape as the stair-head sweep: the below-ground shooter patrols,
+    // so the pocket waits (bounded) for his line to open instead of leaving him to the
+    // fights (the measured #31 fights paid 16.8 [L the run]).
+    let mut waits = 0u32;
+    while waits < 6 {
+        let (di_opt, live) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = sim.bond.pos;
+            let mut di_opt = None;
+            let mut live = false;
+            for (i, d) in sim.drones.list.iter().enumerate() {
+                if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { continue; }
+                if d.pos[1] > 9.5 { continue; }
+                let dxz = ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt();
+                if dxz > 30.0 { continue; }
+                live = true;
+                if di_opt.is_none() && walker::DamageLog::exposed_part_gun_rays(&sim, i).is_some() { di_opt = Some(i); }
+            }
+            (di_opt, live)
+        };
+        match di_opt {
+            Some(di) => {
+                eprintln!("[0c] the display-pocket stand: standing on #{di}");
+                yard_stand_aimed(w, di, "display-pocket", 1500);
+                waits = 0;
+            }
+            None => {
+                if !live { eprintln!("[0c] the display-pocket sweep: nobody left below"); break; }
+                for _ in 0..100 { w.tick(nf_game::player::Input::default(), false); }
+                waits += 1;
+                eprintln!("[0c] the display-pocket sweep: resident(s) live, none exposed — waiting ({waits}/6)");
+            }
+        }
+    }
+}
+
 /// The spawn asserts + legs 1-9c of the main walk, ending on the slot jump's band landing
 /// (grounded, floor 10.2..11.7, x > 42.6). Deterministic: the caller continues from here.
 /// player-upward-shot: legs 1-6 of `walk_spawn_to_the_band` — the REAL route from the level
@@ -495,7 +596,7 @@ pub fn walk_spawn_to_the_yard_ladder_base(iso: &str) -> Walker {
 /// the secret door. Its fights and stands are tuned to this order, so it keeps one placement
 /// onto the mezzanine deck (how a player climbs there is not pinned); the plain walk reaches the
 /// yard on foot instead (Leg 4). Neither writes health, armour or ammo.
-fn mezzanine_door_leg(w: &mut Walker) {
+fn mezzanine_door_leg(w: &mut Walker, difficulty: u32) {
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.pos = [54.0, 5.8, -158.0];
@@ -511,6 +612,14 @@ fn mezzanine_door_leg(w: &mut Walker) {
             "the ch-0x54 VentLatch #182 exists [D #182 p5]");
         assert!(!sim.drones.channels.on(0x54), "ch 0x54 is off before the burn [D #182]");
     }
+    // The Agent walk's d2 gate: the deck-step sweep on the east-ledge snipers (#19/#20, weapon
+    // 0x1e, y 9.7) BEFORE the deck south legs — the measured killers (28.0 + 12.1 at the deck
+    // step-down [L the run]), d 7-11 from this spot, inside the at-the-door sweep's own range
+    // law. The fights on them fail from the deck legs (killed false, 28.0 paid [L the run]) —
+    // the still-gate aimed stand from the stable deck is the player answer, before the
+    // crossfire. A no-op for every d1 caller (the gate is off) and for the top-up walks (the
+    // sweep itself is the YARD_AIMED_STANDS opt-in).
+    if difficulty >= 2 { yard_sniper_stands(w, "deck-step", 3); }
     w.walk_to(Wp::new(54.0, 5.8, -160.8).r(0.8), "the deck south");
     // The deck's internal 0.56 step-down around z −161 holds the walk (the game's own lip-hold
     // [L 2026-10-31 walkway]); cross it with a grounded jump, real input.
@@ -917,6 +1026,11 @@ pub fn walk_spawn_to_the_yard_ladder_base_at(iso: &str, difficulty: u32) -> Walk
         assert!(ramp.is_some(), "the ramp's mid surface (~8.52 at z −124 [D probe rays]) vanished; the descent would free-fall");
     }
     w.walk_to(Wp::new(13.2, 12.4, -124.0).r(1.0), "the lane south to the stair head");
+    // real-health-agent-0c-0d's ledger lever 1 (the d2 gate — the Agent sister only; every
+    // d1 caller keeps master's byte-exact legs): the stair-head down-shot stand takes the
+    // display-ground pair through the hall floor's own opening BEFORE the stair-approach
+    // fights pay their 20+ health a fight for the blocked up-rays (see the helper's doc).
+    if difficulty >= 2 { stair_head_down_shot_stands(&mut w); }
     w.walk_to(Wp::new(13.0, 12.4, -128.2).r(0.8), "the stair approach");
     // West onto the landing (z −128: the hall floor 11.27 at x 12.5+, the landing 11.29..11.32
     // at x 10.5..12 — level [D probe rays]).
@@ -968,6 +1082,10 @@ pub fn walk_spawn_to_the_yard_ladder_base_at(iso: &str, difficulty: u32) -> Walk
     }
     eprintln!("[0c] the staircase descent walked for real — the eye on the display ground at {:?}",
         w.scene.sim.as_ref().unwrap().bond.pos);
+    // real-health-agent-0c-0d's ledger lever 2 (the d2 gate — the Agent sister only): the
+    // display-pocket stand on the below-ground shooter (#31 class) from the photograph leg's
+    // own spot, before the fights pay their blocked-fight cost on him (see the helper's doc).
+    if difficulty >= 2 { display_pocket_stands(&mut w); }
     let subject = {
         let sim = w.scene.sim.as_ref().unwrap();
         sim.drones.props.subjects.iter().find(|s| s.channel == 0x1c)
@@ -997,7 +1115,7 @@ pub fn walk_spawn_to_the_yard_ladder_base_at(iso: &str, difficulty: u32) -> Walk
     eprintln!("[0c] objective 2 complete — the photograph (the staircase-routed eye spot)");
 
     if YARD_AIMED_STANDS.with(|c| c.get()) {
-        mezzanine_door_leg(&mut w);
+        mezzanine_door_leg(&mut w, difficulty);
     } else {
     // Leg 4 (REAL): out of ST-1 on foot. The display ground's east ledge runs south to the head
     // of the 6.29 stair at z -143, which descends north to the 2.32 deck at z -137; under the
@@ -1153,6 +1271,68 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
     // north-west walkway to its west edge (0..8, −208 [D probes]).
     w.walk_to(Wp::new(10.5, 11.1, -190.5).r(1.2), "the ring diagonal");
     w.walk_to(Wp::new(12.0, 11.1, -196.0).r(1.2), "the ring diagonal 2");
+    if difficulty >= 2 {
+        // The Agent walk's d2 gate, levers measured on this tree:
+        // (1) the corner bend routes EAST of the #1 corpse (see the map + legs below). The
+        // fights' #1 kill (the ring diagonal's own fight, killed true [L the run]) leaves the
+        // corpse capsule mid-band at the deck's bend, and the straight ring north-west corner
+        // leg's slide direction decides the run — the Operative's west slide recovered, the
+        // Agent's east slide fell off the walkway (the measured fall to the yard floor
+        // (15.06,1.03,-202.45) [L the run]). Guards and corpses are solid [M 0a9d39435]; the
+        // Operative sister's green chain keeps master's legs (the gate is off at d1); every
+        // top-up walk too.
+        // (2) the west-half return-fire SUPPRESSION (the strip crossing's own law, armed
+        // early): the lane pick's unseen fallback fought the west sniper #13 from the corner
+        // and its creep walked Bond 7.7 u off the choreography toward the shooter —
+        // (10.5,-204.6) → (3.1,-208.2) — and the aftermath fell off the walkway (the measured
+        // (16.14,1.03,-192.29) yard death [L the traced run]). The west-edge and ring-corner
+        // sweeps answer the west snipers from the stable deck instead (the Operative run's
+        // own fight killed #13 from the west edge at 0 cost [L the run]); the strip section
+        // re-arms this scope at the landing and strip_fights_resume() lifts it after the
+        // #282 grab, so no separate clear is needed.
+        walker::STRIP_NO_FIGHTS.with(|c| c.set(true));
+        // The ring deck map around the corner body (the #1 corpse from the ring-diagonal
+        // fight [L the fight trace's tgt (13.0,-198.8)]): the approach legs must route from
+        // what actually holds, the way the [0c-arc] map did for the SW arc.
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            eprintln!("[0c-ring] at the corner-approach start bond=({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
+            for (i, d) in sim.drones.list.iter().enumerate() {
+                if !d.present { continue; }
+                let dd = ((d.pos[0] - p[0]).powi(2) + (d.pos[2] - p[2]).powi(2)).sqrt();
+                if dd < 14.0 {
+                    eprintln!("[0c-ring] drone {i}: pos=({:.2},{:.2},{:.2}) d={dd:.2} health={:.1} corpse={} team={} skin={:#x}",
+                        d.pos[0], d.pos[1], d.pos[2], d.health, d.corpse, d.team, d.skin);
+                }
+            }
+            eprintln!("[0c-ring] deck rows (bond cel, down-seg 15.0→9.0; x 9..15 step 1, z -195..-204 step 1):");
+            for zk in 0..10 {
+                let z = -195.0 - zk as f32;
+                let mut row = String::new();
+                for xk in 0..7 {
+                    let x = 9.0 + xk as f32;
+                    let hit = sim.world.segment_hit_scoped(sim.bond.cel, [x, 15.0, z], [x, 9.0, z]);
+                    match hit {
+                        Some((t, _)) => row.push_str(&format!("{:5.1}", 15.0 - 6.0 * t)),
+                        None => row.push_str("    ."),
+                    }
+                }
+                eprintln!("[0c-ring] z={z:6.1}: {row}");
+            }
+            eprintln!("[0c-ring]          x: {}", (0..7).map(|k| format!("{:>5.1}", 9.0 + k as f32)).collect::<String>());
+        }
+        // The east-shelf bend past the body (the [0c-ring] map on this tree: the deck bends
+        // EAST around the corner — z −197..−200 holds x 13-14, z −195 x 12-13, z −196 x 13 —
+        // while the #1 corpse lies at (12.61,12.09,-196.03), mid-band at the bend's neck [L
+        // the run's own dump]). The straight corner line clips the capsule and the slide's
+        // direction decides the run (the Operative's west slide recovered, the Agent's east
+        // slide fell — the measured (15.06,1.03,-202.45) yard death [L the run]). The player's
+        // way: pass the body on its east side along the mapped shelf, then cut back west to
+        // the corner — the same brush-past law the west ledge's sniper slide rides.
+        w.walk_to(Wp::new(13.4, 11.1, -196.4).r(0.6), "the corner bend east of the body");
+        w.walk_to(Wp::new(13.4, 11.1, -199.0).r(0.7), "the corner shelf south");
+    }
     w.walk_to(Wp::new(12.0, 11.1, -203.0).r(1.2), "the ring north-west corner");
     // Leg 8 (OPT-IN, same flag): the sweep at the north-west corner. The walkway-deck #1 closes
     // to ~1 u here and holds AimStandFire at ~4.6 u through the west-edge leg; his single
@@ -1836,6 +2016,17 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
         // (9,−220) [L the fine map] — the east walks past the band's end fall 11 u to the yard
         // (the measured (14.17,2.01) arrival [L the run]).
         w.walk_to(Wp::new(9.3, 12.0, -220.4).r(0.3), "the band's south step-off onto the arc");
+    }
+    // los-mask-repins-0c-2's lever (the real-damage tree only — the top-up walks keep master's
+    // byte-exact legs): the mid-arc stop before "the arc west end". The measured run: the
+    // step-off held (9.49,12.87,-220.21) but the arc west end leg overran its arrival circle
+    // off the arc's east edge and fell to the yard (arrived (14.18,2.01,-218.45) [L the run];
+    // the plain run's green arrival rides the west side at (11.81,-218.53) [L the green run]).
+    // The stop at (11.0,-219.3) — mid-band floor on the [0c-arc] rows (z −219: x 10-14 hold
+    // 11.2-11.4 [L the run's own map]) — shortens the final run-up so the circle is met on its
+    // west side, the same treatment the mid-band stop gave the strip diagonals.
+    if !w.tops_up() {
+        w.walk_to(Wp::new(11.0, 12.4, -219.3).r(0.7), "the mid-arc stop (the real-damage tree's own arrival fix)");
     }
     w.walk_to(Wp::new(13.0, 12.4, -218.5).r(1.2), "the arc west end");
     w.walk_to(Wp::new(24.0, 12.4, -218.0).r(1.5), "the ring south-west arc");

@@ -508,7 +508,15 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
 #[ignore = "Agent: the fights win but the crossfire cadence out-bleeds the route — run 3 (lane fights + escalating cooldowns) died tick 8579 at the warehouse plates (3.0 hp left; the tick-5903 fight paid 19.0 to the d 18-20 machine pistols); run 1 (master fights) died tick 4054, run 2 tick 6716, run 4 (dry_taps) reshuffled worse, tick 4234; levers: a d2-gated stair-head down-shot stand on the display-ground pair, an aimed stand on #31 from the display pocket, the NF_RF_TRACE read of the blocked fights"]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_agent() {
     walker::with_yard_aimed_stands(|| {
-        walker::walker::with_real_damage(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(2))
+        // The Operative sister's own crossing opt-ins (los-mask-repins-0c-2 / pretrans-arms-
+        // 0c-11), which this sister must match — the base test carries them but this test calls
+        // `_at(2)` directly: the past-A ride release lands ON the walkable spine (the d<0.9
+        // landing sits WEST of it, isolated — walking east falls [L the ledger]) and the
+        // strip crossing walks the no-fight scope with the P2K landing shot (a return-fire
+        // fight on the thin lip flanks Bond straight off it [L the measured west lane fall]).
+        walker::with_ride_release_past_a(|| walker::with_strip_p2k_shot(|| {
+            walker::walker::with_real_damage(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(2))
+        }))
     });
 }
 
