@@ -419,14 +419,31 @@ fn the_lock_gated_touchonce_fires_the_ledge_nis_until_locked() {
 }
 
 /// KIND: the plunge walk-off death chain — the 13 PlungeTrigger TouchOnces (#285-#297, out
-/// 0xBE = 190, mask 8 [D audit rows; the resolved boxes: #287 x −20.28..59.71, y −2.13..10.18,
-/// z 50.22..144.68 over the east valley]) → ScriptPlayer #284 (script 0x06000952, watch 190
-/// [D SP row]) → the death NIS's stream-8 event 0xD [98,1] writes ch 98 = 0x62 = mission fail
-/// [D the script dump; M 0x1827d8's ch-0x62 arm]. Driven by the real valley walk the hurt
-/// test's stand proved walkable-and-alive (63.5, 6.5, 57.9): west down the basin crosses
-/// #287's box, the shell fires, the NIS takes control (the player disable, event 4/5 [D]) and
-/// the mission fails — the health stays 100 because the who-1 hurt planes are configured-inert
-/// [M 0x17e5d0:51-104; the audit's hurt row]. Sister: a fresh load keeps the chain dark.
+/// 0xBE = 190, mask 8 [D audit rows; the resolved geometry [D the 07000005.bin out-190 probe]:
+/// #285 is the flat 2-tri plane at y 13.17 over the whole east basin (x 80.29..167.89, z
+/// 96.66..144.68) — the live PCSX2 fact's "the PlungeTrigger plane is y 13.17"; #287's sloped
+/// funnel runs (−20.28,10.18,120.77)→(59.71,−2.13,96.66..144.68) over the west half]) →
+/// ScriptPlayer #284 (script 0x06000952, watch 190 [D SP row]) → the death NIS's stream-8
+/// event 0xD [98,1] writes ch 98 = 0x62 = mission fail [D the script dump; M 0x1827d8's
+/// ch-0x62 arm].
+///
+/// THE ROUTE IS THE GAME'S OWN. The live PCSX2 measurement (2026-11-10, fresh boot): Bond
+/// placed just past the east lip at (132.0, 14.4, 126.6) settles at y 14.15 and the game
+/// plays the plunge death and shows Mission Failed — the game does NOT let Bond walk down
+/// from the lip into the basin. The old body walked the basin interior from the hurt test's
+/// old stand (63.5, 6.5, 57.9) — a spot the game never allows — and fired the chain through
+/// the PORT's own accident: pre-fold (level-05-basin-floor) Bond walked off the west floor's
+/// edge (x 3.6 [D the room-15 quad map]) into the void and fell THROUGH #287's sloped surface
+/// (y ≈ −0.36 at his landing line [D the tri dump]) — the one-sided entry fired. With the
+/// ungated hurt planes solid ([M Hurt_Create 0x17e870:51-57, Collide_Pick 0x1eb320:140] —
+/// game-correct, kept) hurt 0's plane (y −0.70 [L the census]) catches that fall 0.3-0.6
+/// above #287's surface and the chain stays dark — the port measured it: the 4000-tick walk
+/// ends at (−6.96, 0.52, 64.09) standing on hurt 0, ch 190 dark [L this branch's red run].
+/// The lip is the game's trigger instead: the live fact's Bond settles just past the lip at
+/// y 14.15 and the game plays the plunge death FROM THE SETTLE — no walk-off, no fall — and
+/// the port measures the same from the walk-proven lip stand (132.0, 14.2, 125.4 [L the
+/// level-05-valley-hurt ledger]): ch 190 fires while grounded [L this test's run]. Sister: a
+/// fresh load keeps the chain dark.
 #[test]
 fn the_valley_walkoff_runs_the_plunge_death_nis_chain() {
     let iso = iso();
@@ -441,26 +458,23 @@ fn the_valley_walkoff_runs_the_plunge_death_nis_chain() {
     let mut w = load(&iso);
     {
         let sim = w.scene.sim.as_mut().unwrap();
-        // The valley floor east stand — walkable and alive (the hurt test's proven spot).
-        sim.bond.pos = [63.5, 6.5, 57.9];
+        // The lip stand — the walk-proven spot at the room block's very end [L the ledger;
+        // D probe_05_collblocks: the block ends z 125.98]. The game's own kill is HERE: the
+        // live fact's Bond settles at y 14.15 just past the lip and the plunge death plays
+        // from the settle — no fall, no walk-off. The port measures the same: the lip stand
+        // fires ch 190 while grounded [L this test's run].
+        sim.bond.pos = [132.0, 14.2, 125.4];
         sim.bond.vel = [0.0; 3];
     }
-    w.wait(60);
-    // West down the basin, into #287's box — the real walk (the hurt test's route).
+    // The settle: the trigger fires while Bond stands at the lip (the game's route).
     let mut fired = false;
-    for t in 0..4000u32 {
-        {
-            let sim = w.scene.sim.as_mut().unwrap();
-            let p = sim.bond.pos;
-            let to = [-10.0 - p[0], 0.0, 60.0 - p[2]];
-            sim.bond.yaw = to[0].atan2(to[2]);
-        }
-        w.tick(Input { forward: 1.0, ..Default::default() }, false);
+    for _ in 0..120u32 {
+        w.tick(Input::default(), false);
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0xbe) { fired = true; break; }
     }
     let sim = w.scene.sim.as_ref().unwrap();
     eprintln!("[05i] plunge: fired {fired} at bond {:?}", sim.bond.pos);
-    assert!(fired, "the basin walk must cross a plunge shell (ch 190) [D #285-297 out 0xBE mask 8]");
+    assert!(fired, "the lip settle must fire the plunge plane (ch 190) [D #285 y 13.17 over the east basin; L the live fact's settle-kill at y 14.15]");
     assert!(sim.disabled,
         "the death NIS takes control (SP #284's event-4 player disable [D 0x06000952 s6])");
     let playing = sim.drones.scripts.players.iter().any(|p| p.scripts.contains(&0x0600_0952)
@@ -468,7 +482,7 @@ fn the_valley_walkoff_runs_the_plunge_death_nis_chain() {
             || p.info.get(p.cur).and_then(|s| s.as_ref()).is_some_and(|s| s.play & 1 != 0)));
     assert!(playing, "SP #284 plays the plunge NIS 0x06000952 [D SP row; M SP_Update 0x1dbda8]");
     assert_eq!(sim.drones.health.health, 100.0,
-        "the kill is the NIS, not damage — the who-1 hurt planes are inert [M 0x17e5d0:51-104]");
+        "the kill is the NIS, not damage — the chain fires 1.0 into the fall, the who-1 planes are inert [M 0x17e5d0:51-104]");
     // The NIS's stream-8 event 0xD [98,1] lands within the NIS's own first beats.
     let mut failed = false;
     for _ in 0..400u32 {

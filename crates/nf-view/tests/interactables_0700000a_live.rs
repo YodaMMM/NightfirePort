@@ -492,6 +492,8 @@ fn lift_shaft_hurt_volume_deals_the_fall_damage() {
         .expect("the shaft HurtPolys");
     assert!(hurt.lo[1] < -20.0, "the shaft volumes sit at y = −29.2 [D], got {}", hurt.lo[1]);
     assert!(hurt.damage >= 1000.0, "p1 = 1000 damage [D], got {}", hurt.damage);
+    eprintln!("[0a-shaft] gate {} shape_key_nonzero {} disabled_at_load {}", hurt.gate, hurt.shape_key != 0, hurt.disabled);
+    eprintln!("[0a-shaft] sim.disabled after load {}", sim.disabled);
     let hurt_xz = [(hurt.lo[0] + hurt.hi[0]) / 2.0, (hurt.lo[2] + hurt.hi[2]) / 2.0];
     // Sister: on the office floor, above the volume, no touch.
     sim.bond = nf_game::player::Bond::stand_at(&sim.world, [0.0, 0.1, 0.0], 0.0);
@@ -501,9 +503,11 @@ fn lift_shaft_hurt_volume_deals_the_fall_damage() {
     // Drop Bond into the shaft at the volume's x/z, just above it — the real fall reaches it.
     sim.bond = nf_game::player::Bond::stand_at(&sim.world,
         [hurt_xz[0], hurt.lo[1] + 2.0, hurt_xz[1]], 0.0);
-    for _ in 0..120 {
+
+    for t in 0..120 {
         if sim.drones.health.health <= 0.0 { break; }
         sim.step_bond(Default::default(), false, false, false);
+        if t % 30 == 0 { eprintln!("[0a-shaft] t{} pos {:?} disabled {}", t, sim.bond.pos, sim.disabled); }
     }
     assert!(sim.drones.health.health <= 0.0,
         "the shaft volume's 1000 damage kills [M hurt.rs], health {}",
