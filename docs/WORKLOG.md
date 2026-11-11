@@ -160,3 +160,9 @@ ignores" — this round attacked the three ledgered reds.
   guard_stuck_sweep_live 2/0/0 (the leaf-slide law test itself green). ALL GREEN.
 - The full suite did not fit (the fast runner is disk-hostile in this 9.9 GB sandbox); the
   per-binary chunks above are its substitute. Report: docs/reports/guard-slide-gate-sweep.md.
+
+## guard-slide-03-01-repairs (started 2026-11-11)
+Branch s/guard-slide-03-01-repairs, from origin/s/guard-slide-gate-sweep + origin/master merge.
+Goal: 07000003 wedge repair (lane-exit re-take, gated) then 07000001 Agent repair (Mayhew sister
+re-timing per leg, 900-tick step-out, NF_RF_TRACE on the 13556 leg). One level per tool call,
+real input only, no top-ups, never lower damage or health.
