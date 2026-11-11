@@ -48,12 +48,18 @@ top-ups added; the helper change is opt-in and gated to the 07000001 d1 walks.
 
 ## What ran (release, --test-threads=1, this tree)
 
-- walkreal_07000001_live WHOLE BINARY: **6 passed, 0 failed, 2 ignored** (the d3 sister with
-  its own ammo-exhaustion ledger — its death (tick 12897, killer #7 skin 0x5000038 shotgun at
-  the hall aperture) is byte-identical to the pre-task red, untouched by this branch's d1-gated
-  changes; plus the pre-existing 00agent AND-gate ledger test). [L the full-binary run log]
-- The d2 `walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent` sister: green in
-  the same run (its timeline is byte-identical — every new lever is d1-gated).
+- walkreal_07000001_live WHOLE BINARY, the window's run: **6 passed, 0 failed, 1 ignored**
+  before the window cut it — mayhew, the exit-fade pin, the_hall_guards_wait, the_plate_refuses,
+  the main walk and the real-damage sister ALL ok [L the full-binary log, /tmp on the sandbox];
+  the d3 sister ignored with its own ammo-exhaustion ledger (its death, tick 12897, killer #7
+  skin 0x5000038 shotgun at the hall aperture, is byte-identical to the pre-task red — the d1
+  gates don't touch it). The d2 `..._real_damage_agent` sister was mid-run (its own long
+  guard-2 retry cycle, round 34+/48) when the run was cut by the sandbox tool timeout; its
+  timeline is byte-identical to the -5 green single (every new lever is d1-gated; the
+  flank_hold_min_y check is none_or on the unset field) — [L the -5 per-test single] stands
+  for it.
+- The fix5 targeted run (the three un-ignored tests + the d3): **2 passed, 1 failed (the d3
+  ledger only)** [L the fix5 log].
 - interactables_07000001_live and the nf-game lib tests: see the WORKLOG entry for the final
   counts on the pushed tree (they ran after this report's draft; the WORKLOG records them).
 - The full four-crate `tools/test/suite.py`: the background start died within seconds (this
