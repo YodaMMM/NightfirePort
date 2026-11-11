@@ -125,4 +125,18 @@ credit balance, no dollar cost.
 
 ## ntfy failed
 
-(filled at finish — see below)
+The sandbox has no reliable outbound route to ntfy.sh this session (the same outcome the
+los-mask-repins-12, -12-2, -0c-3 and the guard-noise sessions recorded). The three fallbacks, in
+order, with their exact outcomes:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "walker-sidestep-decay: done — …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 urllib.request` (ASCII body) →
+   `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `timeout 25 wget -q -O- --post-data "walker-sidestep-decay: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → **exit 0 with no output** — but two verification reruns without `-q` both hang at
+   `Connecting to ntfy.sh|159.203.148.75:443...` until their timeouts, so the exit-0 is a
+   connection artifact, not a delivery. Treat the notification as NOT sent.
+
+Everything else was delivered: the branch (a4081cbcc), the report on the branch, and the queue's
+done item with the report body attached.
