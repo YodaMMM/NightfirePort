@@ -28,3 +28,11 @@ Work log:
   west-corridor pre-clear before the meet walk); the fast suite died early on the sandbox
   memory (0-byte suite.out) — the explicit batteries are the coverage; the report written and
   the branch pushed.
+
+## real-health-00agent-01-hall-2
+Started 2026-11-11 07:12 UTC. Branch s/real-health-00agent-01-hall-2 cut from origin/s/real-health-00agent-01-hall (4f76e3fb90) and merged with origin/master (already up to date).
+Task: continue the 00 Agent hall walk from the prior ledger's next lever — the west-corridor
+pre-clear before the meet walk. Helpers stay gated to 07000001 + difficulty; real input only,
+no top-ups, never lower damage or health. Remove the ignore when green; else push ledger+lever.
+- (07:12) setup: clone, branch, WORKLOG entry, checkpoint pushed. Next: read the prior report
+  and the 00 Agent ignore message; downloads (work-slim, ISO) next.
