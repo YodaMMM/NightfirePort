@@ -357,20 +357,21 @@ fn the_silo_fall_dies_on_the_death_plate() {
     // physics below).
     w.scene.sim.as_mut().unwrap().bond.pos = [71.0, 41.0, 0.0];
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
-    let mut fell = false;
-    for _ in 0..300 {
-        let sim = w.scene.sim.as_ref().unwrap();
-        if sim.bond.pos[1] < 40.0 { fell = true; break; }
-        w.tick(nf_game::player::Input::default(), false);
-    }
-    assert!(fell, "the shaft drop never began");
-    let mut hurt = false;
-    for _ in 0..600 {
-        let sim = w.scene.sim.as_ref().unwrap();
-        if sim.drones.health.health < 100.0 || sim.drones.death.active { hurt = true; break; }
-        w.tick(nf_game::player::Input::default(), false);
-    }
-    assert!(hurt, "the shaft fall never hurt — the death plate #794 (y 38.57, damage 1000 [D]) must catch the fall [M Hurt_Update 0x17e5d0]");
+    // level-05-basin-floor-4 re-pin: the death plate is SOLID ground (the fold's ungated 0xE4
+    // collision — all nine 07000015 plates carry gate 0 [D the census dump]) — Bond lands ON
+    // the plate's own collision top instead of falling through to its y 38.57 band, and the
+    // object hit applies the plate's damage the way the game does [M Player_DealWithObjHit
+    // 0x194458:94-103 — obj+0xFF == 0x27 applies Hurt_GetDamage on the contact]. Measured on
+    // this tree: y 40.183, grounded, health 44.0 after the 300-tick stand.
+    for _ in 0..300 { w.tick(nf_game::player::Input::default(), false); }
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[silo] after 300 ticks: y {:.3} grounded {} health {:.1} death {}", sim.bond.pos[1],
+        sim.bond.grounded, sim.drones.health.health, sim.drones.death.active);
+    let (y, grounded, health) = (sim.bond.pos[1], sim.bond.grounded, sim.drones.health.health);
+    assert!(grounded && (39.8..=40.5).contains(&y),
+        "the drop lands ON the solid death plate #794 (its own collision top) [D plate #794 at (71.14, 38.57, −0.01); M the fold] (y {y:.3} grounded {grounded})");
+    assert!(health < 100.0,
+        "the stand on the plate takes its damage through the object hit [M 0x194458:94-103] (health {health:.1})");
 }
 
 /// The shooter + the sound trigger, both armed by the same room touch #720 (out 0xfb [D]): the

@@ -164,6 +164,13 @@ pub const PANE_PART: u64 = 0x400_0000_0000;
 /// Set in a dynamic part's id when the sight ray skips it: obj+0xF0 bit 0x10 against HITTEST+0x98
 /// bit 4 [M Collide_PickObj 0x1eae80:33-35].
 pub const SIGHT_THROUGH_PART: u64 = 0x2000_0000_0000;
+
+/// The dynamic-part id band of the gated hurt planes whose gate channel reads high (bit 46 + the
+/// hurt list index, level-05-basin-floor-3). The plane joins the per-tick `set_dynamic` set only
+/// while its channel reads high — the game's disabled bit law [M `Hurt_Create` 0x17e870 tail;
+/// `Hurt_Update` 0x17e5d0:26-37; `Collide_Pick` 0x1eb320:140's `& 0x20` skip +
+/// `Collide_PickObj` 0x1eae80:26-30's obj+0xF0 & 0x20 drop].
+pub const HURT_PART: u64 = 0x4000_0000_0000;
 /// The normalized-spine head-on cull [M Intersect_CylGeom 0x109da0:302-322]. level-0a-office-hatch-9
 /// measured the arms' orientation: the game skips the horizontal face BELOW the spine (the
 /// corner walk's y-0.19 floor-band lifter — the port dithered 1.13→1.21 on it while the game
@@ -627,6 +634,28 @@ pub struct CollisionWorld {
     /// Static only: per pushed instance (the `owners` ordinal), whether it is CEL geometry (the
     /// placement flags' 0x8000 [M 0x1d1998:92]) — the aim ray's filter (aim-snap-objects).
     aim_pick: Vec<bool>,
+    /// The gated hurt planes whose gate channel reads high this tick (level-05-basin-floor-3):
+    /// the scene posts them from the hurt pass (whose per-tick gate maintenance runs first) and
+    /// `Drones::tick`'s `script_parts` extend carries them into the per-tick `set_dynamic` rebuild
+    /// — a gated plane is solid exactly while its channel reads high [M `Hurt_Create` 0x17e870
+    /// tail + `Hurt_Update` 0x17e5d0:26-37 + the pick's bit-0x20 skips]. Empty unless posted.
+    hurt_parts: std::sync::RwLock<Vec<(u64, u32, Mat4)>>,
+    /// The folded hurt instances' object-hit pairs (level-05-basin-floor-4): push ordinal →
+    /// (damage, kind) for every pushed stat instance that is an UNGATED kind-0xE4 placement
+    /// (`Level::folded_hurt` — the static fold's exact filter). The game delivers the hurt
+    /// damage through the player's object hit [M `Player_DealWithObjHit` 0x194458:94-103 —
+    /// obj+0xFF == 0x27 applies `Hurt_GetDamage`], i.e. from the collide pass's per-contact
+    /// hit — so a capsule STANDING on a solid plane is hit while it touches. The port's
+    /// equivalent records the push contacts (the `hurt_hits` log) and the sim delivers these
+    /// pairs; the per-tick capsule re-test missed the settled stand (the spine bottom rests
+    /// ~r above the floor).
+    pub stat_hurts: HashMap<u32, (f32, u8, usize)>,
+    /// The object-hit log (level-05-basin-floor-4): the stat push ordinals and the
+    /// HURT_PART-tagged dynamic part ids the pushes' capsule actually contacted (a run counts
+    /// when its contact moved the push accumulator — the game's hit is the collide pass's
+    /// per-contact byproduct [M `Player_CollisionHandler` 0x1949a8:139-145 walks obj+0xD0 per
+    /// contact]). The sim drains it once per tick and delivers the hurt damage.
+    pub hurt_hits: std::sync::Mutex<Vec<u64>>,
 }
 
 /// The triangle's unit normal (= +cross(v1−v0, v2−v0), the stored-plane orientation the port's
@@ -1211,6 +1240,14 @@ impl CollisionWorld {
     pub fn build_scoped(level: &Level, instances: &[Instance], graph: Option<ScopeGraph>) -> CollisionWorld {
         let mut stat = Geo::default();
         let mut missile = Geo::default();
+        // The folded hurt instances' (damage, kind) pairs by push ordinal (level-05-basin-floor-4),
+        // with the placement index (level-05-basin-floor-5): the sim routes the delivery through
+        // the matching `Hurt`'s own state side (`deliver_contact` — the witness, the one-shot
+        // expiry, the disabled bit), the way the game's per-contact hit runs the volume's
+        // obj+0xFF class arm on the LIVE object [M Player_DealWithObjHit 0x194458:94-103]. The
+        // raw pair stays the fallback for a fold whose placement built no Hurt (hurt.rs creates
+        // from the main map only).
+        let mut stat_hurts: HashMap<u32, (f32, u8, usize)> = HashMap::new();
         // Per pushed stat instance: is it CEL geometry (the 0x8000 flag) — the aim ray's filter.
         let mut stat_aim_pick: Vec<bool> = Vec::new();
         // Per pushed object: its own runtime cel (the pushed ordinal — see the doc above).
@@ -1262,7 +1299,14 @@ impl CollisionWorld {
             // OBJECTS instead: `Drones::aim_snap`'s door stage). The port's stat fold includes them
             // (the flight's door stops ride it), so the aim query needs the per-instance flag.
             stat_aim_pick.push(inst.placement.flags & 0x8000 != 0);
+            let pushed = stat_aim_pick.len() - 1;
             stat.push_kept(c.triangles_with_material().into_iter().map(|(t, m)| (t.map(|p| transform(&inst.matrix, p)), m)), node_pass);
+            // The folded hurt planes' object-hit pairs (level-05-basin-floor-4): the sim
+            // delivers these when the capsule contacts the run (`Level::folded_hurt` is the
+            // static fold's own filter — one source, no drift).
+            if let Some((damage, kind)) = nf_formats::level::Level::folded_hurt(&inst.placement) {
+                stat_hurts.insert(pushed as u32, (damage, kind, inst.placement.index as usize));
+            }
         }
         // Index collision shapes by hashcode, AND by (map,object) packed into a synthetic key for objects whose
         // hashcode is u32::MAX (anonymous objects — e.g. 4/5 doors on 07000001 have hashcode=MAX, so the hashcode
@@ -1314,7 +1358,7 @@ impl CollisionWorld {
         });
         let gravity_y = if level.main_map().is_some_and(|m| level.maps[m].placements.iter()
             .any(|p| p.flags & 0xff == 0x24 && p.params.iter().any(|&(k, v)| k == 3 && v == 2))) { 0.0 } else { -9.8 };
-        CollisionWorld { stat, missile, dynamic: Default::default(), shapes, shape_mats, gravity_y, shape_flags, glist_flags, scope, aim_pick: stat_aim_pick }
+        CollisionWorld { stat, missile, dynamic: Default::default(), shapes, shape_mats, gravity_y, shape_flags, glist_flags, scope, aim_pick: stat_aim_pick, hurt_parts: Default::default(), stat_hurts, hurt_hits: Default::default() }
     }
 
     /// The glist flags word (celglist+0x44) of the object a hash resolves to — the port's
@@ -1483,7 +1527,7 @@ impl CollisionWorld {
     pub fn from_triangles(tris: Vec<[V3; 3]>) -> CollisionWorld {
         let mut stat = Geo::default();
         stat.push(tris.into_iter().map(|t| (t, 0)));
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new() }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new(), hurt_parts: Default::default(), stat_hurts: Default::default(), hurt_hits: Default::default() }
     }
 
     /// One object holding these world-space triangles with surface bytes and per-triangle
@@ -1493,7 +1537,7 @@ impl CollisionWorld {
         let pass = tris.iter().map(|(_, _, p)| *p).collect::<Vec<_>>();
         stat.push_flags(tris.into_iter().map(|(t, m, _)| (t, m)), false);
         for (k, p) in pass.into_iter().enumerate() { stat.pass[k] = p; }
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new() }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new(), hurt_parts: Default::default(), stat_hurts: Default::default(), hurt_hits: Default::default() }
     }
 
     /// `WldGravity.y`, see the field.
@@ -1578,6 +1622,19 @@ impl CollisionWorld {
             flags,
         };
     }
+
+    /// Posts this tick's gated hurt planes whose gate channel reads high (level-05-basin-floor-3):
+    /// each `(HURT_PART | hurt index, shape key, obj+0x90 pose)`. The scene calls this from the
+    /// hurt pass (after the per-tick gate maintenance [M `Hurt_Update` 0x17e5d0:26-37]) and
+    /// `Drones::tick`'s `script_parts` reads it back, so the plane enters the `set_dynamic` set
+    /// the same tick the channel rises and leaves it the tick the channel falls — the game's
+    /// disabled-bit law (the pick skips bit-0x20 objects [M 0x1eb320:140 / 0x1eae80:26-30]).
+    pub fn set_hurt_parts(&self, parts: Vec<(u64, u32, Mat4)>) { *self.hurt_parts.write().unwrap() = parts; }
+    /// The posted hurt parts (a copy — the set is rebuilt from it this tick).
+    pub fn hurt_parts(&self) -> Vec<(u64, u32, Mat4)> { self.hurt_parts.read().unwrap().clone() }
+    /// Drains the object-hit log (level-05-basin-floor-4) — the sim calls this once per tick
+    /// after the bond step; the entries are stat push ordinals and HURT_PART-tagged part ids.
+    pub fn take_hurt_hits(&self) -> Vec<u64> { std::mem::take(&mut *self.hurt_hits.lock().unwrap()) }
 
     /// When the first collision surface along `from → to` belongs to a moving object, how that object moved over the
     /// last tick (`Player_FeetOnPoint` 0x194188 → `Control_InheritVelocity`).
@@ -1913,13 +1970,29 @@ impl CollisionWorld {
         for r in runs {
             let o = &stat.objects[r as usize];
             if !(0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) {
+                let before = total;
                 for k in o.tris.clone() { test(&stat.tris[k], stat.body_mat(k), &mut a, &mut b, &mut total, &mut walkable, &mut pick); }
+                // The object-hit log (level-05-basin-floor-4): a run whose contact moved the
+                // push accumulator is the collide pass's hit — the folded hurt planes deliver
+                // their damage through it (the sim maps the push ordinal via `stat_hurts`).
+                // u32::MAX when the world is not chunk-built (the test builders) — no pair to
+                // deliver, the sim ignores it.
+                if total != before {
+                    let owner = stat.owners.get(r as usize).copied().unwrap_or(u32::MAX);
+                    self.hurt_hits.lock().unwrap().push(owner as u64);
+                }
             }
         }
-        for g in [&dynamic.geo] {
-            for o in overlapping(g, lo, hi) {
-                for k in o.tris.clone() { test(&g.tris[k], g.body_mat(k), &mut a, &mut b, &mut total, &mut walkable, &mut pick); }
-            }
+        // The per-tick dynamic set (the doors, the SS objects, the panes, the gated hurt
+        // planes): one object per shape-bearing part, `movers` 1:1 (set_dynamic pushes them
+        // together) — the same linear walk `pane_push` runs, with each part's id so the
+        // HURT_PART planes' contacts land in the object-hit log exactly once.
+        for (oi, o) in dynamic.geo.objects.iter().enumerate() {
+            if (0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) { continue; }
+            let id = dynamic.movers[oi].0;
+            let before = total;
+            for k in o.tris.clone() { test(&dynamic.geo.tris[k], dynamic.geo.body_mat(k), &mut a, &mut b, &mut total, &mut walkable, &mut pick); }
+            if id & HURT_PART != 0 && total != before { self.hurt_hits.lock().unwrap().push(id); }
         }
         (total, walkable)
     }
@@ -3602,7 +3675,7 @@ mod tests {
         let n = tris.len();
         let stat = Geo { mats: vec![0; n], tris, objects: vec![Object { lo: [-10.0; 3], hi: [10.0; 3], tris: 0..n }], oneway: vec![false; n], groups: Vec::new(), owners: Vec::new(), grid: None,
             pass: vec![false; n] };
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new() }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new(), hurt_parts: Default::default(), stat_hurts: Default::default(), hurt_hits: Default::default() }
     }
 
     /// fix-safe08b: the straddle walk. A wall assigned to an exterior cell with NO portal from the
@@ -3645,6 +3718,9 @@ mod tests {
             missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
             scope: Some(ScopeData { graph, cells, always: always.clone() }),
             aim_pick: Vec::new(),
+            hurt_parts: Default::default(),
+            stat_hurts: Default::default(),
+            hurt_hits: Default::default(),
             glist_flags: Default::default(),
         };
         let w = mk(graph.clone(), scope_cells.clone());
@@ -3673,6 +3749,9 @@ mod tests {
             stat: stat2, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
             scope: Some(ScopeData { graph: ScopeGraph { cells: vec![([-8.0; 3], [8.0; 3])], portals: Vec::new(), room: vec![true] }, cells: vec![vec![0]], always: Vec::new() }),
             aim_pick: Vec::new(),
+            hurt_parts: Default::default(),
+            stat_hurts: Default::default(),
+            hurt_hits: Default::default(),
             glist_flags: Default::default(),
         };
         assert!(w3.segment_actor([0.0, 0.5, 0.0], [0.0, 0.5, 4.0]).is_some(), "flat: the mat-0xd tri blocks");
@@ -3715,6 +3794,9 @@ mod tests {
             missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
             scope: Some(ScopeData { graph, cells, always: always.clone() }),
             aim_pick: Vec::new(),
+            hurt_parts: Default::default(),
+            stat_hurts: Default::default(),
+            hurt_hits: Default::default(),
             glist_flags: Default::default(),
         };
         let ray = ([1.5, 1.0, 0.0], [3.5, 1.0, 0.0]);
@@ -3740,6 +3822,9 @@ mod tests {
             stat: stat3, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
             scope: Some(ScopeData { graph: ScopeGraph { cells: vec![([-8.0; 3], [8.0; 3])], portals: Vec::new(), room: vec![true] }, cells: vec![vec![0, 1]], always: Vec::new() }),
             aim_pick: Vec::new(),
+            hurt_parts: Default::default(),
+            stat_hurts: Default::default(),
+            hurt_hits: Default::default(),
             glist_flags: Default::default(),
         };
         assert_eq!(w3.segment_bullet_scoped(Some(0), [-1.0, 1.0, 0.0], [2.0, 1.0, 0.0]), w3.segment_bullet([-1.0, 1.0, 0.0], [2.0, 1.0, 0.0]),

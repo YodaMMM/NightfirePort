@@ -127,6 +127,13 @@ pub struct Hurt {
     /// obj+0x90: the current world pose — the placement's until state 1 [M 0x17e870:17], then the
     /// spline's matrix (world-space keys [D: 07000046 path 14's key 0 = the Icicle's hang spot]).
     pub pose: [[f32; 4]; 4],
+    /// The glist collision's shape key in the world's hashed shape map (level-05-basin-floor-3):
+    /// the target object's hashcode, or the anonymous `(map, object)` synthetic key
+    /// `0x8000_0000 | (map << 16) | object` when the hashcode is MAX — the same keys
+    /// `CollisionWorld::build` indexes [M world.rs's shapes build]. 0 = the placement resolves to
+    /// no collision (the volume carries no solid side). The gated planes' per-tick dynamic parts
+    /// pose THIS object's glist (the same source `set_dynamic`'s doors/SS/panes ride).
+    pub shape_key: u32,
 }
 
 impl Hurt {
@@ -166,6 +173,16 @@ impl Hurt {
                 .unwrap_or_default();
             // The create pose [M 0x17e870:17 — CCO(0) → View_RotTransMatrix; obj+0x90 until state 1].
             let pose = nf_formats::placement::view_rot_trans_matrix(p.rotation, p.translation);
+            // The shape key (level-05-basin-floor-3): the target object's hashcode, or the
+            // anonymous synthetic key when the hashcode is MAX — the keys the world's `shapes`
+            // map indexes (world.rs's build). 0 when the target has no collision (no solid side).
+            let shape_key = match target {
+                Some((om, oi)) if level.maps[om].objects[oi].collision.is_some() => {
+                    let h = level.maps[om].objects[oi].hashcode;
+                    if h == u32::MAX { 0x8000_0000 | ((om as u32) << 16) | oi as u32 } else { h }
+                }
+                _ => 0,
+            };
             out.push(Hurt {
                 placement: i,
                 kind: param(0) as u8,
@@ -188,6 +205,7 @@ impl Hurt {
                 flying: false,
                 local_tris,
                 pose,
+                shape_key,
             });
         }
         out
@@ -271,6 +289,19 @@ impl Hurt {
         self.update_touch(gate_on, a, b, 0.55, false)
     }
 
+    /// The object-hit delivery (level-05-basin-floor-4): the state side of `update_touch`
+    /// without the contains test — the contact already happened in the collide pass (the
+    /// world's push log; the game's `Player_DealWithObjHit` 0x194458:94-103 fires from the
+    /// per-contact hit, so a capsule standing ON a solid plane is hit). Same law as the
+    /// contact arm: the disabled bit, the one-shot expiry [M `Hurt_Update` 0x17e5d0:129-132 →
+    /// :41-47, :106-108], the hit witness.
+    pub fn deliver_contact(&mut self) -> Option<(f32, u8)> {
+        if self.disabled || self.fired { return None; }
+        if self.one_shot && !self.flying && self.duration != 0 { self.fired = true; }
+        self.hits += 1;
+        Some((self.damage, self.kind))
+    }
+
     /// The victim-generic contact law: `update` for the player (class 2), the drones' pass for a
     /// drone (class 3). `a`..`b` is the victim's capsule, `r` its radius. The damage arm has NO
     /// who-mask: `Player_DealWithObjHit` 0x194458:94-101 applies `Hurt_GetDamage` on every
@@ -278,10 +309,18 @@ impl Hurt {
     /// side — the who param's only law is the state-0 START mask [M Hurt_Update 0x17e5d0:51-102],
     /// which lives in the starters (the class-5 bullet starter feeding `start_flight`; a static
     /// volume's start is unobservable — no path, state 1 returns at once [M :104-105]).
-    pub fn update_touch(&mut self, gate_on: bool, a: V3, b: V3, r: f32, drone: bool) -> Option<(f32, u8)> {
-        // The gate maintenance [M 0x17e5d0:26-37 — the live every-tick level: the channel low
-        // sets obj+0xF0|0x20, the channel up clears it; a zero gate never disables].
+    /// `Hurt_Update` 0x17e5d0:26-37's gate maintenance, extracted for the scene's every-tick
+    /// pass (level-05-basin-floor-5): the channel low sets obj+0xF0|0x20, the channel up clears
+    /// it — a LIVE level the game's object control pass runs EVERY tick, including while the
+    /// player's own update is cutscene-paused (the launch NIS on 07000016 parks the player and
+    /// the pit pulse's plane still arms/drops with ch 243 [M the decompile: no player-state
+    /// guard]). A zero gate never disables.
+    pub fn maintain_gate(&mut self, gate_on: bool) {
         if self.gate != 0 { self.disabled = !gate_on; }
+    }
+
+    pub fn update_touch(&mut self, gate_on: bool, a: V3, b: V3, r: f32, drone: bool) -> Option<(f32, u8)> {
+        self.maintain_gate(gate_on);
         if self.disabled || self.fired { return None; }
         // The collide contact: the victim's capsule against the volume's glist tris — the damage
         // arm's only condition beyond the disabled bit [M 0x194458:94-101].
@@ -330,6 +369,7 @@ mod tests {
             // The flight fields: a static unit volume.
             count: 0, rate: 0, path: None, t: 0.0, flying: false,
             local_tris: tris, pose: [[0.0; 4]; 4],
+            shape_key: 0,
         }
     }
 

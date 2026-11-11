@@ -21576,6 +21576,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             parts.extend(drones.worldobjs.dynobjs.iter()
                 .filter(|o| o.flags & 0x20 == 0 && o.shape != 0 && !inside(o))
                 .map(|o| (0x1000_0000_0000 | o.slot as u64 | if o.flags & 0x10 != 0 { crate::world::SIGHT_THROUGH_PART } else { 0 }, o.shape, o.matrix)));
+            // The gated hurt planes whose gate channel reads HIGH (level-05-basin-floor-3, the
+            // round-2 open item): `Hurt_Create` 0x17e870's tail sets obj+0xF0 bit 0x20 when the
+            // gate reads low at create (the channels start zeroed — every gated volume loads
+            // disabled), `Hurt_Update` 0x17e5d0:26-37 maintains that bit EVERY tick from the gate
+            // channel (low → set, high → cleared — the same read the round-2 report pinned), and
+            // the pick skips bit-0x20 objects [M `Collide_Pick` 0x1eb320:140's `& 0x20` arm;
+            // `Collide_PickObj` 0x1eae80:26-30 drops obj+0xF0 & 0x20]. So a gated plane is SOLID
+            // exactly while its channel reads high: the tick the channel rises the plane enters
+            // the pick, the tick it falls the plane leaves it. The port holds those planes in the
+            // SAME per-tick set_dynamic set (the doors' precedent): the scene posts the enabled
+            // planes' `(id, shape key, obj+0x90 pose)` from the hurt pass (whose gate maintenance
+            // runs first — scene.rs's hurt loop), and this extend carries them into the rebuild;
+            // a channel flip changes the parts list, the rebuild takes or drops the plane that
+            // tick. The static fold (level.rs) keeps the gated volumes out, so there is no
+            // double-solidity. Id: bit 46 + the hurt list index (stable — the list never
+            // reorders); the shape is the hurt's own glist under the world's shape key.
+            parts.extend(d.world.hurt_parts());
             parts
         };
         // Script triggers (`Trigger_TouchOnce` / `Trigger_Touch` made by `Script_CreateEntity`): one per live entity,

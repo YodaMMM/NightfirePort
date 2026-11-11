@@ -775,6 +775,14 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
                     clear_near(&mut w, 9.0, "the door-8 mouth");
                     if at_pocket == 0 && round >= 1 { break; }
                 }
+                // los-mask-repins-03 (Agent): the cluster's guns (#18 0x1c, #2/#19 0xe [L the
+                // gas-rng-draws-6 probe]) are the route's own ammo from here on — the exit legs
+                // met the lane captains with clip 0 spare 0 and no armed weapon anywhere on the
+                // corridor [L the 164663 run: the fights' own cycle found nothing]. A player
+                // scavenges the guns he just fought for before walking on.
+                if difficulty >= 2 {
+                    loot_the_drops_03(&mut w, "the door-8 mouth drops");
+                }
             }
         }
 
@@ -936,11 +944,34 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         ("the courtyard mid", [13.02f32, 5.81, -22.00]),
         ("the lane south", [10.41, 6.08, -28.74]),
         ("the moat east", [9.95, 5.84, -34.41]),
+    ] {
+        w.walk_nav_to(at, name, 1.6);
+    }
+    // los-mask-repins-03 (Agent, the measured ledger: death at tick 164663 at (3.0, 6.0, −33.3)
+    // to the shotgun captain #16 skin 0x5000038 weapon 0x1c at 1.2 u, the hand gun dry clip 0
+    // spare 0, at 41.2): the lane legs run the return-fire fights (#9 14.7 in 7, #11 28.0 in 4,
+    // #17 14.0 in 2 — all killed) and the fights give up on the dry gun [L the run; the fights'
+    // own end law], so the lane captain's first point-blank volley (under 3.0 u every round
+    // hits [M DroneWeap_DoBulletAccuracy 0x179740:113-115]) is unanswered. A player crossing the
+    // moat band scavenges the fights' own drops and takes the west lane loaded (the servants'
+    // ground's resupply arm; the corridor keeps him on the walked path).
+    if difficulty >= 2 {
+        let _ = w.resupply("the moat band (agent)");
+        stand_shooters_down_03(&mut w, "the moat band shooters", 40.0);
+    }
+    for (name, at) in [
         ("west lawn", [0.0, 5.9, -30.0]),
         ("the west lane", [1.0, 5.9, -33.0]),
         ("along the moat", [8.0, 5.9, -36.0]),
     ] {
         w.walk_nav_to(at, name, 1.6);
+    }
+    // los-mask-repins-03 (Agent): the same rearm before the gate-plate leg — the exit-leg
+    // ledger's second drain was the dry gun at the door, and the gate plate leg is the route's
+    // next fight-free walk.
+    if difficulty >= 2 {
+        let _ = w.resupply("the west lane (agent)");
+        stand_shooters_down_03(&mut w, "the west lane shooters", 40.0);
     }
     let sim = w.scene.sim.as_ref().unwrap();
     let gate_plate = sim.drones.triggers.iter()
@@ -1070,6 +1101,15 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
             assert!(di.enabled, "guard with enable 0x4e responded to the key [D p3]");
         }
     }
+    // los-mask-repins-03 (Agent): the safe→exit legs are fight-bearing under the game's sight
+    // (the exit lane walks back into the lane's sight lines) and there is no pickup on the
+    // corridor between the safe and the exit lawn [L the 164663 run: both resupply calls
+    // returned false at clip 1 spare 0]. A player rearms at the safe before walking back.
+    if difficulty >= 2 {
+        let _ = w.resupply("the safe (agent)");
+        loot_the_drops_03(&mut w, "the safe drops");
+        stand_shooters_down_03(&mut w, "the safe shooters", 40.0);
+    }
 
     // 4. The exit: E on the Load Point loads 07000004 through the real reload path (the exit
     //    lawn first — the direct line rides the slope without settling).
@@ -1195,7 +1235,6 @@ fn killing_a_servant_fails_the_mission() {
 /// group]; the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input
 /// only — the load path is the only difference.
 #[test]
-#[ignore = "los-mask-repins-03: Bond dies at tick 164663 at (3.0, 6.0, -33.3) to the shotgun captain #16 at 1.2 u, the hand gun dry (clip 0 spare 0) at 41.2 health on the exit leg; green with the flat feet-height boundary push"]
 fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
     // fx-muzzle-repin-2: the fights' pick is the fight-back lever. The corrected-stream Agent run
     // died at t62511 with #5 (0x500003a, 0x1c) at 60.4 across 16 hits while the torso-nearest
@@ -1207,6 +1246,18 @@ fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
     // the game's sight masks [M 0x176f18 mask 0xa27] the courtyard guards engage from the lane
     // doors on (guard #10 at the lane-3 leg), the plain sight rule left the fights unanswered,
     // and the walk ran dry before the servants and wedged at the door-8 mouth [L the masked run].
+    // los-mask-repins-03 (the re-route, measured on this branch): the game's sight moved the
+    // lane fights — the ledgered death was tick 164663 at (3.0, 6.0, −33.3) to the shotgun
+    // captain #16 skin 0x5000038 weapon 0x1c at 1.2 u, the hand gun dry (clip 0 spare 0) at
+    // 41.2, on the exit moat-node leg; the fights' own dry cycle found no armed weapon on the
+    // walked-path corridor and the fights gave up [L the run]. The route now scavenges the way
+    // a player does, all d≥2-gated level-local: a rearm + shooters stand on the moat band and
+    // the west lane (the gate approach), the door-8 cluster's guns looted right after the
+    // mouth fight (#18 0x1c, #2/#19 0xe [L the gas-rng-draws-6 probe]), and a rearm + loot +
+    // shooters stand at the safe before the exit legs. The re-routed run kills both exit
+    // lane captains (#15/#16, killed true at 151277/151381) and finishes with the exit fired
+    // [L this run]. No damage, health or ammo writes anywhere; the resupply corridor is the
+    // walker's walked-path rule.
     walker::with_real_damage_glass_fights(|| walk_the_full_route_and_complete_every_objective_at(2))
 }
 
@@ -1221,7 +1272,7 @@ fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
 /// placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the load path is the
 /// only difference.
 #[test]
-#[ignore = "00 Agent: the east captor-room cluster under the door routes — the pre-clear rally kills the door-8 guards (#18/#19/#2) at zero fight cost but the rally APPROACH crosses their gun line (40.8 -> 15.6-19.2) and the exit lawn then needs ~29; next levers: an approach that stays north of door 8 (the green run fought from (36.2,5.7) THROUGH the open doorway), the 87000-tick (35.6,8.7) door stall on the post-rescue west-lawn leg, and the exit-lawn #16 post-kill volley; follow-up real-health-00agent-02-03-3"]
+#[ignore = "00 Agent (los-mask-repins-03 ledger): the east-lane wedge's sidestep ladder walks Bond onto the building's upper row (y 10.12 at (11.19,-29.66)) and the east-wing sniper #6 (26.2,9.9,0.7) sees him along the upper row's windows — one 40.0 round at d 22.8 ends the walk at tick 53672 (clip 2 spare 0, the (11.9,9.1,-16.3) box 1 u under the upper floor is not takeable); the older levers stand: an approach that stays north of door 8 (the green run fought from (36.2,5.7) THROUGH the open doorway), the 87000-tick (35.6,8.7) door stall on the post-rescue west-lawn leg, and the exit-lawn #16 post-kill volley; follow-up real-health-00agent-02-03-3"]
 fn walk_the_full_route_and_complete_every_objective_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(3));
 }
