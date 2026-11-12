@@ -23,7 +23,7 @@ if (Test-Path $Out) { Remove-Item -Recurse -Force $Out }
 New-Item -ItemType Directory -Force $Out | Out-Null
 
 $notices = Join-Path $Out "THIRD_PARTY_NOTICES.txt"
-& python -I (Join-Path $PSScriptRoot "notices.py") $ws $notices movies
+& python -I (Join-Path $PSScriptRoot "notices.py") $ws $notices "movies,gamepad"
 if ($LASTEXITCODE -ne 0) { throw "notices failed" }
 
 $env:NF_RELEASE_VERSION = $Version
@@ -34,7 +34,7 @@ $env:CARGO_TARGET_DIR = $Target
 # runtime, and a stray DLL of that name beside it (often Downloads) must not load into us. The other hijack-prone
 # imports are delay-loaded (crates/nf-view/build.rs); check-imports.py verifies the result.
 $env:RUSTFLAGS = "-C target-feature=+crt-static"
-& cargo build --release -p nf-view --bins --features movies --manifest-path (Join-Path $ws "Cargo.toml")
+& cargo build --release -p nf-view --bins --features "movies,gamepad" --manifest-path (Join-Path $ws "Cargo.toml")
 $code = $LASTEXITCODE
 Remove-Item Env:NF_RELEASE_VERSION, Env:NF_GIT_HASH, Env:NF_NOTICES_FILE, Env:RUSTFLAGS
 if ($code -ne 0) { throw "cargo build failed" }
