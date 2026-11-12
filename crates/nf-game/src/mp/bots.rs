@@ -5758,6 +5758,26 @@ mod brain_tests {
     /// carries (see `can_backoff`)]: a wall 2.0 behind blocks a speed-2 bot (2.34) and not a
     /// speed-1 bot (1.8); a wall 0.45 behind blocks; the movement lock refuses [M :60]; the anim
     /// gate reads the weapon's anim set into the disc block ([`ANIM_STATE4_TABLE`]).
+    /// The sight cone faces where the bot faces: the brain's yaw is the (cos, sin) stand-in its aim
+    /// turns use (`atan2_approx(dz, dx)`), so an opponent 10 u straight ahead scores the cone's
+    /// full ≥ 0.7 at EVERY heading [M DroneVision_OpponentVisibility 0x175af0: 0.7 band, ±(π/2 +
+    /// 0.3927) cone], and one straight behind scores 0. (The swapped-order bearing read the cone
+    /// mirrored: a bot looking right at its opponent missed it at most headings.)
+    #[test]
+    fn sight_cone_faces_the_way_the_bot_faces() {
+        let mut r = floor_rig(true);
+        for k in 0..16 {
+            let yaw = -std::f32::consts::PI + k as f32 * std::f32::consts::PI / 8.0;
+            r.brain.yaw = yaw;
+            let p = r.brain.pos;
+            let at = |d: f32| OtherPlayer { index: 1, pos: [p[0] + crate::trig::cosf(yaw) * d, p[1], p[2] + crate::trig::sinf(yaw) * d], alive: true, team: 0, flags: 0, dist2: 0.0, health: 100.0, score: 0.0, yaw: 0.0 };
+            let ahead = r.brain.opponent_visibility(&at(10.0));
+            assert!(ahead >= 0.7, "yaw {yaw:.3}: an opponent straight ahead scores {ahead:.3} (< 0.7)");
+            let behind = r.brain.opponent_visibility(&at(-10.0));
+            assert_eq!(behind, 0.0, "yaw {yaw:.3}: an opponent straight behind is outside the cone");
+        }
+    }
+
     #[test]
     fn can_backoff_probe_is_18_times_the_mul() {
         let mut r = floor_rig(true);
