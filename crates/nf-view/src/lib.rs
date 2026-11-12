@@ -6939,7 +6939,11 @@ impl App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.gfx.is_some() { return; }
-        let window = Arc::new(el.create_window(Window::default_attributes().with_title("nf-view")).expect("create window"));
+        // Port-only: the saved fullscreen choice (Alt+Enter toggles it; settings::display_path).
+        let full = settings::display_path().is_some_and(|p| settings::display_fullscreen_at(&p));
+        let attrs = Window::default_attributes().with_title("nf-view")
+            .with_fullscreen(full.then_some(winit::window::Fullscreen::Borderless(None)));
+        let window = Arc::new(el.create_window(attrs).expect("create window"));
         let (instance, surface) = gpu_instance(Some(&window));
         let surface = surface.expect("create surface");
         let (adapter, device, queue) = pollster::block_on(device(&instance, Some(&surface))).expect("GPU device");
@@ -7083,6 +7087,24 @@ impl ApplicationHandler for App {
             },
             // No manual-aim mode with the mouse (PLAN.md D-002): the mouse aims directly; `aiming` stays for a pad.
             WindowEvent::KeyboardInput { event, .. } => if let PhysicalKey::Code(k) = event.physical_key {
+                // Port-only: Alt+Enter toggles borderless fullscreen and remembers it
+                // (display.toml). Alt is tracked here; the toggle press never reaches the game.
+                static ALT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                if matches!(k, KeyCode::AltLeft | KeyCode::AltRight) {
+                    ALT.store(event.state == ElementState::Pressed, std::sync::atomic::Ordering::Relaxed);
+                }
+                if matches!(k, KeyCode::Enter | KeyCode::NumpadEnter) && ALT.load(std::sync::atomic::Ordering::Relaxed) {
+                    if event.state == ElementState::Pressed && !event.repeat {
+                        if let Some(g) = self.gfx.as_ref() {
+                            let on = g.window.fullscreen().is_none();
+                            g.window.set_fullscreen(on.then_some(winit::window::Fullscreen::Borderless(None)));
+                            if let Some(p) = settings::display_path() {
+                                if let Err(e) = settings::save_display_fullscreen_at(&p, on) { eprintln!("[display] {e}"); }
+                            }
+                        }
+                    }
+                    return;
+                }
                 // headless-app-harness: the whole arm moved into `App::app_key` (no winit
                 // objects beyond the plain KeyCode/ElementState data). true = the app asks
                 // to exit (the bare viewer's un-grabbed Esc — the old `el.exit()` arm).
