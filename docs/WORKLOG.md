@@ -38,3 +38,7 @@ reds are the drawn-gait class [M 0x149f88]: 01 x4, 05 d3 (the ambush pair closes
 crates/*/src change. METHOD: post-merge binaries must be re-checked by mtime — the first
 round ran the previous session's stale binaries and "passed" 01/08/13 wrongly. Left: the
 per-test re-tunes (the report's ledger), the 0c family re-run on the merged tree, the suite.
+
+## level-0a-civilian-slide-cels-4
+
+Branch `s/level-0a-civilian-slide-cels-4` = origin/s/level-0a-civilian-slide-cels-3 c82052ad4 merged with origin/master (clean merge). Task: land the portal drawn gate — the walks the gait shift moved, per the -3 report's ledger. Order: (1) walkreal_07000001_live's exit family (one walk, 4 tests: route around the RESTART LoadPointActivator at (-24.06, 6.46, 7.99), the hall doorway stands #10/#14/#15, keep the contact alive); (2) the two that may be more than a re-tune: 08 agent (live-wire hurt volume at (112.98, 13.47, -177.50) the old path avoided — why does the route change, a guard pushing Bond?), 11 base real-damage (AIRBORNE wedge at (21.51, 48.03, 15.89) near door (20.0, 46.8, 16.6) — check whether a walking guard / door contact pushes Bond, name the arm); (3) 05 d3, 13, 15 agent, 11 sisters. Real input only, never lower damage; unwinnable walks get #[ignore] naming a task, no more than three. Suite with tools/test/suite.py in the background, run to completion.
