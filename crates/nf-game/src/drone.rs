@@ -19442,47 +19442,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.sky_frame();
     }
 
-    /// The collide phase's DeltaP, drone against drone [M Drone_CollisionHandler 0x140968:204-208 +
-    /// Collide_Intersect 0x1ebaa8:353-373]: when the 0x800 capsule's contact list (obj+0xD0) is
-    /// non-empty the handler adds the pass's DeltaP (ext+0x3e0, the HITTEST+0x10 copy the collide
-    /// step wrote) to obj+0x30 — a drone whose capsule overlaps another body is PUSHED OUT to the
-    /// contact distance in the same tick, never left standing inside it. The port had no
-    /// drone-vs-drone arm at all: a guard routed onto a peer stood inside his capsule, and the
-    /// fight geometry diverged from the game's (07000001's escort held past the courtyard shoji
-    /// instead of at it, then killed by a hall guard's crossfire —
-    /// fix_mission_live::the_07000001_exit_works_end_to_end red on the merged tree, green with the
-    /// near_peers tier off). The capsule is the collide radius 0.4 [M NDrone2_Collision
-    /// 0x140e90:91-93, `+0x45c` = 0.4 for the standard guard], the y band 2.0 [M 0x140e90:91-121's
-    /// standing-body read]; the class-2 gate is the near_peers fold (present ∧ enabled ∧
-    /// non-corpse ∧ health > 0). The player keeps the ported standing-body rule (0x140e90) — not
-    /// double-pushed here. The law is the game's on every level; the set grows one level at a time
-    /// with its walks re-run (the door_leaf_slide / leaf_press precedent) — 07000001 first, the
-    /// level this task re-greened.
-    fn contact_pushout(&mut self, level: u32) {
-        if !matches!(level, 0x0700_0001) { return; }
-        let n = self.list.len();
-        for i in 0..n {
-            let i_ok = { let dr = &self.list[i]; dr.present && dr.enabled && !dr.corpse && dr.health > 0.0 };
-            if !i_ok { continue; }
-            for j in 0..n {
-                if j == i { continue; }
-                let (opx, opy, opz, j_ok) = { let o = &self.list[j];
-                    (o.pos[0], o.pos[1], o.pos[2], o.present && o.enabled && !o.corpse && o.health > 0.0) };
-                if !j_ok { continue; }
-                let dx = self.list[i].pos[0] - opx;
-                let dy = self.list[i].pos[1] - opy;
-                let dz = self.list[i].pos[2] - opz;
-                let d2 = dx * dx + dz * dz;
-                if d2 >= 0.64 || dy.abs() >= 2.0 { continue; }
-                let dist = d2.sqrt();
-                let (nx, nz) = if dist > 1e-4 { (dx / dist, dz / dist) } else { (1.0, 0.0) };
-                let push = 0.8 - dist;
-                self.list[i].pos[0] += nx * push;
-                self.list[i].pos[2] += nz * push;
-            }
-        }
-    }
-
     /// The frame's `View_DrawSky` pair (Game_Draw, after the update): the thunder countdowns —
     /// a 2-D `Sound_Play(100, 0x5d)` (0x5e after a reflicker roll) when one leaves 1
     /// [M 0x1e5ad0:100-109]. Only slots with a flash variant run the timers (0700000a/0700000b's
@@ -24700,10 +24659,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // :122; 0x112730:210, :219]. Applied AFTER `update`, so the next frame's SeenAndAttacking
         // pass sees them — the game's frame order (the drone pass precedes 0x114e70).
         for w in self.music.gate_writes.drain(..) { self.attack_gate.apply(w); }
-        // The collide phase's DeltaP (the contact pushout above) runs here — after the movement
-        // walk, before the next tick's AI snapshots read positions (the game's own order: Control
-        // moves, the collide pass resolves, the next tick's AI reads the resolved positions).
-        self.contact_pushout(d.level);
         // The drone-contact pass ([M Break_Update 0x12bfd8:23-34]: class-2 contacts damage kind-2
         // breakables by the squared step × 20, on 07000001 only). The kills join the view queue;
         // Break_Kill 0x12b970:75 plays the kill sound inline (the same presentation the bullet
