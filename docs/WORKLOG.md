@@ -34,3 +34,14 @@ differ (red test first), then un-ignore walkreal_07000006_live::the_castle_chat_
 chatting_and_breaks_off_when_alerted (legs, state-0x36 asserts, burst break-off written).
 Real input only, no top-ups, never lower damage or health. Run walkreal_07000006_live whole and
 interactables_07000006_live.
+
+## guard-castle-chat-gate-2 (2026-11-12T03:52Z, branch s/guard-castle-chat-gate-2)
+
+- Claimed. Base: origin/s/guard-castle-chat-gate (bf162d825). The duplicate fns the driver
+  reported were an appension INSIDE that branch's walkreal_07000006_live.rs (its base already
+  equals master 08a276ce0) — removed the appended copies, keeping master's versions of
+  real_damage_agent / real_damage_00agent / the_wellhead; the branch's ignored chat test
+  replaced with the castle-chat-real-path green version (the 15 u watch spot: the pair holds
+  0x36 through the NIS and the legs on THIS tree too — the sight-bit fix included — and the
+  test passes: spawn 0x36, ch 0x11 up, the scripts playing, the burst breaks the chat off with
+  the un-shot guard alive).

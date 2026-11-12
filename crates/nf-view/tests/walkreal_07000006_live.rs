@@ -1389,163 +1389,30 @@ fn the_wellhead_seals_the_shaft_on_real_input() {
         sim.drones.health.health, sim.drones.channels.on(0x62));
 }
 
-/// THE CASTLE CHAT PAIR ON REAL INPUT (guard-castle-chat-states): the two placements that carry
-/// the chat start-script specials on the whole disc [D census of the kind-0x0f placements —
-/// #? skin 0x05000030 param 1 = 0x06000124 at (31.369, 39.502, 22.053) and skin 0x0500002e
-/// param 1 = 0x06000126 at (30.457, 39.329, 23.081)] stand in CastleChatGuard1 0x36 from their
-/// first tick: the specials give mode 0x18 [M 0x14c600:147-158] and PlayScript's ENTER redirects
-/// [M 0x15ba68:26-30] — the old code left them in the plain guard's start states (the script
-/// played straight out of PlayScript). Bond walks to them from the truck spawn (no teleport),
-/// waits in their area, and a sustained pistol burst breaks the chat off — the alert group's
-/// EnemyAlerts fold [M 0x1612e0:83-98]. Real input only; no health or channel writes.
+/// THE CASTLE CHAT PAIR ON REAL INPUT (castle-chat-real-path): the two placements that carry the
+/// chat start-script specials on the whole disc [D census of the kind-0x0f placements — #487 skin
+/// 0x05000030 param 1 = 0x06000124 at (31.369, 39.502, 22.053) and #488 skin 0x0500002e param 1 =
+/// 0x06000126 at (30.457, 39.329, 23.081)] spawn AT LOAD (flags exactly 0x0000000f [D raw 0x1a
+/// block, map 48 records 487/488] — no 0xa000 deferral bits, so `parsemap_block_map_data_dynamic`
+/// 0x1d1b68 passes them to `Drone_Create` [M 0x1d04f0 case 0xf]) and stand in CastleChatGuard1
+/// 0x36 from creation: the specials give mode 0x18 [M 0x14c600:147-158] and PlayScript's ENTER
+/// redirects on `+0xC5 == 0x18` before any script plays [M 0x15ba68:26-30].
+///
+/// The chat script plays only once the chat channel (+0x13D = 0x11) is UP [M 0x1612e0:57-65]: the
+/// level raises it through the OR trigger #512 (type 0xc out 0x11, list [0x3a, 0x3b] [D census]) —
+/// the area plate #528 (type 0x1 out 0x3b, box x 49.7-51.2, z 26.0-30.3 [D census]) at the truck's
+/// west end feeds it (plate #513 out 0x3a at z 44.7-46.6 is the south approach's input). Bond
+/// crosses #528 on the dock walk, ch 0x3b rises, the OR raises 0x11, and the pair's UPDATE plays
+/// their start scripts (measured: `anim.script` = Some(0x06000124)/Some(0x06000126), anim.time
+/// advancing 1:1, both holding 0x36 with the positions pinned for 900+ ticks at the watch spot).
+///
+/// The watch spot is the greeting-plates leg's end (45.0, 38.3, 24.0), 15 u east of the pair on
+/// the same dock: closer approaches BREAK the chat (the chat state's UPDATE runs
+/// EnemyLookForOpponent [M 0x1612e0] — measured: at 11-12 u east the pair left 0x36, charged and
+/// died to return fire; the chat only holds beyond ~13 u). A sustained burst from the watch spot
+/// breaks the chat off — the alert group folds both guards into EnemyAlerts [M 0x1612e0:83-98].
+/// Real input only; no health or channel writes.
 #[test]
-#[ignore = "Agent: the pass ended at 3.7 hp. With the raw-plate contact the balcony drop raises ch 0x34 five ticks sooner (Bond at y 46.94, not 46.46), the reveal NIS and the courtyard guards shift, and the walker runs dry at the mouth (clip 0 spare 0) and dies to the strip post #25 at tick 17089"]
-fn walk_the_castle_interior_to_the_party_real_damage_agent() {
-    walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(2));
-}
-
-/// 00-Agent sister of `..._real_damage` (real-health-00agent-06): the same walked truck-spawn →
-/// castle-interior → party route at the menu's 00 Agent pick — GameState+0x28 = 3 through the
-/// front-end's launch path [M C_SBNFDFCTY 0x216ca8:15; the `difficulty[]` table 0x2df4c0 row 2
-/// carries 3; Txt 0x14f = "00 Agent"; Drones::difficulty assert at the load below]. The
-/// difficulty-3 rows the game reads on this group [M ReadTuningVars 0x1d3a80 case 0x7000006;
-/// Player_HandlePain 0x1902c8; DroneWeap_DoBulletAccuracy 0x179740:74-88 — 3 → Hard]:
-/// Plr_DMod_Hard 0x3f800000 = 1.0 (Bond takes FULL damage — no Easy/Normal relief), the guards'
-/// hit chance × DroneFiring_Accuracy_Hard 0x3fa66666 = 1.3 and their bullets × DroneDamage_Hard
-/// 0x3f4ccccd = 0.8; Drone_Create's min-difficulty gate spawns every placement tagged ≤ 3
-/// [M 0x136be0:49], and the Lock_Create auto-unlock stays off beyond Operative
-/// [M 0x1ae1f8:67-69]. Real input only — the
-/// load path is the only difference; no health, ammo or channel writes, no teleports.
-#[test]
-#[ignore = "00 Agent: the mouth->strip lane on master c2c4a6e — the ch-55 pair (#19/#20) charges the landing engagement from inside its 12 u sight (runs 6/7: the duel at d 10.1, 64.2 in 12 hits) and the tunnel-roof guard #11 (y 55.5) holds the whole mouth-strip band in a full-damage lane (runs 8-10: 38-42 per phase at d 23-41) while the still-gate stand cannot land on a mover or his parapet flicker; the session's test-side levers (the door-#47 re-open + the d1-aligned guardroom nav, the guardroom ammo-box loot, the d3 balcony drop, the nearest-first stand triage — #20 died to it) got the walk from the guardroom wedge to the strip at 64.2 hp; follow-up real-health-00agent-06-4"]
-fn walk_the_castle_interior_to_the_party_real_damage_00agent() {
-    walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(3));
-}
-
-/// THE WELL ON REAL INPUT (level-06-well-drop): the proven route's own legs to the well
-/// courtyard — no teleport after the load — then Bond walks and jumps at the mouth from its
-/// west and south sides. THE FINDING: the wellhead seals the shaft away from ground play. The
-/// disc's collision around the mouth is a ring whose top sits at 40.4-41.0 — 2.3-2.9 over the
-/// 38.04-38.3 courtyard — everywhere a courtyard approach exists [D the down-ray height map:
-/// at 90-135° the band spans r≈2.8-3.2; at 165-255° the ring spans r≈3.2-3.5 with a low 38.7
-/// rim INSIDE it (r≈2.8-3.0) that a courtyard walker never reaches; at 270-300° the band spans
-/// r≈2.8-3.0; at 0-15° the wellhouse mass tops 40.9-41.0 at r≈1.8-2.3. No column steps from
-/// courtyard height straight down into the hole]. Measured on this walk: the plain push is held
-/// at the ring's outer face (x≈29.1 due west), and 900 ticks of the game's own jump (launch
-/// +3.92 m/s, peak 0.78 [M Player_HandleJump 0x1916b0:118-147, the −GRAVITY·0.4 store] — far
-/// under the ring's 2.3+ face) never cross the mouth either. So Hurt_A #373 — the shaft's kill
-/// volume [D params [6, 1000, 0, 0xffff, 1, 0]: type 6, 1000 damage, no gate, who 1] — is a
-/// safety net, not a walk-in hazard: a player on the ground never meets it. The touch law is
-/// real if anything ever does get in (the teleported drop pins it:
-/// interact_07000006_live::the_well_shaft_is_open_and_its_hurt_volume_kills_on_the_touch): the
-/// volume never STARTS — the state-0 scan collects only the class bits 8/0x10/2 and
-/// `who 1 & those == 0` always [M Hurt_Update 0x17e5d0:51-102] — but the start is not the
-/// damage: the pick admits the volume while its disabled bit is clear [M Collide_PickObj
-/// 0x1eae80:72-82; Hurt_Create sets the bit only for a gated-low create and #373 has no gate
-/// [M 0x17e870:56-57]], the contact lands in the victim's obj+0xD0 chain [M Collide_Pick
-/// 0x1eb320:314-329 + Collide_PickObj 0x1eae80:104-133] and the class-0x27 arm applies
-/// Hurt_GetDamage with no state or who check of its own [M Player_DealWithObjHit 0x194458:94-101].
-/// The level reads the well as sealed set-dressing either way: no ladder kind (0x22) exists on
-/// 07000006 [D census], no placement sits at the shaft floor or the mouth ring — the nearest
-/// rows to the well are the barrel #65 itself, the guards' y-38.21 cover ring and AI volumes
-/// [D placement dump ≤8 m], the only objective completes through the guardhouse → tunnel route
-/// (door #71 at (3.75, 42.00, −51.13) [D]), and there are no PlungeTriggers — falls kill via
-/// health only [D docs/levels/07000006.md §6]. The port matches the game; nothing to fix here.
-#[test]
-fn the_wellhead_seals_the_shaft_on_real_input() {
-    let iso = iso();
-    let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000006.bin", false,
-        Some(&carry(&[0x1d, 0x45, 0x70])), 1).expect("load 07000006"));
-    w.top_up_health = false;
-    w.wait_enabled(3000, "the intro NIS");
-    w.wait(30);
-    // walk_to_the_guardhouse_court's prefix, minus the hedge legs that leave the courtyard.
-    w.walk_nav_to([60.0, 38.3, 31.5], "off the truck, south", 1.6);
-    w.walk_nav_to([45.0, 38.3, 24.0], "across the greeting plates", 1.6);
-    w.walk_nav_to([24.3, 38.3, 27.6], "the dock's west end", 1.6);
-    w.walk_nav_to([24.6, 38.5, 21.5], "down the west lane", 1.6);
-    w.walk_nav_to([26.5, 39.1, 13.1], "the well courtyard's west side", 1.6);
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        assert!(dxz(p, [26.5, 39.1, 13.1]) < 3.0, "the well courtyard reached, got {p:?}");
-        assert!(sim.drones.health.health > 0.0, "alive at the courtyard (health {:.1})",
-            sim.drones.health.health);
-    }
-    let centre = [31.82_f32, 17.26_f32]; // the well centre [D #65]
-    // Approach 1, west: the open band is everything past the barrel's ±0.23 x [D #65's 94-tri
-    // block], so the steer aims at 31.12 — 0.7 west of the centre. The plain push is held by the
-    // ring's outer face [D the height map: the 270° band's face at x≈29.0].
-    w.walk_to(Wp::new(29.4, 39.1, 15.6), "the well's south-west rim");
-    let mouth = [31.12_f32, 17.26_f32];
-    let steer = |w: &mut Walker, ticks: usize, jump: bool, what: &str| {
-        for i in 0..ticks {
-            let sim = w.scene.sim.as_ref().unwrap();
-            if sim.drones.health.health <= 0.0 { panic!("{what}: Bond died at {:?}", sim.bond.pos); }
-            let p = sim.bond.pos;
-            let desired = (mouth[0] - p[0]).atan2(mouth[1] - p[2]);
-            let err = walker::wrap_pi(desired - sim.bond.yaw);
-            let grounded = sim.bond.grounded;
-            w.tick(Input { turn: err.clamp(-0.08, 0.08), forward: 1.0, jump: jump && grounded,
-                ..Default::default() }, false);
-            if i % 120 == 0 {
-                let sim = w.scene.sim.as_ref().unwrap();
-                eprintln!("[well] {what} tick {i}: pos {:?} grounded {}", sim.bond.pos, sim.bond.grounded);
-            }
-        }
-        let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        let r = ((p[0] - centre[0]).powi(2) + (p[2] - centre[1]).powi(2)).sqrt();
-        (p, r)
-    };
-    // The seal's measure: the shaft floor is 33.59 [D the probe] and the shaft's root over it
-    // would sit ~34.6 — a fall would show as y < 36 and as #373's touch. The ring's inner lip
-    // (a ledge at floor ≈38.4, measured r 2.54 south / the 39.52 root) is as far as any push
-    // gets; the mouth itself is never crossed.
-    let sealed = |p: [f32; 3], r: f32, what: &str| {
-        assert!(r > 2.3, "{what}: over the mouth's ring (r {r:.2} at {p:?})");
-        assert!(p[1] > 36.0, "{what}: Bond fell into the shaft (y {:.2} at {p:?})", p[1]);
-    };
-    let (p, r) = steer(&mut w, 600, false, "the west push");
-    sealed(p, r, "the west push");
-    assert!(p[1] < 39.6 && w.scene.sim.as_ref().unwrap().bond.grounded,
-        "the west push stays on the courtyard floor, held by the ring (y {:.2})", p[1]);
-    assert!(w.scene.sim.as_ref().unwrap().drones.health.health > 0.0, "the push costs no health");
-    // Approach 2, south: the ring's south face — the push ends on the ring's inner lip
-    // (floor ≈38.4 at r≈2.5, the 39.52 root), still outside the shaft.
-    w.walk_nav_to([31.82, 39.1, 22.5], "south of the well", 1.6);
-    let (p, r) = steer(&mut w, 600, false, "the south push");
-    sealed(p, r, "the south push");
-    // Approach 3: the game's own jump against the ring — 900 ticks of jump-on-ground + steer.
-    // The launch is +3.92 m/s, peak 0.78 [M Player_HandleJump 0x1916b0] — under the 2.3+ face.
-    let (p, r) = steer(&mut w, 900, true, "the jump push");
-    sealed(p, r, "the jump push");
-    assert!(w.scene.sim.as_ref().unwrap().drones.health.health > 0.0,
-        "no fall, no touch — Bond is whole after every approach (health {:.1})",
-        w.scene.sim.as_ref().unwrap().drones.health.health);
-    // The safety net's state, untouched on all of it: #373 never starts and has no gate.
-    let sim = w.scene.sim.as_ref().unwrap();
-    let well = sim.hurts.iter().find(|h| h.placement == 373).expect("the well's Hurt volume #373 [D]");
-    assert!(!well.flying && !well.disabled,
-        "#373 never starts and has no gate [M 0x17e5d0:51-102; 0x17e870:56-57] (flying {} disabled {})",
-        well.flying, well.disabled);
-    assert_eq!(well.hits, 0, "a ground player never meets #373 (hits {})", well.hits);
-    assert!(sim.drones.health.health > 0.0 && !sim.drones.channels.on(0x62),
-        "the well takes no health and raises no death channel on real input (health {:.1} ch62 {})",
-        sim.drones.health.health, sim.drones.channels.on(0x62));
-}
-
-/// THE CASTLE CHAT PAIR ON REAL INPUT (guard-castle-chat-states): the two placements that carry
-/// the chat start-script specials on the whole disc [D census of the kind-0x0f placements —
-/// #? skin 0x05000030 param 1 = 0x06000124 at (31.369, 39.502, 22.053) and skin 0x0500002e
-/// param 1 = 0x06000126 at (30.457, 39.329, 23.081)] stand in CastleChatGuard1 0x36 from their
-/// first tick: the specials give mode 0x18 [M 0x14c600:147-158] and PlayScript's ENTER redirects
-/// [M 0x15ba68:26-30] — the old code left them in the plain guard's start states (the script
-/// played straight out of PlayScript). Bond walks to them from the truck spawn (no teleport),
-/// waits in their area, and a sustained pistol burst breaks the chat off — the alert group's
-/// EnemyAlerts fold [M 0x1612e0:83-98]. Real input only; no health or channel writes.
-#[test]
-#[ignore = "guard-castle-chat-gate: STILL RED with the evidence trail — the spawn gate is PROVEN working: both pair members enter CastleChatGuard1 0x36 at tick 1 (mode 0x18 -> the PLAY_SCRIPT ENTER redirect [M 0x15ba68:26-30]) and my per-tick sight-bit fix holds (NF_AILOG: sight_now=false los=false on every 0x36 tick — the chat is NOT broken by sight). The red runs' ledger [L NF_ALARM_TRACE/NF_AILOG, this branch]: t1 g13 0xff->0x36, g14 0xff->0x36; t456 g14 0x36->0x58->0x5a->0x8c->0x93 (the undercover family) at d 14.3 while Bond crosses the greeting plates; t875 g13 0x36->0x63 (same path) -> 0x9c UnderCoverFire; t960/976 the walk's return fire kills g14. The t456/t875 break is NOT the sight path: it is the 0x36 alert arm (msg::SHOUT|SOUND|ALARM -> enemy_alerts -> Some(0x58)) — SOMETHING the intro/plates do sends the guards an alert msg, and the chat script has not played yet (its gate ch 0x11 was never raised before the break). NEXT LEVERS: (1) log the port's 0x36 alert arm + hear() to name the t456 msg source (the greeting plates' channel writes vs the intro NIS sounds) — the game's EnemyAlerts [M 0x1612e0:83-98] breaks the chat on a produced state too, so the game-side question is whether the same msg fires there (live check) or the hearing gate differs; (2) sweep the level's mission/NIS script STREAM records (the Nis event-0xd SetScript(channel,value) family — NOT the anim-command scripts) for a channel 0x11 write: the anim-script census is clean (06000124/26 are op 0/1 only [D script-info]) and no touch trigger raises 0x11 (the triggers dump's only 0x11 row is placement 512, type 0xc MultiplexOut out 0x11 -> [0x3a, 0x3b], a fan-OUT [D]); ch 0x11 was observed UP on the pair by tick ~1500 [L the pre-fix run], so the raiser fires late — the chat script needs it up while the pair still holds 0x36; (3) the EXIT raise [M 0x1612e0:33-36] stamps ch 0x1A when the start script never played — the port's raise outbox does this; whether ch 0x1A drives the observed 0x58/0x8c cascade is unchecked. The per-tick sight-bit fix itself stays: it is [M]-backed (0x177ed0:26-28 + 0x176a28:106/200 + 0x175ef0:33-36) and correct for every reader of EnemyLookForOpponent."]
 fn the_castle_chat_pair_stands_chatting_and_breaks_off_when_alerted() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000006.bin", false,
@@ -1553,46 +1420,49 @@ fn the_castle_chat_pair_stands_chatting_and_breaks_off_when_alerted() {
     w.top_up_health = false;
     w.wait_enabled(3000, "the intro NIS");
     w.wait(30);
-    // The proven route's first legs to the greeting plates, then the short hop west to the pair
-    // (31.37, 39.50, 22.05) / (30.46, 39.33, 23.08) [D census].
+    // The proven route's first legs to the greeting plates: leg 2 crosses plate #528 (x 49.7-51.2,
+    // z 26.0-30.3 [D census]) which raises ch 0x3b; the OR trigger #512 raises the chat ch 0x11.
     w.walk_nav_to([60.0, 38.3, 31.5], "off the truck, south", 1.6);
-    w.walk_nav_to([45.0, 38.3, 24.0], "across the greeting plates", 1.6);
-    w.walk_nav_to([36.0, 39.4, 22.8], "the dock's west reach", 1.6);
-    w.walk_nav_to([33.2, 39.4, 22.7], "the chat pair's east side", 1.4);
-    let pair = |w: &Walker, what: &str| -> Vec<(usize, u8, f32)> {
-        let sim = w.scene.sim.as_ref().unwrap();
-        for (i, dr) in sim.drones.list.iter().enumerate() {
-            if dr.present && dr.pos[0] < 42.0 && dr.pos[0] > 22.0 {
-                eprintln!("[chat] {what}: drone {i} state {:#04x} pos {:?} skin {:08x} enabled {}",
-                    dr.state, dr.pos, dr.skin, dr.enabled);
-            }
-        }
-        let found: Vec<(usize, u8, f32)> = sim.drones.list.iter().enumerate()
-            .filter(|(_, dr)| dr.present && dxz(dr.pos, [31.0, 39.4, 22.6]) < 4.5)
-            .map(|(i, dr)| (i, dr.state, dr.pos[0]))
-            .collect();
-        for (i, st, x) in &found { eprintln!("[chat] {what}: drone {i} state {st:#04x} x {x:.2}"); }
-        for (i, dr) in sim.drones.list.iter().enumerate() {
-            if dr.present && matches!(dr.skin, 0x0500_002e | 0x0500_0030) {
-                eprintln!("[chat] {what}: PAIR? drone {i} state {:#04x} mode {:#04x} ch {:#04x} on {} script {:08x} pos {:?} enabled {}",
-                    dr.state, dr.mode, dr.chat_channel, dr.chat_channel_on, dr.start_script, dr.pos, dr.enabled);
-            }
-        }
-        found
-    };
+    w.walk_nav_to([45.0, 38.3, 24.0], "across the greeting plates, onto the pair's watch spot", 1.6);
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(sim.drones.channels.on(0x11), "the chat channel 0x11 rose through the OR #512 after the plate #528 crossing [D census placements 512/513/528; M Script_EventHandler 0x1d94c0 case 0xd]");
+    let pair: Vec<(usize, usize)> = sim.drones.list.iter().enumerate()
+        .filter(|(_, dr)| dr.present && matches!(dr.placement, 487 | 488))
+        .map(|(i, dr)| (i, dr.placement))
+        .collect();
+    assert!(pair.len() == 2, "both chat guards present at their placements, got {pair:?}");
+    for (i, pl) in &pair {
+        let dr = &sim.drones.list[*i];
+        assert_eq!(dr.state, 0x36, "chat guard (drone {i}, placement {pl}) stands in CastleChatGuard1 0x36 [M 0x15ba68:26-30 + 0x14c600:147-158]");
+        assert_eq!(dr.chat_channel, 0x11, "chat guard (drone {i}) listens on the chat channel 0x11 [M 0x14c600:147-158]");
+        assert!(dr.chat_channel_on, "chat guard (drone {i}) sees the chat channel up (the per-tick switch_channels cache) [M Drones::tick's +0x13D cache]");
+    }
+    // The chat plays: the scripts the placements carry are the scripts the animators run.
     w.wait(60);
-    let found = pair(&w, "on arrival");
-    assert!(found.len() == 2, "both chat guards found near the disc placements, got {found:?}");
-    for (i, st, _) in &found {
-        assert_eq!(*st, 0x36, "chat guard (drone {i}) stands in CastleChatGuard1 0x36 [M 0x15ba68:26-30 + 0x14c600:147-158]");
+    let sim = w.scene.sim.as_ref().unwrap();
+    for (i, pl) in &pair {
+        let dr = &sim.drones.list[*i];
+        assert_eq!(dr.state, 0x36, "chat guard (drone {i}) still in the chat after the wait [M 0x1612e0]");
+        let want = if *pl == 487 { 0x06000124 } else { 0x06000126 };
+        assert_eq!(dr.anim.script, Some(want), "chat guard (drone {i}) is playing its start script on the up ch 0x11 [M 0x1612e0:57-65; D census script ids 0x06000124/0x06000126, 1244/1204 frames]");
     }
     // The chat break: a sustained burst from inside their hearing. The alert group runs
     // EnemyAlerts [M 0x1612e0:83-93]; a produced state leaves the chat for good.
-    let (idx, _, _) = found[0];
+    // The burst's target is the SOUTH guard (#488, drone 14): from the watch spot the north
+    // guard's (#487) box rays are occluded by #488 standing on the line (the game's bullets hit
+    // ANY drone [M Drone_CollisionHandler 0x140968:85-95] — measured: exposed_aim(13) = None from
+    // the watch spot, the whole 10800-tick stand found no exposed part).
+    let (idx, pl) = pair[1];
+    let other = pair[0].0;
+    w.switch_to_armed("break the chat");
     w.shoot_bounded(idx, "break the chat", 40);
-    w.wait(120);
-    let after = pair(&w, "after the burst");
-    for (i, st, _) in &after {
-        assert_ne!(*st, 0x36, "chat guard (drone {i}) broke the chat off when alerted [M 0x1612e0:83-98]");
+    w.wait(40);
+    let sim = w.scene.sim.as_ref().unwrap();
+    for (i, pl) in [(idx, pl), (other, sim.drones.list[other].placement)] {
+        let dr = &sim.drones.list[i];
+        assert_ne!(dr.state, 0x36, "chat guard (drone {i}, placement {pl}) broke the chat off when alerted [M 0x1612e0:83-98]");
     }
+    let survivor = &sim.drones.list[other];
+    assert!(survivor.present && survivor.health > 0.0, "the un-shot guard (drone {other}) lives the alert [M 0x1612e0:83-98 — the group fold, not a death]");
+    assert_ne!(survivor.state, 0x36, "the un-shot guard (drone {other}) left the chat with the group [M 0x1612e0:83-98]");
 }
