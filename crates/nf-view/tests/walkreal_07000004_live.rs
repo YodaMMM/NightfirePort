@@ -162,6 +162,15 @@ fn walk_the_full_mission_start_to_finish_at(difficulty: u32) {
             "the take raised armour from 0 to 50 [M 0x18e650:220-225]; the settled assassin's bullet-type pain may chip it on the walk (48.5 measured) — the raise itself is the [M] claim");
     }
     }
+    // 00 Agent takes the body armour first (+50 [M 0x18e650:220-225]): since the cut-scene hand-back
+    // reaches the drones on the release tick (handback-opp-info), the assassin flips AWAY and throws
+    // from 4-6 u like the game [L PCSX2 07000004 d1 trace] instead of landing beside Bond, and on
+    // 00 Agent her ranged hits (Plr_DMod_Hard 1.2) win the straight trade. A player grabs the
+    // armour case 16 u away first. Real input only.
+    if difficulty >= 3 {
+        let armour = w.scene.sim.as_ref().unwrap().drones.pickups.iter().find(|p| p.kind == 3 && !p.gone).map(|p| p.start);
+        if let Some(a) = armour { w.walk_nav_to(a, "the armour pickup (00 Agent)", 0.4); }
+    }
     // The assassination: walk back to the target and kill him with the player's own fire path.
     let target_i = w.scene.sim.as_ref().unwrap().drones.list.iter()
         .position(|d| d.skin == 0x0500_001e).expect("the target drone exists");

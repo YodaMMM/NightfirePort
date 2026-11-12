@@ -12383,6 +12383,19 @@ impl Drone {
     /// and re-runs it from `DroneWeap_NextBulletTime` 0x179d40:130 before every shot) into `+0x210`, the
     /// AI's aim point. The port stands in the player's own aim target snapshot (`Player.target`, [S fold
     /// documented in docs/systems/drone2-helpers.md]).
+    /// `opponent_info` against Bond at `pos` — the cut-scene hand-back spot `Player_Enable` put him at
+    /// earlier in this tick's walk [M Script_Free 0x1da880:44-48 → 0x195498], before the view applies
+    /// the move. The aim point and Bond's facing are the snapshot's (the hand-back sets the facing too,
+    /// but nothing on the release tick reads `opp_facing` before the next tick's pass).
+    fn opponent_info_at(&mut self, p: &Player, pos: V3) {
+        let dx = pos[0] - self.pos[0];
+        let dz = pos[2] - self.pos[2];
+        let dy = pos[1] - self.pos[1];
+        self.dist = (dx * dx + dy * dy + dz * dz).sqrt();
+        self.yaw_to_opp = atan2_approx(dx, dz);
+        self.opp_target = p.target;
+    }
+
     fn opponent_info(&mut self, p: &Player) {
         let dx = p.pos[0] - self.pos[0];
         let dz = p.pos[2] - self.pos[2];
@@ -22370,6 +22383,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let dr = &mut self.list[index];
             if !dr.present { continue; }
             if dr.spawn_frame == frame { continue; }   // spawned this tick: the game's walk already passed it
+            // handback-opp-info: `Drone_GetOpponentInfo` runs inside each drone's own control func at its
+            // place in the walk [M 0x138f68 from ControlSTANDARD 0x1490f0], so a drone the walk reaches
+            // AFTER the script that ended a cut-scene (`Script_Free` → `Player_Enable` moves Bond to the
+            // hand-back marker and `Drone_EnableAll(1)` wakes the drones, one call) reads Bond at the marker.
+            // The port's pre-pass read the pre-scene Bond: 07000004's ninja then ran 0xa9's MoveToObject at
+            // Bond's intro spot and the backflip turned toward him [L PCSX2 d1: the game's ninja reads
+            // distance 1.25 on its first update and flips straight back, yaw unchanged].
+            if dr.enabled && dr.team != 2 && self.player_pos != player.pos { dr.opponent_info_at(player, self.player_pos); }
             if dr.target.stamp != self.target.stamp { dr.target = self.target.clone(); }
             dr.channel_on = self.channels.on(dr.switch_channel as u32);
             dr.wait_channel_on = dr.wait_channel != 0 && self.channels.on(dr.wait_channel as u32);

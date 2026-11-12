@@ -236,3 +236,33 @@ fn a_flip_holds_its_heading() {
         stand_by(&mut w, ni, 5.0);
     }
 }
+
+/// handback-opp-info: the intro's release reaches the assassin with Bond at the hand-back spot.
+/// [L PCSX2 07000004 d1, drone 0x1b45420]: she holds 0xa9 through the intro; one frame after the
+/// `Drone_EnableAll(1)` her distance reads 1.25 (Bond at (-3.87, 5.46, 30.30)) and she goes
+/// straight to the backflip 0xae with obj+0x54 unchanged at -1.572, landing EAST at
+/// (1.76, 5.31, 30.09) [the 30-frame trace]. The port used to read the pre-scene Bond (11.88 u),
+/// run 0xa9's MoveToObject toward his intro spot and turn the flip WEST, onto Bond (-5.50, 28.15).
+#[test]
+fn the_release_reads_the_hand_back_bond_and_she_flips_away() {
+    let iso = iso();
+    let mut scene = nf_view::load_with_carry_difficulty(&iso, "07000004.bin", false, None, 1).expect("load 07000004");
+    let mut first: Option<(u8, f32, f32)> = None;
+    let mut landed = None;
+    for _ in 0..1600u32 {
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+        let sim = scene.sim.as_ref().unwrap();
+        let n = sim.drones.list.iter().find(|d| d.present && d.dtype == 0xf).expect("the assassin [D]");
+        if first.is_none() && n.state != 0 { first = Some((n.state, n.dist, n.yaw)); }
+        if first.is_some() && landed.is_none() && n.state != kiko::NINJA_BACKFLIP { landed = Some(n.pos); }
+    }
+    let (st, dist, yaw) = first.expect("the assassin wakes after the intro");
+    eprintln!("[04] first update: state {st:#x} dist {dist:.2} yaw {yaw:.3}; landed {landed:.2?}");
+    assert_eq!(st, kiko::NINJA_BACKFLIP, "her first update after the release is the backflip, like the game [L]");
+    assert!((dist - 1.25).abs() < 0.2, "she reads Bond at the hand-back spot: dist {dist} (game 1.25, pre-scene Bond 11.88) [L]");
+    assert!((yaw + 1.572).abs() < 0.05, "the flip keeps her heading: yaw {yaw} (game -1.572) [L; M 0x16d430 sets no angle]");
+    let p = landed.expect("the flip ends");
+    assert!(p[0] > 1.0 && (p[2] - 30.08).abs() < 0.6, "she lands east, away from Bond: {p:?} (game (1.76, 30.09)) [L]");
+    // Sister: the pre-fix landing spot fails this pin.
+    assert!(!([-5.50f32, 5.34, 28.15][0] > 1.0), "the old west landing is rejected");
+}
