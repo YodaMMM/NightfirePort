@@ -89,14 +89,19 @@ pub fn with_strip_p2k_shot<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 thread_local! {
-    /// los-mask-repins-0c-3 (OPT-IN, set ONLY by walkreal_0700000c_live's real_damage sister):
+    /// los-mask-repins-0c-3 (OPT-IN, set by walkreal_0700000c_live's real_damage sister and,
+    /// level-0a-civilian-slide-cels-2, by walkreal_0700000c_eastroute_live's ground route):
     /// the post-#282-ride thin-floor legs get the real-damage tree's own mid-ledge stops. The
     /// fights' RNG draws shift every guard/round draw downstream, so the real-damage tree's
     /// ride lands at its own spot ((4.9831,−223.2948) [L this round's run] vs the plain run's
     /// (4.9688,−223.3107)) and the plain tree's single long "the ledge to the arc" leg then
     /// overshoots its arrival circle off the ledge's east edge — the measured fall to y 2.01
     /// at (8.99,−222.09) at +114 ticks (the walk_to arrival check is dxz-only, so it read
-    /// "arrived" MID-FALL and the next leg started from the yard floor [L the run]). The fix
+    /// "arrived" MID-FALL and the next leg started from the yard floor [L the run]). The eastroute
+    /// sister lands at the SAME shifted spot under the drawn gate's room rule (the ring patrollers
+    /// #405/#404 walk their real danim gait where the ray gate held them at the no-gait slide —
+    /// `NDrone2_DoAnimation` 0x149f88's not-drawn arm [M] — and the shifted fights shift the ride
+    /// [L the level-0a branch's run]) and hits the same fall. The fix
     /// is the 0c-2 ledger's lever: mid-ledge stops placed POST-ride (they cannot re-time the
     /// ride), breaking the long eastward runs so each arrival circle is met at walking speed.
     /// Off = master behaviour for every other caller.

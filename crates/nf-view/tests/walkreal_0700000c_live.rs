@@ -56,7 +56,17 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(difficulty: u32) {
     // prologue `walk_spawn_to_the_band` (common/walkreal0c.rs) — moved verbatim, same
     // ticks, so the eastroute test can replay the game's own route to the band instead
     // of teleporting to it.
-    let mut w = walker::walk_spawn_to_the_band_at(&iso, difficulty);
+    // level-0a-civilian-slide-cels-2 (OPT-IN `with_strip_rd_post_ride`): under the drawn gate's
+    // room rule the ring patrollers walk their real danim gait where the ray gate held them at
+    // the no-gait slide (`NDrone2_DoAnimation` 0x149f88's not-drawn arm [M]; the drawn set is
+    // the game's VisCelList pair [M 0x1e62d8:34-71]), the shifted fights land the #282 ride at
+    // the real-damage tree's own spot (4.9831,-223.2948 [L this branch's run]) and the plain
+    // single long "the ledge to the arc" leg overshoots the band's east edge into the measured
+    // fall — the arc-west-end wedge at bond (11.36,1.13,-217.52) with guard #15 in 0x5f above
+    // [L this branch's run], the same wedge the eastroute sister measured. The post-ride
+    // mid-ledge stops are that measured lever (the real_damage sister already opts in and
+    // passes); off = master behaviour for every other caller.
+    let mut w = walker::with_strip_rd_post_ride(|| walker::walk_spawn_to_the_band_at(&iso, difficulty));
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
         "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
 

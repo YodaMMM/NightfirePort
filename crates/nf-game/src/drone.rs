@@ -13104,6 +13104,39 @@ pub fn in_view_of(player: &Player, pos: V3) -> bool {
     a2 > 1e-12 && in_view(player.eye, pos, DRONE_DRAWN_SLACK, &frustum_sides(player.aim))
 }
 
+/// The drawn gate's room mask — the game's own room rule (level-0a-civilian-slide-cels).
+/// `View_AddCels` 0x1e6ba0 draws each VisCelList cel's object list: the VisCelList is what the
+/// portal walk (`Vision_Portal_Recurse` 0x1e86e8 + `Vision_Recurse` 0x1e82e0, the viewer's cel at
+/// depth 0) reached — and `View_AddObjects` 0x1e62d8:71 writes obj+0xFC = 2 only for the objects
+/// of THOSE cels whose world sphere passes `Vision_InView` 0x1e89e0 (:34). The pair holds NO rays:
+/// an object in a portal-visible cel draws even when a thin post (LaserTrackVert, mat 0x06) or
+/// non-pass foliage stands between — exactly what the bullet-ray stand-in got wrong on 0700000a.
+/// The walk is `celgraph::portal_visible_cels_from_cell_doors` from the viewer's linked cel
+/// (`player.obj_cel` — the sim's `viewer+4`), the depth-0 planes `Vision_Calculate_View_Fustrum`
+/// 0x1e7df8's five: the four side planes through the eye (the sim's `frustum_sides` normals — the
+/// same half-spaces `in_view` tests) plus the near-back plane keeping `fw·p <= fw·eye + 200` (the
+/// fog cut; gpu.rs `depth0_game` builds the same five from the render camera). The doors leg is
+/// `Vision_Recurse` 0x1e82e0:65-70's `Door_IsClosed` [M], on this tick's `Doors::closed_flags`.
+/// `None` = the walk cannot run (no portals / the viewer's cel unresolved / a zero aim): the
+/// caller keeps the bullet-ray stand-in, so the hand-built test sims and cel-less worlds see no
+/// change.
+fn drawn_room_mask(cel_graph: &crate::celgraph::CelGraph, player: &Player, door_closed: &[bool]) -> Option<Vec<bool>> {
+    if cel_graph.portals.is_empty() { return None; }
+    let start = player.obj_cel?;
+    let a2 = player.aim[0] * player.aim[0] + player.aim[1] * player.aim[1] + player.aim[2] * player.aim[2];
+    if !(a2 > 1e-12) { return None; }
+    let l = a2.sqrt();
+    let sides = frustum_sides(player.aim);
+    let mut depth0: [[f32; 4]; 5] = [[0.0; 4]; 5];
+    for (k, n) in sides.iter().enumerate() {
+        depth0[k] = [n[0], n[1], n[2], -(n[0] * player.eye[0] + n[1] * player.eye[1] + n[2] * player.eye[2])];
+    }
+    let fw = [player.aim[0] / l, player.aim[1] / l, player.aim[2] / l];
+    let fe = fw[0] * player.eye[0] + fw[1] * player.eye[1] + fw[2] * player.eye[2];
+    depth0[4] = [-fw[0], -fw[1], -fw[2], fe + 200.0];
+    crate::celgraph::portal_visible_cels_from_cell_doors(cel_graph, start, player.eye, &depth0, Some(door_closed))
+}
+
 pub fn visible_to(player: &Player, world: &CollisionWorld, pos: V3, head: V3) -> bool {
     let a2 = player.aim[0] * player.aim[0] + player.aim[1] * player.aim[1] + player.aim[2] * player.aim[2];
     if !(a2 > 1e-12) { return false; }
@@ -19498,18 +19531,32 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     }
 
     pub fn tick(&mut self, d: &Data, player: &Player) {
+        self.tick_with_cel_graph(d, player, None)
+    }
+
+    /// `tick` with the level's cel graph lent in (nf-view's `Sim::cel_graph` build clone — the same
+    /// one the renderer's `cel_visibility` walk runs): the drawn gate below then keys on the game's
+    /// own room rule — the VisCelList walk from the viewer's cel — instead of the bullet-ray
+    /// stand-in (level-0a-civilian-slide-cels). `None` (the unit-test harnesses) keeps the rays.
+    pub fn tick_with_cel_graph(&mut self, d: &Data, player: &Player, cel_graph: Option<&crate::celgraph::CelGraph>) {
         if self.hold_npcs && self.npc_enabled {
             self.npc_enabled = false;
             self.hold_active = true;
-            self.tick_inner(d, player);
+            self.tick_impl(d, player, cel_graph);
             self.hold_active = false;
             // Dev-only: a script's event 5 during a held tick is not kept (the hold already freezes them).
             self.npc_enabled = true;
             self.sky_frame();
             return;
         }
-        self.tick_inner(d, player);
+        self.tick_impl(d, player, cel_graph);
         self.sky_frame();
+    }
+
+    /// The unit-test entry (hand-built `Player`s carry no viewer cel): the drawn gate keeps the
+    /// bullet-ray stand-in for every drone — the pre-level-0a behaviour, byte for byte.
+    pub fn tick_inner(&mut self, d: &Data, player: &Player) {
+        self.tick_impl(d, player, None)
     }
 
     /// The frame's `View_DrawSky` pair (Game_Draw, after the update): the thunder countdowns —
@@ -19629,7 +19676,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
     }
 
-    fn tick_inner(&mut self, d: &Data, player: &Player) {
+    // (tick_impl — the former tick_inner, with the cel-graph lent room walk; the entry points sit above.)
+    fn tick_impl(&mut self, d: &Data, player: &Player, cel_graph: Option<&crate::celgraph::CelGraph>) {
         // The game's walk reaches the drones after the trigger that raises ch 0x35 and before the
         // script player that freezes them (07000002 #496 > #442-466 > #399 in the reverse-order
         // walk), so the removal runs ahead of this tick's script pass and its `Drone_EnableAll(0)`.
@@ -20637,6 +20685,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if dr.present && !dr.corpse && dr.relink_cel(d.world) { dr.fell_out_map(); }
             }
         }
+        // The drawn gate's room walk, ONCE per tick (level-0a-civilian-slide-cels): the game runs
+        // `View_AddCels` 0x1e6ba0 in the draw pass over the VisCelList the portal walk built —
+        // `View_AddObjects` 0x1e62d8:71 then writes obj+0xFC = 2 for a VisCelList cel's object
+        // whose world sphere passes `Vision_InView` 0x1e89e0. No rays anywhere in that pair. The
+        // door snapshot is this tick's `Door_IsClosed` state (the game's draw pass reads the doors
+        // one update later than the control pass — the same one-tick lag every sim-side door read
+        // here carries).
+        let room_vis = cel_graph.and_then(|g| drawn_room_mask(g, player, &self.doors.closed_flags()));
         if self.npc_enabled {
         // Visibility every tick for drones with vision on; line of sight for one drone per tick (round robin).
         // [M 0x176a28 first loop] the visibility value is computed ONLY while the 0x10000 vision bit
@@ -22376,7 +22432,22 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // The chat pair's listen channel (+0x13D), cached for the 0x36 UPDATE the same way [M
             // 0x1612e0:40 reads switch_channels[+0x13D] every tick].
             dr.chat_channel_on = dr.chat_channel != 0 && self.channels.on(dr.chat_channel as u32);
-            { let _p = crate::prof::scope("drone: visible_to (drawn ray)"); dr.drawn = dr.enabled && visible_to(player, d.world, dr.pos, dr.head()); }
+            { let _p = crate::prof::scope("drone: drawn gate");
+              // level-0a-civilian-slide-cels — the game's own gate: the drone's linked cel
+              // (`obj_cel`, obj+0x20, relinked every tick like `control_handle_cel_change`
+              // 0x133288) must sit in the VisCelList set the portal walk built (`View_AddCels`
+              // 0x1e6ba0 draws only those cels' object lists), then the object's own frustum leg
+              // (`Vision_InView` 0x1e89e0 over the world sphere [M 0x1e62d8:34]). NO rays — the
+              // thin posts and non-pass foliage the ray walk stopped on are NOT stops in the
+              // game's pair, and the civilians they hid slid at the danim speed with no gait
+              // (`NDrone2_DoAnimation` 0x149f88's not-drawn arm).
+              // No walk (no graph / the viewer's cel unresolved / no portals) or the drone's cel
+              // unresolved: the bullet-ray stand-in — the hand-built test sims and the cel-less
+              // worlds keep their exact prior verdicts.
+              dr.drawn = dr.enabled && match (&room_vis, dr.obj_cel) {
+                  (Some(vis), Some(cel)) => vis.get(cel).copied().unwrap_or(false) && in_view_of(player, dr.pos),
+                  _ => visible_to(player, d.world, dr.pos, dr.head()),
+              }; }
             // The frustum leg alone (`Vision_InView` [M View_AddObjects 0x1e62d8:34-35]) for the
             // no-physics arm's obj+0xFC read — see `frustum_grace`.
             let in_frustum = dr.enabled && in_view_of(player, dr.pos);
