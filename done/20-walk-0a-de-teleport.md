@@ -21,3 +21,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: main agent at 2026-11-12T10:13:10Z
+
+---
+## Report (done by the main agent)
+On master bb5e63e94: the 0a Operative real-damage walk is pure recorded input (Q-Worm shot + use presses through the walker step, keypad codes typed on the pad, the #648 stand walked); tests/replays/0700000a_operative.bin + replay_parity_0700000a (no divergence over 14038 ticks, hatch exit 0700000b).
