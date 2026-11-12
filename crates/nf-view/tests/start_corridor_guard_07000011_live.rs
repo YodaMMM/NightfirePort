@@ -273,7 +273,11 @@ fn idle_bond_is_approached_and_shot_at_every_selectable_difficulty() {
 
 /// The tick budget for the step pins: the guards arrive at t172/t202 and Bond (idle, d2) dies at
 /// ~t1000 [L f1113], after which they leave the fight (0x5c → 0x60).
-const STEP_WINDOW: u32 = 1000;
+// The window covers the game's rule (in position the guard both steps and fires), not one
+// stream's timing: the step side is a Rand pick after the wall/side gates [M 0x150c18], and with the
+// stand's root step dropped on the 0x68 stop [M 0x166328:117-123 → 0x13b490] the port's #126 first
+// fires at t1368 from (0.83, 16.44) where one PCSX2 run's fired at f380 from (0.42, 17.05) [L].
+const STEP_WINDOW: u32 = 2000;
 
 /// Run d2 for `STEP_WINDOW` ticks (`prep` edits the sim after load) and collect each guard's visited
 /// states and the shots each fired.

@@ -2009,6 +2009,12 @@ fn courtyard_sniper_pin_stair_bottom_agent() {
     let shots_at_snapshot = w.scene.sim.as_ref().unwrap().drones.list.iter()
         .find(|d| d.weapon == 0x1e && d.health > 0.0 && !d.corpse)
         .map(|d| d.shots.len()).unwrap_or(0);
+    // Back to the ch-0x17 plate first: with the guards' aim stop (Drone+0x38) the captor fight
+    // ends with Bond up at (-39.2, 6.96, 3.6), and the nav leg from there to the stair wedged
+    // 7 x 3000 ticks against the wing's x -36.8 wall (z 8-12) while #10 and the sniper bled him.
+    w.lenient = true;
+    w.walk_nav_to([-35.2, 6.5, 4.6], "pin back to the ch-0x17 plate", 1.0);
+    w.lenient = false;
     leg_to(&mut w, [-36.7, 5.9, 1.0], "pin west wing stair", 1.6);
     leg_to(&mut w, [-36.9, 5.5, -1.5], "pin stair bottom", 1.6);
     status(&w, "pin stair bottom — the stand begins");

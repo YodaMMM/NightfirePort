@@ -1318,6 +1318,10 @@ pub struct Drone {
     /// `bond_alive` health fold], else `SetOpponent(0)`. NO sight test anywhere on the path.
     /// Team 2 never takes the player [M :101] — its pointer lives in `opp_drone`.
     pub opp_bond: bool,
+    /// `Drone+0x38`: this tick's root motion is dropped (`DroneAnim_PreTransCallback` 0x13b490 zeroes
+    /// the root step while +0x38 or +0x23 is set). `NDrone2_PreDroneControl` 0x148db0:23 clears it every
+    /// tick; AimStandFire's UPDATE sets it [M 0x166328:117-123]. Consumed by `root_motion`.
+    pub zero_root: bool,
     /// Corpse (`obj+0xF0 & 0x20`: no longer hit or seeing), the death channel to raise (`+0xCD8` pending — confirmed
     /// in the re-check: `NDrone2_DSTATE_Death_Anim` 0x1637f8 sets `+0xCD8 = 1` at enter and raises `+0x13C` on
     /// exit/timer while set; `+0x13C` = placement parameter 12), the special-death script (`+0xBD4`, parameter 13),
@@ -2260,6 +2264,7 @@ impl Drone {
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
             opp_cursor: 0,
             opp_drone: None,
+            zero_root: false,
             opp_have_frame: 0,
             opp_los: false,
             // the spawn-time `NDrone2_PostLoad_Init` 0x14d890:14-17 `FindOpponent` + the +0x360
@@ -3548,7 +3553,8 @@ impl Drone {
             for k in 0..2 { m[k] += (cur[k] - m[k]) * (1.0 - w); }
             Some(m)
         };
-        if let (Some([lx, lz]), Some(_)) = (delta, root) {
+        let zero_root = std::mem::take(&mut self.zero_root);
+        if let (Some([lx, lz]), Some(_), false) = (delta, root, zero_root) {
             let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
             let mut step = [lx * c + lz * s, -lx * s + lz * c];
             // The obj-hit latch's reader [M 0x13b490:104-116]: while the bump latch stands the
@@ -9093,6 +9099,16 @@ impl Drone {
                 self.turn_to_opponent(0.524);
                 if self.dist <= 4.0 && self.can_backoff(d) { self.set_state(AIM_BACKOFF); return true; }
                 if self.unseen_ticks >= 16 { self.set_state(COMBAT_NO_SIGHT); return true; }
+                // `+0x274 < 0x10` and an opponent with the aiming class (`+0x568 == 2`) -> `+0x38 = 1`:
+                // the stand's root step is dropped this tick [M 0x166328:117-123 → 0x13b490]. [L PCSX2
+                // 07000011 d2: the run-in guard 0x1896b50 stops dead on its 0x68 entry ((-1.355, 20.105)
+                // frames 214-249, +0x38 = 1 from the frame after) while the fading run script still
+                // carries a 0.09-0.10 root delta.]
+                // Landed level by level (each level's walks re-tuned against the stop first, the
+                // room gate's pattern); ZERO_ROOT_ALL turns it on everywhere.
+                let zero_root_live = ZERO_ROOT_ALL || (d.level >> 8 == 0x0700_00
+                    && matches!(d.level & 0xff, 0x02 | 0x03 | 0x04 | 0x05 | 0x06 | 0x07 | 0x09 | 0x0a | 0x0c | 0x0d | 0x12 | 0x13 | 0x1b));
+                if zero_root_live && self.has_opponent(frame) && self.anim.class == 2 { self.zero_root = true; }
                 if self.firing && !self.burst_done {
                     if ailog() && self.grenade_count > 0 {
                         eprintln!("[ailog] guard {} AIM_STAND_FIRE UPDATE: firing={} burst_done={} -- combat_state skipped (mid-burst)",
@@ -25415,6 +25431,7 @@ mod tests {
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
             opp_cursor: 0,
             opp_drone: None,
+            zero_root: false,
             opp_have_frame: 0,
             opp_los: false,
             // the spawn-time `NDrone2_PostLoad_Init` 0x14d890:14-17 `FindOpponent` + the +0x360
@@ -26920,3 +26937,7 @@ impl crate::space_missile::MissileScripts for OwnedScripts<'_, '_> {
     fn playing(&self, h: usize) -> bool { self.scripts.owned_playing(h) }
     fn free(&mut self, h: usize) { self.scripts.owned_free(h); }
 }
+
+/// The AimStandFire root stop (`Drone+0x38`, [M 0x166328:117-123]) on every level; while false it is
+/// live on the levels listed at its AIM_STAND_FIRE UPDATE site.
+const ZERO_ROOT_ALL: bool = false;
