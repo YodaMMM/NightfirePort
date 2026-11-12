@@ -108,3 +108,15 @@ Nothing was changed or asserted about them; the -3 report's dumps stand as the e
 
 not visible to me — this environment shows no token, credit or context-window figures for the
 session (no usage panel is exposed to the agent).
+
+## ntfy failed
+
+All three fallbacks failed (the same outbound-egress wall the -3 report recorded):
+
+1. curl: `curl: (28) Connection timed out after 15002 milliseconds`
+2. python3 urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. wget: no output within the 20 s cap (the TCP/TLS connect hangs, as in -3).
+
+finish.sh itself succeeded: the queue recorded `done 10-level-0a-civilian-slide-cels-4`
+(queue commit 362334832, the report copied to the queue's `done/` folder).
+
