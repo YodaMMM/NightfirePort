@@ -1425,7 +1425,7 @@ fn the_castle_chat_pair_stands_chatting_and_breaks_off_when_alerted() {
     w.walk_nav_to([60.0, 38.3, 31.5], "off the truck, south", 1.6);
     w.walk_nav_to([45.0, 38.3, 24.0], "across the greeting plates, onto the pair's watch spot", 1.6);
     let sim = w.scene.sim.as_ref().unwrap();
-    assert!(sim.drones.channels.on(0x11), "the chat channel 0x11 rose through the OR #512 after the plate #528 crossing [D census placements 512/513/528; M Script_EventHandler 0x1d94c0 case 0xd]");
+    assert!(sim.drones.channels.on(0x11), "the chat channel 0x11 rose through the type-0xc list-OR #512 after the plate #528 crossing [D census placements 512/513/528; M Trigger_Update 0x1b1a78 case 0xc — the +0x26 input list ORed into the out channel]");
     let pair: Vec<(usize, usize)> = sim.drones.list.iter().enumerate()
         .filter(|(_, dr)| dr.present && matches!(dr.placement, 487 | 488))
         .map(|(i, dr)| (i, dr.placement))
