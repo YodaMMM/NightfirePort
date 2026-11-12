@@ -3709,7 +3709,7 @@ impl Drone {
         let probe = |y: f32| {
             let from = [self.pos[0], y, self.pos[2]];
             let end = [to[0] + step[0].signum() * 0.4 * (step[0].abs() > 1e-6) as i32 as f32, y, to[2] + step[1].signum() * 0.4 * (step[1].abs() > 1e-6) as i32 as f32];
-            if walled { d.world.move_probe_clear(from, end) } else { d.world.segment_clear_dynamic(from, end) }
+            if walled { d.world.move_probe_clear_scoped(self.obj_cel, from, end) } else { d.world.segment_clear_dynamic(from, end) }
         };
         probe(self.pos[1]) && probe(self.pos[1] + 0.5)
     }
