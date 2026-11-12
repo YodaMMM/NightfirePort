@@ -255,6 +255,16 @@ impl Walker {
 
     /// After every stepped tick: read the damage (damage_log.rs), then top health up when on. A
     /// death on a real-damage walk panics with the death line (the walk cannot go on).
+    /// One tick with the trigger state EXPLICIT (files-plate-hazard, ADDITIVE — no existing
+    /// walk calls it): the 0700000b walk's shoot_at helper stepped `step_bond` directly, which
+    /// rode outside the one step site and lost those ticks from a recording. This is the same
+    /// step through `tick_inner` — the recorder sees it and the sim sees exactly the recorded
+    /// lanes. The caller keeps NO separate total_ticks/after_step accounting (tick_inner does
+    /// both).
+    pub fn tick_trigger(&mut self, input: Input, trigger: bool) {
+        self.tick_inner(input, false, trigger, false);
+    }
+
     pub fn after_step(&mut self) {
         self.dmg.active = !self.tops_up();
         let tick = self.total_ticks;
