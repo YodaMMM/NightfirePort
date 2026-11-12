@@ -184,6 +184,28 @@ fn fight_through(w: &mut Walker) {
 /// killed the unarmed crossing), so the nook clears take `exposed_only` at 00: a target with
 /// NO exposed part at pick time is skipped without his budget and re-checked by the next
 /// clear from wherever Bond stands next.)
+/// castle-chat-real-path lever, ported to the gate-2 tree: the balcony-level pre-clear — live
+/// hostiles within 9 u at ANY height with an exposed part, dropped by the game's own fire path.
+/// File-local (the shared `clear_the_spot` skips y >= 46 guards by design — the 00 clear is a
+/// ground clear), and exposed-only so a blocked line never sprays the wall.
+fn pre_clear_balcony_guard(w: &mut Walker, label: &str) {
+    w.switch_to_armed(label);
+    for _ in 0..4 {
+        let target = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (0..sim.drones.list.len()).find(|&i| {
+                let d = &sim.drones.list[i];
+                !d.corpse && d.health > 0.0 && d.team == 1
+                    && dxz(d.pos, sim.bond.pos) < 9.0
+                    && w.exposed_aim(i).is_some()
+            })
+        };
+        let Some(di) = target else { return };
+        eprintln!("[06] {label}: clearing guard {di} at {:?}", w.scene.sim.as_ref().unwrap().drones.list[di].pos);
+        if !w.shoot_bounded(di, label, 1200) { return; }
+    }
+}
+
 fn clear_the_spot(w: &mut Walker, radius: f32, exposed_only: bool) {
     w.switch_to_armed("the 00 clear");
     let mut skipped: Vec<usize> = Vec::new();
@@ -722,6 +744,10 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
         // (the wedge-luck is gone).
         w.try_walk_to(Wp::new(21.0, 42.0, -23.5).r(1.2), "the ramp's lower lane");
         w.try_walk_to(Wp::new(14.0, 44.8, -23.5).r(1.2), "the ramp's upper lane");
+        // The balcony pre-clear (castle-chat-real-path lever; the gate-2 ledger re-measured the
+        // same death: the y-47 grenade guard's 54.0 toss at the crest, Bond dead t3964 in the
+        // tunnel). The player clears the balcony guard from the ramp's upper lane BEFORE cresting.
+        pre_clear_balcony_guard(w, "the balcony's grenade guard pre-clear");
         w.try_walk_to(Wp::new(9.5, 46.0, -23.0).r(1.0), "the balcony's west reach");
         // The drop target sits WELL west of the edge with a tight radius: a nearer/wider target
         // arrived ON the edge lip (the first cut's r 2.0 fired at x 6.44 while Bond was still on
