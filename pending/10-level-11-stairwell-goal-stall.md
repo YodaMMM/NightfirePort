@@ -18,3 +18,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
   `NF_ISO=<abs path> nohup python3 tools/test/suite.py > suite.out 2>&1 &` (docs/tools/test-suite.md; once `tools/test/suite.py`
   is on your branch: merge `origin/master` first). Read `tail -1 suite.out` and its FAILED/TIMEOUT lines before you push, and
   run it once more on your final tree (merged with `origin/master`). Report the total line.
+
+---
+## Main agent addendum (2026-11-12)
+anim state 0x1e is `anim_state::RUN`: in GO_TO_GOAL the port's `move_to_goal` returns 0..=2 (moving) every tick and the guard plays the RUN cycle, yet his position holds at (22.13, 44.14, -3.44) for 3+ s - he runs in place against something on the flight (the user-visible "walking into an invisible wall"). So the nav says go and the body's move is refused: log the drone's per-tick move request vs the applied displacement and the collision contact that cancels it (the step-up on the flight's tread, a stair-rail/railing brush, the push-out against the stair's side wall, or another drone's capsule), and compare with the game's guard on the same flight.
