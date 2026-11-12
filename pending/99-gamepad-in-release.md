@@ -17,3 +17,6 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
   `NF_ISO=<abs path> nohup python3 tools/test/suite.py > suite.out 2>&1 &` (docs/tools/test-suite.md; once `tools/test/suite.py`
   is on your branch: merge `origin/master` first). Read `tail -1 suite.out` and its FAILED/TIMEOUT lines before you push, and
   run it once more on your final tree (merged with `origin/master`). Report the total line.
+
+---
+Main agent (2026-11-12): the release-script half is DONE on s/gamepad-in-release (0a8a18954: make-release.ps1 builds and notices with "movies,gamepad"; smoke OK, frame times unchanged) and HELD for a hands-on controller check. What remains for this task: the synthesized-pad test (PadDriver state into the menus and a level start, no hardware) - build it on top of that branch.
