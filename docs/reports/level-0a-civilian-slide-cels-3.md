@@ -126,3 +126,18 @@ false [L the run] — the test's pinned fight outcome is intact.
 
 not visible to me — this environment shows no token, credit or context-window figures for the
 session (no usage panel is exposed to the agent).
+
+## ntfy failed
+
+All three fallbacks failed (the same outbound-egress wall every prior round recorded):
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds`
+2. python3 urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. wget: DNS resolves (159.203.148.75) but the TCP/TLS connect hangs — the verbose probe's
+   last line is `Connecting to ntfy.sh|159.203.148.75|:443... ` with no HTTP response before
+   the timeout killed it. (A first `-q` run printed nothing and a pipeline `head` masked the
+   real exit status; the verbose re-run above is the honest record.)
+
+finish.sh itself succeeded: the queue recorded
+`done 10-level-0a-civilian-slide-cels-3` (the done marker is on origin/queue, commit
+30a803c7b, later ancestors confirm it).
