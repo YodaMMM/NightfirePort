@@ -27,6 +27,42 @@ pub static PRE_CLEAR_SOUTH_CORRIDOR: std::sync::atomic::AtomicBool = std::sync::
 /// stand at the leg ends and take the posted guards BEFORE the legs walk into them).
 pub static PRE_CLEAR_NORTH_LOBBY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// OPT-IN (set only by the 07000013 chain's d3 real-damage walk, checked at the three east
+/// north-lobby legs below — no other caller sets it, so every other walk is byte-identical):
+/// the north lobby's east legs recover from a fight displacement. The lobby's south wall (static
+/// cel 374) blocks EVERY straight line from the lower floor south of the lobby to the lane (the
+/// probe scanned x −12..−4 at z 15.75–17.5: all blocked; the wedge repro's own segment read
+/// Some(0.127) [L probe_012_rebridge, this tree]), and the nav graph has no cross-path route
+/// out (its route to the corridor detours through the y-0.45 level below, whose nodes cannot be
+/// walked from y 1.03). What IS proven walkable is the route the level's own fights walked: the
+/// lower floor's south lane z 5.2–9.4 (every node arrived on in the resupply runs), the passage
+/// (−19.07,5.32) → (−20.09,5.24) through the corridor's east wall, the corridor north, and the
+/// lobby mouth (−18.64,15.93). `reanchor_north_lobby` walks exactly those points (each hop
+/// lenient: a wedged hop bails and the next hop re-aims), then the leg is re-walked from the
+/// lane — a player who fought his way off the lane walks back the way he came and continues.
+pub static REANCHOR_NORTH_LOBBY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// OPT-IN (set only by the 07000013 chain's d3 real-damage walk, checked at the one labeled leg
+/// below — no other caller sets it, so every other walk is byte-identical): the lobby-east
+/// posts flank. The melt ledger (warm-chain-margin-4 [L this tree's NF_DMG_TRACE run]): #6
+/// (skin 0x5000006, hp 30) + #7 (skin 0x5000008, hp 12) open fire the moment the lane's west
+/// half is crossed — −59.5 in 64 ticks from x −9.1, the fights' own exposure flickering
+/// None→Some→None (he patrols 1.1 u behind the east furniture), so no in-place exchange wins;
+/// and the pre-clear-from-the-lane-ends lever found nobody exposed at 14-16 u [L the run-8
+/// ledger]. The measured lever ([L] the static probes + settles of this tree's scratch probe,
+/// teleport-diagnosis only): the lobby's south band IS walkable floor (the settles ground y
+/// 1.07-1.12 at (−8,14.5), (−5,14.5), (2.4,13.9)), the crossing column x −8.5 runs clear from
+/// the lane (z 15.6) to z 13.4, the deep south band z 13.4-13.6 is blocked only at x
+/// −3.0..−2.5, and the z 13.5-14 leg runs UNDER the posts' sight lines (the sight grid: the
+/// lane's south edge unseen to x −7.5, the z 14.2 band seen only at x −7.5..−4.5 from #6's
+/// then-current spot, the z 13.6 row clear but x −6 from the first probe). The flank (2.4,13.9)
+/// is the d2 fight#6 trace's proven fight spot (#6 exposed, the taps landed −16.8/60 ticks
+/// [L the d2 trace]) — both posts' boxes read exposed from there (the probe's mutual static
+/// rays), #7 nearest (d ≈ 2.9, hp 12 — one fight), #6 from the flank after (d ≈ 3.3, hp 30).
+/// The rejected levers are NOT repeated: no pre-clear at 14-16 u, no bridge_and_retry, no
+/// in-place creep or longer stands (each measured dead in the margin-4 report).
+pub static FLANK_LOBBY_EAST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// OPT-IN (set only by the 07000011 chain's Agent and 00 Agent walks; the 07000012 and 07000013
 /// walks never set it, so their legs are unchanged): "the east wing" leg aims at the corridor's
 /// west side (x 23.2; the wall stops Bond near x 24.0). The office civilian #24 stands at
@@ -48,6 +84,77 @@ thread_local! { pub static EAST_WING_WEST_SIDE: std::cell::Cell<bool> = const { 
 /// he walks past instead of turning his back on him: the stand runs only while that guard lives
 /// within 6 u of the corner.
 thread_local! { pub static CLEAR_EAST_WING_GUARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
+/// The displacement recovery for the east north-lobby legs (OPT-IN, `REANCHOR_NORTH_LOBBY`, the
+/// d3 chain only): every point below was WALKED by this level's own resupply navs on this tree
+/// (the run-5 ledger arrivals), so the chain rides proven clear edges, not a guess. The first
+/// hop is a nav walk (the graph routes the lower floor's open band — resupply #3's own route
+/// (−9.28,10.22)→(−18.09,7.42) and the probe's hop-1 arrival prove it), the rest are the
+/// passage + corridor edges as direct legs, each lenient (try_walk_to: a wedged hop bails and
+/// the next hop re-aims — the same self-healing walk_nav_to's per-node walks use).
+fn reanchor_north_lobby(w: &mut crate::walker::Walker) {
+    w.walk_nav_to([-16.49, 1.03, 5.60], "the re-anchor: the lower floor west", 1.3);
+    const CHAIN: [&[f32; 3]; 6] = [
+        &[-19.07, 1.03, 5.32],   // the passage lane east end (resupply #1 walked it west→east)
+        &[-20.09, 1.03, 5.24],   // the passage through the corridor's east wall
+        &[-21.32, 1.03, 6.25],   // the corridor (its west side)
+        &[-20.61, 1.10, 9.15],   // the corridor north
+        &[-20.26, 1.10, 14.06],  // the corridor mouth
+        &[-18.64, 1.10, 15.93],  // the lobby mouth — on the lane
+    ];
+    for (k, p) in CHAIN.iter().enumerate() {
+        let _ = w.try_walk_to(crate::walker::Wp::new(p[0], p[1], p[2]).r(1.3),
+            &format!("the re-anchor {k}"));
+    }
+}
+
+/// The lobby-east posts flank (OPT-IN, `FLANK_LOBBY_EAST`, the d3 chain only). The route rides
+/// this tree's own static probes + settles ([L] the scratch probe, teleport-diagnosis only —
+/// the PROOF is the real walk's ledger): the south turn at x −10.0 (the crossing 15.6→14.2
+/// clear there; the lane end's own x −10.75 is wall at z 14.6), then east under the posts'
+/// sight lines — the deep south band z 13.4-13.6, blocked only at x −3.0..−2.5 — to the flank
+/// (2.4,13.9), where BOTH posts' boxes read exposed (the d2 fight#6 trace: the taps landed
+/// −16.8/60 ticks from exactly this spot). #7 first (hp 12, the nearest — one fight), then #6
+/// (hp 30) from the flank, both through the ordinary fight machinery (`stand_and_fire` — the
+/// walk's own flags: the lane ray set, the tight gate, the dry switch, the back-off). Every hop
+/// is lenient: a wedged hop bails and the next re-aims (the re-anchor's own shape). No position
+/// writes, no RNG draws, no health/ammo writes.
+fn flank_lobby_east(w: &mut crate::walker::Walker) {
+    const HOPS: [&[f32; 2]; 7] = [
+        &[-10.0, 15.4],  // east along the lane's south edge (the sight grid: unseen to x −7.5)
+        &[-8.5, 13.9],   // the clear column x −8.5 (15.6→13.4 all clear [L the crossing scan])
+        &[-6.5, 13.6],   // the deep south band, under the posts' sight lines
+        &[-4.0, 13.6],
+        &[-2.0, 13.6],
+        &[0.6, 13.6],    // under the z 13.75 knee-wall (blocked only at z 13.75; z 13.4 clear)
+        &[2.4, 13.9],    // the flank — the d2 fight#6 trace's spot
+    ];
+    for (k, p) in HOPS.iter().enumerate() {
+        let _ = w.try_walk_to(crate::walker::Wp::new(p[0], 1.1, p[1]).r(0.9),
+            &format!("the lobby-east flank {k}"));
+    }
+    // The fights, in the task's order: #7 (skin 0x5000008, hp 12) first, then #6 (skin
+    // 0x5000006, hp 30) from the flank. Nearest-alive within 8 u per skin (the skins repeat
+    // across the level's roster — the range keeps the pick on the lobby-east pair).
+    for skin in [0x5000008u32, 0x5000006u32] {
+        let (di, d) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let stand = sim.bond.pos;
+            let Some(di) = sim.drones.list.iter().enumerate().filter(|(_, d)| {
+                d.present && !d.corpse && d.health > 0.0 && d.team == 1 && d.skin == skin
+                    && crate::walker::dxz(d.pos, stand) < 8.0
+            })
+            .min_by(|a, b| crate::walker::dxz(a.1.pos, stand).total_cmp(&crate::walker::dxz(b.1.pos, stand)))
+            .map(|(i, _)| i)
+            else { eprintln!("[012] the flank: no alive skin {skin:#x} within 8 u — walking on"); continue };
+            (di, crate::walker::dxz(sim.drones.list[di].pos, stand))
+        };
+        let t0 = w.total_ticks;
+        let killed = w.stand_and_fire(di, 2400);
+        eprintln!("[012] the flank stand on skin {skin:#x} #{di} at d {d:.1}: killed {killed} in {} ticks, health {:.1}",
+            w.total_ticks - t0, w.scene.sim.as_ref().unwrap().drones.health.health);
+    }
+}
 
 /// The walkreal-12 route: spawn → the keypad burn → the console E. Used again by the 07000013
 /// test's warm chain.
@@ -320,18 +427,65 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
         (-4.00, 17.00, "the north lobby 3"), (-1.00, 16.00, "the north lobby east"),
     ];
     for &(x, z, label) in legs {
-        w.walk_to(Wp::new(x, 1.1, z).r(1.0), label);
+        // warm-chain-margin-5 (OPT-IN `FLANK_LOBBY_EAST`, the d3 walk only): the lobby-east
+        // posts' flank replaces the lane crossing at "the north lobby 2" — the melt ledger
+        // (margin-4) killed every in-place answer from the lane. The flank walks the south band
+        // under the posts' sight lines to the (2.4,13.9) fight spot, takes #7 then #6, and the
+        // walk rejoins at "the lift doors" — the remaining lane legs (2/3/east) are behind him
+        // (the posts are the lane's east guards; with them dead the lane is walked out).
+        // Every other caller runs master's plain walk_to byte-identical.
+        if label == "the north lobby 2" && FLANK_LOBBY_EAST.load(std::sync::atomic::Ordering::Relaxed) {
+            flank_lobby_east(w);
+            continue;
+        }
+        if matches!(label, "the north lobby 3" | "the north lobby east")
+            && FLANK_LOBBY_EAST.load(std::sync::atomic::Ordering::Relaxed) {
+            continue;
+        }
+        // warm-chain-margin-4 (OPT-IN `REANCHOR_NORTH_LOBBY`, the d3 walk only): the east
+        // north-lobby legs' displacement recovery — try the leg leniently first; if the fights'
+        // resupply fetches left Bond south of the lobby wall (the leg's direct line blocked,
+        // the 6000-tick wedge of the margin-3 ledger), walk the proven re-anchor chain back to
+        // the lane and re-walk the leg from there. Every other caller runs master's plain
+        // walk_to byte-identical.
+        let reanchored = REANCHOR_NORTH_LOBBY.load(std::sync::atomic::Ordering::Relaxed)
+            && matches!(label, "the north lobby 2" | "the north lobby 3" | "the north lobby east");
+        if reanchored {
+            let already = { let sim = w.scene.sim.as_ref().unwrap(); crate::walker::dxz(sim.bond.pos, [x, 1.1, z]) < 1.0 };
+            if !already {
+                let _ = w.try_walk_to(Wp::new(x, 1.1, z).r(1.0), label);
+            }
+            let arrived = { let sim = w.scene.sim.as_ref().unwrap(); crate::walker::dxz(sim.bond.pos, [x, 1.1, z]) < 1.0 };
+            if !arrived {
+                reanchor_north_lobby(w);
+                w.walk_to(Wp::new(x, 1.1, z).r(1.0), label);
+            }
+        } else {
+            w.walk_to(Wp::new(x, 1.1, z).r(1.0), label);
+        }
         // warm-chain-margin-3 (the level-13-warm-chain-margin-2 lever, ported to master): the
         // flag-gated north-lobby pre-clear — only the 07000013 chain's d3 real-damage walk sets
         // PRE_CLEAR_NORTH_LOBBY, so every other caller walks the legs byte-identical.
-        if label == "the north lobby 2" && PRE_CLEAR_NORTH_LOBBY.load(std::sync::atomic::Ordering::Relaxed) {
-            for _ in 0..3 {
+        // warm-chain-margin-4: the sweep fires at BOTH lane ends — the "the north lobby" end
+        // (BEFORE the east legs walk into the lobby-east posts' sight; the d3 melt ledger [L
+        // this tree: #6 rifle −7/hit + #7 −3.5/hit landed −59.5 in 64 ticks from x −9.1, the
+        // fight's own gun-ray exposure flickered None→Some→None and the taps landed −3.5 per
+        // ~4 rounds — no in-place exchange wins that) — and the "the north lobby 2" end (the
+        // late spawns the east legs meet). The radius opens to 16.0 (the posts stand 14-15.5 u
+        // from the west end: #6 (3.3,17.2) d 14.6, #7 (4.7,15.5) d 15.5 [L the fight#6 trace])
+        // and the stands cap at 2400 (the d3 stands' 700-cap law is the 13 lobby's unseen-
+        // respawner bleed; these posts are 14-16 u lanes whose kill budget is ~9 body taps —
+        // a 600-cap stand cannot finish one). The flag gates every line — no other caller
+        // changes.
+        if matches!(label, "the north lobby" | "the north lobby 2")
+            && PRE_CLEAR_NORTH_LOBBY.load(std::sync::atomic::Ordering::Relaxed) {
+            for _ in 0..4 {
                 let (di, d) = {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let stand = sim.bond.pos;
                     let Some(di) = sim.drones.list.iter().enumerate().filter(|(_, d)| {
                         d.present && !d.corpse && d.health > 0.0 && d.team == 1
-                            && crate::walker::dxz(d.pos, stand) < 12.0
+                            && crate::walker::dxz(d.pos, stand) < 16.0
                     })
                     .min_by(|a, b| crate::walker::dxz(a.1.pos, stand).total_cmp(&crate::walker::dxz(b.1.pos, stand)))
                     .map(|(i, _)| i)
@@ -339,7 +493,7 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
                     if crate::walker::DamageLog::exposed_part(sim, di).is_none() { break }
                     (di, crate::walker::dxz(sim.drones.list[di].pos, stand))
                 };
-                let killed = w.stand_and_fire(di, 600);
+                let killed = w.stand_and_fire(di, 2400);
                 eprintln!("[012] the north lobby pre-clear: guard #{di} at d {d:.1} killed {killed}");
                 if !killed { break }
             }
