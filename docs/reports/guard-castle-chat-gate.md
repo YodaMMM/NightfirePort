@@ -98,4 +98,11 @@ not visible to me
 
 ## ntfy failed
 
-(pending — appended below after the finish step)
+All three fallbacks, in order, with their exact outputs (03:42-03:44 UTC, this sandbox —
+ntfy.sh has been unreachable from every session's sandbox):
+1. `curl -sS -m 15 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 15001 milliseconds`
+2. `python3 -c "... urlopen(Request('https://ntfy.sh/nightfire-yoda-8k3x', ...))"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --timeout=12 --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → exit code **4** (network failure), no output.
