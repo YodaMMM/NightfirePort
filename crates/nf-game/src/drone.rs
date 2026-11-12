@@ -22446,10 +22446,17 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // behaviour is game-true for that corridor's guards needs a live check (the report
             // lists it) before the flip can land; the faithful port below is complete and ready.
             const NB_SCAN_LIVE: bool = false;
+            // LIVE per level, the door-leaf-slide pattern: 07000012 [L PCSX2 2026-11-12: the start
+            // pair carries +0x31C 0x14 (south, its partner to the right) and 0xC (north) through
+            // the fight; the scan here gives the same bits, and without them the south guard
+            // stepped right into his partner and his standing rounds hit the partner's body].
+            // Every other level waits on its walks (07000001's four walks and 07000014's two go red
+            // with the scan on - the side bits reshuffle their guard chains).
+            let nb_scan_live = NB_SCAN_LIVE || d.level == 0x0700_0012;
             // The per-tick zero is the scan's own head (the game's ControlSTANDARD 0x1490f0:202-226
             // zeroes +0x31C and re-runs NoBunching in the same breath); +0x17 (no_bunching_hit)
             // goes with it — 1 only when a neighbor actually stamped this tick [M 0x150ad0:56-62].
-            if NB_SCAN_LIVE {
+            if nb_scan_live {
                 dr.no_bunching = 0;
                 dr.no_bunching_hit = false;
                 let mut best: Option<(f32, V3, usize)> = None;

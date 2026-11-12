@@ -79,9 +79,11 @@ fn walk_spawn_to_the_shaft_exit_at(difficulty: u32) {
         w.dmg.lane_fights = true;
     }
     if difficulty == 1 {
-        // los-mask-repins-12: the Operative route takes the 543 west-stand crossing — the d3/d2
-        // diagonal's stuck-E lands east of the hinge and the leg wedges at d1 [L the runs].
-        tower2::DOOR_543_WEST_STAND.with(|c| c.set(true));
+        // The 543 crossing: the d3/d2 diagonal again. The west-stand crossing (los-mask-repins-12)
+        // wedged once the start pair's no-bunching side bits went live on this level (the guards'
+        // chain shifts and the stand at (10.62, -12.85) is refused 0.55 u short, no guard near);
+        // the diagonal walks green [the start_pair_07000012 run].
+        tower2::DOOR_543_WEST_STAND.with(|c| c.set(false));
         // walker-sidestep-decay-2: the decay is OPT-IN again (the walker DEFAULT re-timed the
         // 0b real-damage roof walks and all four sisters died in the roof fights — 5/4 vs
         // master's 9/0 [L the run]). This is the 12-2 patch's setter, back: the old
