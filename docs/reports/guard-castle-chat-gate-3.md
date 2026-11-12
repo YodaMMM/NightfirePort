@@ -109,3 +109,14 @@ earlier than the port's model — the live checks below decide which.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox (ntfy.sh unreachable):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "guard-castle-chat-gate-3: blocked ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "...urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'...', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → first attempt SyntaxError (a non-ASCII dash in the message bytes), the corrected ASCII
+   attempt hung past the tool timeout (killed at 90 s, no response).
+3. `wget -q -O- --post-data "guard-castle-chat-gate-3: blocked ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → hung, no output, killed at the same 90 s limit.
