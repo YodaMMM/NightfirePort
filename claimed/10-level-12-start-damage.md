@@ -40,3 +40,7 @@ The pair's paths (port, t from the load): starts match the game exactly - #6 nor
 
 ---
 claimed-by: main agent 2026-11-12 09:58 MST (worker daily cap: the main agent fixes this one)
+
+---
+## Main agent (2026-11-12 10:25 MST): fixed on s/12-start-pair-nobunching (b3f1ba816), suite next
+Correction: live, the SOUTH guard (0x1876400) switches to weapon 0x18, as in the port (#7). The difference is DroneMove_NoBunching's +0x31C side bits: live the pair carries 0x14 (south) / 0xC (north) from frame 231; the port held the scan inert (NB_SCAN_LIVE false), so #7 stepped RIGHT (0x74) into his partner and his standing rounds hit #6. The port's scan (already a faithful copy) gives exactly 0x14 / 0xC; it is now live on 07000012 (the door-leaf-slide per-level pattern; 01 and 14 walks go red with it on, they wait). Idle Bond at d1 now 79 / 68.5 / 61.5 / 37 / 26.5 at 360..840 (game runs 86-100 / 53-72 / 35-51 / 18-44 / 0-37). Pinned: start_pair_07000012_live. The d1 walk's 543 crossing moved back to the diagonal.
