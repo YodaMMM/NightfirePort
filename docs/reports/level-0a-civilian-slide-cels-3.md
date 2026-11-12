@@ -91,7 +91,8 @@ false [L the run] — the test's pinned fight outcome is intact.
 | walkreal_07000005_live `…_real_damage_00agent` | 1 FAILED |
 | walkreal_07000008_live `…_real_damage_agent` | 1 FAILED |
 | walkreal_07000013_live `…_real_damage` | 1 FAILED |
-| walkreal_0700000c_live, walkreal_0700000c_eastroute_live | **not re-run this round** (built, no window) — the merge changed `tests/common/walker_b2.rs`/`walkreal0c.rs`; the next round must re-run the whole 0c family first |
+| walkreal_0700000c_eastroute_live (whole) | **1 passed** — the merge (which changed `tests/common/walker_b2.rs`/`walkreal0c.rs`) did not break the -2 re-tune |
+| walkreal_0700000c_live (whole) | **4 passed, 1 ignored** (the pre-existing agent ledger) — the merged tree keeps the base's greens |
 | the full suite (`tools/test/suite.py`) | did not fit: background jobs die between tool calls here and the rootfs filled twice (method note) |
 
 ## What's left (the ledger for the next message)
@@ -105,8 +106,9 @@ false [L the run] — the test's pinned fight outcome is intact.
    of the pair's new patrol line (they close to point-blank now — the pass-by price is lethal).
 3. **08 / 13 / 15 / 11 agent sisters**: per the dumps above — a hazard-avoid leg (08), a
    sniper-line diet (13's 50.12 hit), a blast-range diet (15), a south-band fall guard (11).
-4. Re-run the whole 0c family on the merged tree (walker_b2/walkreal0c changed in the merge),
-   then the fast runner on the final tree.
+4. Re-run the REST of the 0c family on the merged tree (barrelrow, comms, upward, ventexit),
+   then the fast runner on the final tree — the two core 0c walks (eastroute, the
+   whole-mission walk) already re-ran GREEN here after the merge.
 5. No draw changes were made or needed: every red is the gait-shift class; the drawn-gated
    arm [M 0x149f88] and the drawn set [M 0x1e62d8:34-71] are the game's own rules.
 
