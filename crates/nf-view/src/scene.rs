@@ -9222,10 +9222,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             if !armed.insert(key) { continue; }
             let Some(wd) = drones.and_then(|d| d.weapons.as_ref()) else { continue };
             let param9 = inst.placement.params.iter().find(|(i, _)| *i == 9).map(|&(_, v)| v).unwrap_or(0);
-            // The placement's weapon (kind 0 here): the assassin's 0x14 sword mesh (`weapon_id` with her
-            // kind 0xB) is not drawn in her hand in the game [L PCSX2 07000004 frame 1440: her hand is
-            // empty, the hilt shows above her shoulder]; where the game draws it is open.
-            let weapon = drone::weapon_id(skin_hash, param9, 0);
+            // The held weapon `anim+0x62` (`weapon_id`, with the setup's kind): the game draws its
+            // third-person mesh on the weapon's datum every frame [M AnimObjectDraw 0x1c4490:257-264 ->
+            // AnimDatumGetWeaponInfo 0x1c7900 -> AnimDatumSetEntity 0x1c7848]; the assassin's 0x14 is
+            // her sword on datum 0x2c [L PCSX2 07000004: the blade shows raised behind her in the slash].
+            let weapon = drone::weapon_id(skin_hash, param9, drone::drone_setup(skin_hash, param9, drones.map_or(0, |d| d.level_id)).kind);
             let Some((mesh, datum_id)) = (weapon < 0x73).then(|| wd.third_person(weapon as u8)).flatten() else { continue };
             let datum_id = if datum_id == 0xff { 0 } else { datum_id as u32 };
             let Some(dt) = skin.datums.iter().find(|d| d.id == datum_id && d.bone >= 0) else { weapons_missing += 1; continue };
