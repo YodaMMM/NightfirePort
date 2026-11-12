@@ -23,3 +23,14 @@ that use them, one level per tool call, repairs gated to level. Run ai binaries 
   gated — the live probe is #[ignore]d with the dump evidence); the full suite died on ENOSPC
   (6.2 GB target on a 9.9 GB disk).
 - Checkpoint 2 (13:48 UTC): report written, branch pushed.
+
+## guard-castle-chat-gate
+Started 2026-11-12 02:15 UTC. Branch s/guard-castle-chat-gate cut from origin/s/guard-castle-chat-states c1055e9cf, merged origin/master 08a276ce0 (fb2fcabb6).
+Task: finish guard-castle-chat-states "What is left" 1 and 2 — find the gate that spawns the
+0x06000124/0x06000126 castle chat pair on 07000006 (census the level's creators/events/scripts
+keyed on those ids or their map, addresses [M]/[D]), census who raises channel 0x11 (the chat's
+listen channel [M 0x14c600:147-158]), fix the port's spawn/channel in the game's way if they
+differ (red test first), then un-ignore walkreal_07000006_live::the_castle_chat_pair_stands_
+chatting_and_breaks_off_when_alerted (legs, state-0x36 asserts, burst break-off written).
+Real input only, no top-ups, never lower damage or health. Run walkreal_07000006_live whole and
+interactables_07000006_live.
