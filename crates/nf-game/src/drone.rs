@@ -2154,7 +2154,7 @@ impl Drone {
         // HandleImpact ones not yet (docs/systems/dronefunc-rest.md, GAPS G-055).
         let alert_props = (param(5) == 100).then_some(alert_words);
         let alert = nf_formats::drone::ALERTNESS_LEVELS[d.props.get(0x20, &normal) as usize & 3];
-        let weapon = nf_formats::drone::weapon_id(skin, param(9));
+        let weapon = nf_formats::drone::weapon_id(skin, param(9), setup.kind);
         // Sight constants by class (parameter 14), `NDrone2_DefaultInit`; e4 = π/2 for every class.
         let (e8, f0_base, f0_rand, fc_add) = match param(14) { 1 => (12.0, 12.0, 3.0, 1.0), 2 => (16.0, 12.0, 3.0, 1.0),
             3 => (40.0, 25.0, 6.0, 100.0), 4 => (1000.0, 75.0, 8.0, 1000.0), 5 => (0.0, 12.0, 4.0, 1.0), _ => (24.0, 12.0, 4.0, 1.0) };

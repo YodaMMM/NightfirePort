@@ -266,3 +266,33 @@ fn the_release_reads_the_hand_back_bond_and_she_flips_away() {
     // Sister: the pre-fix landing spot fails this pin.
     assert!(!([-5.50f32, 5.34, 28.15][0] > 1.0), "the old west landing is rejected");
 }
+
+/// Her ranged rounds are weapon 0x14, not the placement's 0x12: the weapon switch's 0x12/0x14/0x15
+/// arm gives a kind-0xB body weapon 0x14 [M NDrone2_DefaultInit 0x14b300:294-300]. Live, at
+/// difficulty 1 every one of her ranged hits costs Bond 1.25 (raw 2.5 × the level's 0.5) and the
+/// sword 25 [L PCSX2 07000004 d1, `Drone_ModBulletDamage` 0x139f50 entry: weapon 0x14 raw 2.5
+/// mul 1.0 at 5.0-6.2 u; weapon 0x63 raw 50 in 0xac].
+#[test]
+fn her_ranged_rounds_cost_what_the_games_do() {
+    let iso = iso();
+    let mut scene = nf_view::load_with_carry_difficulty(&iso, "07000004.bin", false, None, 1).expect("load 07000004");
+    let hp = 100.0f32;
+    let (mut ranged, mut sword) = (Vec::new(), Vec::new());
+    for _ in 0..6000u32 {
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+        let sim = scene.sim.as_mut().unwrap();
+        let n = sim.drones.list.iter().find(|d| d.present && d.dtype == 0xf).expect("the assassin [D]");
+        assert_eq!(n.weapon, 0x14, "her held weapon is 0x14 [L anim+0x62 / the round's weapon]");
+        let h = sim.drones.health.health;
+        if h < hp { if n.state == kiko::NINJA_SWORD { sword.push(hp - h) } else { ranged.push(hp - h) } }
+        // Bond stays alive for the whole exchange.
+        sim.drones.health.health = 100.0;
+        if ranged.len() >= 4 { break; }
+    }
+    eprintln!("[04] ranged {ranged:?} sword {sword:?}");
+    assert!(!ranged.is_empty(), "she lands ranged rounds in the opening fight");
+    assert!(ranged.iter().all(|d| (d - 1.25).abs() < 1e-3), "each ranged hit costs 1.25 at d1 [L]: {ranged:?}");
+    assert!(sword.iter().all(|d| (d - 25.0).abs() < 1e-3), "each sword hit costs 25 [L]: {sword:?}");
+    // Sister: the old 0x12 round (raw 1.5 × 0.5) is rejected.
+    assert!(!((0.75f32 - 1.25).abs() < 1e-3));
+}
