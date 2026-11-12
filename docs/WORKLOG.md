@@ -60,3 +60,15 @@ interactables_07000006_live.
   IDLE read predates the port); walkreal_07000006_live whole 7/0/2i (the balcony pre-clear
   lever ported; the gate ledger's t3964 death re-measured identical before it). Then EVERY
   walkreal_*_live binary on the final tree: all green (see the report's list).
+
+## guard-castle-chat-gate-3 (2026-11-12T05:55Z, branch s/guard-castle-chat-gate-3)
+
+- Claimed. Base: origin/s/guard-castle-chat-gate-2 (80f622052) merged with origin/master
+  (clean). The chat pair itself checks out against the game [L PCSX2 fresh 07000006]. This
+  task: the 4 suite reds that pass on master but fail on master + this branch —
+  guard_parity_live::a_tower_guard_outside_his_civilian_states_can_attack_on_sight,
+  guard_ai_other4_live::investigate_stands_down_to_idle_when_nothing_is_found,
+  rook06_realpath_live::the_switch16_guard_fights_through_the_door47_doorway,
+  walkreal_07000005_live::the_door_band_exit_chains_to_07000006_walked_real_damage.
+  Each red gets a cause with the address; a test wrong against the decompile gets corrected
+  with the address; nothing weakened. Then the full suite.
