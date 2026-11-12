@@ -88,6 +88,28 @@ pub fn with_strip_p2k_shot<R>(f: impl FnOnce() -> R) -> R {
     let _reset = Reset;
     f()
 }
+thread_local! {
+    /// los-mask-repins-0c-3 (OPT-IN, set ONLY by walkreal_0700000c_live's real_damage sister):
+    /// the post-#282-ride thin-floor legs get the real-damage tree's own mid-ledge stops. The
+    /// fights' RNG draws shift every guard/round draw downstream, so the real-damage tree's
+    /// ride lands at its own spot ((4.9831,−223.2948) [L this round's run] vs the plain run's
+    /// (4.9688,−223.3107)) and the plain tree's single long "the ledge to the arc" leg then
+    /// overshoots its arrival circle off the ledge's east edge — the measured fall to y 2.01
+    /// at (8.99,−222.09) at +114 ticks (the walk_to arrival check is dxz-only, so it read
+    /// "arrived" MID-FALL and the next leg started from the yard floor [L the run]). The fix
+    /// is the 0c-2 ledger's lever: mid-ledge stops placed POST-ride (they cannot re-time the
+    /// ride), breaking the long eastward runs so each arrival circle is met at walking speed.
+    /// Off = master behaviour for every other caller.
+    static STRIP_RD_POST_RIDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+#[allow(dead_code)]
+pub fn with_strip_rd_post_ride<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { STRIP_RD_POST_RIDE.with(|c| c.set(false)); } }
+    STRIP_RD_POST_RIDE.with(|c| c.set(true));
+    let _reset = Reset;
+    f()
+}
 /// Trace helpers (scratch): the gun's state for the no-bullet-spawned line.
 fn s_gun_debug(w: &Walker) -> String { format!("{:?}", w.scene.sim.as_ref().unwrap().gun.weapon) }
 fn s_gun_fire_state(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().gun.fire_state }
@@ -1668,8 +1690,32 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
     walker::strip_fights_resume();
     // los-mask-repins-0c-2: the flag scope's return-fire suppression lifts here (the strip
     // crossing is over; the SW arc and everything east fight normally).
+    // los-mask-repins-0c-3 (OPT-IN STRIP_RD_POST_RIDE, the real_damage sister only): the
+    // real-damage tree's ride lands at its own shifted spot and the plain tree's single long
+    // "the ledge to the arc" leg overshoots its arrival circle off the ledge's east edge —
+    // the measured fall to y 2.01 at (8.99,−222.09) at +114 ticks [L this branch's run; the
+    // plain run holds the same leg at +55]. The stops sit POST-ride so they cannot re-time
+    // the #282 grab: the mid-ledge stop at the plain run's own hold spot ((7.10,12.71,−222.42)
+    // [L the plain run] — the arrival circle's west side), then a mid-stop before the arc
+    // west end, so every thin-floor arrival circle is met at walking speed with no coast to
+    // carry Bond past the edge.
+    if STRIP_RD_POST_RIDE.with(|c| c.get()) {
+        // The stale-sidestep reset FIRST (walker_b2's opt-in `reset_sidestep`): the stuck
+        // ladder's nudge counter survives the ride's direct `step_bond` stretches and strafed
+        // the first post-ride leg north off the band — the measured walk_to path ran 0.84 u
+        // north of the clean steering path at the same x and fell to (6.26,1.13,−221.83) [L
+        // the run + the rd-diag: the same start hand-steered reaches the stop at
+        // (7.117,12.718,−222.412)]. A stale RIGHT nudge would swing it south the same way.
+        w.reset_sidestep();
+        w.walk_to(Wp::new(7.1, 12.4, -222.42).r(0.5), "the mid-ledge stop (rd)");
+    }
     // The SW arc: the ledge to the arc's west end and east along it [D probes].
     w.walk_to(Wp::new(8.0, 12.4, -222.0).r(1.0), "the ledge to the arc");
+    if STRIP_RD_POST_RIDE.with(|c| c.get()) {
+        // The same treatment for the arc west end (the 0c-2 ledger's lever): the (8,−222) →
+        // (13,−218.5) leg is 5.2 u of thin arc — a mid-stop at its midpoint breaks the run.
+        w.walk_to(Wp::new(10.5, 12.4, -220.25).r(0.8), "the arc west end mid-stop (rd)");
+    }
     w.walk_to(Wp::new(13.0, 12.4, -218.5).r(1.2), "the arc west end");
     w.walk_to(Wp::new(24.0, 12.4, -218.0).r(1.5), "the ring south-west arc");
     // The grab line: the 1.5 arrival can stop anywhere on the arc's bend (a guard fight on the arc
