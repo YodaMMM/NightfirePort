@@ -6940,9 +6940,11 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.gfx.is_some() { return; }
         // Port-only: the saved fullscreen choice (Alt+Enter toggles it; settings::display_path).
-        let full = settings::display_path().is_some_and(|p| settings::display_fullscreen_at(&p));
-        let attrs = Window::default_attributes().with_title("nf-view")
-            .with_fullscreen(full.then_some(winit::window::Fullscreen::Borderless(None)));
+        let disp = settings::display_path().map(|p| settings::display_at(&p)).unwrap_or_default();
+        let mut attrs = Window::default_attributes().with_title("nf-view")
+            .with_fullscreen(disp.fullscreen.then_some(winit::window::Fullscreen::Borderless(None)));
+        // The saved windowed size (Alt+PageUp/PageDown presets or a dragged edge, kept on close).
+        if let Some((w, h)) = disp.size { attrs = attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h)); }
         let window = Arc::new(el.create_window(attrs).expect("create window"));
         let (instance, surface) = gpu_instance(Some(&window));
         let surface = surface.expect("create surface");
@@ -7031,7 +7033,17 @@ impl ApplicationHandler for App {
             return;
         }
         match event {
-            WindowEvent::CloseRequested => el.exit(),
+            WindowEvent::CloseRequested => {
+                // Port-only: keep the windowed size for the next launch (display.toml).
+                if let (Some(g), Some(p)) = (self.gfx.as_ref(), settings::display_path()) {
+                    if g.window.fullscreen().is_none() && !g.minimized {
+                        let s = g.window.inner_size();
+                        let d = settings::Display { size: Some((s.width, s.height)), ..settings::display_at(&p) };
+                        if let Err(e) = settings::save_display_at(&p, &d) { eprintln!("[display] {e}"); }
+                    }
+                }
+                el.exit()
+            }
             WindowEvent::Resized(s) => if let Some(g) = &mut self.gfx {
                 // Minimised windows report 0×0; a surface cannot be configured at that size.
                 g.minimized = s.width == 0 || s.height == 0;
@@ -7100,6 +7112,24 @@ impl ApplicationHandler for App {
                             g.window.set_fullscreen(on.then_some(winit::window::Fullscreen::Borderless(None)));
                             if let Some(p) = settings::display_path() {
                                 if let Err(e) = settings::save_display_fullscreen_at(&p, on) { eprintln!("[display] {e}"); }
+                            }
+                        }
+                    }
+                    return;
+                }
+                // Port-only: Alt+PageUp / Alt+PageDown step the window through the 4:3 size
+                // presets that fit the monitor (settings::WINDOW_PRESETS), and remember it.
+                if matches!(k, KeyCode::PageUp | KeyCode::PageDown) && ALT.load(std::sync::atomic::Ordering::Relaxed) {
+                    if event.state == ElementState::Pressed && !event.repeat {
+                        if let Some(g) = self.gfx.as_ref().filter(|g| g.window.fullscreen().is_none()) {
+                            let cur = g.window.inner_size();
+                            let mon = g.window.current_monitor().map(|m| m.size()).unwrap_or(winit::dpi::PhysicalSize::new(1920, 1080));
+                            if let Some((w, h)) = settings::next_window_preset((cur.width, cur.height), (mon.width, mon.height), k == KeyCode::PageUp) {
+                                let _ = g.window.request_inner_size(winit::dpi::PhysicalSize::new(w, h));
+                                if let Some(p) = settings::display_path() {
+                                    let d = settings::Display { size: Some((w, h)), ..settings::display_at(&p) };
+                                    if let Err(e) = settings::save_display_at(&p, &d) { eprintln!("[display] {e}"); }
+                                }
                             }
                         }
                     }

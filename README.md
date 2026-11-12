@@ -164,6 +164,8 @@ Controls:
 | Esc | pause |
 | F10 | bug report |
 | F12 | screenshot |
+| Alt+Enter | fullscreen on/off (remembered) |
+| Alt+PageUp / Alt+PageDown | bigger / smaller window (4:3 sizes; the window size is remembered) |
 
 Optional cargo features:
 
