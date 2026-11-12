@@ -67,3 +67,6 @@ Start from origin/s/level-0a-civilian-slide-cels-5-base (= master 729f9694e + th
 - fix_06_driver_live::the_scared_cower_keeps_him_in_place_on_the_floor
 First decide whether the drawn gate itself is right for non-civilians (which drone code reads `drawn` - sight? animation? physics?) against the decompile, before re-tuning any walk.
 - Main agent, decompile answer to "is the gate right for non-civilians": YES. `View_AddObjects` 0x1e62d8 queues only objects linked into the visible cels (the VisCelList walk) and writes obj+0xFC = 2 for each queued object; obj+0xFC is read for EVERY drone by NDrone2_DoGravity 0x141e58, DroneAnim_SetDAnimInternal 0x13aee8, NDrone2_BondTalk 0x1446b0, Bullet_heatseekable 0x12f248 (homing only seeks drawn objects), DroneSpawner_Control 0x137e68 and control_movement_object_handler 0x1336f8. So the cel-visibility drawn gate is the game's rule for all drones; the 41 reds are its consequences - re-derive the walks/pins, do not narrow the gate to civilians.
+
+---
+claimed-by: sandbox5 at 2026-11-12T16:22Z
