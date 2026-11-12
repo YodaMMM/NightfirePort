@@ -381,6 +381,13 @@ pub fn record_tick(sim: &crate::scene::Sim, entry: Option<&nf_game::player::RamS
             rng_x: sim.drones.rng.x, rng_y: sim.drones.rng.y,
             bond_pos: sim.bond.pos, bond_yaw: sim.bond.yaw, bond_pitch: sim.bond.pitch,
             start_weapon: sim.gun.weapon, start_clip: sim.gun.clip, start_spare: sim.gun.spare,
+            // walks-replay-proof: the session's option rows ride the header too — a bug report
+            // replayed on the exact build must run under the reporter's options (the F10 hole:
+            // a 0.1.37 report replayed near the start instead of the reported spot).
+            options: Some(crate::replay::ReplayOptions {
+                auto_aim: sim.auto_aim, auto_switch: sim.drones.auto_switch,
+                crouch_toggle: sim.drones.crouch_toggle, crosshair: sim.drones.crosshair,
+            }),
         };
         let replay = crate::replay::Replay { header, ticks: Vec::new() };
         *g = Some(Session { replay, entry: entry.cloned(), difficulty, level_code: sim.level, last_frame: frame, truncated: false });

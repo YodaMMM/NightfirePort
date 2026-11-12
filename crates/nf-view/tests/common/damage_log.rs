@@ -1236,9 +1236,12 @@ impl Walker {
                 (Input { turn: drive_turn, look: drive_look, forward: if crowd { -1.0 } else if creep { 0.5 } else { 0.0 }, aiming: self.dmg.aimed_fights || self.dmg.sniper_stands, ..Default::default() }, fire, reload)
             };
             if reload {
-                self.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, true, false);
-                self.total_ticks += 1;
-                self.after_step();
+                // replay-parity-walker-side-effects: the reload step is a real walker-stepped
+                // tick — through `tick_inner` like every other. The old direct `step_bond` here
+                // was the ONE hole a recorded walk's replay fell through: it skipped the
+                // walker's per-tick work (the keep_alive top-ups, the cut-scene skip request,
+                // rise_watch, drone_watch), so the recorded inputs did not reproduce the run.
+                self.tick_inner(Input::default(), false, false, true);
                 for _ in 0..60 { self.tick(Input::default(), false); }
             } else if fire {
                 last_tap = t;
