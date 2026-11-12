@@ -119,3 +119,8 @@ green 0b/0c/12 runs above.
 
 not visible to me — this session's environment shows no token, context-window or cost
 figures, so there are no numbers to copy.
+
+---
+## ntfy failed (worker)
+
+curl (28) timeout, python urllib errno 101 network unreachable, wget 60s wall — full text in the branch report (docs/reports/walker-sidestep-decay-2.md, commit 0c0a on s/20-walker-sidestep-decay-2).
