@@ -139,3 +139,8 @@ earlier than the port's model — the live checks below decide which.
 ## Usage
 
 not visible to me
+
+---
+## ntfy failed (2026-11-12T07:37Z)
+
+All three fallbacks timed out from this sandbox: curl(28) Connection timed out after 20001 ms; python urllib hung past 90 s (first attempt SyntaxError on a non-ASCII dash); wget hung, no output. Full errors in the repo report.
