@@ -910,8 +910,15 @@ fn walk_the_full_mission_start_to_finish_real_damage_agent() {
 /// autoaim bit closes at 00 Agent (Autoaim_HardMul 0) [M Player_HandlePain 0x1902c8;
 /// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 01-04 group]. Real input only — the
 /// load path is the only difference.
+/// GREEN, UN-IGNORED (real-health-00agent-04, 2026-11-11 [L the runs on this tree, master
+/// c3e09cb2f]): the note's trade loss (Bond dies at tick 1627, 32 hits for 100.0, with her at
+/// 24) does NOT reproduce on the merged master — the single `--ignored` run passes in 1.1 s
+/// and the whole binary with `--include-ignored` is 10 passed / 0 failed / 0 ignored. The
+/// armour-first and cover levers the note named are NOT needed: the trade already wins under
+/// master's merged commits between this test's ledger round (1f6d00bc1) and now (the
+/// body-solidity 0a9d39435, the guards/glass/copters rules 2998b6a76 and the cut-scene-lines
+/// 74ee9b749 are the [S] candidates; the exact fixer is not bisected this window).
 #[test]
-#[ignore = "00 Agent: she fires at accuracy byte 0 [M 0x14b300:752] and the walker's P2K stand loses the trade by a few rounds: Bond dies at tick 1627, 32 hits for 100.0, with her at 24; the stand needs cover or the armour first"]
 fn walk_the_full_mission_start_to_finish_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_full_mission_start_to_finish_at(3));
 }

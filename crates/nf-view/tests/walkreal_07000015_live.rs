@@ -1206,8 +1206,13 @@ fn crouching_under_the_door52_beam_passes_it() {
 /// crossing at d 2.0 for 21.6 — he is answered from the door[39] north stand (measured spot
 /// (35.73, 41.28, 44.65) hp 10, 17.7 u off the stand) before the plank. The crossing takes
 /// 58.5 and Bond reaches the exit with 41.5 health; the assert pins 25 or more.
+/// GREEN again on the merged tree (los-mask-repins-15): the round-3 ledger's door[42] death
+/// (tick 9330 at (-0.65, 41.40, 25.82), "red with the flat boundary push too") does not
+/// reproduce anywhere on the merged master line — the walk passes at 823ff190b (the round-3
+/// merge, this branch's base) already [L the 2026-11-11 filtered run] and in the whole binary
+/// on master, twice, byte-identical [L]. The ignore was written on the round-3 development
+/// tree and outlived its own red (an ignored test is never re-run), so it is removed.
 #[test]
-#[ignore = "los-mask-repins-15: Bond dies at tick 9330 at (-0.65, 41.40, 25.82) at the door[42] threshold; red with the flat boundary push too"]
 fn walk_spawn_to_the_omega_sector_exit_real_damage_agent() {
     walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(2));
 }
@@ -1263,8 +1268,15 @@ fn walk_spawn_to_the_omega_sector_exit() {
 /// [M Drone_Create 0x136be0:49] and the keypad create-unlock tag (difficulty 1 only [M
 /// Lock_Create 0x1ae1f8 tail]) change the level at each pick, so each pick's real path to
 /// ch 0x8e is walked. The real-health sisters stay the damage pins.
+/// GREEN again under the game's guard sight (los-mask-repins-15): the round-3 ledger's
+/// door[42] crowd (guards #4 and #19 standing 0.1-1.6 u off Bond, the leaf closed again by
+/// the #447 shot's start, the mine never going off in 3000 ticks) is gone on the merged
+/// master line. Bisect pins the change to c3e09cb2f (death and hurt planes are solid, the
+/// level-agnostic sim change): the walk still fails at 6e24d0164 [L the 2026-11-11 filtered
+/// run] and passes at c3e09cb2f [L] and master, where the whole binary runs
+/// 8/1 (the 1 is the d3 00-agent ledger, not this walk) twice, byte-identical [L]. How the
+/// plane solidity moves the pair off the threshold is not measured — [S] unverified.
 #[test]
-#[ignore = "los-mask-repins-15: guards #4 and #19 stand at door[42] (0.1 u to 1.6 u from Bond); door[42] is closed again when the fence mine #447 shot starts, the line is blocked and the mine never goes off in 3000 ticks; green with the flat feet-height boundary push"]
 fn walk_spawn_to_the_omega_sector_exit_agent() {
     walk_spawn_to_the_omega_sector_exit_at(2);
 }

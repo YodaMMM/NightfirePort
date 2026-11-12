@@ -268,6 +268,15 @@ fn aimed_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
 /// makes. `difficulty` = the menu pick the chain runs at (the front-end's launch path [M
 /// C_SBNFDFCTY 0x216ca8:15]; 3 = the pre-sister byte-identical 00 Agent).
 fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
+    // warm-chain-margin-4: the tower2 OPT-IN flags are PROCESS-GLOBAL atomics and the tests of
+    // this binary share one process (--test-threads=1, the suite's shape) — the d3 walk's stores
+    // would leak into whichever test runs next (the run-8 ledger caught the agent sister running
+    // the d3 pre-clear). Every walk resets them first: the sisters stay byte-identical no matter
+    // the run order, and the d3 block below sets its own.
+    tower2::PRE_CLEAR_SOUTH_CORRIDOR.store(false, std::sync::atomic::Ordering::Relaxed);
+    tower2::PRE_CLEAR_NORTH_LOBBY.store(false, std::sync::atomic::Ordering::Relaxed);
+    tower2::REANCHOR_NORTH_LOBBY.store(false, std::sync::atomic::Ordering::Relaxed);
+    tower2::FLANK_LOBBY_EAST.store(false, std::sync::atomic::Ordering::Relaxed);
     // ---- 07000012 walked (the shared route) ----
     // Agent difficulty (3): the keypad locks' param-6 tag auto-unlocks them at create on
     // Operative [M 0x1ae1f8 tail], and the route's burn leg pins the Agent+ behaviour
@@ -321,11 +330,43 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             // 0c Agent lever; the wait doubles per further failure on the same drone).
             w.dmg.switch_dry = true;
             w.dmg.escalating_cooldowns = true;
+            w.resupply_home = true;
+            tower2::REANCHOR_NORTH_LOBBY.store(true, std::sync::atomic::Ordering::Relaxed);
+            tower2::PRE_CLEAR_NORTH_LOBBY.store(true, std::sync::atomic::Ordering::Relaxed);
+            // warm-chain-margin-5: the lobby-east posts' flank (the margin-4 report's first
+            // lever). The melt ledger killed every in-place answer from the lane (−59.5 in 64
+            // ticks from x −9.1, the exposure flickering [L this tree's NF_DMG_TRACE run]) and
+            // the pre-clear-from-the-lane-ends lever found nobody exposed at 14-16 u [L the
+            // run-8 ledger]; the flank walks the south band (z 13.4-13.6, the static probes'
+            // under-the-sight-lines lane) to the d2 fight#6 trace's proven fight spot (2.4,13.9)
+            // and takes #7 first, then #6 from the flank — the ordinary fight machinery, the
+            // walk's own flags. Rejected levers not repeated: no pre-clear hook, no
+            // bridge_and_retry, no in-place creep/longer stands (each measured dead, the
+            // margin-4 report).
+            tower2::FLANK_LOBBY_EAST.store(true, std::sync::atomic::Ordering::Relaxed);
+            // warm-chain-margin-4: the lobby-east posts (#6 rifle 0x18 + #7 0x19, hp 30/12, at
+            // (3-5,15-18)) open fire the moment the lane's west half is crossed — the d3 melt
+            // ledger: −59.5 in 64 ticks from x −9.1, the fights' own exposure flickering and
+            // the taps −3.5 per ~4 rounds [L this tree's NF_RF_TRACE run]. A player who spots
+            // the posted pair from the lane's west end shoots them from THERE (the master
+            // tower2 hook, now fired at the "the north lobby" end too, radius 16, stands
+            // capped 2400 so the 30-hp rifle post dies in one stand).
             // warm-chain-margin-3: `lenient` is NOT set here — the resupply-nav machinery
             // restores it to false after its own sub-walks, so a leg-level setting does not
             // survive the first dry-nav (the tick-13980 run still panicked non-lenient at the
             // "the north lobby 2" cap [L this tree's run]). The budget/wedge re-pin is the
             // next session's first item (see the report).
+            // warm-chain-margin-4 (the north-lobby-2 wedge's fix, both pieces OPT-IN and set by
+            // no other caller): the wedge's cause is the fights' resupply fetches — the stream
+            // guards' drops rest on the lower floor ~1.1 under the lane (the lane_floor_drops
+            // band admits them), the fetch's nav walk leaves Bond THERE, and the leg's resumed
+            // direct line crosses the lobby's south wall (cel 374 blocks every line from that
+            // floor to the lane; the probe scanned x −12..−4 at z 15.75–17.5: all blocked [L
+            // probe_012_rebridge, this tree]) for the 6000-tick cap (bond (-8.99,1.03,12.62),
+            // target (-8.00,1.10,17.00), segment Some(0.127), tick 13980 [L the repro run]).
+            // `resupply_home` makes each fetch a there-and-back errand (the leg resumes where
+            // it left); `REANCHOR_NORTH_LOBBY` is the legs' own recovery should a displacement
+            // ever survive the errand — the proven passage chain back to the lane.
             // civ-unignore (the measured pre-engagement burst): #10's first fire on the bend→
             // corridor walk is ONE tick of 8 × −3.0 shotgun pellets at d 3.5 (t2723, Bond at
             // (16.8,−12.0)) — the −24 chunk that sends 13 the 62 instead of 86, the exact leak the
@@ -837,6 +878,14 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
 /// 12-health guard [M NDrone2_HitDamage 0x145558 × DroneDamage_Head] — so the fights end in 1-2
 /// taps and the volley exposure shrinks with them (the 11 walk ships this wrapper on the same
 /// machinery [L its d1 pass]). The d2 sister keeps her passing torso timeline byte-identical.
+/// GREEN (warm-chain-margin-4): the north-lobby-2 wedge was the fights' resupply fetches — the
+/// stream guards' drops rest on the lower floor ~1.1 under the lane, the fetch's nav walk left
+/// Bond there, and the leg's resumed direct line crossed the lobby's south wall (cel 374 blocks
+/// every line from that floor to the lane [L probe_012_rebridge, this tree]) for the 6000-tick
+/// cap (the margin-3 ledger, repro'd on this tree at tick 13980). The fetch is now a
+/// there-and-back errand (`resupply_home`) and the east lobby legs carry the proven re-anchor
+/// chain (`REANCHOR_NORTH_LOBBY`) should a displacement ever survive it. Never lowered damage
+/// or health; the sisters stay byte-identical (neither flag is theirs).
 /// GREEN (civ-unignore-2): the file-local `clear_the_visible` pre-clears stand at the leg ends
 /// and take the posted guards BEFORE the legs walk into them — the master baseline died walking
 /// INTO the spawn pocket (#3's three −14 volleys at d 2.6, death t1666, 86.0 consumed) because
@@ -857,8 +906,22 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
 /// (-8.99,12.62) target (-8,17) [L the run dump]). The walker's lenient mode is clobbered by
 /// the nav machinery (it restores false), so the bail-and-continue shape needs either a
 /// nav-aware lenient restore or a flag-gated tower2 hook — the next session's first item.
+/// GREEN (warm-chain-margin-5): the lobby-east posts' flank (`FLANK_LOBBY_EAST`, the margin-4
+/// report's first lever, taken). The flank replaces the lane crossing at "the north lobby 2":
+/// the south turn at x −10.0, then the lobby's south band z 13.4-13.6 UNDER the posts' sight
+/// lines (the route rides this tree's static probes + settles [L the scratch probe,
+/// teleport-diagnosis only]: the crossing column x −8.5 runs clear 15.6→13.4, the band is
+/// blocked only at x −3.0..−2.5, the settles ground y 1.07-1.12, and the sight grid reads the
+/// band unseen but x −7.5..−4.5 at z 14.2), to the d2 fight#6 trace's proven fight spot
+/// (2.4,13.9). The ledger ([L] /tmp/d3run2.log, three byte-identical runs): the melt NEVER
+/// opened — the fights answered the posts ON the flank walk and killed #6 (tick 5979), #18 and
+/// #7 (tick 6505) with health 86.0 held flat; the flank's own targeted stands correctly found
+/// nobody left (their fallback role); 12 walked out in 18961 ticks, stuck 0, falls 0, 79.0 hp
+/// at 13's arrival; 13's lobby drained by the kit's own fights; end health 14.5, 24 hits for
+/// 64.5, 14 return-fire fights, Mission Complete. The rejected levers were NOT repeated (no
+/// pre-clear at 14-16 u, no bridge_and_retry, no in-place creep or longer stands — each
+/// measured dead in the margin-4 report). Never lowered damage or health; no top-ups.
 #[test]
-#[ignore = "real-damage margin: the margin-2 levers are ported and 12's 100.0-death is fixed (the d3 chain crosses 12 at 89.5 hp + 25.5 armour); what remains is 12's north lobby 2 leg budget/wedge under the sight batch (the leg's free fights + 3 dry-navs exceed 6000 ticks, the last 4.49 u wedge) — see docs/reports/level-13-warm-chain-margin-3.md for the re-pin plan."]
 fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage() {
     let iso = iso();
     walker::with_real_damage_head_hunting(|| walk_the_warm_chain(&iso, true, 3));

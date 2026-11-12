@@ -288,7 +288,14 @@ pub const SPU_RATE: f64 = 48_000.0;
 /// (`SPU_RATE / 60` samples) per batch: the key-on delay, `pitch / 0x1000` samples a tick, the
 /// loop wrap and the `RELEASE_SAMPLES` release.
 #[derive(Default)]
-pub struct VoiceClock { voices: Vec<ClockVoice> }
+pub struct VoiceClock {
+    voices: Vec<ClockVoice>,
+    /// music-section-parity: the music playhead with NO output device (headless runs), the mixer's
+    /// `MusicVoice` bookkeeping stepped 32 000 / 60 samples per game frame — the rate the device
+    /// plays it at when the game holds 60 Hz — so a headless run's music sections (the sim's
+    /// `iop_section`) advance as the windowed game's do. A device keeps its own playhead.
+    music_front: u64, music_end: u64, music_frac: f64,
+}
 
 struct ClockVoice { id: u32, len: usize, looped: bool, pos: f64, pitch: u32, wait: usize, releasing: bool, rel: f64 }
 
@@ -309,6 +316,9 @@ impl VoiceClock {
                 Cmd::Set { voice, pitch, .. } => if let Some(v) = self.voices.iter_mut().find(|v| v.id == *voice) { v.pitch = *pitch; },
                 Cmd::Stop { voice } => if let Some(v) = self.voices.iter_mut().find(|v| v.id == *voice) { v.releasing = true; },
                 Cmd::StopAll => for v in &mut self.voices { v.releasing = true; },
+                Cmd::MusicAppend(pcm) => self.music_end += pcm.len() as u64,
+                Cmd::MusicTruncate(at) => self.music_end = self.music_end.min((*at).max(self.music_front)),
+                Cmd::MusicStop => { self.music_front = 0; self.music_end = 0; self.music_frac = 0.0; }
                 _ => {}
             }
         }
@@ -340,8 +350,15 @@ impl VoiceClock {
             if need < left { ended.push(v.id); } else { v.pos += step * left as f64; }
         }
         self.voices.retain(|v| !ended.contains(&v.id));
+        self.music_frac += 32_000.0 / 60.0;
+        let whole = self.music_frac.floor();
+        self.music_frac -= whole;
+        self.music_front = (self.music_front + whole as u64).min(self.music_end);
         ended
     }
+
+    /// Music samples played since the last `MusicStop` on the frame clock (headless runs).
+    pub fn music_played(&self) -> u64 { self.music_front }
 
     /// Voices the clock still runs (tests).
     pub fn live(&self) -> usize { self.voices.len() }
@@ -754,5 +771,27 @@ mod tests {
         // Left is louder than right here (the right arrives via the diff cross-feed only) — both
         // nonzero is the requirement, the ratio just documents the path.
         assert!(max_l > max_r, "left send dominates but both sides speak: {max_l} vs {max_r}");
+    }
+}
+
+#[cfg(test)]
+mod music_clock_tests {
+    use super::*;
+    /// music-section-parity: with no device the music playhead advances 32 000 / 60 samples a game
+    /// frame (the device's rate at 60 Hz), stops at what is queued, and a stop resets it.
+    #[test]
+    fn the_headless_music_playhead_runs_on_the_frame_clock() {
+        let mut c = VoiceClock::default();
+        c.apply(&[Cmd::MusicAppend(vec![[0i16, 0]; 2000])]);
+        c.advance();
+        assert_eq!(c.music_played(), 533, "one frame = 533.33 samples");
+        c.advance(); c.advance();
+        assert_eq!(c.music_played(), 1600, "three frames = 1600 exactly");
+        for _ in 0..10 { c.advance(); }
+        assert_eq!(c.music_played(), 2000, "never past what is queued");
+        c.apply(&[Cmd::MusicStop]);
+        assert_eq!(c.music_played(), 0);
+        c.advance();
+        assert_eq!(c.music_played(), 0, "an empty queue does not advance");
     }
 }

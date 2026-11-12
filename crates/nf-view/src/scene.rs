@@ -2732,8 +2732,8 @@ impl Sim {
     pub fn step_bond(&mut self, input: nf_game::player::Input, trigger: bool, reload: bool, use_key: bool) {
         self.step_bond_sim(input, trigger, reload, use_key);
         // The app's order: the step, then `sound_tick` (lib.rs's sim loop). Headless runs only.
-        // The music commands stay queued for the caller: the headless driver has no music stream
-        // to take them (the deviceless run keeps them, as before the driver ran here).
+        // The music commands stay queued for the caller as well (the deviceless run keeps them, as
+        // before the driver ran here); the headless driver plays them on the frame clock.
         // The driver sees each command once (the `.1` count of those already sent).
         if let Some(mut s) = self.headless_sound.take() {
             let music = self.drones.music.out.clone();

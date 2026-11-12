@@ -5344,6 +5344,19 @@ impl Drone {
             }
             // EXIT (case 2): `+0x44 = 1`.
             (CIVILIAN_DOOR_GUARD, msg::EXIT) => { true }
+            // The alert family — case 0x11/0x12/0x14/0x15/0x16/0x1e through
+            // `DroneVision_EnemyAlerts` (0x177c18 → `AlertSound` 0x177800 for the sound), Some →
+            // the state it picks [M 0x160648:154-161 — the shared group's `SM+0x1c = r`, SetState
+            // on a non-zero r]. The old arm list had NO sound arm — the msg fell to GLOBAL and
+            // dropped, so the library sentries ignored the sustained burst the game's handler
+            // answers (guard-noise-attack-states red test; the -hall report's live check 2).
+            // SCREAM/SHOUT ride the pre-dispatch fold, msgs 0x15/0x16 are EnemyAlerts' dead shout
+            // rows (ShoutFromOtherDrone returns 0 [M 0x177a30]). No RNG in any of these paths
+            // [M the group body].
+            (CIVILIAN_DOOR_GUARD, msg::SOUND | msg::ALARM) => {
+                if let Some(n) = self.enemy_alerts(d, s, m) { self.set_state(n); }
+                true
+            }
             // UPDATE (case 3): an armed opponent within the game's gates → hostile; else the zone
             // dispatch (the zone itself is the pre-pass's `door_zone`). The game pairs ONLY in the
             // ENTER [M 0x160648:21 — SetDronePartner's sole call site]; this UPDATE never re-pairs
@@ -8674,9 +8687,16 @@ impl Drone {
             }
             // Suspect: any further sound → Attack. Alert (0x16b540) has no sound case (the global state's applies).
             (HEARD_NOISE_SUSPECT, msg::SOUND) => {
-                // 0x16b0e0 case 0x14: a share above 0.1 stamps the sound-alert pending bit (+0x4F8
-                // 0x10000000 with the 0x4000000 sighting flag), then Attack unconditionally.
-                if self.sound_share > 0.1 { self.alert_pending |= 0x1000_0000; }
+                // 0x16b0e0 case 0x14: a share above 0.1 stamps BOTH bits — +0x4F8 0x4000000 (the
+                // sighting flag) AND 0x10000000 — then Attack unconditionally, return 1 [M
+                // 0x16b0e0 case 0x14: the two `|= 0x4000000` / `|= 0x10000000` writes sit inside
+                // the `if (0.1 < *(float *)(param_2 + 0x514))`, the SetState(0x56) after it]. The
+                // old arm raised only 0x10000000 — the sighting stamp the game's draw carries was
+                // missing (guard-noise-attack-states red test).
+                if self.sound_share > 0.1 {
+                    self.sighted = true; // +0x4F8 |= 0x4000000 [M 0x16b0e0 case 0x14]
+                    self.alert_pending |= 0x1000_0000;
+                }
                 self.set_state(ATTACK); true
             }
             (HEARD_NOISE_ALERT, msg::ENTER) => {
@@ -10103,6 +10123,17 @@ impl Drone {
                 if self.hostage_target.is_some() { self.monitor_talk_to_mission_obj(); }
                 if self.seen { self.set_state(ATTACK); } true
             }
+            // The alert family — case 0x11/0x12/0x14/0x15/0x16/0x1e through
+            // `DroneVision_EnemyAlerts` (0x177c18 → `AlertSound` 0x177800 for the sound), Some →
+            // the state it picks [M 0x15c728:69-85; the game's `SM+0x1c = r` then SetState on a
+            // non-zero r]. The old arm list had NO sound arm — the msg fell to GLOBAL and dropped
+            // (guard-noise-attack-states red test); SCREAM/SHOUT ride the pre-dispatch fold, msgs
+            // 0x15/0x16 are EnemyAlerts' dead shout rows (ShoutFromOtherDrone returns 0 [M
+            // 0x177a30 — linker-stripped body]). No RNG in any of these paths [M the group body].
+            (HOSTAGE_KILLER, msg::SOUND | msg::ALARM) => {
+                if let Some(n) = self.enemy_alerts(d, s, m) { self.set_state(n); }
+                true
+            }
             // 0x15c728 case 0x1a [M :86-89] — `NDrone2_TalkToMissionObj` 0x14a8b8 (the monitor's
             // own-obj sends land here).
             (HOSTAGE_KILLER, msg::MISSION_TALK) => { self.talk_to_mission_obj(rng); true }
@@ -10854,7 +10885,22 @@ impl Drone {
                 }
                 true
             }
-            (crate::kiko::KIKO_MISSION, msg::SOUND | msg::ALARM | 0x11 | 0x12 | 0x15 | 0x16 | 0x1f) => d.level == 0x0700_0016,
+            // KikoMission's sound family — case 0x11/0x12/0x14/0x15/0x16/0x1e [M 0x15df28:54-68]:
+            // on 0x07000016 the family is ignored (`return 1`); ELSEWHERE `DroneVision_EnemyAlerts`
+            // runs (its bookkeeping and `AlertSound` writes) and a non-zero result hardcodes
+            // KikoMissionRun 0x1a — the shared tail `uVar4 = 0x1a` discards the fold's own pick
+            // [M :63-68 + the `uVar4 = 0x1a` tail at the LAB_0015e0b0 SetState]. The old arm
+            // dropped the family off the gate level (guard-noise-attack-states red test). No RNG
+            // in the path [M the case body].
+            (crate::kiko::KIKO_MISSION, msg::SOUND | msg::ALARM | 0x11 | 0x12 | 0x15 | 0x16) => {
+                if d.level != 0x0700_0016 && self.enemy_alerts(d, s, m).is_some() {
+                    self.set_state(crate::kiko::KIKO_MISSION_RUN); // the hardcoded 0x1a [M 0x15df28:68]
+                }
+                true
+            }
+            // Case 0x1f rides the same gate [M 0x15df28:69-74] — unchanged behavior (out of the
+            // sound task's scope; the old arm swallowed it with the family).
+            (crate::kiko::KIKO_MISSION, 0x1f) => d.level == 0x0700_0016,
             // KikoMissionRun 0x1a (0x15e0d8): route done → RunToAlarm.
             (crate::kiko::KIKO_MISSION_RUN, msg::ENTER) => { self.vision_on = true; self.call_anim(d, 0x1e, 0, 0); true }
             (crate::kiko::KIKO_MISSION_RUN, msg::UPDATE) => {
@@ -26329,6 +26375,190 @@ mod abseil_tests {
         assert_eq!(dr3.team, 3, "the unarmed sight never flips the team (the drawn-weapon gate) [M 0x17a4b8]");
         assert_ne!(dr3.state, state::ATTACK, "the unarmed sight never attacks");
         assert!(!dr3.scare_shouted, "the unarmed sight never reaches the shout arm [M 0x15d860:69]");
+    }
+
+    /// guard-noise-attack-states: HostageKiller's msg-0x14 arm — the game's case 0x11/0x12/0x14/
+    /// 0x15/0x16/0x1e group [M NDrone2_DSTATE_HostageKiller 0x15c728:69-85] routes the alert through
+    /// `DroneVision_EnemyAlerts` (0x177c18 → `AlertSound` 0x177800); mode 9 at alertness 1.0 is the
+    /// attack row (>0.7 → 0x56) [M 0x177800:51-68], which stamps 0x4000000|0x10000000 [M :69-73].
+    /// The port had NO (HOSTAGE_KILLER, msg::SOUND) arm — the message fell to GLOBAL and dropped,
+    /// so the executioner ignored gunfire the game draws him with.
+    #[test]
+    fn hostage_killer_hears_gunfire_through_the_shared_sound_fold() {
+        // prop 0x1f needs REAL table wiring — `empty_data!`'s empty descs return 0 for every
+        // prop, which would stub the fold's first gate. One desc (0x1f → word 0, shift 0,
+        // masks[0] = 1) is enough (the 26074 pattern) [M nf-formats::drone::PropertyTables].
+        let keep = (
+            CollisionWorld::empty(),
+            nf_formats::drone::DroneAnimData { states: Vec::new(), info: Vec::new(), tables: Vec::new() },
+            nf_formats::drone::PropertyTables { descs: vec![[0u8, 0u8]; 0x20], masks: vec![1u32], types: Vec::new() },
+            std::collections::HashMap::<u32, nf_formats::anim::Script>::new(),
+            nf_formats::weapon::WeaponData { records: Vec::new(), ammo_cap: Vec::new(), ammo_raw: Vec::new() },
+            nf_formats::tuning::Tuning::default(),
+            std::collections::HashMap::<u32, nf_formats::anim::Sequence>::new(),
+            std::collections::HashMap::<u32, nf_formats::character::Skin>::new(),
+            std::collections::HashMap::<u8, nf_formats::character::Skeleton>::new(),
+            crate::nav::Network::default(),
+            Vec::<crate::cover::CoverNode>::new(),
+            nf_formats::hitbox::CollisionBones { human: Vec::new(), astronaut: Vec::new() },
+            Vec::<crate::aivolume::AiVolume>::new(),
+            std::collections::HashMap::<u32, crate::pickup::Model>::new(),
+            Vec::<crate::aipoint::AiPoint>::new(),
+        );
+        let d = Data { tables: &keep.1, props: &keep.2, scripts: &keep.3, weapons: &keep.4, world: &keep.0, level: 0x0700_0005,
+            sequences: &keep.6, skins: &keep.7, skeletons: &keep.8, nav: &keep.9, covers: &keep.10, tuning: &keep.5,
+            hitboxes: &keep.11, volumes: &keep.12, sfx: None, models: &keep.13, surfaces: None, voices: None,
+            difficulty: 2, ai_points: &keep.14 };
+        let mut rng = Rng::new(0x5eed);
+        let mut dr = drone_at([10.0, 0.0, 10.0]);
+        d.props.set(0x1f, &mut dr.props, 1); // the hearing prop [M 0x177800:20-21]
+        dr.mode = 9;
+        dr.alert = 1.0;
+        dr.dist = 10.0;
+        dr.state = state::HOSTAGE_KILLER;
+        dr.send(&d, &mut rng, 100, msg::SOUND);
+        assert!(dr.log.iter().any(|&(f, n)| f == 100 && n == state::ATTACK),
+            "the executioner hears: mode 9 at alert 1.0 → Attack [M 0x15c728:69-85 → 0x177800:51-68]; log {:?}", dr.log);
+        assert!(dr.sighted, "the attack row stamps 0x4000000 [M 0x177800:69-73]");
+        assert!(dr.alert_pending & 0x1000_0000 != 0, "the attack row stamps 0x10000000 [M 0x177800:69-73]");
+    }
+
+    /// guard-noise-attack-states: CivilianDoorGuard's msg-0x14 arm — the game's case 0x11/0x12/
+    /// 0x14/0x15/0x16/0x1e group [M NDrone2_DSTATE_CivilianDoorGuard 0x160648:154-161] routes the
+    /// alert through `DroneVision_EnemyAlerts` like any guard. The port had NO
+    /// (CIVILIAN_DOOR_GUARD, msg::SOUND) arm — the message fell to GLOBAL and dropped, so the
+    /// hall-door sentries ignored the sustained burst the game's handler answers (the -hall
+    /// report's live check 2).
+    #[test]
+    fn civilian_door_guard_hears_gunfire_through_the_shared_sound_fold() {
+        let keep = (
+            CollisionWorld::empty(),
+            nf_formats::drone::DroneAnimData { states: Vec::new(), info: Vec::new(), tables: Vec::new() },
+            nf_formats::drone::PropertyTables { descs: vec![[0u8, 0u8]; 0x20], masks: vec![1u32], types: Vec::new() },
+            std::collections::HashMap::<u32, nf_formats::anim::Script>::new(),
+            nf_formats::weapon::WeaponData { records: Vec::new(), ammo_cap: Vec::new(), ammo_raw: Vec::new() },
+            nf_formats::tuning::Tuning::default(),
+            std::collections::HashMap::<u32, nf_formats::anim::Sequence>::new(),
+            std::collections::HashMap::<u32, nf_formats::character::Skin>::new(),
+            std::collections::HashMap::<u8, nf_formats::character::Skeleton>::new(),
+            crate::nav::Network::default(),
+            Vec::<crate::cover::CoverNode>::new(),
+            nf_formats::hitbox::CollisionBones { human: Vec::new(), astronaut: Vec::new() },
+            Vec::<crate::aivolume::AiVolume>::new(),
+            std::collections::HashMap::<u32, crate::pickup::Model>::new(),
+            Vec::<crate::aipoint::AiPoint>::new(),
+        );
+        let d = Data { tables: &keep.1, props: &keep.2, scripts: &keep.3, weapons: &keep.4, world: &keep.0, level: 0x0700_0001,
+            sequences: &keep.6, skins: &keep.7, skeletons: &keep.8, nav: &keep.9, covers: &keep.10, tuning: &keep.5,
+            hitboxes: &keep.11, volumes: &keep.12, sfx: None, models: &keep.13, surfaces: None, voices: None,
+            difficulty: 2, ai_points: &keep.14 };
+        let mut rng = Rng::new(0x5eed);
+        let mut dr = drone_at([10.0, 0.0, 10.0]);
+        d.props.set(0x1f, &mut dr.props, 1); // the hearing prop [M 0x177800:20-21]
+        dr.mode = 9;
+        dr.alert = 1.0;
+        dr.dist = 10.0;
+        dr.state = state::CIVILIAN_DOOR_GUARD;
+        dr.send(&d, &mut rng, 100, msg::SOUND);
+        assert!(dr.log.iter().any(|&(f, n)| f == 100 && n == state::ATTACK),
+            "the door sentry hears: mode 9 at alert 1.0 → Attack [M 0x160648:154-161 → 0x177800:51-68]; log {:?}", dr.log);
+        // Sister: the quiet sound takes the fall-through row → HeardNoise 0xa2 [M 0x177800:74-79].
+        // The DTYPE here sits OUTSIDE the attack rows {9, 0x12, 0x13, 0x16} — a row DTYPE never
+        // investigates (alert ≤ 0.7 returns 0 [M :52-72]); the fall-through is the other DTYPEs'.
+        let mut dr2 = drone_at([10.0, 0.0, 10.0]);
+        d.props.set(0x1f, &mut dr2.props, 1);
+        dr2.mode = 5;
+        dr2.alert = 0.0;
+        dr2.dist = 10.0;
+        dr2.sound_share = 0.5;
+        dr2.state = state::CIVILIAN_DOOR_GUARD;
+        dr2.send(&d, &mut rng, 100, msg::SOUND);
+        assert!(dr2.log.iter().any(|&(f, n)| f == 100 && n == state::HEARD_NOISE),
+            "the quiet sound investigates through the fold [M 0x177800:74-79]; log {:?}", dr2.log);
+    }
+
+    /// guard-noise-attack-states: Suspect's dedicated case stamps BOTH bits — a share above 0.1
+    /// raises `+0x4F8` 0x4000000 AND 0x10000000, then SetState(0x56) runs unconditionally, return 1
+    /// [M NDrone2_DSTATE_HeardNoiseSuspect 0x16b0e0 case 0x14]. The port stamped only 0x10000000 —
+    /// the sighting flag stayed clear, so the draw into Attack skipped the game's sighted stamp.
+    #[test]
+    fn suspects_loud_sound_stamps_the_sighting_flag() {
+        empty_data!(0x0700_0001, keep, d);
+        let mut rng = Rng::new(0x5eed);
+        let mut dr = drone_at([10.0, 0.0, 10.0]);
+        dr.state = state::HEARD_NOISE_SUSPECT;
+        dr.sound_share = 0.5;
+        dr.send(&d, &mut rng, 100, msg::SOUND);
+        assert!(dr.log.iter().any(|&(f, n)| f == 100 && n == state::ATTACK),
+            "the unconditional SetState(0x56) [M 0x16b0e0 case 0x14]; log {:?}", dr.log);
+        assert!(dr.sighted, "+0x4F8 |= 0x4000000 with the 0.1+ share [M 0x16b0e0 case 0x14]");
+        assert!(dr.alert_pending & 0x1000_0000 != 0, "+0x4F8 |= 0x10000000 with the 0.1+ share [M 0x16b0e0 case 0x14]");
+        // Sister: the quiet share (≤ 0.1) still attacks but stamps nothing [M 0x16b0e0 case 0x14 —
+        // both writes sit inside the `if`].
+        let mut dr2 = drone_at([10.0, 0.0, 10.0]);
+        dr2.state = state::HEARD_NOISE_SUSPECT;
+        dr2.sound_share = 0.05;
+        dr2.send(&d, &mut rng, 100, msg::SOUND);
+        assert!(dr2.log.iter().any(|&(f, n)| f == 100 && n == state::ATTACK),
+            "the unconditional SetState(0x56) holds below the share [M 0x16b0e0 case 0x14]; log {:?}", dr2.log);
+        assert!(!dr2.sighted, "no 0x4000000 below the 0.1 share [M 0x16b0e0 case 0x14]");
+        assert!(dr2.alert_pending & 0x1000_0000 == 0, "no 0x10000000 below the 0.1 share [M 0x16b0e0 case 0x14]");
+    }
+
+    /// guard-noise-attack-states: KikoMission off the gate level — the game's case 0x11/0x12/
+    /// 0x14/0x15/0x16/0x1e group [M NDrone2_DSTATE_KikoMission 0x15df28:54-68] ignores the family
+    /// on 0x07000016 (`return 1`), and ELSEWHERE runs `DroneVision_EnemyAlerts` (its bookkeeping
+    /// and `AlertSound` writes) and hardcodes KikoMissionRun 0x1a for a non-zero result — the
+    /// shared tail `uVar4 = 0x1a` discards the fold's own pick [M :63-68 + the `uVar4 = 0x1a` tail].
+    /// The port swallowed the whole family on 0x16 (right) and DROPPED it elsewhere (wrong).
+    #[test]
+    fn kiko_mission_runs_enemy_alerts_off_0x16_to_the_run_state() {
+        let keep = (
+            CollisionWorld::empty(),
+            nf_formats::drone::DroneAnimData { states: Vec::new(), info: Vec::new(), tables: Vec::new() },
+            nf_formats::drone::PropertyTables { descs: vec![[0u8, 0u8]; 0x20], masks: vec![1u32], types: Vec::new() },
+            std::collections::HashMap::<u32, nf_formats::anim::Script>::new(),
+            nf_formats::weapon::WeaponData { records: Vec::new(), ammo_cap: Vec::new(), ammo_raw: Vec::new() },
+            nf_formats::tuning::Tuning::default(),
+            std::collections::HashMap::<u32, nf_formats::anim::Sequence>::new(),
+            std::collections::HashMap::<u32, nf_formats::character::Skin>::new(),
+            std::collections::HashMap::<u8, nf_formats::character::Skeleton>::new(),
+            crate::nav::Network::default(),
+            Vec::<crate::cover::CoverNode>::new(),
+            nf_formats::hitbox::CollisionBones { human: Vec::new(), astronaut: Vec::new() },
+            Vec::<crate::aivolume::AiVolume>::new(),
+            std::collections::HashMap::<u32, crate::pickup::Model>::new(),
+            Vec::<crate::aipoint::AiPoint>::new(),
+        );
+        let d = Data { tables: &keep.1, props: &keep.2, scripts: &keep.3, weapons: &keep.4, world: &keep.0, level: 0x0700_0005,
+            sequences: &keep.6, skins: &keep.7, skeletons: &keep.8, nav: &keep.9, covers: &keep.10, tuning: &keep.5,
+            hitboxes: &keep.11, volumes: &keep.12, sfx: None, models: &keep.13, surfaces: None, voices: None,
+            difficulty: 2, ai_points: &keep.14 };
+        let d16 = Data { tables: &keep.1, props: &keep.2, scripts: &keep.3, weapons: &keep.4, world: &keep.0, level: 0x0700_0016,
+            sequences: &keep.6, skins: &keep.7, skeletons: &keep.8, nav: &keep.9, covers: &keep.10, tuning: &keep.5,
+            hitboxes: &keep.11, volumes: &keep.12, sfx: None, models: &keep.13, surfaces: None, voices: None,
+            difficulty: 2, ai_points: &keep.14 };
+        let mut rng = Rng::new(0x5eed);
+        // Off 0x16: the alert runs the fold and lands on the hardcoded KikoMissionRun 0x1a.
+        let mut dr = drone_at([10.0, 0.0, 10.0]);
+        d.props.set(0x1f, &mut dr.props, 1); // the hearing prop [M 0x177800:20-21]
+        dr.mode = 9;
+        dr.alert = 1.0;
+        dr.dist = 10.0;
+        dr.state = crate::kiko::KIKO_MISSION;
+        dr.send(&d, &mut rng, 100, msg::SOUND);
+        assert!(dr.log.iter().any(|&(f, n)| f == 100 && n == crate::kiko::KIKO_MISSION_RUN),
+            "the off-0x16 sound hardcodes KikoMissionRun 0x1a [M 0x15df28:63-68 + the uVar4 = 0x1a tail]; log {:?}", dr.log);
+        // On 0x07000016 itself the family is ignored [M 0x15df28:60-62].
+        let mut dr2 = drone_at([10.0, 0.0, 10.0]);
+        d16.props.set(0x1f, &mut dr2.props, 1);
+        dr2.mode = 9;
+        dr2.alert = 1.0;
+        dr2.dist = 10.0;
+        dr2.state = crate::kiko::KIKO_MISSION;
+        dr2.send(&d16, &mut rng, 100, msg::SOUND);
+        assert_eq!(dr2.state, crate::kiko::KIKO_MISSION, "the 0x07000016 gate ignores the family [M 0x15df28:60-62]");
+        assert!(!dr2.log.iter().any(|&(f, _)| f == 100), "no transition on the gate level [M 0x15df28:60-62]; log {:?}", dr2.log);
     }
 }
 
