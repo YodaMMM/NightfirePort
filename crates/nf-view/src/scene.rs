@@ -8154,6 +8154,10 @@ fn add_instance_tagged(level: &Level, inst: &Instance, layer: Layer, character: 
     // upper-left 3×3 are the basis vectors and their lengths are the per-axis scales. `object_matrix` is a pure
     // rotation+translation (column lengths = 1), so most world placements keep `obj.radius` unchanged.
     let centre = transform(&inst.matrix, obj.centre);
+    // 1b-control-room-wreck-key: a World instance with an explicit tag (the destroyed-glist wreck
+    // bakes) takes the tag's bits as its centre, so its draws stay apart from the intact leaf's in
+    // both the group key and the renderer's centre-bit gates (`destroy_dead` / `destroy_wreck_all`).
+    let centre = match (layer, tag) { (Layer::World, Some(t)) => t.map(f32::from_bits), _ => centre };
     // CompAlphaObj 0x1d3458 [M] — QuickSort comparator id 4, View_DrawObjList 0x1e69a0:24's
     // per-object draw key (f32 at +0 = the world-centre distance, ascending); this pass/layer
     // + centre model replaces the game's alpha-object ordering.
@@ -10555,8 +10559,17 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                                 let wmult = if wobj.flags & 0x800 != 0 {
                                     mul_bytes(cel_ambient(&room_cels, transform(&inst.matrix, wobj.centre), 0).unwrap_or([0xff; 3]))
                                 } else { [1.0; 3] };
-                                add_instance(level, &Instance { map: wm, object: wo, matrix: inst.matrix, placement: p.clone() }, Layer::World, None, &mut groups, Some(&mut bounds), None, None, None, wmult, &room_cels, u32::MAX, u32::MAX);
-                                destroy_wrecks.push((transform(&inst.matrix, wobj.centre), pi));
+                                // 1b-control-room-wreck-key: the wreck's identity is its centre one ulp off in x.
+                                // A wreck glist can share the intact glist's sphere exactly — 0700001b's
+                                // SCRIPT_ControlRoom (PL#1) and its LOD-next SCRIPT_ControlRoom_DEST [D the
+                                // block-0x27 word] bake to the same centre bits — and the centre-keyed gates
+                                // then counted the intact room as its own wreck: hidden while alive, dropped
+                                // when dead, so the control-room shell never drew (space showed through the
+                                // arrival cut-scene's back wall).
+                                let wc = transform(&inst.matrix, wobj.centre);
+                                let wtag = [wc[0].to_bits() ^ 1, wc[1].to_bits(), wc[2].to_bits()];
+                                add_instance_tagged(level, &Instance { map: wm, object: wo, matrix: inst.matrix, placement: p.clone() }, Layer::World, None, &mut groups, Some(&mut bounds), None, None, None, wmult, &room_cels, u32::MAX, u32::MAX, Some(wtag));
+                                destroy_wrecks.push((wtag.map(f32::from_bits), pi));
                             }
                         }
                     }
