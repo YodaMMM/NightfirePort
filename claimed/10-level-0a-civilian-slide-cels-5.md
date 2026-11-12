@@ -22,5 +22,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 claimed-by: sandbox7 at 2026-11-12T16:54Z
 
 ---
-## Main agent evidence (2026-11-12 13:00 MST): the drawn gate on 07000011, live
+## Main agent evidence (2026-11-12 12:40 MST): the drawn gate on 07000011, live
 [L PCSX2 07000011 d2, Bond idle at the spawn] the start-corridor guard 0x1897990 runs GoToGoal (0x63) from (10.17, 11.68) to (2.44, 16.15) with obj+0xFC = 2 (drawn) on every frame 6-102, stepping ~0.1/frame. The port's #5 (same guard, master 70555d76c) is `drawn = false` from t33 at (7.94, 13.08) (`visible_to`'s eye rays are blocked) and takes the undrawn slide at the danim's 0.04 (0xdc), so it reaches the corridor ~85 ticks late; with the no-bunching scan on, its partner then meets the civilian and parks (0x5e) - the three start_corridor_guard_07000011_live reds. The game draws this guard although no straight ray reaches it: room visibility, not the ray, as this task's gate does.
