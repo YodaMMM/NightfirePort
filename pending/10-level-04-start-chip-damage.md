@@ -39,3 +39,6 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 Game [L PCSX2, drone 0x1b45420 Drone+0x10C, Bond BLData+0x894]: 0xa9 (intro) -> 0xae @1327 -> **0xaa @1461 at (1.76, 5.31, 30.09)** (a jump ~4.4 u EAST of its start (-2.64, 5.34, 30.08)) -> hits of **1.25** at 1474, 1477, 1538, 1605, 1607, 1661 (~one per 60 frames) -> 0xab/0xad @1666 -> 0xac @1779 moving onto Bond -> **-25 @1823** (melee) -> 0xae @1976 -> 0xa9 @2092 back east at (1.89, 5.32, 30.97).
 Port [load_with_carry_difficulty(.., 1)]: 0xae @1332 -> **0xaa @1464 at (-5.50, 5.34, 28.15)** (WEST/south, not east) -> hits of **1.5 every 6 ticks** in bursts of 6 (1465-1495, 1516-1546, 1567-1597, 1618-1642), ~20-tick gaps = 24 hits in 180 ticks -> 0xae @1644 -> 0xaa again @1757 at (-6.54, 5.41, 25.82), hits of 0.75 -> 0xad @1937 -> 0xac @2048 -> -25 @2090.
 So three things differ in state 0xaa: (a) the jump target (east in the game, west in the port), (b) the attack cadence (game ~1 hit / 60 frames, port 1 hit / 6 ticks in bursts - the throw/fire timer or the burst count), (c) the per-hit damage at d1 (1.25 vs 1.5, then 0.75). Read NDrone2's 0xaa state handler (the ninja's throw state) and its fire timer; pin the cadence and damage against this trace.
+
+---
+claimed-by: main agent at 2026-11-12T15:40:00Z (workers paused until 17:02 MST)
