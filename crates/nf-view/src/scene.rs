@@ -8183,6 +8183,31 @@ fn add_instance_tagged(level: &Level, inst: &Instance, layer: Layer, character: 
     // onward — we apply the writes per-batch, not per-leaf (the old per-leaf approach made the sniper's gun body
     // transparent because the leaf's final state was additive for the trailing reflection batches).
     let (mut alpha, mut test, mut zbuf) = (0x44u64, 0x5001bu64, 0x3100_0000u64);
+    // cut1b-face: a character's groups draw in the glist's own batch order. The game sends a
+    // skinned glist's batches in packet order (`psiDrawSkinObjectMatrix` 0x111828 walks the leaf's
+    // batch list), so a depth-writing alpha-tested overlay late in the list lands AFTER the batches it
+    // covers. Keying the groups by texture index alone reordered them: 0700001b's arrival-scene actor
+    // (glist 0x0200087D) has its visor tint (texture 7, batch 56: 16×16, every texel alpha 1-0x3f,
+    // ALPHA 0x44 / TEST GEQUAL 1 / ZBUF write on [D]) ahead of its face (texture 9, batches 2-16), and
+    // the tint's depth write hid the face. The ordinal = the first batch carrying the same (texture,
+    // GS state), so merging stays as before and only the order changes.
+    let mut order_firsts: Vec<(Option<(usize, u32)>, Draw)> = Vec::new();
+    if layer == Layer::Character {
+        let (mut a2, mut t2, mut z2) = (0x44u64, 0x5001bu64, 0x3100_0000u64);
+        for leaf in &obj.gfx.leaves {
+            let mut gi = 0usize;
+            for (bi, b) in leaf.batches.iter().enumerate() {
+                while gi < leaf.gs.len() && leaf.gs[gi].2 <= bi {
+                    let (r, v, _) = leaf.gs[gi];
+                    match r { 0x42 => a2 = v, 0x47 => t2 = v, 0x4e => z2 = v, _ => {} }
+                    gi += 1;
+                }
+                let k = b.texture.filter(|&t| (t as usize) < level.maps[inst.map].textures.len()).map(|t| (inst.map, t));
+                let d = Draw::from_gs(pass, fog, a2, t2, z2);
+                if !order_firsts.iter().any(|e| *e == (k, d)) { order_firsts.push((k, d)); }
+            }
+        }
+    }
     for (li, leaf) in obj.gfx.leaves.iter().enumerate() {
     let mut gs_idx = 0usize;
     for (bi, b) in leaf.batches.iter().enumerate() {
@@ -8193,8 +8218,11 @@ fn add_instance_tagged(level: &Level, inst: &Instance, layer: Layer, character: 
             gs_idx += 1;
         }
         let draw = Draw::from_gs(pass, fog, alpha, test, zbuf);
-        let lkey = if matches!(layer, Layer::World) { (li as u32) << 16 | bi as u32 } else if node == VIEW_MODEL_NODE { 1 } else { 0 };
         let key = b.texture.filter(|&t| (t as usize) < level.maps[inst.map].textures.len()).map(|t| (inst.map, t));
+        let ord = order_firsts.iter().position(|e| *e == (key, draw)).unwrap_or(0) as u32;
+        let lkey = if matches!(layer, Layer::World) { (li as u32) << 16 | bi as u32 }
+            else if node == VIEW_MODEL_NODE { 0x8000_0000 | ord }
+            else if layer == Layer::Character { ord } else { 0 };
         // fix-render3: the room cel for the static World layer (build_LinkToRoom 0x1c9680 →
         // build_FindCel 0x1c8cb0 on the object's world centre; View_AddCels 0x1e6ba0 frustum-tests
         // each cel's bbox per viewer). Everything posed per frame keeps None.
