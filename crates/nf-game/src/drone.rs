@@ -11317,7 +11317,16 @@ impl Drone {
                 }
                 return None;
             }
-            let go = self.opp_los && self.seen && self.prop(d, 0x3c) && self.obj_armed() && self.alert_bits & 0x20 == 0;
+            let go = self.opp_los && self.seen_ticks >= self.reaction_time(d.level)
+                && self.prop(d, 0x3c) && self.obj_armed() && self.alert_bits & 0x20 == 0;
+            // [M 0x177ed0:26-28 + 0x176a28:200-222 + 0x175ef0:33-36] the sight bit `+0x228 & 4` —
+            // guard-castle-chat-gate: the game CLEARS it every pass without the held sight
+            // (ProcessDroneSight's lost arms 0x176a28:106/200) and sets it in HaveOpponentSight
+            // 0x175ef0:33-36 only behind the reaction gate on a tick whose LOS ray (bit 2,
+            // SeekOpponentLOS 0x175cb8:104) held — the port's per-tick analog is
+            // `los && seen_ticks >= reaction_time`, NOT the sticky `seen` latch (which never
+            // clears for team != 2). EnemyLookForOpponent requires bit 4 BEFORE the team arms,
+            // so both break-off arms take the per-tick form.
             if ailog() {
                 eprintln!("[ailog] guard {} look_for_opponent: team 2 opp {:?} los {} seen {} -> {}",
                     self.index, self.opp_drone, self.opp_los, self.seen, if go { "ATTACK" } else { "none" });
@@ -11344,10 +11353,17 @@ impl Drone {
         // interrogate bit refuse, and a mode 7/0xE guard without prop 0x57 runs past the opponent in
         // states 0x85 and 99.
         let run_past = !self.prop(d, 0x57) && matches!(self.mode, 7 | 0xe) && matches!(self.state, state::ENEMY_RUN_TO_POINT | state::GO_TO_GOAL);
-        let go = self.seen && self.prop(d, 0x3c) && (self.alert >= 0.66 || self.prop(d, 0x51)) && !self.cover_claimed && self.alert_bits & 0x20 == 0 && !run_past;
+        // [M 0x177ed0:26-28] the sight bit `+0x228 & 4` gates the break — the per-tick held-sight
+        // form (see the team-2 arm's citation block above); the sticky latch broke the 07000006
+        // castle chat pair off the moment Bond was EVER reaction-sighted, where the game holds
+        // the chat until the sight is held on the CURRENT tick.
+        let go = self.los && self.seen_ticks >= self.reaction_time(d.level)
+            && self.prop(d, 0x3c) && (self.alert >= 0.66 || self.prop(d, 0x51))
+            && !self.cover_claimed && self.alert_bits & 0x20 == 0 && !run_past;
         if { static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *F.get_or_init(|| ailog()) } {
-            eprintln!("[ailog] guard {} look_for_opponent: seen={} prop_3c={} alert={:.2} prop_51={} -> {}",
-                self.index, self.seen, self.prop(d, 0x3c), self.alert, self.prop(d, 0x51), if go { "ATTACK" } else { "none" });
+            eprintln!("[ailog] guard {} look_for_opponent: sight_now={} los={} hold={} prop_3c={} alert={:.2} prop_51={} -> {}",
+                self.index, self.los && self.seen_ticks >= self.reaction_time(d.level), self.los, self.seen_ticks,
+                self.prop(d, 0x3c), self.alert, self.prop(d, 0x51), if go { "ATTACK" } else { "none" });
         }
         if go && !self.sighted { self.sighted = true; self.own_sight = true; }
         go.then_some(state::ATTACK)
