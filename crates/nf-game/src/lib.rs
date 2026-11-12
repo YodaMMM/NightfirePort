@@ -24,6 +24,7 @@
 
 pub mod aipoint;
 pub mod aivolume;
+pub mod celgraph;
 pub mod prof;
 pub mod ally;
 pub mod anim;
