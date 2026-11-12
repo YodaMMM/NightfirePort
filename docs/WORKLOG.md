@@ -160,3 +160,19 @@ ignores" — this round attacked the three ledgered reds.
   guard_stuck_sweep_live 2/0/0 (the leaf-slide law test itself green). ALL GREEN.
 - The full suite did not fit (the fast runner is disk-hostile in this 9.9 GB sandbox); the
   per-binary chunks above are its substitute. Report: docs/reports/guard-slide-gate-sweep.md.
+
+## guard-slide-gate-sweep-2 (2026-11-12T03:58Z, branch s/20-guard-slide-gate-sweep-2)
+
+Task: branch from origin/s/guard-slide-gate-sweep, merge origin/master (08a276ce0), reconcile
+the leaf gates into one game-correct rule [M Drone_CollisionHandler 0x140968:204-208] and repair
+walkreal_07000001_live::walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent —
+re-ignored by the sweep, green on master — with real input; run every walkreal_*_live one level
+per tool call.
+
+- Checkpoint 0 (04:00 UTC): the merge is clean; the tree carries the sweep's gateless slide
+  (master's copy still gates it to 07|14 — the merge took the sweep's all-levels version; note:
+  master does NOT actually carry guard-leaf-press-07's press law — leaf_press_rest exists only
+  on s/guard-leaf-press-07 [S ref-check]). The re-ignore's levers ledger is in the test's
+  #[ignore] reason. WORKLOG started, pushed. Next: reproduce the walk's death on THIS tree (the
+  master sound commits shift the RNG timeline again), then the sweep's next levers (a) mayhew
+  re-timing, (b) step-out windows, (c) NF_RF_TRACE.
