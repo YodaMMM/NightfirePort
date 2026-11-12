@@ -52,3 +52,6 @@ The faithful fix is likely ORDER, not a skip: in the game the script that ends t
 
 ---
 claimed-by: main agent 2026-11-12 (the order fix is in test: Bond's hand-back position reaches each drone at its walk turn; full suite running)
+
+---
+DONE by the main agent 2026-11-12 (master 4cb3e6b4d): each drone refreshes its opponent info from the post-hand-back Bond at its walk turn; the release reads 0xae dist 1.25 yaw -1.572 and the flip lands east like the game. Residual hit size -> 10-level-04-assassin-star-damage.
