@@ -12,7 +12,7 @@
 //! end: the walk completes at the mission latch with Bond alive, the replayed run ends on the
 //! same tick count and the same latch.
 //!
-//! The same file is the app replay's input: `nf-view <iso> 0700000b.bin --difficulty 1 --replay
+//! The same file is the app replay's input: `nf-view <iso> 0700000b.bin --replay
 //! tests/replays/0700000b_operative.bin` plays the session to mission complete in the windowed
 //! app (checked by a windowed replay).
 
