@@ -88,6 +88,31 @@ fn walk_the_party_start_to_finish_at(difficulty: u32) {
     });
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.difficulty, difficulty,
         "the sim runs the picked difficulty [M GameState+0x28 0x2a3790 → Drones::difficulty]");
+    // level-07-rook-doorway-pin: Rook (drone 22, placement #426 [D], WaitSwitch on ch 0x17 at
+    // load) walks his civilian mission route once the party releases him and never freezes in
+    // the west doorway (a user report: he stood frozen there). Track it per step: after the
+    // release he must leave his spawn by > 10 u, and while in CivilianMission (0x16) he must
+    // not stand still for 600 ticks. [D placement #426; the route itself is the port's nav
+    // walk - [S] no PCSX2 timing pinned, only "moves through".]
+    let rook: std::rc::Rc<std::cell::RefCell<(Option<u32>, f32, [f32; 3], u32, u32)>> =
+        std::rc::Rc::new(std::cell::RefCell::new((None, 0.0, [0.0; 3], 0, 0)));
+    {
+        let r = rook.clone();
+        let spawn = w.scene.sim.as_ref().unwrap().drones.list[22].pos;
+        w.on_step = Some(Box::new(move |scene: &nf_view::scene::Scene, tick: u32| {
+            let sim = scene.sim.as_ref().unwrap();
+            let d = &sim.drones.list[22];
+            let mut st = r.borrow_mut();
+            if st.0.is_none() && d.enabled { st.0 = Some(tick); }
+            let moved = ((d.pos[0] - spawn[0]).powi(2) + (d.pos[2] - spawn[2]).powi(2)).sqrt();
+            if moved > st.1 { st.1 = moved; }
+            if d.state == nf_game::drone::state::CIVILIAN_MISSION {
+                let step = ((d.pos[0] - st.2[0]).powi(2) + (d.pos[2] - st.2[2]).powi(2)).sqrt();
+                if step < 0.01 { st.3 += 1; st.4 = st.4.max(st.3); } else { st.3 = 0; }
+            } else { st.3 = 0; }
+            st.2 = d.pos;
+        }));
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -299,6 +324,13 @@ fn walk_the_party_start_to_finish_at(difficulty: u32) {
     assert_eq!(m.states[2][1], 4, "objective 2 'Spy on secret meeting' completes on the next level's plate [L ee_start_05 record 2]");
     eprintln!("[07] objectives after the carry: 07 [{}] [{}], done in {} more ticks",
         m.states[2][0], m.states[2][1], n.total_ticks);
+    {
+        let st = rook.borrow();
+        eprintln!("[07] Rook: released at {:?}, max distance from spawn {:.1} u, longest mid-route stand {} ticks", st.0, st.1, st.4);
+        assert!(st.0.is_some(), "the party releases Rook (drone 22, ch 0x17 [D #426])");
+        assert!(st.1 > 10.0, "Rook walks his route out of the west doorway area, got {:.1} u from his spawn", st.1);
+        assert!(st.4 < 600, "Rook never freezes mid-route (a user report: frozen in the west doorway), longest stand {} ticks", st.4);
+    }
 }
 
 /// The party's zoning rules, walked: the guests stand in groups until their plate fires, then the
