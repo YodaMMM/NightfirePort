@@ -16,3 +16,6 @@ Run tests: `NF_ISO=<abs path> cargo test -j 8 --release -p nf-view --test assass
 
 ---
 claimed-by: sandbox4 at 2026-11-12T16:14Z
+
+---
+DONE by the main agent 2026-11-12 (master e0bcb174c) before this claim could land: live PCSX2 read of Drone_ModBulletDamage showed weapon 0x14 raw 2.5 mul 1.0; NDrone2_DefaultInit 0x14b300:294-300 gives a kind-0xB body weapon 0x14 for 0x12/0x14/0x15. weapon_id now takes the kind; pinned by her_ranged_rounds_cost_what_the_games_do. Any branch for this task is superseded.
