@@ -181,13 +181,14 @@ fn replay_parity_07000004() {
     let iso = iso();
     let (inputs, recorded) = record_full_mission(&iso);
     assert!(!inputs.is_empty(), "the walk recorded nothing");
-    // The mission ends around tick 3003 (the target dies to return fire at ~2683 — the driver's
-    // measured run of this route); the band pins the route's real timeline without pinning a
-    // single tick of it.
+    // The mission ends around tick 2307 (the target dies to return fire at ~1986 — the driver's
+    // measured run of this route, once the assassin wakes seeing Bond at the cut-scene's
+    // hand-back spot and closes to the sword sooner); the band pins the route's real timeline
+    // without pinning a single tick of it.
     let end_tick = recorded.iter().position(|s| s.mission_end.is_some()).map(|i| i + 1)
         .expect("mission_end latched in the recorded run");
-    assert!((2400..=3600).contains(&end_tick),
-        "the mission must end around tick 3003 (measured; got {end_tick})");
+    assert!((1900..=3000).contains(&end_tick),
+        "the mission must end around tick 2307 (measured; got {end_tick})");
     assert_eq!(recorded.last().unwrap().mission_end, Some(0x0730_0004),
         "the walk stopped AT the first mission_end tick [M 0x182c60:65-76]");
     // The replay: a FRESH load, the same difficulty, the sound attached as the walker attaches
