@@ -26,3 +26,4 @@ walkreal_07000016_live: Bond died at tick 14833 (frame 14833) at (-7.56,-22.28,-
 walkreal_07000016_live: Bond died at tick 2176 (frame 2176) at (-0.19,7.96,-79.44) armour 0.0
 walkreal_0700001b_live: Bond died at tick 11385 (frame 11385) at (46.01,-14.08,-3.00) armour 0.0
 walkreal_0700001b_live: Bond died at tick 5619 (frame 5619) at (31.92,-1.68,-0.59) armour 0.0
+- Main agent, named: the t1020 death is walk_the_chasers_defeat_completes_the_mission_on_real_damage_00agent - the upper-ring guards (y 6.7: #5/#2 skin 0x50000b2 and #3 0x500008c, weapon 0x1a) land 7.0 a hit from 22-28 u onto the floor-0 approach (the level_fights field doc's ring ambush); t14833 is the Operative real-damage walk (#14 at 1.6 u, weapon 0x14, the pit); t2176 the Agent walk.
