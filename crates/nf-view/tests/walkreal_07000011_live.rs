@@ -370,6 +370,11 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     // Leg 1: east across the top floor to the stairwell door (the nav web [D paths 0/1] has no
     // cross-floor route — the direct chain), then through the doorway's south band — walked.
     w.stop_on_exit = false;
+    // Operative: a fight on the doorway leg can send the resupply 17 u east to the far drops
+    // ((23.8, 22.4)); the leg's straight walk back then crossed the desk rows and climbed the desk
+    // at (21.5, 15.9) (grounded=false, the 6000-tick cap) once the room drawn gate moved the
+    // fights. The errand walks home first (the opt-in the 13 chain uses).
+    if difficulty == 1 { w.resupply_home = true; }
     w.follow_nav_route([12.7, 47.4, 6.4], "across the top floor to the stairwell door");
     w.walk_to(Wp::new(16.0, 47.4, 6.4).r(0.9), "through the doorway (the south band)");
     {

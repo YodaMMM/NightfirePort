@@ -727,7 +727,10 @@ fn aim_and_press(w: &mut Walker, target: [f32; 3], cycles: u32, done: &dyn Fn(&n
 
 /// The z ≈ 5 corridor west of beam #625, the keypad stand and door #725: the legs from the east
 /// corridor into the security room.
-const ROOM_APPROACH: [[f32; 3]; 6] = [[21.3, 1.3, 5.3], [15.0, 1.3, 5.3], [9.9, 1.3, 5.3], [9.75, 1.3, 2.2], [8.2, 1.3, 0.5], [7.6, 1.3, -0.9]];
+/// The east corridor's own leg (25.9, 5.2) leads it: the room gate's civilians walk at their gait,
+/// and the antechamber patroller met Bond there at 2 u right after the wait released (the
+/// challenge 0x3E at (23.8, 4.5) -> RunToAlarm -> the press at t11934 [the cels-5 trace]).
+const ROOM_APPROACH: [[f32; 3]; 7] = [[25.9, 1.3, 5.2], [21.3, 1.3, 5.3], [15.0, 1.3, 5.3], [9.9, 1.3, 5.3], [9.75, 1.3, 2.2], [8.2, 1.3, 0.5], [7.6, 1.3, -0.9]];
 /// The legs out of the security room to the hatch anteroom (the ring's north legs).
 const ROOM_EXIT: [[f32; 3]; 7] = [[7.6, 1.3, -0.9], [9.75, 1.3, 2.2], [9.9, 1.3, 5.3], [9.75, 1.3, 8.8], [9.6, 1.3, 12.3], [11.5, 1.3, 15.5], [17.5, 1.3, 15.5]];
 

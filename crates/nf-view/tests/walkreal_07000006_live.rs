@@ -468,8 +468,29 @@ fn walk_to_the_courtyard_at(w: &mut Walker, cut: bool, difficulty: u32) {
     walk_from_the_guardhouse_court_at(w, cut, difficulty);
 }
 
+/// The dock guard beside the driver (skin 0x500002e at (68.8, 27.3), the driver (66.1, 28.9)
+/// between him and the south dismount): he opens fire the moment Bond stands on the dismount, and
+/// rounds aimed there pass ~0.8 u from the driver (hp 1) - the driver dies and ch 0x60 (civilian
+/// killed) fails the mission, in the game too [L PCSX2 07000006 d1: Bond held at the dismount, the
+/// driver 0x17778b0 dies at frame 384, ch 0x60 = 1]. From the bed's west edge (58.2, 25.3) the line
+/// to him clears the driver by ~2.3 u: Bond answers him there first.
+fn answer_the_dock_guard(w: &mut Walker) {
+    w.walk_nav_to([58.2, 38.3, 25.3], "the truck bed's west edge", 1.0);
+    let dock = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        sim.drones.list.iter().position(|d| d.present && d.health > 0.0 && d.team == 1 && d.skin == 0x0500_002e
+            && dxz(d.pos, [68.8, 39.0, 27.3]) < 3.0)
+    };
+    if let Some(di) = dock {
+        w.switch_to_armed("the dock guard by the driver");
+        let killed = w.shoot_bounded(di, "the dock guard by the driver", 1500);
+        eprintln!("[06] the dock guard #{di} from the bed: killed {killed}");
+    }
+}
+
 /// The spawn → the guardhouse court east of the searchlight courtyard, with its idle guard down.
 fn walk_to_the_guardhouse_court(w: &mut Walker, difficulty: u32) {
+    answer_the_dock_guard(w);
     // THE DISMOUNT: off the truck bed's open south side (the spawn's own facing walks onto the
     // bed; the probe drops grounded at z≈29).
     w.walk_nav_to([60.0, 38.3, 31.5], "off the truck, south", 1.6);
@@ -1340,6 +1361,7 @@ fn the_wellhead_seals_the_shaft_on_real_input() {
     w.wait_enabled(3000, "the intro NIS");
     w.wait(30);
     // walk_to_the_guardhouse_court's prefix, minus the hedge legs that leave the courtyard.
+    answer_the_dock_guard(&mut w);
     w.walk_nav_to([60.0, 38.3, 31.5], "off the truck, south", 1.6);
     w.walk_nav_to([45.0, 38.3, 24.0], "across the greeting plates", 1.6);
     w.walk_nav_to([24.3, 38.3, 27.6], "the dock's west end", 1.6);
@@ -1448,6 +1470,7 @@ fn the_castle_chat_pair_stands_chatting_and_breaks_off_when_alerted() {
     w.wait(30);
     // The proven route's first legs to the greeting plates: leg 2 crosses plate #528 (x 49.7-51.2,
     // z 26.0-30.3 [D census]) which raises ch 0x3b; the OR trigger #512 raises the chat ch 0x11.
+    answer_the_dock_guard(&mut w);
     w.walk_nav_to([60.0, 38.3, 31.5], "off the truck, south", 1.6);
     w.walk_nav_to([45.0, 38.3, 24.0], "across the greeting plates, onto the pair's watch spot", 1.6);
     let sim = w.scene.sim.as_ref().unwrap();

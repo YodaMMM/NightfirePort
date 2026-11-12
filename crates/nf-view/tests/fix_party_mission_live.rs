@@ -576,7 +576,6 @@ fn the_guards_reappear_at_their_places_after_the_kimiko_scene() {
     let pre: Snap = scene.sim.as_ref().unwrap().drones.list.iter().enumerate()
         .filter(|(_, d)| d.present && d.enabled && d.state != nf_game::drone::state::WAIT_SWITCH)
         .map(|(i, d)| (i, d.state, d.pos, d.anim.time, d.corpse)).collect();
-    let walker = pre.iter().copied().max_by_key(|&(_, _, _, t, _)| t).filter(|&(_, _, _, t, _)| t > 5);
     eprintln!("[party6] pre-scene: {} live drones, max anim.time {:?}",
         pre.len(), pre.iter().map(|&(_, _, _, t, _)| t).max());
     {
@@ -596,6 +595,12 @@ fn the_guards_reappear_at_their_places_after_the_kimiko_scene() {
     // still stand where they stood.
     scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
     let sim = scene.sim.as_ref().unwrap();
+    // The pick is the most-advanced animation among the drones the scene re-SHOWS: a drone the scene
+    // removes (not present after it - #51, state 0xB4, on the room drawn gate) never comes back, so
+    // its clock says nothing about the re-show restart.
+    let walker = pre.iter().copied()
+        .filter(|&(i, _, _, t, _)| t > 5 && sim.drones.list[i].present && sim.drones.list[i].enabled)
+        .max_by_key(|&(_, _, _, t, _)| t);
     let bond = &sim.bond;
     eprintln!("[party6] bond {:?} yaw {:.2}", bond.pos, bond.yaw);
     assert!((bond.pos[0] - 91.52).abs() < 0.1 && (bond.pos[2] - -31.09).abs() < 0.1 && ((bond.yaw - std::f32::consts::PI).abs() < 0.06 || (bond.yaw + std::f32::consts::PI).abs() < 0.06),
