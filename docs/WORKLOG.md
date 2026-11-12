@@ -45,3 +45,18 @@ interactables_07000006_live.
   0x36 through the NIS and the legs on THIS tree too — the sight-bit fix included — and the
   test passes: spawn 0x36, ch 0x11 up, the scripts playing, the burst breaks the chat off with
   the un-shot guard alive).
+
+- The ch 0x11 raiser census CLOSED with the decompile: the gate branch's "512 fans out, not a
+  raiser" cited the wrong case — Trigger_Update 0x1b1a78's case 5 (MultiplexOut) only runs for
+  type-5 triggers; #512's type is 0xc, and case 0xc (lines 167-180) ORs the +0x26 input list
+  into the out channel [M]. So #512 IS the raiser: plate #528 (out 0x3b) or #513 (out 0x3a)
+  fires, the list-OR raises 0x11 [D census + the sim: 0x3a never on, 0x11 on after #528]. The
+  NIS/event-layer sweep is CLEAN: 07000006's 16 op-0x12 event sites carry no 0x11 write (the
+  0x0d sets are 0x40/0x3f/0x3d/0x3e in the reveal NIS, 0x83 + 0x02 in the dressing cut-scene)
+  [D nis-census].
+- vision_bit_census green (CASTLE_CHAT_GUARD1 + INTEROGATE_WALK moved to REQUIRED — both port
+  ENTERs set vision_on [M 0x1612e0:21 + 0x162338:20]); fix_npcs_live green after correcting
+  its gate-guard test to the decompile (487 = the chat pair's north guard in 0x36, the old
+  IDLE read predates the port); walkreal_07000006_live whole 7/0/2i (the balcony pre-clear
+  lever ported; the gate ledger's t3964 death re-measured identical before it). Then EVERY
+  walkreal_*_live binary on the final tree: all green (see the report's list).
