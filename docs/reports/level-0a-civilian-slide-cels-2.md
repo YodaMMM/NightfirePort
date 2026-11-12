@@ -123,3 +123,14 @@ changing who is where, not from a port bug in those readers.
 
 not visible to me — this environment shows no token, credit or context-window figures for the
 session (no usage panel is exposed to the agent).
+
+## ntfy failed
+
+All three fallbacks failed (the same outbound-egress wall every prior round recorded):
+
+1. curl: `curl: (28) Connection timed out after 20001 milliseconds`
+2. python3 urllib: the first try died on a local SyntaxError (an em-dash inside the bytes
+   literal — `SyntaxError: bytes can only contain ASCII literal characters`), the ASCII retry
+   reached the network layer and failed with `urllib.error.URLError: <urlopen error [Errno 101]
+   Network is unreachable>`
+3. wget: no output, killed at the timeout (`wget exit=124`, 0 bytes written).
