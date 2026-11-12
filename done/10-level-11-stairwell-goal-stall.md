@@ -40,3 +40,6 @@ claimed-by: main agent 2026-11-12 09:58 MST (worker daily cap: the main agent fi
 ---
 ## Main agent (2026-11-12 10:25 MST): fixed on s/11-stairwell-scoped-probe (04442d377), suite running
 Correction to the filter lead above: the guard's HITTEST (Drone+0x3D0) reads +0x94 0x800, +0x98/+0x9A 0 live, so Collide_Filter never runs for it. Live trace (single breakpoint on Collide_Intersect 0x1ebaa8 from the release): the game DOES intersect the guard against the panel's node (0x18a1820, cel+0x94 0x10) every frame of the crossing, and his push (HITTEST+0x10) stays 0 - and Bond walks through the panel both ways in the game too. The port's cel-scoped body capsule (capsule_push_scoped from cel 128) also pushes 0 there and the port's Bond walks through; only the guards' step probe (move_probe_clear, unscoped) hit it. Fix: probe_move uses move_probe_clear_scoped(obj_cel, ..) - clear when nothing in the scoped set blocks. Pinned: stairwell_guards_07000011_live::the_flight_panel_does_not_hold_the_stairwell_guard (side walls still hold).
+
+---
+DONE by the main agent 2026-11-12 10:40 MST: master 04442d377, suite 4937/0/364.
