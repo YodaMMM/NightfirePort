@@ -987,7 +987,37 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
         // there — Bond still at y 2.9 under the whole ring — and the stand burned ~1400
         // ticks on a hunting guard 17-27 u out (12 rounds, zero damage) while the ring
         // guards emptied him (the 1988 death).
+        let mut d3_ramp_done = false;
         for (label, wp) in APPROACH {
+            // los-mask-repins-16-3 (the measured phase split): the lane costs 7.0 (93.0 at
+            // the ramp foot, t446) but the RAMP costs 45.5 (t446 -> t752) — three walk_to
+            // legs + their per-leg overhead (306 ticks for 10.6 u, 0.035 u/tick) under the
+            // y 6.7 quartet's Hard pour, then the arm + crossing cost 52.5 more (2.0 left at
+            // the sight line, t953). The quartet is never fightable in this timeline (the
+            // fights' counters read 0 every run) and the pre-ring stand re-measured the 916
+            // death — the only lever left that changes the budget is the TIME: the ramp and
+            // the ring east stretch as ONE fights-off nav leg (the web's own pace measured
+            // 0.05-0.06 u/tick on the crossing navs, no leg-boundary stalls) — the same
+            // crossing law the ring east arm already runs, extended to the ramp.
+            if station_armour && w.scene.sim.as_ref().unwrap().drones.difficulty == 3
+                && *label == "the ramp foot" {
+                let rf = w.dmg.return_fire;
+                w.dmg.return_fire = false;
+                w.walk_nav_to([6.0, 5.9, -78.5], "the ramp + ring east stretch as one leg (d3)", 1.4);
+                w.dmg.return_fire = rf;
+                clear_hostiles_16(w, 40.0, 900);
+                answer_the_gallery_from_the_ring(w, 40.0);
+                d3_ramp_done = true;
+                continue;
+            }
+            if station_armour && d3_ramp_done && w.scene.sim.as_ref().unwrap().drones.difficulty == 3
+                && (label.starts_with("the ramp") || *label == "the ring east") {
+                continue; // already past them on the single nav leg
+            }
+            if station_armour && d3_ramp_done && w.scene.sim.as_ref().unwrap().drones.difficulty == 3
+                && *label == "the ring 1" {
+                d3_ramp_done = false; // the sight line's own legs run from here
+            }
             if wp.at[1] > 5.5 {
                 // los-mask-repins-16-2 (the defeat walks' ramp-top sprint — the measured d3
                 // 916 death): the ring east leg's clear ran at the leg's START with Bond still
@@ -1004,7 +1034,34 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
                 // ramp top at Normal).
                 if station_armour && w.scene.sim.as_ref().unwrap().drones.difficulty != 2
                     && w.scene.sim.as_ref().unwrap().bond.pos[1] < 5.5 {
-                    w.walk_nav_to([wp.at[0], wp.at[1], wp.at[2]], label, wp.arrive);
+                    // los-mask-repins-16-3 (the d3 lever, the 16-2 ignore's first): skip the
+                    // ring east leg's own walk at 00 Agent. The measured d3 deaths stand at
+                    // the ring east target (this tree: tick 1002 at (14.37, 6.28, −80.17),
+                    // 21 hits for 100.0 from the y 6.7 quartet; 16-2: 1292 at (6.84, 6.81,
+                    // −75.07)) — #2 at 30.8 u, #4 at 22.0, #5 at 34.6, #3 at 36.9, NONE of
+                    // them visible from the ring east spot, so the clear (its 15 u gate
+                    // returns before the fights) and the gallery answer both pass empty and
+                    // Bond stands in the pour. The punch-proven sight line is the ring 1
+                    // target (6.0, 5.9, −78.5): the capsule-join trace t893-1891 answers #2
+                    // from the ring there [L]. A player crosses the ring east -> ring 1
+                    // stretch and answers the gallery from the far edge, where the south
+                    // gallery opens; the ring 1 leg's own hooks then fire from the sight
+                    // line itself. d1 keeps the measured sprint (the squad-phase hand-back
+                    // depends on it); d2's green runs without the sprint at all.
+                    let target = if w.scene.sim.as_ref().unwrap().drones.difficulty == 3
+                        && *label == "the ring east" { [6.0, 5.9, -78.5] }
+                        else { [wp.at[0], wp.at[1], wp.at[2]] };
+                    // The crossing runs with the reactive fights OFF (restored after the
+                    // leg): the measured lever-1 run stalled at (10.5, 6.75, −78) from t900
+                    // — a return-fire fight held Bond mid-stretch (2 fights) while the
+                    // quartet poured the rest of his 47.5. A player sprints the stretch and
+                    // answers FROM the sight line, where the gallery is visible; the fights
+                    // he fights are the sight line's, not the crossing's. Harness tactics
+                    // only — the scripted clear + answer below still fire every round.
+                    let rf = w.dmg.return_fire;
+                    w.dmg.return_fire = false;
+                    w.walk_nav_to(target, label, wp.arrive);
+                    w.dmg.return_fire = rf;
                     clear_hostiles_16(w, 40.0, 900);
                     answer_the_gallery_from_the_ring(w, 40.0);
                     continue;
@@ -2487,6 +2544,13 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(difficulty: u
     // finish_fights + bridge_wedged_nav shifted the d2 stream off its 18240 green run and
     // the walk died at 1405 on the ring north):
     if difficulty >= 3 {
+        // los-mask-repins-16-3 (the 16-2 ignore's third lever): the unseen-fights creep —
+        // needs hurting_first OFF, the pick chain skips the unseen fallback while it is on
+        // (the ignore message). The d3 quartet's biggest dealer (#2, 47.5 in 7 hits in the
+        // 16-2 ledger) was NEVER visible from the spots the fights displaced Bond to — with
+        // hurting_first off the pick's unseen fallback runs the short-stand creep that has
+        // to open the line fast, instead of skipping him every tick.
+        w.dmg.hurting_first = false;
         // the d1 walk's third law (the route fights' economy — the measured d3 1068 death ran
         // the ring east leg's fights' flank dance while #2 poured 7.0 a hit from 34 u and
         // Bond died 3 u short of the ring 1 leg's stand): a player finishes the guard he is
@@ -2670,7 +2734,7 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
 /// DroneWeap_DoBulletAccuracy 0x179740:74-88]. The d2 gates (the pit-door guard pre-shoot) fire
 /// at 3 too. Real input only; no health/ammo/channel writes.
 #[test]
-#[ignore = "00 Agent (los-mask-repins-16-2, re-measured): the d2 laws carried it 1020 -> 1292 (the ramp-top sprint, the defeat gallery stands killed #4, the d2 pick laws) but the Hard quartet still kills on the ring: tick 1292 at (6.84,6.81,-75.07), 20 hits for 100.0 — #2 skin 0x50000b2 weapon 0x1a hp 20 at (9.5,6.7,-110.6) poured 47.5 in 7 hits (7.0 a hit, Accuracy Hard [M 0x179740:74-88]) from 30-36 u and was NEVER visible from the spots Bond's fights displaced him to (the reactive pick skipped him every tick); #4 21.0/6 (the stands killed him), #3 17.5/5, #5 14.0/2; the fights' drops slide below the walk-over take radius and the ring stands ran dry twice (clip 1-2 spare 9, the measured 1148/1292 traces). TRIED: the d2 laws (level_fights/hurting_first/finish_fights/bridge_wedged_nav), the defeat gallery stands to 40 u, the ramp-top sprint, the drop re-read walks (arrive 0.3), switch_off_the_delta. NEXT LEVERS: cross the ring east -> ring 1 stretch faster (skip the ring east leg's own walk after the sprint — the stands handled the visible set — so the ring 1 hook fires from the punch-proven sight line (6.0,5.9,-78.5) where #2 IS visible [L the capsule-join trace t893-1891]); or a pre-ring stand from the ramp top's east edge; or the unseen-fights creep (needs hurting_first OFF — the pick chain skips the unseen fallback while hurting_first is on)"]
+#[ignore = "00 Agent (los-mask-repins-16-3, re-measured on this tree): the 16-2 ignore's three levers are ALL measured now — (1) the ring east skip + the fights-off crossing to the ring 1 sight line WORKS (the web crosses in 201 ticks, no fight stalls) but Bond arrives at (7.19, 6.75, −78.58) with 2.0 health (t953) and dies at 968: at the sight line #0 (d 2.2, hp 25), #2 (32.1), #3 (34.3), #4 (16.0), #5 (31.7) are ALL vis true at level (the probe run) — the answer spot is right, the budget is not; (2) the pre-ring stand from the ramp top's east edge re-measured the 916 death — EVERYTHING is exposed from (14.51, 4.77, −82.64) (probe: #0 6.7/25, #1 29.9 ground, #2 28.6/20, #3 36.1/10, #4 21.5/10, #5 35.8/20) but the answer's switch overhead (the Delta 0x11 clip 3 spare 9 in hand -> P2K) burns ~120 ticks at a 0.35/tick pour before the first shot flies; (3) hurting_first OFF changed NOTHING byte-for-byte — the fights never run in ANY d3 timeline (0 return-fire fights every run; the quartet is never level+close enough for the pick), so the unseen-fights creep never engages. The phase split (the diag run): the lane costs 7.0 (93.0 at the ramp foot, t446), the RAMP costs 45.5 (t446->t752 — three walk_to legs + their per-leg overhead, 306 ticks for 10.6 u under the Hard pour), the arm + crossing 52.5 more. The single-nav-leg ramp+ring (482 ticks, 6 web sub-legs, no stalls — death 1033) shaves ~80 ticks and the pour total is UNCHANGED: the quartet lands 21 hits for 100.0 in EVERY shape measured (base 1002, crossing 1004, fights-off 968, pre-ring stand 916, single-nav 1033). The accuracy law has no crouch factor [M 0x179740 — TooClose/FirstMoved/FirstStopped/Moving/difficulty/TimeToHit only; a STANDING target loses the TargetMoving discount, so stands are strictly worse than walks]. NEXT LEVERS: (a) prepare the gun BEFORE the pour window — switch off the Delta during the cheap lane phase (0.02/tick there) so the P2K is in hand at the ramp foot; (b) the fights-off nav leg to the ring east END (14.4, 6.75, −78.7 — the measured nav 5 arrival; the y 6.75 spots see the quartet where the y 6.28 rest spots do not [L the two probes]) and ONE bounded head-shot stand at the nearest exposed hp-10 dealer (#4 d 16.1, #3) — one P2K head round each (17.5 = 3.5×5 [M NDrone2_HitDamage's part-5]) against their 0.07-0.1/tick share of the pour; (c) then the sight line as measured, with the survivors' pour halved; (d) [S] unverified: the +0x270 TimeToHit gate [M 0x179740] is why the ramp pour starts around t446 — if the quartet's sighting timers can be kept running on the lane legs, the climb starts unengaged"]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3));
 }
