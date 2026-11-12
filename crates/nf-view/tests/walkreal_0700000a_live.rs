@@ -19,6 +19,41 @@ mod usepick;
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
+/// Types one digit on the open keypad page with the PAD's own lanes (the cursor steps from its
+/// focus to the digit's control [M Menu_FindControl 0x1f16d8 via nf_view::menu::keypad_step],
+/// ✕ types it [M Button_Update 0x1ef948 → C_KEYPAD_Handler 0x216810]) — real input the replay
+/// file carries (format v2 keypad lanes), not a direct handler call.
+fn type_digit(w: &mut Walker, digit: u8) {
+    // One released tick first: a press on the page's opening tick is spent on the open (the
+    // #648 run typed 1065 for 4065 — the first nav step never moved the cursor off digit 1).
+    w.tick(Default::default(), false);
+    let to = nf_game::lock::KEYPAD_DIGIT_VALUES.iter().position(|&v| v == digit as u32).expect("a keypad digit");
+    let from = w.scene.sim.as_ref().unwrap().drones.keypad.as_ref().map_or(0, |(_, kp)| kp.focus);
+    let mut seen: Vec<Option<Vec<u8>>> = vec![None; 10];
+    seen[from] = Some(Vec::new());
+    let mut queue = std::collections::VecDeque::from([from]);
+    while let Some(c) = queue.pop_front() {
+        for bit in [1u8, 2, 4, 8] {
+            let nx = nf_view::menu::keypad_step(c, bit);
+            if seen[nx].is_none() { let mut p = seen[c].clone().unwrap_or_default(); p.push(bit); seen[nx] = Some(p); queue.push_back(nx); }
+        }
+    }
+    for bit in seen[to].clone().expect("every digit is reachable") {
+        w.tick(nf_game::player::Input { keypad_nav: bit, ..Default::default() }, false);
+        w.tick(Default::default(), false);
+    }
+    w.tick(nf_game::player::Input { keypad_confirm: true, ..Default::default() }, false);
+    w.tick(Default::default(), false);
+}
+
+/// walk-0a-de-teleport: the Operative real-damage walk is RECORDED (the 0b pattern): set by
+/// that test only (the plain walk tops health up — a write a replay cannot carry).
+static REC_0A: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+const REC_0A_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/replays/0700000a_operative.bin");
+thread_local! {
+    static REC_0A_RECORDER: std::cell::RefCell<Option<nf_view::replay::Recorder>> = const { std::cell::RefCell::new(None) };
+}
+
 /// The warm carry (the elevator chain from 07000009 — ch 0x46 rides the RamSave [M 0x195670:13]).
 fn load_carry(save: Option<&nf_game::player::RamSave>) -> Walker { load_carry_at(save, 1) }
 
@@ -331,10 +366,10 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, label:
                     ..Default::default()
                 }
             };
-            w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
+            // The walker's recorded step (tick_trigger counts the tick and runs after_step): the
+            // replay file carries this shot exactly (walk-0a-de-teleport).
+            w.tick_trigger(input, trigger);
         }
-        w.total_ticks += 1;
-        w.after_step();
     }
 }
 
@@ -682,9 +717,9 @@ fn aim_and_press(w: &mut Walker, target: [f32; 3], cycles: u32, done: &dyn Fn(&n
                     ..Default::default()
                 };
                 let hold = t < 3 && err.abs() < 0.06;
-                w.scene.sim.as_mut().unwrap().step_bond(input, false, false, hold);
+                // The walker's recorded step (counts the tick; walk-0a-de-teleport).
+                w.tick(input, hold);
             }
-            w.total_ticks += 1;
         }
     }
     done(w.scene.sim.as_ref().unwrap())
@@ -746,8 +781,7 @@ fn security_room_visit(w: &mut Walker) {
     };
     for d in code {
         assert!(d.is_ascii_digit(), "the code digits are ASCII");
-        w.scene.sim.as_mut().unwrap().drones.keypad_digit((d - b'0') as u32);
-        w.wait(1);
+        type_digit(w, d - b'0');
     }
     // The match → ch 0x31 → the door's rising-edge unlock + auto-activate.
     {
@@ -831,6 +865,17 @@ fn walk_qworm_and_back() -> Walker { walk_qworm_and_back_at(1) }
 /// `walk_qworm_and_back` at `difficulty` (2 = the front-end's launch path, see load_carry_at).
 fn walk_qworm_and_back_at(difficulty: u32) -> Walker {
     let mut w = load_carry_at(None, difficulty);
+    if difficulty == 1 && REC_0A.load(std::sync::atomic::Ordering::Relaxed) {
+        // The header snapshots the warm load's RNG / pose / weapon / option rows before the
+        // first recorded tick (replay_parity_0700000a.rs rebuilds the same warm load).
+        let rec = nf_view::replay::Recorder::start(&w.scene, REC_0A_PATH, "0700000a.bin", None, false,
+            { let s = w.scene.sim.as_ref().unwrap(); Some(nf_view::replay::ReplayOptions {
+                auto_aim: s.auto_aim, auto_switch: s.drones.auto_switch,
+                crouch_toggle: s.drones.crouch_toggle, crosshair: s.drones.crosshair }) })
+            .expect("the recorder");
+        REC_0A_RECORDER.with(|r| *r.borrow_mut() = Some(rec));
+        w.start_recording();
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -1230,18 +1275,19 @@ fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
     // keypad's faces [M Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8;
     // nf_game::usepick] — Bond steps to the first stand in front of it (the lock arm's facing
     // gate [M 0x1a5170:158-166] refuses the ones behind it) and presses there.
-    let armed = {
-        let sim = w.scene.sim.as_mut().unwrap();
+    // walk-0a-de-teleport: the stand is WALKED to (the old for_each_stand probe placed Bond on
+    // candidate stands — a position write a replay cannot carry). The stand the probe always
+    // picked on this route: (−11.25, 1.08, −17.43), facing east [port trace, the 13987-tick
+    // walk]; from there the recorded aim + use pulse arms the keypad.
+    let (kp648, li648) = {
+        let sim = w.scene.sim.as_ref().unwrap();
         let li = sim.drones.locks.iter().position(|l| l.placement == 648).expect("keypad #648 [D]");
-        let t = sim.drones.use_picks.locks[li];
-        let tris = usepick::posed(sim, t.hash, &t.matrix);
-        // Only #648's keypad counts: a stand whose press arms a neighbour's is backed out of.
-        usepick::for_each_stand(sim, &tris, t.sphere, &mut |sim| {
-            let hit = usepick::pulse(sim, 12, &|s| s.drones.keypad.is_some());
-            if hit && sim.drones.keypad.as_ref().is_some_and(|(k, _)| *k != li) { sim.drones.keypad = None; return false; }
-            hit
-        })
+        (sim.drones.use_picks.locks[li].sphere.0, li)
     };
+    w.walk_to(Wp::new(-11.25, 1.08, -17.43).r(0.25), "the keypad #648 stand");
+    let armed = aim_and_press(&mut w, kp648, 8, &|s| s.drones.keypad.is_some());
+    assert_eq!(w.scene.sim.as_ref().unwrap().drones.keypad.as_ref().map(|(i, _)| *i), Some(li648),
+        "the press armed #648, not another keypad");
     assert!(armed, "the keypad #648 E arms the mini-game (state 3) [M 0x1aed00's kind-0 no-key branch]");
     // THE DIGITS RUN AT THE WEDGE, NO RETREAT (civ-unignore, the 00agent fix): the old
     // "out of the turret's line" retreat to (−14.5,−15.0) bought nothing any more — the
@@ -1274,8 +1320,7 @@ fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
     };
     for d in code {
         assert!(d >= b'0' && d <= b'9', "the snapshot code digits are ASCII [L 0x2beff8]");
-        w.scene.sim.as_mut().unwrap().drones.keypad_digit((d - b'0') as u32);
-        w.wait(1);
+        type_digit(&mut w, d - b'0');
     }
     // The match fires Lock_Unlock [M 0x1ae3d8 case 4] and the NEXT case-1 tick holds
     // switch_channels[0x30] [M case 1] — the door's rising-edge unlock + auto-activate
@@ -1501,6 +1546,25 @@ fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
     }
     eprintln!("[0a] walked to the hatch in {} ticks; stuck {}; falls {}", w.total_ticks, w.report.stuck_events.len(), w.report.falls.len());
     for f in &w.report.falls { eprintln!("[0a] fall: {f}"); }
+    if let Some(mut rec) = REC_0A_RECORDER.with(|r| r.borrow_mut().take()) {
+        rec.replay.ticks = w.record_inputs.take().expect("the recorded ticks");
+        if let Some(out) = std::env::var_os("NF_REC_0A_STATES") {
+            let st = w.record_states.as_ref().map(|v| v.iter().map(|s| format!("{:.5} {:.5} {:.5}
+", s.pos[0], s.pos[1], s.pos[2])).collect::<String>()).unwrap_or_default();
+            let _ = std::fs::write(out, st);
+        }
+        eprintln!("[0a] the Operative walk recorded: {} ticks, the hatch exit at the end", rec.replay.ticks.len());
+        // NF_REC_0A_WRITE=1 rewrites the committed file (after a deliberate route change);
+        // otherwise the live walk must reproduce the committed recording's inputs exactly.
+        if std::env::var_os("NF_REC_0A_WRITE").is_some() {
+            rec.finish().expect("the replay write");
+        } else {
+            let committed = nf_view::replay::Replay::load(REC_0A_PATH).expect("the committed Operative recording");
+            assert_eq!(committed.ticks.len(), rec.replay.ticks.len(), "the walk's tick count matches the committed recording");
+            let first = committed.ticks.iter().zip(rec.replay.ticks.iter()).position(|(a, b)| a != b);
+            assert!(first.is_none(), "the walk's inputs differ from the committed recording at tick {:?} (re-record with NF_REC_0A_WRITE=1 after a deliberate route change)", first);
+        }
+    }
 }
 
 /// the game's own spawn height vs the port's. The game stands Bond at
@@ -2019,7 +2083,9 @@ fn the_pick_ref_accumulator_tracks_the_game_ref() {
 /// 0x12c5a0:166-184 + 0x180498:349]) — the dead-on port gap fixed this round.
 #[test]
 fn walk_office_floor_qworm_keyboard_hatch_real_damage() {
+    REC_0A.store(true, std::sync::atomic::Ordering::Relaxed);
     walker::with_real_damage(walk_office_floor_qworm_keyboard_hatch);
+    REC_0A.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// The laser band rule, pinned phase by phase on fresh loads (each phase asserts right after its
