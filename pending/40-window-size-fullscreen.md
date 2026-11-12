@@ -17,3 +17,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
   `NF_ISO=<abs path> nohup python3 tools/test/suite.py > suite.out 2>&1 &` (docs/tools/test-suite.md; once `tools/test/suite.py`
   is on your branch: merge `origin/master` first). Read `tail -1 suite.out` and its FAILED/TIMEOUT lines before you push, and
   run it once more on your final tree (merged with `origin/master`). Report the total line.
+
+---
+## Already on master (631871863, main agent)
+Alt+Enter borderless fullscreen + display.toml persistence (settings::display_path / display_fullscreen_at / save_display_fullscreen_at; the window is created fullscreen when the file says so), and the 4:3 picture is already pillarboxed at any window shape [render audits: 2560x1440]. What remains of this task: the size presets and a fullscreen row on the Screen adjust page (or a port-only Display row) using the same display.toml - extend that file, do not add a second one.
