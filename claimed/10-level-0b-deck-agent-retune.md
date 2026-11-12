@@ -27,3 +27,6 @@ claimed-by: main agent at 2026-11-12T10:20:06Z
 - The Agent (d2) walk is ALREADY GREEN on master bb5e63e94 (walk_fresh_spawn_to_the_mission_end_real_damage_agent 1/0) - only the 00 Agent (d3) walk remains.
 - d3 on master: reaches the files plate at 57.0 health (E-plate #166 side fights kill #0/#1, tick 14545), then dies on the roof at tick 17415 at (-3.45, 58.07, 19.89): #4 (skin 0x5000006, weapon 0x18) at (1.6, 58.0, 32.1) lands 7.0 per hit from d 13.2 (four hits 17317-17389), #7 (7.9, 58.0, 21.4) one 3.5, then #5 (-0.6, 58.0, 22.4) finishes from d 3.8.
 - The r1 rocket aimed at #4 passes ~0.4 u from him at y 58.06 and flies on to 40 u (the [0b-flight] trace). The homing aim point is the game's (target obj+0x30 [M Bullet_homing 0x12f358:111-121]) and the steer is the game's 0.01/tick clamp, so a wide pass is the turn radius, not a port bug - fire r1 from a line where #4 sits inside the turn, or with less lateral offset.
+
+---
+claimed-by: sandbox1 at 2026-11-12T16:38Z
