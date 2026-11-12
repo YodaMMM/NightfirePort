@@ -176,3 +176,15 @@ per tool call.
   #[ignore] reason. WORKLOG started, pushed. Next: reproduce the walk's death on THIS tree (the
   master sound commits shift the RNG timeline again), then the sweep's next levers (a) mayhew
   re-timing, (b) step-out windows, (c) NF_RF_TRACE.
+- Checkpoint 1 (04:20 UTC): the agent walk reproduced at exactly the sweep's base death (tick
+  9724 — master's sound commits did not shift this walk). Nine test-side levers applied, all
+  gated by run_slab_ambush's `levers` param (d2 direct load only; the sister's call passes
+  false — byte-exact, proven by the whole-binary runs): the death moved 9724 -> 9921 -> 10358
+  -> 17050 -> 17483. Levers 6 and 8 tried and reverted (15586 both). The walk stays #[ignore]d
+  with the full updated ledger; no lib change; no damage/health write.
+- Checkpoint 2 (05:15 UTC): the walkreal sweep, one level per tool call, direct per-binary path
+  on the final tree: 01 6/0/2i, 02 3/0/2i, 03 5/0/3i, 04 10/0/0i, 05 17/0/0i, 06 6/0/2i,
+  07 6/0/0i, 08 5/0/1i, 09 9/0/0i, 0b 9/0/0i, 0d 1/0/2i, 13 4/0/0i, 14 7/0/3i — 13 batteries,
+  every active test green, no walk lost. Not run before the window closed: 0a, 0c(+sisters),
+  11(+route), 12, 15, 16, 1b, 41(+wall), 4a(+satchel) + the probes (built on the sandbox disk).
+  Report written, branch pushed.
