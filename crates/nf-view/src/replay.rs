@@ -15,6 +15,7 @@ use anyhow::{bail, Context, Result};
 
 // ── magic + version ───────────────────────────────────────────────────────────
 const MAGIC: &[u8; 8] = b"NFREPLAY";
+
 /// v1: the original per-tick lanes. v2: the keypad pad lanes. v3 (walks-replay-proof): the
 /// per-tick cut-scene `skip` bit (bit 7 of the bits byte — v1/v2 writers never set it) and the
 /// player's option rows in the header (the sim-affecting ones: auto aim, weapon auto switch,

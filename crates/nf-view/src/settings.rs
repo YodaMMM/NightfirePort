@@ -87,6 +87,26 @@ pub fn output_dir() -> PathBuf {
 /// can be resolved (no HOME and no override).
 pub fn default_path() -> Option<PathBuf> { config_dir().map(|d| d.join(FILE_NAME)) }
 
+/// The PC window's own state (port-only; the PS2 had no window): `display.toml` beside the
+/// settings file, never in the game's option layout. One key today: `fullscreen = true|false`.
+pub fn display_path() -> Option<PathBuf> { config_dir().map(|d| d.join("display.toml")) }
+
+/// Whether `display.toml` asks for fullscreen (missing or unreadable → windowed).
+pub fn display_fullscreen_at(path: &std::path::Path) -> bool {
+    std::fs::read_to_string(path).ok().is_some_and(|t| t.lines().any(|l| {
+        let l = l.split('#').next().unwrap_or("").trim();
+        l.split_once('=').is_some_and(|(k, v)| k.trim() == "fullscreen" && v.trim() == "true")
+    }))
+}
+
+/// Writes the fullscreen choice to `path` (creating the config dir if needed).
+pub fn save_display_fullscreen_at(path: &std::path::Path, on: bool) -> Result<(), String> {
+    let dir = path.parent().ok_or_else(|| format!("display path {} has no parent", path.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("display dir {}: {e}", dir.display()))?;
+    std::fs::write(path, format!("fullscreen = {on}
+")).map_err(|e| format!("display write {}: {e}", path.display()))
+}
+
 /// The label key the file stores: the row's game text id in lower hex (`0x0196`).
 fn label_key(label: u32) -> String { format!("0x{label:04x}") }
 
@@ -248,6 +268,20 @@ pub fn save_opts(path: &std::path::Path, opts: &HashMap<u32, i32>) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_fullscreen_choice_round_trips_through_display_toml() {
+        let dir = std::env::temp_dir().join(format!("nf-display-{}", std::process::id()));
+        let path = dir.join("display.toml");
+        assert!(!display_fullscreen_at(&path), "no file reads windowed");
+        save_display_fullscreen_at(&path, true).unwrap();
+        assert!(display_fullscreen_at(&path));
+        save_display_fullscreen_at(&path, false).unwrap();
+        assert!(!display_fullscreen_at(&path));
+        std::fs::write(&path, "garbage ===").unwrap();
+        assert!(!display_fullscreen_at(&path), "an unreadable file reads windowed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn label_key_round_trips_through_parse() {

@@ -9715,7 +9715,20 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
         // net-online-lobby: the port-only online pages — the stand-in draw below is NOT the
         // task's layout (no drawing in this task's scope): it lists the same getters the draw
         // code replaces, so the pages are never blank [S docs/systems/net-online-lobby.md §2].
-        Page::MpMode => { page_rows(&mut h, fe, font, "MULTIPLAYER", dim, bright); }
+        // The port-only mode page (local / host online / join online) in the game's page frame:
+        // the Difficulty page's header, panel, row wheel, description plate and hint bar
+        // (menu-def page 0x40000023's layout), so it reads as one of the game's own pages.
+        Page::MpMode => {
+            page_header(&mut h, hfont, "Multiplayer");
+            panel(&mut h);
+            wheel(&mut h, fe, font, lang, |fe, row| fe.row_label(None, row), cream);
+            let desc = ["Play split screen and against bots on this PC.",
+                "Host a match that players can join over the internet.",
+                "Join a match hosted over the internet."][fe.cursor.min(2)];
+            desc_block(&mut h, font, desc, bright);
+            hint_bar(&mut h, font, &hint(0x218, "~A Select  ~V Scroll  ~B Back"), 50.0, 419.0, cream);
+            logo_stamp(&mut h);
+        }
         Page::MpHost | Page::MpNetJoin | Page::MpLobby => {
             page_rows(&mut h, fe, font, match fe.page { Page::MpHost => "HOST ONLINE", Page::MpNetJoin => "JOIN ONLINE", _ => "LOBBY" }, dim, bright);
             let mut y = 250.0f32;

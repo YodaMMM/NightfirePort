@@ -421,6 +421,13 @@ impl DamageLog {
                         eprintln!("[dmg]   explosion at ({:.1},{:.1},{:.1}) d {d:.1} radius {:.1} damage {:.1} owner {} kind {}",
                             e.0[0], e.0[1], e.0[2], e.1, e.2, e.3 as isize, e.4);
                     }
+                    // files-plate-hazard: the GT fire states + the arming channels at the hit.
+                    for (i, t) in sim.drones.gt_turrets.iter().enumerate() {
+                        eprintln!("[dmg]   gt{i} placement {} state {} hp {}", t.placement, t.state, t.hp);
+                    }
+                    eprintln!("[dmg]   ch 0x1C {} 0x27 {} 0x28 {} 0x0E {} 0x0D {} 0x06 {}",
+                        sim.drones.channels.on(0x1c), sim.drones.channels.on(0x27), sim.drones.channels.on(0x28),
+                        sim.drones.channels.on(0x0e), sim.drones.channels.on(0x0d), sim.drones.channels.on(6));
                     // scratch-16-diag: grenades in flight (owner, weapon, pos) around a world hit.
                     for (gi, g) in sim.drones.grenades.iter().enumerate() {
                         let d = ((g.pos[0] - p[0]).powi(2) + (g.pos[1] - p[1]).powi(2) + (g.pos[2] - p[2]).powi(2)).sqrt();

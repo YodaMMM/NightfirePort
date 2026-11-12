@@ -13889,6 +13889,16 @@ pub struct Drones {
     /// The animated SimpleScripts (`SS_Create` 0x1a9c58 / `SS_Update` 0x1a9948; map-tower2): the
     /// 07000012 lift screens, shutters and lift doors swap on their switch channels.
     pub sss: crate::ss::SsList,
+    /// The LoadLevel triggers' (placement 0xE8) door meshes that stand solid: `Trigger_Create`
+    /// 0x1b1720 sets obj+0xD8 = the glist and links the object into its room (:92-96), so
+    /// `Collide_PickObj` 0x1eae80 tests it like any cel-linked object. Measured [L PCSX2-gdb
+    /// 2026-11-12, 07000005 loaded by the game's loader]: Bond walking at Door_Gate8 (#118,
+    /// glist flags 0x80000) stops at z 38.89 and stays — the castle exit is closed to him; the
+    /// port let him through and down the gorge. Held to the 0x80000 door meshes (Door_Gate8,
+    /// 05's Locked_Door_Top_I, 11's DOOR_loadlevel); the walk-in "Load Point" volumes (flags
+    /// 0x0/0x40/0x50, 2-12 tris) stay out [S: what keeps the volume triggers walk-through in
+    /// the game is not pinned]. (glist hash, placement matrix).
+    pub trigger_walls: Vec<(u32, nf_formats::anim::Mat4)>,
     /// The sensors (placement 0x28, `Sensor_Create` 0x1af010 / `Sensor_Update` 0x1af618;
     /// crate::sensor): the security-camera cone detectors that write their out switch channel
     /// after 2 s of sight.
@@ -14338,7 +14348,7 @@ impl Drones {
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
             bond_door_skip: false, // the boot value latches at the Mission_Init site (Player_Init 0x1910f8's write)
-            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), bullet_paths: Vec::new(), script_round_damage: Vec::new(), script_round_hits: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), guard_break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), use_picks: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
+            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), trigger_walls: Vec::new(), bullet_paths: Vec::new(), script_round_damage: Vec::new(), script_round_hits: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), guard_break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), use_picks: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             bullet_contacts_now: Vec::new(),
             bullet_contacts_prev: Vec::new(),
             space_laser_beams: Vec::new(),
@@ -14909,6 +14919,16 @@ impl Drones {
             }
             self.wire_geo = geo;
         }
+        // The LoadLevel door meshes that stand solid (see `trigger_walls`).
+        self.trigger_walls = level.maps[m].placements.iter().filter(|p| p.flags & 0xff == 0xe8).filter_map(|p| {
+            let o = if p.by_hash() { level.by_hash.get(&p.hashcode).map(|&(map, object)| &level.maps[map].objects[object]) }
+                else { level.maps[m].objects.get(p.index as usize) }?;
+            // The shape key: the glist hash, or (index-referenced objects) the SS closure's
+            // synthesized `0x8000_0000 | map << 16 | index` key the collision world registers.
+            let key = if o.hashcode == u32::MAX { 0x8000_0000 | ((m as u32) << 16) | p.index as u32 } else { o.hashcode };
+            (o.flags & 0x80000 != 0 && o.collision.is_some())
+                .then(|| (key, nf_formats::placement::object_matrix(p.rotation, p.translation)))
+        }).collect();
         // SimpleScripts (`SS_Create` 0x1a9c58): the 0xE2 placements with a non-zero key count, their
         // keys from the main map's 0x19 blocks (map-tower2).
         self.sss = crate::ss::SsList::create(&level.maps[m].placements, &path_blocks, |p| {
@@ -21593,6 +21613,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             parts.extend(drones.doors.list.iter().enumerate()
                 .filter(|(_, x)| x.glist != 0)
                 .map(|(k, x)| (0x100_0000_0000 | k as u64, x.glist, x.matrix)));
+            // The LoadLevel door meshes (`trigger_walls`): static, solid to every body query.
+            parts.extend(drones.trigger_walls.iter().enumerate().map(|(k, &(h, m))| (0x8000_0000_0000 | k as u64, h, m)));
             // The SimpleScripts too (fix-party-mission item 7): the safe door (ch 136) and the doorway
             // bolt (ch 137) are solid at their posed matrix, like the doors. Id: bit 41 + the ss index.
             // door-state-collision's SS review (#205 safe door, #217 bolt): UNCONDITIONAL stays — the
