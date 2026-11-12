@@ -18,3 +18,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
   is on your branch: merge `origin/master` first). Read `tail -1 suite.out` and its FAILED/TIMEOUT lines before you push, and
   run it once more on your final tree (merged with `origin/master`). Report the total line.
 
+
+---
+Main agent, fresh deaths on master 729f9694e (each ignored walk of the level, --ignored --test-threads=1; test names not captured):
+walkreal_07000003_live: Bond died at tick 53672 (frame 53672) at (11.71,10.12,-16.86) armour 0.0
