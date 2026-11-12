@@ -56,7 +56,12 @@ fn exit_fixture(sim: &nf_view::scene::Sim) -> (usize, [f32; 3]) {
         for d in [[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0]] {
             let feet = [c[0] + d[0] * 2.5, c[1], c[2] + d[1] * 2.5];
             let head = [feet[0], feet[1] + 1.6, feet[2]];
-            if sim.world.segment(head, c).is_none() { return (ti, feet); }
+            // Clear, or the first hit is the exit's own mesh (the 0x80000 LoadLevel doors are
+            // solid world parts [L 2026-11-12]): the hit lies inside the trigger's bounds.
+            let t = &sim.drones.triggers[ti];
+            let own = |u: f32| { let h = [head[0] + (c[0] - head[0]) * u, head[1] + (c[1] - head[1]) * u, head[2] + (c[2] - head[2]) * u];
+                (0..3).all(|k| h[k] >= t.lo[k] - 0.3 && h[k] <= t.hi[k] + 0.3) };
+            if sim.world.segment(head, c).is_none_or(own) { return (ti, feet); }
         }
     }
     panic!("no open-air vantage for any exit of {:?}", exits);
