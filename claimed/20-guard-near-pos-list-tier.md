@@ -27,3 +27,6 @@ claimed-by: main agent at 2026-11-12T08:59:10Z
 - On 07000001 the list tier fires exactly once in fix_mission_live::the_07000001_exit_works_end_to_end: drone 11 counts the node (-13.50, 5.74, 14.09) reached because peer 14 stands at (-13.65, 6.34, 13.73).
 - After that, the scripted escort diverges: when the ambush clears (ch 0x99) Mayhew is at (6.55, 6.35, 12.75) in state 0x47 instead of holding at (-32.94, 4.74, 11.61) in state 0x20 (LeadWait) as on master; the harness never gets him onto the plate. Find why Mayhew leaves his hold (which state chain takes him to 0x47 - NF_AILOG on him), and whether the game's escort would do the same with drone 11's changed timing; fix the port if it is a port bug, else re-derive the test's stand-ins (never by weakening the exit assert).
 - An env-gated eprintln in near_pos_fn (print the drone, node and peer when the list tier fires) found the event above in one run.
+
+---
+claimed-by: sandbox5 at 2026-11-12T17:49Z
