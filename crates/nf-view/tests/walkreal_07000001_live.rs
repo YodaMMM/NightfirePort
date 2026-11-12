@@ -55,7 +55,7 @@ fn route_order(w: &Walker, guards: &[usize]) -> Vec<usize> {
 /// Bond-touch only [L the d2 run: his ~t9500 crossing popped nothing, Bond's t10284 crossing
 /// popped g4/12/17 onto him at 5.4 u] — and again late, where it becomes a no-op once ch 0xF
 /// is on. Self-contained: saves/restores the fight bands it sets.
-fn run_slab_ambush(w: &mut Walker, ci: usize, difficulty: u32) {
+fn run_slab_ambush(w: &mut Walker, ci: usize, difficulty: u32, levers: bool) {
 // The ch-0xF ambush is a PLACED pocket pair, not a door route — [L the trio dump on this
 // tree] #12 (0x5000036 SMG) stands DISABLED at (-31.31, 6.34, 11.51) (the stairwell-head
 // pocket) and #17 (0x5000039 SMG) at (-29.08, 6.34, -0.01) (the south lower hall) from the
@@ -89,9 +89,19 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
     if difficulty >= 2 { w.flank_hold_x = Some(-27.0); }
     w.keep_off = Some(band);
     w.dmg.back_off = Some(band);
+    // Lever 7 (levers, agent walk only): the fights AIM — the aim bit held every tick, the
+    // 0x400000 zero-spread round [M 0x12c5a0:139-170] and the 0.01-rad gate (the deck-sentry
+    // pattern): the mouth kills land in fewer taps, and the bleed that ground 62.5 -> 8.0
+    // across the rounds (the 17050 run) is the exposure time. Saved/restored with the bands.
+    let prev_aimed = w.dmg.aimed_fights;
+    if levers { w.dmg.aimed_fights = true; }
     // 00 Agent: the pop fight at x1.2 pain is long; a player tops up the gun before he trips it
     // (the fight opened on clip 2 / spare 14 and ran dry against the 24-health captain).
-    if difficulty >= 3 {
+    // Lever 4 (levers, agent walk only — the ledger's lever 4): the law-everywhere runs
+    // entered the slab at clip 5 spare 6 and the dry taps stalled the mouth fight while four
+    // shooters bled Bond out (the 10358 death: no ambush kill logged, 59 hits for 100 [L the
+    // run on this tree]). The resupply is the same call the d3 path already makes.
+    if difficulty >= 3 || levers {
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.gun.clip + sim.gun.spare < 30 { let _ = sim; w.resupply("pre-ambush ammo"); }
     }
@@ -102,7 +112,32 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
         w.wait(1);
     }
     // Out FIRST (the pop volley's reaction window), then the mouth fight.
+    // guard-slide-gate-sweep-2 (levers, the agent walk only — the sister and the d1/d3 walks
+    // stay byte-exact): the returned-fire machinery used to stop the back-off nav at the
+    // 6.0-6.4 u stand inside the pocket tap cone where the world ray blocks Bond's own tap and
+    // the escort-shield holds it — Bond bled 62.5 -> 2.7 there and died at tick 9724 [L the
+    // run on this tree + the sweep's ledger]. The back-off runs QUIET (return fire off for
+    // exactly this nav, the field the walker already reads) so Bond reaches the mouth stand
+    // where the eye rays clear both ways, then fights from it.
+    let prev_rf = w.dmg.return_fire;
+    if levers { w.dmg.return_fire = false; }
     w.walk_nav_to([-22.3, 6.4, 14.8], "back off the popped ambush", 1.0);
+    if levers { w.dmg.return_fire = prev_rf; }
+    // Lever 2 (levers, agent walk only): the back-off's east walk crossed the contact's west
+    // follow — the ally lands INSIDE every pocket tap cone and the mouth fight's shield line
+    // (fire_shield = the contact) holds Bond's tap while #12's fight runs its determined pass
+    // (the 9921 death: the #12 fight held 300 ticks, the pass cost 25.1 [L the sweep's ledger +
+    // the run on this tree]). A player waits for his escort to fall back BEHIND him before the
+    // mouth fight: bounded settle until the contact is east of Bond, then fight.
+    if levers {
+        for _ in 0..600 {
+            let (cx, bx) = { let sim = w.scene.sim.as_ref().unwrap();
+                (sim.drones.list.get(ci).map(|d| d.pos[0]).unwrap_or(f32::MAX), sim.bond.pos[0]) };
+            if cx >= bx - 0.5 { break; }
+            w.wait(1);
+        }
+        w.wait(30);
+    }
     for ambush_round in 0..5 {
         let near: Vec<usize> = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -136,12 +171,23 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
             // The pocket rule: a guard parked west of x -27 (the stairwell-head pocket) is
             // NEVER approached — the shoot loop alone, from the mouth. Hunters in the open
             // corridor get the normal approach to 8 (outside the ×2 band).
-            if gpos[0] > -27.0 && walker::dxz(gpos, w.scene.sim.as_ref().unwrap().bond.pos) > 9.0 {
+            // Lever 3 (levers, agent walk only): NO approach walk at all in the rounds — the
+            // approach into the pocket lane is where the runs died (the 10358 death at the
+            // band-edge stand (-26.29, 16.08) mid-approach with four shooters live [L the run
+            // on this tree]; the 10085 death "a pass that kills its guard ends 3.8-5 u deep
+            // in the lane" [L the sweep's ledger]). The mouth stand answers the exposed
+            // guards; the walled ones get the band-edge window below; the step-out hold (the
+            // 900-tick window) draws the rest into the mouth line.
+            if !levers && gpos[0] > -27.0 && walker::dxz(gpos, w.scene.sim.as_ref().unwrap().bond.pos) > 9.0 {
                 w.walk_nav_to(gpos, &format!("ambush approach guard {g2}"), 8.0);
             }
             // Agent (with health to spare): a walled pocket guard is answered from the corridor band's west end, where
             // the pocket opens at 3.7-4.5 (outside the x2 band), for one bounded window.
-            if difficulty >= 2 && !los && gpos[0] < -27.0 && w.scene.sim.as_ref().unwrap().drones.health.health >= 40.0 {
+            // Lever 5 (levers, agent walk only): the band-edge window is SKIPPED — with the
+            // slid-in shotguns live it sits inside every pocket cone (the 10358 death at
+            // (-26.29, 16.08), the band-edge stand, four shooters live [L the run on this
+            // tree]); the walled guards are answered by the step-out hold instead.
+            if difficulty >= 2 && !levers && !los && gpos[0] < -27.0 && w.scene.sim.as_ref().unwrap().drones.health.health >= 40.0 {
                 w.walk_nav_to([-26.5, 6.4, 14.6], &format!("the band edge for guard {g2}"), 0.8);
                 // Whoever the band edge exposes Bond to comes first (a later popper the round's
                 // list did not hold shot free while Bond waited on the walled guard).
@@ -164,6 +210,10 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
                 continue;
             }
             if !w.shoot(g2, &format!("ambush guard {g2}")) {
+                // (Lever 8 — hold-then-retry before the resupply — was tried and REVERTED:
+                // the hold runs Bond's gun DRY, the retry stalls, and the death came sooner
+                // (15586, the lever-6 family [L the run on this tree]). The resupply pays
+                // here; the next levers own its target direction.)
                 if w.resupply("ambush ammo") { w.shoot(g2, &format!("ambush guard {g2} retry")); }
             }
             if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
@@ -175,11 +225,16 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
             i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
                 && d.pos[0] < -27.0 && walker::dxz(d.pos, w.scene.sim.as_ref().unwrap().bond.pos) < 14.0
         });
-        if still { w.wait(300); }
+        // The step-out window (levers, agent walk only): the pocket pairs step out under
+        // sustained mouth fire (the old-tree kill window); the 300-tick hold expired before
+        // the slid-in shotguns committed — the 900-tick hold is the level-11-d3-pocket
+        // pattern (the sweep ledger's next lever b).
+        if still { w.wait(if levers { 900 } else { 300 }); }
     }
     w.keep_off = prev_keep;
     w.dmg.back_off = prev_back;
     w.flank_hold_x = prev_hold;
+    w.dmg.aimed_fights = prev_aimed;
 }
 
 /// The south-lower-hall far field (≈(-7.9, 6.3, -0.4)) covering the hall door mouth from
@@ -1161,7 +1216,9 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // level. A player clears the ambush line BEFORE escorting through it: the slab crossing +
     // mouth fight + the ch-0x26 waiters as they show, all while the contact still waits east
     // (the hall's live holders keep his hide on).
-    run_slab_ambush(&mut w, ci, difficulty);
+    // The levers are the agent walk's own (d2 direct load); every other difficulty's timeline
+    // stays byte-exact (the mayhew sister calls run_slab_ambush with false directly).
+    run_slab_ambush(&mut w, ci, difficulty, difficulty == 2 && !stop_at_fire);
     let mut settled = cpos;
     // The contact's park from the previous round: two rounds inside ~1 unit with no guard to
     // clear means the lead machine wedged on geometry — Bond walks PAST him toward the plate
@@ -1468,7 +1525,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // Bond walks the last leg onto the plate (the contact stalled at the stairwell head;
     // the AND cannot fire with him outside the volume).
     drop(sim);
-    run_slab_ambush(&mut w, ci, difficulty);
+    run_slab_ambush(&mut w, ci, difficulty, difficulty == 2 && !stop_at_fire);
     {
         // The player clears his OWN radius before the stairwell descent: the route guards the
         // contact woke (the west-corridor SMG pair 12/17 among them) sit 2-6 u off the final
@@ -2282,7 +2339,7 @@ fn following_mayhew_down_completes_the_level() {
         w.dmg.back_off = prev_back_off;
         w.flank_hold_x = prev_flank_hold;
     }
-    run_slab_ambush(&mut w, ci, 2);
+    run_slab_ambush(&mut w, ci, 2, false);
     {
         // The head sweep: the balcony skin-0x36 (g2) parks over the stairwell head and the
         // ch-0x26 wake leaves him there; the trail would walk the contact under his sight.
@@ -2628,7 +2685,8 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage() {
 /// parked west of x -27 (the walled pocket — no clear eye ray from any mouth stand [L]) is
 /// fought SHOOT-ONLY, never approached into the 0.4-u corner where the pre-fix run died.
 #[test]
-#[ignore = "guard-slide-gate-all-levels SHIFT — the repair round (guard-slide-gate-sweep, 2026-11-11): the law moved the hall shotguns into the stairwell pocket [M Drone_CollisionHandler 0x140968 — the level list dropped], so the ch-0xF ambush now pops FOUR+ poppers (the placed #12/#17 AND slid-in #3 0x05000038 shotgun hp 24 + #4 0x0500003a shotgun hp 12) and the mouth/band-edge trades lose: the base death tick 9724 — the back-off nav's returned-fire stand sat 6.0-6.4 u from the pair where the world ray blocks the tap and the escort-shield (fire_shield = the contact) holds it, bled 42.6 -> 2.7 while #3 landed 44.1 [L the run on this tree]. FOUR d2-gated levers were RUN in this window (run_slab_ambush only) and REVERTED, because this test's mayhew sister (line ~2346) calls run_slab_ambush at d2 too and the levers re-timed it into a STUCK at the meet plate — a hard regression against a green test [L the stash A/B: clean tree 1 passed, levered tree STUCK]: (1) return fire OFF through the back-off nav, (2) a settle wait until the contact falls back BEHIND Bond (the back-off's east walk crossed his west follow and put him INSIDE every pocket tap cone — the #12 fight held 300 ticks and its determined pass cost 25.1 [L the 9921 run]), (3) a lane exit after every pocket fight and after the band-edge window (a pass that kills its guard ends 3.8-5 u deep in the lane and the NEXT turn holds there — the 10085 death), (4) the d3 pre-ambush resupply extended to d2 (the law-everywhere runs entered the slab at clip 5 spare 6 and the dry passes walked Bond INTO the lane — the 9569 death). The levers pushed the agent death 9724 -> 10085 -> 13556 (Bond fought through the pocket and 3500+ ticks further) but #17 (hp 12) + #4 (hp 12) survive every round and the later legs re-enter their lane (the 13556 death: #17 dealt 21.6 in 20 hits at 5.2 u [L]). NEXT LEVERS: (a) re-time the mayhew sister with the levers (its own condensed route needs the same exit law, applied per-leg so its meet-plate timeline holds); (b) the step-out windows — the pocket pairs step out under sustained mouth fire (the old-tree kill window); the hold loop waits 300 ticks, a 900-tick hold (the level-11-d3-pocket pattern) may walk them into the mouth line; (c) NF_RF_TRACE the 13556 leg for the exact re-entry spot. The sisters' timelines stay byte-exact on THIS tree (the levers are off it)."]
+#[ignore = "guard-slide-gate-all-levels SHIFT — repaired FORWARD by guard-slide-gate-sweep-2 (2026-11-12): the death moved 9724 -> 17483 with seven test-side levers, all gated to this walk by run_slab_ambush's `levers` param (the mayhew sister and the d1/d3 timelines are byte-exact — the sister's call passes false). The levers: (1) the back-off nav runs QUIET (dmg.return_fire off for exactly that nav — the old returned-fire stand sat 6.0-6.4 u inside the pocket tap cone where the world ray blocks Bond's tap and the escort-shield holds it [L the 9724 run]); (2) a bounded settle until the contact falls back BEHIND Bond before the mouth fights (the 9921 death: the ally inside every pocket cone, the #12 fight's determined pass cost 25.1 [L]); (3) NO approach walks in the rounds (the 10358 death mid-approach at the band edge with four shooters live [L]); (4) the pre-ambush resupply extended to this walk (the law-everywhere runs entered the slab at clip 5 spare 6, the dry taps stalled the mouth fight — the 10358 run logged no ambush kill [L]); (5) the band-edge window SKIPPED (with the slid-in shotguns live it sits inside every pocket cone — the 10358 death at (-26.29, 16.08) [L]); (b) the step-out hold 300 -> 900 ticks (the level-11-d3-pocket pattern — this is what pulled #2/#3/#12 into the mouth line: the pocket phase went from death-at-entry to three kills and a 3500+-tick gain); (7) the fights AIM (the 0x400000 zero-spread round [M 0x12c5a0:139-170], the 0.01-rad gate): 17050 -> 17483. Lever 6 (skip the critical-health resupply, break the rounds) was tried and REVERTED — it left the poppers alive earlier and died sooner (15586 [L]). THE REMAINING DEATH: tick 17483 at (-23.22, 16.32) — health ground to 8.0 across the mouth phase, the first dry-mag resupply detour engaged the surviving popper #4 (killed false at 3.8 hp) and the later legs re-entered the lane [L the 17050 run; the 17483 run's death is the same family]. NEXT LEVERS: (i) the resupply detour's target — walk east first and resupply from the east side (the walker's resupply picks the nearest box, the guardroom box is west past the pocket); (ii) a second aimed-hold round for #4 specifically before any detour; (iii) the ledger's (a): apply the levers to the mayhew sister with its meet-plate re-timing, then widen the gate beyond `levers`. The 00 Agent sister below keeps its own ignore."]
+
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(2));
 }
