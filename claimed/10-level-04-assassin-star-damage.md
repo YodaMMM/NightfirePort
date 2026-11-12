@@ -13,3 +13,6 @@ Find which input differs: (1) the ninja's weapon id in the game (live read of he
 Also note (not a bug unless proven): in this port run she goes 0xae -> 0xa7 -> 0xaa -> 0xab in one tick (ShortRange's 1/3 ENTER roll), while the game stays in 0xaa for ~200 frames. That is an RNG draw; only chase it if the stream position before it differs from the game.
 
 Run tests: `NF_ISO=<abs path> cargo test -j 8 --release -p nf-view --test assassin_07000004_live` and the 04 walks (`walkreal_07000004_live`, `replay_parity_07000004`). Run the full suite in the background (tools/test/suite.py) before you push and report its total line.
+
+---
+claimed-by: sandbox3 at 2026-11-12T16:05Z
