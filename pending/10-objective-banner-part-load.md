@@ -22,3 +22,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
   `NF_ISO=<abs path> nohup python3 tools/test/suite.py > suite.out 2>&1 &` (docs/tools/test-suite.md; once `tools/test/suite.py`
   is on your branch: merge `origin/master` first). Read `tail -1 suite.out` and its FAILED/TIMEOUT lines before you push, and
   run it once more on your final tree (merged with `origin/master`). Report the total line.
+
+---
+## Main agent addendum (2026-11-12): every level with an objective completing in the first 3 s of play (port, direct load, d1; (tick, LEVELS record, objective))
+07000002 (1540, 4, 0) · 07000003 (1, 5, 2) · 07000004 (1330, 6, 2) · 07000006 (1, 0, 0) · 0700000a (1, 8, 2) · 0700000b (1, 9, 2) · 0700000d (1, 11, 2) · 07000012 (1, 15, 1) · 07000013 (1, 17, 0) · 07000016 (1, 21, 0) · 0700004a (95, 16, 1). None on 01 / 05 / 07 / 08 / 09 / 0c / 11 / 14 / 15 / 1b. The game was checked on 04 / 0d / 13 (no stray completion); check each of the others in PCSX2 the same way before pinning (a record whose channel is genuinely set at load may be correct - 06's record 0 and 4a's tick-95 completion look different from the tick-1 pattern).
