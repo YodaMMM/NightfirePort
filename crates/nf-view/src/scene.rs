@@ -8223,6 +8223,16 @@ fn add_instance_tagged(level: &Level, inst: &Instance, layer: Layer, character: 
         let lkey = if matches!(layer, Layer::World) { (li as u32) << 16 | bi as u32 }
             else if node == VIEW_MODEL_NODE { 0x8000_0000 | ord }
             else if layer == Layer::Character { ord } else { 0 };
+        // The ordinal orders, it never splits: a group this character already holds for the same
+        // (texture, GS state) — another object of the same character, a pool slot, an attachment —
+        // keeps its first ordinal, so the merging is exactly the texture-keyed one.
+        let lkey = if layer != Layer::Character { lkey } else {
+            let vm = lkey & 0x8000_0000;
+            groups.range((layer, ikey, 0u32, 0u32, None, Draw::default(), 0u16)..)
+                .take_while(|(k, _)| k.0 == layer && k.1 == ikey)
+                .find(|(k, _)| k.2 & 0x8000_0000 == vm && k.3 == chain && k.4 == key && k.5 == draw && k.6 == lflags)
+                .map_or(lkey, |(k, _)| k.2)
+        };
         // fix-render3: the room cel for the static World layer (build_LinkToRoom 0x1c9680 →
         // build_FindCel 0x1c8cb0 on the object's world centre; View_AddCels 0x1e6ba0 frustum-tests
         // each cel's bbox per viewer). Everything posed per frame keeps None.
