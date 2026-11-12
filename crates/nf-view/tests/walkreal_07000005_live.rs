@@ -1366,6 +1366,10 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker, difficulty: u32) {
                 // death panic above cannot leak the lever into the next test).
                 if name == "the stairs 28" && REAL_DAMAGE_BACKOFF.load(std::sync::atomic::Ordering::Relaxed) {
                     let armed = w.switch_to_armed("the stair-top pre-emptive");
+                    // Open the stand on a full clip: under the held-sight rule (the chat-gate
+                    // look_for_opponent [M 0x177ed0:26-28]) the pair engages at 5-7 u and a stand
+                    // that opens on the leftover 2 rounds reloads in their volley [L the 11184 death].
+                    w.reload_full();
                     eprintln!("[05d] the pre-emptive's gun: armed {armed} weapon {:#x} clip {} spare {} bond {:?}",
                         w.scene.sim.as_ref().unwrap().gun.weapon, w.scene.sim.as_ref().unwrap().gun.clip,
                         w.scene.sim.as_ref().unwrap().gun.spare, w.scene.sim.as_ref().unwrap().bond.pos);
