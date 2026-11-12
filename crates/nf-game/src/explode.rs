@@ -401,6 +401,24 @@ mod tests {
     }
 
     #[test]
+    fn the_falloff_keeps_the_fractions_the_decompiles_int_misprint_would_drop() {
+        // 0x17c608 is `max.s f0,f0,f3` (EE COP1 funct 0x28 = MAX.S, MIN.S is 0x29 — the EE Core
+        // manual's COP1.S table; 89 such words in ACTION.ELF), f3 = 0.0 set at 0x17c5e8: the gap
+        // is CLAMPED at zero, never truncated, and the line keeps its fraction [M
+        // 0x17c5f8 sub.s, 0x17c608 max.s, 0x17c60c div.s, 0x17c610 sub.s, 0x17c614 mul.s].
+        // Reading the decompile's `(float)((int)gap · (0 < gap))` as a truncation would give
+        // DIFFERENT damage at every fractional gap: at gap 0.9 full damage (int 0.9 = 0), here
+        // 100·(1−0.9/10) = 91; at gap 2.9 it would be 80, here 71. Radius 10, damage 100.
+        let t = Targets { drones: &[(0, [1.9, 0.0, 0.0], 1.0)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &t);
+        assert_eq!(h.drones.len(), 1);
+        assert!((h.drones[0].1 - 91.0).abs() < 1e-3, "gap 0.9 keeps its fraction, got {}", h.drones[0].1);
+        let t = Targets { drones: &[(0, [3.9, 0.0, 0.0], 1.0)], player: [1000.0; 3], breaks: &[], destroys: &[], copters: &[] };
+        let h = propagate([0.0; 3], 10.0, 100.0, usize::MAX, &t);
+        assert!((h.drones[0].1 - 71.0).abs() < 1e-3, "gap 2.9 keeps its fraction, got {}", h.drones[0].1);
+    }
+
+    #[test]
     fn the_blast_reaches_each_guard_by_its_own_sphere() {
         // The game's pick reads the victim's own obj+0x8C [M Collide_PickObj 0x1eae80:221-228,
         // hit iff SqDist(centre) < (blast_r + obj+0x8C)²] and the gap subtracts the same sphere

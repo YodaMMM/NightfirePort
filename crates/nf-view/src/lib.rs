@@ -504,7 +504,10 @@ pub fn attach_headless_sound(scene: &mut scene::Scene) {
     driver.load_bank(slot, bank, sbf);
     for (slot, bank, sbf) in std::mem::take(&mut scene.sound_spares) { driver.load_spare_bank(slot, bank, sbf); }
     if let Some((lut, bin)) = scene.streams.take() { driver.load_streams(lut, std::sync::Arc::new(bin)); }
-    let s = nf_audio::sfx::Sound { driver, output: None, captured: None, music_files: None, music: None, music_pending: Vec::new() };
+    // music-section-parity: the level's music plays headless too (the frame clock is its playhead),
+    // so the sim's music sections advance as in the windowed game.
+    let music_files = scene.music_files.take().map(|(t, smf, ssd)| (t, smf, std::sync::Arc::new(ssd)));
+    let s = nf_audio::sfx::Sound { driver, output: None, captured: None, music_files, music: None, music_pending: Vec::new() };
     if let Some(sim) = scene.sim.as_mut() { sim.headless_sound = Some(Box::new((s, 0))); }
 }
 
@@ -3104,6 +3107,10 @@ struct App {
     /// `replay_idx == replay_ticks.len()` ⇒ the recording ended (the sim pauses).
     replay: Option<replay::Replay>,
     replay_idx: usize,
+    /// shot-live-capture: a spot shot waiting for the next drawn frame (its PNG path). The frame
+    /// renders once more into an offscreen target with the live device + renderer and the PNG is
+    /// encoded on a thread, so the screenshot key no longer builds a GPU device and re-uploads the level per shot.
+    capture_req: Option<std::path::PathBuf>,
     /// The party weapon lock's rising-edge memory (`switch_channels_prev[0x48]`, `Player_Weapon`
     /// 0x1a24c8:247): the previous tick's channel state. Reset on every level load — the game's `_prev`
     /// is restored from the RamSave, whose value for the lock channel is 0 in every pre-party level.
@@ -3125,6 +3132,9 @@ struct App {
     game_aspect: f32,
     /// The 60 Hz ticks no driver update has answered yet (`sound_pumps`).
     sound_owed: u32,
+    /// sim-audio-determinism: `sound_tick` ran since the last pump (the sim is live and owns the
+    /// driver's frames); noclip, the dev menu and a lockstep wait leave it false.
+    sound_ticked: bool,
     /// The sim reported the mission's own end this frame (see `Drones::mission_end`).
     pending_mission_end: bool,
     /// mission-results-page: the finished mission's progress layer, snapshotted at
@@ -4468,7 +4478,17 @@ impl App {
             self.sound_owed = 0;
         } else {
             let menus = self.fe.is_some() || self.async_load.is_some();
-            let n = sound_pumps(&mut self.sound_owed, polls, menus);
+            // stream-slot-parity: a loaded mission whose sim has not ticked yet owns its sound's
+            // frames from its first tick — no pump batch before it (the game's first SFXUpdate is
+            // in its first frame). A load-screen batch here started the level's looping effects one
+            // update early, by a count that depended on the load time, and their cue re-triggers
+            // then took voices a frame apart from every headless run [L 07000005 replay, tick 10215].
+            // Only a sim about to run: the menus, the dev menu and a lockstep wait hold it at
+            // frame 0 with the sound still updating (their own pump arm).
+            let held = menus || self.paused || self.net_await_load || self.dev.as_ref().is_some_and(|d| d.menu);
+            let pre_first = !held && self.scene.sim.as_ref().is_some_and(|s| s.drones.frame == 0);
+            if pre_first { self.sound_owed = 0; }
+            let n = if pre_first { 0 } else { sound_pumps(&mut self.sound_owed, polls, menus, std::mem::take(&mut self.sound_ticked)) };
             if let Some(s) = self.sound.as_mut() { for _ in 0..n { s.batch(|_, _| {}); } }
         }
     }
@@ -4720,6 +4740,10 @@ impl App {
         // it) the overlay skips its dark plate, the movie plane draws nothing and a front-end
         // page shots the raw black void of the front-end level — an all-dark
         // capture (F12 on a menu page).
+        if self.gfx.is_some() && std::env::var_os("NF_SHOT_RERENDER").is_none() {
+            self.capture_req = Some(png.clone());
+            return format!("saved {} ({line})", png.display());
+        }
         match self.capture_png(&png) {
             Ok(()) => format!("saved {} ({line})", png.display()),
             Err(e) => format!("screenshot failed: {e} ({line})"),
@@ -5904,7 +5928,7 @@ impl App {
                                 sim.gun.switch_request = 2;
                             }
                             self.prev_lock_ch = on;
-                            if let Some(s) = self.sound.as_mut() { sound_tick(s, sim); }
+                            if let Some(s) = self.sound.as_mut() { sound_tick(s, sim); self.sound_ticked = true; }
                             self.sound_owed = self.sound_owed.saturating_sub(1);
                             // mp-host-match-logic: the match-end handover — `MP_Update` 0x184bd0's
                             // case 4 sets `GameState+0x1C = 0x40000033` (the port's
@@ -6405,6 +6429,41 @@ impl App {
                 g.renderer.set_shards(&g.queue, &self.scene.shard_draws());
                 g.renderer.set_particles(&g.queue, &particles_for(&self.scene, &draw_cam));
                 let enc = g.renderer.render(&g.device, &g.queue, &view, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
+                if let Some(path) = self.capture_req.take() {
+                    let (w, h) = (g.config.width.max(1), g.config.height.max(1));
+                    let target = g.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("spot shot"), size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2, format: g.config.format,
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC, view_formats: &[],
+                    });
+                    let tview = target.create_view(&Default::default());
+                    let mut senc = g.renderer.render(&g.device, &g.queue, &tview, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
+                    let row = (4 * w).next_multiple_of(256);
+                    let buf = g.device.create_buffer(&wgpu::BufferDescriptor { label: Some("spot shot"), size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+                    senc.copy_texture_to_buffer(
+                        wgpu::TexelCopyTextureInfo { texture: &target, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                        wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
+                        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 });
+                    g.queue.submit([senc.finish()]);
+                    let bgra = matches!(g.config.format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb);
+                    let out = path.clone();
+                    buf.clone().map_async(wgpu::MapMode::Read, .., move |r| {
+                        if r.is_err() { eprintln!("screenshot: map failed for {}", out.display()); return; }
+                        let data = buf.get_mapped_range(..).map(|d| d.to_vec());
+                        buf.unmap();
+                        let Ok(data) = data else { return };
+                        std::thread::spawn(move || {
+                            let mut rgba = Vec::with_capacity((4 * w * h) as usize);
+                            for y in 0..h as usize { rgba.extend_from_slice(&data[y * row as usize..][..4 * w as usize]); }
+                            if bgra { for px in rgba.chunks_exact_mut(4) { px.swap(0, 2); } }
+                            for px in rgba.chunks_exact_mut(4) { px[3] = 255; }
+                            match std::fs::write(&out, nf_formats::png::encode_rgba(w, h, &rgba)) {
+                                Ok(()) => eprintln!("wrote {}", out.display()),
+                                Err(e) => eprintln!("screenshot: {e}"),
+                            }
+                        });
+                    });
+                }
                 let fp_sub = std::time::Instant::now();
                 frame_part(5, fp_sub - fp_enc);
                 frame_part(1, fp_sub - self.frame_start);
@@ -6775,6 +6834,7 @@ impl App {
             recorder: None,
             replay: None,
             replay_idx: 0,
+            capture_req: None,
             prev_lock_ch: false,
             ticked: false,
             frame_ticks: 0,
@@ -6784,6 +6844,7 @@ impl App {
             sound_poll_clock: 0.0,
             game_aspect: if std::env::var_os("NF_WIDESCREEN").is_some() { 16.0 / 9.0 } else { 4.0 / 3.0 },
             sound_owed: 0,
+            sound_ticked: false,
             pending_mission_end: false,
             results_progress: None,
             pending_mp_debrief: None,
@@ -8087,7 +8148,18 @@ const SOUND_SLACK: u32 = 2;
 /// answered; `sound_tick` pays one each. Under the menus or a load every tick is the pump's.
 /// Elsewhere this frame's own ticks are still to run, so only older debt counts: that is what
 /// a noclip flight, the dev menu or a lockstep wait leaves, and the music queue runs dry on it.
-fn sound_pumps(owed: &mut u32, polls: u32, menus: bool) -> u32 {
+///
+/// sim-audio-determinism: while the sim is LIVE (`sound_tick` ran since the last pump) the pump runs nothing and
+/// the debt past the slack is dropped. The sim catches a hitch up by at most four ticks a frame and
+/// drops the rest; a pump batch for a dropped tick advanced the voice clock (and every voice-busy
+/// gate the guards' talk reads) without a game frame, so the app drew different random numbers
+/// than any test [L the 07000005 door-band replay: app vs headless split at ticks 1187 / 10262].
+/// The game updates its sound once per game frame, and a slow frame slows both together.
+fn sound_pumps(owed: &mut u32, polls: u32, menus: bool, sim_live: bool) -> u32 {
+    if sim_live && !menus {
+        *owed = (*owed + polls).min(polls + SOUND_SLACK);
+        return 0;
+    }
     let due = if menus { *owed + polls } else { owed.saturating_sub(SOUND_SLACK) };
     *owed = (*owed + polls).saturating_sub(due);
     due.min(8)
@@ -9307,18 +9379,27 @@ mod headless_app_harness {
     #[test]
     fn the_pump_only_covers_ticks_the_sim_left() {
         let mut owed = 0;
-        assert_eq!(sound_pumps(&mut owed, 6, false), 0, "this frame's ticks come first");
+        assert_eq!(sound_pumps(&mut owed, 6, false, false), 0, "this frame's ticks come first");
         assert_eq!(owed, 6);
         owed -= 4; // the four-tick cap ran
-        assert_eq!(sound_pumps(&mut owed, 1, false), 0, "two behind is ordinary phase");
+        assert_eq!(sound_pumps(&mut owed, 1, false, false), 0, "two behind is ordinary phase");
         owed = 3;
-        assert_eq!(sound_pumps(&mut owed, 1, false), 1);
+        assert_eq!(sound_pumps(&mut owed, 1, false, false), 1);
         assert_eq!(owed, 3);
         owed = 0;
-        assert_eq!(sound_pumps(&mut owed, 1, true), 1);
+        assert_eq!(sound_pumps(&mut owed, 1, true, false), 1);
         assert_eq!(owed, 0);
-        assert_eq!(sound_pumps(&mut owed, 60, true), 8, "a long frame does not burst");
+        assert_eq!(sound_pumps(&mut owed, 60, true, false), 8, "a long frame does not burst");
         assert_eq!(owed, 0);
+        // A live sim: no pump at all, and a hitch's dropped ticks do not pile up as debt (the
+        // menus that follow would otherwise burst them out).
+        owed = 0;
+        assert_eq!(sound_pumps(&mut owed, 30, false, true), 0, "a hitch in play pumps nothing");
+        assert_eq!(owed, 30, "this frame's own ticks stay owed for the sim to pay");
+        owed = 9;
+        assert_eq!(sound_pumps(&mut owed, 1, false, true), 0);
+        assert_eq!(owed, 1 + SOUND_SLACK);
+        assert_eq!(sound_pumps(&mut owed, 1, true, true), 1 + SOUND_SLACK + 1, "the menus still pump");
     }
 
     /// regression-read-player-move: the grapple's own quad memset through the REAL App path —
