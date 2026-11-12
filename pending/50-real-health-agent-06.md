@@ -19,3 +19,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: main agent at 2026-11-12T10:22:46Z
+
+---
+## Main agent's run (2026-11-12, master bb5e63e94 - after the castle chat pair + held-sight look_for_opponent landed in 88051e74f; released back)
+The death moved EARLIER than this task's text: the walk now dies at tick 15832 at the mouth (45 hits; #11 skin 0x500002f at (-0.6, 55.5, -51.1) from d 23.4, then #20 at (11.2, 42.0, -35.5) from d 6.4), arriving at 38.4 health. The big loss is the GUARDHOUSE COURT: 94.2 -> 92.3 vs #4 (t2380), then 90.4 -> 49.9 vs #2 (t3236, killed false) - the court trio #2/#3/#4 now engage on held sight (the gate's per-tick rule). Re-derive the court leg first (the Operative rook06 walk passes this court; its approach and kill_438 are the template), then the mouth (restock before it, take #20 before he closes).
