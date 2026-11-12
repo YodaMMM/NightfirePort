@@ -18,3 +18,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
   `NF_ISO=<abs path> nohup python3 tools/test/suite.py > suite.out 2>&1 &` (docs/tools/test-suite.md; once `tools/test/suite.py`
   is on your branch: merge `origin/master` first). Read `tail -1 suite.out` and its FAILED/TIMEOUT lines before you push, and
   run it once more on your final tree (merged with `origin/master`). Report the total line.
+
+---
+## Report (done by the main agent)
+On master 729f9694e: Rook released t2273, walks 14.8 u, never stands >1 tick mid-route; ends Civilian -> DeleteMe. No freeze on master; the pin is in walkreal_07000007_live.
