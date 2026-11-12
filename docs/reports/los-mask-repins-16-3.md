@@ -84,3 +84,12 @@ timers [M 0x179740] explain why the ramp pour only starts around t446 — a gdbw
 
 The environment did not expose any token, credit or context-window figures for this session —
 not visible to me. (No usage numbers were shown by the sandbox, the CLI, or the git host.)
+
+## ntfy failed
+
+All three fallbacks failed:
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20002 milliseconds`
+2. python urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → timed out after 30 s,
+   killed.
