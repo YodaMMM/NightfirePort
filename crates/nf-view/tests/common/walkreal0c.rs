@@ -838,8 +838,15 @@ pub fn walk_spawn_to_the_yard_ladder_base_at(iso: &str, difficulty: u32) -> Walk
     // arm returns code 99; Intersect_CylGeom 0x109da0 skips the face on 99]; the hall side stays
     // shut. Standing, the lintel at z -111.89 stops the body [L 2026-10-31 c8-stand], so Bond
     // crouches once [M Player_SSCrouch 0x1924c0:84-105], holds south and drops to the hall floor.
-    // The real-health walk keeps its tuned timing here: the same 463 ticks in the shaft, then a
-    // placement where the crawl lands (its fights are a pinned sequence; see mezzanine_door_leg).
+    // walks-replay-proof ATTEMPTED (this session): making BOTH walks crawl for real (deleting
+    // the 463-tick wait + the [5.0, 12.35, -112.9] placement) — the crawl itself walks fine
+    // (the real-input vent-exit test pins it against the 2026-11-11 live numbers), but the
+    // real-health walk then DIES far downstream: at tick 9660 the yard's west-edge wire #284
+    // grab froze with level_exit already Some(0x0700000c) — a LOAD_LEVEL trigger the shifted
+    // route crosses early (Bond's exit state moves from (5.0, 12.35, -112.9) to the real
+    // (5.69, 11.92, -113.54) and every later leg's timing shifts). The placement stays until
+    // mezzanine_door_leg (itself a documented stand-in) and the yard triggers are re-tuned on
+    // real input — the 0c de-teleport is filed as walks-replay-proof's remaining work.
     if YARD_AIMED_STANDS.with(|c| c.get()) {
         for _ in 0..463 { w.tick(nf_game::player::Input::default(), false); }
         let sim = w.scene.sim.as_mut().unwrap();

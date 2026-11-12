@@ -2466,10 +2466,21 @@ pub fn pause_hud_refresh(sim: &mut scene::Sim) {
 /// nothing (0x47 [M Player_InitWeapon 0x1a7ef8:137]) and the level's request draws on the first
 /// ticks; a script camera's hold is skipped the way the walkers do. Returns the ticks stepped.
 pub fn settle_start_draw(sim: &mut scene::Sim) -> u32 {
+    settle_start_draw_rec(sim, &mut Vec::new())
+}
+
+/// The same settle, pushing every step's input into `rec` (walks-replay-proof): the ticks a
+/// walk spends in `settle_start_draw` are real sim steps — the skipped cut-scene draws set the
+/// skip request exactly as a player's press does — so a recording that includes them carries
+/// `TickInput::skip` ticks and the replay reproduces them. Plain callers (no recording) keep
+/// the old behaviour through `settle_start_draw`.
+pub fn settle_start_draw_rec(sim: &mut scene::Sim, rec: &mut Vec<crate::replay::TickInput>) -> u32 {
     for t in 0..600 {
         let req = sim.gun.switch_request;
         if sim.gun.switch_state == 0 && (req == 0 || (sim.gun.weapon == req && t > 0)) { return t; }
-        if sim.disabled { sim.drones.scripts.skip_request = true; }
+        let skip = sim.disabled;
+        if skip { sim.drones.scripts.skip_request = true; }
+        rec.push(crate::replay::TickInput { skip, ..Default::default() });
         sim.step_bond(Default::default(), false, false, false);
     }
     600
@@ -5501,10 +5512,14 @@ impl App {
                             // B-5 record/replay: when `--replay` is set, the input comes from the recording, not the
                             // keyboard. The recorded tick drives `step_bond` exactly as it did when recorded; the player
                             // can only watch (Esc to quit). When the recording ends, the sim pauses.
+                            // walks-replay-proof: the recorded skip press rides along (replay_skip) — the feed
+                            // applies it at the step, the way the app's own skip key does.
+                            let mut replay_skip = false;
                             let (mut input, trigger, reload, use_key) = if let Some(rp) = &self.replay {
                                 if self.replay_idx < rp.ticks.len() {
                                     let t = rp.ticks[self.replay_idx];
                                     self.replay_idx += 1;
+                                    replay_skip = t.skip;
                                     t.to_parts()
                                 } else {
                                     self.paused = true; // recording exhausted — hold the last frame.
@@ -5809,6 +5824,9 @@ impl App {
                             sim.rapid_fire = RAPID_FIRE.load(std::sync::atomic::Ordering::Relaxed) && self.net.is_none();
                             // The window answers the fail menu through its page, not the sim's restart.
                             sim.drones.auto_restart = false;
+                            // walks-replay-proof: the recorded cut-scene skip press — the same lane the
+                            // app's own skip key drives (the request is a scripts flag, not an Input lane).
+                            if replay_skip { sim.drones.scripts.skip_request = true; }
                             sim.step_bond(input, trigger, reload, use_key);
                             // Port dev aid: re-apply `--bond` after the opening cut-scene's hand-back.
                             if let Some(b) = self.dev_bond {
@@ -7157,6 +7175,16 @@ impl App {
         sim.drones.decay_gate = ov(0x1000_023b) != 0;
         sim.drones.crouch_toggle = self.crouch_toggle_opt;
         sim.drones.subtitle_track.enabled = ov(0x1000_0136) != 0;
+        // walks-replay-proof: a loaded `--replay` recording pins the option rows its session
+        // played under — the replayed run must play the recorded options, not this machine's
+        // profile (the headless Sim's auto_aim default is OFF where the game's profile is ON,
+        // and the same inputs then aim differently from the first shot).
+        if let Some(o) = self.replay.as_ref().and_then(|r| r.header.options) {
+            sim.auto_aim = o.auto_aim;
+            sim.drones.auto_switch = o.auto_switch;
+            sim.drones.crouch_toggle = o.crouch_toggle;
+            sim.drones.crosshair = o.crosshair;
+        }
     }
 }
 
@@ -8066,7 +8094,13 @@ pub fn run() -> Result<()> {
     // B-5: start the recorder AFTER the scenario is applied (so the header captures the post-scenario starting state:
     // Bond near a guard, the RNG seed, etc.). On replay, the same starting state is reproduced.
     if let Some(path) = record_path {
-        app.recorder = Some(replay::Recorder::start(&app.scene, &path, &level_for_record, scenario.as_deref(), dev)?);
+        // walks-replay-proof: the recorder's header carries the option rows this Sim runs under
+        // (the app applied them in drain_options before this point), so a replay restores them.
+        let opts = app.scene.sim.as_ref().map(|s| replay::ReplayOptions {
+            auto_aim: s.auto_aim, auto_switch: s.drones.auto_switch,
+            crouch_toggle: s.drones.crouch_toggle, crosshair: s.drones.crosshair,
+        });
+        app.recorder = Some(replay::Recorder::start(&app.scene, &path, &level_for_record, scenario.as_deref(), dev, opts)?);
         eprintln!("[replay] recording to {path} (Esc-Esc to stop & write)");
     }
     // B-5: hand the parsed recording to the App; the tick loop reads from it instead of the keyboard.
