@@ -3901,10 +3901,9 @@ impl BotBrain {
     }
 
     /// `NDrone2_CanBackoff` 0x1501a0 for a bot, the game's order:
-    /// 1. behaviour prop 6 — a bot's drone mode is 0 (`BOT_init`'s DIVARS+0x48 is never written,
-    ///    disasm 0x1249e8: stores at +0x2c/+0x40/+0x4c/+0x64/+0x68 only) and mode 0's hook is
-    ///    `DMODE_Normal` → `DMODE_Defaults`, which sets prop 6 [M 0x14d958, 0x14d528:2] —
-    ///    implicit true here.
+    /// 1. behaviour prop 6 — `BOT_init` sets it in the bot's behaviour block
+    ///    (`setProperty(6, .., 1)` [M 0x1249e8:134]), which `DoModeSettingsNEW` unpacks into
+    ///    Drone+0x4dc [M 0x14c600:66-72] — implicit true here.
     /// 2. `DroneAnim_CanDoAnimState(dcv, 4, 0)` [M 0x1501d4-dc, 0x13dfc8]: the bot's anim set is
     ///    its weapon's — `BOTWEAP_changeWeapon` writes Drone+0xDA = `BOTWEAP_getWeaponAnimSet`
     ///    [M 0x12a028:47], and `NDrone2_PostLoad_Init` change-weapon's to the start weapon at
