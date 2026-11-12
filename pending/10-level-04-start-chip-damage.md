@@ -28,3 +28,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
   `NF_ISO=<abs path> nohup python3 tools/test/suite.py > suite.out 2>&1 &` (docs/tools/test-suite.md; once `tools/test/suite.py`
   is on your branch: merge `origin/master` first). Read `tail -1 suite.out` and its FAILED/TIMEOUT lines before you push, and
   run it once more on your final tree (merged with `origin/master`). Report the total line.
+
+---
+## Main agent addendum (2026-11-12): two more start-of-play differences on 07000004 [L PCSX2 frames audits-side, same direct load, d1]
+1. **The assassin's position.** At ~frame 1440 after the load (play starts at port tick 1330) the game's ninja stands ahead of Bond in the courtyard, in view, red goggles lit, while the port's ninja (drone #0, skin 0x0500001e, state 0xae) has run to (-5.23, 5.34, 28.32) - right beside Bond, out of view - and is the one landing the early hits. Trace the ninja's opening states in both (Drone+0x10C each 30 frames in the game) - this is most likely the same root as the damage gap above.
+2. **The objective banner.** On the first play tick the port posts two objective events: record 6 objective 2 (state 3 -> 4, "OBJECTIVE COMPLETE") and record 7 objective 0 (state 1 -> 3, "Defeat the assassin"); the HUD shows "OBJECTIVE COMPLETE" for 3 s. The game shows "NEW OBJECTIVE / Defeat the assassin" at the same moment. Find which is wrong: does record 6's objective 2 complete here in the game (read the LEVELS record states live), and if both post, which message `HUD_UpdateStatusPane` 0x19c310 shows first (Text_AddMsg 0x1b0c30 insertion order). Pin it with a test.
