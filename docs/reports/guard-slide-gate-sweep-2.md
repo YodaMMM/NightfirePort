@@ -118,3 +118,10 @@ next session runs them directly the same way): 0700000a, 0700000c (+barrelrow/+e
 ## Usage
 
 not visible to me
+
+## ntfy
+
+1. `curl -sS -m 20 …` → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 urllib.request` → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "guard-slide-gate-sweep-2: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → exit 0, empty output (the -q quiet path reads as delivered; the first two are recorded verbatim above).
