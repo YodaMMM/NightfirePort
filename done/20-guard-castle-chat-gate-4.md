@@ -20,3 +20,7 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: main agent at 2026-11-12T09:36:46Z
+
+---
+## Report (done by the main agent)
+On master 88051e74f.
