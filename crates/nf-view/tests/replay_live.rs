@@ -128,3 +128,52 @@ fn replay_format_is_stable_across_loads() {
     eprintln!("replay format stable across loads: {} bytes, {} ticks ✓", bytes_a.len(), replay_a.tick_count());
 }
 
+/// Format v3 (walks-replay-proof): the per-tick skip bit and the header's option rows survive a
+/// serialise/parse round-trip, and `replay_headless` applies the recorded options to the Sim
+/// before the first tick (the headless Sim's auto_aim default is OFF where the game's profile
+/// is ON — an unrecorded replay of the same inputs aims differently from the first shot).
+#[test]
+fn replay_v3_round_trips_skip_and_options() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut ticks = sample_ticks();
+    // The cut-scene skip presses: ticks 5..12 carry the skip bit (a walk's skipped intro draw).
+    for t in ticks.iter_mut().skip(5).take(7) { t.skip = true; }
+    let mut scene = nf_view::load(&iso, LEVEL, false).expect("load scene");
+    let mut replay = Replay::from_scene_and_ticks(&scene, LEVEL, None, false, ticks).expect("build replay");
+    // The recorder's session ran the game's default profile: auto aim ON.
+    replay.header.options = Some(nf_view::replay::ReplayOptions {
+        auto_aim: true, auto_switch: true, crouch_toggle: true, crosshair: false,
+    });
+    let sim_default_aim = scene.sim.as_ref().unwrap().auto_aim;
+    let bytes = replay.to_bytes();
+    let re_parsed = Replay::from_bytes(&bytes).expect("re-parse v3");
+    assert_eq!(re_parsed.header.options, replay.header.options, "the option rows changed across serialise/parse");
+    assert_eq!(re_parsed.ticks.iter().filter(|t| t.skip).count(), 7, "the skip bits did not survive the round-trip");
+    assert_eq!(re_parsed.ticks, replay.ticks, "tick inputs changed across serialise/parse (v3)");
+    // The headless replay applies the recorded options: the Sim flips to them before tick 0.
+    let states = nf_view::replay::replay_headless(&mut scene, &re_parsed).expect("replay v3");
+    assert_eq!(states.len(), 61, "the v3 replay ran the wrong tick count");
+    let after = scene.sim.as_ref().unwrap();
+    assert!(after.auto_aim, "replay_headless must apply the header's auto_aim (the sim default was {sim_default_aim})");
+    assert!(after.drones.auto_switch && after.drones.crouch_toggle, "the recorded auto_switch/crouch_toggle must ride the replay");
+    assert!(!after.drones.crosshair, "the recorded crosshair row must ride the replay");
+    eprintln!("v3 round-trip: skip bits + options survive, replay_headless applies the options ✓");
+}
+
+/// walks-replay-proof: the settle steps a walk spends in `settle_start_draw` record through
+/// `settle_start_draw_rec` — the skipped intro draw sets the skip request the way a player's
+/// press does, so the recording carries skip ticks the replay reproduces (07000001's contact
+/// walk took 29 unrecorded ticks there).
+#[test]
+fn settle_start_draw_records_its_steps() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = nf_view::load(&iso, "07000001.bin", false).expect("load 07000001");
+    let sim = scene.sim.as_mut().unwrap();
+    let mut rec = Vec::new();
+    let t = nf_view::settle_start_draw_rec(sim, &mut rec);
+    assert!(t > 0 && rec.len() == t as usize, "the recorded settle must push one tick per step, got {t} ticks / {} rec", rec.len());
+    assert!(rec.iter().any(|tk| tk.skip), "the settle's cut-scene draws must record the skip press");
+    assert!(rec.iter().all(|tk| !tk.trigger && !tk.use_key), "the settle carries no gameplay input");
+    eprintln!("settle_start_draw_rec: {t} ticks recorded, {} skip ticks ✓", rec.iter().filter(|tk| tk.skip).count());
+}
+
