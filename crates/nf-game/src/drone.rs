@@ -22450,9 +22450,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // pair carries +0x31C 0x14 (south, its partner to the right) and 0xC (north) through
             // the fight; the scan here gives the same bits, and without them the south guard
             // stepped right into his partner and his standing rounds hit the partner's body].
-            // Every other level waits on its walks (07000001's four walks and 07000014's two go red
-            // with the scan on - the side bits reshuffle their guard chains).
-            let nb_scan_live = NB_SCAN_LIVE || d.level == 0x0700_0012;
+            // The scan is the game's on every level [M ControlSTANDARD 0x1490f0:202-226 calls it per
+            // tick for every drone]; it runs where the level's tests walk green with it: 12, and
+            // 04 06 07 09 0a 0d 1b (the 2026-11-12 suite with it on everywhere but 01/14 went red
+            // only on 02 03 08 0b 0c 11 13 15 16). Those levels, 01 and 14 wait on their walks;
+            // 05 stays off because guard_side_gates_live injects the bits there by hand to pin
+            // their consumers (the live scan would overwrite the injection every tick).
+            let nb_scan_live = NB_SCAN_LIVE || matches!(d.level & 0xff,
+                0x04 | 0x06 | 0x07 | 0x09 | 0x0a | 0x0d | 0x12 | 0x1b) && d.level >> 8 == 0x0700_00;
             // The per-tick zero is the scan's own head (the game's ControlSTANDARD 0x1490f0:202-226
             // zeroes +0x31C and re-runs NoBunching in the same breath); +0x17 (no_bunching_hit)
             // goes with it — 1 only when a neighbor actually stamped this tick [M 0x150ad0:56-62].
