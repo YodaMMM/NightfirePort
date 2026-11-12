@@ -23,3 +23,6 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 - NDrone2_DefaultInit 0x14b300:745-752: class (+0xC5) 0x0D drones get props 0x3c/0x36/0x35, health 100, +0x8f0 8.0, +0xEC 2.0 and +0xB4 = 0 [M].
 - DroneWeap_DoBulletAccuracy 0x179740:52: chance = 100 - (+0xB4)·5, so byte 0 = 100 before modifiers; then x TooClose_Accuracy under TooClose_Distance (:53-55, again :95-97), x TargetFirstMoved_Accuracy when +0x1dd (:56-58), x TargetMoving_Accuracy when Bond moves (+0x1dc, :78-80), x the difficulty factor (Easy on Operative, :81-93); a hit needs FRand(100) < chance (:100-101) AND the new-sighting time-to-hit past +0x270 beyond TooClose (:103-109); under 3.0 every round hits (:113-115).
 - So the stand's levers are the game's own: keep Bond MOVING while exposed (the moving-target factor), stay out of 3.0 u, and break first sight (the time-to-hit gate). The death at 0.4 u is inside the auto-hit band.
+
+---
+claimed-by: sandbox5 at 2026-11-12T20:01Z
