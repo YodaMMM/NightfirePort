@@ -26,7 +26,8 @@ lands the sighting (0x177ed0:76-80 is reached only past the bit-4 gate). **The t
 against the decompile; corrected** (guard_parity_live.rs): the setup now sets the port's model of
 bit 4 (`los = true`, `seen_ticks = 600` — past every reaction time) and keeps the assertion
 (the sighting lands, [M 0x177ed0:76-80]) unchanged. The send() path runs no vision pass, so the
-setup reaches look_for_opponent intact.
+setup reaches look_for_opponent intact. **Verified green on the branch tree**: guard_parity_live
+whole 20/0.
 
 ## Red 2 — guard_ai_other4_live::investigate_stands_down_to_idle_when_nothing_is_found
 
@@ -36,9 +37,9 @@ the decompile; corrected** (guard_ai_other4_live.rs): `los = true` + `seen_ticks
 of `seen = true`, plus `opp_bond = false` so the sim tick's vision pass skips the probe (the
 round robin probes opponent-pointer drones; a skipped tick keeps bit 2 in the game [M
 0x175cb8]) — without it the pass overwrote the setup. The stand-down arm and both assertions are
-unchanged. **Verification pending**: the final run linked master's nf-game out of the shared
-target dir (the ailog format proved it), so the corrected binaries have not been re-run yet; the
-branch sources are committed and the next run rebuilds cleanly from them.
+unchanged. **Verified green on the branch tree** (after a forced lib rebuild — the first
+re-run had linked master's nf-game out of the shared target dir; the ailog format proved it):
+guard_ai_other4_live whole 4/0.
 
 ## Red 3 — rook06_realpath_live::the_switch16_guard_fights_through_the_door47_doorway
 
@@ -97,6 +98,8 @@ earlier than the port's model — the live checks below decide which.
 - guard_ai_other4_live (branch binary, pre-correction): 3 passed, 1 failed.
 - walkreal_07000005_live (branch binary): 16 passed, 1 failed (the red above).
 - rook06_realpath_live (branch binary): 0 passed, 1 failed; master binary: 1 passed.
+- guard_ai_other4_live (branch tree, corrected): 4 passed, 0 failed.
+- guard_parity_live (branch tree, corrected): 20 passed, 0 failed.
 - The full suite did NOT run: this sandbox has 2 cores and a 9.9 GB disk; the 4-crate test
   build alone (672 binaries) filled the disk to 100% twice (ld bus errors) and background jobs
   do not survive between tool calls here, so the fast-runner flow was not available. The
