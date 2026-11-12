@@ -27,3 +27,8 @@ claimed-by: sandbox7 at 2026-11-12T16:54Z
 
 ---
 claimed-by: main agent 2026-11-12 12:47 MST (sandbox7 never received it - z.ai's verification puzzle blocks sends since 10:52; the main agent does it)
+
+---
+## Main agent (13:17 MST): suite on the base + master eb3845408 (s/0a-cels-5 in the main agent's lane, 564727dd0)
+26 reds: 06 x7 (+ fix_party_mission 06), 0a qworm x4, 11 x2 + start_corridor_guard, 03 full route (timeout), 05 door band 00agent, 08 agent + zoe_gondola, 12 real damage, 13 warm chain agent, 14 tripbomb, 15 omega agent, 16 chasers punch, fix_mission 01 exit, npc_doors 06.
+06 (the walks' shared assert at :513): the friendly driver #15 (skin 0x5000035, hp 1) dies at t233 to a guard's 0x16 round fired from ~(53.1, 40.5, 20.6) at Bond on the dismount -> ch 0x60 (civilian killed) -> the mission fail exits 303 ticks later with Bond frozen. LIVE [L PCSX2 07000006 d1, Bond held at the dismount (59.25, 39.13, 30.52)]: the game's driver 0x17778b0 dies the same way at frame 384 (hp 1.0 -> -3.12, ch 0x60 = 1) - the gate's behaviour is game-true; master's walk only passed because the undrawn guards slid and fired late. The 06 walks need to leave the dismount before the dock guard opens fire (or answer him) - a walk re-tune, not a gate bug.
