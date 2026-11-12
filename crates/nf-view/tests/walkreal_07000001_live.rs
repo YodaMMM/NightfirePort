@@ -380,6 +380,16 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // keep their 6.5 personal space (`keep_off`).
         if difficulty == 2 { w.dmg.back_off = None; }
     }
+    // The restart plate hold (the -3 ledger's plate-refuses fix): the RESTART
+    // LoadPointActivator at (−24.06, 6.46, 7.99) [D placement] sits on the west side of the
+    // stairwell descent, and a walled pocket guard's wide flank arc walked Bond across its
+    // volume — the checkpoint load fired mid-approach (level_exit Some(0x07000001) [L the
+    // run's "sister blocker 2 flank 1 nav 1: level_exit reached"]). A player does not lap a
+    // walled pocket across a checkpoint plate: the existing OPT-IN hold [M walker.rs
+    // flank_hold_x] keeps every guard west of x −20 (the stairwell pocket pair) held — the
+    // fight machinery re-windows instead of flanking — while the east fights (x > −20)
+    // flank as before. run_slab_ambush's own narrower hold (−27.0) saves/restores around it.
+    w.flank_hold_x = Some(-20.0);
     // The type-2 guards carry 12 health, captains 24 [L ee_02b.bin]: Bond aims for the head
     // (`Walker::prefer_head`), as a player does, or the scripted fights run the walk dry.
     w.prefer_head = true;
@@ -1162,6 +1172,27 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // mouth fight + the ch-0x26 waiters as they show, all while the contact still waits east
     // (the hall's live holders keep his hide on).
     run_slab_ambush(&mut w, ci, difficulty);
+    // The doorway stands' second line (the -3 ledger's "#14's line"): the door fight's
+    // survivors re-cower through the slab-ambush and pickup phases, and the follow legs then
+    // walk Bond past their muzzle line (the STUCK dump's z 11.6 stall sits 2-4 u off #14's
+    // (3.0, 6.3, 14.6) hold). The same self-gating filter the post-doorway block runs,
+    // re-run where the follow begins; no live guard near the mouth → a no-op.
+    {
+        let survivors: Vec<usize> = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (0..sim.drones.list.len()).filter(|&i| {
+                let d = &sim.drones.list[i];
+                i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                    && walker::dxz(d.pos, [6.0f32, 6.3f32, 13.0f32]) < 6.0
+            }).collect()
+        };
+        for g2 in survivors {
+            if !w.shoot(g2, &format!("doorway survivor re-scan {g2}")) {
+                if w.resupply("doorway survivor re-scan ammo") { w.shoot(g2, &format!("doorway survivor re-scan {g2} retry")); }
+            }
+            if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+        }
+    }
     let mut settled = cpos;
     // The contact's park from the previous round: two rounds inside ~1 unit with no guard to
     // clear means the lead machine wedged on geometry — Bond walks PAST him toward the plate
@@ -1308,6 +1339,30 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 eprintln!("[01] round {round}: the lead is wedged at ({:.1},{:.1},{:.1}) state {cstate:#x} — Bond walks past him toward the plate (the lead resumes out of the way band and re-paths)",
                     settled[0], settled[1], settled[2]);
                 prev_settled = settled;
+                // The hall pocket lane (the run's STUCK dump: bond (2.6-5.5, ~6.8, 11.6-12.5),
+                // every southbound hop hitting at t≈0.1-0.24 with the door@(7.9,5.3,11.1)
+                // closed or open — the doorway wall (z≈12.1) has a NARROW aperture
+                // (x≈6.0..9.8, the door's x 7.9 its centre) and the hall's west wall
+                // (x≈1.93, z 11.1-13.1 [D collision cels, walkreal_probe11]) closes the
+                // pocket's west side, so a straight hop to the contact or to the south
+                // corridor crosses wall. A player leaves the pocket the way the AI's own
+                // chain runs: north through the hall's opening (node[23] (3.39,14.69) →
+                // node[7] (6.88,14.62) [D nav path 0]), then south THROUGH the aperture's
+                // centre (x 6.88 is inside 6.0..9.8), then the ahead walk runs from the
+                // south side. The existing walled branch (below) covers the x<2.0 case;
+                // this covers the rest of the pocket.
+                {
+                    let bp_now = w.scene.sim.as_ref().unwrap().bond.pos;
+                    let cp_now = w.scene.sim.as_ref().unwrap().drones.list[ci].pos;
+                    let line_blocked = w.scene.sim.as_ref().unwrap().world
+                        .segment(bp_now, [cp_now[0], cp_now[1] + 0.3, cp_now[2]]).is_some();
+                    if line_blocked && bp_now[2] > 10.5 {
+                        w.walk_nav_to([3.39, 6.4, 14.69], "the hall's north opening (nav node 23)", 1.4);
+                        w.walk_nav_to([6.88, 6.4, 14.62], "the hall's east floor (nav node 7)", 1.4);
+                        w.walk_nav_to([6.88, 6.4, 11.4], "through the aperture (its centre x 6.88)", 1.2);
+                        w.walk_nav_to([6.9, 6.4, 8.9], "the meet hall's south side", 1.2);
+                    }
+                }
                 let before = w.scene.sim.as_ref().unwrap().bond.pos;
                 w.walk_nav_to(ahead, "walk past the wedged lead", 3.0);
                 let moved = walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, before);
@@ -1959,6 +2014,12 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_at(difficulty: u32) {
 fn the_plate_refuses_bond_alone() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load"));
+    // The restart plate hold (walk_to_the_exit_at's rationale): the sister's own blocker
+    // fights flank walled pocket guards west of x −20 straight across the RESTART
+    // LoadPointActivator volume at (−24.06, 6.46, 7.99) [D placement] — the checkpoint load
+    // fired mid-approach (level_exit Some(0x07000001) [L "sister blocker 2 flank 1 nav 1:
+    // level_exit reached"]) and the plate assert died with it. Held, not flanked.
+    w.flank_hold_x = Some(-20.0);
     for _ in 0..4000u32 {
         w.tick(Default::default(), false);
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0xb) { break; }
