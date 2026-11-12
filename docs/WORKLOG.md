@@ -24,3 +24,17 @@ Branch `s/level-0a-civilian-slide-cels-2` = origin/s/level-0a-civilian-slide-cel
 ## level-0a-civilian-slide-cels-3
 
 Branch `s/level-0a-civilian-slide-cels-3` = origin/s/level-0a-civilian-slide-cels-2 91cee1b9f merged with origin/master 7dc4c9dcd (clean merge). Task: the -2 sweep ledger's RED walks — walkreal_07000001_live x4 (first the two non-fight walks: the_plate_refuses_bond_alone and the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_level_loads — a drawn-gate change should not move a plate's filter or the exit fade, so these may be real regressions), then the contact walk sisters; walkreal_07000005 real_damage_00agent; walkreal_07000008 real_damage_agent; walkreal_07000013 real_damage; guard1_rounds_0700000c_live the ring fight (Bond off the ring west edge). For each: name the drawn-gated arm that moved it; a real regression gets fixed (with the address), a fight that only moved gets a real-input re-tune or an #[ignore] naming a task. No draw changes.
+
+## level-0a-civilian-slide-cels-3 (outcome)
+
+The -2 ledger re-measured on the merged tree (-2 91cee1b9f + master 7dc4c9dcd). FIXED GREEN:
+guard1_rounds the ring real-health fight — two mid-rim stops (9.0,-204.5)/(6.5,-206.0) r1.4
+north of the measured west-edge fall (6.95,1.06,-210.35); guard #1 still dies at the west edge.
+The 01 non-fight walks are NOT port regressions — the fade/plate assertions never ran: the hall
+doorway freezes (guard #10 in the leaf, #14 on the pickup line) and the plate sister's route
+crossed the restart LoadPointActivator (level_exit Some(0x07000001)) after blocker wedges. All
+reds are the drawn-gait class [M 0x149f88]: 01 x4, 05 d3 (the ambush pair closes point-blank),
+08 agent (world hurt volume), 13 rd (a 50.12 sniper hit), 15 agent, 11 real-damage x3. No
+crates/*/src change. METHOD: post-merge binaries must be re-checked by mtime — the first
+round ran the previous session's stale binaries and "passed" 01/08/13 wrongly. Left: the
+per-test re-tunes (the report's ledger), the 0c family re-run on the merged tree, the suite.
