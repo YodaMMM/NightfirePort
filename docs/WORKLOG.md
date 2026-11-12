@@ -71,3 +71,7 @@
 - The full suite did not fit (the background fast runner is disk-hostile in this 9.9 GB sandbox
   — it filled the disk in the previous window; per-binary foreground chunks are what ran).
 - Report: docs/reports/guard-leaf-press-07.md.
+
+## guard-leaf-press-2 (2026-11-12T03:05Z, branch s/guard-leaf-press-2) — in progress
+
+- Base: origin/s/guard-leaf-press-07 758a89ddc, merged origin/master 08a276ce0 (clean; 16 files, 1049 insertions). Scope: the merged tree turns fix_mission_live::the_07000001_exit_works_end_to_end red (master alone passes). Find the leaf-press interaction that blocks the 07000001 courtyard/exit route, fix it the game's way [M Drone_CollisionHandler 0x140968:204-208], re-run every walkreal_*_live one level per tool call, then the full suite.
