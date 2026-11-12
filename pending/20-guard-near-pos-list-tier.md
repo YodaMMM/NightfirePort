@@ -17,16 +17,3 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
   `NF_ISO=<abs path> nohup python3 tools/test/suite.py > suite.out 2>&1 &` (docs/tools/test-suite.md; once `tools/test/suite.py`
   is on your branch: merge `origin/master` first). Read `tail -1 suite.out` and its FAILED/TIMEOUT lines before you push, and
   run it once more on your final tree (merged with `origin/master`). Report the total line.
-
----
-claimed-by: main agent at 2026-11-12T08:59:10Z
-
----
-## Main agent's findings (2026-11-12, released back to pending)
-- The 01 exit is NOT broken for a player: walkreal_07000001_live (the real-input walk onto the LoadPointActivator plate) is 7/0/1 with the rule.
-- On 07000001 the list tier fires exactly once in fix_mission_live::the_07000001_exit_works_end_to_end: drone 11 counts the node (-13.50, 5.74, 14.09) reached because peer 14 stands at (-13.65, 6.34, 13.73).
-- After that, the scripted escort diverges: when the ambush clears (ch 0x99) Mayhew is at (6.55, 6.35, 12.75) in state 0x47 instead of holding at (-32.94, 4.74, 11.61) in state 0x20 (LeadWait) as on master; the harness never gets him onto the plate. Find why Mayhew leaves his hold (which state chain takes him to 0x47 - NF_AILOG on him), and whether the game's escort would do the same with drone 11's changed timing; fix the port if it is a port bug, else re-derive the test's stand-ins (never by weakening the exit assert).
-- An env-gated eprintln in near_pos_fn (print the drone, node and peer when the list tier fires) found the event above in one run.
-
----
-claimed-by: sandbox5 at 2026-11-12T17:49Z
