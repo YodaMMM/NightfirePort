@@ -103,7 +103,7 @@ fn iso() -> Option<String> {
 // 0xe3fb_90fd_011b_bbef (34 kills).
 // join-1110-mp: the four mp branches joined (setup defaults + DefaultInit bands + arrival 2.0 /
 // raw walk mul + the combat-move draw order) — re-pinned on the joined tree.
-const PINNED_DIGEST: u64 = 0x29b0_8957_ec71_90d7; // PLACEHOLDER from master — re-pinned below for the merged tree once mp_perf_16_live runs on it (the site-scan port + the current backoff state both change the match)
+const PINNED_DIGEST: u64 = 0x4b0f_0d0e_0dbe_e72b; // 42 kills (re-pinned for mp-bot-site-scan on the master-merged tree: FindOpponent's MP arm has no early return — the scan 0x1427c4 runs for a site holder too [M-dis 0x142770/0x1427b0 → 0x1427c4], so bots shooting the site now turn to opponents who come into view, and a changed pick resets the hold +0x274/+0x270 [M 0x1257c0:158-162]; combined with master's reviewed CanBackoff (1.8 × mul [M 0x1501a0:57 `0xbfe66666`, 0x14c938 case 0x10]); decompile-backed behaviour changes, not optimisations)
 
 const TICKS: u32 = 3600;
 
