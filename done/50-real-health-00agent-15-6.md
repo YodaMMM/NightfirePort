@@ -129,3 +129,6 @@ session.
 ## ntfy failed (from the branch report, d52518cad)
 
 All three fallbacks failed: curl (28) Connection timed out after 20002 ms; urllib URLError [Errno 101] Network is unreachable; wget silent network failure. The same egress artifact as the 15-5 session.
+
+---
+Merged (squash, docs dropped): master 6daafd915. Next round queued as 50-real-health-00agent-15-7.
