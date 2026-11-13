@@ -132,6 +132,20 @@ fn flank_lobby_east(w: &mut crate::walker::Walker) {
         &[0.6, 13.6],    // under the z 13.75 knee-wall (blocked only at z 13.75; z 13.4 clear)
         &[2.4, 13.9],    // the flank — the d2 fight#6 trace's spot
     ];
+    // 00 Agent real health (the flag's only caller): the rifle post #6 (skin 0x5000006, 0x18)
+    // is not exposed from the south-band flank (the retarget measured: 21 hp, never hit, t12162);
+    // a static bullet-line scan of the lobby floor found ONE spot outside his 3-4 u band with a
+    // clear line to his chest - (-8.25, 19.00), d 8.7 [the 11-13 probe over x -14..1, z 12..19].
+    // He is shot from there first (the measured run: #7 and #6 both killed, 12 cleared).
+    {
+        let di = { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.list.iter().position(|d| d.present && !d.corpse
+            && d.health > 0.0 && d.team == 1 && d.skin == 0x5000006 && crate::walker::dxz(d.pos, [0.3, 1.0, 17.5]) < 3.0) };
+        if let Some(di) = di {
+            let _ = w.try_walk_to(crate::walker::Wp::new(-8.25, 1.1, 19.0).r(0.5), "the north-lobby line on #6");
+            let k = w.shoot(di, "the rifle post #6 from the north-lobby line (d 8.7)");
+            eprintln!("[012] north line #6 killed {k} health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+        }
+    }
     for (k, p) in HOPS.iter().enumerate() {
         let _ = w.try_walk_to(crate::walker::Wp::new(p[0], 1.1, p[1]).r(0.9),
             &format!("the lobby-east flank {k}"));
