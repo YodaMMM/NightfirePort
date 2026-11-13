@@ -120,3 +120,6 @@ behaviour) are the highest-risk sweep targets and they are green on my merged tr
 
 not visible to me — no token, credit, cost or context-window figures are shown anywhere in this session's
 environment.
+
+---
+Merged (squash, docs dropped): master 7840d9362; the 00 Agent walk is un-ignored.
