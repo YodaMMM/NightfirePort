@@ -99,3 +99,15 @@ before each commit, only the task's files staged:
 
 not visible to me — no token, credit, context-window or cost figures are shown anywhere in
 this environment's interfaces for this session.
+
+## ntfy failed
+
+All three fallbacks failed (the same egress artifact as the 14-9/15-6 windows: github.com
+reachable throughout, ntfy.sh unreachable from this sandbox):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "real-health-14-00agent-10: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20000 milliseconds`.
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'…', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`.
+3. `wget -q -O- --timeout=15 --post-data "real-health-14-00agent-10: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → no output, silent network failure.
