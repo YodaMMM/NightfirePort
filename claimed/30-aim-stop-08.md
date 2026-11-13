@@ -20,3 +20,6 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
   run it once more on your final tree (merged with `origin/master`). Report the total line.
 
 **Branch:** `s/30-aim-stop-08`.
+
+---
+claimed-by: sandbox3 at 2026-11-13T01:48Z
