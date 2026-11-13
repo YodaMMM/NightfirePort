@@ -5728,10 +5728,17 @@ impl App {
                             // game's own mapping/curves/ramps merges into the keyboard's Input; no pad,
                             // no change. Mouse look is untouched (its deltas are in input.turn/look; the
                             // pad's contributions add on top).
+                            // The pad's fire reaches the trigger lane too (the keyboard writes both
+                            // `input.fire` and `trigger` from the same button), and its action 0xe
+                            // (use/reload, Square|R2) the use_key/reload lanes, as E and R do.
                             #[cfg(feature = "gamepad")]
-                            if let Some(pad) = self.pad.as_mut() {
-                                pad.merge(&mut input, sim.zoom, sim.bond.underwater, false);
-                            }
+                            let (trigger, reload, use_key) = match self.pad.as_mut() {
+                                Some(pad) => {
+                                    let act_e = pad.merge(&mut input, sim.zoom, sim.bond.underwater, false);
+                                    (trigger || input.fire, reload || act_e, use_key || act_e)
+                                }
+                                None => (trigger, reload, use_key),
+                            };
                             // The party weapon lock (`Player_Weapon` 0x1a24c8:242-275): on 07000007 with
                             // ch 0x48 off the cycle actions cannot leave the fists (fix-level2 F4).
                             nf_game::player::weapon_lock_input(sim.level, sim.drones.channels.on(nf_game::player::WEAPON_LOCK_CHANNEL), &mut input);
