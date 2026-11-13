@@ -126,3 +126,7 @@ Nothing here can be measured against the PS2 — all [S]. If you render on a des
 
 - Input tokens / output tokens / context used / cost: not visible to me (the sandbox shows no
   per-session token or cost figures).
+
+## ntfy failed
+
+All three fallbacks failed at ~03:40 UTC 2026-11-13: curl (28) Connection timed out after 20001 milliseconds; python urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>; wget hung, killed by the tool timeout (45 s and 120 s).
