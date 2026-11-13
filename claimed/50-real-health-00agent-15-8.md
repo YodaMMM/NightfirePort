@@ -25,3 +25,5 @@ claimed-by: sandbox3 at 2026-11-13T11:45Z
 11-13 (on master 893dc3252): after the #526 lob the P2K comes back in hand when the gun is nearly empty - the resupply walk east is gone; the death moved t7985 -> t8578 (the door[29] through fight on #11 goes killed-false, #11/#10 throws 33.2 + 25.7). Measured dead: a head-first aimed stand from the threshold (#11 unseen at +200, death t8121).
 
 11-13 (master a4b8a6b14): the west room is CLEARED - a live bullet-line scan at t7347 found #11 seen alone from (5.0, 71.25); from the threshold Bond walks there, head-first stand kills #11 (+20), then #18 and #10 nearest-first, health 34.4 kept. Death t8578 -> t9746 at (-5.66, 41.46, 34.60): the great-hall #5 (0x50000b2) 31.4 in 2 at d 12.7 (ledger lever 3).
+
+Great-hall scan (11-13, at the door[50] threshold, Bond (0.02, 47.73)): live #5 (7.41, 36.21), #4 (-0.35, 27.95), #19 (-3.48, 30.24). No floor spot sees #5 with #4/#19 hidden; 53 spots see #5 at all (nearest (1.0, 40.25), 7.6 u from him) but all are in #4/#19 lines too. The hall needs a multi-guard order (#19/#4 first from a #5-hidden line), not a solo shot.
