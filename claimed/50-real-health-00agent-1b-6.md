@@ -21,3 +21,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox7 at 2026-11-13T12:14Z
+
+11-13 (on master cdfc28056): round-5 lever 1 landed - cap = deadline - 800: m3/m4/m5 all disarmed, death t6580 -> t7494 (the wave 6-7 astronauts + one 17.64 world blast at the fixed 6580 tick). Reserve 1000: t7402 (disarmed); 1200: t6505 (starved). Next: thin the wave (lever 2) and the kind-107 blast compare.
