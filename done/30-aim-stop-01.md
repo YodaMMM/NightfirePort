@@ -27,3 +27,8 @@ claimed-by: sandbox1 at 2026-11-13T01:32Z
 ---
 ## Report (done, 2026-11-13T03:20Z)
 
+
+---
+## Report from the worker (done, 2026-11-13T03:20Z)
+
+Closed by the driver: the report is on `s/aim-stop-01` (docs/reports/aim-stop-01.md); the worker didn't run finish.sh.
