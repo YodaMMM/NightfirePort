@@ -89,3 +89,14 @@ Task: the door-phase kill path — the hall-2 ledger's next lever. Either work o
 - (04:30-04:36) whole walkreal_07000001_live: 7 passed / 1 failed (the d3 ledger only [L
   99.4s]); interactables_07000001_live 10/0 (29.4s). The fast suite dies between tool calls
   (hall-2's documented artifact) — the batteries are the coverage. Report written.
+- (04:05-04:40) the advance dance built and pushed (9b09f06ab): the capped-nav opt-ins
+  (Walker::nav_tick_cap, Walker::leg_abort_on_wound, DamageLog::abort_on_wound — None-
+  defaulted, pure reads, no RNG draw) + the dance legs. THE MECHANIC CONFIRMED [L dance5]:
+  the nav leg through the door OPENS it (7.9,5.3,11.1 state 0x2 at leg 0) and guard 6
+  advanced and died to the walk's own return fire at tick 7217 with 55.0 -> 55.0 — the kill
+  is FREE when the door is open. The remaining bug: the abort misses the death window (the
+  captain's 6-pellet frame 7301 lands 40.6 inside one tick; the die panic fires inside the
+  tick before any loop-head abort) — next round wires the abort into the note path or gives
+  the dance a no-die-panic window. Battery with the WIP files: walkreal_07000001_live whole
+  7 passed / 1 failed (the d3 ledger only [L 88.9s]); interactables_07000001_live 10/0
+  (29.9s) — the d1/d2 streams byte-identical through the opt-ins.
