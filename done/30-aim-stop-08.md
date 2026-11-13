@@ -248,3 +248,6 @@ All three fallbacks, in order, with their exact output:
    network reaches github.com via the tooling but not ntfy.sh directly).
 
 The queue entry (done/30-aim-stop-08.md on origin/queue) carries this report.
+
+---
+Not merged (held): with the stop on, the Agent real-damage walk goes from green to ignored, and the stop moves a guard <= 0.006 u per aim entry on this level. Land it only with the Agent walk green.
