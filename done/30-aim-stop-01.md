@@ -129,3 +129,6 @@ Branch `s/aim-stop-01` (base origin/master 1105786cd). Code checkpoint: 0d06bcda
 ## Usage
 
 not visible to me — this environment shows no token, cost or context-window figures.
+
+---
+Merged (squash, docs dropped): master abc09337d.
