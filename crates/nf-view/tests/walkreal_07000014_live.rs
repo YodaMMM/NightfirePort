@@ -1091,7 +1091,7 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// wrap + this un-ignore are one-liners; (2) a d2/d3-gated fight-quiet approach so the
 /// displacement never reaches the pocket; (3) the stairwell AIM-pair stands.
 #[test]
-#[ignore = "00 Agent (11-13 update): the landing west drop is PASSED - a d3-only guard (#6, 28 hp, 0x14) slept in the drop band at (32.2, 1.8, 33.2) and turned the drop aim into the overhang (wedge at (33.70, 1.19, 35.21)); the pistol comes out (Bond held the vent-lid item) and #6 dies from the landing with no hits, the drop then aims z 33.4 past his body. The walk now dies at t7051 in the corridor lane north (node 57, the door (27.8, 1.2, 30.0)) to the corridor crowd (47 hits, 0 return-fire fights: #9 65.0 in 13 at d 1.2, #8 17.5, #7 12.5 at d 9.9, #10 5.0; all 0x14). Next: the corridor crowd (why no return fire at d 1.2). Earlier ledger: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
+#[ignore = "00 Agent (11-13 update 2): the hostile clear picks NEAREST first at d3 real health (the list-order pick spent 900 ticks on #3 at 18.2 u while #9 shot Bond from 1.2 u) - the corridor, leg 2 and the generator room now pass; the walk dies at t21466 at the fusebox #383 stance (-88.35, -1.10, 31.38): the fusebox burn's blast lands 37.91 in one hit on the remaining health (34 hits, 7 fights before it). Next: the #383 burn from a stance outside the blast, or health into it. Update 1: the landing west drop is PASSED - a d3-only guard (#6, 28 hp, 0x14) slept in the drop band at (32.2, 1.8, 33.2) and turned the drop aim into the overhang (wedge at (33.70, 1.19, 35.21)); the pistol comes out (Bond held the vent-lid item) and #6 dies from the landing with no hits, the drop then aims z 33.4 past his body. The walk now dies at t7051 in the corridor lane north (node 57, the door (27.8, 1.2, 30.0)) to the corridor crowd (47 hits, 0 return-fire fights: #9 65.0 in 13 at d 1.2, #8 17.5, #7 12.5 at d 9.9, #10 5.0; all 0x14). Next: the corridor crowd (why no return fire at d 1.2). Earlier ledger: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(3)));
 }
@@ -1693,10 +1693,16 @@ fn clear_hostiles(w: &mut Walker, radius: f32, cap: u32) {
     for _ in 0..10 {
         trail.push(w.scene.sim.as_ref().unwrap().bond.pos);
         let sim = w.scene.sim.as_ref().unwrap();
-        let Some(di) = sim.drones.list.iter().position(|d| {
-            d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
-                && walker::dxz(d.pos, sim.bond.pos) < radius
-        }) else { break }; // a clear that ends here still walks home below
+        let live = |d: &nf_game::drone::Drone| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+            && walker::dxz(d.pos, sim.bond.pos) < radius;
+        // 00 Agent real health: nearest first - the list-order pick spent 900 ticks on #3 at
+        // 18.2 u while #9 shot Bond from 1.2 u (65.0 in 13, the t7051 corridor death).
+        let nearest = sim.drones.difficulty >= 3 && !w.tops_up();
+        let pick = if nearest {
+            sim.drones.list.iter().enumerate().filter(|(_, d)| live(d))
+                .min_by(|a, b| walker::dxz(a.1.pos, sim.bond.pos).total_cmp(&walker::dxz(b.1.pos, sim.bond.pos))).map(|(i, _)| i)
+        } else { sim.drones.list.iter().position(|d| live(d)) };
+        let Some(di) = pick else { break }; // a clear that ends here still walks home below
         // The dropped-gun cycle is now a bounded test-local loot pass (this tree's measured
         // runs: the fights held Bond at 74.0 across 9-12 fights — the armour takes the traded
         // rounds — while the shared resupply walked Bond onto the trench lip for a drop
