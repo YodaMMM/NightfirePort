@@ -731,6 +731,11 @@ fn open_the_pad_lid(w: &mut Walker) {
 /// dump]) for the whole 2400-tick cap. The player drops past him on the north side, z 34.9.
 fn drop_aim_z(w: &Walker) -> f32 {
     let sim = w.scene.sim.as_ref().unwrap();
+    // 00 Agent real health: the drop-band guard is shot from the landing (below), and his body
+    // lies in the band at (32.2, 33.2); the 34.0 line then wedges under the overhang at
+    // (33.71, 1.20, 34.23) while the 33.4 line clears to the low floor [L the 11-13 runs].
+    if sim.drones.difficulty >= 3 && !w.tops_up() && sim.drones.list.iter().any(|d| d.corpse
+        && (31.0..33.2).contains(&d.pos[0]) && (33.0..34.6).contains(&d.pos[2])) { return 33.4; }
     let blocked = sim.drones.list.iter().any(|d| d.present && !d.corpse && d.health > 0.0 && d.pos[1] < 2.3
         && (31.0..33.2).contains(&d.pos[0]) && (33.0..34.6).contains(&d.pos[2]));
     if blocked { 34.9 } else { 34.0 }
@@ -806,6 +811,22 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
         // clear segment to the target is the overhang catch), so the westing is the player's own
         // push: steer south-west around the slab's corner, hop when grounded (the walker's wedge
         // recovery), until clear of the overhang zone on the low floor.
+        // 00 Agent real health: a d3-only guard (#6, 28 health, 0x14) stands asleep in the drop
+        // band at (32.2, 1.8, 33.2); the drop steers into the overhang around him and wedges, and
+        // walking past wakes him (point-blank death). Bond still holds the vent-lid item here, so
+        // the pistol comes out first, then the guard is shot from the landing (killed, no hits
+        // taken [L the 11-13 run]).
+        if !w.tops_up() && w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 {
+            let _ = w.switch_to_armed("the drop-band guard");
+            for _ in 0..3 {
+                let di = { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.list.iter().position(|d| d.present && !d.corpse
+                    && d.health > 0.0 && d.pos[1] < 2.3 && (31.0..33.2).contains(&d.pos[0]) && (33.0..34.6).contains(&d.pos[2])) };
+                let Some(di) = di else { break };
+                let k = w.shoot(di, "the drop-band guard (from the landing)");
+                eprintln!("[014] drop-band guard #{di} killed {k} health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+                if !k { break; }
+            }
+        }
         {
             let start = w.total_ticks;
             loop {
@@ -1070,7 +1091,7 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// wrap + this un-ignore are one-liners; (2) a d2/d3-gated fight-quiet approach so the
 /// displacement never reaches the pocket; (3) the stairwell AIM-pair stands.
 #[test]
-#[ignore = "00 Agent: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
+#[ignore = "00 Agent (11-13 update): the landing west drop is PASSED - a d3-only guard (#6, 28 hp, 0x14) slept in the drop band at (32.2, 1.8, 33.2) and turned the drop aim into the overhang (wedge at (33.70, 1.19, 35.21)); the pistol comes out (Bond held the vent-lid item) and #6 dies from the landing with no hits, the drop then aims z 33.4 past his body. The walk now dies at t7051 in the corridor lane north (node 57, the door (27.8, 1.2, 30.0)) to the corridor crowd (47 hits, 0 return-fire fights: #9 65.0 in 13 at d 1.2, #8 17.5, #7 12.5 at d 9.9, #10 5.0; all 0x14). Next: the corridor crowd (why no return fire at d 1.2). Earlier ledger: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(3)));
 }
