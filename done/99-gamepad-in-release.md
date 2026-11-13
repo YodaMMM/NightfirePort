@@ -20,3 +20,6 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 Main agent (2026-11-12): the release-script half is DONE on s/gamepad-in-release (0a8a18954: make-release.ps1 builds and notices with "movies,gamepad"; smoke OK, frame times unchanged) and HELD for a hands-on controller check. What remains for this task: the synthesized-pad test (PadDriver state into the menus and a level start, no hardware) - build it on top of that branch.
+
+---
+Done on master 23b0ae649: release build includes gamepad; the stick walks, the d-pad switches; pad_walk_live drives a level start through the pad path. Fire/use lanes follow in the next push.
