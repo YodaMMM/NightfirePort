@@ -923,6 +923,52 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
         // guards emptied him (the 1988 death).
         for (label, wp) in APPROACH {
             if wp.at[1] > 5.5 { clear_hostiles_16(w, 40.0, 900); }
+            // The Agent walk (d2): the ramp foot and the whole ramp see all
+            // three gallery riflemen (#3/#4/#5, 0x1a) [the 11-13 cover map]; the pocket at
+            // x 19-20 / z -92..-98 sees none. Dash there (no return fire, straight legs - the nav's
+            // hop toward (20.7, -95.6) wedged 771 ticks), arm, and peek-fight from the pocket edge.
+            if re_arm && *label == "the lane east"
+                && w.scene.sim.as_ref().unwrap().drones.difficulty == 2 {
+                let rf = w.dmg.return_fire;
+                w.dmg.return_fire = false;
+                w.lenient = true;
+                for (i, at) in [[10.0f32, 0.0, -84.0], [11.0, 0.0, -90.0], [16.5, 0.0, -91.6], [20.5, 0.0, -92.4], [20.6, 0.0, -95.0]].iter().enumerate() {
+                    w.walk_to(walker::Wp::new(at[0], at[1], at[2]).r(0.9), &format!("the pocket dash {i}"));
+                }
+                w.lenient = false;
+                w.dmg.return_fire = rf;
+                let _ = w.switch_to_armed("the pocket");
+                eprintln!("[016] in the pocket: health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+                let pocket = [20.6f32, 0.9, -95.0];
+                let peek = [19.0f32, 0.9, -92.2];
+                for k in 0..10 {
+                    let alive = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        (0..sim.drones.list.len()).filter(|&i| {
+                            let d = &sim.drones.list[i];
+                            d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 && d.pos[1] > 5.5 && d.pos[0] < 0.0 && d.pos[2] < -84.0
+                        }).collect::<Vec<_>>()
+                    };
+                    if alive.is_empty() { break; }
+                    w.lenient = true;
+                    w.walk_to(walker::Wp::new(peek[0], peek[1], peek[2]).r(0.5), &format!("the gallery peek {k}"));
+                    w.lenient = false;
+                    let tgt = { let sim = w.scene.sim.as_ref().unwrap(); alive.iter().copied().find(|&i| walker::DamageLog::visible(sim, i)) };
+                    if let Some(gi) = tgt { let _ = w.shoot_bounded(gi, &format!("the gallery peek {k}"), 300); }
+                    w.lenient = true;
+                    w.walk_to(walker::Wp::new(pocket[0], pocket[1], pocket[2]).r(0.6), &format!("back to the pocket {k}"));
+                    w.lenient = false;
+                    for _ in 0..90 { w.tick(nf_game::player::Input::default(), false); }
+                }
+                eprintln!("[016] the gallery pocket fight ends, health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+                // Back out the way the dash came (the straight steer from the pocket to the lane
+                // pins on the trench's east edge).
+                w.lenient = true;
+                for (i, at) in [[20.5f32, 0.0, -92.4], [16.5, 0.0, -91.6], [11.0, 0.0, -90.0], [10.0, 0.0, -84.0]].iter().enumerate() {
+                    w.walk_to(walker::Wp::new(at[0], at[1], at[2]).r(0.9), &format!("out of the pocket {i}"));
+                }
+                w.lenient = false;
+            }
             // los-mask-repins-16 (the real-damage walks' east-lane re-route): under the game's
             // guard sight the east guards (#1 skin 0x50000b1 from (24.1, 0.8, −96.6), #3 skin
             // 0x500008c from (22.1, 0.8, −104.2) [L the 10864 death ledger]) hunt Bond on the
@@ -2490,7 +2536,9 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
 /// the chain set), or a live PCSX2 scout of whether the gallery is reachable on foot
 /// (the station's west side?) — the player answer this route is missing.
 #[test]
-#[ignore = "Agent: Bond dies on real health — RE-MEASURED on master 22d5836b (real-health-00agent-16-1b-2): tick 1638 at (12.12,0.93,-88.14), 44 hits for 100.0, the ramp foot / corridor approach cluster (the same spot the south-gallery law was measured from — the gallery's first landed round tick 455); the four measured levers of the round-2 report (the load-time (48,18) window, the ring-east-gated window, the spawn shoot_point stands, the static ring-east stands) all stand; next levers unchanged: a cover-shaped gallery approach from the ring, an armour pickup, a live scout of the gallery's foot access"]
+/// GREEN 2026-11-13: the gallery trio (#3/#4/#5, 0x1a) sees the whole ramp; the walk dashes to the
+/// x 19-20 / z -92..-98 pocket (no line to any of them), peek-fights them from its edge and backs
+/// out the way it came (end health 49.2, armour 41.3).
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
     walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2));
 }
