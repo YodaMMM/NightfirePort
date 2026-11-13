@@ -11,3 +11,13 @@ first (lever 4 — the drop pocket re-rolls #6's charge state with every upstrea
 then arm through switch_to_armed at the landing + the head round at the closer from the pad
 west, the pad standoff on the walker's own leg machinery, then the unseen-cover opt-in scoped
 to the descent's legs. Helpers gated to 07000014 + difficulty 3.
+- [the outcome] The death moved t3673 → t18878 and the walk now clears the descent, the machine
+  room, the south row and the corridor foot. Landed: switch_to_armed at the pad west (the in-hand
+  ammo law — the armed pre-drop clear killed the closer at +305), the strict 300-tick pad-west
+  head stand (the lip eats the line; zero rounds wasted), the already-down drop skip (the clear's
+  trail grounds Bond on the low floor; the raw hop loop wedged 2400 ticks), the gap choke hold
+  (the fights killed #4 at ZERO cost at the choke). Measured nothing: the 6.0 crowd band
+  (byte-identical run — the band was saturated). The wall: the fights engaged the 5-chaser
+  cluster through the gap, could not finish (the jamb), and their retreat walked Bond back into
+  the machine room's crossfire (#9/#56's rifles, 57.5 together). Whole binary 7/0/3, interactables
+  10/0. The fast runner died silently three times (empty suite.out, no process) — recorded.
