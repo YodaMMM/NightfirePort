@@ -637,7 +637,7 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // mid-lane, and #526's chain blast reads 80·(1−(15.2−1.06)/15)·0.6 ≈ 2.8 there. The rim
     // walk and rim shot below then skip (the d1 run keeps them: nothing chains the mine there,
     // and the check is a read, not a write). The AR goes back in hand for the west-room stands.
-    if difficulty >= 2 && !w.tops_up() { // real damage only, as the plate sneak
+    if !w.tops_up() { // real damage only, as the plate sneak (aim-stop-15: the d1 run rides the lob too — its #526 rim shot is the measured world bill's largest row, 27.7 at the pain row 0.4)
         w.walk_to(Wp::new(26.5, 41.4, 71.2).r(0.5), "door[32] threshold (the guard's own drops)");
         // The thrower: the carried frag 0x34 (the level's own loadout [D the 07000015 loadout] —
         // owned from the start, measured in the run's owned list), or the launcher 0x1b when a
@@ -717,14 +717,32 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // doorway and answers through it; #526 is already gone, so the fight's own wandering is
     // body-safe. The doorway's z band (70.06..72.32 at x 10.56) covers both boxes' rays from
     // here (#10's at z ≈ 70.3-70.6, #11's at z ≈ 71.6-72.2).
+    // AIM-STOP-15 re-tune: the placement-spot resolution is replaced by proximity. With the
+    // AimStandFire root stop live the released pair HOLDS its spots instead of advancing and
+    // throws on first sight — the throw cycle beats the plain kill from any stance [L
+    // damage_log.rs's pre_throw_stands doc] — and #10's grenade rested 3.5 u off Bond's route
+    // for −36.9, the run's largest bill (the measured d2 real run: released behind the west
+    // wall at the door[32] threshold leg, in sight only from the door[29] legs, killed at 7076
+    // AFTER his ~6940 throw; the spot-based shots below never fired — the pair stood off its
+    // [D] spots when the sweep ran). A player answers what he SEES through the open doorway
+    // from the west lane: the nearest live hostile WEST of the door[29] plane (x < 9 — the
+    // door[32] guard's spot (26.22, 71.15) stays out) within the plain shooters' own 20 u
+    // reach [M damage_log.rs pre_throw_stands's reach law], fought the tick he is in sight —
+    // inside the pair's aim/throw cycle, so the kill precedes the first throw.
     if difficulty >= 2 {
-        for (at, label) in [
-            ([-1.87f32, 41.34, 77.42], "the northwest grenadier (port #11, skin 0x50000b2) through the door[29] window"),
-            ([-5.14f32, 41.34, 67.25], "the west-room grenadier (port #10, skin 0x50000b2) through the door[29] window"),
-        ] {
-            if let Some(di) = agent_drone_near(&w, at, 8.0) {
-                w.shoot(di, label);
-            }
+        for sweep in 0..4 {
+            let near = { let sim = w.scene.sim.as_ref().unwrap();
+                (0..sim.drones.list.len())
+                    .filter(|&i| { let d = &sim.drones.list[i];
+                        d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                            && d.pos[0] < 9.0 })
+                    .min_by_key(|&i| { let d = &sim.drones.list[i]; let b = sim.bond.pos;
+                        ((d.pos[0] - b[0]).powi(2) + (d.pos[1] - b[1]).powi(2) + (d.pos[2] - b[2]).powi(2)) as u32 })
+                    .filter(|&i| { let d = &sim.drones.list[i]; let b = sim.bond.pos;
+                        ((d.pos[0] - b[0]).powi(2) + (d.pos[1] - b[1]).powi(2) + (d.pos[2] - b[2]).powi(2)) < 20.0 * 20.0 })
+            };
+            let Some(di) = near else { break };
+            w.shoot(di, &format!("the west-room hostile through the door[29] window, sweep {sweep}"));
         }
     }
     let route: &[(&str, Wp)] = &[
@@ -867,6 +885,42 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     for _ in 0..40 { w.tick(nf_game::player::Input::default(), false); }
     assert!(w.scene.sim.as_ref().unwrap().drones.doors.list[42].state & 0xc != 0,
         "door[42] is open inside the auto-close window [M 0x13660c-0x136700]");
+    // AIM-STOP-15 re-tune (the stop's measured top-up breaks): with the AimStandFire root stop
+    // live, the corridor's chasers stop dead to shoot and one stands in door[42]'s own
+    // aperture — the fence shot's eye line dies at fraction 0.0 on his capsule and the shot
+    // runs dry behind him (the measured top-up d2/d3 runs: los Some(0.0) on every gate tick,
+    // clip 1 spare 0 by t1800, the dry-swap cascade 0x02 → 0x1a → 0x1b → fists, the mine
+    // intact, "never exploded under fire"). A player with a guard standing in the doorway
+    // kills him before he shoots the fence: the nearest live hostile within 12 u, up to
+    // three sweeps (the jog sweep's pattern, level-15-agent-doors-2).
+    if difficulty >= 2 {
+        for sweep in 0..3 {
+            let near = { let sim = w.scene.sim.as_ref().unwrap();
+                (0..sim.drones.list.len())
+                    .filter(|&i| { let d = &sim.drones.list[i];
+                        d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 })
+                    .min_by_key(|&i| { let d = &sim.drones.list[i]; let b = sim.bond.pos;
+                        ((d.pos[0] - b[0]).powi(2) + (d.pos[1] - b[1]).powi(2) + (d.pos[2] - b[2]).powi(2)) as u32 })
+                    .filter(|&i| { let d = &sim.drones.list[i]; let b = sim.bond.pos;
+                        ((d.pos[0] - b[0]).powi(2) + (d.pos[1] - b[1]).powi(2) + (d.pos[2] - b[2]).powi(2)) < 12.0 * 12.0 })
+            };
+            let Some(di) = near else { break };
+            w.shoot(di, &format!("the door[42] doorway blocker, sweep {sweep}"));
+        }
+        // The sweep's own fight can have let the leaf auto-close; the shot rides the open
+        // doorway's window (the same re-open the pre-stop re-draw block served).
+        if w.scene.sim.as_ref().unwrap().drones.doors.list[42].state & 0xc == 0 {
+            w.use_door(42, "door[42] re-opened after the doorway sweep");
+            for _ in 0..40 { w.tick(nf_game::player::Input::default(), false); }
+        }
+        // The sweep's fight spends rounds; the measured dry pool died on the leaf again. The
+        // same pickup-walk allowance the pre-door check rode.
+        let low_after = { let g = &w.scene.sim.as_ref().unwrap().gun; (g.clip as i32 + g.spare as i32) < 4 };
+        if low_after {
+            w.resupply("the fence shot's rounds after the doorway sweep");
+            assert!(w.switch_to_armed("the fence shot's gun (post-sweep)"), "a carried gun has rounds for the fence");
+        }
+    }
     // REAL-HEALTH TACTIC (level-15-agent-doors-2): the fence's own pops are pure distance — all
     // three records carry damage 80, radius 10 [L the run probe 2026-11-04 printed all three:
     // damage 80, radius 10; the measured pops at the threshold stand were
