@@ -22,3 +22,6 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 ---
 Main agent, fresh deaths on master 729f9694e (each ignored walk of the level, --ignored --test-threads=1; test names not captured):
 walkreal_07000001_live: Bond died at tick 6709 (frame 6738) at (6.62,6.47,9.85) armour 0.0
+
+---
+claimed-by: sandbox4 at 2026-11-13T02:52Z
