@@ -26,3 +26,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-11-12T20:01Z
+
+---
+## Report (done, 2026-11-13T01:33Z)
+
+Closed by the driver: the report is on `s/level-16-pit-squad-operative` (docs/reports/level-16-pit-squad-operative.md); the worker didn't run finish.sh.
