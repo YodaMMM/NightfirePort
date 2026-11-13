@@ -30,3 +30,6 @@ walkreal_0700001b_live: Bond died at tick 5619 (frame 5619) at (31.92,-1.68,-0.5
 
 ---
 Update 2026-11-13T17:05Z (master c94c1043e): the 16 Agent walk now dies at tick 2176 at (-0.19, 7.96, -79.44), 38 hits for 100.0 - #5 (skin 0x50000b2, 0x1a, at (-9.5, 6.7, -91.4), 15 u) 43.3 in 11 and #3 (0x500008c, 0x1a, at (-4.7, 6.7, -110.5), 31 u) 31.5 in 15; five return-fire fights, none closed. The 1b Agent walk is still red too.
+
+---
+Update 2026-11-13T17:11Z (master 40f33b3d3): the 1b AGENT walk latches all 8 consoles and ends the console run at 2.3 health, then dies at the waves-wait first tick (frame 11385, (46.0, -14.1, -3.0)) to a world hit of 2.32 - at the instant every missile reaches deploy state 2 (likely the launch blast), not a hurt volume (hurt-avoidance in hide_and_snipe for d2 changed nothing). Budget: 28 hits for 100 - the world 27.7 in 5 (13.84 at frame 8502), astronauts #3 17.5, #7 14.0, #4 10.5, #11 10.5 (0x6a). Levers: a waiting spot away from the silos when the deploy completes; the frame-8502 world hit during the console run.
