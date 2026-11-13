@@ -68,3 +68,6 @@ no top-ups, never lower damage or health. Remove the ignore when green; else pus
   byte-identical); interactables_07000001_live 10/10. Report written; the fast suite did not
   fit (the sandbox OOM-kills the 4-crate build; 4 GB) — the explicit batteries are the
   coverage, re-run the suite before merging.
+Started 2026-11-13 03:12 UTC. Branch s/real-health-00agent-01-hall-3 cut from origin/s/real-health-00agent-01-hall-2 (ec54db62c) and merged with origin/master (merge ca17d3e5b; one conflict in tests/common/walker.rs — hall-2's flank_hold_z field kept alongside master's record_inputs/record_states replay machinery).
+Task: the door-phase kill path — the hall-2 ledger's next lever. Either work out which weapon/timing draws the guards across the aperture ([M] DroneFunc_SetNoiseHeard 0x149920, HandleSoundAlerts 0x148a30) and lure with that, or kill the crowd through the aperture with crouched taps along the flight lane, ammo metered. Helpers gated to 07000001 + difficulty 3. Real input only, no top-ups, never lower damage or health. Remove the ignore when green; else push the ledger + next lever.
+- (03:12) sandbox kept the repo + work/ + ISO; branch cut, master merged, WORKLOG pushed.
