@@ -103,3 +103,24 @@ level-02-castle-walks-hearing-2 reports document):
 Everything else was delivered: the branch `s/real-health-00agent-01-hall-3` (402081b08) with
 the report, the WORKLOG entries, the ledger in the d3 test's ignore message, and the queue's
 done item with the report body attached.
+
+## Addendum (the final 35 minutes: the advance dance built and pushed)
+
+The clock allowed one more lever round. **The advance mechanic is CONFIRMED and the kill is
+free when the door is open**: the dance's capped nav leg through the door plane OPENS it
+(`opening door (7.9,5.3,11.1) state 0x2` during leg 0), guard 6 advanced and DIED to the
+walk's own return fire at tick 7217 with **health 55.0 -> 55.0** — no wound at all [L the
+dance5 run]. The earlier exchanges cost 3.6 only when Bond lingered.
+
+Pushed WIP (9b09f06ab + 4ce28f619): the opt-in capped-nav plumbing — `Walker::nav_tick_cap`,
+`Walker::leg_abort_on_wound`, `DamageLog::abort_on_wound` (all `None`-defaulted, pure health
+reads, no RNG draw; the `u32::MAX−1` early-return stops the WHOLE nav, not just the leg) and
+the dance itself. **The one remaining bug**: the wound abort misses the death window — the
+captain's 6-pellet frame 7301 lands 40.6 inside a single tick, so the die panic fires inside
+the step before any loop-head abort can run. Next round: wire the abort into the damage-note
+path (or run the dance legs with the die panic deferred to a flag the dance reads). The
+measured exchange budget stands: the advancer's volley 3.6, the captain's 36.0, Bond at 55.0.
+
+**Battery with the WIP files in place** ([L]): `walkreal_07000001_live` whole binary
+**7 passed / 1 failed** (the d3 ledger test only; d1/d2 byte-identical through the opt-ins,
+88.9 s); `interactables_07000001_live` **10 passed / 0 failed** (29.9 s).
