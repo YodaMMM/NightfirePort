@@ -23,3 +23,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 claimed-by: sandbox1 at 2026-11-13T11:19Z
 
 11-13 measured on master 893dc3252: death t9585 at (11.55, 6.29, -15.74), one 40.0 from the east-wing sniper #6 (d 22.3). Bond reaches the lane mouth line at exactly 40.0: the mid-courtyard "through the doorway" fights cost 92.8 -> 40.0 (#9 killed false, #8 twice, #11). At the mouth line stand_shooters_down_03 engages nobody (no exposed shooter hit Bond in the last 600 ticks); holding Bond on the mouth line between stands changed nothing. Lever: the mid-courtyard doorway trade (the 52.8 drain), not the mouth.
+
+Measured dead (11-13): an aimed pre-clear from the mid-courtyard doorway line (lane side, after the doors open). It kills #9 cleanly (+0 damage) but the stand time on the lane side feeds the lane shooters #11 (machine gun, 56.8 in 5) and #10 (30.6 in 17): death t8720 (t8472 when the pick also took the upper-row #8 at y 9.1). The quick crossing stays the better trade; the 52.8 drain needs a crossing that does not linger on either side, or the lane shooters dead first.
