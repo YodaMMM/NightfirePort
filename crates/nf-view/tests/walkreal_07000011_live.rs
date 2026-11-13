@@ -294,6 +294,10 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
                 // unmasked run won the same stand by a few ticks]. A player reloads before he
                 // opens the door.
                 w.reload_full();
+                // 00 Agent with the drawn room gate and the guards' aim stop (Drone+0x38): the
+                // unarmed #1 now meets Bond ON the wall lane (one 40.0 punch at (20.07, 15.96)
+                // before the doorway stand began). The same stand from the jog, 6.5 u back.
+                if difficulty >= 3 { armour_room_stand(&mut w, difficulty, 12.0); }
             }
             if *label == "the east wall north" {
                 // The armour room's pair, held at its doorway: #1 (placement 122, unarmed) and #2
@@ -308,25 +312,7 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
                 // hits [L NF_RF_TRACE run: fight#2 aim None, creep true, death t2427]. A player
                 // facing a shotgun captain he cannot see holds back: the stand keeps 4 u off a
                 // live guard (DamageLog::back_off — the crowd arm steps back and stops the creep).
-                let prev_back_off = w.dmg.back_off;
-                if difficulty >= 3 { w.dmg.back_off = Some(4.0); } // the Agent sister passes as she is
-                let start = w.total_ticks;
-                while w.total_ticks - start < 900 {
-                    let (near, far) = {
-                        let sim = w.scene.sim.as_ref().unwrap();
-                        let live = |d: &&nf_game::drone::Drone| d.present && !d.corpse && d.health > 0.0 && d.team == 1
-                            && (d.pos[1] - sim.bond.pos[1]).abs() < 2.0;
-                        (sim.drones.list.iter().position(|d| live(&d) && walker::dxz(d.pos, sim.bond.pos) < 7.0),
-                         sim.drones.list.iter().any(|d| live(&d) && walker::dxz(d.pos, sim.bond.pos) < 12.0))
-                    };
-                    if let Some(di) = near {
-                        let k = w.stand_and_fire(di, 600);
-                        eprintln!("[011] d3 armour-room stand: #{di} killed {k} health {}", w.scene.sim.as_ref().unwrap().drones.health.health);
-                    } else if far {
-                        w.tick(nf_game::player::Input::default(), false);
-                    } else { break; }
-                }
-                w.dmg.back_off = prev_back_off;
+                armour_room_stand(&mut w, difficulty, 7.0);
                 // The doorway stand's own turns and recoil can carry Bond off the wall lane
                 // (join-reds2-0, 00 Agent on the stream join: the run east then started from the
                 // desk side and wedged on a desk top at (20.87, 48.28, 14.89), grounded false).
@@ -905,4 +891,28 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage_00agent() {
         walker::with_real_damage_unseen_fights(||
             walker::with_real_damage(||
                 walk_spawn_to_the_lower_floor_load_point_at(3))))
+}
+
+/// The armour room's doorway stand (see its first call site): any guard on Bond's floor within 7
+/// is fought, one within 12 waited for (bounded 900 ticks); 00 Agent keeps 4 u off a live guard.
+fn armour_room_stand(w: &mut Walker, difficulty: u32, near_r: f32) {
+    let prev_back_off = w.dmg.back_off;
+    if difficulty >= 3 { w.dmg.back_off = Some(4.0); } // the Agent sister passes as she is
+    let start = w.total_ticks;
+    while w.total_ticks - start < 900 {
+        let (near, far) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let live = |d: &&nf_game::drone::Drone| d.present && !d.corpse && d.health > 0.0 && d.team == 1
+                && (d.pos[1] - sim.bond.pos[1]).abs() < 2.0;
+            (sim.drones.list.iter().position(|d| live(&d) && walker::dxz(d.pos, sim.bond.pos) < near_r),
+             sim.drones.list.iter().any(|d| live(&d) && walker::dxz(d.pos, sim.bond.pos) < 12.0))
+        };
+        if let Some(di) = near {
+            let k = w.stand_and_fire(di, 600);
+            eprintln!("[011] d3 armour-room stand: #{di} killed {k} health {}", w.scene.sim.as_ref().unwrap().drones.health.health);
+        } else if far {
+            w.tick(nf_game::player::Input::default(), false);
+        } else { break; }
+    }
+    w.dmg.back_off = prev_back_off;
 }

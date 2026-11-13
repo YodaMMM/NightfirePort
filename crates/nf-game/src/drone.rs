@@ -9111,7 +9111,7 @@ impl Drone {
                 // Landed level by level (each level's walks re-tuned against the stop first, the
                 // room gate's pattern); ZERO_ROOT_ALL turns it on everywhere.
                 let zero_root_live = ZERO_ROOT_ALL || (d.level >> 8 == 0x0700_00
-                    && matches!(d.level & 0xff, 0x02 | 0x03 | 0x04 | 0x05 | 0x06 | 0x07 | 0x09 | 0x0a | 0x0c | 0x0d | 0x12 | 0x13 | 0x14 | 0x16 | 0x1b));
+                    && matches!(d.level & 0xff, 0x02 | 0x03 | 0x04 | 0x05 | 0x06 | 0x07 | 0x09 | 0x0a | 0x0c | 0x0d | 0x11 | 0x12 | 0x13 | 0x14 | 0x16 | 0x1b));
                 if zero_root_live && self.has_opponent(frame) && self.anim.class == 2 { self.zero_root = true; }
                 if self.firing && !self.burst_done {
                     if ailog() && self.grenade_count > 0 {
@@ -20731,7 +20731,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // 2026-11-12 per-level suite), 01 03 05 08 12-16 on their fight walks: those keep the
         // bullet-ray stand-in until each is checked live and re-tuned.
         let room_gate_live = d.level >> 8 == 0x0700_00 && matches!(d.level & 0xff,
-            0x02 | 0x04 | 0x0a | 0x0b | 0x0c | 0x0d | 0x1b);
+            0x02 | 0x04 | 0x0a | 0x0b | 0x0c | 0x0d | 0x11 | 0x1b);
         let room_vis = if room_gate_live { cel_graph.and_then(|g| drawn_room_mask(g, player, &self.doors.closed_flags())) } else { None };
         if self.npc_enabled {
         // Visibility every tick for drones with vision on; line of sight for one drone per tick (round robin).
