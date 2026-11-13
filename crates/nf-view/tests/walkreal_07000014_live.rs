@@ -787,12 +787,47 @@ fn the_machine_room_to_the_corridor(w: &mut Walker) {
     // off the gap [M NDrone2_Collision 0x140e90:91-121 via 0x149ec8/0x14b190]; the plain ladder
     // re-opened the door for the whole 6000-tick cap. The player's answer to a guard in his way
     // is the shot (Walker::stuck_answers, the 11 route walk's opt-in), scoped to this lane.
+    // real-health-14-00agent-10 (lever 2, the standoff on the walker's own machinery): the
+    // run14c ledger — the corridor-foot squad's point-blank burst lost the DPS race: the fights
+    // killed ALL six chasers (the 17471-18043 lines, health 100.0 → 10.0 across them) but the
+    // under-3.0 band's burst rate [M DroneWeap_DoBulletAccuracy 0x179740:113-115] ate the last
+    // 90.0 in ~110 ticks at d 1.8-2.9. The crowd arm's backpedal (forward −1.0, the fights' own
+    // law in walker.rs) starts at the back_off radius — widening it to 6.0 on the descent's
+    // legs starts the escape a guard earlier (the 03 sister's band law, one band out). The
+    // difficulty-1 walks keep the 4.0 band byte-identical.
+    let d3_real = !w.tops_up() && w.scene.sim.as_ref().unwrap().drones.difficulty >= 3;
+    let prev_back = w.dmg.back_off;
+    if d3_real { w.dmg.back_off = Some(6.0); }
     let prev_answers = w.stuck_answers;
     w.stuck_answers = true;
-    for (label, x, y, z, r) in lane {
+    for (lane_i, (label, x, y, z, r)) in lane.iter().enumerate() {
         w.walk_to(Wp::new(*x, *y, *z).r(*r), label);
+        // real-health-14-00agent-10 (the run14c/d ledger, the choke hold): the chasers file
+        // through the south gap's door behind Bond and corner him at the corridor foot — the
+        // run14c burst was FOUR throwers' arcs landing together (health 100.0 → 10.0 in 15
+        // ticks at 17965-18030, the fights' own six kills notwithstanding). A player holds
+        // SOUTH of the gap and lets them file through the doorway one at a time: the fights'
+        // law answers each at the choke where no second arc can reach. The runs 14c/d: three
+        // kills at ZERO cost before the burst — the choke turns all six into that shape.
+        // Scoped to the d3 real-health run; the d1 lane keeps master's pace byte-identical.
+        if d3_real && *label == "south of the gap (node 129)" {
+            for hold in 0..8 {
+                let n = { let sim = w.scene.sim.as_ref().unwrap(); let b = sim.bond.pos;
+                    sim.drones.list.iter().filter(|d| d.team == 1 && d.enabled && d.present
+                        && !d.corpse && d.health > 0.0
+                        && ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt() < 14.0).count() };
+                if n == 0 { break; }
+                eprintln!("[014] the gap hold {hold}: {n} chasers in the band — the fights clean them at the choke");
+                // The hold legs must CARRY ticks (the fights' law runs inside walk_to's tick
+                // loop — a same-spot leg arrives in 6 ticks and the fights never run): real
+                // strides west and back, ~30 ticks each way.
+                w.walk_to(Wp::new(33.6, 0.65, 29.6).r(0.5), "the gap hold west");
+                w.walk_to(Wp::new(34.72, 0.65, 29.99).r(0.5), "the gap hold south");
+            }
+        }
     }
     w.stuck_answers = prev_answers;
+    if d3_real { w.dmg.back_off = prev_back; }
 }
 
 /// The walked west route from the SP #276 hand-back to the west switch band (level-14-hall-walk-in):
@@ -816,6 +851,39 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
     // live glass pane) → the leg-2 start.
     {
         w.walk_to(Wp::new(34.63, 2.80, 37.94).r(1.0), "the pad west");
+        // real-health-14-00agent-10 (lever 1, the in-hand ammo law): the claw's hand-back
+        // leaves sim.gun (the IN-HAND gun) dry while the P2K's ~11 rounds sit in the
+        // INVENTORY [L the 14-9 run9 pre-drop dump] — the landing's armed check then skipped
+        // the pre-drop clear whole and the melee closer under the lip went unanswered (the
+        // run14a ledger: death t3673 ON the landing, 100.0 in 30 hits at d 1.6, 0 return-fire
+        // fights — no eye ray reaches a shooter under the lip). A player arms the real way:
+        // switch_to_armed's cycle brings the P2K up, and the head round at the closer runs
+        // FROM THE PAD WEST — the pad's eye ~4.3 passes over the slab top 2.4 (the line to
+        // (32.4, ~2.4, 34.3) rides 2.99 at the landing's x — the sight line the landing's own
+        // lip blocks), and one P2K head round is 35 [M NDrone2_HitDamage 0x145558 ×
+        // DroneDamage_Head; the P2K's 3.5 → 35] — a 28-hp guard dies outright. The closer is
+        // resolved by the drop pocket's own box (the drop_aim_z predicate), so no other
+        // 0x5000093 guard eats the round. Non-strict: the pad-west line clears the slab, so
+        // the torso anchor fires too (28 hp = 8 torso rounds worst case; the clip is ~11).
+        // Opt-in on the real-health runs only: the difficulty-1 walks keep master behaviour.
+        if !w.tops_up() {
+            assert!(w.switch_to_armed("the descent's arm"), "the P2K has rounds in the inventory");
+            // The run14b ledger: the pad-west line does NOT deliver (900 ticks, health 28
+            // constant, 0 progress — the lip's east face eats the rounds the geometry says
+            // should clear), so the stand rides the STRICT gate (a blocked window costs zero
+            // rounds — the 14-9 corner-stand law) with the 300-tick cap: the head window
+            // either opens at once or the lip blocks it for good. The kill itself is the
+            // pre-drop clear's (armed now — its head round killed at +305 in the same run).
+            if let Some(di) = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
+                d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && d.pos[1] < 2.3
+                    && (31.0..33.2).contains(&d.pos[0]) && (33.0..34.6).contains(&d.pos[2])
+            }) {
+                shoot_head_loose(&mut w, di, "the drop-pocket closer's head from the pad west", 300, true);
+            } else {
+                eprintln!("[014] the drop pocket is empty at the pad west — the closer has not engaged yet");
+            }
+        }
         w.walk_to(Wp::new(34.57, 2.80, 37.18).r(0.9), "the pad's south-west step head");
         open_the_pad_lid(&mut w);
         w.walk_to(Wp::new(33.09, 2.37, 35.38).r(0.8), "the 1.72 landing");
@@ -849,26 +917,40 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
             if armed { clear_hostiles(w, 6.0, 900); }
         }
         {
-            let start = w.total_ticks;
-            loop {
-                assert!(w.total_ticks - start < 2400,
-                    "the landing's west drop never cleared the overhang\n{}",
-                    walker::fail_dump_pub(&w.scene, [31.8, 1.0, 34.0], "the landing west drop"));
-                {
+            // real-health-14-00agent-10 (the run14b wedge): the pre-drop clear chases the
+            // closer DOWN and its walk-home cannot climb back (the nav graph has no link from
+            // the low floor to the landing) — Bond lands the clear on the low floor
+            // ((33.92, 0.65, 35.35) [L the run14b trail]) and the drop loop's westing then
+            // wedges under the slab's overhang for the whole 2400-tick cap (the hop law
+            // raising him INTO the catch). The drop exists to GET DOWN: when the clear has
+            // already grounded Bond below the landing (y < 1.5), the westing is done — the
+            // machine-room lane starts from here.
+            let already_down = { let sim = w.scene.sim.as_ref().unwrap();
+                sim.bond.grounded && sim.bond.pos[1] < 1.5 };
+            if !already_down {
+                let start = w.total_ticks;
+                loop {
+                    assert!(w.total_ticks - start < 2400,
+                        "the landing's west drop never cleared the overhang\n{}",
+                        walker::fail_dump_pub(&w.scene, [31.8, 1.0, 34.0], "the landing west drop"));
+                    {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let p = sim.bond.pos;
+                        if p[0] < 32.6 && p[1] < 1.4 && sim.bond.grounded { break; }
+                    }
+                    let tz = drop_aim_z(&w);
                     let sim = w.scene.sim.as_ref().unwrap();
-                    let p = sim.bond.pos;
-                    if p[0] < 32.6 && p[1] < 1.4 && sim.bond.grounded { break; }
+                    let b = &sim.bond;
+                    let inp = nf_game::player::Input {
+                        forward: 1.0,
+                        jump: b.grounded && (w.total_ticks - start) % 30 == 0,
+                        turn: wrap_pi((31.8f32 - b.pos[0]).atan2(tz - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
+                        ..Default::default()
+                    };
+                    w.tick(inp, false);
                 }
-                let tz = drop_aim_z(&w);
-                let sim = w.scene.sim.as_ref().unwrap();
-                let b = &sim.bond;
-                let inp = nf_game::player::Input {
-                    forward: 1.0,
-                    jump: b.grounded && (w.total_ticks - start) % 30 == 0,
-                    turn: wrap_pi((31.8f32 - b.pos[0]).atan2(tz - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
-                    ..Default::default()
-                };
-                w.tick(inp, false);
+            } else {
+                eprintln!("[014] the clear already grounded Bond on the low floor — the drop west is skipped");
             }
             eprintln!("[014] the low floor west reached {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
         }
