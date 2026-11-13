@@ -124,3 +124,8 @@ faster).
 
 Not visible to me: this environment exposes no token, credit or context-window figures for the
 session.
+
+
+## ntfy failed (from the branch report, d52518cad)
+
+All three fallbacks failed: curl (28) Connection timed out after 20002 ms; urllib URLError [Errno 101] Network is unreachable; wget silent network failure. The same egress artifact as the 15-5 session.
