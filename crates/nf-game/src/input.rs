@@ -357,6 +357,12 @@ impl PadDriver {
         let newly = pad.buttons & !self.prev_buttons;
         self.prev_buttons = pad.buttons;
         let mut input = Input::default();
+        // The move axes [M Player_Move 0x191dd0:65-66: `Input_Actionf(slot, 2, 1)` forward and
+        // `Input_Actionf(slot, 1, 1)` strafe, read straight into the forward/side curves]: the
+        // port's Input carries those two actions as they are (the keyboard writes ±1 into the
+        // same fields; strafe + = toward A / stick left, action 1 = −LX in style 0).
+        input.forward = a[2];
+        input.strafe = a[1];
         // Style 0's button actions [M the case 0 table; the port's conventions: 7 jump, 8 crouch,
         // 9 fire, 19 (0x13) aim mode]. Jump/crouch press on the newly-pressed edge, like the
         // keyboard path and the game's +0x120 "newly pressed" word [M ps2_handle_pad 0x10c738:89].
@@ -434,6 +440,28 @@ mod tests {
     /// The dead zone's exact outputs [M 0x10ca78:38-55, f32 arithmetic: threshold 40, scale
     /// 1.4597701, trunc-then-char-wrap]. G-012: the raw byte exists only between `scePadRead`
     /// and this loop — the code pins the behaviour the live check would observe.
+    /// The left stick walks: actions 2 and 1 reach `Input::forward` / `Input::strafe` [M Player_Move
+    /// 0x191dd0:65-66], with style 0's signs (act 2 = −LY: stick up is forward; act 1 = −LX: stick
+    /// left is +, the keyboard's A) [M psiInput_MapInputs 0x10cd80 case 0, styles_gen act 1/2].
+    #[test]
+    fn the_left_stick_moves_bond() {
+        let cfg = PadConfig { curve: (0..=128u32).map(|i| (i * 2).min(255) as u8).collect(), style: 0, invert_look: false, player0: true };
+        let tuning = nf_formats::tuning::Tuning::default();
+        let run = |lx: u8, ly: u8| {
+            let mut d = PadDriver::new(cfg.clone());
+            let pad = PadState { buttons: 0, rx: 0x7f, ry: 0x7f, lx, ly, connected: true };
+            d.tick(&pad, &tuning, 1.0, false, false).0
+        };
+        let up = run(0x7f, 0);
+        assert!(up.forward > 0.5 && up.strafe == 0.0, "stick up walks forward: {:?}", (up.forward, up.strafe));
+        assert!(run(0x7f, 255).forward < -0.5, "stick down walks back");
+        let left = run(0, 0x7f);
+        assert!(left.strafe > 0.5 && left.forward == 0.0, "stick left strafes toward A: {:?}", (left.forward, left.strafe));
+        assert!(run(255, 0x7f).strafe < -0.5, "stick right strafes toward D");
+        let still = run(0x7f, 0x7f);
+        assert_eq!((still.forward, still.strafe), (0.0, 0.0), "the centred stick inside the dead zone is still");
+    }
+
     #[test]
     fn dead_zone_matches_the_decomp_constants() {
         // (raw, dead-zoned): centre, the ±40 thresholds (inside -> 0, first step -> ±1), the
