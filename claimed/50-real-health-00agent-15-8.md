@@ -21,3 +21,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox3 at 2026-11-13T11:45Z
+
+11-13 (on master 893dc3252): after the #526 lob the P2K comes back in hand when the gun is nearly empty - the resupply walk east is gone; the death moved t7985 -> t8578 (the door[29] through fight on #11 goes killed-false, #11/#10 throws 33.2 + 25.7). Measured dead: a head-first aimed stand from the threshold (#11 unseen at +200, death t8121).
