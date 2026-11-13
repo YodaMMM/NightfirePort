@@ -298,6 +298,15 @@ pub const PAGE_MP_LOBBY: u32 = 0x5000_0004;
 /// stay untouched [S].
 pub const PAGE_MP_ONLINE_LOBBY: u32 = 0x5000_0005;
 
+// ── window-size-fullscreen: the port-only Display page ─────────────────────────────────────────
+// The PS2 had no PC window — no game page carries the window size or fullscreen choice, and the
+// main agent's note pins the route: no row may be ADDED to a game page (the reachable options
+// page is the game's own P_CNAVOPTIONS 0x214818), so the choice lives on a port-only page in
+// the spare 0x5000_0000 block next to the online pages [S]. The host opens it with Alt+D and
+// the state persists through the SAME display.toml Alt+Enter / Alt+PageUp/PageDown write
+// (settings::display_path — no second file).
+pub const PAGE_DISPLAY: u32 = 0x5000_0006;
+
 /// The GameState stack machine's fields [M addresses in the doc comment].
 #[derive(Clone, Debug, Default)]
 pub struct GameFlow {
@@ -910,7 +919,10 @@ pub enum Page { Start, Main, Codename, Difficulty, MissionSelect, Dossier, Recor
     // net-online-lobby: the port-only online pages (ids in the PAGE_MP_* constants below).
     MpMode, MpHost, MpNetJoin, MpLobby,
     // mp-lobby-one-screen: the ONE-screen online lobby (both roles).
-    MpOnlineLobby, Credits,
+    MpOnlineLobby,
+    // window-size-fullscreen: the port-only Display page (PAGE_DISPLAY above; opened by the
+    // host's Alt+D, never from a game page's rows).
+    Display, Credits,
     // fe-audit: the intro run's pages (ids in PAGE_INTRO / PAGE_PARISENUM / PAGE_ESTHERO).
     Intro, ParisEnum, EstHero,
     // unlock-popups: the post-results pages (ids in PAGE_NF_BONUS / PAGE_WIN_GAME / PAGE_CHEAT_MEDAL).
@@ -934,13 +946,13 @@ impl Page {
             Page::MpConfirm => PAGE_MP_CONFIRM, Page::MpDebriefing => PAGE_MP_DEBRIEFING,
             Page::MpMode => PAGE_MP_MODE, Page::MpHost => PAGE_MP_HOST,
             Page::MpNetJoin => PAGE_MP_NETJOIN, Page::MpLobby => PAGE_MP_LOBBY,
-            Page::MpOnlineLobby => PAGE_MP_ONLINE_LOBBY,
+            Page::MpOnlineLobby => PAGE_MP_ONLINE_LOBBY, Page::Display => PAGE_DISPLAY,
             Page::Credits => crate::credits::PAGE_CREDITS,
             Page::Intro => PAGE_INTRO, Page::ParisEnum => PAGE_PARISENUM, Page::EstHero => PAGE_ESTHERO,
             Page::NfBonus => PAGE_NF_BONUS, Page::WinGame => PAGE_WIN_GAME, Page::CheatMedal => PAGE_CHEAT_MEDAL,
         }
     }
-    fn from_id(id: u32) -> Option<Page> {
+    pub fn from_id(id: u32) -> Option<Page> {
         Some(match id {
             PAGE_START => Page::Start, PAGE_MAIN => Page::Main, PAGE_CODENAME => Page::Codename,
             PAGE_DIFFICULTY => Page::Difficulty, PAGE_MISSION_SELECT => Page::MissionSelect,
@@ -957,7 +969,7 @@ impl Page {
             PAGE_MP_CONFIRM => Page::MpConfirm, PAGE_MP_DEBRIEFING => Page::MpDebriefing,
             PAGE_MP_MODE => Page::MpMode, PAGE_MP_HOST => Page::MpHost,
             PAGE_MP_NETJOIN => Page::MpNetJoin, PAGE_MP_LOBBY => Page::MpLobby,
-            PAGE_MP_ONLINE_LOBBY => Page::MpOnlineLobby,
+            PAGE_MP_ONLINE_LOBBY => Page::MpOnlineLobby, PAGE_DISPLAY => Page::Display,
             crate::credits::PAGE_CREDITS => Page::Credits,
             PAGE_INTRO => Page::Intro, PAGE_PARISENUM => Page::ParisEnum, PAGE_ESTHERO => Page::EstHero,
             PAGE_NF_BONUS => Page::NfBonus, PAGE_WIN_GAME => Page::WinGame, PAGE_CHEAT_MEDAL => Page::CheatMedal,
@@ -2517,6 +2529,23 @@ pub struct FrontEnd {
     /// the host must write the option file (crates/nf-view/src/settings.rs). The model stays pure;
     /// the host drains the flag in `menu_after` (the same split as `secret.pending_submit`).
     pub settings_save_pending: bool,
+    // window-size-fullscreen (each field on its own line [WORKLOG lesson 4]). The model stays
+    // pure — the host syncs the window's live state on open and drains `display_request` in
+    // `menu_after` (apply to the winit window + write display.toml, the file the Alt+Enter /
+    // Alt+PageUp keys write; no second file).
+    /// The window's live state at the page's open (fullscreen + the windowed size), host-synced
+    /// so the rows can label the current choice.
+    pub display_now: crate::settings::Display,
+    /// The current monitor's pixel size, host-synced at the page's open; a preset is offered only
+    /// when it fits (the task's rule). (0, 0) = the host could not tell (headless) — every
+    /// preset is offered [S].
+    pub display_monitor: (u32, u32),
+    /// The pick the host must apply: fullscreen + size together (a size pick also leaves
+    /// fullscreen — a size row means windowed at that size [S]). None = nothing pending.
+    pub display_request: Option<crate::settings::Display>,
+    /// The page the Display page opened FROM — Back returns there (the host's Alt+D works from
+    /// any front-end page).
+    pub display_from: Page,
     /// net-desync-detail: the desync report line to show on the online fail box (the diagnosis +
     /// the report zip's path); set from `App::desync_report` when the exchange completes. The
     /// draw code reads [`FrontEnd::desync_report`].
@@ -3203,6 +3232,10 @@ impl FrontEnd {
             opts: default_opts(),
             opts_saved: None,
             settings_save_pending: false,
+            display_now: Default::default(),
+            display_monitor: (0, 0),
+            display_request: None,
+            display_from: Page::Main,
             desync_report: None,
             cn_name: String::new(),
             // codename-entry (each on its own line [WORKLOG lesson 4]).
@@ -3616,6 +3649,51 @@ impl FrontEnd {
         true
     }
 
+    /// window-size-fullscreen: opens the port-only Display page from the host (Alt+D; also the
+    /// headless `--page display` render aid). The host syncs `now` (the window's live state) and
+    /// `monitor` first; Back returns to `from`. Returns false when input is blocked (a notice
+    /// box, a movie) or the page is already up — no game page's rows are touched on any route
+    /// [S the main agent's note on the reachable options page P_CNAVOPTIONS 0x214818].
+    pub fn open_display(&mut self, now: crate::settings::Display, monitor: (u32, u32), from: Page) -> bool {
+        if self.input_blocked() || self.page == Page::Display { return false; }
+        self.display_now = now;
+        self.display_monitor = monitor;
+        self.display_from = from;
+        self.enter_page(Page::Display);
+        self.cursor = 0;
+        true
+    }
+
+    /// The presets the Display page offers: the game's 4:3 ladder (settings::WINDOW_PRESETS —
+    /// 640x480..1920x1440, the same rows Alt+PageUp/PageDown step) that FIT the monitor
+    /// (the task's rule). The host never learned the monitor (0, 0) → every preset [S].
+    pub fn display_presets(&self) -> Vec<(u32, u32)> {
+        crate::settings::WINDOW_PRESETS.iter()
+            .filter(|p| self.display_monitor == (0, 0) || (p.0 <= self.display_monitor.0 && p.1 <= self.display_monitor.1))
+            .copied().collect()
+    }
+
+    /// The Display page's row count: the fullscreen toggle, the presets that fit, Back.
+    pub fn display_rows(&self) -> usize { self.display_presets().len() + 2 }
+
+    /// The Display page's row labels (port-only literals [S — the game had no PC window]). An
+    /// off-page row clamps onto the last one, like the other pages' getters.
+    pub fn display_row_label(&self, row: usize) -> String {
+        let presets = self.display_presets();
+        let last = presets.len() + 1;
+        let row = row.min(last);
+        if row == 0 { format!("Fullscreen  {}", if self.display_now.fullscreen { "On" } else { "Off" }) }
+        else if row == last { "Back".into() }
+        else { presets.get(row - 1).map_or(String::new(), |(w, h)| format!("{w} x {h}")) }
+    }
+
+    /// Back out of the Display page to the page it opened from.
+    fn display_back(&mut self) -> bool {
+        self.page = self.display_from;
+        self.cursor = 0;
+        true
+    }
+
     pub fn rows(&self) -> usize {
         match self.page {
             Page::Start => 1,
@@ -3687,6 +3765,8 @@ impl FrontEnd {
             Page::MpLobby => 1,
             // mp-lobby-one-screen: the one screen's row count (the model's own) [S §6.3].
             Page::MpOnlineLobby => self.mp_one.row_count(),
+            // window-size-fullscreen: the fullscreen toggle + the fitting presets + Back.
+            Page::Display => self.display_rows(),
             Page::MpScenario => MP_SCENARIO_ROWS.len(),
             Page::MpMap => MP_MAP_ROWS.len(),
             // The setup page drives agent 1's single pick row (the game's per-agent lists live on
@@ -3791,6 +3871,8 @@ impl FrontEnd {
             Page::MpNetJoin => String::new(),   // the address row draws its own text (mp_net_addr)
             Page::MpLobby => String::new(),     // the mirror draws through mp_lobby_lines
             Page::MpOnlineLobby => String::new(), // the one screen draws through mp_lobby_rows [S §6.3]
+            // window-size-fullscreen: the port-only page's own literals [S — see PAGE_DISPLAY].
+            Page::Display => self.display_row_label(row),
             Page::MpScenario => {
                 let r = row.min(MP_SCENARIO_ROWS.len() - 1);
                 if self.mp_scenario_locked(r) { bind(MP_LOCKED_SCENARIO_DESC) } else { bind(MP_SCENARIO_ROWS[r].1) }
@@ -3879,6 +3961,9 @@ impl FrontEnd {
             Page::Options | Page::MpMode => vec![138.0, 164.0, 190.0],
             Page::MpHost => vec![138.0, 164.0],
             Page::MpNetJoin => vec![251.0],
+            // window-size-fullscreen: the port-only page's drawn rows (the page_rows y's — the
+            // draw code draws them centred at 140+26k like the Options stub [S]).
+            Page::Display => (0..self.display_rows()).map(|i| 138.0 + 26.0 * i as f32).collect(),
             _ => return None,
         })
     }
@@ -4040,6 +4125,8 @@ impl FrontEnd {
                 // page's three rows are actions too — the stubs' ✕ is the keyboard's no-op [M
                 // action()'s Options arm], the Back row's ✕ leaves.
                 Page::MpMode | Page::MpNetJoin | Page::MpHost | Page::Options => true,
+                // window-size-fullscreen: every Display row is an action (a click toggles / picks / leaves).
+                Page::Display => true,
                 _ => false,
             };
             if is_action { return self.action(Action::Confirm); }
@@ -6490,6 +6577,38 @@ impl FrontEnd {
                 Action::Back | Action::Confirm if self.cursor == 2 => { self.enter_page(Page::Main); self.cursor = 2; return true; }
                 _ => {}
             },
+            // window-size-fullscreen: the port-only Display page (the host's Alt+D opens it; no
+            // game page's rows changed). Confirm toggles fullscreen / picks the preset / leaves;
+            // the pick rides `display_request` for the host (apply to the window + write the
+            // SAME display.toml the Alt+Enter / Alt+PageUp keys write). The model never touches
+            // the window itself — the host drains the request in `menu_after` [S].
+            Page::Display => {
+                let n = self.display_rows();
+                match a {
+                    Action::Up if self.cursor > 0 => { self.cursor -= 1; return true; }
+                    Action::Down if self.cursor + 1 < n => { self.cursor += 1; return true; }
+                    Action::Confirm => {
+                        let presets = self.display_presets();
+                        if self.cursor == 0 {
+                            self.display_now.fullscreen = !self.display_now.fullscreen;
+                            self.display_request = Some(self.display_now);
+                            return true;
+                        }
+                        if let Some(&(w, h)) = presets.get(self.cursor - 1) {
+                            // A size row means WINDOWED at that size (the size only shapes a
+                            // window) — picking one while fullscreen drops fullscreen too [S].
+                            self.display_now.fullscreen = false;
+                            self.display_now.size = Some((w, h));
+                            self.display_request = Some(self.display_now);
+                            return true;
+                        }
+                        // The last row (Back): to the page the host opened the Display page from.
+                        return self.display_back();
+                    }
+                    Action::Back => return self.display_back(),
+                    _ => {}
+                }
+            }
             Page::Pause => {
                 // The YES/NO confirm list runs while either confirm is armed [M 0x204408's msg-0x4b
                 // d1=0xd case reads the list's row (msg 0x34) and 0 = YES executes].
@@ -9726,6 +9845,28 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                 "Host a match that players can join over the internet.",
                 "Join a match hosted over the internet."][fe.cursor.min(2)];
             desc_block(&mut h, font, desc, bright);
+            hint_bar(&mut h, font, &hint(0x218, "~A Select  ~V Scroll  ~B Back"), 50.0, 419.0, cream);
+            logo_stamp(&mut h);
+        }
+        // window-size-fullscreen: the port-only Display page in the game's page frame (the MpMode
+        // template — header, panel, row wheel, description plate, hint bar, logo), so it reads as
+        // one of the game's own pages. Port-only literals [S — the PS2 had no PC window; the
+        // game's own pages stay untouched per the main agent's note].
+        Page::Display => {
+            page_header(&mut h, hfont, "Display");
+            panel(&mut h);
+            wheel(&mut h, fe, font, lang, |fe, row| fe.display_row_label(row), cream);
+            let presets = fe.display_presets();
+            let desc: String = if fe.cursor == 0 {
+                if fe.display_now.fullscreen { "Borderless fullscreen on this monitor.".into() }
+                else { "Run in a window. Alt+Enter toggles fullscreen anywhere.".into() }
+            } else if fe.cursor == presets.len() + 1 {
+                "Back to the page you came from.".into()
+            } else {
+                presets.get(fe.cursor - 1).map_or(String::new(), |(w, h)|
+                    format!("Resize the window to {w} x {h}. Alt+PageUp/PageDown steps these anywhere."))
+            };
+            desc_block(&mut h, font, &desc, bright);
             hint_bar(&mut h, font, &hint(0x218, "~A Select  ~V Scroll  ~B Back"), 50.0, 419.0, cream);
             logo_stamp(&mut h);
         }

@@ -448,7 +448,7 @@ pub(crate) fn bug_replay_shot(scene: &scene::Scene, out: &std::path::Path) -> Re
         Some(s) => { let h = s.bond.head(); Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: s.bond.yaw, pitch: s.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV } }
         None => start_camera(scene),
     };
-    shot(scene, &cam, &out.to_string_lossy(), None, 0.0, scene::ViewOpts::default(), false, false, None, None)
+    shot(scene, &cam, &out.to_string_lossy(), None, 0.0, scene::ViewOpts::default(), false, false, None, None, (1280, 720))
 }
 
 /// Builds the sound driver + output from the scene's bank/music, and wires the music logic. The scene's bank,
@@ -2655,6 +2655,18 @@ fn front_end_menu(args: &[String], scene: &scene::Scene, front_end: bool, iso_pa
             "mpplayermods" => menu::Page::MpPlayerMods,
             "mpenviromods" => menu::Page::MpEnviroMods,
             "mpbotsetup" => menu::Page::MpBotSetup,
+            // window-size-fullscreen: the port-only Display page renders headless too (the
+            // report's two-size shots). NF_SHOT_DISPLAY_MON=WxH overrides the monitor the fit
+            // filter sees (default 1920x1080 — the 1600x1200/1920x1440 rows fold away on it);
+            // NF_SHOT_DISPLAY_SIZE=WxH / NF_SHOT_DISPLAY_FS=1 set the shown window state [S].
+            "display" => {
+                let parse_wh = |v: &str| v.split_once('x').and_then(|(a, b)| Some((a.trim().parse::<u32>().ok()?, b.trim().parse::<u32>().ok()?)));
+                let mon = std::env::var("NF_SHOT_DISPLAY_MON").ok().and_then(|v| parse_wh(&v)).unwrap_or((1920, 1080));
+                let size = std::env::var("NF_SHOT_DISPLAY_SIZE").ok().and_then(|v| parse_wh(&v));
+                let fs = std::env::var_os("NF_SHOT_DISPLAY_FS").is_some();
+                fe.open_display(crate::settings::Display { fullscreen: fs, size }, mon, menu::Page::Main);
+                menu::Page::Display
+            }
             // The setup step / match summary (agent 1 joined; NF_SETUP_STATE=2|3|4 picks team/character/handicap,
             // NF_CONFIRM_TEAM=1 a Team Arena with 3 bots split across the teams).
             "mpsetup" | "mpconfirm" => {
@@ -2906,7 +2918,7 @@ fn mp_drive_shots(scene: &mut scene::Scene, args: &[String], spec: &str, out: &s
                     s.mp_body_state(1).map_or(0.0, |b| b.0[1]), s.mp_body_cc(1));
             }
             let path = format!("{stem}_t{t:04}.png");
-            shot(scene, &cam, &path, None, t as f32, opts, false, false, None, None)?;
+            shot(scene, &cam, &path, None, t as f32, opts, false, false, None, None, shot_size(args))?;
         }
     }
     Ok(())
@@ -2925,8 +2937,19 @@ fn shot_screen_pos() -> (i32, i32) {
     (it.next().unwrap_or(0).clamp(-0x1b0, 0x1b0), it.next().unwrap_or(0).clamp(-0x30, 0x30))
 }
 
-fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, time: f32, mut opts: scene::ViewOpts, notex: bool, nofog: bool, menu: Option<&gpu::HudFrame>, movie: Option<&(u32, u32, Vec<u8>)>) -> Result<()> {
-    let (w, h) = (1280u32, 720u32);
+/// window-size-fullscreen: the headless shot's render size — `--size WxH` (the report's two-size
+/// shots), else the old fixed 1280x720 [S render aid].
+fn shot_size(args: &[String]) -> (u32, u32) {
+    args.iter().position(|a| a == "--size")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.split_once('x'))
+        .and_then(|(a, b)| Some((a.trim().parse::<u32>().ok()?, b.trim().parse::<u32>().ok()?)))
+        .filter(|&(a, b)| (320..=16384).contains(&a) && (240..=16384).contains(&b))
+        .unwrap_or((1280u32, 720u32))
+}
+
+fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, time: f32, mut opts: scene::ViewOpts, notex: bool, nofog: bool, menu: Option<&gpu::HudFrame>, movie: Option<&(u32, u32, Vec<u8>)>, size: (u32, u32)) -> Result<()> {
+    let (w, h) = size;
     let (instance, _) = gpu_instance(None);
     let (_adapter, device, queue) = pollster::block_on(device(&instance, None))?;
     let format = wgpu::TextureFormat::Rgba8Unorm;
@@ -3596,6 +3619,24 @@ impl App {
         self.menu_after();
     }
 
+    /// The window's live display state + monitor size, for the Display page's open (window-size-
+    /// fullscreen): windowed the inner size is the live one; fullscreen the SAVED windowed size
+    /// stands in (the monitor size is then the inner size, not a window shape). No GPU/no window
+    /// (headless): the file's state and an unknown monitor [S].
+    fn window_display_state(&self) -> (settings::Display, (u32, u32)) {
+        match self.gfx.as_ref() {
+            Some(g) => {
+                let fs = g.window.fullscreen().is_some();
+                let inner = g.window.inner_size();
+                let mon = g.window.current_monitor().map(|m| m.size()).unwrap_or(winit::dpi::PhysicalSize::new(0, 0));
+                let saved = settings::display_path().map(|p| settings::display_at(&p)).unwrap_or_default();
+                let size = if fs { saved.size } else { Some((inner.width, inner.height)) };
+                (settings::Display { fullscreen: fs, size }, (mon.width, mon.height))
+            }
+            None => (settings::display_path().map(|p| settings::display_at(&p)).unwrap_or_default(), (0, 0)),
+        }
+    }
+
     /// After a menu action (key, click or hover): the page's sounds, the level it requested and its close.
     fn menu_after(&mut self) {
         // mission-results-page: the results sub-pages' 0x4c builds — the game delivers the 0x44
@@ -3636,6 +3677,23 @@ impl App {
             fe.settings_save_pending = false;
             if let Some(p) = settings::default_path() {
                 if let Err(e) = settings::save_opts(&p, &fe.opts_with_screen()) { eprintln!("[settings] {e}"); }
+            }
+        }
+        // window-size-fullscreen: the Display page's pick — apply to the window now and write
+        // the SAME display.toml the Alt+Enter / Alt+PageUp keys write (no second file). The
+        // headless render path never runs this either, so a render can't move the player's
+        // window. The fullscreen edge triggers winit's Resized, so the surface follows itself.
+        if let Some(d) = fe.display_request.take() {
+            if let Some(g) = self.gfx.as_ref() {
+                if d.fullscreen {
+                    g.window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+                } else {
+                    g.window.set_fullscreen(None);
+                    if let Some((w, h)) = d.size { let _ = g.window.request_inner_size(winit::dpi::PhysicalSize::new(w, h)); }
+                }
+            }
+            if let Some(p) = settings::display_path() {
+                if let Err(e) = settings::save_display_at(&p, &d) { eprintln!("[display] {e}"); }
             }
         }
         // menu-sfx: the front end's sound events play straight through the driver's 2-D start —
@@ -4774,7 +4832,7 @@ impl App {
                 menu::menu_overlay_fonts(fe, &t.font, &t.font_header, Some(&t.font_medium), lang, &self.scene.hud_textures, 1280.0 / 720.0)
             }))
         };
-        shot(&self.scene, &self.cam, &png.to_string_lossy(), self.choice, self.anim_time as f32, self.opts, self.notex, self.nofog, fe_menu.as_ref(), movie_owned.as_ref())
+        shot(&self.scene, &self.cam, &png.to_string_lossy(), self.choice, self.anim_time as f32, self.opts, self.notex, self.nofog, fe_menu.as_ref(), movie_owned.as_ref(), (1280, 720))
     }
 
     /// Player bug report (F10, bugreport.rs): the frame, where the player is, the system, the session recording and
@@ -7135,6 +7193,21 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                // window-size-fullscreen: Alt+D opens the port-only Display page (the fullscreen
+                // toggle + the size presets as ROWS, same display.toml) — the port's own surface
+                // (PAGE_DISPLAY), so no game page's rows change; Alt+Enter / Alt+PageUp keep
+                // working everywhere. D is the menu's ▶ key: swallowed while Alt is held.
+                if matches!(k, KeyCode::KeyD) && ALT.load(std::sync::atomic::Ordering::Relaxed) {
+                    if event.state == ElementState::Pressed && !event.repeat
+                        && self.fe.is_some() && self.async_load.is_none() {
+                        let (now, mon) = self.window_display_state();
+                        if let Some(fe) = self.fe.as_mut() {
+                            let from = fe.page;
+                            fe.open_display(now, mon, from);
+                        }
+                    }
+                    return;
+                }
                 // headless-app-harness: the whole arm moved into `App::app_key` (no winit
                 // objects beyond the plain KeyCode/ElementState data). true = the app asks
                 // to exit (the bare viewer's un-grabbed Esc — the old `el.exit()` arm).
@@ -7877,7 +7950,7 @@ pub fn run() -> Result<()> {
             let cam = Camera { pos: Vec3::new(eye[0], eye[1], eye[2]), yaw: d[0].atan2(d[2]), pitch: (d[1] / (d[0] * d[0] + d[2] * d[2]).sqrt()).atan(), fov: GAME_FOV };
             if let Some(s) = scene.sim.as_mut() { s.first_person = false; }
             eprintln!("--mp-look: slot {slot} body at {p:?} yaw {:.2} held {}", st.1, scene.sim.as_ref().map_or(0, |s| s.mp_held[slot]));
-            return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
+            return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref(), shot_size(&args));
         }
         // Render aid (`--shot-cam x,y,z,yaw,pitch`): the ticks run Bond's own eye as usual (so a
         // lift ride or a cut-scene plays exactly as without the flag); only the rendered frame's
@@ -7889,7 +7962,7 @@ pub fn run() -> Result<()> {
             // The first-person gun is posed at Bond's eye; away from it, it would float in the frame.
             let mut scene = scene;
             if let Some(s) = scene.sim.as_mut() { s.first_person = false; }
-            return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
+            return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref(), shot_size(&args));
         }
         // Render aid (NF_SHOT_AT_PICKUP=k): frame pickup k from its DRAWN matrix (`Pickup::m`, what the renderer
         // places), 1.8 units out on x and z and 1.2 up — no coordinate guessing.
@@ -7899,9 +7972,9 @@ pub fn run() -> Result<()> {
             let d = [p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]];
             let cam = Camera { pos: Vec3::new(eye[0], eye[1], eye[2]), yaw: d[0].atan2(d[2]), pitch: (d[1] / (d[0] * d[0] + d[2] * d[2]).sqrt()).atan(), fov: GAME_FOV };
             if let Some(s) = scene.sim.as_ref() { let q = &s.drones.pickups[k]; eprintln!("NF_SHOT_AT_PICKUP {k}: drawn at {p:?}, weapon {:#x}, hidden {} gone {}", q.weapon, q.hidden, q.gone); }
-            return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
+            return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref(), shot_size(&args));
         }
-        return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref());
+        return shot(&scene, &cam, args.get(i + 1).context("--shot needs a file name")?, choice, time, opts, notex, nofog, menu_frame.as_ref(), movie_frame.as_ref(), shot_size(&args));
     }
     let event_loop = EventLoop::new()?;
     // Sound: built in `App::bare` (the level's bank in the driver, the default output device; silent without one).
