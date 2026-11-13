@@ -135,3 +135,6 @@ baseline), k4 5574 (**+800** past 4774), k3's holds answered 5828/5936/6044, all
 
 - Context window, token and credit figures for this session: not visible to me (no such
   counters are exposed in this environment; nothing to copy).
+
+---
+Merged (squash, docs dropped): master 679168719; next round queued.

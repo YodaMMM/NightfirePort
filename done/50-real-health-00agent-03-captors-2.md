@@ -30,3 +30,6 @@ claimed-by: sandbox1 at 2026-11-13T05:36Z
 ## Report (done, 2026-11-13T07:20Z)
 
 Closed by the driver: the report is on `s/real-health-00agent-03-captors-2` (docs/reports/real-health-00agent-03-captors-2.md); the worker didn't run finish.sh.
+
+---
+Merged (squash, docs dropped): master 679168719; next round queued.

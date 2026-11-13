@@ -106,3 +106,6 @@ open doorway, so the port is if anything stricter).
 
 Not visible to me: this environment exposes no token, credit or context-window figures for the
 session.
+
+---
+Merged (squash, docs dropped): master 679168719; next round queued.
