@@ -19,3 +19,6 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: main agent at 2026-11-13T17:02:15Z
+
+---
+Done by the main agent: master 0fdee8319 - already green on master (end health 57.8); the ignore removed.
