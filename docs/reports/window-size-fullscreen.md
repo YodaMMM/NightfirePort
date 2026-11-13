@@ -90,3 +90,14 @@ Nothing here can be measured against the PS2 — all [S]. If you render on a des
 
 - Input tokens / output tokens / context used / cost: not visible to me (the sandbox shows no
   per-session token or cost figures).
+
+## ntfy failed
+
+All three fallbacks failed, in order, at ~03:40 UTC 2026-11-13:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "…" https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "… urllib.request …"` →
+   `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "…" https://ntfy.sh/nightfire-yoda-8k3x` → no output, hung and was
+   killed by the tool timeout (45 s, then 120 s with the curl retry on the same call).
