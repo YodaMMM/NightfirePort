@@ -133,7 +133,7 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
     let sim = w.scene.sim.as_ref().unwrap();
     let fb = sim.drones.fuseboxes.iter().position(|f| f.ch[0] as u32 == want as u32)
         .unwrap_or_else(|| panic!("{label}: the fusebox with group-0 channel {want:#x} exists [D]"));
-    let (bp, wire, wire_obj) = {
+    let (bp, wire, wire_obj, away) = {
         let sim = w.scene.sim.as_ref().unwrap();
         // The group-0 wire (the p1 word's group [D placements 383/385 p1]); fall back to the
         // first alive wire if the group-0 slot is empty.
@@ -141,7 +141,22 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
             .or_else(|| sim.drones.fuseboxes[fb].alive_wires().next())
             .map(|(_, _, o)| o)
             .expect("the script registered wires (groups 0 and 1 [L])");
-        (sim.drones.fuseboxes[fb].pos, wire_aim_point(sim, obj), obj)
+        // The group-1 wire is the WRONG cut: its channel word smashes the room's generator
+        // (#383's group 1 writes 0x71 = destroy #388's kill word, #385's 0xd8 = #387's [D the
+        // fusebox ch words + the destroy census]; type 50 -> a 500-damage, radius-10 blast [M
+        // Destroy_Create 0x12c318 +0x34/+0x40, Destroy_Smash 0x12bb60]) 2.4 u from the stance -
+        // lethal. The two cables hang side by side 0.007 u apart, so the burn aims at the far
+        // side of the wanted cable, away from the other group's (the centre aim's feedback
+        // drift cut group 1 one frame before group 0 [L the 11-13 levellog: 0x71 at 13608,
+        // 0x87 at 13609]).
+        let mine = wire_aim_point(sim, obj);
+        let away = sim.drones.fuseboxes[fb].alive_wires().find(|(_, _, o)| *o != obj)
+            .map(|(_, _, o)| wire_aim_point(sim, o))
+            .map(|other| { let v = [mine[0] - other[0], mine[1] - other[1], mine[2] - other[2]];
+                let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-4);
+                [v[0] / l * 0.04, v[1] / l * 0.04, v[2] / l * 0.04] })
+            .unwrap_or([0.0; 3]);
+        (sim.drones.fuseboxes[fb].pos, [mine[0] + away[0], mine[1] + away[1], mine[2] + away[2]], obj, away)
     };
     let cands = [[0.6f32, -1.2, 0.0], [-0.6, -1.2, 0.0], [0.0, -1.2, 0.6], [0.0, -1.2, -0.6]];
     let mut stood = false;
@@ -200,7 +215,7 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
         if let Some((pos, dir, speed)) = round {
             let centre = w.scene.sim.as_ref().unwrap();
             if let Some((lo, hi)) = wire_world_box(centre, wire_obj) {
-                let c = [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5];
+                let c = [(lo[0] + hi[0]) * 0.5 + away[0], (lo[1] + hi[1]) * 0.5 + away[1], (lo[2] + hi[2]) * 0.5 + away[2]];
                 let e = [pos[0] + dir[0] * speed, pos[1] + dir[1] * speed, pos[2] + dir[2] * speed];
                 let ab = [e[0] - pos[0], e[1] - pos[1], e[2] - pos[2]];
                 let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
@@ -1091,7 +1106,7 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// wrap + this un-ignore are one-liners; (2) a d2/d3-gated fight-quiet approach so the
 /// displacement never reaches the pocket; (3) the stairwell AIM-pair stands.
 #[test]
-#[ignore = "00 Agent (11-13 update 2): the hostile clear picks NEAREST first at d3 real health (the list-order pick spent 900 ticks on #3 at 18.2 u while #9 shot Bond from 1.2 u) - the corridor, leg 2 and the generator room now pass; the walk dies at t21466 at the fusebox #383 stance (-88.35, -1.10, 31.38): the fusebox burn's blast lands 37.91 in one hit on the remaining health (34 hits, 7 fights before it). Next: the #383 burn from a stance outside the blast, or health into it. Update 1: the landing west drop is PASSED - a d3-only guard (#6, 28 hp, 0x14) slept in the drop band at (32.2, 1.8, 33.2) and turned the drop aim into the overhang (wedge at (33.70, 1.19, 35.21)); the pistol comes out (Bond held the vent-lid item) and #6 dies from the landing with no hits, the drop then aims z 33.4 past his body. The walk now dies at t7051 in the corridor lane north (node 57, the door (27.8, 1.2, 30.0)) to the corridor crowd (47 hits, 0 return-fire fights: #9 65.0 in 13 at d 1.2, #8 17.5, #7 12.5 at d 9.9, #10 5.0; all 0x14). Next: the corridor crowd (why no return fire at d 1.2). Earlier ledger: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
+#[ignore = "00 Agent (11-13 update 3): the fusebox burns now cut ONLY the group-0 cable (the t21466 death was the walk's own wrong cut: the centre aim drifted onto the adjacent group-1 cable, whose channel 0x71 smashes generator #388 - a 500/r10 blast 2.4 u from the stance); both fuseboxes cut clean, the E-use switch band reached; dies at t23511 at (-59.69, 0.73, 38.98) on the corridor east to the door - #32 (skin 0x5000093) 32.9 in 4 at d 7.6, 9 fights. Next: the switch-band corridor fight. Update 2: the hostile clear picks NEAREST first at d3 real health (the list-order pick spent 900 ticks on #3 at 18.2 u while #9 shot Bond from 1.2 u) - the corridor, leg 2 and the generator room now pass; the walk dies at t21466 at the fusebox #383 stance (-88.35, -1.10, 31.38): the fusebox burn's blast lands 37.91 in one hit on the remaining health (34 hits, 7 fights before it). Next: the #383 burn from a stance outside the blast, or health into it. Update 1: the landing west drop is PASSED - a d3-only guard (#6, 28 hp, 0x14) slept in the drop band at (32.2, 1.8, 33.2) and turned the drop aim into the overhang (wedge at (33.70, 1.19, 35.21)); the pistol comes out (Bond held the vent-lid item) and #6 dies from the landing with no hits, the drop then aims z 33.4 past his body. The walk now dies at t7051 in the corridor lane north (node 57, the door (27.8, 1.2, 30.0)) to the corridor crowd (47 hits, 0 return-fire fights: #9 65.0 in 13 at d 1.2, #8 17.5, #7 12.5 at d 9.9, #10 5.0; all 0x14). Next: the corridor crowd (why no return fire at d 1.2). Earlier ledger: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(3)));
 }
