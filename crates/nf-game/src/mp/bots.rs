@@ -3967,9 +3967,9 @@ impl BotBrain {
         // behind = −(cos, sin) of the brain's facing — R·(0, 0, −1.8·mul) with the yaw-only
         // matrix stand-in [S: the game rotates by the full obj matrix +0x90]
         let to = [
-            r[0] - crate::trig::cosf(self.yaw) * 0.75,
+            r[0] - crate::trig::cosf(self.yaw) * reach,
             r[1],
-            r[2] - crate::trig::sinf(self.yaw) * 0.75,
+            r[2] - crate::trig::sinf(self.yaw) * reach,
         ];
         match ctx.nav {
             Some(net) => net.move_test(ctx.world, r, to, false, false).0 == 1,

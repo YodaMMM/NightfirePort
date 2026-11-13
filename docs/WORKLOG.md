@@ -47,3 +47,7 @@ Work log:
 - (01:00-01:10) the mp battery + rig tests run (47 rig + 45 binaries green; mp_stress_explosives
   and mp_online_failures SIGKILL'd by the sandbox memory both ways); suite started on the final
   tree, killed early by the window — re-run before merge. Report written, branch pushed.
+- (continued) merged current origin/master: master's reviewed CanBackoff (1.8 x mul, the
+  0x1249e8:98/0x14c600/0x14c938-case-0x10 chain) taken in every conflicted hunk; the auto-merge
+  had left the branch's old 0.75 in the shared `let to` block — fixed to master's `* reach`.
+  nf-game --lib 794/0/4 on the merged tree.
