@@ -23,3 +23,6 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 Alt+Enter borderless fullscreen + display.toml persistence (settings::display_path / display_fullscreen_at / save_display_fullscreen_at; the window is created fullscreen when the file says so), and the 4:3 picture is already pillarboxed at any window shape [render audits: 2560x1440]. What remains of this task: the size presets and a fullscreen row on the Screen adjust page (or a port-only Display row) using the same display.toml - extend that file, do not add a second one.
 
 Note (main agent, 11-12): the stub `Page::Options` is unreachable (nothing calls enter_page(Page::Options) - menus_mouse_parity.rs notes it); the reachable options page is the GAME's AV options (P_CNAVOPTIONS 0x214818). Do not add rows to a game page: if a menu entry is wanted, it must be a port-only page reached without changing a game page's rows, otherwise leave the display choice on Alt+Enter (already on master).
+
+---
+claimed-by: sandbox7 at 2026-11-13T02:35Z
