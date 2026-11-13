@@ -43,3 +43,5 @@ The 0x6b blasts are explosive BOLT rounds (weapon_data+0x70 bolt bits -> script 
 Update 2026-11-13T17:18Z: master 1a0270f44 shifts cover in the 1b Agent waits; the walk now reaches Drake (2.3 hp) and fails at the Drake fight - Bond never fires (no clear shot from the held cover). Start there.
 
 Update 2026-11-13T17:21Z: the 1b AGENT walk is GREEN on master 95a45f308 (main agent). Only the 16 Agent walk is left in this task.
+
+16 Agent detail (master 95a45f308): the loss is the ramp-foot return-fire fights at (12.8, 0.93, -90.35): #4 (t530), #0 (t874, 95.8 -> 74.8), #1 (t1313, -> 26.5), #2 (t1435, -> 18.1) - while those run, the gallery riflemen #5 (-9.5, 6.7, -91.4) and #3 (-4.7, 6.7, -110.5) fire into Bond; he dies on the ring west leg at t2176. Lever: fight the ramp-foot four from a stand out of the gallery line (the lane south / door[7] side), then take the ramp.
