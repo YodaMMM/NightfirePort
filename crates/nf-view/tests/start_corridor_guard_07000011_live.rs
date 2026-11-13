@@ -141,22 +141,27 @@ fn at_difficulty_3_the_guards_walk_their_disc_owner_points() {
     // The resume state the guard carries out of GoToGoal 0x63 — read on its last 0x63 tick: once in
     // the fight, Attack 0x56's prop-0x18 arm rewrites +0x5A2 to 0x68 [M 0x164210:71-87].
     let mut leave_ret = [None; 2];
+    // The closest approach over the run, not the t400 spot: the game's guard reaches its point and
+    // then leaves it in the fight's steps [L PCSX2 07000011 d2, Bond idle: 0x1896b50 at (-1.62, 18.70)
+    // by frame 156 (0.5 from (-1.51, 18.21)), then 0x68/0x74 out to (-2.85, 20.6) / (-4.0, 21.3) by 400-530].
+    let mut closest = [(f32::MAX, [0.0f32; 3]); 2];
     for _ in 0..400u32 {
         scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
         let sim = scene.sim.as_ref().unwrap();
-        for (k, (p, _)) in owners.iter().enumerate() {
+        for (k, (p, want)) in owners.iter().enumerate() {
             let dr = sim.drones.list.iter().find(|d| d.placement == *p).unwrap();
             if dr.state == nf_game::drone::state::GO_TO_GOAL { leave_ret[k] = Some(dr.return_state); }
+            let dd = ((dr.pos[0] - want[0]).powi(2) + (dr.pos[2] - want[1]).powi(2)).sqrt();
+            if dd < closest[k].0 { closest[k] = (dd, dr.pos); }
         }
     }
     let sim = scene.sim.as_ref().unwrap();
     for (k, (p, want)) in owners.into_iter().enumerate() {
         let dr = &sim.drones.list[sim.drones.list.iter().position(|d| d.placement == p).unwrap()];
-        let dx = dr.pos[0] - want[0];
-        let dz = dr.pos[2] - want[1];
-        assert!((dx * dx + dz * dz).sqrt() < 2.5,
-            "p{p} reached its owner point ({:.2},{:.2}) [D; M 0x151b18] within the 2.0 goal accuracy, at ({:.2},{:.2})",
-            want[0], want[1], dr.pos[0], dr.pos[2]);
+        let (dd, at) = closest[k];
+        assert!(dd < 2.5,
+            "p{p} reached its owner point ({:.2},{:.2}) [D; M 0x151b18] within the 2.0 goal accuracy, closest at ({:.2},{:.2})",
+            want[0], want[1], at[0], at[2]);
         assert_ne!(dr.state, nf_game::drone::state::GO_TO_GOAL, "p{p} left GoToGoal by t400");
         assert_eq!(leave_ret[k], Some(nf_game::drone::state::ATTACK),
             "p{p}'s resume state stays ATTACK 0x56 at alertness 1.0 through GoToGoal (the Tower clause) [M 0x168910:23-31]");
@@ -268,7 +273,11 @@ fn idle_bond_is_approached_and_shot_at_every_selectable_difficulty() {
 
 /// The tick budget for the step pins: the guards arrive at t172/t202 and Bond (idle, d2) dies at
 /// ~t1000 [L f1113], after which they leave the fight (0x5c → 0x60).
-const STEP_WINDOW: u32 = 1000;
+// The window covers the game's rule (in position the guard both steps and fires), not one
+// stream's timing: the step side is a Rand pick after the wall/side gates [M 0x150c18], and with the
+// stand's root step dropped on the 0x68 stop [M 0x166328:117-123 → 0x13b490] the port's #126 first
+// fires at t1368 from (0.83, 16.44) where one PCSX2 run's fired at f380 from (0.42, 17.05) [L].
+const STEP_WINDOW: u32 = 2000;
 
 /// Run d2 for `STEP_WINDOW` ticks (`prep` edits the sim after load) and collect each guard's visited
 /// states and the shots each fired.

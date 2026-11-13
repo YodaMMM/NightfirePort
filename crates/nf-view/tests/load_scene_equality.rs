@@ -45,6 +45,10 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
     // cells, 0c's three yaw-only wires the same (one ulp, signed zeros) plus one tilted wire (rot.z −0.4887) whose slope now
     // flips like 08's zip line. 01 and 14 place no wire and are bit-identical.
 const BASELINE: &[(&str, &str)] = &[
+    // cut1b re-pin (11-12): every hash moves — a character's batch groups now draw in the glist's
+    // batch order (the order ordinal joins the group key; merging unchanged, counts identical);
+    // 0700000c +7 / 07000001 +1 materials — a Destroy leaf's wreck no longer merges into its
+    // intact draw when both glists share one bounding sphere (the wreck takes its own identity).
     // pickup-medal-gate re-pin: the fresh-boot loads now run `Pickup_Create`'s kind-6 gate
     // [M 0x18dda0:93-95] — the 007 rows (kind 6) create only with the level's gold medal
     // recorded, and these pins were captured with bonus[0] = 0 (the fresh-boot word [L
@@ -84,19 +88,19 @@ const BASELINE: &[(&str, &str)] = &[
     // flags, 05 corona billboard slots, satchel/weather/pc-screen slots) — counts as each branch pinned.
     // goggles-all re-pin (11-01): the goggles chain on the merged master — the body-glow, x-ray,
     // breath (+64) and guard-ray (+8) slots, the same +201 attachments on every pinned level.
-    ("07000002.bin", "07f406b0bfe70e12 4528718 9471414 5296 4395409 88 11287 205 28 25 5"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
+    ("07000002.bin", "5aa64229ac9f5ecf 4528718 9471414 5296 4395409 88 11287 205 28 25 5"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
     // level-05-basin-floor-4 re-pin (07000005 colliders 106 → 119): the solid hurt-plane fold's
     // 13 UNGATED 0xE4 instances join the collision set ONLY (the draw is bit-identical — the
     // vertices/indices/materials counts returned to the pre-fold pins once the no-draw gate
     // [M View_AddObjects 0x1e62d8's 0x8010] covered the non-cel fold instances; the planes are
     // collision-only [D the basin planes' glist bit 0x10]). [S port engineering] like every pin.
     // (history: re-pinned 11-01 (courtyard-lamps on the merged master): the courtyard corona's sort-list-2 copy on its own searchlight slot, pass 6 [M View_AddObjects 0x1e62d8:57-59; Game_Draw 0x1e6f50:157-176] (+28 verts, +42 indices, +1 material); the placed-corona billboard slots follow it; the two copter SPs + their script draw slots; re-pinned 10-26: the 0x3b dynamic objects ride posed slots [M View_AddObjects 0x1e62d8:33, DynamicObject_Update 0x18d3b8]; re-pinned 10-28: the searchlight heads' block-0x27 LOD meshes (OBJECT_SearchLightBroken) on their own slots [M Control_NextLOD 0x1349b0] (+1134 verts, +1 material))
-    ("07000005.bin", "02d0a6f75ade25dd 4429821 9266439 3618 4345532 74 11185 119 19 16 4"),
+    ("07000005.bin", "d233a6b15b71329f 4429821 9266439 3618 4345532 74 11185 119 19 16 4"),
     // lift-indicators-09 re-pin: one draw slot per `Script_SubScriptStart` op per running SP
     // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
     // +1 attachment); 07000014's vent-lid SPs are placed SPs (unchanged), the rest have no
     // multi-SP sub chains.
-    ("0700000c.bin", "067ec333c0981d9b 4926782 10356138 8425 4726862 97 12444 170 22 40 11"), // re-pinned 10-26: 0x3b on posed slots
+    ("0700000c.bin", "e608a0241a79dcce 4926782 10356138 8432 4726862 97 12444 170 22 40 11"), // re-pinned 10-26: 0x3b on posed slots
     // script-entity-copies: one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
     // The keypads' LOD pair in the posed slots (Lock_Unlock 0x1b0650 / case 1 `Control_NextLOD`: three
@@ -110,8 +114,8 @@ const BASELINE: &[(&str, &str)] = &[
     // param-0 script 0x06000A1B, +20 script-entity slots (the cabinet and wire art) [M FuseBox_Create].
     // 07000014 places two kind-6 rows as well: −836 verts / −752 indices / −2 material slots,
     // pickups 32 → 30 (same gate).
-    ("07000014.bin", "9c0740eced1c46e6 7201469 14964117 6841 7039682 99 14960 173 41 37 30"), // re-pinned 10-26: p0-gated 0x3b instanced from load (created hidden [M 0x18dbf8:27-29])
-    ("07000001.bin", "903c68c04a10f6a3 4439467 9308115 3535 4366285 77 11265 101 11 20 4"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
+    ("07000014.bin", "cc33d36dfb9ede0b 7201469 14964117 6841 7039682 99 14960 173 41 37 30"), // re-pinned 10-26: p0-gated 0x3b instanced from load (created hidden [M 0x18dbf8:27-29])
+    ("07000001.bin", "ebe4f5f0413f0809 4439467 9308115 3536 4366285 77 11265 101 11 20 4"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
 ];
 
 #[test]

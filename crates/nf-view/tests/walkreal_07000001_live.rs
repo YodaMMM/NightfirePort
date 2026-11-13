@@ -437,6 +437,11 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // the contact standing past him (by_player, weapon 0x1c, t6620 [L the NF_HEALTH_TRACE run])
     // and the mission failed. A player never fires through his escort, whichever fight it is.
     w.dmg.fire_shield = Some((ci, true));
+    // The shotgun's spread in the shield's cone too (the following walk's rule): with the guards'
+    // aim stop (Drone+0x38) the round-0 own-radius clear of guard #5 put a 0x1c pellet into the
+    // contact 9.8 u behind him (d#1 10.0 -> 5.5 at t8329, by_player) and #17's three rounds in
+    // the west hall then finished him.
+    w.shield_bloom = true;
     let guards: Vec<usize> = {
         let sim = w.scene.sim.as_ref().unwrap();
         (0..sim.drones.list.len()).filter(|&i| {

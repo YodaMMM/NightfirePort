@@ -47,7 +47,12 @@ fn loot_the_drops_03(w: &mut Walker, label: &str) {
             .filter(|p| (p.m[3][1] - bp[1]).abs() < 1.5)
             .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
             .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)))
-            .filter(|t| walker::dxz(*t, bp) < 8.0);
+            .filter(|t| walker::dxz(*t, bp) < 8.0)
+            // A drop Bond can see: with the guards' aim stop (Drone+0x38) #10 died in the
+            // east-lane door at (10.1, -19.2) and his gun came to rest under the door leaf
+            // (y 5.34); the nav to it wedged 2 x 3000 ticks on the leaf's far side and the
+            // servant legs after it never recovered.
+            .filter(|t| sim.world.segment([bp[0], bp[1] + 0.9, bp[2]], [t[0], t[1] + 0.3, t[2]]).is_none());
         let Some(t) = t else { break };
         w.walk_nav_to(t, &format!("{label} loot"), 0.6);
     }

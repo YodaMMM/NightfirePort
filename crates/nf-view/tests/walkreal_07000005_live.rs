@@ -1366,6 +1366,10 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker, difficulty: u32) {
                 // death panic above cannot leak the lever into the next test).
                 if name == "the stairs 28" && REAL_DAMAGE_BACKOFF.load(std::sync::atomic::Ordering::Relaxed) {
                     let armed = w.switch_to_armed("the stair-top pre-emptive");
+                    // Open the stand on a full clip: under the held-sight rule (the chat-gate
+                    // look_for_opponent [M 0x177ed0:26-28]) the pair engages at 5-7 u and a stand
+                    // that opens on the leftover 2 rounds reloads in their volley [L the 11184 death].
+                    w.reload_full();
                     eprintln!("[05d] the pre-emptive's gun: armed {armed} weapon {:#x} clip {} spare {} bond {:?}",
                         w.scene.sim.as_ref().unwrap().gun.weapon, w.scene.sim.as_ref().unwrap().gun.clip,
                         w.scene.sim.as_ref().unwrap().gun.spare, w.scene.sim.as_ref().unwrap().bond.pos);
@@ -1469,18 +1473,19 @@ fn walk_the_stairs_top_to_the_terrace_spot(w: &mut Walker, difficulty: u32) {
         ([38.2, 49.0, -65.8], "the terrace's east edge"),
         ([38.5, 49.0, -67.0], "the doorhouse's east lane"),
         ([38.6, 49.0, -68.3], "the doorway's east mouth"),
-        ([36.2, 49.0, -68.6], "through the doorway"),
-        ([32.0, 49.0, -67.5], "the terrace west 1"),
-        ([26.0, 49.0, -67.8], "the terrace west 2"),
-        ([22.0, 50.1, -68.0], "the terrace spot"),
     ], 40.0, 900);
+    // The route ENDS at the doorway's east mouth: the arch holds door #112's mesh
+    // (Locked_Door_Top_I, glist flags 0x80000, x 37.12-37.38 [D]), solid to Bond like the
+    // castle exit's [L PCSX2-gdb 2026-11-12, fresh level load: Bond walked west at (39.6, 50.2,
+    // -69.2) stops at x 38.05 and stays]. The old legs "through the doorway" to the terrace spot
+    // walked a gap the game does not have.
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        // The terrace spot rests on the disc floor 49.001 under it [D probe_terrace05 col
-        // (21.8, −68.1): instance 20, map 50, object 38, mat 12], the centre in the feet-band
-        // rest over it (floor + 1.03..1.13 [M Player_FeetOnPoint 0x194188:106; L live 1.086]).
+        // The doorway's east mouth rests on the y-49 floor, the centre in the feet-band rest
+        // over it (floor + 1.03..1.13 [M Player_FeetOnPoint 0x194188:106; L live 1.086]; the
+        // PCSX2 stop at the door read y 50.12).
         assert!(sim.bond.grounded && sim.bond.pos[1] > 49.9 && sim.bond.pos[1] < 50.4,
-            "the walked route must stand Bond on the y-49 terrace (floor 49.001 [D probe_terrace05]), got {:?}",
+            "the walked route must stand Bond on the y-49 floor at the door, got {:?}",
             sim.bond.pos);
     }
 }
@@ -1745,11 +1750,13 @@ fn the_door_band_exit_chains_to_07000006_walked_at(difficulty: u32) {
     // Player_Activate 0x1a5170:100-108,134-137]; the port's AABB stand-in over the 0xE8's glist
     // bounds spans x 37.12..37.38, y 49.0..51.25, z −69.0..−67.75 (the port's own trigger dump).
     // The -3 draft's threshold wp (35.4) stopped Bond at x 34.88 — its use sphere reached only
-    // x 36.88, 0.24 short of the trigger face: no fire. The arch itself is the target; the
-    // doorway is open floor (the walk crosses it unblocked — there is no solid door object on
-    // this arch, "Locked_Door_Top_I" names the level-exit TRIGGER [D placement kind 0xE8]).
+    // x 36.88, 0.24 short of the trigger face: no fire. The arch holds the door's solid mesh
+    // (the 0xE8 trigger's glist [M Trigger_Create 0x1b1720:92-96; L the 2026-11-12 stop at
+    // x 38.05]), so the press comes from the east side, against the door.
+    // From the east side: Bond stands against the door (the game's stop x 38.05 [L]) and
+    // presses E; the use sphere (head + 1×view, r 1.0) reaches the trigger face at x 37.38.
     w.walk_to(walker::Wp {
-        at: [37.0, 50.1, -68.4],
+        at: [38.2, 50.1, -68.4],
         act: walker::Act::Use { use_ticks: 120 },
         arrive: 0.6,
     }, "door #112's arch");

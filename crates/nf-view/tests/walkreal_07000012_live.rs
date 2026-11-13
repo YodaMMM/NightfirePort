@@ -78,6 +78,21 @@ fn walk_spawn_to_the_shaft_exit_at(difficulty: u32) {
         w.dmg.back_off = Some(3.0);
         w.dmg.lane_fights = true;
     }
+    if difficulty == 1 {
+        // The 543 crossing: the d3/d2 diagonal again. The west-stand crossing (los-mask-repins-12)
+        // wedged once the start pair's no-bunching side bits went live on this level (the guards'
+        // chain shifts and the stand at (10.62, -12.85) is refused 0.55 u short, no guard near);
+        // the diagonal walks green [the start_pair_07000012 run].
+        tower2::DOOR_543_WEST_STAND.with(|c| c.set(false));
+        // walker-sidestep-decay-2: the decay is OPT-IN again (the walker DEFAULT re-timed the
+        // 0b real-damage roof walks and all four sisters died in the roof fights — 5/4 vs
+        // master's 9/0 [L the run]). This is the 12-2 patch's setter, back: the old
+        // `sidestep -= 1` grew a LEFT nudge forever (the crossing leg measured sidestep -753
+        // with Bond strafe-left pinned at the door recess [L the NF_WALKTRACE run]); the red
+        // proof: this walk without the decay wedged at the west stand (10.62,1.03,−15.73),
+        // the 6000-tick cap.
+        w.sidestep_decays = true;
+    }
     tower2::walk_12(&mut w);
     tower2::walk_12_exit(&mut w);
 
@@ -134,8 +149,18 @@ fn walk_spawn_to_the_shaft_exit_real_damage_agent() {
 /// creates only the p2 = 1 placements [M Drone_Create 0x136be0:49] and the keypad locks unlock
 /// at create [M Lock_Create 0x1ae1f8 tail: param 6 = 1 on difficulty 1] (the route's unlock
 /// check accepts both paths, common/tower2.rs). Real input only.
+///
+/// los-mask-repins-12-2 green: the approach walks the wall geometry (south to the hole band
+/// first — the corridor's west wall is solid north of the hole, and the old single west steer
+/// pinned Bond there while the stuck ladder's door answer no-oped on the open leaf), the
+/// west-stand E + the straight crossing run as los-mask-repins-12 proved them, and the
+/// walker's sidestep decay (walker-sidestep-decay: the walker default that replaced the 12-2
+/// opt-in `sidestep_decays` setter) ends the stuck ladder's left nudge so
+/// the crossing leg is not strafe-crippled (sidestep −753 at its first tick [L the
+/// NF_WALKTRACE run]). Drone #2 (skin 0x5000008, weapon 0x19, the south hall's lower floor)
+/// is answered by the level's own return-fire machinery once the crossing puts Bond inside
+/// its 20 u shooters window — no damage or health writes anywhere.
 #[test]
-#[ignore = "los-mask-repins-12: door plc 543 at (9.9, 1.1, -14.5) holds state 0x2 at 0.50 for ~200 ticks after the E press; Bond slides south along the leaf to (10.62, 1.03, -15.73) and the leg hits its 6000-tick cap"]
 fn walk_spawn_to_the_shaft_exit_real_damage_operative() {
     walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(|| walk_spawn_to_the_shaft_exit_at(1)))

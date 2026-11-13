@@ -3923,24 +3923,29 @@ impl BotBrain {
     }
 
     /// `NDrone2_CanBackoff` 0x1501a0 for a bot, the game's order:
-    /// 1. behaviour prop 6 — a bot's drone mode is 0 (`BOT_init`'s DIVARS+0x48 is never written,
-    ///    disasm 0x1249e8: stores at +0x2c/+0x40/+0x4c/+0x64/+0x68 only) and mode 0's hook is
-    ///    `DMODE_Normal` → `DMODE_Defaults`, which sets prop 6 [M 0x14d958, 0x14d528:2] —
-    ///    implicit true here.
+    /// 1. behaviour prop 6 — `BOT_init` sets it in the bot's behaviour block
+    ///    (`setProperty(6, .., 1)` [M 0x1249e8:134]), which `DoModeSettingsNEW` unpacks into
+    ///    Drone+0x4dc [M 0x14c600:66-72] — implicit true here.
     /// 2. `DroneAnim_CanDoAnimState(dcv, 4, 0)` [M 0x1501d4-dc, 0x13dfc8]: the bot's anim set is
     ///    its weapon's — `BOTWEAP_changeWeapon` writes Drone+0xDA = `BOTWEAP_getWeaponAnimSet`
     ///    [M 0x12a028:47], and `NDrone2_PostLoad_Init` change-weapon's to the start weapon at
     ///    spawn [M 0x14d890:22-24]. The gate reads the disc's anim-state-4 block
     ///    ([`ANIM_STATE4_TABLE`]) — data, not a constant.
     /// 3. the movement lock Drone+0x4f8 & 0x10 [M 0x150218-220] — the port's `ctx.stationary`.
-    /// 4. the probe [M 0x1501f0-74]: local (0, 0, −0.75), scaled by `BOT_getMovementSpeedMul`
-    ///    on x/z only when Drone+0xc5 == 0x1e [M 0x150234-64 `Vec_MulR32(mul, 1, mul)`]. A
-    ///    bot's +0xc5 = `DroneModeSettings[mode].b0` [M 0x14cfa0:38] = 0x00 for mode 0
-    ///    [D 0x29ad40 row 0 byte 0], so the scaling arm never fires for bots — the probe is
-    ///    0.75 straight back (the old port's "1.8 × mul" read the wrong rows).
+    /// 4. the probe [M 0x1501f0-74]: local (0, 0, −1.8) — the decompile's probe vector is
+    ///    `uStack_98 = 0xbfe66666` = −1.8 f32 [M 0x1501a0:57; disasm 0x1501f4 `lui r1,0xbfe6`]
+    ///    — scaled by `BOT_getMovementSpeedMul` (0.7 / 1.0 / 1.3 by Drone+0xb6 [M 0x126568])
+    ///    on x/z when Drone+0xc5 == 0x1e [M 0x150234-64 `Vec_MulR32(mul, 1, mul)`]. A bot's
+    ///    +0xc5 IS 0x1e: `BOT_init` fills the create block (Drone_Create copies create+0x2c to
+    ///    Drone+0xc34, so DIVars = create + 8 [M Drone_Create, PostLoad_Init 0x14d890:13]) with
+    ///    mode 100 (create+0x40 → DIVars+0x48 [M 0x1249e8:98]) → `DoModeSettingsNEW`
+    ///    [M 0x14b300:495-502], whose behaviour struct (create+0x68 = 0x10 → DIVars+0x70) sets
+    ///    type +199 = 0x10 [M 0x14c600:76, 0x1c7a98:45] and attack +200 = 0; with no prop 0x10
+    ///    `GetDTYPENEW` returns 0x1e for type 0x10 [M 0x14c938 case 0x10] → +0xc5 [M 0x14cbd8:26].
+    ///    So the probe is 1.8 × mul straight back.
     /// 5. `NDrone2_MoveTest(feet, feet+R·probe, NULL, obj, NULL, 0, 1) == 1` [M 0x1502f0-308]:
     ///    the range chain (≤ 30 / |dy| ≤ 4.0 / the slope band [M 0x136938:53-62] — trivially
-    ///    true at 0.75) then `AINetwork_BoundsTest` in its mode-0 arm (no endpoint proximity
+    ///    true at 1.8) then `AINetwork_BoundsTest` in its mode-0 arm (no endpoint proximity
     ///    [M 0x157d80:165-169]) — the port's `nav::Network::move_test` (the boundary walls +
     ///    the [S] +1 LOS stand-in for the missing portal straddle). `nav: None` (the unit
     ///    rigs' no-network worlds) keeps the `walk_clear` stand-in [S — `can_side_move`'s].
@@ -3954,10 +3959,12 @@ impl BotBrain {
         if ctx.stationary {
             return false;
         }
-        // 4-5. the 0.75-behind probe through the MoveTest [M 0x1501f0-308]; bots never take
-        // the speedmul arm [M 0x150234-64 + 0x14cfa0:38 + D row 0]
+        // 4-5. the 1.8 × speed-mul probe through the MoveTest [M 0x1501f0-308]; a bot's
+        // +0xc5 is 0x1e, so the mul arm fires [M 0x150234-64, 0x14c938 case 0x10]
+        let mul = [0.7f32, 1.0, 1.3][(self.vars.speed as usize).min(2)]; // [M 0x126568]
+        let reach = 1.8 * mul;
         let r = self.root();
-        // behind = −(cos, sin) of the brain's facing — R·(0, 0, −0.75) with the yaw-only
+        // behind = −(cos, sin) of the brain's facing — R·(0, 0, −1.8·mul) with the yaw-only
         // matrix stand-in [S: the game rotates by the full obj matrix +0x90]
         let to = [
             r[0] - crate::trig::cosf(self.yaw) * 0.75,
@@ -5763,30 +5770,47 @@ mod brain_tests {
         // past the engage band: 0xCF [M 0x16fc30:89-92]
         assert_eq!(run(20.5, false, 0.0, 0.0), Some(state::BOT_ATTACK), "past +0xF0 → 0xCF");
         // inside the band but a wall 0.45 behind (facing −x, the wall at x = 3; the probe is
-        // 0.75 for a bot [M 0x1501a0:55-64 + 0x14cfa0:38]): `!CanBackoff` → 0xCF
+        // 1.8 × the speed mul for a bot [M 0x1501a0:55-64]): `!CanBackoff` → 0xCF
         // [M 0x16fc30:64-66, 0x1501a0:76-86]
         assert_eq!(run(-2.0, true, 2.55, std::f32::consts::PI), Some(state::BOT_ATTACK), "no room behind → 0xCF");
     }
 
-    /// `NDrone2_CanBackoff` 0x1501a0's behind probe is 0.75 for a bot and is NOT scaled by the
-    /// speed mul [M 0x1501f0-64: local (0, 0, −0.75), scaled only when Drone+0xc5 == 0x1e; a
-    /// bot's +0xc5 = `DroneModeSettings[mode].b0` [M 0x14cfa0:38] with mode = DIVARS+0x48 = 0
-    /// (`BOT_init` writes no +0x48, disasm 0x1249e8) → [D 0x29ad40 row 0 byte 0 = 0x00]: the
-    /// scaling arm never fires for bots]. A wall 2.0 behind never blocks (0.75 stops short);
-    /// a wall 0.5 behind does; the movement lock refuses [M :60]; the anim gate reads the
-    /// weapon's anim set into the disc block ([`ANIM_STATE4_TABLE`]) — the rig's weapon 0x02
-    /// maps to set 0x16, whose entry (2576) plays [M 0x12a028:47, 0x12b140, D block].
+    /// `NDrone2_CanBackoff` 0x1501a0's behind probe is 1.8 × the speed mul for a bot
+    /// [M 0x1501a0:57 `0xbfe66666` = −1.8; :62-64 the mul arm on +0xc5 == 0x1e, which a bot
+    /// carries (see `can_backoff`)]: a wall 2.0 behind blocks a speed-2 bot (2.34) and not a
+    /// speed-1 bot (1.8); a wall 0.45 behind blocks; the movement lock refuses [M :60]; the anim
+    /// gate reads the weapon's anim set into the disc block ([`ANIM_STATE4_TABLE`]).
+    /// The sight cone faces where the bot faces: the brain's yaw is the (cos, sin) stand-in its aim
+    /// turns use (`atan2_approx(dz, dx)`), so an opponent 10 u straight ahead scores the cone's
+    /// full ≥ 0.7 at EVERY heading [M DroneVision_OpponentVisibility 0x175af0: 0.7 band, ±(π/2 +
+    /// 0.3927) cone], and one straight behind scores 0. (The swapped-order bearing read the cone
+    /// mirrored: a bot looking right at its opponent missed it at most headings.)
     #[test]
-    fn can_backoff_probe_is_075_and_unscaled() {
+    fn sight_cone_faces_the_way_the_bot_faces() {
+        let mut r = floor_rig(true);
+        for k in 0..16 {
+            let yaw = -std::f32::consts::PI + k as f32 * std::f32::consts::PI / 8.0;
+            r.brain.yaw = yaw;
+            let p = r.brain.pos;
+            let at = |d: f32| OtherPlayer { index: 1, pos: [p[0] + crate::trig::cosf(yaw) * d, p[1], p[2] + crate::trig::sinf(yaw) * d], alive: true, team: 0, flags: 0, dist2: 0.0, health: 100.0, score: 0.0, yaw: 0.0 };
+            let ahead = r.brain.opponent_visibility(&at(10.0));
+            assert!(ahead >= 0.7, "yaw {yaw:.3}: an opponent straight ahead scores {ahead:.3} (< 0.7)");
+            let behind = r.brain.opponent_visibility(&at(-10.0));
+            assert_eq!(behind, 0.0, "yaw {yaw:.3}: an opponent straight behind is outside the cone");
+        }
+    }
+
+    #[test]
+    fn can_backoff_probe_is_18_times_the_mul() {
         let mut r = floor_rig(true);
         r.brain.pos[0] = 1.0; // the wall at x = 3 is 2.0 behind when facing −x
         r.brain.yaw = std::f32::consts::PI;
         let others = r.others.clone();
         let ctx = Rig::build_ctx(r.now, &r.pickups, &others, &r.world, false, None);
         r.brain.vars.speed = 2;
-        assert!(r.brain.can_backoff(&ctx), "0.75 stops 1.25 short of the wall — the speed mul never applies [M :55-58, 0x14cfa0:38]");
+        assert!(!r.brain.can_backoff(&ctx), "1.8 × 1.3 = 2.34 reaches the wall [M 0x1501a0:57-64, 0x126568]");
         r.brain.vars.speed = 1;
-        assert!(r.brain.can_backoff(&ctx), "the same at speed 1 [M]");
+        assert!(r.brain.can_backoff(&ctx), "1.8 × 1.0 stops 0.2 short of it [M]");
         r.brain.pos[0] = 2.55; // the wall is 0.45 behind: the probe crosses it
         assert!(!r.brain.can_backoff(&ctx), "no room behind → false [M :76-86]");
         let ctx_s = Rig::build_ctx(r.now, &r.pickups, &others, &r.world, true, None);

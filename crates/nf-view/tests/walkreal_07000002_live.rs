@@ -44,6 +44,25 @@ use walker::{Act, Walker, Wp, dxz};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
+thread_local! {
+    /// hear-fold re-tune (20-level-02-castle-walks-hearing): the 00 Agent pre-crossing silence
+    /// discipline. When set, every fight/scoop weapon re-arm ends on the SILENCED P99 (0x02)
+    /// instead of the loudest wheel pick — firing the scooped 0x1c inside the west-end rifles'
+    /// 41-48 u hearing band draws them onto the courtyard sight lines, and their chips (and
+    /// wobbled rounds) accompany the rest of the route [L this task's v6/v9 runs: 30.4 of the
+    /// crossing pool went to the drawn pair]. Set at the geisha-1 duel, cleared at the stair
+    /// bottom (the deliberate lane-shotgun arm). d1/d2 never set it — their RNG is untouched.
+    static QUIET_DISCIPLINE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn quiet_discipline() -> bool { QUIET_DISCIPLINE.with(|c| c.get()) }
+
+/// The fight's weapon re-arm: the loudest pick by default; the silenced P99 under the
+/// discipline (see QUIET_DISCIPLINE).
+fn arm_after_fight(w: &mut Walker, label: &str) {
+    if quiet_discipline() { arm_weapon(w, 0x02, label); } else { let _ = w.switch_to_armed(label); }
+}
+
 fn ch_on(w: &Walker, c: u8) -> bool { w.scene.sim.as_ref().unwrap().drones.channels.on(c as u32) }
 
 /// The MissionData row of a level [M mission::LEVELS = the 0x2a3ed0 table; the row-lookup
@@ -94,7 +113,7 @@ fn clear_captors(w: &mut Walker, around: [f32; 3], label: &str) {
 /// The real-health walk's captor fight: the same kill set as `clear_captors`, played the way a
 /// player does under real fire — enabled guards only, shot from range when a part is exposed,
 /// approached node by node until one is, the gun cycled/looted when it runs dry.
-fn clear_captors_real(w: &mut Walker, around: [f32; 3], label: &str, d3: bool) {
+fn clear_captors_real(w: &mut Walker, around: [f32; 3], label: &str, d3: bool, quiet: bool) {
     for round in 0..8 {
         let target = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -103,25 +122,81 @@ fn clear_captors_real(w: &mut Walker, around: [f32; 3], label: &str, d3: bool) {
                 .or_else(|| hostage_captor(w, around))
         };
         let Some(di) = target else { return };
+        // hear-fold re-tune (20-level-02-castle-walks-hearing): the dry guard — the repro run
+        // walked the captor-0 APPROACH on the dry 0x47 cuffs into a live shotgunner's volley
+        // ring and died there (tick 13471, the wheel 0/0 across the whole cycle [L this task's
+        // run]). A player out of rounds grabs the fight-floor drops first (the kills' guns land
+        // there [L drops]) and re-arms the silenced P99 (the scoop's own switch_to_armed arms
+        // the loudest deep gun, whose fire sound re-runs the west-end rifles' alert chain
+        // [los-mask-repins-02-2]); still dry = break off, never close with cuffs.
+        if d3 && w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare == 0 {
+            if !scoop_quiet(w, &format!("{label} captor {round} resupply"), 2, 11.0)
+                || w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare == 0 {
+                eprintln!("[02] {label}: the wheel is dry — breaking off the captor approach");
+                return;
+            }
+        }
         // From range first: a captor Bond can already see a part of is shot from where he
         // stands. Walking into the room put Bond 1.1-1.3 u from three shotgun captors (weapon
         // 0x1c [L probe]) and cost ~95 of his 150 health+armour there (run12 2026-10-31); the
         // pellets' spread is what range buys a player.
+        // los-mask-repins-02-2 (quiet, the silenced geisha-1 duel): the 900-tick hold and the
+        // 8.0 approach MEASURED WORSE (Bond stood in the closing captain's volley ring —
+        // 49.2 in one captor fight, dead mid-phase) — the 240 hold + the 3.5 approach stand.
         if !hold_for_sight(w, di, 240) {
             let dest = if round == 0 { around }
                 else { w.scene.sim.as_ref().unwrap().drones.list[di].pos };
             approach_until_seen(w, di, dest, &format!("{label} captor {round} approach"), 3.5);
         }
-        let _ = w.switch_to_armed(&format!("{label} captor {round}"));
+        // los-mask-repins-02-2: quiet (the silenced geisha-1 duel, d3 only) keeps the P99 in
+        // hand — the guards' fire path arms whatever switch_to_armed picks (the loudest deep
+        // gun), whose shots re-run the measured alert chain.
+        if quiet { arm_weapon(w, 0x02, &format!("{label} captor {round} silenced")); } else { let _ = w.switch_to_armed(&format!("{label} captor {round}")); }
+        // hear-fold re-tune: settle the view before the first tap (the repro stands opened at
+        // err 2.19 and burned the clip on the convergence [L the rf-trace]). d3 only: the extra
+        // turn ticks would shift the d1/d2 RNG timelines.
+        if d3 { settle_aim(w, di, 120, 0.06); }
         if !w.shoot(di, &format!("{label} captor {round}")) {
             eprintln!("[02] {label}: captor {round} (drone {di}) survived the clip");
             loot(w, &format!("{label} captor {round}"), 1);
         }
         // The 00 Agent scoop: the dead guard's drop is the resupply (one 8-pellet tap per captor
-        // keeps the next fight ahead of its first volley).
-        if d3 { scoop_drops(w, &format!("{label} captor {round} drop"), 1); }
+        // keeps the next fight ahead of its first volley). hear-fold re-tune: the scoop re-arms
+        // the silenced P99 (scoop_quiet) — the loudest pick would fire the 0x1c inside the
+        // west-end rifles' hearing band.
+        if d3 { scoop_quiet(w, &format!("{label} captor {round} drop"), 1, 8.0); }
         status(w, &format!("{label} captor {round}"));
     }
+}
+
+/// The silenced resupply (hear-fold re-tune, 20-level-02-castle-walks-hearing): scoop the
+/// fight-floor drops within `radius` (the kills' guns land there [L drops]) and re-arm the
+/// silenced P99 (0x02). The plain `scoop_drops`/`scoop_drops_within` end in `switch_to_armed`,
+/// which arms the loudest deep gun the wheel carries — firing it inside the west-end rifles'
+/// 41-48 u hearing band re-runs their measured alert chain (los-mask-repins-02-2), and their
+/// combat rounds cross the scared civilian's line band. Real input throughout: the walk to the
+/// drops, the game's own weapon cycle.
+fn scoop_quiet(w: &mut Walker, label: &str, n: usize, radius: f32) -> bool {
+    scoop_drops_within(w, label, n, radius, 2.2);
+    arm_weapon(w, 0x02, label)
+}
+
+/// Face drone `di` up to `ticks` until the VIEW's aim error is inside `tol` (the tap's
+/// convergence — the d3 repro stands opened at err 2.19 [L this task's rf-trace] and burned
+/// 1-2 rounds per kill on the convergence; the view turn is real input). True when converged
+/// (or the drone died mid-turn).
+fn settle_aim(w: &mut Walker, di: usize, ticks: u32, tol: f32) -> bool {
+    for _ in 0..ticks {
+        let (dead, err) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.list[di];
+            (d.corpse || d.health <= 0.0,
+             walker::wrap_pi((d.pos[0] - sim.bond.pos[0]).atan2(d.pos[2] - sim.bond.pos[2]) - sim.bond.yaw))
+        };
+        if dead || err.abs() < tol { return true; }
+        w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
+    false
 }
 
 /// The geisha-2 room taken from range, the way a player holds a doorway against a shotgun
@@ -155,7 +230,7 @@ fn take_room(w: &mut Walker, around: [f32; 3], label: &str, d3: bool) {
         if live.is_empty() { break; }
         match pick {
             Some(di) => {
-                let _ = w.switch_to_armed(&format!("{label} room {round}"));
+                arm_after_fight(w, &format!("{label} room {round}"));
                 let killed = w.stand_and_fire(di, 900);
                 if !killed { let until = w.total_ticks + 240; tried.push((di, until)); }
                 let dry = { let g = &w.scene.sim.as_ref().unwrap().gun; g.clip + g.spare == 0 };
@@ -176,7 +251,7 @@ fn take_room(w: &mut Walker, around: [f32; 3], label: &str, d3: bool) {
     }
     w.dmg.dry_taps = None;
     // Whatever the stand left (a captor out of every line from here): the old sweep.
-    clear_captors_real(w, around, label, d3);
+    clear_captors_real(w, around, label, d3, false);
 }
 
 /// Bond's own status line (health, armour, gun) for the fight log.
@@ -250,7 +325,15 @@ fn engage_in_view(w: &mut Walker, radius: f32, label: &str) -> bool {
         };
         let Some(di) = target else { return fought };
         fought = true;
-        let _ = w.switch_to_armed(label);
+        // hear-fold re-tune: the dry guard — the cuffs' weapon-cycle dance (12 presses × the
+        // draw wait, per round of the loop) burned minutes per leg when the wheel went dry
+        // mid-route [L the v8 run's east-courtyard spiral]; a player out of every round walks
+        // on instead of clicking an empty gun at a guard.
+        if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare == 0 {
+            arm_fullest(w, &format!("{label} dry rearm"));
+            if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare == 0 { return fought; }
+        }
+        arm_after_fight(w, &format!("{label} in view {k}"));
         if !w.shoot(di, &format!("{label} in view {k}")) {
             loot(w, &format!("{label} in view {k}"), 1);
         }
@@ -346,9 +429,9 @@ fn scoop_drops_within(w: &mut Walker, label: &str, n: usize, radius: f32, y_tol:
         // Arm the take at once: the captors close DURING the scoop walk, and the fights that
         // answer them fire the gun in hand (the first scoop run fought drones 7/5/6 on the P99
         // for 61.2 health because the switch came only after the loop [L the 00agent ledger]).
-        let _ = w.switch_to_armed(&format!("{label} scoop {k} arm"));
+        arm_after_fight(w, &format!("{label} scoop {k} arm"));
     }
-    let _ = w.switch_to_armed(label);
+    arm_after_fight(w, label);
 }
 
 /// Cycle the wheel to the gun `id` (the game's own weapon cycle, the arm_fullest walk) and top
@@ -432,12 +515,12 @@ fn loot(w: &mut Walker, label: &str, min: i32) {
         // Nothing at the feet: the other carried guns still count (the start P99's 41 spare sat
         // unused while the walker clicked an empty drop gun, run1 2026-10-31) — the game's own
         // weapon cycle to one with ammo.
-        let Some(target) = target else { eprintln!("[02] {label}: nothing to loot"); let _ = w.switch_to_armed(label); return; };
+        let Some(target) = target else { eprintln!("[02] {label}: nothing to loot"); arm_after_fight(w, label); return; };
         eprintln!("[02] {label}: looting ({:.1},{:.1},{:.1}) (d {:.1})", target[0], target[1], target[2], dxz(target, bp));
         // arrive 0.4: the take needs Bond's capsule ON the pickup (the 1.2 stop left it untaken,
         // first loot run 2026-10-29).
         w.walk_nav_to(target, &format!("{label} loot {k}"), 0.4);
-        let _ = w.switch_to_armed(label);
+        arm_after_fight(w, label);
     }
 }
 
@@ -471,6 +554,12 @@ fn clear_pursuers(w: &mut Walker, radius: f32, label: &str) {
                 .map(|(i, _)| i)
         };
         let Some(di) = target else { return };
+        // hear-fold re-tune: the same dry guard as `engage_in_view` — the wheel-dry cuffs dance
+        // is minutes per round [L the v8 run]; a player out of every round walks on.
+        if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare == 0 {
+            arm_fullest(w, &format!("{label} dry rearm"));
+            if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare == 0 { return; }
+        }
         // A player who can already see a part of him fires from where he stands. An unseen guard
         // is HELD FOR (face him, wait for him to come round the cover — a pursuer closes on his
         // own [the 0x15 group's chase]) and only a close one (< 8 u) is walked to — through the
@@ -490,7 +579,7 @@ fn clear_pursuers(w: &mut Walker, radius: f32, label: &str) {
             }
             approach_until_seen(w, di, at, &format!("{label} pursuer {round} approach"), 3.0);
         }
-        let _ = w.switch_to_armed(&format!("{label} pursuer {round}"));
+        arm_after_fight(w, &format!("{label} pursuer {round}"));
         let stand = w.scene.sim.as_ref().unwrap().bond.pos;
         if !w.shoot(di, &format!("{label} pursuer {round}")) {
             // The fight's own loot: the dead guards' drops and the placed boxes — the nearest
@@ -534,6 +623,13 @@ fn clear_pursuers(w: &mut Walker, radius: f32, label: &str) {
 /// part) — were both the walker's own route: the AI-path detour over the upper floor and the chase
 /// of an unseen guard. Robustness: green with 0..400 idle ticks inserted after the armour take
 /// (16 offsets on the placement-stat guards, 2026-11-01).
+/// GREEN (level-02-castle-walks-hearing on this branch): the repro's fail chain was the scared
+/// civilian (ch 0x60, FAIL_CIVILIANS 0x4000034 [M 0x1827d8:98-107]) killed by the courtyard
+/// sniper's volley while the lane-mouth return-fire duel (a measured dead end at 21.6 u) stood
+/// Bond in her line band [L the v1 repro]. The re-tune: the rearm moved to the stair top (out
+/// of her band), the sniper suppressed across the no-dwell crossing, and the band stand at the
+/// door (10.3 u, the ≤12-u band) answers him — the d3 shape, d1-gated so the d2 RNG is
+/// untouched. Green in 20.8 s; the whole binary 4/1 (the 00agent sister is the open item).
 #[test]
 fn walk_the_castle_all_objectives_real_health() { walk_the_castle_all_objectives_real_health_at(1) }
 
@@ -693,7 +789,29 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         // the room (real-health-00agent-02-5).
         scoop_drops_within(&mut w, "the west-wing drops", 1, 14.0, 1.5);
     }
-    arm_fullest(&mut w, "before the geisha-1 room");
+    if difficulty >= 3 {
+        // los-mask-repins-02-2 (lever (c), the silenced duel — MEASURED alert chain: the 0x12
+        // duel shots at t~6300 turned both west-end rifles within ~200 ticks [L this round's
+        // trace: #10/#11 idle state 1 at their start posts through the plate leg (t5586),
+        // state 7 at the first stand-off (t6320), #10 HEARD_NOISE_SUSPECT at the converged
+        // west post (−52.1,−1.6) by t7651 and COMBAT_NO_ROUTE by t7942; the killer round was
+        // #11 (placement 453) → the civilian #22 at t12239, the ONLY guard→drone round hit of
+        // the walk [L the stair-bottom diag]). The west-end start posts sit 41-48 u from the
+        // duel area, and the P99's fire sound 0x403 has outer radius 40 [D sound.md: 0x403
+        // inner 2 / outer 40 / weight 65] — past it Sound_Alertness' share is 0 and
+        // DroneVision_AlertSound's share>0.2 gate never opens [M 0x177800]. The d1/d2 walks'
+        // P99 fights (62-68 u out) left the guards idle (state 1) [L the d2 status trace] —
+        // the same silence, kept through the duel, is what keeps #10/#11 at their start posts
+        // (whose lines to the crossing pass 2.1-28 u from her — outside the ±1.5-u miss
+        // wobble [M 0x179740:136-148]). The rifle would re-arm AFTER the crossing (the
+        // stair-top arm); the duel itself rides the 28 P99 rounds on head shots.
+        arm_weapon(&mut w, 0x02, "the silenced geisha-1 duel");
+        // The discipline starts here: every fight re-arm through the duel, the room sweep and
+        // the wing walk ends on the silenced P99 (see QUIET_DISCIPLINE).
+        QUIET_DISCIPLINE.with(|c| c.set(true));
+    } else {
+        arm_fullest(&mut w, "before the geisha-1 room");
+    }
     // NOTE (real-health-00agent-02-03-04): no pre-room drop scoop at d1/d2 — the walk to the
     // drops passes the captors' posts and the return-fire fights answer them in the open corridor
     // on the P99 (61.2 health before the room, the first tactic run [L the 00agent ledger]). At
@@ -703,7 +821,18 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     // captor's shotgun and the per-round scoop arms it (the `d3` arm in `clear_captors_real`) —
     // the later rounds fight on it.
     w.lenient = true;
-    w.walk_to(Wp { at: [-35.2, 6.5, 4.6], act: Act::Wait(10), arrive: 0.9 }, "the ch-0x17 plate");
+    if difficulty >= 3 {
+        // hear-fold re-tune: step the plate at its south-west edge — the captor cluster sits
+        // east-north of the quad (x −34.5..−33.7, z 6.0..8.3 [L this task's run]) and the old
+        // centre stop put Bond 1-2.5 u from them, inside the under-3.0-u every-round-hits band
+        // [M DroneWeap_DoBulletAccuracy 0x179740:113-115] — the repro's opening burst cost 56
+        // health+armour before the first fight could answer. The SW corner stands 2.6-4.9 u
+        // from the cluster, where misses exist. d1/d2 keep the centre stop (their RNG is
+        // untouched).
+        w.walk_to(Wp { at: [-35.7, 6.5, 3.6], act: Act::Wait(10), arrive: 0.6 }, "the ch-0x17 plate (sw corner)");
+    } else {
+        w.walk_to(Wp { at: [-35.2, 6.5, 4.6], act: Act::Wait(10), arrive: 0.9 }, "the ch-0x17 plate");
+    }
     w.lenient = false;
     assert!(ch_on(&w, 0x17), "the geisha group is enabled [D tr[003] out 0x17]");
     {
@@ -733,6 +862,29 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     }
     // 3. The captors die (the 0x17 guards: death chs 0x88 / 0x2A / 0x29 [D param 12]) — the save
     //    fires through the real fire path, AND #397 closes 0x3B [D tr[017]].
+    if difficulty >= 3 {
+        // hear-fold re-tune: GIVE GROUND before duelling. The repro's stands bled 100 → 13.8 in
+        // three rounds: the plate step wakes the room at 2-5 u and the converged set (the three
+        // captors + the corridor pair the silenced shots draw within their 40-u band) volleys
+        // from 2.8-4 u while Bond duels one [L this task's run]. A player who steps on the
+        // plate and wakes the room does not stand in its mouth: he gives ground east into the
+        // open (return fire held for the retreat — the walk's cooldown is the walk's own
+        // "don't shoot yet" choice, real input), and meets the rush at 8+ u where the 8-pellet
+        // volleys spread past him [M DroneWeap_DoBulletAccuracy 0x179740].
+        {
+            let n = w.scene.sim.as_ref().unwrap().drones.list.len();
+            for i in 0..n {
+                w.dmg.cooldown.retain(|&(ci, _)| ci != i);
+                w.dmg.cooldown.push((i, w.total_ticks + 400));
+            }
+        }
+        // The retreat resumes the leg's own return fire after 400 ticks (the suppression window):
+        // the v4 attempt held it 900 and Bond ate the chase unchecked — a player retreating from
+        // a wake still answers whoever closes. The destination is the open stretch east (the v3
+        // route, which fought the chase one at a time and killed #7 mid-retreat [L this task]).
+        w.walk_nav_to([-30.8, 6.4, 13.5], "the geisha-1 give-ground", 1.0);
+        status(&w, "the geisha-1 give-ground");
+    }
     //    00 Agent round-0 (real-health-00agent-02-03-2): the approach met the shotgun captor at
     //    1.3 u and his first 8-pellet volley landed 57.6 at 2.7 u — dead at t6398 [L the
     //    00agent ledger; this branch's own run, the same tick]. A player holds the corridor and
@@ -757,7 +909,21 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         // and answers the 24-hp captain at 4+ u, where the volley is the 4-u band's 21.6 and
         // the under-3.0-u rule is out of play [M DroneWeap_DoBulletAccuracy 0x179740:113-115]).
         for k in 0..4 {
-            w.dmg.back_off = Some(6.0);
+            // hear-fold re-tune: the funnel ring widens 6.0 → 8.0 (the converged set volleys
+            // from 2.8-4 u at the 6.0 ring [L this task's run] — the wider ring keeps more of
+            // each volley's pellets off Bond) and the sight hold shortens 900 → 300 (the hold
+            // is the exposure: the rush closes during it).
+            w.dmg.back_off = Some(8.0);
+            // hear-fold re-tune: the dry guard first — the repro run closed on a live shotgunner
+            // with the dry 0x47 cuffs and died in his volley ring [L this task's run]. The
+            // scoop re-arms the silenced P99 (scoop_quiet); still dry = break off.
+            if w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare == 0 {
+                if !scoop_quiet(&mut w, &format!("geisha 1 stand-off {k} resupply"), 2, 11.0)
+                    || w.scene.sim.as_ref().unwrap().gun.clip + w.scene.sim.as_ref().unwrap().gun.spare == 0 {
+                    eprintln!("[02] geisha 1 stand-off {k}: the wheel is dry — breaking off");
+                    break;
+                }
+            }
             let di = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let bp = sim.bond.pos;
@@ -768,7 +934,10 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
                     .map(|(i, _)| i)
             };
             let Some(di) = di else { break };
-            if !hold_for_sight(&mut w, di, 900) { break; }
+            if !hold_for_sight(&mut w, di, 300) { break; }
+            // hear-fold re-tune: settle the view before the first tap (the repro stands opened
+            // at err 2.19 and burned 1-2 rounds per kill on the convergence [L the rf-trace]).
+            settle_aim(&mut w, di, 120, 0.06);
             // stand_and_fire, NOT shoot: the shoot loop's reposition/flank walked Bond INTO the
             // closing captain (dist 1.6 at the shot, 50.4 health for the kill [L the
             // 00agent-02-03-2 run]). The stand holds the plate and duels — Bond does not move
@@ -781,8 +950,14 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             // empty wheel up to ~730 ticks per round while the closing captor volleyed Bond
             // from 88.8 to 6.0 across one such gap [L the run-2/3 duel trace, t7561].
             // The kill's drop is the resupply (the guards' own guns; the dead captain's shells).
-            scoop_drops(&mut w, &format!("geisha 1 stand-off {k} drop"), 1);
-            arm_weapon(&mut w, 0x1c, &format!("geisha 1 stand-off {k} shotgun"));
+            // los-mask-repins-02-2: the d3 shotgun ARM is gone — arming the 0x1c here would put
+            // 8-pellet shots (the 0x1c's fire sound, outer well past 40 [D sound.md]) inside
+            // the west-end guards' 41-48 u hearing band and re-run the measured alert chain;
+            // the scooped drops still ride the wheel for the post-crossing phases.
+            // hear-fold re-tune: the scoop re-arms the silenced P99 (scoop_quiet) — the loudest
+            // pick would fire the 0x1c inside the west-end rifles' hearing band.
+            scoop_quiet(&mut w, &format!("geisha 1 stand-off {k} drop"), 1, 6.0);
+            if difficulty < 3 { arm_weapon(&mut w, 0x1c, &format!("geisha 1 stand-off {k} shotgun")); }
         }
         w.dmg.back_off = Some(4.0);
         // The corridor carries its own chaser (drone #8 enabled mid-duel and chewed 43.2 into
@@ -792,7 +967,15 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
     }
     let g1 = geisha(&w, 0x49).unwrap();
     let at = w.scene.sim.as_ref().unwrap().drones.list[g1].pos;
-    clear_captors_real(&mut w, at, "geisha 1", difficulty >= 3);
+    if difficulty >= 3 {
+        // hear-fold re-tune: the give-ground retreat drags the surviving captors south with it
+        // (15+ u out — beyond the 8-u sweep around her) and they drift home when the shots
+        // stop [L this task's v5 run: the deaths assert failed with captors alive at 15.1 u
+        // unseen]. A player walks back to the room and finishes them there; the sweep then
+        // meets them at their posts.
+        w.walk_nav_to(at, "back to the geisha-1 room", 1.0);
+    }
+    clear_captors_real(&mut w, at, "geisha 1", difficulty >= 3, difficulty >= 3);
     for _ in 0..240 {
         if ch_on(&w, 0x49) { break; }
         w.tick(Default::default(), false);
@@ -881,20 +1064,13 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         ("bunker door", [-46.1, 5.9, -23.2]),
         ("bunker corridor", [-55.1, 5.9, -23.1]),
     ] {
-        if name == "bunker door" && difficulty < 3 {
-            // Into the bunker with the fullest gun (the ch-0x81 ambush is next [D #389]). At 00
-            // Agent the shotgun RIDES — the band stand below fires the 0x1c first (8-pellet taps
-            // inside the ≤12-u band), and the wheel read here would swap it back for the 0x12
-            // before the leg (real-health-00agent-02-6). The d1/d2 walks keep the rearm.
-            arm_fullest(&mut w, "before the bunker");
-        }
-        if name == "west wing stair" && difficulty >= 3 {
-            // 00 Agent (real-health-00agent-02-03-2): the courtyard sniper (weapon 0x1e) covers
-            // the stair descent and the lane crossing — his ONE hit from 25.7 u landed 48.0 and
-            // the crossing never survived it [L the 00agent-02-03-2 ledger, two runs]. A player
-            // spots the muzzle from the stair top and answers before descending: the stand taps
-            // from cover (Bond does not move), the 12-hp class dies to three body rounds [L the
-            // run ledger "hp 12"]. Nothing exposed from here = the stand gives up on its own.
+        if name == "bunker door" && difficulty == 1 {
+            // hear-fold re-tune: the band stand first, THEN the rearm. The lane-mouth duel was
+            // the dead end; the door (−46.1, 5.9, −23.2) stands 10.3 u from the sniper's post
+            // [D placement (−52.05, 6.34, −14.43)] — inside the ≤12-u band where return fire
+            // lands [L the 00agent-02-6 ledger]. The lane suppression expires on the walk in;
+            // this stand is the walk's own answer (the d3 shape). The rearm after the stand is
+            // safe here: her line band is north-east, the bunker corridor is south-west.
             let di = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let bp = sim.bond.pos;
@@ -904,43 +1080,66 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
                     .map(|(i, _)| i).next()
             };
             if let Some(di) = di {
-                // The fullest gun, not whatever the rooms left in hand (the shotgun's last 3
-                // pellets burned at 25 u were 3 close-range kills gone [L the 00agent-02-03-2
-                // run: the dry hook fight then let the hp-5 rifle chaser finish Bond]). And the
-                // aim held: the hip cone at 25 u missed all 16 rifle rounds [L the same run];
-                // the aim raise is the game's own zero-spread for a 0x400000 record [M
-                // Bullet_init 0x12c5a0:139-170]. Scoped to this stand only — the walk's other
-                // fights keep the plain gates.
                 w.dmg.aimed_fights = true;
-                arm_fullest(&mut w, "the stair-top sniper duel");
-                let _ = w.stand_and_fire(di, 1200);
+                let killed = w.stand_and_fire(di, 1200);
                 w.dmg.aimed_fights = false;
-                status(&w, "the courtyard sniper from the stair top");
+                status(&w, &format!("the band stand at the door (killed {killed})"));
+            } else {
+                status(&w, "the band stand at the door: the sniper is already down");
             }
+            arm_fullest(&mut w, "before the bunker");
         }
-        if name == "courtyard lane" && difficulty >= 3 {
-            // 00 Agent (real-health-00agent-02-03-2): the sniper (0x1e, one hit 48.0) is exposed
-            // from the lane mouth — the lane leg's own hook fight killed him there in the
-            // earlier run [L the 00agent-02-03-2 ledger: "courtyard lane: returned fire on
-            // drone #9 (killed true)"] — but his shot reaches the DESCENT, so the stand must
-            // not wait for the leg to hand him over. The stair top never exposed him (the
-            // aimed duel there never fired, clip 32 at the status [L the same run]).
+        if name == "bunker door" && difficulty == 2 {
+            // Into the bunker with the fullest gun (the ch-0x81 ambush is next [D #389]). At 00
+            // Agent the shotgun RIDES — the band stand below fires the 0x1c first (8-pellet taps
+            // inside the ≤12-u band), and the wheel read here would swap it back for the 0x12
+            // before the leg (real-health-00agent-02-6). The d1 rearm moved into its own band
+            // stand block above (hear-fold re-tune); d2's RNG timeline is untouched.
+            arm_fullest(&mut w, "before the bunker");
+        }
+        if name == "west wing stair" && difficulty == 1 {
+            // hear-fold re-tune (20-level-02-castle-walks-hearing): the pre-bunker rearm moves
+            // up to the stair top. The lane mouth (where the old "before the bunker" arm
+            // stood, d1's repro) sits in the scared civilian's line band — the sniper's muzzle
+            // line to a Bond at x −43, z −1.7 passes 0.1-2.3 u from her hide spot (−40.3,
+            // 6.3, 2.1) [D census #464], and the wheel-cycling dwell there is standing in his
+            // shot window for ~700 ticks. The stair top's lines pass 3+ u south of her
+            // [L the 00agent ledger note].
+            arm_fullest(&mut w, "the stair-top arm");
+        }
+        if name == "west wing stair" && difficulty >= 3 {
+            // 00 Agent (real-health-00agent-02-03-2): the courtyard sniper (weapon 0x1e) covers
+            // the stair descent and the lane crossing — his ONE hit from 25.7 u landed 48.0 and
+            // the crossing never survived it [L the 00agent-02-03-2 ledger, two runs]. A player
+            // spots the muzzle from the stair top and answers before descending: the stand taps
+            // from cover (Bond does not move), the 12-hp class dies to three body rounds [L the
+            // run ledger "hp 12"]. Nothing exposed from here = the stand gives up on its own.
             //
-            // real-health-00agent-02-6: the aimed stand here is a MEASURED dead end — the run
-            // stood at the lip (21 u) with aim Some from t0, err converged to 0.000 by t60,
-            // fired 25 rifle rounds into the slit and hit NOTHING (his hp pinned 12.0 t0→t180
-            // [L the run-1 rf-trace]; the 0x12's tap spread is 21 [M Bullet_init 0x12c5a0
-            // :139-170 — the 16 base + the 5 bloom, no 0x400000 record] = ±0.62 u at 21 u, and
-            // the wall eats every round off the slit's sliver). Standing here also parked Bond
-            // inside shot 1 (+134..+557 from the bottom arrival) and shot 2 (~+501) — the
-            // repro-run death (24.0 health, the lethal −24.0 at +134). A player does NOT duel
-            // a slit at 21 u: he crosses FIRST and answers inside the ≤12-u band (the bunker
-            // door stands 10.3 u from the post [D placement (−52.05,6.34,−14.43) vs the door
-            // (−46.1,5.9,−23.2)]). Suppress the leg's own return fire on him until the door is
-            // reached — the crossing and the door leg walk CLEAN (the fight's 300-tick
-            // no-damage give-up and the failed-fight cooldown would otherwise park Bond
-            // mid-lane exactly as the lottery stand did). The band stand at the door below is
-            // the walk's own answer.
+            // los-mask-repins-02: the stand is GONE on the sight-corrected tree. The stair top
+            // never exposes the sniper (exposed None on this tree [L the probe + the run: clip
+            // 32 unchanged across the stand]), so the 1200-tick stand only PARKED Bond on the
+            // upper east stretch — and guard #10 (placement 452, rifle, lower west
+            // (-54.6, 5.35, -0.95)) got his sight turn at t12330 mid-park, fired at Bond across
+            // the courtyard and his miss round hit the scared civilian #464 (drone #22) at her
+            // hide spot (-40.6, 6.3, 1.9): ch 0x60 → FAIL_CIVILIANS, the mission ends at t12902
+            // [L the round trace: #10→#22 t12330/t12586/t12598, her hit (weapon 0x12, part 5);
+            // ch 0x60 on + level_exit restart at the stair-bottom leg]. #10's line to an upper-east
+            // Bond passes ~0.5 u from her (inside the ±1.5 miss wobble [M DroneWeap_DoBulletAccuracy
+            // 0x179740:136-148]); from the stair mouth DOWN or the west hall it passes 3+ u south
+            // — the descent must not loiter up there. The sniper himself answers only from inside
+            // the lane band on this tree ("the sniper answered from the band, not the lip" [L]),
+            // so the stair-bottom wait + the band stand at the bunker door stay the plan.
+            arm_fullest(&mut w, "the stair-top arm");
+        }
+        if name == "courtyard lane" && difficulty == 1 {
+            // hear-fold re-tune: the no-dwell crossing the d3 walk already runs, d1-gated so
+            // the d2 RNG timeline is untouched. The repro's leg return-fire dueled the sniper
+            // from the lane mouth at 21.6 u — the measured dead end (25 rifle rounds into the
+            // slit, nothing hit [L the 00agent-02-6 run]) — and the stand parked Bond in her
+            // line band while the sniper's volley killed the civilian: ch 0x60 →
+            // FAIL_CIVILIANS, fail_label 0x4000034, restart [M 0x1827d8:98-107 + ally.rs
+            // FailReason 1/3/6/9 → 0x4000034/0x60; L this task's repro run]. Suppress the
+            // leg's return fire on him until the door band; the crossing walks clean.
             let di = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let bp = sim.bond.pos;
@@ -955,6 +1154,58 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
                 w.dmg.cooldown.push((di, until));
                 status(&w, "the lane crossing: the sniper answered from the band, not the lip");
             }
+        }
+        if name == "courtyard lane" && difficulty >= 3 {
+            // hear-fold re-tune (extends the 02-6 lane suppression): the drawn west-end pair
+            // chips the crossing too — hold fire on EVERY live shooter within 30 u for the
+            // crossing; the band stand at the door is still the answer (the window expires on
+            // the walk in). The 02-3-2/02-6 notes stand: the sniper is exposed only from
+            // inside the lane band, the aimed stand at the lip is a measured dead end (25
+            // rifle rounds into the slit, nothing hit [L the run-1 rf-trace]), and the failed
+            // fight's cooldown would otherwise park Bond mid-lane exactly as the lottery
+            // stand did. The band stand at the door below is the walk's own answer.
+            let di = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
+                        && d.weapon == 0x1e && dxz(d.pos, bp) < 30.0)
+                    .map(|(i, _)| i).next()
+            };
+            if let Some(di) = di {
+                let until = w.total_ticks + 1400;
+                w.dmg.cooldown.retain(|e| e.0 != di);
+                w.dmg.cooldown.push((di, until));
+                status(&w, "the lane crossing: the sniper answered from the band, not the lip");
+            }
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                let hold: Vec<(usize, u32)> = sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
+                        && dxz(d.pos, bp) < 30.0)
+                    .map(|(i, _)| (i, w.total_ticks + 900)).collect();
+                for e in hold { w.dmg.cooldown.retain(|&(ci, _)| ci != e.0); w.dmg.cooldown.push(e); }
+            }
+        }
+        if name == "bunker corridor" && difficulty == 3 {
+            // hear-fold re-tune: the d2 lure shape (join-fix-g) at 00 Agent. The v6 run met the
+            // ambush at 1.8 u INSIDE the corridor and the 32.4-health pool died to two volleys
+            // [L this task's run]. A player pops the sensor, steps back OUT into the courtyard
+            // with the fullest gun, and fights the ambush as it funnels through the door.
+            arm_fullest(&mut w, "the bunker ambush lure");
+            for p in [[-45.7f32, 6.37, -23.4], [-46.7, 6.37, -21.5]] {
+                if ch_on(&w, 0x81) { break; }
+                w.walk_nav_to(p, "the bunker ambush sensor", 0.6);
+            }
+            status(&w, &format!("the bunker ambush sensor (ch 0x81 {})", ch_on(&w, 0x81)));
+            w.lenient = true;
+            w.walk_to(Wp::new(-45.7, 6.37, -23.4).r(0.6), "the bunker ambush step out");
+            w.walk_to(Wp::new(-40.0, 5.5, -22.6).r(0.8), "the bunker ambush courtyard stand");
+            w.lenient = false;
+            status(&w, "the bunker ambush courtyard stand");
+            clear_pursuers(&mut w, 16.0, "bunker ambush (courtyard)");
+            reload_full(&mut w);
         }
         if name == "bunker corridor" && difficulty == 2 {
             // join-fix-g (Agent only): on the joined tree the walk reaches the bunker at ~47
@@ -981,6 +1232,23 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         leg_to(&mut w, at, name, 1.6);
         status(&w, name);
         if difficulty >= 3 && name == "stair bottom" {
+            // los-mask-repins-02-2: THE CIVILIAN PIN at the spot the old fail landed. The scared
+            // civilian (placement #464, team 3, death channel 0x60 [D census]) must be alive
+            // here — the mission fails whatever the killer the moment her death channel rises
+            // [M 0x1827d8:98-107 the FAIL_CIVILIANS read; ally.rs on_init_death: a guard's kill
+            // still raises the death channel]. The fix that keeps her alive is the silenced
+            // geisha-1 duel above (the west-end rifles #452/#453 hear only within their 50-u
+            // gate [M 0x177800] and the P99's 0x403 shot is silent past its outer 40 [D
+            // sound.md] — without it they converged onto the lane's sight lines and #11's miss
+            // round killed her at t12239 [L the 1b-2-era ledger + this round's traces]); the
+            // round-hit trace empty at this point is that silence's own proof.
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                assert!(!sim.drones.channels.on(0x60),
+                    "the scared civilian is alive at the stair bottom (ch 0x60 off) [M 0x1827d8:98-107; D census #464]");
+                assert!(sim.drones.drone_round_hits.is_empty(),
+                    "no guard round has hit any drone on the route to the stair bottom (the west-end rifles never opened fire across the lane) [L the silenced-duel runs]");
+            }
             // THE PROTECTED-CIVILIAN WAIT (level-02-castle-00agent), BEFORE the scoop: the scared
             // civilian (placement #464, skin 0x5000034, team 3, death channel 0x60 [D census])
             // hides at (−40.3, 6.3, 2.1) — 3.8 u north of the lane mouth, INSIDE the sniper's
@@ -1009,6 +1277,23 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
                 quiet += 1;
             }
             status(&w, &format!("the stair-bottom sniper wait (first round anchored at +{quiet})"));
+            // hear-fold re-tune: hold the walk's own fire through the scoop/arm/crossing window —
+            // the drawn west-end pair (#10/#11, the shotgun noise's guests) chip Bond across the
+            // courtyard while he resupplies and crosses (10.6 + 9.0 in the v6 run's ledger [L]).
+            // Their lines to the stair bottom pass 6.3+ u south of the scared civilian; holding
+            // fire costs nothing but their own chips.
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                let hold: Vec<(usize, u32)> = sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
+                        && dxz(d.pos, bp) < 40.0)
+                    .map(|(i, _)| (i, w.total_ticks + 700)).collect();
+                for e in hold { w.dmg.cooldown.retain(|&(ci, _)| ci != e.0); w.dmg.cooldown.push(e); }
+            }
+            // hear-fold re-tune: the discipline ends here — the deliberate lane-shotgun arm is
+            // the crossing's own weapon (the west-end pair has had no shots to hear).
+            QUIET_DISCIPLINE.with(|c| c.set(false));
             // 00 Agent (real-health-00agent-02-03-2 + 02-5): the scoop ONLY — no rearm, no
             // stand. The sniper's window opens only from inside the lane (the stair-top and
             // bottom stands both gave up on aim None [L the run-4/5 traces]), so every tick at
@@ -1026,6 +1311,16 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             // measurement is the payoff: the leg's engage_in_view met the sniper EXPOSED at
             // 13.2 u and one shell took him 12.0 → 2.0 — the band kills him without any stand.
             arm_weapon(&mut w, 0x1c, "the lane shotgun");
+        }
+        if difficulty == 1 && name == "stair bottom" {
+            // hear-fold re-tune: the civilian pin at the spot her line band begins — the
+            // fail the repro died of one leg later. The fail channel read [M 0x1827d8:98-107];
+            // her death channel 0x60 [D census #464].
+            let sim = w.scene.sim.as_ref().unwrap();
+            assert!(!sim.drones.channels.on(0x60),
+                "the scared civilian is alive at the stair bottom (ch 0x60 off) [M 0x1827d8:98-107; D census #464]");
+            drop(sim);
+            status(&w, "the stair bottom (d1): the civilian lives");
         }
         if difficulty >= 3 && name == "courtyard lane" {
             // real-health-00agent-02-6: NO dwell at the mouth — the old scoop+arm_fullest+duel
@@ -1572,7 +1867,7 @@ fn walk_the_castle_all_objectives_real_health_agent() {
 /// no-dwell lane crossing with the sniper suppressed (`dmg.cooldown` until the door leg), and
 /// the ≤12-u band stand at the bunker door (10.3 u from the post) + the corridor rearm.
 #[test]
-#[ignore = "los-mask-repins-02: the mission ends (level_exit) on the stair-bottom leg at tick 12902 and the doorway sensor's ch 0x81 never rises; cause not traced"]
+#[ignore = "re-tune in flight (20-level-02-castle-walks-hearing): the give-ground shape survives the geisha-1 mob, the wing armour and the crossing, and dies at the bunker ambush courtyard stand (v10: pool 21.6, the drawn west-end pair #10/#11's 30.4 of chips). THE NEXT LEVER is the opt-in shared-helper flag (lesson 7): the walker's own return_fire/resupply inside damage_log.rs re-arms the loudest wheel pick during the retreat legs — the leg fights' shotgun shots are what draw the pair (the file-local QUIET_DISCIPLINE covers only the file's own helpers, and the v10 timeline is tick-identical to v9 through the crossing, the leak's proof). Add `pub quiet_rearm: bool` to DamageLog (default false, set only by this walk), check it at damage_log.rs's arming sites, run EVERY walkreal_*_live, then re-run this walk"]
 fn walk_the_castle_all_objectives_real_health_00agent() {
     walk_the_castle_all_objectives_real_health_at(3);
 }
@@ -1684,7 +1979,7 @@ fn courtyard_sniper_pin_stair_bottom_agent() {
         // real-fire clear, then the rescue's channel.
         let g1 = geisha(&w, 0x49).expect("geisha 1 [D]");
         let at = w.scene.sim.as_ref().unwrap().drones.list[g1].pos;
-        clear_captors_real(&mut w, at, "pin geisha 1", false);
+        clear_captors_real(&mut w, at, "pin geisha 1", false, false);
         for _ in 0..240 {
             if ch_on(&w, 0x49) { break; }
             w.tick(Default::default(), false);
@@ -1702,7 +1997,7 @@ fn courtyard_sniper_pin_stair_bottom_agent() {
     {
         let g1 = geisha(&w, 0x49).expect("geisha 1 [D]");
         let at = w.scene.sim.as_ref().unwrap().drones.list[g1].pos;
-        clear_captors_real(&mut w, at, "pin the saved geisha", false);
+        clear_captors_real(&mut w, at, "pin the saved geisha", false, false);
     }
     clear_pursuers(&mut w, 16.0, "pin after the geisha-1 room");
 
@@ -1714,6 +2009,12 @@ fn courtyard_sniper_pin_stair_bottom_agent() {
     let shots_at_snapshot = w.scene.sim.as_ref().unwrap().drones.list.iter()
         .find(|d| d.weapon == 0x1e && d.health > 0.0 && !d.corpse)
         .map(|d| d.shots.len()).unwrap_or(0);
+    // Back to the ch-0x17 plate first: with the guards' aim stop (Drone+0x38) the captor fight
+    // ends with Bond up at (-39.2, 6.96, 3.6), and the nav leg from there to the stair wedged
+    // 7 x 3000 ticks against the wing's x -36.8 wall (z 8-12) while #10 and the sniper bled him.
+    w.lenient = true;
+    w.walk_nav_to([-35.2, 6.5, 4.6], "pin back to the ch-0x17 plate", 1.0);
+    w.lenient = false;
     leg_to(&mut w, [-36.7, 5.9, 1.0], "pin west wing stair", 1.6);
     leg_to(&mut w, [-36.9, 5.5, -1.5], "pin stair bottom", 1.6);
     status(&w, "pin stair bottom — the stand begins");

@@ -81,6 +81,10 @@ fn enter_arms(src: &str) -> Vec<(Vec<String>, String)> {
 
 /// (port state const, decomp cite) — the game's ENTER writes `+0x4F8 |= 0x10000` at that address.
 const REQUIRED: &[(&str, &str)] = &[
+    // guard-castle-chat-gate-2: the castle chat pair's states got port arms (both ENTERs set
+    // vision_on [M 0x1612e0:21 case 1's +0x4F8 |= 0x10000; 0x162338:20 case 1's same])
+    ("CASTLE_CHAT_GUARD1", "0x1612e0:21"),
+    ("INTEROGATE_WALK", "0x162338:20"),
     // round 2 + earlier: the scripted and the abseil families
     ("PLAY_SCRIPT", "0x15ba68:24"),
     ("IDLE", "0x15bf18:30"),
@@ -220,8 +224,6 @@ const REQUIRED: &[(&str, &str)] = &[
 /// Writer states the port has no handler for yet ([M] each is a census writer). When one gets an
 /// arm, this list fails — move it to REQUIRED with `vision_on = true` on the new ENTER.
 const NOT_IMPLEMENTED: &[(&str, &str)] = &[
-    ("CASTLE_CHAT_GUARD1", "0x1612e0:21"),
-    ("INTEROGATE_WALK", "0x162338:20"),
     ("COMBAT_TOO_CLOSE", "0x173338:12"),
     ("OBSTRUCTED", "0x173390:14"),
     ("AIM_STAND_DISCARD", "0x166840:15"),

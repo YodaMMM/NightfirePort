@@ -161,22 +161,28 @@ fn the_spot_ray_passes_bond_and_the_light_stays_unarmed() {
     }
 }
 
-/// Sister (the regression gate for the enabled idle guards): a same-floor idle guard on 07000006 sees
+/// Sister (the regression gate for the enabled guards): a same-floor enabled guard on 07000006 sees
 /// Bond within seconds, alerts and attacks — the enabled-guard AI the C2 waiters must not be confused
-/// with (their statues are DISABLED drones, not idle guards).
+/// with (their statues are DISABLED drones, not idle guards). The guard is placement 487, the chat
+/// pair's north guard: the decompile-correct state is CastleChatGuard1 0x36 (the placement's
+/// start-script special 0x06000124 gives mode 0x18 [M 0x14c600:147-158 + 0x15ba68:26-30; D census])
+/// — the old "enabled IDLE" read predates the chat-states port, and the game's own chat state runs
+/// the same EnemyLookForOpponent see-alert-attack AI [M 0x1612e0:44-52].
 #[test]
-fn an_idle_gate_guard_sees_and_attacks_bond_on_the_same_floor() {
+fn an_enabled_gate_guard_sees_and_attacks_bond_on_the_same_floor() {
     let Some(_) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load("07000006.bin");
     let (saw, attacked) = {
         let sim = scene.sim.as_mut().unwrap();
         for _ in 0..3000 { sim.step_bond(Input::default(), false, false, false); }
-        // The idle gate guards (placements 487/488, the pre-gate list[15]/[16]): enabled IDLE with no
-        // switch channel on the spawn floor (39). Drone_Create's min-difficulty gate [M 0x136be0:49]
-        // holds back 07000006's six param2=2 placements (442/447/635/648/680/704) at the direct load's
-        // difficulty 1, so the guard sits at list[13] (the d1 roster order, verified by probe).
-        assert!(sim.drones.list[13].present && sim.drones.list[13].enabled && sim.drones.list[13].state == nf_game::drone::state::IDLE,
-            "the idle gate guard (placement 487) is an enabled idle guard");
+        // The gate guard (placement 487, the chat pair's north guard): enabled, in CastleChatGuard1
+        // 0x36 from tick 1 (mode 0x18 via the placement's start-script special [M 0x14c600:147-158 +
+        // 0x15ba68:26-30; D census param 1 = 0x06000124]). Drone_Create's min-difficulty gate
+        // [M 0x136be0:49] holds back 07000006's six param2=2 placements (442/447/635/648/680/704)
+        // at the direct load's difficulty 1, so the guard sits at list[13] (the d1 roster order).
+        assert!(sim.drones.list[13].present && sim.drones.list[13].enabled
+            && sim.drones.list[13].state == nf_game::drone::state::CASTLE_CHAT_GUARD1,
+            "the gate guard (placement 487) is enabled in CastleChatGuard1 0x36 [M 0x14c600:147-158 + 0x15ba68:26-30]");
         let d15_idx = 13;
         sim.bond = nf_game::player::Bond::stand_at(&sim.world, [33.5, 39.0, 22.5], 0.0);
         let mut saw = false; let mut attacked = false;
@@ -184,12 +190,12 @@ fn an_idle_gate_guard_sees_and_attacks_bond_on_the_same_floor() {
             sim.step_bond(Input::default(), false, false, false);
             let d15 = &sim.drones.list[d15_idx];
             if d15.los { saw = true; }
-            if d15.state != nf_game::drone::state::IDLE && d15.alert >= 1.0 { attacked = true; }
+            if d15.state != nf_game::drone::state::CASTLE_CHAT_GUARD1 && d15.alert >= 1.0 { attacked = true; }
         }
         (saw, attacked)
     };
-    assert!(saw, "the idle guard's sight pass runs (vision_on via the IDLE enter, 0x15bf18:30)");
-    assert!(attacked, "the idle guard alerts and leaves IDLE for combat (EnemyLookForOpponent → 0x56, 0x177ed0)");
+    assert!(saw, "the gate guard's sight pass runs (vision_on via the CastleChatGuard1 enter [M 0x1612e0:21])");
+    assert!(attacked, "the gate guard alerts and leaves the chat for combat (EnemyLookForOpponent [M 0x1612e0:44-52] → the alert group 0x1612e0:83-98)");
 }
 
 /// The 07000007 guest retest: fix_drone4's walk (`a_party_guest_walks_her_mission_route`)

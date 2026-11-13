@@ -228,7 +228,14 @@ fn a_tower_guard_outside_his_civilian_states_can_attack_on_sight() {
     let sim = s.sim.as_ref().unwrap();
     let d = sim.data();
     let mut g = drone(sim, "a tower guard", |x, d| x.team == 3 && x.prop(d, 0x3c));
-    g.state = state::ALERT; g.seen = true; g.alert = 0.9; g.sighted = false; g.log.clear();
+    // The game's gate is the per-tick sight bit +0x228 & 4 [M 0x177ed0:26-28], set in
+    // HaveOpponentSight only while the accumulated sight (+0x270) holds past the reaction
+    // time [M 0x175ef0:41-44] on a tick whose LOS ray (bit 2) held, and cleared with the
+    // counter reset on the first pass without it [M 0x176a28:200-202] — the port models the
+    // bit as `los && seen_ticks >= reaction_time` (guard-castle-chat-gate). The old setup
+    // (`seen = true`, the ever-sighted latch) does not reach the gate: corrected to the
+    // held-sight state (guard-castle-chat-gate-3).
+    g.state = state::ALERT; g.los = true; g.seen_ticks = 600; g.alert = 0.9; g.sighted = false; g.log.clear();
     g.send(&d, &mut Rng::new(7), 500, msg::UPDATE);
     assert!(g.own_sight, "the sighting landed [M 0x177ed0:76-80]; log {:?}", g.log);
 }

@@ -162,6 +162,15 @@ fn walk_the_full_mission_start_to_finish_at(difficulty: u32) {
             "the take raised armour from 0 to 50 [M 0x18e650:220-225]; the settled assassin's bullet-type pain may chip it on the walk (48.5 measured) — the raise itself is the [M] claim");
     }
     }
+    // 00 Agent takes the body armour first (+50 [M 0x18e650:220-225]): since the cut-scene hand-back
+    // reaches the drones on the release tick (handback-opp-info), the assassin flips AWAY and throws
+    // from 4-6 u like the game [L PCSX2 07000004 d1 trace] instead of landing beside Bond, and on
+    // 00 Agent her ranged hits (Plr_DMod_Hard 1.2) win the straight trade. A player grabs the
+    // armour case 16 u away first. Real input only.
+    if difficulty >= 3 {
+        let armour = w.scene.sim.as_ref().unwrap().drones.pickups.iter().find(|p| p.kind == 3 && !p.gone).map(|p| p.start);
+        if let Some(a) = armour { w.walk_nav_to(a, "the armour pickup (00 Agent)", 0.4); }
+    }
     // The assassination: walk back to the target and kill him with the player's own fire path.
     let target_i = w.scene.sim.as_ref().unwrap().drones.list.iter()
         .position(|d| d.skin == 0x0500_001e).expect("the target drone exists");
@@ -910,8 +919,15 @@ fn walk_the_full_mission_start_to_finish_real_damage_agent() {
 /// autoaim bit closes at 00 Agent (Autoaim_HardMul 0) [M Player_HandlePain 0x1902c8;
 /// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 01-04 group]. Real input only — the
 /// load path is the only difference.
+/// GREEN, UN-IGNORED (real-health-00agent-04, 2026-11-11 [L the runs on this tree, master
+/// c3e09cb2f]): the note's trade loss (Bond dies at tick 1627, 32 hits for 100.0, with her at
+/// 24) does NOT reproduce on the merged master — the single `--ignored` run passes in 1.1 s
+/// and the whole binary with `--include-ignored` is 10 passed / 0 failed / 0 ignored. The
+/// armour-first and cover levers the note named are NOT needed: the trade already wins under
+/// master's merged commits between this test's ledger round (1f6d00bc1) and now (the
+/// body-solidity 0a9d39435, the guards/glass/copters rules 2998b6a76 and the cut-scene-lines
+/// 74ee9b749 are the [S] candidates; the exact fixer is not bisected this window).
 #[test]
-#[ignore = "00 Agent: she fires at accuracy byte 0 [M 0x14b300:752] and the walker's P2K stand loses the trade by a few rounds: Bond dies at tick 1627, 32 hits for 100.0, with her at 24; the stand needs cover or the armour first"]
 fn walk_the_full_mission_start_to_finish_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_full_mission_start_to_finish_at(3));
 }

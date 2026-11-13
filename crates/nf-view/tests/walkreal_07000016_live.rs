@@ -2370,6 +2370,15 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(difficulty: u
             // this pickup; the walk-over take [M Pickup_Handler 0x18e650], arrive 0.6 — the
             // take's radius is under a unit [M]). The floor target y (the walk's plane), the
             // placement's −22.97 is the box's own rest.
+            // From the room's north side (with the guards' aim stop (Drone+0x38) the pit fight
+            // ends with Bond at (-17.0, -168.1)) every hop toward the armour slid along a wall
+            // out to (-10.5, -182) for the 3000-tick cap and pulse 2 caught him outside: the
+            // room's own stand (the shelter route's last point) first, then the armour.
+            if w.scene.sim.as_ref().unwrap().bond.pos[2] > -169.5 {
+                w.lenient = true;
+                w.walk_to(walker::Wp { at: [-15.2, -22.0, -170.4], act: walker::Act::None, arrive: 0.8 }, "the blast room stand (before the armour)");
+                w.lenient = false;
+            }
             w.walk_nav_to([-14.41, -22.0, -172.75], "the pit-room armour #648 [D]", 0.6);
             let spots: Vec<[f32; 3]> = {
                 let sim = w.scene.sim.as_ref().unwrap();
