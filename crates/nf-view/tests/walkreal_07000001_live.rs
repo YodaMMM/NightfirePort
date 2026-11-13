@@ -1812,6 +1812,37 @@ fn peek_fire(w: &mut Walker, g: usize) -> Option<bool> {
         if d.corpse || d.health <= 0.0 { Some(true) } else { None }
 }
 
+/// The peek stand approach, bounded (aim-stop-01): steer at the stand like walk_to's plain leg,
+/// but stop early — Bond reached the 0.55 band, stalled (no closing progress for 60 ticks: a
+/// guard's capsule crossed into the mouth), or after 240 ticks. The full walk_to leg would
+/// grind the capsule to the 3000-tick lenient cap under point-blank fire [L the aim-stop-01
+/// run: the #7 captain trade]; the return-fire answering keeps running inside `tick`.
+fn bounded_peek_walk(w: &mut Walker, stand: V3) -> bool {
+    let mut best = walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, stand);
+    let mut stalled = 0u32;
+    for _ in 0..240u32 {
+        let (input, arrived) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let d = walker::dxz(bp, stand);
+            if d <= 0.55 { (Input::default(), true) } else {
+                let desired = (stand[0] - bp[0]).atan2(stand[2] - bp[2]);
+                let err = walker::wrap_pi(desired - sim.bond.yaw);
+                (Input { turn: err.clamp(-0.07, 0.07), forward: if d > 2.2 { 1.0 } else { 0.45 }, ..Default::default() }, false)
+            }
+        };
+        if arrived { return true; }
+        w.tick(input, false);
+        if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { return false; }
+        let d = walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, stand);
+        if d < best - 0.02 { best = d; stalled = 0; } else {
+            stalled += 1;
+            if stalled >= 60 { return false; }
+        }
+    }
+    walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, stand) <= 0.55
+}
+
 /// Agent hall door, a guard across the aperture that the hold line cannot see (he side-steps
 /// behind the jamb, z 14-18): a player leans to the angle that sees him, from the meet-room side
 /// of the door plane. The stand is the nearest spot south of the door (z 8.4-10.8, x 6.0-9.8)
@@ -1890,7 +1921,32 @@ fn door_peek_fight(w: &mut Walker, g: usize, tag: &str) -> bool {
         eprintln!("[01] {tag}: peek stand {round} at ({:.1},{:.1}) for guard {g} at {:?}", stand[0], stand[2],
             w.scene.sim.as_ref().unwrap().drones.list[g].pos);
         w.lenient = true;
-        w.walk_to(Wp::new(stand[0], stand[1], stand[2]).r(0.3), &format!("{tag} peek {round}"));
+        // aim-stop-01: the stand approach is BOUNDED. A guard crossing the mouth mid-walk turns
+        // the leg into a point-blank capsule fight: the #7 captain ground the leg 0.72 u short
+        // for 37.8 in 9 hits (the ×2 band at ~1.5 u), then his corpse held the wedge to the
+        // 3000-tick cap [L the aim-stop-01 run]. A player who bumps a body in the doorway steps
+        // back out of the pellet line and answers from the frame instead of pressing.
+        if !bounded_peek_walk(w, stand) {
+            eprintln!("[01] {tag}: peek {round} approach stalled (a body in the mouth) — back to the hold line");
+            w.walk_to(Wp::new(hold[0], hold[1], hold[2]).r(0.5), &format!("{tag} peek back {round}"));
+            w.lenient = false;
+            // Answer whoever shows from the hold line (the no-stand arm's fight): the blocker
+            // (the #7 captain at the mouth in the run) is fought from the frame, not traded with.
+            let other = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| i != g).find(|&i| {
+                    let o = &sim.drones.list[i];
+                    o.team == 1 && o.enabled && o.present && !o.corpse && o.health > 0.0
+                        && walker::dxz(o.pos, bp) < 14.0 && w.exposed_aim(i).is_some()
+                })
+            };
+            if let Some(o) = other {
+                eprintln!("[01] {tag}: peek {round} blocked — #{o} shows from the hold line, answering him");
+                if peek_fire(w, o) == Some(false) { return false; }
+            }
+            continue;
+        }
         w.lenient = false;
         match peek_fire(w, g) {
             Some(true) => return true,
@@ -2210,7 +2266,12 @@ fn following_mayhew_down_completes_the_level() {
     // /tmp of the guard-standing-capsule-2 session]). A player escorting clears the shooters'
     // end of the hall BEFORE the contact crosses it: fight them now, farthest (the burst
     // line) first, while the contact still waits east of the crossfire; band 20 (the 14 band
-    // missed #15 at dxz 14.8). Fight order only — the contact's rules are untouched.
+    // missed #15 at dxz 14.8). With the AimStandFire root stop live on 01 (zero_root_live
+    // 0x01) the west-end holders #15/#4 stop dead to shoot at (-30.5, 6.3, 13.5) and fire the
+    // length of the hall at the waiting contact 28 u off (hit_by_drone 15 at t5708: 10.0 ->
+    // 2.5; #4 finished him at t10021 [L the aim-stop-01 measurement]) — the band widens to
+    // 30 so the pair is listed and fought (still farthest first) before the follow begins.
+    // Fight order only — the contact's rules are untouched.
     {
         let guards: Vec<usize> = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -2219,7 +2280,7 @@ fn following_mayhew_down_completes_the_level() {
                 let d = &sim.drones.list[i];
                 i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
                     && ((2..0x47).contains(&d.weapon) || (0x6a..=0x71).contains(&d.weapon))
-                    && walker::dxz(d.pos, cp) < 20.0 && !cleared.contains(&i)
+                    && walker::dxz(d.pos, cp) < 30.0 && !cleared.contains(&i)
             }).collect();
             g.sort_by(|&a, &b| {
                 let da = walker::dxz(sim.drones.list[a].pos, cp);
