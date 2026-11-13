@@ -51,3 +51,8 @@ Work log:
   0x1249e8:98/0x14c600/0x14c938-case-0x10 chain) taken in every conflicted hunk; the auto-merge
   had left the branch's old 0.75 in the shared `let to` block — fixed to master's `* reach`.
   nf-game --lib 794/0/4 on the merged tree.
+- (final) the battery: every mp_*_live binary one per tool call on the merged tree — 40 nf-view
+  binaries (159 tests) + nf-game mp_arenas_live 1 + mp_map_objects_live 4, all green; the site
+  pin demolition_site_holder_turns_to_an_opponent passes; mp_perf_16 re-pinned once for the
+  merged tree (42 kills, 0x4b0f0d0e0dbee72b). mp_stress_explosives_live not attempted (sandbox
+  memory SIGKILL precedent from the base branch and the last two sessions).
