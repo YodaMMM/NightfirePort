@@ -1214,7 +1214,13 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                             let s = [eye[0] + (ge[0] - eye[0]) * t, eye[1] + (ge[1] - eye[1]) * t, eye[2] + (ge[2] - eye[2]) * t];
                             format!("stop {t:.2} at ({:.1},{:.1},{:.1})", s[0], s[1], s[2])
                         }).unwrap_or_else(|| "CLEAR".into());
-                        eprintln!("[0b-ray] t{} bond ({:.1},{:.1},{:.1}) → g{gi} d {:.1}: {}", w.total_ticks, eye[0], eye[1], eye[2], walker::dxz(g.pos, p), stop);
+                        // real-health-00agent-0b-deck-2: the SECOND ray set beside the world ray —
+                        // the hit-box eye-ray census (`DamageLog::visible`) and the world-ray
+                        // spine ladder's own answer — the two sets the ledger's next-lever
+                        // note asks to compare from the crossing spots. Diag only.
+                        let vis = walker::DamageLog::visible(sim, gi);
+                        let wrp = walker::DamageLog::world_ray_point(sim, gi).map(|a| format!("({:.1},{:.1},{:.1})", a[0], a[1], a[2])).unwrap_or_else(|| "none".into());
+                        eprintln!("[0b-ray] t{} bond ({:.1},{:.1},{:.1}) → g{gi} d {:.1}: {} visible {vis} world_ray_aim {wrp}", w.total_ticks, eye[0], eye[1], eye[2], walker::dxz(g.pos, p), stop);
                     }
                 }
             }
@@ -1940,14 +1946,43 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage_agent() {
 /// hp 15.1) → the post-take r4 (t16753) → the drive → the jump. The second stretch round stays
 /// the muzzle-zone kill (capped at one); the ring-turret 16.0 world toll stays the fusebox
 /// task's.
+/// real-health-00agent-0b-deck-2 (2026-11-13, master 80ebf43c9): UN-IGNORED — GREEN (twice,
+/// byte-identical: mission complete t18215, stuck 0, falls 1, end health 25.5, 18 hits for
+/// 74.5). The lever is THE WORLD-RAY FIGHTS (opt-in `world_ray_fights`, this walk only — the
+/// d1/d2 sisters keep their committed streams byte-identical): the 2026-11-13 census run
+/// answered the ledger's next-lever note — the hit-box eye-ray sets answer NONE of the roof
+/// band from the crossing while the world segment_bullet spine rays read CLEAR to #6/#8/#9
+/// ([L the [0b-ray] lines t17109/17139/17428: g6 CLEAR x3, g8 CLEAR/CLEAR/stop-0.21, g9
+/// stop-0.86/stop-0.89/CLEAR — and the census print's `visible` column: the PLAIN eye-ray set
+/// reads true where the fights' gun-ray set reads false, the rounds leave low-right of the eye
+/// [M the lane-fight note in damage_log.rs]), so the disc's own reachability law is the
+/// flight's (a round spawns along the CROSSHAIR ray [M 0x1a4bf0:226-245] and hits iff the ray
+/// enters a box before the world stop [M 0x1ea398:216-229]) and the fight pick widens to the
+/// world-ray spine ladder. On master 80ebf43c9 the fights machinery PICKS from the crossing
+/// anyway (the lane arm's unseen fallback — the ledger's "no pick" is stale on this tree): the
+/// no-flag run stands the unseen shooters at d 31-40 and dies t17600 (24 hits for 100.0, 5
+/// fights, the stands drew the volleys — a still target cuts no roll [M 0x179740
+/// DroneFiring_TargetMoving_Accuracy]). With the flag the fights open ON the world-ray set and
+/// the in-hand 0x2e rockets fly down the crosshair aim — the chase detonations WIPE THE BAND
+/// (#4 hp -60, #6/#7/#8/#9 hp 0 at the latch [L the run4 death-log owner lines]) and the walk
+/// crosses at 25.5. MEASURED-NOT-SHIPPED: a dart-rearm variant (the fights cycle to the K5
+/// 0x43 first) landed the sleeps FASTER (#7 t17258, #4 t17347 — both killed true) and died
+/// HARDER (t17624): the dart sleeps hold only ~144 ticks before a team-1 wake [M 0x147188
+/// k=60; L the ring sleeps #1/#3] — the wakes re-armed the shooters and the chained fights
+/// stood Bond at the deck entry (take-dist 43.6 through three fights) until the band chewed
+/// him; the rocket fights END (the hp 10-20 band dies to one blast) where the dart fights
+/// only pause. The 3 darts stay the walk's own close/fire-on-move ammo. The [0b-ray] diag now
+/// prints the census columns (visible + the world-ray spine aim) beside the world ray.
 #[test]
-#[ignore = "re-tune ledger (level-0b-deck-agent-retune, 2026-11-13, master b1fd37ee2 after the files-plate shift): the deck phase moved ~+700 ticks and the roof squad's spawn order changed — #5 is NOT present at the deck entry ([L d3run1 t17199: g5 absent]) so the early r1 aims band_pick #6 and the nearest-seekable lock takes #4 ([L d3run1 flight: target Some(4) every print]); on THIS tree the 0x2e round never detonates — it chased #4 past the parachute housing (travelled 40.0, still flying at the death tick 17415), so the sprint-10 six-round window is structurally jammed: `!flying` held every follow-up forever, band_shot stuck 1 < cap 6 kept the rocket in hand (no 0x43 switch-back, no dart close, no fights) and Bond died at 17415 (-3.45, 58.07, 19.89), 22 hits for 100.0 (36.0 world in 9, 35.0 #4 0x18 in 5, 8.0 #5, 7.0 #1, 7.0 #9). LEVERS LANDED (both gated difficulty3; d1/d2 streams byte-identical, verified): (1) THE JAM CLOSE — a spend with no new spend for 100 ticks closes the window so the d1/d2 package runs (0x43 armed by t17349, the close/fights live); alone it dies EARLIER (t17389: the 40-tick switch bought the #6/#7 hits the old tree's detonations used to pay for). (2) THE DECK FIGHT CALL — the fights machinery was never wired into the hand-rolled deck loop (the walk_to legs own it): wired d3-only, no pick happened ([L d3run4: still only the 2 E-plate fights]) because no candidate is VISIBLE from the crossing. d2 itself is GREEN on this tree (twice, deterministic: mission complete t17886, hp 1.2, 27 hits — the d1/d2 route carries 5.6/hit 0x18s; d3 pays 1.25x, Plr_DMod_Hard 1.0 vs Normal 0.8 [M Player_HandlePain 0x1902c8]) with ZERO margin. NEXT LEVER: the fight pick needs a VISIBLE candidate — the [0b-ray] world segment_bullet rays to #6/#8/#9 read CLEAR from the crossing (t17229-17379) but DamageLog::visible (the hit-box eye-ray set) says none; census the two ray sets from the crossing spots (NF_RF_TRACE=1 + the [0b-ray] map), then either widen the fight's reach to the world-ray set (opt-in flag, d3 only) or shift the P2 aim so a fight opens from a visible spot; the dart sleep on the dartable #4 (state 0x68 dartable true [L t17199]) saves the 35.0/5-hits and flips the margin. Live checks: (1) the 0x2e flight law — Bullet_init 0x12c5a0's speed/fuse fields for 0x2e [M the record walk]: does the disc's heatseeker round time out or detonate on chase-proximity (the port's round chased 40 u without detonating [L d3run1])? (2) from the crossing (-6.9, 58.8, 18.8) does a real player's eye ray reach #4 (1.62, 59.2, 32.11) — the port's visible() says no while the world segment_bullet says clear"]
 fn walk_fresh_spawn_to_the_mission_end_real_damage_00agent() {
     walker::with_real_damage(|| {
         let mut w = load_fresh_at(3);
         w.dmg.lane_fights = true;
         w.dmg.back_off = Some(3.0);
         w.dmg.tranq_fights = true;
+        // real-health-00agent-0b-deck-2: the deck crossing's fight lever (d3 only — the d1/d2
+        // sisters do not set it, their streams stay byte-identical).
+        w.dmg.world_ray_fights = true;
         fresh_boot_asserts(&w);
         walk_to_the_mission_end(&mut w, true, true, false);
     });
