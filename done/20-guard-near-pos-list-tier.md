@@ -25,3 +25,6 @@ claimed-by: sandbox1 at 2026-11-12T19:26Z
 ## Report (done, 2026-11-13T01:32Z)
 
 Closed by the driver: the report is on `s/guard-near-pos-list-tier` (docs/reports/guard-near-pos-list-tier.md); the worker didn't run finish.sh.
+
+---
+Merged (squash, docs dropped): master 2265b403e.

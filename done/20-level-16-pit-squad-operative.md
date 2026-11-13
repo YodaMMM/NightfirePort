@@ -172,3 +172,6 @@ these are the checks that would independently confirm the accuracy path on a FRE
 
 not visible to me — this session exposes no token, context-window or cost figures anywhere I
 can read.
+
+---
+Merged (squash, docs dropped): master 2265b403e.
