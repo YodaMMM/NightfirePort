@@ -744,6 +744,54 @@ impl Walker {
     /// units away, which is the guardroom-guard "invulnerability" the 07000006 walkreal fought
     /// (probe_guard438 evidence, level-06-guardroom-guard).
     pub fn switch_to_armed(&mut self, label: &str) -> bool {
+        // quiet_rearm (opt-in, the 07000002 00 Agent walk, the hearing fold): the discipline's
+        // shared arm — the silenced P99 (0x02) ends the cycle when the wheel carries it with
+        // rounds (the game's own weapon cycle; the same law the 02 file's QUIET_DISCIPLINE
+        // helpers apply to their own re-arms). The plain cycle's loudest pick would put a
+        // guard's dropped 0x1c in hand and its shots re-run the west-end rifles' measured
+        // alert chain (los-mask-repins-02-2). GATED ON THE P99'S OWN ROUNDS (the v11 lesson:
+        // an unconditional sweep cycled AWAY from the armed 0x1c hunting a dry P99, wedged on
+        // the 0x47 gadget slot — the gadget's draw eats the presses — and left the wheel dry:
+        // the fight was skipped and Bond died standing at tick 12424): the inventory is read
+        // first and NO press happens unless the P99 is owned with rounds somewhere (the clip
+        // slot or the carried ammo); then the sweep stops on it, with a same-weapon break so
+        // a wedged draw cannot eat the bound. Otherwise the plain cycle below runs untouched
+        // (any armed gun still beats the cuffs; the flag is false everywhere else).
+        if self.dmg.quiet_rearm {
+            let p99_ready = {
+                let sim = self.scene.sim.as_ref().unwrap();
+                let inv = &sim.drones.inventory;
+                let in_hand = sim.gun.weapon == 0x02 && sim.gun.clip + sim.gun.spare > 0;
+                let owned = inv.owned.get(0x02).copied().unwrap_or(false) && {
+                    let slot = nf_game::pickup::Inventory::clip_slot(&sim.weapons, 0x02);
+                    inv.clip.get(slot).copied().unwrap_or(0) > 0
+                        || inv.carried.get(sim.weapons.ammo_type(0x02)).copied().unwrap_or(0) > 0
+                };
+                in_hand || owned
+            };
+            if p99_ready {
+                let mut last = 0u8;
+                for k in 0..12 {
+                    let (w, c, s) = {
+                        let sim = self.scene.sim.as_ref().unwrap();
+                        (sim.gun.weapon, sim.gun.clip, sim.gun.spare)
+                    };
+                    if w == 0x02 && c + s > 0 { return true; }
+                    eprintln!("[walk] {label}: cycling to the silenced P99 ({k}) (weapon {w:#x} clip {c} spare {s})");
+                    self.tick(Input { weapon_cycle: 1, ..Default::default() }, false);
+                    for _ in 0..60 { self.tick(Input::default(), false); } // the holster/draw cycle
+                    let now = { let sim = self.scene.sim.as_ref().unwrap(); sim.gun.weapon };
+                    if now == last { eprintln!("[walk] {label}: the wheel cycle wedged on {now:#x} — the plain armed cycle"); break; }
+                    last = now;
+                }
+                {
+                    let sim = self.scene.sim.as_ref().unwrap();
+                    let (w, c, s) = (sim.gun.weapon, sim.gun.clip, sim.gun.spare);
+                    if w == 0x02 && c + s > 0 { return true; }
+                    eprintln!("[walk] {label}: the silenced P99 never came up ({w:#x} clip {c} spare {s}) — the plain armed cycle");
+                }
+            }
+        }
         for k in 0..12 {
             let (w, c, s) = {
                 let sim = self.scene.sim.as_ref().unwrap();

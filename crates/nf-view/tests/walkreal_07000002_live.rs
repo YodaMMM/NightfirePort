@@ -807,8 +807,16 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         // stair-top arm); the duel itself rides the 28 P99 rounds on head shots.
         arm_weapon(&mut w, 0x02, "the silenced geisha-1 duel");
         // The discipline starts here: every fight re-arm through the duel, the room sweep and
-        // the wing walk ends on the silenced P99 (see QUIET_DISCIPLINE).
+        // the wing walk ends on the silenced P99 (see QUIET_DISCIPLINE). quiet_rearm is the
+        // same law for the SHARED machinery (damage_log.rs's return-fire fight arm and the
+        // resupply's dropped-gun fallback): the v10 run's timeline was tick-identical to v9
+        // through the crossing while the file's own helpers were already quiet — the leg
+        // fights' loudest-pick re-arms (the dropped 0x1c) were the leak that drew the west-end
+        // pair #10/#11 and their chips were 30.4 of the crossing pool [L the
+        // level-02-castle-walks-hearing ledger]. Cleared with the discipline at the stair
+        // bottom (the deliberate lane-shotgun arm).
         QUIET_DISCIPLINE.with(|c| c.set(true));
+        w.dmg.quiet_rearm = true;
     } else {
         arm_fullest(&mut w, "before the geisha-1 room");
     }
@@ -879,9 +887,13 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             }
         }
         // The retreat resumes the leg's own return fire after 400 ticks (the suppression window):
-        // the v4 attempt held it 900 and Bond ate the chase unchecked — a player retreating from
-        // a wake still answers whoever closes. The destination is the open stretch east (the v3
-        // route, which fought the chase one at a time and killed #7 mid-retreat [L this task]).
+        // the v4 attempt held it 900 with the OLD route and ate the chase unchecked; the v14
+        // 700-tick window repeated that (the chase ate 61.2 unchecked, dead at t10440 [L the
+        // v14 run]); the v13 8.0-ring variant made the #5 stand outlive its 900 cap (killed
+        // false, the unchecked chase killed Bond at t7688 [L the v13 run]). The 400-tick window
+        // with the 4.0 ring is the measured optimum: the fights meet the closing captain #5 for
+        // 48.0 in 4 hits and KILL him (health 87.0 → 37.2, the walk survives [L the v12 run]).
+        // d3 only; the d1/d2 RNG is untouched.
         w.walk_nav_to([-30.8, 6.4, 13.5], "the geisha-1 give-ground", 1.0);
         status(&w, "the geisha-1 give-ground");
     }
@@ -1193,7 +1205,16 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             // ambush at 1.8 u INSIDE the corridor and the 32.4-health pool died to two volleys
             // [L this task's run]. A player pops the sensor, steps back OUT into the courtyard
             // with the fullest gun, and fights the ambush as it funnels through the door.
-            arm_fullest(&mut w, "the bunker ambush lure");
+            // hear-fold-2 (this task's v12 run): the fullest 0x12 chipped the ambush fight 0 for
+            // 12.0 and left the hp-10 pistol guard #14 alive to volley the 23.0 pool down
+            // (12.0 + 11.0, dead at t77706 [L the v12 run]). The 0x1c's 8-pellet tap is the
+            // captor one-tap mechanic — one tap kills a 12-hp captor before its first volley
+            // [L the 00agent ledger] — and both west-end pair guards are DEAD by this point
+            // (#11 killed by the door return fire at t15133, #10 hp 0 in the v12 summary [L]),
+            // so the shotgun's loud shots cost nothing here. The shells ride from the wing
+            // scoops (6 at the lure [L the v12 run]); switch_dry falls through to the 0x12's
+            // 68 rounds when they run out.
+            arm_weapon(&mut w, 0x1c, "the bunker ambush lure");
             for p in [[-45.7f32, 6.37, -23.4], [-46.7, 6.37, -21.5]] {
                 if ch_on(&w, 0x81) { break; }
                 w.walk_nav_to(p, "the bunker ambush sensor", 0.6);
@@ -1204,6 +1225,35 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
             w.walk_to(Wp::new(-40.0, 5.5, -22.6).r(0.8), "the bunker ambush courtyard stand");
             w.lenient = false;
             status(&w, "the bunker ambush courtyard stand");
+            // hear-fold-2 (this task's v15 run): the plain clear_pursuers approach walked Bond
+            // INTO the corridor mouth's shotgunner #13 — his volleys ate the 23.0 pool during
+            // the return-fire fight's view convergence (dead at t77370 [L the v15 run]) — while
+            // #14 (the hp-10 pistol guard) died to ONE 0x1c tap for free. The geisha-1
+            // stand-off loop's shape is the measured-free duel here too (the v12 stand-off
+            // rounds all ran at ZERO cost [L the v12 run]): settle the view first (the
+            // convergence is the exposure), hold the 8.0 ring (the volley's pellets spread —
+            // the 00agent-02-03-2 ledger's own finding), one guard at a time, the 0x1c's
+            // one-tap mechanic doing the killing. A guard the stand does not drop is left to
+            // the plain sweep below (the pursuit set still clears the corridor).
+            {
+                w.dmg.back_off = Some(8.0);
+                for k in 0..6 {
+                    let di = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let bp = sim.bond.pos;
+                        sim.drones.list.iter().enumerate()
+                            .filter(|(_, d)| d.team == 1 && d.health > 0.0 && !d.corpse && d.enabled
+                                && dxz(d.pos, bp) < 16.0)
+                            .min_by(|a, b| dxz(a.1.pos, bp).total_cmp(&dxz(b.1.pos, bp)))
+                            .map(|(i, _)| i)
+                    };
+                    let Some(di) = di else { break };
+                    settle_aim(&mut w, di, 120, 0.06);
+                    if !w.stand_and_fire(di, 900) { break; }
+                    status(&w, &format!("bunker ambush stand-off {k}"));
+                }
+                w.dmg.back_off = Some(4.0);
+            }
             clear_pursuers(&mut w, 16.0, "bunker ambush (courtyard)");
             reload_full(&mut w);
         }
@@ -1292,8 +1342,10 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
                 for e in hold { w.dmg.cooldown.retain(|&(ci, _)| ci != e.0); w.dmg.cooldown.push(e); }
             }
             // hear-fold re-tune: the discipline ends here — the deliberate lane-shotgun arm is
-            // the crossing's own weapon (the west-end pair has had no shots to hear).
+            // the crossing's own weapon (the west-end pair has had no shots to hear). The
+            // shared quiet_rearm ends with it (the crossing fights run the shotgun on purpose).
             QUIET_DISCIPLINE.with(|c| c.set(false));
+            w.dmg.quiet_rearm = false;
             // 00 Agent (real-health-00agent-02-03-2 + 02-5): the scoop ONLY — no rearm, no
             // stand. The sniper's window opens only from inside the lane (the stair-top and
             // bottom stands both gave up on aim None [L the run-4/5 traces]), so every tick at
@@ -1867,7 +1919,6 @@ fn walk_the_castle_all_objectives_real_health_agent() {
 /// no-dwell lane crossing with the sniper suppressed (`dmg.cooldown` until the door leg), and
 /// the ≤12-u band stand at the bunker door (10.3 u from the post) + the corridor rearm.
 #[test]
-#[ignore = "re-tune in flight (20-level-02-castle-walks-hearing): the give-ground shape survives the geisha-1 mob, the wing armour and the crossing, and dies at the bunker ambush courtyard stand (v10: pool 21.6, the drawn west-end pair #10/#11's 30.4 of chips). THE NEXT LEVER is the opt-in shared-helper flag (lesson 7): the walker's own return_fire/resupply inside damage_log.rs re-arms the loudest wheel pick during the retreat legs — the leg fights' shotgun shots are what draw the pair (the file-local QUIET_DISCIPLINE covers only the file's own helpers, and the v10 timeline is tick-identical to v9 through the crossing, the leak's proof). Add `pub quiet_rearm: bool` to DamageLog (default false, set only by this walk), check it at damage_log.rs's arming sites, run EVERY walkreal_*_live, then re-run this walk"]
 fn walk_the_castle_all_objectives_real_health_00agent() {
     walk_the_castle_all_objectives_real_health_at(3);
 }

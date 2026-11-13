@@ -363,6 +363,19 @@ pub struct DamageLog {
     /// placement drones carry 0 for life, so a non-zero stamp inside the window IS a release.
     /// Off = master behaviour everywhere else — no other walk sets it.
     pub pre_throw_stands: bool,
+    /// OPT-IN (`quiet_rearm`, set by the 07000002 00 Agent walk, the hearing fold): the shared
+    /// re-arm cycle ends on the SILENCED P99 (0x02) when the wheel carries it with rounds — the
+    /// walkers' `switch_to_armed` (the return-fire fight arm and the resupply's dropped-gun
+    /// fallback) prefers the P99 before the loudest armed pick. The loudest pick puts a guard's
+    /// dropped 0x1c in hand and its shot sound (outer well past 40 [D sound.md]) re-runs the
+    /// west-end rifles' measured alert chain inside their 41-48 u band — the drawn pair's chips
+    /// were 30.4 of the crossing pool on the v10 run [L the level-02-castle-walks-hearing
+    /// ledger]; the P99's 0x403 shot is silent past its outer 40 [D sound.md]. The 02 file's
+    /// QUIET_DISCIPLINE covers only that file's own helpers — this flag is the same law for the
+    /// shared machinery (the v10 timeline was tick-identical to v9 through the crossing: the
+    /// leak is here, not in the file). Off = master behaviour (the loudest pick) everywhere
+    /// else — no other walk sets it.
+    pub quiet_rearm: bool,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
     /// The live-hostile drones this log has already seen alive, with the walker tick of the
