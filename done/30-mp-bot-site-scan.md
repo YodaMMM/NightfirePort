@@ -126,3 +126,8 @@ this report written ~02:30 UTC), `git` hashes, and test outputs. No input/output
 credit balance, no dollar cost were visible anywhere in the session.
 
 ## ntfy failed
+
+All three fallbacks failed from this sandbox (same as the previous sessions):
+- curl: `curl: (28) Connection timed out after 20000 milliseconds`, exit 28.
+- python urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`.
+- wget: produced no output, wrapper `timeout 45` killed it, exit 124.
