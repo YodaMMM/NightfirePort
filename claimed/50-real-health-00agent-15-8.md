@@ -23,3 +23,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 claimed-by: sandbox3 at 2026-11-13T11:45Z
 
 11-13 (on master 893dc3252): after the #526 lob the P2K comes back in hand when the gun is nearly empty - the resupply walk east is gone; the death moved t7985 -> t8578 (the door[29] through fight on #11 goes killed-false, #11/#10 throws 33.2 + 25.7). Measured dead: a head-first aimed stand from the threshold (#11 unseen at +200, death t8121).
+
+11-13 (master a4b8a6b14): the west room is CLEARED - a live bullet-line scan at t7347 found #11 seen alone from (5.0, 71.25); from the threshold Bond walks there, head-first stand kills #11 (+20), then #18 and #10 nearest-first, health 34.4 kept. Death t8578 -> t9746 at (-5.66, 41.46, 34.60): the great-hall #5 (0x50000b2) 31.4 in 2 at d 12.7 (ledger lever 3).
