@@ -29,3 +29,5 @@ claimed-by: sandbox3 at 2026-11-13T11:45Z
 Great-hall scan (11-13, at the door[50] threshold, Bond (0.02, 47.73)): live #5 (7.41, 36.21), #4 (-0.35, 27.95), #19 (-3.48, 30.24). No floor spot sees #5 with #4/#19 hidden; 53 spots see #5 at all (nearest (1.0, 40.25), 7.6 u from him) but all are in #4/#19 lines too. The hall needs a multi-guard order (#19/#4 first from a #5-hidden line), not a solo shot.
 
 And the reverse: no floor spot (x -6..6, z 30..48) sees #4 or #19 while hidden from #5 - the great hall is fully mutually visible at the threshold moment. No position answer; the levers left are timing (the throw-cycle windows) or more health carried in (34.4 now).
+
+11-13 (master b164773fb): a 300-tick hold before door[50] (sweep 0/60/120/180/300 -> t9746/11352/9948/9961/20553) crosses the great hall; death t20553 at the door[42] fence leg with 5.4 health and a dry gun (the fence shot resupply found nothing on the path).
