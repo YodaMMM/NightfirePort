@@ -130,3 +130,8 @@ before each commit, only the task's files staged:
 
 not visible to me — no token, credit, context-window or cost figures are shown anywhere in
 this environment's interfaces for this session.
+
+
+## ntfy failed (from the branch report)
+
+All three fallbacks failed: curl (28) Connection timed out after 20000 ms; urllib URLError [Errno 101] Network is unreachable; wget silent network failure. The same egress artifact as the 14-9/15-6 windows.
