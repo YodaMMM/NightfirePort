@@ -9111,7 +9111,7 @@ impl Drone {
                 // Landed level by level (each level's walks re-tuned against the stop first, the
                 // room gate's pattern); ZERO_ROOT_ALL turns it on everywhere.
                 let zero_root_live = ZERO_ROOT_ALL || (d.level >> 8 == 0x0700_00
-                    && matches!(d.level & 0xff, 0x02 | 0x03 | 0x04 | 0x05 | 0x06 | 0x07 | 0x09 | 0x0a | 0x0c | 0x0d | 0x11 | 0x12 | 0x13 | 0x14 | 0x16 | 0x1b));
+                    && matches!(d.level & 0xff, 0x02 | 0x03 | 0x04 | 0x05 | 0x06 | 0x07 | 0x08 | 0x09 | 0x0a | 0x0c | 0x0d | 0x11 | 0x12 | 0x13 | 0x14 | 0x16 | 0x1b));
                 if zero_root_live && self.has_opponent(frame) && self.anim.class == 2 { self.zero_root = true; }
                 if self.firing && !self.burst_done {
                     if ailog() && self.grenade_count > 0 {

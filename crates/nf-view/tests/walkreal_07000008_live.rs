@@ -561,6 +561,18 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     let bolts = [[162.24f32, 43.88, -117.14], [162.24, 42.70, -117.14]];
     for (k, bolt) in bolts.iter().enumerate() {
         let ch = [134u32, 135][k];
+        // aim-stop-08: with the stop live on 08 the guard the stop plants in the room stands
+        // dead (root dropped) through the burn and its bursts land — the measured death: #5
+        // standing at 2.8 u ate 80.8 in 29 hits while Bond held the laser [L the NF_DMG_TRACE
+        // run on this task's tree]. A player lasering a safe answers the man on his floor
+        // first: the fullest gun up, every team-1 guard on Bond's floor within 10 u answered,
+        // then back to the burn stand. REAL-DAMAGE ONLY: the topped-up sister's fight-free
+        // timeline stays exactly as pinned (fight_guards_within already gates on tops_up).
+        if !w.tops_up() {
+            arm_fullest(&mut w, "the safe bolts");
+            fight_guards_within(&mut w, "the safe room floor", 4200, false, 10.0);
+            w.walk_nav_to([160.0, 43.4, -117.0], "back to the safe stand", 1.2);
+        }
         aim_and_fire_until(&mut w, *bolt, 0x4e, 240, |s| s.drones.channels.on(ch));
         eprintln!("[08] bolt {k} laser_charge {:.1}", w.scene.sim.as_ref().unwrap().laser_charge);
         let sim = w.scene.sim.as_ref().unwrap();
