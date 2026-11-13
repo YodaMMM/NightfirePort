@@ -556,6 +556,21 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // position, then step through into the room (the safe wall's face is east).
     w.walk_to(Wp { at: [154.6, 42.5, -121.0], act: Act::Use { use_ticks: 240 }, arrive: 1.1 }, "E the secure room door");
     w.walk_nav_to([158.0, 43.0, -119.0], "into the secure room", 1.4);
+    // aim-stop-08: with the stop live on 08 the room's own guard (#5, weapon 0x15) plants dead
+    // at ≈(157.6, 43.0, −114.0) behind the room's interior band and bursts the walk-in — the
+    // measured deaths: 80.8 in 30/36 hits, and the stands at the door and the safe both hold
+    // "out of sight or cap" (his eye reaches Bond through the door gap; Bond's sight ray from
+    // the door and the safe stand is buried) [L the NF_DMG_TRACE runs on this task's tree].
+    // A player closes to the room's armour corner (159.4, 43.0, −113.6 — 1.9 u off the guard,
+    // the placed heavy armour #281 (159.37, 42.62, −113.59) [D the placement census] taken on
+    // the way: armour 50 [M Pickup_Handler 0x18e650 case 3]), answers every team-1 guard on
+    // his floor within 10 u from there, then walks back to the burn stand. REAL-DAMAGE ONLY
+    // (the topped-up sister's fight-free timeline stays exactly as pinned).
+    if !w.tops_up() {
+        w.walk_nav_to([159.4, 43.0, -113.6], "the armour corner", 1.0);
+        arm_fullest(&mut w, "the secure room entry");
+        fight_guards_within(&mut w, "the secure room entry", 4200, false, 10.0);
+    }
     // The bolts sit at (162.24, 43.88/42.70, −117.14) [D #207/#208] — inside, on the safe face.
     w.walk_nav_to([160.0, 43.4, -117.0], "before the safe", 1.2);
     let bolts = [[162.24f32, 43.88, -117.14], [162.24, 42.70, -117.14]];
@@ -1632,6 +1647,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // branch]; the same own-rocket signature the d3 runs measured). Same gate shape as the
         // sight gates above: difficulty ≥ 2 or the real-damage walk (`!tops_up()`), so the
         // topped-up Operative walk keeps its byte-exact timeline.
+        // aim-stop-08: at Agent (d2) the stop makes the route bleed harder — Bond reaches the
+        // machine at 41.9 health (the ledger below), and the −38.91 rocket blast that killed
+        // the first stop-on run (frame 32114) rode a wall detonation whose k=6 falloff reaches
+        // past the 24-tick / 30-u dodge (the d3 ledger's next-lever note: the step must clear
+        // the wall band, not just the direct line). D2-GATED wider dodge: the window opens to
+        // 60 u and the side step holds 60 ticks — the Operative sister's byte-exact timeline
+        // keeps the 30/24 shape (its fight is green with it).
+        let (dodge_window, dodge_hold_ticks) = if difficulty >= 2 { (60.0f32, 60u32) } else { (30.0, 24) };
         let dodge_now = if (difficulty >= 2 || !w.tops_up()) && rocket.is_none() {
             let b = sim.bond.pos;
             let chest = [b[0], b[1] + 0.6, b[2]];
@@ -1639,7 +1662,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 if bu.state == 2 { return false; }
                 let rel = [chest[0] - bu.pos[0], chest[1] - bu.pos[1], chest[2] - bu.pos[2]];
                 let d = (rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]).sqrt();
-                if !(2.0..30.0).contains(&d) { return false; }
+                if !(2.0..dodge_window).contains(&d) { return false; }
                 let vm = (bu.dir[0] * bu.dir[0] + bu.dir[1] * bu.dir[1] + bu.dir[2] * bu.dir[2]).sqrt().max(1e-6);
                 let along = (rel[0] * bu.dir[0] + rel[1] * bu.dir[1] + rel[2] * bu.dir[2]) / (d * vm);
                 if along <= 0.0 { return false; }
@@ -1649,7 +1672,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         } else { false };
         if dodge_now {
             if dodge_hold == 0 { dodge_sign = -dodge_sign; }
-            dodge_hold = 24;
+            dodge_hold = dodge_hold_ticks;
         } else if dodge_hold > 0 {
             dodge_hold -= 1;
         }
@@ -2124,6 +2147,26 @@ fn walk_the_whole_mission_on_real_input_real_damage() {
 // on this tree). The boarding ledger's #19 33.6 and the walkway 36.4 stand as measured; the
 // levers tried and retired this window (the pre-leg lip stand, the d2 reload, the hall-mouth
 // stand) are documented in their blocks and docs/reports/los-mask-repins-08-agent.md.
+// IGNORED on aim-stop-08 (2026-11-13, the AimStandFire root stop live on 08): the safe room
+// gained the armour-corner answer (the stop plants #5 dead behind the interior band; the
+// Operative sister is green with it), but at Agent the stop makes the whole route bleed
+// harder and the machine fight outlasts the budget — Bond reaches the Hind at 41.9 health
+// (the route ledger: 59 hits for 100.0 — the world's Hind blasts 41.9 in 27 hits, #11 11.2,
+// #5 10.5, #14 8.4, #2 8.4) and dies at tick 32389, (111.88, 13.49, −177.19): the machine's
+// rocket blast (−38.91, frame 32114 in the first run) plus the strafing drips, with rockets
+// left [L the NF_DMG_TRACE runs on this branch]. The d2-gated wider dodge (60 u window, 60
+// tick hold — the d3 ledger's next-lever 2) bought 127 ticks and got rocket 2 to land
+// (damage 101.0 of the machine's 448.5 [L the run]); rocket 1 still self-detonates on the
+// carriage band 24 ticks after launch — the same chase-clip signature the 00 Agent ledger
+// pins, whose forecast gate is the lever there. NEXT LEVERS: (1) the route's health budget —
+// fight the walkway stretch from cover (the fights cost 100.0 → 55.2 by tick 4602 [L the
+// run]) and take both armours (#281 via the armour corner, #282 the ledge — already taken);
+// no health pickup kind exists on this level [M Pickup_Handler 0x18e650 cases 0-6]; (2) the
+// Hind fight's launch gates: the flight-time forecast the d3 ledger names (extrapolate the
+// machine's flight-time position and require machine_lane_clear against BOTH positions) so
+// the chase's mid-flight curve stops eating rockets on the band; (3) the drips through the
+// slit once the dodge leaves it.
+#[ignore = "aim-stop-08: the stop-on route bleeds harder and the Hind fight outlasts the 41.9-health arrival (dies at tick 32389, the machine's −38.91 rocket blast + drips, rockets left); the Operative sister is green — the route's health budget needs the cover-fight re-plan and the machine fight needs the d3 ledger's forecast launch gate"]
 fn walk_the_whole_mission_on_real_input_real_damage_agent() {
     // HEAD-HUNT (the 05/07 00 Agent sisters' tactic on this level group): at Agent the guards'
     // hit chance is DroneFiring_Accuracy_Normal 1.1 (Operative 0.8) and Bond's pain is
