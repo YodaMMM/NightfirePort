@@ -1814,7 +1814,7 @@ fn walk_arrival_to_drakes_defeat_on_real_health_at(difficulty: u32) {
 }
 
 #[test]
-#[ignore = "the walker's tactics on whole panels: every console latches, but the wave costs the walker its 100 health at the x 20 hold (tick 9473) now that its rounds no longer clear the panel rows; the top-up walk above proves the route; fresh on master b059df948 (level-1b-drake-walk-time): death frame 9081, k5/k4/k3/k6/k8 latched, the stuck guard ends the leg at the death"]
+/// UN-IGNORED 2026-11-13: green on master c94c1043e (the ignored-walk sweep).
 fn walk_arrival_to_drakes_defeat_on_real_health() {
     walk_arrival_to_drakes_defeat_on_real_health_at(1);
 }

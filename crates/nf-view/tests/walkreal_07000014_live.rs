@@ -1021,7 +1021,7 @@ fn walk_the_infiltration_to_the_delta_exit() {
 /// 0x1902c8] and the guards' hit chance by Accuracy row 2 [M DroneWeap_DoBulletAccuracy
 /// 0x179740:74-88]. Real input only; no health, ammo or channel writes.
 #[test]
-#[ignore = "re-tune after the claw wall fix: the route's SkyBridge crossing is a stand-in now (the claw bolt dies on the duct wall) and the shifted clock leaves Bond short on the pit band's east jump (46.34, -1.78, 53.19); the plain walk passes the same legs"]
+/// UN-IGNORED 2026-11-13: green on master c94c1043e (the ignored-walk sweep).
 fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
     // The lane-fight + path-clear laws (opt-in, this level's sister only — set inside the body
     // behind the difficulty gate; see the body comment for the measured deaths).
