@@ -71,3 +71,21 @@ no top-ups, never lower damage or health. Remove the ignore when green; else pus
 Started 2026-11-13 03:12 UTC. Branch s/real-health-00agent-01-hall-3 cut from origin/s/real-health-00agent-01-hall-2 (ec54db62c) and merged with origin/master (merge ca17d3e5b; one conflict in tests/common/walker.rs — hall-2's flank_hold_z field kept alongside master's record_inputs/record_states replay machinery).
 Task: the door-phase kill path — the hall-2 ledger's next lever. Either work out which weapon/timing draws the guards across the aperture ([M] DroneFunc_SetNoiseHeard 0x149920, HandleSoundAlerts 0x148a30) and lure with that, or kill the crowd through the aperture with crouched taps along the flight lane, ammo metered. Helpers gated to 07000001 + difficulty 3. Real input only, no top-ups, never lower damage or health. Remove the ignore when green; else push the ledger + next lever.
 - (03:12) sandbox kept the repo + work/ + ISO; branch cut, master merged, WORKLOG pushed.
+- (03:12-04:00) the door-phase kill path, both arms measured: the LURE arm is dead by the AI
+  gate — the crowd is sighted-attacking and +0x4F8 0x4000000 never clears on 07000001 (only
+  the 09/0A tower-impact path clears it [M tower_impact_stamp]), so DroneVision_AlertSound
+  0x177800 returns 0 for msg SOUND [M enemy_alerts]; the diag run: P2K 0x403 (w65/o40 [L
+  SFXOutputData]) 56 taps, SMG 0x12→0x3 (w50/o30) 55, fists 56 — alive-across ×3. The TAP arm
+  is dead from the deep line: 0 of 56/55/56 taps landed, the flight lane walled on every
+  trigger tick; the lane grid (64 combos, both eye heights [L]) walls the whole middle band
+  (x 6-7.5) and the clear west/east bands wedge the nav 1.6-1.7 u short. The crouched peek
+  drew no advance in 24 windows (the crouch hides Bond).
+- (04:00-04:30) the mechanic that WORKS [L the stance-fight run window 2]: a STANDING walk
+  through the door lane draws the crowd's advance — guard 6 died to the walk's own return
+  fire at 16518 for 3.6 — but the nav leg lingered and the captain's 5-pellet 36.0 volley
+  killed Bond at 16593 (the 75-tick lethal linger). The WIP peek dance + the lane grid + the
+  diag counters are on the branch, d3-gated; d1/d2 byte-identical. Ledger + the next lever
+  (the advance dance with the hard exchange budget) pushed into the ignore message.
+- (04:30-04:36) whole walkreal_07000001_live: 7 passed / 1 failed (the d3 ledger only [L
+  99.4s]); interactables_07000001_live 10/0 (29.4s). The fast suite dies between tool calls
+  (hall-2's documented artifact) — the batteries are the coverage. Report written.
