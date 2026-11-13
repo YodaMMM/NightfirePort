@@ -24,3 +24,6 @@ Main agent, fresh deaths on master 729f9694e (each ignored walk of the level, --
 walkreal_0700000c_live: Bond died at tick 6148 (frame 6150) at (54.02,6.01,-157.98) armour 0.0
 walkreal_0700000d_live: Bond died at tick 3749 (frame 3749) at (213.07,17.37,-234.51) armour 0.0
 walkreal_0700000d_live: Bond died at tick 5020 (frame 5020) at (213.07,17.37,-234.51) armour 0.0
+
+---
+Update 2026-11-13T17:05Z: the 0c walk (walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_agent) is green on master c94c1043e and un-ignored; only the 0d walk (walk_arrival_to_the_c5_door_real_damage_agent) is left.
