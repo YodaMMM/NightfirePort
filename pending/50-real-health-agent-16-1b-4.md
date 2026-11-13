@@ -49,3 +49,5 @@ Update 2026-11-13T17:21Z: the 1b AGENT walk is GREEN on master 95a45f308 (main a
 Tried (reverted): the d1 route tactics on d2 (finish_fights + back_off 3.5 + hurting_first + level_fights) - WORSE, death t1571 at (13.62, 6.81, -78.60).
 
 Tried (reverted): answer the exposed gallery rifleman (#3, 32.4 u) from the lane before the ramp foot (shoot_bounded 1200) - WORSE, death t1258 at (7.75, 0.84, -84.60); the ground four close in during the long-range trade.
+
+Tried (reverted): a d2 hold in the door[7] corridor before the lane, answering visible ground guards (y < 2.5, < 25 u) - none came (quiet 400 ticks at 100 health): the ramp-foot four hold their posts; the walk then died on the ramp at t1882 (14.37, 3.37, -84.92). Three measured levers now closed for 16 (d1 tactics, gallery-first, door hold); the fight has to be taken TO the ramp-foot four from a stand the gallery cannot see.
