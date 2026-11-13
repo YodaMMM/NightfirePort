@@ -95,10 +95,12 @@ impl Backend {
 
     /// One tick: poll the pad, run the game's mapping/curves/ramps, merge into the keyboard's
     /// Input (axes add and clamp, buttons OR). With no pad connected this is a no-op — the
-    /// keyboard/mouse Input passes through untouched.
-    pub fn merge(&mut self, input: &mut Input, zoom: f32, underwater: bool, scoped: bool) {
+    /// keyboard/mouse Input passes through untouched. Returns whether action 0xe is held — the
+    /// game's use/reload action (style 0: Square|R2 [M psiInput_MapInputs case 0]; the keyboard's
+    /// E and R both feed it) — for the caller's use_key/reload lanes.
+    pub fn merge(&mut self, input: &mut Input, zoom: f32, underwater: bool, scoped: bool) -> bool {
         let pad = self.poll();
-        if !pad.connected { return; }
+        if !pad.connected { return false; }
         let (p, _actions) = self.driver.tick(&pad, &self.tuning, zoom, underwater, scoped);
         input.forward = (input.forward + p.forward).clamp(-1.0, 1.0);
         input.strafe = (input.strafe + p.strafe).clamp(-1.0, 1.0);
@@ -121,6 +123,7 @@ impl Backend {
         if input.weapon_cycle == 0 { input.weapon_cycle = p.weapon_cycle; }
         if input.gadget_cycle == 0 { input.gadget_cycle = p.gadget_cycle; }
         if input.switch_to.is_none() { input.switch_to = p.switch_to; }
+        p.stabilise
     }
 
     /// The front end's pad input (results-stats-key): drains the events and returns the ONE menu

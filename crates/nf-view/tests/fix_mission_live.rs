@@ -273,6 +273,9 @@ fn the_07000001_exit_works_end_to_end() {
                 .collect()
         };
         assert_eq!(named.len(), 3, "three guards carry death channels 0x11/0x12/0x13 [D]");
+        // guards the sweep already fought without killing (the courtyard cover sitter) — one
+        // attempt each, the same walk the game's player makes past a guard he cannot see
+        let mut sweep_tried: std::collections::HashSet<usize> = Default::default();
         for &g in named.iter() {
             let gpos = w.scene.sim.as_ref().unwrap().drones.list[g].pos;
             if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, gpos) > 9.0 {
@@ -303,17 +306,39 @@ fn the_07000001_exit_works_end_to_end() {
             // dies: sweep every living started team-1 drone near the held escort (the hold
             // parks him at the wait node until ch99 [M NDrone2_ReachedDestNode 0x153358:85-94])
             // with the same real fire path, while the named guards still keep the hold on.
+            // mp-near-pos-list-tier re-derivation: with the game's DroneNearPos list tier live
+            // [M 0x143e68/0x159dd0], the corridor guards' combat repositioning (0x5a
+            // CombatOutOfRange / 0x8c RunForCover walks) counts the route's door nodes reached
+            // while a fighting peer stands on them, the walker's nav legs wedge on the new
+            // door-park positions, and during those wedges the escort's ride resumes — he
+            // crosses into the courtyard BEFORE ch99, where the surviving east-side guards
+            // shoot him ("a guard's round lands on any drone of the other side it meets" [M
+            // NDrone2_DealWithObjHit 0x13fff0]; measured on the pre-fix tree: Mayhew
+            // hit_by_drone Some(15), DEATH_ANIM 0x44 mid-sweep). The room to clear is now the
+            // whole ride: started team-1 drones near the escort OR near the courtyard shoji
+            // (the ride's mid-point), cleared EAST-SIDE FIRST (the ride reaches the courtyard
+            // while the west fights run), each guard attempted once per sweep.
             if g != *named.last().unwrap() {
-                let roomies: Vec<usize> = {
+                let door = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
+                    .min_by(|a, b| ((a.pos[0] - 7.0).abs() + (a.pos[2] - 11.0).abs())
+                        .total_cmp(&((b.pos[0] - 7.0).abs() + (b.pos[2] - 11.0).abs())))
+                    .map(|d| d.pos).expect("the courtyard door exists");
+                let mut roomies: Vec<usize> = {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let mp = sim.drones.list[contact].pos;
                     (0..sim.drones.list.len())
-                        .filter(|&i| i != g && !named.contains(&i)
+                        .filter(|&i| i != g && !named.contains(&i) && !sweep_tried.contains(&i)
                             && sim.drones.list[i].team == 1 && sim.drones.list[i].started
                             && !sim.drones.list[i].corpse && sim.drones.list[i].health > 0.0
-                            && walker::dxz(sim.drones.list[i].pos, mp) < 30.0)
+                            && (walker::dxz(sim.drones.list[i].pos, mp) < 30.0
+                                || walker::dxz(sim.drones.list[i].pos, door) < 30.0))
                         .collect()
                 };
+                roomies.sort_by_key(|&h| {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let hp = sim.drones.list[h].pos;
+                    ((hp[0] - door[0]).powi(2) + (hp[2] - door[2]).powi(2)) as i64
+                });
                 for h in roomies {
                     let hpos = w.scene.sim.as_ref().unwrap().drones.list[h].pos;
                     if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, hpos) > 9.0 {
@@ -330,6 +355,7 @@ fn the_07000001_exit_works_end_to_end() {
                         if w.shoot(h, &format!("leftover guard {h}")) { break; }
                         walker::hall_ammo_ladder(&mut w, &format!("leftover guard {h} ammo {k}"));
                     }
+                    sweep_tried.insert(h);
                 }
             }
         }

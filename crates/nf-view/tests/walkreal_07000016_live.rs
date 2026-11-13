@@ -2436,8 +2436,30 @@ fn walk_the_chasers_defeat_completes_the_mission_00agent() {
     walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3);
 }
 
+/// UN-IGNORED (level-16-pit-squad-operative, 2026-11-13): the ignore's tick-15337 death does
+/// not reproduce on master 1105786cd's sim — the walked finale completes on real health
+/// (measured on this tree, NF_DMG_TRACE: end health 46.8, armour 32.0, 69 hits for 53.2 with
+/// the lowest health 46.8 — the whole pit phase's hits land on the armour and take NO health;
+/// the chaser fell +3349 into her window, the squad #12/#13/#14/#15 fell inside the bounded
+/// slices, ch 0xbf at +8461, the button played the lift-out and the mission completed). The
+/// accuracy byte the ignore tuned against is the game's own rule, confirmed in the decompile:
+/// `NDrone2_DefaultInit` 0x14b300's mode-0x0D arm WRITES `+0xB4 = 0` (with health 100.0,
+/// +0x8F0 8.0, +0xEC 2.0 and the 0x3c/0x36/0x35 props) after DoModeSettingsNEW's stats-table
+/// read, and `DroneWeap_DoBulletAccuracy` 0x179740 reads it at :52 as `chance = 100 − (+0xB4)·5`
+/// — byte 0 is 100 before the factors — then ×TooClose_Accuracy under TooClose_Distance (:53-55
+/// and again :95-97), ×TargetFirstMoved_Accuracy on +0x1DD (:56-58), ×TargetFirstStopped_Accuracy
+/// for level 12/13's anim-set-0x13 drones (:60-70), ×TargetMoving_Accuracy on +0x1DC (:78-80),
+/// ×the difficulty factor (Operative = Easy 0.5, tuning 0x1d3a80's 0x07000014-16 row; :81-93);
+/// a hit needs Rand_FRand(100) < chance (:100-101) AND, beyond TooClose, +0x270 past
+/// NewSighting_TimeToHit·FRAME_RATE with +0x41 clear (:103-109); under 3.0 EVERY round hits
+/// (:113-115). The walk's existing stand already tunes against exactly those levers: the
+/// band-hold backpedal keeps every dealer outside the 3.0 always-hit band, the bounded slices
+/// answer the muzzle that hurts (hurting_first, d1-gated in the walk body), and the pit-room
+/// armour #648 [D] carries the squad's stars. The intervening master commits (the guards'
+/// AimStandFire root stop 7df2f148d and the room-visibility draw gate) shifted the fight away
+/// from the ignore's measured death; the sim is bit-exact deterministic, so this pass is not a
+/// coin toss. No health top-ups, no damage lowered, no state pokes.
 #[test]
-#[ignore = "Operative: the pit squad's ninjas now fire at accuracy byte 0 [M 0x14b300:752] (the table's 80 kept them from landing a round at range): after the chaser's 46.4 Bond dies at tick 15337 to #12 at 0.4 u with her at 100; the pit fight needs a stand built for them"]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
     walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(1));
 }
