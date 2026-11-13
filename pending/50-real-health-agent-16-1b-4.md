@@ -41,3 +41,5 @@ Both 1b Agent world hits are the SAME blast kind (a spawn_blast log on master): 
 The 0x6b blasts are explosive BOLT rounds (weapon_data+0x70 bolt bits -> script 0x60007c4, Bullet_CollisionHandler 0x12ce80:205-224) fired by a shooter with NO drone behind it (drone.rs blast_at maps b.owner == usize::MAX to usize::MAX-1) - a turret or scripted gun aimed at Bond's position. Lever: no long stationary holds in its line (keep the waits moving or out of its sight).
 
 Update 2026-11-13T17:18Z: master 1a0270f44 shifts cover in the 1b Agent waits; the walk now reaches Drake (2.3 hp) and fails at the Drake fight - Bond never fires (no clear shot from the held cover). Start there.
+
+Update 2026-11-13T17:21Z: the 1b AGENT walk is GREEN on master 95a45f308 (main agent). Only the 16 Agent walk is left in this task.
