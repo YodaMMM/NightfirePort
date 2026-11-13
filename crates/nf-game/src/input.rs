@@ -363,6 +363,13 @@ impl PadDriver {
         // same fields; strafe + = toward A / stick left, action 1 = −LX in style 0).
         input.forward = a[2];
         input.strafe = a[1];
+        // Weapon and gadget switching [M Player_Weapon 0x1a24c8:232-267, mode 4 = the newly-pressed
+        // read]: action 0x10 / 0xf step the weapons (Player_WeaponChange kind 0, ids 0..0x48) and
+        // 0xb / 0xa the gadgets (kind 1, 0x49..0x5f) [M Player_WeaponChange 0x1a6f80:66-94]; the
+        // first of each pair wins, like the game's if/else.
+        let edge = |act: u8| a[act as usize] != 0.0 && newly & self.mask_of(pad, act) != 0;
+        input.weapon_cycle = if edge(0x10) { 1 } else if edge(0xf) { -1 } else { 0 };
+        input.gadget_cycle = if edge(0xb) { 1 } else if edge(0xa) { -1 } else { 0 };
         // Style 0's button actions [M the case 0 table; the port's conventions: 7 jump, 8 crouch,
         // 9 fire, 19 (0x13) aim mode]. Jump/crouch press on the newly-pressed edge, like the
         // keyboard path and the game's +0x120 "newly pressed" word [M ps2_handle_pad 0x10c738:89].
@@ -460,6 +467,30 @@ mod tests {
         assert!(run(255, 0x7f).strafe < -0.5, "stick right strafes toward D");
         let still = run(0x7f, 0x7f);
         assert_eq!((still.forward, still.strafe), (0.0, 0.0), "the centred stick inside the dead zone is still");
+    }
+
+    /// The pad's d-pad weapon/gadget steps on the press edge only [M Player_Weapon 0x1a24c8:232-267
+    /// mode 4]: style 0 maps 16 = Right|L2, 15 = Left, 11 = Up, 10 = Down [M psiInput_MapInputs case 0].
+    #[test]
+    fn the_dpad_steps_weapons_and_gadgets_on_the_press() {
+        let cfg = PadConfig { curve: (0..=128u32).map(|i| (i * 2).min(255) as u8).collect(), style: 0, invert_look: false, player0: true };
+        let tuning = nf_formats::tuning::Tuning::default();
+        let mut d = PadDriver::new(cfg);
+        let mut press = |buttons: u16| {
+            let pad = PadState { buttons, rx: 0x7f, ry: 0x7f, lx: 0x7f, ly: 0x7f, connected: true };
+            let i = d.tick(&pad, &tuning, 1.0, false, false).0;
+            (i.weapon_cycle, i.gadget_cycle)
+        };
+        assert_eq!(press(0x2000), (1, 0), "Right: next weapon");
+        assert_eq!(press(0x2000), (0, 0), "held: no repeat");
+        assert_eq!(press(0), (0, 0));
+        assert_eq!(press(0x8000), (-1, 0), "Left: previous weapon");
+        assert_eq!(press(0), (0, 0));
+        assert_eq!(press(0x1), (1, 0), "L2: next weapon too");
+        assert_eq!(press(0), (0, 0));
+        assert_eq!(press(0x1000), (0, 1), "Up: next gadget");
+        assert_eq!(press(0), (0, 0));
+        assert_eq!(press(0x4000), (0, -1), "Down: previous gadget");
     }
 
     #[test]
