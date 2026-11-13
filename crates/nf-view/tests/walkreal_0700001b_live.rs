@@ -1068,6 +1068,12 @@ fn fight_opts_y(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first
 /// point (the Agent Drake fight re-fights FROM it — the shelter the waves' LOS already
 /// respects; see `fight_opts`).
 fn hide_and_snipe(w: &mut Walker, rad: f32, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32, hard: bool) -> Option<[f32; 3]> {
+    hide_and_snipe_opts(w, rad, done, cap, hard, false)
+}
+
+/// `shift`: move off the held cover every 240 ticks (a fixed gun's explosive bolts - weapon 0x6b,
+/// no drone owner - land on a spot held still; the Agent walk died to one at its 1316-tick wait).
+fn hide_and_snipe_opts(w: &mut Walker, rad: f32, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32, hard: bool, shift: bool) -> Option<[f32; 3]> {
     let mut last_tap = 0u32;
     let mut cover: Option<([f32; 3], f32)> = None;
     let mut cal = ShotCal::default();
@@ -1080,8 +1086,10 @@ fn hide_and_snipe(w: &mut Walker, rad: f32, done: impl Fn(&nf_view::scene::Sim) 
         if t % 30 == 0 {
             let ys: Vec<f32> = (-6..=2).map(|k| p[1] + k as f32 * 1.5).collect();
             let here = cover.map(|(c, _)| (c, score(c)));
-            if let Some((c, s)) = best_float_point(sim, p, rad, &ys, |c| Some(score(c))) {
-                cover = match here { Some((hc, hs)) if hs <= s + 1.0 => Some((hc, hs)), _ => Some((c, s)) };
+            let moving = shift && t % 240 == 0 && t > 0;
+            let held = cover.map(|c| c.0);
+            if let Some((c, s)) = best_float_point(sim, p, rad, &ys, |c| if moving && held.is_some_and(|h| dist3(h, c) < 3.0) { None } else { Some(score(c)) }) {
+                cover = if moving { Some((c, s)) } else { match here { Some((hc, hs)) if hs <= s + 1.0 => Some((hc, hs)), _ => Some((c, s)) } };
             }
         }
         let spot = cover.map_or(p, |c| c.0);
@@ -1141,7 +1149,7 @@ fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) ->
     // The gate-and-cover wait is a no-op at the tree's fast countdown and becomes the pacing
     // fix when the constant moves to REC_FRAME_RATE 0x30d0dc (seed·60 gated ticks — the
     // measured run in docs/reports/sp-panes-new-drawing.md).
-    hide_and_snipe(w, 12.0, |s| { walk_log::leg("missile-wait", s); s.drones.missile_deploy.iter().all(|&d| d == 2) || !alive(s) }, 12000, hard);
+    hide_and_snipe_opts(w, 12.0, |s| { walk_log::leg("missile-wait", s); s.drones.missile_deploy.iter().all(|&d| d == 2) || !alive(s) }, 12000, hard, waves_first && !hard);
 
     // 3. The disarm branch, the fly-by chain, Drake — the later waves waited out in cover.
     // The Agent tactics (waves_first): Drake is fought FROM the shelter the wave-wait just
@@ -1825,7 +1833,7 @@ fn walk_arrival_to_drakes_defeat_on_real_health() {
 /// astronauts' hit chance by Accuracy Normal 0.8 [M DroneWeap_DoBulletAccuracy 0x179740:74-88].
 /// Real input only; no health/ammo/channel writes.
 #[test]
-#[ignore = "Agent: Bond dies on real health, tactics not a port gap (the s/real-health-agent-difficulty-16-1b-41-4a report); follow-up real-health-agent-16-1b-2; fresh on master b059df948 (level-1b-drake-walk-time): death frame 11385 with k5/k4/k3/k6 latched in deadline and k8 +1199, m1/m2/m7 launch, the wave 15-strong grinds the hub holds; the 590s+ no-result run was the harness (the consoles stuck guard now ends the leg at the death)"]
+#[ignore = "Agent (2026-11-13, master 40f33b3d3): the waits now shift cover every 240 ticks (a no-owner 0x6b explosive bolt - script 0x60007c4, r 20 d 20 - landed on the 1316-tick missile-wait spot and killed Bond at frame 11385), and the walk reaches Drake (spawned frame 12634) at health 2.3; it then fails at the Drake fight: Drake stays at hp 100 and Bond never fires (clip 100 throughout, 14 u from Drake at (27.9, 2.8, 7.8)) - the fight pick finds no clear shot from the held cover. Next: a Drake stand with a clear line; the health budget (the frame-8502 bolt 13.84, astronauts 0x6a ~52)."]
 fn walk_arrival_to_drakes_defeat_on_real_health_agent() {
     walk_arrival_to_drakes_defeat_on_real_health_at(2);
 }
