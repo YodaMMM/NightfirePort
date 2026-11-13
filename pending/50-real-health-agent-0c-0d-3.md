@@ -27,3 +27,6 @@ walkreal_0700000d_live: Bond died at tick 5020 (frame 5020) at (213.07,17.37,-23
 
 ---
 Update 2026-11-13T17:05Z: the 0c walk (walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_agent) is green on master c94c1043e and un-ignored; only the 0d walk (walk_arrival_to_the_c5_door_real_damage_agent) is left.
+
+---
+Update 2026-11-13T17:06Z (master c94c1043e): walk_arrival_to_the_c5_door_real_damage_agent dies at tick 3868 at the ladder #435 top (213.07, 17.37, -234.51), 6 hits for 100.0, zero return-fire fights: the west-roof snipers #32/#33 (0x1e, at (151.4, 22.7, -252.8)/(-255.8), 65 u) land 28-damage rounds during the 863-tick ladder climb (frames 2680-3868), plus deck #20 28.0 at frame 3168. They are not present at the pre-wake roof checks (line ~150) and the ladder-top sweep runs only after the climb. Lever: answer them before the climb (from the ladder base) or climb out of their line.
