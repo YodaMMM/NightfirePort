@@ -33,3 +33,5 @@ Update 2026-11-13T17:06Z (master c94c1043e): walk_arrival_to_the_c5_door_real_da
 
 ---
 Update 2026-11-13T17:07Z: the west-roof pair is NOT present at the ladder base either (a capped base shot found no guard near (151.4, -249..-256)) - they appear DURING the climb, so a pre-climb answer cannot work; the lever is the climb itself (its timing vs their wake, or a route that is not on their line).
+
+Correction 2026-11-13T17:24Z: the west-roof pair #32/#33 WAKE at the platform drop (t1452, Bond (178.1, 8.0, -207.8)) and settle at x ~151, z -241..-248 (a temporary present/state watch); at the ladder base #33 IS present at (151.35, 22.70, -245.52) state 0x93, but a 300-tick base answer at d 63 with the carried gun (clip 2 spare 30) does nothing (health 10 left; the second line blocked 0.970 at the roof edge). So the base answer fails on reach, not presence: the climb needs cover from their line, or a long gun for the 63 u shot.
