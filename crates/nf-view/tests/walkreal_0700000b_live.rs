@@ -1126,6 +1126,9 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
         let mut band_shot = 0u32;
         let mut band_refire = 0u32;
         let mut band_clip = 0u32;
+        // level-0b-deck-agent-retune: the spend tick of the LAST 0x2e round — the flight-jam
+        // bound reads it (below).
+        let mut band_spend_tick = 0u32;
         let mut shot_press_gate = true;
         let mut stretch_shots = 0u32; // sprint-10: the z > 20 window fires ONE cleanup round
         let mut post_take_shots = 0u32; // sprint-11: ONE cleanup round after the take (ch 0x3F)
@@ -1136,6 +1139,21 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
         // view in-lane (~8-20 ticks each); the d1 runs break at the take well inside 2400 and
         // keep the old cap byte-exact.
         while w.total_ticks - start < if agent_run { 3000 } else { 2400 } {
+            // level-0b-deck-agent-retune (d3's own pass, the Operative lever list as template):
+            // the deck section is a hand-rolled loop — the walk_to legs own the return-fire
+            // call (walker_b2 per-tick), so NO deck fight ever picked on any walk ([L d3run1/
+            // d2run4: "2 return-fire fights" = the E-plate pair only]). d3 pays the crossing
+            // unanswered: #4 at his column (1.62, 58.03, 32.11) lands 7.0 0x18 rounds from
+            // d 13-20 ([L d3run1: 35.0 in 5 hits]) while every dart gate sits at d < 9.0.
+            // THE FIGHT LEVER: answer the shooters the Operative package answers — the tranq
+            // filter keeps only dartable guards (the win is the sleep [M 0x1469b8:315-361];
+            // #4 state 0x68 dartable true [L d3run1 t17199]), the fights stand per their own
+            // rules and time out on an unreachable guard. Gated difficulty3 (d1/d2 keep their
+            // committed streams byte-identical). Measured on this tree: NO pick — no candidate
+            // is VISIBLE from the crossing (the next lever, in the d3 ignore's ledger).
+            if difficulty3 && w.total_ticks % 10 == 0 && w.return_fire("the deck band") {
+                continue;
+            }
             let sim = w.scene.sim.as_ref().unwrap();
             let p = sim.bond.pos;
             // The take fires ON THE PASS — for the sisters the pass continues to the deck's
@@ -1339,6 +1357,18 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                     && difficulty3
                     && phase >= 1 && ((p[2] < 18.5 || (p[2] > 20.0 && stretch_shots == 0))
                         || (sim.drones.channels.on(0x3f) && post_take_shots == 0)) {
+                    // level-0b-deck-agent-retune (d3's own pass over the shifted phase): the
+                    // early r1's flight is STUCK on this tree — it locks #4 (alive(5) was
+                    // false at the shot: the +700-tick shift spawns #5 late) and chases him
+                    // past the parachute housing without detonating ([L d3run1: fired t17208,
+                    // still flying at travelled 40.0 when Bond died t17415]) — the old
+                    // `!flying` gate held every follow-up round forever, d3 crossed the band
+                    // HOLDING the rocket launcher (band_shot 1 < cap 6 → no 0x43 switch-back,
+                    // no dart close, no fights) and died at t17415 to #4's 7.0 0x18 rounds.
+                    // THE FLIGHT-JAM LEVER (the close below): a spend with NO new spend for
+                    // 100 ticks means the round is stuck — the window closes and the
+                    // d1-template package runs. [S] walk-choice, not a game law — the game's
+                    // re-press (+0x40 = 60 [D]) never gates on flight.
                     // sprint-10: the cleanup rounds — (a) the STRIP round (z < 18.5) locks the
                     // r1-woken #5 (WAIT_SWITCH exits the scan only while he waits [M
                     // 0x12f248]) and its chase-blast KILLS him in the gap-mouth piece (the
@@ -1365,6 +1395,21 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                     // the detonation (the blast lands 12+ u behind-east of the drive path —
                     // no falloff reaches him).
                     shot_victim = band_pick();
+                }
+                // level-0b-deck-agent-retune: THE JAM CLOSE — 100 ticks after a spend with no
+                // new spend, the round is stuck (the r1 chased #4 40 u without detonating
+                // [L d3run1]) and no follow-up can ever fire: CLOSE the window so the
+                // d1-template package runs — the arm-on-the-run switch to 0x43, the dart
+                // close on the dartable #4 at his column [L d3run1 t17199 state 0x68
+                // dartable true], the tranq/lane fights. On a detonating tree the next round
+                // spends at refire+convergence ≈ +80 (before this bound) and resets the
+                // stamp, so a paying window never closes early. Gated difficulty3 (d2's cap 1
+                // makes the branch unreachable). [S] walk-choice, not a game law.
+                if difficulty3 && band_shot >= 1 && band_shot < band_cap
+                    && band_spend_tick > 0 && w.total_ticks - band_spend_tick > 100 {
+                    band_shot = band_cap;
+                    eprintln!("[0b-band] window closed at t{} (round stuck {} ticks, flying {})",
+                        w.total_ticks, w.total_ticks - band_spend_tick, flying);
                 }
                 if shot_victim.is_none() && [6usize, 7, 8, 9].iter().all(|&i| !alive(i)) {
                     band_shot = band_cap; // the band is gone — the rounds are done (the dart close owns #4)
@@ -1567,6 +1612,7 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                     if shot_victim.is_some() && band_shot < band_cap {
                         band_shot += 1;
                         band_refire = w.total_ticks + 60;
+                        band_spend_tick = w.total_ticks;
                         if p[2] > 20.0 { stretch_shots += 1; }
                         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f) { post_take_shots += 1; }
                         eprintln!("[0b-band] round {} away at t{} (clip {}) victim {:?} hp {:.1}",
@@ -1895,7 +1941,7 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage_agent() {
 /// the muzzle-zone kill (capped at one); the ring-turret 16.0 world toll stays the fusebox
 /// task's.
 #[test]
-#[ignore = "re-tune: on the duct route (walks-replay-proof: no exec-floor teleport) Bond reaches the roof with less health and roof guard #4 (0.7, 58.0, 32.5) kills him at tick 17096 -> 50-real-health-00agent-0b-duct; the sister re-tune landed on this branch (the camera-latch sprints + the no-walk-back plate exit + d1/d2 on the sister deck package) — this sister still needs its own pass"]
+#[ignore = "re-tune ledger (level-0b-deck-agent-retune, 2026-11-13, master b1fd37ee2 after the files-plate shift): the deck phase moved ~+700 ticks and the roof squad's spawn order changed — #5 is NOT present at the deck entry ([L d3run1 t17199: g5 absent]) so the early r1 aims band_pick #6 and the nearest-seekable lock takes #4 ([L d3run1 flight: target Some(4) every print]); on THIS tree the 0x2e round never detonates — it chased #4 past the parachute housing (travelled 40.0, still flying at the death tick 17415), so the sprint-10 six-round window is structurally jammed: `!flying` held every follow-up forever, band_shot stuck 1 < cap 6 kept the rocket in hand (no 0x43 switch-back, no dart close, no fights) and Bond died at 17415 (-3.45, 58.07, 19.89), 22 hits for 100.0 (36.0 world in 9, 35.0 #4 0x18 in 5, 8.0 #5, 7.0 #1, 7.0 #9). LEVERS LANDED (both gated difficulty3; d1/d2 streams byte-identical, verified): (1) THE JAM CLOSE — a spend with no new spend for 100 ticks closes the window so the d1/d2 package runs (0x43 armed by t17349, the close/fights live); alone it dies EARLIER (t17389: the 40-tick switch bought the #6/#7 hits the old tree's detonations used to pay for). (2) THE DECK FIGHT CALL — the fights machinery was never wired into the hand-rolled deck loop (the walk_to legs own it): wired d3-only, no pick happened ([L d3run4: still only the 2 E-plate fights]) because no candidate is VISIBLE from the crossing. d2 itself is GREEN on this tree (twice, deterministic: mission complete t17886, hp 1.2, 27 hits — the d1/d2 route carries 5.6/hit 0x18s; d3 pays 1.25x, Plr_DMod_Hard 1.0 vs Normal 0.8 [M Player_HandlePain 0x1902c8]) with ZERO margin. NEXT LEVER: the fight pick needs a VISIBLE candidate — the [0b-ray] world segment_bullet rays to #6/#8/#9 read CLEAR from the crossing (t17229-17379) but DamageLog::visible (the hit-box eye-ray set) says none; census the two ray sets from the crossing spots (NF_RF_TRACE=1 + the [0b-ray] map), then either widen the fight's reach to the world-ray set (opt-in flag, d3 only) or shift the P2 aim so a fight opens from a visible spot; the dart sleep on the dartable #4 (state 0x68 dartable true [L t17199]) saves the 35.0/5-hits and flips the margin. Live checks: (1) the 0x2e flight law — Bullet_init 0x12c5a0's speed/fuse fields for 0x2e [M the record walk]: does the disc's heatseeker round time out or detonate on chase-proximity (the port's round chased 40 u without detonating [L d3run1])? (2) from the crossing (-6.9, 58.8, 18.8) does a real player's eye ray reach #4 (1.62, 59.2, 32.11) — the port's visible() says no while the world segment_bullet says clear"]
 fn walk_fresh_spawn_to_the_mission_end_real_damage_00agent() {
     walker::with_real_damage(|| {
         let mut w = load_fresh_at(3);
