@@ -991,7 +991,10 @@ fn fight_opts_y(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first
                 (s as f32 + 4.0 * cl as f32) + if prio_blind(c, c[1] + eye_off) { 50.0 } else { 0.0 }
             };
             let mut best = (sc(p), p);
-            for r in [2.5f32, 5.0] {
+            // The Agent Drake fight (prio set, waves_first): every point within 5 u of the hold was
+            // blind to Drake (no shot in a whole cap, clip 100) - the ring reaches 8 and 11 u too.
+            let rings: &[f32] = if waves_first && prio.is_some() { &[2.5, 5.0, 8.0, 11.0] } else { &[2.5, 5.0] };
+            for &r in rings {
                 for o in [[r, 0.0, 0.0], [-r, 0.0, 0.0], [0.0, r, 0.0], [0.0, -r, 0.0], [0.0, 0.0, r], [0.0, 0.0, -r]] {
                     let c = [hold[0] + o[0], (hold[1] + o[1]).min(max_y), hold[2] + o[2]];
                     if sim.world.segment(p, c).is_some() { continue; }
@@ -1833,7 +1836,9 @@ fn walk_arrival_to_drakes_defeat_on_real_health() {
 /// astronauts' hit chance by Accuracy Normal 0.8 [M DroneWeap_DoBulletAccuracy 0x179740:74-88].
 /// Real input only; no health/ammo/channel writes.
 #[test]
-#[ignore = "Agent (2026-11-13, master 40f33b3d3): the waits now shift cover every 240 ticks (a no-owner 0x6b explosive bolt - script 0x60007c4, r 20 d 20 - landed on the 1316-tick missile-wait spot and killed Bond at frame 11385), and the walk reaches Drake (spawned frame 12634) at health 2.3; it then fails at the Drake fight: Drake stays at hp 100 and Bond never fires (clip 100 throughout, 14 u from Drake at (27.9, 2.8, 7.8)) - the fight pick finds no clear shot from the held cover. Next: a Drake stand with a clear line; the health budget (the frame-8502 bolt 13.84, astronauts 0x6a ~52)."]
+/// GREEN 2026-11-13: the waits shift cover (a no-owner 0x6b explosive bolt landed on the held
+/// missile-wait spot) and the Drake fight's cover ring reaches 8 and 11 u (every point within 5 u
+/// of the hold was blind to Drake); the walk defeats Drake on real health at Agent.
 fn walk_arrival_to_drakes_defeat_on_real_health_agent() {
     walk_arrival_to_drakes_defeat_on_real_health_at(2);
 }
