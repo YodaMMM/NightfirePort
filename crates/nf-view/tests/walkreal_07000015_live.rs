@@ -226,6 +226,57 @@ fn draw_persist(w: &mut Walker, id: u8, label: &str) {
 /// 0x1a7c98:50-59]); the STILL gate 18 (a stepping guard is not where the view was); the bails
 /// (200 unseen / 1500 no-hit / dry).
 fn aimed_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
+    aimed_stand_impl(w, di, label, cap, false)
+}
+
+/// The desk stand's HEAD-priority aim (real-health-00agent-15-7, file-local): the shared
+/// exposure pick is torso-nearest [M DamageLog::exposed_impl — the head box wins only inside
+/// the opt-in 6 u HEAD_HUNT window], so the 10.7 u desk stand grinds 3.5 body rounds while the
+/// guard's own stream rides the window [L the fresh run on this tree: #2 stood at hp 14 when
+/// his first −7 landed, ground to hp 2 at tick 5790, and the killing −31.28 was his 0x1a
+/// GRENADE blast at 10.7 u, not a bullet]. The head round is ×10 [M NDrone2_HitDamage
+/// 0x145558 × DroneDamage_Head] — 35 from the P2K, one round per guard. The pick mirrors the
+/// gun_rays law (the eye plus the two low stand-in gun rays [M DamageLog::exposed_impl:544],
+/// `segment_bullet_scoped` — this walk never runs `with_glass_sight`) at the head box
+/// (part 5, the same part the HEAD_HUNT branch reads); None falls back to the shared torso
+/// pick, so an unexposed head costs nothing.
+fn head_aim(sim: &nf_view::scene::Sim, di: usize) -> Option<[f32; 3]> {
+    let d = &sim.drones.list[di];
+    if d.corpse || d.health <= 0.0 || !d.present { return None; }
+    let bp = sim.bond.pos;
+    let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+    let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+    let right = [cy, 0.0, -fy];
+    let gun_spots = [eye,
+        [eye[0] + right[0] * 0.25, eye[1] - 0.15, eye[2] + right[2] * 0.25],
+        [eye[0] - right[0] * 0.25, eye[1] - 0.15, eye[2] - right[2] * 0.25]];
+    let data = nf_game::drone::Data {
+        tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+        world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+        skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+        hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+        surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+        ai_points: &sim.ai_points,
+    };
+    for b in d.hit_boxes(&data) {
+        if b.part != 5 { continue; }
+        let c = [b.m[3][0], b.m[3][1], b.m[3][2]];
+        let ray = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
+        let Some(t_box) = nf_game::damage::ray_box(eye, ray, &b) else { continue };
+        let mut clear = true;
+        for g in &gun_spots {
+            let gr = [c[0] - g[0], c[1] - g[1], c[2] - g[2]];
+            if sim.world.segment_bullet_scoped(sim.world.find_cel(*g), *g, c).is_some_and(|tw| tw < t_box) {
+                clear = false;
+                break;
+            }
+        }
+        if clear { return Some(c); }
+    }
+    None
+}
+
+fn aimed_stand_impl(w: &mut Walker, di: usize, label: &str, cap: u32, head_first: bool) -> bool {
     // Settle: no input until the switch anim is done, then the raise loop (the 0c idiom).
     for _ in 0..90 {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -277,7 +328,7 @@ fn aimed_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                     eprintln!("[15] the aimed stand ({label}): drone #{di} bailed NO-HIT at +{t} (still {still}, aiming {})", sim.aiming);
                     return false;
                 }
-                if t % 10 == 0 { aim = walker::DamageLog::exposed_part_gun_rays(&sim, di); }
+                if t % 10 == 0 { aim = if head_first { head_aim(&sim, di).or(walker::DamageLog::exposed_part_gun_rays(&sim, di)) } else { walker::DamageLog::exposed_part_gun_rays(&sim, di) }; }
                 if aim.is_none() { unseen += 1; if unseen > 200 { eprintln!("[15] the aimed stand ({label}): drone #{di} bailed UNSEEN at +{t}"); return false; } } else { unseen = 0; }
                 let b = sim.bond.pos;
                 let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
@@ -896,12 +947,16 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
         } else if clip + spare < 8 {
             w.resupply("the desk-corner stand's rounds");
         }
+        // real-health-00agent-15-7 (the head lever): the desk stands aim the clear HEAD box
+        // first (head_aim above) — one ×10 round [M NDrone2_HitDamage 0x145558 ×
+        // DroneDamage_Head] kills where the torso grind fed the guard's own stream. The
+        // door[39] stands keep the torso pick (their guards die at +74/+44 on body rounds).
         for (at, skin, label) in [
             ([30.4f32, 41.3, 73.6], 0x50000b2u32, "the desk-corner AR guard (skin 0x50000b2) from door[47] north"),
             ([38.7f32, 41.3, 76.0], 0x5000087u32, "the desk-corner rifle guard (skin 0x5000087) from door[47] north"),
         ] {
             if let Some(di) = agent_drone_nearest_skin(&w, at, 14.0, skin) {
-                aimed_stand(&mut w, di, label, 2400);
+                aimed_stand_impl(&mut w, di, label, 2400, true);
             }
         }
     }
@@ -1026,6 +1081,48 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
             }
         }
     }
+    // real-health-00agent-15-7 (the west-room lever, d3 real-damage only): the d3 roster's
+    // west-room pair is SPawner-RELEASED during the door[29] threshold leg (the fresh run: the
+    // lane-mark stands resolved NOTHING, and #10's 0x1a grenade blast −58.86 at the jog killed
+    // Bond at t7684 — the fights met #11 at hp 3 but gave up, and the throw cycle (~70 ticks
+    // between throws [L the d2 rain ledger]) outscores any stand's raise window). The answer is
+    // the release-tick fight law the d2 Agent run itself rides: `pre_throw_stands` answers the
+    // spawner release the tick after it, so the kill lands before the guard's first throw —
+    // SCOPED to the west-room phase (the 15-5 disaster was the whole-walk flag at the crossing's
+    // aperture fight, a different close fight this scope never touches), and off again after the
+    // jog sweep. The d2/top-up walks keep their pinned timelines.
+    if difficulty >= 3 && !w.tops_up() {
+        w.dmg.pre_throw_stands = true;
+        // real-health-00agent-15-7 (the west-room fights' gun-ray law): the fights' aim pick
+        // rides the EYE law here (lane_fights was cleared at the #462 shot) — the fresh run's
+        // newborn fight on #11 went "killed false" at hp 3 with the tap gated on an eye ray
+        // whose ROUNDS died on the door jamb (the 07000013 security-room's own measured
+        // mismatch [M DamageLog::exposed_impl:544 — the eye ray clears by a hair while the
+        // gun's low-right stand-in clips the corner]). lane_fights re-armed for this phase makes
+        // the pick AND the taps ride the gun-ray law — every tap is a round that actually
+        // reaches — and the pick only fights a guard the lanes can kill. Off again after the
+        // jog sweep, with pre_throw_stands.
+        w.dmg.lane_fights = true;
+        // real-health-00agent-15-7 (the fights' ammo): the AR came back in hand after the lob at
+        // clip 3 spare 0 — the fresh run's fights burned it dry mid-fight and the fights' own
+        // resupply nav walked Bond into the door[29] wedge (the panic at tick 25080, health
+        // 23.6, 12 fights). The P2K's pool (clip 3 spare 34 after the desk stands [L the fresh
+        // run]) pays the fights instead — the same law as the desk stands' swap, one phase
+        // later.
+        let (clip, spare, wpn) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare, sim.gun.weapon) };
+        if clip + spare < 8 && wpn != 0x02 {
+            draw_persist(&mut w, 0x02, "the P2K for the west-room fights");
+        }
+        // real-health-00agent-15-7 (the fights' dry-mag law, scoped): the fresh run's fights
+        // still ran the resupply NAV on the dry AR ("door[29] through resupply 0 nav 1/2", the
+        // wedge panic at tick 25080) — the fights' master give-up on a dry mag is the base law,
+        // and a player whose mag runs dry mid-fight cycles to the next loaded firearm
+        // (the field doc's 02/03 00agent idiom). switch_dry is that law — SCOPED to this phase
+        // (the 15-5 run15q disaster was the whole-walk flag at the crossing's aperture fight,
+        // a different fight this scope never touches); with the P2K's 34 spare in the wheel the
+        // cycle always finds rounds, so the resupply nav never fires. Off after the jog sweep.
+        w.dmg.switch_dry = true;
+    }
     let route: &[(&str, Wp)] = &[
         ("door[29] threshold", Wp::new(11.5, 41.4, 71.2).r(0.9)),
         ("door[29] through", Wp::new(8.0, 41.4, 71.2).r(1.0)),
@@ -1089,6 +1186,11 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
             let Some(di) = near else { break };
             w.shoot(di, &format!("the west-room grenadier met at the jog, sweep {sweep} (level-15-agent-doors-2: by proximity, not the spot)"));
         }
+    }
+    if difficulty >= 3 && !w.tops_up() {
+        w.dmg.pre_throw_stands = false;
+        w.dmg.lane_fights = false;
+        w.dmg.switch_dry = false;
     }
     let (route_d1, route_d2) = route_d.split_at(route_d.iter().position(|(l, _)| *l == "door[50] through").unwrap());
     w.walk_route(route_d1);
@@ -1552,7 +1654,7 @@ fn walk_spawn_to_the_omega_sector_exit_real_damage() {
 /// body (the fence-mark stands at 28 u never fired — the 0.02-rad aim gate is a torso
 /// width there; the door[38]-north point is the next try).
 #[test]
-#[ignore = "00 Agent (real-health-00agent-15-6, the measured ledger on this tree): the walk PASSES the grenadier and dies at t5790 at (34.74,41.48,63.88) at door[47]'s north side, 12 hits for 100.0. What this session fixed, each measured on its own run: the fence chain's −16.52 is DODGED (the d3 shot line steps to z 6.5 — the mark stood inside the sphere-edge reach by ~0.4 u; at z 6.5 every chain blast dies before Bond, zero fence hits in runs 15d-m); the plank/meet grenadier pair is DEAD with zero volleys — the AR draw at door[38] north shifts the stream so the fights' own law kills #7 mid-leg (the 4228 line) and #8 VANISHES at the door[39] stand's +74, was 39.5 in 3 blasts (the run15a baseline) plus #7's 41.3-59.3 when unanswered; the chaser #17's 48.0 in 16 is GONE — the door[39] aimed stand's zero-spread taps kill him at +44 (the hip cone scattered 8 rounds for 0 at 7 u — the run15f ledger), the walk then crosses the plank, door[46] and door[47] for the first time; the d3 gates all carry !w.tops_up() so the top-up 00agent walk keeps its pinned timeline (the whole binary 8 passed / 0 failed / 1 ignored; interactables_07000015_live 19/0). The remaining dealers at the death: the desk-corner AR guard #2 (0x50000b2, weapon 0x1a, (30.4, 73.7)) dealt 59.3 in 5 DURING the desk stand's settle+raise — the aimed stand converged and dropped him to hp 2 but his volley rode the stand's ~330-tick unarmed window (the run15m ledger; the P2K swap for the dry AR works — clip 5 spare 34, the fights never touch it; the resupply is measured WORSE — its only corridor pile is the plank drops 29.2 u south, the backtrack nav ate 56.3, the run15l ledger); the #462 beam's own blast −14.72 at the 13.56 u shot stand (the pop lands at +473 ≈ tick 2151 — the door[42] leaf blocks the far line, so the stand cannot move east; the max_d 18.5 gate rode to the same 13.56 stop); the sneak 14.0 and the crossing 9.0 stand as accepted. The measured dead ends this session: the door[38] 24.0 u shoot_bounded stand (poked the WRONG guard — #17 the rifle chaser stands 2.2 u off #7's spot and an unskinned nearest answers with him; the aimed stand at 21 u is also dead — the grenadiers are SPAWNER-RELEASED and not present at t3900, the run15c/f ledgers); the d3 chaser resupply detour (fell Bond −56.28 at the plank, the run15f ledger). The next levers: answer #2 from a defended window (the settle+raise is the exposure — crouch first [S] unverified, or kill #3 FIRST from the same mark and take #2 with a shorter convergence, or pre-damage #2 from the door[46] through leg where his line may be longer), then the desk stands' ammo law is settled (the P2K swap), then the meet's pool chain (the -15-4 stub's named lever) and the coded levers downstream: the #526 lob from door[32]'s threshold (implemented, never reached), the west-room stands, the great hall tail."]
+#[ignore = "00 Agent (real-health-00agent-15-7, the measured ledger on this tree): the walk PASSES the whole desk corner for the first time and dies at t7985 at (11.26, 41.38, 70.82) — the door[29] threshold — with 15 hits for 100.0, 9 fights. What this session fixed, each measured on its own run: the desk stands answer HEAD-first (the file-local head_aim — the shared pick is torso-nearest [M DamageLog::exposed_impl; the head round is ×10 = 35 from the P2K, one round per guard]): #2 VANISHED at +20, #3 at +19, zero return fire during the stands (was: the torso grind 14→9→2 while #2's 0x1a GRENADE blast −31.28 rode the settle+raise window — the killing hit, not a bullet); the walk then clears door[32], the #526 lob from the threshold lands at −0.42 (Bond 16.22 u off the boom, cause 3 — the lob lever WORKS, the feared −44.33 rim shot never paid), door[29] opens and the fights meet the west-room pair for the first time. The west-room ledger (four runs): the pair is SPawner-RELEASED during the door[32]-threshold leg ~28 u behind the west wall (the lane-mark 22 u skin stands resolved NOTHING; born ≈ t7400, first sight during route_c); the fights' pick rode the EYE law and the newborn fight on #11 went killed-false at hp 3 with the rounds on the door jamb (the 07000013 mismatch [M DamageLog::exposed_impl:544 — the eye ray clears by a hair while the gun's low-right stand-in clips the corner]) — lane_fights re-armed for the phase (d3-gated, cleared after the jog sweep) made the fights HONEST and #11 KILLED at 7637, the first west-room kill; his grenade still landed −14.0 (the thrown grenades outlive their throwers [L the aim-last-seven §3 ledger]); #10's fight never reached him (his gun-ray window from the through/jog never cleared — he stands at the room's south-west), his grenade −21.1; Bond SURVIVED both pops (58.9 → 23.8 — the pop budget at this health is TWO, not one). The wedge that killed: the fights' dry-mag RESUPPLY NAV — after the P2K's clip burned the nav walked Bond BACK EAST 31 u to the (41.9, 40.4, 67.8) pile with both throwers alive (the switch_dry cycle needs a LOADED wheel entry; the P2K at clip 0 spare 34 did not qualify) and the grenades chased the nav to the death at t7985. The next levers, in order: 1) disarm the fights' resupply nav for this phase, or keep a LOADED gun in the wheel (a mid-phase reload press — the reload input exists in aimed_stand), 2) kill #10 from the jog with the head-first aimed stand (the raise ~330 ticks eats 1-2 pops of −14/−21; after #11's outlived pop the budget holds 44.9 — ONE pop survivable, so the stand is a race the fights' co-fight helps), 3) then the corridor south, the great-hall #5 (the d3 roster's wander — the same spot-resolution miss is likely there), the door[42] fence dance, the exit. The upstream costs stand accepted: the sneak 14.0, the #462 beam's own blast −14.72 at the 13.56 u shot stand (the north-side line [S] remains the untried dodge — the beam spans z −2..3.2), the crossing 9.0."]
 fn walk_spawn_to_the_omega_sector_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(3));
 }
