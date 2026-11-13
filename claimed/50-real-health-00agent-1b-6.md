@@ -18,3 +18,6 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
   run it once more on your final tree (merged with `origin/master`). Report the total line.
 
 **Branch:** `s/real-health-00agent-1b-6`.
+
+---
+claimed-by: sandbox7 at 2026-11-13T12:14Z
