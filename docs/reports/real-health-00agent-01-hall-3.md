@@ -87,3 +87,19 @@ Token/credit/context figures: `not visible to me` — this environment exposes n
 or context-window readout to the worker. What was visible: the task message's clock (sandbox
 expiry ~05:09 UTC; this report written ~04:36 UTC), `git` hashes, test outputs, and process
 exit codes. No input/output token counters, no credit balance, no dollar cost.
+
+## ntfy failed
+
+All three fallbacks failed at the network level (the same signature the hall-2 and
+level-02-castle-walks-hearing-2 reports document):
+
+1. `curl -sS -m 20 ... https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 urllib.request` →
+   `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data ... https://ntfy.sh/nightfire-yoda-8k3x` → timed out inside the
+   38 s cap, no output, killed.
+
+Everything else was delivered: the branch `s/real-health-00agent-01-hall-3` (402081b08) with
+the report, the WORKLOG entries, the ledger in the d3 test's ignore message, and the queue's
+done item with the report body attached.
