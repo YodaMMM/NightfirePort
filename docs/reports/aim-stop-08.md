@@ -96,3 +96,16 @@ have not been re-run here.
 ## Usage
 
 not visible to me (no token, credit or context-window figures are shown in this environment).
+
+## ntfy failed
+
+All three fallbacks, in order, with their exact output:
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "aim-stop-08: done - stop live on 08, Operative walk green (armour-corner + per-bolt answer), Agent walk ignored with its ledger, all 08 binaries green, full suite not runnable here (bg killed/disk)" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'aim-stop-08: done ...', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "aim-stop-08: done ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → killed after a 30 s hang with no output (connection never established; the sandbox's
+   network reaches github.com via the tooling but not ntfy.sh directly).
+
+The queue entry (done/30-aim-stop-08.md on origin/queue) carries this report.
