@@ -635,9 +635,9 @@ impl Walker {
                     .filter(|b| b.state < 2)
                     .map(|b| format!("d{}:w{}", b.owner, b.weapon))
                     .collect();
-                eprintln!("[hp] t{} d#{i} skin {:#x} team {} {prev:.1}->{:.1} st {:#x} mode {} alt {:#x} dtype {} at ({:.2},{:.2},{:.2}) last_dmg {:.1} hit {:?} by_player {} blast {:?} opp {:?} bullets [{}]",
+                eprintln!("[hp] t{} d#{i} skin {:#x} team {} {prev:.1}->{:.1} st {:#x} mode {} alt {:#x} dtype {} at ({:.2},{:.2},{:.2}) last_dmg {:.1} hit {:?} by_player {} by_drone {:?} blast {:?} opp {:?} bullets [{}]",
                     self.total_ticks, d.skin, d.team, d.health, d.state, d.mode, d.alt_state, d.dtype,
-                    d.pos[0], d.pos[1], d.pos[2], d.last_damage, d.hit, d.hit_by_player, d.blast, d.opp_drone, live.join(" "));
+                    d.pos[0], d.pos[1], d.pos[2], d.last_damage, d.hit, d.hit_by_player, d.hit_by_drone, d.blast, d.opp_drone, live.join(" "));
             }
         }
         if sim.bond.pos[1] < y_before - 0.4 && !sim.bond.grounded {

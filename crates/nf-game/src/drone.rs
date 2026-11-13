@@ -1347,6 +1347,10 @@ pub struct Drone {
     /// `Drone+0x2B4` (last-hit-by) is the player [M `DroneFunc_OnInitDeath` 0x145bd0 reads it; the port
     /// tracks the two bullet paths separately, so a flag stands in] (fix-actors).
     pub hit_by_player: bool,
+    /// The shooting drone of the last drone bullet that hit this one (`Drone+0x2B4` when it is a
+    /// drone [M 0x13a9f8:23, 0x13fff0:302-304]); `None` until a drone's round lands. Read-only state
+    /// (the death path keys on `hit_by_player`); the walks' hit traces name the shooter with it.
+    pub hit_by_drone: Option<usize>,
     /// The pending `OnInitDeath` fail verdict, drained by the tick (fix-actors).
     pub fail_reason: Option<crate::ally::FailReason>,
     /// `Drone+0x51C` — the alert STATUS byte `Drone_AlertStatusSet` 0x13a8d8 writes (with the
@@ -2271,7 +2275,7 @@ impl Drone {
             // copy: a fresh team != 2 drone holds the player, team 2 holds none — `type_setup`
             // refines it the moment the team byte resolves.
             opp_bond: true,
-            corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, alert_status: 0, alert_status_prev: 0, alert_status_frame: 0, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, chat_channel: 0, chat_channel_on: false,
+            corpse: false, death_pending: false, hit_by_player: false, hit_by_drone: None, fail_reason: None, alert_status: 0, alert_status_prev: 0, alert_status_frame: 0, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, chat_channel: 0, chat_channel_on: false,
             alert_pending: 0,
             mission_wait_channel: 0,
             armed_peer_exit_dist: f32::MAX,
@@ -9107,7 +9111,7 @@ impl Drone {
                 // Landed level by level (each level's walks re-tuned against the stop first, the
                 // room gate's pattern); ZERO_ROOT_ALL turns it on everywhere.
                 let zero_root_live = ZERO_ROOT_ALL || (d.level >> 8 == 0x0700_00
-                    && matches!(d.level & 0xff, 0x02 | 0x03 | 0x04 | 0x05 | 0x06 | 0x07 | 0x09 | 0x0a | 0x0c | 0x0d | 0x12 | 0x13 | 0x14 | 0x1b));
+                    && matches!(d.level & 0xff, 0x02 | 0x03 | 0x04 | 0x05 | 0x06 | 0x07 | 0x09 | 0x0a | 0x0c | 0x0d | 0x12 | 0x13 | 0x14 | 0x16 | 0x1b));
                 if zero_root_live && self.has_opponent(frame) && self.anim.class == 2 { self.zero_root = true; }
                 if self.firing && !self.burst_done {
                     if ailog() && self.grenade_count > 0 {
@@ -24128,6 +24132,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 let dr = &mut self.list[vi];
                                 // +0x2B4 = the shooting drone [M 0x13a9f8:23, 0x13fff0:302-304].
                                 dr.hit_by_player = false;
+                                dr.hit_by_drone = Some(b.owner);
                                 dr.hit = Some(Hit { part, ray, point: at, damage, weapon: b.weapon });
                                 dr.global_flinch = self.last_flinch;
                                 dr.bond_aiming = self.bond_aiming;
@@ -25438,7 +25443,7 @@ mod tests {
             // copy: a fresh team != 2 drone holds the player, team 2 holds none — `type_setup`
             // refines it the moment the team byte resolves.
             opp_bond: true,
-            corpse: false, death_pending: false, hit_by_player: false, fail_reason: None, alert_status: 0, alert_status_prev: 0, alert_status_frame: 0, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, chat_channel: 0, chat_channel_on: false, death_channel: 0, special_death: 0, special_spot: pos, special_yaw: 0.0,
+            corpse: false, death_pending: false, hit_by_player: false, hit_by_drone: None, fail_reason: None, alert_status: 0, alert_status_prev: 0, alert_status_frame: 0, interro_armed: false, interro_min_dist: 0.0, interro_step: 0, interro_latch: None, assist_src: None, assist_ended: false, armed_peer_dist: f32::MAX, wait_channel: 0, wait_channel_on: false, route_blocked: false, chat_channel: 0, chat_channel_on: false, death_channel: 0, special_death: 0, special_spot: pos, special_yaw: 0.0,
             alert_pending: 0,
             armed_peer_exit_dist: f32::MAX,
             peer_latch: u32::MAX,
