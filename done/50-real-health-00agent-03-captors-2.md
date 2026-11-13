@@ -25,3 +25,8 @@ walkreal_07000003_live: Bond died at tick 53672 (frame 53672) at (11.71,10.12,-1
 
 ---
 claimed-by: sandbox1 at 2026-11-13T05:36Z
+
+---
+## Report (done, 2026-11-13T07:20Z)
+
+Closed by the driver: the report is on `s/real-health-00agent-03-captors-2` (docs/reports/real-health-00agent-03-captors-2.md); the worker didn't run finish.sh.
