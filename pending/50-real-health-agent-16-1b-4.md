@@ -33,3 +33,5 @@ Update 2026-11-13T17:05Z (master c94c1043e): the 16 Agent walk now dies at tick 
 
 ---
 Update 2026-11-13T17:11Z (master 40f33b3d3): the 1b AGENT walk latches all 8 consoles and ends the console run at 2.3 health, then dies at the waves-wait first tick (frame 11385, (46.0, -14.1, -3.0)) to a world hit of 2.32 - at the instant every missile reaches deploy state 2 (likely the launch blast), not a hurt volume (hurt-avoidance in hide_and_snipe for d2 changed nothing). Budget: 28 hits for 100 - the world 27.7 in 5 (13.84 at frame 8502), astronauts #3 17.5, #7 14.0, #4 10.5, #11 10.5 (0x6a). Levers: a waiting spot away from the silos when the deploy completes; the frame-8502 world hit during the console run.
+
+Also: the frame-8502 world hit (13.84 on Bond) is one blast centred (20.69, -3.89, -0.80) that also hits a dozen astronauts (#7 10.4, #13 11.3, #8 8.4 ...); find its source (NF_HEALTH_TRACE prints blast Some(..) with no owner) - a console or prop blowing up, or a grenade - and keep Bond out of its radius.
