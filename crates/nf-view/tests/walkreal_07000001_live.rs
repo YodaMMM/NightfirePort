@@ -419,6 +419,67 @@ fn d3_corridor_fight(w: &mut Walker, g: usize, stance: [f32; 2], label: &str) ->
     dead
 }
 
+/// real-health-00agent-01-hall-3 (d3): the door-phase ADVANCE DANCE — the fight3 mechanic
+/// with the exchange budget bolted on. The measured facts ([L] the stance-fight run window 2
+/// and the peek runs): a STANDING walk into the door lane draws the crowd's advance (guard 6
+/// advanced and died to the walker's own return fire at tick 16518 for 3.6 hp — the
+/// return-fire machinery lives in `after_step`/`DamageLog::note`, so it runs in ANY stepped
+/// loop), but lingering cost the deep captain's 5-pellet 36.0 volley at 16593. So: SHORT
+/// standing legs straight at the aperture mouth (8.5,10.8), capped at 600 ticks, ANY wound
+/// exits the leg, home to the deep line + 60 wait between legs, and the whole dance stops
+/// pressing under 20 hp (the budget: the advancer's volley 3.6, the captain's 36.0, Bond at
+/// 55.0 — one captain volley per dance is survivable). The return-fire machinery kills the
+/// advancers inside the legs; the named guards that die raise their channels wherever they
+/// stand [M 0x1637f8 case 2]. Returns whether ANY named guard died or crossed. d3-gated at
+/// the call site (the d1/d2 lure streams stay byte-identical).
+fn d3_advance_dance(w: &mut Walker, named: &[usize], tag: &str) -> bool {
+    d3_switch_to_deepest_gun(w, &format!("{tag} the advance re-arm"));
+    let mut any_done = false;
+    for leg in 0..5u32 {
+        let done_all = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            named.iter().all(|&gi| {
+                let d = &sim.drones.list[gi];
+                d.corpse || d.health <= 0.0 || d.pos[2] <= 11.2
+            })
+        };
+        if done_all { any_done = true; break; }
+        let hp_bond0 = w.scene.sim.as_ref().unwrap().drones.health.health;
+        if hp_bond0 <= 15.0 { break; } // the exchange budget: never press into the lane under 15
+        // The leg: the NAV walks toward (9,10) — a target BEYOND the door plane, so the nav's
+        // own path crosses the door and OPENS it (the fight3 exchange rode a JUST-opened door:
+        // its nav 2 line, the guards exchange through the open aperture; the door auto-closes
+        // between phases and the guards ignore a standing Bond at a closed plane [L the dance
+        // runs]). Capped at 500 ticks by the opt-in nav_tick_cap — the measured lethal linger
+        // (the 16518→16593 window) must not ride a 3000-tick wedge.
+        w.nav_tick_cap = Some(500);
+        w.leg_abort_on_wound = Some(1.0);
+        w.dmg.abort_on_wound = Some(1.0);
+        w.walk_nav_to([9.0, 6.4, 10.0], &format!("{tag} advance leg {leg} through the door"), 0.4);
+        w.nav_tick_cap = None;
+        w.leg_abort_on_wound = None;
+        w.dmg.abort_on_wound = None;
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bpos = sim.bond.pos;
+            let across: Vec<String> = named.iter().map(|&gi| {
+                let d = &sim.drones.list[gi];
+                format!("g{}h{:.0}z{:.1}", gi, if d.corpse { 0.0 } else { d.health }, d.pos[2])
+            }).collect();
+            eprintln!("[01] {tag} advance leg {leg}: bond {:.1} at ({:.1},{:.1},{:.1}) [{was}]", 
+                sim.drones.health.health, bpos[0], bpos[1], bpos[2], was = across.join(" "));
+        }
+        for &gi in named {
+            let d = &w.scene.sim.as_ref().unwrap().drones.list[gi];
+            if d.corpse || d.health <= 0.0 || d.pos[2] <= 11.2 { any_done = true; }
+        }
+        if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+        w.walk_nav_to([6.5, 6.4, 7.6], &format!("{tag} advance leg {leg} home to the deep line"), 1.0);
+        w.wait(60);
+    }
+    any_done
+}
+
 /// real-health-00agent-01-hall-3 (d3): the door-phase DOOR-LANE PEEK DANCE. The 2026-11-13
 /// diag run measured the sustained lure from the deep line (6.5,7.6) dead on every axis: 0 of
 /// 56/55/56 taps LANDED, the flight lane to every guard blocked on every trigger tick,
@@ -1376,9 +1437,9 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                         // guards [L the grid]; the fight walks it (real input) and taps on the
                         // lane, metered. The guard that dies raises his channel wherever he
                         // stands [M 0x1637f8 case 2].
-                        // The peek dance (see d3_aperture_fight): the whole named crowd is the
-                        // target set — the advancers cross and the exchange kills them.
-                        let finished = d3_aperture_fight(&mut w, &named_all, "hall")
+                        // The advance dance (see d3_advance_dance): the whole named crowd is
+                        // the target set — the legs draw the advancers, the return fire kills.
+                        let finished = d3_advance_dance(&mut w, &named_all, "hall")
                             || { let sim = w.scene.sim.as_ref().unwrap(); let d = &sim.drones.list[g]; d.corpse || d.health <= 0.0 || d.pos[2] <= 11.2 };
                         if finished { continue; }
                         eprintln!("[01] hall guard {g}: still across and alive after the aperture fight — left (no flank)");

@@ -151,6 +151,19 @@ pub struct Walker {
     pub sidestep_decays: bool,
     max_y: f32,
     pub lenient: bool,
+    /// Opt-in tick cap for `walk_to`'s leg loop (real-health-00agent-01-hall-3, d3 only):
+    /// `None` everywhere else — the door-phase advance dance needs a nav leg into the hall
+    /// that STOPS after the exchange instead of wedging to the 3000-tick cap in the lane (the
+    /// 16518→16593 measured linger is lethal). `Some(cap)` makes a leg return early after
+    /// `cap` ticks (u32::MAX−1, not the wedge marker, so `walk_nav_to` does not re-bridge).
+    /// Pure tick accounting: no RNG draw, no sim call — the other walks are byte-identical.
+    pub nav_tick_cap: Option<u32>,
+    /// Opt-in wound abort for `walk_to` (same round, d3 only): `Some(threshold)` makes a leg
+    /// return early (u32::MAX−1, not the wedge marker) the first tick Bond's health drops more
+    /// than `threshold` below the leg's start — the advance dance's leg must END on the first
+    /// volley (the 36.0 captain burst is one-frame; the linger is the measured killer). `None`
+    /// everywhere else; pure health reads, no RNG, no sim call.
+    pub leg_abort_on_wound: Option<f32>,
     /// Inside the stuck ladder's hostile-body-block response (the arm's shoot/resupply run their
     /// own nested walks): the nested stuck ladders must fall through to the plain sidestep ladder
     /// instead of re-triggering the arm (the run-2 recursion: nav 5 flank 1 nav 1 flank 1 …).
@@ -315,6 +328,8 @@ impl Walker {
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, on_step: None, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0,
             sidestep: 0, sidestep_decays: false, max_y: pos[1], lenient: false,
+            nav_tick_cap: None,
+            leg_abort_on_wound: None,
             trail: Vec::new(),
             alarm_last: Vec::new(),
             drone_watch, watch_last,
@@ -1181,6 +1196,7 @@ impl Walker {
             // A wedged nav node is SKIPPED (the next node re-aims); the route continues.
             let r = self.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("{label} nav {k}"));
             if r == u32::MAX { self.bridge_and_retry(*p, 1.3, &format!("{label} nav {k}")); }
+            if r == u32::MAX - 1 { self.lenient = false; return; } // the opt-in wound abort / tick cap: stop the WHOLE nav, not just this leg
         }
         let r = self.walk_to(Wp { at: target, act: Act::None, arrive: final_arrive }, label);
         if r == u32::MAX { self.bridge_and_retry(target, final_arrive, label); }
@@ -1250,6 +1266,7 @@ impl Walker {
         // trip the 6000-tick give-up cap on the way out; the 16 chasers walk died exactly
         // there, walker.rs:853, level-02-every-objective-5 2026-10-31).
         let mut start_ticks = self.total_ticks;
+        let start_health = self.scene.sim.as_ref().map(|s| s.drones.health.health).unwrap_or(100.0);
         let mut use_left = 0u32;
         let mut ladder = false;
         let mut riding = false;
@@ -1270,7 +1287,21 @@ impl Walker {
                 if self.lenient { eprintln!("[walk] {label}: gave up at the {give_up}-tick cap\n{dump}"); return u32::MAX; }
                 panic!("walk_to {label}: 6000-tick cap\n{dump}");
             }
+            // The opt-in leg cap (see the field doc): return early, NOT as a wedge — the
+            // caller's bridge_and_retry must not run on a deliberate stop.
+            if let Some(cap) = self.nav_tick_cap {
+                if self.total_ticks - start_ticks >= cap {
+                    eprintln!("[walk] {label}: the opt-in nav_tick_cap {cap} hit — returning early (not a wedge)");
+                    return u32::MAX - 1;
+                }
+            }
             let sim = self.scene.sim.as_ref().unwrap();
+            if let Some(th) = self.leg_abort_on_wound {
+                if sim.drones.health.health < start_health - th {
+                    eprintln!("[walk] {label}: the opt-in wound abort hit (health {:.1}) — returning early (not a wedge)", sim.drones.health.health);
+                    return u32::MAX - 1;
+                }
+            }
             if self.stop_on_exit && sim.drones.level_exit.is_some() {
                 self.report.legs.push((label.to_string(), self.total_ticks - start_ticks, self.pos));
                 if std::env::var_os("NF_RF_TRACE").is_some() {
