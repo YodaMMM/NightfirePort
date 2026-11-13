@@ -167,8 +167,12 @@ pub fn drone_setup(skin: u32, weapon_param: u32, level: u32) -> DroneSetup {
 
 /// The weapon `NDrone2_DefaultInit` stores in `sAnimObject` (`anim+0x62`): parameter 9, or 1 (0 for skin
 /// 0x0500001E) when it is 0. Measured live in 07000005: parameter 9 = 0x16 / 0x24 → anim+0x62 = 0x16 / 0x24.
-pub fn weapon_id(skin: u32, weapon_param: u32) -> u32 {
-    if weapon_param != 0 { weapon_param } else if skin == 0x0500_001e { 0 } else { 1 }
+/// `kind` is the setup's `+0xD8` ([`drone_setup`]): the weapon switch's 0x12/0x14/0x15 arm gives a
+/// kind-0xB body (the assassin's) weapon 0x14 [M 0x14b300:294-300; L 07000004 d1: her rounds carry
+/// weapon 0x14, raw 2.5, through `Drone_ModBulletDamage` 0x139f50].
+pub fn weapon_id(skin: u32, weapon_param: u32, kind: u16) -> u32 {
+    let w = if weapon_param != 0 { weapon_param } else if skin == 0x0500_001e { 0 } else { 1 };
+    if kind == 0xb && matches!(w, 0x12 | 0x14 | 0x15) { 0x14 } else { w }
 }
 
 /// Behaviour property decoding (`behaviour_util_getProperty` 0x1c7d98): `(words[desc[2id] & 7] & masks[desc[2id+1]])

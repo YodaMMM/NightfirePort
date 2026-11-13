@@ -83,6 +83,19 @@ pub struct Report {
     pub falls: Vec<String>,
 }
 
+/// The per-tick snapshot the replay-parity test compares (walker-side; the replay side captures
+/// the same fields right after each replayed `step_bond`). Captured by `step_recorded` when
+/// recording is on. (The b2 walker's own copy — the two walkers are separate modules, each with
+/// its own `Walker` type; the fields match walker.rs's.)
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WalkTickState {
+    pub pos: [f32; 3],
+    pub yaw: f32,
+    pub health: f32,
+    pub frame: u32,
+    pub mission_end: Option<u32>,
+}
+
 /// The walker over one loaded scene.
 pub struct Walker {
     pub scene: Scene,
@@ -105,6 +118,16 @@ pub struct Walker {
     stuck_cycles: u32,
     float_ticks: u32,
     sidestep: i32,
+    /// walker-sidestep-decay's stuck-ladder decay, OPT-IN (walker-sidestep-decay-2: the
+    /// walker DEFAULT re-timed the 0b real-damage roof walks' legs upstream of any route
+    /// lever and all four sisters died in the roof fights — 5/4 on the merged tree vs
+    /// master's 9/0 [L the run] — so master's `sidestep -= 1` is the default again and the
+    /// walks that need the decay set this). true ALSO restores the ride/grab scope resets
+    /// at walk_to's WireRide/Ladder boundaries (the 0c real-damage walk's post-#282 leg
+    /// starts straight only when the boundary clears the carry; master's own opt-in
+    /// `reset_sidestep` call sites keep firing regardless, so a master-tuned caller is
+    /// untouched). walker.rs has the same opt-in under the same name.
+    pub sidestep_decays: bool,
     max_y: f32,
     /// Lenient walks bail (u32::MAX) at the 6000-tick cap instead of panicking — the caller
     /// decides (walkreal_0700000b_live's deck leg keeps the interactions real on a wedge).
@@ -123,6 +146,28 @@ pub struct Walker {
     /// Pickups `resupply` must not walk to: a placed pickup behind a locked door is near on the map
     /// and no route away.
     pub no_fetch: Vec<[f32; 3]>,
+    /// OPT-IN (`resupply_home`, set only by the 07000013 chain's d3 real-damage walk — no other
+    /// caller sets it, so every other walk is byte-identical): a successful resupply fetch is a
+    /// THERE-AND-BACK errand — after the fetch loop, walk the nav route back to where the
+    /// resupply started. The 07000012 north lobby's fetches left Bond on the lower floor south
+    /// of the lobby (the drops rest ~1.1 under the lane floor, where the stream guards stand),
+    /// and the leg resumed its steering from there — the direct line to the leg target crosses
+    /// the lobby's south wall (cel 374 blocks every line from that floor to the lane; the nav
+    /// graph has no cross-path route) and the 6000-tick cap killed the walk
+    /// (level-13-warm-chain-margin-3's wedge, repro'd on this tree: bond (-8.99,1.03,12.62),
+    /// target (-8.00,1.10,17.00), segment Some(0.127) at tick 13980 [L]). A player who steps off
+    /// the lane to grab ammo walks back to where he was heading and continues.
+    pub resupply_home: bool,
+    /// replay-parity (opt-in, `start_recording`): every stepped tick's exact input, appended by
+    /// `step_recorded` in the replay file's own form. While recording, the sim is stepped with
+    /// `to_parts()` of the just-pushed record — the sim sees exactly what is recorded — so a
+    /// fresh load replaying this Vec is tick-for-tick identical. `None` (default): no recording,
+    /// and the step is exactly the old direct `step_bond`.
+    pub record_inputs: Option<Vec<nf_view::replay::TickInput>>,
+    /// replay-parity (opt-in): the per-tick state the parity test compares — Bond pos/yaw,
+    /// health, the drone frame and the mission_end latch, captured right after each recorded
+    /// step. One entry per recorded tick, same order as `record_inputs`.
+    pub record_states: Option<Vec<WalkTickState>>,
 }
 
 /// The stuck dump, public for the walkreal tests' own aim loops.
@@ -171,9 +216,54 @@ impl Walker {
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0, float_ticks: 0,
             sidestep: 0, max_y: pos[1], lenient: false, stuck_answers: false,
+            // The stuck-ladder decay + the ride/grab scope resets are OPT-IN (see the field's
+            // doc): default off keeps every walk master-timed (walker-sidestep-decay-2). The
+            // opt-in walks (the 07000012 d1 crossing, the 0700000c real-damage tree) set it
+            // explicitly; with it on, the counter decays toward 0 on BOTH sides (the old
+            // `sidestep -= 1` grew a LEFT nudge forever — the 07000012 crossing leg measured
+            // sidestep −753 with Bond strafe-left pinned [L the NF_WALKTRACE run]).
+            sidestep_decays: false,
             alarm_last: Vec::new(),
             alarm_props_dumped: None,
             no_fetch: Vec::new(),
+            resupply_home: false,
+            record_inputs: None,
+            record_states: None,
+        }
+    }
+
+    /// replay-parity: start recording every stepped tick's input and per-tick state. The
+    /// recording rides the ONE step site (`step_recorded`, reached through `tick_inner`), so
+    /// every walker-stepped tick — nav legs, fights (the shared damage_log's reload branch
+    /// included), waits, the recovery hop — lands in the record.
+    pub fn start_recording(&mut self) {
+        self.record_inputs = Some(Vec::new());
+        self.record_states = Some(Vec::new());
+    }
+
+    /// The walker's ONE step site (mirror of walker.rs's; the b2 walker steps every tick through
+    /// here). Recording on: the tick's input is appended in the replay file's own form and the
+    /// sim is stepped with `to_parts()` of it (the sim sees exactly what is recorded); the
+    /// per-tick state is captured right after the step. Recording off: byte-identical to the
+    /// old direct `step_bond` (replay-parity-walker-side-effects).
+    fn step_recorded(&mut self, input: Input, fire: bool, reload: bool, use_key: bool) {
+        let (input, fire, reload, use_key) = if let Some(rec) = self.record_inputs.as_mut() {
+            let ti = nf_view::replay::TickInput::from_parts(&input, fire, reload, use_key);
+            rec.push(ti);
+            ti.to_parts()
+        } else {
+            (input, fire, reload, use_key)
+        };
+        self.scene.sim.as_mut().unwrap().step_bond(input, fire, reload, use_key);
+        if let Some(st) = self.record_states.as_mut() {
+            let sim = self.scene.sim.as_ref().unwrap();
+            st.push(WalkTickState {
+                pos: sim.bond.pos,
+                yaw: sim.bond.yaw,
+                health: sim.drones.health.health,
+                frame: sim.drones.frame,
+                mission_end: sim.drones.mission_end,
+            });
         }
     }
 
@@ -182,6 +272,16 @@ impl Walker {
 
     /// After every stepped tick: read the damage (damage_log.rs), then top health up when on. A
     /// death on a real-damage walk panics with the death line (the walk cannot go on).
+    /// One tick with the trigger state EXPLICIT (files-plate-hazard, ADDITIVE — no existing
+    /// walk calls it): the 0700000b walk's shoot_at helper stepped `step_bond` directly, which
+    /// rode outside the one step site and lost those ticks from a recording. This is the same
+    /// step through `tick_inner` — the recorder sees it and the sim sees exactly the recorded
+    /// lanes. The caller keeps NO separate total_ticks/after_step accounting (tick_inner does
+    /// both).
+    pub fn tick_trigger(&mut self, input: Input, trigger: bool) {
+        self.tick_inner(input, false, trigger, false);
+    }
+
     pub fn after_step(&mut self) {
         self.dmg.active = !self.tops_up();
         let tick = self.total_ticks;
@@ -229,7 +329,7 @@ impl Walker {
 
     fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool, reload: bool) {
         let y_before = self.scene.sim.as_ref().unwrap().bond.pos[1];
-        self.scene.sim.as_mut().unwrap().step_bond(input, fire, reload, use_key);
+        self.step_recorded(input, fire, reload, use_key);
         let sim = self.scene.sim.as_ref().unwrap();
         self.total_ticks += 1;
         // ai-sight-drawn-gate-4 (NF_ALARM_TRACE, additive): the alarm-chain trace. Every live
@@ -299,9 +399,10 @@ impl Walker {
             // check). Not a teleport — an input.
             self.float_ticks += 1;
             if self.float_ticks == 90 {
-                let j = self.scene.sim.as_mut().unwrap();
+                // replay-parity-walker-side-effects: the hop is a real stepped tick — through the
+                // one step site, so a recorded walk records it and a replay reproduces it.
                 let input = Input { jump: true, ..Default::default() };
-                j.step_bond(input, false, false, false);
+                self.step_recorded(input, false, false, false);
                 self.report.falls.push(format!("recovery hop at tick {} y {:.2}", self.total_ticks, self.scene.sim.as_ref().unwrap().bond.pos[1]));
             }
         }
@@ -356,6 +457,9 @@ impl Walker {
             total
         };
         let before = ammo(self);
+        // The there-and-back errand (opt-in `resupply_home`, the d3 chain only): where the fetch
+        // started — the leg resumes from HERE, not from the drop.
+        let home = self.pos;
         // Targets a previous attempt already walked to without arming Bond (lane): the take radius
         // is `bounds.radius + 1.1` [M 0x18e148:203-214] and a small-model drop the 1.8 arrive
         // radius never touched (the 07000012 spawn-lobby runs stood 4 × 6000 ticks one drop short
@@ -393,6 +497,13 @@ impl Walker {
             // arrive stays the master 1.8.
             self.walk_nav_to(target, &format!("{label} resupply {attempt}"), if lane { 0.6 } else { 1.8 });
             if ammo(self) > before { break; }
+        }
+        // The errand's return leg (opt-in `resupply_home`): the fetch's own nav walk proved the
+        // route there, so the way back is the same graph; lenient per-node inside walk_nav_to (a
+        // wedged hop bails, the next hop re-aims), and a failed return leaves Bond where the old
+        // behaviour left him — the caller's own leg steering takes over from there.
+        if self.resupply_home && dxz(self.pos, home) > 1.5 {
+            self.walk_nav_to(home, &format!("{label} resupply home"), 1.0);
         }
         let got = ammo(self) > before;
         eprintln!("[walk] {label}: resupply done ({got}) clip {} spare {}", self.scene.sim.as_ref().unwrap().gun.clip, self.scene.sim.as_ref().unwrap().gun.spare);
@@ -502,10 +613,11 @@ impl Walker {
                     strafe: if repositions % 2 != 0 && t - last_progress < 60 { -1.0 } else if repositions % 2 != 0 { 0.0 } else if t - last_progress < 60 { 1.0 } else { 0.0 },
                     ..Default::default()
                 };
-                self.scene.sim.as_mut().unwrap().step_bond(input, trigger, reload, false);
+                // replay-parity-walker-side-effects: the fight's step is a real walker-stepped
+                // tick — through `tick_inner` like every other (the old direct `step_bond` here
+                // skipped the walker's per-tick work, and a recorded walk fell through it).
+                self.tick_inner(input, false, trigger, reload);
             }
-            self.total_ticks += 1;
-            self.after_step();
             // Out of ammo: give up (the caller resupplies and retries).
             if self.scene.sim.as_ref().unwrap().gun.clip == 0
                 && self.scene.sim.as_ref().unwrap().gun.spare == 0 && t > 60 {
@@ -734,6 +846,9 @@ impl Walker {
                 let on = self.scene.sim.as_ref().unwrap().bond.substate;
                 if on != nf_game::player::SS_WIRE && on != nf_game::player::SS_ZIPLINE {
                     riding = false;
+                    // Ride scope END (walker-sidestep-decay, opt-in): the counter cannot carry
+                    // out of the ride's direct `step_bond` stretches into the next steered leg.
+                    if self.sidestep_decays { self.sidestep = 0; }
                     self.report.legs.push((format!("{label} (wire ride)"), self.total_ticks - start_ticks, self.pos));
                     eprintln!("[walk] {label}: wire ride ended at +{} ticks, pos {:?}", self.total_ticks - start_ticks, self.pos);
                     return self.total_ticks - start_ticks;
@@ -747,6 +862,9 @@ impl Walker {
                 let y = sim.bond.pos[1];
                 if sim.bond.substate != nf_game::player::SS_CLIMB && y > wp.at[1] - 1.2 && sim.bond.grounded {
                     ladder = false;
+                    // Grab scope END (walker-sidestep-decay, opt-in): the climb never
+                    // decremented the counter — clear it so the next steered leg starts straight.
+                    if self.sidestep_decays { self.sidestep = 0; }
                     self.report.legs.push((format!("{label} (climb)"), self.total_ticks - start_ticks, self.pos));
                     eprintln!("[walk] {label}: ladder climbed to y {y:.2} at +{} ticks", self.total_ticks - start_ticks);
                     return self.total_ticks - start_ticks;
@@ -825,6 +943,9 @@ impl Walker {
                         self.tick(input, false);
                         if self.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_CLIMB {
                             ladder = true;
+                            // Grab scope BEGIN (walker-sidestep-decay, opt-in): the climb is a
+                            // direct `step_bond` stretch — clear the pre-grab carry here.
+                            if self.sidestep_decays { self.sidestep = 0; }
                             eprintln!("[walk] {label}: ladder grabbed at +{} ticks", self.total_ticks - start_ticks);
                         }
                         if self.total_ticks - start_ticks > 1200 {
@@ -837,6 +958,10 @@ impl Walker {
                         if self.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_WIRE
                             || self.scene.sim.as_ref().unwrap().bond.substate == nf_game::player::SS_ZIPLINE {
                             riding = true;
+                            // Ride scope BEGIN (walker-sidestep-decay, opt-in): the grab ends a
+                            // steered stretch mid-nudge — clear the carry before the direct
+                            // ride loop.
+                            if self.sidestep_decays { self.sidestep = 0; }
                             eprintln!("[walk] {label}: wire grabbed at +{} ticks", self.total_ticks - start_ticks);
                             continue;
                         }
@@ -871,7 +996,24 @@ impl Walker {
             if self.sidestep != 0 {
                 input.strafe = if self.sidestep > 0 { 1.0 } else { -1.0 };
                 input.forward = 0.4;
-                self.sidestep -= 1;
+                // The nudge decays toward 0 on BOTH sides, OPT-IN (walker-sidestep-decay-2
+                // restored master's `-= 1` as the default: the signum decay re-timed the 0b
+                // real-damage roof walks and all four sisters died in the roof fights [L the
+                // run]. The old `-= 1` grew a LEFT nudge forever — los-mask-repins-12-2
+                // measured sidestep −753 with Bond strafe-left pinned at the 07000012 door
+                // recess [L the NF_WALKTRACE run] — so the walks that need it set
+                // `sidestep_decays`, mirroring walker.rs's same-name opt-in).
+                self.sidestep -= if self.sidestep_decays { self.sidestep.signum() } else { 1 };
+            }
+            // NF_WALKTRACE=1 per-tick diagnostic (los-mask-repins-12-2): the first 240 ticks of
+            // each leg print the raw steering inputs and the pose, so a slow-start wedge reads
+            // directly off the run. Diagnostic only (no behaviour change).
+            if std::env::var_os("NF_WALKTRACE").is_some()
+                && self.total_ticks - start_ticks < 240 {
+                let sim = self.scene.sim.as_ref().unwrap();
+                eprintln!("[walktrace] {label} +{} pos ({:.3},{:.3},{:.3}) yaw {:.3} err {err:.3} fwd {:.2} strafe {:.2} sidestep {} stuck {}",
+                    self.total_ticks - start_ticks, p[0], p[1], p[2], sim.bond.yaw,
+                    input.forward, input.strafe, self.sidestep, self.stuck);
             }
             self.tick(input, false);
 
@@ -949,6 +1091,22 @@ impl Walker {
                 }
             }
         }
+    }
+
+    /// Clear the stuck ladder's sidestep counter. The direct `step_bond` loops that own their
+    /// own wire rides (walkreal0c's three) call this at the grab and at the drop, and with the
+    /// `sidestep_decays` opt-in the climb/ride stretches inside walk_to reset automatically at
+    /// the scope boundaries. The counter would otherwise carry ACROSS the route's direct
+    /// `step_bond` stretches (the wire grabs + the rides never decrement it) into the next
+    /// walk_to leg, whose steering then strafes for |sidestep| ticks — a stale LEFT nudge
+    /// (facing east, strafe −1 = north) swung the post-ride walk 0.84 u north of the clean
+    /// steering path at the same x and Bond walked off the thin band's north edge (the measured
+    /// fall to (6.26,1.13,−221.83) [L the run; the clean hand-steered path from the same
+    /// landing reaches the same target at (7.117,12.718,−222.412) [L the rd-diag]]).
+    /// Unconditional (master's own call sites keep firing); the decay-branch's ADDED call
+    /// sites are gated on the opt-in instead (walker-sidestep-decay-2).
+    pub fn reset_sidestep(&mut self) {
+        self.sidestep = 0;
     }
 
     /// Press E at a nearby door until it opens, then keep walking (no wait — the auto-close is 360

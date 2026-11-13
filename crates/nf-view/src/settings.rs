@@ -87,6 +87,70 @@ pub fn output_dir() -> PathBuf {
 /// can be resolved (no HOME and no override).
 pub fn default_path() -> Option<PathBuf> { config_dir().map(|d| d.join(FILE_NAME)) }
 
+/// The PC window's own state (port-only; the PS2 had no window): `display.toml` beside the
+/// settings file, never in the game's option layout. Keys: `fullscreen = true|false` and the
+/// windowed size `width = N` / `height = N` (both or neither).
+pub fn display_path() -> Option<PathBuf> { config_dir().map(|d| d.join("display.toml")) }
+
+/// What `display.toml` holds. Missing or unreadable keys read as windowed at the default size.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Display {
+    pub fullscreen: bool,
+    /// The windowed inner size in physical pixels (`None` = the platform default).
+    pub size: Option<(u32, u32)>,
+}
+
+/// Reads `display.toml` (missing or unreadable → `Display::default()`).
+pub fn display_at(path: &std::path::Path) -> Display {
+    let Ok(text) = std::fs::read_to_string(path) else { return Display::default() };
+    let (mut full, mut w, mut h) = (false, None::<u32>, None::<u32>);
+    for l in text.lines() {
+        let l = l.split('#').next().unwrap_or("").trim();
+        let Some((k, v)) = l.split_once('=') else { continue };
+        match (k.trim(), v.trim()) {
+            ("fullscreen", v) => full = v == "true",
+            ("width", v) => w = v.parse().ok().filter(|&n: &u32| (320..=16384).contains(&n)),
+            ("height", v) => h = v.parse().ok().filter(|&n: &u32| (240..=16384).contains(&n)),
+            _ => {}
+        }
+    }
+    Display { fullscreen: full, size: w.zip(h) }
+}
+
+/// Whether `display.toml` asks for fullscreen (missing or unreadable → windowed).
+pub fn display_fullscreen_at(path: &std::path::Path) -> bool { display_at(path).fullscreen }
+
+/// Writes `d` to `path` (creating the config dir if needed).
+pub fn save_display_at(path: &std::path::Path, d: &Display) -> Result<(), String> {
+    let dir = path.parent().ok_or_else(|| format!("display path {} has no parent", path.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("display dir {}: {e}", dir.display()))?;
+    let mut text = format!("fullscreen = {}
+", d.fullscreen);
+    if let Some((w, h)) = d.size { text.push_str(&format!("width = {w}
+height = {h}
+")); }
+    std::fs::write(path, text).map_err(|e| format!("display write {}: {e}", path.display()))
+}
+
+/// Writes the fullscreen choice to `path`, keeping the saved window size.
+pub fn save_display_fullscreen_at(path: &std::path::Path, on: bool) -> Result<(), String> {
+    save_display_at(path, &Display { fullscreen: on, ..display_at(path) })
+}
+
+/// The window size presets (Alt+PageUp / Alt+PageDown): 4:3 like the game's picture.
+pub const WINDOW_PRESETS: [(u32, u32); 5] = [(640, 480), (800, 600), (1280, 960), (1600, 1200), (1920, 1440)];
+
+/// The next preset up (or down) from the current inner width that fits inside `monitor`
+/// (`None`: already at the end, or nothing fits).
+pub fn next_window_preset(current: (u32, u32), monitor: (u32, u32), up: bool) -> Option<(u32, u32)> {
+    let fits = |&&(w, h): &&(u32, u32)| w <= monitor.0 && h <= monitor.1;
+    if up {
+        WINDOW_PRESETS.iter().filter(fits).find(|p| p.0 > current.0).copied()
+    } else {
+        WINDOW_PRESETS.iter().filter(fits).rev().find(|p| p.0 < current.0).copied()
+    }
+}
+
 /// The label key the file stores: the row's game text id in lower hex (`0x0196`).
 fn label_key(label: u32) -> String { format!("0x{label:04x}") }
 
@@ -248,6 +312,49 @@ pub fn save_opts(path: &std::path::Path, opts: &HashMap<u32, i32>) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_window_size_round_trips_and_survives_the_fullscreen_toggle() {
+        let dir = std::env::temp_dir().join(format!("nf-display-size-{}", std::process::id()));
+        let path = dir.join("display.toml");
+        assert_eq!(display_at(&path), Display::default(), "no file reads windowed at the default size");
+        save_display_at(&path, &Display { fullscreen: false, size: Some((1280, 960)) }).unwrap();
+        assert_eq!(display_at(&path).size, Some((1280, 960)));
+        save_display_fullscreen_at(&path, true).unwrap();
+        assert_eq!(display_at(&path), Display { fullscreen: true, size: Some((1280, 960)) }, "Alt+Enter keeps the size");
+        std::fs::write(&path, "width = 1280
+").unwrap();
+        assert_eq!(display_at(&path).size, None, "a width without a height is ignored");
+        std::fs::write(&path, "width = 5
+height = 4
+").unwrap();
+        assert_eq!(display_at(&path).size, None, "an absurd size is ignored");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_size_presets_step_within_the_monitor() {
+        assert_eq!(next_window_preset((800, 600), (1920, 1080), true), Some((1280, 960)));
+        assert_eq!(next_window_preset((1280, 960), (1920, 1080), true), None, "1600x1200 does not fit 1080 lines");
+        assert_eq!(next_window_preset((1000, 700), (2560, 1440), true), Some((1280, 960)), "a dragged size steps to the next preset");
+        assert_eq!(next_window_preset((1000, 700), (2560, 1440), false), Some((800, 600)));
+        assert_eq!(next_window_preset((640, 480), (2560, 1440), false), None);
+        assert_eq!(next_window_preset((1600, 1200), (2560, 1440), true), Some((1920, 1440)));
+    }
+
+    #[test]
+    fn the_fullscreen_choice_round_trips_through_display_toml() {
+        let dir = std::env::temp_dir().join(format!("nf-display-{}", std::process::id()));
+        let path = dir.join("display.toml");
+        assert!(!display_fullscreen_at(&path), "no file reads windowed");
+        save_display_fullscreen_at(&path, true).unwrap();
+        assert!(display_fullscreen_at(&path));
+        save_display_fullscreen_at(&path, false).unwrap();
+        assert!(!display_fullscreen_at(&path));
+        std::fs::write(&path, "garbage ===").unwrap();
+        assert!(!display_fullscreen_at(&path), "an unreadable file reads windowed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn label_key_round_trips_through_parse() {

@@ -421,6 +421,13 @@ impl DamageLog {
                         eprintln!("[dmg]   explosion at ({:.1},{:.1},{:.1}) d {d:.1} radius {:.1} damage {:.1} owner {} kind {}",
                             e.0[0], e.0[1], e.0[2], e.1, e.2, e.3 as isize, e.4);
                     }
+                    // files-plate-hazard: the GT fire states + the arming channels at the hit.
+                    for (i, t) in sim.drones.gt_turrets.iter().enumerate() {
+                        eprintln!("[dmg]   gt{i} placement {} state {} hp {}", t.placement, t.state, t.hp);
+                    }
+                    eprintln!("[dmg]   ch 0x1C {} 0x27 {} 0x28 {} 0x0E {} 0x0D {} 0x06 {}",
+                        sim.drones.channels.on(0x1c), sim.drones.channels.on(0x27), sim.drones.channels.on(0x28),
+                        sim.drones.channels.on(0x0e), sim.drones.channels.on(0x0d), sim.drones.channels.on(6));
                     // scratch-16-diag: grenades in flight (owner, weapon, pos) around a world hit.
                     for (gi, g) in sim.drones.grenades.iter().enumerate() {
                         let d = ((g.pos[0] - p[0]).powi(2) + (g.pos[1] - p[1]).powi(2) + (g.pos[2] - p[2]).powi(2)).sqrt();
@@ -1236,9 +1243,12 @@ impl Walker {
                 (Input { turn: drive_turn, look: drive_look, forward: if crowd { -1.0 } else if creep { 0.5 } else { 0.0 }, aiming: self.dmg.aimed_fights || self.dmg.sniper_stands, ..Default::default() }, fire, reload)
             };
             if reload {
-                self.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, true, false);
-                self.total_ticks += 1;
-                self.after_step();
+                // replay-parity-walker-side-effects: the reload step is a real walker-stepped
+                // tick — through `tick_inner` like every other. The old direct `step_bond` here
+                // was the ONE hole a recorded walk's replay fell through: it skipped the
+                // walker's per-tick work (the keep_alive top-ups, the cut-scene skip request,
+                // rise_watch, drone_watch), so the recorded inputs did not reproduce the run.
+                self.tick_inner(Input::default(), false, false, true);
                 for _ in 0..60 { self.tick(Input::default(), false); }
             } else if fire {
                 last_tap = t;

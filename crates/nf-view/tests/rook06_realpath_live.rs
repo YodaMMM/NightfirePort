@@ -93,8 +93,16 @@ fn the_switch16_guard_fights_through_the_door47_doorway() {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(16), "the step trigger raised ch 16 (the guard pair's wake) [D #514-#523]");
         let d3 = &sim.drones.list[3];
-        assert_eq!((d3.skin, d3.mode, d3.switch_channel), (0x0500_002e, 0, 16),
-            "d#3 is the switch-16 guard in the placement mode 0 [D census (30.3, 41.1, −16.8)]");
+        assert_eq!((d3.skin, d3.switch_channel), (0x0500_002e, 16),
+            "d#3 is the switch-16 guard [D census (30.3, 41.1, −16.8)]");
+        // His mode here depends on whether he has already had his first attack: the placement's
+        // mode 0, or — once FirstSightState's prop-0x1b coin falls to the alt tail — the game's
+        // ChangeToAttackMode flush to the stationary 0x19 with the second block in
+        // [M 0x148010:100-131 + 0x14a648:7-36]. Which one is a shared-RNG draw, not a disc fact,
+        // so both are accepted (the same pair the watch below pins). [S] which one ran:
+        eprintln!("[rook06] d#3 before door #47: mode {:#x} using_2nd {} state {:#x}", d3.mode, d3.using_2nd, d3.state);
+        assert!(d3.corpse || d3.mode == 0 || (d3.mode == 0x19 && d3.using_2nd),
+            "d#3 is in the placement mode 0 or the FirstAttack flush 0x19 [M 0x148010:100-131], got mode {:#x} 2nd {}", d3.mode, d3.using_2nd);
     }
     {
         let (pos, di) = walker::door_near(w.scene.sim.as_ref().unwrap(), [36.5, 40.0, -16.25]).expect("door #47 present");

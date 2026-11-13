@@ -94,7 +94,10 @@ fn the_guards_run_to_their_point_within_its_accuracy() {
         let sim = scene.sim.as_ref().unwrap();
         for (k, (p, _)) in pts.iter().enumerate() {
             let dr = sim.drones.list.iter().find(|d| d.placement == *p && d.present).unwrap();
-            if dr.state == nf_game::drone::state::GO_TO_GOAL { last[k] = Some(dr.pos); } else if last[k].is_some() { left[k] = true; }
+            // The run-to-point leg is the FIRST GoToGoal: a later 0x63 is the attack route toward Bond
+            // [L PCSX2 07000011 d2: 0x1896b50 leaves its first 0x63 at (-2.232, 17.773) frame 116, 0.87
+            // from the point, and runs a second 0x63 toward Bond at frames 179-206].
+            if !left[k] { if dr.state == nf_game::drone::state::GO_TO_GOAL { last[k] = Some(dr.pos); } else if last[k].is_some() { left[k] = true; } }
         }
     }
     let sim = scene.sim.as_ref().unwrap();

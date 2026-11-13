@@ -3189,6 +3189,21 @@ impl CollisionWorld {
         self.los_walk_opts(a, b, LOS_PROBE_8, None, true)
     }
 
+    /// The guard step probe scoped to the cels the body query tests. The game's guard takes the
+    /// body capsule's push, and that query only meets the nodes `Collide_Pick` 0x1eb320 gathers
+    /// from the guard's cel (`HITTEST+0x80` = obj+0x20) and the cels it straddles; geometry outside
+    /// them never pushes [L PCSX2 07000011: the stairwell guard (HITTEST +0x94 0x800, +0x9a 0)
+    /// crosses the 0x0A panel at z -4.05 (x 22.44..25.43) with HITTEST+0x10 = 0 every frame, and
+    /// Bond walks through it both ways; the port's cel-scoped `capsule_push_scoped` from cel 128
+    /// pushes 0 there too, while the unscoped probe ray hits it]. So a step the unscoped probe
+    /// refuses is still clear when nothing in the scoped set blocks it. `None` keeps the unscoped
+    /// probe. [S] the scoped test is the masked sight walk (panes in scope still block it).
+    pub fn move_probe_clear_scoped(&self, cell: Option<usize>, a: V3, b: V3) -> bool {
+        if self.move_probe_clear(a, b) { return true; }
+        if cell.is_none() || !LOS_MASKS_ON { return false; }
+        self.line_of_sight_scoped(cell, a, b, LOS_PROBE_8)
+    }
+
     /// The guard-sight ray scoped the way the game scopes it [M DroneVision_CanSeeObjectFrom
     /// 0x176f18:60-77 — `Collide_LineOfSight(from, to, iStack_60, param_2, …)` with
     /// `iStack_60 = *(int *)(target + 0x20)`, the TARGET's cel, so `Collide_Pick` 0x1eb320's BFS

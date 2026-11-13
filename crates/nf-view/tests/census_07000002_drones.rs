@@ -26,7 +26,7 @@ fn dump_07000002_drone_placements() {
         let g = |k: u32| p.params.iter().find(|(j, _)| *j == k).map_or(0, |&(_, v)| v);
         let skin = g(0);
         let setup = nf_formats::drone::drone_setup(skin, g(9), 0x0700_0002);
-        let weapon = nf_formats::drone::weapon_id(skin, g(9));
+        let weapon = nf_formats::drone::weapon_id(skin, g(9), setup.kind);
         let t = p.translation;
         let params: Vec<String> = p.params.iter().map(|(a, b)| format!("{a}:{b:#x}")).collect();
         println!("#{i} @({:.2},{:.2},{:.2}) skin {skin:08x} kind {:#x} set {:#x} weapon {weapon:#x} p2(diff) {} p14(class) {} params [{}]",

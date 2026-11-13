@@ -850,6 +850,53 @@ impl Route {
 mod tests {
     use super::*;
 
+    /// `LinkCreep_AtSpecialNode` 0x159dd0's tier-2 through the port's route follow
+    /// (`Drone::near_pos_fn`, the closure every `Route::follow` call site passes): a special
+    /// node in the 0.4-1.0 band counts as reached when another class-2-gate drone stands within
+    /// the CALLER's radius — 0.4, the 0x3ecccccd loaded into $f12 at 0x159eb8-0x159ec0 for the
+    /// 0.4 compare and live at the jal 0x143e68 (0x159ef8), squared at 0x143eac — and 2.0 in y
+    /// [M 0x143fd0-0x143fe8], the caller itself skipped [M 0x143f48]; the player tier runs
+    /// first [M 0x143ec4-0x143f20, 0.55² = 0x3e9ae148's 0.3025]. The old call sites passed the
+    /// player tier only (`ppos_near` — the replaced drone.rs comment said the list tier "stays
+    /// unwired"), so a guard queued in the band behind a peer standing ON the node never counted
+    /// the node as reached and froze behind it.
+    #[test]
+    fn special_node_band_counts_a_peer_on_the_node() {
+        // Node 1 is special (flag 1 ∈ SPECIAL 0xF007F); the route creeps from node 0 toward it.
+        let n = net(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 0.0, 0.0]], &[(0, 1), (1, 2)], 2);
+        let n = Network { paths: vec![NavPath { name: n.paths[0].name.clone(), kind: 2, nodes: {
+            let mut ns = n.paths[0].nodes.clone(); ns[1].flags = 1; ns
+        }, links: n.paths[0].links.clone(), adj: n.paths[0].adj.clone() }], ..n };
+        let route_from = |special: Option<u16>| Route {
+            path: 0, mode: RouteMode::OneWay, nodes: vec![0, 1, 2], links: vec![0, 1], index: 0, start: [0.0; 3], dest: [20.0, 0.0, 0.0],
+            target: [0.0; 3], remaining: 0.0, radius: 2.0, lookahead: 0.5,
+            creep: Creep { a: [0.0; 3], b: [10.0, 0.0, 0.0], vec: [0.4, 0.0, 0.0], step: 0, steps: 24, special },
+            stamp: 0,
+        };
+        // The walker sits 0.5 from the special node: the 0.4-1.0 tier-2 band [M 0x159ed8-0x159eec].
+        let feet = [9.5, 0.0, 0.0];
+        let far_ppos = [1000.0, 0.0, 1000.0];
+        // A class-2-gate peer ON the node (index 1 ≠ the walker's 0) → the node counts as reached.
+        let (code, reached) = route_from(Some(1)).follow(&n, feet, &crate::drone::Drone::near_pos_fn(far_ppos, 0, &[(1, [10.0, 0.0, 0.0])]), false);
+        assert_eq!((code, reached), (follow::MOVING, Some(1)));
+        // The special consumed, the next tick walks on past it (no re-reach).
+        let (code2, reached2) = route_from(None).follow(&n, feet, &crate::drone::Drone::near_pos_fn(far_ppos, 0, &[(1, [10.0, 0.0, 0.0])]), false);
+        assert_eq!((code2, reached2), (follow::MOVING, None));
+        // The radius is exactly 0.4 [M 0x159eb8]: a peer 0.5 from the node is OUTSIDE it.
+        let (_, reached) = route_from(Some(1)).follow(&n, feet, &crate::drone::Drone::near_pos_fn(far_ppos, 0, &[(1, [10.5, 0.0, 0.0])]), false);
+        assert_eq!(reached, None);
+        // The y gate is 2.0 [M 0x143fd0-0x143fe8]: a peer 2.5 above the node is OUTSIDE it.
+        let (_, reached) = route_from(Some(1)).follow(&n, feet, &crate::drone::Drone::near_pos_fn(far_ppos, 0, &[(1, [10.0, 2.5, 0.0])]), false);
+        assert_eq!(reached, None);
+        // The caller itself is skipped [M 0x143f48]: the only near record is the walker's own index.
+        let (_, reached) = route_from(Some(1)).follow(&n, feet, &crate::drone::Drone::near_pos_fn(far_ppos, 0, &[(0, [10.0, 0.0, 0.0])]), false);
+        assert_eq!(reached, None);
+        // The player tier first [M 0x143ec4-0x143f20]: Bond within 0.55 of the node reaches it
+        // with no peers at all (0.5 < 0.55, |dy| 0 < 2.0).
+        let (code, reached) = route_from(Some(1)).follow(&n, feet, &crate::drone::Drone::near_pos_fn([10.0, 0.0, 0.5], 0, &[]), false);
+        assert_eq!((code, reached), (follow::MOVING, Some(1)));
+    }
+
     fn net(nodes: &[V3], links: &[(u16, u16)], kind: u32) -> Network {
         let nodes: Vec<NavNode> = nodes.iter().map(|&p| NavNode { pos: p, flags: 0, cel: None }).collect();
         let links: Vec<NavLink> = links.iter().map(|&(a, b)| NavLink { a, b, len: dist3(nodes[a as usize].pos, nodes[b as usize].pos) }).collect();

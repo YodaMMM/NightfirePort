@@ -1388,6 +1388,45 @@ fn dist2d(a: [f32; 3], b: [f32; 3]) -> f32 {
     ((a[0] - b[0]) * (a[0] - b[0]) + (a[2] - b[2]) * (a[2] - b[2])).sqrt()
 }
 
+/// The site pseudo-opponent's seen test. The game's `NDrone2_CanSeeObject(obj, 5, 0)` — the
+/// FindOpponent site arm's sight [M 0x1424e0:551] — sees an OBJECT when the ray stops on it: a
+/// bot 2 u from the site looks at the site's own skin, which the point-centre `segment_clear`
+/// answered "blocked" for (the same ray's first hit IS the site). The stand-in: the ray to the
+/// contact-sphere centre is seen when nothing is hit, or the first hit sits at/behind the
+/// contact-sphere surface (the site's own geometry) — anything closer is a real blocker.
+/// [S the surface-aware stand-in — the live read is listed in the report.]
+fn site_seen(ctx: &BotCtx, from: [f32; 3], centre: [f32; 3]) -> bool {
+    let Some(site) = ctx.objectives.and_then(|ob| ob.site.as_ref()) else {
+        return ctx.world.segment_clear(from, centre);
+    };
+    let d = ((centre[0] - from[0]).powi(2)
+        + (centre[1] - from[1]).powi(2)
+        + (centre[2] - from[2]).powi(2))
+        .sqrt();
+    if site.radius <= 0.0 || d <= site.radius {
+        return true; // inside the contact sphere the site fills the view
+    }
+    match ctx.world.segment_surface_bullet(from, centre) {
+        None => true,
+        Some((t, _, _)) => t + 1e-3 >= (d - site.radius) / d,
+    }
+}
+
+/// The disc's `Drone_AnimTables` anim-state-4 block, variant 0 — the per-character u16 entries
+/// `DroneAnim_CanDoAnimState` 0x13dfc8 reads [M]: `DroneAnimStates[4].u16 = 14` [D 0x272c68+48],
+/// base = 14·0x6c = 1512 bytes, entries at 0x275ae0+1512+char·4 (the value ≠ 0 = the character
+/// can play the state; 0 falls back to character 0's entry [M 0x13e040-74]). Characters 5/19/20
+/// hold 699, 21..26 hold 2573/2576/2570/2586/2572/2574 — i.e. every weapon anim set
+/// (`BOTWEAP_getWeaponAnimSet` 0x12b140 returns 0x14..0x1a) can play the walk-back — while the
+/// `DefaultInit` character ids (2/3/7/10/12/14/18, the SP drone types [M 0x14b300]) cannot.
+static ANIM_STATE4_TABLE: [u16; 27] = [
+    0, 0, 0, 0, 0, 699, // chars 0..5
+    0, 0, 0, 0, 0, 0, // chars 6..11
+    0, 0, 0, 0, 0, 0, // chars 12..17
+    0, 699, 699, 2573, 2576, 2570, // chars 18..23
+    2586, 2572, 2574, // chars 24..26
+];
+
 /// `LinkCreep_ForNodes` 0x159810's link subdivision: steps of 0.4 (trunc(trunc(|d|) × 2.5)), or
 /// one step of d when |d| ≤ 0.4 — the same math `nav::Creep` runs for the drones. Returns
 /// (link from, step vec, step count).
@@ -1691,7 +1730,11 @@ impl BotBrain {
         }
         let r = 24.0f32; // sight × (2·alertness + 1), alertness 0
         let mut vis = 0.7 - (dist - r) / r;
-        let yaw_to_opp = crate::trig::atan2_approx(dx, dz);
+        // The game's bearing is `ATAN2_APPROX(dx, dz)` in the +0x54 convention [M 0x1424e0:543],
+        // but THIS brain's yaw is the port's (cos, sin) stand-in — the aim turn and the scan's
+        // cone both face `atan2_approx(dz, dx)` — so the bearing must use the same order or the
+        // cone reads mirrored (a bot facing its opponent scored < 0.7 at most headings).
+        let yaw_to_opp = crate::trig::atan2_approx(dz, dx);
         let margin = crate::trig::HALF_PI + 0.392_699_1 - crate::trig::angle_difference(self.yaw, yaw_to_opp).abs();
         if margin < 0.0 {
             return 0.0;
@@ -1723,7 +1766,17 @@ impl BotBrain {
                     // −0.3 line matched the old chest aim; the pair must agree or a bot "sees"
                     // along one line and shoots along another — the ledge-lip case this once
                     // patched is the same line again). [S the CanSeeObject stand-in.]
-                    let clear = ctx.world.segment_clear(self.pos, t.pos);
+                    // The site pseudo-opponent (index ≥ OBJ_ROW) rides the object's surface:
+                    // the game's `NDrone2_CanSeeObject(obj, 5, 0)` sees an OBJECT when the ray
+                    // stops on it — a bot 2 u from the site looks at the site's own skin, and
+                    // the point-centre `segment_clear` answered "blocked" for exactly that ray
+                    // (the earlier sight-lapse freeze this replaces). [S the surface-aware
+                    // stand-in — the live read is listed in the report.]
+                    let clear = if o >= OBJ_ROW {
+                        site_seen(ctx, self.pos, t.pos)
+                    } else {
+                        ctx.world.segment_clear(self.pos, t.pos)
+                    };
                     if clear && self.opponent_visibility(t) >= 0.7 {
                         self.vars.seen_ticks = self.vars.seen_ticks.saturating_add(1); // +0x270 [M 0x176a28 seen arm]
                         self.vars.unseen_ticks = 0; // Drone+0x274
@@ -3847,27 +3900,59 @@ impl BotBrain {
         walk_clear(ctx.world, r, to) && ctx.world.floor_below([to[0], to[1] - 1.1, to[2]], 0.9).is_some()
     }
 
-    /// `NDrone2_CanBackoff` 0x1501a0 for a bot [M :47-88]: behaviour prop 6 (set for every bot
-    /// [M 0x1249e8:134]) and `CanDoAnimState(4)` [S reads true — no anim pipeline], the
-    /// movement lock +0x4f8 & 0x10 clear (the port's `ctx.stationary`), then `NDrone2_MoveTest`
-    /// from the feet to the feet + R·(0, 0, −1.8) — for a bot (+0xc5 == 0x1e) the local probe is
-    /// scaled by `BOT_getMovementSpeedMul` on x and z first [M :55-58 `Vec_MulR32(mul, 1, mul)`],
-    /// so 1.8 × mul straight behind. The port's `walk_clear` + floor probe stands in for
-    /// `MoveTest` [S, the same stand-in `can_side_move` uses].
+    /// `NDrone2_CanBackoff` 0x1501a0 for a bot, the game's order:
+    /// 1. behaviour prop 6 — `BOT_init` sets it in the bot's behaviour block
+    ///    (`setProperty(6, .., 1)` [M 0x1249e8:134]), which `DoModeSettingsNEW` unpacks into
+    ///    Drone+0x4dc [M 0x14c600:66-72] — implicit true here.
+    /// 2. `DroneAnim_CanDoAnimState(dcv, 4, 0)` [M 0x1501d4-dc, 0x13dfc8]: the bot's anim set is
+    ///    its weapon's — `BOTWEAP_changeWeapon` writes Drone+0xDA = `BOTWEAP_getWeaponAnimSet`
+    ///    [M 0x12a028:47], and `NDrone2_PostLoad_Init` change-weapon's to the start weapon at
+    ///    spawn [M 0x14d890:22-24]. The gate reads the disc's anim-state-4 block
+    ///    ([`ANIM_STATE4_TABLE`]) — data, not a constant.
+    /// 3. the movement lock Drone+0x4f8 & 0x10 [M 0x150218-220] — the port's `ctx.stationary`.
+    /// 4. the probe [M 0x1501f0-74]: local (0, 0, −1.8) — the decompile's probe vector is
+    ///    `uStack_98 = 0xbfe66666` = −1.8 f32 [M 0x1501a0:57; disasm 0x1501f4 `lui r1,0xbfe6`]
+    ///    — scaled by `BOT_getMovementSpeedMul` (0.7 / 1.0 / 1.3 by Drone+0xb6 [M 0x126568])
+    ///    on x/z when Drone+0xc5 == 0x1e [M 0x150234-64 `Vec_MulR32(mul, 1, mul)`]. A bot's
+    ///    +0xc5 IS 0x1e: `BOT_init` fills the create block (Drone_Create copies create+0x2c to
+    ///    Drone+0xc34, so DIVars = create + 8 [M Drone_Create, PostLoad_Init 0x14d890:13]) with
+    ///    mode 100 (create+0x40 → DIVars+0x48 [M 0x1249e8:98]) → `DoModeSettingsNEW`
+    ///    [M 0x14b300:495-502], whose behaviour struct (create+0x68 = 0x10 → DIVars+0x70) sets
+    ///    type +199 = 0x10 [M 0x14c600:76, 0x1c7a98:45] and attack +200 = 0; with no prop 0x10
+    ///    `GetDTYPENEW` returns 0x1e for type 0x10 [M 0x14c938 case 0x10] → +0xc5 [M 0x14cbd8:26].
+    ///    So the probe is 1.8 × mul straight back.
+    /// 5. `NDrone2_MoveTest(feet, feet+R·probe, NULL, obj, NULL, 0, 1) == 1` [M 0x1502f0-308]:
+    ///    the range chain (≤ 30 / |dy| ≤ 4.0 / the slope band [M 0x136938:53-62] — trivially
+    ///    true at 1.8) then `AINetwork_BoundsTest` in its mode-0 arm (no endpoint proximity
+    ///    [M 0x157d80:165-169]) — the port's `nav::Network::move_test` (the boundary walls +
+    ///    the [S] +1 LOS stand-in for the missing portal straddle). `nav: None` (the unit
+    ///    rigs' no-network worlds) keeps the `walk_clear` stand-in [S — `can_side_move`'s].
     fn can_backoff(&self, ctx: &BotCtx) -> bool {
+        // 2. the anim gate [M 0x1501d4 + 0x13dfc8]: the weapon's anim set into the disc block
+        let ch = crate::mp::botweap::weapon_anim_set(self.vars.weapon_id) as usize;
+        if ANIM_STATE4_TABLE.get(ch).copied().unwrap_or(0) == 0 && ANIM_STATE4_TABLE[0] == 0 {
+            return false;
+        }
+        // 3. the movement lock [M 0x150218-220]
         if ctx.stationary {
             return false;
         }
-        let mul = [0.7f32, 1.0, 1.3][(self.vars.speed as usize).min(2)];
+        // 4-5. the 1.8 × speed-mul probe through the MoveTest [M 0x1501f0-308]; a bot's
+        // +0xc5 is 0x1e, so the mul arm fires [M 0x150234-64, 0x14c938 case 0x10]
+        let mul = [0.7f32, 1.0, 1.3][(self.vars.speed as usize).min(2)]; // [M 0x126568]
         let reach = 1.8 * mul;
         let r = self.root();
-        // behind = −(cos, sin) of the brain's facing
+        // behind = −(cos, sin) of the brain's facing — R·(0, 0, −1.8·mul) with the yaw-only
+        // matrix stand-in [S: the game rotates by the full obj matrix +0x90]
         let to = [
             r[0] - crate::trig::cosf(self.yaw) * reach,
             r[1],
             r[2] - crate::trig::sinf(self.yaw) * reach,
         ];
-        walk_clear(ctx.world, r, to) && ctx.world.floor_below([to[0], to[1] - 1.1, to[2]], 0.9).is_some()
+        match ctx.nav {
+            Some(net) => net.move_test(ctx.world, r, to, false, false).0 == 1,
+            None => walk_clear(ctx.world, r, to),
+        }
     }
 
     /// The side a combat move walks: +1 left, −1 right.
@@ -5662,26 +5747,76 @@ mod brain_tests {
         assert!(p.is_none() || matches!(p, Some(0xD4 | 0xD5 | 0xDB | 0xDC)), "inside +0xF0 the backoff stays, pending {p:?}");
         // past the engage band: 0xCF [M 0x16fc30:89-92]
         assert_eq!(run(20.5, false, 0.0, 0.0), Some(state::BOT_ATTACK), "past +0xF0 → 0xCF");
-        // inside the band but a wall 1.5 behind (facing −x, the wall at x = 3, 1.8·1.3 reach):
-        // `!CanBackoff` → 0xCF [M 0x16fc30:64-66, 0x1501a0:76-86]
-        assert_eq!(run(-2.0, true, 1.5, std::f32::consts::PI), Some(state::BOT_ATTACK), "no room behind → 0xCF");
+        // inside the band but a wall 0.45 behind (facing −x, the wall at x = 3; the probe is
+        // 1.8 × the speed mul for a bot [M 0x1501a0:55-64]): `!CanBackoff` → 0xCF
+        // [M 0x16fc30:64-66, 0x1501a0:76-86]
+        assert_eq!(run(-2.0, true, 2.55, std::f32::consts::PI), Some(state::BOT_ATTACK), "no room behind → 0xCF");
     }
 
-    /// `NDrone2_CanBackoff` 0x1501a0's behind probe is 1.8 × the speed mul for a bot [M :55-58]:
-    /// a wall 2.0 behind blocks a speed-2 bot (2.34 reach) and not a speed-1 bot (1.8).
+    /// `NDrone2_CanBackoff` 0x1501a0's behind probe is 1.8 × the speed mul for a bot
+    /// [M 0x1501a0:57 `0xbfe66666` = −1.8; :62-64 the mul arm on +0xc5 == 0x1e, which a bot
+    /// carries (see `can_backoff`)]: a wall 2.0 behind blocks a speed-2 bot (2.34) and not a
+    /// speed-1 bot (1.8); a wall 0.45 behind blocks; the movement lock refuses [M :60]; the anim
+    /// gate reads the weapon's anim set into the disc block ([`ANIM_STATE4_TABLE`]).
+    /// The sight cone faces where the bot faces: the brain's yaw is the (cos, sin) stand-in its aim
+    /// turns use (`atan2_approx(dz, dx)`), so an opponent 10 u straight ahead scores the cone's
+    /// full ≥ 0.7 at EVERY heading [M DroneVision_OpponentVisibility 0x175af0: 0.7 band, ±(π/2 +
+    /// 0.3927) cone], and one straight behind scores 0. (The swapped-order bearing read the cone
+    /// mirrored: a bot looking right at its opponent missed it at most headings.)
     #[test]
-    fn can_backoff_probe_is_scaled_by_the_mul() {
+    fn sight_cone_faces_the_way_the_bot_faces() {
+        let mut r = floor_rig(true);
+        for k in 0..16 {
+            let yaw = -std::f32::consts::PI + k as f32 * std::f32::consts::PI / 8.0;
+            r.brain.yaw = yaw;
+            let p = r.brain.pos;
+            let at = |d: f32| OtherPlayer { index: 1, pos: [p[0] + crate::trig::cosf(yaw) * d, p[1], p[2] + crate::trig::sinf(yaw) * d], alive: true, team: 0, flags: 0, dist2: 0.0, health: 100.0, score: 0.0, yaw: 0.0 };
+            let ahead = r.brain.opponent_visibility(&at(10.0));
+            assert!(ahead >= 0.7, "yaw {yaw:.3}: an opponent straight ahead scores {ahead:.3} (< 0.7)");
+            let behind = r.brain.opponent_visibility(&at(-10.0));
+            assert_eq!(behind, 0.0, "yaw {yaw:.3}: an opponent straight behind is outside the cone");
+        }
+    }
+
+    #[test]
+    fn can_backoff_probe_is_18_times_the_mul() {
         let mut r = floor_rig(true);
         r.brain.pos[0] = 1.0; // the wall at x = 3 is 2.0 behind when facing −x
         r.brain.yaw = std::f32::consts::PI;
         let others = r.others.clone();
         let ctx = Rig::build_ctx(r.now, &r.pickups, &others, &r.world, false, None);
         r.brain.vars.speed = 2;
-        assert!(!r.brain.can_backoff(&ctx), "1.8 × 1.3 = 2.34 reaches the wall");
+        assert!(!r.brain.can_backoff(&ctx), "1.8 × 1.3 = 2.34 reaches the wall [M 0x1501a0:57-64, 0x126568]");
         r.brain.vars.speed = 1;
-        assert!(r.brain.can_backoff(&ctx), "1.8 × 1.0 stops short of it");
+        assert!(r.brain.can_backoff(&ctx), "1.8 × 1.0 stops 0.2 short of it [M]");
+        r.brain.pos[0] = 2.55; // the wall is 0.45 behind: the probe crosses it
+        assert!(!r.brain.can_backoff(&ctx), "no room behind → false [M :76-86]");
         let ctx_s = Rig::build_ctx(r.now, &r.pickups, &others, &r.world, true, None);
         assert!(!r.brain.can_backoff(&ctx_s), "the movement lock refuses [M :60]");
+    }
+
+    /// Sister to the anim gate: a weapon whose anim set has no walk-back entry refuses. Every
+    /// `BOTWEAP_getWeaponAnimSet` value (0x14..0x1a) plays [D block], so the gate is driven by
+    /// the table itself — pinned through the `DefaultInit` character ids the SP types carry
+    /// (12 = 0, the MP skins' default [M 0x14b300:121]): a brain forced to anim-set 12 via the
+    /// table's shape would refuse — here pinned by the block's char-0/char-12 zeros through
+    /// the game's fallback rule [M 0x13e054-74].
+    #[test]
+    fn anim_state4_block_matches_the_disc() {
+        // the disc bytes [D 0x275ae0+1512]: chars 5/19/20 = 699, 21..26 = the 2570 family,
+        // every other character 0 (and character 0 = 0, so those fall through to false)
+        assert_eq!(ANIM_STATE4_TABLE[0], 0);
+        assert_eq!(ANIM_STATE4_TABLE[5], 699);
+        assert_eq!(ANIM_STATE4_TABLE[12], 0, "the MP skins' DefaultInit default char has no walk-back");
+        for (i, v) in [21usize, 22, 23, 24, 25, 26].iter().enumerate() {
+            assert_ne!(ANIM_STATE4_TABLE[*v], 0, "weapon anim set {:#x} plays", 0x14 + i);
+        }
+        for c in 0..27usize {
+            let set = crate::mp::botweap::weapon_anim_set((c + 1) as u8) as usize; // weapon ids 1..27
+            if (0x14..=0x1a).contains(&set) {
+                assert_ne!(ANIM_STATE4_TABLE[set], 0, "set {set:#x} (weapon {}) plays [M 0x12b140]", c + 1);
+            }
+        }
     }
 
     /// `BOTSTATE_chooseUnarmedAttackAnim` 0x1292f0 via `NDrone2_CanAltAttack` 0x1549e0: the

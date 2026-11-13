@@ -47,7 +47,16 @@ fn the_ground_route_crosses_to_the_east_side() {
     // shot rides the same wheel switch as the handoff walk (the landing gun is the MICRO-CAMERA
     // 0x54 — no round spawns from it [M scene.rs:5002]; the P2K is loaded there [L the probe]) —
     // with #35 dead the west strip holds and the prologue's own #284-ride legs land clean.
-    let mut w = walker::with_strip_p2k_shot(|| walk_spawn_to_the_band(&iso));
+    // level-0a-civilian-slide-cels-2 (OPT-IN `with_strip_rd_post_ride`): the drawn gate's room
+    // rule makes the ring patrollers walk their real danim gait where the ray gate held them at
+    // the no-gait slide (`NDrone2_DoAnimation` 0x149f88's not-drawn arm [M]; the drawn set is
+    // the game's VisCelList pair [M 0x1e62d8:34-71]) — measured: #405/#404 walk from t=1699,
+    // the shifted fights shift the ride to (4.9831,-223.2948) — the SAME spot the real-damage
+    // tree's ride lands on [L the rd comment in walkreal0c.rs] — and the plain single long
+    // "the ledge to the arc" leg overshoots the band's east edge into the measured fall (y
+    // 2.01 at (8.99,-222.09), +114 ticks [L this branch's run]). The post-ride mid-ledge stops
+    // are that same measured lever, so this test opts in like its real-damage sister.
+    let mut w = walker::with_strip_rd_post_ride(|| walker::with_strip_p2k_shot(|| walk_spawn_to_the_band(&iso)));
     // Start: the band west end (the whole walk's leg-10 spot, floor 10.34 [D probe door4]) -
     // REACHED by the game's own route on real input: the shared prologue replays the main
     // walk's legs 1-9c verbatim (spawn -> the laser hinge burn -> the vent drop -> the

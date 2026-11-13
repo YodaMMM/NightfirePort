@@ -103,7 +103,7 @@ fn iso() -> Option<String> {
 // 0xe3fb_90fd_011b_bbef (34 kills).
 // join-1110-mp: the four mp branches joined (setup defaults + DefaultInit bands + arrival 2.0 /
 // raw walk mul + the combat-move draw order) — re-pinned on the joined tree.
-const PINNED_DIGEST: u64 = 0x5193_ea0e_9852_b444; // 36 kills (re-pinned with the guard-sight round robin and the own-cel boundary push)
+const PINNED_DIGEST: u64 = 0x29b0_8957_ec71_90d7; // 48 kills (re-pinned for mp-bot-backoff-2: the CanBackoff probe is the game's (0, 0, −1.8) [M 0x1501a0:57 `0xbfe66666`] scaled by the bot speed mul (a bot's +0xc5 is 0x1e [M 0x14c938 case 0x10]), through the MoveTest, behind the disc anim-state-4 gate; decompile-backed behaviour change, not an optimisation)
 
 const TICKS: u32 = 3600;
 

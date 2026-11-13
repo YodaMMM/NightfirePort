@@ -99,6 +99,18 @@ pub struct Report {
     pub falls: Vec<String>,
 }
 
+/// The per-tick snapshot the replay-parity test compares (walker-side; the replay side captures
+/// the same fields right after each replayed `step_bond`). Captured by `step_recorded` when
+/// recording is on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WalkTickState {
+    pub pos: [f32; 3],
+    pub yaw: f32,
+    pub health: f32,
+    pub frame: u32,
+    pub mission_end: Option<u32>,
+}
+
 /// The walker over one loaded scene.
 pub struct Walker {
     pub scene: Scene,
@@ -227,6 +239,16 @@ pub struct Walker {
     /// which plate a walked route actually crossed first.
     pub rise_watch: Vec<u8>,
     pub rises: Vec<(u8, u32, V3, Vec<usize>)>,
+    /// replay-parity (opt-in, `start_recording`): every stepped tick's exact input, appended by
+    /// `step_recorded` in the replay file's own form. While recording, the sim is stepped with
+    /// `to_parts()` of the just-pushed record — the sim sees exactly what is recorded — so a
+    /// fresh load replaying this Vec is tick-for-tick identical. `None` (default): no recording,
+    /// and the step is exactly the old direct `step_bond`.
+    pub record_inputs: Option<Vec<nf_view::replay::TickInput>>,
+    /// replay-parity (opt-in): the per-tick state the parity test compares — Bond pos/yaw,
+    /// health, the drone frame and the mission_end latch, captured right after each recorded
+    /// step. One entry per recorded tick, same order as `record_inputs`.
+    pub record_states: Option<Vec<WalkTickState>>,
 }
 
 /// The stuck dump, public for the walkreal tests' own aim loops (walkreal-b2).
@@ -309,6 +331,44 @@ impl Walker {
             grenade_downgrade_logged: false,
             flank_hold_x: None,
             flank_hold_z: None,
+            record_inputs: None,
+            record_states: None,
+        }
+    }
+
+    /// replay-parity: start recording every stepped tick's input and per-tick state. The
+    /// recording rides the ONE step site (`step_recorded`, reached only through `tick_inner`),
+    /// so every walker-stepped tick — nav legs, fights (the shared damage_log's reload branch
+    /// included), waits, the recovery hops — lands in the record.
+    pub fn start_recording(&mut self) {
+        self.record_inputs = Some(Vec::new());
+        self.record_states = Some(Vec::new());
+    }
+
+    /// The walker's ONE step site. `tick_inner` steps every walker tick through here, so every
+    /// walker-stepped tick — and nothing else — goes through this function. Recording on: the
+    /// tick's input is appended in the replay file's own form and the sim is stepped with
+    /// `to_parts()` of it (the sim sees exactly what is recorded); the per-tick state is
+    /// captured right after the step. Recording off: byte-identical to the old direct
+    /// `step_bond` (replay-parity-walker-side-effects).
+    fn step_recorded(&mut self, input: Input, fire: bool, reload: bool, use_key: bool) {
+        let (input, fire, reload, use_key) = if let Some(rec) = self.record_inputs.as_mut() {
+            let ti = nf_view::replay::TickInput::from_parts(&input, fire, reload, use_key);
+            rec.push(ti);
+            ti.to_parts()
+        } else {
+            (input, fire, reload, use_key)
+        };
+        self.scene.sim.as_mut().unwrap().step_bond(input, fire, reload, use_key);
+        if let Some(st) = self.record_states.as_mut() {
+            let sim = self.scene.sim.as_ref().unwrap();
+            st.push(WalkTickState {
+                pos: sim.bond.pos,
+                yaw: sim.bond.yaw,
+                health: sim.drones.health.health,
+                frame: sim.drones.frame,
+                mission_end: sim.drones.mission_end,
+            });
         }
     }
 
@@ -499,7 +559,7 @@ impl Walker {
             self.rise_watch.iter().map(|&c| sim.drones.channels.on(c as u32)).collect()
         };
         let feet_before = self.scene.sim.as_ref().unwrap().bond.pos;
-        self.scene.sim.as_mut().unwrap().step_bond(input, fire, reload, use_key);
+        self.step_recorded(input, fire, reload, use_key);
         let sim = self.scene.sim.as_ref().unwrap();
         self.total_ticks += 1;
         for (k, &c) in self.rise_watch.iter().enumerate() {
@@ -584,9 +644,9 @@ impl Walker {
                     .filter(|b| b.state < 2)
                     .map(|b| format!("d{}:w{}", b.owner, b.weapon))
                     .collect();
-                eprintln!("[hp] t{} d#{i} skin {:#x} team {} {prev:.1}->{:.1} st {:#x} mode {} alt {:#x} dtype {} at ({:.2},{:.2},{:.2}) last_dmg {:.1} hit {:?} by_player {} blast {:?} opp {:?} bullets [{}]",
+                eprintln!("[hp] t{} d#{i} skin {:#x} team {} {prev:.1}->{:.1} st {:#x} mode {} alt {:#x} dtype {} at ({:.2},{:.2},{:.2}) last_dmg {:.1} hit {:?} by_player {} by_drone {:?} blast {:?} opp {:?} bullets [{}]",
                     self.total_ticks, d.skin, d.team, d.health, d.state, d.mode, d.alt_state, d.dtype,
-                    d.pos[0], d.pos[1], d.pos[2], d.last_damage, d.hit, d.hit_by_player, d.blast, d.opp_drone, live.join(" "));
+                    d.pos[0], d.pos[1], d.pos[2], d.last_damage, d.hit, d.hit_by_player, d.hit_by_drone, d.blast, d.opp_drone, live.join(" "));
             }
         }
         if sim.bond.pos[1] < y_before - 0.4 && !sim.bond.grounded {
@@ -951,10 +1011,11 @@ impl Walker {
                     strafe: if backing { 0.0 } else if blocked { if window { 1.0 } else { -1.0 } } else if repositions % 2 != 0 && t - last_progress < 60 { -1.0 } else if repositions % 2 != 0 { 0.0 } else if t - last_progress < 60 { 1.0 } else { 0.0 },
                     ..Default::default()
                 };
-                self.scene.sim.as_mut().unwrap().step_bond(input, trigger, reload, false);
+                // replay-parity-walker-side-effects: the fight's step is a real walker-stepped
+                // tick — through `tick_inner` like every other (the old direct `step_bond` here
+                // skipped the walker's per-tick work, and a recorded walk fell through it).
+                self.tick_inner(input, false, trigger, reload);
             }
-            self.total_ticks += 1;
-            self.after_step();
             // Out of ammo: give up (the caller resupplies and retries).
             if self.scene.sim.as_ref().unwrap().gun.clip == 0
                 && self.scene.sim.as_ref().unwrap().gun.spare == 0 && t > 60 {
