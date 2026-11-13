@@ -25,3 +25,6 @@ claimed-by: sandbox4 at 2026-11-12T19:44Z
 ## Report (done, 2026-11-13T02:21Z)
 
 Closed by the driver: the report is on `s/level-02-castle-walks-hearing-2` (docs/reports/level-02-castle-walks-hearing-2.md); the worker didn't run finish.sh.
+
+---
+Merged (squash, docs dropped): master 80ebf43c9.
